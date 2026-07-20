@@ -1251,6 +1251,7 @@ spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
 # claude inherits it WITHOUT the secret ever being composed into $LAUNCH (the
 # recorded launch string) or written to state/<id>.meta or any status line.
 if [ -n "$ENDPOINT_TOKEN" ]; then
+  spawn_send_text_line "$T" "unset HISTFILE"
   spawn_send_text_line "$T" "export ANTHROPIC_AUTH_TOKEN=$(shell_quote "$ENDPOINT_TOKEN")"
 fi
 sleep 0.3

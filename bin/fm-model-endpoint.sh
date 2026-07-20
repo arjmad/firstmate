@@ -187,6 +187,7 @@ while IFS= read -r line; do
         auth_token_file)
           if [ -f "$operand" ]; then
             IFS= read -r val < "$operand" 2>/dev/null || true
+            val=${val%$'\r'}
           fi
           ;;
         auth_token)
