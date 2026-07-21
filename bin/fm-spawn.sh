@@ -3,6 +3,12 @@
 # secondmate in its isolated firstmate home.
 # Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
+#   <project-dir> accepts a projects/<name> path, an explicit absolute or
+#   slash-containing relative path, or a bare registered project name resolved
+#   against this home's projects/ dir (matching fm-brief.sh's bare <repo-name>
+#   convention, with an existing cwd-relative dir as back-compat fallback).
+#   An unresolvable bare name fails with exit 2 and lists the available
+#   project directories instead of dying on a raw cd error.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
@@ -641,10 +647,24 @@ resolved_existing_dir() {
 }
 
 resolve_project_dir_arg() {
-  local path=$1
+  local path=$1 d
   case "$path" in
     projects/*) printf '%s/%s\n' "$PROJECTS" "${path#projects/}" ;;
-    *) printf '%s\n' "$path" ;;
+    /*|*/*) printf '%s\n' "$path" ;;
+    *)
+      if [ -d "$PROJECTS/$path" ]; then
+        printf '%s/%s\n' "$PROJECTS" "$path"
+      elif [ -d "$path" ]; then
+        # Back-compat: a bare name that is an existing cwd-relative directory.
+        printf '%s\n' "$path"
+      else
+        {
+          echo "error: no project '$path' (looked in $PROJECTS/$path)."
+          echo "Pass a registered project name or an explicit path. Available projects:"
+          for d in "$PROJECTS"/*/; do [ -d "$d" ] && echo "  - $(basename "$d")"; done
+        } >&2
+        return 2
+      fi ;;
   esac
 }
 
@@ -800,7 +820,8 @@ if [ "$KIND" = secondmate ]; then
     BRIEF="$DATA/$ID/brief.md"
   fi
 else
-  PROJ_ABS="$(cd "$(resolve_project_dir_arg "$PROJ")" && pwd)"
+  PROJ_RESOLVED=$(resolve_project_dir_arg "$PROJ") || exit 2
+  PROJ_ABS="$(cd "$PROJ_RESOLVED" && pwd)"
   WT=""
   BRIEF="$DATA/$ID/brief.md"
 fi
