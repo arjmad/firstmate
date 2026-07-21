@@ -574,6 +574,53 @@ test_arm_attaches_and_waits_for_live_fresh_watcher() {
   pass "arm attaches to a live fresh watcher and fails loudly when that cycle has no successor"
 }
 
+test_attached_arm_closes_quiet_after_owner_delivers_wake() {
+  local dir state fakebin ownerout followerout i wpid owner_pid follower_pid status
+  dir=$(make_case arm-attach-delivered)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  ownerout="$dir/owner.out"
+  followerout="$dir/follower.out"
+  mark_pr_check_migration_complete "$state"
+  # The OWNER arm starts the seed watcher; it will print the wake and record the
+  # actionable close in the cycle ledger when the watcher delivers.
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=0.2 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=2 "$WATCH_ARM" > "$ownerout" &
+  owner_pid=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF 'watcher: started pid=' "$ownerout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF 'watcher: started pid=' "$ownerout" || fail "owner arm did not start the seed watcher"
+  wpid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  # A redundant re-arm attaches as a follower of the same watcher.
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_ARM_ATTACH_POLL=0.1 FM_ARM_CONFIRM_TIMEOUT=1 "$WATCH_ARM" > "$followerout" &
+  follower_pid=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF "watcher: attached pid=$wpid" "$followerout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF "watcher: attached pid=$wpid" "$followerout" || fail "follower arm did not attach to the seed watcher"
+  # An actionable signal makes the watcher exit through the owner arm normally.
+  printf 'needs-decision: pick A or B\n' > "$state/task.status"
+  wait_for_exit "$owner_pid" 120
+  status=$?
+  [ "$status" -eq 0 ] || fail "owner arm did not deliver the wake cleanly (status $status): $(cat "$ownerout")"
+  grep -qF "signal: $state/task.status" "$ownerout" || fail "owner arm did not print the signal wake"
+  # The follower's cycle closed after a recorded delivery: it must exit 0 with
+  # no line beyond the attach report - no FAILED, no duplicate wake.
+  wait_for_exit "$follower_pid" 120
+  status=$?
+  [ "$status" -eq 0 ] || fail "follower arm did not close quietly after a delivered cycle (status $status): $(cat "$followerout")"
+  ! grep -qF 'watcher: FAILED' "$followerout" || fail "follower arm reported FAILED for a delivered cycle"
+  ! grep -qF 'signal:' "$followerout" || fail "follower arm double-notified the delivered wake"
+  grep -q "reason=attached-cycle-delivered" "$state/.watch-cycle-exits.log" || fail "delivered attached cycle was not classified in the lifecycle ledger"
+  pass "attached arm closes quietly when the owner arm already delivered the cycle's wake"
+}
+
 test_attached_arm_signal_is_recorded_in_cycle_ledger() {
   local dir state fakebin out armout i wpid armpid status
   dir=$(make_case attached-arm-signal-ledger)
@@ -974,6 +1021,7 @@ test_watch_restart_attaches_to_healthy_peer
 test_watcher_self_evicts_on_lock_takeover
 test_arm_self_eviction_is_loud_without_successor
 test_arm_attaches_and_waits_for_live_fresh_watcher
+test_attached_arm_closes_quiet_after_owner_delivers_wake
 test_attached_arm_signal_is_recorded_in_cycle_ledger
 test_arm_starts_and_self_heals
 test_arm_hup_cleans_child_and_temp_output

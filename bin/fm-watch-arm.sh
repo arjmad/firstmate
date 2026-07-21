@@ -35,7 +35,11 @@
 # returns the FAILED line. On started it waits the child and propagates the wake
 # reason; on attached it stays live across identity-matched successors. An
 # attached cycle that ends without a healthy successor is a typed nonzero failure,
-# never a clean empty completion. On FAILED it exits non-zero so the failure is
+# never a clean empty completion - unless the cycle ledger shows the OWNER arm
+# already delivered that cycle's actionable wake, in which case this follower
+# closes quietly (exit 0, no output) so one wake is never notified twice.
+# A killed or crashed watcher leaves no such delivery record, so genuine silent
+# death still fails loud. On FAILED it exits non-zero so the failure is
 # loud. A live cycle already present means re-arm attaches - do not start a second
 # watcher.
 #
@@ -252,9 +256,39 @@ fail_unexplained_cycle() {
   return 1
 }
 
+# An attached follower cannot see the wake its watcher delivered: the OWNER arm
+# prints the reason line and records the actionable close in the cycle ledger.
+# Scan that ledger for an actionable-* record naming this watcher pid that ended
+# within this attach window, with a short bounded retry to absorb the owner
+# finishing its ledger write just after the follower notices the cycle closed.
+# A killed or crashed watcher produces no actionable record for its pid, so the
+# unexplained-cycle alarm still fires on genuine silent death.
+cycle_delivered_actionable() {
+  local wpid=$1 since=$2 i
+  for i in 1 2 3; do
+    [ "$i" -eq 1 ] || sleep 0.1
+    [ -f "$CYCLE_LOG" ] || continue
+    awk -F '\t' -v wpid="watcher_pid=$wpid" -v since="$since" '
+      {
+        matched = 0; delivered = 0; ended = -1
+        for (i = 1; i <= NF; i += 1) {
+          if ($i == wpid) matched = 1
+          else if ($i ~ /^reason=actionable-/) delivered = 1
+          else if ($i ~ /^ended_at=/) ended = substr($i, 10) + 0
+        }
+        if (matched && delivered && ended >= since + 0) { found = 1; exit }
+      }
+      END { exit found ? 0 : 1 }
+    ' "$CYCLE_LOG" 2>/dev/null && return 0
+  done
+  return 1
+}
+
 # Stay alive across identity-matched healthy holders. If one cycle ends, attach
-# to a verified successor. With no successor, fail loudly instead of returning a
-# clean empty completion that an adapter could mistake for a no-op.
+# to a verified successor. With no successor, close quietly when the ledger
+# proves the owner arm delivered this cycle's wake; otherwise fail loudly
+# instead of returning a clean empty completion that an adapter could mistake
+# for a no-op.
 attach_and_wait() {
   local attached_pid=$1
   while :; do
@@ -274,6 +308,10 @@ attach_and_wait() {
       cycle_begin "$attached_pid" attached
       report_attached
       continue
+    fi
+    if cycle_delivered_actionable "$attached_pid" "$cycle_started_at"; then
+      cycle_log_append unknown unknown attached-cycle-delivered none
+      return 0
     fi
     cycle_log_append unknown unknown attached-cycle-ended none
     fail_unexplained_cycle
