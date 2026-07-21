@@ -120,7 +120,7 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-  sed -n '2,85p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,91p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in
@@ -652,7 +652,7 @@ resolve_project_dir_arg() {
     projects/*) printf '%s/%s\n' "$PROJECTS" "${path#projects/}" ;;
     /*|*/*) printf '%s\n' "$path" ;;
     *)
-      if [ -d "$PROJECTS/$path" ]; then
+      if [ -n "$path" ] && [ -d "$PROJECTS/$path" ]; then
         printf '%s/%s\n' "$PROJECTS" "$path"
       elif [ -d "$path" ]; then
         # Back-compat: a bare name that is an existing cwd-relative directory.

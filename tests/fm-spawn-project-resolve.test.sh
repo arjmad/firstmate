@@ -75,6 +75,22 @@ test_unknown_bare_name_lists_candidates() {
   pass "unknown bare name exits 2 with the candidate list"
 }
 
+# An empty project-dir arg fails with exit 2 and the candidate list instead of
+# silently resolving to the projects root.
+test_empty_arg_lists_candidates() {
+  local id=nope-resolve-empty-r5 out status
+  out=$(run_spawn "$id" '' codex)
+  status=$?
+  expect_code 2 "$status" "empty project-dir arg"
+  assert_contains "$out" "no project '' (looked in $PROJECTS_DIR/)" \
+    "empty arg error does not name what was looked for"
+  assert_contains "$out" "- registry" \
+    "empty arg error does not list available projects"
+  assert_not_contains "$out" "cd:" \
+    "empty arg died on a raw cd error"
+  pass "empty project-dir arg exits 2 with the candidate list"
+}
+
 # An explicit absolute path passes through untouched and reaches the brief check.
 test_explicit_path_passes_through() {
   local id=nope-resolve-abs-r4 out dir status
@@ -93,4 +109,5 @@ test_explicit_path_passes_through() {
 test_bare_name_resolves
 test_projects_prefix_resolves
 test_unknown_bare_name_lists_candidates
+test_empty_arg_lists_candidates
 test_explicit_path_passes_through
