@@ -650,7 +650,7 @@ resolve_project_dir_arg() {
   local path=$1 d
   case "$path" in
     projects/*) printf '%s/%s\n' "$PROJECTS" "${path#projects/}" ;;
-    /*|*/*) printf '%s\n' "$path" ;;
+    .|..|/*|*/*) printf '%s\n' "$path" ;;
     *)
       if [ -n "$path" ] && [ -d "$PROJECTS/$path" ]; then
         printf '%s/%s\n' "$PROJECTS" "$path"

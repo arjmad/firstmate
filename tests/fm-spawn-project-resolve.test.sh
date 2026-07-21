@@ -91,6 +91,24 @@ test_empty_arg_lists_candidates() {
   pass "empty project-dir arg exits 2 with the candidate list"
 }
 
+# '.' and '..' keep their cwd-relative meaning: they pass through untouched
+# instead of resolving into the projects root via the bare-name branch.
+test_dot_paths_stay_cwd_relative() {
+  local id=nope-resolve-dot-r6 out status arg
+  for arg in . ..; do
+    out=$(cd "$TMP_ROOT" && run_spawn "$id" "$arg" codex)
+    status=$?
+    [ "$status" -ne 0 ] || fail "'$arg' with missing brief should exit non-zero"
+    assert_contains "$out" "error: no brief at $HOME_DIR/data/$id/brief.md" \
+      "'$arg' did not pass through to the brief check"
+    assert_not_contains "$out" "no project" \
+      "'$arg' hit the bare-name registry branch"
+    assert_not_contains "$out" "cd:" \
+      "'$arg' resolution died on a raw cd error"
+  done
+  pass "'.' and '..' keep their cwd-relative pass-through"
+}
+
 # An explicit absolute path passes through untouched and reaches the brief check.
 test_explicit_path_passes_through() {
   local id=nope-resolve-abs-r4 out dir status
@@ -110,4 +128,5 @@ test_bare_name_resolves
 test_projects_prefix_resolves
 test_unknown_bare_name_lists_candidates
 test_empty_arg_lists_candidates
+test_dot_paths_stay_cwd_relative
 test_explicit_path_passes_through
