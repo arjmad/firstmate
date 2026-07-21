@@ -2270,6 +2270,49 @@ test_apply_transition_defer_and_fallback_are_noops() {
   pass "fm_backend_herdr_apply_transition: idle/done (defer) and unknown/empty (fallback) take no fast action"
 }
 
+test_events_capable_large_schema_probes_clean() {
+  local dir log resp fb err rc
+  dir="$TMP_ROOT/events-capable-large-schema"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  printf '{"client":{"version":"0.7.3","protocol":16}}\n' > "$resp/1.out"
+  # A schema the size of the real one (~220KB+) with both required tokens near
+  # the front: the old `printf | grep -Fq` probe let grep exit on the early
+  # match and SIGPIPE the printf still writing the tail, spraying cosmetic
+  # "printf: write error: Broken pipe" lines on most arms.
+  {
+    printf '{"methods":["events.subscribe","pane.agent_status_changed"],"pad":"'
+    awk 'BEGIN { for (i = 0; i < 30000; i += 1) printf "padpadpad " }'
+    printf '"}\n'
+  } > "$resp/2.out"
+  err="$dir/stderr"
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 FM_BACKEND_HERDR_EVENT_READER=cat \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_events_capable sess' "$ROOT" 2> "$err"
+  rc=$?
+  expect_code 0 "$rc" "events_capable should accept protocol 16 + a schema containing both event tokens"
+  ! grep -q 'Broken pipe' "$err" || fail "capability probe leaked a broken-pipe error: $(cat "$err")"
+  [ ! -s "$err" ] || fail "capability probe wrote unexpected stderr: $(cat "$err")"
+  pass "fm_backend_herdr_events_capable: a large schema probes clean with no broken-pipe noise"
+}
+
+test_events_capable_missing_event_token_refuses() {
+  local dir log resp fb err rc
+  dir="$TMP_ROOT/events-capable-missing-token"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  printf '{"client":{"version":"0.7.3","protocol":16}}\n' > "$resp/1.out"
+  {
+    printf '{"methods":["events.subscribe"],"pad":"'
+    awk 'BEGIN { for (i = 0; i < 30000; i += 1) printf "padpadpad " }'
+    printf '"}\n'
+  } > "$resp/2.out"
+  err="$dir/stderr"
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 FM_BACKEND_HERDR_EVENT_READER=cat \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_events_capable sess' "$ROOT" 2> "$err"
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "events_capable should refuse a schema missing pane.agent_status_changed"
+  ! grep -q 'Broken pipe' "$err" || fail "refusing probe leaked a broken-pipe error: $(cat "$err")"
+  pass "fm_backend_herdr_events_capable: a schema missing an event token fails closed, still quietly"
+}
+
 test_wait_transition_no_panes_returns_2() {
   local rc
   bash -c '. "$0/bin/backends/herdr.sh"; FM_BACKEND_HERDR_EVENTS_FORCE=1 fm_backend_herdr_wait_transition default 1 /tmp/st' "$ROOT"; rc=$?
@@ -2525,6 +2568,8 @@ test_apply_transition_blocked_requires_commit_to_dedupe
 test_apply_transition_working_clears_marker
 test_clear_transition_removes_task_marker
 test_apply_transition_defer_and_fallback_are_noops
+test_events_capable_large_schema_probes_clean
+test_events_capable_missing_event_token_refuses
 test_wait_transition_no_panes_returns_2
 test_wait_transition_not_capable_returns_2
 test_wait_transition_reconcile_blocked_returns_record
