@@ -227,6 +227,45 @@ If no dispatch rule fits, firstmate uses the dispatch profile `default` when pre
 Because the spawn backstop is gated by file presence, any fallback path after a missing match, validation error, or missing `jq` still passes a resolved harness explicitly until the file is fixed or removed.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
 
+## Local model endpoints (config/model-endpoints.json)
+
+`config/model-endpoints.json` is an optional local, gitignored file that lets firstmate route a `claude` crewmate or scout at a local, Anthropic-shaped proxy so a non-Anthropic model can be driven through the unchanged `claude` CLI.
+This is a per-model endpoint override, not a new harness: a matched spawn still records `harness=claude`, so every claude supervision fact (busy signature, turn-end hook, prompt-suggestion suppression, trust dialog, watcher classification) applies unchanged.
+The only launch differences from a normal claude spawn are an endpoint environment prefix, a separately exported auth token, and `--strict-mcp-config`.
+Selection reuses the existing `--model` axis: when a template-based claude launch resolves a `--model` that matches a configured entry (whether the model came from an explicit flag or a `config/crew-dispatch.json` profile), `fm-spawn.sh` applies that entry; a raw launch command, a non-claude harness, and a normal Anthropic model (or no model) are never affected.
+This section owns the schema; `bin/fm-model-endpoint.sh`'s header and `--help` own the exact resolution mechanics and exit-code contract, and `bin/fm-spawn.sh` owns the launch wiring.
+
+```json
+{
+  "endpoints": {
+    "<model-name>": {
+      "base_url": "http://127.0.0.1:8317",
+      "auth_token_env": "SOME_TOKEN_VAR",
+      "auth_token_file": "/path/to/gitignored/token",
+      "auth_token": "<literal-token>",
+      "strict_mcp_config": true,
+      "env": {
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "gpt-5.6-sol",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "gpt-5.6-sol",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gpt-5.6-luna",
+        "CLAUDE_CODE_SUBAGENT_MODEL": "gpt-5.6-sol"
+      }
+    }
+  }
+}
+```
+
+`base_url` is required and becomes `ANTHROPIC_BASE_URL`.
+`strict_mcp_config` is an optional boolean that defaults to `true`, adding `--strict-mcp-config` so the endpoint crewmate loads no ambient MCP servers.
+`env` is an optional map of additional non-secret environment variables set as an inline launch prefix; use it for the `ANTHROPIC_DEFAULT_*_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL` slot mappings and any other non-secret knobs, with valid shell variable names only.
+`ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` are rejected inside `env`: the token must come from a token source so it can be exported off the recorded launch string, and the base URL comes from `base_url`.
+The auth token is a credential and is resolved from `auth_token_env` (an environment variable name), then `auth_token_file` (a gitignored file), then `auth_token` (an embedded literal), taking the first non-empty value; prefer the env or file source over embedding.
+The token is never written to `state/<id>.meta`, to any status line, or to the recorded launch string; firstmate exports it into the crewmate's pane shell just before launch, the same mechanism as the `GOTMPDIR` export.
+Reading the file requires `jq`.
+Fail-closed contract: an absent or whitespace-only file, or a `--model` that is simply not listed, is inert and the claude spawn launches normally against the real Anthropic API; but a present-but-malformed file, a matched entry missing `base_url` or a token source, or an unresolvable token aborts the spawn with a clear error rather than silently launching an endpoint model against Anthropic.
+Local endpoint values (the proxy URL, the token, and the string naming a specific proxy) live only in this gitignored file and never in tracked code.
+See [`docs/examples/model-endpoints.json`](examples/model-endpoints.json) for a starting point to copy into local `config/model-endpoints.json`, and [`model-endpoint-verification.md`](model-endpoint-verification.md) for the dated end-to-end verification evidence.
+
 ## Toolchain
 
 On session start the first mate detects what its required toolchain is missing or too old and lists each problem with either an exact install command or manual instructions.

@@ -9,6 +9,13 @@
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
 #   from that harness's launch rather than guessed.
+#   Local model endpoints: for a template-based claude launch, when --model matches
+#   an entry in config/model-endpoints.json, the SAME claude CLI is redirected at a
+#   local Anthropic-shaped proxy (endpoint env prefix + --strict-mcp-config; auth
+#   token exported separately, never in meta or the launch string). harness stays
+#   claude. A missing entry, malformed config, or unresolvable token fails closed.
+#   A normal Anthropic model (or none) is unaffected. See bin/fm-model-endpoint.sh
+#   and docs/configuration.md "Local model endpoints".
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   spawn. Without it, the script resolves FM_BACKEND, then config/backend, then
 #   runtime auto-detection (the runtime firstmate itself is executing inside -
@@ -95,7 +102,7 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-  sed -n '2,78p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,85p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in
@@ -361,7 +368,13 @@ launch_template() {
     # does NOT suppress the interactive ghost text (verified empirically), so the env
     # var is the correct control. The dim-aware composer reader in fm-tmux-lib.sh is
     # the defense-in-depth backstop for any pane this flag cannot reach.
-    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(cat __BRIEF__)"' ;;
+    # __ENDPOINTENV__ and __STRICTMCP__ are empty for a normal Anthropic launch
+    # (byte-identical to before). They are filled only when the resolved --model
+    # matches a config/model-endpoints.json entry, redirecting this SAME claude
+    # CLI at a local Anthropic-shaped proxy (fm-model-endpoint.sh; the auth token
+    # is exported separately below, never composed into this launch string). The
+    # harness stays claude, so every claude supervision fact still applies.
+    claude) printf '%s' '__ENDPOINTENV__CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG____STRICTMCP__"$(cat __BRIEF__)"' ;;
     codex)
       if [ "$kind" = secondmate ]; then
         printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(cat __BRIEF__)"'
@@ -389,6 +402,11 @@ launch_template() {
   esac
 }
 
+# LAUNCH_FROM_TEMPLATE distinguishes a verified-adapter template launch (which
+# carries the __ENDPOINTENV__/__STRICTMCP__ placeholders) from a raw
+# launch-command escape hatch. The local-model-endpoint override below only
+# applies to template launches; a hand-written raw command owns its own env.
+LAUNCH_FROM_TEMPLATE=0
 case "$ARG3" in
   *' '*)  # raw launch command (unverified-adapter escape hatch)
     LAUNCH=$ARG3
@@ -418,10 +436,12 @@ case "$ARG3" in
       harness_src='config/crew-harness'
     fi
     LAUNCH=$(launch_template "$HARNESS" "$KIND") || { echo "error: no launch template for harness '$HARNESS' (from $harness_src or detection); pass a raw launch command to use an unverified adapter" >&2; exit 1; }
+    LAUNCH_FROM_TEMPLATE=1
     ;;
   *)
     HARNESS=$ARG3
     LAUNCH=$(launch_template "$HARNESS" "$KIND") || { echo "error: unknown harness '$HARNESS'; pass a raw launch command to use an unverified adapter" >&2; exit 1; }
+    LAUNCH_FROM_TEMPLATE=1
     ;;
 esac
 
@@ -445,6 +465,47 @@ if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
       esac
     fi
   fi
+fi
+
+# Local model-endpoint override (bin/fm-model-endpoint.sh; docs/configuration.md
+# "Local model endpoints"). When this is a template-based claude launch whose
+# resolved --model matches a config/model-endpoints.json entry, the SAME claude
+# CLI is redirected at a local Anthropic-shaped proxy so non-Anthropic models can
+# be driven without a new harness (harness stays claude, so all claude
+# supervision facts hold). Resolution and full validation happen HERE, before any
+# window or meta exists, so a malformed config or unresolvable token fails closed
+# up front. Gated on: a template launch (not a raw command), the claude harness,
+# and a concrete model - a normal Anthropic model, or none, never consults the
+# config, so plain claude spawns are untouched. The env records and strict flag
+# are stashed raw and shell-quoted at launch composition; the auth token is kept
+# out of the launch string and exported separately just before launch.
+ENDPOINT_ENV_KEYS=()
+ENDPOINT_ENV_VALS=()
+ENDPOINT_STRICT=0
+ENDPOINT_TOKEN=
+ENDPOINT_ACTIVE=0
+if [ "$LAUNCH_FROM_TEMPLATE" -eq 1 ] && [ -n "$MODEL" ] && [ "$MODEL" != default ] && [ "$HARNESS" = claude ]; then
+  ep_status=0
+  ep_out=$("$SCRIPT_DIR/fm-model-endpoint.sh" resolve --with-token "$MODEL") || ep_status=$?
+  case "$ep_status" in
+    0)
+      ENDPOINT_ACTIVE=1
+      while IFS="$(printf '\t')" read -r ep_kind ep_a ep_b; do
+        case "$ep_kind" in
+          env) ENDPOINT_ENV_KEYS+=("$ep_a"); ENDPOINT_ENV_VALS+=("$ep_b") ;;
+          strict_mcp_config) [ "$ep_a" = 1 ] && ENDPOINT_STRICT=1 ;;
+          token) ENDPOINT_TOKEN=$ep_a ;;
+        esac
+      done <<EOF
+$ep_out
+EOF
+      ;;
+    3) : ;;  # no config, or model is a normal Anthropic model: launch unchanged
+    *)
+      echo "error: model '$MODEL' names a local endpoint but config/model-endpoints.json is missing the entry, malformed, or its auth token is unresolvable; refusing to launch claude against the real Anthropic API. Fix config/model-endpoints.json (docs/configuration.md 'Local model endpoints')." >&2
+      exit 1
+      ;;
+  esac
 fi
 
 secondmate_registry_value() {
@@ -1176,6 +1237,23 @@ sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
+# Compose the local-endpoint env prefix and --strict-mcp-config from the records
+# validated above. Both stay empty for a normal claude launch (byte-identical),
+# and the placeholders are absent from every other harness template and the raw
+# launch command, so those substitutions are no-ops there. The auth token is
+# deliberately NOT part of this string (exported separately below).
+ENDPOINT_ENV_PREFIX=
+if [ "$ENDPOINT_ACTIVE" -eq 1 ]; then
+  ep_i=0
+  while [ "$ep_i" -lt "${#ENDPOINT_ENV_KEYS[@]}" ]; do
+    ENDPOINT_ENV_PREFIX="${ENDPOINT_ENV_PREFIX}${ENDPOINT_ENV_KEYS[$ep_i]}=$(shell_quote "${ENDPOINT_ENV_VALS[$ep_i]}") "
+    ep_i=$((ep_i + 1))
+  done
+fi
+ENDPOINT_STRICT_FLAG=
+[ "$ENDPOINT_STRICT" -eq 1 ] && ENDPOINT_STRICT_FLAG='--strict-mcp-config '
+LAUNCH=${LAUNCH//__ENDPOINTENV__/$ENDPOINT_ENV_PREFIX}
+LAUNCH=${LAUNCH//__STRICTMCP__/$ENDPOINT_STRICT_FLAG}
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
@@ -1191,6 +1269,14 @@ fi
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
 spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
+# A local-endpoint claude launch needs its proxy auth token in the pane shell.
+# Send it as a standalone pre-launch export - the same mechanism as GOTMPDIR - so
+# claude inherits it WITHOUT the secret ever being composed into $LAUNCH (the
+# recorded launch string) or written to state/<id>.meta or any status line.
+if [ -n "$ENDPOINT_TOKEN" ]; then
+  spawn_send_text_line "$T" "unset HISTFILE"
+  spawn_send_text_line "$T" "export ANTHROPIC_AUTH_TOKEN=$(shell_quote "$ENDPOINT_TOKEN")"
+fi
 sleep 0.3
 spawn_send_literal "$T" "$LAUNCH"
 sleep 0.3
