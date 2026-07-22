@@ -127,7 +127,10 @@ records=$(jq -r --arg model "$MODEL" --arg with "$WITH_TOKEN" '
             | (($e.env // {}) as $env0
                | if (($env0 | type) != "object") then error("env must be an object") else $env0 end) as $env
             | ([ ("auth_token_env","auth_token_file","auth_token")
-                 | select((($e[.]?) | type) == "string" and ($e[.] != "")) ]) as $tsrc
+                 | select((($e[.]?) | type) == "string" and ($e[.] != ""))
+                 | if ($e[.] | test("[\t\n\r\u000b\u000c]"))
+                     then error(. + " for " + $model + " must not contain tab, newline, or other control whitespace")
+                   else . end ]) as $tsrc
             | if (($tsrc | length) == 0)
                 then error("no token source for " + $model + ": set auth_token_env, auth_token_file, or auth_token")
               else
