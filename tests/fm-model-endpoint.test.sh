@@ -196,6 +196,26 @@ test_invalid_env_key_rejected() {
   pass "an invalid env key name fails closed (exit 2)"
 }
 
+test_control_chars_in_token_sources_rejected() {
+  local dir
+  # A newline-bearing literal token used to be truncated-accepted, with its tail
+  # lines leaking into the non-secret record stream as forged env records.
+  dir=$(write_config ctrltok '{ "endpoints": { "m": { "base_url": "http://x", "auth_token": "sk-part1\nenv\tINJECTED_VAR\tevil" } } }')
+  OUT=$(FM_CONFIG_OVERRIDE="$dir" "$EP" resolve --with-token m 2>/dev/null)
+  CODE=$?
+  expect_code 2 "$CODE" "a newline-bearing literal auth_token must fail closed"
+  assert_not_contains "$OUT" "INJECTED_VAR" "the token tail must never leak into the record stream"
+  run_resolve "$dir" resolve m
+  expect_code 2 "$CODE" "the same entry must fail closed without --with-token too"
+  dir=$(write_config ctrltokenv '{ "endpoints": { "m": { "base_url": "http://x", "auth_token_env": "FM\tBAD" } } }')
+  run_resolve "$dir" resolve m
+  expect_code 2 "$CODE" "a tab in auth_token_env must fail closed"
+  dir=$(write_config ctrltokfile '{ "endpoints": { "m": { "base_url": "http://x", "auth_token_file": "/tmp/a\n/tmp/b" } } }')
+  run_resolve "$dir" resolve m
+  expect_code 2 "$CODE" "a newline in auth_token_file must fail closed"
+  pass "tab/newline control chars in any token-source string fail closed (exit 2)"
+}
+
 test_strict_defaults_true_when_absent() {
   local dir
   dir=$(write_config strictdefault '{ "endpoints": { "m": { "base_url": "http://x", "auth_token": "t" } } }')
@@ -235,6 +255,7 @@ test_no_token_source_exits_2
 test_unresolvable_token_exits_2_and_prints_nothing
 test_anthropic_auth_token_in_env_rejected
 test_invalid_env_key_rejected
+test_control_chars_in_token_sources_rejected
 test_strict_defaults_true_when_absent
 test_strict_can_be_disabled
 test_usage_and_bad_subcommand
