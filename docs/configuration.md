@@ -240,16 +240,16 @@ This section owns the schema; `bin/fm-model-endpoint.sh`'s header and `--help` o
 {
   "endpoints": {
     "<model-name>": {
-      "base_url": "http://127.0.0.1:8317",
+      "base_url": "http://127.0.0.1:8080",
       "auth_token_env": "SOME_TOKEN_VAR",
       "auth_token_file": "/path/to/gitignored/token",
       "auth_token": "<literal-token>",
       "strict_mcp_config": true,
       "env": {
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": "gpt-5.6-sol",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": "gpt-5.6-sol",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gpt-5.6-luna",
-        "CLAUDE_CODE_SUBAGENT_MODEL": "gpt-5.6-sol"
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "my-local-model",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "my-local-model",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "my-local-model-small",
+        "CLAUDE_CODE_SUBAGENT_MODEL": "my-local-model"
       }
     }
   }

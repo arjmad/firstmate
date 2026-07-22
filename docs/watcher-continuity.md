@@ -55,7 +55,7 @@ Only the watcher process touches `state/.last-watcher-beat`; no helper process c
 
 All five harnesses ran against git-initialized scratch projects and isolated `FM_HOME` state.
 Existing harness-managed credentials remained in place, no credential bytes were copied into a fixture or transcript, and no account was created.
-Pi used the existing shared Pi auth store with the explicit `openai-codex/gpt-5.6-sol` provider/model pin and low thinking.
+Pi used the existing shared Pi auth store with an explicit `openai-codex/<model>` provider/model pin and low thinking.
 Each run used the smallest prompt needed to exercise the harness-native path.
 
 Harness versions:

@@ -19,16 +19,16 @@
 #   {
 #     "endpoints": {
 #       "<model-name>": {
-#         "base_url": "http://127.0.0.1:8317",   # required, becomes ANTHROPIC_BASE_URL
+#         "base_url": "http://127.0.0.1:8080",   # required, becomes ANTHROPIC_BASE_URL
 #         "auth_token_env": "SOME_TOKEN_VAR",    # token source (one of the three below)
 #         "auth_token_file": "/path/to/token",   #   tried in this priority order,
 #         "auth_token": "<literal-token>",       #   first non-empty wins
 #         "strict_mcp_config": true,             # optional bool, default true -> --strict-mcp-config
 #         "env": {                               # optional extra NON-SECRET env vars,
-#           "ANTHROPIC_DEFAULT_OPUS_MODEL": "gpt-5.6-sol",   # set as an inline launch prefix
-#           "ANTHROPIC_DEFAULT_SONNET_MODEL": "gpt-5.6-sol",
-#           "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gpt-5.6-luna",
-#           "CLAUDE_CODE_SUBAGENT_MODEL": "gpt-5.6-sol"
+#           "ANTHROPIC_DEFAULT_OPUS_MODEL": "my-local-model",   # set as an inline launch prefix
+#           "ANTHROPIC_DEFAULT_SONNET_MODEL": "my-local-model",
+#           "ANTHROPIC_DEFAULT_HAIKU_MODEL": "my-local-model-small",
+#           "CLAUDE_CODE_SUBAGENT_MODEL": "my-local-model"
 #         }
 #       }
 #     }

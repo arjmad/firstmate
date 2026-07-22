@@ -32,14 +32,14 @@ run_resolve() {
 
 SOL_JSON='{
   "endpoints": {
-    "gpt-5.6-sol": {
-      "base_url": "http://127.0.0.1:8317",
+    "my-local-model": {
+      "base_url": "http://127.0.0.1:8080",
       "auth_token_env": "FM_TEST_EP_TOKEN",
       "strict_mcp_config": true,
       "env": {
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": "gpt-5.6-sol",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gpt-5.6-luna",
-        "CLAUDE_CODE_SUBAGENT_MODEL": "gpt-5.6-sol"
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "my-local-model",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "my-local-model-small",
+        "CLAUDE_CODE_SUBAGENT_MODEL": "my-local-model"
       }
     }
   }
@@ -48,13 +48,13 @@ SOL_JSON='{
 test_match_emits_non_secret_records() {
   local dir
   dir=$(write_config match "$SOL_JSON")
-  run_resolve "$dir" resolve gpt-5.6-sol
+  run_resolve "$dir" resolve my-local-model
   expect_code 0 "$CODE" "a configured model must resolve with exit 0"
   assert_contains "$OUT" "strict_mcp_config	1" "missing strict flag record"
-  assert_contains "$OUT" "env	ANTHROPIC_BASE_URL	http://127.0.0.1:8317" "missing base_url env record"
-  assert_contains "$OUT" "env	ANTHROPIC_DEFAULT_OPUS_MODEL	gpt-5.6-sol" "missing opus mapping"
-  assert_contains "$OUT" "env	ANTHROPIC_DEFAULT_HAIKU_MODEL	gpt-5.6-luna" "missing haiku mapping"
-  assert_contains "$OUT" "env	CLAUDE_CODE_SUBAGENT_MODEL	gpt-5.6-sol" "missing subagent mapping"
+  assert_contains "$OUT" "env	ANTHROPIC_BASE_URL	http://127.0.0.1:8080" "missing base_url env record"
+  assert_contains "$OUT" "env	ANTHROPIC_DEFAULT_OPUS_MODEL	my-local-model" "missing opus mapping"
+  assert_contains "$OUT" "env	ANTHROPIC_DEFAULT_HAIKU_MODEL	my-local-model-small" "missing haiku mapping"
+  assert_contains "$OUT" "env	CLAUDE_CODE_SUBAGENT_MODEL	my-local-model" "missing subagent mapping"
   pass "a configured model resolves to its non-secret endpoint records"
 }
 
@@ -62,7 +62,7 @@ test_env_output_never_contains_token() {
   local dir
   dir=$(write_config notoken "$SOL_JSON")
   # Token env var is set, but WITHOUT --with-token the resolver must never print it.
-  OUT=$(FM_TEST_EP_TOKEN="sk-should-not-appear" FM_CONFIG_OVERRIDE="$dir" "$EP" resolve gpt-5.6-sol 2>/dev/null)
+  OUT=$(FM_TEST_EP_TOKEN="sk-should-not-appear" FM_CONFIG_OVERRIDE="$dir" "$EP" resolve my-local-model 2>/dev/null)
   expect_code 0 "$?" "resolve without --with-token should still succeed on a valid entry"
   assert_not_contains "$OUT" "sk-should-not-appear" "the auth token must never appear in non-secret env output"
   assert_not_contains "$OUT" "token	" "no token record without --with-token"
@@ -72,7 +72,7 @@ test_env_output_never_contains_token() {
 test_with_token_env_source() {
   local dir
   dir=$(write_config withtok "$SOL_JSON")
-  OUT=$(FM_TEST_EP_TOKEN="sk-env-tok-42" FM_CONFIG_OVERRIDE="$dir" "$EP" resolve --with-token gpt-5.6-sol 2>/dev/null)
+  OUT=$(FM_TEST_EP_TOKEN="sk-env-tok-42" FM_CONFIG_OVERRIDE="$dir" "$EP" resolve --with-token my-local-model 2>/dev/null)
   expect_code 0 "$?" "resolve --with-token should succeed when the env token is set"
   assert_contains "$OUT" "token	sk-env-tok-42" "token record missing or wrong for env source"
   pass "auth_token_env resolves the token from the environment"
@@ -128,7 +128,7 @@ test_absent_config_exits_3() {
   local dir
   dir="$TMP_ROOT/absent/config"
   mkdir -p "$dir"  # no model-endpoints.json inside
-  run_resolve "$dir" resolve gpt-5.6-sol
+  run_resolve "$dir" resolve my-local-model
   expect_code 3 "$CODE" "absent config must exit 3"
   pass "an absent config file exits 3 (feature off)"
 }
@@ -138,7 +138,7 @@ test_empty_config_exits_3() {
   dir="$TMP_ROOT/emptyfile/config"
   mkdir -p "$dir"
   printf '   \n\n' > "$dir/model-endpoints.json"
-  run_resolve "$dir" resolve gpt-5.6-sol
+  run_resolve "$dir" resolve my-local-model
   expect_code 3 "$CODE" "a whitespace-only config must exit 3, not fail closed"
   pass "an empty/whitespace-only config exits 3 (treated as absent)"
 }
@@ -148,7 +148,7 @@ test_malformed_json_exits_2() {
   dir="$TMP_ROOT/malformed/config"
   mkdir -p "$dir"
   printf '{ this is not json ' > "$dir/model-endpoints.json"
-  run_resolve "$dir" resolve gpt-5.6-sol
+  run_resolve "$dir" resolve my-local-model
   expect_code 2 "$CODE" "malformed JSON must fail closed with exit 2"
   pass "malformed JSON fails closed (exit 2)"
 }
@@ -173,7 +173,7 @@ test_unresolvable_token_exits_2_and_prints_nothing() {
   local dir
   dir=$(write_config unresolv "$SOL_JSON")
   # FM_TEST_EP_TOKEN unset/empty and no other source -> token unresolvable.
-  OUT=$(FM_TEST_EP_TOKEN="" FM_CONFIG_OVERRIDE="$dir" "$EP" resolve --with-token gpt-5.6-sol 2>/dev/null)
+  OUT=$(FM_TEST_EP_TOKEN="" FM_CONFIG_OVERRIDE="$dir" "$EP" resolve --with-token my-local-model 2>/dev/null)
   CODE=$?
   expect_code 2 "$CODE" "an unresolvable token must fail closed with exit 2"
   assert_not_contains "$OUT" "ANTHROPIC_BASE_URL" "a failed resolve must print no records at all"

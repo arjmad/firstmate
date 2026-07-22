@@ -6,6 +6,9 @@ unchanged `claude` CLI without a new harness.
 Schema and mechanics are owned by [`configuration.md`](configuration.md) "Local model
 endpoints", [`bin/fm-model-endpoint.sh`](../bin/fm-model-endpoint.sh), and
 [`bin/fm-spawn.sh`](../bin/fm-spawn.sh).
+Operator-specific values (the real alias name, proxy port, and model ids) are
+genericized in this record as `<alias>`, `http://127.0.0.1:<port>`, `my-local-model`,
+and `my-local-model-small`; the commands and outputs are otherwise as run.
 
 ## Environment (2026-07-20)
 
@@ -15,74 +18,65 @@ endpoints", [`bin/fm-model-endpoint.sh`](../bin/fm-model-endpoint.sh), and
 - curl: 8.7.1
 - shellcheck: 0.11.0 (matches the `bin/fm-lint.sh` pin)
 - herdr: 0.7.4
-- Local proxy: CLIProxyAPI on `http://127.0.0.1:8317`, Anthropic-shaped, codex OAuth
-  (the operator's `claudex` shell alias)
+- Local proxy: CLIProxyAPI on `http://127.0.0.1:<port>`, Anthropic-shaped, upstream
+  OAuth (the operator's `<alias>` shell alias)
 
 Secret discipline for this record: the proxy auth token is a credential and appears
-nowhere below. Probes that need it read it in-process from the `claudex` alias and print
+nowhere below. Probes that need it read it in-process from the `<alias>` alias and print
 only the HTTP status and the non-secret model ids.
 
 ## 1. Proxy reachability and shape
 
 ```
-$ curl -s -o /dev/null -w "HTTP %{http_code}\n" --max-time 5 http://127.0.0.1:8317/v1/models
+$ curl -s -o /dev/null -w "HTTP %{http_code}\n" --max-time 5 http://127.0.0.1:<port>/v1/models
 HTTP 401
 
 $ zsh -i -c '
-    tok=$(alias claudex | grep -oE "ANTHROPIC_AUTH_TOKEN=[^ ]+" | head -1 | cut -d= -f2)
+    tok=$(alias <alias> | grep -oE "ANTHROPIC_AUTH_TOKEN=[^ ]+" | head -1 | cut -d= -f2)
     curl -s -o /tmp/models.json -w "HTTP %{http_code}\n" --max-time 8 \
-      -H "Authorization: Bearer $tok" http://127.0.0.1:8317/v1/models'
+      -H "Authorization: Bearer $tok" http://127.0.0.1:<port>/v1/models'
 HTTP 200
 
 $ jq -r '.data[].id' /tmp/models.json
-gpt-image-2
-gpt-5.4
-gpt-5.4-mini
-codex-auto-review
-gpt-5.3-codex-spark
-gpt-5.5
-gpt-5.6-sol
-gpt-5.6-terra
-gpt-5.6-luna
-gpt-image-1.5
+<ten upstream model ids, including my-local-model and my-local-model-small>
 ```
 
 The proxy is up, rejects unauthenticated `GET /v1/models` (401), answers 200 with the
-Bearer token, and serves both target models (`gpt-5.6-sol`, `gpt-5.6-luna`).
+Bearer token, and serves both target models (`my-local-model`, `my-local-model-small`).
 
-## 2. Real end-to-end turn against GPT-5.6 (supporting evidence)
+## 2. Real end-to-end turn against the proxied model (supporting evidence)
 
-The `claudex` alias is exactly `claude --model gpt-5.6-sol --strict-mcp-config` plus the
+The `<alias>` alias is exactly `claude --model my-local-model --strict-mcp-config` plus the
 `ANTHROPIC_*` proxy env prefix. A print-mode turn proves the unchanged `claude` CLI drives
-GPT-5.6 through the local proxy:
+the proxied model through the local proxy:
 
 ```
-$ timeout 120 zsh -i -c 'claudex -p "Reply with exactly one word: PROXYOK. Then stop."'
+$ timeout 120 zsh -i -c '<alias> -p "Reply with exactly one word: PROXYOK. Then stop."'
 ⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set ...
 PROXYOK
 ```
 
-`PROXYOK` came back from `gpt-5.6-sol` via `127.0.0.1:8317`, so the model + proxy + claude
-CLI triad works end to end.
+`PROXYOK` came back from `my-local-model` via `127.0.0.1:<port>`, so the model + proxy +
+claude CLI triad works end to end.
 
 ## 3. fm-spawn composes the identical launch, harness stays claude
 
 Driven through the real `bin/fm-spawn.sh` with a fake terminal backend (the
 `tests/fm-spawn-model-endpoint.test.sh` harness records the literal launch line and the
-pre-launch text-line sends). For a `--model gpt-5.6-sol` spawn against a
+pre-launch text-line sends). For a `--model my-local-model` spawn against a
 `config/model-endpoints.json` entry, the launch line fm-spawn sends is:
 
 ```
-ANTHROPIC_BASE_URL='http://127.0.0.1:8317' ANTHROPIC_DEFAULT_OPUS_MODEL='gpt-5.6-sol' \
-ANTHROPIC_DEFAULT_SONNET_MODEL='gpt-5.6-sol' ANTHROPIC_DEFAULT_HAIKU_MODEL='gpt-5.6-luna' \
-CLAUDE_CODE_SUBAGENT_MODEL='gpt-5.6-sol' ENABLE_TOOL_SEARCH='false' \
+ANTHROPIC_BASE_URL='http://127.0.0.1:<port>' ANTHROPIC_DEFAULT_OPUS_MODEL='my-local-model' \
+ANTHROPIC_DEFAULT_SONNET_MODEL='my-local-model' ANTHROPIC_DEFAULT_HAIKU_MODEL='my-local-model-small' \
+CLAUDE_CODE_SUBAGENT_MODEL='my-local-model' ENABLE_TOOL_SEARCH='false' \
 CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions \
-  --model 'gpt-5.6-sol' --strict-mcp-config "$(cat '<brief>')"
+  --model 'my-local-model' --strict-mcp-config "$(cat '<brief>')"
 ```
 
-That is byte-for-byte the working `claudex` shape (base URL + slot mappings + `--model
-gpt-5.6-sol --strict-mcp-config`), with `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false`
-preserved. `state/<id>.meta` records `harness=claude` and `model=gpt-5.6-sol`, so the
+That is byte-for-byte the working `<alias>` shape (base URL + slot mappings + `--model
+my-local-model --strict-mcp-config`), with `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false`
+preserved. `state/<id>.meta` records `harness=claude` and `model=my-local-model`, so the
 busy signature, the claude Stop turn-end hook, the trust dialog, and watcher classification
 all apply unchanged. The test also asserts the claude Stop hook
 (`.claude/settings.local.json`) is still installed for the endpoint launch.
@@ -122,10 +116,11 @@ created), and `tests/fm-model-endpoint.test.sh` pins the resolver's config parsi
 
 ### Not exercised here: a live herdr-supervised spawn
 
-A real `fm-spawn.sh --backend herdr` launch of a GPT-5.6 worker (creating and later tearing
-down a herdr tab/pane) drives herdr lifecycle. The crewmate brief for this task is not
-`--herdr-lab` enabled, and its hard safety gate forbids driving herdr lifecycle from an
+A real `fm-spawn.sh --backend herdr` launch of a proxied-model worker (creating and later
+tearing down a herdr tab/pane) drives herdr lifecycle. The crewmate brief for this task is
+not `--herdr-lab` enabled, and its hard safety gate forbids driving herdr lifecycle from an
 unguarded brief, so that final live confirmation was deliberately left to firstmate. To run
-it, add a `gpt-5.6-sol` entry to `config/model-endpoints.json` (token via `auth_token_env`
-or `auth_token_file`) and spawn a scout with `--harness claude --model gpt-5.6-sol`; the
-worker should report `harness=claude`, run on GPT-5.6, and wake the watcher at each turn.
+it, add a `my-local-model` entry to `config/model-endpoints.json` (token via `auth_token_env`
+or `auth_token_file`) and spawn a scout with `--harness claude --model my-local-model`; the
+worker should report `harness=claude`, run on the proxied model, and wake the watcher at
+each turn.

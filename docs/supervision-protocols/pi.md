@@ -30,7 +30,7 @@ Observed output: `ok - Pi 0.80.5 live E2E rendered the tool, guarded once, woke,
 Command run for the installed-type contract: `tests/fm-pi-primary-types.test.sh`.
 Observed output: `ok - Pi primary extensions pass strict no-emit typecheck against Pi 0.80.5`.
 
-Continuity verification on 2026-07-17 used Pi 0.80.10 with the existing shared Pi credential store and the explicit `openai-codex/gpt-5.6-sol` provider/model pin.
+Continuity verification on 2026-07-17 used Pi 0.80.10 with the existing shared Pi credential store and an explicit `openai-codex/<model>` provider/model pin.
 The isolated live test copied no credential material and created no account.
 The model called `fm_watch_arm_pi` exactly once, an actionable status closed that cycle, the extension ledger-linked a verified successor before the handling turn ended, the turn-end guard never fired, and `/quit` cleaned up both child processes.
 Command: `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh`.
