@@ -16,7 +16,7 @@ No-verb wakes, such as `working:` notes and bare turn-ended signals, are benign 
 A crew that declares `paused:` for a known external wait is separately absorbed while idle and re-surfaced only on the longer pause cadence, rather than being treated as a possible wedge.
 A trailing `paused:` or durable `captain-held` status keeps that bounded cadence regardless of agent liveness, durably across watcher cycles, re-arms, and pane redraws: a live idle agent is the normal shape of a parked crew, and only authoritative working evidence (an active run-step or busy pane, rechecked on the wedge-threshold interval) reclassifies it.
 The pause declaration itself still surfaces once through the no-verb signal path, status movement past the pause escalates immediately, and the secondmate idle-endpoint exemption is unchanged.
-Its initial normal-mode status signal still surfaces through the no-verb path, while away mode self-handles that routine signal and owns the later recheck.
+In away mode the daemon instead self-handles that routine signal and owns the later recheck.
 Fresh stale panes use the same current-state read before trusting the status log, so an active run or busy pane outranks an old captain-relevant status-log line left behind before validation.
 No-change heartbeats are also benign.
 Absorbed wakes advance their suppression markers, log to `state/.watch-triage.log`, and keep the watcher blocking without a queue record or LLM turn.
