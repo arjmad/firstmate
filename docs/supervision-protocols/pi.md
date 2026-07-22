@@ -25,13 +25,13 @@ The extension tool returned Pi's required text `content` plus structured `detail
 The human command `/fm-watch-arm-pi` notified through `ctx.ui.notify(...)` and returned no value.
 The clean-exit probe ran `/quit`, printed `PI_EXIT=0`, and confirmed that both the attached arm process and watcher child were gone.
 That cleanup is owned by a one-shot process `exit` listener because Pi 0.80.5 did not reliably emit `session_shutdown` for `/quit`; the listener is removed when `session_shutdown` does run.
-Command run for the complete interactive regression: `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh`.
+Command run for the complete interactive regression: `FM_PI_LIVE_E2E=1 FM_PI_LIVE_MODEL=openai-codex/<model> tests/fm-pi-primary-live-e2e.test.sh` (the test requires an explicit provider/model pin via `FM_PI_LIVE_MODEL`).
 Observed output: `ok - Pi 0.80.5 live E2E rendered the tool, guarded once, woke, re-armed, and cleaned up on exit`.
 Command run for the installed-type contract: `tests/fm-pi-primary-types.test.sh`.
 Observed output: `ok - Pi primary extensions pass strict no-emit typecheck against Pi 0.80.5`.
 
-Continuity verification on 2026-07-17 used Pi 0.80.10 with the existing shared Pi credential store and the explicit `openai-codex/gpt-5.6-sol` provider/model pin.
+Continuity verification on 2026-07-17 used Pi 0.80.10 with the existing shared Pi credential store and an explicit `openai-codex/<model>` provider/model pin.
 The isolated live test copied no credential material and created no account.
 The model called `fm_watch_arm_pi` exactly once, an actionable status closed that cycle, the extension ledger-linked a verified successor before the handling turn ended, the turn-end guard never fired, and `/quit` cleaned up both child processes.
-Command: `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh`.
+Command: `FM_PI_LIVE_E2E=1 FM_PI_LIVE_MODEL=openai-codex/<model> tests/fm-pi-primary-live-e2e.test.sh`.
 Observed output: `ok - Pi 0.80.10 live E2E used shared Codex auth, auto-started one successor before turn end, and cleaned up`.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Behavior tests for fm-spawn.sh's local model-endpoint injection (the "claudex"
+# Behavior tests for fm-spawn.sh's local model-endpoint injection (the local-proxy
 # case: route a claude crewmate at a local Anthropic-shaped proxy via config/
 # model-endpoints.json, WITHOUT a new harness). These drive fm-spawn through meta
 # writing and launch construction with a fake tmux pane and a real isolated git
@@ -81,22 +81,22 @@ $1
 EOF
 }
 
-# write_endpoint_config <home> : the motivating gpt-5.6-sol -> local proxy entry,
+# write_endpoint_config <home> : an example my-local-model -> local proxy entry,
 # with the token sourced from an env var (never embedded).
 write_endpoint_config() {
   local home=$1
   cat > "$home/config/model-endpoints.json" <<'JSON'
 {
   "endpoints": {
-    "gpt-5.6-sol": {
-      "base_url": "http://127.0.0.1:8317",
+    "my-local-model": {
+      "base_url": "http://127.0.0.1:8080",
       "auth_token_env": "FM_TEST_PROXY_TOKEN",
       "strict_mcp_config": true,
       "env": {
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": "gpt-5.6-sol",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": "gpt-5.6-sol",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gpt-5.6-luna",
-        "CLAUDE_CODE_SUBAGENT_MODEL": "gpt-5.6-sol"
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "my-local-model",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "my-local-model",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "my-local-model-small",
+        "CLAUDE_CODE_SUBAGENT_MODEL": "my-local-model"
       }
     }
   }
@@ -135,25 +135,25 @@ test_endpoint_model_injects_prefix_and_strict_keeps_harness_claude() {
   seed_brief "$HOME_DIR" "$id"
 
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
-    --token "$TOKEN" "$id" "$PROJ_DIR" --model gpt-5.6-sol)
+    --token "$TOKEN" "$id" "$PROJ_DIR" --model my-local-model)
   expect_code 0 "$?" "endpoint spawn should succeed"
   assert_contains "$out" "spawned $id harness=claude" "endpoint spawn must report harness=claude"
 
   launch=$(cat "$LAUNCH_LOG")
   # Endpoint env prefix on the launch line.
-  assert_contains "$launch" "ANTHROPIC_BASE_URL='http://127.0.0.1:8317'" "launch missing base_url prefix"
-  assert_contains "$launch" "ANTHROPIC_DEFAULT_OPUS_MODEL='gpt-5.6-sol'" "launch missing opus mapping"
-  assert_contains "$launch" "ANTHROPIC_DEFAULT_HAIKU_MODEL='gpt-5.6-luna'" "launch missing haiku mapping"
-  assert_contains "$launch" "CLAUDE_CODE_SUBAGENT_MODEL='gpt-5.6-sol'" "launch missing subagent mapping"
+  assert_contains "$launch" "ANTHROPIC_BASE_URL='http://127.0.0.1:8080'" "launch missing base_url prefix"
+  assert_contains "$launch" "ANTHROPIC_DEFAULT_OPUS_MODEL='my-local-model'" "launch missing opus mapping"
+  assert_contains "$launch" "ANTHROPIC_DEFAULT_HAIKU_MODEL='my-local-model-small'" "launch missing haiku mapping"
+  assert_contains "$launch" "CLAUDE_CODE_SUBAGENT_MODEL='my-local-model'" "launch missing subagent mapping"
   # It is still the same claude CLI with the same prompt-suggestion suppression.
   assert_contains "$launch" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions" \
     "launch must remain the claude CLI with prompt-suggestion suppression"
-  assert_contains "$launch" "--model 'gpt-5.6-sol' --strict-mcp-config" "launch missing --strict-mcp-config"
+  assert_contains "$launch" "--model 'my-local-model' --strict-mcp-config" "launch missing --strict-mcp-config"
 
   # harness=claude preserved in meta; model recorded; token NOT recorded.
   meta="$HOME_DIR/state/$id.meta"
   assert_grep "harness=claude" "$meta" "meta must record harness=claude"
-  assert_grep "model=gpt-5.6-sol" "$meta" "meta must record the model"
+  assert_grep "model=my-local-model" "$meta" "meta must record the model"
   assert_no_grep "$TOKEN" "$meta" "the auth token must never be written to meta"
   pass "endpoint model injects the env prefix + --strict-mcp-config and stays harness=claude"
 }
@@ -166,7 +166,7 @@ test_token_exported_separately_never_in_launch_or_records() {
   seed_brief "$HOME_DIR" "$id"
 
   run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
-    --token "$TOKEN" "$id" "$PROJ_DIR" --model gpt-5.6-sol >/dev/null
+    --token "$TOKEN" "$id" "$PROJ_DIR" --model my-local-model >/dev/null
 
   launch=$(cat "$LAUNCH_LOG")
   sent=$(cat "$SENT_LOG")
@@ -229,7 +229,7 @@ test_turn_end_hook_still_installed_for_endpoint_launch() {
   seed_brief "$HOME_DIR" "$id"
 
   run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
-    --token "$TOKEN" "$id" "$PROJ_DIR" --model gpt-5.6-sol >/dev/null
+    --token "$TOKEN" "$id" "$PROJ_DIR" --model my-local-model >/dev/null
   # The claude Stop hook (turn-end signal) is written into the worktree exactly as
   # for a normal claude spawn - the endpoint override does not disturb supervision.
   hook="$WT_DIR/.claude/settings.local.json"
@@ -246,7 +246,7 @@ test_malformed_config_fails_closed_before_window() {
   seed_brief "$HOME_DIR" "$id"
 
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
-    --token "$TOKEN" "$id" "$PROJ_DIR" --model gpt-5.6-sol)
+    --token "$TOKEN" "$id" "$PROJ_DIR" --model my-local-model)
   expect_code 1 "$?" "a malformed endpoint config must abort an endpoint-model spawn"
   assert_contains "$out" "refusing to launch claude against the real Anthropic API" \
     "abort message must explain the fail-closed reason"
@@ -263,7 +263,7 @@ test_unresolvable_token_fails_closed() {
 
   # Token env var deliberately empty -> unresolvable -> abort.
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
-    --token "" "$id" "$PROJ_DIR" --model gpt-5.6-sol)
+    --token "" "$id" "$PROJ_DIR" --model my-local-model)
   expect_code 1 "$?" "an unresolvable token must abort the spawn"
   assert_absent "$HOME_DIR/state/$id.meta" "token-failure abort must happen before meta is written"
   pass "an unresolvable proxy token fails closed before launch"
@@ -277,17 +277,17 @@ test_dispatch_profile_backstop_with_endpoint_model() {
   # A dispatch profile is active, so fm-spawn requires an explicit harness. This
   # is the path firstmate takes: it resolves a profile that selects the endpoint
   # model and passes an explicit --harness claude --model <endpoint-model>.
-  printf '%s\n' '{"rules":[{"when":"proxy work","use":{"harness":"claude","model":"gpt-5.6-sol"}}]}' \
+  printf '%s\n' '{"rules":[{"when":"proxy work","use":{"harness":"claude","model":"my-local-model"}}]}' \
     > "$HOME_DIR/config/crew-dispatch.json"
   seed_brief "$HOME_DIR" "$id"
 
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
-    --token "$TOKEN" "$id" "$PROJ_DIR" --harness claude --model gpt-5.6-sol)
+    --token "$TOKEN" "$id" "$PROJ_DIR" --harness claude --model my-local-model)
   expect_code 0 "$?" "explicit harness must satisfy the dispatch backstop and apply the endpoint"
   assert_contains "$out" "spawned $id harness=claude" "backstop spawn must report harness=claude"
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "ANTHROPIC_BASE_URL='http://127.0.0.1:8317'" "backstop path must still apply the endpoint prefix"
-  assert_contains "$launch" "--model 'gpt-5.6-sol' --strict-mcp-config" "backstop path must still add --strict-mcp-config"
+  assert_contains "$launch" "ANTHROPIC_BASE_URL='http://127.0.0.1:8080'" "backstop path must still apply the endpoint prefix"
+  assert_contains "$launch" "--model 'my-local-model' --strict-mcp-config" "backstop path must still add --strict-mcp-config"
   pass "the crew-dispatch backstop coexists with an endpoint model when firstmate passes an explicit harness"
 }
 

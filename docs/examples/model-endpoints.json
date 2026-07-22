@@ -1,14 +1,14 @@
 {
   "endpoints": {
-    "gpt-5.6-sol": {
-      "base_url": "http://127.0.0.1:8317",
+    "my-local-model": {
+      "base_url": "http://127.0.0.1:8080",
       "auth_token_env": "MY_PROXY_TOKEN",
       "strict_mcp_config": true,
       "env": {
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": "gpt-5.6-sol",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": "gpt-5.6-sol",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gpt-5.6-luna",
-        "CLAUDE_CODE_SUBAGENT_MODEL": "gpt-5.6-sol"
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "my-local-model",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "my-local-model",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "my-local-model-small",
+        "CLAUDE_CODE_SUBAGENT_MODEL": "my-local-model"
       }
     }
   }

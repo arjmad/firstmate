@@ -55,7 +55,7 @@ Only the watcher process touches `state/.last-watcher-beat`; no helper process c
 
 All five harnesses ran against git-initialized scratch projects and isolated `FM_HOME` state.
 Existing harness-managed credentials remained in place, no credential bytes were copied into a fixture or transcript, and no account was created.
-Pi used the existing shared Pi auth store with the explicit `openai-codex/gpt-5.6-sol` provider/model pin and low thinking.
+Pi used the existing shared Pi auth store with an explicit `openai-codex/<model>` provider/model pin and low thinking.
 Each run used the smallest prompt needed to exercise the harness-native path.
 
 Harness versions:
@@ -84,7 +84,7 @@ Observed result: `ok - OpenCode 1.17.18 live E2E auto-started one successor befo
 
 Pi loaded the tracked extensions in its interactive TUI, called `fm_watch_arm_pi` once, received an actionable close, and ledger-linked a successor before the handling turn ended.
 The turn-end backstop did not fire, and `/quit` removed both the watcher and arm child.
-Command: `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh`.
+Command: `FM_PI_LIVE_E2E=1 FM_PI_LIVE_MODEL=openai-codex/<model> tests/fm-pi-primary-live-e2e.test.sh`.
 Observed result: `ok - Pi 0.80.10 live E2E used shared Codex auth, auto-started one successor before turn end, and cleaned up`.
 
 Grok ran the real arm wrapper through `run_terminal_command` with its tracked background option, surfaced its native task-completion notification after the actionable close, and recorded `reason=actionable-signal` in the cycle ledger.

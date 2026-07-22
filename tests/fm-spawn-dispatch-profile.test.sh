@@ -337,12 +337,12 @@ test_pi_threads_model_and_max_effort() {
   read_case_record "$rec"
 
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
-    --model openai-codex/gpt-5.6-sol --effort max)
+    --model openai-codex/my-local-model --effort max)
   status=$?
   expect_code 0 "$status" "pi spawn with max effort should succeed"
-  assert_meta_profile "$HOME_DIR/state/$id.meta" pi openai-codex/gpt-5.6-sol max
+  assert_meta_profile "$HOME_DIR/state/$id.meta" pi openai-codex/my-local-model max
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "pi --model 'openai-codex/gpt-5.6-sol' --thinking 'max' -e" \
+  assert_contains "$launch" "pi --model 'openai-codex/my-local-model' --thinking 'max' -e" \
     "pi launch did not thread the requested model and max thinking level"
   pass "pi receives --model and --thinking max profile flags"
 }
