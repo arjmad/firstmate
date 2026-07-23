@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 # Static watcher program for a validated PR poll sidecar.
 # It emits exactly one merged line for MERGED and stays silent otherwise.
+#
+# Usage:
+#   fm-pr-poll.sh --validated <url> <owner> <repo> <number>
+#   <task>.check.sh
+#
+# The validated mode consumes canonical fields supplied directly by a trusted
+# caller. The zero-argument installed-check mode derives the adjacent
+# <task>.pr-poll sidecar from its own <task>.check.sh path, validates its four
+# exact lines, and otherwise exits silently without invoking GitHub.
 set -u
 LC_ALL=C
 export LC_ALL

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Post a completion follow-up for an X-mode-linked task, up to three within a
-# 7-day window, and manage the link's counter.
+# Post a completion follow-up for an X-mode-linked task, up to the configured
+# cap within the configured window, and manage the link's counter.
 #
 # An X-mode mention that spawned real work is linked to its task by fm-x-link.sh
 # (x_request/x_request_ts/x_followups plus optional reply context in
 # state/<id>.meta). When that task reaches a genuine milestone (investigation
 # done, build started, shipped, failed), firstmate composes a public-safe outcome
-# and posts it here as one of up to three follow-ups, within the window. Past the
+# and posts it here as one of the permitted follow-ups, within the window. Past the
 # window, past the cap, or after --final, this clears the link so a later call is
 # a clean no-op.
 #
@@ -74,8 +74,9 @@ usage: fm-x-followup.sh --check <task-id>
        fm-x-followup.sh <task-id> [--image <path>] [--final] --text-file <path>
        fm-x-followup.sh <task-id> [--image <path>] [--final] -
 
-Post a completion follow-up (up to 3 per link, within a 7-day window) for an
-X-mode-linked task and manage the link's follow-up counter.
+Post a completion follow-up for an X-mode-linked task and manage the link's
+follow-up counter. The cap defaults to 3 and the window defaults to 7 days;
+FMX_FOLLOWUP_MAX_COUNT and FMX_FOLLOWUP_MAX_AGE_SECS configure them.
 
 Options:
   --check          Print the request_id when a follow-up is due.

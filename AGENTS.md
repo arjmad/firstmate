@@ -464,6 +464,8 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `firstmate-codexapp` - load before coordinating a visible Codex Desktop thread, evaluating a Codex App backend request, or reconciling Codex Desktop host-tool smoke evidence for Firstmate work.
 - `firstmate-coding-guidelines` - load before changing firstmate's shared, tracked material, as defined by section 1's list, whether editing directly or briefing a crewmate for a firstmate-repo task.
 
+When the captain invokes `/bearings` or asks for a bearings report, morning brief, status report, catch-up, where they left off, or what is in the works, load the `bearings` skill.
+
 ## 14. X mode
 
 X mode ships inert and causes no behavior change until the home opts in by placing `FMX_PAIRING_TOKEN` in its gitignored `.env`.
