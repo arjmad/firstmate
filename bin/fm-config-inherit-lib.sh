@@ -3,9 +3,10 @@
 # set of LOCAL (gitignored) config items down into each secondmate home's
 # config/, so a secondmate's OWN crewmates inherit the primary's settings
 # (e.g. primary config/crew-dispatch.json makes a secondmate use the same dispatch
-# profile rules, primary config/crew-harness=codex makes a secondmate's crewmates
-# spawn on codex too, and primary config/backlog-backend=manual makes that home
-# hand-edit backlog files too). It also pushes the one primary-authoritative
+# profile rules, config/model-endpoints.json carries matching endpoint mappings,
+# primary config/crew-harness=codex makes a secondmate's crewmates spawn on codex
+# too, and primary config/backlog-backend=manual makes that home hand-edit backlog
+# files too). It also pushes the one primary-authoritative
 # shared captain-preference file, data/captain-shared.md, into each secondmate
 # home's data/ as a read-only copy.
 #
@@ -39,7 +40,7 @@ FM_SHARED_CAPTAIN_MODE="444"
 # The declared inheritable set (space-separated, config-dir-relative item paths).
 # Extend here to inherit more of the primary's local config; override via the
 # environment only in tests. Items must not contain whitespace.
-FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json crew-harness backlog-backend}"
+FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json model-endpoints.json crew-harness backlog-backend}"
 
 fm_inherit_file_mode() {
   if [ "$(uname)" = Darwin ]; then
@@ -65,6 +66,11 @@ fm_inherit_file_link_count() {
   fi
 }
 
+inheritable_config_mode_is_safe() {
+  local item=$1 dest=$2
+  [ "$item" != model-endpoints.json ] || [ "$(fm_inherit_file_mode "$dest")" = 600 ]
+}
+
 fm_inherit_sha256() {
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
@@ -84,7 +90,7 @@ copy_inheritable_file() {
   [ -n "$dest_parent" ] && [ "$dest_parent" != "$dest" ] || return 1
   mkdir -p "$dest_parent" 2>/dev/null || return 1
   tmp=$(mktemp "$dest_parent/.fm-inherit.XXXXXX" 2>/dev/null) || return 1
-  if ! cp "$src" "$tmp" 2>/dev/null; then
+  if ! cp "$src" "$tmp" 2>/dev/null || ! chmod 0600 "$tmp" 2>/dev/null; then
     rm -f "$tmp" 2>/dev/null || true
     return 1
   fi
@@ -405,7 +411,8 @@ propagate_inheritable_config() {
         record_inheritable_config_result "$item" skipped "$reason"
         continue
       fi
-      if [ -L "$dest" ] || [ ! -f "$dest" ] || ! cmp -s "$src" "$dest"; then
+      if [ -L "$dest" ] || [ ! -f "$dest" ] || ! cmp -s "$src" "$dest" \
+        || ! inheritable_config_mode_is_safe "$item" "$dest"; then
         if copy_inheritable_file "$src" "$dest"; then
           record_inheritable_config_result "$item" pushed ""
         else
