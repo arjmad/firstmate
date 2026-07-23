@@ -921,12 +921,12 @@ test_spawn_task_lock_covers_all_backend_creation_and_metadata_publication() {
   wake_source=". \"\$SCRIPT_DIR/fm-wake-lib.sh\""
   acquire_pattern="fm_lock_try_acquire \"\$SPAWN_TASK_LOCK\""
   backend_pattern="^case \"\$BACKEND\" in"
-  meta_pattern="} > \"\$STATE/\$ID.meta\""
+  meta_pattern="printf '%s\\n' \"\${META_LINES[@]}\" > \"\$STATE/\$ID.meta\""
   assert_contains "$source" "$wake_source" \
     "fm-spawn does not load the shared lock implementation"
   acquire_line=$(grep -n "$acquire_pattern" "$ROOT/bin/fm-spawn.sh" | head -1 | cut -d: -f1)
   backend_line=$(grep -n "$backend_pattern" "$ROOT/bin/fm-spawn.sh" | tail -1 | cut -d: -f1)
-  meta_line=$(grep -n "$meta_pattern" "$ROOT/bin/fm-spawn.sh" | tail -1 | cut -d: -f1)
+  meta_line=$(grep -nF "$meta_pattern" "$ROOT/bin/fm-spawn.sh" | tail -1 | cut -d: -f1)
   [ -n "$acquire_line" ] && [ -n "$backend_line" ] && [ -n "$meta_line" ] \
     || fail "could not locate the spawn lock, backend creation, and metadata publication"
   [ "$acquire_line" -lt "$backend_line" ] && [ "$backend_line" -lt "$meta_line" ] \
