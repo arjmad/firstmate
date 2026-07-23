@@ -55,7 +55,14 @@ jobs:
       - run: |
           set -eu
           for test_script in tests/*.test.sh; do
+            if [ ! -x "$test_script" ]; then
+              echo "::error file=$test_script::shell behavior test is not executable"
+              exit 1
+            fi
             "$test_script"
+          done
+          for test_script in tests/*.test.py; do
+            python3 "$test_script"
           done
 
   macos-stock-bash:
