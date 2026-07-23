@@ -20,12 +20,14 @@ test_selected_harness_block_only() {
 }
 
 test_unknown_fallback() {
-  local out
+  local checkpoint_line out stale_line
+  checkpoint_line="bin/fm-watch-checkpoint.sh --seconds \"\${FM_CODEX_WATCH_CHECKPOINT:-180}\""
+  stale_line="bounded foreground wait over \`bin/fm-watch.sh\`"
   out=$("$RENDER" --harness not-real)
   assert_contains "$out" "primary harness: unknown" "unknown heading missing"
   assert_contains "$out" "Mode: Unknown harness fallback." "unknown fallback snippet missing"
-  assert_contains "$out" 'bin/fm-watch-checkpoint.sh --seconds "${FM_CODEX_WATCH_CHECKPOINT:-180}"' "unknown fallback missing bounded checkpoint entrypoint"
-  assert_not_contains "$out" 'bounded foreground wait over `bin/fm-watch.sh`' "unknown fallback still prescribes direct watcher execution"
+  assert_contains "$out" "$checkpoint_line" "unknown fallback missing bounded checkpoint entrypoint"
+  assert_not_contains "$out" "$stale_line" "unknown fallback still prescribes direct watcher execution"
   pass "renderer falls back to a policy-compliant unknown-harness checkpoint"
 }
 
@@ -108,10 +110,11 @@ test_ordinary_wake_lines_are_distinct_from_repair() {
 }
 
 test_orca_skill_defers_to_emitted_protocol() {
-  local skill
+  local skill stale_line
+  stale_line="\`bin/fm-watch.sh\` whenever there are tasks in flight"
   skill=$(cat "$ROOT/.agents/skills/firstmate-orca/SKILL.md")
   assert_contains "$skill" "supervision protocol emitted at session start" "Orca skill does not defer to the emitted supervision protocol"
-  assert_not_contains "$skill" '`bin/fm-watch.sh` whenever there are tasks in flight' "Orca skill still prescribes direct watcher execution"
+  assert_not_contains "$skill" "$stale_line" "Orca skill still prescribes direct watcher execution"
   pass "Orca skill defers watcher continuity to the emitted harness protocol"
 }
 
