@@ -107,6 +107,14 @@ test_ordinary_wake_lines_are_distinct_from_repair() {
   pass "renderer distinguishes ordinary wake continuation from failure recovery"
 }
 
+test_orca_skill_defers_to_emitted_protocol() {
+  local skill
+  skill=$(cat "$ROOT/.agents/skills/firstmate-orca/SKILL.md")
+  assert_contains "$skill" "supervision protocol emitted at session start" "Orca skill does not defer to the emitted supervision protocol"
+  assert_not_contains "$skill" '`bin/fm-watch.sh` whenever there are tasks in flight' "Orca skill still prescribes direct watcher execution"
+  pass "Orca skill defers watcher continuity to the emitted harness protocol"
+}
+
 test_grok_is_background_notify() {
   local out
   out=$("$RENDER" --harness grok)
@@ -153,6 +161,7 @@ test_invalid_boolean_values_are_rejected
 test_conditional_stanzas
 test_repair_lines
 test_ordinary_wake_lines_are_distinct_from_repair
+test_orca_skill_defers_to_emitted_protocol
 test_grok_is_background_notify
 test_grok_command_sources_effective_config
 test_pi_snippet_uses_effective_extension_path
