@@ -6,8 +6,9 @@
 # proxy that speaks the Anthropic API shape (so non-Anthropic models can be
 # driven through the unchanged `claude` CLI) WITHOUT introducing a new harness.
 # The resolved model still launches as `harness=claude`; the only launch
-# differences are an endpoint env prefix, a separately-exported auth token, and
-# `--strict-mcp-config`. fm-spawn.sh consumes this and owns the launch wiring.
+# differences are an endpoint env prefix, a separately-exported auth token,
+# `--strict-mcp-config`, and an optional deliberately granted `--mcp-config`.
+# fm-spawn.sh consumes this and owns the launch wiring.
 #
 # Usage:
 #   fm-model-endpoint.sh resolve [--with-token] <model>
@@ -24,6 +25,7 @@
 #         "auth_token_file": "/path/to/token",   #   tried in this priority order,
 #         "auth_token": "<literal-token>",       #   first non-empty wins
 #         "strict_mcp_config": true,             # optional bool, default true -> --strict-mcp-config
+#         "mcp_config": "/path/to/.mcp.json",    # optional deliberate MCP grant -> --mcp-config
 #         "env": {                               # optional extra NON-SECRET env vars,
 #           "ANTHROPIC_DEFAULT_OPUS_MODEL": "my-local-model",   # set as an inline launch prefix
 #           "ANTHROPIC_DEFAULT_SONNET_MODEL": "my-local-model",
@@ -43,6 +45,7 @@
 #
 # Output (stdout), one TAB-separated record per line, on a match:
 #   strict_mcp_config<TAB><0|1>
+#   mcp_config<TAB><absolute-readable-path> # only when configured
 #   env<TAB>ANTHROPIC_BASE_URL<TAB><base_url>
 #   env<TAB><KEY><TAB><VALUE>            # one per entry in the config's env map
 #   token<TAB><resolved-token>          # ONLY when --with-token and resolvable
@@ -124,6 +127,13 @@ records=$(jq -r --arg model "$MODEL" --arg with "$WITH_TOKEN" '
                          then error("strict_mcp_config must be a boolean")
                        else $e.strict_mcp_config end)
                else true end) as $strict
+            | (if ($e | has("mcp_config"))
+                 then (if (($e.mcp_config | type) != "string") or ($e.mcp_config == "")
+                         then error("mcp_config must be a non-empty string")
+                       elif ($e.mcp_config | test("[[:cntrl:]]"))
+                         then error("mcp_config must not contain control characters")
+                       else $e.mcp_config end)
+               else null end) as $mcp
             | (($e.env // {}) as $env0
                | if (($env0 | type) != "object") then error("env must be an object") else $env0 end) as $env
             | ([ ("auth_token_env","auth_token_file","auth_token")
@@ -135,6 +145,7 @@ records=$(jq -r --arg model "$MODEL" --arg with "$WITH_TOKEN" '
                 then error("no token source for " + $model + ": set auth_token_env, auth_token_file, or auth_token")
               else
                 ("strict_mcp_config\t" + (if $strict then "1" else "0" end)),
+                (if $mcp == null then empty else ("mcp_config\t" + $mcp) end),
                 ("env\tANTHROPIC_BASE_URL\t" + $base),
                 ($env | to_entries[]
                   | if ((.key | is_env_name) | not) then error("invalid env key: " + .key)
@@ -169,11 +180,24 @@ esac
 # the first that yields a non-empty single-line value wins.
 token=
 token_seen=0
+mcp_error=
 emit=()
 while IFS= read -r line; do
   [ -n "$line" ] || continue
   kind=${line%%$'\t'*}
   case "$kind" in
+    mcp_config)
+      operand=${line#mcp_config$'\t'}
+      case "$operand" in
+        /*) ;;
+        *) operand="$FM_HOME/$operand" ;;
+      esac
+      if [ ! -f "$operand" ] || [ ! -r "$operand" ]; then
+        mcp_error="configured mcp_config for '$MODEL' is missing or unreadable: $operand"
+      else
+        emit+=("mcp_config"$'\t'"$operand")
+      fi
+      ;;
     tokensrc)
       token_seen=1
       [ -z "$token" ] || continue
@@ -212,6 +236,10 @@ EOF
 
 # Fail closed BEFORE emitting anything, so a spawn that will abort never prints
 # even the non-secret records.
+if [ -n "$mcp_error" ]; then
+  echo "error: $mcp_error" >&2
+  exit 2
+fi
 if [ "$WITH_TOKEN" -eq 1 ] && { [ "$token_seen" -eq 0 ] || [ -z "$token" ]; }; then
   echo "error: could not resolve a non-empty auth token for '$MODEL' from the configured source" >&2
   exit 2

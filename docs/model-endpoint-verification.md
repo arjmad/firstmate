@@ -81,6 +81,10 @@ busy signature, the claude Stop turn-end hook, the trust dialog, and watcher cla
 all apply unchanged. The test also asserts the claude Stop hook
 (`.claude/settings.local.json`) is still installed for the endpoint launch.
 
+The verified launch has `--strict-mcp-config` and no `--mcp-config`, so it loads zero configured MCP servers rather than inheriting user/global or project-scoped servers.
+The exact default capability boundary and the optional per-endpoint `mcp_config` grant are owned by [`configuration.md`](configuration.md) "Local model endpoints".
+Strict MCP governs MCP discovery only, so this launch shape does not prove that Claude-in-Chrome or other tooling configured outside MCP is absent.
+
 ### Secret discipline (grepped)
 
 The auth token is exported as its own pre-launch line and appears in no durable record:
@@ -96,10 +100,8 @@ $ grep -rn '<token>' config/           -> absent (only the env var NAME is store
 $ grep '<token>' <launch-literal>      -> absent (not in the recorded launch string)
 ```
 
-`tests/fm-spawn-model-endpoint.test.sh` pins all of the above, plus the fail-closed paths
-(malformed config and an unresolvable token both abort before any window or meta is
-created), and `tests/fm-model-endpoint.test.sh` pins the resolver's config parsing, the
-0/3/2 exit-code contract, and the token-source priority.
+`tests/fm-spawn-model-endpoint.test.sh` pins all of the above, the default absence of `--mcp-config`, the opt-in `--mcp-config` launch shape, and the fail-closed paths before any launch or meta is created.
+`tests/fm-model-endpoint.test.sh` pins the resolver's config parsing, readable MCP path record, missing-path refusal, 0/3/2 exit-code contract, and token-source priority.
 
 ## 4. Backend coverage
 
@@ -108,9 +110,9 @@ created), and `tests/fm-model-endpoint.test.sh` pins the resolver's config parsi
   are ordinary characters in the launch literal; the token export rides the same
   `spawn_send_text_line` primitive as the existing `GOTMPDIR` export.
 - herdr (this home's pinned backend): reasoned, not independently driven here. The endpoint
-  override adds nothing to the transport layer - it only lengthens the launch literal and
-  adds one more `export` line, both carried by the same `spawn_send_literal` /
-  `spawn_send_text_line` primitives that already deliver the herdr-verified `GOTMPDIR`
+  override adds nothing to the transport layer - it only lengthens the launch literal,
+  optionally lengthens it again with `--mcp-config`, and adds one more `export` line, all
+  carried by the same `spawn_send_literal` / `spawn_send_text_line` primitives that already deliver the herdr-verified `GOTMPDIR`
   export and `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` prefix (see
   [`herdr-backend.md`](herdr-backend.md)). No herdr-specific code path changed.
 
@@ -124,3 +126,27 @@ it, add a `my-local-model` entry to `config/model-endpoints.json` (token via `au
 or `auth_token_file`) and spawn a scout with `--harness claude --model my-local-model`; the
 worker should report `harness=claude`, run on the proxied model, and wake the watcher at
 each turn.
+
+## 5. Per-endpoint MCP grant extension (2026-07-23)
+
+- Date: 2026-07-23
+- Base commit: `73e050b` (`fix(spawn): fail on metadata write errors (#14)`)
+- Scope: resolver and launch-string behavior with the fake tmux transport used in section 3.
+
+```
+$ bash tests/fm-model-endpoint.test.sh
+ok - mcp_config emits the configured readable path
+ok - a relative mcp_config resolves from the effective FM_HOME
+ok - a missing mcp_config fails closed before records are emitted
+ok - an invalid mcp_config value fails closed
+
+$ bash tests/fm-spawn-model-endpoint.test.sh
+ok - endpoint model injects the env prefix + --strict-mcp-config and stays harness=claude
+ok - an endpoint mcp_config adds one deliberate --mcp-config grant
+ok - a missing endpoint mcp_config fails closed before any launch or meta is created
+ok - an unreadable endpoint mcp_config fails closed before launch
+```
+
+The opt-in launch assertion is `--model 'my-local-model' --strict-mcp-config --mcp-config '<readable-path>'`.
+The existing no-`mcp_config` case still asserts that no `--mcp-config` flag appears, preserving the zero-MCP default exactly.
+No live Sol-worker Chrome probe was run, so the outside-MCP Chrome boundary remains explicitly unverified rather than inferred from the strict MCP flag.
