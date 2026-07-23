@@ -53,9 +53,10 @@
 # Exit codes (the fail-closed contract fm-spawn relies on):
 #   0  model matched a configured endpoint; records printed.
 #   3  no config file (absent or empty) OR model not listed; launch normally.
-#   2  config present but malformed, matched entry invalid, or (with --with-token)
-#      token unresolvable; fm-spawn ABORTS the spawn rather than risk launching an
-#      endpoint model against the real Anthropic API.
+#   2  config present but malformed, matched entry invalid, configured mcp_config
+#      missing/unreadable, or (with --with-token) token unresolvable; fm-spawn
+#      ABORTS the spawn rather than risk launching an endpoint model against the
+#      real Anthropic API.
 #   64 usage error.
 set -u
 

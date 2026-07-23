@@ -232,7 +232,7 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 
 `config/model-endpoints.json` is an optional local, gitignored file that lets firstmate route a `claude` crewmate or scout at a local, Anthropic-shaped proxy so a non-Anthropic model can be driven through the unchanged `claude` CLI.
 This is a per-model endpoint override, not a new harness: a matched spawn still records `harness=claude`, so every claude supervision fact (busy signature, turn-end hook, prompt-suggestion suppression, trust dialog, watcher classification) applies unchanged.
-The only launch differences from a normal claude spawn are an endpoint environment prefix, a separately exported auth token, and `--strict-mcp-config`.
+The only launch differences from a normal claude spawn are an endpoint environment prefix, a separately exported auth token, `--strict-mcp-config`, and an optional deliberately granted `--mcp-config` (see `mcp_config` below).
 Selection reuses the existing `--model` axis: when a template-based claude launch resolves a `--model` that matches a configured entry (whether the model came from an explicit flag or a `config/crew-dispatch.json` profile), `fm-spawn.sh` applies that entry; a raw launch command, a non-claude harness, and a normal Anthropic model (or no model) are never affected.
 This section owns the schema; `bin/fm-model-endpoint.sh`'s header and `--help` own the exact resolution mechanics and exit-code contract, and `bin/fm-spawn.sh` owns the launch wiring.
 
