@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout]
-#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--title <short>] [--scout]
+#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--title <short>] --secondmate
 #   <project-dir> accepts a projects/<name> path, an explicit absolute or
 #   slash-containing relative path, or a bare registered project name resolved
 #   against this home's projects/ dir (matching fm-brief.sh's bare <repo-name>
@@ -15,6 +15,12 @@
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
 #   from that harness's launch rather than guessed.
+#   --title <short> changes only the display label for this spawn. The effective
+#   Herdr pane/agent title is "<title> · <model>" when a concrete model is known,
+#   otherwise "<title> · <harness>"; without --title, <task-id> is used. The
+#   operational endpoint, tab label, ownership, and selector metadata remain task-id
+#   based. title= is recorded in state/<id>.meta only when the flag was explicit.
+#   tmux keeps its fm-<id> window name because that name is also its recorded target.
 #   Local model endpoints: for a template-based claude launch, when --model matches
 #   an entry in config/model-endpoints.json, the SAME claude CLI is redirected at a
 #   local Anthropic-shaped proxy (endpoint env prefix + --strict-mcp-config; auth
@@ -157,10 +163,12 @@ HARNESS_ARG=
 MODEL=
 EFFORT=
 BACKEND_ARG=
+TITLE=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
 BACKEND_SET=0
+TITLE_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -173,6 +181,7 @@ for a in "$@"; do
       model) MODEL=$a; MODEL_SET=1 ;;
       effort) EFFORT=$a; EFFORT_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
+      title) TITLE=$a; TITLE_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -189,6 +198,8 @@ for a in "$@"; do
     --effort=*) EFFORT=${a#--effort=}; EFFORT_SET=1 ;;
     --backend) want_value=backend ;;
     --backend=*) BACKEND_ARG=${a#--backend=}; BACKEND_SET=1 ;;
+    --title) want_value=title ;;
+    --title=*) TITLE=${a#--title=}; TITLE_SET=1 ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -197,6 +208,11 @@ done
 [ "$MODEL_SET" -eq 0 ] || [ -n "$MODEL" ] || { echo "error: --model requires a non-empty value" >&2; exit 1; }
 [ "$EFFORT_SET" -eq 0 ] || [ -n "$EFFORT" ] || { echo "error: --effort requires a non-empty value" >&2; exit 1; }
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || { echo "error: --backend requires a non-empty value" >&2; exit 1; }
+[ "$TITLE_SET" -eq 0 ] || [ -n "$TITLE" ] || { echo "error: --title requires a non-empty value" >&2; exit 1; }
+if [ "$TITLE_SET" -eq 1 ] && printf '%s' "$TITLE" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+  echo "error: --title must not contain control characters" >&2
+  exit 1
+fi
 case "$EFFORT" in
   ''|low|medium|high|xhigh|max) ;;
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
@@ -298,6 +314,7 @@ spawn_abort_cleanup() {
             echo "tasktmp=${TASK_TMP:-}"
             echo "model=${MODEL:-default}"
             echo "effort=${EFFORT:-default}"
+            [ "$TITLE_SET" -eq 0 ] || echo "title=$TITLE"
             echo "backend=orca"
             echo "orca_worktree_id=$ORCA_WORKTREE_ID"
             [ -z "${ORCA_TERMINAL:-}" ] || echo "terminal=$ORCA_TERMINAL"
@@ -358,6 +375,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
+  [ "$TITLE_SET" -eq 0 ] || shared_args+=(--title "$TITLE")
   for pair in "${POS[@]}"; do
     case "$pair" in
       *=*) : ;;
@@ -524,6 +542,14 @@ if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
     fi
   fi
 fi
+
+DISPLAY_LABEL=$ID
+[ "$TITLE_SET" -eq 0 ] || DISPLAY_LABEL=$TITLE
+DISPLAY_AGENT=$HARNESS
+if [ -n "$MODEL" ] && [ "$MODEL" != default ]; then
+  DISPLAY_AGENT=$MODEL
+fi
+DISPLAY_TITLE="$DISPLAY_LABEL · $DISPLAY_AGENT"
 
 # Local model-endpoint override (bin/fm-model-endpoint.sh; docs/configuration.md
 # "Local model endpoints"). When this is a template-based claude launch whose
@@ -1015,6 +1041,8 @@ EOF
       echo "error: herdr did not return a tab/pane id for $W" >&2
       exit 1
     fi
+    fm_backend_herdr_set_task_display \
+      "$HERDR_SES" "$HERDR_PANE_ID" "$DISPLAY_TITLE" "$DISPLAY_AGENT" || true
     T="$HERDR_SES:$HERDR_PANE_ID"
     ;;
   zellij)
@@ -1298,6 +1326,7 @@ META_WINDOW=$T
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  [ "$TITLE_SET" -eq 0 ] || echo "title=$TITLE"
   # backend= is written only for a non-default (non-tmux) backend, so the
   # default path's meta stays byte-identical (absent backend= means tmux;
   # data/fm-backend-design-d7's P1 compatibility contract).

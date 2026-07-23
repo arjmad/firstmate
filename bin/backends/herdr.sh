@@ -792,6 +792,27 @@ fm_backend_herdr_agent_alive() {  # <target>
   esac
 }
 
+# fm_backend_herdr_set_task_display: attach a display-only title and effective
+# model/harness label to one exact pane.
+# The task tab's fm-<id> label and the recorded pane endpoint remain unchanged,
+# so no title text becomes selector, recovery, ownership, or cleanup authority.
+# pane rename covers Herdr clients that render the pane's custom label directly;
+# report-metadata covers the agent-aware sidebar title and displayed agent name.
+# Both are best-effort because display metadata is not task lifecycle authority.
+fm_backend_herdr_set_task_display() {  # <session> <pane-id> <title> <display-agent>
+  local session=$1 pane_id=$2 title=$3 display_agent=$4 ok=0
+  if ! fm_backend_herdr_cli "$session" pane rename "$pane_id" "$title" >/dev/null 2>&1; then
+    echo "warning: could not set Herdr pane title '$title' for $pane_id; the task endpoint is still valid" >&2
+    ok=1
+  fi
+  if ! fm_backend_herdr_cli "$session" pane report-metadata "$pane_id" \
+    --source firstmate --title "$title" --display-agent "$display_agent" >/dev/null 2>&1; then
+    echo "warning: could not set Herdr agent display metadata for $pane_id; the task endpoint is still valid" >&2
+    ok=1
+  fi
+  return "$ok"
+}
+
 # fm_backend_herdr_create_task: create the task's tab (one pane) in
 # <container> ("session:workspace_id"). Herdr does NOT enforce label
 # uniqueness itself (verified: two tabs can share a label), so the duplicate

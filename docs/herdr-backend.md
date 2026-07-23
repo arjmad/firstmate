@@ -129,6 +129,15 @@ Tab-per-task within each home's own workspace remains the durable default for th
 Durable or automatically recovered workspace-per-task remains rejected.
 The optional projection accepts a top-level space per clean new task only as a disposable visual aid with explicit flat fallback.
 
+## Informative pane and agent titles
+
+`bin/fm-spawn.sh --title <short>` sets a display-only label for one spawn and defaults to the task id when the flag is absent.
+The composed Herdr title is `<title> · <model>` when a concrete model is known and `<title> · <harness>` otherwise.
+Firstmate applies the composed string as the pane's custom label and as Herdr display metadata, while the effective model or harness is also reported as the display-agent value.
+The task's `fm-<id>` tab label, exact pane endpoint, task id, and ownership records are unchanged and remain the only operational authorities.
+An explicit title is recorded as `title=` in the task metadata, while a defaulted task-id title adds no metadata key.
+The tmux adapter deliberately keeps its existing `fm-<id>` window name because that name is also its recorded target and duplicate-detection key, so there is no equivalent display-only window rename to apply safely.
+
 ## Default workspace lifecycle: one per-home workspace, reused
 
 Each home's own workspace (`firstmate` for the primary, `2ndmate-<secondmate-id>` for a secondmate - see "Label derivation" above) is created as needed and reused by each subsequent default-container spawn while it exists: `fm_backend_herdr_workspace_ensure` calls `fm_backend_herdr_workspace_find` first and creates a workspace only when none labelled for that home exists yet.
