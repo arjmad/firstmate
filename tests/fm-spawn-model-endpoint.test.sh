@@ -104,6 +104,22 @@ write_endpoint_config() {
 JSON
 }
 
+write_endpoint_config_with_mcp() {
+  local home=$1 mcp=$2
+  cat > "$home/config/model-endpoints.json" <<JSON
+{
+  "endpoints": {
+    "my-local-model": {
+      "base_url": "http://127.0.0.1:8080",
+      "auth_token_env": "FM_TEST_PROXY_TOKEN",
+      "strict_mcp_config": true,
+      "mcp_config": "$mcp"
+    }
+  }
+}
+JSON
+}
+
 # run_spawn <home> <wt> <fakebin> <launchlog> <sentlog> [--token <tok>] <spawn-args...>
 run_spawn() {
   local home=$1 wt=$2 fakebin=$3 launchlog=$4 sentlog=$5 token=
@@ -149,6 +165,7 @@ test_endpoint_model_injects_prefix_and_strict_keeps_harness_claude() {
   assert_contains "$launch" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions" \
     "launch must remain the claude CLI with prompt-suggestion suppression"
   assert_contains "$launch" "--model 'my-local-model' --strict-mcp-config" "launch missing --strict-mcp-config"
+  assert_not_contains "$launch" "--mcp-config" "endpoint without mcp_config must keep the zero-MCP launch"
 
   # harness=claude preserved in meta; model recorded; token NOT recorded.
   meta="$HOME_DIR/state/$id.meta"
@@ -156,6 +173,59 @@ test_endpoint_model_injects_prefix_and_strict_keeps_harness_claude() {
   assert_grep "model=my-local-model" "$meta" "meta must record the model"
   assert_no_grep "$TOKEN" "$meta" "the auth token must never be written to meta"
   pass "endpoint model injects the env prefix + --strict-mcp-config and stays harness=claude"
+}
+
+test_endpoint_mcp_config_adds_deliberate_grant() {
+  local rec id launch mcp
+  id=ep-mcp-e9
+  rec=$(make_case ep-mcp); read_case "$rec"
+  mcp="$HOME_DIR/granted.mcp.json"
+  printf '%s\n' '{"mcpServers":{"example":{"command":"true"}}}' > "$mcp"
+  write_endpoint_config_with_mcp "$HOME_DIR" "$mcp"
+  seed_brief "$HOME_DIR" "$id"
+
+  run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
+    --token "$TOKEN" "$id" "$PROJ_DIR" --model my-local-model >/dev/null
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "--model 'my-local-model' --strict-mcp-config --mcp-config '$mcp'" \
+    "configured mcp_config must be passed alongside strict mode"
+  pass "an endpoint mcp_config adds one deliberate --mcp-config grant"
+}
+
+test_missing_endpoint_mcp_config_fails_closed_before_window() {
+  local rec id out missing
+  id=ep-mcp-missing-e10
+  rec=$(make_case ep-mcp-missing); read_case "$rec"
+  missing="$HOME_DIR/missing.mcp.json"
+  write_endpoint_config_with_mcp "$HOME_DIR" "$missing"
+  seed_brief "$HOME_DIR" "$id"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
+    --token "$TOKEN" "$id" "$PROJ_DIR" --model my-local-model)
+  expect_code 1 "$?" "a missing endpoint mcp_config must abort the spawn"
+  assert_contains "$out" "refusing to launch claude against the real Anthropic API" \
+    "abort message must retain the endpoint fail-closed explanation"
+  assert_absent "$HOME_DIR/state/$id.meta" "mcp_config failure must happen before meta is written"
+  [ ! -s "$LAUNCH_LOG" ] || fail "mcp_config failure must happen before a launch is sent"
+  pass "a missing endpoint mcp_config fails closed before any launch or meta is created"
+}
+
+test_unreadable_endpoint_mcp_config_fails_closed() {
+  local rec id mcp
+  id=ep-mcp-unreadable-e11
+  rec=$(make_case ep-mcp-unreadable); read_case "$rec"
+  mcp="$HOME_DIR/unreadable.mcp.json"
+  printf '%s\n' '{"mcpServers":{}}' > "$mcp"
+  chmod 000 "$mcp"
+  write_endpoint_config_with_mcp "$HOME_DIR" "$mcp"
+  seed_brief "$HOME_DIR" "$id"
+
+  run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
+    --token "$TOKEN" "$id" "$PROJ_DIR" --model my-local-model >/dev/null 2>&1
+  expect_code 1 "$?" "an unreadable endpoint mcp_config must abort the spawn"
+  assert_absent "$HOME_DIR/state/$id.meta" "unreadable mcp_config failure must happen before meta is written"
+  chmod 600 "$mcp"
+  pass "an unreadable endpoint mcp_config fails closed before launch"
 }
 
 test_token_exported_separately_never_in_launch_or_records() {
@@ -292,6 +362,9 @@ test_dispatch_profile_backstop_with_endpoint_model() {
 }
 
 test_endpoint_model_injects_prefix_and_strict_keeps_harness_claude
+test_endpoint_mcp_config_adds_deliberate_grant
+test_missing_endpoint_mcp_config_fails_closed_before_window
+test_unreadable_endpoint_mcp_config_fails_closed
 test_token_exported_separately_never_in_launch_or_records
 test_dispatch_profile_backstop_with_endpoint_model
 test_normal_model_unaffected_even_with_config_present

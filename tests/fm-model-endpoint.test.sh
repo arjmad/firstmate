@@ -216,6 +216,49 @@ test_control_chars_in_token_sources_rejected() {
   pass "tab/newline control chars in any token-source string fail closed (exit 2)"
 }
 
+test_mcp_config_emits_readable_path() {
+  local dir mcp
+  mcp="$TMP_ROOT/granted.mcp.json"
+  printf '%s\n' '{"mcpServers":{}}' > "$mcp"
+  dir=$(write_config mcp "{ \"endpoints\": { \"m\": { \"base_url\": \"http://x\", \"auth_token\": \"t\", \"mcp_config\": \"$mcp\" } } }")
+  run_resolve "$dir" resolve m
+  expect_code 0 "$CODE" "a readable mcp_config should resolve"
+  assert_contains "$OUT" $'mcp_config\t'"$mcp" "mcp_config record missing or wrong"
+  pass "mcp_config emits the configured readable path"
+}
+
+test_relative_mcp_config_resolves_from_fm_home() {
+  local home dir mcp
+  home="$TMP_ROOT/mcp-relative-home"
+  dir="$home/config"
+  mcp="$home/mcp/granted.json"
+  mkdir -p "$dir" "$(dirname "$mcp")"
+  printf '%s\n' '{"mcpServers":{}}' > "$mcp"
+  printf '%s\n' '{ "endpoints": { "m": { "base_url": "http://x", "auth_token": "t", "mcp_config": "mcp/granted.json" } } }' > "$dir/model-endpoints.json"
+  OUT=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$dir" "$EP" resolve m 2>/dev/null)
+  expect_code 0 "$?" "a relative mcp_config should resolve from FM_HOME"
+  assert_contains "$OUT" $'mcp_config\t'"$mcp" "relative mcp_config did not resolve from FM_HOME"
+  pass "a relative mcp_config resolves from the effective FM_HOME"
+}
+
+test_missing_mcp_config_exits_2_and_prints_nothing() {
+  local dir missing
+  missing="$TMP_ROOT/missing.mcp.json"
+  dir=$(write_config mcpmissing "{ \"endpoints\": { \"m\": { \"base_url\": \"http://x\", \"auth_token\": \"t\", \"mcp_config\": \"$missing\" } } }")
+  run_resolve "$dir" resolve m
+  expect_code 2 "$CODE" "a missing mcp_config must fail closed"
+  assert_not_contains "$OUT" "ANTHROPIC_BASE_URL" "a failed mcp_config resolve must print no records"
+  pass "a missing mcp_config fails closed before records are emitted"
+}
+
+test_invalid_mcp_config_value_exits_2() {
+  local dir
+  dir=$(write_config mcpinvalid '{ "endpoints": { "m": { "base_url": "http://x", "auth_token": "t", "mcp_config": 42 } } }')
+  run_resolve "$dir" resolve m
+  expect_code 2 "$CODE" "a non-string mcp_config must fail closed"
+  pass "an invalid mcp_config value fails closed"
+}
+
 test_strict_defaults_true_when_absent() {
   local dir
   dir=$(write_config strictdefault '{ "endpoints": { "m": { "base_url": "http://x", "auth_token": "t" } } }')
@@ -256,6 +299,10 @@ test_unresolvable_token_exits_2_and_prints_nothing
 test_anthropic_auth_token_in_env_rejected
 test_invalid_env_key_rejected
 test_control_chars_in_token_sources_rejected
+test_mcp_config_emits_readable_path
+test_relative_mcp_config_resolves_from_fm_home
+test_missing_mcp_config_exits_2_and_prints_nothing
+test_invalid_mcp_config_value_exits_2
 test_strict_defaults_true_when_absent
 test_strict_can_be_disabled
 test_usage_and_bad_subcommand
