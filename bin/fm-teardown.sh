@@ -1164,7 +1164,7 @@ if [ "$BACKEND" = herdr ] && [ -n "$FLEET" ]; then
   HERDR_FLEET_TAB=$(meta_value "$META" herdr_tab_id)
   HERDR_FLEET_PANE=$(meta_value "$META" herdr_pane_id)
   HERDR_FLEET_RECORD=$(fm_backend_herdr_fleet_record_path "$STATE" "$FLEET")
-  HERDR_FLEET_LOCK="$STATE/.herdr-fleet-$FLEET.lock"
+  HERDR_FLEET_LOCK=$(fm_backend_herdr_fleet_lock_path "$STATE" "$FLEET")
   HERDR_FLEET_LOCK_HELD=0
   HERDR_FLEET_LOCK_ATTEMPT=0
   while [ "$HERDR_FLEET_LOCK_ATTEMPT" -lt 50 ]; do

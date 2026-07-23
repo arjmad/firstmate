@@ -107,6 +107,12 @@ FM_BACKEND_HERDR_PRESENTATION_JOURNAL_SUFFIX=".herdr-presentation"
 # Only an exact active record plus a live token-bearing workspace authorizes a
 # join or final workspace prune.
 FM_BACKEND_HERDR_FLEET_RECORD_PREFIX=".herdr-fleet-"
+# Transient lock and scratch names diverge from the record prefix at the byte
+# before the fleet name ("." vs "-"). Path-safe fleet names never start with a
+# dot, so no fleet's lock or leftover scratch file can occupy (or be mistaken
+# for) any fleet's durable record path.
+FM_BACKEND_HERDR_FLEET_LOCK_PREFIX=".herdr-fleet.lock-"
+FM_BACKEND_HERDR_FLEET_SCRATCH_PREFIX=".herdr-fleet.tmp-"
 
 # fm_backend_herdr_workspace_label: the per-firstmate-HOME herdr workspace
 # label (docs/herdr-backend.md "Default task container shape"). The PRIMARY home (no
@@ -279,6 +285,10 @@ fm_backend_herdr_fleet_record_path() {  # <state-dir> <fleet-name>
   printf '%s/%s%s' "$1" "$FM_BACKEND_HERDR_FLEET_RECORD_PREFIX" "$2"
 }
 
+fm_backend_herdr_fleet_lock_path() {  # <state-dir> <fleet-name>
+  printf '%s/%s%s' "$1" "$FM_BACKEND_HERDR_FLEET_LOCK_PREFIX" "$2"
+}
+
 fm_backend_herdr_fleet_workspace_label() {  # <fleet-name> <fleet-id>
   printf '%s/fleet-%s · f:%s' "$(fm_backend_herdr_workspace_label)" "$1" "$2"
 }
@@ -301,7 +311,7 @@ fm_backend_herdr_fleet_record_create_pending() {  # <state-dir> <fleet-name>
     return 2
   fi
   token=$(fm_backend_herdr_projection_id) || return 1
-  tmp=$(mktemp "$state/.herdr-fleet-${fleet}.XXXXXX") || return 1
+  tmp=$(mktemp "$state/${FM_BACKEND_HERDR_FLEET_SCRATCH_PREFIX}${fleet}.XXXXXX") || return 1
   chmod 0600 "$tmp" || { rm -f "$tmp"; return 1; }
   if ! {
     printf 'version=1\n'
@@ -335,7 +345,7 @@ fm_backend_herdr_fleet_record_pending_matches() {  # <record> <fleet-name> <flee
 fm_backend_herdr_fleet_record_activate() {  # <record> <fleet> <fleet-id> <session> <workspace-id> <tab-id>
   local record=$1 fleet=$2 token=$3 session=$4 workspace=$5 tab=$6 tmp
   fm_backend_herdr_fleet_record_pending_matches "$record" "$fleet" "$token" || return 1
-  tmp=$(mktemp "$(dirname "$record")/.herdr-fleet-${fleet}.active.XXXXXX") || return 1
+  tmp=$(mktemp "$(dirname "$record")/${FM_BACKEND_HERDR_FLEET_SCRATCH_PREFIX}${fleet}.active.XXXXXX") || return 1
   chmod 0600 "$tmp" || { rm -f "$tmp"; return 1; }
   if ! {
     printf 'version=1\n'
@@ -383,7 +393,7 @@ fm_backend_herdr_fleet_record_read() {  # <record> <fleet-name>
 fm_backend_herdr_fleet_record_mark_ambiguous() {  # <record> <fleet-name>
   local record=$1 fleet=$2 tmp
   fm_backend_herdr_fleet_record_read "$record" "$fleet" || return 1
-  tmp=$(mktemp "$(dirname "$record")/.herdr-fleet-${fleet}.ambiguous.XXXXXX") || return 1
+  tmp=$(mktemp "$(dirname "$record")/${FM_BACKEND_HERDR_FLEET_SCRATCH_PREFIX}${fleet}.ambiguous.XXXXXX") || return 1
   chmod 0600 "$tmp" || { rm -f "$tmp"; return 1; }
   if ! {
     printf 'version=1\n'

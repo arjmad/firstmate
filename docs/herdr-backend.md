@@ -149,6 +149,8 @@ Pass `bin/fm-spawn.sh --fleet <fleet-name>` to place related Herdr tasks in one 
 The option is Herdr-only, and any other resolved runtime backend refuses it instead of silently ignoring it.
 Without `--fleet`, the ordinary per-home tab layout remains the default and no fleet record is created.
 
+Fleet grids are for crewmate/scout batches in one home; `--secondmate` refuses `--fleet` before any mutation because each secondmate lives in its own cross-home workspace.
+
 The first spawn for a path-safe fleet name publishes a pending private record and creates a token-bearing workspace with `--no-focus`.
 The exact workspace, seeded tab, and root pane IDs come only from that create response.
 After those IDs are complete, Firstmate atomically activates `state/.herdr-fleet-<fleet-name>` with the fleet name, random 128-bit fleet id, named session, workspace id, and shared tab id.

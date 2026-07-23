@@ -150,6 +150,23 @@ test_fleet_refuses_non_herdr_backend() {
   pass "--fleet refuses non-Herdr backends instead of silently ignoring the grouping request"
 }
 
+test_fleet_refuses_secondmate_spawn() {
+  local id rec out status
+  id=visibility-fleet-secondmate-v1
+  rec=$(make_case fleet-secondmate "$id")
+  read_case "$rec"
+
+  out=$(run_spawn "$id" "$PROJ_DIR" --backend herdr --fleet batch --secondmate)
+  status=$?
+  expect_code 1 "$status" "--fleet with --secondmate should fail before any mutation"
+  assert_contains "$out" "--fleet cannot be combined with --secondmate; fleet grids are for crewmate/scout batches in one home, never cross-home secondmates" \
+    "secondmate fleet refusal did not state the one-home crewmate/scout scope"
+  assert_absent "$HOME_DIR/state/$id.meta" "secondmate fleet refusal must not publish task metadata"
+  assert_absent "$HOME_DIR/state/.herdr-fleet-batch" "secondmate fleet refusal must not create a fleet record"
+  [ ! -s "$HERDR_LOG" ] || fail "secondmate fleet refusal must not touch the Herdr backend"
+  pass "--fleet refuses --secondmate spawns before any mutation instead of forming a cross-home grid"
+}
+
 test_ambiguous_fleet_record_falls_back_flat_without_reuse() {
   local id rec out log
   id=visibility-fleet-ambiguous-v4
@@ -209,6 +226,7 @@ test_fleet_takes_precedence_over_presentation_spaces() {
 test_explicit_title_uses_model_and_records_only_explicit_title
 test_default_title_uses_task_id_and_harness_without_meta_key
 test_fleet_refuses_non_herdr_backend
+test_fleet_refuses_secondmate_spawn
 test_ambiguous_fleet_record_falls_back_flat_without_reuse
 test_fleet_takes_precedence_over_presentation_spaces
 

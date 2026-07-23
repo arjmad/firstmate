@@ -2,7 +2,7 @@
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
 # Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--title <short>] [--fleet <fleet-name>] [--scout]
-#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--title <short>] [--fleet <fleet-name>] --secondmate
+#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--title <short>] --secondmate
 #   <project-dir> accepts a projects/<name> path, an explicit absolute or
 #   slash-containing relative path, or a bare registered project name resolved
 #   against this home's projects/ dir (matching fm-brief.sh's bare <repo-name>
@@ -30,7 +30,9 @@
 #   only a valid active record authorizes joining or final workspace pruning.
 #   Missing, malformed, stale, or ambiguous records warn and fall back to the
 #   ordinary flat layout without adopting or closing any workspace. fleet= is
-#   recorded in every task meta whose spawn explicitly passed --fleet.
+#   recorded in every task meta whose spawn explicitly passed --fleet. Fleet
+#   grids are for crewmate/scout batches in one home; --secondmate refuses
+#   --fleet because each secondmate lives in its own cross-home workspace.
 #   Local model endpoints: for a template-based claude launch, when --model matches
 #   an entry in config/model-endpoints.json, the SAME claude CLI is redirected at a
 #   local Anthropic-shaped proxy (endpoint env prefix + --strict-mcp-config; auth
@@ -233,6 +235,10 @@ if [ "$FLEET_SET" -eq 1 ] && ! fm_task_id_creation_valid "$FLEET"; then
   echo "error: --fleet must be a path-safe name of at most 64 characters" >&2
   exit 1
 fi
+if [ "$FLEET_SET" -eq 1 ] && [ "$KIND" = secondmate ]; then
+  echo "error: --fleet cannot be combined with --secondmate; fleet grids are for crewmate/scout batches in one home, never cross-home secondmates" >&2
+  exit 1
+fi
 case "$EFFORT" in
   ''|low|medium|high|xhigh|max) ;;
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
@@ -388,7 +394,7 @@ spawn_herdr_presentation_order_lock_release() {
 
 spawn_herdr_fleet_lock_acquire() {
   local attempt
-  HERDR_FLEET_LOCK="$STATE/.herdr-fleet-$FLEET.lock"
+  HERDR_FLEET_LOCK=$(fm_backend_herdr_fleet_lock_path "$STATE" "$FLEET")
   attempt=0
   while [ "$attempt" -lt 50 ]; do
     if fm_lock_try_acquire "$HERDR_FLEET_LOCK"; then
