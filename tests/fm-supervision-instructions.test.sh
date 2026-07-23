@@ -20,11 +20,27 @@ test_selected_harness_block_only() {
 }
 
 test_unknown_fallback() {
-  local out
+  local checkpoint_line out stale_line
+  checkpoint_line="bin/fm-watch-checkpoint.sh --seconds \"\${FM_CODEX_WATCH_CHECKPOINT:-180}\""
+  stale_line="bounded foreground wait over \`bin/fm-watch.sh\`"
   out=$("$RENDER" --harness not-real)
   assert_contains "$out" "primary harness: unknown" "unknown heading missing"
   assert_contains "$out" "Mode: Unknown harness fallback." "unknown fallback snippet missing"
-  pass "renderer falls back to unknown.md for unverified harness names"
+  assert_contains "$out" "$checkpoint_line" "unknown fallback missing bounded checkpoint entrypoint"
+  assert_not_contains "$out" "$stale_line" "unknown fallback still prescribes direct watcher execution"
+  pass "renderer falls back to a policy-compliant unknown-harness checkpoint"
+}
+
+test_invalid_boolean_values_are_rejected() {
+  local flag status
+  mkdir -p "$TMP_ROOT"
+  for flag in --read-only --afk --x-mode --queue-pending; do
+    status=0
+    "$RENDER" --harness codex "$flag" banana >/dev/null 2>"$TMP_ROOT/invalid-boolean.err" || status=$?
+    expect_code 2 "$status" "$flag invalid boolean exit"
+    assert_contains "$(cat "$TMP_ROOT/invalid-boolean.err")" "boolean value must be 0 or 1" "$flag invalid boolean rejection missing"
+  done
+  pass "renderer rejects invalid values for every boolean option"
 }
 
 test_conditional_stanzas() {
@@ -93,6 +109,15 @@ test_ordinary_wake_lines_are_distinct_from_repair() {
   pass "renderer distinguishes ordinary wake continuation from failure recovery"
 }
 
+test_orca_skill_defers_to_emitted_protocol() {
+  local skill stale_line
+  stale_line="\`bin/fm-watch.sh\` whenever there are tasks in flight"
+  skill=$(cat "$ROOT/.agents/skills/firstmate-orca/SKILL.md")
+  assert_contains "$skill" "supervision protocol emitted at session start" "Orca skill does not defer to the emitted supervision protocol"
+  assert_not_contains "$skill" "$stale_line" "Orca skill still prescribes direct watcher execution"
+  pass "Orca skill defers watcher continuity to the emitted harness protocol"
+}
+
 test_grok_is_background_notify() {
   local out
   out=$("$RENDER" --harness grok)
@@ -135,9 +160,11 @@ test_pi_snippet_uses_effective_extension_path() {
 
 test_selected_harness_block_only
 test_unknown_fallback
+test_invalid_boolean_values_are_rejected
 test_conditional_stanzas
 test_repair_lines
 test_ordinary_wake_lines_are_distinct_from_repair
+test_orca_skill_defers_to_emitted_protocol
 test_grok_is_background_notify
 test_grok_command_sources_effective_config
 test_pi_snippet_uses_effective_extension_path
