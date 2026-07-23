@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--title <short>] [--scout]
-#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--title <short>] --secondmate
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--title <short>] [--fleet <fleet-name>] [--scout]
+#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--title <short>] [--fleet <fleet-name>] --secondmate
 #   <project-dir> accepts a projects/<name> path, an explicit absolute or
 #   slash-containing relative path, or a bare registered project name resolved
 #   against this home's projects/ dir (matching fm-brief.sh's bare <repo-name>
@@ -21,6 +21,16 @@
 #   operational endpoint, tab label, ownership, and selector metadata remain task-id
 #   based. title= is recorded in state/<id>.meta only when the flag was explicit.
 #   tmux keeps its fm-<id> window name because that name is also its recorded target.
+#   --fleet <fleet-name> is Herdr-only and groups related spawns into one dedicated
+#   workspace with one task pane per member. The first spawn creates the workspace;
+#   later spawns split the largest current pane to form a grid. The default remains
+#   the ordinary per-home flat tab layout. A fleet spawn skips the optional
+#   config/herdr-presentation-spaces projection with a warning. Durable
+#   state/.herdr-fleet-<fleet-name> records exact response IDs and a random token;
+#   only a valid active record authorizes joining or final workspace pruning.
+#   Missing, malformed, stale, or ambiguous records warn and fall back to the
+#   ordinary flat layout without adopting or closing any workspace. fleet= is
+#   recorded in every task meta whose spawn explicitly passed --fleet.
 #   Local model endpoints: for a template-based claude launch, when --model matches
 #   an entry in config/model-endpoints.json, the SAME claude CLI is redirected at a
 #   local Anthropic-shaped proxy (endpoint env prefix + --strict-mcp-config; auth
@@ -102,7 +112,7 @@
 # Batch dispatch: pass one or more `id=repo` pairs instead of a single <id> <project>, e.g.
 #     fm-spawn.sh fix-a-k3=projects/foo add-b-q7=projects/bar [--scout]
 #   Each pair re-execs this script in single-task mode, so the single path stays the only
-#   source of truth; shared --scout/--harness/--model/--effort/--backend applies to every pair.
+#   source of truth; shared --scout/--harness/--model/--effort/--backend/--title/--fleet applies to every pair.
 #   If config/crew-dispatch.json exists, shared --harness is required for crewmate
 #   and scout batches. The loop lives here, in bash, so callers never hand-write a
 #   multi-task shell loop (the tool shell is zsh, which does not word-split unquoted
@@ -126,7 +136,7 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-  sed -n '2,91p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,/^set -eu$/p' "$0" | sed '$d; s/^# \{0,1\}//'
 }
 
 case "${1:-}" in
@@ -164,11 +174,13 @@ MODEL=
 EFFORT=
 BACKEND_ARG=
 TITLE=
+FLEET=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
 BACKEND_SET=0
 TITLE_SET=0
+FLEET_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -182,6 +194,7 @@ for a in "$@"; do
       effort) EFFORT=$a; EFFORT_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
       title) TITLE=$a; TITLE_SET=1 ;;
+      fleet) FLEET=$a; FLEET_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -200,6 +213,8 @@ for a in "$@"; do
     --backend=*) BACKEND_ARG=${a#--backend=}; BACKEND_SET=1 ;;
     --title) want_value=title ;;
     --title=*) TITLE=${a#--title=}; TITLE_SET=1 ;;
+    --fleet) want_value=fleet ;;
+    --fleet=*) FLEET=${a#--fleet=}; FLEET_SET=1 ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -211,6 +226,11 @@ done
 [ "$TITLE_SET" -eq 0 ] || [ -n "$TITLE" ] || { echo "error: --title requires a non-empty value" >&2; exit 1; }
 if [ "$TITLE_SET" -eq 1 ] && printf '%s' "$TITLE" | LC_ALL=C grep -q '[[:cntrl:]]'; then
   echo "error: --title must not contain control characters" >&2
+  exit 1
+fi
+[ "$FLEET_SET" -eq 0 ] || [ -n "$FLEET" ] || { echo "error: --fleet requires a non-empty value" >&2; exit 1; }
+if [ "$FLEET_SET" -eq 1 ] && ! fm_task_id_creation_valid "$FLEET"; then
+  echo "error: --fleet must be a path-safe name of at most 64 characters" >&2
   exit 1
 fi
 case "$EFFORT" in
@@ -232,6 +252,10 @@ else
 fi
 fm_backend_validate_spawn "$BACKEND" || exit 1
 fm_backend_source "$BACKEND" || exit 1
+if [ "$FLEET_SET" -eq 1 ] && [ "$BACKEND" != herdr ]; then
+  echo "error: --fleet requires backend=herdr; resolved backend is '$BACKEND'" >&2
+  exit 1
+fi
 if [ "$BACKEND" = orca ] && [ "$KIND" = secondmate ]; then
   echo "error: backend=orca does not support --secondmate spawns yet" >&2
   exit 1
@@ -252,6 +276,8 @@ HERDR_PROJECTION_ABORT_TASK_PANE=
 HERDR_PROJECTION_ABORT_SEEDED_PANE=
 HERDR_PRESENTATION_ORDER_LOCK=
 HERDR_PRESENTATION_ORDER_LOCK_HELD=0
+HERDR_FLEET_LOCK=
+HERDR_FLEET_LOCK_HELD=0
 SPAWN_TASK_LOCK=
 SPAWN_TASK_LOCK_HELD=0
 CONFIG_INHERIT_LOCK=
@@ -293,6 +319,10 @@ spawn_abort_cleanup() {
   if [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" = 1 ]; then
     HERDR_PRESENTATION_ORDER_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
+  fi
+  if [ "$HERDR_FLEET_LOCK_HELD" = 1 ]; then
+    HERDR_FLEET_LOCK_HELD=0
+    fm_lock_release "$HERDR_FLEET_LOCK" || true
   fi
   if [ "$ORCA_ABORT_CLEANUP" = 1 ]; then
     ORCA_ABORT_CLEANUP=0
@@ -356,6 +386,27 @@ spawn_herdr_presentation_order_lock_release() {
   fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
 }
 
+spawn_herdr_fleet_lock_acquire() {
+  local attempt
+  HERDR_FLEET_LOCK="$STATE/.herdr-fleet-$FLEET.lock"
+  attempt=0
+  while [ "$attempt" -lt 50 ]; do
+    if fm_lock_try_acquire "$HERDR_FLEET_LOCK"; then
+      HERDR_FLEET_LOCK_HELD=1
+      return 0
+    fi
+    sleep 0.1
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+spawn_herdr_fleet_lock_release() {
+  [ "$HERDR_FLEET_LOCK_HELD" = 1 ] || return 0
+  HERDR_FLEET_LOCK_HELD=0
+  fm_lock_release "$HERDR_FLEET_LOCK" || true
+}
+
 # Batch dispatch (see header): when the first positional is an `id=repo` pair, treat every
 # positional as one and spawn each by re-execing this script in single-task mode. We use
 # the FM_ROOT path (not $0) so it works whatever cwd or relative path invoked us, and reuse
@@ -376,6 +427,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
   [ "$TITLE_SET" -eq 0 ] || shared_args+=(--title "$TITLE")
+  [ "$FLEET_SET" -eq 0 ] || shared_args+=(--fleet "$FLEET")
   for pair in "${POS[@]}"; do
     case "$pair" in
       *=*) : ;;
@@ -974,7 +1026,30 @@ case "$BACKEND" in
     fi
     HERDR_PRESENTATION_JOURNAL=$(fm_backend_herdr_projection_journal_path "$STATE" "$ID")
     HERDR_PROJECTED=0
-    if [ -f "$CONFIG/herdr-presentation-spaces" ]; then
+    HERDR_FLEETED=0
+    if [ "$FLEET_SET" -eq 1 ]; then
+      if [ -f "$CONFIG/herdr-presentation-spaces" ]; then
+        echo "warning: --fleet takes precedence over config/herdr-presentation-spaces; skipping the single-task presentation space" >&2
+      fi
+      if spawn_herdr_fleet_lock_acquire; then
+        set +e
+        FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_fleet_create_or_join "$STATE" "$FLEET" "$PROJ_ABS"
+        HERDR_FLEET_STATUS=$?
+        set -e
+        if [ "$HERDR_FLEET_STATUS" -eq 0 ]; then
+          HERDR_FLEETED=1
+          HERDR_SES=$FM_BACKEND_HERDR_FLEET_SESSION
+          HERDR_WORKSPACE_ID=$FM_BACKEND_HERDR_FLEET_WORKSPACE_ID
+          HERDR_TAB_ID=$FM_BACKEND_HERDR_FLEET_TAB_ID
+          HERDR_PANE_ID=$FM_BACKEND_HERDR_FLEET_PANE_ID
+        elif [ "$HERDR_FLEET_STATUS" -eq 1 ]; then
+          exit 1
+        fi
+        spawn_herdr_fleet_lock_release
+      else
+        echo "warning: Herdr fleet '$FLEET' lock stayed busy; using the ordinary flat layout without touching the fleet workspace" >&2
+      fi
+    elif [ -f "$CONFIG/herdr-presentation-spaces" ]; then
       HERDR_PRESENTATION_ORDER_LOCK="$STATE/.herdr-presentation-order.lock"
       if [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; then
         if [ -e "$STATE/$ID.meta" ] || [ -L "$STATE/$ID.meta" ]; then
@@ -1020,7 +1095,7 @@ case "$BACKEND" in
         fi
       fi
     fi
-    if [ "$HERDR_PROJECTED" -ne 1 ]; then
+    if [ "$HERDR_PROJECTED" -ne 1 ] && [ "$HERDR_FLEETED" -ne 1 ]; then
       HERDR_CONTAINER_RAW=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_container_ensure "$PROJ_ABS") || exit 1
       # fm_backend_herdr_container_ensure echoes "<session>:<workspace_id>\t<seeded_default_tab_id>"
       # (the second field empty when this call ADOPTED a pre-existing workspace
@@ -1327,6 +1402,7 @@ META_WINDOW=$T
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
   [ "$TITLE_SET" -eq 0 ] || echo "title=$TITLE"
+  [ "$FLEET_SET" -eq 0 ] || echo "fleet=$FLEET"
   # backend= is written only for a non-default (non-tmux) backend, so the
   # default path's meta stays byte-identical (absent backend= means tmux;
   # data/fm-backend-design-d7's P1 compatibility contract).
