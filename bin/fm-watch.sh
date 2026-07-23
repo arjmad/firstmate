@@ -6,9 +6,10 @@
 # is absorbed only when the crew shows POSITIVE evidence it is still working (an
 # actively-running no-mistakes step, or a backend busy signal), and surfaced
 # otherwise, so a crew that finishes (or stops and waits) without a current
-# working signal is never silently swallowed. A declared external-wait pause is
-# the separate idle absorb case and re-surfaces only on its long bounded cadence,
-# although its initial no-verb status signal still surfaces in normal mode.
+# working signal is never silently swallowed. Declared external-wait pauses and
+# already-surfaced done/failed results are the expected-idle absorb cases; each
+# re-surfaces only on the shared long bounded cadence, while every new status
+# event still surfaces immediately in normal mode.
 # While state/.afk exists, the daemon owns triage and this watcher queues and exits
 # on every wake. Printed reason lines:
 #   signal: <file>...      status/turn-end signals, surfaced when a listed status
@@ -22,8 +23,10 @@
 #                          external-wait pause is absorbed instead with its own long
 #                          re-surface cadence, never as a wedge. Only when neither
 #                          absorb class applies does the log's last line decide:
-#                          terminal (captain-relevant) or non-terminal (no verb),
-#                          both surfaced at once. A provably-working stale past the
+#                          a newly surfaced terminal status or a non-terminal
+#                          no-verb status wakes at once; an unchanged done/failed
+#                          result already surfaced rechecks only on the long idle
+#                          cadence. A provably-working stale past the
 #                          wedge threshold also surfaces, with an "escalation N"
 #                          count in the reason; at FM_WEDGE_DEMAND_INSPECT_COUNT
 #                          consecutive escalations on the SAME pane, the reason
@@ -143,8 +146,9 @@ STALE_ESCALATE_SECS=${FM_STALE_ESCALATE_SECS:-240}  # idle secs before a provabl
 # confirmed agent death re-surfaced exactly that pane as a fresh bare stale on
 # every new hash epoch (live 2026-07-21 evening incident). Only authoritative
 # working evidence, rechecked at most every STALE_ESCALATE_SECS, overrides it.
-# These cases re-surface once for a recheck every PAUSE_RESURFACE_SECS - far
-# longer than the wedge threshold, but finite so a forgotten hold cannot rot invisibly.
+# These cases, plus already-surfaced done/failed results, re-surface once for a
+# recheck every PAUSE_RESURFACE_SECS - far longer than the wedge threshold, but
+# finite so a forgotten wait or settled task cannot rot invisibly.
 PAUSE_RESURFACE_SECS=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT}
 TRIAGE_LOG="$STATE/.watch-triage.log"
 TRIAGE_LOG_MAX_BYTES=${FM_WATCH_TRIAGE_LOG_MAX_BYTES:-262144}
@@ -340,6 +344,28 @@ handle_paused_stale() {  # <window> <task> <hash>
   triage_log "absorbed stale (paused, awaiting external, age ${age}s): $win"
 }
 
+# Absorb pane churn for an expected-idle done/failed status only after that exact
+# status line has already surfaced. The surfaced marker's mtime is the cadence
+# anchor, so hash changes cannot reset or accelerate the long recheck. A different
+# status line never reaches this helper: its marker content differs and the signal
+# scan remains immediately actionable.
+handle_settled_terminal_stale() {  # <window> <task> <hash> <last-status-line>
+  local win=$1 task=$2 h=$3 last=$4 key surfaced_file age verb reason
+  key=$(printf '%s' "$win" | tr ':/.' '___')
+  printf '%s' "$h" > "$STATE/.stale-$key"
+  rm -f "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key"
+  surfaced_file=$(_hb_surfaced_path "$task")
+  age=$(age_of "$surfaced_file")
+  if [ "$age" -ge "$PAUSE_RESURFACE_SECS" ]; then
+    verb=$(status_line_verb "$last")
+    reason="stale: $win (settled $verb status, rechecked after ${age}s; pane churn absorbed between long-cadence rechecks)"
+    fm_wake_append stale "$win" "$reason" || exit 1
+    mark_surfaced "$STATE/$task.status" "$last"
+    wake "$reason"
+  fi
+  triage_log "absorbed stale (settled terminal status, surfaced ${age}s ago): $win"
+}
+
 clear_pause_state() {  # <window>
   local win=$1 key
   key=${win//:/_}
@@ -369,12 +395,11 @@ clear_pause_tracking() {  # <window>
 # while costing a per-poll backend liveness probe. Status movement past the pause
 # still escalates immediately through the signal scan and the not-paused guard at
 # the top of the stale loop, never through this classifier.
-pause_state_class() {  # <window> <task>
-  local win=$1 task=$2 key last recheck_file class
+pause_state_class() {  # <window> <task> <last-status-line>
+  local win=$1 task=$2 last=$3 key recheck_file class
   key=${win//:/_}
   key=${key//\//_}
   key=${key//./_}
-  last=$(last_status_line "$STATE/$task.status")
   recheck_file="$STATE/.paused-rechecked-$key"
   if ! status_is_paused_or_captain_held "$last"; then
     rm -f "$recheck_file"
@@ -395,14 +420,12 @@ pause_state_class() {  # <window> <task>
   printf 'paused'
 }
 
-surface_nonterminal_stale() {  # <window> <hash>
-  local win=$1 h=$2 key task last
+surface_nonterminal_stale() {  # <window> <task> <hash> <last-status-line>
+  local win=$1 task=$2 h=$3 last=$4 key
   key=$(printf '%s' "$win" | tr ':/.' '___')
   fm_wake_append stale "$win" "stale: $win" || exit 1
   printf '%s' "$h" > "$STATE/.stale-$key"
   rm -f "$STATE/.stale-since-$key"
-  task=$(window_to_task "$win" "$STATE")
-  last=$(last_status_line "$STATE/$task.status")
   if status_is_paused_or_captain_held "$last"; then
     : > "$STATE/.paused-$key"
     date +%s > "$STATE/.paused-rechecked-$key"
@@ -531,18 +554,29 @@ run_check_capture() {
 # surface and absorb), .hb-surfaced is advanced ONLY on surface, so the heartbeat
 # fleet-scan can tell apart a captain-relevant status that already woke firstmate
 # from one that has not - the latter being a per-wake-path miss it must surface.
+# For an expected-idle done/failed result, the marker mtime also anchors the long
+# stale-pane recheck cadence.
 _hb_surfaced_path() { printf '%s/.hb-surfaced-%s' "$STATE" "$(printf '%s' "$1" | tr ':/.' '___')"; }
 
 # Record a status file's captain-relevant last line as surfaced (no-op for a
 # non-captain-relevant or empty status). Call AFTER the wake is enqueued, so the
 # enqueue-before-suppress ordering holds for this marker too.
-mark_surfaced() {  # <status-file>
-  local f=$1 task last
+mark_surfaced() {  # <status-file> [last-status-line]
+  local f=$1 last=${2-} task
   task=$(basename "$f"); task="${task%.status}"
-  last=$(last_status_line "$f")
+  [ "$#" -ge 2 ] || last=$(last_status_line "$f")
   [ -n "$last" ] || return 0
   status_is_captain_relevant "$last" || return 0
   printf '%s' "$last" > "$(_hb_surfaced_path "$task")"
+}
+
+# 0 when this exact captain-relevant status snapshot already woke firstmate.
+# Comparing content, not only marker existence, keeps every newly appended status
+# actionable even when the task was previously settled.
+status_was_surfaced() {  # <task> <last-status-line>
+  local task=$1 last=$2
+  [ -n "$task" ] || return 1
+  [ "$(cat "$(_hb_surfaced_path "$task")" 2>/dev/null || true)" = "$last" ]
 }
 
 # Mark every current captain-relevant status as surfaced. Called after the
@@ -898,7 +932,7 @@ EOF
         # The pane is idle/stale at hash $h. Triage decides whether this wakes
         # firstmate. Detection itself is unchanged from above.
         if [ "$kind" = secondmate ]; then
-          case "$(pause_state_class "$w" "$task")" in
+          case "$(pause_state_class "$w" "$task" "$last")" in
             paused) handle_paused_stale "$w" "$task" "$h" ;;
             *)      clear_pause_tracking "$w" ;;
           esac
@@ -909,43 +943,36 @@ EOF
             printf '%s' "$h" > "$sf"
             wake "stale: $w"
           fi
-        elif stale_is_terminal "$w" "$STATE"; then
-          # The log's last line is captain-relevant - but that alone is not
-          # proof the crew is actually done: a crew's own status log gets no
-          # new entry once firstmate hands it to a no-mistakes validation
-          # (AGENTS.md's sparse status-reporting contract), so the log can
-          # keep showing a "done:"/needs-decision/blocked leftover from
-          # BEFORE that validation started for the run's entire (possibly
-          # many-minutes) duration, while stale_is_terminal - which has no
-          # run-step awareness - keeps reporting it as still-current on every
-          # poll. Root cause of the 2026-07 herdr false-surface incidents: a
-          # validating crew was surfaced as stale every few minutes despite an
-          # actively-running pipeline, purely because of this stale leftover
-          # line. On a NEW hash, give an active run/busy pane (the same
-          # authoritative source fm-crew-state.sh itself already prioritizes
-          # over the log) a chance to override before trusting the log.
+        elif stale_is_terminal "$last"; then
+          # A captain-relevant status snapshot is not proof the crew is idle: a
+          # sparse pre-validation status can remain last while an active run is
+          # still working. On each new hash, authoritative run/pane evidence gets
+          # one chance to override the snapshot and start the wedge timer.
           if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
-            if crew_is_provably_working "$(window_to_task "$w" "$STATE")"; then
+            if crew_is_provably_working "$task"; then
               printf '%s' "$h" > "$sf"
               date +%s > "$ssf"
               triage_log "absorbed stale (provably working, overriding a stale captain-relevant status): $w"
+            elif status_idle_is_expected "$last" && status_was_surfaced "$task" "$last"; then
+              handle_settled_terminal_stale "$w" "$task" "$h" "$last"
             else
               fm_wake_append stale "$w" "stale: $w" || exit 1
               printf '%s' "$h" > "$sf"
               rm -f "$ssf"
-              mark_surfaced "$STATE/$(window_to_task "$w" "$STATE").status"
+              mark_surfaced "$STATE/$task.status" "$last"
               wake "stale: $w"
             fi
           elif [ -e "$ssf" ]; then
             # This exact hash was already overridden as provably-working (a
             # wedge timer is running for it) - keep treating it that way
-            # without re-reading the crew state every poll, and without
-            # letting the still-captain-relevant log line re-surface it.
+            # without re-reading the crew state every poll.
             wedge_timer_check "$w" "$ssf" "stale (overridden terminal status)" "$ewf"
+          elif status_idle_is_expected "$last" && status_was_surfaced "$task" "$last"; then
+            # A settled done/failed result already woke firstmate. Recheck it on
+            # the shared long cadence even if the pane is stable, while pane hash
+            # churn only advances the stale suppressor in the helper above.
+            handle_settled_terminal_stale "$w" "$task" "$h" "$last"
           fi
-          # else: already surfaced as genuinely terminal on a prior poll of
-          # this same hash - nothing left to do (matches the original,
-          # unmodified terminal-status behavior).
         else
           # Non-terminal stale: a crew gone quiet without a captain-relevant status.
           # Decided once per distinct stale hash (the costly state reads run only
@@ -963,8 +990,7 @@ EOF
           #     waiting on a decision, or wedged) instead of leaving the finish to
           #     wait out the timer.
           if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
-            task=$(window_to_task "$w" "$STATE")
-            case "$(pause_state_class "$w" "$task")" in
+            case "$(pause_state_class "$w" "$task" "$last")" in
               working)
                 clear_pause_tracking "$w"
                 printf '%s' "$h" > "$sf"
@@ -975,13 +1001,12 @@ EOF
                 handle_paused_stale "$w" "$task" "$h"
                 ;;
               *)
-                surface_nonterminal_stale "$w" "$h"
+                surface_nonterminal_stale "$w" "$task" "$h" "$last"
                 ;;
             esac
           else
-            task=$(window_to_task "$w" "$STATE")
-            if [ -e "$pf" ] || status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")"; then
-              case "$(pause_state_class "$w" "$task")" in
+            if [ -e "$pf" ] || status_is_paused_or_captain_held "$last"; then
+              case "$(pause_state_class "$w" "$task" "$last")" in
                 paused)  handle_paused_stale "$w" "$task" "$h" ;;
                 working) clear_pause_state "$w"
                          printf '%s' "$h" > "$sf"
@@ -997,7 +1022,7 @@ EOF
       else
         # Pane busy or not yet stably stale: reset pending escalation bookkeeping.
         rm -f "$ssf" "$ewf"
-        if [ -e "$pf" ] && { [ "$n" -ge 2 ] || ! status_is_paused_or_captain_held "$(last_status_line "$STATE/$(window_to_task "$w" "$STATE").status")"; }; then
+        if [ -e "$pf" ] && { [ "$n" -ge 2 ] || ! status_is_paused_or_captain_held "$last"; }; then
           clear_pause_tracking "$w"
         fi
       fi
@@ -1005,9 +1030,8 @@ EOF
       printf '%s' "$h" > "$hf"
       echo 0 > "$cf"
       rm -f "$ssf" "$ewf"
-      task=$(window_to_task "$w" "$STATE")
-      if ! afk_present && status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")" && ! window_is_busy "$w" "$tail40"; then
-        case "$(pause_state_class "$w" "$task")" in
+      if ! afk_present && status_is_paused_or_captain_held "$last" && ! window_is_busy "$w" "$tail40"; then
+        case "$(pause_state_class "$w" "$task" "$last")" in
           paused) handle_paused_stale "$w" "$task" "$h" ;;
           *)      clear_pause_tracking "$w" ;;
         esac
