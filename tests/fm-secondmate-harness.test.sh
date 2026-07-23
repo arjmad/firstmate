@@ -13,10 +13,11 @@
 #      launch through that mode, durably (every respawn re-resolves), while an
 #      explicit per-spawn harness arg still wins.
 #   B) Inheritance. The primary pushes a declared, extensible set of LOCAL
-#      (gitignored) config items - config/crew-dispatch.json, config/crew-harness,
-#      and config/backlog-backend - down into each secondmate home's config/, so
-#      the secondmate's OWN crewmates, dispatch profiles, and backlog backend
-#      inherit the primary's settings. It is primary-authoritative (re-pushed at
+#      (gitignored) config items - config/crew-dispatch.json,
+#      config/model-endpoints.json, config/crew-harness, and config/backlog-backend
+#      - down into each secondmate home's config/, so the secondmate's OWN
+#      crewmates, dispatch profiles, model endpoints, and backlog backend inherit
+#      the primary's settings. It is primary-authoritative (re-pushed at
 #      secondmate spawn, on the bootstrap secondmate sweep, and by config push).
 #      config/secondmate-harness is deliberately NOT inherited (secondmates do
 #      not spawn secondmates). After a successful push that changes allowlisted
@@ -123,7 +124,7 @@ ROWS
 # B) propagate_inheritable_config unit behavior
 # ===========================================================================
 test_propagate_lib() {
-  local d src dest m1 m2 outside stdout stderr guard_repo err_text
+  local d src dest m1 m2 outside stdout stderr guard_repo err_text token_file endpoint_json
   d="$TMP_ROOT/prop-lib"
   src="$d/src"
   dest="$d/dest"
@@ -131,6 +132,11 @@ test_propagate_lib() {
 
   # 1. present source is copied
   printf '{"default":{"harness":"codex"}}\n' > "$src/crew-dispatch.json"
+  token_file="$d/endpoint-token"
+  printf 'credential-value-must-not-be-copied\n' > "$token_file"
+  endpoint_json=$(printf '{"endpoints":{"local-model":{"base_url":"http://127.0.0.1:8317","auth_token_file":"%s"}}}' "$token_file")
+  printf '%s\n' "$endpoint_json" > "$src/model-endpoints.json"
+  chmod 0600 "$src/model-endpoints.json"
   printf 'codex\n' > "$src/crew-harness"
   printf 'manual\n' > "$src/backlog-backend"
   stdout="$d/clean-copy.out"
@@ -139,11 +145,15 @@ test_propagate_lib() {
   [ ! -s "$stdout" ] || fail "clean copy wrote to stdout"
   [ ! -s "$stderr" ] || fail "clean copy wrote to stderr"
   [ "$(cat "$dest/crew-dispatch.json")" = '{"default":{"harness":"codex"}}' ] || fail "crew-dispatch.json not propagated"
+  [ "$(cat "$dest/model-endpoints.json")" = "$endpoint_json" ] || fail "model-endpoints.json not propagated byte-exact"
+  [ "$(fm_inherit_file_mode "$dest/model-endpoints.json")" = 600 ] || fail "model-endpoints.json copy is not mode 0600"
+  ! grep -Rqs 'credential-value-must-not-be-copied' "$dest" || fail "referenced endpoint credential value was copied"
   [ "$(cat "$dest/crew-harness")" = codex ] || fail "crew-harness not propagated"
   [ "$(cat "$dest/backlog-backend")" = manual ] || fail "backlog-backend not propagated"
 
   # 2. idempotent: an unchanged re-run does not churn the mtime
   m1=$(date -r "$dest/crew-harness" +%s 2>/dev/null || stat -c %Y "$dest/crew-harness")
+  chmod 0644 "$dest/model-endpoints.json"
   sleep 1
   stdout="$d/unchanged.out"
   stderr="$d/unchanged.err"
@@ -152,6 +162,7 @@ test_propagate_lib() {
   [ ! -s "$stderr" ] || fail "unchanged propagation wrote to stderr"
   m2=$(date -r "$dest/crew-harness" +%s 2>/dev/null || stat -c %Y "$dest/crew-harness")
   [ "$m1" = "$m2" ] || fail "idempotent re-run churned mtime ($m1 -> $m2)"
+  [ "$(fm_inherit_file_mode "$dest/model-endpoints.json")" = 600 ] || fail "mode drift on model-endpoints.json did not reconverge to 0600"
 
   # 3. a changed source value converges downstream
   printf '{"default":{"harness":"claude"}}\n' > "$src/crew-dispatch.json"
@@ -173,9 +184,10 @@ test_propagate_lib() {
   [ "$(cat "$outside")" = outside ] || fail "destination symlink target was overwritten"
 
   # 4. removing the source mirrors absence downstream (primary-authoritative)
-  rm -f "$src/crew-dispatch.json" "$src/crew-harness" "$src/backlog-backend"
+  rm -f "$src/crew-dispatch.json" "$src/model-endpoints.json" "$src/crew-harness" "$src/backlog-backend"
   propagate_inheritable_config "$src" "$dest"
   [ -e "$dest/crew-dispatch.json" ] && fail "dispatch profile absence not mirrored downstream"
+  [ -e "$dest/model-endpoints.json" ] && fail "model endpoint absence not mirrored downstream"
   [ -e "$dest/crew-harness" ] && fail "absence not mirrored downstream"
   [ -e "$dest/backlog-backend" ] && fail "backlog-backend absence not mirrored downstream"
 
@@ -197,6 +209,8 @@ test_propagate_lib() {
   # 5. secondmate-harness is never inherited
   printf 'grok\n' > "$src/secondmate-harness"
   printf '{"default":{"harness":"codex"}}\n' > "$src/crew-dispatch.json"
+  printf '%s\n' "$endpoint_json" > "$src/model-endpoints.json"
+  chmod 0600 "$src/model-endpoints.json"
   printf 'codex\n' > "$src/crew-harness"
   printf 'manual\n' > "$src/backlog-backend"
   rm -rf "$d/dest2"
@@ -204,6 +218,8 @@ test_propagate_lib() {
   propagate_inheritable_config "$src" "$d/dest2"
   [ -e "$d/dest2/secondmate-harness" ] && fail "secondmate-harness was inherited (must not be)"
   [ "$(cat "$d/dest2/crew-dispatch.json")" = '{"default":{"harness":"codex"}}' ] || fail "crew-dispatch.json not propagated alongside"
+  [ "$(cat "$d/dest2/model-endpoints.json")" = "$endpoint_json" ] || fail "model-endpoints.json not propagated alongside"
+  [ "$(fm_inherit_file_mode "$d/dest2/model-endpoints.json")" = 600 ] || fail "model-endpoints.json mode not preserved alongside"
   [ "$(cat "$d/dest2/crew-harness")" = codex ] || fail "crew-harness not propagated alongside"
   [ "$(cat "$d/dest2/backlog-backend")" = manual ] || fail "backlog-backend not propagated alongside"
 
@@ -297,6 +313,8 @@ test_spawn_split_and_inherit() {
   sm="$w/sm"
   mkdir -p "$w/home/config"
   printf '{"default":{"harness":"claude","model":"haiku","effort":"low"}}\n' > "$w/home/config/crew-dispatch.json"
+  printf '{"endpoints":{"haiku":{"base_url":"http://127.0.0.1:8317","auth_token_file":"/machine-local/token"}}}\n' > "$w/home/config/model-endpoints.json"
+  chmod 0600 "$w/home/config/model-endpoints.json"
   printf 'claude\n' > "$w/home/config/crew-harness"
   printf 'codex\n' > "$w/home/config/secondmate-harness"
   printf 'manual\n' > "$w/home/config/backlog-backend"
@@ -312,6 +330,10 @@ test_spawn_split_and_inherit() {
     || fail "split: home crew-harness not inherited as claude (got '$(cat "$sm/config/crew-harness" 2>/dev/null)')"
   [ "$(cat "$sm/config/crew-dispatch.json" 2>/dev/null)" = '{"default":{"harness":"claude","model":"haiku","effort":"low"}}' ] \
     || fail "split: home crew-dispatch.json not inherited"
+  [ "$(cat "$sm/config/model-endpoints.json" 2>/dev/null)" = '{"endpoints":{"haiku":{"base_url":"http://127.0.0.1:8317","auth_token_file":"/machine-local/token"}}}' ] \
+    || fail "split: home model-endpoints.json not inherited"
+  [ "$(fm_inherit_file_mode "$sm/config/model-endpoints.json")" = 600 ] \
+    || fail "split: inherited model-endpoints.json is not mode 0600"
   [ "$(cat "$sm/config/backlog-backend" 2>/dev/null)" = manual ] \
     || fail "split: home backlog-backend not inherited as manual"
   [ -e "$sm/config/secondmate-harness" ] \
@@ -698,7 +720,7 @@ new_world() {
   {
     printf 'projects/\nstate/\ndata/\n.no-mistakes/\n'
     [ "$dispatch_ignore" = no ] || printf 'config/crew-dispatch.json\n'
-    printf 'config/crew-harness\nconfig/secondmate-harness\nconfig/backlog-backend\n'
+    printf 'config/model-endpoints.json\nconfig/crew-harness\nconfig/secondmate-harness\nconfig/backlog-backend\n'
   } > "$w/main/.gitignore"
   printf 'v1\n' > "$w/main/AGENTS.md"
   printf 'r1\n' > "$w/main/README.md"
