@@ -114,6 +114,26 @@ test_idle_placeholder_case_mode_is_explicit() {
   pass "fm_composer_classify_content: idle matching preserves the caller's case mode"
 }
 
+test_prompt_glyph_stripping_is_locale_safe() {
+  local idle='^Type a message\.\.\.$' locale out
+  for locale in default C; do
+    case "$locale" in
+      default) out=$(classify 0 '❯ Type a message...' "$idle") ;;
+      C) out=$(LC_ALL=C classify 0 '❯ Type a message...' "$idle") ;;
+    esac
+    [ "$out" = empty ] \
+      || fail "the idle placeholder after a multibyte glyph should read empty under locale '$locale', got '$out'"
+
+    case "$locale" in
+      default) out=$(classify 0 '›real text') ;;
+      C) out=$(LC_ALL=C classify 0 '›real text') ;;
+    esac
+    [ "$out" = pending ] \
+      || fail "real text after a multibyte glyph should read pending under locale '$locale', got '$out'"
+  done
+  pass "fm_composer_classify_content: multibyte prompt stripping is stable in default and C locales"
+}
+
 # --- Real text is pending ---------------------------------------------------
 
 test_real_text_is_pending() {
@@ -133,4 +153,5 @@ test_agent_glyphs_are_empty_bordered_and_bare
 test_empty_content_is_empty
 test_idle_placeholder_is_empty
 test_idle_placeholder_case_mode_is_explicit
+test_prompt_glyph_stripping_is_locale_safe
 test_real_text_is_pending
