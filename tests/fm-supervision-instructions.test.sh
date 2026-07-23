@@ -27,6 +27,18 @@ test_unknown_fallback() {
   pass "renderer falls back to unknown.md for unverified harness names"
 }
 
+test_invalid_boolean_values_are_rejected() {
+  local flag status
+  mkdir -p "$TMP_ROOT"
+  for flag in --read-only --afk --x-mode --queue-pending; do
+    status=0
+    "$RENDER" --harness codex "$flag" banana >/dev/null 2>"$TMP_ROOT/invalid-boolean.err" || status=$?
+    expect_code 2 "$status" "$flag invalid boolean exit"
+    assert_contains "$(cat "$TMP_ROOT/invalid-boolean.err")" "boolean value must be 0 or 1" "$flag invalid boolean rejection missing"
+  done
+  pass "renderer rejects invalid values for every boolean option"
+}
+
 test_conditional_stanzas() {
   local home config out
   home="$TMP_ROOT/conditional-home"
@@ -135,6 +147,7 @@ test_pi_snippet_uses_effective_extension_path() {
 
 test_selected_harness_block_only
 test_unknown_fallback
+test_invalid_boolean_values_are_rejected
 test_conditional_stanzas
 test_repair_lines
 test_ordinary_wake_lines_are_distinct_from_repair

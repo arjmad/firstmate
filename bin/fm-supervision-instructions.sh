@@ -28,8 +28,8 @@ EOF
 
 bool_value() {
   case "$1" in
-    1|true|TRUE|yes|YES) printf '1\n' ;;
-    *) printf '0\n' ;;
+    0|1) printf '%s\n' "$1" ;;
+    *) echo "error: boolean value must be 0 or 1: $1" >&2; return 2 ;;
   esac
 }
 
