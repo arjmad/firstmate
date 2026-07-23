@@ -1273,6 +1273,17 @@ test_composer_state_unknown_when_no_composer_row_found() {
   pass "fm_backend_herdr_composer_state: reports unknown for bare shell prompts with no composer row"
 }
 
+test_composer_state_border_prefix_is_not_bare_prompt_in_c_locale() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/composer-c-locale-border"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '╭────────────────────────\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( LC_ALL=C PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = unknown ] || fail "a border prefix must not match a multibyte bare prompt under LC_ALL=C, got '$out'"
+  pass "fm_backend_herdr_composer_state: C locale does not confuse a border prefix with a bare prompt"
+}
+
 # Real Pi 0.80.7 on Herdr 0.7.3 renders no prompt glyph and no side border.
 # Its content is the row(s) between two blue horizontal separators; the idle row
 # carries only a reverse-video cursor. This exact shape was `unknown` for 4555s
@@ -2526,6 +2537,7 @@ test_composer_state_real_text_is_pending
 test_composer_state_popup_placeholder_fill_is_pending
 test_composer_state_unknown_on_capture_failure
 test_composer_state_unknown_when_no_composer_row_found
+test_composer_state_border_prefix_is_not_bare_prompt_in_c_locale
 test_composer_state_pi_separator_idle_is_empty
 test_composer_state_pi_separator_real_text_is_pending
 test_composer_state_pi_incomplete_separator_below_stale_generic_is_unknown
