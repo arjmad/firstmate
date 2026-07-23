@@ -60,9 +60,10 @@ FM_CLASSIFY_PAUSED_VERB_DEFAULT='paused'
 # Bounded re-surface cadence for a declared pause or a captain hold.
 # Far longer than the wedge threshold (FM_STALE_ESCALATE_SECS, default 240s), it
 # avoids nagging a deliberate wait while ensuring a forgotten hold cannot rot
-# invisibly - it re-surfaces once for a recheck every window. One hour by default;
-# both consumers read FM_PAUSE_RESURFACE_SECS with this default so the cadence has
-# one owner.
+# invisibly - it re-surfaces once for a recheck every window. The watcher also
+# applies this cadence to already-surfaced done/failed results whose panes churn.
+# One hour by default; both consumers read FM_PAUSE_RESURFACE_SECS with this
+# default so the cadence has one owner.
 # shellcheck disable=SC2034 # Read by the watcher and daemon (fm-watch.sh, fm-supervise-daemon.sh), not this lib.
 FM_PAUSE_RESURFACE_SECS_DEFAULT=3600
 
@@ -89,6 +90,20 @@ status_is_terminal_verb() {
   verb=$(status_line_verb "$line")
   case "$verb" in
     done|needs-decision|blocked|failed) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# 0 if the given (last) status line is an expected-idle terminal result after it
+# has already surfaced. Only done and failed are settled results: needs-decision
+# and blocked still require firstmate action and therefore retain immediate stale
+# re-surfacing. Consumers separately prove that this exact status line surfaced.
+status_idle_is_expected() {
+  local line=$1 verb
+  [ -n "$line" ] || return 1
+  verb=$(status_line_verb "$line")
+  case "$verb" in
+    done|failed) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -388,13 +403,12 @@ signal_crew_provably_working() {  # <file> ...
   return 0
 }
 
-# 0 (terminal/actionable) if a stale window's last status line is
-# captain-relevant; 1 otherwise, including the no-status case. A 1 only means
-# "non-terminal"; the always-on watcher then applies crew_is_provably_working,
-# while the away-mode daemon applies its persistence recheck.
-stale_is_terminal() {  # <window> <state>
-  local win=$1 state=$2 last
-  last=$(last_status_line "$state/$(window_to_task "$win" "$state").status")
+# 0 (terminal/actionable) if a stale pane's snapshotted last status line is
+# captain-relevant; 1 otherwise, including the no-status case. The caller owns
+# the status-file read and passes the same snapshot through the full pane poll so
+# a concurrent append cannot route one cycle through inconsistent classifiers.
+stale_is_terminal() {  # <last-status-line>
+  local last=$1
   [ -n "$last" ] && status_is_captain_relevant "$last"
 }
 

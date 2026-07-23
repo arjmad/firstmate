@@ -8,7 +8,8 @@
 # provably-working no-verb wakes absorbed (no exit, no queue entry, suppressor
 # advanced, beacon fresh), stopped-crew no-verb wakes surfaced (queue + exit),
 # provably-working stale panes absorbed-then-escalated past the threshold,
-# terminal-looking stale status lines overridden by an active run, the heartbeat
+# terminal-looking stale status lines overridden by an active run, settled
+# done/failed pane churn bounded by the long recheck cadence, the heartbeat
 # backstop fail-safe, and afk coherence (no double-triage while the away-mode
 # daemon owns supervision).
 #
@@ -95,17 +96,10 @@ test_signal_reason_is_actionable_classifier() {
 }
 
 test_stale_is_terminal_classifier() {
-  local dir state
-  dir=$(make_case classify-stale); state="$dir/state"
-  printf 'done: ready in branch fm/x\n' > "$state/term.status"
-  stale_is_terminal "sess:fm-term" "$state" || fail "terminal stale status not classified terminal"
-  fm_write_meta "$state/herdr-term.meta" "window=default:w1:p2" "backend=herdr"
-  printf 'done: ready in branch fm/herdr\n' > "$state/herdr-term.status"
-  stale_is_terminal "default:w1:p2" "$state" || fail "terminal herdr stale status not resolved through metadata"
-  printf 'working: compiling\n' > "$state/nonterm.status"
-  stale_is_terminal "sess:fm-nonterm" "$state" && fail "non-terminal stale classified terminal"
-  stale_is_terminal "sess:fm-missing" "$state" && fail "stale with no status classified terminal"
-  pass "stale_is_terminal: terminal status surfaces, non-terminal and no-status are benign"
+  stale_is_terminal "done: ready in branch fm/x" || fail "terminal stale status not classified terminal"
+  stale_is_terminal "working: compiling" && fail "non-terminal stale classified terminal"
+  stale_is_terminal "" && fail "stale with no status classified terminal"
+  pass "stale_is_terminal classifies one caller-owned status snapshot"
 }
 
 test_scan_captain_relevant_statuses_classifier() {
@@ -144,6 +138,14 @@ test_classifier_primitives() {
     || fail "done: not a terminal verb"
   status_is_terminal_verb "working: rebased onto merged #76" \
     && fail "working: wrongly classed as terminal verb"
+  status_idle_is_expected "done: PR https://x/pull/76 checks green" \
+    || fail "done: not classified as expected-idle once surfaced"
+  status_idle_is_expected "failed: validation failed" \
+    || fail "failed: not classified as expected-idle once surfaced"
+  status_idle_is_expected "needs-decision: choose a fix" \
+    && fail "needs-decision: wrongly classified as expected-idle"
+  status_idle_is_expected "blocked: credential required" \
+    && fail "blocked: wrongly classified as expected-idle"
   status_is_captain_relevant "merged" || fail "legacy bare merged free-text not captain-relevant"
   status_is_captain_relevant "PR ready https://x/pull/2" \
     || fail "legacy bare PR ready free-text not captain-relevant"
@@ -421,6 +423,95 @@ test_terminal_stale_surfaced() {
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the terminal stale failed"
   grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "terminal stale was not queued"
   pass "a stale pane sitting on a terminal status is surfaced (queue + exit)"
+}
+
+# Once an exact done/failed line has surfaced, a settled idle pane may redraw
+# indefinitely without minting one wake per hash. The surfaced marker anchors the
+# shared long cadence. A newly appended status remains an immediate signal and is
+# never hidden behind that cadence.
+test_settled_terminal_hash_churn_uses_long_cadence() {
+  local dir state fakebin out drain_out capture_file statusf window key pane_hash pid round back wakes
+  dir=$(make_case settled-terminal-churn); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
+  statusf="$state/settled.status"; window="test:fm-settled"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/settled.meta"
+  printf 'settled result redraw 0' > "$capture_file"
+  printf 'done: PR https://example.test/pr/8 checks green\n' > "$statusf"
+
+  # Establish the contract precondition through the real signal path: this exact
+  # terminal line has already woken firstmate and has a surfaced marker.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_FAKE_CREW_STATE='state: done · source: status-log · checks green' \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "initial done status did not surface through the signal path"
+  grep -F "signal: $statusf" "$out" >/dev/null || fail "initial done status did not print a signal wake"
+  [ "$(cat "$state/.hb-surfaced-settled" 2>/dev/null || true)" = "done: PR https://example.test/pr/8 checks green" ] \
+    || fail "initial done signal did not record the surfaced terminal line"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after initial done signal failed"
+
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  round=1
+  while [ "$round" -le 3 ]; do
+    printf 'settled result redraw %s' "$round" > "$capture_file"
+    pane_hash=$(hash_text "settled result redraw $round")
+    printf '%s' "$pane_hash" > "$state/.hash-$key"
+    printf '1\n' > "$state/.count-$key"
+    : > "$out"
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_FAKE_CREW_STATE='state: done · source: status-log · checks green' \
+      FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+    pid=$!
+    if ! wait_live "$pid" 20; then
+      reap "$pid"; fail "settled done pane surfaced on redraw $round before the long cadence: $(cat "$out")"
+    fi
+    reap "$pid"
+    round=$((round + 1))
+  done
+  if [ -e "$state/.wake-queue" ]; then
+    wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' "$state/.wake-queue")
+  else
+    wakes=0
+  fi
+  [ "$wakes" -eq 0 ] || fail "settled done pane queued $wakes stale wakes across three redraw hashes"
+
+  # The same result re-surfaces once when the last surfaced time crosses the long
+  # cadence. Hash churn cannot reset this age because the pane hash is not the anchor.
+  back=$(( $(date +%s) - 500 ))
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$state/.hb-surfaced-settled"
+  else touch -m -d "@$back" "$state/.hb-surfaced-settled"; fi
+  printf 'settled result redraw after cadence' > "$capture_file"
+  pane_hash=$(hash_text "settled result redraw after cadence")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_FAKE_CREW_STATE='state: done · source: status-log · checks green' \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "settled done pane did not re-surface after the long cadence"
+  grep -F "settled done status" "$out" >/dev/null || fail "settled recheck omitted its done-status reason: $(cat "$out")"
+  grep -F "long-cadence rechecks" "$out" >/dev/null || fail "settled recheck omitted its churn-throttling reason"
+  grep -F "possible wedge" "$out" >/dev/null && fail "settled terminal recheck was mislabeled a wedge"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after settled terminal recheck failed"
+
+  # A different status line is a new event, not pane churn. It must wake through
+  # the signal scan immediately even though the prior done result was settled.
+  printf 'failed: CI regressed after the earlier done result\n' >> "$statusf"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_FAKE_CREW_STATE='state: failed · source: status-log · CI regressed' \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "new failed status was delayed behind the settled cadence"
+  grep -F "signal: $statusf" "$out" >/dev/null || fail "new failed status did not wake through the signal path: $(cat "$out")"
+  [ "$(cat "$state/.hb-surfaced-settled" 2>/dev/null || true)" = "failed: CI regressed after the earlier done result" ] \
+    || fail "new failed status did not replace the surfaced marker"
+  pass "settled done/failed pane churn is bounded by the long cadence while new status events wake immediately"
 }
 
 # --- stale pane, STALE terminal status overridden by an active run: absorbed ---
@@ -1321,6 +1412,7 @@ test_turn_ended_not_working_surfaced
 test_working_note_not_working_surfaced
 test_actionable_signal_surfaced
 test_terminal_stale_surfaced
+test_settled_terminal_hash_churn_uses_long_cadence
 test_stale_terminal_status_overridden_by_active_run
 test_nonterminal_stale_provably_working_absorbed_then_escalated
 test_wedge_escalation_marks_demand_deep_inspection_after_threshold
