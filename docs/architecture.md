@@ -9,11 +9,12 @@ firstmate's always-loaded operating contract and routing index for conditional p
 ## Event-driven supervision
 
 A zero-token bash watcher (`bin/fm-watch.sh`) sleeps on the fleet, classifies detected wakes in bash, and wakes the first mate only when something is actionable.
-Actionable wakes include captain-relevant status signals, no-verb signals whose crew is not provably working, authenticated check output such as PR merge polling or an X-mode mention, stale panes whose crew is not provably working whether their status log looks terminal or non-terminal, provably-working stale panes that persist past `FM_STALE_ESCALATE_SECS`, declared external waits that remain paused past `FM_PAUSE_RESURFACE_SECS`, and heartbeat backstop hits.
+Actionable wakes include captain-relevant status signals, no-verb signals whose crew is not provably working, authenticated check output such as PR merge polling or an X-mode mention, stale panes whose crew is not provably working whether their status log looks terminal or non-terminal (except a settled result that already surfaced, which waits for the cadence below), provably-working stale panes that persist past `FM_STALE_ESCALATE_SECS`, expected-idle panes (declared external waits, and settled `done:`/`failed:` results that already surfaced) that remain idle past `FM_PAUSE_RESURFACE_SECS`, and heartbeat backstop hits.
 Repeated provably-working stale escalations on the same unchanged pane add an escalation count to the wake reason and, at `FM_WEDGE_DEMAND_INSPECT_COUNT`, a `demand-deep-inspection` marker.
 Those actionable wakes are written to a durable local queue (`state/.wake-queue`) before detector state advances, so a missed process exit can be recovered by draining the queue.
 No-verb wakes, such as `working:` notes and bare turn-ended signals, are benign only when `bin/fm-crew-state.sh` reports positive evidence that the crew is still working: an actively running no-mistakes step attributed to that crew's current code or a backend busy signature.
 A crew that declares `paused:` for a known external wait is separately absorbed while idle and re-surfaced only on the longer pause cadence, rather than being treated as a possible wedge.
+A settled `done:` or `failed:` result gets the same expected-idle treatment once that exact status line has woken the first mate: further pane redraws are absorbed and recheck only on that shared cadence, while every newly appended status event, even one repeating earlier text, still wakes immediately.
 A trailing `paused:` or durable `captain-held` status keeps that bounded cadence regardless of agent liveness, durably across watcher cycles, re-arms, and pane redraws: a live idle agent is the normal shape of a parked crew, and only authoritative working evidence (an active run-step or busy pane, rechecked on the wedge-threshold interval) reclassifies it.
 The pause declaration itself still surfaces once through the no-verb signal path, status movement past the pause escalates immediately, and the secondmate idle-endpoint exemption is unchanged.
 In away mode the daemon instead self-handles that routine signal and owns the later recheck.
@@ -22,7 +23,7 @@ No-change heartbeats are also benign.
 Absorbed wakes advance their suppression markers, log to `state/.watch-triage.log`, and keep the watcher blocking without a queue record or LLM turn.
 After each drain, `fm-wake-drain.sh` runs the same liveness guard as the supervision scripts, so a lapsed watcher chain surfaces even on a turn that only drains and handles queued wakes.
 Routine watcher polling, supervision no-ops, elapsed waiting time, and absorbed benign wakes stay silent.
-A declared external wait trades that silence for one bounded recheck per pause window, so a forgotten pause cannot remain invisible indefinitely.
+A declared external wait or settled result trades that silence for one bounded recheck per cadence window, so a forgotten pause or settled task cannot remain invisible indefinitely.
 Crew status files are append-only wake-event logs, not current-state fields.
 `bin/fm-crew-state.sh <id>` is the cheap current-state read for an actionable heartbeat review: it attributes a no-mistakes run, active or terminal, only when it matches the crew's branch and current code identity, then keeps that run-step authoritative even if the pane has closed.
 The script header owns the exact run-head ancestry rules.
