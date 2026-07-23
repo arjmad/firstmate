@@ -44,6 +44,7 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
 - Helper scripts in `bin/` are plain bash.
   Each starts with a usage header comment; keep it accurate when you change behavior.
   Shell test scripts and helpers in `tests/` are plain bash; Python behavior tests use the standard library's `unittest` runner.
+  Shell behavior tests must keep their executable bit: CI invokes them directly and fails on a non-executable test (enforced by the CI guard and pinned by `tests/fm-test-runners.test.sh`).
   `bin/fm-lint.sh` must pass: it is the single owner of the lint definition (the shellcheck file set, config, and pinned shellcheck version), and both CI and the no-mistakes pre-push gate run it, so local and CI can never diverge.
   It pins one exact shellcheck version and refuses to run under any other; print it with `bin/fm-lint.sh --required-version` and install that build locally.
 - Changes to harness adapters (detection in `bin/fm-harness.sh`, launch and hook mechanics in `bin/fm-spawn.sh`, busy signatures in `bin/fm-watch.sh` and `bin/fm-tmux-lib.sh`, cleanup in `bin/fm-teardown.sh`, and facts in `.agents/skills/harness-adapters/SKILL.md`) must be verified empirically against the real harness, never written from documentation alone.
