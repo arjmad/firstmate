@@ -105,8 +105,8 @@ test_spawn_contract_and_mkdir_pattern() {
   grep -F 'mkdir -p "$TASK_TMP/gotmp"' "$SPAWN" >/dev/null \
     || fail "fm-spawn missing: mkdir of gotmp under TASK_TMP"
   # shellcheck disable=SC2016  # single quotes are deliberate: literal source string
-  grep -F 'echo "tasktmp=$TASK_TMP"' "$SPAWN" >/dev/null \
-    || fail "fm-spawn missing: tasktmp= line in meta write"
+  grep -F '"tasktmp=$TASK_TMP"' "$SPAWN" >/dev/null \
+    || fail "fm-spawn missing: tasktmp= line in metadata assembly"
   grep -F 'export GOTMPDIR=' "$SPAWN" >/dev/null \
     || fail "fm-spawn missing: GOTMPDIR export into pane"
   # Behavioral: the mkdir + meta-write pattern spawn uses must produce a gotmp dir and
@@ -115,12 +115,11 @@ test_spawn_contract_and_mkdir_pattern() {
   local sim_root="$TMP_ROOT/$id-root"
   local task_tmp="$sim_root/tmp/fm-$id"
   mkdir -p "$sim_root/state"
-  # Replicate spawn's exact mkdir + meta-write lines.
+  # Replicate spawn's exact mkdir + metadata-publication pattern.
   TASK_TMP="$task_tmp"
   mkdir -p "$TASK_TMP/gotmp"
-  {
-    echo "tasktmp=$TASK_TMP"
-  } > "$sim_root/state/$id.meta"
+  META_LINES=("tasktmp=$TASK_TMP")
+  printf '%s\n' "${META_LINES[@]}" > "$sim_root/state/$id.meta"
   [ -d "$task_tmp/gotmp" ] || fail "simulated spawn did not create gotmp dir"
   # Teardown reads tasktmp= with `grep '^tasktmp=' | cut -d= -f2-`; round-trip it.
   local read_back

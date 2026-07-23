@@ -1396,47 +1396,52 @@ fi
 
 META_WINDOW=$T
 [ "$BACKEND" = orca ] && META_WINDOW=$W
-{
-  echo "window=$META_WINDOW"
-  echo "worktree=$WT"
-  echo "project=$PROJ_ABS"
-  echo "harness=$HARNESS"
-  echo "kind=$KIND"
-  echo "mode=$MODE"
-  echo "yolo=$YOLO"
-  echo "tasktmp=$TASK_TMP"
-  echo "model=${MODEL:-default}"
-  echo "effort=${EFFORT:-default}"
-  [ "$TITLE_SET" -eq 0 ] || echo "title=$TITLE"
-  [ "$FLEET_SET" -eq 0 ] || echo "fleet=$FLEET"
-  # backend= is written only for a non-default (non-tmux) backend, so the
-  # default path's meta stays byte-identical (absent backend= means tmux;
-  # data/fm-backend-design-d7's P1 compatibility contract).
-  [ "$BACKEND" = tmux ] || echo "backend=$BACKEND"
-  if [ "$BACKEND" = herdr ]; then
-    echo "herdr_session=$HERDR_SES"
-    echo "herdr_workspace_id=$HERDR_WORKSPACE_ID"
-    echo "herdr_tab_id=$HERDR_TAB_ID"
-    echo "herdr_pane_id=$HERDR_PANE_ID"
-  fi
-  if [ "$BACKEND" = zellij ]; then
-    echo "zellij_session=$ZELLIJ_SES"
-    echo "zellij_tab_id=$ZELLIJ_TAB_ID"
-    echo "zellij_pane_id=$ZELLIJ_PANE_ID"
-  fi
-  if [ "$BACKEND" = orca ]; then
-    echo "orca_worktree_id=$ORCA_WORKTREE_ID"
-    echo "terminal=$ORCA_TERMINAL"
-  fi
-  if [ "$BACKEND" = cmux ]; then
-    echo "cmux_workspace_id=$CMUX_WORKSPACE_ID"
-    echo "cmux_surface_id=$CMUX_SURFACE_ID"
-  fi
-  if [ "$KIND" = secondmate ]; then
-    echo "home=$PROJ_ABS"
-    echo "projects=$SECONDMATE_PROJECTS"
-  fi
-} > "$STATE/$ID.meta"
+# Publish through one explicitly checked write: Bash 3.2 can ignore failures from a
+# redirected compound block under set -e and otherwise launch without metadata.
+META_LINES=(
+  "window=$META_WINDOW"
+  "worktree=$WT"
+  "project=$PROJ_ABS"
+  "harness=$HARNESS"
+  "kind=$KIND"
+  "mode=$MODE"
+  "yolo=$YOLO"
+  "tasktmp=$TASK_TMP"
+  "model=${MODEL:-default}"
+  "effort=${EFFORT:-default}"
+)
+[ "$TITLE_SET" -eq 0 ] || META_LINES[${#META_LINES[@]}]="title=$TITLE"
+[ "$FLEET_SET" -eq 0 ] || META_LINES[${#META_LINES[@]}]="fleet=$FLEET"
+# backend= is written only for a non-default (non-tmux) backend, so the
+# default path's meta stays byte-identical (absent backend= means tmux;
+# data/fm-backend-design-d7's P1 compatibility contract).
+[ "$BACKEND" = tmux ] || META_LINES[${#META_LINES[@]}]="backend=$BACKEND"
+if [ "$BACKEND" = herdr ]; then
+  META_LINES[${#META_LINES[@]}]="herdr_session=$HERDR_SES"
+  META_LINES[${#META_LINES[@]}]="herdr_workspace_id=$HERDR_WORKSPACE_ID"
+  META_LINES[${#META_LINES[@]}]="herdr_tab_id=$HERDR_TAB_ID"
+  META_LINES[${#META_LINES[@]}]="herdr_pane_id=$HERDR_PANE_ID"
+fi
+if [ "$BACKEND" = zellij ]; then
+  META_LINES[${#META_LINES[@]}]="zellij_session=$ZELLIJ_SES"
+  META_LINES[${#META_LINES[@]}]="zellij_tab_id=$ZELLIJ_TAB_ID"
+  META_LINES[${#META_LINES[@]}]="zellij_pane_id=$ZELLIJ_PANE_ID"
+fi
+if [ "$BACKEND" = orca ]; then
+  META_LINES[${#META_LINES[@]}]="orca_worktree_id=$ORCA_WORKTREE_ID"
+  META_LINES[${#META_LINES[@]}]="terminal=$ORCA_TERMINAL"
+fi
+if [ "$BACKEND" = cmux ]; then
+  META_LINES[${#META_LINES[@]}]="cmux_workspace_id=$CMUX_WORKSPACE_ID"
+  META_LINES[${#META_LINES[@]}]="cmux_surface_id=$CMUX_SURFACE_ID"
+fi
+if [ "$KIND" = secondmate ]; then
+  META_LINES[${#META_LINES[@]}]="home=$PROJ_ABS"
+  META_LINES[${#META_LINES[@]}]="projects=$SECONDMATE_PROJECTS"
+fi
+if ! printf '%s\n' "${META_LINES[@]}" > "$STATE/$ID.meta"; then
+  exit 1
+fi
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")
