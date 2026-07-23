@@ -45,6 +45,13 @@
 # Projected closes share the presentation-order lock, refuse to close the
 # captain's active tab, and restore the exact response-derived pre-close tab
 # if Herdr's last-pane cleanup focuses an unrelated neighboring workspace.
+# A Herdr fleet task closes only its exact recorded pane under the fleet-name
+# lock and preserves the exact active workspace/tab. When no other metadata
+# member shares that recorded fleet workspace, final workspace cleanup is
+# allowed only if state/.herdr-fleet-<name> is an exact active record whose
+# token-bearing live workspace matches the task endpoint. Missing, malformed,
+# stale, busy, active, or otherwise ambiguous proof leaves the workspace and
+# record in place with a warning; no workspace is looked up or adopted by label.
 # Secondmates (kind=secondmate in meta) are retired explicitly. Normal
 # teardown refuses while their home has in-flight crewmate meta files; --force
 # is the approved discard path that prevalidates child removal targets, discards
@@ -140,6 +147,7 @@ KIND=$(grep '^kind=' "$META" | cut -d= -f2- || true)
 [ -n "$KIND" ] || KIND=ship
 MODE=$(grep '^mode=' "$META" | cut -d= -f2- || true)
 [ -n "$MODE" ] || MODE=no-mistakes
+FLEET=$(grep '^fleet=' "$META" | cut -d= -f2- || true)
 
 default_branch() {
   local ref branch
@@ -160,6 +168,21 @@ default_branch() {
 meta_value() {
   local meta=$1 key=$2
   fm_meta_get "$meta" "$key"
+}
+
+herdr_fleet_has_other_member() {  # <fleet> <session> <workspace-id> <tab-id>
+  local fleet=$1 session=$2 workspace=$3 tab=$4 candidate
+  for candidate in "$STATE"/*.meta; do
+    [ -f "$candidate" ] && [ ! -L "$candidate" ] || continue
+    [ "$candidate" != "$META" ] || continue
+    [ "$(meta_value "$candidate" fleet)" = "$fleet" ] || continue
+    [ "$(fm_backend_of_meta "$candidate")" = herdr ] || continue
+    [ "$(meta_value "$candidate" herdr_session)" = "$session" ] || continue
+    [ "$(meta_value "$candidate" herdr_workspace_id)" = "$workspace" ] || continue
+    [ "$(meta_value "$candidate" herdr_tab_id)" = "$tab" ] || continue
+    return 0
+  done
+  return 1
 }
 
 require_orca_worktree_id() {
@@ -1130,11 +1153,80 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   }
 fi
 
+HERDR_FLEET_HANDLED=0
+if [ "$BACKEND" = herdr ] && [ -n "$FLEET" ]; then
+  HERDR_FLEET_HANDLED=1
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$SCRIPT_DIR/fm-wake-lib.sh"
+  fm_backend_source herdr || true
+  HERDR_FLEET_SESSION=$(meta_value "$META" herdr_session)
+  HERDR_FLEET_WORKSPACE=$(meta_value "$META" herdr_workspace_id)
+  HERDR_FLEET_TAB=$(meta_value "$META" herdr_tab_id)
+  HERDR_FLEET_PANE=$(meta_value "$META" herdr_pane_id)
+  HERDR_FLEET_RECORD=$(fm_backend_herdr_fleet_record_path "$STATE" "$FLEET")
+  HERDR_FLEET_LOCK=$(fm_backend_herdr_fleet_lock_path "$STATE" "$FLEET")
+  HERDR_FLEET_LOCK_HELD=0
+  HERDR_FLEET_LOCK_ATTEMPT=0
+  while [ "$HERDR_FLEET_LOCK_ATTEMPT" -lt 50 ]; do
+    if fm_lock_try_acquire "$HERDR_FLEET_LOCK"; then
+      HERDR_FLEET_LOCK_HELD=1
+      break
+    fi
+    sleep 0.1
+    HERDR_FLEET_LOCK_ATTEMPT=$((HERDR_FLEET_LOCK_ATTEMPT + 1))
+  done
+  HERDR_FLEET_LAST=0
+  if ! herdr_fleet_has_other_member \
+    "$FLEET" "$HERDR_FLEET_SESSION" "$HERDR_FLEET_WORKSPACE" "$HERDR_FLEET_TAB"; then
+    HERDR_FLEET_LAST=1
+  fi
+  HERDR_FLEET_RECORD_MATCHED=0
+  if fm_backend_herdr_fleet_record_read "$HERDR_FLEET_RECORD" "$FLEET" \
+     && [ "$FM_BACKEND_HERDR_FLEET_RECORD_SESSION" = "$HERDR_FLEET_SESSION" ] \
+     && [ "$FM_BACKEND_HERDR_FLEET_RECORD_WORKSPACE_ID" = "$HERDR_FLEET_WORKSPACE" ] \
+     && [ "$FM_BACKEND_HERDR_FLEET_RECORD_TAB_ID" = "$HERDR_FLEET_TAB" ] \
+     && fm_backend_herdr_fleet_workspace_matches_record \
+       "$HERDR_FLEET_SESSION" "$HERDR_FLEET_WORKSPACE" "$HERDR_FLEET_TAB" \
+       "$FLEET" "$FM_BACKEND_HERDR_FLEET_RECORD_TOKEN"; then
+    HERDR_FLEET_RECORD_MATCHED=1
+  elif [ "$HERDR_FLEET_LAST" = 1 ]; then
+    echo "warning: Herdr fleet '$FLEET' lacks exact durable creation proof; closing only the task pane and leaving workspace cleanup to the operator" >&2
+  fi
+  HERDR_FLEET_CLOSE_CONFIRMED=0
+  case "$(fm_backend_herdr_pane_agent_state "$HERDR_FLEET_SESSION" "$HERDR_FLEET_PANE")" in
+    dead) HERDR_FLEET_CLOSE_CONFIRMED=1 ;;
+    *)
+      if fm_backend_herdr_fleet_close_pane_focus_preserving \
+        "$HERDR_FLEET_SESSION" "$HERDR_FLEET_PANE" 2>/dev/null \
+         && [ "$(fm_backend_herdr_pane_agent_state "$HERDR_FLEET_SESSION" "$HERDR_FLEET_PANE")" = dead ]; then
+        HERDR_FLEET_CLOSE_CONFIRMED=1
+      fi
+      ;;
+  esac
+  if [ "$HERDR_FLEET_CLOSE_CONFIRMED" = 1 ] \
+     && [ "$HERDR_FLEET_LAST" = 1 ] \
+     && [ "$HERDR_FLEET_RECORD_MATCHED" = 1 ] \
+     && [ "$HERDR_FLEET_LOCK_HELD" = 1 ]; then
+    fm_backend_herdr_fleet_prune_recorded_workspace \
+      "$HERDR_FLEET_RECORD" "$FLEET" "$HERDR_FLEET_SESSION" \
+      "$HERDR_FLEET_WORKSPACE" "$HERDR_FLEET_TAB" || true
+  elif [ "$HERDR_FLEET_CLOSE_CONFIRMED" != 1 ]; then
+    echo "warning: exact Herdr fleet pane close could not be confirmed for $ID; retaining the fleet workspace record" >&2
+  fi
+  if [ "$HERDR_FLEET_LOCK_HELD" = 1 ]; then
+    HERDR_FLEET_LOCK_HELD=0
+    fm_lock_release "$HERDR_FLEET_LOCK" || true
+  else
+    echo "warning: Herdr fleet '$FLEET' lock stayed busy; no final workspace cleanup was attempted" >&2
+  fi
+fi
+
 HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
 HERDR_PRESENTATION_RETIRE_CANDIDATE=0
 HERDR_PRESENTATION_SESSION=
 HERDR_PRESENTATION_PANE=
 if [ "$BACKEND" = herdr ] \
+   && [ "$HERDR_FLEET_HANDLED" != 1 ] \
    && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
   fm_backend_source herdr || true
   HERDR_PRESENTATION_SESSION=$(meta_value "$META" herdr_session)
@@ -1173,7 +1265,7 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   else
     echo "warning: herdr presentation focus lock stayed busy; refusing a concurrent focus-unsafe pane close" >&2
   fi
-elif [ "$BACKEND" != orca ]; then
+elif [ "$BACKEND" != orca ] && [ "$HERDR_FLEET_HANDLED" != 1 ]; then
   fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
 fi
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
@@ -1183,6 +1275,7 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
     echo "warning: exact herdr task-pane close could not be confirmed for $ID; retaining the presentation journal and attempting no workspace cleanup" >&2
   fi
 elif [ "$BACKEND" = herdr ] \
+     && [ "$HERDR_FLEET_HANDLED" != 1 ] \
      && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
   echo "warning: herdr presentation journal for $ID remains quarantined; no workspace cleanup was attempted" >&2
 fi

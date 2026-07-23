@@ -4,7 +4,7 @@ This document records the empirical verification behind `bin/backends/herdr.sh`,
 It is the herdr equivalent of the tmux facts recorded in the `harness-adapters` skill and `docs/architecture.md`'s "Runtime session backends" section.
 
 Herdr is [an agent-native terminal multiplexer](https://herdr.dev) with a socket API, CLI wrappers, and native per-pane agent-state detection.
-Originally verified against herdr 0.7.1, protocol 14, on macOS aarch64; the latest dated evidence below uses herdr 0.7.4, protocol 16.
+Originally verified against herdr 0.7.1, protocol 14, on macOS aarch64; the latest dated evidence below uses herdr 0.7.5, protocol 16.
 Current real-herdr verification uses isolated named sessions plus the guarded `bin/fm-herdr-lab.sh` lifecycle helper, either directly or through the compatibility wrappers in `tests/herdr-test-safety.sh`.
 A 2026-07-02 cleanup bug proved that `HERDR_SESSION` alone is not a safe way to target destructive session cleanup; see "Session targeting: the `--session` flag, not `HERDR_SESSION` alone" below.
 All real-herdr verification in this document uses isolated sessions and guarded cleanup; the captain's default herdr session and live tmux fleet were never intended targets.
@@ -18,7 +18,7 @@ Firstmate only drives the `herdr` CLI as a separate process, which carries no AG
 
 Prerequisites:
 
-- `herdr` itself, protocol 14 or newer (0.7.1, 0.7.3, and 0.7.4 verified) - see [herdr.dev](https://herdr.dev) for install instructions.
+- `herdr` itself, protocol 14 or newer (0.7.1, 0.7.3, 0.7.4, and 0.7.5 verified) - see [herdr.dev](https://herdr.dev) for install instructions.
 - `jq`, required to parse herdr's JSON output: `brew install jq` (or your platform's package manager).
 - The universal firstmate prerequisites - a verified crew harness plus the required toolchain, owned by [`docs/configuration.md`](configuration.md) ("Harness support", "Toolchain"); treehouse still provides the worktree, herdr only provides the session.
 
@@ -129,10 +129,72 @@ Tab-per-task within each home's own workspace remains the durable default for th
 Durable or automatically recovered workspace-per-task remains rejected.
 The optional projection accepts a top-level space per clean new task only as a disposable visual aid with explicit flat fallback.
 
+## Informative pane and agent titles
+
+`bin/fm-spawn.sh --title <short>` sets a display-only label for one spawn and defaults to the task id when the flag is absent.
+The composed Herdr title is `<title> · <model>` when a concrete model is known and `<title> · <harness>` otherwise.
+Firstmate applies the composed string as the pane's custom label and as Herdr display metadata, while the effective model or harness is also reported as the display-agent value.
+The task's `fm-<id>` tab label, exact pane endpoint, task id, and ownership records are unchanged and remain the only operational authorities.
+An explicit title is recorded as `title=` in the task metadata, while a defaulted task-id title adds no metadata key.
+The tmux adapter deliberately keeps its existing `fm-<id>` window name because that name is also its recorded target and duplicate-detection key, so there is no equivalent display-only window rename to apply safely.
+
 ## Default workspace lifecycle: one per-home workspace, reused
 
 Each home's own workspace (`firstmate` for the primary, `2ndmate-<secondmate-id>` for a secondmate - see "Label derivation" above) is created as needed and reused by each subsequent default-container spawn while it exists: `fm_backend_herdr_workspace_ensure` calls `fm_backend_herdr_workspace_find` first and creates a workspace only when none labelled for that home exists yet.
 Teardown (`fm_backend_herdr_kill`) closes only the task's pane/tab, never the workspace.
+
+## Opt-in fleet grid workspaces
+
+Pass `bin/fm-spawn.sh --fleet <fleet-name>` to place related Herdr tasks in one dedicated workspace as panes in a shared tab.
+The option is Herdr-only, and any other resolved runtime backend refuses it instead of silently ignoring it.
+Without `--fleet`, the ordinary per-home tab layout remains the default and no fleet record is created.
+
+Fleet grids are for crewmate/scout batches in one home; `--secondmate` refuses `--fleet` before any mutation because each secondmate lives in its own cross-home workspace.
+
+The first spawn for a path-safe fleet name publishes a pending private record and creates a token-bearing workspace with `--no-focus`.
+The exact workspace, seeded tab, and root pane IDs come only from that create response.
+After those IDs are complete, Firstmate atomically activates `state/.herdr-fleet-<fleet-name>` with the fleet name, random 128-bit fleet id, named session, workspace id, and shared tab id.
+A later spawn joins only when that exact active record still matches one live token-bearing workspace and tab in the same named session.
+It lists the panes, chooses the largest current pane from Herdr's layout response, and splits it right or down at a 0.5 ratio according to its current shape.
+This produces a practical grid while leaving exact geometry to Herdr's split primitives.
+
+Fleet records are task-container proof, not task endpoint authority.
+Each task still records its exact pane in `window=` and `herdr_pane_id=`, and `fleet=` records only the requested fleet name.
+The display title remains separate from all of those fields.
+A missing, pending, malformed, stale, session-mismatched, token-mismatched, or otherwise ambiguous fleet record is never adopted, repaired, overwritten, or used for cleanup.
+The spawn warns and uses the ordinary flat layout, while leaving every existing workspace untouched.
+A lost or unverifiable split response also quarantines the fleet record before the task falls back flat.
+
+`--fleet` takes precedence over the optional `config/herdr-presentation-spaces` flag for that spawn.
+When both are present, Firstmate prints one warning, skips the single-task projection entirely, and attempts only the fleet path before any flat fallback.
+
+Fleet create, split, pane close, and final workspace close use the same exact active-workspace and active-tab snapshot and restoration discipline as the presentation path.
+The fleet-name lock serializes create, join, and final cleanup decisions.
+Teardown closes only the task's exact pane.
+When no other task metadata points at that exact fleet session, workspace, and tab, Firstmate prunes the workspace only if the active durable record and live token-bearing workspace still match.
+If the last pane already caused Herdr to remove the workspace, that confirmed absence retires the fleet record without a separate close.
+If an empty workspace remains, an exact recorded, non-active workspace may be closed and the prior tab is restored.
+Missing proof, extra panes, an active last tab, lock contention, or any ambiguous response leaves the workspace and record for operator inspection.
+Firstmate never looks up, adopts, closes, or deletes a fleet workspace by its human-readable label alone.
+
+### Isolated fleet-grid evidence (2026-07-23)
+
+The real fleet-grid suite ran against Herdr 0.7.5 on macOS through the guarded named-session lab helper.
+It created one four-pane workspace, applied the display-only pane metadata, preserved the exact control workspace and tab through three joins, closed each exact pane, retired the workspace record after confirmed workspace removal, and left the default-session fleet-state tripwire identical.
+
+Exact command:
+
+```sh
+HERDR_LAB_HELPER='/Users/heimdall/src/platforms/firstmate/bin/fm-herdr-lab.sh' bash tests/fm-backend-herdr-fleet-e2e.test.sh
+```
+
+Exact result:
+
+```text
+ok - real Herdr fleet create and three joins produce one four-pane grid without focus drift
+ok - real Herdr exact-pane cleanup removes the recorded fleet workspace and preserves focus
+evidence: herdr=0.7.5 panes=4 session=fm-lab-fleetview-titles-54924-17463
+```
 
 ## Optional disposable single-task presentation spaces
 
@@ -288,9 +350,10 @@ For a bare unknown non-`fm-` name, Herdr retains the legacy tmux live-window fal
 Herdr tasks additionally record:
 
 - `herdr_session=` - the named herdr session this task's server lives in.
-- `herdr_workspace_id=` - the id of the exact workspace containing this task's endpoint, ordinarily the primary's `firstmate` workspace or a secondmate's own `2ndmate-<id>` workspace, and a disposable task workspace when the optional projection succeeds; for reference only, since day-to-day operations use the recorded pane target.
+- `herdr_workspace_id=` - the id of the exact workspace containing this task's endpoint, ordinarily the primary's `firstmate` workspace or a secondmate's own `2ndmate-<id>` workspace, a disposable task workspace when the optional projection succeeds, or the shared fleet workspace when a `--fleet` spawn succeeds; for reference only, since day-to-day operations use the recorded pane target.
 - `herdr_tab_id=` - the task's tab id.
 - `herdr_pane_id=` - the task's pane id, the fast-path operational target.
+- `fleet=` - only for a spawn that explicitly passed `--fleet`: the requested fleet name; container proof, never endpoint authority (see "Opt-in fleet grid workspaces" above).
 
 ## Verified CLI facts
 
@@ -306,7 +369,7 @@ Herdr tasks additionally record:
 | Bounded capture | `herdr pane read <pane> --source recent --lines N` | See "Verified bug" below - N is never passed through directly. |
 | ANSI capture | `herdr pane read <pane> --source recent --lines N --format ansi` | Herdr 0.7.3 preserves composer de-emphasis styling, letting the shared `fm_composer_strip_ghost` extractor treat dim/faint and dark-TRUECOLOR ghost/placeholder text as empty while retaining real typed input. The same small-`--lines` workaround applies. |
 | Busy state | `herdr agent get <pane>` -> `.result.agent.agent_status` | Verified live against an interactive `claude` session: reports `working` while generating, `done` once idle. Mapped: `working` -> busy; `idle`/`done` -> idle; `blocked` -> idle (surfaced like a stale pane, not suppressed as busy - a blocked agent is stuck waiting on the human, not grinding); anything else -> unknown (the cue for the shared tail-regex fallback). |
-| Kill | `herdr pane close <pane>` | Closing a tab's only (root) pane also closes the tab - no separate tab-close call needed for this adapter's one-pane-per-tab shape. Best-effort: closing an already-closed pane exits non-zero, matching tmux's `kill-window \|\| true` contract. Teardown itself only ever closes the task's own pane/tab, never the workspace - but closing a workspace's LAST tab (verified real-herdr behavior) deletes the workspace as a side effect, so a home's own workspace persists only while at least one task tab remains; see "Default workspace lifecycle" above. |
+| Kill | `herdr pane close <pane>` | Closing a tab's only (root) pane also closes the tab - no separate tab-close call needed for this adapter's one-pane-per-tab shape. Best-effort: closing an already-closed pane exits non-zero, matching tmux's `kill-window \|\| true` contract. Teardown itself only ever closes the task's own pane/tab, never the workspace (the one exception is a fleet task's provably Firstmate-created final workspace; see "Opt-in fleet grid workspaces" above) - but closing a workspace's LAST tab (verified real-herdr behavior) deletes the workspace as a side effect, so a home's own workspace persists only while at least one task tab remains; see "Default workspace lifecycle" above. |
 | Default-tab prune (create_task, first task in a fresh workspace only) | `herdr workspace create`'s own response (`.result.tab.tab_id`) identifies the seeded tab; `herdr tab list` + `herdr agent get <pane>` re-verify it; `herdr pane close <pane>` closes exactly that tab id | `herdr workspace create` seeds the new workspace with one auto-created default tab (label `1`, id captured straight from the create response) firstmate never uses. `fm_backend_herdr_create_task` closes EXACTLY that captured tab id right after creating the first real task tab in a freshly created workspace - never right after `workspace create` itself (see Kill row), and never re-derived from a tab's label or the workspace's tab count at create_task time (see "Default-tab prune" above for the created-vs-adopted safety gate and the 2026-07-02 incident it fixes). Best-effort; an ADOPTED workspace (not freshly created by this same call) is never a prune candidate at all. |
 | Presentation workspace ordering | Raw protocol-16 `workspace.move` with `{workspace_id, insert_index}` over the exact named session socket | Herdr 0.7.4 exposes the method and zero-based `WorkspaceMoveParams.insert_index` in `herdr api schema` but has no `herdr workspace move` CLI subcommand, while moving the exact newly created workspace returns the full `workspace_list`, preserves focus and every other workspace's relative order, and is never used for recovery, ownership, adoption, or cleanup. The surrounding projection guard captures and verifies the exact active workspace and tab anyway. |
 | Presentation cleanup focus | `herdr pane close <exact-projection-pane>`, followed only when needed by `herdr tab focus <exact-prior-tab>` | Herdr 0.7.4 can move focus to a neighboring workspace when closing a non-focused workspace's last pane. Firstmate serializes projected cleanup, refuses to close the active tab, and restores only the exact response-derived pre-close tab id. No label, order, or projection token is restoration authority. |
