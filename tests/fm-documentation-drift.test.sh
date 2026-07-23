@@ -66,8 +66,12 @@ test_cmux_minimum_matches_major_minor_gate() {
 
 test_skill_triggers_match_agents_declarations() {
   assert_contains_text "$AGENTS" "When the captain invokes \`/bearings\` or asks for a bearings report" "AGENTS.md must declare the bearings trigger"
+  if sed -n '/^## 13\./,/^## 14\./p' "$AGENTS" | grep -Fq -- 'bearings'; then
+    fail "AGENTS.md section 13 must stay agent-only and not carry the bearings trigger"
+  fi
   assert_absent_text "$BOOTSTRAP_SKILL" 'standalone bin/fm-bootstrap.sh' "bootstrap-diagnostics frontmatter must stay session-start scoped"
-  assert_absent_text "$STOW_SKILL" 'or periodically to keep operational memory current' "stow frontmatter must not add an undeclared periodic trigger"
+  assert_contains_text "$STOW_SKILL" 'or periodically to keep operational memory current' "stow frontmatter must declare the periodic trigger"
+  assert_contains_text "$AGENTS" "before a session reset or context compaction, or periodically to keep operational memory current, load the \`stow\` skill" "AGENTS.md /stow line must declare the pre-reset and periodic triggers"
   pass "bearings, bootstrap-diagnostics, and stow triggers align with AGENTS.md"
 }
 
