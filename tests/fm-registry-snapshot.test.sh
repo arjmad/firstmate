@@ -396,20 +396,44 @@ test_machine_readable_contradiction_diagnostics() {
 }
 
 test_aggregates_match_detailed_bounded_rows() {
-  local home fakebin out
+  local home fakebin out orphan
   home=$(make_home aggregates)
   fakebin=$(make_fakebin "$home")
   write_complete_fixture "$home"
   out=$(run_snapshot "$home" "$fakebin") || fail "aggregate snapshot failed"
   printf '%s' "$out" | jq -e '
     .counts.registered_projects.value==.projects.total and
-    .counts.registered_secondmates.value==.secondmates.total and
+    .counts.registered_secondmates.value==.secondmates.total_registered and
     .counts.active_tasks.value==(.tasks.in_flight.total + ([.secondmates.records[].workload.active_tasks]|add)) and
     .counts.queued_tasks.value==(.tasks.queued.total + ([.secondmates.records[].workload.queued_tasks]|add)) and
     .counts.retained_done_tasks.value==(.tasks.retained_done.total + ([.secondmates.records[].workload.retained_done_tasks]|add)) and
     .counts.diagnostics.value==.diagnostics.total and
     .counts.diagnostics_by_code==.diagnostics.by_code
   ' >/dev/null || fail "aggregate counts disagreed with detailed rows"
+
+  home=$(make_home aggregates-orphan)
+  fakebin=$(make_fakebin "$home")
+  write_complete_fixture "$home"
+  orphan=$(make_secondmate_home mate-orphan "$(basename "$home")-mate2")
+  fm_write_meta "$home/state/mate-orphan.meta" \
+    'window=firstmate:fm-dead-mate-orphan' \
+    "worktree=$orphan" \
+    "project=$orphan" \
+    'harness=claude' \
+    'kind=secondmate' \
+    'mode=secondmate' \
+    'yolo=off' \
+    'model=claude-opus-4-8' \
+    'effort=high' \
+    "home=$orphan" \
+    'projects=alpha'
+  out=$(run_snapshot "$home" "$fakebin") || fail "orphan secondmate snapshot failed"
+  printf '%s' "$out" | jq -e '
+    .secondmates.total==2 and .secondmates.total_registered==1 and
+    .counts.registered_secondmates.value==1 and
+    .counts.registered_secondmates.status=="available" and
+    ([.secondmates.records[]|select(.registry.status=="available")]|length)==.counts.registered_secondmates.value
+  ' >/dev/null || fail "unregistered secondmate metadata inflated the registered count"
   pass "operational aggregate counts cross-check against detailed rows"
 }
 
@@ -449,6 +473,14 @@ EOF
     (.secondmates.records|any(.id=="bad-mate" and .status=="unavailable"
       and (.diagnostics|index("malformed_secondmate_registry_entry"))!=null))
   ' >/dev/null || fail "malformed or unreadable inputs lacked explicit degradation"
+
+  printf '%s\n%s\n' '{"rules":[]}' '{"rules":[]}' > "$home/config/crew-dispatch.json"
+  out=$(run_snapshot "$home" "$fakebin") || fail "multi-document crew-dispatch snapshot exited non-zero"
+  printf '%s' "$out" | jq -e '
+    .schema=="fm-registry-snapshot.v1" and
+    .configuration.routing.crew_dispatch.configured==true and
+    .configuration.routing.crew_dispatch.status=="unavailable"
+  ' >/dev/null || fail "multi-document crew-dispatch lacked structured degradation"
 
   home=$(make_home truncated)
   fakebin=$(make_fakebin "$home")
@@ -508,6 +540,17 @@ test_secret_token_and_environment_sentinels_never_serialize() {
   printf '%s\n' 'claude ghp_CONFIG_SECRET_1234567890 high' > "$home/config/secondmate-harness"
   printf '%s\n' '{"default":{"harness":"claude","model":"ghp_DISPATCH_SECRET_1234567890","effort":"high"}}' > "$home/config/crew-dispatch.json"
   printf '%s\n' '- ghp_PROJECT_SECRET_1234567890 [local-only] - secret-shaped project key' >> "$home/data/projects.md"
+  make_git_repo "$home/projects/gamma" main
+  git -C "$home/projects/gamma" remote add origin 'https://alice:p@ssw0rd-CREDAT_SENTINEL_9f2b1c@github.com/acme/gamma.git'
+  make_git_repo "$home/projects/delta" main
+  git -C "$home/projects/delta" remote add origin 'https://github.com/acme/del@ta.git'
+  make_git_repo "$home/projects/epsilon" main
+  git -C "$home/projects/epsilon" remote add origin 'ci@bot@github.com:acme/epsilon.git'
+  printf '%s\n' \
+    '- gamma [no-mistakes] - remote password containing an at sign' \
+    '- delta [no-mistakes] - credential-free remote path containing an at sign' \
+    '- epsilon [no-mistakes] - scp remote userinfo containing an at sign' \
+    >> "$home/data/projects.md"
   out=$(run_snapshot "$home" "$fakebin") || fail "secret sentinel snapshot failed"
   for sentinel in \
     ghp_REMOTE_SECRET_1234567890 \
@@ -519,11 +562,17 @@ test_secret_token_and_environment_sentinels_never_serialize() {
     ghp_DISPATCH_SECRET_1234567890 \
     ghp_PROJECT_SECRET_1234567890 \
     CREDENTIAL_SENTINEL_1234567890 \
+    CREDAT_SENTINEL_9f2b1c \
     RAW_ENV_SENTINEL_652e6c \
     'user:ghp_'; do
     assert_not_contains "$out" "$sentinel" "secret or environment sentinel leaked: $sentinel"
   done
   printf '%s' "$out" | jq -e '
+    (.projects.records[] | select(.key=="gamma")
+      | .remote.identity=="github.com/acme/gamma" and .remote.locator=="https://github.com/acme/gamma") and
+    (.projects.records[] | select(.key=="delta") | .remote.identity=="github.com/acme/del@ta") and
+    (.projects.records[] | select(.key=="epsilon")
+      | .remote.kind=="ssh" and .remote.identity=="github.com/acme/epsilon") and
     .configuration.routing.crew_dispatch.status=="unavailable" and
     .configuration.routing.secondmate.model==null and
     .configuration.routing.secondmate.status=="unavailable" and

@@ -230,7 +230,10 @@ if [ -e "$crew_dispatch_file" ]; then
            default_profile:(if $config | has("default") then ($config.default | clean_profile) else null end)}
       end
     ' "$crew_dispatch_file" 2>/dev/null) || crew_dispatch_candidate=
-    [ -n "$crew_dispatch_candidate" ] && crew_dispatch=$crew_dispatch_candidate
+    if [ -n "$crew_dispatch_candidate" ] \
+      && jq -en --argjson candidate "$crew_dispatch_candidate" '$candidate | type == "object"' >/dev/null 2>&1; then
+      crew_dispatch=$crew_dispatch_candidate
+    fi
   fi
 fi
 
@@ -300,10 +303,10 @@ sanitize_remote() {  # <raw-url>; sets REMOTE_KIND/IDENTITY/LOCATOR/STATUS
     http://*|https://*|ssh://*)
       scheme=${raw%%://*}
       rest=${raw#*://}
-      rest=${rest#*@}
       host=${rest%%/*}
       path=${rest#*/}
       [ "$path" != "$rest" ] || return 0
+      host=${host##*@}
       path=${path%%\?*}
       path=${path%.git}
       [ -n "$host" ] && [ -n "$path" ] || return 0
@@ -313,9 +316,10 @@ sanitize_remote() {  # <raw-url>; sets REMOTE_KIND/IDENTITY/LOCATOR/STATUS
       REMOTE_STATUS=available
       ;;
     *@*:*)
-      rest=${raw#*@}
+      rest=${raw##*@}
       host=${rest%%:*}
       path=${rest#*:}
+      [ "$path" != "$rest" ] || return 0
       path=${path%.git}
       [ -n "$host" ] && [ -n "$path" ] || return 0
       REMOTE_KIND=ssh
@@ -572,6 +576,7 @@ SECONDMATES_JSON=$(jq -n \
                  then "degraded" else .status end]
   | . as $all
   | ($fleet.secondmate_current.total // ($all|length)) as $total
+  | ($fleet.secondmate_current.total_registered // null) as $total_registered
   | (if $cap == 0 then $all else $all[:$cap] end) as $shown
   | ([$all[].truncated_fields[]?] | length) as $field_truncations
   | {status:(if $fleet.secondmate_current.registry.available != true then "unavailable"
@@ -579,7 +584,7 @@ SECONDMATES_JSON=$(jq -n \
              else "available" end),
      complete:($fleet.secondmate_current.registry.complete == true
                and ($fleet.secondmate_current.truncated // 0) == 0),
-     total:$total,shown:($shown|length),truncated:($total-($shown|length)),records:$shown,all_records:$all,
+     total:$total,total_registered:$total_registered,shown:($shown|length),truncated:($total-($shown|length)),records:$shown,all_records:$all,
      omissions:[if $total > ($shown|length) then {section:"secondmates",reason:"record_limit",omitted:($total-($shown|length))} else empty end,
                 if $field_truncations > 0 then {section:"secondmates",reason:"field_limit",omitted:$field_truncations} else empty end,
                 if $fleet.secondmate_current.registry.input_truncated == true then {section:"secondmates",reason:"input_limit",omitted:null} else empty end,
@@ -810,8 +815,10 @@ COUNTS_JSON=$(jq -n \
     [$secondmates.all_records[]? | ((if .endpoint.exists == false or .endpoint.agent_alive == "dead" then 1 else 0 end) + (.workload.unhealthy_endpoints // 0))] | add // 0;
   {registered_projects:metric((if $projects.status == "unavailable" then null else $projects.total end);
                               (if $projects.status == "unavailable" then "unavailable" else "available" end);"projects.total"),
-   registered_secondmates:metric((if $secondmates.complete != true then null else $secondmates.total end);
-                                 (if $secondmates.complete != true then "unavailable" else "available" end);"secondmates.total"),
+   registered_secondmates:metric((if $secondmates.complete != true or ($secondmates.total_registered | type) != "number" then null
+                                  else $secondmates.total_registered end);
+                                 (if $secondmates.complete != true or ($secondmates.total_registered | type) != "number"
+                                  then "unavailable" else "available" end);"secondmates.total_registered"),
    active_tasks:metric((if $tasks.in_flight.status == "unavailable" or (workload_complete|not) then null
                         else $tasks.in_flight.total + workload_sum("active_tasks") end);
                        (if $tasks.in_flight.status == "unavailable" or (workload_complete|not) then "unavailable" else "available" end);
@@ -878,4 +885,8 @@ FINAL=$(jq -n \
                    or .diagnostics.total > 0 then "degraded"
               else "available" end')
 
+if ! printf '%s' "$FINAL" | jq -e 'type == "object" and .schema == "fm-registry-snapshot.v1"' >/dev/null 2>&1; then
+  printf 'fm-registry-snapshot: failed to assemble fm-registry-snapshot.v1 output\n' >&2
+  exit 1
+fi
 printf '%s\n' "$FINAL"
