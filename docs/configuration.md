@@ -167,7 +167,7 @@ The full cmux home label also includes a short hash of the resolved `FM_ROOT` pa
 claude, codex, opencode, pi, and grok are all empirically verified; new harnesses get verified through a supervised trial task before joining the set.
 The verified adapter knowledge - busy signatures, interrupt and exit commands, skill-invocation syntax, and per-harness quirks - lives in [`.agents/skills/harness-adapters/SKILL.md`](../.agents/skills/harness-adapters/SKILL.md).
 Launch mechanics, including the verified command templates, live in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh).
-Primary-session turn-end guard integrations for verified harnesses are tracked as repo-level hook files and documented in [`docs/turnend-guard.md`](turnend-guard.md).
+Primary-session safety integrations are tracked as repo-level hook wiring, including Claude's `.claude/settings.json`; the owning hook documents are [`docs/sessionstart-nudge.md`](sessionstart-nudge.md), [`docs/arm-pretool-check.md`](arm-pretool-check.md), [`docs/cd-guard.md`](cd-guard.md), [`docs/watcher-continuity.md`](watcher-continuity.md), and [`docs/turnend-guard.md`](turnend-guard.md).
 Primary-session watcher wake protocols are rendered at session start by [`bin/fm-supervision-instructions.sh`](../bin/fm-supervision-instructions.sh) from [`docs/supervision-protocols/`](supervision-protocols/).
 Claude and Grok use background-notify cycles, Codex uses bounded foreground checkpoints, Pi uses its two tracked primary extensions, and OpenCode uses its TUI plugin.
 `config/crew-harness` is a local, gitignored file containing one adapter name for crewmate and scout launches.
@@ -235,6 +235,9 @@ This is a per-model endpoint override, not a new harness: a matched spawn still 
 The only launch differences from a normal claude spawn are an endpoint environment prefix, a separately exported auth token, `--strict-mcp-config`, and an optional deliberately granted `--mcp-config` (see `mcp_config` below).
 Selection reuses the existing `--model` axis: when a template-based claude launch resolves a `--model` that matches a configured entry (whether the model came from an explicit flag or a `config/crew-dispatch.json` profile), `fm-spawn.sh` applies that entry; a raw launch command, a non-claude harness, and a normal Anthropic model (or no model) are never affected.
 This section owns the schema; `bin/fm-model-endpoint.sh`'s header and `--help` own the exact resolution mechanics and exit-code contract, and `bin/fm-spawn.sh` owns the launch wiring.
+The captain's `claudex` shell alias and the fleet endpoint entry both read the canonical token file `~/.secrets/claudex-token`.
+The alias is the ad-hoc interactive path, while `config/model-endpoints.json` is the authoritative supervised fleet path.
+The alias's `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and model defaults must track that token file and endpoint entry, not define a competing configuration.
 
 ```json
 {

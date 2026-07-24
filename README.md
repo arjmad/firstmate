@@ -36,7 +36,7 @@ For larger fleets, you can opt in to persistent secondmates: second mates that a
 firstmate is not a model, not a harness, not a skill, not an MCP server, and not a CLI.
 firstmate is an agent distro for running a crew of agents.
 An agent distro is a portable directory of instructions, skills, tooling, policies, and state conventions that turns a general-purpose agent into a specialized one.
-There is no app to install: the cloned repo is the distro - `AGENTS.md`, bundled firstmate skills, and helper scripts that any terminal coding agent can follow.
+There is no app to install: the cloned repo is the distro - `AGENTS.md`, bundled firstmate skills, tracked harness hook wiring, and helper scripts that any terminal coding agent can follow.
 Launching a supported harness inside it instantiates your first mate - and makes you the captain.
 
 ## Features
@@ -101,6 +101,7 @@ grok --trust
 pi
 ```
 
+Claude loads its tracked project safety hooks from `.claude/settings.json`.
 For Grok, `--trust` is needed once per clone so project hooks and the turn-end guard load; `/hooks-trust` inside Grok works too.
 For Pi, approve the project trust prompt once per clone on first launch so both tracked `.pi/extensions/*.ts` files auto-load.
 
