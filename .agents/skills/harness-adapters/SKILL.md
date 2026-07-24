@@ -43,7 +43,7 @@ If the captain asks for a new harness, propose verifying it first: spawn a trivi
 `bin/fm-spawn.sh` uses `crew` mode for a crewmate/scout launch and `secondmate` mode for a `--secondmate` launch, re-resolving on every spawn so the split is durable across respawns; an explicit per-spawn harness arg overrides either.
 On `unknown`, ask the captain instead of guessing.
 A captain override always beats detection.
-When verifying a new adapter, record its env marker and command name in `bin/fm-harness.sh`.
+When verifying a new adapter, record its env marker, command name, and machine-readable `verified` list entry in `bin/fm-harness.sh`.
 
 For stuck recovery, the target window's harness is recorded as `harness=` in `state/<id>.meta`.
 Use that value for interrupt, exit, resume, and skill-invocation facts.
