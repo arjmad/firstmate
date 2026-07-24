@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Behavior tests for the strict Registry-safe projection over fm-fleet-snapshot.sh.
-# Covers the exact schema, zero-network default, comprehensive leak sentinels,
-# aggregate accuracy, posture allowlists, unavailable-state degradation, unchanged
-# bearings compatibility, and shell/static checks.
+# Behavior tests for the bounded fm-registry-snapshot.v1 operational contract.
+# Covers exact schema, determinism, local-only/read-only behavior, structured
+# project/secondmate/task rows, local delivery evidence, current-vs-event semantics,
+# consistency diagnostics, aggregate cross-checks, degradation/truncation, secret
+# and wholesale-content exclusions, bearings compatibility, and static validation.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -20,6 +21,16 @@ make_fakebin() {  # <dir>
   fb=$(fm_fakebin "$1")
   cat > "$fb/no-mistakes" <<'SH'
 #!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  axi)
+    case "${2:-}" in
+      status) printf '%s\n' "${FM_FAKE_AXI_STATUS:-}" ;;
+      logs) printf '%s\n' "${FM_FAKE_CI_LOGS:-}" ;;
+    esac
+    ;;
+  runs) printf '%s\n' "${FM_FAKE_RUNS_LIST:-}" ;;
+esac
 exit 0
 SH
   cat > "$fb/tmux" <<'SH'
@@ -28,7 +39,7 @@ case "${1:-}" in
   display-message)
     case "$*" in *fm-dead*) exit 1 ;; *) printf '%%1\n' ;; esac
     ;;
-  capture-pane) printf 'working locally\n> \n' ;;
+  capture-pane) printf 'PANE_TRANSCRIPT_SENTINEL_70c6a1\nall quiet\n> \n' ;;
 esac
 exit 0
 SH
@@ -46,8 +57,17 @@ SH
 
 make_home() {  # <name>
   local home=$TMP_ROOT/$1
-  mkdir -p "$home/state" "$home/data" "$home/config" "$home/projects"
+  mkdir -p "$home/state" "$home/data" "$home/config" "$home/projects" "$home/task-worktrees"
   printf '%s\n' "$home"
+}
+
+make_git_repo() {  # <path> <branch>
+  fm_git_init_commit "$1"
+  if git -C "$1" show-ref --verify --quiet "refs/heads/$2"; then
+    git -C "$1" checkout -q "$2"
+  else
+    git -C "$1" checkout -qb "$2"
+  fi
 }
 
 make_secondmate_home() {  # <id> <name>
@@ -65,47 +85,130 @@ make_secondmate_home() {  # <id> <name>
 ## Done
 - [x] mate-done - Completed secondmate fixture task (repo: alpha) (kind: ship) (done 2026-07-24)
 EOF
-  mkdir -p "$mate/projects/mate-active"
+  make_git_repo "$mate/projects/mate-active" fm/mate-active
   fm_write_meta "$mate/state/mate-active.meta" \
     'window=firstmate:fm-mate-active' \
     "worktree=$mate/projects/mate-active" \
     'project=alpha' \
     'harness=codex' \
     'kind=ship' \
-    'mode=no-mistakes'
+    'mode=no-mistakes' \
+    'yolo=off' \
+    'model=claude-sonnet-5' \
+    'effort=high'
   printf 'working: secondmate fixture activity\n' > "$mate/state/mate-active.status"
   printf '%s\n' "$mate"
 }
 
 write_complete_fixture() {  # <home>
-  local home=$1 mate
+  local home=$1 mate active_head
   mate=$(make_secondmate_home mate-one "$(basename "$home")-mate")
   cat > "$home/data/projects.md" <<'EOF'
 - alpha [no-mistakes] - first fixture project (added 2026-07-24)
 - beta [local-only +yolo] - second fixture project (added 2026-07-24)
 EOF
-  printf -- '- mate-one - fixture domain (home: %s; scope: fixture work; projects: alpha; added 2026-07-24)\n' \
+  make_git_repo "$home/projects/alpha" main
+  git -C "$home/projects/alpha" remote add origin 'https://user:ghp_REMOTE_SECRET_1234567890@github.com/acme/alpha.git'
+  make_git_repo "$home/projects/beta" main
+  git -C "$home/projects/beta" remote add origin 'git@github.com:acme/beta.git'
+
+  printf -- '- mate-one - Fixture domain (home: %s; scope: registry verification and delivery work; projects: alpha, beta; added 2026-07-24)\n' \
     "$mate" > "$home/data/secondmates.md"
   cat > "$home/data/backlog.md" <<'EOF'
 ## In flight
-- [ ] active-one - Active fixture task (repo: alpha) (kind: ship) (since 2026-07-24)
+- [ ] active-one - Active validation task (repo: alpha) (kind: ship) (since 2026-07-24)
+- [ ] done-no-pr - Worker-reported done without delivery (repo: alpha) (kind: ship) (since 2026-07-24)
+- [ ] decision-one - Waiting on a bounded decision (repo: alpha) (kind: ship) (since 2026-07-24)
 
 ## Queued
 - [ ] queued-one - Queued fixture task (repo: beta) (kind: ship)
 
 ## Done
-- [x] done-one - Completed fixture task (repo: alpha) (kind: ship) (done 2026-07-24)
+- [x] done-one - Completed fixture task https://github.com/acme/alpha/pull/7 (repo: alpha) (kind: ship) (done 2026-07-24)
 EOF
-  mkdir -p "$home/projects/dead-work"
+
+  make_git_repo "$home/task-worktrees/active-one" fm/active-one
+  active_head=$(git -C "$home/task-worktrees/active-one" rev-parse HEAD)
   fm_write_meta "$home/state/active-one.meta" \
-    'window=firstmate:fm-dead' \
-    "worktree=$home/projects/dead-work" \
-    'project=alpha' \
+    'window=firstmate:fm-active-one' \
+    "worktree=$home/task-worktrees/active-one" \
+    "project=$home/projects/alpha" \
     'harness=codex' \
     'kind=ship' \
-    'mode=no-mistakes'
-  printf 'working: local fixture activity\n' > "$home/state/active-one.status"
-  printf 'FMX_PAIRING_TOKEN=fixture-token-value\n' > "$home/.env"
+    'mode=no-mistakes' \
+    'yolo=off' \
+    'model=gpt-5.6-sol' \
+    'effort=xhigh' \
+    'pr=https://github.com/acme/alpha/pull/9' \
+    "pr_head=$active_head"
+  cat > "$home/state/active-one.status" <<'EOF'
+working: RAW_FULL_STATUS_LOG_SENTINEL_9a4d13
+blocked: stale event history, not current truth
+EOF
+
+  make_git_repo "$home/task-worktrees/done-no-pr" fm/done-no-pr
+  fm_write_meta "$home/state/done-no-pr.meta" \
+    'window=firstmate:fm-done-no-pr' \
+    "worktree=$home/task-worktrees/done-no-pr" \
+    "project=$home/projects/alpha" \
+    'harness=claude' \
+    'kind=ship' \
+    'mode=no-mistakes' \
+    'yolo=off' \
+    'model=claude-sonnet-5' \
+    'effort=high'
+  printf 'done: implementation committed locally\n' > "$home/state/done-no-pr.status"
+  mkdir -p "$home/data/done-no-pr"
+  printf 'RAW_REPORT_SENTINEL_5108d4\n' > "$home/data/done-no-pr/report.md"
+  printf 'RAW_BRIEF_SENTINEL_1bf889\n' > "$home/data/done-no-pr/brief.md"
+
+  make_git_repo "$home/task-worktrees/decision-one" fm/decision-one
+  fm_write_meta "$home/state/decision-one.meta" \
+    'window=firstmate:fm-dead' \
+    "worktree=$home/task-worktrees/decision-one" \
+    "project=$home/projects/alpha" \
+    'harness=pi' \
+    'kind=ship' \
+    'mode=no-mistakes' \
+    'yolo=off' \
+    'model=claude-opus-4-8' \
+    'effort=medium'
+  printf 'needs-decision [key=choice]: choose safe option ghp_DECISION_SECRET_1234567890\n' > "$home/state/decision-one.status"
+
+  fm_write_meta "$home/state/mate-one.meta" \
+    'window=firstmate:fm-dead-mate-one' \
+    "worktree=$mate" \
+    "project=$mate" \
+    'harness=claude' \
+    'kind=secondmate' \
+    'mode=secondmate' \
+    'yolo=off' \
+    'model=claude-opus-4-8' \
+    'effort=high' \
+    "home=$mate" \
+    'projects=alpha,beta'
+
+  cat > "$home/config/crew-harness" <<'EOF'
+codex
+EOF
+  cat > "$home/config/crew-dispatch.json" <<'EOF'
+{"rules":[{"when":"registry work","use":[{"harness":"claude","model":"claude-sonnet-5","effort":"high"},{"harness":"codex","model":"gpt-5.6-sol","effort":"xhigh"}],"select":"quota-balanced"}],"default":{"harness":"pi","effort":"medium"}}
+EOF
+  cat > "$home/config/secondmate-harness" <<'EOF'
+claude claude-opus-4-8 high
+EOF
+  cat > "$home/.env" <<'EOF'
+FMX_PAIRING_TOKEN=ghp_XMODE_SECRET_1234567890
+EOF
+  cat > "$home/active-run.out" <<EOF
+run:
+  id: "01RUN"
+  branch: fm/active-one
+  status: running
+  head: "$active_head"
+  pr: "https://github.com/acme/alpha/pull/9"
+  findings: none
+EOF
 }
 
 run_snapshot() {  # <home> <fakebin> [backend]
@@ -115,167 +218,214 @@ run_snapshot() {  # <home> <fakebin> [backend]
     NET_LOG="$home/net.log" \
     FM_HOME="$home" \
     FM_BACKEND="$backend" \
+    FM_FAKE_AXI_STATUS="$(test -f "$home/active-run.out" && printf '%s' "$(<"$home/active-run.out")")" \
+    FM_FAKE_RUNS_LIST='' \
+    SECRET_ENV_SENTINEL='RAW_ENV_SENTINEL_652e6c' \
     TMUX='' HERDR_ENV=0 CMUX_WORKSPACE_ID='' __CFBundleIdentifier='' \
     FM_REGISTRY_SNAPSHOT_NOW=2026-07-24T12:34:56Z \
+    FM_REGISTRY_PROJECTS="${FM_REGISTRY_PROJECTS:-50}" \
+    FM_REGISTRY_SECONDMATES="${FM_REGISTRY_SECONDMATES:-20}" \
+    FM_REGISTRY_TASKS_PER_SECTION="${FM_REGISTRY_TASKS_PER_SECTION:-50}" \
+    FM_REGISTRY_DIAGNOSTICS="${FM_REGISTRY_DIAGNOSTICS:-100}" \
+    FM_REGISTRY_ROUTING_RULES="${FM_REGISTRY_ROUTING_RULES:-50}" \
+    FM_SNAPSHOT_REGISTRY_BYTES="${FM_SNAPSHOT_REGISTRY_BYTES:-65536}" \
     "$SNAPSHOT" --json
 }
 
 run_bearings() {  # <home> <fakebin>
   local home=$1 fakebin=$2
-  PATH="$fakebin:$PATH" \
-    NET_LOG="$home/net.log" \
-    FM_HOME="$home" \
+  PATH="$fakebin:$PATH" NET_LOG="$home/net.log" FM_HOME="$home" \
     TMUX='' HERDR_ENV=0 CMUX_WORKSPACE_ID='' __CFBundleIdentifier='' \
-    FM_BEARINGS_NOW=2026-07-24T12:34:56Z \
-    "$BEARINGS" --json
+    FM_BEARINGS_NOW=2026-07-24T12:34:56Z "$BEARINGS" --json
 }
 
-test_schema_exact_keys_and_types() {
-  local home fakebin out out_again help
+fingerprint_state() {  # <home>
+  find "$1/data" "$1/state" "$1/config" -type f -print0 \
+    | sort -z \
+    | xargs -0 shasum 2>/dev/null
+}
+
+test_exact_versioned_schema_and_types() {
+  local home fakebin out help
   home=$(make_home schema)
   fakebin=$(make_fakebin "$home")
   write_complete_fixture "$home"
-  out=$(run_snapshot "$home" "$fakebin") || fail "registry snapshot failed for schema fixture"
-
+  out=$(run_snapshot "$home" "$fakebin") || fail "operational snapshot failed for schema fixture"
   printf '%s' "$out" | jq -e '
-    (keys | sort) == ["counts","generated","posture","schema","status","unavailable_fields"] and
+    (keys|sort) == ["configuration","counts","diagnostics","generated","limits","omissions","projects","provenance","schema","secondmates","status","tasks","unavailable_fields"] and
     .schema == "fm-registry-snapshot.v1" and
-    (.generated | type) == "string" and
-    (.generated | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
-    (.status == "available" or .status == "degraded" or .status == "unavailable") and
-    (.unavailable_fields | type) == "array" and all(.unavailable_fields[]; type == "string") and
-    (.posture | keys | sort) == ["delivery_modes","runtime_backend","source_revision","verified_adapters","x_mode_enabled"] and
-    (.posture.runtime_backend | keys | sort) == ["source","status","value"] and
-    (.posture.verified_adapters | keys | sort) == ["status","values"] and
-    (.posture.delivery_modes | keys | sort) == ["status","values"] and
-    (.posture.x_mode_enabled | keys | sort) == ["status","value"] and
-    (.posture.source_revision | keys | sort) == ["status","value"] and
-    (.counts | keys | sort) == ["active_tasks","completed_tasks","queued_tasks","registered_projects","registered_secondmates","unhealthy_endpoints"] and
-    all(.counts[]; (keys | sort) == ["status","value"]) and
-    all(.counts[]; (.status == "available" or .status == "unavailable")) and
-    all(.counts[]; (.value == null or ((.value | type) == "number" and .value >= 0 and (.value | floor) == .value)))
-  ' >/dev/null || fail "registry snapshot schema or field types drifted"
-  out_again=$(run_snapshot "$home" "$fakebin") || fail "repeat registry snapshot failed"
-  [ "$out" = "$out_again" ] || fail "fixed local registry snapshot was not deterministic"
-  help=$("$SNAPSHOT" --help) || fail "registry snapshot help failed"
-  assert_contains "$help" 'fm-registry-snapshot.v1' "registry snapshot help omitted the schema identifier"
-  assert_contains "$help" 'local-only' "registry snapshot help omitted the local-only guarantee"
-  pass "registry snapshot has exact versioned keys and types with deterministic output"
+    (.status|IN("available","degraded","unavailable")) and
+    (.limits|keys|sort) == ["diagnostics","projects","routing_rules","secondmates","tasks_per_section"] and
+    (.provenance|keys|sort) == ["canonical_snapshot","home","source"] and
+    (.configuration|keys|sort) == ["autonomy","delivery","routing","runtime_backend","status","verified_adapters","x_mode_enabled"] and
+    (.configuration.routing|keys|sort) == ["crew","crew_dispatch","primary","secondmate"] and
+    (.configuration.routing.crew_dispatch
+      | .configured==true and .status=="available" and .rule_count==1
+        and .rules[0].selector=="quota-balanced"
+        and .rules[0].profiles[0]=={"harness":"claude","model":"claude-sonnet-5","model_truncated":false,"effort":"high"}
+        and .default_profile=={"harness":"pi","model":null,"model_truncated":false,"effort":"medium"}) and
+    (.projects.records|type)=="array" and (.secondmates.records|type)=="array" and
+    (.tasks|keys|sort)==["complete","in_flight","omissions","queued","retained_done","status"] and
+    (.diagnostics.records|type)=="array" and (.counts|type)=="object"
+  ' >/dev/null || fail "operational schema keys or types drifted"
+  help=$("$SNAPSHOT" --help) || fail "operational snapshot help failed"
+  assert_contains "$help" 'fm-registry-snapshot.v1' "help omitted schema"
+  assert_contains "$help" 'local-only' "help omitted local-only contract"
+  pass "operational snapshot has exact versioned schema and types"
 }
 
-test_local_mode_makes_no_network_calls() {
+test_deterministic_for_fixed_state_and_time() {
+  local home fakebin first second
+  home=$(make_home deterministic)
+  fakebin=$(make_fakebin "$home")
+  write_complete_fixture "$home"
+  first=$(run_snapshot "$home" "$fakebin") || fail "first deterministic snapshot failed"
+  second=$(run_snapshot "$home" "$fakebin") || fail "second deterministic snapshot failed"
+  [ "$first" = "$second" ] || fail "fixed local state produced different snapshots"
+  pass "operational snapshot is deterministic for fixed state and time"
+}
+
+test_zero_network_and_github_calls() {
   local home fakebin
   home=$(make_home no-network)
   fakebin=$(make_fakebin "$home")
   write_complete_fixture "$home"
-  run_snapshot "$home" "$fakebin" >/dev/null || fail "local registry snapshot failed"
-  [ ! -s "$home/net.log" ] || fail "local registry snapshot invoked a network or GitHub tool"
-  pass "registry snapshot performs zero network and GitHub calls"
+  run_snapshot "$home" "$fakebin" >/dev/null || fail "local operational snapshot failed"
+  [ ! -s "$home/net.log" ] || fail "operational snapshot invoked a network or GitHub tool"
+  pass "operational snapshot performs zero network and GitHub calls"
 }
 
-test_leak_sentinels_never_reach_serialized_output() {
-  local home fakebin path_sentinel out sentinel
-  home=$(make_home leak-sentinel)
+test_read_only_no_firstmate_state_mutation() {
+  local home fakebin before after
+  home=$(make_home read-only)
   fakebin=$(make_fakebin "$home")
-  path_sentinel='LEAK_PATH_FRAGMENT_4f6f89'
-  mkdir -p "$home/projects/$path_sentinel"
-  cat > "$home/data/projects.md" <<'EOF'
-- LEAK_PROJECT_NAME_2cb735 [direct-PR] - private project description (added 2026-07-24)
-EOF
-  cat > "$home/data/backlog.md" <<'EOF'
-## In flight
-- [ ] leak-task - LEAK_TASK_TITLE_936e11 (repo: LEAK_PROJECT_NAME_2cb735) (kind: ship) (since 2026-07-24)
-
-## Queued
-- [ ] leak-decision - LEAK_DECISION_TEXT_54f903 (repo: LEAK_PROJECT_NAME_2cb735) (kind: captain) (hold: LEAK_HOLD_REASON_9a448c) (hold-kind: captain)
-
-## Done
-- [x] leak-done - LEAK_LANDED_DESCRIPTION_b4a8d2 (repo: LEAK_PROJECT_NAME_2cb735) (kind: ship) (done 2026-07-24)
-EOF
-  fm_write_meta "$home/state/leak-task.meta" \
-    'window=firstmate:fm-dead' \
-    "worktree=$home/projects/$path_sentinel" \
-    'project=LEAK_PROJECT_NAME_2cb735' \
-    'harness=codex' \
-    'kind=ship' \
-    'mode=direct-PR'
-  cat > "$home/state/leak-task.status" <<'EOF'
-working: LEAK_STATUS_PROSE_025d6a
-needs-decision [key=leak]: LEAK_DECISION_TEXT_54f903
-EOF
-  cat > "$home/.env" <<'EOF'
-FMX_PAIRING_TOKEN=ghp_LEAK_TOKEN_SHAPED_7c2a9e1234567890
-EOF
-
-  out=$(run_snapshot "$home" "$fakebin") || fail "registry snapshot failed for leak fixture"
-  for sentinel in \
-    LEAK_TASK_TITLE_936e11 \
-    LEAK_STATUS_PROSE_025d6a \
-    LEAK_DECISION_TEXT_54f903 \
-    LEAK_HOLD_REASON_9a448c \
-    LEAK_LANDED_DESCRIPTION_b4a8d2 \
-    LEAK_PROJECT_NAME_2cb735 \
-    "$path_sentinel" \
-    ghp_LEAK_TOKEN_SHAPED_7c2a9e1234567890; do
-    assert_not_contains "$out" "$sentinel" "registry-safe output leaked sentinel $sentinel"
-  done
-  pass "registry snapshot excludes all task, decision, path, project, and token sentinels"
+  write_complete_fixture "$home"
+  before=$(fingerprint_state "$home")
+  run_snapshot "$home" "$fakebin" >/dev/null || fail "read-only operational snapshot failed"
+  after=$(fingerprint_state "$home")
+  [ "$before" = "$after" ] || fail "operational snapshot mutated FirstMate data/state/config"
+  pass "operational snapshot does not mutate FirstMate state"
 }
 
-test_aggregate_counts_match_complete_fixture() {
+test_structured_project_secondmate_and_task_rows() {
+  local home fakebin out
+  home=$(make_home structured-rows)
+  fakebin=$(make_fakebin "$home")
+  write_complete_fixture "$home"
+  out=$(run_snapshot "$home" "$fakebin") || fail "structured operational snapshot failed"
+  printf '%s' "$out" | jq -e --arg home "$home" '
+    (.projects.records[] | select(.key=="alpha")
+      | .delivery_mode=="no-mistakes" and .yolo==false and .local.exists==true
+        and .local.git_repository==true and .remote.identity=="github.com/acme/alpha") and
+    (.projects.records[] | select(.key=="beta") | .delivery_mode=="local-only" and .yolo==true) and
+    (.secondmates.records[] | select(.id=="mate-one")
+      | .registry.scope=="registry verification and delivery work"
+        and .registry.projects==["alpha","beta"] and .runtime.harness=="claude"
+        and .runtime.model=="claude-opus-4-8" and .workload.active_tasks==1
+        and .endpoint.exists==false and (.diagnostics|index("endpoint_unhealthy"))!=null) and
+    (.tasks.in_flight.records[] | select(.id=="active-one")
+      | .title=="Active validation task" and .project=="alpha" and .runtime.harness=="codex"
+        and .runtime.model=="gpt-5.6-sol" and .runtime.effort=="xhigh"
+        and .implementation.branch=="fm/active-one"
+        and .implementation.worktree==($home+"/task-worktrees/active-one")) and
+    (.tasks.queued.records[] | select(.id=="queued-one") | .current.state=="queued") and
+    (.tasks.retained_done.records[] | select(.id=="done-one")
+      | .current.state=="done" and .delivery.yolo==false)
+  ' >/dev/null || fail "project, secondmate, or task rows were incomplete"
+  pass "operational snapshot emits structured project, secondmate, and task rows"
+}
+
+test_local_delivery_validation_and_pr_evidence() {
+  local home fakebin out active_head
+  home=$(make_home delivery-evidence)
+  fakebin=$(make_fakebin "$home")
+  write_complete_fixture "$home"
+  active_head=$(git -C "$home/task-worktrees/active-one" rev-parse HEAD)
+  out=$(run_snapshot "$home" "$fakebin") || fail "delivery evidence snapshot failed"
+  printf '%s' "$out" | jq -e --arg head "$active_head" '
+    (.tasks.in_flight.records[] | select(.id=="active-one")
+      | .delivery_evidence.validation.required==true
+        and .delivery_evidence.validation.source=="run-step"
+        and .delivery_evidence.validation.state=="working"
+        and .delivery_evidence.pr.url=="https://github.com/acme/alpha/pull/9"
+        and .delivery_evidence.pr.head==$head
+        and .delivery_evidence.pr.source=="meta") and
+    (.tasks.in_flight.records[] | select(.id=="done-no-pr")
+      | .delivery_evidence.validation.state=="missing"
+        and .delivery_evidence.pr.url==null
+        and .implementation.push_state=="no_upstream") and
+    (.tasks.retained_done.records[] | select(.id=="done-one")
+      | .delivery_evidence.pr.url=="https://github.com/acme/alpha/pull/7"
+        and .delivery_evidence.pr.source=="backlog")
+  ' >/dev/null || fail "local validation, branch, or PR evidence semantics were wrong"
+  pass "operational snapshot exposes local delivery, validation, and PR evidence"
+}
+
+test_reconciled_current_state_vs_event_history() {
+  local home fakebin out
+  home=$(make_home current-vs-event)
+  fakebin=$(make_fakebin "$home")
+  write_complete_fixture "$home"
+  out=$(run_snapshot "$home" "$fakebin") || fail "current/event snapshot failed"
+  printf '%s' "$out" | jq -e '
+    .tasks.in_flight.records[] | select(.id=="active-one")
+    | .current.state=="working" and .current.source=="run-step"
+      and .event_history.role=="event_history" and .event_history.category=="blocked"
+      and .event_history.summary=="stale event history, not current truth"
+  ' >/dev/null || fail "event history replaced reconciled current state"
+  pass "operational snapshot labels event history separately from current state"
+}
+
+test_machine_readable_contradiction_diagnostics() {
+  local home fakebin out
+  home=$(make_home diagnostics)
+  fakebin=$(make_fakebin "$home")
+  write_complete_fixture "$home"
+  out=$(run_snapshot "$home" "$fakebin") || fail "diagnostic snapshot failed"
+  printf '%s' "$out" | jq -e '
+    (.tasks.in_flight.records[] | select(.id=="done-no-pr")
+      | (.diagnostics|sort)==["branch_not_pushed","reported_done_without_required_pr","validation_missing"]) and
+    (.tasks.in_flight.records[] | select(.id=="decision-one")
+      | (.diagnostics|index("endpoint_unhealthy"))!=null) and
+    .diagnostics.by_code.reported_done_without_required_pr==1 and
+    .diagnostics.by_code.validation_missing==1 and
+    .diagnostics.by_code.branch_not_pushed==1 and
+    .diagnostics.by_code.endpoint_unhealthy==2
+  ' >/dev/null || fail "required contradiction diagnostics were absent or unstructured"
+  pass "operational snapshot reports machine-readable delivery contradictions"
+}
+
+test_aggregates_match_detailed_bounded_rows() {
   local home fakebin out
   home=$(make_home aggregates)
   fakebin=$(make_fakebin "$home")
   write_complete_fixture "$home"
-  out=$(run_snapshot "$home" "$fakebin") || fail "registry snapshot failed for aggregate fixture"
-
+  out=$(run_snapshot "$home" "$fakebin") || fail "aggregate snapshot failed"
   printf '%s' "$out" | jq -e '
-    .counts.registered_projects == {value:2,status:"available"} and
-    .counts.registered_secondmates == {value:1,status:"available"} and
-    .counts.active_tasks == {value:2,status:"available"} and
-    .counts.queued_tasks == {value:2,status:"available"} and
-    .counts.completed_tasks == {value:2,status:"available"} and
-    .counts.unhealthy_endpoints == {value:1,status:"available"}
-  ' >/dev/null || fail "registry-safe aggregate counts were incorrect"
-  pass "registry snapshot reports correct active, queued, completed, project, secondmate, and endpoint counts"
+    .counts.registered_projects.value==.projects.total and
+    .counts.registered_secondmates.value==.secondmates.total and
+    .counts.active_tasks.value==(.tasks.in_flight.total + ([.secondmates.records[].workload.active_tasks]|add)) and
+    .counts.queued_tasks.value==(.tasks.queued.total + ([.secondmates.records[].workload.queued_tasks]|add)) and
+    .counts.retained_done_tasks.value==(.tasks.retained_done.total + ([.secondmates.records[].workload.retained_done_tasks]|add)) and
+    .counts.diagnostics.value==.diagnostics.total and
+    .counts.diagnostics_by_code==.diagnostics.by_code
+  ' >/dev/null || fail "aggregate counts disagreed with detailed rows"
+  pass "operational aggregate counts cross-check against detailed rows"
 }
 
-test_posture_values_stay_inside_allowlists() {
-  local home fakebin out
-  home=$(make_home posture)
-  fakebin=$(make_fakebin "$home")
-  write_complete_fixture "$home"
-  out=$(run_snapshot "$home" "$fakebin" cmux) || fail "registry snapshot failed for posture fixture"
-
-  printf '%s' "$out" | jq -e '
-    .posture.runtime_backend == {value:"cmux",source:"configured",status:"available"} and
-    .posture.verified_adapters == {values:["claude","codex","grok","opencode","pi"],status:"available"} and
-    .posture.delivery_modes == {values:["direct-PR","local-only","no-mistakes"],status:"available"} and
-    .posture.x_mode_enabled == {value:true,status:"available"} and
-    (.posture.source_revision.status == "available") and
-    (.posture.source_revision.value | test("^[0-9a-f]{40}([0-9a-f]{24})?$")) and
-    (.posture.runtime_backend.value | IN("tmux","herdr","zellij","orca","cmux","unknown")) and
-    (.posture.runtime_backend.source | IN("configured","auto","fallback","unknown"))
-  ' >/dev/null || fail "registry posture escaped its documented allowlists"
-  pass "registry snapshot posture fields use only verified classes and safe values"
-}
-
-test_missing_unreadable_and_malformed_inputs_degrade_without_leaking() {
-  local home fakebin out malformed
+test_missing_unreadable_malformed_incomplete_and_truncated_inputs() {
+  local home fakebin out malformed truncated long_model long_project long_scope long_title content
   home=$(make_home unavailable)
   fakebin=$(make_fakebin "$home")
-  out=$(run_snapshot "$home" "$fakebin") || fail "registry snapshot failed for missing-input fixture"
+  out=$(run_snapshot "$home" "$fakebin") || fail "missing-input snapshot failed"
   printf '%s' "$out" | jq -e '
-    .status == "degraded" and
-    .counts.registered_projects == {value:null,status:"unavailable"} and
-    .counts.registered_secondmates == {value:null,status:"unavailable"} and
-    .counts.active_tasks == {value:null,status:"unavailable"} and
-    .counts.queued_tasks == {value:null,status:"unavailable"} and
-    .counts.completed_tasks == {value:null,status:"unavailable"}
-  ' >/dev/null || fail "missing private inputs were inferred as zero"
+    .status=="degraded" and .projects.status=="unavailable" and
+    .tasks.status=="unavailable" and .counts.registered_projects.status=="unavailable" and
+    .diagnostics.status=="unavailable" and .counts.diagnostics.status=="unavailable"
+  ' >/dev/null || fail "missing inputs were not explicit"
 
-  malformed='LEAK_MALFORMED_PRIVATE_CONTENT_6e91a3'
-  printf -- '- malformed [unknown-mode] - %s\n' "$malformed" > "$home/data/projects.md"
+  malformed='MALFORMED_PRIVATE_SENTINEL_a9e801'
+  printf -- '- bad [unknown-mode] - %s\nnot-a-project-row\n' "$malformed" > "$home/data/projects.md"
   cat > "$home/data/backlog.md" <<EOF
 ## In flight
 $malformed
@@ -285,22 +435,123 @@ $malformed
 ## Done
 EOF
   printf -- '- bad-mate - %s\n' "$malformed" > "$home/data/secondmates.md"
-  printf 'FMX_PAIRING_TOKEN=%s\n' "$malformed" > "$home/.env"
+  printf '{"rules":[{"when":"%s","use":{"harness":"unknown"}}]}\n' "$malformed" > "$home/config/crew-dispatch.json"
+  printf 'FMX_PAIRING_TOKEN=ghp_UNREADABLE_SECRET_1234567890\n' > "$home/.env"
   chmod 000 "$home/.env"
-  out=$(run_snapshot "$home" "$fakebin") || fail "registry snapshot failed for malformed-input fixture"
+  out=$(run_snapshot "$home" "$fakebin") || fail "malformed-input snapshot failed"
   chmod 600 "$home/.env"
-
-  assert_not_contains "$out" "$malformed" "malformed private content leaked into unavailable output"
+  assert_not_contains "$out" "$malformed" "malformed private content leaked"
   printf '%s' "$out" | jq -e '
-    .status == "degraded" and
-    .posture.x_mode_enabled == {value:null,status:"unavailable"} and
-    .counts.registered_projects == {value:null,status:"unavailable"} and
-    .counts.registered_secondmates == {value:null,status:"unavailable"} and
-    .counts.active_tasks == {value:null,status:"unavailable"} and
-    (.unavailable_fields | index("posture.x_mode_enabled") != null) and
-    (.unavailable_fields | index("counts.registered_projects") != null)
-  ' >/dev/null || fail "malformed or unreadable state lacked structured unavailable markers"
-  pass "missing, unreadable, and malformed inputs degrade explicitly without leaking content"
+    .configuration.x_mode_enabled.status=="unavailable" and
+    .configuration.routing.crew_dispatch.status=="unavailable" and
+    (.projects.records|any(.status=="unavailable")) and
+    (.tasks.in_flight.records|any((.diagnostics|index("malformed_backlog_record"))!=null)) and
+    (.secondmates.records|any(.id=="bad-mate" and .status=="unavailable"
+      and (.diagnostics|index("malformed_secondmate_registry_entry"))!=null))
+  ' >/dev/null || fail "malformed or unreadable inputs lacked explicit degradation"
+
+  home=$(make_home truncated)
+  fakebin=$(make_fakebin "$home")
+  write_complete_fixture "$home"
+  printf -v long_model '%*s' 220 ''
+  long_model=${long_model// /m}
+  printf -v long_project '%*s' 180 ''
+  long_project=${long_project// /p}
+  printf -v long_scope '%*s' 260 ''
+  long_scope=${long_scope// /s}
+  printf -v long_title '%*s' 220 ''
+  long_title=${long_title// /t}
+  printf -- '- %s [no-mistakes] - field truncation fixture\n- beta [local-only +yolo] - second fixture project\n' \
+    "$long_project" > "$home/data/projects.md"
+  content=$(<"$home/data/secondmates.md")
+  printf '%s\n' "${content/registry verification and delivery work/$long_scope}" > "$home/data/secondmates.md"
+  content=$(<"$home/data/backlog.md")
+  printf '%s\n' "${content/Queued fixture task/$long_title}" > "$home/data/backlog.md"
+  printf '{"rules":[{"when":"one","use":{"harness":"claude","model":"%s"}},{"when":"two","use":{"harness":"codex"}}]}\n' \
+    "$long_model" > "$home/config/crew-dispatch.json"
+  out=$(FM_REGISTRY_PROJECTS=1 FM_REGISTRY_TASKS_PER_SECTION=1 FM_REGISTRY_ROUTING_RULES=1 \
+    run_snapshot "$home" "$fakebin") || fail "truncated snapshot failed"
+  truncated=$out
+  printf '%s' "$truncated" | jq -e '
+    .projects.truncated>0 and .tasks.in_flight.truncated>0 and
+    (.projects.records[0].truncated_fields|index("key"))!=null and (.projects.records[0].key|length)==160 and
+    (.secondmates.records[0].truncated_fields|index("registry.scope"))!=null and
+    (.secondmates.records[0].registry.scope|length)==240 and
+    (.tasks.queued.records[0].truncated_fields|index("title"))!=null and
+    (.tasks.queued.records[0].title|length)==200 and
+    .configuration.routing.crew_dispatch.truncated==1 and
+    .configuration.routing.crew_dispatch.rules[0].profiles[0].model_truncated==true and
+    (.configuration.routing.crew_dispatch.rules[0].profiles[0].model|length)==200 and
+    (.omissions|any(.section=="projects" and .reason=="field_limit")) and
+    (.omissions|any(.section=="secondmates" and .reason=="field_limit")) and
+    (.omissions|any(.section=="tasks.queued" and .reason=="field_limit")) and
+    (.omissions|any(.section=="configuration.routing.crew_dispatch" and .reason=="record_limit"))
+  ' >/dev/null || fail "field or record truncation was not explicit"
+  out=$(FM_SNAPSHOT_REGISTRY_BYTES=40 run_snapshot "$home" "$fakebin") || fail "input-limited snapshot failed"
+  printf '%s' "$out" | jq -e '
+    .secondmates.complete==false and
+    (.omissions|any(.section=="secondmates" and .reason=="input_limit"))
+  ' >/dev/null || fail "bounded input truncation was not explicit"
+  pass "operational snapshot exposes missing, malformed, incomplete, and truncated inputs"
+}
+
+test_secret_token_and_environment_sentinels_never_serialize() {
+  local home fakebin out sentinel
+  home=$(make_home secrets)
+  fakebin=$(make_fakebin "$home")
+  write_complete_fixture "$home"
+  printf '%s\n' \
+    'model=ghp_META_SECRET_1234567890' \
+    'pr_head=ghp_HEAD_SECRET_1234567890' \
+    'pr=https://user:CREDENTIAL_SENTINEL_1234567890@github.com/acme/alpha/pull/99' \
+    >> "$home/state/decision-one.meta"
+  printf '%s\n' 'claude ghp_CONFIG_SECRET_1234567890 high' > "$home/config/secondmate-harness"
+  printf '%s\n' '{"default":{"harness":"claude","model":"ghp_DISPATCH_SECRET_1234567890","effort":"high"}}' > "$home/config/crew-dispatch.json"
+  printf '%s\n' '- ghp_PROJECT_SECRET_1234567890 [local-only] - secret-shaped project key' >> "$home/data/projects.md"
+  out=$(run_snapshot "$home" "$fakebin") || fail "secret sentinel snapshot failed"
+  for sentinel in \
+    ghp_REMOTE_SECRET_1234567890 \
+    ghp_XMODE_SECRET_1234567890 \
+    ghp_DECISION_SECRET_1234567890 \
+    ghp_META_SECRET_1234567890 \
+    ghp_HEAD_SECRET_1234567890 \
+    ghp_CONFIG_SECRET_1234567890 \
+    ghp_DISPATCH_SECRET_1234567890 \
+    ghp_PROJECT_SECRET_1234567890 \
+    CREDENTIAL_SENTINEL_1234567890 \
+    RAW_ENV_SENTINEL_652e6c \
+    'user:ghp_'; do
+    assert_not_contains "$out" "$sentinel" "secret or environment sentinel leaked: $sentinel"
+  done
+  printf '%s' "$out" | jq -e '
+    .configuration.routing.crew_dispatch.status=="unavailable" and
+    .configuration.routing.secondmate.model==null and
+    .configuration.routing.secondmate.status=="unavailable" and
+    (.tasks.in_flight.records[] | select(.id=="decision-one")
+      | .runtime.model==null and .delivery_evidence.pr.head==null
+        and .delivery_evidence.pr.url=="https://github.com/acme/alpha/pull/99")
+  ' >/dev/null || fail "secret-bearing structured fields were not withheld"
+  assert_contains "$out" '[redacted]' "token-shaped decision summary was not redacted"
+  pass "operational snapshot never serializes secret, token, or environment values"
+}
+
+test_raw_transcript_pane_log_brief_and_report_never_serialize() {
+  local home fakebin out sentinel
+  home=$(make_home raw-content)
+  fakebin=$(make_fakebin "$home")
+  write_complete_fixture "$home"
+  out=$(run_snapshot "$home" "$fakebin") || fail "raw-content snapshot failed"
+  for sentinel in \
+    PANE_TRANSCRIPT_SENTINEL_70c6a1 \
+    RAW_FULL_STATUS_LOG_SENTINEL_9a4d13 \
+    RAW_REPORT_SENTINEL_5108d4 \
+    RAW_BRIEF_SENTINEL_1bf889; do
+    assert_not_contains "$out" "$sentinel" "wholesale raw content leaked: $sentinel"
+  done
+  assert_contains "$out" 'done-no-pr' "allowed task ID was incorrectly removed"
+  assert_contains "$out" 'Worker-reported done without delivery' "allowed concise title was incorrectly removed"
+  assert_contains "$out" 'fm/done-no-pr' "allowed branch was incorrectly removed"
+  pass "operational snapshot excludes raw transcripts, panes, logs, briefs, and reports"
 }
 
 test_existing_bearings_contract_remains_unchanged() {
@@ -316,24 +567,30 @@ test_existing_bearings_contract_remains_unchanged() {
 EOF
   out=$(run_bearings "$home" "$fakebin") || fail "existing bearings command failed"
   printf '%s' "$out" | jq -e '
-    .schema == "fm-bearings.v1" and
-    (keys | sort) == ["decisions_open","gates","generated","home","in_flight","landed","omitted","prs","recorded_prs","reports","schema","secondmates"]
-  ' >/dev/null || fail "existing fm-bearings.v1 JSON shape changed"
-  pass "existing fm-bearings.v1 output shape remains unchanged"
+    .schema=="fm-bearings.v1" and
+    (keys|sort)==["decisions_open","gates","generated","home","in_flight","landed","omitted","prs","recorded_prs","reports","schema","secondmates"]
+  ' >/dev/null || fail "fm-bearings.v1 output shape changed"
+  pass "existing fm-bearings.v1 output remains unchanged"
 }
 
-test_shell_and_static_checks_pass() {
-  bash -n "$SNAPSHOT" || fail "registry snapshot failed bash syntax validation"
-  bash -n "$ROOT/bin/fm-harness.sh" || fail "harness declaration failed bash syntax validation"
+test_shell_static_and_diff_checks_pass() {
+  bash -n "$SNAPSHOT" || fail "registry snapshot failed bash syntax"
+  bash -n "$ROOT/bin/fm-fleet-snapshot.sh" || fail "canonical snapshot failed bash syntax"
   git -C "$ROOT" diff --check || fail "git diff --check failed"
-  pass "registry snapshot passes shell syntax and static diff checks"
+  pass "operational snapshot passes shell syntax and static diff checks"
 }
 
-test_schema_exact_keys_and_types
-test_local_mode_makes_no_network_calls
-test_leak_sentinels_never_reach_serialized_output
-test_aggregate_counts_match_complete_fixture
-test_posture_values_stay_inside_allowlists
-test_missing_unreadable_and_malformed_inputs_degrade_without_leaking
+test_exact_versioned_schema_and_types
+test_deterministic_for_fixed_state_and_time
+test_zero_network_and_github_calls
+test_read_only_no_firstmate_state_mutation
+test_structured_project_secondmate_and_task_rows
+test_local_delivery_validation_and_pr_evidence
+test_reconciled_current_state_vs_event_history
+test_machine_readable_contradiction_diagnostics
+test_aggregates_match_detailed_bounded_rows
+test_missing_unreadable_malformed_incomplete_and_truncated_inputs
+test_secret_token_and_environment_sentinels_never_serialize
+test_raw_transcript_pane_log_brief_and_report_never_serialize
 test_existing_bearings_contract_remains_unchanged
-test_shell_and_static_checks_pass
+test_shell_static_and_diff_checks_pass

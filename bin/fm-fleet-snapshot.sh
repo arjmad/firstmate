@@ -17,7 +17,8 @@
 #     those sections are preserved as unstructured records.
 #     Structured rows preserve captain-hold metadata such as hold_kind and
 #     hold_reason when tasks-axi emits it.
-#   tasks[]: one row per state/<id>.meta, sorted by id.
+#   tasks[]: one row per state/<id>.meta, sorted by id, including recorded
+#     harness/model/effort/backend posture and locally recorded PR head identity.
 #     current_state is parsed from bin/fm-crew-state.sh <id> and preserves
 #     state, source, detail, and raw line separately.
 #     paths.status_log.last_event is historical wake-event data only, never
@@ -359,8 +360,8 @@ backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
 }
 
 task_json_lines() {
-  local meta id kind harness mode yolo project worktree home projects backend target status_log report_path
-  local pr pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json
+  local meta id kind harness model effort mode yolo project worktree home projects backend target status_log report_path
+  local pr pr_head pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json
   local last_event_raw current_state current_source pending_decision blocked_event report_present=0 pr_from_status
   local open_decisions_tsv open_decisions_json
 
@@ -370,6 +371,8 @@ task_json_lines() {
     kind=$(meta_value "$meta" kind)
     [ -n "$kind" ] || kind=ship
     harness=$(meta_value "$meta" harness)
+    model=$(meta_value "$meta" model)
+    effort=$(meta_value "$meta" effort)
     mode=$(meta_value "$meta" mode)
     yolo=$(meta_value "$meta" yolo)
     project=$(meta_value "$meta" project)
@@ -381,6 +384,7 @@ task_json_lines() {
     status_log="$STATE/$id.status"
     report_path="$DATA/$id/report.md"
     pr=$(meta_value "$meta" pr)
+    pr_head=$(meta_value "$meta" pr_head)
     pr_source=meta
     if [ -z "$pr" ]; then
       pr_from_status=$(first_pr_url_in_file "$status_log" || true)
@@ -452,6 +456,8 @@ task_json_lines() {
       --arg id "$id" \
       --arg kind "$kind" \
       --arg harness "$harness" \
+      --arg model "$model" \
+      --arg effort "$effort" \
       --arg mode "$mode" \
       --arg yolo "$yolo" \
       --arg project "$project" \
@@ -461,6 +467,7 @@ task_json_lines() {
       --arg backend "$backend" \
       --arg target "$target" \
       --arg pr "$pr" \
+      --arg pr_head "$pr_head" \
       --arg pr_source "$pr_source" \
       --arg agent_alive "$agent_alive" \
       --arg observed_at "$SNAPSHOT_NOW" \
@@ -480,6 +487,8 @@ task_json_lines() {
         id:$id,
         kind:$kind,
         harness:($harness // ""),
+        model:($model // ""),
+        effort:($effort // ""),
         mode:($mode // ""),
         yolo:($yolo // ""),
         project:($project // ""),
@@ -498,7 +507,8 @@ task_json_lines() {
                   elif $agent_alive == "alive" or $agent_alive == "dead" then $agent_alive
                   else "unknown" end),
           observed_at:$observed_at,freshness:"fresh"},
-        pr:{url:($pr | if . == "" then null else . end),source:$pr_source},
+        pr:{url:($pr | if . == "" then null else . end),
+            head:($pr_head | if . == "" then null else . end),source:$pr_source},
         hints:{
           pending_decision:$pending_decision,
           blocked_event:$blocked_event,
@@ -739,11 +749,18 @@ BASH
   parse_filter=$(cat <<'JQ'
       [ inputs
         | select(startswith("- "))
-        | (capture("^- (?<id>[^[:space:]]+)")?) as $id
+        | ((capture("^- (?<id>[^[:space:]]+)")?) // null) as $id
         | select($id != null)
-        | (capture("\\(home:[[:space:]]*(?<home>[^;)]*);")?) as $home
-        | {id:$id.id,home:($home.home // null),registered:true,
-           registry_error:(if $home == null or ($home.home | length) == 0 then "registry entry has no home" else null end)} ]
+        | ((capture("\\(home:[[:space:]]*(?<home>[^;)]*);[[:space:]]*scope:[[:space:]]*(?<scope>[^;)]*);[[:space:]]*projects:[[:space:]]*(?<projects>[^;)]*);[[:space:]]*added[[:space:]]*(?<added>[^)]*)\\)")?) // null) as $fields
+        | {id:$id.id,
+           home:($fields.home // null),
+           scope:($fields.scope // null),
+           projects:(($fields.projects // "") | split(",") | map(gsub("^[[:space:]]+|[[:space:]]+$"; "")) | map(select(length > 0))),
+           added:($fields.added // null),
+           registered:true,
+           registry_error:(if $fields == null or (($fields.home // "") | length) == 0
+                           then "malformed secondmate registry entry"
+                           else null end)} ]
       | group_by(.id)
       | map(if length > 1 then .[0] + {registry_error:"duplicate secondmate id in registry"} else .[0] end)
 JQ
