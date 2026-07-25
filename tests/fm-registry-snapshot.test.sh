@@ -118,6 +118,8 @@ EOF
 ## In flight
 - [ ] active-one - Active validation task (repo: alpha) (kind: ship) (since 2026-07-24)
 - [ ] done-no-pr - Worker-reported done without delivery (repo: alpha) (kind: ship) (since 2026-07-24)
+- [ ] scout-with-report - Completed scout with report (repo: alpha) (kind: scout) (since 2026-07-24)
+- [ ] scout-without-report - Completed scout without report (repo: alpha) (kind: scout) (since 2026-07-24)
 - [ ] decision-one - Waiting on a bounded decision (repo: alpha) (kind: ship) (since 2026-07-24)
 
 ## Queued
@@ -161,6 +163,34 @@ EOF
   mkdir -p "$home/data/done-no-pr"
   printf 'RAW_REPORT_SENTINEL_5108d4\n' > "$home/data/done-no-pr/report.md"
   printf 'RAW_BRIEF_SENTINEL_1bf889\n' > "$home/data/done-no-pr/brief.md"
+
+  make_git_repo "$home/task-worktrees/scout-with-report" fm/scout-with-report
+  fm_write_meta "$home/state/scout-with-report.meta" \
+    'window=firstmate:fm-scout-with-report' \
+    "worktree=$home/task-worktrees/scout-with-report" \
+    "project=$home/projects/alpha" \
+    'harness=claude' \
+    'kind=scout' \
+    'mode=no-mistakes' \
+    'yolo=off' \
+    'model=claude-sonnet-5' \
+    'effort=high'
+  printf 'done: scout report complete\n' > "$home/state/scout-with-report.status"
+  mkdir -p "$home/data/scout-with-report"
+  printf '# Scout report\n\nFindings are complete.\n' > "$home/data/scout-with-report/report.md"
+
+  make_git_repo "$home/task-worktrees/scout-without-report" fm/scout-without-report
+  fm_write_meta "$home/state/scout-without-report.meta" \
+    'window=firstmate:fm-scout-without-report' \
+    "worktree=$home/task-worktrees/scout-without-report" \
+    "project=$home/projects/alpha" \
+    'harness=claude' \
+    'kind=scout' \
+    'mode=no-mistakes' \
+    'yolo=off' \
+    'model=claude-sonnet-5' \
+    'effort=high'
+  printf 'done: scout report complete\n' > "$home/state/scout-without-report.status"
 
   make_git_repo "$home/task-worktrees/decision-one" fm/decision-one
   fm_write_meta "$home/state/decision-one.meta" \
@@ -385,12 +415,21 @@ test_machine_readable_contradiction_diagnostics() {
   printf '%s' "$out" | jq -e '
     (.tasks.in_flight.records[] | select(.id=="done-no-pr")
       | (.diagnostics|sort)==["branch_not_pushed","reported_done_without_required_pr","validation_missing"]) and
+    (.tasks.in_flight.records[] | select(.id=="scout-with-report")
+      | .kind=="scout" and .delivery_evidence.validation.required==false
+        and .delivery_evidence.validation.source=="task_kind" and (.diagnostics|length)==0) and
+    (.tasks.in_flight.records[] | select(.id=="scout-without-report")
+      | .kind=="scout" and .delivery_evidence.validation.required==false
+        and .diagnostics==["reported_done_without_scout_report"]) and
     (.tasks.in_flight.records[] | select(.id=="decision-one")
       | (.diagnostics|index("endpoint_unhealthy"))!=null) and
     .diagnostics.by_code.reported_done_without_required_pr==1 and
+    .diagnostics.by_code.reported_done_without_scout_report==1 and
     .diagnostics.by_code.validation_missing==1 and
     .diagnostics.by_code.branch_not_pushed==1 and
-    .diagnostics.by_code.endpoint_unhealthy==2
+    .diagnostics.by_code.endpoint_unhealthy==2 and
+    (.diagnostics.records | any(.record_id=="scout-without-report"
+      and .code=="reported_done_without_scout_report" and .severity=="warning"))
   ' >/dev/null || fail "required contradiction diagnostics were absent or unstructured"
   pass "operational snapshot reports machine-readable delivery contradictions"
 }

@@ -617,6 +617,8 @@ TASKS_JSON=$(jq -n \
       | if $url == null then null else (($url.scheme + "://" + $url.host + $url.path) | safe(512)) end)
     end;
   def task_for($id): ([$fleet.tasks[]? | select(.id == $id)][0] // null);
+  def scout_report_present($id; $task):
+    (($task.paths.report.present // false) == true) or any($fleet.scout_reports[]?; .id == $id);
   def git_for($id): ([$git_rows[]? | select(.id == $id)][0] // null);
   def project_for($key): ([$projects.records[]? | select(.key == $key)][0] // null);
   def project_key($backlog; $task):
@@ -640,8 +642,9 @@ TASKS_JSON=$(jq -n \
     elif $section == "queued" then {state:"queued",source:"backlog",detail:null,observed_at:null,freshness:"local",status:"available"}
     elif $section == "done" then {state:"done",source:"backlog",detail:null,observed_at:null,freshness:"retained",status:"available"}
     else {state:"unknown",source:"none",detail:null,observed_at:null,freshness:"unknown",status:"unavailable"} end;
-  def validation_for($mode; $task; $current):
-    if $mode != "no-mistakes" then {required:false,state:"not_required",source:"delivery_mode",detail:null,status:"available"}
+  def validation_for($mode; $kind; $task; $current):
+    if $kind == "scout" then {required:false,state:"not_required",source:"task_kind",detail:null,status:"available"}
+    elif $mode != "no-mistakes" then {required:false,state:"not_required",source:"delivery_mode",detail:null,status:"available"}
     elif $task == null then {required:true,state:"unknown",source:"none",detail:null,status:"unavailable"}
     elif $task.current_state.source == "run-step" then
       {required:true,state:$task.current_state.state,source:"run-step",detail:($task.current_state.detail | safe(200)),status:"available"}
@@ -663,13 +666,15 @@ TASKS_JSON=$(jq -n \
   def make_row($backlog):
     ($backlog.id // null) as $id
     | task_for($id) as $task
+    | clean_kind($task.kind // $backlog.kind // null) as $kind
+    | scout_report_present($id; $task) as $scout_report_present
     | git_for($id) as $git
     | project_key($backlog; $task) as $project_key
     | project_for($project_key) as $project
     | mode_for($task; $project) as $mode
     | yolo_for($task; $project) as $yolo
     | current_for($backlog.state; $task) as $current
-    | validation_for($mode; $task; $current) as $validation
+    | validation_for($mode; $kind; $task; $current) as $validation
     | (($task.pr.url // $backlog.pr_url // null)) as $pr_url
     | {id:($id | safe(160)),title:(($backlog.title // null) | safe(200)),section:$backlog.state,
        status:(if $backlog.structured != true or $current.status == "unavailable" then "unavailable" else "available" end),
@@ -689,7 +694,7 @@ TASKS_JSON=$(jq -n \
            then "decision.summary" else empty end,
          if (($task.paths.status_log.last_event.note // "") | redact | length) > 200
            then "event_history.summary" else empty end]),
-       project:($project_key | safe(160)),kind:clean_kind($task.kind // $backlog.kind // null),
+       project:($project_key | safe(160)),kind:$kind,
        delivery:{mode:$mode,yolo:$yolo,
                  source:(if ($task.mode // "") != "" then "task_metadata" elif $project != null then "project_registry" else "unknown" end),
                  status:(if $mode == null or $yolo == null then "unavailable" else "available" end)},
@@ -717,16 +722,20 @@ TASKS_JSON=$(jq -n \
        decision:decision_for($backlog; $task),
        event_history:event_for($task),
        diagnostics:[]}
+    # Scout reports are the only implemented no-PR terminal contract.
+    # A future kind=ops exemption should first define its required durable completion evidence.
     | .diagnostics = ([
         if $backlog.structured != true then "malformed_backlog_record" else empty end,
         if $backlog.state == "in_flight" and $task == null then "in_flight_without_task_record" else empty end,
         if $backlog.state == "in_flight" and ((.endpoint.exists == false) or (.endpoint.agent_alive == "dead")) then "endpoint_unhealthy" else empty end,
         if .delivery_evidence.pr.status == "unavailable" then "invalid_local_pr_evidence" else empty end,
-        if .current.state == "done" and (.delivery.mode == "no-mistakes" or .delivery.mode == "direct-PR") and .delivery_evidence.pr.url == null
+        if .current.state == "done" and .kind == "scout" and $scout_report_present != true
+          then "reported_done_without_scout_report" else empty end,
+        if .current.state == "done" and .kind != "scout" and (.delivery.mode == "no-mistakes" or .delivery.mode == "direct-PR") and .delivery_evidence.pr.url == null
           then "reported_done_without_required_pr" else empty end,
-        if .current.state == "done" and .delivery.mode == "no-mistakes" and .delivery_evidence.validation.state == "missing"
+        if .current.state == "done" and .kind != "scout" and .delivery.mode == "no-mistakes" and .delivery_evidence.validation.state == "missing"
           then "validation_missing" else empty end,
-        if .current.state == "done" and (.delivery.mode == "no-mistakes" or .delivery.mode == "direct-PR")
+        if .current.state == "done" and .kind != "scout" and (.delivery.mode == "no-mistakes" or .delivery.mode == "direct-PR")
            and (.implementation.push_state == "no_upstream" or .implementation.push_state == "ahead" or .implementation.push_state == "diverged")
           then "branch_not_pushed" else empty end,
         if $backlog.state == "done" and ($task.current_state.state // "done") != "done" and ($task.current_state.state // "done") != "failed"
@@ -759,8 +768,9 @@ DIAGNOSTICS_JSON=$(jq -n \
   --argjson secondmates "$SECONDMATES_JSON" \
   --argjson cap "$FM_REGISTRY_DIAGNOSTICS" '
   def severity($code):
-    if $code == "reported_done_without_required_pr" or $code == "validation_missing" or $code == "branch_not_pushed"
-       or $code == "endpoint_unhealthy" then "warning" else "info" end;
+    if $code == "reported_done_without_required_pr" or $code == "reported_done_without_scout_report"
+       or $code == "validation_missing" or $code == "branch_not_pushed" or $code == "endpoint_unhealthy"
+      then "warning" else "info" end;
   ([ $tasks.in_flight.all_records[], $tasks.queued.all_records[], $tasks.retained_done.all_records[]
       | . as $row | $row.diagnostics[]? | {scope:"task",record_id:$row.id,code:.,severity:severity(.)} ]
    + [ $secondmates.all_records[]? | . as $row | $row.diagnostics[]?
