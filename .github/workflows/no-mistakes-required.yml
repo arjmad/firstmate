@@ -1,16 +1,8 @@
 name: Require no-mistakes
 
 on:
-  # The gate reads only `github.event.pull_request.body`, which a push cannot
-  # change, so a `synchronize` run can never reach a different verdict than the
-  # `opened`/`edited` run before it. Requesting a hosted runner per pushed round
-  # anyway only adds ways for the gate to report failure without ever evaluating
-  # the signature (a denied runner reports "failure" with zero steps, which reads
-  # as "this contributor bypassed no-mistakes"). Stay on the events that can
-  # actually change the body; no-mistakes rewrites the body after each push, so
-  # the `edited` run still lands on that round's final head commit.
   pull_request:
-    types: [opened, edited, reopened]
+    types: [opened, edited, synchronize, reopened]
     branches:
       - main
 

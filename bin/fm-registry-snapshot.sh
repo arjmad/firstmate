@@ -25,16 +25,14 @@
 #   counts: aggregate values cross-checked against the detailed section envelopes.
 #
 # Delivery diagnostics follow each task's terminal contract, and the scout exemption
-# is gated on durable evidence rather than on the `kind=scout` annotation alone. A
-# `kind=scout` task delivers its canonical `data/<id>/report.md`, never a PR, so a
-# scout whose report artifact exists has delivered: its validation becomes
-# `not_required` with source `scout_report` and it raises no
-# `reported_done_without_required_pr`, `validation_missing`, or `branch_not_pushed`
-# finding. A done scout with no report artifact has no durable delivery evidence at
-# all, so it raises the distinct `reported_done_without_scout_report` finding and
-# stays subject to the ordinary delivery findings instead of being exempted on the
-# strength of its annotation. Ship rows in the `no-mistakes` and `direct-PR` modes
-# keep the unchanged PR-based delivery findings.
+# is gated on durable completion evidence rather than on the `kind=scout` annotation
+# alone. A completed scout is exempt only when its backlog record names the canonical
+# `data/<id>/report.md` completion artifact and that report file still exists. This
+# keeps a genuine torn-down scout clean while a promoted ship with a stale scout
+# annotation and old report file remains subject to the ordinary PR-based findings.
+# A done scout with no report artifact also raises the distinct
+# `reported_done_without_scout_report` finding. Ship rows in the `no-mistakes` and
+# `direct-PR` modes keep the unchanged PR-based delivery findings.
 #
 # Missing, unreadable, malformed, incomplete, and truncated sources are explicit.
 # Chat transcripts, pane captures, full status logs, prompts, briefs, reports, raw
@@ -641,6 +639,9 @@ TASKS_JSON=$(jq -n \
   # is scanned from the data root, so it still resolves after task metadata cleanup.
   def scout_report_present($id; $task):
     ($task.hints.scout_report_present == true) or any($fleet.scout_reports[]?; .id == $id);
+  def scout_report_recorded($id; $backlog):
+    (($backlog.report_path // null) | type) == "string"
+    and ($backlog.report_path | endswith("data/" + $id + "/report.md"));
   def git_for($id): ([$git_rows[]? | select(.id == $id)][0] // null);
   def project_for($key): ([$projects.records[]? | select(.key == $key)][0] // null);
   def project_key($backlog; $task):
@@ -691,7 +692,7 @@ TASKS_JSON=$(jq -n \
     | clean_kind($task.kind // $backlog.kind // null) as $kind
     | ($kind == "scout") as $is_scout
     | scout_report_present($id; $task) as $scout_report_present
-    | ($is_scout and $scout_report_present) as $scout_delivered
+    | ($is_scout and scout_report_recorded($id; $backlog) and $scout_report_present) as $scout_delivered
     | git_for($id) as $git
     | project_key($backlog; $task) as $project_key
     | project_for($project_key) as $project
@@ -746,12 +747,12 @@ TASKS_JSON=$(jq -n \
        decision:decision_for($backlog; $task),
        event_history:event_for($task),
        diagnostics:[]}
-    # kind=scout is the only implemented no-PR terminal contract, and only a scout that
-    # actually produced its durable report artifact is exempt from the PR-based findings
-    # below; a bare annotation never buys the exemption on its own. Operational ship
-    # actions with no PR are NOT exempt; a future explicit kind=ops contract must first
-    # define the durable completion evidence it would be measured against before any
-    # exemption is added here.
+    # kind=scout is the only implemented no-PR terminal contract, and only a scout whose
+    # durable backlog completion names its present report artifact is exempt from the
+    # PR-based findings below; a bare annotation or old scout-phase report never buys the
+    # exemption on its own. Operational ship actions with no PR are NOT exempt; a future
+    # explicit kind=ops contract must first define the durable completion evidence it would
+    # be measured against before any exemption is added here.
     | .diagnostics = ([
         if $backlog.structured != true then "malformed_backlog_record" else empty end,
         if $backlog.state == "in_flight" and $task == null then "in_flight_without_task_record" else empty end,

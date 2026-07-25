@@ -128,7 +128,7 @@ EOF
 - [x] done-one - Completed fixture task https://github.com/acme/alpha/pull/7 (repo: alpha) (kind: ship) (done 2026-07-24)
 - [x] scout-with-report - Completed scout with report data/scout-with-report/report.md (repo: alpha) (kind: scout) (reported 2026-07-24)
 - [x] scout-report-retained - Retained scout report without task metadata data/scout-report-retained/report.md (repo: alpha) (kind: scout) (reported 2026-07-24)
-- [x] scout-report-unlinked - Completed scout whose row never linked its report (repo: alpha) (kind: scout) (done 2026-07-24)
+- [x] promoted-stale-scout - Promoted ship left with a stale scout annotation (repo: alpha) (kind: scout) (done 2026-07-24)
 EOF
 
   make_git_repo "$home/task-worktrees/active-one" fm/active-one
@@ -186,10 +186,10 @@ EOF
   mkdir -p "$home/data/scout-report-retained"
   printf '# Scout report\n\nRetained after teardown.\n' > "$home/data/scout-report-retained/report.md"
 
-  # Delivered scout whose backlog row never recorded the report path: the durable
-  # report artifact is the only delivery evidence left.
-  mkdir -p "$home/data/scout-report-unlinked"
-  printf '# Scout report\n\nDelivered without a recorded link.\n' > "$home/data/scout-report-unlinked/report.md"
+  # Promoted ship whose backlog row still carries the stale scout annotation and an
+  # old scout-phase report file, but no recorded report completion and no PR.
+  mkdir -p "$home/data/promoted-stale-scout"
+  printf '# Scout report\n\nSuperseded by ship delivery.\n' > "$home/data/promoted-stale-scout/report.md"
 
   # Worker-reported done carrying only a kind=scout annotation and no report artifact:
   # the annotation alone must not buy the scout delivery exemption.
@@ -437,9 +437,9 @@ test_machine_readable_contradiction_diagnostics() {
     (.tasks.retained_done.records[] | select(.id=="scout-report-retained")
       | .kind=="scout" and .delivery_evidence.validation.required==false
         and .delivery_evidence.validation.source=="scout_report" and (.diagnostics|length)==0) and
-    (.tasks.retained_done.records[] | select(.id=="scout-report-unlinked")
-      | .kind=="scout" and .delivery_evidence.validation.required==false
-        and .delivery_evidence.validation.source=="scout_report" and (.diagnostics|length)==0) and
+    (.tasks.retained_done.records[] | select(.id=="promoted-stale-scout")
+      | .kind=="scout" and .delivery_evidence.validation.required==true
+        and .diagnostics==["reported_done_without_required_pr"]) and
     (.tasks.retained_done.records[] | select(.id=="done-one") | (.diagnostics|length)==0) and
     (.tasks.in_flight.records[] | select(.id=="scout-without-report")
       | .kind=="scout" and .delivery_evidence.validation.required==true
@@ -448,7 +448,7 @@ test_machine_readable_contradiction_diagnostics() {
                                   "reported_done_without_scout_report","validation_missing"]) and
     (.tasks.in_flight.records[] | select(.id=="decision-one")
       | (.diagnostics|index("endpoint_unhealthy"))!=null) and
-    .diagnostics.by_code.reported_done_without_required_pr==2 and
+    .diagnostics.by_code.reported_done_without_required_pr==3 and
     .diagnostics.by_code.reported_done_without_scout_report==1 and
     .diagnostics.by_code.validation_missing==2 and
     .diagnostics.by_code.branch_not_pushed==2 and
