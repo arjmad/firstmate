@@ -118,7 +118,6 @@ EOF
 ## In flight
 - [ ] active-one - Active validation task (repo: alpha) (kind: ship) (since 2026-07-24)
 - [ ] done-no-pr - Worker-reported done without delivery (repo: alpha) (kind: ship) (since 2026-07-24)
-- [ ] scout-with-report - Completed scout with report (repo: alpha) (kind: scout) (since 2026-07-24)
 - [ ] scout-without-report - Completed scout without report (repo: alpha) (kind: scout) (since 2026-07-24)
 - [ ] decision-one - Waiting on a bounded decision (repo: alpha) (kind: ship) (since 2026-07-24)
 
@@ -127,6 +126,9 @@ EOF
 
 ## Done
 - [x] done-one - Completed fixture task https://github.com/acme/alpha/pull/7 (repo: alpha) (kind: ship) (done 2026-07-24)
+- [x] scout-with-report - Completed scout with report data/scout-with-report/report.md (repo: alpha) (kind: scout) (reported 2026-07-24)
+- [x] scout-report-retained - Retained scout report without task metadata data/scout-report-retained/report.md (repo: alpha) (kind: scout) (reported 2026-07-24)
+- [x] promoted-stale-scout - Promoted ship left with a stale scout annotation (repo: alpha) (kind: scout) (done 2026-07-24)
 EOF
 
   make_git_repo "$home/task-worktrees/active-one" fm/active-one
@@ -178,6 +180,16 @@ EOF
   printf 'done: scout report complete\n' > "$home/state/scout-with-report.status"
   mkdir -p "$home/data/scout-with-report"
   printf '# Scout report\n\nFindings are complete.\n' > "$home/data/scout-with-report/report.md"
+
+  # Retained genuine scout whose task metadata was already cleaned up: only the
+  # backlog report link and the canonical report artifact remain.
+  mkdir -p "$home/data/scout-report-retained"
+  printf '# Scout report\n\nRetained after teardown.\n' > "$home/data/scout-report-retained/report.md"
+
+  # Promoted ship whose backlog row still carries the stale scout annotation and an
+  # old scout-phase report file, but no recorded report completion and no PR.
+  mkdir -p "$home/data/promoted-stale-scout"
+  printf '# Scout report\n\nSuperseded by ship delivery.\n' > "$home/data/promoted-stale-scout/report.md"
 
   make_git_repo "$home/task-worktrees/scout-without-report" fm/scout-without-report
   fm_write_meta "$home/state/scout-without-report.meta" \
@@ -415,18 +427,28 @@ test_machine_readable_contradiction_diagnostics() {
   printf '%s' "$out" | jq -e '
     (.tasks.in_flight.records[] | select(.id=="done-no-pr")
       | (.diagnostics|sort)==["branch_not_pushed","reported_done_without_required_pr","validation_missing"]) and
-    (.tasks.in_flight.records[] | select(.id=="scout-with-report")
+    (.tasks.retained_done.records[] | select(.id=="scout-with-report")
       | .kind=="scout" and .delivery_evidence.validation.required==false
-        and .delivery_evidence.validation.source=="task_kind" and (.diagnostics|length)==0) and
+        and .delivery_evidence.validation.source=="scout_report"
+        and .delivery_evidence.pr.url==null
+        and .implementation.push_state=="no_upstream" and (.diagnostics|length)==0) and
+    (.tasks.retained_done.records[] | select(.id=="scout-report-retained")
+      | .kind=="scout" and .delivery_evidence.validation.required==false
+        and .delivery_evidence.validation.source=="scout_report" and (.diagnostics|length)==0) and
+    (.tasks.retained_done.records[] | select(.id=="promoted-stale-scout")
+      | .kind=="scout" and .delivery_evidence.validation.required==true
+        and .diagnostics==["reported_done_without_required_pr"]) and
+    (.tasks.retained_done.records[] | select(.id=="done-one") | (.diagnostics|length)==0) and
     (.tasks.in_flight.records[] | select(.id=="scout-without-report")
-      | .kind=="scout" and .delivery_evidence.validation.required==false
-        and .diagnostics==["reported_done_without_scout_report"]) and
+      | .kind=="scout" and .delivery_evidence.validation.required==true
+        and (.diagnostics|sort)==["branch_not_pushed","reported_done_without_required_pr",
+                                  "reported_done_without_scout_report","validation_missing"]) and
     (.tasks.in_flight.records[] | select(.id=="decision-one")
       | (.diagnostics|index("endpoint_unhealthy"))!=null) and
-    .diagnostics.by_code.reported_done_without_required_pr==1 and
+    .diagnostics.by_code.reported_done_without_required_pr==3 and
     .diagnostics.by_code.reported_done_without_scout_report==1 and
-    .diagnostics.by_code.validation_missing==1 and
-    .diagnostics.by_code.branch_not_pushed==1 and
+    .diagnostics.by_code.validation_missing==2 and
+    .diagnostics.by_code.branch_not_pushed==2 and
     .diagnostics.by_code.endpoint_unhealthy==2 and
     (.diagnostics.records | any(.record_id=="scout-without-report"
       and .code=="reported_done_without_scout_report" and .severity=="warning"))
