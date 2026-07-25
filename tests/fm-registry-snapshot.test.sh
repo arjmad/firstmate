@@ -118,6 +118,7 @@ EOF
 ## In flight
 - [ ] active-one - Active validation task (repo: alpha) (kind: ship) (since 2026-07-24)
 - [ ] done-no-pr - Worker-reported done without delivery (repo: alpha) (kind: ship) (since 2026-07-24)
+- [ ] scout-without-report - Completed scout without report (repo: alpha) (kind: scout) (since 2026-07-24)
 - [ ] decision-one - Waiting on a bounded decision (repo: alpha) (kind: ship) (since 2026-07-24)
 
 ## Queued
@@ -125,6 +126,10 @@ EOF
 
 ## Done
 - [x] done-one - Completed fixture task https://github.com/acme/alpha/pull/7 (repo: alpha) (kind: ship) (done 2026-07-24)
+- [x] scout-with-report - Completed scout with report data/scout-with-report/report.md (repo: alpha) (kind: scout) (reported 2026-07-24)
+- [x] scout-report-retained - Retained scout report without task metadata data/scout-report-retained/report.md (repo: alpha) (kind: scout) (reported 2026-07-24)
+- [x] promoted-stale-scout - Promoted ship left with a stale scout annotation (repo: alpha) (kind: scout) (done 2026-07-24)
+- [x] promoted-shipped-scout - Promoted ship delivered before writing any report https://github.com/acme/alpha/pull/11 (repo: alpha) (kind: scout) (done 2026-07-24)
 EOF
 
   make_git_repo "$home/task-worktrees/active-one" fm/active-one
@@ -161,6 +166,50 @@ EOF
   mkdir -p "$home/data/done-no-pr"
   printf 'RAW_REPORT_SENTINEL_5108d4\n' > "$home/data/done-no-pr/report.md"
   printf 'RAW_BRIEF_SENTINEL_1bf889\n' > "$home/data/done-no-pr/brief.md"
+
+  make_git_repo "$home/task-worktrees/scout-with-report" fm/scout-with-report
+  fm_write_meta "$home/state/scout-with-report.meta" \
+    'window=firstmate:fm-scout-with-report' \
+    "worktree=$home/task-worktrees/scout-with-report" \
+    "project=$home/projects/alpha" \
+    'harness=claude' \
+    'kind=scout' \
+    'mode=no-mistakes' \
+    'yolo=off' \
+    'model=claude-sonnet-5' \
+    'effort=high'
+  printf 'done: scout report complete\n' > "$home/state/scout-with-report.status"
+  mkdir -p "$home/data/scout-with-report"
+  printf '# Scout report\n\nFindings are complete.\n' > "$home/data/scout-with-report/report.md"
+
+  # Retained genuine scout whose task metadata was already cleaned up: only the
+  # backlog report link and the canonical report artifact remain.
+  mkdir -p "$home/data/scout-report-retained"
+  printf '# Scout report\n\nRetained after teardown.\n' > "$home/data/scout-report-retained/report.md"
+
+  # Promoted ship whose backlog row still carries the stale scout annotation and an
+  # old scout-phase report file, but no recorded report completion and no PR.
+  mkdir -p "$home/data/promoted-stale-scout"
+  printf '# Scout report\n\nSuperseded by ship delivery.\n' > "$home/data/promoted-stale-scout/report.md"
+
+  # Promoted ship that shipped a PR before ever writing a scout report and was then torn
+  # down, leaving only the stale backlog scout annotation: the recorded PR is its durable
+  # completion artifact, so it never owed a report.
+
+  # Worker-reported done carrying only a kind=scout annotation and no report artifact:
+  # the annotation alone must not buy the scout delivery exemption.
+  make_git_repo "$home/task-worktrees/scout-without-report" fm/scout-without-report
+  fm_write_meta "$home/state/scout-without-report.meta" \
+    'window=firstmate:fm-scout-without-report' \
+    "worktree=$home/task-worktrees/scout-without-report" \
+    "project=$home/projects/alpha" \
+    'harness=claude' \
+    'kind=scout' \
+    'mode=no-mistakes' \
+    'yolo=off' \
+    'model=claude-sonnet-5' \
+    'effort=high'
+  printf 'done: scout report complete\n' > "$home/state/scout-without-report.status"
 
   make_git_repo "$home/task-worktrees/decision-one" fm/decision-one
   fm_write_meta "$home/state/decision-one.meta" \
@@ -229,7 +278,7 @@ run_snapshot() {  # <home> <fakebin> [backend]
     FM_REGISTRY_DIAGNOSTICS="${FM_REGISTRY_DIAGNOSTICS:-100}" \
     FM_REGISTRY_ROUTING_RULES="${FM_REGISTRY_ROUTING_RULES:-50}" \
     FM_SNAPSHOT_REGISTRY_BYTES="${FM_SNAPSHOT_REGISTRY_BYTES:-65536}" \
-    "$SNAPSHOT" --json
+    "${SNAPSHOT_UNDER_TEST:-$SNAPSHOT}" --json
 }
 
 run_bearings() {  # <home> <fakebin>
@@ -385,14 +434,77 @@ test_machine_readable_contradiction_diagnostics() {
   printf '%s' "$out" | jq -e '
     (.tasks.in_flight.records[] | select(.id=="done-no-pr")
       | (.diagnostics|sort)==["branch_not_pushed","reported_done_without_required_pr","validation_missing"]) and
+    (.tasks.retained_done.records[] | select(.id=="scout-with-report")
+      | .kind=="scout" and .delivery_evidence.validation.required==false
+        and .delivery_evidence.validation.source=="scout_report"
+        and .delivery_evidence.pr.url==null
+        and .implementation.push_state=="no_upstream" and (.diagnostics|length)==0) and
+    (.tasks.retained_done.records[] | select(.id=="scout-report-retained")
+      | .kind=="scout" and .delivery_evidence.validation.required==false
+        and .delivery_evidence.validation.source=="scout_report" and (.diagnostics|length)==0) and
+    (.tasks.retained_done.records[] | select(.id=="promoted-stale-scout")
+      | .kind=="scout" and .delivery_evidence.validation.required==true
+        and .diagnostics==["reported_done_without_required_pr"]) and
+    (.tasks.retained_done.records[] | select(.id=="promoted-shipped-scout")
+      | .kind=="scout" and .delivery_evidence.pr.url=="https://github.com/acme/alpha/pull/11"
+        and (.diagnostics|length)==0) and
+    (.tasks.retained_done.records[] | select(.id=="done-one") | (.diagnostics|length)==0) and
+    (.tasks.in_flight.records[] | select(.id=="scout-without-report")
+      | .kind=="scout" and .delivery_evidence.validation.required==true
+        and .delivery_evidence.validation.source=="none"
+        and (.diagnostics|sort)==["branch_not_pushed","reported_done_without_required_pr",
+                                  "reported_done_without_scout_report","validation_missing"]) and
     (.tasks.in_flight.records[] | select(.id=="decision-one")
       | (.diagnostics|index("endpoint_unhealthy"))!=null) and
-    .diagnostics.by_code.reported_done_without_required_pr==1 and
-    .diagnostics.by_code.validation_missing==1 and
-    .diagnostics.by_code.branch_not_pushed==1 and
-    .diagnostics.by_code.endpoint_unhealthy==2
+    .diagnostics.by_code.reported_done_without_required_pr==3 and
+    .diagnostics.by_code.reported_done_without_scout_report==1 and
+    .diagnostics.by_code.validation_missing==2 and
+    .diagnostics.by_code.branch_not_pushed==2 and
+    .diagnostics.by_code.endpoint_unhealthy==2 and
+    (.diagnostics.records | any(.record_id=="scout-without-report"
+      and .code=="reported_done_without_scout_report" and .severity=="warning"))
   ' >/dev/null || fail "required contradiction diagnostics were absent or unstructured"
   pass "operational snapshot reports machine-readable delivery contradictions"
+}
+
+test_absent_scout_report_index_degrades_explicitly() {
+  local home fakebin stub_bin entry out
+  home=$(make_home scoutindex)
+  fakebin=$(make_fakebin "$home")
+  write_complete_fixture "$home"
+
+  # The scout delivery exemption is decided on the canonical durable report index.
+  # A canonical snapshot that omits that index looks exactly like one where no
+  # scout ever filed a report, so treating it as empty would silently restore the
+  # false-positive delivery findings for every delivered scout. Stub the canonical
+  # snapshot to drop the index and require explicit unavailability instead.
+  stub_bin=$home/stub-bin
+  mkdir -p "$stub_bin"
+  for entry in "$ROOT"/bin/*; do
+    ln -s "$entry" "$stub_bin/$(basename "$entry")"
+  done
+  rm -f "$stub_bin/fm-fleet-snapshot.sh"
+  cat > "$stub_bin/fm-fleet-snapshot.sh" <<SH
+#!/usr/bin/env bash
+set -u
+"$ROOT/bin/fm-fleet-snapshot.sh" "\$@" | jq 'del(.scout_reports)'
+SH
+  chmod +x "$stub_bin/fm-fleet-snapshot.sh"
+
+  out=$(SNAPSHOT_UNDER_TEST="$stub_bin/fm-registry-snapshot.sh" run_snapshot "$home" "$fakebin") \
+    || fail "snapshot without a canonical scout-report index exited non-zero"
+  printf '%s' "$out" | jq -e '
+    .status=="unavailable" and
+    .provenance.canonical_snapshot.status=="unavailable" and
+    (.unavailable_fields|index("provenance.canonical_snapshot"))!=null
+  ' >/dev/null || fail "absent canonical scout-report index was not explicit"
+
+  out=$(run_snapshot "$home" "$fakebin") || fail "baseline snapshot failed"
+  printf '%s' "$out" | jq -e '
+    .provenance.canonical_snapshot.status=="available" and
+    (.tasks.retained_done.records[] | select(.id=="scout-with-report") | (.diagnostics|length)==0)
+  ' >/dev/null || fail "canonical scout-report index was not consumed as available"
+  pass "absent canonical scout-report index degrades explicitly instead of silently"
 }
 
 test_aggregates_match_detailed_bounded_rows() {
@@ -637,6 +749,7 @@ test_structured_project_secondmate_and_task_rows
 test_local_delivery_validation_and_pr_evidence
 test_reconciled_current_state_vs_event_history
 test_machine_readable_contradiction_diagnostics
+test_absent_scout_report_index_degrades_explicitly
 test_aggregates_match_detailed_bounded_rows
 test_missing_unreadable_malformed_incomplete_and_truncated_inputs
 test_secret_token_and_environment_sentinels_never_serialize

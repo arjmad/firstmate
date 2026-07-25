@@ -8,8 +8,9 @@
 # The command is read-only, lock-free, deterministic for fixed local state and
 # FM_REGISTRY_SNAPSHOT_NOW, and never performs GitHub, auth, or network calls.
 # It reuses `fm-fleet-snapshot.sh --json` for canonical backlog, current-state,
-# endpoint, decision, and secondmate-home reads, then adds bounded local project
-# and Git evidence without scraping conversations or raw private files.
+# endpoint, decision, durable scout-report-index, and secondmate-home reads, then
+# adds bounded local project and Git evidence without scraping conversations or
+# raw private files.
 #
 # Top-level sections:
 #   schema/generated/status: contract identity, observation time, and availability.
@@ -22,6 +23,20 @@
 #     state, local delivery evidence, one labeled event-history record, and diagnostics.
 #   diagnostics: bounded machine-readable consistency findings derived from task rows.
 #   counts: aggregate values cross-checked against the detailed section envelopes.
+#
+# Delivery diagnostics follow each task's terminal contract, and the scout exemption
+# is gated on durable completion evidence rather than on the `kind=scout` annotation
+# alone. A completed scout is exempt from the required-PR, validation, and unpushed-
+# branch findings only when its backlog record names the canonical `data/<id>/report.md`
+# completion artifact and that report file still exists; its `delivery_evidence.validation`
+# then reports `required:false` with source `scout_report`. This keeps a genuine torn-down
+# scout clean while a promoted ship with a stale scout annotation and an old report file
+# remains subject to the ordinary PR-based findings.
+# A done scout that recorded no completion PR and has no report artifact also raises
+# the distinct `reported_done_without_scout_report` finding; a row carrying a recorded
+# PR was delivered as a ship and is never measured against the scout report contract.
+# Ship rows in the `no-mistakes` and `direct-PR` modes keep the unchanged PR-based
+# delivery findings.
 #
 # Missing, unreadable, malformed, incomplete, and truncated sources are explicit.
 # Chat transcripts, pane captures, full status logs, prompts, briefs, reports, raw
@@ -406,15 +421,22 @@ PROJECT_BASE=$(printf '%s' "$PROJECT_BASE" | jq --argjson records "$PROJECT_RECO
 
 FLEET_AVAILABLE=false
 FLEET=$(FM_SNAPSHOT_NOW="$NOW" "$SCRIPT_DIR/fm-fleet-snapshot.sh" --json 2>/dev/null) || FLEET=
+# `scout_reports` is a required key, not an optional one: it is the delivery
+# evidence the scout diagnostics below are decided on. A canonical snapshot that
+# omits it would look identical to one where no scout ever filed a report, so
+# every delivered scout would silently regain the false-positive delivery
+# findings. Gating on it keeps that degradation explicit through
+# `provenance.canonical_snapshot.status` instead.
 if [ -n "$FLEET" ] && printf '%s' "$FLEET" | jq -e '
   .schema == "fm-fleet-snapshot.v1" and
   (.backlog | type) == "object" and
   (.tasks | type) == "array" and
+  (.scout_reports | type) == "array" and
   (.secondmate_current | type) == "object"
 ' >/dev/null 2>&1; then
   FLEET_AVAILABLE=true
 else
-  FLEET='{"schema":"fm-fleet-snapshot.v1","backlog":{"present":false,"records":[]},"tasks":[],"secondmate_current":{"registry":{"present":false,"available":false,"complete":false,"records":[]},"records":[],"total":null,"shown":0,"truncated":0}}'
+  FLEET='{"schema":"fm-fleet-snapshot.v1","backlog":{"present":false,"records":[]},"tasks":[],"scout_reports":[],"secondmate_current":{"registry":{"present":false,"available":false,"complete":false,"records":[]},"records":[],"total":null,"shown":0,"truncated":0}}'
 fi
 
 TASK_GIT='[]'
@@ -617,6 +639,14 @@ TASKS_JSON=$(jq -n \
       | if $url == null then null else (($url.scheme + "://" + $url.host + $url.path) | safe(512)) end)
     end;
   def task_for($id): ([$fleet.tasks[]? | select(.id == $id)][0] // null);
+  # Durable evidence that data/<id>/report.md exists. The canonical fleet report index
+  # is the single source for it: the index is scanned from the data root, so unlike the
+  # per-task hint it still resolves after task metadata cleanup.
+  def scout_report_present($id):
+    any($fleet.scout_reports[]?; .id == $id);
+  def scout_report_recorded($id; $backlog):
+    (($backlog.report_path // null) | type) == "string"
+    and ($backlog.report_path | endswith("data/" + $id + "/report.md"));
   def git_for($id): ([$git_rows[]? | select(.id == $id)][0] // null);
   def project_for($key): ([$projects.records[]? | select(.key == $key)][0] // null);
   def project_key($backlog; $task):
@@ -640,8 +670,9 @@ TASKS_JSON=$(jq -n \
     elif $section == "queued" then {state:"queued",source:"backlog",detail:null,observed_at:null,freshness:"local",status:"available"}
     elif $section == "done" then {state:"done",source:"backlog",detail:null,observed_at:null,freshness:"retained",status:"available"}
     else {state:"unknown",source:"none",detail:null,observed_at:null,freshness:"unknown",status:"unavailable"} end;
-  def validation_for($mode; $task; $current):
-    if $mode != "no-mistakes" then {required:false,state:"not_required",source:"delivery_mode",detail:null,status:"available"}
+  def validation_for($mode; $scout_delivered; $task; $current):
+    if $scout_delivered then {required:false,state:"not_required",source:"scout_report",detail:null,status:"available"}
+    elif $mode != "no-mistakes" then {required:false,state:"not_required",source:"delivery_mode",detail:null,status:"available"}
     elif $task == null then {required:true,state:"unknown",source:"none",detail:null,status:"unavailable"}
     elif $task.current_state.source == "run-step" then
       {required:true,state:$task.current_state.state,source:"run-step",detail:($task.current_state.detail | safe(200)),status:"available"}
@@ -663,13 +694,17 @@ TASKS_JSON=$(jq -n \
   def make_row($backlog):
     ($backlog.id // null) as $id
     | task_for($id) as $task
+    | clean_kind($task.kind // $backlog.kind // null) as $kind
+    | ($kind == "scout") as $is_scout
+    | scout_report_present($id) as $scout_report_present
+    | ($is_scout and scout_report_recorded($id; $backlog) and $scout_report_present) as $scout_delivered
     | git_for($id) as $git
     | project_key($backlog; $task) as $project_key
     | project_for($project_key) as $project
     | mode_for($task; $project) as $mode
     | yolo_for($task; $project) as $yolo
     | current_for($backlog.state; $task) as $current
-    | validation_for($mode; $task; $current) as $validation
+    | validation_for($mode; $scout_delivered; $task; $current) as $validation
     | (($task.pr.url // $backlog.pr_url // null)) as $pr_url
     | {id:($id | safe(160)),title:(($backlog.title // null) | safe(200)),section:$backlog.state,
        status:(if $backlog.structured != true or $current.status == "unavailable" then "unavailable" else "available" end),
@@ -689,7 +724,7 @@ TASKS_JSON=$(jq -n \
            then "decision.summary" else empty end,
          if (($task.paths.status_log.last_event.note // "") | redact | length) > 200
            then "event_history.summary" else empty end]),
-       project:($project_key | safe(160)),kind:clean_kind($task.kind // $backlog.kind // null),
+       project:($project_key | safe(160)),kind:$kind,
        delivery:{mode:$mode,yolo:$yolo,
                  source:(if ($task.mode // "") != "" then "task_metadata" elif $project != null then "project_registry" else "unknown" end),
                  status:(if $mode == null or $yolo == null then "unavailable" else "available" end)},
@@ -717,16 +752,29 @@ TASKS_JSON=$(jq -n \
        decision:decision_for($backlog; $task),
        event_history:event_for($task),
        diagnostics:[]}
+    # kind=scout is the only implemented no-PR terminal contract, and only a scout whose
+    # durable backlog completion names its present report artifact is exempt from the
+    # PR-based findings below; a bare annotation or old scout-phase report never buys the
+    # exemption on its own. The two durable completion artifacts are distinct: a recorded
+    # PR is a ship delivery, so a row that has one is never measured against the scout
+    # report contract, which keeps a promoted-and-shipped task whose backlog row still
+    # carries the stale scout annotation from being flagged for a report it never owed.
+    # A stale scout annotation with neither recorded artifact stays flagged. Operational
+    # ship actions with no PR are NOT exempt; a future explicit kind=ops contract must
+    # first define the durable completion evidence it would be measured against before any
+    # exemption is added here.
     | .diagnostics = ([
         if $backlog.structured != true then "malformed_backlog_record" else empty end,
         if $backlog.state == "in_flight" and $task == null then "in_flight_without_task_record" else empty end,
         if $backlog.state == "in_flight" and ((.endpoint.exists == false) or (.endpoint.agent_alive == "dead")) then "endpoint_unhealthy" else empty end,
         if .delivery_evidence.pr.status == "unavailable" then "invalid_local_pr_evidence" else empty end,
-        if .current.state == "done" and (.delivery.mode == "no-mistakes" or .delivery.mode == "direct-PR") and .delivery_evidence.pr.url == null
+        if .current.state == "done" and $is_scout and $pr_url == null and $scout_report_present != true
+          then "reported_done_without_scout_report" else empty end,
+        if .current.state == "done" and $scout_delivered != true and (.delivery.mode == "no-mistakes" or .delivery.mode == "direct-PR") and .delivery_evidence.pr.url == null
           then "reported_done_without_required_pr" else empty end,
-        if .current.state == "done" and .delivery.mode == "no-mistakes" and .delivery_evidence.validation.state == "missing"
+        if .current.state == "done" and $scout_delivered != true and .delivery.mode == "no-mistakes" and .delivery_evidence.validation.state == "missing"
           then "validation_missing" else empty end,
-        if .current.state == "done" and (.delivery.mode == "no-mistakes" or .delivery.mode == "direct-PR")
+        if .current.state == "done" and $scout_delivered != true and (.delivery.mode == "no-mistakes" or .delivery.mode == "direct-PR")
            and (.implementation.push_state == "no_upstream" or .implementation.push_state == "ahead" or .implementation.push_state == "diverged")
           then "branch_not_pushed" else empty end,
         if $backlog.state == "done" and ($task.current_state.state // "done") != "done" and ($task.current_state.state // "done") != "failed"
@@ -759,8 +807,9 @@ DIAGNOSTICS_JSON=$(jq -n \
   --argjson secondmates "$SECONDMATES_JSON" \
   --argjson cap "$FM_REGISTRY_DIAGNOSTICS" '
   def severity($code):
-    if $code == "reported_done_without_required_pr" or $code == "validation_missing" or $code == "branch_not_pushed"
-       or $code == "endpoint_unhealthy" then "warning" else "info" end;
+    if $code == "reported_done_without_required_pr" or $code == "reported_done_without_scout_report"
+       or $code == "validation_missing" or $code == "branch_not_pushed" or $code == "endpoint_unhealthy"
+      then "warning" else "info" end;
   ([ $tasks.in_flight.all_records[], $tasks.queued.all_records[], $tasks.retained_done.all_records[]
       | . as $row | $row.diagnostics[]? | {scope:"task",record_id:$row.id,code:.,severity:severity(.)} ]
    + [ $secondmates.all_records[]? | . as $row | $row.diagnostics[]?
