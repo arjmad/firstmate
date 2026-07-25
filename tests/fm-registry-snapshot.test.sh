@@ -129,6 +129,7 @@ EOF
 - [x] scout-with-report - Completed scout with report data/scout-with-report/report.md (repo: alpha) (kind: scout) (reported 2026-07-24)
 - [x] scout-report-retained - Retained scout report without task metadata data/scout-report-retained/report.md (repo: alpha) (kind: scout) (reported 2026-07-24)
 - [x] promoted-stale-scout - Promoted ship left with a stale scout annotation (repo: alpha) (kind: scout) (done 2026-07-24)
+- [x] promoted-shipped-scout - Promoted ship delivered before writing any report https://github.com/acme/alpha/pull/11 (repo: alpha) (kind: scout) (done 2026-07-24)
 EOF
 
   make_git_repo "$home/task-worktrees/active-one" fm/active-one
@@ -190,6 +191,10 @@ EOF
   # old scout-phase report file, but no recorded report completion and no PR.
   mkdir -p "$home/data/promoted-stale-scout"
   printf '# Scout report\n\nSuperseded by ship delivery.\n' > "$home/data/promoted-stale-scout/report.md"
+
+  # Promoted ship that shipped a PR before ever writing a scout report and was then torn
+  # down, leaving only the stale backlog scout annotation: the recorded PR is its durable
+  # completion artifact, so it never owed a report.
 
   # Worker-reported done carrying only a kind=scout annotation and no report artifact:
   # the annotation alone must not buy the scout delivery exemption.
@@ -440,6 +445,9 @@ test_machine_readable_contradiction_diagnostics() {
     (.tasks.retained_done.records[] | select(.id=="promoted-stale-scout")
       | .kind=="scout" and .delivery_evidence.validation.required==true
         and .diagnostics==["reported_done_without_required_pr"]) and
+    (.tasks.retained_done.records[] | select(.id=="promoted-shipped-scout")
+      | .kind=="scout" and .delivery_evidence.pr.url=="https://github.com/acme/alpha/pull/11"
+        and (.diagnostics|length)==0) and
     (.tasks.retained_done.records[] | select(.id=="done-one") | (.diagnostics|length)==0) and
     (.tasks.in_flight.records[] | select(.id=="scout-without-report")
       | .kind=="scout" and .delivery_evidence.validation.required==true

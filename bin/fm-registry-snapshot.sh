@@ -30,9 +30,11 @@
 # `data/<id>/report.md` completion artifact and that report file still exists. This
 # keeps a genuine torn-down scout clean while a promoted ship with a stale scout
 # annotation and old report file remains subject to the ordinary PR-based findings.
-# A done scout with no report artifact also raises the distinct
-# `reported_done_without_scout_report` finding. Ship rows in the `no-mistakes` and
-# `direct-PR` modes keep the unchanged PR-based delivery findings.
+# A done scout that recorded no completion PR and has no report artifact also raises
+# the distinct `reported_done_without_scout_report` finding; a row carrying a recorded
+# PR delivered as a ship and is never measured against the scout report contract. Ship
+# rows in the `no-mistakes` and `direct-PR` modes keep the unchanged PR-based delivery
+# findings.
 #
 # Missing, unreadable, malformed, incomplete, and truncated sources are explicit.
 # Chat transcripts, pane captures, full status logs, prompts, briefs, reports, raw
@@ -636,9 +638,10 @@ TASKS_JSON=$(jq -n \
     end;
   def task_for($id): ([$fleet.tasks[]? | select(.id == $id)][0] // null);
   # Durable evidence that data/<id>/report.md exists. The canonical fleet report index
-  # is scanned from the data root, so it still resolves after task metadata cleanup.
-  def scout_report_present($id; $task):
-    ($task.hints.scout_report_present == true) or any($fleet.scout_reports[]?; .id == $id);
+  # is the single source for it: the index is scanned from the data root, so unlike the
+  # per-task hint it still resolves after task metadata cleanup.
+  def scout_report_present($id):
+    any($fleet.scout_reports[]?; .id == $id);
   def scout_report_recorded($id; $backlog):
     (($backlog.report_path // null) | type) == "string"
     and ($backlog.report_path | endswith("data/" + $id + "/report.md"));
@@ -691,7 +694,7 @@ TASKS_JSON=$(jq -n \
     | task_for($id) as $task
     | clean_kind($task.kind // $backlog.kind // null) as $kind
     | ($kind == "scout") as $is_scout
-    | scout_report_present($id; $task) as $scout_report_present
+    | scout_report_present($id) as $scout_report_present
     | ($is_scout and scout_report_recorded($id; $backlog) and $scout_report_present) as $scout_delivered
     | git_for($id) as $git
     | project_key($backlog; $task) as $project_key
@@ -750,15 +753,20 @@ TASKS_JSON=$(jq -n \
     # kind=scout is the only implemented no-PR terminal contract, and only a scout whose
     # durable backlog completion names its present report artifact is exempt from the
     # PR-based findings below; a bare annotation or old scout-phase report never buys the
-    # exemption on its own. Operational ship actions with no PR are NOT exempt; a future
-    # explicit kind=ops contract must first define the durable completion evidence it would
-    # be measured against before any exemption is added here.
+    # exemption on its own. The two durable completion artifacts are distinct: a recorded
+    # PR is a ship delivery, so a row that has one is never measured against the scout
+    # report contract, which keeps a promoted-and-shipped task whose backlog row still
+    # carries the stale scout annotation from being flagged for a report it never owed.
+    # A stale scout annotation with neither recorded artifact stays flagged. Operational
+    # ship actions with no PR are NOT exempt; a future explicit kind=ops contract must
+    # first define the durable completion evidence it would be measured against before any
+    # exemption is added here.
     | .diagnostics = ([
         if $backlog.structured != true then "malformed_backlog_record" else empty end,
         if $backlog.state == "in_flight" and $task == null then "in_flight_without_task_record" else empty end,
         if $backlog.state == "in_flight" and ((.endpoint.exists == false) or (.endpoint.agent_alive == "dead")) then "endpoint_unhealthy" else empty end,
         if .delivery_evidence.pr.status == "unavailable" then "invalid_local_pr_evidence" else empty end,
-        if .current.state == "done" and $is_scout and $scout_report_present != true
+        if .current.state == "done" and $is_scout and $pr_url == null and $scout_report_present != true
           then "reported_done_without_scout_report" else empty end,
         if .current.state == "done" and $scout_delivered != true and (.delivery.mode == "no-mistakes" or .delivery.mode == "direct-PR") and .delivery_evidence.pr.url == null
           then "reported_done_without_required_pr" else empty end,
