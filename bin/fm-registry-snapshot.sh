@@ -23,6 +23,13 @@
 #   diagnostics: bounded machine-readable consistency findings derived from task rows.
 #   counts: aggregate values cross-checked against the detailed section envelopes.
 #
+# Delivery diagnostics follow each task's terminal contract. A `kind=scout` row whose
+# backlog record links its canonical `data/<id>/report.md` and whose report file exists
+# has delivered, so its validation becomes `not_required` with source `scout_report`
+# and it raises no PR, validation, or pushed-branch finding; a done scout without that
+# report raises `reported_done_without_scout_report` instead. Ship rows in the
+# `no-mistakes` and `direct-PR` modes keep the unchanged PR-based delivery findings.
+#
 # Missing, unreadable, malformed, incomplete, and truncated sources are explicit.
 # Chat transcripts, pane captures, full status logs, prompts, briefs, reports, raw
 # configuration, credentials, tokens, cookies, and auth payloads are never emitted.
