@@ -191,6 +191,8 @@ EOF
   mkdir -p "$home/data/scout-report-unlinked"
   printf '# Scout report\n\nDelivered without a recorded link.\n' > "$home/data/scout-report-unlinked/report.md"
 
+  # Worker-reported done carrying only a kind=scout annotation and no report artifact:
+  # the annotation alone must not buy the scout delivery exemption.
   make_git_repo "$home/task-worktrees/scout-without-report" fm/scout-without-report
   fm_write_meta "$home/state/scout-without-report.meta" \
     'window=firstmate:fm-scout-without-report' \
@@ -440,15 +442,16 @@ test_machine_readable_contradiction_diagnostics() {
         and .delivery_evidence.validation.source=="scout_report" and (.diagnostics|length)==0) and
     (.tasks.retained_done.records[] | select(.id=="done-one") | (.diagnostics|length)==0) and
     (.tasks.in_flight.records[] | select(.id=="scout-without-report")
-      | .kind=="scout" and .delivery_evidence.validation.required==false
-        and .delivery_evidence.validation.source=="scout_report"
-        and .diagnostics==["reported_done_without_scout_report"]) and
+      | .kind=="scout" and .delivery_evidence.validation.required==true
+        and .delivery_evidence.validation.source=="none"
+        and (.diagnostics|sort)==["branch_not_pushed","reported_done_without_required_pr",
+                                  "reported_done_without_scout_report","validation_missing"]) and
     (.tasks.in_flight.records[] | select(.id=="decision-one")
       | (.diagnostics|index("endpoint_unhealthy"))!=null) and
-    .diagnostics.by_code.reported_done_without_required_pr==1 and
+    .diagnostics.by_code.reported_done_without_required_pr==2 and
     .diagnostics.by_code.reported_done_without_scout_report==1 and
-    .diagnostics.by_code.validation_missing==1 and
-    .diagnostics.by_code.branch_not_pushed==1 and
+    .diagnostics.by_code.validation_missing==2 and
+    .diagnostics.by_code.branch_not_pushed==2 and
     .diagnostics.by_code.endpoint_unhealthy==2 and
     (.diagnostics.records | any(.record_id=="scout-without-report"
       and .code=="reported_done_without_scout_report" and .severity=="warning"))
