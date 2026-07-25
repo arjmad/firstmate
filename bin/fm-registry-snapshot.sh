@@ -26,15 +26,17 @@
 #
 # Delivery diagnostics follow each task's terminal contract, and the scout exemption
 # is gated on durable completion evidence rather than on the `kind=scout` annotation
-# alone. A completed scout is exempt only when its backlog record names the canonical
-# `data/<id>/report.md` completion artifact and that report file still exists. This
-# keeps a genuine torn-down scout clean while a promoted ship with a stale scout
-# annotation and old report file remains subject to the ordinary PR-based findings.
+# alone. A completed scout is exempt from the required-PR, validation, and unpushed-
+# branch findings only when its backlog record names the canonical `data/<id>/report.md`
+# completion artifact and that report file still exists; its `delivery_evidence.validation`
+# then reports `required:false` with source `scout_report`. This keeps a genuine torn-down
+# scout clean while a promoted ship with a stale scout annotation and an old report file
+# remains subject to the ordinary PR-based findings.
 # A done scout that recorded no completion PR and has no report artifact also raises
 # the distinct `reported_done_without_scout_report` finding; a row carrying a recorded
-# PR delivered as a ship and is never measured against the scout report contract. Ship
-# rows in the `no-mistakes` and `direct-PR` modes keep the unchanged PR-based delivery
-# findings.
+# PR was delivered as a ship and is never measured against the scout report contract.
+# Ship rows in the `no-mistakes` and `direct-PR` modes keep the unchanged PR-based
+# delivery findings.
 #
 # Missing, unreadable, malformed, incomplete, and truncated sources are explicit.
 # Chat transcripts, pane captures, full status logs, prompts, briefs, reports, raw
