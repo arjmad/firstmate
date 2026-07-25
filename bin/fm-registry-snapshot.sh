@@ -8,8 +8,9 @@
 # The command is read-only, lock-free, deterministic for fixed local state and
 # FM_REGISTRY_SNAPSHOT_NOW, and never performs GitHub, auth, or network calls.
 # It reuses `fm-fleet-snapshot.sh --json` for canonical backlog, current-state,
-# endpoint, decision, and secondmate-home reads, then adds bounded local project
-# and Git evidence without scraping conversations or raw private files.
+# endpoint, decision, durable scout-report-index, and secondmate-home reads, then
+# adds bounded local project and Git evidence without scraping conversations or
+# raw private files.
 #
 # Top-level sections:
 #   schema/generated/status: contract identity, observation time, and availability.
@@ -418,15 +419,22 @@ PROJECT_BASE=$(printf '%s' "$PROJECT_BASE" | jq --argjson records "$PROJECT_RECO
 
 FLEET_AVAILABLE=false
 FLEET=$(FM_SNAPSHOT_NOW="$NOW" "$SCRIPT_DIR/fm-fleet-snapshot.sh" --json 2>/dev/null) || FLEET=
+# `scout_reports` is a required key, not an optional one: it is the delivery
+# evidence the scout diagnostics below are decided on. A canonical snapshot that
+# omits it would look identical to one where no scout ever filed a report, so
+# every delivered scout would silently regain the false-positive delivery
+# findings. Gating on it keeps that degradation explicit through
+# `provenance.canonical_snapshot.status` instead.
 if [ -n "$FLEET" ] && printf '%s' "$FLEET" | jq -e '
   .schema == "fm-fleet-snapshot.v1" and
   (.backlog | type) == "object" and
   (.tasks | type) == "array" and
+  (.scout_reports | type) == "array" and
   (.secondmate_current | type) == "object"
 ' >/dev/null 2>&1; then
   FLEET_AVAILABLE=true
 else
-  FLEET='{"schema":"fm-fleet-snapshot.v1","backlog":{"present":false,"records":[]},"tasks":[],"secondmate_current":{"registry":{"present":false,"available":false,"complete":false,"records":[]},"records":[],"total":null,"shown":0,"truncated":0}}'
+  FLEET='{"schema":"fm-fleet-snapshot.v1","backlog":{"present":false,"records":[]},"tasks":[],"scout_reports":[],"secondmate_current":{"registry":{"present":false,"available":false,"complete":false,"records":[]},"records":[],"total":null,"shown":0,"truncated":0}}'
 fi
 
 TASK_GIT='[]'

@@ -273,7 +273,7 @@ run_snapshot() {  # <home> <fakebin> [backend]
     FM_REGISTRY_DIAGNOSTICS="${FM_REGISTRY_DIAGNOSTICS:-100}" \
     FM_REGISTRY_ROUTING_RULES="${FM_REGISTRY_ROUTING_RULES:-50}" \
     FM_SNAPSHOT_REGISTRY_BYTES="${FM_SNAPSHOT_REGISTRY_BYTES:-65536}" \
-    "$SNAPSHOT" --json
+    "${SNAPSHOT_UNDER_TEST:-$SNAPSHOT}" --json
 }
 
 run_bearings() {  # <home> <fakebin>
@@ -457,6 +457,46 @@ test_machine_readable_contradiction_diagnostics() {
       and .code=="reported_done_without_scout_report" and .severity=="warning"))
   ' >/dev/null || fail "required contradiction diagnostics were absent or unstructured"
   pass "operational snapshot reports machine-readable delivery contradictions"
+}
+
+test_absent_scout_report_index_degrades_explicitly() {
+  local home fakebin stub_bin entry out
+  home=$(make_home scoutindex)
+  fakebin=$(make_fakebin "$home")
+  write_complete_fixture "$home"
+
+  # The scout delivery exemption is decided on the canonical durable report index.
+  # A canonical snapshot that omits that index looks exactly like one where no
+  # scout ever filed a report, so treating it as empty would silently restore the
+  # false-positive delivery findings for every delivered scout. Stub the canonical
+  # snapshot to drop the index and require explicit unavailability instead.
+  stub_bin=$home/stub-bin
+  mkdir -p "$stub_bin"
+  for entry in "$ROOT"/bin/*; do
+    ln -s "$entry" "$stub_bin/$(basename "$entry")"
+  done
+  rm -f "$stub_bin/fm-fleet-snapshot.sh"
+  cat > "$stub_bin/fm-fleet-snapshot.sh" <<SH
+#!/usr/bin/env bash
+set -u
+"$ROOT/bin/fm-fleet-snapshot.sh" "\$@" | jq 'del(.scout_reports)'
+SH
+  chmod +x "$stub_bin/fm-fleet-snapshot.sh"
+
+  out=$(SNAPSHOT_UNDER_TEST="$stub_bin/fm-registry-snapshot.sh" run_snapshot "$home" "$fakebin") \
+    || fail "snapshot without a canonical scout-report index exited non-zero"
+  printf '%s' "$out" | jq -e '
+    .status=="unavailable" and
+    .provenance.canonical_snapshot.status=="unavailable" and
+    (.unavailable_fields|index("provenance.canonical_snapshot"))!=null
+  ' >/dev/null || fail "absent canonical scout-report index was not explicit"
+
+  out=$(run_snapshot "$home" "$fakebin") || fail "baseline snapshot failed"
+  printf '%s' "$out" | jq -e '
+    .provenance.canonical_snapshot.status=="available" and
+    (.tasks.retained_done.records[] | select(.id=="scout-with-report") | (.diagnostics|length)==0)
+  ' >/dev/null || fail "canonical scout-report index was not consumed as available"
+  pass "absent canonical scout-report index degrades explicitly instead of silently"
 }
 
 test_aggregates_match_detailed_bounded_rows() {
@@ -701,6 +741,7 @@ test_structured_project_secondmate_and_task_rows
 test_local_delivery_validation_and_pr_evidence
 test_reconciled_current_state_vs_event_history
 test_machine_readable_contradiction_diagnostics
+test_absent_scout_report_index_degrades_explicitly
 test_aggregates_match_detailed_bounded_rows
 test_missing_unreadable_malformed_incomplete_and_truncated_inputs
 test_secret_token_and_environment_sentinels_never_serialize
