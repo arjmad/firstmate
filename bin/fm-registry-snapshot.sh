@@ -618,8 +618,7 @@ TASKS_JSON=$(jq -n \
     end;
   def task_for($id): ([$fleet.tasks[]? | select(.id == $id)][0] // null);
   def scout_report_present($id; $task):
-    (($task.hints.scout_report_present // $task.paths.report.present // false) == true)
-    or any($fleet.scout_reports[]?; .id == $id);
+    ($task.hints.scout_report_present == true) or any($fleet.scout_reports[]?; .id == $id);
   def scout_report_recorded($id; $backlog):
     (($backlog.report_path // null) | type) == "string"
     and ($backlog.report_path | endswith("data/" + $id + "/report.md"));
