@@ -23,11 +23,12 @@
 #   diagnostics: bounded machine-readable consistency findings derived from task rows.
 #   counts: aggregate values cross-checked against the detailed section envelopes.
 #
-# Delivery diagnostics follow each task's terminal contract. A `kind=scout` row whose
-# backlog record links its canonical `data/<id>/report.md` and whose report file exists
-# has delivered, so its validation becomes `not_required` with source `scout_report`
-# and it raises no PR, validation, or pushed-branch finding; a done scout without that
-# report raises `reported_done_without_scout_report` instead. Ship rows in the
+# Delivery diagnostics follow each task's terminal contract. A `kind=scout` task
+# delivers its canonical `data/<id>/report.md`, never a PR, so scout validation is
+# `not_required` with source `scout_report` and scout rows never raise the PR-based
+# `reported_done_without_required_pr`, `validation_missing`, or `branch_not_pushed`
+# findings. A done scout whose report artifact exists has delivered; a done scout
+# without it raises `reported_done_without_scout_report` instead. Ship rows in the
 # `no-mistakes` and `direct-PR` modes keep the unchanged PR-based delivery findings.
 #
 # Missing, unreadable, malformed, incomplete, and truncated sources are explicit.
@@ -624,11 +625,10 @@ TASKS_JSON=$(jq -n \
       | if $url == null then null else (($url.scheme + "://" + $url.host + $url.path) | safe(512)) end)
     end;
   def task_for($id): ([$fleet.tasks[]? | select(.id == $id)][0] // null);
+  # Durable evidence that data/<id>/report.md exists. The canonical fleet report index
+  # is scanned from the data root, so it still resolves after task metadata cleanup.
   def scout_report_present($id; $task):
     ($task.hints.scout_report_present == true) or any($fleet.scout_reports[]?; .id == $id);
-  def scout_report_recorded($id; $backlog):
-    (($backlog.report_path // null) | type) == "string"
-    and ($backlog.report_path | endswith("data/" + $id + "/report.md"));
   def git_for($id): ([$git_rows[]? | select(.id == $id)][0] // null);
   def project_for($key): ([$projects.records[]? | select(.key == $key)][0] // null);
   def project_key($backlog; $task):
@@ -652,8 +652,8 @@ TASKS_JSON=$(jq -n \
     elif $section == "queued" then {state:"queued",source:"backlog",detail:null,observed_at:null,freshness:"local",status:"available"}
     elif $section == "done" then {state:"done",source:"backlog",detail:null,observed_at:null,freshness:"retained",status:"available"}
     else {state:"unknown",source:"none",detail:null,observed_at:null,freshness:"unknown",status:"unavailable"} end;
-  def validation_for($mode; $scout_delivered; $task; $current):
-    if $scout_delivered then {required:false,state:"not_required",source:"scout_report",detail:null,status:"available"}
+  def validation_for($mode; $is_scout; $task; $current):
+    if $is_scout then {required:false,state:"not_required",source:"scout_report",detail:null,status:"available"}
     elif $mode != "no-mistakes" then {required:false,state:"not_required",source:"delivery_mode",detail:null,status:"available"}
     elif $task == null then {required:true,state:"unknown",source:"none",detail:null,status:"unavailable"}
     elif $task.current_state.source == "run-step" then
@@ -679,14 +679,13 @@ TASKS_JSON=$(jq -n \
     | clean_kind($task.kind // $backlog.kind // null) as $kind
     | ($kind == "scout") as $is_scout
     | scout_report_present($id; $task) as $scout_report_present
-    | ($is_scout and scout_report_recorded($id; $backlog) and $scout_report_present) as $scout_delivered
     | git_for($id) as $git
     | project_key($backlog; $task) as $project_key
     | project_for($project_key) as $project
     | mode_for($task; $project) as $mode
     | yolo_for($task; $project) as $yolo
     | current_for($backlog.state; $task) as $current
-    | validation_for($mode; $scout_delivered; $task; $current) as $validation
+    | validation_for($mode; $is_scout; $task; $current) as $validation
     | (($task.pr.url // $backlog.pr_url // null)) as $pr_url
     | {id:($id | safe(160)),title:(($backlog.title // null) | safe(200)),section:$backlog.state,
        status:(if $backlog.structured != true or $current.status == "unavailable" then "unavailable" else "available" end),
@@ -734,11 +733,11 @@ TASKS_JSON=$(jq -n \
        decision:decision_for($backlog; $task),
        event_history:event_for($task),
        diagnostics:[]}
-    # Scout reports are the only implemented no-PR terminal contract, and a bare
-    # kind=scout annotation is never trusted on its own: the durable backlog record
-    # must also link data/<id>/report.md and that report must exist. A stale scout
-    # annotation left behind by a promoted ship therefore stays flagged.
-    # A future kind=ops exemption should first define its required durable completion evidence.
+    # kind=scout is the only implemented no-PR terminal contract, so the PR-based
+    # findings below stay scoped to non-scout rows and a done scout is instead measured
+    # against its report artifact. Operational ship actions with no PR are NOT exempt;
+    # a future explicit kind=ops contract must first define the durable completion
+    # evidence it would be measured against before any exemption is added here.
     | .diagnostics = ([
         if $backlog.structured != true then "malformed_backlog_record" else empty end,
         if $backlog.state == "in_flight" and $task == null then "in_flight_without_task_record" else empty end,
@@ -746,11 +745,11 @@ TASKS_JSON=$(jq -n \
         if .delivery_evidence.pr.status == "unavailable" then "invalid_local_pr_evidence" else empty end,
         if .current.state == "done" and $is_scout and $scout_report_present != true
           then "reported_done_without_scout_report" else empty end,
-        if .current.state == "done" and $scout_delivered != true and (.delivery.mode == "no-mistakes" or .delivery.mode == "direct-PR") and .delivery_evidence.pr.url == null
+        if .current.state == "done" and ($is_scout | not) and (.delivery.mode == "no-mistakes" or .delivery.mode == "direct-PR") and .delivery_evidence.pr.url == null
           then "reported_done_without_required_pr" else empty end,
-        if .current.state == "done" and $scout_delivered != true and .delivery.mode == "no-mistakes" and .delivery_evidence.validation.state == "missing"
+        if .current.state == "done" and ($is_scout | not) and .delivery.mode == "no-mistakes" and .delivery_evidence.validation.state == "missing"
           then "validation_missing" else empty end,
-        if .current.state == "done" and $scout_delivered != true and (.delivery.mode == "no-mistakes" or .delivery.mode == "direct-PR")
+        if .current.state == "done" and ($is_scout | not) and (.delivery.mode == "no-mistakes" or .delivery.mode == "direct-PR")
            and (.implementation.push_state == "no_upstream" or .implementation.push_state == "ahead" or .implementation.push_state == "diverged")
           then "branch_not_pushed" else empty end,
         if $backlog.state == "done" and ($task.current_state.state // "done") != "done" and ($task.current_state.state // "done") != "failed"
