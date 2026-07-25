@@ -208,10 +208,12 @@ fetch_once() {
 }
 
 # Which watched instruction paths changed between HEAD and BASE (comma list).
-# These are the files a running agent actually reads or runs: its instructions
-# (AGENTS.md, which CLAUDE.md symlinks), its agent-loaded skills
-# (.agents/skills/), and its tooling (bin/). Public skills/ is installer-facing
-# and intentionally not part of this watched instruction surface.
+# These are the files a re-read nudge can refresh in a running agent: its
+# instructions (AGENTS.md, which CLAUDE.md symlinks), its agent-loaded skills
+# (.agents/skills/), and its tooling (bin/). Tracked harness hook wiring
+# (.claude/settings.json) loads only at session start so a nudge cannot refresh
+# it, and public skills/ is installer-facing; both are intentionally not part
+# of this watched instruction surface.
 changed_instr() {
   local dir=$1 base=$2 p out=""
   for p in AGENTS.md bin .agents/skills; do

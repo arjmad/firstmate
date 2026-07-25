@@ -19,8 +19,8 @@
 #                 "FMX: X mode on ..." or "FMX: X mode off ...".
 #          When a RUNNING secondmate worktree is fast-forwarded to firstmate's
 #          own current default-branch commit (a purely LOCAL fast-forward, never
-#          an origin fetch) AND its loaded instruction surface (AGENTS.md, bin/,
-#          or .agents/skills/) actually changed, bootstrap immediately nudges it
+#          an origin fetch) AND its watched instruction surface (AGENTS.md,
+#          bin/, or .agents/skills/) actually changed, bootstrap immediately nudges it
 #          via FM_HOME=<active-home> bin/fm-send.sh fm-<id> so meta resolves the
 #          current backend target and the standard from-firstmate marker is
 #          applied. A successful send prints one BOOTSTRAP_INFO line with the
