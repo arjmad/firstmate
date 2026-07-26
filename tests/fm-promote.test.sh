@@ -346,6 +346,7 @@ test_rolls_back_backlog_when_metadata_replacement_fails() {
   expect_code 1 "$rc" "metadata replacement failure"
   assert_contains "$out" "metadata update failed for task scout-x1" "metadata replacement failure must name the task"
   assert_contains "$out" "durable backlog kind reset to scout" "metadata replacement failure must report the durable rollback"
+  assert_not_contains "$out" "fm-send.sh" "a promotion that did not stand must not hand over the worker next-command"
   assert_not_contains "$out" "promoted scout-x1 to ship" "a failed promotion must not claim success"
   [ "$(cat "$meta")" = "$meta_before" ] || fail "metadata replacement failure changed metadata"
   assert_grep "(kind: scout)" "$backlog" "the durable backlog kind was not rolled back to scout"
@@ -399,6 +400,7 @@ test_interrupt_after_durable_write_reports_itself_and_rolls_back() {
   expect_code 143 "$rc" "interrupted promotion"
   assert_contains "$out" "interrupted by SIGTERM" "an interrupt must be diagnosed as an interrupt"
   assert_contains "$out" "durable backlog kind reset to scout" "an interrupt after the durable write must roll it back"
+  assert_not_contains "$out" "fm-send.sh" "an interrupt before both records reach ship must not hand over the worker next-command"
   assert_not_contains "$out" "metadata update failed" "an interrupt must not be misreported as a metadata write failure"
   assert_not_contains "$out" "promoted scout-x1 to ship" "an interrupted promotion must not claim success"
   [ "$(cat "$meta")" = "$meta_before" ] || fail "interrupted promotion changed metadata"
@@ -425,6 +427,7 @@ test_interrupt_during_durable_write_still_rolls_back() {
   assert_not_contains "$out" "could not find the promote script to signal" "the fixture failed to land the interrupt in the intended window"
   [ "$rc" -ne 0 ] || fail "an interrupted promotion must exit nonzero"
   assert_contains "$out" "durable backlog kind reset to scout to match the unchanged metadata" "a signal landing on a committed durable write must reconcile it, whichever branch observes the interruption"
+  assert_not_contains "$out" "fm-send.sh" "an interrupt before both records reach ship must not hand over the worker next-command"
   assert_not_contains "$out" "promoted scout-x1 to ship" "an interrupted promotion must not claim success"
   [ "$(cat "$meta")" = "$meta_before" ] || fail "interrupt during the durable write changed metadata"
   assert_grep "(kind: scout)" "$backlog" "the durable backlog was left labeled ship while metadata says scout"
@@ -434,7 +437,7 @@ test_interrupt_during_durable_write_still_rolls_back() {
 }
 
 test_interrupt_after_metadata_swap_keeps_both_records_at_ship() {
-  local case_dir meta backlog fakebin out rc
+  local case_dir meta backlog fakebin out rc home_q
   require_tasks_axi || return 0
   case_dir=$(make_case interrupted-after-swap)
   meta="$case_dir/home/state/scout-x1.meta"
@@ -450,11 +453,42 @@ test_interrupt_after_metadata_swap_keeps_both_records_at_ship() {
   [ "$rc" -ne 0 ] || fail "an interrupted promotion must exit nonzero"
   assert_contains "$out" "the metadata swap had already completed" "an interrupt after the swap must report the promotion as done"
   assert_not_contains "$out" "reset to scout" "an interrupt after the swap must not undo the durable write"
+  assert_contains "$out" "fm-send.sh fm-scout-x1" "a promotion that stands must still hand over the worker next-command"
+  home_q=$(printf '%q' "$case_dir/home")
+  assert_contains "$out" "FM_HOME=$home_q" "the recovered next command must safely quote FM_HOME"
   assert_grep "kind=ship" "$meta" "the completed metadata swap was lost"
   assert_no_grep "kind=scout" "$meta" "the completed metadata swap was reverted"
   assert_grep "(kind: ship)" "$backlog" "an interrupt after the swap left the durable backlog labeled scout while metadata says ship"
   assert_absent "$meta.tmp" "interrupt after the metadata swap left a temporary metadata file"
   pass "an interrupt after the metadata swap leaves both records at ship"
+}
+
+test_interrupt_after_swap_of_meta_with_extra_kind_lines() {
+  local case_dir meta backlog fakebin out rc
+  require_tasks_axi || return 0
+  case_dir=$(make_case interrupted-after-swap-dup-kind)
+  meta="$case_dir/home/state/scout-x1.meta"
+  backlog="$case_dir/home/data/backlog.md"
+  fakebin=$(fm_fakebin "$case_dir")
+  fm_write_meta "$meta" \
+    "window=fm-scout-x1" \
+    "kind=ship" \
+    "kind=scout" \
+    "mode=no-mistakes"
+  add_backlog_task "$case_dir"
+  fake_mv_signalling_after_move "$fakebin" TERM
+
+  rc=0
+  out=$(FM_TEST_PATH="$fakebin:$PATH" run_promote "$case_dir") || rc=$?
+
+  [ "$rc" -ne 0 ] || fail "an interrupted promotion must exit nonzero"
+  assert_contains "$out" "the metadata swap had already completed" "a stale kind=ship line must not hide a completed swap"
+  assert_not_contains "$out" "reset to scout" "a stale kind=ship line must not drive a rollback over completed metadata"
+  [ "$(grep -c '^kind=ship$' "$meta")" -eq 1 ] || fail "the swap must leave exactly one kind=ship line"
+  assert_no_grep "kind=scout" "$meta" "the completed metadata swap was reverted"
+  assert_grep "(kind: ship)" "$backlog" "the durable backlog was reset to scout while metadata says ship"
+  assert_absent "$meta.tmp" "interrupt after the metadata swap left a temporary metadata file"
+  pass "extra kind= lines in the original meta cannot mask a completed swap"
 }
 
 test_promotes_scout_and_updates_backlog
@@ -469,3 +503,4 @@ test_reports_divergence_when_rollback_also_fails
 test_interrupt_after_durable_write_reports_itself_and_rolls_back
 test_interrupt_during_durable_write_still_rolls_back
 test_interrupt_after_metadata_swap_keeps_both_records_at_ship
+test_interrupt_after_swap_of_meta_with_extra_kind_lines

@@ -10,11 +10,13 @@
 # write is attempted, every failure and every HUP/INT/TERM interrupt reconciles the
 # two records from what they actually say rather than from how far the script got,
 # because neither a backend exit status nor a progress flag can be trusted after a
-# signal: if the metadata already says ship the promotion stands and both records
-# stay at ship, otherwise the durable kind is reset to scout - a no-op when the
-# write never landed, and the repair when a killed or failing backend committed it
-# anyway. A reset that itself fails is reported as a durable divergence carrying
-# the backend's own reason. All of these paths exit nonzero rather than claiming
+# signal: if the metadata no longer says scout the swap landed, so the promotion
+# stands, both records stay at ship, and the worker next-command is still printed
+# so an interrupted run can be finished by hand; otherwise the durable kind is
+# reset to scout - a no-op when the write never landed, and the repair when a
+# killed or failing backend committed it anyway. A reset that itself fails is
+# reported as a durable divergence carrying the backend's own reason. All of these
+# paths exit nonzero, keeping the original signal disposition, rather than claiming
 # promotion succeeded.
 # After promoting, send the crewmate its ship instructions via fm-send.sh
 # (inventory scratch state, reset to a clean default-branch base, carry over only
@@ -55,23 +57,26 @@ if ! SHOW_OUT=$(tasks-axi show "$ID" --file "$BACKLOG" 2>&1); then
 fi
 
 TMP="$META.tmp"
-META_HAD_SHIP=0
-if grep -qx 'kind=ship' "$META"; then
-  META_HAD_SHIP=1
-fi
 
 promote_cleanup() {
   rm -f "$TMP"
 }
 
-promote_metadata_says_ship() {
-  [ "$META_HAD_SHIP" -eq 0 ] && grep -qx 'kind=ship' "$META" 2>/dev/null
+promote_next_command() {
+  local home_q
+  home_q=$(printf '%q' "$FM_HOME")
+  echo "next: FM_HOME=$home_q bin/fm-send.sh fm-$ID '<ship instructions: review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/$ID; implement; report done>'"
+}
+
+promote_swap_landed() {
+  [ -f "$META" ] && ! grep -qx 'kind=scout' "$META"
 }
 
 promote_reconcile() {
   local context=$1 out=''
-  if promote_metadata_says_ship; then
-    echo "error: $context; the metadata swap had already completed, so both records stay at ship and the ship instructions were not sent" >&2
+  if promote_swap_landed; then
+    echo "error: $context; the metadata swap had already completed, so both records stay at ship and the promotion stands - only the ship instructions are unsent" >&2
+    promote_next_command >&2
     return 0
   fi
   if out=$(tasks-axi update "$ID" --kind scout --file "$BACKLOG" 2>&1); then
@@ -111,6 +116,5 @@ if ! mv "$TMP" "$META"; then
 fi
 trap - EXIT HUP INT TERM
 
-HOME_Q=$(printf '%q' "$FM_HOME")
 echo "promoted $ID to ship (durable backlog updated; teardown protection restored)"
-echo "next: FM_HOME=$HOME_Q bin/fm-send.sh fm-$ID '<ship instructions: review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/$ID; implement; report done>'"
+promote_next_command
