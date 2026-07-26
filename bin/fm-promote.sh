@@ -6,11 +6,16 @@
 # are owned by .tasks.toml, docs/configuration.md, and current tasks-axi help.
 # Promotion refuses without metadata mutation when config/backlog-backend selects
 # manual, when the configured tasks-axi backend is unavailable or incompatible,
-# or when the durable backlog record for the task is missing. If the final
-# metadata replacement fails, or a HUP/INT/TERM interrupt arrives after the
-# durable write, the backlog kind is rolled back to scout and the script exits
-# nonzero rather than claiming promotion succeeded; an interrupt is reported as an
-# interrupt and a failed rollback as a durable divergence.
+# or when the durable backlog record for the task is missing. Once the durable
+# write is attempted, every failure and every HUP/INT/TERM interrupt reconciles the
+# two records from what they actually say rather than from how far the script got,
+# because neither a backend exit status nor a progress flag can be trusted after a
+# signal: if the metadata already says ship the promotion stands and both records
+# stay at ship, otherwise the durable kind is reset to scout - a no-op when the
+# write never landed, and the repair when a killed or failing backend committed it
+# anyway. A reset that itself fails is reported as a durable divergence carrying
+# the backend's own reason. All of these paths exit nonzero rather than claiming
+# promotion succeeded.
 # After promoting, send the crewmate its ship instructions via fm-send.sh
 # (inventory scratch state, reset to a clean default-branch base, carry over only
 # intended fix changes, create branch fm/<task-id>, implement, then report done
@@ -50,24 +55,38 @@ if ! SHOW_OUT=$(tasks-axi show "$ID" --file "$BACKLOG" 2>&1); then
 fi
 
 TMP="$META.tmp"
-BACKLOG_UPDATED=0
+META_HAD_SHIP=0
+if grep -qx 'kind=ship' "$META"; then
+  META_HAD_SHIP=1
+fi
 
 promote_cleanup() {
   rm -f "$TMP"
 }
 
+promote_metadata_says_ship() {
+  [ "$META_HAD_SHIP" -eq 0 ] && grep -qx 'kind=ship' "$META" 2>/dev/null
+}
+
+promote_reconcile() {
+  local context=$1 out=''
+  if promote_metadata_says_ship; then
+    echo "error: $context; the metadata swap had already completed, so both records stay at ship and the ship instructions were not sent" >&2
+    return 0
+  fi
+  if out=$(tasks-axi update "$ID" --kind scout --file "$BACKLOG" 2>&1); then
+    echo "error: $context; durable backlog kind reset to scout to match the unchanged metadata" >&2
+  else
+    echo "error: $context and the durable backlog reset to scout failed; the backlog may say ship while the metadata says scout" >&2
+    [ -n "$out" ] && printf '%s\n' "$out" >&2
+  fi
+  return 0
+}
+
 promote_interrupt() {
   local sig=$1
   rm -f "$TMP"
-  if [ "$BACKLOG_UPDATED" -eq 1 ]; then
-    if tasks-axi update "$ID" --kind scout --file "$BACKLOG" >/dev/null 2>&1; then
-      echo "error: promotion of $ID interrupted by SIG$sig; durable backlog kind rolled back to scout" >&2
-    else
-      echo "error: promotion of $ID interrupted by SIG$sig and durable backlog rollback also failed; backlog may say ship while metadata says scout" >&2
-    fi
-  else
-    echo "error: promotion of $ID interrupted by SIG$sig; metadata left unchanged" >&2
-  fi
+  promote_reconcile "promotion of $ID interrupted by SIG$sig"
   trap - EXIT HUP INT TERM
   kill -s "$sig" "$$"
 }
@@ -81,20 +100,13 @@ echo "kind=ship" >> "$TMP"
 
 UPDATE_OUT=''
 if ! UPDATE_OUT=$(tasks-axi update "$ID" --kind ship --file "$BACKLOG" 2>&1); then
-  echo "error: durable backlog update failed for task $ID; metadata left unchanged" >&2
   [ -n "$UPDATE_OUT" ] && printf '%s\n' "$UPDATE_OUT" >&2
+  promote_reconcile "durable backlog update failed for task $ID"
   exit 1
 fi
-BACKLOG_UPDATED=1
 
 if ! mv "$TMP" "$META"; then
-  ROLLBACK_OUT=''
-  if ROLLBACK_OUT=$(tasks-axi update "$ID" --kind scout --file "$BACKLOG" 2>&1); then
-    echo "error: metadata update failed for task $ID; durable backlog kind rolled back to scout" >&2
-  else
-    echo "error: metadata update failed for task $ID and durable backlog rollback also failed; backlog may say ship while metadata says scout" >&2
-    [ -n "$ROLLBACK_OUT" ] && printf '%s\n' "$ROLLBACK_OUT" >&2
-  fi
+  promote_reconcile "metadata update failed for task $ID"
   exit 1
 fi
 trap - EXIT HUP INT TERM
