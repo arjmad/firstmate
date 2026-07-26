@@ -1,6 +1,6 @@
 # shellcheck shell=bash
-# Shared tasks-axi backend selection and compatibility probe for bootstrap,
-# teardown, and secondmate backlog handoff.
+# Shared tasks-axi backend selection and compatibility probe for every firstmate
+# script that probes or mutates the durable backlog.
 # Usage: . bin/fm-tasks-axi-lib.sh
 # Compatible means tasks-axi --version reports 0.1.1 or newer,
 # `tasks-axi update --help` exposes --archive-body for recoverable note rewrites,
@@ -8,8 +8,9 @@
 # by secondmate handoffs (introduced in tasks-axi 0.2.2).
 # `config/backlog-backend=manual` opts out of tasks-axi for routine firstmate
 # backlog mutations, but validated secondmate handoffs always use `tasks-axi mv`.
-# Absent or any other value keeps the default tasks-axi backend path, falling
-# back to manual mutation when the tool is not compatible.
+# Absent or any other value keeps the default tasks-axi backend path. What a
+# caller does when the backend is manual or incompatible is that caller's own
+# contract: most fall back to manual mutation, while scout promotion refuses.
 
 fm_tasks_axi_version_parts() {
   local output
