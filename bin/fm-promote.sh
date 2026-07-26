@@ -4,11 +4,13 @@
 # durable backlog kind through the configured tasks-axi backend before flipping
 # kind= to ship in state/<task-id>.meta. The backlog schema and backend selection
 # are owned by .tasks.toml, docs/configuration.md, and current tasks-axi help.
-# Promotion refuses without metadata mutation when the selected backend is manual,
-# tasks-axi is unavailable or incompatible, or the durable backlog record is
-# missing. If the final metadata replacement fails, the backlog kind is rolled
-# back to scout; a failed rollback is reported as a durable divergence and exits
-# nonzero rather than claiming promotion succeeded.
+# Promotion refuses without metadata mutation when config/backlog-backend selects
+# manual, when the configured tasks-axi backend is unavailable or incompatible,
+# or when the durable backlog record for the task is missing. If the final
+# metadata replacement fails, or a HUP/INT/TERM interrupt arrives after the
+# durable write, the backlog kind is rolled back to scout and the script exits
+# nonzero rather than claiming promotion succeeded; an interrupt is reported as an
+# interrupt and a failed rollback as a durable divergence.
 # After promoting, send the crewmate its ship instructions via fm-send.sh
 # (inventory scratch state, reset to a clean default-branch base, carry over only
 # intended fix changes, create branch fm/<task-id>, implement, then report done
@@ -48,7 +50,32 @@ if ! SHOW_OUT=$(tasks-axi show "$ID" --file "$BACKLOG" 2>&1); then
 fi
 
 TMP="$META.tmp"
-trap 'rm -f "$TMP"' EXIT HUP INT TERM
+BACKLOG_UPDATED=0
+
+promote_cleanup() {
+  rm -f "$TMP"
+}
+
+promote_interrupt() {
+  local sig=$1
+  rm -f "$TMP"
+  if [ "$BACKLOG_UPDATED" -eq 1 ]; then
+    if tasks-axi update "$ID" --kind scout --file "$BACKLOG" >/dev/null 2>&1; then
+      echo "error: promotion of $ID interrupted by SIG$sig; durable backlog kind rolled back to scout" >&2
+    else
+      echo "error: promotion of $ID interrupted by SIG$sig and durable backlog rollback also failed; backlog may say ship while metadata says scout" >&2
+    fi
+  else
+    echo "error: promotion of $ID interrupted by SIG$sig; metadata left unchanged" >&2
+  fi
+  trap - EXIT HUP INT TERM
+  kill -s "$sig" "$$"
+}
+
+trap promote_cleanup EXIT
+trap 'promote_interrupt HUP' HUP
+trap 'promote_interrupt INT' INT
+trap 'promote_interrupt TERM' TERM
 grep -v '^kind=' "$META" > "$TMP"
 echo "kind=ship" >> "$TMP"
 
@@ -58,6 +85,7 @@ if ! UPDATE_OUT=$(tasks-axi update "$ID" --kind ship --file "$BACKLOG" 2>&1); th
   [ -n "$UPDATE_OUT" ] && printf '%s\n' "$UPDATE_OUT" >&2
   exit 1
 fi
+BACKLOG_UPDATED=1
 
 if ! mv "$TMP" "$META"; then
   ROLLBACK_OUT=''
