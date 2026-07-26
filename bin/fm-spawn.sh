@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--title <short>] [--scout]
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--title <short>] [--reuse-worktree <path>] [--scout]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--title <short>] --secondmate
 #   <project-dir> accepts a projects/<name> path, an explicit absolute or
 #   slash-containing relative path, or a bare registered project name resolved
@@ -21,6 +21,12 @@
 #   operational endpoint, tab label, ownership, and selector metadata remain task-id
 #   based. title= is recorded in state/<id>.meta only when the flag was explicit.
 #   tmux keeps its fm-<id> window name because that name is also its recorded target.
+#   --reuse-worktree <path> is a single ship/scout relaunch path for a caller-selected
+#   existing git worktree. It resolves and validates the path before endpoint creation,
+#   starts the task there, and skips treehouse get. The path must be the worktree root
+#   and must remain distinct from the primary project checkout; the ordinary isolation
+#   assertion is mandatory. It cannot be combined with batch, --secondmate, or Orca,
+#   whose backend owns worktree creation. Without this flag, allocation is unchanged.
 #   Local model endpoints: for a template-based claude launch, when --model matches
 #   an entry in config/model-endpoints.json, the SAME claude CLI is redirected at a
 #   local Anthropic-shaped proxy (endpoint env prefix + --strict-mcp-config; an
@@ -172,11 +178,13 @@ MODEL=
 EFFORT=
 BACKEND_ARG=
 TITLE=
+REUSE_WORKTREE=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
 BACKEND_SET=0
 TITLE_SET=0
+REUSE_WORKTREE_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -190,6 +198,7 @@ for a in "$@"; do
       effort) EFFORT=$a; EFFORT_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
       title) TITLE=$a; TITLE_SET=1 ;;
+      reuse-worktree) REUSE_WORKTREE=$a; REUSE_WORKTREE_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -208,6 +217,8 @@ for a in "$@"; do
     --backend=*) BACKEND_ARG=${a#--backend=}; BACKEND_SET=1 ;;
     --title) want_value=title ;;
     --title=*) TITLE=${a#--title=}; TITLE_SET=1 ;;
+    --reuse-worktree) want_value=reuse-worktree ;;
+    --reuse-worktree=*) REUSE_WORKTREE=${a#--reuse-worktree=}; REUSE_WORKTREE_SET=1 ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -219,6 +230,11 @@ done
 [ "$TITLE_SET" -eq 0 ] || [ -n "$TITLE" ] || { echo "error: --title requires a non-empty value" >&2; exit 1; }
 if [ "$TITLE_SET" -eq 1 ] && printf '%s' "$TITLE" | LC_ALL=C grep -q '[[:cntrl:]]'; then
   echo "error: --title must not contain control characters" >&2
+  exit 1
+fi
+[ "$REUSE_WORKTREE_SET" -eq 0 ] || [ -n "$REUSE_WORKTREE" ] || { echo "error: --reuse-worktree requires a non-empty value" >&2; exit 1; }
+if [ "$REUSE_WORKTREE_SET" -eq 1 ] && [ "$KIND" = secondmate ]; then
+  echo "error: --reuse-worktree cannot be combined with --secondmate; secondmates launch in their provisioned home" >&2
   exit 1
 fi
 case "$EFFORT" in
@@ -242,6 +258,10 @@ fm_backend_validate_spawn "$BACKEND" || exit 1
 fm_backend_source "$BACKEND" || exit 1
 if [ "$BACKEND" = orca ] && [ "$KIND" = secondmate ]; then
   echo "error: backend=orca does not support --secondmate spawns yet" >&2
+  exit 1
+fi
+if [ "$BACKEND" = orca ] && [ "$REUSE_WORKTREE_SET" -eq 1 ]; then
+  echo "error: --reuse-worktree cannot be combined with backend=orca; Orca owns worktree creation" >&2
   exit 1
 fi
 if [ "$BACKEND" = cmux ] && [ "$KIND" = secondmate ]; then
@@ -378,6 +398,10 @@ spawn_herdr_presentation_order_lock_release() {
 idpart=${POS[0]:-}
 idpart=${idpart%%=*}
 if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in */*) false ;; *) true ;; esac; then
+  if [ "$REUSE_WORKTREE_SET" -eq 1 ]; then
+    echo "error: --reuse-worktree cannot be used with batch dispatch; each task must name its own existing worktree" >&2
+    exit 1
+  fi
   if [ "$KIND" != secondmate ] && [ -z "$HARNESS_ARG" ] && [ -f "$CONFIG/crew-dispatch.json" ]; then
     echo "error: config/crew-dispatch.json is active - pass an explicit harness resolved from the dispatch rules (the consultation backstop, so the rules are never silently skipped)." >&2
     exit 1
@@ -964,6 +988,20 @@ validate_spawn_worktree() {  # <source> <inspect-target>
   fi
 }
 
+SPAWN_CWD=$PROJ_ABS
+if [ "$REUSE_WORKTREE_SET" -eq 1 ]; then
+  if [ ! -d "$REUSE_WORKTREE" ]; then
+    echo "error: --reuse-worktree path does not exist or is not a directory: $REUSE_WORKTREE" >&2
+    exit 1
+  fi
+  WT=$(cd "$REUSE_WORKTREE" 2>/dev/null && pwd -P) || {
+    echo "error: --reuse-worktree path could not be resolved: $REUSE_WORKTREE" >&2
+    exit 1
+  }
+  validate_spawn_worktree "--reuse-worktree path" "$REUSE_WORKTREE"
+  SPAWN_CWD=$WT
+fi
+
 herdr_projection_meta_field_exact() {  # <meta> <key>
   local meta=$1 key=$2 count
   [ -f "$meta" ] && [ ! -L "$meta" ] || return 1
@@ -1051,7 +1089,7 @@ case "$BACKEND" in
     # treehouse cd's into the worktree. WT_TARGET carries that stable id for the
     # rename-critical worktree-detection steps below; the persisted window= handle
     # stays $T (the name form), which is safe now that rename is disabled.
-    WID=$(fm_backend_tmux_create_task "$SES" "$W" "$PROJ_ABS") || exit 1
+    WID=$(fm_backend_tmux_create_task "$SES" "$W" "$SPAWN_CWD") || exit 1
     WT_TARGET="$WID"
     ;;
   herdr)
@@ -1094,7 +1132,7 @@ case "$BACKEND" in
           FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_reclaim_task \
             "$HERDR_SES" "$HERDR_PRESENTATION_JOURNAL" "$ID" "$HERDR_LABEL_HOME" \
             "$HERDR_RECOVERY_WORKSPACE_ID" "$HERDR_RECOVERY_TAB_ID" "$HERDR_RECOVERY_PANE_ID" \
-            "$HERDR_PARENT_LABEL" "$W" "$PROJ_ABS"
+            "$HERDR_PARENT_LABEL" "$W" "$SPAWN_CWD"
           HERDR_RECLAIM_STATUS=$?
           set -e
           case "$HERDR_RECLAIM_STATUS" in
@@ -1132,7 +1170,7 @@ case "$BACKEND" in
             HERDR_PROJECTION_ID=$(fm_backend_herdr_projection_journal_create "$STATE" "$ID") || exit 1
             HERDR_PROJECTION_LABEL=$(fm_backend_herdr_projection_workspace_label "$ID" "$HERDR_PROJECTION_ID")
             if ! FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_create_task \
-              "$PROJ_ABS" "$HERDR_PROJECTION_LABEL" "$W"; then
+              "$SPAWN_CWD" "$HERDR_PROJECTION_LABEL" "$W"; then
               if [ "${FM_BACKEND_HERDR_PROJECTION_CLEANUP_SAFE:-0}" = 1 ]; then
                 HERDR_PROJECTION_ABORT_CLEANUP=1
                 HERDR_PROJECTION_ABORT_SESSION=$FM_BACKEND_HERDR_PROJECTION_SESSION
@@ -1185,7 +1223,7 @@ case "$BACKEND" in
       HERDR_SEEDED_DEFAULT_TAB_ID=${HERDR_CONTAINER_RAW#*$'\t'}
       HERDR_SES=${CONTAINER%%:*}
       HERDR_WORKSPACE_ID=${CONTAINER#*:}
-      HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task "$CONTAINER" "$W" "$PROJ_ABS" "$HERDR_SEEDED_DEFAULT_TAB_ID") || exit 1
+      HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task "$CONTAINER" "$W" "$SPAWN_CWD" "$HERDR_SEEDED_DEFAULT_TAB_ID") || exit 1
       read -r HERDR_TAB_ID HERDR_PANE_ID <<EOF
 $HERDR_TASK_IDS
 EOF
@@ -1200,7 +1238,7 @@ EOF
     ;;
   zellij)
     ZELLIJ_SES=$(fm_backend_zellij_container_ensure) || exit 1
-    ZELLIJ_TASK_IDS=$(fm_backend_zellij_create_task "$ZELLIJ_SES" "$W" "$PROJ_ABS") || exit 1
+    ZELLIJ_TASK_IDS=$(fm_backend_zellij_create_task "$ZELLIJ_SES" "$W" "$SPAWN_CWD") || exit 1
     read -r ZELLIJ_TAB_ID ZELLIJ_PANE_ID <<EOF
 $ZELLIJ_TASK_IDS
 EOF
@@ -1212,7 +1250,7 @@ EOF
     ;;
   cmux)
     fm_backend_cmux_container_ensure || exit 1
-    CMUX_TASK_IDS=$(fm_backend_cmux_create_task "$W" "$PROJ_ABS") || exit 1
+    CMUX_TASK_IDS=$(fm_backend_cmux_create_task "$W" "$SPAWN_CWD") || exit 1
     read -r CMUX_WORKSPACE_ID CMUX_SURFACE_ID <<EOF
 $CMUX_TASK_IDS
 EOF
@@ -1251,7 +1289,7 @@ esac
 # #134 robustness: only tmux needs a worktree-detection target distinct from $T -
 # its rename-safe stable window id, set as WT_TARGET=$WID in the tmux branch above.
 # Every other backend addresses its pane/surface by the id already in $T, so default
-# WT_TARGET to $T for them (and for any future backend) - the shared treehouse-get +
+# WT_TARGET to $T for them (and for any future backend) - the default treehouse-get +
 # worktree-detection steps below must never reference an unbound WT_TARGET under set -u.
 : "${WT_TARGET:=$T}"
 spawn_send_text_line() {  # <target> <text>
@@ -1341,7 +1379,7 @@ kimi_spawn_fail() {  # <detail>
   echo "error: $1; inspect window $T" >&2
 }
 
-if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] && [ "$REUSE_WORKTREE_SET" -eq 0 ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
