@@ -47,12 +47,11 @@
 #   Spawn-capable backends are the reference tmux adapter and experimental
 #   herdr, zellij, orca, and cmux. Orca owns both the task worktree and
 #   terminal, so ship/scout Orca spawns do not run treehouse get; cmux is a
-#   session provider only, exactly like herdr/zellij, so it does. An
+#   session provider only, exactly like herdr/zellij, so it does.
 #   Selection notices and auto-detection eligibility are owned by
 #   bin/fm-backend.sh. codex-app is not a known backend yet;
-#   docs/codex-app-backend.md owns that
-#   blocked backend contract. Default tmux spawns do not write backend= to meta;
-#   absent backend= means tmux. cmux does not support --secondmate spawns yet.
+#   docs/codex-app-backend.md owns that blocked backend contract. Default tmux
+#   spawns do not write backend= to meta; absent backend= means tmux. cmux does not support --secondmate spawns yet.
 #   A backend spawn refusal (missing dependency, version gate, unauthenticated
 #   socket, or unsupported secondmate mode) is terminal for that selected backend;
 #   callers must surface it instead of silently retrying another backend.

@@ -220,9 +220,14 @@ fm_backend_detect_cmux_app_is_ancestor() {
 # deleted, fm_backend_detect's documented innermost-first runtime markers, and
 # finally tmux. config/backend comments have no special syntax and therefore
 # become ordinary values after whitespace deletion. Auto-detection runs only
-# when no explicit source selected a value. Auto-detected herdr or cmux prints
-# one notice, while auto-detected tmux stays silent. The cmux notice names the
-# winning primary or fallback signal.
+# when no explicit source selected a value, and it can resolve ONLY tmux, herdr,
+# or cmux - fm_backend_detect carries no zellij or orca marker. So zellij and
+# orca are never selected implicitly: they require one of the explicit sources
+# above (`--backend <name>`, `FM_BACKEND=<name>`, or a config/backend line), and
+# a firstmate running inside zellij or Orca without one of those resolves to the
+# tmux fallback. Auto-detected herdr or cmux prints one notice, while
+# auto-detected tmux stays silent. The cmux notice names the winning primary or
+# fallback signal.
 fm_backend_name() {
   local line v detected marker
   if [ -n "${FM_BACKEND:-}" ]; then
