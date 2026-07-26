@@ -13,7 +13,7 @@ It does not replace `AGENTS.md`, `docs/orca-backend.md`, or `harness-adapters`.
 
 Orca is a runtime backend, not an agent harness.
 The runtime backend owns the task endpoint and, for Orca, the task worktree.
-The harness is the agent process launched inside that endpoint, such as `claude`, `codex`, `opencode`, `pi`, or `grok`.
+The harness is the verified agent process launched inside that endpoint, with the adapter set owned by `harness-adapters`.
 Load `harness-adapters` for harness-specific launch, interrupt, resume, trust-dialog, and skill-invocation facts.
 
 Implementation details, metadata fields, teardown guarantees, limitations, and smoke evidence live in `docs/orca-backend.md`.
@@ -22,12 +22,11 @@ Use raw `orca` only when the helper surface cannot answer the inspection questio
 
 ## Preflight
 
-Work from the current firstmate home or repo root.
-If `FM_HOME` is set, remember that operational state lives under `$FM_HOME` while the helper scripts still run from this repo's `bin/`.
+Resolve the current code root and operational home through the layout contract in `docs/configuration.md` before preflight.
 
 Before switching or spawning against Orca:
 
-- Confirm Orca is intentionally selected through `--backend orca`, `FM_BACKEND=orca`, or local `config/backend`.
+- Confirm Orca is intentionally selected under the precedence owned by `bin/fm-backend.sh`.
 - Confirm the Orca app is running and the backend readiness checks pass before expecting spawn to work.
 - Inspect active `state/*.meta` records before changing backend selection.
 - Treat a backend switch as affecting future spawns only; existing tasks keep their recorded backend.

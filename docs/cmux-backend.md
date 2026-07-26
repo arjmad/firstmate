@@ -48,10 +48,9 @@ If you prefer **Password mode** instead: set the mode and a password in Settings
 A configured password is harmless if you later switch to Automation mode: cmux's CLI sends the `auth` handshake preemptively and tolerates the server's "Unknown command 'auth'" reply in non-password modes (verified from source, `cli/cmux.swift` `authenticateSocketClientIfNeeded`).
 Do not edit `~/.config/cmux/cmux.json` by hand for any of this: the mode change cannot be applied over the socket that is itself still rejecting connections, and the app's config writer drops a hand-added `socketPassword` key entirely (see "Socket control modes" below for that finding).
 
-Ask the firstmate crew to select cmux by putting `cmux` in a local `config/backend` file - the durable way to pick it - or by exporting `FM_BACKEND=cmux` for a one-off session; telling the first mate in chat to use cmux also works.
-cmux is also selected by **runtime auto-detection**: a firstmate process itself running inside a cmux-spawned terminal (`CMUX_WORKSPACE_ID` set - or, when cmux's bundled claude wrapper stripped that marker, the bundle-id/ancestry fallback signals - checked after `$TMUX`/`HERDR_ENV=1` since cmux is the outermost terminal application, not a nestable multiplexer) spawns new tasks into cmux by default, with no config needed, exactly like herdr's own auto-detection - see "Runtime auto-detection" below.
-Auto-detection only ever picks a SESSION provider; it never touches the one-time socket-access setup above, which stays required regardless of how cmux was selected.
-A cmux spawn refuses loudly, with an actionable message pointing back to this document, if the app is unreachable, the socket rejects the connection (`cmuxOnly` mode still active), or a password is required but not configured or was rejected; the refusal names every viable mode with Automation mode as the recommendation, plus the `config/backend`/`--backend tmux` opt-out for a caller who ended up on cmux only because auto-detection picked it.
+Select cmux through the configuration values in [`configuration.md`](configuration.md#runtime-backend-configbackend--fm_backend); `bin/fm-backend.sh` owns exact precedence, runtime detection, and notices.
+Selection never changes the one-time socket-access requirement above.
+A cmux spawn refuses with an actionable setup diagnostic if the app or control socket is unavailable or authentication fails.
 
 No first-run provisioning beyond the socket-access setup above and having `jq` installed; firstmate creates the workspace it needs on first spawn, launching the app itself (`open -a cmux`) if it is not already running.
 
@@ -66,10 +65,9 @@ Limitations: cmux is experimental, macOS-only, GUI-first (never viable for a hea
 
 ## Status: experimental
 
-cmux is experimental, exactly like every non-tmux backend in this design.
-Select it by putting `cmux` in a local `config/backend` file, by exporting `FM_BACKEND=cmux`, by telling the first mate in chat to use cmux, or implicitly by runtime auto-detection when firstmate itself is already running inside a cmux-spawned terminal - see "Runtime auto-detection" below.
-GUI-first and macOS-only stay unchanged by that: cmux is never a candidate for a headless/CI/SSH-only instance, because auto-detection can only fire from inside a live cmux terminal in the first place, which such an instance never is.
-Absent `backend=` in a task's meta always means `tmux`; only a cmux task ever carries an explicit `backend=cmux` line.
+cmux is experimental, GUI-first, and macOS-only.
+Selection and fallback follow the single owner in `bin/fm-backend.sh`, while this document retains cmux-specific empirical evidence and support limits.
+A cmux task carries an explicit `backend=cmux` line; the shared metadata compatibility contract remains owned by `bin/fm-backend.sh`.
 A cmux spawn refuses loudly if the `cmux` CLI cannot be found, the installed version is older than the verified minimum (0.64), or the control socket is unreachable/unauthenticated (`fm_backend_cmux_version_check`, `fm_backend_cmux_ensure_running`).
 
 ## Runtime auto-detection
@@ -77,15 +75,9 @@ A cmux spawn refuses loudly if the `cmux` CLI cannot be found, the installed ver
 Verified from the shipped app source (`Packages/macOS/CmuxTerminal/Sources/CmuxTerminal/Spawn/TerminalSurface+StartupEnvironment.swift`'s `applyManagedCmuxContextEnvironment`, cloned read-only from `github.com/manaflow-ai/cmux` at the commit current on 2026-07-04): every terminal surface cmux spawns gets `CMUX_WORKSPACE_ID`, `CMUX_SURFACE_ID`, and `CMUX_SOCKET_PATH` (plus the legacy `CMUX_TAB_ID`/`CMUX_PANEL_ID` aliases) injected into its environment, and all five keys are marked `protectedKeys` - non-overridable by anything the spawned shell or its own env config does afterward.
 cmux's own CLI corroborates this is a legitimate ambient-identity marker, not incidental: `cmux_open.swift` reads `CMUX_WORKSPACE_ID`/`CMUX_SURFACE_ID` from the environment as its own fallback target when a caller does not pass `--workspace`/`--surface`, exactly how `$TMUX` and `HERDR_ENV`/`HERDR_PANE_ID` work for their own backends.
 
-`fm_backend_detect` (`bin/fm-backend.sh`) checks `CMUX_WORKSPACE_ID` (non-empty) as the PRIMARY cmux marker, not `CMUX_SOCKET_PATH`: the latter is separately documented as a user-settable override for pointing the CLI at a non-default socket path, so its mere presence would not reliably mean "running inside a cmux-spawned terminal" the way `CMUX_WORKSPACE_ID` does.
-Nesting still resolves innermost-first, exactly as it does for herdr: `$TMUX` is checked first, then `HERDR_ENV=1`, then the cmux checks last.
-cmux is checked last deliberately, not because it is a "lesser" backend, but because it is a terminal application - the outermost layer, like iTerm2/Terminal.app - not a session multiplexer.
-Both tmux and herdr can run nested inside a cmux-provided shell (someone starts a tmux or herdr session from within a cmux terminal), but cmux itself cannot run nested inside either of them, so whenever a multiplexer marker is present alongside a cmux signal, that multiplexer really is the innermost, currently-executing layer and must win.
-An auto-detected cmux spawn prints the same loud stderr `NOTICE` herdr's auto-detection prints, naming the winning signal and the `config/backend`/`--backend tmux` opt-out; a fallback-signal detection (below) says so explicitly in that notice, so it is visibly distinct from the primary-marker case.
-
-Auto-detection selects the SESSION provider only.
-It has no bearing on the one-time socket-access setup ("Setup" above): a viable `automation.socketControlMode` is still required for the very first cmux-backed spawn to succeed, auto-detected or explicit, and the existing loud spawn refusal (`fm_backend_cmux_ensure_running`) still fires when it is missing.
-That refusal message names the viable modes and the `config/backend`/`--backend tmux` opt-out, so a captain who never explicitly chose cmux - and only landed on it because firstmate happened to be launched from inside a cmux terminal - gets a self-contained answer either way: finish the socket setup to actually use cmux, or opt out back to tmux.
+The source evidence above establishes `CMUX_WORKSPACE_ID` as the primary cmux marker and shows why `CMUX_SOCKET_PATH` is not sufficient.
+`bin/fm-backend.sh` owns the exact position of that marker, fallback signals, notices, and overall runtime-detection precedence.
+The one-time socket-access setup remains required regardless of how the owner selected cmux.
 
 The original build's env-injection finding rested on the source read above alone; it has since been corroborated live (2026-07-04, cmux 0.64.17 build 97): the inherited environment of a tmux server started from a cmux tab on the reference machine carries `CMUX_WORKSPACE_ID`, `CMUX_TAB_ID`, `CMUX_SOCKET_PATH`, `CMUX_BUNDLE_ID`, and `__CFBundleIdentifier=com.cmuxterm.app` into every pane, and firstmate separately confirmed the full injected set on a live tab shell via `ps eww`.
 
@@ -366,7 +358,7 @@ All three tasks' cmux workspaces and worktrees were confirmed fully cleaned up a
 
 - **No event push at all**, not even herdr's semantic busy-state: cmux has agent-awareness elsewhere (Claude Code hooks, session-resume) but nothing exposed over the socket API for generic busy/idle classification, so `fm-watch.sh`'s existing pane-hash + `FM_BUSY_REGEX` poll loop is the ONLY event source for this backend, identical to the tmux/zellij/Orca path.
 - **GUI-first, macOS-only, requires the app running** - identical posture to Orca.
-  Never a candidate for a headless/CI firstmate instance, because runtime auto-detection (cmux runtime signals; see "Runtime auto-detection" above) can only fire from inside a live cmux terminal in the first place.
+  It is never viable for a headless or CI firstmate instance; `bin/fm-backend.sh` owns selection eligibility.
   The one-time socket-access setup remains an unavoidable manual step regardless of how the backend was selected.
 - **`--secondmate` spawns are refused** (mirrors Orca's refusal) - no per-home container design (a herdr-style workspace-per-home split, or similar) has been designed or verified for cmux yet.
 - **The one-time socket-access setup is a real, undocumented-by-upstream onboarding step.** A captain who selects `backend=cmux` without first switching `automation.socketControlMode` away from its `cmuxOnly` default to a viable mode (Automation mode recommended; see "Setup") will see every spawn fail with an actionable error naming the viable modes and pointing back to this document, but there is no way for firstmate to complete that GUI-only setup step on the captain's behalf.

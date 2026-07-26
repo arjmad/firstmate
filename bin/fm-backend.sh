@@ -7,25 +7,11 @@
 # abstraction"). P1 extracted the tmux command sequences that fm-send.sh,
 # fm-peek.sh, fm-watch.sh, fm-spawn.sh, and fm-teardown.sh already ran inline
 # into bin/backends/tmux.sh, with those SAME command sequences, so the default
-# (tmux) path stays byte-identical. P2 adds bin/backends/herdr.sh, an
-# EXPERIMENTAL spawn-capable backend behind `--backend herdr`/`FM_BACKEND=herdr`/
-# `config/backend`, and behind runtime auto-detection when firstmate itself is
-# running inside herdr with no explicit backend setting; see herdr-addendum.md and
-# data/fm-backend-design-d7/herdr-verification-p2.md for its empirical basis.
-# P3 adds bin/backends/zellij.sh, also EXPERIMENTAL and spawn-capable, behind
-# `--backend zellij`/`FM_BACKEND=zellij`/`config/backend` - NOT behind runtime
-# auto-detection (report.md's Open Question #2: start with a dedicated
-# background session for predictability, unlike tmux's/herdr's ambient-session
-# reuse); see report.md's "Zellij Backend" section and docs/zellij-backend.md
-# for its empirical basis. P4 makes Orca spawn-capable: Orca owns both the
-# task worktree and the terminal endpoint. P5 adds bin/backends/cmux.sh, also
-# EXPERIMENTAL and spawn-capable, behind `--backend cmux`/`FM_BACKEND=cmux`/
-# `config/backend`, and behind runtime auto-detection when firstmate itself is
-# running inside a cmux-spawned terminal (primary CMUX_WORKSPACE_ID marker, or
-# the documented macOS fallback signals when cmux's claude wrapper strips that
-# marker) with no explicit backend setting - unlike Orca, which stays
-# never-auto-detected because it also owns the task worktree; see
-# docs/cmux-backend.md for its empirical basis.
+# (tmux) path stays byte-identical. P2 adds the experimental Herdr adapter, P3
+# adds the experimental Zellij adapter, P4 makes Orca spawn-capable while Orca
+# owns both worktree and terminal, and P5 adds the experimental cmux adapter.
+# The backend guides retain each adapter's empirical basis, while the selection
+# owner below defines their current eligibility without repeating it here.
 # Codex App is intentionally not in the known set yet.
 # docs/codex-app-backend.md owns that blocked backend contract.
 #
@@ -227,19 +213,16 @@ fm_backend_detect_cmux_app_is_ancestor() {
   return 1
 }
 
-# fm_backend_name: resolve the ACTIVE backend for a NEW spawn, absent an
-# explicit per-task override. Precedence: FM_BACKEND env, then config/backend
-# (a single word on its first non-empty line, mirroring config/crew-harness),
-# then runtime auto-detection (fm_backend_detect), then default tmux. A
-# per-task `--backend` flag is parsed by the caller (fm-spawn.sh) and takes
-# precedence over this resolution entirely; it is not read here. Auto-detect
-# fires only when nothing was explicitly configured, so an explicit setting
-# always wins. Selecting herdr or cmux via auto-detect prints one loud stderr
-# notice (both are experimental); auto-detecting tmux stays silent - it is
-# today's default-path behavior and callers must see zero change. The cmux
-# notice names the winning signal, so a fallback-detected cmux (bundle id or
-# ancestry, after the claude wrapper stripped CMUX_WORKSPACE_ID) is visibly
-# distinct from the primary-marker case.
+# fm_backend_name: single owner of exact backend precedence for a NEW spawn.
+# A non-empty per-task `--backend` parsed by fm-spawn.sh wins first; an explicit
+# blank value is rejected there. This resolver then uses a non-empty FM_BACKEND,
+# the first config/backend line that remains non-empty after ALL whitespace is
+# deleted, fm_backend_detect's documented innermost-first runtime markers, and
+# finally tmux. config/backend comments have no special syntax and therefore
+# become ordinary values after whitespace deletion. Auto-detection runs only
+# when no explicit source selected a value. Auto-detected herdr or cmux prints
+# one notice, while auto-detected tmux stays silent. The cmux notice names the
+# winning primary or fallback signal.
 fm_backend_name() {
   local line v detected marker
   if [ -n "${FM_BACKEND:-}" ]; then

@@ -11,23 +11,11 @@
 # declared-pause recheck reach the LLM, and even then as one pre-read digest per
 # batch window.
 #
-# PRESENCE-GATING (the /afk contract). The daemon is the away-mode engine: it
-# injects ONLY when the durable away-mode flag state/.afk is present. Invoking
-# the /afk skill sets that flag and starts this daemon; any real (unmarked)
-# user message clears it and firstmate resumes full responsiveness.
-# When afk is off, normal fm-watch.sh always-on triage is the active mechanism.
-# Any buffered daemon escalations that remain while afk is off survive in
-# state/.subsuper-escalations and are flushed on the next "while you were out"
-# catch-up or when afk is re-entered.
-#
-# IN-BAND SENTINEL MARKER. Every daemon injection is prefixed with
-# FM_INJECT_MARK (U+2063 INVISIBLE SEPARATOR), a character a human cannot type
-# from a normal keyboard at the start of a message and Herdr transports as text.
-# Firstmate's contract: a message that starts with the marker is an internal
-# escalation (stay afk); a message without it means the captain is back (exit
-# afk, flush catch-up, resume per-wake responsiveness). The marker and the
-# busy-guard solve the same problem - the daemon and the human share one input
-# channel - so they live together under /afk.
+# PRESENCE-GATING AND SENTINEL. The /afk skill is the single owner of the
+# operator lifecycle and marker interpretation. This daemon enforces that
+# contract by injecting only while state/.afk exists and prefixing every
+# injection with FM_INJECT_MARK (U+2063 INVISIBLE SEPARATOR). Buffered
+# escalations survive outside away mode for the owner's ordered catch-up path.
 #
 # Reliability model (see the /afk skill):
 #   - Nothing is lost in away mode: while state/.afk exists, the watcher reverts
@@ -102,13 +90,9 @@
 #                                   undelivered before one normal flush attempt;
 #                                   if that cannot confirm a submit, a wedge
 #                                   alarm fires (default 300; 0 disables)
-#          FM_WEDGE_ALARM_CHANNEL   override config/wedge-alarm with a single
-#                                   active-alert directive for that wedge alarm
-#                                   (off|auto|osascript|herdr|command:<cmd>). An
-#                                   absent file/var means auto: on macOS that is
-#                                   an OS-level notification, so the alarm is
-#                                   never silent. See wedge_alarm_notify below
-#                                   and docs/configuration.md.
+#          FM_WEDGE_ALARM_CHANNEL   single-directive override governed by
+#                                   docs/configuration.md "Away-mode wedge alarm
+#                                   channels"; implementation is below.
 #          FM_WEDGE_ALARM_EXEC      notifier seam: when set, every notifier
 #                                   channel routes through this command as
 #                                   `<cmd> <channel> <summary>` instead of
@@ -642,22 +626,11 @@ escalate_flush() {  # <state>
 # skipped, never crashing the daemon loop - and the durable marker plus the tmux
 # flash stay exactly as before.
 #
-# Config: config/wedge-alarm (local, gitignored), one channel directive per
-# non-empty, non-comment line. FM_WEDGE_ALARM_CHANNEL overrides the file with a
-# single directive. Directives:
-#   off              disable the active alert entirely, regardless of position
-#                    (marker + flash remain)
-#   auto | default   platform default: macOS -> osascript; otherwise none
-#   osascript        macOS Notification Center banner (backend-independent)
-#   herdr            herdr UI notification (herdr notification show)
-#   command:<cmd>    run <cmd> via `sh -c`, summary on $1 and on stdin
-# An absent config means auto, i.e. default-ON on macOS: the alarm's whole
-# purpose is to never be silent, so the reachable OS channel fires unless the
-# captain explicitly disables it.
+# docs/configuration.md "Away-mode wedge alarm channels" is the single owner of
+# the file and environment schema. The functions below implement that schema and
+# own exact invocation, timeout, and failure mechanics.
 
-# Print the configured channel directives, one per line. FM_WEDGE_ALARM_CHANNEL
-# wins (a single directive); else each non-empty, non-comment line of
-# config/wedge-alarm; else "auto".
+# Print the configured channel directives resolved by the owning schema.
 wedge_alarm_configured_channels() {
   local cfg line found=
   if [ -n "${FM_WEDGE_ALARM_CHANNEL:-}" ]; then

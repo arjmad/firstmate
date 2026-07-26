@@ -1,7 +1,7 @@
 # tmux runtime backend (reference)
 
 tmux is firstmate's verified reference runtime backend: the session provider every other backend is compared against, and the fully verified baseline for secondmate support.
-This is the setup guide; for the shared runtime-backend abstraction and selection order, see [`docs/architecture.md`](architecture.md) ("Runtime session backends") and [`docs/configuration.md`](configuration.md) ("Runtime backend").
+This is the setup guide; `bin/fm-backend.sh`'s header owns the shared selection order, and [`configuration.md`](configuration.md#runtime-backend-configbackend--fm_backend) owns accepted configuration values.
 
 ## What it is and when to pick it
 
@@ -16,10 +16,8 @@ Pick tmux unless you have a specific reason to try an experimental backend (herd
 
 ## Selecting it
 
-tmux is the hard default: it needs no explicit selection.
-It is also what firstmate falls back to when nothing else is set - no local `config/backend` file, no `FM_BACKEND`, no explicit `--backend` flag firstmate passes internally when it spawns a task - and runtime auto-detection (see below) does not pick anything either.
-You can still select it explicitly by putting `tmux` in a local `config/backend` file - the durable way to pick it - or by exporting `FM_BACKEND=tmux` when you launch your harness for a one-off session; telling the first mate in chat to use tmux also works.
-This mainly matters as an opt-out of herdr or cmux runtime auto-detection (see [`docs/herdr-backend.md`](herdr-backend.md) and [`docs/cmux-backend.md`](cmux-backend.md)).
+tmux is the default when the selection owner resolves no other backend.
+Use the configuration values in [`configuration.md`](configuration.md#runtime-backend-configbackend--fm_backend), with exact precedence and runtime detection owned by `bin/fm-backend.sh`.
 
 ## First run
 
@@ -77,17 +75,10 @@ It reads tmux's own `#{pane_current_command}`, which reports the pane's live for
 Agent liveness and composer safety are separate checks.
 During away-mode escalation delivery, `fm_tmux_composer_state` sends a bare shell glyph on an unbordered row to the shared composer classifier as `unknown`, and the daemon injects only into an affirmatively `empty` composer; see [Composer-emptiness safety](herdr-backend.md#composer-emptiness-safety-2026-07-10-fleet-wide-across-all-four-backends).
 
-## Submit acknowledgement: "landed" is empty (with one busy-queue exception)
+## Submit acknowledgement
 
-The shared `fm_tmux_submit_enter_core` (`bin/fm-tmux-lib.sh`) types the message once, then retries Enter (Enter only, never a retype) until the composer clears.
-The submit is reported `empty` iff the composer cleared, which is the same corrected, border-aware detector the composer guard uses, so a bordered-but-empty composer is correctly seen as the positive acknowledgement of a delivered submit.
-A genuine swallowed Enter leaves the typed text in the composer and the function reports `pending`; `fm-send` fails on `pending` so the captain learns the steer did not land instead of leaving it unsubmitted.
-
-**Exception (opencode 1.18.4, on the tmux backend):** while the agent is mid-turn, opencode accepts Enter as a "send when the turn ends" keystroke but does not clear the composer until then, so the typed text stays visible the whole time.
-After the Enter-retry budget is spent and the composer still reads `pending`, the submit core falls back to `fm_pane_is_busy`:
-a busy pane means the harness accepted and queued the Enter (reported as `empty`, so the caller does not re-send), and an idle pane keeps `pending` as a genuine swallow.
-This is the only place that exception lives; the herdr adapter observes the same opencode behavior but needs a separate fix (see the opencode note in [harness-adapters](../.agents/skills/harness-adapters/SKILL.md) and the opencode-busy gap recorded in [herdr-backend.md](herdr-backend.md)).
-Regression coverage: `tests/fm-tmux-submit-busy.test.sh` covers the four scenarios (busy pane + pending composer -> `empty`, idle pane + pending composer -> `pending`, busy pane + cleared composer -> `empty`, idle pane + cleared composer -> `empty`).
+The `fm_tmux_submit_enter_core` header in `bin/fm-tmux-lib.sh` is the single owner of submit acknowledgement and the busy-queued Enter exception.
+The Herdr-specific gap remains recorded in [`herdr-backend.md`](herdr-backend.md), and regression coverage remains in `tests/fm-tmux-submit-busy.test.sh`.
 
 Verified empirically with real tmux 3.6a on macOS (Darwin 25.5.0), 2026-07-07:
 

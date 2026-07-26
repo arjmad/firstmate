@@ -17,8 +17,7 @@ Prerequisites:
 - `jq`, required to parse zellij's JSON output: `brew install jq` (or your platform's package manager).
 - The universal firstmate prerequisites - a verified crew harness plus the required toolchain, owned by [`docs/configuration.md`](configuration.md) ("Harness support", "Toolchain"); treehouse still provides the worktree, zellij only provides the session.
 
-Select zellij by putting `zellij` in a local `config/backend` file - the durable way to pick it - or by exporting `FM_BACKEND=zellij` when you launch your harness for a one-off session; telling the first mate in chat to use zellij also works.
-Unlike tmux and herdr, zellij is **never** auto-detected - it always requires an explicit choice.
+Select Zellij through the configuration values in [`configuration.md`](configuration.md#runtime-backend-configbackend--fm_backend); `bin/fm-backend.sh` owns exact precedence and runtime-detection eligibility.
 A zellij spawn refuses loudly before creating a session container or acquiring a ship/scout worktree if `zellij` or `jq` is missing or the installed zellij is older than 0.44.
 For `--secondmate` launches, secondmate home sync and inherited local-material propagation happen before this spawn-time backend gate.
 
@@ -36,9 +35,8 @@ Limitations: zellij is experimental, has no per-home workspace split (all tasks 
 ## Status: experimental
 
 Zellij is experimental, exactly like every non-tmux backend in this design.
-Select it by putting `zellij` in a local `config/backend` file, by exporting `FM_BACKEND=zellij`, or by telling the first mate in chat to use zellij.
-Unlike tmux and herdr, zellij is **never** selected by runtime auto-detection: the design report's Open Question #2 recommends starting with a dedicated background session for predictability rather than reusing whatever zellij session firstmate itself might be running inside, and empirical verification below (see "Focus-steal on new-tab") confirms that recommendation was correct - reusing an ambient session a human might be attached to would risk yanking their view on every spawn.
-Absent `backend=` in a task's meta always means `tmux`; only a zellij task ever carries an explicit `backend=zellij` line.
+Selection and fallback follow the single owner in `bin/fm-backend.sh`, while this document retains Zellij-specific empirical evidence and the focus-steal rationale for its current eligibility.
+A Zellij task carries an explicit `backend=zellij` line; the shared metadata compatibility contract remains owned by `bin/fm-backend.sh`.
 A zellij spawn refuses loudly if `zellij` or `jq` is missing, or if the installed zellij's version is older than the verified minimum, 0.44 (`fm_backend_zellij_version_check`).
 
 ## Worktree provider stays treehouse

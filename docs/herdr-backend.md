@@ -22,8 +22,7 @@ Prerequisites:
 - `jq`, required to parse herdr's JSON output: `brew install jq` (or your platform's package manager).
 - The universal firstmate prerequisites - a verified crew harness plus the required toolchain, owned by [`docs/configuration.md`](configuration.md) ("Harness support", "Toolchain"); treehouse still provides the worktree, herdr only provides the session.
 
-Select herdr by putting `herdr` in a local `config/backend` file - the durable way to pick it - or by exporting `FM_BACKEND=herdr` when you launch your harness for a one-off session; telling the first mate in chat to use herdr also works.
-It can also be auto-detected: when firstmate itself is running natively inside herdr (`HERDR_ENV=1`) and no explicit backend is set, firstmate auto-selects herdr and prints a one-time opt-out notice; running inside tmux nested in herdr always resolves to tmux instead.
+Select Herdr through the configuration values in [`configuration.md`](configuration.md#runtime-backend-configbackend--fm_backend); `bin/fm-backend.sh` owns exact precedence, runtime detection, and notices.
 A herdr spawn refuses loudly before creating a session container or acquiring a ship/scout worktree if `herdr` or `jq` is missing or the installed herdr's protocol is older than verified.
 For `--secondmate` launches, secondmate home sync and inherited local-material propagation happen before this spawn-time backend gate.
 
@@ -47,15 +46,8 @@ Resolved backend evidence, including the 2026-07-06 symlinked-project-prefix iso
 ## Status: experimental
 
 Herdr is experimental, exactly like every non-tmux backend in this design.
-Select it by putting `herdr` in a local `config/backend` file, by exporting `FM_BACKEND=herdr`, or by telling the first mate in chat to use herdr.
-It can also be selected by runtime auto-detection when firstmate itself is running inside herdr and no explicit backend setting exists.
-Absent those three explicit settings, firstmate falls through to runtime auto-detection.
-When nothing is explicitly configured, `bin/fm-backend.sh`'s `fm_backend_detect` checks the runtime firstmate itself is executing inside: `$TMUX` (set inside every tmux pane, including a tmux pane nested inside a herdr pane) selects tmux and wins when present, `HERDR_ENV=1` (injected into every process herdr manages a pane for) selects herdr when `$TMUX` is absent, and cmux runtime signals select cmux only after those multiplexer markers are absent.
-See [`docs/cmux-backend.md`](cmux-backend.md#runtime-auto-detection) for cmux's primary `CMUX_WORKSPACE_ID` marker and macOS-only fallback signals.
-An auto-detected herdr spawn prints one loud stderr notice (set `config/backend` or pass `--backend tmux` to opt out).
-Auto-detecting tmux stays silent, since that reproduces today's unconfigured default byte-for-byte.
-Only when none of that resolves anything does firstmate fall back to the hard default, tmux.
-Absent `backend=` in a task's meta always means `tmux`; a herdr task carries an explicit `backend=herdr` line, while other experimental adapters carry their own backend values.
+Selection and fallback follow the single owner in `bin/fm-backend.sh`, while this document retains Herdr-specific empirical evidence and support limits.
+A Herdr task carries an explicit `backend=herdr` line; the shared metadata compatibility contract remains owned by `bin/fm-backend.sh`.
 A herdr spawn refuses loudly if `herdr` or `jq` is missing, or if the installed herdr's protocol is older than the verified minimum (`fm_backend_herdr_version_check`).
 
 ## Worktree provider stays treehouse
@@ -1074,4 +1066,6 @@ Covered by the unit cases in `tests/fm-afk-launch.test.sh` (clear-on-fresh-entry
 - **Not implemented: mid-session secondmate liveness.** The `fm_backend_agent_alive`-driven respawn sweep (`bin/fm-bootstrap.sh`, see "Agent liveness probe reuses the husk classifier" above) only runs at session start.
   A secondmate dying mid-session is a harder follow-on: the watcher deliberately exempts secondmates from stale-pane detection (an idle secondmate pane is healthy by design), so catching a mid-session death would need a periodic liveness beacon distinct from that exemption, not implemented here.
   Deferred as a separate item - it changes the stale-classification/status vocabulary shared with `bin/fm-watch.sh` and `bin/fm-classify-lib.sh`, which is a bigger surface than this redelivery-loop fix should carry.
-- **OPEN: opencode 1.18.4 busy-queued Enter on the herdr backend.** Mirrors the tmux-backend fix (see "Submit acknowledgement" in [docs/tmux-backend.md](tmux-backend.md)): while opencode is mid-turn, the composer accepts Enter as a "send when the turn ends" keystroke but does not clear the typed text until the turn actually finishes, so the cleared-composer check alone false-positives on a swallowed Enter for every steer sent to a busy opencode pane. The shared `fm_tmux_submit_enter_core` (`bin/fm-tmux-lib.sh`) already handles this for the tmux backend by falling back to `fm_pane_is_busy` after the Enter-retry budget is spent, but the herdr adapter's own `fm_backend_herdr_send_text_submit` has no equivalent fallback. Needs a separate fix - a busy opencode pane still trips the existing submit-pending failure on herdr, even though the Enter was actually accepted.
+- **OPEN: opencode 1.18.4 busy-queued Enter on the Herdr backend.**
+  The exact tmux contract is owned beside `fm_tmux_submit_enter_core` in `bin/fm-tmux-lib.sh`.
+  Herdr has no equivalent fallback, so the same accepted Enter still reports submit-pending and needs a separate adapter fix.

@@ -14,26 +14,12 @@ The classifier-side half of that incident shipped separately (PR #429); this is 
 `inject_wedge_alarm` now also calls `wedge_alarm_notify`, a configurable active alert that does not depend on any pane or its backend status-line.
 The durable marker and the tmux flash are unchanged; the active alert is added alongside them.
 
-## Channels
+## Configuration and mechanics
 
-`config/wedge-alarm` (local, gitignored) lists channel directives, one per non-empty, non-comment line; every listed non-`off` channel fires, best-effort.
-`FM_WEDGE_ALARM_CHANNEL` overrides the file with a single directive (used by the tests).
-
-- `off` - position-independent kill switch that disables every active alert; the marker and tmux flash remain.
-- `auto` / `default` - platform default. macOS resolves to `osascript`; other platforms have no built-in OS channel, so `auto` there fires nothing and logs that the durable marker is the only signal (configure a `command:` directive instead).
-- `osascript` - a macOS Notification Center banner via `osascript`. OS-level, so it reaches the captain even when every pane and its status-line is unreadable.
-- `herdr` - a herdr UI notification via `herdr notification show`. herdr's own surface, separate from the pane and its status-line.
-- `command:<cmd>` - run `<cmd>` via `sh -c`, with the alarm summary passed as `$1` and on stdin. Lets the alert reach a phone or pager (ntfy, Slack, SMS) even when the captain is away from the machine entirely.
-
-An absent `config/wedge-alarm` behaves as `auto`, i.e. default-on on macOS.
-Default-on is deliberate: the alarm's entire purpose is that a wedged away-mode primary is never silent, so the reachable OS channel fires unless the captain explicitly disables it.
-The alarm is rate-limited to at most once per max-defer window, and fires only after a genuine wedge past max-defer, so the default-on banner is rare and never chatty.
-
-Each channel is best-effort: a missing binary or a non-zero exit logs a warning and the alarm falls through to the next channel, never crashing the daemon loop.
-Every invocation is also process-group bounded by `FM_WEDGE_ALARM_TIMEOUT_SECS` (10 seconds by default), including `command:`, `osascript`, `herdr`, and an `FM_WEDGE_ALARM_EXEC` override.
-On timeout or daemon shutdown, its watchdog terminates the notifier group, logs the timeout when applicable, and continues to the next configured channel.
-The AppleScript passes the summary as an `argv` item rather than interpolating it into the script source, so summary text can never break the notification.
-See `docs/examples/wedge-alarm` for a copyable starting config.
+[`configuration.md`](configuration.md#away-mode-wedge-alarm-channels-configwedge-alarm) is the single owner of the file, environment, directive, default, and fallback schema.
+`bin/fm-supervise-daemon.sh`'s header owns exact parser, invocation, timeout, ordering, and failure mechanics.
+The alarm remains rate-limited to at most once per max-defer window after a genuine wedge.
+See [`examples/wedge-alarm`](examples/wedge-alarm) for a copyable starting config.
 
 ## Test safety: no test posts a real notification
 

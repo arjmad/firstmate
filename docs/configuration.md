@@ -8,11 +8,17 @@ The shared orchestrator behavior lives in [`AGENTS.md`](../AGENTS.md) - edit it 
 
 ## Operational home layout and state
 
-This section is the single owner of the top-level operational-home layout; producer script headers and their help own exact child-file fields and mutation contracts.
-The tracked code root contains the shared instruction, skill, documentation, workflow, and `bin/` surfaces, while each effective `FM_HOME` contains private operational directories.
-`data/` holds durable private fleet records such as the project and secondmate registries, captain preferences, optional shared captain preferences, learnings, backlog, briefs, and scout reports.
-`state/` holds volatile runtime records such as task metadata, append-only status events, endpoint signals, watcher and wake-queue coordination, away-mode state, generated X-mode artifacts, and private secondmate config-reread generations with their retry and quarantine state.
-`config/` holds local gitignored operating choices, and `projects/` holds the local project clones that Firstmate reads but changes only through the guarded exceptions in `AGENTS.md`.
+This section is the single owner of the top-level operational-home layout and root resolution; producer script headers and their help own exact child-file fields and mutation contracts.
+The tracked code root contains `.agents/`, `.claude/`, `.codex/`, `.github/`, `.grok/`, `.opencode/`, `.pi/`, `assets/`, `bin/`, `docs/`, public `skills/`, `tests/`, `.gitignore`, `.no-mistakes.yaml`, `.tasks.toml`, `AGENTS.md` and its `CLAUDE.md` symlink, `CONTRIBUTING.md`, `LICENSE`, and `README.md`.
+The private Firstmate surface contains `.env`, `data/`, `state/`, local files under `config/`, `projects/`, `.no-mistakes/`, and the optional `.fm-secondmate-home` marker; the tracked `.gitignore` owns the exact ignored-path set.
+Entrypoint scripts resolve the tracked code root from `FM_ROOT_OVERRIDE` when set and otherwise from their own repository location.
+Sourced backend and wake libraries preserve an ambient `FM_ROOT` between those sources so the entrypoint's resolved root propagates.
+The effective operational home is an explicit `FM_HOME`, then the legacy `FM_ROOT_OVERRIDE` whole-root fallback, then the tracked code root.
+`FM_STATE_OVERRIDE`, `FM_DATA_OVERRIDE`, `FM_PROJECTS_OVERRIDE`, and `FM_CONFIG_OVERRIDE` may replace the corresponding operational directories for tests and specialized setup.
+`data/` holds durable private fleet records such as registries, captain preferences, learnings, backlog items, briefs, and scout reports.
+`state/` holds volatile runtime records such as task metadata, append-only status events, endpoint signals, supervision coordination, away-mode state, and generated integration artifacts.
+`config/` holds local operating choices, and `projects/` holds the local project clones that Firstmate reads but changes only through the guarded exceptions in `AGENTS.md`.
+Each secondmate has its own persistent operational home under this same layout.
 
 `bin/fm-spawn.sh` owns the base task-metadata fields it emits, while the runtime-backend section below owns backend-specific fields and selector interpretation.
 The producing PR and X helpers own the fields they append, `bin/fm-classify-lib.sh` owns status-event vocabulary, and `bin/fm-crew-state.sh` owns current-state reconciliation.
@@ -44,20 +50,12 @@ The file format is unchanged in both modes; tasks-axi and manual edits produce t
 For spawn-capable adapters, the runtime session-provider backend controls where task windows/endpoints are created, captured, sent to, watched, and killed.
 `tmux` is the verified reference backend (see [`docs/tmux-backend.md`](tmux-backend.md)); `herdr`, `zellij`, `orca`, and `cmux` are experimental spawn backends (see [`docs/herdr-backend.md`](herdr-backend.md), [`docs/zellij-backend.md`](zellij-backend.md), [`docs/orca-backend.md`](orca-backend.md), and [`docs/cmux-backend.md`](cmux-backend.md)).
 Treehouse remains the worktree provider for tmux, herdr, zellij, and cmux, since herdr, zellij, and cmux are session providers only; Orca provides both the task worktree and terminal endpoint.
-New spawns choose the backend in this order: an explicit `--backend` flag firstmate passes when it spawns a task, then `FM_BACKEND`, then the first non-empty line of local gitignored `config/backend`, then runtime auto-detection from `$TMUX`, `HERDR_ENV=1`, or cmux runtime signals, then default `tmux`.
-If more than one runtime marker is present, detection resolves innermost-first: `$TMUX` is checked before `HERDR_ENV=1`, which is checked before cmux's primary `CMUX_WORKSPACE_ID` marker and its documented fallback signals - tmux or herdr started from inside a cmux terminal is the innermost, currently-executing layer, while cmux itself (a terminal application, not a nestable multiplexer) is always checked last.
-See [`docs/cmux-backend.md`](cmux-backend.md#runtime-auto-detection) for why cmux can be selected when `CMUX_WORKSPACE_ID` is absent.
-Auto-detected herdr or cmux prints a stderr notice naming `config/backend` and `--backend tmux` as opt-outs; auto-detected tmux stays silent to preserve existing default behavior.
-Zellij and Orca are never auto-detected; select them by putting the name in a local `config/backend` file, by exporting `FM_BACKEND=<name>`, or by telling the first mate in chat.
-Any value other than `tmux`, `herdr`, `zellij`, `orca`, or `cmux` is rejected until another adapter is implemented and verified.
-`fm-spawn.sh` accepts `tmux`, `herdr`, `zellij`, `orca`, and `cmux` for ship and scout tasks; `backend=orca` and `backend=cmux` both still refuse `--secondmate` until secondmate launch semantics are designed for each.
+`bin/fm-backend.sh`'s header is the single owner of backend-selection precedence, `config/backend` parsing, runtime detection order, notices, and the default fallback.
+`config/backend` and `FM_BACKEND` accept `tmux`, `herdr`, `zellij`, `orca`, or `cmux`; any other value is rejected until another adapter is implemented and verified.
+`fm-spawn.sh` accepts the same five names for ship and scout tasks, while the backend guides own their support limits and empirical prerequisites.
 `codex-app` is not an accepted runtime backend yet; [`docs/codex-app-backend.md`](codex-app-backend.md) owns the Codex App boundary.
-The session-start secondmate liveness sweep uses a deeper `fm_backend_agent_alive` probe where verified.
-Today that probe can classify tmux and herdr secondmate endpoints as `alive`, `dead`, or `unknown`; zellij, Orca, and cmux report `unknown` until their own agent-process classifiers are verified.
-A herdr spawn additionally version-gates against the installed `herdr` binary's protocol and requires `jq`, refusing loudly on an incompatible or missing installation.
-A zellij spawn additionally version-gates against the installed `zellij` binary's version and requires `jq`, refusing loudly when either is missing or the version is older than 0.44.
-A cmux spawn additionally version-gates against the installed `cmux` binary's version, requires `jq`, and requires the control socket to be reachable and accessible (see [`docs/cmux-backend.md`](cmux-backend.md) "Setup" for the one-time socket-access configuration this needs; Automation mode is the recommended socket control mode, with Password mode supported via `config/cmux-socket-password`), refusing loudly and non-retryably on a `cmuxOnly`/unauthenticated socket.
-A backend spawn refusal from a missing dependency, version gate, or unauthenticated socket is terminal for that selected backend; firstmate surfaces it as a blocker instead of silently retrying another backend.
+The session-start secondmate liveness sweep uses a deeper `fm_backend_agent_alive` probe where verified; each backend guide owns its current classifier support.
+A backend spawn refusal from a missing dependency, version gate, unauthenticated socket, or unsupported task kind is terminal for that selected backend; firstmate surfaces it as a blocker instead of silently retrying another backend.
 Task meta records `backend=` only for a non-default backend; an absent `backend=` means `tmux`, preserving existing default-path meta files.
 A herdr task additionally records `herdr_session=`, `herdr_workspace_id=`, `herdr_tab_id=`, and `herdr_pane_id=`; an opt-in `--fleet` spawn also records `fleet=` ([`docs/herdr-backend.md`](herdr-backend.md#opt-in-fleet-grid-workspaces) owns fleet-grid behavior).
 A zellij task additionally records `zellij_session=`, `zellij_tab_id=`, and `zellij_pane_id=`.
@@ -97,13 +95,18 @@ Selecting any other supervisor backend, including `zellij`, `orca`, or `cmux`, r
 ## Away-mode wedge alarm channels (config/wedge-alarm)
 
 When away-mode injection wedges past `FM_MAX_DEFER_SECS`, the sub-supervisor raises a loud, rate-limited alarm.
-Beyond the durable `state/.subsuper-inject-wedged` marker and the tmux status-line flash, it attempts a configured backend-independent active alert that can reach the captain even when every pane and its backend status-line is unreadable.
-`config/wedge-alarm` (local, gitignored) lists channel directives, one per non-empty, non-comment line; every listed non-`off` channel fires, best-effort.
-`FM_WEDGE_ALARM_CHANNEL` overrides the file with a single directive.
-Directives are `off` (a position-independent kill switch that disables every active alert), `auto`/`default`, `osascript` (macOS Notification Center banner), `herdr` (herdr UI notification), and `command:<cmd>` (run `<cmd>` via `sh -c`, summary on `$1` and stdin).
-An absent file means `auto`, i.e. default-on on macOS: the alarm exists precisely so a wedged away-mode primary is never silent, and it fires at most once per max-defer window after a genuine wedge.
-A missing or failing channel logs and falls through to the next, never crashing the daemon.
-See [`wedge-alarm.md`](wedge-alarm.md) for the channel reference and macOS verification evidence, and [`examples/wedge-alarm`](examples/wedge-alarm) for a copyable config.
+Beyond the durable `state/.subsuper-inject-wedged` marker and the tmux status-line flash, it attempts configured backend-independent active alerts.
+`config/wedge-alarm` is local and gitignored, with one directive per non-empty, non-comment line.
+A non-empty `FM_WEDGE_ALARM_CHANNEL` replaces the file with one directive.
+Recognized directives are `off`, `auto` or `default`, `osascript`, `herdr`, and `command:<cmd>`.
+`off` is a position-independent kill switch that disables every active alert while preserving the marker and tmux flash.
+`auto` and `default` attempt a macOS Notification Center banner only when `osascript` is available and otherwise leave the durable marker as the signal.
+`osascript` requests a macOS Notification Center banner, `herdr` requests a Herdr UI notification, and `command:<cmd>` runs `<cmd>` through `sh -c` with the summary on `$1` and stdin.
+An absent, empty, or comment-only file resolves to `auto`.
+Every recognized non-`off` directive is attempted in file order, best-effort; unknown, missing, failing, or timed-out channels are logged and skipped without crashing the daemon.
+The alarm fires at most once per max-defer window after a genuine wedge.
+`bin/fm-supervise-daemon.sh`'s header owns exact parser, invocation, timeout, and failure mechanics.
+See [`wedge-alarm.md`](wedge-alarm.md) for rationale and verification evidence, and [`examples/wedge-alarm`](examples/wedge-alarm) for a copyable config.
 
 ## Gate defaults (.no-mistakes.yaml)
 
@@ -149,43 +152,33 @@ This does not relax protection for any other untracked file.
 An existing linked-worktree home that predates this rule advances through its marker-only state during its next bootstrap or spawn local sync, after which Git ignores the marker normally.
 A standalone-clone home cannot receive a primary-local commit through that no-fetch sync, so it receives the rule through `/updatefirstmate`'s origin refresh instead.
 
-## FM_HOME
+## FM_HOME consequences
 
-`FM_HOME` selects the operational home for one firstmate instance.
-When it is unset, most scripts use the repo root as the home; when it is set, scripts still run from this repo's `bin/`, but `state/`, `data/`, `config/`, and `projects/` come from `$FM_HOME`.
-`FM_ROOT_OVERRIDE` overrides the firstmate repo root used by scripts, including the primary checkout watched by the worktree-tangle guard.
-When `FM_HOME` is unset, it also behaves as the old whole-root override.
-`bin/fm-send.sh` is intentionally stricter than that general fallback: it requires `FM_HOME` to be set before resolving a target, so operator steers cannot silently resolve against the wrong home.
-`FM_STATE_OVERRIDE`, `FM_DATA_OVERRIDE`, `FM_PROJECTS_OVERRIDE`, and `FM_CONFIG_OVERRIDE` override individual operational directories for tests and specialized harness setup.
-For the herdr backend, `FM_HOME` also determines the workspace label used by the adapter.
+The "Operational home layout and state" section above owns `FM_HOME`, code-root, fallback, and per-directory override resolution.
+`bin/fm-send.sh` is intentionally stricter than that general resolution: it requires `FM_HOME` to be set before resolving a target, so operator steers cannot silently resolve against the wrong home.
+For the herdr backend, the resolved operational home also determines the workspace label used by the adapter.
 For the zellij backend, `FM_HOME` does not split containers, but it determines the readable home prefix embedded in visible tab titles; use `FM_ZELLIJ_SESSION` when a separate zellij session is needed.
 The full zellij home label also includes a short hash of the resolved `FM_ROOT` path.
 For the cmux backend, `FM_CONFIG_OVERRIDE` overrides where `config/cmux-socket-password` is read from, while `FM_HOME` determines the default config path and readable home prefix embedded in workspace titles.
 The full cmux home label also includes a short hash of the resolved `FM_ROOT` path, and there is no per-home container split.
 
-## Harness support
+## Harness configuration
 
-claude, codex, opencode, pi, and grok are all empirically verified; new harnesses get verified through a supervised trial task before joining the set.
-The verified adapter knowledge - busy signatures, interrupt and exit commands, skill-invocation syntax, and per-harness quirks - lives in [`.agents/skills/harness-adapters/SKILL.md`](../.agents/skills/harness-adapters/SKILL.md).
-Launch mechanics, including the verified command templates, live in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh).
-Primary-session safety integrations are tracked as repo-level hook wiring, including Claude's `.claude/settings.json`; the owning hook documents are [`docs/sessionstart-nudge.md`](sessionstart-nudge.md), [`docs/arm-pretool-check.md`](arm-pretool-check.md), [`docs/cd-guard.md`](cd-guard.md), [`docs/watcher-continuity.md`](watcher-continuity.md), and [`docs/turnend-guard.md`](turnend-guard.md).
-Primary-session watcher wake protocols are rendered at session start by [`bin/fm-supervision-instructions.sh`](../bin/fm-supervision-instructions.sh) from [`docs/supervision-protocols/`](supervision-protocols/).
-Claude and Grok use background-notify cycles, Codex uses bounded foreground checkpoints, Pi uses its two tracked primary extensions, and OpenCode uses its TUI plugin.
+The [`harness-adapters` skill](../.agents/skills/harness-adapters/SKILL.md) is the single owner of the verified adapter set, busy signatures, interrupt and exit commands, skill-invocation syntax, effort policy, and per-harness quirks.
+Launch mechanics and verified command templates live in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh), while [`bin/fm-harness.sh`](../bin/fm-harness.sh) owns exact detection and parsing mechanics.
+Primary-session integration mechanics are owned by [`docs/sessionstart-nudge.md`](sessionstart-nudge.md), [`docs/arm-pretool-check.md`](arm-pretool-check.md), [`docs/cd-guard.md`](cd-guard.md), [`docs/watcher-continuity.md`](watcher-continuity.md), [`docs/turnend-guard.md`](turnend-guard.md), and the rendered [`docs/supervision-protocols/`](supervision-protocols/).
+
 `config/crew-harness` is a local, gitignored file containing one adapter name for crewmate and scout launches.
 When it is absent or contains `default`, crewmates mirror the firstmate's own harness.
-`config/secondmate-harness` is a separate local, gitignored file containing the adapter the primary uses to launch secondmate agents, optionally followed by model and effort tokens on the same line.
-The first non-empty, non-comment line is parsed as `<harness> [<model>] [<effort>]`.
-A bare `<harness>` preserves the previous behavior: harness only, with no model or effort launch flag.
+`config/secondmate-harness` is a separate local, gitignored file for the adapter the primary uses to launch secondmate agents.
+Its first non-empty, non-comment line has the schema `<harness> [<model>] [<effort>]`; the parser consumes only those first three whitespace-separated tokens and ignores later tokens.
+A bare `<harness>` remains harness-only, with no model or effort launch flag.
 When the harness token is absent or `default`, secondmate launch falls back through `config/crew-harness` and then the primary's own harness, and no model or effort is read from that file.
-`fm-harness.sh secondmate-model` and `fm-harness.sh secondmate-effort` expose only the optional tokens from `config/secondmate-harness`; `config/crew-harness` remains a bare adapter-name file.
-An explicit harness argument to `fm-spawn.sh` still overrides either config file for that spawn only.
+An explicit harness argument to `fm-spawn.sh` overrides either config file for that spawn only.
 An explicit `--model` or `--effort` overrides the matching token from `config/secondmate-harness`; an explicit harness or raw launch command starts with clean model and effort defaults unless those flags are also passed.
 When `config/crew-dispatch.json` exists, crewmate and scout spawns require an explicit resolved harness instead of automatically falling back to `config/crew-harness`.
-The inherited-local-material contract is owned by `secondmate-provisioning`; for harness behavior, its propagated config items make a secondmate's own crewmates, dispatch profiles, and backlog backend use the primary values.
-Those inherited values are defaults and rules only; `fm-spawn` still permits a consciously chosen explicit runtime outside the config.
-`config/secondmate-harness` is not inherited because secondmates do not launch secondmates.
-For grok, `fm-spawn.sh` installs one firstmate-owned global turn-end hook under `$GROK_HOME/hooks/`, or `~/.grok/hooks/` when `GROK_HOME` is unset, and drops a per-task `.fm-grok-turnend` pointer in the worktree, with teardown removing the task token and pointer.
-For Pi secondmate launches, `fm-spawn.sh` starts Pi with `-e` pointed at the secondmate home's own tracked `.pi/extensions/fm-primary-pi-watch.ts` and `.pi/extensions/fm-primary-turnend-guard.ts`, both already present from the secondmate home's git worktree.
+The inherited-local-material contract is owned by `secondmate-provisioning`, and `config/secondmate-harness` is not inherited because secondmates do not launch secondmates.
+Inherited values remain defaults and rules only; `fm-spawn` still permits a consciously chosen explicit runtime outside the configuration.
 
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
@@ -193,7 +186,7 @@ For Pi secondmate launches, `fm-spawn.sh` starts Pi with `-e` pointed at the sec
 The shell scripts do not match those rules; firstmate chooses the best matching rule with judgment, resolves that rule directly or through a supported selector, and passes only concrete `--harness`, `--model`, and `--effort` flags to `fm-spawn.sh`.
 When the file exists, `fm-spawn.sh` enforces that contract by refusing crewmate and scout spawns that lack an explicit harness (`--harness`, a positional adapter, or a raw launch command).
 Batch spawns satisfy the same requirement with a shared `--harness`.
-Secondmate spawns are exempt and still resolve through `config/secondmate-harness` and its optional model and effort tokens.
+Secondmate spawns are exempt and use the separate secondmate launch configuration defined in "Harness configuration" above.
 This section is the single owner of the canonical schema and its per-field semantics; `AGENTS.md` section 4 keeps only the dispatch procedure and points here.
 
 ```json
@@ -291,7 +284,7 @@ Required tools come in two parts: a universal toolchain every home needs regardl
 The universal toolchain is node, git, gh with GitHub auth via `gh auth login`, no-mistakes v1.31.2 or newer, gh-axi, chrome-devtools-axi, lavish-axi, compatible tasks-axi per "Backlog backend" above, and quota-axi.
 This section is the single owner of that universal toolchain list; backend guides' prerequisites point here and add only their backend-specific tools.
 In that list, no-mistakes runs the validation pipeline, gh-axi, chrome-devtools-axi, and lavish-axi cover GitHub, browser, and rich-review operations, and tasks-axi plus quota-axi back backlog mutations and quota-balanced dispatch.
-The per-backend delta is required only for the backend resolved from `FM_BACKEND`, then `config/backend`, then runtime auto-detection, then default `tmux`, so a home is never told to install a tool an inactive backend or feature would need.
+The per-backend delta follows the backend resolved by the precedence contract in `bin/fm-backend.sh`, so a home is never told to install a tool an inactive backend or feature would need.
 That delta is owned in code by `fm_backend_required_tools` in `bin/fm-backend.sh`: the resolved backend's own session-provider CLI (`tmux`, `herdr`, `zellij`, `orca`, or `cmux`), `jq` for the JSON-emitting experimental adapters (`herdr`, `zellij`, `cmux`) whose spawn and liveness paths parse the backend's JSON output, and the `treehouse` worktree provider for every session-provider-only backend (`tmux`, `herdr`, `zellij`, `cmux`).
 Backend tool availability uses the adapter's own executable resolver, so bootstrap and spawn agree on supported non-`PATH` locations such as cmux's bundled CLI.
 An unknown resolved backend emits `BACKEND_INVALID` and blocks dispatch instead of silently dropping its dependency delta or falling back to tmux.
@@ -317,7 +310,7 @@ When a running home advances and its watched instruction surface (`AGENTS.md`, `
 If that send fails, bootstrap keeps an idempotent retry marker and emits `NUDGE_SECONDMATES:` with the failure reason.
 The same bootstrap run emits `SECONDMATE_LIVENESS:` only when a live secondmate endpoint is skipped or respawn fails; already-live and successfully respawned endpoints are handled silently.
 For a mid-session inherited local-material edit where tracked-file sync is not needed, run `bin/fm-config-push.sh`.
-It uses the same live secondmate discovery and propagation helper as bootstrap, prints each live home's `crew-dispatch.json`, `model-endpoints.json`, `crew-harness`, `backlog-backend`, and `data/captain-shared.md` result as `pushed`, `unchanged`, `skipped`, or `error`, and exits non-zero for real propagation errors or config-reread send failures.
+It uses the same live secondmate discovery and propagation helper as bootstrap, reports each inherited item owned by `secondmate-provisioning` as `pushed`, `unchanged`, `skipped`, or `error`, and exits non-zero for real propagation errors or config-reread send failures.
 When an allowlisted config item changes for an already-running home, it sends the literal-content reread pointer described in [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md); unchanged allowlisted config sends no pointer unless a previous delivery is pending.
 The locked bootstrap inheritance pass uses the same per-home changed-set and reread path for already-running homes; see `secondmate-provisioning` for the single contract owner.
 That live discovery starts from `state/*.meta` records with `kind=secondmate`; `data/secondmates.md` only backfills `home=` for older or incomplete meta records.
@@ -402,14 +395,14 @@ These paths need `jq` to build the JSON payload, but they run before token and n
 Runtime tuning via environment variables (defaults shown):
 
 ```sh
-FM_HOME=                 # optional operational home for most scripts, unset means this repo root; fm-send requires it explicitly
-FM_ROOT_OVERRIDE=        # override firstmate repo root, tangle-guard target, and zellij/cmux home-title hash; also legacy whole-root override when FM_HOME is unset
-FM_STATE_OVERRIDE=       # alternate state dir, mainly for tests
-FM_DATA_OVERRIDE=        # alternate data dir, mainly for tests
-FM_PROJECTS_OVERRIDE=    # alternate projects dir, mainly for tests
-FM_CONFIG_OVERRIDE=      # alternate config dir, mainly for tests
+FM_HOME=                 # operational-home selector; see "Operational home layout and state" above
+FM_ROOT_OVERRIDE=        # tracked-root and legacy whole-root override; see the layout owner above
+FM_STATE_OVERRIDE=       # per-directory override; see the layout owner above
+FM_DATA_OVERRIDE=        # per-directory override; see the layout owner above
+FM_PROJECTS_OVERRIDE=    # per-directory override; see the layout owner above
+FM_CONFIG_OVERRIDE=      # per-directory override; see the layout owner above
 FM_PROC_ROOT_OVERRIDE=   # alternate /proc root for the Linux process-identity read in fm-wake-lib.sh, mainly for tests
-FM_BACKEND=             # optional runtime backend override for new spawns; tmux/herdr/zellij/orca/cmux support ship/scout spawns, codex-app is not accepted
+FM_BACKEND=             # runtime backend override; see "Runtime backend" and bin/fm-backend.sh's precedence owner
 HERDR_SESSION=default  # herdr-only: named session for normal backend ops; not enough for destructive cleanup (docs/herdr-backend.md)
 FM_BACKEND_HERDR_COMPOSER_LINES=20  # herdr-only: tail lines scanned by composer-state guard/fallback paths; idle-baseline submit confirmation uses agent-state
 FM_BACKEND_HERDR_IDLE_RE='^Type a message\.\.\.$'  # herdr-only: empty-composer placeholder regex after shared ghost extraction plus border and prompt stripping
@@ -487,9 +480,9 @@ FM_SUPERVISOR_TARGET=              # optional supervisor pane target override; t
 FM_INJECT_SKIP=heartbeat           # |-prefixes force-self-handled bypassing classification; empty disables
 FM_ESCALATE_BATCH_SECS=90          # buffer window for batched escalation digests; 0 = flush immediately
 FM_MAX_DEFER_SECS=300              # max buffered escalation age before retry plus wedge alarm; 0 disables
-FM_WEDGE_ALARM_CHANNEL=            # override config/wedge-alarm with one active-alert directive for the wedge alarm; off|auto|osascript|herdr|command:<cmd>; absent = auto (macOS -> an OS notification)
-FM_WEDGE_ALARM_EXEC=              # notifier seam: route every channel (osascript, herdr, command:) through this command as `<cmd> <channel> <summary>`; "discard" fires nothing; unset in production; the daemon defaults it to "discard" when sourced so no test posts a real notification (docs/wedge-alarm.md)
-FM_WEDGE_ALARM_TIMEOUT_SECS=10    # maximum seconds for each osascript, herdr, override, or command: notifier before its watchdog terminates it and continues to the next channel; invalid or zero values use 10
+FM_WEDGE_ALARM_CHANNEL=            # single-directive override; schema owned by "Away-mode wedge alarm channels" above
+FM_WEDGE_ALARM_EXEC=              # notifier test seam; exact mechanics owned by bin/fm-supervise-daemon.sh
+FM_WEDGE_ALARM_TIMEOUT_SECS=10    # per-notifier timeout; exact mechanics owned by bin/fm-supervise-daemon.sh
 FM_INJECT_FAIL_SLEEP=30            # seconds to back off when the supervisor pane is unavailable
 FM_INJECT_CONFIRM_RETRIES=3        # daemon Enter-retry attempts after typing a digest once
 FM_INJECT_CONFIRM_SLEEP=0.5        # seconds between daemon submit checks

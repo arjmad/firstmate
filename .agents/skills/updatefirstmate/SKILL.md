@@ -15,7 +15,7 @@ This skill performs that pull for the running main firstmate and every secondmat
 
 The update is **fast-forward only** - the same sanctioned self-write as the fleet sync firstmate already runs.
 It never forces, never creates a merge commit, never stashes, and advances a target only on a clean fast-forward; anything dirty, diverged, offline, or on the wrong branch is skipped and reported.
-A tracked-files fast-forward leaves the gitignored operational dirs (data/, state/, config/, projects/, .no-mistakes/) untouched, so a secondmate's in-flight work is never disrupted.
+A tracked-files fast-forward leaves every private operational path owned by `docs/configuration.md` untouched, so a secondmate's in-flight work is never disrupted.
 This touches only the firstmate repo and its own worktrees, never anything under `projects/`.
 
 ## What it does
@@ -56,5 +56,5 @@ This touches only the firstmate repo and its own worktrees, never anything under
 - **Only the firstmate repo and its worktrees** are touched, never `projects/`.
   It is the same sanctioned self-write as the fleet sync.
 - **Secondmates are never disrupted.**
-  A secondmate gets a tracked-files fast-forward (safe while it is mid-task, since its work lives in gitignored operational dirs and separate project worktrees) plus a gentle re-read nudge.
+  A secondmate gets a tracked-files fast-forward that leaves the private surface owned by `docs/configuration.md` untouched, plus a gentle re-read nudge.
   It is never torn down, interrupted, or forced.
