@@ -13,7 +13,7 @@ Prerequisites:
 
 - The Orca app installed at `/Applications/Orca.app`, and **running**.
 - The `orca` CLI: `brew install orca`.
-- The universal firstmate prerequisites - a verified crew harness plus the required toolchain, owned by [`docs/configuration.md`](configuration.md) ("Harness support", "Toolchain") - with `orca` as the only backend-specific tool, since Orca replaces both the session multiplexer CLI and the `treehouse` worktree provider that the other backends require.
+- The universal firstmate prerequisites - a verified crew harness, owned by the [`harness-adapters` skill](../.agents/skills/harness-adapters/SKILL.md), plus the required toolchain, owned by [`docs/configuration.md`](configuration.md#toolchain) - with `orca` as the only backend-specific tool, since Orca replaces both the session multiplexer CLI and the `treehouse` worktree provider that the other backends require.
 
 Select Orca through the configuration values in [`configuration.md`](configuration.md#runtime-backend-configbackend--fm_backend); `bin/fm-backend.sh` owns exact precedence and runtime-detection eligibility.
 

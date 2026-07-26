@@ -15,7 +15,7 @@ Prerequisites:
 
 - `zellij` itself, version 0.44 or newer (installed 0.44.0 verified) - see [zellij.dev](https://zellij.dev) for install instructions.
 - `jq`, required to parse zellij's JSON output: `brew install jq` (or your platform's package manager).
-- The universal firstmate prerequisites - a verified crew harness plus the required toolchain, owned by [`docs/configuration.md`](configuration.md) ("Harness support", "Toolchain"); treehouse still provides the worktree, zellij only provides the session.
+- The universal firstmate prerequisites - a verified crew harness, owned by the [`harness-adapters` skill](../.agents/skills/harness-adapters/SKILL.md), plus the required toolchain, owned by [`docs/configuration.md`](configuration.md#toolchain); treehouse still provides the worktree, zellij only provides the session.
 
 Select Zellij through the configuration values in [`configuration.md`](configuration.md#runtime-backend-configbackend--fm_backend); `bin/fm-backend.sh` owns exact precedence and runtime-detection eligibility.
 A zellij spawn refuses loudly before creating a session container or acquiring a ship/scout worktree if `zellij` or `jq` is missing or the installed zellij is older than 0.44.
