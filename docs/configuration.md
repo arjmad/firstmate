@@ -296,7 +296,7 @@ The token is never written to `state/<id>.meta`, to any status line, or to the r
 Reading the file requires `jq`.
 Fail-closed contract: an absent or whitespace-only file, or a `--model` that is simply not listed, is inert and the claude spawn launches normally against the real Anthropic API; but a present-but-malformed file, a matched entry missing `base_url` or a token source, an unresolvable token, or a configured `mcp_config` that is missing or unreadable aborts the spawn with a clear error rather than silently launching with the wrong endpoint or connector boundary.
 Local endpoint values (the proxy URL, the token, and the string naming a specific proxy) live only in this gitignored file and never in tracked code.
-See [`docs/examples/model-endpoints.json`](examples/model-endpoints.json) for a starting point to copy into local `config/model-endpoints.json`, and [`model-endpoint-verification.md`](model-endpoint-verification.md) for the dated end-to-end verification evidence.
+See [`docs/examples/model-endpoints.json`](examples/model-endpoints.json) for a starting point to copy into local `config/model-endpoints.json`, and [`verification/model-endpoints.md`](verification/model-endpoints.md) for the dated end-to-end verification evidence.
 
 ## Toolchain
 

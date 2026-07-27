@@ -3,9 +3,9 @@
 Empirical evidence for the `config/model-endpoints.json` feature: routing a `claude`
 crewmate at a local Anthropic-shaped proxy so a non-Anthropic model runs through the
 unchanged `claude` CLI without a new harness.
-Schema and mechanics are owned by [`configuration.md`](configuration.md) "Local model
-endpoints", [`bin/fm-model-endpoint.sh`](../bin/fm-model-endpoint.sh), and
-[`bin/fm-spawn.sh`](../bin/fm-spawn.sh).
+Schema and mechanics are owned by [`configuration.md`](../configuration.md) "Local model
+endpoints", [`bin/fm-model-endpoint.sh`](../../bin/fm-model-endpoint.sh), and
+[`bin/fm-spawn.sh`](../../bin/fm-spawn.sh).
 Operator-specific values (the real alias name, proxy port, and model ids) are
 genericized in this record as `<alias>`, `http://127.0.0.1:<port>`, `my-local-model`,
 and `my-local-model-small`; the commands and outputs are otherwise as run.
@@ -82,7 +82,7 @@ all apply unchanged. The test also asserts the claude Stop hook
 (`.claude/settings.local.json`) is still installed for the endpoint launch.
 
 The verified launch has `--strict-mcp-config` and no `--mcp-config`, so it loads zero configured MCP servers rather than inheriting user/global or project-scoped servers.
-The exact default capability boundary and the optional per-endpoint `mcp_config` grant are owned by [`configuration.md`](configuration.md) "Local model endpoints".
+The exact default capability boundary and the optional per-endpoint `mcp_config` grant are owned by [`configuration.md`](../configuration.md) "Local model endpoints".
 Strict MCP governs MCP discovery only, so this launch shape does not prove that Claude-in-Chrome or other tooling configured outside MCP is absent.
 
 ### Secret discipline (grepped)
@@ -114,7 +114,7 @@ $ grep '<token>' <launch-literal>      -> absent (not in the recorded launch str
   optionally lengthens it again with `--mcp-config`, and adds one more `export` line, all
   carried by the same `spawn_send_literal` / `spawn_send_text_line` primitives that already deliver the herdr-verified `GOTMPDIR`
   export and `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` prefix (see
-  [`herdr-backend.md`](herdr-backend.md)). No herdr-specific code path changed.
+  [`herdr-backend.md`](../herdr-backend.md)). No herdr-specific code path changed.
 
 ### Not exercised here: a live herdr-supervised spawn
 
@@ -150,3 +150,35 @@ ok - an unreadable endpoint mcp_config fails closed before launch
 The opt-in launch assertion is `--model 'my-local-model' --strict-mcp-config --mcp-config '<readable-path>'`.
 The existing no-`mcp_config` case still asserts that no `--mcp-config` flag appears, preserving the zero-MCP default exactly.
 No live Sol-worker Chrome probe was run, so the outside-MCP Chrome boundary remains explicitly unverified rather than inferred from the strict MCP flag.
+
+## 6. Re-verification after the upstream merge (2026-07-27)
+
+- Date: 2026-07-27
+- Base commit: the merge of `upstream/main` `a5fe1bc` into this fork
+- Scope: the composed launch string, with the same fake-backend harness used in section 3.
+
+Upstream replaced `"$(cat <brief>)"` with the canonical operational-input encoder in every
+adapter template, so the section 3 capture above is the pre-merge shape and is retained as
+dated evidence of what was observed then. The endpoint prefix and MCP flags are unchanged;
+only the brief argument moved. The launch string composed after the merge is:
+
+```
+ANTHROPIC_BASE_URL='http://127.0.0.1:<port>' ANTHROPIC_DEFAULT_OPUS_MODEL='my-local-model' \
+ANTHROPIC_DEFAULT_SONNET_MODEL='my-local-model' ANTHROPIC_DEFAULT_HAIKU_MODEL='my-local-model-small' \
+CLAUDE_CODE_SUBAGENT_MODEL='my-local-model' CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false \
+claude --dangerously-skip-permissions --model 'my-local-model' --strict-mcp-config \
+  "$('<root>/bin/fm-operational-input.sh' encode launch-brief < '<brief>')"
+```
+
+The endpoint env prefix, `--strict-mcp-config`, and the encoder therefore compose in one
+string; `state/<id>.meta` still records `harness=claude`, and the auth token is still
+exported on its own pre-launch line and absent from the launch literal, meta, and config.
+
+```
+$ bash tests/fm-model-endpoint.test.sh          -> 22 assertions, exit 0
+$ bash tests/fm-spawn-model-endpoint.test.sh    -> 11 assertions, exit 0
+```
+
+The two byte-exact non-endpoint baseline assertions in `tests/fm-spawn-model-endpoint.test.sh`
+were retargeted at the new stock template in the same merge; they still require byte equality
+and still forbid the endpoint prefix and both MCP flags on a non-endpoint launch.
