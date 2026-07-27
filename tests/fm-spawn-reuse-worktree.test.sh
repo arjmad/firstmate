@@ -184,18 +184,25 @@ run_spawn_argv() {
 # Tools fm-spawn itself needs on PATH before it ever reaches the owner probe
 # (git for the isolation and same-repository assertions, jq for herdr/zellij/cmux
 # JSON) plus the coreutils the script and these fixtures shell out to. Hiding one
-# backend CLI must never take any of these with it.
-SPAWN_PATH_ESSENTIALS="git jq env bash sh basename dirname grep sed awk cut tr head tail sort wc mkdir rm ln cp mv chmod cat mktemp date find id uname"
+# backend CLI must never take any of these with it, so the rescue below is
+# asserted against this list - it is a floor on what must survive, never the
+# definition of what gets rescued.
+SPAWN_PATH_ESSENTIALS="git jq env bash sh basename dirname grep sed awk cut tr head tail sort wc mkdir rm ln cp mv chmod cat mktemp date find id uname readlink stat sleep"
 
 # hide_tool_from_spawn_path <tool>: make <tool> genuinely unreachable to the
 # spawn, however the host is laid out, WITHOUT collaterally removing anything
 # else. Dropping every PATH directory that provides <tool> is not enough on a
 # host where one bin directory holds several tools (a single Nix/asdf/homebrew
-# profile, /usr/local/bin): git or jq can vanish with it, and fm-spawn then fails
-# its same-repository assertion long before the owner probe, so the case would
-# fail for the wrong reason. So each stripped directory's still-needed tools are
-# re-exported through a per-case rescue dir, and both directions are asserted:
-# <tool> is gone, and every essential that was reachable before still is.
+# profile, /usr/local/bin, or Linux's /usr/bin, which holds tmux next to the
+# whole of coreutils): git or jq can vanish with it, and fm-spawn then fails its
+# same-repository assertion long before the owner probe, so the case would fail
+# for the wrong reason. Re-exporting a hand-listed set of essentials is not
+# enough either - anything the list forgets (readlink and stat, which fm-spawn's
+# lock helpers need) still disappears on such a host. So each stripped directory
+# is mirrored WHOLE, minus <tool>, through a per-case rescue dir appended after
+# the surviving directories, so the fake CLIs keep their precedence. Both
+# directions are asserted: <tool> is gone, and every essential that was reachable
+# before still is.
 hide_tool_from_spawn_path() {
   local tool=$1 dir rescue keep kept=''
   rm -f "$FAKEBIN_DIR/$tool"
@@ -204,19 +211,16 @@ hide_tool_from_spawn_path() {
   while IFS= read -r dir; do
     [ -n "$dir" ] || continue
     if [ -x "$dir/$tool" ]; then
-      for keep in $SPAWN_PATH_ESSENTIALS; do
-        [ "$keep" = "$tool" ] && continue
-        if [ -x "$dir/$keep" ] && [ ! -e "$rescue/$keep" ]; then
-          ln -s "$dir/$keep" "$rescue/$keep"
-        fi
-      done
+      # First mirrored directory wins, exactly as PATH lookup would.
+      ln -s "$dir"/* "$rescue/" 2>/dev/null || true
+      rm -f "$rescue/$tool"
       continue
     fi
     kept="${kept:+$kept:}$dir"
   done <<EOF
 $(printf '%s' "$SPAWN_PATH" | tr ':' '\n')
 EOF
-  SPAWN_PATH="$rescue${kept:+:$kept}"
+  SPAWN_PATH="${kept:+$kept:}$rescue"
   if PATH="$SPAWN_PATH" command -v "$tool" >/dev/null 2>&1; then
     fail "hide_tool_from_spawn_path left $tool reachable on the spawn PATH"
   fi
