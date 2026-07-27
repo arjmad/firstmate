@@ -268,7 +268,10 @@ test_normal_model_unaffected_even_with_config_present() {
     --token "$TOKEN" "$id" "$PROJ_DIR" --model sonnet >/dev/null
   launch=$(cat "$LAUNCH_LOG")
   sent=$(cat "$SENT_LOG")
-  expected="CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --model 'sonnet' \"\$(cat '$HOME_DIR/data/$id/brief.md')\""
+  # The baseline is the stock claude launch template verbatim: no endpoint env
+  # prefix, no --strict-mcp-config, no --mcp-config, and the brief still riding
+  # the canonical operational-input encoder that every adapter uses.
+  expected="CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --model 'sonnet' \"\$('$ROOT/bin/fm-operational-input.sh' encode launch-brief < '$HOME_DIR/data/$id/brief.md')\""
   [ "$launch" = "$expected" ] || fail "normal model launch changed"$'\n'"expected: $expected"$'\n'"actual:   $launch"
   assert_not_contains "$launch" "ANTHROPIC_BASE_URL" "normal model must not get an endpoint prefix"
   assert_not_contains "$launch" "strict-mcp-config" "normal model must not get --strict-mcp-config"
@@ -286,7 +289,7 @@ test_no_model_unaffected_with_config_present() {
   run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
     --token "$TOKEN" "$id" "$PROJ_DIR" >/dev/null
   launch=$(cat "$LAUNCH_LOG")
-  expected="CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions \"\$(cat '$HOME_DIR/data/$id/brief.md')\""
+  expected="CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions \"\$('$ROOT/bin/fm-operational-input.sh' encode launch-brief < '$HOME_DIR/data/$id/brief.md')\""
   [ "$launch" = "$expected" ] || fail "no-model launch changed"$'\n'"expected: $expected"$'\n'"actual:   $launch"
   pass "a claude spawn with no --model is unaffected by a present endpoint config"
 }
