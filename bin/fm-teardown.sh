@@ -45,13 +45,6 @@
 # Projected closes share the presentation-order lock, refuse to close the
 # captain's active tab, and restore the exact response-derived pre-close tab
 # if Herdr's last-pane cleanup focuses an unrelated neighboring workspace.
-# A Herdr fleet task closes only its exact recorded pane under the fleet-name
-# lock and preserves the exact active workspace/tab. When no other metadata
-# member shares that recorded fleet workspace, final workspace cleanup is
-# allowed only if state/.herdr-fleet-<name> is an exact active record whose
-# token-bearing live workspace matches the task endpoint. Missing, malformed,
-# stale, busy, active, or otherwise ambiguous proof leaves the workspace and
-# record in place with a warning; no workspace is looked up or adopted by label.
 # Secondmates (kind=secondmate in meta) are retired explicitly. Normal
 # teardown refuses while their home has in-flight crewmate meta files; --force
 # is the approved discard path that prevalidates child removal targets, discards
@@ -147,7 +140,6 @@ KIND=$(grep '^kind=' "$META" | cut -d= -f2- || true)
 [ -n "$KIND" ] || KIND=ship
 MODE=$(grep '^mode=' "$META" | cut -d= -f2- || true)
 [ -n "$MODE" ] || MODE=no-mistakes
-FLEET=$(grep '^fleet=' "$META" | cut -d= -f2- || true)
 
 default_branch() {
   local ref branch
@@ -168,21 +160,6 @@ default_branch() {
 meta_value() {
   local meta=$1 key=$2
   fm_meta_get "$meta" "$key"
-}
-
-herdr_fleet_has_other_member() {  # <fleet> <session> <workspace-id> <tab-id>
-  local fleet=$1 session=$2 workspace=$3 tab=$4 candidate
-  for candidate in "$STATE"/*.meta; do
-    [ -f "$candidate" ] && [ ! -L "$candidate" ] || continue
-    [ "$candidate" != "$META" ] || continue
-    [ "$(meta_value "$candidate" fleet)" = "$fleet" ] || continue
-    [ "$(fm_backend_of_meta "$candidate")" = herdr ] || continue
-    [ "$(meta_value "$candidate" herdr_session)" = "$session" ] || continue
-    [ "$(meta_value "$candidate" herdr_workspace_id)" = "$workspace" ] || continue
-    [ "$(meta_value "$candidate" herdr_tab_id)" = "$tab" ] || continue
-    return 0
-  done
-  return 1
 }
 
 require_orca_worktree_id() {
@@ -219,6 +196,14 @@ remove_grok_turnend_auth() {
   rm -f "$hooks_dir/$token"
 }
 
+remove_kimi_turnend_auth() {
+  local state_dir=$1 id=$2 token hooks_dir
+  token=$(cat "$state_dir/$id.kimi-turnend-token" 2>/dev/null || true)
+  case "$token" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac
+  hooks_dir="$HOME/.kimi-code/fm-turn-end.d"
+  rm -f "$hooks_dir/$token"
+}
+
 validate_pr_poll_cleanup() {
   local state_dir=$1 id=$2 quarantine state_device artifact has_artifact=0
   fm_task_id_path_safe "$id" || return 0
@@ -232,7 +217,8 @@ validate_pr_poll_cleanup() {
     return 1
   fi
   for artifact in "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
-    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.check-trust"; do
+    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.pr-poll-retirement" \
+    "$state_dir/$id.check-trust"; do
     [ -e "$artifact" ] || [ -L "$artifact" ] || continue
     has_artifact=1
   done
@@ -243,7 +229,8 @@ validate_pr_poll_cleanup() {
   [ -d "$state_dir" ] && [ ! -L "$state_dir" ] || return 1
   state_device=$(fm_pr_file_device "$state_dir") || return 1
   for artifact in "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
-    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.check-trust"; do
+    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.pr-poll-retirement" \
+    "$state_dir/$id.check-trust"; do
     [ -e "$artifact" ] || [ -L "$artifact" ] || continue
     if [ ! -f "$artifact" ] || [ -L "$artifact" ] \
       || [ "$(fm_pr_file_device "$artifact")" != "$state_device" ] \
@@ -252,6 +239,13 @@ validate_pr_poll_cleanup() {
       return 1
     fi
   done
+  if [ -e "$state_dir/$id.pr-poll-retirement" ] \
+    || [ -L "$state_dir/$id.pr-poll-retirement" ]; then
+    fm_pr_poll_retirement_state_valid "$state_dir" "$id" || {
+      echo "REFUSED: invalid PR-poll retirement receipt; preserving task state." >&2
+      return 1
+    }
+  fi
   [ -e "$quarantine" ] || [ -L "$quarantine" ] || return 0
   if [ ! -d "$state_dir" ] || [ -L "$state_dir" ] \
     || [ ! -d "$quarantine" ] || [ -L "$quarantine" ]; then
@@ -275,8 +269,10 @@ validate_pr_poll_cleanup() {
 remove_pr_poll_artifacts() {
   local state_dir=$1 id=$2 quarantine artifact
   validate_pr_poll_cleanup "$state_dir" "$id" || return 1
+  fm_pr_poll_retirement_recover_one "$state_dir" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" || return 1
   rm -f "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
-    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.check-trust" || return 1
+    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.pr-poll-retirement" \
+    "$state_dir/$id.check-trust" || return 1
   if fm_task_id_path_safe "$id"; then
     quarantine="$state_dir/.pr-check-quarantine"
     if [ -d "$quarantine" ] && [ ! -L "$quarantine" ]; then
@@ -684,7 +680,7 @@ validate_worktree_teardown_safety() {
     echo "Restore the git index state, or get the captain's explicit OK to discard, then --force." >&2
     return 1
   fi
-  dirty=$(printf '%s\n' "$dirty_raw" | grep -vE '^\?\? (\.claude/|\.fm-grok-turnend$)' | head -1 || true)
+  dirty=$(printf '%s\n' "$dirty_raw" | grep -vE '^\?\? (\.claude/|\.fm-(grok|kimi)-turnend$)' | head -1 || true)
 
   if ! unpushed_raw=$(git -C "$WT" log --oneline HEAD --not --remotes -- 2>/dev/null); then
     if worktree_safety_blocked_by_lock "commits not on a remote"; then
@@ -1014,12 +1010,14 @@ cleanup_firstmate_home_children() {
     elif [ "$child_backend" = orca ]; then
       if [ -n "$child_wt" ] && [ -d "$child_wt" ]; then
         validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
-        rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" "$child_wt/.fm-grok-turnend"
+        rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" \
+          "$child_wt/.fm-grok-turnend" "$child_wt/.fm-kimi-turnend"
       fi
       fm_backend_remove_worktree "$child_backend" "$child_orca_worktree_id" || return 1
     elif [ -n "$child_wt" ] && [ -d "$child_wt" ]; then
       validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
-      rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" "$child_wt/.fm-grok-turnend"
+      rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" \
+        "$child_wt/.fm-grok-turnend" "$child_wt/.fm-kimi-turnend"
       if [ -n "$child_proj" ] && [ -d "$child_proj" ] && command -v treehouse >/dev/null 2>&1; then
         if teardown_treehouse_return "$child_wt" "$child_proj" "child worktree"; then
           :
@@ -1035,8 +1033,11 @@ cleanup_firstmate_home_children() {
       fi
     fi
     remove_grok_turnend_auth "$sub_state" "$child_id"
+    remove_kimi_turnend_auth "$sub_state" "$child_id"
     remove_pr_poll_artifacts "$sub_state" "$child_id" || return 1
-    rm -f "$sub_state/$child_id.status" "$sub_state/$child_id.turn-ended" "$sub_state/$child_id.meta" "$sub_state/$child_id.pi-ext.ts" "$sub_state/$child_id.grok-turnend-token"
+    rm -f "$sub_state/$child_id.status" "$sub_state/$child_id.turn-ended" \
+      "$sub_state/$child_id.meta" "$sub_state/$child_id.pi-ext.ts" \
+      "$sub_state/$child_id.grok-turnend-token" "$sub_state/$child_id.kimi-turnend-token"
   done
 }
 
@@ -1126,7 +1127,8 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
         git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
       fi
     fi
-    rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" "$WT/.fm-grok-turnend"
+    rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
+      "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
   fi
   [ -z "$T_ORCA" ] || fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
   fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
@@ -1138,7 +1140,8 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
     fi
   fi
   # Remove our hook file so a reused pool worktree cannot fire signals for a dead task.
-  rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" "$WT/.fm-grok-turnend"
+  rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
+    "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
   # Kills remaining processes in the worktree (including the agent), resets, returns
   # to pool. treehouse resolves the pool from the working directory, so run it from
   # the project. teardown_treehouse_return tolerates transient and stale git locks
@@ -1153,80 +1156,11 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   }
 fi
 
-HERDR_FLEET_HANDLED=0
-if [ "$BACKEND" = herdr ] && [ -n "$FLEET" ]; then
-  HERDR_FLEET_HANDLED=1
-  # shellcheck source=bin/fm-wake-lib.sh
-  . "$SCRIPT_DIR/fm-wake-lib.sh"
-  fm_backend_source herdr || true
-  HERDR_FLEET_SESSION=$(meta_value "$META" herdr_session)
-  HERDR_FLEET_WORKSPACE=$(meta_value "$META" herdr_workspace_id)
-  HERDR_FLEET_TAB=$(meta_value "$META" herdr_tab_id)
-  HERDR_FLEET_PANE=$(meta_value "$META" herdr_pane_id)
-  HERDR_FLEET_RECORD=$(fm_backend_herdr_fleet_record_path "$STATE" "$FLEET")
-  HERDR_FLEET_LOCK=$(fm_backend_herdr_fleet_lock_path "$STATE" "$FLEET")
-  HERDR_FLEET_LOCK_HELD=0
-  HERDR_FLEET_LOCK_ATTEMPT=0
-  while [ "$HERDR_FLEET_LOCK_ATTEMPT" -lt 50 ]; do
-    if fm_lock_try_acquire "$HERDR_FLEET_LOCK"; then
-      HERDR_FLEET_LOCK_HELD=1
-      break
-    fi
-    sleep 0.1
-    HERDR_FLEET_LOCK_ATTEMPT=$((HERDR_FLEET_LOCK_ATTEMPT + 1))
-  done
-  HERDR_FLEET_LAST=0
-  if ! herdr_fleet_has_other_member \
-    "$FLEET" "$HERDR_FLEET_SESSION" "$HERDR_FLEET_WORKSPACE" "$HERDR_FLEET_TAB"; then
-    HERDR_FLEET_LAST=1
-  fi
-  HERDR_FLEET_RECORD_MATCHED=0
-  if fm_backend_herdr_fleet_record_read "$HERDR_FLEET_RECORD" "$FLEET" \
-     && [ "$FM_BACKEND_HERDR_FLEET_RECORD_SESSION" = "$HERDR_FLEET_SESSION" ] \
-     && [ "$FM_BACKEND_HERDR_FLEET_RECORD_WORKSPACE_ID" = "$HERDR_FLEET_WORKSPACE" ] \
-     && [ "$FM_BACKEND_HERDR_FLEET_RECORD_TAB_ID" = "$HERDR_FLEET_TAB" ] \
-     && fm_backend_herdr_fleet_workspace_matches_record \
-       "$HERDR_FLEET_SESSION" "$HERDR_FLEET_WORKSPACE" "$HERDR_FLEET_TAB" \
-       "$FLEET" "$FM_BACKEND_HERDR_FLEET_RECORD_TOKEN"; then
-    HERDR_FLEET_RECORD_MATCHED=1
-  elif [ "$HERDR_FLEET_LAST" = 1 ]; then
-    echo "warning: Herdr fleet '$FLEET' lacks exact durable creation proof; closing only the task pane and leaving workspace cleanup to the operator" >&2
-  fi
-  HERDR_FLEET_CLOSE_CONFIRMED=0
-  case "$(fm_backend_herdr_pane_agent_state "$HERDR_FLEET_SESSION" "$HERDR_FLEET_PANE")" in
-    dead) HERDR_FLEET_CLOSE_CONFIRMED=1 ;;
-    *)
-      if fm_backend_herdr_fleet_close_pane_focus_preserving \
-        "$HERDR_FLEET_SESSION" "$HERDR_FLEET_PANE" 2>/dev/null \
-         && [ "$(fm_backend_herdr_pane_agent_state "$HERDR_FLEET_SESSION" "$HERDR_FLEET_PANE")" = dead ]; then
-        HERDR_FLEET_CLOSE_CONFIRMED=1
-      fi
-      ;;
-  esac
-  if [ "$HERDR_FLEET_CLOSE_CONFIRMED" = 1 ] \
-     && [ "$HERDR_FLEET_LAST" = 1 ] \
-     && [ "$HERDR_FLEET_RECORD_MATCHED" = 1 ] \
-     && [ "$HERDR_FLEET_LOCK_HELD" = 1 ]; then
-    fm_backend_herdr_fleet_prune_recorded_workspace \
-      "$HERDR_FLEET_RECORD" "$FLEET" "$HERDR_FLEET_SESSION" \
-      "$HERDR_FLEET_WORKSPACE" "$HERDR_FLEET_TAB" || true
-  elif [ "$HERDR_FLEET_CLOSE_CONFIRMED" != 1 ]; then
-    echo "warning: exact Herdr fleet pane close could not be confirmed for $ID; retaining the fleet workspace record" >&2
-  fi
-  if [ "$HERDR_FLEET_LOCK_HELD" = 1 ]; then
-    HERDR_FLEET_LOCK_HELD=0
-    fm_lock_release "$HERDR_FLEET_LOCK" || true
-  else
-    echo "warning: Herdr fleet '$FLEET' lock stayed busy; no final workspace cleanup was attempted" >&2
-  fi
-fi
-
 HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
 HERDR_PRESENTATION_RETIRE_CANDIDATE=0
 HERDR_PRESENTATION_SESSION=
 HERDR_PRESENTATION_PANE=
 if [ "$BACKEND" = herdr ] \
-   && [ "$HERDR_FLEET_HANDLED" != 1 ] \
    && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
   fm_backend_source herdr || true
   HERDR_PRESENTATION_SESSION=$(meta_value "$META" herdr_session)
@@ -1246,26 +1180,28 @@ fi
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   # shellcheck source=bin/fm-wake-lib.sh
   . "$SCRIPT_DIR/fm-wake-lib.sh"
-  HERDR_PRESENTATION_FOCUS_LOCK="$STATE/.herdr-presentation-order.lock"
+  HERDR_PRESENTATION_FOCUS_LOCK=
   HERDR_PRESENTATION_FOCUS_LOCK_HELD=0
   HERDR_PRESENTATION_FOCUS_LOCK_ATTEMPT=0
-  while [ "$HERDR_PRESENTATION_FOCUS_LOCK_ATTEMPT" -lt 50 ]; do
-    if fm_lock_try_acquire "$HERDR_PRESENTATION_FOCUS_LOCK"; then
-      HERDR_PRESENTATION_FOCUS_LOCK_HELD=1
-      break
-    fi
-    sleep 0.1
-    HERDR_PRESENTATION_FOCUS_LOCK_ATTEMPT=$((HERDR_PRESENTATION_FOCUS_LOCK_ATTEMPT + 1))
-  done
+  if HERDR_PRESENTATION_FOCUS_LOCK=$(fm_backend_herdr_presentation_session_lock_path "$HERDR_PRESENTATION_SESSION"); then
+    while [ "$HERDR_PRESENTATION_FOCUS_LOCK_ATTEMPT" -lt 50 ]; do
+      if fm_lock_try_acquire "$HERDR_PRESENTATION_FOCUS_LOCK"; then
+        HERDR_PRESENTATION_FOCUS_LOCK_HELD=1
+        break
+      fi
+      sleep 0.1
+      HERDR_PRESENTATION_FOCUS_LOCK_ATTEMPT=$((HERDR_PRESENTATION_FOCUS_LOCK_ATTEMPT + 1))
+    done
+  fi
   if [ "$HERDR_PRESENTATION_FOCUS_LOCK_HELD" = 1 ]; then
     fm_backend_herdr_projection_close_pane_focus_preserving \
       "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" 2>/dev/null || true
     HERDR_PRESENTATION_FOCUS_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_FOCUS_LOCK" || true
   else
-    echo "warning: herdr presentation focus lock stayed busy; refusing a concurrent focus-unsafe pane close" >&2
+    echo "warning: herdr presentation focus lock unavailable; refusing a concurrent focus-unsafe pane close" >&2
   fi
-elif [ "$BACKEND" != orca ] && [ "$HERDR_FLEET_HANDLED" != 1 ]; then
+elif [ "$BACKEND" != orca ]; then
   fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
 fi
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
@@ -1275,7 +1211,6 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
     echo "warning: exact herdr task-pane close could not be confirmed for $ID; retaining the presentation journal and attempting no workspace cleanup" >&2
   fi
 elif [ "$BACKEND" = herdr ] \
-     && [ "$HERDR_FLEET_HANDLED" != 1 ] \
      && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
   echo "warning: herdr presentation journal for $ID remains quarantined; no workspace cleanup was attempted" >&2
 fi
@@ -1285,12 +1220,15 @@ if [ "$KIND" = secondmate ]; then
   remove_secondmate_registry_entry "$ID"
 fi
 remove_grok_turnend_auth "$STATE" "$ID"
+remove_kimi_turnend_auth "$STATE" "$ID"
 fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 # Remove the per-task temp root (/tmp/fm-<id>/, incl. its gotmp/) recorded by spawn.
 # Read before the state-file rm below; empty (pre-fix tasks without tasktmp=) is a no-op.
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
-rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token"
+rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" \
+  "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token" \
+  "$STATE/$ID.kimi-turnend-token"
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi

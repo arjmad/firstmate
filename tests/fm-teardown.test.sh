@@ -1301,6 +1301,9 @@ case "${1:-} ${2:-}" in
   "status --json")
     printf '%s\n' '{"server":{"running":true}}'
     ;;
+  "session list")
+    printf '%s\n' '{"sessions":[{"name":"fmtest","running":true,"socket_path":"/tmp/fmtest.sock"}]}'
+    ;;
   "pane close")
     if [ "${FM_FAKE_HERDR_CLOSE_FAIL:-0}" = 1 ]; then
       exit 1
@@ -1328,116 +1331,6 @@ case "${1:-} ${2:-}" in
 esac
 SH
   chmod +x "$case_dir/fakebin/herdr"
-}
-
-configure_herdr_fleet_teardown_case() {  # <case-dir> <with-record>
-  local case_dir=$1 with_record=$2 token=AbCdEfGhIjKlMnOpQrStUv
-  sed -i.bak 's/^window=.*/window=fmtest:w9:p1/' "$case_dir/state/task-x1.meta"
-  rm -f "$case_dir/state/task-x1.meta.bak"
-  printf '%s\n' \
-    'backend=herdr' \
-    'fleet=batch' \
-    'herdr_session=fmtest' \
-    'herdr_workspace_id=w9' \
-    'herdr_tab_id=w9:t1' \
-    'herdr_pane_id=w9:p1' >> "$case_dir/state/task-x1.meta"
-  if [ "$with_record" = yes ]; then
-    printf '%s\n' \
-      'version=1' \
-      'fleet=batch' \
-      "fleet_id=$token" \
-      'state=active' \
-      'session=fmtest' \
-      'workspace_id=w9' \
-      'tab_id=w9:t1' > "$case_dir/state/.herdr-fleet-batch"
-  fi
-  cat > "$case_dir/fakebin/herdr" <<'SH'
-#!/usr/bin/env bash
-set -u
-printf '%s\n' "$*" >> "${FM_FAKE_HERDR_LOG:?}"
-case "${1:-} ${2:-}" in
-  "workspace get")
-    if [ -e "${FM_FAKE_HERDR_WORKSPACE_CLOSED:?}" ]; then
-      printf '%s\n' '{"error":{"code":"workspace_not_found"}}' >&2
-      exit 1
-    fi
-    printf '%s\n' '{"result":{"workspace":{"workspace_id":"w9","label":"firstmate/fleet-batch · f:AbCdEfGhIjKlMnOpQrStUv"}}}'
-    ;;
-  "tab get")
-    printf '%s\n' '{"result":{"tab":{"tab_id":"w9:t1","workspace_id":"w9"}}}'
-    ;;
-  "workspace list")
-    printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"captain","active_tab_id":"captain:t1","focused":true},{"workspace_id":"w9","active_tab_id":"w9:t1","focused":false}]}}'
-    ;;
-  "tab list")
-    printf '%s\n' '{"result":{"tabs":[{"tab_id":"captain:t1","focused":true}]}}'
-    ;;
-  "pane get")
-    if [ -e "${FM_FAKE_HERDR_PANE_CLOSED:?}" ]; then
-      printf '%s\n' '{"error":{"code":"pane_not_found"}}' >&2
-      exit 1
-    fi
-    printf '%s\n' '{"result":{"pane":{"pane_id":"w9:p1","tab_id":"w9:t1","workspace_id":"w9"}}}'
-    ;;
-  "agent get")
-    printf '%s\n' '{"error":{"code":"agent_not_found"}}' >&2
-    exit 1
-    ;;
-  "pane list")
-    if [ -e "${FM_FAKE_HERDR_PANE_CLOSED:?}" ]; then
-      printf '%s\n' '{"result":{"panes":[]}}'
-    else
-      printf '%s\n' '{"result":{"panes":[{"pane_id":"w9:p1","tab_id":"w9:t1","workspace_id":"w9"}]}}'
-    fi
-    ;;
-  "pane close")
-    : > "${FM_FAKE_HERDR_PANE_CLOSED:?}"
-    ;;
-  "workspace close")
-    : > "${FM_FAKE_HERDR_WORKSPACE_CLOSED:?}"
-    ;;
-esac
-SH
-  chmod +x "$case_dir/fakebin/herdr"
-}
-
-test_herdr_fleet_teardown_prunes_only_with_exact_creation_record() {
-  local case_dir log pane_closed workspace_closed
-  case_dir=$(make_case herdr-fleet-recorded-prune)
-  write_meta "$case_dir" local-only ship
-  configure_herdr_fleet_teardown_case "$case_dir" yes
-  log="$case_dir/herdr.log"; pane_closed="$case_dir/pane-closed"; workspace_closed="$case_dir/workspace-closed"; : > "$log"
-
-  FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_PANE_CLOSED="$pane_closed" \
-    FM_FAKE_HERDR_WORKSPACE_CLOSED="$workspace_closed" \
-    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
-    || fail "herdr-fleet-recorded-prune: forced teardown failed"
-  assert_present "$pane_closed" "recorded fleet teardown did not close the exact task pane"
-  assert_present "$workspace_closed" "recorded last fleet member did not prune the exact empty workspace"
-  assert_absent "$case_dir/state/.herdr-fleet-batch" "confirmed fleet workspace prune did not retire the durable record"
-  assert_contains "$(cat "$log")" "workspace close w9" \
-    "recorded fleet teardown did not close only the exact recorded workspace"
-  pass "Herdr fleet teardown prunes the last workspace only with exact durable creation proof"
-}
-
-test_herdr_fleet_teardown_without_creation_record_leaves_workspace() {
-  local case_dir log pane_closed workspace_closed
-  case_dir=$(make_case herdr-fleet-unrecorded-leave)
-  write_meta "$case_dir" local-only ship
-  configure_herdr_fleet_teardown_case "$case_dir" no
-  log="$case_dir/herdr.log"; pane_closed="$case_dir/pane-closed"; workspace_closed="$case_dir/workspace-closed"; : > "$log"
-
-  FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_PANE_CLOSED="$pane_closed" \
-    FM_FAKE_HERDR_WORKSPACE_CLOSED="$workspace_closed" \
-    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
-    || fail "herdr-fleet-unrecorded-leave: forced teardown failed"
-  assert_present "$pane_closed" "unrecorded fleet teardown did not clean the exact task pane"
-  assert_absent "$workspace_closed" "unrecorded fleet teardown must not close the workspace"
-  assert_not_contains "$(cat "$log")" "workspace close" \
-    "unrecorded fleet teardown attempted workspace cleanup"
-  assert_grep "lacks exact durable creation proof" "$case_dir/stderr" \
-    "unrecorded fleet teardown did not explain why workspace cleanup was skipped"
-  pass "Herdr fleet teardown cleans the task pane but leaves an unproven workspace untouched"
 }
 
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close() {
@@ -1487,8 +1380,6 @@ test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
 test_herdr_teardown_clears_escalation_marker
-test_herdr_fleet_teardown_prunes_only_with_exact_creation_record
-test_herdr_fleet_teardown_without_creation_record_leaves_workspace
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
 test_herdr_projection_teardown_retains_journal_when_close_unconfirmed
 test_squash_merged_branch_deleted_allows
