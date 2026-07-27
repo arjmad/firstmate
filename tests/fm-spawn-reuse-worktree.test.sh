@@ -48,6 +48,28 @@ printf 'treehouse was executed directly\n' >> "${FM_TREEHOUSE_LOG:?}"
 exit 99
 SH
   chmod +x "$fakebin/treehouse"
+  # A herdr CLI that logs every invocation, so a case can assert the owner probe
+  # never reached for `herdr server`. FM_FAKE_HERDR_MODE=down is the
+  # not-running-at-all runtime (every call fails, exactly as a real client does
+  # with no server bound); FM_FAKE_HERDR_MODE=up answers pane reads and reports
+  # FM_FAKE_HERDR_AGENT_STATUS for the agent read.
+  cat > "$fakebin/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+{ printf 'herdr'; for arg in "$@"; do printf '\x1f%s' "$arg"; done; printf '\n'; } >> "${FM_HERDR_LOG:?}"
+if [ "${FM_FAKE_HERDR_MODE:-down}" != up ]; then
+  printf '{"error":{"code":"connection_refused","message":"no herdr server"}}\n' >&2
+  exit 1
+fi
+case "${1:-}:${2:-}" in
+  pane:get) printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "${3:-}"; exit 0 ;;
+  agent:get) printf '{"result":{"agent":{"agent_status":"%s"}}}\n' "${FM_FAKE_HERDR_AGENT_STATUS:-unrecognized}"; exit 0 ;;
+  status:*) printf '{"server":{"running":true},"client":{"protocol":99,"version":"fake"}}\n'; exit 0 ;;
+esac
+printf '{"result":{}}\n'
+exit 0
+SH
+  chmod +x "$fakebin/herdr"
   printf '%s\n' "$fakebin"
 }
 
@@ -72,6 +94,7 @@ EOF
   WT_REAL=$(cd "$WT_DIR" && pwd -P)
   TMUX_LOG="$CASE_DIR/tmux.log"
   TREEHOUSE_LOG="$CASE_DIR/treehouse.log"
+  HERDR_LOG="$CASE_DIR/herdr.log"
   # The foreground command the fake tmux reports, i.e. what the shared
   # fm_backend_agent_alive classifier sees for any endpoint this case probes.
   # A bare shell is the default, so every case starts from "confidently dead".
@@ -82,8 +105,11 @@ EOF
   # exactly what a stopped worker's stale metadata points at, so the dead cases
   # leave this empty and only the alive/ambiguous ones register a window.
   TMUX_WINDOWS=
+  HERDR_MODE=down
+  HERDR_AGENT_STATUS=unrecognized
   : > "$TMUX_LOG"
   : > "$TREEHOUSE_LOG"
+  : > "$HERDR_LOG"
 }
 
 run_spawn_argv() {
@@ -92,8 +118,11 @@ run_spawn_argv() {
     FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
     FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux TMUX="fake,1,0" \
     FM_TMUX_LOG="$TMUX_LOG" FM_TREEHOUSE_LOG="$TREEHOUSE_LOG" \
+    FM_HERDR_LOG="$HERDR_LOG" \
     FM_FAKE_PANE_COMMAND="$PANE_COMMAND" \
     FM_FAKE_TMUX_WINDOWS="$TMUX_WINDOWS" \
+    FM_FAKE_HERDR_MODE="$HERDR_MODE" \
+    FM_FAKE_HERDR_AGENT_STATUS="$HERDR_AGENT_STATUS" \
     PATH="$FAKEBIN_DIR:$PATH" \
     "$SPAWN" "$@" 2>&1
 }
@@ -124,6 +153,40 @@ write_owner_meta() {
     "kind=ship" \
     "mode=default" \
     "yolo=off"
+}
+
+# write_herdr_owner_meta <owner-id> <worktree>: an owner recorded against the
+# herdr backend while the current spawn stays on tmux - the cross-backend shape
+# that must never boot a herdr server just to read the owner.
+write_herdr_owner_meta() {
+  local owner=$1 worktree=$2
+  fm_write_meta "$HOME_DIR/state/$owner.meta" \
+    "window=fmtest:%7" \
+    "backend=herdr" \
+    "worktree=$worktree" \
+    "project=$PROJ_DIR" \
+    "harness=claude" \
+    "kind=ship" \
+    "mode=default" \
+    "yolo=off"
+}
+
+# write_endpointless_owner_meta <owner-id> <worktree>: a truncated or hand-edited
+# meta that names the worktree but records no endpoint at all.
+write_endpointless_owner_meta() {
+  local owner=$1 worktree=$2
+  fm_write_meta "$HOME_DIR/state/$owner.meta" \
+    "worktree=$worktree" \
+    "project=$PROJ_DIR" \
+    "harness=claude" \
+    "kind=ship"
+}
+
+assert_herdr_probe_stayed_passive() {
+  assert_contains "$(cat "$HERDR_LOG")" "herdr"$'\x1f'"pane"$'\x1f'"get" \
+    "the owner liveness probe never reached the herdr adapter at all"
+  assert_not_contains "$(cat "$HERDR_LOG")" "server" \
+    "the owner liveness probe started or polled a herdr server"
 }
 
 test_valid_reuse_skips_treehouse_and_records_worktree() {
@@ -285,21 +348,122 @@ test_worktree_owned_by_dead_task_is_reclaimed() {
   pass "stale metadata over a dead endpoint still permits the relaunch"
 }
 
-test_own_stale_metadata_does_not_block_relaunch() {
+test_same_task_relaunch_over_live_endpoint_is_refused() {
   local id rec out status
-  id=reuse-self-stale-z9
-  rec=$(make_case self-stale "$id")
+  id=reuse-self-live-z9
+  rec=$(make_case self-live "$id")
   read_case "$rec"
   write_owner_meta "$id" "$WT_REAL"
+  register_live_tmux_window "$id"
+  PANE_COMMAND=claude
+
+  out=$(run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 1 "$status" "relaunching a task over its own live endpoint must be refused"
+  assert_contains "$out" "is already recorded by this task's own prior launch" \
+    "self-relaunch refusal did not identify the task's own prior launch"
+  assert_contains "$out" "endpoint reported as alive" \
+    "self-relaunch refusal did not report the prior endpoint as alive"
+  assert_not_contains "$(cat "$TMUX_LOG")" "new-window" \
+    "self-relaunch refusal created a second endpoint over the live one"
+  assert_grep "window=firstmate:fm-$id" "$HOME_DIR/state/$id.meta" \
+    "the refused self-relaunch overwrote the live endpoint in metadata"
+  pass "a live worker is never replaced by a relaunch into its own worktree"
+}
+
+test_same_task_relaunch_over_ambiguous_endpoint_is_refused() {
+  local id rec out status
+  id=reuse-self-unknown-za0
+  rec=$(make_case self-unknown "$id")
+  read_case "$rec"
+  write_owner_meta "$id" "$WT_REAL"
+  register_live_tmux_window "$id"
   PANE_COMMAND=node
 
   out=$(run_spawn "$id" "$WT_DIR")
   status=$?
-  expect_code 0 "$status" "a task's own prior metadata must not block its relaunch"$'\n'"$out"
+  expect_code 1 "$status" "an ambiguously live prior endpoint must not license replacement"
+  assert_contains "$out" "is already recorded by this task's own prior launch" \
+    "ambiguous self-relaunch refusal did not identify the task's own prior launch"
+  assert_contains "$out" "endpoint reported as unknown" \
+    "ambiguous self-relaunch refusal did not report the prior endpoint as unknown"
+  assert_not_contains "$(cat "$TMUX_LOG")" "new-window" \
+    "ambiguous self-relaunch refusal created a second endpoint"
+  pass "an ambiguously live prior endpoint refuses a same-task relaunch"
+}
+
+test_same_task_relaunch_over_dead_endpoint_is_reclaimed() {
+  local id rec out status
+  id=reuse-self-dead-z9b
+  rec=$(make_case self-dead "$id")
+  read_case "$rec"
+  write_owner_meta "$id" "$WT_REAL"
+
+  out=$(run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 0 "$status" "a confidently dead prior endpoint must permit the relaunch"$'\n'"$out"
   assert_grep "worktree=$WT_REAL" "$HOME_DIR/state/$id.meta" \
     "the relaunched task did not record its own worktree"
   rm -rf "/tmp/fm-$id"
-  pass "the exclusivity scan skips the relaunching task's own metadata"
+  pass "a stopped worker's own stale metadata is reclaimed by the relaunch"
+}
+
+test_endpointless_owner_meta_refuses_with_a_diagnostic() {
+  local id rec out status
+  id=reuse-no-endpoint-z9c
+  rec=$(make_case no-endpoint "$id")
+  read_case "$rec"
+  write_endpointless_owner_meta owner-endpointless-z9c "$WT_REAL"
+
+  out=$(run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 1 "$status" "an owner meta with no endpoint must be refused, not silently fatal"
+  assert_contains "$out" "is already recorded by task owner-endpointless-z9c" \
+    "endpointless-owner refusal did not name the owning task"
+  assert_contains "$out" "records no endpoint" \
+    "endpointless-owner refusal did not explain that no endpoint could be probed"
+  assert_not_contains "$(cat "$TMUX_LOG")" "new-window" \
+    "endpointless-owner refusal created a task endpoint"
+  pass "metadata naming the worktree with no endpoint fails loudly rather than silently"
+}
+
+test_herdr_owner_with_no_running_server_is_reclaimed() {
+  local id rec out status
+  id=reuse-herdr-down-z9d
+  rec=$(make_case herdr-down "$id")
+  read_case "$rec"
+  write_herdr_owner_meta owner-herdr-down-z9d "$WT_REAL"
+
+  out=$(run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 0 "$status" "a herdr owner with no running server must release the worktree"$'\n'"$out"
+  assert_grep "worktree=$WT_REAL" "$HOME_DIR/state/$id.meta" \
+    "the reclaimed worktree was not recorded for the relaunched task"
+  assert_herdr_probe_stayed_passive
+  rm -rf "/tmp/fm-$id"
+  pass "a stopped herdr runtime cannot host a live agent, so its owner is reclaimed without booting it"
+}
+
+test_herdr_owner_with_ambiguous_agent_is_refused() {
+  local id rec out status
+  id=reuse-herdr-ambiguous-z9e
+  rec=$(make_case herdr-ambiguous "$id")
+  read_case "$rec"
+  write_herdr_owner_meta owner-herdr-ambiguous-z9e "$WT_REAL"
+  HERDR_MODE=up
+  HERDR_AGENT_STATUS=something-unrecognized
+
+  out=$(run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 1 "$status" "a running herdr whose agent read is ambiguous must refuse"
+  assert_contains "$out" "is already recorded by task owner-herdr-ambiguous-z9e" \
+    "ambiguous herdr-owner refusal did not name the owning task"
+  assert_contains "$out" "endpoint reported as unknown" \
+    "ambiguous herdr-owner refusal did not report the owning endpoint as unknown"
+  assert_not_contains "$(cat "$TMUX_LOG")" "new-window" \
+    "ambiguous herdr-owner refusal created a task endpoint"
+  assert_herdr_probe_stayed_passive
+  pass "a running herdr with an unreadable agent refuses rather than sharing the worktree"
 }
 
 test_batch_dispatch_is_refused() {
@@ -355,7 +519,12 @@ test_foreign_repository_worktree_is_refused
 test_worktree_owned_by_live_task_is_refused
 test_worktree_owned_by_unreadable_task_is_refused
 test_worktree_owned_by_dead_task_is_reclaimed
-test_own_stale_metadata_does_not_block_relaunch
+test_same_task_relaunch_over_live_endpoint_is_refused
+test_same_task_relaunch_over_ambiguous_endpoint_is_refused
+test_same_task_relaunch_over_dead_endpoint_is_reclaimed
+test_endpointless_owner_meta_refuses_with_a_diagnostic
+test_herdr_owner_with_no_running_server_is_reclaimed
+test_herdr_owner_with_ambiguous_agent_is_refused
 test_batch_dispatch_is_refused
 test_secondmate_is_refused
 test_orca_backend_is_refused

@@ -26,9 +26,11 @@
 #   starts the task there, and skips treehouse get. The path must be the worktree root,
 #   must remain distinct from the primary project checkout, and must belong to the same
 #   repository as <project-dir>; the ordinary isolation assertion is mandatory. It is
-#   also refused when another task already records the same path and that task's
-#   endpoint is not confidently dead, so stale metadata can be reclaimed but two live
-#   agents can never share files. It cannot be combined with batch, --secondmate, or
+#   also refused when any task, this one included, already records the same path and
+#   that task's endpoint is not confidently dead, so stale metadata can be reclaimed but
+#   a live worker is never replaced and two live agents can never share files. That owner
+#   probe is read-only: it never starts a backend runtime in order to inspect one.
+#   It cannot be combined with batch, --secondmate, or
 #   Orca, whose backend owns worktree creation. Without this flag, allocation is unchanged.
 #   Local model endpoints: for a template-based claude launch, when --model matches
 #   an entry in config/model-endpoints.json, the SAME claude CLI is redirected at a
@@ -999,10 +1001,14 @@ validate_spawn_worktree() {  # <source> <inspect-target>
 #     assertions above, and the mismatch would then be baked into worktree= for
 #     every downstream git/treehouse consumer of the metadata.
 #   exclusivity - treehouse get guaranteed one worktree per task. Only the
-#     recorded metadata can say whether another task still owns a supplied path,
-#     and only a CONFIDENTLY dead endpoint releases it: stale metadata over a
-#     dead endpoint is exactly the relaunch case this flag exists for, while an
-#     alive or unreadable endpoint must never let two agents share files.
+#     recorded metadata can say whether a task still owns a supplied path, and
+#     only a CONFIDENTLY dead endpoint releases it: stale metadata over a dead
+#     endpoint is exactly the relaunch case this flag exists for, while an alive
+#     or unreadable endpoint must never let two agents share files. The scan
+#     covers the relaunching task's OWN prior metadata on the same bar, because
+#     replacing a worker that is still running both orphans its endpoint and
+#     puts two agents in one checkout - the same hazard, from the direction an
+#     operator is most likely to hit while believing the worker had stopped.
 
 # spawn_git_common_dir_real: <dir>'s repository-identifying git common dir,
 # physically resolved. Every worktree of one repository reports the same value,
@@ -1020,21 +1026,33 @@ spawn_git_common_dir_real() {  # <dir>
 }
 
 # spawn_meta_endpoint_liveness: <meta>'s recorded endpoint as alive|dead|unknown,
-# or unrecorded when the meta names no endpoint at all. Delegates to the shared
-# fm_backend_agent_alive classifier (bin/fm-backend.sh) - the same CONFIDENT
-# agent-process probe the session-start secondmate sweep gates on - and keeps its
-# fail-safe contract: anything not positively dead collapses to a refusing
-# verdict here, so a momentary read glitch can never license sharing a worktree.
-# herdr needs its server up before a pane read means anything, mirroring the
-# journal guard below.
+# or unrecorded when the meta names no endpoint at all. Inspecting a worktree
+# owner must never MUTATE the runtime it is reading, so this composes the two
+# shared bin/fm-backend.sh primitives in the order that keeps it passive:
+#   fm_backend_target_exists - the cheap READ-ONLY presence check that
+#     deliberately never starts a server or session. A backend that is not
+#     running at all cannot be hosting a live agent, so its failure is a
+#     CONFIDENT dead: that is exactly what lets a worktree recorded against a
+#     stopped runtime be reclaimed without this probe booting that runtime.
+#   fm_backend_agent_alive - the CONFIDENT agent-PROCESS classifier the
+#     session-start secondmate sweep gates on, consulted only once the endpoint
+#     is known to exist. Its fail-safe contract is preserved verbatim: a present
+#     endpoint whose agent cannot be classified stays `unknown`, which refuses.
+# Backend-down and running-but-unreadable therefore stay distinguishable for
+# every backend whose adapter can tell them apart, and neither is ever guessed.
+# fm_backend_target_of_meta returns non-zero for a meta with no endpoint at all,
+# which under a `set -e` shell that propagates errexit into command substitution
+# would abort this subshell and kill the spawn with no diagnostic; `|| true`
+# keeps the unrecorded verdict below reachable on every bash.
 spawn_meta_endpoint_liveness() {  # <meta>
-  local meta=$1 backend target verdict
+  local meta=$1 id backend target verdict
+  id=$(basename "$meta" .meta)
   backend=$(fm_backend_of_meta "$meta")
-  target=$(fm_backend_target_of_meta "$meta")
+  target=$(fm_backend_target_of_meta "$meta" || true)
   [ -n "$target" ] || { printf 'unrecorded'; return 0; }
-  if [ "$backend" = herdr ] && fm_backend_source herdr >/dev/null 2>&1 &&
-    fm_backend_herdr_parse_target "$target" >/dev/null 2>&1; then
-    fm_backend_herdr_server_ensure "$FM_BACKEND_HERDR_SESSION" >/dev/null 2>&1 || true
+  if ! fm_backend_target_exists "$backend" "$target" "fm-$id" >/dev/null 2>&1; then
+    printf 'dead'
+    return 0
   fi
   verdict=$(fm_backend_agent_alive "$backend" "$target" 2>/dev/null) || verdict=
   case "$verdict" in
@@ -1059,7 +1077,6 @@ validate_reuse_worktree_exclusive() {  # <resolved-worktree>
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] || continue
     other_id=$(basename "$meta" .meta)
-    [ "$other_id" != "$ID" ] || continue
     other_wt=$(fm_meta_get "$meta" worktree)
     [ -n "$other_wt" ] || continue
     [ "$(real_path_or_raw "$other_wt")" = "$wt_real" ] || continue
@@ -1068,10 +1085,14 @@ validate_reuse_worktree_exclusive() {  # <resolved-worktree>
       continue
     fi
     case "$liveness" in
-      unrecorded) detail="records no endpoint that could prove its agent is gone" ;;
+      unrecorded) detail="records no endpoint, so nothing can establish that its agent is gone" ;;
       *) detail="has an endpoint reported as $liveness" ;;
     esac
-    echo "error: --reuse-worktree path $wt_real is already recorded by task $other_id, which $detail; refusing to start a second agent in a worktree another task may still own. Only a confidently dead endpoint releases the path." >&2
+    if [ "$other_id" = "$ID" ]; then
+      echo "error: --reuse-worktree path $wt_real is already recorded by this task's own prior launch, which $detail; refusing to replace a worker that may still be running, which would orphan its endpoint and put two agents in one checkout. Steer or exit that agent first. Only a confidently dead endpoint releases the path." >&2
+    else
+      echo "error: --reuse-worktree path $wt_real is already recorded by task $other_id, which $detail; refusing to start a second agent in a worktree another task may still own. Only a confidently dead endpoint releases the path." >&2
+    fi
     exit 1
   done
 }
