@@ -131,7 +131,12 @@ test_primary_and_secondmate_instruction_generation() {
     "generated implementation brief lets the worker own an ask-user decision"
   assert_grep "Firstmate applies the authority contract in its \`AGENTS.md\`" "$ship" \
     "generated implementation brief bypasses the primary authority owner"
-  assert_grep "silently bypass firstmate's authority check and any required captain escalation" "$ship" \
+  # Wording note: the possessive "firstmate's" cannot appear in this brief line.
+  # The line lives in a heredoc nested inside $( ) in bin/fm-brief.sh, where a bare
+  # apostrophe breaks bash's paren matching and stops the whole script parsing
+  # (upstream issue #1069). The assertion is unchanged in substance: the brief must
+  # still warn that --yes silently bypasses the authority check and captain escalation.
+  assert_grep "silently bypass the firstmate authority check and any required captain escalation" "$ship" \
     "generated implementation brief permits silent ask-user auto-resolution"
   assert_no_grep 'the captain, not you, owns the ask-user decisions' "$ship" \
     "generated implementation brief retained conflicting captain-only wording"
