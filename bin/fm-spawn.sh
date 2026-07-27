@@ -1034,26 +1034,44 @@ spawn_git_common_dir_real() {  # <dir>
   (cd "$common" 2>/dev/null && pwd -P) || return 1
 }
 
+# spawn_backend_probe_extra_tools: tools <backend>'s PRESENCE PROBE shells out to
+# that fm_backend_required_tools does not list, because they are not part of a
+# home's declared per-backend dependency delta. orca's read path is the case:
+# fm_backend_orca_capture returns the status of fm_backend_orca_json_text, which
+# is a `node -e` pipeline (bin/backends/orca.sh), so an unreachable node makes the
+# probe fail exactly like a gone terminal. Scoped to this probe rather than pushed
+# into fm_backend_required_tools, which would also make bootstrap demand node of
+# every orca home - a policy change this flag has no business making.
+spawn_backend_probe_extra_tools() {  # <backend>
+  case "$1" in
+    orca) printf '%s' 'node' ;;
+  esac
+}
+
 # spawn_backend_probe_tool: the first tool <backend>'s liveness probe needs that
 # this process cannot reach, or nothing when it can reach them all. The tool set
-# and the how-to-look-for-it rule both come from bin/fm-backend.sh's
+# and the how-to-look-for-it rule come from bin/fm-backend.sh's
 # fm_backend_required_tools / fm_backend_required_tool_available, the declared
 # single owner of the per-backend dependency delta (so cmux's bundled-binary
-# fallback is honoured here for free). treehouse is skipped: it allocates
-# worktrees and has no part in reading whether an endpoint is alive.
+# fallback is honoured here for free), plus this probe's own extras above.
+# treehouse is skipped: it allocates worktrees and has no part in reading whether
+# an endpoint is alive.
 # A missing tool is an INABILITY TO ASK, never an answer. Every adapter's
 # presence check reports it as absence instead - zellij pipes `list-sessions`
 # into grep and cmux pipes `list-panes` into jq, so no output reads as "gone";
-# orca's capture fails its own tool check; tmux's display-message is simply not
-# found - and absence would release the worktree to a second agent while the
-# first may still be running. So this runs BEFORE any presence probe, for every
-# backend, and refuses.
+# orca's capture fails at its own tool check or its node pipeline; tmux's
+# display-message is simply not found - and absence would release the worktree to
+# a second agent while the first may still be running. So this runs BEFORE any
+# presence probe, for every backend, and refuses.
 spawn_backend_probe_tool() {  # <backend>
   local backend=$1 tool required
   required=$(fm_backend_required_tools "$backend") || { printf 'unknown-backend'; return 0; }
   for tool in $required; do
     [ "$tool" = treehouse ] && continue
     fm_backend_required_tool_available "$backend" "$tool" || { printf '%s' "$tool"; return 0; }
+  done
+  for tool in $(spawn_backend_probe_extra_tools "$backend"); do
+    command -v "$tool" >/dev/null 2>&1 || { printf '%s' "$tool"; return 0; }
   done
 }
 

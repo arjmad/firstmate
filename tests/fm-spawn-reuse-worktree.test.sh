@@ -718,6 +718,28 @@ test_orca_owner_with_missing_cli_is_refused() {
   pass "an unreachable orca CLI refuses rather than reading its failed capture as absence"
 }
 
+test_orca_owner_with_missing_node_is_refused() {
+  local id rec out status
+  id=reuse-orca-nonode-z9q
+  rec=$(make_case orca-nonode "$id")
+  read_case "$rec"
+  write_owner_meta_on_backend owner-orca-nonode-z9q "$WT_REAL" orca "terminal=orca-term-2"
+  hide_tool_from_spawn_path node
+
+  out=$(run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 1 "$status" "an unreachable node must never release an orca-recorded worktree"
+  assert_contains "$out" "is already recorded by task owner-orca-nonode-z9q" \
+    "missing-node refusal did not name the owning task"
+  assert_contains "$out" "Cannot determine liveness: node CLI not found on PATH" \
+    "missing-node refusal did not name the condition that blocked the read"
+  assert_contains "$out" "a backend=orca runtime this spawn cannot see may still be running that agent" \
+    "missing-node refusal did not explain why absence is not death"
+  assert_absent "$HOME_DIR/state/$id.meta" \
+    "the refused spawn still recorded metadata for the reused worktree"
+  pass "orca's node-dependent read path refuses when node is unreachable"
+}
+
 test_owner_on_unrecognized_backend_is_refused() {
   local id rec out status
   id=reuse-badbackend-z9p
@@ -907,6 +929,7 @@ test_tmux_owner_with_missing_cli_is_refused
 test_zellij_owner_with_missing_cli_is_refused
 test_cmux_owner_with_missing_cli_is_refused
 test_orca_owner_with_missing_cli_is_refused
+test_orca_owner_with_missing_node_is_refused
 test_owner_on_unrecognized_backend_is_refused
 test_herdr_owner_with_unreadable_status_is_refused
 test_herdr_owner_with_unexpected_pane_error_is_refused
