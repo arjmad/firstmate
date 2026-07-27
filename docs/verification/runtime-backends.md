@@ -77,6 +77,7 @@ The CLI matrix was checked directly:
 | Close | `herdr pane close <pane> --session <name>` | The exact one-pane task tab closed; closing a final tab could remove the workspace. |
 | Launch environment | `herdr tab create --help`, `herdr workspace create --help` | Both document `--env <KEY=VALUE>` as setting an environment variable for the launched process. |
 | Repeatable launch environment | `herdr tab create --env A=1 --env B=2 --session <absent-name>` | Both occurrences parsed; the call failed only at socket connect, not with a repeated-argument refusal, so the flag accumulates rather than replacing. |
+| Launch environment reaches the process | `herdr tab create ... --env <k>=<v>` then `herdr pane run <pane> "printenv > <dump>"` | The variable was present in the launched process's own environment and absent from the pane's visible screen content. |
 
 All destructive verification used `bin/fm-herdr-lab.sh` with a non-default `fm-lab-` name and a byte-identical default-session tripwire.
 No ambient `herdr server stop` command is a supported test operation.

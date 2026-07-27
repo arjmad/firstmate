@@ -241,8 +241,59 @@ The end-to-end case asserts that a `pane run` and a `pane send-text` did occur, 
 `tests/fm-spawn-model-endpoint.test.sh` continues to pin the typed path on the tmux transport unchanged.
 Both assertions were confirmed to fail when the change is reverted in place: forcing the typed block back on reproduces `export GOTMPDIR` at the pane, and dropping the flag expansion from `tab create` reproduces the missing `--env`.
 
-### Not exercised here: a live herdr launch through the proxy
+### Live confirmation in an isolated lab session
 
-Reading the environment from inside a really launched process, and confirming a proxy-routed `claude` worker reaches the proxy rather than a 401 retry loop, requires creating and tearing down a real Herdr tab.
-The crewmate brief for this task is not `--herdr-lab` enabled and its hard safety gate forbids driving Herdr lifecycle from an unguarded brief, so that confirmation is left to firstmate, exactly as in section 4.
-To run it, add a `my-local-model` entry to `config/model-endpoints.json` (token via `auth_token_env` or `auth_token_file`), spawn with `--backend herdr --harness claude --model my-local-model`, then read the launched process's own environment from inside the pane and confirm the worker answers on the proxied model.
+Every check below ran inside a `bin/fm-herdr-lab.sh` session, never against the captain's `default` session, and each teardown re-verified the identical default fleet state.
+Generic values are used as elsewhere in this record: the real endpoint alias, proxy port, and model ids are the operator's own.
+
+A pane created with `--env` carries that environment in the launched process, and neither value reaches the screen:
+
+```
+$ herdr tab create --workspace <ws> --cwd <dir> --label envprobe --no-focus \
+    --env FM_LAB_PROBE=<probe> --env ANTHROPIC_AUTH_TOKEN=<fake> --session <lab>
+$ herdr pane run <pane> "printenv > <dump>" --session <lab>
+
+PASS: FM_LAB_PROBE present in the launched process environment
+PASS: ANTHROPIC_AUTH_TOKEN present in the launched process environment
+env entries captured: 61
+screen bytes captured: 250
+PASS: the token value never appeared in the pane's visible screen content
+PASS: the probe value never appeared on screen either
+```
+
+A real `bin/fm-spawn.sh --backend herdr --harness claude --model <alias>` launch against the live proxy then completed a turn and reported its own environment.
+The worker wrote the report to a file rather than the screen, so the credential was never printed and the file's existence is itself proof of a completed model turn:
+
+```
+TOKEN_LEN=48
+BASEURL=http://127.0.0.1:<port>
+GOTMP=/tmp/fm-<id>/gotmp
+
+PASS: the proxied worker completed a turn and ran its tool (reached the proxy, no 401 retry loop)
+PASS: ANTHROPIC_AUTH_TOKEN present in the launched process environment (length 48, value never printed)
+PASS: GOTMPDIR correct inside the launched process
+PASS: endpoint base URL present inside the launched process
+PASS: the real credential does not appear in the pane's visible screen content
+PASS: the real credential reached no durable record under state/
+PASS: no 401 or unauthorized signature on the pane
+```
+
+Reading the screen back from a pane whose worktree `claude` had never seen holds the launch at the folder-trust dialog, so the pane's whole visible history from its first shell prompt can be captured.
+That history is the prompt, the launch command, and the agent UI, with no pre-launch typing at all:
+
+```
+heimdall@heimdall <worktree> % ANTHROPIC_BASE_URL='http://127.0.0.1:<port>' ANTHROPIC_DEFAULT_OPUS_MODEL='<alias>' \
+ANTHROPIC_DEFAULT_SONNET_MODEL='<alias>' ANTHROPIC_DEFAULT_HAIKU_MODEL='<alias-small>' \
+CLAUDE_CODE_SUBAGENT_MODEL='<alias>' CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude \
+--dangerously-skip-permissions --model '<alias>' --strict-mcp-config "$('<root>/bin/fm-operational-input.sh' encode launch-brief < '<brief>')"
+
+ Quick safety check: Is this a project you created or one you trust? ...
+
+PASS: 'export ANTHROPIC_AUTH_TOKEN' does not appear on the pane screen
+PASS: 'export GOTMPDIR' does not appear on the pane screen
+PASS: 'unset HISTFILE' does not appear on the pane screen
+PASS: the real credential does not appear on the pane screen
+```
+
+The non-secret endpoint prefix is still visible there, as expected: it is part of the launch command, not launch environment, and is composed identically on every backend.
+The three lines that used to sit above that command are gone, which is the acceptance bar for enabling `experimental.pane_history`.
