@@ -23,10 +23,13 @@
 #   tmux keeps its fm-<id> window name because that name is also its recorded target.
 #   --reuse-worktree <path> is a single ship/scout relaunch path for a caller-selected
 #   existing git worktree. It resolves and validates the path before endpoint creation,
-#   starts the task there, and skips treehouse get. The path must be the worktree root
-#   and must remain distinct from the primary project checkout; the ordinary isolation
-#   assertion is mandatory. It cannot be combined with batch, --secondmate, or Orca,
-#   whose backend owns worktree creation. Without this flag, allocation is unchanged.
+#   starts the task there, and skips treehouse get. The path must be the worktree root,
+#   must remain distinct from the primary project checkout, and must belong to the same
+#   repository as <project-dir>; the ordinary isolation assertion is mandatory. It is
+#   also refused when another task already records the same path and that task's
+#   endpoint is not confidently dead, so stale metadata can be reclaimed but two live
+#   agents can never share files. It cannot be combined with batch, --secondmate, or
+#   Orca, whose backend owns worktree creation. Without this flag, allocation is unchanged.
 #   Local model endpoints: for a template-based claude launch, when --model matches
 #   an entry in config/model-endpoints.json, the SAME claude CLI is redirected at a
 #   local Anthropic-shaped proxy (endpoint env prefix + --strict-mcp-config; an
@@ -988,6 +991,91 @@ validate_spawn_worktree() {  # <source> <inspect-target>
   fi
 }
 
+# validate_spawn_worktree proves the path is a worktree ROOT distinct from the
+# primary checkout. Two properties treehouse get used to supply implicitly, that
+# a caller-selected path does not, and that both have to be settled before any
+# endpoint exists:
+#   membership - a worktree root of an UNRELATED repository satisfies both of the
+#     assertions above, and the mismatch would then be baked into worktree= for
+#     every downstream git/treehouse consumer of the metadata.
+#   exclusivity - treehouse get guaranteed one worktree per task. Only the
+#     recorded metadata can say whether another task still owns a supplied path,
+#     and only a CONFIDENTLY dead endpoint releases it: stale metadata over a
+#     dead endpoint is exactly the relaunch case this flag exists for, while an
+#     alive or unreadable endpoint must never let two agents share files.
+
+# spawn_git_common_dir_real: <dir>'s repository-identifying git common dir,
+# physically resolved. Every worktree of one repository reports the same value,
+# so it is the repository-membership identity a per-worktree --show-toplevel or
+# --git-dir cannot be.
+spawn_git_common_dir_real() {  # <dir>
+  local dir=$1 common
+  common=$(cd "$dir" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null) || return 1
+  [ -n "$common" ] || return 1
+  case "$common" in
+    /*) ;;
+    *) common=$dir/$common ;;
+  esac
+  (cd "$common" 2>/dev/null && pwd -P) || return 1
+}
+
+# spawn_meta_endpoint_liveness: <meta>'s recorded endpoint as alive|dead|unknown,
+# or unrecorded when the meta names no endpoint at all. Delegates to the shared
+# fm_backend_agent_alive classifier (bin/fm-backend.sh) - the same CONFIDENT
+# agent-process probe the session-start secondmate sweep gates on - and keeps its
+# fail-safe contract: anything not positively dead collapses to a refusing
+# verdict here, so a momentary read glitch can never license sharing a worktree.
+# herdr needs its server up before a pane read means anything, mirroring the
+# journal guard below.
+spawn_meta_endpoint_liveness() {  # <meta>
+  local meta=$1 backend target verdict
+  backend=$(fm_backend_of_meta "$meta")
+  target=$(fm_backend_target_of_meta "$meta")
+  [ -n "$target" ] || { printf 'unrecorded'; return 0; }
+  if [ "$backend" = herdr ] && fm_backend_source herdr >/dev/null 2>&1 &&
+    fm_backend_herdr_parse_target "$target" >/dev/null 2>&1; then
+    fm_backend_herdr_server_ensure "$FM_BACKEND_HERDR_SESSION" >/dev/null 2>&1 || true
+  fi
+  verdict=$(fm_backend_agent_alive "$backend" "$target" 2>/dev/null) || verdict=
+  case "$verdict" in
+    alive|dead) printf '%s' "$verdict" ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
+validate_reuse_worktree_membership() {  # <resolved-worktree>
+  local wt_real=$1 wt_common proj_common
+  wt_common=$(spawn_git_common_dir_real "$wt_real") || wt_common=
+  proj_common=$(spawn_git_common_dir_real "$PROJ_ABS") || proj_common=
+  if [ -z "$wt_common" ] || [ -z "$proj_common" ] || [ "$wt_common" != "$proj_common" ]; then
+    echo "error: --reuse-worktree path is not a worktree of this project (resolved '$wt_real' git dir '${wt_common:-none}'; primary '$PROJ_ABS' git dir '${proj_common:-none}'); refusing to launch because every downstream git and treehouse step would address the wrong repository" >&2
+    exit 1
+  fi
+}
+
+validate_reuse_worktree_exclusive() {  # <resolved-worktree>
+  local wt_real=$1 meta other_id other_wt liveness detail
+  [ -d "$STATE" ] || return 0
+  for meta in "$STATE"/*.meta; do
+    [ -f "$meta" ] || continue
+    other_id=$(basename "$meta" .meta)
+    [ "$other_id" != "$ID" ] || continue
+    other_wt=$(fm_meta_get "$meta" worktree)
+    [ -n "$other_wt" ] || continue
+    [ "$(real_path_or_raw "$other_wt")" = "$wt_real" ] || continue
+    liveness=$(spawn_meta_endpoint_liveness "$meta")
+    if [ "$liveness" = dead ]; then
+      continue
+    fi
+    case "$liveness" in
+      unrecorded) detail="records no endpoint that could prove its agent is gone" ;;
+      *) detail="has an endpoint reported as $liveness" ;;
+    esac
+    echo "error: --reuse-worktree path $wt_real is already recorded by task $other_id, which $detail; refusing to start a second agent in a worktree another task may still own. Only a confidently dead endpoint releases the path." >&2
+    exit 1
+  done
+}
+
 SPAWN_CWD=$PROJ_ABS
 if [ "$REUSE_WORKTREE_SET" -eq 1 ]; then
   if [ ! -d "$REUSE_WORKTREE" ]; then
@@ -999,6 +1087,8 @@ if [ "$REUSE_WORKTREE_SET" -eq 1 ]; then
     exit 1
   }
   validate_spawn_worktree "--reuse-worktree path" "$REUSE_WORKTREE"
+  validate_reuse_worktree_membership "$WT"
+  validate_reuse_worktree_exclusive "$WT"
   SPAWN_CWD=$WT
 fi
 
