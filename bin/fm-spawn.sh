@@ -29,7 +29,12 @@
 #   also refused when any task, this one included, already records the same path and
 #   that task's endpoint is not confidently dead, so stale metadata can be reclaimed but
 #   a live worker is never replaced and two live agents can never share files. That owner
-#   probe is read-only: it never starts a backend runtime in order to inspect one.
+#   probe is read-only: it never starts a backend runtime in order to inspect one, and
+#   only a runtime that is demonstrably down or an endpoint the runtime itself reports as
+#   gone counts as dead. zellij and cmux have no verified agent-liveness probe yet, so a
+#   relaunch into a worktree whose recorded endpoint is still present there is refused
+#   until the operator closes that pane or workspace - an honest precondition of those
+#   experimental backends, not of the flag.
 #   It cannot be combined with batch, --secondmate, or
 #   Orca, whose backend owns worktree creation. Without this flag, allocation is unchanged.
 #   Local model endpoints: for a template-based claude launch, when --model matches
@@ -1025,32 +1030,71 @@ spawn_git_common_dir_real() {  # <dir>
   (cd "$common" 2>/dev/null && pwd -P) || return 1
 }
 
+# spawn_herdr_runtime_state: is the herdr server behind <target> up, as
+# running|down|unreadable. This is the FIRST line of
+# fm_backend_herdr_server_ensure and nothing more: the read-only
+# `status --json` .server.running query, without the start-and-poll half that
+# follows it there. herdr's own client reports a server it is not connected to
+# as running:false, so `down` is a positive answer, not a read failure - a
+# missing CLI is the same answer for the same reason. Anything that leaves the
+# question open (malformed target, an errored or unparseable status body) is
+# `unreadable` and must not be read as either.
+spawn_herdr_runtime_state() {  # <target>
+  local target=$1 status running
+  command -v herdr >/dev/null 2>&1 || { printf 'down'; return 0; }
+  command -v jq >/dev/null 2>&1 || { printf 'unreadable'; return 0; }
+  fm_backend_source herdr >/dev/null 2>&1 || { printf 'unreadable'; return 0; }
+  fm_backend_herdr_parse_target "$target" >/dev/null 2>&1 || { printf 'unreadable'; return 0; }
+  status=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" status --json 2>/dev/null) || {
+    printf 'unreadable'
+    return 0
+  }
+  running=$(printf '%s' "$status" | jq -r '.server.running' 2>/dev/null) || running=
+  case "$running" in
+    true) printf 'running' ;;
+    false) printf 'down' ;;
+    *) printf 'unreadable' ;;
+  esac
+}
+
 # spawn_meta_endpoint_liveness: <meta>'s recorded endpoint as alive|dead|unknown,
 # or unrecorded when the meta names no endpoint at all. Inspecting a worktree
-# owner must never MUTATE the runtime it is reading, so this composes the two
-# shared bin/fm-backend.sh primitives in the order that keeps it passive:
-#   fm_backend_target_exists - the cheap READ-ONLY presence check that
-#     deliberately never starts a server or session. A backend that is not
-#     running at all cannot be hosting a live agent, so its failure is a
-#     CONFIDENT dead: that is exactly what lets a worktree recorded against a
-#     stopped runtime be reclaimed without this probe booting that runtime.
-#   fm_backend_agent_alive - the CONFIDENT agent-PROCESS classifier the
-#     session-start secondmate sweep gates on, consulted only once the endpoint
-#     is known to exist. Its fail-safe contract is preserved verbatim: a present
-#     endpoint whose agent cannot be classified stays `unknown`, which refuses.
-# Backend-down and running-but-unreadable therefore stay distinguishable for
-# every backend whose adapter can tell them apart, and neither is ever guessed.
+# owner must never MUTATE the runtime it is reading, and only two things may be
+# read as a CONFIDENT dead that releases the path: a runtime demonstrably not
+# running, or an endpoint the runtime itself reports as not there. Everything
+# else - including a running runtime whose endpoint read merely errored - is
+# `unknown`, which refuses.
+#   herdr keeps those two apart itself, so it gets the two-step treatment: the
+#     read-only runtime probe above answers "is anything up at all", and
+#     fm_backend_agent_alive then carries the adapter's own error-code
+#     discrimination (fm_backend_herdr_pane_agent_state maps ONLY
+#     pane_not_found/agent_not_found to a husk and every other error to
+#     unknown). A transient or internal herdr error therefore refuses instead of
+#     releasing a path a live agent may still own, and the pane is read once.
+#   every other backend uses fm_backend_target_exists, the cheap READ-ONLY
+#     presence check documented never to start a server or session, and then the
+#     same fm_backend_agent_alive classifier. Its adapters expose no error-code
+#     split, so a failed presence read means the recorded endpoint is gone and
+#     nothing can be running in it.
+# fm_backend_agent_alive's fail-safe contract is preserved verbatim throughout: a
+# present endpoint whose agent cannot be classified stays `unknown`. On zellij,
+# cmux, and orca that is EVERY present endpoint, because those adapters have no
+# verified agent-liveness probe yet - see the refusal text below, which says so.
 # fm_backend_target_of_meta returns non-zero for a meta with no endpoint at all,
 # which under a `set -e` shell that propagates errexit into command substitution
 # would abort this subshell and kill the spawn with no diagnostic; `|| true`
 # keeps the unrecorded verdict below reachable on every bash.
 spawn_meta_endpoint_liveness() {  # <meta>
-  local meta=$1 id backend target verdict
-  id=$(basename "$meta" .meta)
+  local meta=$1 backend target verdict
   backend=$(fm_backend_of_meta "$meta")
   target=$(fm_backend_target_of_meta "$meta" || true)
   [ -n "$target" ] || { printf 'unrecorded'; return 0; }
-  if ! fm_backend_target_exists "$backend" "$target" "fm-$id" >/dev/null 2>&1; then
+  if [ "$backend" = herdr ]; then
+    case "$(spawn_herdr_runtime_state "$target")" in
+      down) printf 'dead'; return 0 ;;
+      unreadable) printf 'unknown'; return 0 ;;
+    esac
+  elif ! fm_backend_target_exists "$backend" "$target" >/dev/null 2>&1; then
     printf 'dead'
     return 0
   fi
@@ -1072,7 +1116,7 @@ validate_reuse_worktree_membership() {  # <resolved-worktree>
 }
 
 validate_reuse_worktree_exclusive() {  # <resolved-worktree>
-  local wt_real=$1 meta other_id other_wt liveness detail
+  local wt_real=$1 meta other_id other_wt other_backend other_target liveness detail remedy
   [ -d "$STATE" ] || return 0
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] || continue
@@ -1084,14 +1128,28 @@ validate_reuse_worktree_exclusive() {  # <resolved-worktree>
     if [ "$liveness" = dead ]; then
       continue
     fi
+    other_backend=$(fm_backend_of_meta "$meta")
+    other_target=$(fm_backend_target_of_meta "$meta" || true)
+    remedy="Steer or exit that agent, or close its endpoint ${other_target:-none}, then retry."
     case "$liveness" in
-      unrecorded) detail="records no endpoint, so nothing can establish that its agent is gone" ;;
+      unrecorded)
+        detail="records no endpoint, so nothing can establish that its agent is gone"
+        remedy="Repair or remove that metadata, then retry."
+        ;;
+      unknown)
+        detail="has an endpoint reported as unknown"
+        case "$other_backend" in
+          zellij|cmux|orca)
+            remedy="Firstmate has no verified agent-liveness probe for backend=$other_backend yet, so a still-present endpoint there can never be classified: close its pane or workspace ${other_target:-none} first, then retry."
+            ;;
+        esac
+        ;;
       *) detail="has an endpoint reported as $liveness" ;;
     esac
     if [ "$other_id" = "$ID" ]; then
-      echo "error: --reuse-worktree path $wt_real is already recorded by this task's own prior launch, which $detail; refusing to replace a worker that may still be running, which would orphan its endpoint and put two agents in one checkout. Steer or exit that agent first. Only a confidently dead endpoint releases the path." >&2
+      echo "error: --reuse-worktree path $wt_real is already recorded by this task's own prior launch, which $detail; refusing to replace a worker that may still be running, which would orphan its endpoint and put two agents in one checkout. $remedy Only a confidently dead endpoint releases the path." >&2
     else
-      echo "error: --reuse-worktree path $wt_real is already recorded by task $other_id, which $detail; refusing to start a second agent in a worktree another task may still own. Only a confidently dead endpoint releases the path." >&2
+      echo "error: --reuse-worktree path $wt_real is already recorded by task $other_id, which $detail; refusing to start a second agent in a worktree another task may still own. $remedy Only a confidently dead endpoint releases the path." >&2
     fi
     exit 1
   done

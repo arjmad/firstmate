@@ -48,28 +48,68 @@ printf 'treehouse was executed directly\n' >> "${FM_TREEHOUSE_LOG:?}"
 exit 99
 SH
   chmod +x "$fakebin/treehouse"
-  # A herdr CLI that logs every invocation, so a case can assert the owner probe
-  # never reached for `herdr server`. FM_FAKE_HERDR_MODE=down is the
-  # not-running-at-all runtime (every call fails, exactly as a real client does
-  # with no server bound); FM_FAKE_HERDR_MODE=up answers pane reads and reports
-  # FM_FAKE_HERDR_AGENT_STATUS for the agent read.
+  # A herdr CLI that logs every invocation, so a case can assert both what the
+  # owner probe read and that it never reached for `herdr server`. `status --json`
+  # reports FM_FAKE_HERDR_MODE as the real client does - a client with no server
+  # bound still answers, with running:false, which is why server-down is a
+  # positive reading rather than a failed one. Pane and agent reads answer
+  # according to FM_FAKE_HERDR_PANE_ERROR / FM_FAKE_HERDR_AGENT_STATUS, writing
+  # any error body to stderr and exiting non-zero exactly as herdr 0.7.1 does.
   cat > "$fakebin/herdr" <<'SH'
 #!/usr/bin/env bash
 set -u
 { printf 'herdr'; for arg in "$@"; do printf '\x1f%s' "$arg"; done; printf '\n'; } >> "${FM_HERDR_LOG:?}"
-if [ "${FM_FAKE_HERDR_MODE:-down}" != up ]; then
+mode=${FM_FAKE_HERDR_MODE:-down}
+case "${1:-}:${2:-}" in
+  status:*)
+    case "$mode" in
+      up) printf '{"server":{"running":true},"client":{"protocol":99,"version":"fake"}}\n' ;;
+      *) printf '{"server":{"running":false},"client":{"protocol":99,"version":"fake"}}\n' ;;
+    esac
+    exit 0
+    ;;
+esac
+if [ "$mode" != up ]; then
   printf '{"error":{"code":"connection_refused","message":"no herdr server"}}\n' >&2
   exit 1
 fi
 case "${1:-}:${2:-}" in
-  pane:get) printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "${3:-}"; exit 0 ;;
+  pane:get)
+    if [ -n "${FM_FAKE_HERDR_PANE_ERROR:-}" ]; then
+      printf '{"error":{"code":"%s"}}\n' "$FM_FAKE_HERDR_PANE_ERROR" >&2
+      exit 1
+    fi
+    printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "${3:-}"
+    exit 0
+    ;;
   agent:get) printf '{"result":{"agent":{"agent_status":"%s"}}}\n' "${FM_FAKE_HERDR_AGENT_STATUS:-unrecognized}"; exit 0 ;;
-  status:*) printf '{"server":{"running":true},"client":{"protocol":99,"version":"fake"}}\n'; exit 0 ;;
 esac
 printf '{"result":{}}\n'
 exit 0
 SH
   chmod +x "$fakebin/herdr"
+  # A zellij CLI covering only the two read-only calls the presence check makes:
+  # the session listing fm_backend_zellij_session_exists greps, and the pane
+  # listing fm_backend_zellij_pane_exists filters. FM_FAKE_ZELLIJ_SESSION empty
+  # means no session is up at all.
+  cat > "$fakebin/zellij" <<'SH'
+#!/usr/bin/env bash
+set -u
+{ printf 'zellij'; for arg in "$@"; do printf '\x1f%s' "$arg"; done; printf '\n'; } >> "${FM_ZELLIJ_LOG:?}"
+case "$*" in
+  *list-sessions*)
+    [ -n "${FM_FAKE_ZELLIJ_SESSION:-}" ] || exit 1
+    printf '%s\n' "$FM_FAKE_ZELLIJ_SESSION"
+    exit 0
+    ;;
+  *list-panes*)
+    printf '[{"id":%s,"tab_id":1,"is_plugin":false}]\n' "${FM_FAKE_ZELLIJ_PANE:-3}"
+    exit 0
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/zellij"
   printf '%s\n' "$fakebin"
 }
 
@@ -95,6 +135,7 @@ EOF
   TMUX_LOG="$CASE_DIR/tmux.log"
   TREEHOUSE_LOG="$CASE_DIR/treehouse.log"
   HERDR_LOG="$CASE_DIR/herdr.log"
+  ZELLIJ_LOG="$CASE_DIR/zellij.log"
   # The foreground command the fake tmux reports, i.e. what the shared
   # fm_backend_agent_alive classifier sees for any endpoint this case probes.
   # A bare shell is the default, so every case starts from "confidently dead".
@@ -107,9 +148,13 @@ EOF
   TMUX_WINDOWS=
   HERDR_MODE=down
   HERDR_AGENT_STATUS=unrecognized
+  HERDR_PANE_ERROR=
+  ZELLIJ_SESSION=zsess
+  ZELLIJ_PANE=3
   : > "$TMUX_LOG"
   : > "$TREEHOUSE_LOG"
   : > "$HERDR_LOG"
+  : > "$ZELLIJ_LOG"
 }
 
 run_spawn_argv() {
@@ -118,11 +163,14 @@ run_spawn_argv() {
     FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
     FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux TMUX="fake,1,0" \
     FM_TMUX_LOG="$TMUX_LOG" FM_TREEHOUSE_LOG="$TREEHOUSE_LOG" \
-    FM_HERDR_LOG="$HERDR_LOG" \
+    FM_HERDR_LOG="$HERDR_LOG" FM_ZELLIJ_LOG="$ZELLIJ_LOG" \
     FM_FAKE_PANE_COMMAND="$PANE_COMMAND" \
     FM_FAKE_TMUX_WINDOWS="$TMUX_WINDOWS" \
     FM_FAKE_HERDR_MODE="$HERDR_MODE" \
     FM_FAKE_HERDR_AGENT_STATUS="$HERDR_AGENT_STATUS" \
+    FM_FAKE_HERDR_PANE_ERROR="$HERDR_PANE_ERROR" \
+    FM_FAKE_ZELLIJ_SESSION="$ZELLIJ_SESSION" \
+    FM_FAKE_ZELLIJ_PANE="$ZELLIJ_PANE" \
     PATH="$FAKEBIN_DIR:$PATH" \
     "$SPAWN" "$@" 2>&1
 }
@@ -171,6 +219,22 @@ write_herdr_owner_meta() {
     "yolo=off"
 }
 
+# write_zellij_owner_meta <owner-id> <worktree>: an owner on a backend whose
+# adapter has no verified agent-liveness probe, so a still-present endpoint can
+# only ever read as unknown.
+write_zellij_owner_meta() {
+  local owner=$1 worktree=$2
+  fm_write_meta "$HOME_DIR/state/$owner.meta" \
+    "window=zsess:3" \
+    "backend=zellij" \
+    "worktree=$worktree" \
+    "project=$PROJ_DIR" \
+    "harness=claude" \
+    "kind=ship" \
+    "mode=default" \
+    "yolo=off"
+}
+
 # write_endpointless_owner_meta <owner-id> <worktree>: a truncated or hand-edited
 # meta that names the worktree but records no endpoint at all.
 write_endpointless_owner_meta() {
@@ -182,11 +246,20 @@ write_endpointless_owner_meta() {
     "kind=ship"
 }
 
+# assert_herdr_probe_stayed_passive [expected-pane-reads]: the probe must have
+# asked herdr whether its server is running, must never have reached for
+# `herdr server`, and must have read the pane exactly as many times as claimed
+# (0 when the runtime answered down, 1 otherwise - never twice for one owner).
 assert_herdr_probe_stayed_passive() {
-  assert_contains "$(cat "$HERDR_LOG")" "herdr"$'\x1f'"pane"$'\x1f'"get" \
-    "the owner liveness probe never reached the herdr adapter at all"
-  assert_not_contains "$(cat "$HERDR_LOG")" "server" \
+  local want_pane_reads=${1:-1} log reads
+  log=$(cat "$HERDR_LOG")
+  assert_contains "$log" "herdr"$'\x1f'"status"$'\x1f'"--json" \
+    "the owner probe never asked herdr whether its server was running"
+  assert_not_contains "$log" "herdr"$'\x1f'"server" \
     "the owner liveness probe started or polled a herdr server"
+  reads=$(grep -c -F "herdr"$'\x1f'"pane"$'\x1f'"get" "$HERDR_LOG" || true)
+  [ "$reads" -eq "$want_pane_reads" ] || \
+    fail "expected $want_pane_reads herdr pane read(s), got $reads"$'\n'"--- herdr log ---"$'\n'"$log"
 }
 
 test_valid_reuse_skips_treehouse_and_records_worktree() {
@@ -439,9 +512,90 @@ test_herdr_owner_with_no_running_server_is_reclaimed() {
   expect_code 0 "$status" "a herdr owner with no running server must release the worktree"$'\n'"$out"
   assert_grep "worktree=$WT_REAL" "$HOME_DIR/state/$id.meta" \
     "the reclaimed worktree was not recorded for the relaunched task"
-  assert_herdr_probe_stayed_passive
+  assert_herdr_probe_stayed_passive 0
   rm -rf "/tmp/fm-$id"
   pass "a stopped herdr runtime cannot host a live agent, so its owner is reclaimed without booting it"
+}
+
+test_herdr_owner_with_pane_not_found_is_reclaimed() {
+  local id rec out status
+  id=reuse-herdr-gone-z9f
+  rec=$(make_case herdr-gone "$id")
+  read_case "$rec"
+  write_herdr_owner_meta owner-herdr-gone-z9f "$WT_REAL"
+  HERDR_MODE=up
+  HERDR_PANE_ERROR=pane_not_found
+
+  out=$(run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 0 "$status" "a running herdr reporting the pane as gone must release the worktree"$'\n'"$out"
+  assert_grep "worktree=$WT_REAL" "$HOME_DIR/state/$id.meta" \
+    "the reclaimed worktree was not recorded for the relaunched task"
+  assert_herdr_probe_stayed_passive 1
+  rm -rf "/tmp/fm-$id"
+  pass "an endpoint the runtime itself reports as not found is reclaimed"
+}
+
+test_herdr_owner_with_unexpected_pane_error_is_refused() {
+  local id rec out status
+  id=reuse-herdr-broken-z9g
+  rec=$(make_case herdr-broken "$id")
+  read_case "$rec"
+  write_herdr_owner_meta owner-herdr-broken-z9g "$WT_REAL"
+  HERDR_MODE=up
+  HERDR_PANE_ERROR=internal_error
+
+  out=$(run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 1 "$status" "a running herdr returning an unexpected pane error must not release the worktree"
+  assert_contains "$out" "is already recorded by task owner-herdr-broken-z9g" \
+    "unexpected-pane-error refusal did not name the owning task"
+  assert_contains "$out" "endpoint reported as unknown" \
+    "unexpected-pane-error refusal did not report the owning endpoint as unknown"
+  assert_not_contains "$(cat "$TMUX_LOG")" "new-window" \
+    "unexpected-pane-error refusal created a task endpoint"
+  assert_herdr_probe_stayed_passive 1
+  pass "an errored pane read on a running herdr refuses instead of releasing the path"
+}
+
+test_zellij_owner_with_present_endpoint_is_refused_with_close_instructions() {
+  local id rec out status
+  id=reuse-zellij-present-z9h
+  rec=$(make_case zellij-present "$id")
+  read_case "$rec"
+  write_zellij_owner_meta owner-zellij-present-z9h "$WT_REAL"
+
+  out=$(run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 1 "$status" "a present zellij endpoint with unclassifiable liveness must be refused"
+  assert_contains "$out" "is already recorded by task owner-zellij-present-z9h" \
+    "zellij-owner refusal did not name the owning task"
+  assert_contains "$out" "no verified agent-liveness probe for backend=zellij" \
+    "zellij-owner refusal did not explain why liveness cannot be classified"
+  assert_contains "$out" "close its pane or workspace zsess:3 first, then retry" \
+    "zellij-owner refusal did not tell the operator to close the recorded endpoint"
+  assert_not_contains "$(cat "$TMUX_LOG")" "new-window" \
+    "zellij-owner refusal created a task endpoint"
+  pass "an experimental backend's still-present endpoint refuses with an explicit precondition"
+}
+
+test_zellij_owner_with_gone_session_is_reclaimed() {
+  local id rec out status
+  id=reuse-zellij-gone-z9i
+  rec=$(make_case zellij-gone "$id")
+  read_case "$rec"
+  write_zellij_owner_meta owner-zellij-gone-z9i "$WT_REAL"
+  ZELLIJ_SESSION=
+
+  out=$(run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 0 "$status" "a zellij owner whose session is gone must release the worktree"$'\n'"$out"
+  assert_grep "worktree=$WT_REAL" "$HOME_DIR/state/$id.meta" \
+    "the reclaimed worktree was not recorded for the relaunched task"
+  assert_contains "$(cat "$ZELLIJ_LOG")" "list-sessions" \
+    "the owner probe never asked zellij whether its session was up"
+  rm -rf "/tmp/fm-$id"
+  pass "a demonstrably gone zellij endpoint is reclaimed once the pane is closed"
 }
 
 test_herdr_owner_with_ambiguous_agent_is_refused() {
@@ -462,7 +616,7 @@ test_herdr_owner_with_ambiguous_agent_is_refused() {
     "ambiguous herdr-owner refusal did not report the owning endpoint as unknown"
   assert_not_contains "$(cat "$TMUX_LOG")" "new-window" \
     "ambiguous herdr-owner refusal created a task endpoint"
-  assert_herdr_probe_stayed_passive
+  assert_herdr_probe_stayed_passive 1
   pass "a running herdr with an unreadable agent refuses rather than sharing the worktree"
 }
 
@@ -524,7 +678,11 @@ test_same_task_relaunch_over_ambiguous_endpoint_is_refused
 test_same_task_relaunch_over_dead_endpoint_is_reclaimed
 test_endpointless_owner_meta_refuses_with_a_diagnostic
 test_herdr_owner_with_no_running_server_is_reclaimed
+test_herdr_owner_with_pane_not_found_is_reclaimed
+test_herdr_owner_with_unexpected_pane_error_is_refused
 test_herdr_owner_with_ambiguous_agent_is_refused
+test_zellij_owner_with_present_endpoint_is_refused_with_close_instructions
+test_zellij_owner_with_gone_session_is_reclaimed
 test_batch_dispatch_is_refused
 test_secondmate_is_refused
 test_orca_backend_is_refused
