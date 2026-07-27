@@ -51,7 +51,7 @@ Current deterministic and live entry points:
 ```sh
 tests/fm-sessionstart-nudge.test.sh
 tests/fm-captain-translation-contract.test.sh
-FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh
+FM_PI_LIVE_E2E=1 FM_PI_LIVE_MODEL=openai-codex/<model> tests/fm-pi-primary-live-e2e.test.sh
 FM_OPENCODE_LIVE_E2E=1 tests/fm-opencode-primary-live-e2e.test.sh
 ```
 
@@ -93,7 +93,7 @@ Current entry points:
 ```sh
 tests/fm-turnend-guard.test.sh
 tests/fm-supervision-instructions.test.sh
-FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh
+FM_PI_LIVE_E2E=1 FM_PI_LIVE_MODEL=openai-codex/<model> tests/fm-pi-primary-live-e2e.test.sh
 ```
 
 ## Watcher continuity
@@ -114,7 +114,7 @@ grok 0.2.103 (89c3d36fb6f1) [stable]
 | Claude | `FM_CLAUDE_LIVE_E2E=1 tests/fm-claude-stop-autoarm-live-e2e.test.sh` | Session start reclaimed a stale owner before two Stop-owned cycles, and a competing live owner prevented arm, rewake, epoch write, or lock replacement. |
 | Codex | `FM_CODEX_LIVE_E2E=1 tests/fm-codex-continuity-live-e2e.test.sh` | The one-second foreground checkpoint returned without switching to the arm wrapper. |
 | OpenCode | `FM_OPENCODE_LIVE_E2E=1 tests/fm-opencode-primary-live-e2e.test.sh` | A verified successor existed before prompt handling, with no model re-arm or turn-end fallback. |
-| Pi | `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` | One initial tool call led to extension-owned successors and clean child retirement on exit. |
+| Pi | `FM_PI_LIVE_E2E=1 FM_PI_LIVE_MODEL=openai-codex/<model> tests/fm-pi-primary-live-e2e.test.sh` | One initial tool call led to extension-owned successors and clean child retirement on exit. |
 | Grok | `FM_GROK_LIVE_E2E=1 tests/fm-grok-continuity-live-e2e.test.sh` | Native task completion surfaced the actionable close and the cycle ledger recorded `reason=actionable-signal`. |
 
 Pi 0.81.1 repeated the continuity and clean-exit lifecycle on 2026-07-23 after the Calm presentation changes.

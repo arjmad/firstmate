@@ -221,7 +221,7 @@ The relevant commands are:
 
 ```sh
 tests/fm-calm-pi-extension.test.sh
-FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh
+FM_PI_LIVE_E2E=1 FM_PI_LIVE_MODEL=openai-codex/<model> tests/fm-pi-primary-live-e2e.test.sh
 tests/fm-pi-primary-types.test.sh
 ```
 
