@@ -64,6 +64,7 @@ case "${1:-}:${2:-}" in
   status:*)
     case "$mode" in
       up) printf '{"server":{"running":true},"client":{"protocol":99,"version":"fake"}}\n' ;;
+      garbled) printf '{"client":{"protocol":99,"version":"fake"}}\n' ;;
       *) printf '{"server":{"running":false},"client":{"protocol":99,"version":"fake"}}\n' ;;
     esac
     exit 0
@@ -151,6 +152,7 @@ EOF
   HERDR_PANE_ERROR=
   ZELLIJ_SESSION=zsess
   ZELLIJ_PANE=3
+  SPAWN_PATH="$FAKEBIN_DIR:$PATH"
   : > "$TMUX_LOG"
   : > "$TREEHOUSE_LOG"
   : > "$HERDR_LOG"
@@ -171,8 +173,26 @@ run_spawn_argv() {
     FM_FAKE_HERDR_PANE_ERROR="$HERDR_PANE_ERROR" \
     FM_FAKE_ZELLIJ_SESSION="$ZELLIJ_SESSION" \
     FM_FAKE_ZELLIJ_PANE="$ZELLIJ_PANE" \
-    PATH="$FAKEBIN_DIR:$PATH" \
+    PATH="$SPAWN_PATH" \
     "$SPAWN" "$@" 2>&1
+}
+
+# hide_tool_from_spawn_path <tool>: drop the case's own stub for <tool> and strip
+# every PATH entry that still provides it, so the spawn genuinely cannot find it
+# however the host machine is set up.
+hide_tool_from_spawn_path() {
+  local tool=$1 dir kept=
+  rm -f "$FAKEBIN_DIR/$tool"
+  local IFS=:
+  for dir in $SPAWN_PATH; do
+    [ -n "$dir" ] || continue
+    [ -x "$dir/$tool" ] && continue
+    kept="${kept:+$kept:}$dir"
+  done
+  SPAWN_PATH=$kept
+  command -v "$tool" >/dev/null 2>&1 && PATH="$SPAWN_PATH" command -v "$tool" >/dev/null 2>&1 && \
+    fail "hide_tool_from_spawn_path left $tool reachable on the spawn PATH"
+  return 0
 }
 
 run_spawn() {
@@ -536,6 +556,52 @@ test_herdr_owner_with_pane_not_found_is_reclaimed() {
   pass "an endpoint the runtime itself reports as not found is reclaimed"
 }
 
+test_herdr_owner_with_missing_cli_is_refused() {
+  local id rec out status
+  id=reuse-herdr-nocli-z9j
+  rec=$(make_case herdr-nocli "$id")
+  read_case "$rec"
+  write_herdr_owner_meta owner-herdr-nocli-z9j "$WT_REAL"
+  hide_tool_from_spawn_path herdr
+
+  out=$(run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 1 "$status" "an unreachable herdr CLI must never release the worktree"
+  assert_contains "$out" "is already recorded by task owner-herdr-nocli-z9j" \
+    "missing-herdr-CLI refusal did not name the owning task"
+  assert_contains "$out" "Cannot determine liveness: herdr CLI not found on PATH" \
+    "missing-herdr-CLI refusal did not name the condition that blocked the read"
+  assert_contains "$out" "Put herdr on PATH, then retry" \
+    "missing-herdr-CLI refusal did not tell the operator how to proceed"
+  assert_not_contains "$(cat "$TMUX_LOG")" "new-window" \
+    "missing-herdr-CLI refusal created a task endpoint"
+  assert_absent "$HOME_DIR/state/$id.meta" \
+    "the refused spawn still recorded metadata for the reused worktree"
+  pass "an unreachable herdr CLI is an inability to ask, not evidence the runtime stopped"
+}
+
+test_herdr_owner_with_unreadable_status_is_refused() {
+  local id rec out status
+  id=reuse-herdr-badstatus-z9k
+  rec=$(make_case herdr-badstatus "$id")
+  read_case "$rec"
+  write_herdr_owner_meta owner-herdr-badstatus-z9k "$WT_REAL"
+  HERDR_MODE=garbled
+
+  out=$(run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 1 "$status" "an unparseable herdr status must not release the worktree"
+  assert_contains "$out" "is already recorded by task owner-herdr-badstatus-z9k" \
+    "unparseable-status refusal did not name the owning task"
+  assert_contains "$out" "Cannot determine liveness: 'herdr status --json' reported no readable server state" \
+    "unparseable-status refusal did not name the condition that blocked the read"
+  assert_not_contains "$(cat "$TMUX_LOG")" "new-window" \
+    "unparseable-status refusal created a task endpoint"
+  assert_absent "$HOME_DIR/state/$id.meta" \
+    "the refused spawn still recorded metadata for the reused worktree"
+  pass "a herdr status with no readable server state refuses rather than releasing the path"
+}
+
 test_herdr_owner_with_unexpected_pane_error_is_refused() {
   local id rec out status
   id=reuse-herdr-broken-z9g
@@ -679,6 +745,8 @@ test_same_task_relaunch_over_dead_endpoint_is_reclaimed
 test_endpointless_owner_meta_refuses_with_a_diagnostic
 test_herdr_owner_with_no_running_server_is_reclaimed
 test_herdr_owner_with_pane_not_found_is_reclaimed
+test_herdr_owner_with_missing_cli_is_refused
+test_herdr_owner_with_unreadable_status_is_refused
 test_herdr_owner_with_unexpected_pane_error_is_refused
 test_herdr_owner_with_ambiguous_agent_is_refused
 test_zellij_owner_with_present_endpoint_is_refused_with_close_instructions
