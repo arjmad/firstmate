@@ -116,6 +116,8 @@ Codex App support is recorded in `docs/codex-app-backend.md`; it is not selectab
 
 Crewmates never intentionally touch your project clone; [treehouse](https://github.com/kunchenguid/treehouse) pools clean worktrees for tmux, herdr, zellij, and cmux tasks, while Orca creates its own worktrees for `backend=orca`.
 For ship and scout work, `fm-spawn.sh` refuses to launch unless the resolved task path is a real git worktree root that is distinct from the project primary checkout.
+Allocation is the default; the opt-in `fm-spawn.sh --reuse-worktree <path>` flag instead relaunches one stopped ship or scout into a caller-selected existing worktree of the same project, so unlanded work stays with the task rather than being stranded beside a freshly allocated slot.
+The same isolation refusal still applies, and the script's header owns the flag's exact preconditions and refusals.
 
 The firstmate repo has one extra exposure because it can dispatch crewmates to work on itself.
 Its operating checkout (`FM_ROOT`) and the disposable crewmate worktrees are all linked git worktrees of the same repository, so the valid discriminator is branch state, not whether the checkout is linked.

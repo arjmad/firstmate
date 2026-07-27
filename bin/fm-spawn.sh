@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--title <short>] [--scout]
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--title <short>] [--reuse-worktree <path>] [--scout]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--title <short>] --secondmate
 #   <project-dir> accepts a projects/<name> path, an explicit absolute or
 #   slash-containing relative path, or a bare registered project name resolved
@@ -21,6 +21,26 @@
 #   operational endpoint, tab label, ownership, and selector metadata remain task-id
 #   based. title= is recorded in state/<id>.meta only when the flag was explicit.
 #   tmux keeps its fm-<id> window name because that name is also its recorded target.
+#   --reuse-worktree <path> is a single ship/scout relaunch path for a caller-selected
+#   existing git worktree. It resolves and validates the path before endpoint creation,
+#   starts the task there, and skips treehouse get. The path must be the worktree root,
+#   must remain distinct from the primary project checkout, and must belong to the same
+#   repository as <project-dir>; the ordinary isolation assertion is mandatory. It is
+#   also refused when any task, this one included, already records the same path and
+#   that task's endpoint is not confidently dead, so stale metadata can be reclaimed but
+#   a live worker is never replaced and two live agents can never share files. That owner
+#   probe is read-only: it never starts a backend runtime in order to inspect one, and
+#   only a runtime that is demonstrably down or an endpoint the runtime itself reports as
+#   gone counts as dead. Being unable to ask - the recorded backend's CLI missing from
+#   this process's PATH, an errored or unparseable probe, an unrecognized backend -
+#   refuses on every backend and names the condition, because a runtime this spawn
+#   cannot see may still be running the recorded agent.
+#   zellij and cmux have no verified agent-liveness probe yet, so a
+#   relaunch into a worktree whose recorded endpoint is still present there is refused
+#   until the operator closes that pane or workspace - an honest precondition of those
+#   experimental backends, not of the flag.
+#   It cannot be combined with batch, --secondmate, or
+#   Orca, whose backend owns worktree creation. Without this flag, allocation is unchanged.
 #   Local model endpoints: for a template-based claude launch, when --model matches
 #   an entry in config/model-endpoints.json, the SAME claude CLI is redirected at a
 #   local Anthropic-shaped proxy (endpoint env prefix + --strict-mcp-config; an
@@ -172,11 +192,13 @@ MODEL=
 EFFORT=
 BACKEND_ARG=
 TITLE=
+REUSE_WORKTREE=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
 BACKEND_SET=0
 TITLE_SET=0
+REUSE_WORKTREE_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -190,6 +212,7 @@ for a in "$@"; do
       effort) EFFORT=$a; EFFORT_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
       title) TITLE=$a; TITLE_SET=1 ;;
+      reuse-worktree) REUSE_WORKTREE=$a; REUSE_WORKTREE_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -208,6 +231,8 @@ for a in "$@"; do
     --backend=*) BACKEND_ARG=${a#--backend=}; BACKEND_SET=1 ;;
     --title) want_value=title ;;
     --title=*) TITLE=${a#--title=}; TITLE_SET=1 ;;
+    --reuse-worktree) want_value=reuse-worktree ;;
+    --reuse-worktree=*) REUSE_WORKTREE=${a#--reuse-worktree=}; REUSE_WORKTREE_SET=1 ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -219,6 +244,11 @@ done
 [ "$TITLE_SET" -eq 0 ] || [ -n "$TITLE" ] || { echo "error: --title requires a non-empty value" >&2; exit 1; }
 if [ "$TITLE_SET" -eq 1 ] && printf '%s' "$TITLE" | LC_ALL=C grep -q '[[:cntrl:]]'; then
   echo "error: --title must not contain control characters" >&2
+  exit 1
+fi
+[ "$REUSE_WORKTREE_SET" -eq 0 ] || [ -n "$REUSE_WORKTREE" ] || { echo "error: --reuse-worktree requires a non-empty value" >&2; exit 1; }
+if [ "$REUSE_WORKTREE_SET" -eq 1 ] && [ "$KIND" = secondmate ]; then
+  echo "error: --reuse-worktree cannot be combined with --secondmate; secondmates launch in their provisioned home" >&2
   exit 1
 fi
 case "$EFFORT" in
@@ -242,6 +272,10 @@ fm_backend_validate_spawn "$BACKEND" || exit 1
 fm_backend_source "$BACKEND" || exit 1
 if [ "$BACKEND" = orca ] && [ "$KIND" = secondmate ]; then
   echo "error: backend=orca does not support --secondmate spawns yet" >&2
+  exit 1
+fi
+if [ "$BACKEND" = orca ] && [ "$REUSE_WORKTREE_SET" -eq 1 ]; then
+  echo "error: --reuse-worktree cannot be combined with backend=orca; Orca owns worktree creation" >&2
   exit 1
 fi
 if [ "$BACKEND" = cmux ] && [ "$KIND" = secondmate ]; then
@@ -378,6 +412,10 @@ spawn_herdr_presentation_order_lock_release() {
 idpart=${POS[0]:-}
 idpart=${idpart%%=*}
 if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in */*) false ;; *) true ;; esac; then
+  if [ "$REUSE_WORKTREE_SET" -eq 1 ]; then
+    echo "error: --reuse-worktree cannot be used with batch dispatch; each task must name its own existing worktree" >&2
+    exit 1
+  fi
   if [ "$KIND" != secondmate ] && [ -z "$HARNESS_ARG" ] && [ -f "$CONFIG/crew-dispatch.json" ]; then
     echo "error: config/crew-dispatch.json is active - pass an explicit harness resolved from the dispatch rules (the consultation backstop, so the rules are never silently skipped)." >&2
     exit 1
@@ -964,6 +1002,263 @@ validate_spawn_worktree() {  # <source> <inspect-target>
   fi
 }
 
+# validate_spawn_worktree proves the path is a worktree ROOT distinct from the
+# primary checkout. Two properties treehouse get used to supply implicitly, that
+# a caller-selected path does not, and that both have to be settled before any
+# endpoint exists:
+#   membership - a worktree root of an UNRELATED repository satisfies both of the
+#     assertions above, and the mismatch would then be baked into worktree= for
+#     every downstream git/treehouse consumer of the metadata.
+#   exclusivity - treehouse get guaranteed one worktree per task. Only the
+#     recorded metadata can say whether a task still owns a supplied path, and
+#     only a CONFIDENTLY dead endpoint releases it: stale metadata over a dead
+#     endpoint is exactly the relaunch case this flag exists for, while an alive
+#     or unreadable endpoint must never let two agents share files. The scan
+#     covers the relaunching task's OWN prior metadata on the same bar, because
+#     replacing a worker that is still running both orphans its endpoint and
+#     puts two agents in one checkout - the same hazard, from the direction an
+#     operator is most likely to hit while believing the worker had stopped.
+
+# spawn_git_common_dir_real: <dir>'s repository-identifying git common dir,
+# physically resolved. Every worktree of one repository reports the same value,
+# so it is the repository-membership identity a per-worktree --show-toplevel or
+# --git-dir cannot be.
+spawn_git_common_dir_real() {  # <dir>
+  local dir=$1 common
+  common=$(cd "$dir" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null) || return 1
+  [ -n "$common" ] || return 1
+  case "$common" in
+    /*) ;;
+    *) common=$dir/$common ;;
+  esac
+  (cd "$common" 2>/dev/null && pwd -P) || return 1
+}
+
+# spawn_backend_probe_extra_tools: tools <backend>'s PRESENCE PROBE shells out to
+# that fm_backend_required_tools does not list, because they are not part of a
+# home's declared per-backend dependency delta. orca's read path is the case:
+# fm_backend_orca_capture returns the status of fm_backend_orca_json_text, which
+# is a `node -e` pipeline (bin/backends/orca.sh), so an unreachable node makes the
+# probe fail exactly like a gone terminal. Scoped to this probe rather than pushed
+# into fm_backend_required_tools, which would also make bootstrap demand node of
+# every orca home - a policy change this flag has no business making.
+spawn_backend_probe_extra_tools() {  # <backend>
+  case "$1" in
+    orca) printf '%s' 'node' ;;
+  esac
+}
+
+# spawn_backend_probe_tool: the first tool <backend>'s liveness probe needs that
+# this process cannot reach, or nothing when it can reach them all. The tool set
+# and the how-to-look-for-it rule come from bin/fm-backend.sh's
+# fm_backend_required_tools / fm_backend_required_tool_available, the declared
+# single owner of the per-backend dependency delta (so cmux's bundled-binary
+# fallback is honoured here for free), plus this probe's own extras above.
+# treehouse is skipped: it allocates worktrees and has no part in reading whether
+# an endpoint is alive.
+# A missing tool is an INABILITY TO ASK, never an answer. Every adapter's
+# presence check reports it as absence instead - zellij pipes `list-sessions`
+# into grep and cmux pipes `list-panes` into jq, so no output reads as "gone";
+# orca's capture fails at its own tool check or its node pipeline; tmux's
+# display-message is simply not found - and absence would release the worktree to
+# a second agent while the first may still be running. So this runs BEFORE any
+# presence probe, for every backend, and refuses.
+spawn_backend_probe_tool() {  # <backend>
+  local backend=$1 tool required
+  required=$(fm_backend_required_tools "$backend") || { printf 'unknown-backend'; return 0; }
+  for tool in $required; do
+    [ "$tool" = treehouse ] && continue
+    fm_backend_required_tool_available "$backend" "$tool" || { printf '%s' "$tool"; return 0; }
+  done
+  for tool in $(spawn_backend_probe_extra_tools "$backend"); do
+    command -v "$tool" >/dev/null 2>&1 || { printf '%s' "$tool"; return 0; }
+  done
+}
+
+# spawn_herdr_runtime_state: is the herdr server behind <target> up? This is the
+# FIRST line of fm_backend_herdr_server_ensure and nothing more: the read-only
+# `status --json` .server.running query, without the start-and-poll half that
+# follows it there. Exactly ONE outcome is a positive "nothing is up" - an
+# available client answering, parseably, running:false, which herdr's own client
+# does report for a server it is not connected to. Every other outcome is an
+# INABILITY TO ASK, never an answer, and each names its own condition so the
+# refusal can tell the operator what to repair. Reachability of the herdr and jq
+# binaries is already settled by spawn_backend_probe_tool above.
+#   running                - a server is up; the endpoint may still be hosting an agent.
+#   down                   - client answered running:false. The only reclaim-permitting verdict.
+#   adapter-unavailable    - the herdr adapter itself could not be sourced.
+#   target-malformed       - the recorded endpoint is not <session>:<pane>.
+#   status-failed          - the status command errored.
+#   status-unparseable     - status returned something with no readable .server.running.
+spawn_herdr_runtime_state() {  # <target>
+  local target=$1 status running
+  fm_backend_source herdr >/dev/null 2>&1 || { printf 'adapter-unavailable'; return 0; }
+  fm_backend_herdr_parse_target "$target" >/dev/null 2>&1 || { printf 'target-malformed'; return 0; }
+  status=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" status --json 2>/dev/null) || {
+    printf 'status-failed'
+    return 0
+  }
+  running=$(printf '%s' "$status" | jq -r '.server.running' 2>/dev/null) || running=
+  case "$running" in
+    true) printf 'running' ;;
+    false) printf 'down' ;;
+    *) printf 'status-unparseable' ;;
+  esac
+}
+
+# spawn_meta_endpoint_liveness: <meta>'s recorded endpoint as alive|dead|unknown,
+# or unrecorded when the meta names no endpoint at all. Inspecting a worktree
+# owner must never MUTATE the runtime it is reading, and only two things may be
+# read as a CONFIDENT dead that releases the path: a runtime demonstrably not
+# running, or an endpoint the runtime itself reports as not there. Everything
+# else - including a running runtime whose endpoint read merely errored - is
+# `unknown`, which refuses.
+#   herdr keeps those two apart itself, so it gets the two-step treatment: the
+#     read-only runtime probe above answers "is anything up at all", and
+#     fm_backend_agent_alive then carries the adapter's own error-code
+#     discrimination (fm_backend_herdr_pane_agent_state maps ONLY
+#     pane_not_found/agent_not_found to a husk and every other error to
+#     unknown). A transient or internal herdr error therefore refuses instead of
+#     releasing a path a live agent may still own, and the pane is read once.
+#   every other backend uses fm_backend_target_exists, the cheap READ-ONLY
+#     presence check documented never to start a server or session, and then the
+#     same fm_backend_agent_alive classifier. Its adapters expose no error-code
+#     split, so a failed presence read means the recorded endpoint is gone and
+#     nothing can be running in it - which is only sound once the adapter's own
+#     CLI is known to be reachable, hence the spawn_backend_probe_tool gate that
+#     runs first for EVERY backend.
+# fm_backend_agent_alive's fail-safe contract is preserved verbatim throughout: a
+# present endpoint whose agent cannot be classified stays `unknown`. On zellij,
+# cmux, and orca that is EVERY present endpoint, because those adapters have no
+# verified agent-liveness probe yet - see the refusal text below, which says so.
+# fm_backend_target_of_meta returns non-zero for a meta with no endpoint at all,
+# which under a `set -e` shell that propagates errexit into command substitution
+# would abort this subshell and kill the spawn with no diagnostic; `|| true`
+# keeps the unrecorded verdict below reachable on every bash.
+# Prints "<verdict>" for alive/dead/unrecorded and "unknown <reason>" otherwise,
+# so the refusal can name the exact condition that blocked the read instead of
+# reporting every inconclusive probe identically.
+spawn_meta_endpoint_liveness() {  # <meta>
+  local meta=$1 backend target verdict runtime missing
+  backend=$(fm_backend_of_meta "$meta")
+  target=$(fm_backend_target_of_meta "$meta" || true)
+  [ -n "$target" ] || { printf 'unrecorded'; return 0; }
+  missing=$(spawn_backend_probe_tool "$backend")
+  case "$missing" in
+    '') ;;
+    unknown-backend) printf 'unknown backend-unrecognized'; return 0 ;;
+    *) printf 'unknown tool-missing:%s' "$missing"; return 0 ;;
+  esac
+  if [ "$backend" = herdr ]; then
+    runtime=$(spawn_herdr_runtime_state "$target")
+    case "$runtime" in
+      running) ;;
+      down) printf 'dead'; return 0 ;;
+      *) printf 'unknown herdr-%s' "$runtime"; return 0 ;;
+    esac
+  elif ! fm_backend_target_exists "$backend" "$target" >/dev/null 2>&1; then
+    printf 'dead'
+    return 0
+  fi
+  verdict=$(fm_backend_agent_alive "$backend" "$target" 2>/dev/null) || verdict=
+  case "$verdict" in
+    alive|dead) printf '%s' "$verdict" ;;
+    *) printf 'unknown agent-unclassified' ;;
+  esac
+}
+
+validate_reuse_worktree_membership() {  # <resolved-worktree>
+  local wt_real=$1 wt_common proj_common
+  wt_common=$(spawn_git_common_dir_real "$wt_real") || wt_common=
+  proj_common=$(spawn_git_common_dir_real "$PROJ_ABS") || proj_common=
+  if [ -z "$wt_common" ] || [ -z "$proj_common" ] || [ "$wt_common" != "$proj_common" ]; then
+    echo "error: --reuse-worktree path is not a worktree of this project (resolved '$wt_real' git dir '${wt_common:-none}'; primary '$PROJ_ABS' git dir '${proj_common:-none}'); refusing to launch because every downstream git and treehouse step would address the wrong repository" >&2
+    exit 1
+  fi
+}
+
+validate_reuse_worktree_exclusive() {  # <resolved-worktree>
+  local wt_real=$1 meta other_id other_wt other_backend other_target record liveness reason detail remedy missing_tool
+  [ -d "$STATE" ] || return 0
+  for meta in "$STATE"/*.meta; do
+    [ -f "$meta" ] || continue
+    other_id=$(basename "$meta" .meta)
+    other_wt=$(fm_meta_get "$meta" worktree)
+    [ -n "$other_wt" ] || continue
+    [ "$(real_path_or_raw "$other_wt")" = "$wt_real" ] || continue
+    record=$(spawn_meta_endpoint_liveness "$meta")
+    liveness=${record%% *}
+    reason=${record#"$liveness"}
+    reason=${reason# }
+    if [ "$liveness" = dead ]; then
+      continue
+    fi
+    other_backend=$(fm_backend_of_meta "$meta")
+    other_target=$(fm_backend_target_of_meta "$meta" || true)
+    remedy="Steer or exit that agent, or close its endpoint ${other_target:-none}, then retry."
+    case "$liveness" in
+      unrecorded)
+        detail="records no endpoint, so nothing can establish that its agent is gone"
+        remedy="Repair or remove that metadata, then retry."
+        ;;
+      unknown)
+        detail="has an endpoint reported as unknown"
+        case "$reason" in
+          tool-missing:*)
+            missing_tool=${reason#tool-missing:}
+            remedy="Cannot determine liveness: $missing_tool CLI not found on PATH. $missing_tool must be available to this process to verify the recorded owner - a backend=$other_backend runtime this spawn cannot see may still be running that agent. Put $missing_tool on PATH, then retry."
+            ;;
+          backend-unrecognized)
+            remedy="Cannot determine liveness: '$other_backend' is not a backend this Firstmate knows, so its endpoint cannot be probed. Repair that metadata, then retry."
+            ;;
+          herdr-adapter-unavailable)
+            remedy="Cannot determine liveness: the herdr backend adapter could not be loaded. Repair the Firstmate install, then retry."
+            ;;
+          herdr-target-malformed)
+            remedy="Cannot determine liveness: the recorded herdr endpoint '${other_target:-none}' is not a <session>:<pane> target. Repair that metadata, then retry."
+            ;;
+          herdr-status-failed)
+            remedy="Cannot determine liveness: 'herdr status --json' failed, so whether a herdr server is running is unknown. Confirm herdr is healthy, then retry."
+            ;;
+          herdr-status-unparseable)
+            remedy="Cannot determine liveness: 'herdr status --json' reported no readable server state. Confirm herdr is healthy, then retry."
+            ;;
+          *)
+            case "$other_backend" in
+              zellij|cmux|orca)
+                remedy="Firstmate has no verified agent-liveness probe for backend=$other_backend yet, so a still-present endpoint there can never be classified: close its pane or workspace ${other_target:-none} first, then retry."
+                ;;
+            esac
+            ;;
+        esac
+        ;;
+      *) detail="has an endpoint reported as $liveness" ;;
+    esac
+    if [ "$other_id" = "$ID" ]; then
+      echo "error: --reuse-worktree path $wt_real is already recorded by this task's own prior launch, which $detail; refusing to replace a worker that may still be running, which would orphan its endpoint and put two agents in one checkout. $remedy Only a confidently dead endpoint releases the path." >&2
+    else
+      echo "error: --reuse-worktree path $wt_real is already recorded by task $other_id, which $detail; refusing to start a second agent in a worktree another task may still own. $remedy Only a confidently dead endpoint releases the path." >&2
+    fi
+    exit 1
+  done
+}
+
+SPAWN_CWD=$PROJ_ABS
+if [ "$REUSE_WORKTREE_SET" -eq 1 ]; then
+  if [ ! -d "$REUSE_WORKTREE" ]; then
+    echo "error: --reuse-worktree path does not exist or is not a directory: $REUSE_WORKTREE" >&2
+    exit 1
+  fi
+  WT=$(cd "$REUSE_WORKTREE" 2>/dev/null && pwd -P) || {
+    echo "error: --reuse-worktree path could not be resolved: $REUSE_WORKTREE" >&2
+    exit 1
+  }
+  validate_spawn_worktree "--reuse-worktree path" "$REUSE_WORKTREE"
+  validate_reuse_worktree_membership "$WT"
+  validate_reuse_worktree_exclusive "$WT"
+  SPAWN_CWD=$WT
+fi
+
 herdr_projection_meta_field_exact() {  # <meta> <key>
   local meta=$1 key=$2 count
   [ -f "$meta" ] && [ ! -L "$meta" ] || return 1
@@ -1051,7 +1346,7 @@ case "$BACKEND" in
     # treehouse cd's into the worktree. WT_TARGET carries that stable id for the
     # rename-critical worktree-detection steps below; the persisted window= handle
     # stays $T (the name form), which is safe now that rename is disabled.
-    WID=$(fm_backend_tmux_create_task "$SES" "$W" "$PROJ_ABS") || exit 1
+    WID=$(fm_backend_tmux_create_task "$SES" "$W" "$SPAWN_CWD") || exit 1
     WT_TARGET="$WID"
     ;;
   herdr)
@@ -1094,7 +1389,7 @@ case "$BACKEND" in
           FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_reclaim_task \
             "$HERDR_SES" "$HERDR_PRESENTATION_JOURNAL" "$ID" "$HERDR_LABEL_HOME" \
             "$HERDR_RECOVERY_WORKSPACE_ID" "$HERDR_RECOVERY_TAB_ID" "$HERDR_RECOVERY_PANE_ID" \
-            "$HERDR_PARENT_LABEL" "$W" "$PROJ_ABS"
+            "$HERDR_PARENT_LABEL" "$W" "$SPAWN_CWD"
           HERDR_RECLAIM_STATUS=$?
           set -e
           case "$HERDR_RECLAIM_STATUS" in
@@ -1132,7 +1427,7 @@ case "$BACKEND" in
             HERDR_PROJECTION_ID=$(fm_backend_herdr_projection_journal_create "$STATE" "$ID") || exit 1
             HERDR_PROJECTION_LABEL=$(fm_backend_herdr_projection_workspace_label "$ID" "$HERDR_PROJECTION_ID")
             if ! FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_create_task \
-              "$PROJ_ABS" "$HERDR_PROJECTION_LABEL" "$W"; then
+              "$SPAWN_CWD" "$HERDR_PROJECTION_LABEL" "$W"; then
               if [ "${FM_BACKEND_HERDR_PROJECTION_CLEANUP_SAFE:-0}" = 1 ]; then
                 HERDR_PROJECTION_ABORT_CLEANUP=1
                 HERDR_PROJECTION_ABORT_SESSION=$FM_BACKEND_HERDR_PROJECTION_SESSION
@@ -1185,7 +1480,7 @@ case "$BACKEND" in
       HERDR_SEEDED_DEFAULT_TAB_ID=${HERDR_CONTAINER_RAW#*$'\t'}
       HERDR_SES=${CONTAINER%%:*}
       HERDR_WORKSPACE_ID=${CONTAINER#*:}
-      HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task "$CONTAINER" "$W" "$PROJ_ABS" "$HERDR_SEEDED_DEFAULT_TAB_ID") || exit 1
+      HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task "$CONTAINER" "$W" "$SPAWN_CWD" "$HERDR_SEEDED_DEFAULT_TAB_ID") || exit 1
       read -r HERDR_TAB_ID HERDR_PANE_ID <<EOF
 $HERDR_TASK_IDS
 EOF
@@ -1200,7 +1495,7 @@ EOF
     ;;
   zellij)
     ZELLIJ_SES=$(fm_backend_zellij_container_ensure) || exit 1
-    ZELLIJ_TASK_IDS=$(fm_backend_zellij_create_task "$ZELLIJ_SES" "$W" "$PROJ_ABS") || exit 1
+    ZELLIJ_TASK_IDS=$(fm_backend_zellij_create_task "$ZELLIJ_SES" "$W" "$SPAWN_CWD") || exit 1
     read -r ZELLIJ_TAB_ID ZELLIJ_PANE_ID <<EOF
 $ZELLIJ_TASK_IDS
 EOF
@@ -1212,7 +1507,7 @@ EOF
     ;;
   cmux)
     fm_backend_cmux_container_ensure || exit 1
-    CMUX_TASK_IDS=$(fm_backend_cmux_create_task "$W" "$PROJ_ABS") || exit 1
+    CMUX_TASK_IDS=$(fm_backend_cmux_create_task "$W" "$SPAWN_CWD") || exit 1
     read -r CMUX_WORKSPACE_ID CMUX_SURFACE_ID <<EOF
 $CMUX_TASK_IDS
 EOF
@@ -1251,7 +1546,7 @@ esac
 # #134 robustness: only tmux needs a worktree-detection target distinct from $T -
 # its rename-safe stable window id, set as WT_TARGET=$WID in the tmux branch above.
 # Every other backend addresses its pane/surface by the id already in $T, so default
-# WT_TARGET to $T for them (and for any future backend) - the shared treehouse-get +
+# WT_TARGET to $T for them (and for any future backend) - the default treehouse-get +
 # worktree-detection steps below must never reference an unbound WT_TARGET under set -u.
 : "${WT_TARGET:=$T}"
 spawn_send_text_line() {  # <target> <text>
@@ -1341,7 +1636,7 @@ kimi_spawn_fail() {  # <detail>
   echo "error: $1; inspect window $T" >&2
 }
 
-if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] && [ "$REUSE_WORKTREE_SET" -eq 0 ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
