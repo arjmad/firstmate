@@ -281,6 +281,13 @@ read -r MODE _ <<EOF
 $("$FM_ROOT/bin/fm-project-mode.sh" "$REPO")
 EOF
 
+# Each DOD body below is a heredoc nested inside $( ), so bash scans it for paren
+# matching: one bare apostrophe in the prose stops the whole script from parsing and
+# every brief scaffold fails. Backslash-escaping parses but leaks a literal backslash
+# into the generated brief, so reword instead - hence "the firstmate authority check"
+# rather than "firstmate's" in the no-mistakes block. This is a local patch for
+# upstream issue #1069; drop it once upstream lands its own fix.
+# tests/fm-ask-user-authority.test.sh pins the reworded line.
 case "$MODE" in
   direct-PR)
     SETUP2=""
