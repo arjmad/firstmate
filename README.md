@@ -181,7 +181,7 @@ Firstmate's skills live in two separate places with different audiences:
 
 - [docs/architecture.md](docs/architecture.md) - how the crew, supervision, worktrees, secondmates, and project modes work.
 - [docs/configuration.md](docs/configuration.md) - operational-home layout, environment variables, configuration schemas, optional X mode, and harness configuration.
-- [docs/wedge-alarm.md](docs/wedge-alarm.md) - configure the active alert for an away-mode escalation delivery that gets stuck.
+- [docs/wedge-alarm.md](docs/wedge-alarm.md) - why the active alert for a stuck away-mode escalation delivery exists, plus its verification evidence; the channel schema itself lives in [docs/configuration.md](docs/configuration.md#away-mode-wedge-alarm-channels-configwedge-alarm).
 - [docs/tmux-backend.md](docs/tmux-backend.md) - setup guide for the tmux reference backend: prerequisites, attaching, and watching crew windows.
 - [docs/herdr-backend.md](docs/herdr-backend.md) - setup guide for the experimental herdr backend, plus its verification notes and known gaps.
 - [docs/zellij-backend.md](docs/zellij-backend.md) - setup guide for the experimental zellij backend, plus its verification notes and known gaps.

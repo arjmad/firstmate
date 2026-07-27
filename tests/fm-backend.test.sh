@@ -441,6 +441,53 @@ test_backend_name_explicit_beats_detection() {
   pass "fm_backend_name: an explicit FM_BACKEND or config/backend setting always wins over runtime auto-detection, including an ambient cmux marker"
 }
 
+# bin/fm-backend.sh's fm_backend_name header owns the guarantee that
+# auto-detection can resolve ONLY tmux, herdr, or cmux, so zellij and orca are
+# never selected implicitly and always require an explicit source. That is a
+# safety property for orca in particular, which also owns the task worktree.
+# fm_backend_detect carries no zellij or orca marker, so a firstmate running
+# inside either one with no explicit source falls back to tmux.
+test_backend_name_zellij_orca_never_auto_detected() {
+  local dir cfg_empty cfg_zellij cfg_orca out errfile
+
+  dir="$TMP_ROOT/name-no-implicit-zellij-orca"
+  cfg_empty="$dir/config-empty"; mkdir -p "$cfg_empty"
+  cfg_zellij="$dir/config-zellij"; mkdir -p "$cfg_zellij"; printf 'zellij\n' > "$cfg_zellij/backend"
+  cfg_orca="$dir/config-orca"; mkdir -p "$cfg_orca"; printf 'orca\n' > "$cfg_orca/backend"
+  errfile="$dir/err"
+
+  # No marker fm_backend_detect knows about may ever produce zellij or orca.
+  # The zellij runtime exports ZELLIJ/ZELLIJ_SESSION_NAME; Orca is a terminal
+  # app with no marker at all. Both must land on the silent tmux fallback.
+  out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID __CFBundleIdentifier; PATH="$FAKE_NONDARWIN_BIN:$PATH" \
+    ZELLIJ=0 ZELLIJ_SESSION_NAME='ambient-zellij' \
+    FM_BACKEND='' FM_BACKEND_CONFIG_DIR="$cfg_empty" fm_backend_name 2>"$errfile")
+  [ "$out" = tmux ] || fail "an ambient zellij runtime must not auto-select the zellij backend, got '$out'"
+  [ -s "$errfile" ] && fail "the tmux fallback inside zellij must stay silent"$'\n'"$(cat "$errfile")"
+
+  # Defensive: fm_backend_detect itself must not gain a zellij or orca branch.
+  if out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID __CFBundleIdentifier; PATH="$FAKE_NONDARWIN_BIN:$PATH" \
+    ZELLIJ=0 ZELLIJ_SESSION_NAME='ambient-zellij' fm_backend_detect); then
+    fail "fm_backend_detect must report nothing detected inside zellij, got '$out'"
+  fi
+
+  # Both stay reachable through every explicit source, so the guarantee is an
+  # eligibility rule, not a removal of the backends.
+  out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID; ZELLIJ=0 FM_BACKEND=zellij FM_BACKEND_CONFIG_DIR="$cfg_empty" fm_backend_name)
+  [ "$out" = zellij ] || fail "FM_BACKEND=zellij should still select zellij explicitly, got '$out'"
+
+  out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID; ZELLIJ=0 FM_BACKEND='' FM_BACKEND_CONFIG_DIR="$cfg_zellij" fm_backend_name)
+  [ "$out" = zellij ] || fail "config/backend=zellij should still select zellij explicitly, got '$out'"
+
+  out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID; FM_BACKEND=orca FM_BACKEND_CONFIG_DIR="$cfg_empty" fm_backend_name)
+  [ "$out" = orca ] || fail "FM_BACKEND=orca should still select orca explicitly, got '$out'"
+
+  out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID; FM_BACKEND='' FM_BACKEND_CONFIG_DIR="$cfg_orca" fm_backend_name)
+  [ "$out" = orca ] || fail "config/backend=orca should still select orca explicitly, got '$out'"
+
+  pass "fm_backend_name: zellij and orca are never auto-detected and require an explicit FM_BACKEND or config/backend source"
+}
+
 test_backend_validate_refuses_unknown() {
   fm_backend_validate tmux 2>/dev/null || fail "fm_backend_validate should accept tmux"
   fm_backend_validate orca 2>/dev/null || fail "fm_backend_validate should accept orca"
@@ -1075,6 +1122,7 @@ test_backend_detect_cmux_fallback_ancestry_stops_at_launchd
 test_backend_name_cmux_fallback_notice
 test_backend_name_autodetect_notice
 test_backend_name_explicit_beats_detection
+test_backend_name_zellij_orca_never_auto_detected
 test_backend_validate_refuses_unknown
 test_backend_source_shell_portable
 test_backend_validate_spawn_accepts_orca

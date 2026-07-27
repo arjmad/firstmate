@@ -100,7 +100,7 @@ Beyond the durable `state/.subsuper-inject-wedged` marker and the tmux status-li
 A non-empty `FM_WEDGE_ALARM_CHANNEL` replaces the file with one directive.
 Recognized directives are `off`, `auto` or `default`, `osascript`, `herdr`, and `command:<cmd>`.
 `off` is a position-independent kill switch that disables every active alert while preserving the marker and tmux flash.
-`auto` and `default` attempt a macOS Notification Center banner only when `osascript` is available and otherwise leave the durable marker as the signal.
+`auto` and `default` attempt a macOS Notification Center banner only when `osascript` is available and otherwise leave the durable marker as the signal, so a non-macOS home needs an explicit `command:<cmd>` directive to get an active alert at all.
 `osascript` requests a macOS Notification Center banner, `herdr` requests a Herdr UI notification, and `command:<cmd>` runs `<cmd>` through `sh -c` with the summary on `$1` and stdin.
 An absent, empty, or comment-only file resolves to `auto`.
 Every recognized non-`off` directive is attempted in file order, best-effort; unknown, missing, failing, or timed-out channels are logged and skipped without crashing the daemon.

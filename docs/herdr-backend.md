@@ -959,7 +959,7 @@ The luminance rule assumes a dark terminal theme (the fleet reality); the SGR-2 
 `shellcheck bin/*.sh bin/backends/*.sh tests/*.sh` passes clean.
 
 **Resolved: backend-independent wedge alarm.** The max-defer wedge alarm (`inject_wedge_alarm`, `bin/fm-supervise-daemon.sh`) formerly alarmed into the void because its only active signal was a tmux client status-line flash, skipped for herdr, leaving only the passive `state/.subsuper-inject-wedged` marker.
-It now also attempts a configurable active alert independent of the supervisor backend; [`wedge-alarm.md`](wedge-alarm.md) owns its channels and verification evidence.
+It now also attempts a configurable active alert independent of the supervisor backend; [`configuration.md`](configuration.md#away-mode-wedge-alarm-channels-configwedge-alarm) owns its channel schema and [`wedge-alarm.md`](wedge-alarm.md) owns the rationale and verification evidence.
 
 ## Native `pane.agent_status_changed` push escalation (immediate blocked wake)
 
