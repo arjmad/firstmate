@@ -111,6 +111,9 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/zellij"
+  # cmux and orca exist only so the missing-CLI cases have a stub to remove and
+  # so no host-installed copy leaks into a case that expects them absent.
+  fm_fake_exit0 "$fakebin" cmux orca
   printf '%s\n' "$fakebin"
 }
 
@@ -173,25 +176,55 @@ run_spawn_argv() {
     FM_FAKE_HERDR_PANE_ERROR="$HERDR_PANE_ERROR" \
     FM_FAKE_ZELLIJ_SESSION="$ZELLIJ_SESSION" \
     FM_FAKE_ZELLIJ_PANE="$ZELLIJ_PANE" \
+    FM_BACKEND_CMUX_BUNDLE_BIN="$CASE_DIR/no-cmux-bundle" \
     PATH="$SPAWN_PATH" \
     "$SPAWN" "$@" 2>&1
 }
 
-# hide_tool_from_spawn_path <tool>: drop the case's own stub for <tool> and strip
-# every PATH entry that still provides it, so the spawn genuinely cannot find it
-# however the host machine is set up.
+# Tools fm-spawn itself needs on PATH before it ever reaches the owner probe
+# (git for the isolation and same-repository assertions, jq for herdr/zellij/cmux
+# JSON) plus the coreutils the script and these fixtures shell out to. Hiding one
+# backend CLI must never take any of these with it.
+SPAWN_PATH_ESSENTIALS="git jq env bash sh basename dirname grep sed awk cut tr head tail sort wc mkdir rm ln cp mv chmod cat mktemp date find id uname"
+
+# hide_tool_from_spawn_path <tool>: make <tool> genuinely unreachable to the
+# spawn, however the host is laid out, WITHOUT collaterally removing anything
+# else. Dropping every PATH directory that provides <tool> is not enough on a
+# host where one bin directory holds several tools (a single Nix/asdf/homebrew
+# profile, /usr/local/bin): git or jq can vanish with it, and fm-spawn then fails
+# its same-repository assertion long before the owner probe, so the case would
+# fail for the wrong reason. So each stripped directory's still-needed tools are
+# re-exported through a per-case rescue dir, and both directions are asserted:
+# <tool> is gone, and every essential that was reachable before still is.
 hide_tool_from_spawn_path() {
-  local tool=$1 dir kept=
+  local tool=$1 dir rescue keep kept=''
   rm -f "$FAKEBIN_DIR/$tool"
-  local IFS=:
-  for dir in $SPAWN_PATH; do
+  rescue="$CASE_DIR/rescue-$tool"
+  mkdir -p "$rescue"
+  while IFS= read -r dir; do
     [ -n "$dir" ] || continue
-    [ -x "$dir/$tool" ] && continue
+    if [ -x "$dir/$tool" ]; then
+      for keep in $SPAWN_PATH_ESSENTIALS; do
+        [ "$keep" = "$tool" ] && continue
+        if [ -x "$dir/$keep" ] && [ ! -e "$rescue/$keep" ]; then
+          ln -s "$dir/$keep" "$rescue/$keep"
+        fi
+      done
+      continue
+    fi
     kept="${kept:+$kept:}$dir"
-  done
-  SPAWN_PATH=$kept
-  command -v "$tool" >/dev/null 2>&1 && PATH="$SPAWN_PATH" command -v "$tool" >/dev/null 2>&1 && \
+  done <<EOF
+$(printf '%s' "$SPAWN_PATH" | tr ':' '\n')
+EOF
+  SPAWN_PATH="$rescue${kept:+:$kept}"
+  if PATH="$SPAWN_PATH" command -v "$tool" >/dev/null 2>&1; then
     fail "hide_tool_from_spawn_path left $tool reachable on the spawn PATH"
+  fi
+  for keep in $SPAWN_PATH_ESSENTIALS; do
+    command -v "$keep" >/dev/null 2>&1 || continue
+    PATH="$SPAWN_PATH" command -v "$keep" >/dev/null 2>&1 || \
+      fail "hiding $tool also removed $keep from the spawn PATH (they share a PATH directory)"
+  done
   return 0
 }
 
@@ -247,6 +280,22 @@ write_zellij_owner_meta() {
   fm_write_meta "$HOME_DIR/state/$owner.meta" \
     "window=zsess:3" \
     "backend=zellij" \
+    "worktree=$worktree" \
+    "project=$PROJ_DIR" \
+    "harness=claude" \
+    "kind=ship" \
+    "mode=default" \
+    "yolo=off"
+}
+
+# write_owner_meta_on_backend <owner-id> <worktree> <backend> <endpoint-line>: an
+# owner recorded against an arbitrary backend, for the cases that only need the
+# recorded backend and a non-empty endpoint.
+write_owner_meta_on_backend() {
+  local owner=$1 worktree=$2 backend=$3 endpoint=$4
+  fm_write_meta "$HOME_DIR/state/$owner.meta" \
+    "$endpoint" \
+    "backend=$backend" \
     "worktree=$worktree" \
     "project=$PROJ_DIR" \
     "harness=claude" \
@@ -580,6 +629,114 @@ test_herdr_owner_with_missing_cli_is_refused() {
   pass "an unreachable herdr CLI is an inability to ask, not evidence the runtime stopped"
 }
 
+test_tmux_owner_with_missing_cli_is_refused() {
+  local id rec out status
+  id=reuse-tmux-nocli-z9l
+  rec=$(make_case tmux-nocli "$id")
+  read_case "$rec"
+  write_owner_meta owner-tmux-nocli-z9l "$WT_REAL"
+  hide_tool_from_spawn_path tmux
+
+  out=$(run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 1 "$status" "an unreachable tmux CLI must never release the worktree"
+  assert_contains "$out" "is already recorded by task owner-tmux-nocli-z9l" \
+    "missing-tmux-CLI refusal did not name the owning task"
+  assert_contains "$out" "Cannot determine liveness: tmux CLI not found on PATH" \
+    "missing-tmux-CLI refusal did not name the condition that blocked the read"
+  assert_contains "$out" "a backend=tmux runtime this spawn cannot see may still be running that agent" \
+    "missing-tmux-CLI refusal did not explain why absence is not death"
+  assert_absent "$HOME_DIR/state/$id.meta" \
+    "the refused spawn still recorded metadata for the reused worktree"
+  pass "an unreachable tmux CLI refuses rather than reading absence as a dead endpoint"
+}
+
+test_zellij_owner_with_missing_cli_is_refused() {
+  local id rec out status
+  id=reuse-zellij-nocli-z9m
+  rec=$(make_case zellij-nocli "$id")
+  read_case "$rec"
+  write_zellij_owner_meta owner-zellij-nocli-z9m "$WT_REAL"
+  hide_tool_from_spawn_path zellij
+
+  out=$(run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 1 "$status" "an unreachable zellij CLI must never release the worktree"
+  assert_contains "$out" "is already recorded by task owner-zellij-nocli-z9m" \
+    "missing-zellij-CLI refusal did not name the owning task"
+  assert_contains "$out" "Cannot determine liveness: zellij CLI not found on PATH" \
+    "missing-zellij-CLI refusal did not name the condition that blocked the read"
+  assert_contains "$out" "a backend=zellij runtime this spawn cannot see may still be running that agent" \
+    "missing-zellij-CLI refusal did not explain why absence is not death"
+  [ ! -s "$ZELLIJ_LOG" ] || fail "the probe queried zellij after finding its CLI unreachable"
+  assert_absent "$HOME_DIR/state/$id.meta" \
+    "the refused spawn still recorded metadata for the reused worktree"
+  pass "an unreachable zellij CLI refuses instead of reading a silent probe as absence"
+}
+
+test_cmux_owner_with_missing_cli_is_refused() {
+  local id rec out status
+  id=reuse-cmux-nocli-z9n
+  rec=$(make_case cmux-nocli "$id")
+  read_case "$rec"
+  write_owner_meta_on_backend owner-cmux-nocli-z9n "$WT_REAL" cmux "window=ws1:sf1"
+  hide_tool_from_spawn_path cmux
+
+  out=$(run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 1 "$status" "an unreachable cmux CLI must never release the worktree"
+  assert_contains "$out" "is already recorded by task owner-cmux-nocli-z9n" \
+    "missing-cmux-CLI refusal did not name the owning task"
+  assert_contains "$out" "Cannot determine liveness: cmux CLI not found on PATH" \
+    "missing-cmux-CLI refusal did not name the condition that blocked the read"
+  assert_contains "$out" "a backend=cmux runtime this spawn cannot see may still be running that agent" \
+    "missing-cmux-CLI refusal did not explain why absence is not death"
+  assert_absent "$HOME_DIR/state/$id.meta" \
+    "the refused spawn still recorded metadata for the reused worktree"
+  pass "an unreachable cmux CLI refuses, bundled-binary fallback included"
+}
+
+test_orca_owner_with_missing_cli_is_refused() {
+  local id rec out status
+  id=reuse-orca-nocli-z9o
+  rec=$(make_case orca-nocli "$id")
+  read_case "$rec"
+  write_owner_meta_on_backend owner-orca-nocli-z9o "$WT_REAL" orca "terminal=orca-term-1"
+  hide_tool_from_spawn_path orca
+
+  out=$(run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 1 "$status" "an unreachable orca CLI must never release the worktree"
+  assert_contains "$out" "is already recorded by task owner-orca-nocli-z9o" \
+    "missing-orca-CLI refusal did not name the owning task"
+  assert_contains "$out" "Cannot determine liveness: orca CLI not found on PATH" \
+    "missing-orca-CLI refusal did not name the condition that blocked the read"
+  assert_contains "$out" "a backend=orca runtime this spawn cannot see may still be running that agent" \
+    "missing-orca-CLI refusal did not explain why absence is not death"
+  assert_absent "$HOME_DIR/state/$id.meta" \
+    "the refused spawn still recorded metadata for the reused worktree"
+  pass "an unreachable orca CLI refuses rather than reading its failed capture as absence"
+}
+
+test_owner_on_unrecognized_backend_is_refused() {
+  local id rec out status
+  id=reuse-badbackend-z9p
+  rec=$(make_case badbackend "$id")
+  read_case "$rec"
+  write_owner_meta_on_backend owner-badbackend-z9p "$WT_REAL" notabackend "window=whatever:1"
+
+  out=$(run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 1 "$status" "an unprobeable backend must never release the worktree"
+  assert_contains "$out" "is already recorded by task owner-badbackend-z9p" \
+    "unrecognized-backend refusal did not name the owning task"
+  assert_contains "$out" "'notabackend' is not a backend this Firstmate knows" \
+    "unrecognized-backend refusal did not name the condition that blocked the read"
+  assert_absent "$HOME_DIR/state/$id.meta" \
+    "the refused spawn still recorded metadata for the reused worktree"
+  pass "an owner recorded against an unknown backend refuses rather than being read as dead"
+}
+
 test_herdr_owner_with_unreadable_status_is_refused() {
   local id rec out status
   id=reuse-herdr-badstatus-z9k
@@ -746,6 +903,11 @@ test_endpointless_owner_meta_refuses_with_a_diagnostic
 test_herdr_owner_with_no_running_server_is_reclaimed
 test_herdr_owner_with_pane_not_found_is_reclaimed
 test_herdr_owner_with_missing_cli_is_refused
+test_tmux_owner_with_missing_cli_is_refused
+test_zellij_owner_with_missing_cli_is_refused
+test_cmux_owner_with_missing_cli_is_refused
+test_orca_owner_with_missing_cli_is_refused
+test_owner_on_unrecognized_backend_is_refused
 test_herdr_owner_with_unreadable_status_is_refused
 test_herdr_owner_with_unexpected_pane_error_is_refused
 test_herdr_owner_with_ambiguous_agent_is_refused

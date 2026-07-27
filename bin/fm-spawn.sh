@@ -31,9 +31,10 @@
 #   a live worker is never replaced and two live agents can never share files. That owner
 #   probe is read-only: it never starts a backend runtime in order to inspect one, and
 #   only a runtime that is demonstrably down or an endpoint the runtime itself reports as
-#   gone counts as dead. Being unable to ask - a backend CLI missing from this process's
-#   PATH, an errored or unparseable probe - refuses and names the condition, because a
-#   runtime this spawn cannot see may still be running the recorded agent.
+#   gone counts as dead. Being unable to ask - the recorded backend's CLI missing from
+#   this process's PATH, an errored or unparseable probe, an unrecognized backend -
+#   refuses on every backend and names the condition, because a runtime this spawn
+#   cannot see may still be running the recorded agent.
 #   zellij and cmux have no verified agent-liveness probe yet, so a
 #   relaunch into a worktree whose recorded endpoint is still present there is refused
 #   until the operator closes that pane or workspace - an honest precondition of those
@@ -1033,6 +1034,29 @@ spawn_git_common_dir_real() {  # <dir>
   (cd "$common" 2>/dev/null && pwd -P) || return 1
 }
 
+# spawn_backend_probe_tool: the first tool <backend>'s liveness probe needs that
+# this process cannot reach, or nothing when it can reach them all. The tool set
+# and the how-to-look-for-it rule both come from bin/fm-backend.sh's
+# fm_backend_required_tools / fm_backend_required_tool_available, the declared
+# single owner of the per-backend dependency delta (so cmux's bundled-binary
+# fallback is honoured here for free). treehouse is skipped: it allocates
+# worktrees and has no part in reading whether an endpoint is alive.
+# A missing tool is an INABILITY TO ASK, never an answer. Every adapter's
+# presence check reports it as absence instead - zellij pipes `list-sessions`
+# into grep and cmux pipes `list-panes` into jq, so no output reads as "gone";
+# orca's capture fails its own tool check; tmux's display-message is simply not
+# found - and absence would release the worktree to a second agent while the
+# first may still be running. So this runs BEFORE any presence probe, for every
+# backend, and refuses.
+spawn_backend_probe_tool() {  # <backend>
+  local backend=$1 tool required
+  required=$(fm_backend_required_tools "$backend") || { printf 'unknown-backend'; return 0; }
+  for tool in $required; do
+    [ "$tool" = treehouse ] && continue
+    fm_backend_required_tool_available "$backend" "$tool" || { printf '%s' "$tool"; return 0; }
+  done
+}
+
 # spawn_herdr_runtime_state: is the herdr server behind <target> up? This is the
 # FIRST line of fm_backend_herdr_server_ensure and nothing more: the read-only
 # `status --json` .server.running query, without the start-and-poll half that
@@ -1040,24 +1064,16 @@ spawn_git_common_dir_real() {  # <dir>
 # available client answering, parseably, running:false, which herdr's own client
 # does report for a server it is not connected to. Every other outcome is an
 # INABILITY TO ASK, never an answer, and each names its own condition so the
-# refusal can tell the operator what to repair:
+# refusal can tell the operator what to repair. Reachability of the herdr and jq
+# binaries is already settled by spawn_backend_probe_tool above.
 #   running                - a server is up; the endpoint may still be hosting an agent.
 #   down                   - client answered running:false. The only reclaim-permitting verdict.
-#   cli-missing            - no herdr on this process's PATH. A reduced-PATH spawn
-#                            (hook, cron, non-login shell) cannot see a server that
-#                            may well be running a live agent, so this must never be
-#                            read as evidence the runtime stopped; the rest of the
-#                            codebase refuses on an absent herdr binary too
-#                            (fm_backend_herdr_tool_check).
-#   jq-missing             - herdr's JSON answer cannot be parsed at all.
 #   adapter-unavailable    - the herdr adapter itself could not be sourced.
 #   target-malformed       - the recorded endpoint is not <session>:<pane>.
 #   status-failed          - the status command errored.
 #   status-unparseable     - status returned something with no readable .server.running.
 spawn_herdr_runtime_state() {  # <target>
   local target=$1 status running
-  command -v herdr >/dev/null 2>&1 || { printf 'cli-missing'; return 0; }
-  command -v jq >/dev/null 2>&1 || { printf 'jq-missing'; return 0; }
   fm_backend_source herdr >/dev/null 2>&1 || { printf 'adapter-unavailable'; return 0; }
   fm_backend_herdr_parse_target "$target" >/dev/null 2>&1 || { printf 'target-malformed'; return 0; }
   status=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" status --json 2>/dev/null) || {
@@ -1090,7 +1106,9 @@ spawn_herdr_runtime_state() {  # <target>
 #     presence check documented never to start a server or session, and then the
 #     same fm_backend_agent_alive classifier. Its adapters expose no error-code
 #     split, so a failed presence read means the recorded endpoint is gone and
-#     nothing can be running in it.
+#     nothing can be running in it - which is only sound once the adapter's own
+#     CLI is known to be reachable, hence the spawn_backend_probe_tool gate that
+#     runs first for EVERY backend.
 # fm_backend_agent_alive's fail-safe contract is preserved verbatim throughout: a
 # present endpoint whose agent cannot be classified stays `unknown`. On zellij,
 # cmux, and orca that is EVERY present endpoint, because those adapters have no
@@ -1103,10 +1121,16 @@ spawn_herdr_runtime_state() {  # <target>
 # so the refusal can name the exact condition that blocked the read instead of
 # reporting every inconclusive probe identically.
 spawn_meta_endpoint_liveness() {  # <meta>
-  local meta=$1 backend target verdict runtime
+  local meta=$1 backend target verdict runtime missing
   backend=$(fm_backend_of_meta "$meta")
   target=$(fm_backend_target_of_meta "$meta" || true)
   [ -n "$target" ] || { printf 'unrecorded'; return 0; }
+  missing=$(spawn_backend_probe_tool "$backend")
+  case "$missing" in
+    '') ;;
+    unknown-backend) printf 'unknown backend-unrecognized'; return 0 ;;
+    *) printf 'unknown tool-missing:%s' "$missing"; return 0 ;;
+  esac
   if [ "$backend" = herdr ]; then
     runtime=$(spawn_herdr_runtime_state "$target")
     case "$runtime" in
@@ -1136,7 +1160,7 @@ validate_reuse_worktree_membership() {  # <resolved-worktree>
 }
 
 validate_reuse_worktree_exclusive() {  # <resolved-worktree>
-  local wt_real=$1 meta other_id other_wt other_backend other_target record liveness reason detail remedy
+  local wt_real=$1 meta other_id other_wt other_backend other_target record liveness reason detail remedy missing_tool
   [ -d "$STATE" ] || return 0
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] || continue
@@ -1162,11 +1186,12 @@ validate_reuse_worktree_exclusive() {  # <resolved-worktree>
       unknown)
         detail="has an endpoint reported as unknown"
         case "$reason" in
-          herdr-cli-missing)
-            remedy="Cannot determine liveness: herdr CLI not found on PATH. herdr must be available to this process to verify the recorded owner - a herdr server this spawn cannot see may still be running that agent. Put herdr on PATH, then retry."
+          tool-missing:*)
+            missing_tool=${reason#tool-missing:}
+            remedy="Cannot determine liveness: $missing_tool CLI not found on PATH. $missing_tool must be available to this process to verify the recorded owner - a backend=$other_backend runtime this spawn cannot see may still be running that agent. Put $missing_tool on PATH, then retry."
             ;;
-          herdr-jq-missing)
-            remedy="Cannot determine liveness: jq not found on PATH, so herdr's status could not be parsed. Put jq on PATH, then retry."
+          backend-unrecognized)
+            remedy="Cannot determine liveness: '$other_backend' is not a backend this Firstmate knows, so its endpoint cannot be probed. Repair that metadata, then retry."
             ;;
           herdr-adapter-unavailable)
             remedy="Cannot determine liveness: the herdr backend adapter could not be loaded. Repair the Firstmate install, then retry."
