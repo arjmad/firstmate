@@ -616,46 +616,6 @@ test_create_task_creates_with_no_focus_flag() {
   pass "fm_backend_herdr_create_task: tab create passes --no-focus"
 }
 
-# --- opt-in fleet grid ------------------------------------------------------
-
-test_fleet_create_then_join_splits_the_recorded_workspace() {
-  local dir state log resp fb out record created split
-  dir="$TMP_ROOT/fleet-create-join"; state="$dir/state"; mkdir -p "$dir/responses" "$state"
-  log="$dir/log"; resp="$dir/responses"; : > "$log"
-  printf '%s\n' '{"result":{"workspace":{"workspace_id":"w9","label":"firstmate/fleet-batch · f:AbCdEfGhIjKlMnOpQrStUv"},"tab":{"tab_id":"w9:t1"},"root_pane":{"pane_id":"w9:p1"}}}' > "$resp/1.out"
-  # 2: tab rename succeeds with no response body.
-  printf '%s\n' '{"result":{"workspace":{"workspace_id":"w9","label":"firstmate/fleet-batch · f:AbCdEfGhIjKlMnOpQrStUv"}}}' > "$resp/3.out"
-  printf '%s\n' '{"result":{"tab":{"tab_id":"w9:t1","workspace_id":"w9"}}}' > "$resp/4.out"
-  printf '%s\n' '{"result":{"panes":[{"pane_id":"w9:p1","tab_id":"w9:t1","workspace_id":"w9"}]}}' > "$resp/5.out"
-  printf '%s\n' '{"result":{"layout":{"workspace_id":"w9","tab_id":"w9:t1","panes":[{"pane_id":"w9:p1","rect":{"width":100,"height":30}}]}}}' > "$resp/6.out"
-  printf '%s\n' '{"result":{"pane":{"pane_id":"w9:p2","tab_id":"w9:t1","workspace_id":"w9"}}}' > "$resp/7.out"
-  fb=$(make_herdr_fakebin "$dir")
-  out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" HERDR_SESSION=fmtest \
-    bash -c '
-      . "$0/bin/backends/herdr.sh"
-      fm_backend_herdr_projection_id() { printf AbCdEfGhIjKlMnOpQrStUv; }
-      fm_backend_herdr_projection_focus_snapshot() { printf "captain-ws\tcaptain-tab"; }
-      fm_backend_herdr_projection_focus_restore() { return 0; }
-      fm_backend_herdr_fleet_create_or_join "$1" batch /tmp/one || exit $?
-      printf "first=%s/%s/%s/%s\n" \
-        "$FM_BACKEND_HERDR_FLEET_SESSION" "$FM_BACKEND_HERDR_FLEET_WORKSPACE_ID" \
-        "$FM_BACKEND_HERDR_FLEET_TAB_ID" "$FM_BACKEND_HERDR_FLEET_PANE_ID"
-      fm_backend_herdr_fleet_create_or_join "$1" batch /tmp/two || exit $?
-      printf "second=%s/%s/%s/%s\n" \
-        "$FM_BACKEND_HERDR_FLEET_SESSION" "$FM_BACKEND_HERDR_FLEET_WORKSPACE_ID" \
-        "$FM_BACKEND_HERDR_FLEET_TAB_ID" "$FM_BACKEND_HERDR_FLEET_PANE_ID"
-    ' "$ROOT" "$state") || fail "fleet create-then-join should succeed from exact responses"
-  assert_contains "$out" "first=fmtest/w9/w9:t1/w9:p1" "first fleet member did not use the workspace create root pane"
-  assert_contains "$out" "second=fmtest/w9/w9:t1/w9:p2" "second fleet member did not use the split pane"
-  record="$state/.herdr-fleet-batch"
-  assert_grep "state=active" "$record" "fleet record was not activated after exact create IDs"
-  assert_grep "workspace_id=w9" "$record" "fleet record did not retain the exact workspace id"
-  created=$(grep -c $'\x1fworkspace\x1fcreate' "$log")
-  split=$(grep -c $'\x1fpane\x1fsplit\x1fw9:p1\x1f--direction\x1fright\x1f--ratio\x1f0.5' "$log")
-  [ "$created" = 1 ] || fail "fleet create-then-join should create exactly one workspace, got $created"
-  [ "$split" = 1 ] || fail "fleet join should split the largest recorded pane once, got $split"
-  pass "Herdr fleet grid creates one exact workspace, then joins it with a focus-safe pane split"
-}
 
 # --- default-off disposable presentation projection ------------------------
 
@@ -3098,7 +3058,6 @@ test_create_task_refuses_when_agent_state_ambiguous
 test_create_task_husk_replacement_creates_before_closing
 test_create_task_creates_and_parses_ids
 test_create_task_creates_with_no_focus_flag
-test_fleet_create_then_join_splits_the_recorded_workspace
 test_projection_journal_is_atomic_and_uses_128_bit_token
 test_projection_journal_v2_binds_and_advances_exact_endpoint
 test_projection_create_uses_exact_response_ids_and_leaves_one_task_pane

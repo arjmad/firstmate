@@ -1,16 +1,5 @@
 #!/usr/bin/env bash
-# Source-only durable wake queue, portable lock, watcher identity/health, and
-# bounded status-annotation helpers.
-#
-# Usage:
-#   . "${FM_ROOT}/bin/fm-wake-lib.sh"
-#
-# Sourcing resolves FM_ROOT, FM_HOME, STATE, queue paths, and lock timing from
-# their documented overrides, then creates STATE immediately. Public APIs cover
-# PID/path identity and age checks, watcher health, portable lock acquisition
-# and release, durable queue append/restore/deduplication, and bounded status
-# annotation rendering; callers should use the fm_* functions below rather than
-# duplicating those contracts.
+# Shared durable wake queue and portable lock helpers.
 
 FM_WAKE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_WAKE_DEFAULT_ROOT="$(cd "$FM_WAKE_LIB_DIR/.." && pwd)"

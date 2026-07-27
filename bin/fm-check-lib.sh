@@ -1,16 +1,4 @@
 #!/usr/bin/env bash
-# Source-only helpers for validating registered custom checks and preparing a
-# private, byte-verified execution snapshot under the effective state directory.
-#
-# Usage:
-#   . "${FM_ROOT}/bin/fm-pr-lib.sh"
-#   . "${FM_ROOT}/bin/fm-check-lib.sh"
-#
-# Callers must source fm-pr-lib.sh first because this library uses its task-id,
-# private-file, mode, device, and link-count validators. Public entrypoints are
-# fm_custom_check_registered, fm_custom_check_snapshot_prepare, and
-# fm_custom_check_snapshot_cleanup; the prepare call sets
-# FM_CUSTOM_CHECK_SNAPSHOT and cleanup removes it.
 
 FM_CUSTOM_CHECK_HASH=
 FM_CUSTOM_CHECK_SNAPSHOT=
