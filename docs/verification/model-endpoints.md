@@ -115,6 +115,8 @@ $ grep '<token>' <launch-literal>      -> absent (not in the recorded launch str
   carried by the same `spawn_send_literal` / `spawn_send_text_line` primitives that already deliver the herdr-verified `GOTMPDIR`
   export and `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` prefix (see
   [`herdr-backend.md`](../herdr-backend.md)). No herdr-specific code path changed.
+  Section 7 supersedes this bullet's transport detail: on herdr the token is no longer an
+  `export` line at all.
 
 ### Not exercised here: a live herdr-supervised spawn
 
@@ -182,3 +184,65 @@ $ bash tests/fm-spawn-model-endpoint.test.sh    -> 11 assertions, exit 0
 The two byte-exact non-endpoint baseline assertions in `tests/fm-spawn-model-endpoint.test.sh`
 were retargeted at the new stock template in the same merge; they still require byte equality
 and still forbid the endpoint prefix and both MCP flags on a non-endpoint launch.
+
+## 7. Native launch environment on the herdr backend (2026-07-27)
+
+- Date: 2026-07-27
+- herdr: 0.7.5
+- Scope: how the auth token and `GOTMPDIR` reach the worker on `backend=herdr`.
+
+Herdr's own CLI documents a launch-environment flag on both container-creating verbs:
+
+```
+$ herdr tab create --help
+      --env <KEY=VALUE>
+          Set an environment variable for the launched process
+
+$ herdr workspace create --help
+      --env <KEY=VALUE>
+          Set an environment variable for the launched process
+```
+
+The flag accumulates rather than replacing.
+Passing it twice against a session name with no server reaches the socket connect and fails there, instead of the repeated-argument refusal a single-value argument would produce:
+
+```
+$ herdr tab create --workspace ws-does-not-exist --env FM_PROBE_A=1 --env FM_PROBE_B=2 \
+    --no-focus --session fm-envprobe-nonexistent-9a3f
+Error: Os { code: 2, kind: NotFound, message: "No such file or directory" }
+```
+
+This probe is non-mutating by construction: the named session has no server, so no container is created.
+
+Firstmate therefore passes both values it already knows before the pane exists through that flag, and skips the typed pre-launch export block entirely on this backend.
+The token never reaches the pane's interactive shell, so it cannot appear in the pane's visible screen content or in Herdr's optional persisted pane history.
+Every other runtime backend keeps the typed path, including the paired history-file suppression.
+The endpoint's non-secret variables remain a prefix of the composed launch command, identical on every backend, so section 6's launch string is unchanged.
+
+Pinned by `tests/fm-backend-herdr.test.sh`, whose last two cases drive the real `bin/fm-spawn.sh` with `--backend herdr` against a stateful fake CLI and assert both directions:
+
+```
+$ bash tests/fm-backend-herdr.test.sh
+ok - fm_backend_herdr_env_flags: emits repeatable --env flags, one per pair, values preserved verbatim
+ok - fm_backend_herdr_env_flags: no pairs builds no flags (an env-less create stays byte-identical)
+ok - fm_backend_herdr_env_flags: refuses a non-KEY=VALUE entry loudly and withholds its value
+ok - fm_backend_herdr_env_flags: refuses an invalid environment variable name
+ok - fm_backend_herdr_create_task: places launch env on the pane process via repeatable --env
+ok - fm_backend_herdr_create_task: an env-less create is unchanged (no stray --env)
+ok - fm_backend_herdr_create_task: a malformed env pair refuses before any tab create (no half-configured pane)
+ok - fm_backend_herdr_projection_create_task: launch env is scoped to the task tab, never the disposable workspace's seeded tab
+ok - fm_backend_herdr_projection_create_task: a malformed env pair refuses before any herdr call and grants no cleanup authority
+ok - fm-spawn (herdr): launch env goes native via tab create --env and is never typed at the pane shell
+ok - fm-spawn (herdr): a spawn with no local endpoint still gets GOTMPDIR natively and no token env
+-> 146 assertions, exit 0
+```
+
+The end-to-end case asserts that a `pane run` and a `pane send-text` did occur, then that no typed call carried the credential, an `ANTHROPIC_AUTH_TOKEN` export, a `GOTMPDIR` export, or the history-file suppression, so it cannot pass by the spawn simply typing nothing.
+`tests/fm-spawn-model-endpoint.test.sh` continues to pin the typed path on the tmux transport unchanged.
+Both assertions were confirmed to fail when the change is reverted in place: forcing the typed block back on reproduces `export GOTMPDIR` at the pane, and dropping the flag expansion from `tab create` reproduces the missing `--env`.
+
+### Not exercised here: a live herdr launch through the proxy
+
+Reading the environment from inside a really launched process, and confirming a proxy-routed `claude` worker reaches the proxy rather than a 401 retry loop, requires creating and tearing down a real Herdr tab.
+The crewmate brief for this task is not `--herdr-lab` enabled and its hard safety gate forbids driving Herdr lifecycle from an unguarded brief, so that confirmation is left to firstmate, exactly as in section 4.
+To run it, add a `my-local-model` entry to `config/model-endpoints.json` (token via `auth_token_env` or `auth_token_file`), spawn with `--backend herdr --harness claude --model my-local-model`, then read the launched process's own environment from inside the pane and confirm the worker answers on the proxied model.

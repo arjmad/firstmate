@@ -179,6 +179,18 @@ Herdr's native agent state can read idle while a harness waits on its own long f
 The shared crew-state path therefore corroborates every native non-busy or unreadable result with the recorded harness's rendered busy signature before concluding that a pane is not working.
 A human-blocked permission dialog has no busy banner and still surfaces.
 
+## Launch environment
+
+Herdr's `tab create` and `workspace create` accept a repeatable `--env KEY=VALUE` that sets the variable on the launched process itself.
+This backend uses that flag for every launch value firstmate already knows before the pane exists, so those values never transit the pane's interactive shell.
+That is what keeps a local proxy credential out of the pane's visible screen content, and therefore out of Herdr's optional persisted pane history.
+The disposable presentation workspace's own seeded default tab deliberately receives none of it, because that tab is pruned and never hosts the crewmate.
+
+A value that only exists after the pane has been created cannot use this route and still goes through the typed pre-launch path.
+Every other runtime backend keeps that typed path unchanged, including the paired history-file suppression that protects a typed credential.
+The local endpoint's non-secret variables are a prefix of the composed launch command rather than launch environment, and are identical on every backend.
+A malformed pair refuses the create outright rather than starting a pane whose environment is silently incomplete.
+
 ## Composer and injection safety
 
 Herdr has no direct cursor-row primitive.

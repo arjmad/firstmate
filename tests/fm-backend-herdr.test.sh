@@ -3025,9 +3025,361 @@ test_wait_transition_clean_timeout_returns_1() {
   pass "fm_backend_herdr_wait_transition: stock macOS Bash clean timeout closes fd 9 and returns 1"
 }
 
+# --- native launch env: `tab create --env`, never typed at the pane shell ---
+#
+# Herdr's `tab create` / `workspace create` accept repeatable
+# `--env KEY=VALUE` and set the variable on the launched process itself
+# (verified against the installed binary, herdr 0.7.5). fm-spawn uses that for
+# every launch value it already knows before the pane exists, so those values
+# never transit the pane's interactive shell - which is what keeps the local
+# proxy credential out of the pane's visible screen content, and therefore out
+# of herdr's experimental.pane_history persistence on disk.
+#
+# FAKE_TOKEN below is an obviously fake string on purpose: nothing in this
+# suite may carry a real credential.
+
+FAKE_TOKEN='sk-fake-not-a-real-token-000'
+
+test_env_flags_builds_repeatable_flags() {
+  local out
+  out=$(bash -c '. "$0/bin/backends/herdr.sh"
+    fm_backend_herdr_env_flags "A=1" "B=two words" || exit 1
+    printf "%s\n" "${FM_BACKEND_HERDR_ENV_FLAGS[@]}"' "$ROOT") \
+    || fail "env_flags should accept well-formed pairs"
+  [ "$out" = $'--env\nA=1\n--env\nB=two words' ] \
+    || fail "env_flags should emit one --env flag per pair, preserving the whole value, got: $out"
+  pass "fm_backend_herdr_env_flags: emits repeatable --env flags, one per pair, values preserved verbatim"
+}
+
+test_env_flags_with_no_pairs_is_empty() {
+  local out
+  out=$(bash -c '. "$0/bin/backends/herdr.sh"
+    fm_backend_herdr_env_flags || exit 1
+    printf "%s" "${#FM_BACKEND_HERDR_ENV_FLAGS[@]}"' "$ROOT") \
+    || fail "env_flags with no pairs should succeed"
+  [ "$out" = 0 ] || fail "env_flags with no pairs should build an empty flag array, got '$out'"
+  pass "fm_backend_herdr_env_flags: no pairs builds no flags (an env-less create stays byte-identical)"
+}
+
+test_env_flags_refuses_malformed_pair_without_echoing_the_value() {
+  local out status
+  # An entry that lost its "=" - the shape a quoting slip would produce, and
+  # the one where the whole string could be the credential.
+  out=$(bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_env_flags "ANTHROPIC_AUTH_TOKEN$1"' \
+    "$ROOT" "$FAKE_TOKEN" 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "env_flags should refuse an entry with no '=' rather than silently dropping it"
+  assert_not_contains "$out" "$FAKE_TOKEN" "a malformed env diagnostic must never echo the value"
+  pass "fm_backend_herdr_env_flags: refuses a non-KEY=VALUE entry loudly and withholds its value"
+}
+
+test_env_flags_refuses_invalid_name() {
+  local out status
+  out=$(bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_env_flags "not a name=1"' "$ROOT" 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "env_flags should refuse a key that is not a valid environment variable name"
+  assert_contains "$out" "not a name" "the refusal should name the offending key"
+  pass "fm_backend_herdr_env_flags: refuses an invalid environment variable name"
+}
+
+test_create_task_passes_launch_env_natively() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/create-task-env"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"result":{"tabs":[]}}\n' > "$resp/1.out"
+  printf '{"result":{"tab":{"tab_id":"w1:t2"},"root_pane":{"pane_id":"w1:p2"}}}\n' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-envtask /tmp/proj "" "GOTMPDIR=/tmp/fm-envtask/gotmp" "ANTHROPIC_AUTH_TOKEN=$1"' "$ROOT" "$FAKE_TOKEN" )
+  [ "$out" = "w1:t2 w1:p2" ] || fail "create_task with env should still echo '<tab_id> <pane_id>', got '$out'"
+  assert_contains "$(cat "$log")" $'\x1f''--env'$'\x1f''GOTMPDIR=/tmp/fm-envtask/gotmp' \
+    "create_task did not pass GOTMPDIR through herdr's native --env"
+  assert_contains "$(cat "$log")" $'\x1f''--env'$'\x1f''ANTHROPIC_AUTH_TOKEN='"$FAKE_TOKEN" \
+    "create_task did not pass the auth token through herdr's native --env"
+  # The env flags are APPENDED after --no-focus, so the pre-existing
+  # --workspace/--cwd/--label/--no-focus sequence stays contiguous.
+  assert_contains "$(cat "$log")" $'\x1f''tab'$'\x1f''create'$'\x1f''--workspace'$'\x1f''w1'$'\x1f''--cwd'$'\x1f''/tmp/proj'$'\x1f''--label'$'\x1f''fm-envtask'$'\x1f''--no-focus'$'\x1f''--env' \
+    "env flags must be appended after the existing create flags, not spliced into them"
+  pass "fm_backend_herdr_create_task: places launch env on the pane process via repeatable --env"
+}
+
+test_create_task_without_env_passes_no_env_flag() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/create-task-no-env"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"result":{"tabs":[]}}\n' > "$resp/1.out"
+  printf '{"result":{"tab":{"tab_id":"w1:t3"},"root_pane":{"pane_id":"w1:p3"}}}\n' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-noenv /tmp/proj ""' "$ROOT" )
+  [ "$out" = "w1:t3 w1:p3" ] || fail "create_task without env should echo '<tab_id> <pane_id>', got '$out'"
+  assert_not_contains "$(cat "$log")" $'\x1f''--env' "a create with no env pairs must pass no --env flag at all"
+  pass "fm_backend_herdr_create_task: an env-less create is unchanged (no stray --env)"
+}
+
+test_create_task_refuses_malformed_env_before_creating_anything() {
+  local dir log resp fb out status
+  dir="$TMP_ROOT/create-task-bad-env"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-badenv /tmp/proj "" "NOT_A_PAIR"' "$ROOT" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "create_task should refuse a malformed env pair"
+  assert_not_contains "$(cat "$log")" $'\x1f''tab'$'\x1f''create' \
+    "a malformed env pair must refuse BEFORE any tab is created, never leave a pane with a half-built environment"
+  assert_contains "$out" "not KEY=VALUE" "the refusal should explain the malformed entry"
+  pass "fm_backend_herdr_create_task: a malformed env pair refuses before any tab create (no half-configured pane)"
+}
+
+test_projection_create_task_puts_env_on_the_task_tab_only() {
+  local dir log resp fb logtext line saw_ws_create=0 saw_tab_create=0 focus_ws focus_tabs
+  dir="$TMP_ROOT/projection-env"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  focus_ws='{"result":{"workspaces":[{"workspace_id":"wA","label":"parent","focused":true,"active_tab_id":"wA:t1"}]}}'
+  focus_tabs='{"result":{"tabs":[{"tab_id":"wA:t1","label":"1","workspace_id":"wA","focused":true}]}}'
+  # 1 version_check (client), 2 server_ensure, 3+4 focus snapshot, 5 workspace
+  # create, 6+7 focus restore snapshot (unchanged: --no-focus), 8+9 focus
+  # snapshot for the task tab, 10 the TASK tab create. The fake deliberately
+  # stops modeling after call 10 - the assertion target is what call 10's argv
+  # carried, and what call 5's did not - so the function is expected to bail
+  # afterwards on the seeded-tab prune it can no longer satisfy.
+  printf '{"client":{"version":"0.7.5","protocol":14}}\n' > "$resp/1.out"
+  printf '{"server":{"running":true}}\n' > "$resp/2.out"
+  printf '%s\n' "$focus_ws" > "$resp/3.out"
+  printf '%s\n' "$focus_tabs" > "$resp/4.out"
+  printf '{"result":{"workspace":{"workspace_id":"wP"},"tab":{"tab_id":"wP:t1"},"root_pane":{"pane_id":"wP:p1"}}}\n' > "$resp/5.out"
+  printf '%s\n' "$focus_ws" > "$resp/6.out"
+  printf '%s\n' "$focus_tabs" > "$resp/7.out"
+  printf '%s\n' "$focus_ws" > "$resp/8.out"
+  printf '%s\n' "$focus_tabs" > "$resp/9.out"
+  printf '{"result":{"tab":{"tab_id":"wP:t2"},"root_pane":{"pane_id":"wP:p2"}}}\n' > "$resp/10.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 HERDR_SESSION=fmtest \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_projection_create_task /tmp/proj fm-proj-ws fm-projtask "ANTHROPIC_AUTH_TOKEN=$1"' \
+    "$ROOT" "$FAKE_TOKEN" >/dev/null 2>&1 || true
+
+  logtext=$(cat "$log")
+  while IFS= read -r line; do
+    case "$line" in
+      *$'\x1f'workspace$'\x1f'create*)
+        saw_ws_create=1
+        # The disposable presentation workspace's seeded default tab is pruned
+        # and never hosts the crewmate, so widening the credential to it would
+        # be pure exposure for no gain.
+        assert_not_contains "$line" "--env" \
+          "the projection's disposable workspace create must never carry launch env"
+        assert_not_contains "$line" "$FAKE_TOKEN" \
+          "the credential must never reach the projection workspace create"
+        ;;
+      *$'\x1f'tab$'\x1f'create*)
+        saw_tab_create=1
+        assert_contains "$line" $'\x1f''--env'$'\x1f''ANTHROPIC_AUTH_TOKEN='"$FAKE_TOKEN" \
+          "the projection's TASK tab create must carry the launch env natively"
+        ;;
+    esac
+  done <<EOF
+$logtext
+EOF
+  [ "$saw_ws_create" = 1 ] || fail "the projection did not reach its workspace create"
+  [ "$saw_tab_create" = 1 ] || fail "the projection did not reach its task tab create"
+  pass "fm_backend_herdr_projection_create_task: launch env is scoped to the task tab, never the disposable workspace's seeded tab"
+}
+
+test_projection_create_task_refuses_malformed_env_before_any_call() {
+  local dir log resp fb out status
+  dir="$TMP_ROOT/projection-bad-env"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 HERDR_SESSION=fmtest \
+    bash -c '. "$0/bin/backends/herdr.sh"
+      fm_backend_herdr_projection_create_task /tmp/proj fm-proj-ws fm-projtask "NOT_A_PAIR"
+      rc=$?
+      printf "cleanup_safe=%s\n" "$FM_BACKEND_HERDR_PROJECTION_CLEANUP_SAFE"
+      exit "$rc"' "$ROOT" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "the projection create should refuse a malformed env pair"
+  assert_contains "$out" "cleanup_safe=0" "a refused projection must grant no cleanup authority"
+  [ ! -s "$log" ] || fail "a malformed env pair must refuse before ANY herdr call, log was: $(cat "$log")"
+  pass "fm_backend_herdr_projection_create_task: a malformed env pair refuses before any herdr call and grants no cleanup authority"
+}
+
+# --- end-to-end: a real fm-spawn.sh herdr launch never types the credential --
+#
+# The acceptance bar for the native-env change is behavioral, not structural:
+# drive the REAL bin/fm-spawn.sh with --backend herdr against a stateful fake
+# `herdr` CLI and a fake `treehouse`, then assert the credential reached the
+# pane only as a `tab create --env` argument, and reached the pane's shell -
+# the thing herdr's pane history persists - not at all.
+
+# make_spawn_herdr_fake: a stateful `herdr` that models just enough of the
+# spawn path (version/server status, workspace+tab create, pane display
+# metadata, pane run/send-text/send-keys, and the foreground_cwd that
+# `treehouse get` moves). Logs every invocation unit-separated to FM_HERDR_LOG
+# exactly like the other fakes in this suite.
+make_spawn_herdr_fake() {  # <dir> -> echoes fakebin dir
+  local dir=$1 fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+LOG="${FM_HERDR_LOG:?}"
+CWD_FILE="${FM_FAKE_HERDR_CWD:?}"
+{
+  printf 'HERDR_SESSION=%s' "${HERDR_SESSION:-}"
+  for a in "$@"; do printf '\x1f%s' "$a"; done
+  printf '\n'
+} >> "$LOG"
+cmd=${1:-}; sub=${2:-}
+case "$cmd $sub" in
+  "status --json")
+    printf '{"client":{"version":"0.7.5","protocol":14},"server":{"running":true}}\n' ;;
+  "workspace list")
+    printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"firstmate"}]}}\n' ;;
+  "tab list")
+    printf '{"result":{"tabs":[]}}\n' ;;
+  "tab create")
+    printf '{"result":{"tab":{"tab_id":"w1:t7"},"root_pane":{"pane_id":"w1:p7"}}}\n' ;;
+  "pane get")
+    printf '{"result":{"pane":{"pane_id":"w1:p7","cwd":"%s","foreground_cwd":"%s"}}}\n' \
+      "${FM_FAKE_HERDR_PROJ:-}" "$(cat "$CWD_FILE")" ;;
+  "pane run")
+    # `treehouse get` is what moves the pane into its worktree.
+    case "${4:-}" in
+      *"treehouse get"*) printf '%s' "${FM_FAKE_HERDR_WT:?}" > "$CWD_FILE" ;;
+    esac
+    ;;
+  *) : ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/herdr"
+  printf '%s\n' "$fb"
+}
+
+test_spawn_herdr_sends_launch_env_natively_and_never_types_the_credential() {
+  local dir home proj wt fb log cwd_file id out logtext meta line
+  id=herdr-env-e1
+  dir="$TMP_ROOT/spawn-herdr-env"
+  home="$dir/home"; proj="$dir/project"; wt="$dir/wt"
+  log="$dir/herdr.log"; cwd_file="$dir/foreground_cwd"
+  mkdir -p "$dir" "$home/data/$id" "$home/projects" "$home/state" "$home/config"
+  printf 'claude\n' > "$home/config/crew-harness"
+  cat > "$home/config/model-endpoints.json" <<'JSON'
+{
+  "endpoints": {
+    "my-local-model": {
+      "base_url": "http://127.0.0.1:8080",
+      "auth_token_env": "FM_TEST_PROXY_TOKEN",
+      "strict_mcp_config": true
+    }
+  }
+}
+JSON
+  printf 'brief for %s\n' "$id" > "$home/data/$id/brief.md"
+  touch "$home/state/.last-watcher-beat"
+  fm_git_worktree "$proj" "$wt" "wt-herdr-env"
+  fb=$(make_spawn_herdr_fake "$dir")
+  fm_fake_exit0 "$fb" treehouse
+  : > "$log"
+  printf '%s' "$proj" > "$cwd_file"
+
+  out=$( FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_TEST_PROXY_TOKEN="$FAKE_TOKEN" \
+    FM_HERDR_LOG="$log" FM_FAKE_HERDR_CWD="$cwd_file" \
+    FM_FAKE_HERDR_PROJ="$proj" FM_FAKE_HERDR_WT="$wt" \
+    HERDR_SESSION=fmtest GROK_HOME="$home/grok-home" PATH="$fb:$PATH" \
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" --backend herdr --model my-local-model 2>&1 )
+  expect_code 0 "$?" "the herdr endpoint spawn should succeed: $out"
+
+  logtext=$(cat "$log")
+  # 1. The credential and GOTMPDIR reach the pane process natively, at creation.
+  assert_contains "$logtext" $'\x1f''tab'$'\x1f''create' "the spawn did not create a herdr tab"
+  assert_contains "$logtext" $'\x1f''--env'$'\x1f''ANTHROPIC_AUTH_TOKEN='"$FAKE_TOKEN" \
+    "the proxy credential must be placed on the launched process via tab create --env"
+  assert_contains "$logtext" $'\x1f''--env'$'\x1f''GOTMPDIR=/tmp/fm-'"$id"'/gotmp' \
+    "GOTMPDIR must be placed on the launched process via tab create --env"
+
+  # 2. NOTHING is typed at the pane shell that carries either value. This is
+  #    the acceptance bar: `pane run` / `pane send-text` / `pane send-keys` are
+  #    the calls whose text lands on the pane's visible screen, which is what
+  #    herdr's experimental.pane_history persists to disk.
+  #    Assert the typed channel was genuinely exercised first, so this can
+  #    never pass vacuously by the spawn simply never typing anything.
+  assert_contains "$logtext" $'\x1f''pane'$'\x1f''run' "the spawn should still type the treehouse get command at the pane"
+  assert_contains "$logtext" $'\x1f''pane'$'\x1f''send-text' "the spawn should still type the launch line at the pane"
+  while IFS= read -r line; do
+    case "$line" in
+      *$'\x1f'pane$'\x1f'run*|*$'\x1f'pane$'\x1f'send-text*|*$'\x1f'pane$'\x1f'send-keys*)
+        assert_not_contains "$line" "$FAKE_TOKEN" "the credential must never be typed at the pane shell"
+        assert_not_contains "$line" "ANTHROPIC_AUTH_TOKEN" "no token export may be typed at the pane shell"
+        assert_not_contains "$line" "export GOTMPDIR" "GOTMPDIR must not be typed at the pane shell on this backend"
+        assert_not_contains "$line" "unset HISTFILE" \
+          "with nothing secret typed, the HISTFILE workaround must not be sent on this backend"
+        ;;
+    esac
+  done <<EOF
+$logtext
+EOF
+
+  # 3. The credential stays out of every durable record, as before.
+  meta="$home/state/$id.meta"
+  assert_grep "harness=claude" "$meta" "meta must still record harness=claude"
+  assert_no_grep "$FAKE_TOKEN" "$meta" "the credential must never be written to meta"
+  assert_no_grep "$FAKE_TOKEN" "$home/config/model-endpoints.json" "the credential must not be embedded in config"
+  for line in "$home"/state/*.status; do
+    [ -e "$line" ] || continue
+    assert_no_grep "$FAKE_TOKEN" "$line" "the credential must never reach a status line"
+  done
+  pass "fm-spawn (herdr): launch env goes native via tab create --env and is never typed at the pane shell"
+}
+
+test_spawn_herdr_without_endpoint_sends_only_gotmpdir_natively() {
+  local dir home proj wt fb log cwd_file id out logtext
+  id=herdr-env-e2
+  dir="$TMP_ROOT/spawn-herdr-noendpoint"
+  home="$dir/home"; proj="$dir/project"; wt="$dir/wt"
+  log="$dir/herdr.log"; cwd_file="$dir/foreground_cwd"
+  mkdir -p "$dir" "$home/data/$id" "$home/projects" "$home/state" "$home/config"
+  printf 'claude\n' > "$home/config/crew-harness"
+  printf 'brief for %s\n' "$id" > "$home/data/$id/brief.md"
+  touch "$home/state/.last-watcher-beat"
+  fm_git_worktree "$proj" "$wt" "wt-herdr-noendpoint"
+  fb=$(make_spawn_herdr_fake "$dir")
+  fm_fake_exit0 "$fb" treehouse
+  : > "$log"
+  printf '%s' "$proj" > "$cwd_file"
+
+  out=$( FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 \
+    FM_HERDR_LOG="$log" FM_FAKE_HERDR_CWD="$cwd_file" \
+    FM_FAKE_HERDR_PROJ="$proj" FM_FAKE_HERDR_WT="$wt" \
+    HERDR_SESSION=fmtest GROK_HOME="$home/grok-home" PATH="$fb:$PATH" \
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" --backend herdr 2>&1 )
+  expect_code 0 "$?" "an ordinary herdr spawn should succeed: $out"
+  logtext=$(cat "$log")
+  assert_contains "$logtext" $'\x1f''--env'$'\x1f''GOTMPDIR=/tmp/fm-'"$id"'/gotmp' \
+    "an ordinary spawn must still get GOTMPDIR natively"
+  assert_not_contains "$logtext" "ANTHROPIC_AUTH_TOKEN" \
+    "a spawn with no local endpoint must not carry any auth token env at all"
+  assert_not_contains "$logtext" "export GOTMPDIR" \
+    "GOTMPDIR must not also be typed at the pane shell (that would defeat the native path)"
+  pass "fm-spawn (herdr): a spawn with no local endpoint still gets GOTMPDIR natively and no token env"
+}
+
 # shellcheck source=bin/fm-backend.sh
 . "$ROOT/bin/fm-backend.sh"
 
+test_env_flags_builds_repeatable_flags
+test_env_flags_with_no_pairs_is_empty
+test_env_flags_refuses_malformed_pair_without_echoing_the_value
+test_env_flags_refuses_invalid_name
+test_create_task_passes_launch_env_natively
+test_create_task_without_env_passes_no_env_flag
+test_create_task_refuses_malformed_env_before_creating_anything
+test_projection_create_task_puts_env_on_the_task_tab_only
+test_projection_create_task_refuses_malformed_env_before_any_call
+test_spawn_herdr_sends_launch_env_natively_and_never_types_the_credential
+test_spawn_herdr_without_endpoint_sends_only_gotmpdir_natively
 test_version_check_accepts_current_protocol
 test_version_check_refuses_old_protocol
 test_version_check_refuses_missing_herdr
