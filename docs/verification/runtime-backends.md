@@ -46,7 +46,7 @@ Expected submit matrix: proven pending plus busy is accepted as queued; proven p
 ## Herdr
 
 The compatibility floor is protocol 14.
-The latest active verification uses Herdr 0.7.5 protocol 16 on macOS aarch64, with earlier 0.7.4, protocol-14, and 0.7.3 evidence retained where they define current behavior or fallbacks.
+The latest active verification uses Herdr 0.7.5 protocol 17 on macOS aarch64, with earlier 0.7.4, protocol-16, protocol-14, and 0.7.3 evidence retained where they define current behavior or fallbacks.
 
 Core read-only probes:
 
@@ -60,7 +60,7 @@ Observed current shapes:
 
 ```text
 herdr 0.7.5
-{"client":16,"server":16}
+{"client":17,"server":17}
 ["pane.output_matched","pane.agent_status_changed","pane.scroll_changed"]
 ```
 

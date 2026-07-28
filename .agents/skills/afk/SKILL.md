@@ -60,7 +60,7 @@ No `/back` is needed. The first genuine message is the return signal:
 
 - A message **without** the current operational prefix or a legacy bare marker, and **not** starting with `/afk` -> the captain is back.
   Run `bin/fm-afk-return.sh` before acting on the message that brought the captain back.
-  That script owns correct-ordered daemon shutdown, durable wake draining, escalation and wedge evidence, and the return-catch-up gate.
+  That script owns correct-ordered daemon shutdown, durable wake draining, escalation, wedge, and unconfirmed-delivery evidence, and the return-catch-up gate.
   If it reports a firstmate-actionable `blocked:` event, remediate it immediately through the normal lifecycle, or explicitly reclassify it with a durable reason and close its decision key with `resolved [key=...]`, then run `bin/fm-afk-return.sh check`.
   Once the daemon stops, resume full per-wake responsiveness through the emitted primary-harness supervision protocol while blocker handling proceeds, so the gate never creates a blind wait.
   Do not answer a Bearings request or perform any other ordinary captain work until the check exits successfully.
@@ -100,6 +100,8 @@ backend (tmux or herdr; see "Auto-discovered supervisor pane" below):
   `pane_input_pending` remains the tested predicate for callers that only need to know whether real unsubmitted text is present, but it is insufficient for an injection-safety decision because it cannot distinguish `empty` from `unknown`.
 
 Either condition, or any composer verdict other than `empty`, defers the injection; the buffered escalation survives in `state/.subsuper-escalations` and is retried on the next housekeeping tick.
+One submit verdict is the exception and is never retried: `sent-unconfirmed` means the backend handed the digest to the agent exactly once and could not confirm the submit, so the daemon records it in `state/.subsuper-inject-unconfirmed` and retires it instead of re-flushing a possible duplicate.
+`docs/herdr-backend.md` "Atomic agent-prompt delivery" owns that contract, and `bin/fm-backend.sh`'s `fm_backend_send_text_submit` comment owns the cross-backend verdict vocabulary.
 In afk mode the composer guard is belt-and-suspenders (no human is typing), but it protects against the race window between the captain returning and their message landing, a dead shell, and the daemon's own previous injection sitting unsent.
 
 **Max-defer escape (the daemon must never silently wedge).**
@@ -124,6 +126,7 @@ For tmux that confirmation is a cleared composer, using the same corrected,
 border-aware detector as the composer guard.
 For herdr, normal idle-baseline submits are confirmed by native agent-state showing a real turn started; the ANSI-aware composer classifier remains the affirmative-empty pre-injection guard and conservative fallback for non-idle or unreadable baselines.
 A bordered-empty or ghost-only composer is recognized as empty where that backend uses composer confirmation, rather than mistaken for a swallowed Enter.
+A herdr home that sets `FM_BACKEND_HERDR_AGENT_PROMPT=1` submits an agent-directed digest atomically instead of typing it, keeps the same native agent-state confirmation, and never retries; that path is default-off and owned by `docs/herdr-backend.md` "Atomic agent-prompt delivery".
 `fm-send.sh` uses the same primitive and exits non-zero
 when a steer's Enter is positively swallowed, so firstmate learns an instruction
 did not land instead of leaving it unsubmitted.
@@ -136,7 +139,7 @@ busy opencode pane. The shared `fm_tmux_submit_enter_core` falls back to
 `fm_pane_is_busy` once the Enter-retry budget is spent: a busy pane means the
 Enter was accepted and queued (reported as `empty` so the caller does not
 re-send), while an idle pane keeps `pending` as a genuine swallow. The
-strict-buffer-clears-only-on-`empty` policy above still holds for the daemon
+daemon's strict buffer policy above still holds
 and the lenient-`pending`-fails-for-`fm-send` policy still holds for steer
 verification - this exception is a busy-queue is treated as a delivered
 Enter, not a swallowed one. The herdr adapter observes the same opencode
@@ -183,7 +186,7 @@ the operational prefix lets firstmate distinguish it from a real captain message
   harness.
 - **Composer guard on the supervisor pane** - before injecting, the daemon checks `pane_is_busy` (harness busy footer means agent mid-turn) and reads `fm_backend_composer_state` directly.
   Only `empty` permits injection; `pending` protects half-typed or swallowed input, and `unknown` protects unreadable panes and bare dead-shell prompts.
-  Every other result preserves the buffer for retry, so the daemon never merges its digest into the captain's half-typed line or types it into a shell.
+  Every other composer result preserves the buffer for retry, so the daemon never merges its digest into the captain's half-typed line or types it into a shell.
 - The shared composer classifier receives a candidate row only after the active backend performs its own capture and structural row recognition.
   tmux and herdr route their raw styled candidate rows through the shared `fm_composer_strip_ghost` extractor, which removes dim/faint and dark-TRUECOLOR ghost/placeholder text before classification.
   They read the composer shape from a separately ANSI-stripped plain row because a dark TRUECOLOR border can be stripped with ghost content.
@@ -197,14 +200,8 @@ the operational prefix lets firstmate distinguish it from a real captain message
   applicable, and a backend-independent active alert. A
   composer false-positive surfaces as a visible stall, never an unbounded silent
   no-op.
-- **Verified type-once submit model** - the digest is typed once (`send-keys -l`
-  on tmux, `pane send-text` on herdr), then submitted with Enter and verified.
-  Enter is retried, Enter only and never a retype, until the backend submit
-  primitive reports `empty` as its caller-facing success verdict.
-  For tmux that verdict means the shared-ghost-aware and border-aware composer
-  cleared.
-  For herdr's normal idle-baseline path it means native agent-state observed a real turn start; herdr uses the ANSI-aware structural classifier for the pre-injection composer guard and fallback paths.
-  This lets ghost-only or bordered-empty composers count as empty where a composer read is the active confirmation signal.
+- **Verified type-once submit model** - the digest is delivered once and its submit is verified through the selected backend's own primitive, never by retyping it.
+  "Submit model" above owns the per-backend detail and the retry boundary.
 - **Marker strip** - `strip_injection_marker` removes the current operational
   prefix or legacy bare marker before classification or relay, so the digest
   text firstmate sees is clean.
@@ -230,6 +227,7 @@ the operational prefix lets firstmate distinguish it from a real captain message
 ## Stale-artifact lifecycle
 
 Treat `state/.subsuper-escalations`, its `.since` sidecar, and `state/.subsuper-inject-wedged` as session-scoped delivery artifacts, not as the durable work record.
+`state/.subsuper-inject-unconfirmed` is the exception and is deliberately not session-scoped: it holds a digest that was delivered exactly once and will never be re-derived or re-escalated, so entering a fresh away session leaves it alone and only `bin/fm-afk-return.sh` clears it, after showing it as `unconfirmed-delivery` catch-up evidence.
 Always enter through `bin/fm-afk-launch.sh`, which clears prior-session artifacts only for a fresh entry and preserves the current session's buffer on refresh.
 Always exit through `bin/fm-afk-launch.sh stop`, which keeps `state/.afk` present through the daemon's shutdown flush and clears it last.
 `docs/herdr-backend.md` "Away-mode supervisor support" owns the current mechanism, and `docs/verification/runtime-backends.md` "Away-mode transport" owns active evidence.
