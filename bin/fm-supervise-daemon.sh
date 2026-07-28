@@ -661,12 +661,21 @@ escalate_retire_unconfirmed() {  # <state> <digest> <age-seconds>
   record="$state/.subsuper-inject-unconfirmed"
   if [ "${DAEMON_SHUTTING_DOWN:-0}" = 1 ]; then
     notify=0
-    alarm='UNNOTIFIED (retired from the shutdown path, which never starts a notifier); the next bin/fm-afk-return.sh surfaces this record'
-  elif wedge_alarm_alarms_off; then
-    notify=0
-    alarm='UNNOTIFIED (the wedge-alarm config is off, a legitimate captain choice); this record and the daemon log are the whole signal'
+    alarm='UNNOTIFIED (retired from the shutdown path, which never starts a notifier); the next bin/fm-afk-return.sh catch-up surfaces this record'
   else
-    alarm='NOTIFIER STARTED on every configured channel; per-channel delivery is best effort and is NOT confirmed here (wedge_alarm_notify logs its own channel failures)'
+    case "$(wedge_alarm_delivery_prospect)" in
+      off)
+        notify=0
+        alarm='UNNOTIFIED (the wedge-alarm config is off, a legitimate captain choice); this record and the daemon log are the whole signal'
+        ;;
+      no-channel)
+        notify=0
+        alarm="UNNOTIFIED (no wedge-alarm channel resolves on $(uname), so nothing would fire); this record and the daemon log are the whole signal"
+        ;;
+      *)
+        alarm='NOTIFIER STARTED on every channel that resolves; whether a channel then delivers is best effort and is NOT confirmed here (wedge_alarm_notify logs its own channel failures)'
+        ;;
+    esac
   fi
   {
     printf 'fm away-mode escalation DELIVERED ONCE, SUBMIT UNCONFIRMED: %ss buffered, as of %s\n' \
@@ -774,17 +783,43 @@ wedge_alarm_configured_channels() {
   [ -n "$found" ] || printf 'auto\n'
 }
 
-# wedge_alarm_alarms_off: true when the captain configured the active alert off,
-# which wedge_alarm_notify honors by firing nothing at all. That is a legitimate
-# choice, not a misconfiguration, so callers that must be honest about whether an
-# alarm was sent read it here instead of assuming wedge_alarm_notify fired (it
-# always returns 0 either way).
-wedge_alarm_alarms_off() {
-  local ch
+# wedge_alarm_delivery_prospect: what wedge_alarm_notify would actually DO with
+# the current config, echoing exactly one of:
+#
+#   off        - an `off` directive short-circuits it, so it fires nothing. A
+#                legitimate captain choice, not a misconfiguration.
+#   no-channel - it is not disabled, but no directive resolves to a channel it
+#                would hand to a notifier: an `auto`/`default` that
+#                wedge_alarm_platform_default cannot resolve (any non-Darwin
+#                host, or Darwin without osascript), or an unrecognized
+#                directive. It fires nothing and logs that the durable record is
+#                the only signal.
+#   ready      - at least one channel would be handed to a notifier. Whether
+#                that notifier then SUCCEEDS is not knowable from here.
+#
+# The resolution below mirrors wedge_alarm_notify's own, built from the same two
+# primitives (wedge_alarm_configured_channels, wedge_alarm_platform_default) and
+# admitting the same channel names it dispatches. Callers that must state whether
+# an alarm was sent read this instead of assuming one was, because
+# wedge_alarm_notify always returns 0.
+wedge_alarm_delivery_prospect() {
+  local ch resolved
+  local -a channels=()
   while IFS= read -r ch; do
-    [ "$ch" = off ] && return 0
+    [ -n "$ch" ] || continue
+    channels+=("$ch")
   done < <(wedge_alarm_configured_channels)
-  return 1
+  for ch in "${channels[@]}"; do
+    [ "$ch" = off ] && { printf 'off'; return 0; }
+  done
+  for ch in "${channels[@]}"; do
+    resolved=$ch
+    case "$resolved" in auto|default) resolved=$(wedge_alarm_platform_default) ;; esac
+    case "$resolved" in
+      osascript|herdr|command:*) printf 'ready'; return 0 ;;
+    esac
+  done
+  printf 'no-channel'
 }
 
 # Resolve the platform's default OS-level channel for `auto`. macOS reaches the

@@ -59,12 +59,23 @@ fm_afk_start_usage() {
 # lifecycle" and bin/fm-supervise-daemon.sh's escalate_add/inject_wedge_alarm).
 # NOT called on a refresh (daemon already alive), so the current session's own
 # buffered escalations are preserved.
+#
+# state/.subsuper-inject-unconfirmed is deliberately NOT swept here, and must not
+# be added. Every artifact above is safe to drop only because its condition is
+# re-derived - that record's is not. It holds a digest the backend handed to the
+# crewmate exactly once without a confirmed submit, which is terminal by
+# construction (bin/fm-supervise-daemon.sh's escalate_retire_unconfirmed never
+# re-flushes it), so nothing re-derives or re-escalates it. When that retire was
+# marked UNNOTIFIED it is the ONLY captain-facing signal, and sweeping it here
+# would destroy the escalation on the very next away-session entry. It shares the
+# wedge marker's surfacing path and clearing point instead: bin/fm-afk-return.sh
+# reports it as catch-up evidence and clears it there, once the captain has been
+# shown it.
 fm_afk_clear_stale_artifacts() {  # <state-dir>
   local state=$1
   rm -f "$state/.subsuper-escalations" \
         "$state/.subsuper-escalations.since" \
-        "$state/.subsuper-inject-wedged" \
-        "$state/.subsuper-inject-unconfirmed" 2>/dev/null
+        "$state/.subsuper-inject-wedged" 2>/dev/null
 }
 
 daemon_lock_owner() {

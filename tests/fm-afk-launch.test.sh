@@ -51,6 +51,11 @@ unit_clear_stale() {
   : > "$st/state/.subsuper-escalations.since"
   : > "$st/state/.subsuper-inject-wedged"
   : > "$st/state/.wake-queue"          # durable queue must be untouched
+  # Terminal by construction: the digest was handed to the crewmate once and is
+  # never re-flushed, so nothing re-derives it. Sweeping it on a fresh away entry
+  # would destroy the escalation, and when the retire was UNNOTIFIED this record
+  # is the only captain-facing signal.
+  printf 'retired digest\n' > "$st/state/.subsuper-inject-unconfirmed"
   # Source fm-afk-start.sh inside a child bash (it sets `set -eu` and would
   # otherwise leak that into this test shell) and call the clear helper.
   FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" \
@@ -66,6 +71,11 @@ unit_clear_stale() {
     pass "clear-stale: leaves the durable wake-queue intact (no pending work dropped)"
   else
     fail "clear-stale: removed the durable wake-queue"
+  fi
+  if [ -s "$st/state/.subsuper-inject-unconfirmed" ]; then
+    pass "clear-stale: preserves the unconfirmed-delivery record (terminal, re-derived by nothing)"
+  else
+    fail "clear-stale: swept the unconfirmed-delivery record, destroying an escalation nothing re-derives"
   fi
   rm -rf "$st"
 }

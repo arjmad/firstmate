@@ -219,8 +219,9 @@ What that enforces exactly is a durable record, mandatory on every path with no 
 The daemon may retire an escalation it will not re-flush only after the digest is written to `state/.subsuper-inject-unconfirmed`, before the buffer is truncated, and a failed record write preserves the buffer instead, because a duplicate escalation is recoverable and a silently dropped one is not.
 The live alarm is a best-effort side effect on top of that record, not a second condition on the retire.
 It fires on running paths, where it is out of reach of the discarded return code at every flush call site; it is never started from the SIGTERM cleanup trap, which would hang shutdown per configured channel and start a notifier that shutdown has already stopped reaping.
-Because a channel failure is undetectable from the caller and an `off` wedge-alarm directive is a legitimate captain choice that fires nothing, the record always names which happened on its own `alarm:` line, `UNNOTIFIED` or `NOTIFIER STARTED`.
-`bin/fm-afk-return.sh` surfaces the record as catch-up evidence, so an `UNNOTIFIED` retire still reaches the captain at the next session start.
+Because a channel failure is undetectable from the caller, and because both an `off` directive and a config where no channel resolves on this platform are cases where nothing fires at all, the record always names what happened on its own `alarm:` line, `UNNOTIFIED` or `NOTIFIER STARTED`.
+`bin/fm-afk-return.sh` surfaces the record as catch-up evidence and clears it there, the same lifecycle as `state/.subsuper-inject-wedged`, so an `UNNOTIFIED` retire still reaches the captain on the next return.
+Unlike the wedge marker it is not swept when a fresh away session starts, because nothing re-derives a digest that was already delivered once.
 
 `bin/backends/herdr.sh` owns the full contract in `fm_backend_herdr_send_text_submit` and `fm_backend_herdr_agent_prompt_once`.
 

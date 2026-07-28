@@ -112,6 +112,8 @@ Beyond the durable `state/.subsuper-inject-wedged` marker and the tmux status-li
 Directives are `off` (a position-independent kill switch that disables every active alert), `auto`/`default`, `osascript` (macOS Notification Center banner), `herdr` (herdr UI notification), and `command:<cmd>` (run `<cmd>` via `sh -c`, summary on `$1` and stdin).
 An absent file means `auto`, i.e. default-on on macOS: the alarm exists precisely so a wedged away-mode primary is never silent, and it fires at most once per max-defer window after a genuine wedge.
 A missing or failing channel logs and falls through to the next, never crashing the daemon.
+The same channels carry one other away-mode alarm: an escalation the backend delivered exactly once without a confirmed submit is retired rather than re-flushed, and its durable `state/.subsuper-inject-unconfirmed` record names on its own `alarm:` line whether a channel fired or the retire was `UNNOTIFIED`.
+`off`, and any config where no directive resolves to a reachable channel, both leave that record marked `UNNOTIFIED` rather than implying an alert was sent; `bin/fm-afk-return.sh` surfaces it as catch-up evidence either way.
 See [`wedge-alarm.md`](wedge-alarm.md) for the current channel reference, [`verification/supervision.md`](verification/supervision.md#wedge-alarm-channels) for active evidence, and [`examples/wedge-alarm`](examples/wedge-alarm) for a copyable config.
 
 ## Gate defaults (.no-mistakes.yaml)

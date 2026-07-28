@@ -1934,6 +1934,44 @@ test_alarms_off_retire_records_that_no_alarm_was_sent() {
   pass "escalate_flush: with the wedge alarm configured off, the retire still records the digest and states that no alarm was sent"
 }
 
+# The dangerous alarm case is neither "fired" nor "off": the default directive is
+# `auto`, and on any host where wedge_alarm_platform_default resolves nothing,
+# wedge_alarm_notify fires no notifier at all. Recording NOTIFIER STARTED there
+# would tell the captain he was alerted when he was not.
+test_no_resolvable_channel_retire_records_unnotified() {
+  local dir state alert daemon_log
+  dir=$(make_supercase unconfirmed-no-channel)
+  state="$dir/state"
+  alert="$dir/alert.log"; : > "$alert"
+  daemon_log="$dir/daemon.log"; : > "$daemon_log"
+  mkdir -p "$dir/fakebin"
+  printf '#!/usr/bin/env bash\nprintf %%s\\\\n "${FM_FAKE_UNAME:-Linux}"\n' > "$dir/fakebin/uname"
+  chmod +x "$dir/fakebin/uname"
+  escalate_add "$state" "needs-decision: pick F"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    fm_backend_busy_state() { printf 'idle'; }
+    fm_backend_capture() { printf 'idle prompt\n'; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() { printf 'sent-unconfirmed'; }
+    WEDGE_ALARM_LAST_EPOCH=0
+    PATH="$dir/fakebin:$PATH" FM_FAKE_UNAME=Linux \
+      LOG="$daemon_log" FM_WEDGE_ALARM_LOG="$alert" FM_WEDGE_ALARM_CHANNEL=auto \
+      FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      FM_ESCALATE_BATCH_SECS=0 escalate_flush "$state" || true
+  ) || fail "no-resolvable-channel escalate_flush subshell failed"
+  [ -s "$state/.subsuper-escalations" ] && fail "an unresolvable alarm channel must not block the retire"
+  grep -F 'needs-decision: pick F' "$state/.subsuper-inject-unconfirmed" >/dev/null \
+    || fail "the durable record is mandatory when no alarm channel resolves"
+  grep -F 'alarm: UNNOTIFIED' "$state/.subsuper-inject-unconfirmed" >/dev/null \
+    || fail "an 'auto' that resolves to no channel must record UNNOTIFIED, not a notifier that never started"
+  grep -F 'NOTIFIER STARTED' "$state/.subsuper-inject-unconfirmed" >/dev/null \
+    && fail "the record claimed a notifier started on a platform where nothing resolves"
+  [ ! -s "$alert" ] || fail "a notifier fired where no channel should resolve: $(cat "$alert")"
+  pass "escalate_flush: where no alarm channel resolves, the record says UNNOTIFIED rather than claiming a notifier started"
+}
+
 # The pane-typing backends are untouched by the branch above: 'pending' and
 # 'unknown' still PRESERVE the buffer, because for them a swallowed send really
 # does leave the text in the composer for the next cycle's guard to catch.
@@ -2079,5 +2117,6 @@ test_batch_flush_alarms_before_retiring_an_unconfirmed_escalation
 test_escalate_flush_preserves_buffer_when_the_record_cannot_be_written
 test_shutdown_retire_records_unnotified_and_starts_no_notifier
 test_alarms_off_retire_records_that_no_alarm_was_sent
+test_no_resolvable_channel_retire_records_unnotified
 test_escalate_flush_still_preserves_buffer_on_pending
 test_inject_msg_defers_on_unrecognized_composer_state

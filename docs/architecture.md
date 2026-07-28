@@ -83,6 +83,8 @@ Composer-content classification has one shared owner, `bin/fm-composer-lib.sh`, 
 The daemon injects only into an affirmatively `empty` composer, so both `pending` and `unknown` defer and a bare dead-shell prompt cannot receive an escalation; the current boundary is in [Composer and injection safety](herdr-backend.md#composer-and-injection-safety).
 Unsupported supervisor backends refuse at daemon startup.
 Stalled escalation delivery writes `state/.subsuper-inject-wedged` and attempts a configured backend-independent active alert after `FM_MAX_DEFER_SECS` instead of silently deferring forever.
+A backend that reports a delivery it made exactly once but cannot confirm produces a second durable record, `state/.subsuper-inject-unconfirmed`: that escalation is terminal and is deliberately never re-flushed, so the record is written before the buffer is retired and states on its own `alarm:` line whether an active alert was sent or the retire was `UNNOTIFIED`, which is the case on the shutdown path and wherever no alarm channel resolves.
+Both records surface as catch-up evidence in `bin/fm-afk-return.sh`, which is also where they are cleared.
 On an unmarked return, `bin/fm-afk-return.sh` owns ordered shutdown, durable catch-up evidence, and the fail-closed gate that keeps ordinary work behind every live firstmate-actionable blocker.
 `fm-send.sh` selects a pre-Enter popup-settle for slash commands and for codex `$...` skill invocations using metadata-routed target `harness=` values, then adds its own `FM_SEND_SETTLE` pause after successful text sends so immediate peeks catch the receiving turn starting; the sub-supervisor uses only the shared submit core and does not pay that post-submit pause.
 
