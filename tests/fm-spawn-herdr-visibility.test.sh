@@ -58,6 +58,12 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/herdr"
+  # fm-spawn's pre-allocation owner guard runs `treehouse status` in its own
+  # process, so these display-only assertions would otherwise depend on whether
+  # the host happens to have the treehouse CLI installed. Stub it exit-0 with no
+  # output, as the other fake-CLI spawn tests do: an empty pool listing means no
+  # candidate to probe and the guard allows the allocation.
+  fm_fake_exit0 "$fakebin" treehouse
   printf '%s\n' "$fakebin"
 }
 

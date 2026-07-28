@@ -411,6 +411,17 @@ normalize_meta() {  # <meta>
     "$1"
 }
 
+# The Treehouse calls a spawn makes split into two kinds. Acquisition (`get`) is
+# what the presentation flag could plausibly disturb. The pre-allocation owner
+# guard's read-only probe - one `status` plus one `enter --print-path <name>` per
+# slot the pool reports available - is a function of live pool state, not of the
+# flag: the flag-off spawn's worktree is returned by its teardown, so it is an
+# available candidate the projected spawn probes and the flag-off spawn never saw.
+# Compare only the acquisition calls so this assertion keeps testing the flag.
+treehouse_acquisition_calls() {  # <call-log>
+  grep -v -e '^status$' -e "^enter	--print-path	" "$1" || true
+}
+
 log_line_count() { wc -l < "$HERDR_CALL_LOG" | tr -d '[:space:]'; }
 
 projection_labels_from_log() {  # <start-line>
@@ -527,8 +538,10 @@ assert_raw_presentation_mutations_preserved_since "$SHAPE_FOCUS_AUDIT_START" "pr
 ON_META="$TMP_ROOT/on.meta"
 cp "$HOME_DIR/state/shape.meta" "$ON_META"
 ON_WT=$(remember_meta_worktree "$ON_META")
-cmp -s "$TMP_ROOT/off-treehouse.log" "$TREEHOUSE_CALL_LOG" \
-  || fail "Treehouse command sequence changed between flag-off and projected spawns"
+treehouse_acquisition_calls "$TMP_ROOT/off-treehouse.log" > "$TMP_ROOT/off-treehouse-acquire.log"
+treehouse_acquisition_calls "$TREEHOUSE_CALL_LOG" > "$TMP_ROOT/on-treehouse-acquire.log"
+cmp -s "$TMP_ROOT/off-treehouse-acquire.log" "$TMP_ROOT/on-treehouse-acquire.log" \
+  || fail "Treehouse acquisition command sequence changed between flag-off and projected spawns"
 JOURNAL="$HOME_DIR/state/shape.herdr-presentation"
 [ -f "$JOURNAL" ] || fail "projected spawn did not publish its presentation journal"
 TOKEN=$(grep '^projection_id=' "$JOURNAL" | cut -d= -f2-)
