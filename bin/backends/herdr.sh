@@ -2021,10 +2021,19 @@ EOF
   fm_composer_classify_content "$bordered" "$stripped" "$FM_BACKEND_HERDR_IDLE_RE"
 }
 
-# fm_backend_herdr_send_text_submit: type <text> into <target> once (raw,
-# unsubmitted, via send_literal), then submit with a named Enter key, retried
-# (Enter only, never retyped) until herdr's NATIVE agent-state (agent get)
-# confirms a real turn started. Verified hazard (herdr-verification-p2.md
+# fm_backend_herdr_send_text_submit_pane: the PANE-LEVEL delivery path. Type
+# <text> into <target> once (raw, unsubmitted, via send_literal), then submit
+# with a named Enter key, retried (Enter only, never retyped) until herdr's
+# NATIVE agent-state (agent get) confirms a real turn started.
+#
+# This is the ONLY path that works without a live agent occupying the pane, so
+# it stays reachable permanently: fm-spawn.sh's pre-launch shell commands
+# (`treehouse get`, the GOTMPDIR/token exports, the launch command itself) run
+# here before any agent exists, and steering a pane whose agent has exited has
+# no other mechanism. fm_backend_herdr_send_text_submit below selects between
+# this path and the atomic `agent prompt` path.
+#
+# Verified hazard (herdr-verification-p2.md
 # "slash/$ autocomplete popup"): a `/`- or `$`-prefixed send opens a
 # completion popup within ~0.1s, exactly like tmux's claude/codex popups, so
 # the caller's <settle> before the first Enter matters here the same way it
@@ -2082,7 +2091,7 @@ EOF
 # submit vocabulary. Empty means confirmed submitted for every backend; how
 # each backend confirms it is an internal decision, and herdr's is no longer
 # literally "the composer read empty".
-fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle>
+fm_backend_herdr_send_text_submit_pane() {  # <target> <text> <retries> <enter-sleep> <settle>
   local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 i=0 verdict baseline confirm_sleep
   fm_backend_herdr_parse_target "$target" || { printf 'unknown'; return 0; }
   fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }
@@ -2107,6 +2116,130 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
     i=$((i + 1))
     [ "$i" -lt "$retries" ] || { printf 'pending'; return 0; }
   done
+}
+
+# FM_BACKEND_HERDR_AGENT_PROMPT (default 0 = off): opt in to the atomic
+# `herdr agent prompt` delivery path for agent-directed text. Off means this
+# adapter behaves exactly as before - every send goes through the pane path -
+# so the change is inert in a running fleet until a home deliberately selects
+# it. Documented in docs/herdr-backend.md "Atomic agent-prompt delivery".
+FM_BACKEND_HERDR_AGENT_PROMPT=${FM_BACKEND_HERDR_AGENT_PROMPT:-0}
+
+# fm_backend_herdr_agent_prompt_once: one `herdr agent prompt` call, echoing a
+# three-way outcome. NEVER called more than once per delivery - see the
+# no-retry rule in fm_backend_herdr_send_text_submit.
+#
+#   ok      - the call succeeded. Herdr accepted the text and submitted it in
+#             ONE request, so no separate Enter can be swallowed or race a
+#             repaint between the two.
+#   absent  - herdr answered `agent_not_found`: this pane has no live agent to
+#             prompt. Verified empirically (herdr 0.7.5): the CLI exits 1 and
+#             writes {"error":{"code":"agent_not_found",...}} to STDERR, and
+#             nothing whatsoever reaches the pane - a bare shell pane probed
+#             this way showed an untouched prompt afterwards. That makes it a
+#             definitive PRE-delivery rejection and therefore the one failure
+#             the caller may safely retry on the pane path.
+#   failed  - any other failure (transport, unparseable response, unknown
+#             error code). Ambiguous about whether the text reached the agent,
+#             so the caller must NOT fall back: re-sending could deliver the
+#             same message twice.
+fm_backend_herdr_agent_prompt_once() {  # <session> <pane> <text> -> ok|absent|failed
+  local session=$1 pane=$2 text=$3 err code
+  if err=$(fm_backend_herdr_cli "$session" agent prompt "$pane" "$text" 2>&1 >/dev/null); then
+    printf 'ok'
+    return 0
+  fi
+  code=$(printf '%s' "$err" | jq -r '.error.code // empty' 2>/dev/null)
+  if [ "$code" = agent_not_found ]; then
+    printf 'absent'
+  else
+    printf 'failed'
+  fi
+}
+
+# fm_backend_herdr_send_text_submit: deliver <text> to <target> and confirm it
+# was submitted, echoing the shared proof-carrying verdict vocabulary
+# (empty|pending|unknown|send-failed) unchanged. Path selection is AUTOMATIC -
+# no caller passes a flag - and every rejection degrades to the pane path
+# rather than failing.
+#
+# Selection, when FM_BACKEND_HERDR_AGENT_PROMPT=1:
+#   1. Read the pre-send agent status ONCE (`agent get`). The pane path
+#      already paid this exact call for its own baseline, so moving it ahead
+#      of the send costs nothing; detecting "no live agent in this pane" is
+#      therefore FREE, not an extra probe. An empty read means agent_not_found
+#      or an unreadable target -> pane path.
+#   2. A baseline that is not legibly idle -> pane path. The atomic path has
+#      no valid confirmation signal for a busy target (see below), and the
+#      pane path's composer-state branch already owns that case.
+#   3. A legibly idle baseline -> one `agent prompt`. `absent` (the agent
+#      exited between the two calls) falls back to the pane path; any other
+#      failure returns send-failed without falling back.
+#
+# WHY THE SUBMIT CONFIRMATION IS STILL REQUIRED HERE. Measured on herdr 0.7.5
+# with real claude: `agent prompt` returns exit 0 and
+# {"result":{"type":"agent_prompted"}} in ~10ms even when the text is never
+# delivered - the very first message sent to a freshly launched TUI is
+# swallowed and no turn ever starts, yet the call still reports success. Its
+# response is an acknowledgement that herdr accepted the request, NOT proof
+# that the agent received the text. So this path keeps
+# fm_backend_herdr_wait_for_working, the same native agent-state confirmation
+# the pane path uses, and it is the only thing that catches that case. (The
+# swallow is a TUI-startup property, not an agent-prompt defect: the pane path
+# measured identically - its first post-launch message vanished too, while
+# both paths delivered every subsequent message reliably.)
+#
+# WHY THE COMPOSER-STATE MACHINERY IS NOT CARRIED OVER. On the pane path an
+# empty composer after Enter is evidence, because this adapter typed into that
+# composer moments earlier and the text leaving it means it was submitted. The
+# atomic path never types into the composer at all, so an empty composer is
+# just its unconditional resting state and carries zero information about
+# whether THIS call's text was accepted - reading it would manufacture a false
+# `empty` verdict. That is exactly why a non-idle baseline routes to the pane
+# path in step 2 instead of reusing composer_state here.
+#
+# NO RETRY, EVER. The pane path may safely retry because it retries only
+# Enter, which is a no-op on an already-empty composer. Here a retry would
+# re-send the whole message, and an unconfirmed send is genuinely ambiguous (a
+# turn that starts and finishes between two polls looks identical to a swallow
+# from outside). Re-sending on that ambiguity would deliver the same steer
+# twice, so an unconfirmed atomic send reports `pending` and stops. `pending`
+# is already a loud non-zero refusal in fm-send.sh, which is the correct
+# outcome: firstmate is told the steer did not land instead of a crewmate
+# silently receiving it twice. <retries> is therefore deliberately unused on
+# this path.
+#
+# The <settle> pre-Enter delay is also unused here. It exists so a slash- or
+# `$`-triggered completion popup cannot swallow the first Enter, and that
+# hazard needs a separate Enter to exist. Verified: a `/`-prefixed message
+# sent through `agent prompt` is submitted as one complete line and processed
+# by the agent immediately, with no popup-selection step in between.
+fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle>
+  local target=$1 text=$2 sleep_s=$4 raw baseline outcome verdict confirm_sleep
+  if [ "$FM_BACKEND_HERDR_AGENT_PROMPT" != 1 ]; then
+    fm_backend_herdr_send_text_submit_pane "$@"
+    return 0
+  fi
+  fm_backend_herdr_parse_target "$target" || { printf 'unknown'; return 0; }
+  raw=$(fm_backend_herdr_agent_status_raw "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE")
+  baseline=$(fm_backend_herdr_classify_submit_agent_status "$raw")
+  if [ -z "$raw" ] || [ "$baseline" != idle ]; then
+    fm_backend_herdr_send_text_submit_pane "$@"
+    return 0
+  fi
+  outcome=$(fm_backend_herdr_agent_prompt_once "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" "$text")
+  case "$outcome" in
+    absent) fm_backend_herdr_send_text_submit_pane "$@"; return 0 ;;
+    failed) printf 'send-failed'; return 0 ;;
+  esac
+  confirm_sleep=$(fm_backend_herdr_submit_confirm_budget "$sleep_s")
+  verdict=$(fm_backend_herdr_wait_for_working "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" \
+    "$confirm_sleep" "$FM_BACKEND_HERDR_SUBMIT_POLLS")
+  case "$verdict" in
+    busy) printf 'empty' ;;
+    unknown) printf 'unknown' ;;
+    *) printf 'pending' ;;
+  esac
 }
 
 # fm_backend_herdr_kill: remove the task's pane, best-effort (mirrors

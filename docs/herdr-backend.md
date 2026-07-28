@@ -160,7 +160,7 @@ The adapter starts and polls a named server before workspace, tab, pane, or agen
 Every Herdr invocation goes through `fm_backend_herdr_cli`, which sets the environment and passes an explicit trailing `--session <name>`.
 An environment variable alone is not reliable when another Herdr server is running.
 
-Literal text and Enter are separate operations for ordinary steers.
+Literal text and Enter are separate operations for ordinary steers on the pane path.
 Spawn-time fixed commands may use Herdr's atomic run primitive.
 Enter, Escape, and Ctrl-C are supported.
 Slash and dollar-prefixed input uses the shared harness-aware settle before the first Enter so a completion popup cannot consume it.
@@ -178,6 +178,30 @@ This generous floor is required for small composer and peek reads.
 Herdr's native agent state can read idle while a harness waits on its own long foreground tool.
 The shared crew-state path therefore corroborates every native non-busy or unreadable result with the recorded harness's rendered busy signature before concluding that a pane is not working.
 A human-blocked permission dialog has no busy banner and still surfaces.
+
+## Atomic agent-prompt delivery
+
+Herdr's `agent prompt` submits text to the live agent in one request, so no repaint can land between typing and Enter the way it can on the pane path.
+Set `FM_BACKEND_HERDR_AGENT_PROMPT=1` to opt a home in.
+It defaults to off, so a running fleet keeps the pane path until it deliberately selects this.
+
+The pane path is added to, never replaced, because `agent prompt` resolves the live agent and rejects a pane that has none.
+Spawn-time shell commands run before any agent exists, and a pane whose agent has exited has no other way to be steered.
+
+Path selection is automatic and no caller passes a flag.
+The pre-send agent-state read that the pane path already performed for its own baseline now happens first, so detecting an agent-less pane costs no extra call.
+An unreadable or agent-less target, and any baseline that is not legibly idle, uses the pane path.
+Only `agent_not_found` may fall back after the prompt call itself, because that rejection is verified to reach the pane with nothing; every other failure is ambiguous about delivery and refuses loudly instead.
+
+Submit confirmation still applies here and is unchanged.
+`agent prompt` answers success in milliseconds even for a message the agent never receives, so its response acknowledges only that Herdr accepted the request.
+Composer reading does not apply, because this path never types into the composer and an empty composer is its unconditional resting state.
+
+This path sends exactly once and never retries.
+The pane path may retry safely because it retries only Enter, which is a no-op on an already-empty composer, while a retry here would re-send the whole message on an ambiguity that cannot distinguish a swallowed send from a very fast turn.
+An unconfirmed send reports pending, which is already a loud refusal, rather than risking a duplicate steer.
+
+`bin/backends/herdr.sh` owns the full contract in `fm_backend_herdr_send_text_submit` and `fm_backend_herdr_agent_prompt_once`.
 
 ## Composer and injection safety
 
@@ -265,6 +289,9 @@ Tests use thin compatibility wrappers in `tests/herdr-test-safety.sh` and never 
 - OpenCode 1.18.4 can accept Enter while busy without clearing the composer.
   The tmux backend has a busy-queue fallback, but Herdr still reports this case as submit pending and needs a separate adapter fix.
 - Only tmux and Herdr can host the away-mode supervisor terminal.
+- The first message sent to a freshly launched agent TUI can be swallowed with no turn started.
+  Measured identically on both the pane path and the atomic agent-prompt path, so it is a startup property of the terminal UI rather than a defect in either delivery mechanism.
+  Submit confirmation reports the send as unconfirmed rather than silently losing it.
 
 ## Regression entry points
 
