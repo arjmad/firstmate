@@ -1292,8 +1292,9 @@ TREEHOUSE_STATUS_WORDS='available in-use dirty leased stale locked reserved orph
 # hand out. A confidently dead endpoint is deliberately reclaimable, which prevents
 # stale metadata from poisoning a genuinely available pool slot.
 validate_treehouse_allocation_candidates() {
-  local listing trimmed line name slot_status _ candidate candidate_real version
+  local listing line name slot_status _ candidate candidate_real version ci
   local rows=0 recognized=0 safe=0 excluded=0 excluded_report=
+  local -a candidate_names=()
   if ! command -v treehouse >/dev/null 2>&1; then
     echo "error: the treehouse CLI is not on this process's PATH, so the pool's available worktrees cannot be checked for a live recorded owner; refusing to allocate a worktree this spawn cannot prove is unowned. Install it with bin/fm-install-treehouse.sh or put treehouse on PATH, then retry." >&2
     return 1
@@ -1302,11 +1303,11 @@ validate_treehouse_allocation_candidates() {
     echo "error: treehouse status failed while checking allocation candidates; refusing to allocate without proving the available slots are unowned" >&2
     return 1
   }
-  trimmed=$(printf '%s' "$listing" | tr -d '[:space:]')
-  # An empty pool has no candidate to contest: treehouse get creates a fresh worktree.
-  if [ -z "$trimmed" ] || [ "$trimmed" = 'Noworktreesinpool.' ]; then
-    return 0
-  fi
+  # Collect every candidate name before probing anything. The probes below shell out
+  # to treehouse and to whichever backend CLI a recorded owner names, and a child that
+  # reads stdin would consume the rest of a stdin-driven loop, silently shortening the
+  # candidate set in the one guard that must fail closed. An empty pool yields no rows
+  # at all, which is not a parse failure: treehouse get simply creates a new worktree.
   while read -r name slot_status _; do
     [ -n "$name" ] || continue
     rows=$((rows + 1))
@@ -1314,7 +1315,15 @@ validate_treehouse_allocation_candidates() {
       *" $slot_status "*) recognized=1 ;;
     esac
     [ "$slot_status" = available ] || continue
-    candidate=$(cd "$PROJ_ABS" && treehouse enter --print-path "$name" 2>/dev/null) || candidate=
+    candidate_names+=("$name")
+  done <<EOF
+$listing
+EOF
+  ci=0
+  while [ "$ci" -lt "${#candidate_names[@]}" ]; do
+    name=${candidate_names[$ci]}
+    ci=$((ci + 1))
+    candidate=$(cd "$PROJ_ABS" && treehouse enter --print-path "$name" 2>/dev/null </dev/null) || candidate=
     if [ -z "$candidate" ]; then
       excluded=$((excluded + 1))
       excluded_report="$excluded_report
@@ -1322,16 +1331,14 @@ validate_treehouse_allocation_candidates() {
       continue
     fi
     candidate_real=$(real_path_or_raw "$candidate")
-    if spawn_recorded_worktree_owner "$candidate_real"; then
+    if spawn_recorded_worktree_owner "$candidate_real" </dev/null; then
       excluded=$((excluded + 1))
       excluded_report="$excluded_report
   - treehouse reports allocation candidate $candidate_real as available, but task $SPAWN_OWNER_ID still records it and $SPAWN_OWNER_DETAIL. $SPAWN_OWNER_REMEDY"
     else
       safe=$((safe + 1))
     fi
-  done <<EOF
-$listing
-EOF
+  done
   if [ "$rows" -gt 0 ] && [ "$recognized" -eq 0 ]; then
     version=$(treehouse --version 2>/dev/null | head -n 1) || version=
     {

@@ -53,8 +53,11 @@ SH
   # A treehouse CLI whose pool is described by FM_FAKE_TREEHOUSE_ROWS, one
   # `<name>|<status>|<path>` line per slot, rendered in the column layout real
   # treehouse v2.0.1 uses (name, status word, path). FM_FAKE_TREEHOUSE_AVAILABLE_PATH
-  # is the single-available-slot shorthand. An empty pool answers exactly as the real
-  # CLI does, so the guard's empty-pool short-circuit is exercised rather than mocked.
+  # is the single-available-slot shorthand. An empty pool answers as v2.0.1 does:
+  # nothing at all on stdout, with its emoji banner on stderr, so the guard's
+  # empty-pool behavior is driven by real-shaped output rather than a sentinel string.
+  # FM_FAKE_TREEHOUSE_DRAIN_STDIN makes `enter --print-path` swallow whatever stdin it
+  # inherits, standing in for any child of the candidate scan that reads stdin.
   cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -70,7 +73,7 @@ case "${1:-}:${2:-}" in
     ;;
   status:)
     if [ -z "$rows" ]; then
-      printf ' No worktrees in pool.\n'
+      printf '\xf0\x9f\x8c\xb3 No worktrees in pool.\n' >&2
       exit 0
     fi
     while IFS='|' read -r name slot_status path; do
@@ -82,6 +85,7 @@ EOF
     exit 0
     ;;
   enter:--print-path)
+    [ -z "${FM_FAKE_TREEHOUSE_DRAIN_STDIN:-}" ] || cat >/dev/null 2>&1 || true
     while IFS='|' read -r name slot_status path; do
       [ "$name" = "${3:-}" ] || continue
       printf '%s\n' "$path"
@@ -195,6 +199,7 @@ EOF
   TREEHOUSE_AVAILABLE_PATH=
   TREEHOUSE_ROWS=
   TREEHOUSE_VERSION=v2.0.1
+  TREEHOUSE_DRAIN_STDIN=
   # Windows the fake tmux reports in its session inventory, i.e. the endpoints
   # that still EXIST. fm_backend_tmux_agent_state only trusts a foreground-command
   # read for a window it finds there, and reads an absent one as gone - which is
@@ -224,6 +229,7 @@ run_spawn_argv() {
     FM_FAKE_TREEHOUSE_AVAILABLE_PATH="$TREEHOUSE_AVAILABLE_PATH" \
     FM_FAKE_TREEHOUSE_ROWS="$TREEHOUSE_ROWS" \
     FM_FAKE_TREEHOUSE_VERSION="$TREEHOUSE_VERSION" \
+    FM_FAKE_TREEHOUSE_DRAIN_STDIN="$TREEHOUSE_DRAIN_STDIN" \
     FM_FAKE_TMUX_WINDOWS="$TMUX_WINDOWS" \
     FM_FAKE_HERDR_MODE="$HERDR_MODE" \
     FM_FAKE_HERDR_AGENT_STATUS="$HERDR_AGENT_STATUS" \
@@ -649,6 +655,52 @@ test_ordinary_allocation_excludes_one_contested_candidate() {
     "the spawn did not record the safe pool worktree"
   rm -rf "/tmp/fm-$id"
   pass "a single contested candidate is excluded rather than blocking every ordinary spawn"
+}
+
+test_candidate_scan_survives_a_child_that_reads_stdin() {
+  local id owner rec out status safe_wt
+  id=allocate-stdin-drain-z8g
+  owner='owner-live-drain-z8g'
+  rec=$(make_case allocate-stdin-drain "$id")
+  read_case "$rec"
+  safe_wt=$(add_pool_worktree drain)
+  write_owner_meta "$owner" "$WT_REAL"
+  register_live_tmux_window "$owner"
+  PANE_COMMAND=claude
+  TREEHOUSE_ROWS="1|available|$WT_REAL
+2|available|$safe_wt"
+  TREEHOUSE_DRAIN_STDIN=1
+  PANE_PATH=$safe_wt
+
+  out=$(run_ordinary_spawn "$id")
+  status=$?
+  expect_code 0 "$status" "a candidate probe that reads stdin must not truncate the scan"$'\n'"$out"
+  assert_contains "$out" "excluding 1 of 2 available treehouse worktree" \
+    "the scan stopped early, so the later candidates were never counted"
+  assert_grep "worktree=$safe_wt" "$HOME_DIR/state/$id.meta" \
+    "the spawn did not reach the safe candidate the truncated scan would have skipped"
+  rm -rf "/tmp/fm-$id"
+  pass "the candidate scan is driven by parsed rows, not by a stdin a child can swallow"
+}
+
+test_ordinary_allocation_accepts_an_empty_pool() {
+  local id rec out status
+  id=allocate-empty-pool-z8h
+  rec=$(make_case allocate-empty-pool "$id")
+  read_case "$rec"
+  PANE_PATH=$WT_REAL
+
+  out=$(run_ordinary_spawn "$id")
+  status=$?
+  expect_code 0 "$status" "an empty treehouse pool must allocate without warning or refusal"$'\n'"$out"
+  assert_not_contains "$out" "TREEHOUSE STATUS FORMAT NOT RECOGNIZED" \
+    "an empty pool was misread as an unparseable status format"
+  assert_not_contains "$out" "excluded from allocation" \
+    "an empty pool produced a bogus exclusion report"
+  assert_grep "worktree=$WT_REAL" "$HOME_DIR/state/$id.meta" \
+    "the spawn did not record the freshly created worktree"
+  rm -rf "/tmp/fm-$id"
+  pass "an empty pool allocates silently, because treehouse get creates a new worktree"
 }
 
 test_ordinary_allocation_warns_on_unrecognized_status_format() {
@@ -1149,6 +1201,8 @@ test_ordinary_allocation_refuses_clean_live_owner
 test_ordinary_allocation_refuses_dirty_live_owner
 test_ordinary_allocation_reclaims_confidently_dead_owner
 test_ordinary_allocation_excludes_one_contested_candidate
+test_candidate_scan_survives_a_child_that_reads_stdin
+test_ordinary_allocation_accepts_an_empty_pool
 test_ordinary_allocation_warns_on_unrecognized_status_format
 test_post_allocation_backstop_closes_its_endpoint
 test_ordinary_allocation_names_a_missing_treehouse_cli
