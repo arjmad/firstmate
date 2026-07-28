@@ -204,13 +204,22 @@ test_claude_busy_signature_uses_real_capture_shapes() {
   printf '✽ Proofing… (5s · thinking with high effort)\n' > "$composer"
   pane_busy live claude || fail "Claude capture 2 should be busy"
 
-  # Real idle Claude capture shape from the verified pane sample.
+  # Live Claude 2.1.220 capture 3: generation is idle while a foreground shell
+  # tool remains active.
+  printf '✻ Cooked for 10m 17s · 1 shell still running\n' > "$composer"
+  pane_busy live-shell claude || fail "Claude running-shell footer should be busy"
+
+  # Real idle Claude capture shapes from the same pane family.
   printf '✻ Worked for 31s\n' > "$composer"
   pane_busy idle claude && fail "Claude Worked-for capture must be idle"
+  printf 'Thought for 9s, ran 1 shell command\n' > "$composer"
+  pane_busy idle-shell claude && fail "Claude completed-shell summary must be idle"
 
-  # The new signature is Claude-scoped and must not widen the shared default.
+  # The new signatures are Claude-scoped and must not widen the shared default.
   printf '✢ Pollinating… (16s · ↓ 1.1k tokens)\n' > "$composer"
-  pane_busy live && fail "Claude signature must not match without the Claude harness"
+  pane_busy live && fail "Claude spinner must not match without the Claude harness"
+  printf '✻ Cooked for 10m 17s · 1 shell still running\n' > "$composer"
+  pane_busy live-shell && fail "Claude running-shell footer must not match without the Claude harness"
 
   # Each verified harness must use only its own signature.
   printf 'Ctrl+c:cancel\n' > "$composer"
@@ -253,7 +262,7 @@ test_claude_busy_signature_uses_real_capture_shapes() {
   pane_busy pi pi || fail "Pi Working footer should be busy"
   printf 'Ctrl+c:cancel\n' > "$composer"
   pane_busy grok grok || fail "Grok cancel footer should be busy"
-  pass "fm_pane_is_busy: Claude spinner is scoped, multi-frame, and backward-compatible"
+  pass "fm_pane_is_busy: Claude busy signatures are scoped, multi-frame, and backward-compatible"
 }
 
 test_busy_pane_pending_returns_empty

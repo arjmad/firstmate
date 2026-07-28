@@ -418,6 +418,12 @@ CREW_BRANCH=$(git -C "$WT" symbolic-ref --quiet --short HEAD 2>/dev/null || true
 #   - run head is a strict ancestor of worktree HEAD: no match (local work
 #     advanced outside the run)
 #   - diverged / run head not in this worktree: no match (rewritten branch tip)
+#
+# No-mistakes fix commits can legitimately exist only in its gate repo, leaving
+# the task worktree unable to resolve the reported run head. That structural case
+# is intentionally a no-match: branch-only attribution would revive historical
+# runs on reused branches. The pane fallback below owns current liveness when the
+# code identity cannot be proven from this worktree.
 nm_run_head_matches_worktree() {
   local run_head local_full run_full
   run_head=$(strip_quotes "$(nm_field head)")

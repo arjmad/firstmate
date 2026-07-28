@@ -108,7 +108,8 @@ case "${1:-}" in
     case "${2:-}" in
       read)
         [ "${FM_FAKE_HERDR_MISSING:-0}" = 1 ] && exit 1
-        if [ "${FM_FAKE_HERDR_BUSY:-0}" = 1 ]; then printf 'work in progress\nesc to interrupt\n'
+        if [ -n "${FM_FAKE_HERDR_CAPTURE:-}" ]; then printf '%s\n' "$FM_FAKE_HERDR_CAPTURE"
+        elif [ "${FM_FAKE_HERDR_BUSY:-0}" = 1 ]; then printf 'work in progress\nesc to interrupt\n'
         else printf 'all quiet\n> \n'; fi
         exit 0 ;;
     esac ;;
@@ -161,9 +162,10 @@ reset_fakes() {
   FM_FAKE_HERDR_BUSY=0
   FM_FAKE_HERDR_MISSING=0
   FM_FAKE_HERDR_AGENT_STATUS=""
+  FM_FAKE_HERDR_CAPTURE=""
   FM_FAKE_CI_LOGS=""
   export FM_FAKE_AXI_STATUS FM_FAKE_AXI_STATUS_RUN FM_FAKE_RUNS_LIST FM_FAKE_BUSY FM_FAKE_TMUX_MISSING
-  export FM_FAKE_HERDR_BUSY FM_FAKE_HERDR_MISSING FM_FAKE_HERDR_AGENT_STATUS FM_FAKE_CI_LOGS
+  export FM_FAKE_HERDR_BUSY FM_FAKE_HERDR_MISSING FM_FAKE_HERDR_AGENT_STATUS FM_FAKE_HERDR_CAPTURE FM_FAKE_CI_LOGS
 }
 
 # --- run-object fixtures (TOON, as `no-mistakes axi status` emits) -----------
@@ -840,6 +842,36 @@ test_no_run_herdr_idle_agent_status_corroborated_by_busy_pane() {
   pass "herdr idle agent_status is corroborated by the pane text, not trusted outright"
 }
 
+# Regression for relaunchwt-w55 (2026-07-27): no-mistakes fix commits lived only
+# in the gate repo, so neither the full nor coarse run-head check could resolve the
+# reported pipeline head from the task worktree. That is an intentional identity
+# refusal, not permission to weaken branch reuse protection. The pane fallback
+# must still recognize Claude's long-running foreground-shell footer while Herdr's
+# narrower generation state reads idle.
+test_unresolvable_gate_head_uses_herdr_shell_running_footer() {
+  command -v jq >/dev/null 2>&1 || { pass "gate-head shell-footer fallback skipped without jq"; return; }
+  reset_fakes
+  local d; d=$(new_case gate-head-shell-running)
+  make_repo_on_branch "$d/wt" fm/relaunchwt-w55
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/relaunchwt-w55.meta" \
+    "window=default:w30:p4" \
+    "worktree=$d/wt" \
+    "harness=claude" \
+    "kind=ship" \
+    "backend=herdr"
+  FM_FAKE_RUN_HEAD=a76392eb
+  FM_FAKE_AXI_STATUS="$(run_running fm/relaunchwt-w55)"
+  FM_FAKE_RUNS_LIST="running fm/relaunchwt-w55 a76392e 2026-07-27 01:00"
+  FM_FAKE_HERDR_AGENT_STATUS=idle
+  FM_FAKE_HERDR_CAPTURE="✻ Cooked for 10m 17s · 1 shell still running"
+  local out; out=$(run_crew_state "$d" relaunchwt-w55)
+  assert_contains "$out" "state: working" "unresolvable gate head with a running shell -> working"
+  assert_contains "$out" "source: pane" "unresolvable gate head falls through to the pane source"
+  assert_contains "$out" "harness busy" "Claude shell-running footer is positive busy evidence"
+  pass "unresolvable gate head falls back to Claude's running-shell footer"
+}
+
 # The corroboration must not mask a genuinely idle/human-blocked agent: idle
 # agent_status AND an idle-looking pane (no busy banner) still reads not-busy.
 test_no_run_herdr_idle_agent_status_and_idle_pane_stays_idle() {
@@ -1259,6 +1291,7 @@ test_other_branch_run_ignored
 test_no_run_busy_pane
 test_no_run_herdr_unknown_uses_backend_capture
 test_no_run_herdr_idle_agent_status_corroborated_by_busy_pane
+test_unresolvable_gate_head_uses_herdr_shell_running_footer
 test_no_run_herdr_idle_agent_status_and_idle_pane_stays_idle
 test_no_run_idle_pane_uses_log
 test_no_run_idle_pane_uses_keyed_log
