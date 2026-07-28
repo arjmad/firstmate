@@ -174,7 +174,7 @@ The shared symptom is a healthy-looking pane with no work in progress, so each a
 | Interrupt | single Escape |
 | Skill invocation | `/<skill>` (e.g. `/no-mistakes`) |
 
-Herdr's `agent get` reports GENERATION state only, so it reads idle for the whole running-shell span.
+Herdr's native agent state reads idle for that whole running-shell span, the case `docs/herdr-backend.md` "Current transport behavior" owns.
 That is why the pane text stays the corroborating source for a claude crew blocked on its own long-running foreground tool call (`bin/fm-crew-state.sh`, `crew_pane_is_busy`).
 
 First launch in a fresh worktree, or first ever on a machine, may show a trust or bypass-permissions confirmation.
