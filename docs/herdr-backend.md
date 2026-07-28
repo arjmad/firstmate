@@ -269,6 +269,17 @@ It provisions only non-default names beginning with `fm-lab-`, appends an explic
 Immediately before every destructive call it re-queries the named session and refuses empty, missing, literal `default`, or `default:true` identities.
 Its before/after tripwire requires the live default-session snapshot to remain byte-identical.
 
+Task teardown removes only that exact task's helper-owned labs, matched by the deterministic task token so truncated label collisions cannot reach a sibling task's lab.
+It is durable: it does not depend on the worker shell that created the lab, and the brief's `EXIT` trap stays best-effort wording.
+When Herdr is unreachable, teardown warns with the exact leftover ownership-record paths and still returns the worktree; it never weakens an unlanded-work refusal.
+
+Reaping is the only cross-task sweep and is a dry run unless `--apply` is given.
+It considers only guarded `fm-lab-` names from the live session list, so the default session and unrelated sessions are never candidates.
+It destroys a session only on positive same-home ownership plus death: exactly one task record in the effective `FM_HOME` claims the session and that record's recovery-grade agent state is `dead` or `missing`.
+The deterministic task token in the session name is the authoritative claim; the pre-token label prefix is consulted only for sessions no token prefix claims, where a truncated label can leave two records claiming one session and the verdict stays unproven.
+A session this home holds no task record for is unproven, never dead.
+Ambiguous, unreadable, unverified, foreign-home, and otherwise unproven sessions are left running and reported by exact name; the sweep never enumerates other Firstmate homes.
+
 The helper's header and `--help` own exact commands.
 Tests use thin compatibility wrappers in `tests/herdr-test-safety.sh` and never duplicate the destructive policy.
 

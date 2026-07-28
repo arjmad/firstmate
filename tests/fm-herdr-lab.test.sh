@@ -33,14 +33,19 @@ lab_state=absent
 
 case "$1 ${2:-}" in
   "session list")
-    if [ "$lab_state" = absent ] || [ "$lab_state" = deleted ]; then
-      jq -nc --arg socket "$default_socket" '{sessions:[{default:true,name:"default",running:true,socket_path:$socket}]}'
-    else
+    labs='[]'
+    for path in "$state"/fm-lab-*; do
+      [ -f "$path" ] || continue
+      name=${path##*/}
+      value=$(cat "$path")
+      [ "$value" != deleted ] || continue
       running=false
-      [ "$lab_state" = running ] && running=true
-      jq -nc --arg socket "$default_socket" --arg name "$session" --argjson running "$running" \
-        '{sessions:[{default:true,name:"default",running:true,socket_path:$socket},{default:false,name:$name,running:$running,socket_path:("/tmp/" + $name + ".sock")}]}'
-    fi
+      [ "$value" = running ] && running=true
+      labs=$(printf '%s' "$labs" | jq -c --arg name "$name" --argjson running "$running" \
+        '. + [{default:false,name:$name,running:$running,socket_path:("/tmp/" + $name + ".sock")}]')
+    done
+    jq -nc --arg socket "$default_socket" --argjson labs "$labs" \
+      '{sessions:([{default:true,name:"default",running:true,socket_path:$socket}] + $labs)}'
     ;;
   "server --session")
     if [ "${FM_FAKE_HERDR_SERVER_DELAY:-0}" != 0 ]; then
@@ -208,6 +213,120 @@ test_failed_delete_retains_tripwire() {
   pass "fm-herdr-lab: failed deletion retains ownership until absence is confirmed"
 }
 
+test_teardown_task_removes_owned_session() {
+  local task_id=collision-prefix-alpha sibling_id=collision-prefix-bravo name sibling
+  name=$(fm_herdr_lab_name "$task_id")
+  sibling=$(fm_herdr_lab_name "$sibling_id")
+  run_with_fake fm_herdr_lab_provision "$name" || fail "task teardown fixture provision failed"
+  run_with_fake fm_herdr_lab_provision "$sibling" || fail "sibling teardown fixture provision failed"
+  run_with_fake fm_herdr_lab_teardown_task "$task_id" || fail "task teardown failed"
+  [ "$(cat "$FAKE_STATE/$name")" = deleted ] || fail "task teardown did not delete its owned lab session"
+  [ "$(cat "$FAKE_STATE/$sibling")" = running ] || fail "task teardown deleted a colliding sibling lab session"
+  assert_absent "$TRIPWIRES/$name.fleet-state.json" "task teardown left its ownership tripwire"
+  assert_present "$TRIPWIRES/$sibling.fleet-state.json" "task teardown removed the sibling ownership tripwire"
+  run_with_fake fm_herdr_lab_teardown_task "$sibling_id" || fail "sibling task teardown failed"
+  pass "fm-herdr-lab: task teardown removes only exact ownership when truncated labels collide"
+}
+
+assert_lab_untouched() { # <session> <message>
+  [ "$(cat "$FAKE_STATE/$1")" = running ] || fail "$2"
+  if grep -E '^session (stop|delete) ' "$FAKE_LOG" | grep -F "$1" >/dev/null; then
+    fail "$2 (destructive Herdr call reached it)"
+  fi
+}
+
+test_reap_requires_positive_same_home_ownership() {
+  local old_state=$FAKE_STATE old_tripwires=$TRIPWIRES reap_home lab live stale murky foreign collide token_owned out
+  fm_herdr_lab_meta_agent_state() {
+    grep '^lab-agent-state=' "$1" | cut -d= -f2-
+  }
+  reap_home="$TMP_ROOT/reap-home"
+  FAKE_STATE="$TMP_ROOT/reap-herdr-state"
+  TRIPWIRES="$TMP_ROOT/reap-tripwires"
+  mkdir -p "$FAKE_STATE" "$TRIPWIRES" "$reap_home/state"
+  printf '%s\n' '/home/test/.config/herdr/herdr.sock' > "$FAKE_STATE/default-socket"
+  live=$(fm_herdr_lab_name live-task)
+  stale=$(fm_herdr_lab_name stale-task)
+  murky=$(fm_herdr_lab_name murky-task)
+  # A lab provisioned by another Firstmate home: this home has no task record
+  # for it, but the tripwire directory is UID-global so its ownership record is
+  # visible here.
+  foreign=$(fm_herdr_lab_name other-home-task)
+  # A legacy-named lab that two of this home's task records both claim.
+  collide="fm-lab-alpha-beta-$$-7"
+  # Task id herdr-lab-cleanup truncates to the stem herdr-lab, which is also a
+  # sibling task's full id, so that sibling's pre-token label prefix claims this
+  # session too. The exact task token decides ownership.
+  token_owned=$(fm_herdr_lab_name herdr-lab-cleanup)
+  for lab in "$live" "$stale" "$murky" "$foreign" "$collide" "$token_owned"; do
+    printf '%s\n' running > "$FAKE_STATE/$lab"
+    printf '%s\n' '{"name":"default","default":true,"running":true,"socket_path":"/home/test/.config/herdr/herdr.sock"}' \
+      > "$TRIPWIRES/$lab.fleet-state.json"
+  done
+  printf '%s\n' 'window=default:test' 'lab-agent-state=alive' > "$reap_home/state/live-task.meta"
+  printf '%s\n' 'window=default:gone' 'lab-agent-state=dead' > "$reap_home/state/stale-task.meta"
+  printf '%s\n' 'window=default:murky' 'lab-agent-state=ambiguous' > "$reap_home/state/murky-task.meta"
+  printf '%s\n' 'window=default:a' 'lab-agent-state=missing' > "$reap_home/state/alpha.meta"
+  printf '%s\n' 'window=default:ab' 'lab-agent-state=missing' > "$reap_home/state/alpha-beta.meta"
+  printf '%s\n' 'window=default:stem' 'lab-agent-state=dead' > "$reap_home/state/herdr-lab-cleanup.meta"
+  printf '%s\n' 'window=default:sib' 'lab-agent-state=ambiguous' > "$reap_home/state/herdr-lab.meta"
+
+  : > "$FAKE_LOG"
+  out=$(FM_HOME="$reap_home" FM_STATE_OVERRIDE="$reap_home/state" run_with_fake fm_herdr_lab_reap) \
+    || fail "dry-run reap should report without mutating"
+  printf '%s\n' "$out" | grep -F "keep live task lab: $live" >/dev/null \
+    || fail "dry-run reap did not protect the live task lab: $out"
+  printf '%s\n' "$out" | grep -F "dry-run stale task lab: $stale" >/dev/null \
+    || fail "dry-run reap did not identify the proven stale lab: $out"
+  printf '%s\n' "$out" | grep -F "leave unproven lab: $murky" >/dev/null \
+    || fail "dry-run reap did not report the ambiguous-state lab by exact name: $out"
+  printf '%s\n' "$out" | grep -F "leave unproven lab: $foreign" >/dev/null \
+    || fail "dry-run reap did not report the foreign-home lab by exact name: $out"
+  printf '%s\n' "$out" | grep -F "leave unproven lab: $collide" >/dev/null \
+    || fail "dry-run reap did not report the doubly-claimed lab by exact name: $out"
+  printf '%s\n' "$out" | grep -F "dry-run stale task lab: $token_owned" >/dev/null \
+    || fail "dry-run reap let a sibling's label prefix outvote the exact task token: $out"
+  assert_lab_untouched "$live" "dry-run reap changed the live lab"
+  assert_lab_untouched "$stale" "dry-run reap changed the stale lab"
+  assert_lab_untouched "$foreign" "dry-run reap changed the foreign-home lab"
+
+  : > "$FAKE_LOG"
+  out=$(FM_HOME="$reap_home" FM_STATE_OVERRIDE="$reap_home/state" \
+    run_with_fake fm_herdr_lab_reap --apply) \
+    || fail "apply reap must sweep its own proven-dead labs even while other labs stay unproven"
+  printf '%s\n' "$out" | grep -F "removed stale task lab: $stale" >/dev/null \
+    || fail "apply reap did not report removing the proven stale lab: $out"
+  [ "$(cat "$FAKE_STATE/$stale")" = deleted ] || fail "apply reap did not delete the proven stale lab"
+  [ "$(cat "$FAKE_STATE/$token_owned")" = deleted ] \
+    || fail "apply reap did not delete the lab whose exact task token proves dead ownership"
+  assert_lab_untouched "$live" "apply reap deleted a live task lab"
+  assert_lab_untouched "$murky" "apply reap deleted a lab with an ambiguous agent state"
+  assert_lab_untouched "$foreign" "apply reap deleted a lab this home has no task record for"
+  assert_lab_untouched "$collide" "apply reap deleted a lab claimed by two task records"
+  assert_present "$TRIPWIRES/$foreign.fleet-state.json" "apply reap removed a foreign home's ownership record"
+
+  FAKE_STATE=$old_state
+  TRIPWIRES=$old_tripwires
+  # shellcheck source=/dev/null
+  . "$ROOT/bin/fm-herdr-lab.sh"
+  pass "fm-herdr-lab: reaping is dry-run by default and destroys only token-owned same-home labs proven dead"
+}
+
+test_task_stem_backs_both_naming_and_task_prefix() {
+  local task_id name prefix
+  for task_id in lab a collision-prefix-alpha collision-prefix-bravo \
+    ...leading-dots 1234567890-trailing very-long-task-id-that-truncates task.id_2; do
+    name=$(fm_herdr_lab_name "$task_id") || fail "name derivation failed for '$task_id'"
+    prefix=$(fm_herdr_lab_task_prefix "$task_id") || fail "task prefix derivation failed for '$task_id'"
+    case "$name" in
+      "$prefix"*) ;;
+      *) fail "generated name '$name' does not carry the task teardown prefix '$prefix'" ;;
+    esac
+    fm_herdr_lab_validate_name "$name" || fail "generated name '$name' is not a valid lab session name"
+  done
+  pass "fm-herdr-lab: one task stem backs both session naming and task-scoped teardown"
+}
+
 test_timed_out_provision_cancels_late_launch() {
   local name="fm-lab-late-launch-$$" status=0
   cat > "$FAKEBIN/sleep" <<'SH'
@@ -240,4 +359,7 @@ test_missing_tripwire_blocks_destruction
 test_changed_default_trips_after_teardown
 test_stopped_owned_lab_can_reprovision
 test_failed_delete_retains_tripwire
+test_teardown_task_removes_owned_session
+test_reap_requires_positive_same_home_ownership
+test_task_stem_backs_both_naming_and_task_prefix
 test_timed_out_provision_cancels_late_launch
