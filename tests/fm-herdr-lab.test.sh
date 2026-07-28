@@ -236,7 +236,7 @@ assert_lab_untouched() { # <session> <message>
 }
 
 test_reap_requires_positive_same_home_ownership() {
-  local old_state=$FAKE_STATE old_tripwires=$TRIPWIRES reap_home lab live stale murky foreign collide out
+  local old_state=$FAKE_STATE old_tripwires=$TRIPWIRES reap_home lab live stale murky foreign collide token_owned out
   fm_herdr_lab_meta_agent_state() {
     grep '^lab-agent-state=' "$1" | cut -d= -f2-
   }
@@ -254,7 +254,11 @@ test_reap_requires_positive_same_home_ownership() {
   foreign=$(fm_herdr_lab_name other-home-task)
   # A legacy-named lab that two of this home's task records both claim.
   collide="fm-lab-alpha-beta-$$-7"
-  for lab in "$live" "$stale" "$murky" "$foreign" "$collide"; do
+  # Task id herdr-lab-cleanup truncates to the stem herdr-lab, which is also a
+  # sibling task's full id, so that sibling's pre-token label prefix claims this
+  # session too. The exact task token decides ownership.
+  token_owned=$(fm_herdr_lab_name herdr-lab-cleanup)
+  for lab in "$live" "$stale" "$murky" "$foreign" "$collide" "$token_owned"; do
     printf '%s\n' running > "$FAKE_STATE/$lab"
     printf '%s\n' '{"name":"default","default":true,"running":true,"socket_path":"/home/test/.config/herdr/herdr.sock"}' \
       > "$TRIPWIRES/$lab.fleet-state.json"
@@ -264,6 +268,8 @@ test_reap_requires_positive_same_home_ownership() {
   printf '%s\n' 'window=default:murky' 'lab-agent-state=ambiguous' > "$reap_home/state/murky-task.meta"
   printf '%s\n' 'window=default:a' 'lab-agent-state=missing' > "$reap_home/state/alpha.meta"
   printf '%s\n' 'window=default:ab' 'lab-agent-state=missing' > "$reap_home/state/alpha-beta.meta"
+  printf '%s\n' 'window=default:stem' 'lab-agent-state=dead' > "$reap_home/state/herdr-lab-cleanup.meta"
+  printf '%s\n' 'window=default:sib' 'lab-agent-state=ambiguous' > "$reap_home/state/herdr-lab.meta"
 
   : > "$FAKE_LOG"
   out=$(FM_HOME="$reap_home" FM_STATE_OVERRIDE="$reap_home/state" run_with_fake fm_herdr_lab_reap) \
@@ -278,6 +284,8 @@ test_reap_requires_positive_same_home_ownership() {
     || fail "dry-run reap did not report the foreign-home lab by exact name: $out"
   printf '%s\n' "$out" | grep -F "leave unproven lab: $collide" >/dev/null \
     || fail "dry-run reap did not report the doubly-claimed lab by exact name: $out"
+  printf '%s\n' "$out" | grep -F "dry-run stale task lab: $token_owned" >/dev/null \
+    || fail "dry-run reap let a sibling's label prefix outvote the exact task token: $out"
   assert_lab_untouched "$live" "dry-run reap changed the live lab"
   assert_lab_untouched "$stale" "dry-run reap changed the stale lab"
   assert_lab_untouched "$foreign" "dry-run reap changed the foreign-home lab"
@@ -289,6 +297,8 @@ test_reap_requires_positive_same_home_ownership() {
   printf '%s\n' "$out" | grep -F "removed stale task lab: $stale" >/dev/null \
     || fail "apply reap did not report removing the proven stale lab: $out"
   [ "$(cat "$FAKE_STATE/$stale")" = deleted ] || fail "apply reap did not delete the proven stale lab"
+  [ "$(cat "$FAKE_STATE/$token_owned")" = deleted ] \
+    || fail "apply reap did not delete the lab whose exact task token proves dead ownership"
   assert_lab_untouched "$live" "apply reap deleted a live task lab"
   assert_lab_untouched "$murky" "apply reap deleted a lab with an ambiguous agent state"
   assert_lab_untouched "$foreign" "apply reap deleted a lab this home has no task record for"
@@ -299,7 +309,7 @@ test_reap_requires_positive_same_home_ownership() {
   TRIPWIRES=$old_tripwires
   # shellcheck source=/dev/null
   . "$ROOT/bin/fm-herdr-lab.sh"
-  pass "fm-herdr-lab: reaping is dry-run by default and destroys only same-home labs proven dead"
+  pass "fm-herdr-lab: reaping is dry-run by default and destroys only token-owned same-home labs proven dead"
 }
 
 test_task_stem_backs_both_naming_and_task_prefix() {

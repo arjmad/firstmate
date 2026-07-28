@@ -415,13 +415,19 @@ fm_herdr_lab_meta_agent_state() { # <meta>
 
 # Ownership verdict for one lab session, judged only against the effective
 # FM_HOME's own task records. Prints exactly one of:
-#   live     - a matching task record's agent is alive.
-#   reapable - exactly one task record in this home names the session and its
+#   live     - a task record claiming the session has a live agent.
+#   reapable - exactly one task record in this home claims the session and its
 #              recovery-grade state is dead or missing.
 #   unproven - everything else, including a session no task record here claims.
 # Only `reapable` licenses destruction; absence of a record is never death.
+# The deterministic task token in a token-bearing session name is the
+# authoritative claim: when any task record's token prefix matches, ownership is
+# decided from those records alone. The pre-token label prefix is consulted only
+# as a fallback for sessions no token prefix claims, where truncated labels can
+# leave two records claiming one session and the verdict stays unproven.
 fm_herdr_lab_session_verdict() { # <session>
-  local session=$1 state_root meta task_id prefix legacy_prefix agent_state matches=0 verdict=unproven
+  local session=$1 state_root meta task_id prefix legacy_prefix agent_state claim
+  local token_matches=0 token_state='' legacy_matches=0 legacy_state='' matches state
   state_root=$(fm_herdr_lab_state_root)
   { [ -d "$state_root" ] && [ ! -L "$state_root" ]; } || { printf 'unproven\n'; return 0; }
   for meta in "$state_root"/*.meta; do
@@ -435,19 +441,35 @@ fm_herdr_lab_session_verdict() { # <session>
     prefix=$(fm_herdr_lab_task_prefix "$task_id" 2>/dev/null) || { printf 'unproven\n'; return 0; }
     legacy_prefix=$(fm_herdr_lab_legacy_task_prefix "$task_id") || { printf 'unproven\n'; return 0; }
     case "$session" in
-      "$prefix"*|"$legacy_prefix"*) ;;
+      "$prefix"*) claim=token ;;
+      "$legacy_prefix"*) claim=legacy ;;
       *) continue ;;
     esac
-    matches=$((matches + 1))
-    agent_state=$(fm_herdr_lab_meta_agent_state "$meta") || { printf 'unproven\n'; return 0; }
-    case "$agent_state" in
-      alive) printf 'live\n'; return 0 ;;
-      dead|missing) verdict=reapable ;;
-      *) printf 'unproven\n'; return 0 ;;
-    esac
+    agent_state=$(fm_herdr_lab_meta_agent_state "$meta") || agent_state=unreadable
+    if [ "$agent_state" = alive ]; then
+      printf 'live\n'
+      return 0
+    fi
+    if [ "$claim" = token ]; then
+      token_matches=$((token_matches + 1))
+      token_state=$agent_state
+    else
+      legacy_matches=$((legacy_matches + 1))
+      legacy_state=$agent_state
+    fi
   done
+  if [ "$token_matches" -gt 0 ]; then
+    matches=$token_matches
+    state=$token_state
+  else
+    matches=$legacy_matches
+    state=$legacy_state
+  fi
   [ "$matches" -eq 1 ] || { printf 'unproven\n'; return 0; }
-  printf '%s\n' "$verdict"
+  case "$state" in
+    dead|missing) printf 'reapable\n' ;;
+    *) printf 'unproven\n' ;;
+  esac
 }
 
 fm_herdr_lab_reap() { # [--apply]

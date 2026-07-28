@@ -1121,7 +1121,7 @@ fi
 FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
   "$SCRIPT_DIR/fm-herdr-lab.sh" teardown-task "$ID" || {
     echo "WARNING: Herdr lab cleanup failed for task $ID; returning the worktree anyway." >&2
-    echo "WARNING: leftover lab ownership records for this task remain under ${FM_HERDR_LAB_STATE_DIR:-${TMPDIR:-/tmp}/fm-herdr-lab-${UID}}:" >&2
+    echo "WARNING: leftover lab ownership records for this task:" >&2
     FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
       "$SCRIPT_DIR/fm-herdr-lab.sh" tripwires "$ID" 2>/dev/null \
       | while IFS= read -r leftover_lab; do
