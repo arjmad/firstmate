@@ -230,11 +230,17 @@ ok - fm_backend_herdr_env_flags: refuses an invalid environment variable name
 ok - fm_backend_herdr_create_task: places launch env on the pane process via repeatable --env
 ok - fm_backend_herdr_create_task: an env-less create is unchanged (no stray --env)
 ok - fm_backend_herdr_create_task: a malformed env pair refuses before any tab create (no half-configured pane)
+ok - fm_backend_herdr_create_task: a refused tab create names the herdr version requirement instead of failing silently
 ok - fm_backend_herdr_projection_create_task: launch env is scoped to the task tab, never the disposable workspace's seeded tab
 ok - fm_backend_herdr_projection_create_task: a malformed env pair refuses before any herdr call and grants no cleanup authority
+ok - fm_backend_herdr_projection_reclaim_task: the husk replacement tab carries launch env natively, and only that call sees it
+ok - fm_backend_herdr_projection_reclaim_task: a malformed env pair refuses before any herdr call
+ok - fm_backend_herdr_version_check: refuses a pre---env herdr (protocol 16) and names the 0.7.5 requirement
+ok - fm_backend_herdr_version_check: refuses a stale RUNNING herdr server that would silently drop the launch env
+ok - fm_backend_herdr_version_check: a stopped, absent, or unreadable server skips the server gate instead of refusing spuriously
 ok - fm-spawn (herdr): launch env goes native via tab create --env and is never typed at the pane shell
 ok - fm-spawn (herdr): a spawn with no local endpoint still gets GOTMPDIR natively and no token env
--> 146 assertions, exit 0
+-> 152 assertions, exit 0
 ```
 
 The end-to-end case asserts that a `pane run` and a `pane send-text` did occur, then that no typed call carried the credential, an `ANTHROPIC_AUTH_TOKEN` export, a `GOTMPDIR` export, or the history-file suppression, so it cannot pass by the spawn simply typing nothing.

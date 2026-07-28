@@ -232,13 +232,21 @@ fm_backend_herdr_tool_check() {
 }
 
 # fm_backend_herdr_version_check: refuse loudly on a missing/incompatible
-# herdr client. Verified locally: v0.7.5, protocol 17 (herdr status --json's
-# .client.protocol; client info is session-independent, unlike .server).
+# herdr client or on a stale running herdr server. Verified locally: v0.7.5,
+# protocol 17 for both (herdr status --json's .client.protocol and, when a
+# daemon is up, .server.protocol).
 # The floor is the version that carries `tab create --env`; see
-# FM_BACKEND_HERDR_MIN_PROTOCOL.
+# FM_BACKEND_HERDR_MIN_PROTOCOL. Both halves matter: a current client speaking
+# to a pre-0.7.5 daemon has its unknown env field dropped from the create RPC,
+# and with no typed fallback that silent credential loss surfaces only as the
+# crewmate's 401 retry loop.
+# The server half is read ONLY when .server.running is exactly true. Server
+# info is session-dependent and optional, so an absent, false, or unreadable
+# .server, or a running server whose protocol cannot be parsed, skips that half
+# rather than refusing - a spurious refusal here would block every spawn.
 fm_backend_herdr_version_check() {
   fm_backend_herdr_tool_check || return 1
-  local status protocol version
+  local status protocol version server_running server_protocol server_version
   status=$(herdr status --json 2>/dev/null) || { echo "error: 'herdr status --json' failed; is herdr installed correctly?" >&2; return 1; }
   protocol=$(printf '%s' "$status" | jq -r '.client.protocol // empty' 2>/dev/null)
   version=$(printf '%s' "$status" | jq -r '.client.version // empty' 2>/dev/null)
@@ -251,6 +259,20 @@ fm_backend_herdr_version_check() {
   if [ "$protocol" -lt "$FM_BACKEND_HERDR_MIN_PROTOCOL" ]; then
     echo "error: herdr protocol $protocol (version ${version:-unknown}) is older than the verified minimum $FM_BACKEND_HERDR_MIN_PROTOCOL (herdr 0.7.5, the first release whose 'tab create --env' can carry a crewmate's launch environment natively); update herdr (herdr update) before using backend=herdr" >&2
     return 1
+  fi
+  server_running=$(printf '%s' "$status" | jq -r 'if .server.running == true then "true" else empty end' 2>/dev/null)
+  if [ "$server_running" = true ]; then
+    server_protocol=$(printf '%s' "$status" | jq -r '.server.protocol // empty' 2>/dev/null)
+    server_version=$(printf '%s' "$status" | jq -r '.server.version // empty' 2>/dev/null)
+    case "$server_protocol" in
+      ''|*[!0-9]*) : ;;
+      *)
+        if [ "$server_protocol" -lt "$FM_BACKEND_HERDR_MIN_PROTOCOL" ]; then
+          echo "error: the running herdr server speaks protocol $server_protocol (version ${server_version:-unknown}), older than the verified minimum $FM_BACKEND_HERDR_MIN_PROTOCOL (herdr 0.7.5, the first release whose 'tab create --env' can carry a crewmate's launch environment natively); a stale server silently drops the launch environment and the crewmate starts with no credential, so restart it (herdr server stop, then let the next command start it, or 'herdr update' first) before using backend=herdr" >&2
+          return 1
+        fi
+        ;;
+    esac
   fi
   return 0
 }

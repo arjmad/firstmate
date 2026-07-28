@@ -191,6 +191,8 @@ Every other runtime backend keeps that typed path unchanged, including the paire
 The local endpoint's non-secret variables are a prefix of the composed launch command rather than launch environment, and are identical on every backend.
 A malformed pair refuses the create outright rather than starting a pane whose environment is silently incomplete.
 Because there is no typed fallback here (one would put the credential back on the pane screen), the version floor is the release that carries `--env`, and a refused `tab create` names that requirement instead of failing silently.
+The floor is enforced against the client and, when a daemon is actually running, against that server too: a current client speaking to a stale server has the environment dropped from the create RPC, which without a fallback surfaces only as the crewmate's authentication retry loop.
+A stopped, absent, or unreadable server skips the server half rather than refusing, since server state is session-dependent and optional.
 
 ## Composer and injection safety
 

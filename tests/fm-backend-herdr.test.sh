@@ -213,6 +213,50 @@ test_version_check_refuses_protocol_below_env_floor() {
   pass "fm_backend_herdr_version_check: refuses a pre---env herdr (protocol 16) and names the 0.7.5 requirement"
 }
 
+# The client half is only half the failure: a current client speaking to a
+# still-running pre-0.7.5 daemon has its unknown env field dropped from the
+# create RPC, so the pane launches with no credential and the crewmate spins in
+# a 401 retry loop. Refuse that up front too.
+test_version_check_refuses_stale_running_server() {
+  local dir log resp fb out status
+  dir="$TMP_ROOT/version-stale-server"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"client":{"version":"0.7.5","channel":"stable","protocol":17},"server":{"status":"running","running":true,"version":"0.7.4","protocol":16,"compatible":true,"restart_needed":false}}\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_version_check' "$ROOT" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "version_check should refuse a running server below the --env floor even when the client is current"
+  assert_contains "$out" "server" "the refusal did not identify the running server as the stale half"
+  assert_contains "$out" "protocol 16" "the refusal did not name the rejected server protocol"
+  assert_contains "$out" "0.7.5" "the refusal did not name the herdr version requirement"
+  assert_contains "$out" "restart" "the refusal did not tell the operator to restart the stale server"
+  pass "fm_backend_herdr_version_check: refuses a stale RUNNING herdr server that would silently drop the launch env"
+}
+
+# The scoping is the point: server info is session-dependent and optional, so
+# every shape that is not an affirmatively-running server with a readable
+# protocol must SKIP the server half rather than refuse. A spurious refusal here
+# would block every spawn.
+test_version_check_skips_server_gate_when_no_usable_server_protocol() {
+  local dir log resp fb status case_json i=0
+  for case_json in \
+    '{"client":{"version":"0.7.5","protocol":17},"server":{"status":"stopped","running":false,"protocol":16}}' \
+    '{"client":{"version":"0.7.5","protocol":17},"server":{"running":true}}' \
+    '{"client":{"version":"0.7.5","protocol":17},"server":{"running":true,"protocol":"unknown"}}' \
+    '{"client":{"version":"0.7.5","protocol":17}}' \
+  ; do
+    i=$((i + 1))
+    dir="$TMP_ROOT/version-server-skip-$i"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+    printf '%s\n' "$case_json" > "$resp/1.out"
+    fb=$(make_herdr_fakebin "$dir")
+    PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+      bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_version_check' "$ROOT" >/dev/null 2>&1
+    status=$?
+    expect_code 0 "$status" "version_check must skip the server gate, not refuse, for: $case_json"
+  done
+  pass "fm_backend_herdr_version_check: a stopped, absent, or unreadable server skips the server gate instead of refusing spuriously"
+}
+
 test_version_check_refuses_old_protocol() {
   local dir log resp fb out status
   dir="$TMP_ROOT/version-old"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -3157,7 +3201,10 @@ test_create_task_names_the_env_version_requirement_when_create_fails() {
   local dir log resp fb out status
   dir="$TMP_ROOT/create-task-refused"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   printf '{"result":{"tabs":[]}}\n' > "$resp/1.out"
-  printf 'error: unexpected argument '"'"'--env'"'"' found\n' > "$resp/2.err"
+  # Real clap quotes the WHOLE offending argument, so a pre---env herdr's own
+  # stderr carries the credential. The fixture reproduces that faithfully:
+  # otherwise the no-relay assertion below could not fail.
+  printf "error: unexpected argument '--env ANTHROPIC_AUTH_TOKEN=%s' found\n" "$FAKE_TOKEN" > "$resp/2.err"
   printf '2\n' > "$resp/2.exit"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
@@ -3515,6 +3562,8 @@ test_spawn_herdr_without_endpoint_sends_only_gotmpdir_natively
 test_version_check_accepts_current_protocol
 test_version_check_refuses_old_protocol
 test_version_check_refuses_protocol_below_env_floor
+test_version_check_refuses_stale_running_server
+test_version_check_skips_server_gate_when_no_usable_server_protocol
 test_version_check_refuses_missing_herdr
 test_workspace_label_primary_home_no_marker
 test_workspace_label_secondmate_home_uses_marker_id
