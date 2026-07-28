@@ -108,7 +108,21 @@ case "${1:-}" in
     case "${2:-}" in
       read)
         [ "${FM_FAKE_HERDR_MISSING:-0}" = 1 ] && exit 1
-        if [ "${FM_FAKE_HERDR_BUSY:-0}" = 1 ]; then printf 'work in progress\nesc to interrupt\n'
+        # FM_FAKE_HERDR_CAPTURE_NEXT models an ANIMATING pane: reads alternate
+        # between the two frames, so ANY two consecutive reads differ no matter
+        # how many earlier reads (pane_readable's liveness probe) came first.
+        # Leaving it unset models a FROZEN pane, the leftover-footer case.
+        if [ -n "${FM_FAKE_HERDR_CAPTURE:-}" ]; then
+          if [ -n "${FM_FAKE_HERDR_CAPTURE_NEXT:-}" ] && [ -n "${FM_FAKE_HERDR_CAPTURE_COUNT:-}" ]; then
+            n=$(cat "$FM_FAKE_HERDR_CAPTURE_COUNT" 2>/dev/null || echo 0)
+            case "$n" in ''|*[!0-9]*) n=0 ;; esac
+            printf '%s\n' "$((n + 1))" > "$FM_FAKE_HERDR_CAPTURE_COUNT"
+            if [ "$((n % 2))" = 1 ]; then printf '%s\n' "$FM_FAKE_HERDR_CAPTURE_NEXT"
+            else printf '%s\n' "$FM_FAKE_HERDR_CAPTURE"; fi
+          else
+            printf '%s\n' "$FM_FAKE_HERDR_CAPTURE"
+          fi
+        elif [ "${FM_FAKE_HERDR_BUSY:-0}" = 1 ]; then printf 'work in progress\nesc to interrupt\n'
         else printf 'all quiet\n> \n'; fi
         exit 0 ;;
     esac ;;
@@ -161,9 +175,15 @@ reset_fakes() {
   FM_FAKE_HERDR_BUSY=0
   FM_FAKE_HERDR_MISSING=0
   FM_FAKE_HERDR_AGENT_STATUS=""
+  FM_FAKE_HERDR_CAPTURE=""
+  FM_FAKE_HERDR_CAPTURE_NEXT=""
+  FM_FAKE_HERDR_CAPTURE_COUNT=""
   FM_FAKE_CI_LOGS=""
+  # Keep the freshness re-read exercised but instant; the real default is 2s.
+  FM_BUSY_FOOTER_RECHECK_SECS=0.05
   export FM_FAKE_AXI_STATUS FM_FAKE_AXI_STATUS_RUN FM_FAKE_RUNS_LIST FM_FAKE_BUSY FM_FAKE_TMUX_MISSING
-  export FM_FAKE_HERDR_BUSY FM_FAKE_HERDR_MISSING FM_FAKE_HERDR_AGENT_STATUS FM_FAKE_CI_LOGS
+  export FM_FAKE_HERDR_BUSY FM_FAKE_HERDR_MISSING FM_FAKE_HERDR_AGENT_STATUS FM_FAKE_HERDR_CAPTURE FM_FAKE_CI_LOGS
+  export FM_FAKE_HERDR_CAPTURE_NEXT FM_FAKE_HERDR_CAPTURE_COUNT FM_BUSY_FOOTER_RECHECK_SECS
 }
 
 # --- run-object fixtures (TOON, as `no-mistakes axi status` emits) -----------
@@ -840,6 +860,107 @@ test_no_run_herdr_idle_agent_status_corroborated_by_busy_pane() {
   pass "herdr idle agent_status is corroborated by the pane text, not trusted outright"
 }
 
+# Regression for relaunchwt-w55 (2026-07-27): no-mistakes fix commits lived only
+# in the gate repo, so neither the full nor coarse run-head check could resolve the
+# reported pipeline head from the task worktree. That is an intentional identity
+# refusal, not permission to weaken branch reuse protection. The pane fallback
+# must still recognize Claude's long-running foreground-shell footer while Herdr's
+# narrower generation state reads idle.
+test_unresolvable_gate_head_uses_herdr_shell_running_footer() {
+  command -v jq >/dev/null 2>&1 || { pass "gate-head shell-footer fallback skipped without jq"; return; }
+  reset_fakes
+  local d; d=$(new_case gate-head-shell-running)
+  make_repo_on_branch "$d/wt" fm/relaunchwt-w55
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/relaunchwt-w55.meta" \
+    "window=default:w30:p4" \
+    "worktree=$d/wt" \
+    "harness=claude" \
+    "kind=ship" \
+    "backend=herdr"
+  FM_FAKE_RUN_HEAD=a76392eb
+  FM_FAKE_AXI_STATUS="$(run_running fm/relaunchwt-w55)"
+  FM_FAKE_RUNS_LIST="running fm/relaunchwt-w55 a76392e 2026-07-27 01:00"
+  FM_FAKE_HERDR_AGENT_STATUS=idle
+  # The footer is ANIMATING: the glyph, the past-tense word and the elapsed
+  # duration all rotate while the foreground shell is genuinely running.
+  FM_FAKE_HERDR_CAPTURE="✻ Cooked for 10m 17s · 1 shell still running"
+  FM_FAKE_HERDR_CAPTURE_NEXT="✽ Brewed for 10m 19s · 1 shell still running · ctrl+o to expand"
+  FM_FAKE_HERDR_CAPTURE_COUNT="$d/capture-count"
+  local out; out=$(run_crew_state "$d" relaunchwt-w55)
+  assert_contains "$out" "state: working" "unresolvable gate head with a running shell -> working"
+  assert_contains "$out" "source: pane" "unresolvable gate head falls through to the pane source"
+  assert_contains "$out" "harness busy" "Claude shell-running footer is positive busy evidence"
+  pass "unresolvable gate head falls back to Claude's running-shell footer"
+}
+
+# The running-shell footer is grafted onto a PERSISTENT past-tense turn summary,
+# unlike the two ephemeral spinner shapes. A killed or wedged harness can leave
+# it frozen on screen, and this reader owns no stale timer of its own, so a
+# single-capture match would pin the crew to `working` forever and suppress
+# recovery. A frozen footer must therefore fall through, not report working.
+test_frozen_shell_running_footer_is_not_working() {
+  command -v jq >/dev/null 2>&1 || { pass "frozen shell-footer control skipped without jq"; return; }
+  reset_fakes
+  local d; d=$(new_case gate-head-shell-frozen)
+  make_repo_on_branch "$d/wt" fm/relaunchwt-w56
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/relaunchwt-w56.meta" \
+    "window=default:w31:p4" \
+    "worktree=$d/wt" \
+    "harness=claude" \
+    "kind=ship" \
+    "backend=herdr"
+  FM_FAKE_RUN_HEAD=a76392eb
+  FM_FAKE_AXI_STATUS="$(run_running fm/relaunchwt-w56)"
+  FM_FAKE_RUNS_LIST="running fm/relaunchwt-w56 a76392e 2026-07-27 01:00"
+  FM_FAKE_HERDR_AGENT_STATUS=idle
+  # No FM_FAKE_HERDR_CAPTURE_NEXT: every read returns the identical frame.
+  FM_FAKE_HERDR_CAPTURE="✻ Cooked for 10m 17s · 1 shell still running"
+  local out; out=$(run_crew_state "$d" relaunchwt-w56)
+  case "$out" in
+    *"state: working"*) fail "a frozen running-shell footer must not report working: $out" ;;
+  esac
+  assert_contains "$out" "no current-state source available" \
+    "a frozen footer leaves no source, so the reader stays unknown"
+  pass "a frozen running-shell footer never pins a wedged crew to working"
+}
+
+# Freshness is proven from the footer LINE, not the whole captured tail. A pane
+# whose footer is byte-identical across samples is wedged even when something
+# else in the tail keeps churning (a background writer, a human at the composer),
+# so that churn must not launder a frozen footer into `working`.
+test_churning_tail_does_not_refresh_a_frozen_footer() {
+  command -v jq >/dev/null 2>&1 || { pass "churning-tail footer control skipped without jq"; return; }
+  reset_fakes
+  local d; d=$(new_case gate-head-shell-churn)
+  make_repo_on_branch "$d/wt" fm/relaunchwt-w57
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/relaunchwt-w57.meta" \
+    "window=default:w32:p4" \
+    "worktree=$d/wt" \
+    "harness=claude" \
+    "kind=ship" \
+    "backend=herdr"
+  FM_FAKE_RUN_HEAD=a76392eb
+  FM_FAKE_AXI_STATUS="$(run_running fm/relaunchwt-w57)"
+  FM_FAKE_RUNS_LIST="running fm/relaunchwt-w57 a76392e 2026-07-27 01:00"
+  FM_FAKE_HERDR_AGENT_STATUS=idle
+  # Only the non-footer row differs between the two frames.
+  FM_FAKE_HERDR_CAPTURE="background writer row 1
+✻ Cooked for 10m 17s · 1 shell still running"
+  FM_FAKE_HERDR_CAPTURE_NEXT="background writer row 2
+✻ Cooked for 10m 17s · 1 shell still running"
+  FM_FAKE_HERDR_CAPTURE_COUNT="$d/capture-count"
+  local out; out=$(run_crew_state "$d" relaunchwt-w57)
+  case "$out" in
+    *"state: working"*) fail "tail churn must not refresh a frozen footer: $out" ;;
+  esac
+  assert_contains "$out" "no current-state source available" \
+    "a frozen footer under churn still leaves no source"
+  pass "unrelated tail churn cannot launder a frozen running-shell footer"
+}
+
 # The corroboration must not mask a genuinely idle/human-blocked agent: idle
 # agent_status AND an idle-looking pane (no busy banner) still reads not-busy.
 test_no_run_herdr_idle_agent_status_and_idle_pane_stays_idle() {
@@ -1259,6 +1380,9 @@ test_other_branch_run_ignored
 test_no_run_busy_pane
 test_no_run_herdr_unknown_uses_backend_capture
 test_no_run_herdr_idle_agent_status_corroborated_by_busy_pane
+test_unresolvable_gate_head_uses_herdr_shell_running_footer
+test_frozen_shell_running_footer_is_not_working
+test_churning_tail_does_not_refresh_a_frozen_footer
 test_no_run_herdr_idle_agent_status_and_idle_pane_stays_idle
 test_no_run_idle_pane_uses_log
 test_no_run_idle_pane_uses_keyed_log
