@@ -45,6 +45,10 @@
 # Projected closes share the presentation-order lock, refuse to close the
 # captain's active tab, and restore the exact response-derived pre-close tab
 # if Herdr's last-pane cleanup focuses an unrelated neighboring workspace.
+# Before returning an ordinary task worktree, teardown also removes every
+# helper-owned Herdr lab session named for that exact task. The shell EXIT trap
+# in a Herdr-lab brief remains best-effort; this durable task cleanup survives
+# the worker process that created the lab.
 # Secondmates (kind=secondmate in meta) are retired explicitly. Normal
 # teardown refuses while their home has in-flight crewmate meta files; --force
 # is the approved discard path that prevalidates child removal targets, discards
@@ -1113,6 +1117,12 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
     fi
   fi
 fi
+
+FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+  "$SCRIPT_DIR/fm-herdr-lab.sh" teardown-task "$ID" || {
+    echo "error: Herdr lab cleanup failed for task $ID; teardown aborted" >&2
+    exit 1
+  }
 
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.
 if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then

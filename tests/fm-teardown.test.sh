@@ -1242,6 +1242,49 @@ test_local_only_force_overrides_unpushed() {
   pass "local-only worktree with unpushed work is torn down under --force (escape hatch)"
 }
 
+test_teardown_removes_task_owned_herdr_lab() {
+  local case_dir lab_dir lab_session
+  case_dir=$(make_case herdr-lab-cleanup)
+  write_meta "$case_dir" local-only ship
+  lab_dir="$case_dir/lab-state"
+  lab_session=$("$ROOT/bin/fm-herdr-lab.sh" name task-x1)
+  mkdir -p "$lab_dir"
+  printf '%s\n' '{"name":"default","default":true,"running":true,"socket_path":"/tmp/default.sock"}' \
+    > "$lab_dir/$lab_session.fleet-state.json"
+  printf '%s\n' running > "$case_dir/herdr-lab-status"
+  cat > "$case_dir/fakebin/herdr" <<'SH'
+#!/usr/bin/env bash
+set -eu
+status_file=${FM_FAKE_HERDR_LAB_STATUS:?}
+session=
+for arg in "$@"; do
+  session=$arg
+done
+case "${1:-} ${2:-}" in
+  "session list")
+    if [ "$(cat "$status_file")" = deleted ]; then
+      printf '%s\n' '{"sessions":[{"default":true,"name":"default","running":true,"socket_path":"/tmp/default.sock"}]}'
+    else
+      jq -nc --arg name "$session" \
+        '{sessions:[{default:true,name:"default",running:true,socket_path:"/tmp/default.sock"},{default:false,name:$name,running:true,socket_path:("/tmp/" + $name + ".sock")}]} '
+    fi
+    ;;
+  "session stop") printf '%s\n' stopped > "$status_file" ;;
+  "session delete") printf '%s\n' deleted > "$status_file" ;;
+esac
+SH
+  chmod +x "$case_dir/fakebin/herdr"
+
+  FM_HERDR_LAB_STATE_DIR="$lab_dir" FM_FAKE_HERDR_LAB_STATUS="$case_dir/herdr-lab-status" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "herdr-lab-cleanup: teardown failed"
+  [ "$(cat "$case_dir/herdr-lab-status")" = deleted ] \
+    || fail "herdr-lab-cleanup: teardown did not delete the task-owned lab"
+  assert_absent "$lab_dir/$lab_session.fleet-state.json" \
+    "herdr-lab-cleanup: teardown left the lab ownership record"
+  pass "teardown removes its task-owned Herdr lab after the worker is gone"
+}
+
 test_herdr_teardown_clears_escalation_marker() {
   local case_dir marker
   case_dir=$(make_case herdr-marker-cleanup)
@@ -1379,6 +1422,7 @@ test_local_only_merged_to_local_main_allows
 test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
+test_teardown_removes_task_owned_herdr_lab
 test_herdr_teardown_clears_escalation_marker
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
 test_herdr_projection_teardown_retains_journal_when_close_unconfirmed

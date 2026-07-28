@@ -9,10 +9,13 @@
 #   fm-herdr-lab.sh run <session> <herdr arguments...>
 #   fm-herdr-lab.sh stop <session>
 #   fm-herdr-lab.sh teardown <session>
+#   fm-herdr-lab.sh teardown-task <task-id>
+#   fm-herdr-lab.sh reap [--apply]
 #
 # Session names must begin with "fm-lab-" and can never be "default".
-# The name command sanitizes the label, caps it at 16 characters, and appends
-# process/random suffixes to keep generated socket paths short.
+# The name command combines a short sanitized label with a deterministic token
+# for the complete task id, then appends process/random suffixes. The token lets
+# task teardown target exact ownership without collisions between truncated ids.
 # Every Herdr call made here carries a trailing --session <session>.
 # The run command rejects caller-supplied --session flags, any leading option
 # before the subcommand, all session lifecycle operations, and every server
@@ -288,14 +291,200 @@ fm_herdr_lab_teardown() { # <session>
   fm_herdr_lab_verify_tripwire "$name"
 }
 
-fm_herdr_lab_name() { # <label>
+fm_herdr_lab_label() { # <label>
   local label=${1:-lab}
   label=$(printf '%s' "$label" | tr -cd 'a-zA-Z0-9_-' | sed 's/^[^a-zA-Z0-9]*//; s/-*$//')
   [ -n "$label" ] || label=lab
   label=${label:0:16}
   label=${label%-}
   [ -n "$label" ] || label=lab
-  printf 'fm-lab-%s-%s-%s\n' "$label" "$$" "$RANDOM"
+  printf '%s\n' "$label"
+}
+
+fm_herdr_lab_task_token() { # <task-id>
+  local token
+  token=$(printf '%s' "$1" | cksum | cut -d ' ' -f1) || return 1
+  printf '%s\n' "${token:0:8}"
+}
+
+fm_herdr_lab_name() { # <label>
+  local task_id=${1:-lab} label token
+  label=$(fm_herdr_lab_label "$task_id") || return 1
+  label=${label:0:10}
+  label=${label%-}
+  [ -n "$label" ] || label=lab
+  token=$(fm_herdr_lab_task_token "$task_id") || return 1
+  printf 'fm-lab-%s-%s-%s-%s\n' "$label" "$token" "$$" "$RANDOM"
+}
+
+fm_herdr_lab_task_id_valid() { # <task-id>
+  case "${1:-}" in
+    ''|*[!A-Za-z0-9._-]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+fm_herdr_lab_task_prefix() { # <task-id>
+  local label token
+  fm_herdr_lab_task_id_valid "${1:-}" || {
+    fm_herdr_lab_error "invalid task id '${1:-}'"
+    return 1
+  }
+  label=$(fm_herdr_lab_label "$1") || return 1
+  label=${label:0:10}
+  label=${label%-}
+  [ -n "$label" ] || label=lab
+  token=$(fm_herdr_lab_task_token "$1") || return 1
+  printf 'fm-lab-%s-%s-' "$label" "$token"
+}
+
+fm_herdr_lab_legacy_task_prefix() { # <task-id>
+  local label
+  label=$(fm_herdr_lab_label "$1") || return 1
+  printf 'fm-lab-%s-' "$label"
+}
+
+fm_herdr_lab_task_tripwires() { # <task-id>
+  local prefix state_dir tripwire
+  prefix=$(fm_herdr_lab_task_prefix "$1") || return 1
+  state_dir=$(fm_herdr_lab_state_dir)
+  for tripwire in "$state_dir/$prefix"*.fleet-state.json; do
+    [ -e "$tripwire" ] || [ -L "$tripwire" ] || continue
+    printf '%s\n' "$tripwire"
+  done
+}
+
+fm_herdr_lab_teardown_task() { # <task-id>
+  local task_id=$1 tripwire session found=0
+  fm_herdr_lab_task_id_valid "$task_id" || {
+    fm_herdr_lab_error "invalid task id '$task_id'"
+    return 1
+  }
+  while IFS= read -r tripwire; do
+    [ -n "$tripwire" ] || continue
+    found=1
+    if [ ! -f "$tripwire" ] || [ -L "$tripwire" ]; then
+      fm_herdr_lab_error "refusing unsafe lab ownership record '$tripwire'"
+      return 1
+    fi
+    session=${tripwire##*/}
+    session=${session%.fleet-state.json}
+    fm_herdr_lab_teardown "$session" || return 1
+  done <<EOF
+$(fm_herdr_lab_task_tripwires "$task_id")
+EOF
+  [ "$found" -eq 0 ] || return 0
+}
+
+fm_herdr_lab_state_root() {
+  printf '%s' "${FM_STATE_OVERRIDE:-${FM_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/state}"
+}
+
+fm_herdr_lab_meta_agent_state() { # <meta>
+  local meta=$1 script_dir backend target
+  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd) || return 1
+  # shellcheck source=bin/fm-backend.sh
+  . "$script_dir/fm-backend.sh"
+  backend=$(fm_backend_of_meta "$meta") || { printf 'unreadable\n'; return 0; }
+  target=$(fm_meta_get "$meta" window)
+  [ -n "$target" ] || { printf 'unreadable\n'; return 0; }
+  fm_backend_agent_state "$backend" "$target"
+}
+
+fm_herdr_lab_session_has_live_task() { # <session>
+  local session=$1 state_root meta task_id prefix legacy_prefix agent_state
+  state_root=$(fm_herdr_lab_state_root)
+  [ -d "$state_root" ] && [ ! -L "$state_root" ] || return 2
+  for meta in "$state_root"/*.meta; do
+    [ -e "$meta" ] || [ -L "$meta" ] || continue
+    if [ ! -f "$meta" ] || [ -L "$meta" ]; then
+      return 2
+    fi
+    task_id=${meta##*/}
+    task_id=${task_id%.meta}
+    prefix=$(fm_herdr_lab_task_prefix "$task_id") || return 2
+    legacy_prefix=$(fm_herdr_lab_legacy_task_prefix "$task_id") || return 2
+    case "$session" in
+      "$prefix"*|"$legacy_prefix"*) ;;
+      *) continue ;;
+    esac
+    agent_state=$(fm_herdr_lab_meta_agent_state "$meta") || return 2
+    case "$agent_state" in
+      alive) return 0 ;;
+      dead|missing) ;;
+      *) return 2 ;;
+    esac
+  done
+  return 1
+}
+
+fm_herdr_lab_reap() { # [--apply]
+  local mode=${1:-} sessions names name live_status tripwire unknown=0
+  case "$mode" in
+    '') mode=dry-run ;;
+    --apply) mode=apply ;;
+    *) fm_herdr_lab_error "reap accepts only --apply"; return 2 ;;
+  esac
+  command -v herdr >/dev/null 2>&1 || { fm_herdr_lab_error "herdr is required"; return 1; }
+  command -v jq >/dev/null 2>&1 || { fm_herdr_lab_error "jq is required"; return 1; }
+  sessions=$(fm_herdr_lab_session_list default 2>/dev/null) || {
+    fm_herdr_lab_error "cannot list Herdr sessions for lab reaping"
+    return 1
+  }
+  names=$(printf '%s' "$sessions" | jq -r '.sessions[]? | select(.name | startswith("fm-lab-")) | .name' 2>/dev/null) || {
+    fm_herdr_lab_error "cannot parse Herdr sessions for lab reaping"
+    return 1
+  }
+
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    fm_herdr_lab_validate_name "$name" || return 1
+    live_status=0
+    fm_herdr_lab_session_has_live_task "$name" || live_status=$?
+    if [ "$live_status" -eq 0 ]; then
+      printf 'keep live task lab: %s\n' "$name"
+      continue
+    fi
+    tripwire=$(fm_herdr_lab_tripwire_path "$name")
+    if [ "$live_status" -ne 1 ] || [ ! -f "$tripwire" ] || [ -L "$tripwire" ]; then
+      printf 'leave unproven lab: %s\n' "$name"
+      unknown=1
+      continue
+    fi
+    printf '%s stale task lab: %s\n' "$mode" "$name"
+  done <<EOF
+$names
+EOF
+
+  if [ "$mode" = dry-run ]; then
+    return 0
+  fi
+  if [ "$unknown" -ne 0 ]; then
+    fm_herdr_lab_error "refusing reap because at least one fm-lab session could not be proven stale"
+    return 1
+  fi
+
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    live_status=0
+    fm_herdr_lab_session_has_live_task "$name" || live_status=$?
+    if [ "$live_status" -eq 0 ]; then
+      continue
+    fi
+    if [ "$live_status" -ne 1 ]; then
+      fm_herdr_lab_error "task liveness became unreadable during reap for '$name'"
+      return 1
+    fi
+    tripwire=$(fm_herdr_lab_tripwire_path "$name")
+    [ -f "$tripwire" ] && [ ! -L "$tripwire" ] || {
+      fm_herdr_lab_error "ownership changed during reap for '$name'"
+      return 1
+    }
+    fm_herdr_lab_teardown "$name" || return 1
+    printf 'removed stale task lab: %s\n' "$name"
+  done <<EOF
+$names
+EOF
 }
 
 fm_herdr_lab_usage() {
@@ -329,6 +518,14 @@ fm_herdr_lab_main() {
     teardown)
       [ "$#" -eq 2 ] || { fm_herdr_lab_usage >&2; return 2; }
       fm_herdr_lab_teardown "$2"
+      ;;
+    teardown-task)
+      [ "$#" -eq 2 ] || { fm_herdr_lab_usage >&2; return 2; }
+      fm_herdr_lab_teardown_task "$2"
+      ;;
+    reap)
+      [ "$#" -le 2 ] || { fm_herdr_lab_usage >&2; return 2; }
+      fm_herdr_lab_reap "${2:-}"
       ;;
     -h|--help|help)
       fm_herdr_lab_usage

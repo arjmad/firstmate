@@ -33,14 +33,19 @@ lab_state=absent
 
 case "$1 ${2:-}" in
   "session list")
-    if [ "$lab_state" = absent ] || [ "$lab_state" = deleted ]; then
-      jq -nc --arg socket "$default_socket" '{sessions:[{default:true,name:"default",running:true,socket_path:$socket}]}'
-    else
+    labs='[]'
+    for path in "$state"/fm-lab-*; do
+      [ -f "$path" ] || continue
+      name=${path##*/}
+      value=$(cat "$path")
+      [ "$value" != deleted ] || continue
       running=false
-      [ "$lab_state" = running ] && running=true
-      jq -nc --arg socket "$default_socket" --arg name "$session" --argjson running "$running" \
-        '{sessions:[{default:true,name:"default",running:true,socket_path:$socket},{default:false,name:$name,running:$running,socket_path:("/tmp/" + $name + ".sock")}]}'
-    fi
+      [ "$value" = running ] && running=true
+      labs=$(printf '%s' "$labs" | jq -c --arg name "$name" --argjson running "$running" \
+        '. + [{default:false,name:$name,running:$running,socket_path:("/tmp/" + $name + ".sock")}]')
+    done
+    jq -nc --arg socket "$default_socket" --argjson labs "$labs" \
+      '{sessions:([{default:true,name:"default",running:true,socket_path:$socket}] + $labs)}'
     ;;
   "server --session")
     if [ "${FM_FAKE_HERDR_SERVER_DELAY:-0}" != 0 ]; then
@@ -208,6 +213,75 @@ test_failed_delete_retains_tripwire() {
   pass "fm-herdr-lab: failed deletion retains ownership until absence is confirmed"
 }
 
+test_teardown_task_removes_owned_session() {
+  local task_id=collision-prefix-alpha sibling_id=collision-prefix-bravo name sibling
+  name=$(fm_herdr_lab_name "$task_id")
+  sibling=$(fm_herdr_lab_name "$sibling_id")
+  run_with_fake fm_herdr_lab_provision "$name" || fail "task teardown fixture provision failed"
+  run_with_fake fm_herdr_lab_provision "$sibling" || fail "sibling teardown fixture provision failed"
+  run_with_fake fm_herdr_lab_teardown_task "$task_id" || fail "task teardown failed"
+  [ "$(cat "$FAKE_STATE/$name")" = deleted ] || fail "task teardown did not delete its owned lab session"
+  [ "$(cat "$FAKE_STATE/$sibling")" = running ] || fail "task teardown deleted a colliding sibling lab session"
+  assert_absent "$TRIPWIRES/$name.fleet-state.json" "task teardown left its ownership tripwire"
+  assert_present "$TRIPWIRES/$sibling.fleet-state.json" "task teardown removed the sibling ownership tripwire"
+  run_with_fake fm_herdr_lab_teardown_task "$sibling_id" || fail "sibling task teardown failed"
+  pass "fm-herdr-lab: task teardown removes only exact ownership when truncated labels collide"
+}
+
+test_reap_protects_live_and_refuses_unproven_sessions() {
+  local old_state=$FAKE_STATE old_tripwires=$TRIPWIRES reap_home live stale unknown out status=0
+  fm_herdr_lab_meta_agent_state() {
+    grep '^lab-agent-state=' "$1" | cut -d= -f2-
+  }
+  reap_home="$TMP_ROOT/reap-home"
+  FAKE_STATE="$TMP_ROOT/reap-herdr-state"
+  TRIPWIRES="$TMP_ROOT/reap-tripwires"
+  mkdir -p "$FAKE_STATE" "$TRIPWIRES" "$reap_home/state"
+  printf '%s\n' '/home/test/.config/herdr/herdr.sock' > "$FAKE_STATE/default-socket"
+  live=$(fm_herdr_lab_name live-task)
+  stale=$(fm_herdr_lab_name stale-task)
+  unknown="fm-lab-unknown-task-$$-3"
+  printf '%s\n' running > "$FAKE_STATE/$live"
+  printf '%s\n' running > "$FAKE_STATE/$stale"
+  printf '%s\n' running > "$FAKE_STATE/$unknown"
+  printf '%s\n' '{"name":"default","default":true,"running":true,"socket_path":"/home/test/.config/herdr/herdr.sock"}' > "$TRIPWIRES/$live.fleet-state.json"
+  printf '%s\n' '{"name":"default","default":true,"running":true,"socket_path":"/home/test/.config/herdr/herdr.sock"}' > "$TRIPWIRES/$stale.fleet-state.json"
+  printf '%s\n' 'window=default:test' 'lab-agent-state=alive' > "$reap_home/state/live-task.meta"
+  printf '%s\n' 'window=default:gone' 'lab-agent-state=dead' > "$reap_home/state/stale-task.meta"
+
+  out=$(FM_HOME="$reap_home" FM_STATE_OVERRIDE="$reap_home/state" run_with_fake fm_herdr_lab_reap) \
+    || fail "dry-run reap should report without mutating"
+  printf '%s\n' "$out" | grep -F "keep live task lab: $live" >/dev/null \
+    || fail "dry-run reap did not protect the live task lab: $out"
+  printf '%s\n' "$out" | grep -F "dry-run stale task lab: $stale" >/dev/null \
+    || fail "dry-run reap did not identify the proven stale lab: $out"
+  printf '%s\n' "$out" | grep -F "leave unproven lab: $unknown" >/dev/null \
+    || fail "dry-run reap did not report the unproven lab: $out"
+  [ "$(cat "$FAKE_STATE/$live")" = running ] || fail "dry-run reap changed the live lab"
+  [ "$(cat "$FAKE_STATE/$stale")" = running ] || fail "dry-run reap changed the stale lab"
+
+  : > "$FAKE_LOG"
+  FM_HOME="$reap_home" FM_STATE_OVERRIDE="$reap_home/state" \
+    run_with_fake fm_herdr_lab_reap --apply >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "apply reap must refuse when any fm-lab session is unproven"
+  [ "$(cat "$FAKE_STATE/$stale")" = running ] || fail "refused reap deleted a proven stale lab before completing preflight"
+  if grep -E '^session (stop|delete) ' "$FAKE_LOG" >/dev/null; then
+    fail "refused reap reached a destructive Herdr call"
+  fi
+
+  rm -f "$FAKE_STATE/$unknown"
+  FM_HOME="$reap_home" FM_STATE_OVERRIDE="$reap_home/state" \
+    run_with_fake fm_herdr_lab_reap --apply >/dev/null || fail "apply reap failed after every lab was classified"
+  [ "$(cat "$FAKE_STATE/$live")" = running ] || fail "apply reap deleted a live task lab"
+  [ "$(cat "$FAKE_STATE/$stale")" = deleted ] || fail "apply reap did not delete the proven stale lab"
+
+  FAKE_STATE=$old_state
+  TRIPWIRES=$old_tripwires
+  # shellcheck source=/dev/null
+  . "$ROOT/bin/fm-herdr-lab.sh"
+  pass "fm-herdr-lab: reaping is dry-run by default, protects durable live tasks, and refuses unproven labs"
+}
+
 test_timed_out_provision_cancels_late_launch() {
   local name="fm-lab-late-launch-$$" status=0
   cat > "$FAKEBIN/sleep" <<'SH'
@@ -240,4 +314,6 @@ test_missing_tripwire_blocks_destruction
 test_changed_default_trips_after_teardown
 test_stopped_owned_lab_can_reprovision
 test_failed_delete_retains_tripwire
+test_teardown_task_removes_owned_session
+test_reap_protects_live_and_refuses_unproven_sessions
 test_timed_out_provision_cancels_late_launch

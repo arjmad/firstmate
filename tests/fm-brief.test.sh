@@ -154,6 +154,10 @@ test_herdr_lab_contract_is_explicit_and_complete() {
     "Herdr lab brief missing helper-owned provisioning"
   assert_grep "\"\$HERDR_LAB_HELPER\" teardown \"\$HERDR_LAB_SESSION\"" "$brief" \
     "Herdr lab brief missing helper-owned teardown"
+  assert_grep "The EXIT trap is best-effort." "$brief" \
+    "Herdr lab brief incorrectly presents shell-local cleanup as durable"
+  assert_grep "\"\$HERDR_LAB_HELPER\" teardown-task $id" "$brief" \
+    "Herdr lab brief missing firstmate-owned durable task cleanup"
   assert_grep "required trailing \`--session \"\$HERDR_LAB_SESSION\"\`" "$brief" \
     "Herdr lab brief missing the per-call trailing session contract"
   assert_grep "direct \`herdr server stop\`" "$brief" \
