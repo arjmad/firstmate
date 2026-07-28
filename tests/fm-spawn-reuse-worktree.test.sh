@@ -166,7 +166,7 @@ run_spawn_argv() {
   FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" \
     FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
     FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
-    FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux TMUX="fake,1,0" \
+    FM_SPAWN_NO_GUARD="${FM_TEST_SPAWN_NO_GUARD-1}" FM_BACKEND=tmux TMUX="fake,1,0" \
     FM_TMUX_LOG="$TMUX_LOG" FM_TREEHOUSE_LOG="$TREEHOUSE_LOG" \
     FM_HERDR_LOG="$HERDR_LOG" FM_ZELLIJ_LOG="$ZELLIJ_LOG" \
     FM_FAKE_PANE_COMMAND="$PANE_COMMAND" \
@@ -362,6 +362,41 @@ test_valid_reuse_skips_treehouse_and_records_worktree() {
   [ ! -s "$TREEHOUSE_LOG" ] || fail "--reuse-worktree executed treehouse directly"
   rm -rf "/tmp/fm-$id"
   pass "a valid reused worktree skips allocation and preserves downstream spawn state"
+}
+
+test_reuse_guard_ignores_task_branch() {
+  local id rec out status
+  id=reuse-guard-task-branch-z1a
+  rec=$(make_case guard-task-branch "$id")
+  read_case "$rec"
+
+  out=$(FM_TEST_SPAWN_NO_GUARD='' run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 0 "$status" "reuse on its task branch should succeed with the guard enabled"$'\n'"$out"
+  assert_not_contains "$out" "WORKTREE TANGLE" \
+    "the guard mistook the reused task worktree for the project primary checkout"
+  rm -rf "/tmp/fm-$id"
+  pass "a reuse relaunch on its own task branch does not print the tangle banner"
+}
+
+test_reuse_guard_reports_primary_tangle() {
+  local id rec out status
+  id=reuse-guard-primary-tangle-z1b
+  rec=$(make_case guard-primary-tangle "$id")
+  read_case "$rec"
+  git -C "$PROJ_DIR" checkout -q -B fm/genuine-primary-tangle
+
+  out=$(FM_TEST_SPAWN_NO_GUARD='' run_spawn "$id" "$WT_DIR")
+  status=$?
+  expect_code 0 "$status" "the advisory tangle guard must not block a valid reuse spawn"$'\n'"$out"
+  assert_contains "$out" "WORKTREE TANGLE - PRIMARY CHECKOUT IS ON A FEATURE BRANCH" \
+    "a genuine project-primary tangle did not print the existing banner"
+  assert_contains "$out" "$PROJ_ABS is on 'fm/genuine-primary-tangle', not its default branch 'main'." \
+    "the tangle banner did not identify the project primary checkout"
+  assert_contains "$out" "git -C $PROJ_ABS checkout main" \
+    "the tangle banner changed or omitted its restore instruction"
+  rm -rf "/tmp/fm-$id"
+  pass "a reuse relaunch still reports a genuine tangle in the project primary checkout"
 }
 
 test_primary_checkout_is_refused() {
@@ -915,6 +950,8 @@ test_orca_backend_is_refused() {
 }
 
 test_valid_reuse_skips_treehouse_and_records_worktree
+test_reuse_guard_ignores_task_branch
+test_reuse_guard_reports_primary_tangle
 test_primary_checkout_is_refused
 test_non_worktree_path_is_refused
 test_missing_path_is_refused_clearly
