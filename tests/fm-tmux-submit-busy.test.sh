@@ -238,6 +238,25 @@ test_claude_busy_signature_uses_real_capture_shapes() {
   printf '✻ Cooked for 10m 17s · 1 shell still running\n' > "$composer"
   pane_busy frozen-shell claude && fail "a frozen running-shell footer must not read busy"
 
+  # Freshness is proven from the FOOTER LINE itself, never the whole tail:
+  # unrelated churn in the tail (a background writer, a human typing in the
+  # composer) must not refresh a byte-identical frozen footer.
+  FM_FAKE_COMPOSER_NEXT='background writer row 2
+✻ Cooked for 10m 17s · 1 shell still running'
+  printf 'background writer row 1\n✻ Cooked for 10m 17s · 1 shell still running\n' > "$composer"
+  pane_busy churn-frozen-shell claude && fail "unrelated tail churn must not refresh a frozen footer"
+
+  # ...while the same churn alongside a genuinely advancing footer stays busy.
+  FM_FAKE_COMPOSER_NEXT='background writer row 2
+✽ Brewed for 10m 19s · 1 shell still running'
+  printf 'background writer row 1\n✻ Cooked for 10m 17s · 1 shell still running\n' > "$composer"
+  pane_busy churn-live-shell claude || fail "an advancing footer amid tail churn should be busy"
+
+  # A footer that has disappeared by the second sample means the turn ended.
+  FM_FAKE_COMPOSER_NEXT='Thought for 10m 18s, ran 1 shell command'
+  printf '✻ Cooked for 10m 17s · 1 shell still running\n' > "$composer"
+  pane_busy finished-shell claude && fail "a footer replaced by a completed-shell summary must be idle"
+
   # The self-fresh spinner shapes are exempt: a single capture already proves a
   # streaming turn, so a repeated frame stays busy.
   printf '✢ Pollinating… (16s · ↓ 1.1k tokens · thought for 1s)\n' > "$composer"
@@ -306,6 +325,61 @@ test_claude_busy_signature_uses_real_capture_shapes() {
   pass "fm_pane_is_busy: Claude busy signatures are scoped, multi-frame, and backward-compatible"
 }
 
+# The freshness proof must be STRUCTURAL, not a convention a reader can skip.
+# bin/fm-watch.sh, bin/fm-supervise-daemon.sh and bin/fm-pending-reply-lib.sh all
+# classify from ONE capture through fm_busy_lines_match, and fm-watch.sh gates
+# its whole stale block (including the .stale-since wedge timer) on a not-busy
+# verdict. If the single-sample signature could see the running-shell footer, a
+# killed Claude crew that froze the footer on screen would suppress its own
+# wedge recovery, so the footer must be unreachable from that matcher.
+test_claude_shell_footer_is_unreachable_from_single_sample_readers() {
+  local footer='✻ Cooked for 10m 17s · 1 shell still running'
+  unset FM_BUSY_REGEX
+  if printf '%s' "$footer" | fm_busy_lines_match claude; then
+    fail "the single-sample matcher must not credit Claude's persistent running-shell footer"
+  fi
+  case "$FM_TMUX_CLAUDE_BUSY_REGEX_DEFAULT" in
+    *"still running"*) fail "the running-shell footer must stay out of the single-sample Claude signature" ;;
+  esac
+  # The self-fresh spinner shapes stay single-sample, so the recovery readers
+  # keep every signature they had before the footer existed.
+  printf '%s' '✢ Pollinating… (16s · ↓ 1.1k tokens)' | fm_busy_lines_match claude \
+    || fail "the spinner shape must still match from a single sample"
+  printf '%s' 'esc to interrupt' | fm_busy_lines_match claude \
+    || fail "the legacy escape footer must still match from a single sample"
+
+  # fm_busy_shell_footer_line is the sole reader of the footer signature, and is
+  # scoped to the recorded Claude harness.
+  [ "$(printf '%s' "$footer" | fm_busy_shell_footer_line claude)" = "$footer" ] \
+    || fail "fm_busy_shell_footer_line should return the matched Claude footer line"
+  [ -z "$(printf '%s' "$footer" | fm_busy_shell_footer_line codex)" ] \
+    || fail "the running-shell footer must not be readable for another harness"
+  [ -z "$(printf '%s' "$footer" | fm_busy_shell_footer_line)" ] \
+    || fail "the running-shell footer must not be readable without a recorded harness"
+  [ -z "$(printf '%s' 'Thought for 9s, ran 1 shell command' | fm_busy_shell_footer_line claude)" ] \
+    || fail "a completed-shell summary is not a running-shell footer"
+  [ -z "$(FM_BUSY_REGEX='esc to interrupt' fm_busy_shell_footer_line claude <<<"$footer")" ] \
+    || fail "an explicit FM_BUSY_REGEX override owns the whole decision"
+  pass "fm_busy_lines_match: the persistent running-shell footer is unreachable without a freshness proof"
+}
+
+# With no re-read there is no freshness proof, so the footer is not credited -
+# `0` must never mean "trust it unchecked".
+test_disabled_recheck_drops_the_shell_footer() {
+  local dir fakebin composer
+  dir="$TMP_ROOT/claude-recheck-disabled"
+  fakebin=$(make_submit_mock "$dir")
+  composer="$dir/composer"
+  printf '✻ Cooked for 10m 17s · 1 shell still running\n' > "$composer"
+  if PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$composer" \
+     FM_FAKE_COMPOSER_NEXT='✽ Brewed for 10m 19s · 1 shell still running' \
+     FM_BUSY_FOOTER_RECHECK_SECS=0 \
+     bash -c '. "$1/bin/fm-tmux-lib.sh"; fm_pane_is_busy live-shell claude' _ "$ROOT"; then
+    fail "a disabled re-read must drop the footer, not trust it unchecked"
+  fi
+  pass "fm_busy_decide: a disabled freshness re-read refuses the running-shell footer"
+}
+
 test_busy_pane_pending_returns_empty
 test_idle_pane_pending_returns_pending
 test_busy_pane_composer_clears_first_try
@@ -314,3 +388,5 @@ test_busy_pane_unknown_stays_unknown
 test_busy_pane_ambiguous_pending_retries_without_conversion
 test_unrecognized_state_skips_busy_conversion
 test_claude_busy_signature_uses_real_capture_shapes
+test_claude_shell_footer_is_unreachable_from_single_sample_readers
+test_disabled_recheck_drops_the_shell_footer

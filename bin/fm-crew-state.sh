@@ -175,13 +175,16 @@ pane_readable() {  # <target>
 # corroboration does not mask that case: it stays correctly not-busy.
 #
 # The corroborating read goes through the shared fm_busy_decide
-# (bin/fm-tmux-lib.sh), so claude's persistent running-shell footer is credited
-# only after a second sample proves the footer is still animating. That keeps a
-# genuinely quiet crew mid-tool-call positively `working` while denying a frozen
-# footer - a killed or wedged harness - the power to report `working` forever
-# from this always-on reader, which unlike the watcher owns no stale timer of
-# its own. A rejected footer just falls through to the status log and the
-# unknown default below; no source is ever invented.
+# (bin/fm-tmux-lib.sh). That is the ONLY reader able to see claude's persistent
+# running-shell footer at all, because crediting it requires re-reading the pane
+# and proving the matched footer line itself changed between samples; the
+# single-sample readers in bin/fm-watch.sh and bin/fm-supervise-daemon.sh never
+# match it, so a frozen footer cannot suppress their wedge recovery. Here it
+# keeps a genuinely quiet crew mid-tool-call positively `working` while denying
+# a frozen footer - a killed or wedged harness - the power to report `working`
+# forever from this always-on reader, which owns no stale timer of its own. A
+# rejected footer just falls through to the status log and the unknown default
+# below; no source is ever invented.
 # shellcheck disable=SC2329 # Invoked indirectly, by name, through fm_busy_decide.
 crew_backend_capture_tail40() {  # <target>
   fm_backend_capture "$TASK_BACKEND" "$1" 40 "$EXPECTED_LABEL" 2>/dev/null

@@ -81,11 +81,18 @@
 # turn is streaming and are overwritten every animation tick. The running-shell
 # footer is not: it is grafted onto a past-tense turn summary, so a wedged or
 # killed harness can leave it frozen on screen and a stateless tail-regex read
-# would report `working` forever, suppressing recovery. False-healthy is the
-# more dangerous direction, so this footer alone is credited as busy only after
-# fm_busy_decide re-reads the pane and proves the footer region is STILL
-# ANIMATING (the rotating glyph/word/duration change between samples). A frozen
-# footer reads not-busy and the caller falls through to its remaining sources.
+# would report `working` forever, suppressing exactly the recovery paths that
+# gate on a not-busy verdict (bin/fm-watch.sh's stale block and its
+# .stale-since timer, bin/fm-supervise-daemon.sh's wedge escalation).
+# False-healthy is the more dangerous direction, so the footer is deliberately
+# NOT part of FM_TMUX_CLAUDE_BUSY_REGEX_DEFAULT: fm_busy_lines_match is the
+# single-sample matcher every reader shares, and a single sample can never
+# prove this footer current. FM_TMUX_CLAUDE_SHELL_BUSY_REGEX_DEFAULT is read
+# ONLY by fm_busy_shell_footer_line, which fm_busy_decide uses to compare the
+# MATCHED FOOTER LINE ITSELF across two samples. Bypass is therefore not
+# expressible: a reader that cannot re-read the pane simply never sees this
+# signature, and unrelated churn elsewhere in the tail (a background writer, a
+# human typing in the composer) cannot refresh a frozen footer.
 # The spinner shapes and every other harness skip the re-read entirely.
 # Kimi's anchored moon-phase spinner is separate because bare moon glyphs in
 # ordinary output must not classify another harness as busy. Leading whitespace is
@@ -98,9 +105,8 @@
 # The full moon-phase set remains locale- and emoji-font-sensitive because Kimi
 # exposes no stable ASCII busy token.
 FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'
-FM_TMUX_CLAUDE_SPINNER_BUSY_REGEX_DEFAULT='esc to interrupt|…[[:space:]]+\([0-9]+[smh]'
+FM_TMUX_CLAUDE_BUSY_REGEX_DEFAULT='esc to interrupt|…[[:space:]]+\([0-9]+[smh]'
 FM_TMUX_CLAUDE_SHELL_BUSY_REGEX_DEFAULT='^[^[:alnum:]]*[[:alpha:]]+ for .+[[:space:]]·[[:space:]][0-9]+ shells? still running'
-FM_TMUX_CLAUDE_BUSY_REGEX_DEFAULT="$FM_TMUX_CLAUDE_SPINNER_BUSY_REGEX_DEFAULT|$FM_TMUX_CLAUDE_SHELL_BUSY_REGEX_DEFAULT"
 FM_TMUX_CODEX_BUSY_REGEX_DEFAULT='esc to interrupt'
 FM_TMUX_OPENCODE_BUSY_REGEX_DEFAULT='esc interrupt'
 FM_TMUX_PI_BUSY_REGEX_DEFAULT='Working\.\.\.'
@@ -133,60 +139,68 @@ fm_busy_lines_match() {  # [harness]
 
 # Seconds between the two samples that prove a running-shell footer is still
 # animating. Claude re-renders that footer's glyph, word and elapsed duration at
-# least once a second, so one second plus a margin is enough; 0 disables the
-# re-read for callers that have their own time-based bound.
+# least once a second, so one second plus a margin is enough. 0 does NOT mean
+# "trust the footer unchecked": with no re-read there is no freshness proof, so
+# the footer is simply not credited, exactly like a single-sample reader.
 FM_BUSY_FOOTER_RECHECK_SECS_DEFAULT=2
 
-# fm_busy_tail: the shared busy-decision window - the last 12 non-blank lines of
-# a raw capture. One owner so every pane reader looks at the same rows.
+# fm_busy_tail: the shared 12-line busy-decision window - the last 12 non-blank
+# lines of a raw capture. Used by every 12-line pane reader (this file,
+# bin/fm-watch.sh, bin/fm-supervise-daemon.sh) so the window cannot drift
+# between them. bin/fm-pending-reply-lib.sh deliberately reads a narrower 6-line
+# footer window and owns that choice.
 fm_busy_tail() {  # <raw-capture on stdin>
   grep -v '^[[:space:]]*$' | tail -12
 }
 
-# fm_busy_needs_freshness_recheck: 0 when the ONLY busy evidence in an
-# already-matched tail is claude's persistent running-shell footer, which cannot
-# prove currency from a single capture. An explicit FM_BUSY_REGEX override owns
-# the whole decision, so it never triggers the re-read.
-fm_busy_needs_freshness_recheck() {  # <harness> <tail>
-  local fm_bf_harness=$1 fm_bf_tail=$2
-  [ "$fm_bf_harness" = claude ] || return 1
-  [ -z "${FM_BUSY_REGEX:-}" ] || return 1
-  if ! printf '%s' "$fm_bf_tail" | grep -qiE "$FM_TMUX_CLAUDE_SHELL_BUSY_REGEX_DEFAULT"; then
-    return 1
+# fm_busy_shell_footer_line: print the matched claude running-shell footer line
+# from a tail on stdin, or nothing. The SOLE consumer of
+# FM_TMUX_CLAUDE_SHELL_BUSY_REGEX_DEFAULT, so the persistent footer can only
+# ever be credited through fm_busy_decide's two-sample proof below. Scoped to
+# the recorded claude harness, and silent under an explicit FM_BUSY_REGEX
+# override because that override owns the whole decision in fm_busy_lines_match.
+fm_busy_shell_footer_line() {  # <harness>; tail on stdin
+  local fm_sf_harness=${1:-}
+  if [ "$fm_sf_harness" != claude ] || [ -n "${FM_BUSY_REGEX:-}" ]; then
+    cat >/dev/null
+    return 0
   fi
-  if printf '%s' "$fm_bf_tail" | grep -qiE "$FM_TMUX_CLAUDE_SPINNER_BUSY_REGEX_DEFAULT"; then
-    return 1
-  fi
-  return 0
+  grep -iE "$FM_TMUX_CLAUDE_SHELL_BUSY_REGEX_DEFAULT" | tail -1
 }
 
 # fm_busy_decide: the shared busy verdict for any backend, over a capture
 # function that prints one raw capture for the given target (0 on success).
-# A self-fresh signature answers from the first sample. A running-shell footer
-# additionally requires a second sample that is still busy AND differs from the
-# first, so a frozen leftover footer reads not-busy instead of pinning a
-# finished or wedged worker to `working` forever. An unreadable target at either
-# sample is not-busy; callers keep their own unknown/no-source handling.
+# A self-fresh signature answers from the first sample alone. The running-shell
+# footer instead requires a second sample in which THAT FOOTER LINE ITSELF has
+# changed, so neither a frozen leftover footer nor unrelated churn elsewhere in
+# the tail can pin a finished or wedged worker to `working`. A footer that has
+# disappeared by the second sample is not-busy too: the turn is over. An
+# unreadable target at either sample is not-busy; callers keep their own
+# unknown/no-source handling.
 # Every local is namespaced because bash locals are DYNAMICALLY scoped and this
 # function calls back into a caller-supplied capture function, which must still
 # see its own enclosing variables rather than ours.
 fm_busy_decide() {  # <harness> <capture-fn> [capture-args...]
   local fm_bd_harness=$1 fm_bd_capture=$2
   shift 2
-  local fm_bd_raw fm_bd_first fm_bd_second fm_bd_secs
+  local fm_bd_raw fm_bd_tail fm_bd_first fm_bd_second fm_bd_secs
   fm_bd_raw=$("$fm_bd_capture" "$@") || return 1
-  fm_bd_first=$(printf '%s' "$fm_bd_raw" | fm_busy_tail)
-  printf '%s' "$fm_bd_first" | fm_busy_lines_match "$fm_bd_harness" || return 1
-  fm_busy_needs_freshness_recheck "$fm_bd_harness" "$fm_bd_first" || return 0
+  fm_bd_tail=$(printf '%s' "$fm_bd_raw" | fm_busy_tail)
+  if printf '%s' "$fm_bd_tail" | fm_busy_lines_match "$fm_bd_harness"; then
+    return 0
+  fi
+  fm_bd_first=$(printf '%s' "$fm_bd_tail" | fm_busy_shell_footer_line "$fm_bd_harness")
+  [ -n "$fm_bd_first" ] || return 1
   fm_bd_secs=${FM_BUSY_FOOTER_RECHECK_SECS:-$FM_BUSY_FOOTER_RECHECK_SECS_DEFAULT}
   case "$fm_bd_secs" in
-    0|0.0|'') return 0 ;;
+    0|0.0|'') return 1 ;;
   esac
   sleep "$fm_bd_secs" 2>/dev/null || true
   fm_bd_raw=$("$fm_bd_capture" "$@") || return 1
-  fm_bd_second=$(printf '%s' "$fm_bd_raw" | fm_busy_tail)
-  [ "$fm_bd_second" != "$fm_bd_first" ] || return 1
-  printf '%s' "$fm_bd_second" | fm_busy_lines_match "$fm_bd_harness"
+  fm_bd_tail=$(printf '%s' "$fm_bd_raw" | fm_busy_tail)
+  fm_bd_second=$(printf '%s' "$fm_bd_tail" | fm_busy_shell_footer_line "$fm_bd_harness")
+  [ -n "$fm_bd_second" ] || return 1
+  [ "$fm_bd_second" != "$fm_bd_first" ]
 }
 
 # fm_tmux_strip_ghost: thin adapter over the shared, fleet-wide ghost extractor

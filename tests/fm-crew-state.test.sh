@@ -926,6 +926,41 @@ test_frozen_shell_running_footer_is_not_working() {
   pass "a frozen running-shell footer never pins a wedged crew to working"
 }
 
+# Freshness is proven from the footer LINE, not the whole captured tail. A pane
+# whose footer is byte-identical across samples is wedged even when something
+# else in the tail keeps churning (a background writer, a human at the composer),
+# so that churn must not launder a frozen footer into `working`.
+test_churning_tail_does_not_refresh_a_frozen_footer() {
+  command -v jq >/dev/null 2>&1 || { pass "churning-tail footer control skipped without jq"; return; }
+  reset_fakes
+  local d; d=$(new_case gate-head-shell-churn)
+  make_repo_on_branch "$d/wt" fm/relaunchwt-w57
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/relaunchwt-w57.meta" \
+    "window=default:w32:p4" \
+    "worktree=$d/wt" \
+    "harness=claude" \
+    "kind=ship" \
+    "backend=herdr"
+  FM_FAKE_RUN_HEAD=a76392eb
+  FM_FAKE_AXI_STATUS="$(run_running fm/relaunchwt-w57)"
+  FM_FAKE_RUNS_LIST="running fm/relaunchwt-w57 a76392e 2026-07-27 01:00"
+  FM_FAKE_HERDR_AGENT_STATUS=idle
+  # Only the non-footer row differs between the two frames.
+  FM_FAKE_HERDR_CAPTURE="background writer row 1
+✻ Cooked for 10m 17s · 1 shell still running"
+  FM_FAKE_HERDR_CAPTURE_NEXT="background writer row 2
+✻ Cooked for 10m 17s · 1 shell still running"
+  FM_FAKE_HERDR_CAPTURE_COUNT="$d/capture-count"
+  local out; out=$(run_crew_state "$d" relaunchwt-w57)
+  case "$out" in
+    *"state: working"*) fail "tail churn must not refresh a frozen footer: $out" ;;
+  esac
+  assert_contains "$out" "no current-state source available" \
+    "a frozen footer under churn still leaves no source"
+  pass "unrelated tail churn cannot launder a frozen running-shell footer"
+}
+
 # The corroboration must not mask a genuinely idle/human-blocked agent: idle
 # agent_status AND an idle-looking pane (no busy banner) still reads not-busy.
 test_no_run_herdr_idle_agent_status_and_idle_pane_stays_idle() {
@@ -1347,6 +1382,7 @@ test_no_run_herdr_unknown_uses_backend_capture
 test_no_run_herdr_idle_agent_status_corroborated_by_busy_pane
 test_unresolvable_gate_head_uses_herdr_shell_running_footer
 test_frozen_shell_running_footer_is_not_working
+test_churning_tail_does_not_refresh_a_frozen_footer
 test_no_run_herdr_idle_agent_status_and_idle_pane_stays_idle
 test_no_run_idle_pane_uses_log
 test_no_run_idle_pane_uses_keyed_log

@@ -570,8 +570,7 @@ pane_is_busy() {  # <target> [backend]
     busy) return 0 ;;
   esac
   tail40=$(fm_backend_capture "$backend" "$target" 40 2>/dev/null) || return 1
-  printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -12 \
-    | fm_busy_lines_match
+  printf '%s' "$tail40" | fm_busy_tail | fm_busy_lines_match
 }
 
 # pane_input_pending dispatches through fm_backend_composer_state and treats
@@ -606,8 +605,7 @@ stale_window_is_busy() {  # <window> <state>
   case "$bs" in
     busy) return 0 ;;
   esac
-  printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -12 \
-    | fm_busy_lines_match "$harness"
+  printf '%s' "$tail40" | fm_busy_tail | fm_busy_lines_match "$harness"
 }
 
 escalate_add() {  # <state> <distilled-item>

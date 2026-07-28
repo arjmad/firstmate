@@ -179,7 +179,7 @@ window_is_busy() {  # <window> <tail40>
     busy) return 0 ;;
     idle) return 1 ;;
     *)
-      lines=$(printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -12)
+      lines=$(printf '%s' "$tail40" | fm_busy_tail)
       harness=$(window_harness "$w")
       if [ -n "${FM_BUSY_REGEX:-}" ]; then
         printf '%s' "$lines" | grep -qiE "$BUSY_REGEX"
