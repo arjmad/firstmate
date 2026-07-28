@@ -620,8 +620,15 @@ escalate_add() {  # <state> <distilled-item>
 # Flush the escalation buffer as ONE batched, single-line digest to the
 # supervisor pane. Returns 0 on successful inject (or empty buffer), non-zero on
 # inject failure (buffer preserved for retry / catch-up).
+#
+# inject_msg's third status, 2, means "delivered exactly once, submit
+# unconfirmed, NOT retryable" (see the sent-unconfirmed branch there). That is
+# terminal: the buffer is retired so a later cycle cannot deliver the same
+# digest a second time, but the flush still reports failure so the max-defer
+# wedge alarm fires and the captain is told the escalation may not have landed.
+# The digest is logged verbatim, so retiring it is not a silent loss.
 escalate_flush() {  # <state>
-  local state=$1 buf item n msg
+  local state=$1 buf item n msg status
   buf="$state/.subsuper-escalations"
   [ -s "$buf" ] || return 0
   n=$(wc -l < "$buf" 2>/dev/null || echo 0)
@@ -630,7 +637,16 @@ escalate_flush() {  # <state>
   # Single-line wrapper: no embedded newlines (inject_msg also collapses as a
   # safety net, but keeping the source single-line makes the intent explicit).
   msg=$(printf 'Supervisor escalate (%s event(s)): %s (pre-read; re-arm not needed — watcher daemon-managed)' "$n" "$msg")
-  if inject_msg "$msg" "$state"; then : > "$buf"; rm -f "${buf}.since" "$state/.subsuper-inject-wedged"; return 0; fi
+  inject_msg "$msg" "$state"
+  status=$?
+  case "$status" in
+    0) : > "$buf"; rm -f "${buf}.since" "$state/.subsuper-inject-wedged"; return 0 ;;
+    2)
+      log "inject unconfirmed: retiring the escalation buffer after a non-retryable unconfirmed submit; re-flushing it could deliver this digest twice. Digest was: $msg"
+      : > "$buf"; rm -f "${buf}.since"
+      return 1
+      ;;
+  esac
   return 1
 }
 
@@ -1145,6 +1161,21 @@ inject_msg() {  # <message> [state]
   verdict=$(fm_backend_send_text_submit "$backend" "$target" "$msg" "$retries" "$sleep_s" "$sleep_s")
   if [ "$verdict" = empty ]; then
     return 0  # Backend confirmed the submit.
+  fi
+  # 'sent-unconfirmed' is a NON-RETRYABLE unconfirmed submit: the backend handed
+  # the text to the agent exactly once and cannot confirm it landed. It exists
+  # because the composer-guard above is only real protection for a backend that
+  # TYPES into the composer - a swallowed typed send leaves the text there, so
+  # the next cycle reads 'pending' and defers. A backend that submits atomically
+  # (herdr's `agent prompt`) never touches the composer, so the composer is
+  # unconditionally empty afterwards, the guard passes vacuously, and preserving
+  # the buffer would silently deliver the same escalation a second time. Return 2
+  # so escalate_flush retires the buffer instead of re-flushing it. Unreached by
+  # tmux and by herdr's pane path, whose 'pending'/'unknown' handling below is
+  # unchanged.
+  if [ "$verdict" = sent-unconfirmed ]; then
+    log "inject unconfirmed: $backend delivered the digest exactly once but could not confirm the submit (verdict=$verdict); not retryable, so the buffer is retired rather than re-flushed"
+    return 2
   fi
   log "inject failed: submit unconfirmed after $retries retries (verdict=$verdict, text may be in composer)"
   return 1

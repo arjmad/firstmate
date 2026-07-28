@@ -29,6 +29,12 @@ export FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0
 # applied, which is where the real CLI puts its {"error":{"code":...}} JSON
 # (verified against herdr 0.7.5); pair it with <n>.exit to model a real
 # failing call.
+# $FM_HERDR_FAKE_PROTOCOL / $FM_HERDR_FAKE_VERSION set what the intercepted
+# `status --json` reports as the CLIENT build, defaulting to the 0.7.1/protocol-14
+# pair this fake has always reported. Raise it for a test that needs a client new
+# enough to serve a version-gated subcommand (`agent prompt` needs 17). Like the
+# interception itself, this response is NOT counted, so call numbering is
+# unaffected either way.
 make_herdr_fakebin() {  # <dir> -> echoes fakebin dir
   local dir=$1 fb="$1/fakebin"
   mkdir -p "$fb"
@@ -45,7 +51,8 @@ next=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
   printf '\n'
 } >> "$LOG"
 if [ "${1:-}" = status ] && [ "${2:-}" = --json ] && [ "${FM_HERDR_SCRIPT_STATUS:-0}" != 1 ]; then
-  printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n'
+  printf '{"client":{"version":"%s","protocol":%s},"server":{"running":true}}\n' \
+    "${FM_HERDR_FAKE_VERSION:-0.7.1}" "${FM_HERDR_FAKE_PROTOCOL:-14}"
   exit 0
 fi
 n=$next
@@ -2384,8 +2391,19 @@ test_send_text_submit_unknown_on_capture_failure() {
 # path's separate send-text and send-keys calls, so no repaint can land between
 # them. It resolves the LIVE agent and rejects a pane that has none, so it is an
 # ADDED path: FM_BACKEND_HERDR_AGENT_PROMPT gates it (default off, so a running
-# fleet is unaffected until a home opts in) and every rejection degrades to the
-# pane path. Path selection is automatic - no caller passes a flag.
+# fleet is unaffected until a home opts in), a client older than protocol 17
+# fails closed to the pane path even with the gate on, and every rejection
+# degrades to the pane path. Path selection is automatic - no caller passes a
+# flag. Hence FM_HERDR_FAKE_PROTOCOL=17 on every test that expects the atomic
+# path to actually be taken.
+#
+# Once the single prompt call has been ISSUED, this path emits only `empty` or
+# `sent-unconfirmed`. It must never emit `pending` or `unknown` post-send: the
+# away-mode daemon preserves its buffer on those and re-flushes it behind a
+# composer-empty guard that is vacuous for a path which never types into the
+# composer, so either verdict would deliver the same digest twice. Nor
+# `send-failed`, which means definitively-not-delivered and invites a manual
+# resend. tests/fm-daemon.test.sh asserts the daemon side of that contract.
 
 herdr_agent_not_found_err() {  # <file>
   printf '{"error":{"code":"agent_not_found","message":"agent target w1:p2 not found"},"id":"cli:agent:prompt"}\n' > "$1"
@@ -2415,7 +2433,7 @@ test_send_text_submit_agent_prompt_delivers_atomically() {
   printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/3.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    FM_BACKEND_HERDR_AGENT_PROMPT=1 \
+    FM_BACKEND_HERDR_AGENT_PROMPT=1 FM_HERDR_FAKE_PROTOCOL=17 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "A != B" 3 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "the atomic path should report empty once agent_status reports working, got '$out'"
   assert_contains "$(cat "$log")" $'\x1f''agent'$'\x1f''prompt'$'\x1f''w1:p2'$'\x1f''A != B' "the atomic path did not submit the text through 'agent prompt'"
@@ -2432,7 +2450,7 @@ test_send_text_submit_agent_prompt_never_waits() {
   printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/3.out"
   fb=$(make_herdr_fakebin "$dir")
   PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    FM_BACKEND_HERDR_AGENT_PROMPT=1 \
+    FM_BACKEND_HERDR_AGENT_PROMPT=1 FM_HERDR_FAKE_PROTOCOL=17 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "x" 3 0.01 0.01' "$ROOT" >/dev/null
   [ "$(grep -c -- $'\x1f''--wait' "$log")" -eq 0 ] || fail "'agent prompt --wait' would hand supervision ownership to herdr; firstmate's own event subscription must remain the only supervision path"
   [ "$(grep -c -- $'\x1f''--until' "$log")" -eq 0 ] || fail "'agent prompt --until' would hand supervision ownership to herdr"
@@ -2452,7 +2470,7 @@ test_send_text_submit_agent_prompt_falls_back_when_no_live_agent() {
   printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/5.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    FM_BACKEND_HERDR_AGENT_PROMPT=1 \
+    FM_BACKEND_HERDR_AGENT_PROMPT=1 FM_HERDR_FAKE_PROTOCOL=17 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "pre-launch command" 3 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "an agent-less pane must degrade to the pane path, not fail, got '$out'"
   [ "$(grep -c $'\x1f''agent'$'\x1f''prompt' "$log")" -eq 0 ] || fail "the baseline read already proved no agent is present, so no wasted 'agent prompt' call should follow"
@@ -2473,7 +2491,7 @@ test_send_text_submit_agent_prompt_falls_back_on_late_agent_exit() {
   printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/6.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    FM_BACKEND_HERDR_AGENT_PROMPT=1 \
+    FM_BACKEND_HERDR_AGENT_PROMPT=1 FM_HERDR_FAKE_PROTOCOL=17 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "steer" 3 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "an agent_not_found rejection from 'agent prompt' itself must degrade to the pane path, got '$out'"
   assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''send-text'$'\x1f''w1:p2'$'\x1f''steer' "the late-exit fallback must deliver through the pane path"
@@ -2488,11 +2506,14 @@ test_send_text_submit_agent_prompt_ambiguous_failure_never_falls_back() {
   printf '1\n' > "$resp/2.exit"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    FM_BACKEND_HERDR_AGENT_PROMPT=1 \
+    FM_BACKEND_HERDR_AGENT_PROMPT=1 FM_HERDR_FAKE_PROTOCOL=17 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "steer" 3 0.01 0.01' "$ROOT" )
-  [ "$out" = send-failed ] || fail "a non-agent_not_found failure is ambiguous about delivery and must refuse loudly, got '$out'"
+  # 'send-failed' would be wrong twice over: in the shared vocabulary it means
+  # definitively-not-delivered, which is the message most likely to make an
+  # operator resend by hand, and this failure is ambiguous about delivery.
+  [ "$out" = sent-unconfirmed ] || fail "an ambiguous failure must report sent-unconfirmed (delivered at most once, never retryable), got '$out'"
   [ "$(grep -c $'\x1f''pane'$'\x1f''send-text' "$log")" -eq 0 ] || fail "falling back after an ambiguous failure could deliver the same message twice"
-  pass "fm_backend_herdr_send_text_submit: an ambiguous 'agent prompt' failure refuses instead of falling back, so a steer can never be delivered twice"
+  pass "fm_backend_herdr_send_text_submit: an ambiguous 'agent prompt' failure reports sent-unconfirmed instead of falling back or claiming send-failed"
 }
 
 test_send_text_submit_agent_prompt_busy_baseline_uses_pane_path() {
@@ -2506,7 +2527,7 @@ test_send_text_submit_agent_prompt_busy_baseline_uses_pane_path() {
   printf '\xe2\x94\x82   \xe2\x94\x82\n' > "$resp/5.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    FM_BACKEND_HERDR_AGENT_PROMPT=1 \
+    FM_BACKEND_HERDR_AGENT_PROMPT=1 FM_HERDR_FAKE_PROTOCOL=17 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "steer" 3 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "a busy baseline should route to the pane path and confirm there, got '$out'"
   [ "$(grep -c $'\x1f''agent'$'\x1f''prompt' "$log")" -eq 0 ] || fail "a busy baseline must not use the atomic path, which has no confirmation signal for it"
@@ -2514,37 +2535,113 @@ test_send_text_submit_agent_prompt_busy_baseline_uses_pane_path() {
   pass "fm_backend_herdr_send_text_submit: a non-idle baseline routes to the pane path, whose composer-state confirmation owns that case"
 }
 
-test_send_text_submit_agent_prompt_unconfirmed_is_pending_without_resend() {
+test_send_text_submit_agent_prompt_unconfirmed_is_never_a_retryable_verdict() {
   local dir log resp fb out prompt_count
   dir="$TMP_ROOT/submit-prompt-pending"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   # herdr answers exit 0 / agent_prompted even for a swallowed first message
   # (measured on 0.7.5 against real claude), so a never-working agent_status is
-  # a genuine unconfirmed send. Re-sending would risk a duplicate steer, so this
-  # reports pending - fm-send.sh's loud non-zero refusal - and stops.
+  # a genuine unconfirmed send. This must NOT be 'pending': the away-mode daemon
+  # preserves its buffer on pending and re-flushes it behind a composer-empty
+  # guard that is vacuous here, so pending would deliver the same steer twice.
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/1.out"
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/3.out"
+  printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/4.out"
+  printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/5.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    FM_BACKEND_HERDR_AGENT_PROMPT=1 \
+    FM_BACKEND_HERDR_AGENT_PROMPT=1 FM_HERDR_FAKE_PROTOCOL=17 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "steer" 3 0.01 0.01' "$ROOT" )
-  [ "$out" = pending ] || fail "an unconfirmed atomic send must report pending, got '$out'"
+  [ "$out" = sent-unconfirmed ] || fail "an unconfirmed atomic send must report sent-unconfirmed, got '$out'"
   prompt_count=$(grep -c $'\x1f''agent'$'\x1f''prompt' "$log")
   [ "$prompt_count" -eq 1 ] || fail "the atomic path must send exactly once - a retry re-sends the whole message, unlike the pane path's Enter-only retry - sent $prompt_count"
   [ "$(grep -c $'\x1f''pane'$'\x1f''send-text' "$log")" -eq 0 ] || fail "an unconfirmed atomic send must not be retried on the pane path either"
-  pass "fm_backend_herdr_send_text_submit: an unconfirmed atomic send reports pending after exactly one prompt, never re-sending the text"
+  pass "fm_backend_herdr_send_text_submit: an unconfirmed atomic send reports the non-retryable sent-unconfirmed after exactly one prompt, never 'pending'"
 }
 
-test_send_text_submit_agent_prompt_unreadable_target_is_unknown() {
+test_send_text_submit_agent_prompt_unreadable_while_confirming_is_not_unknown() {
   local dir log resp fb out
   dir="$TMP_ROOT/submit-prompt-unreadable"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  # The text was already handed to the agent, so a read failure while confirming
+  # is not the pane path's 'unknown' (nothing typed, safe to re-guard and retry):
+  # the daemon re-flushes 'unknown' too, and by the next cycle the pane can be
+  # readable again with an empty composer, so the guard would pass and duplicate.
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/1.out"
   printf '1\n' > "$resp/3.exit"
+  printf '1\n' > "$resp/4.exit"
+  printf '1\n' > "$resp/5.exit"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    FM_BACKEND_HERDR_AGENT_PROMPT=1 \
+    FM_BACKEND_HERDR_AGENT_PROMPT=1 FM_HERDR_FAKE_PROTOCOL=17 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "steer" 3 0.01 0.01' "$ROOT" )
-  [ "$out" = unknown ] || fail "a hard read failure while confirming must report unknown, not pending, got '$out'"
-  pass "fm_backend_herdr_send_text_submit: a target that cannot be read while confirming reports unknown, matching the pane path"
+  [ "$out" = sent-unconfirmed ] || fail "a read failure AFTER the text was delivered must report sent-unconfirmed, not the retryable 'unknown', got '$out'"
+  pass "fm_backend_herdr_send_text_submit: a target unreadable while confirming reports sent-unconfirmed, because the text is already delivered"
+}
+
+test_send_text_submit_agent_prompt_unparseable_target_is_unknown() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/submit-prompt-badtarget"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
+    FM_BACKEND_HERDR_AGENT_PROMPT=1 FM_HERDR_FAKE_PROTOCOL=17 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit "not-a-herdr-target" "steer" 3 0.01 0.01' "$ROOT" )
+  [ "$out" = unknown ] || fail "'unknown' stays reachable BEFORE any call is made, where nothing was delivered, got '$out'"
+  [ ! -s "$log" ] || fail "an unparseable target must not reach the herdr CLI at all: $(cat "$log")"
+  pass "fm_backend_herdr_send_text_submit: an unparseable target reports unknown, the pre-delivery verdict, without calling herdr"
+}
+
+test_send_text_submit_agent_prompt_needs_a_verified_client() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/submit-prompt-oldclient"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  # The gate says this home WANTS the atomic path; the client protocol says
+  # whether it can serve it. `agent prompt` is verified on 0.7.5 (protocol 17),
+  # and an absent subcommand exits non-zero with a non-JSON usage error that
+  # classifies as the ambiguous 'failed' outcome, which does NOT fall back - so
+  # without this guard, opting in against an older herdr would break every
+  # agent-directed steer and brief in that home.
+  printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/2.out"
+  printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/4.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
+    FM_BACKEND_HERDR_AGENT_PROMPT=1 FM_HERDR_FAKE_PROTOCOL=16 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "steer" 3 0.01 0.01' "$ROOT" )
+  [ "$out" = empty ] || fail "an unsupported client must fail CLOSED to the pane path and still deliver, never report a send failure, got '$out'"
+  [ "$(grep -c $'\x1f''agent'$'\x1f''prompt' "$log")" -eq 0 ] || fail "a client below the verified protocol must never be asked to serve 'agent prompt'"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''send-text'$'\x1f''w1:p2'$'\x1f''steer' "the version-guard fallback must deliver through the pane path"
+  pass "fm_backend_herdr_send_text_submit: a client below the verified 'agent prompt' protocol falls back to the pane path instead of failing every send"
+}
+
+test_atomic_confirm_window_matches_the_pane_paths_effective_budget() {
+  local out
+  # The pane path re-enters the confirmation wait once per Enter attempt, so its
+  # effective budget is <retries> x the per-attempt budget: 3 x 0.6s = 1.8s at
+  # fm-send.sh's and fm-supervise-daemon.sh's defaults. The atomic path sends
+  # once and must observe that same TOTAL window, with polls scaled by the same
+  # factor so the sample interval stays as tight. Widening a poll window is not
+  # a re-send.
+  out=$( FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0.6 FM_BACKEND_HERDR_SUBMIT_POLLS=6 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_atomic_confirm_window 0.4 3' "$ROOT" )
+  [ "$out" = "1.8000 18" ] || fail "expected '1.8000 18' (3 x the 0.6s floor, 3 x 6 polls), got '$out'"
+  out=$( FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0.6 FM_BACKEND_HERDR_SUBMIT_POLLS=6 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_atomic_confirm_window 0.4 ""' "$ROOT" )
+  [ "$out" = "0.6000 6" ] || fail "a missing/zero retry count must degrade to one window, got '$out'"
+  pass "fm_backend_herdr_atomic_confirm_window: one pass observes the pane path's full effective budget, at the same sample density"
+}
+
+test_send_text_submit_agent_prompt_polls_the_widened_window() {
+  local dir log resp fb get_count
+  dir="$TMP_ROOT/submit-prompt-window"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  # 1: baseline agent get; 2: agent prompt; 3.. : confirmation polls. With
+  # <retries>=3 and 2 polls per window, the widened window samples 6 times, so a
+  # harness that is merely slow to start a turn under load is still caught.
+  printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=2 \
+    FM_BACKEND_HERDR_AGENT_PROMPT=1 FM_HERDR_FAKE_PROTOCOL=17 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "steer" 3 0.01 0.01' "$ROOT" >/dev/null
+  get_count=$(grep -c $'\x1f''agent'$'\x1f''get' "$log")
+  [ "$get_count" -eq 7 ] || fail "expected 1 baseline read plus 6 confirmation polls (retries x polls-per-window), got $get_count agent-get calls"
+  [ "$(grep -c $'\x1f''agent'$'\x1f''prompt' "$log")" -eq 1 ] || fail "widening the poll window must not re-send the text"
+  pass "fm_backend_herdr_send_text_submit: the atomic confirmation window scales with <retries> while still sending exactly once"
 }
 
 test_agent_prompt_once_classifies_outcomes() {
@@ -2556,15 +2653,22 @@ test_agent_prompt_once_classifies_outcomes() {
   printf '1\n' > "$resp/2.exit"
   printf 'herdr: connection refused\n' > "$resp/3.err"
   printf '1\n' > "$resp/3.exit"
+  # A non-JSON preamble beside the error object must not cost the classification:
+  # misreading a genuine agent_not_found as 'failed' silently loses the pane-path
+  # fallback that agent-less panes depend on.
+  { printf 'warning: reconnecting to the herdr server\n'
+    printf '{"error":{"code":"agent_not_found","message":"no agent"},"id":"cli:agent:prompt"}\n'; } > "$resp/4.err"
+  printf '1\n' > "$resp/4.exit"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"
       printf "%s " "$(fm_backend_herdr_agent_prompt_once default w1:p2 t)"
       printf "%s " "$(fm_backend_herdr_agent_prompt_once default w1:p2 t)"
       printf "%s " "$(fm_backend_herdr_agent_prompt_once default w1:p2 t)"
+      printf "%s " "$(fm_backend_herdr_agent_prompt_once default w1:p2 t)"
       printf "%s" "$(fm_backend_herdr_agent_prompt_once default w1:p2 t)"' "$ROOT" )
-  [ "$out" = "absent failed failed ok" ] || fail "expected 'absent failed failed ok' (agent_not_found, other error code, unparseable stderr, success), got '$out'"
-  pass "fm_backend_herdr_agent_prompt_once: only agent_not_found reports 'absent'; every other failure stays 'failed' so the caller cannot fall back into a double delivery"
+  [ "$out" = "absent failed failed absent ok" ] || fail "expected 'absent failed failed absent ok' (agent_not_found, other error code, unparseable stderr, agent_not_found behind a non-JSON preamble, success), got '$out'"
+  pass "fm_backend_herdr_agent_prompt_once: only agent_not_found reports 'absent' - including behind a non-JSON stderr preamble - and every other failure stays 'failed'"
 }
 
 # --- fm-backend.sh dispatch wiring -------------------------------------------
@@ -3341,8 +3445,12 @@ test_send_text_submit_agent_prompt_falls_back_when_no_live_agent
 test_send_text_submit_agent_prompt_falls_back_on_late_agent_exit
 test_send_text_submit_agent_prompt_ambiguous_failure_never_falls_back
 test_send_text_submit_agent_prompt_busy_baseline_uses_pane_path
-test_send_text_submit_agent_prompt_unconfirmed_is_pending_without_resend
-test_send_text_submit_agent_prompt_unreadable_target_is_unknown
+test_send_text_submit_agent_prompt_unconfirmed_is_never_a_retryable_verdict
+test_send_text_submit_agent_prompt_unreadable_while_confirming_is_not_unknown
+test_send_text_submit_agent_prompt_unparseable_target_is_unknown
+test_send_text_submit_agent_prompt_needs_a_verified_client
+test_atomic_confirm_window_matches_the_pane_paths_effective_budget
+test_send_text_submit_agent_prompt_polls_the_widened_window
 test_agent_prompt_once_classifies_outcomes
 test_dispatch_routes_herdr_backend
 test_dispatch_busy_state_unknown_for_tmux

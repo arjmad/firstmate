@@ -553,6 +553,11 @@ fm_backend_send_key() {  # <backend> <target> <key> [expected-label]
 # fm_backend_send_text_submit: type text once, then submit and verify,
 # retrying only the submission (never retyping). Echoes the backend's
 # proof-carrying verdict; callers require exact empty for confirmed delivery.
+# empty means confirmed; pending/unknown mean unconfirmed and MAY be retried by
+# a caller that re-guards first; send-failed means definitively not delivered;
+# sent-unconfirmed means delivered exactly once and unconfirmed, and must NEVER
+# be retried (a backend that submits atomically leaves no composer evidence for
+# a caller's pre-injection guard to see - see fm_backend_herdr_send_text_submit).
 fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sleep> <settle> [expected-label]
   local backend=$1
   shift

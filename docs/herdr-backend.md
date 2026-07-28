@@ -185,21 +185,35 @@ Herdr's `agent prompt` submits text to the live agent in one request, so no repa
 Set `FM_BACKEND_HERDR_AGENT_PROMPT=1` to opt a home in.
 It defaults to off, so a running fleet keeps the pane path until it deliberately selects this.
 
+The opt-in also requires a client at protocol 17 or newer, which is Herdr 0.7.5, the build `agent prompt` was verified against.
+Setting the variable against an older client is not an error and does not break delivery: the adapter reads the client protocol once per process and silently keeps that home on the pane path.
+
 The pane path is added to, never replaced, because `agent prompt` resolves the live agent and rejects a pane that has none.
 Spawn-time shell commands run before any agent exists, and a pane whose agent has exited has no other way to be steered.
 
 Path selection is automatic and no caller passes a flag.
-The pre-send agent-state read that the pane path already performed for its own baseline now happens first, so detecting an agent-less pane costs no extra call.
+The pre-send agent-state read that the pane path already performed for its own baseline now happens first, so when the atomic path is taken, detecting an agent-less pane costs no extra call.
+On any fallback the pane path still re-reads its own baseline, so the agent-less case costs one extra round trip rather than none.
 An unreadable or agent-less target, and any baseline that is not legibly idle, uses the pane path.
-Only `agent_not_found` may fall back after the prompt call itself, because that rejection is verified to reach the pane with nothing; every other failure is ambiguous about delivery and refuses loudly instead.
+Only `agent_not_found` may fall back after the prompt call itself, because that rejection is verified to reach the pane with nothing; every other failure is ambiguous about delivery and refuses instead.
 
 Submit confirmation still applies here and is unchanged.
 `agent prompt` answers success in milliseconds even for a message the agent never receives, so its response acknowledges only that Herdr accepted the request.
 Composer reading does not apply, because this path never types into the composer and an empty composer is its unconditional resting state.
 
+The pane path spreads its confirmation across one window per Enter attempt, so its effective budget is the retry count times the per-attempt budget, 1.8s at the send and away-supervisor defaults.
+This path sends once, so it observes that same total window in a single pass, with the sample count scaled by the same factor so the interval between samples stays as tight.
+Widening a poll window is not a re-send, and a harness that is merely slow to start a turn under load is not reported as undelivered.
+
 This path sends exactly once and never retries.
 The pane path may retry safely because it retries only Enter, which is a no-op on an already-empty composer, while a retry here would re-send the whole message on an ambiguity that cannot distinguish a swallowed send from a very fast turn.
-An unconfirmed send reports pending, which is already a loud refusal, rather than risking a duplicate steer.
+
+Once the single prompt call has been issued, this path reports only two verdicts: `empty` for a confirmed submit, and `sent-unconfirmed` for a send that was handed to the agent exactly once and could not be confirmed.
+`sent-unconfirmed` covers every unconfirmed reason, including an ambiguous prompt failure and a target that becomes unreadable while confirming.
+It is deliberately not `pending`, not `unknown`, and not `send-failed`.
+The away-mode daemon preserves its escalation buffer on `pending` and `unknown` and re-flushes it later, guarded only by a composer-empty read, and that guard is vacuous for a path that never types into the composer, so either verdict would deliver the same digest twice.
+`send-failed` means definitively not delivered and would invite an operator to resend by hand.
+`sent-unconfirmed` is non-zero for `fm-send` exactly like `pending`, and terminal for the daemon, which retires the buffer, logs the digest verbatim, and lets the wedge alarm report that the escalation may not have landed.
 
 `bin/backends/herdr.sh` owns the full contract in `fm_backend_herdr_send_text_submit` and `fm_backend_herdr_agent_prompt_once`.
 

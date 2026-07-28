@@ -90,6 +90,15 @@ FM_BACKEND_HERDR_MIN_EVENTS_PROTOCOL=16
 # presentation path uses one narrowly whitelisted raw-socket request after
 # verifying the exact method and parameter schema.
 FM_BACKEND_HERDR_MIN_WORKSPACE_MOVE_PROTOCOL=16
+# `agent prompt` (the atomic delivery path gated behind
+# FM_BACKEND_HERDR_AGENT_PROMPT) was verified against herdr 0.7.5, protocol 17.
+# Below this the subcommand may not exist at all, and an unknown subcommand
+# exits non-zero with a non-JSON clap usage error that carries no error code to
+# classify - so the atomic path fails CLOSED to the pane path rather than
+# reporting a delivery failure (fm_backend_herdr_agent_prompt_capable). Distinct
+# from FM_BACKEND_HERDR_MIN_PROTOCOL (14), which is the floor for the adapter as
+# a whole: every other primitive works on 14.
+FM_BACKEND_HERDR_MIN_AGENT_PROMPT_PROTOCOL=17
 # Per-pane escalation dedupe marker prefix, under the state dir. One marker per
 # window (keyed like the watcher's own .stale-<key>): set when a ->blocked edge
 # is enqueued, cleared on any working edge, so exactly one wake fires per
@@ -2125,6 +2134,65 @@ fm_backend_herdr_send_text_submit_pane() {  # <target> <text> <retries> <enter-s
 # it. Documented in docs/herdr-backend.md "Atomic agent-prompt delivery".
 FM_BACKEND_HERDR_AGENT_PROMPT=${FM_BACKEND_HERDR_AGENT_PROMPT:-0}
 
+# fm_backend_herdr_agent_prompt_capable: the version gate for the atomic path,
+# mirroring fm_backend_herdr_events_capable's fail-closed idiom. The env gate
+# above says "this home WANTS the atomic path"; this says "this CLIENT can serve
+# it". Both must hold, because turning the gate on against a herdr older than
+# FM_BACKEND_HERDR_MIN_AGENT_PROMPT_PROTOCOL would otherwise break every
+# agent-directed steer and brief in that home: an absent subcommand exits
+# non-zero with a non-JSON usage error, which classifies as the ambiguous
+# `failed` outcome and so refuses instead of falling back. Failing closed HERE,
+# before any call is made, keeps that home on the pane path silently.
+#
+# Only the protocol number is read, not `herdr api schema` (which
+# fm_backend_herdr_events_capable also checks): that read is ~220KB and this
+# runs on the per-send path, where the watcher's once-per-process memoization is
+# not available. The verdict is memoized per shell process instead, so a
+# long-lived daemon probes once; a herdr upgraded underneath a running daemon is
+# picked up on its next restart.
+fm_backend_herdr_agent_prompt_capable() {
+  local protocol
+  case "${FM_BACKEND_HERDR_AGENT_PROMPT_CAPABLE_CACHE:-}" in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
+  protocol=$(herdr status --json 2>/dev/null | jq -r '.client.protocol // empty' 2>/dev/null)
+  case "$protocol" in
+    ''|*[!0-9]*) FM_BACKEND_HERDR_AGENT_PROMPT_CAPABLE_CACHE=0; return 1 ;;
+  esac
+  if [ "$protocol" -lt "$FM_BACKEND_HERDR_MIN_AGENT_PROMPT_PROTOCOL" ]; then
+    FM_BACKEND_HERDR_AGENT_PROMPT_CAPABLE_CACHE=0
+    return 1
+  fi
+  FM_BACKEND_HERDR_AGENT_PROMPT_CAPABLE_CACHE=1
+  return 0
+}
+
+# fm_backend_herdr_atomic_confirm_window: the atomic path's total confirmation
+# window, echoing "<budget-seconds> <polls>".
+#
+# The pane path does not observe one window: it re-enters
+# fm_backend_herdr_wait_for_working once per Enter attempt, so its EFFECTIVE
+# budget is <retries> x fm_backend_herdr_submit_confirm_budget (3 x 0.6s = 1.8s
+# at fm-send.sh's and fm-supervise-daemon.sh's defaults). The atomic path sends
+# exactly once, so it must observe that same TOTAL window in a single pass or a
+# harness that is merely slow to start a turn under load (several agents on one
+# machine) reports unconfirmed where the path it replaces confirmed. Widening a
+# POLL window is not a re-send - the text is still delivered exactly once - so
+# this does not touch the no-retry rule below. <polls> scales by the same
+# factor, keeping the sample interval (the bound on the inherent
+# starts-and-finishes-between-two-polls gap) exactly as tight as the pane
+# path's.
+fm_backend_herdr_atomic_confirm_window() {  # <enter-sleep> <retries> -> "<budget> <polls>"
+  local sleep_s=$1 attempts=$2 polls=${FM_BACKEND_HERDR_SUBMIT_POLLS:-6} budget
+  case "$attempts" in ''|*[!0-9]*|0) attempts=1 ;; esac
+  case "$polls" in ''|*[!0-9]*|0) polls=1 ;; esac
+  budget=$(fm_backend_herdr_submit_confirm_budget "$sleep_s")
+  budget=$(awk -v b="$budget" -v n="$attempts" 'BEGIN { printf "%.4f", (b + 0) * n }' 2>/dev/null)
+  case "$budget" in ''|*[!0-9.]*) budget=0 ;; esac
+  printf '%s %s' "$budget" "$((polls * attempts))"
+}
+
 # fm_backend_herdr_agent_prompt_once: one `herdr agent prompt` call, echoing a
 # three-way outcome. NEVER called more than once per delivery - see the
 # no-retry rule in fm_backend_herdr_send_text_submit.
@@ -2143,6 +2211,13 @@ FM_BACKEND_HERDR_AGENT_PROMPT=${FM_BACKEND_HERDR_AGENT_PROMPT:-0}
 #             error code). Ambiguous about whether the text reached the agent,
 #             so the caller must NOT fall back: re-sending could deliver the
 #             same message twice.
+#
+# The error code is read from stderr twice: once from the whole capture, then -
+# only if that found nothing - from its last non-empty line. herdr writes a bare
+# error object today, but any non-JSON preamble beside it (a warning, a
+# connection notice) would make the whole-capture read fail, misclassify a
+# genuine agent_not_found as `failed`, and so silently lose the pane-path
+# fallback that agent-less panes depend on.
 fm_backend_herdr_agent_prompt_once() {  # <session> <pane> <text> -> ok|absent|failed
   local session=$1 pane=$2 text=$3 err code
   if err=$(fm_backend_herdr_cli "$session" agent prompt "$pane" "$text" 2>&1 >/dev/null); then
@@ -2150,6 +2225,10 @@ fm_backend_herdr_agent_prompt_once() {  # <session> <pane> <text> -> ok|absent|f
     return 0
   fi
   code=$(printf '%s' "$err" | jq -r '.error.code // empty' 2>/dev/null)
+  if [ -z "$code" ]; then
+    code=$(printf '%s\n' "$err" | grep -v '^[[:space:]]*$' | tail -1 \
+      | jq -r '.error.code // empty' 2>/dev/null)
+  fi
   if [ "$code" = agent_not_found ]; then
     printf 'absent'
   else
@@ -2158,23 +2237,56 @@ fm_backend_herdr_agent_prompt_once() {  # <session> <pane> <text> -> ok|absent|f
 }
 
 # fm_backend_herdr_send_text_submit: deliver <text> to <target> and confirm it
-# was submitted, echoing the shared proof-carrying verdict vocabulary
-# (empty|pending|unknown|send-failed) unchanged. Path selection is AUTOMATIC -
-# no caller passes a flag - and every rejection degrades to the pane path
-# rather than failing.
+# was submitted, echoing the shared proof-carrying verdict vocabulary. Path
+# selection is AUTOMATIC - no caller passes a flag - and every rejection
+# degrades to the pane path rather than failing.
 #
-# Selection, when FM_BACKEND_HERDR_AGENT_PROMPT=1:
+# Selection, when FM_BACKEND_HERDR_AGENT_PROMPT=1 (after the local target parse,
+# so an unparseable target still costs no herdr call at all):
+#   0. The client must be able to serve `agent prompt` at all
+#      (fm_backend_herdr_agent_prompt_capable) -> otherwise pane path, silently.
 #   1. Read the pre-send agent status ONCE (`agent get`). The pane path
-#      already paid this exact call for its own baseline, so moving it ahead
-#      of the send costs nothing; detecting "no live agent in this pane" is
-#      therefore FREE, not an extra probe. An empty read means agent_not_found
-#      or an unreadable target -> pane path.
+#      already paid this exact call for its own baseline, so on the atomic path
+#      it costs nothing; detecting "no live agent in this pane" is therefore
+#      FREE there, not an extra probe. (On a fallback the pane path does re-read
+#      its own baseline, so the agent-less case costs one extra round trip.) An
+#      empty read means agent_not_found or an unreadable target -> pane path.
 #   2. A baseline that is not legibly idle -> pane path. The atomic path has
 #      no valid confirmation signal for a busy target (see below), and the
 #      pane path's composer-state branch already owns that case.
 #   3. A legibly idle baseline -> one `agent prompt`. `absent` (the agent
 #      exited between the two calls) falls back to the pane path; any other
-#      failure returns send-failed without falling back.
+#      failure does not fall back.
+#
+# THE VERDICT MAPPING, AND WHY IT IS SHAPED THIS WAY. Two callers read these
+# verdicts with DIFFERENT retry semantics, and the mapping has to be safe for
+# both. fm-send.sh (bin/fm-send.sh) treats anything but `empty` as a loud
+# non-zero refusal and stops. fm-supervise-daemon.sh does not stop: it PRESERVES
+# the escalation buffer on any non-`empty` verdict and re-flushes it on a later
+# cycle, guarded only by a pre-injection composer-empty read. That guard is real
+# protection for the pane path, which types into the composer - a swallowed send
+# leaves the text there, the next cycle reads `pending`, and it defers. It is
+# VACUOUS here: this path never types into the composer, so the composer is
+# unconditionally empty after an unconfirmed send, the guard always passes, and
+# the digest would be silently delivered a second time. So once the single
+# `agent prompt` call has been ISSUED, this path emits exactly two verdicts:
+#
+#   empty            - a real turn was observed: confirmed submitted.
+#   sent-unconfirmed - the text was handed to the agent EXACTLY ONCE and
+#                      submission could not be confirmed, for any reason
+#                      (swallowed, ambiguous prompt failure, target unreadable
+#                      while confirming). Non-zero for fm-send.sh exactly like
+#                      `pending`, and TERMINAL for the daemon, which retires the
+#                      buffer instead of re-flushing it.
+#
+# It deliberately never emits `pending` (the daemon would re-flush it),
+# `unknown` (same), or `send-failed` (which means definitively-not-delivered in
+# the shared vocabulary and is the message most likely to make an operator
+# resend by hand - manufacturing the very duplicate steer this path exists to
+# remove). `unknown` remains reachable only BEFORE any call is made, for a
+# target that cannot be parsed, where nothing was delivered. Do not collapse
+# these back into the pane path's verdicts: the duplicate-delivery hazard is
+# reintroduced the moment a post-send verdict is one the daemon re-flushes.
 #
 # WHY THE SUBMIT CONFIRMATION IS STILL REQUIRED HERE. Measured on herdr 0.7.5
 # with real claude: `agent prompt` returns exit 0 and
@@ -2203,11 +2315,13 @@ fm_backend_herdr_agent_prompt_once() {  # <session> <pane> <text> -> ok|absent|f
 # re-send the whole message, and an unconfirmed send is genuinely ambiguous (a
 # turn that starts and finishes between two polls looks identical to a swallow
 # from outside). Re-sending on that ambiguity would deliver the same steer
-# twice, so an unconfirmed atomic send reports `pending` and stops. `pending`
-# is already a loud non-zero refusal in fm-send.sh, which is the correct
-# outcome: firstmate is told the steer did not land instead of a crewmate
-# silently receiving it twice. <retries> is therefore deliberately unused on
-# this path.
+# twice, so an unconfirmed atomic send reports `sent-unconfirmed` and stops:
+# firstmate is told the steer did not land instead of a crewmate silently
+# receiving it twice. <retries> is NOT unused, though: it sizes the
+# confirmation window so this single send observes the same total window the
+# pane path spreads across its Enter attempts (see
+# fm_backend_herdr_atomic_confirm_window). Widening a poll window is not a
+# re-send.
 #
 # The <settle> pre-Enter delay is also unused here. It exists so a slash- or
 # `$`-triggered completion popup cannot swallow the first Enter, and that
@@ -2215,12 +2329,16 @@ fm_backend_herdr_agent_prompt_once() {  # <session> <pane> <text> -> ok|absent|f
 # sent through `agent prompt` is submitted as one complete line and processed
 # by the agent immediately, with no popup-selection step in between.
 fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle>
-  local target=$1 text=$2 sleep_s=$4 raw baseline outcome verdict confirm_sleep
+  local target=$1 text=$2 retries=$3 sleep_s=$4 raw baseline outcome verdict window budget polls
   if [ "$FM_BACKEND_HERDR_AGENT_PROMPT" != 1 ]; then
     fm_backend_herdr_send_text_submit_pane "$@"
     return 0
   fi
   fm_backend_herdr_parse_target "$target" || { printf 'unknown'; return 0; }
+  if ! fm_backend_herdr_agent_prompt_capable; then
+    fm_backend_herdr_send_text_submit_pane "$@"
+    return 0
+  fi
   raw=$(fm_backend_herdr_agent_status_raw "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE")
   baseline=$(fm_backend_herdr_classify_submit_agent_status "$raw")
   if [ -z "$raw" ] || [ "$baseline" != idle ]; then
@@ -2228,17 +2346,22 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
     return 0
   fi
   outcome=$(fm_backend_herdr_agent_prompt_once "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" "$text")
-  case "$outcome" in
-    absent) fm_backend_herdr_send_text_submit_pane "$@"; return 0 ;;
-    failed) printf 'send-failed'; return 0 ;;
-  esac
-  confirm_sleep=$(fm_backend_herdr_submit_confirm_budget "$sleep_s")
+  if [ "$outcome" = absent ]; then
+    fm_backend_herdr_send_text_submit_pane "$@"
+    return 0
+  fi
+  if [ "$outcome" != ok ]; then
+    printf 'sent-unconfirmed'
+    return 0
+  fi
+  window=$(fm_backend_herdr_atomic_confirm_window "$sleep_s" "$retries")
+  budget=${window%% *}
+  polls=${window##* }
   verdict=$(fm_backend_herdr_wait_for_working "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" \
-    "$confirm_sleep" "$FM_BACKEND_HERDR_SUBMIT_POLLS")
+    "$budget" "$polls")
   case "$verdict" in
     busy) printf 'empty' ;;
-    unknown) printf 'unknown' ;;
-    *) printf 'pending' ;;
+    *) printf 'sent-unconfirmed' ;;
   esac
 }
 
@@ -2280,9 +2403,17 @@ fm_backend_herdr_classify_submit_agent_status() {  # <raw-agent_status>
 # round trip (an extra `status --json` call) that fm_backend_herdr_busy_state
 # pays on every call: fm_backend_herdr_wait_for_working polls this in a tight
 # loop right after a caller has already parsed the target and confirmed the
-# server is live (e.g. fm_backend_herdr_send_text_submit, immediately after a
-# successful send-text), so re-checking server liveness on every poll would
+# server is live (e.g. fm_backend_herdr_send_text_submit_pane, immediately after
+# a successful send-text), so re-checking server liveness on every poll would
 # only add latency without adding safety.
+#
+# ONE caller does NOT hold that precondition: fm_backend_herdr_send_text_submit's
+# pre-send baseline read on the atomic path is the FIRST herdr call of that
+# delivery and runs before any server-ensure. That is safe rather than an
+# oversight - an unreachable server yields an empty read, which routes to the
+# pane path, which does ensure the server - but it means an empty read here can
+# mean "no server" as well as "no agent", and callers must not read it as proof
+# that the pane specifically has no agent.
 fm_backend_herdr_agent_status_raw() {  # <session> <pane_id>
   local session=$1 pane_id=$2 out
   out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>/dev/null) || { printf ''; return 0; }

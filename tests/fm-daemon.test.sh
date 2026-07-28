@@ -1747,6 +1747,67 @@ test_inject_msg_defers_on_dead_shell_unknown() {
   pass "inject_msg: defers on a dead-shell/unreadable composer (unknown), never typing the escalation into a shell"
 }
 
+# Safety-critical: the composer-empty guard above is real protection ONLY for a
+# backend that TYPES into the composer - a swallowed typed send leaves the text
+# there, so the next cycle reads 'pending' and defers. A backend that submits
+# atomically (herdr's `agent prompt`, gated behind FM_BACKEND_HERDR_AGENT_PROMPT)
+# never touches the composer, so the composer is unconditionally empty after an
+# unconfirmed send: the guard passes vacuously and preserving the buffer would
+# deliver the same escalation a second time. 'sent-unconfirmed' is that
+# backend's non-retryable verdict, and the flush must RETIRE the buffer on it
+# while still reporting failure so the wedge alarm fires.
+test_escalate_flush_retires_buffer_on_non_retryable_unconfirmed_submit() {
+  local dir state calls n
+  dir=$(make_supercase inject-sent-unconfirmed)
+  state="$dir/state"
+  calls="$dir/submit-calls"; : > "$calls"
+  escalate_add "$state" "needs-decision: pick A"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    fm_backend_busy_state() { printf 'idle'; }
+    fm_backend_capture() { printf 'idle prompt\n'; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() { printf '%s\n' "$3" >> "$calls"; printf 'sent-unconfirmed'; }
+    if FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" FM_ESCALATE_BATCH_SECS=0 \
+      escalate_flush "$state"; then
+      fail "escalate_flush must still report failure for an unconfirmed submit, so the wedge alarm can fire"
+    fi
+    # A later cycle must not re-deliver what was already handed to the agent.
+    FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" FM_ESCALATE_BATCH_SECS=0 \
+      escalate_flush "$state" || true
+  ) || fail "sent-unconfirmed escalate_flush subshell failed"
+  [ -s "$state/.subsuper-escalations" ] && fail "buffer must be retired after a non-retryable unconfirmed submit, or the daemon silently delivers the same digest twice"
+  [ -e "$state/.subsuper-escalations.since" ] && fail "first-append sidecar not cleared when the buffer was retired"
+  n=$(grep -c . "$calls")
+  [ "$n" -eq 1 ] || fail "the digest must be submitted exactly once, got $n submits"
+  pass "escalate_flush: a non-retryable unconfirmed submit retires the buffer (no silent re-delivery) and still reports failure"
+}
+
+# The pane-typing backends are untouched by the branch above: 'pending' and
+# 'unknown' still PRESERVE the buffer, because for them a swallowed send really
+# does leave the text in the composer for the next cycle's guard to catch.
+test_escalate_flush_still_preserves_buffer_on_pending() {
+  local dir state
+  dir=$(make_supercase inject-pending-preserved)
+  state="$dir/state"
+  escalate_add "$state" "needs-decision: pick A"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    fm_backend_busy_state() { printf 'idle'; }
+    fm_backend_capture() { printf 'idle prompt\n'; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() { printf 'pending'; }
+    if FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET="sess:w1" FM_ESCALATE_BATCH_SECS=0 \
+      escalate_flush "$state"; then
+      fail "escalate_flush should report failure on a pending submit"
+    fi
+  ) || fail "pending escalate_flush subshell failed"
+  [ -s "$state/.subsuper-escalations" ] || fail "a pending submit must still PRESERVE the buffer for the next cycle"
+  pass "escalate_flush: 'pending' still preserves the buffer, so composer-typing backends keep their existing retry behavior"
+}
+
 test_inject_msg_defers_on_unrecognized_composer_state() {
   local dir state
   dir=$(make_supercase inject-future-composer-state)
@@ -1863,4 +1924,6 @@ test_inject_msg_herdr_composer_guard_defers
 test_inject_msg_herdr_pane_gone_defers
 test_inject_msg_herdr_submits_through_backend_dispatch
 test_inject_msg_defers_on_dead_shell_unknown
+test_escalate_flush_retires_buffer_on_non_retryable_unconfirmed_submit
+test_escalate_flush_still_preserves_buffer_on_pending
 test_inject_msg_defers_on_unrecognized_composer_state
