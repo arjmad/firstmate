@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Behavior tests for fm-spawn.sh's explicit existing-worktree relaunch path.
+# Behavior tests for fm-spawn.sh's shared recorded-worktree ownership probe.
 #
 # A relaunch must start the worker in the caller-selected worktree without
-# asking treehouse to allocate another slot. The ordinary isolation assertion
-# remains authoritative and must refuse both the primary checkout and paths
-# that are not git worktree roots before any endpoint is created.
+# asking treehouse to allocate another slot. Ordinary allocation must apply the
+# same probe before reset and still allow a confidently dead stale owner. The
+# isolation assertion remains authoritative and must refuse both the primary
+# checkout and paths that are not git worktree
+# roots before any endpoint is created.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -23,7 +25,11 @@ set -u
 case "${1:-}" in
   display-message)
     case "$*" in
-      *pane_current_path*) printf 'unexpected-pane-current-path-read\n'; exit 1 ;;
+      *pane_current_path*)
+        [ -n "${FM_FAKE_PANE_PATH:-}" ] || { printf 'unexpected-pane-current-path-read\n'; exit 1; }
+        printf '%s\n' "$FM_FAKE_PANE_PATH"
+        exit 0
+        ;;
       *pane_current_command*) printf '%s\n' "${FM_FAKE_PANE_COMMAND:-zsh}"; exit 0 ;;
       *pane_id*) printf '%%1\n'; exit 0 ;;
       *) printf 'firstmate\n'; exit 0 ;;
@@ -44,7 +50,20 @@ SH
   chmod +x "$fakebin/tmux"
   cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
-printf 'treehouse was executed directly\n' >> "${FM_TREEHOUSE_LOG:?}"
+set -u
+{ printf 'treehouse'; for arg in "$@"; do printf '\x1f%s' "$arg"; done; printf '\n'; } >> "${FM_TREEHOUSE_LOG:?}"
+case "${1:-}:${2:-}" in
+  status:)
+    [ -z "${FM_FAKE_TREEHOUSE_AVAILABLE_PATH:-}" ] || \
+      printf '1     available    %s\n' "$FM_FAKE_TREEHOUSE_AVAILABLE_PATH"
+    exit 0
+    ;;
+  enter:--print-path)
+    [ "${3:-}" = 1 ] || exit 2
+    printf '%s\n' "${FM_FAKE_TREEHOUSE_AVAILABLE_PATH:-}"
+    exit 0
+    ;;
+esac
 exit 99
 SH
   chmod +x "$fakebin/treehouse"
@@ -144,6 +163,8 @@ EOF
   # fm_backend_agent_alive classifier sees for any endpoint this case probes.
   # A bare shell is the default, so every case starts from "confidently dead".
   PANE_COMMAND=zsh
+  PANE_PATH=
+  TREEHOUSE_AVAILABLE_PATH=
   # Windows the fake tmux reports in its session inventory, i.e. the endpoints
   # that still EXIST. fm_backend_tmux_agent_state only trusts a foreground-command
   # read for a window it finds there, and reads an absent one as gone - which is
@@ -169,7 +190,8 @@ run_spawn_argv() {
     FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux TMUX="fake,1,0" \
     FM_TMUX_LOG="$TMUX_LOG" FM_TREEHOUSE_LOG="$TREEHOUSE_LOG" \
     FM_HERDR_LOG="$HERDR_LOG" FM_ZELLIJ_LOG="$ZELLIJ_LOG" \
-    FM_FAKE_PANE_COMMAND="$PANE_COMMAND" \
+    FM_FAKE_PANE_COMMAND="$PANE_COMMAND" FM_FAKE_PANE_PATH="$PANE_PATH" \
+    FM_FAKE_TREEHOUSE_AVAILABLE_PATH="$TREEHOUSE_AVAILABLE_PATH" \
     FM_FAKE_TMUX_WINDOWS="$TMUX_WINDOWS" \
     FM_FAKE_HERDR_MODE="$HERDR_MODE" \
     FM_FAKE_HERDR_AGENT_STATUS="$HERDR_AGENT_STATUS" \
@@ -235,6 +257,11 @@ EOF
 run_spawn() {
   local id=$1 reuse_path=$2
   run_spawn_argv "$id" "$PROJ_DIR" claude --reuse-worktree "$reuse_path"
+}
+
+run_ordinary_spawn() {
+  local id=$1
+  run_spawn_argv "$id" "$PROJ_DIR" claude
 }
 
 # register_live_tmux_window <owner-id>: report that owner's tmux window as still
@@ -492,6 +519,66 @@ test_worktree_owned_by_dead_task_is_reclaimed() {
     "the reclaimed worktree was not recorded for the relaunched task"
   rm -rf "/tmp/fm-$id"
   pass "stale metadata over a dead endpoint still permits the relaunch"
+}
+
+assert_ordinary_allocation_refuses_live_owner() {
+  local name=$1 dirty=$2 id owner rec out status
+  id="allocate-live-$name-z8a"
+  owner="owner-live-$name-z8a"
+  rec=$(make_case "allocate-live-$name" "$id")
+  read_case "$rec"
+  write_owner_meta "$owner" "$WT_REAL"
+  register_live_tmux_window "$owner"
+  PANE_COMMAND=claude
+  TREEHOUSE_AVAILABLE_PATH=$WT_REAL
+  if [ "$dirty" = 1 ]; then
+    printf 'uncommitted owner state\n' > "$WT_DIR/owner-dirty.txt"
+    [ -n "$(git -C "$WT_DIR" status --porcelain)" ] || fail "dirty allocation fixture stayed clean"
+  fi
+
+  out=$(run_ordinary_spawn "$id")
+  status=$?
+  expect_code 1 "$status" "ordinary allocation must refuse a $name worktree recorded by a live task"
+  assert_contains "$out" "reports allocation candidate $WT_REAL as available" \
+    "ordinary allocation refusal did not identify the vulnerable pool candidate"
+  assert_contains "$out" "task $owner still records it" \
+    "ordinary allocation refusal did not name the recorded owner"
+  assert_contains "$out" "endpoint reported as alive" \
+    "ordinary allocation refusal did not preserve the shared owner probe verdict"
+  assert_not_contains "$(cat "$TMUX_LOG")" "new-window" \
+    "ordinary allocation created an endpoint before checking pool ownership"
+  assert_not_contains "$(cat "$TMUX_LOG")" "treehouse get" \
+    "ordinary allocation invoked treehouse get before checking pool ownership"
+  pass "ordinary allocation refuses a $name worktree recorded by a live task before reset"
+}
+
+test_ordinary_allocation_refuses_clean_live_owner() {
+  assert_ordinary_allocation_refuses_live_owner clean 0
+}
+
+test_ordinary_allocation_refuses_dirty_live_owner() {
+  assert_ordinary_allocation_refuses_live_owner dirty 1
+}
+
+test_ordinary_allocation_reclaims_confidently_dead_owner() {
+  local id owner rec out status
+  id=allocate-dead-owner-z8b
+  owner='owner-dead-allocate-z8b'
+  rec=$(make_case allocate-dead-owner "$id")
+  read_case "$rec"
+  write_owner_meta "$owner" "$WT_REAL"
+  TREEHOUSE_AVAILABLE_PATH=$WT_REAL
+  PANE_PATH=$WT_REAL
+
+  out=$(run_ordinary_spawn "$id")
+  status=$?
+  expect_code 0 "$status" "ordinary allocation must permit a confidently dead stale owner"$'\n'"$out"
+  assert_grep "worktree=$WT_REAL" "$HOME_DIR/state/$id.meta" \
+    "ordinary allocation did not record the reclaimed worktree"
+  assert_contains "$(cat "$TMUX_LOG")" "treehouse get" \
+    "ordinary allocation did not enter the selected pool worktree"
+  rm -rf "/tmp/fm-$id"
+  pass "ordinary allocation permits stale metadata only after the shared owner probe proves the endpoint dead"
 }
 
 test_same_task_relaunch_over_live_endpoint_is_refused() {
@@ -922,6 +1009,9 @@ test_foreign_repository_worktree_is_refused
 test_worktree_owned_by_live_task_is_refused
 test_worktree_owned_by_unreadable_task_is_refused
 test_worktree_owned_by_dead_task_is_reclaimed
+test_ordinary_allocation_refuses_clean_live_owner
+test_ordinary_allocation_refuses_dirty_live_owner
+test_ordinary_allocation_reclaims_confidently_dead_owner
 test_same_task_relaunch_over_live_endpoint_is_refused
 test_same_task_relaunch_over_ambiguous_endpoint_is_refused
 test_same_task_relaunch_over_dead_endpoint_is_reclaimed

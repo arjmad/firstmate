@@ -21,26 +21,29 @@
 #   operational endpoint, tab label, ownership, and selector metadata remain task-id
 #   based. title= is recorded in state/<id>.meta only when the flag was explicit.
 #   tmux keeps its fm-<id> window name because that name is also its recorded target.
+#   Ordinary treehouse allocation first enumerates the pool's available candidates and
+#   applies the same recorded-owner probe used by --reuse-worktree before treehouse can
+#   reset one. The selected path is probed again before launch as a race and
+#   provider-contract backstop.
 #   --reuse-worktree <path> is a single ship/scout relaunch path for a caller-selected
 #   existing git worktree. It resolves and validates the path before endpoint creation,
 #   starts the task there, and skips treehouse get. The path must be the worktree root,
 #   must remain distinct from the primary project checkout, and must belong to the same
-#   repository as <project-dir>; the ordinary isolation assertion is mandatory. It is
-#   also refused when any task, this one included, already records the same path and
-#   that task's endpoint is not confidently dead, so stale metadata can be reclaimed but
-#   a live worker is never replaced and two live agents can never share files. That owner
-#   probe is read-only: it never starts a backend runtime in order to inspect one, and
-#   only a runtime that is demonstrably down or an endpoint the runtime itself reports as
-#   gone counts as dead. Being unable to ask - the recorded backend's CLI missing from
-#   this process's PATH, an errored or unparseable probe, an unrecognized backend -
-#   refuses on every backend and names the condition, because a runtime this spawn
-#   cannot see may still be running the recorded agent.
-#   zellij and cmux have no verified agent-liveness probe yet, so a
-#   relaunch into a worktree whose recorded endpoint is still present there is refused
-#   until the operator closes that pane or workspace - an honest precondition of those
-#   experimental backends, not of the flag.
-#   It cannot be combined with batch, --secondmate, or
-#   Orca, whose backend owns worktree creation. Without this flag, allocation is unchanged.
+#   repository as <project-dir>; the ordinary isolation assertion is mandatory. Both
+#   allocation paths refuse when any task, this one included, already records the same
+#   path and that task's endpoint is not confidently dead, so stale metadata can be
+#   reclaimed but a live worker is never replaced and two live agents can never share
+#   files. That owner probe is read-only: it never starts a backend runtime in order to
+#   inspect one, and only a runtime that is demonstrably down or an endpoint the runtime
+#   itself reports as gone counts as dead. Being unable to ask - the recorded backend's
+#   CLI missing from this process's PATH, an errored or unparseable probe, an unrecognized
+#   backend - refuses on every backend and names the condition, because a runtime this
+#   spawn cannot see may still be running the recorded agent.
+#   zellij and cmux have no verified agent-liveness probe yet, so a recorded owner whose
+#   endpoint is still present there is refused until the operator closes that pane or
+#   workspace - an honest precondition of those experimental backends.
+#   --reuse-worktree cannot be combined with batch, --secondmate, or Orca, whose backend
+#   owns worktree creation.
 #   Local model endpoints: for a template-based claude launch, when --model matches
 #   an entry in config/model-endpoints.json, the SAME claude CLI is redirected at a
 #   local Anthropic-shaped proxy (endpoint env prefix + --strict-mcp-config; an
@@ -1177,8 +1180,8 @@ validate_reuse_worktree_membership() {  # <resolved-worktree>
   fi
 }
 
-validate_reuse_worktree_exclusive() {  # <resolved-worktree>
-  local wt_real=$1 meta other_id other_wt other_backend other_target record liveness reason detail remedy missing_tool
+validate_recorded_worktree_exclusive() {  # <source> <resolved-worktree>
+  local source=$1 wt_real=$2 meta other_id other_wt other_backend other_target record liveness reason detail remedy missing_tool
   [ -d "$STATE" ] || return 0
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] || continue
@@ -1234,13 +1237,47 @@ validate_reuse_worktree_exclusive() {  # <resolved-worktree>
         ;;
       *) detail="has an endpoint reported as $liveness" ;;
     esac
-    if [ "$other_id" = "$ID" ]; then
-      echo "error: --reuse-worktree path $wt_real is already recorded by this task's own prior launch, which $detail; refusing to replace a worker that may still be running, which would orphan its endpoint and put two agents in one checkout. $remedy Only a confidently dead endpoint releases the path." >&2
+    if [ "$source" = reuse ]; then
+      if [ "$other_id" = "$ID" ]; then
+        echo "error: --reuse-worktree path $wt_real is already recorded by this task's own prior launch, which $detail; refusing to replace a worker that may still be running, which would orphan its endpoint and put two agents in one checkout. $remedy Only a confidently dead endpoint releases the path." >&2
+      else
+        echo "error: --reuse-worktree path $wt_real is already recorded by task $other_id, which $detail; refusing to start a second agent in a worktree another task may still own. $remedy Only a confidently dead endpoint releases the path." >&2
+      fi
+    elif [ "$source" = treehouse-candidate ]; then
+      echo "error: treehouse reports allocation candidate $wt_real as available, but task $other_id still records it and $detail; refusing before treehouse can reset a worktree that another task may still own. $remedy Only a confidently dead endpoint releases the path." >&2
     else
-      echo "error: --reuse-worktree path $wt_real is already recorded by task $other_id, which $detail; refusing to start a second agent in a worktree another task may still own. $remedy Only a confidently dead endpoint releases the path." >&2
+      echo "error: treehouse allocated $wt_real, but task $other_id still records it and $detail; refusing to launch a second worker in a worktree another task may still own. $remedy Only a confidently dead endpoint releases the path." >&2
     fi
-    exit 1
+    return 1
   done
+}
+
+# treehouse resets a selected worktree before its interactive get exposes the path.
+# Read its available candidates first and apply the same metadata owner probe used
+# by --reuse-worktree, so a live recorded owner is refused before reset can occur.
+# A confidently dead endpoint is deliberately reclaimable, which prevents stale
+# metadata from poisoning a genuinely available pool slot.
+validate_treehouse_allocation_candidates() {
+  local listing name slot_status _ candidate candidate_real
+  listing=$(cd "$PROJ_ABS" && NO_COLOR=1 CLICOLOR=0 treehouse status) || {
+    echo "error: treehouse status failed while checking allocation candidates; refusing to allocate without proving the available slots are unowned" >&2
+    return 1
+  }
+  while read -r name slot_status _; do
+    [ "$slot_status" = available ] || continue
+    candidate=$(cd "$PROJ_ABS" && treehouse enter --print-path "$name") || {
+      echo "error: treehouse could not resolve available worktree $name while checking recorded ownership; refusing to allocate" >&2
+      return 1
+    }
+    [ -n "$candidate" ] || {
+      echo "error: treehouse reported an empty path for available worktree $name; refusing to allocate" >&2
+      return 1
+    }
+    candidate_real=$(real_path_or_raw "$candidate")
+    validate_recorded_worktree_exclusive treehouse-candidate "$candidate_real" || return 1
+  done <<EOF
+$listing
+EOF
 }
 
 SPAWN_CWD=$PROJ_ABS
@@ -1255,8 +1292,11 @@ if [ "$REUSE_WORKTREE_SET" -eq 1 ]; then
   }
   validate_spawn_worktree "--reuse-worktree path" "$REUSE_WORKTREE"
   validate_reuse_worktree_membership "$WT"
-  validate_reuse_worktree_exclusive "$WT"
+  validate_recorded_worktree_exclusive reuse "$WT" || exit 1
   SPAWN_CWD=$WT
+fi
+if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] && [ "$REUSE_WORKTREE_SET" -eq 0 ]; then
+  validate_treehouse_allocation_candidates || exit 1
 fi
 
 herdr_projection_meta_field_exact() {  # <meta> <key>
@@ -1684,6 +1724,7 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] && [ "$REUSE_WORKTREE_SET
   fi
 
   validate_spawn_worktree "treehouse get" "$T"
+  validate_recorded_worktree_exclusive treehouse-selected "$(real_path_or_raw "$WT")" || exit 1
 fi
 
 # Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/. Go won't
