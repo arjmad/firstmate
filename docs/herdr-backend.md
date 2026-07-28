@@ -257,6 +257,7 @@ It is durable: it does not depend on the worker shell that created the lab, and 
 When Herdr is unreachable, teardown warns with the exact leftover ownership-record paths and still returns the worktree; it never weakens an unlanded-work refusal.
 
 Reaping is the only cross-task sweep and is a dry run unless `--apply` is given.
+It considers only guarded `fm-lab-` names from the live session list, so the default session and unrelated sessions are never candidates.
 It destroys a session only on positive same-home ownership plus death: exactly one task record in the effective `FM_HOME` claims the session and that record's recovery-grade agent state is `dead` or `missing`.
 The deterministic task token in the session name is the authoritative claim; the pre-token label prefix is consulted only for sessions no token prefix claims, where a truncated label can leave two records claiming one session and the verdict stays unproven.
 A session this home holds no task record for is unproven, never dead.
