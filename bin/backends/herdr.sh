@@ -160,7 +160,11 @@ fm_backend_herdr_workspace_label() {
 # var is kept alongside it - harmless, self-documenting, and forward-
 # compatible if a future herdr build honors it. Never used by
 # fm_backend_herdr_version_check, which is intentionally session-independent
-# (reads only .client.* fields).
+# (reads only .client.* fields). Anything reading .server.* MUST route through
+# here for exactly the reason above - that is why the server half of the
+# `tab create --env` protocol floor is asserted by
+# fm_backend_herdr_server_ensure, on its session-scoped status read, rather
+# than alongside the client half in version_check.
 fm_backend_herdr_cli() {  # <session> <herdr-subcommand-and-args...>
   local session=$1
   shift
@@ -232,21 +236,17 @@ fm_backend_herdr_tool_check() {
 }
 
 # fm_backend_herdr_version_check: refuse loudly on a missing/incompatible
-# herdr client or on a stale running herdr server. Verified locally: v0.7.5,
-# protocol 17 for both (herdr status --json's .client.protocol and, when a
-# daemon is up, .server.protocol).
+# herdr client. Verified locally: v0.7.5, protocol 17 (herdr status --json's
+# .client.protocol; client info is session-independent, unlike .server).
 # The floor is the version that carries `tab create --env`; see
-# FM_BACKEND_HERDR_MIN_PROTOCOL. Both halves matter: a current client speaking
-# to a pre-0.7.5 daemon has its unknown env field dropped from the create RPC,
-# and with no typed fallback that silent credential loss surfaces only as the
-# crewmate's 401 retry loop.
-# The server half is read ONLY when .server.running is exactly true. Server
-# info is session-dependent and optional, so an absent, false, or unreadable
-# .server, or a running server whose protocol cannot be parsed, skips that half
-# rather than refusing - a spurious refusal here would block every spawn.
+# FM_BACKEND_HERDR_MIN_PROTOCOL. The matching SERVER-side assertion cannot live
+# here: a bare `herdr status --json` is ambient, and .server.* would describe
+# whatever daemon happens to be bound rather than the one that will host the
+# pane. fm_backend_herdr_server_ensure owns it, on its existing session-scoped
+# read.
 fm_backend_herdr_version_check() {
   fm_backend_herdr_tool_check || return 1
-  local status protocol version server_running server_protocol server_version
+  local status protocol version
   status=$(herdr status --json 2>/dev/null) || { echo "error: 'herdr status --json' failed; is herdr installed correctly?" >&2; return 1; }
   protocol=$(printf '%s' "$status" | jq -r '.client.protocol // empty' 2>/dev/null)
   version=$(printf '%s' "$status" | jq -r '.client.version // empty' 2>/dev/null)
@@ -259,20 +259,6 @@ fm_backend_herdr_version_check() {
   if [ "$protocol" -lt "$FM_BACKEND_HERDR_MIN_PROTOCOL" ]; then
     echo "error: herdr protocol $protocol (version ${version:-unknown}) is older than the verified minimum $FM_BACKEND_HERDR_MIN_PROTOCOL (herdr 0.7.5, the first release whose 'tab create --env' can carry a crewmate's launch environment natively); update herdr (herdr update) before using backend=herdr" >&2
     return 1
-  fi
-  server_running=$(printf '%s' "$status" | jq -r 'if .server.running == true then "true" else empty end' 2>/dev/null)
-  if [ "$server_running" = true ]; then
-    server_protocol=$(printf '%s' "$status" | jq -r '.server.protocol // empty' 2>/dev/null)
-    server_version=$(printf '%s' "$status" | jq -r '.server.version // empty' 2>/dev/null)
-    case "$server_protocol" in
-      ''|*[!0-9]*) : ;;
-      *)
-        if [ "$server_protocol" -lt "$FM_BACKEND_HERDR_MIN_PROTOCOL" ]; then
-          echo "error: the running herdr server speaks protocol $server_protocol (version ${server_version:-unknown}), older than the verified minimum $FM_BACKEND_HERDR_MIN_PROTOCOL (herdr 0.7.5, the first release whose 'tab create --env' can carry a crewmate's launch environment natively); a stale server silently drops the launch environment and the crewmate starts with no credential, so restart it (herdr server stop, then let the next command start it, or 'herdr update' first) before using backend=herdr" >&2
-          return 1
-        fi
-        ;;
-    esac
   fi
   return 0
 }
@@ -899,14 +885,51 @@ fm_backend_herdr_projection_order_best_effort() {  # <session> <created-workspac
 # has-session || tmux new-session -d`. Verified: a bare socket CLI call does
 # NOT auto-start the server, so this must run before any workspace/tab/pane
 # call. Bounded poll for the server to report running.
+#
+# This is also where the SERVER half of the `tab create --env` floor is
+# asserted (fm_backend_herdr_version_check owns the client half). It belongs
+# here and nowhere else: this read is already scoped to <session> through
+# fm_backend_herdr_cli, so it describes the exact daemon that will host the
+# pane rather than whatever daemon an ambient query happens to reach, it runs
+# before every workspace/tab/pane call, and it costs no extra request - the
+# same status blob already being read for .server.running carries
+# .server.protocol. A pre-0.7.5 daemon drops the unknown env field from the
+# create RPC, and with no typed fallback that silent credential loss surfaces
+# only as the crewmate's 401 retry loop. Asserted at both points that observe
+# a running server, so a stale PRE-EXISTING daemon is caught on the fast path.
+# A running server whose protocol cannot be parsed is left alone rather than
+# refused: a spurious refusal here would block every spawn.
+
+# fm_backend_herdr_server_protocol_ok: 0 unless <status-json> describes a
+# running server whose readable protocol is below the floor.
+fm_backend_herdr_server_protocol_ok() {  # <session> <status-json>
+  local session=$1 status=$2 protocol version
+  protocol=$(printf '%s' "$status" | jq -r '.server.protocol // empty' 2>/dev/null)
+  case "$protocol" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  [ "$protocol" -lt "$FM_BACKEND_HERDR_MIN_PROTOCOL" ] || return 0
+  version=$(printf '%s' "$status" | jq -r '.server.version // empty' 2>/dev/null)
+  echo "error: the herdr server running for session '$session' speaks protocol $protocol (version ${version:-unknown}), older than the verified minimum $FM_BACKEND_HERDR_MIN_PROTOCOL (herdr 0.7.5, the first release whose 'tab create --env' can carry a crewmate's launch environment natively); a stale server silently drops the launch environment, so the crewmate would start with no credential. Update herdr ('herdr update'), then restart that session's server ONLY through the guarded lifecycle path (bin/fm-herdr-lab.sh for lab sessions; docs/herdr-backend.md 'Destructive lab safety') - an ambient server-stop is forbidden here and would reach the captain's fleet." >&2
+  return 1
+}
+
 fm_backend_herdr_server_ensure() {  # <session>
-  local session=$1 running out i
-  running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
-  [ "$running" = "true" ] && return 0
+  local session=$1 status running out i
+  status=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null)
+  running=$(printf '%s' "$status" | jq -r '.server.running // false' 2>/dev/null)
+  if [ "$running" = "true" ]; then
+    fm_backend_herdr_server_protocol_ok "$session" "$status" || return 1
+    return 0
+  fi
   ( fm_backend_herdr_cli "$session" server >/dev/null 2>&1 & ) || return 1
   for i in $(seq 1 20); do
-    running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
-    [ "$running" = "true" ] && return 0
+    status=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null)
+    running=$(printf '%s' "$status" | jq -r '.server.running // false' 2>/dev/null)
+    if [ "$running" = "true" ]; then
+      fm_backend_herdr_server_protocol_ok "$session" "$status" || return 1
+      return 0
+    fi
     sleep 0.5
   done
   echo "error: herdr server for session '$session' did not report running within 10s" >&2
