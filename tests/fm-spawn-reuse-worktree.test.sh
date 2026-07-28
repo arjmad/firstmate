@@ -3,9 +3,11 @@
 #
 # A relaunch must start the worker in the caller-selected worktree without
 # asking treehouse to allocate another slot. Ordinary allocation must apply the
-# same probe before reset and still allow a confidently dead stale owner. The
-# isolation assertion remains authoritative and must refuse both the primary
-# checkout and paths that are not git worktree
+# same probe before reset and still allow a confidently dead stale owner, exclude
+# only the contested candidates rather than every spawn, warn loudly when it cannot
+# read treehouse's status vocabulary, and close its own endpoint when the
+# post-allocation backstop refuses. The isolation assertion remains authoritative and
+# must refuse both the primary checkout and paths that are not git worktree
 # roots before any endpoint is created.
 set -u
 
@@ -48,20 +50,46 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
+  # A treehouse CLI whose pool is described by FM_FAKE_TREEHOUSE_ROWS, one
+  # `<name>|<status>|<path>` line per slot, rendered in the column layout real
+  # treehouse v2.0.1 uses (name, status word, path). FM_FAKE_TREEHOUSE_AVAILABLE_PATH
+  # is the single-available-slot shorthand. An empty pool answers exactly as the real
+  # CLI does, so the guard's empty-pool short-circuit is exercised rather than mocked.
   cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
 set -u
 { printf 'treehouse'; for arg in "$@"; do printf '\x1f%s' "$arg"; done; printf '\n'; } >> "${FM_TREEHOUSE_LOG:?}"
+rows=${FM_FAKE_TREEHOUSE_ROWS:-}
+if [ -z "$rows" ] && [ -n "${FM_FAKE_TREEHOUSE_AVAILABLE_PATH:-}" ]; then
+  rows="1|available|$FM_FAKE_TREEHOUSE_AVAILABLE_PATH"
+fi
 case "${1:-}:${2:-}" in
+  --version:*|-v:*)
+    printf '%s\n' "${FM_FAKE_TREEHOUSE_VERSION:-v2.0.1}"
+    exit 0
+    ;;
   status:)
-    [ -z "${FM_FAKE_TREEHOUSE_AVAILABLE_PATH:-}" ] || \
-      printf '1     available    %s\n' "$FM_FAKE_TREEHOUSE_AVAILABLE_PATH"
+    if [ -z "$rows" ]; then
+      printf ' No worktrees in pool.\n'
+      exit 0
+    fi
+    while IFS='|' read -r name slot_status path; do
+      [ -n "$name" ] || continue
+      printf '%-4s  %-10s  %s\n' "$name" "$slot_status" "$path"
+    done <<EOF
+$rows
+EOF
     exit 0
     ;;
   enter:--print-path)
-    [ "${3:-}" = 1 ] || exit 2
-    printf '%s\n' "${FM_FAKE_TREEHOUSE_AVAILABLE_PATH:-}"
-    exit 0
+    while IFS='|' read -r name slot_status path; do
+      [ "$name" = "${3:-}" ] || continue
+      printf '%s\n' "$path"
+      exit 0
+    done <<EOF
+$rows
+EOF
+    exit 2
     ;;
 esac
 exit 99
@@ -165,6 +193,8 @@ EOF
   PANE_COMMAND=zsh
   PANE_PATH=
   TREEHOUSE_AVAILABLE_PATH=
+  TREEHOUSE_ROWS=
+  TREEHOUSE_VERSION=v2.0.1
   # Windows the fake tmux reports in its session inventory, i.e. the endpoints
   # that still EXIST. fm_backend_tmux_agent_state only trusts a foreground-command
   # read for a window it finds there, and reads an absent one as gone - which is
@@ -192,6 +222,8 @@ run_spawn_argv() {
     FM_HERDR_LOG="$HERDR_LOG" FM_ZELLIJ_LOG="$ZELLIJ_LOG" \
     FM_FAKE_PANE_COMMAND="$PANE_COMMAND" FM_FAKE_PANE_PATH="$PANE_PATH" \
     FM_FAKE_TREEHOUSE_AVAILABLE_PATH="$TREEHOUSE_AVAILABLE_PATH" \
+    FM_FAKE_TREEHOUSE_ROWS="$TREEHOUSE_ROWS" \
+    FM_FAKE_TREEHOUSE_VERSION="$TREEHOUSE_VERSION" \
     FM_FAKE_TMUX_WINDOWS="$TMUX_WINDOWS" \
     FM_FAKE_HERDR_MODE="$HERDR_MODE" \
     FM_FAKE_HERDR_AGENT_STATUS="$HERDR_AGENT_STATUS" \
@@ -579,6 +611,110 @@ test_ordinary_allocation_reclaims_confidently_dead_owner() {
     "ordinary allocation did not enter the selected pool worktree"
   rm -rf "/tmp/fm-$id"
   pass "ordinary allocation permits stale metadata only after the shared owner probe proves the endpoint dead"
+}
+
+# add_pool_worktree <suffix>: a second worktree of the same project, so a case can
+# describe a pool holding more than one available slot.
+add_pool_worktree() {
+  local suffix=$1 path
+  path="$CASE_DIR/pool worktree $suffix"
+  git -C "$PROJ_DIR" worktree add --quiet -b "fm/pool-$suffix" "$path"
+  (cd "$path" && pwd -P)
+}
+
+test_ordinary_allocation_excludes_one_contested_candidate() {
+  local id owner rec out status safe_wt
+  id=allocate-mixed-pool-z8c
+  owner='owner-live-mixed-z8c'
+  rec=$(make_case allocate-mixed-pool "$id")
+  read_case "$rec"
+  safe_wt=$(add_pool_worktree mixed)
+  write_owner_meta "$owner" "$WT_REAL"
+  register_live_tmux_window "$owner"
+  PANE_COMMAND=claude
+  TREEHOUSE_ROWS="1|available|$WT_REAL
+2|available|$safe_wt"
+  PANE_PATH=$safe_wt
+
+  out=$(run_ordinary_spawn "$id")
+  status=$?
+  expect_code 0 "$status" "one contested candidate must not block a spawn that still has a safe candidate"$'\n'"$out"
+  assert_contains "$out" "excluding 1 of 2 available treehouse worktree" \
+    "the spawn did not report which pool slots it excluded"
+  assert_contains "$out" "reports allocation candidate $WT_REAL as available" \
+    "the exclusion notice did not name the excluded slot"
+  assert_contains "$out" "task $owner still records it" \
+    "the exclusion notice did not give the reason the slot was excluded"
+  assert_grep "worktree=$safe_wt" "$HOME_DIR/state/$id.meta" \
+    "the spawn did not record the safe pool worktree"
+  rm -rf "/tmp/fm-$id"
+  pass "a single contested candidate is excluded rather than blocking every ordinary spawn"
+}
+
+test_ordinary_allocation_warns_on_unrecognized_status_format() {
+  local id rec out status
+  id=allocate-format-drift-z8d
+  rec=$(make_case allocate-format-drift "$id")
+  read_case "$rec"
+  TREEHOUSE_ROWS="1|slumbering|$WT_REAL"
+  TREEHOUSE_VERSION=v9.9.9-unreleased
+  PANE_PATH=$WT_REAL
+
+  out=$(run_ordinary_spawn "$id")
+  status=$?
+  expect_code 0 "$status" "an unrecognized treehouse status vocabulary must warn, not block the spawn"$'\n'"$out"
+  assert_contains "$out" "TREEHOUSE STATUS FORMAT NOT RECOGNIZED" \
+    "the guard degraded silently instead of warning that it checked nothing"
+  assert_contains "$out" "observed treehouse version: v9.9.9-unreleased" \
+    "the format warning did not name the observed treehouse version"
+  assert_contains "$out" "slumbering" \
+    "the format warning did not include the unparsed treehouse status output"
+  rm -rf "/tmp/fm-$id"
+  pass "an unrecognized treehouse status vocabulary warns loudly and still allocates"
+}
+
+test_post_allocation_backstop_closes_its_endpoint() {
+  local id owner rec out status
+  id=allocate-backstop-z8e
+  owner='owner-live-backstop-z8e'
+  rec=$(make_case allocate-backstop "$id")
+  read_case "$rec"
+  write_owner_meta "$owner" "$WT_REAL"
+  register_live_tmux_window "$owner"
+  PANE_COMMAND=claude
+  # in-use is a status the pre-check recognizes but never treats as a candidate,
+  # so only the post-get backstop can catch this selection.
+  TREEHOUSE_ROWS="1|in-use|$WT_REAL"
+  PANE_PATH=$WT_REAL
+
+  out=$(run_ordinary_spawn "$id")
+  status=$?
+  expect_code 1 "$status" "the backstop must refuse a selected worktree a live task still records"$'\n'"$out"
+  assert_contains "$out" "treehouse allocated $WT_REAL" \
+    "the backstop refusal did not name the allocated worktree"
+  assert_contains "$out" "closing this spawn's endpoint" \
+    "the backstop refusal did not report tearing its own endpoint down"
+  assert_contains "$(cat "$TMUX_LOG")" "kill-window" \
+    "the backstop left its window alive, pinning the pool slot in-use forever"
+  rm -rf "/tmp/fm-$id"
+  pass "the post-allocation backstop closes its endpoint instead of pinning the pool slot"
+}
+
+test_ordinary_allocation_names_a_missing_treehouse_cli() {
+  local id rec out status
+  id=allocate-no-treehouse-z8f
+  rec=$(make_case allocate-no-treehouse "$id")
+  read_case "$rec"
+  hide_tool_from_spawn_path treehouse
+
+  out=$(run_ordinary_spawn "$id")
+  status=$?
+  expect_code 1 "$status" "allocation must refuse when it cannot run the treehouse CLI at all"
+  assert_contains "$out" "the treehouse CLI is not on this process's PATH" \
+    "the refusal did not say the treehouse CLI was simply missing"
+  assert_not_contains "$out" "treehouse status failed" \
+    "a missing CLI was reported as a generic treehouse status failure"
+  pass "a missing treehouse CLI is named rather than reported as a status failure"
 }
 
 test_same_task_relaunch_over_live_endpoint_is_refused() {
@@ -1012,6 +1148,10 @@ test_worktree_owned_by_dead_task_is_reclaimed
 test_ordinary_allocation_refuses_clean_live_owner
 test_ordinary_allocation_refuses_dirty_live_owner
 test_ordinary_allocation_reclaims_confidently_dead_owner
+test_ordinary_allocation_excludes_one_contested_candidate
+test_ordinary_allocation_warns_on_unrecognized_status_format
+test_post_allocation_backstop_closes_its_endpoint
+test_ordinary_allocation_names_a_missing_treehouse_cli
 test_same_task_relaunch_over_live_endpoint_is_refused
 test_same_task_relaunch_over_ambiguous_endpoint_is_refused
 test_same_task_relaunch_over_dead_endpoint_is_reclaimed

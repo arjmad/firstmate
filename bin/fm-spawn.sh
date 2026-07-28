@@ -23,8 +23,15 @@
 #   tmux keeps its fm-<id> window name because that name is also its recorded target.
 #   Ordinary treehouse allocation first enumerates the pool's available candidates and
 #   applies the same recorded-owner probe used by --reuse-worktree before treehouse can
-#   reset one. The selected path is probed again before launch as a race and
-#   provider-contract backstop.
+#   reset one. A contested candidate is excluded from the allocation set rather than
+#   failing the spawn: allocation refuses only when every available candidate is
+#   excluded, and the excluded slots and their reasons are always named. The selected
+#   path is probed again before launch as a race and provider-contract backstop, and
+#   that backstop kills the just-created endpoint so a refusal never pins the pool slot
+#   in-use. The probe needs the treehouse CLI on this process's own PATH and names that
+#   condition when it is missing. When treehouse status renders no status word this
+#   Firstmate recognizes, the guard warns loudly - naming the observed treehouse version
+#   and its unparsed output - and continues rather than blocking every spawn.
 #   --reuse-worktree <path> is a single ship/scout relaunch path for a caller-selected
 #   existing git worktree. It resolves and validates the path before endpoint creation,
 #   starts the task there, and skips treehouse get. The path must be the worktree root,
@@ -1180,9 +1187,21 @@ validate_reuse_worktree_membership() {  # <resolved-worktree>
   fi
 }
 
-validate_recorded_worktree_exclusive() {  # <source> <resolved-worktree>
-  local source=$1 wt_real=$2 meta other_id other_wt other_backend other_target record liveness reason detail remedy missing_tool
-  [ -d "$STATE" ] || return 0
+SPAWN_OWNER_ID=
+SPAWN_OWNER_DETAIL=
+SPAWN_OWNER_REMEDY=
+
+# Report the first recorded task that still owns <resolved-worktree> and whose
+# endpoint is not confidently dead. Returns 0 and fills SPAWN_OWNER_* when the path
+# is contested, 1 when no live, unknown, endpointless, or unaskable owner records it.
+# Callers own the wording so a candidate-level exclusion and a hard refusal can share
+# one verdict.
+spawn_recorded_worktree_owner() {  # <resolved-worktree>
+  local wt_real=$1 meta other_id other_wt other_backend other_target record liveness reason detail remedy missing_tool
+  SPAWN_OWNER_ID=
+  SPAWN_OWNER_DETAIL=
+  SPAWN_OWNER_REMEDY=
+  [ -d "$STATE" ] || return 1
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] || continue
     other_id=$(basename "$meta" .meta)
@@ -1237,47 +1256,107 @@ validate_recorded_worktree_exclusive() {  # <source> <resolved-worktree>
         ;;
       *) detail="has an endpoint reported as $liveness" ;;
     esac
-    if [ "$source" = reuse ]; then
-      if [ "$other_id" = "$ID" ]; then
-        echo "error: --reuse-worktree path $wt_real is already recorded by this task's own prior launch, which $detail; refusing to replace a worker that may still be running, which would orphan its endpoint and put two agents in one checkout. $remedy Only a confidently dead endpoint releases the path." >&2
-      else
-        echo "error: --reuse-worktree path $wt_real is already recorded by task $other_id, which $detail; refusing to start a second agent in a worktree another task may still own. $remedy Only a confidently dead endpoint releases the path." >&2
-      fi
-    elif [ "$source" = treehouse-candidate ]; then
-      echo "error: treehouse reports allocation candidate $wt_real as available, but task $other_id still records it and $detail; refusing before treehouse can reset a worktree that another task may still own. $remedy Only a confidently dead endpoint releases the path." >&2
-    else
-      echo "error: treehouse allocated $wt_real, but task $other_id still records it and $detail; refusing to launch a second worker in a worktree another task may still own. $remedy Only a confidently dead endpoint releases the path." >&2
-    fi
-    return 1
+    SPAWN_OWNER_ID=$other_id
+    SPAWN_OWNER_DETAIL=$detail
+    SPAWN_OWNER_REMEDY=$remedy
+    return 0
   done
+  return 1
 }
+
+validate_recorded_worktree_exclusive() {  # <source> <resolved-worktree>
+  local source=$1 wt_real=$2
+  spawn_recorded_worktree_owner "$wt_real" || return 0
+  if [ "$source" = reuse ]; then
+    if [ "$SPAWN_OWNER_ID" = "$ID" ]; then
+      echo "error: --reuse-worktree path $wt_real is already recorded by this task's own prior launch, which $SPAWN_OWNER_DETAIL; refusing to replace a worker that may still be running, which would orphan its endpoint and put two agents in one checkout. $SPAWN_OWNER_REMEDY Only a confidently dead endpoint releases the path." >&2
+    else
+      echo "error: --reuse-worktree path $wt_real is already recorded by task $SPAWN_OWNER_ID, which $SPAWN_OWNER_DETAIL; refusing to start a second agent in a worktree another task may still own. $SPAWN_OWNER_REMEDY Only a confidently dead endpoint releases the path." >&2
+    fi
+  else
+    echo "error: treehouse allocated $wt_real, but task $SPAWN_OWNER_ID still records it and $SPAWN_OWNER_DETAIL; refusing to launch a second worker in a worktree another task may still own. $SPAWN_OWNER_REMEDY Only a confidently dead endpoint releases the path." >&2
+  fi
+  return 1
+}
+
+# Status words treehouse renders in column 2 of `treehouse status`. The list is a
+# parse assertion, not a policy: only `available` gates allocation, but recognizing
+# none of these means the guard read a format it does not understand.
+TREEHOUSE_STATUS_WORDS='available in-use dirty leased stale locked reserved orphaned busy'
 
 # treehouse resets a selected worktree before its interactive get exposes the path.
 # Read its available candidates first and apply the same metadata owner probe used
-# by --reuse-worktree, so a live recorded owner is refused before reset can occur.
-# A confidently dead endpoint is deliberately reclaimable, which prevents stale
-# metadata from poisoning a genuinely available pool slot.
+# by --reuse-worktree, so a live recorded owner is excluded before reset can occur.
+# A contested candidate only leaves the allocation set; the spawn is refused just
+# when no safe candidate is left, because treehouse would then have nothing else to
+# hand out. A confidently dead endpoint is deliberately reclaimable, which prevents
+# stale metadata from poisoning a genuinely available pool slot.
 validate_treehouse_allocation_candidates() {
-  local listing name slot_status _ candidate candidate_real
+  local listing trimmed line name slot_status _ candidate candidate_real version
+  local rows=0 recognized=0 safe=0 excluded=0 excluded_report=
+  if ! command -v treehouse >/dev/null 2>&1; then
+    echo "error: the treehouse CLI is not on this process's PATH, so the pool's available worktrees cannot be checked for a live recorded owner; refusing to allocate a worktree this spawn cannot prove is unowned. Install it with bin/fm-install-treehouse.sh or put treehouse on PATH, then retry." >&2
+    return 1
+  fi
   listing=$(cd "$PROJ_ABS" && NO_COLOR=1 CLICOLOR=0 treehouse status) || {
     echo "error: treehouse status failed while checking allocation candidates; refusing to allocate without proving the available slots are unowned" >&2
     return 1
   }
+  trimmed=$(printf '%s' "$listing" | tr -d '[:space:]')
+  # An empty pool has no candidate to contest: treehouse get creates a fresh worktree.
+  if [ -z "$trimmed" ] || [ "$trimmed" = 'Noworktreesinpool.' ]; then
+    return 0
+  fi
   while read -r name slot_status _; do
+    [ -n "$name" ] || continue
+    rows=$((rows + 1))
+    case " $TREEHOUSE_STATUS_WORDS " in
+      *" $slot_status "*) recognized=1 ;;
+    esac
     [ "$slot_status" = available ] || continue
-    candidate=$(cd "$PROJ_ABS" && treehouse enter --print-path "$name") || {
-      echo "error: treehouse could not resolve available worktree $name while checking recorded ownership; refusing to allocate" >&2
-      return 1
-    }
-    [ -n "$candidate" ] || {
-      echo "error: treehouse reported an empty path for available worktree $name; refusing to allocate" >&2
-      return 1
-    }
+    candidate=$(cd "$PROJ_ABS" && treehouse enter --print-path "$name" 2>/dev/null) || candidate=
+    if [ -z "$candidate" ]; then
+      excluded=$((excluded + 1))
+      excluded_report="$excluded_report
+  - treehouse could not resolve a path for available worktree $name, so its recorded ownership cannot be checked; excluding it from allocation."
+      continue
+    fi
     candidate_real=$(real_path_or_raw "$candidate")
-    validate_recorded_worktree_exclusive treehouse-candidate "$candidate_real" || return 1
+    if spawn_recorded_worktree_owner "$candidate_real"; then
+      excluded=$((excluded + 1))
+      excluded_report="$excluded_report
+  - treehouse reports allocation candidate $candidate_real as available, but task $SPAWN_OWNER_ID still records it and $SPAWN_OWNER_DETAIL. $SPAWN_OWNER_REMEDY"
+    else
+      safe=$((safe + 1))
+    fi
   done <<EOF
 $listing
 EOF
+  if [ "$rows" -gt 0 ] && [ "$recognized" -eq 0 ]; then
+    version=$(treehouse --version 2>/dev/null | head -n 1) || version=
+    {
+      echo "warning: ================= TREEHOUSE STATUS FORMAT NOT RECOGNIZED ================="
+      echo "warning: none of the $rows row(s) of 'treehouse status' named a status this Firstmate knows (${TREEHOUSE_STATUS_WORDS// /, }), so the pre-allocation owner guard checked NOTHING."
+      echo "warning: treehouse may hand this spawn a worktree a live task still owns. Teach fm-spawn.sh the new status vocabulary."
+      echo "warning: observed treehouse version: ${version:-unknown}"
+      echo "warning: unparsed 'treehouse status' output:"
+      while IFS= read -r line; do
+        printf 'warning: | %s\n' "$line"
+      done <<EOF
+$listing
+EOF
+      echo "warning: =========================================================================="
+    } >&2
+  fi
+  if [ "$excluded" -gt 0 ] && [ "$safe" -eq 0 ]; then
+    echo "error: every treehouse worktree this pool reports as available is excluded from allocation, so any 'treehouse get' would reset a worktree another task may still own; refusing.$excluded_report
+Only a confidently dead endpoint releases a path." >&2
+    return 1
+  fi
+  if [ "$excluded" -gt 0 ]; then
+    echo "warning: excluding $excluded of $((excluded + safe)) available treehouse worktree(s) from this allocation; $safe remain safe. treehouse chooses the slot itself, so if it selects an excluded one this spawn refuses after allocation.$excluded_report" >&2
+  fi
+  return 0
 }
 
 SPAWN_CWD=$PROJ_ABS
@@ -1724,7 +1803,13 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] && [ "$REUSE_WORKTREE_SET
   fi
 
   validate_spawn_worktree "treehouse get" "$T"
-  validate_recorded_worktree_exclusive treehouse-selected "$(real_path_or_raw "$WT")" || exit 1
+  if ! validate_recorded_worktree_exclusive treehouse-selected "$(real_path_or_raw "$WT")"; then
+    # The endpoint's shell is already sitting inside the allocated worktree, which
+    # keeps that slot in-use in treehouse forever if the window outlives this refusal.
+    echo "error: closing this spawn's endpoint $T (window $W) so the contested worktree $WT is released back to the pool; inspect window $T if it survives" >&2
+    fm_backend_kill "$BACKEND" "$T" "${ZELLIJ_TAB_ID:-}" "$W" 2>/dev/null || true
+    exit 1
+  fi
 fi
 
 # Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/. Go won't
