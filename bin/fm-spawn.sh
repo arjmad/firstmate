@@ -623,7 +623,9 @@ DISPLAY_TITLE="$DISPLAY_LABEL · $DISPLAY_AGENT"
 # and a concrete model - a normal Anthropic model, or none, never consults the
 # config, so plain claude spawns are untouched. The env records and strict flag
 # are stashed raw and shell-quoted at launch composition; the auth token is kept
-# out of the launch string and exported separately just before launch.
+# out of the launch string and delivered separately - natively at window
+# creation on backends with an env channel (SPAWN_ENV_NATIVE below), exported
+# into the pane just before launch on the rest.
 ENDPOINT_ENV_KEYS=()
 ENDPOINT_ENV_VALS=()
 ENDPOINT_STRICT=0
@@ -1337,6 +1339,40 @@ herdr_projection_existing_meta_allows_flat() {  # <meta>
   esac
 }
 
+# Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/. Go won't
+# create GOTMPDIR, so mkdir before it is used; fm-teardown removes the whole root.
+# Nested (not a bare /tmp/fm-<id>/gotmp) so other per-task temp can live alongside
+# later, and teardown cleans one deterministic path. GOTMPDIR (not TMPDIR) is the
+# targeted knob: TMPDIR is too broad (affects every program's temp, not just Go's).
+# Resolved BEFORE the window is created so a backend that can place environment
+# on the launched pane process natively (see SPAWN_ENV below) has the value in
+# hand at creation time; it depends only on $ID, never on the worktree.
+TASK_TMP="/tmp/fm-$ID"
+mkdir -p "$TASK_TMP/gotmp"
+
+# SPAWN_ENV: the crewmate environment firstmate has already computed and that
+# is fully known BEFORE the pane exists. Backends able to set environment on
+# the launched process itself take it natively at window creation, so these
+# values never transit the pane's interactive shell - which is what keeps the
+# proxy credential off the pane's visible screen content, and therefore out of
+# herdr's persisted pane history. Backends without that capability keep the
+# typed pre-launch export path further below, unchanged.
+#
+# Deliberately NOT here: anything that is only knowable after the pane exists
+# (the treehouse worktree path, the pane's own ids), and the endpoint's
+# non-secret env prefix, which is a launch-command prefix inside $LAUNCH and is
+# composed identically for every backend.
+SPAWN_ENV=("GOTMPDIR=$TASK_TMP/gotmp")
+if [ -n "$ENDPOINT_TOKEN" ]; then
+  SPAWN_ENV[${#SPAWN_ENV[@]}]="ANTHROPIC_AUTH_TOKEN=$ENDPOINT_TOKEN"
+fi
+# SPAWN_ENV_NATIVE=1 means this backend consumed SPAWN_ENV at window creation
+# and the typed pre-launch export block must be skipped for it.
+SPAWN_ENV_NATIVE=0
+case "$BACKEND" in
+  herdr) SPAWN_ENV_NATIVE=1 ;;
+esac
+
 W="fm-$ID"
 case "$BACKEND" in
   tmux)
@@ -1391,7 +1427,8 @@ case "$BACKEND" in
           FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_reclaim_task \
             "$HERDR_SES" "$HERDR_PRESENTATION_JOURNAL" "$ID" "$HERDR_LABEL_HOME" \
             "$HERDR_RECOVERY_WORKSPACE_ID" "$HERDR_RECOVERY_TAB_ID" "$HERDR_RECOVERY_PANE_ID" \
-            "$HERDR_PARENT_LABEL" "$W" "$SPAWN_CWD"
+            "$HERDR_PARENT_LABEL" "$W" "$SPAWN_CWD" \
+            "${SPAWN_ENV[@]+"${SPAWN_ENV[@]}"}"
           HERDR_RECLAIM_STATUS=$?
           set -e
           case "$HERDR_RECLAIM_STATUS" in
@@ -1429,7 +1466,8 @@ case "$BACKEND" in
             HERDR_PROJECTION_ID=$(fm_backend_herdr_projection_journal_create "$STATE" "$ID") || exit 1
             HERDR_PROJECTION_LABEL=$(fm_backend_herdr_projection_workspace_label "$ID" "$HERDR_PROJECTION_ID")
             if ! FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_create_task \
-              "$SPAWN_CWD" "$HERDR_PROJECTION_LABEL" "$W"; then
+              "$SPAWN_CWD" "$HERDR_PROJECTION_LABEL" "$W" \
+              "${SPAWN_ENV[@]+"${SPAWN_ENV[@]}"}"; then
               if [ "${FM_BACKEND_HERDR_PROJECTION_CLEANUP_SAFE:-0}" = 1 ]; then
                 HERDR_PROJECTION_ABORT_CLEANUP=1
                 HERDR_PROJECTION_ABORT_SESSION=$FM_BACKEND_HERDR_PROJECTION_SESSION
@@ -1482,7 +1520,9 @@ case "$BACKEND" in
       HERDR_SEEDED_DEFAULT_TAB_ID=${HERDR_CONTAINER_RAW#*$'\t'}
       HERDR_SES=${CONTAINER%%:*}
       HERDR_WORKSPACE_ID=${CONTAINER#*:}
-      HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task "$CONTAINER" "$W" "$SPAWN_CWD" "$HERDR_SEEDED_DEFAULT_TAB_ID") || exit 1
+      HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task \
+        "$CONTAINER" "$W" "$SPAWN_CWD" "$HERDR_SEEDED_DEFAULT_TAB_ID" \
+        "${SPAWN_ENV[@]+"${SPAWN_ENV[@]}"}") || exit 1
       read -r HERDR_TAB_ID HERDR_PANE_ID <<EOF
 $HERDR_TASK_IDS
 EOF
@@ -1687,14 +1727,6 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] && [ "$REUSE_WORKTREE_SET
 
   validate_spawn_worktree "treehouse get" "$T"
 fi
-
-# Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/. Go won't
-# create GOTMPDIR, so mkdir before it is used; fm-teardown removes the whole root.
-# Nested (not a bare /tmp/fm-<id>/gotmp) so other per-task temp can live alongside
-# later, and teardown cleans one deterministic path. GOTMPDIR (not TMPDIR) is the
-# targeted knob: TMPDIR is too broad (affects every program's temp, not just Go's).
-TASK_TMP="/tmp/fm-$ID"
-mkdir -p "$TASK_TMP/gotmp"
 
 # Per-harness turn-end hook where enabled: a file that touches
 # state/<id>.turn-ended when the agent finishes a turn. Worktree-resident hooks
@@ -1920,18 +1952,34 @@ if [ "$KIND" = secondmate ]; then
   sq_home=$(shell_quote "$PROJ_ABS")
   LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home $LAUNCH"
 fi
-# Export GOTMPDIR into the crewmate's pane shell so the agent and every child
-# process (go build, go test, ...) inherit it. Sent before the launch command so
-# the env is set when the agent starts; the brief sleep lets the export land.
-spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
-# A local-endpoint claude launch needs its proxy auth token in the pane shell.
-# Send it as a standalone pre-launch export - the same mechanism as GOTMPDIR - so
-# claude inherits it WITHOUT the secret ever being composed into $LAUNCH (the
-# recorded launch string) or written to state/<id>.meta or any status line.
-if [ -n "$ENDPOINT_TOKEN" ]; then
-  spawn_send_text_line "$T" "unset HISTFILE"
-  spawn_send_text_line "$T" "export ANTHROPIC_AUTH_TOKEN=$(shell_quote "$ENDPOINT_TOKEN")"
+# Typed pre-launch environment: the fallback for backends that cannot place
+# environment on the launched pane process themselves. A backend that already
+# consumed SPAWN_ENV natively at window creation (SPAWN_ENV_NATIVE=1) skips this
+# entirely - retyping the same values would put them back on the pane's visible
+# screen, which is exactly what the native path removes.
+if [ "$SPAWN_ENV_NATIVE" -eq 0 ]; then
+  # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
+  # process (go build, go test, ...) inherit it. Sent before the launch command so
+  # the env is set when the agent starts.
+  spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
+  # A local-endpoint claude launch needs its proxy auth token in the pane shell.
+  # Send it as a standalone pre-launch export - the same mechanism as GOTMPDIR - so
+  # claude inherits it WITHOUT the secret ever being composed into $LAUNCH (the
+  # recorded launch string) or written to state/<id>.meta or any status line.
+  # `unset HISTFILE` stays paired with the token export it protects: on this path
+  # the secret really is typed at an interactive shell, so the shell must not
+  # persist it to a history file.
+  if [ -n "$ENDPOINT_TOKEN" ]; then
+    spawn_send_text_line "$T" "unset HISTFILE"
+    spawn_send_text_line "$T" "export ANTHROPIC_AUTH_TOKEN=$(shell_quote "$ENDPOINT_TOKEN")"
+  fi
 fi
+# Settle before the launch line. This used to be described as letting the typed
+# exports land; with SPAWN_ENV_NATIVE=1 nothing is typed ahead of the launch, so
+# what it now buys is the freshly created pane's shell coming up before the launch
+# command is typed at it. That first-input slot was previously occupied by the
+# GOTMPDIR export, so keeping the pause preserves the timing every backend has
+# been verified against rather than promoting the launch line into it untested.
 sleep 0.3
 spawn_send_literal "$T" "$LAUNCH"
 sleep 0.3

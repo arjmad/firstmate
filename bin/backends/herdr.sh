@@ -4,7 +4,9 @@
 # Design: data/fm-backend-design-d7/herdr-addendum.md ("Interface mapping",
 # decisions D1-D6) and the empirical verification recorded in
 # data/fm-backend-design-d7/herdr-verification-p2.md (real herdr v0.7.1,
-# protocol 14, macOS aarch64), refined by docs/herdr-backend.md's
+# protocol 14, macOS aarch64 - the original P2 evidence; the supported floor has
+# since risen to 0.7.5/protocol 17, see FM_BACKEND_HERDR_MIN_PROTOCOL), refined
+# by docs/herdr-backend.md's
 # "workspace-per-home" pass (AGENTS.md task herdr-sm-spaces-k4). Herdr is a
 # session provider ONLY (D3): the worktree provider stays treehouse, exactly
 # like tmux. Sourced only through bin/fm-backend.sh's fm_backend_source in
@@ -76,14 +78,23 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # shellcheck source=bin/fm-transition-lib.sh
 . "$FM_BACKEND_HERDR_ROOT/bin/fm-transition-lib.sh"
 
-FM_BACKEND_HERDR_MIN_PROTOCOL=14
+# Every crewmate pane this adapter creates is created with `tab create --env
+# KEY=VALUE` (fm_backend_herdr_env_flags), which is how the local proxy
+# credential reaches the agent process without ever being typed into the pane's
+# interactive shell. There is deliberately no typed fallback for this backend:
+# falling back would put the credential back on the pane's visible screen, which
+# is exactly what the native path exists to prevent. `--env` is verified on
+# herdr 0.7.5 / protocol 17, so 17 is the floor - the adapter does not claim
+# support for a herdr that cannot carry a launch environment natively.
+FM_BACKEND_HERDR_MIN_PROTOCOL=17
 # events.subscribe (the native pane.agent_status_changed push stream) and its
 # subscription_event schema first shipped at protocol 16 (verified: herdr
 # 0.7.3). Below this, or with the events surface absent from `herdr api schema`,
 # the event fast-path fails closed to the watcher's poll loop
-# (fm_backend_herdr_events_capable). Distinct from FM_BACKEND_HERDR_MIN_PROTOCOL
-# (14): the adapter's spawn/capture/send primitives work on 14, only the push
-# subscriber needs 16.
+# (fm_backend_herdr_events_capable). Kept as its own constant rather than folded
+# into FM_BACKEND_HERDR_MIN_PROTOCOL: this gate is the watcher's, it records the
+# protocol the events surface actually shipped in, and unlike the spawn path it
+# runs without a version_check ahead of it.
 FM_BACKEND_HERDR_MIN_EVENTS_PROTOCOL=16
 # workspace.move first appears in the protocol-16 schema.
 # The installed CLI does not expose it as a workspace subcommand, so the
@@ -149,11 +160,74 @@ fm_backend_herdr_workspace_label() {
 # var is kept alongside it - harmless, self-documenting, and forward-
 # compatible if a future herdr build honors it. Never used by
 # fm_backend_herdr_version_check, which is intentionally session-independent
-# (reads only .client.* fields).
+# (reads only .client.* fields). Anything reading .server.* MUST route through
+# here for exactly the reason above - that is why the server half of the
+# `tab create --env` protocol floor is observed by
+# fm_backend_herdr_server_ensure, on its session-scoped status read (published
+# as FM_BACKEND_HERDR_SERVER_PROTOCOL), and asserted by
+# fm_backend_herdr_require_server_env_support at the three creating call sites,
+# rather than alongside the client half in version_check.
 fm_backend_herdr_cli() {  # <session> <herdr-subcommand-and-args...>
   local session=$1
   shift
   HERDR_SESSION="$session" herdr "$@" --session "$session"
+}
+
+# fm_backend_herdr_env_flags: turn zero or more KEY=VALUE strings into the
+# repeatable `--env KEY=VALUE` flags herdr's `tab create` and `workspace
+# create` accept, and publish them as the FM_BACKEND_HERDR_ENV_FLAGS array for
+# the immediately following create call. Verified against the installed
+# binary (herdr 0.7.5): `herdr tab create --help` and `herdr workspace create
+# --help` both document `--env <KEY=VALUE>  Set an environment variable for
+# the launched process`, and passing the flag twice reaches the RPC layer
+# rather than clap's "cannot be used multiple times" refusal, so it is
+# genuinely repeatable.
+#
+# Why this exists at all: herdr's server puts these values on the launched
+# process directly, so they never transit the pane's interactive shell. That
+# is what keeps a credential off the pane's visible screen content, and
+# therefore out of herdr's experimental.pane_history persistence on disk.
+# Values that are not known until AFTER the pane exists cannot use this path
+# and still need the caller's typed fallback.
+#
+# Refuses a malformed pair loudly instead of dropping it: a silently missing
+# proxy credential is exactly the 401-retry-loop failure this path exists to
+# avoid. Diagnostics never echo a pair's VALUE (it can be the credential); the
+# key alone is safe to name once it has been split off.
+fm_backend_herdr_env_flags() {  # <KEY=VALUE>...
+  FM_BACKEND_HERDR_ENV_FLAGS=()
+  local pair key
+  for pair in "$@"; do
+    case "$pair" in
+      *=*) key=${pair%%=*} ;;
+      *)
+        echo "error: herdr launch env entry is not KEY=VALUE (value withheld)" >&2
+        FM_BACKEND_HERDR_ENV_FLAGS=()
+        return 1
+        ;;
+    esac
+    case "$key" in
+      ''|[0-9]*|*[!A-Za-z0-9_]*)
+        echo "error: herdr launch env name '$key' is not a valid environment variable name" >&2
+        FM_BACKEND_HERDR_ENV_FLAGS=()
+        return 1
+        ;;
+    esac
+    FM_BACKEND_HERDR_ENV_FLAGS[${#FM_BACKEND_HERDR_ENV_FLAGS[@]}]=--env
+    FM_BACKEND_HERDR_ENV_FLAGS[${#FM_BACKEND_HERDR_ENV_FLAGS[@]}]=$pair
+  done
+  return 0
+}
+
+# fm_backend_herdr_tab_create_failed: the single diagnostic for a refused `tab
+# create`. Every crewmate pane carries `--env`, so the most likely cause of a
+# refusal on an otherwise healthy herdr is a client that predates the flag -
+# name that requirement rather than letting the caller's bare `return 1` reach
+# fm-spawn as a silent `exit 1`. Herdr's own stderr is deliberately NOT relayed:
+# a clap argument error can quote the offending argument, and a `--env` argument
+# carries the proxy credential.
+fm_backend_herdr_tab_create_failed() {  # <what>
+  echo "error: herdr 'tab create' failed for $1; the launch environment is passed with 'tab create --env', which requires herdr 0.7.5 or newer (protocol >= $FM_BACKEND_HERDR_MIN_PROTOCOL) - check 'herdr status --json' and its running server, then retry" >&2
 }
 
 # fm_backend_herdr_tool_check: refuse loudly if herdr or jq is missing.
@@ -164,8 +238,15 @@ fm_backend_herdr_tool_check() {
 }
 
 # fm_backend_herdr_version_check: refuse loudly on a missing/incompatible
-# herdr client. Verified locally: v0.7.1, protocol 14 (herdr status --json's
+# herdr client. Verified locally: v0.7.5, protocol 17 (herdr status --json's
 # .client.protocol; client info is session-independent, unlike .server).
+# The floor is the version that carries `tab create --env`; see
+# FM_BACKEND_HERDR_MIN_PROTOCOL. The matching SERVER-side assertion cannot live
+# here: a bare `herdr status --json` is ambient, and .server.* would describe
+# whatever daemon happens to be bound rather than the one that will host the
+# pane. fm_backend_herdr_server_ensure observes it on its session-scoped read,
+# and fm_backend_herdr_require_server_env_support asserts it at the three
+# creating call sites.
 fm_backend_herdr_version_check() {
   fm_backend_herdr_tool_check || return 1
   local status protocol version
@@ -179,7 +260,7 @@ fm_backend_herdr_version_check() {
       ;;
   esac
   if [ "$protocol" -lt "$FM_BACKEND_HERDR_MIN_PROTOCOL" ]; then
-    echo "error: herdr protocol $protocol (version ${version:-unknown}) is older than the verified minimum $FM_BACKEND_HERDR_MIN_PROTOCOL; update herdr (herdr update) before using backend=herdr" >&2
+    echo "error: herdr protocol $protocol (version ${version:-unknown}) is older than the verified minimum $FM_BACKEND_HERDR_MIN_PROTOCOL (herdr 0.7.5, the first release whose 'tab create --env' can carry a crewmate's launch environment natively); update herdr (herdr update) before using backend=herdr" >&2
     return 1
   fi
   return 0
@@ -802,19 +883,88 @@ fm_backend_herdr_projection_order_best_effort() {  # <session> <created-workspac
   return 0
 }
 
+# FM_BACKEND_HERDR_SERVER_PROTOCOL: the protocol of the session-scoped herdr
+# server fm_backend_herdr_server_ensure last observed running, or empty when no
+# running server has been observed in this process or its protocol could not be
+# read. Published, never judged, by server_ensure; judged only by
+# fm_backend_herdr_require_server_env_support.
+FM_BACKEND_HERDR_SERVER_PROTOCOL=""
+
+# fm_backend_herdr_server_protocol_publish: record <status-json>'s
+# .server.protocol, leaving the published value empty unless it is a number.
+fm_backend_herdr_server_protocol_publish() {  # <status-json>
+  local protocol
+  protocol=$(printf '%s' "$1" | jq -r '.server.protocol // empty' 2>/dev/null)
+  case "$protocol" in
+    ''|*[!0-9]*) FM_BACKEND_HERDR_SERVER_PROTOCOL="" ;;
+    *) FM_BACKEND_HERDR_SERVER_PROTOCOL=$protocol ;;
+  esac
+}
+
+# fm_backend_herdr_require_server_env_support: the SERVER half of the
+# `tab create --env` floor (fm_backend_herdr_version_check owns the client
+# half). Called ONLY by the three entry points that create the pane a crewmate
+# runs in, because the floor is a creation-time precondition: a pre-0.7.5
+# daemon drops the unknown env field from the create RPC, and with no typed
+# fallback that silent credential loss surfaces only as the crewmate's 401
+# retry loop. Every non-creating pane operation must keep working against an
+# old-but-live daemon - see fm_backend_herdr_server_ensure's header.
+# Reads the value server_ensure published from its session-scoped status read,
+# so it costs no request and cannot be misled by an ambient one. An empty
+# (unknown) protocol proceeds rather than refusing.
+fm_backend_herdr_require_server_env_support() {  # <session>
+  local session=$1
+  [ -n "$FM_BACKEND_HERDR_SERVER_PROTOCOL" ] || return 0
+  [ "$FM_BACKEND_HERDR_SERVER_PROTOCOL" -lt "$FM_BACKEND_HERDR_MIN_PROTOCOL" ] || return 0
+  echo "error: the herdr server running for session '$session' speaks protocol $FM_BACKEND_HERDR_SERVER_PROTOCOL, older than the verified minimum $FM_BACKEND_HERDR_MIN_PROTOCOL (herdr 0.7.5, the first release whose 'tab create --env' can carry a crewmate's launch environment natively); a stale server silently drops the launch environment, so the crewmate would start with no credential. Update herdr ('herdr update'), then restart that session's server ONLY through the guarded lifecycle path (bin/fm-herdr-lab.sh for lab sessions; docs/herdr-backend.md 'Destructive lab safety') - an ambient server-stop is forbidden here and would reach the captain's fleet. Existing panes keep working meanwhile, so the fleet can be drained first." >&2
+  return 1
+}
+
 # fm_backend_herdr_server_ensure: start the herdr server for <session>
 # headless (no TUI client) if not already running, mirroring tmux's `tmux
 # has-session || tmux new-session -d`. Verified: a bare socket CLI call does
 # NOT auto-start the server, so this must run before any workspace/tab/pane
 # call. Bounded poll for the server to report running.
+#
+# It also OBSERVES, and never judges, the SERVER half of the `tab create --env`
+# floor: whichever read sees .server.running true also publishes that same
+# blob's .server.protocol as FM_BACKEND_HERDR_SERVER_PROTOCOL (empty when it
+# cannot be read, so a caller can tell unknown from below-floor). This read is
+# the right place to OBSERVE it - it is already scoped to <session> through
+# fm_backend_herdr_cli, so it describes the exact daemon that will host the
+# pane rather than whatever daemon an ambient query reaches, and it costs no
+# extra request.
+#
+# It is emphatically the wrong place to REFUSE on it. The floor is a
+# CREATION-time precondition that only `tab create --env` needs, while
+# server_ensure is the UNIVERSAL precondition every pane operation reaches
+# through fm_backend_herdr_target_ready. Refusing here would be actively
+# unsafe: fm_backend_herdr_kill is `target_ready || return 0` under the
+# best-effort tmux-kill-window contract, so a stale daemon would make kill
+# report SUCCESS without closing the pane and teardown would then record a
+# clean cleanup over a still-running worker. capture/capture_ansi,
+# send_text_line/send_literal/send_key, current_path, and the status path must
+# likewise keep working against an old-but-live daemon - draining the fleet is
+# the operator's own remedy for a stale server, so it must not be what the
+# check blocks. fm_backend_herdr_require_server_env_support does the judging,
+# at the three entry points that actually create a crewmate's pane.
 fm_backend_herdr_server_ensure() {  # <session>
-  local session=$1 running out i
-  running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
-  [ "$running" = "true" ] && return 0
+  local session=$1 status running out i
+  FM_BACKEND_HERDR_SERVER_PROTOCOL=""
+  status=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null)
+  running=$(printf '%s' "$status" | jq -r '.server.running // false' 2>/dev/null)
+  if [ "$running" = "true" ]; then
+    fm_backend_herdr_server_protocol_publish "$status"
+    return 0
+  fi
   ( fm_backend_herdr_cli "$session" server >/dev/null 2>&1 & ) || return 1
   for i in $(seq 1 20); do
-    running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
-    [ "$running" = "true" ] && return 0
+    status=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null)
+    running=$(printf '%s' "$status" | jq -r '.server.running // false' 2>/dev/null)
+    if [ "$running" = "true" ]; then
+      fm_backend_herdr_server_protocol_publish "$status"
+      return 0
+    fi
     sleep 0.5
   done
   echo "error: herdr server for session '$session' did not report running within 10s" >&2
@@ -979,6 +1129,7 @@ fm_backend_herdr_container_ensure() {  # <cwd-for-a-fresh-workspace>
   fm_backend_herdr_version_check || return 1
   session=$(fm_backend_herdr_session)
   fm_backend_herdr_server_ensure "$session" || return 1
+  fm_backend_herdr_require_server_env_support "$session" || return 1
   fm_backend_herdr_workspace_ensure "$session" "$cwd" >/dev/null || { label=$(fm_backend_herdr_workspace_label); echo "error: failed to ensure herdr workspace '$label' in session '$session'" >&2; return 1; }
   if [ -z "$FM_BACKEND_HERDR_WS_ID" ]; then
     label=$(fm_backend_herdr_workspace_label)
@@ -1155,8 +1306,16 @@ fm_backend_herdr_set_task_display() {  # <session> <pane-id> <title> <display-ag
 # the safety argument). An ADOPTED workspace's caller always passes an empty
 # 4th arg, so this function never even queries for a prune candidate in that
 # case. Echoes "<tab_id> <pane_id>" on success.
-fm_backend_herdr_create_task() {  # <container> <label> <cwd> <seeded_default_tab_id>
-  local container=$1 label=$2 cwd=$3 seeded_tab_id=${4:-} session wsid list dup_tabs dup dup_pane dup_tab_ids out tab_id pane_id remaining_dup_tabs
+#
+# Trailing KEY=VALUE arguments (optional, repeatable) are placed on the
+# launched pane process natively via fm_backend_herdr_env_flags, so they never
+# transit the pane's interactive shell. A malformed pair refuses the whole
+# create rather than starting a pane with a silently incomplete environment.
+fm_backend_herdr_create_task() {  # <container> <label> <cwd> <seeded_default_tab_id> [KEY=VALUE ...]
+  local container=$1 label=$2 cwd=$3 seeded_tab_id=${4:-} session wsid list dup_tabs dup dup_pane dup_tab_ids out tab_id pane_id remaining_dup_tabs env_flags
+  if [ "$#" -gt 4 ]; then shift 4; else set --; fi
+  fm_backend_herdr_env_flags "$@" || return 1
+  env_flags=( "${FM_BACKEND_HERDR_ENV_FLAGS[@]+"${FM_BACKEND_HERDR_ENV_FLAGS[@]}"}" )
   session=${container%%:*}
   wsid=${container#*:}
   list=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || return 1
@@ -1178,7 +1337,11 @@ fm_backend_herdr_create_task() {  # <container> <label> <cwd> <seeded_default_ta
 $dup_tabs
 EOF
   fi
-  out=$(fm_backend_herdr_cli "$session" tab create --workspace "$wsid" --cwd "$cwd" --label "$label" --no-focus 2>/dev/null) || return 1
+  out=$(fm_backend_herdr_cli "$session" tab create --workspace "$wsid" --cwd "$cwd" --label "$label" --no-focus \
+    "${env_flags[@]+"${env_flags[@]}"}" 2>/dev/null) || {
+    fm_backend_herdr_tab_create_failed "tab '$label' in workspace $wsid (session $session)"
+    return 1
+  }
   tab_id=$(printf '%s' "$out" | jq -r '.result.tab.tab_id // empty' 2>/dev/null)
   pane_id=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
   if [ -z "$tab_id" ] || [ -z "$pane_id" ]; then
@@ -1227,8 +1390,15 @@ EOF
 # CLEANUP_SAFE becomes 1 only after both creates returned complete exact IDs.
 # A missing, failed, or malformed create response stays ambiguous and grants no
 # cleanup authority.
-fm_backend_herdr_projection_create_task() {  # <cwd> <workspace-label> <task-label>
-  local cwd=$1 workspace_label=$2 task_label=$3 session out tabs panes tab_count pane_count focus_before
+#
+# Trailing KEY=VALUE arguments (optional, repeatable) go natively onto the TASK
+# tab's launched process, exactly as in fm_backend_herdr_create_task. The
+# projection workspace's own seeded default tab deliberately gets none: it is
+# pruned below and never runs the crewmate, so giving it the environment would
+# only widen where a credential exists.
+fm_backend_herdr_projection_create_task() {  # <cwd> <workspace-label> <task-label> [KEY=VALUE ...]
+  local cwd=$1 workspace_label=$2 task_label=$3 session out tabs panes tab_count pane_count focus_before env_flags
+  if [ "$#" -gt 3 ]; then shift 3; else set --; fi
   FM_BACKEND_HERDR_PROJECTION_SESSION=""
   FM_BACKEND_HERDR_PROJECTION_WORKSPACE_ID=""
   FM_BACKEND_HERDR_PROJECTION_SEEDED_TAB_ID=""
@@ -1237,9 +1407,12 @@ fm_backend_herdr_projection_create_task() {  # <cwd> <workspace-label> <task-lab
   FM_BACKEND_HERDR_PROJECTION_PANE_ID=""
   FM_BACKEND_HERDR_PROJECTION_CLEANUP_SAFE=0
 
+  fm_backend_herdr_env_flags "$@" || return 1
+  env_flags=( "${FM_BACKEND_HERDR_ENV_FLAGS[@]+"${FM_BACKEND_HERDR_ENV_FLAGS[@]}"}" )
   fm_backend_herdr_version_check || return 1
   session=$(fm_backend_herdr_session)
   fm_backend_herdr_server_ensure "$session" || return 1
+  fm_backend_herdr_require_server_env_support "$session" || return 1
   focus_before=$(fm_backend_herdr_projection_focus_snapshot "$session") || {
     echo "error: herdr presentation workspace create could not capture exact active workspace and tab; refusing a focus-unsafe projection" >&2
     return 1
@@ -1273,10 +1446,12 @@ fm_backend_herdr_projection_create_task() {  # <cwd> <workspace-label> <task-lab
   }
   if out=$(fm_backend_herdr_cli "$session" tab create \
     --workspace "$FM_BACKEND_HERDR_PROJECTION_WORKSPACE_ID" \
-    --cwd "$cwd" --label "$task_label" --no-focus 2>/dev/null); then
+    --cwd "$cwd" --label "$task_label" --no-focus \
+    "${env_flags[@]+"${env_flags[@]}"}" 2>/dev/null); then
     :
   else
     fm_backend_herdr_projection_focus_restore "$session" "$focus_before" "task-tab create" || true
+    fm_backend_herdr_tab_create_failed "presentation task tab '$task_label' in workspace $FM_BACKEND_HERDR_PROJECTION_WORKSPACE_ID (session $session)"
     echo "error: herdr presentation task-tab create failed ambiguously; leaving its journal quarantined" >&2
     return 1
   fi
@@ -1440,11 +1615,19 @@ fm_backend_herdr_projection_reclaim_rollback() {  # <session> <new-pane>
 # Return 0 means exact reclaim, 2 means non-mutating or exactly rolled-back
 # refusal with flat fallback permitted, and 1 means a live/unknown or
 # post-mutation uncertainty that must refuse the launch.
-fm_backend_herdr_projection_reclaim_task() {  # <session> <journal> <task-id> <home> <meta-workspace> <meta-tab> <meta-pane> <parent-label> <task-label> <cwd>
+#
+# Trailing KEY=VALUE arguments (optional, repeatable) go natively onto the
+# replacement pane's launched process, exactly as in the two create paths: a
+# reclaimed husk hosts the same crewmate and needs the same environment.
+fm_backend_herdr_projection_reclaim_task() {  # <session> <journal> <task-id> <home> <meta-workspace> <meta-tab> <meta-pane> <parent-label> <task-label> <cwd> [KEY=VALUE ...]
   local session=$1 journal=$2 id=$3 home=$4 meta_workspace=$5 meta_tab=$6 meta_pane=$7
-  local parent_label=$8 task_label=$9 cwd=${10} canonical_home state focus_before active_tab out new_tab new_pane info close_status
+  local parent_label=$8 task_label=$9 cwd=${10} canonical_home state focus_before active_tab out new_tab new_pane info close_status env_flags
+  if [ "$#" -gt 10 ]; then shift 10; else set --; fi
   FM_BACKEND_HERDR_PROJECTION_TAB_ID=""
   FM_BACKEND_HERDR_PROJECTION_PANE_ID=""
+  fm_backend_herdr_env_flags "$@" || return 1
+  env_flags=( "${FM_BACKEND_HERDR_ENV_FLAGS[@]+"${FM_BACKEND_HERDR_ENV_FLAGS[@]}"}" )
+  fm_backend_herdr_require_server_env_support "$session" || return 1
   fm_backend_herdr_projection_journal_snapshot "$journal" "$id" || return 1
   if [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" != 2 ]; then
     echo "warning: herdr presentation journal for $id has no exact restart binding; spawning flat" >&2
@@ -1494,8 +1677,10 @@ fm_backend_herdr_projection_reclaim_task() {  # <session> <journal> <task-id> <h
     return 2
   fi
   if ! out=$(fm_backend_herdr_cli "$session" tab create \
-    --workspace "$meta_workspace" --cwd "$cwd" --label "$task_label" --no-focus 2>/dev/null); then
+    --workspace "$meta_workspace" --cwd "$cwd" --label "$task_label" --no-focus \
+    "${env_flags[@]+"${env_flags[@]}"}" 2>/dev/null); then
     fm_backend_herdr_projection_focus_restore "$session" "$focus_before" "husk replacement create" || return 1
+    fm_backend_herdr_tab_create_failed "presentation husk replacement tab '$task_label' in workspace $meta_workspace (session $session)"
     echo "warning: herdr presentation reclaim for $id could not create an exact replacement; spawning flat" >&2
     return 2
   fi
@@ -1698,8 +1883,11 @@ fm_backend_herdr_current_path() {  # <target>
 
 # fm_backend_herdr_send_text_line: send one line of TEXT then submit,
 # ATOMICALLY - mirrors tmux's `send-keys -t T text Enter`. Used for the fixed
-# spawn-time commands (treehouse get, the GOTMPDIR export). `pane run` types
-# the command and submits it in one call (verified).
+# spawn-time commands (`treehouse get`, and firstmate's steers). `pane run`
+# types the command and submits it in one call (verified). Crewmate launch
+# environment does NOT come through here on this backend: it is placed on the
+# launched process natively at `tab create --env` time (see
+# fm_backend_herdr_env_flags), so it never reaches the pane's screen.
 fm_backend_herdr_send_text_line() {  # <target> <text>
   fm_backend_herdr_target_ready "$1" || return 1
   fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane run "$FM_BACKEND_HERDR_PANE" "$2" >/dev/null 2>&1

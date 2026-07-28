@@ -1,7 +1,7 @@
 # Herdr runtime backend
 
 Herdr is an experimental agent-native terminal backend with native per-pane agent state and push events.
-Firstmate requires Herdr protocol 14 or newer; versions 0.7.1, 0.7.3, 0.7.4, and 0.7.5 are verified, with protocol-16 features enabled only when available.
+Firstmate requires Herdr 0.7.5 or newer (protocol 17), the first release whose `tab create --env` can carry a crewmate's launch environment natively; earlier 0.7.x releases were verified against older revisions of this backend and are no longer supported.
 Herdr provides the terminal session while Treehouse continues to provide task worktrees.
 [`configuration.md`](configuration.md#runtime-backend-configbackend--fm_backend) owns shared backend selection and metadata semantics.
 
@@ -11,7 +11,7 @@ Pick Herdr when you want native busy, idle, and blocked state and accept the exp
 
 Prerequisites:
 
-- Herdr protocol 14 or newer, installed from [herdr.dev](https://herdr.dev).
+- Herdr 0.7.5 or newer (protocol 17), installed from [herdr.dev](https://herdr.dev).
 - `jq` for JSON responses.
 - The universal harness and toolchain requirements in [`configuration.md`](configuration.md#toolchain).
 - `python3` only for optional protocol-16 presentation-space ordering and native event subscription.
@@ -178,6 +178,23 @@ This generous floor is required for small composer and peek reads.
 Herdr's native agent state can read idle while a harness waits on its own long foreground tool.
 The shared crew-state path therefore corroborates every native non-busy or unreadable result with the recorded harness's rendered busy signature before concluding that a pane is not working.
 A human-blocked permission dialog has no busy banner and still surfaces.
+
+## Launch environment
+
+Herdr's `tab create` and `workspace create` accept a repeatable `--env KEY=VALUE` that sets the variable on the launched process itself.
+This backend uses that flag for every launch value firstmate already knows before the pane exists, so those values never transit the pane's interactive shell.
+That is what keeps a local proxy credential out of the pane's visible screen content, and therefore out of Herdr's optional persisted pane history.
+The disposable presentation workspace's own seeded default tab deliberately receives none of it, because that tab is pruned and never hosts the crewmate.
+
+A value that only exists after the pane has been created cannot use this route and still goes through the typed pre-launch path.
+Every other runtime backend keeps that typed path unchanged, including the paired history-file suppression that protects a typed credential.
+The local endpoint's non-secret variables are a prefix of the composed launch command rather than launch environment, and are identical on every backend.
+A malformed pair refuses the create outright rather than starting a pane whose environment is silently incomplete.
+Because there is no typed fallback here (one would put the credential back on the pane screen), the version floor is the release that carries `--env`, and a refused `tab create` names that requirement instead of failing silently.
+The floor is enforced against the client at the version gate, and against the server at the three entry points that create a crewmate's pane: a current client speaking to a stale server has the environment dropped from the create RPC, which without a fallback surfaces only as the crewmate's authentication retry loop.
+The server's protocol is observed on the session-scoped server-ensure read, because only that read is scoped to the session whose daemon will actually host the pane; an ambient status query reports whatever server happens to be bound.
+That read only publishes the value and never refuses on it, since every pane operation reaches it: a stale daemon must not break capture, send, status, or kill, both because those still work against it and because draining the fleet is the operator's own remedy for a stale server.
+A running server whose protocol cannot be read proceeds rather than refusing.
 
 ## Composer and injection safety
 

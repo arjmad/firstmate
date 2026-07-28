@@ -45,8 +45,8 @@ Expected submit matrix: proven pending plus busy is accepted as queued; proven p
 
 ## Herdr
 
-The compatibility floor is protocol 14.
-The latest active verification uses Herdr 0.7.5 protocol 16 on macOS aarch64, with earlier 0.7.4, protocol-14, and 0.7.3 evidence retained where they define current behavior or fallbacks.
+The compatibility floor is protocol 17 (Herdr 0.7.5), the first release whose `tab create --env` can carry a crewmate's launch environment natively.
+The latest active verification uses Herdr 0.7.5 protocol 17 on macOS aarch64, with earlier 0.7.4, protocol-14, and 0.7.3 evidence retained where it still describes behavior that has not changed.
 
 Core read-only probes:
 
@@ -75,6 +75,9 @@ The CLI matrix was checked directly:
 | Native state | `herdr agent get <pane>` | Working and done transitions were visible; long foreground tool waits required rendered-busy corroboration. |
 | Restart | guarded named-session stop then start | Workspace, tab, pane, and labels persisted; the agent process and registration did not. |
 | Close | `herdr pane close <pane> --session <name>` | The exact one-pane task tab closed; closing a final tab could remove the workspace. |
+| Launch environment | `herdr tab create --help`, `herdr workspace create --help` | Both document `--env <KEY=VALUE>` as setting an environment variable for the launched process. |
+| Repeatable launch environment | `herdr tab create --env A=1 --env B=2 --session <absent-name>` | Both occurrences parsed; the call failed only at socket connect, not with a repeated-argument refusal, so the flag accumulates rather than replacing. |
+| Launch environment reaches the process | `herdr tab create ... --env <k>=<v>` then `herdr pane run <pane> "printenv > <dump>"` | The variable was present in the launched process's own environment and absent from the pane's visible screen content. |
 
 All destructive verification used `bin/fm-herdr-lab.sh` with a non-default `fm-lab-` name and a byte-identical default-session tripwire.
 No ambient `herdr server stop` command is a supported test operation.
@@ -130,7 +133,7 @@ ok - real Herdr lab validation completed on Herdr 0.7.4 with the default-session
 
 The suite also covers lost or failed move responses, active-tab refusal, restart husks, missing and duplicate tokens, manual renames, concurrent cleanup, and exact focus restoration.
 
-The mandatory projection suite ran again on 2026-07-24 against Herdr 0.7.5 protocol 16:
+The mandatory projection suite ran again on 2026-07-24 against Herdr 0.7.5 protocol 17:
 
 ```sh
 HERDR_LAB_HELPER=bin/fm-herdr-lab.sh \

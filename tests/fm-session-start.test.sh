@@ -324,7 +324,7 @@ spawned="${state}.spawned"
 printf '%s\n' "$*" >> "$log"
 case "${1:-} ${2:-}" in
   "status --json")
-    printf '%s\n' '{"client":{"protocol":14,"version":"test"},"server":{"running":true}}'
+    printf '%s\n' '{"client":{"protocol":17,"version":"test"},"server":{"running":true}}'
     ;;
   "workspace list")
     printf '{"result":{"workspaces":[{"workspace_id":"ws1","label":"2ndmate-%s"}]}}\n' "$mate_id"
