@@ -3,7 +3,8 @@
 # default session.
 #
 # Usage:
-#   fm-herdr-lab.sh name <label>
+#   fm-herdr-lab.sh name <task-id|label>  (only a name built from the exact
+#     task id is reclaimable by teardown-task; a plain label is standalone)
 #   fm-herdr-lab.sh prepare <session>
 #   fm-herdr-lab.sh provision <session>
 #   fm-herdr-lab.sh run <session> <herdr arguments...>
@@ -14,9 +15,11 @@
 #   fm-herdr-lab.sh tripwires <task-id>
 #
 # Session names must begin with "fm-lab-" and can never be "default".
-# The name command combines a short sanitized label with a deterministic token
-# for the complete task id, then appends process/random suffixes. The token lets
-# task teardown target exact ownership without collisions between truncated ids.
+# The name command combines a short sanitized stem of its argument with a
+# deterministic token for that complete argument, then appends process/random
+# suffixes. The token lets task teardown target exact ownership without
+# collisions between truncated ids, so a lab a task must later reclaim has to be
+# named with that task's exact id.
 # Every Herdr call made here carries a trailing --session <session>.
 # The run command rejects caller-supplied --session flags, any leading option
 # before the subcommand, all session lifecycle operations, and every server
@@ -534,7 +537,7 @@ EOF
 }
 
 fm_herdr_lab_usage() {
-  sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 fm_herdr_lab_main() {
