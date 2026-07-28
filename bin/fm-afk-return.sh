@@ -124,7 +124,8 @@ clear_delivery_artifacts() {
   rm -f \
     "$STATE/.subsuper-escalations" \
     "$STATE/.subsuper-escalations.since" \
-    "$STATE/.subsuper-inject-wedged"
+    "$STATE/.subsuper-inject-wedged" \
+    "$STATE/.subsuper-inject-unconfirmed"
 }
 
 return_guard() {
@@ -141,7 +142,7 @@ return_guard() {
 }
 
 return_reconcile() {
-  local evidence blockers drained wedge escalations lifecycle_ok=1
+  local evidence blockers drained wedge unconfirmed escalations lifecycle_ok=1
   evidence=$(mktemp "$STATE/.afk-return-evidence.XXXXXX") || return 1
   blockers=$(mktemp "$STATE/.afk-return-blockers.XXXXXX") || { rm -f "$evidence"; return 1; }
   preserve_evidence "$evidence"
@@ -163,6 +164,16 @@ return_reconcile() {
   if [ -s "$STATE/.subsuper-inject-wedged" ]; then
     wedge=$(head -1 "$STATE/.subsuper-inject-wedged" 2>/dev/null || true)
     append_evidence wedge "$wedge" "$evidence"
+  fi
+  # A retired unconfirmed escalation (bin/fm-supervise-daemon.sh's
+  # escalate_retire_unconfirmed) was handed to the crewmate exactly once without a
+  # confirmed submit, and was deliberately not re-flushed. Its record is the only
+  # captain-facing signal when the retire happened on the shutdown path or with
+  # the wedge alarm configured off, both of which mark it UNNOTIFIED, so surface
+  # it here rather than leaving it to be found by hand.
+  if [ -s "$STATE/.subsuper-inject-unconfirmed" ]; then
+    unconfirmed=$(cat "$STATE/.subsuper-inject-unconfirmed" 2>/dev/null || true)
+    append_evidence unconfirmed-delivery "$unconfirmed" "$evidence"
   fi
   if [ -s "$STATE/.subsuper-escalations" ]; then
     escalations=$(cat "$STATE/.subsuper-escalations" 2>/dev/null || true)

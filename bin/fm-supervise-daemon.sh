@@ -195,6 +195,15 @@ MAX_DEFER_SECS_DEFAULT=300
 WEDGE_ALARM_TIMEOUT_SECS_DEFAULT=10
 WEDGE_ALARM_LAST_EPOCH=0
 WEDGE_ALARM_NOTIFIER_PID=
+# Set to 1 by fm_super_main's cleanup trap before its final escalate_flush. The
+# live notifier is a RUNNING-path mechanism only: cleanup has already run
+# wedge_alarm_stop_active_notifier, so anything started after it can outlive the
+# daemon unreaped, and wedge_alarm_run_bounded blocks up to
+# FM_WEDGE_ALARM_TIMEOUT_SECS per configured channel while bin/fm-afk-launch.sh
+# gives the daemon only 10s to exit after SIGTERM. A notifier is also least
+# useful there, since the daemon is going away while the durable record still
+# reaches the captain at the next bin/fm-afk-return.sh.
+DAEMON_SHUTTING_DOWN=0
 # The captain-relevant verb set and the status classifiers (last_status_line,
 # status_is_captain_relevant, window_to_task, scan_captain_relevant_statuses) now
 # live in bin/fm-classify-lib.sh, shared with the always-on watcher.
@@ -617,55 +626,78 @@ escalate_add() {  # <state> <distilled-item>
   printf '%s\n' "$item" >> "$buf"
 }
 
-# INVARIANT: an away-mode escalation may NEVER be retired from the buffer
-# without either a confirmed delivery or a raised alarm. A silent loss is
-# strictly worse than a duplicate: a duplicate is noisy and recoverable, while a
-# dropped escalation means the captain is never told, which is the exact failure
-# the whole away-mode path exists to prevent. escalate_retire_unconfirmed below
-# ENFORCES this structurally - it returns non-zero unless the digest reached a
-# durable record and the alarm channels were fired, and escalate_flush only
-# truncates the buffer when it returns 0.
+# INVARIANT: an away-mode escalation may never be SILENTLY lost. A durable
+# record is MANDATORY on every path, with no exception. The live notifier is the
+# immediacy mechanism for RUNNING paths only, and it is never started from the
+# SIGTERM cleanup trap.
 #
-# escalate_retire_unconfirmed: record + alarm a digest the backend delivered
-# exactly once without confirming the submit, so the live buffer can be retired
-# without ever re-flushing it. Returns 0 ONLY when the durable record was
-# written; the caller must preserve the buffer otherwise.
+# What escalate_retire_unconfirmed below actually ENFORCES, stated exactly: the
+# durable record gates the retire. It returns non-zero unless the digest reached
+# state/.subsuper-inject-unconfirmed, and escalate_flush truncates the live
+# buffer only on a 0 return. The notifier is a best-effort side effect on top of
+# that, NOT a second half of the gate - wedge_alarm_notify always returns 0 by
+# design, so a channel failure cannot be detected here, and an `off` wedge-alarm
+# directive is a legitimate captain choice that deliberately fires nothing. So
+# the record always states which of the two happened, on its own `alarm:` line:
+# UNNOTIFIED (shutdown path, or alarms configured off) or NOTIFIER STARTED (per-
+# channel delivery unconfirmed; wedge_alarm_notify logs its own failures). The
+# no-alarm case is therefore visible in the record, never inferred from its
+# absence.
+#
+# escalate_retire_unconfirmed: record, and on a running path alarm, a digest the
+# backend delivered exactly once without confirming the submit, so the live
+# buffer can be retired without ever re-flushing it.
 #
 # It does NOT reuse inject_wedge_alarm for two reasons. That function is
 # throttled to once per max-defer window, so it can decline to write anything -
 # unacceptable for the only record of a retired escalation. And its marker text
 # says the pane could not accept the escalation, which is the opposite of what
-# happened here. It fires the same backend-independent captain-visible channels
-# (wedge_alarm_notify), which is what makes this survive the `|| true` on every
-# escalate_flush call site: the alarm is a side effect raised here, not a return
-# code a caller can discard.
+# happened here. On running paths it fires the same backend-independent
+# captain-visible channels (wedge_alarm_notify), which is what keeps the alarm
+# out of reach of the `|| true` on every escalate_flush call site: it is a side
+# effect raised here, not a return code a caller can discard.
 escalate_retire_unconfirmed() {  # <state> <digest> <age-seconds>
-  local state=$1 digest=$2 age=$3 record
+  local state=$1 digest=$2 age=$3 record alarm notify=1
   record="$state/.subsuper-inject-unconfirmed"
+  if [ "${DAEMON_SHUTTING_DOWN:-0}" = 1 ]; then
+    notify=0
+    alarm='UNNOTIFIED (retired from the shutdown path, which never starts a notifier); the next bin/fm-afk-return.sh surfaces this record'
+  elif wedge_alarm_alarms_off; then
+    notify=0
+    alarm='UNNOTIFIED (the wedge-alarm config is off, a legitimate captain choice); this record and the daemon log are the whole signal'
+  else
+    alarm='NOTIFIER STARTED on every configured channel; per-channel delivery is best effort and is NOT confirmed here (wedge_alarm_notify logs its own channel failures)'
+  fi
   {
     printf 'fm away-mode escalation DELIVERED ONCE, SUBMIT UNCONFIRMED: %ss buffered, as of %s\n' \
       "$age" "$(date '+%Y-%m-%dT%H:%M:%S%z')"
     printf 'The backend handed this digest to the agent exactly once and could not confirm the submit.\n'
     printf 'It was NOT re-flushed, because re-flushing could deliver it twice. Verify the crewmate received it:\n'
-    printf '%s\n\n' "$digest"
-  } >> "$record" 2>/dev/null || return 1
+    printf '%s\n' "$digest"
+    printf 'alarm: %s\n\n' "$alarm"
+  } 2>/dev/null >> "$record" || return 1
   [ -s "$record" ] || return 1
-  log "ERROR: away-mode escalation retired after a non-retryable unconfirmed submit (${age}s buffered); recorded in $record and deliberately NOT re-flushed. Verify the crewmate received it. Digest: $digest"
+  log "ERROR: away-mode escalation retired after a non-retryable unconfirmed submit (${age}s buffered); recorded in $record and deliberately NOT re-flushed. Verify the crewmate received it. alarm: $alarm. Digest: $digest"
+  [ "$notify" -eq 1 ] || return 0
   wedge_alarm_notify "away-mode escalation delivered once but UNCONFIRMED after ${age}s; not re-flushed - see $record" "$record"
   return 0
 }
 
 # Flush the escalation buffer as ONE batched, single-line digest to the
 # supervisor pane. Returns 0 on successful inject (or empty buffer), non-zero on
-# inject failure (buffer preserved for retry / catch-up).
+# inject failure. A non-zero return preserves the buffer for retry / catch-up in
+# every case EXCEPT the non-retryable status-2 case below, which retires it after
+# recording it durably.
 #
 # inject_msg's third status, 2, means "delivered exactly once, submit
 # unconfirmed, NOT retryable" (see the sent-unconfirmed branch there). Retiring
 # the buffer is the only way to stop a later cycle delivering that digest twice,
-# so the alarm is raised HERE, from this branch, before the truncation - not
-# left to the max-defer wedge alarm downstream, whose `[ -s buffer ]` guard this
-# branch would itself falsify, and not left to the return code, which every
-# other call site discards with `|| true`.
+# so the durable record - and, on a running path, the alarm - happens HERE, from
+# this branch, before the truncation. Not left to the max-defer wedge alarm
+# downstream, whose `[ -s buffer ]` guard this branch would itself falsify, and
+# not left to the return code, which every other call site discards with
+# `|| true`. The cleanup trap reaches this branch too and gets the record only,
+# marked UNNOTIFIED (see escalate_retire_unconfirmed).
 escalate_flush() {  # <state>
   local state=$1 buf item n msg status age
   buf="$state/.subsuper-escalations"
@@ -740,6 +772,19 @@ wedge_alarm_configured_channels() {
     done < "$cfg"
   fi
   [ -n "$found" ] || printf 'auto\n'
+}
+
+# wedge_alarm_alarms_off: true when the captain configured the active alert off,
+# which wedge_alarm_notify honors by firing nothing at all. That is a legitimate
+# choice, not a misconfiguration, so callers that must be honest about whether an
+# alarm was sent read it here instead of assuming wedge_alarm_notify fired (it
+# always returns 0 either way).
+wedge_alarm_alarms_off() {
+  local ch
+  while IFS= read -r ch; do
+    [ "$ch" = off ] && return 0
+  done < <(wedge_alarm_configured_channels)
+  return 1
 }
 
 # Resolve the platform's default OS-level channel for `auto`. macOS reaches the
@@ -940,7 +985,8 @@ inject_wedge_alarm() {  # <state> <age-seconds>
   # so alarming would write a marker whose "Buffered items:" list is blank - the
   # useless artifact the 2026-07-10 incident's marker exists to avoid. Reachable
   # when a flush retired the buffer itself (escalate_retire_unconfirmed), which
-  # has already recorded and alarmed on its own terms.
+  # has already written its durable record, and alarmed if it was on a running
+  # path.
   [ -s "$state/.subsuper-escalations" ] || return 0
   # Re-alarm at most once per max-defer window so a long wedge does not spam.
   if [ "$(_file_age "$marker")" -lt "$max_defer" ]; then
@@ -1472,6 +1518,7 @@ fm_super_main() {
   local WATCHER_PID="" CUR_TMP=""
   cleanup() {
     trap - TERM INT
+    DAEMON_SHUTTING_DOWN=1
     wedge_alarm_stop_active_notifier
     escalate_flush "$STATE" 2>/dev/null || true
     if [ -n "${WATCHER_PID:-}" ]; then

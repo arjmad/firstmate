@@ -2176,8 +2176,9 @@ fm_backend_herdr_agent_prompt_capable() {
 # POLL window is not a re-send - the text is still delivered exactly once - so
 # this does not touch the no-retry rule below. <polls> scales by the same
 # factor, keeping the sample interval (the bound on the inherent
-# starts-and-finishes-between-two-polls gap) exactly as tight as the pane
-# path's.
+# starts-and-finishes-between-two-polls gap) at least as tight as the pane
+# path's - marginally tighter, since one pass over n windows spreads
+# n x <polls> samples across n - 1 fewer gaps than n separate passes do.
 fm_backend_herdr_atomic_confirm_window() {  # <enter-sleep> <retries> -> "<budget> <polls>"
   local sleep_s=$1 attempts=$2 polls=${FM_BACKEND_HERDR_SUBMIT_POLLS:-6} budget
   case "$attempts" in ''|*[!0-9]*|0) attempts=1 ;; esac
@@ -2283,19 +2284,18 @@ fm_backend_herdr_agent_prompt_once() {  # <session> <pane> <text> -> ok|absent|f
 # these back into the pane path's verdicts: the duplicate-delivery hazard is
 # reintroduced the moment a post-send verdict is one the daemon re-flushes.
 #
-# SUPERSEDED DESIGN NOTES. This path's original design said an ambiguous prompt
-# failure returns `send-failed`, and an unconfirmed send returns `pending`.
-# Review superseded BOTH: `send-failed` asserts a delivery that may have
-# happened did not, and `pending`/`unknown` are re-flushed by the away-mode
-# daemon behind a guard this path makes vacuous. `sent-unconfirmed` replaces
-# both, and adding it to the cross-backend vocabulary is the accepted
-# resolution rather than a local shortcut, so every consumer handles it
-# explicitly and none reaches a catch-all: bin/fm-send.sh has its own
-# do-not-resend branch, bin/fm-supervise-daemon.sh's inject_msg maps it to the
-# non-retryable retire-and-alarm path, bin/fm-spawn.sh's kimi pointer proceeds
-# to its own delivery wait instead of re-sending, and bin/fm-backend.sh's
-# dispatch comment owns the shared definition. A new consumer of the vocabulary
-# must decide this verdict deliberately; falling through is a defect.
+# `sent-unconfirmed` IS AN EXTENSION OF THE CROSS-BACKEND VOCABULARY, not a
+# local shortcut, and it is the accepted resolution for both ambiguous cases
+# above: an ambiguous prompt failure and an unconfirmed submit BOTH report it,
+# neither reports `send-failed`, and neither reports `pending`. Because the
+# token is newer than the other four, every consumer branches on it explicitly
+# and none reaches a catch-all: bin/fm-send.sh has its own do-not-resend branch
+# that keeps the pending-reply expectation, bin/fm-supervise-daemon.sh's
+# inject_msg maps it to the non-retryable record-then-retire path,
+# bin/fm-spawn.sh's kimi pointer proceeds to its own delivery wait instead of
+# re-sending, and bin/fm-backend.sh's dispatch comment owns the shared
+# definition. A new consumer must decide this verdict deliberately; falling
+# through to a branch written for one of the other four is a defect.
 #
 # WHY THE SUBMIT CONFIRMATION IS STILL REQUIRED HERE. Measured on herdr 0.7.5
 # with real claude: `agent prompt` returns exit 0 and

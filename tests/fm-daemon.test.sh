@@ -1865,6 +1865,75 @@ test_escalate_flush_preserves_buffer_when_the_record_cannot_be_written() {
   pass "escalate_flush: an unwritable durable record preserves the buffer instead of retiring an escalation silently"
 }
 
+# The live notifier is a RUNNING-path mechanism only. From the SIGTERM cleanup
+# trap it would be started after wedge_alarm_stop_active_notifier has already
+# run, so nothing would reap it, and wedge_alarm_run_bounded blocks up to
+# FM_WEDGE_ALARM_TIMEOUT_SECS per configured channel while fm-afk-launch.sh gives
+# the daemon only 10s to exit. The durable record is still mandatory there, and
+# is marked UNNOTIFIED so bin/fm-afk-return.sh surfaces it at the next session.
+test_shutdown_retire_records_unnotified_and_starts_no_notifier() {
+  local dir state alert daemon_log
+  dir=$(make_supercase unconfirmed-shutdown)
+  state="$dir/state"
+  alert="$dir/alert.log"; : > "$alert"
+  daemon_log="$dir/daemon.log"; : > "$daemon_log"
+  escalate_add "$state" "needs-decision: pick D"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    fm_backend_busy_state() { printf 'idle'; }
+    fm_backend_capture() { printf 'idle prompt\n'; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() { printf 'sent-unconfirmed'; }
+    WEDGE_ALARM_LAST_EPOCH=0
+    DAEMON_SHUTTING_DOWN=1
+    LOG="$daemon_log" FM_WEDGE_ALARM_LOG="$alert" FM_WEDGE_ALARM_CHANNEL=osascript \
+      FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      FM_ESCALATE_BATCH_SECS=0 escalate_flush "$state" || true
+  ) || fail "shutdown-path escalate_flush subshell failed"
+  [ -s "$state/.subsuper-escalations" ] && fail "the shutdown path must still retire the buffer rather than leave it to re-flush"
+  grep -F 'needs-decision: pick D' "$state/.subsuper-inject-unconfirmed" >/dev/null \
+    || fail "the shutdown path retired an escalation with no durable record, which is a silent loss"
+  grep -F 'alarm: UNNOTIFIED' "$state/.subsuper-inject-unconfirmed" >/dev/null \
+    || fail "the shutdown record must be marked UNNOTIFIED so the next session start surfaces it"
+  [ ! -s "$alert" ] \
+    || fail "a notifier was started from the shutdown path, which can outlive the daemon and hang SIGTERM: $(cat "$alert")"
+  grep -F 'ERROR: away-mode escalation retired' "$daemon_log" >/dev/null \
+    || fail "the shutdown retire did not log an ERROR line"
+  pass "escalate_flush: retiring from the shutdown path records the digest UNNOTIFIED and starts no notifier"
+}
+
+# An `off` wedge-alarm directive is a legitimate captain choice, so it must not
+# block the retire - but the code must never then claim an alarm was sent. The
+# durable record stays mandatory and states that none was.
+test_alarms_off_retire_records_that_no_alarm_was_sent() {
+  local dir state alert daemon_log
+  dir=$(make_supercase unconfirmed-alarms-off)
+  state="$dir/state"
+  alert="$dir/alert.log"; : > "$alert"
+  daemon_log="$dir/daemon.log"; : > "$daemon_log"
+  escalate_add "$state" "needs-decision: pick E"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    fm_backend_busy_state() { printf 'idle'; }
+    fm_backend_capture() { printf 'idle prompt\n'; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() { printf 'sent-unconfirmed'; }
+    WEDGE_ALARM_LAST_EPOCH=0
+    LOG="$daemon_log" FM_WEDGE_ALARM_LOG="$alert" FM_WEDGE_ALARM_CHANNEL=off \
+      FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      FM_ESCALATE_BATCH_SECS=0 escalate_flush "$state" || true
+  ) || fail "alarms-off escalate_flush subshell failed"
+  [ -s "$state/.subsuper-escalations" ] && fail "alarms configured off must not block the retire, which exists to stop a duplicate delivery"
+  grep -F 'needs-decision: pick E' "$state/.subsuper-inject-unconfirmed" >/dev/null \
+    || fail "the durable record is mandatory even with alarms off"
+  grep -F 'alarm: UNNOTIFIED' "$state/.subsuper-inject-unconfirmed" >/dev/null \
+    || fail "with alarms off the record must say so, never imply an alarm was sent"
+  [ ! -s "$alert" ] || fail "an 'off' directive still fired a notifier: $(cat "$alert")"
+  pass "escalate_flush: with the wedge alarm configured off, the retire still records the digest and states that no alarm was sent"
+}
+
 # The pane-typing backends are untouched by the branch above: 'pending' and
 # 'unknown' still PRESERVE the buffer, because for them a swallowed send really
 # does leave the text in the composer for the next cycle's guard to catch.
@@ -2008,5 +2077,7 @@ test_inject_msg_defers_on_dead_shell_unknown
 test_escalate_flush_retires_buffer_on_non_retryable_unconfirmed_submit
 test_batch_flush_alarms_before_retiring_an_unconfirmed_escalation
 test_escalate_flush_preserves_buffer_when_the_record_cannot_be_written
+test_shutdown_retire_records_unnotified_and_starts_no_notifier
+test_alarms_off_retire_records_that_no_alarm_was_sent
 test_escalate_flush_still_preserves_buffer_on_pending
 test_inject_msg_defers_on_unrecognized_composer_state

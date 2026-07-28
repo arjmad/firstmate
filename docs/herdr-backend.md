@@ -203,7 +203,7 @@ Composer reading does not apply, because this path never types into the composer
 
 The pane path spreads its confirmation across one window per Enter attempt, so its effective budget is the retry count times the per-attempt budget, 1.8s at the send and away-supervisor defaults.
 This path sends once, so it observes that same total window in a single pass, with the sample count scaled by the same factor so the interval between samples stays as tight.
-Widening a poll window is not a re-send, and a harness that is merely slow to start a turn under load is not reported as undelivered.
+Widening a poll window is not a re-send, and it gives a harness that is slow to start a turn under load the same total time to be observed as the path it replaces.
 
 This path sends exactly once and never retries.
 The pane path may retry safely because it retries only Enter, which is a no-op on an already-empty composer, while a retry here would re-send the whole message on an ambiguity that cannot distinguish a swallowed send from a very fast turn.
@@ -214,8 +214,13 @@ It is deliberately not `pending`, not `unknown`, and not `send-failed`.
 The away-mode daemon preserves its escalation buffer on `pending` and `unknown` and re-flushes it later, guarded only by a composer-empty read, and that guard is vacuous for a path that never types into the composer, so either verdict would deliver the same digest twice.
 `send-failed` means definitively not delivered and would invite an operator to resend by hand.
 `sent-unconfirmed` is non-zero for `fm-send`, which reports that the text was delivered once and must not be resent, and keeps the pending-reply expectation so a reply can still be correlated.
-It is terminal for the away-mode daemon, which may only retire an escalation it will not re-flush after the digest is written to `state/.subsuper-inject-unconfirmed` and the captain-visible alarm channels have fired.
-The record and the alarm happen before the buffer is truncated, and a failed record write preserves the buffer instead, because a duplicate escalation is recoverable and a silently dropped one is not.
+It is terminal for the away-mode daemon, under one invariant: an away-mode escalation may never be silently lost.
+What that enforces exactly is a durable record, mandatory on every path with no exception.
+The daemon may retire an escalation it will not re-flush only after the digest is written to `state/.subsuper-inject-unconfirmed`, before the buffer is truncated, and a failed record write preserves the buffer instead, because a duplicate escalation is recoverable and a silently dropped one is not.
+The live alarm is a best-effort side effect on top of that record, not a second condition on the retire.
+It fires on running paths, where it is out of reach of the discarded return code at every flush call site; it is never started from the SIGTERM cleanup trap, which would hang shutdown per configured channel and start a notifier that shutdown has already stopped reaping.
+Because a channel failure is undetectable from the caller and an `off` wedge-alarm directive is a legitimate captain choice that fires nothing, the record always names which happened on its own `alarm:` line, `UNNOTIFIED` or `NOTIFIER STARTED`.
+`bin/fm-afk-return.sh` surfaces the record as catch-up evidence, so an `UNNOTIFIED` retire still reaches the captain at the next session start.
 
 `bin/backends/herdr.sh` owns the full contract in `fm_backend_herdr_send_text_submit` and `fm_backend_herdr_agent_prompt_once`.
 
