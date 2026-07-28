@@ -1285,6 +1285,48 @@ SH
   pass "teardown removes its task-owned Herdr lab after the worker is gone"
 }
 
+test_unreachable_herdr_warns_but_returns_worktree() {
+  local case_dir lab_dir lab_session rc=0
+  case_dir=$(make_case herdr-lab-unreachable)
+  write_meta "$case_dir" local-only ship
+  lab_dir="$case_dir/lab-state"
+  lab_session=$("$ROOT/bin/fm-herdr-lab.sh" name task-x1)
+  mkdir -p "$lab_dir"
+  printf '%s\n' '{"name":"default","default":true,"running":true,"socket_path":"/tmp/default.sock"}' \
+    > "$lab_dir/$lab_session.fleet-state.json"
+  cat > "$case_dir/fakebin/herdr" <<'SH'
+#!/usr/bin/env bash
+echo "fake herdr: daemon unreachable" >&2
+exit 1
+SH
+  chmod +x "$case_dir/fakebin/herdr"
+
+  # Unlanded work must still refuse even though the lab helper cannot run.
+  wt_commit_file "$case_dir" feature.txt hello "unpushed work"
+  set +e
+  FM_HERDR_LAB_STATE_DIR="$lab_dir" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "herdr-lab-unreachable: unlanded work must still refuse"
+  grep -q REFUSED "$case_dir/stderr" \
+    || fail "herdr-lab-unreachable: lab cleanup weakened the unlanded-work refusal"
+
+  set +e
+  FM_HERDR_LAB_STATE_DIR="$lab_dir" \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "herdr-lab-unreachable: teardown must return the worktree despite lab cleanup failure"
+  grep -q "WARNING: Herdr lab cleanup failed for task task-x1" "$case_dir/stderr" \
+    || fail "herdr-lab-unreachable: no loud warning about the failed lab cleanup"
+  grep -qF "$lab_dir/$lab_session.fleet-state.json" "$case_dir/stderr" \
+    || fail "herdr-lab-unreachable: warning did not name the exact leftover tripwire path"
+  assert_present "$lab_dir/$lab_session.fleet-state.json" \
+    "herdr-lab-unreachable: unverified lab ownership record must be retained"
+  pass "unreachable Herdr warns with the exact lab ownership record and still returns the worktree"
+}
+
 test_herdr_teardown_clears_escalation_marker() {
   local case_dir marker
   case_dir=$(make_case herdr-marker-cleanup)
@@ -1423,6 +1465,7 @@ test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
 test_teardown_removes_task_owned_herdr_lab
+test_unreachable_herdr_warns_but_returns_worktree
 test_herdr_teardown_clears_escalation_marker
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
 test_herdr_projection_teardown_retains_journal_when_close_unconfirmed

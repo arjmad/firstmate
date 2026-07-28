@@ -228,8 +228,15 @@ test_teardown_task_removes_owned_session() {
   pass "fm-herdr-lab: task teardown removes only exact ownership when truncated labels collide"
 }
 
-test_reap_protects_live_and_refuses_unproven_sessions() {
-  local old_state=$FAKE_STATE old_tripwires=$TRIPWIRES reap_home live stale unknown out status=0
+assert_lab_untouched() { # <session> <message>
+  [ "$(cat "$FAKE_STATE/$1")" = running ] || fail "$2"
+  if grep -E '^session (stop|delete) ' "$FAKE_LOG" | grep -F "$1" >/dev/null; then
+    fail "$2 (destructive Herdr call reached it)"
+  fi
+}
+
+test_reap_requires_positive_same_home_ownership() {
+  local old_state=$FAKE_STATE old_tripwires=$TRIPWIRES reap_home lab live stale murky foreign collide out
   fm_herdr_lab_meta_agent_state() {
     grep '^lab-agent-state=' "$1" | cut -d= -f2-
   }
@@ -240,46 +247,74 @@ test_reap_protects_live_and_refuses_unproven_sessions() {
   printf '%s\n' '/home/test/.config/herdr/herdr.sock' > "$FAKE_STATE/default-socket"
   live=$(fm_herdr_lab_name live-task)
   stale=$(fm_herdr_lab_name stale-task)
-  unknown="fm-lab-unknown-task-$$-3"
-  printf '%s\n' running > "$FAKE_STATE/$live"
-  printf '%s\n' running > "$FAKE_STATE/$stale"
-  printf '%s\n' running > "$FAKE_STATE/$unknown"
-  printf '%s\n' '{"name":"default","default":true,"running":true,"socket_path":"/home/test/.config/herdr/herdr.sock"}' > "$TRIPWIRES/$live.fleet-state.json"
-  printf '%s\n' '{"name":"default","default":true,"running":true,"socket_path":"/home/test/.config/herdr/herdr.sock"}' > "$TRIPWIRES/$stale.fleet-state.json"
+  murky=$(fm_herdr_lab_name murky-task)
+  # A lab provisioned by another Firstmate home: this home has no task record
+  # for it, but the tripwire directory is UID-global so its ownership record is
+  # visible here.
+  foreign=$(fm_herdr_lab_name other-home-task)
+  # A legacy-named lab that two of this home's task records both claim.
+  collide="fm-lab-alpha-beta-$$-7"
+  for lab in "$live" "$stale" "$murky" "$foreign" "$collide"; do
+    printf '%s\n' running > "$FAKE_STATE/$lab"
+    printf '%s\n' '{"name":"default","default":true,"running":true,"socket_path":"/home/test/.config/herdr/herdr.sock"}' \
+      > "$TRIPWIRES/$lab.fleet-state.json"
+  done
   printf '%s\n' 'window=default:test' 'lab-agent-state=alive' > "$reap_home/state/live-task.meta"
   printf '%s\n' 'window=default:gone' 'lab-agent-state=dead' > "$reap_home/state/stale-task.meta"
+  printf '%s\n' 'window=default:murky' 'lab-agent-state=ambiguous' > "$reap_home/state/murky-task.meta"
+  printf '%s\n' 'window=default:a' 'lab-agent-state=missing' > "$reap_home/state/alpha.meta"
+  printf '%s\n' 'window=default:ab' 'lab-agent-state=missing' > "$reap_home/state/alpha-beta.meta"
 
+  : > "$FAKE_LOG"
   out=$(FM_HOME="$reap_home" FM_STATE_OVERRIDE="$reap_home/state" run_with_fake fm_herdr_lab_reap) \
     || fail "dry-run reap should report without mutating"
   printf '%s\n' "$out" | grep -F "keep live task lab: $live" >/dev/null \
     || fail "dry-run reap did not protect the live task lab: $out"
   printf '%s\n' "$out" | grep -F "dry-run stale task lab: $stale" >/dev/null \
     || fail "dry-run reap did not identify the proven stale lab: $out"
-  printf '%s\n' "$out" | grep -F "leave unproven lab: $unknown" >/dev/null \
-    || fail "dry-run reap did not report the unproven lab: $out"
-  [ "$(cat "$FAKE_STATE/$live")" = running ] || fail "dry-run reap changed the live lab"
-  [ "$(cat "$FAKE_STATE/$stale")" = running ] || fail "dry-run reap changed the stale lab"
+  printf '%s\n' "$out" | grep -F "leave unproven lab: $murky" >/dev/null \
+    || fail "dry-run reap did not report the ambiguous-state lab by exact name: $out"
+  printf '%s\n' "$out" | grep -F "leave unproven lab: $foreign" >/dev/null \
+    || fail "dry-run reap did not report the foreign-home lab by exact name: $out"
+  printf '%s\n' "$out" | grep -F "leave unproven lab: $collide" >/dev/null \
+    || fail "dry-run reap did not report the doubly-claimed lab by exact name: $out"
+  assert_lab_untouched "$live" "dry-run reap changed the live lab"
+  assert_lab_untouched "$stale" "dry-run reap changed the stale lab"
+  assert_lab_untouched "$foreign" "dry-run reap changed the foreign-home lab"
 
   : > "$FAKE_LOG"
-  FM_HOME="$reap_home" FM_STATE_OVERRIDE="$reap_home/state" \
-    run_with_fake fm_herdr_lab_reap --apply >/dev/null 2>&1 || status=$?
-  expect_code 1 "$status" "apply reap must refuse when any fm-lab session is unproven"
-  [ "$(cat "$FAKE_STATE/$stale")" = running ] || fail "refused reap deleted a proven stale lab before completing preflight"
-  if grep -E '^session (stop|delete) ' "$FAKE_LOG" >/dev/null; then
-    fail "refused reap reached a destructive Herdr call"
-  fi
-
-  rm -f "$FAKE_STATE/$unknown"
-  FM_HOME="$reap_home" FM_STATE_OVERRIDE="$reap_home/state" \
-    run_with_fake fm_herdr_lab_reap --apply >/dev/null || fail "apply reap failed after every lab was classified"
-  [ "$(cat "$FAKE_STATE/$live")" = running ] || fail "apply reap deleted a live task lab"
+  out=$(FM_HOME="$reap_home" FM_STATE_OVERRIDE="$reap_home/state" \
+    run_with_fake fm_herdr_lab_reap --apply) \
+    || fail "apply reap must sweep its own proven-dead labs even while other labs stay unproven"
+  printf '%s\n' "$out" | grep -F "removed stale task lab: $stale" >/dev/null \
+    || fail "apply reap did not report removing the proven stale lab: $out"
   [ "$(cat "$FAKE_STATE/$stale")" = deleted ] || fail "apply reap did not delete the proven stale lab"
+  assert_lab_untouched "$live" "apply reap deleted a live task lab"
+  assert_lab_untouched "$murky" "apply reap deleted a lab with an ambiguous agent state"
+  assert_lab_untouched "$foreign" "apply reap deleted a lab this home has no task record for"
+  assert_lab_untouched "$collide" "apply reap deleted a lab claimed by two task records"
+  assert_present "$TRIPWIRES/$foreign.fleet-state.json" "apply reap removed a foreign home's ownership record"
 
   FAKE_STATE=$old_state
   TRIPWIRES=$old_tripwires
   # shellcheck source=/dev/null
   . "$ROOT/bin/fm-herdr-lab.sh"
-  pass "fm-herdr-lab: reaping is dry-run by default, protects durable live tasks, and refuses unproven labs"
+  pass "fm-herdr-lab: reaping is dry-run by default and destroys only same-home labs proven dead"
+}
+
+test_task_stem_backs_both_naming_and_task_prefix() {
+  local task_id name prefix
+  for task_id in lab a collision-prefix-alpha collision-prefix-bravo \
+    ...leading-dots 1234567890-trailing very-long-task-id-that-truncates task.id_2; do
+    name=$(fm_herdr_lab_name "$task_id") || fail "name derivation failed for '$task_id'"
+    prefix=$(fm_herdr_lab_task_prefix "$task_id") || fail "task prefix derivation failed for '$task_id'"
+    case "$name" in
+      "$prefix"*) ;;
+      *) fail "generated name '$name' does not carry the task teardown prefix '$prefix'" ;;
+    esac
+    fm_herdr_lab_validate_name "$name" || fail "generated name '$name' is not a valid lab session name"
+  done
+  pass "fm-herdr-lab: one task stem backs both session naming and task-scoped teardown"
 }
 
 test_timed_out_provision_cancels_late_launch() {
@@ -315,5 +350,6 @@ test_changed_default_trips_after_teardown
 test_stopped_owned_lab_can_reprovision
 test_failed_delete_retains_tripwire
 test_teardown_task_removes_owned_session
-test_reap_protects_live_and_refuses_unproven_sessions
+test_reap_requires_positive_same_home_ownership
+test_task_stem_backs_both_naming_and_task_prefix
 test_timed_out_provision_cancels_late_launch
