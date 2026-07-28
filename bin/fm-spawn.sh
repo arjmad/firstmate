@@ -185,6 +185,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 fm_refuse_if_gate_agent
 # Skip the watcher guard when re-exec'd for one pair of a batch (FM_SPAWN_NO_GUARD is
 # set by the batch loop below), so the guard runs once for the batch, not once per pair.
+# Every other spawn, --reuse-worktree included, is guarded here at intake so the
+# tangle, watcher-down, and queued-wake alarms survive every later early exit.
 [ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
 KIND=ship
 HARNESS_ARG=

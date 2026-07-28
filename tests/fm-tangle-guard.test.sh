@@ -3,7 +3,8 @@
 #
 # Firstmate is a treehouse-pooled git repo of itself: linked worktrees and
 # secondmate homes all sit at a detached HEAD on the default branch, while the
-# PRIMARY checkout (FM_ROOT) is a normal checkout on a real branch. The "tangle"
+# PRIMARY checkout (the repo's main worktree, resolved from whichever checkout the
+# fleet action runs from) is a normal checkout on a real branch. The "tangle"
 # is a crewmate branching/committing in the primary instead of its own worktree,
 # stranding the primary on a feature branch. Two guards cover it:
 #   GUARD 1 (prevention) - the brief asserts isolation before its branch step, and
@@ -58,6 +59,37 @@ ROWS
   out=$(fm_primary_tangle_branch "$TMP_ROOT" || true)
   [ -z "$out" ] || fail "non-git dir wrongly reported a tangle: '$out'"
   pass "fm_primary_tangle_branch: feature branch alarms; default/detached/non-git stay silent"
+}
+
+# The classification runs on the PRIMARY of the repo the caller is in, not on the
+# caller's own checkout: scripts execute from wherever the fleet action was
+# invoked, routinely a linked task worktree on its own fm/<id> branch, and reading
+# that branch directly is a false tangle. Resolution is what scopes the doctrine.
+test_lib_primary_resolution() {
+  local repo wt bare bare_wt out
+  repo=$(make_repo "$TMP_ROOT/resolve-repo")
+  wt="$TMP_ROOT/resolve-wt"
+  git -C "$repo" worktree add -q -b fm/task-branch-hh8 "$wt"
+
+  out=$(fm_primary_checkout_dir "$wt" || true)
+  [ "$out" = "$(cd "$repo" && pwd -P)" ] || fail "linked worktree resolved primary '$out', expected '$repo'"
+  out=$(fm_primary_tangle_branch "$wt" || true)
+  [ -z "$out" ] || fail "a task worktree on its own branch wrongly reported a tangle: '$out'"
+
+  git -C "$repo" checkout -q -B fm/tangle-hh8
+  out=$(fm_primary_tangle_branch "$wt" || true)
+  [ "$out" = fm/tangle-hh8 ] || fail "a tangled primary was not reported from a linked worktree: '$out'"
+
+  # A bare main worktree (a pooled/gate repo layout) has no branch to strand.
+  bare="$TMP_ROOT/resolve-bare.git"
+  bare_wt="$TMP_ROOT/resolve-bare-wt"
+  git clone --quiet --bare "$repo" "$bare"
+  git -C "$bare" worktree add -q -b fm/bare-task-hh8 "$bare_wt"
+  out=$(fm_primary_checkout_dir "$bare_wt" || true)
+  [ -z "$out" ] || fail "a bare main worktree was reported as a primary checkout: '$out'"
+  out=$(fm_primary_tangle_branch "$bare_wt" || true)
+  [ -z "$out" ] || fail "a worktree of a bare repo wrongly reported a tangle: '$out'"
+  pass "primary resolution: a linked worktree reports on its primary, never on its own branch"
 }
 
 # --- GUARD 2a: fm-guard banner ----------------------------------------------
@@ -302,6 +334,7 @@ test_spawn_tmux_window_construction() {
 }
 
 test_lib_classification
+test_lib_primary_resolution
 test_guard_banner
 test_bootstrap_line
 test_brief_assertion_precedes_branch
