@@ -191,9 +191,10 @@ Every other runtime backend keeps that typed path unchanged, including the paire
 The local endpoint's non-secret variables are a prefix of the composed launch command rather than launch environment, and are identical on every backend.
 A malformed pair refuses the create outright rather than starting a pane whose environment is silently incomplete.
 Because there is no typed fallback here (one would put the credential back on the pane screen), the version floor is the release that carries `--env`, and a refused `tab create` names that requirement instead of failing silently.
-The floor is enforced against the client at the version gate, and against the server on the session-scoped server-ensure read that already precedes every workspace, tab, and pane call: a current client speaking to a stale server has the environment dropped from the create RPC, which without a fallback surfaces only as the crewmate's authentication retry loop.
-The server half deliberately lives there rather than beside the client half, because only that read is scoped to the session whose daemon will actually host the pane; an ambient status query reports whatever server happens to be bound.
-A running server whose protocol cannot be read is left alone rather than refused.
+The floor is enforced against the client at the version gate, and against the server at the three entry points that create a crewmate's pane: a current client speaking to a stale server has the environment dropped from the create RPC, which without a fallback surfaces only as the crewmate's authentication retry loop.
+The server's protocol is observed on the session-scoped server-ensure read, because only that read is scoped to the session whose daemon will actually host the pane; an ambient status query reports whatever server happens to be bound.
+That read only publishes the value and never refuses on it, since every pane operation reaches it: a stale daemon must not break capture, send, status, or kill, both because those still work against it and because draining the fleet is the operator's own remedy for a stale server.
+A running server whose protocol cannot be read proceeds rather than refusing.
 
 ## Composer and injection safety
 

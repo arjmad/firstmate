@@ -162,9 +162,11 @@ fm_backend_herdr_workspace_label() {
 # fm_backend_herdr_version_check, which is intentionally session-independent
 # (reads only .client.* fields). Anything reading .server.* MUST route through
 # here for exactly the reason above - that is why the server half of the
-# `tab create --env` protocol floor is asserted by
-# fm_backend_herdr_server_ensure, on its session-scoped status read, rather
-# than alongside the client half in version_check.
+# `tab create --env` protocol floor is observed by
+# fm_backend_herdr_server_ensure, on its session-scoped status read (published
+# as FM_BACKEND_HERDR_SERVER_PROTOCOL), and asserted by
+# fm_backend_herdr_require_server_env_support at the three creating call sites,
+# rather than alongside the client half in version_check.
 fm_backend_herdr_cli() {  # <session> <herdr-subcommand-and-args...>
   local session=$1
   shift
@@ -242,8 +244,9 @@ fm_backend_herdr_tool_check() {
 # FM_BACKEND_HERDR_MIN_PROTOCOL. The matching SERVER-side assertion cannot live
 # here: a bare `herdr status --json` is ambient, and .server.* would describe
 # whatever daemon happens to be bound rather than the one that will host the
-# pane. fm_backend_herdr_server_ensure owns it, on its existing session-scoped
-# read.
+# pane. fm_backend_herdr_server_ensure observes it on its session-scoped read,
+# and fm_backend_herdr_require_server_env_support asserts it at the three
+# creating call sites.
 fm_backend_herdr_version_check() {
   fm_backend_herdr_tool_check || return 1
   local status protocol version
@@ -880,46 +883,78 @@ fm_backend_herdr_projection_order_best_effort() {  # <session> <created-workspac
   return 0
 }
 
+# FM_BACKEND_HERDR_SERVER_PROTOCOL: the protocol of the session-scoped herdr
+# server fm_backend_herdr_server_ensure last observed running, or empty when no
+# running server has been observed in this process or its protocol could not be
+# read. Published, never judged, by server_ensure; judged only by
+# fm_backend_herdr_require_server_env_support.
+FM_BACKEND_HERDR_SERVER_PROTOCOL=""
+
+# fm_backend_herdr_server_protocol_publish: record <status-json>'s
+# .server.protocol, leaving the published value empty unless it is a number.
+fm_backend_herdr_server_protocol_publish() {  # <status-json>
+  local protocol
+  protocol=$(printf '%s' "$1" | jq -r '.server.protocol // empty' 2>/dev/null)
+  case "$protocol" in
+    ''|*[!0-9]*) FM_BACKEND_HERDR_SERVER_PROTOCOL="" ;;
+    *) FM_BACKEND_HERDR_SERVER_PROTOCOL=$protocol ;;
+  esac
+}
+
+# fm_backend_herdr_require_server_env_support: the SERVER half of the
+# `tab create --env` floor (fm_backend_herdr_version_check owns the client
+# half). Called ONLY by the three entry points that create the pane a crewmate
+# runs in, because the floor is a creation-time precondition: a pre-0.7.5
+# daemon drops the unknown env field from the create RPC, and with no typed
+# fallback that silent credential loss surfaces only as the crewmate's 401
+# retry loop. Every non-creating pane operation must keep working against an
+# old-but-live daemon - see fm_backend_herdr_server_ensure's header.
+# Reads the value server_ensure published from its session-scoped status read,
+# so it costs no request and cannot be misled by an ambient one. An empty
+# (unknown) protocol proceeds rather than refusing.
+fm_backend_herdr_require_server_env_support() {  # <session>
+  local session=$1
+  [ -n "$FM_BACKEND_HERDR_SERVER_PROTOCOL" ] || return 0
+  [ "$FM_BACKEND_HERDR_SERVER_PROTOCOL" -lt "$FM_BACKEND_HERDR_MIN_PROTOCOL" ] || return 0
+  echo "error: the herdr server running for session '$session' speaks protocol $FM_BACKEND_HERDR_SERVER_PROTOCOL, older than the verified minimum $FM_BACKEND_HERDR_MIN_PROTOCOL (herdr 0.7.5, the first release whose 'tab create --env' can carry a crewmate's launch environment natively); a stale server silently drops the launch environment, so the crewmate would start with no credential. Update herdr ('herdr update'), then restart that session's server ONLY through the guarded lifecycle path (bin/fm-herdr-lab.sh for lab sessions; docs/herdr-backend.md 'Destructive lab safety') - an ambient server-stop is forbidden here and would reach the captain's fleet. Existing panes keep working meanwhile, so the fleet can be drained first." >&2
+  return 1
+}
+
 # fm_backend_herdr_server_ensure: start the herdr server for <session>
 # headless (no TUI client) if not already running, mirroring tmux's `tmux
 # has-session || tmux new-session -d`. Verified: a bare socket CLI call does
 # NOT auto-start the server, so this must run before any workspace/tab/pane
 # call. Bounded poll for the server to report running.
 #
-# This is also where the SERVER half of the `tab create --env` floor is
-# asserted (fm_backend_herdr_version_check owns the client half). It belongs
-# here and nowhere else: this read is already scoped to <session> through
+# It also OBSERVES, and never judges, the SERVER half of the `tab create --env`
+# floor: whichever read sees .server.running true also publishes that same
+# blob's .server.protocol as FM_BACKEND_HERDR_SERVER_PROTOCOL (empty when it
+# cannot be read, so a caller can tell unknown from below-floor). This read is
+# the right place to OBSERVE it - it is already scoped to <session> through
 # fm_backend_herdr_cli, so it describes the exact daemon that will host the
-# pane rather than whatever daemon an ambient query happens to reach, it runs
-# before every workspace/tab/pane call, and it costs no extra request - the
-# same status blob already being read for .server.running carries
-# .server.protocol. A pre-0.7.5 daemon drops the unknown env field from the
-# create RPC, and with no typed fallback that silent credential loss surfaces
-# only as the crewmate's 401 retry loop. Asserted at both points that observe
-# a running server, so a stale PRE-EXISTING daemon is caught on the fast path.
-# A running server whose protocol cannot be parsed is left alone rather than
-# refused: a spurious refusal here would block every spawn.
-
-# fm_backend_herdr_server_protocol_ok: 0 unless <status-json> describes a
-# running server whose readable protocol is below the floor.
-fm_backend_herdr_server_protocol_ok() {  # <session> <status-json>
-  local session=$1 status=$2 protocol version
-  protocol=$(printf '%s' "$status" | jq -r '.server.protocol // empty' 2>/dev/null)
-  case "$protocol" in
-    ''|*[!0-9]*) return 0 ;;
-  esac
-  [ "$protocol" -lt "$FM_BACKEND_HERDR_MIN_PROTOCOL" ] || return 0
-  version=$(printf '%s' "$status" | jq -r '.server.version // empty' 2>/dev/null)
-  echo "error: the herdr server running for session '$session' speaks protocol $protocol (version ${version:-unknown}), older than the verified minimum $FM_BACKEND_HERDR_MIN_PROTOCOL (herdr 0.7.5, the first release whose 'tab create --env' can carry a crewmate's launch environment natively); a stale server silently drops the launch environment, so the crewmate would start with no credential. Update herdr ('herdr update'), then restart that session's server ONLY through the guarded lifecycle path (bin/fm-herdr-lab.sh for lab sessions; docs/herdr-backend.md 'Destructive lab safety') - an ambient server-stop is forbidden here and would reach the captain's fleet." >&2
-  return 1
-}
-
+# pane rather than whatever daemon an ambient query reaches, and it costs no
+# extra request.
+#
+# It is emphatically the wrong place to REFUSE on it. The floor is a
+# CREATION-time precondition that only `tab create --env` needs, while
+# server_ensure is the UNIVERSAL precondition every pane operation reaches
+# through fm_backend_herdr_target_ready. Refusing here would be actively
+# unsafe: fm_backend_herdr_kill is `target_ready || return 0` under the
+# best-effort tmux-kill-window contract, so a stale daemon would make kill
+# report SUCCESS without closing the pane and teardown would then record a
+# clean cleanup over a still-running worker. capture/capture_ansi,
+# send_text_line/send_literal/send_key, current_path, and the status path must
+# likewise keep working against an old-but-live daemon - draining the fleet is
+# the operator's own remedy for a stale server, so it must not be what the
+# check blocks. fm_backend_herdr_require_server_env_support does the judging,
+# at the three entry points that actually create a crewmate's pane.
 fm_backend_herdr_server_ensure() {  # <session>
   local session=$1 status running out i
+  FM_BACKEND_HERDR_SERVER_PROTOCOL=""
   status=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null)
   running=$(printf '%s' "$status" | jq -r '.server.running // false' 2>/dev/null)
   if [ "$running" = "true" ]; then
-    fm_backend_herdr_server_protocol_ok "$session" "$status" || return 1
+    fm_backend_herdr_server_protocol_publish "$status"
     return 0
   fi
   ( fm_backend_herdr_cli "$session" server >/dev/null 2>&1 & ) || return 1
@@ -927,7 +962,7 @@ fm_backend_herdr_server_ensure() {  # <session>
     status=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null)
     running=$(printf '%s' "$status" | jq -r '.server.running // false' 2>/dev/null)
     if [ "$running" = "true" ]; then
-      fm_backend_herdr_server_protocol_ok "$session" "$status" || return 1
+      fm_backend_herdr_server_protocol_publish "$status"
       return 0
     fi
     sleep 0.5
@@ -1094,6 +1129,7 @@ fm_backend_herdr_container_ensure() {  # <cwd-for-a-fresh-workspace>
   fm_backend_herdr_version_check || return 1
   session=$(fm_backend_herdr_session)
   fm_backend_herdr_server_ensure "$session" || return 1
+  fm_backend_herdr_require_server_env_support "$session" || return 1
   fm_backend_herdr_workspace_ensure "$session" "$cwd" >/dev/null || { label=$(fm_backend_herdr_workspace_label); echo "error: failed to ensure herdr workspace '$label' in session '$session'" >&2; return 1; }
   if [ -z "$FM_BACKEND_HERDR_WS_ID" ]; then
     label=$(fm_backend_herdr_workspace_label)
@@ -1376,6 +1412,7 @@ fm_backend_herdr_projection_create_task() {  # <cwd> <workspace-label> <task-lab
   fm_backend_herdr_version_check || return 1
   session=$(fm_backend_herdr_session)
   fm_backend_herdr_server_ensure "$session" || return 1
+  fm_backend_herdr_require_server_env_support "$session" || return 1
   focus_before=$(fm_backend_herdr_projection_focus_snapshot "$session") || {
     echo "error: herdr presentation workspace create could not capture exact active workspace and tab; refusing a focus-unsafe projection" >&2
     return 1
@@ -1590,6 +1627,7 @@ fm_backend_herdr_projection_reclaim_task() {  # <session> <journal> <task-id> <h
   FM_BACKEND_HERDR_PROJECTION_PANE_ID=""
   fm_backend_herdr_env_flags "$@" || return 1
   env_flags=( "${FM_BACKEND_HERDR_ENV_FLAGS[@]+"${FM_BACKEND_HERDR_ENV_FLAGS[@]}"}" )
+  fm_backend_herdr_require_server_env_support "$session" || return 1
   fm_backend_herdr_projection_journal_snapshot "$journal" "$id" || return 1
   if [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" != 2 ]; then
     echo "warning: herdr presentation journal for $id has no exact restart binding; spawning flat" >&2

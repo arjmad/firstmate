@@ -237,12 +237,15 @@ ok - fm_backend_herdr_projection_reclaim_task: the husk replacement tab carries 
 ok - fm_backend_herdr_projection_reclaim_task: a malformed env pair refuses before any herdr call
 ok - fm_backend_herdr_version_check: refuses a pre---env herdr (protocol 16) and names the 0.7.5 requirement
 ok - fm_backend_herdr_version_check: stays client-only and session-independent, leaving the server half to the session-scoped server_ensure
-ok - fm_backend_herdr_server_ensure: refuses a stale PRE-EXISTING session server on the fast path, without recommending a forbidden command
-ok - fm_backend_herdr_server_ensure: the same floor assertion covers the poll path, not just the fast path
-ok - fm_backend_herdr_server_ensure: a current or unreadable server protocol proceeds instead of refusing spuriously
+ok - fm_backend_herdr_server_ensure: publishes the session server's protocol on the fast path and never refuses on it
+ok - fm_backend_herdr_server_ensure: the poll path publishes the same way as the fast path
+ok - fm_backend_herdr_server_ensure: an unreadable server protocol publishes empty so callers can tell unknown from below-floor
+ok - herdr non-creating paths: capture and kill still work (and kill really closes) against a below-floor running server
+ok - fm_backend_herdr_container_ensure: refuses a below-floor session server, so the floor still guards the paths that use --env
+ok - fm_backend_herdr_container_ensure: a server at the floor proceeds normally
 ok - fm-spawn (herdr): launch env goes native via tab create --env and is never typed at the pane shell
 ok - fm-spawn (herdr): a spawn with no local endpoint still gets GOTMPDIR natively and no token env
--> 154 assertions, exit 0
+-> 157 assertions, exit 0
 ```
 
 The end-to-end case asserts that a `pane run` and a `pane send-text` did occur, then that no typed call carried the credential, an `ANTHROPIC_AUTH_TOKEN` export, a `GOTMPDIR` export, or the history-file suppression, so it cannot pass by the spawn simply typing nothing.

@@ -216,7 +216,7 @@ test_version_check_refuses_protocol_below_env_floor() {
 # The client half is only half the failure: a current client speaking to a
 # still-running pre-0.7.5 daemon has its unknown env field dropped from the
 # create RPC, so the pane launches with no credential and the crewmate spins in
-# a 401 retry loop. That half is asserted by server_ensure, NOT version_check:
+# a 401 retry loop. That half is observed by server_ensure, NOT version_check:
 # only server_ensure's read is scoped to the session whose daemon will host the
 # pane. A bare `herdr status --json` is ambient and reports whatever server
 # happens to be bound (see the fm_backend_herdr_cli header).
@@ -234,71 +234,143 @@ test_version_check_never_reads_server_fields() {
   pass "fm_backend_herdr_version_check: stays client-only and session-independent, leaving the server half to the session-scoped server_ensure"
 }
 
-# server_ensure is the session-scoped owner of the server half. The fast path
-# matters most: a stale daemon that was ALREADY running is the realistic case,
-# since a server firstmate itself just started is current by construction.
-test_server_ensure_refuses_stale_preexisting_server() {
-  local dir log resp fb out status
-  dir="$TMP_ROOT/server-ensure-stale-fast"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+# server_ensure OBSERVES the server protocol and must never judge it: it is the
+# universal precondition every pane operation reaches through target_ready.
+# The fast path matters most - a stale daemon that was ALREADY running is the
+# realistic case, since a server firstmate just started is current by
+# construction - and both reads that see a running server must publish.
+test_server_ensure_publishes_server_protocol_without_refusing() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/server-ensure-publish-fast"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   printf '{"client":{"version":"0.7.5","protocol":17},"server":{"status":"running","running":true,"version":"0.7.4","protocol":16,"compatible":true,"restart_needed":false}}\n' > "$resp/1.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT" 2>&1 )
+    bash -c '. "$0/bin/backends/herdr.sh"
+      fm_backend_herdr_server_ensure fmtest || { printf "REFUSED\n"; exit 0; }
+      printf "published=%s\n" "$FM_BACKEND_HERDR_SERVER_PROTOCOL"' "$ROOT" 2>&1 )
+  assert_not_contains "$out" "REFUSED" \
+    "server_ensure must NEVER refuse on a below-floor protocol: every pane operation reaches it through target_ready, and kill is 'target_ready || return 0', so a refusal would make teardown report success over a still-running worker"
+  assert_contains "$out" "published=16" "server_ensure did not publish the observed server protocol"
+  assert_contains "$(cat "$log")" $'\x1f''--session'$'\x1f''fmtest' \
+    "the server protocol must be read through the SESSION-SCOPED status call, never an ambient one"
+  pass "fm_backend_herdr_server_ensure: publishes the session server's protocol on the fast path and never refuses on it"
+}
+
+# Slot 3 is racy here: server_ensure backgrounds `herdr server` and immediately
+# polls, so the backgrounded call and the first poll contend for the next slot
+# in the fake's shared counter. Leave slot 3 a don't-care and answer from slot
+# 4, exactly as test_container_ensure_starts_server_and_workspace does.
+test_server_ensure_publishes_server_protocol_on_the_poll_path() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/server-ensure-publish-poll"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"client":{"version":"0.7.5","protocol":17},"server":{"running":false}}\n' > "$resp/1.out"
+  printf '{"client":{"version":"0.7.5","protocol":17},"server":{"status":"running","running":true,"version":"0.7.4","protocol":16}}\n' > "$resp/4.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"
+      fm_backend_herdr_server_ensure fmtest || { printf "REFUSED\n"; exit 0; }
+      printf "published=%s\n" "$FM_BACKEND_HERDR_SERVER_PROTOCOL"' "$ROOT" 2>&1 )
+  assert_not_contains "$out" "REFUSED" "the poll path must not refuse on a below-floor protocol either"
+  assert_contains "$out" "published=16" "server_ensure did not publish the protocol observed during the poll"
+  pass "fm_backend_herdr_server_ensure: the poll path publishes the same way as the fast path"
+}
+
+# Unknown must stay distinguishable from below-floor, so a caller can proceed
+# rather than refuse when the protocol simply could not be read.
+test_server_ensure_publishes_empty_for_an_unreadable_protocol() {
+  local dir log resp fb out case_json i=0
+  for case_json in \
+    '{"server":{"running":true}}' \
+    '{"server":{"running":true,"protocol":"unknown"}}' \
+    '{"server":{"running":true,"protocol":null}}' \
+  ; do
+    i=$((i + 1))
+    dir="$TMP_ROOT/server-ensure-publish-unknown-$i"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+    printf '%s\n' "$case_json" > "$resp/1.out"
+    fb=$(make_herdr_fakebin "$dir")
+    out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+      bash -c '. "$0/bin/backends/herdr.sh"
+        fm_backend_herdr_server_ensure fmtest || { printf "REFUSED\n"; exit 0; }
+        printf "published=[%s]\n" "$FM_BACKEND_HERDR_SERVER_PROTOCOL"' "$ROOT" 2>&1 )
+    assert_contains "$out" "published=[]" "an unreadable protocol must publish empty, not a bogus number, for: $case_json"
+    assert_not_contains "$(cat "$log")" $'\x1f''server'$'\x1f''--session' \
+      "an already-running server must not be restarted for: $case_json"
+  done
+  pass "fm_backend_herdr_server_ensure: an unreadable server protocol publishes empty so callers can tell unknown from below-floor"
+}
+
+# The regression this placement exists to prevent: a stale daemon must not
+# break the operations that still work against it. kill is the sharpest case -
+# it is 'target_ready || return 0' under the best-effort kill-window contract,
+# so a refusal upstream would make teardown record a clean cleanup over a pane
+# that is still running.
+test_noncreating_paths_survive_a_below_floor_server() {
+  local dir log resp fb out status
+  dir="$TMP_ROOT/noncreating-stale-server"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  fb="$dir/fakebin"; mkdir -p "$fb"
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+{ printf 'HERDR_SESSION=%s' "${HERDR_SESSION:-}"; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "${FM_HERDR_LOG:?}"
+case "${1:-} ${2:-}" in
+  "status --json")
+    printf '{"client":{"version":"0.7.5","protocol":17},"server":{"status":"running","running":true,"version":"0.7.4","protocol":16}}\n' ;;
+  "pane get")
+    printf '{"result":{"pane":{"pane_id":"w1:p2","tab_id":"w1:t2","workspace_id":"w1"}}}\n' ;;
+  "pane read")
+    printf '{"result":{"content":"crewmate still working"}}\n' ;;
+  "pane close")
+    printf '{"result":{"closed":true}}\n' ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/herdr"
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" \
+    bash -c '. "$0/bin/backends/herdr.sh"
+      fm_backend_herdr_capture fmtest:w1:p2 40 >/dev/null || { printf "capture-FAILED\n"; exit 1; }
+      fm_backend_herdr_kill fmtest:w1:p2 || { printf "kill-FAILED\n"; exit 1; }
+      printf "ok\n"' "$ROOT" 2>&1 )
   status=$?
-  [ "$status" -ne 0 ] || fail "server_ensure should refuse an already-running server below the --env floor"
+  expect_code 0 "$status" "capture and kill must keep working against an old-but-live daemon: $out"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''close' \
+    "kill must actually close the pane, never silently succeed - a refusal upstream would make teardown record a clean cleanup over a still-running worker"
+  pass "herdr non-creating paths: capture and kill still work (and kill really closes) against a below-floor running server"
+}
+
+# The floor still bites where --env is actually used.
+test_container_ensure_refuses_a_below_floor_server() {
+  local dir log resp fb out status
+  dir="$TMP_ROOT/container-ensure-stale-server"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"client":{"version":"0.7.5","protocol":17}}\n' > "$resp/1.out"
+  printf '{"client":{"version":"0.7.5","protocol":17},"server":{"status":"running","running":true,"version":"0.7.4","protocol":16}}\n' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 HERDR_SESSION=fmtest \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_container_ensure /tmp' "$ROOT" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "container_ensure must refuse a below-floor server: its tab create carries the credential via --env"
   assert_contains "$out" "fmtest" "the refusal did not name the session whose server is stale"
   assert_contains "$out" "protocol 16" "the refusal did not name the rejected server protocol"
   assert_contains "$out" "0.7.5" "the refusal did not name the herdr version requirement"
   assert_contains "$out" "herdr update" "the refusal did not point at the update path"
   assert_not_contains "$out" "herdr server stop" \
     "the refusal must never recommend an ambient 'herdr server stop' - a forbidden command that would tear down the captain's fleet"
-  assert_contains "$(cat "$log")" $'\x1f''--session'$'\x1f''fmtest' \
-    "the server protocol must be read through the SESSION-SCOPED status call, never an ambient one"
-  assert_not_contains "$(cat "$log")" $'\x1f''server'$'\x1f''--session' \
-    "a stale server must be refused before firstmate tries to start anything"
-  pass "fm_backend_herdr_server_ensure: refuses a stale PRE-EXISTING session server on the fast path, without recommending a forbidden command"
+  assert_not_contains "$(cat "$log")" $'\x1f''workspace'$'\x1f''create' \
+    "the refusal must land before any workspace is created"
+  pass "fm_backend_herdr_container_ensure: refuses a below-floor session server, so the floor still guards the paths that use --env"
 }
 
-# The same assertion must hold at the second place a running server is
-# observed, so a stale daemon cannot slip through by coming up during the poll.
-test_server_ensure_refuses_stale_server_on_the_poll_path() {
-  local dir log resp fb out status
-  dir="$TMP_ROOT/server-ensure-stale-poll"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
-  printf '{"client":{"version":"0.7.5","protocol":17},"server":{"running":false}}\n' > "$resp/1.out"
-  : > "$resp/2.out"
-  printf '{"client":{"version":"0.7.5","protocol":17},"server":{"status":"running","running":true,"version":"0.7.4","protocol":16}}\n' > "$resp/3.out"
+test_container_ensure_admits_a_current_server() {
+  local dir log resp fb status
+  dir="$TMP_ROOT/container-ensure-current-server"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"client":{"version":"0.7.5","protocol":17}}\n' > "$resp/1.out"
+  printf '{"client":{"version":"0.7.5","protocol":17},"server":{"status":"running","running":true,"version":"0.7.5","protocol":17}}\n' > "$resp/2.out"
+  printf '{"result":{"workspaces":[{"workspace_id":"w9","label":"firstmate"}]}}\n' > "$resp/3.out"
   fb=$(make_herdr_fakebin "$dir")
-  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT" 2>&1 )
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 HERDR_SESSION=fmtest \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_container_ensure /tmp' "$ROOT" >/dev/null 2>&1
   status=$?
-  [ "$status" -ne 0 ] || fail "server_ensure should refuse a below-floor server that reports running during the poll"
-  assert_contains "$out" "protocol 16" "the poll-path refusal did not name the rejected server protocol"
-  assert_not_contains "$out" "herdr server stop" "the poll-path refusal must not recommend a forbidden command"
-  pass "fm_backend_herdr_server_ensure: the same floor assertion covers the poll path, not just the fast path"
-}
-
-# Scoping is the point: anything that is not a running server with a readable
-# below-floor protocol must proceed. A spurious refusal here blocks every spawn.
-test_server_ensure_admits_current_or_unreadable_server_protocol() {
-  local dir log resp fb status case_json i=0
-  for case_json in \
-    '{"server":{"status":"running","running":true,"version":"0.7.5","protocol":17}}' \
-    '{"server":{"running":true}}' \
-    '{"server":{"running":true,"protocol":"unknown"}}' \
-    '{"server":{"running":true,"protocol":null}}' \
-  ; do
-    i=$((i + 1))
-    dir="$TMP_ROOT/server-ensure-admit-$i"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
-    printf '%s\n' "$case_json" > "$resp/1.out"
-    fb=$(make_herdr_fakebin "$dir")
-    PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
-      bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT" >/dev/null 2>&1
-    status=$?
-    expect_code 0 "$status" "server_ensure must admit, not refuse, a server reporting: $case_json"
-    assert_not_contains "$(cat "$log")" $'\x1f''server'$'\x1f''--session' \
-      "an already-running server must not be restarted for: $case_json"
-  done
-  pass "fm_backend_herdr_server_ensure: a current or unreadable server protocol proceeds instead of refusing spuriously"
+  expect_code 0 "$status" "container_ensure must admit a server at the floor"
+  pass "fm_backend_herdr_container_ensure: a server at the floor proceeds normally"
 }
 
 test_version_check_refuses_old_protocol() {
@@ -3607,9 +3679,12 @@ test_version_check_accepts_current_protocol
 test_version_check_refuses_old_protocol
 test_version_check_refuses_protocol_below_env_floor
 test_version_check_never_reads_server_fields
-test_server_ensure_refuses_stale_preexisting_server
-test_server_ensure_refuses_stale_server_on_the_poll_path
-test_server_ensure_admits_current_or_unreadable_server_protocol
+test_server_ensure_publishes_server_protocol_without_refusing
+test_server_ensure_publishes_server_protocol_on_the_poll_path
+test_server_ensure_publishes_empty_for_an_unreadable_protocol
+test_noncreating_paths_survive_a_below_floor_server
+test_container_ensure_refuses_a_below_floor_server
+test_container_ensure_admits_a_current_server
 test_version_check_refuses_missing_herdr
 test_workspace_label_primary_home_no_marker
 test_workspace_label_secondmate_home_uses_marker_id
