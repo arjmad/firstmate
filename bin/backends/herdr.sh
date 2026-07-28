@@ -2145,27 +2145,22 @@ FM_BACKEND_HERDR_AGENT_PROMPT=${FM_BACKEND_HERDR_AGENT_PROMPT:-0}
 # before any call is made, keeps that home on the pane path silently.
 #
 # Only the protocol number is read, not `herdr api schema` (which
-# fm_backend_herdr_events_capable also checks): that read is ~220KB and this
-# runs on the per-send path, where the watcher's once-per-process memoization is
-# not available. The verdict is memoized per shell process instead, so a
-# long-lived daemon probes once; a herdr upgraded underneath a running daemon is
-# picked up on its next restart.
+# fm_backend_herdr_events_capable also checks): that read is ~220KB, and this
+# probe runs on the per-send path with NO memoization. Do not add one here
+# without checking the callers first: every caller runs
+# fm_backend_send_text_submit inside a command substitution (bin/fm-send.sh,
+# bin/fm-supervise-daemon.sh's inject_msg, bin/fm-spawn.sh's kimi pointer), so
+# any variable this function sets dies with that subshell and a memo would be
+# silently dead code. One `status --json` per send is the accepted cost, and it
+# is not a new one: the pane path already pays exactly that per send through
+# fm_backend_herdr_send_literal -> target_ready -> server_ensure.
 fm_backend_herdr_agent_prompt_capable() {
   local protocol
-  case "${FM_BACKEND_HERDR_AGENT_PROMPT_CAPABLE_CACHE:-}" in
-    1) return 0 ;;
-    0) return 1 ;;
-  esac
   protocol=$(herdr status --json 2>/dev/null | jq -r '.client.protocol // empty' 2>/dev/null)
   case "$protocol" in
-    ''|*[!0-9]*) FM_BACKEND_HERDR_AGENT_PROMPT_CAPABLE_CACHE=0; return 1 ;;
+    ''|*[!0-9]*) return 1 ;;
   esac
-  if [ "$protocol" -lt "$FM_BACKEND_HERDR_MIN_AGENT_PROMPT_PROTOCOL" ]; then
-    FM_BACKEND_HERDR_AGENT_PROMPT_CAPABLE_CACHE=0
-    return 1
-  fi
-  FM_BACKEND_HERDR_AGENT_PROMPT_CAPABLE_CACHE=1
-  return 0
+  [ "$protocol" -ge "$FM_BACKEND_HERDR_MIN_AGENT_PROMPT_PROTOCOL" ]
 }
 
 # fm_backend_herdr_atomic_confirm_window: the atomic path's total confirmation
@@ -2287,6 +2282,20 @@ fm_backend_herdr_agent_prompt_once() {  # <session> <pane> <text> -> ok|absent|f
 # target that cannot be parsed, where nothing was delivered. Do not collapse
 # these back into the pane path's verdicts: the duplicate-delivery hazard is
 # reintroduced the moment a post-send verdict is one the daemon re-flushes.
+#
+# SUPERSEDED DESIGN NOTES. This path's original design said an ambiguous prompt
+# failure returns `send-failed`, and an unconfirmed send returns `pending`.
+# Review superseded BOTH: `send-failed` asserts a delivery that may have
+# happened did not, and `pending`/`unknown` are re-flushed by the away-mode
+# daemon behind a guard this path makes vacuous. `sent-unconfirmed` replaces
+# both, and adding it to the cross-backend vocabulary is the accepted
+# resolution rather than a local shortcut, so every consumer handles it
+# explicitly and none reaches a catch-all: bin/fm-send.sh has its own
+# do-not-resend branch, bin/fm-supervise-daemon.sh's inject_msg maps it to the
+# non-retryable retire-and-alarm path, bin/fm-spawn.sh's kimi pointer proceeds
+# to its own delivery wait instead of re-sending, and bin/fm-backend.sh's
+# dispatch comment owns the shared definition. A new consumer of the vocabulary
+# must decide this verdict deliberately; falling through is a defect.
 #
 # WHY THE SUBMIT CONFIRMATION IS STILL REQUIRED HERE. Measured on herdr 0.7.5
 # with real claude: `agent prompt` returns exit 0 and

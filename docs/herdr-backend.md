@@ -213,7 +213,9 @@ Once the single prompt call has been issued, this path reports only two verdicts
 It is deliberately not `pending`, not `unknown`, and not `send-failed`.
 The away-mode daemon preserves its escalation buffer on `pending` and `unknown` and re-flushes it later, guarded only by a composer-empty read, and that guard is vacuous for a path that never types into the composer, so either verdict would deliver the same digest twice.
 `send-failed` means definitively not delivered and would invite an operator to resend by hand.
-`sent-unconfirmed` is non-zero for `fm-send` exactly like `pending`, and terminal for the daemon, which retires the buffer, logs the digest verbatim, and lets the wedge alarm report that the escalation may not have landed.
+`sent-unconfirmed` is non-zero for `fm-send`, which reports that the text was delivered once and must not be resent, and keeps the pending-reply expectation so a reply can still be correlated.
+It is terminal for the away-mode daemon, which may only retire an escalation it will not re-flush after the digest is written to `state/.subsuper-inject-unconfirmed` and the captain-visible alarm channels have fired.
+The record and the alarm happen before the buffer is truncated, and a failed record write preserves the buffer instead, because a duplicate escalation is recoverable and a silently dropped one is not.
 
 `bin/backends/herdr.sh` owns the full contract in `fm_backend_herdr_send_text_submit` and `fm_backend_herdr_agent_prompt_once`.
 

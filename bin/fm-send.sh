@@ -287,6 +287,16 @@ else
       echo "error: text not sent to $T ($TARGET_BACKEND send failed; tried $RESOLUTION_TRIED)" >&2
       exit 1
       ;;
+    sent-unconfirmed)
+      # The backend handed the text to the crewmate EXACTLY ONCE and could not
+      # confirm the submit. It is NOT "not submitted": saying so is what makes an
+      # operator resend by hand, which is the duplicate steer this verdict exists
+      # to prevent. The pending-reply expectation is deliberately KEPT (never
+      # discarded): the reply may genuinely be coming, and discarding the record
+      # destroys the correlation that would later prove it arrived.
+      echo "error: text was delivered once to $T but its submit could not be confirmed (verdict=$verdict; tried $RESOLUTION_TRIED). Do not resend; peek at the pane to see whether it landed. The pending-reply expectation is kept unconfirmed so a reply can still be correlated." >&2
+      exit 1
+      ;;
     *)
       if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
         fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true

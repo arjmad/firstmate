@@ -558,6 +558,13 @@ fm_backend_send_key() {  # <backend> <target> <key> [expected-label]
 # sent-unconfirmed means delivered exactly once and unconfirmed, and must NEVER
 # be retried (a backend that submits atomically leaves no composer evidence for
 # a caller's pre-injection guard to see - see fm_backend_herdr_send_text_submit).
+# Every caller must branch on sent-unconfirmed EXPLICITLY: it is newer than the
+# other four, so a catch-all branch will have been written for a different
+# meaning, and "unconfirmed" plus "safe to retry" are the two halves a
+# catch-all conflates. Current callers: bin/fm-send.sh (do-not-resend message,
+# keeps the pending-reply expectation), bin/fm-supervise-daemon.sh's inject_msg
+# (record + alarm + retire, never re-flush), bin/fm-spawn.sh's kimi pointer
+# (defers to its own delivery wait).
 fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sleep> <settle> [expected-label]
   local backend=$1
   shift

@@ -1754,13 +1754,21 @@ test_inject_msg_defers_on_dead_shell_unknown() {
 # never touches the composer, so the composer is unconditionally empty after an
 # unconfirmed send: the guard passes vacuously and preserving the buffer would
 # deliver the same escalation a second time. 'sent-unconfirmed' is that
-# backend's non-retryable verdict, and the flush must RETIRE the buffer on it
-# while still reporting failure so the wedge alarm fires.
+# backend's non-retryable verdict, so the flush RETIRES the buffer on it.
+#
+# INVARIANT under test: an escalation may never be retired without either
+# confirmed delivery or a raised alarm. A return code cannot carry that signal -
+# the batch flush, the batch-disabled flush, the per-wake flush and the shutdown
+# flush all discard it with `|| true` - and the max-defer wedge alarm cannot
+# either, because its `[ -s buffer ]` guard is false once the buffer is retired.
+# The record and the alarm therefore happen inside the retiring branch itself.
 test_escalate_flush_retires_buffer_on_non_retryable_unconfirmed_submit() {
-  local dir state calls n
+  local dir state calls alert daemon_log n
   dir=$(make_supercase inject-sent-unconfirmed)
   state="$dir/state"
   calls="$dir/submit-calls"; : > "$calls"
+  alert="$dir/alert.log"; : > "$alert"
+  daemon_log="$dir/daemon.log"; : > "$daemon_log"
   escalate_add "$state" "needs-decision: pick A"
   afk_enter "$state"
   (
@@ -1769,19 +1777,92 @@ test_escalate_flush_retires_buffer_on_non_retryable_unconfirmed_submit() {
     fm_backend_capture() { printf 'idle prompt\n'; }
     fm_backend_composer_state() { printf 'empty'; }
     fm_backend_send_text_submit() { printf '%s\n' "$3" >> "$calls"; printf 'sent-unconfirmed'; }
-    if FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" FM_ESCALATE_BATCH_SECS=0 \
+    WEDGE_ALARM_LAST_EPOCH=0
+    if LOG="$daemon_log" FM_WEDGE_ALARM_LOG="$alert" FM_WEDGE_ALARM_CHANNEL=osascript \
+      FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" FM_ESCALATE_BATCH_SECS=0 \
       escalate_flush "$state"; then
-      fail "escalate_flush must still report failure for an unconfirmed submit, so the wedge alarm can fire"
+      fail "escalate_flush must still report failure for an unconfirmed submit"
     fi
     # A later cycle must not re-deliver what was already handed to the agent.
-    FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" FM_ESCALATE_BATCH_SECS=0 \
+    LOG="$daemon_log" FM_WEDGE_ALARM_LOG="$alert" FM_WEDGE_ALARM_CHANNEL=osascript \
+      FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" FM_ESCALATE_BATCH_SECS=0 \
       escalate_flush "$state" || true
   ) || fail "sent-unconfirmed escalate_flush subshell failed"
   [ -s "$state/.subsuper-escalations" ] && fail "buffer must be retired after a non-retryable unconfirmed submit, or the daemon silently delivers the same digest twice"
   [ -e "$state/.subsuper-escalations.since" ] && fail "first-append sidecar not cleared when the buffer was retired"
   n=$(grep -c . "$calls")
   [ "$n" -eq 1 ] || fail "the digest must be submitted exactly once, got $n submits"
-  pass "escalate_flush: a non-retryable unconfirmed submit retires the buffer (no silent re-delivery) and still reports failure"
+  grep -F 'needs-decision: pick A' "$state/.subsuper-inject-unconfirmed" >/dev/null \
+    || fail "the retired digest was not written to the durable unconfirmed record"
+  grep -F 'osascript' "$alert" >/dev/null \
+    || fail "retiring an escalation raised no captain-visible alarm: $(cat "$alert")"
+  grep -F 'UNCONFIRMED' "$alert" >/dev/null || fail "the alarm summary does not say the escalation was unconfirmed"
+  grep -F 'ERROR: away-mode escalation retired' "$daemon_log" >/dev/null \
+    || fail "retiring an escalation did not log an ERROR line"
+  [ ! -e "$state/.subsuper-inject-wedged" ] \
+    || fail "a wedge marker was written for a retired (already empty) buffer, so it would render an empty 'Buffered items' list"
+  pass "escalate_flush: a non-retryable unconfirmed submit records the digest, alarms, and only then retires the buffer"
+}
+
+# The defect this replaces: the retiring branch returned non-zero and left the
+# alarm to a downstream guard it had already falsified, so on the BATCH path -
+# whose call site is `escalate_flush || true` - the escalation vanished with
+# nothing but a log line. This exercises housekeeping's batch flush, not the
+# max-defer site, because the batch path is the one that dropped silently.
+test_batch_flush_alarms_before_retiring_an_unconfirmed_escalation() {
+  local dir state alert daemon_log
+  dir=$(make_supercase batch-sent-unconfirmed)
+  state="$dir/state"
+  alert="$dir/alert.log"; : > "$alert"
+  daemon_log="$dir/daemon.log"; : > "$daemon_log"
+  escalate_add "$state" "needs-decision: pick B"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    fm_backend_busy_state() { printf 'idle'; }
+    fm_backend_capture() { printf 'idle prompt\n'; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() { printf 'sent-unconfirmed'; }
+    WEDGE_ALARM_LAST_EPOCH=0
+    LOG="$daemon_log" FM_WEDGE_ALARM_LOG="$alert" FM_WEDGE_ALARM_CHANNEL=osascript \
+      FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      FM_ESCALATE_BATCH_SECS=0 FM_HOUSEKEEPING_TICK=0 housekeeping "$state"
+  ) || fail "batch-path unconfirmed housekeeping subshell failed"
+  [ -s "$state/.subsuper-escalations" ] && fail "the batch flush must retire the buffer rather than re-flush it"
+  grep -F 'needs-decision: pick B' "$state/.subsuper-inject-unconfirmed" >/dev/null \
+    || fail "the batch path retired an escalation without a durable record"
+  grep -F 'osascript' "$alert" >/dev/null \
+    || fail "the batch path retired an escalation with NO alarm, which is a silent loss: $(cat "$alert")"
+  pass "housekeeping batch flush: an unconfirmed escalation is alarmed and recorded even though the call site discards the return code"
+}
+
+# The invariant is structural, not advisory: if the durable record cannot be
+# written there is nothing to alarm about later, so the buffer must be PRESERVED
+# and the duplicate risk accepted. A duplicate is recoverable; a silent loss is
+# not.
+test_escalate_flush_preserves_buffer_when_the_record_cannot_be_written() {
+  local dir state daemon_log
+  dir=$(make_supercase unconfirmed-unwritable)
+  state="$dir/state"
+  daemon_log="$dir/daemon.log"; : > "$daemon_log"
+  escalate_add "$state" "needs-decision: pick C"
+  afk_enter "$state"
+  chmod u-w "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    fm_backend_busy_state() { printf 'idle'; }
+    fm_backend_capture() { printf 'idle prompt\n'; }
+    fm_backend_composer_state() { printf 'empty'; }
+    fm_backend_send_text_submit() { printf 'sent-unconfirmed'; }
+    LOG="$daemon_log" FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" \
+      FM_ESCALATE_BATCH_SECS=0 escalate_flush "$state" || true
+  ) || fail "unwritable-record escalate_flush subshell failed"
+  chmod u+w "$state"
+  [ -s "$state/.subsuper-escalations" ] \
+    || fail "the buffer must be PRESERVED when the retired digest cannot be durably recorded"
+  grep -F 'PRESERVED' "$daemon_log" >/dev/null \
+    || fail "preserving the buffer after a failed record write was not logged"
+  pass "escalate_flush: an unwritable durable record preserves the buffer instead of retiring an escalation silently"
 }
 
 # The pane-typing backends are untouched by the branch above: 'pending' and
@@ -1925,5 +2006,7 @@ test_inject_msg_herdr_pane_gone_defers
 test_inject_msg_herdr_submits_through_backend_dispatch
 test_inject_msg_defers_on_dead_shell_unknown
 test_escalate_flush_retires_buffer_on_non_retryable_unconfirmed_submit
+test_batch_flush_alarms_before_retiring_an_unconfirmed_escalation
+test_escalate_flush_preserves_buffer_when_the_record_cannot_be_written
 test_escalate_flush_still_preserves_buffer_on_pending
 test_inject_msg_defers_on_unrecognized_composer_state

@@ -617,18 +617,57 @@ escalate_add() {  # <state> <distilled-item>
   printf '%s\n' "$item" >> "$buf"
 }
 
+# INVARIANT: an away-mode escalation may NEVER be retired from the buffer
+# without either a confirmed delivery or a raised alarm. A silent loss is
+# strictly worse than a duplicate: a duplicate is noisy and recoverable, while a
+# dropped escalation means the captain is never told, which is the exact failure
+# the whole away-mode path exists to prevent. escalate_retire_unconfirmed below
+# ENFORCES this structurally - it returns non-zero unless the digest reached a
+# durable record and the alarm channels were fired, and escalate_flush only
+# truncates the buffer when it returns 0.
+#
+# escalate_retire_unconfirmed: record + alarm a digest the backend delivered
+# exactly once without confirming the submit, so the live buffer can be retired
+# without ever re-flushing it. Returns 0 ONLY when the durable record was
+# written; the caller must preserve the buffer otherwise.
+#
+# It does NOT reuse inject_wedge_alarm for two reasons. That function is
+# throttled to once per max-defer window, so it can decline to write anything -
+# unacceptable for the only record of a retired escalation. And its marker text
+# says the pane could not accept the escalation, which is the opposite of what
+# happened here. It fires the same backend-independent captain-visible channels
+# (wedge_alarm_notify), which is what makes this survive the `|| true` on every
+# escalate_flush call site: the alarm is a side effect raised here, not a return
+# code a caller can discard.
+escalate_retire_unconfirmed() {  # <state> <digest> <age-seconds>
+  local state=$1 digest=$2 age=$3 record
+  record="$state/.subsuper-inject-unconfirmed"
+  {
+    printf 'fm away-mode escalation DELIVERED ONCE, SUBMIT UNCONFIRMED: %ss buffered, as of %s\n' \
+      "$age" "$(date '+%Y-%m-%dT%H:%M:%S%z')"
+    printf 'The backend handed this digest to the agent exactly once and could not confirm the submit.\n'
+    printf 'It was NOT re-flushed, because re-flushing could deliver it twice. Verify the crewmate received it:\n'
+    printf '%s\n\n' "$digest"
+  } >> "$record" 2>/dev/null || return 1
+  [ -s "$record" ] || return 1
+  log "ERROR: away-mode escalation retired after a non-retryable unconfirmed submit (${age}s buffered); recorded in $record and deliberately NOT re-flushed. Verify the crewmate received it. Digest: $digest"
+  wedge_alarm_notify "away-mode escalation delivered once but UNCONFIRMED after ${age}s; not re-flushed - see $record" "$record"
+  return 0
+}
+
 # Flush the escalation buffer as ONE batched, single-line digest to the
 # supervisor pane. Returns 0 on successful inject (or empty buffer), non-zero on
 # inject failure (buffer preserved for retry / catch-up).
 #
 # inject_msg's third status, 2, means "delivered exactly once, submit
-# unconfirmed, NOT retryable" (see the sent-unconfirmed branch there). That is
-# terminal: the buffer is retired so a later cycle cannot deliver the same
-# digest a second time, but the flush still reports failure so the max-defer
-# wedge alarm fires and the captain is told the escalation may not have landed.
-# The digest is logged verbatim, so retiring it is not a silent loss.
+# unconfirmed, NOT retryable" (see the sent-unconfirmed branch there). Retiring
+# the buffer is the only way to stop a later cycle delivering that digest twice,
+# so the alarm is raised HERE, from this branch, before the truncation - not
+# left to the max-defer wedge alarm downstream, whose `[ -s buffer ]` guard this
+# branch would itself falsify, and not left to the return code, which every
+# other call site discards with `|| true`.
 escalate_flush() {  # <state>
-  local state=$1 buf item n msg status
+  local state=$1 buf item n msg status age
   buf="$state/.subsuper-escalations"
   [ -s "$buf" ] || return 0
   n=$(wc -l < "$buf" 2>/dev/null || echo 0)
@@ -637,13 +676,17 @@ escalate_flush() {  # <state>
   # Single-line wrapper: no embedded newlines (inject_msg also collapses as a
   # safety net, but keeping the source single-line makes the intent explicit).
   msg=$(printf 'Supervisor escalate (%s event(s)): %s (pre-read; re-arm not needed — watcher daemon-managed)' "$n" "$msg")
+  age=$(_oldest_line_age "$buf")
   inject_msg "$msg" "$state"
   status=$?
   case "$status" in
     0) : > "$buf"; rm -f "${buf}.since" "$state/.subsuper-inject-wedged"; return 0 ;;
     2)
-      log "inject unconfirmed: retiring the escalation buffer after a non-retryable unconfirmed submit; re-flushing it could deliver this digest twice. Digest was: $msg"
-      : > "$buf"; rm -f "${buf}.since"
+      if escalate_retire_unconfirmed "$state" "$msg" "$age"; then
+        : > "$buf"; rm -f "${buf}.since"
+      else
+        log "inject unconfirmed: the retired digest could not be durably recorded, so the buffer is PRESERVED instead; a duplicate escalation is recoverable, a silently dropped one is not"
+      fi
       return 1
       ;;
   esac
@@ -892,6 +935,13 @@ inject_wedge_alarm() {  # <state> <age-seconds>
   local state=$1 age=$2 marker target backend max_defer now notify=1
   marker="$state/.subsuper-inject-wedged"
   max_defer="${FM_MAX_DEFER_SECS:-$MAX_DEFER_SECS_DEFAULT}"
+  # This alarm's whole premise is "escalations are STUCK in the buffer", and its
+  # marker renders that buffer verbatim. An empty buffer means nothing is stuck,
+  # so alarming would write a marker whose "Buffered items:" list is blank - the
+  # useless artifact the 2026-07-10 incident's marker exists to avoid. Reachable
+  # when a flush retired the buffer itself (escalate_retire_unconfirmed), which
+  # has already recorded and alarmed on its own terms.
+  [ -s "$state/.subsuper-escalations" ] || return 0
   # Re-alarm at most once per max-defer window so a long wedge does not spam.
   if [ "$(_file_age "$marker")" -lt "$max_defer" ]; then
     return 0

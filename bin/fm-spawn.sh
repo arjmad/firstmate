@@ -1957,6 +1957,15 @@ if [ "$HARNESS" = kimi ]; then
     kimi_spawn_fail "kimi brief pointer could not be submitted"
     exit 1
   fi
+  # 'sent-unconfirmed' means the backend handed the pointer to the agent exactly
+  # once and could not confirm the submit, so it must never be re-sent. This
+  # path already owns an independent delivery check (kimi_wait_for_delivery
+  # reads the pane), which is the right adjudicator here: it either observes the
+  # pointer landing or fails the spawn loudly. Handled explicitly so a later
+  # reader does not mistake it for the confirmed-empty case.
+  if [ "$KIMI_SUBMIT_VERDICT" = sent-unconfirmed ]; then
+    echo "warning: kimi brief pointer was delivered once but its submit was unconfirmed; not re-sending, waiting on the independent delivery check" >&2
+  fi
   if ! kimi_wait_for_delivery; then
     kimi_spawn_fail "kimi brief pointer delivery was not confirmed"
     exit 1
