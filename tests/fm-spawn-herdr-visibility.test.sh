@@ -25,7 +25,7 @@ set -u
 } >> "${FM_FAKE_HERDR_LOG:?}"
 case "${1:-} ${2:-}" in
   "status --json")
-    printf '%s\n' '{"client":{"version":"0.7.4","protocol":16},"server":{"running":true}}'
+    printf '%s\n' '{"client":{"version":"0.7.5","protocol":17},"server":{"running":true}}'
     ;;
   "workspace list")
     if [ "${FM_FAKE_FLEET:-0}" = 1 ]; then

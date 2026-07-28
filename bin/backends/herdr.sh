@@ -4,7 +4,9 @@
 # Design: data/fm-backend-design-d7/herdr-addendum.md ("Interface mapping",
 # decisions D1-D6) and the empirical verification recorded in
 # data/fm-backend-design-d7/herdr-verification-p2.md (real herdr v0.7.1,
-# protocol 14, macOS aarch64), refined by docs/herdr-backend.md's
+# protocol 14, macOS aarch64 - the original P2 evidence; the supported floor has
+# since risen to 0.7.5/protocol 17, see FM_BACKEND_HERDR_MIN_PROTOCOL), refined
+# by docs/herdr-backend.md's
 # "workspace-per-home" pass (AGENTS.md task herdr-sm-spaces-k4). Herdr is a
 # session provider ONLY (D3): the worktree provider stays treehouse, exactly
 # like tmux. Sourced only through bin/fm-backend.sh's fm_backend_source in
@@ -76,14 +78,23 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # shellcheck source=bin/fm-transition-lib.sh
 . "$FM_BACKEND_HERDR_ROOT/bin/fm-transition-lib.sh"
 
-FM_BACKEND_HERDR_MIN_PROTOCOL=14
+# Every crewmate pane this adapter creates is created with `tab create --env
+# KEY=VALUE` (fm_backend_herdr_env_flags), which is how the local proxy
+# credential reaches the agent process without ever being typed into the pane's
+# interactive shell. There is deliberately no typed fallback for this backend:
+# falling back would put the credential back on the pane's visible screen, which
+# is exactly what the native path exists to prevent. `--env` is verified on
+# herdr 0.7.5 / protocol 17, so 17 is the floor - the adapter does not claim
+# support for a herdr that cannot carry a launch environment natively.
+FM_BACKEND_HERDR_MIN_PROTOCOL=17
 # events.subscribe (the native pane.agent_status_changed push stream) and its
 # subscription_event schema first shipped at protocol 16 (verified: herdr
 # 0.7.3). Below this, or with the events surface absent from `herdr api schema`,
 # the event fast-path fails closed to the watcher's poll loop
-# (fm_backend_herdr_events_capable). Distinct from FM_BACKEND_HERDR_MIN_PROTOCOL
-# (14): the adapter's spawn/capture/send primitives work on 14, only the push
-# subscriber needs 16.
+# (fm_backend_herdr_events_capable). Kept as its own constant rather than folded
+# into FM_BACKEND_HERDR_MIN_PROTOCOL: this gate is the watcher's, it records the
+# protocol the events surface actually shipped in, and unlike the spawn path it
+# runs without a version_check ahead of it.
 FM_BACKEND_HERDR_MIN_EVENTS_PROTOCOL=16
 # workspace.move first appears in the protocol-16 schema.
 # The installed CLI does not expose it as a workspace subcommand, so the
@@ -202,6 +213,17 @@ fm_backend_herdr_env_flags() {  # <KEY=VALUE>...
   return 0
 }
 
+# fm_backend_herdr_tab_create_failed: the single diagnostic for a refused `tab
+# create`. Every crewmate pane carries `--env`, so the most likely cause of a
+# refusal on an otherwise healthy herdr is a client that predates the flag -
+# name that requirement rather than letting the caller's bare `return 1` reach
+# fm-spawn as a silent `exit 1`. Herdr's own stderr is deliberately NOT relayed:
+# a clap argument error can quote the offending argument, and a `--env` argument
+# carries the proxy credential.
+fm_backend_herdr_tab_create_failed() {  # <what>
+  echo "error: herdr 'tab create' failed for $1; the launch environment is passed with 'tab create --env', which requires herdr 0.7.5 or newer (protocol >= $FM_BACKEND_HERDR_MIN_PROTOCOL) - check 'herdr status --json' and its running server, then retry" >&2
+}
+
 # fm_backend_herdr_tool_check: refuse loudly if herdr or jq is missing.
 fm_backend_herdr_tool_check() {
   command -v herdr >/dev/null 2>&1 || { echo "error: backend=herdr selected but the 'herdr' CLI is not installed (https://herdr.dev) (dual-licensed AGPL-3.0-or-later/commercial)" >&2; return 1; }
@@ -210,8 +232,10 @@ fm_backend_herdr_tool_check() {
 }
 
 # fm_backend_herdr_version_check: refuse loudly on a missing/incompatible
-# herdr client. Verified locally: v0.7.1, protocol 14 (herdr status --json's
+# herdr client. Verified locally: v0.7.5, protocol 17 (herdr status --json's
 # .client.protocol; client info is session-independent, unlike .server).
+# The floor is the version that carries `tab create --env`; see
+# FM_BACKEND_HERDR_MIN_PROTOCOL.
 fm_backend_herdr_version_check() {
   fm_backend_herdr_tool_check || return 1
   local status protocol version
@@ -225,7 +249,7 @@ fm_backend_herdr_version_check() {
       ;;
   esac
   if [ "$protocol" -lt "$FM_BACKEND_HERDR_MIN_PROTOCOL" ]; then
-    echo "error: herdr protocol $protocol (version ${version:-unknown}) is older than the verified minimum $FM_BACKEND_HERDR_MIN_PROTOCOL; update herdr (herdr update) before using backend=herdr" >&2
+    echo "error: herdr protocol $protocol (version ${version:-unknown}) is older than the verified minimum $FM_BACKEND_HERDR_MIN_PROTOCOL (herdr 0.7.5, the first release whose 'tab create --env' can carry a crewmate's launch environment natively); update herdr (herdr update) before using backend=herdr" >&2
     return 1
   fi
   return 0
@@ -1233,7 +1257,10 @@ $dup_tabs
 EOF
   fi
   out=$(fm_backend_herdr_cli "$session" tab create --workspace "$wsid" --cwd "$cwd" --label "$label" --no-focus \
-    "${env_flags[@]+"${env_flags[@]}"}" 2>/dev/null) || return 1
+    "${env_flags[@]+"${env_flags[@]}"}" 2>/dev/null) || {
+    fm_backend_herdr_tab_create_failed "tab '$label' in workspace $wsid (session $session)"
+    return 1
+  }
   tab_id=$(printf '%s' "$out" | jq -r '.result.tab.tab_id // empty' 2>/dev/null)
   pane_id=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
   if [ -z "$tab_id" ] || [ -z "$pane_id" ]; then
@@ -1342,6 +1369,7 @@ fm_backend_herdr_projection_create_task() {  # <cwd> <workspace-label> <task-lab
     :
   else
     fm_backend_herdr_projection_focus_restore "$session" "$focus_before" "task-tab create" || true
+    fm_backend_herdr_tab_create_failed "presentation task tab '$task_label' in workspace $FM_BACKEND_HERDR_PROJECTION_WORKSPACE_ID (session $session)"
     echo "error: herdr presentation task-tab create failed ambiguously; leaving its journal quarantined" >&2
     return 1
   fi
@@ -1569,6 +1597,7 @@ fm_backend_herdr_projection_reclaim_task() {  # <session> <journal> <task-id> <h
     --workspace "$meta_workspace" --cwd "$cwd" --label "$task_label" --no-focus \
     "${env_flags[@]+"${env_flags[@]}"}" 2>/dev/null); then
     fm_backend_herdr_projection_focus_restore "$session" "$focus_before" "husk replacement create" || return 1
+    fm_backend_herdr_tab_create_failed "presentation husk replacement tab '$task_label' in workspace $meta_workspace (session $session)"
     echo "warning: herdr presentation reclaim for $id could not create an exact replacement; spawning flat" >&2
     return 2
   fi

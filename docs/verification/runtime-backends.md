@@ -45,8 +45,8 @@ Expected submit matrix: proven pending plus busy is accepted as queued; proven p
 
 ## Herdr
 
-The compatibility floor is protocol 14.
-The latest active verification uses Herdr 0.7.5 protocol 16 on macOS aarch64, with earlier 0.7.4, protocol-14, and 0.7.3 evidence retained where they define current behavior or fallbacks.
+The compatibility floor is protocol 17 (Herdr 0.7.5), the first release whose `tab create --env` can carry a crewmate's launch environment natively.
+The latest active verification uses Herdr 0.7.5 protocol 17 on macOS aarch64, with earlier 0.7.4, protocol-14, and 0.7.3 evidence retained where it still describes behavior that has not changed.
 
 Core read-only probes:
 

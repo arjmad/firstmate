@@ -621,7 +621,9 @@ DISPLAY_TITLE="$DISPLAY_LABEL · $DISPLAY_AGENT"
 # and a concrete model - a normal Anthropic model, or none, never consults the
 # config, so plain claude spawns are untouched. The env records and strict flag
 # are stashed raw and shell-quoted at launch composition; the auth token is kept
-# out of the launch string and exported separately just before launch.
+# out of the launch string and delivered separately - natively at window
+# creation on backends with an env channel (SPAWN_ENV_NATIVE below), exported
+# into the pane just before launch on the rest.
 ENDPOINT_ENV_KEYS=()
 ENDPOINT_ENV_VALS=()
 ENDPOINT_STRICT=0

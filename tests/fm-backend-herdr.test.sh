@@ -41,11 +41,12 @@ next=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
   printf '\n'
 } >> "$LOG"
 if [ "${1:-}" = status ] && [ "${2:-}" = --json ] && [ "${FM_HERDR_SCRIPT_STATUS:-0}" != 1 ]; then
-  printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n'
+  printf '{"client":{"version":"0.7.5","protocol":17},"server":{"running":true}}\n'
   exit 0
 fi
 n=$next
 echo "$n" > "$COUNT_FILE"
+[ -f "$RESP/$n.err" ] && cat "$RESP/$n.err" >&2
 if [ -f "$RESP/$n.exit" ]; then
   exit "$(cat "$RESP/$n.exit")"
 fi
@@ -105,7 +106,7 @@ done
 
 case "$cmd $sub" in
   "status --json")
-    printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n'
+    printf '{"client":{"version":"0.7.5","protocol":17},"server":{"running":true}}\n'
     ;;
   "workspace list")
     jq_state '{result:{workspaces:.workspaces}}'
@@ -183,14 +184,33 @@ herdr_env() {  # <name>
 test_version_check_accepts_current_protocol() {
   local dir log resp fb status
   dir="$TMP_ROOT/version-ok"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
-  printf '{"client":{"version":"0.7.1","channel":"stable","protocol":14}}\n' > "$resp/1.out"
+  printf '{"client":{"version":"0.7.5","channel":"stable","protocol":17}}\n' > "$resp/1.out"
   fb=$(make_herdr_fakebin "$dir")
   PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_version_check' "$ROOT"
   status=$?
-  expect_code 0 "$status" "version_check should accept protocol 14 (>= the verified minimum)"
+  expect_code 0 "$status" "version_check should accept protocol 17 (>= the verified minimum)"
   assert_contains "$(cat "$log")" $'\x1f''status'$'\x1f''--json' "version_check did not call herdr status --json"
-  pass "fm_backend_herdr_version_check: accepts the current protocol (14)"
+  pass "fm_backend_herdr_version_check: accepts the current protocol (17)"
+}
+
+# The floor is the release that carries `tab create --env`. A herdr that predates
+# it cannot receive a crewmate's launch environment natively, and this backend
+# has no typed fallback (that would put the credential back on the pane screen),
+# so a below-floor client must be refused up front rather than at `tab create`.
+test_version_check_refuses_protocol_below_env_floor() {
+  local dir log resp fb out status
+  dir="$TMP_ROOT/version-below-env-floor"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"client":{"version":"0.7.4","channel":"stable","protocol":16}}\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_version_check' "$ROOT" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "version_check should refuse protocol 16 (below the --env floor of 17)"
+  assert_contains "$out" "protocol 16" "version_check error did not name the rejected protocol"
+  assert_contains "$out" "0.7.5" "version_check error did not name the herdr version requirement"
+  assert_contains "$out" "--env" "version_check error did not explain that the floor is the --env launch-environment requirement"
+  pass "fm_backend_herdr_version_check: refuses a pre---env herdr (protocol 16) and names the 0.7.5 requirement"
 }
 
 test_version_check_refuses_old_protocol() {
@@ -288,7 +308,7 @@ test_container_ensure_starts_server_and_workspace() {
   local dir log resp fb out
   dir="$TMP_ROOT/container"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   # 1: version_check status --json (server not running yet, irrelevant to client check)
-  printf '{"client":{"version":"0.7.1","protocol":14}}\n' > "$resp/1.out"
+  printf '{"client":{"version":"0.7.5","protocol":17}}\n' > "$resp/1.out"
   # 2: server_ensure's status --json check -> not running
   printf '{"server":{"running":false}}\n' > "$resp/2.out"
   # 3: `herdr server` backgrounded launch - no meaningful output
@@ -312,7 +332,7 @@ test_container_ensure_starts_server_and_workspace() {
 test_container_ensure_reuses_existing_workspace() {
   local dir log resp fb out
   dir="$TMP_ROOT/container-reuse"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
-  printf '{"client":{"version":"0.7.1","protocol":14}}\n' > "$resp/1.out"
+  printf '{"client":{"version":"0.7.5","protocol":17}}\n' > "$resp/1.out"
   printf '{"server":{"running":true}}\n' > "$resp/2.out"
   printf '{"result":{"workspaces":[{"workspace_id":"w9","label":"firstmate"}]}}\n' > "$resp/3.out"
   fb=$(make_herdr_fakebin "$dir")
@@ -572,7 +592,7 @@ test_create_task_creates_and_parses_ids() {
 test_container_ensure_creates_with_no_focus_flag() {
   local dir log resp fb out
   dir="$TMP_ROOT/container-no-focus"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
-  printf '{"client":{"version":"0.7.1","protocol":14}}\n' > "$resp/1.out"
+  printf '{"client":{"version":"0.7.5","protocol":17}}\n' > "$resp/1.out"
   printf '{"server":{"running":true}}\n' > "$resp/2.out"
   printf '{"result":{"workspaces":[]}}\n' > "$resp/3.out"
   printf '{"result":{"workspace":{"workspace_id":"w1","label":"firstmate"},"tab":{"tab_id":"w1:t1"},"root_pane":{"pane_id":"w1:p1"}}}\n' > "$resp/4.out"
@@ -589,7 +609,7 @@ test_container_ensure_uses_secondmate_home_label() {
   local dir log resp fb out home
   dir="$TMP_ROOT/container-secondmate-label"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   home="$TMP_ROOT/container-secondmate-home"; mkdir -p "$home"; printf 'sshhip-h7\n' > "$home/.fm-secondmate-home"
-  printf '{"client":{"version":"0.7.1","protocol":14}}\n' > "$resp/1.out"
+  printf '{"client":{"version":"0.7.5","protocol":17}}\n' > "$resp/1.out"
   printf '{"server":{"running":true}}\n' > "$resp/2.out"
   printf '{"result":{"workspaces":[]}}\n' > "$resp/3.out"
   printf '{"result":{"workspace":{"workspace_id":"w9","label":"2ndmate-sshhip-h7"},"tab":{"tab_id":"w9:t1"},"root_pane":{"pane_id":"w9:p1"}}}\n' > "$resp/4.out"
@@ -3129,6 +3149,29 @@ test_create_task_refuses_malformed_env_before_creating_anything() {
   pass "fm_backend_herdr_create_task: a malformed env pair refuses before any tab create (no half-configured pane)"
 }
 
+# A refused `tab create` used to propagate a bare `return 1` all the way to
+# fm-spawn's `exit 1` with herdr's own stderr swallowed, so the most likely
+# cause on an otherwise healthy herdr - a client too old for `--env` - produced
+# no diagnostic at all.
+test_create_task_names_the_env_version_requirement_when_create_fails() {
+  local dir log resp fb out status
+  dir="$TMP_ROOT/create-task-refused"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"result":{"tabs":[]}}\n' > "$resp/1.out"
+  printf 'error: unexpected argument '"'"'--env'"'"' found\n' > "$resp/2.err"
+  printf '2\n' > "$resp/2.exit"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-refused /tmp/proj "" "ANTHROPIC_AUTH_TOKEN=$1"' \
+    "$ROOT" "$FAKE_TOKEN" 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "create_task should fail when tab create is refused"
+  assert_contains "$out" "0.7.5" "a refused tab create must name the herdr version requirement"
+  assert_contains "$out" "--env" "a refused tab create must explain that the launch environment needs --env"
+  assert_not_contains "$out" "$FAKE_TOKEN" \
+    "the diagnostic must never relay herdr's own stderr, which can quote a --env argument carrying the credential"
+  pass "fm_backend_herdr_create_task: a refused tab create names the herdr version requirement instead of failing silently"
+}
+
 test_projection_create_task_puts_env_on_the_task_tab_only() {
   local dir log resp fb logtext line saw_ws_create=0 saw_tab_create=0 focus_ws focus_tabs
   dir="$TMP_ROOT/projection-env"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -3140,7 +3183,7 @@ test_projection_create_task_puts_env_on_the_task_tab_only() {
   # stops modeling after call 10 - the assertion target is what call 10's argv
   # carried, and what call 5's did not - so the function is expected to bail
   # afterwards on the seeded-tab prune it can no longer satisfy.
-  printf '{"client":{"version":"0.7.5","protocol":14}}\n' > "$resp/1.out"
+  printf '{"client":{"version":"0.7.5","protocol":17}}\n' > "$resp/1.out"
   printf '{"server":{"running":true}}\n' > "$resp/2.out"
   printf '%s\n' "$focus_ws" > "$resp/3.out"
   printf '%s\n' "$focus_tabs" > "$resp/4.out"
@@ -3199,6 +3242,92 @@ test_projection_create_task_refuses_malformed_env_before_any_call() {
   pass "fm_backend_herdr_projection_create_task: a malformed env pair refuses before any herdr call and grants no cleanup authority"
 }
 
+# The husk-reclaim path is the third and last way a crewmate's pane gets
+# created, and the one whose arity is most fragile (ten positionals before the
+# trailing KEY=VALUE pairs). A reclaimed husk hosts the same crewmate as a fresh
+# create, so its replacement tab must carry the same native launch env.
+test_projection_reclaim_puts_launch_env_on_the_replacement_tab() {
+  local dir state home home_real log resp fb journal token label out create_line
+  dir="$TMP_ROOT/projection-reclaim-env"; state="$dir/state"; home="$dir/home"
+  mkdir -p "$dir/responses" "$state" "$home"
+  home_real=$(cd "$home" && pwd -P)
+  log="$dir/log"; resp="$dir/responses"; : > "$log"
+  token=$(bash -c '
+    . "$0/bin/backends/herdr.sh"
+    token=$(fm_backend_herdr_projection_journal_create "$1" fm-envre-r1) || exit 1
+    label=$(fm_backend_herdr_projection_workspace_label fm-envre-r1 "$token")
+    fm_backend_herdr_projection_journal_bind \
+      "$1/fm-envre-r1.herdr-presentation" fm-envre-r1 "$2" fmtest \
+      w2 w2:t2 w2:p2 w1 firstmate "$label" fm-fm-envre-r1 || exit 1
+    printf "%s" "$token"
+  ' "$ROOT" "$state" "$home_real") || fail "could not create reclaim env journal fixture"
+  journal="$state/fm-envre-r1.herdr-presentation"
+  label="└ envre-r1 · p:$token"
+  printf '%s\n' "{\"result\":{\"workspaces\":[{\"workspace_id\":\"w1\",\"label\":\"firstmate\",\"focused\":true,\"active_tab_id\":\"w1:t1\"},{\"workspace_id\":\"w2\",\"label\":\"$label\",\"focused\":false,\"active_tab_id\":\"w2:t2\"}]}}" > "$resp/1.out"
+  printf '%s\n' '{"result":{"tabs":[{"tab_id":"w2:t2","label":"fm-fm-envre-r1"}]}}' > "$resp/2.out"
+  printf '%s\n' '{"result":{"panes":[{"pane_id":"w2:p2","tab_id":"w2:t2"}]}}' > "$resp/3.out"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w2:p2"}}}' > "$resp/4.out"
+  printf '%s\n' '{"error":{"code":"agent_not_found"}}' > "$resp/5.out"
+  cp "$resp/1.out" "$resp/6.out"
+  printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","focused":true}]}}' > "$resp/7.out"
+  printf '%s\n' '{"result":{"tab":{"tab_id":"w2:t3"},"root_pane":{"pane_id":"w2:p3"}}}' > "$resp/8.out"
+  cp "$resp/6.out" "$resp/9.out"
+  cp "$resp/7.out" "$resp/10.out"
+  printf '%s\n' '{"result":{"tab":{"tab_id":"w2:t3","workspace_id":"w2"}}}' > "$resp/11.out"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w2:p3","tab_id":"w2:t3","workspace_id":"w2"}}}' > "$resp/12.out"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w2:p2"}}}' > "$resp/13.out"
+  printf '%s\n' '{"error":{"code":"agent_not_found"}}' > "$resp/14.out"
+  cp "$resp/6.out" "$resp/15.out"
+  cp "$resp/7.out" "$resp/16.out"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w2:p2","tab_id":"w2:t2","workspace_id":"w2"}}}' > "$resp/17.out"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w2:p2"}}}' > "$resp/18.out"
+  printf '%s\n' '{"error":{"code":"agent_not_found"}}' > "$resp/19.out"
+  : > "$resp/20.out"
+  cp "$resp/6.out" "$resp/21.out"
+  cp "$resp/7.out" "$resp/22.out"
+  printf '%s\n' '{"error":{"code":"pane_not_found"}}' > "$resp/23.out"
+  cp "$resp/1.out" "$resp/24.out"
+  printf '%s\n' '{"result":{"tabs":[{"tab_id":"w2:t3","label":"fm-fm-envre-r1"}]}}' > "$resp/25.out"
+  printf '%s\n' '{"result":{"panes":[{"pane_id":"w2:p3","tab_id":"w2:t3"}]}}' > "$resp/26.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '
+      . "$0/bin/backends/herdr.sh"
+      fm_backend_herdr_projection_reclaim_task \
+        fmtest "$1" fm-envre-r1 "$2" w2 w2:t2 w2:p2 firstmate fm-fm-envre-r1 /tmp/project \
+        "GOTMPDIR=/tmp/fm-envre-r1/gotmp" "ANTHROPIC_AUTH_TOKEN=$3" || exit 1
+      printf "%s %s" "$FM_BACKEND_HERDR_PROJECTION_TAB_ID" "$FM_BACKEND_HERDR_PROJECTION_PANE_ID"
+    ' "$ROOT" "$journal" "$home" "$FAKE_TOKEN") || fail "exact agent-free projection reclaim with launch env failed"
+  [ "$out" = "w2:t3 w2:p3" ] || fail "reclaim with env did not return exact replacement ids: $out"
+  create_line=$(grep $'tab\x1fcreate\x1f--workspace\x1fw2' "$log") \
+    || fail "reclaim did not create the exact replacement tab"
+  assert_contains "$create_line" $'\x1f''--env'$'\x1f''GOTMPDIR=/tmp/fm-envre-r1/gotmp' \
+    "the husk replacement tab create did not carry GOTMPDIR through herdr's native --env"
+  assert_contains "$create_line" $'\x1f''--env'$'\x1f''ANTHROPIC_AUTH_TOKEN='"$FAKE_TOKEN" \
+    "the husk replacement tab create did not carry the auth token through herdr's native --env"
+  assert_contains "$create_line" $'\x1f''--label'$'\x1f''fm-fm-envre-r1'$'\x1f''--no-focus'$'\x1f''--env' \
+    "env flags must be appended after the existing reclaim create flags, not spliced into the ten positionals"
+  [ "$(grep -c "$FAKE_TOKEN" "$log")" = 1 ] \
+    || fail "the credential reached a herdr call other than the replacement tab create: $(grep -c "$FAKE_TOKEN" "$log") calls"
+  pass "fm_backend_herdr_projection_reclaim_task: the husk replacement tab carries launch env natively, and only that call sees it"
+}
+
+test_projection_reclaim_refuses_malformed_env_before_any_call() {
+  local dir log resp fb out status
+  dir="$TMP_ROOT/projection-reclaim-bad-env"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"
+      fm_backend_herdr_projection_reclaim_task \
+        fmtest /nonexistent/journal fm-badenv-r1 /tmp w2 w2:t2 w2:p2 firstmate fm-fm-badenv-r1 /tmp/project "NOT_A_PAIR"' \
+    "$ROOT" 2>&1 )
+  status=$?
+  [ "$status" -eq 1 ] || fail "a malformed env pair must refuse the reclaim outright (rc 1), not fall back to a flat spawn (rc 2); got $status"
+  assert_contains "$out" "not KEY=VALUE" "the refusal should explain the malformed entry"
+  [ ! -s "$log" ] || fail "a malformed env pair must refuse before ANY herdr call, log was: $(cat "$log")"
+  pass "fm_backend_herdr_projection_reclaim_task: a malformed env pair refuses before any herdr call"
+}
+
 # --- end-to-end: a real fm-spawn.sh herdr launch never types the credential --
 #
 # The acceptance bar for the native-env change is behavioral, not structural:
@@ -3228,7 +3357,7 @@ CWD_FILE="${FM_FAKE_HERDR_CWD:?}"
 cmd=${1:-}; sub=${2:-}
 case "$cmd $sub" in
   "status --json")
-    printf '{"client":{"version":"0.7.5","protocol":14},"server":{"running":true}}\n' ;;
+    printf '{"client":{"version":"0.7.5","protocol":17},"server":{"running":true}}\n' ;;
   "workspace list")
     printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"firstmate"}]}}\n' ;;
   "tab list")
@@ -3376,12 +3505,16 @@ test_env_flags_refuses_invalid_name
 test_create_task_passes_launch_env_natively
 test_create_task_without_env_passes_no_env_flag
 test_create_task_refuses_malformed_env_before_creating_anything
+test_create_task_names_the_env_version_requirement_when_create_fails
 test_projection_create_task_puts_env_on_the_task_tab_only
 test_projection_create_task_refuses_malformed_env_before_any_call
+test_projection_reclaim_puts_launch_env_on_the_replacement_tab
+test_projection_reclaim_refuses_malformed_env_before_any_call
 test_spawn_herdr_sends_launch_env_natively_and_never_types_the_credential
 test_spawn_herdr_without_endpoint_sends_only_gotmpdir_natively
 test_version_check_accepts_current_protocol
 test_version_check_refuses_old_protocol
+test_version_check_refuses_protocol_below_env_floor
 test_version_check_refuses_missing_herdr
 test_workspace_label_primary_home_no_marker
 test_workspace_label_secondmate_home_uses_marker_id

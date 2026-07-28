@@ -1,7 +1,7 @@
 # Herdr runtime backend
 
 Herdr is an experimental agent-native terminal backend with native per-pane agent state and push events.
-Firstmate requires Herdr protocol 14 or newer; versions 0.7.1, 0.7.3, 0.7.4, and 0.7.5 are verified, with protocol-16 features enabled only when available.
+Firstmate requires Herdr 0.7.5 or newer (protocol 17), the first release whose `tab create --env` can carry a crewmate's launch environment natively; earlier 0.7.x releases were verified against older revisions of this backend and are no longer supported.
 Herdr provides the terminal session while Treehouse continues to provide task worktrees.
 [`configuration.md`](configuration.md#runtime-backend-configbackend--fm_backend) owns shared backend selection and metadata semantics.
 
@@ -11,7 +11,7 @@ Pick Herdr when you want native busy, idle, and blocked state and accept the exp
 
 Prerequisites:
 
-- Herdr protocol 14 or newer, installed from [herdr.dev](https://herdr.dev).
+- Herdr 0.7.5 or newer (protocol 17), installed from [herdr.dev](https://herdr.dev).
 - `jq` for JSON responses.
 - The universal harness and toolchain requirements in [`configuration.md`](configuration.md#toolchain).
 - `python3` only for optional protocol-16 presentation-space ordering and native event subscription.
@@ -190,6 +190,7 @@ A value that only exists after the pane has been created cannot use this route a
 Every other runtime backend keeps that typed path unchanged, including the paired history-file suppression that protects a typed credential.
 The local endpoint's non-secret variables are a prefix of the composed launch command rather than launch environment, and are identical on every backend.
 A malformed pair refuses the create outright rather than starting a pane whose environment is silently incomplete.
+Because there is no typed fallback here (one would put the credential back on the pane screen), the version floor is the release that carries `--env`, and a refused `tab create` names that requirement instead of failing silently.
 
 ## Composer and injection safety
 
