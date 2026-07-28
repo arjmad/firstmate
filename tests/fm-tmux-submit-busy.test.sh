@@ -30,7 +30,13 @@ case "${1:-}" in
       case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac
     done
     exit 0 ;;
-  capture-pane) cat "$COMPOSER" 2>/dev/null; exit 0 ;;
+  capture-pane)
+    cat "$COMPOSER" 2>/dev/null
+    # FM_FAKE_COMPOSER_NEXT models an ANIMATING pane: every capture after the
+    # first returns the next frame. Unset means a frozen pane, which is exactly
+    # the leftover-footer case the freshness re-read must reject.
+    [ -z "${FM_FAKE_COMPOSER_NEXT:-}" ] || printf '%s\n' "$FM_FAKE_COMPOSER_NEXT" > "$COMPOSER"
+    exit 0 ;;
   send-keys)
     shift; is_enter=0
     while [ "$#" -gt 0 ]; do
@@ -186,12 +192,17 @@ test_unrecognized_state_skips_busy_conversion() {
 }
 
 test_claude_busy_signature_uses_real_capture_shapes() {
-  local dir fakebin composer
+  local dir fakebin composer FM_FAKE_COMPOSER_NEXT
   dir="$TMP_ROOT/claude-signature"
   fakebin=$(make_submit_mock "$dir")
   composer="$dir/composer"
+  # FM_FAKE_COMPOSER_NEXT (empty by default) makes the fake pane FROZEN: every
+  # capture returns the same frame. Setting it makes the pane ANIMATE.
+  FM_FAKE_COMPOSER_NEXT=""
   pane_busy() {
     PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$composer" \
+      FM_FAKE_COMPOSER_NEXT="$FM_FAKE_COMPOSER_NEXT" \
+      FM_BUSY_FOOTER_RECHECK_SECS=0.05 \
       bash -c '. "$1/bin/fm-tmux-lib.sh"; fm_pane_is_busy "$2" "$3"' \
       _ "$ROOT" "$1" "${2:-}"
   }
@@ -205,21 +216,51 @@ test_claude_busy_signature_uses_real_capture_shapes() {
   pane_busy live claude || fail "Claude capture 2 should be busy"
 
   # Live Claude 2.1.220 capture 3: generation is idle while a foreground shell
-  # tool remains active.
+  # tool remains active. The glyph, the past-tense word and the elapsed duration
+  # all rotate, so only the shape is matched and an animating footer is busy.
+  FM_FAKE_COMPOSER_NEXT='✽ Cooked for 10m 18s · 1 shell still running'
   printf '✻ Cooked for 10m 17s · 1 shell still running\n' > "$composer"
   pane_busy live-shell claude || fail "Claude running-shell footer should be busy"
+
+  # Every observed glyph and past-tense word of the same footer, including a bare
+  # middot, plural shells, and a trailing hint after the count.
+  FM_FAKE_COMPOSER_NEXT='✶ Boogieing for 3m 1s · 2 shells still running · ctrl+o to expand'
+  printf '✳ Boogieing for 3m 0s · 2 shells still running · ctrl+o to expand\n' > "$composer"
+  pane_busy live-shell claude || fail "rotated glyph, plural shells and a trailing hint should be busy"
+  FM_FAKE_COMPOSER_NEXT='· Improvising for 1m 3s · 1 shell still running'
+  printf '· Improvising for 1m 2s · 1 shell still running\n' > "$composer"
+  pane_busy live-shell claude || fail "bare-middot running-shell footer should be busy"
+
+  # Freshness boundary: the running-shell footer is grafted onto a persistent
+  # past-tense summary, so a FROZEN one (a killed or wedged harness) must NOT
+  # report working - false-healthy suppresses recovery.
+  FM_FAKE_COMPOSER_NEXT=""
+  printf '✻ Cooked for 10m 17s · 1 shell still running\n' > "$composer"
+  pane_busy frozen-shell claude && fail "a frozen running-shell footer must not read busy"
+
+  # The self-fresh spinner shapes are exempt: a single capture already proves a
+  # streaming turn, so a repeated frame stays busy.
+  printf '✢ Pollinating… (16s · ↓ 1.1k tokens · thought for 1s)\n' > "$composer"
+  pane_busy frozen-spinner claude || fail "the spinner shape must not require a second sample"
 
   # Real idle Claude capture shapes from the same pane family.
   printf '✻ Worked for 31s\n' > "$composer"
   pane_busy idle claude && fail "Claude Worked-for capture must be idle"
   printf 'Thought for 9s, ran 1 shell command\n' > "$composer"
   pane_busy idle-shell claude && fail "Claude completed-shell summary must be idle"
+  FM_FAKE_COMPOSER_NEXT='Thought for 10s, ran 2 shell commands'
+  printf 'Thought for 9s, ran 1 shell command\n' > "$composer"
+  pane_busy idle-shell claude && fail "a completed-shell summary must stay idle even while animating"
+  FM_FAKE_COMPOSER_NEXT=""
 
   # The new signatures are Claude-scoped and must not widen the shared default.
   printf '✢ Pollinating… (16s · ↓ 1.1k tokens)\n' > "$composer"
   pane_busy live && fail "Claude spinner must not match without the Claude harness"
+  FM_FAKE_COMPOSER_NEXT='✽ Cooked for 10m 18s · 1 shell still running'
   printf '✻ Cooked for 10m 17s · 1 shell still running\n' > "$composer"
   pane_busy live-shell && fail "Claude running-shell footer must not match without the Claude harness"
+  pane_busy live-shell codex && fail "Codex must ignore Claude's running-shell footer"
+  FM_FAKE_COMPOSER_NEXT=""
 
   # Each verified harness must use only its own signature.
   printf 'Ctrl+c:cancel\n' > "$composer"

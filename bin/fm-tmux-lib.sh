@@ -64,10 +64,29 @@
 # interrupt"; opencode: "esc interrupt"; pi: "Working..."; grok: "Ctrl+c:cancel".
 # Claude's current spinner has a rotating glyph and word, but every active-turn
 # line has an ellipsis followed by a parenthesized elapsed duration.
-# During a foreground shell tool call, Claude instead renders an anchored
-# `✻ ... · N shell(s) still running` footer after generation has gone idle.
-# Both signatures stay separate from the shared default because neither shape is
-# generic enough to classify arbitrary harness output safely.
+# During a long-running foreground shell tool call, Claude instead renders a
+# past-tense footer with a live shell count, e.g.
+# `✻ Cooked for 10m 17s · 1 shell still running`, while generation itself has
+# gone idle. The glyph and the past-tense word BOTH rotate (observed live: the
+# glyphs ✻ ✽ ✶ ✳ and a bare middot; the words Cooked, Brewed, Cultivating,
+# Puttering, Boogieing, Improvising), so the only invariant is the shape
+# `<glyph> <word> for <duration> · N shell(s) still running`. Trailing hints may
+# follow the count, so the line end is deliberately unanchored - the same
+# tolerance the Kimi row applies. The completed-shell summary
+# (`Thought for 9s, ran 1 shell command`) lacks `still running` and stays idle.
+# Both claude signatures stay separate from the shared default because neither
+# shape is generic enough to classify arbitrary harness output safely.
+#
+# FRESHNESS: the two spinner shapes are self-fresh - they exist only while a
+# turn is streaming and are overwritten every animation tick. The running-shell
+# footer is not: it is grafted onto a past-tense turn summary, so a wedged or
+# killed harness can leave it frozen on screen and a stateless tail-regex read
+# would report `working` forever, suppressing recovery. False-healthy is the
+# more dangerous direction, so this footer alone is credited as busy only after
+# fm_busy_decide re-reads the pane and proves the footer region is STILL
+# ANIMATING (the rotating glyph/word/duration change between samples). A frozen
+# footer reads not-busy and the caller falls through to its remaining sources.
+# The spinner shapes and every other harness skip the re-read entirely.
 # Kimi's anchored moon-phase spinner is separate because bare moon glyphs in
 # ordinary output must not classify another harness as busy. Leading whitespace is
 # OPTIONAL; whitespace on both sides of the separator is REQUIRED because every
@@ -79,7 +98,9 @@
 # The full moon-phase set remains locale- and emoji-font-sensitive because Kimi
 # exposes no stable ASCII busy token.
 FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'
-FM_TMUX_CLAUDE_BUSY_REGEX_DEFAULT='esc to interrupt|…[[:space:]]+\([0-9]+[smh]|^[[:space:]]*✻ .* · [0-9]+ shells? still running[[:space:]]*$'
+FM_TMUX_CLAUDE_SPINNER_BUSY_REGEX_DEFAULT='esc to interrupt|…[[:space:]]+\([0-9]+[smh]'
+FM_TMUX_CLAUDE_SHELL_BUSY_REGEX_DEFAULT='^[^[:alnum:]]*[[:alpha:]]+ for .+[[:space:]]·[[:space:]][0-9]+ shells? still running'
+FM_TMUX_CLAUDE_BUSY_REGEX_DEFAULT="$FM_TMUX_CLAUDE_SPINNER_BUSY_REGEX_DEFAULT|$FM_TMUX_CLAUDE_SHELL_BUSY_REGEX_DEFAULT"
 FM_TMUX_CODEX_BUSY_REGEX_DEFAULT='esc to interrupt'
 FM_TMUX_OPENCODE_BUSY_REGEX_DEFAULT='esc interrupt'
 FM_TMUX_PI_BUSY_REGEX_DEFAULT='Working\.\.\.'
@@ -108,6 +129,64 @@ fm_busy_lines_match() {  # [harness]
     esac
   fi
   [ -n "$regex" ] && printf '%s' "$lines" | grep -qiE "$regex"
+}
+
+# Seconds between the two samples that prove a running-shell footer is still
+# animating. Claude re-renders that footer's glyph, word and elapsed duration at
+# least once a second, so one second plus a margin is enough; 0 disables the
+# re-read for callers that have their own time-based bound.
+FM_BUSY_FOOTER_RECHECK_SECS_DEFAULT=2
+
+# fm_busy_tail: the shared busy-decision window - the last 12 non-blank lines of
+# a raw capture. One owner so every pane reader looks at the same rows.
+fm_busy_tail() {  # <raw-capture on stdin>
+  grep -v '^[[:space:]]*$' | tail -12
+}
+
+# fm_busy_needs_freshness_recheck: 0 when the ONLY busy evidence in an
+# already-matched tail is claude's persistent running-shell footer, which cannot
+# prove currency from a single capture. An explicit FM_BUSY_REGEX override owns
+# the whole decision, so it never triggers the re-read.
+fm_busy_needs_freshness_recheck() {  # <harness> <tail>
+  local fm_bf_harness=$1 fm_bf_tail=$2
+  [ "$fm_bf_harness" = claude ] || return 1
+  [ -z "${FM_BUSY_REGEX:-}" ] || return 1
+  if ! printf '%s' "$fm_bf_tail" | grep -qiE "$FM_TMUX_CLAUDE_SHELL_BUSY_REGEX_DEFAULT"; then
+    return 1
+  fi
+  if printf '%s' "$fm_bf_tail" | grep -qiE "$FM_TMUX_CLAUDE_SPINNER_BUSY_REGEX_DEFAULT"; then
+    return 1
+  fi
+  return 0
+}
+
+# fm_busy_decide: the shared busy verdict for any backend, over a capture
+# function that prints one raw capture for the given target (0 on success).
+# A self-fresh signature answers from the first sample. A running-shell footer
+# additionally requires a second sample that is still busy AND differs from the
+# first, so a frozen leftover footer reads not-busy instead of pinning a
+# finished or wedged worker to `working` forever. An unreadable target at either
+# sample is not-busy; callers keep their own unknown/no-source handling.
+# Every local is namespaced because bash locals are DYNAMICALLY scoped and this
+# function calls back into a caller-supplied capture function, which must still
+# see its own enclosing variables rather than ours.
+fm_busy_decide() {  # <harness> <capture-fn> [capture-args...]
+  local fm_bd_harness=$1 fm_bd_capture=$2
+  shift 2
+  local fm_bd_raw fm_bd_first fm_bd_second fm_bd_secs
+  fm_bd_raw=$("$fm_bd_capture" "$@") || return 1
+  fm_bd_first=$(printf '%s' "$fm_bd_raw" | fm_busy_tail)
+  printf '%s' "$fm_bd_first" | fm_busy_lines_match "$fm_bd_harness" || return 1
+  fm_busy_needs_freshness_recheck "$fm_bd_harness" "$fm_bd_first" || return 0
+  fm_bd_secs=${FM_BUSY_FOOTER_RECHECK_SECS:-$FM_BUSY_FOOTER_RECHECK_SECS_DEFAULT}
+  case "$fm_bd_secs" in
+    0|0.0|'') return 0 ;;
+  esac
+  sleep "$fm_bd_secs" 2>/dev/null || true
+  fm_bd_raw=$("$fm_bd_capture" "$@") || return 1
+  fm_bd_second=$(printf '%s' "$fm_bd_raw" | fm_busy_tail)
+  [ "$fm_bd_second" != "$fm_bd_first" ] || return 1
+  printf '%s' "$fm_bd_second" | fm_busy_lines_match "$fm_bd_harness"
 }
 
 # fm_tmux_strip_ghost: thin adapter over the shared, fleet-wide ghost extractor
@@ -366,13 +445,17 @@ fm_pane_input_pending() {  # <target>
   [ "$(fm_tmux_composer_state "$1")" != empty ]
 }
 
+fm_pane_capture_tail40() {  # <target>
+  tmux capture-pane -p -t "$1" -S -40 2>/dev/null
+}
+
 # fm_pane_is_busy: 0 if the pane's last few non-blank lines show a busy footer
-# (an agent mid-turn). Scans a 40-line tail like fm-watch.sh.
+# (an agent mid-turn). Scans a 40-line tail like fm-watch.sh. Delegates the
+# verdict to fm_busy_decide so the claude running-shell footer's freshness
+# re-read cannot drift between this reader and the backend-aware one in
+# bin/fm-crew-state.sh.
 fm_pane_is_busy() {  # <target> [harness]
-  local win=$1 harness=${2:-} tail40
-  tail40=$(tmux capture-pane -p -t "$win" -S -40 2>/dev/null) || return 1
-  printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -12 \
-    | fm_busy_lines_match "$harness"
+  fm_busy_decide "${2:-}" fm_pane_capture_tail40 "$1"
 }
 
 # fm_tmux_submit_core: type <text> into <target> ONCE, then submit with Enter,

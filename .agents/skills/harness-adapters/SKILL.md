@@ -162,14 +162,20 @@ A send or key action reporting success is not proof that the intended action hap
 OpenCode can accept and queue an Enter while leaving text visible, Grok can consume Enter in its slash popup without submitting, and Kimi can silently drop a message sent before readiness even though the send returns success.
 The shared symptom is a healthy-looking pane with no work in progress, so each adapter must verify the observable postcondition that is specific to its TUI.
 
-## claude (VERIFIED; busy signature re-verified 2026-07-25 on Claude Code 2.1.220)
+## claude (VERIFIED; busy signature re-verified 2026-07-25 on Claude Code 2.1.220, running-shell footer added 2026-07-27 on the same build)
 
 | Fact | Value |
 |---|---|
-| Busy-pane signature | Current turns match the harness-scoped `…[[:space:]]+\([0-9]+[smh]` shape after a rotating glyph and word, for example `✢ Pollinating… (16s · ...)`; legacy `esc to interrupt` remains accepted, while `Worked for 31s` is idle. |
+| Busy-pane signature | Two verified shapes. (1) Streaming turn: the harness-scoped `…[[:space:]]+\([0-9]+[smh]` shape after a rotating glyph and word, for example `✢ Pollinating… (16s · ...)`; legacy `esc to interrupt` remains accepted. (2) Long-running foreground shell tool call, where generation is idle but the crew is working: `<glyph> <past-tense word> for <duration> · N shell(s) still running`, for example `✻ Cooked for 10m 17s · 1 shell still running`. |
+| Running-shell footer invariants | Only the SHAPE is invariant. Both the glyph and the past-tense word rotate: glyphs observed live include `✻` `✽` `✶` `✳` and a bare middot; words observed include Cooked, Brewed, Cultivating, Puttering, Boogieing, Improvising. Leading whitespace is optional, whitespace on both sides of `·` is required, and the line end is unanchored so trailing hints (for example `· ctrl+o to expand`) still match. Never match on one glyph or one word. |
+| Idle controls | `✻ Worked for 31s` is idle (no shell clause). The completed-shell summary `Thought for 9s, ran 1 shell command` is idle: it lacks `still running`, which is the clause that separates a live shell from a finished one. |
+| Running-shell footer freshness boundary | The two streaming shapes are self-fresh - they exist only while a turn streams and are overwritten each animation tick. The running-shell footer is grafted onto a persistent past-tense turn summary, so a killed or wedged harness can leave it frozen on screen and a single-capture regex read would report `working` forever, suppressing recovery. `fm_busy_decide` (`bin/fm-tmux-lib.sh`) therefore credits this footer only after a second sample proves the footer is still animating; a frozen footer reads not-busy. False-stale is the deliberately preferred direction over false-healthy. `FM_BUSY_FOOTER_RECHECK_SECS` tunes the gap (default 2s; `0` disables the re-read for callers with their own time-based bound, such as `bin/fm-watch.sh`'s `FM_STALE_ESCALATE_SECS` timer). |
 | Exit command | `/exit` |
 | Interrupt | single Escape |
 | Skill invocation | `/<skill>` (e.g. `/no-mistakes`) |
+
+Herdr's `agent get` reports GENERATION state only, so it reads idle for the whole running-shell span.
+That is why the pane text stays the corroborating source for a claude crew blocked on its own long-running foreground tool call (`bin/fm-crew-state.sh`, `crew_pane_is_busy`).
 
 First launch in a fresh worktree, or first ever on a machine, may show a trust or bypass-permissions confirmation.
 After every spawn, peek the pane within about 20 seconds.
