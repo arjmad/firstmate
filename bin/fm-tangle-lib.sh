@@ -11,7 +11,11 @@
 # stranding the primary on a feature branch (e.g. fm/readme-restructure-d3).
 #
 # fm_primary_tangle_branch detects exactly that and nothing else: a NAMED,
-# non-default branch checked out in the given root. It is deliberately silent for
+# non-default branch checked out in the PRIMARY of the repo the given dir belongs
+# to. The dir handed in is whatever checkout the fleet action is executing from,
+# which is routinely a LINKED worktree (a crewmate task worktree on its own
+# fm/<id> branch, a secondmate home), so the classification resolves the primary
+# first rather than reading the caller's own branch. It is deliberately silent for
 # every legitimate state - the primary on its default branch, and detached HEAD,
 # which is how every linked worktree and secondmate home legitimately sits on the
 # default branch. Detached HEAD on the default is fine; a feature branch in a
@@ -35,15 +39,40 @@ fm_default_branch() {
   return 1
 }
 
-# If the git checkout at <root> is tangled - on a NAMED branch that is not its
-# default branch - echo the offending branch name and return 0. For every healthy
-# state (not a git work tree, detached HEAD, or already on the default branch)
-# echo nothing and return 1. Detached HEAD is how linked worktrees and secondmate
-# homes legitimately sit, so they never trip this; only a feature branch checked
-# out in a primary checkout does.
+# Resolve the PRIMARY checkout of the repo <dir> belongs to: git lists the main
+# worktree first in `git worktree list`, ahead of every linked worktree. Echoes
+# that path, or returns 1 when <dir> is not a git work tree at all or the repo's
+# main worktree is bare, which has no checked-out branch to strand. Callers pass
+# the checkout they happen to be executing from, so this is what keeps a linked
+# worktree's own task branch from being classified as the primary's branch.
+fm_primary_checkout_dir() {
+  local dir=$1 line primary=
+  git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      'worktree '*) primary=${line#worktree } ;;
+      bare) return 1 ;;
+      '') break ;;
+    esac
+  done <<EOF
+$(git -C "$dir" worktree list --porcelain 2>/dev/null)
+EOF
+  [ -n "$primary" ] && [ -d "$primary" ] || return 1
+  printf '%s\n' "$primary"
+  return 0
+}
+
+# If the primary checkout of the repo <dir> belongs to is tangled - on a NAMED
+# branch that is not its default branch - echo the offending branch name and
+# return 0. For every healthy state (not a git work tree, no non-bare primary,
+# detached HEAD, or already on the default branch) echo nothing and return 1.
+# Detached HEAD is how linked worktrees and secondmate homes legitimately sit, so
+# they never trip this; only a feature branch checked out in the primary does.
+# Pass the executing checkout: <dir> is resolved to its primary before classifying,
+# so a task worktree on fm/<id> reports on the primary, never on itself.
 fm_primary_tangle_branch() {
-  local root=$1 cur default
-  git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  local dir=$1 root cur default
+  root=$(fm_primary_checkout_dir "$dir") || return 1
   cur=$(git -C "$root" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
   [ -n "$cur" ] || return 1
   default=$(fm_default_branch "$root") || return 1

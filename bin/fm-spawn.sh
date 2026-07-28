@@ -183,6 +183,11 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
+# Skip the watcher guard when re-exec'd for one pair of a batch (FM_SPAWN_NO_GUARD is
+# set by the batch loop below), so the guard runs once for the batch, not once per pair.
+# Every other spawn, --reuse-worktree included, is guarded here at intake so the
+# tangle, watcher-down, and queued-wake alarms survive every later early exit.
+[ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
 KIND=ship
 HARNESS_ARG=
 MODEL=
@@ -244,12 +249,6 @@ if [ "$TITLE_SET" -eq 1 ] && printf '%s' "$TITLE" | LC_ALL=C grep -q '[[:cntrl:]
   exit 1
 fi
 [ "$REUSE_WORKTREE_SET" -eq 0 ] || [ -n "$REUSE_WORKTREE" ] || { echo "error: --reuse-worktree requires a non-empty value" >&2; exit 1; }
-# The ordinary path keeps the guard at intake as before. A reuse relaunch defers
-# it until the project primary is resolved below, so the reused task worktree is
-# never mistaken for the primary checkout merely because this script runs there.
-if [ -z "${FM_SPAWN_NO_GUARD:-}" ] && [ "$REUSE_WORKTREE_SET" -eq 0 ]; then
-  "$FM_ROOT/bin/fm-guard.sh" || true
-fi
 if [ "$REUSE_WORKTREE_SET" -eq 1 ] && [ "$KIND" = secondmate ]; then
   echo "error: --reuse-worktree cannot be combined with --secondmate; secondmates launch in their provisioned home" >&2
   exit 1
@@ -953,9 +952,6 @@ else
   PROJ_ABS="$(cd "$PROJ_RESOLVED" && pwd)"
   WT=""
   BRIEF="$DATA/$ID/brief.md"
-fi
-if [ -z "${FM_SPAWN_NO_GUARD:-}" ] && [ "$REUSE_WORKTREE_SET" -eq 1 ]; then
-  FM_TANGLE_ROOT_OVERRIDE="$PROJ_ABS" "$FM_ROOT/bin/fm-guard.sh" || true
 fi
 [ -f "$BRIEF" ] || { echo "error: no brief at $BRIEF" >&2; exit 1; }
 BRIEF_DIR_REAL=$(cd "$(dirname "$BRIEF")" && pwd -P)

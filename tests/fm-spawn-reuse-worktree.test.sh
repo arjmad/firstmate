@@ -130,6 +130,26 @@ make_case() {
   printf '%s\n' "$case_dir|$home|$proj|$wt|$fakebin"
 }
 
+# make_fm_root_pair <dir> <task-branch>: build the FIRSTMATE side of a spawn - a
+# primary checkout pinned to `main` (never the host's init.defaultBranch) plus a
+# linked worktree on <task-branch>, which is what a crewmate working on firstmate
+# itself executes fm-spawn.sh from. Sets FM_ROOT_PRIMARY / FM_ROOT_PRIMARY_REAL /
+# FM_ROOT_WT. The worktree's bin/ is a symlink to the real scripts so
+# $FM_ROOT/bin/fm-guard.sh runs unchanged from the fixture. Pointing
+# FM_ROOT_OVERRIDE at FM_ROOT_WT is what makes the tangle assertions deterministic:
+# without it the guard reads whatever branch the host checkout happens to be on.
+make_fm_root_pair() {
+  local dir=$1 branch=$2
+  FM_ROOT_PRIMARY="$dir/primary"
+  FM_ROOT_WT="$dir/task-worktree"
+  git init -q -b main "$FM_ROOT_PRIMARY"
+  git -C "$FM_ROOT_PRIMARY" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q --allow-empty -m initial
+  git -C "$FM_ROOT_PRIMARY" worktree add --quiet -b "$branch" "$FM_ROOT_WT"
+  ln -s "$ROOT/bin" "$FM_ROOT_WT/bin"
+  FM_ROOT_PRIMARY_REAL=$(cd "$FM_ROOT_PRIMARY" && pwd -P)
+}
+
 read_case() {
   IFS='|' read -r CASE_DIR HOME_DIR PROJ_DIR WT_DIR FAKEBIN_DIR <<EOF
 $1
@@ -163,7 +183,7 @@ EOF
 }
 
 run_spawn_argv() {
-  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" \
+  FM_ROOT_OVERRIDE="${FM_TEST_ROOT_OVERRIDE-$ROOT}" FM_HOME="$HOME_DIR" \
     FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
     FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
     FM_SPAWN_NO_GUARD="${FM_TEST_SPAWN_NO_GUARD-1}" FM_BACKEND=tmux TMUX="fake,1,0" \
@@ -369,14 +389,18 @@ test_reuse_guard_ignores_task_branch() {
   id=reuse-guard-task-branch-z1a
   rec=$(make_case guard-task-branch "$id")
   read_case "$rec"
+  make_fm_root_pair "$CASE_DIR/fm-root" fm/executing-task-branch-z1a
+  # An ordinary project checkout may legitimately sit on a feature branch; the
+  # tangle doctrine is scoped to firstmate's own primary and must never read it.
+  git -C "$PROJ_DIR" checkout -q -B feature/unrelated-project-work
 
-  out=$(FM_TEST_SPAWN_NO_GUARD='' run_spawn "$id" "$WT_DIR")
+  out=$(FM_TEST_SPAWN_NO_GUARD='' FM_TEST_ROOT_OVERRIDE="$FM_ROOT_WT" run_spawn "$id" "$WT_DIR")
   status=$?
-  expect_code 0 "$status" "reuse on its task branch should succeed with the guard enabled"$'\n'"$out"
+  expect_code 0 "$status" "reuse from a task worktree should succeed with the guard enabled"$'\n'"$out"
   assert_not_contains "$out" "WORKTREE TANGLE" \
-    "the guard mistook the reused task worktree for the project primary checkout"
+    "the guard mistook the executing task worktree or the project checkout for the firstmate primary"
   rm -rf "/tmp/fm-$id"
-  pass "a reuse relaunch on its own task branch does not print the tangle banner"
+  pass "a reuse relaunch executed from a task branch does not print the tangle banner"
 }
 
 test_reuse_guard_reports_primary_tangle() {
@@ -384,19 +408,20 @@ test_reuse_guard_reports_primary_tangle() {
   id=reuse-guard-primary-tangle-z1b
   rec=$(make_case guard-primary-tangle "$id")
   read_case "$rec"
-  git -C "$PROJ_DIR" checkout -q -B fm/genuine-primary-tangle
+  make_fm_root_pair "$CASE_DIR/fm-root" fm/executing-task-branch-z1b
+  git -C "$FM_ROOT_PRIMARY" checkout -q -B fm/genuine-primary-tangle
 
-  out=$(FM_TEST_SPAWN_NO_GUARD='' run_spawn "$id" "$WT_DIR")
+  out=$(FM_TEST_SPAWN_NO_GUARD='' FM_TEST_ROOT_OVERRIDE="$FM_ROOT_WT" run_spawn "$id" "$WT_DIR")
   status=$?
   expect_code 0 "$status" "the advisory tangle guard must not block a valid reuse spawn"$'\n'"$out"
   assert_contains "$out" "WORKTREE TANGLE - PRIMARY CHECKOUT IS ON A FEATURE BRANCH" \
-    "a genuine project-primary tangle did not print the existing banner"
-  assert_contains "$out" "$PROJ_ABS is on 'fm/genuine-primary-tangle', not its default branch 'main'." \
-    "the tangle banner did not identify the project primary checkout"
-  assert_contains "$out" "git -C $PROJ_ABS checkout main" \
+    "a genuine firstmate-primary tangle did not print the existing banner"
+  assert_contains "$out" "$FM_ROOT_PRIMARY_REAL is on 'fm/genuine-primary-tangle', not its default branch 'main'." \
+    "the tangle banner did not identify the firstmate primary checkout"
+  assert_contains "$out" "git -C $FM_ROOT_PRIMARY_REAL checkout main" \
     "the tangle banner changed or omitted its restore instruction"
   rm -rf "/tmp/fm-$id"
-  pass "a reuse relaunch still reports a genuine tangle in the project primary checkout"
+  pass "a reuse relaunch still reports a genuine tangle in the firstmate primary checkout"
 }
 
 test_primary_checkout_is_refused() {

@@ -2,9 +2,10 @@
 # Watcher liveness and worktree-tangle guard, called by supervision scripts, by
 # fm-wake-drain.sh after it empties queued wakes, and by fm-session-start.sh in
 # read-only advisory mode whenever session-lock ownership was not verified.
-# First, always warn if the firstmate primary checkout (FM_ROOT) is on a named
-# non-default branch, because that means firstmate-on-itself work landed in the
-# primary instead of an isolated worktree.
+# First, always warn if the firstmate primary checkout - the main worktree of the
+# repo FM_ROOT belongs to, which is not FM_ROOT itself when this runs from a
+# linked task worktree - is on a named non-default branch, because that means
+# firstmate-on-itself work landed in the primary instead of an isolated worktree.
 # Then, if any task is in flight (a state/<id>.meta exists) and the watcher's
 # liveness beacon (state/.last-watcher-beat, touched every poll cycle) is
 # missing or older than FM_GUARD_GRACE seconds, prints a loud, clearly delimited
@@ -22,7 +23,6 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
-TANGLE_ROOT="${FM_TANGLE_ROOT_OVERRIDE:-$FM_ROOT}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 GRACE=${FM_GUARD_GRACE:-300}
@@ -115,26 +115,31 @@ fm_guard_clear_stale_banner() {
 }
 
 # Worktree-tangle alarm, checked FIRST and independent of in-flight tasks: the
-# project PRIMARY checkout (TANGLE_ROOT) must stay on its default branch. If a
-# crewmate's branch/commits landed here instead of in its own isolated worktree,
+# firstmate PRIMARY checkout must stay on its default branch. FM_ROOT is only the
+# checkout this fleet action is running from, which is itself a linked worktree
+# whenever a crewmate on firstmate works from its own fm/<id> task branch, so the
+# primary is resolved from it rather than assumed to be it. If a crewmate's
+# branch/commits landed in that primary instead of in its own isolated worktree,
 # the primary is stranded on a feature branch - surface it loudly on the very next
 # fleet action, the same way the watcher-down banner does. Scoped to the primary
 # only: detached HEAD (linked worktrees, secondmate homes) never trips this.
-tangle_branch=$(fm_primary_tangle_branch "$TANGLE_ROOT" || true)
+tangle_root=$(fm_primary_checkout_dir "$FM_ROOT" 2>/dev/null || true)
+tangle_branch=
+[ -z "$tangle_root" ] || tangle_branch=$(fm_primary_tangle_branch "$tangle_root" || true)
 if [ -n "$tangle_branch" ]; then
-  tangle_default=$(fm_default_branch "$TANGLE_ROOT" 2>/dev/null || echo main)
+  tangle_default=$(fm_default_branch "$tangle_root" 2>/dev/null || echo main)
   trule='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
   {
     printf '●%s\n' "$trule"
     printf '●  WORKTREE TANGLE - PRIMARY CHECKOUT IS ON A FEATURE BRANCH\n'
-    printf "●  %s is on '%s', not its default branch '%s'.\n" "$TANGLE_ROOT" "$tangle_branch" "$tangle_default"
+    printf "●  %s is on '%s', not its default branch '%s'.\n" "$tangle_root" "$tangle_branch" "$tangle_default"
     printf '●  A crewmate likely branched/committed in the primary instead of its own worktree.\n'
     printf "●  The work is SAFE on the '%s' ref.\n" "$tangle_branch"
     if [ "$READ_ONLY" -eq 1 ]; then
       printf '●  This read-only session must leave restore work to a session with verified fleet-lock ownership.\n'
     else
       printf "●  Restore the primary to '%s':\n" "$tangle_default"
-      printf '●      git -C %s checkout %s\n' "$TANGLE_ROOT" "$tangle_default"
+      printf '●      git -C %s checkout %s\n' "$tangle_root" "$tangle_default"
       printf "●  then re-validate '%s' in a proper isolated worktree.\n" "$tangle_branch"
     fi
     printf '●%s\n' "$trule"
