@@ -216,7 +216,7 @@ This probe is non-mutating by construction: the named session has no server, so 
 
 Firstmate therefore passes both values it already knows before the pane exists through that flag, and skips the typed pre-launch export block entirely on this backend.
 The token never reaches the pane's interactive shell, so it cannot appear in the pane's visible screen content or in Herdr's optional persisted pane history.
-Every other runtime backend keeps the typed path, including the paired history-file suppression.
+[`herdr-backend.md`](../herdr-backend.md) "Launch environment" owns that mechanism, including what still uses the typed path and what the other backends keep.
 The endpoint's non-secret variables remain a prefix of the composed launch command, identical on every backend, so section 6's launch string is unchanged.
 
 Pinned by `tests/fm-backend-herdr.test.sh`, whose last two cases drive the real `bin/fm-spawn.sh` with `--backend herdr` against a stateful fake CLI and assert both directions:
