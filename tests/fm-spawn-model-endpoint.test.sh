@@ -164,7 +164,7 @@ test_endpoint_model_injects_prefix_and_strict_keeps_harness_claude() {
   # It is still the same claude CLI with the same prompt-suggestion suppression.
   assert_contains "$launch" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions" \
     "launch must remain the claude CLI with prompt-suggestion suppression"
-  assert_contains "$launch" "--model 'my-local-model' --strict-mcp-config" "launch missing --strict-mcp-config"
+  assert_contains "$launch" "--strict-mcp-config --model 'my-local-model'" "launch missing --strict-mcp-config"
   assert_not_contains "$launch" "--mcp-config" "endpoint without mcp_config must keep the zero-MCP launch"
 
   # harness=claude preserved in meta; model recorded; token NOT recorded.
@@ -187,9 +187,11 @@ test_endpoint_mcp_config_adds_deliberate_grant() {
   run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
     --token "$TOKEN" "$id" "$PROJ_DIR" --model my-local-model >/dev/null
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "--model 'my-local-model' --strict-mcp-config --mcp-config '$mcp'" \
-    "configured mcp_config must be passed alongside strict mode"
-  pass "an endpoint mcp_config adds one deliberate --mcp-config grant"
+  assert_contains "$launch" "--strict-mcp-config --mcp-config '$mcp' --model 'my-local-model'" \
+    "configured mcp_config must be terminated by the non-variadic model flag"
+  assert_not_contains "$launch" "--mcp-config '$mcp' \"\$(" \
+    "the positional brief prompt must never immediately follow variadic --mcp-config"
+  pass "an endpoint mcp_config is terminated before the positional brief prompt"
 }
 
 test_missing_endpoint_mcp_config_fails_closed_before_window() {
@@ -360,7 +362,7 @@ test_dispatch_profile_backstop_with_endpoint_model() {
   assert_contains "$out" "spawned $id harness=claude" "backstop spawn must report harness=claude"
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" "ANTHROPIC_BASE_URL='http://127.0.0.1:8080'" "backstop path must still apply the endpoint prefix"
-  assert_contains "$launch" "--model 'my-local-model' --strict-mcp-config" "backstop path must still add --strict-mcp-config"
+  assert_contains "$launch" "--strict-mcp-config --model 'my-local-model'" "backstop path must still add --strict-mcp-config"
   pass "the crew-dispatch backstop coexists with an endpoint model when firstmate passes an explicit harness"
 }
 
