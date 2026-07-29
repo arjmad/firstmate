@@ -176,6 +176,45 @@ SH
   chmod +x "$fakebin/tasks-axi"
 }
 
+make_fake_tasks_axi_future_layout() {
+  local fakebin=$1
+  cat > "$fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  --version|-v|-V)
+    printf '%s\n' '0.3.0'
+    exit 0
+    ;;
+  update)
+    if [ "${2:-}" = --help ]; then
+      printf '%s\n' 'usage: tasks-axi update <id> [--archive-body]'
+      exit 0
+    fi
+    ;;
+  mv)
+    if [ "${2:-}" = --help ]; then
+      printf '%s\n' 'usage: tasks-axi mv <dest> [<id>...]'
+      exit 0
+    fi
+    ;;
+  list)
+    cat <<'OUT'
+count: 1
+tasks[1]{id,state,kind,repo,title,blocked_by,hold_kind,hold_reason,extra}:
+  future-hold,in_flight,ship,firstmate,Future layout display,none,captain,"This deliberately oversized hold reason keeps adding words, so the session start digest would otherwise carry the entire decision history on every launch even though a targeted full task view is available whenever the exact rationale is needed and this final tail must stay FUTURE-TAIL-MUST-REMAIN",trailing-extra
+help[2]:
+  - Run `tasks-axi show <id> --full` for full notes on a task
+  - Run `tasks-axi ready` to see unblocked queued work
+OUT
+    exit 0
+    ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/tasks-axi"
+}
+
 # make_fake_ps_claude <fakebin>: harness_pid()/holder_alive() (fm-lock.sh) walk
 # `ps` output looking for a harness command name; this fake reports EVERY
 # queried pid as a live `claude` harness, so the very first ancestry check
@@ -1197,6 +1236,36 @@ EOF
   pass "tasks-axi compact rendering caps long hold reasons and leaves short reasons unchanged"
 }
 
+test_backlog_compact_tasks_axi_passes_through_unknown_header_layout() {
+  local rec root home fakebin out
+  rec=$(new_world backlog-compact-future-layout)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_tasks_axi_future_layout "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## In flight
+- [ ] future-hold - Future layout display (repo: firstmate) (kind: ship) (since 2026-07-28) (hold: long reason) (hold-kind: captain)
+
+## Queued
+
+## Done
+EOF
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "FUTURE-TAIL-MUST-REMAIN\",trailing-extra" \
+    "row with unrecognized header layout was not passed through unchanged"
+  assert_not_contains "$out" "... use show future-hold --full" \
+    "compaction engaged on a header layout it cannot safely parse"
+
+  pass "tasks-axi compact rendering passes through rows under an unrecognized header layout"
+}
+
 test_backlog_compact_manual_backend_skips_indented_bodies() {
   local rec root home fakebin out
   rec=$(new_world backlog-compact-manual)
@@ -1458,6 +1527,7 @@ test_endpoint_liveness_herdr
 test_composition_invokes_real_scripts
 test_backlog_compact_tasks_axi_omits_bodies_and_keeps_metadata
 test_backlog_compact_tasks_axi_caps_only_long_hold_reasons
+test_backlog_compact_tasks_axi_passes_through_unknown_header_layout
 test_backlog_compact_manual_backend_skips_indented_bodies
 test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback
 test_fleet_digest_empty_fleet

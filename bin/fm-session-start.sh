@@ -174,9 +174,10 @@ compact_tasks_axi_hold_reasons() {
       return escaped
     }
     function compact_hold_reason(record,    field_start, id, id_end, keep, prefix, reason, row, suffix) {
+      if (!hold_field) return record
       row = record
       sub(/^  /, "", row)
-      field_start = csv_field_start(row, 8)
+      field_start = csv_field_start(row, hold_field)
       if (!field_start) return record
 
       reason = csv_decode(substr(row, field_start))
@@ -195,6 +196,12 @@ compact_tasks_axi_hold_reasons() {
     }
     /^tasks\[[0-9]+\]\{.*\}:$/ {
       in_tasks = 1
+      header = $0
+      sub(/^tasks\[[0-9]+\]\{/, "", header)
+      sub(/\}:$/, "", header)
+      field_count = split(header, header_fields, ",")
+      hold_field = 0
+      if (field_count > 1 && header_fields[field_count] == "hold_reason") hold_field = field_count
       print
       next
     }
