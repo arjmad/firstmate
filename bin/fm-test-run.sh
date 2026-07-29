@@ -695,7 +695,10 @@ families_for_changed_path() {
     bin/fm-ff-lib.sh|bin/fm-gotmp*|bin/*pretool*)
       printf '%s\n' pure-contract-unit
       ;;
-    .agents/skills/*/SKILL.md)
+    # Any skill surface, not just SKILL.md: a skill may carry supporting files
+    # (harness-adapters/references/, firstmate-codexapp/agents/) that the
+    # contract tests read through their owning skill.
+    .agents/skills/*)
       printf '%s\n' pure-contract-unit
       ;;
     .github/workflows/ci.yml|.no-mistakes.yaml)
