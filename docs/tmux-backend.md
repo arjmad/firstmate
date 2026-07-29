@@ -62,7 +62,7 @@ A bare shell prompt is `unknown`, so away-mode escalation is never injected into
 
 Rendered busy detection is also harness-scoped.
 Task metadata selects only that harness's verified signature, so output from one harness cannot make another harness appear busy.
-The exact selection contract and safety rationale live in [architecture](architecture.md#runtime-session-backends), while the signatures live in [the harness-adapters skill](../.agents/skills/harness-adapters/SKILL.md).
+The exact selection contract and safety rationale live in [architecture](architecture.md#runtime-session-backends), while each harness's signature lives in [the harness-adapters skill](../.agents/skills/harness-adapters/SKILL.md)'s `references/adapter-<harness>.md`.
 
 `bin/fm-tmux-lib.sh` owns exact type-and-submit mechanics.
 It types a message once and retries Enter only until the composer clears.
