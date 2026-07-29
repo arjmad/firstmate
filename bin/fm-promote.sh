@@ -18,10 +18,13 @@
 # reported as a durable divergence carrying the backend's own reason. All of these
 # paths exit nonzero, keeping the original signal disposition, rather than claiming
 # promotion succeeded.
-# After promoting, send the crewmate its ship instructions via fm-send.sh
-# (inventory scratch state, reset to a clean default-branch base, carry over only
-# intended fix changes, create branch fm/<task-id>, implement, then report done
-# according to the project's delivery mode).
+# After promoting, send the crewmate its ship instructions via fm-send.sh. This
+# header is the single owner of those instructions (AGENTS.md task lifecycle
+# points here): inventory scratch state, return to a clean default-branch base,
+# carry over only intended fix changes, create branch fm/<task-id>, implement,
+# then report done according to the project's selected delivery path. Scratch
+# commits and debug edits are left behind rather than carried over, and a bug the
+# scout reproduced becomes the regression test.
 # Usage: fm-promote.sh <task-id>
 set -eu
 

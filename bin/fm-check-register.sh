@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 # Bind an intentional custom watcher check to its current bytes.
+#
+# This header is the single owner of the authoring contract for a custom
+# state/<id>.check.sh that firstmate writes by hand (AGENTS.md task lifecycle
+# points here). The check must be an ordinary single-link mode-0700 file, print
+# exactly one line only when firstmate should wake, print nothing otherwise, and
+# finish before FM_CHECK_TIMEOUT. Register it after every edit: the watcher
+# executes a custom check only while its bytes still match the recorded hash and
+# refuses every unregistered or altered check without running it.
+#
 # Usage: fm-check-register.sh <id>
 set -u
 
