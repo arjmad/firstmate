@@ -177,7 +177,7 @@ The full cmux home label also includes a short hash of the resolved `FM_ROOT` pa
 
 claude, codex, opencode, pi, grok, and kimi are empirically verified for crewmate and secondmate launches; [README requirements](../README.md#requirements) own the narrower set supported for the primary session.
 New harnesses get verified through a supervised trial task before joining the set.
-The verified adapter knowledge - busy signatures, interrupt and exit commands, skill-invocation syntax, and per-harness quirks - lives in [`.agents/skills/harness-adapters/SKILL.md`](../.agents/skills/harness-adapters/SKILL.md).
+The verified adapter knowledge - busy signatures, interrupt and exit commands, skill-invocation syntax, and per-harness quirks - lives in [the harness-adapters skill](../.agents/skills/harness-adapters/SKILL.md), one `references/adapter-<harness>.md` per runtime.
 Launch mechanics, including the verified command templates, live in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh).
 Primary-session safety integrations are tracked as repo-level hook wiring, including Claude's `.claude/settings.json`; the owning hook documents are [`docs/sessionstart-nudge.md`](sessionstart-nudge.md), [`docs/arm-pretool-check.md`](arm-pretool-check.md), [`docs/cd-guard.md`](cd-guard.md), [`docs/watcher-continuity.md`](watcher-continuity.md), and [`docs/turnend-guard.md`](turnend-guard.md).
 Kimi remains outside the primary turn-end guard integrations; [`docs/turnend-guard.md`](turnend-guard.md#compatibility-limits) owns its separate captain-approved crew wake hook.
@@ -495,7 +495,7 @@ FM_FLEET_SYNC_PACKED_REFS_LOCK_RETRIES=3        # fetch retries after fm-fleet-s
 FM_FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS=1 # seconds fm-fleet-sync.sh waits before each of those retries
 FM_FLEET_SYNC_PACKED_REFS_LOCK_AGE_SECS=30       # min mtime age before fm-fleet-sync.sh treats a leftover packed-refs.lock as provably stale
 FM_BUSY_REGEX=          # optional global override for every harness-scoped busy-pane matcher; unset uses each recorded harness's verified signature
-FM_BUSY_FOOTER_RECHECK_SECS=2   # gap between the two samples that prove claude's persistent running-shell footer is still animating, in the re-reading busy readers only; 0 takes no proof, so the footer is simply not credited (.agents/skills/harness-adapters/SKILL.md owns the signature and its freshness boundary)
+FM_BUSY_FOOTER_RECHECK_SECS=2   # gap between the two samples that prove claude's persistent running-shell footer is still animating, in the re-reading busy readers only; 0 takes no proof, so the footer is simply not credited (.agents/skills/harness-adapters/references/adapter-claude.md owns the signature and its freshness boundary)
 FM_COMPOSER_IDLE_RE=    # optional empty-composer regex, applied after ghost and border stripping
 FM_COMPOSER_GHOST_LUMA_MAX=128   # fleet-wide: max perceived luminance (0.299R+0.587G+0.114B, 0-255) for a TRUECOLOR foreground to count as de-emphasised ghost/placeholder text and be stripped; dim/faint (SGR 2) is stripped regardless. Assumes a dark terminal theme (bin/fm-composer-lib.sh's fm_composer_strip_ghost, shared by the tmux and herdr composer readers)
 GROK_HOME=              # optional Grok config home for firstmate's global grok turn-end hook; defaults to ~/.grok
