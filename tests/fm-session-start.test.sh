@@ -136,6 +136,46 @@ SH
   chmod +x "$fakebin/tasks-axi"
 }
 
+make_fake_tasks_axi_hold_reasons() {
+  local fakebin=$1
+  cat > "$fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  --version|-v|-V)
+    printf '%s\n' '0.2.3'
+    exit 0
+    ;;
+  update)
+    if [ "${2:-}" = --help ]; then
+      printf '%s\n' 'usage: tasks-axi update <id> [--archive-body]'
+      exit 0
+    fi
+    ;;
+  mv)
+    if [ "${2:-}" = --help ]; then
+      printf '%s\n' 'usage: tasks-axi mv <dest> [<id>...]'
+      exit 0
+    fi
+    ;;
+  list)
+    cat <<'OUT'
+count: 2
+tasks[2]{id,state,kind,repo,title,blocked_by,hold_kind,hold_reason}:
+  hold-long,in_flight,ship,firstmate,Long hold display,none,captain,"This deliberately oversized hold reason keeps adding words, so the session start digest would otherwise carry the entire decision history on every launch even though a targeted full task view is available whenever the exact rationale is needed and this final tail must disappear FINAL-TAIL-SHOULD-NOT-APPEAR"
+  hold-short,in_flight,ship,firstmate,Short hold display,none,captain,captain choice pending
+help[2]:
+  - Run `tasks-axi show <id> --full` for full notes on a task
+  - Run `tasks-axi ready` to see unblocked queued work
+OUT
+    exit 0
+    ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/tasks-axi"
+}
+
 # make_fake_ps_claude <fakebin>: harness_pid()/holder_alive() (fm-lock.sh) walk
 # `ps` output looking for a harness command name; this fake reports EVERY
 # queried pid as a live `claude` harness, so the very first ancestry check
@@ -1112,6 +1152,51 @@ EOF
   pass "compatible tasks-axi backlog rendering is compact, bounded, and preserves recovery metadata"
 }
 
+test_backlog_compact_tasks_axi_caps_only_long_hold_reasons() {
+  local rec root home fakebin out long_line long_reason long_count backlog_before backlog_after
+  rec=$(new_world backlog-compact-hold-reasons)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_tasks_axi_hold_reasons "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## In flight
+- [ ] hold-long - Long hold display (repo: firstmate) (kind: ship) (since 2026-07-28) (hold: This deliberately oversized hold reason keeps adding words, so the session start digest would otherwise carry the entire decision history on every launch even though a targeted full task view is available whenever the exact rationale is needed and this final tail must disappear FINAL-TAIL-SHOULD-NOT-APPEAR) (hold-kind: captain)
+- [ ] hold-short - Short hold display (repo: firstmate) (kind: ship) (since 2026-07-28) (hold: captain choice pending) (hold-kind: captain)
+
+## Queued
+
+## Done
+EOF
+  backlog_before=$(< "$home/data/backlog.md")
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  backlog_after=$(< "$home/data/backlog.md")
+  long_line=$(printf '%s\n' "$out" | grep '^  hold-long,')
+  long_count=$(printf '%s\n' "$out" | grep -c '^  hold-long,')
+  long_reason=${long_line##*,captain,}
+  long_reason=${long_reason#\"}
+  long_reason=${long_reason%\"}
+
+  [ "$long_count" -eq 1 ] || fail "long hold reason did not remain on exactly one task row"
+  [ "${#long_reason}" -eq 160 ] || fail "long hold reason display was not capped at 160 characters"
+  assert_contains "$long_line" "... use show hold-long --full" \
+    "long hold reason did not end with a targeted full-text pointer"
+  assert_not_contains "$out" "FINAL-TAIL-SHOULD-NOT-APPEAR" \
+    "long hold reason leaked text beyond the display cap"
+  assert_contains "$out" "hold-short,in_flight,ship,firstmate,Short hold display,none,captain,captain choice pending" \
+    "short hold reason changed during compact rendering"
+  [ "$backlog_after" = "$backlog_before" ] || fail "compact hold rendering modified the backlog file"
+  assert_contains "$backlog_after" "FINAL-TAIL-SHOULD-NOT-APPEAR" \
+    "compact rendering removed the full hold reason from the backlog file"
+
+  pass "tasks-axi compact rendering caps long hold reasons and leaves short reasons unchanged"
+}
+
 test_backlog_compact_manual_backend_skips_indented_bodies() {
   local rec root home fakebin out
   rec=$(new_world backlog-compact-manual)
@@ -1372,6 +1457,7 @@ test_endpoint_liveness_tmux
 test_endpoint_liveness_herdr
 test_composition_invokes_real_scripts
 test_backlog_compact_tasks_axi_omits_bodies_and_keeps_metadata
+test_backlog_compact_tasks_axi_caps_only_long_hold_reasons
 test_backlog_compact_manual_backend_skips_indented_bodies
 test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback
 test_fleet_digest_empty_fleet

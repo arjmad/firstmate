@@ -75,7 +75,9 @@
 # When compatible tasks-axi is selected and available, the shared tasks-axi
 # backend probe remains the compatibility owner and this script asks
 # `tasks-axi list` for the compact identity fields plus blocked_by, hold_kind,
-# and hold_reason, never body.
+# and hold_reason, never body. tasks-axi already caps long titles; this script
+# caps only long hold_reason display fields at 160 characters and adds a
+# targeted full-text pointer without changing the backlog file.
 # When manual mode is selected, or tasks-axi is unavailable or incompatible,
 # this script prints only backlog section headings and item title lines, so
 # title-line hold and blocked-by metadata remain visible while indented bodies
@@ -139,6 +141,88 @@ print_backlog_pointer() {
   printf 'Full task bodies remain available on demand: tasks-axi show <id> --full when compatible tasks-axi is available, or data/backlog.md.\n'
 }
 
+compact_tasks_axi_hold_reasons() {
+  awk -v cap=160 '
+    function csv_field_start(record, target,    c, field, i, in_quotes) {
+      field = 1
+      for (i = 1; i <= length(record); i++) {
+        c = substr(record, i, 1)
+        if (c == "\"") {
+          if (in_quotes && substr(record, i + 1, 1) == "\"") {
+            i++
+          } else {
+            in_quotes = !in_quotes
+          }
+        } else if (c == "," && !in_quotes) {
+          field++
+          if (field == target) return i + 1
+        }
+      }
+      return 0
+    }
+    function csv_decode(value) {
+      if (substr(value, 1, 1) == "\"" && substr(value, length(value), 1) == "\"") {
+        value = substr(value, 2, length(value) - 2)
+        gsub(/\"\"/, "\"", value)
+      }
+      return value
+    }
+    function csv_encode(value,    escaped) {
+      escaped = value
+      gsub(/\"/, "\"\"", escaped)
+      if (value ~ /[\",]/ || index(value, "\n") || index(value, "\r")) return "\"" escaped "\""
+      return escaped
+    }
+    function compact_hold_reason(record,    field_start, id, id_end, keep, prefix, reason, row, suffix) {
+      row = record
+      sub(/^  /, "", row)
+      field_start = csv_field_start(row, 8)
+      if (!field_start) return record
+
+      reason = csv_decode(substr(row, field_start))
+      if (length(reason) <= cap) return record
+
+      id_end = index(row, ",")
+      if (!id_end) return record
+      id = substr(row, 1, id_end - 1)
+      gsub(/[\r\n]+/, " ", reason)
+      suffix = "... use show " id " --full"
+      keep = cap - length(suffix)
+      if (keep < 0) keep = 0
+      reason = substr(reason, 1, keep) suffix
+      prefix = substr(row, 1, field_start - 1)
+      return "  " prefix csv_encode(reason)
+    }
+    /^tasks\[[0-9]+\]\{.*\}:$/ {
+      in_tasks = 1
+      print
+      next
+    }
+    in_tasks && /^help\[[0-9]+\]:$/ {
+      if (record != "") {
+        print compact_hold_reason(record)
+        record = ""
+      }
+      in_tasks = 0
+      print
+      next
+    }
+    in_tasks && /^  / {
+      if (record != "") print compact_hold_reason(record)
+      record = $0
+      next
+    }
+    in_tasks && record != "" {
+      record = record "\n" $0
+      next
+    }
+    { print }
+    END {
+      if (record != "") print compact_hold_reason(record)
+    }
+  '
+}
+
 print_backlog_manual_compact() {
   local path=$1 reason=$2
   printf 'compact backlog listing (%s; max %s item(s); indented task bodies omitted)\n' "$reason" "$BACKLOG_LIMIT"
@@ -184,7 +268,7 @@ print_backlog_tasks_axi_compact() {
   out=$(tasks-axi list --file "$path" --limit "$BACKLOG_LIMIT" --fields blocked_by,hold_kind,hold_reason 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ]; then
-    printf '%s\n' "$out"
+    printf '%s\n' "$out" | compact_tasks_axi_hold_reasons
   else
     printf 'tasks-axi compact listing failed; falling back to title-line rendering.\n'
     printf '%s\n' "$out"
