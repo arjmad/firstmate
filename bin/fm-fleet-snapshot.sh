@@ -201,7 +201,8 @@ crew_state_json() {  # <id> <kind> <backend> <target> <worktree>
   # and no-mistakes. In that case fm-crew-state cannot reach either authoritative
   # current-state source. Avoid invoking backend adapters whose readiness path may
   # retry a missing CLI; the resulting unknown row is identical in meaning.
-  if [ -n "$target" ] && [ -d "$worktree" ] && ! command -v "$backend" >/dev/null 2>&1 \
+  if [ -n "$target" ] && [ -d "$worktree" ] \
+     && ! fm_backend_required_tool_available "$backend" "$backend" \
      && { [ "$kind" != ship ] || ! command -v no-mistakes >/dev/null 2>&1; }; then
     raw="state: unknown · source: none · backend target gone: $target"
   else

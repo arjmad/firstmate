@@ -143,7 +143,7 @@ test_missing_state_tools_are_not_retried_per_task() {
   home=$(make_home missing-state-tools)
   restricted="$home/restricted-bin"
   mkdir -p "$restricted"
-  for tool in bash basename cat cut date dirname env find grep head jq sort stat tail tr wc awk sed; do
+  for tool in bash basename cat cut date dirname env find grep head jq sort stat tail tr uname wc awk sed git; do
     real=$(command -v "$tool" || true)
     [ -n "$real" ] || fail "missing test dependency: $tool"
     ln -s "$real" "$restricted/$tool"
