@@ -23,7 +23,10 @@
 #   tasks[]: one row per state/<id>.meta, sorted by id, including recorded
 #     harness/model/effort/backend posture and locally recorded PR head identity.
 #     current_state is parsed from bin/fm-crew-state.sh <id> and preserves
-#     state, source, detail, and raw line separately.
+#     state, source, detail, and raw line separately; when the caller's PATH
+#     has neither the task's backend CLI nor (for ship tasks) no-mistakes and
+#     the task worktree still exists, the identical unreachable-target unknown
+#     row is emitted without invoking fm-crew-state.sh.
 #     paths.status_log.last_event is historical wake-event data only, never
 #     current state.
 #     hints.open_decisions is the keyed open-decision set returned by
