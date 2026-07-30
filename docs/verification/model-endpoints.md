@@ -149,7 +149,7 @@ ok - a missing endpoint mcp_config fails closed before any launch or meta is cre
 ok - an unreadable endpoint mcp_config fails closed before launch
 ```
 
-The opt-in launch assertion is `--model 'my-local-model' --strict-mcp-config --mcp-config '<readable-path>'`.
+The opt-in launch assertion at this date was `--model 'my-local-model' --strict-mcp-config --mcp-config '<readable-path>'`; section 8 supersedes this flag order.
 The existing no-`mcp_config` case still asserts that no `--mcp-config` flag appears, preserving the zero-MCP default exactly.
 No live Sol-worker Chrome probe was run, so the outside-MCP Chrome boundary remains explicitly unverified rather than inferred from the strict MCP flag.
 
@@ -162,7 +162,7 @@ No live Sol-worker Chrome probe was run, so the outside-MCP Chrome boundary rema
 Upstream replaced `"$(cat <brief>)"` with the canonical operational-input encoder in every
 adapter template, so the section 3 capture above is the pre-merge shape and is retained as
 dated evidence of what was observed then. The endpoint prefix and MCP flags are unchanged;
-only the brief argument moved. The launch string composed after the merge is:
+only the brief argument moved. The launch string composed after the merge was:
 
 ```
 ANTHROPIC_BASE_URL='http://127.0.0.1:<port>' ANTHROPIC_DEFAULT_OPUS_MODEL='my-local-model' \
@@ -308,3 +308,38 @@ PASS: the real credential does not appear on the pane screen
 
 The non-secret endpoint prefix is still visible there, as expected: it is part of the launch command, not launch environment, and is composed identically on every backend.
 The three lines that used to sit above that command are gone, which is the acceptance bar for enabling `experimental.pane_history`.
+
+## 8. Variadic `--mcp-config` launch ordering (2026-07-29)
+
+- Date: 2026-07-29T23:34:29Z
+- claude: 2.1.220 (Claude Code)
+- Scope: direct real-CLI reproduction and verification in a scratch directory, without running `fm-spawn.sh` or creating a runtime session.
+
+Claude's help declares `--mcp-config <configs...>` as variadic, while `--model <model>` and `--effort <level>` each consume one value.
+The old endpoint template placed the positional encoded brief immediately after the final MCP config path, so the parser treated the brief as another config filename.
+
+The failing shape was reproduced with a 4,096-character positional prompt and a valid empty MCP config:
+
+```
+$ claude --model haiku --effort low --print --strict-mcp-config \
+    --mcp-config "$scratch/mcp.json" "$(python3 -c 'print("X" * 4096)')"
+Error: Invalid MCP configuration:
+Failed to read file: Error: ENAMETOOLONG: name too long, open
+$ printf '%s\n' "$?"
+1
+```
+
+The reordered shape terminates the variadic option with the scalar model flag before the positional prompt:
+
+```
+$ claude --strict-mcp-config --mcp-config "$scratch/mcp.json" \
+    --model haiku --effort low --print 'Reply with exactly: MCP_ORDER_OK'
+MCP_ORDER_OK
+$ printf '%s\n' "$?"
+0
+```
+
+The successful command also printed the expected local authentication-source warnings on stderr, but no MCP configuration error.
+The launch-template audit found no equivalent adjacency hazard in the other rendered prompts: Claude's model and effort flags are scalar, Codex and Pi end with scalar flags, Grok's model and reasoning-effort flags are scalar, OpenCode receives the prompt through `--prompt`, and Kimi receives no positional prompt.
+The endpoint template now orders `--strict-mcp-config --mcp-config <file> --model <model> [--effort <level>] <prompt>`, superseding the `--model`-first order shown in the section 3-7 captures, which remain dated evidence.
+`tests/fm-spawn-model-endpoint.test.sh` asserts both that `--model` terminates `--mcp-config` and that the positional encoder command never follows the MCP path directly.

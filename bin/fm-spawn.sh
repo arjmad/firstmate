@@ -498,15 +498,18 @@ launch_template() {
     # var is the correct control. The dim-aware composer reader in fm-tmux-lib.sh is
     # the defense-in-depth backstop for any pane this flag cannot reach.
     # __ENDPOINTENV__, __STRICTMCP__, and __MCPCONFIG__ are empty for a normal
-    # Anthropic launch (byte-identical to the stock claude launch). They are filled
-    # only when the resolved --model matches a config/model-endpoints.json entry,
+    # Anthropic launch (byte-identical to the stock claude launch). __MCPCONFIG__
+    # deliberately precedes the scalar --model flag: claude parses --mcp-config as
+    # variadic, so it must never sit immediately before the positional brief prompt.
+    # The endpoint placeholders are filled only when the resolved --model matches a
+    # config/model-endpoints.json entry,
     # redirecting this SAME claude CLI at a local Anthropic-shaped proxy
     # (fm-model-endpoint.sh; the auth token is exported separately below, never
     # composed into this launch string). The harness stays claude, so every claude
     # supervision fact still applies. The brief itself rides the canonical
     # __OPINPUT__ encoder like every other adapter; endpoint routing only prefixes
     # env and appends flags, so the two mechanisms compose without interacting.
-    claude) printf '%s' '__ENDPOINTENV__CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG____STRICTMCP____MCPCONFIG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    claude) printf '%s' '__ENDPOINTENV__CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __STRICTMCP____MCPCONFIG____MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     codex)
       if [ "$kind" = secondmate ]; then
         printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
