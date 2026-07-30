@@ -23,7 +23,10 @@
 #   tasks[]: one row per state/<id>.meta, sorted by id, including recorded
 #     harness/model/effort/backend posture and locally recorded PR head identity.
 #     current_state is parsed from bin/fm-crew-state.sh <id> and preserves
-#     state, source, detail, and raw line separately.
+#     state, source, detail, and raw line separately; when the caller's PATH
+#     has neither the task's backend CLI nor (for ship tasks) no-mistakes and
+#     the task worktree still exists, the identical unreachable-target unknown
+#     row is emitted without invoking fm-crew-state.sh.
 #     paths.status_log.last_event is historical wake-event data only, never
 #     current state.
 #     hints.open_decisions is the keyed open-decision set returned by
@@ -195,17 +198,27 @@ last_nonempty_line() {  # <file>
   grep -v '^[[:space:]]*$' "$1" 2>/dev/null | tail -1
 }
 
-crew_state_json() {  # <id>
-  local id=$1 raw rest state source detail sep
-  raw=$(
-    FM_ROOT_OVERRIDE="$FM_ROOT" \
-      FM_HOME="$FM_HOME" \
-      FM_STATE_OVERRIDE="$STATE" \
-      FM_DATA_OVERRIDE="$DATA" \
-      FM_PROJECTS_OVERRIDE="$PROJECTS" \
-      FM_CONFIG_OVERRIDE="$CONFIG" \
-      "$SCRIPT_DIR/fm-crew-state.sh" "$id" 2>/dev/null || true
-  )
+crew_state_json() {  # <id> <kind> <backend> <target> <worktree>
+  local id=$1 kind=$2 backend=$3 target=$4 worktree=$5 raw rest state source detail sep
+  # A sanitized read-only caller may deliberately omit both the task backend CLI
+  # and no-mistakes. In that case fm-crew-state cannot reach either authoritative
+  # current-state source. Avoid invoking backend adapters whose readiness path may
+  # retry a missing CLI; the resulting unknown row is identical in meaning.
+  if [ -n "$target" ] && [ -d "$worktree" ] \
+     && ! fm_backend_required_tool_available "$backend" "$backend" \
+     && { [ "$kind" != ship ] || ! command -v no-mistakes >/dev/null 2>&1; }; then
+    raw="state: unknown · source: none · backend target gone: $target"
+  else
+    raw=$(
+      FM_ROOT_OVERRIDE="$FM_ROOT" \
+        FM_HOME="$FM_HOME" \
+        FM_STATE_OVERRIDE="$STATE" \
+        FM_DATA_OVERRIDE="$DATA" \
+        FM_PROJECTS_OVERRIDE="$PROJECTS" \
+        FM_CONFIG_OVERRIDE="$CONFIG" \
+        "$SCRIPT_DIR/fm-crew-state.sh" "$id" 2>/dev/null || true
+    )
+  fi
   raw=$(printf '%s\n' "$raw" | head -1)
   sep=' · '
   state=unknown
@@ -434,7 +447,7 @@ task_json_lines() {
       pr_source=absent
     fi
 
-    current_json=$(crew_state_json "$id")
+    current_json=$(crew_state_json "$id" "$kind" "$backend" "$target" "$worktree")
     event_json=$(status_event_json "$status_log")
     last_event_raw=$(printf '%s' "$event_json" | jq -r '.last_event.raw // ""')
     current_state=$(printf '%s' "$current_json" | jq -r '.state // ""')
