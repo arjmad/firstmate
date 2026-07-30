@@ -143,7 +143,11 @@ test_missing_state_tools_are_not_retried_per_task() {
   home=$(make_home missing-state-tools)
   restricted="$home/restricted-bin"
   mkdir -p "$restricted"
-  for tool in bash basename cat cut date dirname env find grep head jq sort stat tail tr uname wc awk sed git; do
+  # seq and sleep must stay on this PATH: the herdr server-ensure retry loop is
+  # built from them, and without them the pre-fix per-task retry aborts
+  # instantly instead of burning its 10s budget, letting the elapsed-time bound
+  # below pass even against an unfixed snapshot.
+  for tool in bash basename cat cut date dirname env find grep head jq seq sleep sort stat tail tr uname wc awk sed git; do
     real=$(command -v "$tool" || true)
     [ -n "$real" ] || fail "missing test dependency: $tool"
     ln -s "$real" "$restricted/$tool"
