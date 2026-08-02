@@ -155,6 +155,8 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 
 # shellcheck source=bin/fm-backend.sh
 . "$FM_DAEMON_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-herdr-env-lib.sh
+. "$FM_DAEMON_DIR/fm-herdr-env-lib.sh"
 
 # Canonical construction and parsing for every Firstmate operational input.
 # shellcheck source=bin/fm-operational-input.sh
@@ -792,7 +794,7 @@ wedge_alarm_via_herdr() {  # <summary>
   esac
   command -v herdr >/dev/null 2>&1 || {
     log "wedge alarm: herdr not found; cannot post a herdr notification"; return 1; }
-  wedge_alarm_run_bounded herdr herdr notification show "firstmate: away-mode escalations WEDGED" \
+  wedge_alarm_run_bounded herdr fm_herdr_scrubbed_exec herdr notification show "firstmate: away-mode escalations WEDGED" \
     --body "$summary" --sound request >/dev/null 2>&1 && return 0
   log "wedge alarm: herdr notification failed"
   return 1

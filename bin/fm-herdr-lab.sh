@@ -39,6 +39,10 @@
 # exact name. Reap never enumerates other Firstmate homes.
 set -u
 
+FM_HERDR_LAB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-herdr-env-lib.sh
+. "$FM_HERDR_LAB_DIR/fm-herdr-env-lib.sh"
+
 fm_herdr_lab_error() {
   echo "fm-herdr-lab: $*" >&2
 }
@@ -65,7 +69,7 @@ fm_herdr_lab_tripwire_path() { # <session>
 fm_herdr_lab_raw() { # <session> <herdr arguments...>
   local name=$1
   shift
-  HERDR_SESSION="$name" herdr "$@" --session "$name"
+  HERDR_SESSION="$name" fm_herdr_scrubbed_exec herdr "$@" --session "$name"
 }
 
 fm_herdr_lab_session_list() { # <session>
