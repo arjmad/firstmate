@@ -16,6 +16,10 @@
 # at or above the required floor (17 for the real-Herdr family).
 set -eu
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-herdr-env-lib.sh
+. "$SCRIPT_DIR/fm-herdr-env-lib.sh"
+
 # Exact pin - change only with a re-verified real-Herdr matrix.
 FM_HERDR_CI_VERSION=0.7.5
 FM_HERDR_CI_TAG="v${FM_HERDR_CI_VERSION}"
@@ -78,11 +82,11 @@ mkdir -p "$DESTINATION"
 install -m 0755 "$TMP/$ASSET" "$DESTINATION/herdr"
 
 # Post-install version and protocol gates (no floating latest).
-installed_version=$("$DESTINATION/herdr" --version 2>/dev/null | awk '{print $2; exit}')
+installed_version=$(fm_herdr_scrubbed_exec "$DESTINATION/herdr" --version 2>/dev/null | awk '{print $2; exit}')
 [ "$installed_version" = "$FM_HERDR_CI_VERSION" ] \
   || die "installed herdr version is '${installed_version:-<empty>}', expected exact pin $FM_HERDR_CI_VERSION"
 
-status=$("$DESTINATION/herdr" status --json 2>/dev/null) \
+status=$(fm_herdr_scrubbed_exec "$DESTINATION/herdr" status --json 2>/dev/null) \
   || die "could not run 'herdr status --json' after install"
 protocol=$(printf '%s' "$status" | jq -r '.client.protocol // empty' 2>/dev/null) \
   || die "jq is required to parse herdr status after install"
@@ -94,4 +98,4 @@ esac
 
 printf 'fm-install-herdr.sh: installed herdr %s (protocol %s) to %s\n' \
   "$installed_version" "$protocol" "$DESTINATION/herdr" >&2
-"$DESTINATION/herdr" --version
+fm_herdr_scrubbed_exec "$DESTINATION/herdr" --version

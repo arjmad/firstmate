@@ -16,6 +16,10 @@
 #   fm-herdr-ci-cleanup.sh teardown <snapshot-path>
 set -eu
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-herdr-env-lib.sh
+. "$SCRIPT_DIR/fm-herdr-env-lib.sh"
+
 die() {
   printf 'fm-herdr-ci-cleanup.sh: %s\n' "$*" >&2
   exit 1
@@ -36,7 +40,7 @@ fi
 command -v jq >/dev/null 2>&1 || die "jq is required"
 
 list_sessions_json() {
-  herdr session list --json 2>/dev/null \
+  fm_herdr_scrubbed_exec herdr session list --json 2>/dev/null \
     || die "could not list Herdr sessions"
 }
 
@@ -76,7 +80,7 @@ case "$cmd" in
         continue
       }
       # Fresh refuse-default check immediately before each destructive call.
-      flag=$(herdr session list --json 2>/dev/null \
+      flag=$(fm_herdr_scrubbed_exec herdr session list --json 2>/dev/null \
         | jq -r --arg n "$name" '.sessions[]? | select(.name == $n) | .default' 2>/dev/null || true)
       if [ "$flag" != "false" ]; then
         log "refusing cleanup of '$name' (default=${flag:-<not found>})"
@@ -84,20 +88,20 @@ case "$cmd" in
         continue
       fi
       log "stopping job-owned lab session $name"
-      herdr session stop "$name" --json >/dev/null 2>&1 || true
+      fm_herdr_scrubbed_exec herdr session stop "$name" --json >/dev/null 2>&1 || true
       sleep 0.3
-      flag=$(herdr session list --json 2>/dev/null \
+      flag=$(fm_herdr_scrubbed_exec herdr session list --json 2>/dev/null \
         | jq -r --arg n "$name" '.sessions[]? | select(.name == $n) | .default' 2>/dev/null || true)
       if [ "$flag" != "false" ]; then
         log "refusing delete of '$name' after stop (default=${flag:-<not found>})"
         failed=1
         continue
       fi
-      if herdr session delete "$name" --json >/dev/null 2>&1; then
+      if fm_herdr_scrubbed_exec herdr session delete "$name" --json >/dev/null 2>&1; then
         log "deleted job-owned lab session $name"
       else
         # Already gone is success; still present is failure.
-        still=$(herdr session list --json 2>/dev/null \
+        still=$(fm_herdr_scrubbed_exec herdr session list --json 2>/dev/null \
           | jq -r --arg n "$name" '.sessions[]? | select(.name == $n) | .name' 2>/dev/null || true)
         if [ -n "$still" ]; then
           log "failed to delete lab session $name"
