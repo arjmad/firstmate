@@ -17,7 +17,7 @@ printf '%s\n' '{"client":{"protocol":17}}'
 SH
 chmod +x "$FAKEBIN/herdr"
 
-# shellcheck source=bin/fm-herdr-env-lib.sh
+# shellcheck source=/dev/null
 . "$ROOT/bin/fm-herdr-env-lib.sh"
 CLAUDE_CODE_CHILD_SESSION=1 CLAUDE_CODE_SESSION_ID=keep \
   PATH="$FAKEBIN:$PATH" FM_FAKE_HERDR_LOG="$LOG" \
@@ -26,7 +26,7 @@ assert_contains "$(cat "$LOG")" 'child=unset session=keep args=status --json' \
   "the shared Herdr execution seam must remove only the harmful child-session marker"
 
 : > "$LOG"
-# shellcheck source=bin/fm-backend.sh
+# shellcheck source=/dev/null
 . "$ROOT/bin/fm-backend.sh"
 fm_backend_source herdr
 CLAUDE_CODE_CHILD_SESSION=1 CLAUDE_CODE_SESSION_ID=keep \
