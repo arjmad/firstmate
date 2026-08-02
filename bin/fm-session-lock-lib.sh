@@ -11,23 +11,21 @@
 # Known harness command names; extend when a new adapter is verified.
 FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$'
 
-# Walk the current process ancestry (up to 8 hops) and print the first pid whose
-# command looks like a verified harness. The harness pid lives as long as the
-# session, unlike the transient subshell pid of any one tool call.
-fm_harness_ancestry_pid() {
-  local pid=$$ comm args
-  for _ in 1 2 3 4 5 6 7 8; do
-    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
-    args=$(ps -o args= -p "$pid" 2>/dev/null)
-    if printf '%s' "$(basename "$comm")" | grep -qE "$FM_HARNESS_RE"; then
-      echo "$pid"; return 0
-    fi
-    # Bare interpreter (e.g. node): match the harness name in its script path.
-    case "$comm" in
-      *node*|*python*) printf '%s' "$args" | grep -qE "$FM_HARNESS_RE" && { echo "$pid"; return 0; } ;;
+# True if $1 is in the current process ancestry. Claude's tool and Stop-hook
+# execution lanes can have different nearer Claude-shaped processes, so exact
+# nearest-ancestor equality is not a stable session identity by itself.
+fm_pid_is_current_ancestor() {
+  local target=$1 pid=$$ parent
+  case "$target" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
+    [ "$pid" = "$target" ] && return 0
+    parent=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ') || return 1
+    case "$parent" in
+      ''|*[!0-9]*|0|1) return 1 ;;
     esac
-    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
-    [ -n "$pid" ] && [ "$pid" -gt 1 ] || return 1
+    pid=$parent
   done
   return 1
 }
@@ -38,6 +36,59 @@ fm_harness_pid_alive() {
   kill -0 "$pid" 2>/dev/null || return 1
   comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
   printf '%s' "$(basename "$comm") $(ps -o args= -p "$pid" 2>/dev/null)" | grep -qE "$FM_HARNESS_RE"
+}
+
+fm_harness_pid_is_claude() {
+  local pid=$1 comm args
+  comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
+  printf '%s' "$(basename "$comm")" | grep -Eq '^claude([._-].*)?$' && return 0
+  case "$comm" in
+    *node*|*python*)
+      args=$(ps -o args= -p "$pid" 2>/dev/null)
+      printf '%s' "$args" | grep -Eq '(^|[[:space:]/])claude([^[:space:]/]*)([[:space:]/]|$)'
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# Walk the current process ancestry (up to 8 hops) and print the nearest pid
+# whose command looks like a verified harness. For Claude only, prefer its
+# declared stable CLAUDE_PID when the nearer candidate is also Claude-shaped
+# and the declared live Claude process is genuinely in this ancestry. This
+# keeps tool and Stop-hook lanes in one Claude session on the same owner while
+# preventing an inherited CLAUDE_PID from overriding a nested non-Claude
+# harness or authorizing a competing session.
+fm_harness_ancestry_pid() {
+  local pid=$$ comm args candidate=
+  for _ in 1 2 3 4 5 6 7 8; do
+    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
+    args=$(ps -o args= -p "$pid" 2>/dev/null)
+    if printf '%s' "$(basename "$comm")" | grep -qE "$FM_HARNESS_RE"; then
+      candidate=$pid
+      break
+    fi
+    # Bare interpreter (e.g. node): match the harness name in its script path.
+    case "$comm" in
+      *node*|*python*)
+        if printf '%s' "$args" | grep -qE "$FM_HARNESS_RE"; then
+          candidate=$pid
+          break
+        fi
+        ;;
+    esac
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    [ -n "$pid" ] && [ "$pid" -gt 1 ] || return 1
+  done
+  [ -n "$candidate" ] || return 1
+
+  if fm_harness_pid_is_claude "$candidate" \
+    && fm_pid_is_current_ancestor "${CLAUDE_PID:-}" \
+    && fm_harness_pid_alive "$CLAUDE_PID" \
+    && fm_harness_pid_is_claude "$CLAUDE_PID"; then
+    echo "$CLAUDE_PID"
+  else
+    echo "$candidate"
+  fi
 }
 
 # True when state dir $1 holds a session lock whose pid is the harness ancestor
