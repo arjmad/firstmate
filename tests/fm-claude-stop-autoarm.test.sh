@@ -18,6 +18,20 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-claude-stop-autoarm)
 fm_git_identity fmtest fmtest@example.invalid
 
+# Fixture-owned background processes (the takeover holder and outer lanes) are
+# registered here by pid so a failed assertion never leaks a polling orphan.
+FIXTURE_PIDS=()
+fm_autoarm_teardown() {
+  local pid
+  for pid in "${FIXTURE_PIDS[@]:-}"; do
+    [ -n "$pid" ] || continue
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
+  fm_test_cleanup
+}
+trap fm_autoarm_teardown EXIT
+
 FAKEBIN=$(fm_fakebin "$TMP_ROOT/fakebin")
 cat > "$FAKEBIN/claude-harness.js" <<'JS'
 #!/usr/bin/env node
@@ -37,6 +51,12 @@ chmod +x "$FAKEBIN/claude-harness.js" "$FAKEBIN/codex-harness.js"
 FAKE_CLAUDE="$FAKEBIN/claude-harness.js"
 FAKE_CODEX="$FAKEBIN/codex-harness.js"
 export FAKE_CLAUDE FAKE_CODEX
+
+# The suite may itself run inside a real Claude session whose exported
+# CLAUDE_PID is alive, Claude-shaped, and ancestral; the fake harness only
+# injects its own pid when CLAUDE_PID is unset, so the ambient identity would
+# hijack every fixture session's lock owner.
+unset CLAUDE_PID
 
 # Copy the hook and its sourced dependencies into a fixture checkout.
 install_autoarm_scripts() {
@@ -218,7 +238,7 @@ test_inert_without_session_lock() {
 }
 
 test_mid_session_takeover_claims_with_stable_claude_owner() {
-  local dir holder outer guard_rc auto_rc owner expected_owner outcome
+  local dir holder outer outer_rc i guard_rc auto_rc owner expected_owner outcome
   dir=$(make_primary_dir "$TMP_ROOT/mid-session-takeover")
   mkdir -p "$dir/config"
   printf 'tmux\n' > "$dir/config/backend"
@@ -231,14 +251,34 @@ test_mid_session_takeover_claims_with_stable_claude_owner() {
   FM_HOME="$dir" "$FAKE_CLAUDE" -c '
     "$FM_HOME/bin/fm-lock.sh" >/dev/null
     printf "%s\n" "$CLAUDE_PID" > "$FM_HOME/state/holder.pid"
-    while [ ! -e "$FM_HOME/state/holder.stop" ]; do sleep 0.05; done
+    i=0
+    while [ ! -e "$FM_HOME/state/holder.stop" ]; do
+      i=$((i + 1)); [ "$i" -le 600 ] || exit 1
+      sleep 0.05
+    done
   ' &
   holder=$!
-  while [ ! -s "$dir/state/holder.pid" ]; do sleep 0.05; done
+  FIXTURE_PIDS+=("$holder")
+  i=0
+  while [ ! -s "$dir/state/holder.pid" ]; do
+    i=$((i + 1)); [ "$i" -le 200 ] || fail "timed out waiting for the old primary to acquire the home lock"
+    sleep 0.05
+  done
 
   cat > "$dir/bin/mid-session-takeover-fixture.sh" <<'SH'
 #!/usr/bin/env bash
 set -u
+lock_lane=
+auto_pid=
+cleanup() {
+  local pid
+  for pid in "$lock_lane" "$auto_pid"; do
+    [ -n "$pid" ] || continue
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
+}
+trap cleanup EXIT
 # Claude exposes its stable session process to tool and hook children. Two
 # transient Claude-shaped children below model the distinct execution lanes
 # used by a mid-session lock command and the later Stop hook.
@@ -250,7 +290,11 @@ printf '%s\n' '{"session_id":"takeover","stop_hook_active":false}' \
 printf '%s\n' "$pre_rc" > "$FM_HOME/state/pre.rc"
 
 : > "$FM_HOME/state/holder.stop"
-while "$FM_HOME/bin/fm-lock.sh" status | grep -q 'held by live'; do sleep 0.05; done
+i=0
+while "$FM_HOME/bin/fm-lock.sh" status | grep -q 'held by live'; do
+  i=$((i + 1)); [ "$i" -le 200 ] || exit 65
+  sleep 0.05
+done
 
 # Carry every suspected dead-session masking file across the takeover. Their
 # age makes them reclaimable; none may permanently suppress the new claim.
@@ -267,10 +311,18 @@ touch -t 202001010000 "$FM_HOME/state/.claude-autoarm.lock" "$FM_HOME/state/.cla
 "$FAKE_CLAUDE" -c '
   "$FM_HOME/bin/fm-lock.sh" >/dev/null
   : > "$FM_HOME/state/takeover.locked"
-  while [ ! -e "$FM_HOME/state/takeover.release" ]; do sleep 0.05; done
+  i=0
+  while [ ! -e "$FM_HOME/state/takeover.release" ]; do
+    i=$((i + 1)); [ "$i" -le 600 ] || exit 1
+    sleep 0.05
+  done
 ' &
 lock_lane=$!
-while [ ! -e "$FM_HOME/state/takeover.locked" ]; do sleep 0.05; done
+i=0
+while [ ! -e "$FM_HOME/state/takeover.locked" ]; do
+  i=$((i + 1)); [ "$i" -le 200 ] || exit 66
+  sleep 0.05
+done
 
 printf '%s\n' '{"session_id":"takeover","stop_hook_active":false}' \
   | "$FAKE_CLAUDE" -c '
@@ -283,10 +335,15 @@ auto_pid=$!
 
 guard_rc=0
 printf '%s\n' '{"session_id":"takeover","stop_hook_active":false}' \
-  | FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=1000 "$FM_HOME/bin/fm-turnend-guard.sh" --claude \
+  | FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=5000 "$FM_HOME/bin/fm-turnend-guard.sh" --claude \
       >"$FM_HOME/state/guard.out" 2>"$FM_HOME/state/guard.err" || guard_rc=$?
 printf '%s\n' "$guard_rc" > "$FM_HOME/state/guard.rc"
 
+i=0
+while kill -0 "$auto_pid" 2>/dev/null; do
+  i=$((i + 1)); [ "$i" -le 600 ] || exit 67
+  sleep 0.05
+done
 auto_rc=0
 wait "$auto_pid" || auto_rc=$?
 printf '%s\n' "$auto_rc" > "$FM_HOME/state/auto.rc"
@@ -302,9 +359,13 @@ SH
     exit "$rc"
   ' &
   outer=$!
-  wait "$outer"
+  FIXTURE_PIDS+=("$outer")
+  outer_rc=0
+  wait "$outer" || outer_rc=$?
   wait "$holder" 2>/dev/null || true
+  FIXTURE_PIDS=()
 
+  expect_code 0 "$outer_rc" "takeover fixture must complete within its bounded deadlines"
   expect_code 0 "$(cat "$dir/state/pre.rc")" "replacement session must stay inert before the old live owner exits"
   guard_rc=$(cat "$dir/state/guard.rc")
   auto_rc=$(cat "$dir/state/auto.rc")
