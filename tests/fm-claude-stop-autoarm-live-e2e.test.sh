@@ -72,6 +72,7 @@ SH
 chmod +x "$PROJECT/bin/tool-logger.sh"
 
 mkdir -p "$HOME_DIR/state" "$HOME_DIR/config" "$HOME_DIR/data"
+printf 'tmux\n' > "$HOME_DIR/config/backend"
 printf 'project=fixture\nwindow=fixture\nbackend=tmux\n' > "$HOME_DIR/state/task.meta"
 # A numeric pid above the supported OS pid range is a demonstrably dead prior
 # harness owner under fm_harness_pid_alive, matching the reproduced incident.

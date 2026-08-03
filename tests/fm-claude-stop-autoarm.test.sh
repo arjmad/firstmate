@@ -3,8 +3,9 @@
 # (bin/fm-claude-stop-autoarm.sh, docs/watcher-continuity.md).
 #
 # The hook fires as a Claude asyncRewake Stop hook. These tests run it hermetically
-# as a child of a fake harness (a bash symlink named "claude") whose pid is
-# written into the fixture home's state/.lock for ordinary owned-lock cases.
+# as a child of a fake Node harness whose script path is named "claude" and
+# whose stable pid is written into the fixture home's state/.lock for ordinary
+# owned-lock cases.
 # Stale-owner cases instead leave a dead recorded pid for the hook to reclaim
 # through the real fm-lock.sh path. The arm wrapper is a per-test fixture, so no
 # real watcher, model, or fleet state is touched.
@@ -17,9 +18,45 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-claude-stop-autoarm)
 fm_git_identity fmtest fmtest@example.invalid
 
+# Fixture-owned background processes (the takeover holder and outer lanes) are
+# registered here by pid so a failed assertion never leaks a polling orphan.
+FIXTURE_PIDS=()
+fm_autoarm_teardown() {
+  local pid
+  for pid in "${FIXTURE_PIDS[@]:-}"; do
+    [ -n "$pid" ] || continue
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
+  fm_test_cleanup
+}
+trap fm_autoarm_teardown EXIT
+
 FAKEBIN=$(fm_fakebin "$TMP_ROOT/fakebin")
-ln -s /bin/bash "$FAKEBIN/claude"
-FAKE_CLAUDE="$FAKEBIN/claude"
+cat > "$FAKEBIN/claude-harness.js" <<'JS'
+#!/usr/bin/env node
+const { spawn } = require("node:child_process");
+const env = { ...process.env, FAKE_HARNESS_PID: String(process.pid) };
+if (!env.CLAUDE_PID) env.CLAUDE_PID = String(process.pid);
+const child = spawn("/bin/bash", process.argv.slice(2), { env, stdio: "inherit" });
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(signal, () => child.kill(signal));
+}
+child.on("exit", (code, signal) => {
+  process.exit(signal ? 1 : (code ?? 1));
+});
+JS
+cp "$FAKEBIN/claude-harness.js" "$FAKEBIN/codex-harness.js"
+chmod +x "$FAKEBIN/claude-harness.js" "$FAKEBIN/codex-harness.js"
+FAKE_CLAUDE="$FAKEBIN/claude-harness.js"
+FAKE_CODEX="$FAKEBIN/codex-harness.js"
+export FAKE_CLAUDE FAKE_CODEX
+
+# The suite may itself run inside a real Claude session whose exported
+# CLAUDE_PID is alive, Claude-shaped, and ancestral; the fake harness only
+# injects its own pid when CLAUDE_PID is unset, so the ambient identity would
+# hijack every fixture session's lock owner.
+unset CLAUDE_PID
 
 # Copy the hook and its sourced dependencies into a fixture checkout.
 install_autoarm_scripts() {
@@ -31,7 +68,8 @@ install_autoarm_scripts() {
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
   cp "$ROOT/bin/fm-session-lock-lib.sh" "$dir/bin/fm-session-lock-lib.sh"
   cp "$ROOT/bin/fm-lock.sh" "$dir/bin/fm-lock.sh"
-  chmod +x "$dir/bin/fm-claude-stop-autoarm.sh" "$dir/bin/fm-lock.sh"
+  cp "$ROOT/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard.sh"
+  chmod +x "$dir/bin/fm-claude-stop-autoarm.sh" "$dir/bin/fm-lock.sh" "$dir/bin/fm-turnend-guard.sh"
 }
 
 make_primary_dir() {
@@ -69,7 +107,7 @@ run_autoarm() {
   local dir=$1 rc=0
   printf '%s\n' '{"session_id":"sess-autoarm","stop_hook_active":false}' \
     | FM_HOME="$dir" "$FAKE_CLAUDE" -c '
-        printf "%s\n" "$$" > "$FM_HOME/state/.lock"
+        printf "%s\n" "$CLAUDE_PID" > "$FM_HOME/state/.lock"
         "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
       ' 2>&1 || rc=$?
   printf 'RC=%s\n' "$rc" >&2
@@ -199,6 +237,173 @@ test_inert_without_session_lock() {
   pass "auto-arm: inert with no session lock"
 }
 
+test_mid_session_takeover_claims_with_stable_claude_owner() {
+  local dir holder outer outer_rc i guard_rc auto_rc owner expected_owner outcome
+  dir=$(make_primary_dir "$TMP_ROOT/mid-session-takeover")
+  mkdir -p "$dir/config"
+  printf 'tmux\n' > "$dir/config/backend"
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" slow-actionable
+
+  # The old primary genuinely acquires the lock, then remains alive while the
+  # replacement Claude session starts. This is the refused session-start edge
+  # that precedes a mid-session takeover.
+  FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+    "$FM_HOME/bin/fm-lock.sh" >/dev/null
+    printf "%s\n" "$CLAUDE_PID" > "$FM_HOME/state/holder.pid"
+    i=0
+    while [ ! -e "$FM_HOME/state/holder.stop" ]; do
+      i=$((i + 1)); [ "$i" -le 600 ] || exit 1
+      sleep 0.05
+    done
+  ' &
+  holder=$!
+  FIXTURE_PIDS+=("$holder")
+  i=0
+  while [ ! -s "$dir/state/holder.pid" ]; do
+    i=$((i + 1)); [ "$i" -le 200 ] || fail "timed out waiting for the old primary to acquire the home lock"
+    sleep 0.05
+  done
+
+  cat > "$dir/bin/mid-session-takeover-fixture.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+lock_lane=
+auto_pid=
+cleanup() {
+  local pid
+  for pid in "$lock_lane" "$auto_pid"; do
+    [ -n "$pid" ] || continue
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
+}
+trap cleanup EXIT
+# Claude exposes its stable session process to tool and hook children. Two
+# transient Claude-shaped children below model the distinct execution lanes
+# used by a mid-session lock command and the later Stop hook.
+printf '%s\n' "$CLAUDE_PID" > "$FM_HOME/state/expected-owner"
+
+pre_rc=0
+printf '%s\n' '{"session_id":"takeover","stop_hook_active":false}' \
+  | "$FM_HOME/bin/fm-claude-stop-autoarm.sh" >/dev/null 2>&1 || pre_rc=$?
+printf '%s\n' "$pre_rc" > "$FM_HOME/state/pre.rc"
+
+: > "$FM_HOME/state/holder.stop"
+i=0
+while "$FM_HOME/bin/fm-lock.sh" status | grep -q 'held by live'; do
+  i=$((i + 1)); [ "$i" -le 200 ] || exit 65
+  sleep 0.05
+done
+
+# Carry every suspected dead-session masking file across the takeover. Their
+# age makes them reclaimable; none may permanently suppress the new claim.
+old_pid=$(cat "$FM_HOME/state/holder.pid")
+mkdir -p "$FM_HOME/state/.claude-autoarm.lock"
+printf '9999999\n' > "$FM_HOME/state/.claude-autoarm.lock/pid"
+printf 'epoch=7 owner_pid=%s outcome=arming updated_at=1\n' "$old_pid" > "$FM_HOME/state/.claude-autoarm-epoch"
+printf 'session=dead-session\ncount=2\n' > "$FM_HOME/state/.turnend-claude-blocks"
+touch -t 202001010000 "$FM_HOME/state/.claude-autoarm.lock" "$FM_HOME/state/.claude-autoarm-epoch"
+
+# Keep the lock-command lane alive after acquisition. Before the fix its nearer
+# Claude-shaped pid is written to .lock, so the sibling Stop lane mistakes the
+# same session for a live competitor and never claims the auto-arm owner lock.
+"$FAKE_CLAUDE" -c '
+  "$FM_HOME/bin/fm-lock.sh" >/dev/null
+  : > "$FM_HOME/state/takeover.locked"
+  i=0
+  while [ ! -e "$FM_HOME/state/takeover.release" ]; do
+    i=$((i + 1)); [ "$i" -le 600 ] || exit 1
+    sleep 0.05
+  done
+' &
+lock_lane=$!
+i=0
+while [ ! -e "$FM_HOME/state/takeover.locked" ]; do
+  i=$((i + 1)); [ "$i" -le 200 ] || exit 66
+  sleep 0.05
+done
+
+printf '%s\n' '{"session_id":"takeover","stop_hook_active":false}' \
+  | "$FAKE_CLAUDE" -c '
+      rc=0
+      "$FM_HOME/bin/fm-claude-stop-autoarm.sh" || rc=$?
+      :
+      exit "$rc"
+    ' >"$FM_HOME/state/auto.out" 2>"$FM_HOME/state/auto.err" &
+auto_pid=$!
+
+guard_rc=0
+printf '%s\n' '{"session_id":"takeover","stop_hook_active":false}' \
+  | FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=5000 "$FM_HOME/bin/fm-turnend-guard.sh" --claude \
+      >"$FM_HOME/state/guard.out" 2>"$FM_HOME/state/guard.err" || guard_rc=$?
+printf '%s\n' "$guard_rc" > "$FM_HOME/state/guard.rc"
+
+i=0
+while kill -0 "$auto_pid" 2>/dev/null; do
+  i=$((i + 1)); [ "$i" -le 600 ] || exit 67
+  sleep 0.05
+done
+auto_rc=0
+wait "$auto_pid" || auto_rc=$?
+printf '%s\n' "$auto_rc" > "$FM_HOME/state/auto.rc"
+: > "$FM_HOME/state/takeover.release"
+wait "$lock_lane"
+SH
+  chmod +x "$dir/bin/mid-session-takeover-fixture.sh"
+
+  FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+    rc=0
+    "$FM_HOME/bin/mid-session-takeover-fixture.sh" || rc=$?
+    :
+    exit "$rc"
+  ' &
+  outer=$!
+  FIXTURE_PIDS+=("$outer")
+  outer_rc=0
+  wait "$outer" || outer_rc=$?
+  wait "$holder" 2>/dev/null || true
+  FIXTURE_PIDS=()
+
+  expect_code 0 "$outer_rc" "takeover fixture must complete within its bounded deadlines"
+  expect_code 0 "$(cat "$dir/state/pre.rc")" "replacement session must stay inert before the old live owner exits"
+  guard_rc=$(cat "$dir/state/guard.rc")
+  auto_rc=$(cat "$dir/state/auto.rc")
+  owner=$(cat "$dir/state/.lock")
+  expected_owner=$(cat "$dir/state/expected-owner")
+  outcome=$(epoch_outcome "$dir")
+  expect_code 0 "$guard_rc" "guard must allow once the takeover session's Stop hook owns recovery"
+  expect_code 2 "$auto_rc" "takeover Stop hook must claim and translate the actionable watcher close"
+  [ "$owner" = "$expected_owner" ] || fail "takeover lock must use Claude's stable session owner: expected $expected_owner, got $owner"
+  [ "$outcome" = rewake ] || fail "takeover auto-arm must replace the carried epoch with outcome=rewake, got $outcome"
+  [ ! -e "$dir/state/.turnend-claude-blocks" ] || fail "successful takeover claim must reset the carried guard block budget"
+  pass "auto-arm: mid-session takeover uses Claude's stable owner across lock-command and Stop-hook lanes"
+}
+
+test_inherited_claude_pid_does_not_override_nested_non_claude() {
+  local dir owner expected
+  dir=$(make_primary_dir "$TMP_ROOT/nested-non-claude")
+  cat > "$dir/bin/nested-non-claude-fixture.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+"$FAKE_CODEX" -c '
+  printf "%s\n" "$FAKE_HARNESS_PID" > "$FM_HOME/state/expected-owner"
+  "$FM_HOME/bin/fm-lock.sh" >/dev/null
+'
+SH
+  chmod +x "$dir/bin/nested-non-claude-fixture.sh"
+  FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+    rc=0
+    "$FM_HOME/bin/nested-non-claude-fixture.sh" || rc=$?
+    :
+    exit "$rc"
+  '
+  owner=$(cat "$dir/state/.lock")
+  expected=$(cat "$dir/state/expected-owner")
+  [ "$owner" = "$expected" ] || fail "an inherited CLAUDE_PID overrode the nested non-Claude harness: expected $expected, got $owner"
+  pass "fm-lock: inherited CLAUDE_PID does not override a nested non-Claude harness"
+}
+
 test_reclaims_stale_session_lock_before_arming() {
   local dir out status expected_owner actual_owner
   dir=$(make_primary_dir "$TMP_ROOT/stale-lock")
@@ -207,7 +412,7 @@ test_reclaims_stale_session_lock_before_arming() {
   write_arm_fixture "$dir" actionable
   out=$(printf '%s\n' '{"session_id":"stale"}' \
     | FM_HOME="$dir" "$FAKE_CLAUDE" -c '
-        printf "%s\n" "$$" > "$FM_HOME/state/expected-owner"
+        printf "%s\n" "$CLAUDE_PID" > "$FM_HOME/state/expected-owner"
         "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
       ' 2>&1); status=$?
   expect_code 2 "$status" "a dead recorded session owner must be reclaimed before the actionable rewake"
@@ -229,7 +434,7 @@ test_inert_when_lock_held_by_other_harness() {
   "$FAKE_CLAUDE" -c 'sleep 60; :' &
   other=$!
   printf '%s\n' "$other" > "$dir/state/.lock"
-  out=$(printf '%s\n' '{"session_id":"s"}' | FM_HOME="$dir" "$FAKE_CLAUDE" -c '"$FM_HOME/bin/fm-claude-stop-autoarm.sh"' 2>&1); status=$?
+  out=$(printf '%s\n' '{"session_id":"s"}' | CLAUDE_PID="$other" FM_HOME="$dir" "$FAKE_CLAUDE" -c '"$FM_HOME/bin/fm-claude-stop-autoarm.sh"' 2>&1); status=$?
   owner_after=$(cat "$dir/state/.lock")
   kill "$other" 2>/dev/null || true
   wait "$other" 2>/dev/null || true
@@ -346,7 +551,7 @@ test_single_flight_admits_exactly_one_owner() {
   : > "$dir/state/task.meta"
   write_arm_fixture "$dir" slow-actionable
   FM_HOME="$dir" "$FAKE_CLAUDE" -c '
-    printf "%s\n" "$$" > "$FM_HOME/state/.lock"
+    printf "%s\n" "$CLAUDE_PID" > "$FM_HOME/state/.lock"
     printf "%s\n" "{\"session_id\":\"s\"}" | "$FM_HOME/bin/fm-claude-stop-autoarm.sh" >/dev/null 2>"$FM_HOME/state/err1" &
     p1=$!
     printf "%s\n" "{\"session_id\":\"s\"}" | "$FM_HOME/bin/fm-claude-stop-autoarm.sh" >/dev/null 2>"$FM_HOME/state/err2" &
@@ -409,6 +614,8 @@ test_fm_lock_status_still_works_with_shared_lib() {
 test_settings_registers_autoarm_with_multi_hour_timeout
 test_inert_in_child_worktree
 test_inert_without_session_lock
+test_mid_session_takeover_claims_with_stable_claude_owner
+test_inherited_claude_pid_does_not_override_nested_non_claude
 test_reclaims_stale_session_lock_before_arming
 test_inert_when_lock_held_by_other_harness
 test_inert_when_afk
