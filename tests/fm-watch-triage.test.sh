@@ -160,12 +160,16 @@ test_classifier_primitives() {
     && fail "FM_CAPTAIN_RE override bypassed paused: suppression"
   FM_CAPTAIN_RE='custom-verb:' status_is_captain_relevant "custom-verb: x" \
     || fail "nonterminal suppression weakened custom bare-line behavior"
-  printf 'needs-decision: should docs mention [key=prose]?\nneeds-decision [key=q1]: real choice\nresolved: docs still mention [key=q1]\nneeds-decision [key=bad key]: malformed\n' > "$state/keys.status"
+  printf 'needs-decision [key=before]: key before colon\nneeds-decision: key after colon [key=after]\nneeds-decision [key=first]: both positions [key=second]\nneeds-decision: no key\nneeds-decision: empty key [key=]\nneeds-decision [key=bad key]: malformed\n' > "$state/keys.status"
   open=$(status_open_decisions "$state/keys.status")
-  printf '%s' "$open" | grep -F $'q1\t' >/dev/null \
-    || fail "a key token in resolved note prose closed the keyed decision"
-  printf '%s' "$open" | grep -F $'prose\t' >/dev/null \
-    && fail "a key token in note prose changed the decision key"
+  printf '%s' "$open" | grep -F $'before\tneeds-decision\tkey before colon' >/dev/null \
+    || fail "a key before the colon was not retained"
+  printf '%s' "$open" | grep -F $'after\tneeds-decision\tkey after colon [key=after]' >/dev/null \
+    || fail "a key after the colon was not retained"
+  printf '%s' "$open" | grep -F $'first\tneeds-decision\tboth positions [key=second]' >/dev/null \
+    || fail "the first of two key markers did not win"
+  [ "$(printf '%s' "$open" | grep -c $'^default\t')" -eq 1 ] \
+    || fail "no-key and empty-key events did not share the default identity"
   printf '%s' "$open" | grep -F $'bad key\t' >/dev/null \
     && fail "an invalid key slug entered the open-decision set"
   cat > "$state/activity.status" <<'EOF'
@@ -177,6 +181,8 @@ resolved [key=phase7]: Phase 7 completed and moved to Done
 paused [key=legal]: awaiting external counsel
 resolved [key=legal]: legal item returned to the queue
 working [key=phase8]: Phase 8 started
+working [key=phase9]: Phase 9 started
+done: Phase 9 completed [key=phase9]
 EOF
   activity=$(status_open_activities "$state/activity.status")
   printf '%s' "$activity" | grep -F $'phase8\tworking\tPhase 8 started' >/dev/null \
@@ -185,6 +191,8 @@ EOF
     && fail "a keyed resolved event did not close the older working phase"
   printf '%s' "$activity" | grep -F $'phase6\t' >/dev/null \
     && fail "a same-key terminal event did not supersede the older working phase"
+  printf '%s' "$activity" | grep -F $'phase9\t' >/dev/null \
+    && fail "a terminal event with its key after the colon did not supersede the older working phase"
   printf '%s' "$activity" | grep -F $'legal\t' >/dev/null \
     && fail "a keyed resolved event did not close the declared pause"
   printf 'working: legacy start\ndone: legacy completion\n' > "$state/legacy-activity.status"

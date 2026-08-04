@@ -169,10 +169,11 @@ status_is_paused_or_captain_held() {  # <status-line>
 # terminal line never clears an open captain decision.
 #
 # Decision key grammar (backward-compatible with the existing "<verb>: <note>"
-# format): an OPTIONAL "[key=<slug>]" token sits between the verb and the colon,
+# format): an OPTIONAL "[key=<slug>]" token may appear anywhere in the line,
 #   needs-decision [key=api-shape]: <summary>
-#   resolved       [key=api-shape]: <how it was decided>
-# A line with no token uses the key "default", preserving the historical
+#   resolved: <how it was decided> [key=api-shape]
+# When multiple tokens appear, the first wins. A line with no token or an empty
+# "[key=]" token uses the key "default", preserving the historical
 # one-open-decision-per-task behavior (a bare "resolved:" closes "default").
 # The three parsers are pure reads of a single line; the verb parser strips any
 # key token before the colon so the leading word is recovered cleanly.
@@ -189,14 +190,15 @@ status_line_note() {  # <status-line> -> text after the first colon, trimmed
     *) printf '%s' "$1" ;;
   esac
 }
-_fm_decision_key() {  # <status-line> -> key slug, or "default" when no token
-  local prefix=${1%%:*} k
-  case "$prefix" in
+_fm_decision_key() {  # <status-line> -> key slug, or "default" when no/empty token
+  local line=$1 k
+  case "$line" in
     *\[key=*\]*)
-      k=${prefix#*\[key=}
+      k=${line#*\[key=}
       k=${k%%\]*}
       case "$k" in
-        ''|*[!A-Za-z0-9._-]*) return 1 ;;
+        '') printf 'default' ;;
+        *[!A-Za-z0-9._-]*) return 1 ;;
         *) printf '%s' "$k" ;;
       esac
       ;;
