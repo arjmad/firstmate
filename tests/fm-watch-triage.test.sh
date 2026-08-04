@@ -160,7 +160,7 @@ test_classifier_primitives() {
     && fail "FM_CAPTAIN_RE override bypassed paused: suppression"
   FM_CAPTAIN_RE='custom-verb:' status_is_captain_relevant "custom-verb: x" \
     || fail "nonterminal suppression weakened custom bare-line behavior"
-  printf 'needs-decision [key=before]: key before colon\nneeds-decision: key after colon [key=after]\nneeds-decision [key=first]: both positions [key=second]\nneeds-decision: no key\nneeds-decision: empty key [key=]\nneeds-decision [key=bad key]: malformed\n' > "$state/keys.status"
+  printf 'needs-decision [key=before]: key before colon\nneeds-decision: key after colon [key=after]\nneeds-decision [key=first]: both positions [key=second]\nneeds-decision: no key\nneeds-decision: empty key [key=]\nneeds-decision [key=bad key]: malformed\nneeds-decision [key=bad slug]: valid marker after malformed [key=recovered]\n' > "$state/keys.status"
   open=$(status_open_decisions "$state/keys.status")
   printf '%s' "$open" | grep -F $'before\tneeds-decision\tkey before colon' >/dev/null \
     || fail "a key before the colon was not retained"
@@ -169,9 +169,16 @@ test_classifier_primitives() {
   printf '%s' "$open" | grep -F $'first\tneeds-decision\tboth positions [key=second]' >/dev/null \
     || fail "the first of two key markers did not win"
   [ "$(printf '%s' "$open" | grep -c $'^default\t')" -eq 1 ] \
-    || fail "no-key and empty-key events did not share the default identity"
+    || fail "no-key, empty-key, and malformed-key events did not share the default identity"
   printf '%s' "$open" | grep -F $'bad key\t' >/dev/null \
     && fail "an invalid key slug entered the open-decision set"
+  printf '%s' "$open" | grep -F $'default\tneeds-decision\tmalformed' >/dev/null \
+    || fail "a malformed key marker did not fold as a keyless default event"
+  printf '%s' "$open" | grep -F $'recovered\tneeds-decision\tvalid marker after malformed [key=recovered]' >/dev/null \
+    || fail "a valid marker after a malformed marker was not honored"
+  printf 'needs-decision: pick a path\nresolved: settled [key=bad slug!]\n' > "$state/malformed-close.status"
+  [ -z "$(status_open_decisions "$state/malformed-close.status")" ] \
+    || fail "a resolved line with a malformed key marker did not close the default decision"
   cat > "$state/activity.status" <<'EOF'
 working [key=phase7]: Phase 7 started
 working [key=phase6]: Phase 6 started

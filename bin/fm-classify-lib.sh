@@ -172,9 +172,12 @@ status_is_paused_or_captain_held() {  # <status-line>
 # format): an OPTIONAL "[key=<slug>]" token may appear anywhere in the line,
 #   needs-decision [key=api-shape]: <summary>
 #   resolved: <how it was decided> [key=api-shape]
-# When multiple tokens appear, the first wins. A line with no token or an empty
-# "[key=]" token uses the key "default", preserving the historical
-# one-open-decision-per-task behavior (a bare "resolved:" closes "default").
+# When multiple tokens appear, the first well-formed one wins. A token whose
+# slug carries characters outside [A-Za-z0-9._-] is not a marker at all: it
+# reads as plain prose, so the event keeps the identity of the next well-formed
+# token, if any. A line with no well-formed token or an empty "[key=]" token
+# uses the key "default", preserving the historical one-open-decision-per-task
+# behavior (a bare "resolved:" closes "default").
 # The three parsers are pure reads of a single line; the verb parser strips any
 # key token before the colon so the leading word is recovered cleanly.
 status_line_verb() {  # <status-line> -> leading verb word
@@ -191,19 +194,20 @@ status_line_note() {  # <status-line> -> text after the first colon, trimmed
   esac
 }
 _fm_decision_key() {  # <status-line> -> key slug, or "default" when no/empty token
-  local line=$1 k
-  case "$line" in
-    *\[key=*\]*)
-      k=${line#*\[key=}
-      k=${k%%\]*}
-      case "$k" in
-        '') printf 'default' ;;
-        *[!A-Za-z0-9._-]*) return 1 ;;
-        *) printf '%s' "$k" ;;
-      esac
-      ;;
-    *) printf 'default' ;;
-  esac
+  local rest=$1 k
+  while :; do
+    case "$rest" in
+      *\[key=*\]*) ;;
+      *) printf 'default'; return 0 ;;
+    esac
+    rest=${rest#*\[key=}
+    k=${rest%%\]*}
+    case "$k" in
+      '') printf 'default'; return 0 ;;
+      *[!A-Za-z0-9._-]*) rest=${rest#*\]} ;;
+      *) printf '%s' "$k"; return 0 ;;
+    esac
+  done
 }
 # Drop the record for <key> from a newline-terminated "<key>\t<verb>\t<note>" set.
 # Portable (no associative arrays) so the fold runs on bash 3.2 as well as 4+.
@@ -235,7 +239,7 @@ status_open_decisions() {  # <status-file>
     stripped=${line//[[:space:]]/}
     [ -n "$stripped" ] || continue
     verb=$(status_line_verb "$line")
-    key=$(_fm_decision_key "$line") || continue
+    key=$(_fm_decision_key "$line")
     case "$verb" in
       needs-decision|blocked)
         note=$(status_line_note "$line")
@@ -270,7 +274,7 @@ _fm_status_open_activities_stream() {
     stripped=${line//[[:space:]]/}
     [ -n "$stripped" ] || continue
     verb=$(status_line_verb "$line")
-    key=$(_fm_decision_key "$line") || continue
+    key=$(_fm_decision_key "$line")
     case "$verb" in
       working|"$pause")
         note=$(status_line_note "$line")
