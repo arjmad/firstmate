@@ -8,7 +8,7 @@
 #      dead shell, NOT an empty agent composer - it must read `unknown`
 #      (unsafe-for-injection), never `empty`. This is the safety fix.
 #   2. The SAME shell glyph INSIDE a bordered composer box is the harness's own
-#      prompt and still reads `empty` (existing behavior preserved).
+#      prompt and still reads `empty` (including Prime Agent v0.7.1).
 #   3. The AGENT prompt glyphs `❯` (claude) and `›` (codex) are a genuine empty
 #      agent composer either way, bordered or bare.
 #   4. Real unsubmitted text reads `pending`; a known idle placeholder reads
@@ -68,7 +68,9 @@ test_bordered_shell_glyph_is_empty() {
     [ "$out" = empty ] \
       || fail "a shell glyph '$g' inside a bordered composer box must read empty, got '$out'"
   done
-  pass "fm_composer_classify_content: a bare prompt glyph inside a bordered composer box reads empty (claude's own idle composer)"
+  out=$(classify 1 '>')
+  [ "$out" = empty ] || fail "Prime Agent's bordered > composer should read empty, got '$out'"
+  pass "fm_composer_classify_content: bordered shell prompts, including Prime Agent's > editor, read empty"
 }
 
 # --- Agent glyphs are empty either way --------------------------------------

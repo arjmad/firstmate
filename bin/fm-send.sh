@@ -268,9 +268,22 @@ else
   esac
   retries=${FM_SEND_RETRIES:-3}
   sleep_s=${FM_SEND_SLEEP:-0.4}
-  # Type once, submit, verify. Only exact empty confirms delivery; every other
-  # verdict preserves the loud refusal boundary.
-  if ! verdict=$(fm_backend_send_text_submit "$TARGET_BACKEND" "$T" "$MESSAGE" "$retries" "$sleep_s" "$settle" "$EXPECTED_LABEL"); then
+  # Prime Agent's idle composer cannot authoritatively identify current state and
+  # its daemon exposes a verified external transport. Plain `send` is steering in
+  # v0.7.1; its advertised --steer flag is broken and must never be used.
+  if [ "$TARGET_HARNESS" = prime-agent ]; then
+    if [ -z "$TARGET_META" ] \
+       || ! "$SCRIPT_DIR/fm-prime-agent.sh" send "$TARGET_META" "$MESSAGE"; then
+      if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
+        fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
+      fi
+      echo "error: text not sent to $T (prime-agent steering delivery failed; tried $RESOLUTION_TRIED)" >&2
+      exit 1
+    fi
+    verdict=empty
+  # Every composer-driven adapter types once, submits, and verifies. Only exact
+  # empty confirms delivery; every other verdict preserves the loud refusal.
+  elif ! verdict=$(fm_backend_send_text_submit "$TARGET_BACKEND" "$T" "$MESSAGE" "$retries" "$sleep_s" "$settle" "$EXPECTED_LABEL"); then
     if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
       fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
     fi

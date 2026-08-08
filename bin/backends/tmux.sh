@@ -136,6 +136,20 @@ fm_backend_tmux_current_command() {  # <target>
   tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null
 }
 
+# Prime Agent's npm entrypoint runs as `node`, so pane_current_command alone is
+# ambiguous. Confirm only the foreground process group's argv, identified from
+# tmux's pane shell tpgid; a random background node process must not keep a dead
+# worker classified alive.
+fm_backend_tmux_foreground_args() {  # <target>
+  local pane_pid tpgid
+  pane_pid=$(tmux display-message -p -t "$1" '#{pane_pid}' 2>/dev/null) || return 1
+  case "$pane_pid" in ''|*[!0-9]*) return 1 ;; esac
+  tpgid=$(ps -o tpgid= -p "$pane_pid" 2>/dev/null | tr -d '[:space:]') || return 1
+  case "$tpgid" in ''|*[!0-9]*) return 1 ;; esac
+  ps -ax -o pgid=,args= 2>/dev/null \
+    | awk -v pgid="$tpgid" '$1 == pgid { $1=""; sub(/^[[:space:]]+/, ""); print }'
+}
+
 # fm_backend_tmux_agent_state: recovery-grade harness-agent state for one
 # recorded target. See bin/fm-backend.sh's fm_backend_agent_state for the
 # shared state vocabulary and docs/tmux-backend.md "Agent liveness probe" for
@@ -181,7 +195,14 @@ fm_backend_tmux_agent_state() {  # <target>
   }
   comm=${comm#-}
   case "$comm" in
-    *claude*|*codex*|*opencode*|*grok*|*kimi*) printf 'alive' ;;
+    *claude*|*codex*|*opencode*|*grok*|*kimi*|*prime-agent*) printf 'alive' ;;
+    node)
+      if fm_backend_tmux_foreground_args "$target" | grep -qE '(^|[[:space:]/])prime-agent([^[:space:]/]*)([[:space:]/]|$)'; then
+        printf 'alive'
+      else
+        printf 'ambiguous'
+      fi
+      ;;
     zsh|bash|sh|dash|ash|ksh|mksh|tcsh|csh|fish) printf 'dead' ;;
     '') printf 'unreadable' ;;
     *) printf 'ambiguous' ;;

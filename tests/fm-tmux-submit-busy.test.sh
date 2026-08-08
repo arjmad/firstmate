@@ -292,6 +292,8 @@ test_claude_busy_signature_uses_real_capture_shapes() {
   pane_busy cross codex && fail "Codex must ignore OpenCode's interrupt footer"
   printf 'Ctrl+c:cancel\n' > "$composer"
   pane_busy cross opencode && fail "OpenCode must ignore Grok's cancel footer"
+  printf '⠦ Waiting · 2s\n' > "$composer"
+  pane_busy cross opencode && fail "OpenCode must ignore Prime Agent's spinner"
   printf 'esc interrupt\n' > "$composer"
   pane_busy cross pi && fail "Pi must ignore OpenCode's interrupt footer"
   printf 'esc to interrupt\n' > "$composer"
@@ -322,7 +324,13 @@ test_claude_busy_signature_uses_real_capture_shapes() {
   pane_busy pi pi || fail "Pi Working footer should be busy"
   printf 'Ctrl+c:cancel\n' > "$composer"
   pane_busy grok grok || fail "Grok cancel footer should be busy"
-  pass "fm_pane_is_busy: Claude busy signatures are scoped, multi-frame, and backward-compatible"
+  printf '⠦ Waiting · 2s\n' > "$composer"
+  pane_busy prime-wait prime-agent || fail "Prime Agent Waiting spinner should be busy"
+  printf '  ⠏ Executing · 8s · ↑ 44 tokens\n' > "$composer"
+  pane_busy prime-exec prime-agent || fail "Prime Agent Executing spinner should be busy"
+  printf 'Waiting · 2s\n' > "$composer"
+  pane_busy prime-idle prime-agent && fail "Prime Agent text without a spinner must not be busy"
+  pass "fm_pane_is_busy: harness busy signatures are scoped, including Prime Agent"
 }
 
 # The freshness proof must be STRUCTURAL, not a convention a reader can skip.

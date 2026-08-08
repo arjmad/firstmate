@@ -99,7 +99,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|grok|kimi)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|grok|kimi|prime-agent)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters.
@@ -140,6 +140,10 @@
 #                  written by this script; outside the worktree to avoid pi's trust gate)
 #     __PITURNEND__ absolute path to .pi/extensions/fm-primary-turnend-guard.ts in a pi secondmate home
 #     __PIWATCH__   absolute path to .pi/extensions/fm-primary-pi-watch.ts in a pi secondmate home
+#     __PRIMECTL__  absolute path to the task-scoped Prime Agent control adapter
+#     __PRIMETMP__  short unique Prime Agent TMPDIR (daemon/worker socket root)
+#     __PRIMESESS__ task-only Prime Agent session directory under state/
+#     __PRIMEEXT__  task-scoped Prime Agent agent_end/session_shutdown extension
 #     __OPINPUT__   absolute path to the canonical operational-input encoder
 # Verified per-harness turn-end hooks are installed automatically where enabled; some live outside the worktree.
 # Kimi uses one surgically installed Firstmate region in $HOME/.kimi-code/config.toml,
@@ -290,6 +294,9 @@ fi
 ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
 ORCA_TERMINAL=
+PRIME_ABORT_CLEANUP=0
+PRIME_TMP=
+PRIME_SESSION_DIR=
 HERDR_PROJECTION_ABORT_CLEANUP=0
 HERDR_PROJECTION_ABORT_SESSION=
 HERDR_PROJECTION_ABORT_TASK_PANE=
@@ -338,6 +345,10 @@ spawn_abort_cleanup() {
     HERDR_PRESENTATION_ORDER_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
   fi
+  if [ "$PRIME_ABORT_CLEANUP" = 1 ]; then
+    PRIME_ABORT_CLEANUP=0
+    "$SCRIPT_DIR/fm-prime-agent.sh" shutdown "$PRIME_TMP" "$PRIME_SESSION_DIR" >/dev/null 2>&1 || true
+  fi
   if [ "$ORCA_ABORT_CLEANUP" = 1 ]; then
     ORCA_ABORT_CLEANUP=0
     if [ -n "${ORCA_TERMINAL:-}" ]; then
@@ -374,6 +385,11 @@ spawn_abort_cleanup() {
   if [ "$CONFIG_INHERIT_LOCK_HELD" = 1 ]; then
     CONFIG_INHERIT_LOCK_HELD=0
     fm_lock_release "$CONFIG_INHERIT_LOCK" || true
+  fi
+  if [ "$status" -ne 0 ] && [ -n "${PRIME_TMP:-}" ]; then
+    rm -rf "$PRIME_TMP"
+    [ -z "${PRIME_SESSION_DIR:-}" ] || rm -rf "${PRIME_SESSION_DIR%/sessions}"
+    rm -f "$STATE/$ID.prime-ext.ts"
   fi
   return "$status"
 }
@@ -460,7 +476,7 @@ FIRSTMATE_HOME=
 
 if [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|grok|kimi)
+    ''|claude|codex|opencode|pi|grok|kimi|prime-agent)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -538,6 +554,13 @@ launch_template() {
     # Its turn-end signal is a globally configured Stop hook plus a guarded
     # per-task worktree token, so no launch placeholder belongs here.
     kimi) printf '%s' '__KIMIBIN__ __MODELFLAG__--auto' ;;
+    # Prime Agent is an experimental CREW adapter, explicitly selected only.
+    # Secondmates need a verified primary-session supervision integration, which
+    # this adapter deliberately does not claim yet.
+    prime-agent)
+      [ "$kind" != secondmate ] || return 1
+      printf '%s' '__PRIMECTL__ launch __PRIMETMP__ __PRIMESESS__ __MODELFLAG____EFFORTFLAG__--extension __PRIMEEXT__ -- "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      ;;
     *) return 1 ;;
   esac
 }
@@ -709,7 +732,7 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|grok|kimi)
+    claude|codex|opencode|pi|grok|kimi|prime-agent)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
@@ -744,6 +767,14 @@ effort_flag_for_harness() {
     pi)
       # Pi 0.80.6 accepts the full shared effort vocabulary, including max, through
       # its --thinking flag.
+      case "$effort" in
+        low|medium|high|xhigh|max) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
+      esac
+      ;;
+    prime-agent)
+      # Prime Agent v0.7.1 accepts the shared firstmate effort vocabulary directly
+      # as thinking levels. The explicit mapping is identity-preserving:
+      # low->low, medium->medium, high->high, xhigh->xhigh, max->max.
       case "$effort" in
         low|medium|high|xhigh|max) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
       esac
@@ -1352,6 +1383,19 @@ herdr_projection_existing_meta_allows_flat() {  # <meta>
 # hand at creation time; it depends only on $ID, never on the worktree.
 TASK_TMP="/tmp/fm-$ID"
 mkdir -p "$TASK_TMP/gotmp"
+if [ "$HARNESS" = prime-agent ]; then
+  # Prime Agent's daemon and worker use Unix sockets below TMPDIR. A short,
+  # random task root is mandatory: long worktree/home paths fail with EINVAL.
+  PRIME_TMP=$(mktemp -d /tmp/fmpa.XXXXXXXX)
+  mkdir -p "$STATE"
+  STATE_REAL=$(cd "$STATE" && pwd -P)
+  PRIME_SESSION_DIR="$STATE_REAL/prime-agent/$ID/sessions"
+  mkdir -p "$PRIME_SESSION_DIR"
+  # Resolve before creating a pane so a missing direct package executable cannot
+  # leave an empty endpoint. The launcher itself resolves again immediately
+  # before exec; this check proves the verified non-wrapper path exists now.
+  "$SCRIPT_DIR/fm-prime-agent.sh" resolve-bin >/dev/null
+fi
 
 # SPAWN_ENV: the crewmate environment firstmate has already computed and that
 # is fully known BEFORE the pane exists. Backends able to set environment on
@@ -1847,6 +1891,25 @@ EOF
       printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-kimi-turnend"
       exclude_path '.fm-kimi-turnend'
       ;;
+    prime-agent*)
+      # One Prime Agent request can span many model/tool turns, so agent_end is
+      # the sparse ready notification. session_shutdown independently records a
+      # clean detach/exit lifecycle edge. Both append to the ordinary task marker;
+      # current state is reconciled separately through `list --json`.
+      cat > "$STATE/$ID.prime-ext.ts" <<EOF
+import { appendFileSync } from "node:fs";
+
+const eventPath = $(printf '%s' "$TURNEND" | jq -Rs .);
+function record(event: string): void {
+  try { appendFileSync(eventPath, event + "\\n", { encoding: "utf8", mode: 0o600 }); } catch {}
+}
+
+export default function (prime: any) {
+  prime.on("agent_end", () => record("agent_end"));
+  prime.on("session_shutdown", () => record("session_shutdown"));
+}
+EOF
+      ;;
   esac
 fi
 
@@ -1882,6 +1945,10 @@ META_LINES=(
   "model=${MODEL:-default}"
   "effort=${EFFORT:-default}"
 )
+if [ "$HARNESS" = prime-agent ]; then
+  META_LINES[${#META_LINES[@]}]="prime_tmp=$PRIME_TMP"
+  META_LINES[${#META_LINES[@]}]="prime_session_dir=$PRIME_SESSION_DIR"
+fi
 [ "$TITLE_SET" -eq 0 ] || META_LINES[${#META_LINES[@]}]="title=$TITLE"
 # backend= is written only for a non-default (non-tmux) backend, so the
 # default path's meta stays byte-identical (absent backend= means tmux;
@@ -1920,6 +1987,10 @@ sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
 sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts")
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
+sq_primectl=$(shell_quote "$SCRIPT_DIR/fm-prime-agent.sh")
+sq_primetmp=$(shell_quote "$PRIME_TMP")
+sq_primesess=$(shell_quote "$PRIME_SESSION_DIR")
+sq_primeext=$(shell_quote "$STATE/$ID.prime-ext.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
@@ -1950,6 +2021,10 @@ LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
 LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
+LAUNCH=${LAUNCH//__PRIMECTL__/$sq_primectl}
+LAUNCH=${LAUNCH//__PRIMETMP__/$sq_primetmp}
+LAUNCH=${LAUNCH//__PRIMESESS__/$sq_primesess}
+LAUNCH=${LAUNCH//__PRIMEEXT__/$sq_primeext}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
 if [ "$KIND" = secondmate ]; then
   sq_home=$(shell_quote "$PROJ_ABS")
@@ -1991,6 +2066,25 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   spawn_herdr_presentation_order_lock_release
 fi
 spawn_send_key "$T" Enter
+if [ "$HARNESS" = prime-agent ]; then
+  PRIME_ABORT_CLEANUP=1
+  PRIME_SESSION=
+  prime_i=0
+  while [ "$prime_i" -lt "${FM_PRIME_SESSION_POLLS:-60}" ]; do
+    PRIME_SESSION=$("$SCRIPT_DIR/fm-prime-agent.sh" discover \
+      "$PRIME_TMP" "$PRIME_SESSION_DIR" "$WT" 2>/dev/null || true)
+    [ -z "$PRIME_SESSION" ] || break
+    prime_i=$((prime_i + 1))
+    [ "$prime_i" -ge "${FM_PRIME_SESSION_POLLS:-60}" ] || sleep "${FM_PRIME_POLL_INTERVAL:-0.5}"
+  done
+  if [ -z "$PRIME_SESSION" ]; then
+    printf 'failed: prime-agent did not publish one task-scoped live session\n' >> "$STATE/$ID.status"
+    echo "error: prime-agent did not publish one task-scoped live session; inspect window $T" >&2
+    exit 1
+  fi
+  printf 'prime_session=%s\n' "$PRIME_SESSION" >> "$STATE/$ID.meta"
+  PRIME_ABORT_CLEANUP=0
+fi
 if [ "$HARNESS" = kimi ]; then
   if ! kimi_wait_for_ready; then
     kimi_spawn_fail "kimi did not show a verified ready signal before brief delivery"

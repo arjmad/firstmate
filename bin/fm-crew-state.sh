@@ -16,7 +16,7 @@
 # fixed mapping logic, no heuristics and no LLM. Output is one stable, parseable,
 # token-tight line firstmate can read every heartbeat:
 #
-#   state: <working|parked|done|blocked|paused|failed|unknown> · source: <run-step|pane|status-log|none> · <detail>
+#   state: <working|parked|done|blocked|paused|failed|unknown> · source: <run-step|prime-agent|pane|status-log|none> · <detail>
 #
 # Logic, in order:
 #   1. Resolve worktree + backend target + kind from state/<id>.meta.
@@ -616,9 +616,30 @@ fi
 
 # --- fallback: no run attributed to this crew ------------------------------
 # The run-step path above already handled any crew with a run, regardless of pane
-# liveness, so a finished-but-pane-closed crew never reaches here. Down here there
-# is no run to consult, so a dead/unreadable target means the crew is gone: report
-# unknown rather than trusting a possibly-stale status log as the current state.
+# liveness, so a finished-but-pane-closed crew never reaches here. Prime Agent is
+# special: its daemon can keep working after the TUI detaches, and its idle pane has
+# no positive idle-only footer. Reconcile it through list --json before any pane or
+# status-log inference. A stale `working:` event never overrides authoritative idle.
+if [ "$HARNESS" = prime-agent ]; then
+  PRIME_STATE=$("$SCRIPT_DIR/fm-prime-agent.sh" state "$META" 2>/dev/null || printf 'unknown\n')
+  case "$PRIME_STATE" in
+    busy) emit working prime-agent "agent busy" ;;
+    idle)
+      case "$(map_log_state "$LOG_LINE")" in
+        parked) emit parked status-log "$LOG_LINE" ;;
+        blocked) emit blocked status-log "$LOG_LINE" ;;
+        paused) emit paused status-log "$LOG_LINE" ;;
+        "done") emit "done" status-log "$LOG_LINE" ;;
+        failed) emit failed status-log "$LOG_LINE" ;;
+        *) emit unknown prime-agent "agent idle; awaiting a current status event" ;;
+      esac
+      ;;
+    missing) emit unknown prime-agent "task session missing" ;;
+    *) emit unknown prime-agent "authoritative state unavailable" ;;
+  esac
+fi
+# Down here there is no run to consult, so a dead/unreadable target means the
+# crew is gone: report unknown rather than trusting a possibly-stale status log.
 [ -n "$BACKEND_TARGET" ] || emit unknown none "no backend target recorded"
 pane_readable "$BACKEND_TARGET" || emit unknown none "backend target gone: $BACKEND_TARGET"
 

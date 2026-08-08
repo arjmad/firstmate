@@ -1,6 +1,6 @@
 ---
 name: harness-adapters
-description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, grok, and kimi.
+description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, grok, kimi, and experimental prime-agent.
 user-invocable: false
 metadata:
   internal: true
@@ -13,6 +13,7 @@ Use this reference before any harness-specific firstmate operation: spawn, recov
 ## Per-runtime reference files
 
 Read `references/adapter-<harness>.md` for the target harness before acting on it, where the harness is the `harness=` value in `state/<id>.meta` for an existing task or the harness being spawned for a new one.
+The experimental `prime-agent` harness is the explicit filename exception `references/adapter-prime.md` required by its adoption record.
 Each reference file owns that runtime's busy signature, exit and interrupt commands, skill invocation, trust dialogs, quirks, incidents, primary-session guard facts, and verification dates.
 Firstmate's own primary-session facts live in the reference file for its own detected harness.
 The `adapter-` prefix is required: a bare `references/claude.md` resolves as `CLAUDE.md` on a case-insensitive filesystem, which loads the file as project memory into every Claude session instead of on demand.
@@ -23,6 +24,7 @@ The `adapter-` prefix is required: a bare `references/claude.md` resolves as `CL
 - [`references/adapter-pi.md`](references/adapter-pi.md)
 - [`references/adapter-grok.md`](references/adapter-grok.md)
 - [`references/adapter-kimi.md`](references/adapter-kimi.md)
+- [`references/adapter-prime.md`](references/adapter-prime.md) - experimental crew-only adapter
 
 Crewmates default to the same harness firstmate is running on unless `config/crew-harness` records an adapter name.
 Optional dispatch profiles in `config/crew-dispatch.json` can override that static default for one crewmate or scout dispatch by selecting concrete harness, model, and effort axes at intake.
@@ -130,6 +132,7 @@ The supported launch-profile flags below are verified locally; each row records 
 | pi | `--model <model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Verified 2026-07-13 on Pi 0.80.6. `pi --help` advertises `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; a `pi --print --thinking max 'Reply with exactly OK.'` probe against an explicit `openai-codex/<model>` pin completed successfully. |
 | opencode | `--model <provider/model>` | none for firstmate's interactive launch | Verified on opencode 1.17.6. `opencode run` has `--variant`, but firstmate launches the interactive `opencode --prompt` path, which has no verified effort flag. |
 | kimi | `--model <model>` | none | Verified 2026-07-25 on Kimi Code CLI 0.29.1. |
+| prime-agent | `--model <model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Experimental crew-only adapter verified 2026-08-08 on Prime Agent v0.7.1. The mapping from firstmate effort to thinking level is direct. |
 
 ### Model support discovery
 
@@ -144,6 +147,7 @@ Use the discovery surface in the current authenticated environment because suppo
 | pi | Run `pi --list-models [search]`; Pi's installed `docs/models.md` owns how built-in, extension-registered, and custom provider/model entries reach that list. |
 | grok | Run `grok models`, which lists the models available to the current Grok installation and account. |
 | kimi | Run `kimi provider list --json`, which lists the current provider and model configuration. |
+| prime-agent | Run `prime-agent model list` in the current authenticated personal config environment. |
 
 For an unfamiliar harness or model namespace, establish support and provider identity from that harness's authoritative CLI help, model listing, or current documentation rather than guessing from a name or prefix.
 If those sources do not establish the relationship needed for dispatch, fail loudly and report the unresolved candidate.
