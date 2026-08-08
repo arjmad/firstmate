@@ -268,7 +268,7 @@ test_claude_hook_registration_preserves_bash_seatbelts() {
         "\"$CLAUDE_PROJECT_DIR\"/bin/fm-cd-pretool-check.sh --claude"
       ]
   ' "$SETTINGS" >/dev/null || fail "Claude Bash PreToolUse must retain only the arm-shape and persistent-cd seatbelts"
-  jq -e '.hooks.Stop[0].hooks[0].command | contains("fm-turnend-guard.sh")' "$SETTINGS" >/dev/null \
+  jq -e '[.hooks.Stop[].hooks[].command] | any(contains("fm-turnend-guard.sh"))' "$SETTINGS" >/dev/null \
     || fail "the Stop turn-end guard changed"
   pass "Claude wires the delegation guard, retains only non-status Bash seatbelts, and preserves the Stop guard"
 }
