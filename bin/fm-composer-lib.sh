@@ -17,8 +17,9 @@
 # THE SAFETY RULE this owner enforces: a bare shell prompt glyph is a genuine
 # empty agent composer ONLY when it appears INSIDE a real agent-composer
 # container - a bordered composer box, where the harness draws its own prompt
-# glyph (e.g. claude's older `| > ... |`). On a bare, unstructured row it is a
-# dead-shell prompt and is NEVER "empty"; it classifies as `unknown` (not a safe
+# glyph (e.g. claude's older `| > ... |`, Kimi, and Prime Agent v0.7.1). On a
+# bare, unstructured row it is a dead-shell prompt and is NEVER "empty"; it
+# classifies as `unknown` (not a safe
 # injection target). The AGENT prompt glyphs `❯` (claude) and `›` (codex) are a
 # genuine empty agent composer either way, bordered or bare.
 #
@@ -196,7 +197,8 @@ fm_composer_classify_content() {  # <bordered> <content> [idle_re] [idle_case] [
       printf 'empty'; return 0 ;;
     '>'|'$'|'%'|'#')
       # Shell prompt glyph: empty ONLY inside a composer box (the harness's own
-      # prompt). Bare, it is a dead-shell prompt - never a safe injection target.
+      # prompt, including Prime Agent v0.7.1's bordered `> ` editor). Bare, it is
+      # a dead-shell prompt - never a safe injection target.
       if [ "$bordered" = 1 ]; then printf 'empty'; else printf 'unknown'; fi
       return 0 ;;
   esac

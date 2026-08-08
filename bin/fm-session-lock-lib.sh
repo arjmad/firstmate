@@ -9,7 +9,7 @@
 # This file is sourced by scripts and has no side effects on source.
 
 # Known harness command names; extend when a new adapter is verified.
-FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$'
+FM_HARNESS_RE='claude|codex|opencode|grok|kimi|prime-agent|^pi$'
 
 # True if $1 is in the current process ancestry. Claude's tool and Stop-hook
 # execution lanes can have different nearer Claude-shaped processes, so exact

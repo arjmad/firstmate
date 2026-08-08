@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|grok|kimi|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|grok|kimi|prime-agent|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate       print the harness the PRIMARY uses to launch
@@ -35,16 +35,22 @@ FM_HARNESS_VERIFIED='claude
 codex
 opencode
 pi
-grok'
+grok
+kimi
+prime-agent'
 
 detect_own() {
   # Layer 1: environment markers for verified harnesses.
   # Keep marker detection before ancestry detection as an explicit precedence rule.
-  # Only claude, pi, and grok set verified markers of their own; codex, opencode,
-  # and kimi are markerless, so a foreign marker retained in a terminal
+  # Only claude, pi, and grok set native verified markers. The experimental
+  # prime-agent adapter adds PRIME_AGENT_FIRSTMATE=1 to its own task processes.
+  # Codex, opencode, and kimi are markerless, so a foreign marker retained in a terminal
   # multiplexer's stored environment can silently misidentify one of them before
   # ancestry is consulted. This is a precedence hazard, not evidence that
   # CLAUDECODE inheritance into a kimi child was observed; it was not observed.
+  # Firstmate's task-scoped marker must win over a foreign primary marker inherited
+  # when Prime Agent is launched from inside another harness.
+  [ "${PRIME_AGENT_FIRSTMATE:-}" = "1" ] && { echo prime-agent; return; }
   [ "${CLAUDECODE:-}" = "1" ] && { echo claude; return; }
   [ "${PI_CODING_AGENT:-}" = "true" ] && { echo pi; return; }
   # grok sets GROK_AGENT=1 for its child/tool processes (verified, grok 0.2.73).
@@ -60,6 +66,7 @@ detect_own() {
       *codex*) echo codex; return ;;
       *opencode*) echo opencode; return ;;
       *grok*) echo grok; return ;;
+      *prime-agent*) echo prime-agent; return ;;
       kimi) echo kimi; return ;;
       pi) echo pi; return ;;
       node*|python*)
@@ -70,6 +77,7 @@ detect_own() {
           *codex*) echo codex; return ;;
           *opencode*) echo opencode; return ;;
           *grok*) echo grok; return ;;
+          *prime-agent*) echo prime-agent; return ;;
           *" pi "*|*/pi) echo pi; return ;;
         esac ;;
     esac

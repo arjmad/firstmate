@@ -137,6 +137,8 @@ PR_URL=$(grep '^pr=' "$META" | tail -1 | cut -d= -f2- || true)
 # tasktmp is recorded by fm-spawn for tasks that set up a per-task temp root
 # (/tmp/fm-<id>/); absent for tasks spawned before that change, so tolerate empty.
 TASK_TMP=$(grep '^tasktmp=' "$META" | cut -d= -f2- || true)
+PRIME_TMP=$(fm_meta_get "$META" prime_tmp)
+HARNESS=$(fm_meta_get "$META" harness)
 ORCA_WORKTREE_ID=$(fm_meta_get "$META" orca_worktree_id)
 ORCA_PATH_MATCH_VERIFIED=0
 
@@ -973,7 +975,7 @@ validate_firstmate_home_children_removal() {
 }
 
 cleanup_firstmate_home_children() {
-  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc
+  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_harness child_prime_tmp child_orca_worktree_id child_return_rc
   sub_state="$home/state"
   [ -d "$sub_state" ] || return 0
   for child_meta in "$sub_state"/*.meta; do
@@ -984,6 +986,10 @@ cleanup_firstmate_home_children() {
     child_kind=$(meta_value "$child_meta" kind)
     [ -n "$child_kind" ] || child_kind=ship
     child_backend=$(fm_backend_of_meta "$child_meta")
+    child_harness=$(meta_value "$child_meta" harness)
+    if [ "$child_harness" = prime-agent ]; then
+      "$SCRIPT_DIR/fm-prime-agent.sh" cleanup "$child_meta" || return 1
+    fi
     if [ "$child_backend" = orca ]; then
       child_t=$(meta_value "$child_meta" terminal)
     else
@@ -1038,10 +1044,19 @@ cleanup_firstmate_home_children() {
     fi
     remove_grok_turnend_auth "$sub_state" "$child_id"
     remove_kimi_turnend_auth "$sub_state" "$child_id"
+    child_prime_tmp=$(meta_value "$child_meta" prime_tmp)
+    if [ -n "$child_prime_tmp" ]; then
+      case "$child_prime_tmp" in
+        /tmp/fmpa.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]) rm -rf "$child_prime_tmp" ;;
+        *) return 1 ;;
+      esac
+    fi
     remove_pr_poll_artifacts "$sub_state" "$child_id" || return 1
     rm -f "$sub_state/$child_id.status" "$sub_state/$child_id.turn-ended" \
       "$sub_state/$child_id.meta" "$sub_state/$child_id.pi-ext.ts" \
-      "$sub_state/$child_id.grok-turnend-token" "$sub_state/$child_id.kimi-turnend-token"
+      "$sub_state/$child_id.prime-ext.ts" "$sub_state/$child_id.grok-turnend-token" \
+      "$sub_state/$child_id.kimi-turnend-token"
+    rm -rf "$sub_state/prime-agent/$child_id"
   done
 }
 
@@ -1116,6 +1131,16 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
       exit 1
     fi
   fi
+fi
+
+if [ "$HARNESS" = prime-agent ]; then
+  # Stop only the recorded task session, then force-shutdown only its unique
+  # TMPDIR daemon. This must precede worktree return so detached Python/tool work
+  # cannot continue writing while the isolated copy is removed.
+  "$SCRIPT_DIR/fm-prime-agent.sh" cleanup "$META" || {
+    echo "error: Prime Agent task-scoped cleanup failed for $ID; preserving the task" >&2
+    exit 1
+  }
 fi
 
 FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
@@ -1239,13 +1264,21 @@ fi
 remove_grok_turnend_auth "$STATE" "$ID"
 remove_kimi_turnend_auth "$STATE" "$ID"
 fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
-# Remove the per-task temp root (/tmp/fm-<id>/, incl. its gotmp/) recorded by spawn.
-# Read before the state-file rm below; empty (pre-fix tasks without tasktmp=) is a no-op.
+# Remove the per-task temp roots recorded by spawn.
+# Prime Agent's socket root uses a separate short random path because Unix socket
+# limits make the ordinary task-id-derived path unsafe for that runtime.
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
+if [ -n "$PRIME_TMP" ]; then
+  case "$PRIME_TMP" in
+    /tmp/fmpa.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]) rm -rf "$PRIME_TMP" ;;
+    *) echo "error: refusing unsafe Prime Agent temp cleanup path: $PRIME_TMP" >&2; exit 1 ;;
+  esac
+fi
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" \
-  "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token" \
-  "$STATE/$ID.kimi-turnend-token"
+  "$STATE/$ID.pi-ext.ts" "$STATE/$ID.prime-ext.ts" \
+  "$STATE/$ID.grok-turnend-token" "$STATE/$ID.kimi-turnend-token"
+rm -rf "$STATE/prime-agent/$ID"
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi
