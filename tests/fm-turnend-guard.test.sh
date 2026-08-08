@@ -611,8 +611,8 @@ test_settings_hook_uses_claude_project_dir() {
   local settings command
   settings="$ROOT/.claude/settings.json"
   [ -f "$settings" ] || fail "tracked .claude/settings.json is missing"
-  command=$(jq -r '.hooks.Stop[0].hooks[0].command // empty' "$settings")
-  [ -n "$command" ] || fail "Stop hook command is missing from .claude/settings.json"
+  command=$(jq -r '[.hooks.Stop[].hooks[].command | select(contains("fm-turnend-guard.sh"))][0] // empty' "$settings")
+  [ -n "$command" ] || fail "turn-end guard Stop hook command is missing from .claude/settings.json"
   assert_contains "$command" 'CLAUDE_PROJECT_DIR' "Stop hook must resolve via CLAUDE_PROJECT_DIR, not a cwd-relative path"
   assert_contains "$command" 'fm-turnend-guard.sh --claude' "Stop hook must invoke fm-turnend-guard.sh in cooperative --claude mode"
   case "$command" in
