@@ -177,6 +177,7 @@ The full cmux home label also includes a short hash of the resolved `FM_ROOT` pa
 
 claude, codex, opencode, pi, grok, and kimi are empirically verified for crewmate and secondmate launches; [README requirements](../README.md#requirements) own the narrower set supported for the primary session.
 Prime Agent v0.7.1 is an experimental, explicitly selected crewmate/scout adapter only; it is never a dispatch default and is not verified for primary or secondmate sessions.
+Prime Agent crews reuse the captain's normal `~/.prime/agent` configuration and authentication with no fleet duplicate, while each task runs behind its own short temporary daemon-socket root and task-owned session directory that teardown removes.
 New harnesses get verified through a supervised trial task before joining the set.
 The verified adapter knowledge - busy signatures, interrupt and exit commands, skill-invocation syntax, and per-harness quirks - lives in [the harness-adapters skill](../.agents/skills/harness-adapters/SKILL.md), one `references/adapter-<harness>.md` per runtime.
 Launch mechanics, including the verified command templates, live in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh).

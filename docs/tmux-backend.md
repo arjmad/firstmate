@@ -46,10 +46,11 @@ Verify setup by spawning a small task and confirming its `fm-<id>` window appear
 
 A target-existence check proves only that the pane exists.
 The deeper tmux agent-liveness probe first verifies exact window membership, then reads `#{pane_current_command}` to distinguish a running harness process from a bare idle shell.
-It classifies recognized Claude, Codex, OpenCode, Grok, and Kimi process names as `alive`, common shells as `dead`, an authoritatively absent window as `missing`, unreadable state as `unreadable`, and every other process as `ambiguous`.
+It classifies recognized Claude, Codex, OpenCode, Grok, Kimi, and Prime Agent process names as `alive`, common shells as `dead`, an authoritatively absent window as `missing`, unreadable state as `unreadable`, and every other process as `ambiguous`.
 Only `dead` and `missing` authorize recovery because a false dead result could launch a duplicate agent.
 
-Pi runs through a generic `node` process name and cannot be attributed confidently from the tmux foreground-process field.
+A generic `node` process name is attributed as a live Prime Agent only when the pane's foreground process group's argv names `prime-agent`; any other `node` pane stays ambiguous.
+Pi also runs through a generic `node` process name and cannot be attributed confidently from the tmux foreground-process field.
 An existing Pi pane is therefore reported as ambiguous rather than auto-healed, while an authoritatively missing Pi window can be relaunched safely.
 This is the active tmux liveness limitation.
 
@@ -86,6 +87,7 @@ Ambiguous pending text never receives the busy-queue conversion.
 tests/fm-backend-tmux-smoke.test.sh
 tests/fm-composer-ghost.test.sh
 tests/fm-kimi-harness.test.sh
+tests/fm-prime-agent-harness.test.sh
 tests/fm-tmux-submit-busy.test.sh
 tests/fm-bootstrap.test.sh
 ```

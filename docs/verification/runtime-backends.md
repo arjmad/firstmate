@@ -31,6 +31,7 @@ A persistent parent shell waiting for a child remained reported as the parent pr
 Claude, Codex, OpenCode, and Grok were observed under their own process names.
 Kimi Code CLI 0.29.1 was observed under `kimi` on 2026-07-25.
 Pi remained a generic `node` process and is intentionally inconclusive.
+Prime Agent v0.7.1's npm entrypoint was also observed as a generic `node` process on 2026-08-08; the liveness probe attributes it as alive only through a `prime-agent` match in the foreground process group's argv, pinned by `tests/fm-prime-agent-harness.test.sh`.
 
 The structural multi-row composer reader, Kimi pointer-delivery path, and OpenCode 1.18.4 busy-queue behavior are pinned by:
 
