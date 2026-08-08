@@ -54,6 +54,8 @@
 #      (default 3) consecutive blocks per session - safely below Claude Code's
 #      hard 8-consecutive-block override - then allow degraded with a visible
 #      systemMessage so the session can always end.
+# .claude/settings.json registers this after the async auto-arm;
+# docs/turnend-guard.md owns the ordering rationale.
 # Any allow resets the consecutive-block budget.
 set -u
 

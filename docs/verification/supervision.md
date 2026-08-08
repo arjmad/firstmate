@@ -119,6 +119,9 @@ grok 0.2.103 (89c3d36fb6f1) [stable]
 
 Pi 0.81.1 repeated the continuity and clean-exit lifecycle on 2026-07-23 after the Calm presentation changes.
 
+On 2026-08-08, GNU Bash 3.2.57(1)-release and jq 1.7.1 ran `tests/fm-claude-stop-autoarm.test.sh` against scratch homes with no live watcher or Claude session.
+The registered-order fixture reported `ok - auto-arm: ordinary cycle close reclaims before the synchronous guard` after observing two actionable arm closes, guard exit 0, successor auto-arm exit 2, and no guard-budget file.
+
 Deterministic entry points:
 
 ```sh

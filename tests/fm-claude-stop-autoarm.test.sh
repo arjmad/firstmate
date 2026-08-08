@@ -127,6 +127,17 @@ printf 'stale: fixture-win actionable\n'
 exit 0
 SH
       ;;
+    actionable-then-slow)
+      cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+echo "$$" >> "$FM_HOME/state/arm-ran"
+count=$(wc -l < "$FM_HOME/state/arm-ran" | tr -d ' ')
+[ "$count" -eq 1 ] || sleep 2
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+printf 'signal: task.status done: fixture cycle %s\n' "$count"
+exit 0
+SH
+      ;;
     failed)
       cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
@@ -508,6 +519,78 @@ test_actionable_close_rewakes_with_reason() {
   pass "auto-arm: actionable close translates to exactly one exit-2 rewake with reason"
 }
 
+test_ordinary_cycle_close_rearms_before_guard() {
+  local dir dispatcher guard_rc auto_rc count
+  dir=$(make_primary_dir "$TMP_ROOT/ordinary-cycle-close")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable-then-slow
+
+  # Model Claude's registered Stop-hook dispatch order without a live session.
+  # A synchronous exit 2 stops later hooks. An asyncRewake hook starts in the
+  # background while dispatch continues, letting the guard observe its claim.
+  dispatcher="$dir/bin/ordinary-close-dispatcher.sh"
+  cat > "$dispatcher" <<'SH'
+#!/usr/bin/env bash
+set -u
+auto_pid=
+cleanup() {
+  [ -n "$auto_pid" ] || return 0
+  kill "$auto_pid" 2>/dev/null || true
+  wait "$auto_pid" 2>/dev/null || true
+}
+trap cleanup EXIT
+payload='{"session_id":"ordinary-close","stop_hook_active":true}'
+printf '%s\n' "$CLAUDE_PID" > "$FM_HOME/state/.lock"
+
+first_rc=0
+printf '%s\n' "$payload" | "$FM_HOME/bin/fm-claude-stop-autoarm.sh" \
+  >"$FM_HOME/state/first.out" 2>"$FM_HOME/state/first.err" || first_rc=$?
+printf '%s\n' "$first_rc" > "$FM_HOME/state/first.rc"
+# A normal handling turn can exceed the epoch's short duplicate-rewake window.
+touch -t 202001010000 "$FM_HOME/state/.claude-autoarm-epoch"
+
+while IFS= read -r command; do
+  case "$command" in
+    *fm-claude-stop-autoarm.sh*)
+      printf '%s\n' "$payload" | "$FM_HOME/bin/fm-claude-stop-autoarm.sh" \
+        >"$FM_HOME/state/auto.out" 2>"$FM_HOME/state/auto.err" &
+      auto_pid=$!
+      ;;
+    *fm-turnend-guard.sh*)
+      guard_rc=0
+      printf '%s\n' "$payload" \
+        | FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=5000 "$FM_HOME/bin/fm-turnend-guard.sh" --claude \
+            >"$FM_HOME/state/guard.out" 2>"$FM_HOME/state/guard.err" || guard_rc=$?
+      printf '%s\n' "$guard_rc" > "$FM_HOME/state/guard.rc"
+      [ "$guard_rc" -ne 2 ] || break
+      ;;
+  esac
+done < <(jq -r '.hooks.Stop[].hooks[].command' "$REAL_SETTINGS")
+
+if [ -n "$auto_pid" ]; then
+  auto_rc=0
+  wait "$auto_pid" || auto_rc=$?
+  auto_pid=
+  printf '%s\n' "$auto_rc" > "$FM_HOME/state/auto.rc"
+else
+  printf '%s\n' not-run > "$FM_HOME/state/auto.rc"
+fi
+SH
+  chmod +x "$dispatcher"
+
+  REAL_SETTINGS="$ROOT/.claude/settings.json" FM_HOME="$dir" "$FAKE_CLAUDE" -c \
+    '"$FM_HOME/bin/ordinary-close-dispatcher.sh"'
+  expect_code 2 "$(cat "$dir/state/first.rc")" "the preceding actionable cycle must close with a rewake"
+  guard_rc=$(cat "$dir/state/guard.rc")
+  auto_rc=$(cat "$dir/state/auto.rc")
+  count=$(wc -l < "$dir/state/arm-ran" | tr -d ' ')
+  expect_code 0 "$guard_rc" "the ordinary-close Stop must let the auto-arm claim before the guard decides"
+  expect_code 2 "$auto_rc" "the reclaimed cycle must translate its actionable close"
+  [ "$count" -eq 2 ] || fail "ordinary close must arm a successor cycle, saw $count total arms"
+  [ ! -e "$dir/state/.turnend-claude-blocks" ] || fail "successful ordinary-close claim must not consume the guard budget"
+  pass "auto-arm: ordinary cycle close reclaims before the synchronous guard"
+}
+
 test_failed_close_rewakes_with_failure_banner() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/failed")
@@ -622,6 +705,7 @@ test_inert_when_afk
 test_stale_lock_recovery_preserves_afk_and_need_gates
 test_inert_when_fleet_idle
 test_actionable_close_rewakes_with_reason
+test_ordinary_cycle_close_rearms_before_guard
 test_failed_close_rewakes_with_failure_banner
 test_clean_close_exits_silently
 test_arms_for_x_mode_poll_need_without_inflight
