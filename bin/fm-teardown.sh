@@ -988,7 +988,10 @@ cleanup_firstmate_home_children() {
     child_backend=$(fm_backend_of_meta "$child_meta")
     child_harness=$(meta_value "$child_meta" harness)
     if [ "$child_harness" = prime-agent ]; then
-      "$SCRIPT_DIR/fm-prime-agent.sh" cleanup "$child_meta" || return 1
+      "$SCRIPT_DIR/fm-prime-agent.sh" cleanup "$child_meta" || {
+        echo "error: Prime Agent task-scoped cleanup failed for child $child_id; preserving the home" >&2
+        return 1
+      }
     fi
     if [ "$child_backend" = orca ]; then
       child_t=$(meta_value "$child_meta" terminal)

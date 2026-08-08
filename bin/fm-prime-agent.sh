@@ -51,7 +51,7 @@ resolve_bin() {
   esac
 }
 
-valid_runtime_paths() {  # <tmpdir> <session-dir>
+safe_runtime_paths() {  # <tmpdir> <session-dir>
   case "$1" in
     /tmp/fmpa.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]) ;;
     *) echo "error: unsafe Prime Agent task TMPDIR: $1" >&2; return 1 ;;
@@ -60,6 +60,10 @@ valid_runtime_paths() {  # <tmpdir> <session-dir>
     /*/state/prime-agent/*/sessions) ;;
     *) echo "error: unsafe Prime Agent task session directory: $2" >&2; return 1 ;;
   esac
+}
+
+valid_runtime_paths() {  # <tmpdir> <session-dir>
+  safe_runtime_paths "$1" "$2" || return 1
   [ -d "$1" ] || { echo "error: Prime Agent task TMPDIR is missing: $1" >&2; return 1; }
   [ -d "$2" ] || { echo "error: Prime Agent task session directory is missing: $2" >&2; return 1; }
 }
@@ -77,8 +81,8 @@ run_scoped() {  # <tmpdir> <session-dir> <args...>
     "$bin" "$@"
 }
 
-meta_runtime() {  # <meta>; sets META_TMP META_SESS META_AGENT
-  local meta=$1 id state expected
+meta_runtime_shape() {  # <meta>; sets META_TMP META_SESS META_AGENT; ownership only, no existence
+  local meta=$1 id state
   [ -f "$meta" ] && [ ! -L "$meta" ] || { echo "error: unsafe or missing Prime Agent task metadata: $meta" >&2; return 1; }
   [ "$(meta_get "$meta" harness)" = prime-agent ] || { echo "error: metadata is not a Prime Agent task: $meta" >&2; return 1; }
   id=$(basename "$meta" .meta)
@@ -86,12 +90,19 @@ meta_runtime() {  # <meta>; sets META_TMP META_SESS META_AGENT
   META_TMP=$(meta_get "$meta" prime_tmp)
   META_SESS=$(meta_get "$meta" prime_session_dir)
   META_AGENT=$(meta_get "$meta" prime_session)
-  expected="$state/prime-agent/$id/sessions"
-  [ "$META_SESS" = "$expected" ] || { echo "error: Prime Agent session directory does not match task metadata owner" >&2; return 1; }
-  valid_runtime_paths "$META_TMP" "$META_SESS" || return 1
+  if [ -n "$META_SESS" ] && [ "$META_SESS" != "$state/prime-agent/$id/sessions" ]; then
+    echo "error: Prime Agent session directory does not match task metadata owner" >&2
+    return 1
+  fi
   case "$META_AGENT" in
-    ''|*[!A-Za-z0-9_-]*) echo "error: invalid or missing Prime Agent session id in $meta" >&2; return 1 ;;
+    *[!A-Za-z0-9_-]*) echo "error: invalid Prime Agent session id in $meta" >&2; return 1 ;;
   esac
+}
+
+meta_runtime() {  # <meta>; sets META_TMP META_SESS META_AGENT; requires a live runtime
+  meta_runtime_shape "$1" || return 1
+  valid_runtime_paths "$META_TMP" "$META_SESS" || return 1
+  [ -n "$META_AGENT" ] || { echo "error: invalid or missing Prime Agent session id in $1" >&2; return 1; }
 }
 
 list_json() {  # <tmpdir> <session-dir>
@@ -158,10 +169,22 @@ shutdown_scoped() {  # <tmpdir> <session-dir>
 }
 
 cleanup_from_meta() {  # <meta>
-  meta_runtime "$1" || return 1
+  local meta=$1
+  meta_runtime_shape "$meta" || return 1
+  # An already-removed task runtime is an idempotent cleanup success; unsafe or
+  # another task's paths still fail closed.
+  [ -n "$META_TMP" ] || [ -n "$META_SESS" ] || return 0
+  safe_runtime_paths "$META_TMP" "$META_SESS" || return 1
+  [ -d "$META_TMP" ] && [ -d "$META_SESS" ] || return 0
+  resolve_bin >/dev/null 2>&1 || {
+    echo "warning: direct prime-agent executable unavailable; skipping stop/shutdown for the ended task runtime" >&2
+    return 0
+  }
   # Plain stop is scoped to the recorded task session. The following daemon-wide
   # shutdown is safe only because every task has a unique TMPDIR/daemon socket.
-  run_scoped "$META_TMP" "$META_SESS" stop "$META_AGENT" --json >/dev/null 2>&1 || true
+  if [ -n "$META_AGENT" ]; then
+    run_scoped "$META_TMP" "$META_SESS" stop "$META_AGENT" --json >/dev/null 2>&1 || true
+  fi
   shutdown_scoped "$META_TMP" "$META_SESS"
 }
 

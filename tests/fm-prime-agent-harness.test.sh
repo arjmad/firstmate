@@ -197,6 +197,102 @@ EOF
   pass "fm-spawn/fm-teardown: Prime Agent launch and cleanup preserve every task isolation boundary"
 }
 
+test_cleanup_idempotent_when_runtime_already_gone() {
+  local d fakebin home state id tmp sessions meta rc
+  d="$TMP_ROOT/cleanup-gone"
+  fakebin=$(fm_fakebin "$d")
+  make_prime_fake "$fakebin"
+  ln -s "$JQ_BIN" "$fakebin/jq"
+  home="$d/home"
+  state="$home/state"
+  id=prime-gone-c3
+  mkdir -p "$state"
+  state=$(cd "$state" && pwd -P)
+  tmp=$(mktemp -d /tmp/fmpa.XXXXXXXX)
+  sessions="$state/prime-agent/$id/sessions"
+  meta="$state/$id.meta"
+  : > "$d/prime.log"
+
+  fm_write_meta "$meta" "harness=prime-agent" \
+    "prime_tmp=$tmp" "prime_session_dir=$sessions"
+  rm -rf "$tmp"
+  rc=0
+  HOME="$home" PRIME_AGENT_REAL_BIN="$fakebin/prime-agent" \
+    FM_FAKE_PRIME_LOG="$d/prime.log" "$PRIME_CTL" cleanup "$meta" || rc=$?
+  [ "$rc" = 0 ] || fail "cleanup should treat an already-removed runtime with no session id as done, rc=$rc"
+  [ ! -s "$d/prime.log" ] || fail "cleanup invoked prime-agent for an absent runtime: $(cat "$d/prime.log")"
+
+  mkdir -p "$tmp" "$sessions"
+  fm_write_meta "$meta" "harness=prime-agent" \
+    "prime_tmp=$tmp" "prime_session_dir=$sessions" "prime_session=pa123"
+  rc=0
+  HOME="$d/nohome" PATH="$BASE_PATH" "$PRIME_CTL" cleanup "$meta" 2>/dev/null || rc=$?
+  [ "$rc" = 0 ] || fail "cleanup should succeed when the prime-agent executable is gone, rc=$rc"
+
+  fm_write_meta "$meta" "harness=prime-agent" \
+    "prime_tmp=$tmp" "prime_session_dir=$state/prime-agent/other-task/sessions" \
+    "prime_session=pa123"
+  rc=0
+  HOME="$home" PRIME_AGENT_REAL_BIN="$fakebin/prime-agent" \
+    FM_FAKE_PRIME_LOG="$d/prime.log" "$PRIME_CTL" cleanup "$meta" 2>/dev/null || rc=$?
+  [ "$rc" != 0 ] || fail "cleanup accepted a session directory owned by another task"
+
+  fm_write_meta "$meta" "harness=prime-agent" \
+    "prime_tmp=/tmp/evil" "prime_session_dir=$sessions" "prime_session=pa123"
+  rc=0
+  HOME="$home" PRIME_AGENT_REAL_BIN="$fakebin/prime-agent" \
+    FM_FAKE_PRIME_LOG="$d/prime.log" "$PRIME_CTL" cleanup "$meta" 2>/dev/null || rc=$?
+  [ "$rc" != 0 ] || fail "cleanup accepted an unsafe task TMPDIR"
+
+  fm_write_meta "$meta" "harness=prime-agent" "prime_tmp=$tmp"
+  rc=0
+  HOME="$home" PRIME_AGENT_REAL_BIN="$fakebin/prime-agent" \
+    FM_FAKE_PRIME_LOG="$d/prime.log" "$PRIME_CTL" cleanup "$meta" 2>/dev/null || rc=$?
+  [ "$rc" != 0 ] || fail "cleanup accepted a partially recorded runtime"
+
+  rm -rf "$tmp"
+  pass "fm-prime-agent: cleanup is idempotent for an already-gone runtime and fail-closed on unsafe paths"
+}
+
+test_teardown_succeeds_after_failed_launch() {
+  local d rec home proj wt fakebin id out rc meta tmp
+  d="$TMP_ROOT/failed-launch"
+  id=prime-fail-d4
+  rec=$(make_case "$d" "$id")
+  IFS='|' read -r home proj wt fakebin id <<EOF
+$rec
+EOF
+  rc=0
+  out=$(FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" FM_PROJECTS_OVERRIDE="$home/projects" \
+    FM_CONFIG_OVERRIDE="$home/config" FM_SPAWN_NO_GUARD=1 TMUX='fake,1,0' \
+    FM_FAKE_PANE_PATH="$wt" FM_FAKE_PRIME_CWD="$d/elsewhere" \
+    FM_FAKE_PRIME_LOG="$d/prime.log" FM_FAKE_TMUX_LOG="$d/tmux.log" \
+    FM_PRIME_SESSION_POLLS=1 FM_PRIME_POLL_INTERVAL=0 \
+    PRIME_AGENT_REAL_BIN="$fakebin/prime-agent" PATH="$fakebin:$BASE_PATH" \
+    "$SPAWN" "$id" "$proj" --reuse-worktree "$wt" --harness prime-agent 2>&1) || rc=$?
+  [ "$rc" != 0 ] || fail "spawn should fail when discovery finds no task session: $out"
+
+  meta="$home/state/$id.meta"
+  assert_present "$meta" "failed spawn should leave task metadata behind for teardown"
+  assert_no_grep 'prime_session=' "$meta" "failed spawn must not record a session id"
+  tmp=$(sed -n 's/^prime_tmp=//p' "$meta")
+  [ -n "$tmp" ] || fail "failed spawn metadata lost prime_tmp"
+  [ ! -d "$tmp" ] || fail "spawn abort cleanup left the task TMPDIR behind"
+
+  rc=0
+  out=$(HOME="$home" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" PRIME_AGENT_REAL_BIN="$fakebin/prime-agent" \
+    FM_FAKE_PRIME_LOG="$d/prime.log" FM_FAKE_PRIME_CWD="$wt" \
+    FM_FAKE_TMUX_LOG="$d/tmux.log" PATH="$fakebin:$BASE_PATH" \
+    "$ROOT/bin/fm-teardown.sh" "$id" --force 2>&1) || rc=$?
+  [ "$rc" = 0 ] || fail "teardown must succeed after a failed Prime Agent launch: $out"
+  assert_absent "$meta" "teardown left Prime Agent metadata after a failed launch"
+  assert_absent "$home/state/prime-agent/$id" "teardown left task session storage after a failed launch"
+  pass "fm-teardown: an aborted Prime Agent launch no longer wedges task teardown"
+}
+
 test_detection_and_registry() {
   local out
   out=$(PRIME_AGENT_FIRSTMATE=1 "$ROOT/bin/fm-harness.sh")
@@ -236,5 +332,7 @@ SH
 
 test_control_adapter_state_send_and_cleanup
 test_spawn_launch_and_event_extension
+test_cleanup_idempotent_when_runtime_already_gone
+test_teardown_succeeds_after_failed_launch
 test_detection_and_registry
 test_tmux_node_process_is_classified_by_foreground_args
