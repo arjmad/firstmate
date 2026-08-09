@@ -493,6 +493,27 @@ test_nested_non_claude_lane_cannot_use_outer_claude_lock() {
   pass "auto-arm: nested non-Claude lane cannot use an outer Claude session lock"
 }
 
+test_nested_distinct_claude_session_cannot_use_outer_claude_lock() {
+  local dir rc
+  dir=$(make_primary_dir "$TMP_ROOT/nested-distinct-claude")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+
+  # A distinct Claude session launched inside the primary declares its own
+  # CLAUDE_PID; clearing the inherited value makes the nested fake harness
+  # inject its own pid as its declared stable identity.
+  rc=0
+  FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+    "$FM_HOME/bin/fm-lock.sh" >/dev/null
+    printf "%s\n" "{\"session_id\":\"nested-claude\"}" \
+      | CLAUDE_PID= "$FAKE_CLAUDE" -c '\''"$FM_HOME/bin/fm-claude-stop-autoarm.sh"'\''
+  ' || rc=$?
+  expect_code 0 "$rc" "nested distinct Claude session must leave the outer-owned home inert"
+  [ ! -e "$dir/state/arm-ran" ] || fail "nested distinct Claude session used the outer session lock to arm"
+  [ ! -e "$dir/state/.claude-autoarm-epoch" ] || fail "nested distinct Claude session wrote an auto-arm epoch"
+  pass "auto-arm: nested distinct Claude session cannot use the outer session lock"
+}
+
 test_reclaims_stale_session_lock_before_arming() {
   local dir out status expected_owner actual_owner
   dir=$(make_primary_dir "$TMP_ROOT/stale-lock")
@@ -779,6 +800,7 @@ test_mid_session_takeover_claims_with_stable_claude_owner
 test_restarted_session_hook_lane_claims_ancestral_lock_owner
 test_inherited_claude_pid_does_not_override_nested_non_claude
 test_nested_non_claude_lane_cannot_use_outer_claude_lock
+test_nested_distinct_claude_session_cannot_use_outer_claude_lock
 test_reclaims_stale_session_lock_before_arming
 test_inert_when_lock_held_by_other_harness
 test_inert_when_afk
