@@ -12,7 +12,9 @@ Claude's `.claude/settings.json` Stop `asyncRewake` hook (`bin/fm-claude-stop-au
 Its required position before the synchronous turn-end guard is owned by [`turnend-guard.md`](turnend-guard.md#harness-integrations).
 The hook fires on every Stop, and an eligible primary with supervision need admits one home-scoped owner that foregrounds `bin/fm-watch-arm.sh` inside the hook-owned process tree.
 Claude lock ownership uses its declared `CLAUDE_PID` only when that PID is a live Claude process in the current ancestry and the nearer detected harness is also Claude-shaped.
-That stable identity lets a lock-command lane and a later Stop-hook lane in the same session agree after a mid-session takeover without letting an inherited value override a nested non-Claude harness or authorize a competing session.
+That stable identity lets a lock-command lane and a later Stop-hook lane in the same session agree after a mid-session takeover.
+A restarted session may instead dispatch its Stop hook through a nearer Claude daemon lane with no `CLAUDE_PID`; that lane owns the home only when the recorded live Claude lock owner is its ancestor.
+Requiring both processes to be Claude-shaped preserves the nested non-Claude boundary, while the ancestry requirement excludes competing sessions.
 A numeric session-lock owner that fails the shared `fm_harness_pid_alive` predicate is reclaimed through `bin/fm-lock.sh` before auto-arm state changes, while a live owner, absent lock, or malformed lock keeps the competing hook inert.
 The stale-owner claim occurs only after the existing AFK and supervision-need gates pass.
 While supervision is still needed and away mode remains inactive, an actionable close or typed failure wakes the idle session through exit 2.
@@ -59,7 +61,7 @@ Only the watcher process touches `state/.last-watcher-beat`; no helper process c
 `tests/fm-pi-watch-extension.test.sh` checks Pi's first-cycle-or-explicit-repair tool metadata and ownership-based redundant-call no-ops, then simulates actionable and empty child closes against the actual Pi and OpenCode close handlers, blocks prompt delivery to prove the successor launches first, verifies single-flight behavior, changes the session lock before close to prove ownership is rechecked, and hangs each successor arm to prove bounded fallback delivery includes the typed restoration failure.
 `tests/fm-watcher-lock.test.sh` covers verified-successor attach, the typed self-eviction failure, bounded and successor-linked lifecycle rows, and a SIGSTOP counterfactual that distinguishes a live PID from a stale beacon before classifying termination.
 `tests/fm-subagent-pretool-check.test.sh` proves Claude retains only the non-status Bash seatbelts.
-`tests/fm-claude-stop-autoarm.test.sh` covers the auto-arm's scope, stale and live session owners, mid-session takeover across distinct Claude execution lanes, ordinary-cycle re-claim in registered Stop-hook order, unchanged AFK and need boundaries, single-flight, and exit-2 translation.
+`tests/fm-claude-stop-autoarm.test.sh` covers the auto-arm's scope, stale and live session owners, mid-session takeover across distinct Claude execution lanes, restarted-session daemon lanes without `CLAUDE_PID`, ordinary-cycle re-claim in registered Stop-hook order, unchanged AFK and need boundaries, single-flight, and exit-2 translation.
 `FM_CLAUDE_LIVE_E2E=1 tests/fm-claude-stop-autoarm-live-e2e.test.sh` starts with the reproduced stale-lock state, runs session start first, completes two tokenless cycles, and checks the competing-live-owner negative control.
 `tests/fm-turnend-guard.test.sh` covers the cooperative `--claude` guard.
 
