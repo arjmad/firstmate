@@ -51,6 +51,17 @@ fm_harness_pid_is_claude() {
   esac
 }
 
+# Print Claude's declared stable CLAUDE_PID when it is a live Claude process
+# in the current ancestry; fail when it is unset, dead, not Claude-shaped, or
+# not an ancestor. Success means this lane declares its own validated Claude
+# session identity.
+fm_claude_declared_ancestor_pid() {
+  fm_pid_is_current_ancestor "${CLAUDE_PID:-}" || return 1
+  fm_harness_pid_alive "$CLAUDE_PID" || return 1
+  fm_harness_pid_is_claude "$CLAUDE_PID" || return 1
+  printf '%s\n' "$CLAUDE_PID"
+}
+
 # Walk the current process ancestry (up to 8 hops) and print the nearest pid
 # whose command looks like a verified harness. For Claude only, prefer its
 # declared stable CLAUDE_PID when the nearer candidate is also Claude-shaped
@@ -81,20 +92,24 @@ fm_harness_ancestry_pid() {
   done
   [ -n "$candidate" ] || return 1
 
+  local declared
   if fm_harness_pid_is_claude "$candidate" \
-    && fm_pid_is_current_ancestor "${CLAUDE_PID:-}" \
-    && fm_harness_pid_alive "$CLAUDE_PID" \
-    && fm_harness_pid_is_claude "$CLAUDE_PID"; then
-    echo "$CLAUDE_PID"
+    && declared=$(fm_claude_declared_ancestor_pid); then
+    echo "$declared"
   else
     echo "$candidate"
   fi
 }
 
-# True when state dir $1 holds a session lock whose pid is the harness ancestor
-# of the current process: this script runs inside the session that owns the
-# home's fleet lock. A missing lock, a lock held by another live harness, or an
-# ancestry that cannot be resolved all fail closed.
+# True when state dir $1 holds a session lock owned by the current harness
+# session. Exact resolved-owner equality is the ordinary path. Restarted Claude
+# sessions may dispatch Stop hooks through a nearer Claude daemon lane with no
+# validated CLAUDE_PID of its own; only that shape may fall back to the
+# recorded owner, and the owner must be a live Claude ancestor while the
+# nearest resolved harness is also Claude. A lane that declares its own
+# validated Claude identity distinct from the owner is a competing session and
+# fails closed, as do missing, malformed, or unresolvable ownership and nested
+# non-Claude harnesses.
 fm_session_lock_owned_by_self() {
   local state=$1 lock_pid my_pid
   lock_pid=$(cat "$state/.lock" 2>/dev/null || true)
@@ -102,5 +117,10 @@ fm_session_lock_owned_by_self() {
     ''|*[!0-9]*) return 1 ;;
   esac
   my_pid=$(fm_harness_ancestry_pid) || return 1
-  [ "$my_pid" = "$lock_pid" ]
+  [ "$my_pid" = "$lock_pid" ] && return 0
+  fm_claude_declared_ancestor_pid >/dev/null && return 1
+  fm_harness_pid_is_claude "$my_pid" \
+    && fm_harness_pid_is_claude "$lock_pid" \
+    && fm_harness_pid_alive "$lock_pid" \
+    && fm_pid_is_current_ancestor "$lock_pid"
 }

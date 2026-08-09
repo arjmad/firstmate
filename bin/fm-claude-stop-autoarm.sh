@@ -15,7 +15,11 @@
 #     exact fm-turnend-guard.sh scope. Child crew/scout worktrees stay inert.
 #   - Identity: only when THIS session's stable harness identity holds
 #     state/.lock. Claude's validated ancestral CLAUDE_PID keeps tool and Stop
-#     execution lanes on one identity even after a mid-session lock takeover.
+#     execution lanes on one identity after a mid-session lock takeover. After a
+#     session restart, a nearer Claude daemon lane with no validated CLAUDE_PID
+#     of its own may use the recorded owner only when it is a live Claude
+#     ancestor; nested non-Claude harnesses and sessions declaring their own
+#     distinct Claude identity remain excluded.
 #     When an existing numeric owner fails the shared harness-liveness predicate,
 #     the hook delegates guarded recovery to bin/fm-lock.sh and then re-verifies
 #     ownership. A live owner, missing lock, malformed lock, or unresolved

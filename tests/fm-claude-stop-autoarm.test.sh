@@ -37,7 +37,8 @@ cat > "$FAKEBIN/claude-harness.js" <<'JS'
 #!/usr/bin/env node
 const { spawn } = require("node:child_process");
 const env = { ...process.env, FAKE_HARNESS_PID: String(process.pid) };
-if (!env.CLAUDE_PID) env.CLAUDE_PID = String(process.pid);
+if (env.FAKE_NO_CLAUDE_PID === "1") delete env.CLAUDE_PID;
+else if (!env.CLAUDE_PID) env.CLAUDE_PID = String(process.pid);
 const child = spawn("/bin/bash", process.argv.slice(2), { env, stdio: "inherit" });
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   process.on(signal, () => child.kill(signal));
@@ -391,6 +392,65 @@ SH
   pass "auto-arm: mid-session takeover uses Claude's stable owner across lock-command and Stop-hook lanes"
 }
 
+test_restarted_session_hook_lane_claims_ancestral_lock_owner() {
+  local dir rc guard_rc auto_rc owner expected_owner
+  dir=$(make_primary_dir "$TMP_ROOT/restarted-session-hook-lane")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" slow-actionable
+  printf '9999999\n' > "$dir/state/.lock"
+  printf 'epoch=9 owner_pid=9999999 outcome=clean updated_at=1\n' > "$dir/state/.claude-autoarm-epoch"
+  touch -t 202001010000 "$dir/state/.claude-autoarm-epoch"
+
+  cat > "$dir/bin/restarted-session-fixture.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+auto_pid=
+cleanup() {
+  [ -n "$auto_pid" ] || return 0
+  kill "$auto_pid" 2>/dev/null || true
+  wait "$auto_pid" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+# Session start in the replacement primary re-acquires the home lock from its
+# stable outer Claude process. Restarted Claude sessions dispatch Stop hooks
+# through a nearer Claude daemon lane that does not expose CLAUDE_PID.
+"$FM_HOME/bin/fm-lock.sh" >/dev/null
+printf '%s\n' "$CLAUDE_PID" > "$FM_HOME/state/expected-owner"
+payload='{"session_id":"restarted-session","stop_hook_active":false}'
+printf '%s\n' "$payload" \
+  | FAKE_NO_CLAUDE_PID=1 "$FAKE_CLAUDE" -c '"$FM_HOME/bin/fm-claude-stop-autoarm.sh"' \
+      >"$FM_HOME/state/restart-auto.out" 2>"$FM_HOME/state/restart-auto.err" &
+auto_pid=$!
+
+guard_rc=0
+printf '%s\n' "$payload" \
+  | FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=5000 "$FM_HOME/bin/fm-turnend-guard.sh" --claude \
+      >"$FM_HOME/state/restart-guard.out" 2>"$FM_HOME/state/restart-guard.err" || guard_rc=$?
+printf '%s\n' "$guard_rc" > "$FM_HOME/state/restart-guard.rc"
+
+auto_rc=0
+wait "$auto_pid" || auto_rc=$?
+auto_pid=
+printf '%s\n' "$auto_rc" > "$FM_HOME/state/restart-auto.rc"
+SH
+  chmod +x "$dir/bin/restarted-session-fixture.sh"
+
+  rc=0
+  FM_HOME="$dir" "$FAKE_CLAUDE" -c '"$FM_HOME/bin/restarted-session-fixture.sh"' || rc=$?
+  expect_code 0 "$rc" "restarted-session fixture must complete"
+  guard_rc=$(cat "$dir/state/restart-guard.rc")
+  auto_rc=$(cat "$dir/state/restart-auto.rc")
+  owner=$(cat "$dir/state/.lock")
+  expected_owner=$(cat "$dir/state/expected-owner")
+  expect_code 0 "$guard_rc" "guard must allow the restarted session's daemon-lane auto-arm claim"
+  expect_code 2 "$auto_rc" "restarted session's Stop hook must translate the actionable close"
+  [ "$owner" = "$expected_owner" ] || fail "restarted session changed its reacquired lock owner: expected $expected_owner, got $owner"
+  [ "$(epoch_outcome "$dir")" = rewake ] || fail "restarted session must replace the carried epoch with outcome=rewake"
+  [ -e "$dir/state/arm-ran" ] || fail "restarted session's Stop hook never armed"
+  pass "auto-arm: restarted-session daemon lane claims its live ancestral Claude lock owner"
+}
+
 test_inherited_claude_pid_does_not_override_nested_non_claude() {
   local dir owner expected
   dir=$(make_primary_dir "$TMP_ROOT/nested-non-claude")
@@ -413,6 +473,45 @@ SH
   expected=$(cat "$dir/state/expected-owner")
   [ "$owner" = "$expected" ] || fail "an inherited CLAUDE_PID overrode the nested non-Claude harness: expected $expected, got $owner"
   pass "fm-lock: inherited CLAUDE_PID does not override a nested non-Claude harness"
+}
+
+test_nested_non_claude_lane_cannot_use_outer_claude_lock() {
+  local dir rc
+  dir=$(make_primary_dir "$TMP_ROOT/nested-non-claude-autoarm")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+
+  rc=0
+  FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+    "$FM_HOME/bin/fm-lock.sh" >/dev/null
+    printf "%s\n" "{\"session_id\":\"nested-codex\"}" \
+      | "$FAKE_CODEX" -c '\''"$FM_HOME/bin/fm-claude-stop-autoarm.sh"'\''
+  ' || rc=$?
+  expect_code 0 "$rc" "nested non-Claude lane must leave the outer Claude-owned home inert"
+  [ ! -e "$dir/state/arm-ran" ] || fail "nested non-Claude lane used an ancestral outer Claude lock to arm"
+  [ ! -e "$dir/state/.claude-autoarm-epoch" ] || fail "nested non-Claude lane wrote an auto-arm epoch"
+  pass "auto-arm: nested non-Claude lane cannot use an outer Claude session lock"
+}
+
+test_nested_distinct_claude_session_cannot_use_outer_claude_lock() {
+  local dir rc
+  dir=$(make_primary_dir "$TMP_ROOT/nested-distinct-claude")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+
+  # A distinct Claude session launched inside the primary declares its own
+  # CLAUDE_PID; clearing the inherited value makes the nested fake harness
+  # inject its own pid as its declared stable identity.
+  rc=0
+  FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+    "$FM_HOME/bin/fm-lock.sh" >/dev/null
+    printf "%s\n" "{\"session_id\":\"nested-claude\"}" \
+      | CLAUDE_PID= "$FAKE_CLAUDE" -c '\''"$FM_HOME/bin/fm-claude-stop-autoarm.sh"'\''
+  ' || rc=$?
+  expect_code 0 "$rc" "nested distinct Claude session must leave the outer-owned home inert"
+  [ ! -e "$dir/state/arm-ran" ] || fail "nested distinct Claude session used the outer session lock to arm"
+  [ ! -e "$dir/state/.claude-autoarm-epoch" ] || fail "nested distinct Claude session wrote an auto-arm epoch"
+  pass "auto-arm: nested distinct Claude session cannot use the outer session lock"
 }
 
 test_reclaims_stale_session_lock_before_arming() {
@@ -698,7 +797,10 @@ test_settings_registers_autoarm_with_multi_hour_timeout
 test_inert_in_child_worktree
 test_inert_without_session_lock
 test_mid_session_takeover_claims_with_stable_claude_owner
+test_restarted_session_hook_lane_claims_ancestral_lock_owner
 test_inherited_claude_pid_does_not_override_nested_non_claude
+test_nested_non_claude_lane_cannot_use_outer_claude_lock
+test_nested_distinct_claude_session_cannot_use_outer_claude_lock
 test_reclaims_stale_session_lock_before_arming
 test_inert_when_lock_held_by_other_harness
 test_inert_when_afk
