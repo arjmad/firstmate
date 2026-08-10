@@ -13,13 +13,14 @@
 #   - Scope: only a genuine primary checkout (plain checkout or validly marked
 #     secondmate home) with AGENTS.md, bin/, and the effective state dir - the
 #     exact fm-turnend-guard.sh scope. Child crew/scout worktrees stay inert.
-#   - Identity: only when THIS session's stable harness identity holds
-#     state/.lock. Claude's validated ancestral CLAUDE_PID keeps tool and Stop
-#     execution lanes on one identity after a mid-session lock takeover. After a
-#     session restart, a nearer Claude daemon lane with no validated CLAUDE_PID
-#     of its own may use the recorded owner only when it is a live Claude
-#     ancestor; nested non-Claude harnesses and sessions declaring their own
-#     distinct Claude identity remain excluded.
+#   - Identity: only when THIS Claude payload session is bound to state/.lock.
+#     SessionStart refreshes that binding when a harness restart retains the
+#     outer lock owner, so a later distinct Claude Stop lane can prove it belongs
+#     to the rebound session instead of being mistaken for a competitor.
+#     Claude's validated ancestral CLAUDE_PID remains the ordinary identity and
+#     mid-session takeover path. A CLAUDE_PID-less daemon may still use the
+#     legacy live-ancestor fallback before a binding exists. Nested non-Claude
+#     harnesses and Claude sessions with a different payload id remain excluded.
 #     When an existing numeric owner fails the shared harness-liveness predicate,
 #     the hook delegates guarded recovery to bin/fm-lock.sh and then re-verifies
 #     ownership. A live owner, missing lock, malformed lock, or unresolved
@@ -42,9 +43,10 @@
 #     wakes Claude even while idle ("Stop hook feedback"). A clean close with
 #     no actionable reason and no remaining need exits 0 silently.
 #
-# The epoch ledger state/.claude-autoarm-epoch records the latest claim and
-# outcome so the synchronous Stop guard (bin/fm-turnend-guard.sh --claude) can
-# allow a stop whose recovery this hook already owns, instead of forcing a
+# The epoch ledger state/.claude-autoarm-epoch records the payload session id,
+# latest claim, and outcome so the synchronous Stop guard
+# (bin/fm-turnend-guard.sh --claude) can allow only a stop whose recovery this
+# session already owns, instead of accepting a pre-restart epoch or forcing a
 # duplicate continuation for the same event epoch.
 #
 # This hook never blocks the Stop decision itself and never prints to stdout:
@@ -72,9 +74,15 @@ EPOCH="$STATE/.claude-autoarm-epoch"
 # shellcheck source=bin/fm-session-lock-lib.sh
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
 
-# Consume the Stop payload once. The decisions below are state-based; the
-# payload is read so a slow writer can never wedge on a full pipe.
-cat >/dev/null 2>&1 || true
+# Consume the Stop payload once. Session id is the stable Claude identity that
+# survives distinct execution lanes; malformed or unavailable ids retain only
+# the legacy process-identity path.
+PAYLOAD=$(cat 2>/dev/null || true)
+CLAUDE_SESSION_ID=
+if command -v jq >/dev/null 2>&1; then
+  CLAUDE_SESSION_ID=$(printf '%s' "$PAYLOAD" | jq -r '.session_id // empty' 2>/dev/null || true)
+fi
+fm_claude_session_id_valid "$CLAUDE_SESSION_ID" || CLAUDE_SESSION_ID=
 
 # --- scope: genuine primary checkout only -----------------------------------
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
@@ -86,7 +94,7 @@ fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 # idle or away home remains byte-for-byte inert. Missing or malformed locks are
 # uncertainty rather than stale-owner evidence and remain inert.
 RECOVER_SESSION_LOCK=0
-if ! fm_session_lock_owned_by_self "$STATE"; then
+if ! fm_session_lock_owned_by_self "$STATE" "$CLAUDE_SESSION_ID"; then
   LOCK_PID=$(cat "$STATE/.lock" 2>/dev/null || true)
   case "$LOCK_PID" in
     ''|*[!0-9]*) exit 0 ;;
@@ -110,7 +118,10 @@ need_supervision || exit 0
 # before touching any auto-arm state.
 if [ "$RECOVER_SESSION_LOCK" -eq 1 ]; then
   "$SCRIPT_DIR/fm-lock.sh" >/dev/null 2>&1 || exit 0
-  fm_session_lock_owned_by_self "$STATE" || exit 0
+  fm_session_lock_owned_by_self "$STATE" "$CLAUDE_SESSION_ID" || exit 0
+fi
+if [ -n "$CLAUDE_SESSION_ID" ]; then
+  fm_claude_session_binding_write "$STATE" "$CLAUDE_SESSION_ID" >/dev/null 2>&1 || exit 0
 fi
 
 # --- single-flight owner claim ------------------------------------------------
@@ -119,6 +130,14 @@ fi
 # 0 so one watcher cycle maps to at most one exit-2 rewake.
 fm_lock_try_acquire "$OWNER_LOCK" || exit 0
 trap 'fm_lock_release "$OWNER_LOCK"' EXIT
+if [ -n "$CLAUDE_SESSION_ID" ]; then
+  AUTOARM_OWNER_DIR=${FM_LOCK_OWNER_DIR:-}
+  [ -n "$AUTOARM_OWNER_DIR" ] \
+    && fm_lock_points_to_owner "$OWNER_LOCK" "$AUTOARM_OWNER_DIR" \
+    && printf '%s\n' "$CLAUDE_SESSION_ID" > "$AUTOARM_OWNER_DIR/session-id" 2>/dev/null \
+    && fm_lock_points_to_owner "$OWNER_LOCK" "$AUTOARM_OWNER_DIR" \
+    || exit 0
+fi
 
 write_epoch() {  # <outcome>
   local outcome=$1 seq tmp
@@ -128,8 +147,8 @@ write_epoch() {  # <outcome>
   esac
   seq=$((seq + 1))
   tmp="$EPOCH.tmp.$$"
-  printf 'epoch=%s owner_pid=%s outcome=%s updated_at=%s\n' \
-    "$seq" "${BASHPID:-$$}" "$outcome" "$(date +%s)" > "$tmp" 2>/dev/null \
+  printf 'epoch=%s session_id=%s owner_pid=%s outcome=%s updated_at=%s\n' \
+    "$seq" "${CLAUDE_SESSION_ID:-unknown}" "${BASHPID:-$$}" "$outcome" "$(date +%s)" > "$tmp" 2>/dev/null \
     && mv -f "$tmp" "$EPOCH" 2>/dev/null
   rm -f "$tmp" 2>/dev/null || true
 }
@@ -155,6 +174,13 @@ else
 fi
 
 # --- classify and translate ---------------------------------------------------
+# A restart may have rebound this lock generation while the old session's arm
+# was still foregrounded. That old hook must not overwrite the new epoch or
+# deliver its close into the replacement session.
+if ! fm_session_lock_owned_by_self "$STATE" "$CLAUDE_SESSION_ID"; then
+  [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
+  exit 0
+fi
 # AFK may have appeared mid-cycle: the daemon owns triage now, so suppress the
 # rewake even for an actionable close.
 if [ -e "$STATE/.afk" ]; then

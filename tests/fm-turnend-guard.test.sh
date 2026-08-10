@@ -107,6 +107,7 @@ install_guard_scripts() {
   cp "$ROOT/bin/fm-primary-scope-lib.sh" "$dir/bin/fm-primary-scope-lib.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
+  cp "$ROOT/bin/fm-session-lock-lib.sh" "$dir/bin/fm-session-lock-lib.sh"
   mkdir -p "$dir/docs"
   cp -R "$ROOT/docs/supervision-protocols" "$dir/docs/supervision-protocols"
   chmod +x "$dir/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard-grok.sh" "$dir/bin/fm-operational-input.sh" "$dir/bin/fm-supervision-instructions.sh" "$dir/bin/fm-harness.sh"
@@ -979,6 +980,28 @@ test_hook_claude_mode_allows_on_fresh_rewake_epoch() {
   pass "fm-turnend-guard --claude: fresh rewake epoch prevents a duplicate continuation for the same event"
 }
 
+test_hook_claude_mode_rejects_pre_restart_owner_and_epoch() {
+  local dir pid out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-pre-restart-proofs")
+  : > "$dir/state/task1.meta"
+  printf '424242\n' > "$dir/state/.lock"
+  printf 'session_id=sess-claude-mode\nlock_pid=424242\n' \
+    > "$dir/state/.claude-primary-session"
+  sleep 60 &
+  pid=$!
+  mkdir -p "$dir/state/.claude-autoarm.lock"
+  printf '%s\n' "$pid" > "$dir/state/.claude-autoarm.lock/pid"
+  printf 'before-restart\n' > "$dir/state/.claude-autoarm.lock/session-id"
+  printf 'epoch=8 session_id=before-restart owner_pid=%s outcome=rewake updated_at=%s\n' \
+    "$pid" "$(date +%s)" > "$dir/state/.claude-autoarm-epoch"
+  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=200 run_hook_claude "$dir" true); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 2 "$status" "--claude mode must reject live-owner and fresh-epoch proofs from the pre-restart session"
+  assert_contains "$out" "Stop-owned auto-arm did not claim" "pre-restart proof rejection must use the missing-claim recovery path"
+  pass "fm-turnend-guard --claude: pre-restart owner and epoch cannot satisfy the rebound session"
+}
+
 test_hook_claude_mode_stale_rewake_epoch_blocks() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-claude-stale-epoch")
@@ -1131,6 +1154,7 @@ test_hook_claude_mode_reblocks_stop_hook_active_when_unhealthy
 test_hook_claude_mode_reblocks_x_mode_without_tasks
 test_hook_claude_mode_allows_when_autoarm_owner_alive
 test_hook_claude_mode_allows_on_fresh_rewake_epoch
+test_hook_claude_mode_rejects_pre_restart_owner_and_epoch
 test_hook_claude_mode_stale_rewake_epoch_blocks
 test_hook_claude_mode_block_budget_then_degraded_allow
 test_hook_claude_mode_allow_resets_budget

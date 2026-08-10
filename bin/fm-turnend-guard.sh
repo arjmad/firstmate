@@ -47,8 +47,9 @@
 #   2. otherwise wait briefly (FM_CLAUDE_AUTOARM_SYNC_WAIT_MS, default 800ms)
 #      for the auto-arm to claim this home (state/.claude-autoarm.lock owner
 #      alive) or to record a fresh rewake outcome (state/.claude-autoarm-epoch)
-#      for this event epoch - either proof allows without consuming a
-#      continuation, so one event epoch yields exactly one recovery turn;
+#      for this payload session and event epoch - either session-bound proof
+#      allows without consuming a continuation, so one event epoch yields
+#      exactly one recovery turn;
 #   3. only when neither materializes is the auto-arm genuinely absent: re-block
 #      with the repair banner, bounded to FM_CLAUDE_TURNEND_BLOCK_BUDGET
 #      (default 3) consecutive blocks per session - safely below Claude Code's
@@ -85,6 +86,8 @@ done
 . "$SCRIPT_DIR/fm-supervision-lib.sh"
 # shellcheck source=bin/fm-primary-scope-lib.sh
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
+# shellcheck source=bin/fm-session-lock-lib.sh
+. "$SCRIPT_DIR/fm-session-lock-lib.sh"
 
 # Read the whole turn-end hook payload once; never block on unreadable/absent
 # stdin.
@@ -97,6 +100,8 @@ PAYLOAD=$(cat 2>/dev/null || true)
 command -v jq >/dev/null 2>&1 || exit 0
 
 STOP_HOOK_ACTIVE=$(printf '%s' "$PAYLOAD" | jq -r '.stop_hook_active // false' 2>/dev/null) || exit 0
+CLAUDE_SESSION_ID=$(printf '%s' "$PAYLOAD" | jq -r '.session_id // empty' 2>/dev/null || true)
+fm_claude_session_id_valid "$CLAUDE_SESSION_ID" || CLAUDE_SESSION_ID=
 if [ "$CLAUDE_MODE" -eq 0 ] && [ "$STOP_HOOK_ACTIVE" = "true" ]; then
   exit 0
 fi
@@ -176,13 +181,33 @@ fi
 # The Stop-owned auto-arm fires on the same Stop event. Give it a brief bounded
 # window to prove it owns recovery for this event epoch before consuming one of
 # Claude's bounded continuations.
+autoarm_proof_matches_session() {  # <proof-session-id, empty for legacy>
+  local proof_session=$1 lock_pid
+  [ -n "$CLAUDE_SESSION_ID" ] || return 0
+  [ "$proof_session" = "$CLAUDE_SESSION_ID" ] && return 0
+  [ -z "$proof_session" ] || return 1
+  lock_pid=$(cat "$STATE/.lock" 2>/dev/null || true)
+  if fm_claude_session_binding_load "$STATE" \
+    && [ "$FM_CLAUDE_BOUND_LOCK_PID" = "$lock_pid" ]; then
+    return 1
+  fi
+  # Rollout compatibility: an old in-flight auto-arm has no session field and
+  # remains acceptable only while this lock generation has no authoritative
+  # Claude session binding of its own.
+  return 0
+}
+
 autoarm_owns_recovery() {
-  local pid outcome age
+  local pid owner_session outcome epoch_session age
   fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME" && return 0
   pid=$(cat "$STATE/.claude-autoarm.lock/pid" 2>/dev/null || true)
-  fm_pid_alive "$pid" && return 0
+  owner_session=$(cat "$STATE/.claude-autoarm.lock/session-id" 2>/dev/null || true)
+  if fm_pid_alive "$pid" && autoarm_proof_matches_session "$owner_session"; then
+    return 0
+  fi
   outcome=$(sed -n 's/^.*outcome=\([a-z][a-z]*\) .*$/\1/p' "$STATE/.claude-autoarm-epoch" 2>/dev/null || true)
-  if [ "$outcome" = rewake ]; then
+  epoch_session=$(sed -n 's/^.*session_id=\([^ ]*\) .*$/\1/p' "$STATE/.claude-autoarm-epoch" 2>/dev/null || true)
+  if [ "$outcome" = rewake ] && autoarm_proof_matches_session "$epoch_session"; then
     age=$(fm_path_age "$STATE/.claude-autoarm-epoch")
     [ "$age" -lt "$EPOCH_FRESH" ] && return 0
   fi
@@ -206,7 +231,7 @@ fi
 # The auto-arm genuinely failed to establish: re-block, but never past the
 # budget so the session can always end and Claude's 8-block override is never
 # approached.
-SESSION_ID=$(printf '%s' "$PAYLOAD" | jq -r '.session_id // "unknown"' 2>/dev/null || printf 'unknown')
+SESSION_ID=${CLAUDE_SESSION_ID:-unknown}
 COUNT=0
 if [ -f "$BUDGET_FILE" ]; then
   old_session=$(sed -n '1s/^session=//p' "$BUDGET_FILE" 2>/dev/null || true)

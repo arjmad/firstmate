@@ -106,6 +106,7 @@ fm_lock_clean_known_files() {
     "$lockdir/fm-home" \
     "$lockdir/pid-identity" \
     "$lockdir/watcher-path" \
+    "$lockdir/session-id" \
     2>/dev/null || true
 }
 

@@ -33,7 +33,7 @@ Claude Code's stdin payload to a Stop hook carries a `stop_hook_active` boolean 
 A project-level `.claude/settings.json` only takes effect when Claude Code's project root is that exact directory - it does not walk up from a subdirectory looking for one, so firstmate launches the primary from the repo root.
 After those settings are loaded, hook command resolution is still cwd-sensitive because Claude Code runs commands through `/bin/sh` against the session's current cwd; keep the tracked commands anchored through `"$CLAUDE_PROJECT_DIR"/bin/...` and see `docs/turnend-guard.md` for the verified Stop-hook details.
 Claude Code's primary watcher protocol is Stop-owned: the auto-arm hook fires on every Stop and foregrounds `bin/fm-watch-arm.sh` when the home is eligible and still needs supervision, and its exit-2 `asyncRewake` rewake is the wake; the model drains and handles wakes but never runs a routine re-arm command.
-`docs/watcher-continuity.md` owns lock identity across ordinary, takeover, and restarted-session Stop-hook lanes.
+`docs/watcher-continuity.md` owns lock identity across ordinary, takeover, and restarted-session Stop-hook lanes, including SessionStart payload rebinding when a restart retains the outer lock owner.
 
 ## Primary session-start nudge
 

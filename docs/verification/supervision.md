@@ -122,6 +122,18 @@ Pi 0.81.1 repeated the continuity and clean-exit lifecycle on 2026-07-23 after t
 On 2026-08-08, GNU Bash 3.2.57(1)-release and jq 1.7.1 ran `tests/fm-claude-stop-autoarm.test.sh` against scratch homes with no live watcher or Claude session.
 The registered-order fixture reported `ok - auto-arm: ordinary cycle close reclaims before the synchronous guard` after observing two actionable arm closes, guard exit 0, successor auto-arm exit 2, and no guard-budget file.
 
+On 2026-08-10, GNU Bash 3.2.57(1)-release and jq 1.7.1 ran the retained-owner restart regression and cooperative guard suite against scratch homes without starting, stopping, or killing a live watcher.
+
+```sh
+bin/fm-test-run.sh tests/fm-claude-stop-autoarm.test.sh
+bin/fm-test-run.sh tests/fm-turnend-guard.test.sh
+bin/fm-test-run.sh tests/fm-sessionstart-nudge.test.sh
+```
+
+The retained-owner fixture reported `ok - auto-arm: restarted session rebinds a retained lock owner before a distinct Stop lane claims` after SessionStart replaced the old payload binding, the distinct lane armed, the guard returned 0, and the auto-arm epoch named the new session.
+The replacement-owner fixture reported `ok - auto-arm: new restart owner promotes SessionStart identity before a distinct Stop lane claims`, and its negative control reported `ok - fm-lock: a lock winner cannot promote another Claude session's pending binding`.
+The guard counterfactual reported `ok - fm-turnend-guard --claude: pre-restart owner and epoch cannot satisfy the rebound session` while a live old owner and fresh old rewake epoch were both present.
+
 Deterministic entry points:
 
 ```sh

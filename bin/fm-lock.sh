@@ -86,4 +86,8 @@ if [ ! -f "$LOCK" ] || [ -L "$LOCK" ] || [ "$written" != "$me" ]; then
   exit 1
 fi
 release_claim_lock
+# A Claude SessionStart hook runs before the model can acquire this lock. Its
+# pid-bound proposal is inert until this exact resolved harness owner wins; a
+# matching fresh proposal now becomes the Stop-hook session binding.
+fm_claude_session_pending_promote "$STATE" >/dev/null 2>&1 || true
 echo "lock acquired: harness pid $me"

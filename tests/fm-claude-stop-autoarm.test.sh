@@ -70,7 +70,11 @@ install_autoarm_scripts() {
   cp "$ROOT/bin/fm-session-lock-lib.sh" "$dir/bin/fm-session-lock-lib.sh"
   cp "$ROOT/bin/fm-lock.sh" "$dir/bin/fm-lock.sh"
   cp "$ROOT/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard.sh"
-  chmod +x "$dir/bin/fm-claude-stop-autoarm.sh" "$dir/bin/fm-lock.sh" "$dir/bin/fm-turnend-guard.sh"
+  cp "$ROOT/bin/fm-sessionstart-nudge.sh" "$dir/bin/fm-sessionstart-nudge.sh"
+  cp "$ROOT/bin/fm-gate-refuse-lib.sh" "$dir/bin/fm-gate-refuse-lib.sh"
+  cp "$ROOT/bin/fm-operational-input.sh" "$dir/bin/fm-operational-input.sh"
+  chmod +x "$dir/bin/fm-claude-stop-autoarm.sh" "$dir/bin/fm-lock.sh" \
+    "$dir/bin/fm-turnend-guard.sh" "$dir/bin/fm-sessionstart-nudge.sh"
 }
 
 make_primary_dir() {
@@ -451,6 +455,170 @@ SH
   pass "auto-arm: restarted-session daemon lane claims its live ancestral Claude lock owner"
 }
 
+test_restarted_session_rebinds_retained_owner_to_new_stop_session() {
+  local dir rc guard_rc auto_rc rebound_session epoch_session nudge
+  dir=$(make_primary_dir "$TMP_ROOT/restarted-retained-owner")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" slow-actionable
+
+  cat > "$dir/bin/restarted-retained-owner-fixture.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+auto_pid=
+cleanup() {
+  [ -n "$auto_pid" ] || return 0
+  kill "$auto_pid" 2>/dev/null || true
+  wait "$auto_pid" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+# A harness restart can retain the outer Claude owner recorded in .lock while
+# assigning a new Claude session id. The SessionStart hook still belongs to the
+# retained owner, but a later Stop hook runs through a distinct Claude lane
+# with its own valid CLAUDE_PID. The earlier restart fixture modeled only a
+# CLAUDE_PID-less descendant, so this retained-owner shape needs its own proof.
+printf '%s\n' "$CLAUDE_PID" > "$FM_HOME/state/.lock"
+printf 'session_id=before-restart\nlock_pid=%s\n' "$CLAUDE_PID" \
+  > "$FM_HOME/state/.claude-primary-session"
+printf 'epoch=12 session_id=before-restart owner_pid=%s outcome=rewake updated_at=%s\n' \
+  "$CLAUDE_PID" "$(date +%s)" > "$FM_HOME/state/.claude-autoarm-epoch"
+
+session_payload='{"hook_event_name":"SessionStart","session_id":"after-restart"}'
+printf '%s\n' "$session_payload" \
+  | "$FM_HOME/bin/fm-sessionstart-nudge.sh" --claude \
+      > "$FM_HOME/state/restart-nudge.out" 2> "$FM_HOME/state/restart-nudge.err"
+
+stop_payload='{"session_id":"after-restart","stop_hook_active":false}'
+printf '%s\n' "$stop_payload" \
+  | CLAUDE_PID= "$FAKE_CLAUDE" -c '"$FM_HOME/bin/fm-claude-stop-autoarm.sh"' \
+      > "$FM_HOME/state/restart-retained-auto.out" \
+      2> "$FM_HOME/state/restart-retained-auto.err" &
+auto_pid=$!
+
+guard_rc=0
+printf '%s\n' "$stop_payload" \
+  | FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=5000 "$FM_HOME/bin/fm-turnend-guard.sh" --claude \
+      > "$FM_HOME/state/restart-retained-guard.out" \
+      2> "$FM_HOME/state/restart-retained-guard.err" || guard_rc=$?
+printf '%s\n' "$guard_rc" > "$FM_HOME/state/restart-retained-guard.rc"
+
+auto_rc=0
+wait "$auto_pid" || auto_rc=$?
+auto_pid=
+printf '%s\n' "$auto_rc" > "$FM_HOME/state/restart-retained-auto.rc"
+SH
+  chmod +x "$dir/bin/restarted-retained-owner-fixture.sh"
+
+  rc=0
+  FM_HOME="$dir" "$FAKE_CLAUDE" -c \
+    '"$FM_HOME/bin/restarted-retained-owner-fixture.sh"' || rc=$?
+  expect_code 0 "$rc" "retained-owner restart fixture must complete"
+  nudge=$(cat "$dir/state/restart-nudge.out" "$dir/state/restart-nudge.err")
+  [ -z "$nudge" ] || fail "owned restarted SessionStart must bind silently, got: $nudge"
+  rebound_session=$(sed -n 's/^session_id=//p' "$dir/state/.claude-primary-session")
+  [ "$rebound_session" = after-restart ] \
+    || fail "SessionStart did not replace the retained owner's old session binding: $rebound_session"
+  guard_rc=$(cat "$dir/state/restart-retained-guard.rc")
+  auto_rc=$(cat "$dir/state/restart-retained-auto.rc")
+  expect_code 0 "$guard_rc" "guard must allow the retained-owner restart's session-bound auto-arm claim"
+  expect_code 2 "$auto_rc" "distinct Stop lane must claim through the rebound Claude session id"
+  [ -e "$dir/state/arm-ran" ] || fail "retained-owner restarted session never armed"
+  epoch_session=$(sed -n 's/^.*session_id=\([^ ]*\) .*$/\1/p' "$dir/state/.claude-autoarm-epoch")
+  [ "$epoch_session" = after-restart ] \
+    || fail "auto-arm epoch kept the pre-restart session binding: $epoch_session"
+  pass "auto-arm: restarted session rebinds a retained lock owner before a distinct Stop lane claims"
+}
+
+test_restarted_session_promotes_new_owner_before_distinct_stop_claim() {
+  local dir rc guard_rc auto_rc rebound_session epoch_session nudge
+  dir=$(make_primary_dir "$TMP_ROOT/restarted-new-owner-distinct-stop")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" slow-actionable
+  printf '9999999\n' > "$dir/state/.lock"
+  printf 'session_id=before-restart\nlock_pid=9999999\n' \
+    > "$dir/state/.claude-primary-session"
+  printf 'epoch=15 session_id=before-restart owner_pid=9999999 outcome=rewake updated_at=%s\n' \
+    "$(date +%s)" > "$dir/state/.claude-autoarm-epoch"
+
+  cat > "$dir/bin/restarted-new-owner-fixture.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+auto_pid=
+cleanup() {
+  [ -n "$auto_pid" ] || return 0
+  kill "$auto_pid" 2>/dev/null || true
+  wait "$auto_pid" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+# SessionStart runs before the replacement outer Claude process can reclaim the
+# stale home lock. Its pid-bound proposal must be promoted by fm-lock.sh so a
+# later Stop lane with its own CLAUDE_PID can use the payload session identity.
+session_payload='{"hook_event_name":"SessionStart","session_id":"after-new-owner-restart"}'
+printf '%s\n' "$session_payload" \
+  | "$FM_HOME/bin/fm-sessionstart-nudge.sh" --claude \
+      > "$FM_HOME/state/new-owner-nudge.out" 2> "$FM_HOME/state/new-owner-nudge.err"
+"$FM_HOME/bin/fm-lock.sh" > "$FM_HOME/state/new-owner-lock.out"
+
+stop_payload='{"session_id":"after-new-owner-restart","stop_hook_active":false}'
+printf '%s\n' "$stop_payload" \
+  | CLAUDE_PID= "$FAKE_CLAUDE" -c '"$FM_HOME/bin/fm-claude-stop-autoarm.sh"' \
+      > "$FM_HOME/state/new-owner-auto.out" 2> "$FM_HOME/state/new-owner-auto.err" &
+auto_pid=$!
+
+guard_rc=0
+printf '%s\n' "$stop_payload" \
+  | FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=5000 "$FM_HOME/bin/fm-turnend-guard.sh" --claude \
+      > "$FM_HOME/state/new-owner-guard.out" 2> "$FM_HOME/state/new-owner-guard.err" || guard_rc=$?
+printf '%s\n' "$guard_rc" > "$FM_HOME/state/new-owner-guard.rc"
+
+auto_rc=0
+wait "$auto_pid" || auto_rc=$?
+auto_pid=
+printf '%s\n' "$auto_rc" > "$FM_HOME/state/new-owner-auto.rc"
+SH
+  chmod +x "$dir/bin/restarted-new-owner-fixture.sh"
+
+  rc=0
+  FM_HOME="$dir" "$FAKE_CLAUDE" -c \
+    '"$FM_HOME/bin/restarted-new-owner-fixture.sh"' || rc=$?
+  expect_code 0 "$rc" "new-owner restart fixture must complete"
+  nudge=$(cat "$dir/state/new-owner-nudge.out" "$dir/state/new-owner-nudge.err")
+  assert_contains "$nudge" "bin/fm-session-start.sh" "unowned restarted SessionStart must still emit the digest instruction"
+  rebound_session=$(sed -n 's/^session_id=//p' "$dir/state/.claude-primary-session")
+  [ "$rebound_session" = after-new-owner-restart ] \
+    || fail "new lock owner did not promote its SessionStart proposal: $rebound_session"
+  [ ! -e "$dir/state/.claude-primary-session.pending" ] \
+    || fail "promoted SessionStart proposal was not retired"
+  guard_rc=$(cat "$dir/state/new-owner-guard.rc")
+  auto_rc=$(cat "$dir/state/new-owner-auto.rc")
+  expect_code 0 "$guard_rc" "guard must allow the new-owner restart's session-bound auto-arm claim"
+  expect_code 2 "$auto_rc" "distinct Stop lane must claim after the new lock owner promotes its session id"
+  [ -e "$dir/state/arm-ran" ] || fail "new-owner restarted session never armed"
+  epoch_session=$(sed -n 's/^.*session_id=\([^ ]*\) .*$/\1/p' "$dir/state/.claude-autoarm-epoch")
+  [ "$epoch_session" = after-new-owner-restart ] \
+    || fail "new-owner epoch kept the pre-restart session binding: $epoch_session"
+  pass "auto-arm: new restart owner promotes SessionStart identity before a distinct Stop lane claims"
+}
+
+test_lock_winner_cannot_promote_another_sessionstart_proposal() {
+  local dir rc
+  dir=$(make_primary_dir "$TMP_ROOT/session-proposal-competitor")
+
+  printf '%s\n' '{"hook_event_name":"SessionStart","session_id":"losing-session"}' \
+    | FM_HOME="$dir" "$FAKE_CLAUDE" -c \
+        '"$FM_HOME/bin/fm-sessionstart-nudge.sh" --claude >/dev/null'
+  [ -f "$dir/state/.claude-primary-session.pending" ] \
+    || fail "unowned SessionStart did not leave its pid-bound proposal"
+
+  rc=0
+  FM_HOME="$dir" "$FAKE_CLAUDE" -c '"$FM_HOME/bin/fm-lock.sh" >/dev/null' || rc=$?
+  expect_code 0 "$rc" "a separate Claude session must still be able to acquire the free home lock"
+  [ ! -e "$dir/state/.claude-primary-session" ] \
+    || fail "lock winner promoted a different SessionStart process's proposal"
+  pass "fm-lock: a lock winner cannot promote another Claude session's pending binding"
+}
+
 test_inherited_claude_pid_does_not_override_nested_non_claude() {
   local dir owner expected
   dir=$(make_primary_dir "$TMP_ROOT/nested-non-claude")
@@ -505,6 +673,8 @@ test_nested_distinct_claude_session_cannot_use_outer_claude_lock() {
   rc=0
   FM_HOME="$dir" "$FAKE_CLAUDE" -c '
     "$FM_HOME/bin/fm-lock.sh" >/dev/null
+    printf "session_id=outer-claude\nlock_pid=%s\n" "$CLAUDE_PID" \
+      > "$FM_HOME/state/.claude-primary-session"
     printf "%s\n" "{\"session_id\":\"nested-claude\"}" \
       | CLAUDE_PID= "$FAKE_CLAUDE" -c '\''"$FM_HOME/bin/fm-claude-stop-autoarm.sh"'\''
   ' || rc=$?
@@ -798,6 +968,9 @@ test_inert_in_child_worktree
 test_inert_without_session_lock
 test_mid_session_takeover_claims_with_stable_claude_owner
 test_restarted_session_hook_lane_claims_ancestral_lock_owner
+test_restarted_session_rebinds_retained_owner_to_new_stop_session
+test_restarted_session_promotes_new_owner_before_distinct_stop_claim
+test_lock_winner_cannot_promote_another_sessionstart_proposal
 test_inherited_claude_pid_does_not_override_nested_non_claude
 test_nested_non_claude_lane_cannot_use_outer_claude_lock
 test_nested_distinct_claude_session_cannot_use_outer_claude_lock

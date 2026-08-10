@@ -154,8 +154,9 @@ test_tracked_harness_registration() {
     || fail "Claude SessionStart hook is not registered exactly once"
   jq -e '.hooks.SessionStart[0].matcher == "startup|resume|clear"' "$ROOT/.claude/settings.json" >/dev/null \
     || fail "Claude SessionStart matcher must include startup/resume/clear and exclude compact"
-  jq -e 'any(.hooks.SessionStart[]?.hooks[]?.command?; contains("fm-sessionstart-nudge.sh"))' \
-    "$ROOT/.claude/settings.json" >/dev/null || fail "Claude SessionStart hook does not invoke the wrapper"
+  jq -e 'any(.hooks.SessionStart[]?.hooks[]?.command?; contains("fm-sessionstart-nudge.sh --claude"))' \
+    "$ROOT/.claude/settings.json" >/dev/null \
+    || fail "Claude SessionStart hook does not invoke the wrapper's session-binding mode"
 
   command=$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$ROOT/.codex/hooks.json")
   # shellcheck disable=SC2016
