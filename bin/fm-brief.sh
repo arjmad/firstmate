@@ -383,6 +383,19 @@ $RULE1
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
 
+# Registry same-change rule
+
+The Heimdall Registry owns generated facts about live reality: PM2 names, ports, live surfaces, remotes and branches, hosts, MCP inventories, model versions, schedules, and backup posture.
+
+**If your change adds, removes, renames, or reconfigures any fact the Registry owns, update the Registry inventory in the same change.**
+
+This is not limited to adding or removing a whole lane or repository.
+Deleting a scheduled job, changing a port, retiring a service, and moving a host all qualify.
+
+A change that alters live reality without updating the model leaves the Registry asserting something false, and its drift checks will then report your correct change as a fault.
+
+If you genuinely cannot update the Registry in the same change, say so explicitly in your handoff or PR body so it is tracked, rather than leaving it for drift detection to find.
+
 # Project memory
 If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.
 Record only project knowledge useful to almost every future session.
