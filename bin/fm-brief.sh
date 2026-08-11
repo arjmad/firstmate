@@ -400,7 +400,8 @@ A change that alters live reality without updating the model leaves the Registry
 If you genuinely cannot update the Registry in the same change, say so explicitly in your handoff or PR body so it is tracked, rather than leaving it for drift detection to find.
 
 Rule 2 outranks that obligation: if the inventory lives outside this worktree, do not leave the worktree to update it and do not go looking for it.
-Use the handoff instead - name the Registry-owned fact you changed in your PR body, or in your \`done:\` line when you open no PR - so firstmate carries the update.
+Use the handoff instead - name the Registry-owned fact you changed in your commit message and in your \`done:\` line, the two channels you own in every delivery mode - so firstmate carries the update.
+Add it to the PR body as well only when you author that body yourself; never hand-edit a PR body the pipeline owns.
 
 # Project memory
 If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.
