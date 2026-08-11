@@ -385,6 +385,9 @@ $RULE1
 
 # Registry same-change rule
 
+Here "Registry" means your fleet's generated inventory of live reality, not firstmate's project registry in \`data/projects.md\`; skip this section if your fleet keeps no such inventory.
+The rule text below is quoted verbatim from the captain's canonical copy and names the Heimdall fleet's instance; read it as your fleet's equivalent.
+
 The Heimdall Registry owns generated facts about live reality: PM2 names, ports, live surfaces, remotes and branches, hosts, MCP inventories, model versions, schedules, and backup posture.
 
 **If your change adds, removes, renames, or reconfigures any fact the Registry owns, update the Registry inventory in the same change.**
@@ -395,6 +398,9 @@ Deleting a scheduled job, changing a port, retiring a service, and moving a host
 A change that alters live reality without updating the model leaves the Registry asserting something false, and its drift checks will then report your correct change as a fault.
 
 If you genuinely cannot update the Registry in the same change, say so explicitly in your handoff or PR body so it is tracked, rather than leaving it for drift detection to find.
+
+Rule 2 outranks that obligation: if the inventory lives outside this worktree, do not leave the worktree to update it and do not go looking for it.
+Use the handoff instead - name the Registry-owned fact you changed in your PR body, or in your \`done:\` line when you open no PR - so firstmate carries the update.
 
 # Project memory
 If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.

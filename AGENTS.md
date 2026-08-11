@@ -219,6 +219,9 @@ Route durable knowledge to its most specific owner:
 
 ### Registry same-change rule
 
+In this subsection only, "Registry" means a fleet's generated inventory of live reality, not firstmate's project registry in `data/projects.md`.
+The rule text below is quoted verbatim from the captain's canonical copy and names the Heimdall fleet's instance; read it as your own fleet's equivalent inventory, and skip the subsection entirely if your fleet keeps none.
+
 The Heimdall Registry owns generated facts about live reality: PM2 names, ports, live surfaces, remotes and branches, hosts, MCP inventories, model versions, schedules, and backup posture.
 
 **If your change adds, removes, renames, or reconfigures any fact the Registry owns, update the Registry inventory in the same change.**
