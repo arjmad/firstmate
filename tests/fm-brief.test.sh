@@ -136,6 +136,110 @@ test_ship_project_memory_wording() {
   pass "fm-brief.sh: ship project-memory wording carries the AGENTS.md authoring bar"
 }
 
+# The Registry same-change obligation must reach every ordinary ship delivery
+# mode - including a --herdr-lab ship brief, whose Herdr section is spliced into
+# the same ship body - exactly once, and must stay out of the scout and
+# secondmate contracts. The rule paragraphs are the captain's canonical copy
+# quoted verbatim, so pin the sentences rather than a paraphrase: a reworded
+# obligation is a different rule.
+assert_registry_rule_once() {
+  local brief=$1 label=$2 count
+  count=$(grep -cF -- '# Registry same-change rule' "$brief")
+  [ "$count" = 1 ] || fail "$label: Registry section must appear exactly once (found $count)"
+  assert_grep 'not firstmate' "$brief" \
+    "$label: Registry section lost the data/projects.md disambiguation"
+  assert_grep 'The Heimdall Registry owns generated facts about live reality: PM2 names, ports, live surfaces, remotes and branches, hosts, MCP inventories, model versions, schedules, and backup posture.' "$brief" \
+    "$label: Registry section lost the canonical owned-facts sentence"
+  assert_grep '**If your change adds, removes, renames, or reconfigures any fact the Registry owns, update the Registry inventory in the same change.**' "$brief" \
+    "$label: Registry section lost the canonical same-change obligation"
+  assert_grep 'This is not limited to adding or removing a whole lane or repository.' "$brief" \
+    "$label: Registry section lost the canonical scope sentence"
+  assert_grep 'Deleting a scheduled job, changing a port, retiring a service, and moving a host all qualify.' "$brief" \
+    "$label: Registry section lost the canonical qualifying examples"
+  assert_grep 'A change that alters live reality without updating the model leaves the Registry asserting something false, and its drift checks will then report your correct change as a fault.' "$brief" \
+    "$label: Registry section lost the canonical drift-fault rationale"
+  assert_grep 'If you genuinely cannot update the Registry in the same change, say so explicitly in your handoff or PR body so it is tracked, rather than leaving it for drift detection to find.' "$brief" \
+    "$label: Registry section lost the canonical escape hatch"
+  assert_grep 'Rule 2 outranks that obligation' "$brief" \
+    "$label: Registry section stopped subordinating itself to worktree isolation"
+  assert_grep 'name the Registry-owned fact you changed in your commit message and in your `done:` line' "$brief" \
+    "$label: Registry section lost the crewmate-owned handoff channels"
+  assert_grep 'never hand-edit a PR body the pipeline owns' "$brief" \
+    "$label: Registry section stopped protecting a pipeline-owned PR body"
+}
+
+# The obligation is additive: every pre-existing ship safety boundary must still
+# render alongside it.
+assert_ship_boundaries_intact() {
+  local brief=$1 label=$2
+  assert_grep '**Verify isolation before anything else.**' "$brief" \
+    "$label: ship brief lost the worktree-isolation assertion"
+  assert_grep 'blocked: launched in primary checkout, not an isolated worktree' "$brief" \
+    "$label: ship brief lost the primary-checkout stop condition"
+  assert_grep '2. Stay inside this worktree; modify nothing outside it.' "$brief" \
+    "$label: ship brief lost rule 2 worktree containment"
+  assert_grep 'States: working, needs-decision, blocked, paused, done, failed.' "$brief" \
+    "$label: ship brief lost the status protocol vocabulary"
+  assert_grep '# Definition of done' "$brief" \
+    "$label: ship brief lost its definition of done"
+}
+
+test_registry_rule_reaches_every_ship_mode_once() {
+  local home id proj brief
+  home="$TMP_ROOT/registry-rule-home"
+  write_registry "$home"
+
+  for id_proj in "brief-reg-nm:no-registry-proj" "brief-reg-dpr:direct-proj" "brief-reg-loc:local-proj"; do
+    id=${id_proj%%:*}
+    proj=${id_proj##*:}
+    FM_HOME="$home" FM_CLASSIFY_PAUSED_VERB=paused \
+      "$ROOT/bin/fm-brief.sh" "$id" "$proj" >/dev/null 2>&1
+    brief="$home/data/$id/brief.md"
+    assert_present "$brief" "$id: brief was not scaffolded"
+    assert_registry_rule_once "$brief" "$id"
+    assert_ship_boundaries_intact "$brief" "$id"
+  done
+
+  # Herdr-lab ship briefs are the same ship body with the isolation contract
+  # spliced in, so the obligation must arrive there too - once, and without
+  # displacing the hard Herdr safety contract.
+  FM_HOME="$home" FM_CLASSIFY_PAUSED_VERB=paused \
+    "$ROOT/bin/fm-brief.sh" brief-reg-lab local-proj --herdr-lab >/dev/null 2>&1
+  brief="$home/data/brief-reg-lab/brief.md"
+  assert_present "$brief" "Herdr-lab ship brief was not scaffolded"
+  assert_registry_rule_once "$brief" "brief-reg-lab"
+  assert_ship_boundaries_intact "$brief" "brief-reg-lab"
+  assert_grep '# Herdr isolation - HARD SAFETY CONTRACT' "$brief" \
+    "Herdr-lab ship brief lost its hard safety contract to the Registry section"
+  pass "fm-brief.sh: Registry same-change rule reaches every ship delivery mode exactly once"
+}
+
+test_registry_rule_does_not_touch_scout_or_secondmate() {
+  local home brief
+  home="$TMP_ROOT/registry-rule-variants-home"
+  mkdir -p "$home/data"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-reg-scout alpha --scout >/dev/null 2>&1
+  brief="$home/data/brief-reg-scout/brief.md"
+  assert_present "$brief" "scout brief was not scaffolded"
+  assert_no_grep '# Registry same-change rule' "$brief" \
+    "scout contract must not carry the ship-only Registry obligation"
+  assert_grep 'SCOUT task' "$brief" "scout brief stopped declaring itself a scout task"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-reg-scout-lab alpha --scout --herdr-lab >/dev/null 2>&1
+  brief="$home/data/brief-reg-scout-lab/brief.md"
+  assert_no_grep '# Registry same-change rule' "$brief" \
+    "Herdr-lab scout contract must not carry the ship-only Registry obligation"
+
+  FM_SECONDMATE_CHARTER='Supervise the alpha domain.' FM_HOME="$home" \
+    "$ROOT/bin/fm-brief.sh" brief-reg-mate --secondmate alpha >/dev/null 2>&1
+  brief="$home/data/brief-reg-mate/brief.md"
+  assert_present "$brief" "secondmate charter was not scaffolded"
+  assert_no_grep '# Registry same-change rule' "$brief" \
+    "secondmate charter must not carry the ship-only Registry obligation"
+  pass "fm-brief.sh: Registry same-change rule leaves scout and secondmate variants untouched"
+}
+
 test_herdr_lab_contract_is_explicit_and_complete() {
   local home id brief
   home="$TMP_ROOT/herdr-lab-home"
@@ -392,6 +496,8 @@ test_ship_modes_generate_clean_briefs
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
 test_ship_project_memory_wording
+test_registry_rule_reaches_every_ship_mode_once
+test_registry_rule_does_not_touch_scout_or_secondmate
 test_herdr_lab_contract_is_explicit_and_complete
 test_herdr_lab_contract_quotes_foreign_firstmate_path
 test_herdr_lab_omission_is_loud_for_ship_and_scout

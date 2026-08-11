@@ -39,6 +39,14 @@
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
 # "blocked:": pause for a known external wait expected to clear on its own,
 # blocked when firstmate must act.
+# Ship tasks include a Registry same-change section, quoting the captain's
+# canonical rule verbatim: a change that adds, removes, renames, or reconfigures
+# a fact the fleet's generated live-reality inventory owns must update that
+# inventory in the same change. It is emitted once into the shared ship body, so
+# it reaches every delivery mode including --herdr-lab, and it is absent from the
+# scout and secondmate scaffolds. Worktree isolation outranks it: rather than
+# leave the worktree to find the inventory, the crewmate names the changed fact
+# in its commit message and "done:" line so firstmate carries the update.
 # Ship tasks include a project-memory section so durable project-intrinsic
 # learnings can be committed to AGENTS.md through the project's delivery path;
 # it carries the AGENTS.md authoring bar (widely useful knowledge only, pointers
