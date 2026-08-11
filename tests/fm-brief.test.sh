@@ -9,6 +9,10 @@
 # parsing of the *entire rest of the script* - `bash -n` fails, not just the
 # generated brief. A plain `cat > file <<EOF ... EOF` (not wrapped in `$(...)`)
 # is unaffected, so the secondmate charter block does not need this guard.
+#
+# Assertion needles are literal excerpts of the generated brief, so they are
+# single-quoted on purpose: `$`, backticks and `**` must reach grep unexpanded.
+# shellcheck disable=SC2016
 set -u
 
 # shellcheck source=tests/lib.sh
