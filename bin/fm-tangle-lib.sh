@@ -68,6 +68,19 @@ EOF
   return 0
 }
 
+# Prefer the CALLER's spelling of the primary when it already is the primary.
+# fm_primary_checkout_dir returns git's physical path, so on a platform where the
+# caller's path traverses a symlink (macOS /var -> /private/var) the remediation
+# command would otherwise name a different-looking directory than the operator
+# handed in. Same directory, same command, familiar spelling; a genuinely
+# different primary (the linked-worktree case) still shows its own path.
+fm_primary_checkout_display() {  # <resolved-primary> <caller-dir>
+  local resolved=$1 caller=$2 rp cp
+  rp=$(cd "$resolved" 2>/dev/null && pwd -P) || { printf '%s\n' "$resolved"; return 0; }
+  cp=$(cd "$caller" 2>/dev/null && pwd -P) || { printf '%s\n' "$resolved"; return 0; }
+  if [ "$rp" = "$cp" ]; then printf '%s\n' "$caller"; else printf '%s\n' "$resolved"; fi
+}
+
 fm_primary_tangle_branch() {
   local dir=$1 root cur default
   root=$(fm_primary_checkout_dir "$dir") || return 1

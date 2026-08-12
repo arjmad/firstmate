@@ -130,6 +130,7 @@ tangle_root=$(fm_primary_checkout_dir "$FM_ROOT" 2>/dev/null || true)
 tangle_branch=
 [ -z "$tangle_root" ] || tangle_branch=$(fm_primary_tangle_branch "$tangle_root" || true)
 if [ -n "$tangle_branch" ]; then
+  tangle_root=$(fm_primary_checkout_display "$tangle_root" "$FM_ROOT")
   tangle_default=$(fm_default_branch "$tangle_root" 2>/dev/null || echo main)
   trule='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
   {
