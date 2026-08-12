@@ -2,7 +2,7 @@
 
 Grok Build TUI (`grok`), a Claude-Code-compatible CLI from xAI.
 Launch with a positional prompt: `grok --always-approve "$(cat <brief>)"`.
-For Grok's supported reasoning-effort values and omission behavior, see the [launch-profile-axes table](#launch-profile-axes).
+For Grok's supported reasoning-effort values and omission behavior, see the [launch-profile-axes table](../SKILL.md#launch-profile-axes) in this skill's core.
 
 | Fact | Value |
 |---|---|
