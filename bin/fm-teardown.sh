@@ -45,6 +45,10 @@
 # Projected closes share the presentation-order lock, refuse to close the
 # captain's active tab, and restore the exact response-derived pre-close tab
 # if Herdr's last-pane cleanup focuses an unrelated neighboring workspace.
+# Before returning an ordinary task worktree, teardown also removes every
+# helper-owned Herdr lab session named for that exact task. The shell EXIT trap
+# in a Herdr-lab brief remains best-effort; this durable task cleanup survives
+# the worker process that created the lab.
 # Secondmates (kind=secondmate in meta) are retired explicitly. Normal
 # teardown refuses while their home has in-flight crewmate meta files; --force
 # is the approved discard path that prevalidates child removal targets, locks each
@@ -2386,6 +2390,26 @@ fi
 # Fix 3 (see script header): sweep remote job workers abandoned by an already
 # pruned code root. Best effort - a sweep failure never blocks this teardown.
 "$SCRIPT_DIR/fm-remote-job-reap-orphans.sh" >&2 || true
+
+# Remove every helper-owned Herdr lab session named for this exact task, matched
+# by the deterministic task token so a truncated label cannot reach a sibling
+# task's lab. A Herdr-lab brief installs an EXIT trap for the same cleanup, but
+# that trap dies with the worker shell; this is the durable half, and it runs
+# after every unlanded-work refusal above so it can never soften one. An
+# unreachable Herdr warns with the exact leftover ownership records and still
+# returns the worktree.
+FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+  "$SCRIPT_DIR/fm-herdr-lab.sh" teardown-task "$ID" || {
+    echo "WARNING: Herdr lab cleanup failed for task $ID; returning the worktree anyway." >&2
+    echo "WARNING: leftover lab ownership records for this task:" >&2
+    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+      "$SCRIPT_DIR/fm-herdr-lab.sh" tripwires "$ID" 2>/dev/null \
+      | while IFS= read -r leftover_lab; do
+          [ -n "$leftover_lab" ] || continue
+          echo "WARNING:   $leftover_lab" >&2
+        done
+    echo "WARNING: rerun '$SCRIPT_DIR/fm-herdr-lab.sh' teardown-task $ID once Herdr is reachable." >&2
+  }
 
 # A Herdr close may reposition shared workspace order, so the whole
 # destructive sequence below (worktree return, pane close, record removal)
