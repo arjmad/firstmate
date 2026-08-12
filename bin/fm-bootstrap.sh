@@ -1158,16 +1158,21 @@ detect_local_tools() {
 }
 
 detect_local_config() {
-  # Worktree-tangle check: the firstmate primary checkout (FM_ROOT) must sit on its
-  # default branch, not a feature branch (see fm-tangle-lib.sh). Scoped to the
-  # primary only; detached-HEAD worktrees and secondmate homes never trip it.
-  tangle_branch=$(fm_primary_tangle_branch "$FM_ROOT" 2>/dev/null || true)
+  # Worktree-tangle check: the firstmate primary checkout must sit on its default
+  # branch, not a feature branch (see fm-tangle-lib.sh). The primary is resolved
+  # from FM_ROOT rather than assumed to be it, because a session started inside a
+  # linked task worktree would otherwise read its own fm/<id> branch as the tangle.
+  # Scoped to the primary only; detached-HEAD worktrees and secondmate homes never
+  # trip it.
+  tangle_root=$(fm_primary_checkout_dir "$FM_ROOT" 2>/dev/null || true)
+  tangle_branch=
+  [ -z "$tangle_root" ] || tangle_branch=$(fm_primary_tangle_branch "$tangle_root" 2>/dev/null || true)
   if [ -n "$tangle_branch" ]; then
-    tangle_default=$(fm_default_branch "$FM_ROOT" 2>/dev/null || echo main)
+    tangle_default=$(fm_default_branch "$tangle_root" 2>/dev/null || echo main)
     if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" = 1 ] && [ "${FM_BOOTSTRAP_LOCKED:-0}" != 1 ]; then
       echo "TANGLE: primary checkout on feature branch '$tangle_branch' (expected '$tangle_default'); the work is safe on that ref - read-only session must leave restore work to the session holding the fleet lock"
     else
-      echo "TANGLE: primary checkout on feature branch '$tangle_branch' (expected '$tangle_default'); the work is safe on that ref - restore the primary with: git -C $FM_ROOT checkout $tangle_default, then re-validate the branch in a proper worktree"
+      echo "TANGLE: primary checkout on feature branch '$tangle_branch' (expected '$tangle_default'); the work is safe on that ref - restore the primary with: git -C $tangle_root checkout $tangle_default, then re-validate the branch in a proper worktree"
     fi
   fi
   crew=

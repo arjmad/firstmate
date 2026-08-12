@@ -4,6 +4,12 @@
 # Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
 #        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
+#   <project-dir> accepts a projects/<name> path, an explicit absolute or
+#   slash-containing relative path, or a bare registered project name resolved
+#   against this home's projects/ dir (matching fm-brief.sh's bare <repo-name>
+#   convention, with an existing cwd-relative dir as back-compat fallback).
+#   An unresolvable bare name fails with exit 2 and lists the available
+#   project directories instead of dying on a raw cd error.
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
 #   per task at intake (AGENTS.md section 7); data/projects.md holds the captain's
@@ -1425,11 +1431,31 @@ resolved_existing_dir() {
   cd "$path" && pwd -P
 }
 
+# Resolve <project-dir>. A projects/<name> path and an explicit absolute or
+# slash-containing relative path are taken as written. A BARE name is resolved
+# against this home's projects/ dir, matching fm-brief.sh's bare <repo-name>
+# convention; without that, a bare registered name silently resolved relative to
+# whatever directory the caller happened to be in. An existing cwd-relative
+# directory still wins as back-compat, and an unresolvable bare name fails with
+# the available projects listed rather than dying on a raw cd error.
 resolve_project_dir_arg() {
-  local path=$1
+  local path=$1 d
   case "$path" in
     projects/*) printf '%s/%s\n' "$PROJECTS" "${path#projects/}" ;;
-    *) printf '%s\n' "$path" ;;
+    .|..|/*|*/*) printf '%s\n' "$path" ;;
+    *)
+      if [ -n "$path" ] && [ -d "$PROJECTS/$path" ]; then
+        printf '%s/%s\n' "$PROJECTS" "$path"
+      elif [ -d "$path" ]; then
+        printf '%s\n' "$path"
+      else
+        {
+          echo "error: no project '$path' (looked in $PROJECTS/$path)."
+          echo "Pass a registered project name or an explicit path. Available projects:"
+          for d in "$PROJECTS"/*/; do [ -d "$d" ] && echo "  - $(basename "$d")"; done
+        } >&2
+        return 2
+      fi ;;
   esac
 }
 
@@ -1595,7 +1621,8 @@ if [ "$KIND" = secondmate ]; then
     BRIEF="$DATA/$ID/brief.md"
   fi
 else
-  PROJ_ABS="$(cd "$(resolve_project_dir_arg "$PROJ")" && pwd)"
+  PROJ_RESOLVED=$(resolve_project_dir_arg "$PROJ") || exit 2
+  PROJ_ABS="$(cd "$PROJ_RESOLVED" && pwd)"
   WT=""
   BRIEF="$DATA/$ID/brief.md"
 fi
