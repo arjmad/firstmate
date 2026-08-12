@@ -151,13 +151,13 @@ EOF
     'pr=https://github.com/acme/alpha/pull/9' \
     "pr_head=$active_head"
   cat > "$home/state/active-one.status" <<'EOF'
+working: RAW_FULL_STATUS_LOG_SENTINEL_9a4d13
+blocked: stale event history, not current truth
+EOF
   # Current state comes from the semantic busy-state record, never from the
   # status log above, which deliberately ends on a stale `blocked:` event to
   # prove event history is not current truth.
   "$ROOT/bin/fm-busy-event.sh" arm "$home/state" active-one >/dev/null
-working: RAW_FULL_STATUS_LOG_SENTINEL_9a4d13
-blocked: stale event history, not current truth
-EOF
 
   make_git_repo "$home/task-worktrees/done-no-pr" fm/done-no-pr
   fm_write_meta "$home/state/done-no-pr.meta" \

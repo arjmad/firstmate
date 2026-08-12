@@ -170,6 +170,8 @@ SUB_HOME_PARENT_MARKER=".fm-secondmate-parent"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
+# shellcheck source=bin/fm-prime-tmp-lib.sh
+. "$SCRIPT_DIR/fm-prime-tmp-lib.sh"
 if [ "$#" -lt 1 ] || ! fm_task_id_path_safe "$1"; then
   echo "error: invalid teardown request" >&2
   exit 2
@@ -2272,13 +2274,12 @@ cleanup_firstmate_home_children() {
     retire_busy_state "$sub_state" "$child_id" "$child_busy_gen" || return 1
     child_prime_tmp=$(meta_value "$child_meta" prime_tmp)
     if [ -n "$child_prime_tmp" ]; then
-      case "$child_prime_tmp" in
-        /tmp/fmpa.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]) rm -rf "$child_prime_tmp" ;;
-        *)
-          echo "error: refusing unsafe Prime Agent temp cleanup path for child $child_id: $child_prime_tmp" >&2
-          return 1
-          ;;
-      esac
+      if fm_prime_tmp_path_safe "$child_prime_tmp"; then
+        rm -rf "$child_prime_tmp"
+      else
+        echo "error: refusing unsafe Prime Agent temp cleanup path for child $child_id: $child_prime_tmp" >&2
+        return 1
+      fi
     fi
     rm -f "$sub_state/$child_id.status" "$sub_state/$child_id.turn-ended" \
       "$sub_state/$child_id.meta" "$sub_state/$child_id.pi-ext.ts" \
@@ -2405,6 +2406,21 @@ fi
 # kind=secondmate: a secondmate home's own runtime lifecycle is owned by the
 # dedicated process-event and firstmate-home removal machinery further below,
 # not by task-worktree cleanup.
+if [ "$TASK_HARNESS" = prime-agent ]; then
+  # Stop only the recorded task session, then force-shutdown only the daemon
+  # behind that task's own unique TMPDIR. Same ordering rule as the child-task
+  # path: this graceful stop must precede the leaked-process reap just below,
+  # which would SIGKILL the daemon (its cwd is this worktree) and leave a stale
+  # socket behind, and it must precede the worktree return because Prime
+  # Agent's Python worker survives a detached client: a still-live daemon would
+  # keep writing into the isolated copy while it is being removed. A failure
+  # preserves the task rather than returning a copy something is still writing
+  # to.
+  "$SCRIPT_DIR/fm-prime-agent.sh" cleanup "$META" || {
+    echo "error: Prime Agent task-scoped cleanup failed for $ID; preserving the task" >&2
+    exit 1
+  }
+fi
 if [ "$KIND" != secondmate ]; then
   conclude_task_no_mistakes_run "$WT"
   reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
@@ -2421,19 +2437,6 @@ fi
 # after every unlanded-work refusal above so it can never soften one. An
 # unreachable Herdr warns with the exact leftover ownership records and still
 # returns the worktree.
-if [ "$TASK_HARNESS" = prime-agent ]; then
-  # Stop only the recorded task session, then force-shutdown only the daemon
-  # behind that task's own unique TMPDIR. This must precede the worktree return
-  # because Prime Agent's Python worker survives a detached client: a still-live
-  # daemon would keep writing into the isolated copy while it is being removed.
-  # A failure preserves the task rather than returning a copy something is still
-  # writing to.
-  "$SCRIPT_DIR/fm-prime-agent.sh" cleanup "$META" || {
-    echo "error: Prime Agent task-scoped cleanup failed for $ID; preserving the task" >&2
-    exit 1
-  }
-fi
-
 FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
   "$SCRIPT_DIR/fm-herdr-lab.sh" teardown-task "$ID" || {
     echo "WARNING: Herdr lab cleanup failed for task $ID; returning the worktree anyway." >&2
@@ -2596,10 +2599,12 @@ fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 # Only the exact minted shape is removable; anything else is a corrupt record and
 # refuses rather than deleting a guessed path.
 if [ -n "$PRIME_TMP" ]; then
-  case "$PRIME_TMP" in
-    /tmp/fmpa.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]) rm -rf "$PRIME_TMP" ;;
-    *) echo "error: refusing unsafe Prime Agent temp cleanup path: $PRIME_TMP" >&2; exit 1 ;;
-  esac
+  if fm_prime_tmp_path_safe "$PRIME_TMP"; then
+    rm -rf "$PRIME_TMP"
+  else
+    echo "error: refusing unsafe Prime Agent temp cleanup path: $PRIME_TMP" >&2
+    exit 1
+  fi
 fi
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1

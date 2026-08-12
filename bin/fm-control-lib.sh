@@ -12,7 +12,7 @@
 # verbs addressed to an exact task id, with the per-harness mechanics owned
 # here rather than improvised per harness in agent prose.
 #
-# This file owns three capability tables plus their pure artifact-path tables
+# This file owns four capability tables plus their pure artifact-path tables
 # and nothing else. It has no side effects, runs no backend command, and reads
 # no state, so it can be sourced by a test as a pure contract:
 #
@@ -33,6 +33,11 @@
 #      (bin/fm-backend.sh's fm_backend_agent_state) able to PROVE that an agent
 #      stopped. A verb whose postcondition cannot be proven on the recorded
 #      backend is refused rather than performed blind.
+#   4. Per-harness verb support (fm_control_harness_supports_verb): which of
+#      the allowlisted verbs an adapter is verified for. prime-agent is
+#      interrupt-only: its documented Ctrl-D detaches the client while the
+#      daemon and its worker keep running, so exit and relaunch are refused
+#      rather than reported as a stop that did not happen.
 #
 # `resume` is deliberately NOT a verb. It is not deterministic across the
 # verified adapters: codex and grok resume only from a session id printed at

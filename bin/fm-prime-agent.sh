@@ -24,6 +24,10 @@
 # elsewhere; absence of a spinner never proves Prime Agent is idle.
 set -u
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-prime-tmp-lib.sh
+. "$SCRIPT_DIR/fm-prime-tmp-lib.sh"
+
 meta_get() {  # <meta> <key>
   grep "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- || true
 }
@@ -52,10 +56,10 @@ resolve_bin() {
 }
 
 safe_runtime_paths() {  # <tmpdir> <session-dir>
-  case "$1" in
-    /tmp/fmpa.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]) ;;
-    *) echo "error: unsafe Prime Agent task TMPDIR: $1" >&2; return 1 ;;
-  esac
+  fm_prime_tmp_path_safe "$1" || {
+    echo "error: unsafe Prime Agent task TMPDIR: $1" >&2
+    return 1
+  }
   case "$2" in
     /*/state/prime-agent/*/sessions) ;;
     *) echo "error: unsafe Prime Agent task session directory: $2" >&2; return 1 ;;
@@ -68,17 +72,35 @@ valid_runtime_paths() {  # <tmpdir> <session-dir>
   [ -d "$2" ] || { echo "error: Prime Agent task session directory is missing: $2" >&2; return 1; }
 }
 
+scoped_env() {  # <tmpdir> <session-dir>; sets SCOPED_ENV, the one task env block
+  SCOPED_ENV=(env
+    TMPDIR="$1"
+    PRIME_AGENT_SESSION_DIR="$2"
+    PRIME_AGENT_TELEMETRY=0
+    DO_NOT_TRACK=1
+    PRIME_AGENT_FIRSTMATE=1)
+}
+
 run_scoped() {  # <tmpdir> <session-dir> <args...>
   local tmp=$1 sessions=$2 bin
   shift 2
   valid_runtime_paths "$tmp" "$sessions" || return 1
   bin=$(resolve_bin) || return 1
-  env TMPDIR="$tmp" \
-    PRIME_AGENT_SESSION_DIR="$sessions" \
-    PRIME_AGENT_TELEMETRY=0 \
-    DO_NOT_TRACK=1 \
-    PRIME_AGENT_FIRSTMATE=1 \
-    "$bin" "$@"
+  scoped_env "$tmp" "$sessions"
+  "${SCOPED_ENV[@]}" "$bin" "$@"
+}
+
+daemon_socket() {  # <tmpdir>
+  printf '%s/prime-agent-%s/daemon.sock' "$1" "$(id -u)"
+}
+
+daemon_alive() {  # <tmpdir>; true when a live process still holds the task daemon socket
+  local sock
+  sock=$(daemon_socket "$1")
+  [ -e "$sock" ] || return 1
+  # Without lsof the leftover socket cannot be proven dead, so treat it as live.
+  command -v lsof >/dev/null 2>&1 || return 0
+  lsof -t -- "$sock" >/dev/null 2>&1
 }
 
 meta_runtime_shape() {  # <meta>; sets META_TMP META_SESS META_AGENT; ownership only, no existence
@@ -151,7 +173,8 @@ state_from_meta() {  # <meta>
 send_from_meta() {  # <meta> <message>
   local json status mode
   meta_runtime "$1" || return 1
-  json=$(run_scoped "$META_TMP" "$META_SESS" send "$META_AGENT" "$2" --json) || return 1
+  # Flags precede --; the -- keeps a message starting with '-' positional.
+  json=$(run_scoped "$META_TMP" "$META_SESS" send "$META_AGENT" --json -- "$2") || return 1
   status=$(printf '%s' "$json" | jq -r '.deliveryStatus // empty' 2>/dev/null) || return 1
   mode=$(printf '%s' "$json" | jq -r '.deliveryMode // empty' 2>/dev/null) || return 1
   case "$status:$mode" in
@@ -163,8 +186,9 @@ send_from_meta() {  # <meta> <message>
 shutdown_scoped() {  # <tmpdir> <session-dir>
   local tmp=$1 sessions=$2
   run_scoped "$tmp" "$sessions" shutdown --force --json >/dev/null 2>&1 || {
-    # A daemon that already exited is an idempotent cleanup success.
-    [ ! -S "$tmp/prime-agent-$(id -u)/daemon.sock" ] || return 1
+    # A daemon that already exited is an idempotent cleanup success, including
+    # a killed daemon's leftover socket file; only a live holder is a failure.
+    ! daemon_alive "$tmp" || return 1
   }
 }
 
@@ -175,8 +199,21 @@ cleanup_from_meta() {  # <meta>
   # another task's paths still fail closed.
   [ -n "$META_TMP" ] || [ -n "$META_SESS" ] || return 0
   safe_runtime_paths "$META_TMP" "$META_SESS" || return 1
-  [ -d "$META_TMP" ] && [ -d "$META_SESS" ] || return 0
+  # Missing recorded directories or a missing executable prove nothing about
+  # the daemon itself (the running node process needs neither), so success in
+  # either case additionally requires that no live daemon holds the socket.
+  if [ ! -d "$META_TMP" ] || [ ! -d "$META_SESS" ]; then
+    ! daemon_alive "$META_TMP" || {
+      echo "error: Prime Agent task runtime records are gone but a live daemon still holds $(daemon_socket "$META_TMP")" >&2
+      return 1
+    }
+    return 0
+  fi
   resolve_bin >/dev/null 2>&1 || {
+    ! daemon_alive "$META_TMP" || {
+      echo "error: direct prime-agent executable unavailable while a live daemon still holds $(daemon_socket "$META_TMP")" >&2
+      return 1
+    }
     echo "warning: direct prime-agent executable unavailable; skipping stop/shutdown for the ended task runtime" >&2
     return 0
   }
@@ -195,9 +232,8 @@ case "${1:-}" in
     tmp=$2; sessions=$3; shift 3
     valid_runtime_paths "$tmp" "$sessions" || exit 1
     bin=$(resolve_bin) || exit 1
-    exec env TMPDIR="$tmp" PRIME_AGENT_SESSION_DIR="$sessions" \
-      PRIME_AGENT_TELEMETRY=0 DO_NOT_TRACK=1 PRIME_AGENT_FIRSTMATE=1 \
-      "$bin" "$@"
+    scoped_env "$tmp" "$sessions"
+    exec "${SCOPED_ENV[@]}" "$bin" "$@"
     ;;
   discover)
     [ "$#" = 4 ] || { echo "usage: fm-prime-agent.sh discover <tmpdir> <session-dir> <cwd>" >&2; exit 2; }

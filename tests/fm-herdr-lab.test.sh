@@ -265,28 +265,34 @@ assert_lab_untouched() { # <session> <message>
 }
 
 test_reap_requires_positive_same_home_ownership() {
-  local old_state=$FAKE_STATE old_tripwires=$TRIPWIRES reap_home lab live stale murky foreign collide token_owned out
+  local old_state=$FAKE_STATE old_tripwires=$TRIPWIRES reap_home foreign_home lab live stale murky foreign collide token_owned out
   fm_herdr_lab_meta_agent_state() {
     grep '^lab-agent-state=' "$1" | cut -d= -f2-
   }
   reap_home="$TMP_ROOT/reap-home"
+  foreign_home="$TMP_ROOT/reap-foreign-home"
   FAKE_STATE="$TMP_ROOT/reap-herdr-state"
   TRIPWIRES="$TMP_ROOT/reap-tripwires"
-  mkdir -p "$FAKE_STATE" "$TRIPWIRES" "$reap_home/state"
+  mkdir -p "$FAKE_STATE" "$TRIPWIRES" "$reap_home/state" "$foreign_home/state"
   printf '%s\n' '/home/test/.config/herdr/herdr.sock' > "$FAKE_STATE/default-socket"
-  live=$(fm_herdr_lab_name live-task)
-  stale=$(fm_herdr_lab_name stale-task)
-  murky=$(fm_herdr_lab_name murky-task)
-  # A lab provisioned by another Firstmate home: this home has no task record
-  # for it, but the tripwire directory is UID-global so its ownership record is
-  # visible here.
-  foreign=$(fm_herdr_lab_name other-home-task)
+  # Owned names are minted under the SAME effective home the reap below runs
+  # as: the ownership token is home-scoped, so a name minted elsewhere would
+  # simply be foreign.
+  live=$(FM_STATE_OVERRIDE="$reap_home/state" fm_herdr_lab_name live-task)
+  stale=$(FM_STATE_OVERRIDE="$reap_home/state" fm_herdr_lab_name stale-task)
+  murky=$(FM_STATE_OVERRIDE="$reap_home/state" fm_herdr_lab_name murky-task)
+  # A lab provisioned by another Firstmate home for the SAME task id this home
+  # records as dead. The tripwire directory is UID-global so its ownership
+  # record is visible here, but the home-scoped token never matches this home's
+  # records, and the pre-token label-prefix fallback refuses token-bearing
+  # names, so the other home's live lab stays unproven here.
+  foreign=$(FM_STATE_OVERRIDE="$foreign_home/state" fm_herdr_lab_name stale-task)
   # A legacy-named lab that two of this home's task records both claim.
   collide="fm-lab-alpha-beta-$$-7"
   # Task id herdr-lab-cleanup truncates to the stem herdr-lab, which is also a
-  # sibling task's full id, so that sibling's pre-token label prefix claims this
-  # session too. The exact task token decides ownership.
-  token_owned=$(fm_herdr_lab_name herdr-lab-cleanup)
+  # sibling task's full id, so that sibling's pre-token label prefix could reach
+  # this session too. The exact task token decides ownership.
+  token_owned=$(FM_STATE_OVERRIDE="$reap_home/state" fm_herdr_lab_name herdr-lab-cleanup)
   for lab in "$live" "$stale" "$murky" "$foreign" "$collide" "$token_owned"; do
     printf '%s\n' running > "$FAKE_STATE/$lab"
     printf '%s\n' '{"name":"default","default":true,"running":true,"socket_path":"/home/test/.config/herdr/herdr.sock"}' \
@@ -330,7 +336,7 @@ test_reap_requires_positive_same_home_ownership() {
     || fail "apply reap did not delete the lab whose exact task token proves dead ownership"
   assert_lab_untouched "$live" "apply reap deleted a live task lab"
   assert_lab_untouched "$murky" "apply reap deleted a lab with an ambiguous agent state"
-  assert_lab_untouched "$foreign" "apply reap deleted a lab this home has no task record for"
+  assert_lab_untouched "$foreign" "apply reap deleted another home's lab for a task id this home records as dead"
   assert_lab_untouched "$collide" "apply reap deleted a lab claimed by two task records"
   assert_present "$TRIPWIRES/$foreign.fleet-state.json" "apply reap removed a foreign home's ownership record"
 

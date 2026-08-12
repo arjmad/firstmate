@@ -738,6 +738,49 @@ test_spawn_secondmate_harness_model_and_effort_tokens() {
   pass "C4 spawn: config/secondmate-harness's model+effort tokens thread into the launch and meta"
 }
 
+# A config-pinned endpoint model is routed exactly like the same model passed
+# with --model: the model-endpoint gate reads MODEL only after the
+# config/secondmate-harness fallback assigns it, so a pinned local-endpoint
+# model composes the proxied launch rather than a stock claude launch aimed at
+# the real Anthropic API.
+test_spawn_config_pinned_endpoint_model_is_routed() {
+  local w sm meta launchlog launch
+  w="$TMP_ROOT/spawn-pinned-endpoint-model"
+  sm="$w/sm"
+  launchlog="$w/launch.log"
+  mkdir -p "$w/home/config"
+  printf 'claude my-local-model\n' > "$w/home/config/secondmate-harness"
+  cat > "$w/home/config/model-endpoints.json" <<'JSON'
+{
+  "endpoints": {
+    "my-local-model": {
+      "base_url": "http://127.0.0.1:8080",
+      "auth_token_env": "FM_TEST_PROXY_TOKEN",
+      "strict_mcp_config": true
+    }
+  }
+}
+JSON
+  make_seeded_home "$sm" sm
+
+  FM_TEST_PROXY_TOKEN='sk-proxy-tok-test123' \
+    spawn_secondmate_capture "$w" sm "$sm" "$launchlog" >/dev/null 2>&1
+
+  meta="$w/home/state/sm.meta"
+  [ "$(meta_field "$meta" harness)" = claude ] || fail "pinned-endpoint: meta harness not claude"
+  [ "$(meta_field "$meta" model)" = my-local-model ] \
+    || fail "pinned-endpoint: meta model not my-local-model (got '$(meta_field "$meta" model)')"
+  launch=$(cat "$launchlog")
+  assert_contains "$launch" "ANTHROPIC_BASE_URL='http://127.0.0.1:8080'" \
+    "pinned-endpoint: launch missing the endpoint base_url prefix; the endpoint gate must resolve the config-pinned model"
+  assert_contains "$launch" "--strict-mcp-config --model 'my-local-model'" \
+    "pinned-endpoint: launch missing --strict-mcp-config with the pinned model"
+  assert_not_contains "$launch" "sk-proxy-tok-test123" \
+    "pinned-endpoint: the auth token must never enter the recorded launch string"
+  assert_no_grep 'sk-proxy-tok-test123' "$meta" "pinned-endpoint: token leaked into meta"
+  pass "C4b spawn: a config-pinned endpoint model resolves through the model-endpoint gate"
+}
+
 # Precedence: an explicit per-spawn --model overrides the file's model token.
 test_spawn_explicit_model_overrides_secondmate_harness_token() {
   local w sm meta launchlog launch
@@ -2479,6 +2522,7 @@ test_spawn_explicit_backend_precedence_over_env_and_inherited_config
 test_spawn_bare_harness_no_model_effort_flag
 test_spawn_secondmate_harness_model_token
 test_spawn_secondmate_harness_model_and_effort_tokens
+test_spawn_config_pinned_endpoint_model_is_routed
 test_spawn_explicit_model_overrides_secondmate_harness_token
 test_spawn_explicit_effort_overrides_secondmate_harness_token
 test_spawn_explicit_harness_does_not_inherit_secondmate_harness_tokens

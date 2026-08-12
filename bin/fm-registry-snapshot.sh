@@ -100,7 +100,7 @@ validate_bound FM_REGISTRY_DIAGNOSTICS "$FM_REGISTRY_DIAGNOSTICS"
 validate_bound FM_REGISTRY_ROUTING_RULES "$FM_REGISTRY_ROUTING_RULES"
 
 NOW=${FM_REGISTRY_SNAPSHOT_NOW:-${FM_SNAPSHOT_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}}
-if ! printf '%s' "$NOW" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'; then
+if [[ ! $NOW =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
   NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 fi
 
@@ -363,7 +363,7 @@ sanitize_remote() {  # <raw-url>; sets REMOTE_KIND/IDENTITY/LOCATOR/STATUS
   fi
 }
 
-PROJECT_RECORDS='[]'
+PROJECT_ROWS=
 while IFS= read -r project_row; do
   [ -n "$project_row" ] || continue
   project_key=$(printf '%s' "$project_row" | jq -r '.key // ""')
@@ -392,7 +392,7 @@ while IFS= read -r project_row; do
       local_status=available
     fi
   fi
-  enriched=$(jq -n \
+  enriched=$(jq -cn \
     --argjson base "$project_row" \
     --arg locator "$project_path" \
     --argjson exists "$project_exists" \
@@ -413,10 +413,11 @@ while IFS= read -r project_row; do
     | .status = if .status == "unavailable" then "unavailable"
                 elif .local.status == "unavailable" then "degraded"
                 else "available" end')
-  PROJECT_RECORDS=$(jq -n --argjson rows "$PROJECT_RECORDS" --argjson row "$enriched" '$rows + [$row]')
+  PROJECT_ROWS="$PROJECT_ROWS$enriched"$'\n'
 done <<EOF
 $(printf '%s' "$PROJECT_BASE" | jq -c '.records[]?')
 EOF
+PROJECT_RECORDS=$(printf '%s' "$PROJECT_ROWS" | jq -cs '.')
 PROJECT_BASE=$(printf '%s' "$PROJECT_BASE" | jq --argjson records "$PROJECT_RECORDS" '.records=$records')
 
 FLEET_AVAILABLE=false
@@ -439,7 +440,7 @@ else
   FLEET='{"schema":"fm-fleet-snapshot.v1","backlog":{"present":false,"records":[]},"tasks":[],"scout_reports":[],"secondmate_current":{"registry":{"present":false,"available":false,"complete":false,"records":[]},"records":[],"total":null,"shown":0,"truncated":0}}'
 fi
 
-TASK_GIT='[]'
+TASK_GIT_ROWS=
 while IFS= read -r task_row; do
   [ -n "$task_row" ] || continue
   task_id=$(printf '%s' "$task_row" | jq -r '.id')
@@ -468,18 +469,21 @@ while IFS= read -r task_row; do
           ahead_behind=$(git -C "$worktree" rev-list --left-right --count "$upstream...HEAD" 2>/dev/null || true)
           behind=${ahead_behind%%[[:space:]]*}
           ahead=${ahead_behind##*[[:space:]]}
-          case "$behind:$ahead" in
-            0:0) push_state=in_sync ;;
-            0:*) push_state=ahead ;;
-            *:0) push_state=behind ;;
-            *:*) push_state=diverged ;;
-            *) push_state=unknown ;;
-          esac
+          if [ -z "$behind" ] || [ -z "$ahead" ]; then
+            push_state=unknown
+          else
+            case "$behind:$ahead" in
+              0:0) push_state=in_sync ;;
+              0:*) push_state=ahead ;;
+              *:0) push_state=behind ;;
+              *) push_state=diverged ;;
+            esac
+          fi
         fi
       fi
     fi
   fi
-  git_row=$(jq -n \
+  git_row=$(jq -cn \
     --arg id "$task_id" --arg locator "$worktree" --argjson exists "$worktree_exists" \
     --argjson git_repository "$git_repository" --arg branch "$branch" --arg revision "$revision" \
     --arg upstream "$upstream" --arg push_state "$push_state" --arg status "$git_status" '
@@ -487,19 +491,22 @@ while IFS= read -r task_row; do
      git_repository:$git_repository,branch:(if $branch == "" then null else $branch end),
      revision:(if $revision == "" then null else $revision end),
      upstream:(if $upstream == "" then null else $upstream end),push_state:$push_state,status:$status}')
-  TASK_GIT=$(jq -n --argjson rows "$TASK_GIT" --argjson row "$git_row" '$rows + [$row]')
+  TASK_GIT_ROWS="$TASK_GIT_ROWS$git_row"$'\n'
 done <<EOF
 $(printf '%s' "$FLEET" | jq -c '.tasks[]?')
 EOF
+TASK_GIT=$(printf '%s' "$TASK_GIT_ROWS" | jq -cs '.')
 
-PROJECTS_JSON=$(jq -n \
-  --argjson base "$PROJECT_BASE" \
-  --argjson cap "$FM_REGISTRY_PROJECTS" '
+JQ_REDACT_DEFS='
   def redact:
     gsub("gh[pousr]_[A-Za-z0-9_=-]{8,}"; "[redacted]")
     | gsub("sk-[A-Za-z0-9_-]{16,}"; "[redacted]")
     | gsub("(?i)(bearer[[:space:]]+[^[:space:]]+|(token|password|secret|authorization)[[:space:]]*[:=][[:space:]]*[^[:space:],;]+)"; "[redacted]");
-  def safe($n): if . == null then null else (redact | .[0:$n]) end;
+  def safe($n): if . == null then null else (redact | .[0:$n]) end;'
+
+PROJECTS_JSON=$(jq -n \
+  --argjson base "$PROJECT_BASE" \
+  --argjson cap "$FM_REGISTRY_PROJECTS" "$JQ_REDACT_DEFS"'
   ($base.records | map(
     . as $record
     | .truncated_fields = ([
@@ -518,19 +525,14 @@ PROJECTS_JSON=$(jq -n \
   | {status:(if $base.status == "unavailable" then "unavailable"
              elif any($all[]?; .status != "available") then "degraded" else "available" end),
      complete:($base.complete and $field_truncations == 0),total:$total,shown:($shown|length),
-     truncated:($total-($shown|length)),records:$shown,
+     truncated:($total-($shown|length)),records:$shown,all_records:$all,
      omissions:([if $total > ($shown|length) then {section:"projects",reason:"record_limit",omitted:($total-($shown|length))} else empty end,
                   if $field_truncations > 0 then {section:"projects",reason:"field_limit",omitted:$field_truncations} else empty end]
                  + [$base.reasons[]? | {section:"projects",reason:.,omitted:null}])}')
 
 SECONDMATES_JSON=$(jq -n \
   --argjson fleet "$FLEET" --argjson adapters "$adapter_values" --arg backend_known "$FM_BACKEND_KNOWN" \
-  --argjson cap "$FM_REGISTRY_SECONDMATES" '
-  def redact:
-    gsub("gh[pousr]_[A-Za-z0-9_=-]{8,}"; "[redacted]")
-    | gsub("sk-[A-Za-z0-9_-]{16,}"; "[redacted]")
-    | gsub("(?i)(bearer[[:space:]]+[^[:space:]]+|(token|password|secret|authorization)[[:space:]]*[:=][[:space:]]*[^[:space:],;]+)"; "[redacted]");
-  def safe($n): if . == null then null else (redact | .[0:$n]) end;
+  --argjson cap "$FM_REGISTRY_SECONDMATES" "$JQ_REDACT_DEFS"'
   def clean_harness($value):
     if ($value | type) == "string" and ($adapters | index($value)) != null then $value else null end;
   def clean_backend($value):
@@ -616,12 +618,7 @@ TASKS_JSON=$(jq -n \
   --argjson fleet "$FLEET" --argjson adapters "$adapter_values" --arg backend_known "$FM_BACKEND_KNOWN" \
   --argjson projects "$PROJECTS_JSON" \
   --argjson git_rows "$TASK_GIT" \
-  --argjson cap "$FM_REGISTRY_TASKS_PER_SECTION" '
-  def redact:
-    gsub("gh[pousr]_[A-Za-z0-9_=-]{8,}"; "[redacted]")
-    | gsub("sk-[A-Za-z0-9_-]{16,}"; "[redacted]")
-    | gsub("(?i)(bearer[[:space:]]+[^[:space:]]+|(token|password|secret|authorization)[[:space:]]*[:=][[:space:]]*[^[:space:],;]+)"; "[redacted]");
-  def safe($n): if . == null then null else (redact | .[0:$n]) end;
+  --argjson cap "$FM_REGISTRY_TASKS_PER_SECTION" "$JQ_REDACT_DEFS"'
   def clean_harness($value):
     if ($value | type) == "string" and ($adapters | index($value)) != null then $value else null end;
   def clean_backend($value):
@@ -648,7 +645,7 @@ TASKS_JSON=$(jq -n \
     (($backlog.report_path // null) | type) == "string"
     and ($backlog.report_path | endswith("data/" + $id + "/report.md"));
   def git_for($id): ([$git_rows[]? | select(.id == $id)][0] // null);
-  def project_for($key): ([$projects.records[]? | select(.key == $key)][0] // null);
+  def project_for($key): ([$projects.all_records[]? | select(.key == $key)][0] // null);
   def project_key($backlog; $task):
     if ($backlog.repo // "") != "" then $backlog.repo
     elif ($task.project // "") != "" then ($task.project | split("/") | .[-1])
@@ -672,6 +669,7 @@ TASKS_JSON=$(jq -n \
     else {state:"unknown",source:"none",detail:null,observed_at:null,freshness:"unknown",status:"unavailable"} end;
   def validation_for($mode; $scout_delivered; $task; $current):
     if $scout_delivered then {required:false,state:"not_required",source:"scout_report",detail:null,status:"available"}
+    elif $mode == null then {required:null,state:"unknown",source:"none",detail:null,status:"unavailable"}
     elif $mode != "no-mistakes" then {required:false,state:"not_required",source:"delivery_mode",detail:null,status:"available"}
     elif $task == null then {required:true,state:"unknown",source:"none",detail:null,status:"unavailable"}
     elif $task.current_state.source == "run-step" then
@@ -842,10 +840,10 @@ CONFIGURATION_JSON=$(jq -n \
                         source:$secondmate_source,status:$secondmate_status},
             crew_dispatch:$crew_dispatch},
    delivery:{supported_modes:["direct-PR","local-only","no-mistakes"],
-             observed_modes:([$projects.records[].delivery_mode | select(. != null)] | unique),
+             observed_modes:([$projects.all_records[].delivery_mode | select(. != null)] | unique),
              status:$projects.status},
-   autonomy:{project_yolo_on:([$projects.records[] | select(.yolo == true)] | length),
-             project_yolo_off:([$projects.records[] | select(.yolo == false)] | length),
+   autonomy:{project_yolo_on:([$projects.all_records[] | select(.yolo == true)] | length),
+             project_yolo_off:([$projects.all_records[] | select(.yolo == false)] | length),
              status:$projects.status},
    x_mode_enabled:{value:$x_value,status:$x_status}}
   | .status = if any([.runtime_backend.status,.verified_adapters.status,.routing.primary.status,.routing.crew.status,.routing.secondmate.status,.routing.crew_dispatch.status,.delivery.status,.autonomy.status,.x_mode_enabled.status][]; . == "unavailable")
@@ -895,11 +893,7 @@ FINAL=$(jq -n \
   --argjson diagnostics "$DIAGNOSTICS_JSON" --argjson counts "$COUNTS_JSON" \
   --argjson project_cap "$FM_REGISTRY_PROJECTS" --argjson secondmate_cap "$FM_REGISTRY_SECONDMATES" \
   --argjson task_cap "$FM_REGISTRY_TASKS_PER_SECTION" --argjson diagnostic_cap "$FM_REGISTRY_DIAGNOSTICS" \
-  --argjson routing_cap "$FM_REGISTRY_ROUTING_RULES" '
-  def redact:
-    gsub("gh[pousr]_[A-Za-z0-9_=-]{8,}"; "[redacted]")
-    | gsub("sk-[A-Za-z0-9_-]{16,}"; "[redacted]")
-    | gsub("(?i)(bearer[[:space:]]+[^[:space:]]+|(token|password|secret|authorization)[[:space:]]*[:=][[:space:]]*[^[:space:],;]+)"; "[redacted]");
+  --argjson routing_cap "$FM_REGISTRY_ROUTING_RULES" "$JQ_REDACT_DEFS"'
   def safe_locator: redact | .[0:512];
   {schema:"fm-registry-snapshot.v1",generated:$generated,status:"available",
    limits:{projects:$project_cap,secondmates:$secondmate_cap,tasks_per_section:$task_cap,

@@ -270,6 +270,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-trace-context-lib.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
+# shellcheck source=bin/fm-prime-tmp-lib.sh
+. "$SCRIPT_DIR/fm-prime-tmp-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -347,9 +349,16 @@ done
 [ "$MODE_SET" -eq 0 ] || [ -n "$MODE" ] || { echo "error: --mode requires a non-empty value" >&2; exit 1; }
 [ "$YOLO_SET" -eq 0 ] || [ -n "$YOLO" ] || { echo "error: --yolo requires a non-empty value" >&2; exit 1; }
 [ "$TITLE_SET" -eq 0 ] || [ -n "$TITLE" ] || { echo "error: --title requires a non-empty value" >&2; exit 1; }
-if [ "$TITLE_SET" -eq 1 ] && printf '%s' "$TITLE" | LC_ALL=C grep -q '[[:cntrl:]]'; then
-  echo "error: --title must not contain control characters" >&2
-  exit 1
+# Matched with a shell pattern rather than line-oriented grep: grep treats an
+# embedded newline as a record delimiter and never as a match, and a newline in
+# the title would inject arbitrary lines into the line-oriented state/<id>.meta.
+if [ "$TITLE_SET" -eq 1 ]; then
+  case "$TITLE" in
+    *[[:cntrl:]]*)
+      echo "error: --title must not contain control characters" >&2
+      exit 1
+      ;;
+  esac
 fi
 [ "$TRACEPARENT_SET" -eq 0 ] || [ -n "$TRACEPARENT_ARG" ] || { echo "error: --traceparent requires a non-empty value" >&2; exit 1; }
 # A parent-delivered carrier replaces this home's own resolution, so it is
@@ -817,14 +826,11 @@ spawn_abort_cleanup() {
   # A failed prime-agent spawn leaves no task behind, so its private runtime
   # roots and per-task extension go with it. Only the exact short random TMPDIR
   # this spawn minted is removed, and only on failure.
-  if [ "$status" -ne 0 ] && [ -n "${PRIME_TMP:-}" ]; then
-    case "$PRIME_TMP" in
-      /tmp/fmpa.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9])
-        rm -rf "$PRIME_TMP"
-        [ -z "${PRIME_SESSION_DIR:-}" ] || rm -rf "${PRIME_SESSION_DIR%/sessions}"
-        rm -f "$STATE/$ID.prime-ext.ts"
-        ;;
-    esac
+  if [ "$status" -ne 0 ] && [ -n "${PRIME_TMP:-}" ] \
+     && fm_prime_tmp_path_safe "$PRIME_TMP"; then
+    rm -rf "$PRIME_TMP"
+    [ -z "${PRIME_SESSION_DIR:-}" ] || rm -rf "${PRIME_SESSION_DIR%/sessions}"
+    rm -f "$STATE/$ID.prime-ext.ts"
   fi
   return "$status"
 }
@@ -1163,9 +1169,13 @@ launch_template() {
     # claude, so every claude supervision fact still applies. __MCPCONFIG__
     # deliberately precedes the scalar --model flag: claude parses --mcp-config as
     # variadic, so it must never sit immediately before the positional brief.
-    # The auth token is NOT part of this string; it ships on the same pre-launch
-    # channel as GOTMPDIR (SPAWN_ENV) so the secret never enters the recorded
-    # launch command.
+    # The auth token is NOT part of this string; it ships as launch environment
+    # on the same channel as GOTMPDIR (SPAWN_ENV), so the secret never enters
+    # the recorded launch command, task metadata, or a status line. On herdr it
+    # is delivered natively as a 'tab create --env' argument at pane creation
+    # (briefly visible in a local process listing, a deliberate tradeoff against
+    # pane-screen and persisted pane-history exposure); every other backend
+    # types the export into the pane shell before launch.
     claude) printf '%s' '__ENDPOINTENV__CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __STRICTMCP____MCPCONFIG____MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     codex)
       if [ "$kind" = secondmate ]; then
@@ -1284,7 +1294,7 @@ case "$HARNESS" in
     if pi_supports_tui_mode "$PI_BIN"; then
       PI_TUI_MODE=' --tui-mode regular'
     fi
-    LAUNCH=${LAUNCH//__PITUIMODE__/$PI_TUI_MODE}
+    LAUNCH=${LAUNCH//__PITUIMODE__/"$PI_TUI_MODE"}
     LAUNCH="FM_PI_HARNESS=$HARNESS $LAUNCH"
     ;;
 esac
@@ -1327,6 +1337,22 @@ fi
 # the harness itself came from the secondmate config fallback chain. Resolving
 # here on every spawn makes the pin durable across respawns. Precedence: explicit
 # --model/--effort flags still win over the file's tokens.
+if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
+  if [ "$MODEL_SET" -eq 0 ]; then
+    SM_MODEL=$("$SCRIPT_DIR/fm-harness.sh" secondmate-model)
+    [ -z "$SM_MODEL" ] || MODEL=$SM_MODEL
+  fi
+  if [ "$EFFORT_SET" -eq 0 ]; then
+    SM_EFFORT=$("$SCRIPT_DIR/fm-harness.sh" secondmate-effort)
+    if [ -n "$SM_EFFORT" ]; then
+      case "$SM_EFFORT" in
+        low|medium|high|xhigh|max) EFFORT=$SM_EFFORT ;;
+        *) echo "warning: config/secondmate-harness effort token '$SM_EFFORT' is not one of low, medium, high, xhigh, max; ignoring" >&2 ;;
+      esac
+    fi
+  fi
+fi
+
 # Local model-endpoint override (bin/fm-model-endpoint.sh; docs/configuration.md
 # "Local model endpoints"). When this is a template-based claude launch whose
 # resolved --model matches a config/model-endpoints.json entry, the SAME claude
@@ -1336,7 +1362,10 @@ fi
 #
 # Resolution and full validation happen HERE, before any window, worktree, or
 # metadata exists, so a malformed config or unresolvable token refuses the spawn
-# up front rather than after a live agent is already running.
+# up front rather than after a live agent is already running. This block sits
+# AFTER the config/secondmate-harness fallback above on purpose: MODEL must be
+# final before the gate reads it, so a config-pinned endpoint model is routed
+# exactly like the same model passed with --model.
 #
 # Gated on a template launch, the claude harness, and a concrete model: a normal
 # Anthropic model, or none at all, never consults the config, so ordinary claude
@@ -1372,22 +1401,6 @@ EOF
   esac
 fi
 
-if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
-  if [ "$MODEL_SET" -eq 0 ]; then
-    SM_MODEL=$("$SCRIPT_DIR/fm-harness.sh" secondmate-model)
-    [ -z "$SM_MODEL" ] || MODEL=$SM_MODEL
-  fi
-  if [ "$EFFORT_SET" -eq 0 ]; then
-    SM_EFFORT=$("$SCRIPT_DIR/fm-harness.sh" secondmate-effort)
-    if [ -n "$SM_EFFORT" ]; then
-      case "$SM_EFFORT" in
-        low|medium|high|xhigh|max) EFFORT=$SM_EFFORT ;;
-        *) echo "warning: config/secondmate-harness effort token '$SM_EFFORT' is not one of low, medium, high, xhigh, max; ignoring" >&2 ;;
-      esac
-    fi
-  fi
-fi
-
 # Display identity, resolved once every harness/model axis above is final.
 # DISPLAY_TITLE is what a human reads on the pane; it is never a selector. The
 # task id remains the tab label, the recorded endpoint, and the only thing
@@ -1396,7 +1409,15 @@ fi
 # concrete model over the harness name, because two workers on the same harness
 # and different models are exactly what a title has to tell apart.
 DISPLAY_LABEL=$ID
-[ "$TITLE_SET" -eq 0 ] || DISPLAY_LABEL=$TITLE
+if [ "$TITLE_SET" -eq 1 ]; then
+  DISPLAY_LABEL=$TITLE
+elif [ "$RELAUNCH" -eq 1 ]; then
+  # A relaunch without --title keeps the recorded title: preserve_relaunch_meta
+  # carries title= forward, so the pane display must not fall back to the bare
+  # task id and diverge from the record.
+  RELAUNCH_TITLE=$(fm_meta_get "$RELAUNCH_META" title)
+  [ -z "$RELAUNCH_TITLE" ] || DISPLAY_LABEL=$RELAUNCH_TITLE
+fi
 DISPLAY_AGENT=$HARNESS
 if [ -n "$MODEL" ] && [ "$MODEL" != default ]; then
   DISPLAY_AGENT=$MODEL
@@ -1568,16 +1589,16 @@ case "$LAUNCH" in
       fi
       exit 1
     fi
-    LAUNCH=${LAUNCH//__MUSEBIN__/$(shell_quote "$MUSE_BIN")}
-    LAUNCH=${LAUNCH//__MUSECONFIG__/$(shell_quote "$MUSE_CONFIG_HOME")}
-    LAUNCH=${LAUNCH//__MUSEDATA__/$(shell_quote "$MUSE_DATA_HOME")}
+    LAUNCH=${LAUNCH//__MUSEBIN__/"$(shell_quote "$MUSE_BIN")"}
+    LAUNCH=${LAUNCH//__MUSECONFIG__/"$(shell_quote "$MUSE_CONFIG_HOME")"}
+    LAUNCH=${LAUNCH//__MUSEDATA__/"$(shell_quote "$MUSE_DATA_HOME")"}
     ;;
 esac
 
 case "$LAUNCH" in
   *__KIMIBIN__*)
     KIMI_BIN=$(resolve_kimi_binary) || exit 1
-    LAUNCH=${LAUNCH//__KIMIBIN__/$(shell_quote "$KIMI_BIN")}
+    LAUNCH=${LAUNCH//__KIMIBIN__/"$(shell_quote "$KIMI_BIN")"}
     if [ "$KIND" != secondmate ]; then
       "$FM_ROOT/bin/fm-kimi-turnend-hook.sh" install || {
         echo "error: refusing Kimi spawn because the global turn-end hook could not be installed safely" >&2
@@ -1597,17 +1618,35 @@ resolved_existing_dir() {
   cd "$path" && pwd -P
 }
 
-# Resolve <project-dir>. A projects/<name> path and an explicit absolute or
-# slash-containing relative path are taken as written. A BARE name is resolved
-# against this home's projects/ dir, matching fm-brief.sh's bare <repo-name>
-# convention; without that, a bare registered name silently resolved relative to
-# whatever directory the caller happened to be in. An existing cwd-relative
-# directory still wins as back-compat, and an unresolvable bare name fails with
-# the available projects listed rather than dying on a raw cd error.
+# Resolve <project-dir>. A projects/<name> path always names this home's
+# registered project of that name, and an explicit absolute or slash-containing
+# relative path is taken as written. A BARE name is resolved against this home's
+# projects/ dir first, matching fm-brief.sh's bare <repo-name> convention;
+# without that, a bare registered name silently resolved relative to whatever
+# directory the caller happened to be in. An existing cwd-relative directory
+# remains the back-compat fallback when no registered project matches, and an
+# unresolvable name in either the bare or the projects/-prefixed spelling fails
+# with the available projects listed rather than dying on a raw cd error.
+resolve_project_dir_unresolved() {
+  local name=$1 d
+  {
+    echo "error: no project '$name' (looked in $PROJECTS/$name)."
+    echo "Pass a registered project name or an explicit path. Available projects:"
+    for d in "$PROJECTS"/*/; do [ -d "$d" ] && echo "  - $(basename "$d")"; done
+  } >&2
+}
+
 resolve_project_dir_arg() {
-  local path=$1 d
+  local path=$1 name
   case "$path" in
-    projects/*) printf '%s/%s\n' "$PROJECTS" "${path#projects/}" ;;
+    projects/*)
+      name=${path#projects/}
+      if [ -n "$name" ] && [ -d "$PROJECTS/$name" ]; then
+        printf '%s/%s\n' "$PROJECTS" "$name"
+      else
+        resolve_project_dir_unresolved "$name"
+        return 2
+      fi ;;
     .|..|/*|*/*) printf '%s\n' "$path" ;;
     *)
       if [ -n "$path" ] && [ -d "$PROJECTS/$path" ]; then
@@ -1615,11 +1654,7 @@ resolve_project_dir_arg() {
       elif [ -d "$path" ]; then
         printf '%s\n' "$path"
       else
-        {
-          echo "error: no project '$path' (looked in $PROJECTS/$path)."
-          echo "Pass a registered project name or an explicit path. Available projects:"
-          for d in "$PROJECTS"/*/; do [ -d "$d" ] && echo "  - $(basename "$d")"; done
-        } >&2
+        resolve_project_dir_unresolved "$path"
         return 2
       fi ;;
   esac
@@ -2041,12 +2076,16 @@ if [ -n "$ENDPOINT_TOKEN" ]; then
 fi
 # SPAWN_ENV_NATIVE=1 means this backend consumed SPAWN_ENV at window creation and
 # the typed pre-launch export block must be skipped for it. A relaunch creates no
-# window, but it also needs no re-delivery: it reuses the recorded endpoint's own
-# shell, which is the exact process the original create placed this environment
-# on, and it refuses unless that shell is still sitting in the recorded worktree.
+# window, so nothing native can run - and the environment the replacement needs
+# is not guaranteed to be what the create placed (a --model change onto a
+# local-endpoint model, or a rotated token, would otherwise leave the pane with
+# no or a stale ANTHROPIC_AUTH_TOKEN and surface only as the replacement's
+# silent authentication retry loop). A relaunch therefore always re-delivers
+# through the typed channel, exactly like a backend without the native
+# capability.
 SPAWN_ENV_NATIVE=0
 case "$BACKEND" in
-  herdr) SPAWN_ENV_NATIVE=1 ;;
+  herdr) [ "$RELAUNCH" -eq 1 ] || SPAWN_ENV_NATIVE=1 ;;
 esac
 
 W="fm-$ID"
@@ -2159,6 +2198,13 @@ case "$BACKEND" in
         # live named-session socket before journal publication.
         if ! fm_backend_herdr_server_ensure "$HERDR_SES"; then
           echo "warning: herdr presentation could not ensure its session server; using the ordinary flat layout without projection" >&2
+        # Upstream's unconfigured-default version-floor arm, kept verbatim for
+        # easier upstream reconciliation. With the projection opt-in (an
+        # unconfigured home never enters this branch; see
+        # fm_backend_herdr_presentation_enabled) the "default" preference cannot
+        # reach here, so this arm and the floor-warn machinery behind it are
+        # currently unreachable in production. An explicit "on" is honored as
+        # written, including below the version floor.
         elif [ "${FM_BACKEND_HERDR_PRESENTATION_PREFERENCE:-default}" = default ] \
           && ! fm_backend_herdr_presentation_default_supported "$STATE" "$HERDR_SES"; then
           :
@@ -2832,19 +2878,25 @@ fi
 META_WINDOW=$T
 [ "$BACKEND" = orca ] && META_WINDOW=$W
 SPAWN_GEN="s$(date +%s).${BASHPID:-$$}.$RANDOM"
-SPAWN_META_PATH="$STATE/$ID.meta"
+SPAWN_META_FINAL="$STATE/$ID.meta"
 if [ "$RELAUNCH" -eq 1 ]; then
-  SPAWN_META_LOCK=$(fm_meta_lock_path "$STATE/$ID.meta") || exit 1
+  SPAWN_META_LOCK=$(fm_meta_lock_path "$SPAWN_META_FINAL") || exit 1
   fm_lock_acquire_wait "$SPAWN_META_LOCK"
   SPAWN_META_LOCK_HELD=1
   SPAWN_META_TMP="$STATE/.$ID.meta.relaunch.${BASHPID:-$$}"
-  SPAWN_META_PATH=$SPAWN_META_TMP
+else
+  SPAWN_META_TMP="$STATE/.$ID.meta.spawn.${BASHPID:-$$}"
 fi
+SPAWN_META_PATH=$SPAWN_META_TMP
 # Publish through an explicitly checked write. A redirected compound block can
-# have its failure ignored under set -e (notably on stock macOS Bash 3.2), which
-# would let a spawn continue and launch an agent that firstmate cannot supervise
-# because its metadata never landed. Testing the status directly is what makes a
-# failed publication stop the spawn instead of orphaning a live worker.
+# have its failure ignored under set -e (notably on stock macOS Bash 3.2), and a
+# mid-stream write failure (ENOSPC after a successful open) leaves the compound's
+# status at the last command's zero, which would let a spawn continue and launch
+# an agent that firstmate cannot supervise because its metadata never landed
+# whole. The record is therefore composed in memory first, written to a temp
+# path with one directly checked write, and only then moved onto the final path,
+# so a failed publication stops the spawn instead of orphaning a live worker and
+# never leaves a truncated record behind on the final path.
 # A key this publication OWNS is re-derived above and must not be carried over
 # from the previous incarnation; everything else is preserved verbatim. title= is
 # owned only when this relaunch passed --title explicitly: without the flag the
@@ -2860,7 +2912,7 @@ preserve_relaunch_meta() {
     !($1 in owned)
   ' "$RELAUNCH_META"
 }
-{
+spawn_meta_compose() {
   echo "window=$META_WINDOW"
   echo "endpoint_task_id=$ID"
   echo "worktree=$WT"
@@ -2913,24 +2965,35 @@ preserve_relaunch_meta() {
     echo "projects=$SECONDMATE_PROJECTS"
   fi
   if [ "$RELAUNCH" -eq 1 ]; then
-    preserve_relaunch_meta
+    preserve_relaunch_meta || exit 1
   fi
   if [ "$SPAWN_CONTROL_PARENT" = 1 ] && [ -n "${FM_CONTROL_RELAUNCH_TX:-}" ]; then
     echo "control_relaunch_tx=$FM_CONTROL_RELAUNCH_TX"
   fi
-} > "$SPAWN_META_PATH" || SPAWN_META_WRITE_STATUS=$?
-if [ "${SPAWN_META_WRITE_STATUS:-0}" -ne 0 ]; then
+}
+SPAWN_META_WRITE_STATUS=0
+SPAWN_META_CONTENT=$(spawn_meta_compose) || SPAWN_META_WRITE_STATUS=$?
+if [ "$SPAWN_META_WRITE_STATUS" -eq 0 ]; then
+  printf '%s\n' "$SPAWN_META_CONTENT" > "$SPAWN_META_PATH" || SPAWN_META_WRITE_STATUS=$?
+fi
+if [ "$SPAWN_META_WRITE_STATUS" -ne 0 ]; then
   echo "error: could not publish task metadata to $SPAWN_META_PATH; refusing to launch an unsupervisable agent for $ID" >&2
   exit 1
 fi
 if [ "$RELAUNCH" -eq 1 ]; then
   SPAWN_META_PUBLISH_STARTED=1
-  mv -f "$SPAWN_META_TMP" "$STATE/$ID.meta"
+  mv -f "$SPAWN_META_TMP" "$SPAWN_META_FINAL"
   RELAUNCH_REPLACEMENT_PENDING=0
   SPAWN_META_PUBLISH_STARTED=0
   SPAWN_META_TMP=
   fm_lock_release "$SPAWN_META_LOCK"
   SPAWN_META_LOCK_HELD=0
+else
+  if ! mv -f "$SPAWN_META_TMP" "$SPAWN_META_FINAL"; then
+    echo "error: could not publish task metadata to $SPAWN_META_FINAL; refusing to launch an unsupervisable agent for $ID" >&2
+    exit 1
+  fi
+  SPAWN_META_TMP=
 fi
 if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   # The record is published, so this task is now part of the set a teardown
@@ -2970,21 +3033,24 @@ ENDPOINT_STRICT_FLAG=
 [ "$ENDPOINT_STRICT" -eq 1 ] && ENDPOINT_STRICT_FLAG='--strict-mcp-config '
 ENDPOINT_MCP_CONFIG_FLAG=
 [ -z "$ENDPOINT_MCP_CONFIG" ] || ENDPOINT_MCP_CONFIG_FLAG="--mcp-config $(shell_quote "$ENDPOINT_MCP_CONFIG") "
-LAUNCH=${LAUNCH//__ENDPOINTENV__/$ENDPOINT_ENV_PREFIX}
-LAUNCH=${LAUNCH//__STRICTMCP__/$ENDPOINT_STRICT_FLAG}
-LAUNCH=${LAUNCH//__MCPCONFIG__/$ENDPOINT_MCP_CONFIG_FLAG}
-LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
-LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
-LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
-LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
-LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
-LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
-LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
-LAUNCH=${LAUNCH//__PRIMECTL__/$sq_primectl}
-LAUNCH=${LAUNCH//__PRIMETMP__/$sq_primetmp}
-LAUNCH=${LAUNCH//__PRIMESESS__/$sq_primesess}
-LAUNCH=${LAUNCH//__PRIMEEXT__/$sq_primeext}
-LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
+# Replacements are quoted so bash >= 5.2's patsub_replacement expansion never
+# rewrites a '&' or '\' in an operator-controlled value (a base_url query
+# string, a path) into a copy of the matched placeholder.
+LAUNCH=${LAUNCH//__ENDPOINTENV__/"$ENDPOINT_ENV_PREFIX"}
+LAUNCH=${LAUNCH//__STRICTMCP__/"$ENDPOINT_STRICT_FLAG"}
+LAUNCH=${LAUNCH//__MCPCONFIG__/"$ENDPOINT_MCP_CONFIG_FLAG"}
+LAUNCH=${LAUNCH//__MODELFLAG__/"$MODELFLAG"}
+LAUNCH=${LAUNCH//__EFFORTFLAG__/"$EFFORTFLAG"}
+LAUNCH=${LAUNCH//__BRIEF__/"$sq_brief"}
+LAUNCH=${LAUNCH//__TURNEND__/"$sq_turnend"}
+LAUNCH=${LAUNCH//__PIEXT__/"$sq_piext"}
+LAUNCH=${LAUNCH//__PITURNEND__/"$sq_piturnend"}
+LAUNCH=${LAUNCH//__PIWATCH__/"$sq_piwatch"}
+LAUNCH=${LAUNCH//__PRIMECTL__/"$sq_primectl"}
+LAUNCH=${LAUNCH//__PRIMETMP__/"$sq_primetmp"}
+LAUNCH=${LAUNCH//__PRIMESESS__/"$sq_primesess"}
+LAUNCH=${LAUNCH//__PRIMEEXT__/"$sq_primeext"}
+LAUNCH=${LAUNCH//__OPINPUT__/"$sq_opinput"}
 case "$HARNESS" in
   pi|pi-signed) LAUNCH=${LAUNCH//__PIBIN__/"$(shell_quote "$PI_BIN")"} ;;
 esac
@@ -3049,10 +3115,13 @@ if [ "$SPAWN_ENV_NATIVE" -eq 0 ]; then
   spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
   # A local-endpoint claude launch needs its proxy auth token in the pane shell.
   # It rides this same typed channel rather than the launch string, so the secret
-  # never enters $LAUNCH, state/<id>.meta, a status line, or the process command
-  # line. `unset HISTFILE` stays paired with the export it protects: on this path
-  # the secret really is typed at an interactive shell, so that shell must not
-  # persist it to a history file.
+  # never enters $LAUNCH, state/<id>.meta, or a status line. (On herdr's native
+  # path the token instead travels as a 'tab create --env' argument on the herdr
+  # client at pane creation - briefly visible in a local process listing, a
+  # deliberate tradeoff against leaving it on the pane's visible screen and in
+  # Herdr's persisted pane history.) `unset HISTFILE` stays paired with the
+  # export it protects: on this path the secret really is typed at an
+  # interactive shell, so that shell must not persist it to a history file.
   if [ -n "$ENDPOINT_TOKEN" ]; then
     spawn_send_text_line "$T" "unset HISTFILE"
     spawn_send_text_line "$T" "export ANTHROPIC_AUTH_TOKEN=$(shell_quote "$ENDPOINT_TOKEN")"

@@ -649,6 +649,14 @@ resolve_relaunch_profile() {
   # transaction, where nothing has changed yet.
   fm_control_harness_supports_kind "$TARGET_HARNESS" "$KIND" \
     || die "'$TARGET_HARNESS' is not verified to run a $KIND task, so relaunching $ID onto it would stop the running agent for a launch that must be refused; choose an adapter verified for this kind"
+  # Same pre-stop discipline for the TARGET's verb support: the per-verb gate at
+  # intake vets only the task's RECORDED harness, and the launch owner refuses a
+  # relaunch ONTO an adapter with no verified way to stop a running agent
+  # (prime-agent) only after the old agent is already gone. Asking the per-verb
+  # table about the target here refuses while the current agent is still
+  # running.
+  fm_control_harness_supports_verb "$TARGET_HARNESS" relaunch \
+    || die "'$TARGET_HARNESS' has no verified way to stop a running agent, so the launch owner must refuse a relaunch onto it; relaunching $ID onto it would stop the running agent for a launch that must be refused. Tear the task down and spawn a fresh one instead"
   # A model or effort chosen for the previous harness does not transfer to a
   # different one, so an explicit harness change resets both axes unless the
   # caller names them too.

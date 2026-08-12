@@ -541,6 +541,26 @@ test_relaunch_onto_an_unverified_harness_is_refused() {
   pass "fm-control relaunch: refuses to relaunch onto an adapter with no verified mechanics"
 }
 
+# prime-agent is a verified adapter and can run a ship task, but it has no
+# verified way to stop a running agent, so the launch owner refuses a relaunch
+# ONTO it. That refusal alone would land only after the running agent had been
+# stopped; the control plane asks the per-verb table about the TARGET harness
+# before it touches anything.
+test_relaunch_onto_prime_agent_refuses_before_stop() {
+  local dir out rc
+  dir=$(new_case primetarget rl9)
+  add_ship_task "$dir" rl9 claude
+  out=$(run_control "$dir" rl9 relaunch --harness prime-agent --note "switching runtime"); rc=$?
+  expect_code 1 "$rc" "a relaunch onto prime-agent should refuse"
+  assert_contains "$out" "no verified way to stop a running agent" \
+    "the refusal should name why prime-agent cannot be a relaunch target"
+  [ "$(cat "$dir/fake/command")" = claude ] \
+    || fail "the refusal must land before the running agent is stopped"
+  [ "$(meta_field "$dir" rl9 harness)" = claude ] \
+    || fail "a refused relaunch must leave the durable record on the recorded harness"
+  pass "fm-control relaunch: a relaunch onto prime-agent refuses before the agent is stopped"
+}
+
 test_prior_harness_turnend_registry_entry_is_cleared() {
   local dir auth
   dir=$(new_case grokauth rl9)
@@ -1312,6 +1332,7 @@ test_prefixed_recorded_harness_requires_explicit_replacement
 test_same_harness_relaunch_keeps_the_profile_axes
 test_explicit_model_wins_over_the_recorded_one
 test_relaunch_onto_an_unverified_harness_is_refused
+test_relaunch_onto_prime_agent_refuses_before_stop
 test_prior_harness_turnend_registry_entry_is_cleared
 test_wiring_removal_failure_refuses_before_replacement_arm
 test_turnend_auth_paths_are_owned_by_the_control_adapter
