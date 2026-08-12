@@ -391,19 +391,14 @@ printf 'on\n' > "$FLOOR_CONFIG/herdr-presentation-spaces"
 GATE_OPT_IN=$(gate_verdict "$FLOOR_CONFIG" 2>/dev/null)
 [ "$GATE_OPT_IN" = on ] \
   || fail "an explicit opt-in must stay on for herdr $LIVE_VERSION, got '$GATE_OPT_IN'"
-if [ "$FLOOR_VERDICT" = 1 ]; then
-  [ "$GATE_DEFAULT" = off ] \
-    || fail "an unconfigured home must not be projected on below-floor herdr $LIVE_VERSION, got '$GATE_DEFAULT'"
-  grep -q "$LIVE_VERSION" "$GATE_ERR" \
-    || fail "the below-floor fallback must name herdr $LIVE_VERSION: $(cat "$GATE_ERR")"
-  pass "version floor: an unconfigured home falls back flat on herdr $LIVE_VERSION and the explicit opt-in still projects"
-else
-  [ "$GATE_DEFAULT" = on ] \
-    || fail "an unconfigured home must stay projected on herdr $LIVE_VERSION, got '$GATE_DEFAULT'"
-  [ ! -s "$GATE_ERR" ] \
-    || fail "a supported release must warn about nothing: $(cat "$GATE_ERR")"
-  pass "version floor: an unconfigured home stays projected on herdr $LIVE_VERSION and the explicit opt-in agrees"
-fi
+# The projection is opt-in, so an unconfigured home stays flat on EVERY release,
+# above or below the floor, and has nothing to warn about because the release is
+# never consulted for it. The explicit opt-in above is what must keep projecting.
+[ "$GATE_DEFAULT" = off ] \
+  || fail "an unconfigured home must stay flat on herdr $LIVE_VERSION, got '$GATE_DEFAULT'"
+[ ! -s "$GATE_ERR" ] \
+  || fail "an unconfigured home must warn about nothing: $(cat "$GATE_ERR")"
+pass "opt-in default: an unconfigured home stays flat on herdr $LIVE_VERSION while the explicit opt-in projects"
 
 printf 'evidence: herdr=%s protocol=%s steal_live=%s floor_verdict=%s default-session-tripwire=armed\n' \
   "$LIVE_VERSION" "$LIVE_PROTOCOL" "$STEAL_LIVE" "$FLOOR_VERDICT"
