@@ -8,23 +8,18 @@
 # Usage:
 #   fm-install-herdr.sh <destination-directory>
 #
-# Pins Herdr v0.7.5 (protocol 17), the release that carries `tab create --env`
-# and is therefore the herdr backend's supported floor (FM_BACKEND_HERDR_MIN_PROTOCOL).
+# Pins Herdr v0.7.4 (protocol 16), the suite-verified protocol-16 release.
 # Selects the official GitHub Releases asset for the host OS/arch, downloads
 # with a bounded max size, verifies SHA-256 before install, then refuses to
 # finish unless the binary reports the exact pin version and a client protocol
-# at or above the required floor (17 for the real-Herdr family).
+# at or above the required floor (16 for the real-Herdr family).
 set -eu
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=bin/fm-herdr-env-lib.sh
-. "$SCRIPT_DIR/fm-herdr-env-lib.sh"
-
 # Exact pin - change only with a re-verified real-Herdr matrix.
-FM_HERDR_CI_VERSION=0.7.5
+FM_HERDR_CI_VERSION=0.7.4
 FM_HERDR_CI_TAG="v${FM_HERDR_CI_VERSION}"
-FM_HERDR_CI_MIN_PROTOCOL=17
-# Bounded download ceiling (bytes). The largest official 0.7.5 asset is under 21 MiB.
+FM_HERDR_CI_MIN_PROTOCOL=16
+# Bounded download ceiling (bytes). The largest official 0.7.4 asset is under 20 MiB.
 FM_HERDR_CI_MAX_BYTES=25000000
 FM_HERDR_CI_REPO=ogulcancelik/herdr
 
@@ -40,19 +35,19 @@ arch=$(uname -m)
 case "${os}-${arch}" in
   Linux-x86_64)
     ASSET=herdr-linux-x86_64
-    SHA256=3dc83288073e4c2d3c679a30e7be97bcca9141c6fd17dbbb9219142e95c59253
+    SHA256=bc0fc02d4ba500f9cac2353a43e67fe036785ecca6eb55378e050fac3c103059
     ;;
   Linux-aarch64|Linux-arm64)
     ASSET=herdr-linux-aarch64
-    SHA256=32e763a1499a6b694b1d708e4f062b743be1da9f34fcfa4d212d6db6fe09a8b9
+    SHA256=544e0002de42806d1ab64ccdef3a7e7414f24717b0b6b022bc9e57d2eefd26a2
     ;;
   Darwin-arm64)
     ASSET=herdr-macos-aarch64
-    SHA256=37350546b0012555943b92eaf962665de4e264395baeb44227b8015e8ff5b0d6
+    SHA256=24992e1625dbdcb18354a59e299e4b263c312400b31396cdc07cd46ed57f24a7
     ;;
   Darwin-x86_64)
     ASSET=herdr-macos-x86_64
-    SHA256=3fe50c4a63dc8102306b1322178628ddb3655cd3ae56d784f094153408d69e62
+    SHA256=ddf430133352e1712413d5d865b34a485546f4658893fc89986257d65a7585a8
     ;;
   *)
     die "unsupported platform ${os}-${arch}; official Herdr assets are linux/macos x86_64 and aarch64"
@@ -82,11 +77,11 @@ mkdir -p "$DESTINATION"
 install -m 0755 "$TMP/$ASSET" "$DESTINATION/herdr"
 
 # Post-install version and protocol gates (no floating latest).
-installed_version=$(fm_herdr_scrubbed_exec "$DESTINATION/herdr" --version 2>/dev/null | awk '{print $2; exit}')
+installed_version=$("$DESTINATION/herdr" --version 2>/dev/null | awk '{print $2; exit}')
 [ "$installed_version" = "$FM_HERDR_CI_VERSION" ] \
   || die "installed herdr version is '${installed_version:-<empty>}', expected exact pin $FM_HERDR_CI_VERSION"
 
-status=$(fm_herdr_scrubbed_exec "$DESTINATION/herdr" status --json 2>/dev/null) \
+status=$("$DESTINATION/herdr" status --json 2>/dev/null) \
   || die "could not run 'herdr status --json' after install"
 protocol=$(printf '%s' "$status" | jq -r '.client.protocol // empty' 2>/dev/null) \
   || die "jq is required to parse herdr status after install"
@@ -98,4 +93,4 @@ esac
 
 printf 'fm-install-herdr.sh: installed herdr %s (protocol %s) to %s\n' \
   "$installed_version" "$protocol" "$DESTINATION/herdr" >&2
-fm_herdr_scrubbed_exec "$DESTINATION/herdr" --version
+"$DESTINATION/herdr" --version

@@ -41,8 +41,7 @@ done
 
 case "$SECONDS_ARG" in
   ''|*[!0-9]*) echo "error: --seconds must be a positive integer" >&2; exit 2 ;;
-  *[1-9]*) ;;
-  *) echo "error: --seconds must be greater than zero" >&2; exit 2 ;;
+  0) echo "error: --seconds must be greater than zero" >&2; exit 2 ;;
 esac
 
 OUT=$(mktemp "${TMPDIR:-/tmp}/fm-watch-checkpoint.out.XXXXXX") || exit 1

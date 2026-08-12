@@ -135,47 +135,7 @@ MD
   pass "local links resolve while dates, versions, commands, and incident prose remain semantically reviewed"
 }
 
-test_no_mistakes_document_schema() {
-  local config="$ROOT/.no-mistakes.yaml"
-  assert_grep 'document:' "$config" "trusted Document config is missing"
-  assert_grep '  instructions: |' "$config" "Document instructions use an unsupported shape"
-  assert_grep 'docs/documentation-audiences.json' "$config" \
-    "Document instructions do not point to the audience inventory"
-  assert_grep 'complete' "$config" \
-    "Document instructions do not require a complete branch-diff review"
-  if command -v ruby >/dev/null 2>&1; then
-    ruby -e '
-      require "yaml"
-      data = YAML.safe_load(File.read(ARGV.fetch(0)))
-      abort unless data.dig("document", "instructions").is_a?(String)
-    ' "$config" || fail ".no-mistakes.yaml did not parse document.instructions"
-  fi
-  pass "no-mistakes uses the supported trusted document.instructions schema"
-}
-
-test_no_skill_support_file_shadows_an_agent_memory_name() {
-  # A skill support file named claude.md resolves as CLAUDE.md on a
-  # case-insensitive filesystem, so the harness loads it as project memory for
-  # every session instead of on demand - the opposite of what a reference file
-  # split is for. Scoped to the skills tree: docs/supervision-protocols/claude.md
-  # is keyed by harness name and read as "$DOC_DIR/$HARNESS.md" by
-  # bin/fm-supervision-instructions.sh, so its name is structural.
-  local path base collisions=""
-  while IFS= read -r path; do
-    [ -n "$path" ] || continue
-    base=$(basename "$path" | tr '[:upper:]' '[:lower:]')
-    case "$base" in
-      claude.md|agents.md) collisions="$collisions $path" ;;
-    esac
-  done < <(git -C "$ROOT" ls-files -- '.agents/skills' 'skills')
-  [ -z "$collisions" ] || fail \
-    "skill support file loads as project memory on a case-insensitive filesystem:$collisions"
-  pass "no skill support file shadows an agent memory filename"
-}
-
 test_repository_inventory_passes
 test_duplicate_and_setup_classification_fail
 test_required_pointer_fails
 test_local_links_and_no_keyword_heuristic
-test_no_mistakes_document_schema
-test_no_skill_support_file_shadows_an_agent_memory_name

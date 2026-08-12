@@ -1,18 +1,12 @@
 #!/usr/bin/env bash
 # Opt-in credentialed Pi continuity regression on a private tmux socket and
 # isolated project/home state. It uses the existing shared Pi auth store without
-# copying credentials and pins the openai-codex model named by FM_PI_LIVE_MODEL.
+# copying credentials and pins the captain-approved openai-codex model.
 set -u
 
 if [ "${FM_PI_LIVE_E2E:-0}" != 1 ]; then
   echo "skip: set FM_PI_LIVE_E2E=1 to run the isolated interactive Pi regression"
   exit 0
-fi
-
-PI_MODEL="${FM_PI_LIVE_MODEL:-}"
-if [ -z "$PI_MODEL" ]; then
-  printf 'not ok - set FM_PI_LIVE_MODEL to an openai-codex/<model> provider/model pin\n' >&2
-  exit 1
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -129,7 +123,7 @@ run_ahoy_case() {
     cd "$PROJECT" &&
       pi --print --approve --no-session --no-context-files --no-extensions \
         --no-skills --skill .agents/skills --tools read \
-        --model "$PI_MODEL" --thinking low \
+        --model openai-codex/gpt-5.6-sol --thinking low \
         "$preceding" "/ahoy"
   ) || status=$?
   [ "$status" -eq 0 ] || fail "Pi Ahoy $label case exited $status: $out"
@@ -226,7 +220,7 @@ run_native_ahoy_regressions() {
       FM_HOME="$first_home" pi --print --approve --no-session --no-context-files --no-extensions \
         -e .pi/extensions/fm-primary-turnend-guard.ts \
         --no-skills --skill .agents/skills \
-        --model "$PI_MODEL" --thinking low \
+        --model openai-codex/gpt-5.6-sol --thinking low \
         "/ahoy"
   )
   printf '%s\n' "$first_out" | grep -Fq "AHOY_BEARINGS_BRANCH" \
@@ -239,7 +233,7 @@ run_native_ahoy_regressions() {
       FM_HOME="$later_home" pi --print --approve --no-session --no-context-files --no-extensions \
         -e .pi/extensions/fm-primary-turnend-guard.ts \
         --no-skills --skill .agents/skills \
-        --model "$PI_MODEL" --thinking low \
+        --model openai-codex/gpt-5.6-sol --thinking low \
         "Respond exactly PRIOR_BOUNDARY_ACK." "/ahoy"
   )
   printf '%s\n' "$later_out" | grep -Fq "PRIOR_BOUNDARY_ACK" \
@@ -260,6 +254,7 @@ cp "$ROOT/.pi/extensions/fm-primary-pi-watch.ts" "$PROJECT/.pi/extensions/fm-pri
 cp "$ROOT/.pi/extensions/lib/fm-calm-assistant-layout.ts" "$PROJECT/.pi/extensions/lib/fm-calm-assistant-layout.ts"
 cp "$ROOT/.pi/extensions/lib/fm-calm-operational-user-layout.ts" "$PROJECT/.pi/extensions/lib/fm-calm-operational-user-layout.ts"
 cp "$ROOT/.pi/extensions/lib/fm-calm-visibility.ts" "$PROJECT/.pi/extensions/lib/fm-calm-visibility.ts"
+cp "$ROOT/.pi/extensions/lib/fm-calm-working-ship.ts" "$PROJECT/.pi/extensions/lib/fm-calm-working-ship.ts"
 cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$PROJECT/.pi/extensions/lib/fm-operational-input.ts"
 cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$PROJECT/.pi/extensions/fm-primary-turnend-guard.ts"
 cp "$ROOT/bin/fm-watch-arm.sh" "$PROJECT/bin/fm-watch-arm.sh"
@@ -269,7 +264,7 @@ chmod +x "$PROJECT/bin/fm-operational-input.sh"
 mkdir -p "$HOME_DIR/state" "$HOME_DIR/config"
 
 "$TMUX" -L "$SOCKET" new-session -d -s "$SESSION" -c "$PROJECT" \
-  "env FM_HOME='$HOME_DIR' FM_ROOT_OVERRIDE='$PROJECT' FM_POLL=1 FM_SIGNAL_GRACE=0 FM_HEARTBEAT=600 bash -lc 'printf \"%s\\n\" \"\$\$\" > \"\$FM_HOME/state/.lock\"; pi --approve --no-session --no-context-files --no-extensions -e .pi/extensions/fm-calm.ts -e .pi/extensions/fm-primary-turnend-guard.ts -e .pi/extensions/fm-primary-pi-watch.ts --model $PI_MODEL --thinking low; rc=\$?; printf \"PI_EXIT=%s\\n\" \"\$rc\"; sleep 300'"
+  "env FM_HOME='$HOME_DIR' FM_ROOT_OVERRIDE='$PROJECT' FM_POLL=1 FM_SIGNAL_GRACE=0 FM_HEARTBEAT=600 bash -lc 'printf \"%s\\n\" \"\$\$\" > \"\$FM_HOME/state/.lock\"; pi --approve --no-session --no-context-files --no-extensions -e .pi/extensions/fm-calm.ts -e .pi/extensions/fm-primary-turnend-guard.ts -e .pi/extensions/fm-primary-pi-watch.ts --model openai-codex/gpt-5.6-sol --thinking low; rc=\$?; printf \"PI_EXIT=%s\\n\" \"\$rc\"; sleep 300'"
 
 i=0
 while [ "$i" -lt 120 ]; do
@@ -288,17 +283,21 @@ send_prompt "Reply exactly CALM_LIVE_WORKING_VISIBLE"
 i=0
 while [ "$i" -lt 240 ]; do
   pane=$(capture)
-  if printf '%s\n' "$pane" | grep -Fq "Working..."; then
+  if printf '%s\n' "$pane" | grep -Fq '\__/'; then
     break
   fi
   sleep 0.05
   i=$((i + 1))
 done
+printf '%s\n' "$pane" | grep -Fq '\__/' \
+  || fail "Calm did not show the working ship on the credentialed provider path"
 printf '%s\n' "$pane" | grep -Fq "Working..." \
-  || fail "Calm hid Pi's built-in Working row on the credentialed provider path"
+  && fail "Calm left Pi's stock working row visible on the credentialed provider path"
 wait_for_exact_line "CALM_LIVE_WORKING_VISIBLE" 120 \
-  || fail "Pi did not settle the Calm Working-row provider probe"
+  || fail "Pi did not settle the Calm working-ship provider probe"
 pane=$(capture)
+printf '%s\n' "$pane" | grep -Fq '\__/' \
+  && fail "Calm left the working ship on screen after the run settled"
 printf '%s\n' "$pane" | grep -Fq "calm transcript" \
   && fail "Calm added a persistent Calm status row on the credentialed provider path"
 send_prompt "/calm"
@@ -342,4 +341,4 @@ wait_for_text "PI_EXIT=0" 60 || fail "Pi did not exit cleanly"
 wait_pid_dead "$watcher_pid" || fail "watcher child survived clean Pi exit"
 wait_pid_dead "$arm_pid" || fail "arm child survived clean Pi exit"
 
-printf 'ok - Pi %s live E2E covered native Calm Working visibility, Ahoy first/later messages, legacy transcripts, near misses, and watcher continuity\n' "$PI_VERSION"
+printf 'ok - Pi %s live E2E covered the Calm working ship, Ahoy first/later messages, legacy transcripts, near misses, and watcher continuity\n' "$PI_VERSION"

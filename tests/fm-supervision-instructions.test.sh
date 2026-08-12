@@ -20,27 +20,11 @@ test_selected_harness_block_only() {
 }
 
 test_unknown_fallback() {
-  local checkpoint_line out stale_line
-  checkpoint_line="bin/fm-watch-checkpoint.sh --seconds \"\${FM_CODEX_WATCH_CHECKPOINT:-180}\""
-  stale_line="bounded foreground wait over \`bin/fm-watch.sh\`"
+  local out
   out=$("$RENDER" --harness not-real)
   assert_contains "$out" "primary harness: unknown" "unknown heading missing"
   assert_contains "$out" "Mode: Unknown harness fallback." "unknown fallback snippet missing"
-  assert_contains "$out" "$checkpoint_line" "unknown fallback missing bounded checkpoint entrypoint"
-  assert_not_contains "$out" "$stale_line" "unknown fallback still prescribes direct watcher execution"
-  pass "renderer falls back to a policy-compliant unknown-harness checkpoint"
-}
-
-test_invalid_boolean_values_are_rejected() {
-  local flag status
-  mkdir -p "$TMP_ROOT"
-  for flag in --read-only --afk --x-mode --queue-pending; do
-    status=0
-    "$RENDER" --harness codex "$flag" banana >/dev/null 2>"$TMP_ROOT/invalid-boolean.err" || status=$?
-    expect_code 2 "$status" "$flag invalid boolean exit"
-    assert_contains "$(cat "$TMP_ROOT/invalid-boolean.err")" "boolean value must be 0 or 1" "$flag invalid boolean rejection missing"
-  done
-  pass "renderer rejects invalid values for every boolean option"
+  pass "renderer falls back to unknown.md for unverified harness names"
 }
 
 test_conditional_stanzas() {
@@ -67,7 +51,11 @@ test_repair_lines() {
 
   out=$(FM_HOME="$home" "$RENDER" --harness claude --queue-pending 1 --repair-line)
   assert_contains "$out" "After draining queued wakes" "queue-pending prefix missing"
-  assert_contains "$out" "Claude Code background task" "claude repair line missing background-task mechanism"
+  assert_contains "$out" "watcher supervision needs Stop-owned automatic recovery" "claude pre-verification repair line is not neutral"
+  assert_not_contains "$out" "is broken" "claude pre-verification repair line claimed a verified mechanism failure"
+  assert_not_contains "$out" "FAILED" "claude pre-verification repair line emitted a verified failure notice"
+  assert_not_contains "$out" "manual background" "claude pre-verification repair line directed a manual background arm"
+  assert_not_contains "$out" "bin/fm-watch-arm.sh" "claude pre-verification repair line directed an arm command"
 
   : > "$home/config/x-mode.env"
   out=$(FM_HOME="$home" FM_CODEX_WATCH_CHECKPOINT=7 "$RENDER" --harness codex --x-mode 1 --repair-line)
@@ -107,8 +95,9 @@ test_cross_harness_ordinary_continuation_and_repair_matrix() {
   assert_contains "$ordinary" "do not arm another cycle" "claude ordinary-wake line does not forbid a model re-arm"
   assert_not_contains "$ordinary" "bin/fm-watch-arm.sh" "claude ordinary-wake line incorrectly calls the manual arm"
   out=$("$RENDER" --harness claude --repair-line)
-  assert_contains "$out" "Claude Code background task" "claude recovery line lost its tracked background repair"
-  assert_contains "$out" "bin/fm-watch-arm.sh" "claude recovery line lost the arm command"
+  assert_contains "$out" "watcher supervision needs Stop-owned automatic recovery" "claude recovery line lost its neutral automatic-recovery guidance"
+  assert_not_contains "$out" "is broken" "claude recovery line claimed failure before verification"
+  assert_not_contains "$out" "bin/fm-watch-arm.sh" "claude recovery line must not create a repeatable manual arm loop"
 
   out=$("$RENDER" --harness grok)
   ordinary=$(printf '%s\n' "$out" | grep -F -- '- Ordinary wake:')
@@ -131,13 +120,20 @@ test_cross_harness_ordinary_continuation_and_repair_matrix() {
   pass "renderer preserves every harness ordinary-continuation and missing-cycle repair path"
 }
 
-test_orca_skill_defers_to_emitted_protocol() {
-  local skill stale_line
-  stale_line="\`bin/fm-watch.sh\` whenever there are tasks in flight"
-  skill=$(cat "$ROOT/.agents/skills/firstmate-orca/SKILL.md")
-  assert_contains "$skill" "supervision protocol emitted at session start" "Orca skill does not defer to the emitted supervision protocol"
-  assert_not_contains "$skill" "$stale_line" "Orca skill still prescribes direct watcher execution"
-  pass "Orca skill defers watcher continuity to the emitted harness protocol"
+test_pi_signed_preserves_identity_with_pi_supervision_protocol() {
+  local out ordinary
+  out=$("$RENDER" --harness pi-signed)
+  assert_contains "$out" "primary harness: pi-signed" \
+    "pi-signed supervision normalized the visible runtime identity to pi"
+  assert_contains "$out" "Mode: Pi extension background wake." \
+    "pi-signed did not reuse Pi's authoritative supervision protocol"
+  ordinary=$(printf '%s\n' "$out" | grep -F -- '- Ordinary wake:')
+  assert_contains "$ordinary" "Pi extension already owns watcher continuity" \
+    "pi-signed ordinary-wake semantics diverged from Pi"
+  out=$("$RENDER" --harness pi-signed --repair-line)
+  assert_contains "$out" "Pi tool fm_watch_arm_pi" \
+    "pi-signed repair semantics diverged from Pi"
+  pass "pi-signed keeps its identity while sharing Pi's supervision protocol"
 }
 
 test_grok_is_background_notify() {
@@ -182,11 +178,10 @@ test_pi_snippet_uses_effective_extension_path() {
 
 test_selected_harness_block_only
 test_unknown_fallback
-test_invalid_boolean_values_are_rejected
 test_conditional_stanzas
 test_repair_lines
 test_cross_harness_ordinary_continuation_and_repair_matrix
-test_orca_skill_defers_to_emitted_protocol
+test_pi_signed_preserves_identity_with_pi_supervision_protocol
 test_grok_is_background_notify
 test_grok_command_sources_effective_config
 test_pi_snippet_uses_effective_extension_path

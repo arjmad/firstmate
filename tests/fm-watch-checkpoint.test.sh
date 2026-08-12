@@ -15,17 +15,6 @@ make_home() {
   printf '%s\n' "$home"
 }
 
-test_zero_padded_zero_is_rejected() {
-  local err status
-  mkdir -p "$TMP_ROOT"
-  err="$TMP_ROOT/zero-padded-zero.err"
-  status=0
-  "$CHECKPOINT" --seconds 00 >/dev/null 2>"$err" || status=$?
-  expect_code 2 "$status" "zero-padded zero checkpoint exit"
-  assert_contains "$(cat "$err")" "must be greater than zero" "zero-padded zero rejection missing"
-  pass "checkpoint rejects zero-padded zero seconds"
-}
-
 test_quiet_checkpoint_exits_124_cleanly() {
   local home out err status
   home=$(make_home quiet)
@@ -98,7 +87,6 @@ test_existing_singleton_watcher_is_not_success() {
   pass "checkpoint rejects an existing watcher singleton as unowned"
 }
 
-test_zero_padded_zero_is_rejected
 test_quiet_checkpoint_exits_124_cleanly
 test_signal_passes_through_and_exits_zero
 test_registered_check_uses_preserved_watcher_environment

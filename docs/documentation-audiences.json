@@ -30,7 +30,8 @@
     "docs/herdr-backend.md",
     "docs/zellij-backend.md",
     "docs/orca-backend.md",
-    "docs/cmux-backend.md"
+    "docs/cmux-backend.md",
+    "docs/remote-secondmates.md"
   ],
   "requiredOwnerPointers": [
     {
@@ -100,6 +101,10 @@
     {
       "source": "docs/codex-app-backend.md",
       "target": "docs/verification/runtime-backends.md"
+    },
+    {
+      "source": "docs/trace-context.md",
+      "target": "docs/verification/trace-context.md"
     }
   ],
   "surfaces": [
@@ -152,35 +157,15 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/harness-adapters/references/adapter-claude.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-adapters/references/adapter-codex.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-adapters/references/adapter-grok.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-adapters/references/adapter-kimi.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-adapters/references/adapter-opencode.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-adapters/references/adapter-pi.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-adapters/references/adapter-prime.md",
+      "path": ".agents/skills/process-event-sources/SKILL.md",
       "audience": "agent-runtime"
     },
     {
       "path": ".agents/skills/project-management/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/quota-array-dispatch/SKILL.md",
       "audience": "agent-runtime"
     },
     {
@@ -214,6 +199,14 @@
     {
       "path": "README.md",
       "audience": "public-product"
+    },
+    {
+      "path": "VISION.md",
+      "audience": "public-product"
+    },
+    {
+      "path": "docs/agent-control.md",
+      "audience": "maintainer-architecture"
     },
     {
       "path": "docs/architecture.md",
@@ -260,10 +253,6 @@
       "audience": "operator-example"
     },
     {
-      "path": "docs/examples/model-endpoints.json",
-      "audience": "operator-example"
-    },
-    {
       "path": "docs/examples/wedge-alarm",
       "audience": "operator-example"
     },
@@ -285,6 +274,10 @@
     },
     {
       "path": "docs/orca-backend.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "docs/remote-secondmates.md",
       "audience": "operator-current"
     },
     {
@@ -328,11 +321,27 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/trace-context.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/turnend-guard.md",
       "audience": "operator-current"
     },
     {
-      "path": "docs/verification/model-endpoints.md",
+      "path": "docs/verification/dispatch-auth.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/muse.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/process-event-sources.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/public-followup.md",
       "audience": "maintainer-verification"
     },
     {
@@ -340,7 +349,15 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/stow-memory.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/supervision.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/trace-context.md",
       "audience": "maintainer-verification"
     },
     {
