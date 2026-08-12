@@ -151,6 +151,45 @@ test_empty_fleet_json() {
   pass "empty fleet snapshot and view use explicit absence markers"
 }
 
+test_missing_state_tools_are_not_retried_per_task() {
+  local home restricted out started elapsed tool real
+  home=$(make_home missing-state-tools)
+  restricted="$home/restricted-bin"
+  mkdir -p "$restricted"
+  # seq and sleep must stay on this PATH: the herdr server-ensure retry loop is
+  # built from them, and without them the pre-fix per-task retry aborts
+  # instantly instead of burning its 10s budget, letting the elapsed-time bound
+  # below pass even against an unbounded snapshot.
+  for tool in bash basename cat cut date dirname env find grep head jq seq sleep sort stat tail tr uname wc awk sed git; do
+    real=$(command -v "$tool" || true)
+    [ -n "$real" ] || fail "missing test dependency: $tool"
+    ln -s "$real" "$restricted/$tool"
+  done
+  mkdir -p "$home/task-worktree"
+  fm_write_meta "$home/state/gone-herdr.meta" \
+    "backend=herdr" \
+    "window=default:gone-pane" \
+    "worktree=$home/task-worktree" \
+    "project=firstmate" \
+    "harness=pi" \
+    "kind=ship" \
+    "mode=no-mistakes"
+
+  started=$SECONDS
+  out=$(PATH="$restricted" FM_HOME="$home" "$SNAPSHOT" --json)
+  elapsed=$((SECONDS - started))
+  [ "$elapsed" -lt 5 ] \
+    || fail "snapshot retried unavailable current-state tools for ${elapsed}s"
+  printf '%s' "$out" | jq -e '
+    .tasks[] | select(.id == "gone-herdr")
+    | .current_state.state == "unknown"
+      and .current_state.source == "none"
+      and .current_state.detail == "backend target gone: default:gone-pane"
+      and .endpoint.exists == false
+  ' >/dev/null || fail "unavailable state tools did not preserve the unknown task row: $out"
+  pass "snapshot skips unavailable current-state tools instead of retrying per task"
+}
+
 test_fixture_snapshot_json() {
   local home fakebin out ids
   home=$(make_home fixture)
@@ -780,6 +819,7 @@ test_parked_scout_decision_stays_pending() {
 }
 
 test_empty_fleet_json
+test_missing_state_tools_are_not_retried_per_task
 test_fixture_snapshot_json
 test_main_inventory_orphan_and_unstructured_disclosure
 test_normalized_roles_and_plural_blocker_readiness

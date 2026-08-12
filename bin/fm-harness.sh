@@ -13,6 +13,8 @@
 #                                        config/secondmate-harness, or empty when absent.
 #        fm-harness.sh secondmate-effort   print the optional EFFORT token from
 #                                        config/secondmate-harness, or empty when absent.
+#        fm-harness.sh verified           print the verified harness adapter set,
+#                                        one stable adapter name per line.
 # config/secondmate-harness format: a single line "<harness> [<model>] [<effort>]",
 # whitespace-separated. A bare "<harness>" (today's format) behaves exactly as before:
 # harness only, no model/effort. Only the first non-empty, non-comment line is parsed.
@@ -26,6 +28,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+
+# Machine-readable declaration consumed by local introspection contracts
+# (bin/fm-registry-snapshot.sh reports it as configuration.verified_adapters, and
+# validates recorded per-task harness values against it).
+# Keep this aligned with the verified detection and launch adapters below, and
+# with the adapter set AGENTS.md section 4 names as dispatchable.
+FM_HARNESS_VERIFIED='claude
+codex
+opencode
+pi
+pi-signed
+grok
+kimi
+muse
+prime-agent'
 
 detect_own() {
   # Layer 1: environment markers for verified harnesses.
@@ -171,5 +188,6 @@ case "${1:-}" in
   secondmate) resolve_secondmate ;;
   secondmate-model) resolve_secondmate_model ;;
   secondmate-effort) resolve_secondmate_effort ;;
+  verified) printf '%s\n' "$FM_HARNESS_VERIFIED" ;;
   *) detect_own ;;
 esac
