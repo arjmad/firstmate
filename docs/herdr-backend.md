@@ -1,7 +1,7 @@
 # Herdr runtime backend
 
 Herdr is an experimental agent-native terminal backend with native per-pane agent state and push events.
-Firstmate requires Herdr protocol 14 or newer; broad backend verification covers versions 0.7.1, 0.7.3, 0.7.4, 0.7.5, and 0.8.0, while protocol-16 features remain gated by availability.
+Firstmate requires Herdr protocol 14 or newer for ordinary pane operations, and protocol 17 (Herdr 0.7.5) to create a crewmate's pane, which carries its launch environment natively; broad backend verification covers versions 0.7.1, 0.7.3, 0.7.4, 0.7.5, and 0.8.0, while protocol-16 features remain gated by availability.
 Default-on presentation spaces have a higher floor of Herdr 0.8.0 for the reason given under [Presentation spaces](#presentation-spaces).
 Herdr provides the terminal session while Treehouse continues to provide task worktrees.
 [`configuration.md`](configuration.md#runtime-backend-configbackend--fm_backend) owns shared backend selection and metadata semantics.
@@ -12,7 +12,7 @@ Pick Herdr when you want native busy, idle, and blocked state and accept the exp
 
 Prerequisites:
 
-- Herdr protocol 14 or newer, installed from [herdr.dev](https://herdr.dev).
+- Herdr protocol 14 or newer, installed from [herdr.dev](https://herdr.dev); spawning a worker additionally needs protocol 17 (Herdr 0.7.5) for its native launch environment.
 - `jq` for JSON responses.
 - The universal harness and toolchain requirements in [`configuration.md`](configuration.md#toolchain).
 - `python3` only for optional protocol-16 presentation-space ordering and native event subscription.
@@ -199,6 +199,37 @@ herdr_pane_id=<pane-id>
 A Herdr pane id contains a colon, so the adapter splits `window=` on the first colon only.
 The recorded pane is the operational fast path.
 Workspace and tab ids support verification and cleanup but are not inferred from mutable labels during normal operation.
+
+An optional `title=` records a spawn's explicit `--title` value; see "Display titles" below.
+
+## Launch environment
+
+Herdr's `tab create` and `workspace create` accept a repeatable `--env KEY=VALUE` that sets the variable on the launched process itself.
+This backend uses that flag for every launch value firstmate already knows before the pane exists, so those values never transit the pane's interactive shell.
+That is what keeps a local proxy credential out of the pane's visible screen content, and therefore out of Herdr's optional persisted pane history.
+The disposable presentation workspace's own seeded default tab deliberately receives none of it, because that tab is pruned and never hosts the crewmate.
+
+A value that only exists after the pane has been created cannot use this route and still goes through the typed pre-launch path, as does trace context, which is a correlation id rather than a secret.
+Every other runtime backend keeps that typed path unchanged, including the paired history-file suppression that protects a typed credential.
+The local endpoint's non-secret variables are a prefix of the composed launch command rather than launch environment, and are identical on every backend.
+A malformed pair refuses the create outright rather than starting a pane whose environment is silently incomplete.
+
+Because there is no typed fallback here (one would put the credential back on the pane screen), creating a crewmate's pane requires Herdr 0.7.5 or newer (protocol 17).
+The two halves of that floor need different treatment.
+A client that predates the flag rejects the argument, so the `tab create` fails and its diagnostic names the version requirement rather than failing silently; no preemptive check is needed.
+A stale server is the dangerous half, because it drops the unknown field from the create request and still reports success, so it is asserted ahead of time at the three entry points that create a crewmate's pane.
+That assertion is deliberately narrower than the adapter's general version gate: capture, send, status, and kill keep working against an older but live Herdr.
+Refusing those fleet-wide would be unsafe, because the best-effort kill path would then report success without closing a pane and cleanup would record a clean teardown over a still-running worker; draining the fleet is the operator's own remedy for a stale Herdr.
+The server's protocol is observed on the session-scoped server-ensure read, because only that read is scoped to the session whose daemon will actually host the pane; an ambient status query reports whatever server happens to be bound.
+A running server whose protocol cannot be read proceeds rather than refusing.
+
+## Display titles
+
+A spawn's `--title <short>` sets the pane's displayed name only.
+The effective title is `<title> · <model>` when a concrete model is known and `<title> · <harness>` otherwise; without the flag the task id takes the title half, so an unlabeled fleet still shows which worker runs which model.
+It is applied with `pane rename` for clients that render a pane's custom label and `pane report-metadata` for the agent-aware sidebar, both best-effort: a pane whose title could not be set is still a valid task endpoint.
+A relaunch reapplies it, because a relaunch may change the harness or model the title reports.
+The tab's `fm-<id>` label, the recorded pane endpoint, and every selector stay task-id based, so no title text is ever recovery, ownership, or cleanup authority.
 
 ## Current transport behavior
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--title <short>]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--title <short>]
+#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--title <short>] --secondmate
 #   <project-dir> accepts a projects/<name> path, an explicit absolute or
 #   slash-containing relative path, or a bare registered project name resolved
 #   against this home's projects/ dir (matching fm-brief.sh's bare <repo-name>
@@ -22,7 +22,7 @@
 #   loud one-line deviation notice is printed and the spawn continues.
 #   no-mistakes-prod-only is a registry policy rather than a task mode and is
 #   refused as a flag value.
-#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>]
+#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--title <short>]
 #   --relaunch launches a replacement agent for an EXISTING task into that
 #   task's own recorded endpoint and worktree instead of creating either. It is
 #   the launch half of the control plane (bin/fm-control.sh relaunch), which
@@ -44,6 +44,14 @@
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
 #   from that harness's launch rather than guessed.
+#   --title <short> changes only the DISPLAY label for this spawn. The effective
+#   pane/agent title is "<title> · <model>" when a concrete model is known,
+#   otherwise "<title> · <harness>"; without --title, <task-id> is used. The
+#   operational endpoint, tab label, ownership, and selector metadata stay task-id
+#   based, so no title text ever becomes recovery or cleanup authority. title= is
+#   recorded in state/<id>.meta only when the flag was explicit. Applied on herdr,
+#   which has a display-only pane title; tmux keeps its fm-<id> window name because
+#   that name is also its recorded target.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
@@ -147,7 +155,7 @@
 # Batch dispatch: pass one or more `id=repo` pairs instead of a single <id> <project>, e.g.
 #     fm-spawn.sh fix-a-k3=projects/foo add-b-q7=projects/bar [--scout]
 #   Each pair re-execs this script in single-task mode, so the single path stays the only
-#   source of truth; shared --scout/--harness/--model/--effort/--backend/--mode/--yolo
+#   source of truth; shared --scout/--harness/--model/--effort/--backend/--title/--mode/--yolo
 #   applies to every pair. A ship batch therefore carries one delivery contract, and each
 #   pair still checks it against its own brief; a batch spanning modes is two invocations.
 #   If config/crew-dispatch.json exists, shared --harness is required for crewmate
@@ -269,6 +277,7 @@ EFFORT=
 BACKEND_ARG=
 MODE=
 YOLO=
+TITLE=
 TRACEPARENT_ARG=
 HARNESS_SET=0
 MODEL_SET=0
@@ -276,6 +285,7 @@ EFFORT_SET=0
 BACKEND_SET=0
 MODE_SET=0
 YOLO_SET=0
+TITLE_SET=0
 TRACEPARENT_SET=0
 RELAUNCH=0
 POS=()
@@ -292,6 +302,7 @@ for a in "$@"; do
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
       mode) MODE=$a; MODE_SET=1 ;;
       yolo) YOLO=$a; YOLO_SET=1 ;;
+      title) TITLE=$a; TITLE_SET=1 ;;
       traceparent) TRACEPARENT_ARG=$a; TRACEPARENT_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
@@ -314,6 +325,8 @@ for a in "$@"; do
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
     --yolo) want_value=yolo ;;
     --yolo=*) YOLO=${a#--yolo=}; YOLO_SET=1 ;;
+    --title) want_value=title ;;
+    --title=*) TITLE=${a#--title=}; TITLE_SET=1 ;;
     --traceparent) want_value=traceparent ;;
     --traceparent=*) TRACEPARENT_ARG=${a#--traceparent=}; TRACEPARENT_SET=1 ;;
     *) POS+=("$a") ;;
@@ -326,6 +339,11 @@ done
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || { echo "error: --backend requires a non-empty value" >&2; exit 1; }
 [ "$MODE_SET" -eq 0 ] || [ -n "$MODE" ] || { echo "error: --mode requires a non-empty value" >&2; exit 1; }
 [ "$YOLO_SET" -eq 0 ] || [ -n "$YOLO" ] || { echo "error: --yolo requires a non-empty value" >&2; exit 1; }
+[ "$TITLE_SET" -eq 0 ] || [ -n "$TITLE" ] || { echo "error: --title requires a non-empty value" >&2; exit 1; }
+if [ "$TITLE_SET" -eq 1 ] && printf '%s' "$TITLE" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+  echo "error: --title must not contain control characters" >&2
+  exit 1
+fi
 [ "$TRACEPARENT_SET" -eq 0 ] || [ -n "$TRACEPARENT_ARG" ] || { echo "error: --traceparent requires a non-empty value" >&2; exit 1; }
 # A parent-delivered carrier replaces this home's own resolution, so it is
 # refused unless it is a secondmate spawn carrying a strictly valid W3C value.
@@ -749,6 +767,7 @@ spawn_abort_cleanup() {
             echo "tasktmp=${TASK_TMP:-}"
             echo "model=${MODEL:-default}"
             echo "effort=${EFFORT:-default}"
+            [ "${TITLE_SET:-0}" -eq 0 ] || echo "title=$TITLE"
             echo "backend=orca"
             echo "orca_worktree_id=$ORCA_WORKTREE_ID"
             [ -z "${ORCA_TERMINAL:-}" ] || echo "terminal=$ORCA_TERMINAL"
@@ -863,6 +882,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   # spanning several modes is two invocations rather than a silent mixed dispatch.
   [ "$MODE_SET" -eq 0 ] || shared_args+=(--mode "$MODE")
   [ "$YOLO_SET" -eq 0 ] || shared_args+=(--yolo "$YOLO")
+  [ "$TITLE_SET" -eq 0 ] || shared_args+=(--title "$TITLE")
   for pair in "${POS[@]}"; do
     case "$pair" in
       *=*) : ;;
@@ -1114,8 +1134,8 @@ launch_template() {
     # claude, so every claude supervision fact still applies. __MCPCONFIG__
     # deliberately precedes the scalar --model flag: claude parses --mcp-config as
     # variadic, so it must never sit immediately before the positional brief.
-    # The auth token is NOT part of this string; it ships on the same typed
-    # pre-launch channel as GOTMPDIR so the secret never enters the recorded
+    # The auth token is NOT part of this string; it ships on the same pre-launch
+    # channel as GOTMPDIR (SPAWN_ENV) so the secret never enters the recorded
     # launch command.
     claude) printf '%s' '__ENDPOINTENV__CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __STRICTMCP____MCPCONFIG____MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     codex)
@@ -1305,6 +1325,21 @@ if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
     fi
   fi
 fi
+
+# Display identity, resolved once every harness/model axis above is final.
+# DISPLAY_TITLE is what a human reads on the pane; it is never a selector. The
+# task id remains the tab label, the recorded endpoint, and the only thing
+# recovery, ownership, and cleanup ever match on, so a renamed or duplicated
+# title cannot misdirect any of them. The effective agent half prefers the
+# concrete model over the harness name, because two workers on the same harness
+# and different models are exactly what a title has to tell apart.
+DISPLAY_LABEL=$ID
+[ "$TITLE_SET" -eq 0 ] || DISPLAY_LABEL=$TITLE
+DISPLAY_AGENT=$HARNESS
+if [ -n "$MODEL" ] && [ "$MODEL" != default ]; then
+  DISPLAY_AGENT=$MODEL
+fi
+DISPLAY_TITLE="$DISPLAY_LABEL · $DISPLAY_AGENT"
 
 secondmate_registry_value() {
   secondmate_registry_field "$DATA/secondmates.md" "$1" "$2"
@@ -1890,6 +1925,43 @@ herdr_projection_existing_meta_allows_flat() {  # <meta>
   esac
 }
 
+# Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/. Go won't
+# create GOTMPDIR, so mkdir before it is used; fm-teardown removes the whole root.
+# Nested (not a bare /tmp/fm-<id>/gotmp) so other per-task temp can live alongside
+# later, and teardown cleans one deterministic path. GOTMPDIR (not TMPDIR) is the
+# targeted knob: TMPDIR is too broad (affects every program's temp, not just Go's).
+# Resolved BEFORE the window is created so a backend that can place environment
+# on the launched pane process natively (see SPAWN_ENV below) has the value in
+# hand at creation time; it depends only on $ID, never on the worktree.
+TASK_TMP="/tmp/fm-$ID"
+mkdir -p "$TASK_TMP/gotmp"
+
+# SPAWN_ENV: the crewmate environment firstmate has already computed and that is
+# fully known BEFORE the pane exists. Backends able to set environment on the
+# launched process itself take it natively at window creation, so these values
+# never transit the pane's interactive shell - which is what keeps the proxy
+# credential off the pane's visible screen content, and therefore out of an
+# optional persisted pane history. Backends without that capability keep the
+# typed pre-launch export path further below, unchanged.
+#
+# Deliberately NOT here: anything only knowable after the pane exists (the
+# treehouse worktree path, the pane's own ids), and the endpoint's non-secret env
+# prefix, which is a launch-command prefix inside $LAUNCH and is composed
+# identically for every backend.
+SPAWN_ENV=("GOTMPDIR=$TASK_TMP/gotmp")
+if [ -n "$ENDPOINT_TOKEN" ]; then
+  SPAWN_ENV[${#SPAWN_ENV[@]}]="ANTHROPIC_AUTH_TOKEN=$ENDPOINT_TOKEN"
+fi
+# SPAWN_ENV_NATIVE=1 means this backend consumed SPAWN_ENV at window creation and
+# the typed pre-launch export block must be skipped for it. A relaunch creates no
+# window, but it also needs no re-delivery: it reuses the recorded endpoint's own
+# shell, which is the exact process the original create placed this environment
+# on, and it refuses unless that shell is still sitting in the recorded worktree.
+SPAWN_ENV_NATIVE=0
+case "$BACKEND" in
+  herdr) SPAWN_ENV_NATIVE=1 ;;
+esac
+
 W="fm-$ID"
 if [ "$RELAUNCH" -eq 1 ]; then
   # Adopt the recorded endpoint instead of creating one. This is what keeps a
@@ -1902,6 +1974,12 @@ if [ "$RELAUNCH" -eq 1 ]; then
   [ "$KIND" = secondmate ] || WT=$RELAUNCH_WT
   WT_TARGET=$T
   SES=${T%%:*}
+  # A relaunch may change the harness or the model, so the display the pane
+  # already carries can be stale. Refresh it on the backend that has one.
+  if [ "$BACKEND" = herdr ]; then
+    fm_backend_herdr_set_task_display \
+      "$HERDR_SES" "$HERDR_PANE_ID" "$DISPLAY_TITLE" "$DISPLAY_AGENT" || true
+  fi
 else
 case "$BACKEND" in
   tmux)
@@ -1965,7 +2043,8 @@ case "$BACKEND" in
           FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_reclaim_task \
             "$HERDR_SES" "$HERDR_PRESENTATION_JOURNAL" "$ID" "$HERDR_LABEL_HOME" \
             "$HERDR_RECOVERY_WORKSPACE_ID" "$HERDR_RECOVERY_TAB_ID" "$HERDR_RECOVERY_PANE_ID" \
-            "$HERDR_PARENT_LABEL" "$W" "$PROJ_ABS"
+            "$HERDR_PARENT_LABEL" "$W" "$PROJ_ABS" \
+            "${SPAWN_ENV[@]+"${SPAWN_ENV[@]}"}"
           HERDR_RECLAIM_STATUS=$?
           set -e
           case "$HERDR_RECLAIM_STATUS" in
@@ -2019,7 +2098,8 @@ case "$BACKEND" in
             HERDR_PROJECTION_ID=$(fm_backend_herdr_projection_journal_create "$STATE" "$ID") || exit 1
             HERDR_PROJECTION_LABEL=$(fm_backend_herdr_projection_workspace_label "$ID" "$HERDR_PROJECTION_ID")
             if ! FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_create_task \
-              "$PROJ_ABS" "$HERDR_PROJECTION_LABEL" "$W"; then
+              "$PROJ_ABS" "$HERDR_PROJECTION_LABEL" "$W" \
+              "${SPAWN_ENV[@]+"${SPAWN_ENV[@]}"}"; then
               if [ "${FM_BACKEND_HERDR_PROJECTION_CLEANUP_SAFE:-0}" = 1 ]; then
                 HERDR_PROJECTION_ABORT_CLEANUP=1
                 HERDR_PROJECTION_ABORT_SESSION=$FM_BACKEND_HERDR_PROJECTION_SESSION
@@ -2072,7 +2152,9 @@ case "$BACKEND" in
       HERDR_SEEDED_DEFAULT_TAB_ID=${HERDR_CONTAINER_RAW#*$'\t'}
       HERDR_SES=${CONTAINER%%:*}
       HERDR_WORKSPACE_ID=${CONTAINER#*:}
-      HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task "$CONTAINER" "$W" "$PROJ_ABS" "$HERDR_SEEDED_DEFAULT_TAB_ID") || exit 1
+      HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task \
+        "$CONTAINER" "$W" "$PROJ_ABS" "$HERDR_SEEDED_DEFAULT_TAB_ID" \
+        "${SPAWN_ENV[@]+"${SPAWN_ENV[@]}"}") || exit 1
       read -r HERDR_TAB_ID HERDR_PANE_ID <<EOF
 $HERDR_TASK_IDS
 EOF
@@ -2082,6 +2164,11 @@ EOF
       exit 1
     fi
     T="$HERDR_SES:$HERDR_PANE_ID"
+    # Display only, and deliberately never checked: a pane whose title could not
+    # be set is still an entirely valid task endpoint, so a warning is the whole
+    # remedy.
+    FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_set_task_display \
+      "$HERDR_SES" "$HERDR_PANE_ID" "$DISPLAY_TITLE" "$DISPLAY_AGENT" || true
     ;;
   zellij)
     ZELLIJ_SES=$(fm_backend_zellij_container_ensure) || exit 1
@@ -2308,14 +2395,6 @@ fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   freshen_spawn_worktree_base "$WT" || exit 1
 fi
-
-# Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/. Go won't
-# create GOTMPDIR, so mkdir before it is used; fm-teardown removes the whole root.
-# Nested (not a bare /tmp/fm-<id>/gotmp) so other per-task temp can live alongside
-# later, and teardown cleans one deterministic path. GOTMPDIR (not TMPDIR) is the
-# targeted knob: TMPDIR is too broad (affects every program's temp, not just Go's).
-TASK_TMP="/tmp/fm-$ID"
-mkdir -p "$TASK_TMP/gotmp"
 
 # Per-harness turn-end hook where enabled: a file that touches
 # state/<id>.turn-ended when the agent finishes a turn. Worktree-resident hooks
@@ -2656,11 +2735,17 @@ fi
 # would let a spawn continue and launch an agent that firstmate cannot supervise
 # because its metadata never landed. Testing the status directly is what makes a
 # failed publication stop the spawn instead of orphaning a live worker.
+# A key this publication OWNS is re-derived above and must not be carried over
+# from the previous incarnation; everything else is preserved verbatim. title= is
+# owned only when this relaunch passed --title explicitly: without the flag the
+# original spawn's title is the still-correct display name and is preserved,
+# while with it the new value must win rather than land beside the old one.
 preserve_relaunch_meta() {
-  awk -F= '
+  awk -F= -v owned_title="$TITLE_SET" '
     BEGIN {
       split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
+      if (owned_title == 1) owned["title"] = 1
     }
     !($1 in owned)
   ' "$RELAUNCH_META"
@@ -2677,6 +2762,9 @@ preserve_relaunch_meta() {
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  # Display only, and written only when the flag was explicit, so a spawn that
+  # never asked for a title keeps byte-identical metadata.
+  [ "$TITLE_SET" -eq 0 ] || echo "title=$TITLE"
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   echo "spawn_gen=$SPAWN_GEN"
   # Default-off writes no traceparent= line.
@@ -2824,22 +2912,32 @@ spawn_record_traceparent() {
   return "$status"
 }
 
-# Export GOTMPDIR into the crewmate's pane shell so the agent and every child
-# process (go build, go test, ...) inherit it. Sent before the launch command so
-# the env is set when the agent starts; the brief sleep lets the export land.
-spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
-# A local-endpoint claude launch needs its proxy auth token in the pane shell.
-# It rides this same typed channel rather than the launch string, so the secret
-# never enters $LAUNCH, state/<id>.meta, a status line, or the process command
-# line. `unset HISTFILE` stays paired with the export it protects: the secret is
-# typed at an interactive shell here, so that shell must not persist it.
-if [ -n "$ENDPOINT_TOKEN" ]; then
-  spawn_send_text_line "$T" "unset HISTFILE"
-  spawn_send_text_line "$T" "export ANTHROPIC_AUTH_TOKEN=$(shell_quote "$ENDPOINT_TOKEN")"
+# Typed pre-launch environment: the fallback for backends that cannot place
+# environment on the launched pane process themselves. A backend that already
+# consumed SPAWN_ENV natively at window creation (SPAWN_ENV_NATIVE=1) skips this
+# entirely - retyping the same values would put them back on the pane's visible
+# screen, which is exactly what the native path removes.
+if [ "$SPAWN_ENV_NATIVE" -eq 0 ]; then
+  # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
+  # process (go build, go test, ...) inherit it. Sent before the launch command so
+  # the env is set when the agent starts.
+  spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
+  # A local-endpoint claude launch needs its proxy auth token in the pane shell.
+  # It rides this same typed channel rather than the launch string, so the secret
+  # never enters $LAUNCH, state/<id>.meta, a status line, or the process command
+  # line. `unset HISTFILE` stays paired with the export it protects: on this path
+  # the secret really is typed at an interactive shell, so that shell must not
+  # persist it to a history file.
+  if [ -n "$ENDPOINT_TOKEN" ]; then
+    spawn_send_text_line "$T" "unset HISTFILE"
+    spawn_send_text_line "$T" "export ANTHROPIC_AUTH_TOKEN=$(shell_quote "$ENDPOINT_TOKEN")"
+  fi
 fi
-# Send through the exact channel that already ships GOTMPDIR, so every backend
-# and harness - ship, scout, and secondmate - gets it before launch. Skipped
-# entirely when trace context is off.
+# Trace context stays on the typed channel for every backend, including the
+# native-env ones: it is resolved after the window exists, and it is a
+# correlation id rather than a secret, so the screen-content argument that moves
+# the credential off this path does not apply to it. Skipped entirely when trace
+# context is off.
 if [ -n "$SPAWN_TRACEPARENT" ]; then
   if spawn_send_text_line "$T" "export TRACEPARENT=$SPAWN_TRACEPARENT"; then
     if ! spawn_record_traceparent; then
@@ -2854,6 +2952,13 @@ if [ -n "$SPAWN_TRACEPARENT" ]; then
     LAUNCH="unset TRACEPARENT; $LAUNCH"
   fi
 fi
+# Settle before the launch line. This used to be described as letting the typed
+# exports land; with SPAWN_ENV_NATIVE=1 nothing need be typed ahead of the
+# launch, so what it now buys is the freshly created pane's shell coming up
+# before the launch command is typed at it. That first-input slot was previously
+# occupied by the GOTMPDIR export, so keeping the pause preserves the timing
+# every backend has been verified against rather than promoting the launch line
+# into it untested.
 sleep 0.3
 spawn_send_literal "$T" "$LAUNCH"
 sleep 0.3
