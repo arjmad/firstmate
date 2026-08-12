@@ -1057,21 +1057,7 @@ EOF
           # authoritative source fm-crew-state.sh itself already prioritizes
           # over the log) a chance to override before trusting the log.
           if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
-            settled_task=$(window_to_task "$w" "$STATE")
-            settled_last=$(last_status_line "$STATE/$settled_task.status")
-            settled_seen=$(cat "$(_hb_surfaced_path "$settled_task")" 2>/dev/null || true)
-            if status_idle_is_expected "$settled_last" \
-               && [ -n "$settled_last" ] && [ "$settled_seen" = "$settled_last" ]; then
-              # A done/failed result that ALREADY surfaced. Its pane is expected
-              # to sit idle afterwards, but each redraw (a peek, a repaint on
-              # focus) mints a new hash and would re-surface the same settled
-              # result forever. Absorb it on the long pause cadence instead, so
-              # a forgotten terminal pane still resurfaces periodically without
-              # nagging once per hash epoch. This is the opposite direction from
-              # fm-inactive-reconcile, which finds terminal results that were
-              # NEVER surfaced; both are needed.
-              handle_paused_stale "$w" "$settled_task" "$h"
-            elif crew_is_provably_working "$settled_task"; then
+            if crew_is_provably_working "$(window_to_task "$w" "$STATE")"; then
               printf '%s' "$h" > "$sf"
               date +%s > "$ssf"
               triage_log "absorbed stale (provably working, overriding a stale captain-relevant status): $w"

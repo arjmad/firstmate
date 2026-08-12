@@ -131,22 +131,6 @@ status_is_paused() {  # <status-line>
   [ "$verb" = "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}" ]
 }
 
-# 0 if the given (last) status line is an expected-idle terminal result. Only
-# done and failed are SETTLED: the pane is expected to sit still afterwards, and
-# once that exact result has been surfaced there is nothing new to report when
-# the pane merely redraws. needs-decision and blocked still require firstmate
-# action, so they deliberately keep immediate stale re-surfacing. Consumers
-# separately prove that this exact status line already surfaced.
-status_idle_is_expected() {  # <status-line>
-  local line=$1 verb
-  [ -n "$line" ] || return 1
-  verb=$(status_line_verb "$line")
-  case "$verb" in
-    done|failed) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
 # 0 if a status line declares either an external-wait pause or a verified
 # captain-held transfer.
 # Both declarations can intentionally leave an exited crew's endpoint idle, so
