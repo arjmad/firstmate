@@ -217,6 +217,22 @@ Route durable knowledge to its most specific owner:
 - Knowledge useful to almost every contributor to one project belongs in that project's committed `AGENTS.md`.
 - Knowledge general to every firstmate user belongs in this repo's shared tracked surface.
 
+### Registry same-change rule
+
+In this subsection only, "Registry" means a fleet's generated inventory of live reality, not firstmate's project registry in `data/projects.md`.
+The rule text below is quoted verbatim from the captain's canonical copy and names the Heimdall fleet's instance; read it as your own fleet's equivalent inventory, and skip the subsection entirely if your fleet keeps none.
+
+The Heimdall Registry owns generated facts about live reality: PM2 names, ports, live surfaces, remotes and branches, hosts, MCP inventories, model versions, schedules, and backup posture.
+
+**If your change adds, removes, renames, or reconfigures any fact the Registry owns, update the Registry inventory in the same change.**
+
+This is not limited to adding or removing a whole lane or repository.
+Deleting a scheduled job, changing a port, retiring a service, and moving a host all qualify.
+
+A change that alters live reality without updating the model leaves the Registry asserting something false, and its drift checks will then report your correct change as a fault.
+
+If you genuinely cannot update the Registry in the same change, say so explicitly in your handoff or PR body so it is tracked, rather than leaving it for drift detection to find.
+
 Firstmate never writes a project's `AGENTS.md` directly.
 A crewmate creates or updates it lazily through the project's selected delivery path, using `bin/fm-ensure-agents-md.sh` and preferring pointers to authoritative sources over copied detail.
 Keep fleet delivery posture and captain-private strategy out of project memory.
