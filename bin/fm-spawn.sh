@@ -2591,6 +2591,11 @@ if [ "$RELAUNCH" -eq 1 ]; then
   SPAWN_META_TMP="$STATE/.$ID.meta.relaunch.${BASHPID:-$$}"
   SPAWN_META_PATH=$SPAWN_META_TMP
 fi
+# Publish through an explicitly checked write. A redirected compound block can
+# have its failure ignored under set -e (notably on stock macOS Bash 3.2), which
+# would let a spawn continue and launch an agent that firstmate cannot supervise
+# because its metadata never landed. Testing the status directly is what makes a
+# failed publication stop the spawn instead of orphaning a live worker.
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
@@ -2648,7 +2653,11 @@ preserve_relaunch_meta() {
   if [ "$SPAWN_CONTROL_PARENT" = 1 ] && [ -n "${FM_CONTROL_RELAUNCH_TX:-}" ]; then
     echo "control_relaunch_tx=$FM_CONTROL_RELAUNCH_TX"
   fi
-} > "$SPAWN_META_PATH"
+} > "$SPAWN_META_PATH" || SPAWN_META_WRITE_STATUS=$?
+if [ "${SPAWN_META_WRITE_STATUS:-0}" -ne 0 ]; then
+  echo "error: could not publish task metadata to $SPAWN_META_PATH; refusing to launch an unsupervisable agent for $ID" >&2
+  exit 1
+fi
 if [ "$RELAUNCH" -eq 1 ]; then
   SPAWN_META_PUBLISH_STARTED=1
   mv -f "$SPAWN_META_TMP" "$STATE/$ID.meta"
