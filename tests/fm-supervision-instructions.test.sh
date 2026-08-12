@@ -181,7 +181,23 @@ test_unknown_fallback
 test_conditional_stanzas
 test_repair_lines
 test_cross_harness_ordinary_continuation_and_repair_matrix
+test_invalid_boolean_values_are_rejected() {
+  local flag status
+  mkdir -p "$TMP_ROOT"
+  # Mapping an unrecognized boolean to false would silently render "supervision
+  # is off" from a typo, so every boolean option must refuse instead.
+  for flag in --read-only --afk --x-mode --queue-pending; do
+    status=0
+    "$RENDER" --harness codex "$flag" banana >/dev/null 2>"$TMP_ROOT/invalid-boolean.err" || status=$?
+    expect_code 2 "$status" "$flag invalid boolean exit"
+    assert_contains "$(cat "$TMP_ROOT/invalid-boolean.err")" "boolean value must be 0 or 1" \
+      "$flag invalid boolean rejection missing"
+  done
+  pass "renderer rejects invalid values for every boolean option"
+}
+
 test_pi_signed_preserves_identity_with_pi_supervision_protocol
 test_grok_is_background_notify
 test_grok_command_sources_effective_config
 test_pi_snippet_uses_effective_extension_path
+test_invalid_boolean_values_are_rejected

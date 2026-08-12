@@ -26,10 +26,13 @@ With --repair-line, print one concise repair instruction for guard and hook mess
 EOF
 }
 
+# Boolean flags are 0 or 1 only. Mapping every unrecognized value to false
+# silently turns a typo or a wrong-shaped value into "supervision is off",
+# which is exactly the direction that must never be guessed.
 bool_value() {
   case "$1" in
-    1|true|TRUE|yes|YES) printf '1\n' ;;
-    *) printf '0\n' ;;
+    0|1) printf '%s\n' "$1" ;;
+    *) echo "error: boolean value must be 0 or 1: $1" >&2; return 2 ;;
   esac
 }
 

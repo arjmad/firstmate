@@ -319,9 +319,13 @@ fm_backend_herdr_presentation_default_supported() {  # <state-dir> [<session>]
 # fm_backend_herdr_presentation_enabled <config-dir> [<state-dir>]: the one gate
 # bin/fm-spawn.sh consults before projecting this home's children into
 # disposable one-task workspaces (docs/herdr-backend.md "Presentation spaces"
-# owns the full contract). An explicit "off" or "on" is obeyed as written; a
-# home that configured nothing is projected only at or above the version floor,
-# and otherwise falls back to the flat layout with one warning. Sets
+# owns the full contract). An explicit "off" or "on" is obeyed as written.
+#
+# The projection is OPT-IN: a home that configured nothing gets the flat layout,
+# even at or above the version floor. Per-task workspace churn is a deliberate
+# local UX choice, and a default-on projection would silently reverse it on every
+# home that never wrote the config file. An explicit "on" is still honored as
+# written, including below the version floor, exactly as before. Sets
 # FM_BACKEND_HERDR_PRESENTATION_PREFERENCE for the new-projection boundary to
 # distinguish an unconfigured default from an explicit opt-in.
 fm_backend_herdr_presentation_enabled() {  # <config-dir> [<state-dir>]
@@ -334,7 +338,7 @@ fm_backend_herdr_presentation_enabled() {  # <config-dir> [<state-dir>]
     off) return 1 ;;
     on) return 0 ;;
   esac
-  fm_backend_herdr_presentation_default_supported "$state_dir"
+  return 1
 }
 
 # fm_backend_herdr_workspace_label: the per-firstmate-HOME herdr workspace
