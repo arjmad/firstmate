@@ -49,6 +49,14 @@
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
 # "blocked:": pause for a known external wait expected to clear on its own,
 # blocked when firstmate must act.
+# Ship tasks include a Registry same-change section, quoting the captain's
+# canonical rule verbatim: a change that adds, removes, renames, or reconfigures
+# a fact the fleet's generated live-reality inventory owns must update that
+# inventory in the same change. It is emitted once into the shared ship body, so
+# it reaches every delivery mode including --herdr-lab, and it is absent from the
+# scout and secondmate scaffolds. Worktree isolation outranks it: rather than
+# leave the worktree to find the inventory, the crewmate names the changed fact
+# in its commit message and "done:" line so firstmate carries the update.
 # Ship tasks include a project-memory section so durable project-intrinsic
 # learnings can be committed to AGENTS.md through the project's delivery path;
 # it carries the AGENTS.md authoring bar (widely useful knowledge only, pointers
@@ -451,6 +459,26 @@ $RULE1
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
+
+# Registry same-change rule
+
+Here "Registry" means your fleet's generated inventory of live reality, not firstmate's project registry in \`data/projects.md\`; skip this section if your fleet keeps no such inventory.
+The rule text below is quoted verbatim from the captain's canonical copy and names the Heimdall fleet's instance; read it as your fleet's equivalent.
+
+The Heimdall Registry owns generated facts about live reality: PM2 names, ports, live surfaces, remotes and branches, hosts, MCP inventories, model versions, schedules, and backup posture.
+
+**If your change adds, removes, renames, or reconfigures any fact the Registry owns, update the Registry inventory in the same change.**
+
+This is not limited to adding or removing a whole lane or repository.
+Deleting a scheduled job, changing a port, retiring a service, and moving a host all qualify.
+
+A change that alters live reality without updating the model leaves the Registry asserting something false, and its drift checks will then report your correct change as a fault.
+
+If you genuinely cannot update the Registry in the same change, say so explicitly in your handoff or PR body so it is tracked, rather than leaving it for drift detection to find.
+
+Rule 2 outranks that obligation: if the inventory lives outside this worktree, do not leave the worktree to update it and do not go looking for it.
+Use the handoff instead - name the Registry-owned fact you changed in your commit message and in your \`done:\` line, the two channels you own in every delivery mode - so firstmate carries the update.
+Add it to the PR body as well only when you author that body yourself; never hand-edit a PR body the pipeline owns.
 
 # Project memory
 If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.

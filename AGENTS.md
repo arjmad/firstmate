@@ -38,7 +38,7 @@ Hard rules, in priority order:
    If work failed, say so plainly with the evidence.
 
 You may maintain this repo's private operational state directly.
-Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `bin/`, `.agents/skills/`, and public `skills/`.
+Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `.claude/settings.json`, `bin/`, `.agents/skills/`, and public `skills/`.
 When any crewmate is live, delegate changes to shared tracked material rather than competing with supervision; when the fleet is empty, firstmate may change it directly.
 This repo is a shared template, while `.env`, `data/`, `state/`, `config/`, `projects/`, and `.no-mistakes/` are captain-private and gitignored.
 Ship shared tracked changes through this repo's no-mistakes pipeline and PR path, with the same merge authority as any other project.
@@ -60,6 +60,7 @@ README.md            public overview and development notes
 .github/workflows/   shared CI and PR enforcement, committed
 .tasks.toml          tracked tasks-axi markdown backend config for the default backlog backend (section 10)
 .agents/skills/      firstmate-loaded internal skills, committed; each carries metadata.internal=true for installers
+.claude/settings.json  tracked Claude safety-hook wiring for SessionStart, PreToolUse, and Stop
 .claude/skills       symlink to .agents/skills for claude compatibility
 skills/              standalone public installer-facing skills, committed; not loaded by firstmate
 bin/                 helper scripts, committed; read each script's header before first use
@@ -239,6 +240,22 @@ Route durable knowledge to its most specific owner:
 - Task-scoped notes belong with the backlog item, and investigation findings belong in the scout report.
 - Knowledge useful to almost every contributor to one project belongs in that project's committed `AGENTS.md`.
 - Knowledge general to every firstmate user belongs in this repo's shared tracked surface.
+
+### Registry same-change rule
+
+In this subsection only, "Registry" means a fleet's generated inventory of live reality, not firstmate's project registry in `data/projects.md`.
+The rule text below is quoted verbatim from the captain's canonical copy and names the Heimdall fleet's instance; read it as your own fleet's equivalent inventory, and skip the subsection entirely if your fleet keeps none.
+
+The Heimdall Registry owns generated facts about live reality: PM2 names, ports, live surfaces, remotes and branches, hosts, MCP inventories, model versions, schedules, and backup posture.
+
+**If your change adds, removes, renames, or reconfigures any fact the Registry owns, update the Registry inventory in the same change.**
+
+This is not limited to adding or removing a whole lane or repository.
+Deleting a scheduled job, changing a port, retiring a service, and moving a host all qualify.
+
+A change that alters live reality without updating the model leaves the Registry asserting something false, and its drift checks will then report your correct change as a fault.
+
+If you genuinely cannot update the Registry in the same change, say so explicitly in your handoff or PR body so it is tracked, rather than leaving it for drift detection to find.
 
 Firstmate never writes a project's `AGENTS.md` directly.
 A crewmate creates or updates it lazily through the project's selected delivery path, using `bin/fm-ensure-agents-md.sh` and preferring pointers to authoritative sources over copied detail.
@@ -506,7 +523,7 @@ The scaffold is a safety contract, not a suggestion.
 ## 12. Self-update
 
 Firstmate's shared instruction surface reaches running homes only after it lands on the default branch and those homes fast-forward.
-Only `AGENTS.md`, `bin/`, and `.agents/skills/` are loaded by a running firstmate; public `skills/` is an installer-facing surface.
+Only `AGENTS.md`, `.claude/settings.json`, `bin/`, and `.agents/skills/` are loaded by a running firstmate or its harness; public `skills/` is an installer-facing surface.
 When the captain invokes `/updatefirstmate` or asks to update firstmate, load the `/updatefirstmate` skill.
 It performs guarded fast-forward updates of firstmate and registered secondmate homes, refreshes instructions, and never touches anything under `projects/`.
 
