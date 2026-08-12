@@ -699,7 +699,7 @@ test_nonterminal_stale_paused_absorbed_then_resurfaced() {
 # A still-live agent at an external-decision gate is the disconfirming case: it
 # must surface once, while the unchanged hash must not append the same wake on
 # every watcher re-arm.
-test_exited_declared_pause_is_bounded_but_live_gate_surfaces() {
+test_declared_pause_is_bounded_regardless_of_agent_liveness() {
   local dir state fakebin out capture_file statusf window key pane_hash sig pid back round wakes bare
   dir=$(make_case exited-declared-pause); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/held.status"
@@ -768,20 +768,16 @@ test_exited_declared_pause_is_bounded_but_live_gate_surfaces() {
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
 
-  # First sight must surface promptly so a live external-decision gate is not
-  # hidden behind the pause cadence.
-  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
-    FM_FAKE_TMUX_CURRENT_COMMAND=grok FM_FAKE_CREW_STATE='state: paused · source: status-log · waiting at an active external-decision gate' \
-    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
-    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
-  pid=$!
-  wait_for_exit "$pid" 40 || fail "live external-decision gate did not surface immediately"
-  ack_stopped_cycle "$state" || fail "could not acknowledge the immediate external-decision surface"
-
-  # Re-arm with the stale timer already beyond the wedge threshold. This is the
-  # exact unchanged-hash fallback after the immediate surface: it must retain
-  # the pause cadence and discard any residual wedge timer instead of emitting
-  # a second possible-wedge wake.
+  # A LIVE agent parked at an external-decision gate is the normal shape of a
+  # parked crew, and its pause declaration was already surfaced once through the
+  # no-verb signal path (.seen-gate_status above records that sighting). Gating
+  # the bounded cadence on confirmed agent death instead re-surfaced exactly this
+  # pane as a fresh bare stale on every new hash epoch a peek or redraw produced,
+  # while also costing a per-poll backend liveness probe.
+  #
+  # The stale timer starts already beyond the wedge threshold, so one run proves
+  # both halves: a live parked pane takes the long cadence on first sight, and
+  # the residual wedge timer is discarded instead of escalating a possible wedge.
   printf '%s\n' $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_FAKE_TMUX_CURRENT_COMMAND=grok FM_FAKE_CREW_STATE='state: paused · source: status-log · waiting at an active external-decision gate' \
@@ -790,16 +786,18 @@ test_exited_declared_pause_is_bounded_but_live_gate_surfaces() {
   pid=$!
   if ! wait_live "$pid" 30; then
     reap "$pid"
-    fail "live external-decision gate escalated on the wedge timer after its immediate surface: $(cat "$out")"
+    fail "live parked pane surfaced instead of holding the bounded pause cadence: $(cat "$out")"
   fi
-  [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "live external-decision gate lost its pause cadence marker"; }
-  [ ! -e "$state/.stale-since-$key" ] || { reap "$pid"; fail "live external-decision gate retained the wedge timer"; }
+  [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "live parked pane did not take the pause cadence on first sight"; }
+  [ ! -e "$state/.stale-since-$key" ] || { reap "$pid"; fail "live parked pane retained the wedge timer"; }
   reap "$pid"
-  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' "$state/.wake-queue")
-  bare=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w && $5 == "stale: " w { n++ } END { print n + 0 }' "$state/.wake-queue")
-  [ "$wakes" -eq 0 ] || fail "acknowledged external-decision surface replayed $wakes wakes"
-  [ "$bare" -eq 0 ] || fail "acknowledged external-decision bare stale remained queued"
-  pass "exited declared-pause and captain-held panes use bounded pause cadence while a live decision gate still surfaces once"
+  # A fully absorbed pane never creates the queue at all, so a missing file is
+  # the strongest possible pass rather than an awk error.
+  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' "$state/.wake-queue" 2>/dev/null)
+  bare=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w && $5 == "stale: " w { n++ } END { print n + 0 }' "$state/.wake-queue" 2>/dev/null)
+  [ "${wakes:-0}" -eq 0 ] || fail "live parked pane emitted $wakes stale wakes"
+  [ "${bare:-0}" -eq 0 ] || fail "live parked pane emitted $bare bare stale wakes"
+  pass "declared-pause and captain-held panes use the bounded pause cadence regardless of agent liveness"
 }
 
 test_secondmate_paused_resurfaces_in_normal_mode() {
@@ -1871,7 +1869,7 @@ test_busy_pane_repeated_escalation_reaches_demand_deep_inspection
 test_busy_pane_default_turn_age_bound_is_3600s
 test_nonterminal_stale_not_working_surfaced
 test_nonterminal_stale_paused_absorbed_then_resurfaced
-test_exited_declared_pause_is_bounded_but_live_gate_surfaces
+test_declared_pause_is_bounded_regardless_of_agent_liveness
 test_secondmate_paused_resurfaces_in_normal_mode
 test_secondmate_nonpaused_stale_remains_suppressed
 test_secondmate_unpause_clears_pause_tracking
