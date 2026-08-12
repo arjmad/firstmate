@@ -242,6 +242,62 @@ The Kimi installer requires an existing regular non-symlink `~/.kimi-code/config
 Its `remove` action excises only the marker-delimited Firstmate region and removes Firstmate's hook files.
 For Pi and pi-signed secondmate launches, `fm-spawn.sh` starts the selected executable with `-e` pointed at the secondmate home's own tracked `.pi/extensions/fm-primary-pi-watch.ts` and `.pi/extensions/fm-primary-turnend-guard.ts`, both already present from the secondmate home's git worktree.
 
+## Local model endpoints (config/model-endpoints.json)
+
+`config/model-endpoints.json` is an optional local, gitignored file that lets firstmate route a `claude` crewmate or scout at a local, Anthropic-shaped proxy so a non-Anthropic model can be driven through the unchanged `claude` CLI.
+This is a per-model endpoint override, not a new harness: a matched spawn still records `harness=claude`, so every claude supervision fact (busy signature, turn-end hook, prompt-suggestion suppression, trust dialog, watcher classification) applies unchanged.
+The only launch differences from a normal claude spawn are an endpoint environment prefix, a separately delivered auth token (see the token paragraph below), `--strict-mcp-config`, and an optional deliberately granted `--mcp-config` (see `mcp_config` below).
+Selection reuses the existing `--model` axis: when a template-based claude launch resolves a `--model` that matches a configured entry (whether the model came from an explicit flag or a `config/crew-dispatch.json` profile), `fm-spawn.sh` applies that entry; a raw launch command, a non-claude harness, and a normal Anthropic model (or no model) are never affected.
+This section owns the schema; `bin/fm-model-endpoint.sh`'s header and `--help` own the exact resolution mechanics and exit-code contract, and `bin/fm-spawn.sh` owns the launch wiring.
+When the captain also keeps an operator shell alias that drives the interactive `claude` CLI at the same proxy, the alias and the fleet endpoint entry must both read the endpoint configuration's canonical token file.
+The alias is the ad-hoc interactive path, while `config/model-endpoints.json` is the authoritative path for supervised fleet launches.
+The alias's `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and model defaults must track that token file and endpoint entry, not define a competing configuration.
+
+```json
+{
+  "endpoints": {
+    "<model-name>": {
+      "base_url": "http://127.0.0.1:8080",
+      "auth_token_env": "SOME_TOKEN_VAR",
+      "auth_token_file": "/path/to/gitignored/token",
+      "auth_token": "<literal-token>",
+      "strict_mcp_config": true,
+      "mcp_config": "/path/to/.mcp.json",
+      "env": {
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "my-local-model",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "my-local-model",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "my-local-model-small",
+        "CLAUDE_CODE_SUBAGENT_MODEL": "my-local-model"
+      }
+    }
+  }
+}
+```
+
+`base_url` is required and becomes `ANTHROPIC_BASE_URL`.
+`strict_mcp_config` is an optional boolean that defaults to `true`, adding `--strict-mcp-config`.
+With that default and no `mcp_config`, an endpoint-routed worker, including a Sol-routed worker, starts with zero configured MCP servers.
+It does not inherit user/global MCP servers, path-scoped project servers, or a project `.mcp.json`, so capabilities exposed only through those servers are unavailable.
+`mcp_config` is an optional non-empty path to one MCP JSON file that `fm-spawn.sh` passes as `--mcp-config` alongside `--strict-mcp-config`.
+An absolute path is used as written; a relative path is resolved from the effective `FM_HOME`.
+The configured path must name a readable regular file when the endpoint is resolved, or the spawn stops before creating the worker.
+With strict mode left at its default, that file is the deliberate per-endpoint MCP grant: only servers declared there are loaded.
+Setting `strict_mcp_config` to `false` restores Claude Code's ambient MCP discovery in addition to any explicitly passed file and is therefore a broader grant.
+This boundary governs MCP discovery only.
+It does not structurally disable facilities configured outside MCP, including Claude-in-Chrome, standalone browser or CLI tooling, hooks, filesystem access, or network access; Chrome availability in a Sol-routed worker requires its own end-to-end verification.
+Account-level Claude connectors can also be disabled separately by endpoint authentication and should not be inferred from MCP flags.
+`env` is an optional map of additional non-secret environment variables set as an inline launch prefix; use it for the `ANTHROPIC_DEFAULT_*_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL` slot mappings and any other non-secret knobs, with valid shell variable names only.
+`ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` are rejected inside `env`: the token must come from a token source so it can be delivered off the recorded launch string, and the base URL comes from `base_url`.
+The auth token is a credential and is resolved from `auth_token_env` (an environment variable name), then `auth_token_file` (a gitignored file), then `auth_token` (an embedded literal), taking the first non-empty value; prefer the env or file source over embedding.
+None of the three token-source strings may contain tab, newline, or other control whitespace; such an entry is rejected at parse time and fails closed rather than being accepted truncated.
+The token is never written to `state/<id>.meta`, to any status line, or to the recorded launch string; it reaches the worker only as launch environment, delivered the same way as `GOTMPDIR`.
+Delivery uses the same typed pre-launch channel that ships `GOTMPDIR` on every runtime backend: the token is exported into the crewmate's pane shell immediately before launch, with that shell's history file suppressed for the line so the secret is not persisted to disk by the shell.
+Reading the file requires `jq`.
+Fail-closed contract: an absent or whitespace-only file, or a `--model` that is simply not listed, is inert and the claude spawn launches normally against the real Anthropic API; but a present-but-malformed file, a matched entry missing `base_url` or a token source, an unresolvable token, or a configured `mcp_config` that is missing or unreadable aborts the spawn with a clear error rather than silently launching with the wrong endpoint or connector boundary.
+Local endpoint values (the proxy URL, the token, and the string naming a specific proxy) live only in this gitignored file and never in tracked code.
+See [`docs/examples/model-endpoints.json`](examples/model-endpoints.json) for a starting point to copy into local `config/model-endpoints.json`.
+Resolution, launch composition, credential handling, and the fail-closed cases are covered by `tests/fm-model-endpoint.test.sh` and `tests/fm-spawn-model-endpoint.test.sh`.
+
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
 `config/crew-dispatch.json` is an optional local, gitignored file containing natural-language rules that firstmate reads before dispatching a crewmate or scout.
