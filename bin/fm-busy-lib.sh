@@ -39,9 +39,9 @@
 #   fm-interrupt     the legacy Claude fm-send --key Escape idle event
 #   fm-recovery      a documented recovery reset after relaunch
 # Classifier-only sources (never written into a record):
-#   endpoint-gone, herdr-native, grok-regex, muse-session-log, missing,
-#   malformed, gen-mismatch, source-mismatch, kimi-unverified,
-#   codex-unverified, capture-failed, no-target
+#   endpoint-gone, herdr-native, grok-regex, muse-session-log,
+#   prime-agent-list, missing, malformed, gen-mismatch, source-mismatch,
+#   kimi-unverified, codex-unverified, capture-failed, no-target
 #
 # Classification (fm_busy_classify): busy | idle | unknown | dead, always
 # with the producing source as the second token. Precedence:
@@ -50,8 +50,9 @@
 #   3. a valid, gen-matching, source-trusted record -> its state and source
 #   4. no record at all: herdr's native busy verdict is trusted as busy
 #      (generation state is sufficient for busy, not for idle), then the
-#      muse session-log pull source, then the Grok-only temporary regex fallback
-#      classifies a grok task from its rendered tail, then unknown missing
+#      muse session-log and prime-agent list pull sources, then the Grok-only
+#      temporary regex fallback classifies a grok task from its rendered tail,
+#      then unknown missing
 #   5. malformed, stale, or untrusted records -> unknown, never a fallback
 # The Grok arm is the ONLY rendered-text classification that survives the
 # redesign, because Grok's structured lifecycle was not credited-live-verified
@@ -67,6 +68,12 @@
 # MUSE_EXPERIMENTAL_PLUGINS). Nothing is armed for muse for the same reason
 # standalone Kimi is not: a seeded record with no writer could never be
 # cleared. See fm_busy_muse_run_state for the fold.
+#
+# The prime-agent pull source is semantic for the same reason and armed for
+# neither: Prime Agent's extension surface delivers turn-end NOTIFICATIONS
+# (agent_end, session_shutdown), not a busy/idle pair, while its authoritative
+# current state is its own `list --json` verdict. See
+# fm_busy_prime_agent_state.
 #
 # Codex negotiation (fm_busy_codex_appserver_observable,
 # fm_busy_codex_hooks_verified): the approved contract prefers Codex's
@@ -169,11 +176,11 @@ fm_busy_current_gen() {  # <state-dir> <id>
 # fm_busy_sources_for_harness: the semantic sources trusted to classify a
 # task recorded with <harness>. One line, space-separated, possibly empty.
 # The firstmate-owned sources are appended for every converted adapter.
-# Grok and muse deliberately trust nothing: neither has a semantic WRITER, so
-# neither is armed, and both read their live source on demand in the classifier
-# (grok's rendered tail, muse's session log) rather than through a stored
-# record. Listing a source here without a writer that can clear it would seed a
-# busy record nothing could ever settle.
+# Grok, muse, and prime-agent deliberately trust nothing: none has a semantic
+# WRITER, so none is armed, and each reads its live source on demand in the
+# classifier (grok's rendered tail, muse's session log, prime-agent's own list
+# verdict) rather than through a stored record. Listing a source here without a
+# writer that can clear it would seed a busy record nothing could ever settle.
 fm_busy_sources_for_harness() {  # <harness>
   local adapter=
   case "${1:-}" in
@@ -595,6 +602,37 @@ fm_busy_muse_run_terminal() {  # <session-log> <run-id>
   '
 }
 
+# ---------------------------------------------------------------------------
+# prime-agent list busy source
+#
+# Prime Agent publishes its own current session state through
+# `prime-agent list --json` under the task's own TMPDIR and session directory,
+# and bin/fm-prime-agent.sh is the single owner of that protocol: it matches the
+# recorded activeSessionId and folds activity, streaming, tool, bash,
+# compaction, child, and unfinished-action fields into exactly one of busy,
+# idle, missing, or unknown.
+#
+# Like muse, this is a PULL source with no writer, no arm, and no generation:
+# Prime's extension surface delivers agent_end and session_shutdown, which are
+# turn-end NOTIFICATIONS rather than a busy/idle pair that could open and close
+# a record. Seeding a record no writer could clear is exactly what the trust
+# table's comment forbids, so prime-agent is deliberately absent from
+# fm_busy_sources_for_harness and read on demand here instead.
+#
+# Both halves are trusted because the adapter's fold is authoritative rather
+# than rendered: Prime's daemon keeps working after its TUI detaches, and its
+# idle pane has no positive idle-only footer, so pane text could never settle a
+# turn. `missing` (no such session) and `unknown` (unreadable, ambiguous, or
+# multi-match) both classify unknown, never idle.
+fm_busy_prime_agent_state() {  # <state-dir> <id>
+  local adapter meta
+  adapter=$(dirname -- "${BASH_SOURCE[0]}")/fm-prime-agent.sh
+  [ -x "$adapter" ] || return 1
+  meta="$1/$2.meta"
+  [ -f "$meta" ] || return 1
+  "$adapter" state "$meta" 2>/dev/null
+}
+
 # fm_busy_grok_tail_busy: the Grok-only temporary rendered-tail fallback.
 # Consumes the tail on stdin; 0 when Grok's verified busy signature matches.
 # FM_BUSY_REGEX still globally overrides the signature, mirroring the
@@ -670,6 +708,17 @@ fm_busy_classify() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
         busy) printf 'busy muse-session-log' ;;
         settled) printf 'idle muse-session-log' ;;
         *) printf 'unknown muse-session-log' ;;
+      esac
+      return 0
+      ;;
+    prime-agent*)
+      # Semantic, on demand: Prime Agent's own list --json verdict for the
+      # recorded session, folded by bin/fm-prime-agent.sh. A missing, ambiguous,
+      # or unreadable session is unknown, never idle.
+      case "$(fm_busy_prime_agent_state "$state" "$id" 2>/dev/null)" in
+        busy) printf 'busy prime-agent-list' ;;
+        idle) printf 'idle prime-agent-list' ;;
+        *) printf 'unknown prime-agent-list' ;;
       esac
       return 0
       ;;

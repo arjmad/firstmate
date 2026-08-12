@@ -168,7 +168,7 @@ fm_backend_tmux_classify_process_name() {  # <path> [argv0] -> agent|shell|other
     # cannot carry it either: ~/.local/bin/muse-bin-<version> has no `muse` path
     # COMPONENT, so the fm_harness_path_name fallback below never fires for it.
     muse|muse-bin-*) printf 'agent' ;;
-    *claude*|*codex*|*opencode*|*grok*|*kimi*|pi|pi-signed|pi-launcher|Pi) printf 'agent' ;;
+    *claude*|*codex*|*opencode*|*grok*|*kimi*|*prime-agent*|pi|pi-signed|pi-launcher|Pi) printf 'agent' ;;
     zsh|bash|sh|dash|ash|ksh|mksh|tcsh|csh|fish) printf 'shell' ;;
     *)
       if fm_harness_path_name "$path" >/dev/null || fm_harness_path_name "$argv0" >/dev/null; then
@@ -217,6 +217,43 @@ fm_backend_tmux_foreground_comms() {  # <target>
       done
 }
 
+# fm_backend_tmux_foreground_script_paths: the SCRIPT path of every foreground
+# process that is a bare interpreter, one per line. Empty on any failure.
+#
+# The third and narrowest name source, for the adapters whose published
+# entrypoint is an interpreted script rather than an executable of their own:
+# prime-agent's npm entrypoint runs as `node`, so both `comm` and argv[0] name
+# the interpreter and neither can identify the harness. This mirrors the bare
+# interpreter rule bin/fm-session-lock-lib.sh's fm_harness_process_matches
+# already applies to the same problem.
+#
+# Deliberately narrow. Only argv[1] of a recognized interpreter is read, so an
+# arbitrary command-line argument can never be mistaken for a harness name, and
+# the foreground-process-group scoping above still applies unchanged.
+fm_backend_tmux_foreground_script_paths() {  # <target>
+  local target=$1 tty pid pgid tpgid comm args argv0 script
+  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
+  [ -n "$tty" ] || return 0
+  LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
+    | while read -r pid pgid tpgid comm; do
+        [ -n "$comm" ] || continue
+        [ "$pgid" = "$tpgid" ] || continue
+        args=$(LC_ALL=C ps -p "$pid" -o args= 2>/dev/null) || continue
+        args=${args#"${args%%[![:space:]]*}"}
+        argv0=${args%%[[:space:]]*}
+        # macOS's framework Python reports argv[0] as `Python`, the same
+        # capitalization quirk the classifier above already spells out for `Pi`.
+        case "${argv0##*/}" in
+          node|node-*|nodejs|python|python[0-9]*|Python|Python[0-9]*) ;;
+          *) continue ;;
+        esac
+        script=${args#"$argv0"}
+        script=${script#"${script%%[![:space:]]*}"}
+        script=${script%%[[:space:]]*}
+        [ -n "$script" ] && printf '%s\n' "$script"
+      done
+}
+
 fm_backend_tmux_foreground_argv0s() {  # <target>
   local target=$1 tty pid pgid tpgid comm args argv0
   tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
@@ -242,15 +279,15 @@ fm_backend_tmux_foreground_argv0s() {  # <target>
 # `missing`; any other inventory or pane read failure is `unreadable`, so a
 # transient tmux problem never licenses a duplicate.
 #
-# The verdict combines two independent name sources rather than trusting either
-# alone. Either source naming a verified harness is enough for `alive`, because
+# The verdict combines three independent name sources rather than trusting any
+# alone. Any source naming a verified harness is enough for `alive`, because
 # a false `dead` is the one outcome that can launch a duplicate agent onto a
 # live worktree, while the foreground process group - when it is readable - is
 # authoritative for the negative verdicts, since it is the only source that can
 # distinguish a truly idle pane from a rewritten process title.
 fm_backend_tmux_agent_state() {  # <target>
   local target=$1 comm session window windows inventory_status
-  local foreground argv0s name fg_seen=0 fg_shell=0 fg_other=0
+  local foreground argv0s scripts name fg_seen=0 fg_shell=0 fg_other=0
   case "$target" in
     *:*:*|'':*|*:'') printf 'unreadable'; return 0 ;;
     *:*) ;;
@@ -301,6 +338,17 @@ EOF
     fi
   done <<EOF
 $argv0s
+EOF
+
+  scripts=$(fm_backend_tmux_foreground_script_paths "$target")
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    if [ "$(fm_backend_tmux_classify_process_name "$name")" = agent ]; then
+      printf 'alive'
+      return 0
+    fi
+  done <<EOF
+$scripts
 EOF
 
   comm=$(fm_backend_tmux_current_command "$target") || {

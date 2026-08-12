@@ -70,7 +70,8 @@
 #
 # THE SAFETY RULE for glyphs: a bare shell prompt glyph (`>` `$` `%` `#`) -
 # what a pane shows once its agent has exited to a plain login shell - is a
-# genuine empty agent composer ONLY inside a bordered container. On a bare row
+# genuine empty agent composer ONLY inside a bordered container (claude's older
+# `| > ... |`, Kimi, and Prime Agent v0.7.1 all draw one). On a bare row
 # it is a dead-shell prompt and classifies `unknown` (never a safe injection
 # target). The AGENT glyphs `❯` (claude), `›` (codex), and `⟩` (U+27E9, muse)
 # are a genuine empty agent composer either way. Both glyph sets are declared

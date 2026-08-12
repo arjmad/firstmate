@@ -65,6 +65,16 @@ ln -s "$SLEEP_BIN" "$LAB/bin/musescore"
 ln -s "$SLEEP_BIN" "$LAB/bin/amuse"
 ln -s "$SLEEP_BIN" "$LAB/bin/muse-binary"
 ln -s "$SLEEP_BIN" "$LAB/bin/muse-bind"
+# prime-agent's npm entrypoint is an interpreted script, so its live process is
+# the INTERPRETER: neither the pane title nor argv[0] names the harness, and only
+# the script path does. The stand-in reproduces that exact shape - a process
+# named `node` whose argv[1] is a prime-agent install path.
+mkdir -p "$LAB/bin/prime-home/node_modules/.bin"
+ln -s "$SLEEP_BIN" "$LAB/bin/node"
+PYTHON_BIN=$(command -v python3 || true)
+if [ -n "$PYTHON_BIN" ]; then
+  printf 'import time\ntime.sleep(900)\n' > "$LAB/bin/prime-home/node_modules/.bin/prime-agent"
+fi
 
 # A launcher whose own process identity is a bare shell, running the harness as
 # a child in the same foreground process group - the shape the real Pi Launcher
@@ -171,6 +181,25 @@ for decoy in musescore amuse muse-binary muse-bind; do
     || fail "'$decoy' merely contains 'muse' and must not classify as a live agent pane"
 done
 pass "tmux liveness: unrelated muse-containing command names stay ambiguous"
+
+# --- an interpreted entrypoint is named only by its script path -------------
+# A prime-agent crewmate pane runs as `node <path>/prime-agent`, so a classifier
+# that reads only the process name and argv[0] sees a bare interpreter and would
+# report a healthy worker's endpoint as agent-free.
+
+new_window prime "$LAB/bin/node" 900
+wait_for_state "$SESSION:prime" ambiguous \
+  || fail "a bare interpreter with no harness argument must not classify as an agent"
+pass "tmux liveness: a bare node process alone stays ambiguous"
+
+if [ -n "$PYTHON_BIN" ]; then
+  new_window prime-script "$PYTHON_BIN" "$LAB/bin/prime-home/node_modules/.bin/prime-agent"
+  wait_for_state "$SESSION:prime-script" alive \
+    || fail "an interpreter running a prime-agent script path must classify alive"
+  pass "tmux liveness: an interpreted prime-agent entrypoint classifies alive from its script path"
+else
+  echo "ok - tmux liveness: interpreted-entrypoint case skipped (no python3 interpreter stand-in)"
+fi
 
 # --- a version name blinds one source ---------------------------------------
 # Giving a genuine harness-named executable the version-string argv[0] that

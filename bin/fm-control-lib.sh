@@ -63,9 +63,28 @@ fm_control_verb_allowed() {  # <verb>
 # than guessed at, exactly as a spawn on it would be.
 fm_control_harness_supported() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|muse) return 0 ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|muse|prime-agent) return 0 ;;
   esac
   return 1
+}
+
+# Which VERBS an adapter is verified for. Every adapter supports every verb
+# unless its verified mechanics genuinely stop short. prime-agent is that case:
+# its interrupt is a verified pane Escape, but it has no verified command that
+# exits the agent from its own composer - the Ctrl-D it documents DETACHES a
+# client and leaves the daemon and its worker running, so an exit built on it
+# would report a stop that did not happen. Relaunch is refused for the same
+# reason, because a relaunch must stop the previous agent first. Refusing here
+# keeps the honest half usable instead of dropping the adapter from the plane.
+fm_control_harness_supports_verb() {  # <harness> <verb>
+  local harness=${1-} verb=${2-}
+  fm_control_harness_supported "$harness" || return 1
+  case "$harness" in
+    prime-agent)
+      case "$verb" in interrupt) return 0 ;; *) return 1 ;; esac
+      ;;
+  esac
+  return 0
 }
 
 # The verified adapter a RECORDED harness value belongs to. Every table below
@@ -86,20 +105,22 @@ fm_control_harness_family() {  # <recorded-harness>
     grok*) printf 'grok' ;;
     kimi*) printf 'kimi' ;;
     muse*) printf 'muse' ;;
+    prime-agent*) printf 'prime-agent' ;;
     *) return 1 ;;
   esac
 }
 
-# Which task kinds an adapter is verified to run. muse is a crewmate/scout
-# adapter only: it has no primary supervision protocol, and bin/fm-spawn.sh
-# refuses a --secondmate launch on it. The control plane asks this BEFORE it
-# stops anything, so an incompatible relaunch target is refused while the
-# current agent is still running rather than after it has been stopped.
+# Which task kinds an adapter is verified to run. muse and prime-agent are
+# crewmate/scout adapters only: neither has a primary supervision protocol, and
+# bin/fm-spawn.sh refuses a --secondmate launch on either. The control plane
+# asks this BEFORE it stops anything, so an incompatible relaunch target is
+# refused while the current agent is still running rather than after it has been
+# stopped.
 fm_control_harness_supports_kind() {  # <harness> <kind>
   local harness=${1-} kind=${2-}
   fm_control_harness_supported "$harness" || return 1
   case "$harness" in
-    muse) [ "$kind" != secondmate ] || return 1 ;;
+    muse|prime-agent) [ "$kind" != secondmate ] || return 1 ;;
   esac
   return 0
 }
@@ -108,7 +129,7 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
 # whose Esc only moves focus to the scrollback; grok cancels on Ctrl+C.
 fm_control_interrupt_key() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|kimi|muse) printf 'Escape' ;;
+    claude|codex|opencode|pi|pi-signed|kimi|muse|prime-agent) printf 'Escape' ;;
     grok) printf 'C-c' ;;
     *) return 1 ;;
   esac
@@ -119,7 +140,7 @@ fm_control_interrupt_key() {  # <harness>
 fm_control_interrupt_repeat() {  # <harness>
   case "${1-}" in
     opencode) printf '2' ;;
-    claude|codex|pi|pi-signed|grok|kimi|muse) printf '1' ;;
+    claude|codex|pi|pi-signed|grok|kimi|muse|prime-agent) printf '1' ;;
     *) return 1 ;;
   esac
 }
@@ -134,7 +155,7 @@ fm_control_interrupt_repeat() {  # <harness>
 fm_control_interrupt_clear_key() {  # <harness>
   case "${1-}" in
     muse) printf 'C-u' ;;
-    claude|codex|opencode|pi|pi-signed|grok|kimi) ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|prime-agent) ;;
     *) return 1 ;;
   esac
 }
@@ -142,12 +163,15 @@ fm_control_interrupt_clear_key() {  # <harness>
 fm_control_interrupt_ack_source() {  # <harness>
   case "${1-}" in
     muse) printf 'muse-session-terminal' ;;
-    claude|codex|opencode|pi|pi-signed|grok|kimi) printf 'none' ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|prime-agent) printf 'none' ;;
     *) return 1 ;;
   esac
 }
 
-# The command that exits the agent from its own composer.
+# The command that exits the agent from its own composer. prime-agent has none:
+# its documented Ctrl-D detaches the client while the daemon and worker keep
+# running, so there is nothing here to send that would stop the agent, and
+# fm_control_harness_supports_verb refuses the verb rather than inventing one.
 fm_control_exit_command() {  # <harness>
   case "${1-}" in
     claude|opencode|grok|kimi|muse) printf '/exit' ;;
@@ -213,6 +237,12 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id>
       # so no retired incarnation's session binding outlives the agent.
       printf '%s\n' "$state/$id.muse-session"
       printf '%s\n' "$state/$id.muse-session-current"
+      ;;
+    prime-agent)
+      # The per-task event extension fm-spawn writes. Prime's runtime roots
+      # (prime_tmp, prime_session_dir) are recorded in the task metadata rather
+      # than derived here, and cleanup owns stopping the session behind them.
+      printf '%s\n' "$state/$id.prime-ext.ts"
       ;;
   esac
 }

@@ -118,7 +118,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|muse)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|muse|prime-agent)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. For pi and pi-signed, fm-spawn resolves the selected executable
@@ -172,6 +172,10 @@
 #                  written by this script; outside the worktree to avoid pi's trust gate)
 #     __PITURNEND__ absolute path to .pi/extensions/fm-primary-turnend-guard.ts in a pi secondmate home
 #     __PIWATCH__   absolute path to .pi/extensions/fm-primary-pi-watch.ts in a pi secondmate home
+#     __PRIMECTL__  absolute path to the task-scoped Prime Agent control adapter
+#     __PRIMETMP__  short unique Prime Agent TMPDIR (daemon/worker socket root)
+#     __PRIMESESS__ task-only Prime Agent session directory under state/
+#     __PRIMEEXT__  task-scoped Prime Agent agent_end/session_shutdown extension
 #     __OPINPUT__   absolute path to the canonical operational-input encoder
 # Verified per-harness turn-end hooks are installed automatically where enabled; some live outside the worktree.
 # Kimi uses one surgically installed Firstmate region in $HOME/.kimi-code/config.toml,
@@ -181,6 +185,9 @@
 # muse installs no hook at all - its plugin engine is off in the default build - so
 # it writes state/<id>.muse-session to bind the pane to muse's own session event
 # log; muse is crewmate/scout only and is refused for --secondmate.
+# prime-agent installs a per-task extension for its turn-end NOTIFICATION only;
+# its current state is read from its own daemon, so nothing busy is armed for it.
+# It is crewmate/scout only and is refused for --secondmate.
 # On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> [mode=<mode> yolo=<on|off>] window=<backend-target> worktree=<path>
 # A ship task records the explicit mode/yolo it was passed; a secondmate spawn records
 # mode=secondmate, yolo=off, home=, and projects=; a scout records neither, and both the
@@ -661,6 +668,9 @@ BACKEND=
 ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
 ORCA_TERMINAL=
+PRIME_ABORT_CLEANUP=0
+PRIME_TMP=
+PRIME_SESSION_DIR=
 HERDR_PROJECTION_ABORT_CLEANUP=0
 HERDR_PROJECTION_ABORT_SESSION=
 HERDR_PROJECTION_ABORT_TASK_PANE=
@@ -747,6 +757,13 @@ spawn_abort_cleanup() {
     HERDR_PRESENTATION_ORDER_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
   fi
+  if [ "$PRIME_ABORT_CLEANUP" = 1 ]; then
+    # The pane launched a Prime Agent daemon that this spawn is abandoning.
+    # Shutting it down is scoped to this task's own unique TMPDIR, so it can
+    # never reach another task's daemon.
+    PRIME_ABORT_CLEANUP=0
+    "$SCRIPT_DIR/fm-prime-agent.sh" shutdown "$PRIME_TMP" "$PRIME_SESSION_DIR" >/dev/null 2>&1 || true
+  fi
   if [ "$ORCA_ABORT_CLEANUP" = 1 ]; then
     ORCA_ABORT_CLEANUP=0
     if [ -n "${ORCA_TERMINAL:-}" ]; then
@@ -796,6 +813,18 @@ spawn_abort_cleanup() {
   if [ "$CONFIG_INHERIT_LOCK_HELD" = 1 ]; then
     CONFIG_INHERIT_LOCK_HELD=0
     fm_lock_release "$CONFIG_INHERIT_LOCK" || true
+  fi
+  # A failed prime-agent spawn leaves no task behind, so its private runtime
+  # roots and per-task extension go with it. Only the exact short random TMPDIR
+  # this spawn minted is removed, and only on failure.
+  if [ "$status" -ne 0 ] && [ -n "${PRIME_TMP:-}" ]; then
+    case "$PRIME_TMP" in
+      /tmp/fmpa.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9])
+        rm -rf "$PRIME_TMP"
+        [ -z "${PRIME_SESSION_DIR:-}" ] || rm -rf "${PRIME_SESSION_DIR%/sessions}"
+        rm -f "$STATE/$ID.prime-ext.ts"
+        ;;
+    esac
   fi
   return "$status"
 }
@@ -1061,7 +1090,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
   }
 elif [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|muse)
+    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|muse|prime-agent)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -1188,6 +1217,18 @@ launch_template() {
     # session event log instead (bin/fm-busy-lib.sh), bound by the sidecar
     # written below. Nothing to place in the template for it.
     # codex, opencode, and kimi are also markerless and share this inherited-marker hazard; changing their verified launch boundaries belongs in follow-up work.
+    # prime-agent (Prime Agent): an EXPERIMENTAL crewmate/scout adapter, only ever
+    # selected explicitly. Every invocation is routed through the task-scoped
+    # control adapter so the short unique TMPDIR, the task-only session directory,
+    # the telemetry opt-outs, and the PRIME_AGENT_FIRSTMATE detection marker are
+    # applied in exactly one place. The encoded brief is one positional argument
+    # after `--`, and --extension loads the per-task event hook written below.
+    # The crewmate/scout boundary is enforced by the explicit refusal below
+    # rather than here, exactly as muse's is, so the diagnostic names the reason
+    # instead of reading as an unknown adapter.
+    prime-agent)
+      printf '%s' '__PRIMECTL__ launch __PRIMETMP__ __PRIMESESS__ __MODELFLAG____EFFORTFLAG__--extension __PRIMEEXT__ -- "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      ;;
     muse) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS XDG_CONFIG_HOME=__MUSECONFIG__ XDG_DATA_HOME=__MUSEDATA__ MUSE_EXPERIMENTAL_FOREIGN_PERSONAL_CONTEXT_KILL=on __MUSEBIN__ --yolo __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     *) return 1 ;;
   esac
@@ -1256,6 +1297,27 @@ esac
 # secondmate whose supervision cycle could never be armed.
 if [ "$KIND" = secondmate ] && [ "$HARNESS" = muse ]; then
   echo "error: muse is a verified crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
+  exit 1
+fi
+
+# prime-agent is likewise a CREWMATE/SCOUT adapter only, and for the same reason:
+# it is verified as an experimental worker runtime, with no primary supervision
+# protocol and no verified turn-end contract for a firstmate session of its own.
+if [ "$KIND" = secondmate ] && [ "$HARNESS" = prime-agent ]; then
+  echo "error: prime-agent is an experimental crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
+  exit 1
+fi
+
+# A relaunch REPLACES the agent in an existing endpoint, which needs a verified
+# way to stop the previous one. prime-agent has none: its documented Ctrl-D
+# detaches the client while the daemon and its Python worker keep running, so a
+# relaunch would strand a live daemon on the same isolated copy the replacement
+# is about to work in - and mint a second one beside it. bin/fm-control-lib.sh
+# refuses the verb for the same reason; this is the flag-level half of that
+# boundary, and it covers a relaunch onto prime-agent as well as away from it.
+if [ "$RELAUNCH" -eq 1 ] \
+   && { [ "$HARNESS" = prime-agent ] || [ "$RELAUNCH_PRIOR_HARNESS" = prime-agent ]; }; then
+  echo "error: prime-agent has no verified way to stop a running agent (its Ctrl-D detaches the client and leaves the daemon working), so --relaunch would leave the previous daemon running on this task's isolated copy. Tear the task down and spawn a fresh one instead." >&2
   exit 1
 fi
 
@@ -1422,7 +1484,7 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|muse)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|muse|prime-agent)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
@@ -1473,6 +1535,15 @@ effort_flag_for_harness() {
       case "$effort" in
         low|medium|high|xhigh) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
         max) printf -- '--reasoning-effort %s ' "$(shell_quote ultra)" ;;
+      esac
+      ;;
+    prime-agent)
+      # Prime Agent v0.7.1 accepts the shared firstmate effort vocabulary directly
+      # as thinking levels, so the mapping is identity-preserving. Its extra off
+      # and minimal levels sit below firstmate's shared vocabulary and are
+      # deliberately unreachable rather than remapped onto low.
+      case "$effort" in
+        low|medium|high|xhigh|max) printf -- '--thinking %s ' "$(shell_quote "$effort")" ;;
       esac
       ;;
     # opencode's interactive `opencode --prompt` launch has a verified --model
@@ -1935,6 +2006,22 @@ herdr_projection_existing_meta_allows_flat() {  # <meta>
 # hand at creation time; it depends only on $ID, never on the worktree.
 TASK_TMP="/tmp/fm-$ID"
 mkdir -p "$TASK_TMP/gotmp"
+if [ "$HARNESS" = prime-agent ]; then
+  # Prime Agent's daemon and worker talk over Unix sockets below TMPDIR, so the
+  # ordinary task-id-derived root is unusable: a long worktree or home path
+  # exceeds the socket path limit and the daemon fails with EINVAL. A short
+  # random root per task is what keeps every task's daemon separate, which is
+  # also what makes the scoped shutdown in cleanup safe.
+  PRIME_TMP=$(mktemp -d /tmp/fmpa.XXXXXXXX)
+  mkdir -p "$STATE"
+  PRIME_STATE_REAL=$(cd "$STATE" && pwd -P)
+  PRIME_SESSION_DIR="$PRIME_STATE_REAL/prime-agent/$ID/sessions"
+  mkdir -p "$PRIME_SESSION_DIR"
+  # Resolve before creating a pane so a missing direct package executable cannot
+  # leave an empty endpoint behind. The launcher resolves again immediately
+  # before exec; this check proves the verified non-wrapper path exists now.
+  "$SCRIPT_DIR/fm-prime-agent.sh" resolve-bin >/dev/null
+fi
 
 # SPAWN_ENV: the crewmate environment firstmate has already computed and that is
 # fully known BEFORE the pane exists. Backends able to set environment on the
@@ -2672,6 +2759,29 @@ EOF
       printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-kimi-turnend"
       exclude_path '.fm-kimi-turnend'
       ;;
+    prime-agent*)
+      # One Prime Agent request can span many model and tool turns, so agent_end
+      # is the sparse ready NOTIFICATION rather than turn_end. session_shutdown
+      # independently records a clean detach or exit lifecycle edge. Both append
+      # to the ordinary task marker the watcher already reads; current state is
+      # never inferred from them, it is reconciled from Prime's own daemon
+      # through bin/fm-prime-agent.sh (see bin/fm-busy-lib.sh's prime-agent arm).
+      # Nothing busy is armed for this adapter for exactly that reason: a seeded
+      # record with no writer that could clear it would never settle.
+      cat > "$STATE/$ID.prime-ext.ts" <<EOF
+import { appendFileSync } from "node:fs";
+
+const eventPath = $(printf '%s' "$TURNEND" | jq -Rs .);
+function record(event: string): void {
+  try { appendFileSync(eventPath, event + "\\n", { encoding: "utf8", mode: 0o600 }); } catch {}
+}
+
+export default function (prime: any) {
+  prime.on("agent_end", () => record("agent_end"));
+  prime.on("session_shutdown", () => record("session_shutdown"));
+}
+EOF
+      ;;
   esac
 fi
 
@@ -2743,7 +2853,7 @@ fi
 preserve_relaunch_meta() {
   awk -F= -v owned_title="$TITLE_SET" '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects prime_tmp prime_session_dir control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
       if (owned_title == 1) owned["title"] = 1
     }
@@ -2762,6 +2872,13 @@ preserve_relaunch_meta() {
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  # prime-agent's private runtime roots. Recorded rather than re-derived so
+  # steering, state reads, and cleanup all address the exact daemon this spawn
+  # started, and so a short random TMPDIR is never guessed from the task id.
+  if [ "$HARNESS" = prime-agent ]; then
+    echo "prime_tmp=$PRIME_TMP"
+    echo "prime_session_dir=$PRIME_SESSION_DIR"
+  fi
   # Display only, and written only when the flag was explicit, so a spawn that
   # never asked for a title keeps byte-identical metadata.
   [ "$TITLE_SET" -eq 0 ] || echo "title=$TITLE"
@@ -2829,6 +2946,10 @@ sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
 sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts")
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
+sq_primectl=$(shell_quote "$SCRIPT_DIR/fm-prime-agent.sh")
+sq_primetmp=$(shell_quote "$PRIME_TMP")
+sq_primesess=$(shell_quote "$PRIME_SESSION_DIR")
+sq_primeext=$(shell_quote "$STATE/$ID.prime-ext.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
@@ -2859,6 +2980,10 @@ LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
 LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
+LAUNCH=${LAUNCH//__PRIMECTL__/$sq_primectl}
+LAUNCH=${LAUNCH//__PRIMETMP__/$sq_primetmp}
+LAUNCH=${LAUNCH//__PRIMESESS__/$sq_primesess}
+LAUNCH=${LAUNCH//__PRIMEEXT__/$sq_primeext}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
 case "$HARNESS" in
   pi|pi-signed) LAUNCH=${LAUNCH//__PIBIN__/"$(shell_quote "$PI_BIN")"} ;;
@@ -2967,6 +3092,29 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   spawn_herdr_presentation_order_lock_release
 fi
 spawn_send_key "$T" Enter
+if [ "$HARNESS" = prime-agent ]; then
+  # Bind this task to the exact session Prime Agent just published. Everything
+  # downstream - steering, state reads, and the scoped stop in cleanup - matches
+  # on this id, so a spawn that cannot resolve exactly ONE live session for this
+  # worktree fails rather than leaving an unaddressable worker running.
+  PRIME_ABORT_CLEANUP=1
+  PRIME_SESSION=
+  prime_i=0
+  while [ "$prime_i" -lt "${FM_PRIME_SESSION_POLLS:-60}" ]; do
+    PRIME_SESSION=$("$SCRIPT_DIR/fm-prime-agent.sh" discover \
+      "$PRIME_TMP" "$PRIME_SESSION_DIR" "$WT" 2>/dev/null || true)
+    [ -z "$PRIME_SESSION" ] || break
+    prime_i=$((prime_i + 1))
+    [ "$prime_i" -ge "${FM_PRIME_SESSION_POLLS:-60}" ] || sleep "${FM_PRIME_POLL_INTERVAL:-0.5}"
+  done
+  if [ -z "$PRIME_SESSION" ]; then
+    printf 'failed: prime-agent did not publish one task-scoped live session\n' >> "$STATE/$ID.status"
+    echo "error: prime-agent did not publish one task-scoped live session; inspect window $T" >&2
+    exit 1
+  fi
+  printf 'prime_session=%s\n' "$PRIME_SESSION" >> "$STATE/$ID.meta"
+  PRIME_ABORT_CLEANUP=0
+fi
 if [ "$HARNESS" = kimi ]; then
   if ! kimi_wait_for_ready; then
     kimi_spawn_fail "kimi did not show a verified ready signal before brief delivery"

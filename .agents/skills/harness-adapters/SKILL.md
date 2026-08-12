@@ -1,6 +1,6 @@
 ---
 name: harness-adapters
-description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, and muse.
+description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, muse, and prime-agent.
 user-invocable: false
 metadata:
   internal: true
@@ -182,5 +182,6 @@ Load only the reference you need: every mandatory load of this skill pays for th
 - [`references/adapter-grok.md`](references/adapter-grok.md)
 - [`references/adapter-kimi.md`](references/adapter-kimi.md)
 - [`references/adapter-muse.md`](references/adapter-muse.md) - crewmate and scout only
+- [`references/adapter-prime.md`](references/adapter-prime.md) - experimental, crewmate and scout only
 
 When a per-adapter fact changes, update that harness's reference file, not this core.

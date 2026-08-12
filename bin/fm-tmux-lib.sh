@@ -67,6 +67,10 @@ FM_TMUX_OPENCODE_BUSY_REGEX_DEFAULT='esc interrupt'
 FM_TMUX_PI_BUSY_REGEX_DEFAULT='Working\.\.\.'
 FM_TMUX_GROK_BUSY_REGEX_DEFAULT='Ctrl\+c:cancel'
 FM_TMUX_KIMI_BUSY_REGEX_DEFAULT='^[[:space:]]*(🌑|🌒|🌓|🌔|🌕|🌖|🌗|🌘)[[:space:]]+·[[:space:]]+'
+# prime-agent draws an anchored braille spinner followed by Waiting or Executing
+# (verified, Prime Agent v0.7.1). Anchored and harness-scoped for the same reason
+# as Kimi's: neither word is safe as a shared signature.
+FM_TMUX_PRIME_AGENT_BUSY_REGEX_DEFAULT='^[[:space:]]*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏][[:space:]]+(Waiting|Executing)([[:space:]]+·|$)'
 
 fm_busy_lines_match() {  # [harness]
   local harness=${1:-} lines regex
@@ -81,6 +85,7 @@ fm_busy_lines_match() {  # [harness]
       pi|pi-signed) regex=$FM_TMUX_PI_BUSY_REGEX_DEFAULT ;;
       grok) regex=$FM_TMUX_GROK_BUSY_REGEX_DEFAULT ;;
       kimi) regex=$FM_TMUX_KIMI_BUSY_REGEX_DEFAULT ;;
+      prime-agent) regex=$FM_TMUX_PRIME_AGENT_BUSY_REGEX_DEFAULT ;;
       '') regex=$FM_TMUX_BUSY_REGEX_DEFAULT ;;
       *)
         # A supplied harness must never borrow another harness's signature.

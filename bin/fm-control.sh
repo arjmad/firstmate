@@ -296,6 +296,8 @@ HARNESS=$(fm_control_harness_family "$RECORDED_HARNESS") \
   || die "task $ID records harness '${RECORDED_HARNESS:-none}', which has no verified control mechanics; fm-control refuses to guess an interrupt key or exit command"
 fm_control_harness_supported "$HARNESS" \
   || die "task $ID records harness '${RECORDED_HARNESS:-none}', which has no verified control mechanics; fm-control refuses to guess an interrupt key or exit command"
+fm_control_harness_supports_verb "$HARNESS" "$VERB" \
+  || die "task $ID records harness '${RECORDED_HARNESS:-none}', which has no verified mechanics for '$VERB'; fm-control refuses to report a lifecycle transition it cannot prove"
 
 fm_backend_validate "$BACKEND" || exit 1
 

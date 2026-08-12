@@ -447,6 +447,8 @@ PR_URL=$(grep '^pr=' "$META" | tail -1 | cut -d= -f2- || true)
 # tasktmp is recorded by fm-spawn for tasks that set up a per-task temp root
 # (/tmp/fm-<id>/); absent for tasks spawned before that change, so tolerate empty.
 TASK_TMP=$(grep '^tasktmp=' "$META" | cut -d= -f2- || true)
+TASK_HARNESS=$(fm_meta_get "$META" harness)
+PRIME_TMP=$(fm_meta_get "$META" prime_tmp)
 BUSY_GEN=$(fm_meta_get "$META" busy_gen)
 if [ -z "$BUSY_GEN" ]; then
   BUSY_GEN=$(cat "$STATE/$ID.busy-gen" 2>/dev/null || true)
@@ -2176,7 +2178,7 @@ preflight_firstmate_home_herdr_children() {  # <home>
 }
 
 cleanup_firstmate_home_children() {
-  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc child_busy_gen
+  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_harness child_prime_tmp child_orca_worktree_id child_return_rc child_busy_gen
   sub_state="$home/state"
   [ -d "$sub_state" ] || return 0
   for child_meta in "$sub_state"/*.meta; do
@@ -2187,6 +2189,15 @@ cleanup_firstmate_home_children() {
     child_kind=$(meta_value "$child_meta" kind)
     [ -n "$child_kind" ] || child_kind=ship
     child_backend=$(fm_backend_of_meta "$child_meta")
+    child_harness=$(meta_value "$child_meta" harness)
+    if [ "$child_harness" = prime-agent ]; then
+      # Same ordering rule as the top-level task: stop the child's own daemon
+      # before its worktree is removed, and preserve the home on failure.
+      "$SCRIPT_DIR/fm-prime-agent.sh" cleanup "$child_meta" || {
+        echo "error: Prime Agent task-scoped cleanup failed for child $child_id; preserving the home" >&2
+        return 1
+      }
+    fi
     if [ "$child_backend" = orca ]; then
       child_t=$(meta_value "$child_meta" terminal)
     else
@@ -2259,10 +2270,22 @@ cleanup_firstmate_home_children() {
       child_busy_gen=$(cat "$sub_state/$child_id.busy-gen" 2>/dev/null || true)
     fi
     retire_busy_state "$sub_state" "$child_id" "$child_busy_gen" || return 1
+    child_prime_tmp=$(meta_value "$child_meta" prime_tmp)
+    if [ -n "$child_prime_tmp" ]; then
+      case "$child_prime_tmp" in
+        /tmp/fmpa.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]) rm -rf "$child_prime_tmp" ;;
+        *)
+          echo "error: refusing unsafe Prime Agent temp cleanup path for child $child_id: $child_prime_tmp" >&2
+          return 1
+          ;;
+      esac
+    fi
     rm -f "$sub_state/$child_id.status" "$sub_state/$child_id.turn-ended" \
       "$sub_state/$child_id.meta" "$sub_state/$child_id.pi-ext.ts" \
+      "$sub_state/$child_id.prime-ext.ts" \
       "$sub_state/$child_id.grok-turnend-token" "$sub_state/$child_id.kimi-turnend-token" \
       "$sub_state/$child_id.muse-session" "$sub_state/$child_id.muse-session-current"
+    rm -rf "$sub_state/prime-agent/$child_id"
   done
 }
 
@@ -2398,6 +2421,19 @@ fi
 # after every unlanded-work refusal above so it can never soften one. An
 # unreachable Herdr warns with the exact leftover ownership records and still
 # returns the worktree.
+if [ "$TASK_HARNESS" = prime-agent ]; then
+  # Stop only the recorded task session, then force-shutdown only the daemon
+  # behind that task's own unique TMPDIR. This must precede the worktree return
+  # because Prime Agent's Python worker survives a detached client: a still-live
+  # daemon would keep writing into the isolated copy while it is being removed.
+  # A failure preserves the task rather than returning a copy something is still
+  # writing to.
+  "$SCRIPT_DIR/fm-prime-agent.sh" cleanup "$META" || {
+    echo "error: Prime Agent task-scoped cleanup failed for $ID; preserving the task" >&2
+    exit 1
+  }
+fi
+
 FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
   "$SCRIPT_DIR/fm-herdr-lab.sh" teardown-task "$ID" || {
     echo "WARNING: Herdr lab cleanup failed for task $ID; returning the worktree anyway." >&2
@@ -2555,15 +2591,27 @@ fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 # Remove the per-task temp root (/tmp/fm-<id>/, incl. its gotmp/) recorded by spawn.
 # Read before the state-file rm below; empty (pre-fix tasks without tasktmp=) is a no-op.
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
+# prime-agent's socket root is a separate short random path, because Unix socket
+# length limits make the task-id-derived path above unusable for that runtime.
+# Only the exact minted shape is removable; anything else is a corrupt record and
+# refuses rather than deleting a guessed path.
+if [ -n "$PRIME_TMP" ]; then
+  case "$PRIME_TMP" in
+    /tmp/fmpa.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]) rm -rf "$PRIME_TMP" ;;
+    *) echo "error: refusing unsafe Prime Agent temp cleanup path: $PRIME_TMP" >&2; exit 1 ;;
+  esac
+fi
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
 rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" \
-  "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token" \
+  "$STATE/$ID.pi-ext.ts" "$STATE/$ID.prime-ext.ts" \
+  "$STATE/$ID.grok-turnend-token" \
   "$STATE/$ID.kimi-turnend-token" "$STATE/$ID.muse-session" \
   "$STATE/$ID.muse-session-current" \
   "$STATE/.$ID.open-decisions-cursor" \
   "$STATE/$ID.control-relaunch" "$STATE/$ID.control-relaunch.meta-prior" \
   "$STATE/$ID.control-relaunch.brief-prior" "$STATE/$ID.control-relaunch.note"
+rm -rf "$STATE/prime-agent/$ID"
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then

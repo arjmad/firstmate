@@ -473,7 +473,20 @@ else
   # Type once, submit, verify. Only exact empty confirms delivery; every other
   # verdict preserves the loud refusal boundary.
   send_rc=0
-  if [ "$TARGET_BACKEND" = remote ]; then
+  if [ "$TARGET_HARNESS" = prime-agent ]; then
+    # Prime Agent has a verified external steering transport, and its idle
+    # composer cannot authoritatively confirm anything, so the daemon's own
+    # delivery receipt replaces the type-and-verify round trip here. Plain `send`
+    # IS steering in v0.7.1; its advertised --steer flag is rejected as unknown
+    # and must never be used. The adapter refuses unless the daemon reports a
+    # queued or delivered steer, so an unconfirmed delivery still fails loudly.
+    if [ -n "$TARGET_META" ] \
+       && "$SCRIPT_DIR/fm-prime-agent.sh" send "$TARGET_META" "$MESSAGE"; then
+      verdict=empty
+    else
+      verdict=send-failed
+    fi
+  elif [ "$TARGET_BACKEND" = remote ]; then
     if "$SCRIPT_DIR/fm-on.sh" "$TARGET_REMOTE_ID" fm-remote-secondmate-control.sh send "$TARGET_REMOTE_ID" "$MESSAGE" < /dev/null >/dev/null; then
       verdict=empty
     else
