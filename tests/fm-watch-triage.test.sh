@@ -274,6 +274,20 @@ test_crew_is_provably_working_classifier() {
 # hardcodes the literal). Matches only the verb before the first colon, so a reason
 # that merely mentions "paused" does not false-match, and a genuine blocker stays a
 # blocker.
+test_status_idle_is_expected_classifier() {
+  # Only a SETTLED terminal result is expected to sit idle: done and failed have
+  # nothing further to report once surfaced. needs-decision and blocked still
+  # need firstmate, so they must keep immediate stale re-surfacing.
+  status_idle_is_expected 'done: PR https://x/pull/7 checks green' || fail "done not classified as expected-idle"
+  status_idle_is_expected 'failed: could not reproduce' || fail "failed not classified as expected-idle"
+  status_idle_is_expected 'needs-decision: pick a lane' && fail "needs-decision wrongly expected-idle"
+  status_idle_is_expected 'blocked: waiting on a credential' && fail "blocked wrongly expected-idle"
+  status_idle_is_expected 'working: still going' && fail "working wrongly expected-idle"
+  status_idle_is_expected 'paused: awaiting the release' && fail "paused wrongly expected-idle"
+  status_idle_is_expected '' && fail "empty line wrongly expected-idle"
+  pass "status_idle_is_expected: only done and failed are settled results"
+}
+
 test_status_is_paused_classifier() {
   status_is_paused 'paused: holding for the upstream release' || fail "paused verb not recognized"
   status_is_paused '  paused:   waiting on a rate-limit reset' || fail "leading-space paused verb not recognized"
@@ -1848,6 +1862,7 @@ test_stale_is_terminal_classifier
 test_scan_captain_relevant_statuses_classifier
 test_classifier_primitives
 test_crew_is_provably_working_classifier
+test_status_idle_is_expected_classifier
 test_status_is_paused_classifier
 test_crew_absorb_class_classifier
 test_signal_crew_provably_working_classifier
