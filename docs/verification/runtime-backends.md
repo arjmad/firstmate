@@ -474,7 +474,7 @@ Observed guarantees: every measured release classifies as the table records; eit
 At the opt-in gate, an unconfigured home stays flat on every release without a warning and never consults the floor, an explicit `on`, including the historical empty opt-in file, is honored on every release including below the floor, and an unrecognized value warns so the typo stays visible and follows the flat unconfigured default.
 The floor's warn-once behavior - once per home per detected release rather than once per spawn - is measured at its owner, `fm_backend_herdr_presentation_default_supported`, which `bin/fm-spawn.sh` still calls on the projection path.
 
-The whole real-Herdr lane was run on 2026-08-05 against both the CI-pinned Herdr 0.7.4 protocol 16, which is below the floor, and Herdr 0.8.0 protocol 19, which is at it:
+The whole real-Herdr lane was run on 2026-08-05 against both Herdr 0.7.4 protocol 16, which is below the floor and was the CI pin at the time, and Herdr 0.8.0 protocol 19, which is at it:
 
 ```sh
 HERDR_LAB_HELPER=bin/fm-herdr-lab.sh bin/fm-test-run.sh --lane real-herdr-gated
@@ -489,7 +489,12 @@ ok - real Herdr lab: a home that configured nothing falls back flat on below-flo
 ```
 
 Every other case in that suite uses an explicit opt-in or opt-out, so the floor leaves them unchanged on both releases.
-That e2e case still asserts the superseded release-aware default and has not been re-baselined or re-run since the opt-in change; the current opt-in-default guarantee is owned portably by `tests/fm-backend-herdr.test.sh` and live by the focus-flash suite's opt-in-default case above.
+That e2e case has since been re-baselined to the opt-in default, in the same shape as the focus-flash suite's case above: an unconfigured home is now asserted flat on every release, above or below the floor, because the release is never consulted for it.
+The runs quoted above therefore predate the current assertion and are retained as the release-aware evidence they were; the re-baselined case has not been re-run live yet.
+The current opt-in-default guarantee is owned portably by `tests/fm-backend-herdr.test.sh` and live by the focus-flash suite's opt-in-default case above.
+
+The CI pin for this lane is now Herdr 0.7.5 protocol 17 (`bin/fm-install-herdr.sh`), raised from 0.7.4 protocol 16 because the adapter refuses to create a crewmate pane below the protocol that carries a launch environment natively; a lane pinned lower could not run a single real-Herdr spawn.
+The 0.7.5 pin's four official assets were checksummed from the release this installer downloads, and the macOS aarch64 asset was confirmed to report `herdr 0.7.5` with client protocol 17.
 
 Direct lab probes on 2026-07-28 established the removal rules the emptying-close plan relies on, each verified with `workspace list` focus reads around one mutation in a guarded `fm-lab-` session:
 
