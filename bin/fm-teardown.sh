@@ -451,6 +451,14 @@ PR_URL=$(grep '^pr=' "$META" | tail -1 | cut -d= -f2- || true)
 TASK_TMP=$(grep '^tasktmp=' "$META" | cut -d= -f2- || true)
 TASK_HARNESS=$(fm_meta_get "$META" harness)
 PRIME_TMP=$(fm_meta_get "$META" prime_tmp)
+# A non-conforming prime_tmp must refuse HERE, at meta-read time, while the
+# task is still intact: refusing after the worktree return and pane close
+# would strand meta, busy state, and PR-poll artifacts behind an already
+# half-torn-down task, wedging every rerun on the same exit.
+if [ -n "$PRIME_TMP" ] && ! fm_prime_tmp_path_safe "$PRIME_TMP"; then
+  echo "error: refusing unsafe Prime Agent temp cleanup path: $PRIME_TMP" >&2
+  exit 1
+fi
 BUSY_GEN=$(fm_meta_get "$META" busy_gen)
 if [ -z "$BUSY_GEN" ]; then
   BUSY_GEN=$(cat "$STATE/$ID.busy-gen" 2>/dev/null || true)

@@ -97,9 +97,21 @@ MODEL=${1:-}
 # No config, or an empty/whitespace-only file: no endpoint routing, launch
 # normally. An empty file is treated as absent so a stray `touch` never blocks
 # every claude spawn; a non-empty but unparseable file is malformed (exit 2).
+# A present-but-unreadable file is NOT absent: it may name an endpoint this
+# spawn must use, so it fails closed (exit 2) instead of launching against the
+# real API. grep exit 1 is whitespace-only; >= 2 is a read error.
 [ -f "$CONFIG_FILE" ] || exit 3
-if ! grep -q '[^[:space:]]' "$CONFIG_FILE" 2>/dev/null; then
+if [ ! -r "$CONFIG_FILE" ]; then
+  echo "error: $CONFIG_FILE exists but is not readable" >&2
+  exit 2
+fi
+grep_status=0
+grep -q '[^[:space:]]' "$CONFIG_FILE" 2>/dev/null || grep_status=$?
+if [ "$grep_status" -eq 1 ]; then
   exit 3
+elif [ "$grep_status" -ge 2 ]; then
+  echo "error: failed to read $CONFIG_FILE" >&2
+  exit 2
 fi
 
 command -v jq >/dev/null 2>&1 || { echo "error: jq is required to read $CONFIG_FILE" >&2; exit 2; }

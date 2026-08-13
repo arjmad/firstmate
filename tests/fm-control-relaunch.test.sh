@@ -530,6 +530,39 @@ test_explicit_model_wins_over_the_recorded_one() {
   pass "fm-control relaunch: explicit model and effort win over the recorded ones"
 }
 
+# A task spawned on a local-endpoint model carries the proxy credential
+# durably in its pane shell (typed export, or herdr's native placement at pane
+# creation), while the endpoint base URL rides only the per-launch command
+# prefix. A relaunch AWAY from the endpoint model must therefore positively
+# clear the stale token, or the replacement reaches the real Anthropic API
+# carrying the proxy credential.
+test_relaunch_away_from_endpoint_model_clears_stale_token() {
+  local dir out rc
+  dir=$(new_case ep-away rl30)
+  add_ship_task "$dir" rl30 claude
+  mkdir -p "$dir/home/config"
+  cat > "$dir/home/config/model-endpoints.json" <<'JSON'
+{
+  "endpoints": {
+    "my-local-model": {
+      "base_url": "http://127.0.0.1:8080",
+      "auth_token_env": "FM_TEST_PROXY_TOKEN"
+    }
+  }
+}
+JSON
+  printf 'model=my-local-model\n' >> "$dir/home/state/rl30.meta"
+  out=$(FM_TEST_PROXY_TOKEN=sk-proxy-test-token run_control "$dir" rl30 relaunch --model sonnet --note "back to anthropic"); rc=$?
+  expect_code 0 "$rc" "a relaunch away from an endpoint model should succeed"$'\n'"$out"
+  [ "$(meta_field "$dir" rl30 model)" = sonnet ] || fail "the non-endpoint model should be recorded"
+  grep -Fqx 'unset ANTHROPIC_AUTH_TOKEN' "$dir/fake/keys" \
+    || fail "a relaunch away from an endpoint model must positively unset the stale proxy token"
+  assert_no_grep 'ANTHROPIC_AUTH_TOKEN=' "$dir/fake/keys" "the non-endpoint relaunch must not export a proxy token"
+  assert_no_grep 'ANTHROPIC_BASE_URL' "$dir/fake/literal" "the non-endpoint relaunch must not carry an endpoint prefix"
+  assert_no_grep 'sk-proxy-test-token' "$dir/fake/literal" "the proxy token must never reach the launch string"
+  pass "fm-control relaunch: relaunching away from an endpoint model clears the stale proxy token"
+}
+
 test_relaunch_onto_an_unverified_harness_is_refused() {
   local dir out rc
   dir=$(new_case badharness rl8)
@@ -1331,6 +1364,7 @@ test_harness_switch_resolves_a_prefixed_recorded_harness
 test_prefixed_recorded_harness_requires_explicit_replacement
 test_same_harness_relaunch_keeps_the_profile_axes
 test_explicit_model_wins_over_the_recorded_one
+test_relaunch_away_from_endpoint_model_clears_stale_token
 test_relaunch_onto_an_unverified_harness_is_refused
 test_relaunch_onto_prime_agent_refuses_before_stop
 test_prior_harness_turnend_registry_entry_is_cleared

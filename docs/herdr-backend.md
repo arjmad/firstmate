@@ -336,7 +336,7 @@ This is distinct from the startup sweep of stale presentation projections, which
 Reaping is the only cross-task sweep and is a dry run unless `--apply` is given.
 It considers only guarded `fm-lab-` names from the live session list, so the default session and unrelated sessions are never candidates.
 It destroys a session only on positive same-home ownership plus death: exactly one task record in the effective `FM_HOME` claims the session and that record's recovery-grade agent state is `dead` or `missing`.
-The deterministic task token in the session name is the authoritative claim; the pre-token label prefix is consulted only for sessions no token prefix claims, where a truncated label can leave two records claiming one session and the verdict stays unproven.
+The deterministic task token in the session name is the only claim; a pre-token legacy-shaped name carries no home boundary and is never claimed or reaped automatically, so a lab named before tokens existed is reclaimed only by hand (a bounded one-time leak, accepted so a local dead record can never destroy another home's live legacy lab).
 A session this home holds no task record for is unproven, never dead.
 Ambiguous, unreadable, unverified, foreign-home, and otherwise unproven sessions are left running and reported by exact name; the sweep never enumerates other Firstmate homes.
 

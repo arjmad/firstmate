@@ -35,7 +35,7 @@ case "$1 ${2:-}" in
   "session list")
     # Every lab this fake knows about, so the cross-task reap sweep has a real
     # multi-session list to judge (a single-session list could not distinguish
-    # owned, foreign, and doubly-claimed labs).
+    # owned, foreign, and legacy-shaped labs).
     labs='[]'
     for path in "$state"/fm-lab-*; do
       [ -f "$path" ] || continue
@@ -284,14 +284,13 @@ test_reap_requires_positive_same_home_ownership() {
   # A lab provisioned by another Firstmate home for the SAME task id this home
   # records as dead. The tripwire directory is UID-global so its ownership
   # record is visible here, but the home-scoped token never matches this home's
-  # records, and the pre-token label-prefix fallback refuses token-bearing
-  # names, so the other home's live lab stays unproven here.
+  # records, so the other home's live lab stays unproven here.
   foreign=$(FM_STATE_OVERRIDE="$foreign_home/state" fm_herdr_lab_name stale-task)
-  # A legacy-named lab that two of this home's task records both claim.
+  # A pre-token legacy-shaped lab name: it carries no home-scoped token, so no
+  # task record can claim it and it must stay unproven, never reapable.
   collide="fm-lab-alpha-beta-$$-7"
   # Task id herdr-lab-cleanup truncates to the stem herdr-lab, which is also a
-  # sibling task's full id, so that sibling's pre-token label prefix could reach
-  # this session too. The exact task token decides ownership.
+  # sibling task's full id. The exact task token decides ownership.
   token_owned=$(FM_STATE_OVERRIDE="$reap_home/state" fm_herdr_lab_name herdr-lab-cleanup)
   for lab in "$live" "$stale" "$murky" "$foreign" "$collide" "$token_owned"; do
     printf '%s\n' running > "$FAKE_STATE/$lab"
@@ -318,7 +317,7 @@ test_reap_requires_positive_same_home_ownership() {
   printf '%s\n' "$out" | grep -F "leave unproven lab: $foreign" >/dev/null \
     || fail "dry-run reap did not report the foreign-home lab by exact name: $out"
   printf '%s\n' "$out" | grep -F "leave unproven lab: $collide" >/dev/null \
-    || fail "dry-run reap did not report the doubly-claimed lab by exact name: $out"
+    || fail "dry-run reap did not report the unclaimed legacy-shaped lab by exact name: $out"
   printf '%s\n' "$out" | grep -F "dry-run stale task lab: $token_owned" >/dev/null \
     || fail "dry-run reap let a sibling's label prefix outvote the exact task token: $out"
   assert_lab_untouched "$live" "dry-run reap changed the live lab"
@@ -337,7 +336,7 @@ test_reap_requires_positive_same_home_ownership() {
   assert_lab_untouched "$live" "apply reap deleted a live task lab"
   assert_lab_untouched "$murky" "apply reap deleted a lab with an ambiguous agent state"
   assert_lab_untouched "$foreign" "apply reap deleted another home's lab for a task id this home records as dead"
-  assert_lab_untouched "$collide" "apply reap deleted a lab claimed by two task records"
+  assert_lab_untouched "$collide" "apply reap deleted a legacy-shaped lab no token claims"
   assert_present "$TRIPWIRES/$foreign.fleet-state.json" "apply reap removed a foreign home's ownership record"
 
   FAKE_STATE=$old_state

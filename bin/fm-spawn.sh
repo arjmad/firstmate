@@ -677,6 +677,7 @@ BACKEND=
 ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
 ORCA_TERMINAL=
+SPAWN_PANE_ABORT_CLEANUP=0
 PRIME_ABORT_CLEANUP=0
 PRIME_TMP=
 PRIME_SESSION_DIR=
@@ -723,7 +724,7 @@ parse_orca_worktree_result() {
 }
 
 spawn_abort_cleanup() {
-  local status=$?
+  local status=$? wt_reclaimed
   if [ "$RELAUNCH_REPLACEMENT_PENDING" = 1 ] \
      && [ "$SPAWN_META_PUBLISH_STARTED" = 1 ] \
      && [ -n "$SPAWN_META_TMP" ] \
@@ -799,6 +800,38 @@ spawn_abort_cleanup() {
             [ -z "${ORCA_TERMINAL:-}" ] || echo "terminal=$ORCA_TERMINAL"
           } > "$STATE/$ID.meta" 2>/dev/null || true
         fi
+      fi
+    fi
+  fi
+  if [ "$SPAWN_PANE_ABORT_CLEANUP" = 1 ]; then
+    SPAWN_PANE_ABORT_CLEANUP=0
+    if [ -n "${T:-}" ]; then
+      fm_backend_kill "$BACKEND" "$T" 2>/dev/null || true
+    fi
+    wt_reclaimed=1
+    if [ "$KIND" != secondmate ] && [ -n "${WT:-}" ] && [ -d "${WT:-}" ]; then
+      ( cd "$PROJ_ABS" && treehouse return --force "$WT" ) >/dev/null 2>&1 || wt_reclaimed=0
+    fi
+    if [ "$wt_reclaimed" -eq 0 ]; then
+      # The lease could not be returned here; leave a minimal meta so
+      # fm-teardown can adopt and finish the reclamation instead of refusing
+      # the task as unknown.
+      mkdir -p "$STATE" 2>/dev/null || true
+      if [ -d "$STATE" ]; then
+        {
+          echo "window=$T"
+          echo "worktree=${WT:-}"
+          echo "project=$PROJ_ABS"
+          echo "harness=$HARNESS"
+          echo "kind=$KIND"
+          [ -z "${MODE:-}" ] || echo "mode=$MODE"
+          [ -z "${YOLO:-}" ] || echo "yolo=$YOLO"
+          echo "tasktmp=${TASK_TMP:-}"
+          echo "model=${MODEL:-default}"
+          echo "effort=${EFFORT:-default}"
+          [ "${TITLE_SET:-0}" -eq 0 ] || echo "title=$TITLE"
+          echo "backend=$BACKEND"
+        } > "$STATE/$ID.meta" 2>/dev/null || true
       fi
     fi
   fi
@@ -2082,7 +2115,9 @@ fi
 # no or a stale ANTHROPIC_AUTH_TOKEN and surface only as the replacement's
 # silent authentication retry loop). A relaunch therefore always re-delivers
 # through the typed channel, exactly like a backend without the native
-# capability.
+# capability - and the non-endpoint direction of the same hazard (relaunching
+# AWAY from an endpoint model) is handled there too, by positively unsetting
+# the credential the previous launch left in the pane shell.
 SPAWN_ENV_NATIVE=0
 case "$BACKEND" in
   herdr) [ "$RELAUNCH" -eq 1 ] || SPAWN_ENV_NATIVE=1 ;;
@@ -2353,6 +2388,12 @@ EOF
     T="$ORCA_TERMINAL"
     ;;
 esac
+# The endpoint now exists, but until state/<id>.meta is published no fleet tool
+# can act on it (fm-teardown refuses a task with no meta), so an abort between
+# here and publication must reclaim the pane and any treehouse-leased worktree
+# itself. Orca carries its own richer arm above; a relaunch adopts an existing
+# endpoint and must never reclaim it.
+[ "$BACKEND" = orca ] || SPAWN_PANE_ABORT_CLEANUP=1
 fi
 if [ "$KIND" = secondmate ]; then
   FM_INHERITABLE_CONFIG=trace-context \
@@ -3003,6 +3044,7 @@ if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   fm_lock_release "$SPAWN_TASK_SET_LOCK"
 fi
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
+SPAWN_PANE_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
@@ -3125,6 +3167,13 @@ if [ "$SPAWN_ENV_NATIVE" -eq 0 ]; then
   if [ -n "$ENDPOINT_TOKEN" ]; then
     spawn_send_text_line "$T" "unset HISTFILE"
     spawn_send_text_line "$T" "export ANTHROPIC_AUTH_TOKEN=$(shell_quote "$ENDPOINT_TOKEN")"
+  elif [ "$RELAUNCH" -eq 1 ]; then
+    # A relaunch AWAY from an endpoint model reuses a pane shell whose previous
+    # launch may have durably exported the proxy credential (typed here, or
+    # placed natively at pane creation on herdr), while the endpoint's base URL
+    # rides only the per-launch command prefix. Without this positive clear the
+    # replacement would reach the real Anthropic API carrying the proxy token.
+    spawn_send_text_line "$T" "unset ANTHROPIC_AUTH_TOKEN"
   fi
 fi
 # Trace context stays on the typed channel for every backend, including the

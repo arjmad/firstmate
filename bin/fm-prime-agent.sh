@@ -95,12 +95,25 @@ daemon_socket() {  # <tmpdir>
 }
 
 daemon_alive() {  # <tmpdir>; true when a live process still holds the task daemon socket
-  local sock
+  local sock out
   sock=$(daemon_socket "$1")
   [ -e "$sock" ] || return 1
+  # Linux: lsof cannot select a unix-domain socket by filesystem path (the
+  # sockfs dev/inode never matches), so consult the kernel's own socket table,
+  # where a bound pathname socket appears exactly while a process holds it.
+  if [ -r /proc/net/unix ]; then
+    awk -v sock="$sock" '$NF == sock { found = 1 } END { exit(found ? 0 : 1) }' \
+      /proc/net/unix 2>/dev/null && return 0
+    return 1
+  fi
   # Without lsof the leftover socket cannot be proven dead, so treat it as live.
   command -v lsof >/dev/null 2>&1 || return 0
-  lsof -t -- "$sock" >/dev/null 2>&1
+  # A clean, silent non-match is the only proof of death: holder PIDs mean
+  # live, and any stderr text (permissions, unusable lsof) means unprovable,
+  # which fails closed as live too.
+  out=$(lsof -t -- "$sock" 2>&1) && [ -n "$out" ] && return 0
+  [ -z "$out" ] || return 0
+  return 1
 }
 
 meta_runtime_shape() {  # <meta>; sets META_TMP META_SESS META_AGENT; ownership only, no existence

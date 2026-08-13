@@ -420,7 +420,7 @@ backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
 task_json_lines() {
   local meta id kind harness model effort mode yolo project worktree home projects backend target status_log report_path
   local remote_host remote_root remote_state remote_rc remote_home_present
-  local pr pr_head pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json
+  local pr pr_head pr_source event_json current_json endpoint_exists agent_alive probe_tool meta_json status_json report_json worktree_json home_json
   local last_event_raw current_state current_source pending_decision blocked_event report_present=0 pr_from_status
   local open_decisions_tsv open_decisions_json
 
@@ -524,7 +524,14 @@ task_json_lines() {
       fi
     else
       if [ -n "$target" ]; then
-        if fm_backend_target_exists "$backend" "$target" "fm-$id" >/dev/null 2>&1; then
+        # Absence of the probing CLI is not evidence about the endpoint: a
+        # sanitized PATH that deliberately omits the backend tool must read as
+        # unknown (null), not as a confident exists=false unhealthy verdict.
+        probe_tool=$(fm_backend_required_tools "$backend" 2>/dev/null || true)
+        probe_tool=${probe_tool%% *}
+        if [ -n "$probe_tool" ] && ! fm_backend_required_tool_available "$backend" "$probe_tool"; then
+          endpoint_exists=null
+        elif fm_backend_target_exists "$backend" "$target" "fm-$id" >/dev/null 2>&1; then
           endpoint_exists=true
         else
           endpoint_exists=false

@@ -383,8 +383,8 @@ test_herdr_lab_contract_is_explicit_and_complete() {
     "Herdr lab brief missing its hard safety contract"
   assert_grep "HERDR_LAB_HELPER='$ROOT/bin/fm-herdr-lab.sh'" "$brief" \
     "Herdr lab brief must bind the absolute Firstmate helper path"
-  assert_grep "HERDR_LAB_SESSION=\$(\"\$HERDR_LAB_HELPER\" name $id)" "$brief" \
-    "Herdr lab brief missing helper-owned session naming"
+  assert_grep "HERDR_LAB_SESSION=\$(FM_STATE_OVERRIDE='$home/state' \"\$HERDR_LAB_HELPER\" name $id)" "$brief" \
+    "Herdr lab brief must pin the owning home's state root into session naming"
   assert_grep "\"\$HERDR_LAB_HELPER\" provision \"\$HERDR_LAB_SESSION\"" "$brief" \
     "Herdr lab brief missing helper-owned provisioning"
   assert_grep "\"\$HERDR_LAB_HELPER\" teardown \"\$HERDR_LAB_SESSION\"" "$brief" \

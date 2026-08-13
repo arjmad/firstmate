@@ -255,7 +255,7 @@ test_refuses_missing_backlog_record_without_mutation() {
   pass "missing durable backlog records are refused without metadata mutation"
 }
 
-test_refuses_manual_backend_without_mutation() {
+test_manual_backend_warns_and_promotes_without_backlog_write() {
   local case_dir meta backlog meta_before backlog_before out rc
   require_tasks_axi || return 0
   case_dir=$(make_case manual-backend)
@@ -279,7 +279,7 @@ test_refuses_manual_backend_without_mutation() {
   pass "manual backlog mode still promotes, warning which row to hand-edit"
 }
 
-test_refuses_unavailable_backend_without_mutation() {
+test_unavailable_backend_warns_and_promotes_without_backlog_write() {
   local case_dir meta backlog fakebin meta_before backlog_before out rc
   require_tasks_axi || return 0
   case_dir=$(make_case unavailable-backend)
@@ -501,8 +501,8 @@ test_promotes_scout_and_updates_backlog
 test_refuses_non_scout_without_mutation
 test_refuses_missing_metadata
 test_refuses_missing_backlog_record_without_mutation
-test_refuses_manual_backend_without_mutation
-test_refuses_unavailable_backend_without_mutation
+test_manual_backend_warns_and_promotes_without_backlog_write
+test_unavailable_backend_warns_and_promotes_without_backlog_write
 test_refuses_when_backlog_write_fails
 test_rolls_back_backlog_when_metadata_replacement_fails
 test_reports_divergence_when_rollback_also_fails

@@ -185,7 +185,8 @@ test_missing_state_tools_are_not_retried_per_task() {
     | .current_state.state == "unknown"
       and .current_state.source == "none"
       and .current_state.detail == "backend target gone: default:gone-pane"
-      and .endpoint.exists == false
+      and .endpoint.exists == null
+      and .endpoint.status == "unknown"
   ' >/dev/null || fail "unavailable state tools did not preserve the unknown task row: $out"
   pass "snapshot skips unavailable current-state tools instead of retrying per task"
 }

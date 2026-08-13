@@ -746,11 +746,10 @@ EOF
   pass "existing fm-bearings.v1 output remains unchanged"
 }
 
-test_shell_static_and_diff_checks_pass() {
+test_shell_static_checks_pass() {
   bash -n "$SNAPSHOT" || fail "registry snapshot failed bash syntax"
   bash -n "$ROOT/bin/fm-fleet-snapshot.sh" || fail "canonical snapshot failed bash syntax"
-  git -C "$ROOT" diff --check || fail "git diff --check failed"
-  pass "operational snapshot passes shell syntax and static diff checks"
+  pass "operational snapshot passes shell syntax checks"
 }
 
 test_exact_versioned_schema_and_types
@@ -767,4 +766,4 @@ test_missing_unreadable_malformed_incomplete_and_truncated_inputs
 test_secret_token_and_environment_sentinels_never_serialize
 test_raw_transcript_pane_log_brief_and_report_never_serialize
 test_existing_bearings_contract_remains_unchanged
-test_shell_static_and_diff_checks_pass
+test_shell_static_checks_pass

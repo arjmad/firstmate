@@ -17,9 +17,12 @@
 # metadata alone saying ship while the backlog still records a scout is what makes
 # a promoted ship keep being measured against the scout report contract. The
 # schema and backend selection are owned by .tasks.toml, docs/configuration.md,
-# and current tasks-axi help. Promotion refuses without touching metadata when
-# config/backlog-backend selects manual, when the configured tasks-axi backend is
-# unavailable or incompatible, or when the durable record for the task is missing.
+# and current tasks-axi help. When config/backlog-backend selects manual, or the
+# configured tasks-axi backend is unavailable or incompatible, promotion warns
+# that the durable record must be updated by hand and proceeds - refusing there
+# would make promotion impossible whenever the backend is momentarily absent.
+# Promotion refuses without touching metadata only when a present, readable
+# backlog has no durable record for the task.
 # Once the durable write is attempted, every failure and every HUP/INT/TERM
 # reconciles the two records from what they ACTUALLY say rather than from how far
 # the script got, because neither an exit status nor a progress flag can be

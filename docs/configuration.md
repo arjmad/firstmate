@@ -279,7 +279,7 @@ The alias's `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and model defaults mus
 
 `base_url` is required and becomes `ANTHROPIC_BASE_URL`.
 `strict_mcp_config` is an optional boolean that defaults to `true`, adding `--strict-mcp-config`.
-With that default and no `mcp_config`, an endpoint-routed worker, including a Sol-routed worker, starts with zero configured MCP servers.
+With that default and no `mcp_config`, an endpoint-routed worker, including a proxy-routed worker, starts with zero configured MCP servers.
 It does not inherit user/global MCP servers, path-scoped project servers, or a project `.mcp.json`, so capabilities exposed only through those servers are unavailable.
 `mcp_config` is an optional non-empty path to one MCP JSON file that `fm-spawn.sh` passes as `--mcp-config` alongside `--strict-mcp-config`.
 An absolute path is used as written; a relative path is resolved from the effective `FM_HOME`.
@@ -287,7 +287,7 @@ The configured path must name a readable regular file when the endpoint is resol
 With strict mode left at its default, that file is the deliberate per-endpoint MCP grant: only servers declared there are loaded.
 Setting `strict_mcp_config` to `false` restores Claude Code's ambient MCP discovery in addition to any explicitly passed file and is therefore a broader grant.
 This boundary governs MCP discovery only.
-It does not structurally disable facilities configured outside MCP, including Claude-in-Chrome, standalone browser or CLI tooling, hooks, filesystem access, or network access; Chrome availability in a Sol-routed worker requires its own end-to-end verification.
+It does not structurally disable facilities configured outside MCP, including Claude-in-Chrome, standalone browser or CLI tooling, hooks, filesystem access, or network access; Chrome availability in a proxy-routed worker requires its own end-to-end verification.
 Account-level Claude connectors can also be disabled separately by endpoint authentication and should not be inferred from MCP flags.
 `env` is an optional map of additional non-secret environment variables set as an inline launch prefix; use it for the `ANTHROPIC_DEFAULT_*_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL` slot mappings and any other non-secret knobs, with valid shell variable names only.
 `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` are rejected inside `env`: the token must come from a token source so it can be delivered off the recorded launch string, and the base URL comes from `base_url`.

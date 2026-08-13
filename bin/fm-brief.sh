@@ -276,6 +276,11 @@ REPO=${POS[1]}
 
 if [ "$HERDR_LAB" -eq 1 ]; then
 HERDR_LAB_HELPER=$(shell_quote "$FM_ROOT/bin/fm-herdr-lab.sh")
+# The mint line pins this home's resolved state root: the crewmate's pane does
+# not inherit FM_HOME/FM_STATE_OVERRIDE, so an unpinned `name` would derive the
+# ownership token from the code root's state/ while fm-teardown.sh computes it
+# under this home's state, and the lab would silently never be reclaimed.
+HERDR_LAB_STATE=$(shell_quote "$STATE")
 # shellcheck disable=SC2016  # single quotes are deliberate: these lines are literal brief text whose backtick-wrapped $(...) and "$HERDR_LAB_SESSION" snippets must reach the reading agent verbatim, not expand at scaffold time; only the '"$VAR"' break-outs interpolate.
 HERDR_SECTION=$(printf '%s\n' \
 '# Herdr isolation - HARD SAFETY CONTRACT' \
@@ -283,7 +288,8 @@ HERDR_SECTION=$(printf '%s\n' \
 'On Herdr 0.7.3 the API socket is not relocatable by `HERDR_CONFIG_PATH`, `XDG_CONFIG_HOME`, or `HOME`.' \
 'A named non-`default` session plus a trailing `--session <name>` on every call is the only viable local isolation.' \
 '' \
-'1. Set `HERDR_LAB_HELPER='"$HERDR_LAB_HELPER"'` and generate the session name with `HERDR_LAB_SESSION=$("$HERDR_LAB_HELPER" name '"$ID"')`.' \
+'1. Set `HERDR_LAB_HELPER='"$HERDR_LAB_HELPER"'` and generate the session name with `HERDR_LAB_SESSION=$(FM_STATE_OVERRIDE='"$HERDR_LAB_STATE"' "$HERDR_LAB_HELPER" name '"$ID"')`.' \
+'   The `FM_STATE_OVERRIDE` pin stamps the owning home'\''s task token into the name; your pane environment does not identify the home, and firstmate'\''s durable teardown only reclaims labs minted under that same identity.' \
 '   Install `trap '\''"$HERDR_LAB_HELPER" teardown "$HERDR_LAB_SESSION"'\'' EXIT` before provisioning, then provision only with `"$HERDR_LAB_HELPER" provision "$HERDR_LAB_SESSION"`.' \
 '   The EXIT trap is best-effort. Firstmate task cleanup also runs `"$HERDR_LAB_HELPER" teardown-task '"$ID"'`, so lab cleanup does not depend on this worker shell surviving.' \
 '2. Run every task-specific non-lifecycle Herdr command through `"$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" <arguments...>`.' \
