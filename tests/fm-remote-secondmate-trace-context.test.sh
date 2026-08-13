@@ -178,7 +178,9 @@ assert_present "$PARENT/state/ios.meta" "default-off remote spawn published no p
 [ "$(remote_launch_snapshot)" = off ] \
   || fail "default-off remote spawn must deliver FM_TRACE_CONTEXT=off (got '$(remote_launch_snapshot)')"
 assert_absent "$REMOTE_HOME/config/trace-context" "default-off remote spawn inherited an enablement flag"
-grep -q 'export GOTMPDIR=' "$HERDR_LOG" || fail "the remote spawn should still run (GOTMPDIR is always exported)"
+# GOTMPDIR reaches a herdr pane natively as a `tab create --env` argument
+# (SPAWN_ENV_NATIVE in bin/fm-spawn.sh), not as a typed `export` line.
+grep -q 'GOTMPDIR=' "$HERDR_LOG" || fail "the remote spawn should still run (GOTMPDIR is always delivered)"
 pass "disabled: a remote-routed second mate records and receives no carrier and stays enabled-off end to end"
 
 # --- enabled: one carrier is recorded by the parent and received remotely ----
@@ -204,7 +206,10 @@ fm_trace_context_valid "$INJECTED_TP" \
   || fail "an enabled remote spawn must deliver FM_TRACE_CONTEXT=on (got '$(remote_launch_snapshot)')"
 assert_present "$REMOTE_HOME/config/trace-context" \
   "an enabled remote launch did not inherit the enablement flag into the remote home"
-GOTMP_LINE=$(grep -n 'export GOTMPDIR=' "$HERDR_LOG" | tail -1 | cut -d: -f1)
+# GOTMPDIR rides the pane's create call as a native `--env` argument, so its
+# log line marks pane creation; the typed TRACEPARENT export must land between
+# that creation and the launch command.
+GOTMP_LINE=$(grep -n 'GOTMPDIR=' "$HERDR_LOG" | tail -1 | cut -d: -f1)
 TP_LINE=$(grep -n 'export TRACEPARENT=' "$HERDR_LOG" | tail -1 | cut -d: -f1)
 LAUNCH_LINE=$(grep -n 'FM_TRACE_CONTEXT=' "$HERDR_LOG" | tail -1 | cut -d: -f1)
 [ -n "$GOTMP_LINE" ] && [ -n "$TP_LINE" ] && [ -n "$LAUNCH_LINE" ] \

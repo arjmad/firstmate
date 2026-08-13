@@ -420,6 +420,124 @@ test_lock_paused_mid_acquire_claim_fails_during_steal() {
   pass "paused mid-acquire claimant backs off to active stealer"
 }
 
+# The lock primitives below can regress into NOT RETURNING, so each runs its
+# fixture through the repo's bounded runner in a shell of its own. Exit 124 is
+# the bound being hit, which is the regression itself rather than a slow case.
+TIMEOUT_LIB="$ROOT/bin/fm-timeout-lib.sh"
+LOCK_SNIPPET_BOUND=30
+
+run_bounded_lock_snippet() {  # <state> <snippet> <lockdir>
+  local state=$1 snippet=$2 lockdir=$3
+  FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_run_timed "$2" bash "$3" "$4" "$5"
+  ' _ "$TIMEOUT_LIB" "$LOCK_SNIPPET_BOUND" "$snippet" "$LIB" "$lockdir"
+}
+
+# A signal can land anywhere, including inside a critical section, and the exit
+# path it triggers re-enters that same section to publish recovery evidence. The
+# lock the interrupted section never released still names this very process, so
+# waiting on it is waiting on ourselves - the shape that wedged a watcher and
+# the arm waiting on it until the harness timed the whole run out.
+test_lock_self_owned_is_reclaimed_not_waited_on() {
+  local dir state lockdir snippet rc out
+  dir=$(make_case lock-self-owned)
+  state="$dir/state"
+  lockdir="$state/.contend.lock"
+  snippet="$dir/reenter.sh"
+  cat > "$snippet" <<'SH'
+set -u
+. "$1"
+fm_lock_try_acquire "$2" || exit 20
+# The section that took it is gone; only the lock it never released is left.
+fm_lock_acquire_wait "$2" || exit 21
+printf 'pid=%s\n' "$(cat "$2/pid" 2>/dev/null || true)"
+fm_lock_release "$2" || exit 22
+if [ -e "$2" ] || [ -L "$2" ]; then exit 23; fi
+exit 0
+SH
+  rc=0
+  out=$(run_bounded_lock_snippet "$state" "$snippet" "$lockdir") || rc=$?
+  [ "$rc" -ne 124 ] || fail "re-entering a self-owned lock never returned"
+  [ "$rc" -ne 20 ] || fail "fixture could not take the lock it then re-enters"
+  [ "$rc" -ne 23 ] || fail "reclaimed lock was not released by its owner"
+  [ "$rc" -eq 0 ] || fail "re-entering a self-owned lock failed (rc=$rc)"
+  case "$out" in
+    pid=[0-9]*) ;;
+    *) fail "reclaimed lock lost its recorded holder: $out" ;;
+  esac
+  pass "a lock this process abandoned is reclaimed instead of waited on"
+}
+
+# The steal token arbitrates one takeover. Recovering an abandoned token by
+# stealing a token OF that token appends a path level per takeover interrupted
+# mid-flight and never collapses, so the chain ratchets. Seeded here at the depth
+# a ratcheting home reaches: one more level puts the owner directory past
+# NAME_MAX, where the descent can no longer create anything and never returns.
+# Recovering the token in place must take the lock and add no further level.
+test_lock_abandoned_steal_token_is_recovered_in_place() {
+  local dir state lockdir snippet dead base levels chain rc out deeper
+  dir=$(make_case lock-token-ratchet)
+  state="$dir/state"
+  snippet="$dir/steal.sh"
+  dead=$(dead_pid)
+  base=$(awk 'BEGIN { s = ""; while (length(s) < 200) { s = s "x" } print s }')
+  lockdir="$state/.$base"
+  mkdir "$lockdir"
+  printf '%s\n' "$dead" > "$lockdir/pid"
+  chain="$lockdir"
+  levels=0
+  while [ "$levels" -lt 7 ]; do
+    chain="$chain.steal"
+    mkdir "$chain"
+    printf '%s\n' "$dead" > "$chain/pid"
+    levels=$((levels + 1))
+  done
+  cat > "$snippet" <<'SH'
+set -u
+. "$1"
+fm_lock_try_acquire "$2" || exit 7
+printf 'pid=%s\n' "$(cat "$2/pid" 2>/dev/null || true)"
+SH
+  rc=0
+  out=$(run_bounded_lock_snippet "$state" "$snippet" "$lockdir" 2>/dev/null) || rc=$?
+  [ "$rc" -ne 124 ] || fail "takeover past an abandoned steal-token chain never returned"
+  [ "$rc" -eq 0 ] || fail "an abandoned steal-token chain blocked the takeover (rc=$rc)"
+  case "$out" in
+    "pid=$dead") fail "stale lock was not reclaimed past its abandoned token" ;;
+    pid=[0-9]*) ;;
+    *) fail "reclaimed lock recorded no holder: $out" ;;
+  esac
+  deeper=$(find "$state" -maxdepth 1 -name "$(basename "$chain").steal*" | wc -l | tr -d '[:space:]')
+  [ "$deeper" -eq 0 ] || fail "takeover ratcheted the token chain one level deeper"
+  pass "an abandoned steal-token chain is recovered in place without ratcheting"
+}
+
+# Once a token path outgrows NAME_MAX its owner directory can never be created,
+# and a create that failed for that reason is indistinguishable from an occupied
+# lock. Descending on that failure never terminates, so acquisition must refuse.
+test_lock_unusable_token_path_refuses_promptly() {
+  local dir state lockdir snippet dead long rc
+  dir=$(make_case lock-token-unusable)
+  state="$dir/state"
+  snippet="$dir/refuse.sh"
+  dead=$(dead_pid)
+  long=$(awk 'BEGIN { s = ""; while (length(s) < 246) { s = s "x" } print s }')
+  lockdir="$state/.$long"
+  mkdir "$lockdir"
+  printf '%s\n' "$dead" > "$lockdir/pid"
+  cat > "$snippet" <<'SH'
+set -u
+. "$1"
+fm_lock_try_acquire "$2" 2>/dev/null && exit 0
+exit 1
+SH
+  rc=0
+  run_bounded_lock_snippet "$state" "$snippet" "$lockdir" >/dev/null 2>&1 || rc=$?
+  [ "$rc" -ne 124 ] || fail "acquisition never returned on an unusable steal-token path"
+  pass "an unusable steal-token path refuses instead of descending forever"
+}
+
 test_watch_restart_rejects_reused_pid() {
   local dir state fakebin out live pid i
   dir=$(make_case restart-reused-pid)
@@ -1114,6 +1232,9 @@ test_lock_does_not_steal_live_lock
 test_lock_empty_pid_uses_minimum_grace
 test_lock_late_claim_loses_after_recreate
 test_lock_paused_mid_acquire_claim_fails_during_steal
+test_lock_self_owned_is_reclaimed_not_waited_on
+test_lock_abandoned_steal_token_is_recovered_in_place
+test_lock_unusable_token_path_refuses_promptly
 test_watch_restart_rejects_reused_pid
 test_watch_restart_attaches_to_healthy_peer
 test_watcher_self_evicts_on_lock_takeover
