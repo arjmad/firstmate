@@ -3030,6 +3030,13 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fm_lock_release "$SPAWN_META_LOCK"
   SPAWN_META_LOCK_HELD=0
 else
+  # mv onto an existing directory "succeeds" by moving the temp file inside it,
+  # which would publish the record somewhere the supervisor never reads. Refuse
+  # a directory obstruction explicitly so the spawn stays fail-closed.
+  if [ -d "$SPAWN_META_FINAL" ]; then
+    echo "error: could not publish task metadata to $SPAWN_META_FINAL: Is a directory; refusing to launch an unsupervisable agent for $ID" >&2
+    exit 1
+  fi
   if ! mv -f "$SPAWN_META_TMP" "$SPAWN_META_FINAL"; then
     echo "error: could not publish task metadata to $SPAWN_META_FINAL; refusing to launch an unsupervisable agent for $ID" >&2
     exit 1
