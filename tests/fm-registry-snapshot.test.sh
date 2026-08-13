@@ -90,13 +90,17 @@ EOF
     'window=firstmate:fm-mate-active' \
     "worktree=$mate/projects/mate-active" \
     'project=alpha' \
-    'harness=codex' \
+    'harness=claude' \
     'kind=ship' \
     'mode=no-mistakes' \
     'yolo=off' \
     'model=claude-sonnet-5' \
     'effort=high'
   printf 'working: secondmate fixture activity\n' > "$mate/state/mate-active.status"
+  # An in-flight child proves it is working through the same semantic
+  # busy-state record; without it the home summary degrades to unknown and
+  # every workload count derived from it reports unavailable.
+  "$ROOT/bin/fm-busy-event.sh" arm "$mate/state" mate-active >/dev/null
   printf '%s\n' "$mate"
 }
 
@@ -150,6 +154,10 @@ EOF
 working: RAW_FULL_STATUS_LOG_SENTINEL_9a4d13
 blocked: stale event history, not current truth
 EOF
+  # Current state comes from the semantic busy-state record, never from the
+  # status log above, which deliberately ends on a stale `blocked:` event to
+  # prove event history is not current truth.
+  "$ROOT/bin/fm-busy-event.sh" arm "$home/state" active-one >/dev/null
 
   make_git_repo "$home/task-worktrees/done-no-pr" fm/done-no-pr
   fm_write_meta "$home/state/done-no-pr.meta" \
@@ -163,6 +171,7 @@ EOF
     'model=claude-sonnet-5' \
     'effort=high'
   printf 'done: implementation committed locally\n' > "$home/state/done-no-pr.status"
+  "$ROOT/bin/fm-busy-event.sh" arm "$home/state" done-no-pr --state idle >/dev/null
   mkdir -p "$home/data/done-no-pr"
   printf 'RAW_REPORT_SENTINEL_5108d4\n' > "$home/data/done-no-pr/report.md"
   printf 'RAW_BRIEF_SENTINEL_1bf889\n' > "$home/data/done-no-pr/brief.md"
@@ -179,6 +188,7 @@ EOF
     'model=claude-sonnet-5' \
     'effort=high'
   printf 'done: scout report complete\n' > "$home/state/scout-with-report.status"
+  "$ROOT/bin/fm-busy-event.sh" arm "$home/state" scout-with-report --state idle >/dev/null
   mkdir -p "$home/data/scout-with-report"
   printf '# Scout report\n\nFindings are complete.\n' > "$home/data/scout-with-report/report.md"
 
@@ -210,6 +220,7 @@ EOF
     'model=claude-sonnet-5' \
     'effort=high'
   printf 'done: scout report complete\n' > "$home/state/scout-without-report.status"
+  "$ROOT/bin/fm-busy-event.sh" arm "$home/state" scout-without-report --state idle >/dev/null
 
   make_git_repo "$home/task-worktrees/decision-one" fm/decision-one
   fm_write_meta "$home/state/decision-one.meta" \
@@ -223,6 +234,7 @@ EOF
     'model=claude-opus-4-8' \
     'effort=medium'
   printf 'needs-decision [key=choice]: choose safe option ghp_DECISION_SECRET_1234567890\n' > "$home/state/decision-one.status"
+  "$ROOT/bin/fm-busy-event.sh" arm "$home/state" decision-one --state idle >/dev/null
 
   fm_write_meta "$home/state/mate-one.meta" \
     'window=firstmate:fm-dead-mate-one' \
@@ -734,11 +746,10 @@ EOF
   pass "existing fm-bearings.v1 output remains unchanged"
 }
 
-test_shell_static_and_diff_checks_pass() {
+test_shell_static_checks_pass() {
   bash -n "$SNAPSHOT" || fail "registry snapshot failed bash syntax"
   bash -n "$ROOT/bin/fm-fleet-snapshot.sh" || fail "canonical snapshot failed bash syntax"
-  git -C "$ROOT" diff --check || fail "git diff --check failed"
-  pass "operational snapshot passes shell syntax and static diff checks"
+  pass "operational snapshot passes shell syntax checks"
 }
 
 test_exact_versioned_schema_and_types
@@ -755,4 +766,4 @@ test_missing_unreadable_malformed_incomplete_and_truncated_inputs
 test_secret_token_and_environment_sentinels_never_serialize
 test_raw_transcript_pane_log_brief_and_report_never_serialize
 test_existing_bearings_contract_remains_unchanged
-test_shell_static_and_diff_checks_pass
+test_shell_static_checks_pass

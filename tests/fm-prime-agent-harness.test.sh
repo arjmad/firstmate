@@ -122,7 +122,7 @@ test_control_adapter_state_send_and_cleanup() {
     FM_FAKE_PRIME_LOG="$d/prime.log" FM_FAKE_PRIME_CWD="$d/cwd" \
     "$PRIME_CTL" send "$meta" 'change course' >/dev/null
   assert_grep 'cmd=send pa123 change course --json' "$d/prime.log" \
-    "Prime Agent steer did not use plain send"
+    "Prime Agent steer did not use plain send with a positional message"
   assert_no_grep '--steer' "$d/prime.log" "Prime Agent used broken --steer flag"
 
   HOME="$home" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" \
@@ -159,7 +159,7 @@ EOF
     FM_FAKE_PANE_PATH="$wt" FM_FAKE_PRIME_CWD="$(cd "$wt" && pwd -P)" \
     FM_FAKE_PRIME_LOG="$d/prime.log" FM_FAKE_TMUX_LOG="$d/tmux.log" \
     PRIME_AGENT_REAL_BIN="$fakebin/prime-agent" PATH="$fakebin:$BASE_PATH" \
-    "$SPAWN" "$id" "$proj" --reuse-worktree "$wt" --harness prime-agent \
+    "$SPAWN" "$id" "$proj" --scout --harness prime-agent \
       --model gpt-5.6-sol --effort high 2>&1) || rc=$?
   [ "$rc" = 0 ] || fail "Prime Agent spawn should succeed: $out; prime log: $(cat "$d/prime.log")"
   assert_contains "$out" "spawned $id harness=prime-agent" "Prime Agent spawn did not report success"
@@ -270,7 +270,7 @@ EOF
     FM_FAKE_PRIME_LOG="$d/prime.log" FM_FAKE_TMUX_LOG="$d/tmux.log" \
     FM_PRIME_SESSION_POLLS=1 FM_PRIME_POLL_INTERVAL=0 \
     PRIME_AGENT_REAL_BIN="$fakebin/prime-agent" PATH="$fakebin:$BASE_PATH" \
-    "$SPAWN" "$id" "$proj" --reuse-worktree "$wt" --harness prime-agent 2>&1) || rc=$?
+    "$SPAWN" "$id" "$proj" --scout --harness prime-agent 2>&1) || rc=$?
   [ "$rc" != 0 ] || fail "spawn should fail when discovery finds no task session: $out"
 
   meta="$home/state/$id.meta"
@@ -302,32 +302,117 @@ test_detection_and_registry() {
   pass "fm-harness: Prime Agent marker and verified registry entry are present"
 }
 
-test_tmux_node_process_is_classified_by_foreground_args() {
-  local d fakebin out
-  d="$TMP_ROOT/liveness"
+
+# The busy-state seam: prime-agent is a PULL source. Nothing is armed for it, so
+# the classifier must reach its adapter on demand and must never fall through to
+# idle when that read cannot settle the turn.
+classify_prime() {  # <state-dir> <id>
+  (
+    # shellcheck source=bin/fm-busy-lib.sh
+    . "$ROOT/bin/fm-busy-lib.sh"
+    fm_busy_classify tmux fake:0 prime-agent "$2" "$1"
+  )
+}
+
+test_busy_classification_uses_the_list_verdict() {
+  local d fakebin home state id tmp sessions meta verdict
+  d="$TMP_ROOT/busy"
   fakebin=$(fm_fakebin "$d")
-  cat > "$fakebin/tmux" <<'SH'
-#!/usr/bin/env bash
-case "$*" in
-  "list-windows -t firstmate -F #{window_name}") printf 'fm-prime-live\n' ;;
-  *"#{pane_current_command}"*) printf 'node\n' ;;
-  *"#{pane_pid}"*) printf '4242\n' ;;
-  *) exit 1 ;;
-esac
-SH
-  cat > "$fakebin/ps" <<'SH'
-#!/usr/bin/env bash
-case "$*" in
-  "-o tpgid= -p 4242") printf ' 777\n' ;;
-  "-ax -o pgid=,args=") printf ' 777 node /home/test/.local/prime-agent/node_modules/.bin/prime-agent --model test\n' ;;
-  *) exit 1 ;;
-esac
-SH
-  chmod +x "$fakebin/tmux" "$fakebin/ps"
-  out=$(FM_BACKEND_LIB_DIR="$ROOT/bin" PATH="$fakebin:$BASE_PATH" bash -c \
-    '. "$1/bin/backends/tmux.sh"; fm_backend_tmux_agent_state firstmate:fm-prime-live' _ "$ROOT")
-  [ "$out" = alive ] || fail "tmux should classify Prime Agent's foreground node argv alive, got '$out'"
-  pass "tmux liveness: foreground node is alive only when argv identifies prime-agent"
+  make_prime_fake "$fakebin"
+  ln -s "$JQ_BIN" "$fakebin/jq"
+  home="$d/home"
+  state="$home/state"
+  id=prime-busy-e5
+  tmp=$(mktemp -d /tmp/fmpa.XXXXXXXX)
+  mkdir -p "$state" "$d/cwd"
+  state=$(cd "$state" && pwd -P)
+  sessions="$state/prime-agent/$id/sessions"
+  mkdir -p "$sessions"
+  : > "$d/prime.log"
+  meta="$state/$id.meta"
+  fm_write_meta "$meta" "window=firstmate:fm-$id" "worktree=$d/cwd" \
+    "project=$d/cwd" "harness=prime-agent" "kind=scout" \
+    "prime_tmp=$tmp" "prime_session_dir=$sessions" "prime_session=pa123"
+
+  verdict=$(PATH="$fakebin:$BASE_PATH" HOME="$home" \
+    PRIME_AGENT_REAL_BIN="$fakebin/prime-agent" FM_FAKE_PRIME_LOG="$d/prime.log" \
+    FM_FAKE_PRIME_CWD="$d/cwd" FM_FAKE_PRIME_ACTIVITY=working classify_prime "$state" "$id")
+  [ "$verdict" = "busy prime-agent-list" ] \
+    || fail "a working Prime Agent session should classify busy from its own list verdict, got '$verdict'"
+
+  verdict=$(PATH="$fakebin:$BASE_PATH" HOME="$home" \
+    PRIME_AGENT_REAL_BIN="$fakebin/prime-agent" FM_FAKE_PRIME_LOG="$d/prime.log" \
+    FM_FAKE_PRIME_CWD="$d/cwd" FM_FAKE_PRIME_ACTIVITY=idle classify_prime "$state" "$id")
+  [ "$verdict" = "idle prime-agent-list" ] \
+    || fail "an idle Prime Agent session should classify idle from its own list verdict, got '$verdict'"
+
+  # A session the daemon no longer knows about proves nothing about the turn, so
+  # it must stay unknown rather than reading as a finished one.
+  fm_write_meta "$meta" "window=firstmate:fm-$id" "worktree=$d/cwd" \
+    "project=$d/cwd" "harness=prime-agent" "kind=scout" \
+    "prime_tmp=$tmp" "prime_session_dir=$sessions" "prime_session=gone999"
+  verdict=$(PATH="$fakebin:$BASE_PATH" HOME="$home" \
+    PRIME_AGENT_REAL_BIN="$fakebin/prime-agent" FM_FAKE_PRIME_LOG="$d/prime.log" \
+    FM_FAKE_PRIME_CWD="$d/cwd" classify_prime "$state" "$id")
+  [ "$verdict" = "unknown prime-agent-list" ] \
+    || fail "a missing Prime Agent session must be unknown, never idle, got '$verdict'"
+
+  # An unreachable adapter is the same kind of non-evidence.
+  verdict=$(PATH="$BASE_PATH" HOME="$d/nohome" classify_prime "$state" "$id")
+  [ "$verdict" = "unknown prime-agent-list" ] \
+    || fail "an unreadable Prime Agent state must be unknown, got '$verdict'"
+
+  # Nothing may be armed for this adapter: a seeded record with no writer to
+  # clear it could never settle.
+  (
+    # shellcheck source=bin/fm-busy-lib.sh
+    . "$ROOT/bin/fm-busy-lib.sh"
+    [ -z "$(fm_busy_sources_for_harness prime-agent)" ]
+  ) || fail "prime-agent must trust no written busy source, because it has no writer"
+  # shellcheck disable=SC2031  # the subshells above only READ $tmp; none assigns it
+  rm -rf "$tmp"
+  pass "fm-busy-lib: prime-agent classifies from its own list verdict and never falls through to idle"
+}
+
+# The control plane: prime-agent has a verified interrupt and no verified way to
+# stop the agent, so it must offer exactly the half it can prove.
+test_control_offers_interrupt_only() {
+  (
+    # shellcheck source=bin/fm-control-lib.sh
+    . "$ROOT/bin/fm-control-lib.sh"
+    fm_control_harness_supported prime-agent || exit 1
+    [ "$(fm_control_harness_family prime-agent)" = prime-agent ] || exit 1
+    [ "$(fm_control_interrupt_key prime-agent)" = Escape ] || exit 1
+    [ "$(fm_control_interrupt_repeat prime-agent)" = 1 ] || exit 1
+    fm_control_harness_supports_verb prime-agent interrupt || exit 1
+    ! fm_control_harness_supports_verb prime-agent exit || exit 1
+    ! fm_control_harness_supports_verb prime-agent relaunch || exit 1
+    ! fm_control_exit_command prime-agent >/dev/null 2>&1 || exit 1
+    fm_control_harness_supports_kind prime-agent scout || exit 1
+    ! fm_control_harness_supports_kind prime-agent secondmate || exit 1
+  ) || fail "the control tables do not describe prime-agent's verified mechanics"
+  pass "fm-control-lib: prime-agent offers a verified interrupt and refuses the verbs it cannot prove"
+}
+
+test_secondmate_and_relaunch_are_refused() {
+  local d rec home proj wt fakebin id out rc
+  d="$TMP_ROOT/refusals"
+  id=prime-refuse-f6
+  rec=$(make_case "$d" "$id")
+  IFS='|' read -r home proj wt fakebin id <<EOF
+$rec
+EOF
+  rc=0
+  out=$(FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" FM_PROJECTS_OVERRIDE="$home/projects" \
+    FM_CONFIG_OVERRIDE="$home/config" FM_SPAWN_NO_GUARD=1 TMUX='fake,1,0' \
+    FM_FAKE_PANE_PATH="$wt" FM_FAKE_TMUX_LOG="$d/tmux.log" \
+    PRIME_AGENT_REAL_BIN="$fakebin/prime-agent" PATH="$fakebin:$BASE_PATH" \
+    "$SPAWN" "$id" "$home/sm" --secondmate --harness prime-agent 2>&1) || rc=$?
+  [ "$rc" != 0 ] || fail "a prime-agent secondmate spawn must be refused: $out"
+  assert_contains "$out" "crewmate/scout adapter only" \
+    "the secondmate refusal should name the adapter boundary"
+  pass "fm-spawn: prime-agent is refused for a secondmate"
 }
 
 test_control_adapter_state_send_and_cleanup
@@ -335,4 +420,6 @@ test_spawn_launch_and_event_extension
 test_cleanup_idempotent_when_runtime_already_gone
 test_teardown_succeeds_after_failed_launch
 test_detection_and_registry
-test_tmux_node_process_is_classified_by_foreground_args
+test_busy_classification_uses_the_list_verdict
+test_control_offers_interrupt_only
+test_secondmate_and_relaunch_are_refused

@@ -1,6 +1,6 @@
 ---
 name: harness-adapters
-description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, grok, kimi, and experimental prime-agent.
+description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, muse, and prime-agent.
 user-invocable: false
 metadata:
   internal: true
@@ -10,24 +10,9 @@ metadata:
 
 Use this reference before any harness-specific firstmate operation: spawn, recovery, trust-dialog handling, skill invocation, interrupt, exit, resume, or adapter verification.
 
-## Per-runtime reference files
-
-Read `references/adapter-<harness>.md` for the target harness before acting on it, where the harness is the `harness=` value in `state/<id>.meta` for an existing task or the harness being spawned for a new one.
-The experimental `prime-agent` harness is the explicit filename exception `references/adapter-prime.md` required by its adoption record.
-Each reference file owns that runtime's busy signature, exit and interrupt commands, skill invocation, trust dialogs, quirks, incidents, primary-session guard facts, and verification dates.
-Firstmate's own primary-session facts live in the reference file for its own detected harness.
-The `adapter-` prefix is required: a bare `references/claude.md` resolves as `CLAUDE.md` on a case-insensitive filesystem, which loads the file as project memory into every Claude session instead of on demand.
-
-- [`references/adapter-claude.md`](references/adapter-claude.md)
-- [`references/adapter-codex.md`](references/adapter-codex.md)
-- [`references/adapter-opencode.md`](references/adapter-opencode.md)
-- [`references/adapter-pi.md`](references/adapter-pi.md)
-- [`references/adapter-grok.md`](references/adapter-grok.md)
-- [`references/adapter-kimi.md`](references/adapter-kimi.md)
-- [`references/adapter-prime.md`](references/adapter-prime.md) - experimental crew-only adapter
-
 Crewmates default to the same harness firstmate is running on unless `config/crew-harness` records an adapter name.
 Optional dispatch profiles in `config/crew-dispatch.json` can override that static default for one crewmate or scout dispatch by selecting concrete harness, model, and effort axes at intake.
+When a matched rule or default is a profile array, load `quota-array-dispatch` for the completion-aware candidate choice after this skill establishes harness and model/provider facts.
 The captain may override that file at session start or later; a per-task instruction such as "run this one on codex" overrides it for that dispatch only.
 `default` means mirror firstmate's own harness.
 
@@ -42,18 +27,23 @@ Inheritance also copies the literal `config/crew-dispatch.json` file, so secondm
 
 Each adapter splits into mechanics and knowledge.
 The per-task mechanics, including launch command, autonomy flag, and any enabled crewmate turn-end hook, live in `bin/fm-spawn.sh`.
+Agent lifecycle mechanics - which key interrupts a turn, how many times it must be sent, whether the composer needs clearing afterwards, which command exits the agent, and which task kinds the adapter can run - are owned by the executable control plane in `bin/fm-control-lib.sh` and delivered by `bin/fm-control.sh <task-id> interrupt|exit|relaunch`.
+Never hand-type an interrupt key or exit command through `fm-send`: a routing-marked lifecycle command becomes chat the agent reasons about instead of executing, which is the defect the control plane exists to remove ([`docs/agent-control.md`](../../../docs/agent-control.md)).
+The per-adapter `Exit command` and `Interrupt` rows below remain the verification record for those values; the executable owner is what firstmate actually runs, so a newly verified adapter is not reachable by the control plane until its rows land in that owner.
 The primary-session "no turn ends blind" guard contract and harness hook installation paths live in `docs/turnend-guard.md`.
 The primary-session watcher wake protocols are rendered from `docs/supervision-protocols/` by `bin/fm-supervision-instructions.sh`.
-The supervision knowledge lives here: busy signature, exit command, interrupt, dialogs, resume behavior, skill invocation, and quirks.
+The supervision knowledge lives here: busy state, exit command, interrupt, dialogs, resume behavior, skill invocation, and quirks.
+Each adapter's `Busy state` row names only which semantic source that harness uses; `bin/fm-busy-lib.sh` owns the contract itself, including verdicts, source attribution, and the verification gates that keep an unverified harness at unknown.
 
 Never dispatch a crewmate or secondmate on an unverified adapter.
 If `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, tell the captain under `AGENTS.md` section 9 that the requested worker runtime is not verified yet, use firstmate's own verified runtime for current work, and ask only whether to verify the requested runtime before future use.
 Do not pause current work for that future-verification choice, and never launch an unverified adapter.
-If the captain asks for a new harness, propose verifying it first: spawn a trivial supervised task using `fm-spawn`'s raw-launch-command escape hatch, confirm every fact empirically, then record the mechanics in `fm-spawn`, the busy signature in `fm-watch.sh` and `fm-tmux-lib.sh` defaults, any needed `FM_COMPOSER_IDLE_RE` empty-composer override plus any novel bare agent prompt glyph in `bin/fm-composer-lib.sh`'s shared composer classifier (the one fleet-wide owner of the empty/dead-shell/pending decision, so a new harness's own idle composer is not misread as a dead shell), the tmux agent-process liveness classification in `bin/backends/tmux.sh` when the harness can launch a secondmate, and the verified knowledge here.
+If the captain asks for a new harness, propose verifying it first: spawn a trivial supervised task using `fm-spawn`'s raw-launch-command escape hatch, confirm every fact empirically, then record the mechanics in `fm-spawn`, its semantic busy source and trust gate in `bin/fm-busy-lib.sh`, any new composer shape, prompt glyph, or idle placeholder in `bin/fm-composer-lib.sh`'s shared screen classifier (the ONE fleet-wide owner of every composer shape and the `empty`/`pending`/`pending-unproven`/`unknown` decision - teaching it there gives every backend the shape in the same commit, and no adapter may carry its own copy), the tmux agent-process liveness classification in `bin/backends/tmux.sh` when the harness can launch a secondmate, and the verified knowledge in that harness's `references/adapter-<harness>.md`.
 
 ## Detection
 
 `bin/fm-harness.sh` prints firstmate's own harness, using verified env markers first and then process ancestry.
+Within the Pi family, only the exact launch-boundary marker `FM_PI_HARNESS=pi-signed` alongside `PI_CODING_AGENT=true` selects the signed identity; unmarked shared launcher ancestry remains `pi`.
 `bin/fm-harness.sh crew` resolves the effective crewmate harness from `config/crew-harness` (absent or `default` -> own).
 `bin/fm-harness.sh secondmate` resolves the secondmate-launch harness through the chain `config/secondmate-harness` -> `config/crew-harness` -> own, so an unset `config/secondmate-harness` matches the crew harness.
 `bin/fm-spawn.sh` uses `crew` mode for a crewmate/scout launch and `secondmate` mode for a `--secondmate` launch, re-resolving on every spawn so the split is durable across respawns; an explicit per-spawn harness arg overrides either.
@@ -66,22 +56,24 @@ Use that value for interrupt, exit, resume, and skill-invocation facts.
 
 ## Primary turn-end guard
 
-The primary integrations for `claude`, `codex`, `opencode`, `pi`, and `grok` have empirically validated hook paths for the "no turn ends blind" guard.
+The primary integrations for `claude`, `codex`, `opencode`, `pi`, `pi-signed`, and `grok` have empirically validated hook paths for the "no turn ends blind" guard.
 `claude` and `codex` block directly through Stop hooks that preserve exit status 2 and stderr from `bin/fm-turnend-guard.sh`.
-`opencode`, `pi`, and `grok` expose passive lifecycle callbacks for this purpose, so their tracked primary adapters force one bounded follow-up or resume when the shared predicate blocks.
+`opencode`, `pi`, and `pi-signed` expose passive lifecycle callbacks and force one bounded follow-up when the shared predicate blocks.
+Grok selects native blocking or its pre-native bounded resume fallback from the exact running Stop payload; [`docs/turnend-guard.md`](../../../docs/turnend-guard.md) owns that contract.
 Kimi is outside the primary turn-end guard scope, while `docs/turnend-guard.md` owns its separate guarded global hook for crew wake signals.
+muse is CREWMATE/SCOUT ONLY and has no primary integration at all: its plugin engine (its only hook surface) is disabled in the default build, and its Claude-compatible hook dialect names `asyncRewake` and model reawakening as explicitly unsupported, which is exactly what a firstmate primary's turn-end supervision needs.
+`bin/fm-spawn.sh` refuses a `--secondmate` launch on muse for that reason.
 The exact hook files, commands, scoping rules, and fail-open tradeoffs are owned by `docs/turnend-guard.md`.
 `docs/verification/supervision.md` "Turn-end guard" owns active validation evidence.
-When changing any primary turn-end hook, validate the real harness behavior in a scratch project or throwaway home before trusting it, then update that doc and the relevant concise fact in `references/adapter-<harness>.md`.
+When changing any primary turn-end hook, validate the real harness behavior in a scratch project or throwaway home before trusting it, then update that doc and the relevant concise fact below.
 
 ## Primary pre-arm (PreToolUse) seatbelt
 
-The primary integrations for `claude`, `codex`, `opencode`, `pi`, and `grok` also have wired PreToolUse-equivalent hooks that deny a watcher-arm anti-pattern (shell `&`, truncating pipe, bundling, broad `pkill -f fm-watch`) before it runs.
+The primary integrations for `claude`, `codex`, `opencode`, `pi`, `pi-signed`, and `grok` also have wired PreToolUse-equivalent hooks that deny a watcher-arm anti-pattern (shell `&`, truncating pipe, bundling, broad `pkill -f fm-watch`) before it runs.
 `claude` and `codex` block directly through PreToolUse hooks; `grok` blocks the same way but requires every `$VAR` reference in its hook `command` string to carry an inline `:-default` or it fails to launch the hook entirely.
-`opencode` and `pi` block by throwing from `tool.execute.before` / returning `{block: true}` from `tool_call`.
+`opencode`, `pi`, and `pi-signed` block by throwing from `tool.execute.before` / returning `{block: true}` from `tool_call`.
 The exact hook files, commands, output-shaping quirks (Claude Code only honors the deny when stdout is empty), and validation transcripts are owned by `docs/arm-pretool-check.md`.
 When changing any watcher-arm PreToolUse hook, validate the real harness behavior in a scratch project before trusting it, then update that doc.
-
 ## Primary delegation-shape guard
 
 Claude exposes built-in delegation, scheduling, and worktree tools that a primary session can use to create work with no `state/<id>.meta`, which makes the whole guard stack inert because every guard counts that metadata.
@@ -94,20 +86,21 @@ Two verified facts worth pinning here.
 The subagent tool presents to the model as `Agent`, and on Claude Code 2.1.217 both `Agent` and `Task` work as `permissions.deny` keys, verified by an A/B with a nonsense-name control.
 `permissions.allow` is a pre-approval list rather than an availability list, so there is no fail-closed positive allowlist.
 
-## Primary session-start nudge
+## Primary session start
 
-AGENTS.md section 3 remains the behavioral owner for session start, while tracked native adapters invoke `bin/fm-sessionstart-nudge.sh` as an idempotent enforcement layer.
-The wrapper prints one canonically typed `session-start` instruction to run `bin/fm-session-start.sh`; it never runs the digest, wake drain, bootstrap sweeps, lock, or supervision arm itself.
-Full mechanics, scoping, and fail-open behavior live in `docs/sessionstart-nudge.md`.
+AGENTS.md section 3 remains the behavioral owner for session start, while tracked native adapters enforce it idempotently at session open through one of two tiers.
+Before inspecting or changing session-open behavior, read `docs/sessionstart-nudge.md`, the single owner of tier assignment, per-surface transports, source routing, the runtime bound, and fail-open behavior.
 `docs/verification/supervision.md` "Native session-start delivery" owns active dated commands, payloads, and evidence.
-Each harness's verified native session-start behavior lives in its own reference file.
 
 ## Primary watcher supervision
 
 At session start, `bin/fm-session-start.sh` prints exactly one watcher supervision block for the detected primary harness.
 Do not substitute another harness's wait shape when resuming supervision.
-Each harness's primary watcher protocol lives in its own reference file.
-When changing any primary watcher adapter, update `docs/supervision-protocols/`, `docs/turnend-guard.md` if a shared idle or turn-end hook changed, and the relevant concise fact in `references/adapter-<harness>.md`.
+Claude's Stop `asyncRewake` hook (`bin/fm-claude-stop-autoarm.sh`) owns tokenless re-arm around `bin/fm-watch-arm.sh`, and Grok uses tracked background-notify cycles around `bin/fm-watch-arm.sh`.
+Codex uses bounded foreground checkpoints through `bin/fm-watch-checkpoint.sh` because Codex cannot reason while a foreground tool call is running.
+OpenCode uses `.opencode/plugins/fm-primary-watch-arm.js`, which coordinates with the turn-end guard plugin and wakes the TUI with `client.session.promptAsync`.
+Pi and pi-signed use the tracked `.pi/extensions/fm-primary-turnend-guard.ts` plus the tracked `.pi/extensions/fm-primary-pi-watch.ts`, both project-local extensions the Pi engine auto-discovers once trusted.
+When changing any primary watcher adapter, update `docs/supervision-protocols/`, `docs/turnend-guard.md` if a shared idle or turn-end hook changed, and the relevant concise fact below.
 
 ## Launch profile axes
 
@@ -129,10 +122,13 @@ The supported launch-profile flags below are verified locally; each row records 
 | claude | `--model <model>` | `--effort <low\|medium\|high\|xhigh\|max>` | Verified on Claude Code 2.1.196. |
 | codex | `--model <model>` | `-c 'model_reasoning_effort="<low\|medium\|high\|xhigh>"'` | Verified on codex-cli 0.142.1. The installed binary schema contains `model_reasoning_effort`, the active config uses it, and the bundled model catalog advertises only low/medium/high/xhigh. `max` is omitted. |
 | grok | `--model <model>` | `--reasoning-effort <low\|medium\|high>` | Verified on grok 0.2.99 (2026-07-13). `--effort` is an alias, but firstmate's profile axis is reasoning effort. As of 0.2.99 the ceiling is `high`; both `xhigh` and `max` are rejected with `use one of: high, medium, low`, so firstmate omits them. |
-| pi | `--model <model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Verified 2026-07-13 on Pi 0.80.6. `pi --help` advertises `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; a `pi --print --thinking max 'Reply with exactly OK.'` probe against an explicit `openai-codex/<model>` pin completed successfully. |
+| pi / pi-signed | `--model <model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Verified 2026-07-27 on Pi and pi-signed 0.82.0. Both expose the same accepted thinking levels and completed the same model-qualified max-thinking smoke. |
 | opencode | `--model <provider/model>` | none for firstmate's interactive launch | Verified on opencode 1.17.6. `opencode run` has `--variant`, but firstmate launches the interactive `opencode --prompt` path, which has no verified effort flag. |
 | kimi | `--model <model>` | none | Verified 2026-07-25 on Kimi Code CLI 0.29.1. |
-| prime-agent | `--model <model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Experimental crew-only adapter verified 2026-08-08 on Prime Agent v0.7.1. The mapping from firstmate effort to thinking level is direct. |
+| muse | `--model <model>` | `--reasoning-effort <low\|medium\|high\|xhigh>`, and `ultra` only for an explicit `max` | Verified 2026-08-05 on Muse Code 0.1.0-R708.1. The flag accepts `none\|minimal\|low\|medium\|high\|xhigh\|ultra` and defaults to `high`. `ultra` is muse's max-class level, so it is reachable only through an explicit captain `max`, never from the generic fallback; `none` and `minimal` sit below the shared vocabulary and stay unreachable. |
+
+The concrete `harness` field owns adapter identity independently of the model provider: `harness=pi` with `model=xai/grok-*` is Pi using xAI, not `harness=grok`, and does not require Grok CLI login; `harness=grok` remains the standalone Grok Build CLI adapter.
+No script resolves that split for you: establish which credential store a tuple reads from the discovery surfaces below plus `quota-axi auth --json`'s per-provider sources, and show that reasoning rather than inferring it from a harness, model, or source name.
 
 ### Model support discovery
 
@@ -144,13 +140,13 @@ Use the discovery surface in the current authenticated environment because suppo
 | claude | Open the current interactive session's `/model` picker; `claude --help` documents the accepted alias or full-model-name input shape. |
 | codex | Open the current interactive session's `/model` picker. |
 | opencode | Run `opencode models [provider]`, which lists available provider/model identifiers. |
-| pi | Run `pi --list-models [search]`; Pi's installed `docs/models.md` owns how built-in, extension-registered, and custom provider/model entries reach that list. |
+| pi / pi-signed | Run the selected executable as `<executable> --list-models [search]`; Pi's installed `docs/models.md` owns how built-in, extension-registered, and custom provider/model entries reach that list. |
 | grok | Run `grok models`, which lists the models available to the current Grok installation and account. |
 | kimi | Run `kimi provider list --json`, which lists the current provider and model configuration. |
-| prime-agent | Run `prime-agent model list` in the current authenticated personal config environment. |
 
 For an unfamiliar harness or model namespace, establish support and provider identity from that harness's authoritative CLI help, model listing, or current documentation rather than guessing from a name or prefix.
-If those sources do not establish the relationship needed for dispatch, fail loudly and report the unresolved candidate.
+A listing that reaches the account and does not contain the model is concrete evidence the model is unsupported: block that candidate and quote the result.
+A discovery surface you could not reach establishes nothing; report that as uncertainty rather than turning it into a supported or unsupported verdict.
 
 When a requested effort value is outside the harness-specific accepted set, `fm-spawn` records the requested `effort=` in meta but emits no effort flag for that harness.
 This preserves launch success instead of passing a known-bad value.
@@ -159,10 +155,33 @@ This preserves launch success instead of passing a known-bad value.
 
 Send the validation skill using the target harness's skill invocation form.
 Natural language is acceptable if uncertain.
-Each harness's verified invocation form lives in its own reference file.
+
+- claude: `/<skill>`, for example `/no-mistakes`.
+- codex: `$<skill>`, for example `$no-mistakes`; `/<skill>` is claude-only and codex rejects it as "Unrecognized command".
+- opencode: no separate verified skill invocation beyond normal slash-command behavior; use natural language if the exact skill command is uncertain.
+- pi and pi-signed: no separate verified skill invocation beyond normal command behavior; use natural language if the exact skill command is uncertain.
+- grok: `/<skill>`, for example `/no-mistakes` (same form as claude). Verified end to end: grok discovers the user-level `no-mistakes` skill, `/no-mistakes` invokes it, and grok drives a real `no-mistakes axi run`. Like codex's `$`/`/` popups, typing `/<skill>` opens grok's slash-autocomplete, so a too-fast Enter selects the popup entry instead of sending, and for an argument-taking command (like `/no-mistakes`'s optional task-first argument) that first Enter only expands the popup selection into an argument-hint placeholder rather than submitting - a genuine second Enter is required (see references/adapter-grok.md for the 2026-07-03 incident and fix). `fm_tmux_submit_core`'s retried Enter (used by `fm-send` on the tmux backend) handles this through the shared structural composer classifier; the herdr backend needed a dedicated fix (`fm_backend_herdr_composer_state`, docs/herdr-backend.md) because its prior delta-based verification false-positived on that same popup-close content change.
+- kimi: `/<skill>`, for example `/no-mistakes`.
 
 ## Submission acknowledgement hazards
 
 A send or key action reporting success is not proof that the intended action happened.
 OpenCode can accept and queue an Enter while leaving text visible, Grok can consume Enter in its slash popup without submitting, and Kimi can silently drop a message sent before readiness even though the send returns success.
 The shared symptom is a healthy-looking pane with no work in progress, so each adapter must verify the observable postcondition that is specific to its TUI.
+
+## Per-runtime references
+
+Read `references/adapter-<harness>.md` for the target harness before acting on it, where the harness is the `harness=` value in `state/<id>.meta` for an existing task or the harness being spawned for a new one.
+Load only the reference you need: every mandatory load of this skill pays for the core, so keeping the per-runtime detail out of it is what stops one spawn from carrying every adapter's facts.
+`pi` and `pi-signed` share one reference because they are the same adapter with different signing posture.
+
+- [`references/adapter-claude.md`](references/adapter-claude.md)
+- [`references/adapter-codex.md`](references/adapter-codex.md)
+- [`references/adapter-opencode.md`](references/adapter-opencode.md)
+- [`references/adapter-pi.md`](references/adapter-pi.md) - covers `pi` and `pi-signed`
+- [`references/adapter-grok.md`](references/adapter-grok.md)
+- [`references/adapter-kimi.md`](references/adapter-kimi.md)
+- [`references/adapter-muse.md`](references/adapter-muse.md) - crewmate and scout only
+- [`references/adapter-prime.md`](references/adapter-prime.md) - experimental, crewmate and scout only
+
+When a per-adapter fact changes, update that harness's reference file, not this core.

@@ -13,7 +13,7 @@ It does not replace `AGENTS.md`, `docs/orca-backend.md`, or `harness-adapters`.
 
 Orca is a runtime backend, not an agent harness.
 The runtime backend owns the task endpoint and, for Orca, the task worktree.
-The harness is the agent process launched inside that endpoint, such as `claude`, `codex`, `opencode`, `pi`, `grok`, or `kimi`.
+The harness is the agent process launched inside that endpoint, such as `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, or `kimi`.
 Load `harness-adapters` for harness-specific launch, interrupt, resume, trust-dialog, and skill-invocation facts.
 
 Implementation details, metadata fields, teardown guarantees, and limitations live in `docs/orca-backend.md`.
@@ -44,7 +44,7 @@ After spawn, check the task with firstmate helpers:
 - `bin/fm-peek.sh fm-<id>` for launch failures, trust dialogs, or first output.
 - `state/<id>.meta` for `backend=orca`, `terminal=`, `orca_worktree_id=`, and `worktree=`.
 - `bin/fm-crew-state.sh <id>` when the current run state matters.
-- The supervision protocol emitted at session start whenever there are tasks in flight and this session owns supervision.
+- `bin/fm-watch.sh` whenever there are tasks in flight and this session owns supervision.
 
 Do not manually create the Orca worktree or terminal for a normal firstmate task.
 Do not manually patch metadata to make an externally-created Orca terminal look like a firstmate task.

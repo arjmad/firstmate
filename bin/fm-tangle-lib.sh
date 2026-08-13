@@ -39,6 +39,12 @@ fm_default_branch() {
   return 1
 }
 
+# If the git checkout at <root> is tangled - on a NAMED branch that is not its
+# default branch - echo the offending branch name and return 0. For every healthy
+# state (not a git work tree, detached HEAD, or already on the default branch)
+# echo nothing and return 1. Detached HEAD is how linked worktrees and secondmate
+# homes legitimately sit, so they never trip this; only a feature branch checked
+# out in a primary checkout does.
 # Resolve the PRIMARY checkout of the repo <dir> belongs to: git lists the main
 # worktree first in `git worktree list`, ahead of every linked worktree. Echoes
 # that path, or returns 1 when <dir> is not a git work tree at all or the repo's
@@ -62,14 +68,19 @@ EOF
   return 0
 }
 
-# If the primary checkout of the repo <dir> belongs to is tangled - on a NAMED
-# branch that is not its default branch - echo the offending branch name and
-# return 0. For every healthy state (not a git work tree, no non-bare primary,
-# detached HEAD, or already on the default branch) echo nothing and return 1.
-# Detached HEAD is how linked worktrees and secondmate homes legitimately sit, so
-# they never trip this; only a feature branch checked out in the primary does.
-# Pass the executing checkout: <dir> is resolved to its primary before classifying,
-# so a task worktree on fm/<id> reports on the primary, never on itself.
+# Prefer the CALLER's spelling of the primary when it already is the primary.
+# fm_primary_checkout_dir returns git's physical path, so on a platform where the
+# caller's path traverses a symlink (macOS /var -> /private/var) the remediation
+# command would otherwise name a different-looking directory than the operator
+# handed in. Same directory, same command, familiar spelling; a genuinely
+# different primary (the linked-worktree case) still shows its own path.
+fm_primary_checkout_display() {  # <resolved-primary> <caller-dir>
+  local resolved=$1 caller=$2 rp cp
+  rp=$(cd "$resolved" 2>/dev/null && pwd -P) || { printf '%s\n' "$resolved"; return 0; }
+  cp=$(cd "$caller" 2>/dev/null && pwd -P) || { printf '%s\n' "$resolved"; return 0; }
+  if [ "$rp" = "$cp" ]; then printf '%s\n' "$caller"; else printf '%s\n' "$resolved"; fi
+}
+
 fm_primary_tangle_branch() {
   local dir=$1 root cur default
   root=$(fm_primary_checkout_dir "$dir") || return 1

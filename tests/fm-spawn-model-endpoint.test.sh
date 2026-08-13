@@ -151,7 +151,7 @@ test_endpoint_model_injects_prefix_and_strict_keeps_harness_claude() {
   seed_brief "$HOME_DIR" "$id"
 
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
-    --token "$TOKEN" "$id" "$PROJ_DIR" --model my-local-model)
+    --token "$TOKEN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off --model my-local-model)
   expect_code 0 "$?" "endpoint spawn should succeed"
   assert_contains "$out" "spawned $id harness=claude" "endpoint spawn must report harness=claude"
 
@@ -185,7 +185,7 @@ test_endpoint_mcp_config_adds_deliberate_grant() {
   seed_brief "$HOME_DIR" "$id"
 
   run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
-    --token "$TOKEN" "$id" "$PROJ_DIR" --model my-local-model >/dev/null
+    --token "$TOKEN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off --model my-local-model >/dev/null
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" "--strict-mcp-config --mcp-config '$mcp' --model 'my-local-model'" \
     "configured mcp_config must be terminated by the non-variadic model flag"
@@ -203,7 +203,7 @@ test_missing_endpoint_mcp_config_fails_closed_before_window() {
   seed_brief "$HOME_DIR" "$id"
 
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
-    --token "$TOKEN" "$id" "$PROJ_DIR" --model my-local-model)
+    --token "$TOKEN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off --model my-local-model)
   expect_code 1 "$?" "a missing endpoint mcp_config must abort the spawn"
   assert_contains "$out" "refusing to launch claude against the real Anthropic API" \
     "abort message must retain the endpoint fail-closed explanation"
@@ -223,7 +223,7 @@ test_unreadable_endpoint_mcp_config_fails_closed() {
   seed_brief "$HOME_DIR" "$id"
 
   run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
-    --token "$TOKEN" "$id" "$PROJ_DIR" --model my-local-model >/dev/null 2>&1
+    --token "$TOKEN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off --model my-local-model >/dev/null 2>&1
   expect_code 1 "$?" "an unreadable endpoint mcp_config must abort the spawn"
   assert_absent "$HOME_DIR/state/$id.meta" "unreadable mcp_config failure must happen before meta is written"
   chmod 600 "$mcp"
@@ -238,7 +238,7 @@ test_token_exported_separately_never_in_launch_or_records() {
   seed_brief "$HOME_DIR" "$id"
 
   run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
-    --token "$TOKEN" "$id" "$PROJ_DIR" --model my-local-model >/dev/null
+    --token "$TOKEN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off --model my-local-model >/dev/null
 
   launch=$(cat "$LAUNCH_LOG")
   sent=$(cat "$SENT_LOG")
@@ -267,7 +267,7 @@ test_normal_model_unaffected_even_with_config_present() {
   seed_brief "$HOME_DIR" "$id"
 
   run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
-    --token "$TOKEN" "$id" "$PROJ_DIR" --model sonnet >/dev/null
+    --token "$TOKEN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off --model sonnet >/dev/null
   launch=$(cat "$LAUNCH_LOG")
   sent=$(cat "$SENT_LOG")
   # The baseline is the stock claude launch template verbatim: no endpoint env
@@ -289,7 +289,7 @@ test_no_model_unaffected_with_config_present() {
   seed_brief "$HOME_DIR" "$id"
 
   run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
-    --token "$TOKEN" "$id" "$PROJ_DIR" >/dev/null
+    --token "$TOKEN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off >/dev/null
   launch=$(cat "$LAUNCH_LOG")
   expected="CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions \"\$('$ROOT/bin/fm-operational-input.sh' encode launch-brief < '$HOME_DIR/data/$id/brief.md')\""
   [ "$launch" = "$expected" ] || fail "no-model launch changed"$'\n'"expected: $expected"$'\n'"actual:   $launch"
@@ -304,7 +304,7 @@ test_turn_end_hook_still_installed_for_endpoint_launch() {
   seed_brief "$HOME_DIR" "$id"
 
   run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
-    --token "$TOKEN" "$id" "$PROJ_DIR" --model my-local-model >/dev/null
+    --token "$TOKEN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off --model my-local-model >/dev/null
   # The claude Stop hook (turn-end signal) is written into the worktree exactly as
   # for a normal claude spawn - the endpoint override does not disturb supervision.
   hook="$WT_DIR/.claude/settings.local.json"
@@ -321,7 +321,7 @@ test_malformed_config_fails_closed_before_window() {
   seed_brief "$HOME_DIR" "$id"
 
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
-    --token "$TOKEN" "$id" "$PROJ_DIR" --model my-local-model)
+    --token "$TOKEN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off --model my-local-model)
   expect_code 1 "$?" "a malformed endpoint config must abort an endpoint-model spawn"
   assert_contains "$out" "refusing to launch claude against the real Anthropic API" \
     "abort message must explain the fail-closed reason"
@@ -338,7 +338,7 @@ test_unresolvable_token_fails_closed() {
 
   # Token env var deliberately empty -> unresolvable -> abort.
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
-    --token "" "$id" "$PROJ_DIR" --model my-local-model)
+    --token "" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off --model my-local-model)
   expect_code 1 "$?" "an unresolvable token must abort the spawn"
   assert_absent "$HOME_DIR/state/$id.meta" "token-failure abort must happen before meta is written"
   pass "an unresolvable proxy token fails closed before launch"
@@ -357,7 +357,7 @@ test_dispatch_profile_backstop_with_endpoint_model() {
   seed_brief "$HOME_DIR" "$id"
 
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$SENT_LOG" \
-    --token "$TOKEN" "$id" "$PROJ_DIR" --harness claude --model my-local-model)
+    --token "$TOKEN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off --harness claude --model my-local-model)
   expect_code 0 "$?" "explicit harness must satisfy the dispatch backstop and apply the endpoint"
   assert_contains "$out" "spawned $id harness=claude" "backstop spawn must report harness=claude"
   launch=$(cat "$LAUNCH_LOG")

@@ -30,7 +30,7 @@ run_resolve() {
   CODE=$?
 }
 
-SOL_JSON='{
+ENDPOINT_JSON='{
   "endpoints": {
     "my-local-model": {
       "base_url": "http://127.0.0.1:8080",
@@ -47,7 +47,7 @@ SOL_JSON='{
 
 test_match_emits_non_secret_records() {
   local dir
-  dir=$(write_config match "$SOL_JSON")
+  dir=$(write_config match "$ENDPOINT_JSON")
   run_resolve "$dir" resolve my-local-model
   expect_code 0 "$CODE" "a configured model must resolve with exit 0"
   assert_contains "$OUT" "strict_mcp_config	1" "missing strict flag record"
@@ -60,7 +60,7 @@ test_match_emits_non_secret_records() {
 
 test_env_output_never_contains_token() {
   local dir
-  dir=$(write_config notoken "$SOL_JSON")
+  dir=$(write_config notoken "$ENDPOINT_JSON")
   # Token env var is set, but WITHOUT --with-token the resolver must never print it.
   OUT=$(FM_TEST_EP_TOKEN="sk-should-not-appear" FM_CONFIG_OVERRIDE="$dir" "$EP" resolve my-local-model 2>/dev/null)
   expect_code 0 "$?" "resolve without --with-token should still succeed on a valid entry"
@@ -71,7 +71,7 @@ test_env_output_never_contains_token() {
 
 test_with_token_env_source() {
   local dir
-  dir=$(write_config withtok "$SOL_JSON")
+  dir=$(write_config withtok "$ENDPOINT_JSON")
   OUT=$(FM_TEST_EP_TOKEN="sk-env-tok-42" FM_CONFIG_OVERRIDE="$dir" "$EP" resolve --with-token my-local-model 2>/dev/null)
   expect_code 0 "$?" "resolve --with-token should succeed when the env token is set"
   assert_contains "$OUT" "token	sk-env-tok-42" "token record missing or wrong for env source"
@@ -117,7 +117,7 @@ test_token_source_priority_env_over_file_over_literal() {
 
 test_no_match_exits_3() {
   local dir
-  dir=$(write_config nomatch "$SOL_JSON")
+  dir=$(write_config nomatch "$ENDPOINT_JSON")
   run_resolve "$dir" resolve some-ordinary-claude-model
   expect_code 3 "$CODE" "an unlisted model must exit 3 (launch normally)"
   assert_not_contains "$OUT" "ANTHROPIC_BASE_URL" "no records for an unlisted model"
@@ -141,6 +141,22 @@ test_empty_config_exits_3() {
   run_resolve "$dir" resolve my-local-model
   expect_code 3 "$CODE" "a whitespace-only config must exit 3, not fail closed"
   pass "an empty/whitespace-only config exits 3 (treated as absent)"
+}
+
+test_unreadable_config_exits_2() {
+  local dir
+  if [ "$(id -u)" -eq 0 ]; then
+    pass "skipped: root can read a 000-mode config"
+    return 0
+  fi
+  dir="$TMP_ROOT/unreadable/config"
+  mkdir -p "$dir"
+  printf '%s' "$ENDPOINT_JSON" > "$dir/model-endpoints.json"
+  chmod 000 "$dir/model-endpoints.json"
+  run_resolve "$dir" resolve my-local-model
+  chmod 644 "$dir/model-endpoints.json"
+  expect_code 2 "$CODE" "a present-but-unreadable config must fail closed with exit 2, not launch normally"
+  pass "an unreadable config fails closed (exit 2)"
 }
 
 test_malformed_json_exits_2() {
@@ -171,7 +187,7 @@ test_no_token_source_exits_2() {
 
 test_unresolvable_token_exits_2_and_prints_nothing() {
   local dir
-  dir=$(write_config unresolv "$SOL_JSON")
+  dir=$(write_config unresolv "$ENDPOINT_JSON")
   # FM_TEST_EP_TOKEN unset/empty and no other source -> token unresolvable.
   OUT=$(FM_TEST_EP_TOKEN="" FM_CONFIG_OVERRIDE="$dir" "$EP" resolve --with-token my-local-model 2>/dev/null)
   CODE=$?
@@ -292,6 +308,7 @@ test_token_source_priority_env_over_file_over_literal
 test_no_match_exits_3
 test_absent_config_exits_3
 test_empty_config_exits_3
+test_unreadable_config_exits_2
 test_malformed_json_exits_2
 test_missing_base_url_exits_2
 test_no_token_source_exits_2

@@ -21,6 +21,9 @@ HOME_DIR="$TMP_ROOT/home"
 PROJECTS_DIR="$TMP_ROOT/projects"
 mkdir -p "$HOME_DIR/data" "$PROJECTS_DIR/registry"
 
+# Upstream requires an explicit delivery contract on every ship spawn and
+# refuses it before project resolution, so every case passes --mode/--yolo; the
+# subject under test is still only resolve_project_dir_arg's routing.
 run_spawn() {
   FM_ROOT_OVERRIDE='' \
     FM_STATE_OVERRIDE='' \
@@ -36,7 +39,7 @@ run_spawn() {
 # reaches the missing-brief check, never a raw cd death.
 test_bare_name_resolves() {
   local id=nope-resolve-bare-r1 out status
-  out=$(run_spawn "$id" registry codex)
+  out=$(run_spawn "$id" registry codex --mode no-mistakes --yolo off)
   status=$?
   [ "$status" -ne 0 ] || fail "bare name with missing brief should exit non-zero"
   assert_contains "$out" "error: no brief at $HOME_DIR/data/$id/brief.md" \
@@ -49,7 +52,7 @@ test_bare_name_resolves() {
 # The existing projects/<name> spelling keeps working exactly as before.
 test_projects_prefix_resolves() {
   local id=nope-resolve-prefix-r2 out status
-  out=$(run_spawn "$id" projects/registry codex)
+  out=$(run_spawn "$id" projects/registry codex --mode no-mistakes --yolo off)
   status=$?
   [ "$status" -ne 0 ] || fail "projects/ path with missing brief should exit non-zero"
   assert_contains "$out" "error: no brief at $HOME_DIR/data/$id/brief.md" \
@@ -63,7 +66,7 @@ test_projects_prefix_resolves() {
 # the available project directories instead of a raw cd error.
 test_unknown_bare_name_lists_candidates() {
   local id=nope-resolve-miss-r3 out status
-  out=$(run_spawn "$id" registry-x codex)
+  out=$(run_spawn "$id" registry-x codex --mode no-mistakes --yolo off)
   status=$?
   expect_code 2 "$status" "unknown bare name"
   assert_contains "$out" "no project 'registry-x' (looked in $PROJECTS_DIR/registry-x)" \
@@ -79,7 +82,7 @@ test_unknown_bare_name_lists_candidates() {
 # silently resolving to the projects root.
 test_empty_arg_lists_candidates() {
   local id=nope-resolve-empty-r5 out status
-  out=$(run_spawn "$id" '' codex)
+  out=$(run_spawn "$id" '' codex --mode no-mistakes --yolo off)
   status=$?
   expect_code 2 "$status" "empty project-dir arg"
   assert_contains "$out" "no project '' (looked in $PROJECTS_DIR/)" \
@@ -96,7 +99,7 @@ test_empty_arg_lists_candidates() {
 test_dot_paths_stay_cwd_relative() {
   local id=nope-resolve-dot-r6 out status arg
   for arg in . ..; do
-    out=$(cd "$TMP_ROOT" && run_spawn "$id" "$arg" codex)
+    out=$(cd "$TMP_ROOT" && run_spawn "$id" "$arg" codex --mode no-mistakes --yolo off)
     status=$?
     [ "$status" -ne 0 ] || fail "'$arg' with missing brief should exit non-zero"
     assert_contains "$out" "error: no brief at $HOME_DIR/data/$id/brief.md" \
@@ -114,7 +117,7 @@ test_explicit_path_passes_through() {
   local id=nope-resolve-abs-r4 out dir status
   dir="$TMP_ROOT/explicit-proj"
   mkdir -p "$dir"
-  out=$(run_spawn "$id" "$dir" codex)
+  out=$(run_spawn "$id" "$dir" codex --mode no-mistakes --yolo off)
   status=$?
   [ "$status" -ne 0 ] || fail "explicit path with missing brief should exit non-zero"
   assert_contains "$out" "error: no brief at $HOME_DIR/data/$id/brief.md" \

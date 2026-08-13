@@ -25,11 +25,12 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-tangle-guard)
 fm_git_identity fmtest fmtest@example.invalid
 
-# A fresh git repo on `main` with one commit. Echoes its path.
+# A fresh git repo on `main` with one commit and a local origin. Echoes its path.
 make_repo() {
   local dir=$1
   git init -q -b main "$dir"
   git -C "$dir" commit -q --allow-empty -m init
+  fm_git_add_origin "$dir" "$dir.origin.git"
   printf '%s\n' "$dir"
 }
 
@@ -59,37 +60,6 @@ ROWS
   out=$(fm_primary_tangle_branch "$TMP_ROOT" || true)
   [ -z "$out" ] || fail "non-git dir wrongly reported a tangle: '$out'"
   pass "fm_primary_tangle_branch: feature branch alarms; default/detached/non-git stay silent"
-}
-
-# The classification runs on the PRIMARY of the repo the caller is in, not on the
-# caller's own checkout: scripts execute from wherever the fleet action was
-# invoked, routinely a linked task worktree on its own fm/<id> branch, and reading
-# that branch directly is a false tangle. Resolution is what scopes the doctrine.
-test_lib_primary_resolution() {
-  local repo wt bare bare_wt out
-  repo=$(make_repo "$TMP_ROOT/resolve-repo")
-  wt="$TMP_ROOT/resolve-wt"
-  git -C "$repo" worktree add -q -b fm/task-branch-hh8 "$wt"
-
-  out=$(fm_primary_checkout_dir "$wt" || true)
-  [ "$out" = "$(cd "$repo" && pwd -P)" ] || fail "linked worktree resolved primary '$out', expected '$repo'"
-  out=$(fm_primary_tangle_branch "$wt" || true)
-  [ -z "$out" ] || fail "a task worktree on its own branch wrongly reported a tangle: '$out'"
-
-  git -C "$repo" checkout -q -B fm/tangle-hh8
-  out=$(fm_primary_tangle_branch "$wt" || true)
-  [ "$out" = fm/tangle-hh8 ] || fail "a tangled primary was not reported from a linked worktree: '$out'"
-
-  # A bare main worktree (a pooled/gate repo layout) has no branch to strand.
-  bare="$TMP_ROOT/resolve-bare.git"
-  bare_wt="$TMP_ROOT/resolve-bare-wt"
-  git clone --quiet --bare "$repo" "$bare"
-  git -C "$bare" worktree add -q -b fm/bare-task-hh8 "$bare_wt"
-  out=$(fm_primary_checkout_dir "$bare_wt" || true)
-  [ -z "$out" ] || fail "a bare main worktree was reported as a primary checkout: '$out'"
-  out=$(fm_primary_tangle_branch "$bare_wt" || true)
-  [ -z "$out" ] || fail "a worktree of a bare repo wrongly reported a tangle: '$out'"
-  pass "primary resolution: a linked worktree reports on its primary, never on its own branch"
 }
 
 # --- GUARD 2a: fm-guard banner ----------------------------------------------
@@ -159,7 +129,7 @@ test_brief_assertion_precedes_branch() {
   local home brief iso br
   home="$TMP_ROOT/brief-home"
   mkdir -p "$home/data"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" tangle-brief-cc3 alpha >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" tangle-brief-cc3 alpha --mode no-mistakes >/dev/null 2>&1
   brief="$home/data/tangle-brief-cc3/brief.md"
   assert_present "$brief" "brief was not scaffolded"
   assert_grep "blocked: launched in primary checkout, not an isolated worktree" "$brief" \
@@ -214,7 +184,7 @@ run_spawn() {
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$pane" TMUX="fake,1,0" \
     PATH="$fakebin:$PATH" \
-    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" codex 2>&1
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" codex --mode no-mistakes --yolo off 2>&1
 }
 
 test_spawn_isolation_abort() {
@@ -294,7 +264,7 @@ run_spawn_record() {
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$pane" TMUX="fake,1,0" \
     FM_TMUX_REC="$rec" \
     PATH="$fakebin:$PATH" \
-    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" codex 2>&1
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" codex --mode no-mistakes --yolo off 2>&1
 }
 
 test_spawn_tmux_window_construction() {
@@ -334,9 +304,40 @@ test_spawn_tmux_window_construction() {
 }
 
 test_lib_classification
-test_lib_primary_resolution
 test_guard_banner
+# The classification runs on the PRIMARY of the repo the caller is in, not on the
+# caller's own checkout: scripts execute from wherever the fleet action was
+# invoked, routinely a linked task worktree on its own fm/<id> branch, and reading
+# that branch directly is a false tangle. Resolution is what scopes the doctrine.
+test_lib_primary_resolution() {
+  local repo wt bare bare_wt out
+  repo=$(make_repo "$TMP_ROOT/resolve-repo")
+  wt="$TMP_ROOT/resolve-wt"
+  git -C "$repo" worktree add -q -b fm/task-branch-hh8 "$wt"
+
+  out=$(fm_primary_checkout_dir "$wt" || true)
+  [ "$out" = "$(cd "$repo" && pwd -P)" ] || fail "linked worktree resolved primary '$out', expected '$repo'"
+  out=$(fm_primary_tangle_branch "$wt" || true)
+  [ -z "$out" ] || fail "a task worktree on its own branch wrongly reported a tangle: '$out'"
+
+  git -C "$repo" checkout -q -B fm/tangle-hh8
+  out=$(fm_primary_tangle_branch "$wt" || true)
+  [ "$out" = fm/tangle-hh8 ] || fail "a tangled primary was not reported from a linked worktree: '$out'"
+
+  # A bare main worktree (a pooled/gate repo layout) has no branch to strand.
+  bare="$TMP_ROOT/resolve-bare.git"
+  bare_wt="$TMP_ROOT/resolve-bare-wt"
+  git clone --quiet --bare "$repo" "$bare"
+  git -C "$bare" worktree add -q -b fm/bare-task-hh8 "$bare_wt"
+  out=$(fm_primary_checkout_dir "$bare_wt" || true)
+  [ -z "$out" ] || fail "a bare main worktree was reported as a primary checkout: '$out'"
+  out=$(fm_primary_tangle_branch "$bare_wt" || true)
+  [ -z "$out" ] || fail "a worktree of a bare repo wrongly reported a tangle: '$out'"
+  pass "primary resolution: a linked worktree reports on its primary, never on its own branch"
+}
+
 test_bootstrap_line
 test_brief_assertion_precedes_branch
 test_spawn_isolation_abort
 test_spawn_tmux_window_construction
+test_lib_primary_resolution

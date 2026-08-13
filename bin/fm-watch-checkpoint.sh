@@ -41,6 +41,8 @@ done
 
 case "$SECONDS_ARG" in
   ''|*[!0-9]*) echo "error: --seconds must be a positive integer" >&2; exit 2 ;;
+  # Any all-zero spelling is zero: matching only the exact literal 0 would
+  # accept "00" and arm a zero-second checkpoint.
   *[1-9]*) ;;
   *) echo "error: --seconds must be greater than zero" >&2; exit 2 ;;
 esac

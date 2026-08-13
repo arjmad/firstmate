@@ -1,4 +1,4 @@
-# kimi (VERIFIED 2026-07-25, kimi 0.29.1)
+## kimi (VERIFIED 2026-07-25, kimi 0.29.1)
 
 Kimi Code CLI launches from the absolute path resolved from `PATH`, falling back to the executable `$HOME/.kimi-code/bin/kimi`.
 
@@ -7,7 +7,7 @@ Kimi Code CLI launches from the absolute path resolved from `PATH`, falling back
 | Binary | Executable `kimi` from `PATH`, then executable `$HOME/.kimi-code/bin/kimi`; spawning refuses if neither exists. |
 | Launch | Bare interactive TUI with `--auto`, followed by readiness-gated pointer delivery; positional prompts are rejected. |
 | Models | `kimi-code/kimi-for-coding` (default), `kimi-code/kimi-for-coding-highspeed`, `kimi-code/k3`, and `kimi-code/k3-256k`. |
-| Busy-pane signature | A transient line with optional leading whitespace, a rotating moon-phase glyph, required whitespace on both sides of `·`, and optional trailing content; the line is absent when idle. |
+| Busy state | Standalone Kimi is unknown until a semantic source is live-verified; prefer Wire's `prompt` request lifetime, then documented hooks including `Interrupt`. Kimi behind Pi uses Pi's lifecycle. Its moon-phase spinner is not a state source. |
 | Exit command | `/exit` |
 | Interrupt | Single Escape, which prints `Interrupted by user`. |
 | Skill invocation | `/<skill>`, for example `/no-mistakes`; firstmate skills are discovered. |
@@ -29,16 +29,12 @@ The startup input-readiness window is the established cause of Kimi's first-Ente
 An early Enter can expand Kimi's composer to multiple content rows, leaving the pointer text on the first row and the cursor on an empty later row, which is the same single-cursor-row reading defect exposed by Grok's bottom-border cursor quirk.
 The shared tmux reader now locates the complete bordered composer and treats real text on any content row as positive evidence that submission is still pending.
 No rendering signal is trustworthy for proving that Kimi will accept input during this window, so delivery retries Enter through the shared submit core and retains the existing postcondition verification rather than relaxing readiness or delivery checks.
-Kimi's footer tip rotates independently and can display `ctrl+c: cancel` while completely idle, so tip text is never used as its busy signature without the leading moon-plus-middot spinner structure.
+Kimi's footer tip rotates independently and can display `ctrl+c: cancel` while completely idle, which is one reason no Kimi rendered signature is a state source.
 The idle status bar can contain lowercase `thinking`, which is the model's effort label rather than a busy signal.
-The spinner match covers the full moon-phase glyph set rather than one frame, but it remains locale- and emoji-font-sensitive because Kimi exposes no stable ASCII busy token.
+The delivery-only spinner match covers the full moon-phase glyph set rather than one frame, but it remains locale- and emoji-font-sensitive because Kimi exposes no stable ASCII busy token.
 
 [`docs/turnend-guard.md`](../../../../docs/turnend-guard.md) owns Kimi's verified global hook surface and captain-approved crew wake integration.
 `fm-spawn.sh` installs one marker-delimited Firstmate entry in `$HOME/.kimi-code/config.toml`, one silent always-zero hook script, and one private token registry under `$HOME/.kimi-code/fm-turn-end.d/`.
 Each Kimi crew worktree receives a gitignored `.fm-kimi-turnend` token pointer, and the global hook touches that task's `state/<id>.turn-ended` only when the Stop payload's `cwd`, pointer, and registry entry all agree.
 A guarded silent hook cannot be verified from absence of effect, so prove invocation with an unguarded probe before concluding that the hook did not fire.
-The guarded turn-end signal supplements the pane busy signature, whose locale- and emoji-font-sensitive limits still apply while a turn is running.
-
-## no-mistakes skill invocation
-
-- kimi: `/<skill>`, for example `/no-mistakes`.
+The guarded turn-end signal remains a wake notification; standalone Kimi has no busy-state source until one is live-verified.

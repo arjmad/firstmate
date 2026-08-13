@@ -16,10 +16,18 @@
 #
 # Session names must begin with "fm-lab-" and can never be "default".
 # The name command combines a short sanitized stem of its argument with a
-# deterministic token for that complete argument, then appends process/random
-# suffixes. The token lets task teardown target exact ownership without
-# collisions between truncated ids, so a lab a task must later reclaim has to be
-# named with that task's exact id.
+# deterministic token for the owning home plus that complete argument, then
+# appends process/random suffixes. The token lets task teardown target exact
+# ownership without collisions between truncated ids, so a lab a task must
+# later reclaim has to be named with that task's exact id under the same
+# effective home. Binding the token to the home keeps a second Firstmate home
+# running a task with the SAME id (a secondmate home, a handed-off task) from
+# ever matching - and destroying - this home's live lab session, and vice
+# versa; the tripwire directory is per-UID and shared across homes, so the
+# name is the only home boundary these records have. A pre-token legacy-shaped
+# session name carries no home boundary at all and is therefore never matched
+# by teardown-task or reap; a lab named before tokens existed is reclaimed
+# only by hand.
 # Every Herdr call made here carries a trailing --session <session>.
 # The run command rejects caller-supplied --session flags, any leading option
 # before the subcommand, all session lifecycle operations, and every server
@@ -34,14 +42,13 @@
 # and it destroys a session only when the effective FM_HOME positively proves
 # ownership: exactly one task record in this home names the session and that
 # record's recovery-grade agent state is dead or missing. A session this home
-# holds no task record for is unproven, never dead. Every ambiguous,
-# unreadable, unverified, or foreign session is left running and reported by
-# exact name. Reap never enumerates other Firstmate homes.
+# holds no task record for is unproven, never dead. Every ambiguous, unreadable,
+# unverified, or foreign session is left running and reported by exact name.
+# Reap never enumerates other Firstmate homes.
 set -u
 
-FM_HERDR_LAB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-herdr-env-lib.sh
-. "$FM_HERDR_LAB_DIR/fm-herdr-env-lib.sh"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-herdr-env-lib.sh"
 
 fm_herdr_lab_error() {
   echo "fm-herdr-lab: $*" >&2
@@ -66,6 +73,10 @@ fm_herdr_lab_tripwire_path() { # <session>
   printf '%s/%s.fleet-state.json' "$(fm_herdr_lab_state_dir)" "$1"
 }
 
+# Every herdr call is scrubbed: a lab host auto-started here inherits this
+# process's environment and passes it to every lab pane, so an unscrubbed call
+# would propagate CLAUDE_CODE_CHILD_SESSION and disable transcript saving in
+# Claude sessions launched under those panes (bin/fm-herdr-env-lib.sh).
 fm_herdr_lab_raw() { # <session> <herdr arguments...>
   local name=$1
   shift
@@ -316,9 +327,22 @@ fm_herdr_lab_label() { # <label>
   printf '%s\n' "$label"
 }
 
+# The home half of the ownership token: the resolved state root, physical when
+# it exists, which is the same identity bin/fm-teardown.sh forwards through
+# FM_HOME/FM_STATE_OVERRIDE when it reclaims a task's labs.
+fm_herdr_lab_home_key() {
+  local root
+  root=$(fm_herdr_lab_state_root)
+  if [ -d "$root" ]; then
+    root=$(cd "$root" && pwd -P) || return 1
+  fi
+  printf '%s\n' "$root"
+}
+
 fm_herdr_lab_task_token() { # <task-id>
-  local token
-  token=$(printf '%s' "$1" | cksum | cut -d ' ' -f1) || return 1
+  local home token
+  home=$(fm_herdr_lab_home_key) || return 1
+  token=$(printf '%s\n%s' "$home" "$1" | cksum | cut -d ' ' -f1) || return 1
   printf '%s\n' "${token:0:8}"
 }
 
@@ -333,7 +357,7 @@ fm_herdr_lab_task_stem() { # <task-id>
   printf '%s\n' "$label"
 }
 
-fm_herdr_lab_name() { # <label>
+fm_herdr_lab_name() { # <task-id|label>
   local task_id=${1:-lab} label token
   label=$(fm_herdr_lab_task_stem "$task_id") || return 1
   token=$(fm_herdr_lab_task_token "$task_id") || return 1
@@ -358,12 +382,6 @@ fm_herdr_lab_task_prefix() { # <task-id>
   printf 'fm-lab-%s-%s-' "$label" "$token"
 }
 
-fm_herdr_lab_legacy_task_prefix() { # <task-id>
-  local label
-  label=$(fm_herdr_lab_label "$1") || return 1
-  printf 'fm-lab-%s-' "$label"
-}
-
 fm_herdr_lab_task_tripwires() { # <task-id>
   local prefix state_dir tripwire
   prefix=$(fm_herdr_lab_task_prefix "$1") || return 1
@@ -375,9 +393,16 @@ fm_herdr_lab_task_tripwires() { # <task-id>
 }
 
 fm_herdr_lab_teardown_task() { # <task-id>
-  local task_id=$1 tripwire session
+  local task_id=$1 tripwires tripwire session
   fm_herdr_lab_task_id_valid "$task_id" || {
     fm_herdr_lab_error "invalid task id '$task_id'"
+    return 1
+  }
+  # Enumerate BEFORE the loop and check the status: a heredoc command
+  # substitution would swallow an enumeration failure, and an empty loop reads
+  # as clean cleanup to the caller, silently leaking every lab the task owns.
+  tripwires=$(fm_herdr_lab_task_tripwires "$task_id") || {
+    fm_herdr_lab_error "cannot enumerate lab ownership records for task '$task_id'"
     return 1
   }
   while IFS= read -r tripwire; do
@@ -393,7 +418,7 @@ fm_herdr_lab_teardown_task() { # <task-id>
       return 1
     }
   done <<EOF
-$(fm_herdr_lab_task_tripwires "$task_id")
+$tripwires
 EOF
   return 0
 }
@@ -427,14 +452,17 @@ fm_herdr_lab_meta_agent_state() { # <meta>
 #              recovery-grade state is dead or missing.
 #   unproven - everything else, including a session no task record here claims.
 # Only `reapable` licenses destruction; absence of a record is never death.
-# The deterministic task token in a token-bearing session name is the
-# authoritative claim: when any task record's token prefix matches, ownership is
-# decided from those records alone. The pre-token label prefix is consulted only
-# as a fallback for sessions no token prefix claims, where truncated labels can
-# leave two records claiming one session and the verdict stays unproven.
+# The deterministic home-scoped task token in a session name is the ONLY claim:
+# when a task record's token prefix matches, ownership is decided from those
+# records alone, and a session minted by a DIFFERENT home for the same task id
+# carries a different token and is never claimed. A pre-token legacy-shaped
+# name carries no home boundary at all, so it is never claimed and never
+# reaped automatically: another home's live legacy lab must not be
+# destroyable from a local dead record. The accepted cost is a bounded
+# one-time leak - a lab named before tokens exist is only reclaimed by hand.
 fm_herdr_lab_session_verdict() { # <session>
-  local session=$1 state_root meta task_id prefix legacy_prefix agent_state claim
-  local token_matches=0 token_state='' legacy_matches=0 legacy_state='' matches state
+  local session=$1 state_root meta task_id prefix agent_state
+  local matches=0 state=''
   state_root=$(fm_herdr_lab_state_root)
   { [ -d "$state_root" ] && [ ! -L "$state_root" ]; } || { printf 'unproven\n'; return 0; }
   for meta in "$state_root"/*.meta; do
@@ -446,10 +474,8 @@ fm_herdr_lab_session_verdict() { # <session>
     task_id=${meta##*/}
     task_id=${task_id%.meta}
     prefix=$(fm_herdr_lab_task_prefix "$task_id" 2>/dev/null) || { printf 'unproven\n'; return 0; }
-    legacy_prefix=$(fm_herdr_lab_legacy_task_prefix "$task_id") || { printf 'unproven\n'; return 0; }
     case "$session" in
-      "$prefix"*) claim=token ;;
-      "$legacy_prefix"*) claim=legacy ;;
+      "$prefix"*) ;;
       *) continue ;;
     esac
     agent_state=$(fm_herdr_lab_meta_agent_state "$meta") || agent_state=unreadable
@@ -457,21 +483,9 @@ fm_herdr_lab_session_verdict() { # <session>
       printf 'live\n'
       return 0
     fi
-    if [ "$claim" = token ]; then
-      token_matches=$((token_matches + 1))
-      token_state=$agent_state
-    else
-      legacy_matches=$((legacy_matches + 1))
-      legacy_state=$agent_state
-    fi
+    matches=$((matches + 1))
+    state=$agent_state
   done
-  if [ "$token_matches" -gt 0 ]; then
-    matches=$token_matches
-    state=$token_state
-  else
-    matches=$legacy_matches
-    state=$legacy_state
-  fi
   [ "$matches" -eq 1 ] || { printf 'unproven\n'; return 0; }
   case "$state" in
     dead|missing) printf 'reapable\n' ;;

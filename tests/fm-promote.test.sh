@@ -151,8 +151,12 @@ add_backlog_task() {
     --file "$case_dir/home/data/backlog.md" >/dev/null
 }
 
+# Upstream requires an explicit delivery contract at promotion time, so every
+# case supplies one; the subject under test is still the durable-backlog
+# synchronization, not the flag parsing.
 run_promote() {
   local case_dir=$1 id=${2:-scout-x1}
+  shift 2 2>/dev/null || shift $#
   PATH="${FM_TEST_PATH:-$PATH}" \
     FM_ROOT_OVERRIDE="$case_dir/root" \
     FM_HOME="$case_dir/home" \
@@ -160,7 +164,7 @@ run_promote() {
     FM_DATA_OVERRIDE="$case_dir/home/data" \
     FM_CONFIG_OVERRIDE="$case_dir/home/config" \
     FM_TEST_GUARD_LOG="$case_dir/guard.log" \
-    "$PROMOTE" "$id" 2>&1
+    "$PROMOTE" "$id" --mode no-mistakes --yolo off "$@" 2>&1
 }
 
 test_promotes_scout_and_updates_backlog() {
@@ -251,7 +255,7 @@ test_refuses_missing_backlog_record_without_mutation() {
   pass "missing durable backlog records are refused without metadata mutation"
 }
 
-test_refuses_manual_backend_without_mutation() {
+test_manual_backend_warns_and_promotes_without_backlog_write() {
   local case_dir meta backlog meta_before backlog_before out rc
   require_tasks_axi || return 0
   case_dir=$(make_case manual-backend)
@@ -266,15 +270,16 @@ test_refuses_manual_backend_without_mutation() {
   rc=0
   out=$(run_promote "$case_dir") || rc=$?
 
-  expect_code 1 "$rc" "manual backend refusal"
-  assert_contains "$out" "config/backlog-backend selects manual" "manual backend refusal must name the selected backend"
-  [ "$(cat "$meta")" = "$meta_before" ] || fail "manual backend refusal changed metadata"
-  [ "$(cat "$backlog")" = "$backlog_before" ] || fail "manual backend refusal changed the backlog"
-  assert_absent "$meta.tmp" "manual backend refusal left a temporary metadata file"
-  pass "manual backlog mode refuses promotion without partial mutation"
+  expect_code 0 "$rc" "manual backend promotion"
+  assert_contains "$out" "config/backlog-backend selects manual" "manual backend must name the selected backend"
+  assert_contains "$out" "hand-edit its backlog row" "manual backend must say which row to hand-edit"
+  grep -qx 'kind=ship' "$meta" || fail "manual backend promotion did not flip the metadata kind"
+  [ "$(cat "$backlog")" = "$backlog_before" ] || fail "manual backend promotion wrote the backlog automatically"
+  assert_absent "$meta.tmp" "manual backend promotion left a temporary metadata file"
+  pass "manual backlog mode still promotes, warning which row to hand-edit"
 }
 
-test_refuses_unavailable_backend_without_mutation() {
+test_unavailable_backend_warns_and_promotes_without_backlog_write() {
   local case_dir meta backlog fakebin meta_before backlog_before out rc
   require_tasks_axi || return 0
   case_dir=$(make_case unavailable-backend)
@@ -294,12 +299,13 @@ SH
   rc=0
   out=$(FM_TEST_PATH="$fakebin:$PATH" run_promote "$case_dir") || rc=$?
 
-  expect_code 1 "$rc" "unavailable backend refusal"
-  assert_contains "$out" "tasks-axi backlog backend is unavailable or incompatible" "unavailable backend refusal must name the backend problem"
-  [ "$(cat "$meta")" = "$meta_before" ] || fail "unavailable backend refusal changed metadata"
-  [ "$(cat "$backlog")" = "$backlog_before" ] || fail "unavailable backend refusal changed the backlog"
-  assert_absent "$meta.tmp" "unavailable backend refusal left a temporary metadata file"
-  pass "unavailable backlog backend refuses promotion without partial mutation"
+  expect_code 0 "$rc" "unavailable backend promotion"
+  assert_contains "$out" "tasks-axi backlog backend is unavailable or incompatible" "unavailable backend must name the backend problem"
+  assert_contains "$out" "hand-edit its backlog row" "unavailable backend must say which row to hand-edit"
+  grep -qx 'kind=ship' "$meta" || fail "unavailable backend promotion did not flip the metadata kind"
+  [ "$(cat "$backlog")" = "$backlog_before" ] || fail "unavailable backend promotion wrote the backlog automatically"
+  assert_absent "$meta.tmp" "unavailable backend promotion left a temporary metadata file"
+  pass "an unavailable backlog backend still promotes, warning which row to hand-edit"
 }
 
 test_refuses_when_backlog_write_fails() {
@@ -495,8 +501,8 @@ test_promotes_scout_and_updates_backlog
 test_refuses_non_scout_without_mutation
 test_refuses_missing_metadata
 test_refuses_missing_backlog_record_without_mutation
-test_refuses_manual_backend_without_mutation
-test_refuses_unavailable_backend_without_mutation
+test_manual_backend_warns_and_promotes_without_backlog_write
+test_unavailable_backend_warns_and_promotes_without_backlog_write
 test_refuses_when_backlog_write_fails
 test_rolls_back_backlog_when_metadata_replacement_fails
 test_reports_divergence_when_rollback_also_fails

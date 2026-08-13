@@ -58,9 +58,7 @@ FM_BACKEND_CONFIG_DIR="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # bin/backends/<name>.sh and empirical verification, mirroring AGENTS.md
 # section 4's harness-verification discipline. herdr is EXPERIMENTAL (P2;
 # data/fm-backend-design-d7/herdr-addendum.md) - verified against the real
-# v0.7.5/protocol-17 binary, which is also its floor because the adapter passes
-# every crewmate's launch environment through `tab create --env`
-# (data/fm-backend-design-d7/herdr-verification-p2.md)
+# v0.7.1/protocol-14 binary (data/fm-backend-design-d7/herdr-verification-p2.md)
 # but newer than tmux's long-proven default path. zellij is EXPERIMENTAL (P3;
 # data/fm-backend-design-d7/report.md "Zellij Backend") - verified against the
 # real 0.44.0 binary (docs/zellij-backend.md). orca is EXPERIMENTAL and
@@ -362,6 +360,177 @@ fm_backend_target_of_meta() {  # <meta-file>
   [ -n "$window" ] && printf '%s' "$window"
 }
 
+# fm_backend_validate_task_endpoint: validate a task cleanup record entirely
+# from its durable metadata before any runtime command or cleanup mutation.
+# The validation binds the exact task id, selected backend, target, project,
+# and worktree. New non-tmux records carry endpoint_task_id because their
+# opaque runtime ids do not encode the task label. Legacy tmux records remain
+# valid only when their window name itself is exactly fm-<task-id>.
+# On success, sets FM_BACKEND_VALIDATED_BACKEND and
+# FM_BACKEND_VALIDATED_TARGET. On failure, prints one refusal and returns 1.
+fm_backend_meta_exact_value() {  # <meta-file> <key>
+  local meta=$1 key=$2 count value
+  count=$(grep -c "^$key=" "$meta" 2>/dev/null || true)
+  [ "$count" -eq 1 ] || return 1
+  value=$(grep "^$key=" "$meta" | cut -d= -f2-)
+  [ -n "$value" ] || return 1
+  printf '%s' "$value"
+}
+
+fm_backend_endpoint_atom_valid() {  # <value>
+  case "$1" in
+    ''|*[!A-Za-z0-9._@%+-]*) return 1 ;;
+  esac
+}
+
+fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
+  local meta=$1 id=$2 backend_count backend window worktree project binding_count binding
+  local session pane recorded_session workspace tab terminal worktree_id surface
+  FM_BACKEND_VALIDATED_BACKEND=
+  FM_BACKEND_VALIDATED_TARGET=
+  [ -f "$meta" ] && [ ! -L "$meta" ] || {
+    echo "REFUSED: task $id has no regular endpoint metadata at $meta; preserving task state." >&2
+    return 1
+  }
+  case "$id" in ''|*[!A-Za-z0-9._-]*)
+    echo "REFUSED: task endpoint identity has an invalid task id; preserving task state." >&2
+    return 1
+  esac
+  window=$(fm_backend_meta_exact_value "$meta" window) || {
+    echo "REFUSED: task $id has a missing, empty, or ambiguous window endpoint; preserving task state." >&2
+    return 1
+  }
+  worktree=$(fm_backend_meta_exact_value "$meta" worktree) || {
+    echo "REFUSED: task $id has a missing, empty, or ambiguous worktree identity; preserving task state." >&2
+    return 1
+  }
+  project=$(fm_backend_meta_exact_value "$meta" project) || {
+    echo "REFUSED: task $id has a missing, empty, or ambiguous project identity; preserving task state." >&2
+    return 1
+  }
+  case "$worktree$project$window" in *$'\n'*|*$'\r'*|*$'\t'*)
+    echo "REFUSED: task $id has malformed endpoint metadata; preserving task state." >&2
+    return 1
+  esac
+  backend_count=$(grep -c '^backend=' "$meta" 2>/dev/null || true)
+  case "$backend_count" in
+    0) backend=tmux ;;
+    1) backend=$(fm_backend_meta_exact_value "$meta" backend) || backend= ;;
+    *) backend= ;;
+  esac
+  if [ -z "$backend" ] || ! fm_backend_is_known "$backend"; then
+    echo "REFUSED: task $id has a missing, ambiguous, or unknown backend identity; preserving task state." >&2
+    return 1
+  fi
+  binding_count=$(grep -c '^endpoint_task_id=' "$meta" 2>/dev/null || true)
+  case "$binding_count" in
+    0) binding= ;;
+    1)
+      binding=$(fm_backend_meta_exact_value "$meta" endpoint_task_id) || {
+        echo "REFUSED: task $id has an empty endpoint task binding; preserving task state." >&2
+        return 1
+      }
+      ;;
+    *)
+      echo "REFUSED: task $id has an ambiguous endpoint task binding; preserving task state." >&2
+      return 1
+      ;;
+  esac
+  if [ -n "$binding" ] && [ "$binding" != "$id" ]; then
+    echo "REFUSED: endpoint metadata belongs to task $binding, not $id; preserving task state." >&2
+    return 1
+  fi
+
+  case "$backend" in
+    tmux)
+      session=${window%%:*}
+      pane=${window#*:}
+      if [ "$pane" = "$window" ] || [ "$pane" != "fm-$id" ] \
+        || [ -z "$session" ]; then
+        echo "REFUSED: tmux endpoint '$window' is malformed or does not belong to task $id; preserving task state." >&2
+        return 1
+      fi
+      ;;
+    herdr)
+      [ "$binding" = "$id" ] || {
+        echo "REFUSED: legacy Herdr endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
+        return 1
+      }
+      recorded_session=$(fm_backend_meta_exact_value "$meta" herdr_session) || recorded_session=
+      workspace=$(fm_backend_meta_exact_value "$meta" herdr_workspace_id) || workspace=
+      tab=$(fm_backend_meta_exact_value "$meta" herdr_tab_id) || tab=
+      pane=$(fm_backend_meta_exact_value "$meta" herdr_pane_id) || pane=
+      if [ -z "$recorded_session" ] || [ -z "$workspace" ] || [ -z "$tab" ] || [ -z "$pane" ] \
+        || [ "$window" != "$recorded_session:$pane" ] \
+        || ! fm_backend_endpoint_atom_valid "$recorded_session" \
+        || ! fm_backend_endpoint_atom_valid "$workspace" \
+        || ! fm_backend_endpoint_atom_valid "${tab//:/_}" \
+        || ! fm_backend_endpoint_atom_valid "${pane//:/_}"; then
+        echo "REFUSED: Herdr endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
+        return 1
+      fi
+      ;;
+    zellij)
+      [ "$binding" = "$id" ] || {
+        echo "REFUSED: legacy Zellij endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
+        return 1
+      }
+      recorded_session=$(fm_backend_meta_exact_value "$meta" zellij_session) || recorded_session=
+      tab=$(fm_backend_meta_exact_value "$meta" zellij_tab_id) || tab=
+      pane=$(fm_backend_meta_exact_value "$meta" zellij_pane_id) || pane=
+      case "$tab:$pane" in *[!0-9:]*) tab= ;; esac
+      if [ -z "$recorded_session" ] || [ -z "$tab" ] || [ -z "$pane" ] \
+        || [ "$window" != "$recorded_session:$pane" ] \
+        || ! fm_backend_endpoint_atom_valid "$recorded_session"; then
+        echo "REFUSED: Zellij endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
+        return 1
+      fi
+      ;;
+    orca)
+      [ "$binding" = "$id" ] || {
+        echo "REFUSED: legacy Orca endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
+        return 1
+      }
+      terminal=$(fm_backend_meta_exact_value "$meta" terminal) || terminal=
+      worktree_id=$(fm_backend_meta_exact_value "$meta" orca_worktree_id) || worktree_id=
+      [ -n "$terminal" ] || {
+        echo "REFUSED: missing terminal in $meta; cannot close Orca endpoint; preserving task state." >&2
+        return 1
+      }
+      [ -n "$worktree_id" ] || {
+        echo "REFUSED: missing orca_worktree_id in $meta; cannot remove Orca worktree; preserving task state." >&2
+        return 1
+      }
+      if [ "$window" != "fm-$id" ] \
+        || ! fm_backend_endpoint_atom_valid "$terminal" \
+        || ! fm_backend_endpoint_atom_valid "$worktree_id"; then
+        echo "REFUSED: Orca endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
+        return 1
+      fi
+      window=$terminal
+      ;;
+    cmux)
+      [ "$binding" = "$id" ] || {
+        echo "REFUSED: legacy cmux endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
+        return 1
+      }
+      workspace=$(fm_backend_meta_exact_value "$meta" cmux_workspace_id) || workspace=
+      surface=$(fm_backend_meta_exact_value "$meta" cmux_surface_id) || surface=
+      if [ -z "$workspace" ] || [ -z "$surface" ] || [ "$window" != "$workspace:$surface" ] \
+        || ! fm_backend_endpoint_atom_valid "$workspace" \
+        || ! fm_backend_endpoint_atom_valid "$surface"; then
+        echo "REFUSED: cmux endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
+        return 1
+      fi
+      ;;
+  esac
+  # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
+  FM_BACKEND_VALIDATED_BACKEND=$backend
+  # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
+  FM_BACKEND_VALIDATED_TARGET=$window
+  return 0
+}
+
 fm_backend_meta_for_window() {  # <target> <state-dir>
   local target=$1 state=$2 meta window terminal
   for meta in "$state"/*.meta; do
@@ -575,6 +744,7 @@ fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sl
 fm_backend_kill() {  # <backend> <target>
   local backend=$1
   shift
+  [ -n "${1:-}" ] || { echo "error: refusing empty backend kill target" >&2; return 1; }
   fm_backend_source "$backend" || return 1
   case "$backend" in
     tmux) fm_backend_tmux_kill "$@" ;;
@@ -623,19 +793,19 @@ fm_backend_busy_state() {  # <backend> <target>
   esac
 }
 
-# fm_backend_composer_state: classify the composer/input row of <target> as
+# fm_backend_composer_state: classify the composer/input area of <target> as
 # empty|pending|pending-unproven|unknown for callers that need a pre-submit
-# input guard or an adapter's conservative submit fallback. It is exposed so a
-# caller other than the send path (the away-mode daemon's supervisor-pane
-# pending-input guard, bin/fm-supervise-daemon.sh) can ask the same question
-# without duplicating per-backend composer-reading logic. tmux and herdr both
-# expose a named classifier already (fm_tmux_composer_state,
-# fm_backend_herdr_composer_state), as do orca and cmux
-# (fm_backend_orca_composer_state, fm_backend_cmux_composer_state); zellij's
-# submit path uses an internal content-diff approach with no separately named
-# classifier, so it reports unknown here - callers fall back to their own
-# policy, exactly as an unknown fm_backend_busy_state already does.
-fm_backend_composer_state() {  # <backend> <target> -> empty|pending|pending-unproven|unknown
+# input guard, a submit acknowledgement, or a launch-readiness check. It is
+# exposed so a caller other than the send path (the away-mode daemon's
+# supervisor-pane pending-input guard in bin/fm-supervise-daemon.sh, and
+# fm-spawn.sh's kimi readiness/delivery checks) can ask the same question
+# without duplicating per-backend composer reading. Every adapter's named
+# classifier is a THIN wrapper - capture plus a capability descriptor fed to
+# the one shared shape owner (bin/fm-composer-lib.sh,
+# fm_composer_classify_screen) - so no backend can hold a private shape
+# assumption; zellij's classifier reads `dump-screen --ansi`, which replaced
+# its old no-classifier content-diff reporting.
+fm_backend_composer_state() {  # <backend> <target> [expected-label] -> empty|pending|pending-unproven|unknown
   local backend=$1
   shift
   fm_backend_source "$backend" || { printf 'unknown'; return 0; }
@@ -644,6 +814,7 @@ fm_backend_composer_state() {  # <backend> <target> -> empty|pending|pending-unp
     herdr) fm_backend_herdr_composer_state "$@" ;;
     orca) fm_backend_orca_composer_state "$@" ;;
     cmux) fm_backend_cmux_composer_state "$@" ;;
+    zellij) fm_backend_zellij_composer_state "$@" ;;
     *) printf 'unknown' ;;
   esac
 }

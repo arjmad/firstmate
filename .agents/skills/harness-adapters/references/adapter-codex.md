@@ -1,9 +1,9 @@
-# codex (VERIFIED 2026-06-11, codex-cli 0.139.0)
+## codex (VERIFIED 2026-06-11, codex-cli 0.139.0)
 
 | Fact | Value |
 |---|---|
-| Busy-pane signature | `esc to interrupt` (shown as `• Working (Xs • esc to interrupt)`) |
-| Exit command | `/quit` (slash popup needs about 1 second between text and Enter; `fm-send` handles it) |
+| Busy state | Unknown until a semantic source is live-verified: the app-server turn lifecycle is unreachable for a pane worker, and project lifecycle hooks did not fire for a firstmate-launched worker. |
+| Exit command | `/quit` (slash popup needs about 1 second between text and Enter; the shared submit path used by `fm-control` handles it) |
 | Interrupt | single Escape |
 | Skill invocation | `$<skill>` (e.g. `$no-mistakes`); `/<skill>` is claude-only and codex rejects it as "Unrecognized command" |
 
@@ -28,15 +28,3 @@ Verified on 2026-07-08: Codex runs the Stop hook command with process PWD set to
 The tracked hook anchors to `pwd -P`, verifies that root is firstmate-shaped and hook-bearing, and then invokes `bin/fm-turnend-guard.sh` with the original payload.
 Codex's primary watcher protocol is `bin/fm-watch-checkpoint.sh --seconds "${FM_CODEX_WATCH_CHECKPOINT:-180}"`, not `bin/fm-watch-arm.sh`.
 The checkpoint is deliberately foreground and bounded so Codex regains control regularly to process user messages and queued wakes.
-
-## Primary session-start nudge
-
-- `codex`: verified on 0.144.4; `.codex/hooks.json` receives `source=startup`, and wrapper stdout reaches model context.
-
-## Primary watcher supervision
-
-Codex uses bounded foreground checkpoints through `bin/fm-watch-checkpoint.sh` because Codex cannot reason while a foreground tool call is running.
-
-## no-mistakes skill invocation
-
-- codex: `$<skill>`, for example `$no-mistakes`; `/<skill>` is claude-only and codex rejects it as "Unrecognized command".

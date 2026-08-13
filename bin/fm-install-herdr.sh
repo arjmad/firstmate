@@ -8,23 +8,25 @@
 # Usage:
 #   fm-install-herdr.sh <destination-directory>
 #
-# Pins Herdr v0.7.5 (protocol 17), the release that carries `tab create --env`
-# and is therefore the herdr backend's supported floor (FM_BACKEND_HERDR_MIN_PROTOCOL).
+# Pins Herdr v0.7.5 (protocol 17), the first release whose `tab create --env`
+# carries a crewmate's launch environment natively. That flag is what keeps the
+# local proxy credential off a pane's visible screen, and the adapter refuses to
+# create a crewmate pane below it (bin/backends/herdr.sh's
+# FM_BACKEND_HERDR_MIN_ENV_PROTOCOL), so a lane pinned any lower could not run a
+# single real-Herdr spawn. Verified against the official 0.7.5 macOS aarch64
+# asset: it reports `herdr 0.7.5` and a client protocol of 17.
 # Selects the official GitHub Releases asset for the host OS/arch, downloads
 # with a bounded max size, verifies SHA-256 before install, then refuses to
 # finish unless the binary reports the exact pin version and a client protocol
-# at or above the required floor (17 for the real-Herdr family).
+# at or above the required floor (16 for the real-Herdr family).
 set -eu
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=bin/fm-herdr-env-lib.sh
-. "$SCRIPT_DIR/fm-herdr-env-lib.sh"
 
 # Exact pin - change only with a re-verified real-Herdr matrix.
 FM_HERDR_CI_VERSION=0.7.5
 FM_HERDR_CI_TAG="v${FM_HERDR_CI_VERSION}"
 FM_HERDR_CI_MIN_PROTOCOL=17
-# Bounded download ceiling (bytes). The largest official 0.7.5 asset is under 21 MiB.
+# Bounded download ceiling (bytes). The largest official 0.7.5 asset is
+# 21,315,048 bytes (linux-x86_64), so this ceiling still bounds every asset.
 FM_HERDR_CI_MAX_BYTES=25000000
 FM_HERDR_CI_REPO=ogulcancelik/herdr
 
@@ -82,11 +84,11 @@ mkdir -p "$DESTINATION"
 install -m 0755 "$TMP/$ASSET" "$DESTINATION/herdr"
 
 # Post-install version and protocol gates (no floating latest).
-installed_version=$(fm_herdr_scrubbed_exec "$DESTINATION/herdr" --version 2>/dev/null | awk '{print $2; exit}')
+installed_version=$("$DESTINATION/herdr" --version 2>/dev/null | awk '{print $2; exit}')
 [ "$installed_version" = "$FM_HERDR_CI_VERSION" ] \
   || die "installed herdr version is '${installed_version:-<empty>}', expected exact pin $FM_HERDR_CI_VERSION"
 
-status=$(fm_herdr_scrubbed_exec "$DESTINATION/herdr" status --json 2>/dev/null) \
+status=$("$DESTINATION/herdr" status --json 2>/dev/null) \
   || die "could not run 'herdr status --json' after install"
 protocol=$(printf '%s' "$status" | jq -r '.client.protocol // empty' 2>/dev/null) \
   || die "jq is required to parse herdr status after install"
@@ -98,4 +100,4 @@ esac
 
 printf 'fm-install-herdr.sh: installed herdr %s (protocol %s) to %s\n' \
   "$installed_version" "$protocol" "$DESTINATION/herdr" >&2
-fm_herdr_scrubbed_exec "$DESTINATION/herdr" --version
+"$DESTINATION/herdr" --version
