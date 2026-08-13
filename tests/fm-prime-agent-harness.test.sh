@@ -121,8 +121,8 @@ test_control_adapter_state_send_and_cleanup() {
   HOME="$home" PRIME_AGENT_REAL_BIN="$fakebin/prime-agent" \
     FM_FAKE_PRIME_LOG="$d/prime.log" FM_FAKE_PRIME_CWD="$d/cwd" \
     "$PRIME_CTL" send "$meta" 'change course' >/dev/null
-  assert_grep 'cmd=send pa123 --json -- change course' "$d/prime.log" \
-    "Prime Agent steer did not use plain send with a positional message separator"
+  assert_grep 'cmd=send pa123 change course --json' "$d/prime.log" \
+    "Prime Agent steer did not use plain send with a positional message"
   assert_no_grep '--steer' "$d/prime.log" "Prime Agent used broken --steer flag"
 
   HOME="$home" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" \
@@ -130,7 +130,7 @@ test_control_adapter_state_send_and_cleanup() {
     FM_FAKE_PRIME_CWD="$d/cwd" FM_FAKE_TMUX_LOG="$d/tmux.log" \
     FM_SEND_SETTLE=0 PATH="$fakebin:$BASE_PATH" \
     "$ROOT/bin/fm-send.sh" "$id" 'steer through firstmate' >/dev/null
-  assert_grep 'cmd=send pa123 --json -- steer through firstmate' "$d/prime.log" \
+  assert_grep 'cmd=send pa123 steer through firstmate --json' "$d/prime.log" \
     "fm-send did not route Prime Agent text through daemon steering"
   assert_no_grep 'send-keys' "$d/tmux.log" "fm-send typed Prime Agent steering into the pane"
 

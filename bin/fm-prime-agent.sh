@@ -173,8 +173,7 @@ state_from_meta() {  # <meta>
 send_from_meta() {  # <meta> <message>
   local json status mode
   meta_runtime "$1" || return 1
-  # Flags precede --; the -- keeps a message starting with '-' positional.
-  json=$(run_scoped "$META_TMP" "$META_SESS" send "$META_AGENT" --json -- "$2") || return 1
+  json=$(run_scoped "$META_TMP" "$META_SESS" send "$META_AGENT" "$2" --json) || return 1
   status=$(printf '%s' "$json" | jq -r '.deliveryStatus // empty' 2>/dev/null) || return 1
   mode=$(printf '%s' "$json" | jq -r '.deliveryMode // empty' 2>/dev/null) || return 1
   case "$status:$mode" in

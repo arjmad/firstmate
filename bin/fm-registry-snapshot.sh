@@ -389,7 +389,7 @@ while IFS= read -r project_row; do
         unset project_remote
       fi
     else
-      local_status=available
+      local_status=unavailable
     fi
   fi
   enriched=$(jq -cn \
