@@ -264,6 +264,27 @@ fm_remote_job_ensure_worker "$REMOTE_ROOT" "$ACCOUNT_HOME" || fail "$FM_REMOTE_J
 NEW_WORKER_PID=$(cat "$STATE_ROOT/worker.pid")
 pass "worker identity binds the canonical configured code root"
 
+# A live lock owner that stops heartbeating must be replaced, not deferred to.
+# Before the start path stopped such an owner, every replacement child saw a
+# live matching owner, exited zero, and took its supervisor down with it, so
+# ensure waited out both probe windows and failed while the stalled owner kept
+# the lock (the CI-only "did not report ready after startup" flake).
+STALLED_WORKER_PID=$NEW_WORKER_PID
+kill -STOP "$STALLED_WORKER_PID"
+touch -t 200001010000 "$STATE_ROOT/worker.ready"
+# The stopped worker only dies to the KILL escalation, and its supervisor was
+# backgrounded from this shell, so drop it from the job table first or bash
+# interleaves a "Killed" notice with the TAP output.
+disown -a 2>/dev/null || true
+fm_remote_job_ensure_worker "$REMOTE_ROOT" "$ACCOUNT_HOME" || fail "$FM_REMOTE_JOB_ERROR"
+NEW_WORKER_PID=$(cat "$STATE_ROOT/worker.pid")
+[ "$NEW_WORKER_PID" != "$STALLED_WORKER_PID" ] \
+  || fail "ensure deferred to a live worker that stopped heartbeating"
+kill -0 "$STALLED_WORKER_PID" 2>/dev/null \
+  && fail "the stalled worker survived its replacement"
+fm_remote_job_probe "$ACCOUNT_HOME" || fail "the replacement worker did not report ready"
+pass "ensure replaces a live lock owner whose heartbeat stalled"
+
 CRASHED_WORKER_PID=$NEW_WORKER_PID
 kill -KILL "$CRASHED_WORKER_PID"
 wait "$CRASHED_WORKER_PID" 2>/dev/null || true
