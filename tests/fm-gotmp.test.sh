@@ -66,6 +66,9 @@ make_fake_root() {
   ln -s "$ROOT/bin/fm-wake-lib.sh" "$fake/bin/fm-wake-lib.sh"
   # fm-gate-refuse-lib.sh: teardown sources it before any fleet mutation.
   ln -s "$ROOT/bin/fm-gate-refuse-lib.sh" "$fake/bin/fm-gate-refuse-lib.sh"
+  # fm-prime-tmp-lib.sh: teardown sources it for the one shared prime-agent
+  # temp-root shape validator, on every task rather than only prime-agent ones.
+  ln -s "$ROOT/bin/fm-prime-tmp-lib.sh" "$fake/bin/fm-prime-tmp-lib.sh"
   # fm-pr-lib.sh: teardown uses its canonical task-ID validator for poll cleanup.
   ln -s "$ROOT/bin/fm-pr-lib.sh" "$fake/bin/fm-pr-lib.sh"
   # fm-public-followup-lib.sh (and the fm-x-lib.sh it sources): teardown sources

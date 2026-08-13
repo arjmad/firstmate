@@ -369,6 +369,7 @@ test_busy_classification_uses_the_list_verdict() {
     . "$ROOT/bin/fm-busy-lib.sh"
     [ -z "$(fm_busy_sources_for_harness prime-agent)" ]
   ) || fail "prime-agent must trust no written busy source, because it has no writer"
+  # shellcheck disable=SC2031  # the subshells above only READ $tmp; none assigns it
   rm -rf "$tmp"
   pass "fm-busy-lib: prime-agent classifies from its own list verdict and never falls through to idle"
 }

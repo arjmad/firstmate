@@ -513,6 +513,7 @@ $(printf '%s' "$FLEET" | jq -c '.tasks[]?')
 EOF
 printf '%s' "$TASK_GIT_ROWS" | jq -cs '.' > "$REGISTRY_TMP/task-git.json"
 
+# shellcheck disable=SC2016  # a jq program: $ and \ are jq syntax, never shell
 JQ_REDACT_DEFS='
   def redact:
     gsub("gh[pousr]_[A-Za-z0-9_=-]{8,}"; "[redacted]")
