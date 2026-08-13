@@ -30,8 +30,12 @@ pass() {
 }
 
 TMP_ROOT=
+TEST_TMUX_SESSION=
 
 cleanup() {
+  if [ -n "${TEST_TMUX_SESSION:-}" ]; then
+    tmux kill-session -t "=$TEST_TMUX_SESSION" 2>/dev/null || true
+  fi
   if [ -n "${TMP_ROOT:-}" ]; then
     rm -rf "$TMP_ROOT"
   fi
@@ -45,7 +49,7 @@ TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-gotmp-tests.XXXXXX")
 # live tmux/treehouse/fleet state is touched. A nonexistent worktree path makes both
 # `if [ -d "$WT" ]` guards skip, so teardown runs straight to the cleanup + state rm.
 make_fake_root() {
-  local id=$1 tasktmp=$2
+  local id=$1 tasktmp=$2 target=${3:-fakeses:fm-$1}
   local fake="$TMP_ROOT/$id"
   mkdir -p "$fake/bin/backends" "$fake/state"
   # Symlink the REAL teardown so the test exercises actual code, not a copy.
@@ -101,7 +105,7 @@ fm_tasks_axi_backend_available() { return 1; }
 SH
   # Meta with a nonexistent worktree so the dirty/treehouse blocks skip.
   cat > "$fake/state/$id.meta" <<META
-window=fakeses:fm-$id
+window=$target
 worktree=$TMP_ROOT/nonexistent-worktree-$id
 project=$TMP_ROOT/nonexistent-project-$id
 harness=claude
@@ -207,6 +211,51 @@ test_teardown_skips_gracefully_when_dir_missing() {
   pass "fm-teardown skips gracefully when tasktmp= points to a nonexistent dir"
 }
 
+test_teardown_removes_tasktmp_when_closing_own_tmux_pane() {
+  command -v tmux >/dev/null 2>&1 || {
+    pass "fm-teardown own-pane cleanup skipped without tmux"
+    return 0
+  }
+  local id=td-self-tmux-z5 window=fm-td-self-tmux-z5 i=0
+  local task_tmp="$TMP_ROOT/fm-$id" fake output="$TMP_ROOT/own-pane.out"
+  TEST_TMUX_SESSION="fmgt$$"
+  mkdir -p "$task_tmp/gotmp"
+  printf 'leftover\n' > "$task_tmp/gotmp/build-artifact"
+  fake=$(make_fake_root "$id" "$task_tmp" "$TEST_TMUX_SESSION:$window")
+
+  tmux new-session -d -s "$TEST_TMUX_SESSION" -n "$window" \
+    "env FM_HOME='$fake' bash '$fake/bin/fm-teardown.sh' '$id' >'$output' 2>&1"
+  while tmux has-session -t "=$TEST_TMUX_SESSION" 2>/dev/null && [ "$i" -lt 100 ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  tmux has-session -t "=$TEST_TMUX_SESSION" 2>/dev/null \
+    && fail "teardown did not close its own tmux pane"
+  TEST_TMUX_SESSION=
+  [ ! -e "$task_tmp" ] \
+    || fail "teardown leaked tasktmp when its tmux kill terminated the running pane: $(cat "$output" 2>/dev/null)"
+  pass "fm-teardown removes tasktmp before closing its own tmux pane"
+}
+
+test_teardown_refusal_preserves_tasktmp() {
+  local id=td-refuse-z6
+  local task_tmp="$TMP_ROOT/fm-$id" fake
+  mkdir -p "$task_tmp/gotmp"
+  printf 'keep\n' > "$task_tmp/gotmp/build-artifact"
+  fake=$(make_fake_root "$id" "$task_tmp" malformed-endpoint)
+
+  if FM_HOME="$fake" bash "$fake/bin/fm-teardown.sh" "$id" >/dev/null 2>&1; then
+    fail "teardown accepted a malformed endpoint"
+  fi
+  [ -f "$task_tmp/gotmp/build-artifact" ] \
+    || fail "teardown refusal changed the tasktmp"
+  [ -f "$fake/state/$id.meta" ] \
+    || fail "teardown refusal removed task metadata"
+  pass "fm-teardown refusal preserves tasktmp and task state"
+}
+
 test_teardown_removes_tasktmp_dir
+test_teardown_removes_tasktmp_when_closing_own_tmux_pane
+test_teardown_refusal_preserves_tasktmp
 test_teardown_skips_gracefully_without_tasktmp
 test_teardown_skips_gracefully_when_dir_missing

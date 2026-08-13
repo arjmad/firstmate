@@ -449,6 +449,11 @@ PR_URL=$(grep '^pr=' "$META" | tail -1 | cut -d= -f2- || true)
 # tasktmp is recorded by fm-spawn for tasks that set up a per-task temp root
 # (/tmp/fm-<id>/); absent for tasks spawned before that change, so tolerate empty.
 TASK_TMP=$(grep '^tasktmp=' "$META" | cut -d= -f2- || true)
+remove_task_tmp() {
+  [ -n "$TASK_TMP" ] || return 0
+  rm -rf -- "$TASK_TMP"
+  TASK_TMP=
+}
 TASK_HARNESS=$(fm_meta_get "$META" harness)
 PRIME_TMP=$(fm_meta_get "$META" prime_tmp)
 # A non-conforming prime_tmp must refuse HERE, at meta-read time, while the
@@ -2562,6 +2567,9 @@ elif [ "$BACKEND" = herdr ]; then
     echo "warning: herdr session presentation lock path is unavailable; skipping the pane close rather than closing unlocked" >&2
   fi
 elif [ "$BACKEND" != orca ]; then
+  # tmux may be tearing down the pane that is running this command, so perform
+  # the authorized temp-root cleanup before that pane can terminate this shell.
+  [ "$BACKEND" != tmux ] || remove_task_tmp
   fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
 fi
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
@@ -2600,8 +2608,9 @@ remove_grok_turnend_auth "$STATE" "$ID" || exit 1
 remove_kimi_turnend_auth "$STATE" "$ID" || exit 1
 fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 # Remove the per-task temp root (/tmp/fm-<id>/, incl. its gotmp/) recorded by spawn.
-# Read before the state-file rm below; empty (pre-fix tasks without tasktmp=) is a no-op.
-[ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
+# The tmux path already did this immediately before closing its pane; this
+# idempotent call handles every backend whose close cannot terminate this shell.
+remove_task_tmp
 # prime-agent's socket root is a separate short random path, because Unix socket
 # length limits make the task-id-derived path above unusable for that runtime.
 # Only the exact minted shape is removable; anything else is a corrupt record and
