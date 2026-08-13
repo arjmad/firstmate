@@ -567,7 +567,9 @@ test_teardown_removes_task_owned_herdr_lab() {
   case_dir=$(make_case herdr-lab-cleanup)
   write_meta "$case_dir" local-only ship
   lab_dir="$case_dir/lab-state"
-  lab_session=$("$ROOT/bin/fm-herdr-lab.sh" name task-x1)
+  # The session name's home-scoped token must be derived under the same state
+  # root run_teardown passes, or the task-scoped sweep matches nothing.
+  lab_session=$(FM_STATE_OVERRIDE="$case_dir/state" "$ROOT/bin/fm-herdr-lab.sh" name task-x1)
   mkdir -p "$lab_dir"
   printf '%s\n' '{"name":"default","default":true,"running":true,"socket_path":"/tmp/default.sock"}' \
     > "$lab_dir/$lab_session.fleet-state.json"
@@ -610,7 +612,9 @@ test_unreachable_herdr_warns_but_returns_worktree() {
   case_dir=$(make_case herdr-lab-unreachable)
   write_meta "$case_dir" local-only ship
   lab_dir="$case_dir/lab-state"
-  lab_session=$("$ROOT/bin/fm-herdr-lab.sh" name task-x1)
+  # Same home-scoped derivation as the cleanup case above: the tripwire name
+  # must carry the token teardown's sweep computes from its own state root.
+  lab_session=$(FM_STATE_OVERRIDE="$case_dir/state" "$ROOT/bin/fm-herdr-lab.sh" name task-x1)
   mkdir -p "$lab_dir"
   printf '%s\n' '{"name":"default","default":true,"running":true,"socket_path":"/tmp/default.sock"}' \
     > "$lab_dir/$lab_session.fleet-state.json"
