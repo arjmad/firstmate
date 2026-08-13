@@ -136,7 +136,7 @@ For capable Herdr sessions, the same watcher replaces its terminal sleep with a 
 The deeper session-start agent-process liveness probe is separate from that busy-state poll: tmux and Herdr have verified classifiers for secondmate recovery, Zellij remains unverified, and Orca and cmux do not support secondmate spawns.
 Herdr is experimental and can be selected explicitly or by runtime auto-detection: Treehouse remains its worktree provider, [`herdr-backend.md`](herdr-backend.md) owns current setup and safety limits, and [`verification/runtime-backends.md`](verification/runtime-backends.md#herdr) owns active empirical evidence.
 Herdr uses one tab per task; [Watching and task containers](herdr-backend.md#watching-and-task-containers) owns launcher-bound workspace placement, the label-only fallback, and recovery scope.
-Its default-on presentation projection may place one clean new task in a disposable workspace without changing endpoint authority or lifecycle ownership; [Presentation spaces](herdr-backend.md#presentation-spaces) owns that conditional design, the Herdr version floor its unconfigured default is gated behind, and its narrow home-local restored-shell cleanup at locked session start.
+Its opt-in presentation projection may place one clean new task in a disposable workspace without changing endpoint authority or lifecycle ownership; [Presentation spaces](herdr-backend.md#presentation-spaces) owns that conditional design, the opt-in default, the Herdr version floor an opted-in projection is measured against, and its narrow home-local restored-shell cleanup at locked session start.
 Zellij is experimental and selected only explicitly: Treehouse remains its worktree provider, [`zellij-backend.md`](zellij-backend.md) owns current setup and limits, and [`verification/runtime-backends.md`](verification/runtime-backends.md#zellij) owns active empirical evidence.
 Zellij's container shape is simpler than herdr's: one shared `firstmate` session, one tab per task, with no per-home workspace split; visible tab titles are scoped by the active home label plus a short hash of the resolved `FM_ROOT` path.
 Orca is experimental and selected only explicitly: Orca owns both worktree and terminal lifecycle, records `orca_worktree_id=` and `terminal=`, and removes worktrees through `orca worktree rm` only after the usual firstmate teardown checks pass.
@@ -155,10 +155,11 @@ Its header owns the exact refusal mechanics, while `tests/fm-spawn-pool-base-fre
 The firstmate repo has one extra exposure because it can dispatch crewmates to work on itself.
 Its operating checkout (`FM_ROOT`) and the disposable crewmate worktrees are all linked git worktrees of the same repository, so the valid discriminator is branch state, not whether the checkout is linked.
 The primary checkout is healthy on its default branch, and linked worktrees or secondmate homes are healthy at detached HEAD.
-Only a named non-default branch checked out in `FM_ROOT` is a worktree tangle.
+Only a named non-default branch checked out in the primary checkout is a worktree tangle.
 
-`fm-tangle-lib.sh` resolves the default branch from `origin/HEAD`, then local `main` or `master`, and classifies that named non-default primary branch as the tangle.
-`fm-guard.sh` prints the repair command on the next mutable fleet action, while `bin/fm-session-start.sh` reports the same condition through bootstrap as a `TANGLE:` line at session start.
+`fm-tangle-lib.sh` first resolves the repo's primary checkout (the main worktree git lists first) and classifies there, never against whatever linked worktree the caller happens to run from, so a crewmate on its own `fm/<id>` branch raises no false alarm and a bare main worktree has no branch to strand and stays silent.
+It resolves the default branch from `origin/HEAD`, then local `main` or `master`, and classifies a named non-default branch on that primary as the tangle.
+`fm-guard.sh` prints the repair command against the resolved primary on the next mutable fleet action, keeping the caller's own spelling of the path when both name the same directory, while `bin/fm-session-start.sh` reports the same condition through bootstrap as a `TANGLE:` line at session start.
 If another live session holds the fleet lock, both surfaces keep the alarm but switch to read-only wording with no repair command.
 Ship briefs also tell the crewmate to verify `pwd -P` and `git rev-parse --show-toplevel` before creating `fm/<id>`, then stop with a blocked status if it landed in the primary checkout.
 
