@@ -9,6 +9,9 @@ STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
 FM_WAKE_QUEUE="${FM_WAKE_QUEUE:-$STATE/.wake-queue}"
 FM_WAKE_QUEUE_LOCK="${FM_WAKE_QUEUE_LOCK:-$STATE/.wake-queue.lock}"
 FM_LOCK_STALE_AFTER="${FM_LOCK_STALE_AFTER:-2}"
+# How many times a stale-lock takeover may recover an abandoned steal token
+# before giving up and letting the caller retry the whole acquisition.
+FM_LOCK_STEAL_TOKEN_ATTEMPTS="${FM_LOCK_STEAL_TOKEN_ATTEMPTS:-3}"
 # Resolved once at source time: fm_pid_identity and fm_path_mtime run inside 0.2s
 # confirm and 0.5s attach polls, and forking uname per call is a measurable cost on
 # the platform (Git Bash/MSYS) that already pays the highest fork price.
@@ -274,13 +277,23 @@ fm_lock_remove_stray_owner_link() {
 }
 
 fm_lock_claim_blocked_by_steal() {
-  local lockdir=$1 allowed_steal_owner=${2:-} steal
+  local lockdir=$1 allowed_steal_owner=${2:-} steal holder
   steal="$lockdir.steal"
   [ -e "$steal" ] || [ -L "$steal" ] || return 1
   if [ -n "$allowed_steal_owner" ] && fm_lock_points_to_owner "$steal" "$allowed_steal_owner"; then
     return 1
   fi
-  return 0
+  # A steal token blocks a claim only while its takeover is genuinely in flight:
+  # a live arbiter, this shell's own arbitration, or the window between creating
+  # the token and recording its pid. A token abandoned by a killed stealer
+  # arbitrates nothing, and treating it as blocking would poison this lock for
+  # every future claimant instead of letting the next stealer recover it.
+  holder=$(cat "$steal/pid" 2>/dev/null || true)
+  if [ "$holder" = "${BASHPID:-$$}" ] || fm_pid_alive "$holder" \
+    || fm_lock_mid_acquire_is_fresh "$steal" "$holder"; then
+    return 0
+  fi
+  return 1
 }
 
 fm_lock_claim() {
@@ -629,6 +642,71 @@ fm_recovery_marker_arm_check() {
   fm_recovery_transition "$1" arm-check
 }
 
+# Reclaim a lock whose recorded holder is THIS shell.
+#
+# A shell runs one command at a time, and no lock in this repo is acquired from
+# a BACKGROUNDED subshell, so a lock that names us can never have a live
+# critical section of ours still inside it: the section that took it was
+# abandoned when a signal handler or an exit path unwound past its release.
+# Nobody else will ever release it, so waiting is waiting on ourselves. That is
+# how a watcher wedged: SIGTERM landing inside a recovery-marker section sent
+# the exit path straight back into the same section to publish downtime
+# evidence, and fm_lock_acquire_wait spun on the watcher's own pid until it was
+# killed. Reclaiming here keeps acquisition consistent with fm_lock_release,
+# which already treats exactly this ownership test as "mine to release".
+fm_lock_reclaim_self() {
+  local lockdir=$1 ownerdir current
+  current=${BASHPID:-$$}
+  FM_LOCK_OWNER_DIR=
+  if [ -L "$lockdir" ]; then
+    ownerdir=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
+    [ -n "$ownerdir" ] || return 1
+    fm_lock_points_to_owner "$lockdir" "$ownerdir" || return 1
+    [ "$(cat "$ownerdir/pid" 2>/dev/null || true)" = "$current" ] || return 1
+    FM_LOCK_OWNER_DIR=$ownerdir
+    return 0
+  fi
+  [ -d "$lockdir" ] || return 1
+  [ "$(cat "$lockdir/pid" 2>/dev/null || true)" = "$current" ] || return 1
+  return 0
+}
+
+# Acquire the one-shot token that arbitrates a single stale-lock takeover.
+#
+# Deliberately NOT recursive. The superseded form recovered an abandoned token
+# by acquiring "<token>.steal", which appends one path level for every takeover
+# interrupted mid-flight and never collapses back. Once such a chain pushes
+# "<token>.owner.XXXXXX" past NAME_MAX, mktemp fails at every level; a create
+# that failed for that reason is indistinguishable from an occupied lock, so
+# the descent never terminates and the caller never returns. Every
+# recovery-marker transition goes through here, so that hung the watcher itself
+# rather than merely losing a lock.
+#
+# A token has no token of its own: an abandoned one is removed in place and
+# retried, bounded, while a token held by a live arbiter still refuses the
+# takeover so exactly one stealer proceeds.
+fm_lock_steal_token_acquire() {  # <token-path>
+  local token=$1 attempt=0 holder
+  while [ "$attempt" -lt "$FM_LOCK_STEAL_TOKEN_ATTEMPTS" ]; do
+    if fm_lock_try_create "$token"; then
+      return 0
+    fi
+    if fm_lock_reclaim_self "$token"; then
+      return 0
+    fi
+    holder=$(cat "$token/pid" 2>/dev/null || true)
+    if fm_pid_alive "$holder" || fm_lock_mid_acquire_is_fresh "$token" "$holder"; then
+      break
+    fi
+    # An unusable token path (no space, a name past NAME_MAX) leaves nothing to
+    # remove, so this refuses instead of looping on a create that cannot work.
+    fm_lock_remove_path "$token" || break
+    attempt=$((attempt + 1))
+  done
+  FM_LOCK_OWNER_DIR=
+  return 1
+}
+
 fm_lock_try_acquire() {
   local lockdir=$1 pid steal cur rc steal_owner primary_owner
   FM_LOCK_HELD_PID=
@@ -640,6 +718,9 @@ fm_lock_try_acquire() {
   fi
 
   pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  if [ "$pid" = "${BASHPID:-$$}" ] && fm_lock_reclaim_self "$lockdir"; then
+    return 0
+  fi
   if fm_pid_alive "$pid"; then
     FM_LOCK_HELD_PID=$pid
     return 1
@@ -650,7 +731,7 @@ fm_lock_try_acquire() {
   fi
 
   steal="$lockdir.steal"
-  if ! fm_lock_try_acquire "$steal"; then
+  if ! fm_lock_steal_token_acquire "$steal"; then
     FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
     FM_LOCK_OWNER_DIR=
     return 1
