@@ -724,7 +724,7 @@ parse_orca_worktree_result() {
 }
 
 spawn_abort_cleanup() {
-  local status=$? wt_reclaimed
+  local status=$? wt_reclaimed herdr_projection_pane_owned=$HERDR_PROJECTION_ABORT_CLEANUP
   if [ "$RELAUNCH_REPLACEMENT_PENDING" = 1 ] \
      && [ "$SPAWN_META_PUBLISH_STARTED" = 1 ] \
      && [ -n "$SPAWN_META_TMP" ] \
@@ -805,7 +805,12 @@ spawn_abort_cleanup() {
   fi
   if [ "$SPAWN_PANE_ABORT_CLEANUP" = 1 ]; then
     SPAWN_PANE_ABORT_CLEANUP=0
-    if [ -n "${T:-}" ]; then
+    # A projected herdr pane belongs to the projection abort cleanup above,
+    # which closes it exactly once under the presentation focus lock (or
+    # deliberately retains it when that lock is unavailable). A second,
+    # unlocked kill here would close the same pane outside the lock - the
+    # focus-unsafe interleaving the presentation contract exists to prevent.
+    if [ -n "${T:-}" ] && [ "$herdr_projection_pane_owned" != 1 ]; then
       fm_backend_kill "$BACKEND" "$T" 2>/dev/null || true
     fi
     wt_reclaimed=1
