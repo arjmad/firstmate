@@ -8,6 +8,7 @@
 # --merge, --rebase, or --method after the optional -- separator. Extra args
 # must not include --repo or -R because the repository comes only from the URL.
 # Usage: fm-pr-merge.sh <task-id> <pr-url> [-- <extra gh-axi pr merge args>]
+#        fm-pr-merge.sh -h|--help    print usage and exit 0
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,6 +18,21 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: fm-pr-merge.sh <task-id> <https://github.com/<owner>/<repo>/pull/<number>> [-- <extra gh-axi pr merge args>]
+
+Merges with --squash by default unless the extra arguments select another merge method.
+EOF
+}
+
+case "${1:-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+esac
 
 if [ "$#" -lt 2 ]; then
   echo "error: invalid PR merge request" >&2

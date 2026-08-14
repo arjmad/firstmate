@@ -14,6 +14,7 @@
 #   (f) malformed PR URL fails fast without calling gh-axi
 #   (g) explicit merge method is not overridden by the default --squash
 #   (h) repo override args fail fast because the repo comes from the URL
+#   (i) -h and --help print usage and succeed without calling gh-axi
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -97,6 +98,23 @@ run_pr_merge() {
     return 1
   fi
   return "$rc"
+}
+
+test_help_prints_usage() {
+  local flag output rc
+  for flag in -h --help; do
+    set +e
+    output=$("$PR_MERGE" "$flag" 2>&1)
+    rc=$?
+    set -e
+
+    expect_code 0 "$rc" "help: $flag should succeed"
+    case "$output" in
+      *'Usage: fm-pr-merge.sh <task-id> <https://github.com/<owner>/<repo>/pull/<number>> [-- <extra gh-axi pr merge args>]'*'--squash by default'*) ;;
+      *) fail "help: $flag did not describe the canonical PR URL, extra arguments, and default squash method" ;;
+    esac
+  done
+  pass "fm-pr-merge prints usage for -h and --help"
 }
 
 test_records_pr_and_head_before_merging() {
@@ -301,6 +319,7 @@ test_parses_pr_url_for_gh_axi() {
   pass "fm-pr-merge parses a GitHub PR URL into gh-axi number and --repo arguments"
 }
 
+test_help_prints_usage
 test_records_pr_and_head_before_merging
 test_merge_failure_propagates_after_recording
 test_extra_merge_args_forwarded
