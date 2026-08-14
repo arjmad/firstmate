@@ -1,10 +1,5 @@
 #!/usr/bin/env bash
-# .gitignore must ignore config/ as a directory, not by exact filename.
-#
-# A name-by-name list silently stops ignoring any new or home-local file under
-# config/ (fm-gitignore-config-name-by-name): an unrecognized file there makes
-# the working tree read as dirty, which then blocks guarded sync paths that
-# refuse to touch a dirty home.
+# Private local surfaces must be ignored by category, including backup files.
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -22,26 +17,43 @@ random_leaf() {
   printf '%s-%s' "$1" "$$-$RANDOM-$RANDOM"
 }
 
-test_config_dir_ignored_as_category() {
-  local direct nested sample
-  direct="$(random_leaf config/unlisted-key)"
-  nested="config/$(random_leaf nested-dir)/$(random_leaf deep-file)"
-  for sample in "$direct" "$nested" config/some-new-key.admin; do
-    git -C "$ROOT" check-ignore -q "$sample" \
-      || fail "git does not ignore $sample (config/ must be ignored as a directory)"
+test_private_surfaces_ignored_as_categories() {
+  local surface sample
+  for surface in config data state projects .no-mistakes; do
+    for sample in \
+      "$surface/$(random_leaf unlisted-key)" \
+      "$surface/$(random_leaf nested-dir)/$(random_leaf deep-file)" \
+      "$surface/$(random_leaf private).bak" \
+      "$surface/$(random_leaf private)~"; do
+      git -C "$ROOT" check-ignore -q "$sample" \
+        || fail "git does not ignore $sample ($surface/ must be ignored as a directory)"
+    done
   done
-  pass "config/ is ignored as a directory, covering unlisted and nested paths"
+
+  for sample in .env .env.bak .env.old .env~ ".env.$(random_leaf editor)"; do
+    git -C "$ROOT" check-ignore -q "$sample" \
+      || fail "git does not ignore $sample (.env backups and variants must remain private)"
+  done
+
+  pass "private local surfaces cover unlisted, nested, and backup paths"
 }
 
-test_unrelated_path_stays_visible() {
-  # Control: a path outside config/ must remain visible to Git, so the
-  # coverage above is proven by contrast rather than an always-ignoring rule.
-  local sibling
-  sibling="$(random_leaf not-config)"
-  git -C "$ROOT" check-ignore -q "$sibling" \
-    && fail "git unexpectedly ignores $sibling (outside config/)"
-  pass "an unrelated path outside config/ remains visible to git"
+test_unrelated_paths_stay_visible() {
+  local sample
+  for sample in "$(random_leaf not-private)" configuration/example dotenv.example; do
+    git -C "$ROOT" check-ignore -q "$sample" \
+      && fail "git unexpectedly ignores $sample (outside private local surfaces)"
+  done
+  pass "unrelated paths remain visible to git"
 }
 
-test_config_dir_ignored_as_category
-test_unrelated_path_stays_visible
+test_tracked_files_are_not_ignored() {
+  local ignored
+  ignored="$(git -C "$ROOT" ls-files | git -C "$ROOT" check-ignore --no-index --stdin || true)"
+  [[ -z "$ignored" ]] || fail "a tracked shared file matches .gitignore: $ignored"
+  pass "no tracked shared file matches .gitignore"
+}
+
+test_private_surfaces_ignored_as_categories
+test_unrelated_paths_stay_visible
+test_tracked_files_are_not_ignored

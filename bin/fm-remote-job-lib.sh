@@ -950,6 +950,20 @@ fm_remote_job_start_linux_worker() { # <remote-root> <account-home>
     }
     wait "$pid" 2>/dev/null || true
     FM_REMOTE_JOB_REPAIRED=1
+  elif fm_remote_job_lock_owner_matches_process "$account_home"; then
+    # A live lock owner that is not provably ready (a stalled heartbeat, a
+    # wedged startup) can never be raced out of ownership: a replacement
+    # worker's child defers to any live matching owner and exits, taking its
+    # own supervisor down with it, so ensure would wait out every probe window
+    # while the unready owner keeps the lock. Stop its whole tree first,
+    # exactly as for a stale identity above.
+    pid=$FM_REMOTE_JOB_OWNER_PID
+    fm_remote_job_stop_worker_tree "$pid" || {
+      FM_REMOTE_JOB_ERROR="unready remote job worker did not stop safely"
+      return 1
+    }
+    wait "$pid" 2>/dev/null || true
+    FM_REMOTE_JOB_REPAIRED=1
   fi
   # Job control puts the worker tree in its own process group, so a later stop
   # can signal every descendant at once without ever reaching the caller's own
