@@ -30,12 +30,19 @@ pass() {
 }
 
 TMP_ROOT=
-TEST_TMUX_SESSION=
+TEST_TMUX_SOCKET=
+# Real /tmp/fm-<id> roots minted by tests (teardown only removes that exact
+# shape); space-separated, no spaces in the paths themselves.
+TASK_TMPS=
 
 cleanup() {
-  if [ -n "${TEST_TMUX_SESSION:-}" ]; then
-    tmux kill-session -t "=$TEST_TMUX_SESSION" 2>/dev/null || true
+  local t
+  if [ -n "${TEST_TMUX_SOCKET:-}" ]; then
+    tmux -L "$TEST_TMUX_SOCKET" kill-server 2>/dev/null || true
   fi
+  for t in $TASK_TMPS; do
+    rm -rf "$t"
+  done
   if [ -n "${TMP_ROOT:-}" ]; then
     rm -rf "$TMP_ROOT"
   fi
@@ -49,7 +56,7 @@ TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-gotmp-tests.XXXXXX")
 # live tmux/treehouse/fleet state is touched. A nonexistent worktree path makes both
 # `if [ -d "$WT" ]` guards skip, so teardown runs straight to the cleanup + state rm.
 make_fake_root() {
-  local id=$1 tasktmp=$2 target=${3:-fakeses:fm-$1}
+  local id=$1 tasktmp=$2 target=${3:-fakeses:fm-$1} extra_meta=${4:-}
   local fake="$TMP_ROOT/$id"
   mkdir -p "$fake/bin/backends" "$fake/state"
   # Symlink the REAL teardown so the test exercises actual code, not a copy.
@@ -114,14 +121,16 @@ mode=no-mistakes
 yolo=off
 tasktmp=$tasktmp
 META
+  [ -z "$extra_meta" ] || printf '%s\n' "$extra_meta" >> "$fake/state/$id.meta"
   printf '%s' "$fake"
 }
 
 # --- fm-teardown side (real subprocess) ---
 
 test_teardown_removes_tasktmp_dir() {
-  local id=td-rm-z2
-  local task_tmp="$TMP_ROOT/fm-$id"
+  local id=td-rm-z2-$$
+  local task_tmp=/tmp/fm-$id
+  TASK_TMPS="$TASK_TMPS $task_tmp"
   mkdir -p "$task_tmp/gotmp"
   printf 'leftover\n' > "$task_tmp/gotmp/build-artifact"
   local fake
@@ -199,8 +208,8 @@ META
 
 test_teardown_skips_gracefully_when_dir_missing() {
   # tasktmp= points to a path that does not exist. Teardown must not error.
-  local id=td-missing-z4
-  local task_tmp="$TMP_ROOT/never-created-fm-$id"
+  local id=td-missing-z4-$$
+  local task_tmp=/tmp/fm-$id
   # Intentionally do NOT create $task_tmp.
   [ ! -e "$task_tmp" ] || fail "precondition: task_tmp should not exist yet"
   local fake
@@ -216,30 +225,68 @@ test_teardown_removes_tasktmp_when_closing_own_tmux_pane() {
     pass "fm-teardown own-pane cleanup skipped without tmux"
     return 0
   }
-  local id=td-self-tmux-z5 window=fm-td-self-tmux-z5 i=0
-  local task_tmp="$TMP_ROOT/fm-$id" fake output="$TMP_ROOT/own-pane.out"
-  TEST_TMUX_SESSION="fmgt$$"
+  local id=td-self-tmux-z5-$$ session=fmgt deadline
+  local task_tmp=/tmp/fm-$id window=fm-td-self-tmux-z5-$$ fake output="$TMP_ROOT/own-pane.out"
+  # Private per-run socket: isolated from any developer/CI tmux server, and no
+  # session-name collisions between concurrent runs of this suite.
+  TEST_TMUX_SOCKET="fmgt$$"
+  TASK_TMPS="$TASK_TMPS $task_tmp"
   mkdir -p "$task_tmp/gotmp"
   printf 'leftover\n' > "$task_tmp/gotmp/build-artifact"
-  fake=$(make_fake_root "$id" "$task_tmp" "$TEST_TMUX_SESSION:$window")
+  fake=$(make_fake_root "$id" "$task_tmp" "$session:$window")
 
-  tmux new-session -d -s "$TEST_TMUX_SESSION" -n "$window" \
-    "env FM_HOME='$fake' bash '$fake/bin/fm-teardown.sh' '$id' >'$output' 2>&1"
-  while tmux has-session -t "=$TEST_TMUX_SESSION" 2>/dev/null && [ "$i" -lt 100 ]; do
-    sleep 0.05
-    i=$((i + 1))
+  if ! tmux -L "$TEST_TMUX_SOCKET" new-session -d -s "$session" -n "$window" \
+    "env FM_HOME='$fake' bash '$fake/bin/fm-teardown.sh' '$id' >'$output' 2>&1"; then
+    TEST_TMUX_SOCKET=
+    pass "fm-teardown own-pane cleanup skipped: tmux server could not start in this environment"
+    return 0
+  fi
+  deadline=$((SECONDS + 30))
+  while tmux -L "$TEST_TMUX_SOCKET" has-session -t "=$session" 2>/dev/null \
+    && [ "$SECONDS" -lt "$deadline" ]; do
+    sleep 0.2
   done
-  tmux has-session -t "=$TEST_TMUX_SESSION" 2>/dev/null \
-    && fail "teardown did not close its own tmux pane"
-  TEST_TMUX_SESSION=
+  tmux -L "$TEST_TMUX_SOCKET" has-session -t "=$session" 2>/dev/null \
+    && fail "teardown did not close its own tmux pane within 30s"
+  tmux -L "$TEST_TMUX_SOCKET" kill-server 2>/dev/null || true
+  TEST_TMUX_SOCKET=
   [ ! -e "$task_tmp" ] \
     || fail "teardown leaked tasktmp when its tmux kill terminated the running pane: $(cat "$output" 2>/dev/null)"
   pass "fm-teardown removes tasktmp before closing its own tmux pane"
 }
 
+test_teardown_removes_tasktmp_before_zellij_self_close() {
+  # A zellij close-tab terminates every process in the tab, including a
+  # teardown running inside it. Stub the zellij adapter's kill to SIGKILL the
+  # teardown shell itself, proving the temp root is removed BEFORE the close.
+  local id=td-self-zellij-z8-$$ rc=0
+  local task_tmp=/tmp/fm-$id fake output="$TMP_ROOT/zellij-self.out"
+  TASK_TMPS="$TASK_TMPS $task_tmp"
+  mkdir -p "$task_tmp/gotmp"
+  printf 'leftover\n' > "$task_tmp/gotmp/build-artifact"
+  fake=$(make_fake_root "$id" "$task_tmp" "fakezs:2" "backend=zellij
+endpoint_task_id=$id
+zellij_session=fakezs
+zellij_tab_id=1
+zellij_pane_id=2")
+  cat > "$fake/bin/backends/zellij.sh" <<'SH'
+fm_backend_zellij_kill() { kill -9 "$$"; }
+SH
+
+  FM_HOME="$fake" bash "$fake/bin/fm-teardown.sh" "$id" >"$output" 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "stubbed zellij close did not terminate teardown; the fixture no longer simulates a self-pane close"
+  [ ! -e "$task_tmp" ] \
+    || fail "teardown leaked tasktmp when its zellij close terminated the running shell: $(cat "$output" 2>/dev/null)"
+  [ -f "$fake/state/$id.meta" ] \
+    || fail "fixture teardown removed task metadata despite dying at the close"
+  pass "fm-teardown removes tasktmp before a zellij close that terminates its own shell"
+}
+
 test_teardown_refusal_preserves_tasktmp() {
-  local id=td-refuse-z6
-  local task_tmp="$TMP_ROOT/fm-$id" fake
+  local id=td-refuse-z6-$$
+  local task_tmp=/tmp/fm-$id fake
+  TASK_TMPS="$TASK_TMPS $task_tmp"
   mkdir -p "$task_tmp/gotmp"
   printf 'keep\n' > "$task_tmp/gotmp/build-artifact"
   fake=$(make_fake_root "$id" "$task_tmp" malformed-endpoint)
@@ -254,8 +301,29 @@ test_teardown_refusal_preserves_tasktmp() {
   pass "fm-teardown refusal preserves tasktmp and task state"
 }
 
+test_teardown_refuses_corrupt_tasktmp() {
+  # A tasktmp= record that is not exactly /tmp/fm-<id> (corrupt or hostile
+  # meta) must refuse before any cleanup and never be deleted.
+  local id=td-badtmp-z7-$$
+  local victim="$TMP_ROOT/victim-$id" fake
+  mkdir -p "$victim"
+  printf 'keep\n' > "$victim/precious"
+  fake=$(make_fake_root "$id" "$victim")
+
+  if FM_HOME="$fake" bash "$fake/bin/fm-teardown.sh" "$id" >/dev/null 2>&1; then
+    fail "teardown accepted a tasktmp outside the exact /tmp/fm-<id> shape"
+  fi
+  [ -f "$victim/precious" ] \
+    || fail "teardown removed a non-conforming tasktmp path"
+  [ -f "$fake/state/$id.meta" ] \
+    || fail "teardown tasktmp refusal removed task metadata"
+  pass "fm-teardown refuses to remove a tasktmp that is not exactly /tmp/fm-<id>"
+}
+
 test_teardown_removes_tasktmp_dir
 test_teardown_removes_tasktmp_when_closing_own_tmux_pane
+test_teardown_removes_tasktmp_before_zellij_self_close
 test_teardown_refusal_preserves_tasktmp
+test_teardown_refuses_corrupt_tasktmp
 test_teardown_skips_gracefully_without_tasktmp
 test_teardown_skips_gracefully_when_dir_missing
