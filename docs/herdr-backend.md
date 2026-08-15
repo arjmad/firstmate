@@ -217,7 +217,7 @@ The two halves of that floor need different treatment.
 A client that predates the flag rejects the argument, so the `tab create` fails and its diagnostic names the version requirement rather than failing silently; no preemptive check is needed.
 A stale server is the dangerous half, because it drops the unknown field from the create request and still reports success, so it is asserted ahead of time at the three entry points that create a crewmate's pane.
 That assertion is deliberately narrower than the adapter's general version gate: capture, send, status, and kill keep working against an older but live Herdr.
-Refusing those fleet-wide would be unsafe, because the best-effort kill path would then report success without closing a pane and cleanup would record a clean teardown over a still-running worker; draining the fleet is the operator's own remedy for a stale Herdr.
+Refusing those fleet-wide would be unsafe, because the kill path would then report success without closing a pane and cleanup's confirmed-gone presence gate would refuse teardown of that still-running worker indefinitely; draining the fleet is the operator's own remedy for a stale Herdr.
 The server's protocol is observed on the session-scoped server-ensure read, because only that read is scoped to the session whose daemon will actually host the pane; an ambient status query reports whatever server happens to be bound.
 A running server whose protocol cannot be read proceeds rather than refusing.
 
