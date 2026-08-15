@@ -764,6 +764,19 @@ test_kill_resolves_tab_and_closes_by_id() {
   pass "fm_backend_zellij_kill: resolves the owning tab id fresh and calls close-tab-by-id (never a bare close-pane)"
 }
 
+test_kill_propagates_close_tab_failure() {
+  local dir fb
+  dir="$TMP_ROOT/kill-close-failure"; mkdir -p "$dir/responses"
+  zellij_pane_response "$dir" 1 7 3
+  printf '1\n' > "$dir/responses/2.exit"
+  fb=$(make_zellij_fakebin "$dir")
+  PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
+    FM_ZELLIJ_SESSION_LIST="firstmate" \
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_kill firstmate:7' "$ROOT"
+  expect_code 1 $? "kill should propagate a close-tab-by-id failure"
+  pass "fm_backend_zellij_kill: propagates tab close failures"
+}
+
 test_kill_falls_back_to_close_pane_when_tab_lookup_empty() {
   local dir fb
   dir="$TMP_ROOT/kill-fallback"; mkdir -p "$dir/responses"
@@ -1334,6 +1347,7 @@ test_expected_label_rejects_reused_pane_id
 test_current_path_probes_with_marker_and_ignores_prompt_paths
 test_current_path_ignores_tilde_prefixed_banner_lines
 test_kill_resolves_tab_and_closes_by_id
+test_kill_propagates_close_tab_failure
 test_kill_falls_back_to_close_pane_when_tab_lookup_empty
 test_kill_closes_recorded_tab_when_pane_already_gone
 test_kill_skips_recorded_tab_when_label_mismatches

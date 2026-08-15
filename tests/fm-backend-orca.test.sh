@@ -333,15 +333,15 @@ test_send_key_refuses_escape_until_supported() {
   pass "fm_backend_orca_send_key: refuses Escape instead of mapping it to interrupt"
 }
 
-test_kill_is_best_effort_close() {
+test_kill_propagates_close_failure() {
   orca_case kill
   printf '1\n' > "$RESP/1.exit"
   PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_kill term-123' "$ROOT"
-  expect_code 0 $? "kill should stay best-effort when Orca close fails"
+  expect_code 1 $? "kill should propagate an Orca close failure"
   assert_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''close'$'\x1f''--terminal'$'\x1f''term-123'$'\x1f''--json' \
     "kill did not call orca terminal close"
-  pass "fm_backend_orca_kill: calls terminal close and stays best-effort"
+  pass "fm_backend_orca_kill: propagates terminal close failures"
 }
 
 test_remove_worktree_refuses_empty_id() {
@@ -1315,7 +1315,7 @@ test_send_helpers_reject_orca_error_json
 test_send_key_enter_and_interrupt
 test_send_key_refuses_unknown_key
 test_send_key_refuses_escape_until_supported
-test_kill_is_best_effort_close
+test_kill_propagates_close_failure
 test_remove_worktree_refuses_empty_id
 test_remove_worktree_rejects_orca_error_json
 test_worktree_path_resolves_id

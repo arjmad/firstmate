@@ -255,10 +255,10 @@ test_teardown_removes_tasktmp_when_closing_own_tmux_pane() {
   pass "fm-teardown removes tasktmp before closing its own tmux pane"
 }
 
-test_teardown_removes_tasktmp_before_zellij_self_close() {
+test_teardown_preserves_tasktmp_when_zellij_close_kills_teardown() {
   # A zellij close-tab terminates every process in the tab, including a
   # teardown running inside it. Stub the zellij adapter's kill to SIGKILL the
-  # teardown shell itself, proving the temp root is removed BEFORE the close.
+  # teardown shell itself, proving task files are not removed before the close.
   local id=td-self-zellij-z8-$$ rc=0
   local task_tmp=/tmp/fm-$id fake output="$TMP_ROOT/zellij-self.out"
   TASK_TMPS="$TASK_TMPS $task_tmp"
@@ -276,11 +276,11 @@ SH
   FM_HOME="$fake" bash "$fake/bin/fm-teardown.sh" "$id" >"$output" 2>&1 || rc=$?
   [ "$rc" -ne 0 ] \
     || fail "stubbed zellij close did not terminate teardown; the fixture no longer simulates a self-pane close"
-  [ ! -e "$task_tmp" ] \
-    || fail "teardown leaked tasktmp when its zellij close terminated the running shell: $(cat "$output" 2>/dev/null)"
+  [ -f "$task_tmp/gotmp/build-artifact" ] \
+    || fail "teardown removed tasktmp before its zellij close completed: $(cat "$output" 2>/dev/null)"
   [ -f "$fake/state/$id.meta" ] \
     || fail "fixture teardown removed task metadata despite dying at the close"
-  pass "fm-teardown removes tasktmp before a zellij close that terminates its own shell"
+  pass "fm-teardown preserves tasktmp when a zellij close terminates the running shell"
 }
 
 test_teardown_refusal_preserves_tasktmp() {
@@ -322,7 +322,7 @@ test_teardown_refuses_corrupt_tasktmp() {
 
 test_teardown_removes_tasktmp_dir
 test_teardown_removes_tasktmp_when_closing_own_tmux_pane
-test_teardown_removes_tasktmp_before_zellij_self_close
+test_teardown_preserves_tasktmp_when_zellij_close_kills_teardown
 test_teardown_refusal_preserves_tasktmp
 test_teardown_refuses_corrupt_tasktmp
 test_teardown_skips_gracefully_without_tasktmp

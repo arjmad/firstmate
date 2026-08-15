@@ -1020,7 +1020,7 @@ test_kill_adds_sibling_when_last_in_window() {
   pass "fm_backend_cmux_kill: adds a throwaway sibling then closes the target when it is the last workspace in its window"
 }
 
-test_kill_is_best_effort_when_close_workspace_fails() {
+test_kill_propagates_close_workspace_failure() {
   local dir fb
   dir="$TMP_ROOT/kill-workspace-fail"; mkdir -p "$dir/responses"
   # 1: list-windows (not last), 2: workspace list --window, 3: close-workspace fails
@@ -1030,12 +1030,12 @@ test_kill_is_best_effort_when_close_workspace_fails() {
   fb=$(make_cmux_fakebin "$dir")
   PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111"' "$ROOT"
-  expect_code 0 $? "kill must stay best-effort (never fail) even when close-workspace fails"
+  expect_code 1 $? "kill must propagate a close-workspace failure"
   assert_contains "$(cat "$dir/log")" $'\x1f''close-workspace'$'\x1f''--workspace'$'\x1f''aaaaaaaa-0000-0000-0000-000000000000' \
     "kill should still attempt close-workspace"
   assert_not_contains "$(cat "$dir/log")" $'\x1f''close-surface' \
     "kill should not call close-surface"
-  pass "fm_backend_cmux_kill: never fails even when close-workspace fails"
+  pass "fm_backend_cmux_kill: propagates close-workspace failures"
 }
 
 test_kill_recovers_stale_target_by_label() {
@@ -1160,7 +1160,7 @@ test_window_of_workspace_finds_window_and_count
 test_window_of_workspace_empty_when_not_found
 test_kill_closes_workspace_directly_when_not_last
 test_kill_adds_sibling_when_last_in_window
-test_kill_is_best_effort_when_close_workspace_fails
+test_kill_propagates_close_workspace_failure
 test_kill_recovers_stale_target_by_label
 test_list_live_filters_by_title_prefix
 test_secondmate_spawn_refuses_cmux_backend

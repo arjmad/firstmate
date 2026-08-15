@@ -119,11 +119,12 @@ fm_backend_tmux_send_literal() {  # <target> <text>
   tmux send-keys -t "$1" -l "$2"
 }
 
-# fm_backend_tmux_kill: remove one explicitly named task window, best-effort.
+# fm_backend_tmux_kill: remove one explicitly named task window.
 # Empty, omitted, and malformed targets return nonzero before invoking tmux so
 # tmux can never interpret an empty target as the caller's current window.
+# A close failure stays nonzero so teardown cannot delete task files afterward.
 fm_backend_tmux_kill() {  # <target>
-  local target=${1:-} session window
+  local target=${1:-} session window windows
   case "$target" in
     *:*)
       session=${target%%:*}
@@ -134,7 +135,12 @@ fm_backend_tmux_kill() {  # <target>
   case "$session:$window" in
     :*|*:|*:*:*) return 1 ;;
   esac
-  tmux kill-window -t "=$session:=$window" 2>/dev/null || true
+  # An endpoint that disappeared before cleanup reached it is already closed.
+  # tmux display-message returns success with empty output for some missing
+  # targets, so use the session's window inventory for this distinction.
+  windows=$(tmux list-windows -t "=$session" -F '#{window_name}' 2>/dev/null) || return 0
+  printf '%s\n' "$windows" | grep -qxF "$window" || return 0
+  tmux kill-window -t "=$session:=$window" 2>/dev/null
 }
 
 # fm_backend_tmux_current_command: <target>'s live foreground process name -

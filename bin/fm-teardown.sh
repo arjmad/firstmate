@@ -45,6 +45,9 @@
 # Projected closes share the presentation-order lock, refuse to close the
 # captain's active tab, and restore the exact response-derived pre-close tab
 # if Herdr's last-pane cleanup focuses an unrelated neighboring workspace.
+# Every task endpoint close completes before teardown removes the worktree,
+# state files, or temp roots. A close failure stops loudly and preserves those
+# task files for a safe retry instead of leaving a half-deleted task.
 # Before returning an ordinary task worktree, teardown also removes every
 # helper-owned Herdr lab session named for that exact task. The shell EXIT trap
 # in a Herdr-lab brief remains best-effort; this durable task cleanup survives
@@ -2094,7 +2097,7 @@ FMEOF
 
 teardown_herdr_require_prerequisites() {  # <task-id>
   local task_id=$1 prerequisite
-  if ! fm_backend_source herdr; then
+  if [ ! -r "$SCRIPT_DIR/backends/herdr.sh" ] || ! fm_backend_source herdr; then
     echo "error: herdr teardown prerequisites are unavailable for $task_id; nothing was changed - restore the adapter and rerun teardown" >&2
     return 1
   fi
@@ -2454,6 +2457,33 @@ fi
 # pruned code root. Best effort - a sweep failure never blocks this teardown.
 "$SCRIPT_DIR/fm-remote-job-reap-orphans.sh" >&2 || true
 
+# When teardown is running inside the tmux endpoint it must close, transfer the
+# complete operation to a nohup-protected continuation first. The close would
+# otherwise terminate this shell before post-close file cleanup could run.
+# The continuation repeats every safety check under freshly acquired locks and
+# skips this handoff exactly once.
+if [ "$BACKEND" = tmux ] \
+  && [ "${FM_TEARDOWN_OWN_ENDPOINT_CONTINUATION:-0}" != 1 ] \
+  && [ -n "${TMUX_PANE:-}" ]; then
+  TEARDOWN_TARGET_PANE=$(tmux display-message -p -t "$T" '#{pane_id}' 2>/dev/null || true)
+  if [ -n "$TEARDOWN_TARGET_PANE" ] && [ "$TEARDOWN_TARGET_PANE" = "$TMUX_PANE" ]; then
+    fm_lock_release "$META_LOCK"
+    META_LOCK_HELD=0
+    fm_lock_release "$CONTROL_LOCK"
+    CONTROL_LOCK_HELD=0
+    TEARDOWN_CONTINUE_ARGS=("$ID")
+    [ -z "$FORCE" ] || TEARDOWN_CONTINUE_ARGS+=("$FORCE")
+    nohup env FM_TEARDOWN_OWN_ENDPOINT_CONTINUATION=1 \
+      "$SCRIPT_DIR/fm-teardown.sh" "${TEARDOWN_CONTINUE_ARGS[@]}" &
+    TEARDOWN_CONTINUE_PID=$!
+    if wait "$TEARDOWN_CONTINUE_PID"; then
+      exit 0
+    else
+      exit $?
+    fi
+  fi
+fi
+
 # Remove every helper-owned Herdr lab session named for this exact task, matched
 # by the deterministic task token so a truncated label cannot reach a sibling
 # task's lab. A Herdr-lab brief installs an EXIT trap for the same cleanup, but
@@ -2490,50 +2520,10 @@ if [ "$BACKEND" = herdr ]; then
   TEARDOWN_HERDR_PANE=$FM_BACKEND_HERDR_PANE
 fi
 
-# Best-effort: drop the local task branch so the shared repo does not accumulate refs.
-if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
-  if [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
-    require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" || exit 1
-    ORCA_PATH_MATCH_VERIFIED=1
-  fi
-  if [ -d "$WT" ]; then
-    branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
-    if [ "$branch" != "HEAD" ]; then
-      if git -C "$WT" checkout --detach -q 2>/dev/null; then
-        git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
-      fi
-    fi
-    rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
-      "$WT/.opencode/plugins/fm-busy-state.js" \
-      "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
-  fi
-  if [ -n "$T_ORCA" ]; then
-    remove_task_tmp
-    fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
-  fi
-  fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
-elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
-  branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
-  if [ "$branch" != "HEAD" ]; then
-    if git -C "$WT" checkout --detach -q 2>/dev/null; then
-      git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
-    fi
-  fi
-  # Remove our hook file so a reused pool worktree cannot fire signals for a dead task.
-  rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
-    "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
-  # Kills remaining processes in the worktree (including the agent), resets, returns
-  # to pool. treehouse resolves the pool from the working directory, so run it from
-  # the project. teardown_treehouse_return tolerates transient and stale git locks
-  # left by a killed crew process; see the script header for retry and stale-lock proof.
-  post_lock_cleanup_check=
-  if [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
-    post_lock_cleanup_check=validate_worktree_teardown_safety
-  fi
-  teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check" || {
-    echo "error: treehouse return failed for worktree $WT; teardown aborted" >&2
-    exit 1
-  }
+if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ] \
+  && [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
+  require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" || exit 1
+  ORCA_PATH_MATCH_VERIFIED=1
 fi
 
 HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
@@ -2558,7 +2548,7 @@ if [ "$BACKEND" = herdr ] \
 fi
 
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
-  # The presentation lock was acquired before the worktree return above; a
+  # The presentation lock was acquired before any task file is removed; a
   # contended lock already refused this teardown while everything was intact.
   if teardown_herdr_session_lock_held "$HERDR_PRESENTATION_SESSION"; then
     # stderr is deliberately NOT discarded here. This is the highest-frequency
@@ -2566,10 +2556,6 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
     # warning - unverifiable workspace.move support, a refused focus-unsafe
     # close, an unconfirmed repositioned-workspace removal, or a failed exact
     # restore.
-    # Swallowing them left a wrong active workspace with no operator-visible
-    # signal at all. The close stays non-fatal exactly as before: the presence
-    # gate below is what decides whether any durable record may be removed.
-    remove_task_tmp
     fm_backend_herdr_projection_close_pane_focus_preserving \
       "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" || true
   else
@@ -2577,17 +2563,15 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   fi
 elif [ "$BACKEND" = herdr ]; then
   if teardown_herdr_session_lock_held "$TEARDOWN_HERDR_SESSION"; then
-    remove_task_tmp
     fm_backend_herdr_kill_serialized "$TEARDOWN_HERDR_SESSION" "$TEARDOWN_HERDR_PANE" 2>/dev/null || true
   else
     echo "warning: herdr session presentation lock path is unavailable; skipping the pane close rather than closing unlocked" >&2
   fi
-elif [ "$BACKEND" != orca ]; then
-  # The kill below may be tearing down the pane, tab, or workspace that is
-  # running this command, so perform the authorized temp-root cleanup before
-  # the close can terminate this shell.
-  remove_task_tmp
-  fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
+elif [ "$BACKEND" != orca ] || [ -n "$T_ORCA" ]; then
+  if ! fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID"; then
+    echo "error: backend close failed for task $ID; preserving its worktree, state files, and temp roots" >&2
+    exit 1
+  fi
 fi
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   if [ "$(fm_backend_herdr_pane_agent_state "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE")" = dead ]; then
@@ -2616,6 +2600,48 @@ if [ "$BACKEND" = herdr ]; then
     exit 1
   fi
 fi
+# No task file is removed until every endpoint close above has succeeded or,
+# for Herdr, the backend-specific confirmation has proved the pane gone.
+remove_task_tmp
+
+# Best-effort: drop the local task branch so the shared repo does not accumulate refs.
+if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
+  if [ -d "$WT" ]; then
+    branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+    if [ "$branch" != "HEAD" ]; then
+      if git -C "$WT" checkout --detach -q 2>/dev/null; then
+        git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
+      fi
+    fi
+    rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
+      "$WT/.opencode/plugins/fm-busy-state.js" \
+      "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
+  fi
+  fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
+elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
+  branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+  if [ "$branch" != "HEAD" ]; then
+    if git -C "$WT" checkout --detach -q 2>/dev/null; then
+      git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
+    fi
+  fi
+  # Remove our hook file so a reused pool worktree cannot fire signals for a dead task.
+  rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
+    "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
+  # Kills remaining processes in the worktree (including the agent), resets, returns
+  # to pool. treehouse resolves the pool from the working directory, so run it from
+  # the project. teardown_treehouse_return tolerates transient and stale git locks
+  # left by a killed crew process; see the script header for retry and stale-lock proof.
+  post_lock_cleanup_check=
+  if [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
+    post_lock_cleanup_check=validate_worktree_teardown_safety
+  fi
+  teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check" || {
+    echo "error: treehouse return failed for worktree $WT; teardown aborted" >&2
+    exit 1
+  }
+fi
+
 if [ "$KIND" = secondmate ]; then
   [ -n "$HOME_PATH" ] || HOME_PATH=$WT
   remove_firstmate_home "$HOME_PATH" "secondmate home" "$ID" || exit $?
@@ -2624,11 +2650,6 @@ fi
 remove_grok_turnend_auth "$STATE" "$ID" || exit 1
 remove_kimi_turnend_auth "$STATE" "$ID" || exit 1
 fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
-# Remove the per-task temp root (/tmp/fm-<id>/, incl. its gotmp/) recorded by spawn.
-# Every endpoint close above that could terminate this shell already did this
-# immediately before closing; this idempotent call covers the paths that
-# closed nothing.
-remove_task_tmp
 # prime-agent's socket root is a separate short random path, because Unix socket
 # length limits make the task-id-derived path above unusable for that runtime.
 # Only the exact minted shape is removable; anything else is a corrupt record and
