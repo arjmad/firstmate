@@ -911,6 +911,12 @@ make_teardown_fakebin() {  # <dir> -> echoes fakebin dir; logs tmux+treehouse ca
 #!/usr/bin/env bash
 set -u
 { printf 'tmux'; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "${FM_TMUX_LOG:?}"
+# The current kill adapter consults the session's window inventory and only
+# issues kill-window for a window that is still present; report the task's
+# window as live (FM_TMUX_WINDOWS) so the close path is actually exercised.
+if [ "${1:-}" = list-windows ] && [ -n "${FM_TMUX_WINDOWS:-}" ]; then
+  printf '%s\n' "$FM_TMUX_WINDOWS"
+fi
 exit 0
 SH
   cat > "$fb/treehouse" <<'SH'
@@ -934,7 +940,7 @@ run_teardown_case() {
   : > "$log"
   env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$fmroot" \
     FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
-    FM_TMUX_LOG="$log" \
+    FM_TMUX_LOG="$log" FM_TMUX_WINDOWS="fm-$id" \
     "$script" "$id"
 }
 

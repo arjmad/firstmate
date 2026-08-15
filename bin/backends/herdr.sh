@@ -112,9 +112,10 @@ FM_BACKEND_HERDR_MIN_EVENTS_PROTOCOL=16
 # pane a crewmate runs in need it. Every other pane operation - capture, send,
 # status, kill - must keep working against an old-but-live client or daemon.
 # Refusing them fleet-wide would be actively unsafe: fm_backend_herdr_kill is
-# `target_ready || return 0` under the best-effort tmux-kill-window contract, so
-# a blanket refusal would make kill report success without closing the pane and
-# teardown would record a clean cleanup over a still-running worker. Draining
+# `target_ready || return 0` (an unreachable target reads as already-closed
+# success), so a blanket refusal would make kill report success without
+# closing the pane, and teardown's confirmed-gone presence gate would then
+# refuse cleanup of that still-running worker indefinitely. Draining
 # the fleet is the operator's own remedy for a stale herdr, so it must not be
 # what the check blocks.
 FM_BACKEND_HERDR_MIN_ENV_PROTOCOL=17
@@ -2959,8 +2960,9 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
   done
 }
 
-# fm_backend_herdr_kill: remove the task's pane, best-effort (mirrors
-# tmux-kill-window's `|| true` contract). Verified: closing a tab's only pane
+# fm_backend_herdr_kill: remove the task's pane, best-effort at the call site
+# (teardown gates durable-record removal on the confirmed-gone presence check,
+# not on this exit code). Verified: closing a tab's only pane
 # closes the tab too, so a separate tab close is unnecessary.
 # When the close would empty a non-focused workspace, Herdr 0.7.5's explicit
 # close moves focus to that workspace's neighbor with no restore anywhere in

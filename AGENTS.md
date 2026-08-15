@@ -97,6 +97,7 @@ state/               runtime records and signals; gitignored
   prime-agent/<id>/  per-task Prime Agent session store, whose sessions path and short socket root are recorded in the task meta; owned by fm-prime-agent.sh, removed by teardown
   <id>.meta          task metadata; each producer script's header owns its exact fields and mutation contract, with docs/configuration.md routing operator-facing backend and trace-context details
   <id>.herdr-presentation  quarantinable attempt and restart-binding journal for Herdr's optional visual projection; never task or endpoint authority; see docs/herdr-backend.md "Presentation spaces"
+  <id>.teardown-continuation.log  output of the detached teardown continuation used when teardown must close its own endpoint; owned by fm-teardown.sh, removed on success, kept for the operator on failure
   <id>.check.sh      authenticated slow poll; the watcher dispatches validated PR data and the byte-identified Relay shim through trusted repository scripts, runs registered custom checks from hash-validated private snapshots, and rejects every other state check without execution
   <id>.check-trust   private content binding created by fm-check-register.sh for an intentional custom check
   <id>.pr-poll       private validated data sidecar for the byte-static PR merge poll

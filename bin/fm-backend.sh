@@ -738,9 +738,10 @@ fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sl
   esac
 }
 
-# fm_backend_kill: remove the task's session endpoint (best-effort; a
-# nonexistent/already-gone target is not an error - callers already swallow
-# failures here exactly as the inline `tmux kill-window ... || true` did).
+# fm_backend_kill: remove the task's session endpoint.
+# A nonexistent/already-gone target is not an error, but a close command that
+# reaches a live endpoint and fails returns nonzero so teardown can preserve
+# the task's files.
 fm_backend_kill() {  # <backend> <target>
   local backend=$1
   shift

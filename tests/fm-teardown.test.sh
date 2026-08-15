@@ -2321,6 +2321,52 @@ test_leaked_worktree_process_is_reaped() {
   pass "a leaked descendant process rooted under the task's worktree is reaped by teardown, not left surviving"
 }
 
+test_failed_backend_close_preserves_all_task_files() {
+  local case_dir rc task_tmp
+  case_dir=$(make_case failed-backend-close-preserves-task)
+  write_meta "$case_dir" no-mistakes ship
+  task_tmp=/tmp/fm-task-x1
+  rm -rf -- "$task_tmp"
+  mkdir -p "$task_tmp"
+  printf '%s\n' "tasktmp=$task_tmp" >> "$case_dir/state/task-x1.meta"
+  printf '%s\n' preserved > "$task_tmp/marker"
+  printf '%s\n' preserved > "$case_dir/state/task-x1.status"
+  printf '%s\n' preserved > "$case_dir/wt/.fm-grok-turnend"
+  land_shippable_commit "$case_dir"
+
+  cat > "$case_dir/fakebin/treehouse" <<EOF
+#!/usr/bin/env bash
+printf 'returned\n' > "$case_dir/treehouse.log"
+EOF
+  cat > "$case_dir/fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  list-windows) printf '%s\n' 'fm-task-x1' ;;
+  kill-window)
+    printf '%s\n' 'simulated close failure' >&2
+    exit 42
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/treehouse" "$case_dir/fakebin/tmux"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "failed-backend-close: teardown should fail"
+  assert_grep "backend close failed for task task-x1; preserving its worktree, state files, and temp roots" "$case_dir/stderr" \
+    "failed-backend-close: teardown did not report the failure and preserved files"
+  assert_present "$case_dir/wt" "failed-backend-close: teardown removed the worktree"
+  assert_present "$case_dir/wt/.fm-grok-turnend" "failed-backend-close: teardown removed a worktree task file"
+  assert_present "$case_dir/state/task-x1.meta" "failed-backend-close: teardown removed task metadata"
+  assert_present "$case_dir/state/task-x1.status" "failed-backend-close: teardown removed task state"
+  assert_present "$task_tmp/marker" "failed-backend-close: teardown removed the task temp root"
+  assert_absent "$case_dir/treehouse.log" "failed-backend-close: teardown returned the worktree before the close succeeded"
+  rm -rf -- "$task_tmp"
+  pass "a failed backend close preserves the worktree, state files, and task temp root"
+}
+
 test_leaked_tasktmp_process_is_reaped() {
   local case_dir rc pid task_tmp
   case_dir=$(make_case leaked-tasktmp-reap)
@@ -2734,6 +2780,7 @@ test_not_found_status_after_abort_confirms_completion
 test_another_branchs_parked_run_is_never_touched
 test_own_autonomous_run_is_left_alone
 test_leaked_worktree_process_is_reaped
+test_failed_backend_close_preserves_all_task_files
 test_leaked_tasktmp_process_is_reaped
 test_lsof_absent_reaps_tmux_process_group
 test_lsof_error_refuses_before_removal
