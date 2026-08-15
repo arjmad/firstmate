@@ -256,12 +256,16 @@ test_teardown_removes_tasktmp_when_closing_own_tmux_pane() {
 }
 
 test_teardown_completes_tasktmp_cleanup_after_zellij_self_close() {
-  # A zellij close-tab terminates every process in the tab, including a
-  # teardown running inside it. Teardown must hand the whole operation to a
-  # detached continuation before that close, so the close can no longer strand
-  # the temp root or the task records. The stubbed kill SIGKILLs the
-  # continuation's parent - the in-pane teardown shell - to simulate the tab
-  # close, and the continuation must still finish the cleanup.
+  # A zellij close-tab terminates every process in the tab, and a real close
+  # can escalate to SIGKILL against the pane's whole process group. Teardown
+  # must hand the whole operation to a continuation detached into its own
+  # session before that close, so even a group SIGKILL can no longer strand
+  # the temp root or the task records. The outer teardown runs in its own
+  # process group (set -m) standing in for the pane's group, and the stubbed
+  # kill SIGKILLs that entire group - the in-pane teardown shell and every
+  # in-group descendant. The detached continuation must survive and finish
+  # the cleanup; if it were still in the pane's group it would die here and
+  # this test would fail.
   local id=td-self-zellij-z8-$$ deadline
   local task_tmp=/tmp/fm-$id fake output="$TMP_ROOT/zellij-self.out"
   TASK_TMPS="$TASK_TMPS $task_tmp"
@@ -273,11 +277,20 @@ zellij_session=fakezs
 zellij_tab_id=1
 zellij_pane_id=2")
   cat > "$fake/bin/backends/zellij.sh" <<'SH'
-fm_backend_zellij_kill() { kill -9 "$PPID" 2>/dev/null; return 0; }
+fm_backend_zellij_kill() {
+  local pane_pgid
+  pane_pgid=$(ps -o pgid= -p "$PPID" | tr -d '[:space:]')
+  [ -n "$pane_pgid" ] || return 1
+  kill -9 -- "-$pane_pgid" 2>/dev/null
+  return 0
+}
 SH
 
-  ( ZELLIJ_SESSION_NAME=fakezs ZELLIJ_PANE_ID=2 FM_HOME="$fake" \
-    bash "$fake/bin/fm-teardown.sh" "$id" >"$output" 2>&1 || true ) 2>/dev/null
+  ( set -m
+    ZELLIJ_SESSION_NAME=fakezs ZELLIJ_PANE_ID=2 FM_HOME="$fake" \
+      bash "$fake/bin/fm-teardown.sh" "$id" >"$output" 2>&1 &
+    wait "$!" || true
+  ) 2>/dev/null || true
   deadline=$((SECONDS + 30))
   while { [ -e "$task_tmp" ] || [ -f "$fake/state/$id.meta" ]; } \
     && [ "$SECONDS" -lt "$deadline" ]; do

@@ -2458,12 +2458,19 @@ fi
 "$SCRIPT_DIR/fm-remote-job-reap-orphans.sh" >&2 || true
 
 # When teardown is running inside the tmux or zellij endpoint it must close,
-# transfer the complete operation to a nohup-protected continuation first. The
-# close would otherwise terminate this shell before post-close file cleanup
-# could run. The continuation repeats every safety check under freshly
-# acquired locks, logs to a per-task state file (removed with the other task
-# records on success, kept for the operator on failure) so no nohup.out can
-# land in the current directory, and skips this handoff exactly once.
+# transfer the complete operation to a detached continuation first. The close
+# would otherwise terminate this shell before post-close file cleanup could
+# run. The continuation runs in its own session and process group
+# (POSIX::setsid before exec; macOS ships no setsid binary), because a real
+# endpoint close can SIGKILL the pane's whole process tree/group and SIGKILL
+# is uncatchable - nohup alone would leave the continuation in the doomed
+# group. The perl child becomes the continuation via exec, so the wait below
+# still relays its exit code when it fails before the close; a missing perl
+# fails the launch loudly with every task file preserved. The continuation
+# repeats every safety check under freshly acquired locks, logs to a per-task
+# state file (removed with the other task records on success, kept for the
+# operator on failure) so no nohup.out can land in the current directory, and
+# skips this handoff exactly once.
 TEARDOWN_SELF_ENDPOINT=0
 if [ "${FM_TEARDOWN_OWN_ENDPOINT_CONTINUATION:-0}" != 1 ]; then
   case "$BACKEND" in
@@ -2492,8 +2499,12 @@ if [ "$TEARDOWN_SELF_ENDPOINT" = 1 ]; then
   [ -z "$FORCE" ] || TEARDOWN_CONTINUE_ARGS+=("$FORCE")
   TEARDOWN_CONTINUE_LOG="$STATE/$ID.teardown-continuation.log"
   echo "teardown for $ID continues in a detached process; its output goes to $TEARDOWN_CONTINUE_LOG" >&2
-  nohup env FM_TEARDOWN_OWN_ENDPOINT_CONTINUATION=1 \
-    "$SCRIPT_DIR/fm-teardown.sh" "${TEARDOWN_CONTINUE_ARGS[@]}" \
+  FM_TEARDOWN_OWN_ENDPOINT_CONTINUATION=1 perl -MPOSIX -e '
+    my $sid = POSIX::setsid();
+    die "setsid failed: $!\n" if !defined($sid) || $sid == -1;
+    exec { $ARGV[0] } @ARGV;
+    die "exec failed: $!\n";
+  ' "$SCRIPT_DIR/fm-teardown.sh" "${TEARDOWN_CONTINUE_ARGS[@]}" \
     >"$TEARDOWN_CONTINUE_LOG" 2>&1 </dev/null &
   TEARDOWN_CONTINUE_PID=$!
   if wait "$TEARDOWN_CONTINUE_PID"; then
