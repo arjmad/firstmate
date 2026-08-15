@@ -255,11 +255,14 @@ test_teardown_removes_tasktmp_when_closing_own_tmux_pane() {
   pass "fm-teardown removes tasktmp before closing its own tmux pane"
 }
 
-test_teardown_preserves_tasktmp_when_zellij_close_kills_teardown() {
+test_teardown_completes_tasktmp_cleanup_after_zellij_self_close() {
   # A zellij close-tab terminates every process in the tab, including a
-  # teardown running inside it. Stub the zellij adapter's kill to SIGKILL the
-  # teardown shell itself, proving task files are not removed before the close.
-  local id=td-self-zellij-z8-$$ rc=0
+  # teardown running inside it. Teardown must hand the whole operation to a
+  # detached continuation before that close, so the close can no longer strand
+  # the temp root or the task records. The stubbed kill SIGKILLs the
+  # continuation's parent - the in-pane teardown shell - to simulate the tab
+  # close, and the continuation must still finish the cleanup.
+  local id=td-self-zellij-z8-$$ deadline
   local task_tmp=/tmp/fm-$id fake output="$TMP_ROOT/zellij-self.out"
   TASK_TMPS="$TASK_TMPS $task_tmp"
   mkdir -p "$task_tmp/gotmp"
@@ -270,17 +273,50 @@ zellij_session=fakezs
 zellij_tab_id=1
 zellij_pane_id=2")
   cat > "$fake/bin/backends/zellij.sh" <<'SH'
-fm_backend_zellij_kill() { kill -9 "$$"; }
+fm_backend_zellij_kill() { kill -9 "$PPID" 2>/dev/null; return 0; }
 SH
 
-  FM_HOME="$fake" bash "$fake/bin/fm-teardown.sh" "$id" >"$output" 2>&1 || rc=$?
-  [ "$rc" -ne 0 ] \
-    || fail "stubbed zellij close did not terminate teardown; the fixture no longer simulates a self-pane close"
+  ( ZELLIJ_SESSION_NAME=fakezs ZELLIJ_PANE_ID=2 FM_HOME="$fake" \
+    bash "$fake/bin/fm-teardown.sh" "$id" >"$output" 2>&1 || true ) 2>/dev/null
+  deadline=$((SECONDS + 30))
+  while { [ -e "$task_tmp" ] || [ -f "$fake/state/$id.meta" ]; } \
+    && [ "$SECONDS" -lt "$deadline" ]; do
+    sleep 0.2
+  done
+  [ ! -e "$task_tmp" ] \
+    || fail "detached continuation did not remove tasktmp after the zellij self-close: $(cat "$output" "$fake/state/$id.teardown-continuation.log" 2>/dev/null)"
+  [ ! -f "$fake/state/$id.meta" ] \
+    || fail "detached continuation did not remove task metadata after the zellij self-close: $(cat "$output" "$fake/state/$id.teardown-continuation.log" 2>/dev/null)"
+  pass "fm-teardown hands a zellij self-close to a detached continuation that completes cleanup"
+}
+
+test_teardown_preserves_tasktmp_when_zellij_close_fails() {
+  # A zellij close that reaches a live endpoint and fails must stop teardown
+  # before any task file is removed.
+  local id=td-zellij-fail-z9-$$ rc=0
+  local task_tmp=/tmp/fm-$id fake output="$TMP_ROOT/zellij-fail.out"
+  TASK_TMPS="$TASK_TMPS $task_tmp"
+  mkdir -p "$task_tmp/gotmp"
+  printf 'leftover\n' > "$task_tmp/gotmp/build-artifact"
+  fake=$(make_fake_root "$id" "$task_tmp" "fakezs:2" "backend=zellij
+endpoint_task_id=$id
+zellij_session=fakezs
+zellij_tab_id=1
+zellij_pane_id=2")
+  cat > "$fake/bin/backends/zellij.sh" <<'SH'
+fm_backend_zellij_kill() { return 1; }
+SH
+
+  ZELLIJ_SESSION_NAME='' ZELLIJ_PANE_ID='' FM_HOME="$fake" \
+    bash "$fake/bin/fm-teardown.sh" "$id" >"$output" 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || fail "teardown succeeded despite a failed zellij close"
+  grep -q "backend close failed for task $id" "$output" \
+    || fail "teardown did not report the failed zellij close: $(cat "$output" 2>/dev/null)"
   [ -f "$task_tmp/gotmp/build-artifact" ] \
-    || fail "teardown removed tasktmp before its zellij close completed: $(cat "$output" 2>/dev/null)"
+    || fail "teardown removed tasktmp despite a failed zellij close: $(cat "$output" 2>/dev/null)"
   [ -f "$fake/state/$id.meta" ] \
-    || fail "fixture teardown removed task metadata despite dying at the close"
-  pass "fm-teardown preserves tasktmp when a zellij close terminates the running shell"
+    || fail "teardown removed task metadata despite a failed zellij close"
+  pass "fm-teardown preserves tasktmp and task state when a zellij close fails"
 }
 
 test_teardown_refusal_preserves_tasktmp() {
@@ -322,7 +358,8 @@ test_teardown_refuses_corrupt_tasktmp() {
 
 test_teardown_removes_tasktmp_dir
 test_teardown_removes_tasktmp_when_closing_own_tmux_pane
-test_teardown_preserves_tasktmp_when_zellij_close_kills_teardown
+test_teardown_completes_tasktmp_cleanup_after_zellij_self_close
+test_teardown_preserves_tasktmp_when_zellij_close_fails
 test_teardown_refusal_preserves_tasktmp
 test_teardown_refuses_corrupt_tasktmp
 test_teardown_skips_gracefully_without_tasktmp

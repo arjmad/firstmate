@@ -595,9 +595,10 @@ fm_backend_cmux_window_of_workspace() {  # <workspace_id> -> "<window_id> <count
   done < <(printf '%s' "$wins" | jq -r '.[]? | .id' 2>/dev/null)
 }
 
-# fm_backend_cmux_kill: remove the task's whole workspace, best-effort (mirrors
-# every other backend's `kill` `|| true` contract). A cmux task owns one
-# workspace, so teardown reclaims that workspace and all of its surfaces.
+# fm_backend_cmux_kill: remove the task's whole workspace. A close failure
+# stays nonzero so teardown cannot delete task files afterward. A cmux task
+# owns one workspace, so teardown reclaims that workspace and all of its
+# surfaces.
 #
 # The selected-workspace teardown bug (docs/cmux-backend.md "Closing the last
 # workspace in a window"): cmux keeps every window at >=1 workspace, so

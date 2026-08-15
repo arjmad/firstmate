@@ -2457,30 +2457,49 @@ fi
 # pruned code root. Best effort - a sweep failure never blocks this teardown.
 "$SCRIPT_DIR/fm-remote-job-reap-orphans.sh" >&2 || true
 
-# When teardown is running inside the tmux endpoint it must close, transfer the
-# complete operation to a nohup-protected continuation first. The close would
-# otherwise terminate this shell before post-close file cleanup could run.
-# The continuation repeats every safety check under freshly acquired locks and
-# skips this handoff exactly once.
-if [ "$BACKEND" = tmux ] \
-  && [ "${FM_TEARDOWN_OWN_ENDPOINT_CONTINUATION:-0}" != 1 ] \
-  && [ -n "${TMUX_PANE:-}" ]; then
-  TEARDOWN_TARGET_PANE=$(tmux display-message -p -t "$T" '#{pane_id}' 2>/dev/null || true)
-  if [ -n "$TEARDOWN_TARGET_PANE" ] && [ "$TEARDOWN_TARGET_PANE" = "$TMUX_PANE" ]; then
-    fm_lock_release "$META_LOCK"
-    META_LOCK_HELD=0
-    fm_lock_release "$CONTROL_LOCK"
-    CONTROL_LOCK_HELD=0
-    TEARDOWN_CONTINUE_ARGS=("$ID")
-    [ -z "$FORCE" ] || TEARDOWN_CONTINUE_ARGS+=("$FORCE")
-    nohup env FM_TEARDOWN_OWN_ENDPOINT_CONTINUATION=1 \
-      "$SCRIPT_DIR/fm-teardown.sh" "${TEARDOWN_CONTINUE_ARGS[@]}" &
-    TEARDOWN_CONTINUE_PID=$!
-    if wait "$TEARDOWN_CONTINUE_PID"; then
-      exit 0
-    else
-      exit $?
-    fi
+# When teardown is running inside the tmux or zellij endpoint it must close,
+# transfer the complete operation to a nohup-protected continuation first. The
+# close would otherwise terminate this shell before post-close file cleanup
+# could run. The continuation repeats every safety check under freshly
+# acquired locks, logs to a per-task state file (removed with the other task
+# records on success, kept for the operator on failure) so no nohup.out can
+# land in the current directory, and skips this handoff exactly once.
+TEARDOWN_SELF_ENDPOINT=0
+if [ "${FM_TEARDOWN_OWN_ENDPOINT_CONTINUATION:-0}" != 1 ]; then
+  case "$BACKEND" in
+    tmux)
+      if [ -n "${TMUX_PANE:-}" ]; then
+        TEARDOWN_TARGET_PANE=$(tmux display-message -p -t "$T" '#{pane_id}' 2>/dev/null || true)
+        if [ -n "$TEARDOWN_TARGET_PANE" ] && [ "$TEARDOWN_TARGET_PANE" = "$TMUX_PANE" ]; then
+          TEARDOWN_SELF_ENDPOINT=1
+        fi
+      fi
+      ;;
+    zellij)
+      if [ -n "${ZELLIJ_PANE_ID:-}" ] && [ "$ZELLIJ_PANE_ID" = "${T##*:}" ] \
+        && [ "${ZELLIJ_SESSION_NAME:-}" = "${T%%:*}" ]; then
+        TEARDOWN_SELF_ENDPOINT=1
+      fi
+      ;;
+  esac
+fi
+if [ "$TEARDOWN_SELF_ENDPOINT" = 1 ]; then
+  fm_lock_release "$META_LOCK"
+  META_LOCK_HELD=0
+  fm_lock_release "$CONTROL_LOCK"
+  CONTROL_LOCK_HELD=0
+  TEARDOWN_CONTINUE_ARGS=("$ID")
+  [ -z "$FORCE" ] || TEARDOWN_CONTINUE_ARGS+=("$FORCE")
+  TEARDOWN_CONTINUE_LOG="$STATE/$ID.teardown-continuation.log"
+  echo "teardown for $ID continues in a detached process; its output goes to $TEARDOWN_CONTINUE_LOG" >&2
+  nohup env FM_TEARDOWN_OWN_ENDPOINT_CONTINUATION=1 \
+    "$SCRIPT_DIR/fm-teardown.sh" "${TEARDOWN_CONTINUE_ARGS[@]}" \
+    >"$TEARDOWN_CONTINUE_LOG" 2>&1 </dev/null &
+  TEARDOWN_CONTINUE_PID=$!
+  if wait "$TEARDOWN_CONTINUE_PID"; then
+    exit 0
+  else
+    exit $?
   fi
 fi
 
@@ -2671,7 +2690,8 @@ rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" \
   "$STATE/$ID.muse-session-current" \
   "$STATE/.$ID.open-decisions-cursor" \
   "$STATE/$ID.control-relaunch" "$STATE/$ID.control-relaunch.meta-prior" \
-  "$STATE/$ID.control-relaunch.brief-prior" "$STATE/$ID.control-relaunch.note"
+  "$STATE/$ID.control-relaunch.brief-prior" "$STATE/$ID.control-relaunch.note" \
+  "$STATE/$ID.teardown-continuation.log"
 rm -rf "$STATE/prime-agent/$ID"
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0

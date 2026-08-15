@@ -344,6 +344,24 @@ test_kill_propagates_close_failure() {
   pass "fm_backend_orca_kill: propagates terminal close failures"
 }
 
+test_kill_rejects_error_json_close() {
+  orca_case kill-error-json
+  printf '{"ok":false,"error":{"code":"internal_error","message":"close failed"}}\n' > "$RESP/1.out"
+  PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_kill term-123' "$ROOT" 2>/dev/null
+  expect_code 1 $? "kill should reject an Orca error-JSON close even when the CLI exits 0"
+  pass "fm_backend_orca_kill: rejects ok:false close JSON despite exit 0"
+}
+
+test_kill_treats_not_found_close_as_already_gone() {
+  orca_case kill-not-found
+  printf '{"ok":false,"error":{"code":"terminal_not_found","message":"no terminal with handle term-123"}}\n' > "$RESP/1.out"
+  PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_kill term-123' "$ROOT"
+  expect_code 0 $? "kill should treat a structured not-found close error as already gone"
+  pass "fm_backend_orca_kill: treats a structured not-found close error as already-gone success"
+}
+
 test_remove_worktree_refuses_empty_id() {
   local out status
   orca_case remove-empty
@@ -1316,6 +1334,8 @@ test_send_key_enter_and_interrupt
 test_send_key_refuses_unknown_key
 test_send_key_refuses_escape_until_supported
 test_kill_propagates_close_failure
+test_kill_rejects_error_json_close
+test_kill_treats_not_found_close_as_already_gone
 test_remove_worktree_refuses_empty_id
 test_remove_worktree_rejects_orca_error_json
 test_worktree_path_resolves_id

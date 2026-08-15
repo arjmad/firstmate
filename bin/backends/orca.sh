@@ -284,7 +284,35 @@ fm_backend_orca_send_text_submit() {  # <terminal-id> <text> <retries> <enter-sl
     "$terminal" "$retries" "$sleep_s"
 }
 
+# fm_backend_orca_json_error_not_found: succeed only for ok:false JSON whose
+# error code/message says the target no longer exists.
+fm_backend_orca_json_error_not_found() {
+  node -e '
+const fs = require("fs");
+let data;
+try {
+  data = JSON.parse(fs.readFileSync(0, "utf8"));
+} catch (err) {
+  process.exit(1);
+}
+if (!data || data.ok !== false) process.exit(1);
+const err = data.error || {};
+const text = [err.code, err.message].filter(Boolean).join(" ");
+process.exit(/not[ _-]?found|no such|unknown terminal|does not exist|already closed/i.test(text) ? 0 : 1);
+'
+}
+
+# fm_backend_orca_kill: close the task's terminal. A structured not-found
+# error means the terminal is already gone and stays success; any other close
+# failure - Orca ok:false error JSON with exit 0 included - stays nonzero so
+# teardown cannot delete task files afterward.
 fm_backend_orca_kill() {  # <terminal-id>
   fm_backend_orca_tool_check || return 1
-  orca terminal close --terminal "$1" --json >/dev/null 2>&1
+  local out rc=0
+  out=$(orca terminal close --terminal "$1" --json 2>/dev/null) || rc=$?
+  if printf '%s' "$out" | fm_backend_orca_json_error_not_found 2>/dev/null; then
+    return 0
+  fi
+  [ "$rc" -eq 0 ] || return 1
+  printf '%s' "$out" | fm_backend_orca_json_ok || return 1
 }
