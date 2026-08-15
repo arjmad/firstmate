@@ -31,6 +31,17 @@ case "${1:-}" in
     exit 0
     ;;
   list-windows)
+    # The kill adapter consults the session's window inventory (-F
+    # '#{window_name}') and only issues kill-window for a window still listed;
+    # report the fixture's live task windows (FM_FAKE_TMUX_LIVE_WINDOWS,
+    # newline-separated names) so teardown's close path is actually exercised.
+    case "$*" in
+      *'-F #{window_name}'*)
+        if [ -n "${FM_FAKE_TMUX_LIVE_WINDOWS:-}" ]; then
+          printf '%s\n' "$FM_FAKE_TMUX_LIVE_WINDOWS"
+        fi
+        ;;
+    esac
     if [ -n "${FM_FAKE_TMUX_WINDOW:-}" ]; then
       printf '%s\n' "$FM_FAKE_TMUX_WINDOW"
     fi
