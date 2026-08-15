@@ -281,6 +281,7 @@ fm_backend_zellij_kill() {
   local pane_pgid
   pane_pgid=$(ps -o pgid= -p "$PPID" | tr -d '[:space:]')
   [ -n "$pane_pgid" ] || return 1
+  [ "$pane_pgid" -gt 1 ] 2>/dev/null || return 1
   kill -9 -- "-$pane_pgid" 2>/dev/null
   return 0
 }
