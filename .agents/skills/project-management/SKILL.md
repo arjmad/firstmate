@@ -82,6 +82,32 @@ Initialization configures the local gate and does not vendor a no-mistakes skill
 Do not create a commit merely because initialization ran.
 If doctor reports an environment, authentication, or daemon problem, resolve that blocker before dispatching work and never restart the shared daemon from a project operation.
 
+## Declare no CI
+
+A repository whose pull requests register zero checks must say so, or every `no-mistakes` run reaches its PR and then waits out the whole configured CI timeout on checks that can never arrive.
+The declaration is a top-level `no_ci: true` in `.no-mistakes.yaml` at the repository root, and no-mistakes honors it only from the trusted default-branch copy, so a feature branch can neither set nor clear it.
+Once it is on the default branch a zero-check PR head reads as all checks passed, and the run reaches `checks-passed` instead of stalling.
+It never waives a check that does register, so a repository that regains CI is judged on real check states again and the line should be removed then.
+Merge authority is unchanged: it rests on the review pipeline plus the captain, never on a green check.
+
+It only has an effect where the pipeline runs, so declare it on `no-mistakes` and `no-mistakes-prod-only` projects.
+Firstmate never writes the file itself: land it through that project's own selected delivery path, one repository at a time, adding exactly this and changing nothing else.
+
+```yaml
+# <one line naming why this repository has no CI>
+no_ci: true
+```
+
+List the projects that still need it, reading each clone's default branch rather than its working tree:
+
+```sh
+for p in projects/*/; do
+  d=$(git -C "$p" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null) || d=origin/main
+  git -C "$p" grep -q '^no_ci: true$' "$d" -- .no-mistakes.yaml 2>/dev/null \
+    && echo "declared $(basename "$p")" || echo "MISSING  $(basename "$p")"
+done
+```
+
 ## Remove
 
 Project removal is destructive.

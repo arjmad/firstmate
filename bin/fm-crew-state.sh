@@ -37,11 +37,15 @@
 #      diverged from it, invalidates attribution.
 #      The run-step is AUTHORITATIVE: running/fixing -> working, ci -> working,
 #      awaiting_approval/fix_review -> parked (with gate findings), terminal
-#      passed/checks-passed -> done, failed/cancelled -> failed. EXCEPT: while
-#      the active step is ci, `axi status` alone cannot tell "still waiting on
-#      checks" from "checks green, waiting on merge" (see nm_ci_checks_state) -
-#      a ci-step log-tail check overrides working -> done once checks read
-#      green, so a green PR is never silently read as still-validating.
+#      passed/checks-passed -> done, failed/cancelled -> failed. TWO carve-outs,
+#      both because a terminal label alone can misread a delivered change:
+#      (a) while the active step is ci, `axi status` alone cannot tell "still
+#      waiting on checks" from "checks green, waiting on merge" (see
+#      nm_ci_checks_state) - a ci-step log-tail check overrides working -> done
+#      once checks read green, so a green PR is never silently read as
+#      still-validating; (b) a `cancelled` run whose recorded step outcomes show
+#      every step through pr completed and only ci unresolved reads done, not
+#      failed (see nm_only_ci_unresolved).
 #   3. Reconcile the status log: if its last line says needs-decision/blocked but
 #      the run-step shows the run moved on, the log is deterministically stale and
 #      is flagged superseded. A genuinely parked run plus a needs-decision log
@@ -353,6 +357,74 @@ nm_ci_checks_state() {
     *) printf 'unknown' ;;
   esac
 }
+
+# `<step>,<status>` for every row of the run's steps[N]{step,status,...} table,
+# read only from inside that table so a findings[] row - also comma-separated -
+# can never be mistaken for a pipeline step. The real table's exact shape and
+# indentation are pinned by the run_cancelled_* fixtures in
+# tests/fm-crew-state.test.sh, which carry the dated CLI evidence.
+nm_step_rows() {
+  printf '%s\n' "$RUN_OUT" | awk '
+    /^[[:space:]]*steps\[[0-9]+\]\{/ { in_table = 1; next }
+    in_table {
+      row = $0
+      sub(/^[[:space:]]+/, "", row)
+      sub(/[[:space:]]+$/, "", row)
+      if (row !~ /^"?[A-Za-z_][A-Za-z0-9_-]*"?,/) { in_table = 0; next }
+      if (split(row, f, ",") < 2) { in_table = 0; next }
+      for (i = 1; i <= 2; i++) {
+        gsub(/^[[:space:]]*"?/, "", f[i])
+        gsub(/"?[[:space:]]*$/, "", f[i])
+      }
+      print f[1] "," f[2]
+    }
+  '
+}
+
+# 0 when the recorded step outcomes show a run that completed every real
+# pipeline step through PR creation and stopped only at the ci step.
+#
+# A no-CI repository whose trusted `.no-mistakes.yaml` predates the `no_ci: true`
+# declaration leaves its CI monitor waiting on checks that can never register,
+# and the only way off that wait is an abort - which stamps the whole run
+# `cancelled` even though review, test, document, lint, push, and pr all
+# completed and the PR is open and good. Reading that terminal label as failure
+# reported healthy work as broken (fleet-wide, 2026-08-28). The step outcomes
+# are the honest record, so judge by them: a `cancelled` run is a real failure
+# only when a step OTHER than ci failed to complete.
+#
+# Deliberately narrow. It requires an actual steps table, an actual pr row that
+# completed, and an actual ci row that did not, so a run cancelled at review, at
+# a gate, or before its PR exists still reads as failed.
+nm_only_ci_unresolved() {
+  local rows step status saw_pr=0 saw_ci=0
+  rows=$(nm_step_rows)
+  [ -n "$rows" ] || return 1
+  while IFS=, read -r step status; do
+    [ -n "$step" ] || continue
+    if [ "$step" = ci ]; then
+      saw_ci=1
+      [ "$status" = completed ] && return 1
+      continue
+    fi
+    [ "$status" = completed ] || return 1
+    [ "$step" = pr ] && saw_pr=1
+  done <<< "$rows"
+  [ "$saw_pr" = 1 ] && [ "$saw_ci" = 1 ]
+}
+
+# Classify a terminal `cancelled` run into RUN_STATE/RUN_DETAIL. Shared by the
+# outcome and top-level-status paths so both read the same step evidence.
+nm_apply_cancelled() {
+  if nm_only_ci_unresolved; then
+    RUN_STATE="done"
+    RUN_DETAIL="pipeline passed through PR; only the CI monitor was cancelled: PR ready for review"
+  else
+    RUN_STATE=failed
+    RUN_DETAIL="run cancelled"
+  fi
+}
+
 # Coarse fallback for cross-branch attribution. `no-mistakes axi status` (bare)
 # reports the active-or-most-recent run for the CURRENT branch when one
 # exists, else falls back to some other branch's run purely as informational
@@ -499,7 +571,7 @@ if [ "$HAVE_RUN" = 1 ]; then
         passed)        RUN_STATE="done"; RUN_DETAIL="run passed: PR merged/closed" ;;
         checks-passed) RUN_STATE="done"; RUN_DETAIL="checks green: PR ready for review" ;;
         failed)        RUN_STATE=failed; RUN_DETAIL="run failed" ;;
-        cancelled)     RUN_STATE=failed; RUN_DETAIL="run cancelled" ;;
+        cancelled)     nm_apply_cancelled ;;
         *)             RUN_STATE=unknown; RUN_DETAIL="outcome: $outcome" ;;
       esac
     elif [ -n "$awaiting" ] || [ "$status" = awaiting_approval ] || [ "$status" = fix_review ] || [ -n "$gate_status" ] || [ "$has_gate" = 1 ]; then
@@ -523,7 +595,7 @@ if [ "$HAVE_RUN" = 1 ]; then
         running|fixing) RUN_STATE=working; RUN_DETAIL="validating ($status)" ;;
         completed)      RUN_STATE="done"; RUN_DETAIL="run completed" ;;
         failed)         RUN_STATE=failed;  RUN_DETAIL="run failed" ;;
-        cancelled)      RUN_STATE=failed;  RUN_DETAIL="run cancelled" ;;
+        cancelled)      nm_apply_cancelled ;;
         "")             RUN_STATE=working; RUN_DETAIL="run active" ;;
         *)              RUN_STATE=working; RUN_DETAIL="run active ($status)" ;;
       esac

@@ -9,6 +9,17 @@
 # HEAD-continuity guard; see docs/architecture.md "No-mistakes gate authority boundary."
 disable_project_settings: true
 
+# Positive declaration that this repository intentionally has no CI, so the CI
+# monitor treats a zero-check PR head as all checks passed instead of waiting
+# out its ci_timeout on checks that can never register. GitHub Actions is
+# disabled account-wide for this owner, so no workflow in .github/workflows/
+# can report a check. Trusted-only, exactly like disable_project_settings
+# above: a pushed branch can neither set nor clear it. It never waives a check
+# that does register, so restoring Actions makes real check states authoritative
+# again; remove this line once that happens. Merge authority is unchanged - it
+# rests on the review pipeline plus the captain, never on a green check.
+no_ci: true
+
 # Trusted documentation placement policy for the Document step.
 # The audience inventory and coding guideline own the detail; keep this as a
 # pointer so gate instructions cannot become a second prose policy.

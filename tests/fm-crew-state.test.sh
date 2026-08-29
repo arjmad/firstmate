@@ -291,6 +291,75 @@ outcome: failed
 EOF
 }
 
+# The exact shape `no-mistakes axi status` reports for a run whose CI monitor was
+# aborted because the repository has no CI to wait for (verified 2026-08-29
+# against the real v1.57.0 CLI on the cade PR #13 and skills PR #36 runs): every
+# real step completed, only ci unresolved, and the whole run stamped cancelled.
+run_cancelled_only_ci() {  # <branch> [ci-status]
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: cancelled
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: "https://github.com/o/r/pull/13"
+  findings: none
+  steps[9]{step,status,findings,duration_ms}:
+    intent,completed,0,0
+    rebase,completed,0,888
+    review,completed,0,523847
+    test,completed,0,356860
+    document,completed,0,94903
+    lint,completed,0,17
+    push,completed,0,1894
+    pr,completed,0,17934
+    ci,${2:-failed},0,1951278
+outcome: cancelled
+error: "cancelled: aborted by user"
+EOF
+}
+
+# Same terminal label, but the run never delivered: it was cancelled at review,
+# so no PR exists and nothing downstream ran.
+run_cancelled_before_pr() {  # <branch>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: cancelled
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: ""
+  findings: none
+  steps[9]{step,status,findings,duration_ms}:
+    intent,completed,0,0
+    rebase,completed,0,888
+    review,cancelled,0,120000
+    test,pending,0,0
+    document,pending,0,0
+    lint,pending,0,0
+    push,pending,0,0
+    pr,pending,0,0
+    ci,pending,0,0
+outcome: cancelled
+error: "cancelled: aborted by user"
+EOF
+}
+
+# A cancelled run reported with no steps[] table at all: nothing to judge by, so
+# the terminal label stands.
+run_cancelled_no_steps() {  # <branch>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: cancelled
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: ""
+  findings: none
+outcome: cancelled
+EOF
+}
+
 run_ci_monitoring() {  # <branch>
   cat <<EOF
 run:
@@ -682,6 +751,71 @@ test_terminal_failed() {
   assert_contains "$out" "state: failed" "failed run -> failed"
   assert_contains "$out" "source: run-step" "failed -> run-step source"
   pass "terminal failed run is authoritative"
+}
+
+# A `cancelled` label is not evidence of failure on a no-CI repository: the abort
+# that produced it is the only way off a CI monitor waiting for checks that can
+# never register, and every real step already completed. Regression for the
+# fleet-wide 2026-08-28 mis-report (see nm_only_ci_unresolved).
+test_cancelled_only_ci_unresolved_reads_done() {
+  reset_fakes
+  local d; d=$(new_case cancelled-only-ci)
+  make_repo_on_branch "$d/wt" fm/feat-noci
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-noci.meta" "window=fm:fm-feat-noci" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_cancelled_only_ci fm/feat-noci)"
+  local out; out=$(run_crew_state "$d" feat-noci)
+  assert_contains "$out" "state: done" "cancelled run with only ci unresolved -> done"
+  assert_contains "$out" "source: run-step" "cancelled-but-delivered -> run-step source"
+  assert_contains "$out" "only the CI monitor was cancelled" "detail names the CI monitor as the only cancelled step"
+  assert_not_contains "$out" "state: failed" "delivered work must not read as failed"
+  assert_not_contains "$out" "checks green" "must not claim checks went green"
+  pass "cancelled run whose steps all passed through PR reads done"
+}
+
+# Same carve-out when the run reports only a top-level cancelled status with no
+# outcome line.
+test_cancelled_status_without_outcome_reads_done() {
+  reset_fakes
+  local d; d=$(new_case cancelled-status-only)
+  make_repo_on_branch "$d/wt" fm/feat-nocistatus
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-nocistatus.meta" "window=fm:fm-feat-nocistatus" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS=$(run_cancelled_only_ci fm/feat-nocistatus cancelled | grep -v '^outcome:')
+  local out; out=$(run_crew_state "$d" feat-nocistatus)
+  assert_contains "$out" "state: done" "cancelled status with only ci unresolved -> done"
+  assert_contains "$out" "only the CI monitor was cancelled" "status-only path shares the same detail"
+  pass "cancelled status without an outcome line uses the same step-outcome rule"
+}
+
+# The carve-out is narrow: a run cancelled before it delivered a PR is a real
+# failure and must keep reading as one.
+test_cancelled_before_pr_stays_failed() {
+  reset_fakes
+  local d; d=$(new_case cancelled-before-pr)
+  make_repo_on_branch "$d/wt" fm/feat-earlycancel
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-earlycancel.meta" "window=fm:fm-feat-earlycancel" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_cancelled_before_pr fm/feat-earlycancel)"
+  local out; out=$(run_crew_state "$d" feat-earlycancel)
+  assert_contains "$out" "state: failed" "run cancelled before its PR -> failed"
+  assert_contains "$out" "run cancelled" "early cancel keeps the plain cancelled detail"
+  assert_not_contains "$out" "state: done" "an undelivered cancelled run must not read as done"
+  pass "cancelled run that never reached its PR stays failed"
+}
+
+# With no steps table there is nothing to judge by, so the terminal label stands.
+test_cancelled_without_steps_stays_failed() {
+  reset_fakes
+  local d; d=$(new_case cancelled-no-steps)
+  make_repo_on_branch "$d/wt" fm/feat-nosteps
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-nosteps.meta" "window=fm:fm-feat-nosteps" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_cancelled_no_steps fm/feat-nosteps)"
+  local out; out=$(run_crew_state "$d" feat-nosteps)
+  assert_contains "$out" "state: failed" "cancelled run with no step evidence -> failed"
+  assert_not_contains "$out" "state: done" "absent step evidence must not be read as success"
+  pass "cancelled run with no steps table stays failed"
 }
 
 # (e) cross-branch attribution: `axi status` returns ANOTHER branch's run (the
@@ -1428,6 +1562,10 @@ test_top_level_fixing_ci_running_after_green_stays_working
 test_top_level_fixing_done_log_stays_working
 test_terminal_passed
 test_terminal_failed
+test_cancelled_only_ci_unresolved_reads_done
+test_cancelled_status_without_outcome_reads_done
+test_cancelled_before_pr_stays_failed
+test_cancelled_without_steps_stays_failed
 test_cross_branch_attribution_via_runs_list
 test_cross_branch_attribution_picks_most_recent_row
 test_coarse_run_does_not_probe_other_branch_ci_log_for_ready_status
