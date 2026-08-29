@@ -285,6 +285,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/google-workspace-access.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/herdr-backend.md",
       "audience": "operator-current"
     },
