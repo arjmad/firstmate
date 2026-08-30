@@ -1,0 +1,57 @@
+FM_TEST_BEGIN 2026-08-30T20:27:00Z tests/fm-public-followup.test.sh family=unclassified expected_gate_skip=none
+ok - outcome text is collapsed to one line, bounded by codepoint, and never corrupts characters
+ok - restart end-to-end: typed result reconciles from disk and delivers one reply to the original thread
+ok - duplicate terminal results, restart replay, and repeated delivery are all no-ops
+ok - wrong source, wrong work id, stale generation, malformed, unsupported deliverable, and forged identity are all refused
+ok - a relay transport failure is held as retryable with no false completion, and the retry posts once
+ok - a dry-run records no public delivery and leaves the commitment retryable
+ok - a late success receipt closes the exact attempt with no second post, and a mismatched attempt is refused
+ok - typed terminal cleanup clears the legacy link without posting
+ok - a delivery interrupted between post and receipt refuses to repost
+ok - a child home reports typed results but can never become the outward-post owner
+ok - typed delivery refuses to post when its cleanup registration is missing
+ok - marked secondmate teardown resolves its parent and fails closed when unavailable
+ok - local seeding publishes durable parent state before its identity marker
+ok - a lost launch-time parent binding is recovered from the durable local record
+ok - a durable local parent record does not bypass a genuinely missing parent-side registration
+ok - unknown durable parent fields remain forward-compatible
+ok - conflicting live and durable parent bindings fail closed
+ok - unsafe durable parent records fail closed before cleanup
+ok - a NUL-bearing durable parent record fails closed before cleanup
+ok - relay-disabled unmarked teardown runs no public-followup work
+ok - a marked child proceeds without tasks-axi when its parent relay is disabled
+ok - secondmate parent resolution matches the durable registry id literally
+ok - traversal-shaped registrations are rejected before path construction or posting
+ok - pending keeps registrations when tasks-axi returns malformed JSON
+ok - the retained private request context keeps the original thread deliverable after inbox cleanup
+ok - cleanup refuses while a public reply is owed and proceeds once it has landed
+ok - a relay-disabled home runs no tasks-axi call, prints nothing, and gains no artifact
+ok - a relay-enabled home with no commitments makes no backlog call and stays silent
+ok - a relay-exhausted follow-up binding is escalated rather than retried into the thread
+ok - the relay poll stays inert without a token, silent with no commitments, and surfaces a new result once
+ok - startup surfaces unresolved public commitments only in a relay home that owes one
+ok - typed public-followup records carry only public-safe summaries and deliverables
+ok - dropped-baton regression: delivery retains the loop and pending prints open-loop
+ok - CONTROL: the identical teardown REFUSES the moment a commitment is registered
+ok - rechain posts the shipped follow-on into the same thread
+ok - rechain resumes the same obligation after an interrupted bind
+ok - concurrent rechains cannot fork one delivered source
+ok - failed rechain retirement keeps the source claimed by one resumable destination
+ok - registration replay preserves delivered and retired loop states
+ok - redelivery does not report a retired loop as open
+ok - retire closes delivered loops after secondmate home removal
+ok - retire fails closed for an unbound existing secondmate
+ok - retire fails closed when a secondmate ID is reassigned
+ok - rechain refuses an unrelated existing destination
+ok - pending skips a registration retired during settlement
+ok - retire --reason closes the loop and drops the open-loop line
+ok - retention creates no false teardown refusal and pending no longer prunes
+ok - expiry escalation is pinned by FMX_NOW_OVERRIDE
+ok - brief fails explicitly when typed deliverable keys are unavailable
+ok - pre-change registrations are open loops and un-rechainable, never a crash
+ok - teardown reports an unreconciled legacy Relay link
+ok - secondmate promotion matches teardown parent resolution
+FM_TEST_END 2026-08-30T20:28:09Z tests/fm-public-followup.test.sh exit=0 duration_ms=69032 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=69079
+FM_TEST_SUMMARY_FAMILY family=unclassified count=1 duration_ms=69032 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-public-followup.test.sh duration_ms=69032

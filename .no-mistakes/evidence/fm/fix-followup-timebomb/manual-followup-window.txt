@@ -1,0 +1,13 @@
+today (UTC):                 2026-08-30T20:26:51Z
+retained thread window ends: 2026-09-29T20:26:51Z   (now + 30d)
+obligation expires:          2026-10-29T20:26:51Z   (now + 60d, deliberately distinct)
+
+--- target-clock-relative: followup_expires_at=2026-09-29T20:26:51Z
+unresolved pf-evidence state=pending-work platform=discord request=req-evidence summary=reproduce a Pi recovery notification loop
+  (exit 0)
+
+--- base-hardcoded-2026-08-28: followup_expires_at=2026-08-28T01:12:00Z
+unresolved pf-evidence state=pending-work platform=discord request=req-evidence summary=reproduce a Pi recovery notification loop
+  DEADLINE: thread can no longer be reached (window closed 2026-08-28T01:12:00Z); this needs a captain decision
+  (exit 0)
+
