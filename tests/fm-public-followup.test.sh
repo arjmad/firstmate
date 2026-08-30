@@ -31,6 +31,8 @@ iso_utc_from_epoch() {  # <epoch>
 
 FOLLOWUP_EXPIRES_EPOCH=$(($(date -u +%s) + 30 * 24 * 60 * 60))
 FOLLOWUP_EXPIRES_AT=$(iso_utc_from_epoch "$FOLLOWUP_EXPIRES_EPOCH")
+FOLLOWUP_OBLIGATION_EXPIRES_EPOCH=$((FOLLOWUP_EXPIRES_EPOCH + 30 * 24 * 60 * 60))
+FOLLOWUP_OBLIGATION_EXPIRES_AT=$(iso_utc_from_epoch "$FOLLOWUP_OBLIGATION_EXPIRES_EPOCH")
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; exit 0; }
@@ -136,7 +138,7 @@ seed_commitment() {
 
   tasks_in "$home" public-followup add "$obligation" \
     --request-context-file "$home/request.json" --purpose promised-final \
-    --expected-final-file "$home/expected.json" --expires-at "$FOLLOWUP_EXPIRES_AT" >/dev/null \
+    --expected-final-file "$home/expected.json" --expires-at "$FOLLOWUP_OBLIGATION_EXPIRES_AT" >/dev/null \
     || fail "could not create the public commitment"
   tasks_in "$home" public-followup bind-work "$obligation" \
     --relation-file "$home/relation.json" >/dev/null \
@@ -177,7 +179,7 @@ seed_repro_commitment() {   # <home> <obligation> <request> <work-home> <work-id
       role:"fulfills", required:true, generation:1}' > "$home/relation.json"
   tasks_in "$home" public-followup add "$obligation" --request-context-file "$home/request.json" \
     --purpose promised-final --expected-final-file "$home/expected.json" \
-    --expires-at "$FOLLOWUP_EXPIRES_AT" >/dev/null || fail "add failed"
+    --expires-at "$FOLLOWUP_OBLIGATION_EXPIRES_AT" >/dev/null || fail "add failed"
   tasks_in "$home" public-followup bind-work "$obligation" --relation-file "$home/relation.json" >/dev/null \
     || fail "bind-work failed"
   FM_HOME="$home" bash -c \
@@ -1571,11 +1573,11 @@ test_rechain_claims_delivered_source_once() {
   FAKE_CURL_LOG="$log" run_pf "$home" consume >/dev/null || fail "consume failed"
   FAKE_CURL_LOG="$log" run_pf "$home" deliver public-final-claim-a >/dev/null || fail "deliver failed"
 
-  FMX_NOW_OVERRIDE=1787539200 run_pf "$home" rechain public-final-claim-b \
+  FMX_NOW_OVERRIDE=$((FOLLOWUP_EXPIRES_EPOCH - 3600)) run_pf "$home" rechain public-final-claim-b \
     --from public-final-claim-a --work-home main --work-id ship-claim-b \
     --expected pr-merged > "$home/rechain-b.out" 2>&1 &
   pid_b=$!
-  FMX_NOW_OVERRIDE=1787539200 run_pf "$home" rechain public-final-claim-c \
+  FMX_NOW_OVERRIDE=$((FOLLOWUP_EXPIRES_EPOCH - 3600)) run_pf "$home" rechain public-final-claim-c \
     --from public-final-claim-a --work-home main --work-id ship-claim-c \
     --expected pr-merged > "$home/rechain-c.out" 2>&1 &
   pid_c=$!
@@ -1840,7 +1842,7 @@ test_rechain_refuses_unclaimed_existing_destination() {
   tasks_in "$home" public-followup add public-final-existing-b \
     --request-context-file "$home/request.json" --purpose promised-final \
     --expected-final-file "$home/collision-expected.json" \
-    --expires-at "$FOLLOWUP_EXPIRES_AT" >/dev/null || fail "could not seed destination collision"
+    --expires-at "$FOLLOWUP_OBLIGATION_EXPIRES_AT" >/dev/null || fail "could not seed destination collision"
 
   expect_failure "a first rechain must not adopt an unrelated existing obligation" \
     run_pf "$home" rechain public-final-existing-b --from public-final-existing-a \
