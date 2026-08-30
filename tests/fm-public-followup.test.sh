@@ -29,6 +29,12 @@ iso_utc_from_epoch() {  # <epoch>
     || date -u -d "@$1" '+%Y-%m-%dT%H:%M:%SZ'
 }
 
+# Fixture expiry windows, computed from the running clock so no absolute date in
+# this suite can rot into the past. The two windows stay deliberately distinct:
+# the retained thread window (followup/reservation expiry) is what escalation and
+# rechain refusal read, while the obligation's own --expires-at sits farther out,
+# so a regression that consulted the obligation instead of the thread would change
+# the observed outcome rather than silently agree.
 FOLLOWUP_EXPIRES_EPOCH=$(($(date -u +%s) + 30 * 24 * 60 * 60))
 FOLLOWUP_EXPIRES_AT=$(iso_utc_from_epoch "$FOLLOWUP_EXPIRES_EPOCH")
 FOLLOWUP_OBLIGATION_EXPIRES_EPOCH=$((FOLLOWUP_EXPIRES_EPOCH + 30 * 24 * 60 * 60))
