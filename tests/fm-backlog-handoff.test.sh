@@ -21,6 +21,18 @@ export FM_FAKE_TMUX_LOG="$TMP_ROOT/default-tmux.log"
 export FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/default-fake/pane.txt"
 export FM_SEND_SETTLE=0 FM_SEND_SLEEP=0 FM_SEND_RETRIES=1
 
+iso_utc_from_epoch() {  # <epoch>
+  date -u -r "$1" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
+    || date -u -d "@$1" '+%Y-%m-%dT%H:%M:%SZ'
+}
+
+# Seeded public-commitment expiries are computed from the running clock, so no
+# absolute date here can rot into a past expiry that makes the fixture unusable.
+# The obligation's own expiry stays farther out than the thread window it is
+# registered against, matching the real intake ordering.
+PUBLIC_FOLLOWUP_EXPIRES_AT=$(iso_utc_from_epoch $(($(date -u +%s) + 30 * 24 * 60 * 60)))
+PUBLIC_OBLIGATION_EXPIRES_AT=$(iso_utc_from_epoch $(($(date -u +%s) + 60 * 24 * 60 * 60)))
+
 setup_homes() {
   local home=$1 subhome=$2 id=${3:-design}
   mkdir -p "$home/data" "$home/state"
@@ -763,12 +775,13 @@ seed_public_commitment() {
   local home=$1 obligation=$2 work_home=$3 work_id=$4
   printf 'FMX_PAIRING_TOKEN=test-token\n' > "$home/.env"
   cp "$ROOT/.tasks.toml" "$home/.tasks.toml"
-  jq -n '{request_id:"req-handoff", platform:"x",
-          context_binding:{version:"ctx1", value:"ctx1_req-handoff"},
-          public_safe_summary:"looking into the sign-in redirect",
-          received_at:"2026-07-30T10:00:00Z",
-          followup_expires_at:"2026-08-06T10:00:00Z",
-          reservation_expires_at:"2026-08-06T10:00:00Z"}' > "$home/request.json"
+  jq -n --arg expires "$PUBLIC_FOLLOWUP_EXPIRES_AT" \
+    '{request_id:"req-handoff", platform:"x",
+      context_binding:{version:"ctx1", value:"ctx1_req-handoff"},
+      public_safe_summary:"looking into the sign-in redirect",
+      received_at:"2026-07-30T10:00:00Z",
+      followup_expires_at:$expires,
+      reservation_expires_at:$expires}' > "$home/request.json"
   jq -n '{type:"pr-merged", project:"alpha",
           required_deliverables:["pr_url"], completion_policy:"all-required"}' \
     > "$home/expected.json"
@@ -777,7 +790,8 @@ seed_public_commitment() {
       role:"fulfills", required:true, generation:1}' > "$home/relation.json"
   (cd "$home" && tasks-axi public-followup add "$obligation" \
     --request-context-file "$home/request.json" --purpose promised-final \
-    --expected-final-file "$home/expected.json" --expires-at 2026-10-01T00:00:00Z) >/dev/null \
+    --expected-final-file "$home/expected.json" \
+    --expires-at "$PUBLIC_OBLIGATION_EXPIRES_AT") >/dev/null \
     || fail "could not create the public commitment"
   (cd "$home" && tasks-axi public-followup bind-work "$obligation" \
     --relation-file "$home/relation.json") >/dev/null \
