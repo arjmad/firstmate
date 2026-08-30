@@ -127,6 +127,9 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-public-followup-lib.sh` | Shared Relay gate, open-loop registry state, expiry classification, locking, and private transport paths |
 | `fm-public-followup.sh`  | Reconcile and deliver typed public commitments, then rechain or explicitly retire their retained loops |
 | `fm-public-followup-emit.sh` | Report one typed terminal work result into the home that owes the public reply    |
+| `fm-google-workspace.sh` | Operate Arjun's per-account Google Workspace instances: paths, consent, verification, runtime wiring, revocation ([google-workspace-access.md](google-workspace-access.md)) |
+| `fm-google-workspace-auth.py` | Drive one Google consent ceremony or verifying read, reporting the account that actually signed in |
+| `fm-google-workspace-wizard.sh` | Walk the captain through the attended Google Cloud, consent, and per-account sign-in steps |
 | `fm-inbox.sh`            | The captain's out-of-band capture surface: queue a note, dictate one, read status, ask a side question |
 | `fm-voice-relay.py`      | Hold the spoken conversation on this host, answer from the records, and hand real work to `fm-inbox.sh` ([voice-relay.md](voice-relay.md)) |
 | `fm-voice-client.py`     | The laptop end of the spoken interface: capture, playback, and turn timing over SSH; audio devices unverified |
