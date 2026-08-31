@@ -72,6 +72,17 @@ case "$command_name" in
     ;;
 esac
 if [ "$slow" -eq 1 ]; then
+  # Hold each slow probe until the background clone refresh is in flight, so the
+  # recorded interleaving is a fact about how bootstrap schedules the two stages
+  # rather than a race between two fixed sleeps on an arbitrarily loaded runner.
+  # The wait is bounded, and the fetch marker is written before the fetch waits
+  # on anything, so the two sides can never deadlock.
+  marker=${FM_FAKE_FETCH_MARKER:-}
+  waited=0
+  while [ -n "$marker" ] && [ ! -e "$marker" ] && [ "$waited" -lt 100 ]; do
+    sleep 0.05
+    waited=$((waited + 1))
+  done
   printf 'START %s %s %s\n' "$host" "$command_name" "$subcommand" >> "$log"
   sleep "$sleep_s"
   printf 'END %s %s %s\n' "$host" "$command_name" "$subcommand" >> "$log"
@@ -124,7 +135,7 @@ SH
 }
 
 install_slow_git() {
-  local fakebin=$1 real_git=$2 log=$3
+  local fakebin=$1 real_git=$2 log=$3 marker=$4
   cat > "$fakebin/git" <<SH
 #!/usr/bin/env bash
 set -eu
@@ -137,7 +148,26 @@ for arg in "\$@"; do
 done
 if [ "\$slow" -eq 1 ]; then
   printf 'START fleet-fetch git fetch\n' >> '$log'
-  sleep "\${FM_FAKE_GIT_FETCH_SLEEP:-0.4}"
+  : > '$marker'
+  # Stay in flight until a remote probe is actually running, and record that
+  # observation ourselves. The fetch only waits for a probe to START, never for
+  # it to END, so this side of the rendezvous cannot block the probes that
+  # release it. Only a fetch that saw a probe in flight writes OVERLAP, so a
+  # serialized bootstrap - or a fetch killed mid-flight - leaves no evidence
+  # instead of leaving an open span a reader could mistake for concurrency.
+  observed=0
+  waited=0
+  while [ "\$waited" -lt 120 ]; do
+    starts=\$(grep -c '^START host-' '$log' 2>/dev/null || true)
+    ends=\$(grep -c '^END host-' '$log' 2>/dev/null || true)
+    if [ "\${starts:-0}" -gt "\${ends:-0}" ]; then
+      observed=1
+      break
+    fi
+    sleep 0.05
+    waited=\$((waited + 1))
+  done
+  [ "\$observed" -eq 0 ] || printf 'OVERLAP fleet-fetch git fetch\n' >> '$log'
   printf 'END fleet-fetch git fetch\n' >> '$log'
 fi
 exec '$real_git' "\$@"
@@ -159,7 +189,7 @@ starts_before_first_end() { # <log> <pattern>
 
 test_remote_probe_scheduling_keeps_per_mate_lines() { # <parallel|fallback>
   local mode=$1
-  local dir home primary fakebin log out n doctor_overlap liveness_starts fetch_starts
+  local dir home primary fakebin log fetch_marker out n doctor_overlap liveness_starts fetch_starts fetch_overlaps
   local alpha_root alpha_home bravo_root bravo_home charlie_root charlie_home
   dir="$TMP_ROOT/parallel-lines-$mode"
   home="$dir/home"
@@ -174,8 +204,10 @@ test_remote_probe_scheduling_keeps_per_mate_lines() { # <parallel|fallback>
   fm_fake_exit0 "$fakebin" gh treehouse tmux node
   log="$dir/probe.log"
   : > "$log"
+  fetch_marker="$dir/fetch-inflight"
+  rm -f "$fetch_marker"
   install_fake_ssh "$fakebin"
-  install_slow_git "$fakebin" "$REAL_GIT" "$log"
+  install_slow_git "$fakebin" "$REAL_GIT" "$log" "$fetch_marker"
   if [ "$mode" = fallback ]; then
     cat > "$fakebin/mktemp" <<SH
 #!/usr/bin/env bash
@@ -215,11 +247,11 @@ SH
     FM_BOOTSTRAP_NETWORK=only \
     FM_SSH_BIN="$fakebin/fake-ssh" \
     FM_FAKE_SSH_LOG="$log" \
+    FM_FAKE_FETCH_MARKER="$fetch_marker" \
     FM_FAKE_SSH_SLEEP=0.4 \
     FM_FAKE_SSH_UNREACHABLE_HOST=host-bravo \
     FM_FAKE_SSH_FAIL_HOST=host-alpha \
     FM_FAKE_SSH_DIRTY_HOST=host-charlie \
-    FM_FAKE_GIT_FETCH_SLEEP=0.4 \
     FM_INHERITABLE_CONFIG='' \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 \
     "$ROOT/bin/fm-bootstrap.sh" 2>&1
@@ -286,13 +318,9 @@ EOF
   fetch_starts=$(grep -c '^START fleet-fetch ' "$log" || true)
   [ "$fetch_starts" -ge 1 ] \
     || fail "clone refresh did not start a fetch to overlap with secondmate probes"$'\n'"$(cat "$log")"
-  awk '
-    /^START fleet-fetch / { fleet = 1; if (remote) overlap = 1; next }
-    /^END fleet-fetch / { fleet = 0; next }
-    /^START host-/ { remote++; if (fleet) overlap = 1; next }
-    /^END host-/ { remote-- }
-    END { exit !overlap }
-  ' "$log" || fail "clone refresh did not overlap the secondmate sweeps"$'\n'"$(cat "$log")"
+  fetch_overlaps=$(grep -c '^OVERLAP fleet-fetch ' "$log" || true)
+  [ "$fetch_overlaps" -ge 1 ] \
+    || fail "clone refresh did not overlap the secondmate sweeps"$'\n'"$(cat "$log")"
 
   awk '
     /END .* fm-remote-secondmate-control.sh state$/ { last_liveness = NR }
