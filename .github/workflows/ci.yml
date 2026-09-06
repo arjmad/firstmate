@@ -15,15 +15,18 @@ jobs:
     runs-on: ubuntu-latest
     # Full extended analysis over the whole canonical set takes about ten
     # minutes of two-worker wall on upstream's 4-vCPU public runner and was
-    # killed at that point on this fork's 2-vCPU private-repository runner, so
-    # bin/fm-lint.sh --shard splits the set into deterministic shards that
-    # together cover it exactly once. The cap is a loud hang tripwire: a shard
+    # killed at that point on this fork's 2-vCPU, 7 GB private-repository
+    # runner: a local full-mode lint measures 7.76 GB peak RSS in one worker and
+    # 12.45 GB across both (bin/fm-lint.sh --telemetry), so the runner runs out
+    # of memory. bin/fm-lint.sh --shard splits the set into deterministic shards
+    # that together cover it exactly once; four shards keep each job's two
+    # workers well inside that memory. The cap is a loud hang tripwire: a shard
     # that reaches it fails on its own timeout instead of a silent runner kill.
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v6
       - name: Install pinned ShellCheck

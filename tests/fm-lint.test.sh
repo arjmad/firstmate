@@ -178,6 +178,49 @@ test_list_files_reports_the_shell_inventory() {
   pass "fm-lint.sh --list-files reports the complete shell inventory"
 }
 
+test_shard_partitions_the_ci_inventory() {
+  local expected one two union rc out
+  expected=$(CI=true "$LINT" --list-files | LC_ALL=C sort)
+  one=$(CI=true "$LINT" --list-files --shard 1of2) || fail "shard 1of2 listing failed"
+  two=$(CI=true "$LINT" --list-files --shard 2of2) || fail "shard 2of2 listing failed"
+  [ -n "$one" ] && [ -n "$two" ] || fail "a lint shard came out empty"
+  union=$(printf '%s\n%s\n' "$one" "$two" | LC_ALL=C sort)
+  [ "$union" = "$expected" ] \
+    || fail "the two lint shards do not partition the inventory exactly once"
+  [ "$(printf '%s\n' "$union" | uniq -d | wc -l | tr -d ' ')" -eq 0 ] \
+    || fail "a root appears in both lint shards"
+  [ "$(CI=true "$LINT" --list-files --shard 1of2)" = "$one" ] \
+    || fail "shard selection is not deterministic"
+  [ "$(CI=true "$LINT" --list-files --shard 1of1 | LC_ALL=C sort)" = "$expected" ] \
+    || fail "a single shard must equal the whole inventory"
+  set +e
+  out=$(CI=true "$LINT" --list-files --shard 3of2 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "an out-of-range shard must be refused with exit 2, got $rc: $out"
+  set +e
+  out=$(CI=true "$LINT" --shard 1of2 bin/fm-lint.sh 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "--shard with explicit paths must be refused with exit 2, got $rc: $out"
+  pass "fm-lint.sh --shard partitions the CI inventory exactly once and refuses bad shards"
+}
+
+test_shard_run_lints_only_its_own_roots() {
+  local tmp fakebin log listed out
+  tmp=$(fm_test_tmproot fm-lint-shard-run)
+  fakebin=$(fm_fakebin "$tmp")
+  log="$tmp/shellcheck.log"
+  fm_lint_stub_shellcheck "$fakebin" "$log"
+  listed=$(CI=true "$LINT" --list-files --shard 2of2 | LC_ALL=C sort)
+  out=$(PATH="$fakebin:$PATH" CI=true GITHUB_ACTIONS=true FM_LINT_JOBS=1 "$LINT" --shard 2of2 2>&1) \
+    || fail "shard run failed"$'\n'"$out"
+  [ "$(LC_ALL=C sort "$log")" = "$listed" ] \
+    || fail "the shard run did not lint exactly the roots it lists"
+  assert_contains "$out" "shard 2 of 2" "the shard run did not report its shard"
+  pass "fm-lint.sh --shard lints exactly the roots it lists"
+}
+
 # fm_lint_stub_git <fakebin-dir>: install a git stub for the changed-file mode
 # tests below. Its answers are driven by env vars the caller sets before
 # invoking fm-lint.sh, so those tests can steer git state without depending on
@@ -1290,6 +1333,8 @@ SH
 
 test_help_reports_the_complete_interface
 test_list_files_reports_the_shell_inventory
+test_shard_partitions_the_ci_inventory
+test_shard_run_lints_only_its_own_roots
 test_fast_mode_disables_extended_analysis
 test_ci_defaults_to_full_analysis
 test_ci_rejects_explicit_fast_mode
