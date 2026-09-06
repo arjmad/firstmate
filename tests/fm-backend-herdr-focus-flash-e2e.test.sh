@@ -78,12 +78,14 @@ fi
 # between this explicit close and the production restore that follows it. On a
 # starved runner the restore can land between two samples, so this shim holds
 # the production flow after the close until the sampler has recorded two new
-# samples - the second one necessarily started after the close - and then
-# returns the close's own status. The hold is bounded and never blocks the
-# sampler, which only reads focus, so the two sides cannot deadlock.
-before=$(wc -l < "$FM_FLASH_HOLD_SAMPLES" 2>/dev/null | tr -d '[:space:]')
+# samples past a baseline read once the close has returned - the first may
+# have been in flight across the close, but the second started after the
+# first finished and so after the close - and then returns the close's own
+# status. The hold is bounded and never blocks the sampler, which only reads
+# focus, so the two sides cannot deadlock.
 env PATH="$HERDR_ORIGINAL_PATH" "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" "$@"
 rc=$?
+before=$(wc -l < "$FM_FLASH_HOLD_SAMPLES" 2>/dev/null | tr -d '[:space:]')
 waited=0
 while [ "$waited" -lt 400 ]; do
   now=$(wc -l < "$FM_FLASH_HOLD_SAMPLES" 2>/dev/null | tr -d '[:space:]')

@@ -197,10 +197,6 @@ while [ "$#" -gt 0 ]; do
       SHARD=$2
       shift 2
       ;;
-    --shard=*)
-      SHARD=${1#*=}
-      shift
-      ;;
     --fast)
       FAST=1
       ANALYSIS_MODE=fast
