@@ -91,11 +91,11 @@ The last complete replay against the three upstream source runs put the then-cur
 
 The single longest script, `tests/fm-watch-triage.test.sh` at 410619 ms on the fork's runner, is the floor for any shard count.
 
-Refresh the hints by downloading the per-shard timing artifacts from several green CI runs, replacing the `portable_serial_weight_hints` table in `bin/fm-test-run.sh` with the slowest measured `duration_ms` per `path`, and updating the table above:
+Refresh the hints by downloading the per-shard timing artifacts from several green CI runs of the repository whose runners execute the lane, since a private fork measures on a slower runner than the public upstream, replacing the `portable_serial_weight_hints` table in `bin/fm-test-run.sh` with the slowest measured `duration_ms` per `path`, and updating the table above:
 
 ```sh
 for run in <run-id> <run-id> <run-id>; do
-  gh run download "$run" -R kunchenguid/firstmate --pattern 'fm-test-timing-portable-serial-*' -D "/tmp/fm-serial/$run"
+  gh run download "$run" -R <owner>/firstmate --pattern 'fm-test-timing-portable-serial-*' -D "/tmp/fm-serial/$run"
 done
 jq -r '.scripts[] | [.path, .duration_ms] | @tsv' /tmp/fm-serial/*/*.json \
   | awk -F'\t' '$2 > m[$1] { m[$1] = $2 } END { for (p in m) print p, m[p] }' \
