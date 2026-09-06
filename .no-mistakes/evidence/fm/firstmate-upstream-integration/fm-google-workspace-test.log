@@ -1,0 +1,21 @@
+FM_TEST_BEGIN 2026-09-06T23:32:50Z tests/fm-google-workspace.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - only the three authorized accounts are listed
+ok - an unlisted account is refused by every account-taking subcommand
+ok - credentials directories are created private to the user, idempotently
+ok - the invocation requests send-capable scopes through permissions alone
+ok - each runtime server gets its own credentials directory
+ok - both runtimes are configured from the one invocation the tool owns
+ok - status names the account that actually signed in
+ok - re-authorizing refuses rather than clearing another account's credential
+ok - revoke without confirmation deletes nothing
+ok - revoke deletes only that account's own credentials
+ok - registering with Claude Code keeps the accounts apart
+ok - only a Desktop OAuth client is installed, and it is kept private
+ok - auth refuses before an OAuth client exists
+ok - the consent driver refuses without a server invocation
+ok - the consent driver refuses without an OAuth client
+ok - the wizard completes and reports what is left undone
+FM_TEST_END 2026-09-06T23:32:53Z tests/fm-google-workspace.test.sh exit=0 duration_ms=2584 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=2669
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=1 duration_ms=2584 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-google-workspace.test.sh duration_ms=2584

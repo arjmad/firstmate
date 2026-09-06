@@ -1,0 +1,27 @@
+$ CI=true bin/fm-lint.sh --list-files | wc -l
+360
+$ CI=true bin/fm-lint.sh --list-files --shard 1of4 | wc -l
+90
+$ CI=true bin/fm-lint.sh --list-files --shard 2of4 | wc -l
+90
+$ CI=true bin/fm-lint.sh --list-files --shard 3of4 | wc -l
+90
+$ CI=true bin/fm-lint.sh --list-files --shard 4of4 | wc -l
+90
+$ union of the four shards, sorted, compared with the whole inventory:
+IDENTICAL (each root appears in exactly one shard: dup count 0)
+$ CI=true bin/fm-lint.sh --list-files --shard 1of4 | head -5
+bin/fm-afk-launch.sh
+bin/fm-afk-return.sh
+bin/fm-bootstrap.sh
+bin/fm-branch-prompt.sh
+bin/fm-busy-event.sh
+$ CI=true bin/fm-lint.sh --list-files --shard 5of4; echo exit=$?
+fm-lint.sh: --shard requires <k>of<n> with 1 <= k <= n, got 5of4.
+exit=2
+$ CI=true bin/fm-lint.sh --shard 1of4 bin/fm-lint.sh; echo exit=$?
+fm-lint.sh: --shard applies to the context-selected file set, not explicit paths.
+exit=2
+$ CI=true bin/fm-lint.sh --list-files --shard=1of4; echo exit=$?   # "=" alias removed per review-2; now read as an explicit path and refused
+fm-lint.sh: --list-files does not accept explicit paths.
+exit=2

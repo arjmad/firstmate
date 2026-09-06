@@ -1,0 +1,42 @@
+$ bin/fm-test-run.sh --check-coverage
+FM_TEST_COVERAGE ok total=183 parallel=24 serial=146 serial_shards=6 serial_unhinted=0 herdr=13
+exit=0
+
+$ bin/fm-test-run.sh --list-lanes
+portable-parallel-1
+portable-parallel-2
+portable-serial
+portable-serial-1of6
+portable-serial-2of6
+portable-serial-3of6
+portable-serial-4of6
+portable-serial-5of6
+portable-serial-6of6
+real-herdr-gated
+
+$ bin/fm-test-run.sh --list --lane portable-serial-1of6 | wc -l
+23
+$ bin/fm-test-run.sh --list --lane portable-serial-2of6 | wc -l
+24
+$ bin/fm-test-run.sh --list --lane portable-serial-3of6 | wc -l
+24
+$ bin/fm-test-run.sh --list --lane portable-serial-4of6 | wc -l
+24
+$ bin/fm-test-run.sh --list --lane portable-serial-5of6 | wc -l
+26
+$ bin/fm-test-run.sh --list --lane portable-serial-6of6 | wc -l
+25
+
+$ bin/fm-test-run.sh --list --lane portable-serial-1of5; echo exit=$?   # old five-shard lane must be refused
+fm-test-run: lane 'portable-serial-1of5' asks for 5 portable serial shards but this runner is configured for 6 (see --list-lanes)
+exit=2
+
+$ bin/fm-test-run.sh --list --changed --base 038d0f7 | grep -c . ; grep for the asset-named script
+exit=0
+183
+3:tests/fm-bearings-board.test.sh
+36:tests/fm-bearings-board-render.test.sh
+37:tests/fm-bearings-snapshot.test.sh
+
+$ git diff --stat 038d0f7 HEAD -- tests/assets | tail -1
+ 1 file changed, 117 insertions(+)

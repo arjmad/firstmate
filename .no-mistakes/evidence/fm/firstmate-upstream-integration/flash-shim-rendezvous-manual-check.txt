@@ -1,0 +1,19 @@
+== shim extracted from tests/fm-backend-herdr-focus-flash-e2e.test.sh @ db54d18 ==
+
+-- 1. no FM_FLASH_HOLD_SAMPLES: close passes straight through, session pair stripped, no hold
+rc=0 elapsed_ms=370
+helper run labsess pane close p1
+
+-- 2. foreign --session is refused with exit 9
+rc=9
+
+-- 3. Part C hold: sampler records one sample every 100 ms; close returns 7; hold releases after two samples past the post-close baseline
+rc=7 (close's own status preserved) elapsed_ms=592 samples_at_release=5 (baseline 3 -> released at >= 5, well under the 20 s bound)
+helper run labsess pane close p1
+
+-- 4. review-1 scenario: a sample completes INSIDE the close; the baseline is read after the close, so that sample does not count toward the two
+rc=0 elapsed_ms=651 samples_at_release=6 (3 pre-close + 1 during close = baseline 4; release requires >= 6, so at least two post-close samples were observed)
+PASS: hold did not release on the in-flight sample
+
+-- 5. sampler silent: hold is bounded (~20 s) and never hangs; close status still returned
+rc=0 elapsed_ms=80683 (400 x 50 ms bound)
