@@ -71,7 +71,27 @@ set -- "${args[@]}"
 for arg in "$@"; do
   case "$arg" in --session|--session=*) exit 9 ;; esac
 done
-exec env PATH="$HERDR_ORIGINAL_PATH" "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" "$@"
+if [ -z "${FM_FLASH_HOLD_SAMPLES:-}" ] || [ "${1:-}" != pane ] || [ "${2:-}" != close ]; then
+  exec env PATH="$HERDR_ORIGINAL_PATH" "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" "$@"
+fi
+# Part C rendezvous: the wrong-focus window a defective release opens lives
+# between this explicit close and the production restore that follows it. On a
+# starved runner the restore can land between two samples, so this shim holds
+# the production flow after the close until the sampler has recorded two new
+# samples - the second one necessarily started after the close - and then
+# returns the close's own status. The hold is bounded and never blocks the
+# sampler, which only reads focus, so the two sides cannot deadlock.
+before=$(wc -l < "$FM_FLASH_HOLD_SAMPLES" 2>/dev/null | tr -d '[:space:]')
+env PATH="$HERDR_ORIGINAL_PATH" "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" "$@"
+rc=$?
+waited=0
+while [ "$waited" -lt 400 ]; do
+  now=$(wc -l < "$FM_FLASH_HOLD_SAMPLES" 2>/dev/null | tr -d '[:space:]')
+  [ "${now:-0}" -ge $(( ${before:-0} + 2 )) ] && break
+  sleep 0.05
+  waited=$((waited + 1))
+done
+exit "$rc"
 SH
 chmod +x "$FAKEBIN/herdr"
 
@@ -297,6 +317,7 @@ done
 # what proves the proof was exhausted rather than skipped.
 C_PROOF_POLLS=3
 C_OUT=$(PATH="$FAKEBIN:$HERDR_ORIGINAL_PATH" FM_FLASH_CALL_LOG="$C_CALL_LOG" \
+  FM_FLASH_HOLD_SAMPLES="$C_FOCUS_SAMPLES" \
   FM_BACKEND_HERDR_IDLE_SHELL_PROOF_POLLS="$C_PROOF_POLLS" bash -c '
   . "$1/bin/backends/herdr.sh"
   fm_backend_herdr_cli() {
