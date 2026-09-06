@@ -11,8 +11,19 @@ permissions:
 
 jobs:
   lint:
-    name: Lint
+    name: Lint ${{ matrix.shard }}of${{ strategy.job-total }}
     runs-on: ubuntu-latest
+    # Full extended analysis over the whole canonical set takes about ten
+    # minutes of two-worker wall on upstream's 4-vCPU public runner and was
+    # killed at that point on this fork's 2-vCPU private-repository runner, so
+    # bin/fm-lint.sh --shard splits the set into deterministic shards that
+    # together cover it exactly once. The cap is a loud hang tripwire: a shard
+    # that reaches it fails on its own timeout instead of a silent runner kill.
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v6
       - name: Install pinned ShellCheck
@@ -28,8 +39,9 @@ jobs:
       # Single owner of the lint definition (shell file set, config, version,
       # and GitHub workflow lint). Do not re-spell the checks here; keep CI
       # and the pre-push gate on this script so a self-broken ci.yml still
-      # fails locally before merge.
-      - run: bin/fm-lint.sh
+      # fails locally before merge. The shard count comes from the matrix so
+      # the shards can never disagree with the number of jobs that run them.
+      - run: bin/fm-lint.sh --shard "${{ matrix.shard }}of${{ strategy.job-total }}"
 
   # Deterministic proof that portable parallel shards + portable serial + Herdr
   # equal the complete tests/*.test.sh inventory with no missing or duplicates,
@@ -137,7 +149,7 @@ jobs:
       # Every shard reports so one failure never hides another shard's result.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v6
         with:
