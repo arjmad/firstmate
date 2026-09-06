@@ -1,0 +1,10 @@
+ok - exact suite coverage: --all lists every tests/*.test.sh once
+ok - family selection returns a proper subset of the suite
+ok - single-script selection lists exactly that path
+ok - changed-file selection stays conservative (never silent full suite)
+ok - runner and its documentation surfaces select their curated family, not just their contract owners
+fm-test-run: no changed-test mapping for source path: tests/assets/render-harness.mjs
+not ok - shared test asset selects the script that names it (missing: 'tests/fm-bearings-board-render.test.sh')
+--- output ---
+
+rc=1

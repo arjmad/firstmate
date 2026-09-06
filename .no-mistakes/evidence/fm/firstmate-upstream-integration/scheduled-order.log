@@ -1,0 +1,5 @@
+== --list-scheduled --lane portable-serial (longest hint first) ==
+tests/fm-public-followup.test.sh
+tests/fm-watch-triage.test.sh
+tests/fm-remote-secondmate-lifecycle-e2e.test.sh
+== runner-computed shard weights ==

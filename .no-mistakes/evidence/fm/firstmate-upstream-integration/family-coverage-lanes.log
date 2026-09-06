@@ -1,0 +1,22 @@
+== family pure-contract-unit contains both conflict-1 scripts ==
+14:tests/fm-google-workspace.test.sh
+24:tests/fm-rovo-harness.test.sh
+== --check-coverage ==
+FM_TEST_COVERAGE ok total=183 parallel=24 serial=146 serial_shards=5 serial_unhinted=6 herdr=13
+rc=0
+== --list-lanes ==
+portable-parallel-1
+portable-parallel-2
+portable-serial
+portable-serial-1of5
+portable-serial-2of5
+portable-serial-3of5
+portable-serial-4of5
+portable-serial-5of5
+real-herdr-gated
+== serial shard sizes ==
+shard 1: 29 scripts
+shard 2: 28 scripts
+shard 3: 29 scripts
+shard 4: 30 scripts
+shard 5: 30 scripts

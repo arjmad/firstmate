@@ -1,0 +1,14 @@
+== shard weights computed from HEAD hint table (+ default ? for unhinted) ==
+portable-serial-1of5 scripts=29 weight_ms=830784 unhinted=1
+portable-serial-2of5 scripts=28 weight_ms=803781 unhinted=2
+portable-serial-3of5 scripts=29 weight_ms=830779 unhinted=1
+portable-serial-4of5 scripts=30 weight_ms=830766 unhinted=1
+portable-serial-5of5 scripts=30 weight_ms=830779 unhinted=1
+== corrected with PORTABLE_SERIAL_DEFAULT_WEIGHT_MS=27000 per unhinted script ==
+portable-serial-1of5 scripts=29 weight_ms=857784 (~857.8 s)
+portable-serial-2of5 scripts=28 weight_ms=857781 (~857.8 s)
+portable-serial-3of5 scripts=29 weight_ms=857779 (~857.8 s)
+portable-serial-4of5 scripts=30 weight_ms=857766 (~857.8 s)
+portable-serial-5of5 scripts=30 weight_ms=857779 (~857.8 s)
+imbalance=18 ms
+docs/fm-test-portable-shards.md claims: 857784 857781 857779 857766 857779, imbalance 18 ms

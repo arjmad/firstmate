@@ -1,0 +1,4 @@
+ok - bootstrap network (parallel): per-mate output stays intact, fail-closed, and correctly sequenced
+ok - bootstrap network (fallback): per-mate output stays intact, fail-closed, and correctly sequenced
+# all fm-bootstrap-network-parallel tests passed
+rc=0
