@@ -1404,6 +1404,16 @@ families_for_changed_path() {
           || printf '%s\n' "__unmapped__:$path"
       fi
       ;;
+    tests/assets/*)
+      # A shared asset belongs to whichever scripts name it, selected per
+      # script because a direct reference is per-script evidence, the same
+      # rule the unmapped bin/ case applies. A removed asset has no consuming
+      # suite left to select.
+      if [ -e "$path" ]; then
+        scripts_for_test_reference "$path" \
+          || printf '%s\n' "__unmapped__:$path"
+      fi
+      ;;
     tests/*)
       printf '%s\n' "__unmapped__:$path"
       ;;

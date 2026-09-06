@@ -114,6 +114,7 @@ init_changed_fixture_repo() {
     fm-pi-watch-extension.test.sh \
     fm-afk-return.test.sh \
     fm-bearings-snapshot.test.sh \
+    fm-bearings-board-render.test.sh \
     fm-backend-cmux.test.sh \
     fm-backend-zellij.test.sh \
     fm-control-herdr-smoke.test.sh \
@@ -142,6 +143,10 @@ init_changed_fixture_repo() {
   printf '# .claude/settings.json\n# .pi/extensions/fm-primary-turnend-guard.ts\n' \
     >>"$repo/tests/fm-cd-pretool-check.test.sh"
   printf '# .pi/extensions/fm-primary-pi-watch.ts\n' >>"$repo/tests/fm-pi-watch-extension.test.sh"
+  # A shared test asset named by exactly one script of a multi-script family.
+  mkdir -p "$repo/tests/assets"
+  : >"$repo/tests/assets/render-harness.mjs"
+  printf '# tests/assets/render-harness.mjs\n' >>"$repo/tests/fm-bearings-board-render.test.sh"
   mkdir -p \
     "$repo/.agents/skills/example" \
     "$repo/.agents/skills/harness-adapters/references/common" \
@@ -295,6 +300,16 @@ test_changed_dependency_selection_and_unmapped_failure() {
     "timeout library selects quota polling coverage"
   git -C "$repo" add bin/fm-timeout-lib.sh
   git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm timeout-lib-change
+
+  printf '\n' >>"$repo/tests/assets/render-harness.mjs"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$listed" "tests/fm-bearings-board-render.test.sh" \
+    "shared test asset selects the script that names it"
+  if printf '%s\n' "$listed" | grep -Fq "tests/fm-bearings-snapshot.test.sh"; then
+    fail "shared test asset must select per script, not widen to its family: $listed"
+  fi
+  git -C "$repo" add tests/assets/render-harness.mjs
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm asset-change
 
   printf '\n' >>"$repo/src/unmapped.ts"
   set +e
