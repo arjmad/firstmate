@@ -626,6 +626,384 @@ test_create_task_refuses_duplicate_label() {
 # AMBIGUOUS/unparseable read refuses (fail-safe, never guesses toward
 # closing).
 
+# Real PTYs/processes pin the native-authority exception without installing an
+# agent or starting Herdr. Only the transport is canned; ancestry, foreground
+# group, children, shell command and process identities come from the kernel.
+test_native_authority_process_crosscheck() {
+  local dir="$TMP_ROOT/native-authority"
+  mkdir -p "$dir"
+  local real_ps
+  # Ask production which ps it would use, rather than reimplementing the
+  # choice here: the fault-injection stub below wraps that same binary, so a
+  # refusal in each negative case comes from the fault it injected and not
+  # from a host ps that cannot report state at all.
+  real_ps=$(bash -c '. "$1/bin/backends/herdr.sh"; fm_backend_herdr_ps_bin' _ "$ROOT") \
+    || fail "could not resolve a ps for the native authority fixture"
+  python3 -u - "$ROOT" "$dir" "$real_ps" <<'PY' || fail "native authority process cross-check"
+import errno, json, os, pathlib, pty, select, signal, subprocess, sys, time
+root, directory = map(pathlib.Path, sys.argv[1:3])
+real_ps = sys.argv[3]
+log = directory / "calls"
+agent = {"result": {"agent": {"pane_id": "w1:p2", "agent": "pi",
+    "agent_status": "idle", "screen_detection_skipped": True}}}
+(directory / "agent").write_text(json.dumps(agent))
+wrapper = directory / "classify"
+wrapper.write_text('''#!/usr/bin/env bash
+. "$1/bin/backends/herdr.sh"
+dir=$2
+[ ! -f "$dir/ps-mode" ] || export FM_HERDR_PS_BIN="$dir/ps"
+fm_backend_herdr_cli() {
+  printf '%s\\n' "$*" >> "$dir/calls"
+  case "$2 $3" in
+    'pane get') printf '{"result":{"pane":{"pane_id":"w1:p2"}}}' ;;
+    'agent get')
+      if [ -f "$dir/agent-changing" ]; then
+        n=$(cat "$dir/agent-count" 2>/dev/null || echo 0)
+        n=$((n + 1)); echo "$n" > "$dir/agent-count"
+        jq --argjson seq "$n" '.result.agent.state_change_seq = $seq' "$dir/agent"
+      else
+        cat "$dir/agent"
+      fi
+      [ ! -f "$dir/agent-failure" ] ;;
+    'pane process-info')
+      if [ -f "$dir/changed-after-create" ] && [ -f "$dir/created" ]; then printf '{}'; return; fi
+      if [ -f "$dir/read-failure" ]; then return 1; fi
+      if [ -f "$dir/read-once" ]; then
+        if [ -f "$dir/read-used" ]; then printf '{}'; return; fi
+        touch "$dir/read-used"
+      fi
+      cat "$dir/info" ;;
+    'tab list')
+      if [ -f "$dir/closed" ]; then
+        printf '{"result":{"tabs":[{"tab_id":"w1:t3","label":"fm-native"}]}}'
+      else
+        printf '{"result":{"tabs":[{"tab_id":"w1:t2","label":"fm-native"}]}}'
+      fi ;;
+    'pane list') printf '{"result":{"panes":[{"pane_id":"w1:p2","tab_id":"w1:t2"}]}}' ;;
+    'tab create')
+      [ -f "$dir/allow-create" ] || { echo "unexpected mutation: $*" >&2; return 1; }
+      touch "$dir/created"
+      printf '{"result":{"tab":{"tab_id":"w1:t3"},"root_pane":{"pane_id":"w1:p3"}}}' ;;
+    'tab close') touch "$dir/closed" ;;
+    *) echo "unexpected mutation: $*" >&2; return 1 ;;
+  esac
+}
+case "$3" in
+  state) fm_backend_herdr_agent_state fmtest:w1:p2 ;;
+  strict) fm_backend_herdr_pane_idle_shell_sample fmtest w1:p2 ;;
+  husk) fm_backend_herdr_tab_is_husk fmtest w1:p2 ;;
+  create) fm_backend_herdr_create_task fmtest:w1 fm-native /tmp ;;
+esac
+''')
+ps_wrapper = directory/'ps'
+ps_wrapper.write_text('''#!/usr/bin/env python3
+import pathlib, subprocess, sys
+here = pathlib.Path(__file__).parent
+mode = (here/'ps-mode').read_text()
+if mode == 'failed':
+    sys.exit(1)
+r = subprocess.run([(here/'ps-real').read_text().strip()] + sys.argv[1:], capture_output=True, text=True)
+if r.returncode:
+    sys.exit(r.returncode)
+if sys.argv[1] != '-axo':
+    print(r.stdout, end='')
+    sys.exit(0)
+if mode == 'malformed':
+    print('not a process table')
+    sys.exit(0)
+target = (here/'ps-target').read_text()
+second = (here/'ps-read').exists()
+(here/'ps-read').touch()
+for line in r.stdout.splitlines():
+    fields = line.split()
+    if fields[0] == target:
+        if mode == 'duplicate': print(line)
+        if mode == 'wrong-group': fields[2] = '0'
+        if mode == 'running': fields[4] = 'R+'
+        if mode == 'shell-command': fields.extend(['-c', 'read'])
+        if mode == 'changed-start' and second: fields[9] = '1900'
+        line = ' '.join(fields)
+    print(line)
+''')
+ps_wrapper.chmod(0o700)
+(directory/'ps-real').write_text(real_ps)
+children = []
+def timed_out(signum, frame):
+    raise TimeoutError('native-authority fixture exceeded its 45-second bound')
+signal.signal(signal.SIGALRM, timed_out)
+signal.alarm(45)
+def launch():
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execv('/bin/sh', ['sh', '-i'])
+    children.append((pid, fd))
+    return pid, fd
+
+def ps(pid, field):
+    return subprocess.check_output(['ps', '-p', str(pid), '-o', field+'='], text=True).strip()
+
+def settle(pid, fd, different=False):
+    for _ in range(100):
+        if select.select([fd], [], [], .03)[0]:
+            os.read(fd, 65536)
+        fg = int(ps(pid, 'tpgid'))
+        if fg > 1 and (fg != pid if different else fg == pid):
+            time.sleep(.06)
+            return fg
+    raise AssertionError('PTY foreground did not settle')
+
+def info(pid, fg):
+    comm = ps(fg, 'comm').split('/')[-1].lstrip('-')
+    return {"result": {"type": "pane_process_info", "process_info": {
+        "pane_id": "w1:p2", "shell_pid": pid, "foreground_process_group_id": fg,
+        "foreground_processes": [{"pid": fg, "name": comm, "argv0": comm}]}}}
+
+def check(data, expected, label, refusal=True):
+    (directory/'info').write_text(json.dumps(data))
+    log.write_text('')
+    out = subprocess.check_output(['bash', str(wrapper), str(root), str(directory), 'state'], text=True)
+    assert out == expected, (label, expected, out)
+    calls = log.read_text()
+    assert not any(x in calls for x in ['close', 'create', 'send', 'report', 'release']), calls
+    if refusal:
+        out = subprocess.run(['bash', str(wrapper), str(root), str(directory), 'create'], capture_output=True, text=True)
+        assert out.returncode != 0, (label, out)
+        assert 'unexpected mutation' not in out.stderr, (label, out.stderr)
+    print('ok - native authority: ' + label)
+
+try:
+    pid, fd = launch()
+    settle(pid, fd)
+    plain = info(pid, pid)
+    check(plain, 'dead', 'bare shell overrides stale official authority without mutation', False)
+
+    # A `ps` that cannot report process state must not silently disable
+    # recovery. This shim reproduces the state-blind adv_cmds rebuild observed
+    # on Darwin 25.6.0: every column stays real and only the state letter is
+    # stripped, dropping the field entirely when nothing else remains, exactly
+    # as that build renders a sleeping process. Both halves are asserted so
+    # neither can pass vacuously: forced through FM_HERDR_PS_BIN the shim must
+    # actually blind the proof, while merely sitting first on PATH it must not,
+    # because the resolver probes it and falls back to a state-capable ps.
+    blind = directory/'blind'
+    blind.mkdir(exist_ok=True)
+    (blind/'ps').write_text('''#!/usr/bin/env python3
+import subprocess, sys
+r = subprocess.run(['/bin/ps'] + sys.argv[1:], capture_output=True, text=True)
+sys.stderr.write(r.stderr)
+if r.returncode:
+    sys.exit(r.returncode)
+wide = sys.argv[1:2] == ['-axo']
+out = []
+for line in r.stdout.splitlines():
+    f = line.split()
+    if wide and len(f) > 4 and f[0].isdigit():
+        f[4] = f[4].lstrip('SIRTUZ')
+        f = f[:4] + ([f[4]] if f[4] else []) + f[5:]
+        line = ' '.join(f)
+    elif not wide:
+        line = line.strip().lstrip('SIRTUZ')
+    out.append(line)
+print('\\n'.join(out))
+''')
+    (blind/'ps').chmod(0o700)
+    if subprocess.run(['/bin/ps', '-p', str(os.getpid()), '-o', 'stat='],
+                      capture_output=True, text=True).stdout.strip()[:1].isupper():
+        env = dict(os.environ, FM_HERDR_PS_BIN=str(blind/'ps'))
+        out = subprocess.check_output(['bash', str(wrapper), str(root), str(directory), 'state'],
+                                      text=True, env=env)
+        assert out == 'unreadable', ('state-blind ps must not prove absence', out)
+        env = dict(os.environ, PATH=str(blind) + os.pathsep + os.environ['PATH'])
+        env.pop('FM_HERDR_PS_BIN', None)
+        out = subprocess.check_output(['bash', str(wrapper), str(root), str(directory), 'state'],
+                                      text=True, env=env)
+        assert out == 'dead', ('a state-blind ps on PATH must not disable recovery', out)
+        print('ok - native authority: a state-blind ps on PATH cannot silently disable recovery')
+    assert subprocess.run(['bash', str(wrapper), str(root), str(directory), 'husk']).returncode == 0
+    (directory/'allow-create').touch()
+    log.write_text('')
+    result = subprocess.run(['bash', str(wrapper), str(root), str(directory), 'create'], capture_output=True, text=True)
+    assert result.returncode == 0 and result.stdout.strip() == 'w1:t3 w1:p3', result
+    calls = log.read_text().splitlines()
+    created = next(i for i, call in enumerate(calls) if ' tab create ' in call)
+    closed = next(i for i, call in enumerate(calls) if ' tab close ' in call)
+    assert created < closed and sum('process-info' in call for call in calls[created:closed]) == 2, calls
+    print('ok - native authority: husk replacement creates first and revalidates before closing')
+    (directory/'closed').unlink()
+    (directory/'created').unlink()
+    (directory/'changed-after-create').touch()
+    log.write_text('')
+    result = subprocess.run(['bash', str(wrapper), str(root), str(directory), 'create'], capture_output=True, text=True)
+    assert result.returncode != 0 and ' tab close ' not in log.read_text(), result
+    print('ok - native authority: changed evidence after replacement create refuses old-tab close')
+    for flag in ['allow-create', 'created', 'changed-after-create']:
+        (directory/flag).unlink()
+    os.write(fd, b'/bin/sh -i\n')
+    fg = settle(pid, fd, True)
+    assert int(ps(fg, 'ppid')) == pid and fg != pid
+    nested = info(pid, fg)
+    check(nested, 'dead', 'proven descendant shell overrides stale official authority', False)
+    # The stricter pane-death proof must NOT become a nested-shell kill license.
+    assert subprocess.run(['bash', str(wrapper), str(root), str(directory), 'strict'],
+        capture_output=True).returncode != 0
+    os.write(fd, b'sleep 30\n')
+    for _ in range(100):
+        job = int(ps(pid, 'tpgid'))
+        if job != fg:
+            break
+        time.sleep(.03)
+    assert job != fg
+    check(info(pid, job), 'alive', 'actual foreground child preserves native live authority')
+    os.write(fd, b'\x03')
+    for _ in range(100):
+        if int(ps(pid, 'tpgid')) == fg:
+            break
+        time.sleep(.03)
+    check(nested, 'dead', 'absence returns only after foreground child exits', False)
+    # Independent shell: do not make this assertion depend on a prior Ctrl-C
+    # resetting another shell's terminal input state.
+    pid, fd = launch()
+    settle(pid, fd)
+    fg = pid
+    background = info(pid, fg)
+    os.write(fd, b'sleep 30 &\n')
+    for _ in range(100):
+        rows = subprocess.check_output(['ps', '-axo', 'pid=,ppid='], text=True)
+        if any(int(row.split()[1]) == fg for row in rows.splitlines()):
+            break
+        time.sleep(.03)
+    else:
+        raise AssertionError('background-child fixture did not launch')
+    check(background, 'unreadable', 'background child cannot be hidden by a shell foreground')
+    # Separate clean PTY, unrelated to the pane shell: never an ancestry proof.
+    other, otherfd = launch()
+    settle(other, otherfd)
+    unrelated = info(pid, other)
+    check(unrelated, 'unreadable', 'unrelated shell cannot override native authority')
+    clean = info(other, other)
+    for label, mutate in [
+        ('wrong pane echo', lambda x: x.update(pane_id='w9:p9')),
+        ('fractional pid', lambda x: x.update(shell_pid=other+.5)),
+        ('missing foreground', lambda x: x.update(foreground_processes=[])),
+        ('contradictory pgid', lambda x: x.update(foreground_process_group_id=other+1)),
+        ('contradictory argv', lambda x: x['foreground_processes'][0].update(argv0='pi')),
+    ]:
+        data = json.loads(json.dumps(clean))
+        mutate(data['result']['process_info'])
+        check(data, 'unreadable', label)
+    (directory/'ps-target').write_text(str(other))
+    for mode in ['failed', 'malformed', 'duplicate', 'wrong-group', 'running', 'shell-command', 'changed-start']:
+        (directory/'ps-mode').write_text(mode)
+        if (directory/'ps-read').exists():
+            (directory/'ps-read').unlink()
+        check(clean, 'unreadable', 'kernel evidence: ' + mode, mode != 'changed-start')
+    (directory/'ps-mode').unlink()
+    (directory/'agent-changing').touch()
+    check(clean, 'unreadable', 'native report changed during positive shell proof')
+    (directory/'agent-changing').unlink()
+    (directory/'agent-failure').touch()
+    check(clean, 'unreadable', 'failed agent read with a success-shaped body is not absence')
+    (directory/'agent-failure').unlink()
+    (directory/'read-failure').touch()
+    check(clean, 'unreadable', 'failed process-info is not absence')
+    (directory/'read-failure').unlink()
+    (directory/'read-once').touch()
+    check(clean, 'unreadable', 'racing second observation is not absence')
+    (directory/'read-once').unlink()
+    agent['result']['agent']['screen_detection_skipped'] = False
+    (directory/'agent').write_text(json.dumps(agent))
+    check(clean, 'alive', 'custom-source registration remains authoritative on a bare shell')
+    assert 'process-info' not in log.read_text()
+finally:
+    signal.alarm(0)
+    cleanup_errors = []
+    for pid, fd in children:
+        descendants = {pid}
+        try:
+            rows = subprocess.check_output(['ps', '-axo', 'pid=,ppid='], text=True, timeout=5)
+            pairs = [tuple(map(int, row.split())) for row in rows.splitlines()]
+            for _ in range(10):
+                descendants.update(p for p, parent in pairs if parent in descendants)
+            os.set_blocking(fd, False)
+            # These are only our private fixture shells. Finish their jobs and
+            # exit each nested shell in order, draining terminal output as we
+            # go. Waiting while retaining an unread master can itself prevent
+            # tty shutdown; close it BEFORE the bounded reap, not afterward.
+            for _ in range(10):
+                result = subprocess.run(['ps', '-p', str(pid), '-o', 'stat='],
+                    capture_output=True, text=True, timeout=5)
+                if result.returncode == 1 or 'E' in result.stdout or 'Z' in result.stdout:
+                    break
+                fg = int(ps(pid, 'tpgid'))
+                # Match the shell names the classifier itself accepts: `comm`
+                # reports the executable, so Linux's /bin/sh reads as `dash`
+                # and a short sh/bash list would silently fall through to the
+                # interrupt below, which an interactive shell ignores.
+                if ps(fg, 'comm').split('/')[-1].lstrip('-') in ['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']:
+                    os.write(fd, b'kill $(jobs -p) 2>/dev/null; wait; exit\n')
+                else:
+                    os.write(fd, b'\x03')
+                for _ in range(10):
+                    try:
+                        os.read(fd, 65536)
+                    except BlockingIOError:
+                        pass
+                    except OSError as exc:
+                        if exc.errno != errno.EIO:
+                            raise
+                    time.sleep(.02)
+                result = subprocess.run(['ps', '-p', str(pid), '-o', 'stat='],
+                    capture_output=True, text=True, timeout=5)
+                if result.returncode == 1 or 'E' in result.stdout or 'Z' in result.stdout:
+                    break
+        except OSError as exc:
+            if exc.errno != errno.EIO:
+                cleanup_errors.append(str(exc))
+        except Exception as exc:
+            cleanup_errors.append(str(exc))
+        finally:
+            os.close(fd)
+        # Reap and verify all recorded descendants even if orderly exit failed.
+        def reap():
+            for _ in range(100):
+                if os.waitpid(pid, os.WNOHANG)[0] == pid:
+                    return True
+                time.sleep(.03)
+            return False
+        def sweep():
+            # Every pid here is one of this fixture's own private shells or
+            # their children. Signal the whole recorded set, not just the root:
+            # killing the root alone reparents its children to init, where they
+            # survive the reap and fail the absence check below.
+            for victim in sorted(descendants, reverse=True):
+                try:
+                    os.kill(victim, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+        try:
+            if not reap():
+                # The orderly exit did not finish; escalate once, then confirm.
+                sweep()
+                if not reap():
+                    raise AssertionError('private PTY root not reaped: ' + str(pid))
+            for attempt in range(2):
+                result = subprocess.run(['ps', '-p', ','.join(map(str, descendants)), '-o', 'pid=,ppid=,stat='],
+                    capture_output=True, text=True, timeout=5)
+                if result.returncode == 1 and not result.stdout.strip():
+                    break
+                # A descendant outlived the shell that owned it. Sweep the set
+                # once and re-read, so cleanup enforces exactly what it asserts.
+                if attempt == 0:
+                    sweep()
+                    time.sleep(.2)
+            assert result.returncode == 1 and not result.stdout.strip(), result.stdout
+        except Exception as exc:
+            cleanup_errors.append(str(exc))
+    assert not cleanup_errors, cleanup_errors
+PY
+  pass "native authority: real-process recovery and husk refusal boundaries"
+}
+
 test_create_task_refuses_duplicate_label_when_agent_live() {
   local dir log resp fb out status
   dir="$TMP_ROOT/dup-live"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -678,7 +1056,9 @@ test_create_task_closes_and_replaces_dead_pane_husk() {
   printf '{"error":{"code":"pane_not_found","message":"pane w1:p2 not found"}}\n' > "$resp/3.out"
   # 4: tab create -> the replacement tab (created BEFORE the husk is closed)
   printf '{"result":{"tab":{"tab_id":"w1:t3"},"root_pane":{"pane_id":"w1:p3"}}}\n' > "$resp/4.out"
-  printf '{"result":{"tabs":[{"tab_id":"w1:t3","label":"fm-husk1","workspace_id":"w1"}]}}\n' > "$resp/6.out"
+  printf '{"result":{"panes":[{"pane_id":"w1:p2","tab_id":"w1:t2"}]}}\n' > "$resp/5.out"
+  cp "$resp/3.out" "$resp/6.out"
+  printf '{"result":{"tabs":[{"tab_id":"w1:t3","label":"fm-husk1","workspace_id":"w1"}]}}\n' > "$resp/8.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-husk1 /tmp/proj' "$ROOT" ) \
@@ -706,7 +1086,10 @@ test_create_task_closes_and_replaces_no_agent_husk() {
   printf '{"error":{"code":"agent_not_found","message":"agent target w1:p2 not found"}}\n' > "$resp/4.out"
   # 5: tab create -> the replacement tab (created BEFORE the husk is closed)
   printf '{"result":{"tab":{"tab_id":"w1:t3"},"root_pane":{"pane_id":"w1:p3"}}}\n' > "$resp/5.out"
-  printf '{"result":{"tabs":[{"tab_id":"w1:t3","label":"fm-husk2","workspace_id":"w1"}]}}\n' > "$resp/7.out"
+  cp "$resp/2.out" "$resp/6.out"
+  cp "$resp/3.out" "$resp/7.out"
+  cp "$resp/4.out" "$resp/8.out"
+  printf '{"result":{"tabs":[{"tab_id":"w1:t3","label":"fm-husk2","workspace_id":"w1"}]}}\n' > "$resp/10.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-husk2 /tmp/proj' "$ROOT" ) \
@@ -734,7 +1117,13 @@ test_create_task_closes_all_duplicate_husks_after_replacement() {
   printf '{"result":{"pane":{"pane_id":"w1:p3"}}}\n' > "$resp/6.out"
   printf '{"error":{"code":"agent_not_found","message":"agent target w1:p3 not found"}}\n' > "$resp/7.out"
   printf '{"result":{"tab":{"tab_id":"w1:t4"},"root_pane":{"pane_id":"w1:p4"}}}\n' > "$resp/8.out"
-  printf '{"result":{"tabs":[{"tab_id":"w1:t4","label":"fm-husk-many","workspace_id":"w1"}]}}\n' > "$resp/11.out"
+  cp "$resp/2.out" "$resp/9.out"
+  cp "$resp/3.out" "$resp/10.out"
+  cp "$resp/4.out" "$resp/11.out"
+  cp "$resp/5.out" "$resp/13.out"
+  cp "$resp/6.out" "$resp/14.out"
+  cp "$resp/7.out" "$resp/15.out"
+  printf '{"result":{"tabs":[{"tab_id":"w1:t4","label":"fm-husk-many","workspace_id":"w1"}]}}\n' > "$resp/17.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-husk-many /tmp/proj' "$ROOT" ) \
@@ -765,8 +1154,11 @@ test_create_task_refuses_when_preexisting_husk_tab_remains() {
   printf '{"result":{"pane":{"pane_id":"w1:p2"}}}\n' > "$resp/3.out"
   printf '{"error":{"code":"agent_not_found","message":"agent target w1:p2 not found"}}\n' > "$resp/4.out"
   printf '{"result":{"tab":{"tab_id":"w1:t3"},"root_pane":{"pane_id":"w1:p3"}}}\n' > "$resp/5.out"
-  printf '1\n' > "$resp/6.exit"
-  printf '{"result":{"tabs":[{"tab_id":"w1:t2","label":"fm-stale-husk","workspace_id":"w1"},{"tab_id":"w1:t3","label":"fm-stale-husk","workspace_id":"w1"}]}}\n' > "$resp/7.out"
+  cp "$resp/2.out" "$resp/6.out"
+  cp "$resp/3.out" "$resp/7.out"
+  cp "$resp/4.out" "$resp/8.out"
+  printf '1\n' > "$resp/9.exit"
+  printf '{"result":{"tabs":[{"tab_id":"w1:t2","label":"fm-stale-husk","workspace_id":"w1"},{"tab_id":"w1:t3","label":"fm-stale-husk","workspace_id":"w1"}]}}\n' > "$resp/10.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-stale-husk /tmp/proj' "$ROOT" 2>&1 )
@@ -814,7 +1206,9 @@ test_create_task_husk_replacement_creates_before_closing() {
   printf '{"result":{"panes":[{"pane_id":"w1:p2","tab_id":"w1:t2"}]}}\n' > "$resp/2.out"
   printf '{"error":{"code":"pane_not_found","message":"pane w1:p2 not found"}}\n' > "$resp/3.out"
   printf '{"result":{"tab":{"tab_id":"w1:t3"},"root_pane":{"pane_id":"w1:p3"}}}\n' > "$resp/4.out"
-  printf '{"result":{"tabs":[{"tab_id":"w1:t3","label":"fm-order1","workspace_id":"w1"}]}}\n' > "$resp/6.out"
+  cp "$resp/2.out" "$resp/5.out"
+  cp "$resp/3.out" "$resp/6.out"
+  printf '{"result":{"tabs":[{"tab_id":"w1:t3","label":"fm-order1","workspace_id":"w1"}]}}\n' > "$resp/8.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-order1 /tmp/proj' "$ROOT" ) \
@@ -4524,6 +4918,7 @@ test_create_task_closes_and_replaces_no_agent_husk
 test_create_task_closes_all_duplicate_husks_after_replacement
 test_create_task_refuses_when_preexisting_husk_tab_remains
 test_create_task_refuses_when_agent_state_ambiguous
+test_native_authority_process_crosscheck
 test_create_task_husk_replacement_creates_before_closing
 test_create_task_creates_and_parses_ids
 test_create_task_creates_with_no_focus_flag

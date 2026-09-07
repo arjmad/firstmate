@@ -265,12 +265,17 @@ No Herdr-specific copy of that protocol exists.
 
 Stopping and restarting a named Herdr server preserves workspace, tab, pane, and label ids, but the underlying harness processes and live agent registrations do not survive.
 A restored same-labeled tab with a missing pane or no registered agent is a husk.
-Create replaces only a confidently dead or no-agent husk, creates the replacement before closing the old tab, and refuses live or unknown states.
+Create replaces only a confidently dead or no-agent husk, creates the replacement before closing the old tab, rechecks the old pane immediately before closing, and refuses live or unknown states.
 This prevents closing the workspace's last tab before a replacement exists.
 
 The generic Herdr agent-liveness probe reuses the same classifier.
 A structurally gone pane becomes `missing`, a restored agent-less shell becomes `dead`, a registered agent becomes `alive`, and an unexpected read becomes `unreadable`.
 Unlike tmux process-name inspection, native registration can classify Pi without guessing from a generic interpreter name.
+A stale full-lifecycle native registration is overridden only by repeated, matching kernel-backed proof of a childless bare pane shell or bounded descendant shell; unreadable or conflicting evidence remains `unreadable`, custom registrations remain authoritative, and the stricter pane-death shell proof is unchanged.
+
+Both shell proofs require a `ps` that reports the process state letter, because each accepts only a sleeping or idle shell.
+The adapter probes `ps` and falls back to the platform `/bin/ps` when the one on `PATH` cannot report state, so an unsigned or reduced `ps` earlier on `PATH` does not leave every pane classified `unreadable` and recovery permanently unavailable.
+Setting `FM_HERDR_PS_BIN` overrides that choice verbatim and is not probed.
 
 The session-start sweep uses this probe.
 Mid-session secondmate agent-process liveness is not implemented because idle secondmates are deliberately exempt from stale-pane escalation and need a separate periodic identity signal.

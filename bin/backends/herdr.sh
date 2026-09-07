@@ -1118,6 +1118,45 @@ FMEOF
   fi
 }
 
+# fm_backend_herdr_ps_state_capable: true when <ps-bin> reports a process
+# state letter for a process known to be alive and readable. This shell's own
+# pid is that process: it exists for the whole probe and sits sleeping while it
+# waits, so a blank or absent STAT letter is a property of the binary rather
+# than of the target.
+fm_backend_herdr_ps_state_capable() {  # <ps-bin>
+  local stat
+  stat=$("$1" -p "$$" -o stat= 2>/dev/null | tr -d '[:space:]') || return 1
+  case "$stat" in [A-Z]*) return 0 ;; *) return 1 ;; esac
+}
+
+# fm_backend_herdr_ps_bin: resolve a `ps` that can actually answer the question
+# both shell proofs below ask. Each rejects any process whose state is not
+# sleeping or idle, so a `ps` that cannot read another process's state letter
+# does not merely lose precision - it turns every proof into `unknown` and
+# leaves stale-authority recovery permanently unreachable while every stubbed
+# test still passes. Observed on Darwin 25.6.0, where an adv_cmds rebuild
+# earlier on PATH prints a blank STAT letter for every live process and the
+# platform `/bin/ps` reports it. Probe the candidates and prefer the first that
+# answers. An explicit FM_HERDR_PS_BIN is used verbatim and never probed, so an
+# operator override and a fault-injecting test both keep exact control.
+fm_backend_herdr_ps_bin() {
+  local candidate
+  if [ -n "${FM_HERDR_PS_BIN:-}" ]; then
+    printf '%s\n' "$FM_HERDR_PS_BIN"
+    return 0
+  fi
+  for candidate in ps /bin/ps; do
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    fm_backend_herdr_ps_state_capable "$candidate" || continue
+    printf '%s\n' "$candidate"
+    return 0
+  done
+  # Nothing on this host can report process state. Say so once on the way out
+  # rather than letting every later proof read as an ordinary unknown.
+  echo "warning: no ps reports process state; herdr shell proofs cannot confirm an idle shell" >&2
+  printf 'ps\n'
+}
+
 # fm_backend_herdr_death_close_pane: end the exact pane's proved lone idle
 # shell so Herdr removes the emptied workspace through its focus-preserving
 # pane-death path, then confirm the pane is gone.
@@ -1129,7 +1168,7 @@ FMEOF
 # Returns 0 only when the pane is confirmed gone.
 fm_backend_herdr_death_close_pane() {  # <session> <pane-id> <shell-pid>
   local session=$1 pane_id=$2 shell_pid=$3 ps_bin attempt max_attempts presence resampled_pid
-  ps_bin=${FM_HERDR_PS_BIN:-ps}
+  ps_bin=$(fm_backend_herdr_ps_bin)
   case "$shell_pid" in
     ''|*[!0-9]*) return 1 ;;
   esac
@@ -1237,7 +1276,7 @@ fm_backend_herdr_pane_idle_shell_sample() {  # <session> <pane-id>
   [ "$argv0" = "$shell_name" ] || return 1
   case "$shell_name" in sh|bash|zsh|dash|ksh|fish) ;; *) return 1 ;; esac
 
-  ps_bin=${FM_HERDR_PS_BIN:-ps}
+  ps_bin=$(fm_backend_herdr_ps_bin)
   command -v "$ps_bin" >/dev/null 2>&1 || return 1
   rows=$("$ps_bin" -axo pid=,ppid= 2>/dev/null) || return 1
   printf '%s\n' "$rows" | awk -v shell="$shell_pid" '
@@ -1862,9 +1901,82 @@ fm_backend_herdr_explicit_close_pane_confirmed() {  # <session> <pane_id>
   [ "$presence" = dead ]
 }
 
+# fm_backend_herdr_native_shell_sample: positive, read-only absence proof for
+# a native full-lifecycle report. Unlike the pane-death proof, this may accept
+# a descendant shell, but NEVER exports a pid for signaling. Two identical
+# samples are required by the caller. Kernel ancestry, start times, foreground
+# group, shell argv and child inventory must agree with the exact pane. Every
+# ancestor up to the pane shell has only the next child in the chain (at most
+# eight edges), so an unrelated shell or a background sibling cannot hide work.
+# A failed or racing read is unknown, not evidence that an agent exited.
+fm_backend_herdr_native_shell_sample() {  # <session> <pane-id>
+  local info ids shell_pid foreground_pid ps_bin rows chain name argv0 args
+  info=$(fm_backend_herdr_cli "$1" pane process-info --pane "$2" 2>/dev/null) || return 1
+  info=$(printf '%s' "$info" | jq -ce --arg pane "$2" '
+    def pid: type == "number" and . > 1 and . == floor;
+    select(.error == null and .result.type == "pane_process_info")
+    | .result.process_info
+    | select(.pane_id == $pane and (.shell_pid | pid)
+        and (.foreground_process_group_id | pid)
+        and (.foreground_processes | type == "array" and length > 0)
+        and all(.foreground_processes[]; (.pid | pid)
+          and (.name | type == "string" and length > 0)))
+    | {pane_id, shell_pid, foreground_process_group_id, foreground_processes}
+  ' 2>/dev/null) || return 1
+  # Real foreground work keeps native authority; only the lone-shell shape
+  # can challenge it. Malformed identity/argv below must not establish absence.
+  [ "$(printf '%s' "$info" | jq '.foreground_processes | length')" = 1 ] || { printf live; return 0; }
+  name=$(printf '%s' "$info" | jq -r '.foreground_processes[0].name')
+  name=${name##*/}
+  case "$name" in sh|bash|zsh|dash|ksh|fish) ;; *) printf live; return 0 ;; esac
+  argv0=$(printf '%s' "$info" | jq -er '
+    .foreground_processes[0] | (.argv0 // .argv[0])
+    | select(type == "string" and length > 0)' 2>/dev/null) || return 1
+  argv0=${argv0#-}; argv0=${argv0##*/}
+  [ "$argv0" = "$name" ] || return 1
+  ids=$(printf '%s' "$info" | jq -er '
+    select(.foreground_processes[0].pid == .foreground_process_group_id)
+    | [.shell_pid, .foreground_process_group_id] | @tsv') || return 1
+  IFS=$'\t' read -r shell_pid foreground_pid <<EOF
+$ids
+EOF
+  ps_bin=$(fm_backend_herdr_ps_bin)
+  fm_backend_herdr_pid_is_bare_shell "$ps_bin" "$shell_pid" || return 1
+  fm_backend_herdr_pid_is_bare_shell "$ps_bin" "$foreground_pid" || return 1
+  # Separate assignment preserves ps failure (not the status of a trailing
+  # filter). lstart binds identities across samples, including intermediate
+  # launch wrappers; args rejects shells executing scripts or -c jobs.
+  rows=$(LC_ALL=C "$ps_bin" -axo pid=,ppid=,pgid=,tpgid=,stat=,lstart=,args= 2>/dev/null) || return 1
+  chain=$(printf '%s\n' "$rows" | awk -v root="$shell_pid" -v leaf="$foreground_pid" '
+    NF < 11 || $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ || $3 !~ /^[0-9]+$/ { bad=1; next }
+    { if ($1 in parent) bad=1; parent[$1]=$2; group[$1]=$3;
+      ttygroup[$1]=$4; state[$1]=$5; row[$1]=$0; children[$2]++; groups[$3]++ }
+    END {
+      if (bad || groups[leaf] != 1 || group[leaf] != leaf) exit 1;
+      p=leaf;
+      for (depth=0; depth<=8; depth++) {
+        if (!(p in parent) || seen[p]++ || ttygroup[p] != leaf || state[p] !~ /^[SI]/ ||
+            children[p] != (depth == 0 ? 0 : 1)) exit 1;
+        proof=proof row[p] "\n";
+        if (p == root) { printf "%s", proof; exit 0 }
+        p=parent[p];
+      }
+      exit 1;
+    }
+  ') || return 1
+  args=$(printf '%s\n' "$chain" | awk 'NR == 1 { for (i=11;i<=NF;i++) printf "%s%s", (i==11 ? "" : " "), $i }')
+  # Only a bare shell and its interactive/login switches qualify. Script
+  # arguments, -c, and other options remain unknown even when comm is a shell.
+  printf '%s\n' "$args" | awk -v name="$name" '
+    { sub(/^-/, "", $1); sub(/^.*\//, "", $1); if ($1 != name) exit 1;
+      for (i=2;i<=NF;i++) if ($i !~ /^-[il]+$/) exit 1 }
+  ' || return 1
+  printf '%s\n%s\n' "$info" "$chain"
+}
+
 # fm_backend_herdr_pane_agent_state: classify <pane_id> in <session> as one of
-# dead|no-agent|live|unknown, purely from the JSON body of two read-only
-# calls - never from process exit status, since a business-logic "not found"
+# dead|no-agent|live|unknown using read-only structured observations, never
+# treating a command failure as absence. A business-logic "not found"
 # response is a normal, expected outcome here, not a call failure (real herdr
 # 0.7.1 exits 1 for it; the canned-response test fakes exit 0; parsing only
 # the JSON keeps this function correct against either).
@@ -1882,11 +1994,14 @@ fm_backend_herdr_explicit_close_pane_confirmed() {  # <session> <pane_id>
 #              agent get -> agent_not_found - docs/herdr-backend.md "ID
 #              stability across a server restart"), and what a future
 #              `resume_agents_on_restore = false` restore would produce too
-#              (a plain shell, never an agent).
+#              (a plain shell, never an agent). A full-lifecycle native report
+#              may also be stale: two identical native_shell_sample proofs
+#              plus an unchanged native report establish absence, without
+#              changing Herdr authority or the strict pane-death predicate.
 #   live     - `agent get` succeeds and reports a real agent_status (working,
 #              idle, done, or blocked - any registered value). An idle or
-#              blocked agent is still a genuine, still-registered agent, not
-#              a restored husk, so it is never a close-and-replace candidate.
+#              blocked agent remains live unless the native-shell proof above
+#              positively contradicts its full-lifecycle registration.
 #   unknown  - anything else: an unparseable/unexpected response from either
 #              call, or a `pane get` success whose own echoed pane_id does not
 #              round-trip (guards against misreading a herdr response shape
@@ -1894,7 +2009,7 @@ fm_backend_herdr_explicit_close_pane_confirmed() {  # <session> <pane_id>
 #              refusal here, never toward closing - this is the conservative
 #              backstop the husk check depends on.
 fm_backend_herdr_pane_agent_state() {  # <session> <pane_id>
-  local session=$1 pane_id=$2 out code presence status
+  local session=$1 pane_id=$2 out code presence status first second current read_status=0
   presence=$(fm_backend_herdr_pane_presence_state "$session" "$pane_id")
   if [ "$presence" != present ]; then
     case "$presence" in
@@ -1903,15 +2018,30 @@ fm_backend_herdr_pane_agent_state() {  # <session> <pane_id>
     esac
     return 0
   fi
-  out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>&1)
+  out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>&1) || read_status=$?
   code=$(printf '%s' "$out" | jq -r '.error.code // empty' 2>/dev/null)
   if [ -n "$code" ]; then
     [ "$code" = "agent_not_found" ] && printf 'no-agent' || printf 'unknown'
     return 0
   fi
+  [ "$read_status" -eq 0 ] || { printf unknown; return 0; }
   status=$(printf '%s' "$out" | jq -r '.result.agent.agent_status // empty' 2>/dev/null)
   case "$status" in
-    working|idle|done|blocked) printf 'live' ;;
+    working|idle|done|blocked)
+      if printf '%s' "$out" | jq -e '.result.agent.screen_detection_skipped == true' >/dev/null 2>&1; then
+        out=$(printf '%s' "$out" | jq -ce --arg pane "$pane_id" '
+          select(.error == null) | .result.agent | select(.pane_id == $pane)') || { printf unknown; return 0; }
+        first=$(fm_backend_herdr_native_shell_sample "$session" "$pane_id") || { printf unknown; return 0; }
+        [ "$first" != live ] || { printf live; return 0; }
+        second=$(fm_backend_herdr_native_shell_sample "$session" "$pane_id") || { printf unknown; return 0; }
+        [ "$first" = "$second" ] || { printf unknown; return 0; }
+        current=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>/dev/null) || { printf unknown; return 0; }
+        current=$(printf '%s' "$current" | jq -ce 'select(.error == null) | .result.agent') || { printf unknown; return 0; }
+        [ "$out" = "$current" ] && printf no-agent || printf unknown
+      else
+        printf live
+      fi
+      ;;
     *) printf 'unknown' ;;
   esac
 }
@@ -2031,6 +2161,13 @@ EOF
   if [ -n "$dup_tab_ids" ]; then
     while IFS= read -r dup; do
       [ -n "$dup" ] || continue
+      # Creating the replacement takes time. Revalidate at the close boundary
+      # so a stale-authority shell that starts work meanwhile is not destroyed.
+      dup_pane=$(fm_backend_herdr_pane_for_tab "$session" "$wsid" "$dup")
+      if [ -z "$dup_pane" ] || ! fm_backend_herdr_tab_is_husk "$session" "$dup_pane"; then
+        echo "error: herdr tab '$label' changed during husk replacement; leaving both tabs open" >&2
+        return 1
+      fi
       fm_backend_herdr_cli "$session" tab close "$dup" >/dev/null 2>&1 || true
     done <<EOF
 $dup_tab_ids
