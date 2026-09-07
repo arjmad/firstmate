@@ -276,15 +276,19 @@ test_auth_refuses_before_an_oauth_client_exists() {
 # achieve. It also proves the wizard opens no browser and touches no real Claude Code
 # configuration, since both are stubbed and asserted through their own logs.
 test_the_wizard_completes_and_reports_what_is_left_undone() {
-  local root out log
+  local root out log opener
   root=$(new_root wizard)
   stub_claude
+  # The wizard hands a URL to the first browser opener its host offers, so every
+  # opener it can choose is stubbed and the console URL lands in the log on any host.
   mkdir -p "$TMP_ROOT/stub"
-  cat > "$TMP_ROOT/stub/open" <<'SH'
+  for opener in wslview explorer.exe xdg-open open; do
+    cat > "$TMP_ROOT/stub/$opener" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$OPEN_STUB_LOG"
 SH
-  chmod 0755 "$TMP_ROOT/stub/open"
+    chmod 0755 "$TMP_ROOT/stub/$opener"
+  done
   log="$TMP_ROOT/wizard-open.log"
   : > "$log"
   : > "$TMP_ROOT/wizard-claude.log"
