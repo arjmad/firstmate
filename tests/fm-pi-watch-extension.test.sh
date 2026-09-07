@@ -3000,6 +3000,199 @@ EOF
   pass "Pi process-exit cleanup stops the attached arm child"
 }
 
+# --- primary marker ownership (F1) -------------------------------------------
+# The marker is the running primary's proof that IT loaded this build, and
+# fm_pi_extension_loaded requires marker pid == session-lock pid exactly. Pi
+# loads this project's extensions in every Pi process started under the tree,
+# including short-lived DESCENDANTS of the primary - bin/fm-spawn.sh's
+# `pi --help` capability probe runs from the primary's own bash tool. A
+# descendant that published the marker would stamp its own pid over the
+# primary's proof and leave the home reading as unsupervised.
+
+fm_test_sha256() {  # <file>
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    sha256sum "$1" | awk '{print $1}'
+  fi
+}
+
+# Load a primary extension in a child node process and report that child's pid.
+# The child is a grandchild of this test shell, the same distance the capability
+# probe sits from the primary that spawns it.
+load_primary_extension_as_descendant() {  # <plugin> <home> <repo> <pid-file>
+  PLUGIN=$1 FM_HOME=$2 FM_ROOT_OVERRIDE=$3 CHILD_PID_FILE=$4 node --input-type=module <<'EOF'
+import { writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const pi = { on() {}, registerCommand() {}, registerTool() {}, sendUserMessage: async () => {} };
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+writeFileSync(process.env.CHILD_PID_FILE, `${process.pid}\n`);
+EOF
+}
+
+test_primary_marker_is_published_only_by_the_lock_holder() {
+  local repo home watch_plugin turnend_plugin state out status child_pid
+  local plugin marker version pair before
+  repo="$TMP_ROOT/pi-marker-owner-root"
+  home="$TMP_ROOT/pi-marker-owner-home"
+  state="$home/state"
+  mkdir -p "$repo/bin" "$repo/.pi/extensions/lib" "$state"
+  install_pi_watch_extension_fixture "$repo"
+  cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$repo/.pi/extensions/fm-primary-turnend-guard.ts"
+  watch_plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  turnend_plugin="$repo/.pi/extensions/fm-primary-turnend-guard.ts"
+
+  # shellcheck source=/dev/null
+  . "$ROOT/bin/fm-wake-lib.sh"
+
+  # This live shell stands in for the primary session that holds the lock.
+  printf '%s\n' "$$" > "$state/.lock"
+  for pair in \
+    "$watch_plugin:.pi-watch-extension-loaded" \
+    "$turnend_plugin:.pi-turnend-extension-loaded"; do
+    plugin=${pair%%:*}
+    marker="$state/${pair#*:}"
+    version="sha256:$(fm_test_sha256 "$plugin")"
+    printf '%s\n%s\n' "$version" "$$" > "$marker"
+    fm_pi_extension_loaded "$marker" "$version" "$state/.lock" \
+      || fail "seeded primary marker $marker was not accepted before the descendant load"
+  done
+
+  for pair in \
+    "$watch_plugin:.pi-watch-extension-loaded" \
+    "$turnend_plugin:.pi-turnend-extension-loaded"; do
+    plugin=${pair%%:*}
+    marker="$state/${pair#*:}"
+    version="sha256:$(fm_test_sha256 "$plugin")"
+    before=$(cat "$marker")
+    rm -f "$state/child.pid"
+    out=$(load_primary_extension_as_descendant "$plugin" "$home" "$repo" "$state/child.pid" 2>&1)
+    status=$?
+    expect_code 0 "$status" "descendant load of $plugin failed: $out"
+    child_pid=$(sed -n '1p' "$state/child.pid" 2>/dev/null)
+    [ -n "$child_pid" ] || fail "descendant load of $plugin recorded no child pid"
+    # Without divergence the case is vacuous: it would pass even if the
+    # descendant DID publish, because it would publish the same pid.
+    [ "$child_pid" != "$$" ] \
+      || fail "descendant load of $plugin ran in the lock holder itself (pid $child_pid)"
+    [ "$(cat "$marker")" = "$before" ] \
+      || fail "descendant Pi rewrote $marker (now $(sed -n '2p' "$marker"), lock $$, child $child_pid)"
+    fm_pi_extension_loaded "$marker" "$version" "$state/.lock" \
+      || fail "descendant Pi invalidated the primary's ownership proof in $marker"
+  done
+
+  # The lock holder itself must still publish: same modules, same home, but the
+  # loading process IS the recorded session.
+  for pair in \
+    "$watch_plugin:.pi-watch-extension-loaded" \
+    "$turnend_plugin:.pi-turnend-extension-loaded"; do
+    plugin=${pair%%:*}
+    marker="$state/${pair#*:}"
+    version="sha256:$(fm_test_sha256 "$plugin")"
+    rm -f "$marker"
+    out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" node --input-type=module 2>&1 <<'EOF'
+import { writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const pi = { on() {}, registerCommand() {}, registerTool() {}, sendUserMessage: async () => {} };
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+EOF
+)
+    status=$?
+    expect_code 0 "$status" "owner load of $plugin failed: $out"
+    assert_present "$marker" "the lock holder did not publish $marker"
+    [ "$(sed -n '2p' "$marker")" = "$(sed -n '1p' "$state/.lock")" ] \
+      || fail "$marker does not name the lock holder that wrote it"
+    fm_pi_extension_loaded "$marker" "$version" "$state/.lock" \
+      || fail "the lock holder's own $marker was rejected"
+  done
+
+  # Cold start: no live session holds the lock yet, so the factory that binds
+  # before bin/fm-session-start.sh records it must still publish.
+  rm -f "$state/.lock" "$state/.pi-watch-extension-loaded"
+  out=$(load_primary_extension_as_descendant "$watch_plugin" "$home" "$repo" "$state/child.pid" 2>&1)
+  status=$?
+  expect_code 0 "$status" "cold-start load failed: $out"
+  assert_present "$state/.pi-watch-extension-loaded" \
+    "cold start with no lock did not publish the watch marker"
+  [ "$(sed -n '2p' "$state/.pi-watch-extension-loaded")" = "$(sed -n '1p' "$state/child.pid")" ] \
+    || fail "cold-start marker does not name the process that wrote it"
+
+  pass "Pi primary extensions: only the lock holder publishes its loaded-marker; a descendant Pi leaves the primary's proof intact"
+}
+
+# The same contract against the REAL installed Pi, because whether Pi loads this
+# project's extensions while preparing --help is a fact only the vendor's binary
+# can answer; a stub would only confirm the assumption written into the stub.
+# It runs from the repository root because that is how Pi resolves the project's
+# extensions, and it redirects the state directory so the running home's own
+# markers are never read or written.
+test_real_pi_help_probe_preserves_primary_markers() {
+  local home state watch_marker turnend_marker watch_version turnend_version
+  local cold_pid help
+  if ! command -v pi >/dev/null 2>&1; then
+    echo "skip: pi not installed, so the real-Pi capability-probe marker regression did not run; install pi to enable it"
+    return 0
+  fi
+  home="$TMP_ROOT/pi-real-help-home"
+  state="$home/state"
+  mkdir -p "$state"
+  watch_marker="$state/.pi-watch-extension-loaded"
+  turnend_marker="$state/.pi-turnend-extension-loaded"
+  watch_version="sha256:$(fm_test_sha256 "$ROOT/.pi/extensions/fm-primary-pi-watch.ts")"
+  turnend_version="sha256:$(fm_test_sha256 "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts")"
+
+  # shellcheck source=/dev/null
+  . "$ROOT/bin/fm-wake-lib.sh"
+
+  # Non-vacuity first. With no lock recorded, a cold start MUST publish both
+  # markers, which is what proves this Pi build really does load both primary
+  # extensions while preparing --help. Without it the preservation case below
+  # would pass just as well on a Pi that never loaded them at all.
+  ( cd "$ROOT" && FM_HOME="$home" FM_STATE_OVERRIDE="$state" pi --help >/dev/null 2>&1 ) \
+    || fail "real pi --help exited non-zero"
+  assert_present "$watch_marker" "real pi --help did not load the watch extension at all"
+  assert_present "$turnend_marker" "real pi --help did not load the turn-end extension at all"
+  [ "$(sed -n '1p' "$watch_marker")" = "$watch_version" ] \
+    || fail "real pi loaded a watch extension build other than the tracked one"
+  [ "$(sed -n '1p' "$turnend_marker")" = "$turnend_version" ] \
+    || fail "real pi loaded a turn-end extension build other than the tracked one"
+  cold_pid=$(sed -n '2p' "$watch_marker")
+  [ "$cold_pid" = "$(sed -n '2p' "$turnend_marker")" ] \
+    || fail "the two primary extensions published different pids from one Pi process"
+  [ -n "$cold_pid" ] && [ "$cold_pid" != "$$" ] \
+    || fail "the Pi that published the markers was this shell itself (pid $cold_pid), so the probe is not a descendant here"
+
+  # The production shape: a live primary holds the lock, and the capability
+  # probe Pi is its DESCENDANT. The primary's proof must survive intact.
+  printf '%s\n' "$$" > "$state/.lock"
+  printf '%s\n%s\n' "$watch_version" "$$" > "$watch_marker"
+  printf '%s\n%s\n' "$turnend_version" "$$" > "$turnend_marker"
+  ( cd "$ROOT" && FM_HOME="$home" FM_STATE_OVERRIDE="$state" pi --help >/dev/null 2>&1 ) \
+    || fail "real pi --help exited non-zero under a held session lock"
+  fm_pi_extension_loaded "$watch_marker" "$watch_version" "$state/.lock" \
+    || fail "a descendant pi --help overwrote the primary's watch-extension proof (marker $(sed -n '2p' "$watch_marker"), lock $$)"
+  fm_pi_extension_loaded "$turnend_marker" "$turnend_version" "$state/.lock" \
+    || fail "a descendant pi --help overwrote the primary's turn-end-extension proof (marker $(sed -n '2p' "$turnend_marker"), lock $$)"
+
+  # The spawn-time belt in bin/fm-spawn.sh: --no-extensions still answers the
+  # capability question, so the probe never needs to load them at all.
+  help=$( cd "$ROOT" && FM_HOME="$home" FM_STATE_OVERRIDE="$state" pi --no-extensions --help 2>&1 ) \
+    || fail "real pi --no-extensions --help exited non-zero"
+  printf '%s\n' "$help" | grep -Eq -- '(^|[[:space:]])--tui-mode([[:space:]=]|$)' \
+    || fail "pi --no-extensions --help no longer reports --tui-mode, so the spawn probe cannot use it"
+  fm_pi_extension_loaded "$watch_marker" "$watch_version" "$state/.lock" \
+    || fail "pi --no-extensions --help still rewrote the watch-extension marker"
+  fm_pi_extension_loaded "$turnend_marker" "$turnend_version" "$state/.lock" \
+    || fail "pi --no-extensions --help still rewrote the turn-end-extension marker"
+
+  pass "real Pi $(pi --version 2>/dev/null | head -1): a descendant --help capability probe leaves both primary ownership markers intact"
+}
+
 test_opencode_plugin_package_boundary_is_explicit_esm() {
   local fixture plugin out status
   fixture="$TMP_ROOT/opencode-esm-boundary/.opencode"
@@ -4006,6 +4199,8 @@ test_pi_replacement_tokens_are_process_unique
 test_pi_replacement_persistence_failure_stops_arm_child
 test_pi_process_exit_cleanup_listener_lifecycle
 test_pi_process_exit_cleanup_stops_arm_child
+test_primary_marker_is_published_only_by_the_lock_holder
+test_real_pi_help_probe_preserves_primary_markers
 test_opencode_plugin_package_boundary_is_explicit_esm
 test_opencode_primary_watch_plugin_uses_effective_state_home
 test_opencode_primary_watch_plugin_sources_effective_config

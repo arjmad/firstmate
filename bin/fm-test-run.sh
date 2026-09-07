@@ -1285,6 +1285,9 @@ families_for_changed_path() {
       # context-reset stdout injection) only show up against a real harness.
       printf '%s\n' session-bootstrap
       printf '%s\n' live-harness-optin
+      # Both primary extensions publish the same session-ownership marker, and
+      # fm-pi-watch-extension.test.sh owns that shared writer contract for both.
+      printf '%s\n' __script__:fm-pi-watch-extension.test.sh
       ;;
     bin/fm-extension.mjs|bin/fm-extension.sh|docs/examples/process-event-extension/*)
       printf '%s\n' __script__:fm-extension-binding.test.sh

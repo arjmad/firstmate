@@ -250,6 +250,11 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 # leases).
 # shellcheck source=bin/fm-lease-lib.sh
 . "$SCRIPT_DIR/fm-lease-lib.sh"
+# Allocation-ownership guard: a pooled worktree or home path is REUSED, so a
+# stale record can name the slot another task is working in right now (contract:
+# bin/fm-allocation-lib.sh).
+# shellcheck source=bin/fm-allocation-lib.sh
+. "$SCRIPT_DIR/fm-allocation-lib.sh"
 # Role partition: forced teardown discards work, and the supervision branch
 # never discards anything - only an ordinary landed-work teardown is branch
 # territory (contract: bin/fm-lease-lib.sh).
@@ -819,12 +824,25 @@ BACKEND=$FM_BACKEND_VALIDATED_BACKEND
 T=$FM_BACKEND_VALIDATED_TARGET
 WT=$(fm_meta_get "$META" worktree)
 PROJ=$(fm_meta_get "$META" project)
+# Second cleanup authorization check, still metadata-only and still ahead of
+# fm-guard, any backend command, file removal, branch deletion, or worktree
+# return: prove no OTHER current record claims this allocation before anything
+# can act on it. bin/fm-allocation-lib.sh owns why a matching path, a label, a
+# dead endpoint, or a task-ID lease is not ownership, and why --force does not
+# lift this.
+fm_allocation_refuse_conflict "$STATE" "$ID" "$WT" worktree || exit 1
 T_ORCA=
 [ "$BACKEND" != orca ] || T_ORCA=$T
 if [ "${FM_TEARDOWN_GUARD_DONE:-0}" != 1 ]; then
   "$FM_ROOT/bin/fm-guard.sh" || true
 fi
 HOME_PATH=$(grep '^home=' "$META" | cut -d= -f2- || true)
+# A secondmate's home is pooled the same way and removed by the same forced
+# path, so it needs the same proof. Records that name one path in both fields
+# are already covered by the worktree check just above.
+if [ -n "$HOME_PATH" ] && [ "$HOME_PATH" != "$WT" ]; then
+  fm_allocation_refuse_conflict "$STATE" "$ID" "$HOME_PATH" home || exit 1
+fi
 PR_URL=$(grep '^pr=' "$META" | tail -1 | cut -d= -f2- || true)
 # tasktmp is recorded by fm-spawn for tasks that set up a per-task temp root
 # (/tmp/fm-<id>/); absent for tasks spawned before that change, so tolerate empty.
@@ -2615,6 +2633,12 @@ cleanup_firstmate_home_children() {
     child_proj=$(meta_value "$child_meta" project)
     child_kind=$(meta_value "$child_meta" kind)
     [ -n "$child_kind" ] || child_kind=ship
+    # Same allocation-ownership proof, before this child's pane is killed or its
+    # worktree is returned: two records inside one secondmate home can collide
+    # on a pooled slot exactly as two records in the main home can.
+    if [ -n "$child_wt" ]; then
+      fm_allocation_refuse_conflict "$sub_state" "$child_id" "$child_wt" "child worktree" || return 1
+    fi
     child_backend=$(fm_backend_of_meta "$child_meta")
     if [ "$child_backend" = orca ]; then
       child_t=$(meta_value "$child_meta" terminal)

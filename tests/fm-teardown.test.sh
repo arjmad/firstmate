@@ -2106,6 +2106,69 @@ SH
   pass "forced secondmate teardown preflights every Herdr child before cleanup mutation"
 }
 
+# A secondmate home's own records can collide on a pooled slot exactly as the
+# main home's can, and forced home removal walks every child in turn, so the
+# same ownership proof has to run before the first child's pane is killed.
+configure_secondmate_with_colliding_children() {  # <case-dir>
+  local case_dir=$1 home="$1/secondmate-home" child shared_wt
+  mkdir -p "$home/state" "$home/data" "$home/config" "$home/projects"
+  printf '%s\n' task-x1 > "$home/.fm-secondmate-home"
+  printf '%s\n' "home=$home" >> "$case_dir/state/task-x1.meta"
+  shared_wt="$case_dir/shared-child-wt"
+  git -C "$case_dir/project" worktree add -q -b fm/shared-child "$shared_wt" main
+  for child in child-a child-b; do
+    fm_write_meta "$home/state/$child.meta" \
+      "window=firstmate:fm-$child" \
+      "endpoint_task_id=$child" \
+      "worktree=$shared_wt" \
+      "project=$case_dir/project" \
+      "kind=ship" \
+      "mode=local-only"
+    : > "$home/state/$child.status"
+  done
+}
+
+test_forced_secondmate_teardown_refuses_colliding_child_allocation() {
+  local case_dir home rc child
+  case_dir=$(make_case colliding-child-allocation)
+  write_meta "$case_dir" local-only secondmate
+  configure_secondmate_with_colliding_children "$case_dir"
+  home="$case_dir/secondmate-home"
+  : > "$case_dir/kill.log"
+  : > "$case_dir/treehouse.log"
+  cat > "$case_dir/fakebin/tmux" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$case_dir/kill.log"
+exit 0
+SH
+  cat > "$case_dir/fakebin/treehouse" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$case_dir/treehouse.log"
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/tmux" "$case_dir/fakebin/treehouse"
+
+  rc=0
+  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "colliding-child-allocation: forced teardown acted on a worktree two child records claim"
+  assert_grep "child worktree" "$case_dir/stderr" \
+    "colliding-child-allocation: refusal did not name the contested allocation"
+  [ ! -s "$case_dir/kill.log" ] \
+    || fail "colliding-child-allocation: refusal killed a child endpoint first"
+  [ ! -s "$case_dir/treehouse.log" ] \
+    || fail "colliding-child-allocation: refusal returned an allocation first"
+  [ -d "$case_dir/shared-child-wt" ] \
+    || fail "colliding-child-allocation: refusal removed the contested worktree"
+  [ -e "$case_dir/state/task-x1.meta" ] && [ -d "$home" ] \
+    || fail "colliding-child-allocation: refusal removed parent state"
+  for child in child-a child-b; do
+    [ -e "$home/state/$child.meta" ] \
+      || fail "colliding-child-allocation: refusal removed the $child record"
+  done
+  pass "forced secondmate teardown refuses a child allocation two records claim, before any child mutation"
+}
+
 configure_secondmate_with_tmux_children() {  # <case-dir>
   local case_dir=$1 home="$1/secondmate-home" child child_wt
   mkdir -p "$home/state" "$home/data" "$home/config" "$home/projects"
@@ -3480,6 +3543,7 @@ test_herdr_flat_teardown_refuses_orphaning_records_then_retry_completes
 test_herdr_flat_teardown_refuses_records_on_unparseable_presence
 test_herdr_flat_teardown_preflight_refuses_before_changes
 test_forced_secondmate_herdr_child_preflight_refuses_before_changes
+test_forced_secondmate_teardown_refuses_colliding_child_allocation
 test_forced_secondmate_teardown_holds_descendant_lifecycle_locks
 test_forced_secondmate_herdr_child_retains_records_when_close_unconfirmed
 test_forced_teardown_retains_nested_secondmate_home_when_grandchild_close_unconfirmed

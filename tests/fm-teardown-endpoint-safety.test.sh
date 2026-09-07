@@ -93,6 +93,110 @@ test_invalid_endpoint_records_refuse_before_mutation() {
   pass "fm-teardown: missing, empty, malformed, ambiguous, and task-mismatched endpoints refuse before every mutation or runtime call"
 }
 
+test_reused_allocation_refuses_before_mutation() {
+  local dir id=slot-owner peer=slot-claimant rc out
+  # A pooled worktree path is REUSED, so a stale record can name the slot
+  # another task is working in right now. Cleanup that acted on it would delete
+  # the live task's branch and hand its allocation back to the pool.
+  dir=$(make_case reused-allocation)
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=isolated:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  fm_write_meta "$dir/home/state/$peer.meta" \
+    "window=isolated:fm-$peer" "endpoint_task_id=$peer" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=ship" "mode=no-mistakes"
+  assert_refused_without_mutation "$dir" "$id" "reused allocation"
+  assert_present "$dir/home/state/$peer.meta" "refusal removed the other task's record"
+  assert_contains "$(cat "$dir/stderr")" "$peer" \
+    "the refusal did not name the other task that records the allocation"
+  # --force is what run_case already passes: force discards THIS task's own
+  # work, it has never meant acting on a record that may not be this task's.
+  assert_contains "$(cat "$dir/stderr")" "--force does not lift this" \
+    "the refusal did not state that force cannot bypass it"
+  # Symmetric: the live task's own cleanup is refused too, because a matching
+  # path alone does not say which of the two records owns the allocation.
+  assert_refused_without_mutation "$dir" "$peer" "reused allocation, other direction"
+
+  # A path recorded through a symlinked parent is the same allocation.
+  dir=$(make_case reused-allocation-alias)
+  ln -s "$dir/worktree" "$dir/worktree-alias"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=isolated:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  fm_write_meta "$dir/home/state/$peer.meta" \
+    "window=isolated:fm-$peer" "endpoint_task_id=$peer" \
+    "worktree=$dir/worktree-alias" "project=$dir/project" "kind=scout"
+  assert_refused_without_mutation "$dir" "$id" "aliased allocation"
+
+  # A secondmate's pooled home is guarded the same way.
+  dir=$(make_case reused-allocation-home)
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=isolated:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  fm_write_meta "$dir/home/state/$peer.meta" \
+    "window=isolated:fm-$peer" "endpoint_task_id=$peer" \
+    "home=$dir/worktree" "project=$dir/project" "kind=secondmate"
+  assert_refused_without_mutation "$dir" "$id" "allocation claimed as another record's home"
+
+  # Ordinary unique cleanup is unchanged, with an unrelated record present.
+  dir=$(make_case unique-allocation)
+  mkdir -p "$dir/other-worktree"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=isolated:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  fm_write_meta "$dir/home/state/$peer.meta" \
+    "window=isolated:fm-$peer" "endpoint_task_id=$peer" \
+    "worktree=$dir/other-worktree" "project=$dir/project" "kind=scout"
+  set +e
+  out=$(run_case "$dir" "$id" 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "unique allocation cleanup should still complete: $out"
+  assert_absent "$dir/home/state/$id.meta" "unique allocation cleanup left its own record"
+  assert_present "$dir/home/state/$peer.meta" "unique allocation cleanup removed an unrelated record"
+  # Idempotence: the record is gone, so a repeat is a no-op refusal about the
+  # missing record, never a second mutation of the neighbor's allocation.
+  set +e
+  run_case "$dir" "$id" >/dev/null 2>&1
+  set -e
+  assert_present "$dir/home/state/$peer.meta" "repeat cleanup disturbed the unrelated record"
+
+  pass "fm-teardown: a worktree or home recorded by another task refuses before every mutation, force included, while unique cleanup is unchanged"
+}
+
+test_reused_allocation_refuses_on_every_backend() {
+  local dir backend id=slot-owner peer=slot-claimant
+  # The guard is metadata-only and runs ahead of any backend command, so both
+  # supported spawn backends refuse identically and neither reaches its runtime.
+  for backend in tmux herdr; do
+    dir=$(make_case "reused-allocation-$backend")
+    case "$backend" in
+      tmux)
+        fm_write_meta "$dir/home/state/$id.meta" \
+          "window=isolated:fm-$id" "endpoint_task_id=$id" \
+          "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+        fm_write_meta "$dir/home/state/$peer.meta" \
+          "window=isolated:fm-$peer" "endpoint_task_id=$peer" \
+          "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+        ;;
+      herdr)
+        fm_write_meta "$dir/home/state/$id.meta" \
+          "window=lab:w1:p2" "endpoint_task_id=$id" \
+          "worktree=$dir/worktree" "project=$dir/project" "kind=scout" \
+          "backend=herdr" "herdr_session=lab" "herdr_workspace_id=w1" \
+          "herdr_tab_id=w1:t2" "herdr_pane_id=w1:p2"
+        fm_write_meta "$dir/home/state/$peer.meta" \
+          "window=lab:w1:p3" "endpoint_task_id=$peer" \
+          "worktree=$dir/worktree" "project=$dir/project" "kind=scout" \
+          "backend=herdr" "herdr_session=lab" "herdr_workspace_id=w1" \
+          "herdr_tab_id=w1:t3" "herdr_pane_id=w1:p3"
+        ;;
+    esac
+    assert_refused_without_mutation "$dir" "$id" "reused allocation on $backend"
+  done
+  pass "fm-teardown: the reused-allocation refusal is backend-neutral across tmux and Herdr"
+}
+
 test_control_lock_contention_refuses_before_mutation() {
   local dir id=locked-task lock holder i=0 rc
   dir=$(make_case control-lock)
@@ -366,6 +470,8 @@ SH
 }
 
 test_invalid_endpoint_records_refuse_before_mutation
+test_reused_allocation_refuses_before_mutation
+test_reused_allocation_refuses_on_every_backend
 test_control_lock_contention_refuses_before_mutation
 test_metadata_lock_serializes_destructive_cleanup
 test_supported_backend_endpoint_records_validate
