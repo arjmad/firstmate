@@ -28,6 +28,32 @@ record_pi_version_evidence() {
   [ -n "$version" ] || fail "$context could not determine the installed Pi version"
 }
 
+# Pi's stock working row, in ONE place. Pi 0.85 renders it as a braille spinner
+# frame plus the bare word "Working" inside the editor's ruled border; older Pi
+# appended an ellipsis. Every site below - the positive assertion that Calm off
+# keeps this row, the waits, and the negative controls that prove Calm HIDES it -
+# matches through this constant, so a future Pi upgrade that changes the row
+# fails loudly here instead of silently disarming the negative controls.
+PI_WORKING_ROW_RE='(⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏) Working(\.\.\.)?'
+
+# pi_working_row_in_file <file>: true when the snapshot shows Pi's stock working row.
+pi_working_row_in_file() {
+  LC_ALL=C grep -Eq "$PI_WORKING_ROW_RE" "$1" 2>/dev/null
+}
+
+# assert_pi_working_row <file> <msg>
+assert_pi_working_row() {
+  pi_working_row_in_file "$1" \
+    || fail "$2 (missing Pi's stock working row: '$PI_WORKING_ROW_RE')"$'\n'"--- output ---"$'\n'"$(cat "$1")"
+}
+
+# assert_no_pi_working_row <file> <msg>
+assert_no_pi_working_row() {
+  pi_working_row_in_file "$1" \
+    && fail "$2 (unexpected Pi stock working row: '$PI_WORKING_ROW_RE')"$'\n'"--- output ---"$'\n'"$(cat "$1")"
+  return 0
+}
+
 cleanup() {
   if command -v tmux >/dev/null 2>&1; then
     tmux -L "$TMUX_SOCKET" kill-server 2>/dev/null || true
@@ -2136,7 +2162,7 @@ TS
   i=0
   while [ "$i" -lt 120 ]; do
     capture_geometry_viewport "$snapshot"
-    tail -12 "$snapshot" | grep -Fq "Working..." || break
+    tail -12 "$snapshot" | LC_ALL=C grep -Eq "$PI_WORKING_ROW_RE" || break
     sleep 0.05
     i=$((i + 1))
   done
@@ -3662,7 +3688,7 @@ JS
   done
   cp "$working_snapshot" "$boat_frame_one"
   assert_contains "$(cat "$boat_frame_one")" '\__/' "Calm did not show the working ship during a real provider wait"
-  assert_not_contains "$(cat "$boat_frame_one")" "Working..." "Calm left Pi's stock working row visible while the ship was shown"
+  assert_no_pi_working_row "$boat_frame_one" "Calm left Pi's stock working row visible while the ship was shown"
   assert_not_contains "$(cat "$boat_frame_one")" "calm transcript" "the real provider wait showed a persistent Calm status row"
   assert_not_contains "$(cat "$boat_frame_one")" "FIRSTMATE WATCHER WAKE: signal: /tmp/probe.status" "the real provider wait restored a hidden operational row"
   boat_hull_line=$(grep -F '\__/' "$boat_frame_one" | head -1)
@@ -3868,7 +3894,7 @@ JS
     || fail "the second working period reset the boat from column $boat_freeze_column to $boat_resume_column instead of resuming"
   [ "$boat_resume_sail" = "$boat_freeze_sail" ] \
     || fail "the second working period changed sail from $boat_freeze_sail to $boat_resume_sail"
-  assert_not_contains "$(cat "$boat_resume_snapshot")" "Working..." \
+  assert_no_pi_working_row "$boat_resume_snapshot" \
     "the second working period left Pi's stock working row visible"
 
   # Clear the resumed run before the Calm-off stock-row probe.
@@ -3901,13 +3927,13 @@ JS
   active_screen_wait=0
   while [ "$active_screen_wait" -lt 200 ]; do
     tmux -L "$TMUX_SOCKET" capture-pane -p -t "$TMUX_SESSION" >"$working_snapshot"
-    if grep -Fq "Working..." "$working_snapshot"; then
+    if pi_working_row_in_file "$working_snapshot"; then
       break
     fi
     sleep 0.025
     active_screen_wait=$((active_screen_wait + 1))
   done
-  assert_contains "$(cat "$working_snapshot")" "Working..." "Calm off did not keep Pi's stock working row"
+  assert_pi_working_row "$working_snapshot" "Calm off did not keep Pi's stock working row"
   assert_not_contains "$(cat "$working_snapshot")" '\__/' "Calm off showed the working ship"
   wait_for_text "$working_response_snapshot" "CALM_WORKING_E2E_RESPONSE" \
     || fail "the deterministic provider did not settle after proving Pi's stock working row"
