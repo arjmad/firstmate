@@ -43,9 +43,23 @@
 # an older record still names was considered and deliberately left out: it does
 # not prevent any destructive act the mutation guard below does not already
 # refuse, and firstmate's spawn fixtures legitimately hand one fake worktree to
-# several task ids, so the refusal fired where nothing was at risk. The residual
-# is that a collision can still be BORN; when it is, both records' cleanup
-# refuses here until a human reconciles them, which is the safe direction.
+# several task ids, so the refusal fired where nothing was at risk.
+#
+# RECORDS-ONLY RETIREMENT. A contested allocation must not deadlock cleanup. A
+# Herdr session restart frees the pooled slot of every live task while its record
+# survives, so the next `treehouse get` can re-hand a slot a stale record still
+# names - after which, if a conflict simply refused the whole teardown, NEITHER
+# task could ever be cleaned up. So a conflict refuses only the ALLOCATION half:
+# the caller leaves the worktree, its branch, and the pooled slot completely
+# alone, and still retires the records it exclusively owns - its own metadata,
+# status log, steering inbox, poll and hook artifacts, busy state, backlog row,
+# and its own endpoint. Nothing outside this task's own records is touched, so
+# the contested slot and the peer record both survive untouched for the peer's
+# own cleanup or for a human to reconcile. Once one side retires, the other is
+# the sole claimant and its next teardown proceeds in full, normally.
+#
+# This is not a bypass and there is no flag for it: the mutation stays refused,
+# unconditionally, and nothing is deleted on age, silence, or a dead endpoint.
 #
 # Path identity is compared on the resolved real path when the path exists, so a
 # symlinked pool root, `/tmp` vs `/private/tmp`, and a trailing slash cannot hide
@@ -101,19 +115,21 @@ fm_allocation_conflicts() {
   return "$found"
 }
 
-# fm_allocation_refuse_conflict <state-dir> <task-id> <path> <what>
-# The shared refusal. Returns 0 when no other record claims <path> (the caller
-# proceeds), and 1 after printing the refusal when one does. <what> names the
-# allocation in the caller's own words, e.g. "worktree" or "child worktree".
-fm_allocation_refuse_conflict() {
-  local state=$1 id=$2 path=$3 what=$4 conflicts peer field
+# fm_allocation_exclusive <state-dir> <task-id> <path> <what>
+# The shared decision. Returns 0 when <task-id> is the only record claiming
+# <path>, so the caller may mutate the allocation. Returns 1, after printing one
+# notice line naming every other claimant, when it is not: the caller must then
+# leave the worktree, its branch, and the pooled slot completely alone and retire
+# only the records this task exclusively owns. <what> names the allocation in the
+# caller's own words, e.g. "worktree", "home", or "child worktree".
+fm_allocation_exclusive() {
+  local state=$1 id=$2 path=$3 what=$4 conflicts peers peer field
   conflicts=$(fm_allocation_conflicts "$state" "$id" "$path") || return 0
-  echo "REFUSED: task $id's recorded $what $path is also recorded by another task; nothing was changed." >&2
+  peers=
   while IFS=$'\t' read -r peer field; do
     [ -n "$peer" ] || continue
-    echo "  task $peer records it as $field=" >&2
+    peers="${peers:+$peers, }$peer ($field=)"
   done <<< "$conflicts"
-  echo "One pooled allocation cannot belong to two tasks, and a matching path alone does not say which one owns it, so acting on it could return or delete the OTHER task's live work." >&2
-  echo "Reconcile the two records first (bin/fm-crew-state.sh for each task), then retry. --force does not lift this: it discards this task's own work, never another record's allocation." >&2
+  echo "notice: task $id's $what $path is also recorded by $peers, so a matching path cannot say which task owns it; retiring only $id's own records and leaving the allocation, its branch, and the pooled slot to the other record." >&2
   return 1
 }

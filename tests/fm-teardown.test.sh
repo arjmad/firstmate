@@ -2128,8 +2128,8 @@ configure_secondmate_with_colliding_children() {  # <case-dir>
   done
 }
 
-test_forced_secondmate_teardown_refuses_colliding_child_allocation() {
-  local case_dir home rc child
+test_forced_secondmate_teardown_retires_colliding_child_records_only() {
+  local case_dir home rc child returns
   case_dir=$(make_case colliding-child-allocation)
   write_meta "$case_dir" local-only secondmate
   configure_secondmate_with_colliding_children "$case_dir"
@@ -2150,23 +2150,22 @@ SH
 
   rc=0
   run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
-  [ "$rc" -ne 0 ] \
-    || fail "colliding-child-allocation: forced teardown acted on a worktree two child records claim"
   assert_grep "child worktree" "$case_dir/stderr" \
-    "colliding-child-allocation: refusal did not name the contested allocation"
-  [ ! -s "$case_dir/kill.log" ] \
-    || fail "colliding-child-allocation: refusal killed a child endpoint first"
-  [ ! -s "$case_dir/treehouse.log" ] \
-    || fail "colliding-child-allocation: refusal returned an allocation first"
-  [ -d "$case_dir/shared-child-wt" ] \
-    || fail "colliding-child-allocation: refusal removed the contested worktree"
-  [ -e "$case_dir/state/task-x1.meta" ] && [ -d "$home" ] \
-    || fail "colliding-child-allocation: refusal removed parent state"
+    "colliding-child-allocation: the notice did not name the contested allocation"
+  # The first child reaches its allocation while the second still claims it, so
+  # it retires its own records and leaves the slot alone. Only the child that is
+  # by then the sole claimant returns it, so the contested path is returned
+  # exactly ONCE. Without the decision both children return the same slot, and
+  # the second return acts on an allocation the first already handed back.
+  returns=$(grep -Fc shared-child-wt "$case_dir/treehouse.log" || true)
+  [ "$returns" = 1 ] \
+    || fail "colliding-child-allocation: the contested allocation was returned $returns times, expected exactly 1: $(cat "$case_dir/treehouse.log")"
+  # Neither child is stranded: each one's own records are still retired.
   for child in child-a child-b; do
-    [ -e "$home/state/$child.meta" ] \
-      || fail "colliding-child-allocation: refusal removed the $child record"
+    [ ! -e "$home/state/$child.meta" ] \
+      || fail "colliding-child-allocation: cleanup kept the $child record it exclusively owns"
   done
-  pass "forced secondmate teardown refuses a child allocation two records claim, before any child mutation"
+  pass "forced secondmate teardown retires a contested child's records without returning a slot its peer still claims"
 }
 
 configure_secondmate_with_tmux_children() {  # <case-dir>
@@ -3543,7 +3542,7 @@ test_herdr_flat_teardown_refuses_orphaning_records_then_retry_completes
 test_herdr_flat_teardown_refuses_records_on_unparseable_presence
 test_herdr_flat_teardown_preflight_refuses_before_changes
 test_forced_secondmate_herdr_child_preflight_refuses_before_changes
-test_forced_secondmate_teardown_refuses_colliding_child_allocation
+test_forced_secondmate_teardown_retires_colliding_child_records_only
 test_forced_secondmate_teardown_holds_descendant_lifecycle_locks
 test_forced_secondmate_herdr_child_retains_records_when_close_unconfirmed
 test_forced_teardown_retains_nested_secondmate_home_when_grandchild_close_unconfirmed

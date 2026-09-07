@@ -826,11 +826,14 @@ WT=$(fm_meta_get "$META" worktree)
 PROJ=$(fm_meta_get "$META" project)
 # Second cleanup authorization check, still metadata-only and still ahead of
 # fm-guard, any backend command, file removal, branch deletion, or worktree
-# return: prove no OTHER current record claims this allocation before anything
-# can act on it. bin/fm-allocation-lib.sh owns why a matching path, a label, a
-# dead endpoint, or a task-ID lease is not ownership, and why --force does not
-# lift this.
-fm_allocation_refuse_conflict "$STATE" "$ID" "$WT" worktree || exit 1
+# return: decide whether this task is the ONLY record claiming this allocation.
+# When it is not, cleanup drops to records-only - every step below that touches
+# the worktree, its branch, or the pooled slot is skipped, while this task's own
+# records and endpoint are still retired. bin/fm-allocation-lib.sh owns why a
+# matching path, a label, a dead endpoint, or a task-ID lease is not ownership,
+# and why --force does not lift the allocation half.
+ALLOC_RECORDS_ONLY=0
+fm_allocation_exclusive "$STATE" "$ID" "$WT" worktree || ALLOC_RECORDS_ONLY=1
 T_ORCA=
 [ "$BACKEND" != orca ] || T_ORCA=$T
 if [ "${FM_TEARDOWN_GUARD_DONE:-0}" != 1 ]; then
@@ -838,10 +841,10 @@ if [ "${FM_TEARDOWN_GUARD_DONE:-0}" != 1 ]; then
 fi
 HOME_PATH=$(grep '^home=' "$META" | cut -d= -f2- || true)
 # A secondmate's home is pooled the same way and removed by the same forced
-# path, so it needs the same proof. Records that name one path in both fields
+# path, so it needs the same decision. Records that name one path in both fields
 # are already covered by the worktree check just above.
 if [ -n "$HOME_PATH" ] && [ "$HOME_PATH" != "$WT" ]; then
-  fm_allocation_refuse_conflict "$STATE" "$ID" "$HOME_PATH" home || exit 1
+  fm_allocation_exclusive "$STATE" "$ID" "$HOME_PATH" home || ALLOC_RECORDS_ONLY=1
 fi
 PR_URL=$(grep '^pr=' "$META" | tail -1 | cut -d= -f2- || true)
 # tasktmp is recorded by fm-spawn for tasks that set up a per-task temp root
@@ -2623,7 +2626,7 @@ preflight_firstmate_home_herdr_children() {  # <home>
 }
 
 cleanup_firstmate_home_children() {
-  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc child_busy_gen
+  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc child_busy_gen child_records_only
   sub_state="$home/state"
   [ -d "$sub_state" ] || return 0
   for child_meta in "$sub_state"/*.meta; do
@@ -2633,11 +2636,15 @@ cleanup_firstmate_home_children() {
     child_proj=$(meta_value "$child_meta" project)
     child_kind=$(meta_value "$child_meta" kind)
     [ -n "$child_kind" ] || child_kind=ship
-    # Same allocation-ownership proof, before this child's pane is killed or its
+    # Same allocation decision, before this child's pane is killed or its
     # worktree is returned: two records inside one secondmate home can collide
-    # on a pooled slot exactly as two records in the main home can.
+    # on a pooled slot exactly as two records in the main home can, and the
+    # answer is the same - retire this child's own records, leave the contested
+    # allocation to the record that also claims it.
+    child_records_only=0
     if [ -n "$child_wt" ]; then
-      fm_allocation_refuse_conflict "$sub_state" "$child_id" "$child_wt" "child worktree" || return 1
+      fm_allocation_exclusive "$sub_state" "$child_id" "$child_wt" "child worktree" \
+        || child_records_only=1
     fi
     child_backend=$(fm_backend_of_meta "$child_meta")
     if [ "$child_backend" = orca ]; then
@@ -2671,7 +2678,12 @@ cleanup_firstmate_home_children() {
         fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" 2>/dev/null || true
       fi
     fi
-    if [ "$child_kind" = secondmate ]; then
+    # The allocation half for this child - its home, its Orca worktree, or its
+    # pooled slot. Under records-only retirement none of it runs; the loop falls
+    # through to the record retirement below.
+    if [ "$child_records_only" = 1 ]; then
+      :
+    elif [ "$child_kind" = secondmate ]; then
       child_home=$(meta_value "$child_meta" home)
       [ -n "$child_home" ] || child_home=$child_wt
       if [ -n "$child_home" ] && [ -d "$child_home" ]; then
@@ -2843,7 +2855,7 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] &&
   ORCA_PATH_MATCH_VERIFIED=1
 fi
 
-if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
+if [ -d "$WT" ] && [ "$FORCE" != "--force" ] && [ "$ALLOC_RECORDS_ONLY" != 1 ]; then
   if validate_worktree_teardown_safety; then
     :
   else
@@ -2958,7 +2970,11 @@ fi
 # kind=secondmate: a secondmate home's own runtime lifecycle is owned by the
 # dedicated process-event and firstmate-home removal machinery further below,
 # not by task-worktree cleanup.
-if [ "$KIND" != secondmate ]; then
+# Both are scoped to the worktree, and under records-only retirement that
+# worktree may already belong to the other record - concluding its run or
+# killing the processes inside it would reach straight into that task's live
+# work, which is the exact hazard this guard exists to prevent.
+if [ "$KIND" != secondmate ] && [ "$ALLOC_RECORDS_ONLY" != 1 ]; then
   conclude_task_no_mistakes_run "$WT"
   reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
 fi
@@ -2968,7 +2984,13 @@ fi
 "$SCRIPT_DIR/fm-remote-job-reap-orphans.sh" >&2 || true
 
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.
-if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
+# The whole block is the allocation half: branch deletion, hook-file removal
+# inside the worktree, the Orca worktree removal, and the Treehouse return. Under
+# records-only retirement none of it runs - the slot, its branch, and everything
+# in it are left exactly as they are for the other record's own cleanup.
+if [ "$ALLOC_RECORDS_ONLY" = 1 ]; then
+  :
+elif [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   if [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
     require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" || exit 1
     ORCA_PATH_MATCH_VERIFIED=1
@@ -3095,7 +3117,9 @@ if [ "$KIND" = secondmate ]; then
   [ -n "$HOME_PATH" ] || HOME_PATH=$WT
   handoff_wake_retire_stage \
     || { echo "error: receiver wake cleanup could not be staged; preserving the secondmate home and route" >&2; exit 1; }
-  if remove_firstmate_home "$HOME_PATH" "secondmate home" "$ID"; then
+  if [ "$ALLOC_RECORDS_ONLY" = 1 ]; then
+    :
+  elif remove_firstmate_home "$HOME_PATH" "secondmate home" "$ID"; then
     :
   else
     rc=$?
