@@ -938,9 +938,8 @@ ok - real herdr: an agent that does not stop fails closed instead of being repor
 ```
 
 Those results cover custom-source registrations, not the native full-lifecycle exception.
-The extended `tests/fm-control-herdr-smoke.test.sh` requires an official Pi report to actually produce `screen_detection_skipped=true` and the `full_lifecycle_hook_authority` explanation before testing plain/nested shell recovery, real foreground work, and non-mutating already-stopped exit.
-CLI registration success without that authority is a test failure, never a simulated proof of the native path.
 That command refreshes the installed-Herdr evidence; run it after every Herdr upgrade rather than trusting the version above.
+NOT VERIFIED against installed Herdr: the native full-lifecycle exception below has no live guard yet, because proving it needs an official Pi report that actually installs `screen_detection_skipped=true` with the `full_lifecycle_hook_authority` reason, and CLI registration success without that authority would simulate the native path rather than prove it.
 
 The portable native-authority and strict pane-death regression targets passed on 2026-09-07, macOS 26.6.2, Darwin 25.6.0 arm64, Python 3.9.6, Bash 5.3.9, and jq 1.8.2:
 

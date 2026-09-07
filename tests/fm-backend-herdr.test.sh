@@ -970,19 +970,32 @@ finally:
                     return True
                 time.sleep(.03)
             return False
+        def sweep():
+            # Every pid here is one of this fixture's own private shells or
+            # their children. Signal the whole recorded set, not just the root:
+            # killing the root alone reparents its children to init, where they
+            # survive the reap and fail the absence check below.
+            for victim in sorted(descendants, reverse=True):
+                try:
+                    os.kill(victim, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
         try:
             if not reap():
-                # The orderly exit did not finish. Every pid here is one of
-                # this fixture's own private shells, so escalate once rather
-                # than leave a stray process behind, then confirm the reap.
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                # The orderly exit did not finish; escalate once, then confirm.
+                sweep()
                 if not reap():
                     raise AssertionError('private PTY root not reaped: ' + str(pid))
-            result = subprocess.run(['ps', '-p', ','.join(map(str, descendants)), '-o', 'pid=,ppid=,stat='],
-                capture_output=True, text=True, timeout=5)
+            for attempt in range(2):
+                result = subprocess.run(['ps', '-p', ','.join(map(str, descendants)), '-o', 'pid=,ppid=,stat='],
+                    capture_output=True, text=True, timeout=5)
+                if result.returncode == 1 and not result.stdout.strip():
+                    break
+                # A descendant outlived the shell that owned it. Sweep the set
+                # once and re-read, so cleanup enforces exactly what it asserts.
+                if attempt == 0:
+                    sweep()
+                    time.sleep(.2)
             assert result.returncode == 1 and not result.stdout.strip(), result.stdout
         except Exception as exc:
             cleanup_errors.append(str(exc))
