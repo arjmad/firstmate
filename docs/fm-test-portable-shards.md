@@ -86,7 +86,8 @@ Refresh the hints whenever the serial lane gains scripts, rather than waiting fo
 | imbalance | | 8 ms |
 
 The current table is generated from the runner's retained maxima.
-Five shards of the same weight would carry 18.0 minutes each against the 20-minute job cap on the fork's 2-vCPU runner, so the lane runs as six shards.
+Five shards of the same weight would carry 18.0 minutes each on the fork's 2-vCPU runner, so the lane runs as six shards of about 15 minutes.
+That runner's speed also spreads 2-4x within one job: shard 1 of run [34067578768](https://github.com/arjmad/firstmate/actions/runs/34067578768) spent 19.8 minutes on 14.8 minutes of hints and was cancelled at the then 20-minute cap, so the cap is 30 minutes.
 The last complete replay against the three upstream source runs put the then-current partition's worst shard at 12.54 min, 63% of the 20-minute job cap.
 
 The single longest script, `tests/fm-watch-triage.test.sh` at 410619 ms on the fork's runner, is the floor for any shard count.
@@ -128,7 +129,7 @@ Portable shards, each portable serial shard, and the Herdr lane upload runner-ge
 | Lane | Bound | Rationale |
 |---|---|---|
 | portable parallel 1/2 | job `timeout-minutes: 10` | The measured shard sums are about three minutes and the timeout is a hang tripwire. |
-| portable serial 1-6 | job `timeout-minutes: 20` | Each balanced shard carries about 15 minutes of conservative assignment weight measured on the fork's own 2-vCPU runner, leaving roughly 1.3x hang-tripwire margin for job setup and runner-speed spread. |
+| portable serial 1-6 | job `timeout-minutes: 30` | Each balanced shard carries about 15 minutes of conservative assignment weight measured on the fork's own 2-vCPU runner, and that runner's speed spreads 2-4x within one job, so the cap keeps 2x hang-tripwire margin over the hints. |
 | Herdr | family-run step `timeout-minutes: 20`; job `timeout-minutes: 75` backstop | Healthy runs finished around 7 minutes before this lane gained `fm-backend-herdr-focus-flash-e2e`, which measures about 2 minutes against a real lab locally, so the step bound is still the hang tripwire (cleanup and timing artifacts still upload) while the job cap stays a last-resort backstop. Refresh this figure from the lane's uploaded timing artifact. |
 
 Timeouts are hang tripwires rather than expected healthy durations.

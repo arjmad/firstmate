@@ -144,10 +144,12 @@ jobs:
   tests-portable-serial:
     name: Behavior portable serial ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    # Measured whole remainder is ~63 min of serial work; the balanced shards
-    # are ~12.7 min each. Cap is a hang tripwire with roughly 1.6x margin, not
-    # the expected healthy end of the lane.
-    timeout-minutes: 20
+    # Each balanced shard carries about 15 min of retained-maximum hints on the
+    # fork's 2-vCPU runner, whose speed spreads 2-4x within one job: shard 1 of
+    # run 34067578768 spent 19.8 min on 14.8 min of hints. Cap is a hang
+    # tripwire with 2x margin over the hints, not the expected healthy end of
+    # the lane.
+    timeout-minutes: 30
     strategy:
       # Every shard reports so one failure never hides another shard's result.
       fail-fast: false
