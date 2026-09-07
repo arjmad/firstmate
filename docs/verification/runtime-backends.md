@@ -937,8 +937,61 @@ ok - real herdr: no control verb removed the endpoint or the task's local copy
 ok - real herdr: an agent that does not stop fails closed instead of being reported as stopped
 ```
 
-The registry read through `herdr pane report-agent` is the same source `fm_backend_herdr_agent_state` classifies, so registering and not registering an agent on a plain shell pane exercises exactly the gate every lifecycle verb depends on, with no real agent launched.
-That command is the guard that refreshes this record; run it after every Herdr upgrade rather than trusting the version above.
+Those results cover custom-source registrations, not the native full-lifecycle exception.
+The extended `tests/fm-control-herdr-smoke.test.sh` requires an official Pi report to actually produce `screen_detection_skipped=true` and the `full_lifecycle_hook_authority` explanation before testing plain/nested shell recovery, real foreground work, and non-mutating already-stopped exit.
+CLI registration success without that authority is a test failure, never a simulated proof of the native path.
+That command refreshes the installed-Herdr evidence; run it after every Herdr upgrade rather than trusting the version above.
+
+The portable native-authority and strict pane-death regression targets passed on 2026-09-07, macOS 26.6.2, Darwin 25.6.0 arm64, Python 3.9.6, Bash 5.3.9, and jq 1.8.2:
+
+```sh
+bin/fm-test-run.sh tests/fm-backend-herdr.test.sh tests/fm-herdr-session-cleanup.test.sh
+```
+
+Selected exact output:
+
+```text
+ok - native authority: bare shell overrides stale official authority without mutation
+ok - native authority: a state-blind ps on PATH cannot silently disable recovery
+ok - native authority: husk replacement creates first and revalidates before closing
+ok - native authority: changed evidence after replacement create refuses old-tab close
+ok - native authority: proven descendant shell overrides stale official authority
+ok - native authority: actual foreground child preserves native live authority
+ok - native authority: background child cannot be hidden by a shell foreground
+ok - native authority: unrelated shell cannot override native authority
+ok - native authority: kernel evidence: changed-start
+ok - native authority: native report changed during positive shell proof
+ok - native authority: custom-source registration remains authoritative on a bare shell
+FM_TEST_SUMMARY total=2 failed=0 skipped_gate=0 duration_ms=70416
+```
+
+These tests use real private PTYs and kernel process tables with a canned Herdr transport, including malformed/failed/racing read injection; they do not establish installed-Herdr behavior.
+NOT VERIFIED: the new native-authority cases against installed Herdr, real Pi, or Linux; the existing 0.8.0 custom-registration evidence above does not cover them.
+
+#### `ps` must report process state
+
+Both shell proofs accept only a sleeping or idle process, so a `ps` that cannot report the state letter refuses every proof and disables recovery entirely rather than degrading gradually.
+Measured on the same host and date, an `adv_cmds` rebuild ahead of the platform binary on `PATH` prints a blank state letter for every live process:
+
+```sh
+ps -axo stat= | sed 's/^ *//' | cut -c1-3 | sort | uniq -c | sort -rn | head -4
+/bin/ps -axo stat= | sed 's/^ *//' | cut -c1-3 | sort | uniq -c | sort -rn | head -4
+```
+
+```text
+ 351
+ 330 s
+  24 +
+   6 N+
+ 356 S
+ 333 Ss
+  24 S+
+   6 SN+
+```
+
+`fm_backend_herdr_ps_bin` therefore probes candidates against a known-live process and falls back to `/bin/ps`, and `tests/fm-backend-herdr.test.sh` pins both halves: the state-blind binary forced through `FM_HERDR_PS_BIN` must still refuse, while the same binary merely first on `PATH` must not prevent recovery.
+`FM_HERDR_PS_BIN` is honored verbatim and never probed.
+NOT VERIFIED: Linux `procps` behavior for this probe.
 
 ### Away-mode transport
 
