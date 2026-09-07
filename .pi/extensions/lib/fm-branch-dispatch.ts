@@ -114,14 +114,24 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
 // no longer rides the heartbeat into main (docs/pi-supervision-branch.md
 // "Heartbeat routing").
 //
+// A signal or stale row whose task record no longer exists is RETIRED and gets
+// that same treatment. bin/fm-teardown.sh removes state/<task>.meta while that
+// task's own rows can still be sitting unacknowledged in the queue, so this is
+// the ordinary end of every task rather than a data problem: the row names work
+// that no longer exists, carries no project scope, and cannot be acted on, so
+// vetoing the whole queue over it stood the branch down at the end of every
+// task, exactly when the captain's conversation most benefits from it.
+//
 // The heartbeat's all-or-nothing contract is unchanged in what it actually
 // guarantees: a heartbeat review takes EVERY branch-ownable unread row or none
-// of them. An unresolvable signal/stale row (unmapped project) still vetoes the
-// whole scan in both modes, because that is a data/metadata problem this
-// function cannot safely reason past, not an ordinary main-only event. A row
-// this repo's fm_wake_append could never have produced (an unknown kind, or a
-// line that fails the structural tab-field check) also still vetoes the whole
-// scan - that is queue corruption, not an everyday mixed queue.
+// of them. An unresolvable signal/stale row still vetoes the whole scan in both
+// modes, because that is a data/metadata problem this function cannot safely
+// reason past, not an ordinary main-only event: a task record that still exists
+// but maps the row to no project is unresolvable, while a record teardown has
+// already removed is retired. A row this repo's fm_wake_append could never have
+// produced (an unknown kind, or a line that fails the structural tab-field
+// check) also still vetoes the whole scan - that is queue corruption, not an
+// everyday mixed queue.
 function statusLineVerb(line: string): string {
   const beforeColon = line.split(":", 1)[0].split("[", 1)[0].trim();
   const words = beforeColon.split(/\s+/);
@@ -203,6 +213,11 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean): UnreadWak
   // The task id behind each key a signal or stale row may carry: the task id
   // itself, or the endpoint its metadata records.
   const taskByKey = new Map<string, string>();
+  // Every identity a task record still on disk names - the task id and the
+  // endpoint it records - whether or not that record maps to a project. A row
+  // naming one of these but resolving to no project is unresolvable; a row
+  // naming none of them is retired work teardown has already removed.
+  const liveTaskRecords = new Set<string>();
   try {
     for (const name of readdirSync(state)) {
       if (!name.endsWith(".meta")) continue;
@@ -210,6 +225,8 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean): UnreadWak
       const fields = readFileSync(`${state}/${name}`, "utf8").split(/\r?\n/);
       const project = fields.find((line) => line.startsWith("project="))?.slice(8) ?? "";
       const window = fields.find((line) => line.startsWith("window="))?.slice(7) ?? "";
+      liveTaskRecords.add(task);
+      if (window) liveTaskRecords.add(window);
       if (project) {
         metadata.set(task, project);
         taskByKey.set(task, task);
@@ -253,6 +270,8 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean): UnreadWak
     }
     let project = "";
     let task = "";
+    // True only when no task record on disk still names this row's work.
+    let retired = false;
     if (kind === "signal") {
       const payload = fields[4] ?? "";
       if (/^needs-decision:/.test(payload)) {
@@ -265,9 +284,12 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean): UnreadWak
       }
       task = key.replace(/\.(?:status|turn-ended)$/, "");
       project = metadata.get(task) ?? "";
+      retired = task.length > 0 && !liveTaskRecords.has(task);
     } else if (kind === "stale") {
       task = taskByKey.get(key) ?? taskByKey.get(key.replace(/^fm-/, "")) ?? "";
       project = metadata.get(key) ?? metadata.get(key.replace(/^fm-/, "")) ?? "";
+      retired = key.length > 0 && !liveTaskRecords.has(key) &&
+        !liveTaskRecords.has(key.replace(/^fm-/, ""));
       if (task) {
         const statusPath = `${state}/${task}.status`;
         if (!staleDecisionOwnership.has(statusPath)) {
@@ -312,7 +334,12 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean): UnreadWak
       // ordinary main-only row.
       return UNSAFE_SCOPE;
     }
-    if (!project || !task) return UNSAFE_SCOPE;
+    if (!project || !task) {
+      // Retired: excluded from what the branch may claim and left queued for
+      // main exactly like a check row, never a veto of the rest of the queue.
+      if (retired) continue;
+      return UNSAFE_SCOPE;
+    }
     projects.add(project);
     eligibleTasks.add(task);
     eligibleSeqs.push(seq);

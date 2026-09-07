@@ -9,6 +9,7 @@ Fleet supervision on the Pi primary harness runs on a second conversation - the 
 Supervision is default-on: once a Pi primary session owns this home's fleet lock, the branch handles eligible task-local rows from ordinary actionable wakes plus heartbeat scans that the cheap bash-level scan flags as possibly captain-relevant, then merges each outcome back into the captain conversation's transcript.
 Ordinary main-only rows remain on main even when eligible task-local rows share their queue, except that a decision-owned signal or stale trigger keeps its entire coalesced trigger batch on main.
 An unresolvable row makes the scan unsafe and returns the whole wake to main, and every watcher-failure alarm also stays on main.
+A signal or stale row whose task record no longer exists is retired rather than unresolvable - it names torn-down work with no project scope, so it is skipped like a permanently main-only row instead of returning the rest of the queue, heartbeat included, to main at the end of every task.
 Captain-relevant branch outcomes persist as exact, sequence-keyed visible transcript entries and then open one sequence-keyed processing turn on main, which stays open until main acknowledges that sequence.
 The design source is the captain-approved forked-supervision architecture board, a captain-private fleet record (a self-contained HTML explainer with the measured cache and judgment evidence); this document records the shape it landed as, and the delivering PR cites the board artifact itself.
 
