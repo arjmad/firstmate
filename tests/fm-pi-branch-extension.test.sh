@@ -3972,12 +3972,17 @@ if (heartbeatMixed.eligibleSeqs.slice().sort().join(",") !== "2,3") {
 
 // All-or-nothing is unchanged in what it actually guarantees: a heartbeat
 // review takes every branch-ownable row or none of them, so a row this scan
-// cannot resolve still defers the whole review to main.
+// cannot resolve still defers the whole review to main. Unresolvable means a
+// task record that is still on disk but maps the row to no project - a record
+// teardown already removed is retired instead, and
+// test_branch_dispatch_retires_a_torn_down_tasks_rows_without_vetoing_the_queue
+// owns that boundary.
+writeFileSync(`${state}/no-project.meta`, "window=fm-no-project\n");
 writeFileSync(
   `${state}/.wake-queue`,
   [
     "1\t1\theartbeat\theartbeat\theartbeat",
-    "1\t2\tsignal\tno-such-task.status\tsignal: no-such-task.status",
+    "1\t2\tsignal\tno-project.status\tsignal: no-project.status",
   ].join("\n"),
 );
 const heartbeatUnresolvable = scopeForUnreadWake(state, true);
@@ -4012,6 +4017,123 @@ EOF
   out=$(cat "$TMP_ROOT/node-output")
   expect_code 0 "$status" "main-only classification and eligible-row snapshot contract must hold: $out"
   pass "scopeForUnreadWake excludes every main-only class without vetoing eligible task-local rows, and writes the eligible snapshot"
+}
+
+# Teardown removes state/<task>.meta while that task's own rows can still be
+# sitting unacknowledged in the durable queue, so at the end of EVERY task the
+# scan met a signal or stale row it could not map to a project. Treating that
+# as unresolvable returned the whole queue to main, heartbeat included, which
+# stood the supervision branch down exactly when the captain's conversation
+# most benefits from it. This is the reported reproduction (cases A-D) plus the
+# fail-safe boundary the retirement rule must not widen.
+test_branch_dispatch_retires_a_torn_down_tasks_rows_without_vetoing_the_queue() {
+  local repo home out status
+  repo="$TMP_ROOT/dispatch-retired-root"
+  home="$TMP_ROOT/dispatch-retired-home"
+  mkdir -p "$repo/.pi/extensions/lib" "$home/state" "$home/projects/hello"
+  cp "$ROOT/.pi/extensions/lib/fm-branch-dispatch.ts" "$repo/.pi/extensions/lib/fm-branch-dispatch.ts"
+  cp "$ROOT/.pi/extensions/lib/fm-async-exec.ts" "$repo/.pi/extensions/lib/fm-async-exec.ts"
+  printf 'project=%s/projects/hello\nwindow=fm-hello\n' "$home" > "$home/state/hello.meta"
+  LIB="$repo/.pi/extensions/lib/fm-branch-dispatch.ts" FM_HOME="$home" \
+    node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+import { unlinkSync, writeFileSync } from "node:fs";
+
+const { scopeForUnreadWake } = await import(pathToFileURL(process.env.LIB).href);
+const state = `${process.env.FM_HOME}/state`;
+const project = `${process.env.FM_HOME}/projects/hello`;
+const heartbeatAndSignal = [
+  "1\t1\theartbeat\theartbeat\theartbeat",
+  "1\t2\tsignal\thello.status\tsignal: hello.status",
+].join("\n");
+// Only the branch-visible verdict is compared, never the sequence numbers,
+// because case B legitimately claims one more row than case C.
+const verdict = (scope) => JSON.stringify({
+  status: scope.status,
+  eligible: scope.eligible,
+  projects: scope.projects,
+  corrupted: scope.corrupted,
+});
+
+// A. heartbeat + signal, task record PRESENT: both rows are claimed.
+writeFileSync(`${state}/.wake-queue`, heartbeatAndSignal);
+const present = scopeForUnreadWake(state, true);
+if (!present.eligible || present.eligibleSeqs.slice().sort().join(",") !== "1,2" ||
+  !present.projects.includes(project) || present.corrupted) {
+  throw new Error(`a live task's rows must ride the heartbeat: ${JSON.stringify(present)}`);
+}
+
+// C. heartbeat alone: the branch absorbs the fleet review.
+writeFileSync(`${state}/.wake-queue`, "1\t1\theartbeat\theartbeat\theartbeat");
+const heartbeatAlone = scopeForUnreadWake(state, true);
+if (!heartbeatAlone.eligible || heartbeatAlone.eligibleSeqs.join(",") !== "1") {
+  throw new Error(`a bare heartbeat must reach the branch: ${JSON.stringify(heartbeatAlone)}`);
+}
+
+// B. the same heartbeat with the task torn down: the retired signal row is
+// skipped like a permanently main-only row, so B now matches C.
+unlinkSync(`${state}/hello.meta`);
+writeFileSync(`${state}/.wake-queue`, heartbeatAndSignal);
+const tornDown = scopeForUnreadWake(state, true);
+if (verdict(tornDown) !== verdict(heartbeatAlone)) {
+  throw new Error(`a torn-down task's row still deferred the heartbeat: ${verdict(tornDown)} vs ${verdict(heartbeatAlone)}`);
+}
+if (tornDown.eligibleSeqs.join(",") !== "1" || tornDown.eligibleTasks.length !== 0) {
+  throw new Error(`a retired row must not be claimed or reported: ${JSON.stringify(tornDown)}`);
+}
+
+// A stale row under the torn-down task's endpoint alias is retired the same
+// way; teardown removes the record both spellings resolve through.
+writeFileSync(
+  `${state}/.wake-queue`,
+  [
+    "1\t1\theartbeat\theartbeat\theartbeat",
+    "1\t2\tstale\tfm-hello\tstale: fm-hello",
+  ].join("\n"),
+);
+const tornDownStale = scopeForUnreadWake(state, true);
+if (verdict(tornDownStale) !== verdict(heartbeatAlone) || tornDownStale.eligibleSeqs.join(",") !== "1") {
+  throw new Error(`a torn-down task's stale row still deferred the heartbeat: ${JSON.stringify(tornDownStale)}`);
+}
+
+// D. the retired signal row alone is ordinary main-only absence rather than a
+// fault: nothing for the branch to claim, and nothing to escalate.
+writeFileSync(`${state}/.wake-queue`, "1\t1\tsignal\thello.status\tsignal: hello.status");
+const retiredOnly = scopeForUnreadWake(state, false);
+if (retiredOnly.eligible || retiredOnly.eligibleSeqs.length !== 0) {
+  throw new Error(`a retired row must never be claimed: ${JSON.stringify(retiredOnly)}`);
+}
+if (retiredOnly.corrupted) {
+  throw new Error(`a retired row is not a fault: ${JSON.stringify(retiredOnly)}`);
+}
+
+// The fail-safe is unchanged for every other unresolvable shape. A task record
+// still on disk that maps the row to no project vetoes the whole scan, whether
+// the row names the task or its endpoint alias.
+writeFileSync(`${state}/broken.meta`, "window=fm-broken\n");
+for (const row of [
+  "1\t2\tsignal\tbroken.status\tsignal: broken.status",
+  "1\t2\tstale\tfm-broken\tstale: fm-broken",
+]) {
+  writeFileSync(`${state}/.wake-queue`, ["1\t1\theartbeat\theartbeat\theartbeat", row].join("\n"));
+  const unresolvable = scopeForUnreadWake(state, true);
+  if (unresolvable.eligible || !unresolvable.corrupted) {
+    throw new Error(`a live record with no project must still veto the scan: ${row} -> ${JSON.stringify(unresolvable)}`);
+  }
+}
+
+// A malformed row is still queue corruption, not retirement.
+writeFileSync(`${state}/.wake-queue`, "1\t1\tsignal\thello.status");
+const malformed = scopeForUnreadWake(state, false);
+if (malformed.eligible || !malformed.corrupted) {
+  throw new Error(`a malformed row must still veto the scan: ${JSON.stringify(malformed)}`);
+}
+process.exit(0);
+EOF
+  status=$?
+  out=$(cat "$TMP_ROOT/node-output")
+  expect_code 0 "$status" "a torn-down task's queued rows must retire instead of vetoing the queue: $out"
+  pass "scopeForUnreadWake retires a torn-down task's queued rows without deferring the rest of the queue to main"
 }
 
 # The model picker's bounded scrolling and its search ranking are Pi's own
@@ -4742,6 +4864,7 @@ test_requested_healthy_outcome_and_unsolicited_routine_outcome_delivery
 test_captain_outcome_is_exactly_once_across_crash_reload_and_unrelated_response
 test_captain_outcome_processing_turn_is_sequence_keyed_and_re_presented
 test_branch_dispatch_classifies_main_only_rows_and_writes_the_eligible_snapshot
+test_branch_dispatch_retires_a_torn_down_tasks_rows_without_vetoing_the_queue
 test_branch_cache_key_is_per_home_stable
 test_branch_default_on_heartbeat_afk_and_fallback
 test_branch_predrain_recheck_keeps_a_heartbeat_a_co_present_check_arrives_under
