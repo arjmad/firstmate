@@ -1078,11 +1078,6 @@ fi
 # bin/fm-lease-lib.sh; no-op in homes without a branch actor).
 # shellcheck source=bin/fm-lease-lib.sh
 . "$SCRIPT_DIR/fm-lease-lib.sh"
-# Allocation-ownership guard: pooled worktree and home paths are reused, so a
-# freed slot can be re-handed while a stale record still names it (contract:
-# bin/fm-allocation-lib.sh).
-# shellcheck source=bin/fm-allocation-lib.sh
-. "$SCRIPT_DIR/fm-allocation-lib.sh"
 if [ "$RELAUNCH" -ne 1 ]; then
   fm_lease_forbid_branch "new-task spawn (fm-spawn)"
 fi
@@ -2940,15 +2935,6 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
 
   validate_spawn_worktree "treehouse get" "$T"
 fi
-# Every path above has now resolved this task's allocation - a fresh pool slot,
-# an Orca worktree, a relaunch's recorded worktree, or a secondmate's home. This
-# is where a new collision would be BORN: a pool slot freed by a task whose
-# record is still on disk gets re-handed here, and publishing a second record for
-# it is what later makes one task's cleanup reach into the other's live work.
-# Refuse at that source rather than only refusing the cleanup afterwards
-# (contract: bin/fm-allocation-lib.sh). A relaunch keeps its own recorded
-# worktree, and its own record is excluded, so replacement is unaffected.
-fm_allocation_refuse_conflict "$STATE" "$ID" "$WT" worktree || exit 1
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   freshen_spawn_worktree_base "$WT" || exit 1
 fi

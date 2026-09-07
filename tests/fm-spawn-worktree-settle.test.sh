@@ -154,33 +154,6 @@ test_already_settled_pane_costs_one_confirm_read() {
   pass "an already-settled pane confirms on the next read, not a whole extra cycle"
 }
 
-# A pooled slot is REUSED. When one is freed and re-handed while the record of
-# the task that used to hold it is still on disk, the spawn is where the
-# collision is born: two records naming one path is what later lets one task's
-# cleanup return or delete the other task's live work. Refuse at that source,
-# and publish no second record for the allocation.
-test_worktree_already_recorded_by_another_task_refuses() {
-  local rec id peer out status
-  id=settle-reused-allocation-z5
-  peer=settle-prior-holder-z5
-  rec=$(make_settle_case settle-reused-allocation "$id" 0)
-  read_settle_record "$rec"
-  fm_write_meta "$HOME_DIR/state/$peer.meta" \
-    "window=firstmate:fm-$peer" "endpoint_task_id=$peer" \
-    "worktree=$WT_DIR" "project=$PROJ_DIR" "kind=ship" "mode=no-mistakes"
-
-  out=$(run_settle_spawn "$id")
-  status=$?
-  [ "$status" -ne 0 ] || fail "spawn accepted a worktree another task already records: $out"
-  assert_contains "$out" "REFUSED" "spawn refusal was not stated as a refusal"
-  assert_contains "$out" "$peer" "spawn refusal did not name the task that already records the allocation"
-  assert_absent "$HOME_DIR/state/$id.meta" "refused spawn still published a second record for the allocation"
-  assert_present "$HOME_DIR/state/$peer.meta" "refused spawn disturbed the other task's record"
-  assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$peer.meta" \
-    "refused spawn rewrote the other task's recorded allocation"
-  pass "a worktree another task already records refuses the spawn instead of publishing a second record"
-}
-
 # make_primary_case <name> <id> <stale_reads> builds the linked-home shape: the
 # spawning project is itself a LINKED worktree of the repository, and the path
 # the pane transiently reports is that repository's PRIMARY checkout. `treehouse
@@ -250,7 +223,6 @@ test_primary_checkout_that_never_settles_fails_at_the_deadline() {
 
 test_single_stale_first_read_is_not_accepted
 test_already_settled_pane_costs_one_confirm_read
-test_worktree_already_recorded_by_another_task_refuses
 test_transient_primary_checkout_is_not_accepted
 test_primary_checkout_that_never_settles_fails_at_the_deadline
 

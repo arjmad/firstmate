@@ -38,6 +38,15 @@
 # `--force` MUST NOT bypass this. Force means "discard the work in MY OWN
 # allocation"; it has never meant "act on a record that may not be mine".
 #
+# SCOPE. This is a guard on MUTATION - the paths that return a Treehouse slot or
+# destroy a worktree - not on record creation. Refusing a spawn whose pooled path
+# an older record still names was considered and deliberately left out: it does
+# not prevent any destructive act the mutation guard below does not already
+# refuse, and firstmate's spawn fixtures legitimately hand one fake worktree to
+# several task ids, so the refusal fired where nothing was at risk. The residual
+# is that a collision can still be BORN; when it is, both records' cleanup
+# refuses here until a human reconciles them, which is the safe direction.
+#
 # Path identity is compared on the resolved real path when the path exists, so a
 # symlinked pool root, `/tmp` vs `/private/tmp`, and a trailing slash cannot hide
 # a collision. A path that no longer exists is compared literally, which is the
