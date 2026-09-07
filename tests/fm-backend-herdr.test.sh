@@ -935,7 +935,11 @@ finally:
                 if result.returncode == 1 or 'E' in result.stdout or 'Z' in result.stdout:
                     break
                 fg = int(ps(pid, 'tpgid'))
-                if ps(fg, 'comm').split('/')[-1].lstrip('-') in ['sh', 'bash']:
+                # Match the shell names the classifier itself accepts: `comm`
+                # reports the executable, so Linux's /bin/sh reads as `dash`
+                # and a short sh/bash list would silently fall through to the
+                # interrupt below, which an interactive shell ignores.
+                if ps(fg, 'comm').split('/')[-1].lstrip('-') in ['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']:
                     os.write(fd, b'kill $(jobs -p) 2>/dev/null; wait; exit\n')
                 else:
                     os.write(fd, b'\x03')
@@ -960,13 +964,23 @@ finally:
         finally:
             os.close(fd)
         # Reap and verify all recorded descendants even if orderly exit failed.
-        try:
+        def reap():
             for _ in range(100):
                 if os.waitpid(pid, os.WNOHANG)[0] == pid:
-                    break
+                    return True
                 time.sleep(.03)
-            else:
-                raise AssertionError('private PTY root not reaped: ' + str(pid))
+            return False
+        try:
+            if not reap():
+                # The orderly exit did not finish. Every pid here is one of
+                # this fixture's own private shells, so escalate once rather
+                # than leave a stray process behind, then confirm the reap.
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                if not reap():
+                    raise AssertionError('private PTY root not reaped: ' + str(pid))
             result = subprocess.run(['ps', '-p', ','.join(map(str, descendants)), '-o', 'pid=,ppid=,stat='],
                 capture_output=True, text=True, timeout=5)
             assert result.returncode == 1 and not result.stdout.strip(), result.stdout
