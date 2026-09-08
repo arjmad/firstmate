@@ -39,6 +39,8 @@ Under the Pi extension model a live identity-matched watcher is the ordinary hea
 A lock is genuinely unheld only when the lock directory or its symlinked owner directory is absent, or when the existing lock records no pid at all.
 Any lock with a recorded pid remains down when its pid, home, watcher path, or process identity fails the strict watcher health check.
 That ownership proof is `fm_pi_extension_owns_supervision` in `bin/fm-wake-lib.sh`: both Pi primary extensions must be recorded in their state markers at their current on-disk builds by the process named in `state/.lock`, and that process must still be alive.
+The writer side of that marker is exact for the same reason: Pi loads this project's extensions in every Pi process started under the tree, including short-lived descendants of the primary such as the `pi --help` capability probe `bin/fm-spawn.sh` runs, so each extension publishes its marker only when it IS the recorded lock holder or when no live session holds the lock yet (cold start, before `bin/fm-session-start.sh` records it).
+A descendant leaves the running primary's proof untouched rather than stamping its own pid over it.
 Requiring the turn-end guard extension as well as the watch extension is deliberate, because a home without that structural backstop has no benign hand-off to tolerate.
 Without that proof an unheld lock alarms exactly as it did before, so an unloaded, version-drifted, or exited Pi session is loud immediately, and a cycle the extension never restores is loud once the beacon passes grace.
 Under every persistent-watcher harness a live identity-matched watcher with a fresh beacon is still required, so the pull guard keeps the same strict semantics there.

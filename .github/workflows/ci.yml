@@ -13,20 +13,32 @@ jobs:
   lint:
     name: Lint ${{ matrix.shard }}of${{ strategy.job-total }}
     runs-on: ubuntu-latest
-    # Full extended analysis over the whole canonical set takes about ten
-    # minutes of two-worker wall on upstream's 4-vCPU public runner and was
-    # killed at that point on this fork's 2-vCPU, 7 GB private-repository
-    # runner: a local full-mode lint measures 7.76 GB peak RSS in one worker and
-    # 12.45 GB across both (bin/fm-lint.sh --telemetry), so the runner runs out
-    # of memory. bin/fm-lint.sh --shard splits the set into deterministic shards
-    # that together cover it exactly once; four shards keep each job's two
-    # workers well inside that memory. The cap is a loud hang tripwire: a shard
-    # that reaches it fails on its own timeout instead of a silent runner kill.
+    # Full extended analysis over the whole canonical set does not fit this
+    # fork's 2-vCPU, 7 GB private-repository runner, so bin/fm-lint.sh --shard
+    # splits it into deterministic shards that together cover it exactly once.
+    # The shard COUNT is what keeps each job affordable, because the partition
+    # balances bytes and ShellCheck's cost is not byte-proportional: a root is
+    # analyzed with --external-sources and carries its whole source graph, while
+    # a test root stops at the production modules it imports. Measured per root
+    # with the pinned ShellCheck, peak RSS ranges from 155 MiB
+    # (tests/fm-pi-branch-extension.test.sh) to 6728 MiB (bin/fm-teardown.sh) at
+    # similar file sizes. At four shards that let one job collect fm-spawn.sh,
+    # fm-teardown.sh and fm-watch.sh together: byte-balanced to within 0.005% of
+    # its siblings, it carried 1.30 MB of bin/ roots against another shard's
+    # 0.67 MB, measured 11.18 GiB across its two concurrent workers against
+    # ~4.1 GiB for the light shards, and was killed by the runner at 4m49s and
+    # again at 5m05s, well inside this cap. Eight shards separate the expensive
+    # roots into different jobs, because the largest-first packing seeds the
+    # first N roots into N distinct bins; the job that then carries
+    # fm-teardown.sh alone measures 74s, and the worst of the eight measures
+    # 83s, against that four-way shard's 135s.
+    # The cap is a loud hang tripwire: a shard that reaches it fails on its own
+    # timeout instead of a silent runner kill.
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@v6
       - name: Install pinned ShellCheck

@@ -11,7 +11,7 @@ import {
 
 let guardFollowupActive = false;
 
-type LockOwnership = "owned" | "missing" | "other";
+type LockOwnership = "owned" | "descendant" | "missing" | "other";
 
 const extensionFile = fileURLToPath(import.meta.url);
 const extensionDir = dirname(extensionFile);
@@ -46,15 +46,30 @@ function lockOwnership(): LockOwnership {
   if (!/^[0-9]+$/.test(lockPid) || lockPid === "1") return "other";
   let pid = String(process.pid);
   for (let i = 0; i < 8; i += 1) {
-    if (pid === lockPid) return "owned";
+    if (pid === lockPid) return i === 0 ? "owned" : "descendant";
     pid = parentPid(pid);
     if (!pid || pid === "1") break;
   }
   return pidAlive(lockPid) ? "other" : "missing";
 }
 
+// The marker is the running primary's proof that IT loaded this build:
+// fm_pi_extension_loaded in bin/fm-wake-lib.sh requires the marker pid to equal
+// the session-lock pid exactly. Pi loads this project's extensions in every Pi
+// process started under this tree, including short-lived DESCENDANTS of the
+// primary - most importantly the `pi --help` capability probe bin/fm-spawn.sh
+// runs from the primary's own bash tool. A descendant that published the marker
+// would stamp its own pid over the primary's proof and leave the home reading
+// as unsupervised for the rest of the session. So publish only when this
+// process IS the lock holder, or when no live session holds the lock at all:
+// that second case is cold start, where the factory binds before
+// bin/fm-session-start.sh records the lock and the pid it will record is this
+// process's own. A live holder that is an ancestor is exactly the probe case
+// and writes nothing.
 function markLoaded(): void {
-  if (!existsSync(state) || lockOwnership() === "other") return;
+  if (!existsSync(state)) return;
+  const ownership = lockOwnership();
+  if (ownership !== "owned" && ownership !== "missing") return;
   writeFileSync(marker, `${extensionVersion}\n${process.pid}\n`);
 }
 

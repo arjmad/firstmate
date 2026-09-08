@@ -93,6 +93,141 @@ test_invalid_endpoint_records_refuse_before_mutation() {
   pass "fm-teardown: missing, empty, malformed, ambiguous, and task-mismatched endpoints refuse before every mutation or runtime call"
 }
 
+test_reused_allocation_retires_records_without_touching_the_slot() {
+  local dir id=slot-owner peer=slot-claimant rc out
+  # A pooled worktree path is REUSED, so a stale record can name the slot
+  # another task is working in right now. Cleanup must never return or delete
+  # that allocation - but it must not deadlock either, or NEITHER task could
+  # ever be cleaned up. So it retires this task's own records and leaves the
+  # allocation, its branch and the pooled slot to the record that also claims it.
+  dir=$(make_case reused-allocation)
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=isolated:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  fm_write_meta "$dir/home/state/$peer.meta" \
+    "window=isolated:fm-$peer" "endpoint_task_id=$peer" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=ship" "mode=no-mistakes"
+
+  out=$(run_case "$dir" "$id" 2>&1)
+  rc=$?
+  expect_code 0 "$rc" "contested cleanup should retire its own records: $out"
+  assert_contains "$out" "$peer" "the notice did not name the other claimant"
+  assert_contains "$out" "leaving the allocation" \
+    "the notice did not say the allocation was left to the other record"
+  assert_absent "$dir/home/state/$id.meta" "contested cleanup kept its own record"
+  # The allocation and the peer are untouched: no runtime command ran against
+  # the slot, the worktree is still there, and the peer still claims it.
+  assert_present "$dir/worktree/sentinel" "contested cleanup changed the contested worktree"
+  assert_present "$dir/home/state/$peer.meta" "contested cleanup removed the other task's record"
+  assert_grep "worktree=$dir/worktree" "$dir/home/state/$peer.meta" \
+    "contested cleanup rewrote the other task's recorded allocation"
+  if grep -Fq treehouse "$dir/runtime.log" 2>/dev/null; then
+    fail "contested cleanup returned the pooled slot: $(cat "$dir/runtime.log")"
+  fi
+
+  # Idempotent: its record is already gone, so a repeat refuses on the missing
+  # record and changes nothing further.
+  run_case "$dir" "$id" > /dev/null 2>&1 || true
+  assert_present "$dir/worktree/sentinel" "a repeat of contested cleanup changed the worktree"
+  assert_present "$dir/home/state/$peer.meta" "a repeat of contested cleanup removed the peer record"
+
+  # With the contest gone, the remaining record is the sole claimant and its own
+  # cleanup runs in full, allocation included.
+  : > "$dir/runtime.log"
+  out=$(run_case "$dir" "$peer" 2>&1)
+  rc=$?
+  expect_code 0 "$rc" "sole-claimant cleanup should complete in full: $out"
+  assert_absent "$dir/home/state/$peer.meta" "sole-claimant cleanup kept its record"
+  grep -Fq treehouse "$dir/runtime.log" \
+    || fail "sole-claimant cleanup did not return the pooled slot: $(cat "$dir/runtime.log")"
+
+  # A path recorded through a symlinked parent is the same allocation.
+  dir=$(make_case reused-allocation-alias)
+  ln -s "$dir/worktree" "$dir/worktree-alias"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=isolated:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  fm_write_meta "$dir/home/state/$peer.meta" \
+    "window=isolated:fm-$peer" "endpoint_task_id=$peer" \
+    "worktree=$dir/worktree-alias" "project=$dir/project" "kind=scout"
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr" || true
+  assert_present "$dir/worktree/sentinel" "an aliased contested path was still returned"
+  assert_present "$dir/home/state/$peer.meta" "an aliased contest removed the peer record"
+
+  # A secondmate's pooled home is decided the same way.
+  dir=$(make_case reused-allocation-home)
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=isolated:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  fm_write_meta "$dir/home/state/$peer.meta" \
+    "window=isolated:fm-$peer" "endpoint_task_id=$peer" \
+    "home=$dir/worktree" "project=$dir/project" "kind=secondmate"
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr" || true
+  assert_present "$dir/worktree/sentinel" "a home-claimed allocation was still returned"
+  assert_present "$dir/home/state/$peer.meta" "a home-claimed contest removed the peer record"
+
+  # Ordinary unique cleanup is unchanged, with an unrelated record present.
+  dir=$(make_case unique-allocation)
+  mkdir -p "$dir/other-worktree"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=isolated:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  fm_write_meta "$dir/home/state/$peer.meta" \
+    "window=isolated:fm-$peer" "endpoint_task_id=$peer" \
+    "worktree=$dir/other-worktree" "project=$dir/project" "kind=scout"
+  out=$(run_case "$dir" "$id" 2>&1)
+  rc=$?
+  expect_code 0 "$rc" "unique allocation cleanup should still complete: $out"
+  assert_absent "$dir/home/state/$id.meta" "unique allocation cleanup left its own record"
+  assert_present "$dir/home/state/$peer.meta" "unique allocation cleanup removed an unrelated record"
+  grep -Fq treehouse "$dir/runtime.log" \
+    || fail "unique allocation cleanup did not return its own slot"
+
+  pass "fm-teardown: a worktree or home another record claims retires only this task's records and leaves the slot, while unique cleanup is unchanged"
+}
+
+test_reused_allocation_decides_the_same_on_every_backend() {
+  local dir backend id=slot-owner peer=slot-claimant
+  # The decision is metadata-only and runs ahead of any backend command, so both
+  # supported spawn backends leave the contested allocation alone identically.
+  for backend in tmux herdr; do
+    dir=$(make_case "reused-allocation-$backend")
+    case "$backend" in
+      tmux)
+        fm_write_meta "$dir/home/state/$id.meta" \
+          "window=isolated:fm-$id" "endpoint_task_id=$id" \
+          "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+        fm_write_meta "$dir/home/state/$peer.meta" \
+          "window=isolated:fm-$peer" "endpoint_task_id=$peer" \
+          "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+        ;;
+      herdr)
+        fm_write_meta "$dir/home/state/$id.meta" \
+          "window=lab:w1:p2" "endpoint_task_id=$id" \
+          "worktree=$dir/worktree" "project=$dir/project" "kind=scout" \
+          "backend=herdr" "herdr_session=lab" "herdr_workspace_id=w1" \
+          "herdr_tab_id=w1:t2" "herdr_pane_id=w1:p2"
+        fm_write_meta "$dir/home/state/$peer.meta" \
+          "window=lab:w1:p3" "endpoint_task_id=$peer" \
+          "worktree=$dir/worktree" "project=$dir/project" "kind=scout" \
+          "backend=herdr" "herdr_session=lab" "herdr_workspace_id=w1" \
+          "herdr_tab_id=w1:t3" "herdr_pane_id=w1:p3"
+        ;;
+    esac
+    # Herdr cannot confirm its endpoint against this fixture's fake toolchain, so
+    # its cleanup stops early; either way the contested allocation stays untouched.
+    run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr" || true
+    assert_present "$dir/worktree/sentinel" \
+      "$backend: contested cleanup changed the contested worktree"
+    assert_present "$dir/home/state/$peer.meta" \
+      "$backend: contested cleanup removed the other task's record"
+    if grep -Fq treehouse "$dir/runtime.log" 2>/dev/null; then
+      fail "$backend: contested cleanup returned the pooled slot"
+    fi
+  done
+  pass "fm-teardown: the contested-allocation decision is backend-neutral across tmux and Herdr"
+}
+
 test_control_lock_contention_refuses_before_mutation() {
   local dir id=locked-task lock holder i=0 rc
   dir=$(make_case control-lock)
@@ -366,6 +501,8 @@ SH
 }
 
 test_invalid_endpoint_records_refuse_before_mutation
+test_reused_allocation_retires_records_without_touching_the_slot
+test_reused_allocation_decides_the_same_on_every_backend
 test_control_lock_contention_refuses_before_mutation
 test_metadata_lock_serializes_destructive_cleanup
 test_supported_backend_endpoint_records_validate

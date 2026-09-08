@@ -46,7 +46,7 @@ type ArmResult = {
   message: string;
 };
 
-type LockOwnership = "owned" | "missing" | "other";
+type LockOwnership = "owned" | "descendant" | "missing" | "other";
 
 type CloseClassification = {
   kind: "actionable" | "failure";
@@ -222,15 +222,29 @@ function lockOwnership(): LockOwnership {
   if (!/^[0-9]+$/.test(lockPid) || lockPid === "1") return "other";
   let pid = String(process.pid);
   for (let i = 0; i < 8; i += 1) {
-    if (pid === lockPid) return "owned";
+    if (pid === lockPid) return i === 0 ? "owned" : "descendant";
     pid = parentPid(pid);
     if (!pid || pid === "1") break;
   }
   return pidAlive(lockPid) ? "other" : "missing";
 }
 
+// The marker is the running primary's proof that IT loaded this build:
+// fm_pi_extension_loaded in bin/fm-wake-lib.sh requires the marker pid to equal
+// the session-lock pid exactly. Pi loads this project's extensions in every Pi
+// process started under this tree, including short-lived DESCENDANTS of the
+// primary - most importantly the `pi --help` capability probe bin/fm-spawn.sh
+// runs from the primary's own bash tool. A descendant that published the marker
+// would stamp its own pid over the primary's proof and leave the home reading
+// as unsupervised for the rest of the session. So publish only when this
+// process IS the lock holder, or when no live session holds the lock at all:
+// that second case is cold start, where the factory binds before
+// bin/fm-session-start.sh records the lock and the pid it will record is this
+// process's own. A live holder that is an ancestor is exactly the probe case
+// and writes nothing.
 function markLoaded(): void {
-  if (lockOwnership() === "other") return;
+  const ownership = lockOwnership();
+  if (ownership !== "owned" && ownership !== "missing") return;
   mkdirSync(state, { recursive: true });
   writeFileSync(marker, `${extensionVersion}\n${process.pid}\n`);
 }
@@ -934,6 +948,10 @@ export default function (pi: ExtensionAPI) {
     if (!generationIsLive(owner)) return { ok: false, message: shuttingDownMessage };
     const ownership = lockOwnership();
     if (ownership === "other") return { ok: false, message: "watcher: read-only - session lock is held by another firstmate session" };
+    // A descendant Pi never owns this home's watcher cycle; the primary it was
+    // launched from does. Arming from one would hand the cycle to a process
+    // that is about to exit, so it stays read-only like any other non-owner.
+    if (ownership === "descendant") return { ok: false, message: "watcher: read-only - session lock is held by the parent firstmate session that started this Pi" };
     if (ownership === "missing") {
       return {
         ok: false,
