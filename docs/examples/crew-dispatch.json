@@ -11,6 +11,19 @@
       "why": "Use the cheapest fast profile when the task is narrow and low ambiguity."
     },
     {
+      "when": "The task is bounded, explicit, low-risk implementation with objective verification, and the preferred provider's plan has adequate headroom after leadership needs.",
+      "use": { "harness": "codex", "model": "gpt-5.5", "effort": "low" },
+      "why": "The declared primary for narrow work. It sits in its own rule rather than in an array with its fallback, so the normal case follows this preference instead of being ranked by quota."
+    },
+    {
+      "when": "The same bounded work, but the preferred provider's runway is projected to exhaust near its reset or is already exhausted, or the alternative has a material fit advantage such as needing more context than the primary offers.",
+      "use": [
+        { "harness": "claude", "model": "claude-sonnet-5", "effort": "low" },
+        { "harness": "claude", "model": "claude-sonnet-5", "effort": "medium" }
+      ],
+      "why": "The pressure fallback. Quota ranks within this allowed set only; whether the work reaches this rule at all is what the when condition decides."
+    },
+    {
       "when": "The task is a big or ambiguous multi-file feature, a risky refactor, or work that requires holding many moving parts in mind.",
       "use": [
         { "harness": "claude", "model": "claude-sonnet-5", "effort": "high" },

@@ -345,7 +345,7 @@ test_active_dispatch_profile_allows_explicit_harness() {
   assert_contains "$out" "spawned $id harness=codex" "spawn did not report explicit codex harness"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' --dangerously-bypass-approvals-and-sandbox" \
+  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' -c 'service_tier=\"default\"' --dangerously-bypass-approvals-and-sandbox" \
     "explicit harness launch did not thread model and effort"
   pass "active crew-dispatch profile allows an explicit resolved harness"
 }
@@ -412,7 +412,7 @@ test_codex_threads_model_and_effort() {
   expect_code 0 "$status" "codex spawn with profile flags should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' --dangerously-bypass-approvals-and-sandbox" \
+  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' -c 'service_tier=\"default\"' --dangerously-bypass-approvals-and-sandbox" \
     "codex launch did not thread model and reasoning effort config"
   pass "codex receives --model and model_reasoning_effort profile flags"
 }
@@ -428,7 +428,7 @@ test_codex_omits_invalid_max_effort() {
   expect_code 0 "$status" "codex spawn with unsupported max effort should omit the effort flag"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 max
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --model 'gpt-5' --dangerously-bypass-approvals-and-sandbox" \
+  assert_contains "$launch" "codex --model 'gpt-5' -c 'service_tier=\"default\"' --dangerously-bypass-approvals-and-sandbox" \
     "codex launch did not preserve the model flag when max effort was omitted"
   assert_not_contains "$launch" "model_reasoning_effort" "codex launch must omit unsupported max reasoning effort"
   pass "codex omits unsupported max effort instead of passing a bad config value"
@@ -789,6 +789,105 @@ test_non_claude_harness_ignores_config_dir() {
   pass "non-claude harnesses do not receive the claude CLAUDE_CONFIG_DIR prefix"
 }
 
+# --- Priority ("fast") tier axis: standard tier is the default ---
+# The captain's standing orchestration default is standard tier for everything
+# firstmate launches, so these pin BOTH directions: the default must actively
+# request standard tier rather than staying silent (silence would inherit a
+# machine-level priority setting), and an opt-in must not leak past its spawn.
+
+test_codex_defaults_to_standard_tier() {
+  local rec id out status launch
+  id=profile-codex-tier-default
+  rec=$(make_spawn_case profile-codex-tier-default codex "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-5)
+  status=$?
+  expect_code 0 "$status" "codex spawn without --fast should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "-c 'service_tier=\"default\"'" \
+    "codex launch must request standard tier when --fast is absent"
+  assert_not_contains "$launch" "service_tier=\"priority\"" \
+    "codex launch must not request the priority tier by default"
+  grep -q '^fast=off$' "$HOME_DIR/state/$id.meta" \
+    || fail "task record did not note the resolved standard tier"
+  pass "codex defaults to standard tier and records it"
+}
+
+test_codex_fast_opt_in_requests_priority() {
+  local rec id out status launch
+  id=profile-codex-tier-on
+  rec=$(make_spawn_case profile-codex-tier-on codex "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-5 --fast on)
+  status=$?
+  expect_code 0 "$status" "codex spawn with --fast on should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "-c 'service_tier=\"priority\"'" \
+    "codex launch did not honour the explicit --fast on opt-in"
+  grep -q '^fast=on$' "$HOME_DIR/state/$id.meta" \
+    || fail "task record did not note the fast opt-in"
+  pass "codex --fast on requests the priority tier"
+}
+
+test_pi_carries_standard_tier_override() {
+  local rec id out status launch
+  id=profile-pi-tier-default
+  rec=$(make_spawn_case profile-pi-tier-default pi "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-6-astra)
+  status=$?
+  expect_code 0 "$status" "pi spawn without --fast should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  # Emitted unconditionally: an ABSENT variable would leave the worker on
+  # whatever the persisted global toggle says, which is the silent-priority
+  # failure this axis exists to close.
+  assert_contains "$launch" "PI_CODEX_FAST_MODE=off" \
+    "pi launch must carry the standard-tier process override by default"
+  pass "pi carries the standard-tier override by default"
+}
+
+test_pi_fast_opt_in_is_scoped_to_its_spawn() {
+  local rec id_on id_off out status launch
+  id_on=profile-pi-tier-on
+  id_off=profile-pi-tier-next
+  rec=$(make_spawn_case profile-pi-tier-scope pi "$id_on" "$id_off")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id_on" "$PROJ_DIR" --model gpt-6-astra --fast on)
+  status=$?
+  expect_code 0 "$status" "pi spawn with --fast on should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "PI_CODEX_FAST_MODE=on" \
+    "pi launch did not honour the explicit --fast on opt-in"
+
+  # The next spawn in the same home must return to standard tier on its own.
+  # An opt-in is per task, never a new standing default.
+  : > "$LAUNCH_LOG"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id_off" "$PROJ_DIR" --model gpt-6-astra)
+  status=$?
+  expect_code 0 "$status" "the following pi spawn should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "PI_CODEX_FAST_MODE=off" \
+    "a fast opt-in leaked into the next spawn"
+  pass "a fast opt-in stays scoped to the spawn that asked for it"
+}
+
+test_fast_flag_refuses_unknown_value() {
+  local rec id out status
+  id=profile-tier-bad
+  rec=$(make_spawn_case profile-tier-bad codex "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-5 --fast yes 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "an unknown --fast value should refuse rather than launch"
+  assert_contains "$out" "--fast accepts on or off" "refusal did not name the accepted values"
+  pass "an unknown --fast value refuses instead of guessing a tier"
+}
+
 test_active_dispatch_profile_does_not_block_secondmate_launch() {
   local rec id sm out status
   id=profile-secondmate-z16
@@ -1124,5 +1223,10 @@ test_claude_forwards_firstmate_config_dir_when_set
 test_claude_omits_config_dir_prefix_when_unset
 test_non_claude_harness_ignores_config_dir
 test_active_dispatch_profile_does_not_block_secondmate_launch
+test_codex_defaults_to_standard_tier
+test_codex_fast_opt_in_requests_priority
+test_pi_carries_standard_tier_override
+test_pi_fast_opt_in_is_scoped_to_its_spawn
+test_fast_flag_refuses_unknown_value
 
 echo "# all fm-spawn-dispatch-profile tests passed"
