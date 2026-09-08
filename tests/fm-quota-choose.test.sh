@@ -620,6 +620,133 @@ fi
 [ "$err" = "error: invalid quota-axi provider data" ] || fail "invalid availability status returned: $err"
 ok "invalid availability status fails closed"
 
+# --- Accepted routing policy: primary preferred, fallback only under pressure ---
+# These cases pin the quota half of the orchestration contract in AGENTS.md
+# section 4: which candidate survives on a given quota state. The rule TEXT that
+# decides WHICH set of candidates an intake brings here is captain-private
+# config and firstmate judgment, deliberately not asserted from a shell test.
+# Candidate order below is the declared preference: primary first.
+
+ROUTING_HEALTHY="$LAB/routing-healthy.toon"
+cat > "$ROUTING_HEALTHY" <<'TOON'
+bin: quota-axi
+generatedAt: "2030-01-01T00:00:00Z"
+quota[2]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:
+  codex,all_models,80,-5,through_reset,high,weekly,"2030-01-02T00:00:00Z"
+  claude,all_models,90,12,through_reset,high,weekly,"2030-01-02T00:00:00Z"
+exhaustion[0]:
+attention[0]:
+TOON
+# The primary wins on a healthy pool even though the fallback's spendPriority is
+# far better. A declared preference is not a quota ranking.
+out=$(call_choose --snapshot "$ROUTING_HEALTHY" --candidate codex:gpt-6-astra --candidate claude:claude-opus-5)
+[ "$out" = "codex gpt-6-astra" ] || fail "healthy pools did not keep the declared primary: $out"
+ok "both pools healthy keeps the declared primary"
+
+ROUTING_PRIMARY_OUT="$LAB/routing-primary-exhausted.toon"
+cat > "$ROUTING_PRIMARY_OUT" <<'TOON'
+bin: quota-axi
+generatedAt: "2030-01-01T00:00:00Z"
+quota[2]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:
+  codex,all_models,0,-40,exhausted_now,high,weekly,"2030-01-02T00:00:00Z"
+  claude,all_models,90,12,through_reset,high,weekly,"2030-01-02T00:00:00Z"
+exhaustion[0]:
+attention[0]:
+TOON
+out=$(call_choose --snapshot "$ROUTING_PRIMARY_OUT" --candidate codex:gpt-6-astra --candidate claude:claude-opus-5)
+[ "$out" = "claude claude-opus-5" ] || fail "primary-pool pressure did not fall back: $out"
+ok "primary pool exhausted falls back to the eligible alternative"
+
+ROUTING_FALLBACK_OUT="$LAB/routing-fallback-exhausted.toon"
+cat > "$ROUTING_FALLBACK_OUT" <<'TOON'
+bin: quota-axi
+generatedAt: "2030-01-01T00:00:00Z"
+quota[2]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:
+  codex,all_models,80,-5,through_reset,high,weekly,"2030-01-02T00:00:00Z"
+  claude,all_models,0,-40,exhausted_now,high,weekly,"2030-01-02T00:00:00Z"
+exhaustion[0]:
+attention[0]:
+TOON
+out=$(call_choose --snapshot "$ROUTING_FALLBACK_OUT" --candidate codex:gpt-6-astra --candidate claude:claude-opus-5)
+[ "$out" = "codex gpt-6-astra" ] || fail "fallback-pool pressure disturbed the primary: $out"
+ok "fallback pool exhausted still keeps the primary"
+
+ROUTING_BOTH_OUT="$LAB/routing-both-exhausted.toon"
+cat > "$ROUTING_BOTH_OUT" <<'TOON'
+bin: quota-axi
+generatedAt: "2030-01-01T00:00:00Z"
+quota[2]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:
+  codex,all_models,0,-40,exhausted_now,high,weekly,"2030-01-02T00:00:00Z"
+  claude,all_models,0,-40,exhausted_now,high,weekly,"2030-01-02T00:00:00Z"
+exhaustion[0]:
+attention[0]:
+TOON
+# Both constrained must refuse rather than quietly pick a lesser-but-available
+# route. Escalation is firstmate's job; silent downgrade is the failure mode.
+if out=$(call_choose --snapshot "$ROUTING_BOTH_OUT" --candidate codex:gpt-6-astra --candidate claude:claude-opus-5 2>/dev/null); then
+  fail "both pools exhausted unexpectedly dispatched"
+fi
+[ "$out" = "none" ] || fail "both pools exhausted returned: $out"
+ok "both pools exhausted refuses rather than downgrading silently"
+
+ROUTING_EARLY="$LAB/routing-early-unknown.toon"
+cat > "$ROUTING_EARLY" <<'TOON'
+bin: quota-axi
+generatedAt: "2030-01-01T00:00:00Z"
+quota[1]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:
+  claude,all_models,90,12,through_reset,high,weekly,"2030-01-02T00:00:00Z"
+exhaustion[0]:
+attention[1]{provider,scope,kind,detail,remedy}:
+  codex,all_models,headroom_unknown,"early window, burn multiple not yet meaningful",none
+TOON
+# Unmeasured primary quota is disclosed uncertainty, not exhaustion. The run
+# must continue on a known-viable candidate instead of inventing a number for
+# the unmeasured one or erroring out.
+out=$(call_choose --snapshot "$ROUTING_EARLY" --candidate codex:gpt-6-astra --candidate claude:claude-opus-5)
+[ "$out" = "claude claude-opus-5" ] || fail "unmeasured primary quota was not handled as uncertainty: $out"
+ok "unmeasured quota defers to known-viable evidence instead of fabricating exhaustion"
+
+ROUTING_MODEL_WINDOW="$LAB/routing-model-window.toon"
+cat > "$ROUTING_MODEL_WINDOW" <<'TOON'
+bin: quota-axi
+generatedAt: "2030-01-01T00:00:00Z"
+quota[2]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:
+  claude,all_models,90,12,through_reset,high,weekly,"2030-01-02T00:00:00Z"
+  claude,"model:claude-fable-5-1",0,-40,exhausted_now,high,weekly,"2030-01-02T00:00:00Z"
+exhaustion[0]:
+attention[0]:
+TOON
+# A model-specific window is a tighter cap INSIDE the shared allowance, never a
+# separate pool. Exhausting it restricts only that model; a sibling model on the
+# same healthy shared window stays eligible and must not inherit that cap.
+if out=$(call_choose --snapshot "$ROUTING_MODEL_WINDOW" --candidate claude:claude-fable-5-1 2>/dev/null); then
+  fail "exhausted model-specific window unexpectedly dispatched"
+fi
+[ "$out" = "none" ] || fail "exhausted model window returned: $out"
+out=$(call_choose --snapshot "$ROUTING_MODEL_WINDOW" --candidate claude:claude-opus-5)
+[ "$out" = "claude claude-opus-5" ] || fail "sibling model wrongly inherited the model-specific cap: $out"
+ok "a model-specific cap restricts only that model"
+
+ROUTING_SHARED_OUT="$LAB/routing-shared-exhausted.toon"
+cat > "$ROUTING_SHARED_OUT" <<'TOON'
+bin: quota-axi
+generatedAt: "2030-01-01T00:00:00Z"
+quota[2]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:
+  claude,all_models,0,-40,exhausted_now,high,weekly,"2030-01-02T00:00:00Z"
+  claude,"model:claude-fable-5-1",50,5,through_reset,high,weekly,"2030-01-02T00:00:00Z"
+exhaustion[0]:
+attention[0]:
+TOON
+# The converse: a healthy model-specific window does NOT add capacity on top of
+# an exhausted shared window. Both models are constrained.
+for candidate in claude:claude-fable-5-1 claude:claude-opus-5; do
+  if out=$(call_choose --snapshot "$ROUTING_SHARED_OUT" --candidate "$candidate" 2>/dev/null); then
+    fail "exhausted shared window dispatched $candidate"
+  fi
+  [ "$out" = "none" ] || fail "exhausted shared window returned '$out' for $candidate"
+done
+ok "an exhausted shared window constrains every model under it"
+
 [ "$(wc -l < "$CALLS" | tr -d '[:space:]')" = 1 ] || fail "helper took an additional quota snapshot"
 ok "helper reuses the captured quota snapshot"
 

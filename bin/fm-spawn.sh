@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--backend <name>]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--backend <name>]
+#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
 #   per task at intake (AGENTS.md section 7); data/projects.md holds the captain's
@@ -26,7 +26,7 @@
 #   Ship/scout launches always supply fm-dod-lib.sh's current worker role scope
 #   using the same private launch-brief overlay. This never rewrites a project's
 #   instruction files or a secondmate's charter.
-#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>]
+#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--fast <on|off>]
 #   --relaunch launches a replacement agent for an EXISTING task into that
 #   task's own recorded endpoint and worktree instead of creating either. It is
 #   the launch half of the control plane (bin/fm-control.sh relaunch), which
@@ -48,6 +48,22 @@
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
 #   from that harness's launch rather than guessed.
+#   --fast <on|off> is this task's model priority ("fast") tier, default off.
+#   Off is the captain's standing orchestration default: every firstmate-launched
+#   worker runs standard tier even when the launching machine's own config or a
+#   persisted global toggle asks for priority, so a worker cannot silently spend
+#   the plan at the priority multiplier. on is a per-spawn captain opt-in and is
+#   deliberately NOT inherited - it is not read from a config file or an ambient
+#   environment variable, and a --relaunch without the flag returns to off, so an
+#   opt-in cannot leak into the next worker. bin/fm-control.sh relaunch therefore
+#   does not carry it either: a relaunched worker returns to standard tier unless
+#   the caller asks for priority again, which trades speed for the safe default
+#   rather than silently keeping a spend multiplier alive across a restart.
+#   It reaches codex as a per-invocation -c service_tier=... (the captain's
+#   ~/.codex/config.toml is never edited) and pi/pi-signed as the
+#   PI_CODEX_FAST_MODE process override the fleet extension reads; harnesses with
+#   no verified priority tier ignore the axis. See fast_tier_flag_for_harness for
+#   the verified codex tier mechanics.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
@@ -411,6 +427,7 @@ EFFORT=
 BACKEND_ARG=
 MODE=
 YOLO=
+FAST=
 TRACEPARENT_ARG=
 HARNESS_SET=0
 MODEL_SET=0
@@ -418,6 +435,7 @@ EFFORT_SET=0
 BACKEND_SET=0
 MODE_SET=0
 YOLO_SET=0
+FAST_SET=0
 TRACEPARENT_SET=0
 RELAUNCH=0
 POS=()
@@ -434,6 +452,7 @@ for a in "$@"; do
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
       mode) MODE=$a; MODE_SET=1 ;;
       yolo) YOLO=$a; YOLO_SET=1 ;;
+      fast) FAST=$a; FAST_SET=1 ;;
       traceparent) TRACEPARENT_ARG=$a; TRACEPARENT_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
@@ -456,6 +475,8 @@ for a in "$@"; do
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
     --yolo) want_value=yolo ;;
     --yolo=*) YOLO=${a#--yolo=}; YOLO_SET=1 ;;
+    --fast) want_value=fast ;;
+    --fast=*) FAST=${a#--fast=}; FAST_SET=1 ;;
     --traceparent) want_value=traceparent ;;
     --traceparent=*) TRACEPARENT_ARG=${a#--traceparent=}; TRACEPARENT_SET=1 ;;
     *) POS+=("$a") ;;
@@ -468,7 +489,19 @@ done
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || { echo "error: --backend requires a non-empty value" >&2; exit 1; }
 [ "$MODE_SET" -eq 0 ] || [ -n "$MODE" ] || { echo "error: --mode requires a non-empty value" >&2; exit 1; }
 [ "$YOLO_SET" -eq 0 ] || [ -n "$YOLO" ] || { echo "error: --yolo requires a non-empty value" >&2; exit 1; }
+[ "$FAST_SET" -eq 0 ] || [ -n "$FAST" ] || { echo "error: --fast requires a non-empty value" >&2; exit 1; }
 [ "$TRACEPARENT_SET" -eq 0 ] || [ -n "$TRACEPARENT_ARG" ] || { echo "error: --traceparent requires a non-empty value" >&2; exit 1; }
+# The captain's standing orchestration default is standard tier for everything
+# firstmate launches, so an unset --fast resolves to off rather than to whatever
+# priority setting the launching environment happens to have inherited. The
+# resolved value is deliberately NOT read from a config file or an ambient
+# environment variable: a per-task opt-in must stay bound to the one spawn the
+# captain approved, and must not leak into the next unrelated worker.
+FAST=${FAST:-off}
+case "$FAST" in
+  on|off) ;;
+  *) echo "error: --fast accepts on or off, not '$FAST'" >&2; exit 1 ;;
+esac
 # A parent-delivered carrier replaces this home's own resolution, so it is
 # refused unless it is a secondmate spawn carrying a strictly valid W3C value.
 # Nothing else may reach the pane's TRACEPARENT export.
@@ -973,6 +1006,7 @@ spawn_abort_cleanup() {
             echo "tasktmp=${TASK_TMP:-}"
             echo "model=${MODEL:-default}"
             echo "effort=${EFFORT:-default}"
+            echo "fast=$FAST"
             echo "backend=orca"
             echo "orca_worktree_id=$ORCA_WORKTREE_ID"
             [ -z "${ORCA_TERMINAL:-}" ] || echo "terminal=$ORCA_TERMINAL"
@@ -1416,9 +1450,9 @@ launch_template() {
     claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings '\''{"feedbackDrafts":"off"}'\'' __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     codex)
       if [ "$kind" = secondmate ]; then
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' 'codex __MODELFLAG____EFFORTFLAG____TIERFLAG__--dangerously-bypass-approvals-and-sandbox "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       else
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' 'codex __MODELFLAG____EFFORTFLAG____TIERFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       fi
       ;;
     opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
@@ -1833,6 +1867,57 @@ effort_flag_for_harness() {
     # task metadata but never reaches the launch command. Cursor encodes effort
     # in model ids such as cursor-grok-4.5-high, so it also receives no separate
     # effort flag.
+  esac
+}
+
+# The priority ("fast") tier axis. Firstmate launches standard tier by default,
+# so a worker never silently spends the captain's plan at the priority
+# multiplier just because the launching machine's own config asked for it.
+#
+# codex: the tier rides `-c service_tier=<v>`, which is per-invocation and
+# leaves ~/.codex/config.toml untouched. Passing "default" is what turns
+# priority OFF, and the mechanism is worth stating exactly, because a wrong
+# guess here fails SILENTLY and expensively: codex resolves the requested tier
+# against the model catalog's advertised service_tiers, and every model in the
+# installed catalog advertises at most `priority`. A requested tier that is not
+# advertised resolves to none and the field is then OMITTED from the request
+# body, which is the standard tier. So "default" works because it is not
+# `priority`, not because the wire protocol has a tier by that name.
+# Verified end to end on codex-cli 0.153.4 against a local capture sink, with
+# no paid call: inherited `service_tier = "priority"` put
+# `"service_tier": "priority"` in the POST body, while the same launch plus
+# `-c service_tier="default"` produced a body with no service_tier field at all,
+# and codex's own debug log showed the pair as requested Some("default") ->
+# resolved None. Re-verify this mapping if a future catalog advertises a tier
+# literally named "default", which would change what the string requests.
+#
+# pi: the tier is owned by the fleet's Pi extension, not by a Pi CLI flag, so
+# the launch carries the agreed PI_CODEX_FAST_MODE process override instead.
+# The extension treats a valid override as session-scoped policy that outranks
+# the persisted global toggle without rewriting the captain's global
+# preferences, so a Pi worker launched here is standard tier even while that
+# global toggle is enabled for the captain's own interactive sessions.
+#
+# Every other adapter is deliberately absent: no other supported harness was
+# verified to expose a priority tier, and an unverified flag would be a guess.
+fast_tier_flag_for_harness() {
+  local harness=$1 fast=$2
+  case "$harness" in
+    codex)
+      case "$fast" in
+        on) printf -- '-c %s ' "$(shell_quote 'service_tier="priority"')" ;;
+        *) printf -- '-c %s ' "$(shell_quote 'service_tier="default"')" ;;
+      esac
+      ;;
+  esac
+}
+
+# The environment prefix half of the same axis, for adapters whose tier control
+# is an environment override rather than a CLI flag.
+fast_tier_env_prefix_for_harness() {
+  local harness=$1 fast=$2
+  case "$harness" in
+    pi|pi-signed) printf 'PI_CODEX_FAST_MODE=%s ' "$fast" ;;
   esac
 }
 
@@ -3488,6 +3573,7 @@ preserve_relaunch_meta() {
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  echo "fast=$FAST"
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   echo "spawn_gen=$SPAWN_GEN"
   # Default-off writes no traceparent= line.
@@ -3583,8 +3669,10 @@ sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 sq_worktree=$(shell_quote "$WT")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
+TIERFLAG=$(fast_tier_flag_for_harness "$HARNESS" "$FAST")
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
+LAUNCH=${LAUNCH//__TIERFLAG__/$TIERFLAG}
 if [ "$HARNESS" = rovo ]; then
   ROVOCONFIGOVERRIDE=$(rovo_config_override_flag "$EFFORT" "$DATA" "$STATE" "$ID") || {
     echo "error: could not resolve this task's home paths for rovo's allowedExternalPaths grant" >&2
@@ -3619,6 +3707,14 @@ esac
 if [ "$HARNESS" = claude ] && [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
   LAUNCH="CLAUDE_CONFIG_DIR=$(shell_quote "$CLAUDE_CONFIG_DIR") $LAUNCH"
 fi
+# The Pi half of the priority-tier axis (fast_tier_env_prefix_for_harness above).
+# It is emitted unconditionally for pi/pi-signed rather than only when the
+# captain opted in, because the whole point is that the DEFAULT is standard
+# tier: an absent variable would leave the worker on whatever the persisted
+# global toggle says, which is the silent-priority failure this axis exists to
+# close.
+TIERENV=$(fast_tier_env_prefix_for_harness "$HARNESS" "$FAST")
+[ -z "$TIERENV" ] || LAUNCH="$TIERENV$LAUNCH"
 if [ "$KIND" = secondmate ]; then
   sq_home=$(shell_quote "$PROJ_ABS")
   sq_primary_home=$(shell_quote "$FM_HOME")

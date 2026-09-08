@@ -418,6 +418,9 @@ The single-object form stays fully backward-compatible, and every profile needs 
 Profile `model` and `effort` fields and rule `why` are optional.
 An omitted model or effort means the selected harness uses its own default for that axis.
 Every profile array is an implicit quota-aware choice resolved through `quota-array-dispatch`.
+Firstmate reads the quota snapshot at every intake these rules govern, including one that matches a single-profile rule, so a `when` condition that turns on provider pressure is always evaluable.
+To express a declared primary with a pressure fallback, write two rules whose `when` text names the condition instead of one mixed array: an array is ranked by `quota-array-dispatch`, so mixing the preferred profile in with its fallback hands the normal case to that ranker rather than to the declared preference.
+Keep an array for candidates that genuinely compete on quota alone.
 If no dispatch rule fits, firstmate resolves `default` through the same object-or-array path before falling back to `config/crew-harness`.
 If a selected profile carries an effort value the chosen harness does not accept, `fm-spawn.sh` records the requested `effort=` in task meta for traceability but omits the launch flag, and bootstrap reports the invalid harness/effort pair as a `CREW_DISPATCH` diagnostic when it is visible in the file.
 See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a starting point to copy into local `config/crew-dispatch.json`.
