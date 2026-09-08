@@ -1371,9 +1371,20 @@ resolve_pi_executable() {
 # Pi's CLI surface is version-dependent, so probe the resolved executable's help
 # before composing the optional regular-TUI flag. An absent or inconclusive probe
 # omits the flag so older Pi versions can still spawn.
+# Pi loads the current project's extensions while preparing --help, so a bare
+# `pi --help` from the primary's own bash tool runs firstmate's two primary
+# extensions inside a DESCENDANT of the primary session. --no-extensions keeps
+# this capability probe out of that path entirely. It is a belt, not the fix:
+# the writer guard in .pi/extensions/fm-primary-*.ts (markLoaded) is the
+# boundary that covers every other way a descendant Pi can load them. A Pi build
+# that does not know the flag must not silently lose --tui-mode detection, so an
+# unanswered safe probe falls back to the plain one rather than reporting "no".
 pi_supports_tui_mode() {
   local executable=$1 help
-  help=$("$executable" --help 2>&1) || return 1
+  help=$("$executable" --no-extensions --help 2>&1) || help=''
+  if ! printf '%s\n' "$help" | grep -Eq -- '(^|[[:space:]])--tui-mode([[:space:]=]|$)'; then
+    help=$("$executable" --help 2>&1) || return 1
+  fi
   printf '%s\n' "$help" | grep -Eq -- '(^|[[:space:]])--tui-mode([[:space:]=]|$)'
 }
 
