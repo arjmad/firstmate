@@ -479,6 +479,11 @@ test_spawn_preserves_orca_metadata_when_pathless_worktree_cleanup_fails() {
   state="$TMP_ROOT/pathless-cleanup-state"
   config="$TMP_ROOT/pathless-cleanup-config"
   fm_git_init_commit "$proj"
+  # A fresh spawn proves the project's origin is reachable before it creates any
+  # endpoint, so an Orca fixture that means to reach the worktree-create step
+  # needs a real origin; without one the spawn refuses at the pre-flight and this
+  # case never exercises what it is about.
+  fm_git_add_origin "$proj" "$proj.origin.git"
   mkdir -p "$data/$id" "$state" "$config"
   write_spawn_brief "$data" "$id"
   touch "$state/.last-watcher-beat"
@@ -580,6 +585,7 @@ test_spawn_refuses_orca_when_runtime_not_ready() {
   state="$TMP_ROOT/runtime-down-state"
   config="$TMP_ROOT/runtime-down-config"
   fm_git_init_commit "$proj"
+  fm_git_add_origin "$proj" "$proj.origin.git"
   mkdir -p "$data/$id" "$state" "$config"
   write_spawn_brief "$data" "$id"
   touch "$state/.last-watcher-beat"
@@ -609,6 +615,7 @@ test_spawn_refuses_orca_nonisolated_worktree() {
   state="$TMP_ROOT/bad-spawn-state"
   config="$TMP_ROOT/bad-spawn-config"
   fm_git_init_commit "$proj"
+  fm_git_add_origin "$proj" "$proj.origin.git"
   mkdir -p "$data/$id" "$state" "$config"
   write_spawn_brief "$data" "$id"
   touch "$state/.last-watcher-beat"

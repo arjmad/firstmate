@@ -6,6 +6,10 @@
 # These tests drive the real spawn path with a fake terminal, then prove it
 # starts the worker from the fetched origin/main tip or stops when origin is
 # unreachable.
+# They also cover what a refusal must NOT leave behind: an unreachable origin is
+# refused before any endpoint is created, and a refusal that lands after the
+# endpoint exists closes it, so a retry of the same task id is not blocked by the
+# previous attempt's debris.
 set -u
 
 # shellcheck source=tests/fixtures.sh
@@ -180,25 +184,119 @@ test_non_main_default_branch_refreshes_before_branching() {
   pass "a stale pooled worktree resolves and refreshes a non-main default branch"
 }
 
-test_unreachable_origin_refuses_stale_pool_base() {
-  local rec id out status before after
+# The pooled slot is a linked worktree of the project, so breaking origin's URL
+# breaks it for both. That is the point: the refusal must now come from the
+# project pre-flight, before any endpoint exists, rather than from the fetch the
+# slot would have run hundreds of lines later.
+test_unreachable_origin_refuses_before_any_endpoint_exists() {
+  local rec id out status before after registry kills
   id='pool-unreachable-origin-r2'
   rec=$(make_case unreachable-origin "$id")
   read_case_record "$rec"
+  registry="$CASE_DIR/tmux-windows"
+  kills="$CASE_DIR/tmux-kills"
+  : > "$registry"
+  : > "$kills"
+  export FM_FAKE_TMUX_WINDOWS="$registry" FM_FAKE_TMUX_KILL_LOG="$kills"
   git -C "$POOL_DIR" remote set-url origin "file://$CASE_DIR/missing-origin.git"
   before=$(git -C "$POOL_DIR" rev-parse HEAD)
 
   out=$(run_spawn "$id" --mode no-mistakes --yolo off)
   status=$?
   [ "$status" -ne 0 ] || fail "spawn succeeded despite an unreachable origin"
-  assert_contains "$out" "could not fetch origin" \
+  assert_contains "$out" "could not reach origin" \
     "spawn did not clearly refuse an unreachable origin"
+  [ ! -s "$registry" ] \
+    || fail "spawn created a worker endpoint before proving origin was reachable"$'\n'"$(cat "$registry")"
+  [ ! -s "$kills" ] \
+    || fail "spawn had to close an endpoint it should never have created"$'\n'"$(cat "$kills")"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "refused spawn published task metadata"
   after=$(git -C "$POOL_DIR" rev-parse HEAD)
   [ "$after" = "$before" ] || fail "spawn changed the pooled worktree after origin became unreachable"
   if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
     printf '# observed unreachable-origin refusal: %s\n' "$(printf '%s\n' "$out" | tail -n 1)"
+    printf '# windows after refusal: %s\n' "$(cat "$registry")"
   fi
-  pass "an unreachable origin refuses a potentially stale pooled worktree"
+  unset FM_FAKE_TMUX_WINDOWS FM_FAKE_TMUX_KILL_LOG
+  pass "an unreachable origin is refused before any worker endpoint exists"
+}
+
+# The other half of the same defect. Reachability can be hoisted; the rest of the
+# base gate cannot, because only the slot can answer it. So a spawn still refuses
+# with its endpoint already created, and that endpoint must not survive the
+# refusal. A dirty slot is the refusal used here precisely because origin stays
+# reachable, which is what puts the failure back after endpoint creation.
+test_late_gate_refusal_closes_its_endpoint_and_frees_a_retry() {
+  local rec id out status registry kills
+  id='pool-late-gate-endpoint-r13'
+  rec=$(make_case late-gate-endpoint "$id")
+  read_case_record "$rec"
+  registry="$CASE_DIR/tmux-windows"
+  kills="$CASE_DIR/tmux-kills"
+  : > "$registry"
+  : > "$kills"
+  export FM_FAKE_TMUX_WINDOWS="$registry" FM_FAKE_TMUX_KILL_LOG="$kills"
+  printf 'keep this local work\n' > "$POOL_DIR/uncommitted.txt"
+
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn succeeded despite a dirty pooled worktree"
+  assert_contains "$out" "is not clean" \
+    "the refusal under test was not the base gate that runs after the endpoint exists"
+  assert_grep "fm-$id" "$kills" "the refused spawn did not close the endpoint it created"
+  [ ! -s "$registry" ] \
+    || fail "the refused spawn left its endpoint behind"$'\n'"$(cat "$registry")"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "refused spawn published task metadata"
+  assert_grep 'keep this local work' "$POOL_DIR/uncommitted.txt" \
+    "the refusal discarded the local work it exists to protect"
+
+  # Control, so the retry below cannot pass vacuously: with the previous
+  # attempt's window still registered, the retry dies exactly the way the field
+  # report described, before it ever reaches the base gate.
+  printf 'firstmate:fm-%s\n' "$id" >> "$registry"
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a leftover window did not block a retry, so the retry case proves nothing"
+  assert_contains "$out" "already exists" \
+    "the leftover-window control did not reproduce the reported retry failure"
+  : > "$registry"
+  : > "$kills"
+
+  rm -f "$POOL_DIR/uncommitted.txt"
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "the same task id should dispatch once the refusal's debris is gone"$'\n'"$out"
+  assert_contains "$out" "spawned $id" "the retry did not report success"
+  if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
+    printf '# observed retry: %s\n' "$(printf '%s\n' "$out" | tail -n 1)"
+  fi
+  unset FM_FAKE_TMUX_WINDOWS FM_FAKE_TMUX_KILL_LOG
+  pass "a refusal after endpoint creation closes that endpoint and frees a retry of the same task id"
+}
+
+# The inverse, and the reason the cleanup is disarmed on publication rather than
+# always run: a spawn that publishes its record must leave the worker's endpoint
+# alone, because the record is what hands it to cleanup later.
+test_successful_spawn_keeps_its_endpoint() {
+  local rec id out status registry kills
+  id='pool-endpoint-survives-r14'
+  rec=$(make_case endpoint-survives "$id")
+  read_case_record "$rec"
+  registry="$CASE_DIR/tmux-windows"
+  kills="$CASE_DIR/tmux-kills"
+  : > "$registry"
+  : > "$kills"
+  export FM_FAKE_TMUX_WINDOWS="$registry" FM_FAKE_TMUX_KILL_LOG="$kills"
+
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "spawn should succeed against a reachable origin and a clean slot"$'\n'"$out"
+  assert_grep "firstmate:fm-$id" "$registry" "a successful spawn did not keep its worker endpoint"
+  [ ! -s "$kills" ] || fail "a successful spawn closed its own endpoint"$'\n'"$(cat "$kills")"
+  assert_grep "window=firstmate:fm-$id" "$HOME_DIR/state/$id.meta" \
+    "the published record does not name the endpoint that survived"
+  unset FM_FAKE_TMUX_WINDOWS FM_FAKE_TMUX_KILL_LOG
+  pass "a successful spawn's endpoint survives and stays named by its own record"
 }
 
 test_direct_pr_and_scout_refresh_before_launch() {
@@ -498,7 +596,9 @@ test_non_main_default_branch_refreshes_before_branching
 test_direct_pr_and_scout_refresh_before_launch
 test_dirty_pool_refuses_without_discarding_work
 test_unresolved_remote_default_refuses_pool
-test_unreachable_origin_refuses_stale_pool_base
+test_unreachable_origin_refuses_before_any_endpoint_exists
+test_late_gate_refusal_closes_its_endpoint_and_frees_a_retry
+test_successful_spawn_keeps_its_endpoint
 test_stale_submodule_pin_explains_itself
 test_unpushed_submodule_commit_is_still_uncommitted_work
 test_work_inside_submodule_is_still_uncommitted_work

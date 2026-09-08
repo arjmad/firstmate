@@ -100,23 +100,85 @@ fm_test_fake_gh_axi() {
 # The pane path defaults to empty when FM_FAKE_PANE_PATH is unset. Window
 # cleanup and option operations are no-ops. Launch logging is env-gated, so
 # suites that do not set FM_FAKE_LAUNCH_LOG keep a silent send-keys.
+#
+# FM_FAKE_TMUX_WINDOWS opts a suite into a real window registry, which is what
+# lets a test see whether a window outlived the spawn that created it. With it
+# set, new-window records "<session>:<name>" in that file and FAILS when the name
+# is already registered - the behavior that makes an orphaned window block every
+# retry of the same task id, since fm_backend_tmux_create_task refuses a
+# duplicate name from list-windows first. list-windows then answers from the
+# registry for the requested session, and kill-window removes exactly the target
+# it was given. Without the variable every window op stays the historical no-op,
+# so suites that do not opt in are unaffected. FM_FAKE_TMUX_KILL_LOG, also
+# optional, appends each kill-window target one per line.
 fm_test_fake_tmux_spawn() {
   local fakebin=$1
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+fake_tmux_flag_value() {  # <flag> <argv...>
+  local flag=$1 prev= a
+  shift
+  for a in "$@"; do
+    if [ "$prev" = "$flag" ]; then
+      printf '%s' "$a"
+      return 0
+    fi
+    prev=$a
+  done
+  return 1
+}
 case "$*" in
   *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
 esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
   list-windows)
+    if [ -n "${FM_FAKE_TMUX_WINDOWS:-}" ]; then
+      ses=$(fake_tmux_flag_value -t "$@") || ses=
+      ses=${ses%%:*}
+      [ -f "$FM_FAKE_TMUX_WINDOWS" ] || exit 0
+      while IFS= read -r entry; do
+        case "$entry" in
+          "$ses":*) printf '%s\n' "${entry#*:}" ;;
+        esac
+      done < "$FM_FAKE_TMUX_WINDOWS"
+      exit 0
+    fi
     if [ -n "${FM_FAKE_DUPLICATE_WINDOW:-}" ]; then
       printf '%s\n' "$FM_FAKE_DUPLICATE_WINDOW"
     fi
     exit 0
     ;;
-  has-session|new-session|new-window|kill-window|set-window-option) exit 0 ;;
+  new-window)
+    if [ -n "${FM_FAKE_TMUX_WINDOWS:-}" ]; then
+      ses=$(fake_tmux_flag_value -t "$@") || ses=
+      ses=${ses%%:*}
+      name=$(fake_tmux_flag_value -n "$@") || name=
+      if [ -f "$FM_FAKE_TMUX_WINDOWS" ] && grep -qxF "$ses:$name" "$FM_FAKE_TMUX_WINDOWS"; then
+        printf 'create window failed: index in use\n' >&2
+        exit 1
+      fi
+      printf '%s\n' "$ses:$name" >> "$FM_FAKE_TMUX_WINDOWS"
+      printf '@%s\n' "$(grep -c '' "$FM_FAKE_TMUX_WINDOWS")"
+      exit 0
+    fi
+    exit 0
+    ;;
+  kill-window)
+    target=$(fake_tmux_flag_value -t "$@") || target=
+    if [ -n "${FM_FAKE_TMUX_KILL_LOG:-}" ]; then
+      printf '%s\n' "$target" >> "$FM_FAKE_TMUX_KILL_LOG"
+    fi
+    if [ -n "${FM_FAKE_TMUX_WINDOWS:-}" ] && [ -f "$FM_FAKE_TMUX_WINDOWS" ]; then
+      # tmux's exact-match target form is "=<session>:=<window>".
+      target=${target//=/}
+      grep -vxF "$target" "$FM_FAKE_TMUX_WINDOWS" > "$FM_FAKE_TMUX_WINDOWS.next" || :
+      mv "$FM_FAKE_TMUX_WINDOWS.next" "$FM_FAKE_TMUX_WINDOWS"
+    fi
+    exit 0
+    ;;
+  has-session|new-session|set-window-option) exit 0 ;;
   send-keys)
     if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
       prev=

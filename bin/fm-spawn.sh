@@ -153,6 +153,20 @@
 #   itself a linked worktree of the project repository still launches. A pane
 #   that never reaches an isolated worktree refuses at the end of that wait,
 #   naming the last path seen and why it was rejected.
+#   A fresh ship or scout first proves the PROJECT's origin is reachable, before
+#   any endpoint or worktree exists. The rest of the base gate below can only run
+#   on the task worktree, which is discovered by driving the endpoint, so without
+#   that pre-flight an unreachable origin refuses long after the endpoint exists.
+#   The pre-flight is reachability only: it lists the remote's refs, fetches
+#   nothing, and writes nothing.
+#   Whatever refuses after the endpoint exists, the endpoint does not outlive the
+#   refusal: a fresh spawn that creates one records that exact endpoint and closes
+#   it when the spawn exits without publishing the task record, so a retry of the
+#   same id is never blocked by the previous attempt's debris. Publishing the
+#   record disarms that cleanup, because from then on teardown owns the endpoint;
+#   an already-published record for the id keeps it disarmed for the same reason.
+#   Orca's terminal and worktree, and a projected herdr workspace, stay with their
+#   own cleanup paths rather than being closed twice.
 #   Only after this isolation check, a fresh ship or scout's clean task worktree
 #   fetches origin, resolves the current remote default branch, and resets to its tip.
 #   Relaunch reuses the recorded worktree without fetching or resetting its base.
@@ -815,6 +829,11 @@ SPAWN_META_PUBLISH_STARTED=0
 SPAWN_FRESH_COMMIT_PENDING=0
 SPAWN_TASK_SET_LOCK=
 SPAWN_TASK_SET_LOCK_HELD=0
+SPAWN_ENDPOINT_ABORT_CLEANUP=0
+SPAWN_ENDPOINT_ABORT_BACKEND=
+SPAWN_ENDPOINT_ABORT_TARGET=
+SPAWN_ENDPOINT_ABORT_TAB=
+SPAWN_ENDPOINT_ABORT_WINDOW=
 RELAUNCH_REPLACEMENT_PENDING=0
 RELAUNCH_REPLACEMENT_BUSY_GEN=
 RELAUNCH_REPLACEMENT_HARNESS=
@@ -848,6 +867,37 @@ parse_orca_worktree_result() {
   else
     ORCA_TERMINAL=
   fi
+}
+
+# The endpoint half of spawn_abort_cleanup's contract. A fresh spawn creates its
+# endpoint hundreds of lines before it can publish a task record, and every
+# refusal in between - the worktree isolation guard, the base-freshness gate, and
+# any ownership check added between them - used to leave that endpoint behind
+# with no record naming it, which is what made every retry of the same task id
+# die on a window name the previous attempt still owned.
+#
+# Only the endpoint THIS process just created is recorded: its backend, the exact
+# target id the create returned, and its own fm-<id> window name. Cleanup closes
+# that recorded target and nothing else, so it can never reach a window belonging
+# to another task.
+#
+# Two backends are deliberately excluded because another cleanup path already
+# owns their resource and closing the pane underneath it would defeat that path:
+# Orca (ORCA_ABORT_CLEANUP owns the terminal and the worktree it created) and a
+# PROJECTED herdr task (HERDR_PROJECTION_ABORT_CLEANUP owns its whole disposable
+# workspace). A flat herdr task has no such owner and is included.
+spawn_arm_endpoint_abort_cleanup() {
+  [ -n "${T:-}" ] || return 0
+  [ "$BACKEND" != orca ] || return 0
+  if [ "$BACKEND" = herdr ] && [ "${HERDR_PROJECTED:-0}" = 1 ]; then
+    return 0
+  fi
+  SPAWN_ENDPOINT_ABORT_BACKEND=$BACKEND
+  SPAWN_ENDPOINT_ABORT_TARGET=$T
+  SPAWN_ENDPOINT_ABORT_TAB=
+  [ "$BACKEND" != zellij ] || SPAWN_ENDPOINT_ABORT_TAB=$ZELLIJ_TAB_ID
+  SPAWN_ENDPOINT_ABORT_WINDOW=$W
+  SPAWN_ENDPOINT_ABORT_CLEANUP=1
 }
 
 spawn_abort_cleanup() {
@@ -931,6 +981,21 @@ spawn_abort_cleanup() {
             || true
         fi
       fi
+    fi
+  fi
+  if [ "$SPAWN_ENDPOINT_ABORT_CLEANUP" = 1 ]; then
+    SPAWN_ENDPOINT_ABORT_CLEANUP=0
+    # A record for this id means something else already owns this endpoint - a
+    # publication this process disarmed on, or a record it never wrote - and
+    # closing an endpoint a record names is exactly the damage this cleanup
+    # exists to prevent, so it stops rather than guesses.
+    if [ -e "$STATE/$ID.meta" ] || [ -L "$STATE/$ID.meta" ]; then
+      echo "warning: task $ID has a task record, so its endpoint $SPAWN_ENDPOINT_ABORT_TARGET was left in place instead of being closed by the aborted spawn" >&2
+    else
+      fm_backend_kill "$SPAWN_ENDPOINT_ABORT_BACKEND" \
+        "$SPAWN_ENDPOINT_ABORT_TARGET" \
+        "$SPAWN_ENDPOINT_ABORT_TAB" \
+        "$SPAWN_ENDPOINT_ABORT_WINDOW" 2>/dev/null || true
     fi
   fi
   if [ "$SPAWN_TASK_LOCK_HELD" = 1 ]; then
@@ -2263,6 +2328,26 @@ EOF
   printf '%s' "$lines" >&2
 }
 
+# The reachability half of freshen_spawn_worktree_base, hoisted to where it can
+# still refuse for free. That gate runs on the TASK WORKTREE, and the worktree is
+# only discovered by driving `treehouse get` inside an endpoint that already
+# exists, so an unreachable origin refused hundreds of lines after the endpoint
+# was created. Reachability is the one condition the gate proves that needs
+# neither a worktree nor an endpoint, so it is proved here, on the project
+# itself, before either exists.
+#
+# `ls-remote` lists the remote's refs and nothing more: no FETCH_HEAD, no ref
+# update, no reflog entry, so a spawn refused for any later reason still leaves
+# the project exactly as it found it. Everything else the gate proves - the
+# current default branch, a clean slot, the reset onto its tip - stays where it
+# is, because only the slot itself can answer those.
+preflight_project_origin_reachable() {  # <project>
+  local project=$1
+  git -C "$project" ls-remote --quiet origin >/dev/null 2>&1 && return 0
+  echo "error: could not reach origin for project '$project'; refusing to create a worker endpoint that the base-freshness gate would only strand" >&2
+  return 1
+}
+
 freshen_spawn_worktree_base() {  # <worktree>
   local worktree=$1 default target expected actual status
   if ! git -C "$worktree" fetch --quiet origin; then
@@ -2438,6 +2523,9 @@ if [ "$RELAUNCH" -eq 1 ]; then
   WT_TARGET=$T
   SES=${T%%:*}
 else
+if [ "$KIND" != secondmate ]; then
+  preflight_project_origin_reachable "$PROJ_ABS" || exit 1
+fi
 case "$BACKEND" in
   tmux)
     SES=$(fm_backend_tmux_container_ensure)
@@ -2668,6 +2756,7 @@ EOF
     T="$ORCA_TERMINAL"
     ;;
 esac
+spawn_arm_endpoint_abort_cleanup
 fi
 if [ "$KIND" = secondmate ]; then
   FM_INHERITABLE_CONFIG=trace-context \
@@ -2854,6 +2943,8 @@ rovo_endpoint_cleanup() {
   local tab_id=
   [ "$BACKEND" = zellij ] && tab_id=$ZELLIJ_TAB_ID
   fm_backend_kill "$BACKEND" "$T" "$tab_id" "fm-$ID" 2>/dev/null || true
+  # This endpoint is closed, so the generic abort cleanup must not close it again.
+  SPAWN_ENDPOINT_ABORT_CLEANUP=0
 }
 
 if [ "$RELAUNCH" -eq 1 ]; then
@@ -3443,6 +3534,8 @@ if [ "$RELAUNCH" -eq 0 ]; then
     exit 1
   fi
   SPAWN_META_TMP=
+  # The record now names this endpoint, so teardown owns it from here.
+  SPAWN_ENDPOINT_ABORT_CLEANUP=0
 fi
 
 # Fuse the backlog In-flight transition into the publication that just created
