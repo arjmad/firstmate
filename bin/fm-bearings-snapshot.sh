@@ -25,7 +25,10 @@
 # decisions from report or visual-review prose or reimplements snapshot semantics.
 # Underway (in_flight) projects every main live worker plus every active child
 # from every readable secondmate ledger, independently of that home's
-# bearings_state. A home classified captain_decision because it has an open
+# bearings_state. Each row's name is the durable task title when nonblank and
+# its durable task id otherwise, so renderers always receive a task-identifying
+# label instead of having to substitute run status. A home classified
+# captain_decision because it has an open
 # captain hold still contributes each working child as its own Underway row;
 # the home row on secondmates[] keeps the decision and gate classification.
 # Captain-hold placement follows the canonical snapshot's hold_bucket and
@@ -40,6 +43,10 @@
 # and drops its gate, so a hold is never in both Captain's Call and Charted Next.
 # Aging is a projection safety net only; the durable
 # deferral remains re-holding with --until.
+#
+# Charted Next gates are ordered by durable filed date, newest first, before the
+# FM_BEARINGS_GATES bound is applied. Gates without a comparable filed date keep
+# their input order after dated gates.
 #
 # Main-home inventory validity comes from the canonical snapshot's main_inventory
 # object (orphan structured in-flight without meta, unstructured current rows).
@@ -129,12 +136,14 @@ Default collection performs bounded concurrent remote-ledger reads for registere
 remote homes under one shared snapshot budget and may refresh the parent-side cache.
 --include-prs additionally performs live GitHub discovery and checks.
 
-Default fields: schema, home, generated, prs, in_flight{id,kind,state,repo,doing},
+Default fields: schema, home, generated, prs, in_flight{id,kind,state,repo,name,doing},
   secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
   secondmate_reconcile{id,spawn_gen,host,kind,ids},
   decisions_open{id,key,verb,summary,owner}, landed{id,what,artifact,owner},
-  gates{id,title,blocked_by,reason,owner}, reports{id,path}, recorded_prs{id,url},
+  gates{id,title,blocked_by,reason,owner,filed}, reports{id,path}, recorded_prs{id,url},
   unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
+Default gates are selected newest filed first before their bound; undated gates
+  retain input order after dated gates.
 landed merges this home's Done with registered secondmate homes' Done, bounded by
   a per-home cap (FM_BEARINGS_LANDED_PER_HOME) and an overall cap (FM_BEARINGS_LANDED),
   with omitted[] disclosure. Default selection is balanced across deterministic home
@@ -381,7 +390,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
   def as_gate($owner):
     {id, title:(.title | trunc(60)),
      blocked_by:((.unresolved_blocker_ids // []) | if length > 0 then join(",") else "-" end | trunc(120)),
-     reason:(hold_gate_reason | trunc(40)), owner:$owner};
+     reason:(hold_gate_reason | trunc(40)), owner:$owner,
+     filed:((.since // null) | trunc(40))};
   def round_robin_landed($n):
     . as $groups
     | [range(0; (($groups | map(length) | max) // 0)) as $i
@@ -457,6 +467,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
        | {id, kind,
         state: .current_state.state,
         repo:(.backlog.repo // .project // null),
+        name:((.backlog.title // "") as $name
+              | (if ($name | test("[^[:space:]]")) then $name else .id end) | trunc(70)),
         doing: ((.current_state.detail // "") as $d
                 | (if $d != "" then $d else (.hints.last_event_text // "") end) | trunc(90))
       } ]
@@ -466,6 +478,9 @@ MODEL=$(printf '%s' "$SNAP" | jq \
             kind:(.kind // "secondmate"),
             state:(.state // "working"),
             repo:(.repo // null),
+            name:((.name // "") as $name
+                  | (if (($name | type) == "string" and ($name | test("[^[:space:]]")))
+                     then $name else ($m.id + "/" + .id) end) | trunc(70)),
             doing:((.doing // .state) | trunc(90))} ]) as $in_flight_all
   | ([ .backlog.records[]
          | . as $record
@@ -501,7 +516,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
           title:((.main_inventory.reason // "main inventory invalid") | trunc(60)),
           blocked_by:"-",
           reason:"main inventory",
-          owner:"(main)"}]
+          owner:"(main)",
+          filed:null}]
       else [] end)
      + [ .backlog.records[]
          | . as $record
@@ -522,7 +538,17 @@ MODEL=$(printf '%s' "$SNAP" | jq \
        | select(($all_reports == 1) or (($rel_ids | index($r.id)) != null))
        | {id, path} ]) as $reports_all
   | ([ .tasks[] | select(.kind != "secondmate" and .pr.url != null and .pr.source == "meta") | {id, url:.pr.url} ]) as $recorded_prs_all
-  | . as $snap
+  | def filed_epoch:
+      (.filed // null) as $filed
+      | if ($filed | type) != "string" then null
+        elif ($filed | test("T")) then try ($filed | fromdateiso8601) catch null
+        else try (($filed + "T00:00:00Z") | fromdateiso8601) catch null end;
+    def newest_filed_first:
+      to_entries
+      | sort_by((.value | filed_epoch) as $epoch
+          | if $epoch == null then [1, 0, .key] else [0, -$epoch, .key] end)
+      | map(.value);
+    . as $snap
   | {
       schema: "fm-bearings.v1",
       home: $home,
@@ -536,7 +562,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
       decisions_open: (if $all_decisions == 1 then $decisions_all else $decisions_all[:$decisions_n] end),
       landed: ($done | map({id, what:(.title | trunc(70)),
                             artifact:(landed_artifact // "-"),owner:.home_id})),
-      gates: (if $all_queued == 1 then $gates_all else $gates_all[:$gates_n] end),
+      gates: ($gates_all | newest_filed_first
+              | if $all_queued == 1 then . else .[:$gates_n] end),
       reports: (if $all_reports == 1 then $reports_all else $reports_all[:$reports_n] end),
       recorded_prs: (if $all_recorded_prs == 1 then $recorded_prs_all else $recorded_prs_all[:$recorded_prs_n] end)
     }
