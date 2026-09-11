@@ -2599,7 +2599,7 @@ preflight_project_origin_reachable() {  # <project>
   local project=$1
   spawn_worktree_has_origin_config "$project" || return 0
   git -C "$project" ls-remote --quiet origin >/dev/null 2>&1 && return 0
-  echo "error: could not reach origin for project '$project'; refusing to create a worker endpoint that the base-freshness gate would only strand" >&2
+  echo "error: could not fetch origin refs for project '$project' (could not reach origin); refusing to create a worker endpoint that the base-freshness gate would only strand" >&2
   return 1
 }
 

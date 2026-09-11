@@ -1172,6 +1172,7 @@ PYEOF
   case "$out" in [A-Z]*) fail "blind ps shim still reports a state letter: $out" ;; esac
   out=$(FM_HERDR_PS_BIN="$dir/blind/ps" bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_ps_bin' "$ROOT")
   [ "$out" = "$dir/blind/ps" ] || fail "FM_HERDR_PS_BIN must be honored verbatim, got: $out"
+  # shellcheck disable=SC2016
   out=$(env -u FM_HERDR_PS_BIN PATH="$dir/blind:$PATH" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_ps_bin' "$ROOT")
   [ "$out" != "$dir/blind/ps" ] && [ "$out" != ps ] \
