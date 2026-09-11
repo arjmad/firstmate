@@ -55,7 +55,7 @@ Observed identities, and the resulting verdict:
 | grok | 0.2.118 | `grok-0.2.118-ma` | `grok` | alive |
 | kimi | 0.31.1 | `kimi` | `kimi` | alive |
 
-Claude Code is the harness whose title no longer attributes it at all; every other adapter is currently attributed by both sources.
+In that 2026-08-03 seven-adapter run, Claude Code was the only harness whose title did not attribute it; every other adapter was attributed by both sources.
 Codex reported `codex-aarch64-a` at 0.145.0 and `codex` at 0.146.0, and Kimi Code reported `kimi-code` as its foreground `comm` at 0.29.1 and `kimi` at 0.31.1, so these identities move between ordinary patch releases in both directions.
 That is the evidence for treating any single process name as a surface under vendor control rather than a stable contract.
 
@@ -63,7 +63,7 @@ The crewmate-only Muse Code 0.1.0-R708.1 adapter was verified separately on 2026
 Its installed `muse-bin-0.1.0-R708.1` foreground identity classified `alive`, while `musescore`, `amuse`, `muse-binary`, and `muse-bind` remained ambiguous in the portable regression.
 [`muse.md`](muse.md#process-identity) owns the artifact identity and launcher evidence for that verification.
 
-The crewmate/scout-only Rovo CLI 202609.1.2 adapter added `*rovo*` to the same glob family as `*grok*`/`*kimi*` in `fm_backend_tmux_classify_process_name`, and was relaunched live under tmux 3.6a in an isolated private socket.
+The crewmate/scout-only Rovo CLI 202609.1.2 adapter added `*rovo*` to the same glob family as `*grok*`/`*kimi*` in the shared process-name classifier (now `fm_agent_process_classify_name` in `bin/fm-agent-process-lib.sh`), and was relaunched live under tmux 3.6a in an isolated private socket.
 `#{pane_current_command}` reported the truncated on-disk binary name `atlassian_cli_r` - macOS's 15-char `comm` truncation cuts `atlassian_cli_rovodev` off just before the `rovo` substring begins, the same truncation-volatility class codex/kimi's own patch-release name drift shows above - while the foreground ps-based `comm` correctly reported `rovo`, so `fm_backend_tmux_agent_state` returned `alive` through that primary source; the two-independent-name-sources design is exactly why the truncated title does not break the verdict.
 [`rovo.md`](rovo.md#backend-liveness-tmux-verified-live-herdr-placement-verified-live-with-a-herdr-side-agent-detection-gap) owns the fuller record, including the busy/interrupt/exit facts captured in that same live tmux session and the herdr agent-detection gap found when herdr placement was verified live in an isolated lab session.
 
@@ -84,14 +84,36 @@ alive
 On macOS the pane command reflected the rewritable title while the full install path could survive in `ps -o comm=`; in the Linux portable regression those roles reversed for the version-named native executable, with the identifying path retained in argv[0].
 The classifier therefore accepts a harness basename first, then an exact harness path component in the full executable path, then the same component in argv[0], without depending on which field carries it on a given platform.
 
-The portable regression is CI-enforced, while the real-harness drift guard is opt-in under the policy in `.agents/skills/firstmate-coding-guidelines/SKILL.md`.
+The portable regression is CI-enforced.
+The real-harness drift guard spends no model tokens, so under the policy in `.agents/skills/firstmate-coding-guidelines/SKILL.md` it runs by default wherever tmux is installed and reports a capability skip elsewhere; `FM_HARNESS_LIVENESS_DRIFT=1` additionally turns an absent tool into a failure.
 Run the live guard after any harness upgrade and before trusting or refreshing the table above:
 
 ```sh
 FM_HARNESS_LIVENESS_DRIFT=1 bin/fm-test-run.sh tests/fm-harness-liveness-drift-live-e2e.test.sh
 ```
 
-Bounded output from the run that produced the table:
+### 2026-09-06 default-on drift refresh, and the Cursor editor CLI collision
+
+Running the guard with no variable set on macOS 26.5.2 arm64 checked 8 installed harnesses and classified every one `alive`:
+
+```text
+# claude 2.1.263 (Claude Code): title='2.1.263' foreground=[/Users/kunchen/.local/bin/claude <defunct> <defunct> ]
+# codex codex-cli 0.147.0: title='codex' foreground=[/opt/homebrew/bin/codex ]
+# opencode 1.18.29: title='opencode' foreground=[/opt/homebrew/bin/opencode ]
+# pi 0.84.4: title='pi-launcher' foreground=[/opt/homebrew/bin/pi-signed .../pi ]
+# pi-signed 0.84.4: title='pi-launcher' foreground=[/opt/homebrew/bin/pi-signed .../pi ]
+# grok grok 1.0.13 (5e9a58528b76) [stable]: title='grok-1.0.13-mac' foreground=[/Users/kunchen/.local/bin/grok ]
+# cursor 2026.09.02-c22c1a3: title='node' foreground=[/Users/kunchen/.local/bin/cursor-agent ]
+# muse Muse Code 1.0.3 (1.0.3-R2198.1): title='muse-bin-1.0.3-' foreground=[/Users/kunchen/.local/bin/muse-bin-1.0.3-R2198.1 ]
+# checked 8 installed harness(es)
+```
+
+The first default-on run failed on Cursor with `LIVENESS DRIFT: cursor unknown is running but classifies 'missing'`, observed title `zsh`.
+The classifier was not at fault: the guard resolved the harness through a generic `command -v cursor`, which on a machine that also has the Cursor editor finds `~/.local/bin/cursor` - the editor launcher, not the agent.
+That binary exits immediately, leaving a bare shell in the pane.
+The guard now asks `fm_cursor_resolve_binary` first for `cursor`, which is the same verified owner `bin/fm-spawn.sh` uses, so the probe launches `cursor-agent` and the editor CLI can no longer masquerade as the harness.
+
+Bounded output from the 2026-08-03 run that produced the first table above:
 
 ```text
 ok - harness liveness: claude 2.1.220 (Claude Code) classifies alive
@@ -585,6 +607,69 @@ The CLI matrix was checked directly:
 All destructive verification used `bin/fm-herdr-lab.sh` with a non-default `fm-lab-` name and a byte-identical default-session tripwire.
 No ambient `herdr server stop` command is a supported test operation.
 
+### fm-remote server birth and login-keychain access
+
+Measured 2026-09-09 on macOS 26 (Darwin 25.6.0) aarch64 with Claude Code 2.1.266 and Herdr 0.9.0, the guarantee behind `bin/fm-remote-herdr-guard.sh` and the doctor's `herdr-server` check: login-keychain access follows the audit session a process was born into, never the launch shape or the shell.
+
+Same user, same `HOME`, same login keychain item, three births, probed with `launchctl managername`, `getaudit_addr` (a compiled probe), `security find-generic-password -a "$USER" -w -s "Claude Code-credentials"` (output withheld), and `claude auth status`:
+
+| Birth | `managername` | audit session | `security ... -w` | `claude auth status` |
+| --- | --- | --- | --- | --- |
+| `gui/501` LaunchAgent, bare `ProgramArguments`, `launchctl bootstrap` + `kickstart -k` mid-session | Aqua | asid 100038 (the `gui/501` asid), `HAS_GRAPHIC_ACCESS HAS_TTY HAS_CONSOLE_ACCESS HAS_AUTHENTICATED` | exit 0 | `loggedIn: true` |
+| `gui/501` LaunchAgent, `zsh -l -c 'exec ...'`, same reload | Aqua | asid 100038, same flags | exit 0 | `loggedIn: true` |
+| `user/501` LaunchAgent (`LimitLoadToSessionType=Background`), same reload | Background | asid 100056, flags `0x0` | exit 36 `User interaction is not allowed.`, item metadata still readable | `loggedIn: false`, `authMethod: none` |
+
+Claude Code 2.1.266 maps that exit 36 (and 44) to "no keychain data" and reads `~/.claude/.credentials.json` instead; with a stale file it prints `Failed to authenticate: OAuth session expired and could not be refreshed` (interactive: `Login expired · Please run /login`).
+
+Candidate birth markers were read with `ps -Eww -o command= -p <pid>` for own-uid processes, noting that macOS hides the environment of Apple platform binaries such as `/bin/sleep` and that a herdr server is never one.
+
+```text
+launchd-born herdr server (child of launchd, gui/501):  XPC_SERVICE_NAME=org.nix-community.home.herdr-server  no SSH_*
+SSH-born herdr server (child of `herdr --session fm-remote remote-client-bridge` under `sshd-session: user@notty`):  SSH_CLIENT=... SSH_CONNECTION=...  no XPC_SERVICE_NAME
+```
+
+`XPC_SERVICE_NAME` identifies a launchd label but does not identify its domain, because the Background `user/501` job also carried that variable while lacking keychain access.
+The owner classifier therefore accepts that label only when `launchctl print gui/<uid>/<label>` identifies the owner pid or the label is loaded in `gui/<uid>` but not `user/<uid>`.
+`XPC_SERVICE_NAME=0`, including a value inherited by a herdr live-handoff child, remains unknown.
+`FM_REMOTE_JOB_ACTIVE=1` proves the Aqua worker only when `dev.firstmate.remote-job` is loaded in `gui/<uid>` but not `user/<uid>`.
+
+The SSH-born row was read on the remote host whose `dev.firstmate.herdr.fm-remote` job showed `state = spawn scheduled`, `runs = 239`, `last exit code = 1` and a log repeating `error: herdr server is already running`: herdr's remote attach had started the session's server as its own child before the login session existed, and launchd's copy lost the socket on every retry.
+`pgrep -f` did not list the herdr server's argv on macOS; `lsof -U -a -c herdr -F pn` named the socket owner.
+
+A separate foreground-supervision check ran on 2026-09-09 on macOS 26 (Darwin 25.6.0) with Herdr 0.9.0 using the throwaway Aqua launch agent `dev.fm-rca.herdr-fg`.
+Its `ProgramArguments` ran `/run/current-system/sw/bin/zsh -l -c "exec /etc/profiles/per-user/kunchen/bin/herdr server --session fm-lab-fg-90381-18985"`, with `KeepAlive={SuccessfulExit=false}` and `ThrottleInterval=10`, after `launchctl bootstrap gui/501 <plist>` and `launchctl kickstart -k gui/501/dev.fm-rca.herdr-fg`.
+`launchctl print gui/501/dev.fm-rca.herdr-fg` reported `state = running` and `pid = 4806`.
+`lsof -U -a -c herdr -F pn` named pid 4806 as the owner of `~/.config/herdr/sessions/fm-lab-fg-90381-18985/herdr.sock`.
+`ps -o pid,ppid,command -p 4806` reported `4806 1 /etc/profiles/per-user/kunchen/bin/herdr server --session fm-lab-fg-90381-18985`, and its environment carried `XPC_SERVICE_NAME=dev.fm-rca.herdr-fg`.
+No other herdr process existed for that session, and after 15 seconds the job remained running with pid 4806.
+After a guarded `herdr session stop`, the job reported `state = not running` and `last exit code = 0`, and it stayed at rest through the throttle interval.
+A second `launchctl kickstart -k gui/501/dev.fm-rca.herdr-fg` started pid 45574, which was also the new socket owner.
+This proves that `herdr server` remains in the foreground as the launchd job, so the guard's final `exec` supplies the intended supervision and the earlier server that survived `launchctl bootout` was the unrelated SSH-bridge-born process.
+
+`bin/fm-test-run.sh tests/fm-remote-herdr-guard.test.sh` pins the resulting decision table against real marker-carrying processes, and `tests/fm-remote-doctor.test.sh` pins the doctor's verdicts on the same markers.
+
+### Client selection
+
+Measured 2026-09-08 on a macOS aarch64 host running a Herdr 0.9.0 server (protocol 22) for the `fm-remote` session while `~/.local/bin/herdr` still held the self-updated 0.8.2 client (protocol 20) ahead of the Nix-managed 0.9.0 client on the remote-job `PATH`.
+
+```sh
+~/.local/bin/herdr --version
+~/.local/bin/herdr pane get wCY:p2 --session fm-remote; echo "rc=$?"
+~/.local/bin/herdr status --json --session fm-remote | jq -c '{c:.client.protocol,s:{running:.server.running,protocol:.server.protocol,compatible:.server.compatible}}'
+herdr status --json --session fm-remote | jq -c '{c:.client.protocol,s:{running:.server.running,protocol:.server.protocol,compatible:.server.compatible}}'
+```
+
+```text
+herdr 0.8.2
+{"id":"cli:pane:get","error":{"code":"protocol_mismatch","message":"client protocol 20 is older than server protocol 22; upgrade the Herdr client before using this command"}}
+rc=1
+{"c":20,"s":{"running":true,"protocol":22,"compatible":false}}
+{"c":22,"s":{"running":true,"protocol":22,"compatible":true}}
+```
+
+The refusal is a JSON error on stderr with exit 1 and empty stdout, and both client generations report `.server.compatible` and `.server.protocol` per named session, which is what the selection in `bin/backends/herdr.sh` reads.
+`tests/fm-backend-herdr.test.sh` pins the bypass, same-process same-session caching, cross-session isolation, forced reselection, and both status shapes against fakes; `tests/fm-backend-herdr-smoke.test.sh` refreshes the real status normalization against the installed binary's running lab server.
+
 ### Submit confirmation
 
 Measured 2026-08-19 against Herdr 0.8.0 and Claude Code 2.1.236 in an isolated `fm-lab-` session.
@@ -710,7 +795,7 @@ ok - real Herdr lab: multi-home exact-pane teardowns restore captain focus witho
 ok - real Herdr lab validation completed on Herdr 0.7.4 with the default-session tripwire intact
 ```
 
-The suite also covers lost or failed move responses, active-tab refusal, restart husks, missing and duplicate tokens, manual renames, concurrent cleanup, and exact focus restoration.
+The suite also covers lost or failed move responses, restart husks, missing and duplicate tokens, manual renames, concurrent cleanup, and exact focus restoration.
 
 The mandatory projection suite ran again on 2026-07-24 against Herdr 0.7.5 protocol 16:
 
@@ -927,50 +1012,45 @@ Herdr is one of the two backends whose recovery-grade agent-state classifier the
 tests/fm-control-herdr-smoke.test.sh
 ```
 
-Observed output:
+Observed output, refreshed 2026-09-10 on Herdr 0.9.0 after the stale-registration fix (the two stale-registration lines are recorded under "Stale agent registration" below):
 
 ```text
 ok - real herdr: exit on a pane with no registered agent is idempotent success
+ok - real herdr 0.9.0: a gone session reads recoverable while a live pane and a malformed target do not
+ok - real herdr: a drifted agent-free shell returns to its worktree and reuses the same endpoint
 ok - real herdr: interrupt refuses when herdr's own agent registry reports no agent
 ok - real herdr: interrupt delivers the harness's key and proves the agent survived it
 ok - real herdr: no control verb removed the endpoint or the task's local copy
+ok - real herdr 0.9.0: a registration Herdr keeps after its agent exits reads stale-agent and recovers as dead
+ok - real herdr: exit on a pane with a stale registration is idempotent success
+ok - real herdr: a stale registration no longer blocks relaunch, and the endpoint and local copy survive
 ok - real herdr: an agent that does not stop fails closed instead of being reported as stopped
 ```
 
-Those results cover custom-source registrations, not the native full-lifecycle exception.
-That command refreshes the installed-Herdr evidence; run it after every Herdr upgrade rather than trusting the version above.
-NOT VERIFIED against installed Herdr: the native full-lifecycle exception below has no live guard yet, because proving it needs an official Pi report that actually installs `screen_detection_skipped=true` with the `full_lifecycle_hook_authority` reason, and CLI registration success without that authority would simulate the native path rather than prove it.
+The registry read through `herdr pane report-agent` is the same source `fm_backend_herdr_agent_state` classifies, and since 2026-09-10 that registration counts as an agent only while `pane process-info` shows a harness process behind it, so the guard backs the registration with a real process named like a harness (a symlink to `sleep`) and then stops that process, with no real harness launched.
+That command is the guard that refreshes this record; run it after every Herdr upgrade rather than trusting the version above.
 
-The portable native-authority and strict pane-death regression targets passed on 2026-09-07, macOS 26.6.2, Darwin 25.6.0 arm64, Python 3.9.6, Bash 5.3.9, and jq 1.8.2:
+For Pi on Herdr 0.9.0, `herdr agent get` reflects whether the agent process remains live; its registration does not persist merely because the pane and parent shell do.
+A Pi launched as a child of the pane shell (not via `exec`) that then `/quit`s or is SIGKILL'd leaves the pane and shell in place, and `agent get` returns `agent_not_found`.
+A sibling live idle Pi stays `agent=pi` with `agent_status=idle`.
+`fm_backend_herdr_pane_agent_state` maps that `agent_not_found` leftover shell to `no-agent` and `fm_backend_herdr_agent_state` maps it to `dead` (relaunch-allowed), while the live idle pane stays `alive`.
+`herdr pane get` `.agent_status` can still read `idle` after the occupant is gone; liveness is `agent get`, never that pane field.
 
 ```sh
-bin/fm-test-run.sh tests/fm-backend-herdr.test.sh tests/fm-herdr-session-cleanup.test.sh
+tests/fm-backend-herdr-agent-exit-shell-e2e.test.sh
 ```
 
-Selected exact output:
+Refresh that live pair after every Herdr upgrade. Observed 2026-09-10 on Herdr 0.9.0 / protocol 22 with Pi 0.82.0 in an isolated `fm-lab-` session:
 
 ```text
-ok - native authority: bare shell overrides stale official authority without mutation
-ok - native authority: a state-blind ps on PATH cannot silently disable recovery
-ok - native authority: husk replacement creates first and revalidates before closing
-ok - native authority: changed evidence after replacement create refuses old-tab close
-ok - native authority: proven descendant shell overrides stale official authority
-ok - native authority: actual foreground child preserves native live authority
-ok - native authority: background child cannot be hidden by a shell foreground
-ok - native authority: unrelated shell cannot override native authority
-ok - native authority: kernel evidence: changed-start
-ok - native authority: native report changed during positive shell proof
-ok - native authority: custom-source registration remains authoritative on a bare shell
-FM_TEST_SUMMARY total=2 failed=0 skipped_gate=0 duration_ms=70416
+ok - agent get distinguishes leftover-shell (dead/no-agent) from live idle Pi
+ok - pane get agent_status lag cannot keep an exited occupant classified alive
 ```
-
-These tests use real private PTYs and kernel process tables with a canned Herdr transport, including malformed/failed/racing read injection; they do not establish installed-Herdr behavior.
-NOT VERIFIED: the new native-authority cases against installed Herdr, real Pi, or Linux; the existing 0.8.0 custom-registration evidence above does not cover them.
 
 #### `ps` must report process state
 
-Both shell proofs accept only a sleeping or idle process, so a `ps` that cannot report the state letter refuses every proof and disables recovery entirely rather than degrading gradually.
-Measured on the same host and date, an `adv_cmds` rebuild ahead of the platform binary on `PATH` prints a blank state letter for every live process:
+The idle-shell and pane-death proofs accept only a sleeping or idle process, so a `ps` that cannot report the state letter refuses every proof and disables recovery entirely rather than degrading gradually.
+Measured 2026-09-07 on macOS 26.6.2, Darwin 25.6.0 arm64, an `adv_cmds` rebuild ahead of the platform binary on `PATH` prints a blank state letter for every live process:
 
 ```sh
 ps -axo stat= | sed 's/^ *//' | cut -c1-3 | sort | uniq -c | sort -rn | head -4
@@ -988,21 +1068,146 @@ ps -axo stat= | sed 's/^ *//' | cut -c1-3 | sort | uniq -c | sort -rn | head -4
    6 SN+
 ```
 
-`fm_backend_herdr_ps_bin` therefore probes candidates against a known-live process and falls back to `/bin/ps`, and `tests/fm-backend-herdr.test.sh` pins both halves: the state-blind binary forced through `FM_HERDR_PS_BIN` must still refuse, while the same binary merely first on `PATH` must not prevent recovery.
+`fm_backend_herdr_ps_bin` therefore probes candidates against a known-live process and falls back to `/bin/ps`, and `tests/fm-backend-herdr.test.sh` pins both halves: the state-blind binary forced through `FM_HERDR_PS_BIN` is used verbatim, while the same binary merely first on `PATH` is skipped for a state-capable one.
 `FM_HERDR_PS_BIN` is honored verbatim and never probed.
 NOT VERIFIED: Linux `procps` behavior for this probe.
 
+### Endpoint recovery classification
+
+Measured 2026-09-10 on macOS aarch64 against Herdr 0.9.0 (protocol 22) in an isolated `fm-lab-` session.
+
+An endpoint recorded in a session whose server is not running cannot be read by any operational call, and `status` is the one command that answers with a body instead of refusing:
+
+```sh
+herdr pane get w1:p2 --session fm-lab-never-started
+herdr status --json --session fm-lab-never-started | jq -c "{running: .server.running, status: .server.status}"
+```
+
+```text
+{"id":"cli:pane:get","error":{"code":"server_not_running","message":"no herdr server is running at /Users/kunchen/.config/herdr/sessions/fm-lab-never-started/herdr.sock; run `herdr session attach fm-lab-never-started` to start or attach it"}}
+{"running":false,"status":"not_running"}
+```
+
+`fm_backend_herdr_agent_state` therefore settles an uninterpretable pane read with `.server.running` rather than with the `server_not_running` error code, which keeps the verdict working across the supported range: the field is present on 0.8.2 protocol 20 and 0.9.0 protocol 22 alike (measured in "Client selection" above), while the code is not.
+Only that recovery-grade read is widened; the husk classifier under it stays strict, because it licenses closing panes.
+Observed in the lab, in one run:
+
+```text
+live agent-free pane                 dead
+endpoint in a session with no server missing
+malformed target                     unreadable
+```
+
+The same run drove `bin/fm-spawn.sh --relaunch` against a real Herdr pane whose shell had been moved outside its recorded worktree: the shell was told once to return, ended in the recorded worktree, and the replacement was launched into the SAME pane, leaving one task tab.
+
+Herdr 0.8.x is not installed on this host, so protocol-20 coverage is structural plus the adapter fixture exercising both response shapes; it is not a live result.
+Refresh the live half, which fails naming the installed version, with:
+
+```sh
+tests/fm-control-herdr-smoke.test.sh
+```
+
+Observed 2026-09-10:
+
+```text
+ok - real herdr 0.9.0: a gone session reads recoverable while a live pane and a malformed target do not
+ok - real herdr: a drifted agent-free shell returns to its worktree and reuses the same endpoint
+```
+
+`tests/fm-backend-herdr.test.sh` pins the logic portably by driving the two signals apart - the same failed pane read yields `missing` under a stopped server and `unreadable` under a running one - and asserts that the husk classifier still refuses on that identical read.
+`tests/fm-control-herdr-smoke.test.sh` proves the Herdr-only drift recovery against a real binary in an isolated lab session.
+`tests/fm-control-relaunch.test.sh` drives a tmux stub and proves that tmux retains its prior refusal without sending `cd` or any other input to the pane.
+The Herdr refusal when a shell accepts the command but does not move is not exercised in this change.
+
+### Stale agent registration
+
+Measured 2026-09-10 on macOS aarch64 against Herdr 0.9.0 (protocol 22) and Pi 0.85.1 in an isolated `fm-lab-` session (upstream issue #4115, duplicates #3639, #3487, #2908, #3545).
+
+Herdr keeps a Pi registration after the Pi process has exited to a shell when a nested interactive shell sits under the pane's top shell, which is the crew shape `treehouse get` leaves behind; a plain `/quit` directly under the top shell, and a `kill -9` of Pi, both released it on this version.
+Reproduced in the lab with a nested `zsh` under the pane shell, then `pi` with no prompt, then `/quit`:
+
+```sh
+herdr pane run w1:p1 zsh --session "$LAB"; herdr pane run w1:p1 pi --session "$LAB"
+herdr agent get w1:p1 --session "$LAB" | jq -c '.result.agent | {agent, agent_status}'
+herdr pane process-info --pane w1:p1 --session "$LAB" | jq -c '.result.process_info | {shell_pid, fg: .foreground_process_group_id, procs: [.foreground_processes[] | {pid, name, argv0}]}'
+herdr pane send-text w1:p1 '/quit' --session "$LAB"; herdr pane send-keys w1:p1 Enter --session "$LAB"
+herdr agent get w1:p1 --session "$LAB" | jq -c '.result.agent | {agent, agent_status}'
+herdr pane process-info --pane w1:p1 --session "$LAB" | jq -c '.result.process_info | {shell_pid, fg: .foreground_process_group_id, procs: [.foreground_processes[] | {pid, name, argv0}]}'
+```
+
+```text
+{"agent":"pi","agent_status":"idle"}
+{"shell_pid":87754,"fg":35952,"procs":[{"pid":35952,"name":"node","argv0":"pi"}]}
+{"agent":"pi","agent_status":"idle"}
+{"shell_pid":87754,"fg":35834,"procs":[{"pid":35834,"name":"zsh","argv0":"zsh"}]}
+```
+
+Before the fix `fm_backend_agent_state herdr` read that second state as `alive`, so `bin/fm-control.sh <id> relaunch` and `bin/fm-spawn.sh --relaunch` were refused for as long as the registration lived, which is hours.
+The registration is still present after the wait, and Herdr's own `pane report-agent` leaves the same shape behind on any pane, which is what the lifecycle-control guard uses.
+
+Two vendor facts the fix rests on, both read from the outputs above and from `fm_backend_herdr_pane_process_state`'s `pane process-info` parse:
+
+- Pi's process presents with kernel name `node` and argv0 `pi` (its foreground group also carries Pi's child `node` helpers with argv0 such as `npm view ... version`), so a running Pi is attributed by argv[0] exactly as the tmux probe attributes it; a symlink named `claude` to `sleep` presents as name `sleep`, argv0 `claude`.
+- Herdr creates the record with its own placeholder `agent_status` of `unknown` the moment it notices Pi, before Pi's extension reports `idle`; that transient reads `unknown` in the pane classifier as it always did, and only a lifecycle status is subject to the process-level proof.
+
+Subcommand presence below the 0.9.0 measurement, checked 2026-09-10 on macOS aarch64 against the pinned upstream release clients fetched from `https://github.com/ogulcancelik/herdr/releases/download/v<version>/herdr-macos-aarch64`:
+
+| Release | sha256 |
+|---------|--------|
+| 0.7.1 | `16f4653f0491ea1e7d2b46b5b02542f18e1b82e88daaf9e2900572e5bb634df8` |
+| 0.7.3 | `b31345392d004ec1f1b2c821e1ad601019fa8385fe1e4c6931321eb58a920773` |
+| 0.7.4 | `24992e1625dbdcb18354a59e299e4b263c312400b31396cdc07cd46ed57f24a7` |
+| 0.7.5 | `37350546b0012555943b92eaf962665de4e264395baeb44227b8015e8ff5b0d6` |
+
+The command run against each client was `<client> pane --help`, which is client-side, session-independent, and opens no socket, and each printed the line:
+
+```text
+process-info  Show pane process information
+```
+
+This proves subcommand presence in the client only, not the server response shape, which is measured only on 0.9.0 above.
+
+The live guard that refreshes this record runs by default wherever Herdr and Pi are installed, spends no model token, and fails naming both versions:
+
+```sh
+tests/fm-herdr-pi-stale-registration-live-e2e.test.sh
+```
+
+Observed 2026-09-10:
+
+```text
+# pi 0.85.1 under herdr 0.9.0: registered idle, foreground [{"name":"node","argv0":"node"},{"name":"node","argv0":"node"},{"name":"node","argv0":"rpiv-ask-user-question version"},{"name":"node","argv0":"npm view gentle-engram version"},{"name":"node","argv0":"pi"}]
+ok - real herdr 0.9.0 + pi 0.85.1: a running registered pi classifies alive at process level
+# herdr 0.9.0 kept the pi registration (idle) after /quit under a nested shell: the stale-registration branch is exercised
+ok - real herdr 0.9.0 + pi 0.85.1: the registration left behind by a quit pi reads stale-agent and recovers as dead
+```
+
+`tests/fm-control-herdr-smoke.test.sh` proves the same shape through the control plane with no harness launched (the two `stale` lines under "Agent lifecycle control" above): a registration over a real agent-named process reads `alive`, stopping that process makes the pane read `stale-agent` and recover as `dead` while `agent get` still reports the record, `exit` then reports `already-stopped`, and `--relaunch` reuses the same endpoint with the local copy intact.
+`tests/fm-backend-herdr.test.sh` pins the logic portably with canned `process-info` bodies over real processes, driving the signals apart: the identical shell-only foreground reads `stale-agent` for a childless shell and `live` when an agent-named process is still a descendant of that shell, a `working`, `done`, or `blocked` record over a shell-only pane reads the same as `idle`, an unreadable process view reads `unknown` and refuses husk closing, a transient prompt helper beside the shell settles into `stale-agent` on the next shell-only sample while a foreground that never settles within the bound still reads `live`, and `busy_state` verifies a `working` record before reporting busy.
+`tests/fm-crew-state.test.sh` pins the recovery classifier: a stale registration over a shell-only pane reports agent gone rather than alive or unreachable, and a stale `working` record never reports the pane working.
+A stale-registration pane is never a husk: create, reclaim, presentation recovery, and session cleanup keep refusing it, and only recovery reuses it.
+
 ### Away-mode transport
 
-The Pi/Herdr return and injection path was reverified on Herdr 0.7.3 and Pi 0.80.7:
+The away daemon is no longer launched on Pi; the away posture there is the record `bin/fm-afk-contract.sh` owns.
+The Pi/Herdr away posture and return path was verified on 2026-09-08 against a real Pi primary in an isolated Herdr lab session, Herdr 0.9.0 and Pi 0.82.0:
 
 ```sh
 FM_AFK_PI_HERDR_E2E=1 HERDR_LAB_HELPER=bin/fm-herdr-lab.sh \
   tests/fm-afk-pi-herdr-return-e2e.test.sh
 ```
 
-Observed guarantees: pending composer input refused injection and raised one alert; idle Pi accepted one marked escalation; the return gate refused ordinary work while a live blocker remained; resolving the blocker allowed the return flow.
-The dedicated Herdr daemon workspace topology is covered by `tests/fm-afk-launch.test.sh` and preserves the captain tab's pane count.
+```
+ok - real Pi primary: the away posture is recorded with no daemon launched
+ok - real Pi/Herdr: nothing injects into the captain pane under the away posture
+ok - real unmarked Pi return renders the brief, opens catch-up, and blocks Bearings before the unresolved blocker can be deferred
+ok - resolved return catch-up allows Bearings and a clean idempotent away re-entry
+evidence: herdr=herdr 0.9.0 pi=0.82.0 target=fm-lab-fm-afk-pi-return-37189-7133:w1:p1 archived-records=2
+```
+
+Observed guarantees: `fm-afk-launch.sh start` refused on the Pi primary and `confirm` recorded the posture with no daemon pid, flag, or terminal; a pending real Pi draft was left untouched with nothing submitted into the captain pane; the unmarked return request was recognized as the return, rendered the brief health first, opened the catch-up gate on the live blocker, and refused Bearings; resolving the blocker cleared the gate, and a clean re-entry and return left exactly one archived record per away window.
+The fixture captures submitted input through Pi's `input` extension hook, so the lab agent directory needs no provider credentials.
+The daemon injection transport into a live composer keeps its coverage in `tests/fm-afk-inject-herdr-e2e.test.sh` for the harnesses that still run the daemon, and the dedicated Herdr daemon workspace topology is covered by `tests/fm-afk-launch.test.sh` and preserves the captain tab's pane count.
 
 ## Zellij
 
@@ -1484,3 +1689,66 @@ It names the installed version and the floor rather than degrading quietly, and 
 The same guard against the pre-change extension in the same lab measured a 676.9 ms worst keystroke echo while delivering two outcomes and a 295.3 ms worst echo with nothing to deliver, against a 49.2 ms extension-free floor, and failed as designed.
 Measured through the same real `fm_branch_report` tool and real `bin/` scripts with a 1 ms interval timer, the largest single block of the JavaScript thread fell from 273 ms to 2.0 ms for a routine outcome, from 286 ms to 2.0 ms for a captain outcome, and from 134 ms to 1.9 ms for main's acknowledgement, against a 1.3-2.2 ms idle-loop floor.
 Those absolute figures are specific to this host and Pi version; the guards assert the relationship (delivery must stay in the class of the same machine's own floor) rather than a remembered millisecond number.
+
+## Native Codex through Pi
+
+Verified on 2026-09-08 with Pi 0.85.1 and the installed `pi-codex-native` 0.2.1 adapter.
+Run this token-free guard after updating Pi, Codex, or the adapter:
+
+```sh
+FM_PI_CODEX_NATIVE_LIVE=1 bash tests/fm-pi-codex-native.test.sh
+```
+
+Observed result: `"result": "PASS"`.
+The guard runs the real Pi runtime, native adapter, three FirstMate primary extensions, native MCP transport, and FirstMate's durable outcome scripts in an isolated home.
+It verifies native `ultra` on initial and operational turns and after restart, startup operational input, watcher arming, a notification while main is idle, outcome read and one acknowledgement, refusal of a duplicate acknowledgement, and no reprocessing after restart.
+Its native App Server peer and watcher-close process are deterministic fixtures; it does not claim a real backend or a live model was tested by that command.
+`tests/fm-busy-state.test.sh`, `tests/fm-busy-adapter-wiring.test.sh`, and `tests/fm-watch-triage.test.sh` cover separate progress notification, unchanged semantic busy state, rejection of a superseded worker's events, and progress refreshing the busy-age bound without fabricating a completed turn.
+
+## Oh My Pi (omp)
+
+omp runs crewmate, scout, secondmate, and primary work; [`supervision.md`](supervision.md#omp-oh-my-pi-native-delivery-2026-09-05) owns the primary evidence.
+The evidence below was produced on 2026-09-05 against omp 18.1.11 (`~/.local/bin/omp`, a Bun-compiled single binary) on macOS 26 arm64 through the Herdr backend with the `openai-codex/gpt-6-astra` model, building on the 2026-09-02 adapter investigation against 18.1.2.
+
+### Process identity and markers
+
+`ps -o comm=` reports the bare name `omp` for the agent process, from both its `!` bash path and the model's bash tool, so identity is the anchored name; `ompd` and `comp` never match.
+omp publishes no harness marker: `PI_CODING_AGENT` is absent from the binary, and the default profile sets neither `PI_CODING_AGENT_DIR` nor `OMP_PROFILE` in the process environment.
+`FM_OMP_HARNESS=omp` is Firstmate's own launch marker and wins over an inherited `CLAUDECODE` only under a real omp ancestor; `tests/fm-omp-harness.test.sh` pins both directions with real processes.
+
+### Composer
+
+Under the captain's `unicode` symbol preset the idle screen through Herdr was a bare `❯` (U+276F) row followed directly by the status row:
+
+```text
+❯
+ π  · ◔ GPT-6-Astra · 🌳 …-workspace · ⑂ detached · ◫ 15.4%/272K ⟲ · (sub)
+```
+
+Before the status-row rule the shared classifier folded that row into the bare composer's wrap region and read the idle pane `pending`, so `bin/fm-send.sh` skipped its doorbell on the first live omp worker.
+After the rule, the same live Herdr capture read `empty`, a steer's doorbell landed, and the worker opened a turn on it.
+`tests/fm-composer-lib.test.sh` pins the unicode idle row, the nerd-preset idle row, the busy spinner row, and typed text over the same fixture in both locales.
+
+### Busy state and lifecycle
+
+| Fact | Observed |
+| --- | --- |
+| Semantic source | `omp-ext`: `busy source=omp-ext event=agent-start` on the brief, `idle source=omp-ext event=agent-end` at its natural end, `busy` again on a steer, `idle` after a control-plane interrupt |
+| Rendered busy row | `⎋ Working…` (U+2026) above the composer and a braille spinner plus elapsed cell (`⠧ 36s`) in the status row; the omp busy regex accepts only those two TUI signals, not the `Working...` that headless `-p` writes to stderr, since no supervised omp pane runs headless |
+| Interrupt | `bin/fm-control.sh <id> interrupt` delivered a single Escape (`verified=agent-alive cancel=unconfirmed`), the composer read `empty`, and omp raised `agent_end` |
+| Exit | `bin/fm-control.sh <id> exit` typed `/quit`; Herdr then reported the pane `dead` |
+| Extension loading | a file named both by `-e` and by `<cwd>/.omp/extensions` loads twice; discovery is top-level and cwd-only |
+| Extension tools | the openai-codex model invokes a registered tool by writing `xd://<tool>` through omp's virtual-file bridge |
+
+### End-to-end
+
+A throwaway scout was spawned through `bin/fm-spawn.sh --scout --harness omp --model openai-codex/gpt-6-astra --effort low` on Herdr and driven to completion:
+
+1. the launch delivered its brief positionally under the tracked posture overlay and the agent executed it with no approval prompt;
+2. the busy record moved seed, busy, idle exactly as the extension contract states;
+3. the report landed and the `done:` status line was appended;
+4. `bin/fm-send.sh` rang the doorbell once the composer read `empty`, and the worker opened a turn on the inbox record;
+5. `bin/fm-control.sh <id> interrupt` cancelled the running turn;
+6. `bin/fm-control.sh <id> exit` stopped the agent and `bin/fm-teardown.sh` returned the worktree and closed the item.
+
+`FM_OMP_LIVE_E2E=1 tests/fm-omp-primary-live-e2e.test.sh` refreshes the primary evidence; the worker path above is refreshed by repeating the scout dispatch after any omp upgrade.

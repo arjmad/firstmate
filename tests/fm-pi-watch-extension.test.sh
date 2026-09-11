@@ -33,6 +33,7 @@ install_pi_watch_extension_fixture() {
     "$repo/node_modules/typebox"
   cp "$EXT" "$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cp "$ROOT/.pi/extensions/lib/fm-branch-dispatch.ts" "$repo/.pi/extensions/lib/fm-branch-dispatch.ts"
+  cp "$ROOT/.pi/extensions/lib/fm-native-contract.ts" "$repo/.pi/extensions/lib/fm-native-contract.ts"
   cp "$ROOT/.pi/extensions/lib/fm-async-exec.ts" "$repo/.pi/extensions/lib/fm-async-exec.ts"
   cp "$ROOT/.pi/extensions/lib/fm-calm-visibility.ts" "$repo/.pi/extensions/lib/fm-calm-visibility.ts"
   cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$repo/.pi/extensions/lib/fm-operational-input.ts"
@@ -3133,14 +3134,22 @@ EOF
 # markers are never read or written.
 test_real_pi_help_probe_preserves_primary_markers() {
   local home state watch_marker turnend_marker watch_version turnend_version
-  local cold_pid help
+  local cold_pid help config
   if ! command -v pi >/dev/null 2>&1; then
     echo "skip: pi not installed, so the real-Pi capability-probe marker regression did not run; install pi to enable it"
     return 0
   fi
   home="$TMP_ROOT/pi-real-help-home"
   state="$home/state"
-  mkdir -p "$state"
+  config="$home/pi-config"
+  mkdir -p "$state" "$config"
+  # Pi discovers a project's .pi/extensions only from a directory recorded in
+  # its trust store, so the probe runs against an isolated config dir that
+  # trusts exactly this checkout: on a developer host that already trusts it
+  # the case would pass by accident, and on a fresh CI checkout the real Pi
+  # would load nothing and fail for a reason unrelated to the marker writer.
+  # The isolated dir also keeps the developer's own Pi config out of the run.
+  printf '{"%s": true}\n' "$ROOT" > "$config/trust.json"
   watch_marker="$state/.pi-watch-extension-loaded"
   turnend_marker="$state/.pi-turnend-extension-loaded"
   watch_version="sha256:$(fm_test_sha256 "$ROOT/.pi/extensions/fm-primary-pi-watch.ts")"
@@ -3153,7 +3162,7 @@ test_real_pi_help_probe_preserves_primary_markers() {
   # markers, which is what proves this Pi build really does load both primary
   # extensions while preparing --help. Without it the preservation case below
   # would pass just as well on a Pi that never loaded them at all.
-  ( cd "$ROOT" && FM_HOME="$home" FM_STATE_OVERRIDE="$state" pi --help >/dev/null 2>&1 ) \
+  ( cd "$ROOT" && FM_HOME="$home" FM_STATE_OVERRIDE="$state" PI_CODING_AGENT_DIR="$config" pi --help >/dev/null 2>&1 ) \
     || fail "real pi --help exited non-zero"
   assert_present "$watch_marker" "real pi --help did not load the watch extension at all"
   assert_present "$turnend_marker" "real pi --help did not load the turn-end extension at all"
@@ -3172,7 +3181,7 @@ test_real_pi_help_probe_preserves_primary_markers() {
   printf '%s\n' "$$" > "$state/.lock"
   printf '%s\n%s\n' "$watch_version" "$$" > "$watch_marker"
   printf '%s\n%s\n' "$turnend_version" "$$" > "$turnend_marker"
-  ( cd "$ROOT" && FM_HOME="$home" FM_STATE_OVERRIDE="$state" pi --help >/dev/null 2>&1 ) \
+  ( cd "$ROOT" && FM_HOME="$home" FM_STATE_OVERRIDE="$state" PI_CODING_AGENT_DIR="$config" pi --help >/dev/null 2>&1 ) \
     || fail "real pi --help exited non-zero under a held session lock"
   fm_pi_extension_loaded "$watch_marker" "$watch_version" "$state/.lock" \
     || fail "a descendant pi --help overwrote the primary's watch-extension proof (marker $(sed -n '2p' "$watch_marker"), lock $$)"
@@ -3181,7 +3190,7 @@ test_real_pi_help_probe_preserves_primary_markers() {
 
   # The spawn-time belt in bin/fm-spawn.sh: --no-extensions still answers the
   # capability question, so the probe never needs to load them at all.
-  help=$( cd "$ROOT" && FM_HOME="$home" FM_STATE_OVERRIDE="$state" pi --no-extensions --help 2>&1 ) \
+  help=$( cd "$ROOT" && FM_HOME="$home" FM_STATE_OVERRIDE="$state" PI_CODING_AGENT_DIR="$config" pi --no-extensions --help 2>&1 ) \
     || fail "real pi --no-extensions --help exited non-zero"
   printf '%s\n' "$help" | grep -Eq -- '(^|[[:space:]])--tui-mode([[:space:]=]|$)' \
     || fail "pi --no-extensions --help no longer reports --tui-mode, so the spawn probe cannot use it"

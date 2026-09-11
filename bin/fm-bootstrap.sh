@@ -103,7 +103,7 @@
 #          checkout command. Used by
 #          fm-session-start.sh's read-only path when another live session holds
 #          the fleet lock, so a second concurrent session never race-mutates
-#          secondmate homes, pending handoff outboxes,
+#          secondmate homes, pending handoff outboxes and receiver wakes,
 #          X-mode artifacts, project clones, or repair instructions.
 #          Unset/0 (the default) runs all six sweeps - this flag is purely
 #          additive.
@@ -792,7 +792,7 @@ secondmate_liveness_one() {  # <meta> <id>
   [ -n "$target" ] || target="$window"
   agent_state=$(fm_backend_agent_state "$backend" "$target" 2>/dev/null) || agent_state=unreadable
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi) ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|omp) ;;
     *)
       case "$agent_state" in dead|missing) agent_state=unverified-harness ;; esac
       ;;
@@ -938,14 +938,14 @@ x_mode_write_if_changed() {
   [ "$parent" != "$dest" ] || return 1
   [ -d "$parent" ] && [ ! -L "$parent" ] || return 1
   if [ "$(uname)" = Darwin ]; then
-    parent_device=$(stat -f %d "$parent" 2>/dev/null) || return 1
+    parent_device=$(/usr/bin/stat -f %d "$parent" 2>/dev/null) || return 1
   else
     parent_device=$(stat -c %d "$parent" 2>/dev/null) || return 1
   fi
   if [ -e "$dest" ] || [ -L "$dest" ]; then
     fmx_single_link_file_valid "$dest" "$parent_device" || return 1
     if [ "$(uname)" = Darwin ]; then
-      current_mode=$(stat -f %Lp "$dest" 2>/dev/null) || return 1
+      current_mode=$(/usr/bin/stat -f %Lp "$dest" 2>/dev/null) || return 1
     else
       current_mode=$(stat -c %a "$dest" 2>/dev/null) || return 1
     fi
@@ -1104,14 +1104,15 @@ crew_dispatch_validate() {
     return 0
   fi
   err=$(jq -r '
-    def verified($h): ["claude","codex","opencode","pi","pi-signed","grok","kimi","cursor","muse","rovo"] | index($h);
-    def effort_ok($h; $e):
+    def verified($h): ["claude","codex","opencode","pi","pi-signed","grok","kimi","cursor","muse","rovo","omp"] | index($h);
+    def effort_ok($h; $m; $e):
       if $e == null then true
       elif ($e | type) != "string" then false
+      elif $e == "ultra" then (($h == "pi" or $h == "pi-signed") and (($m | type) == "string") and ($m | startswith("codex-native/")) and ($m | length) > 13)
       elif $h == "claude" then (["low","medium","high","xhigh","max"] | index($e))
       elif $h == "codex" then (["low","medium","high","xhigh"] | index($e))
       elif $h == "grok" then (["low","medium","high"] | index($e))
-      elif $h == "pi" or $h == "pi-signed" then (["low","medium","high","xhigh","max"] | index($e))
+      elif $h == "pi" or $h == "pi-signed" or $h == "omp" then (["low","medium","high","xhigh","max"] | index($e))
       elif $h == "muse" then (["low","medium","high","xhigh","max"] | index($e))
       elif $h == "rovo" then (["low","medium","high","max"] | index($e))
       elif $h == "opencode" or $h == "kimi" or $h == "cursor" then false
@@ -1130,10 +1131,10 @@ crew_dispatch_validate() {
       or ($items | any(has("effort") and (((.effort | type) != "string") or (.effort | length) == 0)));
     def bad_efforts:
       configured_profiles
-      | map({h: .harness, e: .effort})
+      | map({h: .harness, m: .model, e: .effort})
       | map(select(.e != null))
       | map(select((.h | type) == "string" and verified(.h)))
-      | map(select(. as $p | effort_ok($p.h; $p.e) | not))
+      | map(select(. as $p | effort_ok($p.h; $p.m; $p.e) | not))
       | map("\(.h):\(.e)")
       | unique;
     if type != "object" then "top-level value must be an object"

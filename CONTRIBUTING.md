@@ -41,12 +41,12 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
   Everything personal to one captain's fleet (`.env`, `data/`, `state/`, `config/`, `projects/`, `.no-mistakes/`) is gitignored; never commit it.
   The root `.tasks.toml` is tracked `tasks-axi` config for `data/backlog.md`; compatible `tasks-axi` is the default backend for routine backlog mutations, with the compatibility definition owned by [`docs/configuration.md`](docs/configuration.md) ("Backlog backend").
   A local `config/backlog-backend=manual` opt-out forces firstmate's routine backlog updates to hand-editing and stays gitignored; validated secondmate handoffs still delegate through `tasks-axi mv`.
-  A local `config/backend` file explicitly overrides runtime auto-detection for new task endpoints and stays gitignored; spawn-supported values are `tmux` plus experimental `herdr`, `zellij`, `orca`, and `cmux`, while `codex-app` is documented only in `docs/codex-app-backend.md`.
+  A local `config/backend` file explicitly overrides runtime auto-detection for new task endpoints and stays gitignored; spawn-supported values are `tmux`, `herdr` (which has its own required CI lane), and `zellij`, `orca`, and `cmux`, which remain experimental with no dedicated real-backend CI lane, while `codex-app` is documented only in `docs/codex-app-backend.md`.
   It does not make `data/` tracked.
 - Helper scripts in `bin/` are plain bash.
   Each starts with a usage header comment; keep it accurate when you change behavior.
   Test scripts and helpers in `tests/` are plain bash too.
-  `bin/fm-lint.sh` must pass: it is the single owner of the lint definition (the shellcheck file set, config, pinned shellcheck version, and pinned actionlint workflow lint), and both CI and the no-mistakes pre-push gate invoke it without explicit paths (CI adds only `--shard <k>of<n>` to split the same canonical set across matrix jobs).
+  `bin/fm-lint.sh` must pass: it is the single owner of the lint definition (the shellcheck file set, config, pinned shellcheck version, pinned actionlint workflow lint, and the backend-purity check rejecting direct Beads CLI calls in core `bin/` scripts), and both CI and the no-mistakes pre-push gate invoke it without explicit paths (CI adds only `--shard <k>of<n>` to split the same canonical set across matrix jobs).
   Its header and `--help` output own the exact local lint modes, file-set selection, and analysis flags.
   A malformed `.github/workflows/*.yml`, including a self-broken `ci.yml`, fails that local lint path before merge because a broken workflow cannot report its own breakage.
   It pins one exact shellcheck version and one exact actionlint version and refuses to run under any other.
@@ -70,7 +70,7 @@ When supervising live crewmates, keep firstmate's own long validation or build c
 Crewmate validation follows the installed no-mistakes version's SKILL.md and live `axi` help instead of duplicating gate mechanics in firstmate docs.
 Firstmate's wrapper still matters: crewmates route every `ask-user` finding to firstmate, which applies `ask-user-authority`, and crewmates never pass `--yes` or `-y` because either flag bypasses that check and any required captain escalation.
 [`docs/configuration.md`](docs/configuration.md#gate-defaults-no-mistakesyaml) owns the tracked `.no-mistakes.yaml` gate defaults.
-Local no-mistakes Test is intent-targeted and must not re-run every `tests/*.test.sh`; `.github/workflows/ci.yml` owns the broad behavior suite plus platform-specific compatibility lanes.
+The `firstmate-coding-guidelines` skill owns the rule that local no-mistakes Test stays intent-targeted rather than configuring `commands.test`.
 Verify the same way the gate does: reach for `bin/fm-test-run.sh` with the subjects you care about rather than chaining `bash tests/a.test.sh && bash tests/b.test.sh`, because a list of script paths gets the same bounded concurrency as `--changed`.
 The pipeline publishes that evidence itself, so never hand-commit `.no-mistakes/` paths onto a feature branch; CI rejects them as tracked personal fleet paths.
 
@@ -105,7 +105,6 @@ tmp=$(mktemp -d) && printf 'done: smoke\n' > "$tmp/smoke.status" && FM_STATE_OVE
 Its header and `--help` own the flags, family labels, lanes, and changed-file map; this section only documents the entry points.
 `bin/fm-test-isolation-proof.sh` remains the single owner of the portable candidate proof and reusable family proof harness; see `docs/fm-test-isolation-proof.md`.
 Portable shard balance evidence lives in `docs/fm-test-portable-shards.md`.
-Local no-mistakes Test stays intent-targeted and must not wire `commands.test` to `--all` or a `tests/*.test.sh` walk.
 Family selection is the ordinary local path; `--all` is deliberate full regression only.
 CI owns broad regression across required portable parallel shards, the portable serial lane's separate-runner shards, the Herdr lane, lint, invariants, the coverage guard, and stock macOS Bash compatibility in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 Use `bin/fm-test-run.sh --list-lanes` for exact lane names and `--help` for `--jobs` rules and required gate-skip flags when reproducing a lane locally.
