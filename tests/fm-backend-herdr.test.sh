@@ -1149,21 +1149,22 @@ test_create_task_refuses_duplicate_label() {
 # into an unknown and quietly disables recovery. Pin the resolver's two halves
 # through its public function: forced through FM_HERDR_PS_BIN the state-blind
 # binary is used verbatim, while merely sitting first on PATH it is skipped for
-# a state-capable ps. The shim reproduces the state-blind adv_cmds rebuild
-# observed on Darwin 25.6.0: every column stays real, only the state letter is
-# stripped.
+# a state-capable ps. The shim models the state-blind adv_cmds rebuild observed
+# on Darwin 25.6.0: the state column loses its letters and nothing else changes.
+# It is only ever asked for stat=, so stripping every uppercase letter blinds
+# exactly that column whatever nice or session modifiers the caller carries.
 test_ps_bin_probe_skips_a_state_blind_ps_on_path() {
   local dir="$TMP_ROOT/blind-ps" real_ps=/bin/ps out
   mkdir -p "$dir/blind"
   [ -x "$real_ps" ] || fail "no platform ps at $real_ps to wrap"
   cat > "$dir/blind/ps" <<PYEOF
 #!/usr/bin/env python3
-import subprocess, sys
+import re, subprocess, sys
 r = subprocess.run(['$real_ps'] + sys.argv[1:], capture_output=True, text=True)
 sys.stderr.write(r.stderr)
 if r.returncode:
     sys.exit(r.returncode)
-print('\\n'.join(line.strip().lstrip('SIRTUZ') for line in r.stdout.splitlines()))
+print('\\n'.join(re.sub('[A-Z]', '', line).strip() for line in r.stdout.splitlines()))
 PYEOF
   chmod 0700 "$dir/blind/ps"
   # The shim must actually blind the state read, or the PATH half below passes
