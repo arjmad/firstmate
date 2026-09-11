@@ -2609,6 +2609,10 @@ spawn_worktree_has_origin_config() {  # <worktree>
   git -C "$worktree" config --get-regexp '^remote\.origin\.' >/dev/null 2>&1 && return 0
   while IFS=$'\t' read -r origin key; do
     case $origin in file:*) config=${origin#file:} ;; *) continue ;; esac
+    # Git prints a main worktree's own config as the relative `.git/config`,
+    # which would otherwise resolve against this script's cwd - the firstmate
+    # checkout in CI, whose config names an origin - rather than the target.
+    case $config in /*) ;; *) config="$worktree/$config" ;; esac
     [ -f "$config" ] || continue
     case $seen in *$'\n'"$config"$'\n'*) continue ;; esac
     seen+="$config"$'\n'

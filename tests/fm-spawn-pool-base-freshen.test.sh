@@ -250,8 +250,15 @@ test_originless_pool_launches_without_a_freshness_fetch() {
   ! git -C "$POOL_DIR" remote get-url origin >/dev/null 2>&1 \
     || fail "fixture unexpectedly configured an origin remote"
   before=$(git -C "$POOL_DIR" rev-parse HEAD)
+  # Git names a main worktree's own config as the relative `.git/config`, so
+  # run the spawn from a decoy checkout that DOES have an origin: the origin
+  # detection must read the project's config, not whatever sits at the
+  # caller's cwd (in CI that cwd is the firstmate checkout itself).
+  mkdir -p "$CASE_DIR/decoy"
+  git init --quiet -b main "$CASE_DIR/decoy"
+  git -C "$CASE_DIR/decoy" remote add origin "file://$CASE_DIR/decoy-origin.git"
 
-  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  out=$(cd "$CASE_DIR/decoy" && run_spawn "$id" --mode no-mistakes --yolo off)
   status=$?
   expect_code 0 "$status" "spawn should launch a local-only pooled worktree with no origin"$'\n'"$out"
   assert_contains "$out" "spawned $id" "spawn did not report success for the origin-less pool"
