@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# fm-google-workspace.sh - operate Arjun's per-account Google Workspace MCP instances.
+# fm-google-workspace.sh - operate the captain's per-account Google Workspace MCP instances.
 #
 # Architecture, captain-settled 2026-08-28: ONE google_workspace_mcp instance per
 # Google account, --single-user, each with its own WORKSPACE_MCP_CREDENTIALS_DIR,
-# over stdio, wired into both firstmate/Claude Code and Cade's Hermes.
+# over stdio, wired into both firstmate/Claude Code and the captain's Hermes agent.
 # The per-instance credentials directory IS the account boundary: the target account
 # is an ordinary call argument on nearly every tool, so a shared instance would leave
 # the boundary to a string the model emits, while a process holding one account's
 # directory cannot reach another mailbox whatever the model asks for.
 # docs/google-workspace-access.md is the operator guide and this script's companion.
 #
-# Send is authorized for these three accounts (captain, 2026-08-29), so the permission
-# set below is deliberately not --read-only.
+# Send is authorized for the configured accounts (captain, 2026-08-29), so the
+# permission set below is deliberately not --read-only.
 #
 # This script never prints a token, a refresh token, or a client secret, and it never
 # deletes or overwrites a stored credential except through an explicitly confirmed
@@ -36,9 +36,21 @@
 #   fm-google-workspace.sh hermes-config             print the Hermes mcp_servers YAML block
 #   fm-google-workspace.sh revoke <account> [--yes]  delete that account's local credentials
 #
-# <account> is a slug (arjmad, ecomills, kempf) or its full email address.
-# Any other value is refused: this account table is the enforcement point, and the
-# Nova-only accounts are deliberately absent from it so no subcommand can reach them.
+# <account> is a configured slug or its full email address.
+# Any other value is refused: the account table is the enforcement point, and an
+# account that belongs to another agent is simply not listed, so no subcommand can
+# reach it.
+#
+# The account table and the Bitwarden coordinates live in the gitignored
+# config/google-workspace file of the active firstmate home (FM_HOME, or
+# FM_CONFIG_OVERRIDE for the directory itself); docs/configuration.md "Google
+# Workspace accounts" owns the schema. One setting per line:
+#   account <slug> <email>
+#   bws_project_id <uuid>
+#   bws_secret_key <name>
+# Blank lines and '#' comments are ignored. There is no built-in table: a missing,
+# unreadable, or malformed file, a duplicate slug or email, or an implausible email
+# refuses every subcommand except help, naming the file and the accepted format.
 #
 # Paths. FM_GWS_ROOT overrides the root, which otherwise defaults to
 # ${XDG_STATE_HOME:-$HOME/.local/state}/google-workspace-mcp. The root is shared by
@@ -48,15 +60,17 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTH_DRIVER="$SCRIPT_DIR/fm-google-workspace-auth.py"
+FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+CONFIG_FILE="$CONFIG/google-workspace"
 
-# The account table. slug<TAB>email. Adding a row here grants agents access to that
-# mailbox, so a row is a captain decision, not a maintenance edit.
-ACCOUNTS=$(
-  printf '%s\t%s\n' \
-    arjmad    arjmad@gmail.com \
-    ecomills  arjun@ecomills.com \
-    kempf     williamkempf@gmail.com
-)
+# The account table, slug<TAB>email, filled by load_config from CONFIG_FILE. Adding a
+# row there grants agents access to that mailbox, so a row is a captain decision, not
+# a maintenance edit.
+ACCOUNTS=""
+BWS_PROJECT_ID=""
+BWS_SECRET_KEY=""
 
 # The exact per-service permission levels. --permissions is the only flag that moves
 # the OAuth token boundary: --tool-tier and --disabled-tools shrink the tool list while
@@ -67,24 +81,83 @@ PERMISSIONS="gmail:full drive:full calendar:full docs:full sheets:full contacts:
 GWS_ROOT="${FM_GWS_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/google-workspace-mcp}"
 ACCOUNTS_ROOT="$GWS_ROOT/accounts"
 CLIENT_SECRET_FILE="$GWS_ROOT/client_secret.json"
-BWS_PROJECT_ID=0e9c339e-c6d1-4069-8d05-b4a9001c7022
-BWS_SECRET_KEY=google-oauth/desktop-client-arjun
 CLAUDE_BIN="${FM_GWS_CLAUDE:-claude}"
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-usage() { sed -n '20,46p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '21,58p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed 's/^# \{0,1\}//'; }
 
-all_slugs() { printf '%s\n' "$ACCOUNTS" | cut -f1 | paste -sd, -; }
+CONFIG_FORMAT="accepted format, one setting per line: 'account <slug> <email>', 'bws_project_id <uuid>', 'bws_secret_key <name>'"
+
+config_die() { die "$CONFIG_FILE: $*; $CONFIG_FORMAT"; }
+
+# load_config fills ACCOUNTS, BWS_PROJECT_ID, and BWS_SECRET_KEY from CONFIG_FILE and
+# refuses anything it cannot fully accept. There is deliberately no fallback table:
+# an account that is not in the file does not exist as far as this script is concerned.
+load_config() {
+  local lineno=0 line key slug email value slugs="" emails=""
+  [ -e "$CONFIG_FILE" ] || config_die "no such file; create it in the firstmate home"
+  [ -f "$CONFIG_FILE" ] || config_die "not a regular file"
+  [ -r "$CONFIG_FILE" ] || config_die "not readable"
+  while IFS= read -r line || [ -n "$line" ]; do
+    lineno=$((lineno + 1))
+    case "$line" in ''|'#'*) continue ;; esac
+    # shellcheck disable=SC2086 # deliberate word splitting: the format is whitespace-separated
+    set -- $line
+    key="${1:-}"
+    case "$key" in
+      account)
+        [ "$#" -eq 3 ] || config_die "line $lineno: expected 'account <slug> <email>'"
+        slug="$2"; email="$3"
+        printf '%s' "$slug" | grep -qE '^[a-z0-9][a-z0-9_-]*$' \
+          || config_die "line $lineno: slug '$slug' must be lowercase letters, digits, '_' or '-'"
+        printf '%s' "$email" | grep -qE '^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$' \
+          || config_die "line $lineno: '$email' is not a plausible email address"
+        case ",$slugs," in *",$slug,"*) config_die "line $lineno: duplicate slug '$slug'" ;; esac
+        case ",$emails," in *",$email,"*) config_die "line $lineno: duplicate email '$email'" ;; esac
+        slugs="$slugs,$slug"; emails="$emails,$email"
+        ACCOUNTS="${ACCOUNTS:+$ACCOUNTS
+}$slug	$email"
+        ;;
+      bws_project_id|bws_secret_key)
+        [ "$#" -eq 2 ] || config_die "line $lineno: expected '$key <value>'"
+        value="$2"
+        if [ "$key" = bws_project_id ]; then
+          [ -z "$BWS_PROJECT_ID" ] || config_die "line $lineno: duplicate $key"
+          BWS_PROJECT_ID="$value"
+        else
+          [ -z "$BWS_SECRET_KEY" ] || config_die "line $lineno: duplicate $key"
+          BWS_SECRET_KEY="$value"
+        fi
+        ;;
+      *) config_die "line $lineno: unknown setting '$key'" ;;
+    esac
+  done < "$CONFIG_FILE"
+}
+
+require_bws_config() {
+  [ -n "$BWS_PROJECT_ID" ] && [ -n "$BWS_SECRET_KEY" ] \
+    || die "$CONFIG_FILE: bws_project_id and bws_secret_key are both required for $1; $CONFIG_FORMAT"
+}
+
+# accounts_rows prints the configured slug<TAB>email rows, nothing at all when the
+# file lists no account, so every consumer's loop stays empty rather than seeing "".
+accounts_rows() { [ -n "$ACCOUNTS" ] && printf '%s\n' "$ACCOUNTS"; return 0; }
+
+all_slugs() {
+  local slugs
+  slugs=$(accounts_rows | cut -f1 | paste -sd, -)
+  printf '%s\n' "${slugs:-(none configured in $CONFIG_FILE)}"
+}
 
 # account_email and account_slug resolve a slug or email against the table above and
 # fail for anything else, so no subcommand can be pointed at an unlisted mailbox.
 account_email() {
-  printf '%s\n' "$ACCOUNTS" | awk -F'\t' -v key="$1" '$1 == key || $2 == key { print $2; f = 1 } END { exit !f }'
+  accounts_rows | awk -F'\t' -v key="$1" '$1 == key || $2 == key { print $2; f = 1 } END { exit !f }'
 }
 
 account_slug() {
-  printf '%s\n' "$ACCOUNTS" | awk -F'\t' -v key="$1" '$1 == key || $2 == key { print $1; f = 1 } END { exit !f }'
+  accounts_rows | awk -F'\t' -v key="$1" '$1 == key || $2 == key { print $1; f = 1 } END { exit !f }'
 }
 
 resolve_account() {
@@ -170,7 +243,7 @@ require_client_secret() {
 
 cmd_accounts() {
   local slug email
-  printf '%s\n' "$ACCOUNTS" | while IFS=$'\t' read -r slug email; do
+  accounts_rows | while IFS=$'\t' read -r slug email; do
     printf '%s\t%s\t%s\n' "$slug" "$email" "$ACCOUNTS_ROOT/$slug"
   done
 }
@@ -194,7 +267,7 @@ cmd_init() {
   local slug email
   ensure_dir_0700 "$GWS_ROOT"
   ensure_dir_0700 "$ACCOUNTS_ROOT"
-  printf '%s\n' "$ACCOUNTS" | while IFS=$'\t' read -r slug email; do
+  accounts_rows | while IFS=$'\t' read -r slug email; do
     ensure_dir_0700 "$ACCOUNTS_ROOT/$slug"
     printf 'ready: %s -> %s\n' "$email" "$ACCOUNTS_ROOT/$slug"
   done
@@ -231,6 +304,7 @@ for k in ("client_id", "client_secret"):
       printf 'installed: %s (0600)\n' "$CLIENT_SECRET_FILE"
       ;;
     push-bws)
+      require_bws_config push-bws
       require_client_secret
       token=$(bws_token) || die "no BWS access token; set BWS_ACCESS_TOKEN or write ~/.config/bws/access-token"
       id=$(bws_secret_id "$token") || die "cannot list the shared BWS project"
@@ -240,12 +314,13 @@ for k in ("client_id", "client_secret"):
         printf 'updated: %s in the shared BWS project\n' "$BWS_SECRET_KEY"
       else
         BWS_ACCESS_TOKEN="$token" bws secret create "$BWS_SECRET_KEY" "$(cat "$CLIENT_SECRET_FILE")" \
-          "$BWS_PROJECT_ID" --note "Desktop OAuth client for Arjun's Google Workspace MCP instances" --output none \
+          "$BWS_PROJECT_ID" --note "Desktop OAuth client for the Google Workspace MCP instances" --output none \
           || die "cannot create $BWS_SECRET_KEY"
         printf 'created: %s in the shared BWS project\n' "$BWS_SECRET_KEY"
       fi
       ;;
     pull-bws)
+      require_bws_config pull-bws
       token=$(bws_token) || die "no BWS access token; set BWS_ACCESS_TOKEN or write ~/.config/bws/access-token"
       id=$(bws_secret_id "$token") || die "cannot list the shared BWS project"
       [ -n "$id" ] || die "$BWS_SECRET_KEY is not in the shared BWS project yet"
@@ -298,7 +373,7 @@ cmd_status() {
   local slug email dir held
   printf 'root: %s\n' "$GWS_ROOT"
   if [ -f "$CLIENT_SECRET_FILE" ]; then printf 'client secret: present\n'; else printf 'client secret: ABSENT\n'; fi
-  printf '%s\n' "$ACCOUNTS" | while IFS=$'\t' read -r slug email; do
+  accounts_rows | while IFS=$'\t' read -r slug email; do
     dir="$ACCOUNTS_ROOT/$slug"
     held=$(credential_emails "$dir" | paste -sd, -)
     if [ -z "$held" ]; then
@@ -314,7 +389,7 @@ cmd_status() {
 cmd_claude_config() {
   local argv
   argv=$(server_argv | tail -n +2)
-  printf '%s\n' "$ACCOUNTS" | python3 -c 'import json, sys
+  accounts_rows | python3 -c 'import json, sys
 args = sys.argv[1].split()
 accounts_root, client_secret = sys.argv[2], sys.argv[3]
 servers = {}
@@ -338,7 +413,7 @@ cmd_claude_install() {
   command -v "$CLAUDE_BIN" >/dev/null 2>&1 || die "$CLAUDE_BIN is not on PATH"
   local slug email argv
   argv=$(server_argv | tail -n +2)
-  printf '%s\n' "$ACCOUNTS" | while IFS=$'\t' read -r slug email; do
+  accounts_rows | while IFS=$'\t' read -r slug email; do
     "$CLAUDE_BIN" mcp remove -s user "gws-$slug" >/dev/null 2>&1 || true
     # shellcheck disable=SC2086 # deliberate word splitting: one argv token per line
     "$CLAUDE_BIN" mcp add -s user "gws-$slug" \
@@ -352,7 +427,7 @@ cmd_claude_install() {
 cmd_claude_uninstall() {
   command -v "$CLAUDE_BIN" >/dev/null 2>&1 || die "$CLAUDE_BIN is not on PATH"
   local slug
-  printf '%s\n' "$ACCOUNTS" | cut -f1 | while read -r slug; do
+  accounts_rows | cut -f1 | while read -r slug; do
     if "$CLAUDE_BIN" mcp remove -s user "gws-$slug" >/dev/null 2>&1; then
       printf 'removed: gws-%s\n' "$slug"
     else
@@ -369,7 +444,7 @@ cmd_hermes_config() {
   printf '# and ./deploy.sh --apply-config from that repo.\n'
   printf '# trust: untrusted matches the exa precedent and is right here: a mailbox is\n'
   printf '# the fleet position most exposed to text written by strangers.\n'
-  printf '%s\n' "$ACCOUNTS" | while IFS=$'\t' read -r slug email; do
+  accounts_rows | while IFS=$'\t' read -r slug email; do
     printf '  gws-%s:\n' "$slug"
     printf '    # %s\n' "$email"
     printf '    command: uvx\n'
@@ -424,6 +499,11 @@ cmd_revoke() {
   printf 'To end the grant itself, sign in as %s and remove the app here:\n' "$email"
   printf '  https://myaccount.google.com/connections\n'
 }
+
+case "${1:-}" in
+  -h|--help|help|'') ;;
+  *) load_config ;;
+esac
 
 case "${1:-}" in
   accounts)         shift; cmd_accounts "$@" ;;

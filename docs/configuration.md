@@ -212,6 +212,17 @@ The bound is required rather than cosmetic because churn and pane staleness read
 The flag is a home-local supervision-noise preference and is not inherited by secondmate homes, which run their own crew mix.
 [`architecture.md`](architecture.md) owns the triage contract and `bin/fm-watch.sh`'s `signal_turnend_panes_churned` owns the exact evidence and fail-closed boundaries.
 
+## Google Workspace accounts (config/google-workspace)
+
+The local, gitignored `config/google-workspace` file is the account table for `bin/fm-google-workspace.sh` and its wizard: which Google accounts this home's agents may reach, plus where the shared OAuth client is kept in Bitwarden.
+It is one setting per line, whitespace-separated, with blank lines and `#` comments ignored: `account <slug> <email>` once per account, `bws_project_id <uuid>`, and `bws_secret_key <name>`.
+A slug is lowercase letters, digits, `_`, or `-`, names the account's credentials directory and its `gws-<slug>` server, and is what the account-taking subcommands accept beside the full email.
+The file is the account boundary's enforcement point, so there is no built-in table to fall back to: an account absent from the file cannot be reached by any subcommand, and a missing, unreadable, or malformed file, an unknown setting, a duplicate slug or email, or an implausible email address refuses every subcommand except help, naming the file and the accepted format.
+The two Bitwarden settings are required only by `client-secret push-bws` and `client-secret pull-bws`, which refuse without them.
+Adding a row grants agents a mailbox, so it is a captain decision rather than a maintenance edit.
+The file is per home and is not inherited by secondmate homes.
+[`google-workspace-access.md`](google-workspace-access.md) is the operator guide, and the script header owns the exact reader mechanics.
+
 ## Gate defaults (.no-mistakes.yaml)
 
 The tracked `.no-mistakes.yaml` sets `test.evidence.store_in_repo: true` and pins `commands.lint` to `bin/fm-lint.sh`, the same owner CI invokes.
