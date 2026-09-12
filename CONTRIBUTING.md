@@ -9,10 +9,9 @@ We require this to reduce the maintainer's burden of reviewing and merging contr
 `no-mistakes` puts a local git proxy in front of your real remote.
 Pushing through it runs an AI-driven review/test/lint pipeline in an isolated worktree, forwards the push upstream only after every check passes, and opens a clean PR automatically.
 
-A GitHub Actions check (`Require no-mistakes`) runs on PRs targeting `main` and requires both the deterministic signature and a parseable structured attestation from no-mistakes v1.46.0 or newer.
-The attestation must bind to the current PR head commit and report the review, test, and document steps as completed, so a stale attestation, a missing `head_sha`, or a skipped required step fails.
-It evaluates every PR opening and body edit independently, reruns after head synchronization or reopening, and prevents a later edit from replacing an earlier pending compliance check.
-GitHub Actions and Dependabot are exempt so their automation keeps working, but other contributor PRs that do not satisfy the attestation contract will not be reviewed or merged.
+Contributing through no-mistakes remains the documented path for maintainers who use it, and a PR it opens carries the pipeline's signature and structured attestation in its body.
+This fork does not run a GitHub Actions check that enforces that attestation, so a PR opened without no-mistakes is not failed on that basis; the ordinary CI checks still apply to every PR.
+This is an accepted fork-only divergence from upstream, which enforces the attestation with a `Require no-mistakes` check.
 
 ## Workflow
 
