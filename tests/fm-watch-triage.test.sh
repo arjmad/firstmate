@@ -3764,6 +3764,412 @@ test_write_deferral_resurfaces_on_the_bounded_cadence() {
   pass "a write deferral re-surfaces once on the bounded pause cadence, so a churning worktree cannot stay invisible"
 }
 
+# The wedge detector's fourth liveness input: a process running inside the crew's
+# own recorded worktree that STARTED after the idle window opened. Presence alone
+# is deliberately not evidence - the harness, its shell, and any helper it keeps
+# alive sit in the worktree from spawn to teardown - so the probe must ignore a
+# process older than the anchor exactly as it ignores one that is gone, and
+# every negative outcome must report "no evidence" so the caller keeps its
+# schedule. Real processes, no stub: a sleep launched with its cwd in the tree.
+test_crew_worktree_process_live_classifier() {
+  local dir state anchor wt home pid
+  dir=$(make_case classify-worktree-process); state="$dir/state"
+  anchor="$state/anchor"; wt="$dir/wt"; home="$dir/mate-home"
+  mkdir -p "$wt/src" "$home/state"
+  : > "$anchor"
+  set_mtime "$(( $(date +%s) - 120 ))" "$anchor"
+  printf 'window=test:fm-p\nkind=ship\nworktree=%s\n' "$wt" > "$state/p.meta"
+  # Nothing running there: no evidence.
+  ! crew_worktree_process_live p "$state" "$anchor" \
+    || fail "an idle worktree reported process evidence"
+  # A process born after the anchor with its cwd in the tree: positive evidence.
+  ( cd "$wt" && exec sleep 300 ) &
+  pid=$!
+  sleep 1
+  crew_worktree_process_live p "$state" "$anchor" \
+    || { kill "$pid" 2>/dev/null; fail "a process started in the worktree after the anchor was not reported"; }
+  # The same process, with an anchor written AFTER it started, is the harness
+  # sitting there since spawn: not evidence.
+  sleep 1
+  : > "$anchor"
+  sleep 1
+  ! crew_worktree_process_live p "$state" "$anchor" \
+    || { kill "$pid" 2>/dev/null; fail "a process older than the idle window was reported as evidence (presence alone would blind the detector)"; }
+  set_mtime "$(( $(date +%s) - 120 ))" "$anchor"
+  # No recorded worktree, a torn-down one, a missing anchor, and an empty id: no
+  # evidence, even while the process is still alive.
+  printf 'window=test:fm-q\nkind=ship\n' > "$state/q.meta"
+  ! crew_worktree_process_live q "$state" "$anchor" \
+    || { kill "$pid" 2>/dev/null; fail "a task with no recorded worktree reported process evidence"; }
+  printf 'window=test:fm-r\nkind=ship\nworktree=%s\n' "$dir/missing" > "$state/r.meta"
+  ! crew_worktree_process_live r "$state" "$anchor" \
+    || { kill "$pid" 2>/dev/null; fail "a torn-down worktree reported process evidence"; }
+  ! crew_worktree_process_live p "$state" "$state/absent-anchor" \
+    || { kill "$pid" 2>/dev/null; fail "a missing anchor reported process evidence"; }
+  ! crew_worktree_process_live "" "$state" "$anchor" \
+    || { kill "$pid" 2>/dev/null; fail "an empty id reported process evidence"; }
+  # A secondmate's provisioned home runs its own supervision, so a process in it is
+  # never crew evidence, whether the record says so or only the home marker does.
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
+  printf 'sm-proc\n' > "$home/.fm-secondmate-home"
+  ( cd "$home" && exec sleep 300 ) &
+  pid=$!
+  sleep 1
+  printf 'window=remote:sm\nkind=secondmate\nworktree=%s\n' "$home" > "$state/sm.meta"
+  ! crew_worktree_process_live sm "$state" "$anchor" \
+    || { kill "$pid" 2>/dev/null; fail "a secondmate home's own process reported crew evidence"; }
+  printf 'window=test:fm-sm2\nkind=ship\nworktree=%s\n' "$home" > "$state/sm2.meta"
+  ! crew_worktree_process_live sm2 "$state" "$anchor" \
+    || { kill "$pid" 2>/dev/null; fail "a marked firstmate home reported crew process evidence"; }
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
+  # Gone: no evidence again.
+  sleep 1
+  ! crew_worktree_process_live p "$state" "$anchor" \
+    || fail "a finished process was still reported as evidence"
+  pass "crew_worktree_process_live: a process born in the tree after the idle window is evidence; older, gone, unrecorded, and a mate's home are not"
+}
+
+# The probe's process listings run synchronously inside the poll that was about to
+# escalate, so they must be wall-clock bounded like the write probe's walk. A ps
+# that never answers in time stands in for a stalled process table; hitting the
+# bound must read as NO evidence so the caller's escalation schedule is untouched.
+test_worktree_process_probe_is_wall_clock_bounded() {
+  local dir state anchor wt slowbin started elapsed pid
+  dir=$(make_case classify-process-probe-bound); state="$dir/state"
+  anchor="$state/anchor"; wt="$dir/wt"; slowbin="$dir/slowbin"
+  mkdir -p "$wt" "$slowbin"
+  : > "$anchor"
+  set_mtime "$(( $(date +%s) - 120 ))" "$anchor"
+  printf 'window=test:fm-slowps\nkind=ship\nworktree=%s\n' "$wt" > "$state/slowps.meta"
+  ( cd "$wt" && exec sleep 300 ) &
+  pid=$!
+  sleep 1
+  cat > "$slowbin/ps" <<'SH'
+#!/usr/bin/env bash
+sleep 60
+SH
+  chmod +x "$slowbin/ps"
+  started=$(date +%s)
+  if PATH="$slowbin:$PATH" FM_WORKTREE_PROCESS_TIMEOUT=1 crew_worktree_process_live slowps "$state" "$anchor"; then
+    kill "$pid" 2>/dev/null; fail "a process listing that outlived its bound was reported as evidence"
+  fi
+  elapsed=$(( $(date +%s) - started ))
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
+  [ "$elapsed" -lt 30 ] \
+    || fail "the process probe waited ${elapsed}s on a stalled listing instead of honoring its bound"
+  pass "the worktree process probe is wall-clock bounded and reads a hit bound as no evidence"
+}
+
+# --- quiet pane, a gate still running in the worktree: deferred, not escalated -
+# The 2026-09-11 case: a Claude worker's screen sat on a "Waiting for task" monitor
+# while `bin/fm-test-run.sh --changed` advanced test by test in a harness
+# background shell, and it was wedge-escalated three times in a row (idle
+# 247-250s) although a process sample showed the gate moving. The gate writes
+# nothing into the tree and renders nothing, so the write probe cannot see it;
+# the processes it keeps spawning there can be seen. Both halves on one fixture:
+# a process born in the window defers, the same pane with that process gone
+# escalates on the unchanged schedule.
+test_wedge_escalation_deferred_while_worktree_process_runs() {
+  local dir state fakebin out drain_out capture_file window key pane_hash sig pid wt back gate
+  dir=$(make_case wedge-worktree-process); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
+  window="test:fm-gate"; wt="$dir/wt"
+  mkdir -p "$wt/src"
+  printf 'Waiting for task' > "$capture_file"
+  printf 'window=%s\nkind=ship\nworktree=%s\n' "$window" "$wt" > "$state/gate.meta"
+  printf 'working: running the gate\n' > "$state/gate.status"
+  sig=$(seen_sig "$state/gate.status"); printf '%s' "$sig" > "$state/.seen-gate_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "Waiting for task")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  # Already-classified hash with an idle window that opened 500s ago, so the very
+  # first stale poll lands straight on the at-threshold wedge branch, and nothing
+  # in the tree was written since (the gate leaves no file behind).
+  printf 'old\n' > "$wt/src/main.c"
+  set_mtime "$(( $(date +%s) - 900 ))" "$wt/src/main.c"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  back=$(( $(date +%s) - 500 ))
+  echo "$back" > "$state/.stale-since-$key"
+  set_mtime "$back" "$state/.stale-since-$key"
+
+  # Phase A: a gate process born in the worktree during the idle window. Deferred.
+  ( cd "$wt" && exec sleep 300 ) &
+  gate=$!
+  sleep 1
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; kill "$gate" 2>/dev/null; fail "watcher wedge-escalated a quiet pane whose worktree held a live gate process: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || { reap "$pid"; kill "$gate" 2>/dev/null; fail "a live-process deferral printed a wake reason: $(cat "$out")"; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; kill "$gate" 2>/dev/null; fail "a live-process deferral enqueued a wake"; }
+  [ -e "$state/.writing-since-$key" ] || { reap "$pid"; kill "$gate" 2>/dev/null; fail "the deferral chain marker was not recorded for process evidence"; }
+  [ ! -e "$state/.wedge-escalations-$key" ] || { reap "$pid"; kill "$gate" 2>/dev/null; fail "a deferral advanced the wedge escalation counter"; }
+  [ "$(cat "$state/.stale-since-$key" 2>/dev/null || echo 0)" -gt "$back" ] \
+    || { reap "$pid"; kill "$gate" 2>/dev/null; fail "a deferral did not restart the idle timer, so the next window cannot re-probe"; }
+  grep -F "worktree process since the idle window opened" "$state/.watch-triage.log" >/dev/null \
+    || { reap "$pid"; kill "$gate" 2>/dev/null; fail "the deferral was not attributed to process evidence in the triage log"; }
+  reap "$pid"
+  kill "$gate" 2>/dev/null; wait "$gate" 2>/dev/null || true
+  ack_stopped_cycle "$state" || fail "could not acknowledge the intentional phase-A watcher stop"
+
+  # Phase B: same quiet pane, same tree, the gate gone and nothing written: no
+  # proof of either kind, so the unchanged schedule must still fire.
+  sleep 1
+  echo "$back" > "$state/.stale-since-$key"
+  set_mtime "$back" "$state/.stale-since-$key"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 100 || fail "a stalled crew with no process and no writes did not wedge-escalate on the existing schedule"
+  grep -F "stale: $window" "$out" >/dev/null || fail "the stalled-crew escalation did not print a stale wake"
+  grep -F "possible wedge" "$out" >/dev/null || fail "the stalled-crew escalation did not flag a possible wedge"
+  [ "$(cat "$state/.wedge-escalations-$key" 2>/dev/null || true)" = 1 ] || fail "the stalled-crew escalation was not counted"
+  [ ! -e "$state/.writing-since-$key" ] || fail "the deferral chain outlived a real escalation"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the stalled-crew escalation failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "the stalled-crew escalation was not queued"
+  pass "a quiet pane whose worktree holds a gate process born in the idle window is deferred, while one with neither proof still wedge-escalates"
+}
+
+# A process deferral is not silence either: it rides the same .writing-since-<key>
+# chain as the write deferral, so a tree whose process churn never amounts to
+# progress still re-surfaces once per PAUSE_RESURFACE_SECS, labeled as a recheck
+# that names the process evidence rather than a wedge.
+test_process_deferral_resurfaces_on_the_bounded_cadence() {
+  local dir state fakebin out drain_out capture_file window key pane_hash sig pid wt back gate
+  dir=$(make_case wedge-process-resurface); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
+  window="test:fm-gate-churn"; wt="$dir/wt"
+  mkdir -p "$wt"
+  printf 'Waiting for task' > "$capture_file"
+  printf 'window=%s\nkind=ship\nworktree=%s\n' "$window" "$wt" > "$state/gatechurn.meta"
+  printf 'working: running the gate\n' > "$state/gatechurn.status"
+  sig=$(seen_sig "$state/gatechurn.status"); printf '%s' "$sig" > "$state/.seen-gatechurn_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "Waiting for task")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  back=$(( $(date +%s) - 500 ))
+  echo "$back" > "$state/.stale-since-$key"
+  set_mtime "$back" "$state/.stale-since-$key"
+  : > "$state/.writing-since-$key"
+  set_mtime "$back" "$state/.writing-since-$key"
+  ( cd "$wt" && exec sleep 300 ) &
+  gate=$!
+  sleep 1
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 100 || { kill "$gate" 2>/dev/null; fail "a long-running process deferral never re-surfaced on the bounded cadence"; }
+  kill "$gate" 2>/dev/null; wait "$gate" 2>/dev/null || true
+  grep -F "stale: $window" "$out" >/dev/null || fail "the process-deferral recheck did not print a stale wake"
+  grep -F "running a process in its worktree" "$out" >/dev/null || fail "the process-deferral recheck was not labeled as such"
+  grep -F "possible wedge" "$out" >/dev/null && fail "a process-deferral recheck was mislabeled a possible wedge"
+  [ -e "$state/.writing-resurfaced-$key" ] || fail "the deferral re-surface throttle marker was not recorded"
+  [ ! -e "$state/.wedge-escalations-$key" ] || fail "a process-deferral recheck advanced the wedge escalation counter"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the process-deferral recheck failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "the process-deferral recheck was not queued"
+  pass "a process deferral re-surfaces once on the bounded pause cadence, so a churning gate cannot stay invisible"
+}
+
+# --- a delivered worker, done with a recorded PR: one notice, then bounded -----
+# The 2026-09-10 loop: a worker appends `done: PR <url>`, sits at its prompt
+# waiting for the merge word, and its idle prompt still ticks its render, so every
+# few minutes a new pane hash re-alarmed a delivery firstmate already had in hand
+# (fm-pr-check had recorded pr=), a dozen empty handling turns a day. The bound is
+# keyed on CURRENT state reading done (the fake fm-crew-state verdict, never the
+# status line alone) plus the pr= record, and it is bounded exactly like the
+# declared-pause and captain-call cadences.
+# Pinned in both directions on one fixture family: first sight alarms, churn
+# inside the window is absorbed, the elapsed window re-surfaces once; and the
+# exemption ends when the state stops reading done or the status log moves,
+# while a done worker with NO pr= record keeps alarming on every new hash.
+
+delivered_key() {
+  printf '%s' test:fm-delivered | tr ':/.' '___'
+}
+
+# One watcher against a delivered fixture. The crew-state verdict is the
+# parameter, because the whole bound turns on what the AUTHORITATIVE reader says.
+DELIVERED_WATCH_PID=
+delivered_watch_launch() {  # <dir> <out> <capture> <crew-state-line>
+  local dir=$1 out=$2 capture=$3 verdict=$4
+  PATH="$dir/fakebin:$PATH" FM_FAKE_TMUX_WINDOW=test:fm-delivered \
+    FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_CURRENT_COMMAND=zsh \
+    FM_FAKE_CREW_STATE="$verdict" \
+    FM_WATCH_HANDLING_SUCCESSOR=1 \
+    FM_HOME="$dir" FM_DATA_OVERRIDE="$dir/data" FM_CONFIG_OVERRIDE="$dir/config" \
+    FM_STATE_OVERRIDE="$dir/state" FM_CREW_STATE_BIN="$dir/fakebin/fm-crew-state.sh" \
+    FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" 2>&1 &
+  DELIVERED_WATCH_PID=$!
+}
+
+delivered_watch_surface() {  # <dir> <out> <capture> <pane-text> <crew-state-line>
+  local dir=$1 out=$2 capture=$3 text=$4 verdict=$5
+  printf '%s\n' "$text" > "$capture"
+  delivered_watch_launch "$dir" "$out" "$capture" "$verdict"
+  wait_for_exit "$DELIVERED_WATCH_PID" 100 || { reap "$DELIVERED_WATCH_PID"; return 1; }
+  return 0
+}
+
+# <count> successive pane changes through ONE watcher, three poll cycles each,
+# the watcher staying in its loop throughout (the shape hold_watch_churn uses).
+delivered_watch_churn() {  # <dir> <out> <capture> <label> <count> <crew-state-line>
+  local dir=$1 out=$2 capture=$3 label=$4 count=$5 verdict=$6 i=1 c
+  local state="$dir/state"
+  printf '%s 0\n' "$label" > "$capture"
+  delivered_watch_launch "$dir" "$out" "$capture" "$verdict"
+  while [ "$i" -le "$count" ]; do
+    printf '%s %s\n' "$label" "$i" > "$capture"
+    c=0
+    while [ "$c" -lt 3 ]; do
+      wait_poll_cycle "$state" "$DELIVERED_WATCH_PID" 300 \
+        || { reap "$DELIVERED_WATCH_PID"; return 1; }
+      c=$((c + 1))
+    done
+    i=$((i + 1))
+  done
+  reap "$DELIVERED_WATCH_PID"
+  return 0
+}
+
+delivered_stale_wakes() {  # <state>
+  awk -F '\t' '$3 == "stale" && $4 == "test:fm-delivered" { n++ } END { print n + 0 }' \
+    "$1/.wake-queue" 2>/dev/null || echo 0
+}
+
+make_delivered_home() {  # <name> <pr-record|nopr>
+  local name=$1 pr=$2 dir state
+  dir=$(make_case "$name"); state="$dir/state"
+  mkdir -p "$dir/data" "$dir/config"
+  printf 'window=test:fm-delivered\nkind=ship\nharness=grok\nbackend=tmux\n' \
+    > "$state/delivered.meta"
+  [ "$pr" = nopr ] || printf 'pr=%s\n' "$pr" >> "$state/delivered.meta"
+  printf 'done: PR https://example.invalid/pull/7\n' > "$state/delivered.status"
+  printf '%s' "$(seen_sig "$state/delivered.status")" > "$state/.seen-delivered_status"
+  printf '%s\n' "$dir"
+}
+
+DELIVERED_DONE='state: done · source: status-log · PR https://example.invalid/pull/7'
+
+test_done_worker_with_recorded_pr_surfaces_once_then_absorbs_churn() {
+  local dir state out capture throttle wakes
+  dir=$(make_delivered_home delivered-bound 'https://example.invalid/pull/7') \
+    || fail "could not build a delivered fixture"
+  state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  throttle="$state/.paused-resurfaced-$(delivered_key)"
+
+  # First sight still alarms: the bound covers repetition, never the first look.
+  delivered_watch_surface "$dir" "$out" "$capture" 'idle prompt, elapsed 1s' "$DELIVERED_DONE" \
+    || fail "first sight of a delivered worker did not surface"
+  wakes=$(delivered_stale_wakes "$state")
+  [ "$wakes" -eq 1 ] || fail "first sight produced $wakes wakes instead of one"
+  [ -e "$throttle" ] || fail "the first alarm recorded no re-surface cadence for the delivery"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the first surface"
+
+  # The idle prompt keeps ticking while the same delivery stands. Every one of
+  # these alarmed before.
+  delivered_watch_churn "$dir" "$out" "$capture" 'idle prompt, tick' 2 "$DELIVERED_DONE" \
+    || fail "watcher exited during idle-prompt churn instead of supervising through it"
+  wakes=$(delivered_stale_wakes "$state")
+  [ "$wakes" -eq 0 ] \
+    || fail "idle-prompt churn re-alarmed a delivered worker $wakes time(s) inside the re-surface window"
+  [ ! -e "$state/.stale-since-$(delivered_key)" ] \
+    || fail "a delivered-worker absorb started a wedge timer"
+
+  # After the window ends, the next new pane hash re-surfaces the delivery exactly
+  # once, so a forgotten PR cannot hide behind the bound.
+  set_mtime "$(( $(date +%s) - 5000 ))" "$throttle"
+  delivered_watch_surface "$dir" "$out" "$capture" 'idle prompt, elapsed 9s' "$DELIVERED_DONE" \
+    || fail "a delivered worker did not re-surface once its window elapsed"
+  wakes=$(delivered_stale_wakes "$state")
+  [ "$wakes" -eq 1 ] \
+    || fail "the elapsed window produced $wakes wakes instead of one"
+  pass "a done worker with a recorded PR surfaces once, absorbs its idle-prompt churn, then re-surfaces when the window elapses"
+}
+
+# The exemption is keyed on CURRENT state, so it ends the moment the authoritative
+# reader stops saying done - the status line still reads `done: PR ...` in every
+# case below, and must not be what keeps the bound alive.
+test_done_worker_bound_ends_when_state_is_no_longer_done() {
+  local dir state out capture wakes verdict spec name
+  for spec in \
+    'relaunched-unknown|state: unknown · source: none · backend target gone: test:fm-delivered' \
+    'exited-stopped|state: stopped · source: pane · bare shell' \
+    'failed-later|state: failed · source: run-step · failed'
+  do
+    name=${spec%%|*}; verdict=${spec#*|}
+    dir=$(make_delivered_home "delivered-$name" 'https://example.invalid/pull/7') \
+      || fail "[$name] could not build a delivered fixture"
+    state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
+    delivered_watch_surface "$dir" "$out" "$capture" 'idle prompt, elapsed 1s' "$DELIVERED_DONE" \
+      || fail "[$name] first sight of a delivered worker did not surface"
+    ack_stopped_cycle "$state" || fail "[$name] could not acknowledge the first surface"
+    # Same status line, same recorded PR, a new hash - but the state moved.
+    delivered_watch_surface "$dir" "$out" "$capture" 'idle prompt, elapsed 2s' "$verdict" \
+      || fail "[$name] a delivered worker whose state stopped reading done was still absorbed"
+    wakes=$(delivered_stale_wakes "$state")
+    [ "$wakes" -eq 1 ] \
+      || fail "[$name] the state change produced $wakes wakes instead of one"
+  done
+  pass "a delivered worker's bound ends as soon as its current state stops reading done, whatever the status line says"
+}
+
+# A new status event is a new window: the scope binds the status-log signature,
+# so the worker's next line alarms once even while the state still reads done.
+test_done_worker_bound_ends_on_a_new_status_event() {
+  local dir state out capture wakes
+  dir=$(make_delivered_home delivered-new-event 'https://example.invalid/pull/7') \
+    || fail "could not build a delivered fixture"
+  state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  delivered_watch_surface "$dir" "$out" "$capture" 'idle prompt, elapsed 1s' "$DELIVERED_DONE" \
+    || fail "first sight of a delivered worker did not surface"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the first surface"
+  delivered_watch_churn "$dir" "$out" "$capture" 'idle prompt, tick' 1 "$DELIVERED_DONE" \
+    || fail "watcher exited during idle-prompt churn"
+  [ "$(delivered_stale_wakes "$state")" -eq 0 ] || fail "churn inside the window alarmed"
+  printf 'done: PR https://example.invalid/pull/7 rebased onto main\n' >> "$state/delivered.status"
+  printf '%s' "$(seen_sig "$state/delivered.status")" > "$state/.seen-delivered_status"
+  delivered_watch_surface "$dir" "$out" "$capture" 'idle prompt, elapsed 3s' "$DELIVERED_DONE" \
+    || fail "a new status event on a delivered worker was absorbed under the old window"
+  wakes=$(delivered_stale_wakes "$state")
+  [ "$wakes" -eq 1 ] || fail "the new status event produced $wakes wakes instead of one"
+  pass "a new status event starts its own window for a delivered worker"
+}
+
+# The record that makes the bound safe: without pr=, nothing says firstmate has
+# taken the delivery in hand, so the identical fixture keeps alarming on every
+# new hash exactly as before.
+test_done_worker_without_recorded_pr_still_alarms_on_every_hash() {
+  local dir state out capture round wakes
+  dir=$(make_delivered_home delivered-nopr nopr) \
+    || fail "could not build an unrecorded delivered fixture"
+  state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  round=1
+  while [ "$round" -le 2 ]; do
+    delivered_watch_surface "$dir" "$out" "$capture" "idle prompt, elapsed ${round}s" "$DELIVERED_DONE" \
+      || fail "a done worker with no recorded PR stopped alarming on round $round"
+    wakes=$(delivered_stale_wakes "$state")
+    [ "$wakes" -eq 1 ] || fail "round $round produced $wakes wakes instead of one"
+    ack_stopped_cycle "$state" || fail "could not acknowledge round $round"
+    round=$((round + 1))
+  done
+  [ ! -e "$state/.paused-resurfaced-$(delivered_key)" ] \
+    || fail "a done worker with no recorded PR armed a re-surface throttle"
+  pass "a done worker with no recorded PR keeps alarming on every new hash"
+}
+
 # The worktree recorded for a secondmate is a provisioned firstmate home, and that
 # home runs its OWN supervision inside itself: its watcher beacon, pane hashes and
 # heartbeats keep state/ churning whether or not the mate produced anything. Reading
@@ -4879,6 +5285,14 @@ test_write_deferral_resurfaces_on_the_bounded_cadence
 test_secondmate_home_supervision_churn_is_not_write_evidence
 test_timer_repair_drops_a_finished_write_deferral_chain
 test_terminal_first_sight_drops_a_finished_write_deferral_chain
+test_crew_worktree_process_live_classifier
+test_worktree_process_probe_is_wall_clock_bounded
+test_wedge_escalation_deferred_while_worktree_process_runs
+test_process_deferral_resurfaces_on_the_bounded_cadence
+test_done_worker_with_recorded_pr_surfaces_once_then_absorbs_churn
+test_done_worker_bound_ends_when_state_is_no_longer_done
+test_done_worker_bound_ends_on_a_new_status_event
+test_done_worker_without_recorded_pr_still_alarms_on_every_hash
 test_triage_log_size_cap_accepts_spaced_wc_counts
 test_procevent_captured_result_surfaces_proactively
 test_procevent_unacknowledged_result_redrains_until_handled
