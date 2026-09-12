@@ -12,6 +12,9 @@ set -u
 # shellcheck source=tests/secondmate-helpers.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/secondmate-helpers.sh"
 
+# shellcheck source=bin/fm-timeout-lib.sh disable=SC1091
+. "$ROOT/bin/fm-timeout-lib.sh"
+
 RECONCILE="$ROOT/bin/fm-secondmate-reconcile.sh"
 TMP_ROOT=$(fm_test_tmproot fm-secondmate-reconcile)
 
@@ -877,6 +880,22 @@ META
   pass "reconcile requests coalesce per target and retire independently after delivery"
 }
 
+# The remote-ledger read of the delayed-remote case runs under a hard bound so
+# a fake remote that never answers ends the case with a name instead of holding
+# the whole serial shard until CI's job cap kills it. The bound sits well above
+# the collector budget the case asserts on and well below the fake's 30s delay,
+# so it is only reached when the collector's own budget failed to return.
+FM_TEST_BEARINGS_READ_BOUND=${FM_TEST_BEARINGS_READ_BOUND:-15}
+
+timed_bearings_snapshot() {  # <what> [env=value...] -> stdout json, or fails the case
+  local what=$1 rc=0
+  shift
+  fm_run_timed "$FM_TEST_BEARINGS_READ_BOUND" env "$@" "$ROOT/bin/fm-bearings-snapshot.sh" --json || rc=$?
+  [ "$rc" -ne 124 ] \
+    || fail "the $what remote-ledger read stalled past ${FM_TEST_BEARINGS_READ_BOUND}s: the remote never answered and the collector budget did not return"
+  return "$rc"
+}
+
 test_bearings_request_returns_before_remote_delivery_and_supervision_sends_later() {
   local home rhome fakebin snap warm started elapsed watcher i requests beat_before beat_after processing beacon_advanced=0
   fakebin=$(make_remote_ssh_stub "$TMP_ROOT/remote-offpath")
@@ -892,21 +911,21 @@ test_bearings_request_returns_before_remote_delivery_and_supervision_sends_later
     counts:{active_children:0,decisions_open:0,holds:0,queued:0,landed:0,endpoints:0},omitted:[]
   }' > "$rhome/state/home-summary.json"
 
-  warm=$(FM_SSH_BIN="$fakebin/fake-ssh" FM_REMOTE_CODE_ROOT="$ROOT" \
+  warm=$(timed_bearings_snapshot warm FM_SSH_BIN="$fakebin/fake-ssh" FM_REMOTE_CODE_ROOT="$ROOT" \
     PATH="$fakebin:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$home/state" FM_SNAPSHOT_BUDGET=3 FM_SNAPSHOT_NOW_EPOCH=2000 \
-    FM_BEARINGS_NOW=2026-09-01T22:00:00Z "$ROOT/bin/fm-bearings-snapshot.sh" --json) \
+    FM_BEARINGS_NOW=2026-09-01T22:00:00Z) \
     || fail "the initial remote ledger could not seed the parent cache"
   printf '%s' "$warm" | jq -e '.secondmate_reconcile | any(.id == "remote-offpath-mate" and .kind == "orphan_in_flight")' >/dev/null \
     || fail "the warm remote ledger did not carry its inventory mismatch"
   touch "$home/state/home-summary.json"
 
   started=$(date +%s)
-  snap=$(FM_TEST_RECONCILE_REMOTE_DELAY=30 \
+  snap=$(timed_bearings_snapshot delayed FM_TEST_RECONCILE_REMOTE_DELAY=30 \
     FM_SSH_BIN="$fakebin/fake-ssh" FM_REMOTE_CODE_ROOT="$ROOT" \
     PATH="$fakebin:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$home/state" FM_SNAPSHOT_BUDGET=1 FM_SNAPSHOT_NOW_EPOCH=2000 \
-    FM_BEARINGS_NOW=2026-09-01T22:00:00Z "$ROOT/bin/fm-bearings-snapshot.sh" --json) \
+    FM_BEARINGS_NOW=2026-09-01T22:00:00Z) \
     || fail "Bearings failed while the remote queue was delayed"
   printf '%s\n' "$snap" | FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
     "$RECONCILE" request --snapshot - > "$home/request.out" \
