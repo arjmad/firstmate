@@ -32,7 +32,19 @@
 #                          human the wait is on. Only when neither absorb class
 #                          applies does the log's last line decide:
 #                          terminal (captain-relevant) or non-terminal (no verb),
-#                          both surfaced at once. A provably-working stale past the
+#                          both surfaced at once - and each surfaced once per
+#                          legitimate wait: a delivered worker whose CURRENT state
+#                          reads done (fm-crew-state.sh, never the log line alone)
+#                          and whose metadata carries the pr= record fm-pr-check
+#                          wrote alarms on first sight, then absorbs every new
+#                          idle-prompt render until the same PAUSE_RESURFACE_SECS
+#                          cadence a declared pause uses re-surfaces it once
+#                          (done_pr_stale_bound); a new status event, a state
+#                          that is no longer done, or a record gone ends that
+#                          bound at the next sighting, and a done worker with no
+#                          pr= record keeps alarming on every new hash, because
+#                          nothing says firstmate has seen that delivery yet.
+#                          A provably-working stale past the
 #                          wedge threshold also surfaces, with an "escalation N"
 #                          count in the reason; at FM_WEDGE_DEMAND_INSPECT_COUNT
 #                          consecutive escalations on the SAME pane, the reason
@@ -40,12 +52,18 @@
 #                          wake payload itself, not just repetition, forces a
 #                          closer look instead of another routine supervision
 #                          resume. Unless afk is active. A pane whose own task
-#                          worktree was written during the quiet window is
-#                          deferred rather than escalated (wedge_defer_writing),
-#                          because files appearing there are liveness the pane and
-#                          the run step cannot show; that deferral still
-#                          re-surfaces once per PAUSE_RESURFACE_SECS, and a pane
-#                          that writes nothing keeps the unchanged schedule.
+#                          worktree was written during the quiet window, or
+#                          holds a live process that started there during it (a
+#                          test gate advancing script by script behind a
+#                          waiting monitor), is deferred rather than escalated
+#                          (wedge_defer_writing), because files and processes
+#                          appearing there are liveness the pane and the run
+#                          step cannot show; that deferral still re-surfaces
+#                          once per PAUSE_RESURFACE_SECS, and a pane that writes
+#                          nothing and spawns nothing keeps the unchanged
+#                          schedule - a process merely present since spawn (the
+#                          harness, its shell, a helper it keeps alive) is not
+#                          evidence, or a wedged harness could never surface.
 #                          A genuinely busy pane
 #                          (window_is_busy true) is exempt from the above, but
 #                          only up to BUSY_TURN_MAX_SECS with no completed turn
@@ -876,29 +894,44 @@ resurface_absorbed() {  # <window> <throttle-marker> <age> <reason> [scope] [min
 }
 
 # Defer ONE wedge escalation for a pane that went quiet while its own task
-# worktree is demonstrably still being written (crew_worktree_written_since in
-# fm-classify-lib.sh). The pane and the run step both say nothing is happening;
-# the worktree says otherwise, and files appearing in it is the harder signal to
-# fake, so the escalation is deferred rather than fired. Deliberately a DEFERRAL,
-# not a cancellation: the idle timer restarts, so the next window probes again,
-# and a .writing-since-<key> marker ages the whole deferral chain so the pane
-# still re-surfaces once every PAUSE_RESURFACE_SECS through the shared
+# worktree demonstrably still has work happening in it: a file written there
+# since the idle window opened (crew_worktree_written_since in
+# fm-classify-lib.sh), or a process started there since it opened
+# (crew_worktree_process_live, the gate that renders and writes nothing while it
+# runs). The pane and the run step both say nothing is happening; the worktree
+# says otherwise, and files or processes appearing in it are the harder signals
+# to fake, so the escalation is deferred rather than fired. Deliberately a
+# DEFERRAL, not a cancellation: the idle timer restarts, so the next window
+# probes again, and a .writing-since-<key> marker ages the whole deferral chain -
+# shared by both kinds of evidence, since they answer the same question - so the
+# pane still re-surfaces once every PAUSE_RESURFACE_SECS through the shared
 # resurface_absorbed above - literally the same bounded cadence a declared pause
 # uses, throttled by its own .writing-resurfaced-<key> marker - and a crew whose
 # worktree churns without real progress cannot stay invisible. The escalation
 # counter is left alone: it is neither advanced (this is not an escalation) nor
 # reset (a later genuine escalation must still carry the demand-deep-inspection
-# history it had already earned).
-wedge_defer_writing() {  # <window> <since-file> <triage-label> <idle-age>
-  local win=$1 since_file=$2 label=$3 age=$4 key wsf wage
+# history it had already earned). <evidence> is `writes` or `process` and only
+# words the recheck reason and the triage line.
+wedge_defer_writing() {  # <window> <since-file> <triage-label> <idle-age> [evidence]
+  local win=$1 since_file=$2 label=$3 age=$4 evidence=${5:-writes} key wsf wage what confirm
   key=$(window_key "$win")
   wsf="$STATE/.writing-since-$key"
   [ -e "$wsf" ] || date +%s > "$wsf"
   wage=$(age_of "$wsf")
   date +%s > "$since_file"
+  case "$evidence" in
+    process)
+      what="running a process in its worktree"
+      confirm="confirm the process is real progress"
+      ;;
+    *)
+      what="writing its worktree"
+      confirm="confirm the writes are real progress"
+      ;;
+  esac
   resurface_absorbed "$win" "$STATE/.writing-resurfaced-$key" "$wage" \
-    "stale: $win (idle ${age}s, writing its worktree for ${wage}s, rechecked on a long cadence not a wedge; confirm the writes are real progress)"
-  triage_log "absorbed $label (worktree written since the idle window opened, idle ${age}s): $win"
+    "stale: $win (idle ${age}s, $what for ${wage}s, rechecked on a long cadence not a wedge; $confirm)"
+  triage_log "absorbed $label (worktree $evidence since the idle window opened, idle ${age}s): $win"
 }
 
 # Drop a window's write-deferral chain wherever its stale bookkeeping resets, so
@@ -917,9 +950,10 @@ clear_write_tracking() {  # <window-key>
 # both places a hash can be absorbed this way: the plain non-terminal path,
 # and the stale_is_terminal-overridden path (a captain-relevant status-log
 # line that an active run/busy pane outranked).
-# The worktree write probe runs ONLY here, inside the at-threshold branch that is
-# about to escalate: at most one bounded walk per window per STALE_ESCALATE_SECS,
-# never per poll.
+# The worktree write and process probes run ONLY here, inside the at-threshold
+# branch that is about to escalate: at most one bounded walk and one bounded
+# process listing per window per STALE_ESCALATE_SECS, never per poll. The write
+# probe goes first because it is the cheaper of the two, and either alone defers.
 wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file> <task>
   local win=$1 since_file=$2 label=$3 escalation_file=$4 task=$5 since age n reason
   since=$(cat "$since_file" 2>/dev/null || true)
@@ -935,7 +969,11 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
       age=$(( $(date +%s) - since ))
       if [ "$age" -ge "$STALE_ESCALATE_SECS" ]; then
         if crew_worktree_written_since "$task" "$STATE" "$since_file"; then
-          wedge_defer_writing "$win" "$since_file" "$label" "$age"
+          wedge_defer_writing "$win" "$since_file" "$label" "$age" writes
+          return 0
+        fi
+        if crew_worktree_process_live "$task" "$STATE" "$since_file"; then
+          wedge_defer_writing "$win" "$since_file" "$label" "$age" process
           return 0
         fi
         n=$(( $(cat "$escalation_file" 2>/dev/null || echo 0) + 1 ))
@@ -1265,6 +1303,38 @@ captain_call_stale_bound() {  # <window-key> <task>
   task_captain_call_open "$task" || return 1
   STALE_WAIT_DECLARATION=$(captain_call_declaration "$task" "$CAPTAIN_CALL_IDENTITY")
   afk_record_present && return 0
+  stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION"
+}
+
+# The third record of a legitimate wait, and the one every delivered worker has
+# even before anyone holds it: its CURRENT state reads done (fm-crew-state.sh,
+# never the status line alone, so a relaunch, a new run, or a fresh verb ends the
+# bound the moment the state moves) and its metadata carries the `pr=` record
+# fm-pr-check wrote when firstmate took the delivery in hand. Such a worker sits
+# idle at its prompt for the captain's whole thinking time, and an idle harness
+# prompt still ticks its render, so without this bound each new pane hash
+# re-alarmed a delivery firstmate already had (the 2026-09-10 loop: one stale
+# wake every few minutes per done worker, each a no-op handling turn).
+# The scope binds the PR identity and the status-log signature, so a new status
+# event or a different PR starts its own window and alarms once more; the first
+# sight of each such window still alarms, and the bound only absorbs the
+# repetition inside PAUSE_RESURFACE_SECS after it, then re-surfaces once per
+# window through the same throttle the other two bounds use.
+# A done worker with NO `pr=` record is deliberately outside this bound: without
+# firstmate's own acknowledgement that it saw the delivery, the watcher cannot
+# tell a taken-in-hand delivery from a `done:` firstmate has not processed yet
+# (a scout's report, a local-only branch nobody has looked at, a done line
+# written before fm-pr-check ran), and that first look is the alarm this path
+# exists to deliver. The state line is passed in when the caller already paid
+# for the read, so one sighting costs one fm-crew-state.sh call, not two.
+done_pr_stale_bound() {  # <window-key> <task> [state-line]
+  local key=$1 task=$2 line=${3-} pr
+  STALE_WAIT_DECLARATION=
+  [ -n "$task" ] || return 1
+  [ "$(crew_state_line_token "$line")" = 'done' ] || return 1
+  pr=$(fm_meta_get "$STATE/$task.meta" pr)
+  [ -n "$pr" ] || return 1
+  STALE_WAIT_DECLARATION="done-pr:$pr:$(fm_wake_signal_sig "$STATE/$task.status" || true)"
   stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION"
 }
 
@@ -2263,7 +2333,12 @@ EOF
           # authoritative source fm-crew-state.sh itself already prioritizes
           # over the log) a chance to override before trusting the log.
           if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
-            if crew_is_provably_working "$(window_to_task "$w" "$STATE")"; then
+            # One authoritative state read serves both the provably-working
+            # override and the delivered-worker bound below (crew_state_line in
+            # fm-classify-lib.sh), so a done worker's new hash costs one
+            # fm-crew-state.sh call, not two.
+            stale_state_line=$(crew_state_line "$task")
+            if [ "$(crew_absorb_class_for_line "$stale_state_line")" = working ]; then
               printf '%s' "$h" > "$sf"
               date +%s > "$ssf"
               clear_write_tracking "$key"
@@ -2280,6 +2355,19 @@ EOF
               rm -f "$ssf"
               clear_write_tracking "$key"
               triage_log "absorbed stale (open captain call already surfaced for this status): $w"
+            elif [ -z "$STALE_WAIT_DECLARATION" ] \
+              && done_pr_stale_bound "$key" "$task" "$stale_state_line"; then
+              # Same bound, third record: the worker's current state is done and
+              # its recorded PR is already in firstmate's hands (done_pr_stale_bound
+              # owns the contract). The first sight alarmed; this new hash inside
+              # the window has nothing to add, and the next window alarms again.
+              # An open captain call that just declined to absorb (its own first
+              # sight, left in STALE_WAIT_DECLARATION) keeps the alarm: that call's
+              # first look must never hide behind the delivery's earlier one.
+              printf '%s' "$h" > "$sf"
+              rm -f "$ssf"
+              clear_write_tracking "$key"
+              triage_log "absorbed stale (delivered worker, done with a recorded PR, already surfaced for this status): $w"
             else
               fm_wake_append stale "$w" "stale: $w" || exit 1
               stale_wait_record "$key"
