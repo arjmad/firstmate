@@ -131,7 +131,15 @@
 #   root Firstmate home's state directory before slot allocation and holds it through
 #   task metadata publication. Teardown holds that same lock while proving and
 #   returning a slot, so allocation cannot reuse a slot before its owner record
-#   is published. The local root is whatever bin/fm-wake-lib.sh's
+#   is published. Under that same lock it writes the slot's owner claim, which is
+#   what lets teardown leave a slot reassigned since untouched; bin/fm-wake-lib.sh
+#   owns the claim and bin/fm-teardown.sh owns what it protects. A slot that
+#   cannot be claimed refuses the spawn rather than launching a worker whose slot
+#   could later be released out from under its successor. A spawn that aborts
+#   while it still holds the allocation lock drops its own claim; an abort after
+#   metadata publication has released that lock leaves the claim in place, and
+#   the next spawn's claim replaces it.
+#   The local root is whatever bin/fm-wake-lib.sh's
 #   fm_firstmate_root_home resolves, so a home seeded from another machine anchors
 #   that lock itself rather than failing to resolve one;
 #   contention refuses rather than waits.
@@ -271,8 +279,20 @@
 #   This is an exec environment boundary, not a sandbox for the pane's startup
 #   shell, credential files, same-user processes, or later shell initialization.
 #   See docs/configuration.md for provider/Git setup and supported limits.
+# Claude permission mode (config/claude-permission-mode):
+#   One token selecting the permission flag every claude launch (ship, scout,
+#   secondmate, and relaunch) carries. Absent or `bypass` keeps today's
+#   `--dangerously-skip-permissions`; `auto` launches with `--permission-mode
+#   auto` instead, Claude Code's classifier-reviewed mode, for a captain who
+#   refuses to run workers in bypass mode. Every other part of the claude launch
+#   is unchanged. The token is the file's whitespace-trimmed content; any other
+#   value, or an unreadable file, refuses the spawn before any endpoint,
+#   worktree, or record exists and names the accepted values. The file is read
+#   on every spawn and relaunch, so a change reaches the next launch without a
+#   restart, and it is inherited into secondmate homes (bin/fm-config-inherit-lib.sh).
 #   Launch templates live in launch_template() below; placeholders replaced before launch:
 #     __BRIEF__    absolute path to data/<task-id>/brief.md
+#     __CLAUDEPERMFLAG__ the claude permission flag selected by config/claude-permission-mode
 #     __PIBIN__    quoted concrete Pi-family executable path resolved from PATH
 #     __PITUIMODE__ optional --tui-mode regular when that executable advertises it
 #     __TURNEND__  absolute path to state/<task-id>.turn-ended (for harnesses whose
@@ -431,6 +451,31 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
     exit 1
   fi
 fi
+# config/claude-permission-mode (header above): resolved once per spawn or
+# relaunch, before any mutation, so a malformed file refuses instead of
+# launching a worker on a permission posture the captain did not choose.
+if ! CLAUDE_PERM_PRESENT=$(fm_config_source_present "$CONFIG/claude-permission-mode"); then
+  exit 1
+fi
+CLAUDE_PERMISSION_MODE=bypass
+if [ "$CLAUDE_PERM_PRESENT" = 1 ]; then
+  if [ ! -f "$CONFIG/claude-permission-mode" ] || [ ! -r "$CONFIG/claude-permission-mode" ]; then
+    echo "error: config/claude-permission-mode must be a readable regular file holding one of: bypass, auto" >&2
+    exit 1
+  fi
+  CLAUDE_PERMISSION_MODE=$(tr -d '[:space:]' < "$CONFIG/claude-permission-mode" || true)
+  case "$CLAUDE_PERMISSION_MODE" in
+    bypass|auto) ;;
+    *)
+      echo "error: config/claude-permission-mode holds '$CLAUDE_PERMISSION_MODE'; accepted values are: bypass (--dangerously-skip-permissions, the default when the file is absent), auto (--permission-mode auto)" >&2
+      exit 1
+      ;;
+  esac
+fi
+case "$CLAUDE_PERMISSION_MODE" in
+  auto) CLAUDE_PERM_FLAG='--permission-mode auto' ;;
+  *) CLAUDE_PERM_FLAG='--dangerously-skip-permissions' ;;
+esac
 SUB_HOME_MARKER=".fm-secondmate-home"
 if [ -e "$STATE" ] || [ -L "$STATE" ]; then
   fm_backlog_directory_present "$STATE" "state directory" || {
@@ -927,6 +972,7 @@ SPAWN_ENDPOINT_ABORT_TAB=
 SPAWN_ENDPOINT_ABORT_WINDOW=
 SPAWN_TREEHOUSE_PROJECT_LOCK=
 SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
+SPAWN_SLOT_CLAIMED=0
 RELAUNCH_REPLACEMENT_PENDING=0
 RELAUNCH_REPLACEMENT_BUSY_GEN=
 RELAUNCH_REPLACEMENT_HARNESS=
@@ -1104,6 +1150,23 @@ spawn_abort_cleanup() {
   if [ "$SPAWN_META_LOCK_HELD" = 1 ]; then
     SPAWN_META_LOCK_HELD=0
     fm_lock_release "$SPAWN_META_LOCK" || true
+  fi
+  # A spawn that aborts after claiming its slot but before its record survives
+  # must not leave a claim naming a task no record describes. The release is a
+  # read-then-remove, so it runs only while the project lock that wrote the
+  # claim is still held (aborts before metadata publication); a later abort has
+  # already released that lock and leaves the claim for the next spawn's
+  # atomic replacement rather than racing it. The release itself never removes
+  # another task's claim.
+  if [ "$SPAWN_SLOT_CLAIMED" = 1 ] && [ -n "${WT:-}" ] \
+     && [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ] \
+     && fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
+    SPAWN_SLOT_CLAIMED=0
+    if [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" = 1 ]; then
+      fm_treehouse_slot_owner_release "$WT" "$ID" || true
+    else
+      echo "warning: leaving task $ID's slot claim on $WT in place; the Treehouse project lock is no longer held, so the next spawn's claim replaces it" >&2
+    fi
   fi
   if [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" = 1 ]; then
     SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
@@ -1547,7 +1610,10 @@ launch_template() {
     # sources are not guaranteed to load that scope, so a worker would
     # otherwise run with attribution back on; carrying it per launch keeps the
     # policy in force regardless of which settings scopes end up loaded.
-    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings '\''{"feedbackDrafts":"off","attribution":{"commit":"","pr":"","sessionUrl":false}}'\'' __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # __CLAUDEPERMFLAG__ is the permission flag config/claude-permission-mode
+    # selects (header above): --dangerously-skip-permissions by default, or
+    # --permission-mode auto for a captain who refuses bypass mode.
+    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude __CLAUDEPERMFLAG__ --settings '\''{"feedbackDrafts":"off","attribution":{"commit":"","pr":"","sessionUrl":false}}'\'' __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     codex)
       if [ "$kind" = secondmate ]; then
         printf '%s' 'codex __MODELFLAG____EFFORTFLAG____TIERFLAG__--dangerously-bypass-approvals-and-sandbox "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
@@ -3322,6 +3388,26 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   fi
 
   validate_spawn_worktree "treehouse get" "$T"
+
+  # Claim the pool slot for this task. The interactive `treehouse get` sent to
+  # the pane above records only a process lease (Treehouse's durable
+  # `get --lease --lease-holder`, which bin/fm-home-seed.sh uses for secondmate
+  # homes, is not this path), so Treehouse cannot say which task a slot belongs
+  # to once that task's worker exits - and that is exactly when the slot is
+  # handed on and this task's worktree= line goes stale. The claim is what lets
+  # bin/fm-teardown.sh leave a slot that has since been reassigned untouched, so
+  # a slot that cannot be claimed is refused here, at the cheapest point, rather
+  # than launching a worker whose slot teardown could later release out from
+  # under its successor.
+  # Written under the Treehouse project lock held from before slot allocation
+  # through metadata publication, so no other spawn or return sees a half-claim.
+  if fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
+    if ! fm_treehouse_slot_owner_claim "$WT" "$ID" "$FM_HOME"; then
+      echo "error: could not claim Treehouse pool slot $WT for task $ID; refusing to launch a worker whose slot cannot later be proved to be its own; inspect window $T" >&2
+      exit 1
+    fi
+    SPAWN_SLOT_CLAIMED=1
+  fi
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   freshen_spawn_worktree_base "$WT" || exit 1
@@ -3977,6 +4063,7 @@ TIERFLAG=$(fast_tier_flag_for_harness "$HARNESS" "$FAST")
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 LAUNCH=${LAUNCH//__TIERFLAG__/$TIERFLAG}
+LAUNCH=${LAUNCH//__CLAUDEPERMFLAG__/$CLAUDE_PERM_FLAG}
 if [ "$HARNESS" = rovo ]; then
   ROVOCONFIGOVERRIDE=$(rovo_config_override_flag "$EFFORT" "$DATA" "$STATE" "$ID") || {
     echo "error: could not resolve this task's home paths for rovo's allowedExternalPaths grant" >&2
