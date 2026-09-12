@@ -13,7 +13,10 @@
 #      and a record bound to another task are all refused.
 #   4. Verb allowlist: no arbitrary text, no raw keys, no resume.
 #   5. Lifecycle states: busy interrupts first, idle does not, already-stopped
-#      is idempotent success, and an agent that does not stop fails closed.
+#      is idempotent success, an agent that does not stop fails closed, and a
+#      harness that answers its exit command with a confirmation dialog has
+#      the dialog's exit-confirming default confirmed through the key path -
+#      and only then.
 #   6. Marker non-regression: a control command to a kind=secondmate task
 #      carries NO from-firstmate marker and opens no pending-reply expectation,
 #      while fm-send's marking of the same task is untouched.
@@ -72,7 +75,14 @@ verified_adapter_contract() {  # <harness> -> exit command, interrupt key, repea
 # that is the harness's exit command flips `command` to a shell (the agent
 # stopped), and a literal carrying a launch brief flips it to the value in
 # `becomes` (a new agent came up). FM_FAKE_NEVER_DIES suppresses the first, so
-# a stubborn agent can be tested too.
+# a stubborn agent can be tested too. FM_FAKE_EXIT_DIALOG=<pane-fixture> models
+# a harness that answers its exit command with a confirmation dialog instead of
+# stopping: the typed exit command only arms `exit-typed`, the submitting Enter
+# then raises the dialog (the fixture becomes the pane, `dialog-up` appears),
+# and a further Enter while the dialog is up is recorded in `dialog-keys` and
+# stops the agent - unless FM_FAKE_EXIT_DIALOG_STAYS is set, in which case the
+# dialog stays exactly as rendered, so a key that should never have been sent
+# is still recorded.
 make_tmux_stub() {  # <dir> -> echoes fakebin dir
   local dir=$1 fb="$1/fakebin"
   mkdir -p "$fb"
@@ -94,7 +104,10 @@ case "${1:-}" in
     payload=${1:-}
     if [ "$literal" = 1 ]; then
       printf '%s\n' "$payload" >> "$D/literal"
-      if [ -z "${FM_FAKE_NEVER_DIES:-}" ] \
+      if [ -n "${FM_FAKE_EXIT_DIALOG:-}" ] \
+         && { [ "$payload" = /exit ] || [ "$payload" = /quit ]; }; then
+        : > "$D/exit-typed"
+      elif [ -z "${FM_FAKE_NEVER_DIES:-}" ] \
          && { [ "$payload" = /exit ] || [ "$payload" = /quit ]; }; then
         printf 'zsh' > "$D/command"
       fi
@@ -103,6 +116,17 @@ case "${1:-}" in
       esac
     else
       printf '%s\n' "$payload" >> "$D/keys"
+      if [ "$payload" = Enter ] && [ -e "$D/exit-typed" ]; then
+        rm -f "$D/exit-typed"
+        cp "$FM_FAKE_EXIT_DIALOG" "$D/pane"
+        : > "$D/dialog-up"
+      elif [ "$payload" = Enter ] && [ -e "$D/dialog-up" ]; then
+        printf '%s\n' "$payload" >> "$D/dialog-keys"
+        if [ -z "${FM_FAKE_EXIT_DIALOG_STAYS:-}" ]; then
+          rm -f "$D/dialog-up" "$D/pane"
+          printf 'zsh' > "$D/command"
+        fi
+      fi
       if [ -n "${FM_FAKE_INTERRUPT_STOPS_AGENT:-}" ] \
          && { [ "$payload" = Escape ] || [ "$payload" = C-c ]; }; then
         printf 'zsh' > "$D/command"
@@ -198,7 +222,43 @@ run_control() {
     FM_FAKE_MUSE_LOG="${FM_FAKE_MUSE_LOG:-}" \
     FM_FAKE_MUSE_DISAPPEAR_BEFORE_ACK="${FM_FAKE_MUSE_DISAPPEAR_BEFORE_ACK:-}" \
     FM_FAKE_INTERRUPT_STOPS_AGENT="${FM_FAKE_INTERRUPT_STOPS_AGENT:-}" \
+    FM_FAKE_EXIT_DIALOG="${FM_FAKE_EXIT_DIALOG:-}" \
+    FM_FAKE_EXIT_DIALOG_STAYS="${FM_FAKE_EXIT_DIALOG_STAYS:-}" \
     "$CONTROL" "$@" 2>&1
+}
+
+# The exit-confirmation dialog Claude Code 2.1.269 renders when `/exit` is
+# submitted while a background shell is live, captured verbatim from a real
+# tmux pane; the selection marker sits on the exit-confirming default.
+write_claude_exit_dialog() {  # <path>
+  cat > "$1" <<'PANE'
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Background work is running
+   The following will stop when you exit:
+
+   shell · sleep 900
+
+   ❯ 1. Exit and stop tasks
+     2. Move to background and exit
+     3. Stay
+
+   Enter to confirm · Esc to cancel
+PANE
+}
+
+# The same dialog with its selection moved onto `Stay`: a rendering the key
+# plane cannot confirm, because Enter would keep the agent running and no
+# carried key moves the selection.
+write_claude_exit_dialog_on_stay() {  # <path>
+  write_claude_exit_dialog "$1"
+  sed -i.bak -e 's/^   ❯ 1\. Exit and stop tasks$/     1. Exit and stop tasks/' \
+    -e 's/^     3\. Stay$/   ❯ 3. Stay/' "$1"
+  rm -f "$1.bak"
+  grep -q '❯ 3. Stay' "$1" || fail "fixture: the Stay selection was not rendered"
+}
+
+dialog_keys() {  # <case-dir>
+  cat "$1/fake/dialog-keys" 2>/dev/null || true
 }
 
 alive_as() {  # <case-dir> <command-name>
@@ -795,7 +855,7 @@ test_agent_that_does_not_stop_fails_closed() {
     "$CONTROL" t1 exit 2>&1); rc=$?
   expect_code 1 "$rc" "an agent that ignores its exit command should fail closed"
   assert_contains "$out" "did not stop" "the failure should say the agent did not stop"
-  assert_contains "$out" "exit-delivered t1 interrupt=delivered verified=agent-alive cancel=unconfirmed exit-command=delivered agent-state=alive exit=unconfirmed" \
+  assert_contains "$out" "exit-delivered t1 interrupt=delivered verified=agent-alive cancel=unconfirmed exit-command=delivered exit-confirm=not-needed agent-state=alive exit=unconfirmed" \
     "the failure should distinguish delivered lifecycle input from the unconfirmed exit"
   assert_not_contains "$out" "nothing was changed" \
     "the failure must not deny the lifecycle input that was delivered"
@@ -804,6 +864,109 @@ test_agent_that_does_not_stop_fails_closed() {
   [ "$(literals "$dir")" = /exit ] \
     || fail "a stubborn busy agent should receive its exit command"
   pass "fm-control exit: a stubborn agent reports delivered input and an unconfirmed exit"
+}
+
+# --- 5b. exit-confirmation dialog -------------------------------------------
+#
+# Claude Code answers `/exit` with a confirmation dialog while background work
+# is live (verified 2.1.269, fixture above). The control plane must recognise
+# it after the exit command, confirm its exit-confirming default with Enter
+# through the backend's key path, and then prove the stop as before - and it
+# must send that Enter ONLY when the dialog is on screen with such a default.
+
+test_claude_exit_confirms_the_background_work_dialog() {
+  local dir out rc
+  dir=$(new_case exit-dialog)
+  add_task "$dir" t1 claude
+  alive_as "$dir" claude
+  write_claude_exit_dialog "$dir/dialog.pane"
+  out=$(FM_FAKE_EXIT_DIALOG="$dir/dialog.pane" run_control "$dir" t1 exit); rc=$?
+  expect_code 0 "$rc" "exit should finish through the confirmation dialog"$'\n'"$out"
+  assert_contains "$out" "stopped t1 harness=claude" \
+    "the confirmed exit should report the stop like any other"
+  [ "$(literals "$dir")" = /exit ] \
+    || fail "the exit command should be typed exactly once, got: $(literals "$dir")"
+  [ "$(dialog_keys "$dir")" = Enter ] \
+    || fail "exactly one Enter should reach the dialog, got: $(dialog_keys "$dir")"
+  [ ! -e "$dir/fake/dialog-up" ] || fail "the dialog should have been confirmed away"
+  [ "$(cat "$dir/fake/command")" = zsh ] || fail "the agent should be gone after the confirmed dialog"
+  [ -z "$(keys_sent "$dir")" ] \
+    || fail "an idle agent's confirmed exit needs no other key, got: $(keys_sent "$dir")"
+  pass "fm-control exit: claude's background-work dialog is confirmed on its exit default and the stop is proven"
+}
+
+test_exit_sends_no_confirming_key_without_a_dialog() {
+  # A claude agent that stays alive after its exit command with an ORDINARY
+  # composer on screen: nothing is read as a dialog, no confirming key is
+  # sent, and the exit is reported unconfirmed exactly as before.
+  local dir out rc
+  dir=$(new_case exit-no-dialog)
+  add_task "$dir" t1 claude
+  alive_as "$dir" claude
+  printf '\xe2\x9d\xaf \n  \xe2\x8f\xb5\xe2\x8f\xb5 bypass permissions on (shift+tab to cycle)\n' > "$dir/fake/pane"
+  out=$(FM_FAKE_NEVER_DIES=1 run_control "$dir" t1 exit); rc=$?
+  expect_code 1 "$rc" "an agent that stays alive with no dialog is still an unconfirmed exit"
+  assert_contains "$out" "exit-confirm=not-needed" \
+    "an ordinary composer must not be read as an exit-confirmation dialog"
+  assert_contains "$out" "exit=unconfirmed" "the exit must stay unconfirmed"
+  [ -z "$(dialog_keys "$dir")" ] || fail "no key should be attributed to a dialog that never appeared"
+  pass "fm-control exit: an ordinary post-exit pane is never confirmed as a dialog"
+}
+
+test_exit_refuses_a_dialog_whose_selection_would_not_exit() {
+  local dir out rc
+  dir=$(new_case exit-dialog-stay)
+  add_task "$dir" t1 claude
+  alive_as "$dir" claude
+  write_claude_exit_dialog_on_stay "$dir/dialog.pane"
+  out=$(FM_FAKE_EXIT_DIALOG="$dir/dialog.pane" FM_FAKE_EXIT_DIALOG_STAYS=1 \
+    run_control "$dir" t1 exit); rc=$?
+  expect_code 1 "$rc" "a dialog whose default would keep the agent running must refuse"
+  assert_contains "$out" "exit-confirmation dialog" "the refusal should name the dialog"
+  assert_contains "$out" "selection on '3. Stay'" "the refusal should name the observed selection"
+  assert_contains "$out" "exit=unconfirmed" "the refusal must not claim the agent stopped"
+  [ -z "$(dialog_keys "$dir")" ] \
+    || fail "no key may be sent into a dialog whose selection would not exit, got: $(dialog_keys "$dir")"
+  [ -e "$dir/fake/dialog-up" ] || fail "the dialog should be left exactly as found"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "the agent must still be running"
+  pass "fm-control exit: a dialog whose selection would not exit is refused, named, and left untouched"
+}
+
+test_exit_dialog_confirmation_is_bounded_when_the_agent_ignores_it() {
+  # The dialog stays up after Enter (a harness that ignores the confirmation):
+  # the confirming key is retried at most EXIT_RETRIES times, then the exit is
+  # reported unconfirmed with the confirmation count, never as stopped.
+  local dir out rc
+  dir=$(new_case exit-dialog-stubborn)
+  add_task "$dir" t1 claude
+  alive_as "$dir" claude
+  write_claude_exit_dialog "$dir/dialog.pane"
+  out=$(FM_FAKE_EXIT_DIALOG="$dir/dialog.pane" FM_FAKE_EXIT_DIALOG_STAYS=1 \
+    run_control "$dir" t1 exit); rc=$?
+  expect_code 1 "$rc" "an agent that ignores its confirmed dialog must fail closed"
+  assert_contains "$out" "exit-confirm=confirmed=3" \
+    "the failure should report how many confirmations were delivered"
+  assert_contains "$out" "exit=unconfirmed" "the failure must not claim the agent stopped"
+  [ "$(dialog_keys "$dir" | wc -l | tr -d ' ')" = 3 ] \
+    || fail "the confirming key should be retried exactly EXIT_RETRIES times, got: $(dialog_keys "$dir")"
+  pass "fm-control exit: dialog confirmation is retried a bounded number of times and never reported as a stop"
+}
+
+test_non_claude_harness_never_reads_the_dialog() {
+  # The dialog contract is claude's alone: another harness whose pane happened
+  # to show the same text after its exit command gets no confirming key.
+  local dir out rc
+  dir=$(new_case exit-dialog-codex)
+  add_task "$dir" t1 codex
+  alive_as "$dir" codex
+  write_claude_exit_dialog "$dir/dialog.pane"
+  out=$(FM_FAKE_EXIT_DIALOG="$dir/dialog.pane" FM_FAKE_EXIT_DIALOG_STAYS=1 \
+    run_control "$dir" t1 exit); rc=$?
+  expect_code 1 "$rc" "codex has no dialog contract, so the parked exit stays unconfirmed"
+  assert_contains "$out" "exit-confirm=not-needed" "no confirmation may be attempted for codex"
+  [ -z "$(dialog_keys "$dir")" ] \
+    || fail "codex must receive no confirming key, got: $(dialog_keys "$dir")"
+  pass "fm-control exit: only claude's exit-confirmation dialog is confirmed"
 }
 
 test_grok_interrupt_without_acknowledgement_reports_unconfirmed() {
@@ -910,6 +1073,11 @@ test_muse_interrupt_confirms_adapter_acknowledgement
 test_interrupt_revalidates_agent_after_acknowledgement_wait
 test_exit_accepts_agent_stopped_by_busy_interrupt
 test_agent_that_does_not_stop_fails_closed
+test_claude_exit_confirms_the_background_work_dialog
+test_exit_sends_no_confirming_key_without_a_dialog
+test_exit_refuses_a_dialog_whose_selection_would_not_exit
+test_exit_dialog_confirmation_is_bounded_when_the_agent_ignores_it
+test_non_claude_harness_never_reads_the_dialog
 test_grok_interrupt_without_acknowledgement_reports_unconfirmed
 test_grok_idle_footer_does_not_confirm_cancellation
 test_secondmate_control_command_carries_no_marker

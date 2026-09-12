@@ -28,9 +28,14 @@
 #              state is never rewritten as proof of the action.
 #   exit       Stop the agent, preserving its terminal endpoint, worktree, and
 #              every uncommitted change. Interrupts first when the task reads
-#              busy, then submits the harness's exit command. Postcondition:
-#              the backend's recovery-grade classifier reports the agent gone.
-#              Already-stopped is success (idempotent).
+#              busy, then submits the harness's exit command. When the harness
+#              answers that command with a confirmation dialog instead of
+#              stopping (Claude Code with live background work), the dialog's
+#              exit-confirming default is confirmed through the backend's key
+#              path; a dialog whose selection would not exit is refused, never
+#              guessed at (bin/fm-control-lib.sh's exit-confirm table).
+#              Postcondition: the backend's recovery-grade classifier reports
+#              the agent gone. Already-stopped is success (idempotent).
 #   relaunch   Transactionally replace the running agent with a new one, in the
 #              SAME endpoint and SAME worktree, on the same or a newly chosen
 #              harness/model/effort - so switching harness is one ordinary use
@@ -89,8 +94,12 @@
 #   FM_CONTROL_POLL              poll interval for postcondition waits (0.5)
 #   FM_CONTROL_SETTLE_WAIT       adapter acknowledgement wait after interrupt (5)
 #   FM_CONTROL_EXIT_WAIT         alive->dead wait after the exit command (30)
+#   FM_CONTROL_EXIT_CONFIRM_WAIT window after the exit command in which a
+#                                harness's exit-confirmation dialog is watched
+#                                for and confirmed (8, never above EXIT_WAIT)
 #   FM_CONTROL_LAUNCH_WAIT       dead->alive wait after a relaunch (90)
-#   FM_CONTROL_EXIT_RETRIES      Enter retries for the exit command (3)
+#   FM_CONTROL_EXIT_RETRIES      Enter retries for the exit command, and the
+#                                cap on confirming-key sends to its dialog (3)
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -140,6 +149,9 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 POLL=${FM_CONTROL_POLL:-0.5}
 SETTLE_WAIT=${FM_CONTROL_SETTLE_WAIT:-5}
 EXIT_WAIT=${FM_CONTROL_EXIT_WAIT:-30}
+# The dialog watch never outlasts the exit wait itself: a caller that bounds
+# the exit tightly bounds the watch with it.
+EXIT_CONFIRM_WAIT=${FM_CONTROL_EXIT_CONFIRM_WAIT:-$(awk -v w="$EXIT_WAIT" 'BEGIN{print (w < 8) ? w : 8}')}
 LAUNCH_WAIT=${FM_CONTROL_LAUNCH_WAIT:-90}
 EXIT_RETRIES=${FM_CONTROL_EXIT_RETRIES:-3}
 
@@ -444,10 +456,56 @@ retire_busy_incarnation() {
   fi
 }
 
+# settle_exit_confirm: after the exit command, an adapter may park on a
+# confirmation dialog instead of stopping; bin/fm-control-lib.sh's
+# fm_control_exit_confirm_dialog owns its recognition and
+# fm_control_exit_confirm_key the key that confirms it. Watch the pane for a
+# bounded window while the agent is still alive; when the dialog is on screen
+# with an exit-confirming selection, deliver that key through the backend's
+# key path (never fm-send text), at most EXIT_RETRIES times. A dialog whose
+# selection would not exit the agent refuses rather than guessing, because the
+# key plane (Enter, Escape, C-c) cannot move a selection. Prints `not-needed`
+# or `confirmed=<sends>`; the agent-state proof stays with the caller.
+settle_exit_confirm() {
+  local key pane verdict state sent=0 elapsed=0
+  key=$(fm_control_exit_confirm_key "$HARNESS") || key=
+  [ -n "$key" ] || { printf 'not-needed'; return 0; }
+  while :; do
+    state=$(agent_state)
+    [ "$state" = alive ] || break
+    pane=$(fm_backend_capture "$BACKEND" "$T" 40 "$LABEL" 2>/dev/null) || pane=
+    verdict=$(fm_control_exit_confirm_dialog "$HARNESS" "$pane")
+    case "$verdict" in
+      confirm)
+        [ "$sent" -lt "$EXIT_RETRIES" ] || break
+        fm_control_backend_supports_key "$BACKEND" "$key" \
+          || die "exit-delivered $ID exit-command=delivered exit=unconfirmed; the $HARNESS agent is holding its exit-confirmation dialog, which $key confirms, but the $BACKEND backend cannot deliver that key"
+        fm_backend_send_key "$BACKEND" "$T" "$key" "$LABEL" \
+          || die "exit-delivered $ID exit-command=delivered exit=unconfirmed; the $HARNESS agent is holding its exit-confirmation dialog and $key was not delivered to it on $BACKEND"
+        sent=$((sent + 1))
+        # Give the confirmed exit a beat before re-reading, so a dialog still
+        # painted while the agent shuts down is not answered a second time.
+        sleep 1
+        ;;
+      refuse=*)
+        die "exit-delivered $ID exit-command=delivered exit=unconfirmed; the $HARNESS agent is holding its exit-confirmation dialog with the selection on '${verdict#refuse=}', which would not exit it, and the key plane (Enter, Escape, C-c) cannot move that selection, so the dialog was left as found (.agents/skills/harness-adapters/references/harness/claude.md, Exit)"
+        ;;
+    esac
+    awk -v e="$elapsed" -v t="$EXIT_CONFIRM_WAIT" 'BEGIN{exit !(e < t)}' || break
+    sleep "$POLL"
+    elapsed=$(awk -v e="$elapsed" -v p="$POLL" 'BEGIN{printf "%.3f", e + p}')
+  done
+  if [ "$sent" -gt 0 ]; then
+    printf 'confirmed=%s' "$sent"
+  else
+    printf 'not-needed'
+  fi
+}
+
 # do_exit: stop the running agent, preserving endpoint and worktree. Prints
 # `already-stopped` or `stopped`.
 do_exit() {
-  local state cmd verdict cancel interrupt_result=not-needed
+  local state cmd verdict cancel confirm interrupt_result=not-needed
   require_state_verified_backend exit
   state=$(agent_state)
   case "$state" in
@@ -487,8 +545,9 @@ do_exit() {
     || die "the exit command could not be sent to task $ID on $BACKEND"
   [ "$verdict" != send-failed ] \
     || die "the exit command could not be sent to task $ID on $BACKEND"
+  confirm=$(settle_exit_confirm) || return $?
   state=$(wait_agent_state "$EXIT_WAIT" dead) || {
-    die "exit-delivered $ID interrupt=$interrupt_result exit-command=delivered agent-state=$state exit=unconfirmed; the agent did not stop within ${EXIT_WAIT}s"
+    die "exit-delivered $ID interrupt=$interrupt_result exit-command=delivered exit-confirm=$confirm agent-state=$state exit=unconfirmed; the agent did not stop within ${EXIT_WAIT}s"
   }
   # The incarnation is over: retire its busy wiring so no stale record or
   # orphaned generation survives the agent that produced it.

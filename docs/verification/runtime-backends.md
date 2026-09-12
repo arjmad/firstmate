@@ -304,6 +304,50 @@ This change does not address that warning and does not claim to.
 That automated spawn case runs against a fake claude, so it asserts the store entry and the launch command and nothing more; the live arms above are what establish that the entry actually suppresses the dialog.
 The composer-classification record below observes the same gate from the other side, where an untrusted worktree left Claude, Grok, and Muse unverified because the guard reads a first-launch trust dialog as an unreadable composer.
 
+## Claude exit confirmation
+
+Verified 2026-09-12 on Claude Code 2.1.269, tmux 3.6a, macOS arm64.
+When `/exit` is submitted while a background shell is live, Claude Code renders a confirmation dialog in place of the composer instead of stopping, and `bin/fm-control.sh exit` confirms that dialog's exit default through the backend key path (`bin/fm-control-lib.sh`'s exit-confirm table owns the recognition).
+The rendering was first captured by hand, after asking the agent to run `sleep 900` as a background shell:
+
+```sh
+tmux send-keys -t fm-claude-exit-confirm -l "/exit"; sleep 1.2
+tmux send-keys -t fm-claude-exit-confirm Enter; sleep 2
+tmux capture-pane -p -t fm-claude-exit-confirm | tail -11
+```
+
+```text
+   Background work is running
+   The following will stop when you exit:
+
+   shell · sleep 900
+
+   ❯ 1. Exit and stop tasks
+     2. Move to background and exit
+     3. Stay
+
+   Enter to confirm · Esc to cancel
+```
+
+Each key on firstmate's plane was then sent to that dialog: Escape returned to the composer with the footer still reading `1 shell`, C-c left the dialog exactly as rendered, and Enter ended the session (`#{pane_current_command}` read `zsh`, and no `sleep 900` process remained).
+The same pane also showed why tmux had masked the defect: `fm_tmux_composer_state` reads the dialog's `❯ 1. Exit and stop tasks` row as `pending`, so the submit path's Enter retry confirmed it by accident, while Herdr's submit path returns on its native status without that retry and left the dialog standing.
+
+The live guard drives the real harness and the real control plane end to end and is the refresh command after a Claude Code upgrade:
+
+```sh
+FM_CLAUDE_EXIT_CONFIRM_LIVE=1 tests/fm-claude-exit-confirm-live-e2e.test.sh
+```
+
+Observed output:
+
+```text
+ok - Claude Code 2.1.269: the exit-confirmation dialog renders with its selection on an exit-confirming option
+ok - Claude Code 2.1.269: Escape cancels the exit dialog and keeps the background shell
+ok - Claude Code 2.1.269: fm-control exit confirms the background-work dialog and the agent stops
+```
+
+`tests/fm-control.test.sh` pins the control plane's logic against that captured rendering through the fake pane: the confirming Enter is sent exactly when the dialog is on screen with an exit-confirming selection, a `Stay` selection is refused and named, the confirmation is retried a bounded number of times, and no other harness reads the dialog.
+
 ## Composer classification matrix
 
 The shared composer classifier (`bin/fm-composer-lib.sh`, `fm_composer_classify_screen`) owns every composer shape fleet-wide; each backend contributes only a capture and a capability descriptor.
