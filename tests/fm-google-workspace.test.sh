@@ -3,15 +3,16 @@
 #
 # The property under test throughout is the account boundary. Nearly every tool the
 # server exposes takes the target mailbox as an ordinary call argument, so a shared
-# instance would leave the separation between Arjun's accounts - and between his and
-# the Nova-only ones - to a string a model emits. The chosen architecture moves that
-# boundary into the filesystem: one instance per account, each pointed at its own
+# instance would leave the separation between the captain's accounts - and between
+# those and another agent's - to a string a model emits. The chosen architecture moves
+# that boundary into the filesystem: one instance per account, each pointed at its own
 # credentials directory. These cases assert the boundary holds where it is decided:
-# in the account table, in the generated runtime configuration, and in the deletion
-# path, which must never widen from one account's own files.
+# in the configured account table, in the generated runtime configuration, and in the
+# deletion path, which must never widen from one account's own files.
 #
-# Every case runs against its own root and a stubbed Claude Code CLI, so nothing here
-# reads or writes real credentials, real Claude Code configuration, or Bitwarden.
+# Every case runs against its own root, its own firstmate home holding a placeholder
+# config/google-workspace, and a stubbed Claude Code CLI, so nothing here reads or
+# writes real credentials, real Claude Code configuration, or Bitwarden.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -19,10 +20,38 @@ set -u
 
 GWS="$ROOT/bin/fm-google-workspace.sh"
 TMP_ROOT=$(fm_test_tmproot fm-google-workspace)
+FM_TEST_HOME="$TMP_ROOT/home-fm"
+CONFIG_FILE="$FM_TEST_HOME/config/google-workspace"
 
-# Sapna's accounts are Nova-only. They appear here exactly once, as the thing every
-# account-taking subcommand must refuse.
-NOVA_ACCOUNT=sapnasitapara3@gmail.com
+# The placeholder account table: two accounts on domains the wizard case declares
+# consumer ones and one Workspace-shaped account, so the admin note has something to
+# fire on and something to leave out.
+PERSONAL_ACCOUNT=alpha@example.com
+WORKSPACE_ACCOUNT=ops@example-corp.com
+THIRD_ACCOUNT=bravo@example.org
+
+# An account that belongs to another agent is simply absent from the table. It appears
+# here exactly once, as the thing every account-taking subcommand must refuse.
+OTHER_AGENT_ACCOUNT=other-agent@example.net
+
+# write_config [<body>] writes the home's config file; the default body is the three
+# placeholder accounts plus placeholder Bitwarden coordinates.
+write_config() {
+  mkdir -p "$FM_TEST_HOME/config"
+  if [ "$#" -ge 1 ]; then
+    printf '%s\n' "$1" > "$CONFIG_FILE"
+    return 0
+  fi
+  cat > "$CONFIG_FILE" <<EOF
+# placeholder fixture
+account alpha $PERSONAL_ACCOUNT
+account ops   $WORKSPACE_ACCOUNT
+
+account bravo $THIRD_ACCOUNT
+bws_project_id 00000000-0000-4000-8000-000000000000
+bws_secret_key google-oauth/desktop-client-fixture
+EOF
+}
 
 # new_root <name> echoes a fresh, initialized workspace root.
 new_root() {
@@ -31,11 +60,12 @@ new_root() {
   printf '%s\n' "$root"
 }
 
-# gws <root> <args...> runs the tool against an isolated root, a stubbed Claude Code
-# CLI, and a HOME with no Bitwarden token, so no case can reach real state.
+# gws <root> <args...> runs the tool against an isolated root, the test's own firstmate
+# home, a stubbed Claude Code CLI, and a HOME with no Bitwarden token, so no case can
+# reach real state.
 gws() {
   local root=$1; shift
-  FM_GWS_ROOT="$root" FM_GWS_CLAUDE="$TMP_ROOT/stub/claude" HOME="$TMP_ROOT/home" "$GWS" "$@"
+  FM_HOME="$FM_TEST_HOME" FM_GWS_ROOT="$root" FM_GWS_CLAUDE="$TMP_ROOT/stub/claude" HOME="$TMP_ROOT/home" "$GWS" "$@"
 }
 
 # stub_claude records every invocation so a case can assert what was registered.
@@ -67,34 +97,73 @@ desktop_client_json() {
 JSON
 }
 
-test_only_the_three_authorized_accounts_are_listed() {
+test_only_the_configured_accounts_are_listed() {
   local root out
   root=$(new_root accounts)
   out=$(gws "$root" accounts)
-  assert_contains "$out" arjmad@gmail.com "the personal account is listed"
-  assert_contains "$out" arjun@ecomills.com "the Ecomills account is listed"
-  assert_contains "$out" williamkempf@gmail.com "the Kempf account is listed"
-  assert_not_contains "$out" "$NOVA_ACCOUNT" "a Nova-only account must never be listed"
-  expect_code 3 "$(gws "$root" accounts | wc -l | tr -d ' ')" "exactly three accounts are configured"
-  pass "only the three authorized accounts are listed"
+  assert_contains "$out" "$PERSONAL_ACCOUNT" "the first configured account is listed"
+  assert_contains "$out" "$WORKSPACE_ACCOUNT" "the Workspace-shaped account is listed"
+  assert_contains "$out" "$THIRD_ACCOUNT" "the third configured account is listed"
+  assert_not_contains "$out" "$OTHER_AGENT_ACCOUNT" "an account absent from the config must never be listed"
+  expect_code 3 "$(gws "$root" accounts | wc -l | tr -d ' ')" "exactly the three configured accounts are listed"
+  pass "only the configured accounts are listed"
 }
 
 test_an_unlisted_account_is_refused_by_every_subcommand() {
   local root out code verb
   root=$(new_root refuse)
   for verb in paths auth verify revoke; do
-    out=$(gws "$root" "$verb" "$NOVA_ACCOUNT" 2>&1) && code=0 || code=$?
-    assert_contains "$out" "unknown account" "$verb refuses a Nova-only account"
-    expect_code 1 "$code" "$verb exits non-zero for a Nova-only account"
+    out=$(gws "$root" "$verb" "$OTHER_AGENT_ACCOUNT" 2>&1) && code=0 || code=$?
+    assert_contains "$out" "unknown account" "$verb refuses an account absent from the config"
+    expect_code 1 "$code" "$verb exits non-zero for an account absent from the config"
   done
   pass "an unlisted account is refused by every account-taking subcommand"
+}
+
+# The config file is the enforcement point, so there must be no built-in table to fall
+# back to: without an acceptable file, every subcommand refuses and names the file and
+# the accepted format, and help is the only thing that still answers.
+test_a_missing_or_malformed_config_refuses_every_subcommand() {
+  local root out code verb
+  root=$(new_root config)
+  rm -f "$CONFIG_FILE"
+  for verb in accounts init status claude-config hermes-config argv; do
+    out=$(gws "$root" "$verb" 2>&1) && code=0 || code=$?
+    expect_code 1 "$code" "$verb refuses without a config file"
+    assert_contains "$out" "$CONFIG_FILE" "the $verb refusal names the config file"
+    assert_contains "$out" "account <slug> <email>" "the $verb refusal states the accepted format"
+  done
+  assert_absent "$root/accounts" "a refused init created nothing"
+  out=$(gws "$root" help 2>&1) || fail "help must still answer without a config file"
+  assert_contains "$out" "Usage" "help answers without a config file"
+  write_config "$(printf 'account alpha %s\nnot-a-setting here\n' "$PERSONAL_ACCOUNT")"
+  out=$(gws "$root" accounts 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a malformed line refuses the command"
+  assert_contains "$out" "line 2" "the refusal names the malformed line"
+  write_config "$(printf 'account alpha %s\naccount alpha %s\n' "$PERSONAL_ACCOUNT" "$THIRD_ACCOUNT")"
+  out=$(gws "$root" accounts 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a duplicate slug refuses the command"
+  assert_contains "$out" "duplicate slug 'alpha'" "the refusal names the duplicate slug"
+  write_config "$(printf 'account alpha not-an-address\n')"
+  out=$(gws "$root" accounts 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "an implausible email refuses the command"
+  assert_contains "$out" "not a plausible email" "the refusal names the implausible email"
+  write_config "$(printf 'account alpha %s\naccount alpha-2 %s\n' "$PERSONAL_ACCOUNT" "$PERSONAL_ACCOUNT")"
+  out=$(gws "$root" accounts 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a duplicate email refuses the command"
+  write_config "$(printf 'account alpha %s\n' "$PERSONAL_ACCOUNT")"
+  out=$(gws "$root" client-secret push-bws 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "push-bws refuses without Bitwarden coordinates"
+  assert_contains "$out" "bws_project_id" "the refusal names the missing Bitwarden setting"
+  write_config
+  pass "a missing or malformed config refuses every subcommand rather than falling back"
 }
 
 test_credentials_directories_are_private_to_the_user() {
   local root slug mode
   root=$(new_root init)
   gws "$root" init >/dev/null
-  for slug in arjmad ecomills kempf; do
+  for slug in alpha ops bravo; do
     assert_present "$root/accounts/$slug" "$slug has a credentials directory"
     mode=$(python3 -c 'import os, stat, sys; print(format(stat.S_IMODE(os.stat(sys.argv[1]).st_mode), "04o"))' "$root/accounts/$slug")
     [ "$mode" = 0700 ] || fail "$slug credentials directory is $mode, expected 0700"
@@ -121,7 +190,7 @@ test_each_runtime_server_gets_its_own_credentials_directory() {
   local root config slug
   root=$(new_root perruntime)
   config=$(gws "$root" claude-config)
-  for slug in arjmad ecomills kempf; do
+  for slug in alpha ops bravo; do
     assert_contains "$config" "\"gws-$slug\"" "Claude Code gets a separate server for $slug"
     assert_contains "$config" "$root/accounts/$slug" "$slug points at its own credentials directory"
   done
@@ -135,7 +204,7 @@ test_the_two_runtimes_are_configured_from_one_invocation() {
   local root argv claude hermes
   root=$(new_root oneowner)
   argv=$(gws "$root" argv | tail -n +2 | tr '\n' ' ')
-  claude=$(gws "$root" claude-config | python3 -c 'import json, sys; print(" ".join(json.load(sys.stdin)["mcpServers"]["gws-arjmad"]["args"]) + " ")')
+  claude=$(gws "$root" claude-config | python3 -c 'import json, sys; print(" ".join(json.load(sys.stdin)["mcpServers"]["gws-alpha"]["args"]) + " ")')
   hermes=$(gws "$root" hermes-config)
   [ "$argv" = "$claude" ] || fail "Claude Code args drifted from the tool's own invocation: '$claude' vs '$argv'"
   assert_contains "$hermes" "gmail:full" "the Hermes block carries the same permissions"
@@ -147,13 +216,13 @@ test_status_names_the_account_that_actually_signed_in() {
   local root out
   root=$(new_root status)
   gws "$root" init >/dev/null
-  store_credential "$root/accounts/arjmad" arjmad@gmail.com
-  store_credential "$root/accounts/ecomills" "$NOVA_ACCOUNT"
+  store_credential "$root/accounts/alpha" "$PERSONAL_ACCOUNT"
+  store_credential "$root/accounts/ops" "$OTHER_AGENT_ACCOUNT"
   out=$(gws "$root" status)
-  assert_contains "$out" "arjmad@gmail.com         authorized" "a matching credential reads as authorized"
+  assert_contains "$out" "$PERSONAL_ACCOUNT        authorized" "a matching credential reads as authorized"
   assert_contains "$out" "not authorized yet" "an empty directory reads as not authorized"
   assert_contains "$out" "WRONG ACCOUNT" "a credential for another account is reported, not ignored"
-  assert_contains "$out" "$NOVA_ACCOUNT" "the wrong account is named so it can be removed"
+  assert_contains "$out" "$OTHER_AGENT_ACCOUNT" "the wrong account is named so it can be removed"
   pass "status names the account that actually signed in"
 }
 
@@ -162,11 +231,11 @@ test_reauthorizing_never_clears_another_accounts_credential() {
   root=$(new_root reauth)
   gws "$root" init >/dev/null
   desktop_client_json "$root/client_secret.json"
-  store_credential "$root/accounts/kempf" "$NOVA_ACCOUNT"
-  out=$(gws "$root" auth kempf 2>&1) && code=0 || code=$?
+  store_credential "$root/accounts/bravo" "$OTHER_AGENT_ACCOUNT"
+  out=$(gws "$root" auth bravo 2>&1) && code=0 || code=$?
   expect_code 1 "$code" "auth refuses a directory holding another account"
   assert_contains "$out" "already holds credentials" "auth explains why it refused"
-  assert_present "$root/accounts/kempf/sapnasitapara3@gmail.com.json" "auth removed nothing"
+  assert_present "$root/accounts/bravo/$OTHER_AGENT_ACCOUNT.json" "auth removed nothing"
   pass "re-authorizing refuses rather than clearing another account's credential"
 }
 
@@ -174,11 +243,11 @@ test_revoke_without_confirmation_deletes_nothing() {
   local root out code
   root=$(new_root revoke_unconfirmed)
   gws "$root" init >/dev/null
-  store_credential "$root/accounts/arjmad" arjmad@gmail.com
-  out=$(gws "$root" revoke arjmad 2>&1) && code=0 || code=$?
+  store_credential "$root/accounts/alpha" "$PERSONAL_ACCOUNT"
+  out=$(gws "$root" revoke alpha 2>&1) && code=0 || code=$?
   expect_code 1 "$code" "an unconfirmed revoke exits non-zero"
   assert_contains "$out" "Re-run with --yes" "an unconfirmed revoke says how to confirm"
-  assert_present "$root/accounts/arjmad/arjmad@gmail.com.json" "an unconfirmed revoke deletes nothing"
+  assert_present "$root/accounts/alpha/$PERSONAL_ACCOUNT.json" "an unconfirmed revoke deletes nothing"
   pass "revoke without confirmation deletes nothing"
 }
 
@@ -186,14 +255,14 @@ test_revoke_deletes_only_that_accounts_own_credentials() {
   local root out
   root=$(new_root revoke_scope)
   gws "$root" init >/dev/null
-  store_credential "$root/accounts/arjmad" arjmad@gmail.com
-  store_credential "$root/accounts/ecomills" arjun@ecomills.com
-  printf '{}' > "$root/accounts/arjmad/oauth_states.json"
+  store_credential "$root/accounts/alpha" "$PERSONAL_ACCOUNT"
+  store_credential "$root/accounts/ops" "$WORKSPACE_ACCOUNT"
+  printf '{}' > "$root/accounts/alpha/oauth_states.json"
   printf 'unrelated' > "$root/client_secret.json"
-  out=$(gws "$root" revoke arjmad --yes)
-  assert_absent "$root/accounts/arjmad/arjmad@gmail.com.json" "the account's credential is deleted"
-  assert_present "$root/accounts/arjmad/oauth_states.json" "the server's own bookkeeping file survives"
-  assert_present "$root/accounts/ecomills/arjun@ecomills.com.json" "another account is untouched"
+  out=$(gws "$root" revoke alpha --yes)
+  assert_absent "$root/accounts/alpha/$PERSONAL_ACCOUNT.json" "the account's credential is deleted"
+  assert_present "$root/accounts/alpha/oauth_states.json" "the server's own bookkeeping file survives"
+  assert_present "$root/accounts/ops/$WORKSPACE_ACCOUNT.json" "another account is untouched"
   assert_present "$root/client_secret.json" "nothing above the account directory is touched"
   assert_contains "$out" "myaccount.google.com/connections" "revoke says where the grant itself is ended"
   pass "revoke deletes only that account's own credentials"
@@ -207,8 +276,8 @@ test_registering_with_claude_code_keeps_the_accounts_apart() {
   : > "$log"
   CLAUDE_STUB_LOG="$log" gws "$root" claude-install >/dev/null || fail "claude-install failed"
   first=$(cat "$log")
-  assert_contains "$first" "mcp add -s user gws-arjmad" "each account is registered as its own server"
-  assert_contains "$first" "WORKSPACE_MCP_CREDENTIALS_DIR=$root/accounts/ecomills" "each server carries its own directory"
+  assert_contains "$first" "mcp add -s user gws-alpha" "each account is registered as its own server"
+  assert_contains "$first" "WORKSPACE_MCP_CREDENTIALS_DIR=$root/accounts/ops" "each server carries its own directory"
   assert_contains "$first" "GOOGLE_CLIENT_SECRET_PATH=$root/client_secret.json" "the shared OAuth client is passed by path, not by value"
   assert_contains "$first" "-- uvx workspace-mcp --single-user --permissions" "the registered command is the tool's own invocation"
   : > "$log"
@@ -245,7 +314,7 @@ test_only_a_desktop_oauth_client_is_installed_and_kept_private() {
 test_the_consent_driver_refuses_without_a_server_invocation() {
     local out code
     out=$(python3 "$ROOT/bin/fm-google-workspace-auth.py" \
-      --mode auth --email arjmad@gmail.com --credentials-dir "$TMP_ROOT" 2>&1) && code=0 || code=$?
+      --mode auth --email "$PERSONAL_ACCOUNT" --credentials-dir "$TMP_ROOT" 2>&1) && code=0 || code=$?
     expect_code 2 "$code" "the driver refuses with no invocation to run"
     assert_contains "$out" "required after --" "the refusal names the missing invocation"
     pass "the consent driver refuses without a server invocation"
@@ -254,7 +323,7 @@ test_the_consent_driver_refuses_without_a_server_invocation() {
 test_the_consent_driver_refuses_without_an_oauth_client() {
     local out code
     out=$(GOOGLE_CLIENT_SECRET_PATH="$TMP_ROOT/absent.json" python3 "$ROOT/bin/fm-google-workspace-auth.py" \
-      --mode auth --email arjmad@gmail.com --credentials-dir "$TMP_ROOT" -- uvx workspace-mcp 2>&1) && code=0 || code=$?
+      --mode auth --email "$PERSONAL_ACCOUNT" --credentials-dir "$TMP_ROOT" -- uvx workspace-mcp 2>&1) && code=0 || code=$?
     expect_code 1 "$code" "the driver refuses without a usable OAuth client"
     assert_contains "$out" "GOOGLE_CLIENT_SECRET_PATH" "the refusal names the missing input"
     pass "the consent driver refuses without an OAuth client"
@@ -264,7 +333,7 @@ test_auth_refuses_before_an_oauth_client_exists() {
   local root out code
   root=$(new_root noclient)
   gws "$root" init >/dev/null
-  out=$(gws "$root" auth arjmad 2>&1) && code=0 || code=$?
+  out=$(gws "$root" auth alpha 2>&1) && code=0 || code=$?
   expect_code 1 "$code" "auth refuses without an OAuth client"
   assert_contains "$out" "no OAuth client secret" "the refusal names the missing requirement"
   pass "auth refuses before an OAuth client exists"
@@ -274,11 +343,20 @@ test_auth_refuses_before_an_oauth_client_exists() {
 # all, which is the shape a captain produces by stopping partway: it must still reach
 # the end, name every step left undone, and never quietly report success it did not
 # achieve. It also proves the wizard opens no browser and touches no real Claude Code
-# configuration, since both are stubbed and asserted through their own logs.
+# configuration, since both are stubbed and asserted through their own logs. The
+# admin note fires for the one Workspace-shaped account and names it, and the wizard
+# refuses up front, with the tool's own message, when the config is absent.
 test_the_wizard_completes_and_reports_what_is_left_undone() {
-  local root out log opener
+  local root out log opener code admin_note
   root=$(new_root wizard)
   stub_claude
+  rm -f "$CONFIG_FILE"
+  out=$(FM_HOME="$FM_TEST_HOME" FM_GWS_ROOT="$root" HOME="$TMP_ROOT/home" \
+    bash "$ROOT/bin/fm-google-workspace-wizard.sh" </dev/null 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "the wizard refuses without a config file"
+  assert_contains "$out" "$CONFIG_FILE" "the wizard's refusal names the config file"
+  assert_not_contains "$out" "Stage 1" "the wizard refuses before its first stage"
+  write_config
   # The wizard hands a URL to the first browser opener its host offers, so every
   # opener it can choose is stubbed and the console URL lands in the log on any host.
   mkdir -p "$TMP_ROOT/stub"
@@ -293,21 +371,30 @@ SH
   : > "$log"
   : > "$TMP_ROOT/wizard-claude.log"
   out=$(PATH="$TMP_ROOT/stub:$PATH" OPEN_STUB_LOG="$log" CLAUDE_STUB_LOG="$TMP_ROOT/wizard-claude.log" \
-    FM_GWS_ROOT="$root" FM_GWS_CLAUDE="$TMP_ROOT/stub/claude" HOME="$TMP_ROOT/home" \
+    FM_HOME="$FM_TEST_HOME" FM_GWS_ROOT="$root" FM_GWS_CLAUDE="$TMP_ROOT/stub/claude" HOME="$TMP_ROOT/home" \
+    FM_GWS_CONSUMER_DOMAINS="example.com example.org" \
     bash "$ROOT/bin/fm-google-workspace-wizard.sh" </dev/null 2>&1) || fail "the wizard did not finish"
   assert_contains "$out" "Setup complete" "the wizard reaches its closing summary"
   assert_contains "$out" "still to do by hand" "an abandoned run reports the work left undone"
   assert_contains "$out" "was not authorized" "an account that did not sign in is reported as such"
   assert_contains "$out" "cade/config/config.yaml" "the wizard hands the Cade wiring over rather than editing it"
-  assert_not_contains "$out" "$NOVA_ACCOUNT" "the wizard never mentions a Nova-only account"
+  assert_not_contains "$out" "$OTHER_AGENT_ACCOUNT" "the wizard never mentions an account absent from the config"
+  assert_contains "$out" "Authorize $PERSONAL_ACCOUNT" "the wizard authorizes each configured account"
+  assert_contains "$out" "Authorize $THIRD_ACCOUNT" "the wizard authorizes each configured account"
+  admin_note=$(printf '%s\n' "$out" | sed -n '/can be blocked/,/Understood?/p')
+  assert_contains "$admin_note" "$WORKSPACE_ACCOUNT" "the admin note names the Workspace-domain account"
+  assert_not_contains "$admin_note" "$PERSONAL_ACCOUNT" "the admin note does not name a consumer-domain account"
+  assert_not_contains "$admin_note" "$THIRD_ACCOUNT" "the admin note does not name a consumer-domain account"
   assert_grep "console.cloud.google.com" "$log" "the wizard opened the console for the captain"
-  assert_grep "mcp add -s user gws-arjmad" "$TMP_ROOT/wizard-claude.log" "the wizard registered the accounts it configured"
+  assert_grep "mcp add -s user gws-alpha" "$TMP_ROOT/wizard-claude.log" "the wizard registered the accounts it configured"
   pass "the wizard completes and reports what is left undone"
 }
 
 stub_claude
-test_only_the_three_authorized_accounts_are_listed
+write_config
+test_only_the_configured_accounts_are_listed
 test_an_unlisted_account_is_refused_by_every_subcommand
+test_a_missing_or_malformed_config_refuses_every_subcommand
 test_credentials_directories_are_private_to_the_user
 test_the_invocation_requests_send_capable_scopes_per_service
 test_each_runtime_server_gets_its_own_credentials_directory

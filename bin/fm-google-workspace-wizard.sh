@@ -193,10 +193,40 @@ finish() {
 # This wizard never displays a token, a refresh token, or a client secret, and it
 # never deletes or replaces a stored credential.
 
-TOTAL_STAGES=11
-
 FM="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-google-workspace.sh"
 [[ -x "$FM" ]] || { printf 'error: %s is missing\n' "$FM" >&2; exit 1; }
+
+# The account table comes from the home's config/google-workspace file, which
+# fm-google-workspace.sh owns and validates; its refusal is repeated here verbatim so
+# the wizard stops before its first stage rather than partway through.
+ACCOUNT_ROWS="$("$FM" accounts)" || exit 1
+ACCOUNT_EMAILS=()
+while IFS=$'\t' read -r _slug email _dir; do
+  [[ -n "$email" ]] && ACCOUNT_EMAILS+=("$email")
+done <<<"$ACCOUNT_ROWS"
+ACCOUNT_COUNT=${#ACCOUNT_EMAILS[@]}
+(( ACCOUNT_COUNT > 0 )) || { printf 'error: no account rows in the Google Workspace config; nothing to authorize\n' >&2; exit 1; }
+
+# is_workspace_account says whether an email's domain is a Google Workspace domain
+# rather than a consumer one, which is what decides whether a domain admin can block
+# the sign-in. FM_GWS_CONSUMER_DOMAINS overrides the space-separated consumer list,
+# which the tests use with placeholder domains.
+CONSUMER_DOMAINS="${FM_GWS_CONSUMER_DOMAINS:-gmail.com googlemail.com}"
+is_workspace_account() {
+  local domain="${1##*@}" consumer
+  for consumer in $CONSUMER_DOMAINS; do
+    [[ "$domain" == "$consumer" ]] && return 1
+  done
+  return 0
+}
+WORKSPACE_EMAILS=()
+for email in "${ACCOUNT_EMAILS[@]}"; do
+  is_workspace_account "$email" && WORKSPACE_EMAILS+=("$email")
+done
+
+# Five Cloud and Bitwarden stages, one admin note when any Workspace account is
+# configured, one sign-in per account, then the two wiring stages.
+TOTAL_STAGES=$(( 5 + (${#WORKSPACE_EMAILS[@]} > 0 ? 1 : 0) + ACCOUNT_COUNT + 2 ))
 
 "$FM" init >/dev/null || { printf 'error: cannot prepare the credentials directories\n' >&2; exit 1; }
 GWS_ROOT="$("$FM" paths | awk -F': +' '$1 == "root" { print $2 }')"
@@ -210,9 +240,9 @@ fail() { printf '  %s✗ %s%s\n' "$RED" "$1" "$RESET"; SKIPPED+=("$1"); }
 # The account that actually signed in is reported back, so a wrong-account sign-in
 # is caught here rather than at first use.
 authorize_account() {
-  local account="$1" label="$2"
+  local account="$1"
   stage "Authorize $account"
-  say "One sign-in for $label. Each account gets its own private credential store,"
+  say "One sign-in for $account. Each account gets its own private credential store,"
   say "so this must be repeated once per account - there is no shared login."
   note "credentials: $("$FM" paths "$account" | awk -F': +' '$1 == "credentials dir" { print $2 }')"
   printf '\n'
@@ -234,14 +264,14 @@ authorize_account() {
   pause "Continue?"
 }
 
-banner "Google Workspace access for Arjun's three accounts"
+banner "Google Workspace access for $ACCOUNT_COUNT configured account(s)"
 
 # ── 1 ─────────────────────────────────────────────────────────────────────
 stage "Google Cloud: the project"
-say "All three accounts share one Cloud project and one OAuth client."
+say "All configured accounts share one Cloud project and one OAuth client."
 say "Reuse an existing project or make a new one - either is fine."
 open_url "https://console.cloud.google.com/projectcreate"
-step "Create a project (a name like 'arjun-workspace-agents' is plenty), or pick an existing one."
+step "Create a project (a name like 'workspace-agents' is plenty), or pick an existing one."
 step "Copy its Project ID - the lowercase id, not the display name."
 ask GCP_PROJECT_ID "Paste the project ID:"
 if [[ -n "$GCP_PROJECT_ID" ]]; then
@@ -269,16 +299,16 @@ stage "Google Cloud: the consent screen"
 say "This is what you will see when signing in, and it decides how long logins last."
 open_url "https://console.cloud.google.com/auth/overview?project=${GCP_PROJECT_ID}"
 step "If asked to configure the consent screen, do it now."
-step "User type: External. Internal is impossible here - two of these accounts are personal."
-step "App name: anything you will recognise, e.g. 'Arjun agents'. Support email: your own."
+step "User type: External. Internal only works when every account is in one Workspace domain."
+step "App name: anything you will recognise, e.g. 'Workspace agents'. Support email: your own."
 step "Publishing status: Publish app, so it is In production, NOT Testing."
-warn "Left in Testing, every login expires after 7 days and all three accounts must be redone weekly."
+warn "Left in Testing, every login expires after 7 days and every account must be redone weekly."
 note "Google does not require verification for personal use; the unverified warning screen is the whole cost."
 pause "Consent screen configured and published?"
 
 # ── 4 ─────────────────────────────────────────────────────────────────────
 stage "Google Cloud: the Desktop OAuth client"
-say "One Desktop client serves all three accounts. Desktop is required:"
+say "One Desktop client serves every configured account. Desktop is required:"
 say "it is the type that allows the local loopback sign-in these tools use."
 open_url "https://console.cloud.google.com/auth/clients/create?project=${GCP_PROJECT_ID}"
 step "Application type: Desktop app. Name it anything."
@@ -328,26 +358,29 @@ fi
 unset BWS_TOKEN_INPUT
 pause "Continue?"
 
-# ── 6 ─────────────────────────────────────────────────────────────────────
-stage "ecomills.com: the one account that can be blocked"
-say "arjun@ecomills.com is a Workspace account, so its domain admin can restrict"
-say "third-party apps. The other two are personal accounts and cannot be blocked this way."
-printf '\n'
-say "You do not need to do anything yet. If the ecomills sign-in later refuses outright -"
-say "blocked rather than warning about an unverified app - that restriction is the cause."
-note "The fix is in the Workspace Admin console, as an admin of ecomills.com:"
-note "  Security > Access and data control > API controls > Trusted by OAuth client ID,"
-note "  then trust the client ID from stage 4."
-pause "Understood?"
+# ── Workspace admin note, only when a configured account is on a Workspace domain ──
+if (( ${#WORKSPACE_EMAILS[@]} > 0 )); then
+  stage "Workspace accounts: the ones that can be blocked"
+  say "These accounts are on Google Workspace domains, so a domain admin can restrict"
+  say "third-party apps. Personal accounts cannot be blocked this way."
+  for email in "${WORKSPACE_EMAILS[@]}"; do note "  $email"; done
+  printf '\n'
+  say "You do not need to do anything yet. If such a sign-in later refuses outright -"
+  say "blocked rather than warning about an unverified app - that restriction is the cause."
+  note "The fix is in the Workspace Admin console, as an admin of that domain:"
+  note "  Security > Access and data control > API controls > Trusted by OAuth client ID,"
+  note "  then trust the client ID from stage 4."
+  pause "Understood?"
+fi
 
-# ── 7, 8, 9 ───────────────────────────────────────────────────────────────
-authorize_account arjmad@gmail.com "your personal account"
-authorize_account arjun@ecomills.com "your Ecomills work account"
-authorize_account williamkempf@gmail.com "the Kempf account"
+# ── one sign-in per configured account ───────────────────────────────────
+for email in "${ACCOUNT_EMAILS[@]}"; do
+  authorize_account "$email"
+done
 
-# ── 10 ────────────────────────────────────────────────────────────────────
+# ── Claude Code ──────────────────────────────────────────────────────────
 stage "Wire it into Claude Code"
-say "Registers the three accounts so every Claude Code session on this machine can"
+say "Registers the configured accounts so every Claude Code session on this machine can"
 say "reach them, each through its own separate connection."
 printf '\n'
 if "$FM" claude-install; then
@@ -360,14 +393,14 @@ printf '\n'
 printf '\n'
 pause "Continue?"
 
-# ── 11 ────────────────────────────────────────────────────────────────────
-stage "Hand the same wiring to Cade"
-say "Cade's configuration lives in his own repository, so this wizard will not edit it."
+# ── Hermes ───────────────────────────────────────────────────────────────
+stage "Hand the same wiring to the Hermes agent"
+say "The Hermes agent's configuration lives in its own repository, so this wizard will not edit it."
 say "The block below is exactly what belongs under mcp_servers in cade/config/config.yaml."
 printf '\n'
 "$FM" hermes-config
 printf '\n'
-note "Cade shares these same three logins, so he needs no sign-in of his own."
+note "The Hermes agent shares these same logins, so it needs no sign-in of its own."
 SKIPPED+=("add the block above to cade/config/config.yaml, then run ./check.sh and ./deploy.sh --apply-config")
 pause "Noted?"
 
