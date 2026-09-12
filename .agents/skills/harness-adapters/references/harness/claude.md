@@ -7,7 +7,7 @@ Busy hooks verified 2026-07-28 on Claude Code 2.1.220.
 | Fact | Value |
 |---|---|
 | Busy | Owned hooks: `UserPromptSubmit` opens while `Stop`, `StopFailure`, and `SessionEnd` close; manual interrupt emits no hook, so control reports delivered keys and live endpoint only, publishes no idle event or cancellation claim, and usually leaves `claude-hook` busy. |
-| Exit | `/exit`. |
+| Exit | `/exit`; with a live background shell or agent, 2.1.269 answers it with a `Background work is running` dialog whose selection starts on `1. Exit and stop tasks`, where Enter confirms and stops the agent, Escape cancels back to the composer with the work still running, and C-c leaves the dialog untouched. `../../../../../bin/fm-control.sh exit` confirms that default itself through the key path; see "Exit confirmation" below. |
 | Interrupt | Single Escape. |
 | Skill | `/<skill>`, for example `/no-mistakes`. |
 | Model | `--model <model>`; discover through the interactive `/model` picker, with alias or full-name shape documented by `claude --help`. |
@@ -31,6 +31,30 @@ Firstmate cannot move a selection with Enter, Escape, and C-c alone, so it canno
 Inspect the pane to identify which dialog is on screen, and report it rather than answering it.
 A launch under `config/claude-permission-mode=auto` never meets the bypass confirmation, because it does not request bypass mode: on 2.1.269 `claude --permission-mode auto` reached the composer directly with the footer `⏵⏵ auto mode on (shift+tab to cycle)`, so a captain who refuses the bypass dialog selects `auto` there instead of accepting it.
 The workspace-trust dialog is unaffected by the permission mode and still needs the pre-registration above.
+
+## Exit confirmation
+
+Verified 2026-09-12 on Claude Code 2.1.269, in a throwaway tmux pane with a background `sleep` shell running.
+`/exit` then renders, in place of the composer:
+
+```text
+   Background work is running
+   The following will stop when you exit:
+
+   shell · sleep 900
+
+   ❯ 1. Exit and stop tasks
+     2. Move to background and exit
+     3. Stay
+
+   Enter to confirm · Esc to cancel
+```
+
+Enter on that default stops the agent and its background work, so the control plane finishes the exit itself: `../../../../../bin/fm-control.sh exit` reads the pane after the exit command and confirms the dialog through the backend's key path, and `../../../../../bin/fm-control-lib.sh`'s exit-confirm table is the one owner of the recognition and the key.
+Never confirm it through `fm-send`: a marked line becomes chat the agent reasons about, and a bare Enter from the data plane cannot be attributed to the dialog.
+
+If the dialog ever renders with its selection off an exit-confirming option, the control plane refuses and names the observed selection instead of sending Enter, because the key plane (Enter, Escape, C-c) cannot move a selection.
+Report that refusal as a Claude Code change to verify, in the same way as the trust dialog above, rather than retrying the exit or teardown; `../../../../../tests/fm-claude-exit-confirm-live-e2e.test.sh` is the guard that re-verifies the rendering after an upgrade.
 
 ## Composer ghost
 

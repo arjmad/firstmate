@@ -336,6 +336,7 @@ family_for_basename() {
       ;;
     fm-afk-pi-herdr-return-e2e.test.sh|\
     fm-bearings-board-lavish-live-e2e.test.sh|\
+    fm-claude-exit-confirm-live-e2e.test.sh|\
     fm-claude-stop-autoarm-live-e2e.test.sh|\
     fm-cmux-claude-composer-live-e2e.test.sh|\
     fm-composer-matrix-live-e2e.test.sh|\
@@ -678,6 +679,7 @@ tests/fm-calm-pi-extension.test.sh 256
 tests/fm-check-unregister.test.sh 481
 tests/fm-classify-corr-token.test.sh 38742
 tests/fm-classify-decision-key.test.sh 1167
+tests/fm-claude-exit-confirm-live-e2e.test.sh 21
 tests/fm-claude-stop-autoarm-live-e2e.test.sh 21
 tests/fm-claude-stop-autoarm.test.sh 60709
 tests/fm-cmux-claude-composer-live-e2e.test.sh 23
@@ -1482,6 +1484,9 @@ families_for_changed_path() {
       printf '%s\n' backend-dispatch
       printf '%s\n' session-bootstrap
       printf '%s\n' "__script__:fm-quota-choose.test.sh"
+      # The exit-confirmation dialog table reads vendor-rendered signal, so a
+      # change here re-selects its live guard (fm-claude-exit-confirm-live-e2e).
+      printf '%s\n' live-harness-optin
       ;;
     bin/fm-composer-lib.sh)
       # The shared shape catalogue is vendor-rendered signal; a change to it

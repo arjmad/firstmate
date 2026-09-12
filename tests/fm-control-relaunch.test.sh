@@ -72,7 +72,14 @@ case "${1:-}" in
       printf '%s\n' "$payload" >> "$D/literal"
       case "$payload" in
         /exit|/quit)
-          printf 'zsh' > "$D/command"
+          if [ -n "${FM_FAKE_EXIT_DIALOG:-}" ]; then
+            # The exit command only arms the dialog; the submitting Enter
+            # raises it and a further Enter on it stops the agent (the same
+            # model as tests/fm-control.test.sh's stub).
+            : > "$D/exit-typed"
+          else
+            printf 'zsh' > "$D/command"
+          fi
           [ -z "${FM_FAKE_EXIT_TRANSPORT_FAIL_AFTER_STOP:-}" ] || exit 1
           ;;
         *'encode launch-brief'*)
@@ -82,6 +89,15 @@ case "${1:-}" in
       esac
     else
       printf '%s\n' "$payload" >> "$D/keys"
+      if [ "$payload" = Enter ] && [ -e "$D/exit-typed" ]; then
+        rm -f "$D/exit-typed"
+        cp "$FM_FAKE_EXIT_DIALOG" "$D/pane"
+        : > "$D/dialog-up"
+      elif [ "$payload" = Enter ] && [ -e "$D/dialog-up" ]; then
+        printf '%s\n' "$payload" >> "$D/dialog-keys"
+        rm -f "$D/dialog-up" "$D/pane"
+        printf 'zsh' > "$D/command"
+      fi
       case "$payload" in
         'export GOTMPDIR='*)
           if [ -n "${FM_FAKE_TRACE_PREPARE:-}" ]; then
@@ -109,7 +125,9 @@ case "${1:-}" in
       esac
     done
     printf 'fakepane\n'; exit 0 ;;
-  capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
+  capture-pane)
+    if [ -f "$D/pane" ]; then cat "$D/pane"; else printf '╭────╮\n│    │\n╰────╯\n'; fi
+    exit 0 ;;
   list-windows) [ -f "$D/windows" ] && cat "$D/windows"; exit 0 ;;
 esac
 exit 0
@@ -185,6 +203,7 @@ run_control() {  # <case-dir> <args...>
     FM_FAKE_TRACE_RELEASE="${FM_FAKE_TRACE_RELEASE:-}" \
     FM_FAKE_META_WRITER_READY="${FM_FAKE_META_WRITER_READY:-}" \
     FM_FAKE_TRACE_EXPORTED="${FM_FAKE_TRACE_EXPORTED:-}" \
+    FM_FAKE_EXIT_DIALOG="${FM_FAKE_EXIT_DIALOG:-}" \
     "$CONTROL" "$@" 2>&1
 }
 
@@ -322,6 +341,36 @@ test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint() {
   assert_grep "/exit" "$dir/fake/literal" "the previous agent should have been exited"
   assert_grep "encode launch-brief" "$dir/fake/literal" "the replacement should have been launched"
   pass "fm-control relaunch: a same-harness relaunch replaces the agent in the same endpoint and worktree"
+}
+
+test_relaunch_finishes_through_claude_exit_dialog() {
+  # exit is relaunch's shared step: when the outgoing claude agent parks on
+  # its background-work confirmation dialog (Claude Code 2.1.269), the dialog's
+  # exit default is confirmed and the replacement still comes up.
+  local dir out rc
+  dir=$(new_case dialog rl9)
+  add_ship_task "$dir" rl9 claude
+  cat > "$dir/dialog.pane" <<'PANE'
+   Background work is running
+   The following will stop when you exit:
+
+   shell · sleep 900
+
+   ❯ 1. Exit and stop tasks
+     2. Move to background and exit
+     3. Stay
+
+   Enter to confirm · Esc to cancel
+PANE
+  out=$(FM_FAKE_EXIT_DIALOG="$dir/dialog.pane" run_control "$dir" rl9 relaunch --note "stopped mid-refactor"); rc=$?
+  expect_code 0 "$rc" "a relaunch should finish through the exit dialog"$'\n'"$out"
+  assert_contains "$out" "relaunched rl9 harness=claude from=claude" "the outcome should name the transition"
+  [ "$(cat "$dir/fake/dialog-keys" 2>/dev/null)" = Enter ] \
+    || fail "the exit step should confirm the dialog exactly once, got: $(cat "$dir/fake/dialog-keys" 2>/dev/null)"
+  [ "$(journal_field "$dir" rl9 phase)" = complete ] \
+    || fail "the transaction journal should end complete"
+  assert_grep "encode launch-brief" "$dir/fake/literal" "the replacement should have been launched"
+  pass "fm-control relaunch: the outgoing claude agent's exit dialog is confirmed before the replacement launches"
 }
 
 test_relaunch_from_linked_home_preserves_recorded_worktree() {
@@ -1559,6 +1608,7 @@ test_relaunch_moves_a_drifted_item_back_in_flight() {
 }
 
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
+test_relaunch_finishes_through_claude_exit_dialog
 test_relaunch_from_linked_home_preserves_recorded_worktree
 test_relaunch_preserves_durable_task_metadata
 test_relaunch_serializes_concurrent_durable_metadata_publication

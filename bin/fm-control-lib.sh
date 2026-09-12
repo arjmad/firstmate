@@ -22,7 +22,8 @@
 #   2. Per-harness control mechanics: which key interrupts a running turn, how
 #      many times it must be sent, whether the composer needs clearing after
 #      that key, which adapter-owned cancellation acknowledgement is observable,
-#      which command exits the agent, and which task kinds the adapter is
+#      which command exits the agent, which key confirms the adapter's
+#      post-exit dialog when it has one, and which task kinds the adapter is
 #      verified to run. These are the empirically verified facts previously
 #      carried only in the harness-adapters skill's per-adapter tables; that
 #      skill now points here so one executable owner holds them, and
@@ -177,6 +178,63 @@ fm_control_exit_command() {  # <harness>
     claude|opencode|grok|kimi|cursor|muse|rovo) printf '/exit' ;;
     codex|pi|pi-signed|omp|gemini) printf '/quit' ;;
     *) return 1 ;;
+  esac
+}
+
+# The key that confirms a harness's post-exit-command confirmation dialog, or
+# nothing when the adapter has no verified dialog. Claude Code (verified
+# 2.1.269) parks `/exit` on a "Background work is running" dialog whenever a
+# background shell or agent is still live: its selection starts on
+# `1. Exit and stop tasks`, Enter confirms it, Escape cancels back to the
+# composer with the work still running, and C-c leaves the dialog untouched.
+# Enter is therefore the one key on firstmate's plane (Enter, Escape, C-c; no
+# arrow navigation) that finishes the exit, and only when the selection
+# already sits on an exit-confirming option; fm_control_exit_confirm_dialog
+# below decides that. Every other verified adapter exits without a dialog.
+fm_control_exit_confirm_key() {  # <harness>
+  case "${1-}" in
+    claude) printf 'Enter' ;;
+    codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo) ;;
+    *) return 1 ;;
+  esac
+}
+
+# fm_control_exit_confirm_dialog <harness> <pane-text>: classify a pane read
+# taken AFTER the exit command was submitted. Prints one of
+#   confirm             the adapter's exit-confirmation dialog is on screen and
+#                       its current selection exits the agent
+#   refuse=<selection>  the dialog is on screen but its selection would not
+#                       exit the agent, or cannot be read, so the confirming
+#                       key must not be sent
+#   (nothing)           no dialog is on screen
+# for an adapter with a verified dialog, and nothing for every other adapter.
+# Pure text classification: the caller owns the capture and the key send.
+#
+# Presence is carried by any one of three independent rendered signals (the
+# title, the subtitle, the exit option's label), so no single vendor string is
+# load-bearing. The selection is the LAST selection-marked line of the
+# capture: the dialog replaces the composer, so an older `❯ /exit` composer
+# row left in scrollback sits above it and never wins, while a dialog whose
+# marker cannot be read refuses rather than confirms. Both `Exit and stop
+# tasks` and `Move to background and exit` end the agent, which is the
+# postcondition the control plane proves; `Stay` does not.
+fm_control_exit_confirm_dialog() {  # <harness> <pane-text>
+  local harness=${1-} pane=${2-} selected
+  case "$harness" in
+    claude) ;;
+    *) return 0 ;;
+  esac
+  printf '%s\n' "$pane" \
+    | grep -Eq 'Background work is running|will stop when you exit|Exit and stop tasks' \
+    || return 0
+  selected=$(printf '%s\n' "$pane" | grep -F '❯' | tail -n 1 \
+    | sed -e 's/^[[:space:]]*❯[[:space:]]*//' -e 's/[[:space:]]*$//')
+  case "$selected" in
+    'Exit and stop tasks'|[0-9]*'. Exit and stop tasks'|\
+    'Move to background and exit'|[0-9]*'. Move to background and exit')
+      printf 'confirm' ;;
+    '') printf 'refuse=unreadable' ;;
+    *) printf 'refuse=%s' "$selected" ;;
   esac
 }
 
