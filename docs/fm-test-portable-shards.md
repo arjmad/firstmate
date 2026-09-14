@@ -57,33 +57,22 @@ Each shard is still strictly serial in itself, and separate runners mean no two 
 `.github/workflows/ci.yml` derives the same `n` from `strategy.job-total` rather than a literal, so changing the shard count in either file without the other fails the lane loudly instead of leaving part of the required suite unrun.
 
 Assignment is longest-processing-time bin packing over per-script duration hints embedded in `bin/fm-test-run.sh`.
-The 147 current hints include the slowest measurements retained from the `fm-test-timing-portable-serial-*` artifacts of three green upstream CI runs on 2026-09-01, [33558082172](https://github.com/kunchenguid/firstmate/actions/runs/33558082172), [33523597838](https://github.com/kunchenguid/firstmate/actions/runs/33523597838), and [33463326167](https://github.com/kunchenguid/firstmate/actions/runs/33463326167), the completed-script measurements from upstream [run 34342484144](https://github.com/kunchenguid/firstmate/actions/runs/34342484144), the 5121 ms native-Windows focused runner measurement for `tests/fm-pi-windows-shell-invocation.test.sh` from 2026-09-06T21:02Z, and this fork's own measurement of `tests/fm-google-workspace.test.sh` from run [34058005006](https://github.com/arjmad/firstmate/actions/runs/34058005006) on 2026-09-06.
-Those per-script maxima total 4315754 ms of conservative balance weight.
+The embedded hints include the slowest measurements retained from the `fm-test-timing-portable-serial-*` artifacts of three green upstream CI runs on 2026-09-01, [33558082172](https://github.com/kunchenguid/firstmate/actions/runs/33558082172), [33523597838](https://github.com/kunchenguid/firstmate/actions/runs/33523597838), and [33463326167](https://github.com/kunchenguid/firstmate/actions/runs/33463326167), the completed-script measurements from upstream [run 34342484144](https://github.com/kunchenguid/firstmate/actions/runs/34342484144), the 5121 ms native-Windows focused runner measurement for `tests/fm-pi-windows-shell-invocation.test.sh` from 2026-09-06T21:02Z, and this fork's own measurement of `tests/fm-google-workspace.test.sh` from run [34058005006](https://github.com/arjmad/firstmate/actions/runs/34058005006) on 2026-09-06.
 Taking the slowest of several CI runs rather than a single run keeps the balance honest on a slow runner: this fork is a private repository, so its `ubuntu-latest` jobs run on the 2-vCPU hosted runner rather than the 4-vCPU runner upstream's public repository gets, and its scripts have measured up to 2.5x slower than the upstream runs.
-A script with no hint gets the conservative `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` default; the current 159-script lane has twelve such scripts, bringing its assignment weight to 4639754 ms.
+A script with no hint gets the conservative `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` default.
 Hints only affect balance: the coverage guard keeps the partition complete and disjoint whatever they say, so a stale hint costs a slower shard rather than lost coverage.
 Balance is still worth keeping current, because enough unmeasured scripts let one shard carry more than twice another shard's real work and reach the job cap while another runner sits idle.
 That is not hypothetical: by 2026-09-01 the lane had grown from 116 to 139 scripts and from ~42 to ~63 minutes, 17 scripts were still unmeasured, and several hints were low by 2-5x, so shard 3 of 4 ran 17-20 minutes against its 20-minute cap while shard 1 ran 11.5 minutes and run [33574154856](https://github.com/kunchenguid/firstmate/actions/runs/33574154856) timed out seconds after a passing test.
 `bin/fm-test-run.sh --check-coverage` now reports the unmeasured share as `serial_unhinted=` and refuses past `PORTABLE_SERIAL_MAX_UNHINTED_PERCENT`, so hint drift fails the coverage guard instead of silently pushing one shard into its job cap.
 Refresh the hints whenever the serial lane gains scripts, rather than waiting for that bound to trip.
 
-| Lane | Script count | Estimated duration |
-|---|---:|---:|
-| `portable-serial-1of6` | 26 | 773297 ms (~12.89 min) |
-| `portable-serial-2of6` | 28 | 773297 ms (~12.89 min) |
-| `portable-serial-3of6` | 27 | 773288 ms (~12.89 min) |
-| `portable-serial-4of6` | 27 | 773292 ms (~12.89 min) |
-| `portable-serial-5of6` | 25 | 773299 ms (~12.89 min) |
-| `portable-serial-6of6` | 26 | 773281 ms (~12.89 min) |
-| imbalance | | 18 ms |
-
-The current table is generated from the runner's retained maxima plus its default for the twelve unhinted scripts.
-Five shards of the same weight would carry about 15.5 minutes of upstream-measured work each, which the fork's slower 2-vCPU runner stretches past its cap: shard 1 of run [34067578768](https://github.com/arjmad/firstmate/actions/runs/34067578768) spent 19.8 minutes on 14.8 minutes of hints, so the lane runs as six shards of about 13 minutes.
+`bin/fm-test-run.sh` owns the per-shard packing, so its `--check-coverage` output is the current account of lane size, shard composition, and balance rather than a copied table.
+Five shards would carry about 15.5 minutes of upstream-measured work each, which the fork's slower 2-vCPU runner stretches past its cap: shard 1 of run [34067578768](https://github.com/arjmad/firstmate/actions/runs/34067578768) spent 19.8 minutes on 14.8 minutes of hints, so this fork runs the lane as six shards.
 Upstream run 34342484144 likewise observed a shard reach about 20 minutes of passing work, so the 30-minute job cap keeps meaningful hang-tripwire margin for job setup and runner-speed spread.
 
 The single longest script, `tests/fm-watch-triage.test.sh` at 262626 ms, is the floor for any shard count; it measured 410619 ms on the fork's runner.
 
-Refresh the CI-derived hints by downloading the per-shard timing artifacts from several green CI runs of the repository whose runners execute the lane, since a private fork measures on a slower runner than the public upstream, replacing the `portable_serial_weight_hints` table in `bin/fm-test-run.sh` with the slowest measured `duration_ms` per `path`, and updating the table above:
+Refresh the CI-derived hints by downloading the per-shard timing artifacts from several green CI runs of the repository whose runners execute the lane, since a private fork measures on a slower runner than the public upstream, and replacing the `portable_serial_weight_hints` table in `bin/fm-test-run.sh` with the slowest measured `duration_ms` per `path`:
 
 ```sh
 for run in <run-id> <run-id> <run-id>; do
