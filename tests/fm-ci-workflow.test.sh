@@ -116,6 +116,9 @@ end
 }
 
 # The four jobs the incident found unbounded, at the report's recommended caps.
+# This fork's lint runs as eight shards measured at 74-83 s each (the lint job's
+# own comment in ci.yml owns that evidence), so its tripwire is 10 minutes, not
+# the 25 upstream pins for its single unsharded lint job.
 test_previously_unbounded_jobs_keep_their_caps() {
   local job expected actual
   while read -r job expected; do
@@ -124,7 +127,7 @@ test_previously_unbounded_jobs_keep_their_caps() {
     [ "$actual" = "$expected" ] \
       || fail "$job timeout must stay $expected minutes, got $actual"
   done <<'CAPS'
-lint 25
+lint 10
 test-coverage 5
 tests-timing-aggregate 5
 invariants 5
