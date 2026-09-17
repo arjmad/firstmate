@@ -458,7 +458,7 @@ test_orca_refuses_an_escape_harness_interrupt() {
   {
     cat "$dir/home/state/t1.meta"
     echo "terminal=term-1"
-    echo "orca_worktree_id=wt-1"
+    echo "orca_worktree_id=wt-1::/orca/wt-1"
   } > "$dir/home/state/t1.meta.new"
   sed 's|^window=.*|window=fm-t1|' "$dir/home/state/t1.meta.new" > "$dir/home/state/t1.meta"
   out=$(run_control "$dir" t1 interrupt); rc=$?
@@ -898,12 +898,15 @@ test_claude_exit_confirms_the_background_work_dialog() {
 test_exit_sends_no_confirming_key_without_a_dialog() {
   # A claude agent that stays alive after its exit command with an ORDINARY
   # composer on screen: nothing is read as a dialog, no confirming key is
-  # sent, and the exit is reported unconfirmed exactly as before.
+  # sent, and the exit is reported unconfirmed exactly as before. The pane is
+  # a proven-empty bordered composer so the exit command's own pre-typing
+  # composer gate lets the command through; the dialog reader is what is
+  # under test here, not that gate.
   local dir out rc
   dir=$(new_case exit-no-dialog)
   add_task "$dir" t1 claude
   alive_as "$dir" claude
-  printf '\xe2\x9d\xaf \n  \xe2\x8f\xb5\xe2\x8f\xb5 bypass permissions on (shift+tab to cycle)\n' > "$dir/fake/pane"
+  printf '\xe2\x95\xad\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x95\xae\n\xe2\x94\x82    \xe2\x94\x82\n\xe2\x95\xb0\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x95\xaf\n  \xe2\x8f\xb5\xe2\x8f\xb5 bypass permissions on (shift+tab to cycle)\n' > "$dir/fake/pane"
   out=$(FM_FAKE_NEVER_DIES=1 run_control "$dir" t1 exit); rc=$?
   expect_code 1 "$rc" "an agent that stays alive with no dialog is still an unconfirmed exit"
   assert_contains "$out" "exit-confirm=not-needed" \
