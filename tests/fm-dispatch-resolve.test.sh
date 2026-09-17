@@ -319,8 +319,11 @@ assert_contains "$out" 'candidate: gemini:gemini-3.8-flash-high  provider=google
 assert_contains "$out" "  profile: --harness 'gemini' --model 'gemini-3.8-flash-high'" "Gemini is a typed verified dispatch harness"
 
 cp "$ROOT/docs/examples/crew-dispatch.json" "$RULES"
+# The fake Choice answer must name exactly the example's rules: this fork's
+# example carries five (a declared codex primary and its pressure fallback
+# on top of upstream's three), so the fixture lists rule_1..rule_5.
 cat > "$RESPONSE" <<'JSON'
-{"model":"jev-1.13.0","answers":{"rule":{"type":"choice","choice":"default","confidence":0.9,"probabilities":{"rule_1":0.02,"rule_2":0.02,"rule_3":0.02,"default":0.94}}},"usage":{"input_tokens":812,"output_tokens":60}}
+{"model":"jev-1.13.0","answers":{"rule":{"type":"choice","choice":"default","confidence":0.9,"probabilities":{"rule_1":0.02,"rule_2":0.01,"rule_3":0.01,"rule_4":0.01,"rule_5":0.01,"default":0.94}}},"usage":{"input_tokens":812,"output_tokens":60}}
 JSON
 reset_log
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
