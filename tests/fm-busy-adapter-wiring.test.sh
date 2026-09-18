@@ -244,7 +244,7 @@ test_claude_hooks_semantic_lifecycle() {
   settings="$WT_DIR/.claude/settings.local.json"
   assert_present "$settings" "claude spawn did not write hook settings"
   jq -e . "$settings" >/dev/null || fail "claude hook settings are not valid JSON"
-  for ev in UserPromptSubmit Stop StopFailure SessionEnd; do
+  for ev in UserPromptSubmit PostToolUse Stop StopFailure SessionEnd; do
     jq -e ".hooks[\"$ev\"]" "$settings" >/dev/null || fail "claude hook settings lack $ev"
   done
 
@@ -270,6 +270,39 @@ test_claude_hooks_semantic_lifecycle() {
   out=$(classify claude "$id" "$state")
   [ "$out" = "idle claude-hook" ] || fail "SessionEnd must classify idle, got '$out'"
   pass "claude hooks open on UserPromptSubmit and close on Stop, StopFailure, and SessionEnd"
+}
+
+test_claude_posttooluse_refreshes_progress_only() {
+  local rec id=busy-cl-3 out state settings cmd
+  rec=$(make_spawn_case claude-progress claude "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  expect_code 0 $? "claude spawn should succeed: $out"
+  state="$HOME_DIR/state"
+  settings="$WT_DIR/.claude/settings.local.json"
+  cmd=$(jq -r '.hooks["PostToolUse"][0].hooks[0].command' "$settings")
+  case "$cmd" in
+    *"fm-busy-event.sh"*" progress "*"--gen "*) ;;
+    *) fail "PostToolUse must call the generation-bound progress producer, got '$cmd'" ;;
+  esac
+  case "$cmd" in
+    *" apply "*|*" idle "*|*" busy "*|*turn-ended*) fail "PostToolUse must never change busy state or touch turn-ended: '$cmd'" ;;
+  esac
+
+  rm -f "$state/$id.progress" "$state/$id.turn-ended"
+  run_claude_hook "$settings" UserPromptSubmit
+  run_claude_hook "$settings" PostToolUse || fail "PostToolUse hook command failed"
+  [ -f "$state/$id.progress" ] || fail "PostToolUse did not refresh the progress marker"
+  [ ! -e "$state/$id.turn-ended" ] || fail "PostToolUse must not fabricate a completed turn"
+  out=$(classify claude "$id" "$state")
+  [ "$out" = "busy claude-hook" ] || fail "PostToolUse must leave the busy record untouched, got '$out'"
+
+  # A superseded incarnation may never refresh its replacement's marker, and
+  # the hook still exits 0 so Claude's tool loop is never disturbed.
+  "$ROOT/bin/fm-busy-event.sh" arm "$state" "$id" >/dev/null
+  run_claude_hook "$settings" PostToolUse || fail "a stale-gen PostToolUse must still exit 0"
+  [ ! -e "$state/$id.progress" ] || fail "stale-gen PostToolUse refreshed the new incarnation's progress"
+  pass "claude PostToolUse refreshes the generation-bound progress marker without touching busy state or turn-ended"
 }
 
 test_claude_hooks_stale_incarnation_harmless() {
@@ -429,6 +462,7 @@ test_kimi_and_grok_install_no_unverified_wiring
 test_opencode_plugin_semantic_lifecycle
 test_claude_hooks_semantic_lifecycle
 test_claude_hooks_stale_incarnation_harmless
+test_claude_posttooluse_refreshes_progress_only
 test_gemini_hooks_semantic_lifecycle
 test_gemini_hooks_stale_incarnation_harmless
 test_raw_gemini_launch_has_no_semantic_wiring
