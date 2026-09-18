@@ -6,7 +6,7 @@ Busy hooks verified 2026-07-28 on Claude Code 2.1.220.
 
 | Fact | Value |
 |---|---|
-| Busy | Owned hooks: `UserPromptSubmit` opens while `Stop`, `StopFailure`, and `SessionEnd` close; manual interrupt emits no hook, so control reports delivered keys and live endpoint only, publishes no idle event or cancellation claim, and usually leaves `claude-hook` busy. |
+| Busy | Owned hooks: `UserPromptSubmit` opens while `Stop`, `StopFailure`, and `SessionEnd` close; `PostToolUse` refreshes the generation-bound progress marker owned by `../../../bin/fm-busy-event.sh` after every completed tool call (no periodic or background-task event exists on Claude Code 2.1.274, so the completed-call boundary is the activity source and it never fabricates a completed turn); manual interrupt emits no hook, so control reports delivered keys and live endpoint only, publishes no idle event or cancellation claim, and usually leaves `claude-hook` busy. |
 | Exit | `/exit`; with a live background shell or agent, 2.1.269 answers it with a `Background work is running` dialog whose selection starts on `1. Exit and stop tasks`, where Enter confirms and stops the agent, Escape cancels back to the composer with the work still running, and C-c leaves the dialog untouched. `../../../../../bin/fm-control.sh exit` confirms that default itself through the key path; see "Exit confirmation" below. |
 | Interrupt | Single Escape. |
 | Skill | `/<skill>`, for example `/no-mistakes`. |

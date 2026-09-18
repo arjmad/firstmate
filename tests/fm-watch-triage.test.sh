@@ -174,6 +174,15 @@ record_pi_busy() {  # <state-dir> <id>
     --source pi-ext --event agent-start
 }
 
+record_claude_busy() {  # <state-dir> <id>
+  local state=$1 id=$2 gen
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" "$id")
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" "$id" busy --gen "$gen" \
+    --source claude-hook --event user-prompt-submit
+  # The PostToolUse hook refreshes the marker through the same producer.
+  "$ROOT/bin/fm-busy-event.sh" progress "$state" "$id" --gen "$gen"
+}
+
 reap() { kill "$1" 2>/dev/null || true; wait "$1" 2>/dev/null || true; }
 
 # --- pure classifier predicates (fm-classify-lib.sh) ------------------------
@@ -3504,6 +3513,43 @@ test_busy_pane_native_progress_resets_age() {
   pass "native progress resets busy age without a completed turn or notification"
 }
 
+test_busy_pane_claude_tool_progress_resets_age() {
+  local dir state fakebin out capture_file window key pane_hash sig pid
+  dir=$(make_case busy-claude-progress-resets-age); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-claude-reset"
+  printf 'Working...' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/busy-claude.meta"
+  printf 'working: setup complete\n' > "$state/busy-claude.status"
+  sig=$(seen_sig "$state/busy-claude.status"); printf '%s' "$sig" > "$state/.seen-busy-claude_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "Working...")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  # A wedge is already mid-escalation, as if several over-age polls already ran.
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  printf '1\n' > "$state/.wedge-escalations-$key"
+  # The Claude worker's last completed turn is ancient, but its PostToolUse
+  # hook just refreshed the progress marker through the real producer.
+  touch -t 200001010000 "$state/busy-claude.meta"
+  touch -t 200001010000 "$state/busy-claude.turn-ended"
+  prime_turnend_seen "$state/busy-claude.turn-ended"
+  record_claude_busy "$state" busy-claude
+  [ -f "$state/busy-claude.progress" ] || fail "fixture: the progress producer did not write the marker"
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_BUSY_TURN_MAX_SECS=3600 FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "a Claude worker with fresh tool progress was still escalated: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || fail "a Claude worker with fresh tool progress printed a wake reason"
+  [ ! -e "$state/.stale-since-$key" ] || fail "fresh Claude tool progress did not clear the wedge timer"
+  [ ! -e "$state/.wedge-escalations-$key" ] || fail "fresh Claude tool progress did not clear the escalation counter"
+  reap "$pid"
+  pass "a Claude worker's PostToolUse progress resets busy age exactly like Pi native progress"
+}
+
 test_busy_pane_repeated_escalation_reaches_demand_deep_inspection() {
   local dir state fakebin out capture_file window key pane_hash sig pid n
   dir=$(make_case busy-turn-age-demand-inspect); state="$dir/state"; fakebin="$dir/fakebin"
@@ -5561,6 +5607,7 @@ test_busy_pane_stable_hash_escalates_past_turn_age_bound
 test_busy_pane_changing_hash_escalates_past_turn_age_bound
 test_busy_pane_turn_end_touch_resets_age
 test_busy_pane_native_progress_resets_age
+test_busy_pane_claude_tool_progress_resets_age
 test_busy_pane_repeated_escalation_reaches_demand_deep_inspection
 test_busy_pane_default_turn_age_bound_is_3600s
 test_busy_declared_pause_is_rechecked_not_wedge_escalated
