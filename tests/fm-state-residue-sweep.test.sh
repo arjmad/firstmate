@@ -15,6 +15,7 @@
 #   - A live endpoint's markers are kept even without a task record.
 #   - An ambiguous or unreadable backend answer keeps the markers.
 #   - Markers keyed by any current state/<id>.meta target are never queried.
+#   - A home with no unprotected key on disk makes no backend call at all.
 #   - A key that no candidate backend/session fits is kept untouched.
 #   - The lossy key derivation cannot delete a live window's markers: a live
 #     `fm-a.b` window covers the key `fm-a_b` shares with it.
@@ -152,7 +153,7 @@ test_live_without_record_never_queried_past_inventory() {
 
   [ -z "$out" ] || fail "nothing removed must print nothing, got: $out"
   [ "$(count_markers "$home" firstmate_fm-live)" -eq 12 ] || fail "a live endpoint lost markers"
-  assert_not_contains "$(cat "$home/calls")" "pane_current_command" \
+  assert_not_contains "$(cat "$home/calls" 2>/dev/null)" "pane_current_command" \
     "an endpoint present in the live inventory is settled by that inventory, not a per-window probe"
   pass "sweep: a live endpoint is kept from the inventory alone and the run stays silent"
 }
@@ -190,9 +191,32 @@ test_meta_referenced_endpoint_never_touched() {
 
   [ -z "$out" ] || fail "a task-record endpoint must not be swept: $out"
   [ "$(count_markers "$home" firstmate_fm-held)" -eq 12 ] || fail "a task-record endpoint lost markers"
-  assert_not_contains "$(cat "$home/calls")" "pane_current_command" \
+  assert_not_contains "$(cat "$home/calls" 2>/dev/null)" "pane_current_command" \
     "a task-record endpoint must never be probed"
   pass "sweep: an endpoint named in a current task record is never queried or touched"
+}
+
+test_no_unprotected_key_means_no_backend_call() {
+  local home fb out
+  # Nothing on disk: the backend must not be asked for an inventory, let alone
+  # a window (tests/fm-secondmate-sync.test.sh drives bootstrap in a home like
+  # this and asserts its scripted tmux was never invoked).
+  home=$(new_home quiet); fb=$(make_tmux "$TMP_ROOT/quiet")
+  world "$home" "" ok zsh
+  out=$(run_sweep "$fb" "$home")
+  [ -z "$out" ] || fail "an empty home must print nothing: $out"
+  [ ! -e "$home/calls" ] || fail "an empty home must make no backend call: $(cat "$home/calls")"
+
+  # Only task-record-protected markers on disk: still no backend call.
+  home=$(new_home quiet-meta); fb=$(make_tmux "$TMP_ROOT/quiet-meta")
+  seed_markers "$home" firstmate_fm-held
+  printf 'window=firstmate:fm-held\nkind=ship\nharness=claude\n' > "$home/state/held.meta"
+  world "$home" "" ok zsh
+  out=$(run_sweep "$fb" "$home")
+  [ -z "$out" ] || fail "a home with only protected markers must print nothing: $out"
+  [ ! -e "$home/calls" ] || fail "protected-only markers must make no backend call: $(cat "$home/calls")"
+  [ "$(count_markers "$home" firstmate_fm-held)" -eq 12 ] || fail "protected markers lost"
+  pass "sweep: no backend is touched unless an unprotected key is on disk"
 }
 
 test_unmatched_key_kept() {
@@ -523,6 +547,7 @@ test_gone_endpoint_swept_and_live_kept
 test_live_without_record_never_queried_past_inventory
 test_ambiguous_and_unreadable_kept
 test_meta_referenced_endpoint_never_touched
+test_no_unprotected_key_means_no_backend_call
 test_unmatched_key_kept
 test_lossy_key_covered_by_live_window
 test_scratch_rotation_by_age

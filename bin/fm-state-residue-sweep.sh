@@ -66,7 +66,9 @@
 # so the sweep asks at most FM_STATE_RESIDUE_QUERY_BUDGET endpoints per run -
 # under ten seconds of session start - and leaves the rest for the next one;
 # the summary line reports the deferred count. The inventories are one call
-# per candidate regardless, and a converged home asks nothing.
+# per candidate and are read only when at least one unprotected key is on
+# disk, so a converged home, or one whose only markers belong to current task
+# records, makes no backend call at all.
 #
 # Dry run and the summary line are the only stdout. The kept counts are
 # reported so an operator can see that a live or unreadable endpoint held its
@@ -280,19 +282,28 @@ remove_key_records() {  # <key>
   printf '%s' "$n"
 }
 
-sweep_endpoint_records() {
-  local name key keys='' pair target backend verdict removed
+# collect_keys: every distinct key the marker files on disk are named by,
+# minus those a current task record protects, into KEYS. Runs before any
+# backend is touched so a home with nothing to resolve makes no backend call
+# at all - a converged home must be free, and a home whose backend is a
+# scripted fake in a test must see no call it did not expect.
+KEYS=
+collect_keys() {
+  local name key
   for name in "$STATE"/.*; do
     [ -f "$name" ] && [ ! -L "$name" ] || continue
     key=$(key_of "$(basename "$name")") || continue
     [ -n "$key" ] || continue
-    case "$keys" in *"|$key|"*) continue ;; esac
-    keys="$keys|$key|"
-  done
-  [ -n "$keys" ] || return 0
-  for key in $(printf '%s' "$keys" | tr '|' '\n'); do
-    [ -n "$key" ] || continue
+    case "$KEYS" in *"|$key|"*) continue ;; esac
     case "$PROTECTED" in *"|$key|"*) KEPT_META=$((KEPT_META + 1)); continue ;; esac
+    KEYS="$KEYS|$key|"
+  done
+}
+
+sweep_endpoint_records() {
+  local key pair target backend verdict removed
+  for key in $(printf '%s' "$KEYS" | tr '|' '\n'); do
+    [ -n "$key" ] || continue
     case "$LIVE_KEYS" in *"|$key|"*) KEPT_LIVE=$((KEPT_LIVE + 1)); continue ;; esac
     if ! pair=$(match_candidate "$key"); then
       KEPT_UNRESOLVED=$((KEPT_UNRESOLVED + 1))
@@ -363,9 +374,12 @@ REMOVED_RECORDS=0 REMOVED_ENDPOINTS=0 ROTATED=0 QUERIES=0 DEFERRED=0
 KEPT_META=0 KEPT_LIVE=0 KEPT_UNRESOLVED=0 KEPT_UNMATCHED=0
 
 collect_protected
-ambient_candidate
-read_inventories
-sweep_endpoint_records
+collect_keys
+if [ -n "$KEYS" ]; then
+  ambient_candidate
+  read_inventories
+  sweep_endpoint_records
+fi
 rotate_scratch
 
 if [ "$REMOVED_ENDPOINTS" -gt 0 ] || [ "$ROTATED" -gt 0 ]; then
