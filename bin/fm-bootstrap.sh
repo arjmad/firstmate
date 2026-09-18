@@ -101,8 +101,8 @@
 #          The `code-root <file>` variant is a detect-only local check that runs
 #          even in a read-only session; detect_code_root_backlog_fork owns what
 #          it reports.
-#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the six MUTATING sweeps
-#          (backlog_record_reconcile, secondmate_sync,
+#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the seven MUTATING sweeps
+#          (backlog_record_reconcile, state_residue_sweep, secondmate_sync,
 #          secondmate_liveness_sweep, secondmate_handoff_resume, x_mode_setup,
 #          fleet_sync) while still
 #          printing every read-only detect line
@@ -112,8 +112,11 @@
 #          the fleet lock, so a second concurrent session never race-mutates
 #          secondmate homes, pending handoff outboxes and receiver wakes,
 #          X-mode artifacts, project clones, or repair instructions.
-#          Unset/0 (the default) runs all six sweeps - this flag is purely
+#          Unset/0 (the default) runs all seven sweeps - this flag is purely
 #          additive.
+#          state_residue_sweep is bin/fm-state-residue-sweep.sh, whose header
+#          owns what it retires and how an endpoint is proven gone; it runs on
+#          the local pass only and reports through its own BOOTSTRAP_INFO line.
 #          Set FM_BOOTSTRAP_NETWORK to split this run by whether a step talks to
 #          the network, so a session start can print its digest from local reads
 #          alone and run the network half off the digest's blocking path:
@@ -1454,6 +1457,11 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ] && local_phase; then
       exit 1
     fi
   fi
+  # Watcher bookkeeping for endpoints that are provably gone, and orphaned
+  # scratch files. Runs after the record reconciliation above so a task record
+  # that reconciliation just restored still protects its endpoint's markers.
+  # The sweep never exits nonzero; a problem is a warning it prints itself.
+  "$SCRIPT_DIR/fm-state-residue-sweep.sh" || true
 fi
 
 # Local detection: presence, version floors, and configuration. Nothing here
