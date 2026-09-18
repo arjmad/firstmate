@@ -555,6 +555,25 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
   return 0
 }
 
+# fm_backend_window_key: the ONE derivation of an endpoint's per-window marker
+# key: `:`, `/` and `.` become `_` so a target is usable as a filename suffix.
+# Every per-window file the watcher keeps under state/ is named by it (.hash-,
+# .count-, .stale-, .stale-since-, .wedge-escalations-, .churn-since-,
+# .paused-*, .writing-*, .waiting-*), and live homes hold those markers on disk
+# under the current format, so the format lives here alone: a second copy is
+# how a future change to it silently orphans a window's markers instead of
+# clearing them. bin/fm-watch.sh derives it once per window per poll, and
+# bin/fm-state-residue-sweep.sh re-derives it from live endpoints to retire the
+# markers of endpoints that are provably gone. The derivation is lossy on
+# purpose (a `.` in a task id and the `_` it becomes share one key), which is
+# why that sweep compares keys against live inventories rather than trusting a
+# key's reconstructed target alone.
+fm_backend_window_key() {  # <target>
+  local key=${1//:/_}
+  key=${key//\//_}
+  printf '%s' "${key//./_}"
+}
+
 fm_backend_meta_for_window() {  # <target> <state-dir>
   local target=$1 state=$2 meta window terminal
   for meta in "$state"/*.meta; do
