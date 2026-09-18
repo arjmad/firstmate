@@ -60,11 +60,13 @@
 # lasts seconds; a row rewrite holds the queue lock), so there is nothing to
 # tune.
 #
-# Cost bound. Every backend question is one CLI call, and a home that has
-# accumulated hundreds of dead keys asks them all on its first run, so the
-# sweep asks at most FM_STATE_RESIDUE_QUERY_BUDGET endpoints per run and
-# leaves the rest for the next session start; the summary line reports the
-# deferred count. The inventories are one call per candidate regardless.
+# Cost bound. Every backend question is one CLI call plus its JSON parse
+# (about 45 ms each against a scripted herdr on 2026-09-17), and a home that
+# has accumulated hundreds of dead keys would ask them all on its first run,
+# so the sweep asks at most FM_STATE_RESIDUE_QUERY_BUDGET endpoints per run -
+# under ten seconds of session start - and leaves the rest for the next one;
+# the summary line reports the deferred count. The inventories are one call
+# per candidate regardless, and a converged home asks nothing.
 #
 # Dry run and the summary line are the only stdout. The kept counts are
 # reported so an operator can see that a live or unreadable endpoint held its
@@ -84,7 +86,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # Scratch files older than this many days are orphans; see the header.
 FM_STATE_RESIDUE_SCRATCH_MAX_AGE_DAYS=7
 # Endpoint questions per run; see "Cost bound" in the header.
-FM_STATE_RESIDUE_QUERY_BUDGET=400
+FM_STATE_RESIDUE_QUERY_BUDGET=200
 
 # Longest prefixes first, so `.stale-since-K` is read as key K under
 # `.stale-since-` and never as key `since-K` under `.stale-`.

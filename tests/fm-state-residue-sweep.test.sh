@@ -301,10 +301,10 @@ test_only_marker_family_files_are_touched() {
 test_query_budget_defers_the_remainder() {
   local home fb out i
   home=$(new_home budget); fb=$(make_tmux "$TMP_ROOT/budget")
-  # 402 gone windows against the documented 400-question budget: only .hash-
+  # 202 gone windows against the documented 200-question budget: only .hash-
   # markers, so the removed-record count equals the endpoint count.
   i=0
-  while [ "$i" -lt 402 ]; do
+  while [ "$i" -lt 202 ]; do
     printf 'x' > "$home/state/.hash-firstmate_fm-gone$i"
     i=$((i + 1))
   done
@@ -312,7 +312,7 @@ test_query_budget_defers_the_remainder() {
 
   out=$(run_sweep "$fb" "$home")
 
-  assert_contains "$out" "removed 400 watcher record(s) for 400 gone endpoint(s)" "the budget bounds one run's questions: $out"
+  assert_contains "$out" "removed 200 watcher record(s) for 200 gone endpoint(s)" "the budget bounds one run's questions: $out"
   assert_contains "$out" "2 deferred to the next session start" "the remainder should be reported as deferred: $out"
   [ "$(find "$home/state" -name '.hash-firstmate_fm-gone*' | wc -l | tr -d ' ')" -eq 2 ] \
     || fail "exactly the deferred keys should remain"
