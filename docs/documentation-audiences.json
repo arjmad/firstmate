@@ -433,6 +433,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": "docs/task-lifecycle.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": "docs/tmux-backend.md",
       "audience": "operator-current"
     },

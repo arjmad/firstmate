@@ -3,8 +3,8 @@
 Thanks for wanting to contribute.
 One rule up front:
 
-**Human-authored pull requests targeting `main` must be raised through [`no-mistakes`](https://github.com/kunchenguid/no-mistakes).**
-We require this to reduce the maintainer's burden of reviewing and merging contributions.
+Use the project's selected delivery path and current merge authority.
+[`no-mistakes`](https://github.com/kunchenguid/no-mistakes) remains available when selected; direct PRs run the relevant repository checks and ordinary CI.
 
 `no-mistakes` puts a local git proxy in front of your real remote.
 Pushing through it runs an AI-driven review/test/lint pipeline in an isolated worktree, forwards the push upstream only after every check passes, and opens a clean PR automatically.
@@ -13,7 +13,9 @@ Contributing through no-mistakes remains the documented path for maintainers who
 This fork does not run a GitHub Actions check that enforces that attestation, so a PR opened without no-mistakes is not failed on that basis; the ordinary CI checks still apply to every PR.
 This is an accepted fork-only divergence from upstream, which enforces the attestation with a `Require no-mistakes` check.
 
-## Workflow
+## No-mistakes workflow
+
+Use this workflow when no-mistakes is the selected delivery path.
 
 1. Fork the repo, then clone the parent repo or set your local `origin` back to the parent (`git@github.com:kunchenguid/firstmate.git`).
 2. Create a branch and make your changes.
@@ -62,7 +64,7 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
 
 ## Development
 
-Tracked changes to firstmate itself - `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `bin/`, `.agents/skills/`, and `skills/` - ship through the `no-mistakes` pipeline on a feature branch and require an explicit merge approval.
+Tracked changes to firstmate itself - `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `bin/`, `.agents/skills/`, and `skills/` - ship on a feature branch through the selected delivery path, with the same merge authority as other project work.
 Before making any such change, load the agent-only `firstmate-coding-guidelines` skill (`.agents/skills/firstmate-coding-guidelines/SKILL.md`).
 It has the knowledge-placement rules that keep `AGENTS.md` from regrowing after each diet pass.
 There is no reliable way for `bin/fm-brief.sh`'s scaffold to detect that a task's repo is firstmate itself, so firstmate adds this skill's load line to firstmate-repo briefs by hand.
