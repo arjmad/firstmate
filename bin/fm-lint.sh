@@ -2,9 +2,9 @@
 # fm-lint.sh - the single owner of firstmate's lint definition.
 #
 # Runs its file set with ShellCheck's default severity, extended analysis,
-# ambient configuration disabled, and one exact ShellCheck version. CI and
-# no-mistakes both invoke this script with no arguments, so this owner selects
-# the context-appropriate rule set without duplicating lint configuration.
+# ambient configuration disabled, and one exact ShellCheck version. CI selects
+# canonical partitions; no-mistakes invokes the context-selected default, so
+# both use this owner without duplicating lint configuration.
 # The explicit --fast mode is local-only and disables ShellCheck's extended
 # dataflow analysis while preserving ordinary shell lint checks and source
 # following. CI, main, and merge-base-less runs keep --norc --external-sources
@@ -41,19 +41,20 @@
 # invocations in the core bin/ and bin/backends/ scripts so every configured
 # backlog backend follows the same tasks-axi lifecycle path.
 #
-# Canonical lint defaults to two bounded workers over two stable logical shards.
-# Each shard writes separate diagnostics, and the parent replays those outputs in
-# deterministic shard and root order after every worker finishes. FM_LINT_JOBS=1
-# runs the same shards serially with byte-identical diagnostics and exit selection.
-#
-# CI may split the canonical lint across matrix jobs with --shard <k>of<n>. The
-# context-selected file set is partitioned once into n shards by the same
-# largest-first byte-weight assignment the workers use, shard k keeps its
-# canonical replay order and the same configuration, and the n shards together
-# cover the set exactly once. --shard rejects explicit paths, and every shard
-# still validates the GitHub workflows so a self-broken ci.yml fails wherever
-# the lint runs. A private-repository fork runs on smaller hosted runners than
-# the public upstream, which is what makes the split necessary there.
+# Lint defaults to two bounded workers over two stable logical shards.
+# Diagnostics replay in stable shard/root order. FM_LINT_JOBS=1 changes
+# concurrency, not diagnostics or exit selection.
+# --partition <k>of<n> splits the entire canonical inventory across n CI
+# runners, each with those same bounded workers. Partitions are complete,
+# disjoint, and byte-weight balanced by the same largest-first assignment the
+# workers use, with ties broken by canonical index so partition k is
+# deterministic and keeps canonical replay order; --list-files exposes their
+# actual roots. Partition mode is always full source-aware analysis, never
+# changed-only or --fast, and does not accept explicit paths. Each partition
+# also runs workflow lint and backend-purity checks, keeping either invocation
+# independently useful. Upstream CI runs two partitions; this fork's private
+# repository runs on smaller hosted runners, so its ci.yml selects more
+# partitions to keep the heaviest source graphs in separate jobs.
 #
 # Optional quiet telemetry writes one bounded TSV snapshot of content and source
 # graph identity, wall/CPU/RSS, shard load, and competing ShellCheck processes.
@@ -63,8 +64,7 @@
 #   fm-lint.sh --fast [path]...       local lint with extended analysis disabled
 #   fm-lint.sh <path>...               lint explicit roots with the same config
 #   fm-lint.sh --jobs <1|2> [path]...  override bounded worker count
-#   fm-lint.sh --shard <k>of<n>        lint one deterministic shard of the
-#                                      context-selected file set (CI matrix)
+#   fm-lint.sh --partition <k>of<n>    lint one full-rigor canonical CI partition
 #   fm-lint.sh --telemetry <path> ...  write a quiet metrics snapshot
 #   fm-lint.sh --required-version      print the ShellCheck pin
 #   fm-lint.sh --list-files            print the file set that would be linted
@@ -405,9 +405,10 @@ fm_lint_run_backend_purity() {
 
 JOBS=${FM_LINT_JOBS:-2}
 TELEMETRY=${FM_LINT_TELEMETRY:-}
-SHARD=
 FAST=0
 ANALYSIS_MODE=full
+PARTITION=
+PARTITION_REQUESTED=0
 LIST_FILES=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -429,10 +430,16 @@ while [ "$#" -gt 0 ]; do
       TELEMETRY=${1#*=}
       shift
       ;;
-    --shard)
-      [ "$#" -ge 2 ] || { printf 'fm-lint.sh: --shard requires <k>of<n>.\n' >&2; exit 2; }
-      SHARD=$2
+    --partition)
+      [ "$#" -ge 2 ] || { printf 'fm-lint.sh: --partition requires <k>of<n>.\n' >&2; exit 2; }
+      PARTITION=$2
+      PARTITION_REQUESTED=1
       shift 2
+      ;;
+    --partition=*)
+      PARTITION=${1#*=}
+      PARTITION_REQUESTED=1
+      shift
       ;;
     --fast)
       FAST=1
@@ -459,23 +466,32 @@ case "$JOBS" in
   1|2) ;;
   *) printf 'fm-lint.sh: jobs must be 1 or 2, got %s.\n' "$JOBS" >&2; exit 2 ;;
 esac
-SHARD_INDEX=
-SHARD_TOTAL=
-if [ -n "$SHARD" ]; then
-  case "$SHARD" in
-    *of*)
-      SHARD_INDEX=${SHARD%%of*}
-      SHARD_TOTAL=${SHARD#*of}
-      ;;
-  esac
-  case "$SHARD_INDEX" in ''|*[!0-9]*) SHARD_INDEX= ;; esac
-  case "$SHARD_TOTAL" in ''|*[!0-9]*) SHARD_TOTAL= ;; esac
-  if [ -z "$SHARD_INDEX" ] || [ -z "$SHARD_TOTAL" ] || [ "$SHARD_INDEX" -lt 1 ] \
-    || [ "$SHARD_INDEX" -gt "$SHARD_TOTAL" ]; then
-    printf 'fm-lint.sh: --shard requires <k>of<n> with 1 <= k <= n, got %s.\n' "$SHARD" >&2
-    exit 2
-  fi
-fi
+PARTITION_INDEX=
+PARTITION_TOTAL=
+case "$PARTITION" in
+  '')
+    if [ "$PARTITION_REQUESTED" -eq 1 ]; then
+      printf 'fm-lint.sh: --partition requires <k>of<n>.\n' >&2
+      exit 2
+    fi
+    ;;
+  *of*)
+    PARTITION_INDEX=${PARTITION%%of*}
+    PARTITION_TOTAL=${PARTITION#*of}
+    case "$PARTITION_INDEX" in ''|*[!0-9]*) PARTITION_INDEX= ;; esac
+    case "$PARTITION_TOTAL" in ''|*[!0-9]*) PARTITION_TOTAL= ;; esac
+    if [ -z "$PARTITION_INDEX" ] || [ -z "$PARTITION_TOTAL" ] || [ "$PARTITION_INDEX" -lt 1 ] \
+      || [ "$PARTITION_INDEX" -gt "$PARTITION_TOTAL" ]; then
+      printf 'fm-lint.sh: --partition must be <k>of<n> with 1 <= k <= n, got %s.\n' "$PARTITION" >&2
+      exit 2
+    fi
+    if [ "$FAST" -eq 1 ] || [ "$#" -gt 0 ]; then
+      printf 'fm-lint.sh: --partition requires full canonical lint; omit --fast and explicit paths.\n' >&2
+      exit 2
+    fi
+    ;;
+  *) printf 'fm-lint.sh: --partition must be <k>of<n> with 1 <= k <= n, got %s.\n' "$PARTITION" >&2; exit 2 ;;
+esac
 
 if [ "$FAST" -eq 1 ] && { [ "${GITHUB_ACTIONS:-}" = true ] || [ "${CI:-}" = true ]; }; then
   printf 'fm-lint.sh: --fast is local-only; CI uses full ShellCheck analysis.\n' >&2
@@ -517,57 +533,6 @@ fm_lint_is_canonical_root() {
   esac
 }
 
-# fm_lint_select_shard keeps only shard SHARD_INDEX of SHARD_TOTAL from ROOTS:
-# the same largest-first byte-weight greedy assignment the workers use, with
-# ties broken by canonical index, so the shards are deterministic, disjoint,
-# and together cover the selected set exactly once. Replay order is restored.
-fm_lint_select_shard() {
-  local tab index path weight bin i lines
-  local -a loads selected
-  tab=$(printf '\t')
-  lines=
-  index=1
-  for path in "${ROOTS[@]+"${ROOTS[@]}"}"; do
-    case "$path" in
-      *"$tab"*|*$'\n'*)
-        printf 'fm-lint.sh: paths containing tabs or newlines are not supported: %s\n' "$path" >&2
-        exit 2
-        ;;
-    esac
-    weight=1
-    [ ! -f "$path" ] || weight=$(wc -c < "$path" 2>/dev/null | tr -d '[:space:]')
-    case "$weight" in ''|*[!0-9]*) weight=1 ;; esac
-    lines="$lines$weight$tab$index$tab$path"$'\n'
-    index=$((index + 1))
-  done
-  i=0
-  while [ "$i" -lt "$SHARD_TOTAL" ]; do
-    loads[i]=0
-    i=$((i + 1))
-  done
-  selected=()
-  while IFS="$tab" read -r weight index path; do
-    [ -n "$path" ] || continue
-    bin=0
-    i=1
-    while [ "$i" -lt "$SHARD_TOTAL" ]; do
-      if [ "${loads[i]}" -lt "${loads[bin]}" ]; then
-        bin=$i
-      fi
-      i=$((i + 1))
-    done
-    loads[bin]=$((loads[bin] + weight))
-    if [ "$bin" -eq $((SHARD_INDEX - 1)) ]; then
-      selected+=("$index$tab$path")
-    fi
-  done < <(printf '%s' "$lines" | LC_ALL=C sort -t "$tab" -k1,1nr -k2,2n)
-  ROOTS=()
-  while IFS="$tab" read -r index path; do
-    [ -n "$path" ] || continue
-    ROOTS+=("$path")
-  done < <(printf '%s\n' "${selected[@]+"${selected[@]}"}" | LC_ALL=C sort -t "$tab" -k1,1n)
-}
-
 CHANGED_MODE=0
 EXPLICIT_PATHS=0
 FOLLOW_SOURCES=1
@@ -577,7 +542,7 @@ if [ "$#" -gt 0 ]; then
   ROOTS=("$@")
 else
   full_lint=1
-  if [ "${GITHUB_ACTIONS:-}" != true ] && [ "${CI:-}" != true ] \
+  if [ -z "$PARTITION" ] && [ "${GITHUB_ACTIONS:-}" != true ] && [ "${CI:-}" != true ] \
     && command -v git >/dev/null 2>&1 \
     && git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
     && [ "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" != main ]; then
@@ -604,13 +569,38 @@ if [ "$CHANGED_MODE" -eq 1 ] && [ "$FAST" -eq 0 ]; then
   EXCLUDE_CODES=$LOCAL_NOX_EXCLUDE
   ANALYSIS_MODE=local
 fi
+# Stable largest-first packing is shared by cross-runner partition selection
+# and the two local workers. Weights are a scheduling proxy, never a skip rule.
+TAB=$(printf '\t')
+fm_lint_root_weights() {
+  local index=1 path weight
+  for path in "${ROOTS[@]}"; do
+    case "$path" in
+      *"$TAB"*|*$'\n'*)
+        printf 'fm-lint.sh: paths containing tabs or newlines are not supported: %s\n' "$path" >&2
+        return 2
+        ;;
+    esac
+    weight=1
+    if [ -f "$path" ]; then
+      weight=$(wc -c < "$path" 2>/dev/null | tr -d '[:space:]')
+    fi
+    case "$weight" in ''|*[!0-9]*) weight=1 ;; esac
+    printf '%s\t%s\t%s\n' "$weight" "$index" "$path"
+    index=$((index + 1))
+  done
+}
+
 SELECTED_ROOT_COUNT=${#ROOTS[@]}
-if [ -n "$SHARD" ]; then
-  if [ "$EXPLICIT_PATHS" -eq 1 ]; then
-    printf 'fm-lint.sh: --shard applies to the context-selected file set, not explicit paths.\n' >&2
-    exit 2
-  fi
-  fm_lint_select_shard
+if [ -n "$PARTITION" ]; then
+  PARTITION_ROOTS=()
+  partition_weights=$(fm_lint_root_weights) || exit $?
+  while IFS="$TAB" read -r index path; do
+    PARTITION_ROOTS+=("$path")
+  done < <(printf '%s\n' "$partition_weights" | LC_ALL=C sort -t "$TAB" -k1,1nr -k2,2n | awk -F '\t' -v want="$PARTITION_INDEX" -v total="$PARTITION_TOTAL" '
+    { shard=1; for (i = 2; i <= total; i++) if (load[i] < load[shard]) shard=i; load[shard]+=$1; if (shard == want) print $2 "\t" $3 }
+  ' | LC_ALL=C sort -t "$TAB" -k1,1n)
+  ROOTS=("${PARTITION_ROOTS[@]+"${PARTITION_ROOTS[@]}"}")
 fi
 ROOT_COUNT=${#ROOTS[@]}
 
@@ -649,11 +639,11 @@ else
   printf 'fm-lint.sh: full ShellCheck extended analysis enabled\n' >&2
 fi
 
-if [ -n "$SHARD" ]; then
-  printf 'fm-lint.sh: shard %s of %s (%s of %s roots)\n' \
-    "$SHARD_INDEX" "$SHARD_TOTAL" "$ROOT_COUNT" "$SELECTED_ROOT_COUNT" >&2
+if [ -n "$PARTITION" ]; then
+  printf 'fm-lint.sh: partition %s of %s (%s of %s roots)\n' \
+    "$PARTITION_INDEX" "$PARTITION_TOTAL" "$ROOT_COUNT" "$SELECTED_ROOT_COUNT" >&2
 fi
-if [ "$ROOT_COUNT" -eq 0 ] && { [ "$CHANGED_MODE" -eq 1 ] || [ -n "$SHARD" ]; }; then
+if [ "$ROOT_COUNT" -eq 0 ] && { [ "$CHANGED_MODE" -eq 1 ] || [ -n "$PARTITION" ]; }; then
   printf 'fm-lint.sh: no changed lint targets\n'
   overall_rc=0
   fm_lint_run_backend_purity || overall_rc=$?
@@ -694,7 +684,6 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-TAB=$(printf '\t')
 WEIGHTS="$TMP_ROOT/weights"
 OUTPUT_DIR="$TMP_ROOT/output"
 mkdir -p "$OUTPUT_DIR"
@@ -705,24 +694,7 @@ while [ "$worker" -lt "$SHARD_COUNT" ]; do
   worker=$((worker + 1))
 done
 
-index=1
-: > "$WEIGHTS"
-for path in "${ROOTS[@]}"; do
-  case "$path" in
-    *"$TAB"*|*$'\n'*)
-      printf 'fm-lint.sh: paths containing tabs or newlines are not supported: %s\n' "$path" >&2
-      exit 2
-      ;;
-  esac
-  if [ -f "$path" ]; then
-    weight=$(wc -c < "$path" 2>/dev/null | tr -d '[:space:]')
-  else
-    weight=1
-  fi
-  case "$weight" in ''|*[!0-9]*) weight=1 ;; esac
-  printf '%s\t%s\t%s\n' "$weight" "$index" "$path" >> "$WEIGHTS"
-  index=$((index + 1))
-done
+fm_lint_root_weights > "$WEIGHTS" || exit $?
 
 # Largest-first deterministic greedy assignment keeps the two bounded workers
 # balanced without affecting replay order. Direct bytes are a stable portable
@@ -938,8 +910,8 @@ EOF
     printf 'content_cksum\t%s\n' "$content_cksum"
     printf 'shellcheck_version\t%s\n' "$resolved"
     printf 'analysis_mode\t%s\n' "$ANALYSIS_MODE"
+    printf 'partition\t%s\n' "${PARTITION:-all}"
     printf 'jobs\t%s\n' "$JOBS"
-    printf 'shard\t%s\n' "${SHARD:-1of1}"
     printf 'root_count\t%s\n' "$ROOT_COUNT"
     printf 'direct_lines\t%s\n' "$direct_lines"
     printf 'direct_bytes\t%s\n' "$direct_bytes"

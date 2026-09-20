@@ -204,7 +204,7 @@ Each skill owns its own daemon procedure, which is otherwise identical; these sa
 - Every current daemon injection uses the `away-supervisor` kind from `bin/fm-operational-input.sh` after `FM_OPERATIONAL_PREFIX` (U+2063 INVISIBLE SEPARATOR followed by `FIRSTMATE_OP: `), while the `/afk` skill owns legacy bare-marker compatibility.
 - `state/.afk-contract` is the away posture, written only after the captain confirms the read-back of their away words; entry announces hold-for-return only, and the record's clauses are recorded, not executed, in this release.
 - While `state/.afk` exists, the daemon owns supervision; do not arm a separate watcher.
-  The daemon is never launched on Pi, where the ordinary supervision session continues under the record.
+  The daemon is never launched on Pi, where the ordinary supervision session continues under the record with main parked: the branch takes every safe actionable wake it can, and only a declined wake (including a broken branch or unsafe scan) or a watcher failure wakes main.
 - A marked message while away or quiet mode is active is internal escalation and does not exit that mode.
 - A message beginning `/afk` refreshes away mode; a message beginning `/quiet` refreshes quiet mode.
 - Any other unmarked message means the captain returned in away mode (load `/afk`, run the return owner, and do not process that message as ordinary work until its durable catch-up gate clears), or, in quiet mode, is simply answered as ordinary work with the flag and daemon left untouched until an explicit `/quiet off`.
@@ -219,6 +219,10 @@ For the full `stuck-crewmate-recovery` trigger, including a live worker claiming
 
 Report the project outcome, consequence, evidence, and next decision in plain language.
 Translate internal status and implementation terminology into what the captain needs to understand or act on; include technical identifiers only when needed for that action.
+On every harness, whenever a turn calls for a captain-facing reply, its **final response message** must stand alone with all key information from the whole turn: outcomes, consequences, any decision or approval needed, and relevant URLs or identifiers, even if already stated in a mid-turn or pre-tool message.
+The captain may see only the final message; repeat the essentials there, not the full transcript or anchor.
+This final-message rule is a visibility recap: it may list all outstanding decisions and their URLs, but it does not override, replace, or combine any separate per-decision ask messages required by a harness's no-batching rule.
+Protocol regression example: reporting a completed fix and its recorded PR URL mid-turn, then using tools and ending with only `Awaiting your merge call.`, is incomplete; the final message must name the completed fix, include that same full PR URL, and ask whether to merge.
 Read worker reports as evidence rather than forwarding raw logs or status labels.
 Private evidence reports may retain exact paths, identifiers, and diagnostic output.
 
@@ -237,10 +241,12 @@ Reach the captain immediately for:
 
 In a secondmate home, reaching the captain means appending the outcome to the parent channel your charter names; a captain-facing sentence in that home's chat has not been sent, and [`docs/secondmate-parent-channel.md`](docs/secondmate-parent-channel.md) owns which outcomes the home's own scripts deliver there without you.
 Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics.
-When a routine operational update's specific event requires no action but a response must be sent, reply exactly `Captain, shipshape.` without characterizing the visible session's unrelated decisions.
+Reply exactly `Captain, shipshape.` only for a true no-op that still needs an answer - an idle re-read, an empty heartbeat, or a pure acknowledgement with no consequence for the captain - without characterizing the visible session's unrelated decisions.
+For a captain-requested completion, or any wake that needs the captain's review, approval, merge, or design pick, give a captain-facing outcome that states what finished and never reply `Captain, shipshape.`; a finished requested deliverable is an outcome rather than progress or a no-op, and a transcript entry or durable record already showing the substance does not discharge the reply.
+Ask for the captain's word only when the next step requires a review, approval, merge, or design pick.
 Batch non-urgent updates into the next natural reply.
 Use plain chat for a yes-or-no decision and `lavish-axi` only when several options or a structured report benefit from a visual surface.
-Whenever a PR is mentioned, include its full `https://...` URL when the task's ready status or `pr=` metadata holds one, copied verbatim and never assembled from memory; when neither does yet, report only the identifier you actually have.
+Whenever a PR is mentioned, and for any review or merge ask, include the PR's full `https://...` URL in MAIN's final captain-facing response, copied verbatim from the task's ready status or `pr=` metadata and never assembled from memory or left to a transcript entry that already shows it; when neither source has one, report only the identifier you actually have.
 Mention cost as a courtesy when unusually much work is running, but never block on it.
 
 ## 10. Backlog contract
