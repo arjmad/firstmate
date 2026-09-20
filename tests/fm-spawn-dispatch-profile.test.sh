@@ -132,7 +132,7 @@ test_no_profile_keeps_claude_profile_defaults() {
   assert_meta_profile "$HOME_DIR/state/$id.meta" claude default default
 
   launch=$(cat "$LAUNCH_LOG")
-  expected="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < '$HOME_DIR/data/$id/launch-brief.md')\""
+  expected="export COMPACT_ADVISER_DISABLE=1; env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < '$HOME_DIR/data/$id/launch-brief.md')\""
   [ "$launch" = "$expected" ] || fail "no-profile claude launch did not use the canonical launch kind"$'\n'"expected: $expected"$'\n'"actual:   $launch"
   pass "no --model/--effort records defaults and types the claude launch instructions"
 }
@@ -381,7 +381,10 @@ test_active_dispatch_profile_allows_raw_launch_command() {
   assert_contains "$out" "spawned $id harness=custom-agent" "spawn did not report raw command harness"
   assert_meta_profile "$HOME_DIR/state/$id.meta" custom-agent default default
   launch=$(cat "$LAUNCH_LOG")
-  [ "$launch" = "custom-agent --flag" ] || fail "raw launch command changed"$'\n'"actual: $launch"
+  # The unverified-adapter escape hatch is still an agent this fleet launched,
+  # so it carries the compact-adviser floor; nothing else may rewrite the
+  # captain's own command.
+  [ "$launch" = "export COMPACT_ADVISER_DISABLE=1; custom-agent --flag" ] || fail "raw launch command changed"$'\n'"actual: $launch"
   pass "active crew-dispatch profile allows the raw launch-command escape hatch"
 }
 
@@ -1070,6 +1073,26 @@ test_claude_secondmate_launch_omits_task_control_channel_authority() {
   pass "a persistent claude secondmate keeps its supervisor contract without a task-worker authority overlay"
 }
 
+test_claude_long_launch_is_delivered_intact() {
+  local rec id out status launch expected
+  id=profile-claude-long-launch-z24
+  rec=$(make_spawn_case profile-claude-long-launch claude "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "long Claude launch should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  expected=$(claude_expected_launch "$HOME_DIR" "$id" "--dangerously-skip-permissions")
+  [ "${#expected}" -gt 1024 ] \
+    || fail "Claude regression fixture is too short to cover the terminal line limit: ${#expected} bytes"
+  [ "${#launch}" -gt 1024 ] \
+    || fail "long Claude launch was truncated to ${#launch} bytes; staging must deliver the full command"
+  [ "$launch" = "$expected" ] \
+    || fail "long Claude launch was not delivered intact (${#launch}/${#expected} bytes)"
+  pass "fm-spawn: a Claude launch longer than 1024 bytes is delivered intact through the staging path"
+}
+
 test_claude_crewmate_launch_carries_the_attribution_policy() {
   local rec id out status launch
   id=profile-claude-attribution-z22
@@ -1425,7 +1448,7 @@ SH
 # permission flag, and any other token refuses before endpoint or metadata.
 claude_expected_launch() {  # <home> <id> <permission-flag>
   local home=$1 id=$2 flag=$3
-  printf '%s' "env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $flag --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < '$home/data/$id/launch-brief.md')\""
+  printf '%s' "export COMPACT_ADVISER_DISABLE=1; env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $flag --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < '$home/data/$id/launch-brief.md')\""
 }
 
 test_claude_permission_mode_bypass_matches_absent_launch() {
@@ -1557,6 +1580,7 @@ test_non_claude_harness_ignores_claude_permission_mode
 test_non_claude_harness_ignores_config_dir
 test_claude_task_launch_carries_control_channel_authority
 test_claude_secondmate_launch_omits_task_control_channel_authority
+test_claude_long_launch_is_delivered_intact
 test_claude_crewmate_launch_carries_the_attribution_policy
 test_claude_secondmate_launch_carries_the_attribution_policy
 test_active_dispatch_profile_does_not_block_secondmate_launch
