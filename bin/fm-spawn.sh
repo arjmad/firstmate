@@ -30,7 +30,8 @@
 #   secondmate's charter.
 #        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--fast <on|off>]
 #   --relaunch launches a replacement agent for an EXISTING task into that
-#   task's own recorded endpoint and worktree instead of creating either. It is
+#   task's own recorded worktree, reusing its recorded endpoint when that
+#   endpoint still exists, instead of creating either from scratch. It is
 #   the launch half of the control plane (bin/fm-control.sh relaunch), which
 #   owns the checkpoint, the progress note, stopping the previous agent, and the
 #   transaction; call fm-control rather than this flag directly unless you are
@@ -42,7 +43,20 @@
 #   ordinary relaunch. It refuses unless the recorded endpoint is positively
 #   agent-free on a backend with a recovery-grade agent-state classifier (tmux
 #   or herdr), and clears the previous harness's per-task wiring before arming
-#   the new incarnation. The replacement still never starts outside the copy
+#   the new incarnation. Two verdicts are agent-free: a `dead` endpoint is
+#   ADOPTED as-is, while an endpoint PROVEN gone is RE-CREATED in the recorded
+#   worktree and the republished record rebinds the task to it. That proof is
+#   its own step, because a backend's `missing` also covers an endpoint that is
+#   merely unreachable from here - and it is only available on HERDR, which must
+#   still read the recorded pane as gone once that session's server is running
+#   again. A tmux `missing` always refuses: a task record carries no socket
+#   identity for its endpoint, so no read here can tell a destroyed window from
+#   one on a tmux server this process cannot address. An endpoint that turns out
+#   to have survived refuses too. The worktree is reused untouched either way; a
+#   rebind is a recovery, never a teardown. Only a crewmate or scout rebinds: a
+#   secondmate whose endpoint is gone is respawned by its own owner
+#   (`--secondmate`, driven by the session-start liveness sweep).
+#   The replacement still never starts outside the copy
 #   holding the work: a Herdr shell that has drifted out of the recorded
 #   worktree is told once to return, and only a shell that will not go refuses.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
@@ -525,6 +539,8 @@ fi
 . "$SCRIPT_DIR/fm-ff-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-classify-lib.sh
+. "$SCRIPT_DIR/fm-classify-lib.sh"
 fm_backlog_directory_present "$STATE" "state directory" || {
   echo "error: spawn refused: $FM_BACKLOG_TRANSITION_ERROR" >&2
   exit 1
@@ -1632,6 +1648,9 @@ RAW_LAUNCH=0
 # validation teardown uses, so a malformed, ambiguous, or foreign record
 # refuses here exactly as it refuses there.
 RELAUNCH_PRIOR_HARNESS=
+# 1 when the recorded endpoint is authoritatively gone and this relaunch must
+# create a fresh one for the task rather than adopt its recorded address.
+RELAUNCH_REBIND=0
 if [ "$RELAUNCH" -eq 1 ]; then
   [ "${#POS[@]}" -eq 1 ] || {
     echo "error: --relaunch takes the task id only; its project or home comes from the task's own record" >&2
@@ -1665,14 +1684,69 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: backend '$BACKEND' has no recovery-grade agent-state classifier, so a relaunch cannot prove the previous agent exited; refusing rather than risking two agents in one endpoint" >&2
     exit 1
   }
+  # Two states are agent-free, and both license a relaunch:
+  #   dead    - the endpoint exists and confidently holds no agent. The
+  #             endpoint is ADOPTED, so the task keeps its exact address.
+  #   missing - the endpoint itself is gone. There is no endpoint AND therefore
+  #             no agent, so a relaunch cannot adopt it: it CREATES a fresh
+  #             endpoint in the recorded worktree and the published record
+  #             rebinds to it.
+  # `missing` is NOT one state, and that is what the duplicate-agent argument
+  # turns on. fm_backend_agent_state's per-backend `missing` conflates "the
+  # endpoint was DESTROYED" with "the endpoint is UNREACHABLE from here right
+  # now", and an unreachable endpoint can still hold the live agent this
+  # relaunch would duplicate. So absence is PROVEN before it may rebind, never
+  # inferred from a failed read - and only HERDR can prove it:
+  #   herdr - the recorded session's server is started, and the recorded pane is
+  #           RE-READ through that session's own socket. `dead` means the pane
+  #           survived the restart and is adopted after all; `alive` means the
+  #           agent came back and refuses; only a second `missing` proves the
+  #           pane itself did not survive.
+  #   tmux  - REFUSES, always. A task record carries no socket identity for its
+  #           endpoint, and a server-wide inventory describes only the server
+  #           this process addresses, so no read available here can tell "gone"
+  #           from "on a server I cannot see". A tmux `missing` therefore stays
+  #           as deadlocked as it was before this change - deliberately, and
+  #           with the reason stated rather than guessed past.
+  # Every transient or self-contradicting read stays `unreadable`/`ambiguous`
+  # and refuses as it always did (bin/fm-backend.sh's fm_backend_agent_state
+  # owns that vocabulary). The proof itself lives in one place for the whole
+  # control plane - fm_control_endpoint_absence_verdict - so `exit` and
+  # `relaunch` cannot reach two different answers about one endpoint.
   RELAUNCH_STATE=$(fm_backend_agent_state "$BACKEND" "$RELAUNCH_TARGET")
-  [ "$RELAUNCH_STATE" = dead ] || {
-    echo "error: task $ID's endpoint reads '$RELAUNCH_STATE'; a relaunch requires a positively agent-free endpoint (stop the agent first with bin/fm-control.sh $ID exit)" >&2
-    exit 1
-  }
+  if [ "$RELAUNCH_STATE" = missing ]; then
+    RELAUNCH_ABSENCE=$(fm_control_endpoint_absence_verdict "$BACKEND" "$RELAUNCH_TARGET")
+    case "${RELAUNCH_ABSENCE%%$'\t'*}" in
+      gone) RELAUNCH_STATE=missing ;;
+      dead) RELAUNCH_STATE=dead ;;
+      alive) RELAUNCH_STATE=alive ;;
+      *)
+        echo "error: task $ID's recorded endpoint $RELAUNCH_TARGET reads 'missing', but ${RELAUNCH_ABSENCE#*$'\t'}. An endpoint that cannot be proven absent may still hold a live agent on this task's worktree; refusing rather than launching a second agent into it" >&2
+        exit 1
+        ;;
+    esac
+  fi
+  case "$RELAUNCH_STATE" in
+    dead) ;;
+    missing) RELAUNCH_REBIND=1 ;;
+    *)
+      echo "error: task $ID's endpoint reads '$RELAUNCH_STATE'; a relaunch requires a positively agent-free endpoint (stop the agent first with bin/fm-control.sh $ID exit)" >&2
+      exit 1
+      ;;
+  esac
   RELAUNCH_PRIOR_HARNESS=$(fm_meta_get "$RELAUNCH_META" harness)
   KIND=$(fm_meta_get "$RELAUNCH_META" kind)
   [ -n "$KIND" ] || KIND=ship
+  # A secondmate whose endpoint is gone already has ONE owner for that
+  # recovery: the session-start liveness sweep respawns it with
+  # `fm-spawn.sh <id> --secondmate`, which stands its home's own workspace back
+  # up (bin/fm-bootstrap.sh; the secondmate-provisioning skill). Rebinding one
+  # here as well would be a second path to the same outcome, so this refuses
+  # and names the one that owns it.
+  if [ "$RELAUNCH_REBIND" -eq 1 ] && [ "$KIND" = secondmate ]; then
+    echo "error: secondmate $ID's recorded endpoint is gone; its recovery is owned by the secondmate respawn path, not by relaunch (run bin/fm-spawn.sh $ID --secondmate, or let the session-start liveness sweep do it)" >&2
+    exit 1
+  fi
   MODE=$(fm_meta_get "$RELAUNCH_META" mode)
   YOLO=$(fm_meta_get "$RELAUNCH_META" yolo)
   RELAUNCH_WT=$(fm_meta_get "$RELAUNCH_META" worktree)
@@ -1691,6 +1765,12 @@ if [ "$RELAUNCH" -eq 1 ]; then
     }
   fi
   if [ "$BACKEND" = herdr ]; then
+    # fm-spawn uses HERDR_PANE_ID for the TASK's pane, while the herdr adapter
+    # reads that SAME name as the pane THIS process is itself running in
+    # (fm_backend_herdr_launcher_identity). The record is about to overwrite it,
+    # so keep what herdr actually injected: a rebind still has to prove its own
+    # launcher identity, and a task's recorded pane is not it.
+    RELAUNCH_LAUNCHER_PANE_ID=${HERDR_PANE_ID:-}
     HERDR_SES=$(fm_meta_get "$RELAUNCH_META" herdr_session)
     HERDR_WORKSPACE_ID=$(fm_meta_get "$RELAUNCH_META" herdr_workspace_id)
     HERDR_TAB_ID=$(fm_meta_get "$RELAUNCH_META" herdr_tab_id)
@@ -3244,16 +3324,92 @@ fi
 
 W="fm-$ID"
 if [ "$RELAUNCH" -eq 1 ]; then
-  # Adopt the recorded endpoint instead of creating one. This is what keeps a
-  # relaunch a REPLACEMENT rather than a second copy of the task: no new
-  # terminal, no second worktree, and every uncommitted change left exactly
-  # where the previous agent left it.
-  T=$RELAUNCH_TARGET
   # A secondmate's home already resolved WT above through the same validation a
   # fresh secondmate spawn uses; every other kind takes the recorded worktree.
+  # Either way the worktree is REUSED, never re-created: its branch, commits and
+  # uncommitted changes are exactly as the previous agent left them, and nothing
+  # below may touch them.
   [ "$KIND" = secondmate ] || WT=$RELAUNCH_WT
-  WT_TARGET=$T
-  SES=${T%%:*}
+  if [ "$RELAUNCH_REBIND" -eq 0 ]; then
+    # Adopt the recorded endpoint instead of creating one. This is what keeps a
+    # relaunch a REPLACEMENT rather than a second copy of the task: no new
+    # terminal, no second worktree, and every uncommitted change left exactly
+    # where the previous agent left it.
+    T=$RELAUNCH_TARGET
+    WT_TARGET=$T
+    SES=${T%%:*}
+  else
+    # The recorded endpoint is authoritatively gone, so there is nothing to
+    # adopt: create ONE fresh endpoint for the same task, opened directly in the
+    # recorded worktree. The record published below writes window= (and herdr's
+    # ids) from these values, which is the whole rebind - the task id, brief,
+    # worktree, armed poll and status log are untouched.
+    #
+    # Herdr is the ONLY backend that reaches here: the gate above rebinds only
+    # on a PROVEN-gone endpoint, and absence is provable only on herdr, whose
+    # every read is scoped to the session the record names
+    # (fm_control_endpoint_absence_verdict owns that argument). tmux and every
+    # secondmate were already refused, so there is no dispatch left to make.
+    #
+    # This deliberately uses the FLAT container shape rather than Herdr's
+    # presentation projection: projection is a presentation-only layout that is
+    # never endpoint or ownership authority, and flat is already the documented
+    # fallback for every recovery it cannot bind exactly
+    # (docs/herdr-backend.md "Presentation spaces").
+    #
+    # KNOWN LIMITATION (bead fm-herdr-rebind-leak-20260913): the tab minted
+    # below is registered with no abort cleanup, so a later refusal leaves that
+    # pane behind and a retry mints another. Documented in
+    # docs/agent-control.md rather than fixed here, because the remedy is
+    # machinery the ordinary flat spawn path does not have either.
+    #
+    # Re-create the tab under the RECORDED herdr session. Without the explicit
+    # session the container would resolve from the AMBIENT one
+    # (${HERDR_SESSION:-default}), so reclaiming a task recorded on a named
+    # session from a seat that is not in it would silently relocate the task
+    # onto another herdr server - an identity change, published as a
+    # self-consistent but wrong record.
+    HERDR_REBIND_SES=${RELAUNCH_TARGET%%:*}
+    HERDR_CONTAINER_RAW=$(HERDR_PANE_ID="$RELAUNCH_LAUNCHER_PANE_ID" \
+      fm_backend_herdr_container_ensure "$PROJ_ABS" launcher-home "$HERDR_REBIND_SES") || {
+      # container_ensure returns 1 for several unrelated reasons - a failed
+      # version check, a server that will not start, an ambiguous workspace
+      # label, a cross-session launcher identity, a failed workspace create -
+      # and each already printed its own accurate message. Add only what this
+      # layer actually knows, and name the session mismatch solely when there
+      # IS one, rather than asserting a cause this condition cannot establish.
+      #
+      # A seat with NO herdr pane never reaches the cross-session guard at all:
+      # fm_backend_herdr_launcher_identity returns 2 for it and the placement
+      # falls back to the recorded session's labeled container, which is what
+      # makes a plain ssh or cron reclaim work. Its ambient session still reads
+      # `default` (fm_backend_herdr_session's fallback), so the inequality alone
+      # would fire for EVERY named-session task reclaimed from a plain shell and
+      # send the operator chasing a session mismatch that was never the cause.
+      HERDR_AMBIENT_SES=$(fm_backend_herdr_session)
+      if [ -n "$RELAUNCH_LAUNCHER_PANE_ID" ] && [ "$HERDR_AMBIENT_SES" != "$HERDR_REBIND_SES" ]; then
+        echo "error: task $ID's endpoint could not be re-created in its recorded herdr session '$HERDR_REBIND_SES'; this seat is running in herdr session '$HERDR_AMBIENT_SES', and a reclaim never moves a task to another session" >&2
+      else
+        echo "error: task $ID's endpoint could not be re-created in its recorded herdr session '$HERDR_REBIND_SES'; see the refusal above for what failed" >&2
+      fi
+      exit 1
+    }
+    CONTAINER=${HERDR_CONTAINER_RAW%%$'\t'*}
+    HERDR_SEEDED_DEFAULT_TAB_ID=${HERDR_CONTAINER_RAW#*$'\t'}
+    HERDR_SES=${CONTAINER%%:*}
+    HERDR_WORKSPACE_ID=${CONTAINER#*:}
+    HERDR_TASK_IDS=$(fm_backend_herdr_create_task "$CONTAINER" "$W" "$WT" "$HERDR_SEEDED_DEFAULT_TAB_ID") || exit 1
+    read -r HERDR_TAB_ID HERDR_PANE_ID <<EOF
+$HERDR_TASK_IDS
+EOF
+    if [ -z "$HERDR_TAB_ID" ] || [ -z "$HERDR_PANE_ID" ]; then
+      echo "error: herdr did not return a tab/pane id for $W" >&2
+      exit 1
+    fi
+    T="$HERDR_SES:$HERDR_PANE_ID"
+    SES=$HERDR_SES
+    WT_TARGET=$T
+  fi
 else
   if [ "$KIND" != secondmate ]; then
     preflight_project_origin_reachable "$PROJ_ABS" || exit 1
@@ -3688,7 +3844,7 @@ kimi_wait_for_delivery() {
 }
 
 kimi_spawn_fail() { # <detail>
-  printf 'failed: %s\n' "$1" >>"$STATE/$ID.status"
+  printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
   echo "error: $1; inspect window $T" >&2
 }
 
@@ -3756,7 +3912,7 @@ rovo_wait_for_delivery() {
 }
 
 rovo_spawn_fail() { # <detail>
-  printf 'failed: %s\n' "$1" >>"$STATE/$ID.status"
+  printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
   echo "error: $1; inspect window $T" >&2
   rovo_endpoint_cleanup
 }
@@ -3831,7 +3987,7 @@ agy_wait_for_working() {
 }
 
 agy_spawn_fail() {  # <detail>
-  printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
+  printf '%s\n' "$(status_stamp_line "failed: $1")" >>"$STATE/$ID.status"
   echo "error: $1; inspect window $T" >&2
   rovo_endpoint_cleanup
 }
