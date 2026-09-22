@@ -824,8 +824,7 @@ test_decision_answer_partition_relocates_under_the_record() {
     || fail "the branch's blocker answer did not reach the worker's inbox"
 
   # Under the record: the same decision answer is sent and closes the key.
-  FM_HOME="$home" "$ROOT/bin/fm-afk-contract.sh" propose >/dev/null || fail "away propose failed"
-  FM_HOME="$home" "$ROOT/bin/fm-afk-contract.sh" confirm >/dev/null || fail "away confirm failed"
+  FM_HOME="$home" "$ROOT/bin/fm-afk-contract.sh" enter >/dev/null || fail "away entry failed"
   out=$(env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_LOG="$log" FM_SEND_SETTLE=0 \
     FM_SUPERVISION_ACTOR=branch "$SEND" t1 --resolve-key api-shape "go with REST" 2>&1); rc=$?
   expect_code 0 "$rc" "under the away-posture record the branch's decision answer must be sent: $out"

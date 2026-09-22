@@ -566,6 +566,20 @@ outcome: passed
 EOF
 }
 
+run_passed_with_override() {  # <branch>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: completed
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: "https://github.com/o/r/pull/1"
+  findings: none
+outcome: passed-with-override
+ci_override_reason: "live checks not all passed: Lint (fail)"
+EOF
+}
+
 run_passed_with_pr() {  # <branch> <pr-url>
   cat <<EOF
 run:
@@ -1312,6 +1326,22 @@ test_terminal_passed() {
   pass "terminal passed run is authoritative"
 }
 
+test_terminal_passed_with_override() {
+  reset_fakes
+  local d; d=$(new_case passed-with-override)
+  make_repo_on_branch "$d/wt" fm/feat-override
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-override.meta" "window=fm:fm-feat-override" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_passed_with_override fm/feat-override)"
+  local out; out=$(run_crew_state "$d" feat-override)
+  assert_contains "$out" "state: done" "passed-with-override run -> done, not unknown"
+  assert_contains "$out" "source: run-step" "passed-with-override -> run-step source"
+  assert_contains "$out" "run passed: PR merged" "passed-with-override run reports merged only after the PR record says merged"
+  assert_not_contains "$out" "state: unknown" "passed-with-override must not fall through to unknown"
+  assert_not_contains "$out" "outcome: passed-with-override" "passed-with-override must not surface as a raw unmapped outcome detail"
+  pass "terminal passed-with-override run reads done like a clean pass"
+}
+
 test_terminal_passed_uses_matching_retirement_receipt_without_forge() {
   reset_fakes
   local d url read_log out
@@ -1895,6 +1925,40 @@ test_no_run_busy_pane() {
   assert_contains "$out" "source: pane" "busy record -> pane source"
   assert_contains "$out" "claude-hook" "the working verdict names its semantic source"
   pass "no run + a busy semantic record reads working, attributed to its source"
+}
+
+# A launch pinned at the fm-spawn seed (no hook has posted yet) whose pane
+# renders a recognized interactive prompt must read unknown, never working -
+# this is the load-bearing link the launch-prompt backstop depends on:
+# fm-watch.sh's pause_state_class absorbs a stale pane as "provably working"
+# whenever THIS script reports `state: working · source: pane`, so if this
+# authoritative read still said working, the watcher would silently swallow
+# the wake even though bin/fm-busy-lib.sh's own classifier had already flipped
+# to unknown launch-prompt. crew_busy_verdict must therefore capture a real
+# tail for every harness, not only grok, so the backstop's own tail-based
+# check ever runs here at all.
+test_no_run_launch_prompt_parked_is_not_working() {
+  reset_fakes
+  local d; d=$(new_case launch-prompt)
+  make_repo_on_branch "$d/wt" fm/feat-lp
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-lp.meta" "window=fm:fm-feat-lp" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_RUNS_LIST=""
+  FM_FAKE_BUSY=1
+  FM_FAKE_BUSY_TEXT='Quick safety check: Is this a project you created or one you trust? ...
+> No, exit
+  Yes, I trust this folder
+Enter to confirm . Esc to cancel'
+  export FM_FAKE_BUSY_TEXT
+  # arm only, never apply: the launch turn has never advanced past the seed
+  # fm-spawn.sh writes at spawn time.
+  "$ROOT/bin/fm-busy-event.sh" arm "$d/state" feat-lp >/dev/null
+  local out; out=$(run_crew_state "$d" feat-lp)
+  assert_not_contains "$out" "state: working" "a launch parked on its trust dialog must never read working"
+  assert_contains "$out" "state: unknown" "a parked launch reads unknown, not busy or idle"
+  assert_contains "$out" "launch-prompt" "the unknown verdict names the launch-prompt backstop as its source"
+  pass "a launch parked on a recognized interactive prompt never reads working, closing the absorb path a stale watcher poll depends on"
 }
 
 # A converted adapter must NOT read working from rendered footer text: the
@@ -3286,6 +3350,146 @@ test_capped_overview_without_branch_rows_reports_both_ids() {
   assert_contains "$out" '01NEW' 'the newer hidden run is identified'
   assert_contains "$out" '01OLD' 'the older hidden pending run is identified'
   pass 'same-branch identity survives both runs falling outside the overview'
+}
+
+# Real `no-mistakes axi` overview truncation carries no `repo: ` identity
+# line at all (tests/captures/no-mistakes-v1.70.1/overview.toon, captured
+# 2026-09-20): only `count:`/`runs[...]:`. A branch with zero rows anywhere
+# in a capped overview must still read as truthfully absent from that real
+# shape, not as an unreadable table.
+test_capped_overview_without_repo_line_and_no_runs_reports_absent() {
+  reset_fakes
+  local d; d=$TMP_ROOT/capped-no-repo-line-no-runs
+  mkdir -p "$d/state"
+  make_repo_on_branch "$d/wt" fm/orphan-branch
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/orphan.meta" "window=fm:fm-orphan" "worktree=$d/wt" "kind=ship" "harness=claude"
+  NM_HOME="$d/nm"
+  mkdir -p "$NM_HOME"
+  local head; head=$(git -C "$d/wt" rev-parse --short=8 HEAD)
+  FM_FAKE_AXI_HOME=$(python3 - "$NM_HOME/state.sqlite" "$d/wt" "$head" <<'PY'
+import sqlite3
+import sys
+
+database, worktree, head = sys.argv[1:]
+with sqlite3.connect(database) as db:
+    db.executescript("""
+        CREATE TABLE repos (id TEXT PRIMARY KEY, working_path TEXT NOT NULL UNIQUE);
+        CREATE TABLE runs (id TEXT PRIMARY KEY, repo_id TEXT NOT NULL, branch TEXT NOT NULL,
+                           status TEXT NOT NULL, head_sha TEXT NOT NULL, created_at INTEGER NOT NULL);
+    """)
+    db.execute("INSERT INTO repos VALUES ('repo', ?)", (worktree,))
+    db.executemany("INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?)",
+                    [("01OTHER%02d" % i, "repo", "fm/other-%d" % i, "running", head, i)
+                     for i in range(11)])
+# Genuine captured shape: no `repo: ` line, ever.
+print("count: 10 of 11 total")
+print("runs[10]{id,branch,status,head,pr}:")
+for i in range(10):
+    print('  "01OTHER%02d",fm/other-%d,running,%s,""' % (i, i, head))
+PY
+)
+  FM_FAKE_RUNS_LIST=""
+  FM_FAKE_BUSY=1
+  local gen; gen=$("$ROOT/bin/fm-busy-event.sh" arm "$d/state" orphan)
+  "$ROOT/bin/fm-busy-event.sh" apply "$d/state" orphan busy --gen "$gen" \
+    --source claude-hook --event user-prompt-submit
+  local out; out=$(run_crew_state "$d" orphan)
+  assert_not_contains "$out" "state: unknown" 'a zero-row branch in a repo-line-free capped overview is absent, not unreadable'
+  assert_not_contains "$out" "unreadable" 'the missing repo: line must not read as an unreadable table'
+  assert_contains "$out" "state: working" 'absence of a run falls through to the pane/busy verdict'
+  assert_contains "$out" "source: pane" 'the working verdict still comes from the pane source'
+  pass 'a capped overview with no repo: line and zero same-branch rows reports absent, not unreadable'
+}
+
+# The same real capped shape, but reached through the code path that actually
+# consumes the same-branch selection: fm-crew-state only consults the overview
+# once `axi status` answers with a run, so a branch of its own with no run at
+# all is only reported while SOME run exists elsewhere. Pre-fix this read
+# `unknown - complete same-branch run inventory unreadable`, which is the
+# healthy-home-reports-itself-untrustworthy symptom.
+test_no_branch_run_beside_a_live_run_elsewhere_reads_absent() {
+  reset_fakes
+  local d; d=$TMP_ROOT/capped-live-elsewhere
+  mkdir -p "$d/state"
+  make_repo_on_branch "$d/wt" fm/orphan-branch
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/orphan.meta" "window=fm:fm-orphan" "worktree=$d/wt" "kind=ship" "harness=claude"
+  NM_HOME="$d/nm"
+  mkdir -p "$NM_HOME"
+  local head; head=$(git -C "$d/wt" rev-parse HEAD)
+  FM_FAKE_AXI_HOME=$(python3 - "$NM_HOME/state.sqlite" "$d/wt" "$head" <<'PY'
+import sqlite3
+import sys
+
+database, worktree, head = sys.argv[1:]
+with sqlite3.connect(database) as db:
+    db.executescript("""
+        CREATE TABLE repos (id TEXT PRIMARY KEY, working_path TEXT NOT NULL UNIQUE);
+        CREATE TABLE runs (id TEXT PRIMARY KEY, repo_id TEXT NOT NULL, branch TEXT NOT NULL,
+                           status TEXT NOT NULL, head_sha TEXT NOT NULL, created_at INTEGER NOT NULL);
+    """)
+    db.execute("INSERT INTO repos VALUES ('repo', ?)", (worktree,))
+    db.executemany("INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?)",
+                   [("01OTHER%02d" % i, "repo", "fm/other-%d" % i, "running", head, i)
+                    for i in range(11)])
+# Genuine captured shape: no `repo: ` line, ever.
+print("count: 10 of 11 total")
+print("runs[10]{id,branch,status,head,pr}:")
+for i in range(10):
+    print('  "01OTHER%02d",fm/other-%d,running,%s,""' % (i, i, head))
+PY
+)
+  FM_FAKE_AXI_STATUS=$(run_running fm/other-0)
+  FM_FAKE_RUNS_LIST=""
+  FM_FAKE_BUSY=1
+  local gen; gen=$("$ROOT/bin/fm-busy-event.sh" arm "$d/state" orphan)
+  "$ROOT/bin/fm-busy-event.sh" apply "$d/state" orphan busy --gen "$gen" \
+    --source claude-hook --event user-prompt-submit
+  local out; out=$(run_crew_state "$d" orphan)
+  assert_not_contains "$out" "unreadable" 'a branch with no run of its own is not an unreadable runs table'
+  assert_not_contains "$out" "state: unknown" 'a healthy home does not report itself untrustworthy'
+  assert_contains "$out" "state: working" 'absence of a same-branch run falls through to the pane verdict'
+  assert_contains "$out" "source: pane" 'the working verdict still comes from the pane source'
+  pass 'no run for this branch beside a live run elsewhere reads absent, not unreadable'
+}
+
+# The capped-overview sqlite reader runs inside the same per-read budget as
+# every other no-mistakes state read, so a contended database cannot stall a
+# crew poll: a reader that never returns must be killed and fall through to the
+# reader-unavailable verdict.
+test_capped_inventory_reader_is_time_bounded() {
+  make_capped_runs_case capped-slow-reader running pending hidden
+  local d=$TMP_ROOT/capped-slow-reader out started elapsed
+  cat > "$d/fakebin/python3" <<'SH'
+#!/usr/bin/env bash
+sleep 30
+SH
+  chmod +x "$d/fakebin/python3"
+  FM_CREW_STATE_NM_TIMEOUT=1
+  export FM_CREW_STATE_NM_TIMEOUT
+  started=$SECONDS
+  out=$(run_crew_state "$d" competing)
+  elapsed=$((SECONDS - started))
+  unset FM_CREW_STATE_NM_TIMEOUT
+  [ "$elapsed" -lt 10 ] || fail "the capped inventory reader ran unbounded for ${elapsed}s"
+  assert_contains "$out" 'state: unknown' 'an unreachable inventory reader cannot establish a verdict'
+  assert_contains "$out" 'reader unavailable' 'a killed reader reports the same unavailable reader path'
+  pass 'the capped inventory reader is bounded by the crew read budget'
+}
+
+# Repo identity is looked up by the exact recorded `working_path`; a worktree
+# spelled differently from the registered row is not guessed at, and reads as
+# an unreadable inventory that still names every candidate run id.
+test_capped_inventory_requires_exact_worktree_path() {
+  make_capped_runs_case capped-noncanonical running pending hidden
+  local d=$TMP_ROOT/capped-noncanonical out
+  fm_write_meta "$d/state/competing.meta" "window=fm:fm-competing" "worktree=$d/wt/./" "kind=ship"
+  out=$(run_crew_state "$d" competing)
+  assert_contains "$out" 'state: unknown' 'an unmatched worktree spelling cannot establish a verdict'
+  assert_contains "$out" 'unreadable' 'an unmatched repo lookup reports the inventory unreadable'
+  assert_not_contains "$out" 'absent' 'an unmatched repo lookup never reads as a branch without runs'
+  pass 'a worktree spelling the inventory does not record reads unreadable'
 }
 
 test_capped_replacement_keeps_gate_and_inventory_unchanged() {
@@ -4709,6 +4913,7 @@ test_ci_fixing_after_green_stays_working
 test_top_level_fixing_ci_running_after_green_stays_working
 test_top_level_fixing_done_log_stays_working
 test_terminal_passed
+test_terminal_passed_with_override
 test_terminal_passed_uses_matching_retirement_receipt_without_forge
 test_terminal_passed_no_forge_switch_skips_read_but_keeps_receipt
 test_terminal_passed_with_open_pr_does_not_claim_merged
@@ -4735,6 +4940,7 @@ test_terminal_run_without_live_sibling_is_unchanged
 test_coarse_run_does_not_probe_other_branch_ci_log_for_ready_status
 test_other_branch_run_ignored
 test_no_run_busy_pane
+test_no_run_launch_prompt_parked_is_not_working
 test_no_run_footer_text_alone_is_not_working
 test_no_run_grok_uses_isolated_fallback
 test_no_run_herdr_unknown_uses_backend_capture
@@ -4784,6 +4990,10 @@ test_no_run_herdr_stale_registration_over_shell_reads_agent_gone
 test_no_run_herdr_stale_working_record_is_never_busy
 test_capped_competing_live_runs_report_both_ids
 test_capped_overview_without_branch_rows_reports_both_ids
+test_capped_overview_without_repo_line_and_no_runs_reports_absent
+test_no_branch_run_beside_a_live_run_elsewhere_reads_absent
+test_capped_inventory_reader_is_time_bounded
+test_capped_inventory_requires_exact_worktree_path
 test_capped_replacement_keeps_gate_and_inventory_unchanged
 test_capped_inventory_failures_report_unknown
 test_complete_inventory_ignores_unrelated_semantics

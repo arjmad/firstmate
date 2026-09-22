@@ -1663,7 +1663,7 @@ const contract = (args) => {
     env: { ...process.env, FM_HOME: home, FM_STATE_OVERRIDE: `${home}/state` },
   });
   if (result.status !== 0) throw new Error(`fm-afk-contract.sh ${args.join(" ")} failed: ${result.stderr}`);
-  return (result.stdout || "").trim();
+  return result.stdout || "";
 };
 const requests = () => sentToMain.filter((sent) => sent.message.customType === "fm-branch-process");
 const unprocessedSeqs = () => outcomeScript(["unprocessed"]).split("\n").filter(Boolean).map((line) => JSON.parse(line).seq);
@@ -1714,8 +1714,7 @@ if (pending.options.triggerTurn !== true || pending.options.deliverAs !== "follo
 if (!pending.message.content.includes(`[seq ${seq1}]`)) {
   throw new Error(`the first queued request lost seq ${seq1}: ${pending.message.content}`);
 }
-contract(["propose", "--grant", "task-d"]);
-contract(["confirm"]);
+contract(["enter", "--words", "merge task-d when green, then cut the prerelease\n\n"]);
 const processingMsg = { role: "custom", customType: pending.message.customType, content: pending.message.content, display: false };
 let aborted = false;
 const abortCtx = { ...defaultSessionCtx, abort() { aborted = true; } };
@@ -1806,11 +1805,13 @@ const awayPrompt = globalThis.__fmPrompts[1];
 const head = "FIRSTMATE SUPERVISION WAKE: signal: away wake\n\nHandle this per your operating procedure and finish with fm_branch_report.\n\nPOSTURE: AWAY. ";
 if (!awayPrompt.startsWith(head)) throw new Error(`the away wake lost its shape or its tail: ${awayPrompt}`);
 const readback = contract(["readback"]);
-if (!readback.includes("merge when green (task ids): task-d")) throw new Error(`the read-back lost the grant: ${readback}`);
-if (!awayPrompt.endsWith(`The record, verbatim:\n${readback}`)) throw new Error(`the tail does not end with the record's read-back verbatim: ${awayPrompt}`);
+if (!readback.endsWith("    merge task-d when green, then cut the prerelease\n    \n")) throw new Error(`the read-back lost the captain's words or their trailing blank line: ${JSON.stringify(readback)}`);
+if (!awayPrompt.includes("act on them by your own judgment")) throw new Error(`the away tail lost the words-execution rule: ${awayPrompt}`);
+if (awayPrompt.includes("does not execute them")) throw new Error(`the away tail still calls the words inert: ${awayPrompt}`);
+if (!awayPrompt.endsWith(`The record, verbatim:\n${readback}`)) throw new Error(`the tail does not end with the record's read-back verbatim, trailing whitespace included: ${JSON.stringify(awayPrompt)}`);
 const snapshot = readFileSync(`${home}/state/.branch-eligible-rows`, "utf8").trim().split("\n").join(",");
 if (snapshot !== "1,2,3") throw new Error(`the away wake claimed rows ${snapshot}, not every row`);
-const fleet = await report.execute("c2", { task: "fleet", verdict: "captain", summary: "merged task-d's PR under its grant" }, undefined, undefined, {});
+const fleet = await report.execute("c2", { task: "fleet", verdict: "captain", summary: "per your away instructions: merged task-d's PR once green" }, undefined, undefined, {});
 if (fleet.isError) throw new Error(`a fleet report under a claimed check row was refused: ${JSON.stringify(fleet)}`);
 finishPrompt();
 await awayOffer.settlement;
@@ -1871,12 +1872,11 @@ const contract = (args) => {
     env: { ...process.env, FM_HOME: home, FM_STATE_OVERRIDE: `${home}/state` },
   });
   if (result.status !== 0) throw new Error(`fm-afk-contract.sh ${args.join(" ")} failed: ${result.stderr}`);
-  return (result.stdout || "").trim();
+  return result.stdout || "";
 };
 
 await fire("session_start", {});
-contract(["propose"]);
-contract(["confirm"]);
+contract(["enter"]);
 writeFileSync(`${home}/state/.wake-queue`, "1\t1\tcheck\tmain-only\tcheck: task-d.check.sh: PR merged\n");
 contract(["archive"]);
 const offer = makeOffer("check: task-d.check.sh: PR merged", [], false, true, true);
@@ -1893,8 +1893,7 @@ if (mainUserMessages.length !== 0) {
   throw new Error("the rejected settlement leaked a main user message from the branch");
 }
 
-contract(["propose"]);
-contract(["confirm"]);
+contract(["enter"]);
 writeFileSync(`${home}/state/.wake-queue`, "1\t1\tsignal\tbranch-driver.status\tsignal: branch-driver.status\n");
 const taskLocal = makeOffer("signal: branch-driver.status", [approvedProject], false, true);
 bus.emit("fm-branch-supervision:dispatch", taskLocal);
@@ -1938,12 +1937,11 @@ const contract = (args) => {
     env: { ...process.env, FM_HOME: home, FM_STATE_OVERRIDE: `${home}/state` },
   });
   if (result.status !== 0) throw new Error(`fm-afk-contract.sh ${args.join(" ")} failed: ${result.stderr}`);
-  return (result.stdout || "").trim();
+  return result.stdout || "";
 };
 
 await fire("session_start", {}, defaultSessionCtx);
-contract(["propose"]);
-contract(["confirm"]);
+contract(["enter"]);
 writeFileSync(
   `${home}/state/.wake-queue`,
   "1\t1\tsignal\tbranch-driver.status\tsignal: branch-driver.status\n2\t2\theartbeat\theartbeat\theartbeat\n",

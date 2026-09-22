@@ -2,7 +2,8 @@
 # Strict no-emit contract check for the tracked Firstmate Pi extensions.
 set -u
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/fixtures.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
 command -v npm >/dev/null 2>&1 || { echo "skip: Pi extension typecheck prerequisite not found: npm"; exit 0; }
 command -v tsc >/dev/null 2>&1 || { echo "skip: Pi extension typecheck prerequisite not found: tsc"; exit 0; }
@@ -42,6 +43,17 @@ cp "$ROOT/.pi/extensions/lib/fm-calm-visibility.ts" "$TMP_ROOT/lib/fm-calm-visib
 cp "$ROOT/.pi/extensions/lib/fm-calm-working-ship.ts" "$TMP_ROOT/lib/fm-calm-working-ship.ts"
 cp "$ROOT/.pi/extensions/lib/fm-calm-working-ship-sprite.ts" "$TMP_ROOT/lib/fm-calm-working-ship-sprite.ts"
 cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$TMP_ROOT/lib/fm-operational-input.ts"
+# Compile the state-side worker artifact emitted by the real spawn interface,
+# not a second handwritten copy of its lifecycle handlers. Pi and pi-signed
+# share this artifact; all endpoint operations stay inside the fake toolchain.
+fakebin=$(make_spawn_fakebin "$TMP_ROOT/fake" pi)
+fm_test_spawn_home "$TMP_ROOT/home" pi
+fm_git_worktree "$TMP_ROOT/project" "$TMP_ROOT/wt" worker-types
+fm_test_spawn_brief "$TMP_ROOT/home" worker-types
+fm_test_run_spawn "$TMP_ROOT/home" "$TMP_ROOT/wt" "$fakebin" \
+  worker-types "$TMP_ROOT/project" --mode direct-PR --yolo off >/dev/null || exit 1
+cp "$TMP_ROOT/home/state/worker-types.pi-ext.ts" "$TMP_ROOT/fm-worker.ts"
+
 ln -s "$PI_PACKAGE_DIR" "$TMP_ROOT/node_modules/@earendil-works/pi-coding-agent"
 ln -s "$PI_PACKAGE_DIR/node_modules/@earendil-works/pi-tui" "$TMP_ROOT/node_modules/@earendil-works/pi-tui"
 ln -s "$PI_PACKAGE_DIR/node_modules/@earendil-works/pi-ai" "$TMP_ROOT/node_modules/@earendil-works/pi-ai"
@@ -69,4 +81,4 @@ JSON
 
 tsc -p "$TMP_ROOT/tsconfig.json" || exit 1
 version=$(jq -r '.version' "$PI_PACKAGE_DIR/package.json" 2>/dev/null || printf 'unknown')
-printf 'ok - tracked Pi extensions pass strict no-emit typecheck against Pi %s\n' "$version"
+printf 'ok - tracked and generated worker Pi extensions pass strict no-emit typecheck against Pi %s\n' "$version"
