@@ -32,8 +32,12 @@ Both runtimes read the same root, so one consent per account serves firstmate an
 ## The exact invocation
 
 ```
-uvx workspace-mcp --single-user --permissions gmail:full drive:full calendar:full docs:full sheets:full contacts:full
+workspace-mcp --single-user --permissions gmail:full drive:full calendar:full docs:full sheets:full contacts:full
 ```
+
+The command is the `workspace-mcp` launcher on `PATH`, recorded by its absolute path, so a host that pins the package runs that exact build; `FM_GWS_SERVER` names another launcher.
+The consent and verify driver runs on that launcher's own Python interpreter, read from its shebang, rather than resolving the package again.
+Only when no launcher is found, or `FM_GWS_SERVER` is set empty, does the command fall back to `uvx workspace-mcp` and the driver to `uv run --with workspace-mcp`, both of which resolve the latest release from PyPI at run time.
 
 Each instance additionally receives `WORKSPACE_MCP_CREDENTIALS_DIR` for its own account and `GOOGLE_CLIENT_SECRET_PATH` for the shared client.
 `bin/fm-google-workspace.sh argv` prints this list, and the Claude Code and Hermes configurations are both generated from it, so the three cannot drift apart.

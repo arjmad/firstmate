@@ -56,6 +56,9 @@
 # ${XDG_STATE_HOME:-$HOME/.local/state}/google-workspace-mcp. The root is shared by
 # both runtimes on purpose, so one consent per account serves firstmate and Hermes.
 # FM_GWS_CLAUDE overrides the Claude Code CLI used by claude-install/claude-uninstall.
+# FM_GWS_SERVER names the workspace-mcp launcher; it defaults to the workspace-mcp on
+# PATH, so a host that pins the package runs that exact build. When none is found, or
+# FM_GWS_SERVER is set empty, the tool falls back to resolving it from PyPI with uvx.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -76,6 +79,8 @@ BWS_SECRET_KEY=""
 # the OAuth token boundary: --tool-tier and --disabled-tools shrink the tool list while
 # still consenting to the full service scopes. It is mutually exclusive with --tools and
 # --read-only, so this list also selects which services load at all.
+SERVER_BIN="${FM_GWS_SERVER-$(command -v workspace-mcp 2>/dev/null || true)}"
+
 PERMISSIONS="gmail:full drive:full calendar:full docs:full sheets:full contacts:full"
 
 GWS_ROOT="${FM_GWS_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/google-workspace-mcp}"
@@ -167,11 +172,12 @@ resolve_account() {
 
 creds_dir() { printf '%s/%s\n' "$ACCOUNTS_ROOT" "$(account_slug "$1")"; }
 
-# server_argv prints the workspace-mcp invocation one token per line. Every consumer -
-# the Claude Code entry, the Hermes block, and the consent ceremony - reads it from
-# here, so the three can never drift from each other.
+# server_argv prints the workspace-mcp invocation one token per line, the command
+# first. Every consumer - the Claude Code entry, the Hermes block, and the consent
+# ceremony - reads it from here, so the three can never drift from each other.
 server_argv() {
-  printf '%s\n' uvx workspace-mcp --single-user --permissions
+  if [ -n "$SERVER_BIN" ]; then printf '%s\n' "$SERVER_BIN"; else printf '%s\n' uvx workspace-mcp; fi
+  printf '%s\n' --single-user --permissions
   # shellcheck disable=SC2086 # deliberate word splitting: one permission token per line
   printf '%s\n' $PERMISSIONS
 }
@@ -347,11 +353,21 @@ run_driver() {
   ensure_dir_0700 "$GWS_ROOT"
   ensure_dir_0700 "$ACCOUNTS_ROOT"
   ensure_dir_0700 "$dir"
-  command -v uv >/dev/null 2>&1 || die "uv is not installed; it provides the uvx that runs workspace-mcp"
   argv=$(server_argv)
+  # The driver imports workspace-mcp, so it runs on the launcher's own interpreter:
+  # the same pinned build the server runs, never a fresh resolve from PyPI.
+  local python
+  if [ -n "$SERVER_BIN" ]; then
+    python=$(head -n 1 "$SERVER_BIN" 2>/dev/null | sed -n 's/^#![[:space:]]*//p')
+    [ -n "$python" ] && [ -x "$python" ] || die "cannot find the Python interpreter behind $SERVER_BIN"
+    set -- "$python"
+  else
+    command -v uv >/dev/null 2>&1 || die "neither workspace-mcp nor uv is installed; install one to run the server"
+    set -- uv run --no-project --with workspace-mcp python3
+  fi
   # shellcheck disable=SC2086 # deliberate word splitting: one argv token per line
   GOOGLE_CLIENT_SECRET_PATH="$CLIENT_SECRET_FILE" \
-    uv run --no-project --with workspace-mcp python3 "$AUTH_DRIVER" \
+    "$@" "$AUTH_DRIVER" \
       --mode "$mode" --email "$email" --credentials-dir "$dir" -- $argv
 }
 
@@ -387,11 +403,12 @@ cmd_status() {
 }
 
 cmd_claude_config() {
-  local argv
+  local command argv
+  command=$(server_argv | head -n 1)
   argv=$(server_argv | tail -n +2)
   accounts_rows | python3 -c 'import json, sys
 args = sys.argv[1].split()
-accounts_root, client_secret = sys.argv[2], sys.argv[3]
+accounts_root, client_secret, command = sys.argv[2], sys.argv[3], sys.argv[4]
 servers = {}
 for line in sys.stdin.read().splitlines():
     if not line.strip():
@@ -399,27 +416,27 @@ for line in sys.stdin.read().splitlines():
     slug = line.split("\t")[0]
     servers["gws-" + slug] = {
         "type": "stdio",
-        "command": "uvx",
+        "command": command,
         "args": args,
         "env": {
             "WORKSPACE_MCP_CREDENTIALS_DIR": accounts_root + "/" + slug,
             "GOOGLE_CLIENT_SECRET_PATH": client_secret,
         },
     }
-print(json.dumps({"mcpServers": servers}, indent=2))' "$argv" "$ACCOUNTS_ROOT" "$CLIENT_SECRET_FILE"
+print(json.dumps({"mcpServers": servers}, indent=2))' "$argv" "$ACCOUNTS_ROOT" "$CLIENT_SECRET_FILE" "$command"
 }
 
 cmd_claude_install() {
   command -v "$CLAUDE_BIN" >/dev/null 2>&1 || die "$CLAUDE_BIN is not on PATH"
   local slug email argv
-  argv=$(server_argv | tail -n +2)
+  argv=$(server_argv)
   accounts_rows | while IFS=$'\t' read -r slug email; do
     "$CLAUDE_BIN" mcp remove -s user "gws-$slug" >/dev/null 2>&1 || true
     # shellcheck disable=SC2086 # deliberate word splitting: one argv token per line
     "$CLAUDE_BIN" mcp add -s user "gws-$slug" \
       -e "WORKSPACE_MCP_CREDENTIALS_DIR=$ACCOUNTS_ROOT/$slug" \
       -e "GOOGLE_CLIENT_SECRET_PATH=$CLIENT_SECRET_FILE" \
-      -- uvx $argv >/dev/null || die "cannot register gws-$slug with Claude Code"
+      -- $argv >/dev/null || die "cannot register gws-$slug with Claude Code"
     printf 'registered: gws-%s -> %s\n' "$slug" "$email"
   done
 }
@@ -437,7 +454,8 @@ cmd_claude_uninstall() {
 }
 
 cmd_hermes_config() {
-  local slug email argv
+  local slug email command argv
+  command=$(server_argv | head -n 1)
   argv=$(server_argv | tail -n +2 | paste -sd, - | sed 's/,/, /g')
   printf '# Google Workspace, one instance per account. Paste under mcp_servers in\n'
   printf '# cade/config/config.yaml, beside the existing exa block, then run ./check.sh\n'
@@ -447,7 +465,7 @@ cmd_hermes_config() {
   accounts_rows | while IFS=$'\t' read -r slug email; do
     printf '  gws-%s:\n' "$slug"
     printf '    # %s\n' "$email"
-    printf '    command: uvx\n'
+    printf '    command: %s\n' "$command"
     printf '    args: [%s]\n' "$argv"
     printf '    env:\n'
     printf '      WORKSPACE_MCP_CREDENTIALS_DIR: %s/%s\n' "$ACCOUNTS_ROOT" "$slug"

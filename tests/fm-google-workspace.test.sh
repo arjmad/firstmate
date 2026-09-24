@@ -62,10 +62,10 @@ new_root() {
 
 # gws <root> <args...> runs the tool against an isolated root, the test's own firstmate
 # home, a stubbed Claude Code CLI, and a HOME with no Bitwarden token, so no case can
-# reach real state.
+# reach real state. FM_GWS_SERVER defaults empty so the host's own launcher never leaks in.
 gws() {
   local root=$1; shift
-  FM_HOME="$FM_TEST_HOME" FM_GWS_ROOT="$root" FM_GWS_CLAUDE="$TMP_ROOT/stub/claude" HOME="$TMP_ROOT/home" "$GWS" "$@"
+  FM_GWS_SERVER="${FM_GWS_SERVER-}" FM_HOME="$FM_TEST_HOME" FM_GWS_ROOT="$root" FM_GWS_CLAUDE="$TMP_ROOT/stub/claude" HOME="$TMP_ROOT/home" "$GWS" "$@"
 }
 
 # stub_claude records every invocation so a case can assert what was registered.
@@ -210,6 +210,23 @@ test_the_two_runtimes_are_configured_from_one_invocation() {
   assert_contains "$hermes" "gmail:full" "the Hermes block carries the same permissions"
   assert_contains "$hermes" "trust: untrusted" "a mailbox server is untrusted input in Hermes"
   pass "both runtimes are configured from the one invocation the tool owns"
+}
+
+test_a_pinned_launcher_replaces_the_pypi_resolve() {
+  local root pinned out claude hermes
+  root=$(new_root pinned)
+  pinned="$TMP_ROOT/pinned/bin/workspace-mcp"
+  mkdir -p "$(dirname "$pinned")"
+  printf '#!%s\n' "$(command -v python3)" > "$pinned"
+  chmod 0755 "$pinned"
+  out=$(FM_GWS_SERVER="$pinned" gws "$root" argv)
+  [ "$(head -n 1 <<<"$out")" = "$pinned" ] || fail "argv does not start with the pinned launcher: $out"
+  assert_not_contains "$out" "uvx" "a pinned launcher never resolves from PyPI"
+  claude=$(FM_GWS_SERVER="$pinned" gws "$root" claude-config | python3 -c 'import json, sys; print(json.load(sys.stdin)["mcpServers"]["gws-alpha"]["command"])')
+  [ "$claude" = "$pinned" ] || fail "Claude Code command is not the pinned launcher: $claude"
+  hermes=$(FM_GWS_SERVER="$pinned" gws "$root" hermes-config)
+  assert_contains "$hermes" "command: $pinned" "the Hermes block runs the pinned launcher"
+  pass "a pinned launcher replaces the PyPI resolve in every consumer"
 }
 
 test_status_names_the_account_that_actually_signed_in() {
@@ -371,7 +388,7 @@ SH
   : > "$log"
   : > "$TMP_ROOT/wizard-claude.log"
   out=$(PATH="$TMP_ROOT/stub:$PATH" OPEN_STUB_LOG="$log" CLAUDE_STUB_LOG="$TMP_ROOT/wizard-claude.log" \
-    FM_HOME="$FM_TEST_HOME" FM_GWS_ROOT="$root" FM_GWS_CLAUDE="$TMP_ROOT/stub/claude" HOME="$TMP_ROOT/home" \
+    FM_GWS_SERVER="" FM_HOME="$FM_TEST_HOME" FM_GWS_ROOT="$root" FM_GWS_CLAUDE="$TMP_ROOT/stub/claude" HOME="$TMP_ROOT/home" \
     FM_GWS_CONSUMER_DOMAINS="example.com example.org" \
     bash "$ROOT/bin/fm-google-workspace-wizard.sh" </dev/null 2>&1) || fail "the wizard did not finish"
   assert_contains "$out" "Setup complete" "the wizard reaches its closing summary"
@@ -399,6 +416,7 @@ test_credentials_directories_are_private_to_the_user
 test_the_invocation_requests_send_capable_scopes_per_service
 test_each_runtime_server_gets_its_own_credentials_directory
 test_the_two_runtimes_are_configured_from_one_invocation
+test_a_pinned_launcher_replaces_the_pypi_resolve
 test_status_names_the_account_that_actually_signed_in
 test_reauthorizing_never_clears_another_accounts_credential
 test_revoke_without_confirmation_deletes_nothing
