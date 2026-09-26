@@ -91,6 +91,7 @@ At every crewmate/scout intake, read its [dispatch reference](.agents/skills/har
 That reference owns dispatch policy; `quota-array-dispatch` owns matched-array selection and `harness-adapters` owns supported roles and model/effort rules.
 Use verified adapters only; report an unverified static override and use the supported fallback under the router's safety contract.
 A backend dependency, authentication, version, or unsupported-backend failure is a blocker for that backend, never permission for a silent backend switch.
+Only the captain chooses or changes a worker account pin (`config/claude-account`, `config/pi-account`); on a pin refusal, report the needed login and never edit or remove the pin to unblock a spawn.
 Keep per-task captain overrides scoped to that dispatch; paid fast tier is an explicit per-spawn opt-in, never inherited.
 `secondmate-provisioning` owns inherited local material and secondmate pins.
 
@@ -124,11 +125,12 @@ Route durable knowledge to its most specific owner:
 - Captain preferences shared across secondmate domains belong in the primary home's `data/captain-shared.md` under the `secondmate-provisioning` contract.
 - Fleet-local operational facts belong in curated, home-local `data/learnings.md`.
 - Task-scoped notes belong with the backlog item, and investigation findings belong in the scout report.
-- Knowledge useful to almost every contributor to one project belongs in that project's committed `AGENTS.md`.
+- Knowledge useful to almost every contributor to one project belongs in that project's committed `AGENTS.md`, which only deliberate human edits extend.
 - Knowledge general to every firstmate user belongs in this repo's shared tracked surface.
 
 Firstmate never writes a project's `AGENTS.md` directly.
-A crewmate creates or updates it lazily through the project's selected delivery path, using `bin/fm-ensure-agents-md.sh` and preferring pointers to authoritative sources over copied detail.
+A crewmate edits a project's `AGENTS.md` or `CLAUDE.md` only to correct factually wrong information, including information its own change made wrong, and never adds knowledge because it is missing - additions are a deliberate human choice because every entry taxes every agent session of that project.
+A correction edits only the wrong text and never runs `bin/fm-ensure-agents-md.sh`, a manual project-initialization utility whose inserted sections and created pointer are themselves additions.
 Keep fleet delivery posture and captain-private strategy out of project memory.
 When the captain invokes `/stow`, load the `stow` skill for its memory curation, knowledge routing, and persistence of the open work records this session is holding; it files and corrects only the open work that session is holding, and never reconciles the backlog against repository or PR reality.
 
@@ -136,7 +138,7 @@ When the captain invokes `/stow`, load the `stow` skill for its memory curation,
 
 Before intake, dispatch, validation, landing, teardown, or scout promotion, read the matching subsection of [the task lifecycle](docs/task-lifecycle.md).
 That reference owns the procedure; scripts own exact commands and data mechanics.
-Resolve each task's project, delivery mode, and merge authority from the current request and registry, and pass the resolved mode and `yolo` posture explicitly to the brief, spawn, and promotion.
+Resolve each task's project, delivery mode, merge authority, and ship-branch prefix from the current request and registry, and pass the resolved mode, `yolo` posture, and any non-default prefix explicitly to the brief, spawn, and promotion.
 A diagnostic report or recommendation alone does not authorize implementation.
 Keep authorized implementation moving through its selected path; use a separate scout only for a requested knowledge deliverable or uncertainty that could change what to build.
 Serialize only for concrete semantic or shared-state conflicts, not file overlap alone.
@@ -145,7 +147,7 @@ Spawn isolated worktrees through `bin/fm-spawn.sh`; steer through `bin/fm-send.s
 The selected delivery path owns rigor: `no-mistakes`, `direct-PR`, or `local-only`; do not add an independent reviewer or a second validation pipeline.
 Merge authority is separate: current explicit authority or the registry's `+yolo` posture permits landing; otherwise request the captain's decision.
 Use `bin/fm-pr-merge.sh` for PRs and `bin/fm-merge-local.sh` for local-only landing, retaining their current-head, check, and authority guards.
-Only an explicit current instruction naming one check may authorize its attended `--allow-red` waiver; standing yolo never does.
+Never merge a red PR, or one with an unreported required check, unless an explicit current instruction names the check to waive; standing yolo never does.
 Destructive, irreversible, or security-sensitive changes retain their own authority requirements.
 Load `ask-user-authority` for findings; implementation workers never answer their own findings.
 A no-mistakes worker owns its active validation run; follow the lifecycle reference before superseding work or recovering a reported failed pipeline.
@@ -171,13 +173,14 @@ Treat any `UNREAD STATUS` section as newly surfaced status that must be read thi
 Treat any `RECORD DIVERGENCE` section as a contradiction between two records of one captain call, never as proof the captain ruled; load `captain-hold-lifecycle` and reconcile it in whichever direction the evidence supports.
 After handling all emitted wakes and reconciling the OPEN DECISIONS and UNREAD STATUS sections, run the exact generation-bound `--ack-through` command printed as `WAKE_ACK_REQUIRED`; interruption before that acknowledgement deliberately leaves the work durable for idempotent re-handling.
 A status line is a wake event, not current state; use `bin/fm-crew-state.sh` when current state matters, especially before re-escalating an old decision, blocker, or pause.
-A declared `paused:` event means a bounded external wait expected to clear on its own, while `blocked:` means firstmate action is needed.
+`bin/fm-classify-lib.sh` owns the distinction between declared `paused:` waits and `blocked:` events needing firstmate action; `bin/fm-brief.sh` owns worker declaration instructions.
 
 Handle actionable wakes as follows:
 
 1. For `signal:`, read the listed event lines first, then reconcile current state only where action depends on it.
 2. For `stale:`, inspect the recorded endpoint and load `stuck-crewmate-recovery` for a stopped, looping, confused, or unresponsive worker; a deep-inspection reason also requires current-state and validation-log inspection.
 3. For `check:`, act on the named poll result, including merges, contribution signals, Relay events, process-to-event source results, and captain inbox notes; a handled inbox note is also acknowledged with `bin/fm-inbox.sh drain --ack <id>`, or it stays counted as still waiting for firstmate.
+   A `check: secondmate <id> auto-relaunched` wake records a recovery that already completed - reconcile the mate's current state rather than relaunching again, and treat a repeat or a paused-bound wake as the signal to investigate why the mate keeps exiting.
    When the note needs a durable answer the submitter can read, publish it with `bin/fm-inbox.sh reply <id>` (the script header owns the reply contract) rather than leaving the answer only in this transcript.
 4. For `heartbeat:`, review the whole fleet from the structured fleet view, reconcile suspicious tasks and PR state, update the backlog, and never report an unchanged fleet as progress.
 
@@ -202,10 +205,11 @@ Invoke the `/afk` skill when the captain says `/afk`, says they are going afk, `
 Invoke the `/quiet` skill instead when the captain says `/quiet` or asks for quiet mode, or `state/.afk` already exists in quiet mode (`fm_afk_mode` in `bin/fm-wake-lib.sh`).
 Each skill owns its own daemon procedure, which is otherwise identical; these safety facts remain inline for both:
 
-- Every current daemon injection uses the `away-supervisor` kind from `bin/fm-operational-input.sh` after `FM_OPERATIONAL_PREFIX` (U+2063 INVISIBLE SEPARATOR followed by `FIRSTMATE_OP: `), while the `/afk` skill owns legacy bare-marker compatibility.
+- Every current daemon injection uses the `away-supervisor` kind from `bin/fm-operational-input.sh` after `FM_OPERATIONAL_PREFIX` (U+2063 INVISIBLE SEPARATOR followed by `FIRSTMATE_OP: `), except that a Claude Code primary, which strips U+2063, receives that owner's record-backed doorbell and it counts as marked only when `bin/fm-operational-input.sh open <path>` verifies its record; the `/afk` skill owns legacy bare-marker compatibility.
 - `state/.afk-contract` is the away posture, written in the same turn as `/afk` before any other work, because `/afk` is itself the go: no read-back gates entry or waits for a go; entry announces hold-for-return only, and the away session acts on those words by its own judgment through the guarded scripts under standing authority, holding for the return on doubt.
 - While `state/.afk` exists, the daemon owns supervision; do not arm a separate watcher.
   The daemon is never launched on Pi, where the ordinary supervision session continues under the record with main parked: the branch takes every safe actionable wake it can, and only a declined wake (including a broken branch or unsafe scan) or a watcher failure wakes main.
+  Away mode on a non-Pi home with `config/supervision-host` works the same way with the supervision host as the branch; a wake it hands back arrives through that harness's own wake path and is never the captain's return.
 - A marked message while away or quiet mode is active is internal escalation and does not exit that mode.
 - A message beginning `/afk` refreshes away mode; a message beginning `/quiet` refreshes quiet mode.
 - Any other unmarked message means the captain returned in away mode (load `/afk`, run the return owner, and do not process that message as ordinary work until its durable catch-up gate clears), or, in quiet mode, is simply answered as ordinary work with the flag and daemon left untouched until an explicit `/quiet off`.

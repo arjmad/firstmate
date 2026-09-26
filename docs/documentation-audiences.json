@@ -445,8 +445,16 @@
       "audience": "agent-runtime"
     },
     {
+      "path": "docs/supervision-protocols/supervision-host.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": "docs/supervision-protocols/unknown.md",
       "audience": "agent-runtime"
+    },
+    {
+      "path": "docs/supervision-host.md",
+      "audience": "maintainer-architecture"
     },
     {
       "path": "docs/task-lifecycle.md",
