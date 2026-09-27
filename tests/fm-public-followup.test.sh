@@ -319,8 +319,8 @@ test_ambient_tasks_axi_env_never_reaches_a_real_backlog() {
     [ -z "${TASKS_AXI_BACKEND+x}" ] || { echo "TASKS_AXI_BACKEND survived tests/lib.sh"; exit 1; }
     cd "$2" && tasks-axi public-followup add pf-ambient \
       --request-context-file "$2/request.json" --purpose promised-final \
-      --expected-final-file "$2/expected.json" --expires-at 2026-10-01T00:00:00Z >/dev/null
-  ' _ "$ROOT" "$home" \
+      --expected-final-file "$2/expected.json" --expires-at "$3" >/dev/null
+  ' _ "$ROOT" "$home" "$FOLLOWUP_OBLIGATION_EXPIRES_AT" \
     || fail "seeding under an ambient tasks-axi override did not reach the fixture backlog"
 
   cmp -s "$decoy" "$decoy.expected" \
@@ -1806,7 +1806,7 @@ test_first_register_succeeds_with_empty_lock_list_under_bash32() {
       role:"fulfills", required:true, generation:1}' > "$home/relation.json"
   tasks_in "$home" public-followup add pf-empty-locks \
     --request-context-file "$home/request.json" --purpose promised-final \
-    --expected-final-file "$home/expected.json" --expires-at 2026-10-01T00:00:00Z >/dev/null \
+    --expected-final-file "$home/expected.json" --expires-at "$FOLLOWUP_OBLIGATION_EXPIRES_AT" >/dev/null \
     || fail "could not create the public commitment"
   tasks_in "$home" public-followup bind-work pf-empty-locks \
     --relation-file "$home/relation.json" >/dev/null \
@@ -3231,7 +3231,7 @@ seed_typed_commitment() {
       role:"fulfills", required:true, generation:1}' > "$home/relation.json"
   tasks_in "$home" public-followup add "$obligation" --request-context-file "$home/request.json" \
     --purpose promised-final --expected-final-file "$home/expected.json" \
-    --expires-at 2026-10-01T00:00:00Z >/dev/null || fail "add failed for $obligation"
+    --expires-at "$FOLLOWUP_OBLIGATION_EXPIRES_AT" >/dev/null || fail "add failed for $obligation"
   tasks_in "$home" public-followup bind-work "$obligation" --relation-file "$home/relation.json" >/dev/null \
     || fail "bind-work failed for $obligation"
   FM_HOME="$home" FMX_NOW_OVERRIDE="$PF_TEST_NOW" bash -c \
