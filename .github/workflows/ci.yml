@@ -44,8 +44,9 @@ jobs:
     # from 155 MiB (tests/fm-pi-branch-extension.test.sh) to 6728 MiB
     # (bin/fm-teardown.sh) at similar file sizes. At four partitions that let one
     # job collect fm-spawn.sh, fm-teardown.sh and fm-watch.sh together it
-    # measured 11.18 GiB across its two concurrent workers and was killed by the
-    # runner at 4m49s and again at 5m05s. Eight partitions separate the expensive
+    # measured 11.18 GiB across the two concurrent workers it then ran and was
+    # killed by the runner at 4m49s and again at 5m05s; each job now runs one
+    # worker (FM_LINT_JOBS below). Eight partitions separate the expensive
     # roots into different jobs, because the largest-first packing seeds the
     # first N roots into N distinct bins; the job that then carries
     # fm-teardown.sh alone measures 74s, and the worst of the eight measures 83s.

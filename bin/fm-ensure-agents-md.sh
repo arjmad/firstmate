@@ -3,9 +3,9 @@
 # AGENTS.md is the real project-intrinsic knowledge file. CLAUDE.md may take
 # either of two valid forms: a regular file holding the two-line @AGENTS.md
 # pointer that Claude Code inlines at load time, or a symlink that resolves to
-# AGENTS.md, which Claude Code follows at any directory depth (an @AGENTS.md
-# import expands only in the launch directory, so projects whose sessions may
-# start below the root deliberately keep the symlink). Creates a minimal
+# AGENTS.md, which Claude Code follows at any directory depth (some projects
+# deliberately keep the symlink by convention, so one file is read with no
+# import to resolve). Creates a minimal
 # AGENTS.md skeleton when neither file exists, writes the pointer file when
 # CLAUDE.md is absent, promotes a real CLAUDE.md file when it is the only file
 # present (unless it is already the canonical pointer), preserves a correct
