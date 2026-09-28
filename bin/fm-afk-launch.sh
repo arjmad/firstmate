@@ -10,10 +10,11 @@
 # the captain who typed it may not look at the screen again: `enter` records the
 # away words verbatim straight into state/.afk-contract in the same turn, with no
 # separate confirmation step, then prints the entry announcement (hold-for-return
-# only: no phone channel exists) and the read-back, which is informational and
-# never waits for a go (bin/fm-afk-contract.sh owns the record schema; the words
-# are the whole mandate and no script parses them). The record is the posture in
-# every harness.
+# only: no phone channel exists; a quiet entry's says nothing is held) and the
+# read-back, which is informational and never waits for a go
+# (bin/fm-afk-contract.sh owns the record schema; the words are the whole
+# mandate and no script parses them). The record is the posture in every
+# harness.
 # On Pi and pi-signed the entry ENDS there: the away daemon is no longer launched
 # on Pi, the ordinary supervision session keeps running in both postures, and
 # `start` refuses on those harnesses. The same holds for away mode (not quiet
@@ -103,10 +104,8 @@
 # terminal (default bin/fm-afk-start.sh), so a topology test can run a harmless
 # placeholder instead of a real daemon. FM_SUPERVISOR_TARGET/FM_SUPERVISOR_BACKEND
 # override the captured captain pane/backend (an isolated lab pane in tests).
-# FM_AFK_MODE (away|quiet, default away) declares which mode an `enter` or
-# `start` entry requests; `start` without it takes quiet from the record a
-# quiet `enter` wrote, and otherwise, on a plain refresh of an already-running
-# daemon, preserves its current mode (bin/fm-afk-start.sh fm_afk_flag_write).
+# FM_AFK_MODE (away|quiet, default away) declares which mode an `enter` writes;
+# with it unset, a daemon start/refresh uses the record's mode.
 # FM_TEST_HARNESS pins only this launch path's primary harness when
 # FM_TEST_SEAM=1 and its value is a known harness token; otherwise detection
 # remains real. tests/lib.sh arms the marker for isolated suites.
@@ -247,18 +246,18 @@ fm_afk_launch_host_primary() {  # <harness>
   return 1
 }
 
-# True when the posture record is a quiet entry's (its `mode: quiet` field).
+# True when the posture record is a quiet entry's (bin/fm-afk-contract.sh mode).
 fm_afk_launch_record_quiet() {
-  [ "$(fm_afk_contract_read_field "$(fm_afk_contract_path "$FM_AFK_LAUNCH_STATE")" mode)" = quiet ]
+  [ "$(fm_afk_contract_mode "$FM_AFK_LAUNCH_STATE")" = quiet ]
 }
 
-# The mode this entry requests: an explicit FM_AFK_MODE, else quiet when a
-# quiet `enter` recorded it; empty is a refresh that keeps a running daemon's.
+# An explicit request takes precedence; otherwise the record owns the mode
+# for both a new daemon and a refresh of an existing one.
 fm_afk_launch_requested_mode() {
   if [ -n "${FM_AFK_MODE:-}" ]; then
     printf '%s' "$FM_AFK_MODE"
-  elif fm_afk_launch_record_quiet; then
-    printf quiet
+  else
+    fm_afk_contract_mode "$FM_AFK_LAUNCH_STATE"
   fi
 }
 
@@ -418,11 +417,8 @@ fm_afk_launch_record_write() {  # <backend> <target> <extra>
 }
 
 fm_afk_launch_flag_write() {
-  # The requested mode is FM_AFK_MODE or the quiet mode a quiet `enter`
-  # recorded (away, the unset default, or quiet - kunchenguid/firstmate#2356);
-  # fm_afk_flag_write itself preserves the on-disk mode when none is
-  # requested, so a plain /afk refresh of an already-quiet daemon never
-  # resets it.
+  # Use the explicit request or the record's mode, so /afk over a quiet
+  # record switches a running daemon's flag to away on refresh.
   fm_afk_flag_write "$FM_AFK_LAUNCH_STATE" "$(fm_afk_launch_requested_mode)"
 }
 
