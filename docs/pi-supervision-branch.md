@@ -413,8 +413,13 @@ Together, these let a cold start that acquires the lock through the startup dige
 Display is only half of a captain outcome.
 The other half is processing, because a blocker, a decision, or a ready PR needs main to act, not only the captain to see it.
 
-1. After the visible entry exists and the read cursor has passed it, the extension hands every still-unprocessed captain row to main as one hidden, typed `fm-branch-process` request (kind `branch-outcome`).
-   The request lists each `[seq N] task: summary`.
+1. After the visible entry exists and the read cursor has passed it, the extension hands the oldest batch of at most 32 still-unprocessed captain rows to main as one hidden, typed `fm-branch-process` request (kind `branch-outcome`), and presents the next batch after main acknowledges that one.
+   The request lists each `[seq N, recorded <age> ago] task: summary`, with the age from the store's `recordedAgo` (`bin/fm-branch-outcome.sh` owns its wording), and asks main to check the task's current state first.
+   Summaries over 1024 characters are abbreviated within that bound and point to `bin/fm-branch-outcome.sh lookup --seqs <N>` for the full outcome.
+   Main must read the full outcome for any abbreviated line before acting on, relaying, or acknowledging it.
+   It says each outcome was recorded earlier and may already have been seen or handled, rather than claiming a visible entry in this transcript, because an outcome carried over from before a restart or a switch of primary has none here.
+   Main sorts the outcomes by that state, and its reply to the captain covers only the still-open ones, as if the settled ones had never been listed; a settled one needs only the acknowledgement below.
+   A listed row without a valid age breaks the store's contract, so the extension reports it to main as a visible note and sends no request; every row stays unprocessed and is presented once the store is healthy.
 2. That request opens exactly one main turn.
 3. Main closes it only by calling `fm_branch_processed` with the highest sequence the request listed.
    That call advances a processed marker, which `bin/fm-branch-outcome.sh` keeps separately from the read cursor and never moves past it or backwards.
@@ -435,7 +440,7 @@ After that, the request rides the captain's next prompt, so an ignored request c
 Changed sequence membership and a session replacement each start that budget over.
 
 Routine outcomes never enter this path and stay turn-free.
-A home upgraded with outcomes already delivered treats those rows as processed once, at the first reconciliation that finds no processed marker, so its history is not re-presented.
+A home with no processed marker, including an upgrade or switch from the supervision host, re-presents delivered captain rows dated and check-first until acknowledged; see the marker contract in `bin/fm-branch-outcome.sh`.
 
 ### Ownership and verdict rules
 
@@ -630,7 +635,7 @@ At that moment the branch reports any refusal instead of concluding there is "no
 - Requested-versus-unsolicited delivery, exact visible entry content, and no unkeyed model turn.
 - The sequence-keyed processing request and its acknowledgement.
 - Re-presentation after an empty reply and after an unrelated prior answer, the triggered-then-next-turn pacing, and session-start re-presentation.
-- Routine outcomes staying turn-free, task-level no-change notes staying hidden, and the processed-marker migration.
+- Routine outcomes staying turn-free, task-level no-change notes staying hidden, absent-marker re-presentation, and malformed-age reporting without acknowledgement.
 - Idle and busy main state, and incident-shaped compaction and unrelated-assistant context.
 - Cold-start post-lock recovery, crash-before-cursor reload recovery, and repeated-reload idempotency.
 - Mirroring.
@@ -642,7 +647,7 @@ At that moment the branch reports any refusal instead of concluding there is "no
 `tests/fm-branch-supervision.test.sh` covers:
 
 - Prompt stability, including the landed-work cleanup instruction and the second-mate relay, signal-span, and stale-liveness rules.
-- Store append-only behavior, the captain cursor barrier, and the processed marker's sequence bounds.
+- Store append-only behavior, the captain cursor barrier, processed-marker sequence bounds and absent-marker safety, and captain-only recorded ages.
 - Leases, guards, and non-branch-home invariance.
 - The away relocation: only under a valid live record, never for local-only landing, queued-only branch dispatch rather than orphaned in-flight recovery, the spend cap for both actors and its lock-held recheck, and the attended guarded-action behavior restored by archive or an invalid record.
 
