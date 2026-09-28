@@ -13,7 +13,7 @@
 # presentation-path locks (default 10); queue mutation locks remain blocking.
 set -u
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
@@ -573,11 +573,11 @@ EOF
 #     what was presented and always at least the oldest row. An unprocessed
 #     captain row is never adopted as processed, so a home that opts in
 #     mid-session cannot lose its first captain outcome.
-#   - Routine outcomes are listed once, for awareness, the way the Pi branch's
-#     routine notes reach main's transcript without a turn; silent fleet
-#     reviews never appear. The newest that fit a byte cap are listed, and the
-#     older ones collapse into a count, since bin/fm-branch-outcome.sh list
-#     keeps them all.
+#   - Visible routine outcomes are listed once, for awareness, the way the Pi
+#     branch's routine notes reach main's transcript without a turn; silent
+#     routine outcomes never appear. The newest visible rows that fit a byte
+#     cap are listed, and older visible rows collapse into a count, since
+#     bin/fm-branch-outcome.sh list keeps them all.
 # Once the section is printed, the store's read cursor advances through every
 # presented row, which is what lets mark-processed accept main's
 # acknowledgement and keeps a routine row from repeating; a drain stopped
