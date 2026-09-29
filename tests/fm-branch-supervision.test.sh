@@ -139,6 +139,126 @@ PY
   pass "outcome store is append-only and refuses sequence reuse after a torn tail"
 }
 
+test_outcome_append_keeps_a_bounded_display_tail() {
+  local home store tail cursor
+  home="$TMP_ROOT/tail-home"
+  mkdir -p "$home/state"
+  store="$home/state/branch-outcomes.jsonl"
+  tail="$home/state/.branch-outcomes-tail.jsonl"
+  jq -nc 'range(1; 206) | {seq: ., epoch: 100, task: "task-\(.)", wake: "", verdict: "routine", summary: "row \(.)", silent: false}' \
+    > "$store"
+  printf '205\n' > "$home/state/.branch-outcomes-cursor"
+  cursor=$(cat "$home/state/.branch-outcomes-cursor")
+  [ ! -e "$tail" ] || fail "a display tail existed before any append"
+
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task task-206 --verdict captain --summary $'PR "ready"\nwith a second line' >/dev/null \
+    || fail "append failed on a store with history"
+  [ "$(wc -l < "$tail" | tr -d ' ')" = 200 ] || fail "the display tail is not bounded to the newest 200 rows"
+  [ "$(cat "$tail")" = "$(tail -n 200 "$store")" ] || fail "the display tail is not the store's newest rows verbatim"
+  [ "$(head -n 1 "$tail" | jq -r .seq)" = 7 ] || fail "the display tail does not start at the 200th newest row"
+  [ "$(tail -n 1 "$tail" | jq -r .summary)" = $'PR "ready"\nwith a second line' ] \
+    || fail "the display tail lost the new row's exact summary"
+  [ "$(cat "$home/state/.branch-outcomes-cursor")" = "$cursor" ] || fail "refreshing the display tail moved the read cursor"
+  pass "outcome append refreshes a bounded, verbatim display tail of the newest rows without moving the cursor"
+}
+
+test_outcome_tail_keeps_whole_newest_rows_within_its_byte_budget() {
+  local home store tail first before
+  home="$TMP_ROOT/tail-bytes-home"
+  mkdir -p "$home/state"
+  store="$home/state/branch-outcomes.jsonl"
+  tail="$home/state/.branch-outcomes-tail.jsonl"
+  jq -nc 'range(1; 6) | {seq: ., epoch: 100, task: "task-\(.)", wake: "", verdict: "routine", summary: ("x" * 307200), silent: false}' \
+    > "$store"
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task task-6 --verdict captain --summary 'small newest' >/dev/null || fail "append failed on a store of large rows"
+  [ "$(wc -c < "$tail" | tr -d ' ')" -le 1048576 ] || fail "the display tail exceeded its 1 MiB budget"
+  first=$(head -n 1 "$tail" | jq -r .seq) || fail "the display tail's first row is not whole JSON"
+  [ "$(cat "$tail")" = "$(tail -n "$((7 - first))" "$store")" ] || fail "the display tail is not a verbatim suffix of the store"
+  before=$(sed -n "$((first - 1))p" "$store" | wc -c | tr -d ' ')
+  [ $(( $(wc -c < "$tail" | tr -d ' ') + before )) -gt 1048576 ] || fail "the display tail dropped a row that fit its budget"
+
+  jq -nc '{seq: 7, epoch: 100, task: "task-7", wake: "", verdict: "routine", summary: ("y" * 1100000), silent: false}' >> "$store"
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
+    --task task-8 --verdict routine --summary 'after the oversized row' >/dev/null || fail "append failed after an oversized row"
+  [ "$(jq -r .seq "$tail")" = 8 ] || fail "a row larger than the budget did not leave the display tail to the rows after it"
+  pass "the display tail keeps only whole newest rows within its 1 MiB budget, never shortening one"
+}
+
+test_outcome_seed_tail_creates_only_an_absent_display_tail() {
+  local home store tail out
+  home="$TMP_ROOT/tail-seed-home"
+  mkdir -p "$home/state"
+  store="$home/state/branch-outcomes.jsonl"
+  tail="$home/state/.branch-outcomes-tail.jsonl"
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" seed-tail || fail "seed-tail failed on an empty home"
+  [ ! -e "$tail" ] || fail "seed-tail created a display tail without a store"
+
+  jq -nc 'range(1; 206) | {seq: ., epoch: 100, task: "task-\(.)", wake: "", verdict: (if . == 204 then "captain" else "routine" end), summary: "row \(.)", silent: false}' \
+    > "$store"
+  printf '205\n' > "$home/state/.branch-outcomes-cursor"
+  printf '203\n' > "$home/state/.branch-outcomes-processed"
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" present >/dev/null || fail "present failed on a store that predates the tail"
+  [ ! -e "$tail" ] || fail "present seeded the display tail; seed-tail is its one seeding owner"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" seed-tail) || fail "seed-tail failed on a store that predates the tail"
+  [ -z "$out" ] || fail "seed-tail printed output: $out"
+  [ "$(cat "$tail")" = "$(tail -n 200 "$store")" ] || fail "seed-tail did not write the store's newest rows"
+  [ "$(cat "$home/state/.branch-outcomes-cursor")" = 205 ] || fail "seeding the display tail moved the read cursor"
+  [ "$(cat "$home/state/.branch-outcomes-processed")" = 203 ] || fail "seeding the display tail moved the processed marker"
+
+  printf 'kept\n' > "$tail"
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" seed-tail || fail "seed-tail failed with a display tail"
+  [ "$(cat "$tail")" = kept ] || fail "seed-tail rewrote an existing display tail"
+
+  printf 'not json\n' >> "$store"
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" seed-tail \
+    || fail "seed-tail parsed the store although a display tail already existed"
+  [ "$(cat "$tail")" = kept ] || fail "seed-tail rewrote an existing display tail beside a malformed store"
+  rm -f "$tail"
+  if FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" seed-tail 2>/dev/null; then
+    fail "seed-tail accepted a malformed store"
+  fi
+  [ ! -e "$tail" ] || fail "seed-tail copied a malformed store"
+  pass "outcome seed-tail writes an absent display tail from a valid store's newest rows without moving a marker, and leaves an existing one to append"
+}
+
+test_outcome_seed_tail_only_reads_bounded_suffix() {
+  local home store tail
+  home="$TMP_ROOT/tail-seed-bounded-home"
+  mkdir -p "$home/state"
+  store="$home/state/branch-outcomes.jsonl"
+  tail="$home/state/.branch-outcomes-tail.jsonl"
+  # The malformed old row lies well outside the 1 MiB window. Seeding must
+  # neither inspect it nor copy it, while still validating the recent rows.
+  python3 - "$store" <<'PY'
+import json, sys
+with open(sys.argv[1], 'w') as f:
+    f.write('invalid old row ' + 'z' * 1100000 + '\n')
+    for seq in range(2, 252):
+        f.write(json.dumps(dict(seq=seq, epoch=100, task='task-1', wake='',
+                                verdict='routine', summary='x' * 6000)) + '\n')
+PY
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" seed-tail \
+    || fail "seed-tail inspected old malformed history outside the bounded window"
+  python3 - "$store" "$tail" <<'PY' || fail "seed-tail did not publish the exact byte- and row-bounded suffix"
+import sys
+rows = open(sys.argv[1], 'rb').readlines()[-200:]
+kept = []
+for row in reversed(rows):
+    if sum(map(len, kept)) + len(row) > 1048576:
+        break
+    kept.insert(0, row)
+assert open(sys.argv[2], 'rb').read() == b''.join(kept)
+PY
+  rm -f "$tail"
+  printf '{"seq":252,"epoch":100,"task":"task-1","wake":"","verdict":"routine","summary":"ok"}\n' >> "$store"
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" seed-tail \
+    || fail "seed-tail failed on a new valid row past malformed old history"
+  [ "$(tail -n 1 "$tail" | jq -r .seq)" = 252 ] || fail "seed-tail missed the latest row"
+  pass "seed-tail validates and publishes only a bounded newest window, not old malformed history"
+}
+
 test_outcome_startup_replay_preserves_silence() {
   local home replay out status store
   home="$TMP_ROOT/store-silent-home"
@@ -1317,6 +1437,26 @@ WRAPPER
   pass "relocated branch spawn admits only already-queued dispatchable work, including on a manual-backend home"
 }
 
+# A quiet-mode record is a present captain: its spend cap never queues the
+# captain's own dispatch for a return, while an away record's cap still binds.
+test_quiet_record_never_caps_a_present_captains_spawn() {
+  local home root out
+  home="$TMP_ROOT/quiet-spend-home"
+  root="$TMP_ROOT/quiet-spend-root"
+  mkdir -p "$home/state" "$root/bin"
+  git init -q -b main "$root"
+  git -C "$root" commit -q --allow-empty -m init
+  FM_AFK_MODE=quiet FM_HOME="$home" "$ROOT/bin/fm-afk-contract.sh" enter --spend 1 >/dev/null || fail "quiet entry failed"
+  fm_write_meta "$home/state/task-a.meta" "window=fm-task-a" "kind=ship"
+  fm_write_meta "$home/state/task-b.meta" "window=fm-task-b" "kind=ship"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$ROOT/bin/fm-spawn.sh" task-new --mode no-mistakes --yolo off 2>&1)
+  assert_not_contains "$out" "caps concurrent workers" "a quiet record capped a present captain's spawn"
+  FM_HOME="$home" "$ROOT/bin/fm-afk-contract.sh" enter --spend 1 >/dev/null 2>&1 || fail "away entry over quiet failed"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$ROOT/bin/fm-spawn.sh" task-new --mode no-mistakes --yolo off 2>&1)
+  assert_contains "$out" "caps concurrent workers at 1 and 2 ordinary task(s) are live" "the away record's cap no longer binds"
+  pass "a quiet-mode record never caps a present captain's spawn, while the away record's cap still binds"
+}
+
 test_away_spend_cap_is_rechecked_under_the_task_set_lock() {
   local home root out i
   home="$TMP_ROOT/away-cap-lock-home"
@@ -1374,6 +1514,10 @@ WRAPPER
 
 test_branch_prompt_is_byte_stable_and_above_cache_floor
 test_outcome_store_is_append_only_with_cursor_reads
+test_outcome_append_keeps_a_bounded_display_tail
+test_outcome_tail_keeps_whole_newest_rows_within_its_byte_budget
+test_outcome_seed_tail_creates_only_an_absent_display_tail
+test_outcome_seed_tail_only_reads_bounded_suffix
 test_outcome_startup_replay_preserves_silence
 test_outcome_startup_replay_stops_at_captain_barrier
 test_outcome_cursor_corruption_fails_closed
@@ -1401,3 +1545,4 @@ test_branch_cannot_force_teardown_or_directly_relaunch
 test_away_record_relocates_main_owned_actions_to_the_branch
 test_away_branch_spawn_requires_queued_dispatchable_work
 test_away_spend_cap_is_rechecked_under_the_task_set_lock
+test_quiet_record_never_caps_a_present_captains_spawn
