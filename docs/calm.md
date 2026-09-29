@@ -173,9 +173,9 @@ FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh
 
 ## Claude Code
 
-### The firstmate-calm mod
+### The Calm mod
 
-Calm on Claude Code is the `firstmate-calm` mod under `.claude/mods/firstmate-calm`.
+Calm on Claude Code is the mod under `.claude/mods/firstmate-calm`, whose plugin name is `fm`.
 The mod is a Claude Code plugin whose whole behavior lives in one function-hooks module.
 The trusted project auto-loads the mod through the `.claude/skills/firstmate-calm` entry (a symlink into `.claude/mods`), so no `--plugin-dir` or marketplace install is needed.
 
@@ -224,7 +224,7 @@ The Pi extension keeps its standard ANSI blue and yellow.
 ### Supervision notes on Claude Code
 
 With the flag on, the mod shows the supervision notes Pi shows, whether Calm is on or off, because on Pi they are supervision UI rather than Calm UI.
-Each note is appended to the transcript as its own system-notice row, which Claude Code draws in gray behind a `⏺` bullet and the mod's name (`firstmate-calm:`), and never sends to the model:
+Each note is appended to the transcript as its own system-notice row, which Claude Code draws in gray behind a `⏺` bullet and the plugin's name (`fm:`), which Claude Code adds to every mod's transcript line, and never sends to the model:
 
 | Line | When |
 | --- | --- |
@@ -240,6 +240,7 @@ A home whose outcome store predates the copy gains one at its next locked sessio
 On later reads, if the copy skips sequence numbers since the last seen outcome, one line counts the missing outcomes.
 The display copy's row and byte bounds are owned by [`fm-branch-outcome.sh`](../bin/fm-branch-outcome.sh); older outcomes and oversized rows cannot always be displayed by the mod, while the outcome store and main's delivery remain authoritative.
 Claude Code keeps each note in the session as a display-only entry and restores it on `claude --continue`, so the mod remembers in its own plugin store how far each session has followed the outcomes, and a resumed session replays only outcomes it has not shown.
+Claude Code keys that store by plugin name, so a session that showed notes before the plugin was renamed from `firstmate-calm` to `fm` and is resumed afterwards replays its still-due notes once.
 The mod only reads outcome and host state: the drain owns off-Pi read-cursor advancement, and main explicitly acknowledges captain outcomes as processed.
 Only a home that runs the supervision host has outcomes to show.
 
@@ -277,11 +278,11 @@ The mod never touches tool execution or prompts, and adds to the stored transcri
 ### Claude Code support bounds
 
 The bounds of the Claude Code support below are recorded with evidence in [`calm-mode-feasibility.md`](calm-mode-feasibility.md#2026-09-15-claude-code-21272-mods-feasibility-and-the-shipped-mod).
-Evidence for 2.1.280 and the record-backed doorbell is also in its [2026-09-25 record](calm-mode-feasibility.md#2026-09-25-claude-code-21280-verification-and-the-record-backed-operational-doorbell) and [2.1.282 reproduction](calm-mode-feasibility.md#2026-09-25-claude-code-21282-reproduction-on-the-installed-build), and for the supervision notes in the [2.1.283 record](calm-mode-feasibility.md#2026-09-28-claude-code-21283-supervision-notes).
+Evidence for 2.1.280 and the record-backed doorbell is also in its [2026-09-25 record](calm-mode-feasibility.md#2026-09-25-claude-code-21280-verification-and-the-record-backed-operational-doorbell) and [2.1.282 reproduction](calm-mode-feasibility.md#2026-09-25-claude-code-21282-reproduction-on-the-installed-build), and for the supervision notes in the [2.1.283 record](calm-mode-feasibility.md#2026-09-28-claude-code-21283-supervision-notes) and their label in the [2.1.284 record](calm-mode-feasibility.md#2026-09-28-claude-code-21284-supervision-note-label-and-the-fm-plugin-name).
 
 - The function-hooks surface is early access and default-off.
   Claude Code states that its API may change between releases without notice.
-  The mod is verified on Claude Code 2.1.272, 2.1.280, 2.1.282, and 2.1.283 and refuses nothing newer.
+  The mod is verified on Claude Code 2.1.272, 2.1.280, 2.1.282, 2.1.283, and 2.1.284 and refuses nothing newer.
 - Firstmate's typed producers bound for a Claude Code pane ride the record-backed doorbell, so they hide like any operational row.
   Those producers are the away-mode daemon's escalations and a worker's launch brief.
   Only an envelope that reaches Claude Code some other way, as bare typed or launch-prompt text, arrives without its U+2063 and stays visible.
@@ -295,7 +296,7 @@ Evidence for 2.1.280 and the record-backed doorbell is also in its [2026-09-25 r
 - The sailboat is painted through Claude Code's Raster element, whose colors are RGB quantized to 256-color escapes rather than the standard 16-color ANSI codes Pi's widget emits.
 - The detailed transcript view (`ctrl+o`) keeps its per-message timestamp and model headers where hidden assistant rows sat, because those headers are not a hookable drawing.
 - Collapsed thinking never appears in Claude Code's default view.
-- Supervision notes are system-notice rows rather than Pi's rendered entries: Claude Code draws them in one gray with its own bullet and the mod's name, so the glyph cannot take its own color as on Pi.
+- Supervision notes are system-notice rows rather than Pi's rendered entries: Claude Code draws them in one gray with its own bullet and the plugin's name, so the glyph cannot take its own color as on Pi.
 - A captain outcome still wakes main through a `Stop hook feedback` row, which fires no hookable drawing, so its anchor line appears beside that row rather than replacing it.
 - The mod has no thinking drawing to hide in other views.
 

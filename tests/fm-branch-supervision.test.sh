@@ -806,11 +806,13 @@ test_home_without_branch_is_untouched() {
   [ -z "$(find "$home/state" -name '.lease-*' -o -name 'branch-outcomes*' -o -name '.branch-*' 2>/dev/null)" ] \
     || fail "guard layer created branch state in a home that never ran the branch"
 
-  # An unmarked caller with no lease file for the task takes no lock at all, so
-  # the guard leaves a home that never ran a branch byte-for-byte unchanged.
+  # An unmarked caller with no lease file for the task takes no lock at all on
+  # a home that does not run the supervision host (a Codex primary without
+  # config/supervision-host), so the guard leaves a home that never ran a
+  # branch byte-for-byte unchanged.
   # The positional parameter belongs to the nested shell.
   # shellcheck disable=SC2016
-  out=$(env -u PI_CODING_AGENT -u FM_SUPERVISION_ACTOR STATE="$home/state" bash -c '
+  out=$(env -u PI_CODING_AGENT -u FM_SUPERVISION_ACTOR FM_TEST_HARNESS=codex STATE="$home/state" bash -c '
     . "$1"
     fm_lease_guard task-none "probe"
     if [ -e "$STATE/.fm-lease-command.lock" ]; then echo lock-taken; else echo no-lock; fi
@@ -956,25 +958,41 @@ test_unmarked_guard_with_a_lease_file_holds_exclusivity_through_mutation() {
   pass "a lease file makes an unmarked guard exclude a concurrent claim for the complete mutation"
 }
 
-# A home opted into the supervision host has a branch actor that can claim a
+# A home that runs the supervision host has a branch actor that can claim a
 # task no one has leased yet, so its unmarked main must exclude that first
-# claim for the whole guarded mutation, while a home without the opt-in keeps
-# taking no lock at all.
+# claim for the whole guarded mutation, while a home that does not run it
+# keeps taking no lock at all. A Claude home runs it by default and an off
+# file opts out; another primary needs the file (bin/fm-supervision-engine-lib.sh
+# owns the gate, and FM_TEST_HARNESS pins the primary it judges).
 test_host_home_unmarked_guard_excludes_the_first_claim() {
-  local home operation_pid claim_pid claim_status out
+  local home operation_pid claim_pid claim_status out harness line
   home="$TMP_ROOT/host-first-claim-home"
   mkdir -p "$home/state" "$home/config"
   printf '%s\n' "$$" > "$home/state/.lock"
 
-  # Without the opt-in the unmarked guard stays lock-free for an unleased task.
-  # The positional parameter belongs to the nested shell.
-  # shellcheck disable=SC2016
-  out=$(env -u PI_CODING_AGENT -u FM_SUPERVISION_ACTOR CLAUDECODE=1 FM_HOME="$home" STATE="$home/state" bash -c '
-    . "$1"
-    fm_lease_guard task-first "probe"
-    if [ -e "$STATE/.fm-lease-command.lock" ]; then echo lock-taken; else echo no-lock; fi
-  ' _ "$ROOT/bin/fm-lease-lib.sh" 2>&1)
-  [ "$out" = no-lock ] || fail "a home without config/supervision-host engaged the lease-command lock: $out"
+  # Where the home does not run the host the unmarked guard stays lock-free
+  # for an unleased task. The positional parameter belongs to the nested shell.
+  probe_lock() {  # <harness>
+    # shellcheck disable=SC2016
+    env -u PI_CODING_AGENT -u FM_SUPERVISION_ACTOR CLAUDECODE=1 FM_TEST_HARNESS="$1" FM_HOME="$home" STATE="$home/state" bash -c '
+      . "$1"
+      fm_lease_guard task-first "probe"
+      if [ -e "$STATE/.fm-lease-command.lock" ]; then echo lock-taken; else echo no-lock; fi
+      fm_lease_guard_release
+    ' _ "$ROOT/bin/fm-lease-lib.sh" 2>&1
+  }
+  for line in - off; do
+    rm -f "$home/config/supervision-host"
+    [ "$line" = - ] || printf '%s\n' "$line" > "$home/config/supervision-host"
+    for harness in claude codex; do
+      [ "$line:$harness" != -:claude ] || continue
+      out=$(probe_lock "$harness")
+      [ "$out" = no-lock ] || fail "a $harness home whose config/supervision-host is ${line/-/absent} engaged the lease-command lock: $out"
+    done
+  done
+  rm -f "$home/config/supervision-host"
+  out=$(probe_lock claude)
+  [ "$out" = lock-taken ] || fail "a Claude home without config/supervision-host runs the host, so its unmarked guard must take the lease-command lock: $out"
 
   : > "$home/config/supervision-host"
   # The positional parameter belongs to the nested shell.
@@ -1010,7 +1028,7 @@ test_host_home_unmarked_guard_excludes_the_first_claim() {
     "branch $$ "*" live") ;;
     *) fail "the first claim recorded: $out" ;;
   esac
-  pass "an opted-in home's unmarked main excludes the host's first claim for its whole mutation, and other homes take no lock"
+  pass "a host home's unmarked main excludes the host's first claim for its whole mutation, and other homes take no lock"
 }
 
 # --- session-bound staleness and the loud accidental-override guard ---------
@@ -1352,7 +1370,17 @@ WRAPPER
   out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$ROOT/bin/fm-spawn.sh" task-new --mode no-mistakes --yolo off 2>&1)
   assert_not_contains "$out" "caps concurrent workers" "an invalid record refused a main spawn via the spend cap"
   assert_not_contains "$out" "no readable spend cap" "an invalid record refused a main spawn for an unreadable cap"
-  pass "the away-posture record relocates the PR merge and a spawn under the spend cap to the branch, never local landing, and only while confirmed and valid"
+  # Quiet mode's record is a present captain (bin/fm-afk-contract.sh AWAY OR
+  # QUIET), so it relocates nothing: main keeps its standing authority.
+  rm -f "$home/state/.afk-contract"
+  FM_HOME="$home" FM_AFK_MODE=quiet "$ROOT/bin/fm-afk-contract.sh" enter --words 'keep routine wakes off my main' >/dev/null \
+    || fail "quiet entry failed"
+  out=$(FM_HOME="$home" FM_SUPERVISION_ACTOR=branch "$ROOT/bin/fm-pr-merge.sh" task-x https://github.com/o/r/pull/1 2>&1)
+  status=$?
+  [ "$status" -eq 6 ] || fail "quiet mode's record relocated the merge to the branch (exit $status): $out"
+  assert_contains "$out" "$refusal" "the attended refusal changed under quiet mode's record"
+  assert_not_contains "$out" "main is parked" "quiet mode's record announced a relocation"
+  pass "the away-posture record relocates the PR merge and a spawn under the spend cap to the branch, never local landing, and only while confirmed, valid, and away"
 }
 
 test_away_branch_spawn_requires_queued_dispatchable_work() {
