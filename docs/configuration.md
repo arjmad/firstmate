@@ -300,15 +300,15 @@ Both choices are local to each Firstmate home and are not part of secondmate inh
 
 ## Supervision host (config/supervision-host)
 
-The optional local, gitignored `config/supervision-host` controls the supervision host for this home.
+Two optional local, gitignored files control the supervision host for this home: `config/supervision-host-off` opts the home out, and `config/supervision-host` opts a home in and selects its engine.
 The host runs the supervision branch's contract on a headless engine session beside a non-Pi primary.
 [docs/supervision-host.md](supervision-host.md) defines its design, current scope, and verified engines.
 A Claude, Cursor, OpenCode, omp, Grok, or Codex primary can run the host.
 
-A Claude primary runs the host by default: with no file it runs exactly as with an empty file, at the Claude engine's default model.
-A file whose first word is `off` opts the home out on every primary.
-A Cursor, OpenCode, omp, Grok, or Codex primary runs the host only while the file exists and does not say `off`.
-A home that does not run the host behaves exactly as it does without it, and a Pi primary keeps its in-process supervision branch whatever the file says.
+A present `config/supervision-host-off`, whatever it holds, opts the home out on every primary.
+Otherwise a Claude primary runs the host by default: with no `config/supervision-host` it runs exactly as with an empty one, at the Claude engine's default model.
+A Cursor, OpenCode, omp, Grok, or Codex primary runs the host only while `config/supervision-host` exists and the home is not opted out.
+A home that does not run the host behaves exactly as it does without it, and a Pi primary keeps its in-process supervision branch whatever either file says.
 `fm_supervision_host_enabled` in `bin/fm-supervision-engine-lib.sh` implements this gate for every reader.
 
 While the home runs the host, the primary's arm owner runs it in place of the watcher arm.
@@ -319,22 +319,23 @@ Grok's arm command is rendered at session start, so a change to its host mode ta
 
 ### Engine selection
 
-The file may be empty, hold `off`, or hold one line `<engine> [<model>]`:
+`config/supervision-host` may be empty or hold one line `<engine> [<model>]`:
 
-- `off` opts the home out of the host;
 - empty or `default` selects the primary harness's own engine at that engine's default model (`sonnet` for the Claude engine);
 - `<engine> [<model>]` names a verified engine, currently only `claude`, and optionally the engine's own model name or alias; `default <model>` selects the primary harness's engine with that model.
 
 Only Claude has a verified engine of its own, so a Cursor, OpenCode, omp, Grok, or Codex home names `claude` in the file.
 
-### Failures and when changes apply
+### Failures, when changes apply, and inheritance
 
 An unverified engine, a primary without a verified engine, or a malformed line leaves the host without an engine.
 It takes no wake, so every wake reaches main as it would without the host.
 Each away-posture wake includes a line naming the problem.
-The running host reads the file at every wake, so an engine change or `off` takes effect at the next wake without a restart.
+The running host reads both files at every wake, so an engine change or an opt-out takes effect at the next wake without a restart.
 
-It is local to each home and not part of secondmate inherited configuration, because each home's supervision posture and engine model are its own choice: a primary's `off` never reaches a secondmate, and a secondmate that must stay off writes its own `off`.
+The opt-out is inherited into secondmate homes: a primary that opts out also opts its secondmates out, and clearing it restores each mate's own host setting at its next spawn or convergence.
+The primary-authoritative propagation contract, including removal of a mate's local opt-out when the primary has none, is owned by [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md).
+`config/supervision-host` is local to each home and not inherited, because each home's engine and model are its own choice.
 While the home runs the host, main's lease-checked commands also take the per-task lease lock, so a claim by the host's engine cannot race a mutation main already started (`bin/fm-lease-lib.sh`).
 
 ## Backlog backend (.tasks.toml / config/backlog-backend)

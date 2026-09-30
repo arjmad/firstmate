@@ -1698,7 +1698,7 @@ EOF
   make_fake_ps_claude "$fakebin"
   # A Claude home runs the supervision host by default and then presents its
   # outcomes; this case pins a home that does not run it.
-  printf 'off\n' > "$home/config/supervision-host"
+  : > "$home/config/supervision-host-off"
 
   FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append \
     --task task-b --verdict captain --summary 'unread Pi branch outcome' >/dev/null \
