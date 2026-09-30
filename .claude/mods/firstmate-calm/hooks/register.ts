@@ -1,4 +1,4 @@
-// Firstmate Calm for Claude Code: the hooks module of the `firstmate-calm` mod.
+// Firstmate Calm for Claude Code: the hooks module of the Calm mod, whose plugin name is `fm`.
 //
 // A Claude Code "mod" is a plugin whose behavior lives in one hooks module. Claude Code
 // may load this module through its rollout flag or `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS`,
