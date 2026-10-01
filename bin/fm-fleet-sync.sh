@@ -26,6 +26,31 @@
 # killed mid-write - e.g. a timed-out bootstrap sync or a teardown process kill),
 # it is retried with a bounded wait and removed only when provably stale; see
 # fetch_with_packed_refs_lock_guard and the FM_FLEET_SYNC_PACKED_REFS_LOCK_* knobs.
+# Live checkouts: after the projects/ clones, it also fast-forwards each live
+# checkout the captain-private $FM_HOME/config/live-checkouts lists - a working
+# copy outside projects/ that something actually runs from (a scheduled job's
+# repo, a symlinked skills tree, a service's source). One entry per line:
+#   <project> <path> [lock=<lock-path>] [post-update command...]
+# Blank lines and lines starting with # are ignored; a leading ~/ in <path> or
+# <lock-path> expands to $HOME. An absent file means no live checkouts.
+# Each live checkout gets the same guards as a clone - clone root, origin, clean
+# tree, on its default branch (or the safe detached-HEAD self-heal), merge
+# --ff-only, else a loud STUCK line - but never branch pruning and never the
+# registry posture check. A path that is this firstmate home is refused: Firstmate
+# updates itself only through /updatefirstmate.
+# lock=<lock-path> names a file or directory whose existence means the checkout is
+# in use (a running job cycle); the sync waits while it exists - up to
+# FM_LIVE_CHECKOUT_LOCK_WAIT_SECS (default 120, polling every
+# FM_LIVE_CHECKOUT_LOCK_POLL_SECS, default 5) in the single-project form and not
+# at all in the whole-fleet form - then reports "skipped: busy: ..." and leaves the
+# checkout for the next sync.
+# The post-update command runs through bash -c from the checkout's directory each
+# time the checkout's HEAD differs from the commit it last succeeded for, which
+# state/live-checkouts/<key> records. A first sighting with no record runs it only
+# when this sync moved HEAD; otherwise it just records the current HEAD. A failed
+# command reports STUCK and never records that HEAD, so the next sync retries it.
+# The single-project form syncs the entries for that project name; the whole-fleet
+# form syncs every entry after the clones.
 # Usage: fm-fleet-sync.sh [<project-dir-or-name>]
 # The single-project form accepts either a path (absolute, or relative to the
 # caller's cwd) or a bare "<name>"/"projects/<name>" form, resolved against
@@ -40,6 +65,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+LIVE_CHECKOUTS_FILE="$CONFIG/live-checkouts"
+LIVE_RECORDS="$STATE/live-checkouts"
 # shellcheck source=bin/fm-lock-lib.sh
 . "$SCRIPT_DIR/fm-lock-lib.sh"
 # Inert unless FM_TIMING_LOG names a file; only the deferred network stage sets it.
@@ -63,6 +92,11 @@ if ! [[ "$FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS" =~ ^([0-9]+([.][0-9]*)?|[
   echo "fleet-sync: invalid packed-refs lock retry wait '$FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS'; using 1s" >&2
   FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS=1
 fi
+
+LIVE_LOCK_WAIT_SECS=${FM_LIVE_CHECKOUT_LOCK_WAIT_SECS:-120}
+LIVE_LOCK_POLL_SECS=${FM_LIVE_CHECKOUT_LOCK_POLL_SECS:-5}
+case "$LIVE_LOCK_WAIT_SECS" in ''|*[!0-9]*) LIVE_LOCK_WAIT_SECS=120 ;; esac
+case "$LIVE_LOCK_POLL_SECS" in ''|*[!0-9]*|0) LIVE_LOCK_POLL_SECS=5 ;; esac
 
 usage() {
   echo "usage: fm-fleet-sync.sh [<project-dir-or-name>]" >&2
@@ -299,14 +333,8 @@ report_stuck() {
   echo "$label: STUCK: on $state, $behind commits behind $BASE - needs attention"
 }
 
-sync_project() {
-  PROJ=$1
-  label=$(project_label)
-
-  if [ ! -d "$PROJ" ]; then
-    echo "$label: skipped: not a directory"
-    return 0
-  fi
+# True when $PROJ is the root of its own work tree; otherwise prints the skip line.
+require_clone_root() {
   # Git repository discovery walks UP from $PROJ, so a plain directory merely
   # nested inside a repository - a worktree container left under projects/, say -
   # resolves to the ENCLOSING repository, which in a firstmate home is the
@@ -317,15 +345,27 @@ sync_project() {
   proj_top=$(git -C "$PROJ" rev-parse --show-toplevel 2>/dev/null) || proj_top=""
   if [ -z "$proj_top" ]; then
     echo "$label: skipped: not a git repo"
-    return 0
+    return 1
   fi
   # Both sides are physical paths (git resolves --show-toplevel through symlinks),
   # so a symlinked clone dir still compares equal to its own root.
   proj_abs=$(cd "$PROJ" && pwd -P) || proj_abs=""
   if [ "$proj_top" != "$proj_abs" ]; then
     echo "$label: skipped: not a clone root (git would act on $proj_top)"
+    return 1
+  fi
+  return 0
+}
+
+sync_project() {
+  PROJ=$1
+  label=$(project_label)
+
+  if [ ! -d "$PROJ" ]; then
+    echo "$label: skipped: not a directory"
     return 0
   fi
+  require_clone_root || return 0
   if ! mode_line=$("$FM_ROOT/bin/fm-project-mode.sh" "$label" 2>/dev/null); then
     echo "$label: skipped: registry entry does not resolve to a delivery posture (run bin/fm-project-mode.sh $label for the refusal)"
     return 0
@@ -335,6 +375,15 @@ sync_project() {
     echo "$label: skipped: local-only project"
     return 0
   fi
+  fast_forward_clone yes
+}
+
+# fast_forward_clone <prune yes|no>: fetch $PROJ's origin and fast-forward its
+# default branch when safe, printing one outcome line under $label. Sets
+# FF_CURRENT=yes only when the clone ends cleanly on its default branch at origin.
+fast_forward_clone() {
+  local prune=$1
+  FF_CURRENT=no
   if ! git -C "$PROJ" remote get-url origin >/dev/null 2>&1; then
     echo "$label: skipped: no origin remote"
     return 0
@@ -349,7 +398,7 @@ sync_project() {
     return 0
   fi
 
-  prune_gone_branches || true
+  [ "$prune" = no ] || prune_gone_branches || true
 
   DEFAULT=$(default_branch) || {
     echo "$label: skipped: cannot determine default branch"
@@ -409,6 +458,7 @@ sync_project() {
     return 0
   }
   if [ "$local_rev" = "$remote_rev" ]; then
+    FF_CURRENT=yes
     if [ "$recovered" = yes ]; then
       echo "$label: recovered: re-attached $DEFAULT (already current)"
     else
@@ -437,6 +487,7 @@ sync_project() {
     echo "$label: skipped: fast-forward completed but cannot read local $DEFAULT"
     return 0
   }
+  FF_CURRENT=yes
   if [ "$recovered" = yes ]; then
     echo "$label: recovered: re-attached $DEFAULT, synced $before..$after"
   else
@@ -445,12 +496,143 @@ sync_project() {
   return 0
 }
 
+# shellcheck disable=SC2088 # the case patterns match a literal ~/ prefix
+expand_home() {
+  case "$1" in
+    '~') printf '%s\n' "$HOME" ;;
+    '~/'*) printf '%s/%s\n' "$HOME" "${1#\~/}" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+# wait_for_lock_release <lock> <max-secs>: true once <lock> no longer exists,
+# false when it still exists after waiting up to <max-secs>.
+wait_for_lock_release() {
+  local lock=$1 max=$2 waited=0
+  while [ -e "$lock" ]; do
+    [ "$waited" -lt "$max" ] || return 1
+    sleep "$LIVE_LOCK_POLL_SECS"
+    waited=$((waited + LIVE_LOCK_POLL_SECS))
+  done
+  return 0
+}
+
+# run_post_update <command> <fast-forwarded yes|no>: run the entry's post-update
+# command when the checkout's HEAD differs from the commit the command last
+# succeeded for (see the header), recording HEAD after a success.
+run_post_update() {
+  local cmd=$1 moved=$2 key record head recorded="" rc=0
+  head=$(git -C "$PROJ" rev-parse HEAD 2>/dev/null) || return 0
+  key=$(printf '%s' "$proj_abs" | git hash-object --stdin) || return 0
+  record="$LIVE_RECORDS/$key"
+  [ ! -f "$record" ] || recorded=$(sed -n 1p "$record" 2>/dev/null)
+  if [ -n "$recorded" ] && [ "$recorded" = "$head" ]; then
+    return 0
+  fi
+  if [ -z "$recorded" ] && [ "$moved" = no ]; then
+    write_live_record "$record" "$head"
+    return 0
+  fi
+  (cd "$PROJ" && bash -c "$cmd") </dev/null >&2 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    # A first-sighting failure still leaves a record that matches no commit, so
+    # the next sync retries rather than seeding the record as already deployed.
+    [ -n "$recorded" ] || write_live_record "$record" pending
+    echo "$label: STUCK: post-update command failed (exit $rc) at $(git -C "$PROJ" rev-parse --short HEAD); the next sync retries it - needs attention"
+    return 0
+  fi
+  write_live_record "$record" "$head"
+  echo "$label: post-update command ran at $(git -C "$PROJ" rev-parse --short HEAD)"
+}
+
+write_live_record() {
+  local record=$1 head=$2 tmp
+  mkdir -p "$LIVE_RECORDS" 2>/dev/null || return 0
+  tmp="$record.tmp.$$"
+  if ! { printf '%s\n' "$head" > "$tmp" && mv -f "$tmp" "$record"; } 2>/dev/null; then
+    rm -f "$tmp"
+  fi
+}
+
+# sync_live_checkout <project> <path> <lock> <command> <lock-wait-secs>
+sync_live_checkout() {
+  local project=$1 path=$2 lock=$3 cmd=$4 wait_secs=$5 self before moved
+  PROJ=$(expand_home "$path")
+  label="$project live $path"
+  if [ ! -d "$PROJ" ]; then
+    echo "$label: skipped: not a directory"
+    return 0
+  fi
+  require_clone_root || return 0
+  for self in "$FM_ROOT" "$FM_HOME"; do
+    if [ "$proj_abs" = "$(cd "$self" 2>/dev/null && pwd -P)" ]; then
+      echo "$label: skipped: this is the firstmate home; update it through /updatefirstmate"
+      return 0
+    fi
+  done
+  if [ -n "$lock" ]; then
+    lock=$(expand_home "$lock")
+    if ! wait_for_lock_release "$lock" "$wait_secs"; then
+      echo "$label: skipped: busy: $lock is held; rerun bin/fm-fleet-sync.sh $project after it clears"
+      return 0
+    fi
+  fi
+  before=$(git -C "$PROJ" rev-parse HEAD 2>/dev/null) || before=""
+  fast_forward_clone no
+  [ "$FF_CURRENT" = yes ] || return 0
+  [ -n "$cmd" ] || return 0
+  if [ "$(git -C "$PROJ" rev-parse HEAD 2>/dev/null)" = "$before" ]; then
+    moved=no
+  else
+    moved=yes
+  fi
+  run_post_update "$cmd" "$moved"
+}
+
+# sync_live_checkouts <project-or-empty> <lock-wait-secs>: sync the configured
+# live checkouts for one project, or every entry when the project is empty.
+sync_live_checkouts() {
+  local only=$1 wait_secs=$2 line project path lock cmd rest n=0
+  [ -f "$LIVE_CHECKOUTS_FILE" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    line=${line#"${line%%[![:space:]]*}"}
+    case "$line" in ''|'#'*) continue ;; esac
+    project=${line%%[[:space:]]*}
+    rest=${line#"$project"}
+    rest=${rest#"${rest%%[![:space:]]*}"}
+    path=${rest%%[[:space:]]*}
+    rest=${rest#"$path"}
+    rest=${rest#"${rest%%[![:space:]]*}"}
+    if [ -z "$path" ]; then
+      echo "live-checkouts: skipped: line $n names no path"
+      continue
+    fi
+    [ -z "$only" ] || [ "$project" = "$only" ] || continue
+    lock=""
+    case "$rest" in
+      lock=*)
+        lock=${rest%%[[:space:]]*}
+        rest=${rest#"$lock"}
+        rest=${rest#"${rest%%[![:space:]]*}"}
+        lock=${lock#lock=}
+        ;;
+    esac
+    cmd=$rest
+    sync_live_checkout "$project" "$path" "$lock" "$cmd" "$wait_secs"
+  done < "$LIVE_CHECKOUTS_FILE"
+}
+
 if [ $# -eq 1 ]; then
   sync_project "$(resolve_project_arg "$1")"
+  sync_live_checkouts "$(project_label)" "$LIVE_LOCK_WAIT_SECS"
   exit 0
 fi
 
-[ -d "$PROJECTS" ] || exit 0
+if [ ! -d "$PROJECTS" ]; then
+  sync_live_checkouts "" 0
+  exit 0
+fi
 for proj in "$PROJECTS"/*; do
   [ -e "$proj" ] || continue
   [ -d "$proj" ] || continue
@@ -461,3 +643,4 @@ for proj in "$PROJECTS"/*; do
   sync_project "$proj"
   fm_timing_record clone sync "$__fm_timing_stamp" "$(basename "$proj")"
 done
+sync_live_checkouts "" 0

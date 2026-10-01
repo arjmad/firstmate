@@ -27,6 +27,12 @@
 # worktree dir as its cwd also blocks removal (the clone-dir liveness check); a
 # transient lock that self-clears is retried without a force-remove; and any
 # non-packed-refs.lock fetch failure keeps today's behavior with no retry.
+#
+# It also pins the config/live-checkouts entries: a live checkout outside
+# projects/ fast-forwards under the same guards (and is otherwise STUCK, untouched),
+# its post-update command runs once per new HEAD and is retried after a failure, a
+# held lock= path defers it, the firstmate home itself is refused, and the
+# single-project form syncs only that project's entries.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -715,6 +721,160 @@ test_non_signature_fetch_failure_is_not_retried() {
   pass "a non-packed-refs.lock fetch failure keeps today's behavior (no retry)"
 }
 
+# --- live checkouts ---------------------------------------------------------
+
+# build_live <home> <name>: a clone of a fresh origin that lives at <home>/live/<name>
+# rather than under projects/. Echoes the checkout path.
+build_live() {
+  local home=$1 name=$2 clone
+  clone=$(build_pair "$home" "$name")
+  mkdir -p "$home/live"
+  mv "$clone" "$home/live/$name"
+  printf '%s\n' "$home/live/$name"
+}
+
+# live_config <home> <line>...: write config/live-checkouts.
+live_config() {
+  local home=$1
+  shift
+  mkdir -p "$home/config"
+  printf '%s\n' "$@" > "$home/config/live-checkouts"
+}
+
+# runs_of <file>: how many times a counting post-update command ran.
+runs_of() { if [ -f "$1" ]; then wc -l < "$1" | tr -d ' '; else echo 0; fi; }
+
+test_live_checkout_fast_forwards_and_runs_post_update_once() {
+  local home live out log
+  home=$(new_home)
+  live=$(build_live "$home" svc)
+  log="$home/svc-deploys"
+  advance_origin "$home" svc C1
+  live_config "$home" "# comment" "" "svc $live echo deployed >> '$log'"
+
+  out=$(run_sync "$home" svc)
+  assert_contains "$out" "svc live $live: synced" "a behind live checkout fast-forwards"
+  assert_contains "$out" "svc live $live: post-update command ran" "the post-update command ran after the fast-forward"
+  assert_equals "$(head_sha "$live")" "$(git -C "$home/work-svc" rev-parse HEAD)" "live checkout is at origin"
+  assert_equals "$(runs_of "$log")" 1 "post-update ran once"
+
+  out=$(run_sync "$home" svc)
+  assert_contains "$out" "svc live $live: already current" "a second sync finds it current"
+  assert_equals "$(runs_of "$log")" 1 "post-update does not rerun for the same HEAD"
+  pass "a live checkout fast-forwards and its post-update command runs once per new HEAD"
+}
+
+test_live_checkout_first_sighting_records_without_running() {
+  local home live out log
+  home=$(new_home)
+  live=$(build_live "$home" seed)
+  log="$home/seed-deploys"
+  live_config "$home" "seed $live echo deployed >> '$log'"
+
+  out=$(run_sync "$home" seed)
+  assert_contains "$out" "seed live $live: already current" "current checkout reported"
+  assert_equals "$(runs_of "$log")" 0 "a first sighting that moved nothing does not run the command"
+
+  advance_origin "$home" seed C1
+  out=$(run_sync "$home" seed)
+  assert_contains "$out" "seed live $live: post-update command ran" "the next new HEAD runs it"
+  assert_equals "$(runs_of "$log")" 1 "post-update ran once after the advance"
+  pass "a first sighting records the current HEAD and runs the command only for a later one"
+}
+
+test_live_checkout_failed_post_update_is_retried() {
+  local home live out flag log
+  home=$(new_home)
+  live=$(build_live "$home" flaky)
+  flag="$home/flaky-ok"
+  log="$home/flaky-deploys"
+  advance_origin "$home" flaky C1
+  live_config "$home" "flaky $live test -e '$flag' && echo deployed >> '$log'"
+
+  out=$(run_sync "$home" flaky)
+  assert_contains "$out" "flaky live $live: STUCK: post-update command failed (exit 1)" "a failed command is loud"
+
+  : > "$flag"
+  out=$(run_sync "$home" flaky)
+  assert_contains "$out" "flaky live $live: already current" "the checkout itself stays current"
+  assert_contains "$out" "flaky live $live: post-update command ran" "the next sync retries the command"
+  assert_equals "$(runs_of "$log")" 1 "the retry succeeded once"
+  pass "a failed post-update command is reported STUCK and retried on the next sync"
+}
+
+test_dirty_live_checkout_is_stuck_untouched() {
+  local home live out before log
+  home=$(new_home)
+  live=$(build_live "$home" dirtylive)
+  log="$home/dirtylive-deploys"
+  advance_origin "$home" dirtylive C1
+  printf 'local edit\n' >> "$live/file.txt"
+  before=$(head_sha "$live")
+  live_config "$home" "dirtylive $live echo deployed >> '$log'"
+
+  out=$(run_sync "$home" dirtylive)
+  assert_contains "$out" "dirtylive live $live: STUCK: on branch main with uncommitted changes" "dirty live checkout is STUCK"
+  assert_equals "$(head_sha "$live")" "$before" "dirty live checkout HEAD untouched"
+  assert_contains "$(cat "$live/file.txt")" "local edit" "local edit preserved"
+  assert_equals "$(runs_of "$log")" 0 "no post-update for a stuck checkout"
+  pass "a dirty live checkout is reported STUCK and left untouched"
+}
+
+test_held_lock_defers_live_checkout() {
+  local home live out before lock
+  home=$(new_home)
+  live=$(build_live "$home" runner)
+  lock="$home/runner.lock"
+  advance_origin "$home" runner C1
+  mkdir "$lock"
+  before=$(head_sha "$live")
+  live_config "$home" "runner $live lock=$lock"
+
+  out=$(run_sync "$home")
+  assert_contains "$out" "runner live $live: skipped: busy: $lock is held" "whole-fleet form defers a held lock without waiting"
+  assert_equals "$(head_sha "$live")" "$before" "held lock leaves the checkout untouched"
+
+  out=$(FM_LIVE_CHECKOUT_LOCK_WAIT_SECS=0 run_sync "$home" runner)
+  assert_contains "$out" "skipped: busy" "single-project form defers once its wait is spent"
+
+  ( sleep 1; rmdir "$lock" ) &
+  out=$(FM_LIVE_CHECKOUT_LOCK_WAIT_SECS=20 FM_LIVE_CHECKOUT_LOCK_POLL_SECS=1 run_sync "$home" runner)
+  wait
+  assert_contains "$out" "runner live $live: synced" "single-project form syncs once the lock clears"
+  pass "a held lock= path defers the live checkout until it clears"
+}
+
+test_firstmate_home_live_checkout_is_refused() {
+  local home before out
+  home=$(build_enclosing_home livehome)
+  before=$(head_sha "$home")
+  live_config "$home" "fm $home"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" fm 2>/dev/null)
+  assert_contains "$out" "fm live $home: skipped: this is the firstmate home" "the firstmate home is refused"
+  assert_equals "$(head_sha "$home")" "$before" "the firstmate home was not fast-forwarded"
+  pass "a live-checkouts entry naming the firstmate home is refused"
+}
+
+test_live_checkouts_scoped_by_project_and_tilde() {
+  local home a b out
+  home=$(new_home)
+  a=$(build_live "$home" lc-alpha)
+  b=$(build_live "$home" lc-beta)
+  advance_origin "$home" lc-alpha C1
+  advance_origin "$home" lc-beta C1
+  live_config "$home" "lc-alpha ~/live/lc-alpha" "lc-beta $b"
+
+  out=$(HOME="$home" run_sync "$home" lc-alpha)
+  assert_contains "$out" "lc-alpha live ~/live/lc-alpha: synced" "the named project's entry syncs with ~/ expanded"
+  assert_not_contains "$out" "lc-beta live" "another project's entry is not touched by the single-project form"
+  assert_not_equals "$(head_sha "$b")" "$(git -C "$home/work-lc-beta" rev-parse HEAD)" "beta still behind"
+
+  out=$(HOME="$home" run_sync "$home")
+  assert_contains "$out" "lc-beta live $b: synced" "the whole-fleet form syncs every entry"
+  : "$a"
+  pass "the single-project form syncs only its own entries, and ~/ expands to HOME"
+}
+
 test_detached_clean_ancestor_recovers
 test_detached_unique_commit_is_stuck_untouched
 test_detached_clean_ancestor_with_diverged_local_default_is_stuck_untouched
@@ -741,3 +901,10 @@ test_non_signature_fetch_failure_is_not_retried
 test_non_clone_dir_never_syncs_the_enclosing_repo
 test_non_clone_dir_named_directly_never_syncs_the_enclosing_repo
 test_symlinked_clone_still_syncs
+test_live_checkout_fast_forwards_and_runs_post_update_once
+test_live_checkout_first_sighting_records_without_running
+test_live_checkout_failed_post_update_is_retried
+test_dirty_live_checkout_is_stuck_untouched
+test_held_lock_defers_live_checkout
+test_firstmate_home_live_checkout_is_refused
+test_live_checkouts_scoped_by_project_and_tilde
