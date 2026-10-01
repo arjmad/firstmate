@@ -253,13 +253,13 @@ jobs:
           # The Pi package is installed above and CI provides npm and tsc, so
           # any missing typecheck prerequisite is a broken lane, not a valid skip.
           # The per-script bound turns a hung script into a named exit-124
-          # failure instead of the whole shard eating the job cap. 1200s is
-          # 2x the slowest serial script observed on a hosted runner
-          # (fm-watch-triage.test.sh, 593s in run 34662095776), because these
-          # runners have been seen at 2x local timing; no healthy script
-          # approaches it.
+          # failure instead of the whole shard eating the job cap. 1500s
+          # matches the runner's --changed bound: about 1.3x the slowest
+          # serial script measured on this fork's runner
+          # (fm-watch-triage.test.sh, 1163s in run 36686083023), and still
+          # under the 30-minute job cap so the named failure lands first.
           bin/fm-test-run.sh --lane "$FM_SERIAL_LANE" \
-            --per-script-timeout-secs 1200 \
+            --per-script-timeout-secs 1500 \
             --fail-on-gate-skip 'Pi extension typecheck prerequisite not found' \
             --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-serial-${FM_SERIAL_SHARD}.json"
       - name: Upload portable serial shard ${{ matrix.shard }} timing artifact
