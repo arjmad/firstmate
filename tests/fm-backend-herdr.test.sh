@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/fm-backend-herdr.test.sh - fake-herdr-CLI unit tests for the herdr
 # session-provider adapter (bin/backends/herdr.sh), P2 of
-# data/fm-backend-design-d7 (herdr-addendum.md). Mirrors tests/fm-backend.test.sh's
+# docs/herdr-backend.md. Mirrors tests/fm-backend.test.sh's
 # fakebin/command-log convention, but herdr has no pre-refactor baseline to
 # diff against (it is new in this task), so these are direct behavior
 # assertions against a small, LOG-based, canned-response fake `herdr` + real

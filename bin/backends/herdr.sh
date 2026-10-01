@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # bin/backends/herdr.sh - the verified herdr session-provider adapter.
 #
-# Design: data/fm-backend-design-d7/herdr-addendum.md ("Interface mapping",
-# decisions D1-D6) and the empirical verification recorded in
-# data/fm-backend-design-d7/herdr-verification-p2.md (real herdr v0.7.1,
-# protocol 14, macOS aarch64), refined by docs/herdr-backend.md's
-# "workspace-per-home" pass (AGENTS.md task herdr-sm-spaces-k4). Herdr is a
+# Design: docs/herdr-backend.md (interface mapping and the
+# "workspace-per-home" pass) and the empirical verification recorded in
+# docs/verification/runtime-backends.md (AGENTS.md task herdr-sm-spaces-k4). Herdr is a
 # session provider ONLY (D3): the worktree provider stays treehouse, exactly
 # like tmux. Sourced only through bin/fm-backend.sh's fm_backend_source in
 # normal operation; the unit tests source it directly, so the FM_HOME fallback

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/fm-backend-zellij.test.sh - fake-zellij-CLI unit tests for the zellij
 # session-provider adapter (bin/backends/zellij.sh), P3 of
-# data/fm-backend-design-d7 (report.md "Zellij Backend"). Mirrors
+# docs/zellij-backend.md. Mirrors
 # tests/fm-backend-herdr.test.sh's fakebin/command-log convention: a small,
 # LOG-based, canned-response fake `zellij` + real `jq` (jq is a real required
 # tool for this backend, not faked). The real-binary smoke test lives in

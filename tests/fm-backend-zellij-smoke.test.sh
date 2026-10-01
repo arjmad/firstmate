@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/fm-backend-zellij-smoke.test.sh - real zellij smoke test for the
 # zellij session-provider adapter (bin/backends/zellij.sh), P3 of
-# data/fm-backend-design-d7 (report.md "Zellij Backend"). Mirrors
+# docs/zellij-backend.md. Mirrors
 # tests/fm-backend-herdr-smoke.test.sh's structure: every other suite fakes
 # the CLI, this one talks to a REAL zellij server - but ALWAYS on a private,
 # named, throwaway session (via FM_ZELLIJ_SESSION, never the real "firstmate"

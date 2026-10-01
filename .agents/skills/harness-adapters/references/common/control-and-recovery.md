@@ -5,8 +5,8 @@ Load this with the running or recorded tool reference for trust, skill invocatio
 ## Typed data and lifecycle control
 
 The router owns lifecycle-only control and recorded-harness selection.
-Conversation and harness-native skill invocation use `../../../bin/fm-send.sh`.
-`../../../docs/agent-control.md` owns the data-plane split, and `../../../bin/fm-control-lib.sh` owns executable capabilities.
+Conversation and harness-native skill invocation use `../../../../../bin/fm-send.sh`.
+`../../../../../docs/agent-control.md` owns the data-plane split, and `../../../../../bin/fm-control-lib.sh` owns executable capabilities.
 Tool-reference exit and interrupt values are empirical records, not keys to improvise; a new adapter remains uncontrollable until they land in that owner.
 Let the control plane verify postconditions.
 
@@ -26,7 +26,7 @@ Codex shows a directory-trust dialog on the first run for a repository root.
 
 Use the tool's exact skill form, or natural language only when no separate command is verified or the form remains uncertain.
 A successful send or key return is not proof of submission; require the tool-specific postcondition.
-Popup, queued-input, and readiness handling belongs to `../../../bin/fm-composer-lib.sh` and the selected backend.
+Popup, queued-input, and readiness handling belongs to `../../../../../bin/fm-composer-lib.sh` and the selected backend.
 
 ## Interrupt and exit
 
@@ -40,7 +40,7 @@ The tool reference records repeat, acknowledgement, and clearing behavior, while
 Native resume availability and form belong solely to the selected tool reference.
 Use native resume only when both that reference and the recovery procedure call for it.
 Deterministic relaunch instead trusts instructions on disk, not a private session, and never needs a session id printed at exit.
-One relaunch-time exception is the runtime's own recorded session identity, used only to keep that runtime's status authority valid across the replacement - `../../../docs/agent-control.md` "Transactional relaunch" owns it.
+One relaunch-time exception is the runtime's own recorded session identity, used only to keep that runtime's status authority valid across the replacement - `../../../../../docs/agent-control.md` "Transactional relaunch" owns it.
 
-`../stuck-crewmate-recovery/SKILL.md` owns worker recovery and `../secondmate-provisioning/SKILL.md` owns secondmate recovery; both preserve recorded work.
+`../../../stuck-crewmate-recovery/SKILL.md` owns worker recovery and `../../../secondmate-provisioning/SKILL.md` owns secondmate recovery; both preserve recorded work.
 The router's recovery scenarios select the additional common references for replacement profiles and secondmates.

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # tests/fm-backend.test.sh - P1 runtime-backend extraction conformance
-# (data/fm-backend-design-d7/report.md, herdr-addendum.md "events as the core
-# abstraction"). bin/fm-backend.sh and bin/backends/tmux.sh move the tmux
+# (docs/architecture.md "Runtime session backends"). bin/fm-backend.sh and bin/backends/tmux.sh move the tmux
 # command sequences that fm-send.sh, fm-peek.sh, fm-spawn.sh, and
 # fm-teardown.sh used to run inline into named adapter functions. This suite:
 #

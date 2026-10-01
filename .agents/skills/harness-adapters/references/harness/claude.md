@@ -6,7 +6,7 @@ Busy hooks verified 2026-07-28 on Claude Code 2.1.220.
 
 | Fact | Value |
 |---|---|
-| Busy | Owned hooks: `UserPromptSubmit` opens while `Stop`, `StopFailure`, and `SessionEnd` close; `PostToolUse` refreshes the generation-bound progress marker owned by `../../../bin/fm-busy-event.sh` after every completed tool call (no periodic or background-task event exists on Claude Code 2.1.274, so the completed-call boundary is the activity source and it never fabricates a completed turn); manual interrupt emits no hook, so control reports delivered keys and live endpoint only, publishes no idle event or cancellation claim, and usually leaves `claude-hook` busy. |
+| Busy | Owned hooks: `UserPromptSubmit` opens while `Stop`, `StopFailure`, and `SessionEnd` close; `PostToolUse` refreshes the generation-bound progress marker owned by `../../../../../bin/fm-busy-event.sh` after every completed tool call (no periodic or background-task event exists on Claude Code 2.1.274, so the completed-call boundary is the activity source and it never fabricates a completed turn); manual interrupt emits no hook, so control reports delivered keys and live endpoint only, publishes no idle event or cancellation claim, and usually leaves `claude-hook` busy. |
 | Exit | `/exit`; with a live background shell or agent, 2.1.269 answers it with a `Background work is running` dialog whose selection starts on `1. Exit and stop tasks`, where Enter confirms and stops the agent, Escape cancels back to the composer with the work still running, and C-c leaves the dialog untouched. `../../../../../bin/fm-control.sh exit` confirms that default itself through the key path; see "Exit confirmation" below. |
 | Interrupt | Single Escape. |
 | Skill | `/<skill>`, for example `/no-mistakes`. |
@@ -23,18 +23,18 @@ Every claude spawn therefore pre-registers the directory its pane starts in befo
 A second, separate dialog - "Allow external CLAUDE.md file imports?" - renders whenever a loaded CLAUDE.md chain reaches outside the project tree, which every crewmate's does through the captain's own `~/.claude/CLAUDE.md` importing `~/.claude/RTK.md`.
 `--setting-sources project,local` (the minimal worker tool surface) does not suppress it either, and it gates the pane exactly like the trust dialog: cursor on "No, disable external imports", no way to move the selection from firstmate's steering plane.
 
-`../../../bin/fm-claude-trust.sh` records `hasTrustDialogAccepted` for both the worktree and its primary checkout in `${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json`, where a home's worker account pin decides `CLAUDE_CONFIG_DIR` (`../../../docs/configuration.md` "Worker account pin"), for a ship or scout spawn; a secondmate spawn registers only its own home entry, since a secondmate home has no separate primary-checkout entry to carry import consent forward from.
+`../../../../../bin/fm-claude-trust.sh` records `hasTrustDialogAccepted` for both the worktree and its primary checkout in `${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json`, where a home's worker account pin decides `CLAUDE_CONFIG_DIR` (`../../../../../docs/configuration.md` "Worker account pin"), for a ship or scout spawn; a secondmate spawn registers only its own home entry, since a secondmate home has no separate primary-checkout entry to carry import consent forward from.
 For a ship or scout spawn, the external-imports flags (`hasClaudeMdExternalIncludesApproved`, `hasClaudeMdExternalIncludesWarningShown`) are carried forward alongside the trust flag only when the primary checkout's project entry already carries an explicit `hasClaudeMdExternalIncludesApproved===true` from a prior interactive session - the common first-spawn case is a project claude has never been asked about, so those two flags are left unwritten and the import dialog still renders, even though trust registers normally.
 When the project entry instead already carries an explicit decline (`hasClaudeMdExternalIncludesApproved===false` with `hasClaudeMdExternalIncludesWarningShown===true`), the whole registration refuses - including the trust flag - rather than manufacture consent the human never gave, so that spawn wedges on the trust dialog before it would even reach the import one.
 Both flags `false` is Claude Code's default entry for a project never asked, not a decline, and is treated like an absent flag: trust registers and the import dialog still renders.
-The why-two-entries mechanism and the consent-gating logic live in the script's own header comment, which is the one owner for that contract; the fact worth repeating here is that `../../../bin/fm-spawn.sh` refuses the spawn when the trust flag fails to land, rather than launching a worker that would wedge on that dialog.
+The why-two-entries mechanism and the consent-gating logic live in the script's own header comment, which is the one owner for that contract; the fact worth repeating here is that `../../../../../bin/fm-spawn.sh` refuses the spawn when the trust flag fails to land, rather than launching a worker that would wedge on that dialog.
 
 Never try to answer either dialog with a key.
 Firstmate's key plane carries only Enter, Escape, and C-c with no arrow navigation, so it cannot move a dialog's selection at all, and both dialogs render with the cursor on their declining option, which means a sent Enter ends the session instead of accepting.
 A visible trust dialog means pre-registration did not take effect (or the project entry already carries an explicit decline) - inspect the store and the spawn's error output rather than sending keys.
 A visible external-imports dialog is expected, not a failure signal, whenever the project entry has no prior explicit approval on record - the common first-spawn case.
 `fm-control.sh <id> interrupt` delivers Escape, which is the safe way to clear a wedged workspace-trust dialog for inspection without answering it.
-Escape on the external-imports dialog is different: it records a permanent decline (`hasClaudeMdExternalIncludesApproved: false`, `hasClaudeMdExternalIncludesWarningShown: true`) that `../../../bin/fm-claude-trust.sh` then correctly refuses to override on every later spawn for that project.
+Escape on the external-imports dialog is different: it records a permanent decline (`hasClaudeMdExternalIncludesApproved: false`, `hasClaudeMdExternalIncludesWarningShown: true`) that `../../../../../bin/fm-claude-trust.sh` then correctly refuses to override on every later spawn for that project.
 Leave a pane showing the external-imports dialog alone and have a person answer it interactively instead of interrupting it.
 To recover from an already-recorded decline, remove both flags from the project's entry in `~/.claude.json` and approve the imports dialog once by hand.
 
@@ -75,8 +75,8 @@ Completed turns can render dim predicted text inside an empty composer, indistin
 The spawn scopes `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` to every Claude worker and secondmate without changing global config.
 CLI `--prompt-suggestions` affects print or SDK mode only and did not suppress interactive ghost text on v2.1.186.
 
-As defense in depth, `fm_composer_strip_ghost` in `../../../bin/fm-composer-lib.sh` removes SGR-2 runs before pending classification on styled tmux, Herdr, and Zellij readers.
-`../../../docs/herdr-backend.md` under "Composer and injection safety" owns dark-TRUECOLOR tradeoffs and `../../../docs/verification/runtime-backends.md` owns captures.
+As defense in depth, `fm_composer_strip_ghost` in `../../../../../bin/fm-composer-lib.sh` removes SGR-2 runs before pending classification on styled tmux, Herdr, and Zellij readers.
+`../../../../../docs/herdr-backend.md` under "Composer and injection safety" owns dark-TRUECOLOR tradeoffs and `../../../../../docs/verification/runtime-backends.md` owns captures.
 Styled capture stays internal to the boolean detector; `fm-peek` and model-facing captures remain plain, without escapes.
 
 ## Feedback drafts
@@ -95,26 +95,26 @@ A `--secondmate` launch omits the statement because a secondmate operates under 
 [`../../../../../docs/verification/supervision.md`](../../../../../docs/verification/supervision.md#turn-end-guard) records the current primary and Stop auto-arm live evidence.
 This differs from the worker hook, which only touches a task marker through `.claude/settings.local.json`.
 
-Primary `.claude/settings.json` registers `../../../bin/fm-turnend-guard.sh --claude` and `../../../bin/fm-claude-stop-autoarm.sh` with `asyncRewake: true` and `timeout: 28800`.
+Primary `.claude/settings.json` registers `../../../../../bin/fm-turnend-guard.sh --claude` and `../../../../../bin/fm-claude-stop-autoarm.sh` with `asyncRewake: true` and `timeout: 28800`.
 Guard exit 2 plus stderr forces continuation.
 Stop payload `stop_hook_active=true` follows any hook-driven continuation, including async reawakening, so Claude mode ignores it and uses cooperative claim and epoch plus bounded re-block; default Codex mode keeps it as a one-block loop guard.
 
 Project `.claude/settings.json` loads only when the exact project root is the session root; Claude does not search parents, so Firstmate starts at repository root.
 Hooks still run through cwd-sensitive `/bin/sh`, so tracked commands anchor through `"$CLAUDE_PROJECT_DIR"/bin/...`.
-`../../../docs/turnend-guard.md` owns details.
+`../../../../../docs/turnend-guard.md` owns details.
 
-The Stop-owned watcher hook runs every Stop, foregrounds `../../../bin/fm-watch-arm.sh` only when eligible, and uses exit-2 async reawakening as notification.
+The Stop-owned watcher hook runs every Stop, foregrounds `../../../../../bin/fm-watch-arm.sh` only when eligible, and uses exit-2 async reawakening as notification.
 The model handles notifications but never routine re-arm.
 Unless `config/supervision-host-off` opts the home out, the hook foregrounds the supervision host instead, which also runs Claude's print mode as its headless engine; [`supervision-host.md`](../../../../../docs/supervision-host.md#engines) owns the verified engine facts.
-Claude's PreToolUse seatbelt blocks directly, and its deny is honored only with empty stdout; `../../../docs/arm-pretool-check.md` owns that contract.
+Claude's PreToolUse seatbelt blocks directly, and its deny is honored only with empty stdout; `../../../../../docs/arm-pretool-check.md` owns that contract.
 
 ### Delegation guard
 
 Claude delegation, scheduling, and worktree tools can create work without `state/<id>.meta`, making guards unable to count it.
-`../../../bin/fm-subagent-pretool-check.sh` denies delegation-shaped tool names.
+`../../../../../bin/fm-subagent-pretool-check.sh` denies delegation-shaped tool names.
 A primary should also keep an untracked home-local `permissions.deny` for known delegation tools so they disappear from the schema.
 Never track it in project `.claude/settings.json`, which is Claude-only and propagates to worker copies where it would disarm legitimate delegation.
-`../../../docs/subagent-guard.md` owns the contract, recommendation, `FM_ALLOW_SUBAGENT=1`, and applicability review.
+`../../../../../docs/subagent-guard.md` owns the contract, recommendation, `FM_ALLOW_SUBAGENT=1`, and applicability review.
 
 On Claude 2.1.217 the tool presents as `Agent`, and both `Agent` and `Task` worked as deny keys in an A/B with nonsense control.
 `permissions.allow` pre-approves rather than controls availability, so no closed positive allowlist exists.
