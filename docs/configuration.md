@@ -13,6 +13,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
+| Keeping running checkouts current after merges | [Live checkouts](#live-checkouts-configlive-checkouts) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
 
 ## FM_HOME
@@ -91,6 +92,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Private secondmate config-reread generations with their retry and quarantine state.
 - Per-task steering-inbox records under `state/<id>.inbox/` (`bin/fm-task-inbox-lib.sh`).
 - Parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
+- Live-checkout post-update records under `state/live-checkouts/` (`bin/fm-fleet-sync.sh`).
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
 
@@ -572,6 +574,29 @@ See [`trace-context.md`](trace-context.md) for carrier semantics, supported rout
 ## Fleet activity ledger (config/fleet-ledger)
 
 See [`fleet-ledger.md`](fleet-ledger.md) for the opt-in setup, record contract, and limits.
+
+## Live checkouts (config/live-checkouts)
+
+The optional local, gitignored `config/live-checkouts` file lists working copies outside `projects/` that something runs from, so a merged PR goes live without a hand `git pull`.
+Each line is `<project> <path> [lock=<lock-path>] [post-update command]`, where a leading `~/` expands to `$HOME` and blank or `#` lines are ignored.
+An absent file means no live checkouts.
+
+```text
+# project  path              optional lock               optional post-update command
+jobs       ~/code/jobs
+skills     ~/code/skills                                 ~/code/skills/scripts/deploy.sh
+runner     ~/code/runner     lock=~/Library/Caches/runner/cycle.lock
+```
+
+`bin/fm-fleet-sync.sh` fast-forwards each entry after the `projects/` clones, so the post-merge refresh in `ship-landing`, teardown, and the session-start refresh all keep live checkouts current.
+The single-project form syncs only that project's entries, and the whole-fleet form syncs every entry.
+A live checkout gets the same never-forced guards as a clone: anything dirty, ahead, diverged, or off its default branch is left untouched and reported `STUCK:`.
+A held `lock=` path defers the checkout, after a short bounded wait in the single-project form and without waiting in the whole-fleet form.
+The post-update command runs once for each new HEAD and is retried on the next sync after a failure.
+An entry naming the Firstmate home itself is refused, because Firstmate updates itself only through `/updatefirstmate`.
+
+The list names host paths and is not inherited by secondmate homes.
+[`fm-fleet-sync.sh`'s header](../bin/fm-fleet-sync.sh) owns the exact guards, lock wait, and post-update record under `state/live-checkouts/`.
 
 ## Turn-end pane-churn absorb (config/turnend-churn-absorb)
 
@@ -2377,7 +2402,9 @@ FM_WORKTREE_WRITE_MAXDEPTH=6       # depth that same probe walks below the recor
 FM_WORKTREE_WRITE_TIMEOUT=10       # wall-clock seconds that one walk may take, so a worktree on a hung mount cannot stall the watcher poll that started it; hitting the bound reads as no write evidence, which leaves the escalation schedule exactly as it was; a value that is not a positive integer falls back to the default
 FM_WORKTREE_PROCESS_TIMEOUT=10     # wall-clock seconds the wedge detector's task-worktree process probe may spend listing live processes and their ages; it runs beside the write probe at the moment a wedge escalation would otherwise fire, counts only a process whose working directory is inside the recorded worktree and that started after the idle window opened (a harness or helper present since spawn is not evidence), and hitting the bound reads as no evidence
 FM_WATCH_TRIAGE_LOG_MAX_BYTES=262144   # size cap for the watcher's absorbed-wake debug log
-FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT=     # optional seconds allowed for bootstrap's best-effort clone refresh; unset/blank defaults to max(20, 5 + 3 * origin-backed-project-count)
+FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT=     # optional seconds allowed for bootstrap's best-effort clone refresh; unset/blank defaults to max(20, 5 + 3 * (origin-backed-project-count + live-checkout-count))
+FM_LIVE_CHECKOUT_LOCK_WAIT_SECS=120  # seconds the single-project fm-fleet-sync.sh form waits for a live checkout's held lock= path before deferring it
+FM_LIVE_CHECKOUT_LOCK_POLL_SECS=5    # seconds between those lock checks
 FM_FLEET_PRUNE=1        # set to 0 to skip pruning local branches whose upstream is gone
 FM_STALE_WORKTREE_LOCK_AGE_SECS=30       # min mtime age before fm-teardown.sh treats a leftover worktree git index.lock as provably stale
 FM_TREEHOUSE_RETURN_LOCK_RETRIES=3        # retries after a treehouse return fails on the transient git index.lock signature

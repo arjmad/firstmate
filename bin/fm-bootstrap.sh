@@ -315,6 +315,10 @@ fleet_sync_bootstrap_timeout() {
   fi
 
   count=$(fleet_sync_origin_backed_project_count)
+  # Configured live checkouts (bin/fm-fleet-sync.sh's header) refresh in the same run.
+  if [ -f "$CONFIG/live-checkouts" ]; then
+    count=$((count + $(grep -cEv '^[[:space:]]*(#|$)' "$CONFIG/live-checkouts" || true)))
+  fi
   timeout=$((5 + (3 * count)))
   [ "$timeout" -ge 20 ] || timeout=20
   echo "$timeout"
