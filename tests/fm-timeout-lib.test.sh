@@ -18,7 +18,7 @@ TMP_ROOT=$(fm_test_tmproot fm-timeout-lib)
 # timeout variant: fm_exec_timed must take its perl watchdog here.
 PERL_ONLY="$TMP_ROOT/perl-only-bin"
 mkdir -p "$PERL_ONLY"
-for tool in perl bash sleep; do
+for tool in perl bash sh sleep; do
   ln -s "$(command -v "$tool")" "$PERL_ONLY/$tool"
 done
 
@@ -118,6 +118,28 @@ test_the_bound_replaces_the_calling_shell() {
       || fail "the command's parent $parent is not the replaced caller $caller under PATH=$path"
   done
   pass "fm_exec_timed replaces the calling shell instead of wrapping it"
+}
+
+# macOS ships /bin/bash 3.2, which has no BASHPID; under set -u the owner
+# lookup must still resolve the calling script as owner from a subshell and the
+# shell's parent from the top-level frame, rather than dying unbound.
+test_runs_under_bash_without_bashpid() {
+  local bash32=/bin/bash dir out
+  if [ ! -x "$bash32" ] || "$bash32" -c '[ -n "${BASHPID:-}" ]'; then
+    pass "fm_exec_timed under a bash without BASHPID (skipped: /bin/bash has BASHPID)"
+    return 0
+  fi
+  dir="$TMP_ROOT/bash32"
+  mkdir -p "$dir"
+  out=$(PATH=$PERL_ONLY "$bash32" -c '
+    set -u
+    . "$1/bin/fm-timeout-lib.sh"
+    ( fm_exec_timed 5 1 bash -c "echo sub" )
+    fm_exec_timed 5 1 bash -c "echo top"
+  ' _ "$ROOT" 2>&1) || fail "fm_exec_timed failed under $bash32: $out"
+  [ "$out" = "sub
+top" ] || fail "fm_exec_timed under $bash32 printed: $out"
+  pass "fm_exec_timed runs under a bash without BASHPID"
 }
 
 # The regression a direct-child watchdog had: the command dies at the bound
@@ -333,6 +355,7 @@ test_run_timed_passes_a_natural_exit_through_a_fired_bound
 test_term_ends_a_cooperative_command_at_the_bound
 test_kill_ends_a_term_ignoring_command_after_the_grace
 test_the_bound_replaces_the_calling_shell
+test_runs_under_bash_without_bashpid
 test_a_descendant_holding_the_output_cannot_outlast_the_bound
 test_a_signal_to_the_bounding_process_reaches_the_command
 test_a_named_owner_that_is_gone_ends_the_command
