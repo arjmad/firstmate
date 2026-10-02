@@ -77,6 +77,13 @@ jobs:
           # bound (wall deadline or memory rlimit) cannot be enforced here.
           FM_LINT_REQUIRE_BOUNDS: '1'
           FM_LINT_JOBS: '1'
+          # Fork-only: 13 GiB of address space per root instead of fm-lint's
+          # 12 GiB default. The fork's own code in bin/fm-teardown.sh's source
+          # graph lifts that root's ShellCheck peak to about 8.0 GiB resident,
+          # the default's usable-heap wall (upstream peaks just under it). The
+          # root is still analyzed in full; only its memory bound is wider, and
+          # one worker per job keeps it alone on the runner.
+          FM_LINT_ROOT_MEMORY_KIB: '13631488'
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-lint"
