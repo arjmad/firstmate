@@ -2058,6 +2058,76 @@ EOF
   pass "forced secondmate teardown refuses duplicated descendant pool slots"
 }
 
+# The descendant form of a reassigned slot: the child's stale record still names
+# the slot, and so does the record of the task the slot went to - here a task of
+# the parent home - whose claim is in the slot. The claim proves the child's
+# record is the stale one, so the forced teardown finishes and leaves the slot,
+# its claim, and the other task's record exactly as they were.
+test_secondmate_force_teardown_skips_reassigned_child_slot() {
+  local home subhome childproj childwt fakebin log err rc
+  home="$TMP_ROOT/force-reassigned-slot-home"
+  subhome="$TMP_ROOT/force-reassigned-slot-subhome"
+  childproj="$subhome/projects/alpha"
+  childwt="$TMP_ROOT/force-reassigned-slot-pool/1/alpha"
+  err="$TMP_ROOT/force-reassigned-slot.err"
+  mkdir -p "$home/state" "$home/data" "$subhome/state" "$(dirname "$childwt")"
+  fm_git_worktree "$childproj" "$childwt" reassigned-child
+  printf '{"worktrees":[{"name":"1","path":"%s"}]}\n' "$childwt" \
+    > "$TMP_ROOT/force-reassigned-slot-pool/treehouse-state.json"
+  : > "$childwt/sentinel"
+  printf 'task=live-task\nhome=%s\n' "$home" > "$(dirname "$childwt")/.fm-slot-owner"
+  printf 'domain\n' > "$subhome/.fm-secondmate-home"
+  cat > "$home/state/domain.meta" <<EOF
+window=firstmate:fm-domain
+worktree=$subhome
+project=$subhome
+harness=echo
+kind=secondmate
+mode=secondmate
+yolo=off
+home=$subhome
+projects=alpha
+EOF
+  printf '%s\n' '- domain - design domain (home: '"$subhome"'; scope: design domain; projects: alpha; added 2026-06-22)' > "$home/data/secondmates.md"
+  cat > "$subhome/state/stale-child.meta" <<EOF
+window=firstmate:fm-stale-child
+worktree=$childwt
+project=$childproj
+harness=echo
+kind=ship
+mode=no-mistakes
+yolo=off
+EOF
+  cat > "$home/state/live-task.meta" <<EOF
+window=firstmate:fm-live-task
+worktree=$childwt
+project=$childproj
+harness=echo
+kind=ship
+mode=no-mistakes
+yolo=off
+EOF
+  fakebin=$(make_fake_tmux "$TMP_ROOT/force-reassigned-slot-fake")
+  log="$TMP_ROOT/force-reassigned-slot-fake/tmux.log"
+
+  set +e
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
+    FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/force-reassigned-slot-fake/pane.txt" \
+    "$ROOT/bin/fm-teardown.sh" domain --force >/dev/null 2>"$err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "forced secondmate teardown refused a child slot its claim proves was reassigned: $(cat "$err")"
+  [ ! -e "$home/state/domain.meta" ] || fail "forced secondmate teardown left the secondmate record"
+  [ -e "$childwt/sentinel" ] || fail "forced secondmate teardown reset the slot the child's record no longer owns"
+  [ -e "$home/state/live-task.meta" ] || fail "forced secondmate teardown removed the record of the task the slot went to"
+  grep -Fx 'task=live-task' "$(dirname "$childwt")/.fm-slot-owner" >/dev/null \
+    || fail "forced secondmate teardown removed or rewrote the other task's slot claim"
+  grep -F "treehouse return" "$log" >/dev/null \
+    && fail "forced secondmate teardown returned a slot reassigned to another task: $(cat "$log")"
+  grep -F 'live-task' "$err" >/dev/null || fail "forced secondmate teardown did not name the task the slot went to"
+  pass "forced secondmate teardown skips a descendant slot its claim proves was reassigned"
+}
+
 test_secondmate_force_teardown_preserves_child_on_unproven_lock() {
   local home subhome childproj childwt fakebin log err rc lock
   home="$TMP_ROOT/force-lock-home"
@@ -3081,6 +3151,7 @@ test_secondmate_teardown_refuses_failed_leased_home_return
 test_secondmate_teardown_removes_plain_clone_home_without_treehouse_return
 test_secondmate_force_teardown_discards_child_work
 test_secondmate_force_teardown_refuses_duplicated_child_slot
+test_secondmate_force_teardown_skips_reassigned_child_slot
 test_secondmate_force_teardown_preserves_child_on_unproven_lock
 test_secondmate_force_teardown_allows_non_state_operational_dir_symlinks_inside_home
 test_secondmate_force_teardown_refuses_operational_dir_symlink_outside_home
