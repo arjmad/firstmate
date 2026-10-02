@@ -2,16 +2,14 @@
 # fm-backend.sh - runtime-backend selection, meta helpers, selector resolution,
 # and dispatch for firstmate's session-provider abstraction.
 #
-# Design: data/fm-backend-design-d7/report.md ("Backend Interface") and
-# data/fm-backend-design-d7/herdr-addendum.md ("Events as the core
-# abstraction"). P1 extracted the tmux command sequences that fm-send.sh,
+# Design: docs/architecture.md ("Runtime session backends"). P1 extracted the tmux command sequences that fm-send.sh,
 # fm-peek.sh, fm-watch.sh, fm-spawn.sh, and fm-teardown.sh already ran inline
 # into bin/backends/tmux.sh, with those SAME command sequences, so the default
 # (tmux) path stays byte-identical. P2 adds bin/backends/herdr.sh, a verified
 # spawn-capable backend with its own required CI lane, behind `--backend
 # herdr`/`FM_BACKEND=herdr`/`config/backend`, and behind runtime auto-detection
 # when firstmate itself is running inside herdr with no explicit backend setting;
-# see herdr-addendum.md and data/fm-backend-design-d7/herdr-verification-p2.md for
+# see docs/herdr-backend.md and docs/verification/runtime-backends.md for
 # its empirical basis.
 # P3 adds bin/backends/zellij.sh, also EXPERIMENTAL and spawn-capable, behind
 # `--backend zellij`/`FM_BACKEND=zellij`/`config/backend` - NOT behind runtime
@@ -37,7 +35,7 @@
 # spawn-capable backend, currently herdr, zellij, orca, or cmux, carries an
 # explicit `backend=` line.
 #
-# Event-source framing (herdr-addendum "Events as the core abstraction"): a
+# Event-source framing (docs/herdr-backend.md, "Events as the core abstraction"): a
 # backend's supervision surface is conceptually an EVENT SOURCE - it produces
 # task events (status-changed, went-stale, exited) that map onto firstmate's
 # existing signal/stale/check/heartbeat wake vocabulary. The tmux adapter has
@@ -58,10 +56,10 @@ FM_BACKEND_CONFIG_DIR="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # Verified backend adapters. Extend only after a backend gets its own
 # bin/backends/<name>.sh and empirical verification, mirroring AGENTS.md
 # section 4's harness-verification discipline. herdr is verified (P2;
-# data/fm-backend-design-d7/herdr-addendum.md) and has its own required CI lane,
+# docs/herdr-backend.md) and has its own required CI lane,
 # with current coverage in docs/herdr-backend.md and
 # docs/verification/runtime-backends.md. zellij is EXPERIMENTAL (P3;
-# data/fm-backend-design-d7/report.md "Zellij Backend") - verified against the
+# docs/zellij-backend.md) - verified against the
 # real 0.44.0 binary (docs/zellij-backend.md). orca is EXPERIMENTAL and
 # spawn-capable; unlike tmux/herdr/zellij it is also the worktree provider.
 # cmux is EXPERIMENTAL and spawn-capable, session-provider-only like
@@ -891,7 +889,7 @@ fm_backend_worktree_path() {  # <backend> <worktree-id>
 }
 
 # fm_backend_busy_state: semantic busy/idle/unknown for backends that expose
-# native agent-state (herdr-addendum "busy state" row - the first backend
+# native agent-state (docs/herdr-backend.md, "busy state" row - the first backend
 # where this gets real semantics beyond pane-regex). Backends with no such
 # primitive (tmux) report unknown. Callers own the fallback policy: fm-watch.sh
 # uses unknown as the cue for harness-scoped pane-tail detection, while

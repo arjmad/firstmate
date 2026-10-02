@@ -2,7 +2,7 @@
 # tests/fm-backend-tmux-smoke.test.sh - real tmux smoke test for the tmux
 # session-provider adapter (bin/backends/tmux.sh), the P1 checklist item
 # "run a real tmux smoke test (create session, send text + Enter, capture,
-# list, kill)" from data/fm-backend-design-d7/report.md. Every other suite in
+# list, kill)". Every other suite in
 # this repo fakes tmux; this one is the one place that talks to a REAL tmux
 # server, isolated on a private socket (`-L`) so it never touches the host's
 # actual sessions.

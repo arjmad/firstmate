@@ -169,3 +169,63 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-voice-client.py`     | The laptop end of the spoken interface: capture, playback, and turn timing over SSH; audio devices unverified |
 | `fm_voice_frame.py`      | The wire format both machines share, copied to the laptop beside the client          |
 | `fm_voice_records.py`    | What a spoken answer may read, and the handover that queues real work                |
+| `backends/herdr-eventwait.py` | Subscribe to a Herdr session's native agent-status stream and print one projected line per event |
+| `backends/herdr-workspace-move.py` | Send one presentation-only `workspace.move` request to a Herdr control socket |
+| `fm-agy-trust.sh` | Pre-register Antigravity CLI workspace trust for a task worktree before an agy spawn |
+| `fm-allocation-lib.sh` | Own the task allocation-ownership contract for reused worktree and home pool slots |
+| `fm-backlog-handoff.sh` | Hand identified in-scope backlog items from the main backlog to a secondmate's home backlog |
+| `fm-branch-dispatch.mjs` | Command-line entry to supervision-branch wake dispatch for a non-Pi supervision host |
+| `fm-branch-report.sh` | Record one handled fleet event from a supervision-host branch session in the durable outcome store |
+| `fm-cd-command-policy.mjs` | Decide whether a shell command persistently changes the primary firstmate shell's directory |
+| `fm-cd-pretool-check.sh` | PreToolUse transport for the cd-guard command policy |
+| `fm-claude-trust.sh` | Pre-register Claude Code workspace trust for a task worktree or secondmate home before a claude spawn |
+| `fm-contributions.jq` | Projection used by `fm-contributions.sh`, whose header owns the record contract |
+| `fm-cursor-lib.sh` | Resolve the Cursor executable and identify Cursor processes |
+| `fm-devin-config.sh` | Write a private Devin worker config that preserves the user's settings and hooks |
+| `fm-dispatch-resolve.sh` | Resolve one dispatch profile from a task brief through the opt-in typesafe.ai model |
+| `fm-doc-audience-check.sh` | Validate the tracked documentation audience inventory, setup routing, and local links |
+| `fm-dod-lib.sh` | Own a ship task's Definition of done block and the named-head gate that accepts its `done:` |
+| `fm-env-lib.sh` | Shared one-key accessor for `.env`-style files |
+| `fm-gemini-lib.sh` | Identify Gemini CLI processes |
+| `fm-herdr-session-cleanup.sh` | Retire stale restored-shell Herdr presentation children at locked session start |
+| `fm-hook-host-lib.sh` | Tell which harness delivered a Claude-shaped hook payload |
+| `fm-host-mirror.sh` | Carry the captain dialog to the supervision host's engine session on attended wakes |
+| `fm-install-actionlint.sh` | Install CI's pinned, checksum-verified actionlint build |
+| `fm-install-shellcheck.sh` | Install CI's pinned, checksum-verified ShellCheck build |
+| `fm-jev-mem-guard.py` | Audit host memory and swap pressure across multi-agent seats |
+| `fm-jev-mem-guard.sh` | Wrapper for the Jev memory and swap thrashing guard |
+| `fm-landed-lib.sh` | Shared rule for which backlog rows belong in Recently Landed |
+| `fm-line-cap-lib.sh` | Shared per-line cap for agent-facing digest lines |
+| `fm-lint-workflows.sh` | Run pinned actionlint over every GitHub workflow |
+| `fm-lint.sh` | Single owner of firstmate's ShellCheck lint definition for CI and the pre-push gate |
+| `fm-procevent-extension-capture.pl` | Capture and hand off a process-to-event extension result for `fm-procevent.sh` |
+| `fm-procevent-lavish.sh` | Lavish adapter for the process-to-event runner: classify and read captured results |
+| `fm-procevent-lib.sh` | Shared identity, ownership, capture, and publication rules for the process-to-event runner |
+| `fm-project-origin-lib.sh` | Validate a project origin URL handed from one home to another |
+| `fm-push-transition-lib.sh` | Own the watcher's native push-transition escalation |
+| `fm-remote-delta-read.sh` | Blocking, non-destructive delta read of a remote secondmate append-only log |
+| `fm-remote-entrypoint.sh` | Fixed remote SSH entrypoint that validates and runs one tracked `bin/fm-*.sh` for `fm-on.sh` |
+| `fm-remote-file.sh` | Path-confined remote file transfer for `fm-on.sh` |
+| `fm-remote-herdr-guard.sh` | launchd target that makes the Aqua login session own the fm-remote Herdr server |
+| `fm-remote-herdr-owner-lib.sh` | Discover a Herdr socket's owner and whether it was born in the Aqua login session |
+| `fm-remote-home-provision.sh` | Provision the remote FM_HOME selected by the fixed remote entrypoint |
+| `fm-remote-inherit-push.sh` | Push the declared inherited-material allowlist to one remote secondmate route |
+| `fm-remote-inherit.sh` | Apply one inherited item inside the selected remote home |
+| `fm-remote-secondmate-control.sh` | Host-local lifecycle control for a remote secondmate home |
+| `fm-remote-secondmate-relaunch.sh` | Relaunch a remote secondmate on a new harness, model, or effort and republish its route record |
+| `fm-secondmate-charter-lib.sh` | Extract a secondmate's registry summary and scope from its charter |
+| `fm-secondmate-liveness-lib.sh` | Shared persistent-secondmate endpoint liveness probing and recovery |
+| `fm-secondmate-nudge-lib.sh` | Durable secondmate reread-nudge marker helpers |
+| `fm-secondmate-parent-lib.sh` | Parse the parent binding written into a seeded secondmate home |
+| `fm-secondmate-registry-lib.sh` | Parse `data/secondmates.md` records |
+| `fm-sessionstart-cursor.sh` | Cursor session-open hook transport to `fm-sessionstart-run.sh` |
+| `fm-startup-memory-budget-lib.sh` | Startup-memory budget primitives |
+| `fm-startup-memory-budget.sh` | Read and report the local startup-memory budget |
+| `fm-state-residue-sweep.sh` | Retire watcher bookkeeping for provably gone endpoints and rotate supervision scratch files |
+| `fm-stow-cascade.sh` | Enumerate registered secondmates and their inputs for a `/stow` cascade |
+| `fm-supervision-engine-lib.sh` | Choose the supervision host's headless engine and run one engine turn |
+| `fm-supervision-host.sh` | Run the supervision host: watcher-cycle ownership plus a headless branch session beside a non-Pi primary |
+| `fm-trace-context-lib.sh` | Opt-in W3C trace-context propagation for spawns |
+| `fm-transition-lib.sh` | Backend-neutral agent-state transition shape and supervision policy |
+| `fm-turnend-guard-cursor.sh` | Cursor `stop` hook for a primary session's turn-end supervision |
+| `fm-worker-account-lib.sh` | Own the opt-in per-home worker account pin and its launch-time sign-in check |
