@@ -1710,7 +1710,7 @@ fm_treehouse_slot_lease_take() {  # <worktree> <task-id>
     return 1
   }
   out=$(cd "$slot" && treehouse lease "$FM_TREEHOUSE_SLOT_LEASE_NAME" --lease-holder "$id") || {
-    echo "error: treehouse lease could not lease pool slot $slot (name $FM_TREEHOUSE_SLOT_LEASE_NAME) to $id" >&2
+    echo "error: treehouse lease could not lease pool slot $slot (name $FM_TREEHOUSE_SLOT_LEASE_NAME) to $id; the lease command needs treehouse 3.0.0 or newer" >&2
     return 1
   }
   fm_treehouse_slot_lease_state "$slot" "$id"
