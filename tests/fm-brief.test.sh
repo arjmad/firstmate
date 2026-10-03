@@ -17,6 +17,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=bin/fm-brief-heading-lib.sh
+. "$ROOT/bin/fm-brief-heading-lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-brief)
 BRIEF_HOME="$TMP_ROOT/home"
@@ -1396,6 +1398,99 @@ test_crewmate_scaffolds_forbid_pool_administration() {
   pass "fm-brief.sh: every crewmate scaffold forbids administering the shared worktree pool"
 }
 
+# --method poteto-mode is the captain's per-task opt-in behind the helm's
+# /poteto skill: one shared method block under ## Firstmate spec, below the
+# placeholder firstmate still fills, identical across every ship mode and the
+# scout scaffold, and absent from every brief that did not ask for it.
+test_method_poteto_mode_renders_one_shared_contract() {
+  local home user_home entry id brief mode spec ship_block scout_block
+  home="$TMP_ROOT/method-home"
+  user_home="$TMP_ROOT/method-user-home"
+  entry="$user_home/.claude/skills/poteto-mode/SKILL.md"
+  mkdir -p "$home/data" "$(dirname "$entry")"
+  printf '# Poteto mode\n' > "$entry"
+
+  for mode in no-mistakes direct-PR local-only; do
+    id="brief-method-$mode"
+    HOME="$user_home" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" alpha --mode "$mode" --method poteto-mode >/dev/null 2>&1 \
+      || fail "fm-brief.sh --mode $mode --method poteto-mode exited non-zero"
+    brief="$home/data/$id/brief.md"
+    grep -qx "Delivery contract: mode=$mode" "$brief" \
+      || fail "$mode: the method changed the delivery contract line"
+    assert_grep "{TASK}" "$brief" "$mode: method brief lost the {TASK} placeholder"
+    assert_grep "{FIRSTMATE_SPEC}" "$brief" "$mode: method brief lost the {FIRSTMATE_SPEC} placeholder"
+    spec=$(fm_brief_heading_body "$brief" "## Firstmate spec")
+    assert_contains "$spec" "### Method: poteto-mode" "$mode: method block is not inside ## Firstmate spec"
+    assert_contains "$spec" "$entry" "$mode: method block does not name the entry file by path"
+    assert_contains "$spec" "by path with your file-reading tool" "$mode: method block does not tell the worker to read by path"
+    assert_contains "$spec" "Never invoke the entry or any pstack leaf through the Skill tool" \
+      "$mode: method block does not forbid the Skill tool"
+    assert_contains "$spec" "this brief wins" "$mode: method block does not give the brief precedence"
+    assert_contains "$spec" "you never merge - firstmate does" "$mode: method block does not reserve merging to firstmate"
+    assert_contains "$spec" "seat it exactly as the entry's model sheet configures" \
+      "$mode: method block does not bind panels to the entry's seats"
+    # shellcheck disable=SC2016 # Literal backticks must remain unexpanded.
+    assert_contains "$spec" 'append a `needs-decision:` line instead' \
+      "$mode: method block does not route captain questions through firstmate"
+    assert_no_grep "EOF" "$brief" "$mode: method brief leaked a heredoc marker"
+  done
+  # The block sits below the placeholder, so the fill target stays the first line.
+  awk '/^## Firstmate spec$/{s=1; next} s && NF {print; exit}' "$home/data/brief-method-direct-PR/brief.md" \
+    | grep -qx '{FIRSTMATE_SPEC}' \
+    || fail "the placeholder is no longer the first line of ## Firstmate spec"
+
+  HOME="$user_home" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-method-scout alpha --scout --method=poteto-mode >/dev/null 2>&1 \
+    || fail "fm-brief.sh --scout --method=poteto-mode exited non-zero"
+  brief="$home/data/brief-method-scout/brief.md"
+  assert_grep "This is a SCOUT task" "$brief" "scout method brief lost its scout contract"
+  ship_block=$(awk '/^### Method: poteto-mode$/,/^$/' "$home/data/brief-method-no-mistakes/brief.md")
+  scout_block=$(awk '/^### Method: poteto-mode$/,/^$/' "$brief")
+  [ -n "$ship_block" ] || fail "ship brief emitted no method block to compare"
+  [ "$ship_block" = "$scout_block" ] || fail "ship and scout method blocks have drifted apart"
+
+  # A brief that did not ask for the method is unchanged.
+  HOME="$user_home" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-no-method alpha --mode direct-PR >/dev/null 2>&1 \
+    || fail "plain brief exited non-zero"
+  assert_no_grep "Method: poteto-mode" "$home/data/brief-no-method/brief.md" \
+    "a brief without --method rendered the method block"
+  pass "fm-brief.sh: --method poteto-mode renders one shared contract under ## Firstmate spec"
+}
+
+# The flag is a closed set bound to a real entry file, and a charter is not a
+# task; each refusal must say why and leave no brief behind.
+test_method_is_validated_and_refused_where_it_does_not_apply() {
+  local home user_home out status label args expect n=0
+  home="$TMP_ROOT/method-refused-home"
+  user_home="$TMP_ROOT/method-refused-user-home"
+  mkdir -p "$home/data" "$user_home/.claude/skills/poteto-mode"
+  printf '# Poteto mode\n' > "$user_home/.claude/skills/poteto-mode/SKILL.md"
+  while IFS='|' read -r label args expect; do
+    [ -n "$label" ] || continue
+    n=$((n + 1))
+    # shellcheck disable=SC2086  # args is an intentional word-split arg list
+    out=$(HOME="$user_home" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "brief-method-refused-$n" $args 2>&1)
+    status=$?
+    [ "$status" -ne 0 ] || fail "$label: expected a non-zero exit"
+    assert_contains "$out" "$expect" "$label: refusal did not explain the contract"
+    assert_absent "$home/data/brief-method-refused-$n/brief.md" "$label: refused scaffold still wrote a brief"
+  done <<'ROWS'
+method on a secondmate charter|--secondmate alpha --method poteto-mode|applies only to ship and scout briefs
+unknown method|alpha --mode direct-PR --method nope|must be poteto-mode
+missing method value|alpha --mode direct-PR --method|requires a value
+empty method value|alpha --mode direct-PR --method=|requires a value
+ROWS
+
+  # The entry must exist where the worker is told to read it.
+  out=$(HOME="$TMP_ROOT/method-no-entry-home" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-method-no-entry alpha --mode direct-PR --method poteto-mode 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "missing entry: expected a non-zero exit"
+  assert_contains "$out" "$TMP_ROOT/method-no-entry-home/.claude/skills/poteto-mode/SKILL.md" \
+    "missing entry: refusal did not name the expected path"
+  assert_contains "$out" "not a readable file" "missing entry: refusal did not explain the missing file"
+  assert_absent "$home/data/brief-method-no-entry/brief.md" "missing entry: refused scaffold still wrote a brief"
+  pass "fm-brief.sh: --method is closed-set, entry-bound, and refused on charters"
+}
+
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
@@ -1432,3 +1527,5 @@ test_branch_prefix_is_refused_where_it_does_not_apply
 test_branch_prefix_value_is_validated
 test_branch_prefix_command_is_shell_safe
 test_crewmate_scaffolds_forbid_pool_administration
+test_method_poteto_mode_renders_one_shared_contract
+test_method_is_validated_and_refused_where_it_does_not_apply

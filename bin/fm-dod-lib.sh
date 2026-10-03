@@ -165,16 +165,26 @@ fm_ship_rule_one() {  # <no-mistakes|direct-PR|local-only> <task-id> [branch] [<
   esac
 }
 
-# Return 0 when a Task subsection still consists only of its scaffold
-# placeholder. A missing file and legacy briefs carry no such placeholders.
+# Return 0 when a Task subsection still carries its scaffold placeholder: the
+# whole body is the placeholder, or one of its lines is still exactly the
+# placeholder, as when bin/fm-brief.sh --method renders a method block below
+# it and the fill above was forgotten. A quoted placeholder inside a sentence is
+# content, not an unfilled subsection. A missing file and legacy briefs carry
+# no such placeholders.
 fm_brief_task_placeholders_present() {  # <file>
   local file=$1 intent spec
   [ -f "$file" ] || return 1
   intent=$(fm_brief_task_heading_body "$file" "## Captain's intent")
   spec=$(fm_brief_task_heading_body "$file" "## Firstmate spec")
-  [ "$(printf '%s' "$intent" | tr -d '[:space:]')" = '{TASK}' ] && return 0
-  [ "$(printf '%s' "$spec" | tr -d '[:space:]')" = '{FIRSTMATE_SPEC}' ] && return 0
+  fm_brief_body_has_placeholder "$intent" '{TASK}' && return 0
+  fm_brief_body_has_placeholder "$spec" '{FIRSTMATE_SPEC}' && return 0
   return 1
+}
+
+fm_brief_body_has_placeholder() {  # <body> <placeholder>
+  local body=$1 placeholder=$2
+  [ "$(printf '%s' "$body" | tr -d '[:space:]')" = "$placeholder" ] && return 0
+  printf '%s\n' "$body" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -qxF -- "$placeholder"
 }
 
 # Print the words of every provenance-marked line in a legacy `# Task` body.

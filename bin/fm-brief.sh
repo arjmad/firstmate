@@ -59,6 +59,22 @@
 # standing per-project preference, and firstmate resolves it per task at intake
 # and passes the explicit flag. Refused on --scout and --secondmate: a scout
 # makes no branch and a charter is not a delivery contract.
+# --method <name> opts a ship or scout brief into a captain-chosen working method,
+# rendered as a `### Method: <name>` subsection under `## Firstmate spec`, below
+# the `{FIRSTMATE_SPEC}` placeholder that firstmate still fills with the
+# task-specific build instructions. The only method is poteto-mode: the worker
+# reads the captain's user-level Claude Code entry skill at
+# $HOME/.claude/skills/poteto-mode/SKILL.md by path and follows it as the method
+# for this task, reading every pstack leaf it names by path and never through the
+# Skill tool; the entry's three guards, this brief's Rules, and the Definition of
+# done win where they overlap, so the worker never merges; and panels seat exactly
+# what the entry's model sheet configures. The scaffold refuses the flag when that
+# entry is not a readable file under the scaffolding user's HOME, because a worker
+# told to read an absent file cannot start the method. It is the per-task opt-in
+# behind the helm's /poteto skill (.agents/skills/poteto/SKILL.md), which owns
+# intake and the Fable 5.1 xhigh spawn flags; no model or effort is recorded here,
+# because bin/fm-spawn.sh owns those axes. Refused on --secondmate: a charter is
+# not a task.
 # --forge names the project's forge, defaults to none, and is orthogonal to --mode
 # exactly as the registry's `forge=` token is. It is the captain's confirmed
 # registry binding, read from data/projects.md at intake and passed here; this
@@ -191,6 +207,8 @@ FORGE=none
 FORGE_SET=0
 SHAPE=
 SHAPE_SET=0
+METHOD=
+METHOD_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -203,6 +221,7 @@ for a in "$@"; do
       branch-prefix) BRANCH_PREFIX=$a; BRANCH_PREFIX_SET=1 ;;
       forge) FORGE=$a; FORGE_SET=1 ;;
       shape) SHAPE=$a; SHAPE_SET=1 ;;
+      method) METHOD=$a; METHOD_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -221,6 +240,8 @@ for a in "$@"; do
     --forge=*) FORGE=${a#--forge=}; FORGE_SET=1 ;;
     --shape) want_value=shape ;;
     --shape=*) SHAPE=${a#--shape=}; SHAPE_SET=1 ;;
+    --method) want_value=method ;;
+    --method=*) METHOD=${a#--method=}; METHOD_SET=1 ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
     # brief input. Refuse it loudly so it is never silently dropped here and then
     # believed to have been recorded.
@@ -296,6 +317,30 @@ fi
 if [ "$NO_PROJECTS" -eq 1 ] && [ "$KIND" != secondmate ]; then
   echo "error: --no-projects applies only to --secondmate charters" >&2
   exit 1
+fi
+
+# A method is a per-task captain opt-in for a worker: validated against the
+# closed set and against the entry file the worker is told to read, so the flag
+# can never render a pointer to nothing.
+METHOD_ENTRY=
+METHOD_WORDS=
+if [ "$METHOD_SET" -eq 1 ]; then
+  if [ "$KIND" = secondmate ]; then
+    echo "error: --method applies only to ship and scout briefs; a secondmate charter is not a task" >&2
+    exit 1
+  fi
+  case "$METHOD" in
+    poteto-mode) ;;
+    '') echo "error: --method requires a value" >&2; exit 1 ;;
+    *) echo "error: --method must be poteto-mode (got '$METHOD')" >&2; exit 1 ;;
+  esac
+  [ -n "${HOME:-}" ] || { echo "error: --method poteto-mode needs HOME set to locate the captain's entry skill" >&2; exit 1; }
+  METHOD_ENTRY="$HOME/.claude/skills/poteto-mode/SKILL.md"
+  if [ ! -f "$METHOD_ENTRY" ] || [ ! -r "$METHOD_ENTRY" ]; then
+    echo "error: --method poteto-mode needs the captain's entry skill at $METHOD_ENTRY, which is not a readable file on this host; install it before scaffolding" >&2
+    exit 1
+  fi
+  METHOD_WORDS=" method=$METHOD"
 fi
 
 # The optional home-local include is read before anything is written, so an
@@ -536,6 +581,24 @@ IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 EOF
 TASK_SECTION=${TASK_SECTION%$'\n'}
 
+# The method contract is one shared string, so ship and scout briefs cannot
+# drift apart; it sits under `## Firstmate spec` below the placeholder, and the
+# placeholder guard in bin/fm-dod-lib.sh still sees an unfilled line above it.
+if [ "$METHOD_SET" -eq 1 ]; then
+IFS= read -r -d '' METHOD_SECTION <<EOF || true
+### Method: poteto-mode
+The captain opted this task into poteto's method, so this brief is the authorization the entry's "When to use" section asks for: follow the entry for this task instead of stopping and reporting as that section tells an unbriefed worker.
+Read the entry at \`$METHOD_ENTRY\` by path with your file-reading tool and follow it as the method for this task: match its playbook index to the ask under \`## Captain's intent\`, copy the matched playbook's steps into your todo list, and route through the pinned pstack leaves exactly as the entry says, reading each one by path.
+Never invoke the entry or any pstack leaf through the Skill tool: the entry is user-only, so the call is refused and the refusal poisons the turn; "the X skill" in the pinned text always means read the file.
+Where the method and this brief overlap, this brief wins: the entry's three guards stay in force, the delivery contract under Definition of done decides whether and how a branch is pushed or a PR is opened, this brief's Rules own how you report and escalate, and you never merge - firstmate does, under the configured merge authority.
+Where the entry or a playbook would ask the captain, append a \`needs-decision:\` line instead; a crewmate never addresses the captain.
+The entry's session semantics do not apply: the method starts with this task and ends with it, with no opt-out, \`/clear\`, or second task for a worker.
+Where a playbook calls for a panel, seat it exactly as the entry's model sheet configures, Codex seats included; those seats and the subagents the playbooks start run inside your own session as part of doing the work yourself, never as delegation to another crewmate or as a new firstmate task.
+EOF
+METHOD_SECTION=${METHOD_SECTION%$'\n'}
+TASK_SECTION="$TASK_SECTION"$'\n\n'"$METHOD_SECTION"
+fi
+
 # One shared string keeps the ship and scout infrastructure rule identical.
 # Rule 2 governs file edits, so it does not prohibit pool administration.
 # The secondmate charter deliberately omits this rule because a secondmate
@@ -618,7 +681,7 @@ When the report is complete, append \`done [at=<epoch>]: {one-line conclusion}\`
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
 EOF
 append_brief_include
-echo "scaffolded: $BRIEF (scout; replace {TASK} and {FIRSTMATE_SPEC})"
+echo "scaffolded: $BRIEF (scout$METHOD_WORDS; replace {TASK} and {FIRSTMATE_SPEC})"
 exit 0
 fi
 
@@ -696,7 +759,7 @@ $DOD
 EOF
 append_brief_include
 if [ "$FORGE" = none ]; then
-  echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK} and {FIRSTMATE_SPEC})"
+  echo "scaffolded: $BRIEF (ship, mode=$MODE$METHOD_WORDS; replace {TASK} and {FIRSTMATE_SPEC})"
 else
-  echo "scaffolded: $BRIEF (ship, mode=$MODE forge=$FORGE shape=$SHAPE; replace {TASK} and {FIRSTMATE_SPEC})"
+  echo "scaffolded: $BRIEF (ship, mode=$MODE forge=$FORGE shape=$SHAPE$METHOD_WORDS; replace {TASK} and {FIRSTMATE_SPEC})"
 fi

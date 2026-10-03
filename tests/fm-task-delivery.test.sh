@@ -872,6 +872,25 @@ EOF
     "legacy promotion did not place promotion ship instructions in Firstmate spec"
   assert_not_contains "$spec_body" "This is a SCOUT task" \
     "legacy promotion copied the scout Setup section into Firstmate spec"
+
+  # A --method brief renders its method block below {FIRSTMATE_SPEC}; the
+  # leftover placeholder line above that block must still stop the spawn.
+  id=delivery-method-unfilled-spec
+  mkdir -p "$TMP_ROOT/subsections-user-home/.claude/skills/poteto-mode"
+  printf '# Poteto mode\n' > "$TMP_ROOT/subsections-user-home/.claude/skills/poteto-mode/SKILL.md"
+  HOME="$TMP_ROOT/subsections-user-home" FM_HOME="$home" "$BRIEF" "$id" proj --mode direct-PR --method poteto-mode >/dev/null 2>&1 \
+    || fail "method ship brief should scaffold"
+  fill_brief_subsections "$home/data/$id/brief.md" "Fix the flaky test." "{FIRSTMATE_SPEC}"
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn of a method brief with its spec placeholder left above the method block should exit non-zero"
+  assert_contains "$out" "still contains {TASK} or {FIRSTMATE_SPEC}" \
+    "the rendered method block hid the leftover spec placeholder from the spawn gate"
+  assert_absent "$home/state/$id.meta" "unfilled method spawn wrote task metadata"
+  fill_brief_subsections "$home/data/$id/brief.md" "" "No build constraints beyond the method."
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
+  assert_not_contains "$out" "still contains {TASK} or {FIRSTMATE_SPEC}" \
+    "a filled method brief was still refused for placeholders"
   pass "fm-spawn/fm-promote: leftover Task placeholders are refused until both subsections are filled"
 }
 

@@ -569,6 +569,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/poteto/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/scout-completion/SKILL.md",
       "audience": "agent-runtime"
     },

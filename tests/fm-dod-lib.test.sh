@@ -382,6 +382,27 @@ test_pr_based_dod_draft_check_uses_gh_axi() {
   pass "PR-based DoD draft check uses gh-axi"
 }
 
+# A scaffold block rendered below a placeholder (bin/fm-brief.sh --method) must
+# not hide a forgotten fill: a line that is still exactly the placeholder is an
+# unfilled subsection, while a placeholder quoted inside a sentence is content.
+test_task_placeholder_guard_sees_a_leftover_line() {
+  local brief
+  brief="$TMP_ROOT/placeholder-guard.md"
+  printf '%s\n' "# Task" "## Captain's intent" "Fix the flaky test." "" "## Firstmate spec" \
+    "{FIRSTMATE_SPEC}" "" "### Method: poteto-mode" "Read the entry by path." "" "# Setup" > "$brief"
+  fm_brief_task_placeholders_present "$brief" \
+    || fail "a placeholder line above a rendered method block was not reported as unfilled"
+  printf '%s\n' "# Task" "## Captain's intent" "  {TASK}  " "" "## Firstmate spec" "Keep it small." "" "# Setup" > "$brief"
+  fm_brief_task_placeholders_present "$brief" \
+    || fail "an indented placeholder line was not reported as unfilled"
+  printf '%s\n' "# Task" "## Captain's intent" "Fix the flaky test." "" "## Firstmate spec" \
+    "Keep literal \`{FIRSTMATE_SPEC}\` examples intact." "" "### Method: poteto-mode" "Read the entry by path." "" "# Setup" > "$brief"
+  if fm_brief_task_placeholders_present "$brief"; then
+    fail "a placeholder quoted inside a filled sentence was reported as unfilled"
+  fi
+  pass "task placeholder guard sees a leftover placeholder line below which more text was rendered"
+}
+
 test_scout_done_is_not_gated
 test_unpushed_ship_done_is_refused
 test_no_mistakes_prevalidation_done_is_not_gated
@@ -400,5 +421,6 @@ test_standalone_local_only_needs_project_ref
 test_non_done_lines_are_not_gated
 test_fenced_and_indented_captain_lines_are_not_intent
 test_pr_based_dod_draft_check_uses_gh_axi
+test_task_placeholder_guard_sees_a_leftover_line
 
 echo "all fm-dod-lib tests passed"
