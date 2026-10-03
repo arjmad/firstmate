@@ -4,11 +4,13 @@
 # WHY. A ship or scout task's worktree, and a secondmate's home, come from a
 # pool: `treehouse get` hands out a numbered slot path and `treehouse return`
 # hands it back. The path is therefore REUSED. Nothing in a slot path, a pane
-# label, or a task-ID lease says which task currently holds it, and firstmate's
-# spawns take no Treehouse lease at all (`treehouse status --json` reports empty
-# lease fields for them), so `treehouse return --if-lease-id` cannot bind one
-# either. The only durable task-to-allocation link is the `worktree=` (or, for a
-# secondmate, `home=`) line in that task's own `state/<id>.meta`.
+# label, or a task-ID lease says which task currently holds it. A crewmate or
+# scout slot now carries a durable Treehouse lease naming its task, but slots
+# taken before spawns leased them carry none, and a record does not name the
+# lease, so the task-to-allocation link a record carries is still the
+# `worktree=` (or, for a secondmate, `home=`) line in that task's own
+# `state/<id>.meta`. bin/fm-wake-lib.sh owns what the slot's own lease and claim
+# prove.
 #
 # THE HAZARD. Two task records can name one path: a stale record left by a task
 # whose slot was already returned and re-handed, and the live record of the task
@@ -46,10 +48,10 @@
 # several task ids, so the refusal fired where nothing was at risk.
 #
 # RECORDS-ONLY RETIREMENT. A contested allocation must not deadlock cleanup. A
-# Herdr session restart frees the pooled slot of every live task while its record
-# survives, so the next `treehouse get` can re-hand a slot a stale record still
-# names - after which, if a conflict simply refused the whole teardown, NEITHER
-# task could ever be cleaned up. So a conflict refuses only the ALLOCATION half:
+# Herdr session restart frees the pooled slot of every live task that holds no
+# durable lease while its record survives, so the next `treehouse get` can
+# re-hand a slot a stale record still names - after which, if a conflict simply
+# refused the whole teardown, NEITHER task could ever be cleaned up. So a conflict refuses only the ALLOCATION half:
 # the caller leaves the worktree, its branch, and the pooled slot completely
 # alone, and still retires the records it exclusively owns - its own metadata,
 # status log, steering inbox, poll and hook artifacts, busy state, backlog row,

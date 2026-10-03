@@ -2128,6 +2128,74 @@ EOF
   pass "forced secondmate teardown skips a descendant slot its claim proves was reassigned"
 }
 
+# A child slot durably leased to that child is returned bound to the child's own
+# lease, and a lease-bound return Treehouse refuses is never followed by
+# removing the slot by hand: the lease may have changed hands.
+test_secondmate_force_teardown_binds_leased_child_slot() {
+  local home subhome childproj childwt fakebin log err rc pool case
+  for case in returned refused; do
+    home="$TMP_ROOT/force-leased-slot-$case-home"
+    subhome="$TMP_ROOT/force-leased-slot-$case-subhome"
+    pool="$TMP_ROOT/force-leased-slot-$case-pool"
+    childproj="$subhome/projects/alpha"
+    childwt="$pool/1/alpha"
+    err="$TMP_ROOT/force-leased-slot-$case.err"
+    mkdir -p "$home/state" "$home/data" "$subhome/state" "$(dirname "$childwt")"
+    fm_git_worktree "$childproj" "$childwt" "leased-child-$case"
+    printf '{"worktrees":[{"name":"1","path":"%s","leased":true,"lease_id":"l1","lease_holder":"leased-child"}]}\n' \
+      "$childwt" > "$pool/treehouse-state.json"
+    printf 'task=leased-child\nhome=%s\n' "$subhome" > "$(dirname "$childwt")/.fm-slot-owner"
+    printf 'domain\n' > "$subhome/.fm-secondmate-home"
+    cat > "$home/state/domain.meta" <<META
+window=firstmate:fm-domain
+worktree=$subhome
+project=$subhome
+harness=echo
+kind=secondmate
+mode=secondmate
+yolo=off
+home=$subhome
+projects=alpha
+META
+    printf '%s\n' '- domain - design domain (home: '"$subhome"'; scope: design domain; projects: alpha; added 2026-06-22)' > "$home/data/secondmates.md"
+    cat > "$subhome/state/leased-child.meta" <<META
+window=firstmate:fm-leased-child
+worktree=$childwt
+project=$childproj
+harness=echo
+kind=ship
+mode=no-mistakes
+yolo=off
+META
+    fakebin=$(make_fake_tmux "$TMP_ROOT/force-leased-slot-$case-fake")
+    log="$TMP_ROOT/force-leased-slot-$case-fake/tmux.log"
+    set +e
+    if [ "$case" = refused ]; then
+      PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" FM_FAKE_TREEHOUSE_RETURN_FAIL=1 \
+        FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/force-leased-slot-$case-fake/pane.txt" \
+        "$ROOT/bin/fm-teardown.sh" domain --force >/dev/null 2>"$err"
+    else
+      PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
+        FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/force-leased-slot-$case-fake/pane.txt" \
+        "$ROOT/bin/fm-teardown.sh" domain --force >/dev/null 2>"$err"
+    fi
+    rc=$?
+    set -e
+    grep -F "treehouse return --force --if-lease-holder leased-child $childwt" "$log" >/dev/null \
+      || fail "forced secondmate teardown did not bind the child's slot return to its lease ($case): $(cat "$log")"
+    if [ "$case" = refused ]; then
+      [ "$rc" -ne 0 ] || fail "forced secondmate teardown succeeded although the child's lease-bound return was refused"
+      [ -d "$childwt" ] || fail "forced secondmate teardown removed a child slot by hand after its lease-bound return was refused"
+      [ -e "$subhome/state/leased-child.meta" ] || fail "forced secondmate teardown dropped the child record after a refused lease-bound return"
+      grep -F "bound to leased-child's lease" "$err" >/dev/null \
+        || fail "forced secondmate teardown did not explain the refused lease-bound return: $(cat "$err")"
+    else
+      [ "$rc" -eq 0 ] || fail "forced secondmate teardown of a leased child slot failed: $(cat "$err")"
+    fi
+  done
+  pass "forced secondmate teardown binds a leased child slot's return to its lease and never removes it by hand after a refusal"
+}
+
 test_secondmate_force_teardown_preserves_child_on_unproven_lock() {
   local home subhome childproj childwt fakebin log err rc lock
   home="$TMP_ROOT/force-lock-home"
@@ -3152,6 +3220,7 @@ test_secondmate_teardown_removes_plain_clone_home_without_treehouse_return
 test_secondmate_force_teardown_discards_child_work
 test_secondmate_force_teardown_refuses_duplicated_child_slot
 test_secondmate_force_teardown_skips_reassigned_child_slot
+test_secondmate_force_teardown_binds_leased_child_slot
 test_secondmate_force_teardown_preserves_child_on_unproven_lock
 test_secondmate_force_teardown_allows_non_state_operational_dir_symlinks_inside_home
 test_secondmate_force_teardown_refuses_operational_dir_symlink_outside_home

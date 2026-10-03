@@ -1500,23 +1500,28 @@ fm_treehouse_pool_slot() {  # <project-dir> <worktree>
   [ "$project_common" = "$slot_common" ]
 }
 
-# Slot-owner claim: which task a Treehouse pool slot currently belongs to.
+# Slot ownership: which task a Treehouse pool slot currently belongs to.
 #
-# Treehouse can record ownership durably: `treehouse get --lease --lease-holder`
-# reserves a slot under a label until `treehouse return --if-lease-holder`
-# releases it, and Firstmate uses exactly that for secondmate homes
-# (bin/fm-home-seed.sh). Crewmate spawns do not take that path: they acquire
-# their slot through the interactive pane-driven `treehouse get`, whose state
-# entry is a live process lease (owner_pid plus owner_started_at, and `treehouse
-# status` reports in-use from the processes actually running under the path).
-# That answers "is anything running here", never "which task owns this", and it
-# is released by the very event that makes a task record stale - the worker
-# exiting - so a slot whose lease has lapsed reads identical whether it is still
-# this task's or has since been handed to another one. Firstmate therefore keeps
-# its own claim on top: one file naming the task that took the slot, written by
-# bin/fm-spawn.sh under the same project lock that allocates the slot and
-# released by bin/fm-teardown.sh when the slot goes back to the pool. Moving
-# crewmate spawns onto the durable lease is separate follow-up work.
+# Crewmate and scout spawns acquire their slot through the interactive,
+# pane-driven `treehouse get`, whose state entry is only a live process lease
+# (owner_pid plus owner_started_at). That answers "is anything running here",
+# never "which task owns this", and it is released by the very event that makes
+# a task record stale - the worker exiting - so on its own a lapsed slot reads
+# identical whether it is still this task's or has since been handed to another
+# one, and Treehouse offers a parked or finished task's slot to the next `get`.
+# Two durable records close that gap, both written by bin/fm-spawn.sh under the
+# same project lock that allocates the slot and both dropped by
+# bin/fm-teardown.sh only when the slot goes back to the pool:
+#   - a Treehouse lease naming the task as holder, taken in place with
+#     `treehouse lease <name> --lease-holder <task-id>` - the same persistent
+#     lease state `treehouse get --lease` writes for secondmate homes
+#     (bin/fm-home-seed.sh). A leased slot is never handed out by a later `get`
+#     and never pruned, so a parked task keeps its slot until its teardown, and
+#     `treehouse return` releases the lease with the slot;
+#   - Firstmate's own claim file, below, which is the only evidence on slots
+#     taken before spawns leased them.
+# fm_treehouse_slot_ownership combines the two into the one answer teardown acts
+# on.
 #
 # The claim lives at <pool>/<slot>/.fm-slot-owner - a sibling of the repo
 # checkout rather than a file inside it - so claiming a slot can never dirty the
@@ -1596,6 +1601,185 @@ fm_treehouse_slot_owner_release() {  # <worktree> <task-id>
   [ "$FM_TREEHOUSE_SLOT_OWNER" = mine ] || return 0
   marker=$(fm_treehouse_slot_owner_marker "$worktree") || return 0
   rm -f "$marker" 2>/dev/null || true
+}
+
+# Read the durable Treehouse lease on a pool slot and compare its holder with a
+# task id. The lease is read from the slot's own pool state file - the
+# <pool>/treehouse-state.json fm_treehouse_pool_slot already requires - and
+# matched by the slot's resolved path, so the answer always comes from the pool
+# the slot belongs to; `treehouse status` and `treehouse lease` resolve their
+# pool from the caller's root configuration instead.
+# Sets FM_TREEHOUSE_SLOT_LEASE to one of:
+#   mine     - leased, and the holder is this task
+#   other    - leased by anything else, an unlabelled lease included: spawns
+#              always label their lease, so this one was taken after the spawn
+#   none     - listed in its pool and not leased
+#   unlisted - its pool lists no slot at this path
+#   unsafe   - the pool state cannot be read, or lists the path more than once
+# FM_TREEHOUSE_SLOT_LEASE_NAME, FM_TREEHOUSE_SLOT_LEASE_HOLDER and
+# FM_TREEHOUSE_SLOT_LEASE_ID carry the slot's pool name and the lease as evidence.
+fm_treehouse_slot_lease_state() {  # <worktree> <task-id>
+  local worktree=$1 id=$2 slot state out line listed='' leased='' name='' holder='' lease_id=''
+  FM_TREEHOUSE_SLOT_LEASE=unsafe
+  FM_TREEHOUSE_SLOT_LEASE_NAME=
+  FM_TREEHOUSE_SLOT_LEASE_HOLDER=
+  FM_TREEHOUSE_SLOT_LEASE_ID=
+  slot=$(CDPATH='' cd -- "$worktree" 2>/dev/null && pwd -P) || return 0
+  state="$(dirname "$(dirname "$slot")")/treehouse-state.json"
+  [ -f "$state" ] && [ ! -L "$state" ] || return 0
+  command -v node >/dev/null 2>&1 || return 0
+  out=$(node - "$state" "$slot" 2>/dev/null <<'NODE'
+const fs = require("fs");
+const [stateFile, slot] = process.argv.slice(2);
+const real = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
+const text = (v) => (typeof v === "string" ? v : "");
+const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+if (!state || !Array.isArray(state.worktrees)) process.exit(2);
+const matches = state.worktrees.filter((w) => w && typeof w.path === "string" && real(w.path) === slot);
+if (matches.length > 1) process.exit(2);
+if (matches.length === 0) {
+  process.stdout.write("listed=0\n");
+  process.exit(0);
+}
+const w = matches[0];
+const name = text(w.name), holder = text(w.lease_holder), leaseId = text(w.lease_id);
+if ([name, holder, leaseId].some((v) => /[\x00-\x1f\x7f]/.test(v))) process.exit(2);
+const leased = w.leased === true || leaseId !== "";
+process.stdout.write(`listed=1\nname=${name}\nleased=${leased ? 1 : 0}\nholder=${holder}\nlease_id=${leaseId}\n`);
+NODE
+  ) || return 0
+  while IFS= read -r line; do
+    case "$line" in
+      listed=*) listed=${line#listed=} ;;
+      name=*) name=${line#name=} ;;
+      leased=*) leased=${line#leased=} ;;
+      holder=*) holder=${line#holder=} ;;
+      lease_id=*) lease_id=${line#lease_id=} ;;
+    esac
+  done <<< "$out"
+  if [ "$listed" = 0 ]; then
+    FM_TREEHOUSE_SLOT_LEASE=unlisted
+    return 0
+  fi
+  [ "$listed" = 1 ] || return 0
+  # shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
+  FM_TREEHOUSE_SLOT_LEASE_NAME=$name
+  # shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
+  FM_TREEHOUSE_SLOT_LEASE_HOLDER=$holder
+  # shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
+  FM_TREEHOUSE_SLOT_LEASE_ID=$lease_id
+  if [ "$leased" != 1 ]; then
+    FM_TREEHOUSE_SLOT_LEASE=none
+  elif [ -n "$id" ] && [ "$holder" = "$id" ]; then
+    FM_TREEHOUSE_SLOT_LEASE=mine
+  else
+    FM_TREEHOUSE_SLOT_LEASE=other
+  fi
+}
+
+# Lease a pool slot to a task in place, without touching its contents.
+# Idempotent for the task's own lease; refuses a slot leased by anything else,
+# one its pool does not list, and one whose pool state cannot be read.
+# `treehouse lease` takes the slot's pool name and resolves the pool from its
+# working directory, so it runs from the slot itself, and the outcome is then
+# re-read from the slot's own pool state by path: a lease that landed anywhere
+# else is reported, never accepted. Prints the reason for a refusal on stderr.
+fm_treehouse_slot_lease_take() {  # <worktree> <task-id>
+  local worktree=$1 id=$2 slot out
+  [ -n "$id" ] || return 1
+  slot=$(CDPATH='' cd -- "$worktree" 2>/dev/null && pwd -P) || return 1
+  fm_treehouse_slot_lease_state "$slot" "$id"
+  case "$FM_TREEHOUSE_SLOT_LEASE" in
+    mine) return 0 ;;
+    none) ;;
+    other)
+      echo "error: Treehouse pool slot $slot is already leased by ${FM_TREEHOUSE_SLOT_LEASE_HOLDER:-an unlabelled lease}" >&2
+      return 1
+      ;;
+    unlisted)
+      echo "error: the Treehouse pool state beside $slot does not list that slot" >&2
+      return 1
+      ;;
+    *)
+      echo "error: cannot read the Treehouse lease state of pool slot $slot" >&2
+      return 1
+      ;;
+  esac
+  [ -n "$FM_TREEHOUSE_SLOT_LEASE_NAME" ] || {
+    echo "error: the Treehouse pool state lists slot $slot without a name to lease it by" >&2
+    return 1
+  }
+  out=$(cd "$slot" && treehouse lease "$FM_TREEHOUSE_SLOT_LEASE_NAME" --lease-holder "$id") || {
+    echo "error: treehouse lease could not lease pool slot $slot (name $FM_TREEHOUSE_SLOT_LEASE_NAME) to $id" >&2
+    return 1
+  }
+  fm_treehouse_slot_lease_state "$slot" "$id"
+  [ "$FM_TREEHOUSE_SLOT_LEASE" != mine ] || return 0
+  echo "error: treehouse lease reported '${out:-nothing}', but pool slot $slot is not leased to $id; any lease it took elsewhere is left in place for inspection" >&2
+  return 1
+}
+
+# Return a pool slot an aborted spawn leased, bound to the task's own lease so it
+# can never return a slot leased to anything else. `treehouse return` releases
+# the lease by stopping what runs in the slot and resetting it, so callers use
+# this only for a slot that holds no launched worker, and run it from <cd-dir>
+# outside the slot. It is never forced, and its confirmation prompt reads an
+# empty stdin, so Treehouse refuses a slot with uncommitted changes and keeps it
+# leased rather than discard them. A slot not leased to the task is left alone;
+# returns non-zero when the slot is still leased to the task.
+fm_treehouse_slot_lease_return() {  # <worktree> <task-id> <cd-dir>
+  local worktree=$1 id=$2 cd_dir=$3 slot
+  slot=$(CDPATH='' cd -- "$worktree" 2>/dev/null && pwd -P) || return 1
+  fm_treehouse_slot_lease_state "$slot" "$id"
+  [ "$FM_TREEHOUSE_SLOT_LEASE" = mine ] || return 0
+  ( cd "$cd_dir" && treehouse return --if-lease-holder "$id" "$slot" ) </dev/null >/dev/null 2>&1
+}
+
+# The one slot-ownership answer teardown acts on, combining the lease and the
+# claim. Sets FM_TREEHOUSE_SLOT_OWNER (mine|other|absent|unsafe) with
+# FM_TREEHOUSE_SLOT_OWNER_ID and FM_TREEHOUSE_SLOT_OWNER_HOME as evidence,
+# FM_TREEHOUSE_SLOT_OWNER_SOURCE naming what decided it (lease, claim, or
+# conflict), and FM_TREEHOUSE_SLOT_LEASED_TO_TASK=1 when this task holds the
+# lease, so the slot's return can be bound to that lease.
+#   - A lease held by anything else decides other: Treehouse never hands a
+#     leased slot to a later `get`, so it was leased after this task's spawn.
+#   - A lease held by this task decides mine, unless the claim names another
+#     task: the two records then contradict each other and decide unsafe.
+#   - No lease, or a slot its pool does not list, leaves the claim to decide, as
+#     on every slot taken before spawns leased them.
+#   - Unreadable lease state decides unsafe, because it may hide another lease.
+# shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
+fm_treehouse_slot_ownership() {  # <worktree> <task-id>
+  local worktree=$1 id=$2
+  FM_TREEHOUSE_SLOT_LEASED_TO_TASK=0
+  fm_treehouse_slot_lease_state "$worktree" "$id"
+  case "$FM_TREEHOUSE_SLOT_LEASE" in
+    other)
+      FM_TREEHOUSE_SLOT_OWNER=other
+          FM_TREEHOUSE_SLOT_OWNER_ID=${FM_TREEHOUSE_SLOT_LEASE_HOLDER:-an unlabelled lease $FM_TREEHOUSE_SLOT_LEASE_ID}
+          FM_TREEHOUSE_SLOT_OWNER_HOME=
+          FM_TREEHOUSE_SLOT_OWNER_SOURCE=lease
+      return 0
+      ;;
+    unsafe)
+      FM_TREEHOUSE_SLOT_OWNER=unsafe
+      FM_TREEHOUSE_SLOT_OWNER_ID=
+      FM_TREEHOUSE_SLOT_OWNER_HOME=
+      FM_TREEHOUSE_SLOT_OWNER_SOURCE=lease
+      return 0
+      ;;
+  esac
+  fm_treehouse_slot_owner_state "$worktree" "$id"
+  FM_TREEHOUSE_SLOT_OWNER_SOURCE=claim
+  [ "$FM_TREEHOUSE_SLOT_LEASE" = mine ] || return 0
+  if [ "$FM_TREEHOUSE_SLOT_OWNER" = other ]; then
+    FM_TREEHOUSE_SLOT_OWNER=unsafe
+    FM_TREEHOUSE_SLOT_OWNER_SOURCE=conflict
+    return 0
+  fi
+  FM_TREEHOUSE_SLOT_OWNER=mine
+  FM_TREEHOUSE_SLOT_OWNER_SOURCE=lease
+  FM_TREEHOUSE_SLOT_LEASED_TO_TASK=1
 }
 
 fm_failure_episode_reset() {

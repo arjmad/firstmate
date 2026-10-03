@@ -167,14 +167,17 @@
 #   root Firstmate home's state directory before slot allocation and holds it through
 #   task metadata publication. Teardown holds that same lock while proving and
 #   returning a slot, so allocation cannot reuse a slot before its owner record
-#   is published. Under that same lock it writes the slot's owner claim, which is
-#   what lets teardown leave a slot reassigned since untouched; bin/fm-wake-lib.sh
-#   owns the claim and bin/fm-teardown.sh owns what it protects. A slot that
-#   cannot be claimed refuses the spawn rather than launching a worker whose slot
-#   could later be released out from under its successor. A spawn that aborts
-#   while it still holds the allocation lock drops its own claim; an abort after
-#   metadata publication has released that lock leaves the claim in place, and
-#   the next spawn's claim replaces it.
+#   is published. Under that same lock it writes the slot's owner claim and
+#   durably leases the slot to the task (`treehouse lease <name> --lease-holder
+#   <task-id>`), so the pool never offers a parked or finished task's slot to a
+#   later `get`, and teardown can leave a slot reassigned since untouched;
+#   bin/fm-wake-lib.sh owns the claim and the lease, and bin/fm-teardown.sh owns
+#   what they protect. A slot that cannot be claimed or leased refuses the spawn
+#   rather than launching a worker whose slot could later be handed to or
+#   released by another task. A spawn that aborts while it still holds the
+#   allocation lock drops its own claim and returns the slot it leased, unless
+#   a launched worker may still be in it; an abort after metadata publication
+#   has released that lock leaves both to the task's teardown.
 #   The local root is whatever bin/fm-wake-lib.sh's
 #   fm_firstmate_root_home resolves, so a home seeded from another machine anchors
 #   that lock itself rather than failing to resolve one;
@@ -1269,6 +1272,7 @@ SPAWN_ENDPOINT_ABORT_WINDOW=
 SPAWN_TREEHOUSE_PROJECT_LOCK=
 SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
 SPAWN_SLOT_CLAIMED=0
+SPAWN_SLOT_LEASED=0
 RELAUNCH_REPLACEMENT_PENDING=0
 RELAUNCH_REPLACEMENT_BUSY_GEN=
 RELAUNCH_REPLACEMENT_HARNESS=
@@ -1450,6 +1454,25 @@ spawn_abort_cleanup() {
   if [ "$SPAWN_META_LOCK_HELD" = 1 ]; then
     SPAWN_META_LOCK_HELD=0
     fm_lock_release "$SPAWN_META_LOCK" || true
+  fi
+  # A durable lease outlives the endpoint, so a spawn that aborts after leasing
+  # its slot but before its record survives returns that slot rather than leave
+  # it leased to a task no record describes. The return is bound to this task's
+  # own lease, is never forced, so a slot with uncommitted changes keeps them
+  # and its lease, runs only while the project lock that took it is still held,
+  # and never runs while a launched worker may still be working in the slot;
+  # any slot it leaves is named so it can be checked and returned by hand.
+  if [ "$SPAWN_SLOT_LEASED" = 1 ] && [ -n "${WT:-}" ] &&
+    [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ] &&
+    fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
+    SPAWN_SLOT_LEASED=0
+    if [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" = 1 ] &&
+      { [ "$SPAWN_LAUNCH_SENT" = 0 ] || [ "$SPAWN_ENDPOINT_CLOSED" = 1 ]; }; then
+      fm_treehouse_slot_lease_return "$WT" "$ID" "$PROJ_ABS" ||
+        echo "warning: Treehouse pool slot $WT stays leased to aborted task $ID because treehouse return refused it (it may hold uncommitted changes); check it, then run treehouse return --if-lease-holder $ID $WT" >&2
+    else
+      echo "warning: leaving Treehouse pool slot $WT leased to aborted task $ID; a worker may still be in it, so check it and run treehouse return --if-lease-holder $ID $WT" >&2
+    fi
   fi
   # A spawn that aborts after claiming its slot but before its record survives
   # must not leave a claim naming a task no record describes. The release is a
@@ -4518,16 +4541,16 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
 
   validate_spawn_worktree "treehouse get" "$T"
 
-  # Claim the pool slot for this task. The interactive `treehouse get` sent to
-  # the pane above records only a process lease (Treehouse's durable
-  # `get --lease --lease-holder`, which bin/fm-home-seed.sh uses for secondmate
-  # homes, is not this path), so Treehouse cannot say which task a slot belongs
-  # to once that task's worker exits - and that is exactly when the slot is
-  # handed on and this task's worktree= line goes stale. The claim is what lets
-  # bin/fm-teardown.sh leave a slot that has since been reassigned untouched, so
-  # a slot that cannot be claimed is refused here, at the cheapest point, rather
-  # than launching a worker whose slot teardown could later release out from
-  # under its successor.
+  # Claim and lease the pool slot for this task. The interactive `treehouse
+  # get` sent to the pane above records only a process lease, so on its own
+  # Treehouse cannot say which task a slot belongs to once that task's worker
+  # exits, and offers the slot to the next `get` - exactly when this task's
+  # worktree= line goes stale. bin/fm-wake-lib.sh owns both durable records:
+  # the lease keeps the slot out of every later `get` until teardown returns it,
+  # and lets bin/fm-teardown.sh prove a slot reassigned since; the claim covers
+  # slots taken before spawns leased them. A slot that cannot be claimed or
+  # leased is refused here, at the cheapest point, rather than launching a
+  # worker whose slot could later be handed to or released by another task.
   # Written under the Treehouse project lock held from before slot allocation
   # through metadata publication, so no other spawn or return sees a half-claim.
   if fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
@@ -4536,6 +4559,11 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
       exit 1
     fi
     SPAWN_SLOT_CLAIMED=1
+    if ! fm_treehouse_slot_lease_take "$WT" "$ID"; then
+      echo "error: could not durably lease Treehouse pool slot $WT to task $ID; refusing to launch a worker whose slot the pool could hand to another spawn; inspect window $T" >&2
+      exit 1
+    fi
+    SPAWN_SLOT_LEASED=1
   fi
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
