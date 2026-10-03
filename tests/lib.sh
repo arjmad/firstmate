@@ -419,6 +419,79 @@ SH
   done
 }
 
+# fm_fake_treehouse_pool <fakebin>
+# A fake treehouse that keeps durable leases the way the real one does, in the
+# <pool>/treehouse-state.json beside a fixture's <pool>/<slot>/<repo> slots:
+# `lease <name> --lease-holder <holder>` (run from inside the slot) marks that
+# slot leased and prints its path, refusing one already leased; `return` with
+# --if-lease-holder refuses unless that holder's lease is on the slot, one
+# without --force refuses a slot with uncommitted changes (as the real one does
+# when its confirmation cannot be answered), and any successful return releases
+# the lease. Every call is logged as
+# `treehouse <arg>...` to $FM_RUNTIME_LOG when set; every other command exits 0.
+fm_fake_treehouse_pool() {
+  local fakebin=$1
+  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+if [ -n "${FM_RUNTIME_LOG:-}" ]; then
+  { printf 'treehouse'; printf ' <%s>' "$@"; printf '\n'; } >> "$FM_RUNTIME_LOG"
+fi
+case "${1:-}" in
+  lease)
+    pool=$(cd ../.. && pwd -P) || exit 1
+    exec node - "$pool/treehouse-state.json" lease "$@" <<'NODE'
+const fs = require("fs");
+const [file, op, , name, , holder] = process.argv.slice(2);
+const state = JSON.parse(fs.readFileSync(file, "utf8"));
+const slot = state.worktrees.find((w) => w.name === name);
+if (!slot) { console.error(`no worktree named "${name}" in pool`); process.exit(1); }
+if (slot.leased) { console.error(`worktree ${name} is already leased (holder: "${slot.lease_holder}")`); process.exit(1); }
+Object.assign(slot, { leased: true, lease_id: `fake-${process.pid}`, lease_holder: holder || "" });
+fs.writeFileSync(file, JSON.stringify(state));
+process.stdout.write(`${slot.path}\n`);
+NODE
+    ;;
+  return)
+    holder=; path=; force=0
+    shift
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --if-lease-holder) holder=$2; shift ;;
+        --force) force=1 ;;
+        --*) ;;
+        *) path=$1 ;;
+      esac
+      shift
+    done
+    slot=$(cd "$path" 2>/dev/null && pwd -P) || exit 0
+    if [ "$force" = 0 ] && [ -n "$(git -C "$slot" status --porcelain 2>/dev/null)" ]; then
+      echo "worktree not returned: it has uncommitted changes" >&2
+      exit 3
+    fi
+    state="$(dirname "$(dirname "$slot")")/treehouse-state.json"
+    [ -f "$state" ] || exit 0
+    exec node - "$state" "$slot" "$holder" <<'NODE'
+const fs = require("fs");
+const [file, slotPath, holder] = process.argv.slice(2);
+const real = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
+const state = JSON.parse(fs.readFileSync(file, "utf8"));
+const slot = state.worktrees.find((w) => real(w.path) === slotPath);
+if (slot && holder && (!slot.leased || slot.lease_holder !== holder)) {
+  console.error(`failed to return worktree: lease precondition failed: ${slotPath}`);
+  process.exit(1);
+}
+if (slot) {
+  delete slot.leased; delete slot.lease_id; delete slot.lease_holder;
+  fs.writeFileSync(file, JSON.stringify(state));
+}
+NODE
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/treehouse"
+}
+
 # fm_fake_crash_injector <fakebin>
 # Drops an `fm-crash-inject <pid>` shim that a PATH fake calls to simulate a
 # hard crash of the process under test. It SIGKILLs <pid> and then returns only

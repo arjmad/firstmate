@@ -792,12 +792,21 @@ lay_out_as_pool_slot() {
     > "$slot_root/treehouse-state.json"
   POOL_DIR="$slot_root/1/project"
   SLOT_CLAIM="$slot_root/1/.fm-slot-owner"
+  SLOT_STATE="$slot_root/treehouse-state.json"
+  fm_fake_treehouse_pool "$FAKEBIN_DIR"
 }
 
-# The spawn side of the slot-owner claim that bin/fm-teardown.sh later reads:
-# a launched task's claim names it, a slot that cannot be claimed refuses before
-# anything is published, and an abort while the allocation lock is still held
-# leaves no claim naming a task with no record.
+# The lease holder the fixture pool records for its one slot, or nothing.
+slot_lease_holder() {
+  node -e 'const w = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).worktrees[0];
+    process.stdout.write(w.leased ? w.lease_holder : "")' "$SLOT_STATE"
+}
+
+# The spawn side of the slot-owner claim and durable lease that
+# bin/fm-teardown.sh later reads: a launched task's claim and lease name it, a
+# slot that cannot be claimed or leased refuses before anything is published,
+# and an abort while the allocation lock is still held leaves no claim or lease
+# naming a task with no record.
 test_pool_slot_claim_follows_the_spawn_outcome() {
   local rec id out status before
 
@@ -815,6 +824,25 @@ test_pool_slot_claim_follows_the_spawn_outcome() {
     || fail "the slot claim does not name the spawned task: $(cat "$SLOT_CLAIM")"
   grep -Fxq -- "home=$HOME_DIR" "$SLOT_CLAIM" \
     || fail "the slot claim does not name the spawning home: $(cat "$SLOT_CLAIM")"
+  [ "$(slot_lease_holder)" = "$id" ] \
+    || fail "spawn did not durably lease its Treehouse slot to the task: $(cat "$SLOT_STATE")"
+
+  # A slot already leased to anything else is never taken over: the spawn
+  # refuses, publishes nothing, and leaves that lease as it found it.
+  id='pool-slot-leased-elsewhere-r1'
+  rec=$(make_case slot-leased-elsewhere "$id")
+  read_case_record "$rec"
+  lay_out_as_pool_slot
+  printf '{"worktrees":[{"name":"1","path":"%s","leased":true,"lease_id":"x1","lease_holder":"parked-task"}]}\n' \
+    "$POOL_DIR" > "$SLOT_STATE"
+  out=$(run_spawn "$id" --scout)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn launched a worker on a slot leased to another task"
+  assert_contains "$out" "already leased by parked-task" \
+    "spawn did not name the lease holding the slot"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "spawn published a record for a slot leased elsewhere"
+  [ "$(slot_lease_holder)" = parked-task ] \
+    || fail "spawn changed another task's lease: $(cat "$SLOT_STATE")"
 
   id='pool-slot-unclaimable-r1'
   rec=$(make_case slot-unclaimable "$id")
@@ -845,7 +873,48 @@ test_pool_slot_claim_follows_the_spawn_outcome() {
   [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "the aborted spawn published task metadata"
   [ ! -e "$SLOT_CLAIM" ] && [ ! -L "$SLOT_CLAIM" ] \
     || fail "the aborted spawn left a slot claim naming a task with no record: $(cat "$SLOT_CLAIM")"
-  pass "a Treehouse slot claim names the launched task, refuses when unclaimable, and is dropped by a locked abort"
+  [ -z "$(slot_lease_holder)" ] \
+    || fail "the aborted spawn left its slot leased to a task with no record: $(cat "$SLOT_STATE")"
+
+  # An abort after the slot was leased returns it, bound to its own lease.
+  id='pool-slot-lease-aborted-r1'
+  rec=$(make_case slot-lease-aborted "$id")
+  read_case_record "$rec"
+  lay_out_as_pool_slot
+  git --git-dir="$CASE_DIR/origin.git" symbolic-ref HEAD refs/heads/missing-default
+  : > "$CASE_DIR/treehouse.log"
+  out=$(FM_RUNTIME_LOG="$CASE_DIR/treehouse.log" run_spawn "$id" --scout)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn succeeded despite an unresolved remote default branch"
+  assert_contains "$out" "could not resolve origin's current default branch" \
+    "the leased abort did not refuse where expected"
+  assert_grep "<lease> <1> <--lease-holder> <$id>" "$CASE_DIR/treehouse.log" \
+    "the abort case did not lease its slot before refusing"
+  assert_grep "<return> <--if-lease-holder> <$id>" "$CASE_DIR/treehouse.log" \
+    "the aborted spawn did not return its slot bound to its own lease"
+  assert_no_grep "<--force>" "$CASE_DIR/treehouse.log" \
+    "the aborted spawn forced its slot's return"
+  [ -z "$(slot_lease_holder)" ] \
+    || fail "the aborted spawn left its slot leased to a task with no record: $(cat "$SLOT_STATE")"
+  [ ! -e "$SLOT_CLAIM" ] || fail "the aborted spawn left its slot claim: $(cat "$SLOT_CLAIM")"
+
+  # A slot with uncommitted changes is never discarded to release a lease: the
+  # abort keeps the changes, leaves the lease, and names the slot to check.
+  id='pool-slot-lease-dirty-r1'
+  rec=$(make_case slot-lease-dirty "$id")
+  read_case_record "$rec"
+  lay_out_as_pool_slot
+  printf 'keep this local work\n' > "$POOL_DIR/uncommitted.txt"
+  out=$(run_spawn "$id" --scout)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn succeeded despite a dirty pooled slot"
+  assert_contains "$out" "stays leased to aborted task $id" \
+    "the aborted spawn did not name the slot it left leased"
+  assert_grep 'keep this local work' "$POOL_DIR/uncommitted.txt" \
+    "the aborted spawn discarded uncommitted work to release its lease"
+  [ "$(slot_lease_holder)" = "$id" ] \
+    || fail "the dirty slot's lease was released without returning it: $(cat "$SLOT_STATE")"
+  pass "a Treehouse slot claim and lease name the launched task, refuse when unavailable, and are dropped by a locked abort"
 }
 
 test_remote_seeded_home_spawns_from_treehouse_pool

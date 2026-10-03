@@ -1155,6 +1155,214 @@ test_stale_record_on_claimed_slot_retires_then_claimant_tears_down() {
   pass "fm-teardown: a stale record on a claimed slot retires, then the claimant tears down"
 }
 
+# Lease a fixture pool's one slot in its Treehouse state, the way a spawn's
+# `treehouse lease` records it, and swap in the fake treehouse that honours
+# leases on return. An empty holder is an unlabelled lease.
+lease_pool_slot() {  # <case> <holder>
+  local dir=$1 holder=$2
+  printf '{"worktrees":[{"name":"1","path":"%s","leased":true,"lease_id":"lease-1","lease_holder":"%s"}]}\n' \
+    "$dir/pool/1/project" "$holder" > "$dir/pool/treehouse-state.json"
+  fm_fake_treehouse_pool "$dir/fakebin"
+}
+
+pool_slot_lease_holder() {  # <case>
+  node -e 'const w = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).worktrees[0];
+    process.stdout.write(w.leased ? "leased:" + w.lease_holder : "unleased")' "$1/pool/treehouse-state.json"
+}
+
+# The durable Treehouse lease a spawn takes is the slot's own ownership record:
+# a lease held by anything else proves the slot was handed on after this record
+# was written, a lease held by this task binds its return, and ownership that
+# cannot be read or contradicts itself refuses before anything is touched.
+test_slot_lease_decides_teardown_ownership() {
+  local dir id=stale-task other=leasing-task worker rc
+
+  # Another task's lease, its record naming the slot too, no claim, and a live
+  # worker inside: the stale record retires records-only and the slot, its
+  # worker, its copy, and its lease are left exactly as they were.
+  dir=$(make_case slot-leased-elsewhere)
+  mark_case_as_treehouse_pool "$dir"
+  lease_pool_slot "$dir" "$other"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=ship"
+  fm_write_meta "$dir/home/state/$other.meta" \
+    "window=firstmate:fm-$other" "endpoint_task_id=$other" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  ( cd "$dir/worktree" && exec sleep 30 ) &
+  worker=$!
+  set +e
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "teardown of a record whose slot another task leased failed: $(cat "$dir/stderr")"
+  kill -0 "$worker" 2>/dev/null || fail "teardown killed the worker in a slot another task leased"
+  kill "$worker" 2>/dev/null || true
+  wait "$worker" 2>/dev/null || true
+  assert_absent "$dir/home/state/$id.meta" "the stale record was not retired"
+  assert_present "$dir/worktree/sentinel" "teardown reset a slot another task leased"
+  assert_present "$dir/home/state/$other.meta" "teardown removed the leasing task's record"
+  ! grep -Fq "treehouse <return>" "$dir/runtime.log" \
+    || fail "teardown returned a slot another task leased: $(cat "$dir/runtime.log")"
+  [ "$(pool_slot_lease_holder "$dir")" = "leased:$other" ] \
+    || fail "teardown changed another task's lease: $(pool_slot_lease_holder "$dir")"
+  assert_contains "$(cat "$dir/stderr")" "durably leased in Treehouse to $other" \
+    "the warning should name the lease holder as the evidence"
+
+  # The leasing task is now the sole record, and its own lease binds the return.
+  : > "$dir/runtime.log"
+  run_case "$dir" "$other" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "the leasing task's teardown failed: $(cat "$dir/stderr")"
+  assert_absent "$dir/home/state/$other.meta" "the leasing task's teardown left its record"
+  assert_grep "<return> <--force> <--if-lease-holder> <$other>" "$dir/runtime.log" \
+    "the leasing task's return was not bound to its own lease"
+  [ "$(pool_slot_lease_holder "$dir")" = unleased ] \
+    || fail "the leasing task's teardown did not release its lease"
+
+  # An unlabelled lease is not this task's either: spawns always label theirs.
+  dir=$(make_case slot-leased-unlabelled)
+  mark_case_as_treehouse_pool "$dir"
+  lease_pool_slot "$dir" ""
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "teardown of a record whose slot carries an unlabelled lease failed: $(cat "$dir/stderr")"
+  assert_present "$dir/worktree/sentinel" "teardown reset a slot under an unlabelled lease"
+  ! grep -Fq "treehouse <return>" "$dir/runtime.log" \
+    || fail "teardown returned a slot under an unlabelled lease: $(cat "$dir/runtime.log")"
+  [ "$(pool_slot_lease_holder "$dir")" = "leased:" ] \
+    || fail "teardown changed an unlabelled lease: $(pool_slot_lease_holder "$dir")"
+
+  # A lease naming this task while the claim names another contradicts itself.
+  dir=$(make_case slot-lease-claim-conflict)
+  mark_case_as_treehouse_pool "$dir"
+  lease_pool_slot "$dir" "$id"
+  claim_pool_slot "$dir" "$other"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  assert_refused_without_mutation "$dir" "$id" "a lease and a claim that contradict each other"
+  assert_contains "$(cat "$dir/stderr")" "contradict" \
+    "the refusal should name the contradiction between lease and claim"
+  [ "$(pool_slot_lease_holder "$dir")" = "leased:$id" ] \
+    || fail "a contradiction refusal changed the slot's lease"
+
+  # Lease state that cannot be read may hide another holder's lease.
+  dir=$(make_case slot-lease-unreadable)
+  mark_case_as_treehouse_pool "$dir"
+  printf '{"worktrees":\n' > "$dir/pool/treehouse-state.json"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  assert_refused_without_mutation "$dir" "$id" "unreadable Treehouse lease state"
+  assert_contains "$(cat "$dir/stderr")" "lease state that cannot be read" \
+    "the refusal should name the unreadable lease state"
+
+  pass "fm-teardown: a slot's Treehouse lease proves reassignment, binds the owner's return, and refuses when unreadable or contradicted"
+}
+
+# The shape the incident left on one business slot: three finished records name
+# it and its claim names the last task to take it. The claimant's own teardown
+# refuses while stale records still name its slot; each stale record retires
+# records-only on the claim's evidence; then the claimant tears down in full.
+test_stale_records_on_one_slot_retire_in_turn() {
+  local dir first=first-task second=second-task owner=slot-owner-task rc id
+
+  dir=$(make_case slot-three-records)
+  mark_case_as_treehouse_pool "$dir"
+  for id in "$first" "$second" "$owner"; do
+    fm_write_meta "$dir/home/state/$id.meta" \
+      "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+      "worktree=$dir/worktree" "project=$dir/project" "kind=ship"
+  done
+  claim_pool_slot "$dir" "$owner"
+
+  set +e
+  run_case "$dir" "$owner" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "the claimant returned its slot while stale records still name it"
+  assert_present "$dir/worktree/sentinel" "the refused claimant teardown reset its slot"
+  assert_present "$dir/home/state/$owner.meta" "the refused claimant teardown removed its record"
+
+  for id in "$first" "$second"; do
+    : > "$dir/runtime.log"
+    run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr" \
+      || fail "stale record $id did not retire records-only: $(cat "$dir/stderr")"
+    assert_absent "$dir/home/state/$id.meta" "stale record $id was not retired"
+    assert_present "$dir/worktree/sentinel" "retiring stale record $id reset the slot"
+    ! grep -Fq "treehouse <return>" "$dir/runtime.log" \
+      || fail "retiring stale record $id returned the slot: $(cat "$dir/runtime.log")"
+  done
+
+  : > "$dir/runtime.log"
+  run_case "$dir" "$owner" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "the claimant's teardown failed once it was the sole record: $(cat "$dir/stderr")"
+  assert_absent "$dir/home/state/$owner.meta" "the claimant's teardown left its record"
+  grep -Fq "treehouse <return>" "$dir/runtime.log" \
+    || fail "the claimant's teardown did not return its slot: $(cat "$dir/runtime.log")"
+
+  pass "fm-teardown: stale records sharing one claimed slot retire in turn, then its claimant tears down in full"
+}
+
+# A record whose worktree= is empty or absent names no copy, so it retires its
+# own records and endpoint and touches no worktree, branch, or slot - instead of
+# the endpoint validator stranding it forever. An ambiguous worktree identity
+# and an Orca record, whose copy is named by id, keep refusing.
+test_record_without_a_worktree_retires_records_only() {
+  local dir id=no-worktree-task out rc
+
+  dir=$(make_case empty-worktree)
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "worktree=" "project=$dir/project" "kind=scout"
+  set +e
+  out=$(run_case "$dir" "$id" 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "an empty worktree record should retire records-only: $out"
+  assert_absent "$dir/home/state/$id.meta" "an empty worktree record was not retired"
+  assert_contains "$out" "records no worktree" "the notice did not say why the retirement is records-only"
+  assert_grep "<kill-window>" "$dir/runtime.log" "the empty worktree record's endpoint was not closed"
+  ! grep -Fq treehouse "$dir/runtime.log" \
+    || fail "an empty worktree record reached Treehouse: $(cat "$dir/runtime.log")"
+  assert_present "$dir/worktree/sentinel" "an empty worktree record touched an unrelated copy"
+
+  # No worktree= line at all, on a ship task torn down without --force.
+  dir=$(make_case missing-worktree)
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "project=$dir/project" "kind=ship"
+  set +e
+  out=$(FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_RUNTIME_LOG="$dir/runtime.log" PATH="$dir/fakebin:$PATH" \
+    "$TEARDOWN" "$id" 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "a record with no worktree line should retire records-only: $out"
+  assert_absent "$dir/home/state/$id.meta" "a record with no worktree line was not retired"
+  ! grep -Fq treehouse "$dir/runtime.log" \
+    || fail "a record with no worktree line reached Treehouse: $(cat "$dir/runtime.log")"
+
+  # Two worktree= lines are ambiguous, even when one is empty.
+  dir=$(make_case ambiguous-worktree)
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "worktree=" "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  assert_refused_without_mutation "$dir" "$id" "an ambiguous worktree identity"
+
+  # An Orca record names its copy by id, so an empty path proves nothing.
+  dir=$(make_case orca-empty-worktree)
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=fm-$id" "endpoint_task_id=$id" "terminal=term-7" \
+    "worktree=" "project=$dir/project" "backend=orca" \
+    "orca_worktree_id=worktree-9::/orca/worktree-9" "kind=ship"
+  assert_refused_without_mutation "$dir" "$id" "an Orca record with an empty worktree path"
+
+  pass "fm-teardown: a record naming no worktree retires records-only, while ambiguous and Orca records still refuse"
+}
+
 # The two states that must never become a false refusal: the task's own claim,
 # and no claim at all (a slot taken before claims existed, or already returned).
 test_own_and_absent_slot_claims_still_tear_down() {
@@ -1579,6 +1787,9 @@ test_sole_slot_record_still_tears_down
 test_reassigned_pool_slot_finishes_own_cleanup_without_touching_the_slot
 test_stale_record_on_claimed_slot_retires_then_claimant_tears_down
 test_own_and_absent_slot_claims_still_tear_down
+test_slot_lease_decides_teardown_ownership
+test_stale_records_on_one_slot_retire_in_turn
+test_record_without_a_worktree_retires_records_only
 test_recorded_endpoint_that_changed_directory_still_tears_down
 test_project_lock_anchors_at_the_local_root_across_home_layouts
 test_remote_seeded_home_returns_its_uncontested_slot

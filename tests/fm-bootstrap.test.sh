@@ -8,7 +8,7 @@
 # 'MISSING: gh-axi (install: ...)', 'PRESENTATION_UNAVAILABLE: lavish-axi ...', and
 # 'BOOTSTRAP_INFO: ...' lines, so those contracts are pinned verbatim. The cases
 # are table-driven over the inputs that vary: whether `treehouse get --help`
-# advertises --lease, which (if any) tasks-axi version is on PATH, whether
+# advertises --lease and `treehouse lease` exists, which (if any) tasks-axi version is on PATH, whether
 # tasks-axi update advertises --archive-body, whether its mv help advertises
 # multi-ID moves, whether quota-axi is on PATH,
 # whether the local backend config opts out of tasks-axi backlog mutations,
@@ -40,7 +40,8 @@ unset TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH \
   CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_SOCKET_PATH CMUX_TAB_ID CMUX_PANEL_ID 2>/dev/null || true
 
 # A fake toolchain where every required tool is present and gh is authenticated.
-# treehouse's `get --help` advertises --lease only when FM_FAKE_TREEHOUSE_LEASE_HELP=1.
+# treehouse's `get --help` advertises --lease when FM_FAKE_TREEHOUSE_LEASE_HELP is 1
+# or get, and its `lease` subcommand (Treehouse 3.0.0+) exists only when it is 1.
 make_fake_toolchain() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
@@ -66,12 +67,19 @@ SH
   cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = get ] && [ "${2:-}" = --help ]; then
-  if [ "${FM_FAKE_TREEHOUSE_LEASE_HELP:-}" = 1 ]; then
-    printf '%s\n' 'Usage: treehouse get [--lease] [--lease-holder <holder>]'
-  else
-    printf '%s\n' 'Usage: treehouse get'
-  fi
+  case "${FM_FAKE_TREEHOUSE_LEASE_HELP:-}" in
+    1|get) printf '%s\n' 'Usage: treehouse get [--lease] [--lease-holder <holder>]' ;;
+    *) printf '%s\n' 'Usage: treehouse get' ;;
+  esac
   exit 0
+fi
+if [ "${1:-}" = lease ]; then
+  if [ "${FM_FAKE_TREEHOUSE_LEASE_HELP:-}" = 1 ]; then
+    printf '%s\n' 'Usage: treehouse lease <name> [--lease-holder <holder>]'
+    exit 0
+  fi
+  printf '%s\n' 'unknown command "lease" for "treehouse"' >&2
+  exit 1
 fi
 exit 0
 SH
@@ -247,7 +255,7 @@ assert_timeout_report() {
 }
 
 # Each row (fields are '^'-separated; the install URL contains a literal '|'):
-#   <label>^<lease 1/0>^<tasks-axi version or ->^<quota 1/0>^<backend or ->^<mode>^<expect>^<notcontains>
+#   <label>^<lease 1/get/0>^<tasks-axi version or ->^<quota 1/0>^<backend or ->^<mode>^<expect>^<notcontains>
 #   mode=empty -> output must be empty (expect/notcontains ignored)
 #   mode=exact -> output must equal <expect>
 #   mode=grep  -> output must contain <expect> (fixed string); <notcontains> must not appear
@@ -306,6 +314,7 @@ test_bootstrap_reporting() {
   done <<'ROWS'
 treehouse --lease support is accepted silently^1^0.2.6^1^manual^empty^^
 treehouse without --lease reports an upgrade, gh auth is fine^0^0.2.6^1^-^grep^MISSING: treehouse (install: curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh)^NEEDS_GH_AUTH
+treehouse with get --lease but no lease command reports an upgrade^get^0.2.6^1^manual^exact^MISSING: treehouse (install: curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh)^
 compatible tasks-axi is silent by default^1^0.2.6^1^-^empty^^
 missing tasks-axi is required by default^1^-^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
 incompatible tasks-axi is required by default^1^0.1.0^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
