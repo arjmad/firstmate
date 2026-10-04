@@ -261,6 +261,7 @@ Every presented row is claimed to exactly one actor under the durable queue lock
   Publication is refused if main already claimed any requested row.
 - A main drain validates that owner evidence under the queue lock and reclaims the grant when its process is gone or its identity no longer matches.
 - A main drain claims every currently unclaimed row and excludes an active branch grant from both presentation and acknowledgement.
+- A branch acknowledgement that consumes its whole grant records its cutoff in `state/.branch-eligible-acked`, so a repeated acknowledgement of the same wake reports already acknowledged and exits 0 instead of refusing for a missing snapshot; `bin/fm-wake-grant.sh` clears that record on every activate, publish, and deactivate.
 
 ### Lock deadlines during presentation
 
