@@ -1010,6 +1010,30 @@ ROWS
 }
 
 # Scout and secondmate paths still scaffold well-formed briefs.
+# A research scout files into Arjun's brain like a ship lane and keeps its
+# notes beside the report, because the worktree is discarded at teardown.
+test_scout_files_brain_and_keeps_notes_with_report() {
+  local home brief
+  home="$TMP_ROOT/scout-filing-home"
+  write_registry "$home"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" scout-filing some-proj --scout >/dev/null 2>&1
+  brief="$home/data/scout-filing/brief.md"
+  assert_present "$brief" "scout brief was not scaffolded"
+  assert_grep "Filing durable knowledge through the fleet's sanctioned memory route" "$brief" \
+    "scout brief missing the durable-knowledge filing carve-out"
+  assert_grep "recommendations stay in the report until the captain decides them" "$brief" \
+    "scout brief lets recommendations reach the brain undecided"
+  assert_grep "never writes Arjun's brain and never writes Sapna's" "$brief" \
+    "scout brief missing the Sapna-domain brain boundary"
+  assert_grep "notes files beside it in \`$home/data/scout-filing/\`" "$brief" \
+    "scout brief does not allow notes files in the task data directory"
+  assert_grep "claim in the report its source URL" "$brief" \
+    "scout brief missing the per-claim URL rule"
+  assert_no_grep "the only files you may write outside it are the report and the status file" "$brief" \
+    "scout brief still limits writes to the report alone"
+  pass "fm-brief.sh: scout brief carries brain filing and data-directory notes"
+}
+
 test_scout_and_secondmate_scaffold() {
   local brief
   FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-scout-q6 alpha --scout >/dev/null 2>&1 \
@@ -1516,6 +1540,7 @@ test_pause_verb_override_renders_all_brief_scaffolds
 test_ship_and_scout_teach_validation_round_pause
 test_scout_and_secondmate_load_decision_hold_policy
 test_scout_and_secondmate_scaffold
+test_scout_files_brain_and_keeps_notes_with_report
 test_scout_lavish_line_follows_presentation_floor
 test_workers_wait_without_spending_turns
 test_wait_no_turns_absent_keeps_the_previous_brief
