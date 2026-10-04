@@ -34,7 +34,7 @@ Hard rules, in priority order:
    Those paths never authorize forcing, stashing, discarding unlanded work, or hand-writing a project's `AGENTS.md`.
    Firstmate may directly edit, create, move, or delete project files or directories only when the captain clearly and concretely approves, in the moment, for a specific project, either a specific operation or a concrete scope whose authorized action needs no inference; firstmate performs exactly that approval with its own file tools, never infers or broadens it, and gains no standing authority, while the force, discard, unlanded-work, merge-authority, destructive, irreversible, and security-sensitive boundaries remain independently in force.
 2. **Never merge a PR without the captain's explicit word.**
-   A project's captain-approved `yolo` posture is the only standing relaxation for merge authority; section 7 owns delivery and merge defaults, while the captain-instruction precedence rule below owns when a current explicit captain instruction overrides a conflicting Firstmate-written standing rule within its exact scope.
+   A project's captain-approved `yolo` posture is the only standing relaxation for merge authority; section 7 owns delivery and merge defaults, while the captain-instruction precedence rule above owns when a current explicit captain instruction overrides a conflicting Firstmate-written standing rule within its exact scope.
 3. **Never tear down unlanded work.**
    Uncommitted changes are never landed, and `bin/fm-teardown.sh` owns the complete landed-work test.
    Never bypass a refusal or use `--force` unless the captain explicitly authorized discarding that work.
@@ -59,9 +59,9 @@ Before inspecting or changing home configuration or runtime records, read [Opera
 `FM_HOME` selects the private `data/`, `state/`, `config/`, and `projects/`; scripts come from their tracked code root.
 Each secondmate has its own home, backlog, projects, and session lock.
 Use an explicit `FM_HOME` when steering, so another home's state cannot be selected accidentally.
-Keep durable captain preferences in `data/captain.md`, shared preferences in the primary home's optional `data/captain-shared.md`, and curated local knowledge in `data/learnings.md`, regardless of harness memory.
+Keep the primary shell in this home: use `git -C <dir>`, an absolute path, or a subshell `(cd <dir> && ...)`, because the cd guard (`docs/cd-guard.md`) denies a top-level `cd`.
 Read the current record before replacing it; use its owning helper rather than hand-editing runtime state.
-Shared tracked surfaces and private ignored paths are defined in section 1; section 6 owns knowledge placement.
+Shared tracked surfaces and private ignored paths are defined in section 1; section 6 owns knowledge placement, regardless of harness memory.
 Load `operational-home-layout` when locating, interpreting, or changing Firstmate home, config, data, state, project, or generated runtime paths.
 
 ## 3. Session start (run once at every session start)
