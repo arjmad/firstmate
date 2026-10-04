@@ -5336,12 +5336,30 @@ if (JSON.stringify(actualRow.render(100)) !== JSON.stringify(stockRow.render(100
 }
 
 pi.events.emit("firstmate:calm-presentation", { active: true, stockExportRendering: true });
-const stockHtml = createToolHtmlRenderer({ getToolDefinition: () => stockDefinition, theme, cwd: process.cwd() });
-const actualHtml = createToolHtmlRenderer({ getToolDefinition: () => actualDefinition, theme, cwd: process.cwd() });
+// Pi 1.0.0 looks export renderers up through getToolDefinition, and Pi 1.0.1
+// through getToolRenderers; each ignores the other key and then renders every
+// tool as the structured fallback. Supply both, and require each renderer to
+// reach its definition, so the fallback below cannot come from a lookup the
+// installed Pi never makes.
+const htmlLookups = new Map();
+const htmlRendererFor = (label, definition) => {
+  const lookup = () => {
+    htmlLookups.set(label, (htmlLookups.get(label) ?? 0) + 1);
+    return definition;
+  };
+  return createToolHtmlRenderer({ getToolDefinition: lookup, getToolRenderers: lookup, theme, cwd: process.cwd() });
+};
+const stockHtml = htmlRendererFor("stock", stockDefinition);
+const actualHtml = htmlRendererFor("actual", actualDefinition);
 const stockCall = stockHtml.renderCall("stock-html", "fm_branch_outcomes", args);
 const actualCall = actualHtml.renderCall("actual-html", "fm_branch_outcomes", args);
 const stockResult = stockHtml.renderResult("stock-html", "fm_branch_outcomes", result.content, result.details, false);
 const actualResult = actualHtml.renderResult("actual-html", "fm_branch_outcomes", result.content, result.details, false);
+for (const label of ["stock", "actual"]) {
+  if (!htmlLookups.get(label)) {
+    throw new Error(`the installed Pi's HTML export renderer never looked up the ${label} definition, so its fallback proves nothing`);
+  }
+}
 if (actualCall !== undefined || actualResult !== undefined || stockCall !== undefined || stockResult !== undefined) {
   throw new Error("stock export rendering did not delegate to Pi's structured fallback");
 }
