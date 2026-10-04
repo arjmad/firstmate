@@ -53,26 +53,23 @@ OUT
 SH
 chmod +x "$FAKEBIN/quota-axi" "$FAKEBIN/claude"
 
-run() {  # <out-var> <args...>
-  local _var=$1 _out
-  shift
+run() {  # <args...>
   rm -f "$LOG"
-  _out=$(PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_DIR" FAKE_LOG="$LOG" FAKE_PIN_ROOT="$PIN_ROOT" \
-    CLAUDE_CONFIG_DIR="$TMP_ROOT/personal" ANTHROPIC_API_KEY=ambient-key "$TOOL" "$@")
-  printf -v "$_var" '%s' "$_out"
+  PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_DIR" FAKE_LOG="$LOG" FAKE_PIN_ROOT="$PIN_ROOT" \
+    CLAUDE_CONFIG_DIR="$TMP_ROOT/personal" ANTHROPIC_API_KEY=ambient-key "$TOOL" "$@"
 }
 
 claude_pct() { jq -c '[.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[] | {scope, pct: .effectivePercentRemaining}]'; }
 
 # No pin: today's quota-axi read, byte for byte, in the caller's environment.
-run out --json
+out=$(run --json)
 assert_equals '[{"scope":"all_models","pct":14}]' "$(printf '%s' "$out" | claude_pct)" "no pin keeps quota-axi's own reading"
 assert_contains "$(cat "$LOG")" "ccd=$TMP_ROOT/personal" "no pin leaves the caller's CLAUDE_CONFIG_DIR"
 assert_not_contains "$(cat "$LOG")" "claude -p" "no pin never asks claude"
 
 # Pinned to a Keychain-backed root: the claude row comes from the pinned account.
 printf '%s\n' "$PIN_ROOT" > "$HOME_DIR/config/claude-account"
-run out --json
+out=$(run --json)
 assert_equals '[{"scope":"all_models","pct":78},{"scope":"model:fable","pct":69}]' "$(printf '%s' "$out" | claude_pct)" "the pinned account's /usage replaces the unmeasured claude row"
 assert_not_contains "$out" '"effectivePercentRemaining":14' "the personal account's 14% never reaches dispatch"
 assert_contains "$(cat "$LOG")" "quota-axi --json ccd=$PIN_ROOT key=<unset>" "quota-axi reads the pinned root with ranked credentials shed"
@@ -83,20 +80,20 @@ assert_equals 'null' "$(printf '%s' "$out" | jq '[.providers[] | select(.provide
 . "$ROOT/bin/fm-quota-axi-lib.sh"
 if printf '%s\n' "$out" | fm_quota_json_valid; then pass "the overlaid snapshot is a valid schema-5 snapshot"; else fail "the overlaid snapshot is a valid schema-5 snapshot"; fi
 
-FAKE_SCHEMA=6 run out --json
+out=$(FAKE_SCHEMA=6 run --json)
 assert_equals '"default"' "$(printf '%s' "$out" | jq '.providers[] | select(.provider == "claude") | .accountKey')" "schema 6 keeps the default account key"
 if printf '%s\n' "$out" | fm_quota_json_valid; then pass "the overlaid snapshot is a valid schema-6 snapshot"; else fail "the overlaid snapshot is a valid schema-6 snapshot"; fi
 
 # A pinned root quota-axi can measure keeps quota-axi's row and its spendPriority.
-FAKE_PIN_MEASURED=1 run out --json
+out=$(FAKE_PIN_MEASURED=1 run --json)
 assert_not_contains "$(cat "$LOG")" "claude -p" "a measured pinned row never asks claude"
 
 # An unreadable /usage leaves the row unmeasured rather than borrowing another account.
-FAKE_CLAUDE_FAIL=1 run out --json
+out=$(FAKE_CLAUDE_FAIL=1 run --json)
 assert_equals '[]' "$(printf '%s' "$out" | claude_pct)" "a failed /usage leaves the pinned row unmeasured"
 
 # TOON: quota-axi's TOON under the pin plus the pinned_claude block.
-run out
+out=$(run)
 assert_contains "$out" 'quota[1]: claude unknown' "TOON is quota-axi's under the pin"
 assert_contains "$out" "pinned_claude: worker account $PIN_ROOT" "TOON names the pinned account"
 assert_contains "$out" '  all_models: 78% remaining (session 98%, week 78%)' "TOON carries the all-model remaining"
@@ -104,7 +101,7 @@ assert_contains "$out" '  model:fable: 69% remaining (week 69%)' "TOON carries t
 
 # ordinary pins the vendor default: CLAUDE_CONFIG_DIR unset.
 printf 'ordinary\n' > "$HOME_DIR/config/claude-account"
-run out --json
+out=$(run --json)
 assert_contains "$(cat "$LOG")" "quota-axi --json ccd=<unset>" "ordinary unsets CLAUDE_CONFIG_DIR"
 
 # A malformed pin refuses rather than reading the ambient account.
