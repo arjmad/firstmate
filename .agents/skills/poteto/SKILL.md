@@ -1,7 +1,7 @@
 ---
 name: poteto
 description: >-
-  Dispatch a poteto-mode worker when the captain types /poteto <ask> in the firstmate helm: file the ask as a task, scaffold its brief with bin/fm-brief.sh --method poteto-mode, and spawn it on Fable 5.1 xhigh, so the worker runs poteto's pstack playbook inside its worktree while firstmate supervises and merges as usual.
+  Dispatch a poteto-mode worker when the captain types /poteto <ask> in the firstmate helm, so the worker runs poteto's pstack playbook inside its worktree while firstmate supervises and merges as usual.
   Opt-in per task by that command only; never entered by firstmate itself and never inferred from an ask's wording.
 user-invocable: true
 disable-model-invocation: true
@@ -16,8 +16,7 @@ The ask is everything typed after the command, delivered with this invocation as
 This command is the helm's per-task opt-in to poteto's method: the worker runs Lauren Tan's pstack playbook for the ask, and nothing else about intake, supervision, landing, or merge authority changes.
 
 The method lives in the captain's user-level Claude Code skill at `~/.claude/skills/poteto-mode/SKILL.md`, written for his own interactive sessions.
-Firstmate cannot run it: hard rule 1 forbids writing to a project, and firstmate delegates project work instead of running subagents of its own.
-A project skill cannot take that command over either: when a personal and a project skill share a name, Claude Code runs the personal one (its skills reference says so, and it held on Claude Code 2.1.287), so `/poteto-mode` typed in the helm starts the mode in the helm itself.
+A project skill cannot take that command over: when a personal and a project skill share a name, Claude Code runs the personal one (its skills reference says so, and it held on Claude Code 2.1.287), so `/poteto-mode` typed in the helm starts the mode in the helm itself.
 Do not follow it there; answer that the helm command is `/poteto`.
 
 ## Procedure
