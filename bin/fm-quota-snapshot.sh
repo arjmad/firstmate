@@ -111,11 +111,11 @@ printf '%s\n' "$snapshot" | jq --argjson u "$usage" '
   ([$u.session, $u.week] | min) as $all |
   def row($scope; $pct):
     {scope: $scope, status: "known", effectivePercentRemaining: $pct, runway: {status: "unknown"}};
-  {provider: "claude", label: "Claude", source: "claude-usage",
+  ({provider: "claude", label: "Claude", source: "claude-usage",
    state: {status: "fresh"},
    quotaSemantics: {status: "known", effectiveAvailability:
      ([row("all_models"; $all)] +
       [$u.models | to_entries[] | row("model:\(.key)"; ([$all, .value] | min))])}}
-  + (if .schemaVersion == 6 then {accountKey: "default"} else {} end) as $row |
+  + (if .schemaVersion == 6 then {accountKey: "default"} else {} end)) as $row |
   .providers |= ((map(select(.provider != "claude"))) + [$row])
 '
