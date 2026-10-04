@@ -188,14 +188,28 @@ stop_home_processes() {  # <home>
     kill -TERM "$pid" 2>/dev/null || true
   done < <(cat "$home/orphan-pid" 2>/dev/null)
 }
-suite_cleanup() {
+# Stop every registered home, then forget them, so no later stop signals a pid
+# that a stopped home's process has since released.
+stop_registered_homes() {
   local home
   while IFS= read -r home; do
     [ -n "$home" ] && stop_home_processes "$home"
   done < <(cat "$HOMES_FILE" 2>/dev/null)
+  : > "$HOMES_FILE"
+}
+suite_cleanup() {
+  stop_registered_homes
   fm_test_cleanup
 }
 trap suite_cleanup EXIT
+# Every case ends in pass, so a case's homes stop there rather than at exit.
+# Left running, each finished case's parked host, arm, watcher, and fake session
+# keep polling beside every later case, a load that grows with the case count
+# and stretches the late cases severalfold on a 2-vCPU runner.
+pass() {
+  stop_registered_homes
+  printf 'ok - %s\n' "$1"
+}
 
 make_home() {  # <name> <attended|away|quiet> [config line]
   local home="$TMP_ROOT/$1"
