@@ -1409,9 +1409,14 @@ test_claude_stop_hook_delivers_a_close_that_turns_main_only_at_its_turn() {
 
 # If the at-turn hand-back cannot publish downtime, the healthy successor
 # cannot turn that undelivered close into a silent Stop-hook success.
-test_claude_stop_hook_notifies_when_at_turn_downtime_write_fails() {
-  local home real_mktemp
-  home=$(make_primary_home hook-turns-main-only-write-fails)
+# The host streams the first cycle's status line on a half-second probe, so
+# whether the hook's output holds it before the close depends on runner speed.
+# streamed waits until it does; withheld keeps the host from ever reading it,
+# the order a fast runner takes, where the host's own line is all the hook
+# reads and a silent exit would look like a dead host and be retried.
+assert_claude_stop_hook_notifies_when_at_turn_downtime_write_fails() {
+  local ready=$1 home real_mktemp real_head
+  home=$(make_primary_home "hook-turns-main-only-write-fails-$ready")
   turn_main_only_at_second_offer "$home"
   real_mktemp=$(command -v mktemp)
   cat > "$home/fakebin/mktemp" <<SH
@@ -1423,18 +1428,45 @@ esac
 exec "$real_mktemp" "\$@"
 SH
   chmod +x "$home/fakebin/mktemp"
+  if [ "$ready" = withheld ]; then
+    real_head=$(command -v head)
+    cat > "$home/fakebin/head" <<SH
+#!/usr/bin/env bash
+case "\$*" in *'/state/.supervision-host-arm.'*) exit 0 ;; esac
+exec "$real_head" "\$@"
+SH
+    chmod +x "$home/fakebin/head"
+  fi
   start_hook_session "$home"
   turn_end "$home"
-  wait_until 150 watcher_live "$home" || fail "hook write failure: no watcher started"
+  wait_until 150 watcher_live "$home" || fail "hook write failure ($ready): no watcher started"
+  if [ "$ready" = streamed ]; then
+    wait_until 150 sh -c 'grep -q "^watcher: started " "$1"/state/.claude-autoarm-output.* 2>/dev/null' _ "$home" \
+      || fail "fixture: the host never streamed the first cycle's status line"
+  fi
   append_status "$home" 'step one'
-  wait_until 250 hook_exited "$home" || fail "hook write failure: the Stop hook did not finish"
+  wait_until 250 hook_exited "$home" \
+    || fail "hook write failure ($ready): the Stop hook did not finish: host=$(cat "$home/state/.supervision-host.log" 2>/dev/null) hook=$(cat "$home/hook.err" 2>/dev/null)"
   [ "$(cat "$home/offer-count" 2>/dev/null)" -ge 2 ] || fail "fixture: the close did not turn main-only at its turn"
   assert_re 'pass-through[[:space:]]+downtime-unrestored' "$home/state/.supervision-host.log" "fixture: downtime publication did not fail"
+  [ "$(grep -c '	start	' "$home/state/.supervision-host.log")" -eq 1 ] \
+    || fail "hook write failure ($ready): the failed hand-back was retried as a dead host: $(cat "$home/state/.supervision-host.log")"
   assert_re '^(pending|announced):handling:' "$home/state/.watcher-down" "fixture: the marker unexpectedly became downtime"
   expect_code 2 "$(cat "$home/hook.rc")" "the Stop hook must notify main instead of dropping the close"
   assert_grep 'firstmate watcher auto-arm FAILED' "$home/hook.err" "main must receive the failure notification"
+  assert_grep 'supervision-host hand-back failed: watcher downtime could not be restored' "$home/hook.err" \
+    "the failure notice must say which hand-back failed"
   assert_re 'outcome=failed ' "$home/state/.claude-autoarm-epoch" "the failure must be committed"
+}
+
+test_claude_stop_hook_notifies_when_at_turn_downtime_write_fails() {
+  assert_claude_stop_hook_notifies_when_at_turn_downtime_write_fails streamed
   pass "host+hook: failed at-turn downtime write notifies main despite a healthy successor"
+}
+
+test_claude_stop_hook_notifies_when_at_turn_downtime_write_fails_before_the_ready_line() {
+  assert_claude_stop_hook_notifies_when_at_turn_downtime_write_fails withheld
+  pass "host+hook: failed at-turn downtime write notifies main when the close beats the first cycle's status line"
 }
 
 # The successor a pass-through leaves closes while main's rewoken turn is still
@@ -2939,6 +2971,7 @@ test_claude_stop_hook_rewakes_a_present_captain_beside_a_quiet_record
 test_claude_stop_hook_runs_the_host_without_the_file_and_off_opts_out
 test_claude_stop_hook_delivers_a_close_that_turns_main_only_at_its_turn
 test_claude_stop_hook_notifies_when_at_turn_downtime_write_fails
+test_claude_stop_hook_notifies_when_at_turn_downtime_write_fails_before_the_ready_line
 test_successor_close_during_main_turn_is_delivered_at_the_next_turn_end
 test_next_park_takes_over_the_cycle_a_pass_through_left_for_main
 test_a_park_stopped_mid_take_over_leaves_the_take_over_to_the_next_park
