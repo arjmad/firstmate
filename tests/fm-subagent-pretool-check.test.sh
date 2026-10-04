@@ -167,6 +167,22 @@ test_deny_message_defers_to_intake_classification() {
   pass "deny defers to intake classification and degrades gracefully without fm-scout.sh"
 }
 
+test_monitor_deny_cites_one_live_cycle() {
+  local actual tool
+  for tool in Monitor ProcessMonitor; do
+    expect_deny "monitor tool" "$tool"
+    actual=$(jq -r '.systemMessage' "$ERR")
+    case "$actual" in
+      *'one live supervision cycle (AGENTS.md section 8)'*) ;;
+      *) fail "monitor deny must cite the one-live-cycle rule: $actual" ;;
+    esac
+    case "$actual" in
+      *fm-brief.sh*|*fm-spawn.sh*|*fm-scout.sh*) fail "monitor deny must not route to dispatch: $actual" ;;
+    esac
+  done
+  pass "a blocked monitor cites the one-live-cycle rule instead of the dispatch route"
+}
+
 test_escape_hatch_allows_deliberate_use() {
   local rc value
   expect_allow "escape hatch set" Agent FM_ALLOW_SUBAGENT=1
@@ -283,6 +299,7 @@ test_guard_allows_session_local_todo_tools
 test_plan_only_exclusion_is_exact_name
 test_guard_never_classifies_mcp_tools
 test_deny_message_defers_to_intake_classification
+test_monitor_deny_cites_one_live_cycle
 test_escape_hatch_allows_deliberate_use
 test_task_worktree_and_non_firstmate_repo_are_inert
 test_secondmate_home_is_in_scope
