@@ -646,11 +646,13 @@ $HERDR_SECTION
 You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
 This is a SCOUT task: the deliverable is a written report, not a PR.
 The worktree is your laboratory - install, run, edit, and make scratch commits freely; all of it is discarded at teardown.
-The report is the only thing that survives, so anything worth keeping must be in it.
+The report, its notes files beside it in \`$DATA/$ID/\`, and any brain filing below are the only things that survive, so anything worth keeping must be in them.
 
 # Rules
 1. Never push to any remote and never open a PR.
-2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
+2. Stay inside this worktree; the only files you may write outside it are the report, notes files beside it in \`$DATA/$ID/\`, and the status file below.
+   Filing durable knowledge through the fleet's sanctioned memory route (\`fleet-memory\`) is permitted and is not a change outside the worktree: a research scout follows the research-playbook filing step, adding one research-log line and putting verified facts on the brain page that owns the subject, while recommendations stay in the report until the captain decides them.
+   That filing goes only to Arjun's brain; a scout working in Sapna's domain never writes Arjun's brain and never writes Sapna's.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`$STATUS_APPEND\`
@@ -674,6 +676,7 @@ $WAIT_BLOCK$INBOX_SECTION
 
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
+Keep your research notes file (quotes, URLs, dates) in \`$DATA/$ID/\` beside the report, never only in the worktree, and give every \`[read]\` or \`[sub]\` claim in the report its source URL.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
 $LAVISH_LINE
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
