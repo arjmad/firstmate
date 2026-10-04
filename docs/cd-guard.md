@@ -33,6 +33,11 @@ The cd-guard does not inspect `.fm-secondmate-home`.
 It therefore applies in a git-cloned secondmate home where git-dir equals git-common-dir, but remains inert in a treehouse-leased secondmate home that is itself a linked worktree.
 Secondmate child crew and scout worktrees are likewise inert under the linked-worktree test.
 
+## Claude maintained working directory
+
+The tracked `.claude/settings.json` sets `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1`, so Claude Code returns the shell to the project directory after every Bash call and no `cd` can persist past the command that ran it.
+Under `--claude`, the transport therefore allows without classifying whenever that variable is `1` or `true`; every other harness, and a Claude session without the variable, keeps the guard below.
+
 ## Block vs allow
 
 The discriminator is persistence to the parent shell's cwd, not the mere presence of the token `cd`.
