@@ -735,6 +735,23 @@ test_direct_pr_unpushed_commit_refuses_registration() {
   pass "fm-pr-check refuses a direct-PR registration while a later commit is only in the copy"
 }
 
+# A merge records the PR it merges through this script, and the merge is of the
+# forge's head: a direct-PR copy that moved on to local work after the PR
+# opened must not block it.
+test_merge_record_judges_forge_head_not_copy_head() {
+  local dir pushed
+  dir=$(make_case merge-forge-head)
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=firstmate:fm-task-a" "endpoint_task_id=task-a" "worktree=$dir/wt" \
+    "project=$dir/project" "kind=ship" "mode=direct-PR"
+  pushed=$(git -C "$dir/wt" rev-parse HEAD)
+  git -C "$dir/wt" commit -q --allow-empty -m 'later local work'
+  FM_PR_CHECK_MERGE=1 FM_TEST_GH_HEAD=$pushed run_check_entry "$dir" task-a https://github.com/o/r/pull/4 \
+    > "$dir/stdout" 2> "$dir/stderr" || fail "merge record refused on the copy's later HEAD: $(cat "$dir/stderr")"
+  grep -qx "pr_head=$pushed" "$dir/home/state/task-a.meta" || fail "merge record did not keep the forge head"
+  pass "fm-pr-check's merge record judges the PR's forge head, not the worker copy's later HEAD"
+}
+
 test_valid_recording_and_merge_derivation() {
   local dir expected sidecar count rc
   dir=$(make_case valid-recording)
@@ -3468,6 +3485,7 @@ test_draft_pull_request_is_not_armed
 test_secondmate_record_refuses_a_pr_watch
 test_unpushed_named_head_refuses_registration
 test_direct_pr_unpushed_commit_refuses_registration
+test_merge_record_judges_forge_head_not_copy_head
 test_valid_recording_and_merge_derivation
 test_rejected_metacharacter_bytes_are_inert
 test_static_poll_contract
