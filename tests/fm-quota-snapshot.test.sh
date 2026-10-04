@@ -70,6 +70,8 @@ assert_not_contains "$(cat "$LOG")" "claude -p" "no pin never asks claude"
 # Pinned to a Keychain-backed root: the claude row comes from the pinned account.
 printf '%s\n' "$PIN_ROOT" > "$HOME_DIR/config/claude-account"
 out=$(run --json)
+pinned_pct=$(printf "%s" "$out" | claude_pct)
+[ "$pinned_pct" = "[]" ] && { printf "# diagnostic calls:\n" >&2; sed "s/^/#   /" "$LOG" >&2; PATH="$FAKEBIN:$PATH" bash -c "type -a claude timeout perl env; locale" 2>&1 | sed "s/^/#   /" >&2; }
 assert_equals '[{"scope":"all_models","pct":78},{"scope":"model:fable","pct":69}]' "$(printf '%s' "$out" | claude_pct)" "the pinned account's /usage replaces the unmeasured claude row"
 assert_not_contains "$out" '"effectivePercentRemaining":14' "the personal account's 14% never reaches dispatch"
 assert_contains "$(cat "$LOG")" "quota-axi --json ccd=$PIN_ROOT key=<unset>" "quota-axi reads the pinned root with ranked credentials shed"
