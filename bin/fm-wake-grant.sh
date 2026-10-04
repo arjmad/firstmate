@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 BRANCH_ROWS="$STATE/.branch-eligible-rows"
 BRANCH_OWNER="$STATE/.branch-eligible-owner"
+BRANCH_ACKED="$STATE/.branch-eligible-acked"
 MAIN_ROWS="$STATE/.main-eligible-rows"
 TMP=
 LOCK_HELD=false
@@ -44,7 +45,7 @@ case "${1:-}" in
     fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
     LOCK_HELD=true
     [ "$(fm_pid_identity "$pid" 2>/dev/null || true)" = "$identity" ] || exit 1
-    rm -f -- "$BRANCH_ROWS" || exit 1
+    rm -f -- "$BRANCH_ROWS" "$BRANCH_ACKED" || exit 1
     _fm_atomic_replace "$TMP" "$BRANCH_OWNER" || exit 1
     TMP=
     ;;
@@ -79,6 +80,7 @@ case "${1:-}" in
     rc=$?
     [ "$rc" -eq 0 ] || exit "$rc"
     if [ "$replace" -eq 1 ]; then
+      rm -f -- "$BRANCH_ACKED" || exit 1
       _fm_atomic_replace "$TMP" "$BRANCH_ROWS" || exit 1
       TMP=
     fi
@@ -98,7 +100,7 @@ case "${1:-}" in
     fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
     LOCK_HELD=true
     owner_matches "$pid" "$generation" || exit 1
-    rm -f -- "$BRANCH_ROWS" "$BRANCH_OWNER" || exit 1
+    rm -f -- "$BRANCH_ROWS" "$BRANCH_OWNER" "$BRANCH_ACKED" || exit 1
     ;;
   *)
     echo "usage: fm-wake-grant.sh activate PID GENERATION | publish GENERATION SEQUENCE... | release GENERATION | deactivate PID GENERATION" >&2

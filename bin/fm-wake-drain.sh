@@ -78,6 +78,11 @@ ACTOR=$(fm_lease_actor) || exit 2
 ELIGIBLE_ROWS_FILE="$STATE/.branch-eligible-rows"
 ELIGIBLE_OWNER_FILE="$STATE/.branch-eligible-owner"
 MAIN_ROWS_FILE="$STATE/.main-eligible-rows"
+# The cutoff of the branch acknowledgement that consumed its whole grant, so a
+# repeated acknowledgement of that same wake is answered as already processed
+# instead of as a missing snapshot. bin/fm-wake-grant.sh clears it whenever it
+# activates, publishes, or deactivates a grant.
+BRANCH_ACKED_FILE="$STATE/.branch-eligible-acked"
 
 rows_file_valid() { fm_wake_grant_rows_valid "$1"; }
 
@@ -197,11 +202,26 @@ consume_actor_rows_locked() { # <rows-file> <cutoff>
 # missing or empty file here means this ran outside that handoff - a wiring
 # bug, never "nothing eligible" - and must fail loudly rather than silently
 # draining or acking nothing.
+# The one exception is a repeated acknowledgement: the branch's first ack
+# consumes its whole grant, so a second ack through the same or a lower cutoff
+# finds no snapshot because the wake is already handled. Report that and exit 0,
+# so the caller stops instead of retrying or draining for a wake already gone.
 require_branch_eligible_rows() {
   rows_file_valid "$ELIGIBLE_ROWS_FILE" || {
+    branch_ack_already_processed && exit 0
     echo "wake drain: no branch-eligible row snapshot at $ELIGIBLE_ROWS_FILE; refusing to guess what this actor may consume" >&2
     return 1
   }
+}
+
+branch_ack_already_processed() {
+  local acked
+  [ -n "$ACK_THROUGH" ] || return 1
+  [ -f "$BRANCH_ACKED_FILE" ] && [ ! -L "$BRANCH_ACKED_FILE" ] || return 1
+  acked=$(head -n 1 "$BRANCH_ACKED_FILE" 2>/dev/null) || return 1
+  case "$acked" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$ACK_THROUGH" -le "$acked" ] || return 1
+  printf 'wake drain: already acknowledged through %s; this wake is handled, so do not acknowledge or drain it again\n' "$acked" >&2
 }
 
 # The highest sequence this actor has already been presented: the branch's
@@ -940,6 +960,9 @@ if [ -n "$ACK_THROUGH" ]; then
   DRAIN_TMP=
   if [ "$ACTOR" = branch ]; then
     consume_actor_rows_locked "$ELIGIBLE_ROWS_FILE" "$ACK_THROUGH" || exit 1
+    if [ ! -s "$ELIGIBLE_ROWS_FILE" ]; then
+      printf '%s\n' "$ACK_THROUGH" > "$BRANCH_ACKED_FILE" || exit 1
+    fi
   else
     consume_actor_rows_locked "$MAIN_ROWS_FILE" "$ACK_THROUGH" || exit 1
   fi

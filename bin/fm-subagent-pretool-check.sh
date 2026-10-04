@@ -195,7 +195,15 @@ else
   ROUTE='first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work'
 fi
 
-REASON="[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, $ROUTE (blocked tool: $TOOL, delegation-shaped on \"$MATCHED\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception."
+# A blocked monitor is not delegation: the primary reaching for one is almost
+# always trying to wait on fleet work, which AGENTS.md section 8 already serves
+# through exactly one live supervision cycle. Naming the brief-then-spawn route
+# there would send it to dispatch a crewmate to wait, so cite that rule instead.
+if [ "$MATCHED" = monitor ]; then
+  REASON="[subagent-dispatch] the firstmate primary waits on fleet work through its one live supervision cycle (AGENTS.md section 8), not the harness's own monitor tool: a second watcher duplicates that cycle, leaves no durable wake record, and dies with this session. Instead, keep or repair the single live cycle with the supervision protocol emitted at session start, and never create a second one (blocked tool: $TOOL, delegation-shaped on \"$MATCHED\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception."
+else
+  REASON="[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, $ROUTE (blocked tool: $TOOL, delegation-shaped on \"$MATCHED\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception."
+fi
 
 json_escape() {
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' '

@@ -1772,6 +1772,39 @@ test_branch_actor_without_eligible_snapshot_refuses() {
   pass "a branch-actor drain with no eligible-row snapshot refuses loudly instead of draining nothing"
 }
 
+# The branch's first acknowledgement consumes its whole grant. A repeat of
+# that same acknowledgement (a retried report-then-ack command line) must say
+# the wake is already handled and succeed, not refuse for a missing snapshot,
+# while a branch ack that was never granted anything still refuses.
+test_branch_repeated_ack_reports_already_acknowledged() {
+  local dir state sequence generation
+  dir=$(make_case branch-repeat-ack)
+  state="$dir/state"
+  append_wake "$state" signal "task-a.status" "signal: task-a" || fail "append failed"
+  FM_STATE_OVERRIDE="$state" "$GRANT" activate "$$" repeat-ack || fail "branch owner activation failed"
+  FM_STATE_OVERRIDE="$state" "$GRANT" publish repeat-ack 1 || fail "branch grant publication failed"
+  FM_STATE_OVERRIDE="$state" FM_SUPERVISION_ACTOR=branch "$DRAIN" > "$dir/out" 2> "$dir/err" || fail "branch drain failed"
+  sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$dir/err")
+  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$dir/err")
+  FM_STATE_OVERRIDE="$state" FM_SUPERVISION_ACTOR=branch "$DRAIN" --ack-through "$sequence" --recovery-generation "$generation" \
+    || fail "first branch acknowledgement failed"
+  append_wake "$state" signal "task-b.status" "signal: task-b" || fail "second append failed"
+  FM_STATE_OVERRIDE="$state" FM_SUPERVISION_ACTOR=branch "$DRAIN" --ack-through "$sequence" --recovery-generation "$generation" \
+    > /dev/null 2> "$dir/repeat.err" || fail "a repeated branch acknowledgement refused: $(cat "$dir/repeat.err")"
+  grep -q "already acknowledged through $sequence" "$dir/repeat.err" \
+    || fail "the repeat did not say the wake was already acknowledged: $(cat "$dir/repeat.err")"
+  ! grep -q "no branch-eligible row snapshot" "$dir/repeat.err" || fail "the repeat still reported a missing snapshot"
+  grep -q "signal: task-b" "$state/.wake-queue" || fail "the repeated acknowledgement consumed a row it was never granted"
+  if FM_STATE_OVERRIDE="$state" FM_SUPERVISION_ACTOR=branch "$DRAIN" --ack-through 2 --recovery-generation "$generation" \
+    > /dev/null 2> "$dir/higher.err"; then
+    fail "a branch ack above the recorded cutoff succeeded without a grant"
+  fi
+  grep -q "no branch-eligible row snapshot" "$dir/higher.err" || fail "the ungranted ack did not refuse: $(cat "$dir/higher.err")"
+  FM_STATE_OVERRIDE="$state" "$GRANT" activate "$$" repeat-ack-2 || fail "branch owner reactivation failed"
+  [ ! -e "$state/.branch-eligible-acked" ] || fail "activation kept the previous grant's acknowledgement record"
+  pass "a repeated branch acknowledgement reports already acknowledged instead of a missing snapshot"
+}
+
 test_wake_publish_requires_atomic_recovery_evidence() {
   local dir state fakebin real_mv rc out
   dir=$(make_case wake-publish-recovery-evidence)
@@ -3465,6 +3498,7 @@ test_main_ack_leaves_a_row_that_arrived_after_its_drain_unclaimed
 test_actor_filter_precedes_same_key_deduplication
 test_main_reclaims_a_grant_whose_branch_owner_exited
 test_branch_actor_without_eligible_snapshot_refuses
+test_branch_repeated_ack_reports_already_acknowledged
 test_wake_publish_requires_atomic_recovery_evidence
 test_recovery_mint_and_delivery_log_avoid_sibling_subst
 test_legacy_generationless_wake_is_adopted

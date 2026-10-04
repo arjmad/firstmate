@@ -17,6 +17,8 @@
 # draft state does not refuse, matching how the head read below is optional.
 # bin/fm-pr-merge.sh records through this script with FM_PR_CHECK_MERGE=1 and
 # skips this refusal, because its own merge-time draft refusal is authoritative.
+# It also judges the forge-reported PR head rather than the worker copy's HEAD,
+# because the merge is of that head, not of whatever the copy holds now.
 # Usage: fm-pr-check.sh <task-id> <pr-url>
 set -eu
 
@@ -142,7 +144,12 @@ case "$PROVIDER:$MODE" in
   *:no-mistakes|*:) DONE_LINE="done: PR $URL checks green" ;;
   *) DONE_LINE="done: PR $URL" ;;
 esac
-if { [ -z "$PR_HEAD" ] || ! fm_dod_forge_head_is_named_head "$MODE"; } \
+# A merge records the PR it is about to merge, and that merge is pinned to the
+# forge's live head, so a forge-reported head is the named head in every mode:
+# a worker copy that has since moved on to local work must not block it.
+# Arming a ready report keeps judging a direct-PR worker's copy HEAD.
+if { [ -z "$PR_HEAD" ] \
+    || { [ "${FM_PR_CHECK_MERGE:-}" != 1 ] && ! fm_dod_forge_head_is_named_head "$MODE"; }; } \
   && ! GATE_REASON=$(fm_dod_accept_ship_done "${KIND:-ship}" "$MODE" "$WT" "$PROJECT" "$DONE_LINE" "$STATE" "$ID" "$META"); then
   echo "error: $GATE_REASON" >&2
   exit 1
