@@ -345,9 +345,9 @@ jq -e --slurpfile rules "$RULES" '
        (.usage.output_tokens | type) == "number"))' \
   "$RESP_FILE" >/dev/null 2>&1 || emit_error "response is not a rule Choice answer"
 
-# ---- quota evidence: one quota-axi --json snapshot -----------------------------
+# ---- quota evidence: one quota-axi --json snapshot of the pinned worker account
 command -v quota-axi >/dev/null 2>&1 || emit_error "quota-axi not installed"
-quota-axi --json > "$QUOTA" 2>/dev/null || emit_error "quota-axi --json failed"
+"$SCRIPT_DIR/fm-quota-snapshot.sh" --json > "$QUOTA" 2>/dev/null || emit_error "quota-axi --json failed"
 fm_quota_json_valid < "$QUOTA" || emit_error "quota-axi --json returned an invalid snapshot"
 
 # ---- resolution: declared gates + quota evidence + argmax, all in jq ------------
