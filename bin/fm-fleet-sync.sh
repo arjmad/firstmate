@@ -19,7 +19,9 @@
 # walks up, so a plain nested directory would otherwise resolve to the enclosing
 # repository (the firstmate checkout) and be synced under that directory's label.
 # Anything else is reported as "skipped: not a clone root" naming the repository
-# that would have been touched.
+# that would have been touched. A candidate that has a .git yet yields no work
+# tree (for example a stray core.bare=true) is a broken clone, reported STUCK
+# with its core.bare and core.worktree values rather than as a benign skip.
 # Pruning never deletes the checked-out branch or a branch that still has a
 # worktree, so it cannot discard unlanded work; set FM_FLEET_PRUNE=0 to disable it.
 # When the fetch fails on an orphaned .git/packed-refs.lock (left by a ref rewrite
@@ -333,7 +335,13 @@ report_stuck() {
   echo "$label: STUCK: on $state, $behind commits behind $BASE - needs attention"
 }
 
-# True when $PROJ is the root of its own work tree; otherwise prints the skip line.
+# One config value of $PROJ's own .git, read without needing a work tree.
+git_dir_config() {
+  git --git-dir="$PROJ/.git" config --get "$1" 2>/dev/null || echo unset
+}
+
+# True when $PROJ is the root of its own work tree; otherwise prints the skip
+# line, or a STUCK line when $PROJ has a .git that yields no work tree.
 require_clone_root() {
   # Git repository discovery walks UP from $PROJ, so a plain directory merely
   # nested inside a repository - a worktree container left under projects/, say -
@@ -344,6 +352,13 @@ require_clone_root() {
   # $PROJ to be the root of its own work tree before any other git command runs.
   proj_top=$(git -C "$PROJ" rev-parse --show-toplevel 2>/dev/null) || proj_top=""
   if [ -z "$proj_top" ]; then
+    # A clone whose .git is present but yields no work tree is broken, not
+    # absent - most often a stray core.bare=true or core.worktree in its own
+    # config - and stays broken until someone looks, so say so loudly.
+    if [ -e "$PROJ/.git" ]; then
+      echo "$label: STUCK: has .git but git sees no work tree (core.bare=$(git_dir_config core.bare), core.worktree=$(git_dir_config core.worktree)) - needs attention"
+      return 1
+    fi
     echo "$label: skipped: not a git repo"
     return 1
   fi

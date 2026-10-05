@@ -44,6 +44,11 @@
 #                          bound at the next sighting, and a done worker with no
 #                          pr= record keeps alarming on every new hash, because
 #                          nothing says firstmate has seen that delivery yet.
+#                          A worker whose status log still holds an open
+#                          needs-decision or blocked record takes the same
+#                          once-per-window bound (open_decision_stale_bound),
+#                          and a busy phase never erases a still-standing
+#                          declared wait's re-surface throttle.
 #                          A provably-working stale past the
 #                          wedge threshold also surfaces, with an "escalation N"
 #                          count in the reason; at FM_WEDGE_DEMAND_INSPECT_COUNT
@@ -1757,6 +1762,19 @@ clear_pause_tracking() {  # <window-key>
   clear_stale_hash_tracking "$key"
 }
 
+# What a busy pane clears: everything clear_pause_tracking does except the
+# re-surface throttle. A busy turn on a paused pane is usually the worker
+# reacting to its own background job, not the wait ending, and the throttle is
+# already scoped to its declaration (stale_wait_throttled and
+# resurface_absorbed compare that scope), so a new status event still starts a
+# fresh window. Erasing it here let every busy-then-idle cycle re-alarm the
+# same declared wait as a new first sight.
+clear_pause_tracking_for_busy() {  # <window-key>
+  local key=$1
+  rm -f "$STATE/.paused-$key" "$STATE/.paused-rechecked-$key"
+  clear_stale_hash_tracking "$key"
+}
+
 # Reconcile a declared pause or captain-held status with authoritative crew state.
 # After fm-crew-state has fallen back to stopped or unknown, paused classification is
 # recovered only for a confidently dead ordinary crew, or for a secondmate, whose
@@ -1946,6 +1964,28 @@ done_pr_stale_bound() {  # <window-key> <task> [state-line]
   stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION"
 }
 
+# The fourth record of a legitimate wait: a decision the worker opened with
+# `needs-decision` or `blocked` and that its status log still holds open
+# (status_open_decisions owns the fold, the same one fm-crew-state.sh's current
+# state and the drain's OPEN DECISIONS section read). That decision already
+# reaches firstmate twice over - as the signal that carried it and on every
+# drain until a `resolved` line closes it - so a waiting worker's idle pane
+# churning its render has nothing to add. The scope binds the most recently
+# opened key and the status-log signature, so a new status event or a different
+# decision starts its own window; the first sight of each window still alarms
+# and the repetition inside PAUSE_RESURFACE_SECS after it is absorbed, through
+# the same throttle the other bounds use.
+open_decision_stale_bound() {  # <window-key> <task>
+  local key=$1 task=$2 open record
+  STALE_WAIT_DECLARATION=
+  [ -n "$task" ] || return 1
+  open=$(status_open_decisions "$STATE/$task.status")
+  [ -n "$open" ] || return 1
+  record=${open##*$'\n'}
+  STALE_WAIT_DECLARATION="open-decision:${record%%$'\t'*}:$(fm_wake_signal_sig "$STATE/$task.status" || true)"
+  stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION"
+}
+
 # Surface a stale pane no classifier could resolve, so firstmate inspects it: it
 # may have finished through an interactive menu that wrote no status, be waiting on
 # a decision, or be wedged. pause_state_class deliberately answers `none` for a
@@ -1962,9 +2002,10 @@ done_pr_stale_bound() {  # <window-key> <task> [state-line]
 # and the throttle is read BEFORE anything is queued and advanced only by a wake
 # that really fires - a throttle written by the wake it should have prevented, or
 # read after that wake was already appended, bounds nothing.
-# Both records of an ordinary crew wait bound it (see task_captain_call_open
-# above): the status line the worker declared, and the backlog hold firstmate
-# recorded once the captain took the work in hand.
+# Every record of an ordinary crew wait bounds it (see task_captain_call_open
+# above): the status line the worker declared, the backlog hold firstmate
+# recorded once the captain took the work in hand, and a decision the worker's
+# own status log still holds open (open_decision_stale_bound).
 surface_nonterminal_stale() {  # <window> <hash>
   local win=$1 h=$2 key task last declared=1 bounded=1 throttled=1 until now
   key=$(window_key "$win")
@@ -1996,6 +2037,9 @@ surface_nonterminal_stale() {  # <window> <hash>
       stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION" && throttled=0
     fi
   elif captain_call_stale_bound "$key" "$task"; then
+    bounded=0
+    throttled=0
+  elif [ -z "$STALE_WAIT_DECLARATION" ] && open_decision_stale_bound "$key" "$task"; then
     bounded=0
     throttled=0
   elif [ -n "$STALE_WAIT_DECLARATION" ]; then
@@ -3160,6 +3204,15 @@ EOF
               clear_write_tracking "$key"
               triage_log "absorbed stale (open captain call already surfaced for this status): $w"
             elif [ -z "$STALE_WAIT_DECLARATION" ] \
+              && open_decision_stale_bound "$key" "$task"; then
+              # Same bound, fourth record: the worker's own open decision is
+              # already in firstmate's hands (open_decision_stale_bound owns the
+              # contract), so a new pane hash inside the window is absorbed.
+              printf '%s' "$h" > "$sf"
+              rm -f "$ssf"
+              clear_write_tracking "$key"
+              triage_log "absorbed stale (open decision already surfaced for this status): $w"
+            elif [ -z "$STALE_WAIT_DECLARATION" ] \
               && done_pr_stale_bound "$key" "$task" "$stale_state_line"; then
               # Same bound, third record: the worker's current state is done and
               # its recorded PR is already in firstmate's hands (done_pr_stale_bound
@@ -3258,10 +3311,11 @@ EOF
         fi
         # A busy pane normally means real work resumed, so stale pause bookkeeping
         # is cleared - but not in the same poll the declared-pause cadence just
-        # recorded it, or the re-surface throttle it depends on would be erased and
-        # the pause would re-surface every poll instead of once per long cadence.
+        # recorded it, and never the declaration-scoped re-surface throttle
+        # (clear_pause_tracking_for_busy), or the pause would re-surface on every
+        # busy-then-idle cycle instead of once per long cadence.
         if [ "$paused_bound" -ne 0 ] && [ -e "$pf" ] && { [ "$n" -ge 2 ] || ! status_is_paused_or_captain_held "$(status_declared_wait_line "$STATE/$(window_to_task "$w" "$STATE").status")"; }; then
-          clear_pause_tracking "$key"
+          clear_pause_tracking_for_busy "$key"
         fi
       fi
     else
@@ -3291,8 +3345,8 @@ EOF
         esac
       elif [ "$paused_bound" -ne 0 ] && [ -e "$pf" ]; then
         # Same rule as the stable-hash branch: never clear pause bookkeeping the
-        # declared-pause cadence recorded on this very poll.
-        clear_pause_tracking "$key"
+        # declared-pause cadence recorded on this very poll, nor its throttle.
+        clear_pause_tracking_for_busy "$key"
       fi
     fi
   done < <(recorded_windows)

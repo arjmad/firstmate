@@ -2915,6 +2915,54 @@ test_live_declared_wait_churn_honors_the_resurface_throttle() {
   pass "a parked live worker surfaces once, absorbs pane churn for the whole re-surface window, then re-surfaces when it elapses"
 }
 
+# A paused worker reacting to its own background job turns its pane busy for a
+# moment, then idles again with nothing new to say. That busy phase must not
+# erase the declared wait's re-surface throttle, or every busy-then-idle cycle
+# re-alarms the same declaration as a new first sight (the 2026-10-05 loop: a
+# worker paused on its benchmark runs woke supervision four times in six
+# minutes). A new declaration still starts its own window.
+test_busy_cycle_keeps_the_declared_pause_throttle() {
+  local dir state fakebin out capture_file statusf window key sig wakes throttle
+  dir=$(make_case paused-busy-cycle); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/parked.status"
+  window="test:fm-parked"
+  printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/parked.meta"
+  printf 'paused: waiting on two benchmark runs\n' > "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-parked_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  throttle="$state/.paused-resurfaced-$key"
+
+  printf 'parked, elapsed 1s' > "$capture_file"
+  printf '%s' "$(hash_text 'parked, elapsed 1s')" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" exit \
+    || fail "first sight of a paused live worker did not surface"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the first surface"
+  [ -e "$throttle" ] || fail "the first surface recorded no re-surface throttle"
+
+  # The worker wakes on its background job: the pane is busy for several polls.
+  printf 'benchmark finished, reading results\nCtrl+c:cancel' > "$capture_file"
+  parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" absorb \
+    || fail "watcher exited while the paused worker was busy"
+  [ -e "$throttle" ] || fail "a busy phase erased the declared pause's re-surface throttle"
+
+  # Back to idle on a new hash, with the same declaration standing.
+  printf 'parked, waiting on the second run' > "$capture_file"
+  parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" absorb \
+    || fail "the same declared pause re-alarmed after a busy-then-idle cycle"
+  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' \
+    "$state/.wake-queue" 2>/dev/null || echo 0)
+  [ "$wakes" -eq 0 ] || fail "a busy-then-idle cycle re-alarmed the same pause $wakes time(s)"
+
+  # A new declaration is a new first sight, busy phase or not.
+  printf 'paused: waiting on the rerun\n' >> "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-parked_status"
+  printf 'parked, waiting on the rerun' > "$capture_file"
+  parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" exit \
+    || fail "a new pause declaration inherited the old declaration's throttle"
+  pass "a busy-then-idle cycle keeps a declared pause's re-surface throttle, while a new declaration surfaces"
+}
+
 test_live_paused_until_controls_recheck_time() {
   local dir state fakebin out capture_file statusf window key sig wakes future past
   dir=$(make_case live-paused-until); state="$dir/state"; fakebin="$dir/fakebin"
@@ -4098,14 +4146,14 @@ test_open_captain_call_bounds_stale_churn() {
 
 # The other half of the same bound, and the one that decides whether widening the
 # wait was safe: the identical fixtures with NO hold must keep alarming on every
-# new hash, on both branches.
+# new hash, on both branches. A blocker is not among them: its open decision is a
+# record of its own (test_open_decision_bounds_stale_churn).
 test_stale_churn_without_a_captain_call_still_alarms() {
   local spec name line dir state out capture round wakes
   command -v tasks-axi >/dev/null 2>&1 \
     || { echo "skip: tasks-axi not found (unheld stale alarm)"; return 0; }
   for spec in \
     'unheld-delivery|done: PR https://example.invalid/pull/1 checks green' \
-    'unheld-blocker|blocked: cannot reach the release host' \
     'unheld-worker-line|working: still tidying the branch'
   do
     name=${spec%%|*}; line=${spec#*|}
@@ -4123,7 +4171,60 @@ test_stale_churn_without_a_captain_call_still_alarms() {
       round=$((round + 1))
     done
   done
-  pass "a stale window with no open captain call keeps alarming on every new hash"
+  pass "a stale window with no open captain call or open decision keeps alarming on every new hash"
+}
+
+# A worker waiting on its own open decision - a needs-decision question, a
+# blocker, or either one still open beneath a later working: line - already
+# reaches firstmate through the signal that carried it and on every drain's OPEN
+# DECISIONS until a resolved line closes it. Its idle pane's churn must not
+# re-alarm it inside the re-surface window, while the first sight and the
+# window's end still surface, and resolving the decision restores the alarm.
+test_open_decision_bounds_stale_churn() {
+  local spec name line dir state out capture throttle wakes
+  command -v tasks-axi >/dev/null 2>&1 \
+    || { echo "skip: tasks-axi not found (open-decision stale bound)"; return 0; }
+  for spec in \
+    'open-question|needs-decision [key=reattach]: waiting on the captain to re-attach the browser' \
+    'open-blocker|blocked: cannot reach the release host' \
+    $'open-beneath-working|needs-decision [key=reattach]: waiting on the captain\nworking: tidying while the question stands'
+  do
+    name=${spec%%|*}; line=${spec#*|}
+    dir=$(make_hold_home "$name" "$line" nohold) \
+      || fail "[$name] could not build an open-decision fixture"
+    state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
+    throttle="$state/.paused-resurfaced-$(hold_key)"
+
+    hold_watch_surface "$dir" "$out" "$capture" 'idle, elapsed 1s' \
+      || fail "[$name] first sight of a worker waiting on its open decision did not surface"
+    wakes=$(hold_stale_wakes "$state")
+    [ "$wakes" -eq 1 ] || fail "[$name] first sight produced $wakes wakes instead of one"
+    ack_stopped_cycle "$state" || fail "[$name] could not acknowledge the first surface"
+
+    hold_watch_churn "$dir" "$out" "$capture" 'idle, tick' 2 \
+      || fail "[$name] watcher exited during pane churn instead of supervising through it"
+    wakes=$(hold_stale_wakes "$state")
+    [ "$wakes" -eq 0 ] \
+      || fail "[$name] pane churn re-alarmed an open decision $wakes time(s) inside the re-surface window"
+
+    [ -e "$throttle" ] || fail "[$name] the absorbed churn recorded no re-surface cadence to elapse"
+    set_mtime "$(( $(date +%s) - 5000 ))" "$throttle"
+    hold_watch_surface "$dir" "$out" "$capture" 'idle, elapsed 9s' \
+      || fail "[$name] an open decision did not re-surface once its re-surface window elapsed"
+    wakes=$(hold_stale_wakes "$state")
+    [ "$wakes" -eq 1 ] || fail "[$name] elapsed re-surface window produced $wakes wakes instead of one"
+    ack_stopped_cycle "$state" || fail "[$name] could not acknowledge the elapsed re-surface"
+  done
+
+  # Closing the decision ends the bound: the next new hash is a fresh first sight.
+  printf 'resolved [key=reattach]: the captain re-attached the browser\nworking: back on the theme\n' \
+    >> "$state/held-merge.status"
+  printf '%s' "$(seen_sig "$state/held-merge.status")" > "$state/.seen-held-merge_status"
+  hold_watch_surface "$dir" "$out" "$capture" 'idle, after resolve' \
+    || fail "a resolved decision kept absorbing the stale alarm"
+  wakes=$(hold_stale_wakes "$state")
+  [ "$wakes" -eq 1 ] || fail "after resolve, a new hash produced $wakes wakes instead of one"
+  pass "a worker waiting on its open decision surfaces once, absorbs pane churn, re-surfaces when the window elapses, and alarms again once resolved"
 }
 
 
@@ -7155,6 +7256,7 @@ test_exited_declared_pause_is_bounded_but_live_gate_surfaces
 test_own_work_wait_keeps_first_alert_then_long_cadence
 test_absorbed_replacement_wait_does_not_inherit_the_old_throttle
 test_live_declared_wait_churn_honors_the_resurface_throttle
+test_busy_cycle_keeps_the_declared_pause_throttle
 test_live_paused_until_controls_recheck_time
 test_wedge_threshold_defers_to_a_declared_wait_under_a_working_verdict
 test_wedge_threshold_keeps_a_wait_past_a_default_key_answer
@@ -7165,6 +7267,7 @@ test_wedge_threshold_parked_gate_is_off_until_armed
 test_wedge_defer_refuses_a_half_filled_wait_record
 test_open_captain_call_bounds_stale_churn
 test_stale_churn_without_a_captain_call_still_alarms
+test_open_decision_bounds_stale_churn
 test_failed_wake_append_does_not_arm_the_captain_hold_throttle
 test_reheld_captain_call_starts_its_own_resurface_window
 test_secondmate_paused_resurfaces_in_normal_mode

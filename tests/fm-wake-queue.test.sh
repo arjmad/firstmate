@@ -49,8 +49,10 @@ test_concurrent_append_and_drain() {
   generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$dir/drain-two.err")
   [ -n "$sequence" ] && [ -n "$generation" ] || fail "final replay omitted its acknowledgement boundary"
   FM_STATE_OVERRIDE="$state" "$DRAIN" --ack-through "$sequence" --recovery-generation "$generation" \
-    || fail "concurrent records could not be acknowledged"
+    2> "$dir/ack.err" || fail "concurrent records could not be acknowledged"
   [ ! -s "$state/.wake-queue" ] || fail "acknowledged concurrent records remained queued"
+  assert_grep "wake drain: acknowledged through $sequence (40 row(s) consumed)" "$dir/ack.err" \
+    "a successful acknowledgement did not confirm what it consumed: $(cat "$dir/ack.err")"
   pass "concurrent append plus drain preserves durable records through acknowledgement"
 }
 

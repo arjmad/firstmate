@@ -684,6 +684,31 @@ test_non_clone_dir_named_directly_never_syncs_the_enclosing_repo() {
   pass "the single-project form also refuses a directory that is not its own clone root"
 }
 
+test_broken_clone_is_stuck_not_skipped() {
+  local home clone out
+  home=$(new_home)
+  clone=$(build_pair "$home" bare)
+  advance_origin "$home" bare C1
+  # A stray core.bare=true leaves .git in place while git sees no work tree.
+  git -C "$clone" config core.bare true
+
+  out=$(run_sync "$home")
+
+  assert_contains "$out" "bare: STUCK: has .git but git sees no work tree (core.bare=true, core.worktree=unset) - needs attention" \
+    "a clone whose .git yields no work tree must be reported STUCK with its core settings"
+  assert_not_contains "$out" "bare: skipped: not a git repo" \
+    "a broken clone must not be reported as a benign skip"
+  [ "$(git --git-dir="$clone/.git" config --get core.bare)" = true ] \
+    || fail "the sync changed the broken clone's config instead of only reporting it"
+
+  rm -rf "$clone"
+  mkdir -p "$clone"
+  out=$(run_sync "$home" bare)
+  assert_contains "$out" "bare: skipped: not a git repo" \
+    "a directory with no .git at all stays a benign skip"
+  pass "a clone with .git but no work tree is STUCK, while a plain directory is still skipped"
+}
+
 test_symlinked_clone_still_syncs() {
   local home clone out
   home=$(new_home)
@@ -932,6 +957,7 @@ test_transient_packed_refs_lock_self_clears
 test_non_signature_fetch_failure_is_not_retried
 test_non_clone_dir_never_syncs_the_enclosing_repo
 test_non_clone_dir_named_directly_never_syncs_the_enclosing_repo
+test_broken_clone_is_stuck_not_skipped
 test_symlinked_clone_still_syncs
 test_live_checkout_fast_forwards_and_runs_post_update_once
 test_live_checkout_first_sighting_records_without_running

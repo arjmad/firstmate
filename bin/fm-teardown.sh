@@ -183,6 +183,7 @@
 # never left leased forever. If the treehouse return fails, teardown leaves the
 # leased home and state in place instead of hiding a still-held lease.
 # Usage: fm-teardown.sh <task-id> [--force] [--legacy-record]
+#        fm-teardown.sh --help
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
 #   checks, and discards secondmate child work for kind=secondmate. Only use it
 #   when the captain has explicitly said to discard the work.
@@ -298,6 +299,23 @@
 #     live remote secondmate worker are out of scope. Best effort: a sweep
 #     failure never blocks this teardown.
 set -eu
+
+# Print the Usage block of this header. It runs before any source or state is
+# read, so asking for help can never be mistaken for a task id.
+usage() {
+  awk '
+    !/^#/ || (on && /^#$/) { exit }
+    /^# Usage:/ { on = 1 }
+    on { sub(/^# ?/, ""); print }
+  ' "$0"
+}
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+  --*)
+    echo "error: invalid teardown request: the task id comes first (see --help)" >&2
+    exit 2
+    ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
