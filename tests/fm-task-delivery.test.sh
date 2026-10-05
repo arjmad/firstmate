@@ -364,6 +364,8 @@ STUB
         "$mode: $contract omitted the ship scratch-location rule"
       assert_grep "Outside the worktree, write only that task material and the status and steering-inbox records authorized below." "$contract" \
         "$mode: $contract omitted the ship outside-worktree write boundary"
+      assert_grep "Filing durable knowledge through the fleet's sanctioned memory route" "$contract" \
+        "$mode: $contract dropped the durable-knowledge filing carve-out"
       assert_grep "Leave the worktree clean before reporting done." "$contract" \
         "$mode: $contract omitted the clean-before-done rule"
     done
