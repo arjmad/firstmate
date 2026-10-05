@@ -12,6 +12,9 @@
 # end-to-end cwd-leak regression, and the per-harness wiring. No harness is
 # spawned; live per-harness evidence lives in docs/cd-guard.md.
 set -u
+# A Claude session in this checkout exports it through .claude/settings.json;
+# the suite sets it only where a test asks for it.
+unset CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -282,6 +285,22 @@ test_e2e_cwd_leak_regression() {
   pass "cd-guard: reproduces the cwd leak and denies the exact command that causes it"
 }
 
+test_claude_maintained_cwd_allows() {
+  local value out rc
+  for value in 1 true; do
+    out=$(CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=$value "$CHECK" --claude --command 'cd projects/clone' 2>&1); rc=$?
+    expect_code 0 "$rc" "Claude with CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=$value must allow a top-level cd"
+    [ -z "$out" ] || fail "maintained-cwd allow must be silent: $out"
+  done
+  out=$(CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=0 "$CHECK" --claude --command 'cd projects/clone' 2>&1); rc=$?
+  expect_code 2 "$rc" "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=0 must keep the guard"
+  out=$(CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1 "$CHECK" --command 'cd projects/clone' 2>&1); rc=$?
+  expect_code 2 "$rc" "the Claude-only reset must not relax other harnesses"
+  jq -e '.env.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR == "1"' "$ROOT/.claude/settings.json" >/dev/null \
+    || fail ".claude/settings.json must set CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1"
+  pass "cd-guard: allows a Claude top-level cd when Claude resets the shell cwd after every call"
+}
+
 # --- fail-open transport behavior ------------------------------------------
 
 test_fail_open_empty_stdin() {
@@ -391,6 +410,7 @@ test_inert_in_child_worktree
 test_inert_when_not_firstmate_repo
 test_inert_when_not_a_git_repo
 test_e2e_cwd_leak_regression
+test_claude_maintained_cwd_allows
 test_fail_open_empty_stdin
 test_fail_open_unparseable_json
 test_fail_open_missing_node

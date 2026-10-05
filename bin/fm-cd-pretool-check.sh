@@ -38,6 +38,11 @@
 # Grok consumes the stdout decision object.
 # OpenCode and Pi consume exit 2 plus stderr.
 # Cursor consumes the stdout decision object.
+#
+# Under --claude, a truthy CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR (1 or true)
+# allows without classifying: Claude Code then returns the shell to the project
+# directory after every Bash call, so no cwd change can persist. The tracked
+# .claude/settings.json sets it for Claude sessions in this checkout.
 set -u
 
 CMD=""
@@ -111,6 +116,12 @@ if [ "$CMD_SET" -eq 0 ]; then
 fi
 
 [ -n "$CMD" ] || exit 0
+
+if [ "$CLAUDE_MODE" -eq 1 ]; then
+  case "${CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR:-}" in
+    1|true|TRUE|True) exit 0 ;;
+  esac
+fi
 
 # Strict-superset prefilter (transport only; owns zero classification
 # semantics). Strip syntax bytes that the classifier joins within a shell word
