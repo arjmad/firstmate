@@ -4404,6 +4404,39 @@ SH
   pass "a forced secondmate with a missing own adapter sibling refuses before child cleanup"
 }
 
+test_help_is_never_read_as_a_task_id() {
+  local case_dir rc flag before
+  case_dir=$(make_case help-flag)
+  before=$(ls -A "$case_dir/state")
+  for flag in --help -h; do
+    rc=0
+    FM_ROOT_OVERRIDE="$ROOT" \
+    FM_STATE_OVERRIDE="$case_dir/state" \
+    FM_DATA_OVERRIDE="$case_dir/data" \
+    FM_CONFIG_OVERRIDE="$case_dir/config" \
+    PATH="$case_dir/fakebin:$PATH" \
+      "$TEARDOWN" "$flag" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+    [ "$rc" -eq 0 ] || fail "help-flag: $flag should print usage and exit 0 (rc=$rc): $(cat "$case_dir/stderr")"
+    assert_grep "Usage: fm-teardown.sh <task-id>" "$case_dir/stdout" \
+      "help-flag: $flag did not print the usage block"
+    if [ -s "$case_dir/stderr" ]; then
+      fail "help-flag: $flag wrote an error: $(cat "$case_dir/stderr")"
+    fi
+  done
+  rc=0
+  FM_ROOT_OVERRIDE="$ROOT" \
+  FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
+  FM_CONFIG_OVERRIDE="$case_dir/config" \
+  PATH="$case_dir/fakebin:$PATH" \
+    "$TEARDOWN" --force some-task > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  [ "$rc" -eq 2 ] || fail "help-flag: a leading flag in place of the task id should be refused (rc=$rc)"
+  assert_grep "invalid teardown request" "$case_dir/stderr" \
+    "help-flag: a leading flag was not refused as an invalid request"
+  [ "$(ls -A "$case_dir/state")" = "$before" ] || fail "help-flag: a refused request touched state: $(ls -A "$case_dir/state")"
+  pass "--help and -h print usage, and a leading flag is never read as a task id"
+}
+
 test_retained_sources_still_reach_the_ordinary_refusal() {
   local case_dir rc
   case_dir=$(make_case retained-sources)
@@ -4421,6 +4454,7 @@ test_retained_sources_still_reach_the_ordinary_refusal() {
   pass "present required sources still reach the ordinary teardown refusal"
 }
 
+test_help_is_never_read_as_a_task_id
 test_missing_startup_source_refuses_before_cleanup
 test_unreadable_startup_source_refuses_before_cleanup
 test_missing_adapter_sibling_refuses_before_cleanup
