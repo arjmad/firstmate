@@ -232,6 +232,7 @@ A local skill exists only in this home, so offloading an entry out of `data/capt
    The only graduation moves are promotion to tracked shared material through a PR, folding a learning into the captain-preference destination selected by AGENTS.md, archiving a stale entry to `data/memory-archive.md`, autonomous offload of an eligible non-pinned conditional entry to an already-existing allowed owner through the reduce flow above, captain-approved offload of a pinned durable conditional entry to a JIT-loaded owner executed through the migration step above, or deletion of an entry that is a duplicate or already preserved through a stronger existing owner.
    A stale unique fact is never deleted, only archived.
    Do not invent another graduation path.
+   A captain ruling this session saw change is superseded everywhere, not only in memory: retire its older copies this pass under `captain-hold-lifecycle`'s superseded-ruling rule, and record any captain answer still held only in conversation on its origin row through `bin/fm-captain-hold.sh answer`, never in a new decisions or answers file.
 
 ## Open-record persistence
 

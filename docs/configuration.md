@@ -401,6 +401,13 @@ A `manual` home owns its backlog file outright: the lifecycle transitions above 
 Absent or `tasks-axi` selects the tasks-axi path.
 On the default markdown adapter, tasks-axi and manual edits produce the same `## In flight`, `## Queued`, and `## Done` sections.
 
+### Superseded-ruling hold guard (config/captain-name)
+
+The optional local, gitignored `config/captain-name` names the captain, one name per line.
+While it is present, [`bin/fm-tasks-axi.sh`](../bin/fm-tasks-axi.sh) `hold`, including a park, refuses a reason that cites a dated captain quote older than the newest one on record for that task, unless the caller passes `--cite-older-quote`.
+A hold that re-cites an older ruling would otherwise quietly undo the captain's newer word.
+With the file absent nothing is checked; the script header owns the quote form and the records it reads.
+
 ### Using a separate operational home
 
 The tracked `.tasks.toml` paths resolve against the directory tasks-axi runs in, not `FM_HOME`, so a bare `tasks-axi` run from the code root addresses the code root's `data/` whenever the home lives elsewhere.
