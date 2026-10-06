@@ -217,6 +217,10 @@ test_ship_modes_generate_clean_briefs() {
     assert_grep "## Firstmate spec" "$brief" "$id: brief missing Firstmate spec subsection"
     assert_grep 'never a bare number such as "PR 108"' "$brief" "$id: brief missing the full-PR-URL rule"
     assert_grep "Filing durable knowledge through the fleet's sanctioned memory route" "$brief" "$id: brief missing the durable-knowledge filing carve-out"
+    assert_grep "file it only through that brain's MCP tools - \`remember\` for a fact; \`put_page\`, \`edit_page\`, or \`add_timeline_entry\` for a page" "$brief" \
+      "$id: brief does not route brain filing through the brain's MCP tools"
+    assert_grep "never by editing brain files or opening a brain PR directly" "$brief" \
+      "$id: brief still lets a worker edit brain files directly"
     assert_grep "mid-task \`working:\` line (including setup complete) is nonterminal" "$brief" \
       "$id: brief missing nonterminal working:/setup-complete gate protection"
     assert_no_grep "EOF" "$brief" "$id: brief leaked a heredoc EOF marker (unterminated heredoc)"
@@ -1023,6 +1027,12 @@ test_scout_files_brain_and_keeps_notes_with_report() {
     "scout brief missing the durable-knowledge filing carve-out"
   assert_grep "recommendations stay in the report until the captain decides them" "$brief" \
     "scout brief lets recommendations reach the brain undecided"
+  assert_grep "file it only through that brain's MCP tools" "$brief" \
+    "scout brief does not route brain filing through the brain's MCP tools"
+  assert_grep "never by editing brain files or opening a brain PR directly" "$brief" \
+    "scout brief still lets a research scout edit brain files directly"
+  assert_no_grep "research-log line" "$brief" \
+    "scout brief still asks for a hand-written research-log line"
   assert_grep "never writes Arjun's brain and never writes Sapna's" "$brief" \
     "scout brief missing the Sapna-domain brain boundary"
   assert_grep "notes files beside it in \`$home/data/scout-filing/\`" "$brief" \

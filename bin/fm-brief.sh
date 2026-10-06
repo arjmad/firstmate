@@ -628,6 +628,7 @@ IFS= read -r -d '' SHARED_INFRA_RULE <<'EOF' || true
    `blocked [at=<epoch>]: {what you need}` and stop; firstmate arranges it.
 EOF
 SHARED_INFRA_RULE=${SHARED_INFRA_RULE%$'\n'}
+BRAIN_FILING_RULE=$(fm_brain_filing_rule)
 
 if [ "$KIND" = scout ]; then
 if "$SCRIPT_DIR/fm-bootstrap.sh" lavish-compatible >/dev/null 2>&1; then
@@ -651,7 +652,8 @@ The report, its notes files beside it in \`$DATA/$ID/\`, and any brain filing be
 # Rules
 1. Never push to any remote and never open a PR.
 2. Stay inside this worktree; the only files you may write outside it are the report, notes files beside it in \`$DATA/$ID/\`, and the status file below.
-   Filing durable knowledge through the fleet's sanctioned memory route (\`fleet-memory\`) is permitted and is not a change outside the worktree: a research scout follows the research-playbook filing step, adding one research-log line and putting verified facts on the brain page that owns the subject, while recommendations stay in the report until the captain decides them.
+   Filing durable knowledge through the fleet's sanctioned memory route (\`fleet-memory\`) is permitted and is not a change outside the worktree: a research scout follows the research-playbook filing step, recording one research-log entry and the verified facts on the brain page that owns the subject, while recommendations stay in the report until the captain decides them.
+   $BRAIN_FILING_RULE
    That filing goes only to Arjun's brain; a scout working in Sapna's domain never writes Arjun's brain and never writes Sapna's.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
@@ -730,6 +732,7 @@ $RULE1
 2. Keep project edits inside this worktree; keep proof and scratch output outside it, under \`$DATA/$ID/\` or a temporary directory.
    Outside the worktree, write only that task material and the status and steering-inbox records authorized below.
    Filing durable knowledge through the fleet's sanctioned memory route (\`fleet-memory\`, such as the principal's brain) is permitted and is not a change outside the worktree.
+   $BRAIN_FILING_RULE
    Leave the worktree clean before reporting done.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
