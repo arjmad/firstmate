@@ -932,6 +932,118 @@ test_live_checkouts_scoped_by_project_and_tilde() {
   pass "the single-project form syncs only its own entries, and ~/ expands to HOME"
 }
 
+test_failed_post_update_carries_its_output_tail() {
+  local home live out line
+  home=$(new_home)
+  live=$(build_live "$home" migrator)
+  advance_origin "$home" migrator C1
+  live_config "$home" "migrator $live printf 'step one\\n\\nstep two\\nstep three\\nmigration 0041 is duplicated\\n'; exit 3"
+
+  out=$(run_sync "$home" migrator)
+  line=$(printf '%s\n' "$out" | grep ': STUCK:')
+  assert_contains "$line" "post-update command failed (exit 3)" "the failure stays loud"
+  assert_contains "$line" "; last output: step two / step three / migration 0041 is duplicated" \
+    "the STUCK line carries the last three non-blank output lines"
+  assert_equals "$(printf '%s\n' "$line" | grep -c 'step one')" 0 "only the tail is carried"
+  assert_equals "$(printf '%s\n' "$out" | grep -c ': STUCK:')" 1 "the reason stays on one line"
+  pass "a failed post-update command's STUCK line names its last output lines"
+}
+
+interval_of() {
+  local home=$1
+  shift
+  env "$@" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" --scheduled-interval 2>/dev/null
+}
+
+test_scheduled_interval_is_home_configurable() {
+  local home
+  home=$(new_home)
+  assert_equals "$(interval_of "$home")" 1800 "default is 30 minutes"
+  assert_equals "$(interval_of "$home" FM_FLEET_SYNC_INTERVAL=900)" 900 "the environment sets it when no file exists"
+  mkdir -p "$home/config"
+  printf '# cadence\n\n600\n' > "$home/config/fleet-sync-interval"
+  assert_equals "$(interval_of "$home" FM_FLEET_SYNC_INTERVAL=900)" 600 "the home file wins over the environment"
+  printf 'off\n' > "$home/config/fleet-sync-interval"
+  assert_equals "$(interval_of "$home")" 0 "off disables the schedule"
+  printf '60\n' > "$home/config/fleet-sync-interval"
+  assert_equals "$(interval_of "$home")" 300 "a value under the floor is raised to it"
+  printf 'soon\n' > "$home/config/fleet-sync-interval"
+  assert_equals "$(interval_of "$home")" 1800 "an invalid value uses the default"
+  pass "the scheduled interval comes from config/fleet-sync-interval, then FM_FLEET_SYNC_INTERVAL, then 1800s"
+}
+
+# isolated_home: a home no other test shares, for whole-fleet runs whose output
+# would otherwise include every earlier test's clones.
+isolated_home() {
+  local h
+  h=$(mktemp -d "$TMP_ROOT/isolated.XXXXXX")
+  mkdir -p "$h/projects"
+  printf '%s\n' "$h"
+}
+
+run_scheduled() {
+  FM_HOME="$1" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" --scheduled >/dev/null 2>&1
+}
+
+test_scheduled_sync_queues_new_stuck_lines_once() {
+  local home clone dirty busy lock before pending
+  home=$(isolated_home)
+  clone=$(build_pair "$home" fresh)
+  advance_origin "$home" fresh C1
+  dirty=$(build_live "$home" dirtysvc)
+  advance_origin "$home" dirtysvc C1
+  printf 'local edit\n' >> "$dirty/file.txt"
+  busy=$(build_live "$home" schedrunner)
+  advance_origin "$home" schedrunner C1
+  lock="$home/schedrunner.lock"
+  mkdir "$lock"
+  before=$(head_sha "$busy")
+  live_config "$home" "dirtysvc $dirty" "schedrunner $busy lock=$lock"
+  pending="$home/state/fleet-sync-stuck"
+
+  run_scheduled "$home"
+  assert_equals "$(head_sha "$clone")" "$(git -C "$home/work-fresh" rev-parse HEAD)" "a clean clone goes live"
+  assert_equals "$(head_sha "$busy")" "$before" "a busy runner lock is still skipped"
+  assert_contains "$(cat "$home/state/.fleet-sync-scheduled.log")" "schedrunner live $busy: skipped: busy" "the full run is logged"
+  assert_contains "$(cat "$pending")" "dirtysvc live $dirty: STUCK:" "a STUCK line is queued for the watcher"
+  assert_equals "$(wc -l < "$pending" | tr -d ' ')" 1 "only STUCK lines are queued"
+
+  rm -f "$pending"
+  run_scheduled "$home"
+  [ ! -e "$pending" ] || fail "an unchanged STUCK state must not be queued again"
+
+  git -C "$dirty" checkout -q -- file.txt
+  run_scheduled "$home"
+  [ ! -e "$pending" ] || fail "a cleared STUCK state queues nothing"
+  printf 'local edit\n' >> "$dirty/file.txt"
+  run_scheduled "$home"
+  assert_contains "$(cat "$pending" 2>/dev/null)" "dirtysvc live $dirty: STUCK:" "a STUCK state that returns is queued again"
+  rmdir "$lock"
+  pass "the scheduled sync syncs the fleet, skips busy locks, and queues each STUCK state once"
+}
+
+test_scheduled_sync_is_a_singleton() {
+  local home clone holder before
+  home=$(isolated_home)
+  clone=$(build_pair "$home" held)
+  advance_origin "$home" held C1
+  before=$(head_sha "$clone")
+  mkdir -p "$home/state"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" bash -c \
+    '. "$1/bin/fm-wake-lib.sh"; fm_lock_try_acquire "$2" || exit 1; : > "$3"; sleep 30' \
+    _ "$ROOT" "$home/state/.fleet-sync-scheduled.lock" "$home/held-ready" &
+  holder=$!
+  local n=0
+  while [ ! -e "$home/held-ready" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+  [ -e "$home/held-ready" ] || fail "the test could not hold the scheduled lock"
+  run_scheduled "$home"
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  assert_equals "$(head_sha "$clone")" "$before" "a run that finds the lock held syncs nothing"
+  [ ! -e "$home/state/.fleet-sync-scheduled.log" ] || fail "a refused run must not replace the last log"
+  pass "a scheduled run exits at once while another holds the singleton lock"
+}
+
 test_detached_clean_ancestor_recovers
 test_detached_unique_commit_is_stuck_untouched
 test_detached_clean_ancestor_with_diverged_local_default_is_stuck_untouched
@@ -967,3 +1079,7 @@ test_held_lock_defers_live_checkout
 test_firstmate_home_live_checkout_is_refused
 test_live_checkouts_scoped_by_project_and_tilde
 test_clone_root_named_by_another_spelling_still_syncs
+test_failed_post_update_carries_its_output_tail
+test_scheduled_interval_is_home_configurable
+test_scheduled_sync_queues_new_stuck_lines_once
+test_scheduled_sync_is_a_singleton

@@ -51,9 +51,26 @@
 # state/live-checkouts/<key> records. A first sighting with no record runs it only
 # when this sync moved HEAD; otherwise it just records the current HEAD. A failed
 # command reports STUCK and never records that HEAD, so the next sync retries it.
+# Its output still goes to stderr, and a failure's STUCK line also ends with
+# "; last output: " and the command's last POST_UPDATE_TAIL_LINES non-blank lines
+# joined with " / ", so a relay that keeps only stdout still names the reason.
 # The single-project form syncs the entries for that project name; the whole-fleet
 # form syncs every entry after the clones.
-# Usage: fm-fleet-sync.sh [<project-dir-or-name>]
+# Scheduled form (--scheduled): bin/fm-watch.sh starts it detached once per
+# scheduled interval, so a merge firstmate did not make still goes live. It is
+# one whole-fleet sync under the home-scoped singleton lock
+# $STATE/.fleet-sync-scheduled.lock (a run that finds it held exits at once),
+# with its full stdout kept in $STATE/.fleet-sync-scheduled.log. Each STUCK line not already
+# surfaced is appended to $STATE/fleet-sync-stuck, which the watcher claims and
+# turns into one "check: fleet-sync: ..." wake; $STATE/.fleet-sync-surfaced
+# holds the current STUCK set (post-update output tail removed), so an unchanged
+# STUCK state wakes once, and one that clears and returns wakes again. Every
+# other outcome, including a "skipped: busy:" lock, stays silent for the next run.
+# --scheduled-interval prints the interval in seconds, 0 when off: the first
+# non-blank, non-# line of $FM_HOME/config/fleet-sync-interval, else
+# FM_FLEET_SYNC_INTERVAL, else 1800; "off" or 0 disables it, and a value below
+# 300 is raised to 300.
+# Usage: fm-fleet-sync.sh [<project-dir-or-name> | --scheduled | --scheduled-interval]
 # The single-project form accepts either a path (absolute, or relative to the
 # caller's cwd) or a bare "<name>"/"projects/<name>" form, resolved against
 # this home's projects dir ($FM_HOME/projects, or $FM_PROJECTS_OVERRIDE).
@@ -99,9 +116,20 @@ LIVE_LOCK_WAIT_SECS=${FM_LIVE_CHECKOUT_LOCK_WAIT_SECS:-120}
 LIVE_LOCK_POLL_SECS=${FM_LIVE_CHECKOUT_LOCK_POLL_SECS:-5}
 case "$LIVE_LOCK_WAIT_SECS" in ''|*[!0-9]*) LIVE_LOCK_WAIT_SECS=120 ;; esac
 case "$LIVE_LOCK_POLL_SECS" in ''|*[!0-9]*|0) LIVE_LOCK_POLL_SECS=5 ;; esac
+# A failed post-update command's STUCK line carries this much of its output.
+POST_UPDATE_TAIL_LINES=3
+POST_UPDATE_TAIL_CHARS=200
+
+SCHEDULED_INTERVAL_FILE="$CONFIG/fleet-sync-interval"
+SCHEDULED_INTERVAL_DEFAULT=1800
+SCHEDULED_INTERVAL_MIN=300
+SCHEDULED_LOCK="$STATE/.fleet-sync-scheduled.lock"
+SCHEDULED_LOG="$STATE/.fleet-sync-scheduled.log"
+SCHEDULED_SURFACED="$STATE/.fleet-sync-surfaced"
+SCHEDULED_STUCK="$STATE/fleet-sync-stuck"
 
 usage() {
-  echo "usage: fm-fleet-sync.sh [<project-dir-or-name>]" >&2
+  echo "usage: fm-fleet-sync.sh [<project-dir-or-name> | --scheduled | --scheduled-interval]" >&2
 }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
@@ -109,6 +137,103 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   exit 0
 fi
 [ $# -le 1 ] || { usage; exit 1; }
+
+# scheduled_interval: the effective scheduled-sync interval in seconds, 0 when
+# off. config/fleet-sync-interval wins over FM_FLEET_SYNC_INTERVAL; its first
+# line that is neither blank nor a # comment is the value.
+scheduled_interval() {
+  local raw from
+  if [ -f "$SCHEDULED_INTERVAL_FILE" ]; then
+    from=$SCHEDULED_INTERVAL_FILE
+    raw=$(grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$SCHEDULED_INTERVAL_FILE" 2>/dev/null | head -n 1 | tr -d '[:space:]')
+  else
+    from=FM_FLEET_SYNC_INTERVAL
+    raw=${FM_FLEET_SYNC_INTERVAL:-}
+  fi
+  case "$raw" in
+    '') echo "$SCHEDULED_INTERVAL_DEFAULT" ;;
+    off|0) echo 0 ;;
+    *[!0-9]*)
+      echo "fleet-sync: invalid scheduled interval '$raw' in $from; using ${SCHEDULED_INTERVAL_DEFAULT}s" >&2
+      echo "$SCHEDULED_INTERVAL_DEFAULT"
+      ;;
+    *)
+      raw=$((10#$raw))
+      if [ "$raw" -lt "$SCHEDULED_INTERVAL_MIN" ]; then
+        echo "fleet-sync: scheduled interval ${raw}s in $from is below the ${SCHEDULED_INTERVAL_MIN}s floor; using ${SCHEDULED_INTERVAL_MIN}s" >&2
+        raw=$SCHEDULED_INTERVAL_MIN
+      fi
+      echo "$raw"
+      ;;
+  esac
+}
+
+# stuck_key <line>: a STUCK line without its post-update output tail, so the same
+# failure with different log noise is not surfaced again.
+stuck_key() {
+  printf '%s\n' "${1%%; last output: *}"
+}
+
+# replace_file <path> <content>: atomically replace <path> with <content> plus a
+# trailing newline when <content> is non-empty.
+replace_file() {
+  local path=$1 content=$2 tmp
+  tmp="$path.tmp.$$"
+  if { [ -z "$content" ] || printf '%s\n' "$content"; } > "$tmp" 2>/dev/null && mv -f "$tmp" "$path"; then
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+# run_scheduled: one whole-fleet sync for the watcher's schedule (see the
+# header). It queues only STUCK lines not already surfaced for firstmate.
+run_scheduled() {
+  local out line key new="" surfaced="" current=""
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$SCRIPT_DIR/fm-wake-lib.sh"
+  mkdir -p "$STATE"
+  fm_lock_try_acquire "$SCHEDULED_LOCK" || return 0
+  # shellcheck disable=SC2064 # bind this lock path now
+  trap "fm_lock_release '$SCHEDULED_LOCK'" EXIT
+  out=$(mktemp "$STATE/.fleet-sync-scheduled.out.XXXXXX") || return 0
+  "$SCRIPT_DIR/fm-fleet-sync.sh" </dev/null >"$out" 2>/dev/null || true
+  mv -f "$out" "$SCHEDULED_LOG" 2>/dev/null || { rm -f "$out"; return 0; }
+  [ ! -f "$SCHEDULED_SURFACED" ] || surfaced=$(cat "$SCHEDULED_SURFACED" 2>/dev/null || true)
+  while IFS= read -r line; do
+    case "$line" in *': STUCK:'*) ;; *) continue ;; esac
+    key=$(stuck_key "$line")
+    current="$current$key"$'\n'
+    if ! printf '%s\n' "$surfaced" | grep -Fxq -- "$key"; then
+      new="$new$line"$'\n'
+    fi
+  done < "$SCHEDULED_LOG"
+  if [ -n "$new" ]; then
+    # The watcher claims this file by renaming it, so read-then-replace here can
+    # at worst repeat a line it already claimed, never lose one.
+    # The surfaced set is not advanced unless the lines reached the watcher's
+    # file, so a failed write is retried by the next run.
+    replace_file "$SCHEDULED_STUCK" "$({ [ ! -f "$SCHEDULED_STUCK" ] || cat "$SCHEDULED_STUCK"; printf '%s' "$new"; })" \
+      || return 0
+  fi
+  replace_file "$SCHEDULED_SURFACED" "$current" || true
+  return 0
+}
+
+case "${1:-}" in
+  --scheduled-interval)
+    scheduled_interval
+    exit 0
+    ;;
+  --scheduled)
+    run_scheduled
+    exit 0
+    ;;
+  -*)
+    usage
+    exit 1
+    ;;
+esac
 
 project_label() {
   case "$PROJ" in
@@ -399,7 +524,7 @@ sync_project() {
 # default branch when safe, printing one outcome line under $label. Sets
 # FF_CURRENT=yes only when the clone ends cleanly on its default branch at origin.
 fast_forward_clone() {
-  local prune=$1
+  local prune_mode=$1
   FF_CURRENT=no
   if ! git -C "$PROJ" remote get-url origin >/dev/null 2>&1; then
     echo "$label: skipped: no origin remote"
@@ -415,7 +540,7 @@ fast_forward_clone() {
     return 0
   fi
 
-  [ "$prune" = no ] || prune_gone_branches || true
+  [ "$prune_mode" = no ] || prune_gone_branches || true
 
   DEFAULT=$(default_branch) || {
     echo "$label: skipped: cannot determine default branch"
@@ -534,11 +659,27 @@ wait_for_lock_release() {
   return 0
 }
 
+# post_update_output_tail <file>: the last POST_UPDATE_TAIL_LINES non-blank
+# lines of a post-update command's output, control characters removed, each
+# cut to POST_UPDATE_TAIL_CHARS and joined with " / ", so the reason fits on
+# the one STUCK line every relay reads.
+post_update_output_tail() {
+  local file=$1 line joined=""
+  [ -f "$1" ] || return 0
+  while IFS= read -r line; do
+    [ -n "$joined" ] && joined="$joined / "
+    joined="$joined$line"
+  done < <(LC_ALL=C tr '\t\r' '  ' < "$file" | LC_ALL=C tr -d '\000-\010\013-\037\177' \
+    | grep -v '^[[:space:]]*$' | tail -n "$POST_UPDATE_TAIL_LINES" \
+    | LC_ALL=C cut -c "1-$POST_UPDATE_TAIL_CHARS")
+  printf '%s\n' "$joined"
+}
+
 # run_post_update <command> <fast-forwarded yes|no>: run the entry's post-update
 # command when the checkout's HEAD differs from the commit the command last
 # succeeded for (see the header), recording HEAD after a success.
 run_post_update() {
-  local cmd=$1 moved=$2 key record head recorded="" rc=0
+  local cmd=$1 moved=$2 key record head recorded="" rc=0 output tail
   head=$(git -C "$PROJ" rev-parse HEAD 2>/dev/null) || return 0
   key=$(printf '%s' "$proj_abs" | git hash-object --stdin) || return 0
   record="$LIVE_RECORDS/$key"
@@ -550,14 +691,22 @@ run_post_update() {
     write_live_record "$record" "$head"
     return 0
   fi
-  (cd "$PROJ" && bash -c "$cmd") </dev/null >&2 || rc=$?
+  # The command's output still reaches stderr, but it is also captured so a
+  # failure carries its reason on stdout: bootstrap and the scheduled sync keep
+  # only stdout's STUCK line.
+  output=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-sync-post-update.XXXXXX" 2>/dev/null) || output=/dev/null
+  (cd "$PROJ" && bash -c "$cmd") </dev/null >"$output" 2>&1 || rc=$?
+  [ "$output" = /dev/null ] || cat "$output" >&2 || true
   if [ "$rc" -ne 0 ]; then
     # A first-sighting failure still leaves a record that matches no commit, so
     # the next sync retries rather than seeding the record as already deployed.
     [ -n "$recorded" ] || write_live_record "$record" pending
-    echo "$label: STUCK: post-update command failed (exit $rc) at $(git -C "$PROJ" rev-parse --short HEAD); the next sync retries it - needs attention"
+    tail=$(post_update_output_tail "$output")
+    echo "$label: STUCK: post-update command failed (exit $rc) at $(git -C "$PROJ" rev-parse --short HEAD); the next sync retries it - needs attention${tail:+; last output: $tail}"
+    [ "$output" = /dev/null ] || rm -f "$output"
     return 0
   fi
+  [ "$output" = /dev/null ] || rm -f "$output"
   write_live_record "$record" "$head"
   echo "$label: post-update command ran at $(git -C "$PROJ" rev-parse --short HEAD)"
 }

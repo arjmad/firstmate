@@ -13,7 +13,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
-| Keeping running checkouts current after merges | [Live checkouts](#live-checkouts-configlive-checkouts) |
+| Keeping running checkouts current after merges | [Live checkouts](#live-checkouts-configlive-checkouts) and [scheduled fleet sync](#scheduled-fleet-sync-configfleet-sync-interval) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
 
 ## FM_HOME
@@ -92,7 +92,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Private secondmate config-reread generations with their retry and quarantine state.
 - Per-task steering-inbox records under `state/<id>.inbox/` (`bin/fm-task-inbox-lib.sh`).
 - Parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
-- Live-checkout post-update records under `state/live-checkouts/` (`bin/fm-fleet-sync.sh`).
+- Live-checkout post-update records under `state/live-checkouts/`, and the scheduled sync's log, pending `fleet-sync-stuck` lines, and surfaced set (`bin/fm-fleet-sync.sh`).
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
 
@@ -595,15 +595,25 @@ skills     ~/code/skills                                 ~/code/skills/scripts/d
 runner     ~/code/runner     lock=~/Library/Caches/runner/cycle.lock
 ```
 
-`bin/fm-fleet-sync.sh` fast-forwards each entry after the `projects/` clones, so the post-merge refresh in `ship-landing`, teardown, and the session-start refresh all keep live checkouts current.
+`bin/fm-fleet-sync.sh` fast-forwards each entry after the `projects/` clones, so the refresh `bin/fm-pr-merge.sh` runs after each merge, teardown, the [scheduled sync](#scheduled-fleet-sync-configfleet-sync-interval), and the session-start refresh all keep live checkouts current.
 The single-project form syncs only that project's entries, and the whole-fleet form syncs every entry.
 A live checkout gets the same never-forced guards as a clone: anything dirty, ahead, diverged, or off its default branch is left untouched and reported `STUCK:`.
 A held `lock=` path defers the checkout, after a short bounded wait in the single-project form and without waiting in the whole-fleet form.
-The post-update command runs once for each new HEAD and is retried on the next sync after a failure.
+The post-update command runs once for each new HEAD and is retried on the next sync after a failure, whose `STUCK:` line ends with the command's last few output lines.
 An entry naming the Firstmate home itself is refused, because Firstmate updates itself only through `/updatefirstmate`.
 
 The list names host paths and is not inherited by secondmate homes.
 [`fm-fleet-sync.sh`'s header](../bin/fm-fleet-sync.sh) owns the exact guards, lock wait, and post-update record under `state/live-checkouts/`.
+
+## Scheduled fleet sync (config/fleet-sync-interval)
+
+The watcher runs one whole-fleet `bin/fm-fleet-sync.sh` every 30 minutes by default, so a merge made outside firstmate - on the forge, or by another harness - still reaches project clones and live checkouts the same day.
+It runs detached from the watcher's poll loop and adds no scheduled service of its own.
+Only a `STUCK:` line wakes firstmate, as one `check: fleet-sync:` wake, and an unchanged stuck state wakes once rather than on every run; a `skipped: busy:` live checkout is silently retried next time.
+The optional local, gitignored `config/fleet-sync-interval` file sets the interval in seconds, with a 300-second floor, or turns the schedule off with `off`.
+With the file absent, `FM_FLEET_SYNC_INTERVAL` or the 1800-second default applies, and a change takes effect when the watcher next starts.
+The file is a home-local preference and is not inherited by secondmate homes.
+[`fm-fleet-sync.sh`'s header](../bin/fm-fleet-sync.sh) owns the singleton, the dedupe record, and the state files under `state/`.
 
 ## Waiting worker spends no turns (config/wait-no-turns)
 
@@ -2421,6 +2431,7 @@ FM_WORKTREE_WRITE_TIMEOUT=10       # wall-clock seconds that one walk may take, 
 FM_WORKTREE_PROCESS_TIMEOUT=10     # wall-clock seconds the wedge detector's task-worktree process probe may spend listing live processes and their ages; it runs beside the write probe at the moment a wedge escalation would otherwise fire, counts only a process whose working directory is inside the recorded worktree and that started after the idle window opened (a harness or helper present since spawn is not evidence), and hitting the bound reads as no evidence
 FM_WATCH_TRIAGE_LOG_MAX_BYTES=262144   # size cap for the watcher's absorbed-wake debug log
 FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT=     # optional seconds allowed for bootstrap's best-effort clone refresh; unset/blank defaults to max(20, 5 + 3 * (origin-backed-project-count + live-checkout-count))
+FM_FLEET_SYNC_INTERVAL=1800  # seconds between the watcher's scheduled whole-fleet fm-fleet-sync.sh runs when config/fleet-sync-interval is absent; off or 0 disables, values below 300 use 300
 FM_LIVE_CHECKOUT_LOCK_WAIT_SECS=120  # seconds the single-project fm-fleet-sync.sh form waits for a live checkout's held lock= path before deferring it
 FM_LIVE_CHECKOUT_LOCK_POLL_SECS=5    # seconds between those lock checks
 FM_FLEET_PRUNE=1        # set to 0 to skip pruning local branches whose upstream is gone

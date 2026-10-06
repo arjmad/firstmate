@@ -7156,6 +7156,69 @@ test_paused_until_that_passed_is_rechecked_before_the_cadence() {
   pass "a declared wait whose until time has passed is rechecked at once, then held to the cadence"
 }
 
+# The scheduled fleet sync queues its new STUCK lines in state/fleet-sync-stuck;
+# the watcher claims them as one actionable check wake.
+test_fleet_sync_stuck_lines_surface_as_one_check_wake() {
+  local dir state out pid
+  dir=$(make_case fleet-sync-stuck); state="$dir/state"; out="$dir/watch.out"
+  printf '%s\n' 'alpha: STUCK: on branch main with uncommitted changes, 1 commits behind origin/main - needs attention' \
+    'svc live /srv/svc: STUCK: post-update command failed (exit 3) at abc1234; the next sync retries it - needs attention; last output: boom' \
+    > "$state/fleet-sync-stuck"
+  watch_bg "$state" "$dir/fakebin" "$out" env FM_FLEET_SYNC_INTERVAL=off
+  pid=$!
+  wait_for_exit "$pid" 100 || fail "the watcher did not exit on queued fleet-sync STUCK lines: $(cat "$out")"
+  grep -F 'check: fleet-sync: alpha: STUCK: on branch main' "$out" >/dev/null \
+    || fail "the wake did not name the first STUCK line: $(cat "$out")"
+  grep -F ' | svc live /srv/svc: STUCK: post-update command failed (exit 3)' "$out" >/dev/null \
+    || fail "the wake did not carry every STUCK line in one reason: $(cat "$out")"
+  grep "$(printf '\tcheck\tfleet-sync\t')" "$state/.wake-queue" >/dev/null \
+    || fail "the fleet-sync wake was not queued durably: $(cat "$state/.wake-queue")"
+  [ ! -e "$state/fleet-sync-stuck" ] && [ ! -e "$state/.fleet-sync-stuck.claimed" ] \
+    || fail "the claimed STUCK lines were left behind for a second wake"
+  pass "queued fleet-sync STUCK lines surface once as a single check: fleet-sync wake"
+}
+
+# A due schedule starts the whole-fleet sync detached; the first sighting with
+# no marker only starts the cadence.
+test_fleet_sync_schedule_runs_the_sync_when_due() {
+  local dir state out pid work origin clone i
+  dir=$(make_case fleet-sync-schedule); dir=$(cd "$dir" && pwd -P); state="$dir/state"; out="$dir/watch.out"
+  work="$dir/work"; origin="$dir/origin.git"; clone="$dir/projects/beta"
+  fm_git_init_commit "$work"
+  git clone --quiet --bare "$work" "$origin"
+  mkdir -p "$dir/projects" "$dir/data"
+  printf -- '- beta [direct-PR] - test project (added 2026-10-06)\n' > "$dir/data/projects.md"
+  git clone --quiet "file://$origin" "$clone"
+  printf 'next\n' > "$work/next.txt"
+  git -C "$work" add next.txt
+  git -C "$work" -c user.name=t -c user.email=t@example.invalid commit -qm next
+  git -C "$work" push -q "file://$origin" main
+
+  # fm-fleet-sync.sh resolves the registry helper from FM_ROOT_OVERRIDE, so this
+  # case points it at the real checkout instead of the suite's tangle fixture.
+  PATH="$dir/fakebin:$PATH" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_CREW_STATE_BIN="$dir/fakebin/fm-crew-state.sh" \
+    FM_POLL=0.2 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_SECONDMATE_LIVENESS_SECS=99999999 FM_FLEET_SYNC_INTERVAL=300 "$WATCH" > "$out" 2>/dev/null &
+  pid=$!
+  wait_poll_cycle "$state" "$pid" || fail "the watcher exited before a full cycle: $(cat "$out")"
+  [ -e "$state/.last-fleet-sync" ] || { reap "$pid"; fail "the first sighting did not start the cadence"; }
+  [ ! -e "$state/.fleet-sync-scheduled.log" ] || { reap "$pid"; fail "the first sighting ran a sync"; }
+
+  touch -t 200001010000 "$state/.last-fleet-sync"
+  i=0
+  while [ "$i" -lt 150 ] && [ "$(git -C "$clone" rev-parse HEAD)" != "$(git -C "$work" rev-parse HEAD)" ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  is_live_non_zombie "$pid" || fail "a clean scheduled sync woke the watcher: $(cat "$out")"
+  reap "$pid"
+  [ "$(git -C "$clone" rev-parse HEAD)" = "$(git -C "$work" rev-parse HEAD)" ] \
+    || fail "the due schedule did not fast-forward the clone: $(cat "$state/.fleet-sync-scheduled.log" 2>&1)"
+  [ ! -e "$state/.wake-queue" ] || [ ! -s "$state/.wake-queue" ] || fail "a clean sync queued a wake: $(cat "$state/.wake-queue")"
+  pass "a due schedule runs the whole-fleet sync without waking firstmate when nothing is stuck"
+}
+
 # CI's stock macOS Bash lane sets FM_TEST_ONLY to run just the bash-3.2
 # churn-deferral regression. The rest of this file is not a 3.2 snapshot suite.
 if [ -n "${FM_TEST_ONLY:-}" ]; then
@@ -7315,3 +7378,5 @@ test_captain_held_rechecked_under_a_quiet_record
 test_paused_until_near_future_is_quiet_before_the_cadence
 test_paused_until_wrong_year_is_bounded_by_the_cadence
 test_paused_until_that_passed_is_rechecked_before_the_cadence
+test_fleet_sync_stuck_lines_surface_as_one_check_wake
+test_fleet_sync_schedule_runs_the_sync_when_due
