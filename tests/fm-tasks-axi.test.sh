@@ -239,6 +239,63 @@ test_wrapper_single_home() {
   pass "fm-tasks-axi.sh keeps the single-home layout addressing its own code-root backlog"
 }
 
+# The opt-in superseded-ruling guard: with config/captain-name present, a hold
+# or park whose reason re-cites an older dated captain quote than the newest
+# one in the task's row, brief, or handled steers is refused unless the caller
+# passes --cite-older-quote; with the file absent nothing is checked.
+test_wrapper_hold_quote_guard() {
+  local dir out rc before
+  dir=$(make_split hold-quote)
+  mkdir -p "$dir/home/data/q-1" "$dir/home/state/q-1.inbox/handled"
+  wrapper_from_code "$dir" add q-1 "proxmox host" >/dev/null || fail "add q-1 failed"
+  printf 'Arjun 2026-10-05: keep the host running\n' > "$dir/home/state/q-1.inbox/handled/001.msg"
+  printf '## Progress note (2026-12-01T10:00:00Z)\nArjunx 2026-12-02 is not the captain\n' \
+    > "$dir/home/data/q-1/brief.md"
+
+  wrapper_from_code "$dir" hold q-1 --kind parked --reason "Arjun 2026-09-30: park it" >/dev/null \
+    || fail "a hold was refused with no config/captain-name"
+  wrapper_from_code "$dir" unhold q-1 >/dev/null || fail "unhold q-1 failed"
+
+  printf '# the captain\n\nArjun\n' > "$dir/home/config/captain-name"
+  before=$(cat "$dir/home/data/backlog.md")
+  out=$(wrapper_from_code "$dir" hold q-1 --kind parked --reason "Arjun 2026-09-30: park it" 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "older quote than a handled steer"
+  assert_contains "$out" "dated 2026-09-30" "the refusal did not name the cited date"
+  assert_contains "$out" "is 2026-10-05 (in $dir/home/state/q-1.inbox/handled/001.msg)" \
+    "the refusal did not name the newest quote and its source"
+  assert_contains "$out" "--cite-older-quote" "the refusal did not name the override"
+  assert_equals "$before" "$(cat "$dir/home/data/backlog.md")" "a refused hold changed the backlog"
+  out=$(wrapper_from_code "$dir" hold q-1 --kind parked "--reason=Arjun, 2026-09-30: park it" 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "older quote through --reason="
+
+  wrapper_from_code "$dir" hold q-1 --kind parked --reason "Arjun 2026-09-30: park it" --cite-older-quote >/dev/null \
+    || fail "--cite-older-quote did not let the older quote stand"
+  assert_grep "Arjun 2026-09-30: park it" "$dir/home/data/backlog.md" "the overridden hold was not recorded"
+  wrapper_from_code "$dir" unhold q-1 >/dev/null || fail "unhold q-1 failed"
+  wrapper_from_code "$dir" hold q-1 --kind parked --reason "Arjun 2026-10-05: wait for the window" >/dev/null \
+    || fail "a hold citing the newest quote was refused"
+  wrapper_from_code "$dir" unhold q-1 >/dev/null || fail "unhold q-1 failed"
+  wrapper_from_code "$dir" hold q-1 --kind load --reason "waiting on a free slot" >/dev/null \
+    || fail "a hold citing no captain quote was refused"
+  wrapper_from_code "$dir" unhold q-1 >/dev/null || fail "unhold q-1 failed"
+
+  printf 'Captain ruling, Arjun on 2026-10-07: retire it\n' >> "$dir/home/data/q-1/brief.md"
+  out=$(wrapper_from_code "$dir" hold q-1 --reason "Arjun 2026-10-05: wait for the window" 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "older quote than the brief"
+  assert_contains "$out" "is 2026-10-07 (in $dir/home/data/q-1/brief.md)" "the brief's quote was not found"
+
+  printf 'Arjun 2026-10-08: decided in chat\n' > "$dir/body.md"
+  wrapper_from_code "$dir" update q-1 --body-file "$dir/body.md" >/dev/null || fail "update q-1 failed"
+  out=$(wrapper_from_code "$dir" hold q-1 --reason "Arjun 2026-10-07: retire it" 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "older quote than the row"
+  assert_contains "$out" "is 2026-10-08 (in its backlog row)" "the row's quote was not found"
+  pass "fm-tasks-axi.sh refuses a hold citing an older captain quote only when config/captain-name is set, unless overridden"
+}
+
 test_guard_reports_regular_code_root_backlog
 test_guard_reports_foreign_link_and_archive
 test_guard_silent_for_single_home
@@ -249,6 +306,7 @@ if [ "$HAVE_TASKS_AXI" = 1 ]; then
   test_wrapper_refusals
   test_wrapper_refuses_add_start
   test_wrapper_single_home
+  test_wrapper_hold_quote_guard
 else
   echo "skip: tasks-axi not found; home-addressing cases not run"
 fi

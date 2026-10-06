@@ -2,7 +2,7 @@
 name: captain-hold-lifecycle
 description: >-
   Agent-only policy for completing investigations and visual reviews without losing unresolved captain calls, and for closing what the captain owns with his actual words.
-  Load before treating an investigation, scout report, structured review, or Lavish review as complete, before ending a visual review that exposed a captain decision, when recording or routing the captain's answer, and on any RECORD DIVERGENCE line the wake drain prints.
+  Load before treating an investigation, scout report, structured review, or Lavish review as complete, before ending a visual review that exposed a captain decision, when recording or routing the captain's answer or a change to an earlier captain ruling, and on any RECORD DIVERGENCE line the wake drain prints.
 user-invocable: false
 metadata:
   internal: true
@@ -33,6 +33,15 @@ Never close anything the captain owns without recording what he actually said: `
 A merge approval uses that existing release path because approval permits the merge to proceed; cleanup closes the work only after it lands and records what shipped.
 Closing a held row at merge approval instead records completion before landing, so the backlog claims completion before the work actually ships.
 When the answer changes what a task must build, follow `AGENTS.md` section 7's mid-task ask rule to preserve the captain's words in the brief and steer the worker.
+Record every captain answer on its origin row through `answer` - including answers from a grilling session or a decision sweep, holding that row first when it is not already held, with `--release` when the row is work that should continue - and file the decision to its owner the same turn; never start a separate decisions or answers file, because no lookup reads it.
+When an answer changes an earlier captain ruling, retire every older copy you can reach in that same turn, so two dated answers never stand side by side:
+
+- the backlog row: re-hold or update it so no hold reason or note still cites the old ruling as current;
+- memory entries: rewrite or archive them under the `stow` skill's rules;
+- any external memory store the home writes to: retire the superseded fact through that store's own retire command, such as a `forget`, not only by writing the new one;
+- the owning record for that decision kind under `AGENTS.md` section 6: correct it, through its delivery path when it is tracked, or file the correction as owed work when it cannot land this turn.
+
+With `config/captain-name` set, `bin/fm-tasks-axi.sh hold` refuses a reason that cites an older dated captain quote than the task's newest one; cite the newer ruling, and pass its override only when the captain's newer words leave the older ruling standing.
 When the captain says "later", that is an answer too: re-hold with `bin/fm-captain-hold.sh hold <id> --reason "<reason>" --until <date>` so the item leaves the live Captain's Call and resurfaces on its date, instead of leaving a live-looking card or fabricating a closure.
 "A keyed answer resolves its matching captain-held task" is one capability with one owner, `bin/fm-captain-hold.sh answers`, and every channel that carries a captain answer feeds it the same task id and answer; a channel never maps keys to tasks, records a decision, or resolves anything itself.
 Chat already feeds it through `bin/fm-send.sh --resolve-key`, and a captured-answer source feeds it once bound with `bin/fm-captain-hold.sh bind <source-id>`; bind before arming the source, and key each structured question by the held task's id.
