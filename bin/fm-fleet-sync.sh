@@ -524,7 +524,7 @@ sync_project() {
 # default branch when safe, printing one outcome line under $label. Sets
 # FF_CURRENT=yes only when the clone ends cleanly on its default branch at origin.
 fast_forward_clone() {
-  local prune=$1
+  local prune_mode=$1
   FF_CURRENT=no
   if ! git -C "$PROJ" remote get-url origin >/dev/null 2>&1; then
     echo "$label: skipped: no origin remote"
@@ -540,7 +540,7 @@ fast_forward_clone() {
     return 0
   fi
 
-  [ "$prune" = no ] || prune_gone_branches || true
+  [ "$prune_mode" = no ] || prune_gone_branches || true
 
   DEFAULT=$(default_branch) || {
     echo "$label: skipped: cannot determine default branch"
