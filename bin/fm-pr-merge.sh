@@ -143,6 +143,9 @@
 # destination, normal-case deduplication, and at-least-once recovery.
 # A landed merge whose outcome cannot be written is reported loudly rather than
 # misreported as a failed merge.
+# After a confirmed merge, it runs bin/fm-fleet-sync.sh on the task's project=
+# so the clone and its config/live-checkouts entries go live at once; the sync's
+# lines follow on stdout, and its outcome never changes this script's exit.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1481,3 +1484,12 @@ case "$outcome_rc" in
     printf 'actionable: merged %s but could not record the outcome for supervision\n' "$URL" >&2
     ;;
 esac
+
+# Bring the merged project's clone and live checkouts current now, rather than
+# at the next teardown or scheduled sync. Its lines follow on stdout; a STUCK
+# line needs attention, and a sync failure never turns the landed merge into a
+# failed one.
+MERGED_PROJECT=$(sed -n 's/^project=//p' "$META" 2>/dev/null | head -n 1)
+if [ -n "$MERGED_PROJECT" ] && [ -x "$SCRIPT_DIR/fm-fleet-sync.sh" ]; then
+  "$SCRIPT_DIR/fm-fleet-sync.sh" "$MERGED_PROJECT" </dev/null || true
+fi

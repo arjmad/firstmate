@@ -105,6 +105,10 @@
 #                          steering-inbox recovery; bin/fm-task-inbox-lib.sh owns
 #                          delivery-attempt, busy-deferral, and unavailable-endpoint policy
 #   check: <script>: <out> authenticated check output, always actionable
+#   check: fleet-sync: <STUCK line> | ...
+#                          the scheduled whole-fleet sync found clones or live
+#                          checkouts it could not bring current; each STUCK
+#                          state surfaces once (bin/fm-fleet-sync.sh --scheduled)
 #   check: process-event result captured: <keys>
 #                          a durably captured process-to-event result is queued
 #                          and has not been surfaced yet; reported once per
@@ -2597,6 +2601,37 @@ home_summary_refresh_detached() {
   HOME_SUMMARY_PID=$!
 }
 
+# Scheduled whole-fleet sync (bin/fm-fleet-sync.sh's header owns the interval,
+# singleton, and STUCK dedupe). The watcher only starts it detached when
+# $STATE/.last-fleet-sync is a full interval old, never waiting on it, and turns
+# the STUCK lines it queues into one check wake. A missing marker starts the
+# cadence rather than syncing, because session start has just synced.
+FLEET_SYNC_INTERVAL=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+  "$SCRIPT_DIR/fm-fleet-sync.sh" --scheduled-interval 2>/dev/null) || FLEET_SYNC_INTERVAL=0
+case "$FLEET_SYNC_INTERVAL" in ''|*[!0-9]*) FLEET_SYNC_INTERVAL=0 ;; esac
+fleet_sync_tick() {
+  local pending="$STATE/fleet-sync-stuck" claimed="$STATE/.fleet-sync-stuck.claimed" reason
+  if [ ! -e "$claimed" ] && [ -s "$pending" ]; then
+    mv -f "$pending" "$claimed" 2>/dev/null || true
+  fi
+  if [ -s "$claimed" ]; then
+    reason="check: fleet-sync: $(paste -sd '|' "$claimed" | sed 's/|/ | /g')"
+    fm_wake_append check fleet-sync "$reason" || exit 1
+    rm -f "$claimed"
+    wake "$reason"
+  fi
+  rm -f "$claimed"
+  [ "$FLEET_SYNC_INTERVAL" -gt 0 ] || return 0
+  if [ ! -e "$STATE/.last-fleet-sync" ]; then
+    touch "$STATE/.last-fleet-sync"
+    return 0
+  fi
+  [ "$(age_of "$STATE/.last-fleet-sync")" -ge "$FLEET_SYNC_INTERVAL" ] || return 0
+  touch "$STATE/.last-fleet-sync"
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-fleet-sync.sh" --scheduled </dev/null >/dev/null 2>&1 &
+}
+
 RECONCILE_REQUEST_PID=
 reconcile_requests_pending() {
   local request
@@ -2840,6 +2875,8 @@ while :; do
   else
     triage_log "inactive-outcome reconciliation unavailable"
   fi
+
+  fleet_sync_tick
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
   # Time-based via .last-check mtime so the cadence survives watcher restarts.

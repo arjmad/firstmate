@@ -596,6 +596,58 @@ test_github_merged_outcome_is_verified() {
   pass "fm-pr-merge verifies a genuinely merged GitHub pull request"
 }
 
+# A confirmed merge brings the task's project clone current at once, so a merged
+# change goes live without a separate fleet-sync step; a refused merge does not.
+test_github_verified_merge_fast_forwards_the_project() {
+  local case_dir rc work origin
+  case_dir=$(make_case github-merge-syncs-project)
+  mkdir -p "$case_dir/wt"
+  work="$case_dir/project-work"
+  origin="$case_dir/project-origin.git"
+  fm_git_init_commit "$work"
+  git -C "$work" branch -M main
+  git clone --quiet --bare "$work" "$origin"
+  git clone --quiet "file://$origin" "$case_dir/project"
+  printf 'merged change\n' > "$work/merged.txt"
+  git -C "$work" add merged.txt
+  git -C "$work" commit -qm merged
+  git -C "$work" push -q "file://$origin" main
+  add_gh_mocks "$case_dir" 6464646464646464646464646464646464646464
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/64 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "github-merge-syncs-project: a merged PR should succeed"
+  assert_grep "$case_dir/project: synced" "$case_dir/stdout" \
+    "github-merge-syncs-project: the merge did not report the project sync"
+  [ "$(git -C "$case_dir/project" rev-parse HEAD)" = "$(git -C "$work" rev-parse HEAD)" ] \
+    || fail "github-merge-syncs-project: the project clone was not fast-forwarded to the merged main"
+  pass "fm-pr-merge fast-forwards the task's project clone after a confirmed merge"
+}
+
+test_failed_merge_does_not_sync_the_project() {
+  local case_dir rc
+  case_dir=$(make_case merge-fails-no-sync)
+  mkdir -p "$case_dir/wt" "$case_dir/project"
+  add_gh_mocks_merge_fails "$case_dir"
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/65 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "merge-fails-no-sync: the failed merge should still fail"
+  assert_no_grep "$case_dir/project" "$case_dir/stdout" \
+    "merge-fails-no-sync: a failed merge must not run the project sync"
+  pass "fm-pr-merge runs no project sync when the merge did not land"
+}
+
 test_github_verified_merge_requires_poll_recording() {
   local case_dir rc
   case_dir=$(make_case github-poll-recording-fails)
@@ -2388,6 +2440,8 @@ test_github_failed_merge_names_an_observed_landed_state
 test_github_without_gh_still_uses_gh_axi_merge
 test_github_without_gh_failed_read_keeps_bookkeeping
 test_github_merged_outcome_is_verified
+test_github_verified_merge_fast_forwards_the_project
+test_failed_merge_does_not_sync_the_project
 test_github_verified_merge_requires_poll_recording
 test_github_queued_outcome_is_verified
 test_github_queue_required_refusal_names_retry_flags
