@@ -45,9 +45,28 @@ So the last useful response of an ended review is a `feedback` response, and eve
 That is why the adapter's terminal verdict covers a `feedback` response carrying `session_ended`, not only `status: ended` and a missing session: without it, one human `Send & End` leaves the source armed and each later cycle captures another empty ended result.
 `session_ended` is a session-level field emitted beside `status` in the response's leading `session:` block, which is why the adapter reads it there and ignores identical text appearing in prompt payloads.
 
+## The interrupted-poll response from a restarted server
+
+The interruption a restarted Lavish server leaves under a live poll was verified on 2026-10-06 on macOS (Darwin 27.0.0) with `lavish-axi` 0.1.83, against an isolated server with its own `LAVISH_AXI_STATE_DIR` and port, by killing the server process while `lavish-axi poll` was blocked:
+
+```sh
+$ lavish-axi --version
+0.1.83
+$ lavish-axi poll board.html    # server process killed while this blocks
+error: Lavish Editor poll response was interrupted
+code: SERVER_ERROR
+help[2]: Run `lavish-axi server --verbose` or inspect `~/.lavish-axi/server.log` (`LAVISH_AXI_STATE_DIR/server.log` when set) for server startup or crash diagnostics,Re-run the last `lavish-axi poll <html-file>` command after the server is healthy
+$ echo $?
+1
+```
+
+The trailing `help[2]:` line is why the adapter's interruption shape admits exactly one inline help line after the two exact lines; a two-line-only match never retried this response.
+Under the same kill, the adapter's own `poll` stayed blocked with no output while the next `lavish-axi poll` started a replacement server and long-polled it, which is the quiet retry the adapter header owns.
+A capture of this response that outlives the retry bound classifies `interrupted`, is silent once, and re-arms through `relisten`; `tests/fm-procevent.test.sh` replays these exact bytes.
+
 ## Why an empty ordinary board close or disconnected browser is silent
 
-The generic `silent` verdict covers two positively identified no-answer shapes for an ordinary firstmate-owned source.
+The generic `silent` verdict covers two positively identified no-answer shapes for an ordinary firstmate-owned source, plus the isolated interruption described above.
 `Send & End` delivers the captain's final feedback once as a `feedback` response carrying `session_ended`, and every poll after it returns an empty ended session.
 A firstmate-owned board the captain closes without saying anything therefore produces exactly one `ended` response carrying no queued content block, and announcing it put a wake in front of the handler whose entire content was that nothing happened.
 A task-owned empty terminal round bypasses this generic silence path so its owner receives the steering note required to conclude and retire the board.
@@ -91,6 +110,7 @@ Exercised by `tests/fm-procevent.test.sh` against a fake blocking source whose c
 | generic built-in keyed-answer feed | `tests/fm-captain-hold-lifecycle.test.sh` drives a bound built-in source through the real runner with a fixture adapter that only prints keyed lines, proving any bound built-in channel reaches the one keyed-answer intake: named captain-held tasks close at capture time, a card-declared release mode frees held work, keys naming no captain-held task skip, freeform prose forges nothing, matching answer-and-mode replays are idempotent while mode mismatches refuse, an unbound source closes nothing, and capture remains independent of the handler wake. |
 | structured reconcile feed | The same suite drives the optional `reconciles` adapter seam through the real runner and proves only a bound captured source can create a request; the ordinary keyed-answer and chat paths refuse the reserved value without closing or creating a request, versioned selection stays separate from its note, rollout-compatible ordinary legacy answers still pass, and legacy reconcile-shaped values feed neither intake. |
 | adapter-owned silence verdict | an ordinary firstmate-owned Lavish source driven against a stand-in poll that returns an empty ended session captures its result, records it durably handled, appends no wake, and stays silent through a later `reconcile` that would otherwise republish it, while still retiring its ended source; the same real path with a `Send & End` response carrying the captain's choice still publishes its `check` wake and is left unacknowledged for the handler |
+| bounded interrupted-poll re-arm | an ordinary firstmate-owned Lavish source driven against a stand-in poll that returns the exact 0.1.83 interruption forever captures it once the retry bound is spent, records that first capture handled with no wake, re-arms in the same runner, announces the second capture, and then stops polling; the same response followed by feedback is retried quietly and only the feedback is announced, while the response with an extra line, a feedback item, a message, or a different `SERVER_ERROR` is announced |
 | worker-owned Lavish rounds | one three-round fixture arms a board for an identity-matched task endpoint, delivers nonterminal and terminal captures directly to that task's steering inbox without a firstmate `check` wake, acknowledges each nonterminal round through a successful re-arm, rings the owner's doorbell once when the capture writes a fresh inbox note and never re-rings or resurrects a note the owner has filed into `handled/` across repeated reconciles, refuses a second armer and every early retirement, and concludes the terminal round through `handled` without another poll; focused fixtures also pin synchronous reply acceptance before modern arm returns, failed reply refusal before registration, refused-arm reply isolation, direct poll reply ordering, the legacy poll-with-reply fallback, failed re-arm rollback, one legacy reply post across transient retries, unreachable-owner refusal, interrupted conclusion recovery, and repeat acknowledgement isolation |
 | Lavish handled-status classification | an executable fixture table pins exact `feedback`, `ended`, `waiting`, and `browser_disconnected` mappings, including `browser_disconnected` to `disconnected`; the same suite proves that status is nonterminal and receives a zero-answer silence verdict |
 | session-derived Lavish routing | the three-round worker fixture starts its first listener under conflicting ambient host/port values and configuration, then recovers later listeners while that conflicting configuration remains, and proves every reply/poll uses the board's saved session endpoint; direct polls cover Unicode artifact paths, hostnames, IPv6, session endpoint changes, quiet retries, and refusal before reply consumption when session evidence is absent or invalid; spawn coverage still proves the configured opening address enters the worker launch |
