@@ -6,6 +6,7 @@
 #   fm-procevent-lavish.sh classify <result-file>
 #   fm-procevent-lavish.sh terminal <result-file>
 #   fm-procevent-lavish.sh silent <result-file>
+#   fm-procevent-lavish.sh relisten
 #   fm-procevent-lavish.sh answers <result-file>
 #   fm-procevent-lavish.sh reconciles <result-file>
 #   fm-procevent-lavish.sh read <result-file>
@@ -15,7 +16,7 @@
 #   fm-procevent-lavish.sh deliver-reply poll <artifact.html> --agent-reply-file <path>
 #
 # classify   Print the lifecycle state a handler should act on: feedback, ended,
-#            waiting, disconnected, missing, or unknown.
+#            waiting, disconnected, interrupted, missing, or unknown.
 # read       Print a structured presentation of one already-captured result so a
 #            handler consumes every queued item without grepping the raw file.
 #            It is read-only over the capture: it does not arm, poll, or change
@@ -56,15 +57,22 @@
 #            only place Lavish's notion of "nothing was said" is decided.
 #            Task-owned terminal rounds bypass generic silence so their owner
 #            receives the stop-and-conclude instruction.
+# relisten   Exit 0 only when the runner should keep this source's claim and poll
+#            again, which is the generic seam bin/fm-procevent.sh calls after a
+#            result. Lavish answers yes for exactly one shape: the captured result
+#            the runner names in FM_PROCEVENT_RELISTEN_RESULT is a silent
+#            interruption (see below). Every other result, and a call naming no
+#            result, keeps the default of one poll per runner.
 #
 # AN EMPTY BOARD CLOSE IS NOT NEWS, and that is what `silent` exists to say.
 # Closing a review surface that carried nothing is the single most common Lavish
 # result: the captain reads a board, says nothing, and closes it. Announcing that
 # put a wake in front of the handler whose entire content was that nothing
-# happened. `silent` therefore holds two narrow, positively-determined shapes -
+# happened. `silent` therefore holds three narrow, positively-determined shapes -
 # a session this adapter classifies `ended` that carries no queued content block
-# at all, or `browser_disconnected`, which carries no answer while the session
-# remains open - and every other result stays announced.
+# at all, `browser_disconnected`, which carries no answer while the session
+# remains open, and an isolated `interrupted` capture, described below - and
+# every other result stays announced.
 #
 # Deliberately narrow, in both directions. A `Send & End` close carrying the
 # captain's actual answer arrives as `status: feedback` with `session_ended`, so
@@ -72,7 +80,7 @@
 # is any `ended` result that still carries a `prompts` or `feedback` block, which
 # the published poll is not expected to produce but which must never be dropped
 # on that expectation. A `waiting` session, a `missing` one, an `unknown` or
-# unreadable result, and any error all stay announced, because none of them
+# unreadable result, and any other error all stay announced, because none of them
 # positively proves nothing was said. Silence is only ever an absence this
 # adapter can see in the result, never an absence it assumes.
 #
@@ -112,21 +120,37 @@
 # legacy poll-with-reply path, without the synchronous handoff guarantee.
 #
 # BOUNDED QUIET RETRY, owned here and nowhere else. A live listener can be cut
-# short by the server with exactly this two-line response while the session's
-# marks remain available:
+# short by the server - most often because the Lavish server restarted, as an
+# in-place lavish-axi upgrade does - with exactly this response while the
+# session's marks remain available:
 #
 #   error: Lavish Editor poll response was interrupted
 #   code: SERVER_ERROR
 #
-# That is an internal retry, not news, so registering the raw poll made the
-# generic runner capture it and wake the whole fleet. `poll` therefore re-runs
-# the published poll up to POLL_RETRY_LIMIT times for that exact response, with
-# attempt starts at least POLL_RETRY_DELAY_DEFAULT seconds apart. The match is exact and
-# deliberately narrow: real feedback, ended and missing sessions, any other
-# SERVER_ERROR, and the same interruption still standing after the bound is
-# spent are all printed straight through and captured normally. The retry is a
-# Lavish fact, so the generic runner in bin/fm-procevent.sh stays
-# adapter-agnostic and learns nothing about it.
+# optionally followed by the one `help[N]: ...` suggestion line that newer
+# lavish-axi releases (verified on 0.1.83) append to every error. Nothing else
+# may follow, so the whole payload carries no item and no message;
+# `interrupted_payload` is the one definition of that shape. That is an internal retry, not news, so
+# registering the raw poll made the generic runner capture it and wake the
+# whole fleet. `poll` therefore re-runs the published poll up to
+# POLL_RETRY_LIMIT times for that response, with attempt starts at least
+# POLL_RETRY_DELAY_DEFAULT seconds apart. The match is deliberately narrow:
+# real feedback, ended and missing sessions, any other SERVER_ERROR, whitespace
+# variants, and the interruption followed by anything but that one help line
+# are all printed straight through and captured normally.
+#
+# Once the bound is spent the interruption is printed and captured, and
+# `classify` names it `interrupted`. It is still not news the first time:
+# `silent` records it handled and `relisten` keeps the runner polling, so the
+# source re-arms on the restarted server instead of waking its owner or
+# waiting for reconcile. That re-arm happens once per outage. An interruption
+# whose immediately preceding capture of the same source was also an
+# interruption, captured at most POLL_INTERRUPTED_REPEAT_SECONDS earlier, means
+# the server kept cutting polls across the whole retry bound twice running; it
+# is announced like any other error and not relistened, so a server that stays
+# broken wakes its owner instead of looping in silence. The retry and the
+# re-arm verdict are Lavish facts, so the generic runner in bin/fm-procevent.sh
+# stays adapter-agnostic and learns nothing about them.
 #
 # LOSS LIMITATION, stated plainly. The published poll destructively clears
 # feedback before returning it. A result lost after that clearing and before the
@@ -308,16 +332,46 @@ POLL_RETRY_LIMIT=12
 POLL_RETRY_DELAY_DEFAULT=5
 POLL_RETRY_DELAY_MIN=1
 POLL_RETRY_DELAY_MAX=60
+# Two interruption captures of one source this close together mean one relisten
+# already met a server that kept cutting polls for a whole retry bound, so the
+# second is announced. Each capture alone spends at least
+# POLL_RETRY_LIMIT * POLL_RETRY_DELAY_DEFAULT seconds of quiet retries, so ten
+# minutes spans a relistened repeat with room while two separate upgrades on
+# different days never pair up.
+POLL_INTERRUPTED_REPEAT_SECONDS=600
+# How much of a response that opens with the interruption's two lines the poll
+# filter holds before deciding; the help line lavish-axi appends is a few
+# hundred bytes, and anything longer streams through as a genuine result.
+POLL_INTERRUPTED_STAGE_BYTES=4096
 
-# Exit 0 only for the exact two-line interruption, and nothing else. The whole
-# response must be those two lines with those exact bytes: whitespace variants,
-# a longer response that merely opens with them, and any other SERVER_ERROR are
-# genuine errors this adapter must never swallow.
+# The one definition of the interruption payload: exit 0 when the whole file is
+# the two exact lines, optionally followed by exactly one inline `help[N]:`
+# suggestion line, 1 when it is anything else, and 2 when it cannot be read.
+# Whitespace variants, a second help line, a content block, a message, and any
+# other SERVER_ERROR are genuine results this adapter must never swallow.
+interrupted_payload() {  # <file>
+  perl -e '
+    use strict;
+    use warnings;
+    open my $fh, "<", $ARGV[0] or exit 2;
+    binmode $fh;
+    local $/;
+    my $bytes = <$fh>;
+    defined $bytes or $bytes = "";
+    close $fh or exit 2;
+    exit($bytes =~ /\Aerror: Lavish Editor poll response was interrupted\ncode: SERVER_ERROR\n(?:help\[[0-9]+\]: [^\n]+\n)?\z/ ? 0 : 1);
+  ' "$1"
+}
+
+# Stage a poll response that may be the interruption and stream anything that
+# provably is not. Exit 10 when the whole response is held in <response-file>
+# and nothing was printed, so the caller can test it with interrupted_payload;
+# exit 0 once the response has streamed through to stdout.
 poll_response_filter() {  # <response-file>
   perl -e '
     use strict;
     use warnings;
-    my ($stage) = @ARGV;
+    my ($stage, $cap) = @ARGV;
     my $expected = "error: Lavish Editor poll response was interrupted\ncode: SERVER_ERROR\n";
     open my $staged, ">", $stage or exit 2;
     binmode STDIN;
@@ -337,26 +391,33 @@ poll_response_filter() {  # <response-file>
       my $count = sysread STDIN, my $chunk, 65536;
       exit 2 unless defined $count;
       last if $count == 0;
-      if ($streaming) {
-        write_all(*STDOUT, $chunk);
-        next;
-      }
-      my $room = length($expected) + 1 - length($candidate);
-      my $take = length($chunk) < $room ? length($chunk) : $room;
-      my $prefix = substr($chunk, 0, $take);
-      $candidate .= $prefix;
-      write_all($staged, $prefix);
-      my $matches_prefix = length($candidate) <= length($expected)
-        && substr($expected, 0, length($candidate)) eq $candidate;
-      if (!$matches_prefix) {
-        write_all(*STDOUT, $candidate);
-        write_all(*STDOUT, substr($chunk, $take));
-        $streaming = 1;
+      my $offset = 0;
+      while ($offset < $count) {
+        if ($streaming) {
+          write_all(*STDOUT, substr($chunk, $offset));
+          last;
+        }
+        # Hold only the two exact lines until they match, so a response that
+        # is not the interruption streams after at most that many bytes; only
+        # a response that opens with them may be held up to the cap.
+        my $limit = length($candidate) < length($expected) ? length($expected) : $cap + 1;
+        my $take = $limit - length($candidate);
+        $take = $count - $offset if $take > $count - $offset;
+        my $piece = substr($chunk, $offset, $take);
+        $offset += $take;
+        $candidate .= $piece;
+        write_all($staged, $piece);
+        my $possible = length($candidate) <= length($expected)
+          ? substr($expected, 0, length($candidate)) eq $candidate
+          : substr($candidate, 0, length($expected)) eq $expected && length($candidate) <= $cap;
+        if (!$possible) {
+          write_all(*STDOUT, $candidate);
+          $streaming = 1;
+        }
       }
     }
-    exit 10 if !$streaming && $candidate eq $expected;
-    write_all(*STDOUT, $candidate) unless $streaming;
-  ' "$1"
+    exit 10 unless $streaming;
+  ' "$1" "$POLL_INTERRUPTED_STAGE_BYTES"
 }
 
 # Minimum seconds between retry attempt starts. FM_LAVISH_POLL_RETRY_DELAY is a
@@ -391,7 +452,7 @@ poll_iteration_floor_wait() {
 }
 
 cmd_poll() {
-  local artifact=${1-} delay attempt=0 response cleanup_command rc filter_rc iteration_started
+  local artifact=${1-} delay attempt=0 response cleanup_command rc filter_rc iteration_started interrupted
   local pipeline_status reply_file=''
   local reply_text='' reply_pending=0
   [ -n "$artifact" ] || usage
@@ -447,6 +508,13 @@ cmd_poll() {
     case "$filter_rc" in
       0) break ;;
       10)
+        interrupted=0
+        interrupted_payload "$response" || interrupted=$?
+        case "$interrupted" in
+          0) ;;
+          1) cat -- "$response"; break ;;
+          *) die "cannot classify the poll response" ;;
+        esac
         if [ "$attempt" -lt "$POLL_RETRY_LIMIT" ]; then
           attempt=$((attempt + 1))
           poll_iteration_floor_wait "$iteration_started" "$delay" \
@@ -489,6 +557,10 @@ cmd_classify() {
     waiting)             printf 'waiting\n'; return 0 ;;
     browser_disconnected) printf 'disconnected\n'; return 0 ;;
   esac
+  if interrupted_payload "$file"; then
+    printf 'interrupted\n'
+    return 0
+  fi
   error_message=$(awk 'NR == 1 && /^error:[[:space:]]*/ { sub(/^error:[[:space:]]*/, ""); print }' "$file")
   error_code=$(awk '
     NR == 1 && /^error:[[:space:]]*/ { in_error=1; next }
@@ -551,24 +623,75 @@ result_has_queued_content() {  # <result-file>
   ' "$1"
 }
 
+# Whether an interrupted capture follows another interruption of the same
+# source captured at most POLL_INTERRUPTED_REPEAT_SECONDS earlier - the bound on
+# the one quiet re-arm described in the header. The predecessor is the capture
+# with the previous sequence beside this one, so the verdict is read from the
+# durable captures alone and stays the same on every reconcile. A predecessor
+# that cannot be read, or is an interruption whose capture time cannot be read,
+# counts as a repeat, so an uncertain bound announces rather than staying quiet.
+interruption_repeats() {  # <result-file>
+  local file=$1 base seq previous status=0
+  case "$file" in *.result) ;; *) return 1 ;; esac
+  base=${file%.result}
+  seq=${base##*.}
+  case "$seq" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$((10#$seq))" -gt 1 ] || return 1
+  previous="${base%.*}.$((10#$seq - 1)).result"
+  [ -f "$previous" ] && [ ! -L "$previous" ] || return 1
+  interrupted_payload "$previous" || status=$?
+  case "$status" in
+    0) ;;
+    1) return 1 ;;
+    *) return 0 ;;
+  esac
+  perl -e '
+    my ($previous, $current, $window) = @ARGV;
+    my $then = (stat $previous)[9];
+    my $now = (stat $current)[9];
+    exit 0 unless defined($then) && defined($now);
+    exit($now - $then > $window ? 1 : 0);
+  ' "$previous" "$file" "$POLL_INTERRUPTED_REPEAT_SECONDS"
+}
+
 # Whether a captured result is a routine no-op the runner should record without
 # announcing, for the generic runner's silence seam. Lavish's notion of "nothing
 # was said" lives here and nowhere else: an ended session carrying no queued
-# content block is a board the captain closed without saying anything, and the
-# handler learns nothing from being told. Anything else - a real answer, a
-# missing or waiting session, an unreadable result - is announced.
+# content block is a board the captain closed without saying anything, a
+# disconnected window carries no answer, and an isolated interruption is the
+# server restarting under the listener; the handler learns nothing from being
+# told. Anything else - a real answer, a missing or waiting session, a repeated
+# interruption, an unreadable result - is announced.
 cmd_silent() {
-  local file=${1-} content_rc
+  local file=${1-} content_rc lifecycle
   [ -n "$file" ] || usage
   [ -f "$file" ] && [ ! -L "$file" ] || die "result file does not exist: $file"
-  [ "$(cmd_classify "$file")" = disconnected ] && return 0
-  [ "$(cmd_classify "$file")" = ended ] || return 1
+  lifecycle=$(cmd_classify "$file")
+  [ "$lifecycle" = disconnected ] && return 0
+  if [ "$lifecycle" = interrupted ]; then
+    interruption_repeats "$file" && return 1
+    return 0
+  fi
+  [ "$lifecycle" = ended ] || return 1
   result_has_queued_content "$file"
   content_rc=$?
   # Only a completed check that proved the result carries nothing declares
   # silence; a check that could not complete announces, like every other
   # uncertainty here.
   [ "$content_rc" -eq 1 ]
+}
+
+# Whether the runner should keep this source's claim and poll again after the
+# result it names in FM_PROCEVENT_RELISTEN_RESULT. Only a silent interruption
+# re-arms in place, which is what makes the restarted server's next poll start
+# at once; its own bound is the repeat rule in `silent`. A call with no named
+# result - the runner's empty-wait path - keeps the default of one poll.
+cmd_relisten() {
+  local file=${FM_PROCEVENT_RELISTEN_RESULT-}
+  [ "$#" -eq 0 ] || usage
+  [ -n "$file" ] && [ -f "$file" ] && [ ! -L "$file" ] || return 1
+  [ "$(cmd_classify "$file")" = interrupted ] || return 1
+  cmd_silent "$file"
 }
 
 # Print `key<TAB>answer<TAB>label[<TAB>mode]` for each non-reconcile structured choice the
@@ -847,6 +970,7 @@ case "${1-}" in
   classify)  shift; cmd_classify "$@" ;;
   terminal)  shift; cmd_terminal "$@" ;;
   silent)    shift; cmd_silent "$@" ;;
+  relisten)  shift; cmd_relisten "$@" ;;
   answers)   shift; cmd_answers "$@" ;;
   reconciles) shift; cmd_reconciles "$@" ;;
   read)      shift; cmd_read "$@" ;;

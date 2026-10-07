@@ -1410,7 +1410,9 @@ cat > "$LAVISH_SCRIPTED_BIN/lavish-axi" <<'SH'
 # Stand-in for `lavish-axi poll <file>`, scripted per scenario: LAVISH_SCRIPT
 # names the response for each successive poll, one word per poll, and its last
 # word repeats forever. `interrupt` is the exact transient response the server
-# returns while the board's marks stay available.
+# returns while the board's marks stay available, and `interrupt-help` is the
+# same response as lavish-axi 0.1.83 prints it, captured byte for byte from a
+# real server killed under a live poll.
 [ "${1-}" != --version ] || { printf '0.1.79\n'; exit 0; }
 n=$(cat "$LAVISH_COUNT" 2>/dev/null || echo 0)
 n=$((n + 1))
@@ -1433,6 +1435,14 @@ i=$((n - 1))
 case "${plan[$i]}" in
   interrupt)
     printf 'error: Lavish Editor poll response was interrupted\ncode: SERVER_ERROR\n'; exit 1 ;;
+  interrupt-help)
+    printf '%s\n' 'error: Lavish Editor poll response was interrupted' 'code: SERVER_ERROR' \
+      'help[2]: Run `lavish-axi server --verbose` or inspect `~/.lavish-axi/server.log` (`LAVISH_AXI_STATE_DIR/server.log` when set) for server startup or crash diagnostics,Re-run the last `lavish-axi poll <html-file>` command after the server is healthy'
+    exit 1 ;;
+  interrupt-help-twice)
+    printf '%s\n' 'error: Lavish Editor poll response was interrupted' 'code: SERVER_ERROR' \
+      'help[1]: Re-run the poll' 'help[1]: Re-run the poll'
+    exit 1 ;;
   near-interrupt)
     printf 'error: Lavish Editor poll response was interrupted \ncode: SERVER_ERROR\n'; exit 1 ;;
   other-server-error)
@@ -1495,6 +1505,30 @@ assert_contains "$(wake_payloads "$HRETRY")" "procevent lavish $retry_id 1" \
 assert_grep 'ship it' "$(first_result "$HRETRY" "$retry_id")" \
   "the announced result is the captain's feedback, not the interruption"
 pass "a transient Lavish poll interruption is retried quietly and never announced"
+
+# The same retry for the response as lavish-axi 0.1.83 really prints it, with its
+# trailing help line. An in-place upgrade restarts the server under every live
+# listener, and before this shape was recognized each one captured the error and
+# woke its owner instead of polling the restarted server.
+HRETRYHELP="$TMP_ROOT/hretry-help"; new_home "$HRETRYHELP"
+RETRYHELP_ART="$TMP_ROOT/retry-help-board.html"
+printf '<h1>retry help</h1>\n' > "$RETRYHELP_ART"
+lavish_session "$RETRYHELP_ART"
+retryhelp_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$RETRYHELP_ART")
+fm_test_track_procevent_home "$HRETRYHELP"
+LAVISH_COUNT="$TMP_ROOT/retry-help-count"; LAVISH_SCRIPT="interrupt-help interrupt-help feedback"
+PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HRETRYHELP" \
+  "$ROOT/bin/fm-procevent-lavish.sh" arm "$RETRYHELP_ART" >/dev/null
+wait_for "$HRETRYHELP/state/.wake-queue" || fail "feedback after help-carrying interruptions produced no wake"
+[ "$(cat "$LAVISH_COUNT")" = 3 ] \
+  || fail "the help-carrying interruption was polled $(cat "$LAVISH_COUNT") times, not the two quiet retries plus the delivering poll"
+[ "$(count_results "$HRETRYHELP" "$retryhelp_id")" = 1 ] \
+  || fail "a retried help-carrying interruption produced $(count_results "$HRETRYHELP" "$retryhelp_id") captured results instead of one"
+assert_contains "$(wake_payloads "$HRETRYHELP")" "procevent lavish $retryhelp_id 1" \
+  "feedback arriving after help-carrying interruptions is captured and announced"
+assert_grep 'ship it' "$(first_result "$HRETRYHELP" "$retryhelp_id")" \
+  "the announced result is the captain's feedback, not the help-carrying interruption"
+pass "the interruption as lavish-axi 0.1.83 prints it is retried quietly too"
 
 # --- end-user-aligned regression: a retried poll does not resubmit the reply ---
 # The worker hands its round reply to the adapter once. When the first poll of
@@ -1585,32 +1619,42 @@ PATH="$LAVISH_SCRIPTED_BIN:$PATH" LAVISH_COUNT="$GONE_COUNT" LAVISH_SCRIPT=feedb
   || fail "a listener whose artifact vanished consumed its staged reply anyway"
 pass "a listener whose artifact vanished leaves the staged reply for the next one"
 
-# Exhaustion is news: after the bounded retries the same exact response is
-# captured and announced normally rather than being swallowed forever.
+# An interruption that outlives the bounded retries is captured, but the first
+# capture is still the server restarting rather than news: it is recorded
+# handled without a wake and the same runner re-arms the board at once. A server
+# that keeps cutting polls through that one re-arm is news, so the second
+# capture is announced and the runner stops instead of looping in silence.
 HEXH="$TMP_ROOT/hexh"; new_home "$HEXH"
 EXH_ART="$TMP_ROOT/exhaust-board.html"
 printf '<h1>exhaust</h1>\n' > "$EXH_ART"
 lavish_session "$EXH_ART"
 exh_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$EXH_ART")
 fm_test_track_procevent_home "$HEXH"
-LAVISH_COUNT="$TMP_ROOT/exhaust-count"; LAVISH_SCRIPT="interrupt"
+LAVISH_COUNT="$TMP_ROOT/exhaust-count"; LAVISH_SCRIPT="interrupt-help"
 PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HEXH" \
   "$ROOT/bin/fm-procevent-lavish.sh" arm "$EXH_ART" >/dev/null
-wait_capture "$HEXH" "$exh_id" 200 \
-  || fail "exhaustion produced no captured result"
-[ "$(cat "$LAVISH_COUNT")" = 13 ] \
-  || fail "the retry bound polled $(cat "$LAVISH_COUNT") times, not the first poll plus 12 bounded retries"
-[ "$(count_results "$HEXH" "$exh_id")" = 1 ] \
-  || fail "exhaustion produced $(count_results "$HEXH" "$exh_id") captured results instead of one"
-wait_for "$HEXH/state/.wake-queue" \
-  || fail "the interruption that survives the bound produced no wake"
-assert_contains "$(wake_payloads "$HEXH")" "procevent lavish $exh_id 1" \
-  "the interruption that survives the bound is announced normally"
-assert_grep 'poll response was interrupted' "$(first_result "$HEXH" "$exh_id")" \
-  "the announced result is the exact interruption the server returned"
+wait_for "$HEXH/state/.wake-queue" 600 \
+  || fail "an interruption that persisted through the re-arm produced no wake"
+wait_capture "$HEXH" "$exh_id" 100 \
+  || fail "the runner kept its claim after announcing the repeated interruption"
+[ "$(count_results "$HEXH" "$exh_id")" = 2 ] \
+  || fail "a persistent interruption produced $(count_results "$HEXH" "$exh_id") captured results instead of the first plus one re-arm"
+[ "$(cat "$LAVISH_COUNT")" = 26 ] \
+  || fail "a persistent interruption was polled $(cat "$LAVISH_COUNT") times, not two full retry bounds"
+[ -f "$HEXH/state/procevent-inbox/$exh_id.1.handled" ] \
+  || fail "the first interruption capture was not recorded handled"
+assert_not_contains "$(wake_payloads "$HEXH")" "procevent lavish $exh_id 1" \
+  "the first interruption capture woke its owner"
+assert_contains "$(wake_payloads "$HEXH")" "procevent lavish $exh_id 2" \
+  "the interruption that outlived the re-arm is announced"
+[ ! -f "$HEXH/state/procevent-inbox/$exh_id.2.handled" ] \
+  || fail "the repeated interruption was recorded handled without ever being handled"
+sleep 3
+[ "$(cat "$LAVISH_COUNT")" = 26 ] \
+  || fail "the runner kept polling a server that stays broken: $(cat "$LAVISH_COUNT") polls"
 PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HEXH" \
   "$ROOT/bin/fm-procevent-lavish.sh" retire "$EXH_ART" >/dev/null
-pass "an interruption that outlives the bounded retries is captured and announced"
+pass "an outlasting interruption re-arms once quietly and is announced if it persists"
 
 # A different SERVER_ERROR is a genuine error, never a retry: no fail-open drift
 # from the one exact transient response this adapter owns.
@@ -1654,6 +1698,27 @@ assert_contains "$(wake_payloads "$HNEAR")" "procevent lavish $near_id 1" \
 PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HNEAR" \
   "$ROOT/bin/fm-procevent-lavish.sh" retire "$NEAR_ART" >/dev/null
 pass "only the literal two-line interruption enters the quiet retry policy"
+
+# The help line lavish-axi appends is admitted exactly once; a response carrying
+# anything more after the two lines is a genuine result and surfaces at once.
+HTWICE="$TMP_ROOT/htwice"; new_home "$HTWICE"
+TWICE_ART="$TMP_ROOT/twice-board.html"
+printf '<h1>twice</h1>\n' > "$TWICE_ART"
+lavish_session "$TWICE_ART"
+twice_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$TWICE_ART")
+fm_test_track_procevent_home "$HTWICE"
+LAVISH_COUNT="$TMP_ROOT/twice-count"; LAVISH_SCRIPT="interrupt-help-twice feedback"
+PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HTWICE" FM_LAVISH_POLL_RETRY_DELAY=1 \
+  "$ROOT/bin/fm-procevent-lavish.sh" arm "$TWICE_ART" >/dev/null
+wait_for "$HTWICE/state/.wake-queue" \
+  || fail "an interruption followed by extra lines was not captured and announced"
+[ "$(cat "$LAVISH_COUNT")" = 1 ] \
+  || fail "an interruption followed by extra lines was retried instead of surfacing on its first poll"
+assert_contains "$(wake_payloads "$HTWICE")" "procevent lavish $twice_id 1" \
+  "an interruption followed by extra lines is captured and announced immediately"
+PATH="$LAVISH_SCRIPTED_BIN:$PATH" FM_HOME="$HTWICE" \
+  "$ROOT/bin/fm-procevent-lavish.sh" retire "$TWICE_ART" >/dev/null
+pass "only one trailing help line keeps a response in the quiet retry policy"
 
 # The public arm boundary refuses invalid retry intervals before it publishes a
 # source registration, rather than arming a listener that can only fail later.
@@ -2940,6 +3005,12 @@ assert_contains "$guard_out" "1 process-event source(s) registered" \
   "the general guard identifies the source-only supervision need"
 pass "source-only homes trigger the general supervision guard"
 
+# The poll interruption exactly as lavish-axi 0.1.83 prints it, captured from a
+# real server killed under a live poll.
+# shellcheck disable=SC2016 # The backticks are literal lavish-axi output.
+LAVISH_INTERRUPTED_0183=$(printf '%s\n' 'error: Lavish Editor poll response was interrupted' \
+  'code: SERVER_ERROR' \
+  'help[2]: Run `lavish-axi server --verbose` or inspect `~/.lavish-axi/server.log` (`LAVISH_AXI_STATE_DIR/server.log` when set) for server startup or crash diagnostics,Re-run the last `lavish-axi poll <html-file>` command after the server is healthy')
 CLS="$TMP_ROOT/cls"
 while IFS='|' read -r status expected; do
   printf 'session:\n  file: /a.html\n  status: %s\n' "$status" > "$CLS"
@@ -2960,6 +3031,18 @@ printf 'error: No active Lavish Editor session for this file\ncode: NOT_FOUND\n'
 assert_contains "$("$ROOT/bin/fm-procevent-lavish.sh" classify "$CLS")" missing "an explicit missing session classifies as missing"
 printf 'garbage that is not a session block\n' > "$CLS"
 assert_contains "$("$ROOT/bin/fm-procevent-lavish.sh" classify "$CLS")" unknown "malformed output classifies as unknown rather than a lifecycle state"
+printf 'error: Lavish Editor poll response was interrupted\ncode: SERVER_ERROR\n' > "$CLS"
+[ "$("$ROOT/bin/fm-procevent-lavish.sh" classify "$CLS")" = interrupted ] \
+  || fail "the two-line poll interruption did not classify as interrupted"
+printf '%s\n' "$LAVISH_INTERRUPTED_0183" > "$CLS"
+[ "$("$ROOT/bin/fm-procevent-lavish.sh" classify "$CLS")" = interrupted ] \
+  || fail "the poll interruption as lavish-axi 0.1.83 prints it did not classify as interrupted"
+printf 'feedback[1]{text}:\n  ship it\n' >> "$CLS"
+[ "$("$ROOT/bin/fm-procevent-lavish.sh" classify "$CLS")" = unknown ] \
+  || fail "an interruption carrying a feedback item classified as a bare interruption"
+printf 'error: Lavish Editor server connection failed\ncode: SERVER_ERROR\n' > "$CLS"
+[ "$("$ROOT/bin/fm-procevent-lavish.sh" classify "$CLS")" = unknown ] \
+  || fail "a different SERVER_ERROR classified as an interruption"
 pass "the adapter classifies published poll output safely"
 
 HOST_HOME="$TMP_ROOT/host-config"
@@ -3090,8 +3173,16 @@ printf 'session:\n  file: /a.html\n  status: browser_disconnected\n' > "$SIL"
 silent_says yes "a browser disconnect carries no answer and keeps the session open"
 printf 'error: No active Lavish Editor session for this file\ncode: NOT_FOUND\n' > "$SIL"
 silent_says no "a missing session is not a no-op"
+printf 'error: Lavish Editor server connection failed\ncode: SERVER_ERROR\n' > "$SIL"
+silent_says no "a server error other than the interruption is not a no-op"
 printf 'error: Lavish Editor poll response was interrupted\ncode: SERVER_ERROR\n' > "$SIL"
-silent_says no "a server error is not a no-op"
+silent_says yes "an isolated two-line poll interruption is the server restarting"
+printf '%s\n' "$LAVISH_INTERRUPTED_0183" > "$SIL"
+silent_says yes "the poll interruption as lavish-axi 0.1.83 prints it is the server restarting"
+printf 'feedback[1]{text}:\n  ship it\n' >> "$SIL"
+silent_says no "an interruption carrying a feedback item still wakes its owner"
+printf 'error: Lavish Editor poll response was interrupted\ncode: SERVER_ERROR\nprompts[1]{tag,text}:\n  "message","some prose"\n' > "$SIL"
+silent_says no "an interruption carrying a captain message still wakes its owner"
 printf 'garbage that is not a session block\n' > "$SIL"
 silent_says no "an unreadable result fails closed and is announced"
 printf 'session:\n  file: /a.html\n  status: ended\n  ended_by: user\nfeedback[1]{text}:\n  prompts[0]{x}:\n' > "$SIL"
@@ -3106,6 +3197,38 @@ if [ "$(id -u)" != 0 ]; then
   chmod 600 "$SIL"
 fi
 pass "the adapter owns which Lavish results are silent, and fails closed on everything else"
+
+# The interruption is silent once per outage. The bound is read from the
+# source's own durable captures: the capture with the previous sequence beside
+# this one. `relisten` re-arms in place for exactly the silent interruption the
+# runner names, and for nothing else.
+REP="$TMP_ROOT/repeat-captures"; mkdir -p "$REP"
+REP_SRC="$REP/lavish-0123456789abcdef"
+relisten_says() {  # <expected: yes|no> <result-or-empty> <description>
+  if FM_PROCEVENT_RELISTEN_RESULT="$2" "$ROOT/bin/fm-procevent-lavish.sh" relisten >/dev/null 2>&1; then
+    [ "$1" = yes ] || fail "relisten re-armed after a result that must end the poll: $3"
+  else
+    [ "$1" = no ] || fail "relisten declined to re-arm after an isolated interruption: $3"
+  fi
+}
+printf '%s\n' "$LAVISH_INTERRUPTED_0183" > "$REP_SRC.1.result"
+SIL="$REP_SRC.1.result"
+silent_says yes "the first interruption capture of a source is silent"
+relisten_says yes "$REP_SRC.1.result" "the first interruption capture re-arms in place"
+cp "$REP_SRC.1.result" "$REP_SRC.2.result"
+SIL="$REP_SRC.2.result"
+silent_says no "an interruption right after another interruption of the same source is news"
+relisten_says no "$REP_SRC.2.result" "a repeated interruption does not re-arm again"
+perl -e 'my $t = time - 3600; utime $t, $t, $ARGV[0] or exit 1' "$REP_SRC.1.result" \
+  || fail "could not age the earlier interruption capture"
+silent_says yes "an interruption long after an earlier outage is a new outage"
+relisten_says yes "$REP_SRC.2.result" "a new outage re-arms in place once more"
+printf 'session:\n  file: /a.html\n  status: feedback\nfeedback[1]{text}:\n  ship it\n' > "$REP_SRC.3.result"
+relisten_says no "$REP_SRC.3.result" "feedback ends the runner's poll as before"
+printf 'session:\n  file: /a.html\n  status: browser_disconnected\n' > "$REP_SRC.4.result"
+relisten_says no "$REP_SRC.4.result" "a disconnect keeps its one-poll-per-runner default"
+relisten_says no "" "an empty wait names no result and keeps the default"
+pass "an interruption is silent and re-arms once per outage, and nothing else re-arms"
 
 # `read` is the handler's presentation of a captured result. Exercised through
 # the published command against representative captures, not by inspecting the

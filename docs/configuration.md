@@ -1937,10 +1937,13 @@ Before arming any Lavish source, open its artifact with `lavish-axi` so the save
 
 **Retry interrupted Lavish polls**
 
-That adapter, and only that adapter, retries the one exact transient response a cut-short listener returns while its marks remain available (`error: Lavish Editor poll response was interrupted` with `code: SERVER_ERROR`), up to 12 times with poll starts at least 5 seconds apart, so an internal retry never reaches the runner as a captured result.
+That adapter, and only that adapter, retries the one exact transient response a cut-short listener returns while its marks remain available, as when an in-place lavish-axi upgrade restarts the server under live listeners.
+That response is `error: Lavish Editor poll response was interrupted` with `code: SERVER_ERROR`, optionally followed by the single `help[N]:` suggestion line newer lavish-axi releases append, and nothing else.
+The adapter retries it up to 12 times with poll starts at least 5 seconds apart, so an internal retry never reaches the runner as a captured result.
 This start-to-start governor is a no-op after a normally blocking poll but caps an immediately returning poll under the shipped defaults independently of the owner lease and registration launch pacing.
 
-Real feedback, ended and missing sessions, any other `SERVER_ERROR`, and that same interruption still standing once the bound is spent are all captured and announced normally; `FM_LAVISH_POLL_RETRY_DELAY` is a bounded 1 to 60 second test override for the interval only, and the runner itself stays adapter-agnostic.
+Once the bound is spent the interruption is captured and classified `interrupted`; the first such capture is silent and re-arms the source in the same runner, while one that follows another interruption of the same source within ten minutes is announced and ends the runner, so a server that stays broken wakes its owner instead of looping.
+Real feedback, ended and missing sessions, any other `SERVER_ERROR`, and the interruption carrying any item, message, or other extra line are all captured and announced normally; `FM_LAVISH_POLL_RETRY_DELAY` is a bounded 1 to 60 second test override for the interval only, and the runner itself stays adapter-agnostic.
 An already-armed Lavish source keeps its registered listener command until it is retired and armed again, so retire the source, then arm it again to adopt this retry policy.
 
 ### Crew-hosted Lavish review boards
@@ -2023,6 +2026,7 @@ This section is the single owner of the runner's operating contract.
 - A queued `check` delivery is reported at most once per captured source and sequence while any records for that key remain queued.
 - A durable handled acknowledgement stops future source re-announcement, while a record already queued remains under the durable queue's authority until the ordinary drain's sequence-bound post-handling acknowledgement consumes it.
 - By default, a runner releases its claim after one poll; an adapter that opts into `relisten` keeps that runner and claim across empty waits and captured results, adopting a replacement registration only when the registered command is unchanged and the claim still belongs to it.
+  After a capture the check is told which result it follows, so an adapter such as Lavish can opt in for one result shape only.
   A failed relisten check releases the claim; the runner never refreshes its own home lease.
   The `bin/fm-procevent.sh` header owns the exact seam, and [remote secondmates](remote-secondmates.md#how-remote-lines-are-mirrored) owns the reply listener's behavior.
 
@@ -2049,9 +2053,9 @@ Whether a captured result is a routine no-op is adapter knowledge too, and the r
 
 **Lavish silence rules**
 
-- For Lavish that verdict covers two shapes - a session the adapter classifies `ended` that carries no queued content block at all, which is a review surface closed with nothing said, and `browser_disconnected` (classified `disconnected`), which carries no answer while the session remains open.
+- For Lavish that verdict covers three shapes - a session the adapter classifies `ended` that carries no queued content block at all, which is a review surface closed with nothing said, `browser_disconnected` (classified `disconnected`), which carries no answer while the session remains open, and an isolated `interrupted` capture under the [interrupted-poll retry rule](#process-to-event-sources-stateprocevent), which is the server restarting under the listener.
 - Any recognized top-level `prompts` or `feedback` block counts as content regardless of its declared count, and a malformed header makes the result indeterminate rather than empty.
-- A `Send & End` close carrying the captain's answer arrives as `status: feedback` with `session_ended`, so it classifies `feedback` and is announced unchanged, as is any `ended` result that still carries content, and every `waiting`, `missing`, `unknown`, or unreadable result.
+- A `Send & End` close carrying the captain's answer arrives as `status: feedback` with `session_ended`, so it classifies `feedback` and is announced unchanged, as is any `ended` result that still carries content, a repeated `interrupted` capture, and every `waiting`, `missing`, `unknown`, or unreadable result.
 
 **Retire terminal sources**
 

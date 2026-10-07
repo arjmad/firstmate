@@ -181,11 +181,14 @@
 # Polling again is adapter-owned through the same kind of seam. An adapter that
 # answers exit 0 to `bin/fm-procevent-<adapter>.sh relisten` keeps this runner
 # and its claim across an empty result and across a capture, and the runner
-# polls the registration that claim still owns. It adopts a replacement
-# registration only when that same claim still owns it and the registered
-# command is unchanged. A missing command, an error, or any other exit releases
-# the claim after that one result, exactly as before. The runner still does not
-# refresh the owner lease, so a home that has gone still ends the poll.
+# polls the registration that claim still owns. After a capture the check runs
+# with FM_PROCEVENT_RELISTEN_RESULT naming that captured result, so an adapter
+# may answer for that result alone; after an empty result it is empty. It
+# adopts a replacement registration only when that same claim still owns it and
+# the registered command is unchanged. A missing command, an error, or any other
+# exit releases the claim after that one result, exactly as before. The runner
+# still does not refresh the owner lease, so a home that has gone still ends the
+# poll.
 #
 # Keyed captain answers from built-in adapters use one more seam of the same kind,
 # and this runner still decides nothing about them. Some sources carry the
@@ -1103,13 +1106,13 @@ cmd_start() {
   # 0 when this runner should poll again. The adapter's relisten command is the
   # only adapter-specific signal; a replacement registration is adopted only
   # when this claim still owns it and the registered command is unchanged.
-  adopt_relisten() {
+  adopt_relisten() {  # [captured-result]
     local script registration current now_adapter i
     local -a previous=()
     [ "$extension_owner" -eq 0 ] || return 1
     script=$(adapter_script "$adapter")
     [ -f "$script" ] && [ ! -L "$script" ] || return 1
-    "$script" relisten >/dev/null 2>&1 || return 1
+    FM_PROCEVENT_RELISTEN_RESULT=${1-} "$script" relisten >/dev/null 2>&1 || return 1
     registration=$(source_file "$id")
     [ -f "$registration" ] && [ ! -L "$registration" ] || return 1
     fm_procevent_source_lock_acquire "$id" || return 1
@@ -1429,7 +1432,7 @@ EOF
     fm_procevent_claim_capture_reservation_remove_locked || true
     exec 6<&-
   fi
-  if [ "$handled_capture" -eq 1 ] && adopt_relisten; then
+  if [ "$handled_capture" -eq 1 ] && adopt_relisten "$durable"; then
     continue
   fi
   break
