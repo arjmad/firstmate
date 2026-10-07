@@ -132,6 +132,15 @@ EOF
   printf "If the \`firstmate-coding-guidelines\` skill name does not resolve in this session, read \`%s/.agents/skills/firstmate-coding-guidelines/SKILL.md\` instead.\n" "$root"
 }
 
+# The one sentence every ship, scout, and promoted brief places after its
+# fleet-memory filing carve-out, so a worker files into a brain only through
+# the brain's MCP write tools and never edits its checkout behind its back.
+fm_brain_filing_rule() {
+  cat <<'EOF'
+Where `fleet-memory` routes knowledge to a brain, file it only through that brain's MCP tools - `remember` for a fact; `put_page`, `edit_page`, or `add_timeline_entry` for a page (mechanics in `~/nix/docs/brain-mcp-clients.md`) - and never by editing brain files or opening a brain PR directly.
+EOF
+}
+
 # Closed-set gate shared by every forge-aware renderer and bin/fm-brief.sh, so a
 # caller cannot reach a half-rendered contract. local-only is refused rather than
 # rendered with an inert annotation: it publishes nothing, and its landing

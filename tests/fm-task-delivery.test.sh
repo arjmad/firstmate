@@ -366,6 +366,8 @@ STUB
         "$mode: $contract omitted the ship outside-worktree write boundary"
       assert_grep "Filing durable knowledge through the fleet's sanctioned memory route" "$contract" \
         "$mode: $contract dropped the durable-knowledge filing carve-out"
+      assert_grep "never by editing brain files or opening a brain PR directly" "$contract" \
+        "$mode: $contract dropped the brain MCP-only filing rule"
       assert_grep "Leave the worktree clean before reporting done." "$contract" \
         "$mode: $contract omitted the clean-before-done rule"
     done
