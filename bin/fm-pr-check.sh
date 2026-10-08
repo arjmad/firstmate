@@ -19,6 +19,8 @@
 # skips this refusal, because its own merge-time draft refusal is authoritative.
 # It also judges the forge-reported PR head rather than the worker copy's HEAD,
 # because the merge is of that head, not of whatever the copy holds now.
+# The recorded pr= also frees the task's place in a declared project capacity
+# (bin/fm-project-capacity-lib.sh).
 # Usage: fm-pr-check.sh <task-id> <pr-url>
 set -eu
 

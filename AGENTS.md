@@ -253,7 +253,7 @@ Before filing, holding, updating, or handing off work, read [Backlog contract](d
 Record work in its owning home's backlog, using `bin/fm-tasks-axi.sh` or the configured manual backend; secondmates themselves are not work items.
 Hold decisions through `bin/fm-captain-hold.sh`, and load `captain-hold-lifecycle` for investigation/visual-review decisions.
 File before dispatch; spawn and teardown own automatic state transitions where configured.
-Re-evaluate queued work after teardown and heartbeat, respecting unresolved dependencies and time gates.
+Re-evaluate queued work after teardown, heartbeat, and a recorded PR-ready handoff on a capacity-capped project, respecting unresolved dependencies, time gates, and project capacity.
 Keep notes current and reusable knowledge with section 6's owners.
 
 ## 11. Crewmate briefs
