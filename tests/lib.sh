@@ -686,6 +686,54 @@ fm_eval_launch() {
   (cd "$pane" && env "$@" PATH="$fakebin:${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" bash -c "$launch")
 }
 
+# --- agent-named process stand-ins ------------------------------------------
+#
+# fm_agent_standin <dir> echoes the path of a long-running native executable
+# that a liveness case symlinks under a harness name (`ln -s "$standin"
+# "$bin/pi"`), so the kernel records the harness name as the process identity
+# while a real process runs. Symlink it, never copy it: a copied platform binary
+# fails code-signing validation and is killed on macOS arm64.
+#
+# The target must not dispatch on its own invoked name. A multicall coreutils
+# (uutils, the Ubuntu 26.04 default, or busybox) resolves the applet from that
+# name: a host `sleep` invoked through a symlink named `pi` refuses or runs the
+# wrong applet and exits at once, so the agent-named process never exists. The
+# helper compiles a dedicated spinner when a C compiler exists, falls back to the
+# host `sleep` only when it demonstrably survives a foreign name, and otherwise
+# returns nonzero so the caller can skip with a reason rather than fail.
+# fm_agent_standin_alive <path> is that survival check: it starts <path> and
+# succeeds only if it is still running a moment later.
+fm_agent_standin_alive() {  # <path>
+  local pid
+  "$1" 60 >/dev/null 2>&1 &
+  pid=$!
+  sleep 0.2
+  kill -0 "$pid" 2>/dev/null || { wait "$pid" 2>/dev/null; return 1; }
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
+fm_agent_standin() {  # <dir> -> echoes the stand-in path; nonzero when none survives a foreign name
+  local dir=$1 cc_bin sleep_bin
+  mkdir -p "$dir" || return 1
+  cc_bin=$(command -v cc 2>/dev/null || command -v gcc 2>/dev/null || true)
+  if [ -n "$cc_bin" ] &&
+    printf '%s\n' '#include <unistd.h>' 'int main(void){int i;for(i=0;i<600;i++)sleep(1);return 0;}' > "$dir/standin.c" &&
+    "$cc_bin" -o "$dir/standin" "$dir/standin.c" 2>/dev/null &&
+    fm_agent_standin_alive "$dir/standin"; then
+    printf '%s\n' "$dir/standin"
+    return 0
+  fi
+  rm -f "$dir/standin"
+  sleep_bin=$(command -v sleep) || return 1
+  ln -s "$sleep_bin" "$dir/standin" 2>/dev/null || return 1
+  if ! fm_agent_standin_alive "$dir/standin"; then
+    rm -f "$dir/standin"
+    return 1
+  fi
+  printf '%s\n' "$dir/standin"
+}
+
 # --- portable file timestamps -----------------------------------------------
 
 # fm_touch_epoch <epoch> <path> [path...]: set each path's modification time to
