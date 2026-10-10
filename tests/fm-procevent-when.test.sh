@@ -166,6 +166,58 @@ out=$(pe "$H" handled when-fire 1)
 assert_contains "$out" "handled: when-fire 1" "the outcome acknowledges through the generic channel"
 pass "a stable true fires the action exactly once and wakes with the outcome"
 
+# --- --process-exit fires once the matched process is gone ------------------
+H="$TMP_ROOT/h-process-exit"; new_home "$H"
+# A uniquely named process stands in for the external job being waited on; it
+# exits when its stop file appears, and on its own after 30s as a backstop.
+PROC_PAT="fm-when-proc-marker-$$"
+PROC="$TMP_ROOT/$PROC_PAT.sh"
+cat > "$PROC" <<'SH'
+#!/usr/bin/env bash
+for _ in $(seq 1 600); do [ -e "$1" ] && exit 0; sleep 0.05; done
+SH
+chmod +x "$PROC"
+PROC_LOG="$TMP_ROOT/process-exit.log"
+printf 'first log line\nmiddle log line\nlast log line\n' > "$PROC_LOG"
+"$PROC" "$TMP_ROOT/process-exit-stop" &
+proc_pid=$!
+when "$H" process-absent "$PROC_PAT" >/dev/null
+assert_contains "$?" 1 "process-absent is false while a process matches"
+out=$(when "$H" arm process-exit --interval 0.1 --stable 2 \
+  --process-exit "$PROC_PAT" --then tail -n 2 "$PROC_LOG")
+assert_contains "$out" "armed: when-process-exit" "the preset arms like any watch"
+assert_not_contains "$out" "warning:" "no warning while the process is running"
+pe "$H" reconcile >/dev/null
+# The runner and its timeout wrappers carry the pattern in their own argv; on
+# a pgrep that does not hide ancestors they must not count as the process.
+sleep 1
+if first_result "$H" when-process-exit >/dev/null 2>&1; then
+  fail "the preset must not fire while the matched process still runs"
+fi
+: > "$TMP_ROOT/process-exit-stop"
+wait "$proc_pid" 2>/dev/null || true
+wait_for_result "$H" when-process-exit || fail "no outcome was captured after the process exited"
+RESULT=$(first_result "$H" when-process-exit)
+assert_grep 'status: fired' "$RESULT" "the preset fires once the process is gone"
+assert_grep 'last log line' "$RESULT" "the outcome carries the log tail from --then"
+assert_no_grep 'first log line' "$RESULT" "the outcome carries only the requested tail"
+when "$H" process-absent "$PROC_PAT" >/dev/null
+assert_contains "$?" 0 "process-absent is true once nothing matches"
+pass "--process-exit fires once the matched process exits and wakes with the log tail"
+
+# --- --process-exit refusals, warning, and pgrep errors ----------------------
+H="$TMP_ROOT/h-process-exit-misuse"; new_home "$H"
+if when "$H" arm both --process-exit x --condition true --then true 2>"$TMP_ROOT/both.err"; then
+  fail "--process-exit with --condition must be refused"
+fi
+assert_grep "pass only one" "$TMP_ROOT/both.err" "the refusal names the conflict"
+out=$(when "$H" arm nothing-runs --process-exit "fm-when-no-such-process-$$" --then true)
+assert_contains "$out" "warning: no process matches" "arming on a pattern nothing matches warns"
+when "$H" retire nothing-runs >/dev/null
+when "$H" process-absent '[' >/dev/null 2>&1
+assert_contains "$?" 2 "a pgrep failure is a condition error, never a true"
+pass "--process-exit refuses a second condition, warns on no match, and reports pgrep errors"
+
 # --- a flapping condition never fires ----------------------------------------
 H="$TMP_ROOT/h-flap"; new_home "$H"
 FLAPLOG="$TMP_ROOT/flap-act"

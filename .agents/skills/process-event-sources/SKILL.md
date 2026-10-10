@@ -82,6 +82,14 @@ Eligibility is a firstmate judgment made BEFORE arming, because the scripts cann
 Never bind an action that is destructive, irreversible, or security-sensitive, an action needing captain approval or any gate decision, or an action whose right form depends on what the condition finds - those keep the existing check-fires-then-firstmate-decides flow, for which a plain custom check or another adapter stays correct.
 When in doubt, arm only the condition half as an ordinary check and keep the action as a wake-time decision.
 
+To be woken with a log's tail when an external process exits, such as a fleet-updates round, use the `--process-exit` preset instead of a hand-written `pgrep` condition script:
+
+```sh
+bin/fm-procevent-when.sh arm <name> --process-exit '<pgrep -f pattern>' --then tail -n 40 <log>
+```
+
+The preset fires once no process matches the pattern, so pick one that matches only the watched job; arm warns when nothing matches yet.
+
 `bin/fm-procevent.sh --help`, `bin/fm-procevent-lavish.sh --help`, `bin/fm-procevent-when.sh --help`, `bin/fm-procevent-quota.sh --help`, and `bin/fm-procevent-remote-reply.sh --help` own the exact commands and flags.
 
 An explicitly enabled external adapter registers through `bin/fm-procevent.sh register-extension`, never through a package-discovered script or package-supplied argv.
