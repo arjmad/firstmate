@@ -6,11 +6,13 @@
 #
 # Usage:
 #   fm-procevent-when.sh arm <name> [options] --condition <argv>... --action <argv>...
+#   fm-procevent-when.sh arm <name> [options] --process-exit <pattern> --then <argv>...
 #   fm-procevent-when.sh classify <result-file>
 #   fm-procevent-when.sh terminal <result-file>
 #   fm-procevent-when.sh source-id <name>
 #   fm-procevent-when.sh retire <name>
 #   fm-procevent-when.sh rebind-all
+#   fm-procevent-when.sh process-absent <pattern>
 #   fm-procevent-when.sh run <source-id>
 #
 # arm        Bind a (condition, action) pair as process-event source
@@ -32,6 +34,10 @@
 #                                          before waking firstmate (default 3)
 #            The condition argv must exit 0 for true, 1 for a clean false;
 #            any other exit (or a per-poll timeout) is an error, never a true.
+#            --process-exit <pattern> replaces --condition with the
+#            process-absent preset below, so the watch fires once no process
+#            matches `pgrep -f <pattern>`; --then is the same as --action, for
+#            example `--then tail -n 40 <log>` to wake with the log's tail.
 #            POLICY, not enforceable here: both halves must be exact and
 #            deterministic, and the action must be safe and reversible. Anything
 #            needing judgment, and anything destructive, irreversible, or
@@ -63,6 +69,12 @@
 #            outside FM_ROOT: rebinding follows this repo's own tracked
 #            update, never an arbitrary swapped action. Idempotent: a watch
 #            whose action bytes already match its binding is left alone.
+# process-absent
+#            The --process-exit condition: exit 0 when no process other than
+#            this check and its own ancestors (the runner and its timeout
+#            wrappers, whose argv carries the pattern on platforms whose pgrep
+#            does not hide ancestors) matches `pgrep -f <pattern>`, 1 while
+#            one still does, and 2 when pgrep itself fails.
 # run        The blocking child the generic runner executes; never run it in a
 #            conversational turn. It polls the condition on the registered
 #            cadence, requires the stable count of consecutive trues, claims a
@@ -107,7 +119,7 @@ WHEN_DIR="$STATE/when"
 OUTPUT_TAIL_BYTES=${FM_WHEN_OUTPUT_TAIL_BYTES:-8192}
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { sed -n '2,72p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { awk 'NR > 1 && !/^#/ { exit } NR > 1' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
 
 spec_file()  { printf '%s/%s.spec\n' "$WHEN_DIR" "$1"; }
 trust_file() { printf '%s/%s.trust\n' "$WHEN_DIR" "$1"; }
@@ -153,7 +165,7 @@ action_executable() {  # <argv-zero>: print the executable's absolute path
 
 cmd_arm() {
   local name=${1-} sid interval=60 stable=2 deadline=604800
-  local condition_timeout=60 action_timeout=1800 error_budget=3
+  local condition_timeout=60 action_timeout=1800 error_budget=3 process_pattern=
   local -a cond=() act=()
   [ -n "$name" ] || usage
   shift
@@ -167,17 +179,22 @@ cmd_arm() {
       --condition-timeout) positive_int "${2-}" || die "--condition-timeout needs a positive integer of seconds"; condition_timeout=$2; shift 2 ;;
       --action-timeout)    positive_int "${2-}" || die "--action-timeout needs a positive integer of seconds"; action_timeout=$2; shift 2 ;;
       --error-budget)      positive_int "${2-}" || die "--error-budget needs a positive integer"; error_budget=$2; shift 2 ;;
+      --process-exit)      [ -n "${2-}" ] || die "--process-exit needs a pgrep -f pattern"; process_pattern=$2; shift 2 ;;
       --condition)
         shift
         while [ "$#" -gt 0 ] && [ "$1" != --action ]; do cond+=("$1"); shift; done
         ;;
-      --action)
+      --action|--then)
         shift
         while [ "$#" -gt 0 ]; do act+=("$1"); shift; done
         ;;
       *) die "unknown arm argument: $1" ;;
     esac
   done
+  if [ -n "$process_pattern" ]; then
+    [ "${#cond[@]}" -eq 0 ] || die "--process-exit replaces --condition; pass only one"
+    cond=("$SCRIPT_DIR/fm-procevent-when.sh" process-absent "$process_pattern")
+  fi
   [ "${#cond[@]}" -ge 1 ] || die "arm needs at least one --condition argv element"
   [ "${#act[@]}" -ge 1 ] || die "arm needs at least one --action argv element"
   local arg
@@ -244,8 +261,40 @@ cmd_arm() {
   fm_procevent_source_lock_release "$sid"
   trap - EXIT
   printf 'armed: %s\n' "$sid"
+  if [ -n "$process_pattern" ] && cmd_process_absent "$process_pattern" >/dev/null 2>&1; then
+    printf 'warning: no process matches %s now, so the watch fires on its first stable polls\n' "$process_pattern"
+  fi
   printf 'starts on the watcher'"'"'s next cycle; or run: bin/fm-procevent.sh reconcile\n'
   printf 'reminder: deterministic, safe, reversible actions only; judgment and destructive actions stay on the wake-and-decide path\n'
+}
+
+# --- process-absent ------------------------------------------------------------
+
+cmd_process_absent() {
+  local pattern=${1-} pids rc pid ppid ancestors=' ' p
+  [ -n "$pattern" ] || usage
+  pids=$(pgrep -f -- "$pattern")
+  rc=$?
+  case "$rc" in
+    0) ;;
+    1) return 0 ;;
+    *) printf 'pgrep exited %s\n' "$rc"; return 2 ;;
+  esac
+  p=$$
+  while [ -n "$p" ] && [ "$p" -gt 1 ]; do
+    ancestors="$ancestors$p "
+    p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+  done
+  for pid in $pids; do
+    case "$ancestors" in *" $pid "*) continue ;; esac
+    # A pid already gone, or a child this check forked to run pgrep, is not
+    # the watched process.
+    ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    [ -n "$ppid" ] && [ "$ppid" != "$$" ] || continue
+    printf 'still running: pid %s\n' "$pid"
+    return 1
+  done
+  return 0
 }
 
 # --- spec load ---------------------------------------------------------------
@@ -633,6 +682,7 @@ case "${1-}" in
   source-id) shift; cmd_source_id "$@" ;;
   retire)    shift; cmd_retire "$@" ;;
   rebind-all) shift; cmd_rebind_all "$@" ;;
+  process-absent) shift; [ "$#" -eq 1 ] || usage; cmd_process_absent "$@" ;;
   ''|-h|--help|help) usage ;;
   *) die "unknown command: $1" ;;
 esac
