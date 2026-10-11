@@ -485,7 +485,8 @@ function runGuard(): Promise<{ code: number; stderr: string }> {
 }
 
 // PreToolUse seatbelts (bin/fm-arm-pretool-check.sh, docs/arm-pretool-check.md;
-// bin/fm-cd-pretool-check.sh, docs/cd-guard.md). Both piggyback on this same
+// bin/fm-cd-pretool-check.sh, docs/cd-guard.md; bin/fm-merge-pretool-check.sh,
+// docs/merge-guard.md). All piggyback on this same
 // extension file rather than separate ones so no extra Pi -e flag is needed at
 // launch - the primary already loads this file for the turn-end guard, and
 // pi.on("tool_call", ...) can block (verified 2026-07-09 against pi 0.80.5:
@@ -521,6 +522,10 @@ function runPretoolCheck(command: string): Promise<{ code: number; stderr: strin
 
 function runCdCheck(command: string): Promise<{ code: number; stderr: string }> {
   return runChecker("fm-cd-pretool-check.sh", command);
+}
+
+function runMergeCheck(command: string): Promise<{ code: number; stderr: string }> {
+  return runChecker("fm-merge-pretool-check.sh", command);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -609,6 +614,10 @@ export default function (pi: ExtensionAPI) {
     const cdResult = await runCdCheck(command);
     if (cdResult.code === 2) {
       return { block: true, reason: cdResult.stderr.trim() || "denied by the cd-guard PreToolUse seatbelt" };
+    }
+    const mergeResult = await runMergeCheck(command);
+    if (mergeResult.code === 2) {
+      return { block: true, reason: mergeResult.stderr.trim() || "denied by the merge-guard PreToolUse seatbelt" };
     }
     const result = await runPretoolCheck(command);
     if (result.code !== 2) return {};
