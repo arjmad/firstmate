@@ -1,7 +1,7 @@
 # Cursor Agent
 
 Verified for crew and scout work on tmux on 2026-08-11 and Herdr on 2026-08-12, and for secondmate and primary work on 2026-08-13, with Cursor Agent CLI 2026.08.11-e8db854.
-Cross-harness provider and credential identity is owned by `references/common/model-and-effort.md`.
+Cross-harness provider and credential identity is owned by `../common/model-and-effort.md`.
 
 ## Operating facts
 
@@ -19,7 +19,7 @@ Cross-harness provider and credential identity is owned by `references/common/mo
 | Autonomy | `--yolo`, documented alias for `--force`; footer `Run Everything`. |
 | Trust | `--trust` suppresses the dialog; `--yolo` does not, and every task has a fresh path. |
 | Marker | `CURSOR_INVOKED_AS=cursor-agent` on agent and children, plus `CURSOR_AGENT=1` on child or tool processes; other `CURSOR_*` variables are not identity markers. |
-| Effort | No verified flag; `references/common/model-and-effort.md` owns unsupported-value handling. |
+| Effort | No verified flag; `../common/model-and-effort.md` owns unsupported-value handling. |
 | Composer | Bare borderless row with `→` (U+2192); de-emphasized placeholders `Plan, search, build anything` when fresh and `Add a follow-up` later. |
 
 The slash popup consumes the first Enter; that Enter closes it and a genuine second Enter submits through the shared retry.

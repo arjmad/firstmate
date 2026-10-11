@@ -1,8 +1,8 @@
 # omp (Oh My Pi)
 
 Verified for crew, scout, secondmate, and primary work on Herdr on 2026-09-05 with omp 18.1.11, building on the 2026-09-02 adapter investigation against 18.1.2.
-omp is a Pi fork, so `references/harness/pi.md` is the nearest relative; every difference from Pi is stated here.
-Cross-harness provider and credential identity is owned by `references/common/model-and-effort.md`.
+omp is a Pi fork, so `../harness/pi.md` is the nearest relative; every difference from Pi is stated here.
+Cross-harness provider and credential identity is owned by `../common/model-and-effort.md`.
 
 ## Operating facts
 
