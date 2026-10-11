@@ -52,4 +52,4 @@ Teardown removes nothing agy-specific because the spawn leaves nothing behind.
 
 Unsupported and unverified.
 `../../../../../docs/supervision-protocols/` carries no agy protocol, no turn-end guard adapter exists for it, and this adapter verified only the crewmate-side launch, busy state, interrupt, and exit.
-`references/common/primary-hooks.md`'s unsupported-boundary rule applies: never invent a wake protocol from a similar TUI.
+`../common/primary-hooks.md`'s unsupported-boundary rule applies: never invent a wake protocol from a similar TUI.

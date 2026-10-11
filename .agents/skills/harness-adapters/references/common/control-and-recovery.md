@@ -17,11 +17,11 @@ Select only its documented trust choice from the active Firstmate home, binding 
 No observed dialog proves only that launch.
 
 Each supported harness handles its folder-trust gate differently, and the tool reference owns the detail.
-For Claude, load `references/harness/claude.md`; its workspace-trust section owns the non-key-answerable gate and spawn-time pre-registration for every spawn kind.
+For Claude, load `../harness/claude.md`; its workspace-trust section owns the non-key-answerable gate and spawn-time pre-registration for every spawn kind.
 agy gates every fresh worktree too; the spawn pre-registers it in agy's own store the same way, and a strict post-launch gate answers any dialog that still renders before the spawn reports success.
 Cursor suppresses its dialog with launch-time `--trust`, and Muse suppresses its own with `--yolo`.
-Grok renders a folder-trust gate in a linked worktree, and `references/harness/grok.md` owns how to verify the worker's real location, answer it, and where the decision persists; the project picker is a separate dialog that stays absent when the spawn starts in a git root.
-Pi gates the fresh-worktree case too, but unlike Claude its dialog is answered with Enter, and `references/harness/pi.md` owns that recipe and where the decision persists.
+Grok renders a folder-trust gate in a linked worktree, and `../harness/grok.md` owns how to verify the worker's real location, answer it, and where the decision persists; the project picker is a separate dialog that stays absent when the spawn starts in a git root.
+Pi gates the fresh-worktree case too, but unlike Claude its dialog is answered with Enter, and `../harness/pi.md` owns that recipe and where the decision persists.
 Codex shows a directory-trust dialog on the first run for a repository root.
 
 Use the tool's exact skill form, or natural language only when no separate command is verified or the form remains uncertain.

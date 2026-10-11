@@ -32,7 +32,7 @@ Only `answer` with the captain's words or an evidence-backed `reconcile close` m
 Never close anything the captain owns without recording what he actually said: `bin/fm-captain-hold.sh answer` writes his exact words into the task and closes a question-shaped call, while `--release` frees a captain-gated work item to proceed.
 A merge approval uses that existing release path because approval permits the merge to proceed; cleanup closes the work only after it lands and records what shipped.
 Closing a held row at merge approval instead records completion before landing, so the backlog claims completion before the work actually ships.
-When the answer changes what a task must build, follow `AGENTS.md` section 7's mid-task ask rule to preserve the captain's words in the brief and steer the worker.
+When the answer changes what a task must build, follow the mid-task ask rule in [the task lifecycle](../../../docs/task-lifecycle.md#dispatch-and-supervision-handoff) to preserve the captain's words in the brief and steer the worker.
 Record every captain answer on its origin row through `answer` - including answers from a grilling session or a decision sweep, holding that row first when it is not already held, with `--release` when the row is work that should continue - and file the decision to its owner the same turn; never start a separate decisions or answers file, because no lookup reads it.
 When an answer changes an earlier captain ruling, retire every older copy you can reach in that same turn, so two dated answers never stand side by side:
 
