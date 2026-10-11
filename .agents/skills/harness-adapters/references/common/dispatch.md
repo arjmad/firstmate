@@ -1,6 +1,6 @@
 # Dispatch and start
 
-Load this with the selected tool reference for dispatch, start, or adapter verification; add `references/common/model-and-effort.md` for either profile axis.
+Load this with the selected tool reference for dispatch, start, or adapter verification; add `../common/model-and-effort.md` for either profile axis.
 
 ## Resolution
 
@@ -51,6 +51,6 @@ Tool references record empirical knowledge for those executable owners.
 
 For an approved new adapter check, use the spawn owner's raw-launch escape hatch only for a trivial supervised task.
 Verify detection in `../../../../../bin/fm-harness.sh`, launch in `../../../../../bin/fm-spawn.sh`, busy state in `../../../../../bin/fm-busy-lib.sh`, shared composer behavior in `../../../../../bin/fm-composer-lib.sh`, lifecycle in `../../../../../bin/fm-control-lib.sh`, and tmux liveness in `../../../../../bin/backends/tmux.sh` when secondmate use is supported.
-Also verify primary integration through `references/common/primary-hooks.md`, model discovery through `references/common/model-and-effort.md`, and one tool record.
+Also verify primary integration through `../common/primary-hooks.md`, model discovery through `../common/model-and-effort.md`, and one tool record.
 A value remains unreachable until its executable owner, portable regression, applicable credentialed live guard, and verification record land together.
 `../../../firstmate-coding-guidelines/SKILL.md` owns harness-dependent proof.

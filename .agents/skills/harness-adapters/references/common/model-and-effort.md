@@ -1,7 +1,7 @@
 # Model and effort
 
 Load this with the selected tool reference before choosing, validating, or changing either axis.
-Add `references/common/dispatch.md` for configured profile precedence.
+Add `../common/dispatch.md` for configured profile precedence.
 
 ## Axes and precedence
 
