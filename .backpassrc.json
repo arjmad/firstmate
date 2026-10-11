@@ -1,0 +1,15 @@
+{
+  "memoryFiles": ["AGENTS.md"],
+  "budgetTokens": 5000,
+  "skillsDir": ".agents/skills",
+  "minGapEvidence": 2,
+  "maxTranscripts": 100,
+  "discovery": {
+    "harnesses": ["claude", "codex", "pi"],
+    "since": "30d",
+    "worktreeGlobs": [],
+    "cloneRoots": ["~/code", "~/code/agents", "~/code/agents/firstmate/projects", "~/nix"],
+    "minUserTurns": 2
+  },
+  "jobs": 4
+}
