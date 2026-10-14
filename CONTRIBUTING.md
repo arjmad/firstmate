@@ -33,6 +33,10 @@ Use this workflow when no-mistakes is the selected delivery path.
 
 See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/start-here/quick-start/) for the full first-run walkthrough.
 
+## Agent-driven contributions
+
+Before dispatching an agent-driven contribution, follow the [Firstmate role and task-consent policy](docs/configuration.md#firstmate-role-configfirstmate-role); clone-and-run use alone grants no publication authority.
+
 ## Maintaining required checks
 
 GitHub required checks are configured in the repository's existing main ruleset, not activated by committing workflow YAML.
@@ -86,7 +90,7 @@ Coordinate any workflow rollback with its required-check names so a retired chec
 Tracked changes to firstmate itself, including the shared tracked material that [`AGENTS.md`](AGENTS.md) section 1 names, ship on a feature branch through the selected delivery path, with the same merge authority as other project work.
 Before making any such change, load the agent-only `firstmate-coding-guidelines` skill (`.agents/skills/firstmate-coding-guidelines/SKILL.md`).
 It has the knowledge-placement rules that keep `AGENTS.md` from regrowing after each diet pass.
-There is no reliable way for `bin/fm-brief.sh`'s scaffold to detect that a task's repo is firstmate itself, so firstmate adds this skill's load line to firstmate-repo briefs by hand.
+Firstmate adds this skill's load line to firstmate-repo briefs by hand; the [coding-guidelines skill](.agents/skills/firstmate-coding-guidelines/SKILL.md#trigger-hygiene) owns the scaffold's detection limits.
 A crewmate picking up such a brief should load the skill even if the brief predates this instruction.
 When supervising live crewmates, keep firstmate's own long validation or build commands in the background so watcher wakes can still be handled.
 Crewmate validation follows the installed no-mistakes version's SKILL.md and live `axi` help instead of duplicating gate mechanics in firstmate docs.

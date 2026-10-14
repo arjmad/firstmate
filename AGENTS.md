@@ -50,6 +50,9 @@ Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.
 When any crewmate is live, delegate changes to shared tracked material rather than competing with supervision; when the fleet is empty, firstmate may change it directly.
 This repo is a shared template, while `.env`, `data/`, `state/`, `config/`, `projects/`, and `.no-mistakes/` are captain-private and gitignored.
 Ship shared tracked changes through the selected delivery path and merge authority, as for any other project.
+This home's relationship to this repository is a declared local role, never an inference: absent an explicit grant it runs as a firstmate user/operator, and a firstmate bug found in ordinary use gets private diagnosis, a local workaround, a local issue draft, or a proposed patch - never a push, fork, issue, comment, or pull request opened on its own authority.
+Publishing to this repository's upstream requires `config/firstmate-role`'s maintainer opt-in or a captain-approved one-task consent recorded at dispatch (`docs/configuration.md` "Firstmate role"; the gate is `bin/fm-role-lib.sh`), and is never granted by gh identity, forge permissions, remotes, repository ownership, authentication state, environment, or CI.
+Load `firstmate-self-repo` before dispatching, promoting, or delivering work that targets this repository, when a firstmate bug or improvement idea surfaces in ordinary use, and before granting or revoking upstream publication authority.
 Never add an agent name as a commit co-author.
 Use `gh-axi` for GitHub, `chrome-devtools-axi` for browser work, and compatible `lavish-axi` for visual decisions or reports; consult current help rather than memorizing flags.
 
@@ -123,12 +126,14 @@ Do not reconstruct or supervise a secondmate's child tree from the main home.
 
 Route durable knowledge to its most specific owner:
 
+- A home may declare authoritative external memory tiers in a `Memory layering` section of its captain-preference files ([`docs/configuration.md`](docs/configuration.md) owns the schema); each declared tier owns the knowledge classes it names, this home's `data/` is then only a per-machine cache for those classes, capture to the tier is never skipped because a local file also received the fact, and a correction follows the tier's declared rule rather than an in-place edit.
+- When a worker's harness cannot reach a declared tier, firstmate captures on the worker's behalf from its report.
 - Home-domain captain preferences and working style belong in `data/captain.md` after inspect-then-update.
 - Captain preferences shared across secondmate domains belong in the primary home's `data/captain-shared.md` under the `secondmate-provisioning` contract.
-- Fleet-local operational facts belong in curated, home-local `data/learnings.md`.
+- Fleet-local operational facts no declared tier owns belong in curated, home-local `data/learnings.md`.
 - Task-scoped notes belong with the backlog item, and investigation findings belong in the scout report.
 - Knowledge useful to almost every contributor to one project belongs in that project's committed `AGENTS.md`, which only deliberate human edits extend.
-- Knowledge general to every firstmate user belongs in this repo's shared tracked surface.
+- Knowledge general to every firstmate user belongs in this repo's shared tracked surface, which a user/operator home can only reach through an authorized contribution - otherwise it stays in `data/learnings.md` or a local draft for the captain.
 
 Firstmate never writes a project's `AGENTS.md` directly.
 A crewmate edits a project's `AGENTS.md` or `CLAUDE.md` only to correct factually wrong information, including information its own change made wrong, and never adds knowledge because it is missing - additions are a deliberate human choice because every entry taxes every agent session of that project.
@@ -141,6 +146,7 @@ When the captain invokes `/stow`, load the `stow` skill for its memory curation,
 Before intake, dispatch, validation, landing, teardown, or scout promotion, read the matching subsection of [the task lifecycle](docs/task-lifecycle.md).
 That reference owns the procedure; scripts own exact commands and data mechanics.
 Resolve each task's project, delivery mode, merge authority, and ship-branch prefix from the current request and registry, and pass the resolved mode, `yolo` posture, and any non-default prefix explicitly to the brief, spawn, and promotion.
+For a ship on this firstmate repository, pass the project directory to the brief as `--project` and any captain-approved one-task contribution consent as `--upstream-consent <host>/<owner>/<repo>` to the brief, spawn, and promotion; `bin/fm-spawn.sh` refuses a publishing contract this home's role does not authorize.
 A diagnostic report or recommendation alone does not authorize implementation.
 Keep authorized implementation moving through its selected path; use a separate scout only for a requested knowledge deliverable or uncertainty that could change what to build.
 Serialize only for concrete semantic or shared-state conflicts, not file overlap alone.

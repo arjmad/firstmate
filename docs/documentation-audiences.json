@@ -149,6 +149,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/firstmate-self-repo/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/fmx-respond/SKILL.md",
       "audience": "agent-runtime"
     },
@@ -363,6 +367,10 @@
     {
       "path": "docs/fork-decisions.md",
       "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/forgejo-tea-integration.md",
+      "audience": "maintainer-verification"
     },
     {
       "path": "docs/gerrit-change-watch.md",
