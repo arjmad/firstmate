@@ -2230,7 +2230,7 @@ META
         FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/force-leased-slot-$case-fake/pane.txt" \
         "$ROOT/bin/fm-teardown.sh" domain --force >/dev/null 2>"$err"
     else
-      PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
+      PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" FM_FAKE_TREEHOUSE_RETURN_KEEP=1 \
         FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/force-leased-slot-$case-fake/pane.txt" \
         "$ROOT/bin/fm-teardown.sh" domain --force >/dev/null 2>"$err"
     fi

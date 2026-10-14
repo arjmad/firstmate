@@ -14,7 +14,9 @@
 # FM_FAKE_TMUX_WINDOW, capture-pane echoes FM_FAKE_TMUX_CAPTURE) plus a fake
 # treehouse (durable lease of FM_FAKE_TREEHOUSE_HOME, recording the lease holder
 # to FM_FAKE_TREEHOUSE_LEASE_FILE; `return` removes the target and lease unless
-# FM_FAKE_TREEHOUSE_RETURN_FAIL is set). Echoes the fakebin dir.
+# FM_FAKE_TREEHOUSE_RETURN_FAIL is set, or with FM_FAKE_TREEHOUSE_RETURN_KEEP
+# resets the target clean and keeps it, as Treehouse does for a pool slot).
+# Echoes the fakebin dir.
 make_fake_tmux() {
   local dir=$1 fakebin capture
   fakebin=$(fm_fakebin "$dir")
@@ -123,6 +125,10 @@ case "${1:-}" in
     done
     [ -z "${FM_FAKE_TREEHOUSE_RETURN_FAIL:-}" ] || exit 17
     [ -n "${FM_FAKE_TREEHOUSE_LEASE_FILE:-}" ] && rm -f "$FM_FAKE_TREEHOUSE_LEASE_FILE"
+    if [ -n "${FM_FAKE_TREEHOUSE_RETURN_KEEP:-}" ] && [ -n "$target" ]; then
+      git -C "$target" reset -q --hard && git -C "$target" clean -qfdx
+      exit
+    fi
     [ -n "$target" ] && rm -rf -- "$target"
     exit 0
     ;;
