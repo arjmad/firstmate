@@ -141,7 +141,7 @@ jobs:
       - name: Install the Pi package for the Pi extension tests
         run: |
           set -eu
-          npm install -g --before=2026-10-12T00:00:00Z @earendil-works/pi-coding-agent@1.1.0
+          npm install -g --before=2026-10-14T00:00:00Z @earendil-works/pi-coding-agent@1.2.0
           npm ls -g --depth 0 @earendil-works/pi-coding-agent
       - name: Run portable parallel shard 1
         run: |
@@ -245,11 +245,11 @@ jobs:
       # Both install steps pin the Pi version the fleet runs, so a new Pi
       # release cannot turn main red before the extensions are moved to it.
       # Pi declares its sibling packages with caret ranges, so --before
-      # freezes the whole tree to the date the next Pi release went out.
+      # freezes the whole tree at a date before the next Pi release went out.
       - name: Install the Pi package for the Pi extension tests
         run: |
           set -eu
-          npm install -g --before=2026-10-12T00:00:00Z @earendil-works/pi-coding-agent@1.1.0
+          npm install -g --before=2026-10-14T00:00:00Z @earendil-works/pi-coding-agent@1.2.0
           npm ls -g --depth 0 @earendil-works/pi-coding-agent
       - name: Run portable serial shard ${{ matrix.shard }}
         env:
