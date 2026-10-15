@@ -3010,6 +3010,30 @@ test_latest_status_subshell_work_does_not_grow_with_history() {
   pass "latest status subprocess work stays bounded and still reads past a long prose tail"
 }
 
+# gate-wait and ready are declared waits too: an idle pane behind either reads
+# state: paused, and the detail keeps the verb so the two stay distinguishable
+# from a plain pause.
+test_no_run_idle_pane_gate_wait_and_ready() {
+  reset_fakes
+  local d out; d=$(new_case gate-wait-ready)
+  make_repo_on_branch "$d/wt" fm/feat-gate
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-gate.meta" "window=fm:fm-feat-gate" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'gate-wait: required CI on https://github.com/o/r/pull/9\n' > "$d/state/feat-gate.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" feat-gate
+  out=$(run_crew_state "$d" feat-gate)
+  assert_contains "$out" "state: paused" "gate-wait log -> paused"
+  assert_contains "$out" "gate-wait: required CI on https://github.com/o/r/pull/9" \
+    "the gate-wait detail lost its verb or reason"
+  printf 'ready: PR https://github.com/o/r/pull/9\n' >> "$d/state/feat-gate.status"
+  out=$(run_crew_state "$d" feat-gate)
+  assert_contains "$out" "state: paused" "ready log -> paused"
+  assert_contains "$out" "ready: PR https://github.com/o/r/pull/9" "the ready detail lost its verb or PR"
+  pass "no run + idle pane on gate-wait: or ready: reports state: paused naming the verb"
+}
+
 test_no_run_idle_pane_custom_paused_verb() {
   reset_fakes
   local d; d=$(new_case custom-paused)
@@ -5645,6 +5669,7 @@ test_no_run_herdr_idle_agent_status_and_idle_record_stays_idle
 test_no_run_idle_pane_uses_log
 test_no_run_idle_pane_uses_keyed_log
 test_no_run_idle_pane_paused
+test_no_run_idle_pane_gate_wait_and_ready
 test_no_run_idle_pane_custom_paused_verb
 test_no_run_idle_secondmate_resolved_event_not_state
 test_dead_window_ignores_stale_status_log

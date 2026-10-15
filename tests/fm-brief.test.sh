@@ -915,7 +915,7 @@ test_herdr_lab_contract_applies_to_scouts_but_not_secondmates() {
 }
 
 test_pause_verb_override_renders_all_brief_scaffolds() {
-  local home kind id brief append now epoch templates template line signals
+  local home kind id brief append now epoch templates template line signals states
   home="$TMP_ROOT/pause-verb-home"
   mkdir -p "$home/data"
 
@@ -985,8 +985,34 @@ $templates
 SIGNALS
     [ "$signals" -ge 4 ] \
       || fail "$kind brief instructed only $signals stamped status signals"
-    assert_grep "States: working, needs-decision, blocked, awaiting, done, failed." "$brief" \
+    case "$kind" in
+      ship:*) states="working, needs-decision, blocked, awaiting, gate-wait, ready, done, failed." ;;
+      scout) states="working, needs-decision, blocked, awaiting, gate-wait, done, failed." ;;
+      *) states="working, needs-decision, blocked, awaiting, done, failed." ;;
+    esac
+    assert_grep "States: $states" "$brief" \
       "$kind brief did not render the configured pause verb in its states list"
+    case "$kind" in
+      ship:*)
+        # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
+        assert_grep 'Use `ready [at=<epoch>]: PR {url}` when your PR is open and ready to land' "$brief" \
+          "$kind brief did not say when to use ready"
+        # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
+        assert_grep 'so a PR waiting to land is never a `needs-decision`' "$brief" \
+          "$kind brief did not keep a ready PR out of needs-decision"
+        ;;
+      *)
+        assert_no_grep 'Use `ready' "$brief" "$kind brief offered the ship-only ready state"
+        ;;
+    esac
+    case "$kind" in
+      secondmate) ;;
+      *)
+        # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
+        assert_grep 'Use `gate-wait: {gate}` instead when the wait is a CI run or a policy gate' "$brief" \
+          "$kind brief did not say when to use gate-wait"
+        ;;
+    esac
     # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
     assert_grep 'Use `awaiting: {why}`' "$brief" \
       "$kind brief did not instruct the configured pause status"
@@ -1293,6 +1319,36 @@ test_home_brief_include_is_appended_last() {
 # --base-branch names the branch a task starts from and a ship's PR targets. It is
 # recorded as a Base branch line under # Setup, which fm-spawn reads back, and is
 # refused where no pull request carries the work.
+# --also names dependent repositories: a ship brief gains the section the spawn
+# checks, with the task's own branch, and every misuse refuses before writing.
+test_also_dependent_repositories_are_rendered_and_bounded() {
+  local home brief err id args
+  home="$TMP_ROOT/also-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-also-a1 sample --mode direct-PR --also jobs --also=fleet >/dev/null 2>&1 \
+    || fail "a ship brief with --also should scaffold"
+  brief="$home/data/brief-also-a1/brief.md"
+  assert_grep 'Dependent repositories: jobs fleet' "$brief" \
+    "the brief did not record its dependent repositories in order"
+  # shellcheck disable=SC2016 # Literal backticks in rendered prose must stay unexpanded.
+  assert_grep 'then create the same branch first: `git checkout -b fm/brief-also-a1 --`' "$brief" \
+    "the companion setup did not name the task's own branch"
+  assert_grep 'never hand it to another task' "$brief" "the brief let companion work leave the task"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-also-none sample --mode direct-PR >/dev/null 2>&1 \
+    || fail "a ship brief without --also should scaffold"
+  assert_no_grep 'Dependent repositories' "$home/data/brief-also-none/brief.md" \
+    "a brief without --also gained a dependent repositories section"
+  for args in "--mode direct-PR --also sample" "--mode direct-PR --also jobs --also jobs" \
+    "--mode direct-PR --also bad/name" "--scout --also jobs"; do
+    id="brief-also-bad-$RANDOM"
+    err=$(eval "FM_HOME=\"\$home\" \"\$ROOT/bin/fm-brief.sh\" \"\$id\" sample $args" 2>&1 >/dev/null) \
+      && fail "fm-brief accepted $args"
+    assert_contains "$err" "--also" "the refusal of $args did not name --also"
+    assert_absent "$home/data/$id" "the refused $args left a task directory"
+  done
+  pass "fm-brief.sh: --also records dependent repositories and refuses misuse before writing"
+}
+
 test_base_branch_is_rendered_and_bounded() {
   local home out rc brief base meta_base
   home="$TMP_ROOT/base-branch-home"
@@ -1704,6 +1760,7 @@ test_workers_wait_without_spending_turns
 test_wait_no_turns_absent_keeps_the_previous_brief
 test_home_brief_include_is_appended_last
 test_base_branch_is_rendered_and_bounded
+test_also_dependent_repositories_are_rendered_and_bounded
 test_ship_branch_prefix_defaults_to_legacy_fm
 test_ship_branch_prefix_override_is_consistent_across_modes
 test_ship_branch_prefix_empty_override_yields_bare_task_id

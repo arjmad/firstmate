@@ -35,6 +35,7 @@ It never reads report bodies, review artifacts, terminal output, or chat.
 | --- | --- | --- |
 | `hold` | Creates or reuses a task and holds it for the captain. | [Creating a hold](#creating-a-hold-hold) |
 | `answer` | Records the captain's exact words and resolves the call. | [Answering a call](#answering-a-call-answer) |
+| `release-due` | Releases every reversible hold whose 72-hour default is due, as the decision of record. | [Hold kinds and default release](#hold-kinds-and-default-release) |
 | `complete` | Records the reviewed captain-held task ids in the originating task's metadata. | [Recording a reviewed inventory](#recording-a-reviewed-inventory-complete) |
 | `verify` | Read-only check that scout teardown runs before removing source state. | [Checking before scout teardown](#checking-before-scout-teardown-verify) |
 | `open` | Read-only check of whether a row is still an open captain call. | [Cleanup never closes a captain call](#cleanup-never-closes-a-captain-call) |
@@ -67,6 +68,17 @@ Repeat and edge cases:
   If that write fails, the backend hold is not attempted.
 - The reason may contain parentheses, semicolons, quotes, and line breaks.
   [`bin/fm-hold-reason-lib.sh`](../bin/fm-hold-reason-lib.sh) owns the storage encoding and compatibility rules; [`bin/fm-tasks-axi.sh --help`](../bin/fm-tasks-axi.sh) owns the public read commands and output contract.
+
+### Hold kinds and default release
+
+This is a fork patch recorded in [`docs/fork-decisions.md`](fork-decisions.md).
+`hold --kind reversible|arjun-only` stores the kind as a prefix on the hold reason, so session start, Bearings, the away return brief, and `bin/fm-tasks-axi.sh show` all show it without a separate read.
+A reversible hold given `--default <option>` carries its release time in the same prefix, 72 hours after the default was first recorded.
+`release-due` records each due default as a `defaulted` resolution labelled `Default release:`, closes a question row or releases a work row, and prints one `released by default:` line per release.
+`bin/fm-watch.sh` runs it hourly and queues each line as a durable `check:` wake.
+An arjun-only hold, a reversible hold without a default, and any hold written without `--kind` never release themselves.
+`bin/fm-captain-hold.sh --help` owns the prefix grammar, the refusals, and the clock rules.
+`tests/fm-captain-hold-kind.test.sh` and the two `hold_release` cases in `tests/fm-watch-triage.test.sh` cover them.
 
 ### Answering a call (`answer`)
 

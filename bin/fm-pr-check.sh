@@ -21,7 +21,17 @@
 # because the merge is of that head, not of whatever the copy holds now.
 # The recorded pr= also frees the task's place in a declared project capacity
 # (bin/fm-project-capacity-lib.sh).
-# Usage: fm-pr-check.sh <task-id> <pr-url>
+# Companion PRs (fork patch, docs/fork-decisions.md 2026-10-14): with
+# `--also <repo>`, the URL is a companion PR that a task spawned with
+# bin/fm-spawn.sh --also opened in that dependent repository. It must name a
+# repo the task record lists in also=, and it is recorded only as
+# also_pr_<repo>=<url> (replacing an earlier one): pr=, pr_head=, and the
+# task's merge poll are left untouched, because the task's own PR stays the one
+# its landing and merge outcome follow. The draft refusal applies, and the
+# named-head gate is judged against that repo's companion worktree.
+# bin/fm-teardown.sh reads also_pr_<repo>= for its landed-work check and
+# bin/fm-pr-merge.sh accepts a recorded companion PR.
+# Usage: fm-pr-check.sh <task-id> <pr-url> [--also <repo>]
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,7 +48,13 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
 
-if [ "$#" -ne 2 ]; then
+ALSO_REPO=
+if [ "$#" -eq 4 ] && [ "$3" = --also ]; then
+  ALSO_REPO=$4
+  case "$ALSO_REPO" in
+    ''|-*|*[!A-Za-z0-9_-]*) echo "error: invalid PR check request" >&2; exit 2 ;;
+  esac
+elif [ "$#" -ne 2 ]; then
   echo "error: invalid PR check request" >&2
   exit 2
 fi
@@ -130,6 +146,46 @@ if [ "$PROVIDER" = github ] && [ "${FM_PR_CHECK_MERGE:-}" != 1 ] && command -v g
     echo "error: $URL is a draft pull request; a draft cannot be merged, so merge monitoring would wait for an event that cannot occur - mark it ready for review and arm again, or declare a wait instead of done if the draft is deliberate" >&2
     exit 1
   fi
+fi
+
+if [ -n "$ALSO_REPO" ]; then
+  # A companion PR (see the header): recorded on its own key, never armed.
+  ALSO_LIST=" $(grep '^also=' "$META" | tail -1 | cut -d= -f2- || true) "
+  case "$ALSO_LIST" in
+    *" $ALSO_REPO "*) ;;
+    *) echo "error: task $ID has no companion repository $ALSO_REPO; spawn it with --also $ALSO_REPO first" >&2; exit 1 ;;
+  esac
+  [ "$(grep '^pr=' "$META" | tail -1 | cut -d= -f2- || true)" != "$URL" ] || {
+    echo "error: $URL is task $ID's own PR, not a companion PR" >&2
+    exit 1
+  }
+  ALSO_WT=$(grep "^also_worktree_$ALSO_REPO=" "$META" | tail -1 | cut -d= -f2- || true)
+  ALSO_PROJECT=$(grep "^also_project_$ALSO_REPO=" "$META" | tail -1 | cut -d= -f2- || true)
+  MODE=$(grep '^mode=' "$META" | tail -1 | cut -d= -f2- || true)
+  case "$PROVIDER:$MODE" in
+    gerrit:*) DONE_LINE="done: PR $URL published for review" ;;
+    *:no-mistakes|*:) DONE_LINE="done: PR $URL checks green" ;;
+    *) DONE_LINE="done: PR $URL" ;;
+  esac
+  if [ "${FM_PR_CHECK_MERGE:-}" != 1 ] \
+    && ! GATE_REASON=$(fm_dod_accept_ship_done "${KIND:-ship}" "$MODE" "$ALSO_WT" "$ALSO_PROJECT" "$DONE_LINE" "$STATE" "$ID" "$META"); then
+    echo "error: companion $ALSO_REPO: $GATE_REASON" >&2
+    exit 1
+  fi
+  META_LOCK=$(fm_meta_lock_path "$META") || exit 1
+  fm_lock_acquire_wait "$META_LOCK"
+  ALSO_TMP=$(mktemp "$STATE/.fm-pr-meta.XXXXXX") || { fm_lock_release "$META_LOCK"; exit 1; }
+  if ! { grep -v "^also_pr_$ALSO_REPO=" "$META" > "$ALSO_TMP" || [ "$?" -eq 1 ]; } \
+    || ! printf 'also_pr_%s=%s\n' "$ALSO_REPO" "$URL" >> "$ALSO_TMP" \
+    || ! chmod 0600 "$ALSO_TMP" || ! mv -f -- "$ALSO_TMP" "$META"; then
+    rm -f -- "$ALSO_TMP"
+    fm_lock_release "$META_LOCK" || true
+    echo "error: could not record companion PR $URL on task $ID" >&2
+    exit 1
+  fi
+  fm_lock_release "$META_LOCK" || exit 1
+  printf 'recorded: companion %s PR %s for task %s\n' "$ALSO_REPO" "$URL" "$ID"
+  exit 0
 fi
 
 "$FM_ROOT/bin/fm-guard.sh" || true

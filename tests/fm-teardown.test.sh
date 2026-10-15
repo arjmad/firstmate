@@ -1465,6 +1465,105 @@ seed_nested_clone_and_scratch() {
   printf 'scratch\n' > "$wt/scratch.txt"
 }
 
+# Give the case task one companion worktree of a dependent repository "jobs",
+# the shape bin/fm-spawn.sh --also records: a pooled slot of jobs on the task
+# branch, leased to <holder> and claimed for the task, named in the task record.
+# Echoes the companion slot path.
+add_companion_slot() {  # <case_dir> [lease-holder]
+  local case_dir=$1 holder=${2:-task-x1} slot
+  git init -q --bare "$case_dir/jobs-origin.git"
+  git -C "$case_dir/jobs-origin.git" symbolic-ref HEAD refs/heads/main
+  git clone -q "$case_dir/jobs-origin.git" "$case_dir/_jobs-seed" 2>/dev/null
+  git -C "$case_dir/_jobs-seed" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "jobs baseline"
+  git -C "$case_dir/_jobs-seed" push -q origin main
+  rm -rf "$case_dir/_jobs-seed"
+  git clone -q "$case_dir/jobs-origin.git" "$case_dir/jobs"
+  git -C "$case_dir/jobs" remote set-head origin main 2>/dev/null || true
+  mkdir -p "$case_dir/jobs-pool/1"
+  slot="$case_dir/jobs-pool/1/jobs"
+  git -C "$case_dir/jobs" worktree add -q -b fm/task-x1 "$slot" main
+  slot=$(cd "$slot" && pwd -P)
+  printf '{"worktrees":[{"name":"1","path":"%s","leased":true,"lease_id":"l-1","lease_holder":"%s"}]}\n' \
+    "$slot" "$holder" > "$case_dir/jobs-pool/treehouse-state.json"
+  printf 'task=%s\nhome=%s\n' "$holder" "$case_dir" > "$case_dir/jobs-pool/1/.fm-slot-owner"
+  printf '%s\n' "also=jobs" "also_worktree_jobs=$slot" "also_project_jobs=$(cd "$case_dir/jobs" && pwd -P)" \
+    >> "$case_dir/state/task-x1.meta"
+  fm_fake_treehouse_pool "$case_dir/fakebin"
+  printf '%s\n' "$slot"
+}
+
+companion_lease_holder() {  # <case_dir>
+  node -e 'const w = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).worktrees[0];
+    process.stdout.write(w.leased ? w.lease_holder : "")' "$1/jobs-pool/treehouse-state.json"
+}
+
+test_companion_worktree_with_unlanded_work_refuses() {
+  local case_dir slot rc
+  case_dir=$(make_case companion-unlanded)
+  write_meta "$case_dir" direct-PR ship
+  slot=$(add_companion_slot "$case_dir")
+  printf 'companion change\n' > "$slot/companion.txt"
+  git -C "$slot" add companion.txt
+  git -C "$slot" -c user.email=t@t -c user.name=t commit -q -m "companion work"
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "companion-unlanded: teardown discarded unlanded companion work"
+  assert_grep "companion worktree of jobs" "$case_dir/stderr" \
+    "companion-unlanded: the refusal did not name the companion worktree"
+  assert_present "$case_dir/state/task-x1.meta" "companion-unlanded: the task record was removed"
+  [ "$(companion_lease_holder "$case_dir")" = task-x1 ] \
+    || fail "companion-unlanded: the companion slot lease was released"
+  git -C "$slot" log --oneline -1 | grep -q "companion work" \
+    || fail "companion-unlanded: the companion commit was lost"
+  pass "teardown refuses a task whose companion worktree holds unlanded work"
+}
+
+test_landed_companion_worktree_is_returned() {
+  local case_dir slot rc
+  case_dir=$(make_case companion-landed)
+  write_meta "$case_dir" direct-PR ship
+  slot=$(add_companion_slot "$case_dir")
+  printf 'companion change\n' > "$slot/companion.txt"
+  git -C "$slot" add companion.txt
+  git -C "$slot" -c user.email=t@t -c user.name=t commit -q -m "companion work"
+  git -C "$slot" push -q origin fm/task-x1
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "companion-landed: teardown should finish once companion work is pushed: $(cat "$case_dir/stderr")"
+  [ -z "$(companion_lease_holder "$case_dir")" ] \
+    || fail "companion-landed: the companion slot is still leased: $(cat "$case_dir/jobs-pool/treehouse-state.json")"
+  assert_absent "$case_dir/jobs-pool/1/.fm-slot-owner" "companion-landed: the companion slot claim survived its return"
+  if git -C "$slot" show-ref --verify --quiet refs/heads/fm/task-x1; then
+    fail "companion-landed: the companion task branch was left behind"
+  fi
+  pass "teardown returns a landed companion worktree with its lease and claim"
+}
+
+test_reassigned_companion_worktree_is_untouched() {
+  local case_dir slot rc
+  case_dir=$(make_case companion-reassigned)
+  write_meta "$case_dir" direct-PR ship
+  slot=$(add_companion_slot "$case_dir" other-task)
+  printf 'other change\n' > "$slot/other.txt"
+  git -C "$slot" add other.txt
+  git -C "$slot" -c user.email=t@t -c user.name=t commit -q -m "other task's work"
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "companion-reassigned: a reassigned companion slot should not block teardown: $(cat "$case_dir/stderr")"
+  assert_grep "other-task" "$case_dir/stderr" "companion-reassigned: the warning did not name the new owner"
+  [ "$(companion_lease_holder "$case_dir")" = other-task ] \
+    || fail "companion-reassigned: another task's companion lease was touched"
+  git -C "$slot" log --oneline -1 | grep -q "other task's work" \
+    || fail "companion-reassigned: another task's work was touched"
+  pass "teardown leaves a companion slot reassigned to another task untouched"
+}
+
 # Move the case worktree to pool/<slot>/repo so teardown sees a Treehouse slot.
 move_case_to_pool_slot() {
   local case_dir=$1 slot=$2 dest
@@ -5245,3 +5344,6 @@ test_process_spawned_during_grace_is_reaped_on_later_pass
 test_persistent_scan_refuses_after_bounded_retries
 test_process_exit_during_identity_lookup_does_not_refuse
 test_run_abort_precedes_process_reap_precedes_worktree_removal
+test_companion_worktree_with_unlanded_work_refuses
+test_landed_companion_worktree_is_returned
+test_reassigned_companion_worktree_is_untouched

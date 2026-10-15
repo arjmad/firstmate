@@ -124,8 +124,9 @@ DATE_TAG = re.compile(r"\((?:since|done) [0-9-]+\)")
 READ_SECTIONS = ("in flight", "queued")
 
 # The states a worker is asked to report, and the two more that close a decision.
-# bin/fm-brief.sh states the first six to every crewmate and bin/fm-classify-lib.sh
-# owns resolved and captain-held; this module only recognises them.
+# bin/fm-brief.sh states the first eight to its crewmates (gate-wait and ready are
+# the fork's declared-wait verbs) and bin/fm-classify-lib.sh owns resolved and
+# captain-held; this module only recognises them.
 #
 # A CLOSED set, not a shape. A status line is free text appended by a crewmate,
 # and the verb taken off the front of it is the one record-derived string that
@@ -134,8 +135,8 @@ READ_SECTIONS = ("in flight", "queued")
 # spoken, exactly as a malformed one already was; otherwise a crewmate writing
 # "acmecorp-migration: waiting on their review" would put that word in front of a
 # model in another region, with nothing in config/voice-read-deny able to stop it.
-STATE_VERBS = ("working", "needs-decision", "blocked", "paused", "done",
-               "failed", "resolved", "captain-held")
+STATE_VERBS = ("working", "needs-decision", "blocked", "paused", "gate-wait",
+               "ready", "done", "failed", "resolved", "captain-held")
 NOTE_VERB = "note"
 
 # A status EVENT's prefix is a single lowercase word: letters and internal

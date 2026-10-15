@@ -238,7 +238,9 @@ fi
 # the deliberate-external-wait verb (fm-classify-lib.sh's FM_CLASSIFY_PAUSED_VERB):
 # a crew with no active run and an idle pane that declared a known external wait
 # reports `paused` distinctly, so a supervisor reading this sees a declared pause
-# and its reason rather than a wedge-suspect idle.
+# and its reason rather than a wedge-suspect idle. The other declared-wait verbs,
+# `gate-wait` and `ready`, map to `paused` too, and log_state_note keeps their
+# verb at the front of the detail so the two stay distinguishable.
 # A ship `done:` is not current-state done while bin/fm-dod-lib.sh refuses the
 # named-head reachability gate: that claim is blocked so a disposable copy is
 # not treated as finished-and-safe.
@@ -268,6 +270,19 @@ map_log_state() {  # <line>
 LOG_LINE=$(status_current_line "$LOG" "$KIND")
 LOG_VERB=$(status_line_verb "$LOG_LINE")
 
+# The detail for a state read off the status log: the line's note, led by its
+# verb for the declared-wait verbs that share the `paused` state.
+log_state_note() {  # <line>
+  local verb
+  verb=$(status_line_verb "$1")
+  case "$verb" in
+    "$FM_CLASSIFY_GATE_WAIT_VERB"|"$FM_CLASSIFY_READY_VERB")
+      printf '%s: %s' "$verb" "$(status_line_note "$1")"
+      ;;
+    *) status_line_note "$1" ;;
+  esac
+}
+
 # --- remote secondmate: the true source is the remote endpoint ---------------
 # A remote mate's recorded worktree and backend target live on its own host, so
 # the local worktree probe above and the local pane reads below would misreport
@@ -290,7 +305,7 @@ if [ -n "$REMOTE_HOST" ]; then
       if [ -n "$LOG_VERB" ]; then
         LOG_STATE=$(map_log_state "$LOG_LINE")
         if [ "$LOG_STATE" != unknown ]; then
-          emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")${SEP}remote endpoint alive on $REMOTE_HOST"
+          emit "$LOG_STATE" status-log "$(log_state_note "$LOG_LINE")${SEP}remote endpoint alive on $REMOTE_HOST"
         fi
       fi
       emit unknown remote-endpoint "alive on $REMOTE_HOST (an idle secondmate is healthy)"
@@ -1349,7 +1364,7 @@ if [ -n "$LOG_VERB" ]; then
   fi
   LOG_STATE=$(map_log_state "$LOG_LINE")
   if [ "$LOG_STATE" != unknown ]; then
-    emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")"
+    emit "$LOG_STATE" status-log "$(log_state_note "$LOG_LINE")"
   fi
 fi
 

@@ -503,7 +503,10 @@ SH
 # --if-lease-holder refuses unless that holder's lease is on the slot, one
 # without --force refuses a slot with uncommitted changes (as the real one does
 # when its confirmation cannot be answered), and any successful return releases
-# the lease. Every call is logged as
+# the lease. `get --lease [--lease-holder <holder>]` (run from inside a
+# repository) leases the first unleased slot of each pool listed in
+# $FM_FAKE_TREEHOUSE_GET_POOLS whose repository is the caller's and prints its
+# path; an interactive `get` exits 0. Every call is logged as
 # `treehouse <arg>...` to $FM_RUNTIME_LOG when set; every other command exits 0.
 fm_fake_treehouse_pool() {
   local fakebin=$1
@@ -513,6 +516,44 @@ if [ -n "${FM_RUNTIME_LOG:-}" ]; then
   { printf 'treehouse'; printf ' <%s>' "$@"; printf '\n'; } >> "$FM_RUNTIME_LOG"
 fi
 case "${1:-}" in
+  get)
+    lease=0; holder=
+    shift
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --lease) lease=1 ;;
+        --lease-holder) holder=$2; shift ;;
+      esac
+      shift
+    done
+    [ "$lease" = 1 ] || exit 0
+    common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 1
+    common=$(cd "$common" && pwd -P) || exit 1
+    for pool in ${FM_FAKE_TREEHOUSE_GET_POOLS:-}; do
+      node - "$pool/treehouse-state.json" "$common" "$holder" <<'NODE' && exit 0
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const [file, common, holder] = process.argv.slice(2);
+const real = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
+const state = JSON.parse(fs.readFileSync(file, "utf8"));
+for (const slot of state.worktrees) {
+  if (slot.leased) continue;
+  let owner;
+  try {
+    owner = real(execFileSync("git", ["-C", slot.path, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).trim());
+  } catch { continue; }
+  if (owner !== common) continue;
+  Object.assign(slot, { leased: true, lease_id: `fake-${process.pid}`, lease_holder: holder || "" });
+  fs.writeFileSync(file, JSON.stringify(state));
+  process.stdout.write(`${slot.path}\n`);
+  process.exit(0);
+}
+process.exit(1);
+NODE
+    done
+    echo "no free worktree in the pool" >&2
+    exit 1
+    ;;
   lease)
     pool=$(cd ../.. && pwd -P) || exit 1
     exec node - "$pool/treehouse-state.json" lease "$@" <<'NODE'
