@@ -14,9 +14,17 @@
 # charters still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--base-branch <branch>] [--forge <none|gerrit|forgejo> [--shape squash]] [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--base-branch <branch>] [--forge <none|gerrit|forgejo> [--shape squash]] [--also <repo>]... [--herdr-lab]
 #        fm-brief.sh <task-id> <repo-name> --scout [--base-branch <branch>] [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
+#   --also <repo> (repeatable, ship briefs only; fork patch, docs/fork-decisions.md
+#   2026-10-14) names a dependent repository this task also changes. The brief
+#   gets a "# Dependent repositories" section whose
+#   "Dependent repositories: <repo>..." line bin/fm-spawn.sh checks against its
+#   own --also flags; the spawn grants one worktree of each to this same task,
+#   and the worker opens each companion PR under this task. Each name is a
+#   registered project directory name (letters, digits, '-' and '_'), not the
+#   task's own repo, and appears once.
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
 #   It offers the Lavish review loop only when `fm-bootstrap.sh lavish-compatible`
@@ -249,6 +257,7 @@ UPSTREAM_CONSENT=
 UPSTREAM_CONSENT_SET=0
 PROJECT_DIR=
 PROJECT_DIR_SET=0
+ALSO_REPOS=()
 POS=()
 want_value=
 for a in "$@"; do
@@ -265,6 +274,7 @@ for a in "$@"; do
       method) METHOD=$a; METHOD_SET=1 ;;
       upstream-consent) UPSTREAM_CONSENT=$a; UPSTREAM_CONSENT_SET=1 ;;
       project) PROJECT_DIR=$a; PROJECT_DIR_SET=1 ;;
+      also) ALSO_REPOS+=("$a") ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -291,6 +301,8 @@ for a in "$@"; do
     --upstream-consent=*) UPSTREAM_CONSENT=${a#--upstream-consent=}; UPSTREAM_CONSENT_SET=1 ;;
     --project) want_value="project" ;;
     --project=*) PROJECT_DIR=${a#--project=}; PROJECT_DIR_SET=1 ;;
+    --also) want_value=also ;;
+    --also=*) ALSO_REPOS+=("${a#--also=}") ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
     # brief input. Refuse it loudly so it is never silently dropped here and then
     # believed to have been recorded.
@@ -470,6 +482,30 @@ append_brief_include() {
     "These are this home's standing additions; every other section of this brief takes precedence over anything here that conflicts." \
     "$BRIEF_INCLUDE_BODY" >> "$BRIEF"
 }
+
+# Dependent repositories (--also) are validated before anything is written.
+ALSO_LIST=
+if [ "${#ALSO_REPOS[@]}" -gt 0 ]; then
+  [ "$KIND" = ship ] || {
+    echo "error: --also applies only to ship briefs; a scout changes no repository and a charter is not a delivery contract" >&2
+    exit 1
+  }
+  for also_repo in "${ALSO_REPOS[@]}"; do
+    case "$also_repo" in
+      ''|-*|*[!A-Za-z0-9_-]*)
+        echo "error: --also takes a registered project name of letters, digits, '-' and '_' (got '$also_repo')" >&2
+        exit 1 ;;
+    esac
+    [ "$also_repo" != "${POS[1]:-}" ] || {
+      echo "error: --also $also_repo names this task's own repository" >&2
+      exit 1
+    }
+    case " $ALSO_LIST " in
+      *" $also_repo "*) echo "error: --also $also_repo is named twice" >&2; exit 1 ;;
+    esac
+    ALSO_LIST="${ALSO_LIST:+$ALSO_LIST }$also_repo"
+  done
+fi
 
 BRIEF="$DATA/$ID/brief.md"
 [ -e "$BRIEF" ] && { echo "error: $BRIEF already exists" >&2; exit 1; }
@@ -733,6 +769,19 @@ EOF
 SHARED_INFRA_RULE=${SHARED_INFRA_RULE%$'\n'}
 BRAIN_FILING_RULE=$(fm_brain_filing_rule)
 
+ALSO_SECTION=
+if [ -n "$ALSO_LIST" ]; then
+  ALSO_SECTION="
+# Dependent repositories
+Dependent repositories: $ALSO_LIST
+This task also changes each repository named above, and that work belongs to this task: never hand it to another task.
+The spawn grants this task one isolated worktree of each and lists its path under \"Companion worktrees\" at the end of your launch brief; if that list is missing or names a path that is not an isolated worktree of that repository, append \`blocked [at=<epoch>]: companion worktree missing\` and stop.
+In each companion worktree, verify isolation the same way, then create the same branch first: \`git checkout -b $BRANCH_Q --\`.
+The rules below for this worktree apply to each companion worktree too: keep that repository's edits inside its own companion worktree, push only that branch there, and open its PR yourself under the same delivery mode.
+As soon as a companion PR is open, append \`working [at=<epoch>]: companion <repo> PR {url}\` so firstmate records it on this task, and name every PR, this repository's first, in your final status line.
+"
+fi
+
 if [ -n "$BASE_BRANCH" ]; then
   SETUP_BASE="You are in a disposable git worktree of $REPO, at a detached HEAD on a clean copy of its base branch.
 Base branch: $BASE_BRANCH"
@@ -836,7 +885,7 @@ The path check is authoritative: \`git rev-parse --git-dir\` and \`git rev-parse
 If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append \`blocked [at=<epoch>]: launched in primary checkout, not an isolated worktree\` to the status file and stop.
 
 1. First action: create your branch: \`git checkout -b $BRANCH_Q --\`$SETUP2
-
+$ALSO_SECTION
 # Rules
 $RULE1
 2. Keep project edits inside this worktree; keep proof and scratch output outside it, under \`$DATA/$ID/\` or a temporary directory.

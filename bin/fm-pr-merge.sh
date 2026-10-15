@@ -168,6 +168,13 @@
 # explicit captain instruction and never skips the live green check, the
 # away-record read, or a captain hold.
 #
+# Companion PRs (fork patch, docs/fork-decisions.md 2026-10-14): a URL that
+# the task record already carries as also_pr_<repo>= (bin/fm-pr-check.sh
+# --also) is merged as that companion PR under every gate below. Its recording
+# goes through fm-pr-check.sh --also, so the task's own pr= and merge poll are
+# untouched; it persists no merge authority and reports no merge outcome,
+# because the task lands when its own PR does, and it syncs the companion
+# project instead of the task's own.
 # Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [-- <extra forge merge args>]
 #
 # On GitLab, this script confirms the MR is actually merged before reporting it;
@@ -428,6 +435,17 @@ fm_backlog_directory_present "$STATE" "state directory" || {
   exit 1
 }
 META="$STATE/$ID.meta"
+# A companion PR recorded on this task (see the header).
+COMPANION_REPO=
+if [ -f "$META" ] && [ ! -L "$META" ]; then
+  COMPANION_REPO=$(awk -v url="$URL" '
+    index($0, "also_pr_") == 1 {
+      key = substr($0, 1, index($0, "=") - 1)
+      if (substr($0, length(key) + 2) == url && key ~ /^also_pr_[A-Za-z0-9_-]+$/) found = substr(key, 9)
+    }
+    END { print found }
+  ' "$META")
+fi
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
@@ -1316,6 +1334,14 @@ METHODS
 }
 
 record_pr_metadata() {
+  if [ -n "$COMPANION_REPO" ]; then
+    FM_PR_CHECK_MERGE=1 "$SCRIPT_DIR/fm-pr-check.sh" "$ID" "$URL" --also "$COMPANION_REPO" || return 1
+    grep -qxF "also_pr_$COMPANION_REPO=$URL" "$META" || {
+      echo "error: companion PR metadata recording failed" >&2
+      return 1
+    }
+    return 0
+  fi
   if ! FM_PR_CHECK_MERGE=1 "$SCRIPT_DIR/fm-pr-check.sh" "$ID" "$URL"; then
     return 1
   fi
@@ -1398,6 +1424,8 @@ require_current_away_authority() {
 
 persist_accepted_merge_authority() {
   local status=0
+  # A companion PR has no merge poll of its own to attribute (see the header).
+  [ -z "$COMPANION_REPO" ] || return 0
   MERGE_META_LOCK=$(fm_meta_lock_path "$META") || return 1
   fm_lock_acquire_wait "$MERGE_META_LOCK" || return 1
   fm_merge_authority_persist "$STATE" "$ID" "$META" \
@@ -1437,6 +1465,7 @@ refuse_github_queue_while_away() {
 
 require_recorded_pr_identity() {
   local existing
+  [ -z "$COMPANION_REPO" ] || return 0
   existing=$(grep '^pr=' "$META" | tail -1 | cut -d= -f2- || true)
   [ -n "$existing" ] || return 0
   [ "$existing" = "$URL" ] && return 0
@@ -1789,8 +1818,12 @@ esac
 # refused or failed merge above, and a queued forge merge exits without an
 # outcome while its existing poll remains armed.
 outcome_rc=0
+if [ -n "$COMPANION_REPO" ]; then
+  printf 'merged: companion %s PR %s for task %s; the task lands with its own PR\n' "$COMPANION_REPO" "$URL" "$ID"
+else
 fm_merge_outcome_report "$FM_HOME" "$STATE" "$ID" "$URL" self \
   "${FM_PR_MERGE_AUTHORITY:-}" || outcome_rc=$?
+fi
 case "$outcome_rc" in
   0) ;;
   3)
@@ -1807,6 +1840,8 @@ esac
 # line needs attention, and a sync failure never turns the landed merge into a
 # failed one.
 MERGED_PROJECT=$(sed -n 's/^project=//p' "$META" 2>/dev/null | head -n 1)
+[ -z "$COMPANION_REPO" ] \
+  || MERGED_PROJECT=$(sed -n "s/^also_project_$COMPANION_REPO=//p" "$META" 2>/dev/null | tail -n 1)
 if [ -n "$MERGED_PROJECT" ] && [ -x "$SCRIPT_DIR/fm-fleet-sync.sh" ]; then
   "$SCRIPT_DIR/fm-fleet-sync.sh" "$MERGED_PROJECT" </dev/null || true
 fi

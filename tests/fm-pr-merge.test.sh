@@ -740,6 +740,46 @@ test_verified_merge_records_pr_and_head() {
   pass "fm-pr-merge records pr= and pr_head= for a verified GitHub merge"
 }
 
+# A companion PR recorded on the task (fm-pr-check.sh --also) merges under the
+# same gates without rebinding the task's own PR or reporting the task landed,
+# while any other unrecorded PR stays refused as before.
+test_recorded_companion_pr_merges_without_rebinding_the_task() {
+  local case_dir rc main_url='https://github.com/example/repo/pull/9'
+  local companion_url='https://github.com/example/jobs/pull/7'
+  case_dir=$(make_case companion-merge)
+  mkdir -p "$case_dir/wt"
+  fm_git_init_commit "$case_dir/jobs-wt"
+  printf '%s\n' "pr=$main_url" "also=jobs" "also_worktree_jobs=$case_dir/jobs-wt" \
+    "also_project_jobs=$case_dir/jobs" "also_pr_jobs=$companion_url" >> "$case_dir/state/task-x1.meta"
+  add_gh_mocks "$case_dir" 7777777777777777777777777777777777777777
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$companion_url" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "companion-merge: a recorded companion PR should merge: $(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 7 example/jobs --squash
+  assert_grep "pr=$main_url" "$case_dir/state/task-x1.meta" "companion-merge: the task's own PR was rebound"
+  assert_grep "also_pr_jobs=$companion_url" "$case_dir/state/task-x1.meta" \
+    "companion-merge: the companion PR record was lost"
+  assert_grep "merged: companion jobs PR $companion_url" "$case_dir/stdout" \
+    "companion-merge: the merge did not say it landed only the companion"
+  assert_absent "$case_dir/state/task-x1.merge-authority" \
+    "companion-merge: a companion merge persisted the task's merge authority"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/other/pull/3 \
+    > "$case_dir/stdout2" 2> "$case_dir/stderr2"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "companion-merge: an unrecorded PR merged against the task"
+  assert_grep "is bound to $main_url" "$case_dir/stderr2" \
+    "companion-merge: the unrecorded PR refusal changed"
+  pass "fm-pr-merge merges a recorded companion PR without rebinding the task or reporting it landed"
+}
+
 # The forge call is the point of no return: once gh-axi has merged, nothing this
 # script does afterwards can un-merge it. Proving pr= is already in the task's
 # meta at that moment is what makes a later failure unable to lose the merge.
@@ -2979,6 +3019,7 @@ test_github_closed_unqueued_outcome_omits_retry_flags
 test_github_agreeing_queue_rules_keep_retry_guidance
 test_github_conflicting_queue_rules_report_ambiguity
 test_verified_merge_records_pr_and_head
+test_recorded_companion_pr_merges_without_rebinding_the_task
 test_pr_metadata_is_recorded_before_the_forge_call
 test_merge_failure_propagates_after_recording
 test_github_open_unqueued_outcome_refuses

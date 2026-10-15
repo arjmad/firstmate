@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--backend <name>] [--herdr-resume-lock-wait]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--backend <name>] [--herdr-resume-lock-wait] [--also <repo>]...
 #        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--backend <name>] [--herdr-resume-lock-wait]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
@@ -38,6 +38,23 @@
 #   prints a one-line deviation notice and continues, because the registered
 #   prefix is the captain's standing preference and the brief agreement above
 #   already guarantees the worker's instructions match the branch.
+#   --also <repo> (repeatable; fork patch, docs/fork-decisions.md 2026-10-14)
+#   grants a single fresh Treehouse ship spawn one companion worktree per named
+#   dependent repository, all owned by this same task id. The names must equal,
+#   in order, the brief's "Dependent repositories:" line (bin/fm-brief.sh
+#   --also writes it), and a brief with that line refuses a spawn without them.
+#   Each name is a clone under this home's projects/ other than the task's own
+#   project. After the task's own slot is leased, each companion slot is taken
+#   with `treehouse get --lease --lease-holder <task-id>` under that project's
+#   Treehouse lock (waited for at most 60 seconds, then refused, so two spawns
+#   naming each other's projects cannot deadlock), claimed for the task,
+#   refreshed to origin's default branch, and listed under "Companion worktrees"
+#   at the end of the launch brief. The task record carries also=<repos> and
+#   also_worktree_<repo>= and also_project_<repo>= per repo; a relaunch keeps
+#   them and re-lists them. An abort before the record is published returns
+#   each companion slot it leased. --also is refused on scouts, secondmates,
+#   relaunches, batches, and the Orca backend. bin/fm-teardown.sh owns returning
+#   companion slots and bin/fm-pr-check.sh --also recording companion PRs.
 #   --base-branch is the optional branch selected at intake for a ship or scout
 #   to start from and target instead of origin's default branch. A fresh launch
 #   resets its pooled copy to origin/<branch>, refusing when the project has no
@@ -804,6 +821,7 @@ RELAUNCH=0
 # Opt-in only: exact-resume presentation-order lock waits instead of refusing.
 # Absent/unset keeps upstream refuse-on-contention. See header.
 HERDR_RESUME_LOCK_WAIT=0
+ALSO_REPOS=()
 POS=()
 want_value=
 for a in "$@"; do
@@ -858,6 +876,9 @@ for a in "$@"; do
     traceparent)
       TRACEPARENT_ARG=$a
       TRACEPARENT_SET=1
+      ;;
+    also)
+      ALSO_REPOS+=("$a")
       ;;
     *)
       echo "error: internal parser state for --$want_value" >&2
@@ -933,6 +954,8 @@ for a in "$@"; do
     TRACEPARENT_ARG=${a#--traceparent=}
     TRACEPARENT_SET=1
     ;;
+  --also) want_value=also ;;
+  --also=*) ALSO_REPOS+=("${a#--also=}") ;;
   *) POS+=("$a") ;;
   esac
 done
@@ -1044,6 +1067,10 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: --relaunch reuses the task's recorded upstream consent; --upstream-consent cannot override it" >&2
     exit 1
   }
+  [ "${#ALSO_REPOS[@]}" -eq 0 ] || {
+    echo "error: --relaunch reuses the task's recorded companion worktrees; --also cannot add one" >&2
+    exit 1
+  }
 else
   # Delivery contract (AGENTS.md section 7). A ship task's mode and yolo are
   # firstmate's per-task decision, so they are required and closed-set validated
@@ -1106,6 +1133,10 @@ else
     }
     [ "$UPSTREAM_CONSENT_SET" -eq 0 ] || {
       echo "error: --upstream-consent applies only to ship spawns; a scout publishes nothing and a secondmate records no delivery contract" >&2
+      exit 1
+    }
+    [ "${#ALSO_REPOS[@]}" -eq 0 ] || {
+      echo "error: --also applies only to ship spawns; a scout changes no repository and a secondmate allocates its own crews' worktrees" >&2
       exit 1
     }
   fi
@@ -1428,6 +1459,10 @@ SPAWN_TREEHOUSE_PROJECT_LOCK=
 SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
 SPAWN_SLOT_CLAIMED=0
 SPAWN_SLOT_LEASED=0
+SPAWN_ALSO_LEASED_PATHS=()
+SPAWN_ALSO_LEASED_PROJECTS=()
+SPAWN_ALSO_LOCK=
+SPAWN_ALSO_LOCK_HELD=0
 RELAUNCH_REPLACEMENT_PENDING=0
 RELAUNCH_REPLACEMENT_BUSY_GEN=
 RELAUNCH_REPLACEMENT_HARNESS=
@@ -1661,6 +1696,29 @@ spawn_abort_cleanup() {
       echo "warning: leaving task $ID's slot claim on $WT in place; the Treehouse project lock is no longer held, so the next spawn's claim replaces it" >&2
     fi
   fi
+  # Companion slots leased by --also are returned exactly like the task's own
+  # slot: only while no record names them and no worker can be in them.
+  if [ "${#SPAWN_ALSO_LEASED_PATHS[@]}" -gt 0 ] &&
+    [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ]; then
+    local also_i also_path also_proj
+    for also_i in "${!SPAWN_ALSO_LEASED_PATHS[@]}"; do
+      also_path=${SPAWN_ALSO_LEASED_PATHS[$also_i]}
+      also_proj=${SPAWN_ALSO_LEASED_PROJECTS[$also_i]}
+      if [ "$SPAWN_LAUNCH_SENT" = 0 ] || [ "$SPAWN_ENDPOINT_CLOSED" = 1 ]; then
+        fm_treehouse_slot_owner_release "$also_path" "$ID" || true
+        fm_treehouse_slot_lease_return "$also_path" "$ID" "$also_proj" ||
+          echo "warning: companion Treehouse slot $also_path stays leased to aborted task $ID because treehouse return refused it; check it, then run treehouse return --if-lease-holder $ID $also_path" >&2
+      else
+        echo "warning: leaving companion Treehouse slot $also_path leased to aborted task $ID; a worker may still be in it, so check it and run treehouse return --if-lease-holder $ID $also_path" >&2
+      fi
+    done
+    SPAWN_ALSO_LEASED_PATHS=()
+    SPAWN_ALSO_LEASED_PROJECTS=()
+  fi
+  if [ "$SPAWN_ALSO_LOCK_HELD" = 1 ]; then
+    SPAWN_ALSO_LOCK_HELD=0
+    fm_lock_release "$SPAWN_ALSO_LOCK" || true
+  fi
   if [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" = 1 ]; then
     SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
     fm_lock_release "$SPAWN_TREEHOUSE_PROJECT_LOCK" || true
@@ -1795,6 +1853,10 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
     echo "error: config/crew-dispatch.json is active - pass an explicit harness resolved from the dispatch rules (the consultation backstop, so the rules are never silently skipped)." >&2
     exit 1
   fi
+  [ "${#ALSO_REPOS[@]}" -eq 0 ] || {
+    echo "error: --also is single-task only; spawn a task with dependent repositories explicitly" >&2
+    exit 2
+  }
   rc=0
   shared_args=()
   [ -z "$HARNESS_ARG" ] || shared_args+=(--harness "$HARNESS_ARG")
@@ -3590,6 +3652,51 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   fi
 fi
 
+# Dependent repositories (--also; see the header). Resolved before any
+# endpoint, worktree, or record exists, so every refusal here leaves nothing.
+ALSO_PROJECTS=()
+if [ "$KIND" = ship ] && [ "$RELAUNCH" -eq 0 ]; then
+  BRIEF_ALSO=$(sed -n 's/^Dependent repositories: //p' "$BRIEF")
+  [ "$(printf '%s\n' "$BRIEF_ALSO" | grep -c .)" -le 1 ] || {
+    echo "error: $BRIEF records more than one Dependent repositories line; re-scaffold it with bin/fm-brief.sh --also" >&2
+    exit 1
+  }
+  SPAWN_ALSO="${ALSO_REPOS[*]-}"
+  [ "$BRIEF_ALSO" = "$SPAWN_ALSO" ] || {
+    echo "error: dependent repositories mismatch for $ID: the brief says '${BRIEF_ALSO:-none}' but this spawn passed --also '${SPAWN_ALSO:-none}'; pass the brief's repositories with --also, in its order" >&2
+    exit 1
+  }
+  if [ "${#ALSO_REPOS[@]}" -gt 0 ]; then
+    [ "$BACKEND" != orca ] || {
+      echo "error: --also needs Treehouse companion slots; the Orca backend owns its single worktree, so spawn $ID on a session-provider backend" >&2
+      exit 1
+    }
+    PROJ_ABS_PHYSICAL=$(cd "$PROJ_ABS" && pwd -P)
+    for also_repo in "${ALSO_REPOS[@]}"; do
+      case "$also_repo" in
+        ''|-*|*[!A-Za-z0-9_-]*)
+          echo "error: --also takes a registered project name of letters, digits, '-' and '_' (got '$also_repo')" >&2
+          exit 1 ;;
+      esac
+      also_dir="$PROJECTS/$also_repo"
+      also_top=$(git -C "$also_dir" rev-parse --show-toplevel 2>/dev/null) || {
+        echo "error: --also $also_repo names no project clone at $also_dir" >&2
+        exit 1
+      }
+      also_abs=$(cd "$also_dir" && pwd -P)
+      [ "$(cd "$also_top" && pwd -P)" = "$also_abs" ] || {
+        echo "error: --also $also_repo resolves to $also_top, not the clone root $also_abs" >&2
+        exit 1
+      }
+      [ "$also_abs" != "$PROJ_ABS_PHYSICAL" ] || {
+        echo "error: --also $also_repo is this task's own project" >&2
+        exit 1
+      }
+      ALSO_PROJECTS+=("$also_abs")
+    done
+  fi
+fi
+
 delivery_rigor_rank() { # <mode> -> 3 (most rigor) .. 1 (least); 0 = not a task mode
   case "$1" in
   no-mistakes) echo 3 ;;
@@ -3904,6 +4011,70 @@ spawn_worktree_has_origin_config() { # <worktree>
     awk '/^[[:space:]]*\[[[:space:]]*[Rr][Ee][Mm][Oo][Tt][Ee][[:space:]]+"origin"[[:space:]]*\][[:space:]]*([#;].*)?$/ || /^[[:space:]]*\[[[:space:]]*[Rr][Ee][Mm][Oo][Tt][Ee]\.origin[[:space:]]*\][[:space:]]*([#;].*)?$/ { found=1 } END { exit !found }' "$config" && return 0
   done < <(git -C "$worktree" config --list --show-origin 2>/dev/null || true)
   return 1
+}
+
+# Take one companion slot for --also (see the header). Appends the leased path
+# to SPAWN_ALSO_LEASED_PATHS before anything else can fail, so the abort
+# cleanup returns it, and to SPAWN_ALSO_PATHS once it is claimed and fresh.
+spawn_take_companion_slot() { # <repo> <project>
+  local repo=$1 proj=$2 out path path_real top
+  SPAWN_ALSO_LOCK=$(fm_treehouse_project_lock_path "$proj") || {
+    echo "error: could not resolve the shared Treehouse project lock for companion project $proj" >&2
+    return 1
+  }
+  fm_lock_acquire_wait_max "$SPAWN_ALSO_LOCK" 60 || {
+    echo "error: another Treehouse slot allocation or return held companion project $repo's lock for 60 seconds; refusing to wait longer for task $ID" >&2
+    return 1
+  }
+  SPAWN_ALSO_LOCK_HELD=1
+  out=$( (cd "$proj" && treehouse get --lease --lease-holder "$ID") </dev/null 2>/dev/null ) || {
+    echo "error: treehouse could not lease a companion worktree of $repo for task $ID" >&2
+    return 1
+  }
+  path=$(printf '%s\n' "$out" | sed '/^$/d' | tail -n 1)
+  [ -n "$path" ] && [ -d "$path" ] || {
+    echo "error: treehouse leased no usable companion worktree of $repo for task $ID (got '${path:-nothing}')" >&2
+    return 1
+  }
+  SPAWN_ALSO_LEASED_PATHS+=("$path")
+  SPAWN_ALSO_LEASED_PROJECTS+=("$proj")
+  path_real=$(cd "$path" && pwd -P)
+  top=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || top=
+  if [ -z "$top" ] || [ "$(cd "$top" && pwd -P)" != "$path_real" ] \
+    || [ "$path_real" = "$proj" ] || ! fm_treehouse_pool_slot "$proj" "$path"; then
+    echo "error: the companion worktree $path is not an isolated Treehouse pool slot of $repo; refusing to launch task $ID into it" >&2
+    return 1
+  fi
+  fm_treehouse_slot_owner_claim "$path" "$ID" "$FM_HOME" || {
+    echo "error: could not claim companion Treehouse slot $path for task $ID" >&2
+    return 1
+  }
+  fm_lock_release "$SPAWN_ALSO_LOCK" || return 1
+  SPAWN_ALSO_LOCK_HELD=0
+  freshen_spawn_worktree_base "$path" "" || return 1
+  SPAWN_ALSO_PATHS+=("$path")
+}
+
+# Append the "Companion worktrees" list to a rendered launch brief.
+spawn_list_companion_worktrees() { # <launch-brief> <repo>... -- <path>...
+  local brief=$1 i=0
+  local -a repos=() paths=()
+  shift
+  while [ "$#" -gt 0 ] && [ "$1" != -- ]; do repos+=("$1"); shift; done
+  [ "${1:-}" = -- ] && shift
+  paths=("$@")
+  [ "${#repos[@]}" -eq "${#paths[@]}" ] || return 1
+  {
+    printf '\n# Companion worktrees\n'
+    printf 'Each dependent repository named under "# Dependent repositories" has one isolated worktree for this task:\n'
+    while [ "$i" -lt "${#repos[@]}" ]; do
+      printf -- '- %s: %s\n' "${repos[$i]}" "${paths[$i]}"
+      i=$((i + 1))
+    done
+  } >> "$brief" || {
+    echo "error: could not list the companion worktrees in $brief" >&2
+    return 1
+  }
 }
 
 freshen_spawn_worktree_base() { # <worktree> [<base-branch>]
@@ -4926,6 +5097,24 @@ fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   freshen_spawn_worktree_base "$WT" "$BASE_BRANCH" || exit 1
 fi
+# Companion worktrees (--also; see the header): one leased, claimed, refreshed
+# slot per dependent repository, listed in the launch brief before delivery.
+SPAWN_ALSO_PATHS=()
+if [ "${#ALSO_PROJECTS[@]}" -gt 0 ]; then
+  for also_i in "${!ALSO_PROJECTS[@]}"; do
+    spawn_take_companion_slot "${ALSO_REPOS[$also_i]}" "${ALSO_PROJECTS[$also_i]}" || exit 1
+  done
+  spawn_list_companion_worktrees "$BRIEF" "${ALSO_REPOS[@]}" -- "${SPAWN_ALSO_PATHS[@]}" || exit 1
+elif [ "$RELAUNCH" -eq 1 ] && [ -n "$(fm_meta_get "$RELAUNCH_META" also)" ]; then
+  # A relaunch re-renders the launch brief from brief.md, so it re-lists the
+  # companion worktrees the task record already carries.
+  RELAUNCH_ALSO_PATHS=()
+  read -r -a RELAUNCH_ALSO_REPOS <<<"$(fm_meta_get "$RELAUNCH_META" also)"
+  for also_repo in "${RELAUNCH_ALSO_REPOS[@]}"; do
+    RELAUNCH_ALSO_PATHS+=("$(fm_meta_get "$RELAUNCH_META" "also_worktree_$also_repo")")
+  done
+  spawn_list_companion_worktrees "$BRIEF" "${RELAUNCH_ALSO_REPOS[@]}" -- "${RELAUNCH_ALSO_PATHS[@]}" || exit 1
+fi
 
 # Re-assert the durable task copy after either treehouse acquisition or endpoint
 # adoption. This also updates Herdr's restored pane shell before any harness is
@@ -5628,6 +5817,13 @@ preserve_relaunch_meta() {
   # default path's meta stays byte-identical (absent backend= means tmux;
   # the P1 tmux compatibility contract).
   [ "$BACKEND" = tmux ] || echo "backend=$BACKEND"
+  if [ "${#SPAWN_ALSO_PATHS[@]}" -gt 0 ]; then
+    echo "also=${ALSO_REPOS[*]}"
+    for also_i in "${!SPAWN_ALSO_PATHS[@]}"; do
+      echo "also_worktree_${ALSO_REPOS[$also_i]}=${SPAWN_ALSO_PATHS[$also_i]}"
+      echo "also_project_${ALSO_REPOS[$also_i]}=${ALSO_PROJECTS[$also_i]}"
+    done
+  fi
   if [ "$BACKEND" = herdr ]; then
     echo "herdr_session=$HERDR_SES"
     echo "herdr_workspace_id=$HERDR_WORKSPACE_ID"

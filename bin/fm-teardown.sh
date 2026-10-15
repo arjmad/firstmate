@@ -111,6 +111,17 @@
 # name a live quarantined space and is retained for that sweep.
 # data/<id>/ is deliberately left in place: a successor spawn reads brief.md
 # from it.
+# Companion worktrees (fork patch, docs/fork-decisions.md 2026-10-14): a ship
+# spawned with bin/fm-spawn.sh --also records also=<repos> with
+# also_worktree_<repo>= and also_project_<repo>= per repo, and
+# bin/fm-pr-check.sh --also records also_pr_<repo>=. Teardown takes each
+# companion project's Treehouse lock up front (refusing when one is busy),
+# proves each companion slot is still this task's (a reassigned slot is left
+# untouched, an unreadable one refuses), runs the same dirty and landed-work
+# refusal on each companion copy with its own project and recorded PR before
+# anything destructive, and after the task's own return reaps, scrubs only under
+# --force, and returns each companion slot bound to this task's lease. A
+# records-only retirement leaves every companion slot leased, as it is.
 # Worktree-slot ownership (teardown-slot-collision): a treehouse pool slot is
 # reused across tasks, so a stale, duplicated, or drifted worktree= record can
 # name a slot a DIFFERENT live task now holds. Cleanup kills every process under
@@ -507,6 +518,7 @@ DESCENDANT_TASK_IDS=()
 DESCENDANT_TASK_KINDS=()
 DESCENDANT_TASK_HOMES=()
 DESCENDANT_TREEHOUSE_LOCK_PATHS=()
+ALSO_TREEHOUSE_LOCK_PATHS=()
 teardown_release_locks() {
   local status=$? i
   if declare -F teardown_release_herdr_locks >/dev/null 2>&1; then
@@ -540,6 +552,10 @@ teardown_release_locks() {
     fm_lock_release "$CONTROL_LOCK" || true
     CONTROL_LOCK_HELD=0
   fi
+  for ((i=${#ALSO_TREEHOUSE_LOCK_PATHS[@]} - 1; i >= 0; i--)); do
+    fm_lock_release "${ALSO_TREEHOUSE_LOCK_PATHS[$i]}" || true
+  done
+  ALSO_TREEHOUSE_LOCK_PATHS=()
   if [ "$TREEHOUSE_PROJECT_LOCK_HELD" = 1 ]; then
     fm_lock_release "$TREEHOUSE_PROJECT_LOCK" || true
     TREEHOUSE_PROJECT_LOCK_HELD=0
@@ -548,6 +564,24 @@ teardown_release_locks() {
   return "$status"
 }
 trap teardown_release_locks EXIT
+# Companion projects' Treehouse locks (see "Companion worktrees" above), taken
+# the way the task's own project lock is, before anything is changed.
+if [ -f "$META" ] && [ ! -L "$META" ] && [ "${TEARDOWN_LOCK_KIND:-}" = ship ]; then
+  read -r -a TEARDOWN_ALSO_LOCK_REPOS <<<"$(fm_meta_get "$META" also)"
+  for also_repo in "${TEARDOWN_ALSO_LOCK_REPOS[@]+"${TEARDOWN_ALSO_LOCK_REPOS[@]}"}"; do
+    also_project=$(fm_meta_get "$META" "also_project_$also_repo")
+    fm_treehouse_pool_slot "$also_project" "$(fm_meta_get "$META" "also_worktree_$also_repo")" || continue
+    also_lock=$(fm_treehouse_project_lock_path "$also_project") || {
+      echo "REFUSED: cannot resolve the shared Treehouse project lock for companion project ${also_project:-<missing>}; nothing was changed" >&2
+      exit 1
+    }
+    fm_lock_try_acquire "$also_lock" || {
+      echo "REFUSED: another Treehouse slot allocation or return is in progress for companion project $also_project; nothing was changed" >&2
+      exit 1
+    }
+    ALSO_TREEHOUSE_LOCK_PATHS+=("$also_lock")
+  done
+fi
 fm_lock_try_acquire "$CONTROL_LOCK" || {
   echo "error: another lifecycle action is already running for task $ID; nothing was changed" >&2
   exit 1
@@ -3646,6 +3680,57 @@ if teardown_owns_worktree && [ -d "$WT" ] && [ "$FORCE" != "--force" ] && [ "$AL
   fi
 fi
 
+# Companion worktrees (see the header): ownership and the landed-work refusal
+# for every companion copy, before any destructive step. The same safety check
+# runs with the companion's own copy, project, and recorded PR bound, and the
+# task's own bindings are restored afterwards whatever it returns.
+TEARDOWN_ALSO_REPOS=()
+TEARDOWN_ALSO_WTS=()
+TEARDOWN_ALSO_PROJECTS=()
+teardown_companion_safety() {  # <worktree> <project> <pr-url>
+  local saved_wt=$WT saved_proj=$PROJ saved_pr=$PR_URL saved_base=${BASE_BRANCH:-}
+  local saved_branch=${TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY:-} rc=0
+  WT=$1
+  PROJ=$2
+  PR_URL=$3
+  BASE_BRANCH=''
+  TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=''
+  validate_worktree_teardown_safety || rc=$?
+  WT=$saved_wt
+  PROJ=$saved_proj
+  PR_URL=$saved_pr
+  BASE_BRANCH=$saved_base
+  TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=$saved_branch
+  return "$rc"
+}
+if [ "$KIND" = ship ] && [ "$ALLOC_RECORDS_ONLY" != 1 ]; then
+  read -r -a TEARDOWN_ALSO_ALL <<<"$(meta_value "$META" also)"
+  for also_repo in "${TEARDOWN_ALSO_ALL[@]+"${TEARDOWN_ALSO_ALL[@]}"}"; do
+    also_wt=$(meta_value "$META" "also_worktree_$also_repo")
+    also_project=$(meta_value "$META" "also_project_$also_repo")
+    if [ -z "$also_wt" ] || [ ! -d "$also_wt" ]; then
+      echo "notice: task $ID's companion worktree of $also_repo (${also_wt:-unrecorded}) is gone; nothing to return for it." >&2
+      continue
+    fi
+    also_rc=0
+    require_owned_worktree_slot_record "$ID" "$also_wt" || also_rc=$?
+    case "$also_rc" in
+      0) ;;
+      "$TEARDOWN_SLOT_REASSIGNED_RC") continue ;;
+      *) exit 1 ;;
+    esac
+    if [ "$FORCE" != "--force" ]; then
+      if ! teardown_companion_safety "$also_wt" "$also_project" "$(meta_value "$META" "also_pr_$also_repo")"; then
+        echo "REFUSED: task $ID's companion worktree of $also_repo ($also_wt) holds work that has not landed; nothing was changed." >&2
+        exit 1
+      fi
+    fi
+    TEARDOWN_ALSO_REPOS+=("$also_repo")
+    TEARDOWN_ALSO_WTS+=("$also_wt")
+    TEARDOWN_ALSO_PROJECTS+=("$also_project")
+  done
+fi
+
 # A Herdr close may reposition shared workspace order, so the whole
 # destructive sequence below (worktree return, pane close, record removal)
 # runs under the named-session presentation lock, acquired BEFORE anything is
@@ -3833,6 +3918,28 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   # whenever the return did not actually happen.
   fm_treehouse_slot_owner_release "$WT" "$ID"
 fi
+
+# Companion worktrees (see the header): every one already passed its ownership
+# and landed-work gate above.
+for also_i in "${!TEARDOWN_ALSO_WTS[@]}"; do
+  also_wt=${TEARDOWN_ALSO_WTS[$also_i]}
+  also_project=${TEARDOWN_ALSO_PROJECTS[$also_i]}
+  also_label="companion worktree of ${TEARDOWN_ALSO_REPOS[$also_i]}"
+  reap_task_worktree_processes companion "$also_wt"
+  also_branch=$(git -C "$also_wt" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+  if [ "$also_branch" != HEAD ] && git -C "$also_wt" checkout --detach -q 2>/dev/null; then
+    git -C "$also_wt" branch -D "$also_branch" >/dev/null 2>&1 || true
+  fi
+  [ "$FORCE" != "--force" ] || teardown_scrub_scratch_copy "$also_wt" || exit 1
+  also_pool_slot=0
+  fm_treehouse_pool_slot "$also_project" "$also_wt" && also_pool_slot=1
+  teardown_treehouse_return "$also_wt" "$also_project" "$also_label" "" "$ID" || {
+    echo "error: treehouse return failed for the $also_label at $also_wt; teardown aborted" >&2
+    exit 1
+  }
+  [ "$also_pool_slot" = 0 ] || teardown_note_dirty_return "$also_wt"
+  fm_treehouse_slot_owner_release "$also_wt" "$ID"
+done
 
 HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
 # teardown_herdr_journal_orphaned: true when the task's own journal names
