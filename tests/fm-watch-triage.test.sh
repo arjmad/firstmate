@@ -602,6 +602,53 @@ test_status_is_paused_classifier() {
   pass "status_is_paused: only the leading paused verb matches, paused is not captain-relevant, and the two declared-wait verbs stay separable"
 }
 
+# gate-wait and ready are declared waits like paused: idle panes behind them take
+# the long cadence. ready alone is also captain-relevant, so firstmate sees an
+# open PR once and lands it, yet neither verb ever opens or closes a decision.
+test_gate_wait_and_ready_are_declared_waits() {
+  local dir log record rc needs until
+  dir=$(make_case gate-wait-ready); log="$dir/state/sample.status"
+  status_is_paused 'gate-wait: required CI on https://github.com/o/r/pull/9' \
+    || fail "gate-wait was not a declared wait"
+  status_is_paused 'ready: PR https://github.com/o/r/pull/9' || fail "ready was not a declared wait"
+  status_is_paused 'working: the PR is ready and the gate-wait is over' \
+    && fail "a working line mentioning ready or gate-wait false-matched"
+  status_is_captain_relevant 'gate-wait: required CI' && fail "gate-wait was captain-relevant"
+  status_is_captain_relevant 'ready: PR https://github.com/o/r/pull/9' \
+    || fail "ready was not captain-relevant, so an open PR would never surface"
+  status_is_terminal_verb 'ready: PR https://github.com/o/r/pull/9' \
+    && fail "ready was treated as a terminal verb"
+  status_prefix_unrecognized 'gate-wait: required CI' && fail "gate-wait is not a recognized verb"
+  until=$(status_paused_until 'gate-wait: merge queue until 2026-10-15T10:00Z') \
+    || fail "a gate-wait until time was not read"
+  [ "$until" = "$(fm_utc_iso_to_epoch 2026-10-15T10:00Z)" ] || fail "the gate-wait until time was misread: $until"
+
+  printf '%s\n' 'working: fixing the parser' 'gate-wait: required CI on PR 9' > "$log"
+  record='' needs=''
+  status_span_first_actionable_record "$log" 0 record needs
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a gate-wait span was actionable (rc=$rc): $record"
+  [ "$(status_declared_wait_line "$log")" = 'gate-wait: required CI on PR 9' ] \
+    || fail "gate-wait was not the declared wait line"
+
+  printf '%s\n' 'ready: PR https://github.com/o/r/pull/9' >> "$log"
+  status_span_first_actionable_record "$log" 0 record needs
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "a ready span was not actionable (rc=$rc)"
+  case "$record" in *'ready: PR https://github.com/o/r/pull/9'*) ;; *) fail "the ready event was not surfaced: $record" ;; esac
+  [ "$needs" = 0 ] || fail "a ready line was surfaced as a needs-decision"
+  [ "$(status_declared_wait_line "$log")" = 'ready: PR https://github.com/o/r/pull/9' ] \
+    || fail "ready was not the declared wait line"
+  [ -z "$(status_open_decisions "$log")" ] || fail "ready or gate-wait opened a decision"
+
+  printf '%s\n' 'needs-decision [key=api]: REST or RPC' 'ready: PR https://github.com/o/r/pull/9' > "$log"
+  case "$(status_open_decisions "$log")" in
+    api*) ;;
+    *) fail "a later ready line closed an open decision" ;;
+  esac
+  pass "gate-wait and ready are declared waits, only ready surfaces, and neither touches decisions"
+}
+
 # crew_absorb_class: the single fm-crew-state.sh read that returns BOTH absorb
 # reasons - working (active run/busy pane), paused (declared external wait), or none
 # (surface it) - so the watcher's stale path gets both for one bounded call.
@@ -7291,6 +7338,7 @@ test_classifier_primitives
 test_unrecognized_status_prefix_is_visible
 test_crew_is_provably_working_classifier
 test_status_is_paused_classifier
+test_gate_wait_and_ready_are_declared_waits
 test_crew_absorb_class_classifier
 test_crew_worktree_written_since_classifier
 test_empty_write_prune_widens_the_probe

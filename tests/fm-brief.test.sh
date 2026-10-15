@@ -915,7 +915,7 @@ test_herdr_lab_contract_applies_to_scouts_but_not_secondmates() {
 }
 
 test_pause_verb_override_renders_all_brief_scaffolds() {
-  local home kind id brief append now epoch templates template line signals
+  local home kind id brief append now epoch templates template line signals states
   home="$TMP_ROOT/pause-verb-home"
   mkdir -p "$home/data"
 
@@ -985,8 +985,34 @@ $templates
 SIGNALS
     [ "$signals" -ge 4 ] \
       || fail "$kind brief instructed only $signals stamped status signals"
-    assert_grep "States: working, needs-decision, blocked, awaiting, done, failed." "$brief" \
+    case "$kind" in
+      ship:*) states="working, needs-decision, blocked, awaiting, gate-wait, ready, done, failed." ;;
+      scout) states="working, needs-decision, blocked, awaiting, gate-wait, done, failed." ;;
+      *) states="working, needs-decision, blocked, awaiting, done, failed." ;;
+    esac
+    assert_grep "States: $states" "$brief" \
       "$kind brief did not render the configured pause verb in its states list"
+    case "$kind" in
+      ship:*)
+        # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
+        assert_grep 'Use `ready [at=<epoch>]: PR {url}` when your PR is open and ready to land' "$brief" \
+          "$kind brief did not say when to use ready"
+        # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
+        assert_grep 'so a PR waiting to land is never a `needs-decision`' "$brief" \
+          "$kind brief did not keep a ready PR out of needs-decision"
+        ;;
+      *)
+        assert_no_grep 'Use `ready' "$brief" "$kind brief offered the ship-only ready state"
+        ;;
+    esac
+    case "$kind" in
+      secondmate) ;;
+      *)
+        # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
+        assert_grep 'Use `gate-wait: {gate}` instead when the wait is a CI run or a policy gate' "$brief" \
+          "$kind brief did not say when to use gate-wait"
+        ;;
+    esac
     # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
     assert_grep 'Use `awaiting: {why}`' "$brief" \
       "$kind brief did not instruct the configured pause status"

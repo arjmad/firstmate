@@ -131,6 +131,10 @@
 # "blocked:": pause for a known wait expected to clear on its own, including
 # the worker's own background work, pipeline or long command; blocked when
 # firstmate must act. The first-sight alert remains; repeats use the long cadence.
+# Ship and scout scaffolds add the fixed declared-wait verb `gate-wait:` for a CI
+# or policy gate, and ship scaffolds add `ready:` for an open PR that only waits
+# to land; bin/fm-classify-lib.sh owns how supervisors read both, and neither is
+# ever a needs-decision (fork patch, docs/fork-decisions.md 2026-10-14).
 # Emission-time syntax and legacy unknown-time handling are owned by
 # bin/fm-classify-lib.sh; each scaffold renders the stamp as a literal <epoch>
 # placeholder the worker replaces with a numeric Unix time as it appends, so a
@@ -192,7 +196,12 @@ IFS= read -r -d '' CREWMATE_PAUSE_INSTRUCTIONS <<EOF || true
    Firstmate may still raise one first-sight alert; the declared wait then uses the existing long recheck cadence instead of repeated possible-wedge alarms.
    When you know when the wait clears, include \`until <YYYY-MM-DDTHH:MMZ>\` (UTC) for a recheck at that time.
    Follow the resolution rule below when the wait clears, then resume the task.
+   Use \`$FM_CLASSIFY_GATE_WAIT_VERB: {gate}\` instead when the wait is a CI run or a policy gate (a required check, a review requirement, a merge queue) that clears without anyone deciding anything; it releases your attention exactly like a pause and is never a \`needs-decision\`.
    Use \`blocked:\` when you are stuck and need help.
+EOF
+IFS= read -r -d '' SHIP_READY_INSTRUCTIONS <<EOF || true
+   Use \`$FM_CLASSIFY_READY_VERB [at=<epoch>]: PR {url}\` when your PR is open and ready to land but your task continues after it merges, such as a step that needs the merged code or a companion PR that must land first.
+   You may not merge it, and landing it is firstmate's under the project's merge posture, so a PR waiting to land is never a \`needs-decision\`; when nothing remains for you once it is open, report \`done:\` under the Definition of done instead.
 EOF
 
 resolve_directory_input() {
@@ -759,7 +768,7 @@ The report, its notes files beside it in \`$DATA/$ID/\`, and any brain filing be
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`$STATUS_APPEND\`
-   States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
+   States: working, needs-decision, blocked, $PAUSED_VERB, $FM_CLASSIFY_GATE_WAIT_VERB, done, failed.
    Substitute \`<epoch>\` with the current Unix time in seconds - run \`date +%s\` and write the number it printed; a stamp that is not plain digits records no time at all.
    Each append wakes firstmate, so report sparingly: only phase changes a supervisor
    would act on and the needs-decision/blocked/paused/done/failed states. No step-by-step
@@ -838,7 +847,7 @@ $RULE1
 3. $FORGE_RULE_LINE
 4. Report status by appending one line:
    \`$STATUS_APPEND\`
-   States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
+   States: working, needs-decision, blocked, $PAUSED_VERB, $FM_CLASSIFY_GATE_WAIT_VERB, $FM_CLASSIFY_READY_VERB, done, failed.
    Substitute \`<epoch>\` with the current Unix time in seconds - run \`date +%s\` and write the number it printed; a stamp that is not plain digits records no time at all.
    Each append wakes firstmate, so report sparingly: only phase changes a supervisor
    would act on (setup done, bug reproduced, fix implemented, validation passed) and the
@@ -849,7 +858,7 @@ $RULE1
    copies that URL from your line rather than assembling one.
    A mid-task \`working:\` line (including setup complete) is nonterminal: do not end the
    turn after it; continue the same stage until a defined \`done:\` gate under Definition of done.
-$CREWMATE_PAUSE_INSTRUCTIONS
+$CREWMATE_PAUSE_INSTRUCTIONS$SHIP_READY_INSTRUCTIONS
 5. If you hit the same obstacle twice, append \`blocked [at=<epoch>]: {why}\` and stop; firstmate will help.
 6. If a decision belongs above the implementation worker (product choices, destructive actions),
    append \`needs-decision [at=<epoch>]: {summary of options}\` and stop. Firstmate will reply with the decision.

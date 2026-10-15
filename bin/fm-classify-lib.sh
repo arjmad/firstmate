@@ -108,6 +108,18 @@ FM_CLASSIFY_CAPTAIN_RE_DEFAULT='done:|needs-decision:|blocked:|failed:|PR ready|
 # drift between the two consumers. FM_CLASSIFY_PAUSED_VERB overrides it.
 FM_CLASSIFY_PAUSED_VERB_DEFAULT='paused'
 
+# Two more declared-wait verbs (fork patch, docs/fork-decisions.md 2026-10-14),
+# fixed rather than configurable. `gate-wait: <gate>` waits on a CI run or a
+# policy gate that clears without anyone deciding; it is a pause in every
+# respect. `ready: PR <url>` says a ship's PR is open and ready to land while the
+# worker, who may not merge, waits for it: it is a declared wait for stale and
+# idle handling AND a captain-relevant event, so firstmate sees it once and lands
+# it under the project's merge posture. Neither ever opens a decision.
+# status_is_paused below is the one predicate that admits all three verbs, so
+# every supervisor that honours a pause honours these.
+FM_CLASSIFY_GATE_WAIT_VERB='gate-wait'
+FM_CLASSIFY_READY_VERB='ready'
+
 # Bounded re-surface cadence for a declared external-wait pause.
 # Far longer than the wedge threshold (FM_STALE_ESCALATE_SECS, default 240s), it
 # avoids nagging a deliberate wait while ensuring a forgotten wait cannot rot
@@ -174,6 +186,7 @@ last_status_line() {  # <status-file> [<previous-event-var>]
 _fm_status_verb_recognized() {  # <verb>
   case "$1" in
     working|needs-decision|blocked|done|failed|note|\
+    "$FM_CLASSIFY_GATE_WAIT_VERB"|"$FM_CLASSIFY_READY_VERB"|\
     "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}"|\
     "${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}"|\
     "${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}")
@@ -302,7 +315,8 @@ status_is_captain_relevant() {
   [ -n "$line" ] || return 1
   status_line_verb "$line" verb
   case "$verb" in
-    working|resolved|captain-held|"${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}")
+    working|resolved|captain-held|"$FM_CLASSIFY_GATE_WAIT_VERB"|\
+    "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}")
       return 1
       ;;
   esac
@@ -312,22 +326,27 @@ status_is_captain_relevant() {
   status_prefix_unrecognized "$line" && return 0
   if [ -z "${FM_CAPTAIN_RE+x}" ]; then
     case "$verb" in
-      done|needs-decision|blocked|failed) return 0 ;;
+      done|needs-decision|blocked|failed|"$FM_CLASSIFY_READY_VERB") return 0 ;;
     esac
   fi
   _fm_status_unstamped "$line" unstamped
   _fm_classify_matches "$unstamped" "${FM_CAPTAIN_RE:-$FM_CLASSIFY_CAPTAIN_RE_DEFAULT}"
 }
 
-# 0 if a status line's leading verb is the pause verb (paused: <reason>). A pure
-# read of the line itself, so the daemon's classify_stale can reuse the last line
-# it already read without a fm-crew-state.sh call. Matches only the verb before the
-# first colon, so a reason mentioning "paused" elsewhere does not false-match.
+# 0 if a status line's leading verb is a declared-wait verb: the pause verb
+# (paused: <reason>), gate-wait, or ready. A pure read of the line itself, so the
+# daemon's classify_stale can reuse the last line it already read without a
+# fm-crew-state.sh call. Matches only the verb before the first colon, so a
+# reason mentioning "paused" elsewhere does not false-match.
 status_is_paused() {  # <status-line>
   local line=$1 verb
   [ -n "$line" ] || return 1
   verb=$(status_line_verb "$line")
-  [ "$verb" = "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}" ]
+  case "$verb" in
+    "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}"|\
+    "$FM_CLASSIFY_GATE_WAIT_VERB"|"$FM_CLASSIFY_READY_VERB") return 0 ;;
+  esac
+  return 1
 }
 
 # 0 if a status line's leading verb is the verified captain-held transfer verb.
@@ -400,7 +419,8 @@ _fm_status_declared_wait_scan() {  # <resolve-verb> <legacy-captain-re>
     status_line_verb "$line" verb
     case "$verb" in
       "$resolve") ;;
-      "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}") ;;
+      "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}"|\
+      "$FM_CLASSIFY_GATE_WAIT_VERB"|"$FM_CLASSIFY_READY_VERB") ;;
       *) return 0 ;;
     esac
     key=$(_fm_decision_key "$line" "$_FM_CLASSIFY_KEYLESS_PHASE") || key=
