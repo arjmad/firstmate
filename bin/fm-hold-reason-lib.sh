@@ -76,3 +76,21 @@ fm_hold_reason_decode_stream() {
     }
   ' "${1:-toon}"
 }
+
+# fm_hold_reason_decode <stored>: print one stored reason value decoded, with no
+# trailing newline. An unmarked or malformed value prints unchanged, exactly as
+# the stream decoder above leaves it.
+fm_hold_reason_decode() {
+  printf '%s' "$1" | perl -MMIME::Base64=encode_base64,decode_base64 -MEncode=decode,encode,FB_CROAK -0777 -ne '
+    my $value = $_;
+    if ($value =~ /^fm-hold-v1:(.*)\z/s) {
+      my $payload = $1;
+      my $bytes = decode_base64($payload);
+      if (encode_base64($bytes, "") eq $payload) {
+        my $decoded = eval { decode("UTF-8", $bytes, FB_CROAK) };
+        $value = encode("UTF-8", $decoded) unless $@;
+      }
+    }
+    print $value;
+  '
+}

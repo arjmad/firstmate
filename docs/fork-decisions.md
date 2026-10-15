@@ -13,6 +13,11 @@ Decision: the effort split lives in the private config, and the verdict is not r
 No `bin/` change and no upstream proposal.
 Reopen this if upstream adds a dispatch-verdict field to task records.
 
+2026-10-14: Arjun approved ecosystem-review change 1 under decision D2 in the helm: "Do it on the fork only."
+Firstmate carries exactly three fork patches for authority mechanics, with no upstream proposal: captain-hold kinds with a 72-hour default release, the `ready` and `gate-wait` worker states, and dependent-repository slots named at dispatch with `--also`.
+Nothing beyond those three is authorized by this decision.
+The table below carries one row per patch.
+
 ## Fork patches
 
 2026-10-10: Arjun withdrew the 2026-09-25 rule that firstmate cleanup findings are upstream candidates.
@@ -83,3 +88,4 @@ PR cells without a number name the commit.
 | 2026-10-11 | #77 | Refuse a raw `gh pr merge`, `gh-axi pr merge`, or `gh api` merge call in a primary home, naming `fm-pr-merge.sh` | `bin/fm-merge-pretool-check.sh`, `bin/fm-merge-command-policy.mjs`, `.grok/hooks/fm-primary-merge-check.json`, `.opencode/plugins/fm-primary-merge-check.js`, `docs/merge-guard.md` | `.claude/settings.json`, `.codex/hooks.json`, `.cursor/hooks.json`, `.pi/extensions/fm-primary-turnend-guard.ts`, `.omp/extensions/fm-primary-turnend-guard.ts`, `bin/fm-test-run.sh`, `docs/scripts.md`, `docs/turnend-guard.md`, `docs/arm-pretool-check.md` | carried | 24f3a6b8 |
 | 2026-10-13 | #79, #80 | Pin the Pi package CI installs to 1.2.0, the version Heimdall runs, with `--before` freezing its caret-ranged sibling packages at 1.2.0 | `.github/workflows/ci.yml` | same file | carried | 24f3a6b8 |
 | 2026-10-13 | #78 | Standing poteto-mode opt-in by task class from `data/captain.md` (bug-fix ships) | `.agents/skills/poteto`, `docs/task-lifecycle.md`, `README.md` | `docs/task-lifecycle.md`, `README.md` | carried | 24f3a6b8 |
+| 2026-10-14 | #82 | Captain-hold kinds (`--kind` reversible or arjun-only), a reversible `--default` that releases itself after 72 hours as the decision of record, and the watcher's hourly `release-due` tick | `bin/fm-captain-hold.sh` (`hold`, `release-due`), `bin/fm-hold-reason-lib.sh` (`fm_hold_reason_decode`), `bin/fm-watch.sh` (`hold_release_tick`), `tests/fm-captain-hold-kind.test.sh` | `bin/fm-captain-hold.sh`, `bin/fm-watch.sh`, `.agents/skills/captain-hold-lifecycle`, `docs/captain-hold-lifecycle.md`, `docs/configuration.md`, `tests/fm-watch-triage.test.sh` | carried | 24f3a6b8 |

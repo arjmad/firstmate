@@ -2684,6 +2684,59 @@ fleet_sync_tick() {
     "$SCRIPT_DIR/fm-fleet-sync.sh" --scheduled </dev/null >/dev/null 2>&1 &
 }
 
+# Captain-hold default release (bin/fm-captain-hold.sh's header owns the hold
+# kinds, the 72-hour rule, and the release record). Once per
+# FM_HOLD_RELEASE_INTERVAL seconds (default 3600; 0 or off disables) the watcher
+# starts `fm-captain-hold.sh release-due` detached, never waiting on it; a
+# missing state/.last-hold-release marker only starts the cadence. Each release
+# is already recorded on its row when the command prints its
+# `released by default: <id> <option>` line, which the detached wrapper appends
+# to state/hold-release-woke under the file's lock. The next tick claims that
+# file under the same lock, queues one durable `check:` row per line, and wakes
+# once, exactly as fleet_sync_tick turns its STUCK lines into a wake.
+HOLD_RELEASE_INTERVAL=${FM_HOLD_RELEASE_INTERVAL:-3600}
+case "$HOLD_RELEASE_INTERVAL" in off) HOLD_RELEASE_INTERVAL=0 ;; ''|*[!0-9]*) HOLD_RELEASE_INTERVAL=3600 ;; esac
+hold_release_tick() {
+  local pending="$STATE/hold-release-woke" claimed="$STATE/.hold-release-woke.claimed"
+  local lock="$STATE/.hold-release-woke.lock" reason='' line count=0 id
+  if [ ! -e "$claimed" ] && [ -s "$pending" ]; then
+    fm_lock_acquire_wait "$lock" || exit 1
+    mv -f "$pending" "$claimed" 2>/dev/null || true
+    fm_lock_release "$lock" || exit 1
+  fi
+  if [ -s "$claimed" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      id=${line#released by default: }
+      id=${id%% *}
+      fm_wake_append check "hold-release-$id" "check: $line" || exit 1
+      count=$((count + 1))
+      [ -n "$reason" ] || reason="check: $line"
+    done < "$claimed"
+    rm -f "$claimed"
+    [ "$count" -le 1 ] || reason="$reason (and $((count - 1)) more released by default)"
+    [ -z "$reason" ] || wake "$reason"
+  fi
+  rm -f "$claimed"
+  [ "$HOLD_RELEASE_INTERVAL" -gt 0 ] || return 0
+  if [ ! -e "$STATE/.last-hold-release" ]; then
+    touch "$STATE/.last-hold-release"
+    return 0
+  fi
+  [ "$(age_of "$STATE/.last-hold-release")" -ge "$HOLD_RELEASE_INTERVAL" ] || return 0
+  touch "$STATE/.last-hold-release"
+  (
+    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+      "$SCRIPT_DIR/fm-captain-hold.sh" release-due 2>/dev/null \
+      | while IFS= read -r line; do
+          case "$line" in 'released by default: '?*) ;; *) continue ;; esac
+          fm_lock_acquire_wait "$lock" || continue
+          printf '%s\n' "$line" >> "$pending"
+          fm_lock_release "$lock" || true
+        done
+  ) </dev/null >/dev/null 2>&1 &
+}
+
 RECONCILE_REQUEST_PID=
 reconcile_requests_pending() {
   local request
@@ -2930,6 +2983,7 @@ while :; do
   fi
 
   fleet_sync_tick
+  hold_release_tick
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
   # Time-based via .last-check mtime so the cadence survives watcher restarts.

@@ -7219,6 +7219,61 @@ test_fleet_sync_schedule_runs_the_sync_when_due() {
   pass "a due schedule runs the whole-fleet sync without waking firstmate when nothing is stuck"
 }
 
+# Default releases recorded by the detached release scan queue their own durable
+# rows and leave their lines in state/hold-release-woke; the watcher claims them
+# as one check wake.
+test_hold_release_lines_surface_as_one_check_wake() {
+  local dir state out pid
+  dir=$(make_case hold-release-woke); state="$dir/state"; out="$dir/watch.out"
+  printf '%s\n' 'released by default: sample-call drop it' \
+    'released by default: sample-other ship now' > "$state/hold-release-woke"
+  watch_bg "$state" "$dir/fakebin" "$out" env FM_FLEET_SYNC_INTERVAL=off FM_HOLD_RELEASE_INTERVAL=off
+  pid=$!
+  wait_for_exit "$pid" 100 || fail "the watcher did not exit on queued default releases: $(cat "$out")"
+  grep -F 'check: released by default: sample-call drop it (and 1 more released by default)' "$out" >/dev/null \
+    || fail "the wake did not name the first release and count the rest: $(cat "$out")"
+  grep "$(printf '\tcheck\thold-release-sample-call\t')" "$state/.wake-queue" >/dev/null \
+    || fail "the first release was not queued as its own durable row: $(cat "$state/.wake-queue" 2>&1)"
+  grep "$(printf '\tcheck\thold-release-sample-other\t')" "$state/.wake-queue" >/dev/null \
+    || fail "the second release was not queued as its own durable row: $(cat "$state/.wake-queue" 2>&1)"
+  [ ! -e "$state/hold-release-woke" ] && [ ! -e "$state/.hold-release-woke.claimed" ] \
+    || fail "the claimed release lines were left behind for a second wake"
+  pass "queued default-release lines surface once as a single check wake"
+}
+
+# A due schedule runs the release scan detached against this home: a reversible
+# default past its 72 hours is recorded, queued durably, and wakes the watcher.
+test_hold_release_schedule_releases_a_due_default() {
+  local dir state out pid show
+  command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; return 0; }
+  dir=$(make_case hold-release-schedule); dir=$(cd "$dir" && pwd -P); state="$dir/state"; out="$dir/watch.out"
+  mkdir -p "$dir/data" "$dir/config"
+  fm_test_tasks_toml "$dir/.tasks.toml"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$dir/data/backlog.md"
+  FM_HOME="$dir" FM_STATE_OVERRIDE="$state" FM_CAPTAIN_HOLD_NOW=2020-01-01T00:00:00Z \
+    "$ROOT/bin/fm-captain-hold.sh" hold sample-call --title "Keep the banner" \
+    --reason "keep or drop" --kind reversible --default "drop it" >/dev/null \
+    || fail "could not hold the reversible call"
+
+  PATH="$dir/fakebin:$PATH" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_CREW_STATE_BIN="$dir/fakebin/fm-crew-state.sh" \
+    FM_POLL=0.2 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_SECONDMATE_LIVENESS_SECS=99999999 FM_FLEET_SYNC_INTERVAL=off \
+    FM_HOLD_RELEASE_INTERVAL=1 "$WATCH" > "$out" 2>/dev/null &
+  pid=$!
+  wait_poll_cycle "$state" "$pid" || fail "the watcher exited before a full cycle: $(cat "$out")"
+  [ -e "$state/.last-hold-release" ] || { reap "$pid"; fail "the first sighting did not start the cadence"; }
+  touch -t 200001010000 "$state/.last-hold-release"
+  wait_for_exit "$pid" 150 || fail "the watcher did not wake on a due default release: $(cat "$out")"
+  grep -F 'check: released by default: sample-call drop it' "$out" >/dev/null \
+    || fail "the wake did not name the release: $(cat "$out")"
+  grep "$(printf '\tcheck\thold-release-sample-call\t')" "$state/.wake-queue" >/dev/null \
+    || fail "the release was not queued durably: $(cat "$state/.wake-queue" 2>&1)"
+  show=$(FM_HOME="$dir" "$ROOT/bin/fm-tasks-axi.sh" show sample-call --full)
+  assert_contains "$show" "Resolution mode: defaulted" "the scheduled release left no record"
+  pass "a due schedule releases a reversible default and wakes the watcher"
+}
+
 # CI's stock macOS Bash lane sets FM_TEST_ONLY to run just the bash-3.2
 # churn-deferral regression. The rest of this file is not a 3.2 snapshot suite.
 if [ -n "${FM_TEST_ONLY:-}" ]; then
@@ -7380,3 +7435,5 @@ test_paused_until_wrong_year_is_bounded_by_the_cadence
 test_paused_until_that_passed_is_rechecked_before_the_cadence
 test_fleet_sync_stuck_lines_surface_as_one_check_wake
 test_fleet_sync_schedule_runs_the_sync_when_due
+test_hold_release_lines_surface_as_one_check_wake
+test_hold_release_schedule_releases_a_due_default

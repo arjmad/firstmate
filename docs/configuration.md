@@ -93,6 +93,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Per-task steering-inbox records under `state/<id>.inbox/` (`bin/fm-task-inbox-lib.sh`).
 - Parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
 - Live-checkout post-update records under `state/live-checkouts/`, and the scheduled sync's log, pending `fleet-sync-stuck` lines, and surfaced set (`bin/fm-fleet-sync.sh`).
+- Pending `hold-release-woke` lines and the `.last-hold-release` cadence marker of the watcher's captain-hold default release (`bin/fm-captain-hold.sh release-due`).
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
 
@@ -2614,6 +2615,7 @@ FM_WORKTREE_PROCESS_TIMEOUT=10     # wall-clock seconds the wedge detector's tas
 FM_WATCH_TRIAGE_LOG_MAX_BYTES=262144   # size cap for the watcher's absorbed-wake debug log
 FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT=     # optional seconds allowed for bootstrap's best-effort clone refresh; unset/blank defaults to max(20, 5 + 3 * (origin-backed-project-count + live-checkout-count))
 FM_FLEET_SYNC_INTERVAL=1800  # seconds between the watcher's scheduled whole-fleet fm-fleet-sync.sh runs when config/fleet-sync-interval is absent; off or 0 disables, values below 300 use 300
+FM_HOLD_RELEASE_INTERVAL=3600  # seconds between the watcher's detached bin/fm-captain-hold.sh release-due scans, which release reversible captain holds whose 72-hour default is due; off or 0 disables (fork patch, docs/fork-decisions.md 2026-10-14)
 FM_LIVE_CHECKOUT_LOCK_WAIT_SECS=120  # seconds the single-project fm-fleet-sync.sh form waits for a live checkout's held lock= path before deferring it
 FM_LIVE_CHECKOUT_LOCK_POLL_SECS=5    # seconds between those lock checks
 FM_FLEET_PRUNE=1        # set to 0 to skip pruning local branches whose upstream is gone

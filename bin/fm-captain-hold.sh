@@ -21,7 +21,9 @@
 #
 # Usage:
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
-#     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD]
+#     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] \
+#     [--kind reversible|arjun-only] [--default <option>]
+#   fm-captain-hold.sh release-due
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
 #   fm-captain-hold.sh answers [<legacy-origin> | --any-origin] --source <provenance>   (keyed answers on stdin)
 #   fm-captain-hold.sh reconcile-requests --source-id <source-id> --source <provenance>   (task ids on stdin)
@@ -56,6 +58,37 @@
 # `--until` records the captain's own deferral date through `tasks-axi hold
 # --until`, so a "revisit later" answer is stored as a date instead of a live
 # card.
+#
+# HOLD KINDS AND DEFAULT RELEASE (fork patch, docs/fork-decisions.md 2026-10-14).
+# `--kind` classifies the call. `arjun-only` covers money, credentials,
+# deletions, customer-facing changes, external commitments and Sapna's domain;
+# it never releases itself and refuses `--default`. `reversible` is every other
+# call. A reversible hold given `--default <option>` (one line, at most 200
+# bytes) releases itself 72 hours after that default was first recorded, which
+# enforces the captain's 2026-09-24 rule that a reversible call with a
+# recommendation does not wait on him forever. The kind is stored as a prefix
+# on the stored reason, so every surface that shows a hold reason shows it:
+#   [arjun-only] <reason>
+#   [reversible] <reason>
+#   [reversible; default: <option>; releases <YYYY-MM-DDTHH:MM:SSZ>] <reason>
+# The prefix is the only record of the kind: a hold written without `--kind`
+# (including any later re-hold, or a bare tasks-axi hold) carries no prefix and
+# never releases itself, so a kind cannot outlive the reason it was given with.
+# Re-holding an active hold with the same kind and default keeps its release
+# time; a new default restarts the 72 hours. A caller's own reason may not
+# begin with a kind prefix.
+# `release-due` is the release half. For every open row still held for the
+# captain whose stored reason carries a reversible default whose release time
+# has passed (FM_CAPTAIN_HOLD_NOW overrides now, as for `hold`), it records the
+# release as the decision of record - a resolution block whose mode is
+# `defaulted` and whose label is `Default release:`, so it never reads as the
+# captain's own words - then closes a captain-kind question row or lifts the
+# hold on any other work row so it resumes on the default, publishes the
+# matching parent-channel resolution in a secondmate home, and prints one line
+# `released by default: <id> <option>`. bin/fm-watch.sh runs it on its own
+# hourly tick and turns each printed line into a durable `check:` wake. A row it
+# cannot read or close is reported on stderr and left held, so a failure delays
+# a release rather than inventing one.
 #
 # `answer` records the captain's exact words and resolves the call in the same
 # act. It requires a non-empty captain decision file of at most 8192 bytes and
@@ -194,8 +227,8 @@
 # one captain call. See "record divergence" beside command_diverged below.
 #
 # Resolution records: the block written into the body names this script, the
-# decision digest, and a `Resolution mode:` of answered, released, repaired, or
-# reconciled. Records written by the retired fm-decision-hold.sh (routed,
+# decision digest, and a `Resolution mode:` of answered, released, repaired,
+# reconciled, or defaulted. Records written by the retired fm-decision-hold.sh (routed,
 # declined, answered, repaired) are recognized everywhere a record is read, so
 # nothing already closed needs rewriting.
 #
@@ -466,6 +499,7 @@ body_has_resolution_record() {  # <task-body>
     *"Resolution recorded by fm-captain-hold."*"Captain decision:"*) return 0 ;;
     *"Resolution recorded by fm-decision-hold."*"Captain decision:"*) return 0 ;;
     *"Resolution recorded by fm-captain-hold."*"Reconciliation evidence:"*) return 0 ;;
+    *"Resolution recorded by fm-captain-hold."*"Default release:"*) return 0 ;;
   esac
   return 1
 }
@@ -513,10 +547,14 @@ closed_answer_replay_mode_compatible() {  # <mode> <task-body>
 
 # The record's label is what keeps an evidence-backed reconciliation from
 # reading as the captain's own words. `reconciled` closes a call that went moot
-# and carries verified evidence; every other mode carries what the captain said.
+# and carries verified evidence, `defaulted` records a reversible default that
+# released itself, and every other mode carries what the captain said.
 resolution_block() {  # <mode>
   local label='Captain decision:'
-  [ "$1" != reconciled ] || label='Reconciliation evidence:'
+  case "$1" in
+    reconciled) label='Reconciliation evidence:' ;;
+    defaulted) label='Default release:' ;;
+  esac
   printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\n\n%s\n%s\n' \
     "$DECISION_DIGEST" "$1" "$label" "$DECISION_TEXT"
 }
@@ -900,9 +938,76 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how> <origi
   printf '%s %s %s\n' "$id" "$how" "$origin_state"
 }
 
+# --- hold kinds and default release (see "HOLD KINDS AND DEFAULT RELEASE") -----
+
+HOLD_DEFAULT_RELEASE_SECS=259200
+HOLD_DEFAULT_OPTION_MAX_BYTES=200
+
+validate_hold_kind_args() {  # <kind> <default-given> <default-option> <reason>
+  local kind=$1 given=$2 option=$3 reason=$4
+  case "$kind" in
+    ''|reversible|arjun-only) : ;;
+    *) fail "--kind must be reversible or arjun-only: $kind" ;;
+  esac
+  if [ "$given" = 1 ]; then
+    [ "$kind" != arjun-only ] \
+      || fail "an arjun-only hold never releases itself, so it takes no --default; put the recommendation in the reason"
+    [ "$kind" = reversible ] || fail "--default requires --kind reversible"
+    validate_one_line default "$option"
+    case "$option" in
+      *']'*) fail "--default must not contain ]" ;;
+    esac
+    [ "$(printf '%s' "$option" | LC_ALL=C wc -c | tr -d ' ')" -le "$HOLD_DEFAULT_OPTION_MAX_BYTES" ] \
+      || fail "--default must be at most $HOLD_DEFAULT_OPTION_MAX_BYTES bytes"
+  fi
+  case "$reason" in
+    '[reversible]'*|'[reversible;'*|'[arjun-only]'*)
+      fail "the reason must not begin with a hold-kind prefix; pass --kind and --default instead"
+      ;;
+  esac
+}
+
+# Parse the kind prefix of a decoded reason. Sets HOLD_DECISION_KIND
+# (reversible, arjun-only, or empty when there is no prefix), HOLD_DEFAULT_OPTION
+# and HOLD_RELEASES_AT (both empty unless a reversible default is recorded).
+# Returns 1 when the reason carries no kind prefix.
+HOLD_DECISION_KIND=''
+HOLD_DEFAULT_OPTION=''
+HOLD_RELEASES_AT=''
+parse_hold_kind_prefix() {  # <decoded-reason>
+  local reason=$1
+  local re_default='^\[reversible; default: ([^]]+); releases ([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)\] '
+  HOLD_DECISION_KIND=''
+  HOLD_DEFAULT_OPTION=''
+  HOLD_RELEASES_AT=''
+  if [[ "$reason" =~ $re_default ]]; then
+    HOLD_DECISION_KIND=reversible
+    HOLD_DEFAULT_OPTION=${BASH_REMATCH[1]}
+    HOLD_RELEASES_AT=${BASH_REMATCH[2]}
+    return 0
+  fi
+  case "$reason" in
+    '[reversible] '*) HOLD_DECISION_KIND=reversible; return 0 ;;
+    '[arjun-only] '*) HOLD_DECISION_KIND=arjun-only; return 0 ;;
+  esac
+  return 1
+}
+
+epoch_to_utc_iso() {  # <epoch>
+  date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
+}
+
+hold_release_time() {  # <hold-set-utc-iso>
+  local start
+  start=$(fm_utc_iso_to_epoch "$1") || return 1
+  epoch_to_utc_iso $((start + HOLD_DEFAULT_RELEASE_SECS))
+}
+
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0 stored_reason previous_origin='' hold_status=0
+  local decision_kind='' default_option='' default_given=0 releases='' existing_reason=''
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -912,14 +1017,15 @@ command_hold() {
       --repo) shift; repo=${1:-} ;;
       --origin) shift; origin=${1:-} ;;
       --until) shift; until=${1:-} ;;
+      --kind) shift; decision_kind=${1:-} ;;
+      --default) shift; default_option=${1:-}; default_given=1 ;;
       *) usage >&2; exit 2 ;;
     esac
     shift
   done
   validate_slug task-id "$id"
   [ -n "$reason" ] || fail "reason must not be empty"
-  # bin/fm-hold-reason-lib.sh owns the storage constraint and reversible encoding.
-  stored_reason=$(fm_hold_reason_encode "$reason") || fail "could not encode the hold reason"
+  validate_hold_kind_args "$decision_kind" "$default_given" "$default_option" "$reason"
   if [ -n "$origin" ]; then
     validate_slug origin-id "$origin"
   fi
@@ -945,6 +1051,7 @@ command_hold() {
     existing_held=$(show_field_value "$show" held)
     if [ "$existing_hold_kind" = captain ] && [ "$existing_held" = yes ]; then
       preserve_hold_set=1
+      existing_reason=$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")
     fi
     if [ -n "$title" ]; then
       existing_title=$(show_field_value "$show" title)
@@ -985,6 +1092,21 @@ command_hold() {
     previous_origin=$(body_hold_origin "$(show_field_value "$show" body)")
     write_hold_origin "$id" "$(show_field "$show" body)" "$origin" || exit $?
   fi
+  # The kind prefix rides on the stored reason (see the header). An unchanged
+  # active reversible default keeps its release time; anything else starts 72h.
+  if [ "$default_given" = 1 ]; then
+    if parse_hold_kind_prefix "$existing_reason" \
+      && [ "$HOLD_DECISION_KIND" = reversible ] && [ "$HOLD_DEFAULT_OPTION" = "$default_option" ]; then
+      releases=$HOLD_RELEASES_AT
+    else
+      releases=$(hold_release_time "$hold_set") || fail "could not compute the default release time"
+    fi
+    reason="[reversible; default: $default_option; releases $releases] $reason"
+  elif [ -n "$decision_kind" ]; then
+    reason="[$decision_kind] $reason"
+  fi
+  # bin/fm-hold-reason-lib.sh owns the storage constraint and reversible encoding.
+  stored_reason=$(fm_hold_reason_encode "$reason") || fail "could not encode the hold reason"
   if [ -n "$until" ]; then
     tasks_axi hold "$id" --reason "$stored_reason" --kind captain --until "$until" >/dev/null \
       || hold_status=$?
@@ -1216,6 +1338,81 @@ command_answer() {
     return 0
   fi
   fail "task $id is not held for the captain; hold it first or name the right task"
+}
+
+# Every open row this home holds for the captain, one id per line. The listing's
+# first field is the slug id and its last is the requested hold_kind, so a
+# quoted title holding commas cannot shift either.
+held_captain_task_ids() {
+  local listing
+  listing=$(tasks_axi list --state held --fields hold_kind --limit 100000 2>/dev/null) || return 1
+  printf '%s\n' "$listing" | awk -F, '
+    /^  [A-Za-z0-9._-]+,/ {
+      id = $1
+      sub(/^ +/, "", id)
+      if ($NF == "captain") print id
+    }
+  '
+}
+
+# The default a held row would release to now, or a non-zero return when it has
+# none due. Reads the row in THIS shell (TASK_SHOW_OUTPUT is carried back).
+hold_default_due() {  # <task-id> <now-epoch>; sets HOLD_DEFAULT_OPTION/HOLD_RELEASES_AT
+  local id=$1 now=$2 show releases_epoch
+  task_show "$id" || return 1
+  show=$TASK_SHOW_OUTPUT
+  [ "$(show_field "$show" state)" != "done" ] || return 1
+  [ "$(show_field_value "$show" hold_kind)" = captain ] || return 1
+  [ "$(show_field_value "$show" held)" = yes ] || return 1
+  parse_hold_kind_prefix "$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")" || return 1
+  [ "$HOLD_DECISION_KIND" = reversible ] && [ -n "$HOLD_DEFAULT_OPTION" ] || return 1
+  releases_epoch=$(fm_utc_iso_to_epoch "$HOLD_RELEASES_AT") || return 1
+  [ "$now" -ge "$releases_epoch" ]
+}
+
+# Release one row to its default as the decision of record. Runs in a subshell
+# of command_release_due so a refusal stops only this row; the control lock is
+# released by the subshell's own EXIT trap.
+release_hold_by_default() {  # <task-id> <now-epoch>
+  local id=$1 now=$2 show body option task_kind release=1 occurrence
+  trap captain_hold_cleanup EXIT
+  acquire_task_control_lock "$id"
+  # Re-read under the lock: an answer recorded since the scan wins.
+  hold_default_due "$id" "$now" || return 0
+  option=$HOLD_DEFAULT_OPTION
+  show=$TASK_SHOW_OUTPUT
+  body=$(show_field "$show" body)
+  task_kind=$(show_field_value "$show" kind)
+  [ "$task_kind" != captain ] || release=0
+  DECISION_TEXT=$(printf 'Released by default: no captain answer within 72 hours of the default being recorded, due %s (standing rule of 2026-09-24; fork decision 2026-10-14).\nOption applied: %s' \
+    "$HOLD_RELEASES_AT" "$option")
+  DECISION_DIGEST=$(sha256_text "$DECISION_TEXT")
+  occurrence=$(( $(resolution_record_count "$body") + 1 ))
+  write_resolution_record "$id" defaulted "$body"
+  close_answered "$id" "$release" || fail "could not close default-released captain-held task $id"
+  remove_interrupted_answer_stamp "$id"
+  publish_parent_resolution_then_retire "$id" "$occurrence" "released by default: $option"
+  printf 'released by default: %s %s\n' "$id" "$option"
+}
+
+command_release_due() {
+  local now ids id status=0
+  [ "$#" -eq 0 ] || { usage >&2; exit 2; }
+  now=${FM_CAPTAIN_HOLD_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+  now=$(fm_utc_iso_to_epoch "$now") || fail "FM_CAPTAIN_HOLD_NOW must be a UTC YYYY-MM-DDTHH:MM:SSZ timestamp"
+  require_tasks_axi
+  ids=$(held_captain_task_ids) || fail "could not list the rows held for the captain"
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    hold_default_due "$id" "$now" || continue
+    ( release_hold_by_default "$id" "$now" ) || {
+      printf 'fm-captain-hold: %s stays held; its default release failed\n' "$id" >&2
+      status=1
+    }
+  done <<EOF
+$ids
+EOF
+  return "$status"
 }
 
 # --- the one keyed-answer intake, and the source bindings that feed it --------
@@ -2040,6 +2237,7 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
 
 case "${1:-}" in
   hold) shift; command_hold "$@" ;;
+  release-due) shift; command_release_due "$@" ;;
   answer) shift; command_answer "$@" ;;
   answers) shift; command_answers "$@" ;;
   reconcile-requests) shift; command_reconcile_requests "$@" ;;
