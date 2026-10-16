@@ -552,6 +552,26 @@ ok - Claude Code 2.1.269: fm-control exit confirms the background-work dialog an
 
 `tests/fm-control.test.sh` pins the control plane's logic against that captured rendering through the fake pane: the confirming Enter is sent exactly when the dialog is on screen with an exit-confirming selection, a `Stay` selection is refused and named, the confirmation is retried a bounded number of times, and no other harness reads the dialog.
 
+## Claude blocking question guard
+
+Verified 2026-10-16 on Claude Code 2.1.300 (Claude Code), tmux 3.7b, macOS arm64.
+An interactive Claude in a fixture primary checkout sends a `PreToolUse` payload with `tool_name` `AskUserQuestion` to the tracked `AskUserQuestion` matcher, and honors `bin/fm-question-pretool-check.sh`'s deny: with an in-flight task the turn ends without opening the selector, while on an idle home the same request opens the selector and holds the turn open.
+The live guard is the refresh command after a Claude Code upgrade:
+
+```sh
+FM_QUESTION_GUARD_LIVE_E2E=1 tests/fm-question-pretool-check-live-e2e.test.sh
+```
+
+Observed output:
+
+```text
+ok - claude 2.1.300 (Claude Code): the tracked matcher received AskUserQuestion and the turn ended with work under way
+ok - claude 2.1.300 (Claude Code): on an idle home the selector held the turn open, so the deny is what ended the first turn
+ok - question guard live: claude 2.1.300 (Claude Code) honors the tracked AskUserQuestion deny
+```
+
+`tests/fm-question-pretool-check.test.sh` pins the classifier, scope, escape hatch, and tracked registration without a harness.
+
 ## Pi seeded-secondmate project trust
 
 [`fm-spawn.sh --help`](../../bin/fm-spawn.sh) owns the seeded-secondmate project-trust approval contract and compatibility fallback.
