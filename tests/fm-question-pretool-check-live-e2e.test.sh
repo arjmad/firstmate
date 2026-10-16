@@ -10,8 +10,10 @@
 # Two structural signals carry the verdict, never rendered text: a recorder
 # hook beside the tracked one captures the PreToolUse payload, and a Stop hook
 # records each turn end. With work under way the turn must end, because the
-# guard denied the question; with an idle home the same request must leave the
-# turn open on the selector, so the guard is what ended the first turn.
+# guard denied the question (the lab mirrors no captain prompt, so the captain
+# is absent); with an idle home the same request must leave the turn open on
+# the selector, so the guard is what ended the first turn.
+# tests/fm-question-keeper-live-e2e.test.sh owns the present-captain case.
 # An absent Claude is reported and fails the forced run rather than passing.
 # shellcheck disable=SC2016 # single-quoted scripts expand inside their own shells
 set -u
@@ -43,8 +45,7 @@ git init -q "$ROOT_LAB"
 : > "$ROOT_LAB/AGENTS.md"
 # Real copies, not a symlink to this checkout's bin: the guard resolves its own
 # directory to find its home, and a task worktree is correctly out of scope.
-mkdir -p "$ROOT_LAB/bin"
-cp "$ROOT/bin/fm-question-pretool-check.sh" "$ROOT/bin/fm-primary-scope-lib.sh" "$ROOT/bin/fm-supervision-lib.sh" "$ROOT_LAB/bin/"
+cp -R "$ROOT/bin" "$ROOT_LAB/bin"
 cat > "$ROOT_LAB/record-payload.sh" <<'SH'
 #!/usr/bin/env bash
 dir=$(cd "$(dirname "$0")" && pwd)
@@ -136,8 +137,8 @@ rm -f "$ROOT_LAB/state/lab-task.meta"
 wait_ready
 before_asks=$(asks)
 before_stops=$(stops)
-submit "$PROMPT"
-wait_for 180 asked_more_than "$before_asks" || fail "claude $VERSION never sent the second AskUserQuestion payload"
+submit "The earlier refusal no longer applies, so try again. $PROMPT"
+wait_for 180 asked_more_than "$before_asks" || fail "claude $VERSION never sent the second AskUserQuestion payload: $(screen_tail)"
 if wait_for 20 stopped_more_than "$before_stops"; then
   fail "claude $VERSION: the idle-home turn ended too, so this run cannot show the guard ended the first turn"
 fi

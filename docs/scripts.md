@@ -56,7 +56,9 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-arm-pretool-check.sh` | Stable PreToolUse transport for the watcher-arm command policy (docs/arm-pretool-check.md) |
 | `fm-arm-command-policy.mjs` | Semantic owner of the watcher-arm PreToolUse policy (docs/arm-pretool-check.md)   |
 | `fm-subagent-pretool-check.sh` | Primary-home delegation-shape PreToolUse guard (docs/subagent-guard.md) |
-| `fm-question-pretool-check.sh` | Primary-home PreToolUse guard denying a blocking question tool while the fleet needs supervision |
+| `fm-question-pretool-check.sh` | Primary-home PreToolUse guard allowing a blocking question tool while the fleet needs supervision only for a present captain whose keeper can keep supervision running |
+| `fm-question-keeper.sh`  | Claude async PreToolUse hook that keeps the supervision host parked and holds main's closes while a captain question is open (docs/supervision-host.md) |
+| `fm-question-lib.sh`     | Shared blocking-question names, captain-presence window, and open-question, held-close, and answered records |
 | `fm-supervision-instructions.sh` | Render the session-start primary-harness supervision block or the one-line repair instruction |
 | `fm-home-seed.sh`        | Transactionally provision a local secondmate home and maintain `data/secondmates.md` |
 | `fm-remote-home-seed.sh` | Register and provision a whole secondmate home on an SSH-reachable host              |
