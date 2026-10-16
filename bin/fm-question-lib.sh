@@ -122,9 +122,9 @@ fm_question_open_clear() {  # <state-dir>
 # fm_question_hold_open <state-dir>: 0 while the open record names a live
 # keeper under its recorded identity.
 fm_question_hold_open() {
-  local pid='' identity='' id='' epoch=''
+  local pid='' identity=''
   [ -f "$1/.question-open" ] && [ ! -L "$1/.question-open" ] || return 1
-  IFS="$(printf '\t')" read -r pid identity id epoch < "$1/.question-open" || true
+  IFS="$(printf '\t')" read -r pid identity _ < "$1/.question-open" || true
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   [ -n "$identity" ] && fm_pid_alive "$pid" && [ "$(_fm_engine_identity "$pid")" = "$identity" ]
 }
