@@ -57,6 +57,7 @@ Until they land, their current behavior stays as described in their own owners.
 | The dialog mirror | `bin/fm-host-mirror.sh` | Owns the mirror files, writers, verified-writer list, and feed; see [The dialog mirror](#the-dialog-mirror). |
 | The captain-outcome drain | `bin/fm-wake-drain.sh` | Presents visible new and unprocessed outcomes in its `BRANCH OUTCOMES` section; `bin/fm-branch-outcome.sh mark-processed` is main's acknowledgement; see [Captain outcomes](#captain-outcomes). |
 | The main side | [supervision-protocols/supervision-host.md](supervision-protocols/supervision-host.md) | What main reads at session start on a home that runs the host, rendered for its harness. |
+| The question keeper | `bin/fm-question-keeper.sh`, with `bin/fm-question-lib.sh` | Keeps a Claude primary supervised while a captain question holds its turn open; see [While a captain question is open](#while-a-captain-question-is-open). |
 
 ### Arm owners
 
@@ -140,6 +141,23 @@ A captain who leaves while an attended turn runs turns its captain outcomes into
 So where the attended host runs, `/quiet` is a statement that enters nothing, because the host already gives what a quiet entry would; while [the broken-session latch](#the-broken-session-latch) holds, it says the session is paused instead.
 Where the home runs the host but the attended host lacks one of its parts, `/quiet` names the missing part and enters the quiet daemon, and while an away record is live the captain's return comes first.
 `bin/fm-afk-launch.sh` owns the readiness test and refusals in its `quiet-check` contract, and the [quiet skill](../.agents/skills/quiet/SKILL.md) owns the procedure.
+
+### While a captain question is open
+
+Claude's `AskUserQuestion` holds main's turn open until the captain answers, so no turn end re-arms supervision and main cannot take a close.
+The captain's rule is that work keeps moving while only the item that needs his answer waits.
+So on a Claude primary that runs the attended host, `bin/fm-question-pretool-check.sh` allows the question only for a present captain, and the question keeper keeps the host parked behind it:
+
+- The keeper is an `asyncRewake` PreToolUse hook on the same matcher, so it runs as a child of the session: a host it runs keeps the ancestry that proves the session holds the fleet lock, and Claude holds its exit-2 rewake until the question closes, then delivers it into the same turn.
+- While the question is open the keeper's record (`state/.question-open`) tells every host to hold each close it would hand to main: the host records the close for the keeper, starts and verifies its successor with the handling handoff confirmed, and parks on it, so the close is neither lost nor re-surfaced by the next arm.
+- The Stop hook's park from the previous turn usually still runs, because Claude does not end an async Stop hook when the captain's next prompt starts a turn; otherwise the keeper parks a host itself.
+- Either way the host's engine keeps taking the wakes the branch may take, exactly as attended.
+- The question closes when the transcript records its tool result, which Claude writes both for an answer and for a cancel.
+- The keeper then stamps the captain's presence, asks its own host to hand its running cycle to the next park, and delivers every held close as one rewake; with nothing held it ends silently.
+
+`bin/fm-question-lib.sh` owns the presence window and the records, the keeper's header owns its lifecycle, and the host's header owns the hold and the hand-over.
+A close only main can take still waits for the answer, because only main can handle it.
+A home where no keeper can run - no attended host, no usable engine, no verified mirror, or no readable transcript - keeps the deny.
 
 ## The dialog mirror
 

@@ -75,14 +75,18 @@
 #   fm-host-mirror.sh feed <session> new|resume
 #   fm-host-mirror.sh commit
 #   fm-host-mirror.sh check
+#   fm-host-mirror.sh captain-epoch
 #   fm-host-mirror.sh verified <harness>
 # hook and commit always exit 0 and print nothing; feed exits 1 when
 # the mirror is missing, could not be read, or holds an invalid entry, or the
 # main session cannot be identified, and prints nothing when there is nothing
 # to feed; check (bin/fm-afk-launch.sh quiet-check's mirror test) exits 1 when
 # the mirror is missing, could not be read, or holds an invalid entry, and
-# otherwise 0, printing nothing and staging no cursor; verified exits 0 or 1
-# and prints nothing.
+# otherwise 0, printing nothing and staging no cursor; captain-epoch (the
+# captain-presence test, bin/fm-question-lib.sh) prints the epoch of the
+# current main session's newest captain entry, and exits 1 printing nothing
+# when there is none or the mirror cannot be read; verified exits 0 or 1 and
+# prints nothing.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -115,13 +119,13 @@ case "${1:-}" in
     # home that does not run the host stays inert.
     fm_supervision_host_enabled "$CONFIG" "${2:-}" || exit 0
     ;;
-  feed|commit|check) ;;
+  feed|commit|check|captain-epoch) ;;
   -h|--help) sed -n '2,/^set -u/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) usage ;;
 esac
 
 if ! command -v jq >/dev/null 2>&1 || [ ! -d "$STATE" ]; then
-  case "$1" in feed|check) exit 1 ;; esac
+  case "$1" in feed|check|captain-epoch) exit 1 ;; esac
   exit 0
 fi
 
@@ -269,6 +273,18 @@ case "$1" in
     jq -Rs "$ENTRIES" "$MIRROR" >/dev/null 2>&1 || rc=1
     fm_lock_release "$LOCK"
     exit "$rc"
+    ;;
+  captain-epoch)
+    [ "$#" -eq 1 ] || usage
+    [ -f "$MIRROR" ] || exit 1
+    KEY=$(fm_supervision_host_main_key "$STATE") || exit 1
+    fm_lock_acquire_wait "$LOCK" || exit 1
+    EPOCH=$(jq -Rrs --arg key "$KEY" "$ENTRIES"' | map(select(.key == $key and .tag == "captain") | .epoch | numbers) | max // empty' \
+      "$MIRROR" 2>/dev/null) || EPOCH=
+    fm_lock_release "$LOCK"
+    case "$EPOCH" in ''|*[!0-9]*) exit 1 ;; esac
+    printf '%s\n' "$EPOCH"
+    exit 0
     ;;
 esac
 

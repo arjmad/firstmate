@@ -838,6 +838,36 @@ tests/fm-afk-return.test.sh
 tests/fm-branch-supervision.test.sh
 ```
 
+### Open captain question
+
+This supports [While a captain question is open](../supervision-host.md#while-a-captain-question-is-open) and the headers of `bin/fm-question-keeper.sh` and `bin/fm-supervision-host.sh`.
+It was measured on 2026-10-16 on macOS arm64 with Claude Code 2.1.300 (`haiku` primary, `sonnet` engine), first by probe hooks in a scratch project on a private tmux socket, then by the live guard in a disposable lab copy of this checkout.
+
+| Question | Observed on Claude Code 2.1.300 |
+| --- | --- |
+| Does an async `Stop` hook still parked from the previous turn survive the captain's next prompt and an open `AskUserQuestion`? | Yes: the probe hook kept writing its liveness file through both, and Claude started a second `Stop` hook at that turn's end without ending the first. |
+| What happens to an `asyncRewake` exit 2 while the selector is open? | Claude holds it: nothing reaches the pane until the question closes, then `Stop hook feedback` is delivered into the same turn (after an answer) or as the next turn (after Escape), and also fires `UserPromptSubmit` with a `<task-notification>` prompt. |
+| Does an `asyncRewake` `PreToolUse` hook on the `AskUserQuestion` matcher run while the selector is open? | Yes: it started with the selector, ran as a child of the Claude process, and its exit 2 was held and delivered the same way. |
+| Which hooks fire when the question closes? | An answer fires `PostToolUse` and no `UserPromptSubmit`; Escape fires neither `PostToolUse`, `PostToolUseFailure`, nor `Stop`. |
+| What marks the close in both cases? | The transcript gains a `type: user` entry whose content holds a `tool_result` with the question's `tool_use_id`, for the answer and for the Escape rejection alike. |
+
+```text
+$ FM_QUESTION_KEEPER_LIVE_E2E=1 tests/fm-question-keeper-live-e2e.test.sh
+# 17:03:45 step 1: guard allowed AskUserQuestion; keeper recorded 68510 toolu_01QqpZNeAWSTui3cKeoXdwrH; selector open
+# 17:03:56 step 2: held supervision-host: branch-outcome: the supervision session handled a wake and recorded captain outcom...; host 62540 still parked
+# 17:03:56 step 2: host log since the event: handled/turn=host-62540-1792184621.1;held/for the open captain question;pass-through/attended;held/for the open captain question;
+# 17:04:03 step 3: keeper ended on the transcript tool result; rewake delivered and acknowledged; presence stamp 1792184636
+# 17:04:12 step 4: Escape wrote the tool result and the keeper ended silently
+ok - question keeper live (2.1.300 (Claude Code)): a present captain keeps the selector, the running park holds main's close while it is open, and the answer delivers it into the same turn
+```
+
+Deterministic entry points:
+
+```sh
+tests/fm-question-pretool-check.test.sh
+tests/fm-supervision-host.test.sh
+```
+
 ## Wedge-alarm channels
 
 The two real notification channels were bounded manually on 2026-07-10 on macOS 26.5.2 with Herdr 0.7.3.

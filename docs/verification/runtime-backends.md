@@ -555,7 +555,8 @@ ok - Claude Code 2.1.269: fm-control exit confirms the background-work dialog an
 ## Claude blocking question guard
 
 Verified 2026-10-16 on Claude Code 2.1.300 (Claude Code), tmux 3.7b, macOS arm64.
-An interactive Claude in a fixture primary checkout sends a `PreToolUse` payload with `tool_name` `AskUserQuestion` to the tracked `AskUserQuestion` matcher, and honors `bin/fm-question-pretool-check.sh`'s deny: with an in-flight task the turn ends without opening the selector, while on an idle home the same request opens the selector and holds the turn open.
+An interactive Claude in a fixture primary checkout sends a `PreToolUse` payload with `tool_name` `AskUserQuestion` to the tracked `AskUserQuestion` matcher, and honors `bin/fm-question-pretool-check.sh`'s deny: with an in-flight task and no present captain the turn ends without opening the selector, while on an idle home the same request opens the selector and holds the turn open.
+The present-captain allowance and its keeper are verified in [supervision.md](supervision.md#open-captain-question).
 The live guard is the refresh command after a Claude Code upgrade:
 
 ```sh
@@ -570,7 +571,7 @@ ok - claude 2.1.300 (Claude Code): on an idle home the selector held the turn op
 ok - question guard live: claude 2.1.300 (Claude Code) honors the tracked AskUserQuestion deny
 ```
 
-`tests/fm-question-pretool-check.test.sh` pins the classifier, scope, escape hatch, and tracked registration without a harness.
+`tests/fm-question-pretool-check.test.sh` pins the classifier, scope, presence window, escape hatch, and tracked registration without a harness.
 
 ## Pi seeded-secondmate project trust
 

@@ -89,6 +89,7 @@ state/               runtime records and signals; gitignored
   branch-session/ .branch-session .branch-mirror-cursor  the branch's per-main-session conversations, the pointer to the current one, and the dialog-mirror cursor; extension-owned (docs/pi-supervision-branch.md)
   .branch-eligible-rows .branch-eligible-owner .branch-eligible-acked .main-eligible-rows  per-actor wake-row claims, branch-owner evidence, and the branch's last whole-grant ack; docs/watcher-continuity.md owns the acknowledgement contract
   .supervision-host*  supervision host process record, engine conversation, current turn scope and report receipts, and bounded ledger of every close and engine turn; bin/fm-supervision-host.sh owns them; never touch
+  .question-open .question-held .question-answered .question-keeper-host.*  the open captain question's keeper record, the closes held for main while it is open, the captain's last question answer, and the keeper's host capture; bin/fm-question-lib.sh owns the records and bin/fm-question-keeper.sh the capture; never touch
   .lease-<task>        per-task supervision lease naming which actor (main or branch) may change that task; bin/fm-lease-lib.sh owns the contract the guarded scripts enforce
   x-watch.check.sh   generated Relay poll shim; present only when opted in (section 14)
   tool-updates.check.sh  generated watched-tool update poll shim and its .check-trust binding; present only after bin/fm-tool-update-check.sh arm; its report record .tool-updates is what keeps one pending update from being reported on every poll

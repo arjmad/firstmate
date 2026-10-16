@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Behavior tests for the primary-session blocking-question guard: the tracked
 # hook registration and the PreToolUse classifier, scoped to a primary home
-# whose fleet needs supervision.
+# whose fleet needs supervision, with its captain-presence allowance.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -14,9 +14,42 @@ STATE="$PRIMARY/state"
 OUT="$TMP_ROOT/out"
 ERR="$TMP_ROOT/err"
 
-mkdir -p "$PRIMARY/bin" "$STATE"
+CONFIG="$PRIMARY/config"
+TRANSCRIPT="$TMP_ROOT/transcript.jsonl"
+
+mkdir -p "$PRIMARY/bin" "$STATE" "$CONFIG"
 printf '# fixture\n' > "$PRIMARY/AGENTS.md"
 git -C "$PRIMARY" init -q
+: > "$TRANSCRIPT"
+# The supervision host's engine must exist for a keeper to be possible; the
+# guard only checks that it is there.
+ENGINE_STUB="$TMP_ROOT/engine"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$ENGINE_STUB"
+chmod +x "$ENGINE_STUB"
+export FM_SUPERVISION_ENGINE_CLAUDE_BIN="$ENGINE_STUB"
+unset FM_ALLOW_QUESTION_TOOL FM_QUESTION_PRESENT_SECONDS
+
+# This shell is the fixture session's lock holder, so the main-session key the
+# mirror and the answered stamp are keyed to is its own.
+printf '%s\n' "$$" > "$STATE/.lock"
+main_key() {
+  FM_STATE_OVERRIDE="$STATE" bash -c '. "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-supervision-engine-lib.sh"; fm_supervision_host_main_key "$2"' _ "$ROOT" "$STATE"
+}
+KEY=$(main_key) || fail "fixture: no main-session key for the lock holder"
+# The captain's newest prompt in the dialog mirror, <age> seconds ago.
+captain_said() {  # <age-seconds> [key]
+  rm -f "$STATE/.question-answered"
+  jq -cn --argjson epoch "$(( $(date +%s) - $1 ))" --arg key "${2:-$KEY}" \
+    '{seq: 1, epoch: $epoch, key: $key, id: "p1", tag: "captain", text: "grill me"}' > "$STATE/.host-mirror.jsonl"
+}
+# He answered a question <age> seconds ago.
+captain_answered() {  # <age-seconds> [key]
+  rm -f "$STATE/.host-mirror.jsonl"
+  printf '%s\t%s\n' "$(( $(date +%s) - $1 ))" "${2:-$KEY}" > "$STATE/.question-answered"
+}
+captain_silent() {
+  rm -f "$STATE/.host-mirror.jsonl" "$STATE/.question-answered"
+}
 
 # One in-flight task is the plainest supervision need (bin/fm-supervision-lib.sh).
 give_work() {  # <state-dir>
@@ -31,8 +64,8 @@ run_tool() {
   shift
   : > "$OUT"
   : > "$ERR"
-  env FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" "$@" \
-    "$CHECK" --claude --tool "$tool" > "$OUT" 2> "$ERR" || rc=$?
+  env FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" "$@" \
+    "$CHECK" --claude --tool "$tool" --transcript "$TRANSCRIPT" > "$OUT" 2> "$ERR" || rc=$?
   return "$rc"
 }
 
@@ -47,7 +80,8 @@ expect_allow() {
 
 expect_deny() {
   local label=$1 tool=$2 rc=0
-  run_tool "$tool" || rc=$?
+  shift 2
+  run_tool "$tool" "$@" || rc=$?
   [ "$rc" -eq 2 ] || fail "$label ($tool) must deny with exit 2, got $rc"
   [ ! -s "$OUT" ] || fail "$label ($tool) deny wrote stdout: $(cat "$OUT")"
   jq -e '.hookSpecificOutput.hookEventName == "PreToolUse" and .hookSpecificOutput.permissionDecision == "deny"' "$ERR" >/dev/null 2>&1 \
@@ -58,6 +92,7 @@ expect_deny() {
 
 test_denies_blocking_question_while_work_is_under_way() {
   give_work "$STATE"
+  captain_silent
   expect_deny "blocking question with work under way" AskUserQuestion
   expect_deny "case-insensitive name" askuserquestion
   pass "AskUserQuestion is denied in a primary home whose fleet needs supervision"
@@ -66,6 +101,7 @@ test_denies_blocking_question_while_work_is_under_way() {
 test_deny_names_the_non_blocking_route() {
   local actual
   give_work "$STATE"
+  captain_silent
   run_tool AskUserQuestion && fail "work-under-way case must deny"
   actual=$(jq -r '.systemMessage' "$ERR")
   case "$actual" in
@@ -98,6 +134,7 @@ test_other_tools_are_never_classified() {
 test_escape_hatch_allows_deliberate_use() {
   local rc value
   give_work "$STATE"
+  captain_said 3600
   expect_allow "escape hatch set" AskUserQuestion FM_ALLOW_QUESTION_TOOL=1
   for value in '' 0 yes true 11; do
     rc=0
@@ -143,13 +180,14 @@ test_secondmate_home_is_in_scope() {
   give_work "$second/state"
   FM_ROOT_OVERRIDE="$second" FM_HOME="$second" FM_STATE_OVERRIDE="$second/state" \
     "$CHECK" --claude --tool AskUserQuestion > "$OUT" 2> "$ERR" || rc=$?
-  [ "$rc" -eq 2 ] || fail "a marked secondmate home with work under way must be guarded, got exit $rc"
+  [ "$rc" -eq 2 ] || fail "a marked secondmate home with work under way and no present captain must be guarded, got exit $rc"
   pass "a marked secondmate home is guarded even though it is a linked worktree"
 }
 
 test_stdin_transports_and_output_shapes() {
   local rc=0
   give_work "$STATE"
+  captain_silent
   : > "$OUT"; : > "$ERR"
   printf '%s' '{"tool_name":"AskUserQuestion","tool_input":{"questions":[]}}' \
     | FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" \
@@ -171,6 +209,7 @@ test_stdin_transports_and_output_shapes() {
 test_malformed_transport_fails_open() {
   local rc payload
   give_work "$STATE"
+  captain_silent
   for payload in '{not-json' '' '{}' '{"tool_name":null}'; do
     rc=0
     : > "$OUT"; : > "$ERR"
@@ -187,13 +226,16 @@ test_tracked_claude_registration_reaches_the_guard() {
   # The tracked matcher must route AskUserQuestion to this guard, and the
   # registered command must deny it in a primary home with work under way.
   local cmd rc=0
-  cmd=$(jq -r '.hooks.PreToolUse[] | select(.matcher == "AskUserQuestion") | .hooks[].command' "$ROOT/.claude/settings.json")
+  cmd=$(jq -r '.hooks.PreToolUse[] | select(.matcher == "AskUserQuestion") | .hooks[].command
+    | select(contains("fm-question-pretool-check.sh"))' "$ROOT/.claude/settings.json")
   [ -n "$cmd" ] || fail "tracked .claude/settings.json registers no AskUserQuestion PreToolUse hook"
+  local f
   mkdir -p "$PRIMARY/bin"
-  ln -sf "$CHECK" "$PRIMARY/bin/fm-question-pretool-check.sh"
-  ln -sf "$ROOT/bin/fm-primary-scope-lib.sh" "$PRIMARY/bin/fm-primary-scope-lib.sh"
-  ln -sf "$ROOT/bin/fm-supervision-lib.sh" "$PRIMARY/bin/fm-supervision-lib.sh"
+  for f in "$ROOT"/bin/*; do
+    ln -sf "$f" "$PRIMARY/bin/${f##*/}"
+  done
   give_work "$STATE"
+  captain_silent
   : > "$OUT"; : > "$ERR"
   printf '%s' '{"tool_name":"AskUserQuestion","tool_input":{"questions":[]}}' \
     | env -u GROK_AGENT -u GROK_HOOK_EVENT CLAUDE_PROJECT_DIR="$PRIMARY" \
@@ -204,8 +246,87 @@ test_tracked_claude_registration_reaches_the_guard() {
   pass "the tracked Claude registration routes AskUserQuestion to the guard"
 }
 
+test_present_captain_keeps_the_question_tool() {
+  give_work "$STATE"
+  captain_said 30
+  expect_allow "captain prompted 30 seconds ago" AskUserQuestion
+  captain_silent
+  captain_answered 30
+  expect_allow "captain answered a question 30 seconds ago" AskUserQuestion
+  pass "a captain who prompted or answered within the presence window keeps the selector with work under way"
+}
+
+test_absent_captain_is_denied() {
+  local actual
+  give_work "$STATE"
+  captain_said 900
+  expect_deny "captain prompted 15 minutes ago" AskUserQuestion
+  actual=$(jq -r '.systemMessage' "$ERR")
+  assert_contains "$actual" "15 minutes ago, outside the 10-minute presence window" "the deny must say how long the captain has been silent"
+  captain_silent
+  expect_deny "captain never prompted" AskUserQuestion
+  assert_contains "$(jq -r '.systemMessage' "$ERR")" "has sent no message in this session" "the deny must say the captain never spoke"
+  # Presence belongs to this main session only.
+  captain_said 30 "0:0:0"
+  expect_deny "captain prompted in another session" AskUserQuestion
+  captain_silent
+  captain_answered 30 "0:0:0"
+  expect_deny "captain answered in another session" AskUserQuestion
+  pass "a captain silent past the window, or present only in another session, gets today's deny"
+}
+
+test_presence_window_is_configurable() {
+  give_work "$STATE"
+  captain_said 900
+  expect_allow "a 20-minute window" AskUserQuestion FM_QUESTION_PRESENT_SECONDS=1200
+  expect_deny "a 5-minute window" AskUserQuestion FM_QUESTION_PRESENT_SECONDS=300
+  expect_deny "a malformed window keeps the default" AskUserQuestion FM_QUESTION_PRESENT_SECONDS=soon
+  pass "FM_QUESTION_PRESENT_SECONDS sets the presence window and a malformed value keeps ten minutes"
+}
+
+test_present_captain_without_a_keeper_is_denied() {
+  local rc=0
+  give_work "$STATE"
+  captain_said 30
+  : > "$CONFIG/supervision-host-off"
+  expect_deny "a home that opted out of the supervision host" AskUserQuestion
+  assert_contains "$(jq -r '.systemMessage' "$ERR")" "nothing can keep supervision running while it waits: the home does not run the supervision host" \
+    "the deny must name why no keeper can run"
+  rm -f "$CONFIG/supervision-host-off"
+  expect_deny "no engine executable" AskUserQuestion FM_SUPERVISION_ENGINE_CLAUDE_BIN="$TMP_ROOT/missing"
+  : > "$OUT"; : > "$ERR"
+  FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$CHECK" --claude --tool AskUserQuestion --transcript "$TMP_ROOT/no-transcript" > "$OUT" 2> "$ERR" || rc=$?
+  [ "$rc" -eq 2 ] || fail "an unreadable transcript must deny, got exit $rc"
+  assert_contains "$(jq -r '.systemMessage' "$ERR")" "the session transcript cannot be read" "the deny must name the unreadable transcript"
+  rc=0
+  printf '%s' "{\"toolName\":\"AskUserQuestion\",\"transcript_path\":\"$TRANSCRIPT\"}" \
+    | FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+      "$CHECK" > "$OUT" 2> "$ERR" || rc=$?
+  [ "$rc" -eq 2 ] || fail "a present captain on a non-Claude transport must deny, got exit $rc"
+  pass "a present captain is still denied where no keeper can keep supervision running"
+}
+
+test_present_claude_payload_on_stdin_is_allowed() {
+  local rc=0
+  give_work "$STATE"
+  captain_said 30
+  : > "$OUT"; : > "$ERR"
+  printf '%s' "{\"tool_name\":\"AskUserQuestion\",\"tool_use_id\":\"toolu_1\",\"transcript_path\":\"$TRANSCRIPT\"}" \
+    | FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+      "$CHECK" --claude > "$OUT" 2> "$ERR" || rc=$?
+  [ "$rc" -eq 0 ] || fail "a Claude payload with a present captain must allow, got exit $rc: $(cat "$ERR")"
+  [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || fail "the allow wrote output"
+  pass "the Claude payload's transcript path lets a present captain keep the selector"
+}
+
 test_denies_blocking_question_while_work_is_under_way
 test_deny_names_the_non_blocking_route
+test_present_captain_keeps_the_question_tool
+test_absent_captain_is_denied
+test_presence_window_is_configurable
+test_present_captain_without_a_keeper_is_denied
+test_present_claude_payload_on_stdin_is_allowed
 test_idle_home_keeps_the_question_tool
 test_other_tools_are_never_classified
 test_escape_hatch_allows_deliberate_use

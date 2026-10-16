@@ -101,6 +101,24 @@
 # (bin/fm-branch-report.sh), so it still reaches main when the host dies at the
 # turn's end or its owner drops the handoff, as a superseded Cursor park does.
 #
+# A CAPTAIN QUESTION. While state/.question-open names a live keeper
+# (bin/fm-question-keeper.sh; fm_question_hold_open in bin/fm-question-lib.sh
+# owns the record), a Claude primary's turn is held open by a question to the
+# captain, so main cannot take a close. Then an attended close that would reach
+# main, a close that turned main-only during its turn, and a handled close that
+# recorded a captain outcome are held instead: the host appends the close (or
+# its branch-outcome line) to state/.question-held, starts and verifies the
+# successor cycle and confirms the handling handoff exactly as for a close the
+# engine takes, and parks on that successor; the keeper delivers every held
+# close to main when the question closes. A close the host could not hold
+# reaches main as without the question. SIGUSR1 asks the host to hand over:
+# at its next wait for a close it records the running arm for the next park's
+# take-over, as a main-only pass-through does, and exits with one
+# "supervision-host stood down: handed over ..." line; a close that arrives
+# before then is held. FM_SUPERVISION_HOST_ARM_OWN_GROUP=1 starts every arm in
+# a process group of its own, for an owner whose hook group is torn down after
+# it exits (the keeper).
+#
 # THE LATCH. An opted-in host persists engine health across short-lived
 # parks; docs/supervision-host.md "The broken-session latch" owns the policy.
 #
@@ -177,6 +195,11 @@
 # only when FM_TEST_SEAM=1; tests/lib.sh arms the marker for isolated suites.
 set -u
 
+# Installed first: a hand-over requested while the host is still starting is
+# honored at its first wait instead of ending the process by default.
+HANDOVER_REQUESTED=0
+trap 'HANDOVER_REQUESTED=1' USR1
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
@@ -193,6 +216,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-supervision-engine-lib.sh"
 # shellcheck source=bin/fm-afk-contract.sh
 . "$SCRIPT_DIR/fm-afk-contract.sh"
+# shellcheck source=bin/fm-question-lib.sh
+. "$SCRIPT_DIR/fm-question-lib.sh"
 
 FIRST_ARM_RESTART=0
 case "${1:-}" in
@@ -258,6 +283,8 @@ ARM_PID=
 ARM_OUT=
 ARM_TEXT=
 CLOSED_ARM_PID=
+ARM_OWN_GROUP=0
+[ "${FM_SUPERVISION_HOST_ARM_OWN_GROUP:-}" != 1 ] || ARM_OWN_GROUP=1
 HANDLE_WHY=
 HANDLE_RC=0
 ENGINE_SUBSHELL=
@@ -532,13 +559,14 @@ stream_ready_line() {
 }
 
 # Wait for the current arm to close. Returns 0 with ARM_TEXT set,
-# or 1 when the park boundary arrives first.
+# 1 when the park boundary arrives first, or 2 when a hand-over was requested.
 await_close() {
   local i
   while fm_pid_alive "$ARM_PID"; do
     refresh_process "$ARM_PID"
     [ "$READY_PENDING" -eq 0 ] || stream_ready_line
     boundary_reached && return 1
+    [ "$HANDOVER_REQUESTED" -eq 0 ] || return 2
     # Probe the arm's exit twice a second between POLL-cadence checks, without
     # changing the outer identity refresh, readiness, or boundary cadence.
     i=$((POLL * 2))
@@ -715,6 +743,59 @@ leave_successor_for_main() {
     return 1
   fi
   detach_successor
+}
+
+# True while a captain question holds main's turn open, or the keeper that
+# watched it asked for the hand-over and delivers what is held after it.
+question_hold() {
+  [ "$HANDOVER_REQUESTED" -eq 1 ] || fm_question_hold_open "$STATE"
+}
+
+# Hold the close for the question keeper and park on a verified successor
+# whose handling handoff is confirmed, so main is not woken and the close is
+# not re-surfaced; the keeper delivers it when the question closes. Returns 1,
+# leaving the close for the caller to hand to main, when it cannot be held.
+hold_close() {  # [supervision-host line]
+  local text
+  text=$(printf '%s\n' "$ARM_TEXT" | grep -E '^(signal:|stale:|check:|heartbeat($|:))' || true)
+  [ -z "${1:-}" ] || text=${text:+$text$'\n'}"supervision-host: $1"
+  fm_question_hold_append "$STATE" "$text" || return 1
+  if [ -z "$SUCCESSOR_PID" ]; then
+    if ! ARM_OWN_GROUP=1 start_successor "$CLOSED_ARM_PID"; then
+      log_line "held	successor-unverified	$(printf '%s\n' "$text" | head -n 1)"
+      retire_successor
+      return 1
+    fi
+    if [ -n "$SUCCESSOR_GENERATION" ] \
+      && ! "$SCRIPT_DIR/fm-watch-arm.sh" --handling-delivered "$SUCCESSOR_GENERATION" --watcher-pid "$SUCCESSOR_WATCHER" >/dev/null 2>&1; then
+      log_line "held	handoff-unconfirmed	$(printf '%s\n' "$text" | head -n 1)"
+      retire_successor
+      return 1
+    fi
+  fi
+  log_line "held	for the open captain question	$(printf '%s\n' "$text" | head -n 1)"
+  ARM_PID=$SUCCESSOR_PID
+  ARM_OUT=$SUCCESSOR_OUT
+  SUCCESSOR_PID=
+  SUCCESSOR_OUT=
+  ARM_TEXT=
+}
+
+# The hand-over SIGUSR1 asked for: leave the running arm for the next park to
+# take over, as a main-only pass-through leaves its successor, and exit.
+handover_exit() {
+  local arm=$ARM_PID
+  SUCCESSOR_PID=$ARM_PID
+  SUCCESSOR_OUT=$ARM_OUT
+  ARM_PID=
+  ARM_OUT=
+  if detach_successor; then
+    log_line "handover	arm=$arm"
+  else
+    log_line "handover	arm-unrecorded"
+  fi
+  emit "supervision-host stood down: handed over the watcher cycle to the next park"
+  exit 0
 }
 
 # The engine conversation for this turn: the recorded one while it belongs to
@@ -1074,7 +1155,12 @@ ARM_OUT=$STARTED_ARM_OUT
 
 while :; do
   boundary_reached && boundary_exit
-  await_close || boundary_exit
+  [ "$HANDOVER_REQUESTED" -eq 0 ] || handover_exit
+  await_close
+  case $? in
+    1) boundary_exit ;;
+    2) handover_exit ;;
+  esac
   REASON=$(printf '%s\n' "$ARM_TEXT" | grep -E '^(signal:|stale:|check:|heartbeat($|:))' || true)
 
   # The away daemon owns triage while its flag exists; the owner stands down.
@@ -1096,6 +1182,9 @@ while :; do
   if ! fm_afk_contract_away_present "$STATE"; then
     if ! attended_acceptor "$(printf '%s\n' "$REASON" | head -n 1)"; then
       log_line "pass-through	attended	$ATTENDED_WHY	$(printf '%s\n' "$REASON" | head -n 1)"
+      if question_hold && hold_close; then
+        continue
+      fi
       if [ "$ATTENDED_WHY" = main-only ]; then
         leave_successor_for_main || true
       fi
@@ -1138,6 +1227,9 @@ while :; do
   HANDLE_RC=$?
   if [ "$HANDLE_RC" -eq 2 ]; then
     log_line "pass-through	attended	$ATTENDED_WHY	$(printf '%s\n' "$REASON" | head -n 1)"
+    if question_hold && hold_close; then
+      continue
+    fi
     # The successor this turn already started and confirmed stays up. Retiring
     # it is what left no watcher after a close that became main-only.
     detach_successor
@@ -1183,6 +1275,9 @@ while :; do
     CAPTAIN_SEQS=$(turn_captain_seqs "$LAST_TURN")
     if [ -n "$CAPTAIN_SEQS" ]; then
       ARM_TEXT=
+      if question_hold && hold_close "branch-outcome: the supervision session handled a wake and recorded captain outcomes for you (store rows $CAPTAIN_SEQS); run bin/fm-wake-drain.sh, act on its BRANCH OUTCOMES section, and acknowledge them as it prints"; then
+        continue
+      fi
       exit_to_main "branch-outcome: the supervision session handled this wake and recorded captain outcomes for you (store rows $CAPTAIN_SEQS); run bin/fm-wake-drain.sh, act on its BRANCH OUTCOMES section, and acknowledge them as it prints" \
         "$HEALTH_NOTE"
     fi

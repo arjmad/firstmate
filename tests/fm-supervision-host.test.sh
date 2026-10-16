@@ -2999,6 +2999,199 @@ test_superseded_host_leaves_the_owner_untouched() {
   pass "host: a host under a superseded auto-arm generation stands down without touching the owner"
 }
 
+# --- a captain question held open (bin/fm-question-keeper.sh) ---------------
+
+# A live stand-in keeper recorded as watching an open question, as
+# bin/fm-question-keeper.sh records itself.
+fake_open_question() {  # <home>
+  local pid identity
+  sleep 600 > /dev/null 2>&1 &
+  pid=$!
+  identity=$(bash -c '. "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-supervision-engine-lib.sh"; _fm_engine_identity "$2"' _ "$ROOT" "$pid")
+  printf '%s\t%s\t%s\t%s\n' "$pid" "$identity" toolu_fake "$(date +%s)" > "$1/state/.question-open"
+  printf '%s\n' "$pid" >> "$1/orphan-pid"
+  printf '%s\n' "$pid"
+}
+held_has() { grep -q -- "$2" "$1/state/.question-held" 2>/dev/null; }
+
+test_open_question_holds_main_closes_and_keeps_handling_wakes() {
+  local home keeper
+  home=$(make_home question-hold attended)
+  keeper=$(fake_open_question "$home")
+  start_host "$home"
+  wait_until 150 watcher_live "$home" || fail "hold: the host never started a watcher cycle"
+  # The fleet keeps moving while the question waits: a wake the branch may
+  # take is handled on the engine.
+  append_status "$home" 'step one'
+  wait_until 250 handled_at_least "$home" 1 \
+    || fail "hold: a wake arriving while the question was open was not handled: $(cat "$home/state/.supervision-host.log")"
+  [ ! -s "$home/host.rc" ] || fail "hold: the host left its park after handling a wake: $(cat "$home/host.out")"
+  # A close only main can take is held, and the park goes on.
+  append_status "$home" 'which export format?' needs-decision
+  wait_until 250 held_has "$home" 'demo.status' \
+    || fail "hold: the main-only close was not held while the question was open: $(cat "$home/state/.supervision-host.log")"
+  wait_until 250 sh -c 'grep -q "	held	for the open captain question	signal: " "$1"' _ "$home/state/.supervision-host.log" \
+    || fail "hold: the ledger never recorded the held close parked on a verified successor: $(cat "$home/state/.supervision-host.log")"
+  [ ! -s "$home/host.rc" ] || fail "hold: the host ended its park for a main-only close while main's question was open: $(cat "$home/host.out")"
+  [ "$(engine_calls "$home")" -eq 1 ] || fail "hold: the engine took the decision close"
+  wait_until 100 watcher_live "$home" || fail "hold: no watcher runs after the held close"
+  [ "$(marker_kind "$home")" = handling ] \
+    || fail "hold: the held close left downtime, so the next arm would re-surface it: $(cat "$home/state/.watcher-down")"
+  assert_grep 'demo.status' "$home/state/.wake-queue" "the held decision wake must stay queued for main's drain"
+  # Once the keeper is gone the next main-only close reaches main again.
+  kill -TERM "$keeper" 2>/dev/null
+  wait "$keeper" 2>/dev/null || true
+  append_status "$home" 'and which locale?' needs-decision
+  wait_until 250 host_exited "$home" || fail "hold: with the question closed the decision close did not reach main"
+  assert_re '^signal: .*demo.status' "$home/host.out" "the close after the question must reach main as the arm printed it"
+  pass "host: while a captain question is open the next wake is still handled, and a main-only close is held while the park continues"
+}
+
+test_handover_leaves_the_watcher_for_the_next_park() {
+  local home host watcher
+  home=$(make_home question-handover attended)
+  FM_SUPERVISION_HOST_ARM_OWN_GROUP=1 start_host "$home"
+  wait_until 150 watcher_live "$home" || fail "handover: the host never started a watcher cycle"
+  # The last wake was handled and acknowledged, as main's is before it asks.
+  append_status "$home" 'step one'
+  wait_until 250 handled_at_least "$home" 1 || fail "handover: fixture: the wake was not handled"
+  wait_until 100 sh -c 'grep -q "^acked:" "$1"' _ "$home/state/.watcher-down" \
+    || fail "handover: fixture: the handled wake was not acknowledged: $(cat "$home/state/.watcher-down")"
+  wait_until 100 watcher_live "$home" || fail "handover: no watcher runs after the handled wake"
+  host=$(awk -F '\t' '$1 == "host" { print $2; exit }' "$home/state/.supervision-host")
+  watcher=$(cat "$home/state/.watch.lock/pid")
+  kill -USR1 "$host"
+  wait_until 100 host_exited "$home" || fail "handover: the host did not end its park on SIGUSR1"
+  expect_code 0 "$(cat "$home/host.rc")" "a hand-over exits 0"
+  assert_grep 'supervision-host stood down: handed over the watcher cycle to the next park' "$home/host.out" "the hand-over must say so"
+  kill -0 "$watcher" 2>/dev/null || fail "handover: the hand-over stopped the watcher"
+  [ -s "$home/state/.supervision-host-left" ] || fail "handover: the hand-over recorded no arm for the next park"
+  start_host "$home"
+  wait_until 100 sh -c 'grep -q "	take-over	arm=" "$1"' _ "$home/state/.supervision-host.log" \
+    || fail "handover: the next park did not take over the arm: $(cat "$home/state/.supervision-host.log")"
+  wait_until 150 watcher_live "$home" || fail "handover: no watcher runs after the take-over"
+  sleep 3
+  [ ! -s "$home/host.rc" ] || fail "handover: the next park did not stay parked after its take-over: $(cat "$home/host.out")"
+  assert_no_grep 'rearm-resurface' "$home/state/.supervision-host.log" "handover: the hand-over left a close for the next park to re-surface"
+  pass "host: SIGUSR1 hands the running cycle to the next park, which takes it over"
+}
+
+# One Claude session that asks a question: the keeper runs as the session's
+# asyncRewake PreToolUse hook. With "parked" the session first parks a host as
+# its previous turn's Stop hook would have.
+start_question() {  # <home> <tool-use-id> [parked]
+  local home=$1
+  : > "$home/transcript.jsonl"
+  printf '{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_use_id":"%s","transcript_path":"%s"}\n' \
+    "$2" "$home/transcript.jsonl" > "$home/keeper.stdin"
+  [ "${3:-}" != parked ] || : > "$home/parked"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_CREW_STATE_BIN="$home/fakebin/fm-crew-state.sh" \
+    PATH="$home/fakebin:$PATH" FM_QUESTION_KEEPER_POLL=1 "$FAKE_CLAUDE" -c '
+      printf "%s\n" "$$" > "$FM_HOME/state/.lock"
+      printf "%s\n" "$$" >> "$FM_HOME/claude-pids"
+      for seed in "$FM_HOME"/mirror-seed.*; do
+        [ -f "$seed" ] || continue
+        "$FM_HOME/bin/fm-host-mirror.sh" hook claude < "$seed"
+      done
+      if [ -e "$FM_HOME/parked" ]; then
+        "$FM_HOME/bin/fm-supervision-host.sh" park > "$FM_HOME/host.out" 2>&1 &
+        while ! grep -q "^watcher: " "$FM_HOME/host.out" 2>/dev/null; do sleep 0.1; done
+      fi
+      "$FM_HOME/bin/fm-question-keeper.sh" < "$FM_HOME/keeper.stdin" > "$FM_HOME/keeper.out" 2> "$FM_HOME/keeper.err"
+      printf "%s\n" "$?" > "$FM_HOME/keeper.rc"
+      while [ ! -e "$FM_HOME/session.stop" ]; do sleep 0.1; done
+    ' 2>> "$home/claude.err" &
+}
+# The captain answers: Claude writes the question's tool result.
+answer_question() {  # <home> <tool-use-id>
+  printf '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"%s","content":"Red"}]}}\n' \
+    "$2" >> "$1/transcript.jsonl"
+}
+keeper_exited() { [ -s "$1/keeper.rc" ]; }
+question_open() { [ -s "$1/state/.question-open" ]; }
+recorded_host() { awk -F '\t' '$1 == "host" { print $2; exit }' "$1/state/.supervision-host" 2>/dev/null; }
+
+# The audit's failure: the helm parked on one open question for hours while no
+# wake was handled. With the keeper, a wake that arrives while the question is
+# open is handled, a close only main can take waits for the answer, and the
+# answer delivers it into the same turn.
+test_keeper_handles_wakes_while_the_question_is_open() {
+  local home host watcher
+  home=$(make_primary_home keeper-handles)
+  start_question "$home" toolu_q1
+  wait_until 100 question_open "$home" || fail "keeper: the open question was never recorded: $(cat "$home/keeper.err" 2>/dev/null)"
+  wait_until 150 watcher_live "$home" || fail "keeper: no supervision host ran while the question was open: $(cat "$home/keeper.err" 2>/dev/null)"
+  append_status "$home" 'step one'
+  wait_until 250 handled_at_least "$home" 1 \
+    || fail "keeper: a wake arriving while the question was open was not handled: $(cat "$home/state/.supervision-host.log")"
+  append_status "$home" 'which export format?' needs-decision
+  wait_until 250 held_has "$home" 'demo.status' || fail "keeper: the decision close was not held for main"
+  wait_until 250 sh -c 'grep -q "	held	for the open captain question	signal: " "$1"' _ "$home/state/.supervision-host.log" \
+    || fail "keeper: the held close never parked on a verified successor: $(cat "$home/state/.supervision-host.log")"
+  wait_until 100 watcher_live "$home" || fail "keeper: no watcher runs after the held close"
+  keeper_exited "$home" && fail "keeper: the keeper delivered before the question closed: $(cat "$home/keeper.err")"
+  host=$(recorded_host "$home")
+  watcher=$(cat "$home/state/.watch.lock/pid")
+  answer_question "$home" toolu_q1
+  wait_until 150 keeper_exited "$home" || fail "keeper: the answered question did not end the keeper"
+  expect_code 2 "$(cat "$home/keeper.rc")" "a held close must reach main as a rewake"
+  assert_grep 'firstmate watcher wake - not a block on your question' "$home/keeper.err" "the rewake must say it is a wake, not a refusal"
+  assert_re '^signal: .*demo.status' "$home/keeper.err" "the rewake must carry the held close"
+  assert_grep 'Run bin/fm-wake-drain.sh first' "$home/keeper.err" "the rewake must send main to its drain"
+  [ ! -e "$home/state/.question-open" ] || fail "keeper: the open record outlived the question"
+  [ ! -e "$home/state/.question-held" ] || fail "keeper: the delivered closes stayed held"
+  [ -s "$home/state/.question-answered" ] || fail "keeper: the answer was not stamped as the captain's presence"
+  kill -0 "$host" 2>/dev/null && fail "keeper: its host outlived the keeper"
+  kill -0 "$watcher" 2>/dev/null || fail "keeper: the hand-over stopped the watcher instead of leaving it for the next park"
+  [ -s "$home/state/.supervision-host-left" ] || fail "keeper: the hand-over left no arm for the next park to take over"
+  pass "keeper: a wake arriving while a question is open is handled, and the close only main can take reaches it on the answer"
+}
+
+# The usual case: the Stop hook's park from the previous turn is still running
+# when the captain's next prompt asks the question, so the keeper starts no
+# second host and only delivers what that park held.
+test_keeper_uses_the_park_already_running() {
+  local home host
+  home=$(make_primary_home keeper-parked)
+  start_question "$home" toolu_q2 parked
+  wait_until 100 question_open "$home" || fail "keeper parked: the open question was never recorded"
+  host=$(recorded_host "$home")
+  [ -n "$host" ] || fail "keeper parked: fixture: no host was parked"
+  append_status "$home" 'which export format?' needs-decision
+  wait_until 250 held_has "$home" 'demo.status' || fail "keeper parked: the running park did not hold the decision close"
+  wait_until 250 sh -c 'grep -q "	held	for the open captain question	signal: " "$1"' _ "$home/state/.supervision-host.log" \
+    || fail "keeper parked: the held close never parked on a verified successor: $(cat "$home/state/.supervision-host.log")"
+  [ "$(recorded_host "$home")" = "$host" ] || fail "keeper parked: the keeper replaced the running park"
+  answer_question "$home" toolu_q2
+  wait_until 150 keeper_exited "$home" || fail "keeper parked: the answered question did not end the keeper"
+  expect_code 2 "$(cat "$home/keeper.rc")" "the held close must reach main as a rewake"
+  assert_re '^signal: .*demo.status' "$home/keeper.err" "the rewake must carry the held close"
+  kill -0 "$host" 2>/dev/null || fail "keeper parked: the keeper stopped the park it did not start"
+  pass "keeper: beside a park already running it starts no second host and delivers what that park held"
+}
+
+test_keeper_without_a_held_close_exits_silently_and_inert_when_absent() {
+  local home
+  home=$(make_primary_home keeper-quiet)
+  start_question "$home" toolu_q3
+  wait_until 150 watcher_live "$home" || fail "keeper quiet: no supervision host ran while the question was open"
+  answer_question "$home" toolu_q3
+  wait_until 150 keeper_exited "$home" || fail "keeper quiet: the answered question did not end the keeper"
+  expect_code 0 "$(cat "$home/keeper.rc")" "nothing held must end the keeper silently"
+  [ ! -s "$home/keeper.err" ] || fail "keeper quiet: the keeper printed with nothing held: $(cat "$home/keeper.err")"
+  stop_registered_homes
+
+  # An absent captain: the guard denies the question, so the keeper records nothing.
+  home=$(make_primary_home keeper-absent)
+  rm -f "$home"/mirror-seed.*
+  start_question "$home" toolu_q4
+  wait_until 100 keeper_exited "$home" || fail "keeper absent: the keeper kept running for a question the guard denies"
+  expect_code 0 "$(cat "$home/keeper.rc")" "an inert keeper exits 0"
+  [ ! -e "$home/state/.question-open" ] || fail "keeper absent: an inert keeper recorded an open question"
+  [ ! -e "$home/state/.supervision-host" ] || fail "keeper absent: an inert keeper started a host"
+  pass "keeper: nothing held ends silently, and without a present captain the keeper is inert"
+}
+
 test_claude_stop_hook_restores_handoff_when_successor_closed_before_exit_to_main
 test_claude_stop_hook_restores_handoff_when_successor_closed_mid_engine_turn
 test_claude_stop_hook_notifies_when_closed_successor_downtime_restore_fails
@@ -3075,3 +3268,8 @@ test_unchanged_held_outcome_reaches_the_captain_once_until_a_new_event
 test_unverified_engine_hands_every_away_wake_to_main
 test_host_outside_the_lock_owner_stands_down
 test_superseded_host_leaves_the_owner_untouched
+test_open_question_holds_main_closes_and_keeps_handling_wakes
+test_handover_leaves_the_watcher_for_the_next_park
+test_keeper_handles_wakes_while_the_question_is_open
+test_keeper_uses_the_park_already_running
+test_keeper_without_a_held_close_exits_silently_and_inert_when_absent
