@@ -439,10 +439,12 @@ fm_dod_code_review_block() {  # <direct-PR|no-mistakes>
   [ "$1" != no-mistakes ] \
     || fix='commit a fix for every finding you agree is real and run /no-mistakes again so the pipeline pushes it'
   cat <<EOF
-Before that done report, give a code-changing GitHub PR its code review: run \`$cli status <pr-url>\`; \`exempt\` or \`reviewed\` needs nothing more.
-On \`unreviewed\`, if your harness has Claude Code's built-in \`/code-review\` skill, run \`/code-review medium --comment <number>\` from this worktree, $fix, reply in the PR thread of every finding you do not, then after your last push run \`$cli record <pr-url>\` and confirm it prints \`reviewed\`.
+Before that done report, give a code-changing GitHub PR its code review; a PR on any other forge skips this step.
+Run \`$cli status <pr-url>\`; \`exempt\` or \`reviewed\` needs nothing more.
+On \`unreviewed\`, run Claude Code's built-in \`/code-review medium --comment <number>\` from this worktree: invoke the skill when your harness has it, and otherwise run \`claude -p '/code-review medium --comment <number>'\` as a shell command there.
+Then $fix, reply in the PR thread of every finding you do not, and after your last push run \`$cli record <pr-url>\` and confirm it prints \`reviewed\`.
 A later push that changes the PR's diff needs the review again; a rebase that leaves the diff alone does not.
-If your harness has no \`/code-review\` skill, skip the review and report done; firstmate runs it and steers you through its findings.
+If neither way of running \`/code-review\` works here, append \`blocked:\` naming why instead of done.
 EOF
 }
 

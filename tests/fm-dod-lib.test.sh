@@ -454,12 +454,13 @@ test_pr_based_dod_carries_the_code_review_step() {
     out="$TMP_ROOT/dod-review-$mode.md"
     fm_dod_block "$mode" dod-review-task > "$out"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    cli=$(sed -n 's/^Before that done report, give a code-changing GitHub PR its code review: run `\([^ ]*\) status <pr-url>`.*/\1/p' "$out")
+    cli=$(sed -n 's/^Run `\([^ ]*\) status <pr-url>`.*/\1/p' "$out")
     [ -n "$cli" ] || fail "$mode: DoD does not carry the code review step"
     "$cli" classify bin/x.sh | grep -qx code-changing || fail "$mode: the DoD's review script does not run: $cli"
     assert_grep '/code-review medium --comment <number>' "$out" "$mode: DoD does not name the review skill and level"
+    assert_grep "claude -p '/code-review medium --comment <number>'" "$out" "$mode: DoD does not give a harness without the skill its headless path"
     assert_grep "$cli record <pr-url>" "$out" "$mode: DoD does not name the record step"
-    review_line=$(grep -n '^Before that done report' "$out" | cut -d: -f1)
+    review_line=$(grep -n '^Before that done report, give a code-changing GitHub PR its code review' "$out" | cut -d: -f1)
     done_line=$(grep -n '^Then append `done' "$out" | cut -d: -f1)
     [ "$review_line" -lt "$done_line" ] || fail "$mode: the review step comes after the done report"
   done

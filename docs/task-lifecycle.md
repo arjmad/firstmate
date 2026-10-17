@@ -90,8 +90,8 @@ After an autonomous merge, give the captain a one-line full-URL or local-main ou
 Every code-changing GitHub PR carries an independent code review before it merges, under either merge posture (fork patch, `docs/fork-decisions.md` 2026-10-17): `yolo` still merges on green, but only once that review is recorded.
 `bin/fm-code-review.sh` owns which PRs change code and what record counts, and `bin/fm-pr-merge.sh` refuses to merge one whose review is not recorded for its current diff.
 The review is Claude Code's built-in `/code-review` skill at its medium level with `--comment`, run once per PR diff: the ship worker runs it on its own PR before its ready report, fixes each finding it agrees is real, answers the rest in the PR, and records it, as its Definition of done (`bin/fm-dod-lib.sh`) says.
-When a worker's harness has no `/code-review` skill, firstmate runs the same skill headless with the task's worktree as the working directory, `claude -p '/code-review medium --comment <number>'`, then steers the worker to fix or answer each finding and run `bin/fm-code-review.sh record <pr-url>`.
-When a worker that could have run the review reports a PR the merge refuses as unreviewed, steer it to finish the review rather than running it yourself.
+A worker whose harness has no such skill runs the same review headless from its own worktree, `claude -p '/code-review medium --comment <number>'`, so the review stays crewmate work on every harness.
+When the merge refuses a PR as unreviewed, steer its worker to finish the review rather than running it yourself, including for a worker briefed before this step existed.
 `bin/fm-pr-merge.sh --waive-review <reason>` skips the review only on an explicit captain instruction naming that merge; it is attended-only and logged, and standing `yolo` never supplies it.
 GitLab and Forgejo PRs carry no review here, because `/code-review --comment` posts to GitHub only.
 

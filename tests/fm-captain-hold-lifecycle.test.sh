@@ -127,6 +127,9 @@ case "${1:-} ${2:-}" in
   "api --paginate")
     case " $* " in
       *merge_queue*) ;;
+      # The changed files bin/fm-code-review.sh reads, already through its
+      # --jq filter: one record, so the code review gate passes as exempt.
+      *"/pulls/"*"/files "*) printf '%s\n' 'F docs/records/sample.json' ;;
       *) printf '%s\n' '[]' ;;
     esac
     ;;

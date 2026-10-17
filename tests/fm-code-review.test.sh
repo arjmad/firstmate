@@ -57,7 +57,13 @@ case "$1 $2" in
       *) exit 1 ;;
     esac
     ;;
-  "pr diff") cat "$FM_TEST_DIR/diff" ;;
+  "pr diff")
+    if [ -f "$FM_TEST_DIR/diff-fail" ]; then
+      cat "$FM_TEST_DIR/diff-fail" >&2
+      exit 1
+    fi
+    cat "$FM_TEST_DIR/diff"
+    ;;
   "pr view") cat "$FM_TEST_DIR/head" ;;
   "pr comment")
     [ ! -f "$FM_TEST_DIR/comment-fail" ] || exit 1
@@ -86,7 +92,7 @@ run_case() {
 }
 
 diff_id() {
-  git patch-id --stable < "$1/diff" | awk '{ print $1 }'
+  git patch-id --verbatim < "$1/diff" | awk '{ print $1 }'
 }
 
 test_classify_exempts_records_receipts_data_seed_and_markdown_only() {
@@ -144,10 +150,45 @@ Code review done." '[{author_association: "MEMBER", body: $b}]' > "$dir/comments
     "$dir/diff" > "$dir/diff.next" && mv "$dir/diff.next" "$dir/diff"
   run_case "$dir" status "$URL"
   expect_code 0 "$RC" "status-rebased: a rebase that keeps the change should keep the record"
-  sed 's/^+echo new$/+echo newer/' "$dir/diff" > "$dir/diff.next" && mv "$dir/diff.next" "$dir/diff"
+  sed 's/^+echo new$/+  echo new/' "$dir/diff" > "$dir/diff.next" && mv "$dir/diff.next" "$dir/diff"
+  run_case "$dir" status "$URL"
+  expect_code 1 "$RC" "status-reindented: an indentation-only change needs a new review"
+  sed 's/^+  echo new$/+echo newer/' "$dir/diff" > "$dir/diff.next" && mv "$dir/diff.next" "$dir/diff"
   run_case "$dir" status "$URL"
   expect_code 1 "$RC" "status-changed: a changed diff needs a new review"
+
+  # A record whose comment GitHub stored with CRLF line endings still counts.
+  id=$(diff_id "$dir")
+  jq -nc --arg b "$(printf '<!-- fm-code-review v1 diff=%s head=%s -->\r\nReviewed.\r' "$id" "$HEAD_SHA")" \
+    '[{author_association: "OWNER", body: $b}]' > "$dir/comments.json"
+  run_case "$dir" status "$URL"
+  expect_code 0 "$RC" "status-crlf: a CRLF record should count"
   pass "fm-code-review status reads exempt, unreviewed, and reviewed by trusted record and diff"
+}
+
+test_status_handles_github_limits() {
+  local dir
+  # GitHub will not serve a very large PR's diff, so the head commit keys it,
+  # while any other failed diff read leaves the state unreadable.
+  dir=$(make_case status-no-diff bin/tool.sh)
+  printf 'could not find pull request diff: HTTP 401: Bad credentials\n' > "$dir/diff-fail"
+  run_case "$dir" status "$URL"
+  expect_code 2 "$RC" "status-diff-error: a transient diff failure must read as unreadable"
+  printf 'could not find pull request diff: HTTP 406: Sorry, the diff exceeded the maximum number of files (300).\n' > "$dir/diff-fail"
+  jq -nc --arg b "<!-- fm-code-review v1 diff=$HEAD_SHA head=$HEAD_SHA -->" \
+    '[{author_association: "OWNER", body: $b}]' > "$dir/comments.json"
+  run_case "$dir" status "$URL"
+  expect_code 0 "$RC" "status-no-diff: a head-keyed record should count when the diff is unavailable"
+  printf '%s\n' 9999999999999999999999999999999999999999 > "$dir/head"
+  run_case "$dir" status "$URL"
+  expect_code 1 "$RC" "status-no-diff: a new head needs a new review when the diff is unavailable"
+
+  # GitHub lists at most 3000 files, so the unlisted rest may be code.
+  dir=$(make_case status-file-cap)
+  seq 1 3000 | sed 's|^|docs/records/r|' | jq -R . | jq -sc 'map({filename: .})' > "$dir/files.json"
+  run_case "$dir" status "$URL"
+  expect_code 1 "$RC" "status-file-cap: a PR at the file-list cap must count as code-changing"
+  pass "fm-code-review status keys an unservable diff by head and treats the file-list cap as code"
 }
 
 test_status_refuses_unreadable_and_non_github() {
@@ -194,5 +235,6 @@ test_record_posts_once_for_the_current_diff() {
 
 test_classify_exempts_records_receipts_data_seed_and_markdown_only
 test_status_reads_exempt_unreviewed_and_reviewed
+test_status_handles_github_limits
 test_status_refuses_unreadable_and_non_github
 test_record_posts_once_for_the_current_diff

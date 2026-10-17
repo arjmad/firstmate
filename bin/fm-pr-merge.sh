@@ -182,8 +182,9 @@
 # read it; that script owns which pull requests change code and what record
 # counts. An attended --waive-review <reason>, passed once with the reason as a
 # separate argument, waives only that refusal for one merge on the captain's
-# word, and is appended to state/code-review-waivers.log as one tab-separated
-# line of epoch, task id, URL, verified head, and reason. Like --allow-red it is
+# word, and once the forge accepts that merge it is appended to
+# state/code-review-waivers.log as one tab-separated line of epoch, task id,
+# URL, verified head, and reason. Like --allow-red it is
 # refused while the away-posture record exists. GitLab and Forgejo merges are
 # not reviewed here, because /code-review --comment posts to GitHub only, and
 # --waive-review is refused on them.
@@ -1491,13 +1492,14 @@ require_code_review() {
   return 1
 }
 
+# Called only once the forge accepted the merge, so the log holds waived merges
+# rather than waived attempts; a failed write is reported, never a failed merge.
 log_code_review_waiver() {
   [ "$CODE_REVIEW_WAIVED" = true ] || return 0
-  if ! printf '%s\t%s\t%s\thead=%s\t%s\n' "$(date +%s)" "$ID" "$URL" "$FM_PR_MERGE_HEAD" "$WAIVE_REVIEW" \
-    >> "$STATE/code-review-waivers.log"; then
-    echo "error: the code review waiver could not be logged; nothing was merged" >&2
-    return 1
-  fi
+  printf '%s\t%s\t%s\thead=%s\t%s\n' "$(date +%s)" "$ID" "$URL" "$FM_PR_MERGE_HEAD" "$WAIVE_REVIEW" \
+    >> "$STATE/code-review-waivers.log" 2>/dev/null && return 0
+  printf 'actionable: the forge accepted the merge of %s, but its code review waiver could not be logged: %s\n' \
+    "$URL" "$WAIVE_REVIEW" >&2
 }
 
 persist_accepted_merge_authority() {
@@ -1765,13 +1767,13 @@ case "$PROVIDER" in
     require_current_away_authority || away_status=$?
     [ "$away_status" -eq 0 ] || exit "$away_status"
     refuse_github_queue_while_away || exit 2
-    log_code_review_waiver || exit 1
     merge_status=0
     merge_output=$(gh pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" \
       --match-head-commit "$FM_PR_MERGE_HEAD" \
       "${merge_args[@]+"${merge_args[@]}"}" "$@" 2>&1) || merge_status=$?
     if [ "$merge_status" -eq 0 ]; then
       FM_PR_GITHUB_MERGE_ACCEPTED=true
+      log_code_review_waiver
       persist_accepted_merge_authority || exit 1
       fm_afk_contract_lock_release || true
       fm_lock_release "$MERGE_CONTROL_LOCK" || true

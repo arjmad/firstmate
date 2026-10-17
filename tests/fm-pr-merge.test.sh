@@ -181,7 +181,7 @@ github_pr_comment() {
 
 # The diff id bin/fm-code-review.sh computes for this case's fixture diff.
 github_pr_diff_id() {
-  git patch-id --stable < "$1/github-pr-diff" | awk '{ print $1 }'
+  git patch-id --verbatim < "$1/github-pr-diff" | awk '{ print $1 }'
 }
 
 add_gh_mocks() {
@@ -4684,7 +4684,14 @@ test_waive_review_merges_once_and_is_logged() {
   expect_code 0 "$RC" "review-waiver-unneeded: an exempt PR must merge"
   assert_grep 'was not needed' "$case_dir/stderr" "review-waiver-unneeded: the unused waiver was not reported"
   [ ! -e "$case_dir/state/code-review-waivers.log" ] || fail "review-waiver-unneeded: an unused waiver was logged"
-  pass "fm-pr-merge --waive-review merges an unreviewed PR and logs only a waiver it used"
+  case_dir=$(make_case review-waiver-merge-fails)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks_merge_fails "$case_dir" "$head"
+  write_github_pr_files "$case_dir" bin/tool.sh
+  run_review_case "$case_dir" 98 --waive-review 'merge will fail'
+  [ "$RC" -ne 0 ] || fail "review-waiver-merge-fails: a failed merge must fail"
+  [ ! -e "$case_dir/state/code-review-waivers.log" ] || fail "review-waiver-merge-fails: a waiver was logged for a merge the forge refused"
+  pass "fm-pr-merge --waive-review merges an unreviewed PR and logs only a waiver a landed merge used"
 }
 
 test_waive_review_is_attended_github_only_and_well_formed() {

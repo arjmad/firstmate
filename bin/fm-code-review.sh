@@ -9,18 +9,23 @@
 # data/, or seed/, or names a Markdown file (*.md). A pull request is
 # code-changing when any changed path, counting both names of a rename, is not
 # exempt, so a receipts, records, or prose-only pull request merges on green
-# alone and everything else carries a review first.
+# alone and everything else carries a review first. GitHub lists at most 3000
+# changed files, so a pull request at that cap counts as code-changing, since
+# the files it leaves unlisted cannot be classified.
 #
 # The review is Claude Code's built-in /code-review skill at its medium level
 # with --comment, which posts each finding as an inline PR comment. Once every
 # finding is fixed or answered in its thread and the last push is in, `record`
 # posts one PR comment carrying the marker line
 #   <!-- fm-code-review v1 diff=<diff-id> head=<sha> -->
-# where <diff-id> is `git patch-id --stable` of the PR's diff as GitHub serves
-# it (a hash of the diff text when patch-id yields nothing, as for a diff of
-# binary files only). The patch id ignores line numbers and whitespace, so a
-# rebase or re-push that leaves the change alone keeps the record valid, while
-# any change to the diff needs a new review and a new record. Only a comment
+# where <diff-id> is `git patch-id --verbatim` of the PR's diff as GitHub
+# serves it (a hash of the diff text when patch-id yields nothing, as for a
+# diff of binary files only). The patch id ignores line numbers but not
+# whitespace, so a rebase that leaves the change alone keeps the record valid,
+# while any change to the diff, indentation included, needs a new review and a
+# new record. GitHub refuses to serve the diff of a very large pull request
+# (about 20,000 lines or 300 files); its <diff-id> is then the head commit
+# itself, so every push to it needs a new review. Only a comment
 # whose author is the repository's owner, a member, or a collaborator counts,
 # so a stranger's comment on a public repository cannot pose as a record. The
 # record is the reviewer's attestation; nothing here re-derives the review.
@@ -77,16 +82,30 @@ code_review_parse_url() {
   fi
 }
 
+# Each changed file as "F <path>", plus "P <old path>" for a rename.
 code_review_files() {
   gh api --paginate "repos/$FM_PR_OWNER/$FM_PR_REPO/pulls/$FM_PR_NUMBER/files" \
-    --jq '.[] | .filename, (.previous_filename // empty)'
+    --jq '.[] | ("F " + .filename), (.previous_filename // empty | "P " + .)'
 }
 
+# A failed diff read falls back to the head only when GitHub refused the diff
+# for its size (HTTP 406); any other failure leaves the review state unreadable.
 code_review_diff_id() {
-  local diff id
-  diff=$(gh pr diff "$FM_PR_NUMBER" --repo "$FM_PR_OWNER/$FM_PR_REPO") || return 1
-  [ -n "$diff" ] || return 1
-  id=$(printf '%s\n' "$diff" | git patch-id --stable | awk 'NR == 1 { print $1 }')
+  local diff='' err id head
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-code-review.XXXXXX") || return 1
+  if ! diff=$(gh pr diff "$FM_PR_NUMBER" --repo "$FM_PR_OWNER/$FM_PR_REPO" 2>"$err"); then
+    case "$(cat "$err")" in
+      *"HTTP 406"*|*"too_large"*|*"exceeded the maximum"*) diff= ;;
+      *) cat "$err" >&2; rm -f "$err"; return 1 ;;
+    esac
+  fi
+  rm -f "$err"
+  if [ -z "$diff" ]; then
+    head=$(code_review_head) && fm_pr_head_valid "$head" || return 1
+    printf '%s\n' "$head"
+    return 0
+  fi
+  id=$(printf '%s\n' "$diff" | git patch-id --verbatim | awk 'NR == 1 { print $1 }')
   [ -n "$id" ] || id=$(printf '%s\n' "$diff" | git hash-object --stdin)
   printf '%s\n' "$id"
 }
@@ -101,8 +120,8 @@ code_review_recorded_ids() {
   bodies=$(gh api --paginate "repos/$FM_PR_OWNER/$FM_PR_REPO/issues/$FM_PR_NUMBER/comments" \
     --jq '.[] | select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") | .body') \
     || return 1
-  printf '%s\n' "$bodies" \
-    | sed -n 's/^<!-- fm-code-review v1 diff=\([0-9a-f]\{40\}\) head=[0-9a-f]\{40\} -->$/\1/p'
+  printf '%s\n' "$bodies" | tr -d '\r' \
+    | sed -n 's/^<!-- fm-code-review v1 diff=\([0-9a-f]\{40,64\}\) head=[0-9a-f]\{40,64\} -->$/\1/p'
 }
 
 CODE_REVIEW_DIFF_ID=
@@ -117,7 +136,10 @@ code_review_status() {
     echo "error: could not read the changed files of $FM_PR_URL" >&2
     return 2
   fi
-  verdict=$(printf '%s\n' "$files" | code_review_classify_stream)
+  verdict=$(printf '%s\n' "$files" | sed 's/^[FP] //' | code_review_classify_stream)
+  if [ "$(printf '%s\n' "$files" | grep -c '^F ')" -ge 3000 ]; then
+    verdict=code-changing
+  fi
   if [ "$verdict" = exempt ]; then
     CODE_REVIEW_LINE="exempt: every changed path of $FM_PR_URL is a record, receipt, data, seed, or Markdown file"
     return 0
