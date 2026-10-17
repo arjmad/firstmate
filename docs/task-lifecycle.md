@@ -66,6 +66,7 @@ Supervise all live work under section 8.
 
 The selected delivery path owns its own rigor.
 When no-mistakes is selected, no-mistakes alone owns review, fixes, tests, documentation, push, PR, and CI; otherwise follow the faster path without adding an independent reviewer.
+The one exception on either path is the code review before merge below.
 Never hold work outside no-mistakes for a manual clean verdict, stack serial manual reviews, or infer authority for one from security, architecture, or risk alone.
 A separate review or audit is allowed only when the captain explicitly requests that deliverable or the authorized task is a knowledge-only review; one named question remains scoped to that question.
 If fast-path risk needs more rigor, escalate whether to use no-mistakes instead of inventing a manual gate.
@@ -83,6 +84,16 @@ Without a current explicit captain instruction that states the concrete merge, t
 Load `ask-user-authority` and `validation-supervision` before deciding or answering any ask-user finding; the implementation worker never answers its own finding.
 Use `bin/fm-pr-merge.sh` for every task PR merge so merge metadata is recorded and an unproved merge is refused instead of reported as landed, and use `bin/fm-merge-local.sh` for approved local-only landing; never call a lower-level merge command around their guards.
 After an autonomous merge, give the captain a one-line full-URL or local-main outcome.
+
+### Code review before merge
+
+Every code-changing GitHub PR carries an independent code review before it merges, under either merge posture (fork patch, `docs/fork-decisions.md` 2026-10-17): `yolo` still merges on green, but only once that review is recorded.
+`bin/fm-code-review.sh` owns which PRs change code and what record counts, and `bin/fm-pr-merge.sh` refuses to merge one whose review is not recorded for its current diff.
+The review is Claude Code's built-in `/code-review` skill at its medium level with `--comment`, run once per PR diff: the ship worker runs it on its own PR before its ready report, fixes each finding it agrees is real, answers the rest in the PR, and records it, as its Definition of done (`bin/fm-dod-lib.sh`) says.
+A worker whose harness has no such skill runs the same review headless from its own worktree, `claude -p '/code-review medium --comment <number>'`, so the review stays crewmate work on every harness.
+When the merge refuses a PR as unreviewed, steer its worker to finish the review rather than running it yourself, including for a worker briefed before this step existed.
+`bin/fm-pr-merge.sh --waive-review <reason>` skips the review only on an explicit captain instruction naming that merge; it is attended-only and logged, and standing `yolo` never supplies it.
+GitLab and Forgejo PRs carry no review here, because `/code-review --comment` posts to GitHub only.
 
 ### Validate
 

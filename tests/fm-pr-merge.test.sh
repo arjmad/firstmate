@@ -164,9 +164,41 @@ assert_logged_gh_merge() {
     || fail "expected gh merge line: $line"$'\n'"got: $(grep '^pr merge ' "$case_dir/gh.log" || true)"
 }
 
+# The pull request's changed files, diff, and comments that
+# bin/fm-code-review.sh reads. By default the one changed file is a record, so
+# the code review gate passes as exempt and every other case is untouched.
+# Args: case_dir path...
+write_github_pr_files() {
+  local case_dir=$1
+  shift
+  printf '%s\n' "$@" | jq -R . | jq -sc 'map({filename: .})' > "$case_dir/github-pr-files.json"
+}
+
+# One PR comment as GitHub's issue-comments API reports it. Args: author_association body
+github_pr_comment() {
+  jq -nc --arg a "$1" --arg b "$2" '{author_association: $a, body: $b}'
+}
+
+# The diff id bin/fm-code-review.sh computes for this case's fixture diff.
+github_pr_diff_id() {
+  git patch-id --verbatim < "$1/github-pr-diff" | awk '{ print $1 }'
+}
+
 add_gh_mocks() {
   local case_dir=$1 head=$2
   write_github_live_json "$case_dir" "$head"
+  write_github_pr_files "$case_dir" docs/records/2026-10-17.json
+  printf '%s\n' '[]' > "$case_dir/github-pr-comments.json"
+  cat > "$case_dir/github-pr-diff" <<'DIFF'
+diff --git a/bin/tool.sh b/bin/tool.sh
+index 1111111..2222222 100755
+--- a/bin/tool.sh
++++ b/bin/tool.sh
+@@ -1,2 +1,2 @@
+ #!/usr/bin/env bash
+-echo old
++echo new
+DIFF
   cat > "$case_dir/fakebin/gh-axi" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_TEST_GH_AXI_LOG"
@@ -181,7 +213,22 @@ SH
   cat > "$case_dir/fakebin/gh" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
+fixtures=${FM_TEST_GH_VIEW_JSON%/*}
+# Apply a --jq filter the way gh does, with the real jq over the fixture.
+gh_jq() {
+  local prev='' arg filter='.'
+  for arg in "${@:2}"; do
+    [ "$prev" != --jq ] || filter=$arg
+    prev=$arg
+  done
+  jq -r "$filter" "$1"
+}
 case "${1:-} ${2:-}" in
+  "pr diff")
+    [ ! -f "$fixtures/github-pr-diff-fail" ] || exit 1
+    cat "$fixtures/github-pr-diff"
+    exit 0
+    ;;
   "pr view")
     case " $* " in
       *statusCheckRollup*)
@@ -252,9 +299,19 @@ case "${1:-} ${2:-}" in
     exit 0
     ;;
   api\ *)
-    # The required-check reads: the branch itself, and its rules read without
-    # the merge-queue filter the queue reader below applies.
+    # The code review reads (bin/fm-code-review.sh), then the required-check
+    # reads: the branch itself, and its rules read without the merge-queue
+    # filter the queue reader below applies.
     case " $* " in
+      *" repos/"*"/pulls/"*"/files "*)
+        [ ! -f "$fixtures/github-pr-files-fail" ] || exit 1
+        gh_jq "$fixtures/github-pr-files.json" "$@"
+        exit $?
+        ;;
+      *" repos/"*"/issues/"*"/comments "*)
+        gh_jq "$fixtures/github-pr-comments.json" "$@"
+        exit $?
+        ;;
       *" repos/"*"/commits/"*"/check-runs"*)
         case "$*" in
           *"/commits/$(cat "$FM_TEST_GH_HEAD")/check-runs"*) ;;
@@ -4533,6 +4590,148 @@ test_allow_missing_refused_on_forgejo() {
   pass "fm-pr-merge refuses --allow-missing on Forgejo"
 }
 
+# The code review gate (bin/fm-code-review.sh owns the classifier and record).
+# Args: case_dir pr_number [merge args]...; sets RC.
+run_review_case() {
+  local case_dir=$1 number=$2
+  shift 2
+  set +e
+  run_pr_merge "$case_dir" task-x1 "https://github.com/example/repo/pull/$number" "$@" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  RC=$?
+  set -e
+}
+
+test_code_changing_pr_needs_a_trusted_review_record_for_its_diff() {
+  local case_dir head=c0dec0dec0dec0dec0dec0dec0dec0dec0dec0de id
+  case_dir=$(make_case review-missing)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_pr_files "$case_dir" docs/records/a.json bin/tool.sh
+  run_review_case "$case_dir" 90
+  expect_code 1 "$RC" "review-missing: an unreviewed code-changing PR must be refused"
+  assert_grep 'unreviewed: diff' "$case_dir/stderr" "review-missing: refusal did not name the unreviewed diff"
+  assert_grep 'fm-code-review.sh record' "$case_dir/stderr" "review-missing: refusal did not name the record step"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "review-missing: gh pr merge ran without a review"
+
+  case_dir=$(make_case review-untrusted-or-stale)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_pr_files "$case_dir" bin/tool.sh
+  id=$(github_pr_diff_id "$case_dir")
+  {
+    printf '['
+    github_pr_comment NONE "<!-- fm-code-review v1 diff=$id head=$head -->"
+    printf ','
+    github_pr_comment OWNER "<!-- fm-code-review v1 diff=0123456789012345678901234567890123456789 head=$head -->"
+    printf ']\n'
+  } > "$case_dir/github-pr-comments.json"
+  run_review_case "$case_dir" 91
+  expect_code 1 "$RC" "review-untrusted-or-stale: an outsider's record or another diff's record must not count"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "review-untrusted-or-stale: gh pr merge ran"
+
+  case_dir=$(make_case review-recorded)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_pr_files "$case_dir" bin/tool.sh
+  id=$(github_pr_diff_id "$case_dir")
+  {
+    printf '['
+    github_pr_comment COLLABORATOR "<!-- fm-code-review v1 diff=$id head=$head -->
+Code review: findings fixed."
+    printf ']\n'
+  } > "$case_dir/github-pr-comments.json"
+  run_review_case "$case_dir" 92
+  expect_code 0 "$RC" "review-recorded: a reviewed code-changing PR must merge"
+  assert_grep "reviewed: diff $id" "$case_dir/stderr" "review-recorded: the verified review was not reported"
+  assert_logged_gh_merge "$case_dir" 92 example/repo --squash
+  [ ! -e "$case_dir/state/code-review-waivers.log" ] || fail "review-recorded: a review that ran was logged as waived"
+  pass "fm-pr-merge merges a code-changing PR only with a trusted review record for its current diff"
+}
+
+test_review_state_unreadable_refuses() {
+  local case_dir
+  case_dir=$(make_case review-unreadable)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" dededededededededededededededededededede
+  : > "$case_dir/github-pr-files-fail"
+  run_review_case "$case_dir" 93
+  expect_code 1 "$RC" "review-unreadable: an unreadable file list must refuse"
+  assert_grep 'code review state could not be read' "$case_dir/stderr" "review-unreadable: refusal did not say why"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "review-unreadable: gh pr merge ran"
+  pass "fm-pr-merge refuses when the code review state cannot be read"
+}
+
+test_waive_review_merges_once_and_is_logged() {
+  local case_dir head=feedfacefeedfacefeedfacefeedfacefeedface line
+  case_dir=$(make_case review-waived)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_pr_files "$case_dir" bin/tool.sh
+  run_review_case "$case_dir" 94 --waive-review 'hotfix, captain said ship it'
+  expect_code 0 "$RC" "review-waived: an attended waiver must let the merge proceed"
+  assert_logged_gh_merge "$case_dir" 94 example/repo --squash
+  line=$(cat "$case_dir/state/code-review-waivers.log")
+  case "$line" in
+    *$'\ttask-x1\thttps://github.com/example/repo/pull/94\thead='"$head"$'\thotfix, captain said ship it') ;;
+    *) fail "review-waived: unexpected waiver log line: $line" ;;
+  esac
+
+  case_dir=$(make_case review-waiver-unneeded)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  run_review_case "$case_dir" 95 --waive-review 'not needed'
+  expect_code 0 "$RC" "review-waiver-unneeded: an exempt PR must merge"
+  assert_grep 'was not needed' "$case_dir/stderr" "review-waiver-unneeded: the unused waiver was not reported"
+  [ ! -e "$case_dir/state/code-review-waivers.log" ] || fail "review-waiver-unneeded: an unused waiver was logged"
+  case_dir=$(make_case review-waiver-merge-fails)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks_merge_fails "$case_dir" "$head"
+  write_github_pr_files "$case_dir" bin/tool.sh
+  run_review_case "$case_dir" 98 --waive-review 'merge will fail'
+  [ "$RC" -ne 0 ] || fail "review-waiver-merge-fails: a failed merge must fail"
+  [ ! -e "$case_dir/state/code-review-waivers.log" ] || fail "review-waiver-merge-fails: a waiver was logged for a merge the forge refused"
+  pass "fm-pr-merge --waive-review merges an unreviewed PR and logs only a waiver a landed merge used"
+}
+
+test_waive_review_is_attended_github_only_and_well_formed() {
+  local case_dir head=abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd
+  case_dir=$(make_case review-waiver-away)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_pr_files "$case_dir" bin/tool.sh
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  run_review_case "$case_dir" 96 --waive-review 'away'
+  expect_code 2 "$RC" "review-waiver-away: --waive-review must be refused while away"
+  assert_grep '--waive-review is attended-only' "$case_dir/stderr" "review-waiver-away: refusal did not name attended-only"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "review-waiver-away: gh pr merge ran"
+  [ ! -e "$case_dir/state/code-review-waivers.log" ] || fail "review-waiver-away: a refused waiver was logged"
+
+  case_dir=$(make_gitlab_case gitlab-waive-review)
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" --waive-review 'gitlab' \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  RC=$?
+  set -e
+  expect_code 2 "$RC" "gitlab-waive-review: --waive-review must not apply on GitLab"
+  assert_grep '--waive-review applies only to GitHub' "$case_dir/stderr" "gitlab-waive-review: refusal did not name GitHub"
+  [ ! -s "$case_dir/glab.log" ] || fail "gitlab-waive-review: glab ran despite --waive-review"
+
+  case_dir=$(make_case review-waiver-shape)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  run_review_case "$case_dir" 97 --waive-review
+  expect_code 2 "$RC" "review-waiver-shape: --waive-review needs a reason"
+  run_review_case "$case_dir" 97 --waive-review=inline
+  expect_code 2 "$RC" "review-waiver-shape: --waive-review=<reason> must be refused"
+  run_review_case "$case_dir" 97 --waive-review one --waive-review two
+  expect_code 2 "$RC" "review-waiver-shape: a second --waive-review must be refused"
+  run_review_case "$case_dir" 97 --waive-review $'two\nlines'
+  expect_code 2 "$RC" "review-waiver-shape: a multi-line reason must be refused"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "review-waiver-shape: gh pr merge ran"
+  pass "fm-pr-merge --waive-review is attended-only, GitHub-only, and takes one one-line reason"
+}
+
 test_gitlab_head_override_args_refuse_before_recording
 test_secondmate_merge_reports_upward_once
 test_secondmate_merge_reports_on_the_local_route
@@ -4589,3 +4788,7 @@ test_app_bound_required_status_context_matches_by_name
 test_required_partial_reads_report_all_failures
 test_allow_red_refused_on_forgejo
 test_allow_missing_refused_on_forgejo
+test_code_changing_pr_needs_a_trusted_review_record_for_its_diff
+test_review_state_unreadable_refuses
+test_waive_review_merges_once_and_is_logged
+test_waive_review_is_attended_github_only_and_well_formed
