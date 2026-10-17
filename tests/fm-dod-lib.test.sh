@@ -445,6 +445,34 @@ EOF
   pass "promotion keeps a scout's recorded base branch and refuses local-only for it"
 }
 
+# A PR-based DoD on GitHub hands the worker the code review step before its
+# done report, naming a review script that runs; a forge where
+# /code-review --comment cannot post, and local-only, carry none.
+test_pr_based_dod_carries_the_code_review_step() {
+  local mode out cli review_line done_line
+  for mode in direct-PR no-mistakes; do
+    out="$TMP_ROOT/dod-review-$mode.md"
+    fm_dod_block "$mode" dod-review-task > "$out"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    cli=$(sed -n 's/^Before that done report, give a code-changing GitHub PR its code review: run `\([^ ]*\) status <pr-url>`.*/\1/p' "$out")
+    [ -n "$cli" ] || fail "$mode: DoD does not carry the code review step"
+    "$cli" classify bin/x.sh | grep -qx code-changing || fail "$mode: the DoD's review script does not run: $cli"
+    assert_grep '/code-review medium --comment <number>' "$out" "$mode: DoD does not name the review skill and level"
+    assert_grep "$cli record <pr-url>" "$out" "$mode: DoD does not name the record step"
+    review_line=$(grep -n '^Before that done report' "$out" | cut -d: -f1)
+    done_line=$(grep -n '^Then append `done' "$out" | cut -d: -f1)
+    [ "$review_line" -lt "$done_line" ] || fail "$mode: the review step comes after the done report"
+  done
+  assert_grep 'run /no-mistakes again so the pipeline pushes it' "$TMP_ROOT/dod-review-no-mistakes.md" \
+    "no-mistakes: review fixes must ride the pipeline"
+  for mode in direct-PR:forgejo direct-PR:gerrit no-mistakes:forgejo local-only:none; do
+    out="$TMP_ROOT/dod-review-${mode%%:*}-${mode#*:}.md"
+    fm_dod_block "${mode%%:*}" dod-review-task "" "${mode#*:}" > "$out"
+    assert_no_grep 'code-review' "$out" "$mode: DoD carries a review /code-review cannot post"
+  done
+  pass "PR-based GitHub DoD carries the code review step before done"
+}
+
 test_scout_done_is_not_gated
 test_unpushed_ship_done_is_refused
 test_no_mistakes_prevalidation_done_is_not_gated
@@ -463,6 +491,7 @@ test_standalone_local_only_needs_project_ref
 test_non_done_lines_are_not_gated
 test_fenced_and_indented_captain_lines_are_not_intent
 test_pr_based_dod_draft_check_uses_gh_axi
+test_pr_based_dod_carries_the_code_review_step
 test_task_placeholder_guard_sees_a_leftover_line
 test_promotion_keeps_the_recorded_base_branch
 

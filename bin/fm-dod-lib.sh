@@ -75,6 +75,11 @@
 # report, read back from the forge; a lane that deliberately holds a draft
 # declares a paused wait instead. bin/fm-pr-check.sh refuses to arm merge
 # monitoring on a draft through the same reading bin/fm-pr-merge.sh uses.
+# On those two modes outside Gerrit and Forgejo, fm_dod_code_review_block then
+# has the worker give a code-changing GitHub PR its code review before the done
+# report (fork patch, docs/fork-decisions.md 2026-10-17); a no-mistakes worker
+# carries its fixes through another run so the pipeline stays the one
+# publisher. bin/fm-code-review.sh owns which PRs need it and what record counts.
 # This file is the one owner of the no-mistakes `--intent` contract: only the
 # brief's `## Captain's intent` subsection plus later captain words, never
 # `## Firstmate spec` and never the worker's own tradeoffs.
@@ -427,6 +432,20 @@ There is no pull request, no \`gh-axi\` call, and no forge CI result to report: 
 EOF
 }
 
+fm_dod_code_review_block() {  # <direct-PR|no-mistakes>
+  local cli fix
+  printf -v cli '%q' "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-code-review.sh"
+  fix='push a fix for every finding you agree is real'
+  [ "$1" != no-mistakes ] \
+    || fix='commit a fix for every finding you agree is real and run /no-mistakes again so the pipeline pushes it'
+  cat <<EOF
+Before that done report, give a code-changing GitHub PR its code review: run \`$cli status <pr-url>\`; \`exempt\` or \`reviewed\` needs nothing more.
+On \`unreviewed\`, if your harness has Claude Code's built-in \`/code-review\` skill, run \`/code-review medium --comment <number>\` from this worktree, $fix, reply in the PR thread of every finding you do not, then after your last push run \`$cli record <pr-url>\` and confirm it prints \`reviewed\`.
+A later push that changes the PR's diff needs the review again; a rebase that leaves the diff alone does not.
+If your harness has no \`/code-review\` skill, skip the review and report done; firstmate runs it and steers you through its findings.
+EOF
+}
+
 fm_dod_block() {  # <mode> <task-id> [branch] [<forge>] [<base>] [<consent>]
   local mode=$1 id=$2 forge=${4:-none} base=${5:-} consent=${6:-}
   local branch=${3:-fm/$id} pr_base='' nm_base='' base_q contract_forge='' contract_consent='' forge_cli=gh-axi draft_check
@@ -509,6 +528,9 @@ The task is complete only when committed on your branch.
 When it is implemented and committed, push your branch and open a PR with \`$forge_cli\` that is ready for review, not a draft$pr_base.
 Before you report done, read the PR back from the forge and confirm it is not a draft $draft_check
 A draft cannot be merged, so a done report on one leaves the merge unasked.
+EOF
+      [ "$forge" != none ] || fm_dod_code_review_block direct-PR
+      cat <<EOF
 Then append \`done [at=<epoch>]: PR {url}\` to the status file and stop.
 That \`done:\` is accepted only when this copy's HEAD - your latest commit - is pushed to your PR branch; the check tests that commit, not merely that a branch moved.
 If you deliberately keep the PR a draft, append \`paused [at=<epoch>]: {why the draft is held}\` instead of done.
@@ -544,6 +566,9 @@ EOF
 
 After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), read the PR back from the forge and confirm it is not a draft $draft_check
 A draft cannot be merged, so a done report on one leaves the merge unasked.
+EOF
+      [ "$forge" != none ] || fm_dod_code_review_block no-mistakes
+      cat <<EOF
 Then append \`done [at=<epoch>]: PR {url} checks green\` and stop. You are finished.
 That CI-ready \`done:\` is accepted only when this copy's HEAD - your latest commit - is one the /no-mistakes run pushed, so commit nothing after the run; the check tests that commit, not merely that a branch moved.
 If you deliberately keep the PR a draft, append \`paused [at=<epoch>]: {why the draft is held}\` instead of done.

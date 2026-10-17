@@ -175,7 +175,19 @@
 # untouched; it persists no merge authority and reports no merge outcome,
 # because the task lands when its own PR does, and it syncs the companion
 # project instead of the task's own.
-# Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [-- <extra forge merge args>]
+#
+# Code review (fork patch, docs/fork-decisions.md 2026-10-17): after the live
+# green check, a GitHub merge, companion PRs included, is refused while
+# bin/fm-code-review.sh status reads the pull request as unreviewed or cannot
+# read it; that script owns which pull requests change code and what record
+# counts. An attended --waive-review <reason>, passed once with the reason as a
+# separate argument, waives only that refusal for one merge on the captain's
+# word, and is appended to state/code-review-waivers.log as one tab-separated
+# line of epoch, task id, URL, verified head, and reason. Like --allow-red it is
+# refused while the away-posture record exists. GitLab and Forgejo merges are
+# not reviewed here, because /code-review --comment posts to GitHub only, and
+# --waive-review is refused on them.
+# Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [--waive-review <reason>] [-- <extra forge merge args>]
 #
 # On GitLab, this script confirms the MR is actually merged before reporting it;
 # an auto-merge-queued or unconfirmed request leaves the poll armed and records
@@ -239,6 +251,7 @@ shift 2
 ATTENDED_OVERRIDE=false
 ALLOW_RED=()
 ALLOW_MISSING=()
+WAIVE_REVIEW=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --attended-override)
@@ -269,6 +282,19 @@ while [ "$#" -gt 0 ]; do
       echo "error: --allow-missing requires a separate check name argument" >&2
       exit 2
       ;;
+    --waive-review)
+      [ -n "${2:-}" ] || { echo "error: --waive-review requires a reason" >&2; exit 2; }
+      [ -z "$WAIVE_REVIEW" ] || { echo "error: --waive-review may be specified only once" >&2; exit 2; }
+      case "$2" in
+        *$'\n'*|*$'\t'*) echo "error: --waive-review takes a one-line reason" >&2; exit 2 ;;
+      esac
+      WAIVE_REVIEW=$2
+      shift 2
+      ;;
+    --waive-review=*)
+      echo "error: --waive-review requires a separate reason argument" >&2
+      exit 2
+      ;;
     --) shift; break ;;
     *) break ;;
   esac
@@ -290,6 +316,10 @@ if [ "${#ALLOW_RED[@]}" -gt 0 ]; then
       exit 2
       ;;
   esac
+fi
+if [ -n "$WAIVE_REVIEW" ] && [ "$PROVIDER" != github ]; then
+  echo "error: --waive-review applies only to GitHub, the one forge whose merges carry a code review" >&2
+  exit 2
 fi
 if [ "${#ALLOW_MISSING[@]}" -gt 0 ]; then
   case "$PROVIDER" in
@@ -1420,6 +1450,54 @@ require_current_away_authority() {
     echo "error: --allow-missing is attended-only; while the away-posture record exists every required check must report" >&2
     return 2
   fi
+  if [ "$FM_PR_AWAY_POSTURE" = true ] && [ -n "$WAIVE_REVIEW" ]; then
+    echo "error: --waive-review is attended-only; while the away-posture record exists a code-changing pull request needs its code review record" >&2
+    return 2
+  fi
+}
+
+# The code review gate (see the header). Runs after the live green check, so
+# the head it logs is the one --match-head-commit binds; a push between the two
+# reads fails the merge itself. Sets CODE_REVIEW_WAIVED when the waiver is the
+# only thing letting the merge proceed, for log_code_review_waiver below.
+CODE_REVIEW_WAIVED=false
+require_code_review() {
+  local line status=0
+  line=$("$SCRIPT_DIR/fm-code-review.sh" status "$URL") || status=$?
+  case "$status" in
+    0)
+      printf 'verified: %s\n' "$line" >&2
+      [ -z "$WAIVE_REVIEW" ] || echo "note: --waive-review was not needed and is not logged" >&2
+      return 0
+      ;;
+    1)
+      if [ -n "$WAIVE_REVIEW" ]; then
+        printf 'waived: %s; code review waived on the captain'"'"'s word: %s\n' "$line" "$WAIVE_REVIEW" >&2
+        CODE_REVIEW_WAIVED=true
+        return 0
+      fi
+      printf 'error: refusing to merge %s\n  - %s\n' "$URL" "$line" >&2
+      ;;
+    *)
+      if [ -n "$WAIVE_REVIEW" ]; then
+        printf 'waived: the code review state of %s could not be read; code review waived on the captain'"'"'s word: %s\n' "$URL" "$WAIVE_REVIEW" >&2
+        CODE_REVIEW_WAIVED=true
+        return 0
+      fi
+      printf 'error: refusing to merge %s\n  - its code review state could not be read\n' "$URL" >&2
+      ;;
+  esac
+  echo "error: run Claude Code's /code-review --comment on the pull request, fix or answer each finding, then record it with bin/fm-code-review.sh record $URL (docs/task-lifecycle.md); only an explicit captain instruction may pass --waive-review <reason>" >&2
+  return 1
+}
+
+log_code_review_waiver() {
+  [ "$CODE_REVIEW_WAIVED" = true ] || return 0
+  if ! printf '%s\t%s\t%s\thead=%s\t%s\n' "$(date +%s)" "$ID" "$URL" "$FM_PR_MERGE_HEAD" "$WAIVE_REVIEW" \
+    >> "$STATE/code-review-waivers.log"; then
+    echo "error: the code review waiver could not be logged; nothing was merged" >&2
+    return 1
+  fi
 }
 
 persist_accepted_merge_authority() {
@@ -1679,6 +1757,7 @@ case "$PROVIDER" in
       fi
       exit 1
     fi
+    require_code_review || exit 1
     # The away record is locked first, so this last presence and authority read
     # and the forge command below share one live-owner critical section.
     hold_away_record_for_merge || exit 1
@@ -1686,6 +1765,7 @@ case "$PROVIDER" in
     require_current_away_authority || away_status=$?
     [ "$away_status" -eq 0 ] || exit "$away_status"
     refuse_github_queue_while_away || exit 2
+    log_code_review_waiver || exit 1
     merge_status=0
     merge_output=$(gh pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" \
       --match-head-commit "$FM_PR_MERGE_HEAD" \
