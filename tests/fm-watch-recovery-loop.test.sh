@@ -119,15 +119,16 @@ await tool.execute("tool-call-t1", {}, undefined, undefined, {});
 const deadline = Date.now() + 75000;
 let firstAt = 0;
 while (Date.now() < deadline) {
-  const rearm = prompts.filter((message) => message.includes("check: rearm-resurface"));
+  // The recovery names its queued row (bin/fm-watch.sh resurface_reason).
+  const rearm = prompts.filter((message) => message.includes("check: seed recovery"));
   if (rearm.length > 1) {
-    throw new Error(`unbounded recovery loop: ${rearm.length} rearm-resurface follow-ups`);
+    throw new Error(`unbounded recovery loop: ${rearm.length} recovery follow-ups`);
   }
   if (rearm.length === 1 && firstAt === 0) firstAt = Date.now();
   if (firstAt && Date.now() - firstAt >= 55000) break;
   await new Promise((resolve) => setTimeout(resolve, 200));
 }
-const rearm = prompts.filter((message) => message.includes("check: rearm-resurface"));
+const rearm = prompts.filter((message) => message.includes("check: seed recovery"));
 if (rearm.length !== 1) {
   throw new Error(`expected exactly one recovery follow-up, got ${rearm.length}: ${prompts.join(" || ")}`);
 }

@@ -137,6 +137,13 @@
 #                          running a check or removing poll artifacts
 #   heartbeat              fleet-scan backstop found an unsurfaced captain-relevant
 #                          status, unless afk is active
+#   <queued row's reason> | check: rearm-resurface
+#                          recovery: a durable row no watcher has announced
+#                          (another process appended it, or it was queued while
+#                          no non-successor cycle ran) is announced under its own
+#                          reason, newest check row first; a recovery whose rows
+#                          were all announced or claimed already, or that has
+#                          none, keeps the generic reason
 #   check: inactive-outcome bounded poll-loop reconciliation found a suspicious
 #                          inactive terminal outcome that still lacks its durable
 #                          upstream receipt
@@ -2604,6 +2611,8 @@ if [ -n "$EVICTED_PID" ]; then
   echo "watcher: replaced stalled pid $EVICTED_PID (beacon ${EVICTED_BEAT_AGE}s past hard bound ${WATCHER_STALL_BOUND}s)"
 fi
 WATCHER_RECOVERY_PENDING=0
+# Set once this cycle announces a recovery (resurface_after_downtime).
+WATCHER_RESURFACED=0
 if [ -n "${FM_LOCK_RECOVERED_PID:-}" ]; then
   WATCHER_RECOVERY_PENDING=1
 fi
@@ -2784,7 +2793,7 @@ watcher_cleanup() {
   if [ "$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)" = "${WATCHER_PID:-}" ]; then
     owns_lock=1
     if [ "${WATCHER_RECOVERY_PENDING:-0}" -eq 1 ] \
-      && [ "${FM_WATCH_DELIVERED_REASON:-}" = "check: rearm-resurface" ]; then
+      && [ "${WATCHER_RESURFACED:-0}" -eq 1 ] && [ -n "${FM_WATCH_DELIVERED_REASON:-}" ]; then
       transition=release-lock-existing
     fi
   fi
@@ -2874,7 +2883,48 @@ resurface_after_downtime() {
     fi
     [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || return 0
   fi
-  wake "check: rearm-resurface"
+  WATCHER_RESURFACED=1
+  wake "$(resurface_reason)"
+}
+
+# The reason a recovery announces. A queued row no watcher has announced - an
+# inbox note or a merge outcome another process appended, or a row queued
+# while no non-successor cycle was running - is announced under its own reason,
+# as if this watcher had observed it, so the drain banner says what the work is
+# and the supervision host's offer rule routes it by its real class instead of
+# as a main-only check. The newest check row wins so a main-only row never
+# rides a branch-eligible trigger. A row whose reason a watcher already
+# delivered (the delivery log) was presented and left unhandled, and a row a
+# live branch grant reserves or main has claimed is being handled, so neither
+# is named again: a recovery with only such rows, or none, keeps the generic
+# reason and reaches main exactly as before.
+resurface_reason() {
+  local reason='' grant=''
+  if [ -s "$FM_WAKE_QUEUE" ] && fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"; then
+    ! fm_wake_branch_grant_live "$STATE/.branch-eligible-rows" "$STATE/.branch-eligible-owner" \
+      || grant="$STATE/.branch-eligible-rows"
+    reason=$(awk -F '\t' -v grant="$grant" -v main="$STATE/.main-eligible-rows" -v delivered="$WATCH_DELIVERY_LOG" '
+      BEGIN {
+        if (grant != "") while ((getline line < grant) > 0) taken[line] = 1
+        while ((getline line < main) > 0) taken[line] = 1
+        while ((getline line < delivered) > 0) {
+          n = index(line, "\t"); if (n == 0) continue
+          line = substr(line, n + 1); n = index(line, "\t"); if (n == 0) continue
+          announced[substr(line, n + 1)] = 1
+        }
+      }
+      NF >= 5 && $2 ~ /^[0-9]+$/ && !($2 in taken) && $5 != "" {
+        line = $5
+        if ($3 == "heartbeat") { if (line !~ /^heartbeat($|:)/) line = "heartbeat: " line }
+        else if (index(line, $3 ":") != 1) line = $3 ": " line
+        if ((line in announced) || ($5 in announced)) next
+        if ($3 == "check") check = line; else other = line
+      }
+      END { if (check != "") print check; else if (other != "") print other }
+    ' "$FM_WAKE_QUEUE" 2>/dev/null) || reason=''
+    fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+  fi
+  printf '%s\n' "${reason:-check: rearm-resurface}"
 }
 
 while :; do
