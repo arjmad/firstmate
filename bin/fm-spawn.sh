@@ -5987,7 +5987,9 @@ if [ "$RELAUNCH" -eq 1 ]; then
 fi
 LAUNCH=${LAUNCH//__PIRESUME__/$RESUME_ARGS}
 LAUNCH=${LAUNCH//__CLAUDEPERMFLAG__/$CLAUDE_PERM_FLAG}
-LAUNCH=${LAUNCH//__CLAUDENAME__/"$(claude_session_name_flag "$KIND" "$ID")"}
+case "$LAUNCH" in
+*__CLAUDENAME__*) LAUNCH=${LAUNCH//__CLAUDENAME__/"$(claude_session_name_flag "$KIND" "$ID")"} ;;
+esac
 case "$LAUNCH" in
 *__CLAUDESETTINGS__*)
   if [ "$KIND" = secondmate ]; then
