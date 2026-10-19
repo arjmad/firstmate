@@ -29,7 +29,8 @@
 # spawns Claude workers under its own temporary <root> without a lab record: it
 # removes every project entry at or under <root> from the store
 # CLAUDE_CONFIG_DIR selects (default ~/.claude.json), prints the count, and
-# refuses / and $HOME as roots.
+# refuses any <root> that is not an existing directory strictly inside a
+# temporary directory (TMPDIR or /tmp), or that is or contains $HOME.
 #
 # What up builds:
 #   home/            the lab main home: bin/fm-lab-home.sh create, then the
@@ -868,8 +869,15 @@ cmd_forget_claude() {
   [ "$#" -eq 1 ] && [ -n "$1" ] || usage
   case "$1" in /*) ;; *) die "forget-claude takes an absolute root" ;; esac
   case "${CLAUDE_CONFIG_DIR:-}" in ''|/*) ;; *) die "CLAUDE_CONFIG_DIR must be an absolute path" ;; esac
-  ROOT=${1%/}
-  case "$ROOT" in ''|"${HOME%/}") die "refusing '$1': forget-claude needs a disposable root" ;; esac
+  local tmp home inside=no base
+  ROOT=$(real_dir "$1") || die "refusing '$1': forget-claude needs an existing directory"
+  home=$(real_dir "$HOME" 2>/dev/null || printf '%s' "${HOME%/}")
+  case "$home/" in "$ROOT"/*) die "refusing '$1': it is or contains \$HOME" ;; esac
+  for base in "${TMPDIR:-/tmp}" /tmp; do
+    tmp=$(real_dir "$base") || continue
+    case "$ROOT" in "$tmp"/?*) inside=yes ;; esac
+  done
+  [ "$inside" = yes ] || die "refusing '$1': forget-claude only takes a directory inside a temporary directory"
   CLAUDE_STORE="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
   forget_claude_entries
 }

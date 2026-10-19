@@ -140,9 +140,9 @@ done
 [ "$(cat "$TMP_ROOT/root-probe" 2>/dev/null)" = "$TREEHOUSE_ROOT" ] \
   || fail "a lab pane does not see the lab Treehouse root (saw '$(cat "$TMP_ROOT/root-probe" 2>/dev/null)'); refusing to spawn into the fleet's pool"
 
-CLAUDE_VERSION=$(claude --version 2>/dev/null | head -1 || printf 'version-unknown')
-HERDR_VERSION=$(herdr --version 2>/dev/null | head -1 || printf 'herdr-unknown')
-WHO="Claude Code ($CLAUDE_VERSION) on $HERDR_VERSION"
+CLAUDE_VERSION=$(claude --version 2>/dev/null | head -1)
+HERDR_VERSION=$(herdr --version 2>/dev/null | head -1)
+WHO="Claude Code (${CLAUDE_VERSION:-version-unknown}) on ${HERDR_VERSION:-herdr-unknown}"
 
 # --- the lab home and its one project ------------------------------------------
 

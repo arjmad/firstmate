@@ -956,9 +956,9 @@ test_append_wakes_live_announced_watcher() {
 # A recovery names queued work no watcher announced by its own class, so the
 # supervision host's offer rule routes it as it would the watcher's own close:
 # the newest check row wins over any other row, a payload without its kind
-# prefix gets one, a queue of stale rows names its newest, and a row main
-# already claimed is passed over. A row a watcher already announced keeps the
-# generic reason (test_interrupted_handling_is_redrained_on_rearm).
+# prefix gets one, a queue of stale rows names its newest, a decision-owned row
+# is named by its files, a row main already claimed is passed over, and a row
+# a watcher already announced keeps the whole recovery generic.
 test_recovery_names_queued_work_by_its_own_class() {
   local dir home state fakebin
   dir=$(make_case recovery-names-queued-work)
@@ -985,6 +985,24 @@ test_recovery_names_queued_work_by_its_own_class() {
   grep -Fx 'stale: w3' "$dir/stale.out" >/dev/null \
     || fail "a stale-only queue did not name its newest row: $(cat "$dir/stale.out")"
   ack_wakes "$state" || fail "stale queue acknowledgement failed"
+
+  # A decision-owned signal row is named by its files, as its own close was.
+  append_wake "$state" signal decided.status "needs-decision:$state/decided.status" \
+    || fail "fixture: decision row append failed"
+  start_rearm_arm "$home" "$state" "$fakebin" "$dir/decision.out"
+  wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "a decision-owned row was stranded at re-arm"
+  grep -Fx "signal: $state/decided.status" "$dir/decision.out" >/dev/null \
+    || fail "a decision-owned row was not named by its files: $(cat "$dir/decision.out")"
+
+  # That row is now announced and unhandled, so a fresh row beside it cannot
+  # name the recovery: it stays generic and reaches main, as before.
+  append_wake "$state" check inbox:beside 'check: captain inbox note beside' \
+    || fail "fixture: beside append failed"
+  start_rearm_arm "$home" "$state" "$fakebin" "$dir/beside.out"
+  wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "a row beside an announced one was stranded at re-arm"
+  grep -Fx 'check: rearm-resurface' "$dir/beside.out" >/dev/null \
+    || fail "a fresh row beside an announced, unhandled row named the recovery: $(cat "$dir/beside.out")"
+  ack_wakes "$state" || fail "announced queue acknowledgement failed"
 
   append_wake "$state" check inbox:claimed 'check: captain inbox note claimed' \
     || fail "fixture: claimed append failed"

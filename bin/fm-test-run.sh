@@ -858,9 +858,9 @@ tests/fm-shared-captain-inheritance.test.sh 8681
 tests/fm-spawn-compact-adviser-disable-remote.test.sh 40630
 tests/fm-spawn-compact-adviser-disable.test.sh 21654
 tests/fm-spawn-dispatch-profile.test.sh 215014
-tests/fm-spawn-steer-herdr-live-e2e.test.sh 111
 tests/fm-spawn-orca-worktree.test.sh 2440
 tests/fm-spawn-pool-base-freshen.test.sh 70901
+tests/fm-spawn-steer-herdr-live-e2e.test.sh 111
 tests/fm-spawn-worktree-settle.test.sh 9761
 tests/fm-startup-memory-budget.test.sh 8358
 tests/fm-startup-network.test.sh 72226

@@ -141,8 +141,8 @@
 #                          recovery: a durable row no watcher has announced
 #                          (another process appended it, or it was queued while
 #                          no non-successor cycle ran) is announced under its own
-#                          reason, newest check row first; a recovery whose rows
-#                          were all announced or claimed already, or that has
+#                          reason, newest check row first; a recovery with any
+#                          unclaimed row a watcher already announced, or with
 #                          none, keeps the generic reason
 #   check: inactive-outcome bounded poll-loop reconciliation found a suspicious
 #                          inactive terminal outcome that still lacks its durable
@@ -2893,11 +2893,13 @@ resurface_after_downtime() {
 # as if this watcher had observed it, so the drain banner says what the work is
 # and the supervision host's offer rule routes it by its real class instead of
 # as a main-only check. The newest check row wins so a main-only row never
-# rides a branch-eligible trigger. A row whose reason a watcher already
-# delivered (the delivery log) was presented and left unhandled, and a row a
-# live branch grant reserves or main has claimed is being handled, so neither
-# is named again: a recovery with only such rows, or none, keeps the generic
-# reason and reaches main exactly as before.
+# rides a branch-eligible trigger. Rows a live branch grant reserves or main
+# has claimed are being handled and are passed over. Any other row - one whose
+# reason a watcher already delivered (the delivery log) and nobody handled, a
+# heartbeat, or an unknown kind - keeps the whole recovery generic, as does an
+# empty queue, so such a recovery reaches main exactly as before and no
+# main-only row is left behind a branch-eligible trigger. A decision-owned
+# signal row is named by its files, the reason its watcher close carried.
 resurface_reason() {
   local reason='' grant=''
   if [ -s "$FM_WAKE_QUEUE" ] && fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"; then
@@ -2913,14 +2915,18 @@ resurface_reason() {
           announced[substr(line, n + 1)] = 1
         }
       }
-      NF >= 5 && $2 ~ /^[0-9]+$/ && !($2 in taken) && $5 != "" {
+      NF >= 5 && $2 ~ /^[0-9]+$/ && !($2 in taken) {
         line = $5
-        if ($3 == "heartbeat") { if (line !~ /^heartbeat($|:)/) line = "heartbeat: " line }
+        if ($3 == "signal" && index(line, "needs-decision:") == 1) line = "signal: " substr(line, 16)
         else if (index(line, $3 ":") != 1) line = $3 ": " line
-        if ((line in announced) || ($5 in announced)) next
+        if (($3 != "signal" && $3 != "stale" && $3 != "check") || $5 == "" \
+          || (line in announced) || ($5 in announced)) { generic = 1; next }
         if ($3 == "check") check = line; else other = line
       }
-      END { if (check != "") print check; else if (other != "") print other }
+      END {
+        if (generic) exit
+        if (check != "") print check; else if (other != "") print other
+      }
     ' "$FM_WAKE_QUEUE" 2>/dev/null) || reason=''
     fm_lock_release "$FM_WAKE_QUEUE_LOCK"
   fi

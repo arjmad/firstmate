@@ -781,6 +781,14 @@ out=$(CLAUDE_CONFIG_DIR="$T/forget-config" HOME="$T/forget-root" "$LIVE_LAB" for
 expect_code 1 "$?" "forget-claude refuses the home directory as its root"
 out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude / 2>&1)
 expect_code 1 "$?" "forget-claude refuses / as its root"
+out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude /private 2>&1)
+expect_code 1 "$?" "forget-claude refuses /private, whose stripped form would match every entry"
+out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$ROOT" 2>&1)
+expect_code 1 "$?" "forget-claude refuses a root outside every temporary directory"
+out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$T/forget-missing" 2>&1)
+expect_code 1 "$?" "forget-claude refuses a root that does not exist"
+[ "$(jq -r '.projects | keys | length' "$T/forget-config/.claude.json")" = 2 ] \
+  || fail "a refused forget-claude still changed the store"
 out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude relative/root 2>&1)
 expect_code 1 "$?" "forget-claude refuses a relative root"
 pass "fm-live-lab.sh forget-claude removes only the Claude entries under its root"

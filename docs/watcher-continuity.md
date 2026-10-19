@@ -223,7 +223,7 @@ A non-successor watcher start checks the durable queue and recovery marker under
 If an announced-but-unacknowledged episode has an empty queue, the arm leaves that generation announced, making repeated empty-queue arms idempotent while a long-poll source is merely alive.
 If a durable row arrived after the announcement, the arm opens a fresh pending downtime generation so buried work still resurfaces once.
 The announcement names work no watcher has announced yet: it carries the newest such check row's reason, else the newest such row's, as if the watcher had observed that row itself, so a row another process appended (an inbox note, a merge outcome) reaches the drain banner and the supervision host's offer rule under its own class.
-A row whose reason a watcher already delivered, or that main or a live branch grant has claimed, is never named again, so a recovery with only such rows, or none, announces the generic `check: rearm-resurface` and reaches main as before.
+Rows main or a live branch grant has claimed are passed over, and any other row a watcher already delivered and nobody handled (or a heartbeat) keeps the whole recovery generic, so such a recovery, or one with nothing queued, announces `check: rearm-resurface` and reaches main as before.
 A Codex foreground checkpoint skips the announced-episode reopen transition, so an already-announced generation stays announced while the checkpoint continues its bounded supervision.
 Its ordinary arm check still announces a never-announced generation, including one made pending by a durable queue append during the checkpoint.
 
