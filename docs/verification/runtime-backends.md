@@ -592,6 +592,17 @@ cse_015AvzWvDjSuejijd3se5Kvj {"title": "ship: fm-name-probe-2", "environment_kin
 ```
 
 `--remote-control-session-name-prefix` only prefixes auto-generated names and was not needed.
+The name stays in the composer's top rule while a draft wraps, verified 2026-10-19 on Claude Code 2.1.300 and herdr 0.9.5 in a `bin/fm-herdr-lab.sh` session, with an idle `claude --name 'ship: lab-a'` pane beside an unnamed `claude` pane:
+
+```text
+───────────────────────────────────────────────────────────────── ship: lab-a ─
+❯ : Firstmate instruction waiting: list "$FM_TASK_INBOX"/*.msg in your 'lab.inbox' steering inbox, read and act on
+  each in numeric order, then mv each into its handled/.
+───────────────────────────────────────────────────────────────────────────────
+```
+
+`fm_task_inbox_ring herdr <lab-session>:w1:p1 <record> fm-lab-a` returned 2 on the named pane and 0 on the unnamed one until the titled-rule composer proof accepted wrapped rows, then returned 0 and the named worker acted on the doorbell.
+`tests/fm-composer-lib.test.sh` (`test_matrix_claude_titled_top_rule`) and `tests/fm-backend-herdr.test.sh` (`test_send_text_submit_claude_titled_wrapped_doorbell_is_proven_and_submitted`) pin that shape.
 `tests/fm-spawn-dispatch-profile.test.sh` (`test_claude_launch_names_the_session_after_its_task`) pins the emitted name for ship, scout, and secondmate launches, and `tests/fm-control-relaunch.test.sh` pins it across a relaunch.
 
 ## Pi seeded-secondmate project trust

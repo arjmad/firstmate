@@ -739,7 +739,7 @@ test_matrix_claude_titled_top_rule() {
   # read as a lower unmatched separator, and a visibly empty composer read
   # `unknown` on every cursorless backend, refusing steers, exit, and relaunch.
   local rule title top bottom footer screen ansi typed claude_idle
-  local scrollback short nonascii flush blank
+  local scrollback short nonascii flush blank wrapped gap ruled out long n
   claude_idle=$(printf 'claude\tidle')
   rule='────────────────────────────────────────────────────────────'
   title=' Firstmate operational input 1790546042 '
@@ -761,6 +761,29 @@ test_matrix_claude_titled_top_rule() {
   assert_screen "titled claude typed on zellij" pending "$CAPS_STYLED_NOID" "$typed"
   assert_screen "titled claude typed on tmux" pending "$CAPS_TMUX" "$typed" 1 probe-absent
   assert_screen "titled claude typed on plain backends" unknown "$CAPS_PLAIN" "$typed"
+  # A draft longer than one composer row wraps under the same titled rule
+  # (a ship worker's doorbell, live on herdr 0.9.5), and every row is read.
+  wrapped="$top"$'\n❯ : Firstmate instruction waiting: list the inbox, read and act on\n  each in numeric order, then mv each\n  into its handled/.\n'"$bottom"$'\n'"$footer"
+  assert_screen "titled claude wrapped draft on herdr" pending "$CAPS_STYLED" "$wrapped" '' "$claude_idle"
+  assert_screen "titled claude wrapped draft on zellij" pending "$CAPS_STYLED_NOID" "$wrapped"
+  assert_screen "titled claude wrapped draft on tmux" pending "$CAPS_TMUX" "$wrapped" 3 probe-absent
+  out=$(fm_composer_extract_selected_content "$CAPS_STYLED" "$wrapped") \
+    || fail "a wrapped draft under a titled rule must be extractable"
+  [ "$out" = ': Firstmate instruction waiting: list the inbox, read and act on each in numeric order, then mv each into its handled/.' ] \
+    || fail "a wrapped draft under a titled rule must extract every row, got '$out'"
+  # The wrap must run unbroken to the closing rule: a blank row or another
+  # rule between the draft and the lower separator is not this composer.
+  gap="$top"$'\n❯ an old prompt\n  wrapped once\n\nlater transcript output\n'"$bottom"
+  assert_screen "titled draft with a blank gap above the rule" unknown "$CAPS_STYLED_NOID" "$gap"
+  ruled="$top"$'\n❯ an old prompt\n  | a table row |\n'"$bottom"
+  assert_screen "titled draft with an edged row above the rule" unknown "$CAPS_STYLED_NOID" "$ruled"
+  # The draft is bounded like the untitled pair: past FM_COMPOSER_PI_MAX_LINES
+  # rows it is not proven to be this composer.
+  long="$top"$'\n❯ an old prompt'
+  for n in 1 2 3 4 5 6 7 8; do long+=$'\n  transcript row '"$n"; done
+  long+=$'\n'"$bottom"
+  assert_screen "titled draft past the row bound" unknown "$CAPS_STYLED_NOID" "$long"
+  FM_COMPOSER_PI_MAX_LINES=9 assert_screen "titled draft within a raised row bound" pending "$CAPS_STYLED_NOID" "$long"
   # The staleness rule still holds: a titled sandwich stranded in scrollback,
   # with transcript rows between it and a lower unmatched rule, stays unknown.
   scrollback="$top"$'\n❯'"$NBSP"$'\n'"$bottom"$'\nlater transcript output\n'"$bottom"$'\nmore output'
