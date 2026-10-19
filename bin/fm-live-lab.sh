@@ -14,6 +14,7 @@
 #   fm-live-lab.sh say <lab-root> [--window <name>] <text>
 #   fm-live-lab.sh pane <lab-root> [--window <name>] [--lines <n>]
 #   fm-live-lab.sh down <lab-root>
+#   fm-live-lab.sh forget-claude <root>
 #
 # up builds everything under <lab-root> (a fresh path; default a new
 # /tmp/fmlab.XXXXXX), verifies readiness itself, and prints one line per check.
@@ -24,6 +25,11 @@
 # prints a window's recent scrollback. down stops every lab process, removes the
 # lab's Claude trust entries by one atomic replace, removes <lab-root>, and exits
 # non-zero if the recorded Pi trust store or ~/.treehouse gained changes.
+# forget-claude is that same Claude-entry removal alone, for a live test that
+# spawns Claude workers under its own temporary <root> without a lab record: it
+# removes every project entry at or under <root> from the store
+# CLAUDE_CONFIG_DIR selects (default ~/.claude.json), prints the count, and
+# refuses / and $HOME as roots.
 #
 # What up builds:
 #   home/            the lab main home: bin/fm-lab-home.sh create, then the
@@ -858,12 +864,23 @@ cmd_check() {
   run_checks
 }
 
+cmd_forget_claude() {
+  [ "$#" -eq 1 ] && [ -n "$1" ] || usage
+  case "$1" in /*) ;; *) die "forget-claude takes an absolute root" ;; esac
+  case "${CLAUDE_CONFIG_DIR:-}" in ''|/*) ;; *) die "CLAUDE_CONFIG_DIR must be an absolute path" ;; esac
+  ROOT=${1%/}
+  case "$ROOT" in ''|"${HOME%/}") die "refusing '$1': forget-claude needs a disposable root" ;; esac
+  CLAUDE_STORE="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+  forget_claude_entries
+}
+
 case "${1:-}" in
   up) shift; cmd_up "$@" ;;
   check) shift; cmd_check "$@" ;;
   say) shift; cmd_say "$@" ;;
   pane) shift; cmd_pane "$@" ;;
   down) shift; cmd_down "$@" ;;
+  forget-claude) shift; cmd_forget_claude "$@" ;;
   -h|--help) help_text ;;
   *) usage ;;
 esac

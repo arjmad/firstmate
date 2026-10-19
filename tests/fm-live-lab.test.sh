@@ -762,3 +762,25 @@ out=$(CLAUDE_CONFIG_DIR="$T/config" "$TRUST" --lab-home "$T/home" 2>&1)
 expect_code 1 "$?" "a symlinked marker is refused"
 assert_contains "$out" "is a symlink" "the refusal names the symlink"
 pass "fm-claude-trust.sh --lab-home trusts only a marked lab primary checkout"
+
+# forget-claude removes exactly the Claude project entries at or under its root,
+# for a live test that spawns Claude workers without a lab record.
+mkdir -p "$T/forget-config" "$T/forget-root/home/wt"
+cat > "$T/forget-config/.claude.json" <<JSON
+{"numStartups": 3, "projects": {"$T/forget-root/home/wt": {"hasTrustDialogAccepted": true}, "$T/forget-root": {"hasTrustDialogAccepted": true}, "$T/forget-rootless": {"hasTrustDialogAccepted": true}, "/elsewhere": {"hasTrustDialogAccepted": true}}}
+JSON
+out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$T/forget-root" 2>&1)
+expect_code 0 "$?" "forget-claude succeeds on a disposable root"
+assert_contains "$out" "2" "forget-claude reports the two entries it removed"
+kept=$(jq -r '.projects | keys | sort | join(",")' "$T/forget-config/.claude.json")
+[ "$kept" = "$T/forget-rootless,/elsewhere" ] || [ "$kept" = "/elsewhere,$T/forget-rootless" ] \
+  || fail "forget-claude kept the wrong entries: $kept"
+[ "$(jq -r '.numStartups' "$T/forget-config/.claude.json")" = 3 ] \
+  || fail "forget-claude changed an unrelated store field"
+out=$(CLAUDE_CONFIG_DIR="$T/forget-config" HOME="$T/forget-root" "$LIVE_LAB" forget-claude "$T/forget-root/" 2>&1)
+expect_code 1 "$?" "forget-claude refuses the home directory as its root"
+out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude / 2>&1)
+expect_code 1 "$?" "forget-claude refuses / as its root"
+out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude relative/root 2>&1)
+expect_code 1 "$?" "forget-claude refuses a relative root"
+pass "fm-live-lab.sh forget-claude removes only the Claude entries under its root"
