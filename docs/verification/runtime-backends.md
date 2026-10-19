@@ -573,6 +573,27 @@ ok - question guard live: claude 2.1.300 (Claude Code) honors the tracked AskUse
 
 `tests/fm-question-pretool-check.test.sh` pins the classifier, scope, presence window, escape hatch, and tracked registration without a harness.
 
+## Claude session name
+
+Verified 2026-10-19 on Claude Code 2.1.300 (Claude Code), tmux 3.7b, macOS arm64, with `remoteControlAtStartup` on in user settings.
+Without `--name`, Claude titles an interactive session from its first user message: a worker launched with the operational-input doorbell wrote `{"type": "ai-title", "aiTitle": "Firstmate operational inbox message"}` to its transcript, and the Remote Control API (`GET /v1/code/sessions/<cse id>`, the record the Claude app's session list reads) reported `"title": "Firstmate operational inbox message"`.
+A throwaway interactive session launched in a private tmux socket with the spawn's flag shape and a doorbell-shaped first message:
+
+```sh
+claude --dangerously-skip-permissions --add-dir <probe-dir> --name 'ship: fm-name-probe-2' \
+  ': Firstmate operational input waiting: read '\''<probe-dir>/probe2.msg'\'' and handle its contents as Firstmate operational input.'
+```
+
+wrote no `ai-title`, showed the name in the prompt-box border, and the same API read reported:
+
+```text
+{"type": "custom-title", "customTitle": "ship: fm-name-probe-2"}
+cse_015AvzWvDjSuejijd3se5Kvj {"title": "ship: fm-name-probe-2", "environment_kind": "bridge", "tags": [..., "remote-control-auto"]}
+```
+
+`--remote-control-session-name-prefix` only prefixes auto-generated names and was not needed.
+`tests/fm-spawn-dispatch-profile.test.sh` (`test_claude_launch_names_the_session_after_its_task`) pins the emitted name for ship, scout, and secondmate launches, and `tests/fm-control-relaunch.test.sh` pins it across a relaunch.
+
 ## Pi seeded-secondmate project trust
 
 [`fm-spawn.sh --help`](../../bin/fm-spawn.sh) owns the seeded-secondmate project-trust approval contract and compatibility fallback.

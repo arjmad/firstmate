@@ -468,6 +468,8 @@
 #     __CLAUDESETTINGS__ the single claude --settings value: a quoted inline
 #                  JSON object for a crewmate or scout, or a quoted path to
 #                  state/<task-id>.claude-settings.json for a secondmate
+#     __CLAUDENAME__ the claude --name flag carrying this launch's session name
+#                  (claude_session_name_flag below; supplies its own trailing space)
 #     __PIBIN__    quoted concrete Pi-family executable path resolved from PATH
 #     __PITUIMODE__ optional --tui-mode regular when that executable advertises it
 #     __PIAPPROVE__ optional --approve on a seeded Pi/pi-signed secondmate when
@@ -2473,7 +2475,7 @@ launch_template() {
     # record-backed doorbell: the full envelope is published into the receiving
     # home's state/operational-inbox before launch and only a printable doorbell
     # naming it is passed. A record that cannot be published stops the spawn.
-    printf '%s' '__MODELFLAG____EFFORTFLAG____BRIEFDOORBELL__'
+    printf '%s' '__CLAUDENAME____MODELFLAG____EFFORTFLAG____BRIEFDOORBELL__'
     ;;
   # --disable hooks (equivalent to -c features.hooks=false) turns codex's whole
   # lifecycle-hook layer off for CREWMATE and SCOUT launches only.
@@ -3039,6 +3041,20 @@ relaunch_resume_args() {  # <harness> <backend> <target>
   flag=$(fm_control_relaunch_resume_flag "$harness" "$agent") || return 0
   [ -n "$flag" ] && [ -n "$ref" ] || return 0
   printf -- ' %s %s' "$flag" "$(shell_quote "$ref")"
+}
+
+# claude_session_name_flag: the --name flag that titles a Claude launch after
+# its task. Without it Claude Code auto-titles the session from the first user
+# message, which for every Firstmate launch is the same operational-input
+# doorbell, so every worker read "Firstmate operational inbox message" in the
+# Claude app's Remote Control list, the /resume picker, and the terminal title.
+# A --name title replaces that auto-title everywhere it shows, including the
+# Remote Control session list (docs/verification/runtime-backends.md "Claude
+# session name"). The kind prefix tells ships, scouts, and secondmates apart
+# at a glance; a task id is path-safe ASCII (fm_task_id_path_safe), and the
+# value is quoted anyway. A relaunch reuses the task id, so it keeps its name.
+claude_session_name_flag() {  # <kind> <task-id>
+  printf -- '--name %s ' "$(shell_quote "$1: $2")"
 }
 
 model_flag_for_harness() {
@@ -5971,6 +5987,9 @@ if [ "$RELAUNCH" -eq 1 ]; then
 fi
 LAUNCH=${LAUNCH//__PIRESUME__/$RESUME_ARGS}
 LAUNCH=${LAUNCH//__CLAUDEPERMFLAG__/$CLAUDE_PERM_FLAG}
+case "$LAUNCH" in
+*__CLAUDENAME__*) LAUNCH=${LAUNCH//__CLAUDENAME__/"$(claude_session_name_flag "$KIND" "$ID")"} ;;
+esac
 case "$LAUNCH" in
 *__CLAUDESETTINGS__*)
   if [ "$KIND" = secondmate ]; then
