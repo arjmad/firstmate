@@ -1477,7 +1477,9 @@ _fm_composer_bare_wrap_row() {  # <trimmed-row>
 # unmatched separator below it, which is that composer's closing rule. Only the
 # draft's own wrapped rows may stand between the glyph row and that rule: a
 # doorbell longer than one composer row wraps, and Claude keeps the title in
-# the top rule while it does.
+# the top rule while it does. The draft is held to the untitled pair's row
+# bound, FM_COMPOSER_PI_MAX_LINES, so a titled pair is never looser than an
+# untitled one.
 #
 # The cursorless staleness rule reads an unmatched separator BELOW a candidate
 # as proof the candidate is scrollback. A titled top rule never opens the
@@ -1488,8 +1490,10 @@ _fm_composer_bare_wrap_row() {  # <trimmed-row>
 # transcript rows, not its own rules, around it, and a blank row or any other
 # rule between it and the lower separator still refuses.
 _fm_composer_bare_rule_sandwich() {  # <plain-screen> <row>
-  local plain=$1 row=$2 close=$FM_COMPOSER_SCAN_PI_LAST_SEPARATOR next above below
-  [ "$row" -ge 1 ] && [ "$close" -gt "$row" ] || return 1
+  local plain=$1 row=$2 close=$FM_COMPOSER_SCAN_PI_LAST_SEPARATOR next above below max
+  max=$FM_COMPOSER_PI_MAX_LINES
+  case "$max" in ''|*[!0-9]*|0) max=8 ;; esac
+  [ "$row" -ge 1 ] && [ "$close" -gt "$row" ] && [ "$((close - row))" -le "$max" ] || return 1
   next=$((row + 1))
   while [ "$next" -lt "$close" ]; do
     below=$(_fm_composer_screen_row "$next" "$plain")
