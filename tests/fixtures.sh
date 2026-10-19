@@ -133,6 +133,7 @@ fake_tmux_flag_value() {  # <flag> <argv...>
 case "$*" in
   *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
 esac
+window_file="$(dirname "$0")/.spawn-window"
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
   list-windows)
@@ -150,6 +151,7 @@ case "${1:-}" in
     if [ -n "${FM_FAKE_DUPLICATE_WINDOW:-}" ]; then
       printf '%s\n' "$FM_FAKE_DUPLICATE_WINDOW"
     fi
+    [ ! -s "$window_file" ] || cat "$window_file"
     exit 0
     ;;
   new-window)
@@ -165,6 +167,13 @@ case "${1:-}" in
       printf '@%s\n' "$(grep -c '' "$FM_FAKE_TMUX_WINDOWS")"
       exit 0
     fi
+    name=
+    previous=
+    for arg in "$@"; do
+      [ "$previous" = -n ] && name=$arg
+      previous=$arg
+    done
+    printf '%s\n' "$name" > "$window_file"
     exit 0
     ;;
   kill-window)
@@ -178,6 +187,7 @@ case "${1:-}" in
       grep -vxF "$target" "$FM_FAKE_TMUX_WINDOWS" > "$FM_FAKE_TMUX_WINDOWS.next" || :
       mv "$FM_FAKE_TMUX_WINDOWS.next" "$FM_FAKE_TMUX_WINDOWS"
     fi
+    : > "$window_file"
     exit 0
     ;;
   has-session|new-session|set-window-option) exit 0 ;;
