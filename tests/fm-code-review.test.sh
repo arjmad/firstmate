@@ -58,6 +58,15 @@ case "$1 $2" in
     esac
     ;;
   "pr diff")
+    if [ -f "$FM_TEST_DIR/diff-escapes" ]; then
+      case " $* " in
+        *" --allow-escape-sequences "*) ;;
+        *)
+          printf 'the diff contains terminal escape sequences; pass --allow-escape-sequences to output it anyway\n' >&2
+          exit 1
+          ;;
+      esac
+    fi
     if [ -f "$FM_TEST_DIR/diff-fail" ]; then
       cat "$FM_TEST_DIR/diff-fail" >&2
       exit 1
@@ -183,12 +192,24 @@ test_status_handles_github_limits() {
   run_case "$dir" status "$URL"
   expect_code 1 "$RC" "status-no-diff: a new head needs a new review when the diff is unavailable"
 
+  # gh refuses a diff holding terminal escape sequences unless told to print
+  # it; the fingerprint must still come from that diff, not read unreadable.
+  dir=$(make_case status-escapes bin/tool.sh)
+  : > "$dir/diff-escapes"
+  run_case "$dir" status "$URL"
+  expect_code 1 "$RC" "status-escapes: a diff with escape sequences must still be fingerprinted"
+  assert_contains "$(cat "$dir/gh.log")" "--allow-escape-sequences" "status-escapes: the refused read was not retried"
+  run_case "$dir" record "$URL"
+  expect_code 0 "$RC" "status-escapes: a diff with escape sequences must still be recordable"
+  run_case "$dir" status "$URL"
+  expect_code 0 "$RC" "status-escapes: the recorded diff must then read reviewed"
+
   # GitHub lists at most 3000 files, so the unlisted rest may be code.
   dir=$(make_case status-file-cap)
   seq 1 3000 | sed 's|^|docs/records/r|' | jq -R . | jq -sc 'map({filename: .})' > "$dir/files.json"
   run_case "$dir" status "$URL"
   expect_code 1 "$RC" "status-file-cap: a PR at the file-list cap must count as code-changing"
-  pass "fm-code-review status keys an unservable diff by head and treats the file-list cap as code"
+  pass "fm-code-review status keys an unservable diff by head, reads a diff gh calls unsafe to print, and treats the file-list cap as code"
 }
 
 test_status_refuses_unreadable_and_non_github() {

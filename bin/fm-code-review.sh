@@ -90,10 +90,16 @@ code_review_files() {
 
 # A failed diff read falls back to the head only when GitHub refused the diff
 # for its size (HTTP 406); any other failure leaves the review state unreadable.
+# gh refuses to print a diff carrying terminal escape sequences, which test
+# fixtures legitimately hold; the diff only ever reaches git patch-id here, so
+# that refusal is retried once with --allow-escape-sequences, a flag older gh
+# lacks and so is never passed up front.
 code_review_diff_id() {
   local diff='' err id head
   err=$(mktemp "${TMPDIR:-/tmp}/fm-code-review.XXXXXX") || return 1
-  if ! diff=$(gh pr diff "$FM_PR_NUMBER" --repo "$FM_PR_OWNER/$FM_PR_REPO" 2>"$err"); then
+  if ! diff=$(gh pr diff "$FM_PR_NUMBER" --repo "$FM_PR_OWNER/$FM_PR_REPO" 2>"$err") &&
+    ! { grep -q 'terminal escape sequences' "$err" &&
+      diff=$(gh pr diff "$FM_PR_NUMBER" --repo "$FM_PR_OWNER/$FM_PR_REPO" --allow-escape-sequences 2>"$err"); }; then
     case "$(cat "$err")" in
       *"HTTP 406"*|*"too_large"*|*"exceeded the maximum"*) diff= ;;
       *) cat "$err" >&2; rm -f "$err"; return 1 ;;
