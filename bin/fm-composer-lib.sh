@@ -1459,21 +1459,45 @@ _fm_composer_locate_footer_zone() {  # <plain>
     && [ "$FM_COMPOSER_SCAN_BARE_ROW" -le "$FM_COMPOSER_FOOTER_LAST" ]
 }
 
+# _fm_composer_bare_wrap_row: 0 when a trimmed row can continue a bare
+# composer's wrapped draft - non-blank, with no edge glyph, and not a harness's
+# own status furniture. A blank row or an edge (the closing rule) ends the
+# draft. Owned once for the bare selection's wrap walk and the titled-rule
+# sandwich, so both bound the same rows.
+_fm_composer_bare_wrap_row() {  # <trimmed-row>
+  [ -n "$1" ] || return 1
+  fm_composer_row_has_edge "$1" && return 1
+  _fm_composer_row_is_omp_status "$1" && return 1
+  _fm_composer_row_is_braille_furniture "$1" && return 1
+  return 0
+}
+
 # _fm_composer_bare_rule_sandwich: 0 when bare agent-glyph <row> sits in its
 # own titled composer: a titled rule directly above it and the screen's only
-# unmatched separator directly below it, which is that composer's closing rule.
+# unmatched separator below it, which is that composer's closing rule. Only the
+# draft's own wrapped rows may stand between the glyph row and that rule: a
+# doorbell longer than one composer row wraps, and Claude keeps the title in
+# the top rule while it does.
 #
 # The cursorless staleness rule reads an unmatched separator BELOW a candidate
 # as proof the candidate is scrollback. A titled top rule never opens the
 # separator pair, so the composer's own closing rule becomes that unmatched
-# separator and a genuinely idle composer read `unknown`. Adjacency on BOTH
-# edges keeps the staleness rule intact everywhere else: a glyph stranded in
-# scrollback has transcript rows, not its own rules, around it.
+# separator and a genuinely idle composer read `unknown`. The titled rule
+# directly above and an unbroken wrap down to the closing rule keep the
+# staleness rule intact everywhere else: a glyph stranded in scrollback has
+# transcript rows, not its own rules, around it, and a blank row or any other
+# rule between it and the lower separator still refuses.
 _fm_composer_bare_rule_sandwich() {  # <plain-screen> <row>
-  local plain=$1 row=$2 above below
-  [ "$row" -ge 1 ] || return 1
-  [ "$FM_COMPOSER_SCAN_PI_LAST_SEPARATOR" -eq "$((row + 1))" ] || return 1
-  below=$(_fm_composer_screen_row "$((row + 1))" "$plain")
+  local plain=$1 row=$2 close=$FM_COMPOSER_SCAN_PI_LAST_SEPARATOR next above below
+  [ "$row" -ge 1 ] && [ "$close" -gt "$row" ] || return 1
+  next=$((row + 1))
+  while [ "$next" -lt "$close" ]; do
+    below=$(_fm_composer_screen_row "$next" "$plain")
+    fm_composer_normalize_trim_var below
+    _fm_composer_bare_wrap_row "$below" || return 1
+    next=$((next + 1))
+  done
+  below=$(_fm_composer_screen_row "$close" "$plain")
   fm_composer_normalize_trim_var below
   _fm_composer_pi_separator_row "$below" || return 1
   above=$(_fm_composer_screen_row "$((row - 1))" "$plain")
@@ -1552,13 +1576,9 @@ _fm_composer_select_cursorless() {
   if [ "$FM_COMPOSER_SELECTED_KIND" = bare ]; then
     next=$((FM_COMPOSER_SELECTED_LAST + 1))
     while :; do
-      raw=$(_fm_composer_screen_row "$next" "$plain")
-      trimmed=$raw
+      trimmed=$(_fm_composer_screen_row "$next" "$plain")
       fm_composer_normalize_trim_var trimmed
-      [ -n "$trimmed" ] || break
-      fm_composer_row_has_edge "$trimmed" && break
-      _fm_composer_row_is_omp_status "$trimmed" && break
-      _fm_composer_row_is_braille_furniture "$trimmed" && break
+      _fm_composer_bare_wrap_row "$trimmed" || break
       FM_COMPOSER_SELECTED_LAST=$next
       next=$((next + 1))
     done
