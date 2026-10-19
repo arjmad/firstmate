@@ -1203,9 +1203,15 @@ import { pathToFileURL } from "node:url";
 
 const marker = `${process.env.FM_HOME}/state/.pi-turnend-extension-loaded`;
 const version = `sha256:${createHash("sha256").update(readFileSync(process.env.PLUGIN)).digest("hex")}`;
-// The lock names the parent of this process: a live strict ancestor, exactly where
-// the real session sits above a nested `pi --help`.
-writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.ppid}\n`);
+// In the nested case the lock names the parent of this process: a live strict
+// ancestor, exactly where the real session sits above a nested `pi --help`.
+// Every other case loads as the lock holder itself, because this fork publishes
+// the marker only from the lock holder or at cold start, never from a
+// descendant (docs/fork-decisions.md, pool-slot allocation records row).
+writeFileSync(
+  `${process.env.FM_HOME}/state/.lock`,
+  `${process.env.MARKER_CASE === "nested" ? process.ppid : process.pid}\n`,
+);
 
 const handlers = new Map();
 const pi = {

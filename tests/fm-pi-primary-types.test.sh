@@ -16,7 +16,8 @@ for tool in node npm; do
 done
 
 DEPENDENCY_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-pi-primary-types.XXXXXX")
-trap 'rm -rf "$DEPENDENCY_ROOT"' EXIT
+# The generated worker leaves a read-only git-hooks directory behind.
+trap 'fm_test_remove_tree "$DEPENDENCY_ROOT"' EXIT
 
 # Compile the state-side worker artifact emitted by the real spawn interface,
 # not a second handwritten copy of its lifecycle handlers. Pi and pi-signed

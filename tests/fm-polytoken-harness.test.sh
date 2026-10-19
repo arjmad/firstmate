@@ -1157,6 +1157,9 @@ test_polytoken_post_launch_failure_drops_its_slot_claim() {
   git -C "$PROJ_DIR" worktree move "$WT_DIR" "$slot_root/1/project"
   WT_DIR="$slot_root/1/project"
   printf '{"worktrees":[{"name":"1","path":"%s"}]}\n' "$WT_DIR" > "$slot_root/treehouse-state.json"
+  # This fork durably leases a pool slot at spawn (docs/fork-decisions.md,
+  # pool-slot allocation records row), so the pool fake must keep leases.
+  fm_fake_treehouse_pool "$FAKEBIN_DIR"
   claim="$slot_root/1/.fm-slot-owner"
   rc=0
   out=$(PTFAKE_NO_HOOK=1 FM_POLYTOKEN_READY_POLLS=2 FM_POLYTOKEN_POLL_INTERVAL=0 \
