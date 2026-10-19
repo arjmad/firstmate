@@ -1426,7 +1426,8 @@ test_also_dependent_repositories_are_rendered_and_bounded() {
   assert_no_grep 'Dependent repositories' "$home/data/brief-also-none/brief.md" \
     "a brief without --also gained a dependent repositories section"
   for args in "--mode direct-PR --also sample" "--mode direct-PR --also jobs --also jobs" \
-    "--mode direct-PR --also bad/name" "--scout --also jobs"; do
+    "--mode direct-PR --also bad/name" "--scout --also jobs" \
+    "--mode direct-PR --forge external --also jobs"; do
     id="brief-also-bad-$RANDOM"
     err=$(eval "FM_HOME=\"\$home\" \"\$ROOT/bin/fm-brief.sh\" \"\$id\" sample $args" 2>&1 >/dev/null) \
       && fail "fm-brief accepted $args"

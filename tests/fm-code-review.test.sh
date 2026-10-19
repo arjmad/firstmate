@@ -58,6 +58,17 @@ case "$1 $2" in
     esac
     ;;
   "pr diff")
+    case " $* " in
+      *" --help "*)
+        [ -f "$FM_TEST_DIR/old-gh" ] || printf '      --allow-escape-sequences   Output escape sequences\n'
+        exit 0
+        ;;
+    esac
+    if [ -f "$FM_TEST_DIR/old-gh" ]; then
+      case " $* " in
+        *" --allow-escape-sequences "*) printf 'unknown flag: --allow-escape-sequences\n' >&2; exit 1 ;;
+      esac
+    fi
     if [ -f "$FM_TEST_DIR/diff-escapes" ]; then
       case " $* " in
         *" --allow-escape-sequences "*) ;;
@@ -198,18 +209,24 @@ test_status_handles_github_limits() {
   : > "$dir/diff-escapes"
   run_case "$dir" status "$URL"
   expect_code 1 "$RC" "status-escapes: a diff with escape sequences must still be fingerprinted"
-  assert_contains "$(cat "$dir/gh.log")" "--allow-escape-sequences" "status-escapes: the refused read was not retried"
+  assert_contains "$(cat "$dir/gh.log")" "--allow-escape-sequences" "status-escapes: the diff was not read with the flag"
   run_case "$dir" record "$URL"
   expect_code 0 "$RC" "status-escapes: a diff with escape sequences must still be recordable"
   run_case "$dir" status "$URL"
   expect_code 0 "$RC" "status-escapes: the recorded diff must then read reviewed"
+
+  # A gh too old to know the flag is never passed it.
+  dir=$(make_case status-old-gh bin/tool.sh)
+  : > "$dir/old-gh"
+  run_case "$dir" status "$URL"
+  expect_code 1 "$RC" "status-old-gh: an older gh must still fingerprint an ordinary diff"
 
   # GitHub lists at most 3000 files, so the unlisted rest may be code.
   dir=$(make_case status-file-cap)
   seq 1 3000 | sed 's|^|docs/records/r|' | jq -R . | jq -sc 'map({filename: .})' > "$dir/files.json"
   run_case "$dir" status "$URL"
   expect_code 1 "$RC" "status-file-cap: a PR at the file-list cap must count as code-changing"
-  pass "fm-code-review status keys an unservable diff by head, reads a diff gh calls unsafe to print, and treats the file-list cap as code"
+  pass "fm-code-review status keys an unservable diff by head, reads a diff gh calls unsafe to print on any gh, and treats the file-list cap as code"
 }
 
 test_status_refuses_unreadable_and_non_github() {

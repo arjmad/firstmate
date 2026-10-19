@@ -1170,7 +1170,9 @@ test_polytoken_post_launch_failure_drops_its_slot_claim() {
     "the failed gate must close the endpoint holding the slot"
   assert_absent "$HOME_DIR/state/$id.meta" "the failed launch must not leave its task record"
   [ ! -e "$claim" ] || fail "the failed launch left a slot claim naming a task with no record: $(cat "$claim")"
-  pass "fm-spawn: a gate failure after publication drops the slot claim with the record"
+  jq -e '.worktrees[0].leased != true' "$slot_root/treehouse-state.json" >/dev/null ||
+    fail "the failed launch left its slot durably leased to a task with no record: $(cat "$slot_root/treehouse-state.json")"
+  pass "fm-spawn: a gate failure after publication drops the slot claim and returns the lease with the record"
 }
 
 test_polytoken_spawn_arms_the_busy_contract() {

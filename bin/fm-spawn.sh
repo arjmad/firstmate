@@ -221,8 +221,11 @@
 #   allocation lock drops its own claim and returns the slot it leased, unless
 #   a launched worker may still be in it; an abort after metadata publication
 #   has released that lock leaves both to the task's teardown. A fresh polytoken
-#   spawn that fails and leaves no task record also removes the wiring, task
-#   temp root, and staged launch file it wrote before its launch is delivered.
+#   spawn that fails and leaves no task record restores the pool as it found it:
+#   it retakes that lock once to drop its claim and return its lease after
+#   metadata publication too, and before its launch is delivered it closes its
+#   endpoint and removes the wiring, task temp root, and staged launch file it
+#   wrote.
 #   The local root is whatever bin/fm-wake-lib.sh's
 #   fm_firstmate_root_home resolves, so a home seeded from another machine anchors
 #   that lock itself rather than failing to resolve one;
@@ -1781,9 +1784,11 @@ spawn_abort_cleanup() {
   # its slot but before its record survives returns that slot rather than leave
   # it leased to a task no record describes. The return is bound to this task's
   # own lease, is never forced, so a slot with uncommitted changes keeps them
-  # and its lease, runs only while the project lock that took it is still held,
-  # and never runs while a launched worker may still be working in the slot;
-  # any slot it leaves is named so it can be checked and returned by hand.
+  # and its lease, runs only while the project lock that took it is held - a
+  # polytoken spawn whose record was rolled back retakes it once, as for the
+  # claim below - and never runs while a launched worker may still be working
+  # in the slot; any slot it leaves is named so it can be checked and returned
+  # by hand.
   if [ "$SPAWN_SLOT_LEASED" = 1 ] && [ -n "${WT:-}" ] &&
     [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ] &&
     fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
@@ -1792,6 +1797,12 @@ spawn_abort_cleanup() {
       { [ "$SPAWN_LAUNCH_SENT" = 0 ] || [ "$SPAWN_ENDPOINT_CLOSED" = 1 ]; }; then
       fm_treehouse_slot_lease_return "$WT" "$ID" "$PROJ_ABS" ||
         echo "warning: Treehouse pool slot $WT stays leased to aborted task $ID because treehouse return refused it (it may hold uncommitted changes); check it, then run treehouse return --if-lease-holder $ID $WT" >&2
+    elif [ "${HARNESS:-}" = polytoken ] && [ -n "$SPAWN_TREEHOUSE_PROJECT_LOCK" ] &&
+      { [ "$SPAWN_LAUNCH_SENT" = 0 ] || [ "$SPAWN_ENDPOINT_CLOSED" = 1 ]; } &&
+      fm_lock_try_acquire "$SPAWN_TREEHOUSE_PROJECT_LOCK"; then
+      fm_treehouse_slot_lease_return "$WT" "$ID" "$PROJ_ABS" ||
+        echo "warning: Treehouse pool slot $WT stays leased to aborted task $ID because treehouse return refused it (it may hold uncommitted changes); check it, then run treehouse return --if-lease-holder $ID $WT" >&2
+      fm_lock_release "$SPAWN_TREEHOUSE_PROJECT_LOCK" || true
     else
       echo "warning: leaving Treehouse pool slot $WT leased to aborted task $ID; a worker may still be in it, so check it and run treehouse return --if-lease-holder $ID $WT" >&2
     fi
@@ -3970,6 +3981,22 @@ if [ "$KIND" = ship ]; then
     exit 1
   fi
   [ -n "$STANDING_FORGE" ] || STANDING_FORGE=none
+  # Companion worktrees share the worker's pane, and an external forge's push
+  # guard covers every repository there, so --also never mixes with an external
+  # forge in either direction.
+  if [ "${#ALSO_REPOS[@]}" -gt 0 ] && [ "$RELAUNCH" -eq 0 ]; then
+    [ "$STANDING_FORGE" != external ] || {
+      echo "error: --also is refused for $ID: $PROJ_NAME is registered forge=external, whose push guard would also refuse every companion PR's push" >&2
+      exit 1
+    }
+    for also_repo in "${ALSO_REPOS[@]}"; do
+      also_forge=$("$FM_ROOT/bin/fm-project-mode.sh" --forge "$also_repo" 2>/dev/null) || also_forge=
+      [ "$also_forge" != external ] || {
+        echo "error: --also $also_repo is refused for $ID: it is registered forge=external, and its task branch must never reach that project's shared origin" >&2
+        exit 1
+      }
+    done
+  fi
   STANDING_MODE=$("$FM_ROOT/bin/fm-project-mode.sh" --raw "$PROJ_NAME" 2>/dev/null | cut -d' ' -f1) || STANDING_MODE=
   BRIEF_MODE=$(sed -n 's/^Delivery contract: mode=\([^ ]*\).*$/\1/p' "$BRIEF" | head -n 1)
   BRIEF_FORGE=$(sed -n 's/^Delivery contract: mode=[^ ]*.*[[:space:]]forge=\([^ ]*\).*$/\1/p' "$BRIEF" | head -n 1)
@@ -6247,7 +6274,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort fast account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)

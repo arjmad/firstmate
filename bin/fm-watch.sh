@@ -1691,8 +1691,8 @@ wedge_defer_guard() {  # <window> <since-file> <triage-label> <idle-age> <guard-
 # any one alone defers. The dead-record probe runs last, so the cheaper deferrals
 # keep the panes they already own on their existing bounded cadences and only a
 # pane that would otherwise alarm pays for a backend read. The opt-in operator
-# guard consult (wedge_guard_evidence) runs after all three, so a dead or missing
-# endpoint is never deferred by a guard, and a home without
+# guard consult (wedge_guard_evidence) runs after every probe above, so a dead or
+# missing endpoint is never deferred by a guard, and a home without
 # config/wedge-evidence-guards never reaches it.
 wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file> <task> <pane-hash> [dialog-name]
   local win=$1 since_file=$2 label=$3 escalation_file=$4 task=$5 hash=$6 dialog=${7-} since age n reason evidence guard guard_note

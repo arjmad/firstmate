@@ -496,6 +496,10 @@ if [ "${#ALSO_REPOS[@]}" -gt 0 ]; then
     echo "error: --also applies only to ship briefs; a scout changes no repository and a charter is not a delivery contract" >&2
     exit 1
   }
+  [ "${FORGE:-none}" != external ] || {
+    echo "error: --also does not combine with --forge external, whose push guard would also refuse every companion PR's push" >&2
+    exit 1
+  }
   for also_repo in "${ALSO_REPOS[@]}"; do
     case "$also_repo" in
       ''|-*|*[!A-Za-z0-9_-]*)
