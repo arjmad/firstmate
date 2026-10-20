@@ -440,9 +440,9 @@ test_rearm_resurfaces_durable_queue_and_remote_open_decision() {
   [ "$status" -ne 124 ] \
     || fail "re-arm stayed live instead of surfacing durable wakes and the still-open remote decision"
   expect_code 0 "$status" "re-arm re-surface wake must close successfully"
-  # The newest queued check row names the recovery, not a generic reason.
-  grep -Fx 'check: queued work: 1 check' "$armout" >/dev/null \
-    || fail "re-arm did not announce the durable recovery under its newest row: $(cat "$armout")"
+  # The recovery counts both queued check rows rather than reading as downtime.
+  grep -Fx 'check: queued work: 2 check' "$armout" >/dev/null \
+    || fail "re-arm did not count the durable recovery's queued rows: $(cat "$armout")"
 
   # The normal wake-handling drain is the one owner of both queue consumption
   # and the cursor-backed fold. It must expose every queued record and the

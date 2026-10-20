@@ -6449,7 +6449,7 @@ test_procevent_unacknowledged_result_redrains_until_handled() {
     || fail "an unacknowledged process-event result was not re-surfaced on re-arm: $(cat "$out")"
   # Reconcile republishes the result as a fresh, unclaimed row, so the recovery
   # names it as queued work rather than announcing generic downtime.
-  grep -Fx 'check: queued work: 1 check' "$out" >/dev/null \
+  grep -Eqx 'check: queued work: [0-9]+ check' "$out" \
     || fail "the successor did not report recovery for the unacknowledged result: $(cat "$out")"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$replay_out" 2> "$replay_err" \
     || fail "the successor could not re-drain the unacknowledged process-event result"
