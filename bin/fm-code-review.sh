@@ -202,7 +202,7 @@ code_review_classify_paths() {
     code_review_classify_stream
     return 0
   fi
-  tier=$(sed 's/^/0\t/' | code_review_tier "$table") || return 2
+  tier=$(awk '{ print "0\t" $0 }' | code_review_tier "$table") || return 2
   case "$tier" in
     tinker*) echo exempt ;;
     *) echo code-changing ;;
