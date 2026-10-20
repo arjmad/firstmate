@@ -33,7 +33,7 @@ The fork samples were taken on 2026-10-01 from every serial artifact of the gree
 They covered all 203 fork serial members of that date, including the fork-only scripts; a serial script added since keeps its upstream hint, or none until fork CI measures it.
 `tests/fm-supervision-host.test.sh` measured 694-703 s in the green fork runs but 1027668 and 1074563 ms in the two cancelled serial-5 jobs, so it keeps the 1074563 ms maximum rather than upstream's post-fix 789123 ms.
 The watch-triage suites were one script, `tests/fm-watch-triage.test.sh`, that reached 1252 to 1467 s on fork CI in October 2026 and was killed at random by the 1500 s per-script bound.
-It is now five `tests/fm-watch-triage*.test.sh` suites split by family, which carry provisional local measurements from 2026-10-20 (237882 to 352185 ms, 1462 s in total, the same as the unsplit script on that host) until the next CI refresh replaces them.
+It is now five `tests/fm-watch-triage*.test.sh` suites split by family, whose hints are their 221773 to 352183 ms (1470 s in total) from fork run [39409496681](https://github.com/arjmad/firstmate/actions/runs/39409496681), a single sample until further green runs establish their variance.
 The parallel table keeps upstream's values, because both fork parallel jobs complete in about 13 minutes or less.
 
 ## Parallel lanes
@@ -122,7 +122,7 @@ Its `--list-files` interface exposes partition membership; `tests/fm-lint.test.s
 The workflow uploads each partition's quiet telemetry plus its per-root lifecycle sidecar to distinguish analysis cost, memory use, and host contention.
 No fast mode, path skips, or paid runner provisioning is part of this layout.
 
-The longer-term performance objective remains a complete green run under fifteen minutes including start delay, but the current watch-triage floor alone exceeds that objective.
+The longer-term performance objective remains a complete green run under fifteen minutes including start delay, but the current supervision-host floor alone exceeds that objective.
 The immediate packing target is the runner's modeled script budget, not a claim that more shards alone can make an indivisible script faster.
 The layout uses fifteen long-lived Linux jobs (ten serial, two parallel, Herdr, two lint), plus short checks and macOS; insufficient shared account capacity can erase the packing gain.
 Compare complete before/after runs, preserve cancelled and partial-run evidence, and measure a representative normal-run sample before claiming a P95 improvement.

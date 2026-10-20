@@ -15,8 +15,9 @@
 #                                  wedge escalation, gone endpoints, operator
 #                                  guards, the busy-pane bound, worktree
 #                                  deferrals, and the exit picker
-#   fm-watch-triage-wait.test.sh   declared pauses and waits, `until`, and
-#                                  waits on a worker's own background job
+#   fm-watch-triage-wait.test.sh   declared pauses and waits, `until`, waits
+#                                  on a worker's own background job, and the
+#                                  fleet-sync and hold-release schedules
 #   fm-watch-triage-wedge.test.sh  the wedge threshold's declared-wait,
 #                                  parked-gate, and wait-record evidence
 #   fm-watch-triage-hold.test.sh   captain-held work, delivered workers, and
@@ -108,7 +109,7 @@ wait_poll_cycle() {  # <state> <pid> [limit-ticks]
   return 1
 }
 
-# Every wait_for_exit budget in this file is 100 ticks (10s), not because any
+# Every wait_for_exit budget in the watch-triage suites is 100 ticks (10s), not because any
 # watcher takes that long to decide, but because fm-watch.sh does bounded
 # startup work before its first poll: a tighter budget reaps the process while
 # it is still starting and reports a spurious "did not surface" failure. A
@@ -213,7 +214,7 @@ size_of() { LC_ALL=C wc -c < "$1" | tr -d '[:space:]'; }
 # turn actually does and it is the only arm that stays in the poll loop instead of
 # re-announcing the previous round's downtime - without it a round exits on its
 # recovery announcement before it ever reaches the stale path, and every
-# absorb assertion below passes vacuously. A live agent (pane_current_command
+# absorb assertion built on it passes vacuously. A live agent (pane_current_command
 # matching the recorded harness) on an idle pane is the exact population
 # pause_state_class answers `none` for.
 # <mode> `exit` requires the watcher to surface and exit; `absorb` requires it to
@@ -250,7 +251,7 @@ parked_watch_round() {  # <state> <fakebin> <out> <capture> <window> <exit|absor
 # The endpoint this lane's window resolves to is a live grok agent unless a case
 # drives it elsewhere with FM_TEST_PANE_COMMAND (the pane's foreground command)
 # and FM_TEST_TMUX_WINDOWS (the session inventory the recorded window must appear
-# in), which is how the dead-endpoint cases below reach `dead` and `missing`.
+# in), which is how the suites' dead-endpoint cases reach `dead` and `missing`.
 wedge_threshold_round() {  # <state> <fakebin> <out> <capture> <window> <verdict> <exit|absorb>
   local state=$1 fakebin=$2 out=$3 capture=$4 window=$5 verdict=$6 mode=$7 pid cycles=0
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture" \

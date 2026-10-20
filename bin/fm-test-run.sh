@@ -905,11 +905,11 @@ tests/fm-wake-queue.test.sh 165906
 tests/fm-watch-arm.test.sh 113470
 tests/fm-watch-checkpoint.test.sh 11342
 tests/fm-watch-recovery-loop.test.sh 59254
-tests/fm-watch-triage-hold.test.sh 352185
-tests/fm-watch-triage-stale.test.sh 296454
-tests/fm-watch-triage-wait.test.sh 281691
-tests/fm-watch-triage-wedge.test.sh 293914
-tests/fm-watch-triage.test.sh 237882
+tests/fm-watch-triage-hold.test.sh 352183
+tests/fm-watch-triage-stale.test.sh 345617
+tests/fm-watch-triage-wait.test.sh 264390
+tests/fm-watch-triage-wedge.test.sh 285647
+tests/fm-watch-triage.test.sh 221773
 tests/fm-watcher-lock.test.sh 72022
 tests/fm-worker-account-live-e2e.test.sh 3283
 tests/fm-worker-account.test.sh 38332
