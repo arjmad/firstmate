@@ -137,13 +137,12 @@
 #                          running a check or removing poll artifacts
 #   heartbeat              fleet-scan backstop found an unsurfaced captain-relevant
 #                          status, unless afk is active
-#   <queued row's reason> | check: rearm-resurface
-#                          recovery: a durable row no watcher has announced
+#   check: queued work: <row> | check: rearm-resurface
+#                          recovery: queued work no watcher has announced
 #                          (another process appended it, or it was queued while
-#                          no non-successor cycle ran) is announced under its own
-#                          reason, newest check row first; a recovery with any
-#                          unclaimed row a watcher already announced, or with
-#                          none, keeps the generic reason
+#                          no non-successor cycle ran) is named, newest check row
+#                          first; with none the reason stays generic; both are
+#                          check reasons and reach main
 #   check: inactive-outcome bounded poll-loop reconciliation found a suspicious
 #                          inactive terminal outcome that still lacks its durable
 #                          upstream receipt
@@ -2887,19 +2886,18 @@ resurface_after_downtime() {
   wake "$(resurface_reason)"
 }
 
-# The reason a recovery announces. A queued row no watcher has announced - an
-# inbox note or a merge outcome another process appended, or a row queued
-# while no non-successor cycle was running - is announced under its own reason,
-# as if this watcher had observed it, so the drain banner says what the work is
-# and the supervision host's offer rule routes it by its real class instead of
-# as a main-only check. The newest check row wins so a main-only row never
-# rides a branch-eligible trigger. Rows a live branch grant reserves or main
-# has claimed are being handled and are passed over. Any other row - one whose
-# reason a watcher already delivered (the delivery log) and nobody handled, a
-# heartbeat, or an unknown kind - keeps the whole recovery generic, as does an
-# empty queue, so such a recovery reaches main exactly as before and no
-# main-only row is left behind a branch-eligible trigger. A decision-owned
-# signal row is named by its files, the reason its watcher close carried.
+# The reason a recovery announces. Most recoveries are not watcher downtime:
+# a row another process appended (an inbox note, a merge outcome) or one queued
+# while no non-successor cycle ran has no wake of its own, so this path is how
+# it reaches main. When the queue holds a row no watcher has announced, the
+# recovery says so - "check: queued work: <that row>", the newest such check
+# row first - so the banner and the ledger show what is waiting instead of
+# reading as downtime. It stays a check reason on purpose: routing is
+# unchanged, and every recovery still reaches main, which drains every row.
+# Rows a live branch grant reserves or main has claimed are being handled, and
+# rows a watcher already delivered (the delivery log, including an earlier
+# queued-work announcement) are not new, so neither is named; with nothing
+# else queued the recovery keeps the generic reason.
 resurface_reason() {
   local reason='' grant=''
   if [ -s "$FM_WAKE_QUEUE" ] && fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"; then
@@ -2907,25 +2905,31 @@ resurface_reason() {
       || grant="$STATE/.branch-eligible-rows"
     reason=$(awk -F '\t' -v grant="$grant" -v main="$STATE/.main-eligible-rows" -v delivered="$WATCH_DELIVERY_LOG" '
       BEGIN {
+        prefix = "check: queued work: "
         if (grant != "") while ((getline line < grant) > 0) taken[line] = 1
         while ((getline line < main) > 0) taken[line] = 1
         while ((getline line < delivered) > 0) {
           n = index(line, "\t"); if (n == 0) continue
           line = substr(line, n + 1); n = index(line, "\t"); if (n == 0) continue
-          announced[substr(line, n + 1)] = 1
+          line = substr(line, n + 1)
+          announced[line] = 1
+          if (index(line, prefix) == 1) announced[substr(line, length(prefix) + 1)] = 1
         }
       }
-      NF >= 5 && $2 ~ /^[0-9]+$/ && !($2 in taken) {
+      NF >= 5 && $2 ~ /^[0-9]+$/ && !($2 in taken) && $5 != "" \
+        && ($3 == "signal" || $3 == "stale" || $3 == "check") {
         line = $5
-        if ($3 == "signal" && index(line, "needs-decision:") == 1) line = "signal: " substr(line, 16)
-        else if (index(line, $3 ":") != 1) line = $3 ": " line
-        if (($3 != "signal" && $3 != "stale" && $3 != "check") || $5 == "" \
-          || (line in announced) || ($5 in announced)) { generic = 1; next }
-        if ($3 == "check") check = line; else other = line
+        if ($3 == "signal" && index(line, "needs-decision:") == 1) {
+          line = substr(line, 16); sub(/^ +/, "", line); line = "signal: " line
+        } else if (index(line, $3 ":") != 1) line = $3 ": " line
+        label = line
+        if ($3 == "check") label = substr(line, 8)
+        if ((line in announced) || ($5 in announced) || (label in announced)) next
+        if ($3 == "check") check = label; else other = label
       }
       END {
-        if (generic) exit
-        if (check != "") print check; else if (other != "") print other
+        if (check != "") print prefix check
+        else if (other != "") print prefix other
       }
     ' "$FM_WAKE_QUEUE" 2>/dev/null) || reason=''
     fm_lock_release "$FM_WAKE_QUEUE_LOCK"

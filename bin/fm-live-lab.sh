@@ -30,7 +30,8 @@
 # removes every project entry at or under <root> from the store
 # CLAUDE_CONFIG_DIR selects (default ~/.claude.json), prints the count, and
 # refuses any <root> that is not an existing directory strictly inside a
-# temporary directory (TMPDIR or /tmp), or that is or contains $HOME.
+# system temporary directory (/tmp, or the macOS per-user one; never the
+# caller's TMPDIR), or that is or contains $HOME.
 #
 # What up builds:
 #   home/            the lab main home: bin/fm-lab-home.sh create, then the
@@ -873,7 +874,9 @@ cmd_forget_claude() {
   ROOT=$(real_dir "$1") || die "refusing '$1': forget-claude needs an existing directory"
   home=$(real_dir "$HOME" 2>/dev/null || printf '%s' "${HOME%/}")
   case "$home/" in "$ROOT"/*) die "refusing '$1': it is or contains \$HOME" ;; esac
-  for base in "${TMPDIR:-/tmp}" /tmp; do
+  # System temporary directories only, never the caller's TMPDIR.
+  for base in /tmp "$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"; do
+    [ -n "$base" ] || continue
     tmp=$(real_dir "$base") || continue
     case "$ROOT" in "$tmp"/?*) inside=yes ;; esac
   done

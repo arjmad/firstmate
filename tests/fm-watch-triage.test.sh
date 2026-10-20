@@ -6448,8 +6448,8 @@ test_procevent_unacknowledged_result_redrains_until_handled() {
   wait_for_exit "$pid" 100 \
     || fail "an unacknowledged process-event result was not re-surfaced on re-arm: $(cat "$out")"
   # Reconcile republishes the result as a fresh, unclaimed row, so the recovery
-  # names it rather than announcing generic downtime.
-  grep -Fx 'check: procevent lavish delivery-src 1' "$out" >/dev/null \
+  # names it as queued work rather than announcing generic downtime.
+  grep -Fx 'check: queued work: procevent lavish delivery-src 1' "$out" >/dev/null \
     || fail "the successor did not report recovery for the unacknowledged result: $(cat "$out")"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$replay_out" 2> "$replay_err" \
     || fail "the successor could not re-drain the unacknowledged process-event result"
@@ -6559,8 +6559,8 @@ test_procevent_launch_failed_episodes_are_each_delivered() {
   # The same key again is what a registration-identity-only key would produce
   # for the next episode: already surfaced, so the process-event surface never
   # delivers it under its headline again. A fresh watcher still recovers the
-  # unacknowledged queue row through the recovery path, which announces the
-  # row's own reason line (the contract
+  # unacknowledged queue row through the recovery path, which names the row as
+  # queued work (the contract
   # test_procevent_unacknowledged_result_redrains_until_handled proves), so
   # what this asserts is the headline, not silence.
   append_wake "$state" check "procevent:lf-src:launch-failed:1-2-100-7" \
@@ -6576,7 +6576,7 @@ test_procevent_launch_failed_episodes_are_each_delivered() {
       # the ordinary surface delivered the repeated key after all, or that
       # something unrelated fired inside the window - and both are failures of
       # exactly what this test guards, so neither may pass as "recovery".
-      grep -Fx 'check: process-event source lf-src is registered but its launch did not prove it took the claim' "$out" >/dev/null \
+      grep -Fx 'check: queued work: process-event source lf-src is registered but its launch did not prove it took the claim' "$out" >/dev/null \
         || fail "an already-surfaced launch-failed key woke the watcher, and the reason was not the one tolerated recovery path (expected the row's own reason line; if that path was reworded, update this expectation, do not restore the strict silence check): $(cat "$out")"
       ;;
     *) fail "the watcher failed on an already-surfaced launch-failed key (status $status): $(cat "$out")" ;;
@@ -6692,7 +6692,7 @@ test_procevent_surface_crash_boundaries() {
   procevent_watch_bg "$dir" "$out.replay"; pid=$!
   wait_for_exit "$pid" 100 \
     || fail "an unacknowledged delivered record was not re-surfaced on re-arm: $(cat "$out.replay")"
-  grep -Fx 'check: procevent fixture after-marker 1' "$out.replay" >/dev/null \
+  grep -Fx 'check: queued work: procevent fixture after-marker 1' "$out.replay" >/dev/null \
     || fail "the successor did not recover the delivered-but-unacknowledged record: $(cat "$out.replay")"
   replay_err="$out.replay.err"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out.replay.drain" 2> "$replay_err" \

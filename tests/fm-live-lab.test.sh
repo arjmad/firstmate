@@ -785,6 +785,8 @@ out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude /private 2>
 expect_code 1 "$?" "forget-claude refuses /private, whose stripped form would match every entry"
 out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$ROOT" 2>&1)
 expect_code 1 "$?" "forget-claude refuses a root outside every temporary directory"
+out=$(CLAUDE_CONFIG_DIR="$T/forget-config" TMPDIR=/ "$LIVE_LAB" forget-claude "$ROOT" 2>&1)
+expect_code 1 "$?" "forget-claude does not trust the caller's TMPDIR as a temporary directory"
 out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$T/forget-missing" 2>&1)
 expect_code 1 "$?" "forget-claude refuses a root that does not exist"
 [ "$(jq -r '.projects | keys | length' "$T/forget-config/.claude.json")" = 2 ] \

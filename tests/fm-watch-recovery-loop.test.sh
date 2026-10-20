@@ -101,6 +101,8 @@ import { pathToFileURL } from "node:url";
 
 let tool = null;
 const prompts = [];
+const isRecovery = (message) =>
+  message.includes("check: queued work: seed recovery") || message.includes("check: rearm-resurface");
 const pi = {
   on() {},
   registerCommand() {},
@@ -119,8 +121,9 @@ await tool.execute("tool-call-t1", {}, undefined, undefined, {});
 const deadline = Date.now() + 75000;
 let firstAt = 0;
 while (Date.now() < deadline) {
-  // The recovery names its queued row (bin/fm-watch.sh resurface_reason).
-  const rearm = prompts.filter((message) => message.includes("check: seed recovery"));
+  // The recovery names its queued row (bin/fm-watch.sh resurface_reason); a
+  // repeat of the same row would come back generic, so both forms count.
+  const rearm = prompts.filter((message) => isRecovery(message));
   if (rearm.length > 1) {
     throw new Error(`unbounded recovery loop: ${rearm.length} recovery follow-ups`);
   }
@@ -128,7 +131,7 @@ while (Date.now() < deadline) {
   if (firstAt && Date.now() - firstAt >= 55000) break;
   await new Promise((resolve) => setTimeout(resolve, 200));
 }
-const rearm = prompts.filter((message) => message.includes("check: seed recovery"));
+const rearm = prompts.filter((message) => isRecovery(message));
 if (rearm.length !== 1) {
   throw new Error(`expected exactly one recovery follow-up, got ${rearm.length}: ${prompts.join(" || ")}`);
 }

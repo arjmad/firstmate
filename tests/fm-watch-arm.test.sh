@@ -441,7 +441,7 @@ test_rearm_resurfaces_durable_queue_and_remote_open_decision() {
     || fail "re-arm stayed live instead of surfacing durable wakes and the still-open remote decision"
   expect_code 0 "$status" "re-arm re-surface wake must close successfully"
   # The newest queued check row names the recovery, not a generic reason.
-  grep -Fx 'check: startup-network' "$armout" >/dev/null \
+  grep -Fx 'check: queued work: startup-network' "$armout" >/dev/null \
     || fail "re-arm did not announce the durable recovery under its newest row: $(cat "$armout")"
 
   # The normal wake-handling drain is the one owner of both queue consumption
@@ -557,7 +557,7 @@ SH
   [ "$status" -ne 124 ] \
     || fail "slow re-arm stayed live instead of surfacing its recovery"
   expect_code 0 "$status" "slow re-arm recovery must close successfully"
-  grep -Fx 'check: startup-network before a slow re-arm' "$armout" >/dev/null \
+  grep -Fx 'check: queued work: startup-network before a slow re-arm' "$armout" >/dev/null \
     || fail "slow re-arm did not report the durable recovery wake: $(cat "$armout")"
   # Without this, a change that stopped the delay from applying would pass here
   # while no longer testing a slow cycle at all.
@@ -624,7 +624,7 @@ test_delivery_gap_wake_is_recovered_once() {
 
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/gap-arm.out"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "successor missed the wake queued in the delivery gap"
-  grep -Fx 'check: startup-network during handling gap' "$dir/gap-arm.out" >/dev/null \
+  grep -Fx 'check: queued work: startup-network during handling gap' "$dir/gap-arm.out" >/dev/null \
     || fail "delivery-gap successor did not announce the queued row: $(cat "$dir/gap-arm.out")"
 
   FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/gap-drain.out" \
@@ -777,7 +777,7 @@ test_recovery_consumption_serializes_queue_publication() {
     || fail "concurrent queue publication failed"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" \
     || fail "watcher missed publication after an acknowledged recovery handoff"
-  grep -Fx 'check: concurrent startup-network' "$dir/arm.out" >/dev/null \
+  grep -Fx 'check: queued work: concurrent startup-network' "$dir/arm.out" >/dev/null \
     || fail "publisher did not restore recovery evidence: $(cat "$dir/arm.out")"
   grep "$(printf '\tcheck\tstartup-network\t')" "$state/.wake-queue" >/dev/null \
     || fail "publisher did not durably append its wake"
@@ -829,7 +829,7 @@ test_markerless_legacy_queue_is_recovered_on_arm() {
 
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/arm.out"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "markerless legacy queue was stranded at re-arm"
-  grep -Fx 'check: legacy process-event' "$dir/arm.out" >/dev/null \
+  grep -Fx 'check: queued work: legacy process-event' "$dir/arm.out" >/dev/null \
     || fail "markerless legacy queue did not trigger recovery: $(cat "$dir/arm.out")"
   case "$(cat "$state/.watcher-down" 2>/dev/null || true)" in
     pending:downtime:*|announced:downtime:*) ;;
@@ -941,10 +941,9 @@ test_append_wakes_live_announced_watcher() {
     || fail "the generic producer could not append its wake"
   wait_for_exit "$ARM_PID" 80 \
     || fail "the live watcher stranded work appended after an empty recovery"
-  # The live watcher announces the appended row under its own reason: an
-  # inbox note is not watcher downtime (the 2026-10-19 velocity audit counted
-  # 86 such wakes as recoveries).
-  grep -Fx 'check: captain inbox note fixture' "$idle_out" >/dev/null \
+  # The live watcher names the appended row: an inbox note is not watcher
+  # downtime (the 2026-10-19 velocity audit counted 86 such wakes as recoveries).
+  grep -Fx 'check: queued work: captain inbox note fixture' "$idle_out" >/dev/null \
     || fail "the appended wake did not reopen recovery under its own reason: $(cat "$idle_out")"
   ! grep -F 'rearm-resurface' "$idle_out" >/dev/null \
     || fail "the appended wake was announced as watcher downtime: $(cat "$idle_out")"
@@ -953,13 +952,11 @@ test_append_wakes_live_announced_watcher() {
   pass "watch-arm: appending work reopens an announced empty recovery"
 }
 
-# A recovery names queued work no watcher announced by its own class, so the
-# supervision host's offer rule routes it as it would the watcher's own close:
-# the newest check row wins over any other row, a payload without its kind
-# prefix gets one, a queue of stale rows names its newest, a decision-owned row
-# is named by its files, a row main already claimed is passed over, and a row
-# a watcher already announced keeps the whole recovery generic.
-test_recovery_names_queued_work_by_its_own_class() {
+# A recovery names queued work no watcher announced, as a check reason that
+# still reaches main: the newest check row wins over any other row, a queue of
+# stale rows names its newest, a decision-owned row is named by its files, and
+# rows main already claimed or a watcher already announced are passed over.
+test_recovery_names_queued_work() {
   local dir home state fakebin
   dir=$(make_case recovery-names-queued-work)
   home="$dir/home"
@@ -974,7 +971,7 @@ test_recovery_names_queued_work_by_its_own_class() {
     || fail "fixture: signal append failed"
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/mixed.out"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "a mixed queue was stranded at re-arm"
-  grep -Fx 'check: fixture outcome awaiting presentation' "$dir/mixed.out" >/dev/null \
+  grep -Fx 'check: queued work: fixture outcome awaiting presentation' "$dir/mixed.out" >/dev/null \
     || fail "a queued check row did not name the recovery ahead of a newer signal row: $(cat "$dir/mixed.out")"
   ack_wakes "$state" || fail "mixed queue acknowledgement failed"
 
@@ -982,7 +979,7 @@ test_recovery_names_queued_work_by_its_own_class() {
   append_wake "$state" stale w3 'stale: w3' || fail "fixture: stale append failed"
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/stale.out"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "a stale-only queue was stranded at re-arm"
-  grep -Fx 'stale: w3' "$dir/stale.out" >/dev/null \
+  grep -Fx 'check: queued work: stale: w3' "$dir/stale.out" >/dev/null \
     || fail "a stale-only queue did not name its newest row: $(cat "$dir/stale.out")"
   ack_wakes "$state" || fail "stale queue acknowledgement failed"
 
@@ -991,17 +988,16 @@ test_recovery_names_queued_work_by_its_own_class() {
     || fail "fixture: decision row append failed"
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/decision.out"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "a decision-owned row was stranded at re-arm"
-  grep -Fx "signal: $state/decided.status" "$dir/decision.out" >/dev/null \
+  grep -Fx "check: queued work: signal: $state/decided.status" "$dir/decision.out" >/dev/null \
     || fail "a decision-owned row was not named by its files: $(cat "$dir/decision.out")"
 
-  # That row is now announced and unhandled, so a fresh row beside it cannot
-  # name the recovery: it stays generic and reaches main, as before.
+  # That row is now announced, so only the fresh row beside it is named.
   append_wake "$state" check inbox:beside 'check: captain inbox note beside' \
     || fail "fixture: beside append failed"
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/beside.out"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "a row beside an announced one was stranded at re-arm"
-  grep -Fx 'check: rearm-resurface' "$dir/beside.out" >/dev/null \
-    || fail "a fresh row beside an announced, unhandled row named the recovery: $(cat "$dir/beside.out")"
+  grep -Fx 'check: queued work: captain inbox note beside' "$dir/beside.out" >/dev/null \
+    || fail "a fresh row beside an announced row was not the one named: $(cat "$dir/beside.out")"
   ack_wakes "$state" || fail "announced queue acknowledgement failed"
 
   append_wake "$state" check inbox:claimed 'check: captain inbox note claimed' \
@@ -1015,7 +1011,7 @@ test_recovery_names_queued_work_by_its_own_class() {
     || fail "fixture: fresh append failed"
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/fresh.out"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "a fresh row beside a claimed one was stranded at re-arm"
-  grep -Fx 'check: captain inbox note fresh' "$dir/fresh.out" >/dev/null \
+  grep -Fx 'check: queued work: captain inbox note fresh' "$dir/fresh.out" >/dev/null \
     || fail "a fresh row beside a claimed one was not named: $(cat "$dir/fresh.out")"
   ack_wakes "$state" || fail "fresh queue acknowledgement failed"
   pass "watch-arm: a recovery names queued work by its own class and never names claimed rows"
@@ -1267,7 +1263,7 @@ test_take_over_owns_a_fresh_cycle_and_keeps_queued_work_surfacing() {
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS"
   status=$?
   expect_code 0 "$status" "a takeover that resurfaces queued work closes cleanly"
-  grep -qx 'signal: fixture still queued for main' "$armout" \
+  grep -qx 'check: queued work: signal: fixture still queued for main' "$armout" \
     || fail "work queued for main did not resurface after the takeover: $(cat "$armout")"
   ! is_live_non_zombie "$SEED_PID" || fail "--take-over left the second watcher running"
   pass "watch-arm: --take-over owns a fresh cycle without a recovery wake and still surfaces queued work"
@@ -1811,7 +1807,7 @@ test_restart_preserves_recovery_across_reused_pid_lock
 test_markerless_legacy_queue_is_recovered_on_arm
 test_idle_lavish_source_stays_quiet_until_result
 test_append_wakes_live_announced_watcher
-test_recovery_names_queued_work_by_its_own_class
+test_recovery_names_queued_work
 test_handling_window_close_keeps_the_acknowledgement_valid
 test_moved_generation_acknowledgement_is_self_healing
 test_downtime_marker_does_not_follow_symlink
