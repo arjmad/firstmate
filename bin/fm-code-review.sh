@@ -5,11 +5,28 @@
 # GitHub merge its status calls unreviewed, and bin/fm-dod-lib.sh tells a ship
 # worker to run the review before its ready report.
 #
-# A changed path is exempt when it lies under docs/records/, docs/receipts/,
-# data/, or seed/, or names a Markdown file (*.md). A pull request is
-# code-changing when any changed path, counting both names of a rename, is not
-# exempt, so a receipts, records, or prose-only pull request merges on green
-# alone and everything else carries a review first. GitHub lists at most 3000
+# When the pull request's base branch keeps a risk-tiers.toml at its root
+# (docs/fork-decisions.md 2026-10-19), that table alone decides: a tinker pull
+# request is exempt, and a shared or business one is code-changing. The table
+# is read from the base branch, so a pull request cannot lower its own tier by
+# editing it, and is parsed the way the fleet's bin/risk-tier parses it: a
+# changed path takes the highest tier of every rule whose `paths` globs match
+# it (** crosses directories, * and ? do not), or the table's `default` when
+# none does; a path the `ignore` globs match counts toward no tier; the pull
+# request takes the highest tier of its counted paths, starting from tinker,
+# so one changing only ignored paths is exempt; and a tinker pull request
+# whose counted files change more lines in total than `max_tinker_lines`, as
+# GitHub counts them, is `default`. A table that does not parse, names an
+# unknown `default`, names a tier above its `default`, or has a rule without
+# `paths` leaves the review state unreadable, as does a python3 without tomllib.
+#
+# Without a table, a changed path is exempt when it lies under docs/records/,
+# docs/receipts/, data/, or seed/, or names a Markdown file (*.md), and a pull
+# request is code-changing when any changed path is not exempt, so a receipts,
+# records, or prose-only pull request merges on green alone and everything
+# else carries a review first.
+#
+# Either way a rename counts both its names, and GitHub lists at most 3000
 # changed files, so a pull request at that cap counts as code-changing, since
 # the files it leaves unlisted cannot be classified.
 #
@@ -35,9 +52,11 @@
 # the guard to those forges.
 #
 # Usage:
-#   fm-code-review.sh classify [<path>...]
-#       Paths from the arguments, or one per line on stdin when there are none.
-#       Prints `code-changing` or `exempt` and exits 0.
+#   fm-code-review.sh classify [--table <risk-tiers.toml>] [<path>...]
+#       Paths from the arguments, or one per line on stdin when there are none,
+#       classified by the table when given (counting no changed lines) or by
+#       the paths alone. Prints `code-changing` or `exempt` and exits 0, or 2
+#       when the table is unreadable.
 #   fm-code-review.sh status <pr-url>
 #       Prints one line: `exempt: ...`, `reviewed: diff <id> ...`, or
 #       `unreviewed: diff <id> ...`. Exits 0 for exempt or reviewed, 1 for
@@ -75,6 +94,145 @@ code_review_classify_stream() {
   echo exempt
 }
 
+# The tier of a change under a risk-tiers.toml (see the header). Reads
+# "<changed lines>\t<path>" lines on stdin; prints "<tier>\t<why>", or the
+# table's fault on stderr and exits 2.
+CODE_REVIEW_TIER_PY=$(cat <<'PY'
+import re
+import sys
+
+TIERS = ("tinker", "shared", "business")
+
+
+def die(message):
+    print(f"error: {sys.argv[1]}: {message}", file=sys.stderr)
+    sys.exit(2)
+
+
+def glob_regex(pattern):
+    out, i = [], 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("".join(out) + r"\Z")
+
+
+def globs(value, where):
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        die(f"{where} must be a list of globs")
+    return [glob_regex(item) for item in value]
+
+
+def matches(path, patterns):
+    return any(pattern.match(path) for pattern in patterns)
+
+
+try:
+    import tomllib
+except ImportError:
+    die("python3 has no tomllib (Python 3.11 or later reads risk-tiers.toml)")
+try:
+    with open(sys.argv[1], "rb") as handle:
+        table = tomllib.load(handle)
+except (OSError, tomllib.TOMLDecodeError) as error:
+    die(f"does not parse: {error}")
+default = table.get("default")
+if default not in TIERS:
+    die(f"default must be one of {', '.join(TIERS)}, not {default!r}")
+rules = []
+for tier in TIERS:
+    entries = table.get(tier, [])
+    if not isinstance(entries, list):
+        die(f"{tier} must be an array of tables")
+    if entries and TIERS.index(tier) > TIERS.index(default):
+        die(f"default {default!r} is not the highest tier the table names ({tier!r})")
+    for number, rule in enumerate(entries, 1):
+        if not isinstance(rule, dict) or not rule.get("paths"):
+            die(f"[[{tier}]] #{number} has no paths")
+        rules.append((tier, globs(rule["paths"], f"[[{tier}]] #{number} paths")))
+ignore = globs(table.get("ignore", []), "ignore")
+limit = table.get("max_tinker_lines")
+if limit is not None and (not isinstance(limit, int) or isinstance(limit, bool)):
+    die("max_tinker_lines must be a number")
+
+tier, why, size, counted = "tinker", None, 0, 0
+for line in sys.stdin:
+    lines, _, path = line.rstrip("\n").partition("\t")
+    if not path or matches(path, ignore):
+        continue
+    counted += 1
+    size += int(lines) if lines.isdigit() else 0
+    hits = [rule_tier for rule_tier, patterns in rules if matches(path, patterns)]
+    path_tier = max(hits, key=TIERS.index) if hits else default
+    if TIERS.index(path_tier) > TIERS.index(tier):
+        tier = path_tier
+        why = f"{path} is {path_tier}" if hits else f"{path} matches no rule (default {default})"
+if not counted:
+    why = "it changes only paths the table ignores"
+elif tier == "tinker" and limit and size > limit:
+    tier, why = default, f"its {size} changed lines pass max_tinker_lines ({limit})"
+elif tier == "tinker":
+    why = "every changed path it counts is tinker"
+print(f"{tier}\t{why}")
+PY
+)
+
+# Args: table; stdin as for CODE_REVIEW_TIER_PY.
+code_review_tier() {
+  python3 -c "$CODE_REVIEW_TIER_PY" "$1"
+}
+
+# Args: table, or none for the paths alone; paths one per line on stdin.
+code_review_classify_paths() {
+  local table=$1 tier
+  if [ -z "$table" ]; then
+    code_review_classify_stream
+    return 0
+  fi
+  tier=$(sed 's/^/0\t/' | code_review_tier "$table") || return 2
+  case "$tier" in
+    tinker*) echo exempt ;;
+    *) echo code-changing ;;
+  esac
+}
+
+# Fetches the base branch's risk-tiers.toml to the file named by $1. Returns 0
+# when it exists, 1 when the branch has none, and 2 when it cannot be read.
+code_review_fetch_table() {
+  local out=$1 ref err
+  if ! ref=$(gh api "repos/$FM_PR_OWNER/$FM_PR_REPO/pulls/$FM_PR_NUMBER" --jq '.base.ref | @uri') || [ -z "$ref" ]; then
+    echo "error: could not read the base branch of $FM_PR_URL" >&2
+    return 2
+  fi
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-code-review.XXXXXX") || return 2
+  if gh api -H 'Accept: application/vnd.github.raw+json' \
+    "repos/$FM_PR_OWNER/$FM_PR_REPO/contents/risk-tiers.toml?ref=$ref" > "$out" 2> "$err"; then
+    rm -f "$err"
+    return 0
+  fi
+  if grep -q 'HTTP 404' "$err"; then
+    rm -f "$err"
+    return 1
+  fi
+  cat "$err" >&2
+  rm -f "$err"
+  echo "error: could not read the risk-tiers.toml of $FM_PR_URL's base branch" >&2
+  return 2
+}
+
 code_review_parse_url() {
   if ! fm_pr_url_parse "${1-}" || [ "$FM_PR_PROVIDER" != github ]; then
     echo "error: not a GitHub pull request URL: ${1-}" >&2
@@ -82,10 +240,11 @@ code_review_parse_url() {
   fi
 }
 
-# Each changed file as "F <path>", plus "P <old path>" for a rename.
+# Each changed file as "F\t<changed lines>\t<path>", plus "P\t0\t<old path>"
+# for a rename.
 code_review_files() {
   gh api --paginate "repos/$FM_PR_OWNER/$FM_PR_REPO/pulls/$FM_PR_NUMBER/files" \
-    --jq '.[] | ("F " + .filename), (.previous_filename // empty | "P " + .)'
+    --jq '.[] | ("F\t" + ((.changes // 0) | tostring) + "\t" + .filename), (.previous_filename // empty | "P\t0\t" + .)'
 }
 
 # A failed diff read falls back to the head only when GitHub refused the diff
@@ -137,19 +296,40 @@ CODE_REVIEW_LINE=
 # Sets CODE_REVIEW_LINE to the status line and returns 0 exempt or reviewed, 1
 # unreviewed, 2 unreadable; sets CODE_REVIEW_DIFF_ID for a code-changing PR.
 code_review_status() {
-  local files verdict ids
+  local files verdict ids table tier='' why changes='changes code' status=0
   CODE_REVIEW_DIFF_ID=
   CODE_REVIEW_LINE=
   if ! files=$(code_review_files); then
     echo "error: could not read the changed files of $FM_PR_URL" >&2
     return 2
   fi
-  verdict=$(printf '%s\n' "$files" | sed 's/^[FP] //' | code_review_classify_stream)
-  if [ "$(printf '%s\n' "$files" | grep -c '^F ')" -ge 3000 ]; then
+  table=$(mktemp "${TMPDIR:-/tmp}/fm-code-review.XXXXXX") || return 2
+  code_review_fetch_table "$table" || status=$?
+  if [ "$status" -eq 0 ]; then
+    tier=$(printf '%s\n' "$files" | cut -f2- | code_review_tier "$table") || status=2
+  fi
+  rm -f "$table"
+  case "$status" in
+    0)
+      why=${tier#*$'\t'}
+      tier=${tier%%$'\t'*}
+      verdict=code-changing
+      [ "$tier" != tinker ] || verdict=exempt
+      changes="is $tier under its base branch's risk-tiers.toml ($why)"
+      ;;
+    1) verdict=$(printf '%s\n' "$files" | cut -f3- | code_review_classify_stream) ;;
+    *) return 2 ;;
+  esac
+  if [ "$(printf '%s\n' "$files" | grep -c '^F')" -ge 3000 ]; then
     verdict=code-changing
+    changes="lists GitHub's limit of 3000 changed files"
   fi
   if [ "$verdict" = exempt ]; then
-    CODE_REVIEW_LINE="exempt: every changed path of $FM_PR_URL is a record, receipt, data, seed, or Markdown file"
+    if [ -n "$tier" ]; then
+      CODE_REVIEW_LINE="exempt: $FM_PR_URL is tinker under its base branch's risk-tiers.toml: $why"
+    else
+      CODE_REVIEW_LINE="exempt: every changed path of $FM_PR_URL is a record, receipt, data, seed, or Markdown file"
+    fi
     return 0
   fi
   if ! CODE_REVIEW_DIFF_ID=$(code_review_diff_id); then
@@ -164,7 +344,7 @@ code_review_status() {
     CODE_REVIEW_LINE="reviewed: diff $CODE_REVIEW_DIFF_ID of $FM_PR_URL carries a code review record"
     return 0
   fi
-  CODE_REVIEW_LINE="unreviewed: diff $CODE_REVIEW_DIFF_ID of $FM_PR_URL changes code and carries no code review record for it"
+  CODE_REVIEW_LINE="unreviewed: diff $CODE_REVIEW_DIFF_ID of $FM_PR_URL $changes and carries no code review record for it"
   return 1
 }
 
@@ -200,10 +380,16 @@ cmd=${1-}
 [ "$#" -eq 0 ] || shift
 case "$cmd" in
   classify)
+    table=
+    if [ "${1-}" = --table ]; then
+      [ -n "${2:-}" ] || { echo "error: --table requires a risk-tiers.toml path" >&2; exit 2; }
+      table=$2
+      shift 2
+    fi
     if [ "$#" -gt 0 ]; then
-      printf '%s\n' "$@" | code_review_classify_stream
+      printf '%s\n' "$@" | code_review_classify_paths "$table"
     else
-      code_review_classify_stream
+      code_review_classify_paths "$table"
     fi
     ;;
   status)

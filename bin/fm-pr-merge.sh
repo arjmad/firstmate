@@ -185,7 +185,8 @@
 # Code review (fork patch, docs/fork-decisions.md 2026-10-17): after the live
 # green check, a GitHub merge, companion PRs included, is refused while
 # bin/fm-code-review.sh status reads the pull request as unreviewed or cannot
-# read it; that script owns which pull requests change code and what record
+# read it; that script owns which pull requests change code, including the
+# base branch's risk-tiers.toml deciding it where one exists, and what record
 # counts. An attended --waive-review <reason>, passed once with the reason as a
 # separate argument, waives only that refusal for one merge on the captain's
 # word, and once the forge accepts that merge it is appended to

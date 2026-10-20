@@ -165,8 +165,9 @@ assert_logged_gh_merge() {
 }
 
 # The pull request's changed files, diff, and comments that
-# bin/fm-code-review.sh reads. By default the one changed file is a record, so
-# the code review gate passes as exempt and every other case is untouched.
+# bin/fm-code-review.sh reads. By default the base branch keeps no
+# risk-tiers.toml and the one changed file is a record, so the code review
+# gate passes as exempt and every other case is untouched.
 # Args: case_dir path...
 write_github_pr_files() {
   local case_dir=$1
@@ -311,6 +312,18 @@ case "${1:-} ${2:-}" in
       *" repos/"*"/issues/"*"/comments "*)
         gh_jq "$fixtures/github-pr-comments.json" "$@"
         exit $?
+        ;;
+      *" repos/"*"/pulls/"[0-9]*" --jq "*)
+        printf 'main\n'
+        exit 0
+        ;;
+      *" repos/"*"/contents/risk-tiers.toml?ref=main "*)
+        if [ -f "$fixtures/github-risk-tiers.toml" ]; then
+          cat "$fixtures/github-risk-tiers.toml"
+          exit 0
+        fi
+        echo 'gh: Not Found (HTTP 404)' >&2
+        exit 1
         ;;
       *" repos/"*"/commits/"*"/check-runs"*)
         case "$*" in
@@ -4651,6 +4664,32 @@ Code review: findings fixed."
   pass "fm-pr-merge merges a code-changing PR only with a trusted review record for its current diff"
 }
 
+test_tier_table_decides_whether_a_merge_needs_review() {
+  local case_dir head=7177e47177e47177e47177e47177e47177e47177
+  case_dir=$(make_case review-tinker)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  printf '%s\n' 'default = "shared"' '[[tinker]]' 'paths = ["hosts/thor/**"]' 'readback = "brew list"' \
+    > "$case_dir/github-risk-tiers.toml"
+  write_github_pr_files "$case_dir" hosts/thor/homebrew.nix
+  run_review_case "$case_dir" 86
+  expect_code 0 "$RC" "review-tinker: a tinker PR must merge without a review"
+  assert_grep 'is tinker under its base branch' "$case_dir/stderr" "review-tinker: the tier exemption was not reported"
+  assert_logged_gh_merge "$case_dir" 86 example/repo --squash
+
+  # Under a table the record exemption no longer applies: records are shared.
+  case_dir=$(make_case review-table-shared)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  printf '%s\n' 'default = "shared"' '[[tinker]]' 'paths = ["hosts/thor/**"]' 'readback = "brew list"' \
+    > "$case_dir/github-risk-tiers.toml"
+  run_review_case "$case_dir" 87
+  expect_code 1 "$RC" "review-table-shared: a shared PR must be refused without a review"
+  assert_grep 'is shared under its base branch' "$case_dir/stderr" "review-table-shared: refusal did not name the tier"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "review-table-shared: gh pr merge ran without a review"
+  pass "fm-pr-merge lets the base branch's tier table decide which PRs need a review"
+}
+
 test_review_state_unreadable_refuses() {
   local case_dir
   case_dir=$(make_case review-unreadable)
@@ -4913,6 +4952,7 @@ test_required_partial_reads_report_all_failures
 test_allow_red_refused_on_forgejo
 test_allow_missing_refused_on_forgejo
 test_code_changing_pr_needs_a_trusted_review_record_for_its_diff
+test_tier_table_decides_whether_a_merge_needs_review
 test_review_state_unreadable_refuses
 test_waive_review_merges_once_and_is_logged
 test_waive_review_is_attended_github_only_and_well_formed
