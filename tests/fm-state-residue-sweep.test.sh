@@ -19,8 +19,12 @@
 #   - A key that no candidate backend/session fits is kept untouched.
 #   - The lossy key derivation cannot delete a live window's markers: a live
 #     `fm-a.b` window covers the key `fm-a_b` shares with it.
-#   - The scratch files of the Claude Stop auto-arm and the wake drain rotate
-#     only once older than the documented age, and never while fresh.
+#   - The scratch files of the Claude Stop auto-arm, the wake drain, and the
+#     home-summary refresh rotate only once older than the documented age, and
+#     never while fresh.
+#   - The task-keyed records of a task nothing live references are retired;
+#     a meta, status log, turn-ended file, inbox, or queued wake keeps them.
+#   - A lock owner is retired only when old, unlinked, and its pid is dead.
 #   - The read-only session path (FM_BOOTSTRAP_DETECT_ONLY=1) runs no sweep.
 #   - --dry-run reports the same verdicts and removes nothing.
 #   - Silence when nothing was removed; one BOOTSTRAP_INFO line otherwise.
@@ -305,9 +309,11 @@ test_only_marker_family_files_are_touched() {
   local home fb out
   home=$(new_home family); fb=$(make_tmux "$TMP_ROOT/family")
   seed_markers "$home" firstmate_fm-gone
-  # Task-keyed and unrelated dotfiles that share a key-looking suffix stay.
+  # Task-keyed records whose task still has a status log, and unrelated
+  # dotfiles that share a key-looking suffix, stay.
   printf 'x' > "$home/state/.seen-firstmate_fm-gone"
   printf 'x' > "$home/state/.hb-surfaced-firstmate_fm-gone"
+  printf 'x' > "$home/state/firstmate_fm-gone.status"
   printf 'x' > "$home/state/.subsuper-stale-firstmate_fm-gone"
   printf 'x' > "$home/state/.last-watcher-beat"
   printf 'x' > "$home/state/gone.status"
@@ -354,6 +360,159 @@ test_query_budget_defers_the_remainder() {
 #   server=running|stopped|garbled   `status --json` and whether `api snapshot` answers
 #   panes=<space-separated pane ids>   live panes in the session
 #   fg=<process name>        the foreground process of every live pane
+# procevent_marker <home> <queue-key>: the watcher's surfaced marker for one
+# process-event wake, named the way bin/fm-watch.sh names it.
+procevent_marker() {
+  printf '%s/state/.seen-procevent-%s' "$1" "$(printf '%s' "$2" | LC_ALL=C od -An -tx1 | tr -d ' \n')"
+}
+
+seed_task_records() {  # <home> <task-id>
+  local state="$1/state" id=$2 folded
+  folded=$(printf '%s' "$id" | tr '.:/' '___')
+  printf '0:0\n' > "$state/.seen-${folded}_status"
+  printf '0:0\n' > "$state/.seen-${folded}_turn-ended"
+  printf '0\n' > "$state/.hb-surfaced-$folded"
+  printf 'fm-branch-outcome-index-v1\t1\t0\t-\n' > "$state/.$id.branch-outcome-index"
+}
+
+count_task_records() {  # <home> <task-id>
+  local state="$1/state" id=$2 folded f n=0
+  folded=$(printf '%s' "$id" | tr '.:/' '___')
+  for f in ".seen-${folded}_status" ".seen-${folded}_turn-ended" ".hb-surfaced-$folded" ".$id.branch-outcome-index"; do
+    [ -e "$state/$f" ] && n=$((n + 1))
+  done
+  printf '%s' "$n"
+}
+
+test_retired_task_records_swept_and_referenced_kept() {
+  local home fb out state now id
+  home=$(new_home task-records); fb=$(make_tmux "$TMP_ROOT/task-records")
+  state="$home/state"
+  world "$home" "" ok zsh
+  now=$(date +%s)
+  for id in live.one held ending queued bare gone.task procevent-x; do seed_task_records "$home" "$id"; done
+  printf 'window=firstmate:fm-live.one\nkind=ship\n' > "$state/live.one.meta"
+  printf 'needs-decision [at=1]: pick one\n' > "$state/held.status"
+  # A live task whose id starts like the watcher's process-event marker.
+  printf 'working [at=1]: on it\n' > "$state/procevent-x.status"
+  : > "$state/ending.turn-ended"
+  printf '%s\t1\tsignal\t%s\tqueued status\n' "$now" "$state/queued.status" > "$state/.wake-queue"
+  printf '%s\t3\tsignal\tbare\tqueued by bare id\n' "$now" >> "$state/.wake-queue"
+  printf '%s\n' 1 > "$state/.branch-outcome-index-ready"
+  # Process-event markers: one still queued, one whose source is registered, one
+  # whose capture is unacknowledged, and one with nothing left behind it.
+  printf '%s\t2\tcheck\tprocevent:lavish-q:1\tqueued result\n' "$now" >> "$state/.wake-queue"
+  mkdir -p "$state/procevent" "$state/procevent-inbox"
+  printf 'adapter=lavish\n' > "$state/procevent/lavish-r.source"
+  printf 'x\n' > "$state/procevent-inbox/lavish-u.1.result"
+  for id in q r u g; do : > "$(procevent_marker "$home" "procevent:lavish-$id:1")"; done
+
+  out=$(run_sweep "$fb" "$home" --dry-run)
+  [ "$(count_task_records "$home" gone.task)" -eq 4 ] || fail "--dry-run removed a retired task's records"
+  assert_contains "$out" "would retire retired-task record .hb-surfaced-gone_task" \
+    "--dry-run should list each retired-task record it would remove: $out"
+
+  out=$(run_sweep "$fb" "$home")
+  [ "$(count_task_records "$home" gone.task)" -eq 0 ] \
+    || fail "a task nothing references should lose every task-keyed record: $(ls -a "$state")"
+  for id in live.one held ending queued bare procevent-x; do
+    [ "$(count_task_records "$home" "$id")" -eq 4 ] \
+      || fail "task $id is still referenced and must keep its records: $(ls -a "$state")"
+  done
+  [ -e "$state/.branch-outcome-index-ready" ] || fail "the outcome ready marker is not a task record"
+  for id in q r u; do
+    [ -e "$(procevent_marker "$home" "procevent:lavish-$id:1")" ] \
+      || fail "the process-event marker for lavish-$id is still referenced and must survive"
+  done
+  [ ! -e "$(procevent_marker "$home" "procevent:lavish-g:1")" ] \
+    || fail "a process-event marker with nothing behind it should be retired"
+  assert_contains "$out" "5 retired-task record(s)" "the summary line should count retired-task records: $out"
+  pass "sweep: records of tasks nothing references are retired, referenced ones kept"
+}
+
+# A sweep that cannot name every live task's records removes none of them.
+test_task_records_kept_when_live_names_are_unknown() {
+  local home fb out state
+  home=$(new_home task-records-closed); fb=$(make_tmux "$TMP_ROOT/task-records-closed")
+  state="$home/state"
+  world "$home" "" ok zsh
+  seed_task_records "$home" gone.task
+  # A wake queue the sweep cannot read may name any task.
+  printf 'x\n' > "$state/.wake-queue"
+  chmod 000 "$state/.wake-queue"
+  out=$(run_sweep "$fb" "$home")
+  chmod 600 "$state/.wake-queue"
+  [ "$(count_task_records "$home" gone.task)" -eq 4 ] \
+    || fail "an incomplete live set still let the sweep remove task-keyed records: $(ls -a "$state")"
+  assert_contains "$out" "kept all task-keyed records" "the sweep should say why it removed nothing: $out"
+  pass "sweep: an incomplete live set keeps every task-keyed record"
+}
+
+test_dead_lock_owners_swept_and_live_kept() {
+  local home fb out state old dead
+  home=$(new_home lock-owners); fb=$(make_tmux "$TMP_ROOT/lock-owners")
+  state="$home/state"
+  world "$home" "" ok zsh
+  old=$(( $(date +%s) - 2 * 3600 ))
+  sleep 0 & dead=$!; wait "$dead"
+  for o in .gone.lock.owner.AAAAAA .held.lock.owner.BBBBBB .young.lock.owner.CCCCCC \
+    .alive.lock.owner.DDDDDD .odd.lock.owner.EEEEEE .stolen.lock.owner.FFFFFF; do
+    mkdir "$state/$o"
+    printf '%s\n' "$dead" > "$state/$o/pid"
+  done
+  printf '%s\n' "$$" > "$state/.alive.lock.owner.DDDDDD/pid"
+  printf 'x\n' > "$state/.odd.lock.owner.EEEEEE/unknown"
+  ln -s "$state/.held.lock.owner.BBBBBB" "$state/.held.lock"
+  ln -s "$state/.stolen.lock.owner.FFFFFF" "$state/.stolen.lock.steal"
+  for o in .gone.lock.owner.AAAAAA .held.lock.owner.BBBBBB .alive.lock.owner.DDDDDD \
+    .odd.lock.owner.EEEEEE .stolen.lock.owner.FFFFFF; do
+    fm_touch_epoch "$old" "$state/$o"
+  done
+
+  out=$(run_sweep "$fb" "$home" --dry-run)
+  assert_contains "$out" "would retire dead lock owner .gone.lock.owner.AAAAAA" \
+    "--dry-run should list the owner it would retire: $out"
+  assert_not_contains "$out" "would retire dead lock owner .odd.lock.owner.EEEEEE" \
+    "--dry-run must not promise to retire an owner the real run keeps: $out"
+  assert_contains "$out" "kept lock owner .odd.lock.owner.EEEEEE" \
+    "--dry-run should report the owner it keeps: $out"
+  [ -d "$state/.gone.lock.owner.AAAAAA" ] || fail "--dry-run removed a lock owner"
+
+  out=$(run_sweep "$fb" "$home")
+
+  [ ! -e "$state/.gone.lock.owner.AAAAAA" ] || fail "an old unlinked owner of a dead pid should be retired"
+  [ -d "$state/.held.lock.owner.BBBBBB" ] || fail "the owner a lock points at must survive"
+  [ -d "$state/.young.lock.owner.CCCCCC" ] || fail "a young owner may be mid-acquire and must survive"
+  [ -d "$state/.alive.lock.owner.DDDDDD" ] || fail "an owner whose pid runs must survive"
+  [ -e "$state/.odd.lock.owner.EEEEEE/unknown" ] || fail "an owner holding foreign files must survive intact"
+  [ -d "$state/.stolen.lock.owner.FFFFFF" ] || fail "the owner a steal record points at must survive"
+  assert_contains "$out" "1 dead lock owner(s)" "the summary line should count retired lock owners: $out"
+  pass "sweep: only old, unlinked lock owners of dead processes are retired"
+}
+
+test_home_summary_scratch_rotates_by_age() {
+  local home fb now
+  home=$(new_home summary-scratch); fb=$(make_tmux "$TMP_ROOT/summary-scratch")
+  world "$home" "" ok zsh
+  now=$(date +%s)
+  printf '{}\n' > "$home/state/.home-summary.json.OLD001"
+  printf 'err\n' > "$home/state/.home-summary-error.OLD002"
+  printf '{}\n' > "$home/state/.home-summary.json.NEW001"
+  printf '{}\n' > "$home/state/home-summary.json"
+  printf 'log\n' > "$home/state/.home-summary-refresh.log"
+  fm_touch_epoch $((now - 8 * 86400)) "$home/state/.home-summary.json.OLD001" \
+    "$home/state/.home-summary-error.OLD002" "$home/state/home-summary.json" "$home/state/.home-summary-refresh.log"
+
+  run_sweep "$fb" "$home" >/dev/null
+
+  [ ! -e "$home/state/.home-summary.json.OLD001" ] || fail "an orphaned summary staging file should rotate"
+  [ ! -e "$home/state/.home-summary-error.OLD002" ] || fail "an orphaned summary diagnostic file should rotate"
+  [ -e "$home/state/.home-summary.json.NEW001" ] || fail "a fresh summary staging file must survive"
+  [ -e "$home/state/home-summary.json" ] || fail "the published ledger is not scratch"
+  [ -e "$home/state/.home-summary-refresh.log" ] || fail "the refresh failure log is not scratch"
+  pass "sweep: orphaned home-summary scratch rotates by age, the ledger and log stay"
+}
+
 make_herdr() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
@@ -555,5 +714,9 @@ test_scratch_rotation_by_age
 test_dry_run_reports_and_removes_nothing
 test_only_marker_family_files_are_touched
 test_query_budget_defers_the_remainder
+test_retired_task_records_swept_and_referenced_kept
+test_task_records_kept_when_live_names_are_unknown
+test_dead_lock_owners_swept_and_live_kept
+test_home_summary_scratch_rotates_by_age
 test_herdr_gone_pane_swept_live_and_stopped_server_handled
 test_bootstrap_runs_sweep_only_when_locked

@@ -109,6 +109,10 @@
 # session-start sweep could still close, while a journal bound to any other pane
 # - or a version 1 attempt whose workspace is still present or unreadable - may
 # name a live quarantined space and is retained for that sweep.
+# Teardown also retires every process-event source the task owns through
+# `bin/fm-procevent.sh retire-task`, which owns which rounds are safe to drop; a
+# board kept for an unread round is named in the output and does not fail the
+# teardown.
 # data/<id>/ is deliberately left in place: a successor spawn reads brief.md
 # from it.
 # Companion worktrees (fork patch, docs/fork-decisions.md 2026-10-14): a ship
@@ -4189,6 +4193,24 @@ else
 fi
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0
+# A review board the task armed for itself would otherwise keep polling, and be
+# re-armed by every session start, long after its owner is gone. It is retired
+# only once the record is gone, so a teardown that aborts earlier never leaves
+# a live task without its board. A round the task left unread keeps its board
+# registered and is named here for firstmate.
+if [ -d "$STATE/procevent" ]; then
+  TEARDOWN_BOARDS_RC=0
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-procevent.sh" retire-task "$ID" </dev/null || TEARDOWN_BOARDS_RC=$?
+  case "$TEARDOWN_BOARDS_RC" in
+    0) ;;
+    3) echo "warning: $ID kept a review board for a round it left unread (see the kept: lines above); that round reaches firstmate as a process-event wake" >&2 ;;
+    *) echo "warning: $ID's review boards could not all be retired (see the error above); they keep polling until bin/fm-procevent.sh retire succeeds" >&2 ;;
+  esac
+  # A round published while the record still existed may have re-created the
+  # inbox removed above; nothing can deliver to it any longer.
+  rm -rf "$STATE/$ID.inbox"
+fi
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi

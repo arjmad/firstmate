@@ -472,15 +472,17 @@ fm_watcher_supervision_verdict() {
   return 0
 }
 
+# Every file the lock library writes into an owner directory. An array, so no
+# caller's IFS can change what is removed.
+FM_LOCK_KNOWN_FILES=(pid fm-home pid-identity role watcher-path)
+
 fm_lock_clean_known_files() {
-  local lockdir=$1
-  rm -f \
-    "$lockdir/pid" \
-    "$lockdir/fm-home" \
-    "$lockdir/pid-identity" \
-    "$lockdir/role" \
-    "$lockdir/watcher-path" \
-    2>/dev/null || true
+  local lockdir=$1 name
+  local -a paths=()
+  for name in "${FM_LOCK_KNOWN_FILES[@]}"; do
+    paths+=("$lockdir/$name")
+  done
+  rm -f "${paths[@]}" 2>/dev/null || true
 }
 
 fm_lock_set_role() {
@@ -2791,6 +2793,14 @@ fm_wake_signal_sig() {  # <file> -> reported-state signature
       if [ "$_FM_UNAME" = Darwin ]; then /usr/bin/stat -f '%z:%Fm' "$1" 2>/dev/null; else stat -c '%s:%Y' "$1" 2>/dev/null; fi
       ;;
   esac
+}
+
+# The watcher's surfaced marker for one queued process-event wake: the queue key,
+# hex-encoded so any key is a safe file name. bin/fm-watch.sh writes it and
+# bin/fm-state-residue-sweep.sh retires it; a prefix of the key encodes to a
+# prefix of the name, which is how the sweep matches a source's markers.
+fm_wake_procevent_marker_path() {  # <state> <queue-key>
+  printf '%s/.seen-procevent-%s' "$1" "$(printf '%s' "$2" | LC_ALL=C od -An -tx1 | tr -d ' \n')"
 }
 
 fm_wake_signal_seen_path() {  # <state> <file>

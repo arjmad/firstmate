@@ -166,16 +166,18 @@ read_saved() {
     fm_dirname_to dir "$file"
     fm_basename_to task "$dir"
     if [ -L "$file" ] || [ -L "$dir" ] || [ ! -f "$file" ] \
-      || [ "$(wc -c < "$file")" -gt 1048576 ] \
-      || ! jq_lib -ne --slurpfile record "$file" '($record | length) == 1 and ($record[0] | valid_record)' >/dev/null 2>&1; then
+      || [ "$(wc -c < "$file")" -gt 1048576 ]; then
       ERRORS=$((ERRORS + 1))
       continue
     fi
-    # A file's task identity must match its durable directory, not arbitrary JSON.
-    if ! jq -e --arg task "$task" '.task == $task' "$file" >/dev/null; then
-      ERRORS=$((ERRORS + 1)); continue
+    # One jq per file: a home accumulates hundreds of these, so the validation,
+    # the task-identity check, and the compact copy share a single process. A
+    # file's task identity must match its durable directory, not arbitrary JSON.
+    if ! jq_lib -nc --arg task "$task" --slurpfile record "$file" \
+      'if ($record | length) == 1 and ($record[0] | valid_record) and $record[0].task == $task
+       then $record[0] else error("invalid") end' >> "$TMP/saved.jsonl" 2>/dev/null; then
+      ERRORS=$((ERRORS + 1))
     fi
-    jq -c . "$file" >> "$TMP/saved.jsonl"
   done
   jq -s . "$TMP/saved.jsonl" > "$TMP/saved.json"
 }

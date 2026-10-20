@@ -5269,4 +5269,106 @@ PATH="$UNDISP/bin:$PATH" FM_HOME="$UNDISP/home" \
   "$ROOT/bin/fm-procevent-lavish.sh" retire "$undisp_art" >/dev/null 2>&1 || true
 pass "arm does not launch beside a stale claim whose process group is alive"
 
+# --- end-user-aligned regression: a torn-down task's boards stop polling ----
+# Teardown retires every board the task owns through `retire-task`. A listening
+# board and one whose round carried nothing are retired, a round the task left
+# unread keeps its board registered and is named, and boards owned by another
+# task or by firstmate are untouched.
+RTASK="$TMP_ROOT/retire-task"; new_home "$RTASK/home"
+RTASK_BIN=$(fm_fakebin "$RTASK/bin")
+cat > "$RTASK_BIN/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+[ "${1-}" != --version ] || { printf '0.1.79\n'; exit 0; }
+art=${2-}
+while [ ! -e "$art.go" ]; do
+  [ "$SECONDS" -lt "${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}" ] || exit 75
+  sleep 0.02
+done
+cat "$art.reply"
+SH
+chmod +x "$RTASK_BIN/lavish-axi"
+fm_test_track_procevent_home "$RTASK/home"
+new_task_endpoint "$RTASK/home" worker-a
+new_task_endpoint "$RTASK/home" worker-b
+rtask_board() {  # <name>: create a board and print its source id
+  printf '<h1>%s</h1>\n' "$1" > "$RTASK/$1.html"
+  lavish_session "$RTASK/$1.html"
+  "$ROOT/bin/fm-procevent-lavish.sh" source-id "$RTASK/$1.html"
+}
+rt_listen=$(rtask_board listen)
+rt_unread=$(rtask_board unread)
+rt_empty=$(rtask_board empty)
+rt_other=$(rtask_board other)
+rt_fm=$(rtask_board firstmate)
+printf 'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","please change the title","","message",""\n' \
+  > "$RTASK/unread.html.reply"
+printf 'session:\n  status: ended\n  session_ended: true\n' > "$RTASK/empty.html.reply"
+for b in listen unread empty; do
+  PATH="$RTASK_BIN:$PATH" FM_HOME="$RTASK/home" \
+    "$ROOT/bin/fm-procevent-lavish.sh" arm "$RTASK/$b.html" --for worker-a >/dev/null \
+    || fail "fixture invalid: cannot arm $b for worker-a"
+done
+PATH="$RTASK_BIN:$PATH" FM_HOME="$RTASK/home" \
+  "$ROOT/bin/fm-procevent-lavish.sh" arm "$RTASK/other.html" --for worker-b >/dev/null \
+  || fail "fixture invalid: cannot arm the sibling task's board"
+PATH="$RTASK_BIN:$PATH" FM_HOME="$RTASK/home" \
+  "$ROOT/bin/fm-procevent-lavish.sh" arm "$RTASK/firstmate.html" >/dev/null \
+  || fail "fixture invalid: cannot arm firstmate's board"
+touch "$RTASK/unread.html.go" "$RTASK/empty.html.go"
+# The capture is what matters here; a runner still ringing its owner when
+# retire-task runs is stopped by it.
+wait_for "$RTASK/home/state/procevent-inbox/$rt_unread.1.result" 300 \
+  || fail "fixture invalid: the unread round was not captured"
+wait_for "$RTASK/home/state/procevent-inbox/$rt_empty.1.result" 300 \
+  || fail "fixture invalid: the empty round was not captured"
+# Another task's board whose id extends a worker-a board id with a dot holds
+# an unread round; it must not be counted against the shorter id.
+rt_dotted="$rt_listen.2"
+PATH="$RTASK_BIN:$PATH" pe "$RTASK/home" register-task lavish "$rt_dotted" worker-b -- printf \
+  'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","sibling","","message",""\n' >/dev/null \
+  || fail "fixture invalid: cannot register the dotted sibling board"
+PATH="$RTASK_BIN:$PATH" pe "$RTASK/home" start "$rt_dotted" >/dev/null 2>&1 || true
+[ -e "$RTASK/home/state/procevent-inbox/$rt_dotted.1.result" ] \
+  || fail "fixture invalid: the dotted sibling round was not captured"
+rt_rc=0
+PATH="$RTASK_BIN:$PATH" pe "$RTASK/home" retire-task worker-a > "$RTASK/out" 2>&1 || rt_rc=$?
+[ "$rt_rc" -eq 3 ] || fail "retire-task did not report the kept board with exit 3 (got $rt_rc): $(cat "$RTASK/out")"
+assert_contains "$(cat "$RTASK/out")" "retired: $rt_listen" "retire-task did not retire the listening board"
+assert_contains "$(cat "$RTASK/out")" "retired: $rt_empty" "retire-task did not retire the board whose round said nothing"
+assert_contains "$(cat "$RTASK/out")" "kept: $rt_unread 1" "retire-task did not name the unread round it kept"
+assert_not_contains "$(cat "$RTASK/out")" "kept: $rt_listen " \
+  "retire-task counted a dotted sibling's round against a shorter source id"
+assert_absent "$RTASK/home/state/procevent/$rt_listen.source" "the listening board is still registered"
+assert_absent "$RTASK/home/state/procevent/$rt_empty.source" "the empty-round board is still registered"
+[ -e "$RTASK/home/state/procevent/$rt_unread.source" ] \
+  || fail "retire-task dropped a board whose captured round the task never read"
+[ ! -e "$RTASK/home/state/procevent-inbox/$rt_unread.1.handled" ] \
+  || fail "retire-task acknowledged a round that carried the captain's words"
+[ -e "$RTASK/home/state/procevent/$rt_other.source" ] || fail "retire-task touched another task's board"
+[ -e "$RTASK/home/state/procevent/$rt_fm.source" ] || fail "retire-task touched firstmate's board"
+for _ in $(seq 1 50); do [ ! -e "$FM_PROCEVENT_CLAIM_ROOT/$rt_listen.claim" ] && break; sleep 0.1; done
+assert_absent "$FM_PROCEVENT_CLAIM_ROOT/$rt_listen.claim" "the retired board's listener still holds its claim"
+# Teardown then removes the task's record and inbox: the kept round reaches
+# firstmate as a check wake instead of re-creating the dead task's inbox, and
+# once firstmate acknowledges it the next reconcile retires the board.
+rm -rf "$RTASK/home/state/worker-a.meta" "$RTASK/home/state/worker-a.inbox"
+PATH="$RTASK_BIN:$PATH" pe "$RTASK/home" reconcile >/dev/null 2>&1 || true
+assert_contains "$(wake_payloads "$RTASK/home")" "$rt_unread" \
+  "a torn-down task's kept round was not announced to firstmate"
+assert_absent "$RTASK/home/state/worker-a.inbox" "reconcile re-created a torn-down task's inbox"
+[ -e "$RTASK/home/state/procevent/$rt_unread.source" ] \
+  || fail "reconcile retired a board whose kept round was still unacknowledged"
+PATH="$RTASK_BIN:$PATH" pe "$RTASK/home" handled "$rt_unread" 1 >/dev/null
+PATH="$RTASK_BIN:$PATH" pe "$RTASK/home" reconcile >/dev/null 2>&1 || true
+assert_absent "$RTASK/home/state/procevent/$rt_unread.source" \
+  "reconcile did not retire the torn-down task's board once its round was acknowledged"
+# A task that ended without any teardown leaves a listening board behind; with
+# neither record nor status log left, reconcile retires it instead of polling.
+rm -f "$RTASK/home/state/worker-b.meta"
+PATH="$RTASK_BIN:$PATH" pe "$RTASK/home" reconcile >/dev/null 2>&1 || true
+assert_absent "$RTASK/home/state/procevent/$rt_other.source" \
+  "reconcile kept polling a board whose owner is gone"
+[ -e "$RTASK/home/state/procevent/$rt_fm.source" ] || fail "reconcile retired firstmate's own board"
+pass "retire-task retires a torn-down task's boards and keeps only a round it left unread, which then reaches firstmate"
+
 printf '\nall procevent tests passed\n'

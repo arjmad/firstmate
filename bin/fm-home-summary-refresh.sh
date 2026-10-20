@@ -17,7 +17,9 @@
 # summary cannot overwrite one computed after a later status change. The shared
 # timeout owner bounds the complete refresh with FM_HOME_SUMMARY_TIMEOUT
 # (default 60 seconds). No reader can observe temporary output through the
-# ledger path.
+# ledger path. The bound can kill the worker before its EXIT trap runs, so the
+# parent names the worker's two temporary files, the worker creates them
+# exclusively, and the parent removes them after any failed or killed refresh.
 #
 # With --best-effort, a failure is appended to the bounded home-local
 # state/.home-summary-refresh.log when available, with stderr as the bounded
@@ -47,6 +49,8 @@ HOME_SUMMARY_FAILURE_STAMP=
 HOME_SUMMARY_TMP=
 HOME_SUMMARY_ERR_TMP=
 HOME_SUMMARY_LOCK_HELD=0
+HOME_SUMMARY_TMP_PATH=
+HOME_SUMMARY_ERR_PATH=
 
 # shellcheck source=bin/fm-timeout-lib.sh
 # shellcheck disable=SC1091
@@ -62,6 +66,11 @@ case "${1:-}" in
   --_worker)
     HOME_SUMMARY_MODE=worker
     BEST_EFFORT=${FM_HOME_SUMMARY_WORKER_BEST_EFFORT:-0}
+    # Only the parent names these, for this worker alone; nothing it runs
+    # inherits them.
+    HOME_SUMMARY_TMP_PATH=${FM_HOME_SUMMARY_TMP_PATH:-}
+    HOME_SUMMARY_ERR_PATH=${FM_HOME_SUMMARY_ERR_PATH:-}
+    unset FM_HOME_SUMMARY_TMP_PATH FM_HOME_SUMMARY_ERR_PATH
     ;;
   --_log-failure) HOME_SUMMARY_MODE=log-failure ;;
   -h|--help) usage; exit 0 ;;
@@ -94,6 +103,19 @@ home_summary_cleanup() {
   fi
 }
 
+# Create one temporary file: exactly the parent-named path when there is one,
+# so the parent can remove it after a kill, otherwise a fresh mktemp name.
+home_summary_scratch() {  # <parent-named-path> <mktemp-template>
+  if [ -z "$1" ]; then
+    (umask 077; mktemp "$2")
+    return
+  fi
+  case "$1" in "${2%XXXXXX}"?*) ;; *) return 1 ;; esac
+  case "${1#"${2%XXXXXX}"}" in */*|.*) return 1 ;; esac
+  (umask 077; set -C; : > "$1") 2>/dev/null || return 1
+  printf '%s\n' "$1"
+}
+
 home_summary_fail() {
   HOME_SUMMARY_ERROR=$1
   return 1
@@ -115,11 +137,11 @@ home_summary_refresh_once() {
     fm_lock_acquire_wait "$REFRESH_LOCK"
   fi
   HOME_SUMMARY_LOCK_HELD=1
-  HOME_SUMMARY_TMP=$(umask 077; mktemp "$STATE/.home-summary.json.XXXXXX") || {
+  HOME_SUMMARY_TMP=$(home_summary_scratch "$HOME_SUMMARY_TMP_PATH" "$STATE/.home-summary.json.XXXXXX") || {
     home_summary_fail "could not create an atomic publication file in $STATE"
     return 1
   }
-  HOME_SUMMARY_ERR_TMP=$(umask 077; mktemp "$STATE/.home-summary-error.XXXXXX") || {
+  HOME_SUMMARY_ERR_TMP=$(home_summary_scratch "$HOME_SUMMARY_ERR_PATH" "$STATE/.home-summary-error.XXXXXX") || {
     home_summary_fail "could not create a producer diagnostic file in $STATE"
     return 1
   }
@@ -217,14 +239,23 @@ fi
 
 if [ "$HOME_SUMMARY_MODE" = parent ]; then
   attempt_stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || attempt_stamp=
+  scratch_suffix="p$$r$RANDOM$RANDOM$RANDOM"
+  HOME_SUMMARY_TMP_PATH="$STATE/.home-summary.json.$scratch_suffix"
+  HOME_SUMMARY_ERR_PATH="$STATE/.home-summary-error.$scratch_suffix"
   if fm_run_timed "$HOME_SUMMARY_TIMEOUT" env \
     FM_HOME_SUMMARY_WORKER_BEST_EFFORT="$BEST_EFFORT" \
     FM_HOME_SUMMARY_IF_IDLE="$HOME_SUMMARY_IF_IDLE" \
+    FM_HOME_SUMMARY_TMP_PATH="$HOME_SUMMARY_TMP_PATH" \
+    FM_HOME_SUMMARY_ERR_PATH="$HOME_SUMMARY_ERR_PATH" \
     "$SCRIPT_DIR/fm-home-summary-refresh.sh" --_worker; then
     exit 0
   else
     refresh_rc=$?
   fi
+  # A killed worker never ran its EXIT trap. Bounded, because the state
+  # directory may be the very thing that stalled.
+  fm_run_timed 2 rm -f -- "$HOME_SUMMARY_TMP_PATH" "$HOME_SUMMARY_ERR_PATH" \
+    >/dev/null 2>&1 || true
   if [ "$BEST_EFFORT" -eq 1 ]; then
     if [ "$refresh_rc" -eq 124 ]; then
       parent_error="refresh exceeded its ${HOME_SUMMARY_TIMEOUT}-second deadline"

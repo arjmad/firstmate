@@ -13,6 +13,7 @@
 #   fm-procevent.sh classify <result-file>
 #   fm-procevent.sh handled <source-id> <sequence>
 #   fm-procevent.sh retire <source-id> [--if-absent|--if-matches <adapter> -- <argv>...|--if-owner <registration-token>]
+#   fm-procevent.sh retire-task <task-id>
 #   fm-procevent.sh sweep-home [--preflight]
 #   fm-procevent.sh binding-retirement-preflight <binding-digest>
 #   fm-procevent.sh extension-retirement <binding|transfer> <retirement-arguments...>
@@ -114,6 +115,20 @@
 #            exists, and --if-owner removes only the exact extension registration
 #            token printed by register-extension, so a stale owner cannot retire
 #            a replacement generation.
+# retire-task
+#            Retire every task-owned source <task-id> holds, through `retire`,
+#            when that task is torn down. An unacknowledged captured round the
+#            adapter calls silent carries nothing to read, so it is acknowledged
+#            first; a round with anything in it keeps its source registered and
+#            prints `kept: <source-id> <sequence>`. Once the task has neither a
+#            record nor a status log, its unacknowledged rounds are announced
+#            to firstmate as ordinary `check` wakes instead of its inbox, and
+#            reconcile retires a board of such a task as soon as nothing of it
+#            is unacknowledged - which also covers a task whose record and
+#            status log were removed some other way. Exit 0 when nothing the
+#            task owned remains, 3 when a source was kept for an unread round,
+#            1 when a retire failed.
+#            Firstmate-registered sources are never touched.
 # sweep-home Retire a bounded snapshot of this home's registrations and owned
 #            claims, then refuse unless no registration, runner record, or owned
 #            claim remains. Used by supported Firstmate home retirement.
@@ -417,9 +432,26 @@ source_field() {  # <source-id> <field>
 }
 source_kind() { source_field "$1" kind; }
 source_owner_task() { source_field "$1" owner_task; }
+# A task is gone once it has neither a record nor a status log, which is what
+# teardown leaves; a relaunch keeps the status log, so it never reads as gone.
+owner_task_gone() {  # <task-id>
+  [ -n "$1" ] || return 1
+  [ ! -e "$STATE/$1.meta" ] && [ ! -L "$STATE/$1.meta" ] \
+    && [ ! -e "$STATE/$1.status" ] && [ ! -L "$STATE/$1.status" ]
+}
 # Every captured round of one source with no handled acknowledgement yet.
 source_pending() {  # <source-id>
-  fm_procevent_pending "$STATE" | awk -v id="$1" 'index($0, "/" id ".") { print }'
+  local result
+  while IFS= read -r result; do
+    result_of_source "$result" "$1" && printf '%s\n' "$result"
+  done < <(fm_procevent_pending "$STATE")
+}
+# result_of_source <result-path> <source-id>: the result is exactly one of that
+# source's rounds, not a round of a source whose id merely extends it.
+result_of_source() {
+  local base=${1##*/}
+  base=${base%.result}
+  [ "${base%.*}" = "$2" ]
 }
 # The registration record is a worker-owned board's ONLY ownership evidence, so
 # it cannot be retired while a captured round of it is still unacknowledged.
@@ -821,6 +853,10 @@ publish_result() {  # <result-file>
   line=$(fm_procevent_event_line "$adapter" "$id" "$seq") || return 1
   owner_task=$(fm_procevent_result_owner_task "$result" 2>/dev/null || true)
   fm_procevent_source_lock_acquire "$id" || return 1
+  # A round whose owner was torn down has no inbox left to read it, so it is
+  # announced to firstmate like any firstmate-owned result. Decided under the
+  # source lock, which retire-task's retire also takes.
+  ! owner_task_gone "$owner_task" || owner_task=
   if ! fm_procevent_is_handled "$STATE" "$id" "$seq"; then
     if [ -n "$owner_task" ]; then
       if adapter_result_is_terminal "$adapter" "$result"; then
@@ -1759,6 +1795,18 @@ cmd_reconcile() {
             fm_procevent_source_lock_release "$id"
             continue
           fi
+          # A board whose owner is gone has nobody to deliver to: retire it
+          # rather than poll again; this also retires a kept board once
+          # firstmate acknowledges its round.
+          if owner_task_gone "$(source_owner_task "$id" 2>/dev/null || true)"; then
+            fm_procevent_source_lock_release "$id"
+            if "$SCRIPT_DIR/fm-procevent.sh" retire "$id" >/dev/null 2>&1; then
+              stopped=$((stopped + 1))
+            else
+              uncertain=$((uncertain + 1))
+            fi
+            continue
+          fi
         fi
         if [ "$claim_state" -eq 1 ] && fm_procevent_claim_undisplaceable_locked "$id"; then
           # A stale claim whose process group still has members, which can mean
@@ -2130,6 +2178,8 @@ cmd_handled() {
     *) die "cannot durably record handling: $id $seq" ;;
   esac
   if [ "$conclude" -eq 1 ]; then
+    # The concluded board produces no further answer, exactly as after retire.
+    "$SCRIPT_DIR/fm-captain-hold.sh" unbind "$id" >/dev/null 2>&1 || true
     printf 'retired: %s (owner acknowledged its terminal round)\n' "$id"
   fi
 }
@@ -2248,6 +2298,71 @@ cmd_retire() {
   # source id, and an unbound source is unaffected.
   "$SCRIPT_DIR/fm-captain-hold.sh" unbind "$id" >/dev/null 2>&1 || true
   printf 'retired: %s\n' "$id"
+}
+
+retire_task_kept() {  # <task> <source-id> <sequence>
+  printf 'kept: %s %s (task %s left this captured round unread; once the task record is gone it reaches firstmate as a process-event wake, and acknowledging it with bin/fm-procevent.sh handled %s %s lets the next reconcile retire the board)\n' \
+    "$2" "$3" "$1" "$2" "$3"
+}
+
+# retire_task_unread <task> <source-id> <results>: acknowledge each of the
+# source's rounds in <results> its adapter calls silent and report every other
+# one as kept; succeed when any round was kept.
+retire_task_unread() {
+  local task=$1 id=$2 result seq adapter unread=1
+  while IFS= read -r result; do
+    result_of_source "$result" "$id" || continue
+    seq=${result%.result}; seq=${seq##*.}
+    adapter=$(fm_procevent_result_adapter "$result" 2>/dev/null || true)
+    # The round list arrives on stdin, so nothing run here may read it.
+    if [ -n "$adapter" ] && adapter_result_is_silent "$adapter" "$result" </dev/null \
+      && "$SCRIPT_DIR/fm-procevent.sh" handled "$id" "$seq" </dev/null >/dev/null 2>&1; then
+      continue
+    fi
+    retire_task_kept "$task" "$id" "$seq"
+    unread=0
+  done <<EOF
+$3
+EOF
+  return "$unread"
+}
+
+cmd_retire_task() {
+  local task=${1-} rec id any_kept=0 failed=0 out pending
+  [ "$#" -eq 1 ] || usage
+  fm_pr_task_id_valid "$task" || die "task id is invalid: $task"
+  # One read of the captured rounds serves every board this task owns.
+  pending=$(fm_procevent_pending "$STATE")
+  for rec in "$REG"/*.source; do
+    [ -f "$rec" ] && [ ! -L "$rec" ] || continue
+    id=${rec##*/}; id=${id%.source}
+    [ "$(source_kind "$id" 2>/dev/null || true)" = task-owned ] || continue
+    [ "$(source_owner_task "$id" 2>/dev/null || true)" = "$task" ] || continue
+    if retire_task_unread "$task" "$id" "$pending"; then
+      any_kept=1
+      continue
+    fi
+    # Retire even when acknowledging a silent terminal round already concluded
+    # the board: retire is idempotent and alone drops its decision binding and
+    # leftover runner records.
+    if out=$("$SCRIPT_DIR/fm-procevent.sh" retire "$id" 2>&1); then
+      printf '%s\n' "$out"
+      continue
+    fi
+    # A round captured after the check above makes retire refuse. It is
+    # handled exactly like one found before it - a silent one acknowledged, any
+    # other kept - and the retire is tried once more when nothing is kept.
+    if retire_task_unread "$task" "$id" "$(source_pending "$id")"; then
+      any_kept=1
+    elif out=$("$SCRIPT_DIR/fm-procevent.sh" retire "$id" 2>&1); then
+      printf '%s\n' "$out"
+    else
+      printf 'error: cannot retire %s owned by task %s: %s\n' "$id" "$task" "$out" >&2
+      failed=1
+    fi
+  done
+  [ "$failed" -eq 0 ] || return 1
+  [ "$any_kept" -eq 0 ] || return 3
 }
 
 sweep_add_id() {
@@ -2406,12 +2521,14 @@ cmd_sweep_home() {
 }
 
 cmd_list() {
-  local rec id adapter owner pending claim_state kind task
+  local rec id adapter owner pending claim_state kind task all_pending rec_result
   owner_lease_refresh
   if ! fm_procevent_any_registered "$STATE"; then
     printf 'no sources registered\n'
     return 0
   fi
+  # One read of the captured rounds serves every source listed.
+  all_pending=$(fm_procevent_pending "$STATE")
   printf '%-28s %-12s %-10s %s\n' SOURCE ADAPTER OWNER PENDING
   for rec in "$REG"/*.source; do
     [ -e "$rec" ] || continue
@@ -2439,7 +2556,12 @@ cmd_list() {
       *) owner=uncertain ;;
     esac
     fm_procevent_source_lock_release "$id"
-    pending=$(fm_procevent_pending "$STATE" | grep -c "/$id\." || true)
+    pending=0
+    while IFS= read -r rec_result; do
+      result_of_source "$rec_result" "$id" && pending=$((pending + 1))
+    done <<EOF
+$all_pending
+EOF
     if [ "$kind" = task-owned ] && [ -n "$task" ]; then
       if [ "$pending" -gt 0 ]; then
         owner="task:$task/round-open"
@@ -2562,6 +2684,7 @@ case "${1-}" in
   classify)           shift; cmd_classify "$@" ;;
   handled)            shift; cmd_handled "$@" ;;
   retire)             shift; cmd_retire "$@" ;;
+  retire-task)        shift; cmd_retire_task "$@" ;;
   sweep-home)         shift; cmd_sweep_home "$@" ;;
   binding-retirement-preflight) shift; cmd_binding_retirement_preflight "$@" ;;
   extension-retirement) shift; cmd_extension_retirement "$@" ;;

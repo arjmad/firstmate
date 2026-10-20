@@ -2317,6 +2317,8 @@ Under the default ordering, this happens after the initial `check` publication.
 - Any registration refuses to replace an external registration while its prior runner claim is live, uncertain, orphaned, or terminal-pending; replacement becomes eligible only after that generation is proved gone or its terminal retirement completes.
 - A source that has ended therefore captures at most one terminal result, is never restarted, and leaves no recurring poll work.
 - For ordinary sources, explicit `retire` stays the supported and idempotent path afterwards; a task-owned board instead refuses `retire` until its owner concludes the open terminal round with `handled`.
+- When a task is torn down, `bin/fm-teardown.sh` retires every board it owns through `bin/fm-procevent.sh retire-task <task-id>`: a round the adapter calls silent is acknowledged first, and a round that carries anything keeps its board registered and is named in the teardown output.
+- Once the owning task has neither a record nor a status log, its unacknowledged rounds are announced to firstmate as ordinary `check` wakes instead of its deleted inbox, and `reconcile` retires its board as soon as no round is unacknowledged, which also covers a task whose record and status log were removed some other way.
 - For Lavish that verdict covers an ended session, a missing session, and the final feedback of a `Send & End` review, which the published poll marks with `session_ended` before it returns only empty ended sessions.
 
 **Apply built-in results automatically**
