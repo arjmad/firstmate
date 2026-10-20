@@ -176,6 +176,28 @@ PY
   pass "outcome store is append-only and refuses sequence reuse after a torn tail"
 }
 
+# processed-init's rebuild gives a cache only to tasks that are still live,
+# like append, so a rebuild over history does not recreate retired tasks' caches.
+test_outcome_index_rebuild_skips_retired_tasks() {
+  local home state
+  home="$TMP_ROOT/rebuild-retired-home"
+  state="$home/state"
+  mkdir -p "$state"
+  printf '%s\n' \
+    '{"seq":1,"epoch":1,"task":"gone-task","wake":"","verdict":"captain","summary":"done"}' \
+    '{"seq":2,"epoch":2,"task":"live-task","wake":"","verdict":"routine","summary":"working"}' \
+    '{"seq":3,"epoch":3,"task":"meta-task","wake":"","verdict":"routine","summary":"working"}' \
+    > "$state/branch-outcomes.jsonl"
+  printf 'working [at=1]: on it\n' > "$state/live-task.status"
+  printf 'window=firstmate:fm-meta-task\n' > "$state/meta-task.meta"
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" processed-init || fail "processed-init failed"
+  [ -s "$state/.live-task.branch-outcome-index" ] || fail "rebuild skipped a task with a status log"
+  [ -s "$state/.meta-task.branch-outcome-index" ] || fail "rebuild skipped a task with a record"
+  [ ! -e "$state/.gone-task.branch-outcome-index" ] || fail "rebuild recreated a retired task's cache"
+  [ -f "$state/.branch-outcome-index-ready" ] || fail "rebuild did not publish its ready marker"
+  pass "outcome index rebuild skips retired tasks"
+}
+
 test_outcome_append_keeps_a_bounded_display_tail() {
   local home store tail cursor
   home="$TMP_ROOT/tail-home"
@@ -1614,6 +1636,7 @@ WRAPPER
 test_branch_prompt_is_byte_stable_and_above_cache_floor
 test_branch_prompt_routes_completed_scouts_through_guarded_cleanup
 test_outcome_store_is_append_only_with_cursor_reads
+test_outcome_index_rebuild_skips_retired_tasks
 test_outcome_append_keeps_a_bounded_display_tail
 test_outcome_tail_keeps_whole_newest_rows_within_its_byte_budget
 test_outcome_seed_tail_creates_only_an_absent_display_tail

@@ -2177,6 +2177,8 @@ cmd_handled() {
     *) die "cannot durably record handling: $id $seq" ;;
   esac
   if [ "$conclude" -eq 1 ]; then
+    # The concluded board produces no further answer, exactly as after retire.
+    "$SCRIPT_DIR/fm-captain-hold.sh" unbind "$id" >/dev/null 2>&1 || true
     printf 'retired: %s (owner acknowledged its terminal round)\n' "$id"
   fi
 }
@@ -2302,8 +2304,31 @@ retire_task_kept() {  # <task> <source-id> <sequence>
     "$2" "$3" "$1" "$2" "$3"
 }
 
+# retire_task_unread <task> <source-id> <ack-silent:0|1> <results>: report each
+# of the source's rounds in <results> as kept, after acknowledging a round its
+# adapter calls silent when asked to; succeed when any round was kept.
+retire_task_unread() {
+  local task=$1 id=$2 ack=$3 result seq adapter unread=1
+  while IFS= read -r result; do
+    result_of_source "$result" "$id" || continue
+    seq=${result%.result}; seq=${seq##*.}
+    if [ "$ack" -eq 1 ]; then
+      adapter=$(fm_procevent_result_adapter "$result" 2>/dev/null || true)
+      if [ -n "$adapter" ] && adapter_result_is_silent "$adapter" "$result" \
+        && "$SCRIPT_DIR/fm-procevent.sh" handled "$id" "$seq" >/dev/null 2>&1; then
+        continue
+      fi
+    fi
+    retire_task_kept "$task" "$id" "$seq"
+    unread=0
+  done <<EOF
+$4
+EOF
+  return "$unread"
+}
+
 cmd_retire_task() {
-  local task=${1-} rec id result seq adapter any_kept=0 failed=0 unread out pending
+  local task=${1-} rec id any_kept=0 failed=0 out pending
   [ "$#" -eq 1 ] || usage
   fm_pr_task_id_valid "$task" || die "task id is invalid: $task"
   # One read of the captured rounds serves every board this task owns.
@@ -2313,21 +2338,7 @@ cmd_retire_task() {
     id=${rec##*/}; id=${id%.source}
     [ "$(source_kind "$id" 2>/dev/null || true)" = task-owned ] || continue
     [ "$(source_owner_task "$id" 2>/dev/null || true)" = "$task" ] || continue
-    unread=0
-    while IFS= read -r result; do
-      result_of_source "$result" "$id" || continue
-      seq=${result%.result}; seq=${seq##*.}
-      adapter=$(fm_procevent_result_adapter "$result" 2>/dev/null || true)
-      if [ -n "$adapter" ] && adapter_result_is_silent "$adapter" "$result" \
-        && "$SCRIPT_DIR/fm-procevent.sh" handled "$id" "$seq" >/dev/null 2>&1; then
-        continue
-      fi
-      retire_task_kept "$task" "$id" "$seq"
-      unread=1
-    done <<EOF
-$pending
-EOF
-    if [ "$unread" -eq 1 ]; then
+    if retire_task_unread "$task" "$id" 1 "$pending"; then
       any_kept=1
       continue
     fi
@@ -2340,13 +2351,7 @@ EOF
     fi
     # A round captured after the check above is what makes retire refuse; it
     # is kept exactly like one found before it.
-    while IFS= read -r result; do
-      result_of_source "$result" "$id" || continue
-      seq=${result%.result}; seq=${seq##*.}
-      retire_task_kept "$task" "$id" "$seq"
-      unread=1
-    done < <(source_pending "$id")
-    if [ "$unread" -eq 1 ]; then
+    if retire_task_unread "$task" "$id" 0 "$(source_pending "$id")"; then
       any_kept=1
     else
       printf 'error: cannot retire %s owned by task %s: %s\n' "$id" "$task" "$out" >&2

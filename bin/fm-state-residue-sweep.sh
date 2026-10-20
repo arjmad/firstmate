@@ -58,7 +58,9 @@
 # through the writers' own path helpers and keeps exactly those. A task is live
 # when any of these names it: a current state/<id>.meta, a state/<id>.status log
 # (it may still hold unread lines or an open decision), a state/<id>.turn-ended
-# file, a state/<id>.inbox, or any key in the durable wake queue. The sweep runs
+# file, a state/<id>.inbox, or a durable wake-queue key naming the task's
+# status, turn-ended, or check file (keys naming nothing of those three files
+# protect nothing, because these records only describe them). The sweep runs
 # under the session lock before the session can dispatch, so no task appears
 # between that read and the removal. The watcher's per-wake process-event marker
 # .seen-procevent-<hex key> (fm_wake_procevent_marker_path) is removed once its
@@ -492,6 +494,10 @@ sweep_task_records() {
 
 # --- dead lock owners -----------------------------------------------------------
 
+# Compared by name rather than full path, unlike fm_lock_points_to_owner: a lock
+# records its owner's physical path while $STATE may reach the same directory
+# through a symlink (/var and /private/var on macOS), and an owner name is
+# unique within the directory that holds it.
 lock_points_at() {  # <link> <owner-basename>
   local target
   [ -L "$1" ] || return 1
