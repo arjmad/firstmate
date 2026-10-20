@@ -165,8 +165,9 @@ assert_logged_gh_merge() {
 }
 
 # The pull request's changed files, diff, and comments that
-# bin/fm-code-review.sh reads. By default the one changed file is a record, so
-# the code review gate passes as exempt and every other case is untouched.
+# bin/fm-code-review.sh reads. By default the base branch keeps no
+# risk-tiers.toml and the one changed file is a record, so the code review
+# gate passes as exempt and every other case is untouched.
 # Args: case_dir path...
 write_github_pr_files() {
   local case_dir=$1
@@ -311,6 +312,14 @@ case "${1:-} ${2:-}" in
       *" repos/"*"/issues/"*"/comments "*)
         gh_jq "$fixtures/github-pr-comments.json" "$@"
         exit $?
+        ;;
+      *" repos/"*"/contents/risk-tiers.toml?ref=main "*)
+        if [ -d "$fixtures/tier-remote.git" ]; then
+          printf 'file\n'
+          exit 0
+        fi
+        echo 'gh: Not Found (HTTP 404)' >&2
+        exit 1
         ;;
       *" repos/"*"/commits/"*"/check-runs"*)
         case "$*" in
@@ -4556,6 +4565,8 @@ test_allow_missing_follows_the_allow_red_rules() {
   expect_code 2 "$RC" "gitlab-allow-missing: the waiver must not apply on GitLab"
   assert_grep '--allow-missing does not apply to GitLab' "$case_dir/stderr" \
     "gitlab-allow-missing: the refusal did not name GitLab"
+  assert_grep '--allow-no-pipeline waives only a merge request with no head pipeline' "$case_dir/stderr" \
+    "gitlab-allow-missing: the refusal did not point at the GitLab no-pipeline waiver"
   [ ! -s "$case_dir/glab.log" ] || fail "gitlab-allow-missing: glab ran despite the waiver"
   pass "fm-pr-merge --allow-missing is single use, attended-only, and GitHub-only like --allow-red"
 }
@@ -4649,6 +4660,56 @@ Code review: findings fixed."
   pass "fm-pr-merge merges a code-changing PR only with a trusted review record for its current diff"
 }
 
+# Gives a case's repository a risk-tiers.toml on main and a pull request head
+# in a local remote that the code review's clone fetches, with a stub classifier
+# that prints the tier line given; the head is left in tier-head for
+# add_gh_mocks. Args: case_dir pr_number tier_line
+add_tier_remote() {
+  local case_dir=$1 number=$2 work="$1/tier-work"
+  git init -q --bare "$case_dir/tier-remote.git"
+  git init -q -b main "$work"
+  printf 'default = "shared"\n' > "$work/risk-tiers.toml"
+  git -C "$work" add -A
+  git -C "$work" -c user.name=t -c user.email=t@example.com commit -q -m main
+  git -C "$work" push -q "$case_dir/tier-remote.git" HEAD:refs/heads/main "HEAD:refs/pull/$number/head"
+  git -C "$work" rev-parse HEAD > "$case_dir/tier-head"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q\n' "$3" > "$case_dir/fakebin/risk-tier"
+  chmod +x "$case_dir/fakebin/risk-tier"
+}
+
+# Runs run_review_case with the case's tier remote and stub classifier.
+run_tier_review_case() {
+  local case_dir=$1
+  FM_RISK_TIER="$case_dir/fakebin/risk-tier" GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0="url.$case_dir/tier-remote.git.insteadOf" \
+    GIT_CONFIG_VALUE_0=https://github.com/example/repo.git \
+    run_review_case "$@"
+}
+
+test_tier_table_decides_whether_a_merge_needs_review() {
+  local case_dir
+  case_dir=$(make_case review-tinker)
+  mkdir -p "$case_dir/wt"
+  add_tier_remote "$case_dir" 86 'tinker: every change against origin/main is tinker for thor: hosts/thor/homebrew.nix'
+  add_gh_mocks "$case_dir" "$(cat "$case_dir/tier-head")"
+  write_github_pr_files "$case_dir" hosts/thor/homebrew.nix
+  run_tier_review_case "$case_dir" 86
+  expect_code 0 "$RC" "review-tinker: a tinker PR must merge without a review"
+  assert_grep 'is tinker under its risk-tiers.toml' "$case_dir/stderr" "review-tinker: the tier exemption was not reported"
+  assert_logged_gh_merge "$case_dir" 86 example/repo --squash
+
+  # Under a table the record exemption no longer applies.
+  case_dir=$(make_case review-table-shared)
+  mkdir -p "$case_dir/wt"
+  add_tier_remote "$case_dir" 87 'shared: docs/records/2026-10-17.json matches no rule (default shared)'
+  add_gh_mocks "$case_dir" "$(cat "$case_dir/tier-head")"
+  run_tier_review_case "$case_dir" 87
+  expect_code 1 "$RC" "review-table-shared: a shared PR must be refused without a review"
+  assert_grep 'is shared under its risk-tiers.toml' "$case_dir/stderr" "review-table-shared: refusal did not name the tier"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "review-table-shared: gh pr merge ran without a review"
+  pass "fm-pr-merge lets the repository's tier table decide which PRs need a review"
+}
+
 test_review_state_unreadable_refuses() {
   local case_dir
   case_dir=$(make_case review-unreadable)
@@ -4732,6 +4793,128 @@ test_waive_review_is_attended_github_only_and_well_formed() {
   pass "fm-pr-merge --waive-review is attended-only, GitHub-only, and takes one one-line reason"
 }
 
+# --allow-no-pipeline is for a GitLab repository that deliberately runs no merge
+# request pipeline: it waives only a head_pipeline GitLab reports as null, and
+# the merge stays bound to the verified head.
+test_allow_no_pipeline_merges_only_a_null_head_pipeline() {
+  local case_dir rc merge_line name spec expected
+  case_dir=$(make_gitlab_case gitlab-no-pipeline-waived pipeline=null)
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" --allow-no-pipeline \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "gitlab-no-pipeline-waived: a merge request with no head pipeline should merge: $(cat "$case_dir/stderr")"
+  merge_line=$(glab_merge_line "$case_dir/glab.log")
+  [ "$merge_line" = "GITLAB_HOST=$MR_HOST mr merge 7 -R $MR_PROJECT_URL --sha $MR_HEAD --yes" ] \
+    || fail "gitlab-no-pipeline-waived: unexpected merge invocation: '$merge_line'"
+  assert_grep "at head $MR_HEAD, with no head pipeline, waived by --allow-no-pipeline" "$case_dir/stderr" \
+    "gitlab-no-pipeline-waived: the waived verification was not reported"
+
+  case_dir=$(make_gitlab_case gitlab-no-pipeline-flag-absent pipeline=null)
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "gitlab-no-pipeline-flag-absent: no head pipeline must still refuse by default"
+  assert_grep 'the head pipeline status is "none", not success' "$case_dir/stderr" \
+    "gitlab-no-pipeline-flag-absent: the refusal did not name the missing pipeline"
+  [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
+    || fail "gitlab-no-pipeline-flag-absent: a merge was attempted without the waiver"
+
+  # A pipeline that exists is a verdict, never an absence, so the waiver does
+  # not reach it; and every other condition still holds beside the waiver.
+  set -- \
+    "failed|pipeline_status=failed|the head pipeline status is \"failed\", not success" \
+    "running|pipeline_status=running|the head pipeline status is \"running\", not success" \
+    "canceled|pipeline_status=canceled|the head pipeline status is \"canceled\", not success" \
+    "stale|pipeline_sha=$MR_STALE_HEAD|the head pipeline ran at \"$MR_STALE_HEAD\", not at the current head $MR_HEAD" \
+    "not-mergeable|pipeline=null detail=ci_must_pass|detailed_merge_status is \"ci_must_pass\", not mergeable" \
+    "discussions|pipeline=null discussions=false|blocking_discussions_resolved is \"false\", not true" \
+    "conflicts|pipeline=null conflicts=true|has_conflicts is \"true\", not false"
+  for spec in "$@"; do
+    name=${spec%%|*}
+    expected=${spec##*|}
+    spec=${spec#*|}
+    # shellcheck disable=SC2086 # the field list is deliberately word-split
+    case_dir=$(make_gitlab_case "gitlab-no-pipeline-refuse-$name" ${spec%%|*})
+    set +e
+    run_pr_merge "$case_dir" task-x1 "$MR_URL" --allow-no-pipeline \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 1 "$rc" "gitlab-no-pipeline-refuse-$name: the waiver must not merge"
+    assert_grep "$expected" "$case_dir/stderr" \
+      "gitlab-no-pipeline-refuse-$name: the refusal did not name the failing condition"
+    [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
+      || fail "gitlab-no-pipeline-refuse-$name: a merge was attempted despite the refusal"
+  done
+
+  # An absent head_pipeline field is unreadable state, not a reported absence.
+  case_dir=$(make_gitlab_case gitlab-no-pipeline-field-missing)
+  "$JQ_BIN" -c 'del(.head_pipeline)' "$case_dir/mr.json" > "$case_dir/mr.json.new"
+  mv "$case_dir/mr.json.new" "$case_dir/mr.json"
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" --allow-no-pipeline \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "gitlab-no-pipeline-field-missing: an unread pipeline field must not be waived"
+  [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
+    || fail "gitlab-no-pipeline-field-missing: a merge was attempted on an unread pipeline field"
+  pass "fm-pr-merge --allow-no-pipeline waives only a null GitLab head pipeline and keeps every other condition"
+}
+
+test_allow_no_pipeline_is_attended_only_and_gitlab_only() {
+  local case_dir rc head
+  case_dir=$(make_gitlab_case gitlab-no-pipeline-away pipeline=null)
+  write_away_record "$case_dir" --words 'merge task-x1'
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" --allow-no-pipeline \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "gitlab-no-pipeline-away: the waiver must be refused while away"
+  assert_grep '--allow-no-pipeline is attended-only' "$case_dir/stderr" \
+    "gitlab-no-pipeline-away: the refusal did not name attended-only"
+  [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
+    || fail "gitlab-no-pipeline-away: glab merged despite an away waiver"
+
+  case_dir=$(make_gitlab_case gitlab-no-pipeline-equals pipeline=null)
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" --allow-no-pipeline=true \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "gitlab-no-pipeline-equals: a value must be refused"
+  [ ! -s "$case_dir/glab.log" ] || fail "gitlab-no-pipeline-equals: glab ran for a valued flag"
+
+  head=abababababababababababababababababababab
+  case_dir=$(make_case github-no-pipeline)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/88 --allow-no-pipeline \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "github-no-pipeline: the waiver must not apply on GitHub"
+  assert_grep '--allow-no-pipeline applies only to GitLab' "$case_dir/stderr" \
+    "github-no-pipeline: the refusal did not name GitLab"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "github-no-pipeline: gh pr merge ran despite the waiver"
+
+  case_dir=$(make_forgejo_case forgejo-no-pipeline)
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$FJ_URL" --allow-no-pipeline \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "forgejo-no-pipeline: the waiver must not apply on Forgejo"
+  assert_grep '--allow-no-pipeline applies only to GitLab' "$case_dir/stderr" \
+    "forgejo-no-pipeline: the refusal did not name GitLab"
+  [ ! -s "$case_dir/tea.log" ] || fail "forgejo-no-pipeline: tea ran despite the waiver"
+  pass "fm-pr-merge --allow-no-pipeline is attended-only, takes no value, and applies only to GitLab"
+}
+
 test_gitlab_head_override_args_refuse_before_recording
 test_secondmate_merge_reports_upward_once
 test_secondmate_merge_reports_on_the_local_route
@@ -4789,6 +4972,9 @@ test_required_partial_reads_report_all_failures
 test_allow_red_refused_on_forgejo
 test_allow_missing_refused_on_forgejo
 test_code_changing_pr_needs_a_trusted_review_record_for_its_diff
+test_tier_table_decides_whether_a_merge_needs_review
 test_review_state_unreadable_refuses
 test_waive_review_merges_once_and_is_logged
 test_waive_review_is_attended_github_only_and_well_formed
+test_allow_no_pipeline_merges_only_a_null_head_pipeline
+test_allow_no_pipeline_is_attended_only_and_gitlab_only

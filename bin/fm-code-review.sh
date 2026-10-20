@@ -5,13 +5,25 @@
 # GitHub merge its status calls unreviewed, and bin/fm-dod-lib.sh tells a ship
 # worker to run the review before its ready report.
 #
-# A changed path is exempt when it lies under docs/records/, docs/receipts/,
-# data/, or seed/, or names a Markdown file (*.md). A pull request is
-# code-changing when any changed path, counting both names of a rename, is not
-# exempt, so a receipts, records, or prose-only pull request merges on green
-# alone and everything else carries a review first. GitHub lists at most 3000
-# changed files, so a pull request at that cap counts as code-changing, since
-# the files it leaves unlisted cannot be classified.
+# When the repository's main branch keeps a risk-tiers.toml at its root
+# (docs/fork-decisions.md 2026-10-19), that tier table alone decides, through
+# the fleet's classifier `risk-tier --root <clone> --head <pull request head>`
+# (the fleet's docs/risk-tiers.md owns its rules): a tinker pull request is
+# exempt, and any other tier is code-changing. The classifier is
+# $FM_RISK_TIER, by default ${FLEET_NIX:-$HOME/nix}/bin/risk-tier, run on a
+# throwaway blob-less clone of main and the pull request's head; a missing
+# classifier, a clone or fetch that fails, or a classifier that refuses the
+# table leaves the review state unreadable, so the merge refuses.
+#
+# Without a table, a changed path is exempt when it lies under docs/records/,
+# docs/receipts/, data/, or seed/, or names a Markdown file (*.md), and a pull
+# request is code-changing when any changed path is not exempt, so a receipts,
+# records, or prose-only pull request merges on green alone and everything
+# else carries a review first.
+#
+# Without a table a rename counts both its names, and GitHub lists at most
+# 3000 changed files, so a pull request at that cap counts as code-changing,
+# since the files it leaves unlisted cannot be classified.
 #
 # The review is Claude Code's built-in /code-review skill at its medium level
 # with --comment, which posts each finding as an inline PR comment. Once every
@@ -36,8 +48,9 @@
 #
 # Usage:
 #   fm-code-review.sh classify [<path>...]
-#       Paths from the arguments, or one per line on stdin when there are none.
-#       Prints `code-changing` or `exempt` and exits 0.
+#       Paths from the arguments, or one per line on stdin when there are none,
+#       classified as a repository without a table classifies them. Prints
+#       `code-changing` or `exempt` and exits 0.
 #   fm-code-review.sh status <pr-url>
 #       Prints one line: `exempt: ...`, `reviewed: diff <id> ...`, or
 #       `unreviewed: diff <id> ...`. Exits 0 for exempt or reviewed, 1 for
@@ -75,6 +88,72 @@ code_review_classify_stream() {
   echo exempt
 }
 
+# Whether main keeps a risk-tiers.toml: returns 0 when it does, 1 when it does
+# not, and 2 when that cannot be read.
+code_review_has_table() {
+  local err
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-code-review.XXXXXX") || return 2
+  if gh api "repos/$FM_PR_OWNER/$FM_PR_REPO/contents/risk-tiers.toml?ref=main" --jq .type \
+    > /dev/null 2> "$err"; then
+    rm -f "$err"
+    return 0
+  fi
+  if grep -q 'HTTP 404' "$err"; then
+    rm -f "$err"
+    return 1
+  fi
+  cat "$err" >&2
+  rm -f "$err"
+  return 2
+}
+
+CODE_REVIEW_TIER=
+# Sets CODE_REVIEW_TIER to the classifier's `<tier>: <why>` line for the pull
+# request's head as the API reports it, read once per run. Runs the classifier
+# on a throwaway blob-less clone holding origin/main, that head, and main's
+# table in its tree, fetched with gh's credentials and never a prompt; a pull
+# request ref that does not yet name that head is refused rather than read.
+code_review_tier() {
+  local classifier=${FM_RISK_TIER:-${FLEET_NIX:-$HOME/nix}/bin/risk-tier} dir head fetched status=0
+  [ -z "$CODE_REVIEW_TIER" ] || return 0
+  if [ ! -x "$classifier" ]; then
+    echo "error: $FM_PR_OWNER/$FM_PR_REPO keeps a risk-tiers.toml, but its classifier $classifier is not an executable file" >&2
+    return 2
+  fi
+  if ! head=$(code_review_head) || ! fm_pr_head_valid "$head"; then
+    echo "error: could not read the head commit of $FM_PR_URL" >&2
+    return 2
+  fi
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-code-review.XXXXXX") || return 2
+  if git init -q "$dir" \
+    && git -C "$dir" remote add origin "https://$FM_PR_HOST/$FM_PR_OWNER/$FM_PR_REPO.git" \
+    && git -C "$dir" config remote.origin.promisor true \
+    && git -C "$dir" config remote.origin.partialclonefilter blob:none \
+    && GIT_TERMINAL_PROMPT=0 git -C "$dir" -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+      fetch -q --filter=blob:none origin \
+      +refs/heads/main:refs/remotes/origin/main \
+      "+refs/pull/$FM_PR_NUMBER/head:refs/fm-code-review/head" \
+    && git -C "$dir" show origin/main:risk-tiers.toml > "$dir/risk-tiers.toml" \
+    && fetched=$(git -C "$dir" rev-parse --verify refs/fm-code-review/head); then
+    if [ "$fetched" = "$head" ]; then
+      CODE_REVIEW_TIER=$("$classifier" --root "$dir" --head "$head") || status=2
+    else
+      echo "error: the pull request ref of $FM_PR_URL names $fetched, not its head $head yet; read it again" >&2
+      status=2
+    fi
+  else
+    echo "error: could not fetch main and the head of $FM_PR_URL to classify its tier" >&2
+    status=2
+  fi
+  rm -rf "$dir"
+  case "$status:$CODE_REVIEW_TIER" in
+    0:tinker:*|0:shared:*|0:business:*) return 0 ;;
+    0:*) echo "error: $classifier printed no tier for $FM_PR_URL: $CODE_REVIEW_TIER" >&2 ;;
+  esac
+  CODE_REVIEW_TIER=
+  return 2
+}
+
 code_review_parse_url() {
   if ! fm_pr_url_parse "${1-}" || [ "$FM_PR_PROVIDER" != github ]; then
     echo "error: not a GitHub pull request URL: ${1-}" >&2
@@ -90,10 +169,18 @@ code_review_files() {
 
 # A failed diff read falls back to the head only when GitHub refused the diff
 # for its size (HTTP 406); any other failure leaves the review state unreadable.
+# gh refuses to print a diff carrying terminal escape sequences, which test
+# fixtures legitimately hold; the diff only ever reaches git patch-id here, so
+# --allow-escape-sequences is passed whenever this gh offers it, read from its
+# local help because older gh lacks the flag and would reject it.
 code_review_diff_id() {
   local diff='' err id head
+  local -a flags=()
+  if gh pr diff --help 2>/dev/null | grep -q -- '--allow-escape-sequences'; then
+    flags=(--allow-escape-sequences)
+  fi
   err=$(mktemp "${TMPDIR:-/tmp}/fm-code-review.XXXXXX") || return 1
-  if ! diff=$(gh pr diff "$FM_PR_NUMBER" --repo "$FM_PR_OWNER/$FM_PR_REPO" 2>"$err"); then
+  if ! diff=$(gh pr diff "$FM_PR_NUMBER" --repo "$FM_PR_OWNER/$FM_PR_REPO" ${flags[@]+"${flags[@]}"} 2>"$err"); then
     case "$(cat "$err")" in
       *"HTTP 406"*|*"too_large"*|*"exceeded the maximum"*) diff= ;;
       *) cat "$err" >&2; rm -f "$err"; return 1 ;;
@@ -129,19 +216,38 @@ CODE_REVIEW_LINE=
 # Sets CODE_REVIEW_LINE to the status line and returns 0 exempt or reviewed, 1
 # unreviewed, 2 unreadable; sets CODE_REVIEW_DIFF_ID for a code-changing PR.
 code_review_status() {
-  local files verdict ids
+  local files verdict ids status=0 changes='changes code'
   CODE_REVIEW_DIFF_ID=
   CODE_REVIEW_LINE=
-  if ! files=$(code_review_files); then
-    echo "error: could not read the changed files of $FM_PR_URL" >&2
-    return 2
-  fi
-  verdict=$(printf '%s\n' "$files" | sed 's/^[FP] //' | code_review_classify_stream)
-  if [ "$(printf '%s\n' "$files" | grep -c '^F ')" -ge 3000 ]; then
-    verdict=code-changing
-  fi
+  code_review_has_table || status=$?
+  case "$status" in
+    0)
+      code_review_tier || return 2
+      verdict=code-changing
+      case "$CODE_REVIEW_TIER" in tinker:*) verdict=exempt ;; esac
+      changes="is ${CODE_REVIEW_TIER%%:*} under its risk-tiers.toml (${CODE_REVIEW_TIER#*: })"
+      ;;
+    1)
+      if ! files=$(code_review_files); then
+        echo "error: could not read the changed files of $FM_PR_URL" >&2
+        return 2
+      fi
+      verdict=$(printf '%s\n' "$files" | sed 's/^[FP] //' | code_review_classify_stream)
+      if [ "$(printf '%s\n' "$files" | grep -c '^F ')" -ge 3000 ]; then
+        verdict=code-changing
+      fi
+      ;;
+    *)
+      echo "error: could not read whether $FM_PR_OWNER/$FM_PR_REPO keeps a risk-tiers.toml on main" >&2
+      return 2
+      ;;
+  esac
   if [ "$verdict" = exempt ]; then
-    CODE_REVIEW_LINE="exempt: every changed path of $FM_PR_URL is a record, receipt, data, seed, or Markdown file"
+    if [ "$status" -eq 0 ]; then
+      CODE_REVIEW_LINE="exempt: $FM_PR_URL is tinker under its risk-tiers.toml: ${CODE_REVIEW_TIER#*: }"
+    else
+      CODE_REVIEW_LINE="exempt: every changed path of $FM_PR_URL is a record, receipt, data, seed, or Markdown file"
+    fi
     return 0
   fi
   if ! CODE_REVIEW_DIFF_ID=$(code_review_diff_id); then
@@ -156,7 +262,7 @@ code_review_status() {
     CODE_REVIEW_LINE="reviewed: diff $CODE_REVIEW_DIFF_ID of $FM_PR_URL carries a code review record"
     return 0
   fi
-  CODE_REVIEW_LINE="unreviewed: diff $CODE_REVIEW_DIFF_ID of $FM_PR_URL changes code and carries no code review record for it"
+  CODE_REVIEW_LINE="unreviewed: diff $CODE_REVIEW_DIFF_ID of $FM_PR_URL $changes and carries no code review record for it"
   return 1
 }
 

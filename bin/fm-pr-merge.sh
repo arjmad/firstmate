@@ -95,9 +95,15 @@
 # is open, detailed_merge_status is mergeable, has_conflicts is false,
 # blocking_discussions_resolved is true, and the head pipeline succeeded at the
 # exact current head commit. Every failing condition is reported, not just the
-# first. The verified head is then passed to glab as --sha, so a push that lands
-# between that read and the merge fails the merge instead of landing commits
-# nothing verified. A recorded pr_head that disagrees with the live head is
+# first. An attended --allow-no-pipeline, for a repository that deliberately
+# runs no merge request pipeline, waives only the pipeline condition and only
+# when GitLab reports head_pipeline as present and null: a failed, running,
+# canceled, or stale pipeline still refuses, every other condition still
+# holds, and a project that requires a pipeline to succeed still refuses
+# through detailed_merge_status. It is refused while the away-posture record
+# exists and on any forge other than GitLab. The verified head is then passed
+# to glab as --sha, so a push that lands between that read and the merge fails
+# the merge instead of landing commits nothing verified. A recorded pr_head that disagrees with the live head is
 # reported rather than trusted, because a rebase moves the head and leaves the
 # recorded value stale. Reading that state needs glab and jq, and either one
 # absent stops the merge before any state is recorded.
@@ -179,8 +185,9 @@
 # Code review (fork patch, docs/fork-decisions.md 2026-10-17): after the live
 # green check, a GitHub merge, companion PRs included, is refused while
 # bin/fm-code-review.sh status reads the pull request as unreviewed or cannot
-# read it; that script owns which pull requests change code and what record
-# counts. An attended --waive-review <reason>, passed once with the reason as a
+# read it; that script owns which pull requests change code, including the
+# repository's risk-tiers.toml deciding it where main keeps one, and what
+# record counts. An attended --waive-review <reason>, passed once with the reason as a
 # separate argument, waives only that refusal for one merge on the captain's
 # word, and once the forge accepts that merge it is appended to
 # state/code-review-waivers.log as one tab-separated line of epoch, task id,
@@ -188,7 +195,7 @@
 # refused while the away-posture record exists. GitLab and Forgejo merges are
 # not reviewed here, because /code-review --comment posts to GitHub only, and
 # --waive-review is refused on them.
-# Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [--waive-review <reason>] [-- <extra forge merge args>]
+# Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [--allow-no-pipeline] [--waive-review <reason>] [-- <extra forge merge args>]
 #
 # On GitLab, this script confirms the MR is actually merged before reporting it;
 # an auto-merge-queued or unconfirmed request leaves the poll armed and records
@@ -250,6 +257,7 @@ if [ "$PROVIDER" = gerrit ]; then
 fi
 shift 2
 ATTENDED_OVERRIDE=false
+ALLOW_NO_PIPELINE=false
 ALLOW_RED=()
 ALLOW_MISSING=()
 WAIVE_REVIEW=
@@ -296,6 +304,14 @@ while [ "$#" -gt 0 ]; do
       echo "error: --waive-review requires a separate reason argument" >&2
       exit 2
       ;;
+    --allow-no-pipeline)
+      ALLOW_NO_PIPELINE=true
+      shift
+      ;;
+    --allow-no-pipeline=*)
+      echo "error: --allow-no-pipeline takes no value" >&2
+      exit 2
+      ;;
     --) shift; break ;;
     *) break ;;
   esac
@@ -303,13 +319,14 @@ done
 # --allow-red names one check run to waive, which only GitHub's per-check
 # reading can match. GitLab and Forgejo each collapse their checks into a
 # single head verdict - a head pipeline status and a combined commit status -
-# so there is no per-check name to waive there and the green requirement stays
-# absolute. Refuse the combination rather than accept a flag that would be
-# silently dropped into a refusal the caller cannot explain.
+# so there is no per-check name to waive there; GitLab's only waiver is the
+# whole-pipeline absence --allow-no-pipeline covers. Refuse the combination
+# rather than accept a flag that would be silently dropped into a refusal the
+# caller cannot explain.
 if [ "${#ALLOW_RED[@]}" -gt 0 ]; then
   case "$PROVIDER" in
     gitlab)
-      echo "error: --allow-red does not apply to GitLab, where a merge already requires the head pipeline to have succeeded" >&2
+      echo "error: --allow-red does not apply to GitLab, where a merge already requires the head pipeline to have succeeded; --allow-no-pipeline waives only a merge request with no head pipeline at all" >&2
       exit 2
       ;;
     forgejo)
@@ -322,10 +339,17 @@ if [ -n "$WAIVE_REVIEW" ] && [ "$PROVIDER" != github ]; then
   echo "error: --waive-review applies only to GitHub, the one forge whose merges carry a code review" >&2
   exit 2
 fi
+# --allow-no-pipeline waives only GitLab's own reading of a merge request that
+# has no head pipeline at all. GitHub's per-check waivers and Forgejo's
+# combined status have no such state to waive, so it is refused there too.
+if [ "$ALLOW_NO_PIPELINE" = true ] && [ "$PROVIDER" != gitlab ]; then
+  echo "error: --allow-no-pipeline applies only to GitLab, where it waives a merge request that has no head pipeline at all" >&2
+  exit 2
+fi
 if [ "${#ALLOW_MISSING[@]}" -gt 0 ]; then
   case "$PROVIDER" in
     gitlab)
-      echo "error: --allow-missing does not apply to GitLab, where a merge already requires the head pipeline to have succeeded" >&2
+      echo "error: --allow-missing does not apply to GitLab, where a merge already requires the head pipeline to have succeeded; --allow-no-pipeline waives only a merge request with no head pipeline at all" >&2
       exit 2
       ;;
     forgejo)
@@ -581,10 +605,10 @@ fi
 FM_PR_MERGE_HEAD=
 FM_PR_GITLAB_ASYNC_CONFIGURED=false
 gitlab_verify_mergeable() {
-  local json fields line
+  local json fields line pipeline_waived
   local total=0 named=0 refusals=''
   local state='' detail='' conflicts='' discussions=''
-  local live_head='' pipeline_sha='' pipeline_status='' async_configured=''
+  local live_head='' pipeline_sha='' pipeline_status='' pipeline_absent='' async_configured=''
 
   # GITLAB_HOST is set to the same host the project URL already carries, so the
   # instance is taken from the parsed URL by both signals and never from the
@@ -607,6 +631,7 @@ gitlab_verify_mergeable() {
         "head=" + ((.sha // "") | tostring),
         "pipeline_sha=" + ((.head_pipeline.sha // "") | tostring),
         "pipeline_status=" + ((.head_pipeline.status // "") | tostring),
+        "pipeline_absent=" + (if has("head_pipeline") and .head_pipeline == null then "true" else "false" end),
         "async_configured=" + (if .merge_when_pipeline_succeeds == true or (.merge_after != null) then "true" else "false" end)
       else
         error("merge request payload is not an object")
@@ -624,6 +649,7 @@ gitlab_verify_mergeable() {
       head=*) live_head=${line#head=} ;;
       pipeline_sha=*) pipeline_sha=${line#pipeline_sha=} ;;
       pipeline_status=*) pipeline_status=${line#pipeline_status=} ;;
+      pipeline_absent=*) pipeline_absent=${line#pipeline_absent=} ;;
       async_configured=*) async_configured=${line#async_configured=} ;;
       *) continue ;;
     esac
@@ -634,7 +660,7 @@ FIELDS
   # Every field named exactly once and no unnamed line: a value carrying a
   # newline would split into a line no name matches, so it is refused here
   # rather than silently truncated into a value a check could accept.
-  if [ "$named" -ne 8 ] || [ "$total" -ne 8 ]; then
+  if [ "$named" -ne 9 ] || [ "$total" -ne 9 ]; then
     echo "error: could not read the GitLab merge request state before merging" >&2
     return 1
   fi
@@ -662,20 +688,32 @@ FIELDS
   [ "$discussions" = true ] \
     || refusals="$refusals  - blocking_discussions_resolved is \"${discussions:-unreadable}\", not true
 "
-  [ "$pipeline_status" = success ] \
-    || refusals="$refusals  - the head pipeline status is \"${pipeline_status:-none}\", not success
+  # The waiver covers only a head_pipeline GitLab reports as null; a failed,
+  # running, canceled, or stale pipeline is a verdict, not an absence of one.
+  pipeline_waived=false
+  if [ "$ALLOW_NO_PIPELINE" = true ] && [ "$pipeline_absent" = true ]; then
+    pipeline_waived=true
+  else
+    [ "$pipeline_status" = success ] \
+      || refusals="$refusals  - the head pipeline status is \"${pipeline_status:-none}\", not success
 "
-  [ "$pipeline_sha" = "$live_head" ] \
-    || refusals="$refusals  - the head pipeline ran at \"${pipeline_sha:-none}\", not at the current head $live_head
+    [ "$pipeline_sha" = "$live_head" ] \
+      || refusals="$refusals  - the head pipeline ran at \"${pipeline_sha:-none}\", not at the current head $live_head
 "
+  fi
 
   if [ -n "$refusals" ]; then
     printf 'error: refusing to merge %s\n' "$URL" >&2
     printf '%s' "$refusals" >&2
     return 1
   fi
-  printf 'verified: %s is open and mergeable, with a successful pipeline at head %s\n' \
-    "$URL" "$live_head" >&2
+  if [ "$pipeline_waived" = true ]; then
+    printf 'verified: %s is open and mergeable at head %s, with no head pipeline, waived by --allow-no-pipeline\n' \
+      "$URL" "$live_head" >&2
+  else
+    printf 'verified: %s is open and mergeable, with a successful pipeline at head %s\n' \
+      "$URL" "$live_head" >&2
+  fi
   FM_PR_MERGE_HEAD=$live_head
   FM_PR_GITLAB_ASYNC_CONFIGURED=$async_configured
 }
@@ -1453,6 +1491,10 @@ require_current_away_authority() {
   fi
   if [ "$FM_PR_AWAY_POSTURE" = true ] && [ -n "$WAIVE_REVIEW" ]; then
     echo "error: --waive-review is attended-only; while the away-posture record exists a code-changing pull request needs its code review record" >&2
+    return 2
+  fi
+  if [ "$FM_PR_AWAY_POSTURE" = true ] && [ "$ALLOW_NO_PIPELINE" = true ]; then
+    echo "error: --allow-no-pipeline is attended-only; while the away-posture record exists a GitLab merge requires a successful head pipeline" >&2
     return 2
   fi
 }
