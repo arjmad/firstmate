@@ -102,7 +102,7 @@ import { pathToFileURL } from "node:url";
 let tool = null;
 const prompts = [];
 const isRecovery = (message) =>
-  message.includes("check: queued work: 1 check") || message.includes("check: rearm-resurface");
+  message.includes("check: queued work: ") || message.includes("check: rearm-resurface");
 const pi = {
   on() {},
   registerCommand() {},
@@ -121,8 +121,8 @@ await tool.execute("tool-call-t1", {}, undefined, undefined, {});
 const deadline = Date.now() + 75000;
 let firstAt = 0;
 while (Date.now() < deadline) {
-  // The recovery names its queued row (bin/fm-watch.sh resurface_reason); a
-  // repeat of the same row would come back generic, so both forms count.
+  // A recovery counts its queued rows or, with none, reads generic
+  // (resurface_reason in the watcher), so every form of either counts.
   const rearm = prompts.filter((message) => isRecovery(message));
   if (rearm.length > 1) {
     throw new Error(`unbounded recovery loop: ${rearm.length} recovery follow-ups`);

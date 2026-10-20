@@ -2894,29 +2894,21 @@ resurface_after_downtime() {
 # show what is waiting instead of reading as downtime. It never copies a row's
 # payload: payloads can carry outside text (a mail subject, an inbox note), and
 # this line is main's trigger, not drain output read as evidence. Main's rows
-# are those fm_wake_actor_pending_count counts, read the same lockless way since
-# a torn read only miscounts a label the drain re-derives. It stays a check
-# reason on purpose: routing is unchanged and every recovery still reaches
-# main. A recovery with nothing for main, such as an interrupted handling turn,
-# keeps the generic reason.
+# are the ones fm_wake_main_row_kinds lists, the same set main's pending count
+# uses. It stays a check reason on purpose: routing is unchanged and every
+# recovery still reaches main. A recovery with nothing for main, such as an
+# interrupted handling turn, keeps the generic reason.
 resurface_reason() {
-  local reason='' grant=''
-  if [ -s "$FM_WAKE_QUEUE" ]; then
-    if fm_wake_branch_grant_live "$STATE/.branch-eligible-rows" "$STATE/.branch-eligible-owner"; then
-      grant="$STATE/.branch-eligible-rows"
-    fi
-    reason=$(awk -F '\t' -v seqs="$grant" '
-      BEGIN { if (seqs != "") while ((getline line < seqs) > 0) reserved[line] = 1 }
-      NF >= 5 && $2 ~ /^[0-9]+$/ && !($2 in reserved) {
-        if ($3 == "signal" && index($5, "needs-decision:") == 1) n["needs-decision"]++
-        else if ($3 == "signal" || $3 == "stale" || $3 == "check") n[$3]++
-      }
+  local reason='' kinds
+  if [ -s "$FM_WAKE_QUEUE" ] && kinds=$(fm_wake_main_row_kinds 2>/dev/null); then
+    reason=$(printf '%s\n' "$kinds" | awk '
+      NF { n[$1]++ }
       END {
-        split("needs-decision signal stale check", order, " ")
-        for (i = 1; i <= 4; i++) if (n[order[i]] > 0) out = out (out == "" ? "" : ", ") n[order[i]] " " order[i]
+        split("needs-decision signal stale check heartbeat other", order, " ")
+        for (i = 1; i <= 6; i++) if (n[order[i]] > 0) out = out (out == "" ? "" : ", ") n[order[i]] " " order[i]
         if (out != "") print "check: queued work: " out
       }
-    ' "$FM_WAKE_QUEUE" 2>/dev/null) || reason=''
+    ')
   fi
   printf '%s\n' "${reason:-check: rearm-resurface}"
 }

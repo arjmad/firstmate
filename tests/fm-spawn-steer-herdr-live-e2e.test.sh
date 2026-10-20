@@ -64,11 +64,8 @@ TIMEOUT=${FM_SPAWN_STEER_LIVE_TIMEOUT:-300}
 MODEL=${FM_SPAWN_STEER_LIVE_MODEL:-sonnet}
 case "$TIMEOUT" in ''|*[!0-9]*) fail "FM_SPAWN_STEER_LIVE_TIMEOUT takes seconds" ;; esac
 SESSION=$("$LAB_HELPER" name spawn-steer-live) || fail "could not name an isolated Herdr lab session"
-# Under /tmp, the temporary root bin/fm-live-lab.sh forget-claude accepts.
-TMP_ROOT=$(mktemp -d /tmp/fm-spawn-steer-live.XXXXXX) || fail "could not create the temporary lab root under /tmp"
-TMP_ROOT=$(cd -P "$TMP_ROOT" && pwd -P) || fail "could not resolve the temporary lab root"
-LAB_HOME="$TMP_ROOT/home"
-FAKEBIN="$TMP_ROOT/fakebin"
+TMP_ROOT=
+LAB_HOME=
 ID="steer$$x$RANDOM"
 PROVISIONED=0
 
@@ -89,7 +86,7 @@ cleanup() {
   # either, so each is forgotten before it is removed.
   home_hash=$(printf '%s' "$LAB_HOME" | shasum -a 256 | awk '{print $1}')
   for dir in "$TMP_ROOT" "/tmp/fm-$ID" "/tmp/fm-$ID+$home_hash"; do
-    [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] || continue
+    [ -n "$dir" ] && [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] || continue
     if ! "$ROOT/bin/fm-live-lab.sh" forget-claude "$dir" >/dev/null; then
       printf 'not ok - could not remove the Claude project entries under %s\n' "$dir" >&2
       rc=1
@@ -101,11 +98,20 @@ cleanup() {
     printf 'not ok - ~/.treehouse gained entries during the run; left as is: %s\n' "$(printf '%s' "$added" | tr '\n' ' ')" >&2
     rc=1
   fi
-  chmod -R u+w "$TMP_ROOT" 2>/dev/null
-  rm -rf "$TMP_ROOT"
+  if [ -n "$TMP_ROOT" ]; then
+    chmod -R u+w "$TMP_ROOT" 2>/dev/null
+    rm -rf "$TMP_ROOT"
+  fi
   exit "$rc"
 }
 trap cleanup EXIT
+
+# Under /tmp, the temporary root bin/fm-live-lab.sh forget-claude accepts. The
+# trap is already set, so a failure from here on still removes it.
+TMP_ROOT=$(mktemp -d /tmp/fm-spawn-steer-live.XXXXXX) || fail "could not create the temporary lab root under /tmp"
+TMP_ROOT=$(cd -P "$TMP_ROOT" && pwd -P) || fail "could not resolve the temporary lab root"
+LAB_HOME="$TMP_ROOT/home"
+FAKEBIN="$TMP_ROOT/fakebin"
 
 # fm-spawn and fm-send reach Herdr through bare `herdr` calls that end in
 # --session <name>; only this lab's session passes, through the lab helper. The

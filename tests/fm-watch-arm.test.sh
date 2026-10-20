@@ -953,8 +953,9 @@ test_append_wakes_live_announced_watcher() {
 
 # A recovery counts main's queued work by kind as a check reason that still
 # reaches main: a decision is listed first whatever its age, no payload text is
-# ever copied into the reason, rows main claimed but never acknowledged still
-# count, and rows a live branch grant reserves do not.
+# ever copied into the reason, heartbeat and malformed rows count, rows main
+# claimed but never acknowledged still count, and rows a live branch grant
+# reserves do not.
 test_recovery_names_queued_work() {
   local dir home state fakebin owner_pid seq
   dir=$(make_case recovery-names-queued-work)
@@ -974,6 +975,16 @@ test_recovery_names_queued_work() {
     || fail "a mixed queue was not counted by kind: $(cat "$dir/mixed.out")"
   assert_not_contains "$(cat "$dir/mixed.out")" "merge PR 90" "a recovery copied queued payload text into main's trigger"
   ack_wakes "$state" || fail "mixed queue acknowledgement failed"
+
+  # A heartbeat row and a malformed row are main's work too, as main's pending
+  # count says.
+  append_wake "$state" heartbeat fleet 'heartbeat' || fail "fixture: heartbeat append failed"
+  printf 'not a wake row\n' >> "$state/.wake-queue"
+  start_rearm_arm "$home" "$state" "$fakebin" "$dir/heartbeat.out"
+  wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "a heartbeat-only queue was stranded at re-arm"
+  grep -Fx 'check: queued work: 1 heartbeat, 1 other' "$dir/heartbeat.out" >/dev/null \
+    || fail "a heartbeat and a malformed row were not counted: $(cat "$dir/heartbeat.out")"
+  ack_wakes "$state" || fail "heartbeat queue acknowledgement failed"
 
   # An older routine check row never hides a newer decision.
   append_wake "$state" check startup-network 'check: startup-network: deferred startup network checks finished' \

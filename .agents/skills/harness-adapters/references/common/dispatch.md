@@ -21,7 +21,7 @@ Only concrete contradictory evidence blocks a candidate, such as an authoritativ
 Preserve malformed profile configuration as an actionable error rather than selecting around it.
 Quota chooses which candidate runs ready work, never whether or when it runs: dispatch at intake every task that dependencies, time gates, project capacity, and serialization already allow, and report quota pressure to the captain only as a courtesy.
 Never defer, hold, queue for a later day, or stagger ready work to save quota for later; a quota stop rules out a candidate, never the task - a declared rule or profile `floor`, or a runway that fails `quota-array-dispatch`'s feasibility gate (`exhausted_now` included) - and it only steers the task to another candidate in the same reasoning class or, when none can proceed, to a reported blocker or that skill's escalation.
-When every candidate is tight, preserve the captain's strongest-reasoning class rather than silently downgrading it solely to conserve quota; stop and report only when every candidate in that class has hit one of those quota stops.
+When every candidate is tight, preserve the captain's strongest-reasoning class rather than silently downgrading it solely to conserve quota; stop and report if that class cannot proceed, never merely because its candidates are tight.
 Break genuine evidence ties without array-order or harness bias.
 `quota-axi` owns how model or product windows relate to bounding account windows and remains data-only.
 Load `quota-array-dispatch` before choosing among a matched profile array; that skill is the single owner of the TOON-first spendPriority selection procedure.

@@ -2587,34 +2587,46 @@ fm_wake_branch_grant_live() {  # <rows-file> <owner-file>
   fm_wake_grant_rows_valid "$1" && fm_wake_branch_owner_matches "$2"
 }
 
-# How many queued rows <actor> can act on right now - exactly the rows a drain
-# by that actor would present or retire, and therefore the only rows worth
-# telling that actor to drain. Main owns every structurally valid row a live
-# branch grant does not reserve, plus every structurally invalid row. The branch
-# owns exactly the rows its live grant names. Read without the queue lock: a
-# torn read can only mis-count one poll, and the drain re-derives the set under
-# the lock before it presents or mutates anything.
-fm_wake_actor_pending_count() {  # <actor> [<rows-file> <owner-file>]
-  local actor=${1:-main} rows=${2:-$STATE/.branch-eligible-rows}
-  local owner=${3:-$STATE/.branch-eligible-owner} grant='' count=''
-  [ -f "$FM_WAKE_QUEUE" ] || { printf '0\n'; return 0; }
+# The kind of every queued row main owns, one per line: every structurally
+# valid row a live branch grant does not reserve, plus every structurally
+# invalid row. A signal row whose payload opens with needs-decision: reads
+# needs-decision; a row whose kind is not signal, stale, check, or heartbeat
+# reads other. Read without the queue lock: a torn read can only mis-count one
+# poll, and the drain re-derives the set under the lock before it presents or
+# mutates anything. Fails when the queue exists but cannot be read.
+fm_wake_main_row_kinds() {  # [<rows-file> <owner-file>]
+  local rows=${1:-$STATE/.branch-eligible-rows} owner=${2:-$STATE/.branch-eligible-owner} grant=''
+  [ -f "$FM_WAKE_QUEUE" ] || return 0
   if fm_wake_branch_grant_live "$rows" "$owner"; then
     grant=$rows
   fi
+  awk -F '\t' -v seqs="$grant" '
+    BEGIN { if (seqs != "") while ((getline line < seqs) > 0) reserved[line] = 1 }
+    NF < 5 || $2 !~ /^[0-9]+$/ { print "other"; next }
+    $2 in reserved { next }
+    $3 == "signal" && index($5, "needs-decision:") == 1 { print "needs-decision"; next }
+    $3 == "signal" || $3 == "stale" || $3 == "check" || $3 == "heartbeat" { print $3; next }
+    { print "other" }
+  ' "$FM_WAKE_QUEUE"
+}
+
+# How many queued rows <actor> can act on right now - exactly the rows a drain
+# by that actor would present or retire, and therefore the only rows worth
+# telling that actor to drain. Main owns the rows fm_wake_main_row_kinds lists.
+# The branch owns exactly the rows its live grant names.
+fm_wake_actor_pending_count() {  # <actor> [<rows-file> <owner-file>]
+  local actor=${1:-main} rows=${2:-$STATE/.branch-eligible-rows}
+  local owner=${3:-$STATE/.branch-eligible-owner} count='' kinds
+  [ -f "$FM_WAKE_QUEUE" ] || { printf '0\n'; return 0; }
   if [ "$actor" = branch ]; then
-    [ -n "$grant" ] || { printf '0\n'; return 0; }
-    count=$(awk -F '\t' -v seqs="$grant" '
+    fm_wake_branch_grant_live "$rows" "$owner" || { printf '0\n'; return 0; }
+    count=$(awk -F '\t' -v seqs="$rows" '
       BEGIN { while ((getline line < seqs) > 0) keep[line] = 1 }
       NF >= 5 && $2 ~ /^[0-9]+$/ && ($2 in keep) { n++ }
       END { print n + 0 }
     ' "$FM_WAKE_QUEUE") || count=''
-  else
-    count=$(awk -F '\t' -v seqs="$grant" '
-      BEGIN { if (seqs != "") while ((getline line < seqs) > 0) reserved[line] = 1 }
-      NF < 5 || $2 !~ /^[0-9]+$/ { n++; next }
-      !($2 in reserved) { n++ }
-      END { print n + 0 }
-    ' "$FM_WAKE_QUEUE") || count=''
+  elif kinds=$(fm_wake_main_row_kinds "$rows" "$owner"); then
+    count=$(printf '%s' "$kinds" | awk 'END { print NR }')
   fi
   # A queue that exists but cannot be counted (unreadable file, unreadable
   # state/) is not evidence of an empty queue: report a pending row so callers

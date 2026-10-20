@@ -119,7 +119,7 @@ test_announced_recovery_is_not_reannounced_by_next_checkpoint() {
   expect_code 124 "$status" "announced recovery checkpoint exit"
   assert_contains "$(cat "$out")" "checkpoint: no actionable wake within 1s" \
     "announced recovery checkpoint did not supervise for its bound"
-  assert_not_contains "$(cat "$out")" "check: queued work: 1 check" \
+  assert_not_contains "$(cat "$out")" "check: queued work: " \
     "announced recovery was reannounced by the next checkpoint"
   assert_not_contains "$(cat "$out")" "check: rearm-resurface" \
     "announced recovery was reannounced generically by the next checkpoint"
