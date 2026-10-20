@@ -64,7 +64,9 @@ TIMEOUT=${FM_SPAWN_STEER_LIVE_TIMEOUT:-300}
 MODEL=${FM_SPAWN_STEER_LIVE_MODEL:-sonnet}
 case "$TIMEOUT" in ''|*[!0-9]*) fail "FM_SPAWN_STEER_LIVE_TIMEOUT takes seconds" ;; esac
 SESSION=$("$LAB_HELPER" name spawn-steer-live) || fail "could not name an isolated Herdr lab session"
-TMP_ROOT=$(mktemp -d "$(cd "${TMPDIR:-/tmp}" && pwd -P)/fm-spawn-steer-live.XXXXXX")
+# Under /tmp, the temporary root bin/fm-live-lab.sh forget-claude accepts.
+TMP_ROOT=$(mktemp -d /tmp/fm-spawn-steer-live.XXXXXX) || fail "could not create the temporary lab root under /tmp"
+TMP_ROOT=$(cd -P "$TMP_ROOT" && pwd -P) || fail "could not resolve the temporary lab root"
 LAB_HOME="$TMP_ROOT/home"
 FAKEBIN="$TMP_ROOT/fakebin"
 ID="steer$$x$RANDOM"

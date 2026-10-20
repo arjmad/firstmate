@@ -659,8 +659,8 @@ test_interrupted_handling_is_redrained_on_rearm() {
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/crash-gap-recovery-arm.out"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "re-arm after a pre-successor crash stranded the durable wake"
   recovery_arm=$ARM_PID
-  # The first watcher already announced this row, so its recovery is generic.
-  grep -Fx 'check: rearm-resurface' "$dir/crash-gap-recovery-arm.out" >/dev/null \
+  # The recovery names the row still queued.
+  grep -Eq '^check: queued work: signal: .*/interrupted\.status$' "$dir/crash-gap-recovery-arm.out" \
     || fail "re-arm after a pre-successor crash did not re-surface the durable wake: $(cat "$dir/crash-gap-recovery-arm.out")"
   grep "$(printf '\tsignal\tinterrupted.status\t')" "$state/.wake-queue" >/dev/null \
     || fail "pre-successor crash recovery removed the unacknowledged durable wake"
@@ -674,7 +674,7 @@ test_interrupted_handling_is_redrained_on_rearm() {
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/reason-emit-crash-replay.out"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "a crash after reason emission stranded the durable wake"
   recovery_arm=$ARM_PID
-  grep -Fx 'check: rearm-resurface' "$dir/reason-emit-crash-replay.out" >/dev/null \
+  grep -Eq '^check: queued work: signal: .*/interrupted\.status$' "$dir/reason-emit-crash-replay.out" \
     || fail "a crash after reason emission did not re-drain recovery: $(cat "$dir/reason-emit-crash-replay.out")"
   generation_replay=$(recovery_marker_generation "$state/.watcher-down")
   [ -n "$generation_replay" ] \
@@ -717,9 +717,8 @@ test_interrupted_handling_is_redrained_on_rearm() {
 
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/recovery-arm.out"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "successor after interruption did not re-surface the pending wake"
-  # Main already claimed the row in its interrupted drain, so the recovery
-  # keeps the generic reason rather than presenting it as new work.
-  grep -Fx 'check: rearm-resurface' "$dir/recovery-arm.out" >/dev/null \
+  # Main claimed the row in its interrupted drain; it is still queued work.
+  grep -Eq '^check: queued work: signal: .*/interrupted\.status$' "$dir/recovery-arm.out" \
     || fail "successor after interruption did not emit durable recovery: $(cat "$dir/recovery-arm.out")"
   FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/replay-drain.out" \
     2> "$dir/replay-drain.err" || fail "successor could not re-drain the interrupted wake"
@@ -952,10 +951,10 @@ test_append_wakes_live_announced_watcher() {
   pass "watch-arm: appending work reopens an announced empty recovery"
 }
 
-# A recovery names queued work no watcher announced, as a check reason that
-# still reaches main: the newest check row wins over any other row, a queue of
-# stale rows names its newest, a decision-owned row is named by its files, and
-# rows main already claimed or a watcher already announced are passed over.
+# A recovery names its queued work as a check reason that still reaches main:
+# the newest check row wins over any other row, a payload without its kind
+# prefix gets one, a queue of stale rows names its newest, and a decision-owned
+# row is named by its files.
 test_recovery_names_queued_work() {
   local dir home state fakebin
   dir=$(make_case recovery-names-queued-work)
@@ -991,28 +990,27 @@ test_recovery_names_queued_work() {
   grep -Fx "check: queued work: signal: $state/decided.status" "$dir/decision.out" >/dev/null \
     || fail "a decision-owned row was not named by its files: $(cat "$dir/decision.out")"
 
-  # That row is now announced, so only the fresh row beside it is named.
+  # A newer check row beside it wins.
   append_wake "$state" check inbox:beside 'check: captain inbox note beside' \
     || fail "fixture: beside append failed"
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/beside.out"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "a row beside an announced one was stranded at re-arm"
   grep -Fx 'check: queued work: captain inbox note beside' "$dir/beside.out" >/dev/null \
-    || fail "a fresh row beside an announced row was not the one named: $(cat "$dir/beside.out")"
+    || fail "a newer check row did not name the recovery: $(cat "$dir/beside.out")"
   ack_wakes "$state" || fail "announced queue acknowledgement failed"
 
   append_wake "$state" check inbox:claimed 'check: captain inbox note claimed' \
     || fail "fixture: claimed append failed"
   FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/claim-drain.out" 2>/dev/null \
     || fail "main's claiming drain failed"
-  # test_interrupted_handling_is_redrained_on_rearm pins the claimed row alone:
-  # its recovery keeps the generic reason. A row appended after the claim opens
-  # a fresh episode, and only that row is named.
+  # A row appended after main's claim opens a fresh episode, and as the newest
+  # check row it names the recovery.
   append_wake "$state" check inbox:fresh 'check: captain inbox note fresh' \
     || fail "fixture: fresh append failed"
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/fresh.out"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "a fresh row beside a claimed one was stranded at re-arm"
   grep -Fx 'check: queued work: captain inbox note fresh' "$dir/fresh.out" >/dev/null \
-    || fail "a fresh row beside a claimed one was not named: $(cat "$dir/fresh.out")"
+    || fail "the newest check row beside a claimed one was not named: $(cat "$dir/fresh.out")"
   ack_wakes "$state" || fail "fresh queue acknowledgement failed"
   pass "watch-arm: a recovery names queued work by its own class and never names claimed rows"
 }

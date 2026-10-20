@@ -138,11 +138,11 @@
 #   heartbeat              fleet-scan backstop found an unsurfaced captain-relevant
 #                          status, unless afk is active
 #   check: queued work: <row> | check: rearm-resurface
-#                          recovery: queued work no watcher has announced
-#                          (another process appended it, or it was queued while
-#                          no non-successor cycle ran) is named, newest check row
-#                          first; with none the reason stays generic; both are
-#                          check reasons and reach main
+#                          recovery: queued work (often a row another process
+#                          appended, or one queued while no non-successor cycle
+#                          ran) is named, newest check row first; an empty queue
+#                          keeps the generic reason; both are check reasons and
+#                          reach main
 #   check: inactive-outcome bounded poll-loop reconciliation found a suspicious
 #                          inactive terminal outcome that still lacks its durable
 #                          upstream receipt
@@ -2889,47 +2889,28 @@ resurface_after_downtime() {
 # The reason a recovery announces. Most recoveries are not watcher downtime:
 # a row another process appended (an inbox note, a merge outcome) or one queued
 # while no non-successor cycle ran has no wake of its own, so this path is how
-# it reaches main. When the queue holds a row no watcher has announced, the
-# recovery says so - "check: queued work: <that row>", the newest such check
-# row first - so the banner and the ledger show what is waiting instead of
-# reading as downtime. It stays a check reason on purpose: routing is
-# unchanged, and every recovery still reaches main, which drains every row.
-# Rows a live branch grant reserves or main has claimed are being handled, and
-# rows a watcher already delivered (the delivery log, including an earlier
-# queued-work announcement) are not new, so neither is named; with nothing
-# else queued the recovery keeps the generic reason.
+# it reaches main. When anything is queued the recovery says what - "check:
+# queued work: <row>", the newest check row first, else the newest row - so the
+# banner and the ledger show what is waiting instead of reading as downtime;
+# the drain still presents every row. It stays a check reason on purpose:
+# routing is unchanged and every recovery still reaches main. Only a recovery
+# with nothing queued, such as an interrupted handling turn, keeps the generic
+# reason.
 resurface_reason() {
-  local reason='' grant=''
+  local reason=''
   if [ -s "$FM_WAKE_QUEUE" ] && fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"; then
-    ! fm_wake_branch_grant_live "$STATE/.branch-eligible-rows" "$STATE/.branch-eligible-owner" \
-      || grant="$STATE/.branch-eligible-rows"
-    reason=$(awk -F '\t' -v grant="$grant" -v main="$STATE/.main-eligible-rows" -v delivered="$WATCH_DELIVERY_LOG" '
-      BEGIN {
-        prefix = "check: queued work: "
-        if (grant != "") while ((getline line < grant) > 0) taken[line] = 1
-        while ((getline line < main) > 0) taken[line] = 1
-        while ((getline line < delivered) > 0) {
-          n = index(line, "\t"); if (n == 0) continue
-          line = substr(line, n + 1); n = index(line, "\t"); if (n == 0) continue
-          line = substr(line, n + 1)
-          announced[line] = 1
-          if (index(line, prefix) == 1) announced[substr(line, length(prefix) + 1)] = 1
-        }
-      }
-      NF >= 5 && $2 ~ /^[0-9]+$/ && !($2 in taken) && $5 != "" \
+    reason=$(awk -F '\t' '
+      NF >= 5 && $2 ~ /^[0-9]+$/ && $5 != "" \
         && ($3 == "signal" || $3 == "stale" || $3 == "check") {
         line = $5
         if ($3 == "signal" && index(line, "needs-decision:") == 1) {
           line = substr(line, 16); sub(/^ +/, "", line); line = "signal: " line
         } else if (index(line, $3 ":") != 1) line = $3 ": " line
-        label = line
-        if ($3 == "check") label = substr(line, 8)
-        if ((line in announced) || ($5 in announced) || (label in announced)) next
-        if ($3 == "check") check = label; else other = label
+        if ($3 == "check") check = substr(line, 8); else other = line
       }
       END {
-        if (check != "") print prefix check
-        else if (other != "") print prefix other
+        if (check != "") print "check: queued work: " check
+        else if (other != "") print "check: queued work: " other
       }
     ' "$FM_WAKE_QUEUE" 2>/dev/null) || reason=''
     fm_lock_release "$FM_WAKE_QUEUE_LOCK"

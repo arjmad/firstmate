@@ -131,6 +131,14 @@ usage() { help_text >&2; exit 2; }
 
 real_dir() { (cd -P -- "$1" 2>/dev/null && pwd -P); }
 
+# The Claude store this process's Claude reads: CLAUDE_CONFIG_DIR (absolute)
+# or $HOME. Sets CLAUDE_DIR and CLAUDE_STORE for up and forget-claude alike.
+select_claude_store() {
+  CLAUDE_DIR=${CLAUDE_CONFIG_DIR:-}
+  case "$CLAUDE_DIR" in ''|/*) ;; *) die "CLAUDE_CONFIG_DIR must be an absolute path" ;; esac
+  CLAUDE_STORE="${CLAUDE_DIR:-$HOME}/.claude.json"
+}
+
 digest() {  # <file> -> sha256 of its bytes, or "absent"
   [ -f "$1" ] || { echo absent; return; }
   shasum -a 256 "$1" | awk '{print $1}'
@@ -489,9 +497,7 @@ cmd_up() {
   HOST_OFF=no
   [ "$host_line" != off ] || HOST_OFF=yes
   [ -n "$model" ] || { [ "$harness" = claude ] && model=sonnet || model=openai-codex/gpt-6-luna; }
-  CLAUDE_DIR=${CLAUDE_CONFIG_DIR:-}
-  case "$CLAUDE_DIR" in ''|/*) ;; *) die "CLAUDE_CONFIG_DIR must be an absolute path" ;; esac
-  CLAUDE_STORE="${CLAUDE_DIR:-$HOME}/.claude.json"
+  select_claude_store
   [ -z "$root" ] || [ ! -e "$root" ] || die "refusing '$root': a lab root must not exist yet"
   for tool in git tmux jq node python3 shasum "$harness"; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool is required and was not found on PATH"
@@ -869,7 +875,6 @@ cmd_check() {
 cmd_forget_claude() {
   [ "$#" -eq 1 ] && [ -n "$1" ] || usage
   case "$1" in /*) ;; *) die "forget-claude takes an absolute root" ;; esac
-  case "${CLAUDE_CONFIG_DIR:-}" in ''|/*) ;; *) die "CLAUDE_CONFIG_DIR must be an absolute path" ;; esac
   local tmp home inside=no base
   ROOT=$(real_dir "$1") || die "refusing '$1': forget-claude needs an existing directory"
   home=$(real_dir "$HOME" 2>/dev/null || printf '%s' "${HOME%/}")
@@ -881,7 +886,7 @@ cmd_forget_claude() {
     case "$ROOT" in "$tmp"/?*) inside=yes ;; esac
   done
   [ "$inside" = yes ] || die "refusing '$1': forget-claude only takes a directory inside a temporary directory"
-  CLAUDE_STORE="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+  select_claude_store
   forget_claude_entries
 }
 

@@ -20,7 +20,7 @@ Missing model-level quota, a missing authentication source, unmeasurable headroo
 Only concrete contradictory evidence blocks a candidate, such as an authoritative catalog proving the model unsupported or proof that the credential selected for that surface is unusable; never infer a credential store, provider family, or quota mapping from a harness, model, or source name, and never launch another harness's CLI to judge a candidate.
 Preserve malformed profile configuration as an actionable error rather than selecting around it.
 Quota chooses which candidate runs ready work, never whether or when it runs: dispatch every ready task at intake, and report quota pressure to the captain only as a courtesy.
-Never defer, hold, queue for a later day, or stagger ready work to save quota for later; a declared rule or profile `floor` and an `exhausted_now` runway are the only quota stops, and they only steer the task to another candidate or, when none can proceed, to a reported blocker.
+Never defer, hold, queue for a later day, or stagger ready work to save quota for later; a declared rule or profile `floor` and an `exhausted_now` runway are the only quota stops, and they only steer the task to another candidate in the same reasoning class or, when none can proceed, to a reported blocker.
 When every candidate is tight, preserve the captain's strongest-reasoning class rather than silently downgrading it solely to conserve quota; stop and report only when every candidate in that class has hit one of those quota stops.
 Break genuine evidence ties without array-order or harness bias.
 `quota-axi` owns how model or product windows relate to bounding account windows and remains data-only.
