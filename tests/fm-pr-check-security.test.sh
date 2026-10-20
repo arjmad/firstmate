@@ -187,8 +187,8 @@ case " $* " in
   *" api repos/"*"/branches/"*)
     printf '%s\n' '{"name":"main","protected":false}'
     ;;
-  # The base branch keeps no risk-tiers.toml (bin/fm-code-review.sh).
-  *" api -H "*" repos/"*"/contents/risk-tiers.toml?"*)
+  # Main keeps no risk-tiers.toml (bin/fm-code-review.sh).
+  *" api repos/"*"/contents/risk-tiers.toml?"*)
     echo 'gh: Not Found (HTTP 404)' >&2
     exit 1
     ;;

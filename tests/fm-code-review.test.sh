@@ -14,10 +14,10 @@ command -v jq >/dev/null 2>&1 || fail "these tests apply gh's --jq filters with 
 URL=https://github.com/example/repo/pull/12
 HEAD_SHA=1234567890abcdef1234567890abcdef12345678
 
-# A fixture directory holding the PR's files, diff, comments, head, and base
-# branch, and a fake gh over it. The base branch keeps no risk-tiers.toml until
-# a case writes one with write_table. `gh pr comment` appends an OWNER comment,
-# as the authenticated repository owner's comment reads back. Args: name path...
+# A fixture directory holding the PR's files, diff, comments, and head, and a
+# fake gh over it. Main keeps no risk-tiers.toml until a case builds a remote
+# with make_remote. `gh pr comment` appends an OWNER comment, as the
+# authenticated repository owner's comment reads back. Args: name path...
 make_case() {
   local name=$1 dir
   shift
@@ -26,7 +26,7 @@ make_case() {
   printf '%s\n' "$@" | jq -R . | jq -sc 'map({filename: .})' > "$dir/files.json"
   printf '%s\n' '[]' > "$dir/comments.json"
   printf '%s\n' "$HEAD_SHA" > "$dir/head"
-  printf '%s\n' '{"base": {"ref": "main"}}' > "$dir/pull.json"
+  mkdir -p "$dir/tmp"
   cat > "$dir/diff" <<'DIFF'
 diff --git a/bin/tool.sh b/bin/tool.sh
 index 1111111..2222222 100755
@@ -59,21 +59,16 @@ case "$1 $2" in
       *) exit 1 ;;
     esac
     ;;
-  "api repos/example/repo/pulls/12") gh_jq "$FM_TEST_DIR/pull.json" "$@" ;;
-  "api -H")
-    case "$4" in
-      "repos/example/repo/contents/risk-tiers.toml?ref=$(jq -r '.base.ref | @uri' "$FM_TEST_DIR/pull.json")") ;;
-      *) exit 1 ;;
-    esac
+  "api repos/example/repo/contents/risk-tiers.toml?ref=main")
     if [ -f "$FM_TEST_DIR/table-fail" ]; then
       echo 'gh: Server Error (HTTP 502)' >&2
       exit 1
     fi
-    if [ ! -f "$FM_TEST_DIR/risk-tiers.toml" ]; then
+    if ! git --git-dir="$FM_TEST_DIR/remote.git" cat-file -e main:risk-tiers.toml 2>/dev/null; then
       echo 'gh: Not Found (HTTP 404)' >&2
       exit 1
     fi
-    cat "$FM_TEST_DIR/risk-tiers.toml"
+    printf 'file\n'
     ;;
   "pr diff")
     case " $* " in
@@ -122,7 +117,11 @@ run_case() {
   local dir=$1
   shift
   set +e
-  FM_TEST_DIR="$dir" PATH="$dir/fakebin:$PATH" "$CODE_REVIEW" "$@" > "$dir/out" 2> "$dir/err"
+  FM_TEST_DIR="$dir" PATH="$dir/fakebin:$PATH" TMPDIR="$dir/tmp" \
+    FM_RISK_TIER="${FM_TEST_CLASSIFIER:-$dir/fakebin/risk-tier}" \
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$dir/remote.git.insteadOf" \
+    GIT_CONFIG_VALUE_0=https://github.com/example/repo.git \
+    "$CODE_REVIEW" "$@" > "$dir/out" 2> "$dir/err"
   RC=$?
   set -e
   OUT=$(cat "$dir/out")
@@ -133,31 +132,60 @@ diff_id() {
   git patch-id --verbatim < "$1/diff" | awk '{ print $1 }'
 }
 
-# A tier table like the fleet's: Thor and skill text are tinker, the gate is
-# shared, and business code, seed and data are business by default. Args: dir
+# The repository the classifier's clone fetches: main holds the table at
+# $dir/table.toml and bin/tool.sh, and refs/pull/12/head adds one commit that
+# writes each listed path. A stub classifier stands in for the fleet's
+# risk-tier: it checks the clone it was handed and prints $dir/tier. Args: dir
+# path...
+make_remote() {
+  local dir=$1 work path
+  shift
+  work="$dir/remote-work"
+  git init -q --bare "$dir/remote.git"
+  git -C "$dir/remote.git" config uploadpack.allowFilter true
+  git init -q -b main "$work"
+  mkdir -p "$work/bin"
+  printf 'echo old\n' > "$work/bin/tool.sh"
+  cp "$dir/table.toml" "$work/risk-tiers.toml"
+  git -C "$work" add -A
+  git -C "$work" -c user.name=t -c user.email=t@example.com commit -q -m main
+  for path in "$@"; do
+    mkdir -p "$work/$(dirname "$path")"
+    printf 'changed\n' >> "$work/$path"
+  done
+  git -C "$work" add -A
+  git -C "$work" -c user.name=t -c user.email=t@example.com commit -q -m change
+  git -C "$work" push -q "$dir/remote.git" HEAD~1:refs/heads/main HEAD:refs/pull/12/head
+  git -C "$work" rev-parse HEAD > "$dir/pr-head"
+  cat > "$dir/fakebin/risk-tier" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_TEST_DIR/classifier.log"
+[ "$1 $3" = "--root --head" ] && [ "$#" -eq 4 ] || { echo "stub: usage" >&2; exit 2; }
+cmp -s "$2/risk-tiers.toml" "$FM_TEST_DIR/table.toml" || { echo "stub: main's table is not in the tree" >&2; exit 2; }
+git -C "$2" rev-parse -q --verify origin/main > /dev/null || { echo "stub: no origin/main" >&2; exit 2; }
+[ "$4" = "$(cat "$FM_TEST_DIR/pr-head")" ] || { echo "stub: not the PR head" >&2; exit 2; }
+cat "$FM_TEST_DIR/tier"
+exit "$(cat "$FM_TEST_DIR/tier-rc" 2>/dev/null || echo 0)"
+SH
+  chmod +x "$dir/fakebin/risk-tier"
+}
+
+# A tier table like the fleet's: Thor is tinker, the gate is shared, and
+# everything else, business seed and data included, is business. Args: dir
 write_table() {
-  cat > "$1/risk-tiers.toml" <<'TOML'
+  cat > "$1/table.toml" <<'TOML'
 default = "business"
 ignore = ["docs/**", "*.md"]
 max_tinker_lines = 400
 
 [[tinker]]
 host = "thor"
-paths = ["hosts/thor/**", ".agents/skills/**"]
-checks = ["checks/thor-evaluation.sh"]
+paths = ["hosts/thor/**"]
 readback = "brew list --cask <name> on Thor"
 
 [[shared]]
-paths = ["check.sh", "hooks/**", "hosts/*/agent-guidance.md"]
-
-[[business]]
-paths = ["src/business/**", "seed/**"]
+paths = ["check.sh", "hooks/**"]
 TOML
-}
-
-# Sets each listed file's changed-line count. Args: dir count
-set_changes() {
-  jq -c --argjson n "$2" 'map(.changes = $n)' "$1/files.json" > "$1/files.next" && mv "$1/files.next" "$1/files.json"
 }
 
 test_classify_exempts_records_receipts_data_seed_and_markdown_only() {
@@ -177,7 +205,7 @@ test_classify_exempts_records_receipts_data_seed_and_markdown_only() {
   [ "$OUT" = code-changing ] || fail "classify: one code path should make the set code-changing, got '$OUT'"
   printf '%s\n' data/a '' seed/b | FM_TEST_DIR="$dir" "$CODE_REVIEW" classify > "$dir/out"
   [ "$(cat "$dir/out")" = exempt ] || fail "classify: stdin paths should classify the same way"
-  pass "fm-code-review classify without a table exempts only records, receipts, data, seed, and Markdown paths"
+  pass "fm-code-review classify exempts only records, receipts, data, seed, and Markdown paths"
 }
 
 test_status_reads_exempt_unreviewed_and_reviewed() {
@@ -316,127 +344,123 @@ test_record_posts_once_for_the_current_diff() {
   pass "fm-code-review record posts one record for the current diff and reads it back"
 }
 
-test_classify_with_a_table_exempts_only_tinker_and_ignored_paths() {
-  local dir path
-  dir=$(make_case classify-table)
-  write_table "$dir"
-  for path in hosts/thor/homebrew.nix .agents/skills/x/SKILL.md README.md docs/guide.md; do
-    run_case "$dir" classify --table "$dir/risk-tiers.toml" "$path"
-    [ "$OUT" = exempt ] || fail "classify-table: $path should be exempt, got '$OUT'"
-  done
-  # Business seed and data files and records are reviewed once a table decides.
-  for path in check.sh hooks/pre-push seed/products.json data/x/y.csv docs.sh hosts/thor/agent-guidance.md src/business/price.py; do
-    run_case "$dir" classify --table "$dir/risk-tiers.toml" "$path"
-    [ "$OUT" = code-changing ] || fail "classify-table: $path should be code-changing, got '$OUT'"
-  done
-  run_case "$dir" classify --table "$dir/risk-tiers.toml" hosts/thor/a.nix seed/b.json
-  [ "$OUT" = code-changing ] || fail "classify-table: one business path should make the set code-changing, got '$OUT'"
-  run_case "$dir" classify seed/products.json
-  [ "$OUT" = exempt ] || fail "classify-table: without --table seed/ should stay exempt, got '$OUT'"
-
-  printf 'default = "tinker"\n[[shared]]\npaths = ["bin/**"]\n' > "$dir/bad.toml"
-  run_case "$dir" classify --table "$dir/bad.toml" bin/x
-  expect_code 2 "$RC" "classify-table: a default below a named tier must be refused"
-  assert_contains "$ERR" 'not the highest tier' "classify-table: the bad default was not named"
-  printf 'default = "shared"\n[[tinker]]\nhost = "thor"\n' > "$dir/bad.toml"
-  run_case "$dir" classify --table "$dir/bad.toml" bin/x
-  expect_code 2 "$RC" "classify-table: a rule without paths must be refused"
-  printf 'default = \n' > "$dir/bad.toml"
-  run_case "$dir" classify --table "$dir/bad.toml" bin/x
-  expect_code 2 "$RC" "classify-table: a table that does not parse must be refused"
-  pass "fm-code-review classify --table exempts only tinker and ignored paths and refuses a bad table"
-}
-
-test_status_with_a_table_reviews_shared_and_business_but_not_tinker() {
+test_status_with_a_table_asks_the_classifier_for_the_tier() {
   local dir id
-  dir=$(make_case table-tinker hosts/thor/homebrew.nix docs/thor.md)
+  dir=$(make_case table-tinker hosts/thor/homebrew.nix)
   write_table "$dir"
+  make_remote "$dir" hosts/thor/homebrew.nix
+  printf 'tinker: every change against origin/main (abc) is tinker for thor: hosts/thor/homebrew.nix\n' > "$dir/tier"
   run_case "$dir" status "$URL"
   expect_code 0 "$RC" "table-tinker: a tinker PR should be exempt"
-  [ "$OUT" = "exempt: $URL is tinker under its base branch's risk-tiers.toml: every changed path it counts is tinker" ] \
-    || fail "table-tinker: got '$OUT'"
+  [ "$OUT" = "exempt: $URL is tinker under its risk-tiers.toml: every change against origin/main (abc) is tinker for thor: hosts/thor/homebrew.nix" ] \
+    || fail "table-tinker: got '$OUT' ($ERR)"
   assert_no_grep 'pr diff' "$dir/gh.log" "table-tinker: a tinker PR needs no diff read"
+  assert_no_grep 'pulls/12/files' "$dir/gh.log" "table-tinker: the table, not the path list, decides"
+  [ -z "$(ls -A "$dir/tmp")" ] || fail "table-tinker: the classifier's clone was left behind"
 
-  dir=$(make_case table-ignored docs/a.md NOTES.md)
+  # The tier, not the path exemption, decides: seed/ is reviewed under a table.
+  dir=$(make_case table-business seed/ads.json)
   write_table "$dir"
+  make_remote "$dir" seed/ads.json
+  printf 'business: seed/ads.json matches no rule (default business)\n' > "$dir/tier"
   run_case "$dir" status "$URL"
-  expect_code 0 "$RC" "table-ignored: a PR of only ignored paths should be exempt"
-  assert_contains "$OUT" 'only paths the table ignores' "table-ignored: got '$OUT'"
-
-  dir=$(make_case table-tinker-large hosts/thor/a.nix hosts/thor/b.nix)
-  write_table "$dir"
-  set_changes "$dir" 201
-  run_case "$dir" status "$URL"
-  expect_code 1 "$RC" "table-tinker-large: a tinker PR past max_tinker_lines takes the default"
-  assert_contains "$OUT" 'is business under' "table-tinker-large: got '$OUT'"
-  assert_contains "$OUT" '402 changed lines pass max_tinker_lines (400)' "table-tinker-large: got '$OUT'"
-  set_changes "$dir" 200
-  run_case "$dir" status "$URL"
-  expect_code 0 "$RC" "table-tinker-at-limit: a tinker PR at max_tinker_lines stays tinker"
-
-  dir=$(make_case table-shared hooks/pre-push hosts/thor/a.nix)
-  write_table "$dir"
-  run_case "$dir" status "$URL"
-  expect_code 1 "$RC" "table-shared: a shared PR needs a review"
+  expect_code 1 "$RC" "table-business: a business PR needs a review"
   id=$(diff_id "$dir")
-  [ "$OUT" = "unreviewed: diff $id of $URL is shared under its base branch's risk-tiers.toml (hooks/pre-push is shared) and carries no code review record for it" ] \
-    || fail "table-shared: got '$OUT'"
+  [ "$OUT" = "unreviewed: diff $id of $URL is business under its risk-tiers.toml (seed/ads.json matches no rule (default business)) and carries no code review record for it" ] \
+    || fail "table-business: got '$OUT' ($ERR)"
+
+  dir=$(make_case table-shared hooks/pre-push)
+  write_table "$dir"
+  make_remote "$dir" hooks/pre-push
+  printf 'shared: hooks/pre-push is shared (check.sh, hooks/**)\n' > "$dir/tier"
   run_case "$dir" record "$URL"
-  expect_code 0 "$RC" "table-shared: recording the review should succeed"
-  [ "$OUT" = "reviewed: diff $id of $URL carries a code review record" ] || fail "table-shared: record read back '$OUT'"
-
-  # Seed and data are exempt without a table and reviewed under one.
-  dir=$(make_case table-business seed/ads.json data/feed.csv)
-  run_case "$dir" status "$URL"
-  expect_code 0 "$RC" "no-table-business: seed and data stay exempt without a table"
-  write_table "$dir"
-  run_case "$dir" status "$URL"
-  expect_code 1 "$RC" "table-business: seed and data need a review under a table"
-  assert_contains "$OUT" 'is business under' "table-business: got '$OUT'"
-
-  # A rename out of a business path is business; a change to the table itself
-  # matches no rule, so it takes the default.
-  dir=$(make_case table-rename hosts/thor/moved.nix)
-  write_table "$dir"
-  jq -c '.[0].previous_filename = "src/business/moved.nix"' "$dir/files.json" > "$dir/files.next" && mv "$dir/files.next" "$dir/files.json"
-  run_case "$dir" status "$URL"
-  expect_code 1 "$RC" "table-rename: a rename out of business is business"
-  dir=$(make_case table-self risk-tiers.toml)
-  write_table "$dir"
-  run_case "$dir" status "$URL"
-  expect_code 1 "$RC" "table-self: a change to the table takes its default"
-  assert_contains "$OUT" 'risk-tiers.toml matches no rule (default business)' "table-self: got '$OUT'"
-  pass "fm-code-review status reviews shared and business PRs and exempts tinker ones under a table"
+  expect_code 0 "$RC" "table-shared: recording a shared PR's review should succeed"
+  assert_contains "$OUT" 'reviewed: diff' "table-shared: record read back '$OUT'"
+  [ "$(wc -l < "$dir/classifier.log")" -eq 1 ] || fail "table-shared: the classifier ran more than once in one record"
+  pass "fm-code-review status takes a tabled repository's tier from its classifier: tinker exempt, others reviewed"
 }
 
-test_status_reads_the_table_from_the_base_branch() {
+test_status_with_a_table_fails_closed() {
   local dir
-  dir=$(make_case table-base hosts/thor/a.nix)
+  dir=$(make_case table-refused hosts/thor/a.nix)
   write_table "$dir"
-  printf '%s\n' '{"base": {"ref": "release/2026 q4"}}' > "$dir/pull.json"
+  make_remote "$dir" hosts/thor/a.nix
+  printf '' > "$dir/tier"
+  printf '2\n' > "$dir/tier-rc"
   run_case "$dir" status "$URL"
-  expect_code 0 "$RC" "table-base: the table should be read from the PR's base branch"
-  assert_grep 'contents/risk-tiers.toml?ref=release%2F2026%20q4' "$dir/gh.log" "table-base: the base branch was not the ref read"
+  expect_code 2 "$RC" "table-refused: a classifier that refuses the table must leave the state unreadable"
+
+  printf 'fast: whatever\n' > "$dir/tier"
+  printf '0\n' > "$dir/tier-rc"
+  run_case "$dir" status "$URL"
+  expect_code 2 "$RC" "table-garbled: a line that names no tier must leave the state unreadable"
+  assert_contains "$ERR" 'printed no tier' "table-garbled: error did not say why"
+
+  printf 'tinker: fine\n' > "$dir/tier"
+  FM_TEST_CLASSIFIER="$dir/no-such-risk-tier" run_case "$dir" status "$URL"
+  expect_code 2 "$RC" "table-no-classifier: a missing classifier must leave the state unreadable"
+  assert_contains "$ERR" 'no-such-risk-tier is not an executable file' "table-no-classifier: error did not name it"
+
+  git --git-dir="$dir/remote.git" update-ref -d refs/pull/12/head
+  run_case "$dir" status "$URL"
+  expect_code 2 "$RC" "table-no-head: an unfetchable PR head must leave the state unreadable"
+  assert_contains "$ERR" 'could not fetch main and the head' "table-no-head: error did not say why"
 
   : > "$dir/table-fail"
   run_case "$dir" status "$URL"
-  expect_code 2 "$RC" "table-unreadable: a failed table read other than not-found must be unreadable"
-  assert_contains "$ERR" "could not read the risk-tiers.toml" "table-unreadable: error did not say why"
-  rm -f "$dir/table-fail"
+  expect_code 2 "$RC" "table-unknown: an unreadable table check must leave the state unreadable"
+  assert_contains "$ERR" 'keeps a risk-tiers.toml on main' "table-unknown: error did not say why"
+  [ -z "$(ls -A "$dir/tmp")" ] || fail "table-refused: a classifier clone was left behind"
+  pass "fm-code-review status fails closed when a tabled repository's tier cannot be read"
+}
 
-  printf 'default = "tinker"\n[[business]]\npaths = ["src/**"]\n' > "$dir/risk-tiers.toml"
-  run_case "$dir" status "$URL"
-  expect_code 2 "$RC" "table-invalid: an invalid base table must leave the state unreadable"
-  printf '%s\n' '{"base": {"ref": ""}}' > "$dir/pull.json"
-  run_case "$dir" status "$URL"
-  expect_code 2 "$RC" "table-no-base: an unreadable base branch must leave the state unreadable"
-  pass "fm-code-review status reads the base branch's table and fails closed when it cannot"
+# The fleet's own classifier, when this host has it (FM_TEST_RISK_TIER, or
+# FLEET_NIX's bin/risk-tier), on the cases the stub cannot speak for.
+test_status_with_the_fleet_classifier() {
+  local classifier=${FM_TEST_RISK_TIER:-${FLEET_NIX:-$HOME/nix}/bin/risk-tier} dir
+  if [ ! -x "$classifier" ]; then
+    echo "skip: no fleet risk-tier classifier at $classifier (set FM_TEST_RISK_TIER)"
+    return 0
+  fi
+  dir=$(make_case real-tinker hosts/thor/homebrew.nix docs/thor.md)
+  write_table "$dir"
+  make_remote "$dir" hosts/thor/homebrew.nix docs/thor.md
+  FM_TEST_CLASSIFIER=$classifier run_case "$dir" status "$URL"
+  expect_code 0 "$RC" "real-tinker: a Thor-only PR should be exempt ($ERR)"
+  assert_contains "$OUT" 'is tinker under its risk-tiers.toml' "real-tinker: got '$OUT'"
+
+  dir=$(make_case real-seed seed/ads.json)
+  write_table "$dir"
+  make_remote "$dir" seed/ads.json
+  FM_TEST_CLASSIFIER=$classifier run_case "$dir" status "$URL"
+  expect_code 1 "$RC" "real-seed: a seed/ PR should need a review ($ERR)"
+  assert_contains "$OUT" 'is business under' "real-seed: got '$OUT'"
+
+  # A PR that rewrites the table to make itself tinker is still the default.
+  dir=$(make_case real-self risk-tiers.toml hosts/thor/a.nix)
+  write_table "$dir"
+  make_remote "$dir" hosts/thor/a.nix
+  printf '[[tinker]]\npaths = ["**"]\nreadback = "none"\n' > "$dir/remote-work/extra.toml"
+  (cd "$dir/remote-work" && git checkout -q HEAD -- . && sed -i.bak '/^\[\[shared\]\]/,$d' risk-tiers.toml \
+    && rm -f risk-tiers.toml.bak && cat extra.toml >> risk-tiers.toml && rm extra.toml \
+    && git add -A && git -c user.name=t -c user.email=t@example.com commit -q -m lower \
+    && git push -q -f "$dir/remote.git" HEAD:refs/pull/12/head)
+  FM_TEST_CLASSIFIER=$classifier run_case "$dir" status "$URL"
+  expect_code 1 "$RC" "real-self: a PR that lowers its own table must need a review ($ERR)"
+  assert_contains "$OUT" 'risk-tiers.toml itself changed' "real-self: got '$OUT'"
+
+  dir=$(make_case real-docs docs/guide.md)
+  write_table "$dir"
+  make_remote "$dir" docs/guide.md
+  FM_TEST_CLASSIFIER=$classifier run_case "$dir" status "$URL"
+  expect_code 1 "$RC" "real-docs: a PR of only ignored paths takes the default and needs a review ($ERR)"
+  pass "fm-code-review status with the fleet classifier: Thor exempt, seed reviewed, a self-lowering table reviewed"
 }
 
 test_classify_exempts_records_receipts_data_seed_and_markdown_only
-test_classify_with_a_table_exempts_only_tinker_and_ignored_paths
-test_status_with_a_table_reviews_shared_and_business_but_not_tinker
-test_status_reads_the_table_from_the_base_branch
+test_status_with_a_table_asks_the_classifier_for_the_tier
+test_status_with_a_table_fails_closed
+test_status_with_the_fleet_classifier
 test_status_reads_exempt_unreviewed_and_reviewed
 test_status_handles_github_limits
 test_status_refuses_unreadable_and_non_github

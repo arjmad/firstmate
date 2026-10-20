@@ -313,13 +313,9 @@ case "${1:-} ${2:-}" in
         gh_jq "$fixtures/github-pr-comments.json" "$@"
         exit $?
         ;;
-      *" repos/"*"/pulls/"[0-9]*" --jq "*)
-        printf 'main\n'
-        exit 0
-        ;;
       *" repos/"*"/contents/risk-tiers.toml?ref=main "*)
-        if [ -f "$fixtures/github-risk-tiers.toml" ]; then
-          cat "$fixtures/github-risk-tiers.toml"
+        if [ -d "$fixtures/tier-remote.git" ]; then
+          printf 'file\n'
           exit 0
         fi
         echo 'gh: Not Found (HTTP 404)' >&2
@@ -4664,30 +4660,52 @@ Code review: findings fixed."
   pass "fm-pr-merge merges a code-changing PR only with a trusted review record for its current diff"
 }
 
+# Gives a case's repository a risk-tiers.toml on main and a pull request head
+# in a local remote that the code review's clone fetches, with a stub classifier
+# that prints the tier line given. Args: case_dir pr_number tier_line
+add_tier_remote() {
+  local case_dir=$1 number=$2 work="$1/tier-work"
+  git init -q --bare "$case_dir/tier-remote.git"
+  git init -q -b main "$work"
+  printf 'default = "shared"\n' > "$work/risk-tiers.toml"
+  git -C "$work" add -A
+  git -C "$work" -c user.name=t -c user.email=t@example.com commit -q -m main
+  git -C "$work" push -q "$case_dir/tier-remote.git" HEAD:refs/heads/main "HEAD:refs/pull/$number/head"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q\n' "$3" > "$case_dir/fakebin/risk-tier"
+  chmod +x "$case_dir/fakebin/risk-tier"
+}
+
+# Runs run_review_case with the case's tier remote and stub classifier.
+run_tier_review_case() {
+  local case_dir=$1
+  FM_RISK_TIER="$case_dir/fakebin/risk-tier" GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0="url.$case_dir/tier-remote.git.insteadOf" \
+    GIT_CONFIG_VALUE_0=https://github.com/example/repo.git \
+    run_review_case "$@"
+}
+
 test_tier_table_decides_whether_a_merge_needs_review() {
   local case_dir head=7177e47177e47177e47177e47177e47177e47177
   case_dir=$(make_case review-tinker)
   mkdir -p "$case_dir/wt"
   add_gh_mocks "$case_dir" "$head"
-  printf '%s\n' 'default = "shared"' '[[tinker]]' 'paths = ["hosts/thor/**"]' 'readback = "brew list"' \
-    > "$case_dir/github-risk-tiers.toml"
   write_github_pr_files "$case_dir" hosts/thor/homebrew.nix
-  run_review_case "$case_dir" 86
+  add_tier_remote "$case_dir" 86 'tinker: every change against origin/main is tinker for thor: hosts/thor/homebrew.nix'
+  run_tier_review_case "$case_dir" 86
   expect_code 0 "$RC" "review-tinker: a tinker PR must merge without a review"
-  assert_grep 'is tinker under its base branch' "$case_dir/stderr" "review-tinker: the tier exemption was not reported"
+  assert_grep 'is tinker under its risk-tiers.toml' "$case_dir/stderr" "review-tinker: the tier exemption was not reported"
   assert_logged_gh_merge "$case_dir" 86 example/repo --squash
 
-  # Under a table the record exemption no longer applies: records are shared.
+  # Under a table the record exemption no longer applies.
   case_dir=$(make_case review-table-shared)
   mkdir -p "$case_dir/wt"
   add_gh_mocks "$case_dir" "$head"
-  printf '%s\n' 'default = "shared"' '[[tinker]]' 'paths = ["hosts/thor/**"]' 'readback = "brew list"' \
-    > "$case_dir/github-risk-tiers.toml"
-  run_review_case "$case_dir" 87
+  add_tier_remote "$case_dir" 87 'shared: docs/records/2026-10-17.json matches no rule (default shared)'
+  run_tier_review_case "$case_dir" 87
   expect_code 1 "$RC" "review-table-shared: a shared PR must be refused without a review"
-  assert_grep 'is shared under its base branch' "$case_dir/stderr" "review-table-shared: refusal did not name the tier"
+  assert_grep 'is shared under its risk-tiers.toml' "$case_dir/stderr" "review-table-shared: refusal did not name the tier"
   assert_no_grep 'pr merge' "$case_dir/gh.log" "review-table-shared: gh pr merge ran without a review"
-  pass "fm-pr-merge lets the base branch's tier table decide which PRs need a review"
+  pass "fm-pr-merge lets the repository's tier table decide which PRs need a review"
 }
 
 test_review_state_unreadable_refuses() {

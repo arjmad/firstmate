@@ -129,13 +129,12 @@ case "${1:-} ${2:-}" in
       *merge_queue*) ;;
       # The changed files bin/fm-code-review.sh reads, already through its
       # --jq filter: one record, so the code review gate passes as exempt.
-      *"/pulls/"*"/files "*) printf 'F\t0\t%s\n' docs/records/sample.json ;;
+      *"/pulls/"*"/files "*) printf '%s\n' 'F docs/records/sample.json' ;;
       *) printf '%s\n' '[]' ;;
     esac
     ;;
-  # The base branch keeps no risk-tiers.toml, so the path exemption decides.
-  "api -H") echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
-  "api repos/"*"/pulls/"*) printf '%s\n' main ;;
+  # Main keeps no risk-tiers.toml, so the path exemption decides.
+  "api repos/"*"/contents/risk-tiers.toml?ref=main") echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
   "api repos/"*) printf '%s\n' '{"name":"main","protected":false}' ;;
 esac
 SH
