@@ -59,8 +59,9 @@
 # when any of these names it: a current state/<id>.meta, a state/<id>.status log
 # (it may still hold unread lines or an open decision), a state/<id>.turn-ended
 # file, a state/<id>.inbox, or a durable wake-queue key naming the task's
-# status, turn-ended, or check file (keys naming nothing of those three files
-# protect nothing, because these records only describe them). The sweep runs
+# status, turn-ended, or check file, or a signal wake keyed by the bare task id
+# (keys naming nothing of those files protect nothing, because these records
+# only describe them). The sweep runs
 # under the session lock before the session can dispatch, so no task appears
 # between that read and the removal. The watcher's per-wake process-event marker
 # .seen-procevent-<hex key> (fm_wake_procevent_marker_path) is removed once its
@@ -413,7 +414,7 @@ procevent_live_source() {  # <source-id>
   procevent_live "procevent:$1:"
 }
 collect_referenced() {
-  local path name key keys
+  local path name key keys kind status
   _fm_wake_require_classify || return 1
   for path in "$STATE"/*.meta "$STATE"/*.status "$STATE"/*.turn-ended "$STATE"/*.inbox; do
     [ -e "$path" ] || [ -L "$path" ] || continue
@@ -432,9 +433,14 @@ collect_referenced() {
 $(fm_procevent_pending "$STATE")
 EOF
   [ -e "$STATE/.wake-queue" ] || [ -L "$STATE/.wake-queue" ] || return 0
-  # A queue that cannot be read may name any task, so it fails the whole set.
-  keys=$(awk -F '\t' 'NF >= 5 { print $4 }' "$STATE/.wake-queue") || return 1
-  while IFS= read -r key; do
+  # Read under the queue lock so a row still being appended is never half
+  # read; a queue that cannot be read may name any task, so it fails the set.
+  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return 1
+  keys=$(awk -F '\t' 'NF >= 5 { print $3 "\t" $4 }' "$STATE/.wake-queue")
+  status=$?
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK" || true
+  [ "$status" -eq 0 ] || return 1
+  while IFS=$'\t' read -r kind key; do
     [ -n "$key" ] || continue
     case "$key" in procevent:*) procevent_live "$key"; continue ;; esac
     key=${key##*/}
@@ -442,7 +448,8 @@ EOF
       *.status) key=${key%.status} ;;
       *.turn-ended) key=${key%.turn-ended} ;;
       *.check.sh) key=${key%.check.sh} ;;
-      *) continue ;;
+      # A signal wake may be keyed by the bare task id.
+      *) [ "$kind" = signal ] || continue ;;
     esac
     reference_task "$key" || return 1
   done <<EOF
@@ -512,12 +519,16 @@ lock_points_at() {  # <link> <owner-basename>
 # owner_holds_only_lock_files <dir>: every entry is one the lock library writes,
 # so fm_lock_discard_owner empties it and a dry run can promise the removal.
 owner_holds_only_lock_files() {
-  local entry
+  local entry known found
   for entry in "$1"/* "$1"/.*; do
     case "${entry##*/}" in
       '*'|'.*'|.|..) continue ;;
     esac
-    case " $FM_LOCK_KNOWN_FILES " in *" ${entry##*/} "*) ;; *) return 1 ;; esac
+    found=0
+    for known in "${FM_LOCK_KNOWN_FILES[@]}"; do
+      [ "${entry##*/}" = "$known" ] && { found=1; break; }
+    done
+    [ "$found" -eq 1 ] || return 1
   done
 }
 

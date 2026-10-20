@@ -4207,6 +4207,9 @@ if [ -d "$STATE/procevent" ]; then
     3) echo "warning: $ID kept a review board for a round it left unread (see the kept: lines above); that round reaches firstmate as a process-event wake" >&2 ;;
     *) echo "warning: $ID's review boards could not all be retired (see the error above); they keep polling until bin/fm-procevent.sh retire succeeds" >&2 ;;
   esac
+  # A round published while the record still existed may have re-created the
+  # inbox removed above; nothing can deliver to it any longer.
+  rm -rf "$STATE/$ID.inbox"
 fi
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true

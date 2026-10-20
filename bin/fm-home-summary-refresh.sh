@@ -111,6 +111,7 @@ home_summary_scratch() {  # <parent-named-path> <mktemp-template>
     return
   fi
   case "$1" in "${2%XXXXXX}"?*) ;; *) return 1 ;; esac
+  case "${1#"${2%XXXXXX}"}" in */*|.*) return 1 ;; esac
   (umask 077; set -C; : > "$1") 2>/dev/null || return 1
   printf '%s\n' "$1"
 }

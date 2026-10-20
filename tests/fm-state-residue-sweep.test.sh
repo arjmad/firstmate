@@ -390,13 +390,14 @@ test_retired_task_records_swept_and_referenced_kept() {
   state="$home/state"
   world "$home" "" ok zsh
   now=$(date +%s)
-  for id in live.one held ending queued gone.task procevent-x; do seed_task_records "$home" "$id"; done
+  for id in live.one held ending queued bare gone.task procevent-x; do seed_task_records "$home" "$id"; done
   printf 'window=firstmate:fm-live.one\nkind=ship\n' > "$state/live.one.meta"
   printf 'needs-decision [at=1]: pick one\n' > "$state/held.status"
   # A live task whose id starts like the watcher's process-event marker.
   printf 'working [at=1]: on it\n' > "$state/procevent-x.status"
   : > "$state/ending.turn-ended"
   printf '%s\t1\tsignal\t%s\tqueued status\n' "$now" "$state/queued.status" > "$state/.wake-queue"
+  printf '%s\t3\tsignal\tbare\tqueued by bare id\n' "$now" >> "$state/.wake-queue"
   printf '%s\n' 1 > "$state/.branch-outcome-index-ready"
   # Process-event markers: one still queued, one whose source is registered, one
   # whose capture is unacknowledged, and one with nothing left behind it.
@@ -414,7 +415,7 @@ test_retired_task_records_swept_and_referenced_kept() {
   out=$(run_sweep "$fb" "$home")
   [ "$(count_task_records "$home" gone.task)" -eq 0 ] \
     || fail "a task nothing references should lose every task-keyed record: $(ls -a "$state")"
-  for id in live.one held ending queued procevent-x; do
+  for id in live.one held ending queued bare procevent-x; do
     [ "$(count_task_records "$home" "$id")" -eq 4 ] \
       || fail "task $id is still referenced and must keep its records: $(ls -a "$state")"
   done
