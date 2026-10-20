@@ -345,9 +345,12 @@ archive_away_record() {  # <state>
 # CI's stock macOS Bash lane sets FM_TEST_ONLY to run just the bash-3.2
 # churn-deferral regression in fm-watch-triage.test.sh. The rest of these suites
 # is not a 3.2 snapshot suite. Each suite calls this after its definitions and
-# before its own case list.
+# before its own case list. A name this suite does not define fails rather than
+# passing with nothing run, since the case may live in a sibling suite.
 watch_triage_run_only() {
   [ -n "${FM_TEST_ONLY:-}" ] || return 0
+  declare -F "$FM_TEST_ONLY" >/dev/null \
+    || fail "FM_TEST_ONLY names $FM_TEST_ONLY, which $(basename "$0") does not define"
   "$FM_TEST_ONLY"
   exit 0
 }

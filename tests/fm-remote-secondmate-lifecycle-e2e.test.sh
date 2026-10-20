@@ -1305,8 +1305,8 @@ tabs_before=$(grep -c '^tab create' "$HERDR_LOG" || true)
 # The relaunch is a whole remote spawn, including the inheritance push's items
 # sent one at a time through the real job worker, so on a CI runner this leg
 # takes 27-35s, about as long as the remote-spawn leg above. The wait below must
-# therefore outlast the watcher's own per-relaunch bound, pinned here at its
-# default, plus a grace for the exit that follows: a relaunch the watcher
+# therefore outlast the watcher's own per-relaunch bound, pinned here so the
+# two cannot drift, plus a grace for the exit that follows: a relaunch the watcher
 # accepts as healthy must not fail the test, while a watcher that never exits
 # still fails it. The loop stays iteration-counted, so it stretches under load.
 liveness_timeout=120
