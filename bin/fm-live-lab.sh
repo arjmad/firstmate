@@ -32,8 +32,10 @@
 # refuses any <root> that is not an existing directory strictly inside a
 # system temporary directory (/tmp, or the macOS per-user one; never the
 # caller's TMPDIR), that is or contains $HOME, or that carries no
-# .fm-forget-claude marker file. Only the code that created <root> writes that
-# marker, so a live fleet task's /tmp/fm-<id> directory is never taken.
+# .fm-forget-claude marker file. The marker is a declaration, not proof: the
+# code that creates <root> writes it at creation, and nothing writes it just to
+# clean up, so a directory nobody declared, such as a live fleet task's
+# /tmp/fm-<id>, is refused.
 #
 # What up builds:
 #   home/            the lab main home: bin/fm-lab-home.sh create, then the

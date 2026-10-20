@@ -75,20 +75,34 @@ TREEHOUSE_DIR="$HOME/.treehouse"
 treehouse_listing() { find "$TREEHOUSE_DIR" -mindepth 1 -maxdepth 1 -exec basename {} \; 2>/dev/null | sort; }
 TREEHOUSE_BEFORE=$(treehouse_listing)
 
+# The two temporary directories a spawn of $ID keeps: /tmp/fm-<id> and
+# /tmp/fm-<id>+<sha256 of the spawning home>.
+task_tmp_dirs() {
+  [ -n "$LAB_HOME" ] || return 0
+  printf '%s\n' "/tmp/fm-$ID" "/tmp/fm-$ID+$(printf '%s' "$LAB_HOME" | shasum -a 256 | awk '{print $1}')"
+}
+
+# Declare a root this run just created to bin/fm-live-lab.sh forget-claude.
+mark_created() {  # <dir>...
+  local dir
+  for dir in "$@"; do
+    [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] || continue
+    : > "$dir/.fm-forget-claude" || fail "could not mark $dir for its Claude-entry cleanup"
+  done
+}
+
 cleanup() {
-  local rc=$? home_hash dir added
+  local rc=$? dir added
   trap - EXIT
   if [ "$PROVISIONED" = 1 ] && ! PATH="$ORIGINAL_PATH" "$LAB_HELPER" teardown "$SESSION"; then
     rc=1
   fi
   # A spawn keeps /tmp/fm-<id> and /tmp/fm-<id>+<sha256 of the spawning home>;
   # the id is unique to this run. Claude may have recorded a project entry for
-  # either, so each is forgotten before it is removed.
-  home_hash=$(printf '%s' "$LAB_HOME" | shasum -a 256 | awk '{print $1}')
-  for dir in "$TMP_ROOT" "/tmp/fm-$ID" "/tmp/fm-$ID+$home_hash"; do
+  # either, so each is forgotten before it is removed. Cleanup never writes the
+  # forget-claude marker: mark_created wrote it as each root was created.
+  for dir in "$TMP_ROOT" $(task_tmp_dirs); do
     [ -n "$dir" ] && [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] || continue
-    # This run created each of these, so it marks them for forget-claude.
-    : > "$dir/.fm-forget-claude" 2>/dev/null
     if ! "$ROOT/bin/fm-live-lab.sh" forget-claude "$dir" >/dev/null; then
       printf 'not ok - could not remove the Claude project entries under %s\n' "$dir" >&2
       rc=1
@@ -112,6 +126,7 @@ trap cleanup EXIT
 # trap is already set, so a failure from here on still removes it.
 TMP_ROOT=$(mktemp -d /tmp/fm-spawn-steer-live.XXXXXX) || fail "could not create the temporary lab root under /tmp"
 TMP_ROOT=$(cd -P "$TMP_ROOT" && pwd -P) || fail "could not resolve the temporary lab root"
+mark_created "$TMP_ROOT"
 LAB_HOME="$TMP_ROOT/home"
 FAKEBIN="$TMP_ROOT/fakebin"
 
@@ -201,9 +216,14 @@ PY
 
 # --- spawn through the real launch path ----------------------------------------
 
+spawn_rc=0
 (cd "$LAB_HOME" && in_lab "$ROOT/bin/fm-spawn.sh" "$ID" "$LAB_HOME/projects/smoke" \
   --mode local-only --yolo off --harness claude --model "$MODEL" --effort low --backend herdr) \
-  > "$TMP_ROOT/spawn.out" 2>&1 \
+  > "$TMP_ROOT/spawn.out" 2>&1 || spawn_rc=$?
+# The spawn just created this run's task directories, whatever its outcome.
+# shellcheck disable=SC2046 # Each line is one path without spaces.
+mark_created $(task_tmp_dirs)
+[ "$spawn_rc" = 0 ] \
   || fail "fm-spawn could not launch a Claude worker for $WHO: $(tail -5 "$TMP_ROOT/spawn.out")"
 TARGET=$(sed -n 's/^window=//p' "$LAB_HOME/state/$ID.meta" | head -n 1)
 PANE=${TARGET#*:}
