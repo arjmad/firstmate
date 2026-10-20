@@ -432,11 +432,12 @@ collect_referenced() {
   done <<EOF
 $(fm_procevent_pending "$STATE")
 EOF
-  [ -e "$STATE/.wake-queue" ] || [ -L "$STATE/.wake-queue" ] || return 0
-  # Read under the queue lock so a row still being appended is never half
-  # read; a queue that cannot be read may name any task, so it fails the set.
-  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return 1
-  keys=$(awk -F '\t' 'NF >= 5 { print $3 "\t" $4 }' "$STATE/.wake-queue")
+  [ -e "$FM_WAKE_QUEUE" ] || [ -L "$FM_WAKE_QUEUE" ] || return 0
+  # Read under the queue lock, bounded so session start cannot stall on it, so
+  # a row still being appended is never half read; a queue that cannot be read
+  # may name any task, so it fails the set.
+  fm_lock_acquire_wait_bounded "$FM_WAKE_QUEUE_LOCK" 10 || return 1
+  keys=$(awk -F '\t' 'NF >= 5 { print $3 "\t" $4 }' "$FM_WAKE_QUEUE")
   status=$?
   fm_lock_release "$FM_WAKE_QUEUE_LOCK" || true
   [ "$status" -eq 0 ] || return 1

@@ -852,10 +852,11 @@ publish_result() {  # <result-file>
   [ -n "$adapter" ] || return 1
   line=$(fm_procevent_event_line "$adapter" "$id" "$seq") || return 1
   owner_task=$(fm_procevent_result_owner_task "$result" 2>/dev/null || true)
-  # A round whose owner was torn down has no inbox left to read it, so it is
-  # announced to firstmate like any firstmate-owned result.
-  ! owner_task_gone "$owner_task" || owner_task=
   fm_procevent_source_lock_acquire "$id" || return 1
+  # A round whose owner was torn down has no inbox left to read it, so it is
+  # announced to firstmate like any firstmate-owned result. Decided under the
+  # source lock, which retire-task's retire also takes.
+  ! owner_task_gone "$owner_task" || owner_task=
   if ! fm_procevent_is_handled "$STATE" "$id" "$seq"; then
     if [ -n "$owner_task" ]; then
       if adapter_result_is_terminal "$adapter" "$result"; then
@@ -2304,26 +2305,24 @@ retire_task_kept() {  # <task> <source-id> <sequence>
     "$2" "$3" "$1" "$2" "$3"
 }
 
-# retire_task_unread <task> <source-id> <ack-silent:0|1> <results>: report each
-# of the source's rounds in <results> as kept, after acknowledging a round its
-# adapter calls silent when asked to; succeed when any round was kept.
+# retire_task_unread <task> <source-id> <results>: acknowledge each of the
+# source's rounds in <results> its adapter calls silent and report every other
+# one as kept; succeed when any round was kept.
 retire_task_unread() {
-  local task=$1 id=$2 ack=$3 result seq adapter unread=1
+  local task=$1 id=$2 result seq adapter unread=1
   while IFS= read -r result; do
     result_of_source "$result" "$id" || continue
     seq=${result%.result}; seq=${seq##*.}
-    if [ "$ack" -eq 1 ]; then
-      adapter=$(fm_procevent_result_adapter "$result" 2>/dev/null || true)
-      # The round list arrives on stdin, so nothing run here may read it.
-      if [ -n "$adapter" ] && adapter_result_is_silent "$adapter" "$result" </dev/null \
-        && "$SCRIPT_DIR/fm-procevent.sh" handled "$id" "$seq" </dev/null >/dev/null 2>&1; then
-        continue
-      fi
+    adapter=$(fm_procevent_result_adapter "$result" 2>/dev/null || true)
+    # The round list arrives on stdin, so nothing run here may read it.
+    if [ -n "$adapter" ] && adapter_result_is_silent "$adapter" "$result" </dev/null \
+      && "$SCRIPT_DIR/fm-procevent.sh" handled "$id" "$seq" </dev/null >/dev/null 2>&1; then
+      continue
     fi
     retire_task_kept "$task" "$id" "$seq"
     unread=0
   done <<EOF
-$4
+$3
 EOF
   return "$unread"
 }
@@ -2339,7 +2338,7 @@ cmd_retire_task() {
     id=${rec##*/}; id=${id%.source}
     [ "$(source_kind "$id" 2>/dev/null || true)" = task-owned ] || continue
     [ "$(source_owner_task "$id" 2>/dev/null || true)" = "$task" ] || continue
-    if retire_task_unread "$task" "$id" 1 "$pending"; then
+    if retire_task_unread "$task" "$id" "$pending"; then
       any_kept=1
       continue
     fi
@@ -2353,7 +2352,7 @@ cmd_retire_task() {
     # A round captured after the check above makes retire refuse. It is
     # handled exactly like one found before it - a silent one acknowledged, any
     # other kept - and the retire is tried once more when nothing is kept.
-    if retire_task_unread "$task" "$id" 1 "$(source_pending "$id")"; then
+    if retire_task_unread "$task" "$id" "$(source_pending "$id")"; then
       any_kept=1
     elif out=$("$SCRIPT_DIR/fm-procevent.sh" retire "$id" 2>&1); then
       printf '%s\n' "$out"
