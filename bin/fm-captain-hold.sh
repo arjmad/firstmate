@@ -287,7 +287,9 @@ CAPTAIN_META_LOCK=
 CAPTAIN_META_LOCK_HELD=0
 CAPTAIN_CONTROL_LOCK=
 CAPTAIN_CONTROL_LOCK_HELD=0
+CAPTAIN_META_TMP=
 captain_hold_cleanup() {
+  [ -z "$CAPTAIN_META_TMP" ] || rm -f "$CAPTAIN_META_TMP" 2>/dev/null || true
   if [ "$CAPTAIN_META_LOCK_HELD" = 1 ]; then
     fm_lock_release "$CAPTAIN_META_LOCK" || true
     CAPTAIN_META_LOCK_HELD=0
@@ -1983,7 +1985,15 @@ EOF
 
   if [ "$has_meta" = 1 ]; then
     if [ "$(meta_value "$meta" decisions_reviewed)" != 1 ] || [ "$previous" != "$keys" ]; then
-      printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$keys" >> "$meta"
+      # A rewrite rather than an append keeps any pr= identity block last
+      # (fm_pr_meta_rewrite); the staged copy is private like the record.
+      CAPTAIN_META_TMP="$STATE/.$origin.meta.attest.${BASHPID:-$$}"
+      if ! (umask 077 && fm_pr_meta_rewrite "$meta" "decisions_reviewed decision_keys" \
+          decisions_reviewed=1 "decision_keys=$keys" > "$CAPTAIN_META_TMP") ||
+        ! fm_backlog_atomic_transition publish "$CAPTAIN_META_TMP" "$meta" "task record" "$STATE"; then
+        fail "could not record the decision attestation in $meta"
+      fi
+      CAPTAIN_META_TMP=
     fi
     fm_lock_release "$CAPTAIN_META_LOCK"
     CAPTAIN_META_LOCK_HELD=0

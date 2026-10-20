@@ -98,14 +98,11 @@ META_LOCK_HELD=1
 STATE_DEVICE=$(fm_pr_file_device "$STATE") || exit 1
 [ "$(fm_pr_file_device "$META")" = "$STATE_DEVICE" ] || { echo "error: task metadata is unavailable" >&2; exit 1; }
 META_TMP=$(mktemp "$STATE/.fm-review-meta.XXXXXX") || exit 1
-while IFS= read -r line || [ -n "$line" ]; do
-  case "$line" in
-    review=*|review_head=*) ;;
-    *) printf '%s\n' "$line" >> "$META_TMP" || exit 1 ;;
-  esac
-done < "$META"
-printf 'review=%s\n' "$URL" >> "$META_TMP" || exit 1
-[ -z "$REVIEW_HEAD" ] || printf 'review_head=%s\n' "$REVIEW_HEAD" >> "$META_TMP" || exit 1
+# review= goes before any pr= identity block, which
+# fm_pr_metadata_identity_parse refuses unless it ends the record.
+REVIEW_LINES=("review=$URL")
+[ -z "$REVIEW_HEAD" ] || REVIEW_LINES+=("review_head=$REVIEW_HEAD")
+fm_pr_meta_rewrite "$META" "review review_head" "${REVIEW_LINES[@]}" > "$META_TMP" || exit 1
 chmod 0600 "$META_TMP" || exit 1
 mv -f -- "$META_TMP" "$META" || exit 1
 META_TMP=

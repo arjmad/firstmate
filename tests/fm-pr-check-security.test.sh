@@ -3625,6 +3625,25 @@ SH
   pass "device re-record publication waits without rewriting its registration"
 }
 
+test_meta_rewrite_keeps_the_pr_identity_block_last() {
+  local dir="$TMP_ROOT/meta-rewrite" head=0123456789abcdef0123456789abcdef01234567
+  mkdir -p "$dir"
+  # A record an earlier writer left with keys after pr= is repaired, and the
+  # added and replaced keys land ahead of the identity block.
+  printf '%s\n' kind=ship traceparent=old "pr=https://github.com/o/r/pull/7" \
+    "pr_head=$head" x_request=req decisions_reviewed=1 > "$dir/in.meta"
+  fm_pr_meta_rewrite "$dir/in.meta" traceparent traceparent=new review=u > "$dir/out.meta" \
+    || fail "fm_pr_meta_rewrite failed"
+  [ "$(cat "$dir/out.meta")" = "$(printf '%s\n' kind=ship decisions_reviewed=1 traceparent=new review=u \
+    "pr=https://github.com/o/r/pull/7" "pr_head=$head" x_request=req)" ] \
+    || fail "fm_pr_meta_rewrite produced the wrong order:"$'\n'"$(cat "$dir/out.meta")"
+  fm_pr_metadata_identity_parse "$dir/out.meta" || fail "the rewritten record does not parse"
+  printf '%s\n' kind=ship > "$dir/plain.meta"
+  [ "$(fm_pr_meta_rewrite "$dir/plain.meta" "")" = kind=ship ] \
+    || fail "a record without pr= and nothing to add must come back unchanged"
+  pass "fm_pr_meta_rewrite keeps the pr= identity block last and repairs a damaged record"
+}
+
 test_parser_matrix
 test_gitlab_merge_watch
 test_forgejo_merge_watch
@@ -3669,6 +3688,7 @@ test_device_rerecord_refuses_tampered_artifacts
 test_device_rerecord_serializes_direct_rearm
 test_device_rerecord_serializes_rerecord
 test_postrename_poll_validation_revokes_and_retries
+test_meta_rewrite_keeps_the_pr_identity_block_last
 test_bootstrap_leaves_unauthenticated_checks
 test_custom_snapshot_cleanup_on_signal
 test_returned_custom_check_descendants_are_drained
