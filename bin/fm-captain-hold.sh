@@ -287,7 +287,9 @@ CAPTAIN_META_LOCK=
 CAPTAIN_META_LOCK_HELD=0
 CAPTAIN_CONTROL_LOCK=
 CAPTAIN_CONTROL_LOCK_HELD=0
+CAPTAIN_META_TMP=
 captain_hold_cleanup() {
+  [ -z "$CAPTAIN_META_TMP" ] || rm -f "$CAPTAIN_META_TMP" 2>/dev/null || true
   if [ "$CAPTAIN_META_LOCK_HELD" = 1 ]; then
     fm_lock_release "$CAPTAIN_META_LOCK" || true
     CAPTAIN_META_LOCK_HELD=0
@@ -1927,7 +1929,7 @@ reconcile_note() {
 }
 
 command_complete() {
-  local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open has_meta=0 transfer_rc transfers=() resolved meta_tmp
+  local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open has_meta=0 transfer_rc transfers=() resolved
   local resolved_how attested_by_prefix='' origin_state unrecorded_origin=''
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
@@ -1983,19 +1985,15 @@ EOF
 
   if [ "$has_meta" = 1 ]; then
     if [ "$(meta_value "$meta" decisions_reviewed)" != 1 ] || [ "$previous" != "$keys" ]; then
-      # The attestation goes before any pr= identity block, which
-      # bin/fm-pr-lib.sh's parser refuses unless it ends the record.
-      meta_tmp="$STATE/.$origin.meta.attest.${BASHPID:-$$}"
-      if ! awk -F= -v keys="$keys" '
-        $1 == "decisions_reviewed" || $1 == "decision_keys" { next }
-        !done && $1 == "pr" { print "decisions_reviewed=1"; print "decision_keys=" keys; done = 1 }
-        { print }
-        END { if (!done) { print "decisions_reviewed=1"; print "decision_keys=" keys } }
-      ' "$meta" > "$meta_tmp" ||
-        ! fm_backlog_atomic_transition publish "$meta_tmp" "$meta" "task record" "$STATE"; then
-        rm -f "$meta_tmp"
+      # A rewrite rather than an append keeps any pr= identity block last
+      # (fm_pr_meta_rewrite); the staged copy is private like the record.
+      CAPTAIN_META_TMP="$STATE/.$origin.meta.attest.${BASHPID:-$$}"
+      if ! (umask 077 && fm_pr_meta_rewrite "$meta" "decisions_reviewed decision_keys" \
+          decisions_reviewed=1 "decision_keys=$keys" > "$CAPTAIN_META_TMP") ||
+        ! fm_backlog_atomic_transition publish "$CAPTAIN_META_TMP" "$meta" "task record" "$STATE"; then
         fail "could not record the decision attestation in $meta"
       fi
+      CAPTAIN_META_TMP=
     fi
     fm_lock_release "$CAPTAIN_META_LOCK"
     CAPTAIN_META_LOCK_HELD=0

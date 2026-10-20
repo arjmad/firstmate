@@ -392,6 +392,31 @@ fm_pr_regular_destination_on_device_or_absent() {
   [ ! -e "$path" ] || [ "$(fm_pr_file_device "$path")" = "$device" ]
 }
 
+# fm_pr_meta_rewrite <meta> <"dropped keys"> [line...] prints the task
+# record without the dropped keys, adds the given lines, and moves the pr=
+# identity block (pr=, pr_head=, and the x_* fields after pr=) to the end,
+# because fm_pr_metadata_identity_parse refuses any other key after pr=.
+# Every writer that adds a key to an existing record goes through here, which
+# also repairs a record an earlier writer left out of that order. The added
+# lines travel through the environment: BSD awk refuses a -v value that holds
+# a newline.
+fm_pr_meta_rewrite() {
+  local meta=$1 drop=$2 add=
+  shift 2
+  [ "$#" -eq 0 ] || add=$(printf '%s\n' "$@")
+  FM_PR_META_ADD=$add awk -F= -v drop="$drop" '
+    BEGIN { n = split(drop, d, " "); for (i = 1; i <= n; i++) skip[d[i]] = 1 }
+    $1 in skip { next }
+    $1 == "pr" { seen = 1 }
+    $1 == "pr" || $1 == "pr_head" || (seen && $1 ~ /^x_/) { block = block $0 "\n"; next }
+    { print }
+    END {
+      if (ENVIRON["FM_PR_META_ADD"] != "") print ENVIRON["FM_PR_META_ADD"]
+      printf "%s", block
+    }
+  ' "$meta"
+}
+
 fm_pr_metadata_identity_parse() {
   local file=$1 line value pr_count=0 seen_pr=0 post_pr_invalid=0
   FM_PR_META_PROVIDER=

@@ -777,8 +777,12 @@ EOF
     fm_wake_status_mark_current "$2" "$3"
   ' _ "$ROOT/bin/fm-wake-lib.sh" "$home/state" "$home/state/$id.status" \
     || fail "could not prime the announced decision baseline"
+  printf '%s\n' 'pr=https://github.com/example/repo/pull/5' \
+    'pr_head=0123456789abcdef0123456789abcdef01234567' >> "$home/state/$id.meta"
   run_captain "$home" complete "$id" sample-route-call >/dev/null \
     || fail "shared investigation completion gate failed"
+  bash -c '. "$1"; fm_pr_metadata_identity_parse "$2"' _ "$ROOT/bin/fm-pr-lib.sh" "$home/state/$id.meta" \
+    || fail "the completion attestation landed after pr=, so the PR watch would reject the record"
   FM_STATE_OVERRIDE="$home/state" bash -c '
     . "$1"; fm_wake_signal_seen_current "$2" "$3"
   ' _ "$ROOT/bin/fm-wake-lib.sh" "$home/state" "$home/state/$id.status" \

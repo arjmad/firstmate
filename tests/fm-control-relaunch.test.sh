@@ -547,6 +547,8 @@ test_relaunch_keeps_the_pr_identity_block_last() {
   {
     printf '%s\n' 'pr=https://github.com/example/repo/pull/49'
     printf '%s\n' "pr_head=$head"
+    # An earlier attestation left this after pr=; the relaunch repairs it.
+    printf '%s\n' 'decisions_reviewed=1'
   } >> "$dir/home/state/rl49.meta"
 
   out=$(run_control "$dir" rl49 relaunch --note "continuing review work"); rc=$?
