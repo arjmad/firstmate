@@ -1128,7 +1128,7 @@ SH
 # pre-publication claim is dropped under the allocation lock, the window it
 # opened is closed so no orphan endpoint survives, and its durable lease is
 # returned.
-test_non_polytoken_refused_launch_keeps_its_window() {
+test_non_polytoken_refused_launch_closes_its_window_and_returns_its_slot() {
   local rec id out status slot_root world
   id='pool-refused-codex-r1'
   rec=$(make_originless_case refused-codex "$id")
@@ -1360,7 +1360,7 @@ test_remote_seeded_home_spawns_from_treehouse_pool
 test_pool_slot_claim_follows_the_spawn_outcome
 test_refused_launch_leaves_the_pool_for_a_retry_and_a_second_task
 test_refused_launch_spares_per_id_paths_under_a_contended_spawn_lock
-test_non_polytoken_refused_launch_keeps_its_window
+test_non_polytoken_refused_launch_closes_its_window_and_returns_its_slot
 test_treehouse_isolation_refusal_points_at_what_survives
 test_linked_spawning_home_rejects_primary_before_refresh
 test_stale_pool_base_refreshes_before_branching

@@ -147,6 +147,29 @@ test_spawn_refuses_an_unusable_companion() {
   pass "a spawn refuses a companion with no clone, and --also on a scout"
 }
 
+test_spawn_refuses_an_external_or_unresolvable_companion_forge() {
+  local id out status binding
+  # A companion bound to an external review forge is refused, and a companion
+  # binding the registry itself refuses fails closed instead of reading as none.
+  for binding in forge=external forge=externl; do
+    id="also-forge-${binding#forge=}-c1"
+    make_case "forge-${binding#forge=}" "$id" --also jobs
+    printf -- '- jobs [direct-PR %s] - companion (added 2026-10-19)\n' "$binding" > "$HOME_DIR/data/projects.md"
+    out=$(run_spawn "$id" --mode direct-PR --yolo off --also jobs)
+    status=$?
+    [ "$status" -ne 0 ] || fail "--also launched with a companion registered $binding"
+    case "$binding" in
+      forge=external) assert_contains "$out" "--also jobs is refused for $id: it is registered forge=external" \
+        "the external companion refusal did not say why"$'\n'"$out" ;;
+      *) assert_contains "$out" "the registry entry for companion jobs does not resolve to a forge" \
+        "the unresolvable companion refusal did not say why"$'\n'"$out" ;;
+    esac
+    assert_absent "$HOME_DIR/state/$id.meta" "a spawn refused for $binding published a task record"
+    [ -z "$(lease_holder "$JOBS_POOL")" ] || fail "a spawn refused for $binding leased a companion slot"
+  done
+  pass "a spawn refuses a companion bound to an external forge or to a forge the registry refuses"
+}
+
 test_pr_check_records_a_companion_pr_without_arming() {
   local id='also-prcheck-c1' out status main_url='https://github.com/o/sample/pull/9'
   local url='https://github.com/o/jobs/pull/7'
@@ -180,4 +203,5 @@ test_pr_check_records_a_companion_pr_without_arming() {
 test_spawn_grants_a_companion_worktree
 test_spawn_refuses_a_brief_and_flag_mismatch
 test_spawn_refuses_an_unusable_companion
+test_spawn_refuses_an_external_or_unresolvable_companion_forge
 test_pr_check_records_a_companion_pr_without_arming

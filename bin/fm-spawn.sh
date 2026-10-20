@@ -1789,11 +1789,20 @@ spawn_abort_cleanup() {
   # its slot but before its record survives returns that slot rather than leave
   # it leased to a task no record describes. The return is bound to this task's
   # own lease, is never forced, so a slot with uncommitted changes keeps them
-  # and its lease, runs only while the project lock that took it is held - a
-  # polytoken spawn whose record was rolled back retakes it once, as for the
-  # claim below - and never runs while a launched worker may still be working
-  # in the slot; any slot it leaves is named so it can be checked and returned
-  # by hand.
+  # and its lease, runs only while the project lock that took it is held, and
+  # never runs while a launched worker may still be working in the slot; any
+  # slot it leaves is named so it can be checked and returned by hand.
+  # A polytoken spawn whose record was rolled back after publication has
+  # already released that lock, so it retakes it once, with a bounded wait, and
+  # both its lease return and its claim release below run under that one hold;
+  # the ordinary release further down lets it go.
+  if [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" != 1 ] && [ "${HARNESS:-}" = polytoken ] &&
+    [ -n "$SPAWN_TREEHOUSE_PROJECT_LOCK" ] && [ -n "${WT:-}" ] &&
+    { [ "$SPAWN_SLOT_LEASED" = 1 ] || [ "$SPAWN_SLOT_CLAIMED" = 1 ]; } &&
+    [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ] &&
+    fm_lock_acquire_wait_max "$SPAWN_TREEHOUSE_PROJECT_LOCK" 10; then
+    SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=1
+  fi
   if [ "$SPAWN_SLOT_LEASED" = 1 ] && [ -n "${WT:-}" ] &&
     [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ] &&
     fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
@@ -1802,12 +1811,8 @@ spawn_abort_cleanup() {
       { [ "$SPAWN_LAUNCH_SENT" = 0 ] || [ "$SPAWN_ENDPOINT_CLOSED" = 1 ]; }; then
       fm_treehouse_slot_lease_return "$WT" "$ID" "$PROJ_ABS" ||
         echo "warning: Treehouse pool slot $WT stays leased to aborted task $ID because treehouse return refused it (it may hold uncommitted changes); check it, then run treehouse return --if-lease-holder $ID $WT" >&2
-    elif [ "${HARNESS:-}" = polytoken ] && [ -n "$SPAWN_TREEHOUSE_PROJECT_LOCK" ] &&
-      { [ "$SPAWN_LAUNCH_SENT" = 0 ] || [ "$SPAWN_ENDPOINT_CLOSED" = 1 ]; } &&
-      fm_lock_try_acquire "$SPAWN_TREEHOUSE_PROJECT_LOCK"; then
-      fm_treehouse_slot_lease_return "$WT" "$ID" "$PROJ_ABS" ||
-        echo "warning: Treehouse pool slot $WT stays leased to aborted task $ID because treehouse return refused it (it may hold uncommitted changes); check it, then run treehouse return --if-lease-holder $ID $WT" >&2
-      fm_lock_release "$SPAWN_TREEHOUSE_PROJECT_LOCK" || true
+    elif [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" != 1 ]; then
+      echo "warning: leaving Treehouse pool slot $WT leased to aborted task $ID; the Treehouse project lock is no longer held, so check it and run treehouse return --if-lease-holder $ID $WT" >&2
     else
       echo "warning: leaving Treehouse pool slot $WT leased to aborted task $ID; a worker may still be in it, so check it and run treehouse return --if-lease-holder $ID $WT" >&2
     fi
@@ -1817,19 +1822,15 @@ spawn_abort_cleanup() {
   # read-then-remove, so it runs only while the project lock that wrote the
   # claim is still held (aborts before metadata publication); a later abort has
   # already released that lock and leaves the claim for the next spawn's
-  # atomic replacement rather than racing it. A polytoken spawn instead retakes
-  # that lock once for a later failure whose record was rolled back. The
-  # release itself never removes another task's claim.
+  # atomic replacement rather than racing it. A polytoken spawn whose record
+  # was rolled back holds that lock again here (see the lease return above).
+  # The release itself never removes another task's claim.
   if [ "$SPAWN_SLOT_CLAIMED" = 1 ] && [ -n "${WT:-}" ] &&
     [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ] &&
     fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
     SPAWN_SLOT_CLAIMED=0
     if [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" = 1 ]; then
       fm_treehouse_slot_owner_release "$WT" "$ID" || true
-    elif [ "${HARNESS:-}" = polytoken ] && [ -n "$SPAWN_TREEHOUSE_PROJECT_LOCK" ] &&
-      fm_lock_try_acquire "$SPAWN_TREEHOUSE_PROJECT_LOCK"; then
-      fm_treehouse_slot_owner_release "$WT" "$ID" || true
-      fm_lock_release "$SPAWN_TREEHOUSE_PROJECT_LOCK" || true
     else
       echo "warning: leaving task $ID's slot claim on $WT in place; the Treehouse project lock is no longer held, so the next spawn's claim replaces it" >&2
     fi
@@ -3988,14 +3989,26 @@ if [ "$KIND" = ship ]; then
   [ -n "$STANDING_FORGE" ] || STANDING_FORGE=none
   # Companion worktrees share the worker's pane, and an external forge's push
   # guard covers every repository there, so --also never mixes with an external
-  # forge in either direction.
-  if [ "${#ALSO_REPOS[@]}" -gt 0 ] && [ "$RELAUNCH" -eq 0 ]; then
+  # forge in either direction. A relaunch carries its recorded companions
+  # forward, so it is checked against the registry as it stands now, and a
+  # companion's forge binding the registry refuses fails closed like the
+  # task's own.
+  if [ "$RELAUNCH" -eq 0 ]; then
+    SPAWN_FORGE_CHECK_ALSO="${ALSO_REPOS[*]-}"
+  else
+    SPAWN_FORGE_CHECK_ALSO=$(grep '^also=' "$RELAUNCH_META" 2>/dev/null | tail -n 1 | cut -d= -f2-)
+  fi
+  if [ -n "$SPAWN_FORGE_CHECK_ALSO" ]; then
     [ "$STANDING_FORGE" != external ] || {
       echo "error: --also is refused for $ID: $PROJ_NAME is registered forge=external, whose push guard would also refuse every companion PR's push" >&2
       exit 1
     }
-    for also_repo in "${ALSO_REPOS[@]}"; do
-      also_forge=$("$FM_ROOT/bin/fm-project-mode.sh" --forge "$also_repo" 2>/dev/null) || also_forge=
+    for also_repo in $SPAWN_FORGE_CHECK_ALSO; do
+      if ! also_forge=$("$FM_ROOT/bin/fm-project-mode.sh" --forge "$also_repo" 2>/dev/null); then
+        "$FM_ROOT/bin/fm-project-mode.sh" --forge "$also_repo" >/dev/null || true
+        echo "error: $ID cannot launch: the registry entry for companion $also_repo does not resolve to a forge (see the refusal above); correct data/projects.md and spawn again" >&2
+        exit 1
+      fi
       [ "$also_forge" != external ] || {
         echo "error: --also $also_repo is refused for $ID: it is registered forge=external, and its task branch must never reach that project's shared origin" >&2
         exit 1
