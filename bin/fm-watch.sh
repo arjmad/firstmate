@@ -2882,8 +2882,11 @@ resurface_after_downtime() {
     fi
     [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || return 0
   fi
+  # wake exits, so the flag reaches watcher_cleanup only for this delivery; a
+  # wake that returned must not leave it set for a later, unrelated one.
   WATCHER_RESURFACED=1
   wake "$(resurface_reason)"
+  WATCHER_RESURFACED=0
 }
 
 # The reason a recovery announces. Most recoveries are not watcher downtime:
@@ -2894,23 +2897,20 @@ resurface_after_downtime() {
 # show what is waiting instead of reading as downtime. It never copies a row's
 # payload: payloads can carry outside text (a mail subject, an inbox note), and
 # this line is main's trigger, not drain output read as evidence. Main's rows
-# are the ones fm_wake_main_row_kinds lists, the same set main's pending count
+# are the ones fm_wake_main_row_kinds counts, the same set main's pending count
 # uses. It stays a check reason on purpose: routing is unchanged and every
 # recovery still reaches main. A recovery with nothing for main, such as an
 # interrupted handling turn, keeps the generic reason.
 resurface_reason() {
-  local reason='' kinds
-  if [ -s "$FM_WAKE_QUEUE" ] && kinds=$(fm_wake_main_row_kinds 2>/dev/null); then
-    reason=$(printf '%s\n' "$kinds" | awk '
-      NF { n[$1]++ }
-      END {
-        split("needs-decision signal stale check heartbeat other", order, " ")
-        for (i = 1; i <= 6; i++) if (n[order[i]] > 0) out = out (out == "" ? "" : ", ") n[order[i]] " " order[i]
-        if (out != "") print "check: queued work: " out
-      }
-    ')
+  local summary=''
+  if [ -s "$FM_WAKE_QUEUE" ]; then
+    summary=$(fm_wake_main_row_kinds --summary 2>/dev/null) || summary=''
   fi
-  printf '%s\n' "${reason:-check: rearm-resurface}"
+  if [ -n "$summary" ]; then
+    printf 'check: queued work: %s\n' "$summary"
+  else
+    printf '%s\n' 'check: rearm-resurface'
+  fi
 }
 
 while :; do

@@ -1639,7 +1639,7 @@ test_next_park_takes_over_the_cycle_a_pass_through_left_for_main() {
   ! hook_exited "$home" || fail "takeover: the takeover woke main: $(cat "$home/hook.err")"
   host_owns_the_only_cycle "$home" || fail "takeover: the park did not keep the cycle it took over"
   assert_re '^acked:' "$home/state/.watcher-down" "takeover: the takeover opened a downtime episode"
-  assert_no_re 'rearm-resurface' "$home/state/.supervision-host.log" "takeover: the takeover resurfaced a recovery to main"
+  assert_no_re 'rearm-resurface|check: queued work: ' "$home/state/.supervision-host.log" "takeover: the takeover resurfaced a recovery to main"
   append_status "$home" 'which region?' needs-decision
   wait_until 250 hook_exited "$home" || fail "takeover: the owned cycle did not deliver the next close: $(cat "$home/state/.supervision-host.log")"
   assert_rewoke_main "$home" "takeover (next close)"
@@ -3074,7 +3074,7 @@ test_handover_leaves_the_watcher_for_the_next_park() {
   wait_until 150 watcher_live "$home" || fail "handover: no watcher runs after the take-over"
   sleep 3
   [ ! -s "$home/host.rc" ] || fail "handover: the next park did not stay parked after its take-over: $(cat "$home/host.out")"
-  assert_no_grep 'rearm-resurface' "$home/state/.supervision-host.log" "handover: the hand-over left a close for the next park to re-surface"
+  assert_no_re 'rearm-resurface|check: queued work: ' "$home/state/.supervision-host.log" "handover: the hand-over left a close for the next park to re-surface"
   pass "host: SIGUSR1 hands the running cycle to the next park, which takes it over"
 }
 

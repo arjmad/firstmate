@@ -1659,10 +1659,11 @@ families_for_changed_path() {
       printf '%s\n' pure-contract-unit
       printf '%s\n' live-harness-optin
       ;;
-    bin/fm-spawn.sh|bin/fm-send.sh|bin/fm-harness.sh)
-      # Launch and session-naming code: the spawn-and-steer smoke guard drives
-      # them together with the composer through a real worker, which is how the
-      # firstmate PR 87 naming change broke idle steering unseen.
+    bin/fm-spawn.sh|bin/fm-send.sh|bin/fm-harness.sh|bin/fm-composer*)
+      # Launch, session naming, and composer code other than the lib above: the
+      # spawn-and-steer smoke guard drives them together through a real worker,
+      # which is how the firstmate PR 87 naming change broke idle steering
+      # unseen.
       printf '%s\n' backend-dispatch
       printf '%s\n' pure-contract-unit
       printf '%s\n' __script__:fm-spawn-steer-herdr-live-e2e.test.sh

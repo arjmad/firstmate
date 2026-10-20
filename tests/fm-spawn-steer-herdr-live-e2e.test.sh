@@ -87,6 +87,8 @@ cleanup() {
   home_hash=$(printf '%s' "$LAB_HOME" | shasum -a 256 | awk '{print $1}')
   for dir in "$TMP_ROOT" "/tmp/fm-$ID" "/tmp/fm-$ID+$home_hash"; do
     [ -n "$dir" ] && [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] || continue
+    # This run created each of these, so it marks them for forget-claude.
+    : > "$dir/.fm-forget-claude" 2>/dev/null
     if ! "$ROOT/bin/fm-live-lab.sh" forget-claude "$dir" >/dev/null; then
       printf 'not ok - could not remove the Claude project entries under %s\n' "$dir" >&2
       rc=1

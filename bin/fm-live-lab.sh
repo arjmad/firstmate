@@ -31,7 +31,9 @@
 # CLAUDE_CONFIG_DIR selects (default ~/.claude.json), prints the count, and
 # refuses any <root> that is not an existing directory strictly inside a
 # system temporary directory (/tmp, or the macOS per-user one; never the
-# caller's TMPDIR), or that is or contains $HOME.
+# caller's TMPDIR), that is or contains $HOME, or that carries no
+# .fm-forget-claude marker file. Only the code that created <root> writes that
+# marker, so a live fleet task's /tmp/fm-<id> directory is never taken.
 #
 # What up builds:
 #   home/            the lab main home: bin/fm-lab-home.sh create, then the
@@ -886,6 +888,8 @@ cmd_forget_claude() {
     case "$ROOT" in "$tmp"/?*) inside=yes ;; esac
   done
   [ "$inside" = yes ] || die "refusing '$1': forget-claude only takes a directory inside a temporary directory"
+  [ -f "$ROOT/.fm-forget-claude" ] && [ ! -L "$ROOT/.fm-forget-claude" ] \
+    || die "refusing '$1': it carries no .fm-forget-claude marker from the code that created it"
   select_claude_store
   forget_claude_entries
 }

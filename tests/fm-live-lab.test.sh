@@ -768,7 +768,8 @@ pass "fm-claude-trust.sh --lab-home trusts only a marked lab primary checkout"
 # lives under /tmp whatever TMPDIR says, since forget-claude takes only a
 # system temporary directory.
 F=$(TMPDIR=/tmp fm_test_tmproot fm-live-lab-forget) || fail "fixture: no /tmp root"
-mkdir -p "$T/forget-config" "$F/forget-root/home/wt"
+mkdir -p "$T/forget-config" "$F/forget-root/home/wt" "$F/forget-unmarked"
+: > "$F/forget-root/.fm-forget-claude"
 cat > "$T/forget-config/.claude.json" <<JSON
 {"numStartups": 3, "projects": {"$F/forget-root/home/wt": {"hasTrustDialogAccepted": true}, "$F/forget-root": {"hasTrustDialogAccepted": true}, "$F/forget-rootless": {"hasTrustDialogAccepted": true}, "/elsewhere": {"hasTrustDialogAccepted": true}}}
 JSON
@@ -790,6 +791,9 @@ out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$ROOT" 2>&
 expect_code 1 "$?" "forget-claude refuses a root outside every temporary directory"
 out=$(CLAUDE_CONFIG_DIR="$T/forget-config" TMPDIR=/ "$LIVE_LAB" forget-claude "$ROOT" 2>&1)
 expect_code 1 "$?" "forget-claude does not trust the caller's TMPDIR as a temporary directory"
+out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$F/forget-unmarked" 2>&1)
+expect_code 1 "$?" "forget-claude refuses a root its creator did not mark, such as a live task's directory"
+assert_contains "$out" ".fm-forget-claude" "the refusal names the missing marker"
 out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$F/forget-missing" 2>&1)
 expect_code 1 "$?" "forget-claude refuses a root that does not exist"
 [ "$(jq -r '.projects | keys | length' "$T/forget-config/.claude.json")" = 2 ] \
