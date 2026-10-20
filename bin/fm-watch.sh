@@ -137,12 +137,12 @@
 #                          running a check or removing poll artifacts
 #   heartbeat              fleet-scan backstop found an unsurfaced captain-relevant
 #                          status, unless afk is active
-#   check: queued work: <row> | check: rearm-resurface
-#                          recovery: queued work (often a row another process
-#                          appended, or one queued while no non-successor cycle
-#                          ran) is named, newest check row first; an empty queue
-#                          keeps the generic reason; both are check reasons and
-#                          reach main
+#   check: queued work: <count> <kind>[, ...] | check: rearm-resurface
+#                          recovery: main's queued rows (often one another
+#                          process appended, or one queued while no
+#                          non-successor cycle ran) are counted by kind, never
+#                          quoted; nothing queued for main keeps the generic
+#                          reason; both are check reasons and reach main
 #   check: inactive-outcome bounded poll-loop reconciliation found a suspicious
 #                          inactive terminal outcome that still lacks its durable
 #                          upstream receipt
@@ -2889,31 +2889,34 @@ resurface_after_downtime() {
 # The reason a recovery announces. Most recoveries are not watcher downtime:
 # a row another process appended (an inbox note, a merge outcome) or one queued
 # while no non-successor cycle ran has no wake of its own, so this path is how
-# it reaches main. When anything is queued the recovery says what - "check:
-# queued work: <row>", the newest check row first, else the newest row - so the
-# banner and the ledger show what is waiting instead of reading as downtime;
-# the drain still presents every row. It stays a check reason on purpose:
-# routing is unchanged and every recovery still reaches main. Only a recovery
-# with nothing queued, such as an interrupted handling turn, keeps the generic
-# reason.
+# it reaches main. When main has rows queued the recovery counts them by kind -
+# "check: queued work: 1 needs-decision, 2 check" - so the banner and the ledger
+# show what is waiting instead of reading as downtime. It never copies a row's
+# payload: payloads can carry outside text (a mail subject, an inbox note), and
+# this line is main's trigger, not drain output read as evidence. Main's rows
+# are those fm_wake_actor_pending_count counts, read the same lockless way since
+# a torn read only miscounts a label the drain re-derives. It stays a check
+# reason on purpose: routing is unchanged and every recovery still reaches
+# main. A recovery with nothing for main, such as an interrupted handling turn,
+# keeps the generic reason.
 resurface_reason() {
-  local reason=''
-  if [ -s "$FM_WAKE_QUEUE" ] && fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"; then
-    reason=$(awk -F '\t' '
-      NF >= 5 && $2 ~ /^[0-9]+$/ && $5 != "" \
-        && ($3 == "signal" || $3 == "stale" || $3 == "check") {
-        line = $5
-        if ($3 == "signal" && index(line, "needs-decision:") == 1) {
-          line = substr(line, 16); sub(/^ +/, "", line); line = "signal: " line
-        } else if (index(line, $3 ":") != 1) line = $3 ": " line
-        if ($3 == "check") check = substr(line, 8); else other = line
+  local reason='' grant=''
+  if [ -s "$FM_WAKE_QUEUE" ]; then
+    if fm_wake_branch_grant_live "$STATE/.branch-eligible-rows" "$STATE/.branch-eligible-owner"; then
+      grant="$STATE/.branch-eligible-rows"
+    fi
+    reason=$(awk -F '\t' -v seqs="$grant" '
+      BEGIN { if (seqs != "") while ((getline line < seqs) > 0) reserved[line] = 1 }
+      NF >= 5 && $2 ~ /^[0-9]+$/ && !($2 in reserved) {
+        if ($3 == "signal" && index($5, "needs-decision:") == 1) n["needs-decision"]++
+        else if ($3 == "signal" || $3 == "stale" || $3 == "check") n[$3]++
       }
       END {
-        if (check != "") print "check: queued work: " check
-        else if (other != "") print "check: queued work: " other
+        split("needs-decision signal stale check", order, " ")
+        for (i = 1; i <= 4; i++) if (n[order[i]] > 0) out = out (out == "" ? "" : ", ") n[order[i]] " " order[i]
+        if (out != "") print "check: queued work: " out
       }
     ' "$FM_WAKE_QUEUE" 2>/dev/null) || reason=''
-    fm_lock_release "$FM_WAKE_QUEUE_LOCK"
   fi
   printf '%s\n' "${reason:-check: rearm-resurface}"
 }

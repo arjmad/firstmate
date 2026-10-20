@@ -2289,8 +2289,8 @@ test_outcome_after_the_return_survives_a_host_killed_at_the_turn_end() {
   wait_until 250 host_exited "$home" || fail "return-first: the next host did not resurface the queued outcome"
   # The recovery names the outcome row the branch report queued; it is still a
   # check reason, so it reaches main.
-  assert_re '^check: queued work: supervision-host outcome 1 for demo \[routine\] was recorded after the captain returned' "$home/host.out" "the next host's first cycle must resurface the queue"
-  assert_re '	pass-through	attended	main-only	check: queued work: supervision-host outcome 1 ' "$home/state/.supervision-host.log" "the attended resurface must reach main"
+  assert_re '^check: queued work: 1 check$' "$home/host.out" "the next host's first cycle must resurface the queue"
+  assert_re '	pass-through	attended	main-only	check: queued work: 1 check' "$home/state/.supervision-host.log" "the attended resurface must reach main"
   drained=$(FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" 2>&1)
   assert_contains "$drained" "supervision-host outcome 1 for demo [routine] was recorded after the captain returned" \
     "main's drain must present the outcome the killed host never handed off"
@@ -2322,7 +2322,7 @@ test_next_host_clears_a_turn_its_killed_predecessor_left() {
     "$home"/state/.supervision-host-descendants.* "$home/state/.supervision-host-turn"; do
     [ -e "$f" ] && fail "the next host left its killed predecessor's turn file behind: $f"
   done
-  assert_re '^check: queued work: supervision-host outcome 1 for demo ' "$home/host.out" "the next host's first cycle must resurface the queue"
+  assert_re '^check: queued work: 1 check$' "$home/host.out" "the next host's first cycle must resurface the queue"
   pass "host: a killed predecessor's engine is reaped and the next host removes its turn files"
 }
 
@@ -2679,7 +2679,7 @@ test_first_cycle_status_streams_and_owner_options_reach_it() {
   wait_until 100 sh -c '! kill -0 "$1" 2>/dev/null' _ "$stale" || fail "stream: --restart left the old watcher running"
   wait_until 200 host_exited "$home" || append_status "$home" 'second close' 'done'
   wait_until 200 host_exited "$home" || fail "stream: the restarting host's close did not reach main"
-  assert_re '^(signal: .*demo.status|check: rearm-resurface|check: queued work: signal: .*demo.status)$' "$home/host.out" "stream: the restarting host's close must reach main"
+  assert_re '^(signal: .*demo.status|check: rearm-resurface|check: queued work: 1 signal)$' "$home/host.out" "stream: the restarting host's close must reach main"
 
   # That close left an unacknowledged downtime episode; a host the owner starts
   # as the closed arm's successor takes it over as a handling successor

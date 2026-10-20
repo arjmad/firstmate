@@ -102,7 +102,7 @@ test_announced_recovery_is_not_reannounced_by_next_checkpoint() {
   FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
     "$CHECKPOINT" --seconds 5 >"$out" 2>"$err" || status=$?
   expect_code 0 "$status" "first recovery checkpoint exit"
-  assert_contains "$(cat "$out")" "check: queued work: unacknowledged durable wake" \
+  assert_contains "$(cat "$out")" "check: queued work: 1 check" \
     "first checkpoint did not announce the pending recovery under its queued row"
   marker=$(cat "$home/state/.watcher-down")
   case "$marker" in
@@ -119,7 +119,7 @@ test_announced_recovery_is_not_reannounced_by_next_checkpoint() {
   expect_code 124 "$status" "announced recovery checkpoint exit"
   assert_contains "$(cat "$out")" "checkpoint: no actionable wake within 1s" \
     "announced recovery checkpoint did not supervise for its bound"
-  assert_not_contains "$(cat "$out")" "check: queued work: unacknowledged durable wake" \
+  assert_not_contains "$(cat "$out")" "check: queued work: 1 check" \
     "announced recovery was reannounced by the next checkpoint"
   assert_not_contains "$(cat "$out")" "check: rearm-resurface" \
     "announced recovery was reannounced generically by the next checkpoint"
@@ -170,7 +170,7 @@ test_queue_append_during_checkpoint_still_resurfaces() {
   wait "$checkpoint_pid" || status=$?
 
   expect_code 0 "$status" "queue-append checkpoint exit"
-  assert_contains "$(cat "$out")" "check: queued work: appended during checkpoint" \
+  assert_contains "$(cat "$out")" "check: queued work: 1 check" \
     "queue append during checkpoint did not resurface under its own reason"
   grep "$(printf '\tcheck\tconcurrent\tcheck: appended during checkpoint')" \
     "$home/state/.wake-queue" >/dev/null \

@@ -102,7 +102,7 @@ import { pathToFileURL } from "node:url";
 let tool = null;
 const prompts = [];
 const isRecovery = (message) =>
-  message.includes("check: queued work: seed recovery") || message.includes("check: rearm-resurface");
+  message.includes("check: queued work: 1 check") || message.includes("check: rearm-resurface");
 const pi = {
   on() {},
   registerCommand() {},
