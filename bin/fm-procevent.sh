@@ -124,9 +124,10 @@
 #            record nor a status log, its unacknowledged rounds are announced
 #            to firstmate as ordinary `check` wakes instead of its inbox, and
 #            reconcile retires a board of such a task as soon as nothing of it
-#            is unacknowledged - which also covers a task that ended without a
-#            teardown. Exit 0 when nothing the task owned remains, 3 when a
-#            source was kept for an unread round, 1 when a retire failed.
+#            is unacknowledged - which also covers a task whose record and
+#            status log were removed some other way. Exit 0 when nothing the
+#            task owned remains, 3 when a source was kept for an unread round,
+#            1 when a retire failed.
 #            Firstmate-registered sources are never touched.
 # sweep-home Retire a bounded snapshot of this home's registrations and owned
 #            claims, then refuse unless no registration, runner record, or owned
@@ -440,7 +441,17 @@ owner_task_gone() {  # <task-id>
 }
 # Every captured round of one source with no handled acknowledgement yet.
 source_pending() {  # <source-id>
-  fm_procevent_pending "$STATE" | awk -v id="$1" 'index($0, "/" id ".") { print }'
+  local result
+  while IFS= read -r result; do
+    result_of_source "$result" "$1" && printf '%s\n' "$result"
+  done < <(fm_procevent_pending "$STATE")
+}
+# result_of_source <result-path> <source-id>: the result is exactly one of that
+# source's rounds, not a round of a source whose id merely extends it.
+result_of_source() {
+  local base=${1##*/}
+  base=${base%.result}
+  [ "${base%.*}" = "$2" ]
 }
 # The registration record is a worker-owned board's ONLY ownership evidence, so
 # it cannot be retired while a captured round of it is still unacknowledged.
@@ -1784,8 +1795,8 @@ cmd_reconcile() {
             continue
           fi
           # A board whose owner is gone has nobody to deliver to: retire it
-          # rather than poll again, which also covers a task that ended
-          # without a teardown and a kept round firstmate has acknowledged.
+          # rather than poll again; this also retires a kept board once
+          # firstmate acknowledges its round.
           if owner_task_gone "$(source_owner_task "$id" 2>/dev/null || true)"; then
             fm_procevent_source_lock_release "$id"
             if "$SCRIPT_DIR/fm-procevent.sh" retire "$id" >/dev/null 2>&1; then
@@ -2304,7 +2315,7 @@ cmd_retire_task() {
     [ "$(source_owner_task "$id" 2>/dev/null || true)" = "$task" ] || continue
     unread=0
     while IFS= read -r result; do
-      case "$result" in */"$id".*) ;; *) continue ;; esac
+      result_of_source "$result" "$id" || continue
       seq=${result%.result}; seq=${seq##*.}
       adapter=$(fm_procevent_result_adapter "$result" 2>/dev/null || true)
       if [ -n "$adapter" ] && adapter_result_is_silent "$adapter" "$result" \
@@ -2330,7 +2341,7 @@ EOF
     # A round captured after the check above is what makes retire refuse; it
     # is kept exactly like one found before it.
     while IFS= read -r result; do
-      [ -n "$result" ] || continue
+      result_of_source "$result" "$id" || continue
       seq=${result%.result}; seq=${seq##*.}
       retire_task_kept "$task" "$id" "$seq"
       unread=1
@@ -2535,7 +2546,7 @@ cmd_list() {
       *) owner=uncertain ;;
     esac
     fm_procevent_source_lock_release "$id"
-    pending=$(fm_procevent_pending "$STATE" | grep -c "/$id\." || true)
+    pending=$(source_pending "$id" | grep -c . || true)
     if [ "$kind" = task-owned ] && [ -n "$task" ]; then
       if [ "$pending" -gt 0 ]; then
         owner="task:$task/round-open"

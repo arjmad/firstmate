@@ -385,11 +385,16 @@ PROCEVENT_LIVE=
 PROCEVENT_SOURCES=
 keep_record() { KEEP_RECORDS="$KEEP_RECORDS|${1##*/}|"; }
 reference_task() {  # <task-id>
+  local status turn heartbeat
   case "$KEEP_RECORDS" in *"|.$1.branch-outcome-index|"*) return 0 ;; esac
+  status=$(fm_wake_signal_seen_path "$STATE" "$STATE/$1.status") || return 1
+  turn=$(fm_wake_signal_seen_path "$STATE" "$STATE/$1.turn-ended") || return 1
+  heartbeat=$(status_heartbeat_seen_marker_path "$STATE" "$1") || return 1
+  [ -n "$status" ] && [ -n "$turn" ] && [ -n "$heartbeat" ] || return 1
   keep_record ".$1.branch-outcome-index"
-  keep_record "$(fm_wake_signal_seen_path "$STATE" "$STATE/$1.status")"
-  keep_record "$(fm_wake_signal_seen_path "$STATE" "$STATE/$1.turn-ended")"
-  keep_record "$(status_heartbeat_seen_marker_path "$STATE" "$1")"
+  keep_record "$status"
+  keep_record "$turn"
+  keep_record "$heartbeat"
 }
 procevent_live() {  # <queue-key or key prefix>
   local marker
@@ -402,12 +407,12 @@ procevent_live_source() {  # <source-id>
   procevent_live "procevent:$1:"
 }
 collect_referenced() {
-  local path name key
+  local path name key keys
   _fm_wake_require_classify || return 1
   for path in "$STATE"/*.meta "$STATE"/*.status "$STATE"/*.turn-ended "$STATE"/*.inbox; do
     [ -e "$path" ] || [ -L "$path" ] || continue
     name=${path##*/}
-    reference_task "${name%.*}"
+    reference_task "${name%.*}" || return 1
   done
   for path in "$STATE"/procevent/*.source; do
     [ -e "$path" ] || [ -L "$path" ] || continue
@@ -421,7 +426,9 @@ collect_referenced() {
     name=${name%.result}
     procevent_live_source "${name%.*}"
   done
-  [ -f "$STATE/.wake-queue" ] || return 0
+  [ -e "$STATE/.wake-queue" ] || [ -L "$STATE/.wake-queue" ] || return 0
+  # A queue that cannot be read may name any task, so it fails the whole set.
+  keys=$(awk -F '\t' 'NF >= 5 { print $4 }' "$STATE/.wake-queue") || return 1
   while IFS= read -r key; do
     [ -n "$key" ] || continue
     case "$key" in procevent:*) procevent_live "$key"; continue ;; esac
@@ -431,9 +438,9 @@ collect_referenced() {
       *.turn-ended) key=${key%.turn-ended} ;;
       *.check.sh) key=${key%.check.sh} ;;
     esac
-    reference_task "$key"
+    reference_task "$key" || return 1
   done <<EOF
-$(awk -F '\t' 'NF >= 5 { print $4 }' "$STATE/.wake-queue" 2>/dev/null)
+$keys
 EOF
 }
 
@@ -571,8 +578,12 @@ if [ -n "$KEYS" ]; then
   read_inventories
   sweep_endpoint_records
 fi
-collect_referenced
-sweep_task_records
+# Without the complete set of live names nothing task-keyed may be removed.
+if collect_referenced; then
+  sweep_task_records
+else
+  warn "could not name every live task's records; kept all task-keyed records"
+fi
 sweep_lock_owners
 rotate_scratch
 

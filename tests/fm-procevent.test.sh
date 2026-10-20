@@ -5315,14 +5315,29 @@ PATH="$RTASK_BIN:$PATH" FM_HOME="$RTASK/home" \
   "$ROOT/bin/fm-procevent-lavish.sh" arm "$RTASK/firstmate.html" >/dev/null \
   || fail "fixture invalid: cannot arm firstmate's board"
 touch "$RTASK/unread.html.go" "$RTASK/empty.html.go"
-wait_capture "$RTASK/home" "$rt_unread" || fail "fixture invalid: the unread round was not captured"
-wait_capture "$RTASK/home" "$rt_empty" || fail "fixture invalid: the empty round was not captured"
+# The capture is what matters here; a runner still ringing its owner when
+# retire-task runs is stopped by it.
+wait_for "$RTASK/home/state/procevent-inbox/$rt_unread.1.result" 300 \
+  || fail "fixture invalid: the unread round was not captured"
+wait_for "$RTASK/home/state/procevent-inbox/$rt_empty.1.result" 300 \
+  || fail "fixture invalid: the empty round was not captured"
+# Another task's board whose id extends a worker-a board id with a dot holds
+# an unread round; it must not be counted against the shorter id.
+rt_dotted="$rt_listen.2"
+PATH="$RTASK_BIN:$PATH" pe "$RTASK/home" register-task lavish "$rt_dotted" worker-b -- printf \
+  'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","sibling","","message",""\n' >/dev/null \
+  || fail "fixture invalid: cannot register the dotted sibling board"
+PATH="$RTASK_BIN:$PATH" pe "$RTASK/home" start "$rt_dotted" >/dev/null 2>&1 || true
+[ -e "$RTASK/home/state/procevent-inbox/$rt_dotted.1.result" ] \
+  || fail "fixture invalid: the dotted sibling round was not captured"
 rt_rc=0
 PATH="$RTASK_BIN:$PATH" pe "$RTASK/home" retire-task worker-a > "$RTASK/out" 2>&1 || rt_rc=$?
 [ "$rt_rc" -eq 3 ] || fail "retire-task did not report the kept board with exit 3 (got $rt_rc): $(cat "$RTASK/out")"
 assert_contains "$(cat "$RTASK/out")" "retired: $rt_listen" "retire-task did not retire the listening board"
 assert_contains "$(cat "$RTASK/out")" "retired: $rt_empty" "retire-task did not retire the board whose round said nothing"
 assert_contains "$(cat "$RTASK/out")" "kept: $rt_unread 1" "retire-task did not name the unread round it kept"
+assert_not_contains "$(cat "$RTASK/out")" "kept: $rt_listen " \
+  "retire-task counted a dotted sibling's round against a shorter source id"
 assert_absent "$RTASK/home/state/procevent/$rt_listen.source" "the listening board is still registered"
 assert_absent "$RTASK/home/state/procevent/$rt_empty.source" "the empty-round board is still registered"
 [ -e "$RTASK/home/state/procevent/$rt_unread.source" ] \

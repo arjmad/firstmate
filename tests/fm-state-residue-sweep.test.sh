@@ -429,6 +429,24 @@ test_retired_task_records_swept_and_referenced_kept() {
   pass "sweep: records of tasks nothing references are retired, referenced ones kept"
 }
 
+# A sweep that cannot name every live task's records removes none of them.
+test_task_records_kept_when_live_names_are_unknown() {
+  local home fb out state
+  home=$(new_home task-records-closed); fb=$(make_tmux "$TMP_ROOT/task-records-closed")
+  state="$home/state"
+  world "$home" "" ok zsh
+  seed_task_records "$home" gone.task
+  # A wake queue the sweep cannot read may name any task.
+  printf 'x\n' > "$state/.wake-queue"
+  chmod 000 "$state/.wake-queue"
+  out=$(run_sweep "$fb" "$home")
+  chmod 600 "$state/.wake-queue"
+  [ "$(count_task_records "$home" gone.task)" -eq 4 ] \
+    || fail "an incomplete live set still let the sweep remove task-keyed records: $(ls -a "$state")"
+  assert_contains "$out" "kept all task-keyed records" "the sweep should say why it removed nothing: $out"
+  pass "sweep: an incomplete live set keeps every task-keyed record"
+}
+
 test_dead_lock_owners_swept_and_live_kept() {
   local home fb out state old dead
   home=$(new_home lock-owners); fb=$(make_tmux "$TMP_ROOT/lock-owners")
@@ -696,6 +714,7 @@ test_dry_run_reports_and_removes_nothing
 test_only_marker_family_files_are_touched
 test_query_budget_defers_the_remainder
 test_retired_task_records_swept_and_referenced_kept
+test_task_records_kept_when_live_names_are_unknown
 test_dead_lock_owners_swept_and_live_kept
 test_home_summary_scratch_rotates_by_age
 test_herdr_gone_pane_swept_live_and_stopped_server_handled
