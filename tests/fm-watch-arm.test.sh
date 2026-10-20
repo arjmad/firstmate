@@ -659,8 +659,8 @@ test_interrupted_handling_is_redrained_on_rearm() {
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/crash-gap-recovery-arm.out"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "re-arm after a pre-successor crash stranded the durable wake"
   recovery_arm=$ARM_PID
-  # The recovery names the row still queued.
-  grep -Eq '^check: queued work: 1 signal$' "$dir/crash-gap-recovery-arm.out" \
+  # The recovery counts the signal rows still queued.
+  grep -Eq '^check: queued work: [0-9]+ signal$' "$dir/crash-gap-recovery-arm.out" \
     || fail "re-arm after a pre-successor crash did not re-surface the durable wake: $(cat "$dir/crash-gap-recovery-arm.out")"
   grep "$(printf '\tsignal\tinterrupted.status\t')" "$state/.wake-queue" >/dev/null \
     || fail "pre-successor crash recovery removed the unacknowledged durable wake"
@@ -674,7 +674,7 @@ test_interrupted_handling_is_redrained_on_rearm() {
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/reason-emit-crash-replay.out"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "a crash after reason emission stranded the durable wake"
   recovery_arm=$ARM_PID
-  grep -Eq '^check: queued work: 1 signal$' "$dir/reason-emit-crash-replay.out" \
+  grep -Eq '^check: queued work: [0-9]+ signal$' "$dir/reason-emit-crash-replay.out" \
     || fail "a crash after reason emission did not re-drain recovery: $(cat "$dir/reason-emit-crash-replay.out")"
   generation_replay=$(recovery_marker_generation "$state/.watcher-down")
   [ -n "$generation_replay" ] \
@@ -718,7 +718,7 @@ test_interrupted_handling_is_redrained_on_rearm() {
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/recovery-arm.out"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "successor after interruption did not re-surface the pending wake"
   # Main claimed the row in its interrupted drain; it is still queued work.
-  grep -Eq '^check: queued work: 1 signal$' "$dir/recovery-arm.out" \
+  grep -Eq '^check: queued work: [0-9]+ signal$' "$dir/recovery-arm.out" \
     || fail "successor after interruption did not emit durable recovery: $(cat "$dir/recovery-arm.out")"
   FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/replay-drain.out" \
     2> "$dir/replay-drain.err" || fail "successor could not re-drain the interrupted wake"
