@@ -60,9 +60,11 @@
 # open decision), a state/<id>.turn-ended file, a state/<id>.inbox, or any key
 # in the durable wake queue. A collision between two folded names only ever
 # keeps a record. The watcher's per-wake process-event marker
-# .seen-procevent-<hex key> is removed once its decoded queue key is no longer
-# queued and its source has neither a registration nor an unacknowledged
-# captured result. The daemon's .subsuper-* records are not touched here.
+# .seen-procevent-<hex key> (fm_wake_procevent_marker_path) is removed once its
+# key is no longer queued and its source has neither a registration nor an
+# unacknowledged captured result; the live keys are encoded forward and
+# compared by name, never decoded. The daemon's .subsuper-* records are not
+# touched here.
 #
 # Dead lock owners. bin/fm-wake-lib.sh's locks are a symlink <lock> to a
 # private <lock>.owner.<random> directory; a holder killed before its release
@@ -71,7 +73,8 @@
 # at it, the pid it records is not running, and it is older than
 # FM_STATE_RESIDUE_OWNER_MIN_AGE_SECONDS - an acquirer is inside that window for
 # well under a second before it links. Removal deletes only the lock library's
-# own known files and then the empty directory, so anything else keeps it.
+# own known files and then the empty directory; one holding anything else is
+# kept with a warning, in a dry run too.
 #
 # Scratch rotation. bin/fm-claude-stop-autoarm.sh captures each arm attempt in
 # state/.claude-autoarm-output.<random>, bin/fm-wake-drain.sh stages a row
@@ -371,21 +374,44 @@ sweep_endpoint_records() {
 
 # --- retired-task records -----------------------------------------------------
 
-fold_task() { printf '%s' "$1" | tr '.:/' '___'; }
+# fold_task <name>: the writers' lossy file-name form, into FOLDED.
+FOLDED=
+fold_task() { FOLDED=${1//[.:\/]/_}; }
 
 # REFERENCED: the folded form of every task something live still names.
+# PROCEVENT_LIVE: the marker-name prefix of every queued process-event key and
+# of every source still registered or holding an unacknowledged capture.
 REFERENCED=
-reference_task() { REFERENCED="$REFERENCED|$(fold_task "$1")|"; }
+PROCEVENT_LIVE=
+reference_task() { fold_task "$1"; REFERENCED="$REFERENCED|$FOLDED|"; }
+procevent_live() {  # <queue-key or key prefix>
+  local marker
+  marker=$(fm_wake_procevent_marker_path "$STATE" "$1")
+  PROCEVENT_LIVE="$PROCEVENT_LIVE ${marker##*/}"
+}
 collect_referenced() {
   local path name key
   for path in "$STATE"/*.meta "$STATE"/*.status "$STATE"/*.turn-ended "$STATE"/*.inbox; do
     [ -e "$path" ] || [ -L "$path" ] || continue
-    name=$(basename "$path")
+    name=${path##*/}
     reference_task "${name%.*}"
+  done
+  for path in "$STATE"/procevent/*.source; do
+    [ -e "$path" ] || [ -L "$path" ] || continue
+    name=${path##*/}
+    procevent_live "procevent:${name%.source}:"
+  done
+  for path in "$STATE"/procevent-inbox/*.result; do
+    [ -f "$path" ] || continue
+    [ -e "${path%.result}.handled" ] && continue
+    name=${path##*/}
+    name=${name%.result}
+    procevent_live "procevent:${name%.*}:"
   done
   [ -f "$STATE/.wake-queue" ] || return 0
   while IFS= read -r key; do
     [ -n "$key" ] || continue
+    case "$key" in procevent:*) procevent_live "$key"; continue ;; esac
     key=${key##*/}
     case "$key" in
       *.status) key=${key%.status} ;;
@@ -398,8 +424,8 @@ $(awk -F '\t' 'NF >= 5 { print $4 }' "$STATE/.wake-queue" 2>/dev/null)
 EOF
 }
 
-# task_record_task <basename>: the folded task a retired-task record is keyed
-# by, or nothing when the name is not one of those records.
+# task_record_task <basename>: set FOLDED to the folded task a retired-task
+# record is keyed by, or fail when the name is not one of those records.
 task_record_task() {
   local name=$1 rest
   case "$name" in
@@ -414,49 +440,36 @@ task_record_task() {
   fold_task "$rest"
 }
 
-# procevent_marker_live <basename>: whether a .seen-procevent-<hex> marker's
-# wake is still queued or its source still registered or unacknowledged.
+# procevent_marker_live <basename>: whether a .seen-procevent-<hex> marker is
+# a queued wake's, or a prefix of a live source's key.
 procevent_marker_live() {
-  local hex=${1#.seen-procevent-} key source result
-  case "$hex" in ''|*[!0-9a-f]*) return 0 ;; esac
-  [ $(( ${#hex} % 2 )) -eq 0 ] || return 0
-  key=$(printf '%b' "$(printf '%s' "$hex" | sed 's/../\\x&/g')") || return 0
-  case "$key" in procevent:?*) ;; *) return 0 ;; esac
-  if [ -f "$STATE/.wake-queue" ] \
-    && awk -F '\t' -v k="$key" 'NF >= 5 && $4 == k { found = 1 } END { exit !found }' "$STATE/.wake-queue"; then
-    return 0
-  fi
-  source=${key#procevent:}
-  source=${source%%:*}
-  [ -n "$source" ] || return 0
-  [ ! -e "$STATE/procevent/$source.source" ] && [ ! -L "$STATE/procevent/$source.source" ] || return 0
-  for result in "$STATE/procevent-inbox/$source".*.result; do
-    [ -e "$result" ] || continue
-    [ -e "${result%.result}.handled" ] || return 0
+  local live
+  for live in $PROCEVENT_LIVE; do
+    case "$1" in "$live"*) return 0 ;; esac
   done
   return 1
 }
 
 retire_record() {  # <path> <label>
   if [ "$DRY_RUN" -eq 1 ]; then
-    printf 'would retire %s %s\n' "$2" "$(basename "$1")"
+    printf 'would retire %s %s\n' "$2" "${1##*/}"
     return 0
   fi
   rm -f -- "$1" || { warn "could not remove $1"; return 1; }
 }
 
 sweep_task_records() {
-  local path name task
+  local path name
   for path in "$STATE"/.seen-* "$STATE"/.hb-surfaced-* "$STATE"/.*.branch-outcome-index; do
     [ -f "$path" ] && [ ! -L "$path" ] || continue
-    name=$(basename "$path")
+    name=${path##*/}
     case "$name" in
       .seen-procevent-*)
         procevent_marker_live "$name" && continue
         ;;
       *)
-        task=$(task_record_task "$name") || continue
-        case "$REFERENCED" in *"|$task|"*) continue ;; esac
+        task_record_task "$name" || continue
+        case "$REFERENCED" in *"|$FOLDED|"*) continue ;; esac
         ;;
     esac
     retire_record "$path" "retired-task record" && REMOVED_TASK_RECORDS=$((REMOVED_TASK_RECORDS + 1))
@@ -469,20 +482,36 @@ lock_points_at() {  # <link> <owner-basename>
   local target
   [ -L "$1" ] || return 1
   target=$(readlink "$1" 2>/dev/null) || return 1
-  [ "$(basename "$target")" = "$2" ]
+  [ "${target##*/}" = "$2" ]
+}
+
+# owner_holds_only_lock_files <dir>: every entry is one the lock library writes,
+# so fm_lock_discard_owner empties it and a dry run can promise the removal.
+owner_holds_only_lock_files() {
+  local entry
+  for entry in "$1"/* "$1"/.*; do
+    case "${entry##*/}" in
+      '*'|'.*'|.|..|pid|fm-home|pid-identity|role|watcher-path) ;;
+      *) return 1 ;;
+    esac
+  done
 }
 
 sweep_lock_owners() {
   local path name lock pid
   for path in "$STATE"/*.owner.?????? "$STATE"/.*.owner.??????; do
     [ -d "$path" ] && [ ! -L "$path" ] || continue
-    name=$(basename "$path")
+    name=${path##*/}
     lock="$STATE/${name%.owner.*}"
     lock_points_at "$lock" "$name" && continue
     lock_points_at "$lock.steal" "$name" && continue
     pid=$(cat "$path/pid" 2>/dev/null || true)
     case "$pid" in ''|*[!0-9]*) ;; *) fm_pid_alive "$pid" && continue ;; esac
     [ "$(fm_path_age "$path")" -gt "$FM_STATE_RESIDUE_OWNER_MIN_AGE_SECONDS" ] || continue
+    if ! owner_holds_only_lock_files "$path"; then
+      warn "kept lock owner $name: it holds files the lock library does not own"
+      continue
+    fi
     if [ "$DRY_RUN" -eq 1 ]; then
       printf 'would retire dead lock owner %s\n' "$name"
       REMOVED_LOCK_OWNERS=$((REMOVED_LOCK_OWNERS + 1))
@@ -490,7 +519,7 @@ sweep_lock_owners() {
     fi
     fm_lock_discard_owner "$path"
     if [ -e "$path" ]; then
-      warn "kept lock owner $name: it holds files the lock library does not own"
+      warn "could not remove lock owner $name"
     else
       REMOVED_LOCK_OWNERS=$((REMOVED_LOCK_OWNERS + 1))
     fi

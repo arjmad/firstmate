@@ -120,9 +120,13 @@
 #            when that task is torn down. An unacknowledged captured round the
 #            adapter calls silent carries nothing to read, so it is acknowledged
 #            first; a round with anything in it keeps its source registered and
-#            prints `kept: <source-id> <sequence>` naming the acknowledgement
-#            firstmate owes it. Exit 0 when nothing the task owned remains, 3
-#            when a source was kept for an unread round, 1 when a retire failed.
+#            prints `kept: <source-id> <sequence>`. Once the task has neither a
+#            record nor a status log, its unacknowledged rounds are announced
+#            to firstmate as ordinary `check` wakes instead of its inbox, and
+#            reconcile retires a board of such a task as soon as nothing of it
+#            is unacknowledged - which also covers a task that ended without a
+#            teardown. Exit 0 when nothing the task owned remains, 3 when a
+#            source was kept for an unread round, 1 when a retire failed.
 #            Firstmate-registered sources are never touched.
 # sweep-home Retire a bounded snapshot of this home's registrations and owned
 #            claims, then refuse unless no registration, runner record, or owned
@@ -427,6 +431,13 @@ source_field() {  # <source-id> <field>
 }
 source_kind() { source_field "$1" kind; }
 source_owner_task() { source_field "$1" owner_task; }
+# A task is gone once it has neither a record nor a status log, which is what
+# teardown leaves; a relaunch keeps the status log, so it never reads as gone.
+owner_task_gone() {  # <task-id>
+  [ -n "$1" ] || return 1
+  [ ! -e "$STATE/$1.meta" ] && [ ! -L "$STATE/$1.meta" ] \
+    && [ ! -e "$STATE/$1.status" ] && [ ! -L "$STATE/$1.status" ]
+}
 # Every captured round of one source with no handled acknowledgement yet.
 source_pending() {  # <source-id>
   fm_procevent_pending "$STATE" | awk -v id="$1" 'index($0, "/" id ".") { print }'
@@ -830,6 +841,9 @@ publish_result() {  # <result-file>
   [ -n "$adapter" ] || return 1
   line=$(fm_procevent_event_line "$adapter" "$id" "$seq") || return 1
   owner_task=$(fm_procevent_result_owner_task "$result" 2>/dev/null || true)
+  # A round whose owner was torn down has no inbox left to read it, so it is
+  # announced to firstmate like any firstmate-owned result.
+  ! owner_task_gone "$owner_task" || owner_task=
   fm_procevent_source_lock_acquire "$id" || return 1
   if ! fm_procevent_is_handled "$STATE" "$id" "$seq"; then
     if [ -n "$owner_task" ]; then
@@ -1769,6 +1783,18 @@ cmd_reconcile() {
             fm_procevent_source_lock_release "$id"
             continue
           fi
+          # A board whose owner is gone has nobody to deliver to: retire it
+          # rather than poll again, which also covers a task that ended
+          # without a teardown and a kept round firstmate has acknowledged.
+          if owner_task_gone "$(source_owner_task "$id" 2>/dev/null || true)"; then
+            fm_procevent_source_lock_release "$id"
+            if "$SCRIPT_DIR/fm-procevent.sh" retire "$id" >/dev/null 2>&1; then
+              stopped=$((stopped + 1))
+            else
+              uncertain=$((uncertain + 1))
+            fi
+            continue
+          fi
         fi
         if [ "$claim_state" -eq 1 ] && fm_procevent_claim_undisplaceable_locked "$id"; then
           # A stale claim whose process group still has members, which can mean
@@ -2260,6 +2286,11 @@ cmd_retire() {
   printf 'retired: %s\n' "$id"
 }
 
+retire_task_kept() {  # <task> <source-id> <sequence>
+  printf 'kept: %s %s (task %s left this captured round unread; once the task record is gone it reaches firstmate as a process-event wake, and acknowledging it with bin/fm-procevent.sh handled %s %s lets the next reconcile retire the board)\n' \
+    "$2" "$3" "$1" "$2" "$3"
+}
+
 cmd_retire_task() {
   local task=${1-} rec id result seq adapter any_kept=0 failed=0 unread out
   [ "$#" -eq 1 ] || usage
@@ -2278,8 +2309,7 @@ cmd_retire_task() {
         && "$SCRIPT_DIR/fm-procevent.sh" handled "$id" "$seq" >/dev/null 2>&1; then
         continue
       fi
-      printf 'kept: %s %s (task %s left this captured round unread; read it, then bin/fm-procevent.sh handled %s %s)\n' \
-        "$id" "$seq" "$task" "$id" "$seq"
+      retire_task_kept "$task" "$id" "$seq"
       unread=1
     done < <(source_pending "$id")
     if [ "$unread" -eq 1 ]; then
@@ -2290,6 +2320,18 @@ cmd_retire_task() {
     [ -e "$rec" ] || [ -L "$rec" ] || { printf 'retired: %s\n' "$id"; continue; }
     if out=$("$SCRIPT_DIR/fm-procevent.sh" retire "$id" 2>&1); then
       printf '%s\n' "$out"
+      continue
+    fi
+    # A round captured after the check above is what makes retire refuse; it
+    # is kept exactly like one found before it.
+    while IFS= read -r result; do
+      [ -n "$result" ] || continue
+      seq=${result%.result}; seq=${seq##*.}
+      retire_task_kept "$task" "$id" "$seq"
+      unread=1
+    done < <(source_pending "$id")
+    if [ "$unread" -eq 1 ]; then
+      any_kept=1
     else
       printf 'error: cannot retire %s owned by task %s: %s\n' "$id" "$task" "$out" >&2
       failed=1

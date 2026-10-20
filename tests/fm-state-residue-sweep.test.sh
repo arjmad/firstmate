@@ -448,6 +448,15 @@ test_dead_lock_owners_swept_and_live_kept() {
     fm_touch_epoch "$old" "$state/$o"
   done
 
+  out=$(run_sweep "$fb" "$home" --dry-run)
+  assert_contains "$out" "would retire dead lock owner .gone.lock.owner.AAAAAA" \
+    "--dry-run should list the owner it would retire: $out"
+  assert_not_contains "$out" "would retire dead lock owner .odd.lock.owner.EEEEEE" \
+    "--dry-run must not promise to retire an owner the real run keeps: $out"
+  assert_contains "$out" "kept lock owner .odd.lock.owner.EEEEEE" \
+    "--dry-run should report the owner it keeps: $out"
+  [ -d "$state/.gone.lock.owner.AAAAAA" ] || fail "--dry-run removed a lock owner"
+
   out=$(run_sweep "$fb" "$home")
 
   [ ! -e "$state/.gone.lock.owner.AAAAAA" ] || fail "an old unlinked owner of a dead pid should be retired"

@@ -2793,6 +2793,14 @@ fm_wake_signal_sig() {  # <file> -> reported-state signature
   esac
 }
 
+# The watcher's surfaced marker for one queued process-event wake: the queue key,
+# hex-encoded so any key is a safe file name. bin/fm-watch.sh writes it and
+# bin/fm-state-residue-sweep.sh retires it; a prefix of the key encodes to a
+# prefix of the name, which is how the sweep matches a source's markers.
+fm_wake_procevent_marker_path() {  # <state> <queue-key>
+  printf '%s/.seen-procevent-%s' "$1" "$(printf '%s' "$2" | LC_ALL=C od -An -tx1 | tr -d ' \n')"
+}
+
 fm_wake_signal_seen_path() {  # <state> <file>
   local task
   fm_basename_to task "$2"

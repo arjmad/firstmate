@@ -5333,10 +5333,27 @@ assert_absent "$RTASK/home/state/procevent/$rt_empty.source" "the empty-round bo
 [ -e "$RTASK/home/state/procevent/$rt_fm.source" ] || fail "retire-task touched firstmate's board"
 for _ in $(seq 1 50); do [ ! -e "$FM_PROCEVENT_CLAIM_ROOT/$rt_listen.claim" ] && break; sleep 0.1; done
 assert_absent "$FM_PROCEVENT_CLAIM_ROOT/$rt_listen.claim" "the retired board's listener still holds its claim"
+# Teardown then removes the task's record and inbox: the kept round reaches
+# firstmate as a check wake instead of re-creating the dead task's inbox, and
+# once firstmate acknowledges it the next reconcile retires the board.
+rm -rf "$RTASK/home/state/worker-a.meta" "$RTASK/home/state/worker-a.inbox"
+PATH="$RTASK_BIN:$PATH" pe "$RTASK/home" reconcile >/dev/null 2>&1 || true
+assert_contains "$(wake_payloads "$RTASK/home")" "$rt_unread" \
+  "a torn-down task's kept round was not announced to firstmate"
+assert_absent "$RTASK/home/state/worker-a.inbox" "reconcile re-created a torn-down task's inbox"
+[ -e "$RTASK/home/state/procevent/$rt_unread.source" ] \
+  || fail "reconcile retired a board whose kept round was still unacknowledged"
 PATH="$RTASK_BIN:$PATH" pe "$RTASK/home" handled "$rt_unread" 1 >/dev/null
-PATH="$RTASK_BIN:$PATH" pe "$RTASK/home" retire-task worker-a > "$RTASK/out2" 2>&1 \
-  || fail "retire-task still refused once the kept round was read: $(cat "$RTASK/out2")"
-assert_absent "$RTASK/home/state/procevent/$rt_unread.source" "the read board was not retired on the second pass"
-pass "retire-task retires a torn-down task's boards and keeps only a round it left unread"
+PATH="$RTASK_BIN:$PATH" pe "$RTASK/home" reconcile >/dev/null 2>&1 || true
+assert_absent "$RTASK/home/state/procevent/$rt_unread.source" \
+  "reconcile did not retire the torn-down task's board once its round was acknowledged"
+# A task that ended without any teardown leaves a listening board behind; with
+# neither record nor status log left, reconcile retires it instead of polling.
+rm -f "$RTASK/home/state/worker-b.meta"
+PATH="$RTASK_BIN:$PATH" pe "$RTASK/home" reconcile >/dev/null 2>&1 || true
+assert_absent "$RTASK/home/state/procevent/$rt_other.source" \
+  "reconcile kept polling a board whose owner is gone"
+[ -e "$RTASK/home/state/procevent/$rt_fm.source" ] || fail "reconcile retired firstmate's own board"
+pass "retire-task retires a torn-down task's boards and keeps only a round it left unread, which then reaches firstmate"
 
 printf '\nall procevent tests passed\n'
