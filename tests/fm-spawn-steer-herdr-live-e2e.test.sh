@@ -72,24 +72,35 @@ FAKEBIN="$TMP_ROOT/fakebin"
 ID="steer$$x$RANDOM"
 PROVISIONED=0
 
+# The pool lives under TMP_ROOT, so the operator's ~/.treehouse must not gain an
+# entry; bin/fm-live-lab.sh down holds labs to the same check.
+TREEHOUSE_DIR="$HOME/.treehouse"
+treehouse_listing() { find "$TREEHOUSE_DIR" -mindepth 1 -maxdepth 1 -exec basename {} \; 2>/dev/null | sort; }
+TREEHOUSE_BEFORE=$(treehouse_listing)
+
 cleanup() {
-  local rc=$? home_hash dir
+  local rc=$? home_hash dir added
   trap - EXIT
   if [ "$PROVISIONED" = 1 ] && ! PATH="$ORIGINAL_PATH" "$LAB_HELPER" teardown "$SESSION"; then
     rc=1
   fi
-  if ! "$ROOT/bin/fm-live-lab.sh" forget-claude "$TMP_ROOT" >/dev/null; then
-    printf 'not ok - could not remove the Claude project entries under %s\n' "$TMP_ROOT" >&2
+  # A spawn keeps /tmp/fm-<id> and /tmp/fm-<id>+<sha256 of the spawning home>;
+  # the id is unique to this run. Claude may have recorded a project entry for
+  # either, so each is forgotten before it is removed.
+  home_hash=$(printf '%s' "$LAB_HOME" | shasum -a 256 | awk '{print $1}')
+  for dir in "$TMP_ROOT" "/tmp/fm-$ID" "/tmp/fm-$ID+$home_hash"; do
+    [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] || continue
+    if ! "$ROOT/bin/fm-live-lab.sh" forget-claude "$dir" >/dev/null; then
+      printf 'not ok - could not remove the Claude project entries under %s\n' "$dir" >&2
+      rc=1
+    fi
+    [ "$dir" = "$TMP_ROOT" ] || rm -rf "$dir"
+  done
+  added=$(comm -13 <(printf '%s\n' "$TREEHOUSE_BEFORE") <(treehouse_listing))
+  if [ -n "$added" ]; then
+    printf 'not ok - ~/.treehouse gained entries during the run; left as is: %s\n' "$(printf '%s' "$added" | tr '\n' ' ')" >&2
     rc=1
   fi
-  # A spawn keeps /tmp/fm-<id> and /tmp/fm-<id>+<sha256 of the spawning home>;
-  # the id is unique to this run.
-  home_hash=$(printf '%s' "$LAB_HOME" | shasum -a 256 | awk '{print $1}')
-  for dir in "/tmp/fm-$ID" "/tmp/fm-$ID+$home_hash"; do
-    if [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ]; then
-      rm -rf "$dir"
-    fi
-  done
   chmod -R u+w "$TMP_ROOT" 2>/dev/null
   rm -rf "$TMP_ROOT"
   exit "$rc"
@@ -161,8 +172,9 @@ git clone -q --bare "$SEED" "$TMP_ROOT/origins/smoke.git"
 git clone -q "$TMP_ROOT/origins/smoke.git" "$LAB_HOME/projects/smoke"
 printf '# Projects\n\n- smoke [local-only] - scratch project for the spawn-and-steer smoke guard\n' > "$LAB_HOME/data/projects.md"
 
+# The paused verb is pinned to its default so the brief and the wait below agree.
 in_lab() {  # <command...>: run with the lab home, the lab pool, and the Herdr wrapper
-  env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH \
+  env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH -u FM_CLASSIFY_PAUSED_VERB \
     PATH="$FAKEBIN:$ORIGINAL_PATH" HERDR_SESSION="$SESSION" \
     FM_HOME="$LAB_HOME" FM_ROOT_OVERRIDE="$ROOT" FM_SPAWN_NO_GUARD=1 "$@"
 }

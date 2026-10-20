@@ -764,20 +764,23 @@ assert_contains "$out" "is a symlink" "the refusal names the symlink"
 pass "fm-claude-trust.sh --lab-home trusts only a marked lab primary checkout"
 
 # forget-claude removes exactly the Claude project entries at or under its root,
-# for a live test that spawns Claude workers without a lab record.
-mkdir -p "$T/forget-config" "$T/forget-root/home/wt"
+# for a live test that spawns Claude workers without a lab record. Its root
+# lives under /tmp whatever TMPDIR says, since forget-claude takes only a
+# system temporary directory.
+F=$(TMPDIR=/tmp fm_test_tmproot fm-live-lab-forget) || fail "fixture: no /tmp root"
+mkdir -p "$T/forget-config" "$F/forget-root/home/wt"
 cat > "$T/forget-config/.claude.json" <<JSON
-{"numStartups": 3, "projects": {"$T/forget-root/home/wt": {"hasTrustDialogAccepted": true}, "$T/forget-root": {"hasTrustDialogAccepted": true}, "$T/forget-rootless": {"hasTrustDialogAccepted": true}, "/elsewhere": {"hasTrustDialogAccepted": true}}}
+{"numStartups": 3, "projects": {"$F/forget-root/home/wt": {"hasTrustDialogAccepted": true}, "$F/forget-root": {"hasTrustDialogAccepted": true}, "$F/forget-rootless": {"hasTrustDialogAccepted": true}, "/elsewhere": {"hasTrustDialogAccepted": true}}}
 JSON
-out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$T/forget-root" 2>&1)
+out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$F/forget-root" 2>&1)
 expect_code 0 "$?" "forget-claude succeeds on a disposable root"
 assert_contains "$out" "2" "forget-claude reports the two entries it removed"
 kept=$(jq -r '.projects | keys | sort | join(",")' "$T/forget-config/.claude.json")
-[ "$kept" = "$T/forget-rootless,/elsewhere" ] || [ "$kept" = "/elsewhere,$T/forget-rootless" ] \
+[ "$kept" = "$F/forget-rootless,/elsewhere" ] || [ "$kept" = "/elsewhere,$F/forget-rootless" ] \
   || fail "forget-claude kept the wrong entries: $kept"
 [ "$(jq -r '.numStartups' "$T/forget-config/.claude.json")" = 3 ] \
   || fail "forget-claude changed an unrelated store field"
-out=$(CLAUDE_CONFIG_DIR="$T/forget-config" HOME="$T/forget-root" "$LIVE_LAB" forget-claude "$T/forget-root/" 2>&1)
+out=$(CLAUDE_CONFIG_DIR="$T/forget-config" HOME="$F/forget-root" "$LIVE_LAB" forget-claude "$F/forget-root/" 2>&1)
 expect_code 1 "$?" "forget-claude refuses the home directory as its root"
 out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude / 2>&1)
 expect_code 1 "$?" "forget-claude refuses / as its root"
@@ -787,7 +790,7 @@ out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$ROOT" 2>&
 expect_code 1 "$?" "forget-claude refuses a root outside every temporary directory"
 out=$(CLAUDE_CONFIG_DIR="$T/forget-config" TMPDIR=/ "$LIVE_LAB" forget-claude "$ROOT" 2>&1)
 expect_code 1 "$?" "forget-claude does not trust the caller's TMPDIR as a temporary directory"
-out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$T/forget-missing" 2>&1)
+out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$F/forget-missing" 2>&1)
 expect_code 1 "$?" "forget-claude refuses a root that does not exist"
 [ "$(jq -r '.projects | keys | length' "$T/forget-config/.claude.json")" = 2 ] \
   || fail "a refused forget-claude still changed the store"
