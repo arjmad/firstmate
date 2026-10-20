@@ -224,7 +224,7 @@ jobs:
       # Every shard reports so one failure never hides another shard's result.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -276,9 +276,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/fm-test"
           # The per-script bound turns a hung script into a named exit-124
           # failure instead of the whole shard eating the job cap. 1500s
-          # matches the runner's --changed bound: about 1.3x the slowest
+          # matches the runner's --changed bound: about 1.4x the slowest
           # serial script measured on this fork's runner
-          # (fm-watch-triage.test.sh, 1163s in run 36686083023), and still
+          # (fm-supervision-host.test.sh, 1075s), and still
           # under the 30-minute job cap so the named failure lands first.
           bin/fm-test-run.sh --lane "$FM_SERIAL_LANE" \
             --per-script-timeout-secs 1500 \

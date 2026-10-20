@@ -78,7 +78,7 @@ A reversible hold given `--default <option>` carries its release time in the sam
 `bin/fm-watch.sh` runs it hourly and queues each line as a durable `check:` wake.
 An arjun-only hold, a reversible hold without a default, and any hold written without `--kind` never release themselves.
 `bin/fm-captain-hold.sh --help` owns the prefix grammar, the refusals, and the clock rules.
-`tests/fm-captain-hold-kind.test.sh` and the two `hold_release` cases in `tests/fm-watch-triage.test.sh` cover them.
+`tests/fm-captain-hold-kind.test.sh` and the two `hold_release` cases in `tests/fm-watch-triage-wait.test.sh` cover them.
 
 ### Answering a call (`answer`)
 
