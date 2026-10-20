@@ -1653,17 +1653,16 @@ families_for_changed_path() {
     bin/fm-composer-lib.sh)
       # The shared shape catalogue is vendor-rendered signal; a change to it
       # re-selects the live guard (fm-composer-matrix-live-e2e) alongside the
-      # portable families. As composer code it also names the spawn-and-steer
-      # smoke guard, like the launch branch below.
+      # portable families. That family also holds the spawn-and-steer smoke
+      # guard the launch branch below names.
       printf '%s\n' backend-dispatch
       printf '%s\n' pure-contract-unit
       printf '%s\n' live-harness-optin
-      printf '%s\n' __script__:fm-spawn-steer-herdr-live-e2e.test.sh
       ;;
-    bin/fm-spawn.sh|bin/fm-send.sh|bin/fm-harness.sh|bin/fm-composer*)
-      # Launch, session naming, and composer code: the spawn-and-steer smoke
-      # guard drives all of them together through a real worker, which is how
-      # the firstmate PR 87 naming change broke idle steering unseen.
+    bin/fm-spawn.sh|bin/fm-send.sh|bin/fm-harness.sh)
+      # Launch and session-naming code: the spawn-and-steer smoke guard drives
+      # them together with the composer through a real worker, which is how the
+      # firstmate PR 87 naming change broke idle steering unseen.
       printf '%s\n' backend-dispatch
       printf '%s\n' pure-contract-unit
       printf '%s\n' __script__:fm-spawn-steer-herdr-live-e2e.test.sh
