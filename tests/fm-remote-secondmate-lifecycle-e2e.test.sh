@@ -1302,15 +1302,24 @@ jq --arg p "$ios_pane" \
   || fail "the agent-free remote pane did not classify dead"
 
 tabs_before=$(grep -c '^tab create' "$HERDR_LOG" || true)
+# The relaunch is a whole remote spawn, including the inheritance push's items
+# sent one at a time through the real job worker, so on a CI runner this leg
+# takes 27-35s, about as long as the remote-spawn leg above. The wait below must
+# therefore outlast the watcher's own per-relaunch bound, pinned here at its
+# default, plus a grace for the exit that follows: a relaunch the watcher
+# accepts as healthy must not fail the test, while a watcher that never exits
+# still fails it. The loop stays iteration-counted, so it stretches under load.
+liveness_timeout=120
 # exec keeps $! the watcher itself rather than the function's subshell, so a
 # kill reaches the process that probes and writes into the fixture root.
 FM_STATE_OVERRIDE="$WATCH_STATE" FM_SECONDMATE_LIVENESS_SECS=1 FM_POLL=1 \
+  FM_SECONDMATE_LIVENESS_TIMEOUT="$liveness_timeout" \
   FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
   remote_env exec "$ROOT/bin/fm-watch.sh" \
   > "$TMP_ROOT/watch-liveness.out" 2> "$TMP_ROOT/watch-liveness.err" &
 watch_pid=$!
 watch_wait=0
-while kill -0 "$watch_pid" 2>/dev/null && [ "$watch_wait" -lt 1500 ]; do
+while kill -0 "$watch_pid" 2>/dev/null && [ "$watch_wait" -lt $(( (liveness_timeout + 30) * 50 )) ]; do
   sleep 0.02
   watch_wait=$((watch_wait + 1))
 done
