@@ -157,6 +157,7 @@ make_remote() {
   git -C "$work" -c user.name=t -c user.email=t@example.com commit -q -m change
   git -C "$work" push -q "$dir/remote.git" HEAD~1:refs/heads/main HEAD:refs/pull/12/head
   git -C "$work" rev-parse HEAD > "$dir/pr-head"
+  cp "$dir/pr-head" "$dir/head"
   cat > "$dir/fakebin/risk-tier" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_TEST_DIR/classifier.log"
@@ -390,6 +391,11 @@ test_status_with_a_table_fails_closed() {
   run_case "$dir" status "$URL"
   expect_code 2 "$RC" "table-refused: a classifier that refuses the table must leave the state unreadable"
 
+  printf 'tinker: printed before a failure\n' > "$dir/tier"
+  printf '1\n' > "$dir/tier-rc"
+  run_case "$dir" status "$URL"
+  expect_code 2 "$RC" "table-failed-tier: a classifier that fails after printing a tier must leave the state unreadable"
+
   printf 'fast: whatever\n' > "$dir/tier"
   printf '0\n' > "$dir/tier-rc"
   run_case "$dir" status "$URL"
@@ -400,6 +406,13 @@ test_status_with_a_table_fails_closed() {
   FM_TEST_CLASSIFIER="$dir/no-such-risk-tier" run_case "$dir" status "$URL"
   expect_code 2 "$RC" "table-no-classifier: a missing classifier must leave the state unreadable"
   assert_contains "$ERR" 'no-such-risk-tier is not an executable file' "table-no-classifier: error did not name it"
+
+  # GitHub can serve a new head before its pull request ref moves to it.
+  printf '%s\n' 9999999999999999999999999999999999999999 > "$dir/head"
+  run_case "$dir" status "$URL"
+  expect_code 2 "$RC" "table-ref-lags: a pull request ref behind the head must not be classified"
+  assert_contains "$ERR" 'not its head 9999999999999999999999999999999999999999 yet' "table-ref-lags: error did not say why"
+  cp "$dir/pr-head" "$dir/head"
 
   git --git-dir="$dir/remote.git" update-ref -d refs/pull/12/head
   run_case "$dir" status "$URL"
@@ -444,7 +457,7 @@ test_status_with_the_fleet_classifier() {
   (cd "$dir/remote-work" && git checkout -q HEAD -- . && sed -i.bak '/^\[\[shared\]\]/,$d' risk-tiers.toml \
     && rm -f risk-tiers.toml.bak && cat extra.toml >> risk-tiers.toml && rm extra.toml \
     && git add -A && git -c user.name=t -c user.email=t@example.com commit -q -m lower \
-    && git push -q -f "$dir/remote.git" HEAD:refs/pull/12/head)
+    && git push -q -f "$dir/remote.git" HEAD:refs/pull/12/head && git rev-parse HEAD > "$dir/head")
   FM_TEST_CLASSIFIER=$classifier run_case "$dir" status "$URL"
   expect_code 1 "$RC" "real-self: a PR that lowers its own table must need a review ($ERR)"
   assert_contains "$OUT" 'risk-tiers.toml itself changed' "real-self: got '$OUT'"

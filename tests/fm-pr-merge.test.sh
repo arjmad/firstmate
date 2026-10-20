@@ -4662,7 +4662,8 @@ Code review: findings fixed."
 
 # Gives a case's repository a risk-tiers.toml on main and a pull request head
 # in a local remote that the code review's clone fetches, with a stub classifier
-# that prints the tier line given. Args: case_dir pr_number tier_line
+# that prints the tier line given; the head is left in tier-head for
+# add_gh_mocks. Args: case_dir pr_number tier_line
 add_tier_remote() {
   local case_dir=$1 number=$2 work="$1/tier-work"
   git init -q --bare "$case_dir/tier-remote.git"
@@ -4671,6 +4672,7 @@ add_tier_remote() {
   git -C "$work" add -A
   git -C "$work" -c user.name=t -c user.email=t@example.com commit -q -m main
   git -C "$work" push -q "$case_dir/tier-remote.git" HEAD:refs/heads/main "HEAD:refs/pull/$number/head"
+  git -C "$work" rev-parse HEAD > "$case_dir/tier-head"
   printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q\n' "$3" > "$case_dir/fakebin/risk-tier"
   chmod +x "$case_dir/fakebin/risk-tier"
 }
@@ -4685,12 +4687,12 @@ run_tier_review_case() {
 }
 
 test_tier_table_decides_whether_a_merge_needs_review() {
-  local case_dir head=7177e47177e47177e47177e47177e47177e47177
+  local case_dir
   case_dir=$(make_case review-tinker)
   mkdir -p "$case_dir/wt"
-  add_gh_mocks "$case_dir" "$head"
-  write_github_pr_files "$case_dir" hosts/thor/homebrew.nix
   add_tier_remote "$case_dir" 86 'tinker: every change against origin/main is tinker for thor: hosts/thor/homebrew.nix'
+  add_gh_mocks "$case_dir" "$(cat "$case_dir/tier-head")"
+  write_github_pr_files "$case_dir" hosts/thor/homebrew.nix
   run_tier_review_case "$case_dir" 86
   expect_code 0 "$RC" "review-tinker: a tinker PR must merge without a review"
   assert_grep 'is tinker under its risk-tiers.toml' "$case_dir/stderr" "review-tinker: the tier exemption was not reported"
@@ -4699,8 +4701,8 @@ test_tier_table_decides_whether_a_merge_needs_review() {
   # Under a table the record exemption no longer applies.
   case_dir=$(make_case review-table-shared)
   mkdir -p "$case_dir/wt"
-  add_gh_mocks "$case_dir" "$head"
   add_tier_remote "$case_dir" 87 'shared: docs/records/2026-10-17.json matches no rule (default shared)'
+  add_gh_mocks "$case_dir" "$(cat "$case_dir/tier-head")"
   run_tier_review_case "$case_dir" 87
   expect_code 1 "$RC" "review-table-shared: a shared PR must be refused without a review"
   assert_grep 'is shared under its risk-tiers.toml' "$case_dir/stderr" "review-table-shared: refusal did not name the tier"

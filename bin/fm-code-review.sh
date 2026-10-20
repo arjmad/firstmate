@@ -109,13 +109,19 @@ code_review_has_table() {
 
 CODE_REVIEW_TIER=
 # Sets CODE_REVIEW_TIER to the classifier's `<tier>: <why>` line for the pull
-# request's head, read once per run. Runs the classifier on a throwaway
-# blob-less clone holding origin/main, the head, and main's table in its tree.
+# request's head as the API reports it, read once per run. Runs the classifier
+# on a throwaway blob-less clone holding origin/main, that head, and main's
+# table in its tree, fetched with gh's credentials and never a prompt; a pull
+# request ref that does not yet name that head is refused rather than read.
 code_review_tier() {
-  local classifier=${FM_RISK_TIER:-${FLEET_NIX:-$HOME/nix}/bin/risk-tier} dir head status=0
+  local classifier=${FM_RISK_TIER:-${FLEET_NIX:-$HOME/nix}/bin/risk-tier} dir head fetched status=0
   [ -z "$CODE_REVIEW_TIER" ] || return 0
   if [ ! -x "$classifier" ]; then
     echo "error: $FM_PR_OWNER/$FM_PR_REPO keeps a risk-tiers.toml, but its classifier $classifier is not an executable file" >&2
+    return 2
+  fi
+  if ! head=$(code_review_head) || ! fm_pr_head_valid "$head"; then
+    echo "error: could not read the head commit of $FM_PR_URL" >&2
     return 2
   fi
   dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-code-review.XXXXXX") || return 2
@@ -123,26 +129,29 @@ code_review_tier() {
     && git -C "$dir" remote add origin "https://$FM_PR_HOST/$FM_PR_OWNER/$FM_PR_REPO.git" \
     && git -C "$dir" config remote.origin.promisor true \
     && git -C "$dir" config remote.origin.partialclonefilter blob:none \
-    && git -C "$dir" fetch -q --filter=blob:none origin \
+    && GIT_TERMINAL_PROMPT=0 git -C "$dir" -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+      fetch -q --filter=blob:none origin \
       +refs/heads/main:refs/remotes/origin/main \
       "+refs/pull/$FM_PR_NUMBER/head:refs/fm-code-review/head" \
     && git -C "$dir" show origin/main:risk-tiers.toml > "$dir/risk-tiers.toml" \
-    && head=$(git -C "$dir" rev-parse --verify refs/fm-code-review/head); then
-    CODE_REVIEW_TIER=$("$classifier" --root "$dir" --head "$head") || status=2
+    && fetched=$(git -C "$dir" rev-parse --verify refs/fm-code-review/head); then
+    if [ "$fetched" = "$head" ]; then
+      CODE_REVIEW_TIER=$("$classifier" --root "$dir" --head "$head") || status=2
+    else
+      echo "error: the pull request ref of $FM_PR_URL names $fetched, not its head $head yet; read it again" >&2
+      status=2
+    fi
   else
     echo "error: could not fetch main and the head of $FM_PR_URL to classify its tier" >&2
     status=2
   fi
   rm -rf "$dir"
-  case "$CODE_REVIEW_TIER" in
-    tinker:*|shared:*|business:*) ;;
-    *)
-      [ "$status" -ne 0 ] || echo "error: $classifier printed no tier for $FM_PR_URL: $CODE_REVIEW_TIER" >&2
-      CODE_REVIEW_TIER=
-      return 2
-      ;;
+  case "$status:$CODE_REVIEW_TIER" in
+    0:tinker:*|0:shared:*|0:business:*) return 0 ;;
+    0:*) echo "error: $classifier printed no tier for $FM_PR_URL: $CODE_REVIEW_TIER" >&2 ;;
   esac
-  return "$status"
+  CODE_REVIEW_TIER=
+  return 2
 }
 
 code_review_parse_url() {
