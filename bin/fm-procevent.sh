@@ -2314,8 +2314,9 @@ retire_task_unread() {
     seq=${result%.result}; seq=${seq##*.}
     if [ "$ack" -eq 1 ]; then
       adapter=$(fm_procevent_result_adapter "$result" 2>/dev/null || true)
-      if [ -n "$adapter" ] && adapter_result_is_silent "$adapter" "$result" \
-        && "$SCRIPT_DIR/fm-procevent.sh" handled "$id" "$seq" >/dev/null 2>&1; then
+      # The round list arrives on stdin, so nothing run here may read it.
+      if [ -n "$adapter" ] && adapter_result_is_silent "$adapter" "$result" </dev/null \
+        && "$SCRIPT_DIR/fm-procevent.sh" handled "$id" "$seq" </dev/null >/dev/null 2>&1; then
         continue
       fi
     fi
@@ -2518,12 +2519,14 @@ cmd_sweep_home() {
 }
 
 cmd_list() {
-  local rec id adapter owner pending claim_state kind task
+  local rec id adapter owner pending claim_state kind task all_pending rec_result
   owner_lease_refresh
   if ! fm_procevent_any_registered "$STATE"; then
     printf 'no sources registered\n'
     return 0
   fi
+  # One read of the captured rounds serves every source listed.
+  all_pending=$(fm_procevent_pending "$STATE")
   printf '%-28s %-12s %-10s %s\n' SOURCE ADAPTER OWNER PENDING
   for rec in "$REG"/*.source; do
     [ -e "$rec" ] || continue
@@ -2551,7 +2554,12 @@ cmd_list() {
       *) owner=uncertain ;;
     esac
     fm_procevent_source_lock_release "$id"
-    pending=$(source_pending "$id" | grep -c . || true)
+    pending=0
+    while IFS= read -r rec_result; do
+      result_of_source "$rec_result" "$id" && pending=$((pending + 1))
+    done <<EOF
+$all_pending
+EOF
     if [ "$kind" = task-owned ] && [ -n "$task" ]; then
       if [ "$pending" -gt 0 ]; then
         owner="task:$task/round-open"

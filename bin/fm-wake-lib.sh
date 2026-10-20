@@ -472,15 +472,16 @@ fm_watcher_supervision_verdict() {
   return 0
 }
 
+# Every file the lock library writes into an owner directory.
+FM_LOCK_KNOWN_FILES='pid fm-home pid-identity role watcher-path'
+
 fm_lock_clean_known_files() {
-  local lockdir=$1
-  rm -f \
-    "$lockdir/pid" \
-    "$lockdir/fm-home" \
-    "$lockdir/pid-identity" \
-    "$lockdir/role" \
-    "$lockdir/watcher-path" \
-    2>/dev/null || true
+  local lockdir=$1 name
+  local -a paths=()
+  for name in $FM_LOCK_KNOWN_FILES; do
+    paths+=("$lockdir/$name")
+  done
+  rm -f "${paths[@]}" 2>/dev/null || true
 }
 
 fm_lock_set_role() {

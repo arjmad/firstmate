@@ -110,10 +110,14 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
+# shellcheck source=bin/fm-pr-lib.sh
+. "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-procevent-lib.sh
+. "$SCRIPT_DIR/fm-procevent-lib.sh"
 
 # Scratch files older than this many days are orphans; see the header.
 FM_STATE_RESIDUE_SCRATCH_MAX_AGE_DAYS=7
@@ -416,18 +420,17 @@ collect_referenced() {
     name=${path##*/}
     reference_task "${name%.*}" || return 1
   done
-  for path in "$STATE"/procevent/*.source; do
+  for path in "$(fm_procevent_registry_dir "$STATE")"/*.source; do
     [ -e "$path" ] || [ -L "$path" ] || continue
     name=${path##*/}
     procevent_live_source "${name%.source}"
   done
-  for path in "$STATE"/procevent-inbox/*.result; do
-    [ -f "$path" ] || continue
-    [ -e "${path%.result}.handled" ] && continue
-    name=${path##*/}
-    name=${name%.result}
-    procevent_live_source "${name%.*}"
-  done
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    procevent_live_source "$(fm_procevent_result_source_id "$path")"
+  done <<EOF
+$(fm_procevent_pending "$STATE")
+EOF
   [ -e "$STATE/.wake-queue" ] || [ -L "$STATE/.wake-queue" ] || return 0
   # A queue that cannot be read may name any task, so it fails the whole set.
   keys=$(awk -F '\t' 'NF >= 5 { print $4 }' "$STATE/.wake-queue") || return 1
@@ -511,9 +514,9 @@ owner_holds_only_lock_files() {
   local entry
   for entry in "$1"/* "$1"/.*; do
     case "${entry##*/}" in
-      '*'|'.*'|.|..|pid|fm-home|pid-identity|role|watcher-path) ;;
-      *) return 1 ;;
+      '*'|'.*'|.|..) continue ;;
     esac
+    case " $FM_LOCK_KNOWN_FILES " in *" ${entry##*/} "*) ;; *) return 1 ;; esac
   done
 }
 

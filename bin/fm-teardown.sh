@@ -4122,9 +4122,8 @@ retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
 # task left unread keeps its board registered and is named here for firstmate.
 if [ -d "$STATE/procevent" ]; then
   TEARDOWN_BOARDS_RC=0
-  TEARDOWN_BOARDS_OUT=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
-    "$SCRIPT_DIR/fm-procevent.sh" retire-task "$ID" 2>&1) || TEARDOWN_BOARDS_RC=$?
-  [ -z "$TEARDOWN_BOARDS_OUT" ] || printf '%s\n' "$TEARDOWN_BOARDS_OUT"
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-procevent.sh" retire-task "$ID" </dev/null || TEARDOWN_BOARDS_RC=$?
   case "$TEARDOWN_BOARDS_RC" in
     0) ;;
     3) echo "warning: $ID kept a review board for a round it left unread (see the kept: lines above); that round reaches firstmate as a process-event wake once this task's record is gone" >&2 ;;

@@ -49,8 +49,8 @@ HOME_SUMMARY_FAILURE_STAMP=
 HOME_SUMMARY_TMP=
 HOME_SUMMARY_ERR_TMP=
 HOME_SUMMARY_LOCK_HELD=0
-HOME_SUMMARY_TMP_PATH=${FM_HOME_SUMMARY_TMP_PATH:-}
-HOME_SUMMARY_ERR_PATH=${FM_HOME_SUMMARY_ERR_PATH:-}
+HOME_SUMMARY_TMP_PATH=
+HOME_SUMMARY_ERR_PATH=
 
 # shellcheck source=bin/fm-timeout-lib.sh
 # shellcheck disable=SC1091
@@ -66,6 +66,11 @@ case "${1:-}" in
   --_worker)
     HOME_SUMMARY_MODE=worker
     BEST_EFFORT=${FM_HOME_SUMMARY_WORKER_BEST_EFFORT:-0}
+    # Only the parent names these, for this worker alone; nothing it runs
+    # inherits them.
+    HOME_SUMMARY_TMP_PATH=${FM_HOME_SUMMARY_TMP_PATH:-}
+    HOME_SUMMARY_ERR_PATH=${FM_HOME_SUMMARY_ERR_PATH:-}
+    unset FM_HOME_SUMMARY_TMP_PATH FM_HOME_SUMMARY_ERR_PATH
     ;;
   --_log-failure) HOME_SUMMARY_MODE=log-failure ;;
   -h|--help) usage; exit 0 ;;
