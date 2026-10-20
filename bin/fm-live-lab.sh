@@ -14,6 +14,7 @@
 #   fm-live-lab.sh say <lab-root> [--window <name>] <text>
 #   fm-live-lab.sh pane <lab-root> [--window <name>] [--lines <n>]
 #   fm-live-lab.sh down <lab-root>
+#   fm-live-lab.sh forget-claude <root>
 #
 # up builds everything under <lab-root> (a fresh path; default a new
 # /tmp/fmlab.XXXXXX), verifies readiness itself, and prints one line per check.
@@ -24,6 +25,17 @@
 # prints a window's recent scrollback. down stops every lab process, removes the
 # lab's Claude trust entries by one atomic replace, removes <lab-root>, and exits
 # non-zero if the recorded Pi trust store or ~/.treehouse gained changes.
+# forget-claude is that same Claude-entry removal alone, for a live test that
+# spawns Claude workers under its own temporary <root> without a lab record: it
+# removes every project entry at or under <root> from the store
+# CLAUDE_CONFIG_DIR selects (default ~/.claude.json), prints the count, and
+# refuses any <root> that is not an existing directory strictly inside a
+# system temporary directory (/tmp, or the macOS per-user one; never the
+# caller's TMPDIR), that is or contains $HOME, or that carries no
+# .fm-forget-claude marker file. The marker is a declaration, not proof: the
+# code that creates <root> writes it at creation, and nothing writes it just to
+# clean up, so a directory nobody declared, such as a live fleet task's
+# /tmp/fm-<id>, is refused.
 #
 # What up builds:
 #   home/            the lab main home: bin/fm-lab-home.sh create, then the
@@ -122,6 +134,14 @@ help_text() { sed -n '/^# Usage:/,/^# up builds/p' "${BASH_SOURCE[0]}" | sed '$d
 usage() { help_text >&2; exit 2; }
 
 real_dir() { (cd -P -- "$1" 2>/dev/null && pwd -P); }
+
+# The Claude store this process's Claude reads: CLAUDE_CONFIG_DIR (absolute)
+# or $HOME. Sets CLAUDE_DIR and CLAUDE_STORE for up and forget-claude alike.
+select_claude_store() {
+  CLAUDE_DIR=${CLAUDE_CONFIG_DIR:-}
+  case "$CLAUDE_DIR" in ''|/*) ;; *) die "CLAUDE_CONFIG_DIR must be an absolute path" ;; esac
+  CLAUDE_STORE="${CLAUDE_DIR:-$HOME}/.claude.json"
+}
 
 digest() {  # <file> -> sha256 of its bytes, or "absent"
   [ -f "$1" ] || { echo absent; return; }
@@ -481,9 +501,7 @@ cmd_up() {
   HOST_OFF=no
   [ "$host_line" != off ] || HOST_OFF=yes
   [ -n "$model" ] || { [ "$harness" = claude ] && model=sonnet || model=openai-codex/gpt-6-luna; }
-  CLAUDE_DIR=${CLAUDE_CONFIG_DIR:-}
-  case "$CLAUDE_DIR" in ''|/*) ;; *) die "CLAUDE_CONFIG_DIR must be an absolute path" ;; esac
-  CLAUDE_STORE="${CLAUDE_DIR:-$HOME}/.claude.json"
+  select_claude_store
   [ -z "$root" ] || [ ! -e "$root" ] || die "refusing '$root': a lab root must not exist yet"
   for tool in git tmux jq node python3 shasum "$harness"; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool is required and was not found on PATH"
@@ -858,12 +876,33 @@ cmd_check() {
   run_checks
 }
 
+cmd_forget_claude() {
+  [ "$#" -eq 1 ] && [ -n "$1" ] || usage
+  case "$1" in /*) ;; *) die "forget-claude takes an absolute root" ;; esac
+  local tmp home inside=no base
+  ROOT=$(real_dir "$1") || die "refusing '$1': forget-claude needs an existing directory"
+  home=$(real_dir "$HOME" 2>/dev/null || printf '%s' "${HOME%/}")
+  case "$home/" in "$ROOT"/*) die "refusing '$1': it is or contains \$HOME" ;; esac
+  # System temporary directories only, never the caller's TMPDIR.
+  for base in /tmp "$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"; do
+    [ -n "$base" ] || continue
+    tmp=$(real_dir "$base") || continue
+    case "$ROOT" in "$tmp"/?*) inside=yes ;; esac
+  done
+  [ "$inside" = yes ] || die "refusing '$1': forget-claude only takes a directory inside a temporary directory"
+  [ -f "$ROOT/.fm-forget-claude" ] && [ ! -L "$ROOT/.fm-forget-claude" ] \
+    || die "refusing '$1': it carries no .fm-forget-claude marker from the code that created it"
+  select_claude_store
+  forget_claude_entries
+}
+
 case "${1:-}" in
   up) shift; cmd_up "$@" ;;
   check) shift; cmd_check "$@" ;;
   say) shift; cmd_say "$@" ;;
   pane) shift; cmd_pane "$@" ;;
   down) shift; cmd_down "$@" ;;
+  forget-claude) shift; cmd_forget_claude "$@" ;;
   -h|--help) help_text ;;
   *) usage ;;
 esac

@@ -383,7 +383,7 @@ family_for_basename() {
     fm-host-mirror-live-e2e.test.sh|fm-question-pretool-check-live-e2e.test.sh|\
     fm-question-keeper-live-e2e.test.sh|\
     fm-quota-array-dispatch-live-e2e.test.sh|fm-send-secondmate-marker-herdr-e2e.test.sh|\
-    fm-send-inbox-doorbell-live-e2e.test.sh|\
+    fm-send-inbox-doorbell-live-e2e.test.sh|fm-spawn-steer-herdr-live-e2e.test.sh|\
     fm-secondmate-busy-contract-live-e2e.test.sh|\
     fm-calm-claude-mod-plugin.test.sh|fm-calm-claude-mod-live-e2e.test.sh|\
     fm-calm-pi-queue-retention-live-e2e.test.sh|\
@@ -864,6 +864,7 @@ tests/fm-spawn-compact-adviser-disable.test.sh 21654
 tests/fm-spawn-dispatch-profile.test.sh 215014
 tests/fm-spawn-orca-worktree.test.sh 2440
 tests/fm-spawn-pool-base-freshen.test.sh 70901
+tests/fm-spawn-steer-herdr-live-e2e.test.sh 111
 tests/fm-spawn-worktree-settle.test.sh 9761
 tests/fm-startup-memory-budget.test.sh 8358
 tests/fm-startup-network.test.sh 72226
@@ -1460,6 +1461,7 @@ families_for_changed_path() {
       printf '%s\n' real-herdr-gated
       printf '%s\n' backend-dispatch
       printf '%s\n' pure-contract-unit
+      printf '%s\n' __script__:fm-spawn-steer-herdr-live-e2e.test.sh
       ;;
     bin/fm-herdr-session-cleanup.sh)
       printf '%s\n' session-bootstrap
@@ -1655,13 +1657,22 @@ families_for_changed_path() {
     bin/fm-composer-lib.sh)
       # The shared shape catalogue is vendor-rendered signal; a change to it
       # re-selects the live guard (fm-composer-matrix-live-e2e) alongside the
-      # portable families.
+      # portable families. That family also holds the spawn-and-steer smoke
+      # guard the launch branch below names.
       printf '%s\n' backend-dispatch
       printf '%s\n' pure-contract-unit
       printf '%s\n' live-harness-optin
       ;;
-    bin/fm-spawn.sh|bin/fm-send.sh|bin/fm-harness.sh|\
-    bin/fm-peek.sh|bin/fm-composer*)
+    bin/fm-spawn.sh|bin/fm-send.sh|bin/fm-harness.sh|bin/fm-composer*)
+      # Launch, session naming, and composer code other than the lib above: the
+      # spawn-and-steer smoke guard drives them together through a real worker,
+      # which is how the firstmate PR 87 naming change broke idle steering
+      # unseen.
+      printf '%s\n' backend-dispatch
+      printf '%s\n' pure-contract-unit
+      printf '%s\n' __script__:fm-spawn-steer-herdr-live-e2e.test.sh
+      ;;
+    bin/fm-peek.sh)
       printf '%s\n' backend-dispatch
       printf '%s\n' pure-contract-unit
       ;;

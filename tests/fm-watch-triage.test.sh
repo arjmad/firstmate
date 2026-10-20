@@ -2832,8 +2832,8 @@ test_absorbed_replacement_wait_does_not_inherit_the_old_throttle() {
 # in the pane contents the case just wrote. Armed the way fm-watch-arm.sh arms a
 # successor after firstmate handled a wake, because that is what a supervision
 # turn actually does and it is the only arm that stays in the poll loop instead of
-# re-announcing the previous round's downtime - without it a round exits on
-# `check: rearm-resurface` before it ever reaches the stale path, and every
+# re-announcing the previous round's downtime - without it a round exits on its
+# recovery announcement before it ever reaches the stale path, and every
 # absorb assertion below passes vacuously. A live agent (pane_current_command
 # matching the recorded harness) on an idle pane is the exact population
 # pause_state_class answers `none` for.
@@ -6731,7 +6731,9 @@ test_procevent_unacknowledged_result_redrains_until_handled() {
   pid=$!
   wait_for_exit "$pid" 100 \
     || fail "an unacknowledged process-event result was not re-surfaced on re-arm: $(cat "$out")"
-  grep -F 'check: rearm-resurface' "$out" >/dev/null \
+  # Reconcile republishes the result as a fresh, unclaimed row, so the recovery
+  # names it as queued work rather than announcing generic downtime.
+  grep -Eqx 'check: queued work: [0-9]+ check' "$out" \
     || fail "the successor did not report recovery for the unacknowledged result: $(cat "$out")"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$replay_out" 2> "$replay_err" \
     || fail "the successor could not re-drain the unacknowledged process-event result"
@@ -6841,9 +6843,10 @@ test_procevent_launch_failed_episodes_are_each_delivered() {
   # The same key again is what a registration-identity-only key would produce
   # for the next episode: already surfaced, so the process-event surface never
   # delivers it under its headline again. A fresh watcher still recovers the
-  # unacknowledged queue row through the generic `check: rearm-resurface`
-  # path (the contract test_procevent_unacknowledged_result_redrains_until_handled
-  # proves), so what this asserts is the headline, not silence.
+  # unacknowledged queue row through the recovery path, which names the row as
+  # queued work (the contract
+  # test_procevent_unacknowledged_result_redrains_until_handled proves), so
+  # what this asserts is the headline, not silence.
   append_wake "$state" check "procevent:lf-src:launch-failed:1-2-100-7" \
     "check: process-event source lf-src is registered but its launch did not prove it took the claim"
   : > "$out"
@@ -6857,8 +6860,8 @@ test_procevent_launch_failed_episodes_are_each_delivered() {
       # the ordinary surface delivered the repeated key after all, or that
       # something unrelated fired inside the window - and both are failures of
       # exactly what this test guards, so neither may pass as "recovery".
-      grep -F 'check: rearm-resurface' "$out" >/dev/null \
-        || fail "an already-surfaced launch-failed key woke the watcher, and the reason was not the one tolerated recovery path (expected the exact line 'check: rearm-resurface'; if that path was reworded, update this expectation, do not restore the strict silence check): $(cat "$out")"
+      grep -Fx 'check: queued work: 1 check' "$out" >/dev/null \
+        || fail "an already-surfaced launch-failed key woke the watcher, and the reason was not the one tolerated recovery path (expected the recovery path's count line, never the row's own launch-failed headline; if that path was reworded, update this expectation, do not restore the strict silence check): $(cat "$out")"
       ;;
     *) fail "the watcher failed on an already-surfaced launch-failed key (status $status): $(cat "$out")" ;;
   esac
@@ -6973,7 +6976,7 @@ test_procevent_surface_crash_boundaries() {
   procevent_watch_bg "$dir" "$out.replay"; pid=$!
   wait_for_exit "$pid" 100 \
     || fail "an unacknowledged delivered record was not re-surfaced on re-arm: $(cat "$out.replay")"
-  grep -F 'check: rearm-resurface' "$out.replay" >/dev/null \
+  grep -Fx 'check: queued work: 1 check' "$out.replay" >/dev/null \
     || fail "the successor did not recover the delivered-but-unacknowledged record: $(cat "$out.replay")"
   replay_err="$out.replay.err"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out.replay.drain" 2> "$replay_err" \

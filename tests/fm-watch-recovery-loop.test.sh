@@ -101,6 +101,8 @@ import { pathToFileURL } from "node:url";
 
 let tool = null;
 const prompts = [];
+const isRecovery = (message) =>
+  message.includes("check: queued work: ") || message.includes("check: rearm-resurface");
 const pi = {
   on() {},
   registerCommand() {},
@@ -119,15 +121,17 @@ await tool.execute("tool-call-t1", {}, undefined, undefined, {});
 const deadline = Date.now() + 75000;
 let firstAt = 0;
 while (Date.now() < deadline) {
-  const rearm = prompts.filter((message) => message.includes("check: rearm-resurface"));
+  // A recovery counts its queued rows or, with none, reads generic
+  // (resurface_reason in the watcher), so every form of either counts.
+  const rearm = prompts.filter((message) => isRecovery(message));
   if (rearm.length > 1) {
-    throw new Error(`unbounded recovery loop: ${rearm.length} rearm-resurface follow-ups`);
+    throw new Error(`unbounded recovery loop: ${rearm.length} recovery follow-ups`);
   }
   if (rearm.length === 1 && firstAt === 0) firstAt = Date.now();
   if (firstAt && Date.now() - firstAt >= 55000) break;
   await new Promise((resolve) => setTimeout(resolve, 200));
 }
-const rearm = prompts.filter((message) => message.includes("check: rearm-resurface"));
+const rearm = prompts.filter((message) => isRecovery(message));
 if (rearm.length !== 1) {
   throw new Error(`expected exactly one recovery follow-up, got ${rearm.length}: ${prompts.join(" || ")}`);
 }
@@ -211,7 +215,7 @@ test_handling_successor_does_not_go_blind() {
     || { kill -TERM "$child" 2>/dev/null || true; fail "handling successor did not name the crew status file: $(cat "$out")"; }
   grep "$(printf '\tsignal\tcrew.status\t')" "$state/.wake-queue" >/dev/null \
     || { kill -TERM "$child" 2>/dev/null || true; fail "handling successor did not enqueue a durable row for the crew event"; }
-  ! grep -F 'check: rearm-resurface' "$out" >/dev/null \
+  ! grep -E 'check: (rearm-resurface|queued work: )' "$out" >/dev/null \
     || { kill -TERM "$child" 2>/dev/null || true; fail "handling successor emitted synthetic recovery instead of supervising: $(cat "$out")"; }
   if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
     printf 'T2_WATCH_OUTPUT=%s\n' "$(tr '\n' ' ' < "$out")"

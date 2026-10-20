@@ -224,6 +224,10 @@ The first recovery marks that generation announced, and later empty-queue arms l
 A non-successor watcher start checks the durable queue and recovery marker under their locks.
 If an announced-but-unacknowledged episode has an empty queue, the arm leaves that generation announced, making repeated empty-queue arms idempotent while a long-poll source is merely alive.
 If a durable row arrived after the announcement, the arm opens a fresh pending downtime generation so buried work still resurfaces once.
+Most announcements are not downtime: a row another process appended (an inbox note, a merge outcome) has no wake of its own and reaches main through this path.
+When main has rows queued, the announcement counts them by kind, decisions first, such as `check: queued work: 1 needs-decision, 2 check`; with nothing queued for main it reads `check: rearm-resurface`.
+It never quotes a row, because a payload can carry outside text (a mail subject, an inbox note) and this line is main's trigger rather than drain output read as evidence.
+Both are check reasons, so either one reaches main, which drains every row.
 A Codex foreground checkpoint skips the announced-episode reopen transition, so an already-announced generation stays announced while the checkpoint continues its bounded supervision.
 Its ordinary arm check still announces a never-announced generation, including one made pending by a durable queue append during the checkpoint.
 

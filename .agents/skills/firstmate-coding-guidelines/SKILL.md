@@ -105,6 +105,8 @@ Every such check needs two tests, because they fail for different reasons:
 
 Record the dated per-harness result in `docs/verification/runtime-backends.md`, and point at the live guard as the command that refreshes it, rather than leaving a version-scoped observation to rot into a false claim.
 
+A change to launch, session-naming, or composer code (`bin/fm-spawn.sh`, `bin/fm-send.sh`, `bin/fm-harness.sh`, `bin/fm-composer*`, `bin/backends/herdr*`) also runs `FM_SPAWN_STEER_LIVE=1 tests/fm-spawn-steer-herdr-live-e2e.test.sh` before its PR merges and reports the result in the PR; `bin/fm-test-run.sh --changed` selects it for those files, but its gate keeps it from running unasked.
+
 ## Documentation change review
 
 For every changed maintained prose surface, identify its inventory audience, authoritative owner, current-behavior relevance, destination for supporting evidence, and any unique safety fact that removal could lose.

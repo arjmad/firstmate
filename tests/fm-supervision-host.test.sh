@@ -1653,7 +1653,7 @@ test_next_park_takes_over_the_cycle_a_pass_through_left_for_main() {
   ! hook_exited "$home" || fail "takeover: the takeover woke main: $(cat "$home/hook.err")"
   host_owns_the_only_cycle "$home" || fail "takeover: the park did not keep the cycle it took over"
   assert_re '^acked:' "$home/state/.watcher-down" "takeover: the takeover opened a downtime episode"
-  assert_no_re 'rearm-resurface' "$home/state/.supervision-host.log" "takeover: the takeover resurfaced a recovery to main"
+  assert_no_re 'rearm-resurface|check: queued work: ' "$home/state/.supervision-host.log" "takeover: the takeover resurfaced a recovery to main"
   append_status "$home" 'which region?' needs-decision
   wait_until 250 hook_exited "$home" || fail "takeover: the owned cycle did not deliver the next close: $(cat "$home/state/.supervision-host.log")"
   assert_rewoke_main "$home" "takeover (next close)"
@@ -1891,7 +1891,7 @@ park_after_stop() {  # <home>
   rm -f "$1/host.rc"
   : > "$1/park.go"
   wait_until 150 host_exited "$1" || fail "the watcher's downtime resurface did not reach main: $(cat "$1/host.out")"
-  assert_re '^check: rearm-resurface' "$1/host.out" "fixture: the first close after the watcher stopped was not its resurface"
+  assert_re '^check: (rearm-resurface|queued work: )' "$1/host.out" "fixture: the first close after the watcher stopped was not its resurface"
   main_drain_and_ack "$1"
   quiet_pass_through_successor "$1"
   park_again "$1"
@@ -2301,8 +2301,10 @@ test_outcome_after_the_return_survives_a_host_killed_at_the_turn_end() {
   rm -f "$home/host.rc"
   start_host "$home"
   wait_until 250 host_exited "$home" || fail "return-first: the next host did not resurface the queued outcome"
-  assert_re '^check: rearm-resurface$' "$home/host.out" "the next host's first cycle must resurface the queue"
-  assert_re '	pass-through	attended	main-only	check: rearm-resurface' "$home/state/.supervision-host.log" "the attended resurface must reach main"
+  # The recovery names the outcome row the branch report queued; it is still a
+  # check reason, so it reaches main.
+  assert_re '^check: queued work: (.*, )?[0-9]+ check$' "$home/host.out" "the next host's first cycle must resurface the queue"
+  assert_re '	pass-through	attended	main-only	check: queued work: (.*, )?[0-9]+ check' "$home/state/.supervision-host.log" "the attended resurface must reach main"
   drained=$(FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" 2>&1)
   assert_contains "$drained" "supervision-host outcome 1 for demo [routine] was recorded after the captain returned" \
     "main's drain must present the outcome the killed host never handed off"
@@ -2334,7 +2336,7 @@ test_next_host_clears_a_turn_its_killed_predecessor_left() {
     "$home"/state/.supervision-host-descendants.* "$home/state/.supervision-host-turn"; do
     [ -e "$f" ] && fail "the next host left its killed predecessor's turn file behind: $f"
   done
-  assert_re '^check: rearm-resurface$' "$home/host.out" "the next host's first cycle must resurface the queue"
+  assert_re '^check: queued work: (.*, )?[0-9]+ check$' "$home/host.out" "the next host's first cycle must resurface the queue"
   pass "host: a killed predecessor's engine is reaped and the next host removes its turn files"
 }
 
@@ -2691,7 +2693,7 @@ test_first_cycle_status_streams_and_owner_options_reach_it() {
   wait_until 100 sh -c '! kill -0 "$1" 2>/dev/null' _ "$stale" || fail "stream: --restart left the old watcher running"
   wait_until 200 host_exited "$home" || append_status "$home" 'second close' 'done'
   wait_until 200 host_exited "$home" || fail "stream: the restarting host's close did not reach main"
-  assert_re '^(signal: .*demo.status|check: rearm-resurface)$' "$home/host.out" "stream: the restarting host's close must reach main"
+  assert_re '^(signal: .*demo.status|check: rearm-resurface|check: queued work: 1 signal)$' "$home/host.out" "stream: the restarting host's close must reach main"
 
   # That close left an unacknowledged downtime episode; a host the owner starts
   # as the closed arm's successor takes it over as a handling successor
@@ -3086,7 +3088,7 @@ test_handover_leaves_the_watcher_for_the_next_park() {
   wait_until 150 watcher_live "$home" || fail "handover: no watcher runs after the take-over"
   sleep 3
   [ ! -s "$home/host.rc" ] || fail "handover: the next park did not stay parked after its take-over: $(cat "$home/host.out")"
-  assert_no_grep 'rearm-resurface' "$home/state/.supervision-host.log" "handover: the hand-over left a close for the next park to re-surface"
+  assert_no_re 'rearm-resurface|check: queued work: ' "$home/state/.supervision-host.log" "handover: the hand-over left a close for the next park to re-surface"
   pass "host: SIGUSR1 hands the running cycle to the next park, which takes it over"
 }
 

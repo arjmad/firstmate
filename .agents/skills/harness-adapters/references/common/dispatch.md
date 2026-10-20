@@ -19,7 +19,9 @@ Establish model support and provider family from that harness's own authoritativ
 Missing model-level quota, a missing authentication source, unmeasurable headroom, or unmodeled authentication is disclosed uncertainty that keeps a candidate eligible, never a credential or login escalation.
 Only concrete contradictory evidence blocks a candidate, such as an authoritative catalog proving the model unsupported or proof that the credential selected for that surface is unusable; never infer a credential store, provider family, or quota mapping from a harness, model, or source name, and never launch another harness's CLI to judge a candidate.
 Preserve malformed profile configuration as an actionable error rather than selecting around it.
-When every candidate is tight, preserve the captain's strongest-reasoning class rather than silently downgrading it solely to conserve quota; stop and report the tight choice if that class cannot proceed.
+Quota chooses which candidate runs ready work, never whether or when it runs: dispatch at intake every task that dependencies, time gates, project capacity, and serialization already allow, and report quota pressure to the captain only as a courtesy.
+Never defer, hold, queue for a later day, or stagger ready work to save quota for later; a quota stop - a declared rule or profile `floor`, or a runway that fails `quota-array-dispatch`'s feasibility gate (`exhausted_now` included) - rules out that candidate, and the task goes to the candidate that skill selects next, or to a reported blocker or that skill's escalation when none remains.
+When every candidate is tight, preserve the captain's strongest-reasoning class rather than silently downgrading it solely to conserve quota; stop and report if that class cannot proceed, never merely because its candidates are tight.
 Break genuine evidence ties without array-order or harness bias.
 `quota-axi` owns how model or product windows relate to bounding account windows and remains data-only.
 Load `quota-array-dispatch` before choosing among a matched profile array; that skill is the single owner of the TOON-first spendPriority selection procedure.

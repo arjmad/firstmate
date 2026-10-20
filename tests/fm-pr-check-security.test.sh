@@ -2690,8 +2690,9 @@ test_retirement_crash_recovery() {
     || fail "could not seed post-queue crash"
   FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/recovery.out" 2> "$dir/recovery.err" \
     || fail "post-queue crash recovery wake failed: $(cat "$dir/recovery.err")"
-  grep -F 'check: rearm-resurface' "$dir/recovery.out" >/dev/null \
-    || fail "post-queue crash did not surface its durable recovery first"
+  # The recovery names the queued row (bin/fm-watch.sh resurface_reason).
+  grep -Fx "check: queued work: 1 check" "$dir/recovery.out" >/dev/null \
+    || fail "post-queue crash did not surface its durable recovery first: $(cat "$dir/recovery.out")"
   ack_watcher_cycle "$state" || fail "post-queue crash recovery acknowledgement failed"
   set +e
   FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
@@ -2789,8 +2790,8 @@ test_retirement_crash_recovery() {
   add_stop_custom_check "$dir"
   FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/template-recovery.out" 2> "$dir/template-recovery.err" \
     || fail "template-update recovery wake failed: $(cat "$dir/template-recovery.err")"
-  grep -F 'check: rearm-resurface' "$dir/template-recovery.out" >/dev/null \
-    || fail "template-update recovery did not surface its durable wake first"
+  grep -Fx "check: queued work: 1 check" "$dir/template-recovery.out" >/dev/null \
+    || fail "template-update recovery did not surface its durable wake first: $(cat "$dir/template-recovery.out")"
   ack_watcher_cycle "$state" || fail "template-update recovery acknowledgement failed"
   set +e
   FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/restart.out" 2> "$dir/restart.err"

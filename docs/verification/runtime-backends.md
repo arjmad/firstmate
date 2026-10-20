@@ -1481,6 +1481,32 @@ Observed 2026-08-19:
 ok - live Herdr submit confirm: Claude Code (2.1.236 (Claude Code)) on herdr 0.8.0 reports empty for a landed idle steer
 ```
 
+### Spawn-and-steer smoke
+
+Measured 2026-10-19 against Herdr 0.9.5 and Claude Code 2.1.300 in an isolated `fm-lab-` session.
+
+`tests/fm-spawn-steer-herdr-live-e2e.test.sh` launches a real Claude ship worker through `bin/fm-spawn.sh` on the Herdr backend, waits for it to go idle after its first turn, checks that its composer shows the `ship: <task-id>` session name, and steers it through `bin/fm-send.sh`.
+The worker must act on the steer and move the record into `handled/`, and `fm-send` must not report that its doorbell missed.
+With the titled-rule composer fix from firstmate PR 88 reverted in `bin/fm-composer-lib.sh`, the same run fails at the steer, which is the regression firstmate PR 87 shipped.
+Refresh it with:
+
+```sh
+FM_SPAWN_STEER_LIVE=1 tests/fm-spawn-steer-herdr-live-e2e.test.sh
+```
+
+Observed 2026-10-19:
+
+```text
+ok - Claude Code (2.1.300 (Claude Code)) on herdr 0.9.5: fm-spawn launched a named Claude worker in isolated session fm-lab-spawn-steer-live-32803-27994 and it went idle
+ok - Claude Code (2.1.300 (Claude Code)) on herdr 0.9.5: fm-send's doorbell reached the idle named worker, which acted and acknowledged
+```
+
+Observed 2026-10-19 with the PR 88 composer change reverted:
+
+```text
+fm-send: doorbell did not reach fm-lab-spawn-steer-live-99193-25733:w2:p2; the steer is durably recorded at <lab>/home/state/steer99025x1582.inbox/001.msg and the watcher will re-ring
+```
+
 ### Claude exit behind the slash-command popup
 
 Measured 2026-09-26 against Herdr 0.9.0 and Claude Code 2.1.283 in an isolated `fm-lab-` session.

@@ -151,6 +151,12 @@
 #                          running a check or removing poll artifacts
 #   heartbeat              fleet-scan backstop found an unsurfaced captain-relevant
 #                          status, unless afk is active
+#   check: queued work: <count> <kind>[, ...] | check: rearm-resurface
+#                          recovery: main's queued rows (often one another
+#                          process appended, or one queued while no
+#                          non-successor cycle ran) are counted by kind, never
+#                          quoted; nothing queued for main keeps the generic
+#                          reason; both are check reasons and reach main
 #   check: inactive-outcome bounded poll-loop reconciliation found a suspicious
 #                          inactive terminal outcome that still lacks its durable
 #                          upstream receipt
@@ -2778,6 +2784,8 @@ if [ -n "$EVICTED_PID" ]; then
   echo "watcher: replaced stalled pid $EVICTED_PID (beacon ${EVICTED_BEAT_AGE}s past hard bound ${WATCHER_STALL_BOUND}s)"
 fi
 WATCHER_RECOVERY_PENDING=0
+# Set once this cycle announces a recovery (resurface_after_downtime).
+WATCHER_RESURFACED=0
 if [ -n "${FM_LOCK_RECOVERED_PID:-}" ]; then
   WATCHER_RECOVERY_PENDING=1
 fi
@@ -2958,7 +2966,7 @@ watcher_cleanup() {
   if [ "$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)" = "${WATCHER_PID:-}" ]; then
     owns_lock=1
     if [ "${WATCHER_RECOVERY_PENDING:-0}" -eq 1 ] \
-      && [ "${FM_WATCH_DELIVERED_REASON:-}" = "check: rearm-resurface" ]; then
+      && [ "${WATCHER_RESURFACED:-0}" -eq 1 ] && [ -n "${FM_WATCH_DELIVERED_REASON:-}" ]; then
       transition=release-lock-existing
     fi
   fi
@@ -3048,7 +3056,35 @@ resurface_after_downtime() {
     fi
     [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || return 0
   fi
-  wake "check: rearm-resurface"
+  # wake exits, so the flag reaches watcher_cleanup only for this delivery; a
+  # wake that returned must not leave it set for a later, unrelated one.
+  WATCHER_RESURFACED=1
+  wake "$(resurface_reason)"
+  WATCHER_RESURFACED=0
+}
+
+# The reason a recovery announces. Most recoveries are not watcher downtime:
+# a row another process appended (an inbox note, a merge outcome) or one queued
+# while no non-successor cycle ran has no wake of its own, so this path is how
+# it reaches main. When main has rows queued the recovery counts them by kind -
+# "check: queued work: 1 needs-decision, 2 check" - so the banner and the ledger
+# show what is waiting instead of reading as downtime. It never copies a row's
+# payload: payloads can carry outside text (a mail subject, an inbox note), and
+# this line is main's trigger, not drain output read as evidence. Main's rows
+# are the ones fm_wake_main_row_kinds counts, the same set main's pending count
+# uses. It stays a check reason on purpose: routing is unchanged and every
+# recovery still reaches main. A recovery with nothing for main, such as an
+# interrupted handling turn, keeps the generic reason.
+resurface_reason() {
+  local summary=''
+  if [ -s "$FM_WAKE_QUEUE" ]; then
+    summary=$(fm_wake_main_row_kinds --summary 2>/dev/null) || summary=''
+  fi
+  if [ -n "$summary" ]; then
+    printf 'check: queued work: %s\n' "$summary"
+  else
+    printf '%s\n' 'check: rearm-resurface'
+  fi
 }
 
 while :; do
