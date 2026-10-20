@@ -4117,19 +4117,6 @@ if [ -n "$LAUNCH_HOME_TOKEN" ]; then
 fi
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
-# A review board the task armed for itself would otherwise keep polling, and be
-# re-armed by every session start, long after its owner is gone. A round the
-# task left unread keeps its board registered and is named here for firstmate.
-if [ -d "$STATE/procevent" ]; then
-  TEARDOWN_BOARDS_RC=0
-  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
-    "$SCRIPT_DIR/fm-procevent.sh" retire-task "$ID" </dev/null || TEARDOWN_BOARDS_RC=$?
-  case "$TEARDOWN_BOARDS_RC" in
-    0) ;;
-    3) echo "warning: $ID kept a review board for a round it left unread (see the kept: lines above); that round reaches firstmate as a process-event wake once this task's record is gone" >&2 ;;
-    *) echo "warning: $ID's review boards could not all be retired (see the error above); they keep polling until bin/fm-procevent.sh retire succeeds" >&2 ;;
-  esac
-fi
 # Opt-in fleet activity ledger (docs/fleet-ledger.md), before the status log is
 # retired so its last lines are captured; off costs one file test.
 [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" cleaned_up "$ID" || true
@@ -4206,6 +4193,21 @@ else
 fi
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0
+# A review board the task armed for itself would otherwise keep polling, and be
+# re-armed by every session start, long after its owner is gone. It is retired
+# only once the record is gone, so a teardown that aborts earlier never leaves
+# a live task without its board. A round the task left unread keeps its board
+# registered and is named here for firstmate.
+if [ -d "$STATE/procevent" ]; then
+  TEARDOWN_BOARDS_RC=0
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-procevent.sh" retire-task "$ID" </dev/null || TEARDOWN_BOARDS_RC=$?
+  case "$TEARDOWN_BOARDS_RC" in
+    0) ;;
+    3) echo "warning: $ID kept a review board for a round it left unread (see the kept: lines above); that round reaches firstmate as a process-event wake" >&2 ;;
+    *) echo "warning: $ID's review boards could not all be retired (see the error above); they keep polling until bin/fm-procevent.sh retire succeeds" >&2 ;;
+  esac
+fi
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi

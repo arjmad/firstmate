@@ -442,6 +442,7 @@ EOF
       *.status) key=${key%.status} ;;
       *.turn-ended) key=${key%.turn-ended} ;;
       *.check.sh) key=${key%.check.sh} ;;
+      *) continue ;;
     esac
     reference_task "$key" || return 1
   done <<EOF

@@ -2350,9 +2350,11 @@ cmd_retire_task() {
       printf '%s\n' "$out"
       continue
     fi
-    # A round captured after the check above is what makes retire refuse; it
-    # is kept exactly like one found before it.
-    if retire_task_unread "$task" "$id" 0 "$(source_pending "$id")"; then
+    # A round captured after the check above makes retire refuse with its
+    # unacknowledged-round refusal; that round is kept exactly like one found
+    # before it. Any other refusal is an error, whatever is pending.
+    if case "$out" in *"is unacknowledged"*) true ;; *) false ;; esac \
+      && retire_task_unread "$task" "$id" 0 "$(source_pending "$id")"; then
       any_kept=1
     else
       printf 'error: cannot retire %s owned by task %s: %s\n' "$id" "$task" "$out" >&2
