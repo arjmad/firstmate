@@ -133,6 +133,8 @@ case "${1:-} ${2:-}" in
       *) printf '%s\n' '[]' ;;
     esac
     ;;
+  # Main keeps no risk-tiers.toml, so the path exemption decides.
+  "api repos/"*"/contents/risk-tiers.toml?ref=main") echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
   "api repos/"*) printf '%s\n' '{"name":"main","protected":false}' ;;
 esac
 SH

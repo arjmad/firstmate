@@ -187,6 +187,11 @@ case " $* " in
   *" api repos/"*"/branches/"*)
     printf '%s\n' '{"name":"main","protected":false}'
     ;;
+  # Main keeps no risk-tiers.toml (bin/fm-code-review.sh).
+  *" api repos/"*"/contents/risk-tiers.toml?"*)
+    echo 'gh: Not Found (HTTP 404)' >&2
+    exit 1
+    ;;
   *" api repos/"*"/pulls/"*)
     printf '%s\n' "{\"state\":\"open\",\"user\":{\"login\":\"author\"},\"head\":{\"sha\":\"${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}\"},\"draft\":false,\"mergeable\":true,\"merged_at\":null}"
     ;;

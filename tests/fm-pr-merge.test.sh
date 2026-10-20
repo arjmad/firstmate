@@ -165,8 +165,9 @@ assert_logged_gh_merge() {
 }
 
 # The pull request's changed files, diff, and comments that
-# bin/fm-code-review.sh reads. By default the one changed file is a record, so
-# the code review gate passes as exempt and every other case is untouched.
+# bin/fm-code-review.sh reads. By default the base branch keeps no
+# risk-tiers.toml and the one changed file is a record, so the code review
+# gate passes as exempt and every other case is untouched.
 # Args: case_dir path...
 write_github_pr_files() {
   local case_dir=$1
@@ -311,6 +312,14 @@ case "${1:-} ${2:-}" in
       *" repos/"*"/issues/"*"/comments "*)
         gh_jq "$fixtures/github-pr-comments.json" "$@"
         exit $?
+        ;;
+      *" repos/"*"/contents/risk-tiers.toml?ref=main "*)
+        if [ -d "$fixtures/tier-remote.git" ]; then
+          printf 'file\n'
+          exit 0
+        fi
+        echo 'gh: Not Found (HTTP 404)' >&2
+        exit 1
         ;;
       *" repos/"*"/commits/"*"/check-runs"*)
         case "$*" in
@@ -4651,6 +4660,56 @@ Code review: findings fixed."
   pass "fm-pr-merge merges a code-changing PR only with a trusted review record for its current diff"
 }
 
+# Gives a case's repository a risk-tiers.toml on main and a pull request head
+# in a local remote that the code review's clone fetches, with a stub classifier
+# that prints the tier line given; the head is left in tier-head for
+# add_gh_mocks. Args: case_dir pr_number tier_line
+add_tier_remote() {
+  local case_dir=$1 number=$2 work="$1/tier-work"
+  git init -q --bare "$case_dir/tier-remote.git"
+  git init -q -b main "$work"
+  printf 'default = "shared"\n' > "$work/risk-tiers.toml"
+  git -C "$work" add -A
+  git -C "$work" -c user.name=t -c user.email=t@example.com commit -q -m main
+  git -C "$work" push -q "$case_dir/tier-remote.git" HEAD:refs/heads/main "HEAD:refs/pull/$number/head"
+  git -C "$work" rev-parse HEAD > "$case_dir/tier-head"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q\n' "$3" > "$case_dir/fakebin/risk-tier"
+  chmod +x "$case_dir/fakebin/risk-tier"
+}
+
+# Runs run_review_case with the case's tier remote and stub classifier.
+run_tier_review_case() {
+  local case_dir=$1
+  FM_RISK_TIER="$case_dir/fakebin/risk-tier" GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0="url.$case_dir/tier-remote.git.insteadOf" \
+    GIT_CONFIG_VALUE_0=https://github.com/example/repo.git \
+    run_review_case "$@"
+}
+
+test_tier_table_decides_whether_a_merge_needs_review() {
+  local case_dir
+  case_dir=$(make_case review-tinker)
+  mkdir -p "$case_dir/wt"
+  add_tier_remote "$case_dir" 86 'tinker: every change against origin/main is tinker for thor: hosts/thor/homebrew.nix'
+  add_gh_mocks "$case_dir" "$(cat "$case_dir/tier-head")"
+  write_github_pr_files "$case_dir" hosts/thor/homebrew.nix
+  run_tier_review_case "$case_dir" 86
+  expect_code 0 "$RC" "review-tinker: a tinker PR must merge without a review"
+  assert_grep 'is tinker under its risk-tiers.toml' "$case_dir/stderr" "review-tinker: the tier exemption was not reported"
+  assert_logged_gh_merge "$case_dir" 86 example/repo --squash
+
+  # Under a table the record exemption no longer applies.
+  case_dir=$(make_case review-table-shared)
+  mkdir -p "$case_dir/wt"
+  add_tier_remote "$case_dir" 87 'shared: docs/records/2026-10-17.json matches no rule (default shared)'
+  add_gh_mocks "$case_dir" "$(cat "$case_dir/tier-head")"
+  run_tier_review_case "$case_dir" 87
+  expect_code 1 "$RC" "review-table-shared: a shared PR must be refused without a review"
+  assert_grep 'is shared under its risk-tiers.toml' "$case_dir/stderr" "review-table-shared: refusal did not name the tier"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "review-table-shared: gh pr merge ran without a review"
+  pass "fm-pr-merge lets the repository's tier table decide which PRs need a review"
+}
+
 test_review_state_unreadable_refuses() {
   local case_dir
   case_dir=$(make_case review-unreadable)
@@ -4913,6 +4972,7 @@ test_required_partial_reads_report_all_failures
 test_allow_red_refused_on_forgejo
 test_allow_missing_refused_on_forgejo
 test_code_changing_pr_needs_a_trusted_review_record_for_its_diff
+test_tier_table_decides_whether_a_merge_needs_review
 test_review_state_unreadable_refuses
 test_waive_review_merges_once_and_is_logged
 test_waive_review_is_attended_github_only_and_well_formed
