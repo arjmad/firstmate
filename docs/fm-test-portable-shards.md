@@ -32,7 +32,8 @@ Its serial hint table therefore keeps the slower of each upstream hint and the f
 The fork samples were taken on 2026-10-01 from every serial artifact of the green fork runs [36500320998](https://github.com/arjmad/firstmate/actions/runs/36500320998), [36508826113](https://github.com/arjmad/firstmate/actions/runs/36508826113), [36672572377](https://github.com/arjmad/firstmate/actions/runs/36672572377), [36677945346](https://github.com/arjmad/firstmate/actions/runs/36677945346), and [36686083023](https://github.com/arjmad/firstmate/actions/runs/36686083023), the completed serial shards of [36887279624](https://github.com/arjmad/firstmate/actions/runs/36887279624) and [36895211569](https://github.com/arjmad/firstmate/actions/runs/36895211569), and the completed `FM_TEST_END` markers of those two runs' serial-5 jobs, which were cancelled at their 30-minute cap.
 They covered all 203 fork serial members of that date, including the fork-only scripts; a serial script added since keeps its upstream hint, or none until fork CI measures it.
 `tests/fm-supervision-host.test.sh` measured 694-703 s in the green fork runs but 1027668 and 1074563 ms in the two cancelled serial-5 jobs, so it keeps the 1074563 ms maximum rather than upstream's post-fix 789123 ms.
-`tests/fm-watch-triage.test.sh` keeps the fork's 1162851 ms from run 36686083023, which stays the indivisible floor below the packing budget.
+The watch-triage suites were one script, `tests/fm-watch-triage.test.sh`, that reached 1252 to 1467 s on fork CI in October 2026 and was killed at random by the 1500 s per-script bound.
+It is now five `tests/fm-watch-triage*.test.sh` suites split by family, which carry provisional local measurements from 2026-10-20 (237882 to 352185 ms, 1462 s in total, the same as the unsplit script on that host) until the next CI refresh replaces them.
 The parallel table keeps upstream's values, because both fork parallel jobs complete in about 13 minutes or less.
 
 ## Parallel lanes
@@ -77,9 +78,9 @@ Refresh the hints whenever a serial member grows materially or the lane gains sc
 `bin/fm-test-run.sh` owns the per-shard packing, so its `--check-coverage` output is the current account of lane size and coverage rather than a copied inventory.
 Its header and `--help` own the modeled-budget check and output fields; read the current estimates from `--check-coverage` instead of retaining copied lane sums here.
 [`tests/fm-test-run.test.sh`](../tests/fm-test-run.test.sh), in `test_portable_serial_packing_budget_boundary`, verifies acceptance exactly at the budget and refusal one millisecond above it through the executable runner.
-The longest script, `tests/fm-watch-triage.test.sh`, is the indivisible floor for this layout.
+The longest script, `tests/fm-supervision-host.test.sh`, is the indivisible floor for this layout.
 The estimates use per-file maxima from different runs, not measured rebalanced jobs or an end-to-end latency guarantee.
-The baseline watch-triage samples range from 944375 to 1074843 ms, while each observed completed portable job adds at most 30 seconds beyond its summed scripts in these runs.
+The baseline samples of the then-unsplit watch-triage script ranged from 944375 to 1074843 ms, while each observed completed portable job adds at most 30 seconds beyond its summed scripts in these runs.
 Even so, maxima from five runs do not establish a P95 or guarantee future headroom.
 Job timeouts remain hang tripwires under the policy in [Timeouts](#timeouts) below; they are not the desired healthy duration.
 `tests/fm-ci-workflow.test.sh` compares the parsed CI matrix to the executable runner lanes, and the runner rejects parallel `--jobs` on a serial lane even when that shard has only one member.
@@ -123,7 +124,7 @@ No fast mode, path skips, or paid runner provisioning is part of this layout.
 
 The longer-term performance objective remains a complete green run under fifteen minutes including start delay, but the current watch-triage floor alone exceeds that objective.
 The immediate packing target is the runner's modeled script budget, not a claim that more shards alone can make an indivisible script faster.
-The layout uses fourteen long-lived Linux jobs (nine serial, two parallel, Herdr, two lint), plus short checks and macOS; insufficient shared account capacity can erase the packing gain.
+The layout uses fifteen long-lived Linux jobs (ten serial, two parallel, Herdr, two lint), plus short checks and macOS; insufficient shared account capacity can erase the packing gain.
 Compare complete before/after runs, preserve cancelled and partial-run evidence, and measure a representative normal-run sample before claiming a P95 improvement.
 The workflow retains per-PR supersession without cancelling main pushes or changing the compliance workflow's event semantics.
 

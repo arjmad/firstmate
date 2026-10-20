@@ -188,10 +188,10 @@ MAX_WALL_MS=
 PER_SCRIPT_TIMEOUT_SECS=0
 # Bound applied automatically on the automatic --changed path, derived from
 # measured healthy runtimes with margin rather than picked: the slowest measured
-# script is tests/fm-watch-triage.test.sh at about 1163s on this fork's slower
-# CI runner (the hint table below records that loaded figure). 1500s keeps every
-# measured script under the bound with roughly 1.3x headroom over the slowest
-# loaded measurement,
+# script is tests/fm-supervision-host.test.sh at about 1075s on this fork's
+# slower CI runner (the hint table below records that loaded figure). 1500s keeps
+# every measured script under the bound with roughly 1.4x headroom over the
+# slowest loaded measurement,
 # and it stays under the 30-minute normal CI tier so a wedged script fails here,
 # with its output, before the job cap
 # cancels the lane. It is a guard, not a speed control: a HUNG script becomes a
@@ -201,7 +201,7 @@ CHANGED_DEFAULT_TIMEOUT_SECS=1500
 
 # How many separate-runner shards the portable serial remainder splits into.
 # One owner: CI lane names carry this count and are refused when they disagree.
-PORTABLE_SERIAL_SHARDS=9
+PORTABLE_SERIAL_SHARDS=10
 
 # Conservative balance hint for a portable-serial script with no measurement.
 # Rounded above the current CI mean, including the capability-skipped scripts.
@@ -320,7 +320,8 @@ family_for_basename() {
     fm-mail.test.sh|fm-mail-check.test.sh|\
     fm-turnend-foreign-owner-arm-fix.test.sh|\
     fm-wake-queue.test.sh|fm-watch-arm.test.sh|fm-watch-checkpoint.test.sh|fm-watch-recovery-loop.test.sh|\
-    fm-watch-triage.test.sh|fm-task-inbox.test.sh|\
+    fm-watch-triage.test.sh|fm-watch-triage-stale.test.sh|fm-watch-triage-wait.test.sh|\
+    fm-watch-triage-wedge.test.sh|fm-watch-triage-hold.test.sh|fm-task-inbox.test.sh|\
     fm-watcher-lock.test.sh|fm-inactive-reconcile.test.sh)
       printf '%s\n' watcher-wake-lock
       ;;
@@ -904,7 +905,11 @@ tests/fm-wake-queue.test.sh 165906
 tests/fm-watch-arm.test.sh 113470
 tests/fm-watch-checkpoint.test.sh 11342
 tests/fm-watch-recovery-loop.test.sh 59254
-tests/fm-watch-triage.test.sh 1162851
+tests/fm-watch-triage-hold.test.sh 352185
+tests/fm-watch-triage-stale.test.sh 296454
+tests/fm-watch-triage-wait.test.sh 281691
+tests/fm-watch-triage-wedge.test.sh 293914
+tests/fm-watch-triage.test.sh 237882
 tests/fm-watcher-lock.test.sh 72022
 tests/fm-worker-account-live-e2e.test.sh 3283
 tests/fm-worker-account.test.sh 38332
