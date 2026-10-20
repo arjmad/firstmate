@@ -13,6 +13,7 @@
 #   fm-procevent.sh classify <result-file>
 #   fm-procevent.sh handled <source-id> <sequence>
 #   fm-procevent.sh retire <source-id> [--if-absent|--if-matches <adapter> -- <argv>...|--if-owner <registration-token>]
+#   fm-procevent.sh retire-task <task-id>
 #   fm-procevent.sh sweep-home [--preflight]
 #   fm-procevent.sh binding-retirement-preflight <binding-digest>
 #   fm-procevent.sh extension-retirement <binding|transfer> <retirement-arguments...>
@@ -114,6 +115,15 @@
 #            exists, and --if-owner removes only the exact extension registration
 #            token printed by register-extension, so a stale owner cannot retire
 #            a replacement generation.
+# retire-task
+#            Retire every task-owned source <task-id> holds, through `retire`,
+#            when that task is torn down. An unacknowledged captured round the
+#            adapter calls silent carries nothing to read, so it is acknowledged
+#            first; a round with anything in it keeps its source registered and
+#            prints `kept: <source-id> <sequence>` naming the acknowledgement
+#            firstmate owes it. Exit 0 when nothing the task owned remains, 3
+#            when a source was kept for an unread round, 1 when a retire failed.
+#            Firstmate-registered sources are never touched.
 # sweep-home Retire a bounded snapshot of this home's registrations and owned
 #            claims, then refuse unless no registration, runner record, or owned
 #            claim remains. Used by supported Firstmate home retirement.
@@ -2250,6 +2260,45 @@ cmd_retire() {
   printf 'retired: %s\n' "$id"
 }
 
+cmd_retire_task() {
+  local task=${1-} rec id result seq adapter any_kept=0 failed=0 unread out
+  [ "$#" -eq 1 ] || usage
+  fm_pr_task_id_valid "$task" || die "task id is invalid: $task"
+  for rec in "$REG"/*.source; do
+    [ -f "$rec" ] && [ ! -L "$rec" ] || continue
+    id=${rec##*/}; id=${id%.source}
+    [ "$(source_kind "$id" 2>/dev/null || true)" = task-owned ] || continue
+    [ "$(source_owner_task "$id" 2>/dev/null || true)" = "$task" ] || continue
+    unread=0
+    while IFS= read -r result; do
+      [ -n "$result" ] || continue
+      seq=${result%.result}; seq=${seq##*.}
+      adapter=$(fm_procevent_result_adapter "$result" 2>/dev/null || true)
+      if [ -n "$adapter" ] && adapter_result_is_silent "$adapter" "$result" \
+        && "$SCRIPT_DIR/fm-procevent.sh" handled "$id" "$seq" >/dev/null 2>&1; then
+        continue
+      fi
+      printf 'kept: %s %s (task %s left this captured round unread; read it, then bin/fm-procevent.sh handled %s %s)\n' \
+        "$id" "$seq" "$task" "$id" "$seq"
+      unread=1
+    done < <(source_pending "$id")
+    if [ "$unread" -eq 1 ]; then
+      any_kept=1
+      continue
+    fi
+    # A silent terminal round's acknowledgement already concluded the board.
+    [ -e "$rec" ] || [ -L "$rec" ] || { printf 'retired: %s\n' "$id"; continue; }
+    if out=$("$SCRIPT_DIR/fm-procevent.sh" retire "$id" 2>&1); then
+      printf '%s\n' "$out"
+    else
+      printf 'error: cannot retire %s owned by task %s: %s\n' "$id" "$task" "$out" >&2
+      failed=1
+    fi
+  done
+  [ "$failed" -eq 0 ] || return 1
+  [ "$any_kept" -eq 0 ] || return 3
+}
+
 sweep_add_id() {
   local id=$1
   case "$SWEEP_IDS" in
@@ -2562,6 +2611,7 @@ case "${1-}" in
   classify)           shift; cmd_classify "$@" ;;
   handled)            shift; cmd_handled "$@" ;;
   retire)             shift; cmd_retire "$@" ;;
+  retire-task)        shift; cmd_retire_task "$@" ;;
   sweep-home)         shift; cmd_sweep_home "$@" ;;
   binding-retirement-preflight) shift; cmd_binding_retirement_preflight "$@" ;;
   extension-retirement) shift; cmd_extension_retirement "$@" ;;

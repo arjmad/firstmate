@@ -109,6 +109,10 @@
 # session-start sweep could still close, while a journal bound to any other pane
 # - or a version 1 attempt whose workspace is still present or unreadable - may
 # name a live quarantined space and is retained for that sweep.
+# Teardown also retires every process-event source the task owns through
+# `bin/fm-procevent.sh retire-task`, which owns which rounds are safe to drop; a
+# board kept for an unread round is named in the output and does not fail the
+# teardown.
 # data/<id>/ is deliberately left in place: a successor spawn reads brief.md
 # from it.
 # Companion worktrees (fork patch, docs/fork-decisions.md 2026-10-14): a ship
@@ -4113,6 +4117,17 @@ if [ -n "$LAUNCH_HOME_TOKEN" ]; then
 fi
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
+# A review board the task armed for itself would otherwise keep polling, and be
+# re-armed by every session start, long after its owner is gone. A round the
+# task left unread keeps its board registered and is named here for firstmate.
+if [ -d "$STATE/procevent" ]; then
+  TEARDOWN_BOARDS_RC=0
+  TEARDOWN_BOARDS_OUT=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-procevent.sh" retire-task "$ID" 2>&1) || TEARDOWN_BOARDS_RC=$?
+  [ -z "$TEARDOWN_BOARDS_OUT" ] || printf '%s\n' "$TEARDOWN_BOARDS_OUT"
+  [ "$TEARDOWN_BOARDS_RC" -eq 0 ] \
+    || echo "warning: $ID's process-event sources were not all retired (see above); each kept board still holds a captured round firstmate must read and acknowledge" >&2
+fi
 # Opt-in fleet activity ledger (docs/fleet-ledger.md), before the status log is
 # retired so its last lines are captured; off costs one file test.
 [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" cleaned_up "$ID" || true

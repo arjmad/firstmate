@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # fm-state-residue-sweep.sh - retire the watcher's per-endpoint bookkeeping
-# under state/ once the endpoint it describes is provably gone, and rotate the
-# scratch files two supervision scripts can leave behind.
+# under state/ once the endpoint it describes is provably gone, retire the
+# task-keyed records and dead lock owners nothing live references, and rotate
+# the scratch files supervision scripts can leave behind.
 #
 # Usage: fm-state-residue-sweep.sh [--dry-run]
 #          Prints one "BOOTSTRAP_INFO: state residue sweep: ..." line when
@@ -47,18 +48,41 @@
 # any current state/<id>.meta are never queried at all. Backend answers are
 # never cached across runs: a kept key is simply asked again next time.
 #
-# Records keyed by task id (.seen-<task>_status, .hb-surfaced-<task>, the
-# daemon's .subsuper-*) are the per-task cleanup's concern and are not touched
-# here.
+# Retired-task records. bin/fm-teardown.sh removes a task's own task-keyed
+# records, but a task that ended any other way - or before teardown learned a
+# record - leaves them behind for good: the watcher signal markers
+# .seen-<task>_status and .seen-<task>_turn-ended, the heartbeat marker
+# .hb-surfaced-<task>, and the branch outcome cache .<task>.branch-outcome-index.
+# Those names are lossy (each writer folds some of `.:/` to `_`), so the sweep
+# folds every name the same way and compares folded forms. A record is removed
+# only when its folded task is referenced by none of: a current
+# state/<id>.meta, a state/<id>.status log (it may still hold unread lines or an
+# open decision), a state/<id>.turn-ended file, a state/<id>.inbox, or any key
+# in the durable wake queue. A collision between two folded names only ever
+# keeps a record. The watcher's per-wake process-event marker
+# .seen-procevent-<hex key> is removed once its decoded queue key is no longer
+# queued and its source has neither a registration nor an unacknowledged
+# captured result. The daemon's .subsuper-* records are not touched here.
+#
+# Dead lock owners. bin/fm-wake-lib.sh's locks are a symlink <lock> to a
+# private <lock>.owner.<random> directory; a holder killed before its release
+# leaves that directory behind once the lock is reclaimed. An owner directory
+# directly under state/ is removed when neither <lock> nor <lock>.steal points
+# at it, the pid it records is not running, and it is older than
+# FM_STATE_RESIDUE_OWNER_MIN_AGE_SECONDS - an acquirer is inside that window for
+# well under a second before it links. Removal deletes only the lock library's
+# own known files and then the empty directory, so anything else keeps it.
 #
 # Scratch rotation. bin/fm-claude-stop-autoarm.sh captures each arm attempt in
-# state/.claude-autoarm-output.<random> and bin/fm-wake-drain.sh stages a row
-# rewrite in state/.wake-rows.consume.<random>; both remove their file on every
-# ordinary path, so one older than FM_STATE_RESIDUE_SCRATCH_MAX_AGE_DAYS was
-# orphaned by a killed process and is removed. The threshold is a constant,
-# not a config file: no live scratch file is ever that old (an arm attempt
-# lasts seconds; a row rewrite holds the queue lock), so there is nothing to
-# tune.
+# state/.claude-autoarm-output.<random>, bin/fm-wake-drain.sh stages a row
+# rewrite in state/.wake-rows.consume.<random>, and
+# bin/fm-home-summary-refresh.sh stages state/.home-summary.json.<random> and
+# state/.home-summary-error.<random>; each removes its file on every ordinary
+# path, so one older than FM_STATE_RESIDUE_SCRATCH_MAX_AGE_DAYS was orphaned by
+# a killed process and is removed. The threshold is a constant, not a config
+# file: no live scratch file is ever that old (an arm attempt lasts seconds; a
+# row rewrite holds the queue lock; a summary refresh is bounded at a minute),
+# so there is nothing to tune.
 #
 # Cost bound. Every backend question is one CLI call plus its JSON parse
 # (about 45 ms each against a scripted herdr on 2026-09-17), and a home that
@@ -89,11 +113,13 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 FM_STATE_RESIDUE_SCRATCH_MAX_AGE_DAYS=7
 # Endpoint questions per run; see "Cost bound" in the header.
 FM_STATE_RESIDUE_QUERY_BUDGET=200
+# An unlinked lock owner younger than this may still be mid-acquire.
+FM_STATE_RESIDUE_OWNER_MIN_AGE_SECONDS=3600
 
 # Longest prefixes first, so `.stale-since-K` is read as key K under
 # `.stale-since-` and never as key `since-K` under `.stale-`.
 FM_STATE_RESIDUE_PREFIXES='.stale-since- .paused-rechecked- .paused-resurfaced- .writing-since- .writing-resurfaced- .waiting-resurfaced- .wedge-escalations- .churn-since- .hash- .count- .stale- .paused-'
-FM_STATE_RESIDUE_SCRATCH_PREFIXES='.claude-autoarm-output. .wake-rows.consume.'
+FM_STATE_RESIDUE_SCRATCH_PREFIXES='.claude-autoarm-output. .wake-rows.consume. .home-summary.json. .home-summary-error.'
 
 DRY_RUN=0
 case "${1:-}" in
@@ -343,6 +369,134 @@ sweep_endpoint_records() {
   done
 }
 
+# --- retired-task records -----------------------------------------------------
+
+fold_task() { printf '%s' "$1" | tr '.:/' '___'; }
+
+# REFERENCED: the folded form of every task something live still names.
+REFERENCED=
+reference_task() { REFERENCED="$REFERENCED|$(fold_task "$1")|"; }
+collect_referenced() {
+  local path name key
+  for path in "$STATE"/*.meta "$STATE"/*.status "$STATE"/*.turn-ended "$STATE"/*.inbox; do
+    [ -e "$path" ] || [ -L "$path" ] || continue
+    name=$(basename "$path")
+    reference_task "${name%.*}"
+  done
+  [ -f "$STATE/.wake-queue" ] || return 0
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    key=${key##*/}
+    case "$key" in
+      *.status) key=${key%.status} ;;
+      *.turn-ended) key=${key%.turn-ended} ;;
+      *.check.sh) key=${key%.check.sh} ;;
+    esac
+    reference_task "$key"
+  done <<EOF
+$(awk -F '\t' 'NF >= 5 { print $4 }' "$STATE/.wake-queue" 2>/dev/null)
+EOF
+}
+
+# task_record_task <basename>: the folded task a retired-task record is keyed
+# by, or nothing when the name is not one of those records.
+task_record_task() {
+  local name=$1 rest
+  case "$name" in
+    .seen-procevent-*) return 1 ;;
+    .seen-*_status) rest=${name#.seen-}; rest=${rest%_status} ;;
+    .seen-*_turn-ended) rest=${name#.seen-}; rest=${rest%_turn-ended} ;;
+    .hb-surfaced-*) rest=${name#.hb-surfaced-} ;;
+    .?*.branch-outcome-index) rest=${name#.}; rest=${rest%.branch-outcome-index} ;;
+    *) return 1 ;;
+  esac
+  [ -n "$rest" ] || return 1
+  fold_task "$rest"
+}
+
+# procevent_marker_live <basename>: whether a .seen-procevent-<hex> marker's
+# wake is still queued or its source still registered or unacknowledged.
+procevent_marker_live() {
+  local hex=${1#.seen-procevent-} key source result
+  case "$hex" in ''|*[!0-9a-f]*) return 0 ;; esac
+  [ $(( ${#hex} % 2 )) -eq 0 ] || return 0
+  key=$(printf '%b' "$(printf '%s' "$hex" | sed 's/../\\x&/g')") || return 0
+  case "$key" in procevent:?*) ;; *) return 0 ;; esac
+  if [ -f "$STATE/.wake-queue" ] \
+    && awk -F '\t' -v k="$key" 'NF >= 5 && $4 == k { found = 1 } END { exit !found }' "$STATE/.wake-queue"; then
+    return 0
+  fi
+  source=${key#procevent:}
+  source=${source%%:*}
+  [ -n "$source" ] || return 0
+  [ ! -e "$STATE/procevent/$source.source" ] && [ ! -L "$STATE/procevent/$source.source" ] || return 0
+  for result in "$STATE/procevent-inbox/$source".*.result; do
+    [ -e "$result" ] || continue
+    [ -e "${result%.result}.handled" ] || return 0
+  done
+  return 1
+}
+
+retire_record() {  # <path> <label>
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf 'would retire %s %s\n' "$2" "$(basename "$1")"
+    return 0
+  fi
+  rm -f -- "$1" || { warn "could not remove $1"; return 1; }
+}
+
+sweep_task_records() {
+  local path name task
+  for path in "$STATE"/.seen-* "$STATE"/.hb-surfaced-* "$STATE"/.*.branch-outcome-index; do
+    [ -f "$path" ] && [ ! -L "$path" ] || continue
+    name=$(basename "$path")
+    case "$name" in
+      .seen-procevent-*)
+        procevent_marker_live "$name" && continue
+        ;;
+      *)
+        task=$(task_record_task "$name") || continue
+        case "$REFERENCED" in *"|$task|"*) continue ;; esac
+        ;;
+    esac
+    retire_record "$path" "retired-task record" && REMOVED_TASK_RECORDS=$((REMOVED_TASK_RECORDS + 1))
+  done
+}
+
+# --- dead lock owners -----------------------------------------------------------
+
+lock_points_at() {  # <link> <owner-basename>
+  local target
+  [ -L "$1" ] || return 1
+  target=$(readlink "$1" 2>/dev/null) || return 1
+  [ "$(basename "$target")" = "$2" ]
+}
+
+sweep_lock_owners() {
+  local path name lock pid
+  for path in "$STATE"/*.owner.?????? "$STATE"/.*.owner.??????; do
+    [ -d "$path" ] && [ ! -L "$path" ] || continue
+    name=$(basename "$path")
+    lock="$STATE/${name%.owner.*}"
+    lock_points_at "$lock" "$name" && continue
+    lock_points_at "$lock.steal" "$name" && continue
+    pid=$(cat "$path/pid" 2>/dev/null || true)
+    case "$pid" in ''|*[!0-9]*) ;; *) fm_pid_alive "$pid" && continue ;; esac
+    [ "$(fm_path_age "$path")" -gt "$FM_STATE_RESIDUE_OWNER_MIN_AGE_SECONDS" ] || continue
+    if [ "$DRY_RUN" -eq 1 ]; then
+      printf 'would retire dead lock owner %s\n' "$name"
+      REMOVED_LOCK_OWNERS=$((REMOVED_LOCK_OWNERS + 1))
+      continue
+    fi
+    fm_lock_discard_owner "$path"
+    if [ -e "$path" ]; then
+      warn "kept lock owner $name: it holds files the lock library does not own"
+    else
+      REMOVED_LOCK_OWNERS=$((REMOVED_LOCK_OWNERS + 1))
+    fi
+  done
+}
+
 # --- scratch rotation ----------------------------------------------------------
 
 rotate_scratch() {
@@ -371,6 +525,7 @@ if [ ! -d "$STATE" ] || [ -L "$STATE" ]; then
 fi
 
 REMOVED_RECORDS=0 REMOVED_ENDPOINTS=0 ROTATED=0 QUERIES=0 DEFERRED=0
+REMOVED_TASK_RECORDS=0 REMOVED_LOCK_OWNERS=0
 KEPT_META=0 KEPT_LIVE=0 KEPT_UNRESOLVED=0 KEPT_UNMATCHED=0
 
 collect_protected
@@ -380,13 +535,18 @@ if [ -n "$KEYS" ]; then
   read_inventories
   sweep_endpoint_records
 fi
+collect_referenced
+sweep_task_records
+sweep_lock_owners
 rotate_scratch
 
-if [ "$REMOVED_ENDPOINTS" -gt 0 ] || [ "$ROTATED" -gt 0 ]; then
+if [ "$REMOVED_ENDPOINTS" -gt 0 ] || [ "$ROTATED" -gt 0 ] \
+  || [ "$REMOVED_TASK_RECORDS" -gt 0 ] || [ "$REMOVED_LOCK_OWNERS" -gt 0 ]; then
   verb=removed
   [ "$DRY_RUN" -eq 0 ] || verb='would remove'
-  printf 'BOOTSTRAP_INFO: state residue sweep: %s %s watcher record(s) for %s gone endpoint(s) and %s stale scratch file(s); kept %s endpoint(s) still in a task record, %s live, %s unresolved, %s unmatched' \
+  printf 'BOOTSTRAP_INFO: state residue sweep: %s %s watcher record(s) for %s gone endpoint(s) and %s stale scratch file(s), %s retired-task record(s), %s dead lock owner(s); kept %s endpoint(s) still in a task record, %s live, %s unresolved, %s unmatched' \
     "$verb" "$REMOVED_RECORDS" "$REMOVED_ENDPOINTS" "$ROTATED" \
+    "$REMOVED_TASK_RECORDS" "$REMOVED_LOCK_OWNERS" \
     "$KEPT_META" "$KEPT_LIVE" "$KEPT_UNRESOLVED" "$KEPT_UNMATCHED"
   [ "$DEFERRED" -eq 0 ] || printf ', %s deferred to the next session start' "$DEFERRED"
   printf '\n'

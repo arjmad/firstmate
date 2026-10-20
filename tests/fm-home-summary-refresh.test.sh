@@ -514,6 +514,27 @@ grep -F 'refresh exceeded its 1-second deadline' \
   || fail "publication validation timeout was not logged"
 pass "best-effort refresh bounds validation and publication"
 
+# A worker the bound has to KILL never runs its EXIT trap, so the parent removes
+# the two temporary files it named for that worker.
+cat > "$HANGBIN/jq" <<'SH'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  case "$arg" in
+    */.home-summary.json.*) trap '' TERM; sleep 30 ;;
+  esac
+done
+exec "$FM_TEST_REAL_JQ" "$@"
+SH
+chmod +x "$HANGBIN/jq"
+rm -f "$HOME_DIR/state/.home-summary.json."* "$HOME_DIR/state/.home-summary-error."*
+PATH="$HANGBIN:$FAKEBIN:$PATH" FM_TEST_REAL_JQ="$REAL_JQ" \
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" FM_HOME_SUMMARY_TIMEOUT=1 \
+  "$WRITER" --best-effort \
+  || fail "a killed worker changed the best-effort caller result"
+leaked=$(find "$HOME_DIR/state" -maxdepth 1 \( -name '.home-summary.json.*' -o -name '.home-summary-error.*' \) -print)
+[ -z "$leaked" ] || fail "a worker killed past its deadline leaked temporary files: $leaked"
+pass "a worker killed past its deadline leaves no temporary files behind"
+
 MKBIN="$TMP_ROOT/mkdir-hangbin"
 REAL_MKDIR=$(command -v mkdir)
 mkdir -p "$MKBIN"

@@ -3857,6 +3857,47 @@ test_teardown_retires_task_watcher_markers_and_orphan_journal() {
   pass "teardown retires the task's own watcher markers and orphaned presentation journal, leaving other tasks' markers alone"
 }
 
+# A review board the task armed for itself must stop polling when the task is
+# torn down, while a round it left unread keeps its board and is named, and a
+# board another task owns is untouched.
+test_teardown_retires_the_task_owned_boards() {
+  local case_dir pe_env listen unread other
+  case_dir=$(make_case retire-task-boards)
+  write_meta "$case_dir" local-only ship
+  fm_write_meta "$case_dir/state/task-y2.meta" "window=firstmate:fm-task-y2" \
+    "worktree=$case_dir/wt-y2" "project=$case_dir/project"
+  export FM_PROCEVENT_CLAIM_ROOT="$case_dir/claims"
+  fm_test_track_procevent_home "$case_dir" "$case_dir/claims"
+  pe_env=(env FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" "$ROOT/bin/fm-procevent.sh")
+  listen=lavish-1111111111111111 unread=lavish-2222222222222222 other=lavish-3333333333333333
+  "${pe_env[@]}" register-task lavish "$listen" task-x1 -- sleep 600 >/dev/null \
+    || fail "retire-task-boards: fixture board could not be registered"
+  "${pe_env[@]}" register-task lavish "$unread" task-x1 -- printf \
+    'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","move the logo","","message",""\n' >/dev/null \
+    || fail "retire-task-boards: fixture board with a round could not be registered"
+  "${pe_env[@]}" start "$unread" >/dev/null 2>&1 || true
+  [ -e "$case_dir/state/procevent-inbox/$unread.1.result" ] \
+    || fail "retire-task-boards: fixture round was not captured"
+  "${pe_env[@]}" register-task lavish "$other" task-y2 -- sleep 600 >/dev/null \
+    || fail "retire-task-boards: another task's board could not be registered"
+
+  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "retire-task-boards: teardown failed: $(cat "$case_dir/stderr")"
+  assert_absent "$case_dir/state/task-x1.meta" "retire-task-boards: teardown did not complete"
+  assert_absent "$case_dir/state/procevent/$listen.source" \
+    "teardown left the torn-down task's review board registered"
+  assert_present "$case_dir/state/procevent/$unread.source" \
+    "teardown dropped a board whose captured round the task never read"
+  assert_grep "kept: $unread 1" "$case_dir/stdout" \
+    "teardown did not name the unread round it kept"
+  assert_grep "not all retired" "$case_dir/stderr" \
+    "teardown did not warn that a board was kept"
+  assert_present "$case_dir/state/procevent/$other.source" \
+    "teardown retired another task's review board"
+  unset FM_PROCEVENT_CLAIM_ROOT
+  pass "teardown retires the task's own review boards and keeps one holding an unread round"
+}
+
 test_teardown_retains_journal_bound_to_another_pane() {
   local case_dir log closed restored
   case_dir=$(make_case retain-drifted-journal)
@@ -5411,6 +5452,7 @@ test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
 test_herdr_projection_teardown_retains_journal_when_close_unconfirmed
 test_herdr_projection_teardown_surfaces_restore_failure_without_blocking_cleanup
 test_teardown_retires_task_watcher_markers_and_orphan_journal
+test_teardown_retires_the_task_owned_boards
 test_teardown_retains_journal_bound_to_another_pane
 test_teardown_retires_v1_journal_when_projected_workspace_gone
 test_teardown_retains_v1_journal_when_projected_workspace_present
