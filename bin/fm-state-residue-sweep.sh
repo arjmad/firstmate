@@ -54,12 +54,13 @@
 # .seen-<task>_status and .seen-<task>_turn-ended, the heartbeat marker
 # .hb-surfaced-<task>, and the branch outcome cache .<task>.branch-outcome-index.
 # Those names are lossy (each writer folds some of `.:/` to `_`), so the sweep
-# folds every name the same way and compares folded forms. A record is removed
-# only when its folded task is referenced by none of: a current
-# state/<id>.meta, a state/<id>.status log (it may still hold unread lines or an
-# open decision), a state/<id>.turn-ended file, a state/<id>.inbox, or any key
-# in the durable wake queue. A collision between two folded names only ever
-# keeps a record. The watcher's per-wake process-event marker
+# never parses a task back out of one: it builds every name a live task can own
+# through the writers' own path helpers and keeps exactly those. A task is live
+# when any of these names it: a current state/<id>.meta, a state/<id>.status log
+# (it may still hold unread lines or an open decision), a state/<id>.turn-ended
+# file, a state/<id>.inbox, or any key in the durable wake queue. The sweep runs
+# under the session lock before the session can dispatch, so no task appears
+# between that read and the removal. The watcher's per-wake process-event marker
 # .seen-procevent-<hex key> (fm_wake_procevent_marker_path) is removed once its
 # key is no longer queued and its source has neither a registration nor an
 # unacknowledged captured result; the live keys are encoded forward and
@@ -374,23 +375,35 @@ sweep_endpoint_records() {
 
 # --- retired-task records -----------------------------------------------------
 
-# fold_task <name>: the writers' lossy file-name form, into FOLDED.
-FOLDED=
-fold_task() { FOLDED=${1//[.:\/]/_}; }
-
-# REFERENCED: the folded form of every task something live still names.
-# PROCEVENT_LIVE: the marker-name prefix of every queued process-event key and
-# of every source still registered or holding an unacknowledged capture.
-REFERENCED=
+# KEEP_RECORDS: the exact name of every task-keyed record a live task can own,
+# built forward through each writer's own path helper so the lossy folding
+# stays with its writers. PROCEVENT_LIVE: the marker-name prefix of every
+# queued process-event key and of every source still registered or holding an
+# unacknowledged capture.
+KEEP_RECORDS=
 PROCEVENT_LIVE=
-reference_task() { fold_task "$1"; REFERENCED="$REFERENCED|$FOLDED|"; }
+PROCEVENT_SOURCES=
+keep_record() { KEEP_RECORDS="$KEEP_RECORDS|${1##*/}|"; }
+reference_task() {  # <task-id>
+  case "$KEEP_RECORDS" in *"|.$1.branch-outcome-index|"*) return 0 ;; esac
+  keep_record ".$1.branch-outcome-index"
+  keep_record "$(fm_wake_signal_seen_path "$STATE" "$STATE/$1.status")"
+  keep_record "$(fm_wake_signal_seen_path "$STATE" "$STATE/$1.turn-ended")"
+  keep_record "$(status_heartbeat_seen_marker_path "$STATE" "$1")"
+}
 procevent_live() {  # <queue-key or key prefix>
   local marker
   marker=$(fm_wake_procevent_marker_path "$STATE" "$1")
   PROCEVENT_LIVE="$PROCEVENT_LIVE ${marker##*/}"
 }
+procevent_live_source() {  # <source-id>
+  case "$PROCEVENT_SOURCES" in *"|$1|"*) return 0 ;; esac
+  PROCEVENT_SOURCES="$PROCEVENT_SOURCES|$1|"
+  procevent_live "procevent:$1:"
+}
 collect_referenced() {
   local path name key
+  _fm_wake_require_classify || return 1
   for path in "$STATE"/*.meta "$STATE"/*.status "$STATE"/*.turn-ended "$STATE"/*.inbox; do
     [ -e "$path" ] || [ -L "$path" ] || continue
     name=${path##*/}
@@ -399,14 +412,14 @@ collect_referenced() {
   for path in "$STATE"/procevent/*.source; do
     [ -e "$path" ] || [ -L "$path" ] || continue
     name=${path##*/}
-    procevent_live "procevent:${name%.source}:"
+    procevent_live_source "${name%.source}"
   done
   for path in "$STATE"/procevent-inbox/*.result; do
     [ -f "$path" ] || continue
     [ -e "${path%.result}.handled" ] && continue
     name=${path##*/}
     name=${name%.result}
-    procevent_live "procevent:${name%.*}:"
+    procevent_live_source "${name%.*}"
   done
   [ -f "$STATE/.wake-queue" ] || return 0
   while IFS= read -r key; do
@@ -424,24 +437,18 @@ $(awk -F '\t' 'NF >= 5 { print $4 }' "$STATE/.wake-queue" 2>/dev/null)
 EOF
 }
 
-# task_record_task <basename>: set FOLDED to the folded task a retired-task
-# record is keyed by, or fail when the name is not one of those records.
-task_record_task() {
-  local name=$1 rest
-  case "$name" in
-    .seen-procevent-*) return 1 ;;
-    .seen-*_status) rest=${name#.seen-}; rest=${rest%_status} ;;
-    .seen-*_turn-ended) rest=${name#.seen-}; rest=${rest%_turn-ended} ;;
-    .hb-surfaced-*) rest=${name#.hb-surfaced-} ;;
-    .?*.branch-outcome-index) rest=${name#.}; rest=${rest%.branch-outcome-index} ;;
-    *) return 1 ;;
-  esac
-  [ -n "$rest" ] || return 1
-  fold_task "$rest"
+# A watcher process-event marker is `.seen-procevent-` and an even run of hex;
+# anything else under `.seen-` is a signal marker, even for a task whose id
+# itself starts with `procevent-`.
+is_procevent_marker() {
+  local hex=${1#.seen-procevent-}
+  case "$1" in .seen-procevent-?*) ;; *) return 1 ;; esac
+  case "$hex" in *[!0-9a-f]*) return 1 ;; esac
+  [ $(( ${#hex} % 2 )) -eq 0 ]
 }
 
-# procevent_marker_live <basename>: whether a .seen-procevent-<hex> marker is
-# a queued wake's, or a prefix of a live source's key.
+# procevent_marker_live <basename>: whether a process-event marker is a queued
+# wake's, or carries a live source's key prefix.
 procevent_marker_live() {
   local live
   for live in $PROCEVENT_LIVE; do
@@ -463,15 +470,15 @@ sweep_task_records() {
   for path in "$STATE"/.seen-* "$STATE"/.hb-surfaced-* "$STATE"/.*.branch-outcome-index; do
     [ -f "$path" ] && [ ! -L "$path" ] || continue
     name=${path##*/}
-    case "$name" in
-      .seen-procevent-*)
-        procevent_marker_live "$name" && continue
-        ;;
-      *)
-        task_record_task "$name" || continue
-        case "$REFERENCED" in *"|$FOLDED|"*) continue ;; esac
-        ;;
-    esac
+    if is_procevent_marker "$name"; then
+      procevent_marker_live "$name" && continue
+    else
+      case "$name" in
+        .seen-?*_status|.seen-?*_turn-ended|.hb-surfaced-?*|.?*.branch-outcome-index) ;;
+        *) continue ;;
+      esac
+      case "$KEEP_RECORDS" in *"|$name|"*) continue ;; esac
+    fi
     retire_record "$path" "retired-task record" && REMOVED_TASK_RECORDS=$((REMOVED_TASK_RECORDS + 1))
   done
 }

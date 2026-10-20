@@ -2292,9 +2292,11 @@ retire_task_kept() {  # <task> <source-id> <sequence>
 }
 
 cmd_retire_task() {
-  local task=${1-} rec id result seq adapter any_kept=0 failed=0 unread out
+  local task=${1-} rec id result seq adapter any_kept=0 failed=0 unread out pending
   [ "$#" -eq 1 ] || usage
   fm_pr_task_id_valid "$task" || die "task id is invalid: $task"
+  # One read of the captured rounds serves every board this task owns.
+  pending=$(fm_procevent_pending "$STATE")
   for rec in "$REG"/*.source; do
     [ -f "$rec" ] && [ ! -L "$rec" ] || continue
     id=${rec##*/}; id=${id%.source}
@@ -2302,7 +2304,7 @@ cmd_retire_task() {
     [ "$(source_owner_task "$id" 2>/dev/null || true)" = "$task" ] || continue
     unread=0
     while IFS= read -r result; do
-      [ -n "$result" ] || continue
+      case "$result" in */"$id".*) ;; *) continue ;; esac
       seq=${result%.result}; seq=${seq##*.}
       adapter=$(fm_procevent_result_adapter "$result" 2>/dev/null || true)
       if [ -n "$adapter" ] && adapter_result_is_silent "$adapter" "$result" \
@@ -2311,13 +2313,16 @@ cmd_retire_task() {
       fi
       retire_task_kept "$task" "$id" "$seq"
       unread=1
-    done < <(source_pending "$id")
+    done <<EOF
+$pending
+EOF
     if [ "$unread" -eq 1 ]; then
       any_kept=1
       continue
     fi
-    # A silent terminal round's acknowledgement already concluded the board.
-    [ -e "$rec" ] || [ -L "$rec" ] || { printf 'retired: %s\n' "$id"; continue; }
+    # Retire even when acknowledging a silent terminal round already concluded
+    # the board: retire is idempotent and alone drops its decision binding and
+    # leftover runner records.
     if out=$("$SCRIPT_DIR/fm-procevent.sh" retire "$id" 2>&1); then
       printf '%s\n' "$out"
       continue

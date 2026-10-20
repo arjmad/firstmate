@@ -4125,8 +4125,11 @@ if [ -d "$STATE/procevent" ]; then
   TEARDOWN_BOARDS_OUT=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
     "$SCRIPT_DIR/fm-procevent.sh" retire-task "$ID" 2>&1) || TEARDOWN_BOARDS_RC=$?
   [ -z "$TEARDOWN_BOARDS_OUT" ] || printf '%s\n' "$TEARDOWN_BOARDS_OUT"
-  [ "$TEARDOWN_BOARDS_RC" -eq 0 ] \
-    || echo "warning: $ID's process-event sources were not all retired (see above); each kept board still holds a captured round firstmate must read and acknowledge" >&2
+  case "$TEARDOWN_BOARDS_RC" in
+    0) ;;
+    3) echo "warning: $ID kept a review board for a round it left unread (see the kept: lines above); that round reaches firstmate as a process-event wake once this task's record is gone" >&2 ;;
+    *) echo "warning: $ID's review boards could not all be retired (see the error above); they keep polling until bin/fm-procevent.sh retire succeeds" >&2 ;;
+  esac
 fi
 # Opt-in fleet activity ledger (docs/fleet-ledger.md), before the status log is
 # retired so its last lines are captured; off costs one file test.

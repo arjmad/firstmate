@@ -3890,7 +3890,7 @@ test_teardown_retires_the_task_owned_boards() {
     "teardown dropped a board whose captured round the task never read"
   assert_grep "kept: $unread 1" "$case_dir/stdout" \
     "teardown did not name the unread round it kept"
-  assert_grep "not all retired" "$case_dir/stderr" \
+  assert_grep "kept a review board for a round it left unread" "$case_dir/stderr" \
     "teardown did not warn that a board was kept"
   assert_present "$case_dir/state/procevent/$other.source" \
     "teardown retired another task's review board"
