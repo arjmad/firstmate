@@ -155,7 +155,7 @@ Spawn isolated worktrees through `bin/fm-spawn.sh`; steer through `bin/fm-send.s
 The selected delivery path owns rigor: `no-mistakes`, `direct-PR`, or `local-only`; do not add an independent reviewer or a second validation pipeline, except the code review a code-changing GitHub PR carries before `bin/fm-pr-merge.sh` merges it (fork patch, `docs/fork-decisions.md` 2026-10-17).
 Merge authority is separate: current explicit authority or the registry's `+yolo` posture permits landing; otherwise request the captain's decision.
 Use `bin/fm-pr-merge.sh` for PRs and `bin/fm-merge-local.sh` for local-only landing, retaining their current-head, check, and authority guards.
-Never merge a red PR, or one with an unreported required check, unless an explicit current instruction names the check to waive; standing yolo never does.
+Never merge a red PR, or one with an unreported required check, unless an explicit current instruction names the check to waive or orders that merge for a GitLab merge request with no head pipeline; standing yolo never does.
 Destructive, irreversible, or security-sensitive changes retain their own authority requirements.
 Load `ask-user-authority` and `validation-supervision` before deciding or answering any ask-user finding; implementation workers never answer their own findings.
 A no-mistakes worker owns its active validation run; follow the lifecycle reference before superseding work or recovering a reported failed pipeline.
