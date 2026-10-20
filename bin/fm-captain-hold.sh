@@ -1927,7 +1927,7 @@ reconcile_note() {
 }
 
 command_complete() {
-  local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open has_meta=0 transfer_rc transfers=() resolved
+  local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open has_meta=0 transfer_rc transfers=() resolved meta_tmp
   local resolved_how attested_by_prefix='' origin_state unrecorded_origin=''
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
@@ -1983,7 +1983,19 @@ EOF
 
   if [ "$has_meta" = 1 ]; then
     if [ "$(meta_value "$meta" decisions_reviewed)" != 1 ] || [ "$previous" != "$keys" ]; then
-      printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$keys" >> "$meta"
+      # The attestation goes before any pr= identity block, which
+      # bin/fm-pr-lib.sh's parser refuses unless it ends the record.
+      meta_tmp="$STATE/.$origin.meta.attest.${BASHPID:-$$}"
+      if ! awk -F= -v keys="$keys" '
+        $1 == "decisions_reviewed" || $1 == "decision_keys" { next }
+        !done && $1 == "pr" { print "decisions_reviewed=1"; print "decision_keys=" keys; done = 1 }
+        { print }
+        END { if (!done) { print "decisions_reviewed=1"; print "decision_keys=" keys } }
+      ' "$meta" > "$meta_tmp" ||
+        ! fm_backlog_atomic_transition publish "$meta_tmp" "$meta" "task record" "$STATE"; then
+        rm -f "$meta_tmp"
+        fail "could not record the decision attestation in $meta"
+      fi
     fi
     fm_lock_release "$CAPTAIN_META_LOCK"
     CAPTAIN_META_LOCK_HELD=0

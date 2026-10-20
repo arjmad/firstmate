@@ -540,6 +540,29 @@ test_relaunch_preserves_durable_task_metadata() {
   pass "fm-control relaunch: durable task metadata survives replacement launch publication"
 }
 
+test_relaunch_keeps_the_pr_identity_block_last() {
+  local dir out rc head=0123456789abcdef0123456789abcdef01234567
+  dir=$(new_case pr-last rl49)
+  add_ship_task "$dir" rl49 claude
+  {
+    printf '%s\n' 'pr=https://github.com/example/repo/pull/49'
+    printf '%s\n' "pr_head=$head"
+  } >> "$dir/home/state/rl49.meta"
+
+  out=$(run_control "$dir" rl49 relaunch --note "continuing review work"); rc=$?
+  expect_code 0 "$rc" "relaunch should keep the PR identity"$'\n'"$out"
+  [ -n "$(meta_field "$dir" rl49 control_relaunch_tx)" ] \
+    || fail "a control-parented relaunch must record its transaction"
+  # The PR movement watch reads the record through this parser, which refuses
+  # any key after pr=; a relaunch that lands one there silently stops the watch.
+  (
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-pr-lib.sh"
+    fm_pr_metadata_identity_parse "$dir/home/state/rl49.meta"
+  ) || fail "relaunch left a key after pr=, so the PR watch rejects the record:"$'\n'"$(cat "$dir/home/state/rl49.meta")"
+  pass "fm-control relaunch: the PR identity block stays last so the merge watch keeps working"
+}
+
 test_relaunch_serializes_concurrent_durable_metadata_publication() {
   local dir control_pid link_pid rc i=0 traceparent prepare launch_release waiting ready release
   dir=$(new_case metadata-race rl28)
@@ -2831,6 +2854,7 @@ test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
 test_relaunch_from_linked_home_preserves_recorded_worktree
 test_relaunch_preserves_durable_task_metadata
+test_relaunch_keeps_the_pr_identity_block_last
 test_relaunch_serializes_concurrent_durable_metadata_publication
 test_disabled_relaunch_clears_prior_trace_context
 test_relaunch_appends_the_progress_note_to_the_instructions
