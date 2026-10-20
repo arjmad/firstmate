@@ -51,7 +51,7 @@ case "${1:-}" in
 esac
 [ "$#" -le 1 ] || { echo "usage: fm-quota-snapshot.sh [--json]" >&2; exit 2; }
 
-pin=$(fm_worker_account_resolve claude "$CONFIG") || exit 2
+pin=$(fm_worker_account_resolve claude "$CONFIG" config/claude-account) || exit 2
 if [ -z "$pin" ]; then
   if [ "$JSON" = 1 ]; then exec quota-axi --json; else exec quota-axi; fi
 fi

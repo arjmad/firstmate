@@ -1587,10 +1587,15 @@ parse_orca_worktree_result() {
 # owns their resource and closing the pane underneath it would defeat that path:
 # Orca (ORCA_ABORT_CLEANUP owns the terminal and the worktree it created) and a
 # PROJECTED herdr task (HERDR_PROJECTION_ABORT_CLEANUP owns its whole disposable
-# workspace). A flat herdr task has no such owner and is included.
+# workspace). A flat herdr task has no such owner and is included. A fresh
+# polytoken spawn is excluded the same way: upstream's polytoken abort path
+# (SPAWN_FRESH_ENDPOINT_OPENED in spawn_abort_cleanup) closes its endpoint after
+# the per-id spawn lock is released, which is what lets a retry of the same id
+# contend for that lock before the per-id paths are removed.
 spawn_arm_endpoint_abort_cleanup() {
   [ -n "${T:-}" ] || return 0
   [ "$BACKEND" != orca ] || return 0
+  [ "${HARNESS:-}" != polytoken ] || [ "$RELAUNCH" -ne 0 ] || return 0
   if [ "$BACKEND" = herdr ] && [ "${HERDR_PROJECTED:-0}" = 1 ]; then
     return 0
   fi

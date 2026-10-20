@@ -140,6 +140,8 @@ case "${1:-}" in
     if [ -n "${FM_FAKE_TMUX_WINDOWS:-}" ]; then
       ses=$(fake_tmux_flag_value -t "$@") || ses=
       ses=${ses%%:*}
+      # tmux's exact-match session form is "=<session>".
+      ses=${ses#=}
       [ -f "$FM_FAKE_TMUX_WINDOWS" ] || exit 0
       while IFS= read -r entry; do
         case "$entry" in
@@ -158,6 +160,8 @@ case "${1:-}" in
     if [ -n "${FM_FAKE_TMUX_WINDOWS:-}" ]; then
       ses=$(fake_tmux_flag_value -t "$@") || ses=
       ses=${ses%%:*}
+      # tmux's exact-match session form is "=<session>".
+      ses=${ses#=}
       name=$(fake_tmux_flag_value -n "$@") || name=
       if [ -f "$FM_FAKE_TMUX_WINDOWS" ] && grep -qxF "$ses:$name" "$FM_FAKE_TMUX_WINDOWS"; then
         printf 'create window failed: index in use\n' >&2

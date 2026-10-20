@@ -993,6 +993,10 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
+  # This fork also durably leases the slot a spawn lands on
+  # (docs/fork-decisions.md, pool-slot allocation records row), so the pool
+  # keeps leases beside the window that holds the slot.
+  fm_fake_treehouse_pool "$fakebin"
 }
 
 # A launch refused after it claimed its slot must leave the pool and the task
@@ -1119,9 +1123,11 @@ SH
   pass "a refused polytoken launch leaves its per-id paths alone while another spawn holds the per-id lock"
 }
 
-# A launch on any harness other than polytoken keeps main's abort behavior: its
-# pre-publication claim is dropped under the allocation lock, but the window
-# it opened, and with it the slot's lease, stays for the operator to inspect.
+# A launch on any harness other than polytoken keeps this fork's abort behavior
+# (docs/fork-decisions.md, pool-slot allocation records row): its
+# pre-publication claim is dropped under the allocation lock, the window it
+# opened is closed so no orphan endpoint survives, and its durable lease is
+# returned.
 test_non_polytoken_refused_launch_keeps_its_window() {
   local rec id out status slot_root world
   id='pool-refused-codex-r1'
@@ -1141,9 +1147,11 @@ test_non_polytoken_refused_launch_keeps_its_window() {
   [ "$status" -ne 0 ] || fail "a codex launch on a slot with an unusable origin should refuse"
   assert_contains "$out" "could not fetch origin" "the codex refusal message changed"$'\n'"$out"
   [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "the refused codex launch published a task record"
-  [ -e "$world/fm-$id.id" ] || fail "a non-polytoken refusal closed its window, unlike main"
+  [ ! -e "$world/fm-$id.id" ] || fail "a non-polytoken refusal left its window open"
   [ ! -e "$slot_root/1/.fm-slot-owner" ] || fail "the refused codex launch left its slot claim"
-  pass "a non-polytoken launch refused after its slot claim keeps main's abort behavior"
+  jq -e '.worktrees[0].leased != true' "$slot_root/treehouse-state.json" >/dev/null ||
+    fail "the refused codex launch left its slot durably leased: $(cat "$slot_root/treehouse-state.json")"
+  pass "a non-polytoken launch refused after its slot claim closes its window and returns its slot"
 }
 
 # install_isolation_flip_git <fakebin> <worktree>: a git that answers every
