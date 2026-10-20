@@ -485,7 +485,7 @@ test_rearm_resurfaces_durable_queue_and_remote_open_decision() {
     || fail "decision-only recovery did not require generation-bound post-handling acknowledgement"
   is_live_non_zombie "$decision_successor" \
     || fail "decision-only drain spuriously re-triggered its live handling successor"
-  ! grep -F 'check: rearm-resurface' "$dir/decision-handling-successor.out" >/dev/null \
+  ! grep -E 'check: (rearm-resurface|queued work: )' "$dir/decision-handling-successor.out" >/dev/null \
     || fail "decision-only handling successor emitted recursive recovery"
 
   kill -TERM "$decision_successor" 2>/dev/null || fail "could not interrupt decision handling successor"
@@ -698,7 +698,7 @@ test_interrupted_handling_is_redrained_on_rearm() {
     pending:handling:"$handling_generation"|announced:handling:"$handling_generation") ;;
     *) fail "confirmed prompt delivery did not transition its recovery generation" ;;
   esac
-  ! grep -F 'check: rearm-resurface' "$dir/handling-successor-arm.out" >/dev/null \
+  ! grep -E 'check: (rearm-resurface|queued work: )' "$dir/handling-successor-arm.out" >/dev/null \
     || fail "expected handling successor emitted a recursive recovery wake"
   FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/interrupted-drain.out" \
     2> "$dir/interrupted-drain.err" || fail "handling drain did not expose the durable wake"
@@ -902,7 +902,7 @@ SH
       "$ROOT/bin/fm-procevent.sh" retire idle-lavish >/dev/null 2>&1 || true
     fail "an idle live Lavish source re-fired recovery with an empty queue: $(cat "$idle_out")"
   fi
-  ! grep -F 'check: rearm-resurface' "$idle_out" >/dev/null \
+  ! grep -E 'check: (rearm-resurface|queued work: )' "$idle_out" >/dev/null \
     || fail "the idle live Lavish source emitted a repeated recovery wake"
 
   : > "$trigger"
@@ -1089,7 +1089,7 @@ test_handling_window_close_keeps_the_acknowledgement_valid() {
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/next-arm.out"
   is_live_non_zombie "$ARM_PID" \
     || fail "the watcher armed after acknowledgement died inside its first cycle"
-  ! grep -F 'check: rearm-resurface' "$dir/next-arm.out" >/dev/null \
+  ! grep -E 'check: (rearm-resurface|queued work: )' "$dir/next-arm.out" >/dev/null \
     || fail "the watcher armed after acknowledgement re-announced a retired recovery"
   printf 'blocked: a later wake the live watcher must still surface\n' > "$state/later.status"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "the live watcher did not surface a later wake"
