@@ -72,10 +72,12 @@
 # also be merged: the recorded pr= (a companion's also_pr_<repo>=), or, when none
 # is recorded, the newest GitHub PR whose head is the worktree's branch. An open,
 # draft, or otherwise unmerged PR refuses even when the branch is pushed or a
-# status line says done; a closed-unmerged PR passes only when its content is in
-# the default branch, and so does a recorded PR whose state cannot be read. With
-# no PR recorded, a branch lookup that finds none, or fails, holds no evidence a
-# PR exists and passes as before. delivery_pr_landed below owns this gate.
+# status line says done. A merged PR passes only when, as above, its head holds
+# the current work or that work is in the default branch, and a closed-unmerged
+# PR, or a recorded PR whose state cannot be read, passes only when its content
+# is in the default branch. With no PR recorded, a branch lookup that finds none,
+# or fails, holds no evidence a PR exists and passes as before.
+# delivery_pr_landed below owns this gate.
 # Uncommitted changes are never landed; dirty refusals distinguish untracked-only
 # leftovers from tracked edits and list at most ten non-exempt untracked paths.
 # local-only projects additionally accept work merged into the local default
@@ -1768,56 +1770,99 @@ content_in_default() {
 # only for genuinely unlanded work.
 work_is_landed() {
   local branch=$1
-  pr_is_merged "$branch" && return 0
+  if pr_is_merged "$branch"; then
+    delivery_pr_mark_verified
+    return 0
+  fi
   content_in_default
+}
+
+# The worktree's branch, resolved once per worktree binding and cached in
+# TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY.
+teardown_safety_branch() {
+  [ -n "${TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY:-}" ] && return 0
+  TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
 }
 
 # Read the forge state of the task's delivery PR into FM_PR_RECORD_STATE and
 # FM_PR_RECORD_MERGED: the recorded PR_URL through bin/fm-pr-lib.sh's reader for
 # its provider, or else the newest GitHub PR whose head is <branch>, whose number
-# lands in DELIVERY_PR_NUMBER. Returns 1 when a recorded PR cannot be read, and 2
-# when none is recorded and the branch lookup finds none or fails.
+# lands in DELIVERY_PR_NUMBER. Each forge read is bounded by
+# FM_TEARDOWN_PR_READ_TIMEOUT seconds (default 15), so a stalled forge cannot
+# hold the task lock. Returns 1 when a recorded PR cannot be read, and 2 when
+# none is recorded and the branch lookup finds none or fails.
+DELIVERY_PR_READ_TIMEOUT=${FM_TEARDOWN_PR_READ_TIMEOUT:-15}
+case "$DELIVERY_PR_READ_TIMEOUT" in ''|*[!0-9]*) DELIVERY_PR_READ_TIMEOUT=15 ;; esac
 DELIVERY_PR_NUMBER=
 delivery_pr_state() {  # <branch>
-  local branch=$1 out state
+  local branch=$1 out state merged
   FM_PR_RECORD_STATE=
   FM_PR_RECORD_MERGED=
   DELIVERY_PR_NUMBER=
   if [ -n "$PR_URL" ]; then
-    fm_pr_url_parse "$PR_URL" || return 1
-    case "$FM_PR_PROVIDER" in
-      github) fm_pr_github_read_record "$FM_PR_OWNER" "$FM_PR_REPO" "$FM_PR_NUMBER" ;;
-      gitlab) fm_pr_gitlab_read_record "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" ;;
-      forgejo) fm_pr_forgejo_read_record "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" ;;
-      gerrit) fm_pr_gerrit_read_record "$FM_PR_HOST" "$FM_PR_NUMBER" ;;
-      *) false ;;
-    esac || return 1
-    return 0
+    # shellcheck disable=SC2016  # The inner script expands after bash -c receives positional args.
+    out=$(fm_run_timed "$DELIVERY_PR_READ_TIMEOUT" bash -c '
+      . "$1"
+      fm_pr_url_parse "$2" || exit 1
+      case "$FM_PR_PROVIDER" in
+        github) fm_pr_github_read_record "$FM_PR_OWNER" "$FM_PR_REPO" "$FM_PR_NUMBER" ;;
+        gitlab) fm_pr_gitlab_read_record "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" ;;
+        forgejo) fm_pr_forgejo_read_record "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" ;;
+        gerrit) fm_pr_gerrit_read_record "$FM_PR_HOST" "$FM_PR_NUMBER" ;;
+        *) false ;;
+      esac || exit 1
+      printf "state=%s\nmerged=%s\n" "$FM_PR_RECORD_STATE" "$FM_PR_RECORD_MERGED"
+    ' _ "$SCRIPT_DIR/fm-pr-lib.sh" "$PR_URL" 2>/dev/null) || return 1
+    state=$(printf '%s\n' "$out" | sed -n 's/^state=//p' | head -1)
+    merged=$(printf '%s\n' "$out" | sed -n 's/^merged=//p' | head -1)
+    [ -n "$state" ] || return 1
+    [ "$merged" = true ] || [ "$merged" = false ] || return 1
+  else
+    DELIVERY_PR_NUMBER=$(pr_number_from_branch "$branch") || return 2
+    # shellcheck disable=SC2016  # The inner script expands after bash -c receives positional args.
+    out=$(fm_run_timed "$DELIVERY_PR_READ_TIMEOUT" bash -c 'cd "$1" && gh-axi pr view "$2"' \
+      _ "$WT" "$DELIVERY_PR_NUMBER" 2>/dev/null) || return 2
+    state=$(printf '%s\n' "$out" | awk '
+      $1 == "state:" { count++; value=toupper($2) }
+      END { if (count == 1 && value != "") print value; else exit 1 }
+    ') || return 2
+    merged=false
+    [ "$state" != MERGED ] || merged=true
   fi
-  DELIVERY_PR_NUMBER=$(pr_number_from_branch "$branch") || return 2
-  out=$( cd "$WT" && gh-axi pr view "$DELIVERY_PR_NUMBER" 2>/dev/null ) || return 2
-  state=$(printf '%s\n' "$out" | awk '
-    $1 == "state:" { count++; value=$2 }
-    END { if (count == 1 && value != "") print value; else exit 1 }
-  ') || return 2
   FM_PR_RECORD_STATE=$state
-  case "$state" in
-    MERGED|merged) FM_PR_RECORD_MERGED=true ;;
-    *) FM_PR_RECORD_MERGED=false ;;
-  esac
+  FM_PR_RECORD_MERGED=$merged
 }
 
-# The delivery-PR gate (see the header): 0 when the task's delivery PR is merged,
-# when no PR is recorded or found for <branch>, or when a closed-unmerged or
-# unreadable PR's content is already in the default branch. Otherwise prints the
-# refusal and returns 1.
+# Worktrees whose delivery PR this run already proved merged, one per line, so
+# a repeated safety check - the re-check after stale-lock cleanup, which runs
+# after the task branch is already removed - never repeats a forge read that
+# could fail transiently mid-teardown.
+DELIVERY_PR_VERIFIED_WTS=
+delivery_pr_mark_verified() {
+  DELIVERY_PR_VERIFIED_WTS="$DELIVERY_PR_VERIFIED_WTS$WT
+"
+}
+
+# The delivery-PR gate (see the header): 0 when the task's delivery PR is merged
+# with the current work in its head or the default branch, when no PR is recorded
+# or found for <branch>, or when a closed-unmerged or unreadable PR's content is
+# already in the default branch. Otherwise prints the refusal and returns 1.
 delivery_pr_landed() {  # <branch>
   local branch=$1 rc=0 label
+  case "$DELIVERY_PR_VERIFIED_WTS" in
+    *"$WT
+"*) return 0 ;;
+  esac
   delivery_pr_state "$branch" || rc=$?
   [ "$rc" -ne 2 ] || return 0
   label=${PR_URL:-"#$DELIVERY_PR_NUMBER (the newest PR for branch $branch)"}
-  if [ "$rc" -eq 0 ]; then
-    [ "$FM_PR_RECORD_MERGED" != true ] || return 0
+  if [ "$rc" -eq 0 ] && [ "$FM_PR_RECORD_MERGED" = true ]; then
+    if pr_is_merged "$branch" || content_in_default; then
+      delivery_pr_mark_verified
+      return 0
+    fi
+    echo "REFUSED: worktree $WT's PR $label merged without its current work, which is not in the default branch either." >&2
+  elif [ "$rc" -eq 0 ]; then
     case "$FM_PR_RECORD_STATE" in
       CLOSED|closed|ABANDONED) content_in_default && return 0 ;;
     esac
@@ -2198,11 +2243,8 @@ validate_worktree_teardown_safety() {
     echo "Commit them (or get the captain's explicit OK to discard, then --force)." >&2
     return 1
   elif [ -n "$unpushed" ]; then
-    branch=${TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY:-}
-    if [ -z "$branch" ]; then
-      branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
-      TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=$branch
-    fi
+    teardown_safety_branch
+    branch=$TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY
     if ! work_is_landed "$branch"; then
       echo "REFUSED: worktree $WT has work not on any remote and not landed." >&2
       printf 'unpushed commits:\n%s\n' "$unpushed" >&2
@@ -2212,12 +2254,8 @@ validate_worktree_teardown_safety() {
   fi
 
   [ "$MODE" != local-only ] || return 0
-  branch=${TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY:-}
-  if [ -z "$branch" ]; then
-    branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
-    TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=$branch
-  fi
-  delivery_pr_landed "$branch"
+  teardown_safety_branch
+  delivery_pr_landed "$TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY"
 }
 
 # Fix 1 (see script header): does the active-or-most-recent no-mistakes run in

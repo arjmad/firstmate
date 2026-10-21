@@ -44,6 +44,7 @@
 #   (q5) gh down + squash-merged stale local, content not in default -> REFUSE
 #   (q6) pushed branch + recorded PR open (merge refused on a pending check) -> REFUSE
 #   (q7) pushed branch + recorded PR merged                     -> ALLOW
+#   (q7b) pushed follow-up after the recorded PR merged         -> REFUSE
 #   (q8) pushed branch + no pr= but the branch's PR is open     -> REFUSE
 #   (q9) pushed branch + recorded PR closed, content not in default -> REFUSE
 #   (q10) companion pushed + recorded companion PR open         -> REFUSE
@@ -1664,7 +1665,7 @@ test_pushed_branch_with_merged_pr_allows() {
   wt_commit_file "$case_dir" feature.txt hello "add feature"
   push_task_branch_to_origin "$case_dir"
   append_pr_meta_for_current_head "$case_dir"
-  add_gh_axi_pr_state "$case_dir" merged
+  add_gh_pr_merged_for_head "$case_dir" "$(git -C "$case_dir/wt" rev-parse HEAD)"
   seed_backlog_in_flight "$case_dir"
 
   set +e
@@ -1677,6 +1678,31 @@ test_pushed_branch_with_merged_pr_allows() {
   [ "$(backlog_row_state "$case_dir")" = "done" ] \
     || fail "pushed-merged-pr: the backlog item was not closed"
   pass "teardown proceeds for a pushed branch whose recorded PR merged"
+}
+
+test_pushed_follow_up_after_merged_pr_refuses() {
+  local case_dir rc pr_head head
+  case_dir=$(make_case pushed-after-merge)
+  write_meta "$case_dir" direct-PR ship
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  pr_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  append_pr_meta_url "$case_dir"
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+  # A follow-up pushed after the PR merged is on the remote but was never delivered.
+  wt_commit_file "$case_dir" follow-up.txt later "follow-up after merge"
+  push_task_branch_to_origin "$case_dir"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "pushed-after-merge: teardown should refuse a pushed follow-up the merged PR never carried"
+  assert_grep 'merged without its current work' "$case_dir/stderr" \
+    "pushed-after-merge: the refusal did not explain the undelivered follow-up"
+  assert_refusal_retained_task_state "$case_dir" pushed-after-merge "$head"
+  pass "teardown refuses a pushed follow-up that its merged PR never carried"
 }
 
 test_unrecorded_open_pr_found_by_branch_refuses() {
@@ -1693,7 +1719,7 @@ test_unrecorded_open_pr_found_by_branch_refuses() {
   set -e
 
   expect_code 1 "$rc" "unrecorded-open-pr: teardown should refuse while the branch's PR is open"
-  assert_grep '#7 (the newest PR for branch fm/task-x1) is open, not merged' "$case_dir/stderr" \
+  assert_grep '#7 (the newest PR for branch fm/task-x1) is OPEN, not merged' "$case_dir/stderr" \
     "unrecorded-open-pr: the refusal did not name the branch's open PR"
   assert_present "$case_dir/state/task-x1.meta" "unrecorded-open-pr: the task record was removed"
   pass "teardown refuses a pushed branch whose unrecorded PR is still open"
@@ -1724,8 +1750,10 @@ test_open_companion_pr_refuses() {
   case_dir=$(make_case companion-open-pr)
   write_meta "$case_dir" direct-PR ship
   slot=$(add_companion_slot "$case_dir")
+  # The task's own PR merged (squashed into main); only the companion PR is open.
   wt_commit_file "$case_dir" feature.txt hello "add feature"
   push_task_branch_to_origin "$case_dir"
+  land_on_origin_main "$case_dir" feature.txt hello
   append_pr_meta_url "$case_dir"
   printf 'companion change\n' > "$slot/companion.txt"
   git -C "$slot" add companion.txt
@@ -5705,6 +5733,7 @@ test_landed_companion_worktree_is_returned
 test_reassigned_companion_worktree_is_untouched
 test_pushed_branch_with_open_pr_refuses
 test_pushed_branch_with_merged_pr_allows
+test_pushed_follow_up_after_merged_pr_refuses
 test_unrecorded_open_pr_found_by_branch_refuses
 test_closed_unmerged_pr_refuses_when_content_absent
 test_open_companion_pr_refuses
