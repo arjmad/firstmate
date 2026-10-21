@@ -42,6 +42,12 @@
 #   (q3) no-mistakes + squash-merged, same file, different content   -> REFUSE
 #   (q4) no-mistakes + squash-merged rebased local plus extra commit -> REFUSE
 #   (q5) gh down + squash-merged stale local, content not in default -> REFUSE
+#   (q6) pushed branch + recorded PR open (merge refused on a pending check) -> REFUSE
+#   (q7) pushed branch + recorded PR merged                     -> ALLOW
+#   (q7b) pushed follow-up after the recorded PR merged         -> REFUSE
+#   (q8) pushed branch + no pr= but the branch's PR is open     -> REFUSE
+#   (q9) pushed branch + recorded PR closed, content not in default -> REFUSE
+#   (q10) companion pushed + recorded companion PR open         -> REFUSE
 #
 # Also covers backlog teardown-lock-race: a git index.lock left in the worktree by a
 # killed crew process (bin/fm-teardown.sh's teardown_treehouse_return).
@@ -409,6 +415,32 @@ land_equivalent_patch_on_origin_branch() {
   git -C "$case_dir/project" fetch -q origin "$branch"
   rm -rf "$tmp"
   git -C "$case_dir/project" rev-parse "refs/remotes/origin/$branch"
+}
+
+# Override GitHub lookups so `gh-axi pr view` reports <state> for every PR, or
+# <jobs-state> for a PR addressed in example/jobs, and the branch lookup lists PR
+# 7 in <state>. Every gh call fails, so each state read takes the gh-axi path.
+add_gh_axi_pr_state() {  # <case_dir> <state> [<jobs-state>]
+  local case_dir=$1 state=$2 jobs_state=${3:-$2}
+  cat > "$case_dir/fakebin/gh-axi" <<SH
+#!/usr/bin/env bash
+case "\${1:-} \${2:-}" in
+  "pr list")
+    printf '%s\\n' "count: 1 (showing first 1)" "pull_requests[1]{number,state}:" "  7,$state" ; exit 0 ;;
+  "pr view")
+    case " \$* " in
+      *" example/jobs "*) printf '%s\\n' "pull_request:" "  number: 8" "  state: $jobs_state" ; exit 0 ;;
+    esac
+    printf '%s\\n' "pull_request:" "  number: 7" "  state: $state" ; exit 0 ;;
+esac
+exit 0
+SH
+  cat > "$case_dir/fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+echo "error: gh unavailable" >&2
+exit 1
+SH
+  chmod +x "$case_dir/fakebin/gh-axi" "$case_dir/fakebin/gh"
 }
 
 # Override gh-axi so every call fails, simulating an API/network error.
@@ -1590,6 +1622,160 @@ test_landed_companion_worktree_is_returned() {
     fail "companion-landed: the companion task branch was left behind"
   fi
   pass "teardown returns a landed companion worktree with its lease and claim"
+}
+
+# Push the worktree's task branch to origin so remote reachability alone would
+# call it landed. Args: case_dir
+push_task_branch_to_origin() {
+  git -C "$1/wt" push -q origin fm/task-x1
+  git -C "$1/project" fetch -q origin
+}
+
+test_pushed_branch_with_open_pr_refuses() {
+  local case_dir rc head
+  case_dir=$(make_case pushed-open-pr)
+  write_meta "$case_dir" direct-PR ship
+  # The reported failure: fm-pr-merge.sh refused the merge on a pending check, the
+  # PR stayed open, and teardown ran anyway because the branch was pushed.
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  push_task_branch_to_origin "$case_dir"
+  append_pr_meta_for_current_head "$case_dir"
+  add_gh_axi_pr_state "$case_dir" open
+  seed_backlog_in_flight "$case_dir"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "pushed-open-pr: teardown should refuse while the recorded PR is open"
+  assert_grep 'https://github.com/example/repo/pull/7 is OPEN, not merged' "$case_dir/stderr" \
+    "pushed-open-pr: the refusal did not name the open PR"
+  assert_refusal_retained_task_state "$case_dir" pushed-open-pr "$head"
+  [ "$(backlog_row_state "$case_dir")" != "done" ] \
+    || fail "pushed-open-pr: the refused teardown closed the backlog item"
+  pass "teardown refuses a pushed branch whose recorded PR is still open"
+}
+
+test_pushed_branch_with_merged_pr_allows() {
+  local case_dir rc
+  case_dir=$(make_case pushed-merged-pr)
+  write_meta "$case_dir" direct-PR ship
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  push_task_branch_to_origin "$case_dir"
+  append_pr_meta_for_current_head "$case_dir"
+  add_gh_pr_merged_for_head "$case_dir" "$(git -C "$case_dir/wt" rev-parse HEAD)"
+  seed_backlog_in_flight "$case_dir"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "pushed-merged-pr: teardown should succeed once the recorded PR merged: $(cat "$case_dir/stderr")"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "pushed-merged-pr: teardown printed a REFUSED line"
+  [ "$(backlog_row_state "$case_dir")" = "done" ] \
+    || fail "pushed-merged-pr: the backlog item was not closed"
+  pass "teardown proceeds for a pushed branch whose recorded PR merged"
+}
+
+test_pushed_follow_up_after_merged_pr_refuses() {
+  local case_dir rc pr_head head
+  case_dir=$(make_case pushed-after-merge)
+  write_meta "$case_dir" direct-PR ship
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  pr_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  append_pr_meta_url "$case_dir"
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+  # A follow-up pushed after the PR merged is on the remote but was never delivered.
+  wt_commit_file "$case_dir" follow-up.txt later "follow-up after merge"
+  push_task_branch_to_origin "$case_dir"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "pushed-after-merge: teardown should refuse a pushed follow-up the merged PR never carried"
+  assert_grep 'merged without its current work' "$case_dir/stderr" \
+    "pushed-after-merge: the refusal did not explain the undelivered follow-up"
+  assert_refusal_retained_task_state "$case_dir" pushed-after-merge "$head"
+  pass "teardown refuses a pushed follow-up that its merged PR never carried"
+}
+
+test_unrecorded_open_pr_found_by_branch_refuses() {
+  local case_dir rc
+  case_dir=$(make_case unrecorded-open-pr)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  push_task_branch_to_origin "$case_dir"
+  add_gh_axi_pr_state "$case_dir" open
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "unrecorded-open-pr: teardown should refuse while the branch's PR is open"
+  assert_grep '#7 (the newest PR for branch fm/task-x1) is OPEN, not merged' "$case_dir/stderr" \
+    "unrecorded-open-pr: the refusal did not name the branch's open PR"
+  assert_present "$case_dir/state/task-x1.meta" "unrecorded-open-pr: the task record was removed"
+  pass "teardown refuses a pushed branch whose unrecorded PR is still open"
+}
+
+test_closed_unmerged_pr_refuses_when_content_absent() {
+  local case_dir rc
+  case_dir=$(make_case pushed-closed-pr)
+  write_meta "$case_dir" direct-PR ship
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  push_task_branch_to_origin "$case_dir"
+  append_pr_meta_url "$case_dir"
+  add_gh_axi_pr_state "$case_dir" closed
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "pushed-closed-pr: teardown should refuse a closed-unmerged PR whose content never landed"
+  assert_grep 'is CLOSED, not merged' "$case_dir/stderr" \
+    "pushed-closed-pr: the refusal did not name the closed PR"
+  pass "teardown refuses a closed-unmerged PR whose content is not in the default branch"
+}
+
+test_open_companion_pr_refuses() {
+  local case_dir slot rc
+  case_dir=$(make_case companion-open-pr)
+  write_meta "$case_dir" direct-PR ship
+  slot=$(add_companion_slot "$case_dir")
+  # The task's own PR merged (squashed into main); only the companion PR is open.
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  push_task_branch_to_origin "$case_dir"
+  land_on_origin_main "$case_dir" feature.txt hello
+  append_pr_meta_url "$case_dir"
+  printf 'companion change\n' > "$slot/companion.txt"
+  git -C "$slot" add companion.txt
+  git -C "$slot" -c user.email=t@t -c user.name=t commit -q -m "companion work"
+  git -C "$slot" push -q origin fm/task-x1
+  printf '%s\n' 'also_pr_jobs=https://github.com/example/jobs/pull/8' >> "$case_dir/state/task-x1.meta"
+  add_gh_axi_pr_state "$case_dir" merged open
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "companion-open-pr: teardown should refuse while the companion PR is open"
+  assert_grep 'https://github.com/example/jobs/pull/8 is OPEN, not merged' "$case_dir/stderr" \
+    "companion-open-pr: the refusal did not name the open companion PR"
+  assert_grep "companion worktree of jobs" "$case_dir/stderr" \
+    "companion-open-pr: the refusal did not name the companion worktree"
+  assert_present "$case_dir/state/task-x1.meta" "companion-open-pr: the task record was removed"
+  [ "$(companion_lease_holder "$case_dir")" = task-x1 ] \
+    || fail "companion-open-pr: the companion slot lease was released"
+  pass "teardown refuses a task whose companion PR is still open"
 }
 
 test_reassigned_companion_worktree_is_untouched() {
@@ -5545,3 +5731,9 @@ test_run_abort_precedes_process_reap_precedes_worktree_removal
 test_companion_worktree_with_unlanded_work_refuses
 test_landed_companion_worktree_is_returned
 test_reassigned_companion_worktree_is_untouched
+test_pushed_branch_with_open_pr_refuses
+test_pushed_branch_with_merged_pr_allows
+test_pushed_follow_up_after_merged_pr_refuses
+test_unrecorded_open_pr_found_by_branch_refuses
+test_closed_unmerged_pr_refuses_when_content_absent
+test_open_companion_pr_refuses
