@@ -49,9 +49,9 @@
 # GitHub reports a PR head that contains the current local work, or its content is
 # already present in the up-to-date default branch. This recognizes the common
 # squash-merge-then-delete-branch flow, where the branch's own commits live nowhere
-# on a remote yet the change is fully in main. A task whose meta records
-# base_branch= (bin/fm-spawn.sh) runs that content check against origin's copy of
-# its base branch instead of the default branch.
+# on a remote yet the change is fully in main.
+# A task whose meta records base_branch= (bin/fm-spawn.sh) runs that content
+# check against origin's copy of its base branch instead of the default branch.
 # Squash merges collapse the branch's commits, so per-commit patch ids against main
 # no longer match, and a pipeline rebase can leave the local worktree diverged from
 # the PR head. A diverged copy is not treated as landed: path-set coverage, git
@@ -67,6 +67,15 @@
 # by itself causes a false refusal of landed work.
 # A gh lookup error falls back to the content check; if that is also inconclusive,
 # teardown refuses rather than risk discarding unlanded work.
+# Remote reachability proves only that the commits survive cleanup, not that a
+# PR-delivered ship is finished, so outside local-only mode the delivery PR must
+# also be merged: the recorded pr= (a companion's also_pr_<repo>=), or, when none
+# is recorded, the newest GitHub PR whose head is the worktree's branch. An open,
+# draft, or otherwise unmerged PR refuses even when the branch is pushed or a
+# status line says done; a closed-unmerged PR passes only when its content is in
+# the default branch, and so does a recorded PR whose state cannot be read. With
+# no PR recorded, a branch lookup that finds none, or fails, holds no evidence a
+# PR exists and passes as before. delivery_pr_landed below owns this gate.
 # Uncommitted changes are never landed; dirty refusals distinguish untracked-only
 # leftovers from tracked edits and list at most ten non-exempt untracked paths.
 # local-only projects additionally accept work merged into the local default
@@ -1763,6 +1772,64 @@ work_is_landed() {
   content_in_default
 }
 
+# Read the forge state of the task's delivery PR into FM_PR_RECORD_STATE and
+# FM_PR_RECORD_MERGED: the recorded PR_URL through bin/fm-pr-lib.sh's reader for
+# its provider, or else the newest GitHub PR whose head is <branch>, whose number
+# lands in DELIVERY_PR_NUMBER. Returns 1 when a recorded PR cannot be read, and 2
+# when none is recorded and the branch lookup finds none or fails.
+DELIVERY_PR_NUMBER=
+delivery_pr_state() {  # <branch>
+  local branch=$1 out state
+  FM_PR_RECORD_STATE=
+  FM_PR_RECORD_MERGED=
+  DELIVERY_PR_NUMBER=
+  if [ -n "$PR_URL" ]; then
+    fm_pr_url_parse "$PR_URL" || return 1
+    case "$FM_PR_PROVIDER" in
+      github) fm_pr_github_read_record "$FM_PR_OWNER" "$FM_PR_REPO" "$FM_PR_NUMBER" ;;
+      gitlab) fm_pr_gitlab_read_record "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" ;;
+      forgejo) fm_pr_forgejo_read_record "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" ;;
+      gerrit) fm_pr_gerrit_read_record "$FM_PR_HOST" "$FM_PR_NUMBER" ;;
+      *) false ;;
+    esac || return 1
+    return 0
+  fi
+  DELIVERY_PR_NUMBER=$(pr_number_from_branch "$branch") || return 2
+  out=$( cd "$WT" && gh-axi pr view "$DELIVERY_PR_NUMBER" 2>/dev/null ) || return 2
+  state=$(printf '%s\n' "$out" | awk '
+    $1 == "state:" { count++; value=$2 }
+    END { if (count == 1 && value != "") print value; else exit 1 }
+  ') || return 2
+  FM_PR_RECORD_STATE=$state
+  case "$state" in
+    MERGED|merged) FM_PR_RECORD_MERGED=true ;;
+    *) FM_PR_RECORD_MERGED=false ;;
+  esac
+}
+
+# The delivery-PR gate (see the header): 0 when the task's delivery PR is merged,
+# when no PR is recorded or found for <branch>, or when a closed-unmerged or
+# unreadable PR's content is already in the default branch. Otherwise prints the
+# refusal and returns 1.
+delivery_pr_landed() {  # <branch>
+  local branch=$1 rc=0 label
+  delivery_pr_state "$branch" || rc=$?
+  [ "$rc" -ne 2 ] || return 0
+  label=${PR_URL:-"#$DELIVERY_PR_NUMBER (the newest PR for branch $branch)"}
+  if [ "$rc" -eq 0 ]; then
+    [ "$FM_PR_RECORD_MERGED" != true ] || return 0
+    case "$FM_PR_RECORD_STATE" in
+      CLOSED|closed|ABANDONED) content_in_default && return 0 ;;
+    esac
+    echo "REFUSED: worktree $WT's PR $label is ${FM_PR_RECORD_STATE:-unmerged}, not merged; a pushed branch has not landed." >&2
+  else
+    content_in_default && return 0
+    echo "REFUSED: cannot read whether worktree $WT's PR $label is merged, and its content is not in the default branch." >&2
+  fi
+  echo "Land the PR (bin/fm-pr-merge.sh) and re-run, or get the captain's explicit OK to retire the task with it unmerged, then --force." >&2
+  return 1
+}
+
 # The completion links this teardown already holds locally. A scout's
 # deliverable is its report, a local-only ship lands on local main, and every
 # other ship carries the PR recorded on its own record.
@@ -2143,6 +2210,14 @@ validate_worktree_teardown_safety() {
       return 1
     fi
   fi
+
+  [ "$MODE" != local-only ] || return 0
+  branch=${TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY:-}
+  if [ -z "$branch" ]; then
+    branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+    TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=$branch
+  fi
+  delivery_pr_landed "$branch"
 }
 
 # Fix 1 (see script header): does the active-or-most-recent no-mistakes run in
