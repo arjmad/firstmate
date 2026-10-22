@@ -92,7 +92,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Private secondmate config-reread generations with their retry and quarantine state.
 - Per-task steering-inbox records under `state/<id>.inbox/` (`bin/fm-task-inbox-lib.sh`).
 - Parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
-- Live-checkout post-update records under `state/live-checkouts/`, and the scheduled sync's log, pending `fleet-sync-stuck` lines, and surfaced set (`bin/fm-fleet-sync.sh`).
+- Live-checkout post-update and capture records under `state/live-checkouts/`, and the scheduled sync's log, pending `fleet-sync-stuck` lines, and surfaced set (`bin/fm-fleet-sync.sh`).
 - Pending `hold-release-woke` lines and the `.last-hold-release` cadence marker of the watcher's captain-hold default release (`bin/fm-captain-hold.sh release-due`).
 - The log of captain-waived code reviews, `state/code-review-waivers.log` (`bin/fm-pr-merge.sh`).
 
@@ -590,7 +590,7 @@ See [`fleet-ledger.md`](fleet-ledger.md) for the opt-in setup, record contract, 
 ## Live checkouts (config/live-checkouts)
 
 The optional local, gitignored `config/live-checkouts` file lists working copies outside `projects/` that something runs from, so a merged PR goes live without a hand `git pull`.
-Each line is `<project> <path> [lock=<lock-path>] [post-update command]`, where a leading `~/` expands to `$HOME` and blank or `#` lines are ignored.
+Each line is `<project> <path> [lock=<lock-path>] [capture=<dir>/:<command>] [post-update command]`, where a leading `~/` expands to `$HOME` and blank or `#` lines are ignored.
 An absent file means no live checkouts.
 
 ```text
@@ -598,6 +598,7 @@ An absent file means no live checkouts.
 jobs       ~/code/jobs
 skills     ~/code/skills                                 ~/code/skills/scripts/deploy.sh
 runner     ~/code/runner     lock=~/Library/Caches/runner/cycle.lock
+agent      ~/code/agent      capture=skills/:cron/skill-capture.sh   ./deploy.sh
 ```
 
 `bin/fm-fleet-sync.sh` fast-forwards each entry after the `projects/` clones, so the refresh `bin/fm-pr-merge.sh` runs after each merge, teardown, the [scheduled sync](#scheduled-fleet-sync-configfleet-sync-interval), and the session-start refresh all keep live checkouts current.
@@ -605,10 +606,11 @@ The single-project form syncs only that project's entries, and the whole-fleet f
 A live checkout gets the same never-forced guards as a clone: anything dirty, ahead, diverged, or off its default branch is left untouched and reported `STUCK:`.
 A held `lock=` path defers the checkout, after a short bounded wait in the single-project form and without waiting in the whole-fleet form.
 The post-update command runs once for each new HEAD and is retried on the next sync after a failure, whose `STUCK:` line ends with the command's last few output lines.
+A `capture=` entry is for a checkout edited in place, such as a writable skills tree that a capture job turns into a PR: when only uncommitted edits under that directory hold the checkout, the sync starts the capture command detached once per edit state and reports `capturing:` instead of `STUCK:`, defers the checkout while that capture runs, and reports `STUCK:` again when the finished capture did not clear the checkout or failed.
 An entry naming the Firstmate home itself is refused, because Firstmate updates itself only through `/updatefirstmate`.
 
 The list names host paths and is not inherited by secondmate homes.
-[`fm-fleet-sync.sh`'s header](../bin/fm-fleet-sync.sh) owns the exact guards, lock wait, and post-update record under `state/live-checkouts/`.
+[`fm-fleet-sync.sh`'s header](../bin/fm-fleet-sync.sh) owns the exact guards, lock wait, capture rules, and post-update and capture records under `state/live-checkouts/`.
 
 ## Scheduled fleet sync (config/fleet-sync-interval)
 

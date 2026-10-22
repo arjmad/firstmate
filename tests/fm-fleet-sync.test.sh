@@ -31,8 +31,9 @@
 # It also pins the config/live-checkouts entries: a live checkout outside
 # projects/ fast-forwards under the same guards (and is otherwise STUCK, untouched),
 # its post-update command runs once per new HEAD and is retried after a failure, a
-# held lock= path defers it, the firstmate home itself is refused, and the
-# single-project form syncs only that project's entries.
+# held lock= path defers it, the firstmate home itself is refused, the
+# single-project form syncs only that project's entries, and a capture= entry
+# starts its capture once per edit state when only edits under its dir hold it.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -932,6 +933,144 @@ test_live_checkouts_scoped_by_project_and_tilde() {
   pass "the single-project form syncs only its own entries, and ~/ expands to HOME"
 }
 
+# build_capture_live <home> <name>: a live checkout whose origin also holds
+# skills/a.md, plus <home>/capture-<name>.sh, a capture command that appends its
+# working directory and process group to <home>/captures-<name> and then waits
+# while <home>/capture-hold-<name> exists. Echoes the checkout path.
+build_capture_live() {
+  local home=$1 name=$2 live
+  live=$(build_live "$home" "$name")
+  mkdir -p "$home/work-$name/skills"
+  commit_file "$home/work-$name" skills/a.md v0 skills
+  git -C "$home/work-$name" push -q origin main
+  git -C "$live" pull -q --ff-only
+  cat > "$home/capture-$name.sh" <<SCRIPT
+#!/usr/bin/env bash
+printf '%s %s\n' "\$(pwd -P)" "\$(ps -o pgid= -p \$\$ | tr -d ' ')" >> '$home/captures-$name'
+while [ -e '$home/capture-hold-$name' ]; do sleep 0.1; done
+SCRIPT
+  chmod +x "$home/capture-$name.sh"
+  printf '%s\n' "$live"
+}
+
+# wait_capture_done <sync-output>: wait for the capture that output started to
+# record its exit beside the log it names.
+wait_capture_done() {
+  local log status i=0
+  log=${1##*(log }
+  log=${log%%)*}
+  status="${log%.log}.status"
+  while [ ! -f "$status" ]; do
+    i=$((i + 1))
+    [ "$i" -lt 200 ] || fail "the capture never recorded its exit in $status"
+    sleep 0.1
+  done
+}
+
+test_capture_starts_once_per_edit_state() {
+  local home live out before cmd
+  home=$(new_home)
+  live=$(build_capture_live "$home" skilled)
+  cmd="$home/capture-skilled.sh"
+  advance_origin "$home" skilled C1
+  printf 'live edit\n' >> "$live/skills/a.md"
+  printf 'new skill\n' > "$live/skills/b.md"
+  before=$(head_sha "$live")
+  live_config "$home" "skilled $live capture=skills/:$cmd"
+
+  out=$(run_sync "$home" skilled)
+  assert_contains "$out" "skilled live $live: capturing: 2 uncommitted path(s) under skills/ only; started $cmd" \
+    "edits only under skills/ start the capture"
+  assert_not_contains "$out" "STUCK" "a started capture is not reported STUCK"
+  wait_capture_done "$out"
+  assert_equals 1 "$(runs_of "$home/captures-skilled")" "the capture ran once"
+  assert_equals "$(cd "$live" && pwd -P)" "$(cut -d' ' -f1 "$home/captures-skilled")" "the capture ran from the checkout"
+  assert_not_equals "$(ps -o pgid= -p $$ | tr -d ' ')" "$(cut -d' ' -f2 "$home/captures-skilled")" \
+    "the capture runs in its own process group"
+  assert_equals "$before" "$(head_sha "$live")" "the checkout HEAD is untouched"
+  assert_contains "$(cat "$live/skills/a.md")" "live edit" "the live edit is preserved"
+
+  out=$(run_sync "$home" skilled)
+  assert_contains "$out" "skilled live $live: STUCK: on branch main with uncommitted changes" \
+    "an unchanged state that the capture did not clear is STUCK again"
+  assert_contains "$out" "; capture already ran for these edits (exit 0" "the STUCK line says the capture ran"
+  assert_equals 1 "$(runs_of "$home/captures-skilled")" "an unchanged state does not start a second capture"
+
+  printf 'another edit\n' >> "$live/skills/b.md"
+  out=$(run_sync "$home" skilled)
+  assert_contains "$out" "started $cmd" "a changed edit state starts the capture again"
+  wait_capture_done "$out"
+  assert_equals 2 "$(runs_of "$home/captures-skilled")" "the changed state captured once more"
+  pass "a live checkout held only by edits under its capture dir starts the capture once per edit state"
+}
+
+test_capture_still_running_is_not_restarted() {
+  local home live out cmd before
+  home=$(new_home)
+  live=$(build_capture_live "$home" busyskill)
+  cmd="$home/capture-busyskill.sh"
+  printf 'live edit\n' >> "$live/skills/a.md"
+  : > "$home/capture-hold-busyskill"
+  live_config "$home" "busyskill $live capture=skills:$cmd"
+
+  out=$(run_sync "$home" busyskill)
+  assert_contains "$out" "capturing: 1 uncommitted path(s) under skills/ only; started" "a capture dir without its slash still matches"
+  before=$(head_sha "$live")
+  advance_origin "$home" busyskill C1
+  out=$(run_sync "$home" busyskill)
+  assert_contains "$out" "busyskill live $live: skipped: busy: $cmd is still running" "a running capture defers the checkout"
+  assert_equals "$before" "$(head_sha "$live")" "nothing moves the checkout under a running capture"
+  rm -f "$home/capture-hold-busyskill"
+  wait_capture_done "$out"
+  assert_equals 1 "$(runs_of "$home/captures-busyskill")" "the running capture was not started twice"
+  pass "a capture still running defers the checkout and is not started again"
+}
+
+test_failed_capture_surfaces_when_edits_change() {
+  local home live out
+  home=$(new_home)
+  live=$(build_capture_live "$home" failskill)
+  printf '#!/usr/bin/env bash\necho captured >> %s\nexit 1\n' "'$home/captures-failskill'" > "$home/fail-capture.sh"
+  chmod +x "$home/fail-capture.sh"
+  cp "$home/fail-capture.sh" "$live/fail-capture.sh"
+  git -C "$live" add fail-capture.sh
+  git -C "$live" commit -qm "capture script"
+  printf 'live edit\n' >> "$live/skills/a.md"
+  live_config "$home" "failskill $live capture=skills/:fail-capture.sh"
+
+  out=$(run_sync "$home" failskill)
+  assert_contains "$out" "started ./fail-capture.sh" "a command without a slash runs from the checkout"
+  wait_capture_done "$out"
+  assert_equals 1 "$(runs_of "$home/captures-failskill")" "the capture ran from the checkout"
+
+  printf 'more\n' >> "$live/skills/a.md"
+  out=$(run_sync "$home" failskill)
+  assert_contains "$out" "failskill live $live: STUCK: on branch main with uncommitted changes" "a failed capture surfaces"
+  assert_contains "$out" "; the last capture failed (exit 1), so ./fail-capture.sh started again" "the STUCK line names the failure"
+  wait_capture_done "$out"
+  assert_equals 2 "$(runs_of "$home/captures-failskill")" "the new edit state captured again"
+  pass "a failed capture surfaces as STUCK while the edits keep changing"
+}
+
+test_capture_skips_edits_outside_its_dir() {
+  local home live out
+  home=$(new_home)
+  live=$(build_capture_live "$home" mixed)
+  printf 'live edit\n' >> "$live/skills/a.md"
+  printf 'local edit\n' >> "$live/file.txt"
+  live_config "$home" "mixed $live capture=skills/:$home/capture-mixed.sh" \
+    "mixed $live capture=skills/ echo bad" "mixed $live capture=./:capture.sh" "mixed $live capture=/abs/:capture.sh"
+
+  out=$(run_sync "$home" mixed)
+  assert_contains "$out" "mixed live $live: STUCK: on branch main with uncommitted changes" "an edit outside skills/ stays STUCK"
+  assert_not_contains "$out" "capture already ran" "no capture is claimed"
+  assert_contains "$out" "live-checkouts: skipped: line 2 capture= wants <dir>/:<command>" "a malformed capture= is refused by line"
+  assert_contains "$out" "live-checkouts: skipped: line 3 capture=" "a capture of the whole checkout is refused"
+  assert_contains "$out" "live-checkouts: skipped: line 4 capture=" "a capture dir outside the checkout is refused"
+  assert_equals 0 "$(runs_of "$home/captures-mixed")" "no capture ran"
+  pass "edits outside the capture dir are reported STUCK without a capture"
+}
+
 test_failed_post_update_carries_its_output_tail() {
   local home live out line
   home=$(new_home)
@@ -1080,6 +1219,10 @@ test_firstmate_home_live_checkout_is_refused
 test_live_checkouts_scoped_by_project_and_tilde
 test_clone_root_named_by_another_spelling_still_syncs
 test_failed_post_update_carries_its_output_tail
+test_capture_starts_once_per_edit_state
+test_capture_still_running_is_not_restarted
+test_failed_capture_surfaces_when_edits_change
+test_capture_skips_edits_outside_its_dir
 test_scheduled_interval_is_home_configurable
 test_scheduled_sync_queues_new_stuck_lines_once
 test_scheduled_sync_is_a_singleton
