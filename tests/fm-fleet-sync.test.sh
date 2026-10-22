@@ -1005,7 +1005,7 @@ test_capture_starts_once_per_edit_state() {
 }
 
 test_capture_still_running_is_not_restarted() {
-  local home live out cmd
+  local home live out cmd before
   home=$(new_home)
   live=$(build_capture_live "$home" busyskill)
   cmd="$home/capture-busyskill.sh"
@@ -1015,12 +1015,41 @@ test_capture_still_running_is_not_restarted() {
 
   out=$(run_sync "$home" busyskill)
   assert_contains "$out" "capturing: 1 uncommitted path(s) under skills/ only; started" "a capture dir without its slash still matches"
+  before=$(head_sha "$live")
+  advance_origin "$home" busyskill C1
   out=$(run_sync "$home" busyskill)
-  assert_contains "$out" "busyskill live $live: capturing: $cmd is still running" "a running capture is reported, not restarted"
+  assert_contains "$out" "busyskill live $live: skipped: busy: $cmd is still running" "a running capture defers the checkout"
+  assert_equals "$before" "$(head_sha "$live")" "nothing moves the checkout under a running capture"
   rm -f "$home/capture-hold-busyskill"
   wait_capture_done "$out"
   assert_equals 1 "$(runs_of "$home/captures-busyskill")" "the running capture was not started twice"
-  pass "a capture still running for the same edits is not started again"
+  pass "a capture still running defers the checkout and is not started again"
+}
+
+test_failed_capture_surfaces_when_edits_change() {
+  local home live out
+  home=$(new_home)
+  live=$(build_capture_live "$home" failskill)
+  printf '#!/usr/bin/env bash\necho captured >> %s\nexit 1\n' "'$home/captures-failskill'" > "$home/fail-capture.sh"
+  chmod +x "$home/fail-capture.sh"
+  cp "$home/fail-capture.sh" "$live/fail-capture.sh"
+  git -C "$live" add fail-capture.sh
+  git -C "$live" commit -qm "capture script"
+  printf 'live edit\n' >> "$live/skills/a.md"
+  live_config "$home" "failskill $live capture=skills/:fail-capture.sh"
+
+  out=$(run_sync "$home" failskill)
+  assert_contains "$out" "started ./fail-capture.sh" "a command without a slash runs from the checkout"
+  wait_capture_done "$out"
+  assert_equals 1 "$(runs_of "$home/captures-failskill")" "the capture ran from the checkout"
+
+  printf 'more\n' >> "$live/skills/a.md"
+  out=$(run_sync "$home" failskill)
+  assert_contains "$out" "failskill live $live: STUCK: on branch main with uncommitted changes" "a failed capture surfaces"
+  assert_contains "$out" "; the last capture failed (exit 1), so ./fail-capture.sh started again" "the STUCK line names the failure"
+  wait_capture_done "$out"
+  assert_equals 2 "$(runs_of "$home/captures-failskill")" "the new edit state captured again"
+  pass "a failed capture surfaces as STUCK while the edits keep changing"
 }
 
 test_capture_skips_edits_outside_its_dir() {
@@ -1030,12 +1059,14 @@ test_capture_skips_edits_outside_its_dir() {
   printf 'live edit\n' >> "$live/skills/a.md"
   printf 'local edit\n' >> "$live/file.txt"
   live_config "$home" "mixed $live capture=skills/:$home/capture-mixed.sh" \
-    "mixed $live capture=skills/ echo bad"
+    "mixed $live capture=skills/ echo bad" "mixed $live capture=./:capture.sh" "mixed $live capture=/abs/:capture.sh"
 
   out=$(run_sync "$home" mixed)
   assert_contains "$out" "mixed live $live: STUCK: on branch main with uncommitted changes" "an edit outside skills/ stays STUCK"
   assert_not_contains "$out" "capture already ran" "no capture is claimed"
   assert_contains "$out" "live-checkouts: skipped: line 2 capture= wants <dir>/:<command>" "a malformed capture= is refused by line"
+  assert_contains "$out" "live-checkouts: skipped: line 3 capture=" "a capture of the whole checkout is refused"
+  assert_contains "$out" "live-checkouts: skipped: line 4 capture=" "a capture dir outside the checkout is refused"
   assert_equals 0 "$(runs_of "$home/captures-mixed")" "no capture ran"
   pass "edits outside the capture dir are reported STUCK without a capture"
 }
@@ -1190,6 +1221,7 @@ test_clone_root_named_by_another_spelling_still_syncs
 test_failed_post_update_carries_its_output_tail
 test_capture_starts_once_per_edit_state
 test_capture_still_running_is_not_restarted
+test_failed_capture_surfaces_when_edits_change
 test_capture_skips_edits_outside_its_dir
 test_scheduled_interval_is_home_configurable
 test_scheduled_sync_queues_new_stuck_lines_once

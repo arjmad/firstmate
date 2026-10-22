@@ -63,10 +63,13 @@
 # cannot kill it, and prints "capturing: ..." instead of a STUCK line. It
 # starts once per edit state (HEAD, origin/<default> and the uncommitted content
 # under <dir>/), logging to state/live-checkouts/<key>.capture.log. While that
-# run is alive a later sync says it is still running; once it has finished, the
+# run is alive the checkout is deferred like a held lock ("skipped: busy:"), so
+# no fast-forward or post-update runs under it. Once it has finished, the
 # ordinary STUCK line returns with "; capture already ran for these edits (exit
-# N, ...)", so a capture that did not clear the checkout still surfaces. Edits
-# outside <dir>/ are reported STUCK as before.
+# N, ...)", so a capture that did not clear the checkout still surfaces, and a
+# new edit state after a failed capture starts another one under a STUCK line
+# naming the failure. Edits outside <dir>/ are reported STUCK as before. <dir>
+# must lie inside the checkout, and a <command> without a slash is ./<command>.
 # The single-project form syncs the entries for that project name; the whole-fleet
 # form syncs every entry after the clones.
 # Scheduled form (--scheduled): bin/fm-watch.sh starts it detached once per
@@ -101,6 +104,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 LIVE_CHECKOUTS_FILE="$CONFIG/live-checkouts"
 LIVE_RECORDS="$STATE/live-checkouts"
+# Absolute, because a capture opens its log and status from the checkout.
+case "$LIVE_RECORDS" in /*) ;; *) LIVE_RECORDS="$PWD/$LIVE_RECORDS" ;; esac
 # shellcheck source=bin/fm-lock-lib.sh
 . "$SCRIPT_DIR/fm-lock-lib.sh"
 # Inert unless FM_TIMING_LOG names a file; only the deferred network stage sets it.
@@ -490,14 +495,18 @@ capture_paths_only() {
 }
 
 # capture_fingerprint: one hash of the edit state a capture is started for, so
-# an unchanged state never starts a second run.
+# an unchanged state never starts a second run. It includes origin/<default>
+# because a capture is built on it: after a merge the edits need a fresh capture
+# before they can land.
 capture_fingerprint() {
-  local path
+  local untracked
+  untracked=$(git -C "$PROJ" -c core.quotePath=false ls-files --others --exclude-standard -- "$CAPTURE_DIR" 2>/dev/null)
   { git -C "$PROJ" rev-parse HEAD "$BASE"
     git -C "$PROJ" diff --binary --no-renames HEAD -- "$CAPTURE_DIR"
-    while IFS= read -r -d '' path; do
-      printf '%s %s\n' "$path" "$(git -C "$PROJ" hash-object --no-filters -- "$path")"
-    done < <(git -C "$PROJ" ls-files -z --others --exclude-standard -- "$CAPTURE_DIR")
+    if [ -n "$untracked" ]; then
+      printf '%s\n' "$untracked"
+      printf '%s\n' "$untracked" | git -C "$PROJ" hash-object --no-filters --stdin-paths
+    fi
   } 2>/dev/null | git hash-object --stdin
 }
 
@@ -508,30 +517,39 @@ capture_alive() {
   return 1
 }
 
-# capture_or_report_stuck: for a live checkout on its default branch whose
-# uncommitted paths all lie under its capture=<dir>/, start the capture command
-# once per edit state (see the header); otherwise report STUCK.
+# capture_running: load this checkout's capture record into CAPTURE_RECORD
+# (empty when no key), CAPTURE_PRIOR and CAPTURE_PID; true while that capture
+# is still alive.
+capture_running() {
+  local key
+  CAPTURE_RECORD="" CAPTURE_PRIOR="" CAPTURE_PID=""
+  key=$(live_record_key) || return 1
+  CAPTURE_RECORD="$LIVE_RECORDS/$key.capture"
+  [ ! -f "$CAPTURE_RECORD" ] || read -r CAPTURE_PRIOR CAPTURE_PID < "$CAPTURE_RECORD" || true
+  capture_alive "$CAPTURE_PID"
+}
+
+# capture_or_report_stuck: for a live checkout whose uncommitted paths all lie
+# under its capture=<dir>/, start the capture command once per edit state (see
+# the header); otherwise report STUCK. sync_live_checkout has already deferred
+# a checkout whose capture is still running.
 capture_or_report_stuck() {
-  local key record log fp prior="" pid="" rc
-  if [ -z "$CAPTURE_CMD" ] || [ "$cur" != "$DEFAULT" ] || ! capture_paths_only \
-      || ! key=$(printf '%s' "$proj_abs" | git hash-object --stdin) \
+  local log fp rc="" pid
+  if [ -z "$CAPTURE_CMD" ] || ! capture_paths_only \
       || ! fp=$(capture_fingerprint) || [ -z "$fp" ]; then
     report_stuck "$(stuck_state)"
     return 0
   fi
-  record="$LIVE_RECORDS/$key.capture"
-  log="$record.log"
-  [ ! -f "$record" ] || read -r prior pid < "$record" || true
-  if capture_alive "$pid"; then
-    if [ "$prior" = "$fp" ]; then
-      echo "$label: capturing: $CAPTURE_CMD is still running for $CAPTURE_COUNT uncommitted path(s) under $CAPTURE_DIR (log $log)"
-    else
-      echo "$label: capturing: an earlier $CAPTURE_CMD run is still going; the next sync captures the newer edits under $CAPTURE_DIR (log $log)"
-    fi
+  capture_running || true
+  if [ -z "$CAPTURE_RECORD" ]; then
+    report_stuck "$(stuck_state)"
     return 0
   fi
-  if [ "$prior" = "$fp" ]; then
-    rc=$(cat "$record.status" 2>/dev/null) || rc=""
+  log="$CAPTURE_RECORD.log"
+  if [ -n "$CAPTURE_PRIOR" ]; then
+    rc=$(cat "$CAPTURE_RECORD.status" 2>/dev/null) || rc=""
+  fi
+  if [ "$CAPTURE_PRIOR" = "$fp" ]; then
     report_stuck "$(stuck_state)" "; capture already ran for these edits (exit ${rc:-unknown}, log $log)"
     return 0
   fi
@@ -539,12 +557,12 @@ capture_or_report_stuck() {
     report_stuck "$(stuck_state)"
     return 0
   fi
-  rm -f "$record.status"
+  rm -f "$CAPTURE_RECORD.status"
   # set -m gives the run its own process group: bootstrap's timeout kills the
   # sync's group, and the capture must outlive it.
   # shellcheck disable=SC2016 # $1 and $2 expand in the detached shell
   pid=$(cd "$PROJ" && set -m && {
-    nohup bash -c 'bash -c "$1"; echo $? > "$2"' fm-capture "$CAPTURE_CMD" "$record.status" \
+    nohup bash -c 'bash -c "$1"; echo $? > "$2"' fm-capture "$CAPTURE_CMD" "$CAPTURE_RECORD.status" \
       </dev/null >"$log" 2>&1 &
     echo $!
   }) || pid=""
@@ -552,7 +570,12 @@ capture_or_report_stuck() {
     report_stuck "$(stuck_state)"
     return 0
   fi
-  write_live_record "$record" "$fp $pid"
+  write_live_record "$CAPTURE_RECORD" "$fp $pid"
+  # A failed capture still surfaces while the edits keep changing.
+  if [ -n "$CAPTURE_PRIOR" ] && [ "${rc:-unknown}" != 0 ]; then
+    report_stuck "$(stuck_state)" "; the last capture failed (exit ${rc:-unknown}), so $CAPTURE_CMD started again (log $log)"
+    return 0
+  fi
   echo "$label: capturing: $CAPTURE_COUNT uncommitted path(s) under $CAPTURE_DIR only; started $CAPTURE_CMD (log $log)"
 }
 
@@ -778,7 +801,7 @@ post_update_output_tail() {
 run_post_update() {
   local cmd=$1 moved=$2 key record head recorded="" rc=0 output tail
   head=$(git -C "$PROJ" rev-parse HEAD 2>/dev/null) || return 0
-  key=$(printf '%s' "$proj_abs" | git hash-object --stdin) || return 0
+  key=$(live_record_key) || return 0
   record="$LIVE_RECORDS/$key"
   [ ! -f "$record" ] || recorded=$(sed -n 1p "$record" 2>/dev/null)
   if [ -n "$recorded" ] && [ "$recorded" = "$head" ]; then
@@ -808,6 +831,12 @@ run_post_update() {
   echo "$label: post-update command ran at $(git -C "$PROJ" rev-parse --short HEAD)"
 }
 
+# live_record_key: the name of the current checkout's records under
+# state/live-checkouts/.
+live_record_key() {
+  printf '%s' "$proj_abs" | git hash-object --stdin
+}
+
 write_live_record() {
   local record=$1 head=$2 tmp
   mkdir -p "$LIVE_RECORDS" 2>/dev/null || return 0
@@ -828,6 +857,7 @@ sync_live_checkout() {
     CAPTURE_DIR=${CAPTURE_DIR#./}
     CAPTURE_DIR="${CAPTURE_DIR%/}/"
     CAPTURE_CMD=$(expand_home "${capture#*:}")
+    case "$CAPTURE_CMD" in */*) ;; *) CAPTURE_CMD="./$CAPTURE_CMD" ;; esac
   fi
   if [ ! -d "$PROJ" ]; then
     echo "$label: skipped: not a directory"
@@ -846,6 +876,10 @@ sync_live_checkout() {
       echo "$label: skipped: busy: $lock is held; rerun bin/fm-fleet-sync.sh $project after it clears"
       return 0
     fi
+  fi
+  if [ -n "$CAPTURE_CMD" ] && capture_running; then
+    echo "$label: skipped: busy: $CAPTURE_CMD is still running (log $CAPTURE_RECORD.log); the next sync retries"
+    return 0
   fi
   before=$(git -C "$PROJ" rev-parse HEAD 2>/dev/null) || before=""
   fast_forward_clone no
@@ -891,12 +925,14 @@ sync_live_checkouts() {
       rest=${rest#"${rest%%[![:space:]]*}"}
     done
     case "$capture" in
-      ''|[!:]*:[!:]*) ;;
-      *)
-        echo "live-checkouts: skipped: line $n capture= wants <dir>/:<command>"
-        continue
-        ;;
+      ''|[!:/]*:[!:]*) ;;
+      *) capture=bad ;;
     esac
+    case "${capture%%:*}" in ./|.|bad) capture=bad ;; esac
+    if [ "$capture" = bad ]; then
+      echo "live-checkouts: skipped: line $n capture= wants <dir>/:<command> with <dir> inside the checkout"
+      continue
+    fi
     cmd=$rest
     sync_live_checkout "$project" "$path" "$lock" "$capture" "$cmd" "$wait_secs"
   done < "$LIVE_CHECKOUTS_FILE"
