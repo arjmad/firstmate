@@ -1077,8 +1077,10 @@ SIGNALS
       "$kind brief still instructs the default paused status"
     assert_grep 'a blocker or wait clears' "$brief" \
       "$kind brief did not require durable resolution when a blocker clears"
-    assert_grep 'even when the answer is what started that work' "$brief" \
-      "$kind brief did not warn that an answer-started done/working never closes a decision"
+    if [ "$kind" = secondmate ]; then
+      assert_grep 'even when the answer is what started that work' "$brief" \
+        "$kind brief did not warn that an answer-started done/working never closes a decision"
+    fi
   done
   pass "fm-brief.sh: custom pause verb renders in every scaffold"
 }
@@ -1816,6 +1818,49 @@ ROWS
   pass "fm-brief.sh: --method is closed-set, entry-bound, and refused on charters"
 }
 
+# Run the fold in a child bash so the classify library's globals stay out of
+# this test's scope.
+decision_fold() {
+  bash -c '. "$1"; shift; _fm_decision_fold_line "$@"' _ "$ROOT/bin/fm-classify-lib.sh" "$@"
+}
+
+# Rule 6 must describe the fold it feeds: _fm_decision_fold_line clears every
+# open key on a ship or scout done/failed line, but keeps it for a secondmate.
+test_decision_rule_matches_terminal_fold() {
+  local home kind brief open after failed
+  home="$TMP_ROOT/decision-rule-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-rule-ship some-proj --mode direct-PR >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-rule-scout some-proj --scout >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-rule-secondmate --secondmate --no-projects >/dev/null 2>&1
+  for kind in ship scout secondmate; do
+    brief="$home/data/brief-rule-$kind/brief.md"
+    assert_present "$brief" "$kind brief was not scaffolded"
+    open=$(decision_fold "" "needs-decision [key=choice]: waiting" resolved captain-held "$kind")
+    after=$(decision_fold "$open" "done: finished" resolved captain-held "$kind")
+    failed=$(decision_fold "$open" "failed: gave up" resolved captain-held "$kind")
+    [ -n "$open" ] || fail "$kind fold did not open the needs-decision key"
+    if [ "$kind" = secondmate ]; then
+      [ -n "$after" ] || fail "secondmate fold no longer keeps an open decision after done"
+      [ -n "$failed" ] || fail "secondmate fold no longer keeps an open decision after failed"
+      assert_grep "a later \`done\` or \`working\` event never does" "$brief" \
+        "secondmate charter lost its resolved-only guarantee"
+      assert_no_grep "lands or you declare" "$brief" \
+        "secondmate charter picked up the ship/scout terminal-clears wording"
+    else
+      [ -z "$after" ] || fail "$kind fold no longer clears an open decision on done"
+      [ -z "$failed" ] || fail "$kind fold no longer clears an open decision on failed"
+      assert_grep "lands or you declare" "$brief" \
+        "$kind brief no longer says done or failed clears open decisions"
+      assert_grep "for an unrecoverable failure" "$brief" \
+        "$kind brief no longer limits terminal declarations over an unanswered decision"
+      assert_no_grep "line never closes it, even when" "$brief" \
+        "$kind brief still promises done never closes an open decision"
+    fi
+  done
+  pass "fm-brief.sh: rule 6 matches the ship/scout terminal fold and the secondmate resolved-only fold"
+}
+
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
@@ -1831,6 +1876,7 @@ test_no_mistakes_dod_green_detection
 test_pr_based_dod_requires_non_draft
 test_ask_user_escalation_format
 test_ship_project_memory_wording
+test_decision_rule_matches_terminal_fold
 test_herdr_lab_contract_is_explicit_and_complete
 test_herdr_lab_contract_quotes_foreign_firstmate_path
 test_herdr_lab_omission_is_loud_for_ship_and_scout
