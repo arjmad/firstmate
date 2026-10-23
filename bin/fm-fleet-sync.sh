@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Refresh project clones: fast-forward the checked-out local default branch to
 # origin/<default> when safe, and prune local branches whose upstream tracking
-# branch is gone (the remote branch was deleted, i.e. its PR merged) and that no
+# branch is gone, whose commits provably landed on origin/<default>, and that no
 # worktree still needs.
 # Self-heals the one unambiguously safe drift: a clean, detached HEAD that holds
 # no unique commits (it is an ancestor of origin/<default>) and whose <default>
@@ -22,7 +22,9 @@
 # that would have been touched. A candidate that has a .git yet yields no work
 # tree (for example a stray core.bare=true) is a broken clone, reported STUCK
 # with its core.bare and core.worktree values rather than as a benign skip.
-# Pruning never deletes the checked-out branch or a branch that still has a
+# Pruning deletes a gone-upstream branch only when its commits are proven landed
+# on origin/<default> (an ancestor, or a squash merge whose content is already
+# there), and never the checked-out branch or a branch that still has a
 # worktree, so it cannot discard unlanded work; set FM_FLEET_PRUNE=0 to disable it.
 # When the fetch fails on an orphaned .git/packed-refs.lock (left by a ref rewrite
 # killed mid-write - e.g. a timed-out bootstrap sync or a teardown process kill),
@@ -402,20 +404,35 @@ fetch_with_packed_refs_lock_guard() {
   return "$rc"
 }
 
+# Positive evidence that <branch>'s commits landed on <base>: its tip is an
+# ancestor of <base>, or - after a squash merge, where it never is - merging it
+# into <base> from their real merge base adds no tree change, the same
+# containment proof bin/fm-teardown.sh's content_in_default applies before it
+# removes a branch. A conflict or an unreadable ref is not evidence.
+branch_landed_on() {  # <branch> <base>
+  local branch=$1 base=$2 base_tree merged_tree
+  git -C "$PROJ" merge-base --is-ancestor "refs/heads/$branch" "$base" 2>/dev/null && return 0
+  base_tree=$(git -C "$PROJ" rev-parse --quiet --verify "$base^{tree}" 2>/dev/null) || return 1
+  merged_tree=$(git -C "$PROJ" merge-tree --write-tree "$base" "refs/heads/$branch" 2>/dev/null) || return 1
+  [ "$(printf '%s\n' "$merged_tree" | head -1)" = "$base_tree" ]
+}
+
 prune_gone_branches() {
-  # Delete local branches whose upstream tracking branch is gone - the remote
-  # branch was deleted, which in this fleet means its PR merged - as long as
-  # nothing still needs them. Never the checked-out branch, and never a branch
-  # that still has a worktree (a live or not-yet-torn-down task). "Gone" plus
-  # "no worktree" already proves the work landed: teardown removes a branch's
-  # worktree only after confirming the work reached the remote. We deliberately
-  # do NOT also require the branch to be an ancestor of origin/<default> - PRs in
-  # this fleet are squash-merged, so a merged branch is never an ancestor and
-  # such a check would prune nothing. The no-worktree guard is the real safety
-  # net. Set FM_FLEET_PRUNE=0 to skip pruning entirely.
+  # Delete local branches whose upstream tracking branch is gone and whose
+  # commits provably landed on origin/<default> (branch_landed_on), as long as
+  # nothing still needs them. A gone upstream alone proves nothing - a remote
+  # branch can be deleted unmerged, and a branch made outside task teardown
+  # never passed its landed-work check - so a branch without that proof is kept
+  # and named on stderr. Never the checked-out branch, and never a branch that
+  # still has a worktree (a live or not-yet-torn-down task). With no readable
+  # origin/<default> nothing is pruned. Set FM_FLEET_PRUNE=0 to skip pruning
+  # entirely.
   [ "${FM_FLEET_PRUNE:-1}" != "0" ] || return 0
 
-  local worktree_branches current refline branch track
+  local worktree_branches current refline branch track default base
+  default=$(default_branch) || return 0
+  base="refs/remotes/origin/$default"
+  git -C "$PROJ" rev-parse --verify --quiet "$base^{commit}" >/dev/null || return 0
   worktree_branches=$(git -C "$PROJ" worktree list --porcelain 2>/dev/null \
     | sed -n 's#^branch refs/heads/##p')
   current=$(git -C "$PROJ" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
@@ -427,6 +444,10 @@ prune_gone_branches() {
     [ -n "$branch" ] || continue
     [ "$branch" != "$current" ] || continue
     if printf '%s\n' "$worktree_branches" | grep -Fxq -- "$branch"; then
+      continue
+    fi
+    if ! branch_landed_on "$branch" "$base"; then
+      echo "$label: kept $branch: its upstream is gone but its commits are not proven landed on origin/$default" >&2
       continue
     fi
     if git -C "$PROJ" branch -D -- "$branch" >/dev/null 2>&1; then

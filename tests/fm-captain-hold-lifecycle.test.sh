@@ -3370,6 +3370,46 @@ test_merge_approval_releases_before_zero_done_retention() {
   pass "merge approval releases before zero-retention cleanup records completion"
 }
 
+test_completion_reads_an_answered_hold_past_done_retention() {
+  local home id call i
+  home=$(make_home done-retention-archive)
+  id=sample-retention-review
+  call=sample-retention-call
+  mkdir -p "$home/data/$id"
+  printf '# Retention review\n' > "$home/data/$id/report.md"
+  write_origin_meta "$home" "$id"
+  run_captain "$home" hold "$call" --title "Choose the retention route" \
+    --reason "captain retention route pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not hold the retention captain call"
+  printf 'Take the north route.\n' > "$home/retention-answer.txt"
+  run_captain "$home" answer "$call" --decision-file "$home/retention-answer.txt" >/dev/null \
+    || fail "could not answer the retention captain call"
+  if ! tasks_in "$home" add "$id-unanswered" "Close without an answer" --repo sample >/dev/null \
+    || ! tasks_in "$home" "done" "$id-unanswered" >/dev/null; then
+    fail "could not close the unanswered fixture row"
+  fi
+  # done_keep is 10, so eleven later closes push both rows into the archive.
+  for i in 1 2 3 4 5 6 7 8 9 10 11; do
+    if ! tasks_in "$home" add "$id-later-$i" "Later work $i" --repo sample >/dev/null \
+      || ! tasks_in "$home" "done" "$id-later-$i" >/dev/null; then
+      fail "could not close later fixture row $i"
+    fi
+  done
+  assert_no_grep "$call" "$home/data/backlog.md" "retention left the answered call in the backlog"
+  assert_grep "$call" "$home/data/done-archive.md" "retention did not archive the answered call"
+  run_captain "$home" complete "$id" "$call" > "$home/complete.out" 2> "$home/complete.err" \
+    || fail "complete lost an answered call to done_keep retention: $(cat "$home/complete.err")"
+  assert_grep "decision_keys=$call" "$home/state/$id.meta" "the archived call was not attested"
+  run_captain "$home" verify "$id" >/dev/null 2> "$home/verify.err" \
+    || fail "verify lost an answered call to done_keep retention: $(cat "$home/verify.err")"
+  if run_captain "$home" complete "$id" "$id-unanswered" > "$home/unanswered.out" 2> "$home/unanswered.err"; then
+    fail "complete accepted an archived row that carries no captain answer"
+  fi
+  assert_grep "neither held for the captain nor closed with a recorded captain answer" \
+    "$home/unanswered.err" "the archived unanswered row was not refused for its missing answer"
+  pass "complete and verify read an answered captain call that done_keep retention archived"
+}
+
 test_pr_merge_entrypoint_refuses_a_captain_held_task() {
   local home pr_id pr repo wt rc
   home=$(make_home held-merge-entrypoints)
@@ -4682,6 +4722,7 @@ test_relocated_report_does_not_wedge_an_answer_before_replay
 test_teardown_retains_captain_calls_in_a_relocated_backlog
 test_teardown_retains_a_gerrit_captain_call_with_its_change_url
 test_merge_approval_releases_before_zero_done_retention
+test_completion_reads_an_answered_hold_past_done_retention
 test_pr_merge_entrypoint_refuses_a_captain_held_task
 test_local_merge_entrypoint_refuses_a_captain_held_task
 test_pr_merge_entrypoint_separates_an_unreadable_record_from_an_absent_one

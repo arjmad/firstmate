@@ -802,6 +802,58 @@ live_config() {
 # runs_of <file>: how many times a counting post-update command ran.
 runs_of() { if [ -f "$1" ]; then wc -l < "$1" | tr -d ' '; else echo 0; fi; }
 
+# A gone upstream alone never licenses a delete: only a branch whose commits
+# provably landed on origin/main (an ancestor, or a squash whose content is
+# there) is pruned, and a linked-worktree branch is kept even when landed.
+test_prune_requires_landed_proof() {
+  local home clone work fakebin out err b
+  home=$(new_home)
+  clone=$(build_pair "$home" prune)
+  work="$home/work-prune"
+  fakebin="$home/fb-prune"; mkdir -p "$fakebin"
+  out="$home/out-prune"; err="$home/err-prune"
+
+  git -C "$work" checkout -q -b unmerged main
+  commit_file "$work" unmerged.txt u "unique unmerged work"
+  git -C "$work" checkout -q -b squashed main
+  commit_file "$work" squashed.txt s "squash-merged work"
+  git -C "$work" checkout -q -b merged main
+  commit_file "$work" merged.txt m "ancestor-merged work"
+  git -C "$work" checkout -q -b wt-landed main
+  git -C "$work" checkout -q main
+  git -C "$work" push -q origin unmerged squashed merged wt-landed
+  git -C "$work" merge -q --ff-only merged
+  git -C "$work" merge -q --squash squashed >/dev/null 2>&1
+  git -C "$work" commit -qm "squash of squashed"
+  git -C "$work" push -q origin main
+
+  git -C "$clone" fetch -q origin
+  for b in unmerged squashed merged wt-landed; do
+    git -C "$clone" branch -q --track "$b" "origin/$b"
+  done
+  git -C "$clone" checkout -q -b primary-only
+  commit_file "$clone" primary.txt p "work made in the primary checkout"
+  git -C "$clone" push -q -u origin primary-only
+  git -C "$clone" checkout -q main
+  git -C "$clone" worktree add -q "$home/wt-landed" wt-landed
+  git -C "$work" push -q origin --delete unmerged squashed merged wt-landed primary-only
+
+  run_sync_guarded "$home" "$fakebin" "$out" "$err" prune
+  for b in unmerged primary-only wt-landed; do
+    git -C "$clone" show-ref --verify --quiet "refs/heads/$b" \
+      || fail "prune: deleted $b, which has no proof its commits landed or still has a worktree"
+  done
+  for b in squashed merged; do
+    if git -C "$clone" show-ref --verify --quiet "refs/heads/$b"; then
+      fail "prune: kept $b although its commits provably landed on origin/main"
+    fi
+    assert_grep "prune: pruned $b" "$out" "prune: the landed $b prune was not reported"
+  done
+  assert_grep "kept unmerged: its upstream is gone" "$err" "prune: the kept unmerged branch was not named"
+  assert_grep "kept primary-only: its upstream is gone" "$err" "prune: the kept primary-checkout branch was not named"
+  pass "prune deletes only gone-upstream branches proven landed and never a worktree's branch"
+}
+
 test_live_checkout_fast_forwards_and_runs_post_update_once() {
   local home live out log
   home=$(new_home)
@@ -1226,3 +1278,4 @@ test_capture_skips_edits_outside_its_dir
 test_scheduled_interval_is_home_configurable
 test_scheduled_sync_queues_new_stuck_lines_once
 test_scheduled_sync_is_a_singleton
+test_prune_requires_landed_proof
