@@ -436,6 +436,76 @@ task_show_or_fail() {  # <id> <absence-message>; sets show
   show=$TASK_SHOW_OUTPUT
 }
 
+# A markdown home's done_keep retention moves a closed row out of the backlog
+# into its archive file (the [markdown] `archive` key of .tasks.toml, default
+# done-archive.md beside the backlog), where tasks-axi show no longer finds it.
+# An answered captain call stays answered after that move, so the completion
+# gate reads the newest archived copy instead of calling the call absent. The
+# copy is re-read through tasks-axi from a one-row scratch backlog, so its
+# fields arrive exactly as a live read prints them; only a done row qualifies.
+# The read carries the same bound as task_show and stops the command by name
+# when it is hit, because a wedged read is not absence.
+archived_task_show() {  # <id>; sets TASK_SHOW_OUTPUT
+  local id=$1 data root backend file archive scratch sources=() status=0 secs=${FM_BACKLOG_ROW_TIMEOUT_SECS:-10}
+  case "$secs" in ''|*[!0-9]*) secs=10 ;; esac
+  [ "$secs" -gt 0 ] 2>/dev/null || secs=10
+  data=$(fm_backlog_data_absolute "$DATA") || return 1
+  root=$(fm_backlog_root "$data") || return 1
+  backend=$(fm_tasks_axi_backend "$root" 2>/dev/null) || return 1
+  [ "$backend" = markdown ] || return 1
+  file=$(fm_backlog_file "$data") || return 1
+  archive=$(LC_ALL=C awk '
+    {
+      line = $0
+      sub(/[[:space:]]*#.*/, "", line)
+      if (line ~ /^[[:space:]]*\[[^]]+\][[:space:]]*$/) { inmd = (line ~ /\[markdown\]/); next }
+      if (inmd && line ~ /^[[:space:]]*archive[[:space:]]*=/) {
+        sub(/^[^=]*=[[:space:]]*/, "", line); sub(/[[:space:]]+$/, "", line)
+        gsub(/^"|"$/, "", line); gsub(/^'\''|'\''$/, "", line)
+        print line; exit
+      }
+    }
+  ' "$root/.tasks.toml" 2>/dev/null)
+  case "$archive" in
+    '') archive="${file%/*}/done-archive.md" ;;
+    /*) ;;
+    *) archive="$root/$archive" ;;
+  esac
+  [ ! -f "$file" ] || sources+=("$file")
+  [ ! -f "$archive" ] || sources+=("$archive")
+  [ "${#sources[@]}" -gt 0 ] || return 1
+  scratch=$(mktemp -d "${TMPDIR:-/tmp}/fm-captain-hold-archived.XXXXXX") || return 1
+  # The newest archived copy of the row: the last `- [x] <id> -` entry under any
+  # `## Archived` heading, with its indented continuation lines.
+  { printf '# Backlog\n\n## Done\n'; FM_ARCHIVED_ID=$id LC_ALL=C awk '
+    FNR == 1 { archived = 0; grab = 0 }
+    /^## / { archived = ($0 ~ /^## Archived/); grab = 0; next }
+    /^- \[/ { grab = 0 }
+    archived && index($0, "- [x] " ENVIRON["FM_ARCHIVED_ID"] " - ") == 1 { block = ""; grab = 1 }
+    grab { block = block $0 "\n" }
+    END { printf "%s", block }
+  ' "${sources[@]}" 2>/dev/null; } > "$scratch/backlog.md"
+  if grep -q '^- \[x\] ' "$scratch/backlog.md"; then
+    TASK_SHOW_OUTPUT=$(cd "$scratch" && fm_run_timed "$secs" tasks-axi show "$id" --full --file "$scratch/backlog.md" 2>/dev/null) || status=$?
+  else
+    status=1
+  fi
+  rm -rf -- "$scratch"
+  if [ "$status" -eq 124 ]; then
+    printf 'fm-captain-hold: tasks-axi show %s exceeded its %ss archive read bound\n' "$id" "$secs" >&2
+    exit 124
+  fi
+  [ "$status" -eq 0 ] && [ "$(show_field "$TASK_SHOW_OUTPUT" state)" = "done" ]
+}
+
+# task_show, falling back to the archived copy only when the live backlog
+# reports the row NOT_FOUND; any other read failure keeps task_show's verdict.
+task_show_or_archived() {  # <id>; sets TASK_SHOW_OUTPUT
+  task_show "$1" && return 0
+  printf '%s\n' "$TASK_SHOW_OUTPUT" | grep -q '^code: NOT_FOUND$' || return 1
+  archived_task_show "$1"
+}
+
 show_field() {  # <show-output> <field>
   local output=$1 field=$2
   printf '%s\n' "$output" | sed -n "s/^  $field: //p" | head -1
@@ -565,7 +635,7 @@ resolution_block() {  # <mode>
 # surviving even when a date gate has expired) or a recorded captain answer.
 verify_hold_durable() {  # <task-id>
   local id=$1 show state hold_kind body
-  task_show "$id" || fail "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
+  task_show_or_archived "$id" || fail "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
   show=$TASK_SHOW_OUTPUT
   state=$(show_field "$show" state)
   hold_kind=$(show_field_value "$show" hold_kind)
@@ -773,9 +843,11 @@ resolve_migrated_entry() {  # <origin-or-empty> <entry>
 
 # Resolve one inventory entry or channel key to the task that carries it: the
 # exact task id when it exists, else the legacy derived identity, else - on the
-# beads backend - the migrated row the markdown-to-beads hold migration wrote.
-# Prints "<resolved id> <how>", where <how> is exact, legacy, migrated-note or
-# migrated-prefix, so a caller can record which evidence carried the attestation.
+# beads backend - the migrated row the markdown-to-beads hold migration wrote,
+# else - on the markdown backend - the exact or legacy row retention archived.
+# Prints "<resolved id> <how>", where <how> is exact, legacy, migrated-note,
+# migrated-prefix, archived or archived-legacy, so a caller can record which
+# evidence carried the attestation.
 resolve_entry() {  # <origin-or-empty> <entry>; prints "<id> <how>" or fails
   local origin=$1 entry=$2 legacy migrated rc
   if task_show "$entry"; then
@@ -796,8 +868,16 @@ resolve_entry() {  # <origin-or-empty> <entry>; prints "<id> <how>" or fails
     2) return 2 ;;
     124) return 124 ;;
   esac
+  if archived_task_show "$entry"; then
+    printf '%s archived' "$entry"
+    return 0
+  fi
   if [ -n "$origin" ] && [ "$origin" != "$BINDING_ANY" ]; then
     legacy=$(legacy_hold_id "$origin" "$entry")
+    if archived_task_show "$legacy"; then
+      printf '%s archived-legacy' "$legacy"
+      return 0
+    fi
     fail "no captain-held task $entry and no migrated hold for it in this home's configured backlog (data directory $DATA); the nearest legacy identity $legacy also resolves to nothing"
   fi
   fail "no captain-held task $entry and no migrated hold for it in this home's configured backlog (data directory $DATA)"
