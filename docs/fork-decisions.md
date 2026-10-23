@@ -1,7 +1,8 @@
 # Fork decisions
 
 2026-10-07: The fleet load baseline in `~/code/skills/docs/agent-load-baseline-2026-10-07.md` measured this repo's `AGENTS.md` at 29,144 characters plus about 11,000 characters of `.agents/skills` descriptions, the heaviest always-loaded item in the fleet.
-Decision: no further fork-side shrink of `AGENTS.md` and no upstream proposal.
+Original decision: no further fork-side shrink of `AGENTS.md` and no upstream proposal.
+The no-further-shrink restriction was superseded by Arjun's 2026-10-23 decision below; the no-upstream-proposal restriction remains.
 `AGENTS.md` and `bin/` are not identical to upstream: `AGENTS.md` still carries the earlier fork-side reduction from commit 3220f742 and is 226 lines shorter than upstream `main`, and 41 `bin/` files differ from upstream `main`, 38 of them through fork-only changes since the last upstream sync.
 The fleet's own guidance load is measured by the skills store's `scripts/agent-load` instead.
 
@@ -44,6 +45,10 @@ No upstream proposal.
 Decision: this fork sets upstream's repository variable `FM_CI_SKIP_PUSH=1` on `arjmad/firstmate`, so the push run's jobs skip and only the pull request run validates a change; `bin/fm-pr-merge.sh` reads checks at the PR head, so nothing consumes the push run.
 It is repository configuration with no tracked edit and no fork-patch row; deleting the variable restores the push run.
 No upstream proposal.
+
+2026-10-23: Arjun chose measured Firstmate prompt reductions while grilling ecosystem-wide agent guidance.
+Decision: use upstream-supported options first, and retain a reduction only when representative behavior trials show equal or better observed behavior.
+This supersedes the 2026-10-07 no-further-shrink restriction; it does not authorize an upstream proposal.
 
 ## Fork patches
 
