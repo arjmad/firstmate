@@ -72,6 +72,12 @@
 # the template may display the routing id. Anything else refuses before the
 # existing board is touched.
 #
+# A decision card must also offer a real choice: at least two authored options
+# (the injected reconcile choice does not count), a `recommend_value` naming one
+# of them, and `allow_freeform: true`. Merge and credential cards keep their own
+# shapes. The refusal names each weak card's key and what it lacks, so the
+# composer fixes the payload rather than the board shipping a Done-only card.
+#
 # Every Underway row likewise carries a non-empty `name`: the durable task name
 # when known, otherwise its durable identifier.
 # A Charted Next row MAY carry `filed`, the durable filed date (YYYY-MM-DD, or
@@ -202,6 +208,27 @@ validate_payload() {  # <data.json>
     and ([.landed[] | landed_item] | all)
     and ([.charted[] | charted_item] | all)
   ' "$1" >/dev/null
+}
+
+# Print one line per decision card that does not offer a real choice, naming
+# its key and every missing part. Shape errors are left to validate_payload.
+decision_card_gaps() {  # <data.json>
+  jq -r '
+    .captains_call?
+    | if type == "array" then .[] else empty end
+    | select(type == "object" and .type == "decision")
+    | . as $card
+    | ((.options | if type == "array" then [.[] | objects | .value | select(. != "reconcile")] else [] end)) as $values
+    | [
+        (if ($values | length) < 2
+          then "at least two authored options (has \($values | length))" else empty end),
+        (if ($card.recommend_value | type) != "string" or ($values | index($card.recommend_value)) == null
+          then "a recommend_value naming one of its options" else empty end),
+        (if .allow_freeform != true then "allow_freeform true" else empty end)
+      ] as $gaps
+    | select($gaps | length > 0)
+    | "\(.key | tostring): needs \($gaps | join(", "))"
+  ' "$1"
 }
 
 # --- Lavish session liveness -------------------------------------------------
@@ -358,11 +385,13 @@ await_source_owner() {  # <source-id>
 }
 
 command_build() {
-  local data=${1-} board json tmp sid extracted effective owner version pre_reopen_owner
+  local data=${1-} board json tmp sid extracted effective owner version pre_reopen_owner gaps
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
   command -v jq >/dev/null 2>&1 || fail "jq is required"
   [ -f "$data" ] || fail "board data does not exist: $data"
   jq empty "$data" 2>/dev/null || fail "board data is not valid JSON: $data"
+  gaps=$(decision_card_gaps "$data") || fail "cannot check the board's decision cards: $data"
+  [ -z "$gaps" ] || fail "decision cards must offer a real choice: $(printf '%s' "$gaps" | paste -sd ';' - | sed 's/;/; /g')"
   validate_payload "$data" || fail "board data does not satisfy $BOARD_SCHEMA: $data"
   [ -f "$TEMPLATE" ] && [ ! -L "$TEMPLATE" ] || fail "board template is missing: $TEMPLATE"
   [ "$(grep -cxF "$PLACEHOLDER" "$TEMPLATE")" -eq 1 ] \

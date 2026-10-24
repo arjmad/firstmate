@@ -93,13 +93,14 @@ require_listener_reached_poll() {  # <home>
 }
 
 # Build the board from <underway-json> plus <charted-json> and return what the
-# renderer produced.
+# renderer produced. FM_RENDER_CALLS optionally supplies Captain's Call items.
 render_board() {  # <home> <underway-json> <charted-json> [charted_more] [charted_warning_more]
   local home=$1 underway=$2 charted=$3 more=${4:-0} warning_more=${5:-0} data="$1/payload.json"
   jq -n --argjson underway "$underway" --argjson charted "$charted" \
-    --argjson more "$more" --argjson warning_more "$warning_more" '{
+    --argjson more "$more" --argjson warning_more "$warning_more" \
+    --argjson calls "${FM_RENDER_CALLS:-[]}" '{
     schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-08-26T00:00Z",
-    prs_live:false, captains_call:[], underway:$underway, landed:[],
+    prs_live:false, captains_call:$calls, underway:$underway, landed:[],
     charted:$charted, charted_more:$more, charted_warning_more:$warning_more}' > "$data"
   PATH="$home/fakebin:$PATH" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
@@ -266,6 +267,47 @@ test_charted_rows_without_a_filed_date_follow_the_dated_rows_in_payload_order() 
   pass "charted rows with no filed date follow the dated rows in payload order"
 }
 
+test_a_decision_card_renders_its_options_recommendation_and_note_field() {
+  local home out
+  home=$(make_home decision-card)
+  out=$(FM_RENDER_CALLS='[{"key":"sample-call","type":"decision","repo":"sample",
+    "title":"Board answer shape","about":"How the captain answers","decide":"Which shape?",
+    "options":[
+      {"value":"cards","label":"Option cards","hint":"Pick from authored options"},
+      {"value":"chat","label":"Reply in chat","hint":"Skip the board"}],
+    "recommend_value":"cards","allow_freeform":true}]' render_board "$home" '[]' '[]')
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.calls | length) == 1
+      and (.calls[0]
+        | .key == "sample-call"
+          and ([.options[] | .value] == ["cards", "chat", "reconcile"])
+          and ([.options[] | select(.recommended) | .value] == ["cards"])
+          and (.options[0].hint == "Pick from authored options")
+          and .note == "Or answer in your own words")
+  ' >/dev/null || fail "a decision card did not render its options, recommendation, and note field: $out"
+  pass "a decision card renders its authored options, the recommended tag, and a labelled note field"
+}
+
+# The template, not only the build gate, gives every decision card the note
+# field: inject a payload straight into the shipped template and render it.
+test_the_template_renders_a_note_field_on_every_decision_card() {
+  local home board out
+  home=$(make_home template-note)
+  board="$home/board.html"
+  BOARD_JSON='{"schema":"fm-bearings-board.v1","home":"render-home","generated":"2026-08-26T00:00Z","prs_live":false,"captains_call":[{"key":"no-flag","type":"decision","repo":"sample","title":"No freeform flag","options":[{"value":"a","label":"A"},{"value":"b","label":"B"}],"recommend_value":"a"},{"key":"merge.sample","type":"merge","repo":"sample","title":"Merge sample","risk":"low","options":[{"value":"merge","label":"Merge now"}]}],"underway":[],"landed":[],"charted":[]}' \
+    perl -pe 's/^__FM_BEARINGS_BOARD_DATA__$/$ENV{BOARD_JSON}/' \
+    "$ROOT/.agents/skills/bearings/assets/board-template.html" > "$board"
+  out=$(node "$HARNESS" "$board") || fail "the injected board could not be rendered"
+  printf '%s' "$out" | jq -e '
+    .error == ""
+      and ([.calls[] | {key, note}]
+        == [{key: "no-flag", note: "Or answer in your own words"}, {key: "merge.sample", note: null}])
+  ' >/dev/null || fail "the template did not give a decision card, and only it, the note field: $out"
+  pass "the template renders the note field on every decision card"
+}
+
+test_a_decision_card_renders_its_options_recommendation_and_note_field
+test_the_template_renders_a_note_field_on_every_decision_card
 test_an_underway_row_leads_with_the_task_name_and_keeps_its_run_status
 test_an_underway_identifier_label_is_not_replaced_by_run_status
 test_charted_next_reads_newest_filed_first

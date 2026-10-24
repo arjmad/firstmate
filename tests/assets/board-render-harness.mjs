@@ -5,7 +5,9 @@
 // Usage: node board-render-harness.mjs <built-board.html>
 // Prints one JSON document:
 //   { stats:[{n,label}], underway:[{title,sub,badges}],
-//     charted:[{title,sub,badges,pickable}], empty, more, error }
+//     charted:[{title,sub,badges,pickable}],
+//     calls:[{key,options:[{value,label,hint,recommended}],note}], empty, more, error }
+// A call's note is the free-text field's visible label, or null without one.
 import { readFileSync } from "node:fs";
 
 const html = readFileSync(process.argv[2], "utf8");
@@ -27,6 +29,10 @@ class Node {
     this.classList = {
       add: (c) => { this.className = (this.className + " " + c).trim(); },
       contains: (c) => this.className.split(/\s+/).includes(c),
+      toggle: (c, on) => {
+        const rest = this.className.split(/\s+/).filter((x) => x && x !== c);
+        this.className = (on ? [...rest, c] : rest).join(" ");
+      },
     };
   }
   get textContent() {
@@ -113,6 +119,31 @@ const underway = rowsOf(uw);
 
 const ch = byId.get("bb-charted") || new Node("div");
 const charted = rowsOf(ch);
+const find = (n, cls) => {
+  for (const c of n.children) {
+    if (c.className.split(/\s+/).includes(cls)) return c;
+    const hit = find(c, cls);
+    if (hit) return hit;
+  }
+  return null;
+};
+const findAll = (n, cls) => n.querySelectorAll("." + cls);
+const deck = byId.get("bb-call") || new Node("div");
+const calls = deck.children
+  .filter((c) => c.className.split(/\s+/).includes("bb-decision"))
+  .map((card) => {
+    const form = card.children.find((c) => c.tagName === "form");
+    return {
+      key: form?.attributes["data-lavish-question"] ?? "",
+      options: findAll(card, "fm-opt").map((o) => ({
+        value: o.children.find((c) => c.tagName === "input")?.value ?? "",
+        label: find(o, "fm-opt__label")?.textContent ?? "",
+        hint: find(o, "fm-opt__hint")?.textContent ?? "",
+        recommended: find(o, "fm-rec") !== null,
+      })),
+      note: find(card, "fm-field__label")?.textContent ?? null,
+    };
+  });
 // A fail-closed render replaces the page body instead of the board sections, so
 // surface it rather than reporting an empty board as a successful render.
 const errorText = [...byId.entries()]
@@ -123,4 +154,4 @@ const empty = ch.children.filter((c) => c.className.includes("bb-empty")).map((c
 const more = ch.children.filter((c) => c.className.includes("bb-morechip")).map((c) => c.textContent);
 
 process.stdout.write(
-  JSON.stringify({ stats, underway, charted, empty, more, error: errorText }) + "\n");
+  JSON.stringify({ stats, underway, charted, calls, empty, more, error: errorText }) + "\n");
