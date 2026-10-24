@@ -78,8 +78,8 @@ cleanup_all() {
   rm -rf "$TMP_ROOT"
 }
 trap cleanup_all EXIT
-# shellcheck source=tests/treehouse-test-isolation.sh
-. "$ROOT/tests/treehouse-test-isolation.sh"
+# shellcheck source=tests/treehouse-helpers.sh
+. "$ROOT/tests/treehouse-helpers.sh"
 # The scratch projects' pools live under TMP_ROOT, so removing it removes them.
 treehouse_test_isolate "$TMP_ROOT" || fail "could not isolate the Treehouse pool root"
 fm_herdr_lab_prepare "$SESSION" || fail "could not prepare isolated Herdr lab session"
@@ -148,6 +148,7 @@ CM1_META="$PRIMARY_HOME/state/cm1.meta"
 [ -f "$CM1_META" ] || fail "no meta written for cm1"
 assert_contains_local "$(cat "$CM1_META")" "backend=herdr" "cm1 meta missing backend=herdr"
 WT1=$(grep '^worktree=' "$CM1_META" | cut -d= -f2-)
+[ -n "$WT1" ] || fail "no worktree recorded for cm1"
 treehouse_test_require_isolated_worktree "$WT1" >&2 || fail "cm1 acquired a worktree in the fleet's pool storage"
 CM1_PANE=$(grep '^herdr_pane_id=' "$CM1_META" | cut -d= -f2-)
 [ -n "$CM1_PANE" ] || fail "cm1 meta missing herdr_pane_id"
@@ -204,6 +205,7 @@ CM2_META="$SM_HOME/state/cm2.meta"
 [ -f "$CM2_META" ] || fail "no meta written for cm2 (recorded in the SECONDMATE's own state dir - it did its own spawning)"
 assert_contains_local "$(cat "$CM2_META")" "backend=herdr" "cm2 meta missing backend=herdr"
 WT2=$(grep '^worktree=' "$CM2_META" | cut -d= -f2-)
+[ -n "$WT2" ] || fail "no worktree recorded for cm2"
 treehouse_test_require_isolated_worktree "$WT2" >&2 || fail "cm2 acquired a worktree in the fleet's pool storage"
 CM2_PANE=$(grep '^herdr_pane_id=' "$CM2_META" | cut -d= -f2-)
 [ -n "$CM2_PANE" ] || fail "cm2 meta missing herdr_pane_id"

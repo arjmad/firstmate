@@ -75,8 +75,8 @@ cleanup_all() {
   return "$status"
 }
 trap cleanup_all EXIT
-# shellcheck source=tests/treehouse-test-isolation.sh
-. "$ROOT/tests/treehouse-test-isolation.sh"
+# shellcheck source=tests/treehouse-helpers.sh
+. "$ROOT/tests/treehouse-helpers.sh"
 # The scratch project's pool lives under TMP_ROOT, so removing TMP_ROOT removes it.
 treehouse_test_isolate "$TMP_ROOT" || fail "could not isolate the Treehouse pool root"
 "$HERDR_LAB_HELPER" provision "$HERDR_LAB_SESSION" || fail "could not provision isolated Herdr lab session"

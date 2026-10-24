@@ -17,7 +17,10 @@ set -u
 treehouse_test_production_storage() {
   local root=${TREEHOUSE_ROOT:-} config="$HOME/.config/treehouse/config.toml"
   if [ -z "$root" ] && [ -f "$config" ]; then
-    root=$(sed -n 's/^[[:space:]]*root[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$config" | head -n 1)
+    # Only a top-level key counts, so stop at the first table header.
+    root=$(sed -n -e '/^[[:space:]]*\[/q' \
+      -e 's/^[[:space:]]*root[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+      -e "s/^[[:space:]]*root[[:space:]]*=[[:space:]]*'\([^']*\)'.*/\1/p" "$config" | head -n 1)
   fi
   root=${root:-$HOME}
   case "$root" in

@@ -146,11 +146,10 @@
 # SCRIPT, because the reference is per-script evidence. Consumer bin/ scripts
 # still resolve through the curated map, so recorded family-level coupling still
 # expands to the whole family.
-# tests/lib.sh, tests/fixtures.sh, tests/*-helpers.sh, tests/*-fixture.sh and
-# tests/treehouse-test-isolation.sh are shared files that map to the suites
-# naming them; a fixture under tests/fixtures/<dir>/ is mapped by that directory
-# instead. Curated family arms above those also name individual tests/ files
-# explicitly.
+# tests/lib.sh, tests/fixtures.sh, tests/*-helpers.sh and tests/*-fixture.sh are
+# shared files that map to the suites naming them; a fixture under
+# tests/fixtures/<dir>/ is mapped by that directory instead. Curated family arms
+# above those also name individual tests/ files explicitly.
 set -eu
 
 now_ms() {
@@ -443,7 +442,7 @@ family_for_basename() {
     fm-remote-entrypoint.test.sh|fm-remote-secondmate-parent-binding.test.sh|\
     fm-send-remote-delivery.test.sh|fm-spawn-pool-base-freshen.test.sh|\
     fm-test-fixture-cleanup.test.sh|fm-test-fixtures.test.sh|\
-    fm-treehouse-test-isolation.test.sh|\
+    fm-treehouse-helpers.test.sh|\
     fm-voice-relay.test.sh|fm-wake-drain-open-decisions-cursor.test.sh|\
     fm-wake-drain-open-decisions.test.sh|fm-wake-drain-outcome-backstop.test.sh)
       printf '%s\n' standalone
@@ -1752,7 +1751,7 @@ families_for_changed_path() {
           || printf '%s\n' "__unmapped__:$path"
       fi
       ;;
-    tests/lib.sh|tests/*-helpers.sh|tests/fixtures.sh|tests/*-fixture.sh|tests/treehouse-test-isolation.sh)
+    tests/lib.sh|tests/*-helpers.sh|tests/fixtures.sh|tests/*-fixture.sh)
       # Shared top-level test files, selected by the suites that name them.
       # Must stay below the tests/fixtures/*/* arm: a case glob's * spans /, so
       # tests/*-fixture.sh would otherwise swallow a nested

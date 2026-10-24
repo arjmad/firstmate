@@ -273,10 +273,6 @@ export FM_BACKEND_HERDR_WORKSPACE_MOVER="$FAKEBIN/herdr-workspace-mover"
 # as a cross-session parent identity. Every projection below is anchored on the
 # parent this suite sets up, not on the developer's own workspace.
 herdr_forget_inherited_pane
-# shellcheck source=tests/treehouse-test-isolation.sh
-. "$ROOT/tests/treehouse-test-isolation.sh"
-# The fixture projects' pools live under TMP_ROOT, so removing it removes them.
-treehouse_test_isolate "$TMP_ROOT" || fail "could not isolate the Treehouse pool root"
 
 HERDR_LAB_SESSION=$(PATH="$HERDR_ORIGINAL_PATH" \
   "$HERDR_LAB_HELPER" name fm-herdr-presentation-projection)
@@ -311,6 +307,10 @@ EOF
   rm -rf "$TMP_ROOT"
 }
 trap cleanup_all EXIT
+# shellcheck source=tests/treehouse-helpers.sh
+. "$ROOT/tests/treehouse-helpers.sh"
+# The fixture projects' pools live under TMP_ROOT, so removing TMP_ROOT removes them.
+treehouse_test_isolate "$TMP_ROOT" || fail "could not isolate the Treehouse pool root"
 
 PATH="$HERDR_ORIGINAL_PATH" \
   "$HERDR_LAB_HELPER" provision "$HERDR_LAB_SESSION" \
@@ -389,7 +389,6 @@ remember_meta_worktree() {  # <meta>
   local wt
   wt=$(grep '^worktree=' "$1" | cut -d= -f2-)
   [ -n "$wt" ] || fail "metadata did not record a worktree"
-  treehouse_test_require_isolated_worktree "$wt" >&2 || fail "a fixture spawn acquired a worktree in the fleet's pool storage"
   RECORDED_WORKTREES="${RECORDED_WORKTREES}${wt}"$'\n'
   printf '%s' "$wt"
 }
@@ -1585,6 +1584,10 @@ pass "real Herdr lab: missing, renamed, and duplicate tokens trigger zero destru
 
 LEAKED_SLOTS=$(treehouse_test_production_slots "$TMP_ROOT") \
   || fail "fixture projects left slots in the fleet's Treehouse pool storage:"$'\n'"$LEAKED_SLOTS"
+for FIXTURE_POOL in project recovery-project; do
+  compgen -G "$TREEHOUSE_TEST_ROOT/.treehouse/$FIXTURE_POOL-*" >/dev/null \
+    || fail "the $FIXTURE_POOL fixture pool is missing from the isolated Treehouse root $TREEHOUSE_TEST_ROOT"
+done
 pass "real Treehouse: every fixture pool stayed under the test's own root"
 
 STATUS_JSON=$(lab status --json)

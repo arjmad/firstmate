@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Behavior tests for tests/treehouse-test-isolation.sh, the helper that keeps a
+# Behavior tests for tests/treehouse-helpers.sh, the helper that keeps a
 # real-Treehouse test's pools out of the fleet's pool storage: resolving that
 # storage the way Treehouse does, pointing TREEHOUSE_ROOT inside the test root,
 # refusing a worktree outside it, and reporting any production slot whose git
@@ -12,7 +12,7 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-TMP_ROOT=$(fm_test_tmproot fm-treehouse-test-isolation)
+TMP_ROOT=$(fm_test_tmproot fm-treehouse-helpers)
 
 # in_home <home> <script> [args...]: run <script> in a fresh bash with the
 # helper sourced, HOME set to <home>, and no inherited TREEHOUSE_ROOT; the
@@ -21,7 +21,7 @@ in_home() {
   local home=$1 script=$2
   shift 2
   env -u TREEHOUSE_ROOT HOME="$home" bash -c '. "$0" || exit 1; '"$script" \
-    "$ROOT/tests/treehouse-test-isolation.sh" "$@"
+    "$ROOT/tests/treehouse-helpers.sh" "$@"
 }
 
 write_config() {  # <home> <root-value>
@@ -42,6 +42,16 @@ assert_equals "$TMP_ROOT/fleet-root/.treehouse" "$(in_home "$HOME_ABS" treehouse
 HOME_TILDE="$TMP_ROOT/home-tilde"; write_config "$HOME_TILDE" \~/worktrees
 assert_equals "$HOME_TILDE/worktrees/.treehouse" "$(in_home "$HOME_TILDE" treehouse_test_production_storage)" \
   "a home-relative config root expands against HOME"
+
+HOME_SQ="$TMP_ROOT/home-sq"; mkdir -p "$HOME_SQ/.config/treehouse"
+printf "root = '%s'\n" "$TMP_ROOT/sq-root" > "$HOME_SQ/.config/treehouse/config.toml"
+assert_equals "$TMP_ROOT/sq-root/.treehouse" "$(in_home "$HOME_SQ" treehouse_test_production_storage)" \
+  "a single-quoted config root names production storage"
+
+HOME_TABLE="$TMP_ROOT/home-table"; mkdir -p "$HOME_TABLE/.config/treehouse"
+printf 'max_trees = 8\n\n[hooks]\nroot = "%s"\n' "$TMP_ROOT/table-root" > "$HOME_TABLE/.config/treehouse/config.toml"
+assert_equals "$HOME_TABLE/.treehouse" "$(in_home "$HOME_TABLE" treehouse_test_production_storage)" \
+  "a root key under another table is not the top-level root"
 
 HOME_REL="$TMP_ROOT/home-rel"; write_config "$HOME_REL" "."
 assert_equals "" "$(in_home "$HOME_REL" treehouse_test_production_storage)" \
