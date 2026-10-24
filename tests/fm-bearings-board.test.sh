@@ -792,7 +792,8 @@ assert_weak_card_refused() {  # <home> <jq-filter> <expected> <case>
 test_build_refuses_a_decision_card_without_a_real_choice() {
   local home key
   home=$(make_home weak-decision)
-  key=sample-instruction-layer-refinement-review-decision-perishable-first-admission-choice
+  write_valid_payload "$home/payload.json"
+  key=$(jq -r '.captains_call[0].key' "$home/payload.json")
   assert_weak_card_refused "$home" \
     '.captains_call[0].options = [{"value":"done","label":"Done"}]' \
     "$key: needs at least two authored options (has 1), a recommend_value naming one of its options" \
@@ -817,7 +818,7 @@ test_build_refuses_a_decision_card_without_a_real_choice() {
   assert_weak_card_refused "$home" \
     '.captains_call[0].options = [{"value":"done","label":"Done"},{"value":"done","label":"Done now"}]
       | .captains_call[0].recommend_value = "done"' \
-    "does not satisfy fm-bearings-board.v1" \
+    "$key: needs distinct option values" \
     "a decision card repeating one option value"
   pass "build refuses a decision card without two authored options, a recommendation, and free text"
 }
@@ -828,7 +829,7 @@ test_a_weak_card_whose_subject_landed_is_dropped_not_refused() {
   data="$home/payload.json"
   write_valid_payload "$data"
   jq '.captains_call += [{"key":"old-done-only","type":"decision","repo":"sample",
-        "title":"Already shipped","options":[{"value":"done","label":"Done"}]}]
+        "title":"Already shipped","options":[{"value":"done","label":"Done"},{"value":"done","label":"Done"}]}]
       | .landed = [{"id":"old-done-only","repo":"sample","what":"shipped it","owner":"crew"}]' \
     "$data" > "$data.tmp" && mv "$data.tmp" "$data"
   out=$(run_board "$home" build "$data" 2>&1) || fail "a landed weak card refused the board: $out"

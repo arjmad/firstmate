@@ -75,9 +75,9 @@
 # A decision card must also offer a real choice: at least two authored options
 # (the injected reconcile choice does not count), a `recommend_value` naming one
 # of them, and `allow_freeform: true`. Merge and credential cards keep their own
-# shapes, and no card may repeat an option value. The check runs after stale
-# cards are dropped, and a decision card's recommendation is checked there
-# alone. The refusal names each weak card's key and what it lacks, so the
+# shapes. The check runs after stale cards are dropped, also refuses a decision
+# card that repeats an option value, and alone checks a decision card's
+# recommendation. The refusal names each weak card's key and what it lacks, so the
 # composer fixes the payload rather than the board shipping a Done-only card.
 #
 # Every Underway row likewise carries a non-empty `name`: the durable task name
@@ -176,7 +176,6 @@ validate_payload() {  # <data.json>
           and (.type == "decision"
             or (.recommend_value as $recommend
               | ([.options[].value] | index($recommend) != null)))))
-      and ([.options[].value] | length == (unique | length))
       and ([.options[].value] | index("reconcile") == null)
       and (if .type == "merge" then (.risk | nonempty_string) else true end);
     def underway_item:
@@ -227,6 +226,8 @@ decision_card_gaps() {  # <effective-payload.json>
       | [
           (if ($values | length) < 2
             then "at least two authored options (has \($values | length))" else empty end),
+          (if ($values | length) != ($values | unique | length)
+            then "distinct option values" else empty end),
           (if ($card.recommend_value | type) != "string" or ($values | index($card.recommend_value)) == null
             then "a recommend_value naming one of its options" else empty end),
           (if $card.allow_freeform != true then "allow_freeform true" else empty end)

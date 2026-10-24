@@ -30,6 +30,7 @@ class Node {
       add: (c) => { this.className = (this.className + " " + c).trim(); },
       contains: (c) => this.className.split(/\s+/).includes(c),
       toggle: (c, on) => {
+        if (on === undefined) on = !this.className.split(/\s+/).includes(c);
         const rest = this.className.split(/\s+/).filter((x) => x && x !== c);
         this.className = (on ? [...rest, c] : rest).join(" ");
       },
