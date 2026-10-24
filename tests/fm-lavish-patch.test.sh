@@ -8,7 +8,8 @@
 #     dist/chrome-client.js found through the PATH symlink npm installs, says so
 #     once, keeps each file's mode, and leaves valid JavaScript.
 #   - A second apply is silent and changes nothing; an older overlay revision
-#     is replaced, never stacked.
+#     is replaced, never stacked, and a newer one, written by another home's
+#     newer checkout of the shared toolchain, is never downgraded.
 #   - remove restores upstream's bytes exactly, including a file that had no
 #     trailing newline.
 #   - Fail closed: when upstream no longer carries what the overlay relies on,
@@ -16,12 +17,19 @@
 #     exits 3, and writes nothing.
 #   - No lavish-axi package on PATH (absent, or a stub that is not an npm
 #     install) is silent, and FM_LAVISH_PATCH=0 turns apply off.
+#   - An unreadable overlay is one LAVISH_PATCH failed line, never a stack trace,
+#     and writes nothing.
 #   - Bootstrap applies it on the locked local pass only, converges silently,
-#     and applies it straight after `install lavish-axi`.
+#     and applies it straight after a successful `install lavish-axi`, never
+#     after a failed one.
 set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+# tests/lib.sh turns the patch off for every other suite; this one drives it,
+# and only ever against fake packages under its own fixture root.
+unset FM_LAVISH_PATCH FM_LAVISH_PATCH_PACKAGE
 
 BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 TMP_ROOT=$(fm_test_tmproot fm-lavish-patch)
@@ -32,7 +40,7 @@ PATCH="$ROOT/bin/fm-lavish-patch.mjs"
 patch() {
   local prefix=$1
   shift
-  env -u FM_LAVISH_PATCH_PACKAGE -u FM_LAVISH_PATCH PATH="$prefix/bin:$BASE_PATH" "$prefix/bin/node" "$PATCH" "$@"
+  env PATH="$prefix/bin:$BASE_PATH" "$prefix/bin/node" "$PATCH" "$@"
 }
 
 new_package() {  # <case> [version] -> echoes the toolchain prefix
@@ -85,25 +93,67 @@ test_apply_appends_the_overlay_once() {
   pass "apply: appends the overlay once, keeps upstream bytes and modes, then stays silent"
 }
 
+# other_checkout <name> <revision-delta>: another firstmate checkout of the
+# patch whose overlay revision is this one's plus <revision-delta>, with its own
+# overlay text. Echoes its script path.
+other_checkout() {
+  local bin="$TMP_ROOT/$1/bin" revision
+  mkdir -p "$bin/lavish-patch"
+  revision=$(sed -n 's/^const REVISION = \([0-9]*\);$/\1/p' "$PATCH")
+  [ -n "$revision" ] || fail "the patch script must declare its overlay REVISION"
+  sed "s/^const REVISION = [0-9]*;$/const REVISION = $((revision + $2));/" "$PATCH" > "$bin/fm-lavish-patch.mjs"
+  printf '/* the %s overlay revision */\n' "$1" > "$bin/lavish-patch/chrome.css"
+  printf '// the %s overlay revision\n' "$1" > "$bin/lavish-patch/chrome-client.js"
+  printf '%s\n' "$bin/fm-lavish-patch.mjs"
+}
+
 test_older_revision_is_replaced_not_stacked() {
   local prefix old out
   prefix=$(new_package stale)
-  # An older firstmate checkout: the same script with a different overlay.
-  old="$TMP_ROOT/old-checkout/bin"
-  mkdir -p "$old/lavish-patch"
-  cp "$PATCH" "$old/"
-  printf '/* an older overlay revision */\n' > "$old/lavish-patch/chrome.css"
-  printf '// an older overlay revision\n' > "$old/lavish-patch/chrome-client.js"
-  env PATH="$prefix/bin:$BASE_PATH" "$prefix/bin/node" "$old/fm-lavish-patch.mjs" apply >/dev/null
+  old=$(other_checkout older -1)
+  env PATH="$prefix/bin:$BASE_PATH" "$prefix/bin/node" "$old" apply >/dev/null
   assert_equals "stale 0.1.90" "$(patch "$prefix" status)" "an older overlay revision reads as stale"
 
   out=$(patch "$prefix" apply)
   assert_equals "BOOTSTRAP_INFO: lavish-axi 0.1.90 chrome patch applied" "$out" "apply over a stale revision"
   assert_not_contains "$(cat "$(dist "$prefix")/chrome.css" "$(dist "$prefix")/chrome-client.js")" "older overlay revision" \
     "the older revision must be replaced"
+  assert_contains "$(cat "$(dist "$prefix")/chrome.css")" "$(cat "$ROOT/bin/lavish-patch/chrome.css")" "the current overlay replaces it"
   patch "$prefix" remove >/dev/null
   assert_equals "unpatched 0.1.90" "$(patch "$prefix" status)" "remove after a replaced revision"
   pass "apply: an older overlay revision is replaced, never stacked"
+}
+
+test_newer_revision_is_never_downgraded() {
+  local prefix newer out rc
+  prefix=$(new_package newer)
+  newer=$(other_checkout newer 1)
+  env PATH="$prefix/bin:$BASE_PATH" "$prefix/bin/node" "$newer" apply >/dev/null
+  snapshot "$prefix" "$TMP_ROOT/newer-installed"
+  out=$(patch "$prefix" apply); rc=$?
+  expect_code 0 "$rc" "apply under a newer revision"
+  assert_equals "" "$out" "an older checkout leaves a newer revision alone, silently"
+  same_files "$prefix" "$TMP_ROOT/newer-installed" || fail "an older checkout must not downgrade a newer revision"
+  assert_equals "newer 0.1.90" "$(patch "$prefix" status)" "status names the newer revision"
+  out=$(patch "$prefix" apply)
+  assert_equals "" "$out" "repeated session starts on the older checkout stay silent"
+  pass "apply: a newer overlay revision from another checkout is never downgraded"
+}
+
+test_unreadable_overlay_fails_in_one_line() {
+  local prefix bin out rc pristine
+  prefix=$(new_package unreadable)
+  bin="$TMP_ROOT/partial-checkout/bin"
+  mkdir -p "$bin"
+  cp "$PATCH" "$bin/"
+  pristine="$TMP_ROOT/unreadable-pristine"
+  snapshot "$prefix" "$pristine"
+  out=$(env PATH="$prefix/bin:$BASE_PATH" "$prefix/bin/node" "$bin/fm-lavish-patch.mjs" apply 2>&1); rc=$?
+  expect_code 1 "$rc" "apply without its overlay files"
+  assert_contains "$out" "LAVISH_PATCH: failed: lavish-axi 0.1.90 cannot read overlay bin/lavish-patch/chrome.css" "a missing overlay is a failed line"
+  assert_equals 1 "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" "the failure is exactly one line, not a stack trace"
+  same_files "$prefix" "$pristine" || fail "a failed apply must write nothing"
+  pass "apply: an unreadable overlay is one failed line and writes nothing"
 }
 
 test_remove_restores_upstream_bytes() {
@@ -164,12 +214,12 @@ test_absent_and_disabled_are_silent() {
   mkdir -p "$stub"
   fm_fake_version_tool "$stub" lavish-axi FM_FAKE_LAVISH_AXI_VERSION 0.1.90
   ln -sf "$(command -v node)" "$stub/node"
-  out=$(env -u FM_LAVISH_PATCH_PACKAGE PATH="$stub:$BASE_PATH" "$stub/node" "$PATCH" apply); rc=$?
+  out=$(env PATH="$stub:$BASE_PATH" "$stub/node" "$PATCH" apply); rc=$?
   expect_code 0 "$rc" "apply with a non-npm lavish-axi"
   assert_equals "" "$out" "a lavish-axi that is not an npm package is silent"
-  assert_equals "absent" "$(env -u FM_LAVISH_PATCH_PACKAGE PATH="$stub:$BASE_PATH" "$stub/node" "$PATCH" status)" "status without a package"
+  assert_equals "absent" "$(env PATH="$stub:$BASE_PATH" "$stub/node" "$PATCH" status)" "status without a package"
   rm -f "$stub/lavish-axi"
-  assert_equals "" "$(env -u FM_LAVISH_PATCH_PACKAGE PATH="$stub:$BASE_PATH" "$stub/node" "$PATCH" apply)" "no lavish-axi at all is silent"
+  assert_equals "" "$(env PATH="$stub:$BASE_PATH" "$stub/node" "$PATCH" apply)" "no lavish-axi at all is silent"
 
   prefix=$(new_package disabled)
   out=$(env FM_LAVISH_PATCH=0 PATH="$prefix/bin:$BASE_PATH" "$prefix/bin/node" "$PATCH" apply); rc=$?
@@ -226,11 +276,29 @@ test_bootstrap_install_applies_after_installing() {
   pass "bootstrap: install lavish-axi applies the chrome patch straight away"
 }
 
+test_bootstrap_failed_install_does_not_patch() {
+  local prefix home fakebin out
+  prefix=$(new_package failed-install)
+  home="$TMP_ROOT/failed-install-home"
+  mkdir -p "$home/state" "$home/data" "$home/config"
+  fakebin="$TMP_ROOT/failed-install-fakebin"
+  mkdir -p "$fakebin"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/npm"
+  chmod +x "$fakebin/npm"
+  out=$(env FM_HOME="$home" PATH="$prefix/bin:$fakebin:$BASE_PATH" bash "$ROOT/bin/fm-bootstrap.sh" install lavish-axi 2>&1)
+  assert_not_contains "$out" "chrome patch applied" "a failed install must not report a patch: $out"
+  assert_equals "unpatched 0.1.90" "$(patch "$prefix" status)" "a failed install leaves Lavish alone"
+  pass "bootstrap: a failed install lavish-axi applies nothing"
+}
+
 test_apply_appends_the_overlay_once
 test_older_revision_is_replaced_not_stacked
+test_newer_revision_is_never_downgraded
+test_unreadable_overlay_fails_in_one_line
 test_remove_restores_upstream_bytes
 test_fails_closed_when_upstream_moved
 test_steps_aside_when_upstream_ships_collapse
 test_absent_and_disabled_are_silent
 test_bootstrap_applies_on_the_locked_pass_only
 test_bootstrap_install_applies_after_installing
+test_bootstrap_failed_install_does_not_patch

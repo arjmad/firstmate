@@ -1,4 +1,4 @@
-// Firstmate's local Lavish chrome overlay. bin/fm-lavish-patch.sh appends this file to
+// Firstmate's local Lavish chrome overlay. bin/fm-lavish-patch.mjs appends this file to
 // lavish-axi's dist/chrome-client.js and owns when it is applied and removed.
 // Desktop Conversation panel collapse and drag-to-resize, adapted from kunchenguid/lavish-axi
 // PR #455 (a bar toggle, remembered per viewer, that counts queued notes and marks an unseen

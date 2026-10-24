@@ -958,8 +958,9 @@ tool_version_at_least() {  # <tool> <min-version>
 }
 
 # Firstmate's local Lavish chrome overlay. bin/fm-lavish-patch.mjs owns the
-# patch, its fail-closed check, and every line it prints; a skip or failure
-# leaves Lavish working unpatched, so it never fails bootstrap.
+# patch, its fail-closed check against the installed chrome (which stands in
+# for a version floor), and every line it prints; a skip or failure leaves
+# Lavish working unpatched, so it never fails bootstrap.
 lavish_chrome_patch() {
   command -v node >/dev/null 2>&1 || return 0
   node "$SCRIPT_DIR/fm-lavish-patch.mjs" apply || true
@@ -1420,8 +1421,9 @@ if [ "${1:-}" = "install" ]; then
     fi
     cmd=${cmd%%  #*}
     echo "installing $t: $cmd"
-    eval "$cmd"
-    [ "$t" != lavish-axi ] || lavish_chrome_patch
+    if eval "$cmd"; then
+      [ "$t" != lavish-axi ] || lavish_chrome_patch
+    fi
   done
   exit 0
 fi
@@ -1687,7 +1689,7 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   fi
   # x_mode_setup writes local Relay artifacts only and never leaves the machine.
   local_phase && x_mode_setup
-  local_phase && tool_version_at_least lavish-axi "$LAVISH_AXI_BOARD_MIN" && lavish_chrome_patch
+  local_phase && lavish_chrome_patch
   # Adopt existing durable contribution links without making a network call.
   # Detection-only startup must never publish a check registration.
   if local_phase && command -v jq >/dev/null 2>&1 \

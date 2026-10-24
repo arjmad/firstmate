@@ -52,6 +52,11 @@ export FM_GATE_REFUSE_BYPASS=1
 # leaked harness pin alone stays inert outside a suite.
 export FM_TEST_SEAM=1
 
+# Keep every suite that runs the real bin/fm-bootstrap.sh from patching the
+# lavish-axi a test PATH can still reach in the host's toolchain prefix.
+# tests/fm-lavish-patch.test.sh clears it to drive the patch against fakes.
+export FM_LAVISH_PATCH=0
+
 # Clear the task-worker marker bin/fm-spawn.sh exports into ship and scout
 # panes. This suite builds git-init fixture repositories whose primary checkout
 # it runs a copied bin/fm-test-run.sh in, and that runner refuses the primary
@@ -708,7 +713,7 @@ fm_fake_lavish_package() {
 #!/usr/bin/env node
 var chromeClientUrl = new URL("./chrome-client.js", import.meta.url);
 var chromeCssUrl = new URL("./chrome.css", import.meta.url);
-var template = '<div class="layout"><aside class="panel" id="panel"><div id="chatLog"></div><div id="queuedLog"></div></aside></div><div class="more-wrap" id="moreWrap"></div>';
+var template = '<div class="layout"><aside class="panel" id="panel"><div id="panelScroll"><div id="chatLog"></div><div id="queuedLog"></div></div></aside></div><div class="more-wrap" id="moreWrap"></div>';
 if (process.argv[2] === "--version") console.log("$version");
 JS
   chmod +x "$pkg/dist/cli.mjs"
@@ -719,6 +724,10 @@ JS
   --border-strong: #3c4557;
   --accent-ink: #17130a;
   --panel-w: 360px;
+  --radius-pill: 999px;
+  --w-bold: 700;
+  --dur-fast: 120ms;
+  --ease: cubic-bezier(0.2, 0.6, 0.2, 1);
 }
 .layout {
   grid-template-columns: minmax(0, 1fr) var(--panel-w);

@@ -1,4 +1,4 @@
-/* Firstmate's local Lavish chrome overlay. bin/fm-lavish-patch.sh appends this file to
+/* Firstmate's local Lavish chrome overlay. bin/fm-lavish-patch.mjs appends this file to
    lavish-axi's dist/chrome.css and owns when it is applied and removed.
    1. The fleet-html house style (C1 airy, navy dark; ~/code/skills/skills/fleet-html/house.css v1)
       for Lavish's own chrome: the bar, the Conversation panel, buttons and inputs. Artifacts are
