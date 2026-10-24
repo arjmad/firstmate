@@ -251,6 +251,8 @@ textarea.fm-input { min-height: 88px; resize: vertical; }
   background: var(--fm-card); border: 1px solid var(--fm-rule); border-radius: 14px;
   box-shadow: var(--fm-shadow-soft);
 }
+/* scale from the bottom edge so the pile still pokes out below a tall card */
+.bb-call::before, .bb-call::after { transform-origin: 50% 100%; }
 .bb-call::before { transform: translateY(7px) scale(.975); }
 .bb-call::after { transform: translateY(14px) scale(.95); }
 .bb-call--penult::after { display: none; }
@@ -260,6 +262,8 @@ textarea.fm-input { min-height: 88px; resize: vertical; }
 .bb-call > .bb-decision[hidden] { display: none; }
 .bb-decision .fm-form { flex: 1 1 auto; }
 .bb-decision .fm-actions { margin-top: auto; }
+/* the cards sit inside .fm-section, whose h3 rule would shrink the card title */
+.bb-decision .fm-decision__title { font-size: 1.375rem; }
 .bb-decision__detail { color: var(--fm-text); }
 .bb-decision__link { display: block; padding-block: 12px; line-height: 20px; font-family: var(--fm-font-mono); font-size: .875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bb-queued { display: none; }
@@ -280,8 +284,9 @@ textarea.fm-input { min-height: 88px; resize: vertical; }
 .bb-row:first-child { border-top: 0; }
 label.bb-row { cursor: pointer; }
 .bb-row__main { min-width: 0; flex: 1 1 auto; }
-.bb-row__title { font-weight: 500; color: var(--fm-ink); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bb-row__sub { font-size: .875rem; color: var(--fm-muted); line-height: 1.35; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bb-row .fm-badge { flex: none; white-space: nowrap; }
+.bb-row__title { display: block; font-weight: 500; color: var(--fm-ink); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bb-row__sub { display: block; font-size: .875rem; color: var(--fm-muted); line-height: 1.35; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bb-row__pr { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; min-width: 44px; font-family: var(--fm-font-mono); font-size: .875rem; white-space: nowrap; }
 .bb-row__check { width: 28px; height: 28px; border-radius: 999px; display: grid; place-items: center; flex: none;
   color: var(--fm-ok); background: var(--fm-ok-soft); border: 1px solid var(--fm-ok); }
@@ -349,7 +354,7 @@ label.bb-row { cursor: pointer; }
       <div class="bb-rows" id="bb-charted"></div>
       <div class="bb-dispatch" id="bb-dispatch" hidden>
         <span class="bb-dispatch__count" id="bb-dispatch-count">nothing picked</span>
-        <span class="fm-queued bb-queued" id="bb-dispatch-queued">
+        <span class="fm-queued bb-queued" id="bb-dispatch-queued" role="status">
           <svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
           Queued
         </span>
@@ -563,6 +568,7 @@ __FM_BEARINGS_BOARD_DATA__
     btn.type = "submit";
     foot.appendChild(btn);
     var q = el("span", "fm-queued bb-queued");
+    q.setAttribute("role", "status");
     q.innerHTML = CHECK_SVG + "Queued";
     foot.appendChild(q);
     var answerLimit = el("span", "bb-limit");
@@ -715,11 +721,12 @@ __FM_BEARINGS_BOARD_DATA__
     } else {
       row.appendChild(el("span", "bb-pick-spacer"));
     }
-    var main = el("div", "bb-row__main");
-    main.appendChild(el("div", "bb-row__title", t.title));
+    /* spans, not divs: a pickable row is a label, which holds phrasing content only */
+    var main = el("span", "bb-row__main");
+    main.appendChild(el("span", "bb-row__title", t.title));
     /* second line keeps the title uncrowded in the half-width column */
     var chSub = t.repo || t.id;
-    main.appendChild(el("div", "bb-row__sub", t.reason ? t.reason + " · " + chSub : chSub));
+    main.appendChild(el("span", "bb-row__sub", t.reason ? t.reason + " · " + chSub : chSub));
     row.appendChild(main);
     if (isWarning(t)) row.appendChild(badge("danger", "needs repair"));
     else if (t.reason) row.appendChild(badge("warn", "waiting"));
