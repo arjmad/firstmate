@@ -307,6 +307,10 @@ EOF
   rm -rf "$TMP_ROOT"
 }
 trap cleanup_all EXIT
+# shellcheck source=tests/treehouse-helpers.sh
+. "$ROOT/tests/treehouse-helpers.sh"
+# The fixture projects' pools live under TMP_ROOT, so removing TMP_ROOT removes them.
+treehouse_test_isolate "$TMP_ROOT" || fail "could not isolate the Treehouse pool root"
 
 PATH="$HERDR_ORIGINAL_PATH" \
   "$HERDR_LAB_HELPER" provision "$HERDR_LAB_SESSION" \
@@ -1577,6 +1581,14 @@ assert_no_projection_mutation_since "$START" "live duplicate-token recovery"
 lab workspace get "$DUP1_WSID" >/dev/null 2>&1 || fail "live duplicate refusal removed the first workspace"
 lab workspace get "$DUP2_WSID" >/dev/null 2>&1 || fail "live duplicate refusal removed the second workspace"
 pass "real Herdr lab: missing, renamed, and duplicate tokens trigger zero destructive or adoptive calls, and live duplicate risk refuses launch"
+
+LEAKED_SLOTS=$(treehouse_test_production_slots "$TMP_ROOT") \
+  || fail "fixture projects left slots in the fleet's Treehouse pool storage:"$'\n'"$LEAKED_SLOTS"
+for FIXTURE_POOL in project recovery-project; do
+  compgen -G "$TREEHOUSE_TEST_ROOT/.treehouse/$FIXTURE_POOL-*" >/dev/null \
+    || fail "the $FIXTURE_POOL fixture pool is missing from the isolated Treehouse root $TREEHOUSE_TEST_ROOT"
+done
+pass "real Treehouse: every fixture pool stayed under the test's own root"
 
 STATUS_JSON=$(lab status --json)
 HERDR_VERSION=$(printf '%s' "$STATUS_JSON" | jq -r '.client.version // "unknown"')

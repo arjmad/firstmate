@@ -69,9 +69,11 @@ LAB_HOME=
 ID="steer$$x$RANDOM"
 PROVISIONED=0
 
-# The pool lives under TMP_ROOT, so the operator's ~/.treehouse must not gain an
-# entry; bin/fm-live-lab.sh down holds labs to the same check.
-TREEHOUSE_DIR="$HOME/.treehouse"
+# The pool lives under TMP_ROOT, so the operator's own pool storage must not gain
+# an entry; bin/fm-live-lab.sh down holds labs to the same check.
+# shellcheck source=tests/treehouse-helpers.sh
+. "$ROOT/tests/treehouse-helpers.sh"
+TREEHOUSE_DIR=$(treehouse_test_production_storage)
 treehouse_listing() { find "$TREEHOUSE_DIR" -mindepth 1 -maxdepth 1 -exec basename {} \; 2>/dev/null | sort; }
 TREEHOUSE_BEFORE=$(treehouse_listing)
 
@@ -111,7 +113,7 @@ cleanup() {
   done
   added=$(comm -13 <(printf '%s\n' "$TREEHOUSE_BEFORE") <(treehouse_listing))
   if [ -n "$added" ]; then
-    printf 'not ok - ~/.treehouse gained entries during the run; left as is: %s\n' "$(printf '%s' "$added" | tr '\n' ' ')" >&2
+    printf 'not ok - %s gained entries during the run; left as is: %s\n' "$TREEHOUSE_DIR" "$(printf '%s' "$added" | tr '\n' ' ')" >&2
     rc=1
   fi
   if [ -n "$TMP_ROOT" ]; then

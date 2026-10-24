@@ -75,6 +75,10 @@ cleanup_all() {
   return "$status"
 }
 trap cleanup_all EXIT
+# shellcheck source=tests/treehouse-helpers.sh
+. "$ROOT/tests/treehouse-helpers.sh"
+# The scratch project's pool lives under TMP_ROOT, so removing TMP_ROOT removes it.
+treehouse_test_isolate "$TMP_ROOT" || fail "could not isolate the Treehouse pool root"
 "$HERDR_LAB_HELPER" provision "$HERDR_LAB_SESSION" || fail "could not provision isolated Herdr lab session"
 
 lab() { "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" "$@"; }
@@ -147,8 +151,9 @@ spawn_from_launcher() {
 record_worktree() {  # <meta>
   local wt
   wt=$(grep '^worktree=' "$1" 2>/dev/null | cut -d= -f2-)
-  [ -n "$wt" ] && WORKTREES+=("$wt")
-  return 0
+  [ -n "$wt" ] || return 0
+  WORKTREES+=("$wt")
+  treehouse_test_require_isolated_worktree "$wt" >&2 || fail "a spawn acquired a worktree in the fleet's pool storage"
 }
 
 LAB_SOCKET=$(lab session list --json 2>/dev/null \
@@ -442,6 +447,10 @@ lab pane get "$LAUNCH_DUP_PANE" >/dev/null 2>&1 || fail "teardown closed the lau
 lab pane get "$UNIQB_PANE" >/dev/null 2>&1 || fail "teardown closed an unrelated worker's pane in the other same-labeled workspace"
 [ "$(label_of_workspace "$WS_PRIMARY_DUP")" = firstmate ] || fail "teardown removed or renamed the launcher's workspace"
 pass "real herdr E2E: teardown closes only the worker's own pane and leaves the launcher, its workspace, and the same-labeled sibling intact"
+
+LEAKED_SLOTS=$(treehouse_test_production_slots "$TMP_ROOT") \
+  || fail "the scratch project left slots in the fleet's Treehouse pool storage:"$'\n'"$LEAKED_SLOTS"
+pass "real Treehouse: the scratch project pool stayed under the test's own root"
 
 if ! cleanup_all; then
   trap - EXIT
