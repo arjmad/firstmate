@@ -152,7 +152,9 @@ a { color: inherit; text-decoration: none; }
 .bb-stat__label { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
 
 .bb-section { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.bb-section__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.bb-section__head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; }
+/* the muted subtitle carries runtime text, so it wraps instead of widening a phone page */
+.bb-section__head .fm-sign--muted { white-space: normal; line-height: 1.3; min-width: 0; overflow-wrap: anywhere; }
 .bb-cols { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 22px; }
 
 /* ---- Captain's Call: one card at a time, dealt off a visible stack ---- */
@@ -161,7 +163,7 @@ a { color: inherit; text-decoration: none; }
 .bb-stacknav { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
 .bb-stacknav__count { flex: 1 1 auto; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
 .bb-stacknav__btn {
-  display: inline-grid; place-items: center; width: 34px; height: 34px; cursor: pointer;
+  display: inline-grid; place-items: center; width: 44px; height: 44px; cursor: pointer;
   background: var(--surface-card); color: var(--text-strong);
   border: 1.5px solid var(--border-default); border-radius: var(--radius-sm);
   transition: background 120ms, border-color 120ms;
