@@ -197,7 +197,15 @@ apply_session_host() {  # <artifact>
     open my $file, "<", $path or die "cannot read Lavish session store\n";
     -f $file or die "Lavish session store is not a regular file\n";
     local $/;
-    my $state = eval { decode_json(<$file>) };
+    my $text = <$file> // "";
+    # Lavish can save a string cut mid surrogate pair, and decode_json dies on
+    # the lone escape left behind, wherever in the store it sits. Rewrite each
+    # unpaired \uD800-\uDFFF escape to � first; a paired escape and an
+    # escaped backslash followed by "u" pass through untouched. The file and
+    # url fields are still matched exactly below.
+    $text =~ s{(\\\\)|(\\u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})|\\u[dD][89a-fA-F][0-9a-fA-F]{2}}
+      {$1 // $2 // "\\ufffd"}ge;
+    my $state = eval { decode_json($text) };
     !$@ or die "invalid Lavish session store\n";
     ref($state) eq "HASH" && ref($state->{sessions}) eq "HASH"
       or die "invalid Lavish session store\n";

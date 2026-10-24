@@ -3115,6 +3115,40 @@ for shape in missing malformed no-session invalid-url; do
 done
 pass "missing or unreadable session routing preserves replies and never guesses another server"
 
+# Lavish can save an unrelated session's string cut mid surrogate pair. That
+# lone escape is valid enough for Lavish's own reader, so it must not stop
+# every board in the home from resolving its server. The board's own session is
+# written ASCII-escaped, so its path's emoji is a surrogate pair and its literal
+# backslash before "ud83d" an escaped backslash; both must survive exactly.
+SURROGATE_STORE="$TMP_ROOT/surrogate-lavish-state"
+mkdir -p "$SURROGATE_STORE"
+SURROGATE_ART="$TMP_ROOT/board \ud83d 😀.html"
+printf '<h1>surrogate routing</h1>\n' > "$SURROGATE_ART"
+for lone in '\ud83d' '\udc00'; do
+  perl -MJSON::PP -MCwd=realpath -MEncode=decode -e '
+    my ($path, $artifact, $lone) = @ARGV;
+    my $real = decode("UTF-8", realpath($artifact) // die "missing fixture artifact\n");
+    my $board = JSON::PP->new->ascii->canonical->encode({
+      file => $real, status => "open", url => "http://board.example:24387/session/0123456789abcdef",
+    });
+    $board =~ /\\\\ud83d/ && $board =~ /\\ud83d\\ude00/ or die "board session is not escaped as expected\n";
+    my $stale = qq({"file":"/old board.html","status":"open","url":"http://127.0.0.1:14388/session/fedcba9876543210","chat":[{"text":"layout warning $lone tail"}]});
+    open my $out, ">", $path or die $!;
+    print $out qq({"sessions":{"0123456789abcdef":$board,"fedcba9876543210":$stale}});
+  ' "$SURROGATE_STORE/state.json" "$SURROGATE_ART" "$lone" \
+    || fail "could not build the $lone surrogate fixture store"
+  perl -MJSON::PP -e 'local $/; open my $in, "<", $ARGV[0] or die; eval { decode_json(<$in>) }; exit($@ ? 0 : 1)' \
+    "$SURROGATE_STORE/state.json" || fail "the $lone fixture no longer holds a lone surrogate escape"
+  : > "$HOST_SEEN"
+  PATH="$HOST_BIN:$PATH" HOST_SEEN="$HOST_SEEN" LAVISH_AXI_HOST=wrong.example \
+    LAVISH_AXI_STATE_DIR="$SURROGATE_STORE" FM_HOME="$HOST_HOME" \
+    "$ROOT/bin/fm-procevent-lavish.sh" poll "$SURROGATE_ART" >/dev/null \
+    || fail "a lone $lone in an unrelated Lavish session broke the board's poll"
+  [ "$(cat "$HOST_SEEN")" = 'board.example:24387' ] \
+    || fail "a lone $lone in an unrelated Lavish session changed the board's resolved server"
+done
+pass "lone surrogate escapes elsewhere in the Lavish store still resolve the board's host and port"
+
 # The adapter, not the runner, decides which results end a Lavish source. A
 # final feedback delivery still classifies as feedback for the handler while
 # reporting terminal, because the published poll marks that last delivery with
