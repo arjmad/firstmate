@@ -87,6 +87,10 @@ on_exit() {
   exit "$status"
 }
 trap on_exit EXIT
+# shellcheck source=tests/treehouse-test-isolation.sh
+. "$ROOT/tests/treehouse-test-isolation.sh"
+# The scratch project's pool lives under TMP_ROOT, so removing TMP_ROOT removes it.
+treehouse_test_isolate "$TMP_ROOT" || fail "could not isolate the Treehouse pool root"
 "$HERDR_LAB_HELPER" provision "$HERDR_LAB_SESSION" || fail "could not provision isolated Herdr lab session"
 
 # --- scratch world: FM_HOME with NO backend config, one throwaway project ---
@@ -146,6 +150,7 @@ TAB=$(grep '^herdr_tab_id=' "$META" | cut -d= -f2-)
 [ -n "$TAB" ] || fail "auto-detected spawn meta is missing herdr_tab_id"
 
 WT=$(grep '^worktree=' "$META" | cut -d= -f2-)
+treehouse_test_require_isolated_worktree "$WT" >&2 || fail "the auto-detected spawn acquired a worktree in the fleet's pool storage"
 if [ -z "$WT" ] || [ ! -d "$WT" ]; then
   fail "auto-detected spawn did not report a real worktree path"
 fi
@@ -180,6 +185,10 @@ if "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" pane get "$PANE" >/dev/null 2>&1
 fi
 WT=
 pass "real herdr: teardown completes the auto-detected spawn/teardown cycle (meta cleared, pane closed)"
+
+LEAKED_SLOTS=$(treehouse_test_production_slots "$TMP_ROOT") \
+  || fail "the scratch project left slots in the fleet's Treehouse pool storage:"$'\n'"$LEAKED_SLOTS"
+pass "real Treehouse: the scratch project pool stayed under the test's own root"
 
 if ! cleanup_all; then
   trap - EXIT

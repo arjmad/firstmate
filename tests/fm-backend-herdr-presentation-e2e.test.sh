@@ -273,6 +273,10 @@ export FM_BACKEND_HERDR_WORKSPACE_MOVER="$FAKEBIN/herdr-workspace-mover"
 # as a cross-session parent identity. Every projection below is anchored on the
 # parent this suite sets up, not on the developer's own workspace.
 herdr_forget_inherited_pane
+# shellcheck source=tests/treehouse-test-isolation.sh
+. "$ROOT/tests/treehouse-test-isolation.sh"
+# The fixture projects' pools live under TMP_ROOT, so removing it removes them.
+treehouse_test_isolate "$TMP_ROOT" || fail "could not isolate the Treehouse pool root"
 
 HERDR_LAB_SESSION=$(PATH="$HERDR_ORIGINAL_PATH" \
   "$HERDR_LAB_HELPER" name fm-herdr-presentation-projection)
@@ -385,6 +389,7 @@ remember_meta_worktree() {  # <meta>
   local wt
   wt=$(grep '^worktree=' "$1" | cut -d= -f2-)
   [ -n "$wt" ] || fail "metadata did not record a worktree"
+  treehouse_test_require_isolated_worktree "$wt" >&2 || fail "a fixture spawn acquired a worktree in the fleet's pool storage"
   RECORDED_WORKTREES="${RECORDED_WORKTREES}${wt}"$'\n'
   printf '%s' "$wt"
 }
@@ -1577,6 +1582,10 @@ assert_no_projection_mutation_since "$START" "live duplicate-token recovery"
 lab workspace get "$DUP1_WSID" >/dev/null 2>&1 || fail "live duplicate refusal removed the first workspace"
 lab workspace get "$DUP2_WSID" >/dev/null 2>&1 || fail "live duplicate refusal removed the second workspace"
 pass "real Herdr lab: missing, renamed, and duplicate tokens trigger zero destructive or adoptive calls, and live duplicate risk refuses launch"
+
+LEAKED_SLOTS=$(treehouse_test_production_slots "$TMP_ROOT") \
+  || fail "fixture projects left slots in the fleet's Treehouse pool storage:"$'\n'"$LEAKED_SLOTS"
+pass "real Treehouse: every fixture pool stayed under the test's own root"
 
 STATUS_JSON=$(lab status --json)
 HERDR_VERSION=$(printf '%s' "$STATUS_JSON" | jq -r '.client.version // "unknown"')
