@@ -85,6 +85,13 @@ Styled capture stays internal to the boolean detector; `fm-peek` and model-facin
 The spawn disables Claude's `/bug` and `/feedback` model-drafted feedback flow for every Claude worker and secondmate, preventing a fleet-launched agent from queuing or submitting a bug report on the captain's behalf.
 The controls are scoped to the launched process and never modify the captain's global Claude settings; `launch_template()` in `../../../../../bin/fm-spawn.sh` owns their exact mechanics and defense-in-depth rationale.
 
+## Task list
+
+A Claude ship or scout launches with `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`, because newer models leave Claude Code's task tools (`TaskCreate`, `TaskUpdate`) out unless opted in, and its brief asks it to keep its plan there; a secondmate keeps the model default.
+Claude Code saves the list as `<config-dir>/tasks/<sessionId>/<n>.json`, and `../../../../../bin/fm-progress.sh` finds the worker's `sessionId` through the live session record carrying its `--name` (`<config-dir>/sessions/<pid>.json`); that script's header owns the lookup.
+A nested `claude` a worker runs inherits the variable but writes its own list under its own session, so it never adds steps to the worker's.
+`../../../../../tests/fm-progress-claude-live-e2e.test.sh` re-verifies the chain after an upgrade.
+
 ## Task control channel
 
 A Claude task worker's launch brief and Firstmate steering-inbox messages arrive as file-shaped content that is otherwise indistinguishable from indirect prompt injection.
