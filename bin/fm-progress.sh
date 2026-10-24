@@ -38,10 +38,21 @@
 # list wins because it is updated continuously, while a status token moves only
 # when the worker appends a phase change.
 #
-# Claude directories: a worker's is its meta account= root, else this
-# process's CLAUDE_CONFIG_DIR, else $HOME/.claude. The helm's session record is
-# looked for under FM_PROGRESS_CLAUDE_DIRS (colon-separated), CLAUDE_CONFIG_DIR,
-# every worker root, this home's config/claude-account pin, then $HOME/.claude.
+# Claude directories: an unpinned worker launches with its spawner's
+# CLAUDE_CONFIG_DIR, which the task record does not keep, so sessions are
+# matched by name and live pid across every candidate root: each pinned
+# worker's meta account= root (`ordinary` is $HOME/.claude),
+# FM_PROGRESS_CLAUDE_DIRS (colon-separated; a display running under another
+# login names the fleet's roots here), this process's CLAUDE_CONFIG_DIR, and
+# $HOME/.claude. The helm's record is looked for in the same roots, then under
+# this home's config/claude-account pin.
+#
+# Every Claude file is read on its own, so one Claude Code is rewriting at that
+# moment drops only itself: a half-written session record hides only that
+# session, and a half-written task file only that task.
+#
+# elapsed_s counts from the earlier of spawn_gen and the first stamped status
+# line, because a relaunch records a new spawn_gen.
 #
 # Output (--json, the default; one line):
 #   {"schema":"fm-progress/v1","generated":<epoch>,"home":<path>,
@@ -139,6 +150,25 @@ add_dir() {  # <dir> - append to CLAUDE_DIRS once
   CLAUDE_DIRS+=("$1")
 }
 
+# Append one file to FILE_ARGS as a "<path> <content>" pair for jq's
+# --args, read with builtins so a file removed mid-scan is skipped quietly and
+# no file costs a process.
+add_file() {  # <path>
+  local text=''
+  [ -f "$1" ] || return 0
+  IFS= read -r -d '' text 2>/dev/null < "$1" || [ -n "$text" ] || return 0
+  FILE_ARGS+=("$1" "$text")
+}
+
+# The first stamped status line's epoch, or nothing.
+first_stamp() {  # <status-file>
+  local line
+  [ -f "$1" ] || return 0
+  while IFS= read -r line; do
+    case "$line" in *[![:space:]]*) status_line_at_epoch "$line" || :; return 0 ;; esac
+  done 2>/dev/null < "$1"
+}
+
 ROWS=''
 CLAUDE_DIRS=()
 CLAUDE_WORKERS=()
@@ -163,18 +193,27 @@ for meta in "$STATE"/*.meta; do
   else
     phase=starting phase_at=$m_spawn text='' step=''
   fi
+  started=$(first_stamp "$STATE/$id.status")
+  if [ -z "$m_spawn" ] || { [ -n "$started" ] && [ "$started" -lt "$m_spawn" ]; }; then
+    m_spawn=${started:-$m_spawn}
+  fi
   one_field "${text:0:$TEXT_MAX}" text
   one_field "$phase" phase
   busy_of "$id" "$m_harness"
-  dir=''
   case "$m_harness" in
     claude*)
-      dir=${m_account:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}
-      add_dir "$dir"
+      case "$m_account" in
+        ordinary) add_dir "$HOME/.claude" ;;
+        /*) add_dir "$m_account" ;;
+      esac
       CLAUDE_WORKERS+=("$m_kind: $id"$'\t'"$id")
       ;;
   esac
-  ROWS+="$id"$'\t'"$m_kind"$'\t'"$m_harness"$'\t'"${m_project##*/}"$'\t'"$phase"$'\t'"$phase_at"$'\t'"$text"$'\t'"$m_spawn"$'\t'"$b_state"$'\t'"$b_source"$'\t'"$step"$'\t'"$dir"$'\n'
+  ROWS+="$id"$'\t'"$m_kind"$'\t'"$m_harness"$'\t'"${m_project##*/}"$'\t'"$phase"$'\t'"$phase_at"$'\t'"$text"$'\t'"$m_spawn"$'\t'"$b_state"$'\t'"$b_source"$'\t'"$step"$'\n'
+done
+IFS=: read -r -a extra_dirs <<< "${FM_PROGRESS_CLAUDE_DIRS:-}"
+for d in "${extra_dirs[@]+"${extra_dirs[@]}"}" "${CLAUDE_CONFIG_DIR:-}" "$HOME/.claude"; do
+  add_dir "$d"
 done
 
 # The helm: the live holder of this home's session lock.
@@ -186,11 +225,8 @@ if [ -f "$STATE/.lock" ]; then
 fi
 HELM_FILE=''
 if [ -n "$HELM_PID" ]; then
-  helm_dirs=()
-  IFS=: read -r -a helm_dirs <<< "${FM_PROGRESS_CLAUDE_DIRS:-}"
-  helm_dirs+=("${CLAUDE_CONFIG_DIR:-}" "${CLAUDE_DIRS[@]+"${CLAUDE_DIRS[@]}"}")
-  for d in "${helm_dirs[@]+"${helm_dirs[@]}"}"; do
-    [ -n "$d" ] && [ -f "$d/sessions/$HELM_PID.json" ] && { HELM_FILE=$d/sessions/$HELM_PID.json; break; }
+  for d in "${CLAUDE_DIRS[@]}"; do
+    [ -f "$d/sessions/$HELM_PID.json" ] && { HELM_FILE=$d/sessions/$HELM_PID.json; break; }
   done
   if [ -z "$HELM_FILE" ] && [ -f "$FM_HOME/config/claude-account" ]; then
     # shellcheck source=bin/fm-worker-account-lib.sh
@@ -199,27 +235,29 @@ if [ -n "$HELM_PID" ]; then
     pin=${pin%%$'\t'*}
     case "$pin" in /*) [ -f "$pin/sessions/$HELM_PID.json" ] && HELM_FILE=$pin/sessions/$HELM_PID.json ;; esac
   fi
-  [ -n "$HELM_FILE" ] || { [ -f "$HOME/.claude/sessions/$HELM_PID.json" ] && HELM_FILE=$HOME/.claude/sessions/$HELM_PID.json; }
 fi
 
 # A Claude worker's session: the newest live interactive session carrying its
-# launch name. One jq reads every candidate session record.
+# launch name, in any candidate root. One jq reads every session record.
 TASK_DIRS=''
 if [ "${#CLAUDE_WORKERS[@]}" -gt 0 ]; then
-  session_files=()
+  FILE_ARGS=()
   for d in "${CLAUDE_DIRS[@]}"; do
     for f in "$d"/sessions/*.json; do
-      [ -f "$f" ] && session_files+=("$f")
+      add_file "$f"
     done
   done
   sessions=''
-  if [ "${#session_files[@]}" -gt 0 ]; then
-    sessions=$(jq -r '
-      select(type == "object" and .kind == "interactive" and (.name | type) == "string"
+  if [ "${#FILE_ARGS[@]}" -gt 0 ]; then
+    sessions=$(jq -r -n '
+      $ARGS.positional as $a
+      | range(0; $a | length; 2) as $i
+      | ($a[$i + 1] | try fromjson catch null)
+      | select(type == "object" and .kind == "interactive" and (.name | type) == "string"
              and (.sessionId | type) == "string" and (.pid | type) == "number")
       | [.name, .sessionId, (.pid | tostring), ((.startedAt // 0) | tostring),
-         (input_filename | sub("/sessions/[^/]*$"; ""))] | @tsv' \
-      "${session_files[@]}" 2>/dev/null) || :
+         ($a[$i] | sub("/sessions/[^/]*$"; ""))] | @tsv' \
+      --args "${FILE_ARGS[@]}" 2>/dev/null) || :
   fi
   for w in "${CLAUDE_WORKERS[@]}"; do
     name=${w%%$'\t'*}
@@ -239,24 +277,24 @@ EOF
   done
 fi
 
-task_files=()
+FILE_ARGS=()
+[ -z "$HELM_FILE" ] || add_file "$HELM_FILE"
 while IFS=$'\t' read -r wid tdir; do
   [ -n "$wid" ] || continue
   for f in "$tdir"/*.json; do
-    [ -f "$f" ] && task_files+=("$f")
+    add_file "$f"
   done
 done <<EOF
 $TASK_DIRS
 EOF
 
-# One jq reads the helm's session record and every task file by name. A file
-# Claude Code is rewriting mid-read can fail the parse; the projection then
-# drops those inputs (helm unknown, no task-list steps) rather than failing.
-project() {
+# One jq projects the rows, the helm's session record, and every task file.
+JSON=$(
   jq -c -n --argjson now "$NOW" --arg home "$FM_HOME" --arg rows "$ROWS" \
     --arg taskdirs "$TASK_DIRS" --arg helm_pid "$HELM_PID" --arg helm_file "$HELM_FILE" '
     def num: if . == "" or . == null then null else tonumber end;
-    [inputs | {f: input_filename, v: .}] as $in
+    $ARGS.positional as $a
+    | [range(0; $a | length; 2) as $i | {f: $a[$i], v: ($a[$i + 1] | try fromjson catch null)}] as $in
     | ([$in[] | select(.f != $helm_file and (.v | type) == "object")]
        | group_by(.f | sub("/[^/]*$"; ""))
        | map({key: (.[0].f | sub("/[^/]*$"; "")),
@@ -294,12 +332,8 @@ project() {
                       ($w.step | split("/") | map(tonumber)) as $s
                       | if $s[1] > 0 then {done: $s[0], total: $s[1], current: "", source: "status-token"}
                         else null end
-                    else null end)}]}' "$@" < /dev/null
-}
-inputs=()
-[ -z "$HELM_FILE" ] || inputs+=("$HELM_FILE")
-inputs+=("${task_files[@]+"${task_files[@]}"}")
-JSON=$(project "${inputs[@]+"${inputs[@]}"}" 2>/dev/null) || JSON=$(HELM_FILE='' TASK_DIRS='' project)
+                    else null end)}]}' --args "${FILE_ARGS[@]+"${FILE_ARGS[@]}"}"
+)
 
 if [ "$MODE" = --json ]; then
   printf '%s\n' "$JSON"
@@ -315,8 +349,8 @@ printf '%s\n' "$JSON" | jq -r '
   def glyph: {working: "▶", "gate-wait": "⏳", paused: "⏸", "needs-decision": "❓",
               blocked: "⛔", ready: "✅", done: "✅", failed: "✖"}[.] // "·";
   (if .helm then " · helm \(.helm.state) \(dur(.helm.for_s))" else "" end) as $helm
-  | if (.workers | length) == 0 then "fleet: no workers live" + $helm
-    else "fleet: \(.workers | length) live · \([.workers[] | select(.busy == "busy")] | length) busy" + $helm,
+  | if (.workers | length) == 0 then "fleet: no workers" + $helm
+    else "fleet: \(.workers | length) workers · \([.workers[] | select(.busy == "busy")] | length) busy" + $helm,
       (.workers[] | "\(.phase | glyph) \(.id) \(dur(.elapsed_s)) · \(.phase) \(dur(.in_phase_s))"
         + (if .steps then " · " + bar(.steps.done; .steps.total) else "" end)
         + " · " + ((if (.steps.current // "") != "" then .steps.current else .text end)[0:60]))

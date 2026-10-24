@@ -541,9 +541,10 @@ STATUS_APPEND="echo \"{state} [at=<epoch>]: {one short line}\" >> $STATUS_FILE &
 INBOX_DIR=$(shell_quote "$STATE/$ID.inbox")
 # The worker's plan as steps bin/fm-progress.sh can show: Claude workers launch
 # with Claude Code's task list enabled (bin/fm-spawn.sh), and any other harness
-# may declare a step token on a status line it already appends.
+# may declare a step token on a working line it already appends (never on a
+# done line, whose PR scrape in bin/fm-inactive-reconcile.sh allows only [at=]).
 # shellcheck disable=SC2016 # the backticks are literal Markdown in the brief
-PLAN_LINE='   Keep your plan as Claude Code'"'"'s task list when you have its task tools (TaskCreate, TaskUpdate), marking each step in_progress as you start it and completed as you finish it; without them, you may put `[step=<n>/<m>]` next to the time stamp of a status line you were appending anyway.'
+PLAN_LINE='   Keep your plan as Claude Code'"'"'s task list when you have its task tools (TaskCreate, TaskUpdate), marking each step in_progress as you start it and completed as you finish it; without them, you may put `[step=<n>/<m>]` next to the time stamp of a `working` status line you were appending anyway.'
 
 # The receive-and-ack half of the steering-inbox contract, included in every
 # scaffold kind. The record format, doorbell line, and re-ring ladder are

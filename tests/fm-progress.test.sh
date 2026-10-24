@@ -57,7 +57,7 @@ test_empty_home_has_no_helm_and_no_workers() {
   assert_equals 'fm-progress/v1|null|0' "$(jq -r '"\(.schema)|\(.helm)|\(.workers | length)"' <<< "$out")" \
     "empty home: schema, no helm, no workers"
   out=$(FM_HOME=$home CLAUDE_CONFIG_DIR=$TMP_ROOT/none "$PROGRESS" --line)
-  assert_equals 'fleet: no workers live' "$out" "empty home: --line"
+  assert_equals 'fleet: no workers' "$out" "empty home: --line"
   pass "an empty home projects no helm and no workers"
 }
 
@@ -166,19 +166,59 @@ test_helm_state_comes_from_the_lock_holder_session() {
   pass "helm state comes from the live lock holder's session record"
 }
 
-test_unreadable_task_file_degrades_instead_of_failing() {
-  local home claude out
+test_half_written_files_drop_only_themselves() {
+  local home claude now out
   home=$(new_home torn)
   claude=$TMP_ROOT/torn-claude
+  now=$(date +%s)
+  printf '%s\n' "$$" > "$home/state/.lock"
+  session "$claude" "$$" "firstmate-main" sid-helm 1000 busy "$((now * 1000))"
   fm_write_meta "$home/state/t.meta" kind=ship harness=claude "account=$claude"
   printf 'working [at=1]: going\n' > "$home/state/t.status"
+  # A session record that sorts first and is mid-rewrite hides only itself.
+  printf '{"pid":' > "$claude/sessions/0.json"
+  session "$claude" "$(dead_pid)" "ship: other" sid-other 1000
   session "$claude" "$$" "ship: t" sid-torn 1000
+  task "$claude" sid-torn 1 "Whole step" in_progress
   mkdir -p "$claude/tasks/sid-torn"
-  printf '{"id":"1","subject":' > "$claude/tasks/sid-torn/1.json"
+  printf '{"id":"2","subject":' > "$claude/tasks/sid-torn/2.json"
   out=$(run_json "$home") || fail "torn: reader failed"
-  assert_equals 'working|null' "$(jq -r '.workers[0] | "\(.phase)|\(.steps)"' <<< "$out")" \
-    "torn: a half-written task file drops task-list steps only"
-  pass "a half-written task file degrades the projection instead of failing it"
+  assert_equals 'busy|working|0/1|Whole step' \
+    "$(jq -r '"\(.helm.state)|\(.workers[0].phase)|\(.workers[0].steps.done)/\(.workers[0].steps.total)|\(.workers[0].steps.current)"' <<< "$out")" \
+    "torn: a half-written session record and task file drop only themselves"
+  pass "a half-written Claude file drops only itself from the projection"
+}
+
+test_unpinned_and_ordinary_workers_are_found_in_candidate_roots() {
+  local home elsewhere fakehome out
+  home=$(new_home roots)
+  elsewhere=$TMP_ROOT/roots-elsewhere
+  fakehome=$TMP_ROOT/roots-home
+  mkdir -p "$elsewhere/sessions" "$fakehome/.claude/sessions"
+  fm_write_meta "$home/state/unpinned.meta" kind=ship harness=claude
+  fm_write_meta "$home/state/plain.meta" kind=scout harness=claude account=ordinary
+  session "$elsewhere" "$$" "ship: unpinned" sid-u 1000
+  task "$elsewhere" sid-u 1 "Unpinned step" in_progress
+  session "$fakehome/.claude" "$$" "scout: plain" sid-p 1000
+  task "$fakehome/.claude" sid-p 1 "Ordinary step" completed
+  out=$(FM_HOME=$home FM_PROGRESS_CLAUDE_DIRS=$TMP_ROOT/none:$elsewhere HOME=$fakehome \
+    CLAUDE_CONFIG_DIR=$TMP_ROOT/none "$PROGRESS" --json) || fail "roots: reader failed"
+  assert_equals 'plain:1/1|unpinned:0/1' \
+    "$(jq -r '[.workers[] | "\(.id):\(.steps.done)/\(.steps.total)"] | sort | join("|")' <<< "$out")" \
+    "roots: an ordinary pin reads \$HOME/.claude and an unpinned worker is found through FM_PROGRESS_CLAUDE_DIRS"
+  pass "unpinned and ordinary-pinned workers are found in the candidate Claude roots"
+}
+
+test_elapsed_survives_a_relaunch() {
+  local home now out
+  home=$(new_home relaunch)
+  now=$(date +%s)
+  fm_write_meta "$home/state/r.meta" kind=ship harness=codex "spawn_gen=s$((now - 30)).1.2"
+  printf 'working [at=%s]: first\nworking [at=%s]: after relaunch\n' "$((now - 7200))" "$((now - 20))" > "$home/state/r.status"
+  out=$(run_json "$home")
+  assert_equals ok "$(jq -r '.workers[0] | if .elapsed_s >= 7200 and .elapsed_s < 7260 then "ok" else "\(.elapsed_s)" end' <<< "$out")" \
+    "relaunch: elapsed counts from the first stamped status line"
+  pass "elapsed time counts from the first stamped status line when a relaunch reset spawn_gen"
 }
 
 test_usage() {
@@ -195,5 +235,7 @@ test_status_token_supplies_steps_without_a_task_list
 test_task_list_wins_over_a_status_token
 test_busy_record_from_an_untrusted_source_reads_unknown
 test_helm_state_comes_from_the_lock_holder_session
-test_unreadable_task_file_degrades_instead_of_failing
+test_half_written_files_drop_only_themselves
+test_unpinned_and_ordinary_workers_are_found_in_candidate_roots
+test_elapsed_survives_a_relaunch
 test_usage

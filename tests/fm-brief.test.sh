@@ -1875,7 +1875,7 @@ test_workers_keep_their_plan_as_steps() {
     assert_present "$brief" "$kind brief was not scaffolded"
     assert_grep "Keep your plan as Claude Code's task list" "$brief" "$kind brief does not ask for the task list"
     # shellcheck disable=SC2016 # the backticks are literal Markdown in the brief
-    assert_grep '`[step=<n>/<m>]` next to the time stamp' "$brief" "$kind brief does not offer the step token"
+    assert_grep '`[step=<n>/<m>]` next to the time stamp of a `working` status line' "$brief" "$kind brief does not offer the step token"
   done
   assert_no_grep "Keep your plan as Claude Code's task list" "$home/data/plan-secondmate/brief.md" \
     "secondmate charter picked up the worker plan line"
