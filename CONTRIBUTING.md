@@ -39,20 +39,16 @@ Before dispatching an agent-driven contribution, follow the [Firstmate role and 
 
 ## Maintaining required checks
 
-GitHub required checks are configured in the repository's existing main ruleset, not activated by committing workflow YAML.
-When applying this CI layout, preserve its existing pull-request, merge-method, linear-history, deletion, non-fast-forward, and administrator-bypass settings.
-Add required status checks with `strict_required_status_checks_policy: false`; a main update alone must not force a branch update and retest.
-Bind the checks to the GitHub Actions app already producing them, rather than accepting the same context from any integration.
-No new app installation or manual runner setup is needed for that setting.
+This fork has no server-side merge enforcement: `main` has no ruleset, no classic branch protection, and no required status checks, and committing workflow YAML does not create any.
+[`bin/fm-pr-merge.sh`](bin/fm-pr-merge.sh) is the merge guard: it refuses unless every check is green at the PR's current head and every required check GitHub reports has reported.
+Because GitHub reports no required checks here, that second test is empty today, so a job that never started is not caught by GitHub and the guard rests on the checks that did report.
 
-Require the actual job contexts: `Lint 1of8` through `Lint 8of8` (one per lint matrix partition), `Test coverage guard`, `Repo invariants`, `Stock macOS Bash snapshot compatibility`, `Behavior portable parallel 1`, `Behavior portable parallel 2`, `Behavior portable serial 1` through `Behavior portable serial 10`, `Behavior tests (Herdr)`, and `Behavior timing aggregate`.
-This fork has no no-mistakes compliance job, so unlike upstream it requires no compliance context.
+The CI layout's actual job contexts are `Lint 1of8` through `Lint 8of8` (one per lint matrix partition), `Test coverage guard`, `Repo invariants`, `Stock macOS Bash snapshot compatibility`, `Behavior portable parallel 1`, `Behavior portable parallel 2`, `Behavior portable serial 1` through `Behavior portable serial 10`, `Behavior tests (Herdr)`, and `Behavior timing aggregate`.
+This fork has no no-mistakes compliance job, so unlike upstream it has no compliance context.
 The timing aggregate is not a substitute for individual jobs because it can succeed while collecting evidence from a failed run.
 
-Apply the approved rule change only after the corresponding workflow is green and landed, confirming exact names and the Actions integration id from real checks first.
-Snapshot the current ruleset, amend that same rule with the authenticated GitHub API or settings UI, and read back both the ruleset and effective branch rules.
-Verify missing or red checks prevent ordinary merging without creating a test merge; administrator override intentionally remains available.
-Coordinate any workflow rollback with its required-check names so a retired check cannot leave ordinary merges waiting forever.
+If required checks are ever configured on `main`, require those exact contexts with `strict_required_status_checks_policy: false`, bind them to the GitHub Actions app already producing them, and confirm names from real checks first; `bin/fm-pr-merge.sh` then reads them from the ruleset or branch protection on its own.
+Coordinate any workflow rollback with configured required-check names so a retired check cannot leave ordinary merges waiting forever.
 
 ## Repo conventions
 
