@@ -550,7 +550,8 @@ __FM_BEARINGS_BOARD_DATA__
     });
     form.appendChild(opts);
 
-    if (item.allow_freeform) {
+    /* a decision card always takes the captain's own words */
+    if (item.allow_freeform || item.type === "decision") {
       var field = el("div", "fm-field");
       var noteId = "bb-call-" + index + "-note";
       var noteLabel = el("label", "fm-field__label", "Or answer in your own words");

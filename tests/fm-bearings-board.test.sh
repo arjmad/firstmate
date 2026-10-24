@@ -153,6 +153,7 @@ write_valid_payload() {  # <path>
         { "value": "yes", "label": "Adopt", "hint": "recommended" },
         { "value": "no", "label": "Keep current" }
       ],
+      "recommend_value": "yes",
       "allow_freeform": true
     },
     {
@@ -627,16 +628,20 @@ test_build_drops_decision_cards_whose_subject_already_landed() {
   write_valid_payload "$data"
   jq '.captains_call = [
         {"key":"landed-by-task","type":"decision","repo":"sample","title":"Already shipped",
-         "options":[{"value":"yes","label":"Yes"}]},
+         "options":[{"value":"yes","label":"Yes"},{"value":"no","label":"No"}],
+         "recommend_value":"yes","allow_freeform":true},
         {"key":"timeout-reattach","type":"decision","repo":"sample","title":"Already merged",
          "pr_url":"https://github.com/sample/sample/pull/7",
-         "options":[{"value":"yes","label":"Yes"}]},
+         "options":[{"value":"yes","label":"Yes"},{"value":"no","label":"No"}],
+         "recommend_value":"yes","allow_freeform":true},
         {"key":"quota-version","type":"decision","repo":"sample","title":"Old quota release",
          "subject":{"artifact":"quota-axi","version":"0.1.37"},
-         "options":[{"value":"yes","label":"Yes"}]},
+         "options":[{"value":"yes","label":"Yes"},{"value":"no","label":"No"}],
+         "recommend_value":"yes","allow_freeform":true},
         {"key":"still-open","type":"decision","repo":"sample","title":"Genuinely open",
          "subject":{"artifact":"quota-axi","version":"0.2.0"},
-         "options":[{"value":"yes","label":"Yes"}]}
+         "options":[{"value":"yes","label":"Yes"},{"value":"no","label":"No"}],
+         "recommend_value":"yes","allow_freeform":true}
       ]
       | .landed = [
         {"id":"landed-by-task","repo":"sample","what":"shipped it","owner":"crew"},
@@ -676,7 +681,8 @@ EOF
   jq '.captains_call = [{
         "key":"remote-mate-call","type":"decision","repo":"sample",
         "title":"Remote secondmate decision",
-        "options":[{"value":"yes","label":"Yes"}]
+        "options":[{"value":"yes","label":"Yes"},{"value":"no","label":"No"}],
+        "recommend_value":"yes","allow_freeform":true
       }]
       | .landed = []' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
 
@@ -769,6 +775,85 @@ test_build_refuses_a_nondecision_reconcile_value() {
   pass "build reserves reconcile across non-decision cards"
 }
 
+# --- part 4: a decision card offers a real choice ---------------------------
+
+# Build <data> after applying <jq-filter> to the valid payload, and require a
+# refusal that names <expected> and leaves no board behind.
+assert_weak_card_refused() {  # <home> <jq-filter> <expected> <case>
+  local home=$1 data="$1/payload.json" rc out
+  write_valid_payload "$data"
+  jq "$2" "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  set +e; out=$(run_board "$home" build "$data" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "$4 was accepted"
+  assert_contains "$out" "$3" "the refusal for $4 did not name what is missing: $out"
+  assert_absent "$home/.lavish/bearings-board.html" "$4 still produced a board"
+}
+
+test_build_refuses_a_decision_card_without_a_real_choice() {
+  local home key
+  home=$(make_home weak-decision)
+  write_valid_payload "$home/payload.json"
+  key=$(jq -r '.captains_call[0].key' "$home/payload.json")
+  assert_weak_card_refused "$home" \
+    '.captains_call[0].options = [{"value":"done","label":"Done"}]' \
+    "$key: needs at least two authored options (has 1), a recommend_value naming one of its options" \
+    "a Done-only decision card"
+  assert_weak_card_refused "$home" \
+    '.captains_call[0].options = [{"value":"done","label":"Done"},{"value":"reconcile","label":"Reconcile"}]
+      | .captains_call[0].recommend_value = "done"' \
+    "does not satisfy fm-bearings-board.v1" \
+    "a decision card padded with an authored reconcile option"
+  assert_weak_card_refused "$home" 'del(.captains_call[0].recommend_value)' \
+    "$key: needs a recommend_value naming one of its options" \
+    "a decision card with no recommendation"
+  assert_weak_card_refused "$home" '.captains_call[0].recommend_value = "maybe"' \
+    "$key: needs a recommend_value naming one of its options" \
+    "a decision card recommending an option it does not offer"
+  assert_weak_card_refused "$home" 'del(.captains_call[0].allow_freeform)' \
+    "$key: needs allow_freeform true" \
+    "a decision card without the free-text field"
+  assert_weak_card_refused "$home" '.captains_call[0].allow_freeform = false' \
+    "$key: needs allow_freeform true" \
+    "a decision card that turns the free-text field off"
+  assert_weak_card_refused "$home" \
+    '.captains_call[0].options = [{"value":"done","label":"Done"},{"value":"done","label":"Done now"}]
+      | .captains_call[0].recommend_value = "done"' \
+    "$key: needs distinct option values" \
+    "a decision card repeating one option value"
+  pass "build refuses a decision card without two authored options, a recommendation, and free text"
+}
+
+test_a_weak_card_whose_subject_landed_is_dropped_not_refused() {
+  local home data out
+  home=$(make_home weak-landed)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  jq '.captains_call += [{"key":"old-done-only","type":"decision","repo":"sample",
+        "title":"Already shipped","options":[{"value":"done","label":"Done"},{"value":"done","label":"Done"}]}]
+      | .landed = [{"id":"old-done-only","repo":"sample","what":"shipped it","owner":"crew"}]' \
+    "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  out=$(run_board "$home" build "$data" 2>&1) || fail "a landed weak card refused the board: $out"
+  assert_contains "$out" "dropped-landed-card: old-done-only" "the landed weak card was not dropped: $out"
+  pass "a weak decision card whose subject landed is dropped rather than refusing the board"
+}
+
+test_merge_and_credential_cards_keep_their_own_shapes() {
+  local home data out
+  home=$(make_home card-shapes)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  jq '.captains_call[1] |= (del(.recommend_value) | .options = [{"value":"merge","label":"Merge now"}]
+        | .allow_freeform = false)
+      | .captains_call += [{"key":"credential.sample","type":"credential","repo":"sample",
+        "title":"Sample login","options":[{"value":"done","label":"Logged in"}]}]' \
+    "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  out=$(run_board "$home" build "$data" 2>&1) || fail "single-option merge and credential cards were refused: $out"
+  extract_payload "$home/.lavish/bearings-board.html" | jq -e '
+    [.captains_call[] | select(.type != "decision") | .options | length] == [1, 1]
+  ' >/dev/null || fail "the build changed a merge or credential card's options"
+  pass "merge and credential cards keep their own option shapes"
+}
+
 test_path_is_stable_and_home_scoped
 test_build_refuses_malformed_payloads_before_touching_the_board
 test_charted_kind_is_optional_and_accepts_both_values
@@ -787,3 +872,6 @@ test_build_fails_when_reconcile_cannot_establish_a_listener
 test_every_decision_card_carries_the_reconcile_choice
 test_build_refuses_a_payload_that_occupies_the_reconcile_value
 test_build_refuses_a_nondecision_reconcile_value
+test_build_refuses_a_decision_card_without_a_real_choice
+test_merge_and_credential_cards_keep_their_own_shapes
+test_a_weak_card_whose_subject_landed_is_dropped_not_refused
