@@ -1861,8 +1861,30 @@ test_decision_rule_matches_terminal_fold() {
   pass "fm-brief.sh: rule 6 matches the ship/scout terminal fold and the secondmate resolved-only fold"
 }
 
+# Ship and scout briefs ask the worker to keep its plan where
+# bin/fm-progress.sh reads steps; a secondmate charter does not.
+test_workers_keep_their_plan_as_steps() {
+  local home kind brief
+  home="$TMP_ROOT/plan-steps-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" plan-ship some-proj --mode direct-PR >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" plan-scout some-proj --scout >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" plan-secondmate --secondmate --no-projects >/dev/null 2>&1
+  for kind in ship scout; do
+    brief="$home/data/plan-$kind/brief.md"
+    assert_present "$brief" "$kind brief was not scaffolded"
+    assert_grep "Keep your plan as Claude Code's task list" "$brief" "$kind brief does not ask for the task list"
+    # shellcheck disable=SC2016 # the backticks are literal Markdown in the brief
+    assert_grep '`[step=<n>/<m>]` next to the time stamp of a `working` status line' "$brief" "$kind brief does not offer the step token"
+  done
+  assert_no_grep "Keep your plan as Claude Code's task list" "$home/data/plan-secondmate/brief.md" \
+    "secondmate charter picked up the worker plan line"
+  pass "fm-brief.sh: ship and scout briefs ask for the plan as steps; secondmate charters do not"
+}
+
 test_script_parses
 test_no_heredoc_in_command_substitution
+test_workers_keep_their_plan_as_steps
 test_help_includes_entire_header
 test_ship_modes_generate_clean_briefs
 test_forge_selection_renders_correct_cli

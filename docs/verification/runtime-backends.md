@@ -583,6 +583,29 @@ ok - question guard live: claude 2.1.300 (Claude Code) honors the tracked AskUse
 
 `tests/fm-question-pretool-check.test.sh` pins the classifier, scope, presence window, escape hatch, and tracked registration without a harness.
 
+## Claude task list
+
+Verified 2026-10-24 on Claude Code 2.1.309 (Claude Code), tmux 3.7b, macOS arm64.
+With `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`, a Claude Opus 5.5 or Haiku session gets `TaskCreate` and `TaskUpdate` and writes one file per task under `<config-dir>/tasks/<sessionId>/`, beside a `.lock`:
+
+```sh
+CLAUDE_CODE_ENABLE_TODO_TOOLS=1 claude -p --model haiku --dangerously-skip-permissions --session-id <uuid> \
+  "Use the TaskCreate tool to create three tasks with subjects 'Step A', 'Step B', 'Step C'. Then use TaskUpdate to mark Step A completed and Step B in_progress. Then reply with just OK."
+```
+
+```text
+{"id": "1", "subject": "Step A", "description": "Step A", "status": "completed", "blocks": [], "blockedBy": []}
+{"id": "2", "subject": "Step B", "description": "Step B", "status": "in_progress", "blocks": [], "blockedBy": []}
+{"id": "3", "subject": "Step C", "description": "Step C", "status": "pending", "blocks": [], "blockedBy": []}
+```
+
+An interactive session's record `<config-dir>/sessions/<pid>.json` carries `"kind": "interactive"`, the `--name` value as `"name"`, and the `"sessionId"` that keys the list.
+`FM_PROGRESS_CLAUDE_LIVE_E2E=1 tests/fm-progress-claude-live-e2e.test.sh` drives that chain end to end through `bin/fm-progress.sh` and refreshes this record:
+
+```text
+ok - Claude Code 2.1.309 (Claude Code): a worker launched with CLAUDE_CODE_ENABLE_TODO_TOOLS=1 and --name 'ship: <id>' keeps a task list fm-progress.sh reads as 1/3 · Beta step
+```
+
 ## Claude session name
 
 Verified 2026-10-19 on Claude Code 2.1.300 (Claude Code), tmux 3.7b, macOS arm64, with `remoteControlAtStartup` on in user settings.
