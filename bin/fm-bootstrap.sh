@@ -23,7 +23,9 @@
 #                 "BOOTSTRAP_INFO: nudged fm-<id> with '<message>'",
 #                 "SECONDMATE_LIVENESS: secondmate <id>: skipped: <reason>|respawn failed after <cause>: <reason>",
 #                 "SECONDMATE_HANDOFF: secondmate <id>: pending delivery: <n> item(s)",
-#                 "FMX: X mode on ..." or "FMX: X mode off ...".
+#                 "FMX: X mode on ..." or "FMX: X mode off ...",
+#                 "LAVISH_PATCH: skipped|failed: lavish-axi <version> <reason>",
+#                 "BOOTSTRAP_INFO: lavish-axi <version> chrome patch applied".
 #          When a RUNNING secondmate home is fast-forwarded, its target is
 #          firstmate's own current default-branch commit. A local worktree uses
 #          a purely local fast-forward with no origin fetch; a remote route hands
@@ -64,6 +66,10 @@
 #          Missing or incompatible lavish-axi reports PRESENTATION_UNAVAILABLE;
 #          a compatible older build keeps legacy boards and reports a BOOTSTRAP_INFO
 #          upgrade recommendation for synchronous reply acceptance.
+#          A compatible lavish-axi also carries firstmate's local chrome overlay
+#          (bin/fm-lavish-patch.mjs owns it and its LAVISH_PATCH lines): the
+#          locked local pass re-applies it after any Lavish upgrade, and
+#          `install lavish-axi` applies it straight after installing.
 #          tasks-axi feature probes remain a separate defense-in-depth check.
 #          tasks-axi and quota-axi are essential bootstrap tools.
 #          A compatible tasks-axi default backend is silent.
@@ -102,18 +108,19 @@
 #          The `code-root <file>` variant is a detect-only local check that runs
 #          even in a read-only session; detect_code_root_backlog_fork owns what
 #          it reports.
-#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the seven MUTATING sweeps
+#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the eight MUTATING sweeps
 #          (backlog_record_reconcile, state_residue_sweep, secondmate_sync,
 #          secondmate_liveness_sweep, secondmate_handoff_resume, x_mode_setup,
-#          fleet_sync) while still
+#          lavish_chrome_patch, fleet_sync) while still
 #          printing every read-only detect line
 #          above; the TANGLE line switches to advisory-only wording with no
 #          checkout command. Used by
 #          fm-session-start.sh's read-only path when another live session holds
 #          the fleet lock, so a second concurrent session never race-mutates
 #          secondmate homes, pending handoff outboxes and receiver wakes,
-#          X-mode artifacts, project clones, or repair instructions.
-#          Unset/0 (the default) runs all seven sweeps - this flag is purely
+#          X-mode artifacts, the Lavish install, project clones, or repair
+#          instructions.
+#          Unset/0 (the default) runs all eight sweeps - this flag is purely
 #          additive.
 #          state_residue_sweep is bin/fm-state-residue-sweep.sh, whose header
 #          owns what it retires and how an endpoint is proven gone; it runs on
@@ -950,6 +957,15 @@ tool_version_at_least() {  # <tool> <min-version>
   version_parts_at_least "$parts" "$2"
 }
 
+# Firstmate's local Lavish chrome overlay. bin/fm-lavish-patch.mjs owns the
+# patch, its fail-closed check against the installed chrome (which stands in
+# for a version floor), and every line it prints; a skip or failure leaves
+# Lavish working unpatched, so it never fails bootstrap.
+lavish_chrome_patch() {
+  command -v node >/dev/null 2>&1 || return 0
+  node "$SCRIPT_DIR/fm-lavish-patch.mjs" apply || true
+}
+
 x_mode_write_if_changed() {
   local dest=$1 content=$2 mode=$3 parent tmp parent_device current_mode
   parent=${dest%/*}
@@ -1405,7 +1421,9 @@ if [ "${1:-}" = "install" ]; then
     fi
     cmd=${cmd%%  #*}
     echo "installing $t: $cmd"
-    eval "$cmd"
+    if eval "$cmd"; then
+      [ "$t" != lavish-axi ] || lavish_chrome_patch
+    fi
   done
   exit 0
 fi
@@ -1671,6 +1689,7 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   fi
   # x_mode_setup writes local Relay artifacts only and never leaves the machine.
   local_phase && x_mode_setup
+  local_phase && lavish_chrome_patch
   # Adopt existing durable contribution links without making a network call.
   # Detection-only startup must never publish a check registration.
   if local_phase && command -v jq >/dev/null 2>&1 \

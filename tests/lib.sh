@@ -52,6 +52,11 @@ export FM_GATE_REFUSE_BYPASS=1
 # leaked harness pin alone stays inert outside a suite.
 export FM_TEST_SEAM=1
 
+# Keep every suite that runs the real bin/fm-bootstrap.sh from patching the
+# lavish-axi a test PATH can still reach in the host's toolchain prefix.
+# tests/fm-lavish-patch.test.sh clears it to drive the patch against fakes.
+export FM_LAVISH_PATCH=0
+
 # Clear the task-worker marker bin/fm-spawn.sh exports into ship and scout
 # panes. This suite builds git-init fixture repositories whose primary checkout
 # it runs a copied bin/fm-test-run.sh in, and that runner refuses the primary
@@ -688,6 +693,56 @@ fi
 exit 0
 SH
   chmod +x "$fakebin/$tool"
+}
+
+# fm_fake_lavish_package <prefix> <version>
+# Lays out an npm-global lavish-axi install the way the toolchain prefix holds
+# one: <prefix>/lib/node_modules/lavish-axi with package.json, a dist/cli.mjs
+# that answers `--version` and carries the server template and asset routes the
+# chrome overlay attaches to, and the dist/chrome.css and dist/chrome-client.js
+# it patches, plus the <prefix>/bin/lavish-axi symlink and a <prefix>/bin/node
+# link to the real node so the package runs from a test PATH. Echoes the
+# package directory.
+fm_fake_lavish_package() {
+  local prefix=$1 version=$2 pkg node_bin
+  pkg="$prefix/lib/node_modules/lavish-axi"
+  node_bin=$(command -v node) || return 1
+  mkdir -p "$pkg/dist" "$prefix/bin"
+  printf '{ "name": "lavish-axi", "version": "%s" }\n' "$version" > "$pkg/package.json"
+  cat > "$pkg/dist/cli.mjs" <<JS
+#!/usr/bin/env node
+var chromeClientUrl = new URL("./chrome-client.js", import.meta.url);
+var chromeCssUrl = new URL("./chrome.css", import.meta.url);
+var template = '<div class="layout"><aside class="panel" id="panel"><div id="panelScroll"><div id="chatLog"></div><div id="queuedLog"></div></div></aside></div><div class="more-wrap" id="moreWrap"></div>';
+if (process.argv[2] === "--version") console.log("$version");
+JS
+  chmod +x "$pkg/dist/cli.mjs"
+  cat > "$pkg/dist/chrome.css" <<'CSS'
+:root {
+  --bg-panel: #11141a;
+  --bg-bar: #171a21;
+  --border-strong: #3c4557;
+  --accent-ink: #17130a;
+  --panel-w: 360px;
+  --radius-pill: 999px;
+  --w-bold: 700;
+  --dur-fast: 120ms;
+  --ease: cubic-bezier(0.2, 0.6, 0.2, 1);
+}
+.layout {
+  grid-template-columns: minmax(0, 1fr) var(--panel-w);
+}
+@media (max-width: 860px) {
+  .panel {
+    width: auto;
+  }
+}
+CSS
+  printf 'const panel = document.getElementById("panel");\n' > "$pkg/dist/chrome-client.js"
+  chmod 640 "$pkg/dist/chrome.css" "$pkg/dist/chrome-client.js"
+  ln -sf ../lib/node_modules/lavish-axi/dist/cli.mjs "$prefix/bin/lavish-axi"
+  ln -sf "$node_bin" "$prefix/bin/node"
+  printf '%s\n' "$pkg"
 }
 
 # fm_fake_claude_outside_read_gate <fakebin>

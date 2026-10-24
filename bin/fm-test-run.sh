@@ -352,6 +352,7 @@ family_for_basename() {
       ;;
     fm-backlog-atomicity.test.sh|\
     fm-bootstrap.test.sh|fm-bootstrap-network-parallel.test.sh|fm-fleet-sync.test.sh|fm-gate-refuse.test.sh|fm-gotmp.test.sh|\
+    fm-lavish-patch.test.sh|\
     fm-session-start.test.sh|fm-sessionstart-nudge.test.sh|fm-startup-network.test.sh|\
     fm-state-residue-sweep.test.sh|\
     fm-tangle-guard.test.sh|fm-update.test.sh)
@@ -1540,6 +1541,11 @@ families_for_changed_path() {
     bin/fm-bootstrap.sh)
       printf '%s\n' session-bootstrap
       printf '%s\n' "__script__:fm-brief.test.sh"
+      ;;
+    bin/fm-lavish-patch.mjs|bin/lavish-patch/*)
+      # Firstmate's local Lavish chrome overlay; its suite drives it directly
+      # and through fm-bootstrap.sh.
+      printf '%s\n' "__script__:fm-lavish-patch.test.sh"
       ;;
     bin/fm-state-residue-sweep.sh)
       # The locked bootstrap sweep that retires the watcher's per-endpoint
