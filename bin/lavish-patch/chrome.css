@@ -1,0 +1,227 @@
+/* Firstmate's local Lavish chrome overlay. bin/fm-lavish-patch.sh appends this file to
+   lavish-axi's dist/chrome.css and owns when it is applied and removed.
+   1. The fleet-html house style (C1 airy, navy dark; ~/code/skills/skills/fleet-html/house.css v1)
+      for Lavish's own chrome: the bar, the Conversation panel, buttons and inputs. Artifacts are
+      untouched; they keep their own look inside the iframe.
+   2. A collapse control and drag-to-resize for the desktop Conversation panel, adapted from
+      kunchenguid/lavish-axi PR #455 (bar toggle) and PR #429 (resize handle). Desktop only: the
+      phone bottom sheet below 861px keeps upstream's layout. */
+:root {
+  /* house primitives, values copied from house.css v1 */
+  --fm-navy-950: #121724;
+  --fm-navy-900: #1a2133;
+  --fm-navy-850: #202a40;
+  --fm-navy-750: #2c3650;
+  --fm-slate-500: #7a86a3;
+  --fm-slate-300: #aab4ca;
+  --fm-slate-100: #dde2ec;
+  --fm-slate-50: #eef1f7;
+  --fm-rust-300: #e69377;
+  --fm-rust-950: #3b2a2a;
+  --fm-gold-200: #f0d38c;
+  --fm-gold-950: #362d1c;
+  --fm-scrim: rgb(18 23 36 / 0.8);
+
+  /* Lavish's semantic tokens, mapped onto the house roles */
+  --bg: var(--fm-navy-950);
+  --bg-panel: var(--fm-navy-900);
+  --bg-bar: var(--fm-navy-900);
+  --bg-elevated: var(--fm-navy-850);
+  --fg: var(--fm-slate-50);
+  --fg-muted: var(--fm-slate-100);
+  --fg-dim: var(--fm-slate-100);
+  --fg-faint: var(--fm-slate-300);
+  --fg-label: var(--fm-slate-300);
+  --border: var(--fm-navy-750);
+  --border-subtle: var(--fm-navy-750);
+  --border-strong: var(--fm-slate-500);
+  --accent: var(--fm-rust-300);
+  --accent-hover: var(--fm-rust-300);
+  --accent-ink: var(--fm-navy-950);
+
+  /* Lavish primitives some rules read directly */
+  --ink-700: var(--fm-navy-850);
+  --ink-800: var(--fm-navy-900);
+  --steel-700: var(--fm-navy-850);
+  --cream-200: var(--fm-slate-100);
+  --brass-400: var(--fm-gold-200);
+  --brass-ink: var(--fm-navy-950);
+  --amber-700: var(--fm-gold-200);
+  --amber-900: var(--fm-gold-950);
+
+  --font-serif: "Jost", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-sans: var(--font-serif);
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+:focus-visible {
+  outline: 3px solid var(--fm-slate-50);
+  outline-offset: 2px;
+}
+.brand-mark {
+  font-style: normal;
+  font-weight: 600;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+.button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.composer textarea,
+.more-button {
+  border-color: var(--border-strong);
+}
+.warnings-button {
+  border-color: var(--fm-gold-200);
+  background: var(--fm-gold-950);
+  color: var(--fm-gold-200);
+}
+.warnings-button:hover:not(:disabled),
+.warnings-button[aria-expanded="true"] {
+  border-color: var(--fm-gold-200);
+  background: var(--fm-gold-950);
+  color: var(--fm-slate-50);
+}
+.send-hint.persistent {
+  color: var(--fm-gold-200);
+}
+.anchor-excerpt.text {
+  background: var(--fm-rust-950);
+  box-shadow: 0 0 0 1px var(--fm-rust-300);
+}
+.share-overlay,
+.ended-overlay,
+.whiteboard-overlay {
+  background: var(--fm-scrim);
+}
+
+/* Desktop Conversation panel: bar toggle and resize handle */
+.fm-panel-toggle {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--fg-dim);
+  border-radius: 9px;
+  cursor: pointer;
+  padding: 0;
+}
+.fm-panel-toggle:hover {
+  background: var(--bg-elevated);
+  color: var(--fg);
+}
+.fm-panel-toggle[aria-expanded="false"] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.fm-panel-toggle-count {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: var(--w-bold);
+  line-height: 18px;
+  text-align: center;
+}
+.fm-panel-toggle-count[hidden] {
+  display: none;
+}
+.fm-panel-toggle.is-unread::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg-bar);
+}
+.fm-panel-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  width: 10px;
+  cursor: col-resize;
+  z-index: 10;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.fm-panel-resizer::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 4px;
+  height: 32px;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  transition: background var(--dur-fast) var(--ease);
+}
+.fm-panel-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 2px;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease);
+}
+.fm-panel-resizer:hover::before,
+.fm-panel-resizer:focus-visible::before,
+body.fm-panel-resizing .fm-panel-resizer::before,
+.fm-panel-resizer:hover::after,
+.fm-panel-resizer:focus-visible::after,
+body.fm-panel-resizing .fm-panel-resizer::after {
+  background: var(--accent);
+}
+.fm-panel-resizer:focus-visible {
+  outline: none;
+}
+body.fm-panel-resizing {
+  cursor: col-resize;
+  user-select: none;
+  -webkit-user-select: none;
+}
+body.fm-panel-resizing iframe {
+  pointer-events: none;
+}
+/* The exact complement of the phone breakpoint, so a stored desktop preference can never hide the
+   phone dock. */
+@media not all and (max-width: 860px) {
+  .panel {
+    position: relative;
+  }
+  body.fm-panel-collapsed .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  body.fm-panel-collapsed .panel {
+    display: none;
+  }
+}
+@media (max-width: 860px) {
+  .fm-panel-toggle,
+  .fm-panel-resizer {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fm-panel-resizer::before,
+  .fm-panel-resizer::after {
+    transition: none;
+  }
+}
