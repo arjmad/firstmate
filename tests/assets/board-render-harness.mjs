@@ -119,14 +119,7 @@ const underway = rowsOf(uw);
 
 const ch = byId.get("bb-charted") || new Node("div");
 const charted = rowsOf(ch);
-const find = (n, cls) => {
-  for (const c of n.children) {
-    if (c.className.split(/\s+/).includes(cls)) return c;
-    const hit = find(c, cls);
-    if (hit) return hit;
-  }
-  return null;
-};
+const find = (n, cls) => n.querySelectorAll("." + cls)[0] ?? null;
 const findAll = (n, cls) => n.querySelectorAll("." + cls);
 const deck = byId.get("bb-call") || new Node("div");
 const calls = deck.children

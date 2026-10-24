@@ -800,7 +800,7 @@ test_build_refuses_a_decision_card_without_a_real_choice() {
   assert_weak_card_refused "$home" \
     '.captains_call[0].options = [{"value":"done","label":"Done"},{"value":"reconcile","label":"Reconcile"}]
       | .captains_call[0].recommend_value = "done"' \
-    "$key: needs at least two authored options (has 1)" \
+    "does not satisfy fm-bearings-board.v1" \
     "a decision card padded with an authored reconcile option"
   assert_weak_card_refused "$home" 'del(.captains_call[0].recommend_value)' \
     "$key: needs a recommend_value naming one of its options" \
@@ -814,7 +814,26 @@ test_build_refuses_a_decision_card_without_a_real_choice() {
   assert_weak_card_refused "$home" '.captains_call[0].allow_freeform = false' \
     "$key: needs allow_freeform true" \
     "a decision card that turns the free-text field off"
+  assert_weak_card_refused "$home" \
+    '.captains_call[0].options = [{"value":"done","label":"Done"},{"value":"done","label":"Done now"}]
+      | .captains_call[0].recommend_value = "done"' \
+    "does not satisfy fm-bearings-board.v1" \
+    "a decision card repeating one option value"
   pass "build refuses a decision card without two authored options, a recommendation, and free text"
+}
+
+test_a_weak_card_whose_subject_landed_is_dropped_not_refused() {
+  local home data out
+  home=$(make_home weak-landed)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  jq '.captains_call += [{"key":"old-done-only","type":"decision","repo":"sample",
+        "title":"Already shipped","options":[{"value":"done","label":"Done"}]}]
+      | .landed = [{"id":"old-done-only","repo":"sample","what":"shipped it","owner":"crew"}]' \
+    "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  out=$(run_board "$home" build "$data" 2>&1) || fail "a landed weak card refused the board: $out"
+  assert_contains "$out" "dropped-landed-card: old-done-only" "the landed weak card was not dropped: $out"
+  pass "a weak decision card whose subject landed is dropped rather than refusing the board"
 }
 
 test_merge_and_credential_cards_keep_their_own_shapes() {
@@ -854,3 +873,4 @@ test_build_refuses_a_payload_that_occupies_the_reconcile_value
 test_build_refuses_a_nondecision_reconcile_value
 test_build_refuses_a_decision_card_without_a_real_choice
 test_merge_and_credential_cards_keep_their_own_shapes
+test_a_weak_card_whose_subject_landed_is_dropped_not_refused
