@@ -354,8 +354,8 @@ captain_names() {
 
 # Newest date that follows a configured captain name in stdin, as YYYY-MM-DD.
 newest_captain_quote() {  # <names, newline-separated>
-  local names=$1
-  NAMES=$names perl -ne '
+  local name_list=$1
+  NAMES=$name_list perl -ne '
     BEGIN {
       my @n = grep { length } split /\n/, $ENV{NAMES};
       $re = join "|", map { quotemeta } @n;
