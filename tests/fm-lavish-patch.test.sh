@@ -19,7 +19,8 @@
 #   - Fail closed: when upstream no longer carries what the overlay relies on,
 #     or ships its own panel collapse, apply prints one LAVISH_PATCH skip line,
 #     exits 3, and writes nothing; that includes an artifact iframe that no
-#     longer gets its src from upstream's script.
+#     longer gets its src from upstream's script or no longer exists when that
+#     script starts, and a head part that lost its end marker.
 #   - A revision 2 install, which had no head part, is upgraded to both parts.
 #   - No lavish-axi package on PATH (absent, or a stub that is not an npm
 #     install) is silent, and FM_LAVISH_PATCH=0 turns apply off.
@@ -87,9 +88,9 @@ test_apply_appends_the_overlay_once() {
     || fail "apply must keep upstream's chrome.css content ahead of the overlay"
   head -n 1 "$(dist "$prefix")/chrome-client.js" | grep -q '^// fm-lavish-patch:head-begin r[0-9]*$' \
     || fail "apply must open chrome-client.js with the overlay's head part"
-  assert_contains "$(cat "$(dist "$prefix")/chrome-client.js")" "$(cat "$ROOT/bin/lavish-patch/chrome-client-head.js")
-// fm-lavish-patch:head-end
-$(cat "$pristine/chrome-client.js")" "the head part must come straight before upstream's chrome-client.js"
+  { cat "$ROOT/bin/lavish-patch/chrome-client-head.js"; printf '// fm-lavish-patch:head-end\n'; cat "$pristine/chrome-client.js"; } > "$TMP_ROOT/apply-head-expected"
+  tail -n +2 "$(dist "$prefix")/chrome-client.js" | head -c "$(wc -c < "$TMP_ROOT/apply-head-expected")" | cmp -s - "$TMP_ROOT/apply-head-expected" \
+    || fail "the head part must come straight before upstream's exact chrome-client.js bytes"
   for f in chrome.css chrome-client.js; do
     assert_contains "$(cat "$(dist "$prefix")/$f")" "$(cat "$ROOT/bin/lavish-patch/$f")" "apply should append the $f overlay"
     assert_equals 640 "$(file_mode "$(dist "$prefix")/$f")" "apply should keep $f's mode"
@@ -213,6 +214,31 @@ test_fails_closed_when_upstream_moved() {
   expect_code 3 "$rc" "apply when the iframe src is in the served HTML"
   assert_contains "$out" 'no longer contains "data-artifact-src="' "an iframe loaded before any script runs is a skip"
   same_files "$prefix" "$pristine" || fail "a skipped apply must write nothing"
+
+  prefix=$(new_package both-src 0.2.0)
+  sed 's/data-artifact-src=/src="\/artifact\/key\/index.html" data-artifact-src=/' "$(dist "$prefix")/cli.mjs" > "$TMP_ROOT/both-src.mjs"
+  cat "$TMP_ROOT/both-src.mjs" > "$(dist "$prefix")/cli.mjs"
+  out=$(patch "$prefix" apply); rc=$?
+  expect_code 3 "$rc" "apply when the iframe has a src beside data-artifact-src"
+  assert_contains "$out" "serves the artifact iframe with its own src" "an iframe with its own src is a skip"
+
+  prefix=$(new_package script-first 0.2.0)
+  sed 's#<script src="/chrome-client.js"></script>##; s#<div class="layout">#<script src="/chrome-client.js"></script><div class="layout">#' \
+    "$(dist "$prefix")/cli.mjs" > "$TMP_ROOT/script-first.mjs"
+  cat "$TMP_ROOT/script-first.mjs" > "$(dist "$prefix")/cli.mjs"
+  out=$(patch "$prefix" apply); rc=$?
+  expect_code 3 "$rc" "apply when chrome-client.js loads before the iframe exists"
+  assert_contains "$out" "no longer loads chrome-client.js after the artifact iframe" "a script ahead of the iframe is a skip"
+
+  prefix=$(new_package damaged-head)
+  printf '// fm-lavish-patch:head-begin r3\n// a head part whose end marker was lost\n' | cat - "$(dist "$prefix")/chrome-client.js" > "$TMP_ROOT/damaged.js"
+  cat "$TMP_ROOT/damaged.js" > "$(dist "$prefix")/chrome-client.js"
+  pristine="$TMP_ROOT/damaged-head-pristine"
+  snapshot "$prefix" "$pristine"
+  out=$(patch "$prefix" apply); rc=$?
+  expect_code 3 "$rc" "apply over a head part without its end marker"
+  assert_contains "$out" "has an overlay head part without its end marker" "a damaged head part is a skip"
+  same_files "$prefix" "$pristine" || fail "a damaged head part must not be stacked on"
   pass "apply: fails closed with one skip line when upstream no longer matches"
 }
 
@@ -401,7 +427,8 @@ test_head_grants_fullscreen_before_the_first_load() {
   # Upstream's own script points the iframe at the board as soon as it runs.
   printf '%s\n' 'const frame = document.getElementById("artifact");' 'if (frame) frame.src = frame.dataset.artifactSrc;' > "$client"
   out=$(run_chrome_client "$client" -) || fail "unpatched chrome-client.js did not run under the shim"
-  printf '%s' "$out" | jq -e '.atLoad.allow == null' >/dev/null || fail "the unpatched frame should load without fullscreen: $out"
+  printf '%s' "$out" | jq -e '.atLoad != null and .atLoad.allow == null' >/dev/null \
+    || fail "the unpatched frame should load, without fullscreen: $out"
 
   patch "$prefix" apply >/dev/null
   out=$(run_chrome_client "$client" -) || fail "patched chrome-client.js did not run under the shim"
@@ -412,6 +439,7 @@ test_head_grants_fullscreen_before_the_first_load() {
   out=$(run_chrome_client "$client" "autoplay; fullscreen 'self'") || fail "patched chrome-client.js did not run with fullscreen listed"
   printf '%s' "$out" | jq -e ".atLoad.allow == \"autoplay; fullscreen 'self'\"" >/dev/null || fail "a fullscreen upstream already lists is left alone: $out"
   out=$(run_chrome_client "$client" - no-frame) || fail "the head part must not throw on a page without the iframe"
+  printf '%s' "$out" | jq -e '.atLoad == null and .allow == null' >/dev/null || fail "without the iframe the head part touches nothing: $out"
   pass "head: the board iframe is granted fullscreen before upstream first loads it"
 }
 

@@ -55,9 +55,12 @@
 // Fail closed: before writing, every anchor in ANCHORS must be present in
 // upstream's own content. They are what the overlay relies on: the tokens it
 // remaps or reads, the desktop panel column, the phone breakpoint, and the
-// element ids the script attaches to, and the artifact iframe's script-set src
-// that lets the head part grant fullscreen before the first load. UPSTREAM_COLLAPSE names upstream's own
-// collapse controls (PR #455's sidebarToggle, PR #429's panelResizer); once one
+// element ids the script attaches to. The head part also needs the served
+// artifact iframe to carry no src of its own and to come before the
+// chrome-client.js script tag, so that the iframe exists when the head runs and
+// has not yet navigated; frameLoadsAfterHead checks both. A file whose head part
+// has lost its end marker is skipped rather than stacked. UPSTREAM_COLLAPSE
+// names upstream's own collapse controls (PR #455's sidebarToggle, PR #429's panelResizer); once one
 // ships, the overlay steps aside so the patch can be dropped.
 
 import { chmodSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
@@ -100,12 +103,22 @@ const ANCHORS = {
     'id="moreWrap"',
     'id="chatLog"',
     'id="queuedLog"',
-    '<iframe id="artifact" sandbox=',
     'data-artifact-src=',
   ],
 };
 
 const UPSTREAM_COLLAPSE = ['id="sidebarToggle"', 'id="panelResizer"'];
+
+// The reason the head part would run too late for the server template in cli,
+// or null when the artifact iframe has no src and precedes the client script.
+function frameLoadsAfterHead(cli) {
+  const frame = cli.match(/<iframe id="artifact"[^>]*>/);
+  if (!frame) return 'no longer serves an <iframe id="artifact"> the overlay grants fullscreen to';
+  if (/\ssrc=/.test(frame[0])) return "serves the artifact iframe with its own src, which loads before the overlay's head part runs";
+  const script = cli.indexOf('<script src="/chrome-client.js"');
+  if (script === -1 || script < frame.index) return "no longer loads chrome-client.js after the artifact iframe";
+  return null;
+}
 
 class Skip extends Error {}
 
@@ -206,6 +219,10 @@ function inspect(pkg) {
     const missing = anchors.find((anchor) => !sources[file].includes(anchor));
     if (missing) throw new Skip(`dist/${file} no longer contains ${JSON.stringify(missing)} the overlay relies on`);
   }
+  const late = frameLoadsAfterHead(cli);
+  if (late) throw new Skip(late);
+  const damaged = TARGETS.find((target, i) => target.head && files[i].pristine.startsWith(target.open + HEAD_BEGIN));
+  if (damaged) throw new Skip(`dist/${damaged.file} has an overlay head part without its end marker; reinstall lavish-axi`);
   const own = UPSTREAM_COLLAPSE.find((marker) => cli.includes(marker));
   if (own) throw new Skip(`ships its own conversation-panel collapse (${own}); drop this patch`);
   return files;
