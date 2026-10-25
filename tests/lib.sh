@@ -698,8 +698,8 @@ SH
 # fm_fake_lavish_package <prefix> <version>
 # Lays out an npm-global lavish-axi install the way the toolchain prefix holds
 # one: <prefix>/lib/node_modules/lavish-axi with package.json, a dist/cli.mjs
-# that answers `--version` and carries the server template and asset routes the
-# chrome overlay attaches to, and the dist/chrome.css and dist/chrome-client.js
+# that answers `--version` and carries the server template (with its artifact
+# iframe) and asset routes the chrome overlay attaches to, and the dist/chrome.css and dist/chrome-client.js
 # it patches, plus the <prefix>/bin/lavish-axi symlink and a <prefix>/bin/node
 # link to the real node so the package runs from a test PATH. Echoes the
 # package directory.
@@ -713,7 +713,7 @@ fm_fake_lavish_package() {
 #!/usr/bin/env node
 var chromeClientUrl = new URL("./chrome-client.js", import.meta.url);
 var chromeCssUrl = new URL("./chrome.css", import.meta.url);
-var template = '<div class="layout"><aside class="panel" id="panel"><div id="panelScroll"><div id="chatLog"></div><div id="queuedLog"></div></div></aside></div><div class="more-wrap" id="moreWrap"></div>';
+var template = '<div class="layout"><div class="frame"><iframe id="artifact" sandbox="allow-scripts" data-artifact-src="/artifact/key/index.html"></iframe></div><aside class="panel" id="panel"><div id="panelScroll"><div id="chatLog"></div><div id="queuedLog"></div></div></aside></div><div class="more-wrap" id="moreWrap"></div>';
 if (process.argv[2] === "--version") console.log("$version");
 JS
   chmod +x "$pkg/dist/cli.mjs"

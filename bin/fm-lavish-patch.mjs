@@ -2,14 +2,17 @@
 // fm-lavish-patch.mjs - apply, check, or remove firstmate's local overlay on
 // lavish-axi's browser chrome: the fleet-html house dark colours for Lavish's own
 // bar, panel, buttons and inputs, a collapsible, drag-resizable desktop
-// Conversation panel, and one-line receipts for bearings board answers in that
-// panel. The overlay is bin/lavish-patch/chrome.css and
-// bin/lavish-patch/chrome-client.js; docs/fork-decisions.md records why it exists
-// and which upstream pull requests it tracks.
+// Conversation panel, one-line receipts for bearings board answers in that
+// panel, and fullscreen for the board's iframe, so a board's <video controls> can
+// go full screen. The overlay is bin/lavish-patch/chrome.css,
+// bin/lavish-patch/chrome-client.js, and bin/lavish-patch/chrome-client-head.js;
+// docs/fork-decisions.md records why it exists and which upstream pull requests
+// it tracks.
 //
 // Usage: fm-lavish-patch.mjs apply|status|remove
 //   apply   Make the installed package's dist/chrome.css and dist/chrome-client.js
-//           read as upstream's own content followed by this checkout's overlay.
+//           read as upstream's own content followed by this checkout's overlay,
+//           with dist/chrome-client.js also preceded by the overlay's head part.
 //           Silent when they already do, or when a newer overlay revision is
 //           installed. Prints
 //           "BOOTSTRAP_INFO: lavish-axi <version> chrome patch applied" after
@@ -36,8 +39,11 @@
 // dir> selects a package directly, for tests and scratch installs.
 // FM_LAVISH_PATCH=0 turns apply into a no-op.
 //
-// The overlay is appended between begin and end marker lines, so stripping it
-// restores upstream's bytes exactly. The begin line carries REVISION, and every
+// The overlay is appended between begin and end marker lines, and the head part
+// is prepended between head-begin and head-end lines, so stripping them restores
+// upstream's bytes exactly. The head part must run before upstream's script
+// first sets the iframe's src, because Chrome reads an iframe's allow attribute
+// only when it navigates. Both begin lines carry REVISION, and every
 // change to bin/lavish-patch/ bumps it: several homes on different firstmate
 // commits share one toolchain install, so apply replaces only an older
 // revision and leaves a newer one alone rather than downgrading it. Writes are
@@ -49,7 +55,8 @@
 // Fail closed: before writing, every anchor in ANCHORS must be present in
 // upstream's own content. They are what the overlay relies on: the tokens it
 // remaps or reads, the desktop panel column, the phone breakpoint, and the
-// element ids the script attaches to. UPSTREAM_COLLAPSE names upstream's own
+// element ids the script attaches to, and the artifact iframe's script-set src
+// that lets the head part grant fullscreen before the first load. UPSTREAM_COLLAPSE names upstream's own
 // collapse controls (PR #455's sidebarToggle, PR #429's panelResizer); once one
 // ships, the overlay steps aside so the patch can be dropped.
 
@@ -57,15 +64,17 @@ import { chmodSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const REVISION = 2;
+const REVISION = 3;
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OVERLAY_DIR = join(HERE, "lavish-patch");
 const BEGIN = "fm-lavish-patch:begin";
 const END = "fm-lavish-patch:end";
+const HEAD_BEGIN = "fm-lavish-patch:head-begin";
+const HEAD_END = "fm-lavish-patch:head-end";
 
 const TARGETS = [
   { file: "chrome.css", open: "/* ", close: " */" },
-  { file: "chrome-client.js", open: "// ", close: "" },
+  { file: "chrome-client.js", open: "// ", close: "", head: "chrome-client-head.js" },
 ];
 
 const ANCHORS = {
@@ -91,6 +100,8 @@ const ANCHORS = {
     'id="moreWrap"',
     'id="chatLog"',
     'id="queuedLog"',
+    '<iframe id="artifact" sandbox=',
+    'data-artifact-src=',
   ],
 };
 
@@ -128,26 +139,45 @@ function markerLine(target, word) {
   return target.open + word + target.close;
 }
 
-// Upstream's own content, with any overlay revision stripped from its begin
-// line to the end of the file, and that revision's number (0 for one written
-// before revisions were numbered). The newline before the marker is the overlay's.
-function split(target, content) {
-  const at = content.indexOf("\n" + target.open + BEGIN);
-  if (at === -1) return { pristine: content, revision: null };
-  const line = content.slice(at + 1, content.indexOf("\n", at + 1));
+const revisionOf = (line) => {
   const match = line.match(/ r(\d+)\b/);
-  return { pristine: content.slice(0, at), revision: match ? Number(match[1]) : 0 };
+  return match ? Number(match[1]) : 0;
+};
+
+// Upstream's own content, with any head part stripped from the start of the
+// file and any overlay revision stripped from its begin line to the end of the
+// file, and the newest revision either carried (0 for one written before
+// revisions were numbered). The newline before the begin marker is the overlay's.
+function split(target, content) {
+  let pristine = content;
+  let revision = null;
+  const headEnd = "\n" + markerLine(target, HEAD_END) + "\n";
+  if (target.head && pristine.startsWith(target.open + HEAD_BEGIN) && pristine.includes(headEnd)) {
+    revision = revisionOf(pristine.slice(0, pristine.indexOf("\n")));
+    pristine = pristine.slice(pristine.indexOf(headEnd) + headEnd.length);
+  }
+  const at = pristine.indexOf("\n" + target.open + BEGIN);
+  if (at === -1) return { pristine, revision };
+  const tail = revisionOf(pristine.slice(at + 1, pristine.indexOf("\n", at + 1)));
+  return { pristine: pristine.slice(0, at), revision: Math.max(revision ?? 0, tail) };
 }
 
-function overlayBlock(target) {
+function readOverlay(file) {
   let body;
   try {
-    body = readFileSync(join(OVERLAY_DIR, target.file), "utf8");
+    body = readFileSync(join(OVERLAY_DIR, file), "utf8");
   } catch (error) {
-    throw new Error(`cannot read overlay bin/lavish-patch/${target.file}: ${error.code || error.message}`);
+    throw new Error(`cannot read overlay bin/lavish-patch/${file}: ${error.code || error.message}`);
   }
-  if (!body.endsWith("\n")) body += "\n";
-  return "\n" + markerLine(target, `${BEGIN} r${REVISION}`) + "\n" + body + markerLine(target, END) + "\n";
+  return body.endsWith("\n") ? body : body + "\n";
+}
+
+// The pristine content wrapped in this checkout's overlay revision.
+function overlaid(target, pristine) {
+  const tail = "\n" + markerLine(target, `${BEGIN} r${REVISION}`) + "\n" + readOverlay(target.file) + markerLine(target, END) + "\n";
+  if (!target.head) return pristine + tail;
+  const head = markerLine(target, `${HEAD_BEGIN} r${REVISION}`) + "\n" + readOverlay(target.head) + markerLine(target, HEAD_END) + "\n";
+  return head + pristine + tail;
 }
 
 // Every target with its current and wanted content. Throws Skip when upstream
@@ -163,7 +193,7 @@ function inspect(pkg) {
       throw new Skip(`has no dist/${target.file}`);
     }
     const { pristine, revision } = split(target, content);
-    return { path, content, pristine, revision, wanted: pristine + overlayBlock(target) };
+    return { path, content, pristine, revision, wanted: overlaid(target, pristine) };
   });
   let cli;
   try {
