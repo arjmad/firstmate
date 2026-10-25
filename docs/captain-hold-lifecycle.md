@@ -288,7 +288,7 @@ The Lavish adapter splits each capture between two commands:
 
 | Command | What it emits |
 | --- | --- |
-| `bin/fm-procevent-lavish.sh answers` | An exact non-reconcile card selection, or an inbox item's action whose effect closes (`close`) or defers to a valid date (`hold-until`) a held item; never a note sent alone, a timed `remind-at` firstmate schedules, or a worker's item. |
+| `bin/fm-procevent-lavish.sh answers` | An exact non-reconcile card selection, or an inbox item's action whose effect closes (`close`) or defers to a valid date (`hold-until`) a held item; never a note sent alone, a timed `remind-at` firstmate schedules, a worker's item, or the weekly prune card's answer, which `bin/fm-backlog-prune.sh` carries out. |
 | `reconciles` | Only task ids whose structured selection is Reconcile, carrying their notes as request provenance. |
 
 Current rows require the versioned shape and the `choice` tag.

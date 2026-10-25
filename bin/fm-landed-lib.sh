@@ -37,9 +37,17 @@
 # landed_artifact preserves a report_path with a reported completion; this
 # display compatibility does not admit kindless reports from raw backlog rows.
 # tests/fm-bearings-snapshot.test.sh covers both fresh and cached v1 summaries.
+#
+# A row the weekly backlog prune dropped is closed but delivered nothing, so the
+# artifact-less fallback below never admits it; a row reopened after a drop and
+# later delivered still lands through its artifact. bin/fm-backlog-prune-lib.sh
+# owns that drop record and its reader, prune_dropped.
+
+# shellcheck source=bin/fm-backlog-prune-lib.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/fm-backlog-prune-lib.sh"
 
 # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
-FM_LANDED_JQ_DEFS='
+FM_LANDED_JQ_DEFS="$FM_PRUNE_JQ_DEFS"'
   def scout_report:
     .kind == "scout"
     and (.report_path // null) != null;
@@ -70,7 +78,8 @@ FM_LANDED_JQ_DEFS='
   def landed_record:
     .state == "done" and .structured
     and (landed_delivery
-      or (.kind != "scout"
+      or ((prune_dropped | not)
+        and .kind != "scout"
         and .kind != "captain"
         and .hold_kind != "captain"
         and (.pr_url // null) == null

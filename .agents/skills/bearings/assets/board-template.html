@@ -287,7 +287,7 @@ textarea.fm-input { min-height: 88px; resize: vertical; }
 .bb-limit { font-size: .875rem; font-weight: 600; color: var(--fm-warn); }
 .bb-limit[hidden] { display: none; }
 .bb-item.is-sent .bb-item__title { color: var(--fm-muted); }
-.bb-item.is-sent .bb-acts, .bb-item.is-sent .bb-noterow, .bb-item.is-sent .bb-opts, .bb-item.is-sent .bb-cardacts { display: none; }
+.bb-item.is-sent .bb-acts, .bb-item.is-sent .bb-noterow, .bb-item.is-sent .bb-opts, .bb-item.is-sent .bb-cardacts, .bb-item.is-sent .bb-prune { display: none; }
 /* decision cards keep native radios with the recommendation already chosen */
 .bb-opts { margin-top: 6px; }
 .bb-opts .fm-opts__legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
@@ -324,6 +324,8 @@ textarea.fm-input { min-height: 88px; resize: vertical; }
 .bb-dispatch[hidden] { display: none; }
 .bb-dispatch__count { flex: 1 1 auto; font-size: .875rem; font-weight: 600; color: var(--fm-muted); }
 .bb-dispatch .fm-btn[disabled] { opacity: .45; cursor: not-allowed; }
+.bb-prune { margin-top: 10px; }
+.bb-prune .bb-confirm { margin-bottom: 8px; }
 .bb-foot .fm-meta { font-family: var(--fm-font-mono); }
 @media (min-width: 720px) {
   .bb-acts { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
@@ -783,7 +785,8 @@ __FM_BEARINGS_BOARD_DATA__
   var blocking = data.inbox.filter(function (i) { return i.group === "blocking"; });
   var due = data.inbox.filter(function (i) { return i.group === "due"; })
     .slice().sort(function (a, b) { return a.due < b.due ? -1 : a.due > b.due ? 1 : 0; });
-  var waiting = data.inbox.length + data.captains_call.length;
+  var prune = data.prune && Array.isArray(data.prune.candidates) && data.prune.candidates.length ? data.prune : null;
+  var waiting = data.inbox.length + data.captains_call.length + (prune ? 1 : 0);
   document.getElementById("bb-inbox-count").textContent = String(waiting);
   document.getElementById("bb-headline").textContent =
     (waiting === 1 ? "1 thing waits on you. " : waiting + " things wait on you. ") +
@@ -820,6 +823,136 @@ __FM_BEARINGS_BOARD_DATA__
     rows.forEach(function (i) { renderInboxItem(ul, i); });
     section(inbox, "due-" + d, d === today ? "Due today" : "Due " + dayWords(d), rows.length, true).appendChild(ul);
   });
+
+  /* Weekly prune: one card proposing to drop stale fleet rows. Its three
+     answers are fixed here, never composed: drop-all, drop-picked with the
+     ticked rows' 1-based positions in the offered list, and keep. */
+  function renderPrune(list, p) {
+    var index = itemIndex++;
+    var n = p.candidates.length;
+    var meta = p.more ? metaLine(["+" + p.more + " more held back for next week"], null) : null;
+    var item = itemShell(list, p.key || "prune", index, p.title, p.ask, meta);
+    var pill = el("p", "bb-sent");
+    pill.setAttribute("role", "status");
+    pill.hidden = true;
+    var note, limit;
+    function send(action, label, values, detail) {
+      var noteText = note.value.trim();
+      var parts = [noteText];
+      Object.keys(values).forEach(function (k) { parts.push(values[k]); });
+      if (tooLong(limit, parts)) return;
+      queueAnswer(item, { item: p.title, action: label, detail: detail, note: noteText },
+        { schema: "fm-bearings-answer.v1", question: p.key, group: "prune",
+          action: action, effect: "prune", values: values, note: noteText });
+      markSent(item, pill, label);
+    }
+
+    var acts = el("div", "bb-acts");
+    acts.setAttribute("role", "group");
+    acts.setAttribute("aria-labelledby", "bb-item-" + index + "-title");
+    function act(value, label, hint, main) {
+      var b = el("button", "bb-act" + (main ? " bb-act--main" : ""));
+      b.type = "button";
+      b.setAttribute("data-action", value);
+      b.appendChild(el("span", "bb-act__l", label));
+      b.appendChild(el("span", "bb-act__h", hint));
+      acts.appendChild(b);
+      return b;
+    }
+    var allBtn = act("drop-all", "Drop all " + n, "Closes each one as dropped with a dated note; any can be reopened", true);
+    var pickBtn = act("pick", "Let me pick", "Tick the ones to drop below; the rest stay queued", false);
+    var keepBtn = act("keep", "Keep them", "Drops nothing and hides this card for a week", false);
+    item.appendChild(acts);
+
+    var box = el("div", "bb-prune");
+    var confirm = el("div", "bb-confirm");
+    confirm.hidden = true;
+    confirm.appendChild(el("p", null, "Drop all " + n + "? Each one closes as dropped with a dated note, and any can be reopened."));
+    var cBtns = el("div", "bb-confirm__btns");
+    var cSend = el("button", "fm-btn fm-btn--primary", "Drop " + n);
+    cSend.type = "button";
+    var cCancel = el("button", "fm-btn", "Cancel");
+    cCancel.type = "button";
+    cBtns.appendChild(cSend);
+    cBtns.appendChild(cCancel);
+    confirm.appendChild(cBtns);
+    box.appendChild(confirm);
+
+    var listBody = section(box, "prune-list", "See all " + n, null, false, true);
+    var ul = el("ul", "bb-list");
+    var picks = [];
+    var bar = el("div", "bb-dispatch");
+    var count = el("span", "bb-dispatch__count");
+    var dropBtn = el("button", "fm-btn fm-btn--primary", "Drop picked");
+    dropBtn.type = "button";
+    function picked() {
+      var at = [];
+      picks.forEach(function (c, i) { if (c.checked) at.push(i + 1); });
+      return at;
+    }
+    function refresh() {
+      var k = picked().length;
+      count.textContent = k ? k + " picked to drop" : "tick the ones to drop";
+      dropBtn.textContent = k ? "Drop " + k + " picked" : "Drop picked";
+      dropBtn.disabled = !k;
+    }
+    p.candidates.forEach(function (c) {
+      var t = cleanTitle(c.title);
+      var row = el("label", "bb-row bb-row--pick");
+      var box2 = el("input", "bb-pick");
+      box2.type = "checkbox";
+      box2.value = c.id;
+      box2.setAttribute("aria-label", "Drop " + t.title);
+      box2.addEventListener("change", refresh);
+      picks.push(box2);
+      row.appendChild(box2);
+      row.appendChild(el("span", "bb-row__t", t.title));
+      var m = [t.tag, c.repo, "last touched " + shortDay(c.touched)].filter(Boolean).join(" · ");
+      row.appendChild(el("span", "fm-meta bb-row__m", m));
+      var li = el("li");
+      li.appendChild(row);
+      ul.appendChild(li);
+    });
+    listBody.appendChild(ul);
+    bar.appendChild(count);
+    bar.appendChild(dropBtn);
+    listBody.appendChild(bar);
+    item.appendChild(box);
+    refresh();
+
+    allBtn.addEventListener("click", function () { confirm.hidden = false; cSend.focus(); });
+    cCancel.addEventListener("click", function () { confirm.hidden = true; });
+    cSend.addEventListener("click", function () { send("drop-all", "Drop all " + n, {}, n + " dropped"); });
+    pickBtn.addEventListener("click", function () {
+      var d = listBody.parentNode;
+      d.open = true;
+      if (picks[0]) picks[0].focus();
+    });
+    keepBtn.addEventListener("click", function () { send("keep", "Keep them", {}, ""); });
+    dropBtn.addEventListener("click", function () {
+      var at = picked();
+      if (!at.length) return;
+      var names = at.slice(0, 3).map(function (i) { return cleanTitle(p.candidates[i - 1].title).title; });
+      send("drop-picked", "Drop " + at.length + " picked", { picked: at.join(",") },
+        names.join("; ") + (at.length > 3 ? " +" + (at.length - 3) + " more" : ""));
+    });
+
+    note = noteRow(item, "bb-item-" + index, function () {
+      var noteText = note.value.trim();
+      if (tooLong(limit, [noteText])) return;
+      queueAnswer(item, { item: p.title, action: "", detail: "", note: noteText },
+        { schema: "fm-bearings-answer.v1", question: p.key, group: "prune",
+          action: "", values: {}, note: noteText });
+      markSent(item, pill, "Your note");
+    });
+    limit = limitLine(item);
+    item.appendChild(pill);
+  }
+  if (prune) {
+    var pl = el("ul", "bb-list");
+    renderPrune(pl, prune);
+    section(inbox, "prune", "Weekly prune", prune.candidates.length, true).appendChild(pl);
+  }
 
   /* Later: folded, never on the inbox count */
   function listRow(list, title, metaParts, right) {

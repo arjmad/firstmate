@@ -411,6 +411,86 @@ test_the_template_fails_closed_on_unreadable_data() {
   pass "the template says the board could not load rather than rendering an empty fleet"
 }
 
+# The full board plus the weekly prune card, for this home's current slot.
+prune_board() {  # <name> -> home with the full payload and a prune card built
+  local home slot
+  home=$(make_home "$1")
+  full_payload "$home/payload.json"
+  slot=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$ROOT/bin/fm-backlog-prune.sh" schedule | jq -r .slot)
+  jq --arg slot "$slot" '.prune = {slot:$slot, title:"Weekly backlog prune",
+      ask:"Three fleet items sat untouched for two weeks.", more:2,
+      candidates:[{id:"stale-one", title:"[2099-01-05] Old thing one", repo:"fleet", touched:"2099-01-05"},
+                  {id:"stale-two", title:"Old thing two", repo:"business", touched:"2099-01-09"},
+                  {id:"stale-three", title:"Old thing three", repo:null, touched:"2099-01-12"}]}' \
+    "$home/payload.json" > "$home/payload.tmp" && mv "$home/payload.tmp" "$home/payload.json"
+  build_board "$home" "$home/payload.json"
+  printf '%s\n' "$home"
+}
+
+prune_key() {  # <home>
+  sed -n '/<script id="bearings-data" type="application\/json">/,/<\/script>/p' "$1/.lavish/bearings-board.html" \
+    | sed '1d;$d' | jq -r '.prune.key'
+}
+
+test_the_prune_card_sits_in_the_inbox_with_its_three_answers() {
+  local home out
+  home=$(prune_board prune-layout)
+  out=$(render "$home")
+  printf '%s' "$out" | jq -e --arg soon "$SOON" '
+    .error == "" and .inboxCount == "7"
+      and ([.sections[] | select(.depth == 0) | .key]
+        == ["blocking", "decisions", "overdue", "due-" + $soon, "prune", "later", "underway", "landed", "queued"])
+      and ([.sections[] | select(.key == "prune")][0]
+        | .open and .count == "3" and (.items | length) == 1
+          and (.items[0] | .title == "Weekly backlog prune" and .meta == "+2 more held back for next week"
+            and ([.actions[] | {value, label, main}] == [
+              {value:"drop-all", label:"Drop all 3", main:true},
+              {value:"pick", label:"Let me pick", main:false},
+              {value:"keep", label:"Keep them", main:false}])))
+      and ([.sections[] | select(.key == "prune-list")][0]
+        | .depth == 1 and (.open | not) and .title == "See all 3"
+          and ([.rows[] | {title, meta, pick}] == [
+            {title:"Old thing one", meta:"2099-01-05 · fleet · last touched 5 Jan", pick:true},
+            {title:"Old thing two", meta:"business · last touched 9 Jan", pick:true},
+            {title:"Old thing three", meta:"last touched 12 Jan", pick:true}]))
+  ' >/dev/null || fail "the prune card did not render in the inbox with its three answers and list: $out"
+  pass "the weekly prune card sits in the inbox with Drop all, Let me pick, Keep them, and its folded list"
+}
+
+test_prune_answers_name_the_offer_and_what_to_drop() {
+  local home key out
+  home=$(prune_board prune-answers)
+  key=$(prune_key "$home")
+  out=$(render "$home" '[{"do":"action","key":"'"$key"'","value":"drop-all"}]')
+  printf '%s' "$out" | jq -e '(.prompts | length) == 0' >/dev/null \
+    || fail "Drop all sent before its confirm: $out"
+  out=$(render "$home" '[{"do":"action","key":"'"$key"'","value":"drop-all","note":"clean slate"},
+    {"do":"press","key":"'"$key"'","label":"Drop 3"}]')
+  printf '%s' "$out" | jq -e --arg key "$key" '
+    (.prompts | length) == 1
+      and (.prompts[0].data == {schema:"fm-bearings-answer.v1", question:$key, group:"prune",
+            action:"drop-all", effect:"prune", values:{}, note:"clean slate",
+            receipt:{item:"Weekly backlog prune", action:"Drop all 3", detail:"3 dropped", note:"clean slate"}})
+      and ([.sections[].items[] | select(.key == $key)][0] | .sent and .pill == "✓ Drop all 3")
+  ' >/dev/null || fail "a confirmed Drop all did not send one drop-all answer for the offer: $out"
+  out=$(render "$home" '[{"do":"press","key":"'"$key"'","label":"Drop picked"},
+    {"do":"action","key":"'"$key"'","value":"pick"},
+    {"do":"tick","key":"'"$key"'","picks":["stale-one","stale-three"]},
+    {"do":"press","key":"'"$key"'","label":"Drop 2 picked"}]')
+  printf '%s' "$out" | jq -e --arg key "$key" '
+    (.prompts | length) == 1
+      and (.prompts[0].data | .question == $key and .action == "drop-picked" and .effect == "prune"
+            and .values == {picked:"1,3"})
+      and (.prompts[0].line == "Weekly backlog prune → Drop 2 picked · Old thing one; Old thing three")
+      and ([.sections[] | select(.key == "prune-list")][0].open)
+  ' >/dev/null || fail "picking rows did not send their positions in the offered list: $out"
+  out=$(render "$home" '[{"do":"action","key":"'"$key"'","value":"keep"}]')
+  printf '%s' "$out" | jq -e --arg key "$key" '
+    (.prompts | length) == 1 and (.prompts[0].data | .question == $key and .action == "keep" and .values == {})
+  ' >/dev/null || fail "Keep them did not send a keep answer: $out"
+  pass "prune answers name the recorded offer: Drop all after a confirm, the ticked positions, or keep"
+}
+
 test_the_inbox_comes_first_in_folding_sections
 test_an_inbox_item_shows_its_own_actions_and_value_boxes
 test_an_action_carries_its_values_note_and_route
@@ -423,3 +503,5 @@ test_sections_remember_their_fold_per_viewer
 test_later_and_the_fleet_read_as_plain_words
 test_an_empty_board_says_so_in_each_place
 test_the_template_fails_closed_on_unreadable_data
+test_the_prune_card_sits_in_the_inbox_with_its_three_answers
+test_prune_answers_name_the_offer_and_what_to_drop

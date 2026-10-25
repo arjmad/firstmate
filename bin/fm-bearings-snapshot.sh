@@ -115,6 +115,7 @@ FM_BEARINGS_UNHEALTHY=${FM_BEARINGS_UNHEALTHY:-20}
 FM_BEARINGS_PR_REPOS=${FM_BEARINGS_PR_REPOS:-10}
 FM_BEARINGS_PR_LIMIT=${FM_BEARINGS_PR_LIMIT:-20}
 FM_BEARINGS_PR_TIMEOUT=${FM_BEARINGS_PR_TIMEOUT:-20}
+FM_BEARINGS_PRUNE=${FM_BEARINGS_PRUNE:-100}
 case "$FM_BEARINGS_PR_TIMEOUT" in ''|*[!0-9]*|0) FM_BEARINGS_PR_TIMEOUT=20 ;; esac
 validate_bound() {  # <name> <value>
   case "$2" in ''|*[!0-9]*|0) echo "fm-bearings-snapshot: $1 must be a positive integer" >&2; exit 2 ;; esac
@@ -130,6 +131,9 @@ validate_bound FM_BEARINGS_RECORDED_PRS "$FM_BEARINGS_RECORDED_PRS"
 validate_bound FM_BEARINGS_UNHEALTHY "$FM_BEARINGS_UNHEALTHY"
 validate_bound FM_BEARINGS_PR_REPOS "$FM_BEARINGS_PR_REPOS"
 validate_bound FM_BEARINGS_PR_LIMIT "$FM_BEARINGS_PR_LIMIT"
+validate_bound FM_BEARINGS_PRUNE "$FM_BEARINGS_PRUNE"
+PRUNE_AGE_DAYS=$(fm_backlog_prune_age_days) || {
+  echo "fm-bearings-snapshot: FM_BACKLOG_PRUNE_AGE_DAYS must be a positive whole number of days" >&2; exit 2; }
 
 usage() {
   cat <<'EOF'
@@ -180,6 +184,14 @@ in_flight waits_on is "captain" only when the worker's still-open blocker or
   falls back to kind=captain, and omitted[] counts those rows so the gap stays
   visible, apart from the public-followup obligations tasks-axi files itself,
   which are always the fleet's.
+  board.prune is the weekly backlog prune card's input: due (its weekly
+  slot is open and a candidate exists), slot, open, snoozed_until, age_days,
+  the candidates bin/fm-backlog-prune-lib.sh selects (oldest touch first, each
+  with its full title, repo, kind, filed and touched dates and age_days),
+  bounded by FM_BEARINGS_PRUNE (default 100), and more, the count beyond it.
+  bin/fm-backlog-prune.sh owns the slot; FM_BACKLOG_PRUNE_AGE_DAYS sets the
+  age (default 14). A slot that cannot be read adds error and is never due,
+  so it hides only the card.
 Opt-in surfaces: --fields bodies|paths|actions|endpoints|board, --all-in-flight,
   --all-decisions (all open decisions and captain holds in the bounded snapshot),
   --all-secondmates, --all-landed, --all-reports, --all-queued, --all-recorded-prs,
@@ -368,6 +380,24 @@ case "$BEARINGS_TODAY" in
   [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
   *) BEARINGS_TODAY=$(date -u +%Y-%m-%d) ;;
 esac
+
+# The weekly prune card's slot, read from its owner only for the board, on
+# the snapshot's own clock. A slot that cannot be read hides only the card:
+# board.prune then says why in `error` and is never due.
+PRUNE_SCHEDULE=null
+case ",$FIELDS," in
+  *,board,*)
+    PRUNE_EPOCH=$(jq -nr --arg now "$NOW" \
+      'try ($now | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | floor) catch empty')
+    if [ -z "$PRUNE_EPOCH" ]; then
+      PRUNE_SCHEDULE=$(jq -n --arg now "$NOW" '{open:false, slot:null, snoozed_until:null,
+        error:("the snapshot time is not a UTC timestamp: " + $now)}')
+    elif ! PRUNE_SCHEDULE=$(FM_PRUNE_NOW="$PRUNE_EPOCH" "$SCRIPT_DIR/fm-backlog-prune.sh" schedule 2>&1); then
+      PRUNE_SCHEDULE=$(jq -n --arg why "$PRUNE_SCHEDULE" '{open:false, slot:null, snoozed_until:null,
+        error:("the weekly prune schedule is unreadable: " + ($why | gsub("\\s+"; " ")))}')
+    fi
+    ;;
+esac
 MODEL=$(printf '%s' "$SNAP" | jq \
   --arg home "$HOME_LABEL" \
   --arg now "$NOW" \
@@ -397,6 +427,9 @@ MODEL=$(printf '%s' "$SNAP" | jq \
   --argjson pr_rows_capped "$PR_ROWS_CAPPED" \
   --argjson pr_rows_min_total "$PR_ROWS_MIN_TOTAL" \
   --argjson return_catchup "$RETURN_CATCHUP" \
+  --argjson prune_schedule "$PRUNE_SCHEDULE" \
+  --argjson prune_age "$PRUNE_AGE_DAYS" \
+  --argjson prune_n "$FM_BEARINGS_PRUNE" \
   --argjson candidate_prs "$CANDIDATE_PRS" "$FM_LANDED_JQ_DEFS"'
   def trunc($n): if . == null then null else
     (tostring | gsub("\\s+"; " ") | if (length > $n) then (.[:$n] + "…") else . end) end;
@@ -700,7 +733,14 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                      hold_reason:(.hold_reason // null), filed:(.since // null),
                      blocked_by:(.unresolved_blocker_ids // []), owner, owned_by:$owned_by,
                      wait:$wait, ready:($wait == "none")} ],
-        titles: [ $in_flight_all[] | {id, name:(.full_name // .name)} ]}} else {} end)
+        titles: [ $in_flight_all[] | {id, name:(.full_name // .name)} ],
+        prune: (prune_candidates($snap.backlog.records; $today; $prune_age;
+                  [$snap.tasks[] | select(.kind != "secondmate") | .id]) as $c
+                | {due:($prune_schedule.open and ($c | length) > 0), slot:$prune_schedule.slot,
+                   open:$prune_schedule.open, snoozed_until:$prune_schedule.snoozed_until,
+                   age_days:$prune_age, candidates:$c[:$prune_n],
+                   more:([($c | length) - $prune_n, 0] | max)}
+                  + (if $prune_schedule.error then {error:$prune_schedule.error} else {} end))}} else {} end)
   | . + (if $f_paths then {paths:[ $snap.tasks[] | {id, worktree:(.paths.worktree.path // "-"), home:(.paths.home.path // "-"), status:.paths.status_log.path, report:.paths.report.path} ]} else {} end)
   | . + (if $f_actions then {actions:[ $snap.tasks[] | {id, watch:(.actions.watch // .actions.send // "-"), steer:(.actions.steer // .actions.send // "-")} ]} else {} end)
   | . + (if $f_endpoints then {endpoints:[ $snap.tasks[] | {id, backend, target:(.endpoint.target // "-"), exists:.endpoint.exists, agent:.endpoint.agent_alive} ]} else {} end)
