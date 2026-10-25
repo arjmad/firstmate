@@ -25,6 +25,7 @@
 #     [--kind reversible|arjun-only] [--default <option>]
 #   fm-captain-hold.sh release-due
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
+#   fm-captain-hold.sh defer <task-id> --until YYYY-MM-DD --decision-file <path>
 #   fm-captain-hold.sh answers [<legacy-origin> | --any-origin] --source <provenance>   (keyed answers on stdin)
 #   fm-captain-hold.sh reconcile-requests --source-id <source-id> --source <provenance>   (task ids on stdin)
 #   fm-captain-hold.sh bind <source-id> [<legacy-origin> | --any-origin]
@@ -108,6 +109,18 @@
 # still answerable: the surviving hold annotations, not tasks-axi's live
 # `held:` bit, prove the captain owned it.
 #
+# `defer` records the captain's dated deferral of an open captain hold: the
+# exact words of the decision file go on a `Captain deferred:` body block (the
+# previous body archived), and the task is re-held with `hold --until` that
+# date, keeping its kind (a reversible default is dropped, because the captain
+# has engaged) and its reason. The re-hold comes first and the words are
+# recorded once it stands, so a call closed in between never carries a deferral
+# it did not get. A date may be today in the captain's own time zone, so only a
+# date before yesterday in UTC (FM_CAPTAIN_HOLD_NOW overrides now) is refused.
+# A deferral already recorded is a no-op whatever its date - when it is applied,
+# or when a newer deferral has replaced it, so a replayed older answer never
+# rolls the date back. It never closes or releases anything.
+#
 # ONE KEYED-ANSWER INTAKE, FED BY EVERY CHANNEL.
 # "A keyed answer resolves its matching captain-held task" is a single
 # capability, owned here and nowhere else. `answers` reads
@@ -116,7 +129,9 @@
 # identically no matter which channel the answer arrived on. The key IS the
 # task id - no identity arithmetic. The optional fourth field selects the close:
 # empty or `done` completes the task, `release` lifts the hold so held work
-# resumes; anything else is skipped. A key that names no task, a task that is
+# resumes, and `until=YYYY-MM-DD` is the captain's deferral, recorded through
+# `defer` above (reported `deferred:`) so a "later" answer never closes the
+# call; anything else is skipped. A key that names no task, a task that is
 # not held for the captain, or a task already closed is reported as `skipped:`
 # and feeds nothing. A replayed delivery whose answer digest and requested
 # close mode both match the newest record is reported `closed:` and is a no-op;
@@ -1422,6 +1437,100 @@ command_answer() {
   fail "task $id is not held for the captain; hold it first or name the right task"
 }
 
+command_defer() {
+  local id=${1:-} until='' decision_file='' show decoded hold_kind hold_until reason
+  local earliest stamp marker latest tmp kind_flag='' stamp_epoch
+  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --until) shift; until=${1:-} ;;
+      --decision-file) shift; decision_file=${1:-} ;;
+      *) usage >&2; exit 2 ;;
+    esac
+    shift
+  done
+  validate_slug task-id "$id"
+  case "$until" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
+    *) fail "--until must be a YYYY-MM-DD date: $until" ;;
+  esac
+  [ -n "$decision_file" ] || fail "--decision-file is required; a deferral records the captain's words"
+  load_decision "$decision_file"
+  stamp=${FM_CAPTAIN_HOLD_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+  stamp_epoch=$(fm_utc_iso_to_epoch "$stamp") || fail "cannot read the current time: $stamp"
+  earliest=$(epoch_to_utc_iso $((stamp_epoch - 86400)))
+  earliest=${earliest%%T*}
+  marker="Captain deferral: until $until | decision digest: $DECISION_DIGEST"
+
+  # Decide under the task lock whether this deferral is new, already applied,
+  # or superseded by a newer one; only a new one checks its date.
+  acquire_task_control_lock "$id"
+  require_tasks_axi
+  task_show_or_fail "$id" "task $id is absent from this home's configured backlog (data directory $DATA)"
+  [ "$(show_field "$show" state)" != "done" ] || fail "task $id is already closed"
+  hold_kind=$(show_field_value "$show" hold_kind)
+  hold_until=$(show_field_value "$show" hold_until)
+  [ "$hold_kind" = captain ] || fail "task $id is not held for the captain"
+  decoded=$(decode_shown_value "$(show_field "$show" body)") \
+    || fail "could not decode the existing body for $id"
+  latest=$(printf '%s\n' "$decoded" | grep '^Captain deferral: until ' | tail -1)
+  case "$decoded" in
+    *"$marker"*)
+      # Recorded before: a no-op when it is applied or a newer deferral has
+      # replaced it, so a replayed older answer never rolls the date back.
+      if [ "$latest" != "$marker" ] || [ "$hold_until" = "$until" ]; then
+        printf 'deferred: %s until %s\n' "$id" "$until"
+        return 0
+      fi
+      ;;
+    *)
+      [[ ! "$until" < "$earliest" ]] \
+        || fail "the deferral date $until has already passed (earliest accepted: $earliest)"
+      ;;
+  esac
+  reason=$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")
+  if parse_hold_kind_prefix "$reason"; then
+    kind_flag=$HOLD_DECISION_KIND
+    reason=${reason#\[*\] }
+  fi
+  [ -n "$reason" ] || reason="captain decision pending"
+  release_task_control_lock
+
+  # Re-hold first, through the owner that takes its own lock, and record the
+  # captain's words only once the hold stands, so a call closed in between is
+  # never left carrying a deferral it did not get.
+  if [ -n "$kind_flag" ]; then
+    "$0" hold "$id" --reason "$reason" --kind "$kind_flag" --until "$until" >/dev/null \
+      || fail "could not re-hold $id until $until"
+  else
+    "$0" hold "$id" --reason "$reason" --until "$until" >/dev/null \
+      || fail "could not re-hold $id until $until"
+  fi
+  acquire_task_control_lock "$id"
+  task_show_or_fail "$id" "task $id disappeared while deferring it"
+  [ "$(show_field "$show" state)" != "done" ] || fail "task $id was closed while it was being deferred"
+  decoded=$(decode_shown_value "$(show_field "$show" body)") \
+    || fail "could not decode the existing body for $id"
+  case "$decoded" in
+    *"$marker"*) : ;;
+    *)
+      tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-defer.XXXXXX") \
+        || fail "cannot stage the deferral for $id"
+      if ! printf '%s\n\nCaptain deferred: %s\n%s\n%s\n' "$decoded" "$stamp" "$marker" "$DECISION_TEXT" > "$tmp"; then
+        rm -f -- "$tmp"
+        fail "cannot stage the deferral for $id"
+      fi
+      if ! tasks_axi update "$id" --body-file "$tmp" --archive-body >/dev/null; then
+        rm -f -- "$tmp"
+        fail "could not record the deferral on $id"
+      fi
+      rm -f -- "$tmp"
+      ;;
+  esac
+  printf 'deferred: %s until %s\n' "$id" "$until"
+}
+
 # Every open row this home holds for the captain, one id per line. The listing's
 # first field is the slug id and its last is the requested hold_kind, so a
 # quoted title holding commas cannot shift either.
@@ -1595,7 +1704,7 @@ sanitize_reconcile_provenance() {
 command_answers() {
   local origin='' source='' row rest key answer label mode id show state hold_kind body digest legacy_digest legacy_key
   local recorded_digest recorded_mode occurrence tmp err closed=0 skipped=0 reason release_flag tab=$'\t'
-  local resolve_rc
+  local resolve_rc defer_until deferred=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --source) shift; source=${1:-} ;;
@@ -1637,9 +1746,11 @@ command_answers() {
       continue
     fi
     release_flag=''
+    defer_until=''
     case "${mode:-}" in
       ''|done) : ;;
       release) release_flag=--release ;;
+      until=[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) defer_until=${mode#until=} ;;
       *)
         printf 'skipped: %s (unknown close mode %s)\n' "$key" "$(sanitize_field "$mode")"
         skipped=$((skipped + 1))
@@ -1686,6 +1797,20 @@ command_answers() {
     state=$(show_field "$show" state)
     hold_kind=$(show_field_value "$show" hold_kind)
     body=$(show_field "$show" body)
+    if [ -n "$defer_until" ]; then
+      if [ "$state" = "done" ]; then
+        printf 'skipped: %s (already closed)\n' "$id"
+        skipped=$((skipped + 1))
+      elif "$0" defer "$id" --until "$defer_until" --decision-file "$tmp" </dev/null >/dev/null 2>"$err"; then
+        printf 'deferred: %s until %s\n' "$id" "$defer_until"
+        deferred=$((deferred + 1))
+      else
+        reason=$(tr -d '\n' < "$err" | sed 's/^fm-captain-hold: //')
+        printf 'skipped: %s (%s)\n' "$id" "$reason"
+        skipped=$((skipped + 1))
+      fi
+      continue
+    fi
     recorded_digest=$(recorded_decision_digest "$body" || true)
     recorded_mode=$(recorded_resolution_mode "$body" || true)
     if body_has_resolution_record "$body" \
@@ -1731,7 +1856,7 @@ command_answers() {
     fi
   done
   rm -f -- "$tmp" "$err"
-  printf 'answers: closed=%s skipped=%s\n' "$closed" "$skipped"
+  printf 'answers: closed=%s deferred=%s skipped=%s\n' "$closed" "$deferred" "$skipped"
   [ "$skipped" -eq 0 ]
 }
 
@@ -2330,6 +2455,7 @@ case "${1:-}" in
   release-due) shift; command_release_due "$@" ;;
   answer) shift; command_answer "$@" ;;
   answers) shift; command_answers "$@" ;;
+  defer) shift; command_defer "$@" ;;
   reconcile-requests) shift; command_reconcile_requests "$@" ;;
   bind) shift; command_bind "$@" ;;
   unbind) shift; command_unbind "$@" ;;

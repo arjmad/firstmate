@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // fm-lavish-patch.mjs - apply, check, or remove firstmate's local overlay on
 // lavish-axi's browser chrome: the fleet-html house dark colours for Lavish's own
-// bar, panel, buttons and inputs, and a collapsible, drag-resizable desktop
-// Conversation panel. The overlay is bin/lavish-patch/chrome.css and
+// bar, panel, buttons and inputs, a collapsible, drag-resizable desktop
+// Conversation panel, and one-line receipts for bearings board answers in that
+// panel. The overlay is bin/lavish-patch/chrome.css and
 // bin/lavish-patch/chrome-client.js; docs/fork-decisions.md records why it exists
 // and which upstream pull requests it tracks.
 //
@@ -56,7 +57,7 @@ import { chmodSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const REVISION = 1;
+const REVISION = 2;
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OVERLAY_DIR = join(HERE, "lavish-patch");
 const BEGIN = "fm-lavish-patch:begin";

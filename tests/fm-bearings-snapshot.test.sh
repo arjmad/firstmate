@@ -2104,6 +2104,33 @@ $(printf 'mate-landed-%02d' "$i")"
 # and an open blocker; it must never be converted into a queued `gates` record.
 # The return-catch-up owner prevents this state from reaching ordinary rendering
 # during an away return, while this test pins Bearings' own projection boundary.
+# A worker blocked on the captain is told apart by its structured
+# "[on=captain]" status tag, never by its words, and the board surface carries
+# every queued row with its full title, its wait, and whether it is ready.
+test_captain_wait_and_board_rows_come_from_structured_fields() {
+  local home fakebin json
+  home=$(make_home captain-wait); write_fixture "$home"
+  printf 'blocked [key=open-tabs] [on=captain] [at=1783783800]: open the three sites\n' > "$home/state/ship-task.status"
+  record_claude_state "$home/state" ship-task idle
+  printf 'blocked [key=ci]: waiting on CI, which the captain asked about\n' > "$home/state/external-wait.status"
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    ([.in_flight[] | select(.id == "ship-task")][0] | .waits_on == "captain" and .since == "2026-07-11T15:30:00Z")
+      and ([.in_flight[] | select(.id == "external-wait")][0] | .waits_on == null and .since == null)
+      and (has("board") | not)
+      and ([.omitted[] | select(.reveal == "--fields board")] | length) == 1
+  ' >/dev/null || fail "the captain wait was not read from the structured tag alone: $json"
+  json=$(run "$home" "$fakebin" --json --fields board)
+  printf '%s' "$json" | jq -e '
+    ([.board.queued[] | select(.id == "live-gate")][0] | .wait == "work" and .ready == false and .blocked_by == ["ship-task"])
+      and ([.board.queued[] | select(.id == "dead-gate")][0] | .wait == "none" and .ready == true
+           and .title == "Old conditional work")
+      and ([.board.titles[] | select(.id == "ship-task")][0].name == "Ship the thing")
+  ' >/dev/null || fail "the board surface did not carry full rows with their wait: $json"
+  pass "a captain wait comes from the [on=captain] tag, and --fields board carries full queued rows"
+}
+
 test_live_blocker_is_not_charted_queue_work() {
   local home fakebin json
   home=$(make_home live-blocker); write_fixture "$home"
@@ -3391,6 +3418,7 @@ test_landed_default_handles_no_landed_items
 test_all_landed_keeps_complete_global_order
 test_landed_bounded_and_disclosed
 test_live_blocker_is_not_charted_queue_work
+test_captain_wait_and_board_rows_come_from_structured_fields
 test_captains_call_anti_leak
 test_main_orphan_in_flight_is_disclosed_not_invented
 test_main_unstructured_current_is_disclosed_with_structured_sibling

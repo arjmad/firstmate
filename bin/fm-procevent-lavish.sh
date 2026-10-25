@@ -31,7 +31,10 @@
 #            selector, tag, and text. A non-choice freeform comment (`prompt`)
 #            is printed as its own field even when a selector is also present
 #            and even when that comment matches the element text, so typed
-#            words are never dropped. Choice Context data is not a comment.
+#            words are never dropped. Choice Context data is not a comment;
+#            a choice carrying fm-bearings-answer.v1 context instead prints a
+#            BOARD ANSWER block (question, pick, effect, values, note) and the
+#            route it takes, so a handler acts on structured fields.
 #            Captain-supplied body lines are visibly prefixed so they cannot
 #            forge structural labels. Empty message and annotation sections
 #            are reported explicitly.
@@ -118,6 +121,21 @@
 #
 # Only rows tagged `choice` are read. A freeform captain message is prose that may
 # contain anything, and must never be able to forge a decision key.
+#
+# A bearings board answer (fm-bearings-answer.v1) feeds the intake only when
+# it closes or defers a captain hold, and never on the captain's words alone:
+#   - a decision card's picked option (`selection`) feeds as before;
+#   - an inbox item's action (`action`) feeds only for effect `close` (its
+#     card-declared mode, done by default) or `hold-until` with a valid
+#     `until` (mode `until=<YYYY-MM-DD>`), and never for a `blocking` item,
+#     which is a worker rather than a hold; a `remind-at` names a time of day
+#     the backlog cannot hold, so firstmate schedules it;
+#   - a later pick on the same item replaces an earlier one, including one
+#     firstmate routes or one whose date is unusable, so a superseded close
+#     or deferral is never fed;
+#   - an empty selection or action with a note is a note-only answer: the
+#     captain's own instruction for firstmate to read, never a closure.
+# Every other effect is firstmate's to route (bearings skill), from `read`.
 # `answers` and `reconciles` use the same parser as `read` for either emission
 # form. Malformed content or a declared/parsed count mismatch prints a diagnostic
 # to stderr and exits 3, even if valid choices were already printed to stdout;
@@ -923,18 +941,52 @@ cmd_choice_rows() {
       my $ctx = $1;
       my $data = eval { decode_json($ctx) };
       next unless ref($data) eq "HASH";
-      my ($key, $selected, $note, $answer, $legacy);
+      my ($key, $selected, $note, $answer, $legacy, $item_mode);
       if (defined($data->{schema}) && !ref($data->{schema})
           && $data->{schema} eq "fm-bearings-answer.v1") {
         $key = $data->{question};
         $selected = $data->{selection};
         $note = $data->{note};
+        $selected = exists $data->{action} ? "" : $selected;
         next if !defined($key) || ref($key) || !defined($selected) || ref($selected)
           || !defined($note) || ref($note);
-        next unless $selected eq "" || $selected =~ /\A[A-Za-z0-9._-]{1,128}\z/;
         next unless length($note) <= 512;
-        next unless length($selected) || length($note);
-        $answer = length($selected) ? $selected : $note;
+        if (exists $data->{action}) {
+          # An inbox item answer feeds the intake only when it closes or
+          # defers a captain hold (header).
+          my $action = $data->{action};
+          my $effect = $data->{effect};
+          next if !defined($action) || ref($action) || !length($action);
+          next unless $action =~ /\A[A-Za-z0-9._-]{1,128}\z/;
+          # A later pick on the same item replaces an earlier one even when
+          # firstmate, not the intake, routes it, so a superseded close or
+          # deferral is never fed.
+          my $supersede = sub {
+            return unless $key =~ /\A[A-Za-z0-9._-]{1,128}\z/ && defined $seen{$key};
+            $choices[$seen{$key}] = undef;
+            delete $seen{$key};
+          };
+          if (defined($data->{group}) && !ref($data->{group}) && $data->{group} eq "blocking") {
+            $supersede->();
+            next;
+          }
+          if (!defined($effect) || ref($effect)) { $supersede->(); next; }
+          if ($effect eq "hold-until") {
+            my $until = $data->{until};
+            if (!defined($until) || ref($until) || $until !~ /\A\d{4}-\d{2}-\d{2}\z/) {
+              $supersede->();
+              next;
+            }
+            $item_mode = "until=$until";
+          } elsif ($effect ne "close") {
+            $supersede->();
+            next;
+          }
+          $selected = $action;
+        } else {
+          next unless $selected =~ /\A[A-Za-z0-9._-]{1,128}\z/;
+        }
+        $answer = $selected;
         $legacy = 0;
       # Time-limited compatibility for captures from pre-change boards; remove
       # once no board carrying the old question/answer context can remain armed.
@@ -958,6 +1010,7 @@ cmd_choice_rows() {
           || ($data->{close} ne "done" && $data->{close} ne "release");
         $mode = $data->{close};
       }
+      $mode = $item_mode if defined $item_mode;
       my $label = defined $f{text} ? $f{text} : "";
       s/[\x00-\x1f\x7f]/ /g for ($answer, $note, $label);
       $label = substr($label, 0, 512);
@@ -1008,7 +1061,7 @@ cmd_read() {
   [ -f "$file" ] && [ ! -L "$file" ] || die "result file does not exist: $file"
   lifecycle=$(cmd_classify "$file")
   session_ended=$(session_field "$file" session_ended)
-  perl -e "$(lavish_result_parser)"'
+  perl -MJSON::PP -e "$(lavish_result_parser)"'
     use strict; use warnings;
     my ($path, $lifecycle, $session_ended) = @ARGV;
     my ($form, $want, $items, $malformed) = lavish_result($path, "prompts|feedback");
@@ -1035,6 +1088,56 @@ cmd_read() {
       pop @lines if @lines && $lines[-1] eq "";
       return if !@lines || (@lines == 1 && $lines[0] eq "");
       print "| $_\n" for @lines;
+    }
+    # A bearings board answer, read from its own versioned context. Every
+    # captain-supplied value is a prefixed body line; the route line is the
+    # adapter classification and matches what the answers command feeds.
+    sub emit_board_answer {
+      my ($prompt) = @_;
+      return unless defined $prompt && $prompt =~ /Context data:\s*(\{.*\})/s;
+      my $data = eval { decode_json($1) };
+      return unless ref($data) eq "HASH" && defined($data->{schema}) && !ref($data->{schema})
+        && $data->{schema} eq "fm-bearings-answer.v1";
+      my $str = sub { my $v = shift; defined($v) && !ref($v) ? $v : "" };
+      my $item = exists $data->{action};
+      my $pick = $item ? $str->($data->{action}) : $str->($data->{selection});
+      my $effect = $str->($data->{effect});
+      my $route;
+      if (!length $pick) {
+        $route = "captain instruction: his note alone, never a closure, release or re-hold";
+      } elsif (!$item) {
+        $route = $pick eq "reconcile" ? "reconcile request" : "keyed intake (records the pick)";
+      } elsif ($str->($data->{group}) eq "blocking") {
+        $route = "firstmate: $effect for the blocked worker";
+      } elsif ($effect eq "close") {
+        $route = "keyed intake (records the pick and closes)";
+      } elsif ($effect eq "hold-until" && $str->($data->{until}) =~ /\A\d{4}-\d{2}-\d{2}\z/) {
+        $route = "keyed intake (re-holds until the date)";
+      } elsif ($effect eq "hold-until") {
+        $route = "firstmate: hold-until with no usable date; nothing was fed";
+      } elsif ($effect eq "remind-at") {
+        $route = "firstmate: remind-at (defer to that day and bring it back at that time)";
+      } else {
+        $route = "firstmate: $effect";
+      }
+      print "BOARD ANSWER\n";
+      print "question:\n"; emit_body($str->($data->{question}));
+      print "kind: ", ($item ? "inbox item" : "card"), "\n";
+      print "pick:\n"; emit_body(length $pick ? $pick : "(note only)");
+      if ($item) {
+        print "effect:\n"; emit_body($effect);
+        print "group:\n"; emit_body($str->($data->{group}));
+        for my $k (qw(until at brief close)) {
+          next unless defined $data->{$k} && !ref $data->{$k};
+          print "$k:\n"; emit_body($data->{$k});
+        }
+        my $values = ref($data->{values}) eq "HASH" ? $data->{values} : {};
+        print "values:\n";
+        emit_body(join("\n", map { "$_=" . $str->($values->{$_}) } sort keys %$values));
+      }
+      print "note:\n"; emit_body($str->($data->{note}));
+      print "route: $route\n";
+      print "END BOARD ANSWER\n";
     }
     my $ended = $session_ended =~ /^(?:true|True|TRUE)$/;
     if (@messages) {
@@ -1083,6 +1186,7 @@ cmd_read() {
           print "prompt:\n";
           emit_body($comment);
         }
+        emit_board_answer($comment) if $tag eq "choice";
       }
       print "END ANNOTATIONS\n";
     } else {

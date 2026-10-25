@@ -2258,6 +2258,68 @@ test_legacy_identities_keep_working() {
 # the closed task is asserted here end to end - capture, the wake that tells
 # firstmate to look, and the recorded answer - because each of those was intact
 # on its own while the chain as a whole delivered nothing.
+# A board "later" answer is a dated deferral, never a closure (backlog item
+# fm-board-later-closes-hold): the keyed intake re-holds the task --until the
+# date, keeps its kind, records the captain's words, and an exact replay is a
+# no-op even after its date; a date before yesterday (UTC, which still allows the
+# captain's own today) and a closed task are refused visibly.
+test_keyed_deferral_re_holds_instead_of_closing() {
+  local home out show reason
+  home=$(make_home keyed-deferral)
+  FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" hold sample-later-call \
+    --title "Plan the sample send" --reason "pick the send plan" --repo sample \
+    --kind reversible --default plan-a >/dev/null \
+    || fail "could not register the deferrable captain call"
+  run_captain "$home" hold sample-closed-call --title "Closed call" \
+    --reason "already answered" --repo sample >/dev/null \
+    || fail "could not register the call to close"
+  tasks_in "$home" "done" sample-closed-call >/dev/null || fail "could not close the closed call"
+
+  out=$(printf 'sample-later-call\tthu\tPlan the sample send → Push to Thu\tuntil=2026-07-16\n' \
+    | FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" answers --source "the board sequence 3") \
+    || fail "the keyed deferral was refused: $out"
+  assert_contains "$out" "deferred: sample-later-call until 2026-07-16" "the intake did not report the deferral"
+  assert_contains "$out" "answers: closed=0 deferred=1 skipped=0" "the intake miscounted the deferral"
+  show=$(tasks_in "$home" show sample-later-call --full)
+  assert_contains "$show" "state: queued" "a deferral changed the task state: $show"
+  assert_contains "$show" "hold_kind: captain" "a deferral lifted the captain hold: $show"
+  assert_contains "$show" "hold_until: 2026-07-16" "a deferral did not record its date: $show"
+  reason=$(printf '%s\n' "$show" | sed -n 's/^  hold_reason: "\(.*\)"$/\1/p')
+  reason=$(bash -c '. "$1/bin/fm-hold-reason-lib.sh"; fm_hold_reason_decode "$2"' _ "$ROOT" "$reason")
+  [ "$reason" = "[reversible] pick the send plan" ] \
+    || fail "a deferral lost the hold kind or reason, or kept the overridden default: $reason"
+  assert_contains "$show" "Push to Thu" "a deferral did not record the captain's words: $show"
+  assert_not_contains "$show" "Resolution recorded" "a deferral was recorded as a resolution: $show"
+
+  out=$(printf 'sample-later-call\tthu\tPlan the sample send → Push to Thu\tuntil=2026-07-16\n' \
+    | FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" answers --source "the board sequence 3") \
+    || fail "an exact deferral replay was refused: $out"
+  assert_contains "$out" "deferred: sample-later-call until 2026-07-16" "a replay did not report the deferral"
+  [ "$(tasks_in "$home" show sample-later-call --full | grep -c 'Captain deferred:')" = 1 ] \
+    || fail "an exact replay recorded the deferral twice"
+  out=$(printf 'sample-later-call\tthu\tPlan the sample send → Push to Thu\tuntil=2026-07-16\n' \
+    | FM_CAPTAIN_HOLD_NOW=2026-07-20T12:00:00Z run_captain "$home" answers --source "the board sequence 3") \
+    || fail "a deferral replayed after its date was refused: $out"
+  assert_contains "$out" "deferred: sample-later-call until 2026-07-16" "a late replay did not stay a no-op"
+  out=$(printf 'sample-later-call\tnext\tPlan the sample send → Next week\tuntil=2026-07-21\n' \
+    | FM_CAPTAIN_HOLD_NOW=2026-07-15T12:00:00Z run_captain "$home" answers --source "the board sequence 5") \
+    || fail "a newer deferral was refused: $out"
+  out=$(printf 'sample-later-call\tthu\tPlan the sample send → Push to Thu\tuntil=2026-07-16\n' \
+    | FM_CAPTAIN_HOLD_NOW=2026-07-15T12:00:00Z run_captain "$home" answers --source "the board sequence 3") \
+    || fail "a replayed older deferral was refused: $out"
+  assert_contains "$(tasks_in "$home" show sample-later-call --full)" "hold_until: 2026-07-21" \
+    "a replayed older deferral rolled a newer date back"
+
+  if out=$(printf 'sample-later-call\tlast week\tlabel\tuntil=2026-07-12\nsample-closed-call\tthu\tlabel\tuntil=2026-07-20\n' \
+    | FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" answers --source "the board sequence 4"); then
+    fail "the intake accepted a past deferral or a closed task: $out"
+  fi
+  assert_contains "$out" "skipped: sample-later-call (the deferral date 2026-07-12 has already passed (earliest accepted: 2026-07-13))" \
+    "a past deferral date was not refused by name: $out"
+  assert_contains "$out" "skipped: sample-closed-call (already closed)" "a closed task was deferred: $out"
+  pass "a keyed deferral re-holds until its date, keeps the kind and the words, and never closes"
+}
+
 test_board_answer_reaches_the_keyed_answer_intake() {
   local home sid stub out queue show
   home=$(make_home board-channel)
@@ -4708,6 +4770,7 @@ test_reconcile_outcomes_retry_partial_failures_once
 test_unbound_source_closes_no_hold
 test_legacy_identities_keep_working
 test_board_answer_reaches_the_keyed_answer_intake
+test_keyed_deferral_re_holds_instead_of_closing
 test_chat_channel_feeds_the_same_keyed_answer_intake
 test_origin_slug_validation_precedes_path_construction
 test_status_resolution_over_an_open_hold_is_signalled

@@ -8,7 +8,7 @@
 # agent never authors board UI at invocation time.
 #
 # Usage:
-#   fm-bearings-board.sh build <data.json>
+#   fm-bearings-board.sh build [--if-changed] <data.json>
 #   fm-bearings-board.sh path
 #
 # build      Validate the payload, drop the Captain's Call cards whose subject
@@ -33,6 +33,16 @@
 #            Every dropped card is named on stderr as a `dropped-landed-card:`
 #            line, so a rebuild states what it removed instead of quietly
 #            shrinking Captain's Call.
+#            With --if-changed, a build whose effective payload (after the
+#            steps above, ignoring `generated`) matches the last published one,
+#            while its session is still listed open and its source still has a
+#            live listener, prints `board: <path>` and `unchanged: <path>` and
+#            touches nothing, so a heartbeat refresh never reloads a board the
+#            captain may be typing on; an ended session or a dead listener gets
+#            the full build instead, and so does a new local day, because the
+#            page groups due work against its own today. The fingerprint covers the template too and is
+#            kept beside the board as bearings-board.sha256, written only once
+#            a build has proved its listener.
 # path       Print the stable board path for this home.
 #
 # A LIVE SESSION IS PROVED, NEVER ASSUMED. `lavish-axi <file>` exits 0 even
@@ -80,6 +90,26 @@
 # recommendation. The refusal names each weak card's key and what it lacks, so the
 # composer fixes the payload rather than the board shipping a Done-only card.
 #
+# THE LAYOUT IS INBOX FIRST. Beside `captains_call` (the Decisions group), the
+# payload carries:
+#   inbox[]   everything else waiting on the captain, each {key, group, title,
+#             ask, repo, inputs[], actions[]} plus optional since, pr_url and
+#             close. group `blocking` is a worker blocked on him (key = that
+#             task id); group `due` is a captain hold due on `due` (YYYY-MM-DD,
+#             key = the held task id). inputs[] are value boxes {name, label,
+#             type number|date|datetime-local|text, default?}; actions[] are
+#             two or three {value, label, hint, effect, reads[]} plus until, at
+#             or brief as the effect needs. inbox_item_gaps below owns the
+#             effect set and every refusal, named per key.
+#   later[]   captain rows not due this week, each {id, title, repo, group
+#             dated|held|unheld, back?}; a dated row needs its `back` date.
+# An Underway row may carry progress {done, total, step?} from the worker's own
+# step list (bin/fm-progress.sh), and every Recently Landed row carries
+# `outcome`, the short result sentence the board shows instead of the title.
+# A Charted Next row may carry `wait` (date, outside, work, none) and
+# `wait_date`, which the board groups its queue by; `dispatchable` marks the
+# rows ready to start now.
+#
 # Every Underway row likewise carries a non-empty `name`: the durable task name
 # when known, otherwise its durable identifier.
 # A Charted Next row MAY carry `filed`, the durable filed date (YYYY-MM-DD, or
@@ -118,6 +148,16 @@ fail() {
 }
 
 board_path() { printf '%s/.lavish/bearings-board.html\n' "$FM_HOME"; }
+
+sha256_stdin() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{ print $1 }'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{ print $1 }'
+  else
+    return 1
+  fi
+}
 
 validate_payload() {  # <data.json>
   jq -e --arg schema "$BOARD_SCHEMA" '
@@ -178,27 +218,74 @@ validate_payload() {  # <data.json>
               | ([.options[].value] | index($recommend) != null)))))
       and ([.options[].value] | index("reconcile") == null)
       and (if .type == "merge" then (.risk | nonempty_string) else true end);
+    def count: type == "number" and . >= 0 and (floor == .);
     def underway_item:
       type == "object" and repo_marker and name_marker and (.id | nonempty_string)
-      and (.state | nonempty_string) and (.doing | nonempty_string) and (.kind | nonempty_string);
+      and (.state | nonempty_string) and (.doing | nonempty_string) and (.kind | nonempty_string)
+      and ((has("progress") | not) or (.progress == null)
+        or (.progress | type == "object"
+          and (.done | count) and (.total | count) and .total > 0 and .done <= .total
+          and ((has("step") | not) or (.step | type == "string"))));
     def landed_item:
       type == "object" and repo_marker and (.id | nonempty_string)
-      and (.what | nonempty_string) and (.owner | nonempty_string)
+      and (.what | nonempty_string) and (.outcome | nonempty_string) and (.owner | nonempty_string)
       and optional_https_url("pr_url")
+      and optional_string("artifact")
       and optional_subject;
+    def valid_date:
+      type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+      and (try (((. + "T00:00:00Z") | fromdateiso8601 | strftime("%Y-%m-%d")) == .) catch false);
+    def valid_datetime:
+      type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}$")
+      and (.[0:10] | valid_date)
+      and ((.[11:13] | tonumber) < 24) and ((.[14:16] | tonumber) < 60);
+    def optional_date($name): (has($name) | not) or (.[$name] | valid_date);
     def charted_item:
       type == "object" and repo_marker and (.id | slug(128))
       and (.title | nonempty_string) and (.reason | type == "string")
       and (.dispatchable | type == "boolean")
       and ((has("kind") | not) or (.kind == "queued" or .kind == "warning"))
       and optional_filed
+      and ((has("wait") | not) or (.wait == "date" or .wait == "outside" or .wait == "work" or .wait == "none"))
+      and optional_date("wait_date")
       and (if .kind == "warning" then .dispatchable == false else true end);
+    def inbox_input:
+      type == "object" and (.name | slug(64)) and (.label | nonempty_string)
+      and (.type == "number" or .type == "date" or .type == "datetime-local" or .type == "text")
+      and optional_string("default");
+    def inbox_action:
+      type == "object" and (.value | slug(128)) and (.label | nonempty_string)
+      and (.hint | type == "string") and (.effect | type == "string")
+      and (.reads | type == "array") and ([.reads[] | type == "string"] | all)
+      and optional_date("until")
+      and ((has("at") | not) or (.at | valid_datetime))
+      and optional_string("brief");
+    def inbox_item:
+      type == "object"
+      and (.key | slug(128))
+      and (.group == "blocking" or .group == "due")
+      and (if .group == "due" then (.due | valid_date) else (has("due") | not) end)
+      and repo_marker
+      and (.title | nonempty_string)
+      and (.ask | nonempty_string)
+      and optional_string("since")
+      and optional_https_url("pr_url")
+      and ((has("close") | not) or (.close == "done" or .close == "release"))
+      and (.inputs | type == "array") and ([.inputs[] | inbox_input] | all)
+      and (.actions | type == "array") and ([.actions[] | inbox_action] | all);
+    def later_item:
+      type == "object" and (.id | slug(128)) and repo_marker
+      and (.title | nonempty_string)
+      and (.group == "dated" or .group == "held" or .group == "unheld")
+      and (if .group == "dated" then (.back | valid_date) else optional_date("back") end);
     type == "object"
     and (.schema == $schema)
     and (.home | nonempty_string)
     and (.generated | nonempty_string)
     and (.prs_live | type == "boolean")
     and (.captains_call | type == "array")
+    and (.inbox | type == "array")
+    and (.later | type == "array")
     and (.underway | type == "array")
     and (.landed | type == "array")
     and (.charted | type == "array")
@@ -207,6 +294,8 @@ validate_payload() {  # <data.json>
     and ((has("charted_warning_more") | not)
       or ((.charted_warning_more | type == "number") and (.charted_warning_more >= 0) and (.charted_warning_more | floor == .)))
     and ([.captains_call[] | call_item] | all)
+    and ([.inbox[] | inbox_item] | all)
+    and ([.later[] | later_item] | all)
     and ([.underway[] | underway_item] | all)
     and ([.landed[] | landed_item] | all)
     and ([.charted[] | charted_item] | all)
@@ -234,6 +323,77 @@ decision_card_gaps() {  # <effective-payload.json>
         ] as $gaps
       | select($gaps | length > 0)
       | "\($card.key): needs \($gaps | join(", "))"]
+    | join("; ")
+  ' "$1"
+}
+
+# Name every inbox item whose actions do not say plainly what the fleet does,
+# with its key and each problem, joined on one line. An action's effect is one
+# of a closed set, each a route the board-wake handler owns (bearings skill):
+#   resume-worker  steer the blocked worker with the answer
+#   close          close the held item (or lift its hold, with close: release)
+#   hold-until     re-hold the item until a date: its own `until`, or the one
+#                  date input it reads (the keyed intake defers it)
+#   remind-at      bring the item back at a time: its own `at`, or the one
+#                  datetime-local input it reads (firstmate schedules it)
+#   dispatch       start fleet work from its one-line `brief`
+#   draft          prepare something for the captain's review, never sent or paid
+#   send-mail      send mail under firstmate's normal account rules
+#   record         write the values it reads to their owning record
+# A blocking item is a worker waiting on the captain, not a captain hold, so it
+# may not close or re-hold anything.
+INBOX_EFFECTS='resume-worker close hold-until remind-at dispatch draft send-mail record'
+inbox_item_gaps() {  # <payload.json>
+  jq -r --arg effects "$INBOX_EFFECTS" '
+    ($effects | split(" ")) as $effects
+    | . as $payload
+    | ([.captains_call[].key] + [.inbox[].key]) as $keys
+    | [.inbox[]
+      | . as $item
+      | [.inputs[].name] as $names
+      | [.actions[].value] as $values
+      | ([.actions[].reads[]] | unique) as $read
+      | [
+          (if ([$keys[] | select(. == $item.key)] | length) > 1
+            then "a key no other item or card uses" else empty end),
+          (if (.actions | length) < 2 or (.actions | length) > 3
+            then "two or three actions (has \(.actions | length))" else empty end),
+          (if ($values | length) != ($values | unique | length)
+            then "distinct action values" else empty end),
+          (if ($values | index("reconcile")) != null
+            then "no action named reconcile, which is reserved" else empty end),
+          (if ($names | length) != ($names | unique | length)
+            then "distinct input names" else empty end),
+          (.actions[]
+            | . as $action
+            | (if (.hint | test("[^[:space:]]")) | not
+                then "a hint on action \(.value)" else empty end),
+              (if ($effects | index($action.effect)) == null
+                then "a known effect on action \(.value) (has \(.effect))" else empty end),
+              (.reads[] as $r | select(($names | index($r)) == null)
+                | "an input named \($r) for action \($action.value)"),
+              (if $item.group == "blocking"
+                  and (.effect == "close" or .effect == "hold-until")
+                then "no \(.effect) on action \(.value), since a blocking item is not a captain hold" else empty end),
+              (if .effect == "hold-until"
+                  and ((has("until") | not) == ([.reads[] as $r | $item.inputs[] | select(.name == $r and .type == "date")] | length != 1)
+                    or (.reads | length) > 1)
+                then "either an until date or one date input on action \(.value)" else empty end),
+              (if .effect == "remind-at"
+                  and ((has("at") | not) == ([.reads[] as $r | $item.inputs[] | select(.name == $r and .type == "datetime-local")] | length != 1)
+                    or (.reads | length) > 1)
+                then "either an at time or one datetime-local input on action \(.value)" else empty end),
+              (if .effect == "dispatch" and ((.brief // "") | test("[^[:space:]]") | not)
+                then "a one-line brief on dispatch action \(.value)" else empty end),
+              (if .effect != "hold-until" and has("until")
+                then "no until on non-hold-until action \(.value)" else empty end),
+              (if .effect != "remind-at" and has("at")
+                then "no at on non-remind-at action \(.value)" else empty end)),
+          (.inputs[].name as $n | select(($read | index($n)) == null)
+            | "an action that reads input \($n)")
+        ] as $gaps
+      | select($gaps | length > 0)
+      | "\($item.key): needs \($gaps | join(", "))"]
     | join("; ")
   ' "$1"
 }
@@ -392,8 +552,11 @@ await_source_owner() {  # <source-id>
 }
 
 command_build() {
-  local data=${1-} board json tmp sid extracted effective owner version pre_reopen_owner gaps
+  local data board json tmp sid extracted effective owner version pre_reopen_owner gaps
+  local if_changed=0 fingerprint fingerprint_file
+  if [ "${1-}" = --if-changed ]; then if_changed=1; shift; fi
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  data=$1
   command -v jq >/dev/null 2>&1 || fail "jq is required"
   [ -f "$data" ] || fail "board data does not exist: $data"
   jq empty "$data" 2>/dev/null || fail "board data is not valid JSON: $data"
@@ -416,13 +579,35 @@ command_build() {
     rm -f -- "$effective"
     fail "decision cards must offer a real choice: $gaps"
   fi
+  if ! gaps=$(inbox_item_gaps "$effective"); then
+    rm -f -- "$effective"
+    fail "cannot check the board's inbox items: $data"
+  fi
+  if [ -n "$gaps" ]; then
+    rm -f -- "$effective"
+    fail "inbox items must say what each action does: $gaps"
+  fi
   json=$(jq -c . "$effective") || { rm -f -- "$effective"; fail "cannot compact the board data"; }
+  # The page groups due work against its own today, so a new day is a change.
+  fingerprint=$({ cat -- "$TEMPLATE"; date +%Y-%m-%d; jq -cS 'del(.generated)' "$effective"; } \
+    | sha256_stdin) || fingerprint=''
+  [ "${#fingerprint}" -eq 64 ] || { rm -f -- "$effective"; fail "cannot fingerprint the board data (shasum or sha256sum is required)"; }
   rm -f -- "$effective"
   # `<` never appears in JSON syntax outside strings, so escaping every
   # occurrence keeps the payload valid JSON while making </script> inert.
   json=${json//</\\u003c}
 
   board=$(board_path)
+  fingerprint_file=${board%.html}.sha256
+  if [ "$if_changed" = 1 ] && [ -f "$board" ] && [ -f "$fingerprint_file" ] \
+    && [ "$(cat "$fingerprint_file")" = "$fingerprint" ] \
+    && command -v lavish-axi >/dev/null 2>&1 \
+    && lavish_session_listed_open "$(board_realpath "$board")" \
+    && sid=$("$SCRIPT_DIR/fm-procevent-lavish.sh" source-id "$board" 2>/dev/null) \
+    && [ "$(source_owner "$sid")" = live ]; then
+    printf 'board: %s\nunchanged: %s\n' "$board" "$board"
+    return 0
+  fi
   (umask 077; mkdir -p "${board%/*}") || fail "cannot create ${board%/*}"
   tmp=$(umask 077; mktemp "${board%/*}/.board.XXXXXX") || fail "cannot stage the board"
   if ! BOARD_JSON="$json" perl -pe "s/^\\Q$PLACEHOLDER\\E\$/\$ENV{BOARD_JSON}/" "$TEMPLATE" > "$tmp"; then
@@ -445,6 +630,10 @@ command_build() {
     rm -f -- "$tmp"
     fail "cannot publish the board"
   fi
+  # A failed publish below must not leave a fingerprint that would let the
+  # next --if-changed skip it, so the old one goes now and the new one is
+  # written only once the board is listening.
+  rm -f -- "$fingerprint_file" || fail "cannot clear the board fingerprint"
   printf 'board: %s\n' "$board"
 
   command -v lavish-axi >/dev/null 2>&1 || fail "lavish-axi is not installed"
@@ -491,6 +680,8 @@ command_build() {
     fi
     printf 'listening: live\n'
   fi
+  (umask 077; printf '%s\n' "$fingerprint" > "$fingerprint_file") \
+    || fail "cannot record the board fingerprint"
 }
 
 case "${1-}" in

@@ -201,3 +201,70 @@
   if (phone && typeof phone.addEventListener === "function") phone.addEventListener("change", syncLayout);
   syncLayout();
 })();
+
+// Bearings board receipts. A board answer arrives as a user bubble whose words end in the
+// "Context data:" JSON Lavish appends for firstmate; when that JSON is a bearings answer
+// (fm-bearings-answer.v1, or the board's dispatch order) carrying a receipt, the bubble shows one
+// line instead - "Item → action · values (note)", or "Item → “words”" for a note sent alone - and
+// hides its element anchor. Only the display changes: the words and the JSON still travel to
+// firstmate. Queued bubbles are re-rendered from their prompts, so every render is re-read.
+(() => {
+  const logs = ["chatLog", "queuedLog"].map((id) => document.getElementById(id)).filter(Boolean);
+  if (!logs.length) return;
+  const MARK = "\n\nContext data:\n";
+
+  function receiptOf(text) {
+    const at = text.lastIndexOf(MARK);
+    if (at < 0) return null;
+    let data;
+    try {
+      data = JSON.parse(text.slice(at + MARK.length));
+    } catch {
+      return null;
+    }
+    if (!data || typeof data !== "object") return null;
+    if (data.schema !== "fm-bearings-answer.v1" && data.question !== "dispatch.charted") return null;
+    const r = data.receipt;
+    if (!r || typeof r !== "object" || typeof r.item !== "string" || !r.item) return null;
+    const str = (v) => (typeof v === "string" ? v : "");
+    return { item: r.item, action: str(r.action), detail: str(r.detail), note: str(r.note) };
+  }
+
+  function span(cls, text) {
+    const s = document.createElement("span");
+    s.className = cls;
+    s.textContent = text;
+    return s;
+  }
+
+  // Every bubble is read once: a checked node carries its verdict, so a busy
+  // log's mutations rescan nothing they already looked at.
+  function render(node) {
+    if (node.dataset.fmReceipt) return;
+    const receipt = receiptOf(node.textContent || "");
+    node.dataset.fmReceipt = receipt ? "1" : "0";
+    if (!receipt) return;
+    node.textContent = "";
+    node.appendChild(span("fm-receipt-item", receipt.item));
+    node.appendChild(span("fm-receipt-arrow", " → "));
+    if (receipt.action) {
+      node.appendChild(span("fm-receipt-action", receipt.action));
+      if (receipt.detail) node.appendChild(span("fm-receipt-detail", " · " + receipt.detail));
+      if (receipt.note) node.appendChild(span("fm-receipt-note", " (" + receipt.note + ")"));
+    } else {
+      node.appendChild(span("fm-receipt-words", "“" + receipt.note + "”"));
+    }
+    const bubble = node.closest(".bubble");
+    if (bubble) bubble.classList.add("fm-receipt");
+  }
+
+  function scan() {
+    for (const log of logs) for (const node of log.querySelectorAll(".bubble.user .bubble-text")) render(node);
+  }
+
+  if (typeof MutationObserver === "function") {
+    const observer = new MutationObserver(scan);
+    for (const log of logs) observer.observe(log, { childList: true, subtree: true });
+  }
+  scan();
+})();

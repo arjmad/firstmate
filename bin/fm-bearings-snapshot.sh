@@ -77,7 +77,7 @@
 #   (default)        compact projection with bounded remote-ledger collection, TOON
 #   --json           the same projected model as JSON (machine/debug; parity form)
 #   --include-prs    ALSO do live GitHub open-PR discovery + checks
-#   --fields <list>  opt in to dropped surfaces: bodies,paths,actions,endpoints
+#   --fields <list>  opt in to dropped surfaces: bodies,paths,actions,endpoints,board
 #   --all-in-flight  include every in-flight task
 #   --all-decisions  include every open decision and captain hold in the bounded snapshot
 #   --all-secondmates include every aggregated secondmate record
@@ -145,7 +145,8 @@ Default collection performs bounded concurrent remote-ledger reads for registere
 remote homes under one shared snapshot budget and may refresh the parent-side cache.
 --include-prs additionally performs live GitHub discovery and checks.
 
-Default fields: schema, home, generated, prs, in_flight{id,kind,state,repo,name,doing},
+Default fields: schema, home, generated, prs,
+  in_flight{id,kind,state,repo,name,doing,waits_on,since},
   secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
   secondmate_reconcile{id,spawn_gen,host,kind,ids},
   decisions_open{id,key,verb,summary,owner}, landed{id,what,artifact,owner},
@@ -163,7 +164,17 @@ For every registered secondmate, readable structured facts from its own home are
   Parent events and bounded terminal reads are labeled fallback or contradiction
   evidence and never become current work. The provenance and freshness fields
   distinguish live and cached ledgers; a home without either is explicitly unreadable.
-Opt-in surfaces: --fields bodies|paths|actions|endpoints, --all-in-flight,
+in_flight waits_on is "captain" only when the worker's still-open blocker or
+  question carries the structured [on=captain] status tag, and since is that
+  line's UTC time (the oldest, when several are open); both are null otherwise.
+--fields board adds board{queued[],titles[]} for the bearings board composer:
+  every queued or held backlog row of this home, with its full title, kind,
+  hold_kind, hold_until, full hold_reason, filed date, blocker ids, wait
+  (captain, date, outside, work, or none) and ready (wait none), plus each
+  structured secondmate home's queued rows as that home's summary projects
+  them (bounded, titles as it shortened them), and every in_flight id with its
+  full name.
+Opt-in surfaces: --fields bodies|paths|actions|endpoints|board, --all-in-flight,
   --all-decisions (all open decisions and captain holds in the bounded snapshot),
   --all-secondmates, --all-landed, --all-reports, --all-queued, --all-recorded-prs,
   --all-unhealthy, --all-pr-repos, --include-prs (adds candidate_prs).
@@ -443,6 +454,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
   | (($fl | index("paths")) != null) as $f_paths
   | (($fl | index("actions")) != null) as $f_actions
   | (($fl | index("endpoints")) != null) as $f_endpoints
+  | (($fl | index("board")) != null) as $f_board
   | ([ .backlog.records[] | select(landed_record)
        | {id, title, kind, hold_kind, pr_url, report_path, local_note, completion,
           home:"(main)", home_id:"(main)"} ]) as $main_done
@@ -510,7 +522,11 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         name:((.backlog.title // "") as $name
               | (if ($name | test("[^[:space:]]")) then $name else .id end) | trunc(70)),
         doing: ((.current_state.detail // "") as $d
-                | (if $d != "" then $d else (.hints.last_event_text // "") end) | trunc(90))
+                | (if $d != "" then $d else (.hints.last_event_text // "") end) | trunc(90)),
+        waits_on: (if ((.hints.captain_waits // []) | length) > 0 then "captain" else null end),
+        since: ([(.hints.captain_waits // [])[] | .since | select(. != null)] | min
+                | if . == null then null else todate end),
+        full_name: (.backlog.title // null)
       } ]
      + [ $secondmate_views[] as $m
          | $m.active_children[]?
@@ -521,7 +537,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
             name:((.name // "") as $name
                   | (if (($name | type) == "string" and ($name | test("[^[:space:]]")))
                      then $name else ($m.id + "/" + .id) end) | trunc(70)),
-            doing:((.doing // .state) | trunc(90))} ]) as $in_flight_all
+            doing:((.doing // .state) | trunc(90)),
+            waits_on:null, since:null, full_name:(.name // null)} ]) as $in_flight_all
   | ([ .backlog.records[]
          | . as $record
          | select(.structured and .hold_bucket != null)
@@ -635,7 +652,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
            missing_verdicts:([$measured[].missing_verdicts] | add // 0),
            captain_omitted:([$measured[].captain_omitted] | add // 0),
            captain:[$measured[] as $h | $h.captain[]? | . + {owner:$h.owner}]}),
-      in_flight: (if $all_in_flight == 1 then $in_flight_all else $in_flight_all[:$in_flight_n] end),
+      in_flight: ((if $all_in_flight == 1 then $in_flight_all else $in_flight_all[:$in_flight_n] end)
+                  | map(del(.full_name))),
       secondmates: (if $all_secondmates == 1 then $secondmates_all else $secondmates_all[:$secondmates_n] end),
       secondmate_reconcile: [ (.secondmate_current.records // [])[]
         | select(.reconcile_inventory != null)
@@ -654,6 +672,27 @@ MODEL=$(printf '%s' "$SNAP" | jq \
          else {} end)
   | . + (if $include_prs == 1 then {candidate_prs:$candidate_prs} else {} end)
   | . + (if $f_bodies then {bodies:[ $snap.backlog.records[] | select(.structured and (.state == "queued" or .state == "done")) | {id, body:((.body_excerpt // .raw // "-") | trunc(200))} ]} else {} end)
+  | . + (if $f_board then {board:{
+        queued: [ ([ $snap.backlog.records[] | . + {owner:"(main)"} ]
+                   + [ ($snap.secondmate_current.records // [])[] as $m
+                       | select($m.provenance.selected == "structured-home")
+                       | $m.queued[]? | . + {owner:$m.id} ])[]
+                  | select(.structured != false and ((.state // "queued") == "queued" or .hold_kind != null))
+                  | select(.state != "done")
+                  | ((.unresolved_blocker_ids // []) | length > 0) as $blocked
+                  | (if .hold_kind == "captain" then "captain"
+                     elif $blocked then "work"
+                     elif .hold_kind == "future" or (.hold_kind == null and .hold_until != null) then "date"
+                     elif .hold_kind == "external" then "outside"
+                     elif .hold_kind != null then "work"
+                     elif .kind == "captain" then "captain"
+                     else "none" end) as $wait
+                  | {id, title:(.title // .id), repo:(.repo // null), kind:(.kind // null),
+                     hold_kind:(.hold_kind // null), hold_until:(.hold_until // null),
+                     hold_reason:(.hold_reason // null), filed:(.since // null),
+                     blocked_by:(.unresolved_blocker_ids // []), owner,
+                     wait:$wait, ready:($wait == "none")} ],
+        titles: [ $in_flight_all[] | {id, name:(.full_name // .name)} ]}} else {} end)
   | . + (if $f_paths then {paths:[ $snap.tasks[] | {id, worktree:(.paths.worktree.path // "-"), home:(.paths.home.path // "-"), status:.paths.status_log.path, report:.paths.report.path} ]} else {} end)
   | . + (if $f_actions then {actions:[ $snap.tasks[] | {id, watch:(.actions.watch // .actions.send // "-"), steer:(.actions.steer // .actions.send // "-")} ]} else {} end)
   | . + (if $f_endpoints then {endpoints:[ $snap.tasks[] | {id, backend, target:(.endpoint.target // "-"), exists:.endpoint.exists, agent:.endpoint.agent_alive} ]} else {} end)
@@ -662,6 +701,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         (if $f_paths then empty else {surface:"task paths", reveal:"--fields paths"} end),
         (if $f_actions then empty else {surface:"watch/steer actions", reveal:"--fields actions"} end),
         (if $f_endpoints then empty else {surface:"healthy endpoint detail", reveal:"--fields endpoints"} end),
+        (if $f_board then empty else {surface:"bearings board rows", reveal:"--fields board"} end),
         (if $all_reports == 1 then empty else {surface:"full scout-report inventory", reveal:"--all-reports"} end),
         (if $all_landed == 0 and ($per_home_capped | length) > ($done | length) then {surface:("landed showing \($done | length) of \($per_home_capped | length)" + (($done | map(.home_id) | unique | map(select(. != "(main)")) | length) as $k | if $k > 0 then " (incl. \($k) secondmate home(s))" else "" end)), reveal:"--all-landed"} else empty end),
         (if $all_landed == 0 and $home_cap_dropped > 0 then {surface:("landed per-home capped at \($landed_per_home_n) for \($home_cap_dropped) home(s)"), reveal:"--all-landed"} else empty end),

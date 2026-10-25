@@ -3,7 +3,7 @@
 # (.agents/skills/bearings/assets/board-template.html), exercised through a real
 # `fm-bearings-board.sh build` and then executed under the minimal DOM shim in
 # tests/assets/board-render-harness.mjs. The assertions are on what the page
-# renders - row badges, the stat strip, the empty state - never on the
+# renders - its sections, items, rows, and the answers its taps queue - never on the
 # template's source text.
 set -u
 
@@ -92,228 +92,334 @@ require_listener_reached_poll() {  # <home>
   fail "the board listener did not reach the Lavish poll (owner: ${owner:-none})"
 }
 
-# Build the board from <underway-json> plus <charted-json> and return what the
-# renderer produced. FM_RENDER_CALLS optionally supplies Captain's Call items.
-render_board() {  # <home> <underway-json> <charted-json> [charted_more] [charted_warning_more]
-  local home=$1 underway=$2 charted=$3 more=${4:-0} warning_more=${5:-0} data="$1/payload.json"
-  jq -n --argjson underway "$underway" --argjson charted "$charted" \
-    --argjson more "$more" --argjson warning_more "$warning_more" \
-    --argjson calls "${FM_RENDER_CALLS:-[]}" '{
-    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-08-26T00:00Z",
-    prs_live:false, captains_call:$calls, underway:$underway, landed:[],
-    charted:$charted, charted_more:$more, charted_warning_more:$warning_more}' > "$data"
+
+# Dates sit far from today on purpose: the board groups due work against the
+# viewer's own clock, so a fixture that is not relative to it would drift.
+PAST=2001-01-02
+SOON=2099-03-04
+LATER_DAY=2099-03-09
+
+# Every kind of row the inbox-first board renders, built through the real
+# `build` so the payload is the one its validator accepts.
+full_payload() {  # <path>
+  jq -n --arg past "$PAST" --arg soon "$SOON" --arg later "$LATER_DAY" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2099-03-01T14:30:00Z", prs_live:false,
+    captains_call:[
+      {key:"sample-tier", type:"decision", repo:"sample", title:"Pick the tier", about:"It renews soon.",
+       decide:"Which tier?", options:[
+         {value:"keep", label:"Keep it", hint:"Nothing changes."},
+         {value:"upgrade", label:"Upgrade", hint:"Firstmate drafts it for your OK."}],
+       recommend_value:"keep", allow_freeform:true},
+      {key:"sample-domain", type:"decision", repo:"sample", title:"Renew the domain", about:"Unused.",
+       decide:"Renew?", options:[
+         {value:"lapse", label:"Let it lapse", hint:"Nothing renews."},
+         {value:"renew", label:"Renew", hint:"Firstmate renews it."}],
+       recommend_value:"lapse", allow_freeform:true, close:"release"}],
+    inbox:[
+      {key:"sample-worker", group:"blocking", repo:"sample", title:"Open the sample site",
+       ask:"Sign in so the worker can read it.", since:"2099-02-28T20:00:00Z",
+       pr_url:"https://github.com/example/sample/pull/844", inputs:[],
+       actions:[
+         {value:"go", label:"Signed in - go", hint:"The worker reads it now.", effect:"resume-worker", reads:[]},
+         {value:"monday", label:"Do it Monday", hint:"The worker stays parked until Monday.", effect:"remind-at", at:"2099-03-02T09:00", reads:[]}]},
+      {key:"sample-count", group:"due", due:$soon, repo:"sample", title:"Count the shelf", ask:"Count both sizes.",
+       inputs:[{name:"small", label:"Small", type:"number"}, {name:"large", label:"Large", type:"number"},
+               {name:"day", label:"Back on", type:"date", default:$later}],
+       actions:[
+         {value:"save", label:"Save counts", hint:"Firstmate writes them to the ledger.", effect:"record", reads:["small","large"]},
+         {value:"later", label:"Bring it back", hint:"Back on that day.", effect:"hold-until", reads:["day"]},
+         {value:"never", label:"Not needed", hint:"Closes the item.", effect:"close", reads:[]}]},
+      {key:"sample-send", group:"due", due:$soon, repo:"sample", title:"Send the amendment", ask:"It is drafted.",
+       close:"release", inputs:[],
+       actions:[
+         {value:"sent", label:"Sent it", hint:"Firstmate watches for the reply.", effect:"close", reads:[]},
+         {value:"thu", label:"Push to Thursday", hint:"Back on Thursday.", effect:"hold-until", until:$later, reads:[]}]},
+      {key:"sample-late", group:"due", due:$past, repo:"sample", title:"Read the old notice", ask:"It was due long ago.",
+       inputs:[{name:"when", label:"When", type:"datetime-local"}],
+       actions:[
+         {value:"now", label:"Read it now", hint:"Firstmate reads it with you.", effect:"dispatch", brief:"Attended read", reads:[]},
+         {value:"book", label:"Book this time", hint:"Firstmate pings you then.", effect:"remind-at", reads:["when"]}]}],
+    later:[
+      {id:"later-dated", repo:"sample", title:"[2099-04-01] Arjun: revisit the plan", group:"dated", back:"2099-04-01"},
+      {id:"later-held", repo:"sample", title:"Weigh the mats", group:"held"},
+      {id:"later-unheld", repo:null, title:"Find the property id", group:"unheld"}],
+    underway:[
+      {id:"run-a", repo:"sample", name:"Sample run", state:"working", kind:"ship", doing:"in code review",
+       progress:{done:3, total:6, step:"answer the review"}},
+      {id:"run-b", repo:"sample", name:"Other run", state:"working", kind:"ship", doing:"building"}],
+    landed:[
+      {id:"done-a", repo:"sample", what:"long task title", outcome:"Sample live", owner:"crew",
+       pr_url:"https://github.com/example/sample/pull/2"},
+      {id:"done-b", repo:"sample", what:"scout", outcome:"Mockup approved", owner:"crew", artifact:"data/x/report.md"}],
+    charted:[
+      {id:"q-ready", repo:"sample", title:"Ready work", reason:"", dispatchable:true, wait:"none"},
+      {id:"q-date", repo:"sample", title:"Dated work", reason:"", dispatchable:false, wait:"date", wait_date:$later},
+      {id:"q-was", repo:"sample", title:"Lapsed date", reason:"", dispatchable:false, wait:"date", wait_date:$past},
+      {id:"q-out", repo:"sample", title:"Vendor reply", reason:"", dispatchable:false, wait:"outside"},
+      {id:"q-work", repo:"sample", title:"After the cutover", reason:"", dispatchable:false, wait:"work"},
+      {id:"q-idle", repo:"sample", title:"Not begun", reason:"", dispatchable:false},
+      {id:"main-inventory", repo:null, title:"Main inventory integrity", reason:"main inventory", dispatchable:false, kind:"warning"}],
+    charted_more:2}' > "$1"
+}
+
+build_board() {  # <home> <payload>
+  local home=$1
   PATH="$home/fakebin:$PATH" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
     LAVISH_AXI_STATE_DIR="$home/lavish-state" \
-    "$BOARD" build "$data" >/dev/null || fail "the board did not build"
+    "$BOARD" build "$2" >/dev/null || fail "the board did not build"
   require_listener_reached_poll "$home"
-  node "$HARNESS" "$home/.lavish/bearings-board.html" \
+}
+
+# Render the built board, optionally after taps (<steps-json>) and with a seeded
+# viewer storage (<storage-json>), and print what the renderer produced.
+render() {  # <home> [<steps-json>] [<storage-json>]
+  local home=$1
+  printf '%s\n' "${2:-[]}" > "$home/steps.json"
+  printf '%s\n' "${3:-{\}}" > "$home/storage.json"
+  node "$HARNESS" "$home/.lavish/bearings-board.html" "$home/steps.json" "$home/storage.json" \
     || fail "the built board could not be rendered"
 }
 
-# Build the board from <charted-json> alone and return what the renderer produced.
-render() {  # <home> <charted-json> [charted_more] [charted_warning_more]
-  render_board "$1" '[]' "$2" "${3:-0}" "${4:-0}"
+full_board() {  # <name> -> home with the full payload built
+  local home
+  home=$(make_home "$1")
+  full_payload "$home/payload.json"
+  build_board "$home" "$home/payload.json"
+  printf '%s\n' "$home"
 }
 
-charted_next_count() {  # <render-json>
-  printf '%s' "$1" | jq -r '.stats[] | select(.label == "charted next") | .n'
-}
-
-test_a_warning_row_reads_as_a_repair_not_as_queued_work() {
+test_the_inbox_comes_first_in_folding_sections() {
   local home out
-  home=$(make_home warning-badge)
+  home=$(full_board layout)
+  out=$(render "$home")
+  printf '%s' "$out" | jq -e --arg soon "$SOON" '
+    .error == ""
+      and .inboxCount == "6"
+      and (.headline | startswith("6 things wait on you. "))
+      and ([.sections[] | select(.depth == 0) | .key]
+        == ["blocking", "decisions", "overdue", "due-" + $soon, "later", "underway", "landed", "queued"])
+      and ([.sections[] | select(.depth == 0) | {key, open}] | map(select(.open == (.key != "later"))) | length) == 8
+      and ([.sections[] | select(.key == "due-" + $soon) | .items[].key] == ["sample-count", "sample-send"])
+      and ([.sections[] | select(.key == "overdue") | .title, .count] == ["Overdue", "1"])
+      and ([.sections[] | select(.key == "later") | .count] == ["3 · nothing due this week"])
+      and (.fleetSum == "2 underway · 2 landed · 8 queued")
+  ' >/dev/null || fail "the board did not lead with the captain's inbox in folding sections: $out"
+  pass "the inbox comes first, grouped by kind and due date, and every section but Later opens"
+}
+
+test_an_inbox_item_shows_its_own_actions_and_value_boxes() {
+  local home out
+  home=$(full_board item-shape)
+  out=$(render "$home")
+  printf '%s' "$out" | jq -e '
+    ([.sections[].items[] | select(.key == "sample-count")][0]) as $count
+    | ([.sections[].items[] | select(.key == "sample-worker")][0]) as $worker
+    | ($count.title == "Count the shelf" and $count.ask == "Count both sizes." and $count.meta == "sample")
+      and ([$count.actions[] | {value, main}] == [{value:"save", main:true}, {value:"later", main:false}, {value:"never", main:false}])
+      and ($count.actions[0].hint == "Firstmate writes them to the ledger.")
+      and ([$count.inputs[] | {name, type}] == [{name:"small", type:"number"}, {name:"large", type:"number"}, {name:"day", type:"date"}])
+      and ($count.inputs[2].value != "")
+      and ($worker.meta | test("^sample · worker waiting since .+ · PR 844$"))
+      and ($worker.radios == [])
+  ' >/dev/null || fail "an inbox item did not render its own actions and value boxes: $out"
+  pass "an inbox item shows its title, ask, area, its own actions with hints, and its value boxes"
+}
+
+test_an_action_carries_its_values_note_and_route() {
+  local home out
+  home=$(full_board action-answer)
   out=$(render "$home" '[
-    {"id":"real-queued","repo":"sample","title":"Queued work","reason":"queued behind the cutover","dispatchable":true},
-    {"id":"main-inventory","repo":"sample","title":"Main inventory integrity","reason":"main inventory","dispatchable":false,"kind":"warning"}
-  ]')
-  printf '%s' "$out" | jq -e '.error == ""' >/dev/null \
-    || fail "the board rendered its fail-closed error instead of the fleet: $out"
-  printf '%s' "$out" | jq -e '
-    (.charted | length) == 2
-      and (.charted[0] | .title == "Queued work"
-        and [.badges[] | .text] == ["waiting"] and .pickable == true)
-      and (.charted[1] | .title == "Main inventory integrity"
-        and [.badges[] | .text] == ["needs repair"]
-        and [.badges[] | .tone] == ["danger"]
-        and .pickable == false)
-  ' >/dev/null || fail "a warning row did not read differently from queued work: $out"
-  pass "a warning row badges needs repair while queued work keeps waiting"
+    {"do":"action","key":"sample-count","value":"save"},
+    {"do":"action","key":"sample-count","value":"save","values":{"small":"14","large":"9"},"note":"shelf B"},
+    {"do":"action","key":"sample-count","value":"never"},
+    {"do":"action","key":"sample-send","value":"thu"},
+    {"do":"action","key":"sample-late","value":"book","values":{"when":"2099-03-05T10:00"}}]')
+  printf '%s' "$out" | jq -e --arg later "$LATER_DAY" '
+    (.prompts | length) == 3
+      and (.prompts[0].data == {schema:"fm-bearings-answer.v1", question:"sample-count", group:"due",
+            action:"save", effect:"record", values:{small:"14", large:"9"}, note:"shelf B",
+            receipt:{item:"Count the shelf", action:"Save counts", detail:"Small: 14, Large: 9", note:"shelf B"}})
+      and (.prompts[0].line == "Count the shelf → Save counts · Small: 14, Large: 9 (shelf B)")
+      and (.prompts[1].data | .effect == "hold-until" and .until == $later and .note == "")
+      and (.prompts[2].data | .effect == "remind-at" and .at == "2099-03-05T10:00" and .values == {when:"2099-03-05T10:00"})
+      and ([.sections[].items[] | select(.key == "sample-count")][0] | .sent and .pill == "✓ Save counts")
+  ' >/dev/null || fail "an action did not queue its values, note, and route: $out"
+  pass "an action queues one answer with its values, note, effect, and resolved date, and the item takes no second answer"
 }
 
-test_warnings_are_excluded_from_the_charted_next_count() {
+test_an_action_with_an_empty_box_refuses_and_marks_it() {
   local home out
-  home=$(make_home warning-count)
+  home=$(full_board empty-box)
+  out=$(render "$home" '[{"do":"action","key":"sample-count","value":"save","values":{"small":"3"}}]')
+  printf '%s' "$out" | jq -e '
+    (.prompts | length) == 0
+      and ([.sections[].items[] | select(.key == "sample-count")][0]
+        | (.sent | not) and ([.inputs[] | select(.need) | .name] == ["large"]))
+      and .focused == "large"
+  ' >/dev/null || fail "an action with an empty value box was queued or did not mark the box: $out"
+  pass "an action whose value box is empty refuses, marks that box, and focuses it"
+}
+
+test_a_note_alone_is_sent_as_the_captains_words() {
+  local home out
+  home=$(full_board note-only)
   out=$(render "$home" '[
-    {"id":"queued-one","repo":"sample","title":"One","reason":"gated","dispatchable":true},
-    {"id":"warn-one","repo":"sample","title":"Home unreadable","reason":"current home state unavailable","dispatchable":false,"kind":"warning"},
-    {"id":"warn-two","repo":"sample","title":"Inventory mismatch","reason":"main inventory","dispatchable":false,"kind":"warning"}
-  ]')
-  [ "$(charted_next_count "$out")" = 1 ] \
-    || fail "the charted next tally counted alarms as queued work: $out"
-  printf '%s' "$out" | jq -e '(.charted | length) == 3' >/dev/null \
-    || fail "excluding warnings from the count also dropped their rows: $out"
-  pass "the charted next count counts queued work only, and still renders warnings"
+    {"do":"note","key":"sample-worker","note":"   "},
+    {"do":"note","key":"sample-worker","note":"do GA4 first"},
+    {"do":"note","key":"sample-tier","note":"neither, ask Sunita"}]')
+  printf '%s' "$out" | jq -e '
+    (.prompts | length) == 2
+      and (.prompts[0].data == {schema:"fm-bearings-answer.v1", question:"sample-worker", group:"blocking",
+            action:"", values:{}, note:"do GA4 first",
+            receipt:{item:"Open the sample site", action:"", detail:"", note:"do GA4 first"}})
+      and (.prompts[0].line == "Open the sample site → “do GA4 first”")
+      and (.prompts[1].data | .question == "sample-tier" and .selection == "" and .note == "neither, ask Sunita"
+            and (has("close") | not))
+      and ([.sections[].items[] | select(.key == "sample-worker")][0].pill == "✓ Your note")
+  ' >/dev/null || fail "a note sent alone did not travel as the captain's own words: $out"
+  printf '%s' "$(render "$home" '[{"do":"note","key":"sample-worker","note":""}]')" | jq -e '
+    (.prompts | length) == 0 and ([.sections[].items[] | select(.key == "sample-worker")][0].noteNeed)
+  ' >/dev/null || fail "Send note with no words was queued or not marked"
+  pass "Send note sends the captain's words alone on items and cards, and refuses an empty note"
 }
 
-test_a_board_of_only_warnings_still_reports_nothing_queued() {
+test_a_decision_card_opens_on_its_recommendation() {
   local home out
-  home=$(make_home warning-only)
+  home=$(full_board card)
   out=$(render "$home" '[
-    {"id":"warn-only","repo":"sample","title":"Home unreadable","reason":"current home state unavailable","dispatchable":false,"kind":"warning"}
-  ]')
-  [ "$(charted_next_count "$out")" = 0 ] \
-    || fail "a warning-only board claimed queued work: $out"
+    {"do":"answer","key":"sample-tier","note":"for now"},
+    {"do":"answer","key":"sample-domain","pick":"renew"}]')
   printf '%s' "$out" | jq -e '
-    (.empty | length) == 1 and (.empty[0] | test("Nothing is queued"))
-      and (.charted | length) == 1
-  ' >/dev/null || fail "a warning-only board hid the warning or the empty state: $out"
-  pass "a warning-only board reports nothing queued and still shows the warning"
+    ([.sections[] | select(.key == "decisions") | .items[0].radios[] | {value, checked, recommended}]
+      == [{value:"keep", checked:true, recommended:true}, {value:"upgrade", checked:false, recommended:false},
+          {value:"reconcile", checked:false, recommended:false}])
+      and (.prompts[0].data | .question == "sample-tier" and .selection == "keep" and .note == "for now")
+      and (.prompts[1].data | .question == "sample-domain" and .selection == "renew" and .close == "release")
+  ' >/dev/null || fail "a decision card did not open on its recommendation or send its pick: $out"
+  pass "a decision card opens with its recommendation chosen and sends the chosen option with its note"
 }
 
-test_omitted_warnings_never_count_as_more_queued() {
+test_take_all_recommendations_confirms_then_sends_one_answer_per_card() {
   local home out
-  home=$(make_home warning-more)
+  home=$(full_board take-all)
+  out=$(render "$home" '[{"do":"take-all"}]')
+  printf '%s' "$out" | jq -e '
+    .takeAll.hidden == false and .takeAll.label == "Take all 2 recommendations"
+      and .takeAll.confirm == ["Pick the tier → Keep it", "Renew the domain → Let it lapse"]
+      and (.prompts | length) == 0
+  ' >/dev/null || fail "take all did not list what it would send before sending: $out"
   out=$(render "$home" '[
-    {"id":"warn-visible","repo":"sample","title":"Home unreadable","reason":"current home state unavailable","dispatchable":false,"kind":"warning"}
-  ]' 0 1)
-  [ "$(charted_next_count "$out")" = 0 ] \
-    || fail "an omitted warning was counted as queued work: $out"
+    {"do":"answer","key":"sample-tier","pick":"upgrade","note":"x"},
+    {"do":"take-all"}]')
+  printf '%s' "$out" | jq -e '.takeAll.hidden == true and .takeAll.confirm == null' >/dev/null \
+    || fail "take all stayed offered with only one open card: $out"
+  out=$(render "$home" '[{"do":"take-all"},{"do":"confirm"}]')
   printf '%s' "$out" | jq -e '
-    (.empty | length) == 1 and (.empty[0] | test("Nothing is queued"))
-      and (.more == ["+1 more repair warning - ask firstmate for the full chart"])
-      and ([.more[] | select(test("more queued"))] | length) == 0
-  ' >/dev/null || fail "an omitted warning was labeled as more queued: $out"
-  pass "omitted warnings remain separate from omitted queued work"
+    ([.prompts[].data | {question, selection}] == [{question:"sample-tier", selection:"keep"}, {question:"sample-domain", selection:"lapse"}])
+  ' >/dev/null || fail "confirming take all did not send each card its own recommended answer: $out"
+  pass "take all recommendations confirms the list, then sends one keyed answer per open card"
 }
 
-test_an_omitted_kind_keeps_the_existing_queued_rendering() {
+test_take_all_carries_each_cards_typed_note() {
   local home out
-  home=$(make_home default-kind)
+  home=$(full_board take-all-note)
   out=$(render "$home" '[
-    {"id":"with-reason","repo":"sample","title":"With reason","reason":"blocked on prep","dispatchable":true},
-    {"id":"no-reason","repo":"sample","title":"No reason","reason":"","dispatchable":true}
-  ]' 2)
-  [ "$(charted_next_count "$out")" = 4 ] \
-    || fail "an omitted kind changed the charted next tally: $out"
+    {"do":"type","key":"sample-domain","note":"lapse it for good"},
+    {"do":"take-all"},
+    {"do":"confirm"}]')
   printf '%s' "$out" | jq -e '
-    ([.charted[0].badges[] | .text] == ["waiting"])
-      and (.charted[1].badges == [])
-  ' >/dev/null || fail "an omitted kind changed the existing queued badges: $out"
-  pass "an omitted kind renders exactly as queued work always did"
+    ([.prompts[].data | {question, note}]
+      == [{question:"sample-tier", note:""}, {question:"sample-domain", note:"lapse it for good"}])
+  ' >/dev/null || fail "take all dropped a note typed on its card: $out"
+  pass "a note typed on a card rides with that card when all recommendations are taken"
 }
 
-test_an_underway_row_leads_with_the_task_name_and_keeps_its_run_status() {
+test_sections_remember_their_fold_per_viewer() {
   local home out
-  home=$(make_home underway-name)
-  out=$(render_board "$home" '[
-    {"id":"fm-board-name-r1","repo":"firstmate","name":"Show task names on the board",
-     "state":"working","kind":"ship","doing":"no-mistakes: review round 2"}
-  ]' '[]')
+  home=$(full_board folds)
+  out=$(render "$home" '[{"do":"toggle","sec":"underway"}]' '{"bb-sec:later":"1","bb-sec:blocking":"0"}')
   printf '%s' "$out" | jq -e '
-    (.underway | length) == 1
-      and (.underway[0]
-        | .title == "Show task names on the board"
-          and (.sub | test("no-mistakes: review round 2"))
-          and (.sub | test("ship")) and (.sub | test("firstmate"))
-          and [.badges[] | .text] == ["working"])
-  ' >/dev/null || fail "an underway row did not lead with the task name: $out"
-  pass "an underway row leads with the task name and still reports its run status"
+    ([.sections[] | select(.key == "later" or .key == "blocking" or .key == "underway") | {key, open}]
+      == [{key:"blocking", open:false}, {key:"later", open:true}, {key:"underway", open:false}])
+      and .storage["bb-sec:underway"] == "0"
+  ' >/dev/null || fail "a section did not keep its fold per viewer: $out"
+  pass "every section reads and writes its fold under a stable per-viewer key"
 }
 
-test_an_underway_identifier_label_is_not_replaced_by_run_status() {
+test_later_and_the_fleet_read_as_plain_words() {
   local home out
-  home=$(make_home underway-identifier)
-  out=$(render_board "$home" '[
-    {"id":"mate/child-1","repo":null,"name":"mate/child-1",
-     "state":"working","kind":"secondmate","doing":"fixing the failing check"}
-  ]' '[]')
-  printf '%s' "$out" | jq -e '
-    (.underway | length) == 1
-      and (.underway[0]
-        | .title == "mate/child-1"
-          and (.sub | startswith("fixing the failing check · "))
-          and (.title != "fixing the failing check"))
-  ' >/dev/null || fail "an identifier-labelled underway row rendered as status-only: $out"
-  pass "an underway identifier label is not replaced by run status"
+  home=$(full_board fleet)
+  out=$(render "$home")
+  printf '%s' "$out" | jq -e --arg soon "$SOON" '
+    ([.sections[] | select(.key == "later")][0]) as $later
+    | ([.sections[] | select(.key == "underway")][0]) as $uw
+    | ([.sections[] | select(.key == "landed")][0]) as $ld
+    | ([.sections[] | select(.key == "queued")][0]) as $q
+    | ([.sections[] | select(.key == "queued-all")][0]) as $all
+    | ($later.headings | length) == 3
+      and ($later.headings[1:] == ["Held for you, no date 1", "Filed as yours, never held 1"])
+      and ($later.rows[0] | .title == "revisit the plan" and (.meta | startswith("2099-04-01 · back ")))
+      and ($uw.rows[0] | .title == "Sample run" and .meta == "sample · in code review" and .steps == "3/6 · answer the review")
+      and ($uw.rows[1].steps == null)
+      and ($uw.asides == ["1 more waits on you above."])
+      and ($ld.rows[0] | .title == "Sample live" and .right == "PR 2")
+      and ($ld.rows[1] | .title == "Mockup approved" and .meta == "sample · report")
+      and ($q.count == "8 · 1 ready")
+      and ($q.headings == ["Needs repair", "Ready to start now:"])
+      and ([$q.rows[] | select(.pick) | .title] == ["Ready work"])
+      and ($all.open == false and $all.title == "Show all 8")
+      and ([$all.headings[]] == ["Waits on a date 2", "Waits on someone outside 1", "Waits on other work 1", "Not started 1"])
+      and ([$all.rows[] | .meta][0:2] | (.[0] | startswith("from ")) and (.[1] | startswith("was due ")))
+      and ($all.asides == ["+2 more queued - ask firstmate for the full chart"])
+  ' >/dev/null || fail "Later or the fleet strip did not read as plain words: $out"
+  pass "Later and the fleet strip show full plain titles, step bars, outcomes, and a folded queue"
 }
 
-test_charted_next_reads_newest_filed_first() {
+test_an_empty_board_says_so_in_each_place() {
   local home out
-  home=$(make_home charted-order)
-  out=$(render_board "$home" '[]' '[
-    {"id":"oldest","repo":"sample","title":"Filed in June","reason":"queued","dispatchable":true,"filed":"2026-06-01"},
-    {"id":"newest","repo":"sample","title":"Filed in August","reason":"queued","dispatchable":true,"filed":"2026-08-14T09:30:00Z"},
-    {"id":"middle","repo":"sample","title":"Filed in July","reason":"queued","dispatchable":true,"filed":"2026-07-22"}
-  ]')
+  home=$(make_home empty)
+  jq -n '{schema:"fm-bearings-board.v1", home:"render-home", generated:"2099-03-01T14:30:00Z", prs_live:false,
+    captains_call:[], inbox:[], later:[], underway:[], landed:[], charted:[]}' > "$home/payload.json"
+  build_board "$home" "$home/payload.json"
+  out=$(render "$home")
   printf '%s' "$out" | jq -e '
-    [.charted[] | .title] == ["Filed in August", "Filed in July", "Filed in June"]
-  ' >/dev/null || fail "charted next was not ordered newest filed first: $out"
-  pass "charted next renders the most recently filed work first"
+    .inboxCount == "0" and (.headline | startswith("0 things wait on you."))
+      and ([.sections[] | {key, empty}] == [
+        {key:"decisions", empty:["No open decisions."]},
+        {key:"underway", empty:["Nothing is underway."]},
+        {key:"landed", empty:["No recent completions are in the current baseline."]},
+        {key:"queued", empty:["Nothing is queued."]}])
+  ' >/dev/null || fail "an empty board did not say so in each place: $out"
+  pass "an empty board says so in Decisions, Underway, Landed, and Queued"
 }
 
-test_charted_rows_without_a_filed_date_follow_the_dated_rows_in_payload_order() {
-  local home out
-  home=$(make_home charted-undated)
-  out=$(render_board "$home" '[]' '[
-    {"id":"undated-first","repo":"sample","title":"Undated one","reason":"queued","dispatchable":true},
-    {"id":"dated","repo":"sample","title":"Dated","reason":"queued","dispatchable":true,"filed":"2026-07-22"},
-    {"id":"undated-second","repo":"sample","title":"Undated two","reason":"queued","dispatchable":true,"filed":null}
-  ]')
-  printf '%s' "$out" | jq -e '
-    [.charted[] | .title] == ["Dated", "Undated one", "Undated two"]
-  ' >/dev/null || fail "undated charted rows did not keep a stable trailing order: $out"
-  pass "charted rows with no filed date follow the dated rows in payload order"
-}
-
-test_a_decision_card_renders_its_options_recommendation_and_note_field() {
-  local home out
-  home=$(make_home decision-card)
-  out=$(FM_RENDER_CALLS='[{"key":"sample-call","type":"decision","repo":"sample",
-    "title":"Board answer shape","about":"How the captain answers","decide":"Which shape?",
-    "options":[
-      {"value":"cards","label":"Option cards","hint":"Pick from authored options"},
-      {"value":"chat","label":"Reply in chat","hint":"Skip the board"}],
-    "recommend_value":"cards","allow_freeform":true}]' render_board "$home" '[]' '[]')
-  printf '%s' "$out" | jq -e '
-    .error == "" and (.calls | length) == 1
-      and (.calls[0]
-        | .key == "sample-call"
-          and ([.options[] | .value] == ["cards", "chat", "reconcile"])
-          and ([.options[] | select(.recommended) | .value] == ["cards"])
-          and (.options[0].hint == "Pick from authored options")
-          and .note == "Or answer in your own words")
-  ' >/dev/null || fail "a decision card did not render its options, recommendation, and note field: $out"
-  pass "a decision card renders its authored options, the recommended tag, and a labelled note field"
-}
-
-# The template, not only the build gate, gives every decision card the note
-# field: inject a payload straight into the shipped template and render it.
-test_the_template_renders_a_note_field_on_every_decision_card() {
+# The template fails closed on its own, without the build gate: inject a wrong
+# schema straight into the shipped template.
+test_the_template_fails_closed_on_unreadable_data() {
   local home board out
-  home=$(make_home template-note)
+  home=$(make_home fail-closed)
   board="$home/board.html"
-  BOARD_JSON='{"schema":"fm-bearings-board.v1","home":"render-home","generated":"2026-08-26T00:00Z","prs_live":false,"captains_call":[{"key":"no-flag","type":"decision","repo":"sample","title":"No freeform flag","options":[{"value":"a","label":"A"},{"value":"b","label":"B"}],"recommend_value":"a"},{"key":"merge.sample","type":"merge","repo":"sample","title":"Merge sample","risk":"low","options":[{"value":"merge","label":"Merge now"}]}],"underway":[],"landed":[],"charted":[]}' \
+  BOARD_JSON='{"schema":"fm-bearings-board.v0"}' \
     perl -pe 's/^__FM_BEARINGS_BOARD_DATA__$/$ENV{BOARD_JSON}/' \
     "$ROOT/.agents/skills/bearings/assets/board-template.html" > "$board"
-  out=$(node "$HARNESS" "$board") || fail "the injected board could not be rendered"
-  printf '%s' "$out" | jq -e '
-    .error == ""
-      and ([.calls[] | {key, note}]
-        == [{key: "no-flag", note: "Or answer in your own words"}, {key: "merge.sample", note: null}])
-  ' >/dev/null || fail "the template did not give a decision card, and only it, the note field: $out"
-  pass "the template renders the note field on every decision card"
+  printf '[]\n' > "$home/steps.json"
+  out=$(node "$HARNESS" "$board" "$home/steps.json") || fail "the injected board could not be rendered"
+  printf '%s' "$out" | jq -e '.error | test("This board could not load") and test("fm-bearings-board.v0")' >/dev/null \
+    || fail "the template rendered unreadable data instead of failing closed: $out"
+  pass "the template says the board could not load rather than rendering an empty fleet"
 }
 
-test_a_decision_card_renders_its_options_recommendation_and_note_field
-test_the_template_renders_a_note_field_on_every_decision_card
-test_an_underway_row_leads_with_the_task_name_and_keeps_its_run_status
-test_an_underway_identifier_label_is_not_replaced_by_run_status
-test_charted_next_reads_newest_filed_first
-test_charted_rows_without_a_filed_date_follow_the_dated_rows_in_payload_order
-test_a_warning_row_reads_as_a_repair_not_as_queued_work
-test_warnings_are_excluded_from_the_charted_next_count
-test_a_board_of_only_warnings_still_reports_nothing_queued
-test_omitted_warnings_never_count_as_more_queued
-test_an_omitted_kind_keeps_the_existing_queued_rendering
+test_the_inbox_comes_first_in_folding_sections
+test_an_inbox_item_shows_its_own_actions_and_value_boxes
+test_an_action_carries_its_values_note_and_route
+test_an_action_with_an_empty_box_refuses_and_marks_it
+test_a_note_alone_is_sent_as_the_captains_words
+test_a_decision_card_opens_on_its_recommendation
+test_take_all_recommendations_confirms_then_sends_one_answer_per_card
+test_take_all_carries_each_cards_typed_note
+test_sections_remember_their_fold_per_viewer
+test_later_and_the_fleet_read_as_plain_words
+test_an_empty_board_says_so_in_each_place
+test_the_template_fails_closed_on_unreadable_data

@@ -173,6 +173,8 @@ write_valid_payload() {  # <path>
       "allow_freeform": true
     }
   ],
+  "inbox": [],
+  "later": [],
   "underway": [],
   "landed": [],
   "charted": [
@@ -299,7 +301,7 @@ test_build_refuses_malformed_payloads_before_touching_the_board() {
   jq '.landed = [{
     "id": "sample-landed",
     "repo": "sample",
-    "what": "Landed work",
+    "what": "Landed work","outcome": "Landed work",
     "owner": "firstmate",
     "pr_url": "data:text/html,unsafe"
   }]' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
@@ -644,12 +646,12 @@ test_build_drops_decision_cards_whose_subject_already_landed() {
          "recommend_value":"yes","allow_freeform":true}
       ]
       | .landed = [
-        {"id":"landed-by-task","repo":"sample","what":"shipped it","owner":"crew"},
-        {"id":"some-other-task","repo":"sample","what":"merged timeout reattach","owner":"crew",
+        {"id":"landed-by-task","repo":"sample","what":"shipped it","outcome":"shipped it","owner":"crew"},
+        {"id":"some-other-task","repo":"sample","what":"merged timeout reattach","outcome":"merged timeout reattach","owner":"crew",
          "pr_url":"https://github.com/sample/sample/pull/7"},
-        {"id":"quota-release","repo":"sample","what":"published quota-axi","owner":"crew",
+        {"id":"quota-release","repo":"sample","what":"published quota-axi","outcome":"published quota-axi","owner":"crew",
          "subject":{"artifact":"quota-axi","version":"0.1.38"}},
-        {"id":"unrelated\nstill-open","repo":"sample","what":"unrelated multiline identity","owner":"crew"}
+        {"id":"unrelated\nstill-open","repo":"sample","what":"unrelated multiline identity","outcome":"unrelated multiline identity","owner":"crew"}
       ]' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
 
   out=$(run_board "$home" build "$data" 2>&1) || fail "the hygiene build failed: $out"
@@ -830,7 +832,7 @@ test_a_weak_card_whose_subject_landed_is_dropped_not_refused() {
   write_valid_payload "$data"
   jq '.captains_call += [{"key":"old-done-only","type":"decision","repo":"sample",
         "title":"Already shipped","options":[{"value":"done","label":"Done"},{"value":"done","label":"Done"}]}]
-      | .landed = [{"id":"old-done-only","repo":"sample","what":"shipped it","owner":"crew"}]' \
+      | .landed = [{"id":"old-done-only","repo":"sample","what":"shipped it","outcome":"shipped it","owner":"crew"}]' \
     "$data" > "$data.tmp" && mv "$data.tmp" "$data"
   out=$(run_board "$home" build "$data" 2>&1) || fail "a landed weak card refused the board: $out"
   assert_contains "$out" "dropped-landed-card: old-done-only" "the landed weak card was not dropped: $out"
@@ -854,6 +856,129 @@ test_merge_and_credential_cards_keep_their_own_shapes() {
   pass "merge and credential cards keep their own option shapes"
 }
 
+# One inbox item of each kind the board carries: a worker blocked on the
+# captain, and a due captain hold whose actions read value boxes.
+INBOX_ITEMS='[
+  {"key":"sample-worker","group":"blocking","repo":"sample","title":"Open the sample site",
+   "ask":"Sign in so the worker can read it.","since":"2026-08-18T22:00:00Z","inputs":[],
+   "actions":[
+     {"value":"go","label":"Signed in - go","hint":"The worker reads it now.","effect":"resume-worker","reads":[]},
+     {"value":"monday","label":"Do it Monday","hint":"The worker stays parked until Monday 9 am.","effect":"remind-at","at":"2026-08-24T09:00","reads":[]}]},
+  {"key":"sample-count","group":"due","due":"2026-08-20","repo":"sample","title":"Count the sample shelf",
+   "ask":"Count both sizes.","inputs":[
+     {"name":"small","label":"Small","type":"number"},{"name":"large","label":"Large","type":"number"},
+     {"name":"day","label":"Back on","type":"date","default":"2026-08-27"}],
+   "actions":[
+     {"value":"save","label":"Save counts","hint":"Firstmate writes them to the ledger.","effect":"record","reads":["small","large"]},
+     {"value":"later","label":"Bring it back","hint":"Back on that day.","effect":"hold-until","reads":["day"]},
+     {"value":"never","label":"Not needed","hint":"Closes the item.","effect":"close","reads":[]}]}
+]'
+
+test_build_accepts_the_inbox_layout() {
+  local home data board
+  home=$(make_home inbox-layout)
+  data="$home/payload.json"
+  board="$home/.lavish/bearings-board.html"
+  write_valid_payload "$data"
+  jq --argjson inbox "$INBOX_ITEMS" '.inbox = $inbox
+    | .later = [{"id":"sample-later","repo":"sample","title":"[2026-09-01] Arjun: revisit later","group":"dated","back":"2026-09-01"},
+                {"id":"sample-held","repo":"sample","title":"Held for him","group":"held"},
+                {"id":"sample-unheld","repo":null,"title":"Filed as his","group":"unheld"}]
+    | .underway = [{"id":"sample-run","repo":"sample","name":"Sample run","state":"working","kind":"ship",
+                    "doing":"in code review","progress":{"done":3,"total":6,"step":"answer the review"}}]
+    | .landed = [{"id":"sample-done","repo":"sample","what":"sample change","outcome":"Sample live","owner":"crew",
+                  "pr_url":"https://github.com/example/sample/pull/2"}]
+    | .charted += [{"id":"sample-dated","repo":"sample","title":"Starts later","reason":"","dispatchable":false,
+                    "wait":"date","wait_date":"2026-09-10"}]' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  run_board "$home" build "$data" >/dev/null || fail "a valid inbox-first payload was refused"
+  extract_payload "$board" | jq -e '(.inbox | length) == 2 and (.later | length) == 3' >/dev/null \
+    || fail "the built board lost the inbox or later rows"
+  pass "build accepts the inbox-first layout: items, later rows, step progress, outcomes, and queue waits"
+}
+
+test_build_names_every_inbox_item_that_does_not_say_what_it_does() {
+  local home key=sample-count
+  home=$(make_home weak-inbox)
+  assert_weak_card_refused "$home" \
+    ".inbox = $INBOX_ITEMS | .inbox[1].actions = [.inbox[1].actions[0]] | .inbox[1].inputs = .inbox[1].inputs[0:2]" \
+    "$key: needs two or three actions (has 1)" "an item with one action"
+  assert_weak_card_refused "$home" \
+    ".inbox = $INBOX_ITEMS | .inbox[1].actions[2].hint = \" \"" \
+    "$key: needs a hint on action never" "an action with no hint"
+  assert_weak_card_refused "$home" \
+    ".inbox = $INBOX_ITEMS | .inbox[1].actions[2].effect = \"pay\"" \
+    "$key: needs a known effect on action never (has pay)" "an action with an unknown effect"
+  assert_weak_card_refused "$home" \
+    ".inbox = $INBOX_ITEMS | .inbox[1].actions[0].reads = [\"small\",\"ghost\"]" \
+    "$key: needs an input named ghost for action save, an action that reads input large" \
+    "an action reading a missing input"
+  assert_weak_card_refused "$home" \
+    ".inbox = $INBOX_ITEMS | .inbox[1].actions[1].reads = []" \
+    "either an until date or one date input on action later" "a deferral with no date"
+  assert_weak_card_refused "$home" \
+    ".inbox = $INBOX_ITEMS | .inbox[0].actions[1].effect = \"close\" | del(.inbox[0].actions[1].at)" \
+    "sample-worker: needs no close on action monday, since a blocking item is not a captain hold" \
+    "a worker item that closes a hold"
+  assert_weak_card_refused "$home" \
+    ".inbox = $INBOX_ITEMS | .inbox[1].actions[2].effect = \"dispatch\"" \
+    "$key: needs a one-line brief on dispatch action never" "a dispatch with no brief"
+  assert_weak_card_refused "$home" \
+    ".inbox = $INBOX_ITEMS | .inbox[1].key = .captains_call[0].key" \
+    "needs a key no other item or card uses" "an item sharing a card key"
+  assert_weak_card_refused "$home" \
+    ".inbox = $INBOX_ITEMS | .inbox[1].actions[2].value = \"reconcile\"" \
+    "$key: needs no action named reconcile, which is reserved" "an item occupying reconcile"
+  pass "build names every inbox item whose actions do not say plainly what the fleet does"
+}
+
+test_build_refuses_the_new_fields_out_of_shape() {
+  local home data rc out case filter
+  home=$(make_home new-fields)
+  data="$home/payload.json"
+  while IFS='|' read -r case filter; do
+    write_valid_payload "$data"
+    jq "$filter" "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+    set +e; out=$(run_board "$home" build "$data" 2>&1); rc=$?; set -e
+    [ "$rc" -ne 0 ] || fail "build accepted $case"
+    assert_contains "$out" "does not satisfy fm-bearings-board.v1" "the refusal of $case did not name the contract: $out"
+  done <<'EOF'
+a payload with no inbox|del(.inbox)
+a payload with no later rows|del(.later)
+a landed row with no outcome|.landed = [{"id":"x","repo":"s","what":"w","owner":"o"}]
+step progress past its total|.underway = [{"id":"x","repo":"s","name":"n","state":"working","kind":"ship","doing":"d","progress":{"done":7,"total":6}}]
+a dated later row with no date|.later = [{"id":"x","repo":"s","title":"t","group":"dated"}]
+a due item with no due date|.inbox = [{"key":"x","group":"due","repo":"s","title":"t","ask":"a","inputs":[],"actions":[]}]
+an unknown queue wait|.charted[0].wait = "someday"
+EOF
+  pass "build refuses each new layout field out of shape"
+}
+
+test_build_if_changed_skips_an_unchanged_board() {
+  local home data board out before
+  home=$(make_home if-changed)
+  data="$home/payload.json"
+  board="$home/.lavish/bearings-board.html"
+  write_valid_payload "$data"
+  out=$(run_board "$home" build --if-changed "$data") || fail "the first conditional build failed"
+  assert_contains "$out" "served: $board" "a conditional build with no prior board did not publish"
+  before=$(extract_payload "$board" | jq -r .generated)
+  jq '.generated = "2026-08-19T05:00Z"' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  out=$(run_board "$home" build --if-changed "$data") || fail "the unchanged conditional build failed"
+  assert_contains "$out" "unchanged: $board" "a board that differs only in its timestamp was republished: $out"
+  [ "$(extract_payload "$board" | jq -r .generated)" = "$before" ] \
+    || fail "an unchanged conditional build rewrote the board"
+  end_session_as_captain "$home"
+  out=$(run_board "$home" build --if-changed "$data") || fail "the conditional build over an ended session failed"
+  assert_not_contains "$out" "unchanged:" "an unchanged board whose session had ended was not reopened: $out"
+  assert_contains "$out" "session: reopened" "an ended board session was not reopened by the conditional build: $out"
+  jq '.charted[0].title = "Queued work, renamed"' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  out=$(run_board "$home" build --if-changed "$data") || fail "the changed conditional build failed"
+  assert_not_contains "$out" "unchanged:" "a changed board was skipped: $out"
+  extract_payload "$board" | jq -e '.charted[0].title == "Queued work, renamed"' >/dev/null \
+    || fail "a changed conditional build did not publish the change"
+  pass "build --if-changed republishes only when the composed board changed or its session ended"
+}
+
 test_path_is_stable_and_home_scoped
 test_build_refuses_malformed_payloads_before_touching_the_board
 test_charted_kind_is_optional_and_accepts_both_values
@@ -875,3 +1000,7 @@ test_build_refuses_a_nondecision_reconcile_value
 test_build_refuses_a_decision_card_without_a_real_choice
 test_merge_and_credential_cards_keep_their_own_shapes
 test_a_weak_card_whose_subject_landed_is_dropped_not_refused
+test_build_accepts_the_inbox_layout
+test_build_names_every_inbox_item_that_does_not_say_what_it_does
+test_build_refuses_the_new_fields_out_of_shape
+test_build_if_changed_skips_an_unchanged_board
