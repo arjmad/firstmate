@@ -1,53 +1,53 @@
 /* Firstmate's local Lavish chrome overlay. bin/fm-lavish-patch.mjs appends this file to
    lavish-axi's dist/chrome.css and owns when it is applied and removed.
-   1. The fleet-html house style (C1 airy, navy dark; ~/code/skills/skills/fleet-html/house.css v1)
+   1. The fleet-html house style (Dracula, dark only; ~/code/skills/skills/fleet-html/house.css v2)
       for Lavish's own chrome: the bar, the Conversation panel, buttons and inputs. Artifacts are
       untouched; they keep their own look inside the iframe.
    2. A collapse control and drag-to-resize for the desktop Conversation panel, adapted from
       kunchenguid/lavish-axi PR #455 (bar toggle) and PR #429 (resize handle). Desktop only: the
       phone bottom sheet below 861px keeps upstream's layout. */
 :root {
-  /* house primitives, values copied from house.css v1 */
-  --fm-navy-950: #121724;
-  --fm-navy-900: #1a2133;
-  --fm-navy-850: #202a40;
-  --fm-navy-750: #2c3650;
-  --fm-slate-500: #7a86a3;
-  --fm-slate-300: #aab4ca;
-  --fm-slate-100: #dde2ec;
-  --fm-slate-50: #eef1f7;
-  --fm-rust-300: #e69377;
-  --fm-rust-950: #3b2a2a;
-  --fm-gold-200: #f0d38c;
-  --fm-gold-950: #362d1c;
-  --fm-scrim: rgb(18 23 36 / 0.8);
+  /* house primitives, values copied from house.css v2 */
+  --fm-night-950: #282a36;
+  --fm-night-900: #343746;
+  --fm-comment-500: #6272a4;
+  --fm-comment-300: #8b96c8;
+  --fm-comment-200: #b0b8d8;
+  --fm-fg-50: #f8f8f2;
+  --fm-fg-100: #e2e2dc;
+  --fm-purple-300: #bd93f9;
+  --fm-purple-950: #3b3352;
+  --fm-yellow-200: #f1fa8c;
+  --fm-yellow-950: #3b3d2e;
+  --fm-scrim: rgb(40 42 54 / 0.8);
 
   /* Lavish's semantic tokens, mapped onto the house roles */
-  --bg: var(--fm-navy-950);
-  --bg-panel: var(--fm-navy-900);
-  --bg-bar: var(--fm-navy-900);
-  --bg-elevated: var(--fm-navy-850);
-  --fg: var(--fm-slate-50);
-  --fg-muted: var(--fm-slate-100);
-  --fg-dim: var(--fm-slate-100);
-  --fg-faint: var(--fm-slate-300);
-  --fg-label: var(--fm-slate-300);
-  --border: var(--fm-navy-750);
-  --border-subtle: var(--fm-navy-750);
-  --border-strong: var(--fm-slate-500);
-  --accent: var(--fm-rust-300);
-  --accent-hover: var(--fm-rust-300);
-  --accent-ink: var(--fm-navy-950);
+  --bg: var(--fm-night-950);
+  --bg-panel: var(--fm-night-900);
+  --bg-bar: var(--fm-night-900);
+  /* raised surfaces stay at night-900: purple accent text on house.css night-800 (#44475a) is only 3.8:1 */
+  --bg-elevated: var(--fm-night-900);
+  --fg: var(--fm-fg-50);
+  --fg-muted: var(--fm-fg-100);
+  --fg-dim: var(--fm-fg-100);
+  --fg-faint: var(--fm-comment-200);
+  --fg-label: var(--fm-comment-200);
+  --border: var(--fm-comment-500);
+  --border-subtle: var(--fm-comment-500);
+  --border-strong: var(--fm-comment-300);
+  --accent: var(--fm-purple-300);
+  --accent-hover: var(--fm-purple-300);
+  --accent-ink: var(--fm-night-950);
 
   /* Lavish primitives some rules read directly */
-  --ink-700: var(--fm-navy-850);
-  --ink-800: var(--fm-navy-900);
-  --steel-700: var(--fm-navy-850);
-  --cream-200: var(--fm-slate-100);
-  --brass-400: var(--fm-gold-200);
-  --brass-ink: var(--fm-navy-950);
-  --amber-700: var(--fm-gold-200);
-  --amber-900: var(--fm-gold-950);
+  --ink-700: var(--fm-night-900);
+  --ink-800: var(--fm-night-900);
+  --steel-700: var(--fm-night-900);
+  --cream-200: var(--fm-fg-100);
+  --brass-400: var(--fm-yellow-200);
+  --brass-ink: var(--fm-night-950);
+  --amber-700: var(--fm-yellow-200);
+  --amber-900: var(--fm-yellow-950);
 
   --font-serif: "Jost", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-sans: var(--font-serif);
@@ -55,7 +55,7 @@
   color-scheme: dark;
 }
 :focus-visible {
-  outline: 3px solid var(--fm-slate-50);
+  outline: 3px solid var(--fm-fg-50);
   outline-offset: 2px;
 }
 .brand-mark {
@@ -72,22 +72,27 @@
   border-color: var(--border-strong);
 }
 .warnings-button {
-  border-color: var(--fm-gold-200);
-  background: var(--fm-gold-950);
-  color: var(--fm-gold-200);
+  border-color: var(--fm-yellow-200);
+  background: var(--fm-yellow-950);
+  color: var(--fm-yellow-200);
 }
 .warnings-button:hover:not(:disabled),
 .warnings-button[aria-expanded="true"] {
-  border-color: var(--fm-gold-200);
-  background: var(--fm-gold-950);
-  color: var(--fm-slate-50);
+  border-color: var(--fm-yellow-200);
+  background: var(--fm-yellow-950);
+  color: var(--fm-fg-50);
+}
+.warning-chip.status-queued,
+.warning-chip.status-unverified {
+  border-color: var(--fm-yellow-200);
+  color: var(--fm-yellow-200);
 }
 .send-hint.persistent {
-  color: var(--fm-gold-200);
+  color: var(--fm-yellow-200);
 }
 .anchor-excerpt.text {
-  background: var(--fm-rust-950);
-  box-shadow: 0 0 0 1px var(--fm-rust-300);
+  background: var(--fm-purple-950);
+  box-shadow: 0 0 0 1px var(--fm-purple-300);
 }
 .share-overlay,
 .ended-overlay,
