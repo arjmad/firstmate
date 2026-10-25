@@ -2301,6 +2301,14 @@ test_keyed_deferral_re_holds_instead_of_closing() {
     | FM_CAPTAIN_HOLD_NOW=2026-07-20T12:00:00Z run_captain "$home" answers --source "the board sequence 3") \
     || fail "a deferral replayed after its date was refused: $out"
   assert_contains "$out" "deferred: sample-later-call until 2026-07-16" "a late replay did not stay a no-op"
+  out=$(printf 'sample-later-call\tnext\tPlan the sample send → Next week\tuntil=2026-07-21\n' \
+    | FM_CAPTAIN_HOLD_NOW=2026-07-15T12:00:00Z run_captain "$home" answers --source "the board sequence 5") \
+    || fail "a newer deferral was refused: $out"
+  out=$(printf 'sample-later-call\tthu\tPlan the sample send → Push to Thu\tuntil=2026-07-16\n' \
+    | FM_CAPTAIN_HOLD_NOW=2026-07-15T12:00:00Z run_captain "$home" answers --source "the board sequence 3") \
+    || fail "a replayed older deferral was refused: $out"
+  assert_contains "$(tasks_in "$home" show sample-later-call --full)" "hold_until: 2026-07-21" \
+    "a replayed older deferral rolled a newer date back"
 
   if out=$(printf 'sample-later-call\tlast week\tlabel\tuntil=2026-07-12\nsample-closed-call\tthu\tlabel\tuntil=2026-07-20\n' \
     | FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" answers --source "the board sequence 4"); then

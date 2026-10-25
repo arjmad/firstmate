@@ -237,11 +237,13 @@
     return s;
   }
 
+  // Every bubble is read once: a checked node carries its verdict, so a busy
+  // log's mutations rescan nothing they already looked at.
   function render(node) {
-    if (node.dataset.fmReceipt === "1") return;
+    if (node.dataset.fmReceipt) return;
     const receipt = receiptOf(node.textContent || "");
+    node.dataset.fmReceipt = receipt ? "1" : "0";
     if (!receipt) return;
-    node.dataset.fmReceipt = "1";
     node.textContent = "";
     node.appendChild(span("fm-receipt-item", receipt.item));
     node.appendChild(span("fm-receipt-arrow", " → "));

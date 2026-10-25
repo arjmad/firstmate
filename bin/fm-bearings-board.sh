@@ -39,7 +39,8 @@
 #            live listener, prints `board: <path>` and `unchanged: <path>` and
 #            touches nothing, so a heartbeat refresh never reloads a board the
 #            captain may be typing on; an ended session or a dead listener gets
-#            the full build instead. The fingerprint covers the template too and is
+#            the full build instead, and so does a new local day, because the
+#            page groups due work against its own today. The fingerprint covers the template too and is
 #            kept beside the board as bearings-board.sha256, written only once
 #            a build has proved its listener.
 # path       Print the stable board path for this home.
@@ -332,9 +333,9 @@ decision_card_gaps() {  # <effective-payload.json>
 #   resume-worker  steer the blocked worker with the answer
 #   close          close the held item (or lift its hold, with close: release)
 #   hold-until     re-hold the item until a date: its own `until`, or the one
-#                  date input it reads
+#                  date input it reads (the keyed intake defers it)
 #   remind-at      bring the item back at a time: its own `at`, or the one
-#                  datetime-local input it reads
+#                  datetime-local input it reads (firstmate schedules it)
 #   dispatch       start fleet work from its one-line `brief`
 #   draft          prepare something for the captain's review, never sent or paid
 #   send-mail      send mail under firstmate's normal account rules
@@ -587,7 +588,9 @@ command_build() {
     fail "inbox items must say what each action does: $gaps"
   fi
   json=$(jq -c . "$effective") || { rm -f -- "$effective"; fail "cannot compact the board data"; }
-  fingerprint=$({ cat -- "$TEMPLATE"; jq -cS 'del(.generated)' "$effective"; } | sha256_stdin) || fingerprint=''
+  # The page groups due work against its own today, so a new day is a change.
+  fingerprint=$({ cat -- "$TEMPLATE"; date +%Y-%m-%d; jq -cS 'del(.generated)' "$effective"; } \
+    | sha256_stdin) || fingerprint=''
   [ "${#fingerprint}" -eq 64 ] || { rm -f -- "$effective"; fail "cannot fingerprint the board data (shasum or sha256sum is required)"; }
   rm -f -- "$effective"
   # `<` never appears in JSON syntax outside strings, so escaping every

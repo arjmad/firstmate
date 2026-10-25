@@ -216,7 +216,7 @@ The optional mode column carries a card-declared close:
 | `until=YYYY-MM-DD` | The captain's deferral: `defer` records his words and re-holds the task `--until` that date, reported `deferred:`. |
 | Any other value | Skipped. |
 
-A deferral keeps the hold's kind and reason, drops a reversible self-release default because the captain has engaged, refuses a date that is not after today, and treats an exact replay as a no-op.
+A deferral keeps the hold's kind and reason, drops a reversible self-release default because the captain has engaged, accepts the captain's own today by refusing only a date before yesterday in UTC, and treats a deferral already recorded as a no-op, so a replayed older answer never rolls a newer date back.
 It closes nothing, so a board "later" answer can never complete the call it defers.
 
 Each key is reported as follows:
@@ -285,7 +285,7 @@ The Lavish adapter splits each capture between two commands:
 
 | Command | What it emits |
 | --- | --- |
-| `bin/fm-procevent-lavish.sh answers` | An exact non-reconcile card selection, or an inbox item's action whose effect closes (`close`) or defers (`hold-until`, `remind-at`) a held item; never a note sent alone and never a worker's item. |
+| `bin/fm-procevent-lavish.sh answers` | An exact non-reconcile card selection, or an inbox item's action whose effect closes (`close`) or defers to a valid date (`hold-until`) a held item; never a note sent alone, a timed `remind-at` firstmate schedules, or a worker's item. |
 | `reconciles` | Only task ids whose structured selection is Reconcile, carrying their notes as request provenance. |
 
 Current rows require the versioned shape and the `choice` tag.

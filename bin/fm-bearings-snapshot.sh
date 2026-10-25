@@ -168,10 +168,12 @@ in_flight waits_on is "captain" only when the worker's still-open blocker or
   question carries the structured [on=captain] status tag, and since is that
   line's UTC time (the oldest, when several are open); both are null otherwise.
 --fields board adds board{queued[],titles[]} for the bearings board composer:
-  every queued or held backlog row of this home and of each structured
-  secondmate home with its full title, kind, hold_kind, hold_until, full
-  hold_reason, filed date, blocker ids, wait (captain, date, outside, work, or
-  none) and ready (wait none), plus every in_flight id with its full name.
+  every queued or held backlog row of this home, with its full title, kind,
+  hold_kind, hold_until, full hold_reason, filed date, blocker ids, wait
+  (captain, date, outside, work, or none) and ready (wait none), plus each
+  structured secondmate home's queued rows as that home's summary projects
+  them (bounded, titles as it shortened them), and every in_flight id with its
+  full name.
 Opt-in surfaces: --fields bodies|paths|actions|endpoints|board, --all-in-flight,
   --all-decisions (all open decisions and captain holds in the bounded snapshot),
   --all-secondmates, --all-landed, --all-reports, --all-queued, --all-recorded-prs,
@@ -675,7 +677,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                    + [ ($snap.secondmate_current.records // [])[] as $m
                        | select($m.provenance.selected == "structured-home")
                        | $m.queued[]? | . + {owner:$m.id} ])[]
-                  | select(.structured != false and (.state == "queued" or .hold_kind != null))
+                  | select(.structured != false and ((.state // "queued") == "queued" or .hold_kind != null))
                   | select(.state != "done")
                   | ((.unresolved_blocker_ids // []) | length > 0) as $blocked
                   | (if .hold_kind == "captain" then "captain"

@@ -126,10 +126,13 @@
 # it closes or defers a captain hold, and never on the captain's words alone:
 #   - a decision card's picked option (`selection`) feeds as before;
 #   - an inbox item's action (`action`) feeds only for effect `close` (its
-#     card-declared mode, done by default), `hold-until` (mode
-#     `until=<YYYY-MM-DD>` from its `until`), or `remind-at` (the same mode,
-#     the date of its `at`), and never for a `blocking` item, which is a
-#     worker rather than a hold;
+#     card-declared mode, done by default) or `hold-until` with a valid
+#     `until` (mode `until=<YYYY-MM-DD>`), and never for a `blocking` item,
+#     which is a worker rather than a hold; a `remind-at` names a time of day
+#     the backlog cannot hold, so firstmate schedules it;
+#   - a later pick on the same item replaces an earlier one, including one
+#     firstmate routes or one whose date is unusable, so a superseded close
+#     or deferral is never fed;
 #   - an empty selection or action with a note is a note-only answer: the
 #     captain's own instruction for firstmate to read, never a closure.
 # Every other effect is firstmate's to route (bearings skill), from `read`.
@@ -968,20 +971,16 @@ cmd_choice_rows() {
             next;
           }
           if (!defined($effect) || ref($effect)) { $supersede->(); next; }
-          my $until;
           if ($effect eq "hold-until") {
-            $until = $data->{until};
-          } elsif ($effect eq "remind-at") {
-            $until = $data->{at};
-            $until = substr($until, 0, 10) if defined($until) && !ref($until)
-              && $until =~ /\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}\z/;
+            my $until = $data->{until};
+            if (!defined($until) || ref($until) || $until !~ /\A\d{4}-\d{2}-\d{2}\z/) {
+              $supersede->();
+              next;
+            }
+            $item_mode = "until=$until";
           } elsif ($effect ne "close") {
             $supersede->();
             next;
-          }
-          if ($effect ne "close") {
-            next if !defined($until) || ref($until) || $until !~ /\A\d{4}-\d{2}-\d{2}\z/;
-            $item_mode = "until=$until";
           }
           $selected = $action;
         } else {
@@ -1112,8 +1111,12 @@ cmd_read() {
         $route = "firstmate: $effect for the blocked worker";
       } elsif ($effect eq "close") {
         $route = "keyed intake (records the pick and closes)";
-      } elsif ($effect eq "hold-until" || $effect eq "remind-at") {
+      } elsif ($effect eq "hold-until" && $str->($data->{until}) =~ /\A\d{4}-\d{2}-\d{2}\z/) {
         $route = "keyed intake (re-holds until the date)";
+      } elsif ($effect eq "hold-until") {
+        $route = "firstmate: hold-until with no usable date; nothing was fed";
+      } elsif ($effect eq "remind-at") {
+        $route = "firstmate: remind-at (defer to that day and bring it back at that time)";
       } else {
         $route = "firstmate: $effect";
       }

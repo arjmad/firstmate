@@ -113,12 +113,13 @@
 # exact words of the decision file go on a `Captain deferred:` body block (the
 # previous body archived), and the task is re-held with `hold --until` that
 # date, keeping its kind (a reversible default is dropped, because the captain
-# has engaged) and its reason. A date may be today in the captain's own time
-# zone, so only a date before yesterday in UTC (FM_CAPTAIN_HOLD_NOW overrides
-# now) is refused; a date already reached makes the call due again at once,
-# which is what a same-day reminder means. An exact retry - same words, same
-# date, still held - is a no-op whatever the date. It never closes or releases
-# anything.
+# has engaged) and its reason. The re-hold comes first and the words are
+# recorded once it stands, so a call closed in between never carries a deferral
+# it did not get. A date may be today in the captain's own time zone, so only a
+# date before yesterday in UTC (FM_CAPTAIN_HOLD_NOW overrides now) is refused.
+# A deferral already recorded is a no-op whatever its date - when it is applied,
+# or when a newer deferral has replaced it, so a replayed older answer never
+# rolls the date back. It never closes or releases anything.
 #
 # ONE KEYED-ANSWER INTAKE, FED BY EVERY CHANNEL.
 # "A keyed answer resolves its matching captain-held task" is a single
@@ -1436,12 +1437,9 @@ command_answer() {
   fail "task $id is not held for the captain; hold it first or name the right task"
 }
 
-# Every open row this home holds for the captain, one id per line. The listing's
-# first field is the slug id and its last is the requested hold_kind, so a
-# quoted title holding commas cannot shift either.
 command_defer() {
   local id=${1:-} until='' decision_file='' show decoded hold_kind hold_until reason
-  local earliest stamp marker tmp kind_flag='' stamp_epoch
+  local earliest stamp marker latest tmp kind_flag='' stamp_epoch
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -1464,6 +1462,9 @@ command_defer() {
   earliest=$(epoch_to_utc_iso $((stamp_epoch - 86400)))
   earliest=${earliest%%T*}
   marker="Captain deferral: until $until | decision digest: $DECISION_DIGEST"
+
+  # Decide under the task lock whether this deferral is new, already applied,
+  # or superseded by a newer one; only a new one checks its date.
   acquire_task_control_lock "$id"
   require_tasks_axi
   task_show_or_fail "$id" "task $id is absent from this home's configured backlog (data directory $DATA)"
@@ -1473,9 +1474,12 @@ command_defer() {
   [ "$hold_kind" = captain ] || fail "task $id is not held for the captain"
   decoded=$(decode_shown_value "$(show_field "$show" body)") \
     || fail "could not decode the existing body for $id"
+  latest=$(printf '%s\n' "$decoded" | grep '^Captain deferral: until ' | tail -1)
   case "$decoded" in
     *"$marker"*)
-      if [ "$hold_until" = "$until" ]; then
+      # Recorded before: a no-op when it is applied or a newer deferral has
+      # replaced it, so a replayed older answer never rolls the date back.
+      if [ "$latest" != "$marker" ] || [ "$hold_until" = "$until" ]; then
         printf 'deferred: %s until %s\n' "$id" "$until"
         return 0
       fi
@@ -1483,6 +1487,34 @@ command_defer() {
     *)
       [[ ! "$until" < "$earliest" ]] \
         || fail "the deferral date $until has already passed (earliest accepted: $earliest)"
+      ;;
+  esac
+  reason=$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")
+  if parse_hold_kind_prefix "$reason"; then
+    kind_flag=$HOLD_DECISION_KIND
+    reason=${reason#\[*\] }
+  fi
+  [ -n "$reason" ] || reason="captain decision pending"
+  release_task_control_lock
+
+  # Re-hold first, through the owner that takes its own lock, and record the
+  # captain's words only once the hold stands, so a call closed in between is
+  # never left carrying a deferral it did not get.
+  if [ -n "$kind_flag" ]; then
+    "$0" hold "$id" --reason "$reason" --kind "$kind_flag" --until "$until" >/dev/null \
+      || fail "could not re-hold $id until $until"
+  else
+    "$0" hold "$id" --reason "$reason" --until "$until" >/dev/null \
+      || fail "could not re-hold $id until $until"
+  fi
+  acquire_task_control_lock "$id"
+  task_show_or_fail "$id" "task $id disappeared while deferring it"
+  [ "$(show_field "$show" state)" != "done" ] || fail "task $id was closed while it was being deferred"
+  decoded=$(decode_shown_value "$(show_field "$show" body)") \
+    || fail "could not decode the existing body for $id"
+  case "$decoded" in
+    *"$marker"*) : ;;
+    *)
       tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-defer.XXXXXX") \
         || fail "cannot stage the deferral for $id"
       if ! printf '%s\n\nCaptain deferred: %s\n%s\n%s\n' "$decoded" "$stamp" "$marker" "$DECISION_TEXT" > "$tmp"; then
@@ -1496,23 +1528,12 @@ command_defer() {
       rm -f -- "$tmp"
       ;;
   esac
-  reason=$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")
-  if parse_hold_kind_prefix "$reason"; then
-    kind_flag=$HOLD_DECISION_KIND
-    reason=${reason#\[*\] }
-  fi
-  [ -n "$reason" ] || reason="captain decision pending"
-  release_task_control_lock
-  if [ -n "$kind_flag" ]; then
-    "$0" hold "$id" --reason "$reason" --kind "$kind_flag" --until "$until" >/dev/null \
-      || fail "could not re-hold $id until $until"
-  else
-    "$0" hold "$id" --reason "$reason" --until "$until" >/dev/null \
-      || fail "could not re-hold $id until $until"
-  fi
   printf 'deferred: %s until %s\n' "$id" "$until"
 }
 
+# Every open row this home holds for the captain, one id per line. The listing's
+# first field is the slug id and its last is the requested hold_kind, so a
+# quoted title holding commas cannot shift either.
 held_captain_task_ids() {
   local listing
   listing=$(tasks_axi list --state held --fields hold_kind --limit 100000 2>/dev/null) || return 1
