@@ -1229,9 +1229,11 @@ command_hold() {
   show=$TASK_SHOW_OUTPUT
   hold_kind=$(show_field_value "$show" hold_kind)
   [ "$hold_kind" = captain ] || fail "task $id did not retain its captain hold"
-  write_owner "$id" arjun || fail "task $id is held for the captain, but its owner could not be recorded; repeat the hold"
-  task_show "$id" || fail "task $id disappeared while recording its owner"
-  show=$TASK_SHOW_OUTPUT
+  write_owner "$id" arjun "$show" || fail "task $id is held for the captain, but its owner could not be recorded; repeat the hold"
+  if [ "$OWNER_WRITTEN" = 1 ]; then
+    task_show "$id" || fail "task $id disappeared while recording its owner"
+    show=$TASK_SHOW_OUTPUT
+  fi
   occurrence=$(( $(resolution_record_count "$(show_field "$show" body)") + 1 ))
   [ -n "$(body_hold_set_timestamp "$(show_field_value "$show" body)")" ] \
     || fail "task $id lost its hold-set stamp while being held"
@@ -1301,9 +1303,13 @@ apply_pending_retained_artifact() {  # <task-id>
 }
 
 # Record <owner> as the row's owner (see the header) unless it already is.
-write_owner() {  # <task-id> <owner>
-  local id=$1 owner=$2 show body tmp
-  task_show_or_fail "$id" "task $id disappeared before recording its owner"
+# A caller holding a fresh read of the row passes it to spare a backend read.
+# OWNER_WRITTEN says whether the body changed.
+OWNER_WRITTEN=0
+write_owner() {  # <task-id> <owner> [<fresh-show-output>]
+  local id=$1 owner=$2 show=${3:-} body tmp
+  OWNER_WRITTEN=0
+  [ -n "$show" ] || task_show_or_fail "$id" "task $id disappeared before recording its owner"
   body=$(show_field_value "$show" body) || return 1
   [ "$(fm_backlog_owner_of_body "$body")" != "$owner" ] || return 0
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-owner.XXXXXX") || return 1
@@ -1313,6 +1319,7 @@ write_owner() {  # <task-id> <owner>
     return 1
   fi
   rm -f -- "$tmp"
+  OWNER_WRITTEN=1
 }
 
 close_answered() {  # <task-id> <release-0-or-1>
@@ -1455,6 +1462,8 @@ command_answer() {
     [ "$recorded_mode" = released ] && [ "$release" = 1 ] \
       || fail "task $id records this answer with mode ${recorded_mode:-unknown}; replay requires matching --release"
     remove_interrupted_answer_stamp "$id"
+    # The unhold may have landed before an interrupted owner write.
+    write_owner "$id" fleet || fail "task $id is released, but its owner could not be handed back to the fleet; repeat the answer"
     publish_parent_resolution_then_retire "$id" $((occurrence - 1)) released
     printf 'released: %s\n' "$id"
     return 0

@@ -371,9 +371,9 @@ For a main-home call, the reconcile option is the recovery path for whatever sti
 `bin/fm-fleet-snapshot.sh` parses canonical tasks-axi `(hold: ...)`, `(hold-kind: ...)`, and `(hold-until: ...)` metadata alongside existing backlog fields.
 It resolves every repeated `blocked-by:` edge against structured Done records and keeps missing blockers unresolved.
 It then assigns every captain hold exactly one `hold_bucket`.
-The bucket is decided only from structured fields: `hold_kind`, `state`, `hold_until`, `unresolved_blocker_ids`, the machine-written hold-set timestamp, and the machine-written owner (`owned_by`).
+The bucket is decided only from structured fields: `hold_kind`, `state`, `hold_until`, `unresolved_blocker_ids`, and the machine-written hold-set timestamp.
 Hold reason and body prose are never matched, so no wording can hide, reveal, or reclassify a decision.
-A captain hold on a row the fleet owns gets no bucket: it is not waiting on the captain, so it reads as an ordinary held row and never reaches his inbox.
+The row's owner line never moves a captain hold either; `bin/fm-tasks-axi.sh owner <id> fleet` refuses a row under one, so fleet work that comes back on a date is re-held as a `future` hold first.
 
 The buckets are total and mutually exclusive.
 The first matching row in this order decides the bucket:

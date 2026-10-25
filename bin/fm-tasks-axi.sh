@@ -26,9 +26,13 @@
 # (fleet), except `--kind captain`, which must name one and is refused
 # otherwise. An `Owner:` line already in the given body counts as naming one.
 # `update` with `--body` or `--body-file` carries the row's recorded owner
-# into a new body that names none, so rewriting a note never drops it. The
-# wrapper-only subcommand `owner <id>` prints the recorded owner (`-` when
-# none), and `owner <id> arjun|fleet` records it, idempotently.
+# into a new body that names none, so rewriting a note never drops it; such
+# an update names the row id first and refuses when the row cannot be read.
+# The wrapper-only subcommand `owner <id>` prints the recorded owner (`-` when
+# none), and `owner <id> arjun|fleet` records it, idempotently, under the same
+# per-task control lock bin/fm-captain-hold.sh takes. A row under an active
+# captain hold waits on the captain, so `owner <id> fleet` refuses it: re-hold
+# fleet work that comes back on a date as a `future` hold first.
 #
 # Superseded-ruling guard (opt-in): when the home-private `config/captain-name`
 # names the captain (one name per line; blank and `#` lines ignored), `hold`,
@@ -77,7 +81,9 @@
 #   - a `hold` whose reason cites a captain quote older than the newest one on
 #     record for the task, without --cite-older-quote (see the guard above);
 #   - an `add` of `--kind captain` that names no owner, an `--owner` value
-#     other than arjun or fleet, or `owner` on a row that does not exist.
+#     other than arjun or fleet, `owner` on a row that does not exist,
+#     `owner <id> fleet` on a row held for the captain, or an `update` with a
+#     new body whose row id is not first or whose row cannot be read.
 # Otherwise the exit status is tasks-axi's own, unless decoding a read fails;
 # in that case the decoder's nonzero status is returned.
 set -u
@@ -247,14 +253,25 @@ stage_body() {  # <body>
   ARGS=(${out[@]+"${out[@]}"} --body-file "$OWNER_BODY_FILE")
 }
 
-# The current body of row <id>, decoded, into SHOWN_BODY; fails when the row
-# cannot be read.
+# The current read of row <id> into SHOWN_ROW and its decoded body into
+# SHOWN_BODY; fails when the row cannot be read.
+SHOWN_ROW=
 SHOWN_BODY=
 shown_body() {  # <id>
-  local show
-  show=$(tasks-axi show "$1" --full 2>/dev/null) || return 1
-  printf '%s\n' "$show" | grep -q '^code: NOT_FOUND$' && return 1
-  SHOWN_BODY=$(fm_backlog_owner_shown_body "$show") || return 1
+  SHOWN_ROW=$(tasks-axi show "$1" --full 2>/dev/null) || return 1
+  printf '%s\n' "$SHOWN_ROW" | grep -q '^code: NOT_FOUND$' && return 1
+  SHOWN_BODY=$(fm_backlog_owner_shown_body "$SHOWN_ROW") || return 1
+}
+
+# Hold bin/fm-captain-hold.sh's per-task control lock for the rest of this
+# command, so an owner rewrite never replays a body that a concurrent hold or
+# answer has just changed.
+task_lock() {  # <id>
+  # shellcheck source=bin/fm-wake-lib.sh disable=SC1091
+  . "$SCRIPT_DIR/fm-wake-lib.sh"
+  TASK_LOCK="$STATE/.control-$1.lock"
+  fm_lock_acquire_wait "$TASK_LOCK" || fail "cannot take the control lock for $1"
+  trap 'fm_lock_release "$TASK_LOCK"' EXIT
 }
 
 # add/create: name the owner at filing (see the header).
@@ -279,14 +296,17 @@ prepare_update_owner() {
   given_body || return 0
   if [ -z "$(fm_backlog_owner_of_body "$GIVEN_BODY")" ]; then
     case "$id" in
-      ''|-*) : ;;
-      *) shown_body "$id" && recorded=$(fm_backlog_owner_of_body "$SHOWN_BODY") ;;
+      ''|-*) fail "name the row id right after update, so its owner can carry into the new body" ;;
     esac
+    task_lock "$id"
+    shown_body "$id" || fail "cannot read $id to carry its owner into the new body"
+    recorded=$(fm_backlog_owner_of_body "$SHOWN_BODY")
   fi
   if [ -n "$recorded" ]; then
     stage_body "$(fm_backlog_owner_body_with "$GIVEN_BODY" "$recorded")"
-  elif [ "$GIVEN_BODY_STDIN" = 1 ]; then
-    # Standard input is already read, so hand tasks-axi the body as a file.
+  elif [ "$GIVEN_BODY_STDIN" = 1 ] || [ -n "${TASK_LOCK:-}" ]; then
+    # Standard input is already read, or the lock must outlive the write
+    # (exec would drop its release), so hand tasks-axi the body as a file.
     stage_body "$GIVEN_BODY"
   fi
 }
@@ -296,13 +316,21 @@ command_owner() {
   local id=${ARGS[1]:-} want=${ARGS[2]:-} recorded
   case "$id" in ''|-*) fail "usage: owner <id> [arjun|fleet]" ;; esac
   [ "${#ARGS[@]}" -le 3 ] || fail "usage: owner <id> [arjun|fleet]"
+  if [ -n "$want" ]; then
+    fm_backlog_owner_valid "$want" || fail "owner must be arjun or fleet, not $want"
+    task_lock "$id"
+  fi
   shown_body "$id" || fail "no backlog row $id in this home"
   recorded=$(fm_backlog_owner_of_body "$SHOWN_BODY")
   if [ -z "$want" ]; then
     printf '%s\n' "${recorded:--}"
     return 0
   fi
-  fm_backlog_owner_valid "$want" || fail "owner must be arjun or fleet, not $want"
+  if [ "$want" = fleet ] \
+    && printf '%s\n' "$SHOWN_ROW" | grep -q '^  held: yes$' \
+    && printf '%s\n' "$SHOWN_ROW" | grep -q '^  hold_kind: captain$'; then
+    fail "$id is held for the captain, so it waits on him; answer the hold, or re-hold fleet work that comes back on a date with hold --kind future --until, before naming the fleet"
+  fi
   if [ "$recorded" = "$want" ]; then
     printf 'ok: owner %s already %s\n' "$id" "$want"
     return 0

@@ -174,10 +174,11 @@ in_flight waits_on is "captain" only when the worker's still-open blocker or
   outside, work, or none) and ready (wait none), plus each
   structured secondmate home's queued rows as that home's summary projects
   them (bounded, titles as it shortened them), and every in_flight id with its
-  full name. wait is captain exactly when owned_by is arjun; a fleet-owned row
-  never waits on the captain, whatever its hold or kind. Only a row with no
-  recorded owner falls back to its captain hold or kind=captain, and
-  omitted[] counts those rows so the gap stays visible.
+  full name. wait is captain for every captain hold, and for every row owned_by
+  arjun that no unfinished work blocks; a fleet-owned row never waits on the
+  captain otherwise, whatever its kind. Only a row with no recorded owner
+  falls back to kind=captain, and omitted[] counts those rows so the gap stays
+  visible.
 Opt-in surfaces: --fields bodies|paths|actions|endpoints|board, --all-in-flight,
   --all-decisions (all open decisions and captain holds in the bounded snapshot),
   --all-secondmates, --all-landed, --all-reports, --all-queued, --all-recorded-prs,
@@ -685,11 +686,10 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                   | select(.state != "done")
                   | ((.unresolved_blocker_ids // []) | length > 0) as $blocked
                   | (.owned_by // null) as $owned_by
-                  | (if $owned_by == "arjun" then "captain"
-                     elif $owned_by == null and .hold_kind == "captain" then "captain"
+                  | (if .hold_kind == "captain" then "captain"
                      elif $blocked then "work"
-                     elif .hold_kind == "future" or (.hold_kind == null and .hold_until != null)
-                          or ($owned_by == "fleet" and .hold_kind == "captain" and .hold_until != null) then "date"
+                     elif $owned_by == "arjun" then "captain"
+                     elif .hold_kind == "future" or (.hold_kind == null and .hold_until != null) then "date"
                      elif .hold_kind == "external" then "outside"
                      elif .hold_kind != null then "work"
                      elif $owned_by == null and .kind == "captain" then "captain"

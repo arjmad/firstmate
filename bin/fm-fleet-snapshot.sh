@@ -32,15 +32,15 @@
 #     primitive, whatever kind its row carries.
 #     hold_bucket is the single classification for every captain hold, decided
 #     only from structured fields - state, hold_kind, hold_until,
-#     unresolved_blocker_ids, owned_by, and the machine-written hold-set
-#     timestamp. No hold reason or body prose is ever matched. The buckets are total and
+#     unresolved_blocker_ids, and the machine-written hold-set timestamp. No
+#     hold reason or body prose is ever matched. The buckets are total and
 #     mutually exclusive, so every captain hold lands in exactly one and none
 #     can fall through: "blocked" when any blocker is unresolved, else "dated"
 #     when hold_until is still in the future, else "aged" when an undated hold
 #     is at least FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS old (default 14; legacy
 #     unstamped holds fall back to `since`), else "live". A non-captain or Done
-#     row carries null, and so does a captain hold whose row the fleet owns:
-#     it is not waiting on the captain, so it is an ordinary held row.
+#     row carries null. owned_by never moves a captain hold: a hold for the
+#     captain waits on him whatever the row's owner line says.
 #     captain_actionable means "waiting on the captain now" and is exactly
 #     hold_bucket == "live".
 #     hold_age_days is the hold's age when computable, else null.
@@ -289,9 +289,8 @@ FM_SNAPSHOT_REGISTRY_BYTES, FM_SNAPSHOT_REGISTRY_RECORDS, and
 FM_SNAPSHOT_REGISTRY_TIMEOUT, with unavailability and truncation disclosed.
 Every captain hold carries hold_bucket, decided only from structured fields and
 never from hold reason or body prose: "blocked", "dated", "aged", or "live".
-A captain hold on a row whose machine-written Owner: line names the fleet is
-not waiting on the captain and carries none. Every structured row and every
-summary queued row carries owned_by: "arjun", "fleet", or null when unrecorded.
+Every structured row and every summary queued row carries owned_by: "arjun",
+"fleet", or null when unrecorded; it never changes a captain hold's bucket.
 An undated hold ages once its hold-set timestamp is at least
 FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS old (default 14; 0 ages every hold with a
 non-negative computed age); legacy holds without a stamp fall back to their
@@ -579,8 +578,7 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
           | .requires_child_metadata = (.current_role == "worker")
           | .hold_age_days = days_between((.hold_set // .since); $now)
           | .hold_bucket =
-              (if .hold_kind != "captain" or .hold_reason == null or .state == "done"
-                  or .owned_by == "fleet" then null
+              (if .hold_kind != "captain" or .hold_reason == null or .state == "done" then null
                elif (.unresolved_blocker_ids | length) > 0 then "blocked"
                elif .hold_until != null and .hold_until > $today then "dated"
                elif .hold_until == null and .hold_age_days != null

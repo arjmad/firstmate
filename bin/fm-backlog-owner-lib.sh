@@ -16,7 +16,10 @@
 # deferrals) never displace it. A reader takes the last matching line, which
 # is the canonical one even when quoted captain words above it happen to
 # contain the same text. bin/fm-fleet-snapshot.sh reads the same line from the
-# markdown backlog and is pinned to this format by its tests.
+# markdown backlog in jq and is pinned to this format by
+# tests/fm-bearings-snapshot.test.sh. An owner line never outranks a captain
+# hold: a row held for the captain waits on him whatever the line says, and
+# bin/fm-tasks-axi.sh refuses to record fleet on such a row.
 #
 # Who sets it: bin/fm-tasks-axi.sh at `add` (default by kind, required for
 # kind=captain) and through its `owner` subcommand; bin/fm-captain-hold.sh at

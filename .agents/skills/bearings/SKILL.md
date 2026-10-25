@@ -102,7 +102,7 @@ Compose it from the same snapshot command run as `bin/fm-bearings-snapshot.sh --
 `bin/fm-bearings-board.sh`'s header owns every field and refusal; these rules own what goes where.
 
 Placement, from structured fields only (never from reason or body prose):
-A row is the captain's exactly when its recorded owner is `arjun`: `board.queued` marks those `wait: captain`, and the snapshot keeps a fleet-owned captain hold out of the live decisions, so fleet-owned work never enters his inbox or Later, whatever its hold or kind.
+A row is the captain's when it is held for him or its recorded owner is `arjun` and no unfinished work blocks it: `board.queued` marks those `wait: captain`, and a fleet-owned row never enters his inbox or Later, whatever its kind.
 
 - **Blocking a worker** (`inbox[]`, group `blocking`, key = the task id): every `in_flight` row whose `waits_on` is `captain`, the worker's structured `[on=captain]` status tag; `since` is that row's `since`.
 - **Decisions** (`captains_call[]`): every live captain call with no `hold_until`, plus each PR ready to merge and each needed credential.

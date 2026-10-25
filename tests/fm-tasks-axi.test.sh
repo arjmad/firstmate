@@ -273,6 +273,17 @@ test_wrapper_owner_at_filing() {
   out=$(wrapper_from_code "$dir" owner ow-cap boss 2>&1)
   rc=$?
   expect_code 2 "$rc" "owner with an unknown value"
+  out=$(wrapper_from_code "$dir" update --body "id last" ow-cap 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "update with the row id after the body"
+  wrapper_from_code "$dir" hold ow-file --reason "his call" --kind captain >/dev/null || fail "could not hold ow-file"
+  out=$(wrapper_from_code "$dir" owner ow-file fleet 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "owner fleet on a captain-held row"
+  assert_contains "$out" "held for the captain" "the captain-hold refusal did not say why"
+  assert_equals arjun "$(wrapper_from_code "$dir" owner ow-file)" "a refused owner change still wrote"
+  [ -z "$(find "$dir/home/state" -name '.control-*.lock' 2>/dev/null)" ] \
+    || fail "an owner write left its control lock behind"
   pass "fm-tasks-axi.sh names every new row's owner, keeps it through body rewrites, and reads and records it"
 }
 

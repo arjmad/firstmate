@@ -223,6 +223,11 @@ test_hold_records_the_captain_as_owner_and_release_hands_back() {
   run_captain "$home" answer sample-ship --decision-file "$home/answer.txt" --release >/dev/null \
     || fail "the released answer was refused"
   assert_equals fleet "$(task_owner "$home" sample-ship)" "a released hold did not hand the work back to the fleet"
+  # A replay finishes a release whose owner write never landed.
+  FM_HOME="$home" "$ROOT/bin/fm-tasks-axi.sh" owner sample-ship arjun >/dev/null || fail "could not reset the owner"
+  run_captain "$home" answer sample-ship --decision-file "$home/answer.txt" --release >/dev/null \
+    || fail "the replayed release was refused"
+  assert_equals fleet "$(task_owner "$home" sample-ship)" "a replayed release did not hand the work back to the fleet"
   run_captain "$home" answer sample-new --decision-file "$home/answer.txt" >/dev/null \
     || fail "the closing answer was refused"
   assert_equals arjun "$(task_owner "$home" sample-new)" "a closing answer changed the owner"
