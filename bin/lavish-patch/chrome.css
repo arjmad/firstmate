@@ -10,7 +10,6 @@
   /* house primitives, values copied from house.css v2 */
   --fm-night-950: #282a36;
   --fm-night-900: #343746;
-  --fm-night-800: #44475a;
   --fm-comment-500: #6272a4;
   --fm-comment-300: #8b96c8;
   --fm-comment-200: #b0b8d8;
@@ -26,7 +25,8 @@
   --bg: var(--fm-night-950);
   --bg-panel: var(--fm-night-900);
   --bg-bar: var(--fm-night-900);
-  --bg-elevated: var(--fm-night-800);
+  /* raised surfaces stay at night-900: purple accent text on house.css night-800 (#44475a) is only 3.8:1 */
+  --bg-elevated: var(--fm-night-900);
   --fg: var(--fm-fg-50);
   --fg-muted: var(--fm-fg-100);
   --fg-dim: var(--fm-fg-100);
@@ -40,9 +40,9 @@
   --accent-ink: var(--fm-night-950);
 
   /* Lavish primitives some rules read directly */
-  --ink-700: var(--fm-night-800);
+  --ink-700: var(--fm-night-900);
   --ink-800: var(--fm-night-900);
-  --steel-700: var(--fm-night-800);
+  --steel-700: var(--fm-night-900);
   --cream-200: var(--fm-fg-100);
   --brass-400: var(--fm-yellow-200);
   --brass-ink: var(--fm-night-950);
@@ -81,6 +81,11 @@
   border-color: var(--fm-yellow-200);
   background: var(--fm-yellow-950);
   color: var(--fm-fg-50);
+}
+.warning-chip.status-queued,
+.warning-chip.status-unverified {
+  border-color: var(--fm-yellow-200);
+  color: var(--fm-yellow-200);
 }
 .send-hint.persistent {
   color: var(--fm-yellow-200);
