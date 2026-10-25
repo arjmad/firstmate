@@ -55,7 +55,10 @@ It works in this order:
 2. It records the task's UTC hold-set timestamp as the leading line of the task body.
 3. When `--origin` is supplied, it records the origin on the task, replacing any previous association.
 4. It invokes the underlying tasks-axi hold operation.
-5. It verifies the hold and timestamp.
+5. It verifies the hold and timestamp, then records the captain as the row's owner.
+
+A call held for the captain is his next move, so `hold` writes `Owner: arjun` on the row ([`bin/fm-backlog-owner-lib.sh`](../bin/fm-backlog-owner-lib.sh) owns the record); a row it creates carries that line from its first write.
+Releasing the hold, by `answer --release` or a default release of a work row, hands the row back with `Owner: fleet`, because the work resumes.
 
 Publishing the stamp first ensures a snapshot cannot observe a newly captain-held task without the timestamp that defines its age.
 
@@ -370,6 +373,7 @@ It resolves every repeated `blocked-by:` edge against structured Done records an
 It then assigns every captain hold exactly one `hold_bucket`.
 The bucket is decided only from structured fields: `hold_kind`, `state`, `hold_until`, `unresolved_blocker_ids`, and the machine-written hold-set timestamp.
 Hold reason and body prose are never matched, so no wording can hide, reveal, or reclassify a decision.
+The row's owner line never moves a captain hold either; `bin/fm-tasks-axi.sh owner <id> fleet` refuses a row under one, so fleet work that comes back on a date is re-held as a `future` hold first.
 
 The buckets are total and mutually exclusive.
 The first matching row in this order decides the bucket:

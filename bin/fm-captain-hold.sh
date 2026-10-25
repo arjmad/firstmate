@@ -56,6 +56,13 @@
 # `complete` and `verify` check. The reason may hold parentheses and line breaks:
 # tasks-axi refuses them, so `hold` escapes them where it writes the reason and
 # readers decode them (bin/fm-hold-reason-lib.sh owns the encoding).
+# `hold` also records the captain as the row's owner (`Owner: arjun`, the
+# record bin/fm-backlog-owner-lib.sh owns): a call held for him is his next
+# move. A created row carries the line from its first write. Releasing a hold
+# (`answer --release`, or a default release that lifts a work row's hold)
+# hands the row back with `Owner: fleet`, because the captain has answered and
+# the work resumes; record arjun again through `fm-tasks-axi.sh owner` when
+# steps of his own remain.
 # `--until` records the captain's own deferral date through `tasks-axi hold
 # --until`, so a "revisit later" answer is stored as a date instead of a live
 # card.
@@ -282,6 +289,9 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # shellcheck source=bin/fm-hold-reason-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-hold-reason-lib.sh"
+# shellcheck source=bin/fm-backlog-owner-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-backlog-owner-lib.sh"
 # shellcheck source=bin/fm-parent-channel-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-parent-channel-lib.sh"
@@ -1165,16 +1175,12 @@ command_hold() {
     [ -n "$repo" ] || repo=firstmate
     validate_one_line repo "$repo"
     [ -z "$origin" ] || body=$(printf 'Origin: %s' "$origin")
+    body=$(fm_backlog_owner_body_with "$body" arjun)
     # tasks-axi add never passes --due. Beads due.required would refuse this
     # create, and captain holds have no due semantics, so waive it for this
     # call only. --kind captain stays metadata; Beads native type is task.
-    if [ -n "$body" ]; then
-      BD_DUE_REQUIRED=false tasks_axi add "$id" "$title" --kind captain --repo "$repo" --body "$body" >/dev/null \
-        || fail "could not create task $id"
-    else
-      BD_DUE_REQUIRED=false tasks_axi add "$id" "$title" --kind captain --repo "$repo" >/dev/null \
-        || fail "could not create task $id"
-    fi
+    BD_DUE_REQUIRED=false tasks_axi add "$id" "$title" --kind captain --repo "$repo" --body "$body" >/dev/null \
+      || fail "could not create task $id"
   fi
   # Publish the timestamp before the captain-hold annotation. A concurrent
   # snapshot may see the harmless stamp by itself, but can never see a newly
@@ -1223,6 +1229,11 @@ command_hold() {
   show=$TASK_SHOW_OUTPUT
   hold_kind=$(show_field_value "$show" hold_kind)
   [ "$hold_kind" = captain ] || fail "task $id did not retain its captain hold"
+  write_owner "$id" arjun "$show" || fail "task $id is held for the captain, but its owner could not be recorded; repeat the hold"
+  if [ "$OWNER_WRITTEN" = 1 ]; then
+    task_show "$id" || fail "task $id disappeared while recording its owner"
+    show=$TASK_SHOW_OUTPUT
+  fi
   occurrence=$(( $(resolution_record_count "$(show_field "$show" body)") + 1 ))
   [ -n "$(body_hold_set_timestamp "$(show_field_value "$show" body)")" ] \
     || fail "task $id lost its hold-set stamp while being held"
@@ -1291,9 +1302,30 @@ apply_pending_retained_artifact() {  # <task-id>
   esac
 }
 
+# Record <owner> as the row's owner (see the header) unless it already is.
+# A caller holding a fresh read of the row passes it to spare a backend read.
+# OWNER_WRITTEN says whether the body changed.
+OWNER_WRITTEN=0
+write_owner() {  # <task-id> <owner> [<fresh-show-output>]
+  local id=$1 owner=$2 show=${3:-} body tmp
+  OWNER_WRITTEN=0
+  [ -n "$show" ] || task_show_or_fail "$id" "task $id disappeared before recording its owner"
+  body=$(show_field_value "$show" body) || return 1
+  [ "$(fm_backlog_owner_of_body "$body")" != "$owner" ] || return 0
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-owner.XXXXXX") || return 1
+  if ! fm_backlog_owner_body_with "$body" "$owner" > "$tmp" \
+    || ! tasks_axi update "$id" --body-file "$tmp" >/dev/null; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+  rm -f -- "$tmp"
+  OWNER_WRITTEN=1
+}
+
 close_answered() {  # <task-id> <release-0-or-1>
   if [ "$2" = 1 ]; then
-    tasks_axi unhold "$1" >/dev/null
+    tasks_axi unhold "$1" >/dev/null || return 1
+    write_owner "$1" fleet
   else
     apply_pending_retained_artifact "$1" || return 1
     tasks_axi "done" "$1" "${RETAINED_CLOSE_ARGS[@]+"${RETAINED_CLOSE_ARGS[@]}"}" >/dev/null
@@ -1430,6 +1462,8 @@ command_answer() {
     [ "$recorded_mode" = released ] && [ "$release" = 1 ] \
       || fail "task $id records this answer with mode ${recorded_mode:-unknown}; replay requires matching --release"
     remove_interrupted_answer_stamp "$id"
+    # The unhold may have landed before an interrupted owner write.
+    write_owner "$id" fleet || fail "task $id is released, but its owner could not be handed back to the fleet; repeat the answer"
     publish_parent_resolution_then_retire "$id" $((occurrence - 1)) released
     printf 'released: %s\n' "$id"
     return 0

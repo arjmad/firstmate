@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Hold kinds and default release for captain-held tasks: `hold --kind` and
 # `--default`, the reason prefix every hold surface shows, and `release-due`,
-# which records a due reversible default as the decision of record.
+# which records a due reversible default as the decision of record; and the
+# row owner each hold and release records.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -39,6 +40,10 @@ run_captain() {  # <home> <command args...>
 
 show_task() {  # <home> <id>
   FM_HOME="$1" "$ROOT/bin/fm-tasks-axi.sh" show "$2" --full
+}
+
+task_owner() {  # <home> <id>
+  FM_HOME="$1" "$ROOT/bin/fm-tasks-axi.sh" owner "$2"
 }
 
 test_kind_arguments_are_validated() {
@@ -138,6 +143,8 @@ test_due_reversible_default_releases_with_its_record() {
 
   show=$(show_task "$home" sample-money)
   assert_contains "$show" "held: yes" "the arjun-only hold did not stay held"
+  assert_equals fleet "$(task_owner "$home" sample-work)" "a default release did not hand the work back to the fleet"
+  assert_equals arjun "$(task_owner "$home" sample-money)" "a still-held call lost its captain owner"
 
   out=$(FM_CAPTAIN_HOLD_NOW=2026-10-20T10:00:00Z run_captain "$home" release-due) \
     || fail "a second release-due failed"
@@ -192,7 +199,43 @@ test_answer_before_release_wins() {
   pass "an answer recorded before the release time wins over the default"
 }
 
+# A call held for the captain is his next move, so hold records him as the
+# owner, from the first write of a row it creates; releasing the hold hands
+# the work back to the fleet, while a closing answer leaves the owner alone.
+test_hold_records_the_captain_as_owner_and_release_hands_back() {
+  local home body
+  home=$(make_home owner)
+  run_captain "$home" hold sample-new --title "Pick the box" --reason "small or large" --origin origin-x >/dev/null \
+    || fail "could not create and hold a call"
+  assert_equals arjun "$(task_owner "$home" sample-new)" "a created call did not name the captain as its owner"
+  body=$(show_task "$home" sample-new)
+  assert_contains "$body" 'Captain hold set: ' "the created call lost its hold-set stamp"
+  assert_contains "$body" 'Captain hold origin: origin-x' "the created call lost its origin line"
+  FM_HOME="$home" "$ROOT/bin/fm-tasks-axi.sh" add sample-ship "Ship the box change" --kind ship --repo sample >/dev/null \
+    || fail "could not add the work row"
+  assert_equals fleet "$(task_owner "$home" sample-ship)" "the work row did not start as the fleet's"
+  run_captain "$home" hold sample-ship --reason "ship now or after the audit" >/dev/null \
+    || fail "could not hold the work row"
+  assert_equals arjun "$(task_owner "$home" sample-ship)" "holding work for the captain did not make it his"
+  [ "$(grep -c '^  Owner: ' "$home/data/backlog.md")" = 2 ] \
+    || fail "a held row carries more than one owner line: $(cat "$home/data/backlog.md")"
+  printf 'Ship it now.\n' > "$home/answer.txt"
+  run_captain "$home" answer sample-ship --decision-file "$home/answer.txt" --release >/dev/null \
+    || fail "the released answer was refused"
+  assert_equals fleet "$(task_owner "$home" sample-ship)" "a released hold did not hand the work back to the fleet"
+  # A replay finishes a release whose owner write never landed.
+  FM_HOME="$home" "$ROOT/bin/fm-tasks-axi.sh" owner sample-ship arjun >/dev/null || fail "could not reset the owner"
+  run_captain "$home" answer sample-ship --decision-file "$home/answer.txt" --release >/dev/null \
+    || fail "the replayed release was refused"
+  assert_equals fleet "$(task_owner "$home" sample-ship)" "a replayed release did not hand the work back to the fleet"
+  run_captain "$home" answer sample-new --decision-file "$home/answer.txt" >/dev/null \
+    || fail "the closing answer was refused"
+  assert_equals arjun "$(task_owner "$home" sample-new)" "a closing answer changed the owner"
+  pass "hold makes the captain the owner and a released hold hands the work back to the fleet"
+}
+
 test_kind_arguments_are_validated
+test_hold_records_the_captain_as_owner_and_release_hands_back
 test_kind_prefix_shows_on_every_hold_reason
 test_due_reversible_default_releases_with_its_record
 test_rehold_keeps_or_restarts_the_release_clock

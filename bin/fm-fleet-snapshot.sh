@@ -22,7 +22,10 @@
 #     hold_reason, and hold_until when tasks-axi emits it. They also carry
 #     normalized current_role, requires_child_metadata, blocked_by_ids,
 #     unresolved_blocker_ids, captain_actionable, hold_set, hold_age_days,
-#     and hold_bucket fields.
+#     hold_bucket, and owned_by fields.
+#     owned_by is the row's recorded owner, "arjun" or "fleet", read from its
+#     machine-written `Owner:` body line (bin/fm-backlog-owner-lib.sh owns that
+#     record), else null for a row filed before owners existed.
 #     Repeated blocker tokens remain ordered; a blocker resolves only when its
 #     structured record is Done, and missing ids stay open.
 #     There is no separate decision type: any captain-held task is the same
@@ -36,7 +39,8 @@
 #     when hold_until is still in the future, else "aged" when an undated hold
 #     is at least FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS old (default 14; legacy
 #     unstamped holds fall back to `since`), else "live". A non-captain or Done
-#     row carries null.
+#     row carries null. owned_by never moves a captain hold: a hold for the
+#     captain waits on him whatever the row's owner line says.
 #     captain_actionable means "waiting on the captain now" and is exactly
 #     hold_bucket == "live".
 #     hold_age_days is the hold's age when computable, else null.
@@ -285,6 +289,8 @@ FM_SNAPSHOT_REGISTRY_BYTES, FM_SNAPSHOT_REGISTRY_RECORDS, and
 FM_SNAPSHOT_REGISTRY_TIMEOUT, with unavailability and truncation disclosed.
 Every captain hold carries hold_bucket, decided only from structured fields and
 never from hold reason or body prose: "blocked", "dated", "aged", or "live".
+Every structured row and every summary queued row carries owned_by: "arjun",
+"fleet", or null when unrecorded; it never changes a captain hold's bucket.
 An undated hold ages once its hold-set timestamp is at least
 FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS old (default 14; 0 ages every hold with a
 non-negative computed age); legacy holds without a stamp fall back to their
@@ -504,6 +510,7 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
              hold_kind:metadata($rest; "hold-kind"),
              hold_until:metadata($rest; "hold-until"),
              hold_set:null,
+             owned_by:null,
              blocked_by:cap($rest; ".*blocked-by:[[:space:]]*(?<v>[^[:space:])]+).*"),
              blocked_by_ids:blocked_by_ids($rest),
              blocked_reason:blocked_reason($rest),
@@ -546,7 +553,10 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
                   then null
                   else cap(.body_lines[-1]; "^(?<v>local main)$")
                   end))
-          | .body_excerpt = ((.body_lines | join(" "))[:240])
+          | .owned_by = ([.body_lines[] | capture("^Owner:[[:space:]]*(?<v>arjun|fleet)[[:space:]]*$")? | .v] | last)
+          | .body_excerpt = ((.body_lines
+              | map(select(test("^Owner:[[:space:]]*(arjun|fleet)[[:space:]]*$") | not))
+              | join(" "))[:240])
         else . end)
     | .records as $records
     | (reduce ($records[] | select(.structured)) as $record ({};
@@ -1140,6 +1150,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
           hold_bucket:(.hold_bucket // null),
           hold_age_days:(.hold_age_days // null),
           captain_actionable:(.captain_actionable // false),
+          owned_by:(.owned_by // null),
           repo:((.repo // null) | if . == null then null else trunc(120) end),
           kind:((.kind // null) | if . == null then null else trunc(40) end),
           since:((.since // null) | if . == null then null else trunc(40) end)}]
