@@ -967,12 +967,16 @@ test_build_if_changed_skips_an_unchanged_board() {
   assert_contains "$out" "unchanged: $board" "a board that differs only in its timestamp was republished: $out"
   [ "$(extract_payload "$board" | jq -r .generated)" = "$before" ] \
     || fail "an unchanged conditional build rewrote the board"
+  end_session_as_captain "$home"
+  out=$(run_board "$home" build --if-changed "$data") || fail "the conditional build over an ended session failed"
+  assert_not_contains "$out" "unchanged:" "an unchanged board whose session had ended was not reopened: $out"
+  assert_contains "$out" "session: reopened" "an ended board session was not reopened by the conditional build: $out"
   jq '.charted[0].title = "Queued work, renamed"' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
   out=$(run_board "$home" build --if-changed "$data") || fail "the changed conditional build failed"
   assert_not_contains "$out" "unchanged:" "a changed board was skipped: $out"
   extract_payload "$board" | jq -e '.charted[0].title == "Queued work, renamed"' >/dev/null \
     || fail "a changed conditional build did not publish the change"
-  pass "build --if-changed republishes only when the composed board changed"
+  pass "build --if-changed republishes only when the composed board changed or its session ended"
 }
 
 test_path_is_stable_and_home_scoped

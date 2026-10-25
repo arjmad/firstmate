@@ -34,10 +34,12 @@
 #            line, so a rebuild states what it removed instead of quietly
 #            shrinking Captain's Call.
 #            With --if-changed, a build whose effective payload (after the
-#            steps above, ignoring `generated`) matches the last published one
-#            prints `board: <path>` and `unchanged: <path>` and touches
-#            nothing, so a heartbeat refresh never reloads a board the captain
-#            may be typing on. The fingerprint covers the template too and is
+#            steps above, ignoring `generated`) matches the last published one,
+#            while its session is still listed open and its source still has a
+#            live listener, prints `board: <path>` and `unchanged: <path>` and
+#            touches nothing, so a heartbeat refresh never reloads a board the
+#            captain may be typing on; an ended session or a dead listener gets
+#            the full build instead. The fingerprint covers the template too and is
 #            kept beside the board as bearings-board.sha256, written only once
 #            a build has proved its listener.
 # path       Print the stable board path for this home.
@@ -145,6 +147,16 @@ fail() {
 }
 
 board_path() { printf '%s/.lavish/bearings-board.html\n' "$FM_HOME"; }
+
+sha256_stdin() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{ print $1 }'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{ print $1 }'
+  else
+    return 1
+  fi
+}
 
 validate_payload() {  # <data.json>
   jq -e --arg schema "$BOARD_SCHEMA" '
@@ -575,9 +587,8 @@ command_build() {
     fail "inbox items must say what each action does: $gaps"
   fi
   json=$(jq -c . "$effective") || { rm -f -- "$effective"; fail "cannot compact the board data"; }
-  fingerprint=$({ shasum -a 256 < "$TEMPLATE"; jq -cS 'del(.generated)' "$effective"; } \
-    | shasum -a 256 | awk '{ print $1 }') \
-    || { rm -f -- "$effective"; fail "cannot fingerprint the board data"; }
+  fingerprint=$({ cat -- "$TEMPLATE"; jq -cS 'del(.generated)' "$effective"; } | sha256_stdin) || fingerprint=''
+  [ "${#fingerprint}" -eq 64 ] || { rm -f -- "$effective"; fail "cannot fingerprint the board data (shasum or sha256sum is required)"; }
   rm -f -- "$effective"
   # `<` never appears in JSON syntax outside strings, so escaping every
   # occurrence keeps the payload valid JSON while making </script> inert.
@@ -586,7 +597,11 @@ command_build() {
   board=$(board_path)
   fingerprint_file=${board%.html}.sha256
   if [ "$if_changed" = 1 ] && [ -f "$board" ] && [ -f "$fingerprint_file" ] \
-    && [ "$(cat "$fingerprint_file")" = "$fingerprint" ]; then
+    && [ "$(cat "$fingerprint_file")" = "$fingerprint" ] \
+    && command -v lavish-axi >/dev/null 2>&1 \
+    && lavish_session_listed_open "$(board_realpath "$board")" \
+    && sid=$("$SCRIPT_DIR/fm-procevent-lavish.sh" source-id "$board" 2>/dev/null) \
+    && [ "$(source_owner "$sid")" = live ]; then
     printf 'board: %s\nunchanged: %s\n' "$board" "$board"
     return 0
   fi

@@ -488,7 +488,9 @@ __FM_BEARINGS_BOARD_DATA__
     return line;
   }
 
+  /* One answer per item: once sent, its controls go inert as well as hidden. */
   function markSent(item, pill, text) {
+    item.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
     item.classList.add("is-sent");
     pill.textContent = "✓ " + text;
     pill.hidden = false;

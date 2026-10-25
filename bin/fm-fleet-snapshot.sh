@@ -832,7 +832,7 @@ task_json_lines() {
         | (capture("^(?<key>[^\t]*)\t(?<verb>[^\t]*)\t(?<summary>.*)$")?)
         | select(. != null) ]')
     if [ -n "$open_decisions_tsv" ]; then
-      captain_waits_json=$(status_open_captain_waits "$status_log" | jq -R -s '
+      captain_waits_json=$(status_open_captain_waits "$status_log" "$open_decisions_tsv" | jq -R -s '
         [ splits("\n") | select(length > 0)
           | (capture("^(?<key>[^\t]*)\t(?<verb>[^\t]*)\t(?<since>[0-9]*)$")?)
           | select(. != null)

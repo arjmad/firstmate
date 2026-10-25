@@ -166,7 +166,7 @@ For every registered secondmate, readable structured facts from its own home are
   distinguish live and cached ledgers; a home without either is explicitly unreadable.
 in_flight waits_on is "captain" only when the worker's still-open blocker or
   question carries the structured [on=captain] status tag, and since is that
-  line's UTC time; both are null otherwise.
+  line's UTC time (the oldest, when several are open); both are null otherwise.
 --fields board adds board{queued[],titles[]} for the bearings board composer:
   every queued or held backlog row of this home and of each structured
   secondmate home with its full title, kind, hold_kind, hold_until, full
@@ -522,7 +522,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         doing: ((.current_state.detail // "") as $d
                 | (if $d != "" then $d else (.hints.last_event_text // "") end) | trunc(90)),
         waits_on: (if ((.hints.captain_waits // []) | length) > 0 then "captain" else null end),
-        since: ([(.hints.captain_waits // [])[] | .since | select(. != null)] | max
+        since: ([(.hints.captain_waits // [])[] | .since | select(. != null)] | min
                 | if . == null then null else todate end),
         full_name: (.backlog.title // null)
       } ]
@@ -675,7 +675,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                    + [ ($snap.secondmate_current.records // [])[] as $m
                        | select($m.provenance.selected == "structured-home")
                        | $m.queued[]? | . + {owner:$m.id} ])[]
-                  | select((.structured // true) and (.state == "queued" or .hold_kind != null))
+                  | select(.structured != false and (.state == "queued" or .hold_kind != null))
                   | select(.state != "done")
                   | ((.unresolved_blocker_ids // []) | length > 0) as $blocked
                   | (if .hold_kind == "captain" then "captain"

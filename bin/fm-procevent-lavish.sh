@@ -955,8 +955,19 @@ cmd_choice_rows() {
           my $effect = $data->{effect};
           next if !defined($action) || ref($action) || !length($action);
           next unless $action =~ /\A[A-Za-z0-9._-]{1,128}\z/;
-          next if defined($data->{group}) && !ref($data->{group}) && $data->{group} eq "blocking";
-          next if !defined($effect) || ref($effect);
+          # A later pick on the same item replaces an earlier one even when
+          # firstmate, not the intake, routes it, so a superseded close or
+          # deferral is never fed.
+          my $supersede = sub {
+            return unless $key =~ /\A[A-Za-z0-9._-]{1,128}\z/ && defined $seen{$key};
+            $choices[$seen{$key}] = undef;
+            delete $seen{$key};
+          };
+          if (defined($data->{group}) && !ref($data->{group}) && $data->{group} eq "blocking") {
+            $supersede->();
+            next;
+          }
+          if (!defined($effect) || ref($effect)) { $supersede->(); next; }
           my $until;
           if ($effect eq "hold-until") {
             $until = $data->{until};
@@ -965,6 +976,7 @@ cmd_choice_rows() {
             $until = substr($until, 0, 10) if defined($until) && !ref($until)
               && $until =~ /\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}\z/;
           } elsif ($effect ne "close") {
+            $supersede->();
             next;
           }
           if ($effect ne "close") {

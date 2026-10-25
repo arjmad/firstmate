@@ -113,9 +113,12 @@
 # exact words of the decision file go on a `Captain deferred:` body block (the
 # previous body archived), and the task is re-held with `hold --until` that
 # date, keeping its kind (a reversible default is dropped, because the captain
-# has engaged) and its reason. The date must be after today (UTC, or the day of
-# FM_CAPTAIN_HOLD_NOW). An exact retry - same words, same date, still held -
-# is a no-op. It never closes or releases anything.
+# has engaged) and its reason. A date may be today in the captain's own time
+# zone, so only a date before yesterday in UTC (FM_CAPTAIN_HOLD_NOW overrides
+# now) is refused; a date already reached makes the call due again at once,
+# which is what a same-day reminder means. An exact retry - same words, same
+# date, still held - is a no-op whatever the date. It never closes or releases
+# anything.
 #
 # ONE KEYED-ANSWER INTAKE, FED BY EVERY CHANNEL.
 # "A keyed answer resolves its matching captain-held task" is a single
@@ -1438,7 +1441,7 @@ command_answer() {
 # quoted title holding commas cannot shift either.
 command_defer() {
   local id=${1:-} until='' decision_file='' show decoded hold_kind hold_until reason
-  local today stamp marker tmp kind_flag=''
+  local earliest stamp marker tmp kind_flag='' stamp_epoch
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -1457,8 +1460,9 @@ command_defer() {
   [ -n "$decision_file" ] || fail "--decision-file is required; a deferral records the captain's words"
   load_decision "$decision_file"
   stamp=${FM_CAPTAIN_HOLD_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
-  today=${stamp%%T*}
-  [[ "$until" > "$today" ]] || fail "the deferral date $until is not after today ($today)"
+  stamp_epoch=$(fm_utc_iso_to_epoch "$stamp") || fail "cannot read the current time: $stamp"
+  earliest=$(epoch_to_utc_iso $((stamp_epoch - 86400)))
+  earliest=${earliest%%T*}
   marker="Captain deferral: until $until | decision digest: $DECISION_DIGEST"
   acquire_task_control_lock "$id"
   require_tasks_axi
@@ -1477,6 +1481,8 @@ command_defer() {
       fi
       ;;
     *)
+      [[ ! "$until" < "$earliest" ]] \
+        || fail "the deferral date $until has already passed (earliest accepted: $earliest)"
       tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-defer.XXXXXX") \
         || fail "cannot stage the deferral for $id"
       if ! printf '%s\n\nCaptain deferred: %s\n%s\n%s\n' "$decoded" "$stamp" "$marker" "$DECISION_TEXT" > "$tmp"; then

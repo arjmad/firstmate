@@ -936,34 +936,41 @@ status_open_decisions() {  # <status-file> [<kind>]
 # "[key=...]" and "[at=...]" tags; prose never counts, so a note that merely
 # names the captain stays an ordinary blocker. The newest line that opened a
 # still-open key decides, so re-raising a key without the tag withdraws it.
-# Prints one TAB-separated "<key>\t<verb>\t<at-epoch-or-empty>" line per such
-# decision, the epoch read from that opening line's own time tag.
-status_open_captain_waits() {  # <status-file>
-  local f=$1 open line verb key unstamped head epoch tagged=''
-  open=$(status_open_decisions "$f")
+# A caller that already folded the log passes that open set as <open-set> so
+# the log is not folded twice. Prints one TAB-separated
+# "<key>\t<verb>\t<at-epoch-or-empty>" line per such decision, the epoch read
+# from that opening line's own time tag.
+status_open_captain_waits() {  # <status-file> [<open-set>]
+  local f=$1 open line verb key unstamped head epoch row out='' i n
+  local -a wait_keys=() wait_verbs=() wait_epochs=() wait_tagged=()
+  if [ "$#" -ge 2 ]; then open=$2; else open=$(status_open_decisions "$f"); fi
   [ -n "$open" ] || return 0
+  [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
     status_line_verb "$line" verb
     case "$verb" in needs-decision|blocked) ;; *) continue ;; esac
     _fm_status_unstamped "$line" unstamped
     case "$unstamped" in *:*) head=${unstamped%%:*} ;; *) head=$unstamped ;; esac
     key=$(_fm_decision_key "$line") || continue
-    tagged=$(printf '%s' "$tagged" | awk -F'\t' -v k="$key" '$1 != k')
-    case "$head" in
-      *\[on=captain\]*)
-        epoch=''
-        _fm_status_at_epoch "$line" epoch || epoch=''
-        [ -n "$tagged" ] && tagged="$tagged"$'\n'
-        tagged="$tagged$key"$'\t'"$verb"$'\t'"$epoch"
-        ;;
-    esac
+    epoch=''
+    _fm_status_at_epoch "$line" epoch || epoch=''
+    n=${#wait_keys[@]}
+    for ((i = 0; i < n; i++)); do [ "${wait_keys[i]}" = "$key" ] && break; done
+    wait_keys[i]=$key
+    wait_verbs[i]=$verb
+    wait_epochs[i]=$epoch
+    case "$head" in *\[on=captain\]*) wait_tagged[i]=1 ;; *) wait_tagged[i]=0 ;; esac
   done < "$f"
-  [ -n "$tagged" ] || return 0
-  printf '%s\n' "$tagged" | while IFS=$'\t' read -r key verb epoch; do
-    [ -n "$key" ] || continue
-    printf '%s\n' "$open" | awk -F'\t' -v k="$key" -v v="$verb" '$1 == k && $2 == v { found = 1 } END { exit found ? 0 : 1 }' \
-      && printf '%s\t%s\t%s\n' "$key" "$verb" "$epoch"
+  n=${#wait_keys[@]}
+  for ((i = 0; i < n; i++)); do
+    [ "${wait_tagged[i]}" = 1 ] || continue
+    while IFS=$'\t' read -r row verb _; do
+      [ "$row" = "${wait_keys[i]}" ] && [ "$verb" = "${wait_verbs[i]}" ] || continue
+      out="$out${wait_keys[i]}"$'\t'"${wait_verbs[i]}"$'\t'"${wait_epochs[i]}"$'\n'
+      break
+    done <<< "$open"
   done
+  printf '%s' "$out"
 }
 
 # Resolve the log's current declaration at one boundary for crew-state consumers.

@@ -2261,7 +2261,8 @@ test_legacy_identities_keep_working() {
 # A board "later" answer is a dated deferral, never a closure (backlog item
 # fm-board-later-closes-hold): the keyed intake re-holds the task --until the
 # date, keeps its kind, records the captain's words, and an exact replay is a
-# no-op; a past date and a closed task are refused visibly.
+# no-op even after its date; a date before yesterday (UTC, which still allows the
+# captain's own today) and a closed task are refused visibly.
 test_keyed_deferral_re_holds_instead_of_closing() {
   local home out show reason
   home=$(make_home keyed-deferral)
@@ -2296,12 +2297,16 @@ test_keyed_deferral_re_holds_instead_of_closing() {
   assert_contains "$out" "deferred: sample-later-call until 2026-07-16" "a replay did not report the deferral"
   [ "$(tasks_in "$home" show sample-later-call --full | grep -c 'Captain deferred:')" = 1 ] \
     || fail "an exact replay recorded the deferral twice"
+  out=$(printf 'sample-later-call\tthu\tPlan the sample send → Push to Thu\tuntil=2026-07-16\n' \
+    | FM_CAPTAIN_HOLD_NOW=2026-07-20T12:00:00Z run_captain "$home" answers --source "the board sequence 3") \
+    || fail "a deferral replayed after its date was refused: $out"
+  assert_contains "$out" "deferred: sample-later-call until 2026-07-16" "a late replay did not stay a no-op"
 
-  if out=$(printf 'sample-later-call\tyesterday\tlabel\tuntil=2026-07-13\nsample-closed-call\tthu\tlabel\tuntil=2026-07-20\n' \
+  if out=$(printf 'sample-later-call\tlast week\tlabel\tuntil=2026-07-12\nsample-closed-call\tthu\tlabel\tuntil=2026-07-20\n' \
     | FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" answers --source "the board sequence 4"); then
     fail "the intake accepted a past deferral or a closed task: $out"
   fi
-  assert_contains "$out" "skipped: sample-later-call (the deferral date 2026-07-13 is not after today (2026-07-14))" \
+  assert_contains "$out" "skipped: sample-later-call (the deferral date 2026-07-12 has already passed (earliest accepted: 2026-07-13))" \
     "a past deferral date was not refused by name: $out"
   assert_contains "$out" "skipped: sample-closed-call (already closed)" "a closed task was deferred: $out"
   pass "a keyed deferral re-holds until its date, keeps the kind and the words, and never closes"

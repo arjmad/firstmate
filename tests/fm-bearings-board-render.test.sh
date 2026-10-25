@@ -233,6 +233,7 @@ test_an_action_carries_its_values_note_and_route() {
   out=$(render "$home" '[
     {"do":"action","key":"sample-count","value":"save"},
     {"do":"action","key":"sample-count","value":"save","values":{"small":"14","large":"9"},"note":"shelf B"},
+    {"do":"action","key":"sample-count","value":"never"},
     {"do":"action","key":"sample-send","value":"thu"},
     {"do":"action","key":"sample-late","value":"book","values":{"when":"2099-03-05T10:00"}}]')
   printf '%s' "$out" | jq -e --arg later "$LATER_DAY" '
@@ -245,7 +246,7 @@ test_an_action_carries_its_values_note_and_route() {
       and (.prompts[2].data | .effect == "remind-at" and .at == "2099-03-05T10:00" and .values == {when:"2099-03-05T10:00"})
       and ([.sections[].items[] | select(.key == "sample-count")][0] | .sent and .pill == "✓ Save counts")
   ' >/dev/null || fail "an action did not queue its values, note, and route: $out"
-  pass "an action queues one answer with its values, note, effect, and resolved date"
+  pass "an action queues one answer with its values, note, effect, and resolved date, and the item takes no second answer"
 }
 
 test_an_action_with_an_empty_box_refuses_and_marks_it() {

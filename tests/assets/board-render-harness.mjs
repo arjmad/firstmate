@@ -72,7 +72,8 @@ class Node {
   getAttribute(k) { return k in this.attributes ? this.attributes[k] : null; }
   addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
   fire(type) {
-    // a browser never delivers a tap to an element that is not shown
+    // a browser never delivers a tap to an element that is not shown or disabled
+    if (this.disabled) return;
     for (let n = this; n; n = n.parentNode) if (n.hidden) return;
     for (const fn of this.listeners[type] || []) fn({ type, target: this, preventDefault() {} });
   }
@@ -85,7 +86,9 @@ class Node {
     return out;
   }
   find(pred) { return this.all(pred)[0] ?? null; }
-  querySelectorAll(sel) { return this.all((c) => c.has(sel.replace(/^\./, ""))); }
+  querySelectorAll(sel) {
+    return sel.startsWith(".") ? this.all((c) => c.has(sel.slice(1))) : this.all((c) => c.tagName === sel);
+  }
 }
 
 let focused = null;
