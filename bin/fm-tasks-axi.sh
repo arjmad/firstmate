@@ -2,6 +2,7 @@
 # fm-tasks-axi.sh - run tasks-axi against THIS home's backlog from any working directory.
 #
 # Usage: fm-tasks-axi.sh [<tasks-axi command> [args...]]
+#        fm-tasks-axi.sh owner <id> [arjun|fleet]
 #        fm-tasks-axi.sh --help
 #
 # Every routine firstmate backlog read or mutation goes through this command
@@ -17,6 +18,17 @@
 # `show` (including `view`) and `list` decode stored captain-hold reasons
 # through bin/fm-hold-reason-lib.sh, which owns the field-only decoding contract.
 # Decoded reasons use quoted strings so embedded line breaks remain intact.
+#
+# Owner (bin/fm-backlog-owner-lib.sh owns the record and its meaning): every
+# row this command adds names who owns its next move, `arjun` or `fleet`, on
+# an `Owner:` body line. `add` (and `create`) takes `--owner arjun|fleet`,
+# which the wrapper consumes; without it a row gets the default for its kind
+# (fleet), except `--kind captain`, which must name one and is refused
+# otherwise. An `Owner:` line already in the given body counts as naming one.
+# `update` with `--body` or `--body-file` carries the row's recorded owner
+# into a new body that names none, so rewriting a note never drops it. The
+# wrapper-only subcommand `owner <id>` prints the recorded owner (`-` when
+# none), and `owner <id> arjun|fleet` records it, idempotently.
 #
 # Superseded-ruling guard (opt-in): when the home-private `config/captain-name`
 # names the captain (one name per line; blank and `#` lines ignored), `hold`,
@@ -63,7 +75,9 @@
 #     first write would replace the link with a private copy, exactly the fork
 #     this command exists to prevent. Lifecycle transitions refuse the same file;
 #   - a `hold` whose reason cites a captain quote older than the newest one on
-#     record for the task, without --cite-older-quote (see the guard above).
+#     record for the task, without --cite-older-quote (see the guard above);
+#   - an `add` of `--kind captain` that names no owner, an `--owner` value
+#     other than arjun or fleet, or `owner` on a row that does not exist.
 # Otherwise the exit status is tasks-axi's own, unless decoding a read fails;
 # in that case the decoder's nonzero status is returned.
 set -u
@@ -80,6 +94,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 # shellcheck source=bin/fm-hold-reason-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-hold-reason-lib.sh"
+# shellcheck source=bin/fm-backlog-owner-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-backlog-owner-lib.sh"
 
 usage() {
   awk '
@@ -112,14 +128,33 @@ absolute_from_caller() {  # <path-value>
 
 ARGS=()
 CITE_OLDER_QUOTE=0
+OWNER=
 path_value_next=0
+owner_value_next=0
 for arg in "$@"; do
   if [ "$path_value_next" = 1 ]; then
     ARGS+=("$(absolute_from_caller "$arg")")
     path_value_next=0
     continue
   fi
+  if [ "$owner_value_next" = 1 ]; then
+    OWNER=$arg
+    owner_value_next=0
+    continue
+  fi
   case "$arg" in
+    --owner|--owner=*)
+      case "${1:-}" in
+        add|create)
+          if [ "$arg" = --owner ]; then
+            owner_value_next=1
+          else
+            OWNER=${arg#--owner=}
+          fi
+          ;;
+        *) ARGS+=("$arg") ;;
+      esac
+      ;;
     --file|--file=*)
       fail "this command always addresses this home's backlog at $DATA; drop --file, or run tasks-axi directly for another backlog"
       ;;
@@ -150,6 +185,137 @@ for arg in "$@"; do
       ;;
   esac
 done
+
+[ "$owner_value_next" = 0 ] || fail "--owner needs a value: arjun or fleet"
+if [ -n "$OWNER" ] && ! fm_backlog_owner_valid "$OWNER"; then
+  fail "--owner must be arjun or fleet, not $OWNER"
+fi
+
+# The value of the last <flag> in ARGS; fails when the flag is absent.
+arg_value() {  # <flag>
+  local flag=$1 i=0 value='' found=1
+  while [ "$i" -lt "${#ARGS[@]}" ]; do
+    case "${ARGS[$i]}" in
+      "$flag") i=$((i + 1)); value=${ARGS[$i]:-}; found=0 ;;
+      "$flag"=*) value=${ARGS[$i]#"$flag"=}; found=0 ;;
+    esac
+    i=$((i + 1))
+  done
+  printf '%s' "$value"
+  return "$found"
+}
+
+# The body the caller passed with --body or --body-file, into GIVEN_BODY;
+# fails when neither was passed.
+GIVEN_BODY=
+GIVEN_BODY_STDIN=0
+given_body() {
+  local text file have_text=1 have_file=1
+  text=$(arg_value --body) && have_text=0
+  file=$(arg_value --body-file) && have_file=0
+  [ "$have_text" = 1 ] || [ "$have_file" = 1 ] || fail "pass --body or --body-file, not both"
+  if [ "$have_text" = 0 ]; then
+    GIVEN_BODY=$text
+  elif [ "$have_file" = 0 ]; then
+    if [ "$file" = - ]; then
+      GIVEN_BODY=$(cat)
+      GIVEN_BODY_STDIN=1
+    else
+      [ -f "$file" ] && [ -r "$file" ] || fail "cannot read --body-file $file"
+      GIVEN_BODY=$(cat -- "$file")
+    fi
+  else
+    return 1
+  fi
+}
+
+# Replace the caller's --body/--body-file with a staged file holding <body>.
+OWNER_BODY_FILE=
+stage_body() {  # <body>
+  local out=() i=0
+  OWNER_BODY_FILE=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-tasks-axi-body.XXXXXX") \
+    || fail "cannot stage the row body"
+  printf '%s' "$1" > "$OWNER_BODY_FILE" || fail "cannot stage the row body"
+  while [ "$i" -lt "${#ARGS[@]}" ]; do
+    case "${ARGS[$i]}" in
+      --body|--body-file) i=$((i + 2)); continue ;;
+      --body=*|--body-file=*) i=$((i + 1)); continue ;;
+    esac
+    out+=("${ARGS[$i]}")
+    i=$((i + 1))
+  done
+  ARGS=(${out[@]+"${out[@]}"} --body-file "$OWNER_BODY_FILE")
+}
+
+# The current body of row <id>, decoded, into SHOWN_BODY; fails when the row
+# cannot be read.
+SHOWN_BODY=
+shown_body() {  # <id>
+  local show
+  show=$(tasks-axi show "$1" --full 2>/dev/null) || return 1
+  printf '%s\n' "$show" | grep -q '^code: NOT_FOUND$' && return 1
+  SHOWN_BODY=$(fm_backlog_owner_shown_body "$show") || return 1
+}
+
+# add/create: name the owner at filing (see the header).
+prepare_add_owner() {
+  local kind recorded
+  kind=$(arg_value --kind) || kind=
+  if given_body; then :; else GIVEN_BODY=; fi
+  if [ -z "$OWNER" ]; then
+    recorded=$(fm_backlog_owner_of_body "$GIVEN_BODY")
+    if [ -n "$recorded" ]; then
+      OWNER=$recorded
+    elif ! OWNER=$(fm_backlog_owner_default "$kind"); then
+      fail "a kind=captain row must name its owner: --owner arjun when only the captain can move it, --owner fleet when the fleet does the work and reports to him"
+    fi
+  fi
+  stage_body "$(fm_backlog_owner_body_with "$GIVEN_BODY" "$OWNER")"
+}
+
+# update with a new body: keep the recorded owner when the new body names none.
+prepare_update_owner() {
+  local id=${ARGS[1]:-} recorded=
+  given_body || return 0
+  if [ -z "$(fm_backlog_owner_of_body "$GIVEN_BODY")" ]; then
+    case "$id" in
+      ''|-*) : ;;
+      *) shown_body "$id" && recorded=$(fm_backlog_owner_of_body "$SHOWN_BODY") ;;
+    esac
+  fi
+  if [ -n "$recorded" ]; then
+    stage_body "$(fm_backlog_owner_body_with "$GIVEN_BODY" "$recorded")"
+  elif [ "$GIVEN_BODY_STDIN" = 1 ]; then
+    # Standard input is already read, so hand tasks-axi the body as a file.
+    stage_body "$GIVEN_BODY"
+  fi
+}
+
+# The wrapper-only `owner <id> [arjun|fleet]` subcommand.
+command_owner() {
+  local id=${ARGS[1]:-} want=${ARGS[2]:-} recorded
+  case "$id" in ''|-*) fail "usage: owner <id> [arjun|fleet]" ;; esac
+  [ "${#ARGS[@]}" -le 3 ] || fail "usage: owner <id> [arjun|fleet]"
+  shown_body "$id" || fail "no backlog row $id in this home"
+  recorded=$(fm_backlog_owner_of_body "$SHOWN_BODY")
+  if [ -z "$want" ]; then
+    printf '%s\n' "${recorded:--}"
+    return 0
+  fi
+  fm_backlog_owner_valid "$want" || fail "owner must be arjun or fleet, not $want"
+  if [ "$recorded" = "$want" ]; then
+    printf 'ok: owner %s already %s\n' "$id" "$want"
+    return 0
+  fi
+  ARGS=(update "$id")
+  stage_body "$(fm_backlog_owner_body_with "$SHOWN_BODY" "$want")"
+  if ! tasks-axi "${ARGS[@]}" >/dev/null; then
+    rm -f -- "$OWNER_BODY_FILE"
+    fail "could not record owner $want on $id"
+  fi
+  rm -f -- "$OWNER_BODY_FILE"
+  printf 'ok: owner %s -> %s\n' "$id" "$want"
+}
 
 # The superseded-ruling guard described in the header. Each helper prints
 # nothing when it finds no dated captain quote.
@@ -238,5 +404,21 @@ case "${1:-}" in
     tasks-axi ${ARGS[@]+"${ARGS[@]}"} | fm_hold_reason_decode_stream
     exit $?
     ;;
+  owner)
+    command_owner
+    exit $?
+    ;;
+  add|create)
+    prepare_add_owner
+    ;;
+  update|edit)
+    prepare_update_owner
+    ;;
 esac
+if [ -n "$OWNER_BODY_FILE" ]; then
+  status=0
+  tasks-axi ${ARGS[@]+"${ARGS[@]}"} || status=$?
+  rm -f -- "$OWNER_BODY_FILE"
+  exit "$status"
+fi
 exec tasks-axi ${ARGS[@]+"${ARGS[@]}"}

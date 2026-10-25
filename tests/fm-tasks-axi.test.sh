@@ -227,6 +227,55 @@ test_wrapper_refuses_add_start() {
   pass "fm-tasks-axi.sh refuses add --start while plain add and start <id> pass through"
 }
 
+# Every row added names its owner (bin/fm-backlog-owner-lib.sh): the kind's
+# default, fleet, unless --owner or the body's own Owner: line names one; a
+# kind=captain row must name one. A body rewrite keeps the recorded owner, and
+# `owner` reads and records it.
+test_wrapper_owner_at_filing() {
+  local dir out rc before body
+  dir=$(make_split wrapper-owner)
+  wrapper_from_code "$dir" add ow-ship "fleet work" --kind ship >/dev/null || fail "plain add was refused"
+  assert_equals fleet "$(wrapper_from_code "$dir" owner ow-ship)" "a ship row did not default to the fleet"
+  before=$(cat "$dir/home/data/backlog.md")
+  out=$(wrapper_from_code "$dir" add ow-cap "his call" --kind captain 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "add --kind captain without --owner"
+  assert_contains "$out" "must name its owner" "the captain-kind refusal did not say why"
+  out=$(wrapper_from_code "$dir" add ow-bad "bad owner" --owner=captain 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "add --owner captain"
+  out=$(wrapper_from_code "$dir" add ow-none "no value" --owner 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "add --owner with no value"
+  assert_equals "$before" "$(cat "$dir/home/data/backlog.md")" "a refused add still wrote a row"
+  wrapper_from_code "$dir" create ow-cap "his call" --kind captain --owner arjun --body "keep or undo" >/dev/null \
+    || fail "add --owner arjun was refused"
+  assert_equals arjun "$(wrapper_from_code "$dir" owner ow-cap)" "--owner arjun was not recorded"
+  printf 'first line\n\nOwner: arjun\n' > "$dir/body.md"
+  (cd "$dir" && FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$dir/code" "$WRAPPER" add ow-file "from a file" --kind captain --body-file body.md >/dev/null) \
+    || fail "a body naming its owner was refused"
+  assert_equals arjun "$(wrapper_from_code "$dir" owner ow-file)" "the body's own owner line was not honored"
+  wrapper_from_code "$dir" update ow-cap --body "rewritten note" >/dev/null || fail "update --body failed"
+  assert_equals arjun "$(wrapper_from_code "$dir" owner ow-cap)" "a body rewrite dropped the owner"
+  printf 'piped note\n' | wrapper_from_code "$dir" update ow-file --body-file - >/dev/null || fail "update --body-file - failed"
+  assert_equals arjun "$(wrapper_from_code "$dir" owner ow-file)" "a piped body rewrite dropped the owner"
+  body=$(wrapper_from_code "$dir" show ow-file --full)
+  assert_contains "$body" "piped note" "the piped body was not written"
+  out=$(wrapper_from_code "$dir" owner ow-cap fleet)
+  assert_contains "$out" "ow-cap -> fleet" "owner did not record the change"
+  out=$(wrapper_from_code "$dir" owner ow-cap fleet)
+  assert_contains "$out" "already fleet" "a repeated owner was not a no-op"
+  [ "$(grep -c '^  Owner: ' "$dir/home/data/backlog.md")" = 3 ] \
+    || fail "rows do not carry exactly one owner line each: $(cat "$dir/home/data/backlog.md")"
+  out=$(wrapper_from_code "$dir" owner ow-missing 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "owner on a missing row"
+  out=$(wrapper_from_code "$dir" owner ow-cap boss 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "owner with an unknown value"
+  pass "fm-tasks-axi.sh names every new row's owner, keeps it through body rewrites, and reads and records it"
+}
+
 test_wrapper_single_home() {
   local dir
   dir="$TMP_ROOT/single-wrapper"
@@ -305,6 +354,7 @@ if [ "$HAVE_TASKS_AXI" = 1 ]; then
   test_wrapper_overrides_ambient_file
   test_wrapper_refusals
   test_wrapper_refuses_add_start
+  test_wrapper_owner_at_filing
   test_wrapper_single_home
   test_wrapper_hold_quote_guard
 else

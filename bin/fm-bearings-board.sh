@@ -101,8 +101,9 @@
 #             two or three {value, label, hint, effect, reads[]} plus until, at
 #             or brief as the effect needs. inbox_item_gaps below owns the
 #             effect set and every refusal, named per key.
-#   later[]   captain rows not due this week, each {id, title, repo, group
-#             dated|held|unheld, back?}; a dated row needs its `back` date.
+#   later[]   captain-owned rows not due this week, each {id, title, repo,
+#             group dated|held|unheld, back?}; a dated row needs its `back`
+#             date, and `unheld` is a row he owns that no hold gates.
 # An Underway row may carry progress {done, total, step?} from the worker's own
 # step list (bin/fm-progress.sh), and every Recently Landed row carries
 # `outcome`, the short result sentence the board shows instead of the title.

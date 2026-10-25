@@ -55,7 +55,10 @@ It works in this order:
 2. It records the task's UTC hold-set timestamp as the leading line of the task body.
 3. When `--origin` is supplied, it records the origin on the task, replacing any previous association.
 4. It invokes the underlying tasks-axi hold operation.
-5. It verifies the hold and timestamp.
+5. It verifies the hold and timestamp, then records the captain as the row's owner.
+
+A call held for the captain is his next move, so `hold` writes `Owner: arjun` on the row ([`bin/fm-backlog-owner-lib.sh`](../bin/fm-backlog-owner-lib.sh) owns the record); a row it creates carries that line from its first write.
+Releasing the hold, by `answer --release` or a default release of a work row, hands the row back with `Owner: fleet`, because the work resumes.
 
 Publishing the stamp first ensures a snapshot cannot observe a newly captain-held task without the timestamp that defines its age.
 
@@ -368,8 +371,9 @@ For a main-home call, the reconcile option is the recovery path for whatever sti
 `bin/fm-fleet-snapshot.sh` parses canonical tasks-axi `(hold: ...)`, `(hold-kind: ...)`, and `(hold-until: ...)` metadata alongside existing backlog fields.
 It resolves every repeated `blocked-by:` edge against structured Done records and keeps missing blockers unresolved.
 It then assigns every captain hold exactly one `hold_bucket`.
-The bucket is decided only from structured fields: `hold_kind`, `state`, `hold_until`, `unresolved_blocker_ids`, and the machine-written hold-set timestamp.
+The bucket is decided only from structured fields: `hold_kind`, `state`, `hold_until`, `unresolved_blocker_ids`, the machine-written hold-set timestamp, and the machine-written owner (`owned_by`).
 Hold reason and body prose are never matched, so no wording can hide, reveal, or reclassify a decision.
+A captain hold on a row the fleet owns gets no bucket: it is not waiting on the captain, so it reads as an ordinary held row and never reaches his inbox.
 
 The buckets are total and mutually exclusive.
 The first matching row in this order decides the bucket:

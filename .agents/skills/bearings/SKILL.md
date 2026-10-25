@@ -102,11 +102,12 @@ Compose it from the same snapshot command run as `bin/fm-bearings-snapshot.sh --
 `bin/fm-bearings-board.sh`'s header owns every field and refusal; these rules own what goes where.
 
 Placement, from structured fields only (never from reason or body prose):
+A row is the captain's exactly when its recorded owner is `arjun`: `board.queued` marks those `wait: captain`, and the snapshot keeps a fleet-owned captain hold out of the live decisions, so fleet-owned work never enters his inbox or Later, whatever its hold or kind.
 
 - **Blocking a worker** (`inbox[]`, group `blocking`, key = the task id): every `in_flight` row whose `waits_on` is `captain`, the worker's structured `[on=captain]` status tag; `since` is that row's `since`.
 - **Decisions** (`captains_call[]`): every live captain call with no `hold_until`, plus each PR ready to merge and each needed credential.
-- **Due** (`inbox[]`, group `due`, key = the held task id, `due` = its `hold_until`): every captain hold in `board.queued` whose `hold_until` falls within the next 7 days, or has passed (the board shows those as Overdue).
-- **Later** (`later[]`): every other captain row - group `dated` with `back` = its later `hold_until`, group `held` for a captain hold with no date (aged or blocked), and group `unheld` for a `kind: captain` row never held (Arjun's 2026-10-25 call).
+- **Due** (`inbox[]`, group `due`, key = the held task id, `due` = its `hold_until`): every `board.queued` row whose `wait` is `captain` and whose `hold_until` falls within the next 7 days, or has passed (the board shows those as Overdue).
+- **Later** (`later[]`): every other `wait: captain` row - group `dated` with `back` = its later `hold_until`, group `held` for a held row with no date (aged, blocked, or waiting outside), and group `unheld` for a row he owns that is not held (Arjun's 2026-10-25 call).
 - **Underway** (`underway[]`): every other `in_flight` row.
 - **Queued** (`charted[]`): every `board.queued` row whose `wait` is not `captain`, with its full `title`, `wait`, `wait_date` (its `hold_until` for a date wait), and `dispatchable` = its `ready`.
 - **Landed** (`landed[]`): the snapshot's landed rows.

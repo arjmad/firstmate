@@ -113,7 +113,9 @@ Load `scout-completion` when a scout reports completion, presents a visual artif
 The configured `tasks-axi` backend is the durable queue; the tracked default is `data/backlog.md`.
 It tracks work items only, never agents; persistent secondmates never appear as backlog items.
 Work routed to a secondmate is recorded in that secondmate home's own backlog, not the main backlog.
+Every open row names its owner at filing, `arjun` when only the captain can move it and `fleet` when firstmate or a crewmate does, including a dated check the fleet reports back on; `bin/fm-tasks-axi.sh add --owner` sets it (required for `--kind captain`), `bin/fm-tasks-axi.sh owner <id>` reads or changes it, and the captain's inbox reads nothing else ([`bin/fm-backlog-owner-lib.sh`](../bin/fm-backlog-owner-lib.sh) owns the record).
 A decision is simply a task held for the captain: create the task with `bin/fm-tasks-axi.sh add` when needed, then always hold it through `bin/fm-captain-hold.sh hold <id> --reason "<reason>"`, with `--until <date>` when the captain defers it.
+Fleet work that only comes back on a date is a `future` hold with `--until`, never a captain hold.
 When a main-side thread such as a pending captain decision or relay reminder is worth durable tracking, file it as its own work item and hold it through that wrapper.
 Captain calls discovered by investigations or visual reviews follow `captain-hold-lifecycle`, which owns their completion gate and recorded-answer rules.
 When the automatic transition gate applies, dispatch and completion move the item themselves - `bin/fm-spawn.sh` and `bin/fm-teardown.sh` own those transitions and refuse rather than report success without them - so what remains yours is filing the item before dispatch, recording decisions, and keeping notes current; `docs/configuration.md` owns gate applicability and the manual-backend exception.

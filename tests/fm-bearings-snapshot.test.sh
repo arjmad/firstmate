@@ -2131,6 +2131,59 @@ test_captain_wait_and_board_rows_come_from_structured_fields() {
   pass "a captain wait comes from the [on=captain] tag, and --fields board carries full queued rows"
 }
 
+# The captain's inbox reads each row's recorded owner (the Owner: body line
+# bin/fm-backlog-owner-lib.sh owns), never its hold or kind alone: a row he
+# owns waits on him even unheld, a fleet-owned captain hold is an ordinary
+# held row that never reaches Captain's Call, and only a row that records no
+# owner falls back to its captain hold or kind, counted in omitted[].
+test_owner_decides_what_waits_on_the_captain() {
+  local home fakebin json
+  home=$(make_home owner-placement)
+  cat > "$home/data/backlog.md" <<'EOF2'
+# Backlog
+
+## In flight
+
+## Queued
+- [ ] his-todo - Send the GA4 property id (repo: sites) (kind: captain) (since 2026-07-01)
+  Owner: arjun
+- [ ] fleet-dated - Read the October charge and tell him (repo: business) (kind: captain) (since 2026-07-01) (hold: read it on the 31st) (hold-kind: captain) (hold-until: 2026-07-31)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Owner: fleet
+- [ ] fleet-undated - Restore the costs after the promotion (repo: business) (kind: task) (since 2026-07-01) (hold: after the promotion) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Owner: fleet
+- [ ] his-call - Pick the checkout shipping (repo: business) (kind: captain) (since 2026-07-01) (hold: keep or undo) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Owner: arjun
+- [ ] legacy-captain - A captain row filed before owners (repo: business) (kind: captain) (since 2026-07-01)
+- [ ] fleet-ship - Ordinary fleet work (repo: firstmate) (kind: ship) (since 2026-07-01)
+  Quoted words above the record: Owner: arjun
+
+  Owner: fleet
+
+## Done
+EOF2
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json --all-decisions --all-queued --fields board)
+  printf '%s' "$json" | jq -e '
+    def row($id): [.board.queued[] | select(.id == $id)][0];
+    ([.decisions_open[].id] == ["his-call"])
+      and (row("his-todo") | .owned_by == "arjun" and .wait == "captain" and .ready == false)
+      and (row("his-call") | .owned_by == "arjun" and .wait == "captain")
+      and (row("fleet-dated") | .owned_by == "fleet" and .wait == "date")
+      and (row("fleet-undated") | .owned_by == "fleet" and .wait == "work")
+      and (row("fleet-ship") | .owned_by == "fleet" and .wait == "none" and .ready == true)
+      and (row("legacy-captain") | .owned_by == null and .wait == "captain")
+      and ([.gates[].id] | index("fleet-dated") != null and index("fleet-undated") != null)
+      and ([.omitted[] | select(.surface == "open backlog row(s) with no recorded owner: 1")] | length) == 1
+  ' >/dev/null || fail "the captain inbox did not follow the recorded owner: $json"
+  pass "the recorded owner, not the hold or kind, decides what waits on the captain"
+}
+
 test_live_blocker_is_not_charted_queue_work() {
   local home fakebin json
   home=$(make_home live-blocker); write_fixture "$home"
@@ -3419,6 +3472,7 @@ test_all_landed_keeps_complete_global_order
 test_landed_bounded_and_disclosed
 test_live_blocker_is_not_charted_queue_work
 test_captain_wait_and_board_rows_come_from_structured_fields
+test_owner_decides_what_waits_on_the_captain
 test_captains_call_anti_leak
 test_main_orphan_in_flight_is_disclosed_not_invented
 test_main_unstructured_current_is_disclosed_with_structured_sibling

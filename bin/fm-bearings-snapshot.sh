@@ -169,11 +169,15 @@ in_flight waits_on is "captain" only when the worker's still-open blocker or
   line's UTC time (the oldest, when several are open); both are null otherwise.
 --fields board adds board{queued[],titles[]} for the bearings board composer:
   every queued or held backlog row of this home, with its full title, kind,
-  hold_kind, hold_until, full hold_reason, filed date, blocker ids, wait
-  (captain, date, outside, work, or none) and ready (wait none), plus each
+  hold_kind, hold_until, full hold_reason, filed date, blocker ids, owned_by
+  (arjun, fleet, or null when the row records no owner), wait (captain, date,
+  outside, work, or none) and ready (wait none), plus each
   structured secondmate home's queued rows as that home's summary projects
   them (bounded, titles as it shortened them), and every in_flight id with its
-  full name.
+  full name. wait is captain exactly when owned_by is arjun; a fleet-owned row
+  never waits on the captain, whatever its hold or kind. Only a row with no
+  recorded owner falls back to its captain hold or kind=captain, and
+  omitted[] counts those rows so the gap stays visible.
 Opt-in surfaces: --fields bodies|paths|actions|endpoints|board, --all-in-flight,
   --all-decisions (all open decisions and captain holds in the bounded snapshot),
   --all-secondmates, --all-landed, --all-reports, --all-queued, --all-recorded-prs,
@@ -680,17 +684,20 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                   | select(.structured != false and ((.state // "queued") == "queued" or .hold_kind != null))
                   | select(.state != "done")
                   | ((.unresolved_blocker_ids // []) | length > 0) as $blocked
-                  | (if .hold_kind == "captain" then "captain"
+                  | (.owned_by // null) as $owned_by
+                  | (if $owned_by == "arjun" then "captain"
+                     elif $owned_by == null and .hold_kind == "captain" then "captain"
                      elif $blocked then "work"
-                     elif .hold_kind == "future" or (.hold_kind == null and .hold_until != null) then "date"
+                     elif .hold_kind == "future" or (.hold_kind == null and .hold_until != null)
+                          or ($owned_by == "fleet" and .hold_kind == "captain" and .hold_until != null) then "date"
                      elif .hold_kind == "external" then "outside"
                      elif .hold_kind != null then "work"
-                     elif .kind == "captain" then "captain"
+                     elif $owned_by == null and .kind == "captain" then "captain"
                      else "none" end) as $wait
                   | {id, title:(.title // .id), repo:(.repo // null), kind:(.kind // null),
                      hold_kind:(.hold_kind // null), hold_until:(.hold_until // null),
                      hold_reason:(.hold_reason // null), filed:(.since // null),
-                     blocked_by:(.unresolved_blocker_ids // []), owner,
+                     blocked_by:(.unresolved_blocker_ids // []), owner, owned_by:$owned_by,
                      wait:$wait, ready:($wait == "none")} ],
         titles: [ $in_flight_all[] | {id, name:(.full_name // .name)} ]}} else {} end)
   | . + (if $f_paths then {paths:[ $snap.tasks[] | {id, worktree:(.paths.worktree.path // "-"), home:(.paths.home.path // "-"), status:.paths.status_log.path, report:.paths.report.path} ]} else {} end)
@@ -702,6 +709,10 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         (if $f_actions then empty else {surface:"watch/steer actions", reveal:"--fields actions"} end),
         (if $f_endpoints then empty else {surface:"healthy endpoint detail", reveal:"--fields endpoints"} end),
         (if $f_board then empty else {surface:"bearings board rows", reveal:"--fields board"} end),
+        (([ $snap.backlog.records[]
+            | select(.structured and (.state == "queued" or .state == "in_flight") and .owned_by == null) ]
+          | length) as $unowned
+         | if $unowned > 0 then {surface:("open backlog row(s) with no recorded owner: \($unowned)"), reveal:"bin/fm-tasks-axi.sh owner <id> arjun|fleet"} else empty end),
         (if $all_reports == 1 then empty else {surface:"full scout-report inventory", reveal:"--all-reports"} end),
         (if $all_landed == 0 and ($per_home_capped | length) > ($done | length) then {surface:("landed showing \($done | length) of \($per_home_capped | length)" + (($done | map(.home_id) | unique | map(select(. != "(main)")) | length) as $k | if $k > 0 then " (incl. \($k) secondmate home(s))" else "" end)), reveal:"--all-landed"} else empty end),
         (if $all_landed == 0 and $home_cap_dropped > 0 then {surface:("landed per-home capped at \($landed_per_home_n) for \($home_cap_dropped) home(s)"), reveal:"--all-landed"} else empty end),
