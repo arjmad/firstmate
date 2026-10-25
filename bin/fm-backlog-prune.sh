@@ -44,14 +44,16 @@
 #            card was built is kept and named. Every other one is closed through
 #            bin/fm-tasks-axi.sh with the note line
 #              dropped by <captain>'s prune, <YYYY-MM-DD>
-#            (local date; the captain is the first name in config/captain-name,
+#            (UTC date; the captain is the first name in config/captain-name,
 #            else "the captain"). Nothing is deleted: `fm-tasks-axi.sh reopen`
 #            brings a row back. Output is one line per row,
 #              dropped: <id>
 #              skipped: <id> (<why it no longer qualifies>)
 #              failed: <id>
 #            then `answered: <slot> <answer>` once the answer is recorded, plus
-#            `snoozed-until: <date>` for keep. Re-running an apply is safe: a
+#            `snoozed-until: <date>` for keep. An answer to an earlier week's
+#            card (its offer is still kept) drops what it names but records
+#            nothing, so it never closes or snoozes the current week's card. Re-running an apply is safe: a
 #            row already dropped is skipped as no longer queued. Exit 1 when
 #            any close failed (the answer is still recorded, so the card does
 #            not come back for rows that did drop), 2 for a refused argument or
@@ -59,7 +61,8 @@
 #
 # Records live under state/backlog-prune/: schedule.json (the last answer) and
 # offers/<key>.json. FM_PRUNE_NOW (epoch seconds) fixes the clock and TZ the
-# local zone, for tests; FM_BACKLOG_PRUNE_AGE_DAYS sets the threshold.
+# local zone, for tests; FM_BACKLOG_PRUNE_AGE_DAYS sets the threshold
+# (bin/fm-backlog-prune-lib.sh parses it, and any other value is refused).
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -74,8 +77,6 @@ PRUNE_DIR="$STATE/backlog-prune"
 SCHEDULE_FILE="$PRUNE_DIR/schedule.json"
 OFFER_DIR="$PRUNE_DIR/offers"
 OFFERS_KEPT=8
-AGE_DAYS=${FM_BACKLOG_PRUNE_AGE_DAYS:-14}
-case "$AGE_DAYS" in ''|*[!0-9]*) AGE_DAYS=14 ;; esac
 NOW=${FM_PRUNE_NOW:-$(date +%s)}
 case "$NOW" in ''|*[!0-9]*) NOW=$(date +%s) ;; esac
 
@@ -93,6 +94,8 @@ fail() {  # <status> <message>
 }
 
 command -v jq >/dev/null 2>&1 || fail 1 "jq is required"
+AGE_DAYS=$(fm_backlog_prune_age_days) \
+  || fail 2 "FM_BACKLOG_PRUNE_AGE_DAYS must be a positive whole number of days: ${FM_BACKLOG_PRUNE_AGE_DAYS-}"
 
 # The current weekly slot from the local clock: its Monday's date and the
 # epoch of that Monday 06:00, the most recent one at or before now.
@@ -168,7 +171,8 @@ command_offer() {
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   slot=$1
   shift
-  current=$(schedule_json | jq -r '.slot') || exit 1
+  current=$(schedule_json) || exit 1
+  current=$(printf '%s' "$current" | jq -r '.slot') || fail 1 "cannot read the weekly slot"
   [ "$slot" = "$current" ] || fail 2 "offer slot $slot is not the current slot $current"
   for id in "$@"; do
     printf '%s' "$id" | grep -Eq '^[A-Za-z0-9._-]{1,128}$' || fail 2 "not a backlog id: $id"
@@ -205,6 +209,22 @@ record_answer() {  # <slot> <answer> <snoozed-until-or-empty>
   fi
 }
 
+# Record an answer to the current week's card, which closes its slot (and
+# snoozes it for keep). An answer to an earlier week's card still drops what
+# it names, but leaves this week's card exactly as it was.
+close_slot() {  # <offer-slot> <answer> <snoozed-until-or-empty>
+  local current
+  current=$(schedule_json) || exit 1
+  current=$(printf '%s' "$current" | jq -r '.slot') || fail 1 "cannot read the weekly slot"
+  if [ "$1" != "$current" ]; then
+    printf "answered: %s %s (an earlier week's card; this week's card is unchanged)\n" "$1" "$2"
+    return 0
+  fi
+  record_answer "$1" "$2" "$3" || fail 1 "cannot record the answer"
+  printf 'answered: %s %s\n' "$1" "$2"
+  [ -z "$3" ] || printf 'snoozed-until: %s\n' "$3"
+}
+
 command_apply() {
   local key=${1-} answer=${2-} picked=${3-} offer slot list input verdicts note rc=0 id why fields week
   local -a ids
@@ -224,8 +244,7 @@ command_apply() {
   if [ "$answer" = keep ]; then
     fields=$(slot_fields) || fail 1 "cannot compute the weekly slot"
     week=$(printf '%s' "$fields" | cut -f4)
-    record_answer "$slot" keep "$week" || fail 1 "cannot record the answer"
-    printf 'answered: %s keep\nsnoozed-until: %s\n' "$slot" "$week"
+    close_slot "$slot" keep "$week"
     return 0
   fi
 
@@ -247,9 +266,10 @@ command_apply() {
     | .backlog.records as $records
     | $ARGS.positional[] as $id
     | ([$records[] | select(.structured == true and .id == $id)] | last) as $row
-    | "\($id)\t\(if $row == null then "not in the backlog" else ($row | prune_refusal($today; $age; $live) // "") end)"
+    | prune_depended_ids($records) as $depended
+    | "\($id)\t\(if $row == null then "not in the backlog" else ($row | prune_refusal($today; $age; $live; $depended) // "") end)"
     ' "${ids[@]}") || fail 1 "cannot check the rows against the backlog"
-  note="dropped by $(captain_name)'s prune, $(slot_fields | cut -f3)"
+  note="dropped by $(captain_name)'s prune, $(utc_today)"
   while IFS=$'\t' read -r id why; do
     [ -n "$id" ] || continue
     if [ -n "$why" ]; then
@@ -261,8 +281,7 @@ command_apply() {
       rc=1
     fi
   done <<< "$verdicts"
-  record_answer "$slot" "$answer" '' || fail 1 "cannot record the answer"
-  printf 'answered: %s %s\n' "$slot" "$answer"
+  close_slot "$slot" "$answer" ''
   return "$rc"
 }
 

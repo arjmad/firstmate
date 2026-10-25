@@ -38,9 +38,10 @@
 # display compatibility does not admit kindless reports from raw backlog rows.
 # tests/fm-bearings-snapshot.test.sh covers both fresh and cached v1 summaries.
 #
-# A row the weekly backlog prune dropped is closed but delivered nothing, so it
-# never enters the section; bin/fm-backlog-prune-lib.sh owns that drop record
-# and its reader, prune_dropped.
+# A row the weekly backlog prune dropped is closed but delivered nothing, so the
+# artifact-less fallback below never admits it; a row reopened after a drop and
+# later delivered still lands through its artifact. bin/fm-backlog-prune-lib.sh
+# owns that drop record and its reader, prune_dropped.
 
 # shellcheck source=bin/fm-backlog-prune-lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/fm-backlog-prune-lib.sh"
@@ -76,9 +77,9 @@ FM_LANDED_JQ_DEFS="$FM_PRUNE_JQ_DEFS"'
       and (.local_note // null) != null);
   def landed_record:
     .state == "done" and .structured
-    and (prune_dropped | not)
     and (landed_delivery
-      or (.kind != "scout"
+      or ((prune_dropped | not)
+        and .kind != "scout"
         and .kind != "captain"
         and .hold_kind != "captain"
         and (.pr_url // null) == null

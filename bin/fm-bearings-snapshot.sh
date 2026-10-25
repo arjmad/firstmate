@@ -116,7 +116,6 @@ FM_BEARINGS_PR_REPOS=${FM_BEARINGS_PR_REPOS:-10}
 FM_BEARINGS_PR_LIMIT=${FM_BEARINGS_PR_LIMIT:-20}
 FM_BEARINGS_PR_TIMEOUT=${FM_BEARINGS_PR_TIMEOUT:-20}
 FM_BEARINGS_PRUNE=${FM_BEARINGS_PRUNE:-100}
-FM_BACKLOG_PRUNE_AGE_DAYS=${FM_BACKLOG_PRUNE_AGE_DAYS:-14}
 case "$FM_BEARINGS_PR_TIMEOUT" in ''|*[!0-9]*|0) FM_BEARINGS_PR_TIMEOUT=20 ;; esac
 validate_bound() {  # <name> <value>
   case "$2" in ''|*[!0-9]*|0) echo "fm-bearings-snapshot: $1 must be a positive integer" >&2; exit 2 ;; esac
@@ -133,7 +132,8 @@ validate_bound FM_BEARINGS_UNHEALTHY "$FM_BEARINGS_UNHEALTHY"
 validate_bound FM_BEARINGS_PR_REPOS "$FM_BEARINGS_PR_REPOS"
 validate_bound FM_BEARINGS_PR_LIMIT "$FM_BEARINGS_PR_LIMIT"
 validate_bound FM_BEARINGS_PRUNE "$FM_BEARINGS_PRUNE"
-validate_bound FM_BACKLOG_PRUNE_AGE_DAYS "$FM_BACKLOG_PRUNE_AGE_DAYS"
+PRUNE_AGE_DAYS=$(fm_backlog_prune_age_days) || {
+  echo "fm-bearings-snapshot: FM_BACKLOG_PRUNE_AGE_DAYS must be a positive whole number of days" >&2; exit 2; }
 
 usage() {
   cat <<'EOF'
@@ -190,7 +190,8 @@ in_flight waits_on is "captain" only when the worker's still-open blocker or
   with its full title, repo, kind, filed and touched dates and age_days),
   bounded by FM_BEARINGS_PRUNE (default 100), and more, the count beyond it.
   bin/fm-backlog-prune.sh owns the slot; FM_BACKLOG_PRUNE_AGE_DAYS sets the
-  age (default 14).
+  age (default 14). A slot that cannot be read adds error and is never due,
+  so it hides only the card.
 Opt-in surfaces: --fields bodies|paths|actions|endpoints|board, --all-in-flight,
   --all-decisions (all open decisions and captain holds in the bounded snapshot),
   --all-secondmates, --all-landed, --all-reports, --all-queued, --all-recorded-prs,
@@ -380,13 +381,21 @@ case "$BEARINGS_TODAY" in
   *) BEARINGS_TODAY=$(date -u +%Y-%m-%d) ;;
 esac
 
-# The weekly prune card's slot, read from its owner only for the board.
+# The weekly prune card's slot, read from its owner only for the board, on
+# the snapshot's own clock. A slot that cannot be read hides only the card:
+# board.prune then says why in `error` and is never due.
 PRUNE_SCHEDULE=null
 case ",$FIELDS," in
   *,board,*)
-    PRUNE_EPOCH=$(jq -nr --arg now "$NOW" 'try ($now | fromdateiso8601) catch empty')
-    PRUNE_SCHEDULE=$(FM_PRUNE_NOW="${PRUNE_EPOCH:-}" "$SCRIPT_DIR/fm-backlog-prune.sh" schedule) \
-      || { echo "fm-bearings-snapshot: cannot read the backlog prune schedule" >&2; exit 1; }
+    PRUNE_EPOCH=$(jq -nr --arg now "$NOW" \
+      'try ($now | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | floor) catch empty')
+    if [ -z "$PRUNE_EPOCH" ]; then
+      PRUNE_SCHEDULE=$(jq -n --arg now "$NOW" '{open:false, slot:null, snoozed_until:null,
+        error:("the snapshot time is not a UTC timestamp: " + $now)}')
+    elif ! PRUNE_SCHEDULE=$(FM_PRUNE_NOW="$PRUNE_EPOCH" "$SCRIPT_DIR/fm-backlog-prune.sh" schedule 2>&1); then
+      PRUNE_SCHEDULE=$(jq -n --arg why "$PRUNE_SCHEDULE" '{open:false, slot:null, snoozed_until:null,
+        error:("the weekly prune schedule is unreadable: " + ($why | gsub("\\s+"; " ")))}')
+    fi
     ;;
 esac
 MODEL=$(printf '%s' "$SNAP" | jq \
@@ -419,7 +428,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
   --argjson pr_rows_min_total "$PR_ROWS_MIN_TOTAL" \
   --argjson return_catchup "$RETURN_CATCHUP" \
   --argjson prune_schedule "$PRUNE_SCHEDULE" \
-  --argjson prune_age "$FM_BACKLOG_PRUNE_AGE_DAYS" \
+  --argjson prune_age "$PRUNE_AGE_DAYS" \
   --argjson prune_n "$FM_BEARINGS_PRUNE" \
   --argjson candidate_prs "$CANDIDATE_PRS" "$FM_LANDED_JQ_DEFS"'
   def trunc($n): if . == null then null else
@@ -730,7 +739,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                 | {due:($prune_schedule.open and ($c | length) > 0), slot:$prune_schedule.slot,
                    open:$prune_schedule.open, snoozed_until:$prune_schedule.snoozed_until,
                    age_days:$prune_age, candidates:$c[:$prune_n],
-                   more:([($c | length) - $prune_n, 0] | max)})}} else {} end)
+                   more:([($c | length) - $prune_n, 0] | max)}
+                  + (if $prune_schedule.error then {error:$prune_schedule.error} else {} end))}} else {} end)
   | . + (if $f_paths then {paths:[ $snap.tasks[] | {id, worktree:(.paths.worktree.path // "-"), home:(.paths.home.path // "-"), status:.paths.status_log.path, report:.paths.report.path} ]} else {} end)
   | . + (if $f_actions then {actions:[ $snap.tasks[] | {id, watch:(.actions.watch // .actions.send // "-"), steer:(.actions.steer // .actions.send // "-")} ]} else {} end)
   | . + (if $f_endpoints then {endpoints:[ $snap.tasks[] | {id, backend, target:(.endpoint.target // "-"), exists:.endpoint.exists, agent:.endpoint.agent_alive} ]} else {} end)

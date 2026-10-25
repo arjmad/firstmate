@@ -43,6 +43,10 @@ make_home() {  # <name>
   Owner: fleet
 - [ ] his-own - His own old to-do (repo: sites) (kind: captain) (since 2026-09-01)
   Owner: arjun
+- [ ] waits-on-four - Fresh work waiting on four blocked-by: stale-four (repo: business) (kind: ship) (since 2026-10-20)
+  Owner: fleet
+- [ ] stale-four - Old errand other work waits on (repo: business) (kind: ship) (since 2026-09-04)
+  Owner: fleet
 ## Done
 EOF
   printf '%s\n' "$home"
@@ -111,7 +115,7 @@ test_drop_all_closes_each_row_with_a_reopenable_dated_note() {
   local home key out
   home=$(make_home drop-all)
   printf 'Arjun\n' > "$home/config/captain-name"
-  key=$(prune "$home" "$MONDAY" offer 2026-10-26 stale-one stale-two stale-three ghost)
+  key=$(prune "$home" "$MONDAY" offer 2026-10-26 stale-one stale-two stale-three ghost stale-four)
   # Touched after the card was built: the dated note makes it fresh again.
   perl -0pi -e 's/(stale-two .*\n)/$1  2026-10-25: keep this one, the vendor replied\n/' "$home/data/backlog.md"
   out=$(prune "$home" "$MONDAY" apply "$key" drop-all) || fail "drop-all failed: $out"
@@ -119,6 +123,7 @@ test_drop_all_closes_each_row_with_a_reopenable_dated_note() {
   assert_contains "$out" "skipped: stale-two (touched 2026-10-25)" "drop-all dropped a row touched since the card: $out"
   assert_contains "$out" "dropped: stale-three" "drop-all did not drop every offered row: $out"
   assert_contains "$out" "skipped: ghost (not in the backlog)" "drop-all did not name an absent row: $out"
+  assert_contains "$out" "skipped: stale-four (open work waits on it)" "drop-all dropped a row other work waits on: $out"
   assert_contains "$out" "answered: 2026-10-26 drop-all" "drop-all did not record the answer: $out"
   awk '/^## Done/{d=1} d' "$home/data/backlog.md" | grep -q "^  dropped by Arjun's prune, 2026-10-26$" \
     || fail "a dropped row does not carry the dated prune note"
@@ -167,9 +172,37 @@ test_keep_snoozes_the_card_for_a_week() {
   pass "keep drops nothing and brings the card back a week later"
 }
 
+test_an_earlier_weeks_answer_leaves_this_weeks_card() {
+  local home key out next
+  home=$(make_home earlier-week)
+  key=$(prune "$home" "$MONDAY" offer 2026-10-26 stale-one)
+  next=$((MONDAY + 7 * 86400))
+  out=$(prune "$home" "$next" apply "$key" drop-all) || fail "a late drop-all failed: $out"
+  assert_contains "$out" "dropped: stale-one" "a late answer did not drop what its card named: $out"
+  assert_contains "$out" "an earlier week's card; this week's card is unchanged" "a late answer did not say it left this week alone: $out"
+  prune "$home" "$next" schedule | jq -e '.open == true and .answered_at == null' >/dev/null \
+    || fail "a late answer to last week's card closed this week's"
+  pass "an answer to an earlier week's card drops its rows but leaves this week's card due"
+}
+
+test_the_age_threshold_is_parsed_once_and_refused_when_bad() {
+  local home rc v
+  home=$(make_home age)
+  FM_BACKLOG_PRUNE_AGE_DAYS=030 prune "$home" "$MONDAY" status | jq -e '.age_days == 30 and ([.candidates[].id] == ["stale-one", "stale-two", "stale-three"])' >/dev/null \
+    || fail "a zero-padded threshold was not read as decimal days"
+  for v in 0 -3 two 1e2; do
+    rc=0
+    FM_BACKLOG_PRUNE_AGE_DAYS=$v prune "$home" "$MONDAY" status >/dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 2 ] || fail "the threshold '$v' was not refused (exit $rc)"
+  done
+  pass "the age threshold is one decimal parse, and anything but a positive whole number is refused"
+}
+
 test_the_slot_opens_monday_morning_local_time
 test_status_proposes_only_stale_fleet_rows
 test_an_offer_records_exactly_the_shown_list
 test_drop_all_closes_each_row_with_a_reopenable_dated_note
 test_drop_picked_drops_only_those_positions
 test_keep_snoozes_the_card_for_a_week
+test_an_earlier_weeks_answer_leaves_this_weeks_card
+test_the_age_threshold_is_parsed_once_and_refused_when_bad

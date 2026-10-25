@@ -111,7 +111,9 @@
 #             the snapshot's board.prune; more counts the rows held back. build
 #             records exactly that list through bin/fm-backlog-prune.sh offer
 #             and sets the card's `key` to the offer key it prints (a composed
-#             key is replaced), so every answer names one recorded list. The
+#             key is replaced), so every answer names one recorded list; a
+#             card whose slot is no longer current is dropped and named on
+#             stderr as a `dropped-prune-card:` line. The
 #             card's three answers are fixed by the template, not composed:
 #             drop-all, drop-picked (values.picked = 1-based positions) and
 #             keep, each with effect `prune`.
@@ -556,15 +558,23 @@ effective_payload() {  # <data.json> <dest.json>
 }
 
 # Record the prune card's exact list and print its offer key, or nothing when
-# the payload carries no card. A refused offer (a slot that is not the current
-# one) refuses the build rather than shipping a card no answer can name.
+# the payload carries no card. An offer refused as an argument (a slot that is
+# no longer the current one, as when a payload composed just before Monday
+# 06:00 is built just after) drops only the card, named on stderr as a
+# `dropped-prune-card:` line, since no answer could name it; any other failure
+# refuses the build.
 record_prune_offer() {  # <data.json>
-  local slot ids
+  local slot ids key rc=0
   jq -e '(.prune // null) != null' "$1" >/dev/null 2>&1 || return 0
   slot=$(jq -r '.prune.slot' "$1") || return 1
   ids=$(jq -r '.prune.candidates[].id' "$1") || return 1
   # shellcheck disable=SC2086 # ids are validated backlog-id slugs
-  "$SCRIPT_DIR/fm-backlog-prune.sh" offer "$slot" $ids
+  key=$("$SCRIPT_DIR/fm-backlog-prune.sh" offer "$slot" $ids 2>/dev/null) || rc=$?
+  case "$rc" in
+    0) printf '%s\n' "$key" ;;
+    2) printf 'dropped-prune-card: slot %s is not the current weekly slot\n' "$slot" >&2 ;;
+    *) return 1 ;;
+  esac
 }
 
 # The OWNER column bin/fm-procevent.sh already publishes: live, none,

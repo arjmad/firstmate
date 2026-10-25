@@ -1009,9 +1009,10 @@ test_build_records_the_prune_offer_and_keys_the_card() {
 
   write_valid_payload "$data"
   with_prune_card "$data" 2000-01-03
-  set +e; out=$(run_board "$home" build "$data" 2>&1); rc=$?; set -e
-  [ "$rc" -ne 0 ] || fail "a prune card for a past slot was accepted"
-  assert_contains "$out" "is not the current slot" "the stale-slot refusal did not say why: $out"
+  out=$(run_board "$home" build "$data" 2>&1) || fail "a stale prune card refused the whole board: $out"
+  assert_contains "$out" "dropped-prune-card: slot 2000-01-03 is not the current weekly slot" \
+    "the stale card was not named as dropped: $out"
+  extract_payload "$board" | jq -e 'has("prune") | not' >/dev/null || fail "a stale prune card shipped"
 
   while IFS='|' read -r case filter; do
     write_valid_payload "$data"
@@ -1027,7 +1028,7 @@ a prune candidate with no touched date|del(.prune.candidates[0].touched)
 a prune candidate with no repo marker|del(.prune.candidates[0].repo)
 a prune card with no ask|.prune.ask = ""
 EOF2
-  pass "build records the prune card's exact list as an offer and keys the card with it"
+  pass "build records the prune card's exact list as an offer and keys the card with it, and drops a stale card"
 }
 
 test_path_is_stable_and_home_scoped
