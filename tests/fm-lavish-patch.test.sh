@@ -5,8 +5,12 @@
 #
 # The guarantees under test:
 #   - apply appends the overlay to an upstream dist/chrome.css and
-#     dist/chrome-client.js found through the PATH symlink npm installs, says so
-#     once, keeps each file's mode, and leaves valid JavaScript.
+#     dist/chrome-client.js found through the PATH symlink npm installs, puts its
+#     head part before upstream's chrome-client.js, says so once, keeps each
+#     file's mode, and leaves valid JavaScript.
+#   - The head part grants the board iframe fullscreen before upstream's script
+#     first sets its src, keeps any permission upstream already lists, and does
+#     nothing without the iframe.
 #   - A second apply is silent and changes nothing; an older overlay revision
 #     is replaced, never stacked, and a newer one, written by another home's
 #     newer checkout of the shared toolchain, is never downgraded.
@@ -14,7 +18,10 @@
 #     trailing newline.
 #   - Fail closed: when upstream no longer carries what the overlay relies on,
 #     or ships its own panel collapse, apply prints one LAVISH_PATCH skip line,
-#     exits 3, and writes nothing.
+#     exits 3, and writes nothing; that includes an artifact iframe that no
+#     longer gets its src from upstream's script or no longer exists when that
+#     script starts, and a head part that lost its end marker.
+#   - A revision 2 install, which had no head part, is upgraded to both parts.
 #   - No lavish-axi package on PATH (absent, or a stub that is not an npm
 #     install) is silent, and FM_LAVISH_PATCH=0 turns apply off.
 #   - An unreadable overlay is one LAVISH_PATCH failed line, never a stack trace,
@@ -77,9 +84,14 @@ test_apply_appends_the_overlay_once() {
   expect_code 0 "$rc" "apply"
   assert_equals "BOOTSTRAP_INFO: lavish-axi 0.1.90 chrome patch applied" "$out" "apply should report the write once"
   assert_equals "applied 0.1.90" "$(patch "$prefix" status)" "status after apply"
+  head -c "$(wc -c < "$pristine/chrome.css")" "$(dist "$prefix")/chrome.css" | cmp -s - "$pristine/chrome.css" \
+    || fail "apply must keep upstream's chrome.css content ahead of the overlay"
+  head -n 1 "$(dist "$prefix")/chrome-client.js" | grep -q '^// fm-lavish-patch:head-begin r[0-9]*$' \
+    || fail "apply must open chrome-client.js with the overlay's head part"
+  { cat "$ROOT/bin/lavish-patch/chrome-client-head.js"; printf '// fm-lavish-patch:head-end\n'; cat "$pristine/chrome-client.js"; } > "$TMP_ROOT/apply-head-expected"
+  tail -n +2 "$(dist "$prefix")/chrome-client.js" | head -c "$(wc -c < "$TMP_ROOT/apply-head-expected")" | cmp -s - "$TMP_ROOT/apply-head-expected" \
+    || fail "the head part must come straight before upstream's exact chrome-client.js bytes"
   for f in chrome.css chrome-client.js; do
-    head -c "$(wc -c < "$pristine/$f")" "$(dist "$prefix")/$f" | cmp -s - "$pristine/$f" \
-      || fail "apply must keep upstream's $f content ahead of the overlay"
     assert_contains "$(cat "$(dist "$prefix")/$f")" "$(cat "$ROOT/bin/lavish-patch/$f")" "apply should append the $f overlay"
     assert_equals 640 "$(file_mode "$(dist "$prefix")/$f")" "apply should keep $f's mode"
   done
@@ -104,6 +116,7 @@ other_checkout() {
   sed "s/^const REVISION = [0-9]*;$/const REVISION = $((revision + $2));/" "$PATCH" > "$bin/fm-lavish-patch.mjs"
   printf '/* the %s overlay revision */\n' "$1" > "$bin/lavish-patch/chrome.css"
   printf '// the %s overlay revision\n' "$1" > "$bin/lavish-patch/chrome-client.js"
+  printf '// the %s overlay revision head\n' "$1" > "$bin/lavish-patch/chrome-client-head.js"
   printf '%s\n' "$bin/fm-lavish-patch.mjs"
 }
 
@@ -191,6 +204,41 @@ test_fails_closed_when_upstream_moved() {
   out=$(patch "$prefix" apply); rc=$?
   expect_code 3 "$rc" "apply on a changed chrome template"
   assert_contains "$out" "LAVISH_PATCH: skipped: lavish-axi 0.2.0 dist/cli.mjs no longer contains" "a changed template is a skip"
+
+  prefix=$(new_package static-src 0.2.0)
+  sed 's/data-artifact-src=/src=/' "$(dist "$prefix")/cli.mjs" > "$TMP_ROOT/static-src.mjs"
+  cat "$TMP_ROOT/static-src.mjs" > "$(dist "$prefix")/cli.mjs"
+  pristine="$TMP_ROOT/static-src-pristine"
+  snapshot "$prefix" "$pristine"
+  out=$(patch "$prefix" apply); rc=$?
+  expect_code 3 "$rc" "apply when the iframe src is in the served HTML"
+  assert_contains "$out" 'no longer contains "data-artifact-src="' "an iframe loaded before any script runs is a skip"
+  same_files "$prefix" "$pristine" || fail "a skipped apply must write nothing"
+
+  prefix=$(new_package both-src 0.2.0)
+  sed 's/data-artifact-src=/src="\/artifact\/key\/index.html" data-artifact-src=/' "$(dist "$prefix")/cli.mjs" > "$TMP_ROOT/both-src.mjs"
+  cat "$TMP_ROOT/both-src.mjs" > "$(dist "$prefix")/cli.mjs"
+  out=$(patch "$prefix" apply); rc=$?
+  expect_code 3 "$rc" "apply when the iframe has a src beside data-artifact-src"
+  assert_contains "$out" "serves the artifact iframe with its own src" "an iframe with its own src is a skip"
+
+  prefix=$(new_package script-first 0.2.0)
+  sed 's#<script src="/chrome-client.js"></script>##; s#<div class="layout">#<script src="/chrome-client.js"></script><div class="layout">#' \
+    "$(dist "$prefix")/cli.mjs" > "$TMP_ROOT/script-first.mjs"
+  cat "$TMP_ROOT/script-first.mjs" > "$(dist "$prefix")/cli.mjs"
+  out=$(patch "$prefix" apply); rc=$?
+  expect_code 3 "$rc" "apply when chrome-client.js loads before the iframe exists"
+  assert_contains "$out" "no longer loads chrome-client.js after the artifact iframe" "a script ahead of the iframe is a skip"
+
+  prefix=$(new_package damaged-head)
+  printf '// fm-lavish-patch:head-begin r3\n// a head part whose end marker was lost\n' | cat - "$(dist "$prefix")/chrome-client.js" > "$TMP_ROOT/damaged.js"
+  cat "$TMP_ROOT/damaged.js" > "$(dist "$prefix")/chrome-client.js"
+  pristine="$TMP_ROOT/damaged-head-pristine"
+  snapshot "$prefix" "$pristine"
+  out=$(patch "$prefix" apply); rc=$?
+  expect_code 3 "$rc" "apply over a head part without its end marker"
+  assert_contains "$out" "has an overlay head part without its end marker" "a damaged head part is a skip"
+  same_files "$prefix" "$pristine" || fail "a damaged head part must not be stacked on"
   pass "apply: fails closed with one skip line when upstream no longer matches"
 }
 
@@ -346,7 +394,76 @@ JS
   pass "a board answer reads as one receipt line, a note alone as the captain's words, other bubbles unchanged"
 }
 
+# run_chrome_client <file> <allow|-> [no-frame]: run a chrome-client.js under a
+# minimal DOM whose artifact iframe starts with that allow attribute (- for
+# none) and records its allow and allowfullscreen attributes at the moment a
+# src is first assigned, the way Chrome takes the iframe's permissions when it
+# navigates. Prints them as JSON.
+run_chrome_client() {
+  node - "$@" <<'JS'
+const { readFileSync } = require("node:fs");
+const [file, allow, noFrame] = process.argv.slice(2);
+const attrs = new Map(allow === "-" ? [] : [["allow", allow]]);
+let atLoad = null;
+const frame = {
+  dataset: { artifactSrc: "/artifact/key/index.html" },
+  getAttribute: (name) => (attrs.has(name) ? attrs.get(name) : null),
+  setAttribute: (name, value) => attrs.set(name, String(value)),
+  set src(value) {
+    if (!atLoad) atLoad = { src: value, allow: frame.getAttribute("allow"), allowfullscreen: attrs.has("allowfullscreen") };
+  },
+};
+globalThis.document = { getElementById: (id) => (id === "artifact" && !noFrame ? frame : null) };
+globalThis.window = {};
+new Function(readFileSync(file, "utf8"))();
+console.log(JSON.stringify({ atLoad, allow: frame.getAttribute("allow") }));
+JS
+}
+
+test_head_grants_fullscreen_before_the_first_load() {
+  local prefix client out
+  prefix=$(new_package fullscreen)
+  client="$(dist "$prefix")/chrome-client.js"
+  # Upstream's own script points the iframe at the board as soon as it runs.
+  printf '%s\n' 'const frame = document.getElementById("artifact");' 'if (frame) frame.src = frame.dataset.artifactSrc;' > "$client"
+  out=$(run_chrome_client "$client" -) || fail "unpatched chrome-client.js did not run under the shim"
+  printf '%s' "$out" | jq -e '.atLoad != null and .atLoad.allow == null' >/dev/null \
+    || fail "the unpatched frame should load, without fullscreen: $out"
+
+  patch "$prefix" apply >/dev/null
+  out=$(run_chrome_client "$client" -) || fail "patched chrome-client.js did not run under the shim"
+  printf '%s' "$out" | jq -e '.atLoad == { src: "/artifact/key/index.html", allow: "fullscreen", allowfullscreen: true }' >/dev/null \
+    || fail "the board iframe must carry fullscreen by its first load: $out"
+  out=$(run_chrome_client "$client" "autoplay") || fail "patched chrome-client.js did not run with an upstream allow"
+  printf '%s' "$out" | jq -e '.atLoad.allow == "autoplay; fullscreen"' >/dev/null || fail "fullscreen must join upstream's own permissions: $out"
+  out=$(run_chrome_client "$client" "autoplay; fullscreen 'self'") || fail "patched chrome-client.js did not run with fullscreen listed"
+  printf '%s' "$out" | jq -e ".atLoad.allow == \"autoplay; fullscreen 'self'\"" >/dev/null || fail "a fullscreen upstream already lists is left alone: $out"
+  out=$(run_chrome_client "$client" - no-frame) || fail "the head part must not throw on a page without the iframe"
+  printf '%s' "$out" | jq -e '.atLoad == null and .allow == null' >/dev/null || fail "without the iframe the head part touches nothing: $out"
+  pass "head: the board iframe is granted fullscreen before upstream first loads it"
+}
+
+test_revision_2_install_gains_the_head() {
+  local prefix pristine client out
+  prefix=$(new_package revision-2)
+  pristine="$TMP_ROOT/revision-2-pristine"
+  snapshot "$prefix" "$pristine"
+  client="$(dist "$prefix")/chrome-client.js"
+  printf '\n// fm-lavish-patch:begin r2\n// the revision 2 overlay\n// fm-lavish-patch:end\n' >> "$client"
+  assert_equals "stale 0.1.90" "$(patch "$prefix" status)" "a revision 2 install, which had no head part, reads as stale"
+  out=$(patch "$prefix" apply)
+  assert_equals "BOOTSTRAP_INFO: lavish-axi 0.1.90 chrome patch applied" "$out" "apply over revision 2"
+  head -n 1 "$client" | grep -q '^// fm-lavish-patch:head-begin r[0-9]*$' || fail "the upgrade must add the head part"
+  assert_not_contains "$(cat "$client")" "revision 2 overlay" "the revision 2 overlay must be replaced"
+  assert_equals "applied 0.1.90" "$(patch "$prefix" status)" "status after the upgrade"
+  patch "$prefix" remove >/dev/null
+  same_files "$prefix" "$pristine" || fail "remove after the upgrade must restore upstream's bytes exactly"
+  pass "apply: a revision 2 install gains the head part, and remove still restores upstream"
+}
+
 test_apply_appends_the_overlay_once
+test_head_grants_fullscreen_before_the_first_load
+test_revision_2_install_gains_the_head
 test_older_revision_is_replaced_not_stacked
 test_newer_revision_is_never_downgraded
 test_unreadable_overlay_fails_in_one_line
