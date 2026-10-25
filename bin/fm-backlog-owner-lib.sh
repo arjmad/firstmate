@@ -11,11 +11,13 @@
 #   Owner: arjun
 #   Owner: fleet
 #
-# Writers keep exactly one such line, at the end of the body, so the blocks
-# bin/fm-captain-hold.sh prepends (hold-set stamp, resolution records,
-# deferrals) never displace it. A reader takes the last matching line, which
-# is the canonical one even when quoted captain words above it happen to
-# contain the same text. bin/fm-fleet-snapshot.sh reads the same line from the
+# Writers keep one canonical such line, at the end of the body when written,
+# so the blocks bin/fm-captain-hold.sh prepends (hold-set stamp, resolution
+# records, deferrals) never displace it, and a rewrite replaces only that
+# line. A reader takes the last matching line, which is the canonical one
+# even when quoted captain words above it happen to contain the same text; a
+# note appended later that is itself exactly such a line would win, which is
+# why an owner line never outranks a captain hold. bin/fm-fleet-snapshot.sh reads the same line from the
 # markdown backlog in jq and is pinned to this format by
 # tests/fm-bearings-snapshot.test.sh. An owner line never outranks a captain
 # hold: a row held for the captain waits on him whatever the line says, and
@@ -50,11 +52,17 @@ fm_backlog_owner_of_body() {
   printf '%s\n' "${1:-}" | sed -En 's/^[[:space:]]*Owner:[[:space:]]*(arjun|fleet)[[:space:]]*$/\1/p' | tail -1
 }
 
-# fm_backlog_owner_body_with <decoded-body> <owner>: print the body carrying
-# exactly one owner line, <owner>, at its end; every earlier owner line goes.
+# fm_backlog_owner_body_with <decoded-body> <owner>: print the body with its
+# canonical (last) owner line replaced by <owner>, now at the end. Only that
+# one line goes, so a same-looking line inside quoted captain words or notes
+# above it is kept verbatim.
 fm_backlog_owner_body_with() {
   local body=${1:-} owner=$2 kept
-  kept=$(printf '%s\n' "$body" | sed -E '/^[[:space:]]*Owner:[[:space:]]*(arjun|fleet)[[:space:]]*$/d')
+  kept=$(printf '%s\n' "$body" | awk '
+    { line[NR] = $0 }
+    /^[[:space:]]*Owner:[[:space:]]*(arjun|fleet)[[:space:]]*$/ { last = NR }
+    END { for (i = 1; i <= NR; i++) if (i != last) print line[i] }
+  ')
   # Command substitution already dropped trailing newlines; drop trailing
   # blank lines too so the owner line is separated by exactly one blank line.
   while [ -n "$kept" ] && [ -z "$(printf '%s\n' "$kept" | tail -1 | tr -d '[:space:]')" ]; do

@@ -178,7 +178,8 @@ in_flight waits_on is "captain" only when the worker's still-open blocker or
   arjun that no unfinished work blocks; a fleet-owned row never waits on the
   captain otherwise, whatever its kind. Only a row with no recorded owner
   falls back to kind=captain, and omitted[] counts those rows so the gap stays
-  visible.
+  visible, apart from the public-followup obligations tasks-axi files itself,
+  which are always the fleet's.
 Opt-in surfaces: --fields bodies|paths|actions|endpoints|board, --all-in-flight,
   --all-decisions (all open decisions and captain holds in the bounded snapshot),
   --all-secondmates, --all-landed, --all-reports, --all-queued, --all-recorded-prs,
@@ -710,7 +711,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         (if $f_endpoints then empty else {surface:"healthy endpoint detail", reveal:"--fields endpoints"} end),
         (if $f_board then empty else {surface:"bearings board rows", reveal:"--fields board"} end),
         (([ $snap.backlog.records[]
-            | select(.structured and (.state == "queued" or .state == "in_flight") and .owned_by == null) ]
+            | select(.structured and (.state == "queued" or .state == "in_flight") and .owned_by == null
+                     and .kind != "public-followup") ]
           | length) as $unowned
          | if $unowned > 0 then {surface:("open backlog row(s) with no recorded owner: \($unowned)"), reveal:"bin/fm-tasks-axi.sh owner <id> arjun|fleet"} else empty end),
         (if $all_reports == 1 then empty else {surface:"full scout-report inventory", reveal:"--all-reports"} end),

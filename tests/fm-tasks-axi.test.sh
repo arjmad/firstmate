@@ -282,6 +282,20 @@ test_wrapper_owner_at_filing() {
   expect_code 2 "$rc" "owner fleet on a captain-held row"
   assert_contains "$out" "held for the captain" "the captain-hold refusal did not say why"
   assert_equals arjun "$(wrapper_from_code "$dir" owner ow-file)" "a refused owner change still wrote"
+  printf 'his words:\nOwner: fleet\n\nOwner: fleet\n' > "$dir/fleet-body.md"
+  out=$(wrapper_from_code "$dir" update ow-file --body-file "$dir/fleet-body.md" 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "an update body naming the fleet on a captain-held row"
+  wrapper_from_code "$dir" hold ow-cap --reason "his old call" --kind captain --until 2020-01-01 >/dev/null \
+    || fail "could not hold ow-cap with a past date"
+  out=$(wrapper_from_code "$dir" owner ow-cap fleet 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "owner fleet on a captain hold whose date has passed"
+  wrapper_from_code "$dir" add ow-quote "quoted words" --kind ship \
+    --body "$(printf 'Captain said:\nOwner: arjun\n\nOwner: fleet')" >/dev/null || fail "could not add ow-quote"
+  wrapper_from_code "$dir" owner ow-quote arjun >/dev/null || fail "could not record arjun on ow-quote"
+  body=$(wrapper_from_code "$dir" show ow-quote --full)
+  assert_contains "$body" 'Captain said:\nOwner: arjun\n\nOwner: arjun' "an owner rewrite did not keep the quoted line and replace only its own"
   [ -z "$(find "$dir/home/state" -name '.control-*.lock' 2>/dev/null)" ] \
     || fail "an owner write left its control lock behind"
   pass "fm-tasks-axi.sh names every new row's owner, keeps it through body rewrites, and reads and records it"
