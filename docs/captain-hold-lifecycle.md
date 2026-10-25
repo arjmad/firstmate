@@ -35,6 +35,7 @@ It never reads report bodies, review artifacts, terminal output, or chat.
 | --- | --- | --- |
 | `hold` | Creates or reuses a task and holds it for the captain. | [Creating a hold](#creating-a-hold-hold) |
 | `answer` | Records the captain's exact words and resolves the call. | [Answering a call](#answering-a-call-answer) |
+| `defer` | Records the captain's dated deferral and re-holds the call until that date, never closing it. | [Answer-time resolution](#answer-time-resolution) |
 | `release-due` | Releases every reversible hold whose 72-hour default is due, as the decision of record. | [Hold kinds and default release](#hold-kinds-and-default-release) |
 | `complete` | Records the reviewed captain-held task ids in the originating task's metadata. | [Recording a reviewed inventory](#recording-a-reviewed-inventory-complete) |
 | `verify` | Read-only check that scout teardown runs before removing source state. | [Checking before scout teardown](#checking-before-scout-teardown-verify) |
@@ -212,7 +213,11 @@ The optional mode column carries a card-declared close:
 | --- | --- |
 | `done` (default) | Completes the task. |
 | `release` | Lifts the hold so held work resumes. |
+| `until=YYYY-MM-DD` | The captain's deferral: `defer` records his words and re-holds the task `--until` that date, reported `deferred:`. |
 | Any other value | Skipped. |
+
+A deferral keeps the hold's kind and reason, drops a reversible self-release default because the captain has engaged, refuses a date that is not after today, and treats an exact replay as a no-op.
+It closes nothing, so a board "later" answer can never complete the call it defers.
 
 Each key is reported as follows:
 
@@ -280,13 +285,14 @@ The Lavish adapter splits each capture between two commands:
 
 | Command | What it emits |
 | --- | --- |
-| `bin/fm-procevent-lavish.sh answers` | An exact non-reconcile selection, or a bare note when no option was selected. |
+| `bin/fm-procevent-lavish.sh answers` | An exact non-reconcile card selection, or an inbox item's action whose effect closes (`close`) or defers (`hold-until`, `remind-at`) a held item; never a note sent alone and never a worker's item. |
 | `reconciles` | Only task ids whose structured selection is Reconcile, carrying their notes as request provenance. |
 
 Current rows require the versioned shape and the `choice` tag.
 A time-limited rollout branch accepts ordinary answers from the old question/answer shape.
 That branch refuses the old shape's bare and separator-annotated reconcile values from both intakes, because those rows do not separate the selected option from its note.
 Every other structurally uncertain capture feeds neither intake, remains announced, and cannot forge a task id from freeform prose.
+A note sent with no option or action picked is the captain's own instruction about that call: it feeds neither intake, and `read` presents it under a BOARD ANSWER block whose route says it is never a closure, so firstmate reads the words and acts on them.
 
 The adapter-agnostic runner pipes reconcile rows into `reconcile-requests` only for a bound source.
 That intake verifies the named binding again before it creates anything.
@@ -546,6 +552,7 @@ The suite does not test the accepted merge-to-cleanup re-hold window or asynchro
 - Hold-set stamping precedes visible hold state, preserves an active lifecycle's timestamp, and resets after release.
 - Interrupted answer closure retains the stamp until close and restores resolution-first ordering on retry.
 - Deferral through `--until` leaves `captain_actionable` false until due.
+- A keyed `until=` deferral re-holds the task until its date, keeps its kind and words, and never closes it; a past date and a closed task are skipped by name.
 
 ### Legacy paths
 

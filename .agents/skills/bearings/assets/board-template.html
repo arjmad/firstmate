@@ -227,88 +227,106 @@ textarea.fm-input { min-height: 88px; resize: vertical; }
 }
 </style>
 <style>
-/* Bearings board rules (bb-*), on the house tokens above. */
-.bb-main { max-width: 1180px; }
-.bb-cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: 32px; }
-.bb-cols > * { min-width: 0; }
-.bb-section__head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; }
-/* the muted subtitle carries runtime text, so it wraps instead of widening a phone page */
-.bb-section__head .fm-meta { min-width: 0; line-height: 1.3; overflow-wrap: anywhere; }
+/* Bearings board rules (bb-*), on the house tokens above. One reading column,
+   inbox first; every section is a <details> that remembers its fold per viewer. */
+.bb-main { max-width: 760px; gap: 40px; }
+.bb-h2 { display: flex; align-items: baseline; gap: 10px; font-size: 1.375rem; font-weight: 600; line-height: 1.25; letter-spacing: -.01em; margin-bottom: 8px; }
+.bb-count { font-family: var(--fm-font-mono); font-size: .9375rem; font-weight: 500; color: var(--fm-muted); }
+.bb-block { display: flex; flex-direction: column; }
+.bb-list { list-style: none; margin: 0; padding: 0; }
 
-/* badge tones the renderer emits, mapped onto the house pills */
-.fm-badge--online, .fm-badge--danger, .fm-badge--neutral { border: 1px solid currentColor; border-radius: 999px; padding: 2px 10px; }
-.fm-badge--online { color: var(--fm-ok); background: var(--fm-ok-soft); }
-.fm-badge--danger { color: var(--fm-accent); background: var(--fm-accent-soft); }
-.fm-badge--neutral { color: var(--fm-muted); background: var(--fm-card); }
+/* folding sections: the summary is the whole heading row */
+.bb-sec { border-top: 1px solid var(--fm-rule); }
+.bb-sec > summary { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 4px 0; cursor: pointer; list-style: none; }
+.bb-sec > summary::-webkit-details-marker { display: none; }
+.bb-sec__t { font-size: .8125rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--fm-accent); }
+.bb-sec__n { font-family: var(--fm-font-mono); font-size: .8125rem; color: var(--fm-muted); overflow-wrap: anywhere; }
+.bb-sec__cw { display: flex; flex: none; margin-left: auto; }
+.bb-sec__chev { flex: none; width: 22px; height: 22px; color: var(--fm-muted); transform: rotate(-90deg); transition: transform .15s ease; }
+.bb-sec[open] > summary .bb-sec__chev { transform: none; }
+.bb-sec > summary:hover .bb-sec__chev { color: var(--fm-ink); }
+.bb-sec__b { padding-bottom: 16px; }
+.bb-sec--sub { border-top-color: var(--fm-raised); }
+.bb-sec--sub > summary { min-height: 44px; }
+.bb-sec--sub .bb-sec__t { text-transform: none; letter-spacing: 0; font-size: .9375rem; color: var(--fm-ink); }
 
-/* Captain's Call: one card at a time, dealt off a visible stack that thins as
-   cards are answered: two edges, then one, then none on the last */
-.bb-callwrap { display: flex; flex-direction: column; gap: 12px; }
-/* a one-column track that cannot grow to a long link's one-line width */
-.bb-call { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); }
-.bb-call::before, .bb-call::after {
-  content: ""; position: absolute; inset: 0; z-index: 0;
-  background: var(--fm-card); border: 1px solid var(--fm-rule); border-radius: 14px;
-  box-shadow: var(--fm-shadow-soft);
-}
-/* scale from the bottom edge so the pile still pokes out below a tall card */
-.bb-call::before, .bb-call::after { transform-origin: 50% 100%; }
-.bb-call::before { transform: translateY(7px) scale(.975); }
-.bb-call::after { transform: translateY(14px) scale(.95); }
-.bb-call--penult::after { display: none; }
-.bb-call--last::before, .bb-call--last::after,
-.bb-call--empty::before, .bb-call--empty::after { display: none; }
-.bb-call > .bb-decision { grid-area: 1 / 1; z-index: 1; position: relative; }
-.bb-call > .bb-decision[hidden] { display: none; }
-.bb-decision .fm-form { flex: 1 1 auto; }
-.bb-decision .fm-actions { margin-top: auto; }
-/* the cards sit inside .fm-section, whose h3 rule would shrink the card title */
-.bb-decision .fm-decision__title { font-size: 1.375rem; }
-.bb-decision__detail { color: var(--fm-text); }
-.bb-decision__link { display: block; padding-block: 12px; line-height: 20px; font-family: var(--fm-font-mono); font-size: .875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bb-queued { display: none; }
-.is-queued .bb-queued { display: inline-flex; }
-.bb-limit { display: none; font-size: .875rem; font-weight: 600; color: var(--fm-accent); }
-.bb-limit.is-visible { display: inline; }
-/* extra top margin clears the pile edges that poke below the active card */
-.bb-stacknav { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
-.bb-stacknav[hidden] { display: none; }
-.bb-stacknav__count { flex: 1 1 auto; }
-.bb-stacknav .fm-btn { width: 44px; padding: 0; }
-.bb-stacknav .fm-btn[disabled] { opacity: .45; cursor: not-allowed; }
-.bb-stacknav .fm-btn svg { width: 18px; height: 18px; }
+/* one inbox item: title, ask, meta, its own actions, the note row */
+.bb-item { display: flex; flex-direction: column; gap: 2px; padding: 14px 0 16px; border-top: 1px solid var(--fm-raised); }
+.bb-item:first-child { border-top: 0; padding-top: 6px; }
+.bb-item h4, .bb-item p { margin: 0; }
+.bb-item__title { font-size: 1.0625rem; font-weight: 600; line-height: 1.3; color: var(--fm-ink); }
+.bb-item__ask { font-size: .9375rem; line-height: 1.45; color: var(--fm-text); }
+.bb-item__meta a { display: inline-flex; align-items: center; min-height: 44px; min-width: 44px; margin-block: -12px; font-weight: 600; color: var(--fm-link); }
+.bb-acts { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 10px; }
+.bb-act { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 44px; padding: 10px 14px; text-align: left; font: inherit; color: var(--fm-ink); background: transparent; border: 1px solid var(--fm-edge); border-radius: 10px; cursor: pointer; transition: background-color .15s ease; }
+.bb-act:hover { background: var(--fm-raised); }
+.bb-act--main { border-color: var(--fm-accent); }
+.bb-act__l { font-size: 1rem; font-weight: 600; line-height: 1.3; }
+.bb-act--main .bb-act__l { color: var(--fm-accent); }
+.bb-act__h { font-size: .8125rem; line-height: 1.4; color: var(--fm-muted); }
+.bb-actgrp { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 10px; border-radius: 12px; background: var(--fm-card); }
+.bb-actgrp--wide { grid-column: 1 / -1; }
+.bb-fields { display: flex; flex-wrap: wrap; gap: 8px; }
+.bb-fields--counts { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.bb-f { display: flex; flex-direction: column; gap: 4px; flex: 1 1 220px; min-width: 0; }
+.bb-f__k { font-size: .8125rem; font-weight: 600; color: var(--fm-muted); }
+.bb-fields--counts .bb-f__k { text-align: center; font-family: var(--fm-font-mono); }
+.bb-fields--counts .fm-input { text-align: center; font-family: var(--fm-font-mono); padding: 8px 4px; }
+.bb-f.is-need .fm-input { border-color: var(--fm-warn); box-shadow: 0 0 0 1px var(--fm-warn); }
+.bb-noterow { display: flex; gap: 8px; margin-top: 8px; }
+.bb-note { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; border: 1px solid var(--fm-edge); border-radius: 8px; background: var(--fm-card); cursor: text; }
+.bb-note:focus-within { outline: 3px solid var(--fm-focus); outline-offset: 2px; }
+.bb-note.is-need { border-color: var(--fm-warn); }
+.bb-note__k { flex: none; white-space: nowrap; font-size: .8125rem; font-weight: 600; color: var(--fm-muted); }
+.bb-note__in { flex: 1 1 auto; min-width: 0; font: inherit; color: var(--fm-ink); background: transparent; border: 0; padding: 8px 0; }
+.bb-note__in:focus { outline: none; }
+.bb-note__in::placeholder { color: var(--fm-muted); opacity: 1; }
+.bb-send { flex: none; padding: 0 14px; font-weight: 500; }
+.bb-sent { display: inline-flex; align-self: flex-start; align-items: center; gap: 6px; margin-top: 6px; padding: 4px 12px; font-size: .8125rem; font-weight: 600; color: var(--fm-ok); background: var(--fm-ok-soft); border: 1px solid var(--fm-ok); border-radius: 999px; }
+.bb-sent[hidden] { display: none; }
+.bb-limit { font-size: .875rem; font-weight: 600; color: var(--fm-warn); }
+.bb-limit[hidden] { display: none; }
+.bb-item.is-sent .bb-item__title { color: var(--fm-muted); }
+.bb-item.is-sent .bb-acts, .bb-item.is-sent .bb-noterow, .bb-item.is-sent .bb-opts, .bb-item.is-sent .bb-cardacts { display: none; }
+/* decision cards keep native radios with the recommendation already chosen */
+.bb-opts { margin-top: 6px; }
+.bb-opts .fm-opts__legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.bb-cardacts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.bb-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.bb-empty { color: var(--fm-muted); font-size: .9375rem; padding: 4px 0 12px; }
+.bb-takeall { display: flex; flex-direction: column; gap: 10px; padding: 4px 0 14px; }
+.bb-takeall[hidden], .bb-confirm[hidden] { display: none; }
+.bb-takeall > .fm-btn { align-self: flex-start; }
+.bb-confirm { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 12px; background: var(--fm-card); }
+.bb-confirm__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: .9375rem; }
+.bb-confirm__btns { display: flex; flex-wrap: wrap; gap: 8px; }
 
-/* compact rows (Underway / Landed / Charted), split by hairlines */
-.bb-rows { display: flex; flex-direction: column; }
-.bb-row { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 10px 0; border-top: 1px solid var(--fm-rule); min-width: 0; }
+/* compact rows: Later, Underway, Landed, Queued */
+.bb-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; align-items: baseline; padding: 8px 0; border-top: 1px solid var(--fm-raised); }
 .bb-row:first-child { border-top: 0; }
-label.bb-row { cursor: pointer; }
-.bb-row__main { min-width: 0; flex: 1 1 auto; }
-.bb-row .fm-badge { flex: none; white-space: nowrap; }
-.bb-row__title { display: block; font-weight: 500; color: var(--fm-ink); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bb-row__sub { display: block; font-size: .875rem; color: var(--fm-muted); line-height: 1.35; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bb-row__pr { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; min-width: 44px; font-family: var(--fm-font-mono); font-size: .875rem; white-space: nowrap; }
-.bb-row__check { width: 28px; height: 28px; border-radius: 999px; display: grid; place-items: center; flex: none;
-  color: var(--fm-ok); background: var(--fm-ok-soft); border: 1px solid var(--fm-ok); }
-.bb-row__check svg { width: 15px; height: 15px; }
-.bb-morechip { display: inline-flex; align-items: center; width: fit-content; margin-top: 12px; padding: 4px 12px;
-  font-size: .8125rem; font-weight: 600; color: var(--fm-muted); border: 1px dashed var(--fm-edge); border-radius: 999px; }
-.bb-empty { padding: 12px 0; color: var(--fm-muted); }
-
-/* Charted Next dispatch picker: the whole row is the checkbox's label, so the
-   target is the row; the spacer keeps one text left edge for unpickable rows */
-.bb-pick { flex: none; width: 20px; height: 20px; margin: 0; accent-color: var(--fm-accent); cursor: pointer; }
-.bb-pick-spacer { width: 20px; flex: none; }
-.bb-dispatch { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px; margin-top: 8px; padding-top: 14px; border-top: 1px solid var(--fm-rule); }
+.bb-row__t { font-size: .9375rem; line-height: 1.4; color: var(--fm-ink); overflow-wrap: anywhere; }
+.bb-row__r { font-size: .8125rem; text-align: right; }
+.bb-row__r a { display: inline-flex; align-items: center; justify-content: flex-end; min-height: 44px; min-width: 44px; margin-block: -12px; font-weight: 600; color: var(--fm-link); }
+.bb-row__m { grid-column: 1 / -1; }
+.bb-row--pick { grid-template-columns: auto minmax(0, 1fr); cursor: pointer; min-height: 44px; align-items: center; }
+.bb-row--pick .bb-row__m { grid-column: 2; }
+.bb-pick { width: 20px; height: 20px; margin: 0; accent-color: var(--fm-accent); }
+.bb-steps { display: flex; align-items: center; gap: 8px; grid-column: 1 / -1; margin-top: 4px; }
+.bb-steps__bar { flex: 0 1 120px; height: 6px; border-radius: 999px; background: var(--fm-raised); overflow: hidden; }
+.bb-steps__fill { display: block; height: 100%; background: var(--fm-accent); }
+.bb-steps__n { font-family: var(--fm-font-mono); font-size: .8125rem; color: var(--fm-muted); }
+.bb-h4 { font-size: .8125rem; font-weight: 600; color: var(--fm-muted); margin: 14px 0 2px; }
+.bb-h4:first-child { margin-top: 0; }
+.bb-sum { font-size: 1rem; color: var(--fm-text); margin-bottom: 8px; }
+.bb-sum b { font-family: var(--fm-font-mono); font-weight: 500; color: var(--fm-ink); }
+.bb-aside { font-size: .875rem; color: var(--fm-muted); padding-top: 6px; }
+.bb-dispatch { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px; margin-top: 8px; }
 .bb-dispatch[hidden] { display: none; }
 .bb-dispatch__count { flex: 1 1 auto; font-size: .875rem; font-weight: 600; color: var(--fm-muted); }
 .bb-dispatch .fm-btn[disabled] { opacity: .45; cursor: not-allowed; }
-
-.bb-foot { border-top: 1px solid var(--fm-rule); padding-top: 14px; }
 .bb-foot .fm-meta { font-family: var(--fm-font-mono); }
-
-@media (min-width: 900px) {
-  .bb-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (min-width: 720px) {
+  .bb-acts { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
 }
 </style>
 </head>
@@ -318,67 +336,19 @@ label.bb-row { cursor: pointer; }
 
   <header class="fm-mast">
     <h1 class="fm-title">Bearings</h1>
-    <p class="fm-sub">Where the fleet stands, and what waits on you.</p>
+    <p class="fm-sub" id="bb-headline">-</p>
   </header>
 
-  <section class="fm-stats" id="bb-stats" aria-label="Counts"></section>
-
-  <div class="bb-cols">
-  <section class="fm-section bb-section" aria-labelledby="bb-call-title">
-    <div class="bb-section__head">
-      <h2 id="bb-call-title">Captain's Call</h2>
-      <span class="fm-meta" id="bb-call-sub"></span>
-    </div>
-    <div class="bb-callwrap">
-      <div class="bb-call" id="bb-call"></div>
-      <!-- nav sits under the stack so the active card's top edge aligns with
-           the Charted Next list across the row -->
-      <div class="bb-stacknav">
-        <span class="fm-meta bb-stacknav__count" id="bb-stack-count">-</span>
-        <button type="button" class="fm-btn" id="bb-stack-prev" aria-label="Previous card">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
-        </button>
-        <button type="button" class="fm-btn" id="bb-stack-next" aria-label="Next card">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
-        </button>
-      </div>
-    </div>
+  <section class="bb-block" aria-labelledby="bb-inbox-title">
+    <h2 class="bb-h2" id="bb-inbox-title">Waiting on you<span class="bb-count" id="bb-inbox-count"></span></h2>
+    <div id="bb-inbox"></div>
   </section>
 
-  <section class="fm-section bb-section" aria-labelledby="bb-charted-title">
-    <div class="bb-section__head">
-      <h2 id="bb-charted-title">Charted Next</h2>
-      <span class="fm-meta" id="bb-charted-sub"></span>
-    </div>
-    <div>
-      <div class="bb-rows" id="bb-charted"></div>
-      <div class="bb-dispatch" id="bb-dispatch" hidden>
-        <span class="bb-dispatch__count" id="bb-dispatch-count">nothing picked</span>
-        <span class="fm-queued bb-queued" id="bb-dispatch-queued" role="status">
-          <svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
-          Queued
-        </span>
-        <button type="button" class="fm-btn fm-btn--primary" id="bb-dispatch-btn">Queue dispatch order</button>
-      </div>
-    </div>
+  <section class="bb-block" aria-labelledby="bb-fleet-title">
+    <h2 class="bb-h2" id="bb-fleet-title">Fleet</h2>
+    <p class="bb-sum" id="bb-fleet-sum"></p>
+    <div id="bb-fleet"></div>
   </section>
-  </div>
-
-  <div class="bb-cols">
-    <section class="fm-section bb-section" aria-labelledby="bb-underway-title">
-      <div class="bb-section__head">
-        <h2 id="bb-underway-title">Underway</h2>
-      </div>
-      <div class="bb-rows" id="bb-underway"></div>
-    </section>
-
-    <section class="fm-section bb-section" aria-labelledby="bb-landed-title">
-      <div class="bb-section__head">
-        <h2 id="bb-landed-title">Recently Landed</h2>
-      </div>
-      <div class="bb-rows" id="bb-landed"></div>
-    </section>
-  </div>
 
   <footer class="fm-foot bb-foot">
     <span class="fm-meta" id="bb-provenance">-</span>
@@ -403,12 +373,11 @@ __FM_BEARINGS_BOARD_DATA__
     var main = document.querySelector(".bb-main");
     main.innerHTML = "";
     var card = document.createElement("article");
-    card.className = "fm-decision bb-decision";
+    card.className = "fm-decision";
     var h = document.createElement("h2");
     h.className = "fm-decision__title";
     h.textContent = "This board could not load";
     var d = document.createElement("p");
-    d.className = "bb-decision__detail";
     d.textContent = msg + " - ask firstmate to rebuild the board.";
     card.appendChild(h);
     card.appendChild(d);
@@ -426,346 +395,616 @@ __FM_BEARINGS_BOARD_DATA__
     renderBoardError("Unsupported board data schema: " + (data && data.schema ? data.schema : "(none)"));
     return;
   }
-  var fleetLists = [data.captains_call, data.underway, data.landed, data.charted];
-  var callItemsValid = Array.isArray(data.captains_call) && data.captains_call.every(function (item) {
-    return item && typeof item === "object" &&
-      typeof item.key === "string" && item.key.length > 0 &&
-      typeof item.type === "string" && item.type.length > 0 &&
-      typeof item.title === "string" && item.title.length > 0 &&
-      Array.isArray(item.options);
-  });
-  if (!fleetLists.every(Array.isArray) || !callItemsValid) {
+  var lists = [data.captains_call, data.inbox, data.later, data.underway, data.landed, data.charted];
+  if (!lists.every(Array.isArray)) {
     renderBoardError("The board data does not have the required structure");
     return;
   }
 
   try {
+  var CHEVRON = '<svg class="bb-sec__chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+  var ANSWER_LIMIT = 512;
+
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
     if (text != null) n.textContent = text;
     return n;
   }
-  function badge(tone, text) { return el("span", "fm-badge fm-badge--" + tone, text); }
-  /* Warnings ride the charted feed for layout only; they are alarms, not work,
-     so every count of queued work excludes them. */
-  function isWarning(t) { return t && t.kind === "warning"; }
-  function chartedQueued(rows) { return (rows || []).filter(function (t) { return !isWarning(t); }); }
-  /* Charted Next reads newest filed first, so the most recently filed upcoming
-     work is at the top. ISO filed dates compare as text; a row with no
-     comparable date keeps its payload order after every dated row. */
-  function chartedOrder(rows) {
-    var dated = [], undated = [];
-    (rows || []).forEach(function (t) {
-      if (t && typeof t.filed === "string" && t.filed) dated.push(t); else undated.push(t);
-    });
-    dated.sort(function (a, b) { return a.filed < b.filed ? 1 : (a.filed > b.filed ? -1 : 0); });
-    return dated.concat(undated);
-  }
-  var chartedMoreQueued = data.charted_more || 0;
-  var chartedMoreWarnings = data.charted_warning_more || 0;
   function utf8ByteLength(text) { return new TextEncoder().encode(text).length; }
-  var CHECK_SVG = '<svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+  function store(fn) { try { return fn(window.localStorage); } catch (e) { return null; } }
 
-  document.getElementById("bb-provenance").textContent = data.schema + " · " + data.generated;
+  /* Dates: payload dates are YYYY-MM-DD; they read in the viewer's own words. */
+  function localDay(iso) {
+    var p = String(iso).split("-");
+    return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]), 12);
+  }
+  function dayKey(d) {
+    function two(n) { return (n < 10 ? "0" : "") + n; }
+    return d.getFullYear() + "-" + two(d.getMonth() + 1) + "-" + two(d.getDate());
+  }
+  function dayWords(iso) {
+    return localDay(iso).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "short" });
+  }
+  function shortDay(iso) {
+    return localDay(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  }
+  function whenWords(value) {
+    var d = new Date(value);
+    if (isNaN(d.getTime())) return String(value);
+    var time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }).toLowerCase();
+    return dayKey(d) === dayKey(new Date()) ? time
+      : d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) + ", " + time;
+  }
+  var generatedAt = new Date(data.generated);
+  var today = dayKey(new Date());
+  var windowEnd = new Date(); windowEnd.setDate(windowEnd.getDate() + 7);
 
-  /* stat strip */
-  var callTotal = data.captains_call.length;
-  var stats = [
-    { n: callTotal, l: "need you", call: true },
-    { n: data.underway.length, l: "underway" },
-    { n: data.landed.length, l: "landed recently" },
-    { n: chartedQueued(data.charted).length + chartedMoreQueued, l: "charted next" }
-  ];
-  var strip = document.getElementById("bb-stats");
-  stats.forEach(function (s) {
-    var t = el("div", "fm-stat bb-stat" + (s.call ? " fm-stat--call" : ""));
-    t.appendChild(el("span", "fm-stat__num bb-stat__num", String(s.n)));
-    t.appendChild(el("span", "fm-stat__label bb-stat__label", s.l));
-    strip.appendChild(t);
-  });
-  document.getElementById("bb-call-sub").textContent =
-    callTotal ? callTotal + " item" + (callTotal === 1 ? "" : "s") + " wait on you, captain" : "nothing needs you, captain";
+  /* A list row shows the full backlog title: a leading [YYYY-MM-DD] tag moves to
+     the meta line and an "Arjun:" prefix is dropped. */
+  function cleanTitle(title) {
+    var t = String(title), tag = "";
+    var m = /^\[(\d{4}-\d{2}-\d{2})\]\s*/.exec(t);
+    if (m) { tag = m[1]; t = t.slice(m[0].length); }
+    t = t.replace(/^Arjun:\s*/, "");
+    return { title: t, tag: tag };
+  }
+  function prNumber(url) { return "PR " + String(url).split("/").pop(); }
 
-  /* Captain's Call deck: every item renders as the same full card */
-  var deck = document.getElementById("bb-call");
-  function ctxRow(ctx, k, v) {
-    ctx.appendChild(el("dt", null, k));
-    ctx.appendChild(el("dd", null, v));
+  /* Every section folds from its heading and keeps its state per viewer under
+     bb-sec:<key>; keys are stable across rebuilds. */
+  function section(parent, key, title, count, openByDefault, sub) {
+    var d = el("details", "bb-sec" + (sub ? " bb-sec--sub" : ""));
+    d.setAttribute("data-sec", key);
+    var saved = store(function (ls) { return ls.getItem("bb-sec:" + key); });
+    d.open = saved === "1" ? true : saved === "0" ? false : openByDefault;
+    var s = el("summary");
+    s.appendChild(el(sub ? "span" : "h3", "bb-sec__t", title));
+    if (count != null) s.appendChild(el("span", "bb-sec__n", String(count)));
+    var chev = el("span", "bb-sec__cw");
+    chev.innerHTML = CHEVRON;
+    s.appendChild(chev);
+    d.appendChild(s);
+    var body = el("div", "bb-sec__b");
+    d.appendChild(body);
+    d.addEventListener("toggle", function () {
+      store(function (ls) { ls.setItem("bb-sec:" + key, d.open ? "1" : "0"); });
+    });
+    parent.appendChild(d);
+    return body;
   }
 
-  data.captains_call.forEach(function (item, index) {
-    var card = el("article", "fm-decision bb-decision");
-    var titleId = "bb-call-" + index + "-title";
-    card.setAttribute("aria-labelledby", titleId);
-
-    var top = el("div", "fm-decision__top");
-    if (item.type === "merge") {
-      top.appendChild(badge("online", "checks green"));
-      top.appendChild(badge(item.risk === "low" ? "neutral" : "warn", "risk " + item.risk));
-    } else {
-      top.appendChild(badge("solid", "decision"));
-      top.appendChild(el("span", "fm-meta", item.repo));
+  /* One answer reaches Lavish once. The receipt line is what the Conversation
+     panel shows; the versioned context data is what firstmate routes. */
+  function queueAnswer(element, receipt, ctxData) {
+    ctxData.receipt = receipt;
+    var line = receipt.item + " → " + (receipt.action
+      ? receipt.action + (receipt.detail ? " · " + receipt.detail : "") + (receipt.note ? " (" + receipt.note + ")" : "")
+      : "“" + receipt.note + "”");
+    if (window.lavish && window.lavish.queuePrompt) {
+      window.lavish.queuePrompt("Bearings board answer - " + line,
+        { tag: "choice", text: line, element: element, data: ctxData });
     }
-    card.appendChild(top);
+    return line;
+  }
 
-    var title = el("h3", "fm-decision__title", item.title);
-    title.id = titleId;
-    card.appendChild(title);
+  function markSent(item, pill, text) {
+    item.classList.add("is-sent");
+    pill.textContent = "✓ " + text;
+    pill.hidden = false;
+  }
 
-    if (item.type === "merge") {
-      if (item.detail) card.appendChild(el("p", "bb-decision__detail", item.detail));
-      if (item.pr_url) {
-        var pr = el("a", "bb-decision__link", item.pr_url);
-        pr.href = item.pr_url; pr.target = "_blank"; pr.rel = "noopener";
-        card.appendChild(pr);
+  /* The note row every item and card carries. Send note sends the captain's
+     words alone; firstmate reads them as an instruction, never as a pick. */
+  function noteRow(item, idBase, onSendNote) {
+    var row = el("div", "bb-noterow");
+    var lab = el("label", "bb-note");
+    lab.appendChild(el("span", "bb-note__k", "Note"));
+    var input = el("input", "bb-note__in");
+    input.type = "text"; input.name = "note"; input.id = idBase + "-note";
+    input.placeholder = "optional"; input.autocomplete = "off";
+    input.addEventListener("input", function () { lab.classList.remove("is-need"); });
+    lab.appendChild(input);
+    row.appendChild(lab);
+    var send = el("button", "fm-btn bb-send", "Send note");
+    send.type = "button";
+    send.addEventListener("click", function () {
+      if (!input.value.trim()) {
+        lab.classList.add("is-need");
+        input.focus();
+        return;
       }
-    } else {
-      /* the Recommended tag on the option itself carries the recommendation */
-      var ctx = el("dl", "fm-ctx");
-      if (item.about) ctxRow(ctx, "About", item.about);
-      if (item.decide) ctxRow(ctx, "Decide", item.decide);
-      card.appendChild(ctx);
+      onSendNote();
+    });
+    row.appendChild(send);
+    item.appendChild(row);
+    return input;
+  }
+  function limitLine(item) {
+    var limit = el("p", "bb-limit", "That answer is too long to queue (512 bytes at most).");
+    limit.setAttribute("role", "alert");
+    limit.hidden = true;
+    item.appendChild(limit);
+    return limit;
+  }
+  function tooLong(limit, parts) {
+    var over = parts.some(function (p) { return utf8ByteLength(p) > ANSWER_LIMIT; });
+    limit.hidden = !over;
+    return over;
+  }
+
+  function itemShell(list, key, index, title, ask, meta) {
+    var item = el("li", "bb-item");
+    item.setAttribute("data-key", key);
+    var titleNode = el("h4", "bb-item__title", title);
+    titleNode.id = "bb-item-" + index + "-title";
+    item.appendChild(titleNode);
+    if (ask) item.appendChild(el("p", "bb-item__ask", ask));
+    if (meta) item.appendChild(meta);
+    list.appendChild(item);
+    return item;
+  }
+  function metaLine(parts, prUrl) {
+    var m = el("p", "fm-meta bb-item__meta");
+    var text = parts.filter(Boolean).join(" · ");
+    m.appendChild(el("span", null, text + (text && prUrl ? " · " : "")));
+    if (prUrl) {
+      var a = el("a", null, prNumber(prUrl));
+      a.href = prUrl; a.title = prUrl; a.target = "_blank"; a.rel = "noopener";
+      m.appendChild(a);
+    }
+    return m;
+  }
+
+  /* An inbox item: two or three actions written for it, value boxes beside
+     the action that reads them, and the note row. */
+  var itemIndex = 0;
+  function renderInboxItem(list, it) {
+    var index = itemIndex++;
+    var meta = it.group === "blocking"
+      ? metaLine([it.repo, it.since ? "worker waiting since " + whenWords(it.since) : "worker waiting"], it.pr_url)
+      : metaLine([it.repo], it.pr_url);
+    var item = itemShell(list, it.key, index, it.title, it.ask, meta);
+    var inputs = {};
+    var placed = {};
+    var acts = el("div", "bb-acts");
+    acts.setAttribute("role", "group");
+    acts.setAttribute("aria-labelledby", "bb-item-" + index + "-title");
+    var note;
+    var pill = el("p", "bb-sent");
+    pill.setAttribute("role", "status");
+    pill.hidden = true;
+    var limit;
+
+    function field(spec) {
+      var f = el("label", "bb-f");
+      f.appendChild(el("span", "bb-f__k", spec.label));
+      var input = el("input", "fm-input");
+      input.type = spec.type; input.name = spec.name; input.autocomplete = "off";
+      if (spec.type === "number") { input.inputMode = "decimal"; input.step = "any"; }
+      if (spec.default != null) input.value = spec.default;
+      input.addEventListener("input", function () { f.classList.remove("is-need"); });
+      f.appendChild(input);
+      inputs[spec.name] = { spec: spec, input: input, field: f };
+      return f;
+    }
+    function shown(name) {
+      var e = inputs[name], v = e.input.value.trim();
+      if (e.spec.type === "date" && v) v = shortDay(v);
+      if (e.spec.type === "datetime-local" && v) v = whenWords(v);
+      return v;
     }
 
-    var form = el("form", "fm-form");
-    form.setAttribute("data-lavish-question", item.key);
-    var opts = el("fieldset", "fm-opts");
+    it.actions.forEach(function (a, ai) {
+      var btn = el("button", "bb-act" + (ai === 0 ? " bb-act--main" : ""));
+      btn.type = "button";
+      btn.setAttribute("data-action", a.value);
+      btn.appendChild(el("span", "bb-act__l", a.label));
+      btn.appendChild(el("span", "bb-act__h", a.hint));
+      var own = a.reads.filter(function (n) { return !placed[n]; });
+      if (own.length) {
+        var grp = el("div", "bb-actgrp" + (own.length > 1 ? " bb-actgrp--wide" : ""));
+        var fields = el("div", "bb-fields" + (own.length >= 3 && own.every(function (n) {
+          return it.inputs.some(function (s) { return s.name === n && s.type === "number"; });
+        }) ? " bb-fields--counts" : ""));
+        own.forEach(function (n) {
+          placed[n] = true;
+          it.inputs.forEach(function (s) { if (s.name === n) fields.appendChild(field(s)); });
+        });
+        grp.appendChild(fields);
+        grp.appendChild(btn);
+        acts.appendChild(grp);
+      } else {
+        acts.appendChild(btn);
+      }
+      btn.addEventListener("click", function () {
+        var missing = null, values = {}, detail = [];
+        a.reads.forEach(function (n) {
+          var v = inputs[n].input.value.trim();
+          if (!v && !missing) missing = inputs[n];
+          values[n] = v;
+          if (v) detail.push(a.reads.length > 1 ? inputs[n].spec.label + ": " + shown(n) : shown(n));
+        });
+        if (missing) {
+          missing.field.classList.add("is-need");
+          missing.input.focus();
+          return;
+        }
+        var noteText = note.value.trim();
+        if (tooLong(limit, [noteText].concat(Object.keys(values).map(function (k) { return values[k]; })))) return;
+        var ctx = { schema: "fm-bearings-answer.v1", question: it.key, group: it.group,
+          action: a.value, effect: a.effect, values: values, note: noteText };
+        if (a.effect === "hold-until") ctx.until = a.until || values[a.reads[0]];
+        if (a.effect === "remind-at") ctx.at = a.at || values[a.reads[0]];
+        if (a.effect === "dispatch") ctx.brief = a.brief;
+        if (a.effect === "close" && it.close) ctx.close = it.close;
+        queueAnswer(item, { item: it.title, action: a.label, detail: detail.join(", "), note: noteText }, ctx);
+        markSent(item, pill, a.label);
+      });
+    });
+    item.appendChild(acts);
+    note = noteRow(item, "bb-item-" + index, function () {
+      var noteText = note.value.trim();
+      if (tooLong(limit, [noteText])) return;
+      queueAnswer(item, { item: it.title, action: "", detail: "", note: noteText },
+        { schema: "fm-bearings-answer.v1", question: it.key, group: it.group,
+          action: "", values: {}, note: noteText });
+      markSent(item, pill, "Your note");
+    });
+    limit = limitLine(item);
+    item.appendChild(pill);
+  }
+
+  /* A decision, merge, or credential card in the same item shape: its options
+     as native radios with the recommendation already chosen, Send answer, and
+     the note row. */
+  var cards = [];
+  function renderCard(list, card) {
+    var index = itemIndex++;
+    var meta;
+    if (card.type === "merge") {
+      meta = metaLine([card.repo, "checks green", "risk " + card.risk], card.pr_url);
+    } else {
+      meta = metaLine([card.repo, card.type === "credential" ? "needs a login or key" : ""], card.pr_url);
+    }
+    var ask = [card.about, card.decide, card.detail].filter(Boolean).join(" ");
+    var item = itemShell(list, card.key, index, card.title, ask, meta);
+    var pill = el("p", "bb-sent");
+    pill.setAttribute("role", "status");
+    pill.hidden = true;
+    var radios = [];
+    var opts = el("fieldset", "fm-opts bb-opts");
     opts.appendChild(el("legend", "fm-opts__legend", "Pick one"));
-    item.options.forEach(function (o) {
+    card.options.forEach(function (o) {
       var lab = el("label", "fm-opt");
-      var input = document.createElement("input");
-      input.type = "radio"; input.name = "answer"; input.value = o.value;
+      var input = el("input");
+      input.type = "radio"; input.name = "bb-card-" + index; input.value = o.value;
+      if (card.recommend_value && o.value === card.recommend_value) input.checked = true;
+      radios.push({ input: input, option: o });
       lab.appendChild(input);
       var body = el("span", "fm-opt__body");
       var head = el("span", "fm-opt__head");
       head.appendChild(el("span", "fm-opt__label", o.label));
-      if (item.recommend_value && o.value === item.recommend_value) {
-        head.appendChild(el("span", "fm-rec", "Recommended"));
-      }
+      if (card.recommend_value && o.value === card.recommend_value) head.appendChild(el("span", "fm-rec", "Recommended"));
       body.appendChild(head);
       if (o.hint) body.appendChild(el("span", "fm-opt__hint", o.hint));
       lab.appendChild(body);
       opts.appendChild(lab);
     });
-    form.appendChild(opts);
-
-    /* a decision card always takes the captain's own words */
-    if (item.allow_freeform || item.type === "decision") {
-      var field = el("div", "fm-field");
-      var noteId = "bb-call-" + index + "-note";
-      var noteLabel = el("label", "fm-field__label", "Or answer in your own words");
-      noteLabel.setAttribute("for", noteId);
-      field.appendChild(noteLabel);
-      var ff = document.createElement("input");
-      ff.type = "text"; ff.name = "note"; ff.className = "fm-input"; ff.id = noteId;
-      ff.placeholder = item.freeform_hint || "Optional";
-      field.appendChild(ff);
-      form.appendChild(field);
+    if (card.options.length) item.appendChild(opts);
+    var note;
+    var limit;
+    var state = { card: card, item: item, sent: false };
+    function send(option) {
+      var noteText = note.value.trim();
+      if (tooLong(limit, [noteText])) return false;
+      var ctx = { schema: "fm-bearings-answer.v1", question: card.key,
+        selection: option ? option.value : "", note: noteText };
+      if (option && card.close) ctx.close = card.close;
+      queueAnswer(item, { item: card.title, action: option ? option.label : "", detail: "", note: noteText }, ctx);
+      markSent(item, pill, option ? option.label : "Your note");
+      state.sent = true;
+      refreshTakeAll();
+      return true;
     }
+    state.send = send;
+    state.recommended = function () {
+      var r = radios.filter(function (x) { return x.option.value === card.recommend_value; })[0];
+      return r ? r.option : null;
+    };
+    state.note = function () { return note.value.trim(); };
+    if (card.options.length) {
+      var cardacts = el("div", "bb-cardacts");
+      var btn = el("button", "fm-btn fm-btn--primary", card.type === "merge" ? "Send merge answer" : "Send answer");
+      btn.type = "button";
+      btn.addEventListener("click", function () {
+        var picked = radios.filter(function (x) { return x.input.checked; })[0];
+        if (!picked) { if (radios[0]) radios[0].input.focus(); return; }
+        send(picked.option);
+      });
+      cardacts.appendChild(btn);
+      item.appendChild(cardacts);
+    }
+    note = noteRow(item, "bb-item-" + index, function () { send(null); });
+    limit = limitLine(item);
+    item.appendChild(pill);
+    cards.push(state);
+  }
 
-    var foot = el("div", "fm-actions");
-    var btn = el("button", "fm-btn fm-btn--primary", "Queue answer");
-    btn.type = "submit";
-    foot.appendChild(btn);
-    var q = el("span", "fm-queued bb-queued");
-    q.setAttribute("role", "status");
-    q.innerHTML = CHECK_SVG + "Queued";
-    foot.appendChild(q);
-    var answerLimit = el("span", "bb-limit");
-    answerLimit.setAttribute("role", "alert");
-    foot.appendChild(answerLimit);
-    form.appendChild(foot);
-
-    form.addEventListener("submit", function (ev) {
-      ev.preventDefault();
-      answerLimit.classList.remove("is-visible");
-      var fd = new FormData(form);
-      var value = fd.get("answer");
-      var note = (fd.get("note") || "").trim();
-      var displayAnswer = value ? (note ? value + " - " + note : value) : note;
-      if (!displayAnswer) return;
-      if (utf8ByteLength(displayAnswer) > 512) {
-        answerLimit.textContent = "Answer is too long to queue (512 bytes maximum).";
-        answerLimit.classList.add("is-visible");
-        return;
-      }
-      if (window.lavish && window.lavish.queuePrompt) {
-        /* The versioned context keeps the selected option separate from its
-           note, while close carries the composer-declared completion mode. */
-        var ctxData = {
-          schema: "fm-bearings-answer.v1",
-          question: item.key,
-          selection: value || "",
-          note: note
-        };
-        if (item.close) ctxData.close = item.close;
-        window.lavish.queuePrompt(
-          "Captain's Call answer - " + item.title + ": " + displayAnswer,
-          { tag: "choice", text: item.title + " -> " + displayAnswer, element: form,
-            data: ctxData }
-        );
-      }
-      card.classList.add("is-queued");
-      /* deal the next card once this one is answered */
-      setTimeout(function () { showCard(active < cards.length - 1 ? active + 1 : active); }, 450);
+  /* Take all recommendations: each open decision card's recommended option as
+     its own keyed answer, its typed note riding with it, after a confirm step
+     that lists exactly what will be sent. */
+  var takeAll = el("div", "bb-takeall");
+  var takeBtn = el("button", "fm-btn", "Take all recommendations");
+  takeBtn.type = "button";
+  var confirmBox = el("div", "bb-confirm");
+  confirmBox.hidden = true;
+  var confirmList = el("ul", "bb-confirm__list");
+  var confirmBtns = el("div", "bb-confirm__btns");
+  var confirmSend = el("button", "fm-btn fm-btn--primary", "Send");
+  confirmSend.type = "button";
+  var confirmCancel = el("button", "fm-btn", "Cancel");
+  confirmCancel.type = "button";
+  confirmBox.appendChild(el("p", null, "This sends one answer per card:"));
+  confirmBox.appendChild(confirmList);
+  confirmBtns.appendChild(confirmSend);
+  confirmBtns.appendChild(confirmCancel);
+  confirmBox.appendChild(confirmBtns);
+  takeAll.appendChild(takeBtn);
+  takeAll.appendChild(confirmBox);
+  function pendingRecommendations() {
+    return cards.filter(function (c) { return !c.sent && c.card.type === "decision" && c.recommended(); });
+  }
+  function refreshTakeAll() {
+    var pending = pendingRecommendations();
+    takeAll.hidden = pending.length < 2;
+    if (pending.length < 2) confirmBox.hidden = true;
+    takeBtn.textContent = "Take all " + pending.length + " recommendations";
+  }
+  takeBtn.addEventListener("click", function () {
+    confirmList.textContent = "";
+    pendingRecommendations().forEach(function (c) {
+      var n = c.note();
+      confirmList.appendChild(el("li", null, c.card.title + " → " + c.recommended().label + (n ? " (" + n + ")" : "")));
     });
-
-    card.appendChild(form);
-    deck.appendChild(card);
+    confirmBox.hidden = false;
+    confirmSend.textContent = "Send " + pendingRecommendations().length + " answers";
+  });
+  confirmCancel.addEventListener("click", function () { confirmBox.hidden = true; });
+  confirmSend.addEventListener("click", function () {
+    pendingRecommendations().forEach(function (c) { c.send(c.recommended()); });
+    confirmBox.hidden = true;
   });
 
-  /* stack navigation: one card at a time, dealt off the pile */
-  var cards = Array.prototype.slice.call(deck.children);
-  var active = 0;
-  var stackCount = document.getElementById("bb-stack-count");
-  var stackPrev = document.getElementById("bb-stack-prev");
-  var stackNext = document.getElementById("bb-stack-next");
-  var stackNav = stackCount.parentNode;
-  function showCard(i) {
-    active = Math.max(0, Math.min(cards.length - 1, i));
-    cards.forEach(function (c, j) { c.hidden = j !== active; });
-    var answered = deck.querySelectorAll(".is-queued").length;
-    stackCount.textContent = "card " + (active + 1) + " of " + cards.length +
-      (answered ? " · " + answered + " answered" : "");
-    stackPrev.disabled = active === 0;
-    stackNext.disabled = active === cards.length - 1;
-    /* the pile thins as the deal approaches the bottom */
-    deck.classList.toggle("bb-call--penult", active === cards.length - 2);
-    deck.classList.toggle("bb-call--last", active === cards.length - 1);
+  /* ---- Waiting on you ---- */
+  var inbox = document.getElementById("bb-inbox");
+  var blocking = data.inbox.filter(function (i) { return i.group === "blocking"; });
+  var due = data.inbox.filter(function (i) { return i.group === "due"; })
+    .slice().sort(function (a, b) { return a.due < b.due ? -1 : a.due > b.due ? 1 : 0; });
+  var waiting = data.inbox.length + data.captains_call.length;
+  document.getElementById("bb-inbox-count").textContent = String(waiting);
+  document.getElementById("bb-headline").textContent =
+    (waiting === 1 ? "1 thing waits on you. " : waiting + " things wait on you. ") +
+    (isNaN(generatedAt.getTime()) ? data.generated
+      : generatedAt.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" }) + ", " +
+        generatedAt.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }).toLowerCase() + ".");
+
+  if (blocking.length) {
+    var bl = el("ul", "bb-list");
+    blocking.forEach(function (i) { renderInboxItem(bl, i); });
+    section(inbox, "blocking", "Blocking a worker", blocking.length, true).appendChild(bl);
   }
-  if (cards.length) {
-    stackPrev.addEventListener("click", function () { showCard(active - 1); });
-    stackNext.addEventListener("click", function () { showCard(active + 1); });
-    showCard(0);
+  var decisionsBody = section(inbox, "decisions", "Decisions", data.captains_call.length, true);
+  if (data.captains_call.length) {
+    decisionsBody.appendChild(takeAll);
+    var dl = el("ul", "bb-list");
+    data.captains_call.forEach(function (c) { renderCard(dl, c); });
+    decisionsBody.appendChild(dl);
   } else {
-    deck.classList.add("bb-call--empty");
-    deck.appendChild(el("div", "bb-empty", "Nothing needs your action right now."));
-    stackNav.hidden = true;
+    decisionsBody.appendChild(el("p", "bb-empty", "No open decisions."));
+  }
+  refreshTakeAll();
+  var overdue = due.filter(function (i) { return i.due < today; });
+  if (overdue.length) {
+    var ol = el("ul", "bb-list");
+    overdue.forEach(function (i) { renderInboxItem(ol, i); });
+    section(inbox, "overdue", "Overdue", overdue.length, true).appendChild(ol);
+  }
+  var dueDates = [];
+  due.forEach(function (i) { if (i.due >= today && dueDates.indexOf(i.due) < 0) dueDates.push(i.due); });
+  dueDates.forEach(function (d) {
+    var rows = due.filter(function (i) { return i.due === d; });
+    var ul = el("ul", "bb-list");
+    rows.forEach(function (i) { renderInboxItem(ul, i); });
+    section(inbox, "due-" + d, d === today ? "Due today" : "Due " + dayWords(d), rows.length, true).appendChild(ul);
+  });
+
+  /* Later: folded, never on the inbox count */
+  function listRow(list, title, metaParts, right) {
+    var c = cleanTitle(title);
+    var row = el("li", "bb-row");
+    row.appendChild(el("span", "bb-row__t", c.title));
+    var r = el("span", "bb-row__r");
+    if (right) r.appendChild(right);
+    row.appendChild(r);
+    var parts = metaParts.slice();
+    if (c.tag) parts.unshift(c.tag);
+    var m = parts.filter(Boolean).join(" · ");
+    if (m) row.appendChild(el("span", "fm-meta bb-row__m", m));
+    list.appendChild(row);
+    return row;
+  }
+  if (data.later.length) {
+    var laterBody = section(inbox, "later", "Later", data.later.length + " · nothing due this week", false);
+    [
+      { g: "dated", h: "Comes back after " + windowEnd.toLocaleDateString("en-GB", { day: "numeric", month: "short" }) },
+      { g: "held", h: "Held for you, no date" },
+      { g: "unheld", h: "Filed as yours, never held" }
+    ].forEach(function (grp) {
+      var rows = data.later.filter(function (r) { return r.group === grp.g; });
+      if (grp.g === "dated") rows = rows.slice().sort(function (a, b) { return a.back < b.back ? -1 : a.back > b.back ? 1 : 0; });
+      if (!rows.length) return;
+      var h = el("h4", "bb-h4", grp.h + " ");
+      h.appendChild(el("span", "bb-count", String(rows.length)));
+      laterBody.appendChild(h);
+      var ul = el("ul", "bb-list");
+      rows.forEach(function (r) { listRow(ul, r.title, [r.back ? "back " + shortDay(r.back) : "", r.repo]); });
+      laterBody.appendChild(ul);
+    });
   }
 
-  /* Underway */
-  var uw = document.getElementById("bb-underway");
-  if (!data.underway.length) uw.appendChild(el("div", "bb-empty", "Nothing is underway."));
+  /* ---- Fleet ---- */
+  var fleet = document.getElementById("bb-fleet");
+  function isWarning(t) { return t && t.kind === "warning"; }
+  var queued = data.charted.filter(function (t) { return !isWarning(t); });
+  var warnings = data.charted.filter(isWarning);
+  var queuedTotal = queued.length + (data.charted_more || 0);
+  var ready = queued.filter(function (t) { return t.dispatchable; });
+  var sum = document.getElementById("bb-fleet-sum");
+  [[data.underway.length, " underway · "], [data.landed.length, " landed · "], [queuedTotal, " queued"]].forEach(function (p) {
+    sum.appendChild(el("b", null, String(p[0])));
+    sum.appendChild(el("span", null, p[1]));
+  });
+
+  var uwBody = section(fleet, "underway", "Underway", data.underway.length, true);
+  var uw = el("ul", "bb-list");
+  if (!data.underway.length) uwBody.appendChild(el("p", "bb-empty", "Nothing is underway."));
   data.underway.forEach(function (t) {
-    var row = el("div", "bb-row");
-    row.appendChild(badge(t.state === "working" ? "online" : "info", t.state));
-    var main = el("div", "bb-row__main");
-    /* the snapshot's durable name-or-id label leads the row so a scan says
-       WHICH task this is; the run status keeps its place on the second line */
-    main.appendChild(el("div", "bb-row__title", t.name));
-    /* captain-facing rows name the repo; the internal task id shows only when
-       no repo is known */
-    main.appendChild(el("div", "bb-row__sub",
-      t.doing + " · " + t.kind + " · " + (t.repo || t.id)));
-    row.appendChild(main);
-    uw.appendChild(row);
-  });
-
-  /* Landed */
-  var ld = document.getElementById("bb-landed");
-  if (!data.landed.length) ld.appendChild(el("div", "bb-empty", "No recent completions are in the current baseline."));
-  data.landed.forEach(function (t) {
-    var row = el("div", "bb-row");
-    var chk = el("span", "bb-row__check");
-    chk.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
-    row.appendChild(chk);
-    var main = el("div", "bb-row__main");
-    main.appendChild(el("div", "bb-row__title", t.what));
-    main.appendChild(el("div", "bb-row__sub", (t.repo || t.id) + " · " + t.owner));
-    row.appendChild(main);
-    if (t.pr_url) {
-      var a = el("a", "bb-row__pr", "#" + t.pr_url.split("/").pop());
-      a.href = t.pr_url; a.title = t.pr_url; a.target = "_blank"; a.rel = "noopener";
-      row.appendChild(a);
+    var row = listRow(uw, t.name, [t.repo, t.doing]);
+    if (t.progress && t.progress.total > 0) {
+      var steps = el("span", "bb-steps");
+      var bar = el("span", "bb-steps__bar");
+      var fill = el("span", "bb-steps__fill");
+      fill.style.width = Math.round(100 * t.progress.done / t.progress.total) + "%";
+      bar.appendChild(fill);
+      steps.appendChild(bar);
+      steps.appendChild(el("span", "bb-steps__n", t.progress.done + "/" + t.progress.total + (t.progress.step ? " · " + t.progress.step : "")));
+      row.appendChild(steps);
     }
-    ld.appendChild(row);
   });
-
-  /* Charted Next + dispatch picker */
-  var ch = document.getElementById("bb-charted");
-  var bar = document.getElementById("bb-dispatch");
-  var barCount = document.getElementById("bb-dispatch-count");
-  var barBtn = document.getElementById("bb-dispatch-btn");
-  var anyPickable = false;
-
-  function pickedIds() {
-    return Array.prototype.map.call(ch.querySelectorAll(".bb-pick:checked"), function (c) { return c.value; });
+  uwBody.appendChild(uw);
+  if (blocking.length) {
+    uwBody.appendChild(el("p", "bb-aside", blocking.length + " more " + (blocking.length === 1 ? "waits" : "wait") + " on you above."));
   }
-  function refreshBar(limitMessage) {
+
+  var ldBody = section(fleet, "landed", "Landed recently", data.landed.length, true);
+  var ld = el("ul", "bb-list");
+  if (!data.landed.length) ldBody.appendChild(el("p", "bb-empty", "No recent completions are in the current baseline."));
+  data.landed.forEach(function (t) {
+    var link = null;
+    if (t.pr_url) {
+      link = el("a", null, prNumber(t.pr_url));
+      link.href = t.pr_url; link.title = t.pr_url; link.target = "_blank"; link.rel = "noopener";
+    }
+    listRow(ld, t.outcome, [t.repo, !t.pr_url && t.artifact ? "report" : ""], link);
+  });
+  ldBody.appendChild(ld);
+
+  var qBody = section(fleet, "queued", "Queued", queuedTotal + " · " + ready.length + " ready", true);
+  if (warnings.length || data.charted_warning_more) {
+    qBody.appendChild(el("h4", "bb-h4", "Needs repair"));
+    var wl = el("ul", "bb-list");
+    warnings.forEach(function (t) { listRow(wl, t.title, [t.reason, t.repo]); });
+    qBody.appendChild(wl);
+    if (data.charted_warning_more) {
+      qBody.appendChild(el("p", "bb-aside", "+" + data.charted_warning_more + " more repair warning" +
+        (data.charted_warning_more === 1 ? "" : "s") + " - ask firstmate for the full chart"));
+    }
+  }
+  if (!queuedTotal) qBody.appendChild(el("p", "bb-empty", "Nothing is queued."));
+  var picks = [];
+  var dispatchBar = el("div", "bb-dispatch");
+  var dispatchCount = el("span", "bb-dispatch__count", "pick work to start");
+  var dispatchBtn = el("button", "fm-btn fm-btn--primary", "Start picked work");
+  dispatchBtn.type = "button";
+  var dispatchPill = el("p", "bb-sent");
+  dispatchPill.setAttribute("role", "status");
+  dispatchPill.hidden = true;
+  function pickedIds() { return picks.filter(function (p) { return p.checked; }).map(function (p) { return p.value; }); }
+  function refreshDispatch(message) {
     var n = pickedIds().length;
-    barCount.textContent = limitMessage || (n ? n + " picked for dispatch" : "pick queued work to dispatch");
-    barBtn.disabled = !n;
+    dispatchCount.textContent = message || (n ? n + " picked to start" : "pick work to start");
+    dispatchBtn.disabled = !n;
   }
-
-  if (!chartedQueued(data.charted).length && !chartedMoreQueued) {
-    ch.appendChild(el("div", "bb-empty", "Nothing is queued."));
-  }
-  chartedOrder(data.charted).forEach(function (t) {
-    var pickable = t.dispatchable && !isWarning(t);
-    /* a pickable row is the checkbox's label, so the whole row is its target */
-    var row = el(pickable ? "label" : "div", "bb-row");
-    if (pickable) {
-      anyPickable = true;
-      var pick = document.createElement("input");
-      pick.type = "checkbox"; pick.className = "bb-pick"; pick.value = t.id;
-      pick.setAttribute("aria-label", "Pick " + t.id + " for dispatch");
+  if (ready.length) {
+    qBody.appendChild(el("h4", "bb-h4", "Ready to start now:"));
+    var rl = el("ul", "bb-list");
+    ready.forEach(function (t) {
+      var c = cleanTitle(t.title);
+      var row = el("label", "bb-row bb-row--pick");
+      var pick = el("input", "bb-pick");
+      pick.type = "checkbox"; pick.value = t.id;
+      pick.setAttribute("aria-label", "Start " + c.title);
       pick.addEventListener("change", function () {
-        if (pick.checked && utf8ByteLength(pickedIds().join(",")) > 512) {
+        if (pick.checked && utf8ByteLength(pickedIds().join(",")) > ANSWER_LIMIT) {
           pick.checked = false;
-          refreshBar("Selection limit reached (512 bytes maximum). ");
+          refreshDispatch("Selection limit reached (512 bytes at most).");
           return;
         }
-        refreshBar();
+        refreshDispatch();
       });
+      picks.push(pick);
       row.appendChild(pick);
-    } else {
-      row.appendChild(el("span", "bb-pick-spacer"));
-    }
-    /* spans, not divs: a pickable row is a label, which holds phrasing content only */
-    var main = el("span", "bb-row__main");
-    main.appendChild(el("span", "bb-row__title", t.title));
-    /* second line keeps the title uncrowded in the half-width column */
-    var chSub = t.repo || t.id;
-    main.appendChild(el("span", "bb-row__sub", t.reason ? t.reason + " · " + chSub : chSub));
-    row.appendChild(main);
-    if (isWarning(t)) row.appendChild(badge("danger", "needs repair"));
-    else if (t.reason) row.appendChild(badge("warn", "waiting"));
-    ch.appendChild(row);
-  });
-  var chartedShown = chartedQueued(data.charted).length;
-  var chartedTotal = chartedShown + chartedMoreQueued;
-  document.getElementById("bb-charted-sub").textContent =
-    chartedMoreQueued ? "showing " + chartedShown + " of " + chartedTotal : "";
-  if (chartedMoreQueued) {
-    ch.appendChild(el("span", "bb-morechip", "+" + chartedMoreQueued + " more queued - ask firstmate for the full chart"));
-  }
-  if (chartedMoreWarnings) {
-    ch.appendChild(el("span", "bb-morechip", "+" + chartedMoreWarnings + " more repair warning" + (chartedMoreWarnings === 1 ? "" : "s") + " - ask firstmate for the full chart"));
-  }
-
-  if (anyPickable) {
-    bar.hidden = false;
-    refreshBar();
-    barBtn.addEventListener("click", function () {
+      row.appendChild(el("span", "bb-row__t", c.title));
+      var m = [c.tag, t.repo].filter(Boolean).join(" · ");
+      if (m) row.appendChild(el("span", "fm-meta bb-row__m", m));
+      var li = el("li");
+      li.appendChild(row);
+      rl.appendChild(li);
+    });
+    qBody.appendChild(rl);
+    dispatchBar.appendChild(dispatchCount);
+    dispatchBar.appendChild(dispatchBtn);
+    qBody.appendChild(dispatchBar);
+    qBody.appendChild(dispatchPill);
+    refreshDispatch();
+    dispatchBtn.addEventListener("click", function () {
       var ids = pickedIds();
-      var dispatchAnswer = ids.join(",");
       if (!ids.length) return;
-      if (utf8ByteLength(dispatchAnswer) > 512) {
-        refreshBar("Selection is too long to queue (512 bytes maximum). ");
-        return;
-      }
+      var titles = ready.filter(function (t) { return ids.indexOf(t.id) >= 0; })
+        .map(function (t) { return cleanTitle(t.title).title; });
+      var line = "Start now → " + titles.join("; ");
       if (window.lavish && window.lavish.queuePrompt) {
-        window.lavish.queuePrompt(
-          "Dispatch order - start this queued work now: " + ids.join(", "),
-          { tag: "choice", text: "Dispatch: " + ids.join(", "), element: bar,
-            queueKey: "dispatch.charted",
-            data: { question: "dispatch.charted", answer: dispatchAnswer } }
-        );
+        window.lavish.queuePrompt("Dispatch order - start this queued work now: " + ids.join(", "),
+          { tag: "choice", text: line, element: dispatchBar, queueKey: "dispatch.charted",
+            data: { question: "dispatch.charted", answer: ids.join(","),
+              receipt: { item: "Start now", action: titles.join("; "), detail: "", note: "" } } });
       }
-      bar.classList.add("is-queued");
+      dispatchBar.hidden = true;
+      dispatchPill.textContent = "✓ " + ids.length + " sent to start";
+      dispatchPill.hidden = false;
     });
   }
+  var rest = queued.filter(function (t) { return !t.dispatchable; });
+  if (rest.length || data.charted_more) {
+    var allBody = section(qBody, "queued-all", "Show all " + queuedTotal, null, false, true);
+    [
+      { w: "date", h: "Waits on a date" },
+      { w: "outside", h: "Waits on someone outside" },
+      { w: "work", h: "Waits on other work" },
+      { w: null, h: "Not started" }
+    ].forEach(function (grp) {
+      var rows = rest.filter(function (t) {
+        return grp.w ? t.wait === grp.w : ["date", "outside", "work"].indexOf(t.wait) < 0;
+      });
+      if (!rows.length) return;
+      var h = el("h4", "bb-h4", grp.h + " ");
+      h.appendChild(el("span", "bb-count", String(rows.length)));
+      allBody.appendChild(h);
+      var ul = el("ul", "bb-list");
+      rows.forEach(function (t) {
+        var when = t.wait === "date" && t.wait_date
+          ? (t.wait_date < today ? "was due " : "from ") + shortDay(t.wait_date) : "";
+        listRow(ul, t.title, [when, t.repo]);
+      });
+      allBody.appendChild(ul);
+    });
+    if (data.charted_more) {
+      allBody.appendChild(el("p", "bb-aside", "+" + data.charted_more + " more queued - ask firstmate for the full chart"));
+    }
+  }
+
+  document.getElementById("bb-provenance").textContent = data.schema + " · " + data.generated;
   } catch (e) {
     renderBoardError("The board data could not be rendered");
   }

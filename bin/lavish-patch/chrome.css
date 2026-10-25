@@ -230,3 +230,26 @@ body.fm-panel-resizing iframe {
     transition: none;
   }
 }
+/* Bearings board receipts: one line per board answer, item in ink, action in accent, note
+   muted, and a note sent alone in the captain's own italic words. */
+.bubble.fm-receipt .anchor {
+  display: none;
+}
+.fm-receipt-item,
+.fm-receipt-words {
+  color: var(--fg);
+}
+.fm-receipt-arrow,
+.fm-receipt-action {
+  color: var(--accent);
+  font-weight: var(--w-bold);
+}
+.fm-receipt-detail {
+  color: var(--fg);
+}
+.fm-receipt-note {
+  color: var(--fg-faint);
+}
+.fm-receipt-words {
+  font-style: italic;
+}

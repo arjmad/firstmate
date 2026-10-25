@@ -209,6 +209,7 @@ IFS= read -r -d '' CREWMATE_PAUSE_INSTRUCTIONS <<EOF || true
    Follow the resolution rule below when the wait clears, then resume the task.
    Use \`$FM_CLASSIFY_GATE_WAIT_VERB: {gate}\` instead when the wait is a CI run or a policy gate (a required check, a review requirement, a merge queue) that clears without anyone deciding anything; it releases your attention exactly like a pause and is never a \`needs-decision\`.
    Use \`blocked:\` when you are stuck and need help.
+   When only the captain himself can clear that blocker or answer that question (he must act, sign in, or choose), add the \`[on=captain]\` tag before the colon, as in \`blocked [on=captain] [at=<epoch>]: {what he must do}\`; that tag, not your wording, puts the wait in his inbox.
 EOF
 IFS= read -r -d '' SHIP_READY_INSTRUCTIONS <<EOF || true
    Use \`$FM_CLASSIFY_READY_VERB [at=<epoch>]: PR {url}\` when your PR is open and ready to land but your task continues after it merges, such as a step that needs the merged code or a companion PR that must land first.

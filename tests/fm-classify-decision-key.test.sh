@@ -604,3 +604,30 @@ test_recorded_line_stays_recorded_across_a_resolve() {
 }
 
 test_recorded_line_stays_recorded_across_a_resolve
+
+# Only the structured "[on=captain]" head tag marks a wait the captain himself
+# must clear; prose naming him does not, the newest opening line of a key
+# decides, and a resolved key leaves the set.
+test_captain_waits_come_from_the_structured_tag_only() {
+  local dir out
+  dir=$(case_dir captain-waits)
+  printf 'kind=ship\n' > "$dir/x.meta"
+  cat > "$dir/x.status" <<'EOF'
+working [at=1792900000]: started
+blocked [key=open-tabs] [on=captain] [at=1792901000]: waiting on the captain to open tabs
+blocked [key=ci] [at=1792901100]: waiting on CI; the captain mentioned it
+needs-decision [on=captain] [at=1792901200]: pick A or B
+blocked [key=retag] [on=captain]: first raised for him
+blocked [key=retag]: re-raised as an ordinary blocker
+EOF
+  out=$(status_open_captain_waits "$dir/x.status")
+  [ "$out" = "$(printf 'open-tabs\tblocked\t1792901000\ndefault\tneeds-decision\t1792901200')" ] \
+    || fail "captain waits were not read from the structured tag alone: $out"
+  printf 'resolved [key=open-tabs]: tabs opened\n' >> "$dir/x.status"
+  out=$(status_open_captain_waits "$dir/x.status")
+  [ "$out" = "$(printf 'default\tneeds-decision\t1792901200')" ] \
+    || fail "a resolved captain wait stayed open: $out"
+  pass "captain waits come from the [on=captain] tag only, newest opening line deciding"
+}
+
+test_captain_waits_come_from_the_structured_tag_only

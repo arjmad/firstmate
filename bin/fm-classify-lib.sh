@@ -930,6 +930,42 @@ status_open_decisions() {  # <status-file> [<kind>]
   printf '%s' "$open"
 }
 
+# The subset of status_open_decisions that waits on the captain himself. A
+# worker marks a blocker or question only the captain can clear with an
+# "[on=captain]" tag in the line's head, before its first colon, beside any
+# "[key=...]" and "[at=...]" tags; prose never counts, so a note that merely
+# names the captain stays an ordinary blocker. The newest line that opened a
+# still-open key decides, so re-raising a key without the tag withdraws it.
+# Prints one TAB-separated "<key>\t<verb>\t<at-epoch-or-empty>" line per such
+# decision, the epoch read from that opening line's own time tag.
+status_open_captain_waits() {  # <status-file>
+  local f=$1 open line verb key unstamped head epoch tagged=''
+  open=$(status_open_decisions "$f")
+  [ -n "$open" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    status_line_verb "$line" verb
+    case "$verb" in needs-decision|blocked) ;; *) continue ;; esac
+    _fm_status_unstamped "$line" unstamped
+    case "$unstamped" in *:*) head=${unstamped%%:*} ;; *) head=$unstamped ;; esac
+    key=$(_fm_decision_key "$line") || continue
+    tagged=$(printf '%s' "$tagged" | awk -F'\t' -v k="$key" '$1 != k')
+    case "$head" in
+      *\[on=captain\]*)
+        epoch=''
+        _fm_status_at_epoch "$line" epoch || epoch=''
+        [ -n "$tagged" ] && tagged="$tagged"$'\n'
+        tagged="$tagged$key"$'\t'"$verb"$'\t'"$epoch"
+        ;;
+    esac
+  done < "$f"
+  [ -n "$tagged" ] || return 0
+  printf '%s\n' "$tagged" | while IFS=$'\t' read -r key verb epoch; do
+    [ -n "$key" ] || continue
+    printf '%s\n' "$open" | awk -F'\t' -v k="$key" -v v="$verb" '$1 == k && $2 == v { found = 1 } END { exit found ? 0 : 1 }' \
+      && printf '%s\t%s\t%s\n' "$key" "$verb" "$epoch"
+  done
+}
+
 # Resolve the log's current declaration at one boundary for crew-state consumers.
 # Any decision the fold still holds open wins over unrelated events, and the
 # fold's most recently opened record supplies it; a standing declared wait, then

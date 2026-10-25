@@ -291,6 +291,61 @@ test_bootstrap_failed_install_does_not_patch() {
   pass "bootstrap: a failed install lavish-axi applies nothing"
 }
 
+# The overlay's receipt line, run under a minimal DOM: a bearings answer bubble
+# reads as one line and loses its element anchor, a note sent alone reads as the
+# captain's quoted words, and any other bubble is left exactly as it was.
+test_board_answers_read_as_one_line_receipts() {
+  local out
+  out=$(node - "$ROOT/bin/lavish-patch/chrome-client.js" <<'JS'
+const { readFileSync } = require("node:fs");
+class N {
+  constructor(cls, text, parent) {
+    this.className = cls; this._text = text || ""; this.children = []; this.dataset = {};
+    this.parentNode = parent || null; if (parent) parent.children.push(this);
+    this.classList = { add: (c) => { this.className += " " + c; } };
+  }
+  get textContent() { return this.children.length ? this.children.map((c) => c.textContent).join("") : this._text; }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  appendChild(n) { n.parentNode = this; this.children.push(n); return n; }
+  closest(sel) { for (let n = this; n; n = n.parentNode) if (n.className.split(" ").includes(sel.slice(1))) return n; return null; }
+  querySelectorAll() {
+    const out = [];
+    const walk = (n) => n.children.forEach((c) => {
+      if (c.className === "bubble-text" && c.closest(".bubble") && /\buser\b/.test(c.closest(".bubble").className)) out.push(c);
+      walk(c);
+    });
+    walk(this);
+    return out;
+  }
+}
+const ctx = (data) => "Bearings board answer - x\n\nContext data:\n" + JSON.stringify(data, null, 2);
+const log = new N("chat", "");
+const bubble = (text) => { const b = new N("bubble user", "", log); new N("anchor", "<choice>", b); return new N("bubble-text", text, b); };
+const action = bubble(ctx({ schema: "fm-bearings-answer.v1", question: "q", action: "save", note: "shelf B",
+  receipt: { item: "Count the shelf", action: "Save counts", detail: "Small: 14", note: "shelf B" } }));
+const note = bubble(ctx({ schema: "fm-bearings-answer.v1", question: "q", action: "", note: "do GA4 first",
+  receipt: { item: "Open the site", action: "", detail: "", note: "do GA4 first" } }));
+const plain = bubble("A plain note\n\nContext data:\n{\"question\":\"other\"}");
+globalThis.document = { getElementById: (id) => (id === "chatLog" ? log : null), createElement: () => new N("", "") };
+globalThis.window = {};
+new Function(readFileSync(process.argv[2], "utf8"))();
+console.log(JSON.stringify({
+  action: action.textContent, actionParts: action.children.map((c) => c.className),
+  hidden: action.parentNode.className, note: note.textContent, plain: plain.textContent,
+  plainBubble: plain.parentNode.className }));
+JS
+) || fail "the overlay could not run under the receipt shim"
+  printf '%s' "$out" | jq -e '
+    .action == "Count the shelf → Save counts · Small: 14 (shelf B)"
+      and .actionParts == ["fm-receipt-item", "fm-receipt-arrow", "fm-receipt-action", "fm-receipt-detail", "fm-receipt-note"]
+      and .hidden == "bubble user fm-receipt"
+      and .note == "Open the site → “do GA4 first”"
+      and (.plain | startswith("A plain note\n\nContext data:"))
+      and .plainBubble == "bubble user"
+  ' >/dev/null || fail "board answers did not read as one-line receipts: $out"
+  pass "a board answer reads as one receipt line, a note alone as the captain's words, other bubbles unchanged"
+}
+
 test_apply_appends_the_overlay_once
 test_older_revision_is_replaced_not_stacked
 test_newer_revision_is_never_downgraded
@@ -302,3 +357,4 @@ test_absent_and_disabled_are_silent
 test_bootstrap_applies_on_the_locked_pass_only
 test_bootstrap_install_applies_after_installing
 test_bootstrap_failed_install_does_not_patch
+test_board_answers_read_as_one_line_receipts

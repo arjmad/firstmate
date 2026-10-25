@@ -63,7 +63,11 @@
 #     hints.open_decisions is the keyed open-decision set returned by
 #     fm-classify-lib.sh's authoritative status_open_decisions fold and reconciled
 #     against current_state; hints.pending_decision and hints.blocked_event are
-#     booleans derived from that set.
+#     booleans derived from that set. hints.captain_waits is the subset whose
+#     opening line carried the worker's structured "[on=captain]" tag
+#     (fm-classify-lib.sh's status_open_captain_waits), as {key,verb,since}
+#     with since the opening line's epoch or null; it is empty whenever the
+#     reconciled open set is.
 #     endpoint.exists is the cheap local backend endpoint-presence read.
 #     endpoint.agent_alive is populated for local secondmates only, where it is
 #     useful return-channel supervision data; remote secondmates use "unknown"
@@ -747,7 +751,7 @@ task_json_lines() {
   local remote_host remote_root current_file endpoint_file observation_line index=0
   local pr pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json
   local last_event_raw current_state current_source pending_decision blocked_event report_present=0 pr_from_status
-  local open_decisions_tsv open_decisions_json
+  local open_decisions_tsv open_decisions_json captain_waits_json
 
   while [ "$index" -lt "$SNAPSHOT_TASK_META_COUNT" ]; do
     meta=${SNAPSHOT_TASK_METAS[index]}
@@ -827,6 +831,15 @@ task_json_lines() {
       [ splits("\n") | select(length > 0)
         | (capture("^(?<key>[^\t]*)\t(?<verb>[^\t]*)\t(?<summary>.*)$")?)
         | select(. != null) ]')
+    if [ -n "$open_decisions_tsv" ]; then
+      captain_waits_json=$(status_open_captain_waits "$status_log" | jq -R -s '
+        [ splits("\n") | select(length > 0)
+          | (capture("^(?<key>[^\t]*)\t(?<verb>[^\t]*)\t(?<since>[0-9]*)$")?)
+          | select(. != null)
+          | .since = (if .since == "" then null else (.since | tonumber) end) ]')
+    else
+      captain_waits_json='[]'
+    fi
     pending_decision=$(printf '%s' "$open_decisions_json" | jq 'if any(.[]; .verb == "needs-decision") then 1 else 0 end')
     blocked_event=$(printf '%s' "$open_decisions_json" | jq 'if any(.[]; .verb == "blocked") then 1 else 0 end')
 
@@ -885,6 +898,7 @@ task_json_lines() {
       --argjson home_path "$home_json" \
       --argjson endpoint_exists "$endpoint_exists" \
       --argjson open_decisions "$open_decisions_json" \
+      --argjson captain_waits "$captain_waits_json" \
       --argjson pending_decision "$(bool_json "$pending_decision")" \
       --argjson blocked_event "$(bool_json "$blocked_event")" \
       --argjson report_present "$(bool_json "$report_present")" \
@@ -918,6 +932,7 @@ task_json_lines() {
           pending_decision:$pending_decision,
           blocked_event:$blocked_event,
           open_decisions:$open_decisions,
+          captain_waits:$captain_waits,
           scout_report_present:$report_present,
           last_event_text:$last_event_raw
         },
