@@ -11,6 +11,8 @@
 //   {"do":"answer","key":<card key>,"pick":<option value>,"note":<text>}  pick omitted keeps the preset
 //   {"do":"take-all"} / {"do":"confirm"}                             Take all recommendations
 //   {"do":"toggle","sec":<section key>}                              fold or unfold a section
+//   {"do":"tick","key":<item key>,"picks":[<row id>...]}             tick an item's checkboxes
+//   {"do":"press","key":<item key>,"label":<button text>}            tap an item's button by its text
 // storage.json seeds the viewer's localStorage.
 // Prints one JSON document:
 //   { headline, inboxCount, fleetSum, sections:[{key,title,count,open,depth,items,rows,empty,headings}],
@@ -149,7 +151,13 @@ for (const step of steps) {
     item.find((n) => n.tagName === "input" && n.name === name).value = v;
   }
   if (step.note !== undefined) item.find((n) => n.has("bb-note__in")).value = step.note;
-  if (step.do === "action") {
+  if (step.do === "tick") {
+    for (const box of item.all((n) => n.has("bb-pick"))) {
+      if (step.picks.includes(box.value)) { box.checked = true; box.fire("change"); }
+    }
+  } else if (step.do === "press") {
+    item.find((n) => n.tagName === "button" && n.has("fm-btn") && n.textContent === step.label).fire("click");
+  } else if (step.do === "action") {
     item.find((n) => n.tagName === "button" && n.getAttribute("data-action") === step.value).fire("click");
   } else if (step.do === "note") {
     item.find((n) => n.has("bb-send")).fire("click");

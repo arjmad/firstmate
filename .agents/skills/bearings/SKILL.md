@@ -18,7 +18,7 @@ Generate a complete current snapshot from the fleet's current state, so the capt
 Plain `/bearings` returns only the concise four-section chat digest.
 Only `/bearings file` writes the dated markdown report artifact and then returns the concise four-section chat digest linked to that report.
 Only `/bearings lavish` builds the interactive fleet board beside that digest, through `bin/fm-bearings-board.sh` (its header owns every board mechanic and the fm-bearings-board.v1 payload contract).
-A digest/build invocation is operationally read-only apart from observational remote-ledger cache refreshes, durable per-target reconcile-notify requests when the captured state needs them, plus the explicit per-mode artifacts: the dated report in file mode, and in lavish mode the board file plus the answer binding and source registration that `bin/fm-bearings-board.sh build` records through their own owners.
+A digest/build invocation is operationally read-only apart from observational remote-ledger cache refreshes, durable per-target reconcile-notify requests when the captured state needs them, plus the explicit per-mode artifacts: the dated report in file mode, and in lavish mode the board file plus the answer binding, source registration, and prune offer that `bin/fm-bearings-board.sh build` records through their own owners.
 During that invocation it never tears down a task, merges a PR, dispatches new work, steers a worker, answers a decision, cleans up work, or mutates backlog or task state.
 Board answers are acted on later under the normal authority rules; this skill's board-wake section explicitly owns the guarded routing at that time.
 
@@ -111,6 +111,8 @@ A row is the captain's when it is held for him or its recorded owner is `arjun` 
 - **Underway** (`underway[]`): every other `in_flight` row.
 - **Queued** (`charted[]`): every `board.queued` row whose `wait` is not `captain`, with its full `title`, `wait`, `wait_date` (its `hold_until` for a date wait), and `dispatchable` = its `ready`.
 - **Landed** (`landed[]`): the snapshot's landed rows.
+- **Weekly prune** (`prune`): only when `board.prune.due` is true, one card proposing to drop the fleet rows nobody has touched for `age_days` or more; copy its `slot`, `more`, and each candidate's `id`, full `title`, `repo`, and `touched`, and write a short `title` and a one-line `ask`.
+  `bin/fm-backlog-prune-lib.sh` owns which rows qualify and `bin/fm-backlog-prune.sh` owns the weekly slot; never add, drop, or reorder a candidate, because `build` records exactly that list as the offer the answer names.
 
 Card and item copy, written by you per run:
 
@@ -145,6 +147,8 @@ Route every other answer yourself, by its effect, under the normal authority rul
 
 - `resume-worker`: steer the blocked worker with the action, its values, and the note through `bin/fm-send.sh`, resolving its `[on=captain]` key.
 - `remind-at`: the backlog holds dates only, so for a due item run `bin/fm-captain-hold.sh defer <id> --until <its date> --decision-file <file>` and bring it back to the captain at that time; for a worker, steer it to wait until then.
+- `prune` (the weekly prune card): run `bin/fm-backlog-prune.sh apply <question> <pick>`, adding `values.picked` for `drop-picked`; the tap is the captain's word for exactly those closes, so ask nothing more, and echo every `dropped:` and `skipped:` line in chat.
+  A note-only prune answer drops nothing.
 - `dispatch`: start the work its `brief` names through the normal lifecycle; `draft` prepares something for his review and never sends, files, or pays; `send-mail` sends only from an account firstmate already sends from, otherwise drafts and asks; `record` writes its values through the owning skill.
 - Once that effect is in motion on a due item, record his pick with `bin/fm-captain-hold.sh answer <id> --decision-file <file>` (`--release` when the item declares `close: release`), so the item leaves his inbox.
 - A note-only answer (no pick, route `captain instruction`) is his own words about that item: read them and act on them as a fresh captain instruction, and never close, release, or re-hold the item on the strength of a note unless the words say so.
@@ -240,7 +244,7 @@ For secondmate-owned contributions, handle and acknowledge in that home and use 
 
 ## Supervision discipline
 
-During a digest/build invocation, this skill changes no fleet state beyond observational remote-ledger cache refreshes, durable local per-target reconcile-notify requests, explicit report or board artifacts, binding, and source registration.
+During a digest/build invocation, this skill changes no fleet state beyond observational remote-ledger cache refreshes, durable local per-target reconcile-notify requests, explicit report or board artifacts, binding, source registration, and the prune offer.
 Do not tear down a task, merge a PR, dispatch queued work, steer a worker, answer a queued decision, clean up work, or mutate any other `state/` or `data/` file during that invocation.
 If the state gathered for the digest suggests an action, name it in its section and leave it to the normal lifecycle and configured authority.
 On a later board wake, this read-only invocation rule yields to "Handling a board wake" and its guarded authority for captain-selected dispatches and merges.

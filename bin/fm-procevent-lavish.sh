@@ -135,6 +135,9 @@
 #     or deferral is never fed;
 #   - an empty selection or action with a note is a note-only answer: the
 #     captain's own instruction for firstmate to read, never a closure.
+#   - the weekly prune card's answers (group `prune`, effect `prune`) never
+#     feed it: they name rows that are not captain holds, and
+#     bin/fm-backlog-prune.sh carries them out from `read`.
 # Every other effect is firstmate's to route (bearings skill), from `read`.
 # `answers` and `reconciles` use the same parser as `read` for either emission
 # form. Malformed content or a declared/parsed count mismatch prints a diagnostic
@@ -1109,6 +1112,8 @@ cmd_read() {
         $route = $pick eq "reconcile" ? "reconcile request" : "keyed intake (records the pick)";
       } elsif ($str->($data->{group}) eq "blocking") {
         $route = "firstmate: $effect for the blocked worker";
+      } elsif ($effect eq "prune") {
+        $route = "firstmate: prune (bin/fm-backlog-prune.sh apply <question> <pick> [values.picked]); nothing was fed";
       } elsif ($effect eq "close") {
         $route = "keyed intake (records the pick and closes)";
       } elsif ($effect eq "hold-until" && $str->($data->{until}) =~ /\A\d{4}-\d{2}-\d{2}\z/) {

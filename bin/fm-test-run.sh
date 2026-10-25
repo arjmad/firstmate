@@ -417,6 +417,7 @@ family_for_basename() {
     fm-supervision-host.test.sh|fm-host-mirror.test.sh)
       printf '%s\n' afk
       ;;
+    fm-backlog-prune.test.sh|\
     fm-bearings-board-render.test.sh|fm-bearings-snapshot.test.sh|fm-contributions.test.sh|\
     fm-fleet-snapshot-view.test.sh|fm-home-summary-refresh.test.sh)
       printf '%s\n' snapshot-bearings
@@ -716,6 +717,7 @@ tests/fm-backend-zellij.test.sh 10453
 tests/fm-backend.test.sh 23932
 tests/fm-backlog-atomicity.test.sh 219379
 tests/fm-backlog-handoff.test.sh 58560
+tests/fm-backlog-prune.test.sh 3859
 tests/fm-backlog-read-bound.test.sh 24743
 tests/fm-bearings-board-lavish-live-e2e.test.sh 85
 tests/fm-bearings-board-render.test.sh 16146
@@ -1700,7 +1702,7 @@ families_for_changed_path() {
       printf '%s\n' live-harness-optin
       ;;
     bin/fm-bearings-snapshot.sh|bin/fm-fleet-snapshot.sh|bin/fm-fleet-view.sh|bin/fm-contributions.sh|bin/fm-contributions.jq|\
-    bin/fm-home-summary-refresh.sh)
+    bin/fm-home-summary-refresh.sh|bin/fm-backlog-prune.sh|bin/fm-backlog-prune-lib.sh|bin/fm-landed-lib.sh)
       printf '%s\n' snapshot-bearings
       ;;
     bin/fm-install-herdr.sh|bin/fm-install-treehouse.sh|bin/fm-herdr-ci-cleanup.sh)

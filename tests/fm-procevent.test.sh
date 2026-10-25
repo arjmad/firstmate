@@ -3696,7 +3696,7 @@ board_choice() {  # <uid> <json-context>
 }
 BOARD_ANS="$TMP_ROOT/board-answers-result"
 {
-  printf 'session:\n  file: /board.html\n  status: feedback\nprompts[13]:\n'
+  printf 'session:\n  file: /board.html\n  status: feedback\nprompts[14]:\n'
   board_choice 1 '{"schema":"fm-bearings-answer.v1","question":"due-close","group":"due","action":"drop","effect":"close","values":{},"note":""}'
   board_choice 2 '{"schema":"fm-bearings-answer.v1","question":"due-release","group":"due","action":"go","effect":"close","close":"release","values":{},"note":"after lunch"}'
   board_choice 3 '{"schema":"fm-bearings-answer.v1","question":"due-later","group":"due","action":"thu","effect":"hold-until","until":"2026-10-29","values":{},"note":""}'
@@ -3710,6 +3710,7 @@ BOARD_ANS="$TMP_ROOT/board-answers-result"
   board_choice 11 '{"schema":"fm-bearings-answer.v1","question":"due-redo","group":"due","action":"draft-it","effect":"draft","values":{},"note":""}'
   board_choice 12 '{"schema":"fm-bearings-answer.v1","question":"due-undated","group":"due","action":"done","effect":"close","values":{},"note":""}'
   board_choice 13 '{"schema":"fm-bearings-answer.v1","question":"due-undated","group":"due","action":"later","effect":"hold-until","until":"soon","values":{},"note":""}'
+  board_choice 14 '{"schema":"fm-bearings-answer.v1","question":"prune.2026-10-26.0123abcd","group":"prune","action":"drop-picked","effect":"prune","values":{"picked":"1,3"},"note":""}'
 } > "$BOARD_ANS"
 out=$("$ROOT/bin/fm-procevent-lavish.sh" answers "$BOARD_ANS") || fail "answers failed on a board capture: $out"
 expected=$(printf 'due-close\tdrop\tReceipt 1\ndue-release\tgo\tReceipt 2\trelease\ndue-later\tthu\tReceipt 3\tuntil=2026-10-29')
@@ -3726,6 +3727,9 @@ assert_contains "$out" "route: captain instruction: his note alone, never a clos
   "read did not present a note sent alone as the captain's instruction"
 assert_contains "$out" "| do GA4 first" "read dropped the words of a note sent alone"
 assert_contains "$out" "| when=2026-10-26T10:00" "read dropped an answer's values"
+assert_contains "$out" "route: firstmate: prune (bin/fm-backlog-prune.sh apply <question> <pick> [values.picked]); nothing was fed" \
+  "read did not hand a prune answer to firstmate"
+assert_contains "$out" "| picked=1,3" "read dropped the prune answer's picked positions"
 pass "a board answer closes or defers only through the intake, and every other answer reaches firstmate through read"
 
 # The runner's silence seam is generic and closed by default: an adapter with no

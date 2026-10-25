@@ -979,6 +979,57 @@ test_build_if_changed_skips_an_unchanged_board() {
   pass "build --if-changed republishes only when the composed board changed or its session ended"
 }
 
+current_prune_slot() {  # <home>
+  FM_HOME="$1" FM_STATE_OVERRIDE="$1/state" "$ROOT/bin/fm-backlog-prune.sh" schedule | jq -r .slot
+}
+
+with_prune_card() {  # <path> <slot>
+  jq --arg slot "$2" '.prune = {slot:$slot, title:"Weekly backlog prune",
+      ask:"Two fleet items sat untouched for two weeks.", more:0,
+      candidates:[{id:"stale-one", title:"Old thing one", repo:"fleet", touched:"2026-09-01"},
+                  {id:"stale-two", title:"Old thing two", repo:null, touched:"2026-09-03"}]}' \
+    "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+}
+
+test_build_records_the_prune_offer_and_keys_the_card() {
+  local home data board slot key rc out case filter
+  home=$(make_home prune)
+  data="$home/payload.json"
+  board="$home/.lavish/bearings-board.html"
+  slot=$(current_prune_slot "$home")
+  write_valid_payload "$data"
+  with_prune_card "$data" "$slot"
+  jq '.prune.key = "prune.composed"' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  run_board "$home" build "$data" >/dev/null || fail "a payload with a prune card was refused"
+  key=$(extract_payload "$board" | jq -r '.prune.key')
+  printf '%s' "$key" | grep -Eq "^prune\.$slot\.[0-9a-f]{8}\$" \
+    || fail "the built card does not carry the offer key build recorded: $key"
+  jq -e '.ids == ["stale-one","stale-two"]' "$home/state/backlog-prune/offers/$key.json" >/dev/null \
+    || fail "build did not record exactly the card's list as the offer"
+
+  write_valid_payload "$data"
+  with_prune_card "$data" 2000-01-03
+  set +e; out=$(run_board "$home" build "$data" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "a prune card for a past slot was accepted"
+  assert_contains "$out" "is not the current slot" "the stale-slot refusal did not say why: $out"
+
+  while IFS='|' read -r case filter; do
+    write_valid_payload "$data"
+    with_prune_card "$data" "$slot"
+    jq "$filter" "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+    set +e; out=$(run_board "$home" build "$data" 2>&1); rc=$?; set -e
+    [ "$rc" -ne 0 ] || fail "build accepted $case"
+    assert_contains "$out" "does not satisfy fm-bearings-board.v1" "the refusal of $case did not name the contract: $out"
+  done <<'EOF2'
+a prune card with no candidates|.prune.candidates = []
+a prune card listing a row twice|.prune.candidates[1].id = "stale-one"
+a prune candidate with no touched date|del(.prune.candidates[0].touched)
+a prune candidate with no repo marker|del(.prune.candidates[0].repo)
+a prune card with no ask|.prune.ask = ""
+EOF2
+  pass "build records the prune card's exact list as an offer and keys the card with it"
+}
+
 test_path_is_stable_and_home_scoped
 test_build_refuses_malformed_payloads_before_touching_the_board
 test_charted_kind_is_optional_and_accepts_both_values
@@ -1004,3 +1055,4 @@ test_build_accepts_the_inbox_layout
 test_build_names_every_inbox_item_that_does_not_say_what_it_does
 test_build_refuses_the_new_fields_out_of_shape
 test_build_if_changed_skips_an_unchanged_board
+test_build_records_the_prune_offer_and_keys_the_card

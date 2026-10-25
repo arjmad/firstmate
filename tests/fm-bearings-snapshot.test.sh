@@ -2188,6 +2188,64 @@ EOF2
   pass "the recorded owner and his holds, never body text, decide what waits on the captain"
 }
 
+# The weekly prune card's candidates come from bin/fm-backlog-prune-lib.sh's
+# rule over structured fields and the dates written on each row: only fleet
+# rows nobody touched for two weeks, never his rows, his holds, blocked or
+# scheduled work; a row the prune dropped never reads as landed.
+test_board_prune_proposes_only_stale_fleet_rows() {
+  local home fakebin json
+  home=$(make_home prune-candidates)
+  cat > "$home/data/backlog.md" <<'EOF2'
+# Backlog
+
+## In flight
+
+## Queued
+- [ ] stale-fleet - An old fleet errand (repo: business) (kind: ship) (since 2026-06-01)
+  Owner: fleet
+- [ ] fresh-fleet - A new fleet errand (repo: business) (kind: ship) (since 2026-07-05)
+  Owner: fleet
+- [ ] noted-fleet - An old errand with a recent note (repo: business) (kind: task) (since 2026-06-01)
+  Arjun 2026-07-02: still wanted after the sale.
+
+  Owner: fleet
+- [ ] his-stale - His own old to-do (repo: sites) (kind: captain) (since 2026-06-01)
+  Owner: arjun
+- [ ] held-stale - An old held call (repo: business) (kind: ship) (since 2026-06-01) (hold: go or wait) (hold-kind: captain)
+  Owner: fleet
+- [ ] blocked-stale - Old work behind other work blocked-by: fresh-fleet (repo: business) (kind: ship) (since 2026-06-01)
+  Owner: fleet
+- [ ] scheduled-stale - Old work scheduled ahead (repo: business) (kind: ship) (since 2026-06-01) (hold: after the promo) (hold-kind: future) (hold-until: 2026-08-01)
+  Owner: fleet
+- [ ] past-dated - Old work whose date came (repo: fleet) (kind: ship) (since 2026-06-01) (hold: read it then) (hold-kind: future) (hold-until: 2026-06-10)
+  Owner: fleet
+- [ ] unowned-stale - An old row with no owner (repo: business) (kind: ship) (since 2026-06-01)
+
+## Done
+- [x] dropped-row - An errand the prune dropped (repo: business) (kind: ship) (done 2026-07-06)
+  Owner: fleet
+  dropped by Arjun's prune, 2026-07-06
+- [x] shipped-row - An errand that shipped (repo: business) (kind: ship) (done 2026-07-06)
+  Owner: fleet
+EOF2
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json --fields board)
+  printf '%s' "$json" | jq -e '
+    .board.prune.due == true and .board.prune.open == true and .board.prune.age_days == 14
+      and ([.board.prune.candidates[] | {id, touched, age_days}]
+        == [{id:"stale-fleet", touched:"2026-06-01", age_days:40}, {id:"past-dated", touched:"2026-06-10", age_days:31}])
+      and (.board.prune.candidates[0] | .title == "An old fleet errand" and .repo == "business" and .filed == "2026-06-01")
+      and .board.prune.more == 0
+      and ([.landed[].id] | index("dropped-row") == null and index("shipped-row") != null)
+  ' >/dev/null || fail "the prune card did not propose exactly the stale fleet rows: $json"
+  json=$(FM_BEARINGS_PRUNE=1 run "$home" "$fakebin" --json --fields board)
+  printf '%s' "$json" | jq -e '([.board.prune.candidates[].id] == ["stale-fleet"]) and .board.prune.more == 1' >/dev/null \
+    || fail "the prune candidate bound did not hold the rest back and count them: $json"
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e 'has("board") | not' >/dev/null || fail "the default projection grew board rows"
+  pass "the prune card proposes only stale fleet rows, bounded, and a dropped row never reads as landed"
+}
+
 test_live_blocker_is_not_charted_queue_work() {
   local home fakebin json
   home=$(make_home live-blocker); write_fixture "$home"
@@ -3477,6 +3535,7 @@ test_landed_bounded_and_disclosed
 test_live_blocker_is_not_charted_queue_work
 test_captain_wait_and_board_rows_come_from_structured_fields
 test_owner_decides_what_waits_on_the_captain
+test_board_prune_proposes_only_stale_fleet_rows
 test_captains_call_anti_leak
 test_main_orphan_in_flight_is_disclosed_not_invented
 test_main_unstructured_current_is_disclosed_with_structured_sibling

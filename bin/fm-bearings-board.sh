@@ -104,6 +104,17 @@
 #   later[]   captain-owned rows not due this week, each {id, title, repo,
 #             group dated|held|unheld, back?}; a dated row needs its `back`
 #             date, and `unheld` is a row he owns that no hold gates.
+#   prune     optional: the weekly backlog prune card, {slot, title, ask,
+#             candidates[], more?}. slot is the current weekly slot (YYYY-MM-DD)
+#             and candidates are one to FM_BEARINGS_PRUNE rows, each {id,
+#             title, repo, touched (YYYY-MM-DD)}, every id once, copied from
+#             the snapshot's board.prune; more counts the rows held back. build
+#             records exactly that list through bin/fm-backlog-prune.sh offer
+#             and sets the card's `key` to the offer key it prints (a composed
+#             key is replaced), so every answer names one recorded list. The
+#             card's three answers are fixed by the template, not composed:
+#             drop-all, drop-picked (values.picked = 1-based positions) and
+#             keep, each with effect `prune`.
 # An Underway row may carry progress {done, total, step?} from the worker's own
 # step list (bin/fm-progress.sh), and every Recently Landed row carries
 # `outcome`, the short result sentence the board shows instead of the title.
@@ -274,6 +285,15 @@ validate_payload() {  # <data.json>
       and ((has("close") | not) or (.close == "done" or .close == "release"))
       and (.inputs | type == "array") and ([.inputs[] | inbox_input] | all)
       and (.actions | type == "array") and ([.actions[] | inbox_action] | all);
+    def prune_card:
+      type == "object"
+      and (.slot | valid_date)
+      and (.title | nonempty_string) and (.ask | nonempty_string)
+      and (.candidates | type == "array") and (.candidates | length) > 0
+      and ([.candidates[] | type == "object" and (.id | slug(128)) and repo_marker
+            and (.title | nonempty_string) and (.touched | valid_date)] | all)
+      and ([.candidates[].id] | length) == ([.candidates[].id] | unique | length)
+      and ((has("more") | not) or (.more | count));
     def later_item:
       type == "object" and (.id | slug(128)) and repo_marker
       and (.title | nonempty_string)
@@ -300,6 +320,7 @@ validate_payload() {  # <data.json>
     and ([.underway[] | underway_item] | all)
     and ([.landed[] | landed_item] | all)
     and ([.charted[] | charted_item] | all)
+    and ((has("prune") | not) or (.prune == null) or (.prune | prune_card))
   ' "$1" >/dev/null
 }
 
@@ -489,7 +510,7 @@ decision_card_is_stale() {  # <task-id> <landed-0-or-1>
 # card offers reconcile" a property of the board rather than of the composer's
 # memory; the validator prevents duplicate decision options.
 effective_payload() {  # <data.json> <dest.json>
-  local data=$1 dest=$2 landed_keys key reason drop='' tmp landed=0
+  local data=$1 dest=$2 landed_keys key reason drop='' tmp landed=0 prune_key
   landed_keys=$(jq -c '
     def version_parts: split(".") | map(tonumber);
     . as $payload
@@ -517,7 +538,8 @@ effective_payload() {  # <data.json> <dest.json>
     drop=$drop$key$'\n'
   done < <(jq -r '.captains_call[]? | select(.type == "decision") | .key' "$data")
   tmp=$(printf '%s' "$drop" | jq -R -s 'split("\n") | map(select(length > 0))') || return 1
-  jq --argjson dropped "$tmp" '
+  prune_key=$(record_prune_offer "$data") || return 1
+  jq --argjson dropped "$tmp" --arg prune_key "$prune_key" '
     .captains_call = [
       .captains_call[]
       | . as $card
@@ -529,7 +551,20 @@ effective_payload() {  # <data.json> <dest.json>
           hint: "Re-check the latest state, then close this with evidence or keep it open with a note"
         }]
         else . end
-    ]' "$data" > "$dest" || return 1
+    ]
+    | if $prune_key != "" then .prune.key = $prune_key else del(.prune) end' "$data" > "$dest" || return 1
+}
+
+# Record the prune card's exact list and print its offer key, or nothing when
+# the payload carries no card. A refused offer (a slot that is not the current
+# one) refuses the build rather than shipping a card no answer can name.
+record_prune_offer() {  # <data.json>
+  local slot ids
+  jq -e '(.prune // null) != null' "$1" >/dev/null 2>&1 || return 0
+  slot=$(jq -r '.prune.slot' "$1") || return 1
+  ids=$(jq -r '.prune.candidates[].id' "$1") || return 1
+  # shellcheck disable=SC2086 # ids are validated backlog-id slugs
+  "$SCRIPT_DIR/fm-backlog-prune.sh" offer "$slot" $ids
 }
 
 # The OWNER column bin/fm-procevent.sh already publishes: live, none,
@@ -570,7 +605,7 @@ command_build() {
     || fail "cannot stage the board payload"
   if ! effective_payload "$data" "$effective"; then
     rm -f -- "$effective"
-    fail "cannot reconcile the board payload against landed work"
+    fail "cannot reconcile the board payload against landed work or record its prune offer"
   fi
   if ! gaps=$(decision_card_gaps "$effective"); then
     rm -f -- "$effective"
