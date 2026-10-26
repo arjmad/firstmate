@@ -429,6 +429,31 @@ SH
   pass "registration can consume answers only after any-origin binding exists"
 }
 
+# The build prints the session URL in the phone-openable form the host's
+# `tailscale serve` publishes (bin/fm-lavish-url.sh), while its own liveness
+# check still reads lavish-axi's raw output, and prints the raw URL when no
+# serve origin exists.
+test_build_prints_the_phone_openable_session_url() {
+  local home data out
+  home=$(make_home phone-url)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  cat > "$home/fakebin/tailscale" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"TCP":{"8443":{"HTTPS":true}},"Web":{"host.tail0.ts.net:8443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:4387"}}}}}'
+SH
+  chmod +x "$home/fakebin/tailscale"
+  out=$(FM_TAILSCALE="$home/fakebin/tailscale" run_board "$home" build "$data") || fail "a valid payload did not build: $out"
+  assert_contains "$out" "https://host.tail0.ts.net:8443/session/0123456789abcdef" "the build did not print the phone-openable session URL: $out"
+  case "$out" in
+    *"http://127.0.0.1:4387/session/"*) fail "the build still printed the raw session URL: $out" ;;
+  esac
+  assert_contains "$out" "armed: " "the rewrite changed what the build armed: $out"
+  out=$(run_board "$home" build "$data") || fail "a rebuild with no tailscale did not build: $out"
+  assert_contains "$out" "http://127.0.0.1:4387/session/0123456789abcdef" "with no serve origin the build did not print the raw session URL: $out"
+  pass "a board build prints the phone-openable session URL and keeps the raw one without a serve origin"
+}
+
 test_build_does_not_bind_or_arm_when_session_start_fails() {
   local home data rc sid
   home=$(make_home serve-failure)
@@ -1038,6 +1063,7 @@ test_path_is_stable_and_home_scoped
 test_build_refuses_malformed_payloads_before_touching_the_board
 test_charted_kind_is_optional_and_accepts_both_values
 test_build_injects_binds_then_arms
+test_build_prints_the_phone_openable_session_url
 test_registration_cannot_consume_before_any_origin_binding
 test_build_does_not_bind_or_arm_when_session_start_fails
 test_rebuild_is_idempotent_and_does_not_double_arm

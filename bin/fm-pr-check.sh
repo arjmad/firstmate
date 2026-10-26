@@ -164,7 +164,7 @@ if [ -n "$ALSO_REPO" ]; then
   MODE=$(grep '^mode=' "$META" | tail -1 | cut -d= -f2- || true)
   case "$PROVIDER:$MODE" in
     gerrit:*) DONE_LINE="done: PR $URL published for review" ;;
-    *:no-mistakes|*:) DONE_LINE="done: PR $URL checks green" ;;
+    github:*|*:no-mistakes|*:) DONE_LINE="done: PR $URL checks green" ;;
     *) DONE_LINE="done: PR $URL" ;;
   esac
   if [ "${FM_PR_CHECK_MERGE:-}" != 1 ] \
@@ -218,10 +218,11 @@ fi
 MODE=$(grep '^mode=' "$META" | tail -1 | cut -d= -f2- || true)
 PROJECT=$(grep '^project=' "$META" | tail -1 | cut -d= -f2- || true)
 # The gate is asked about the ready report this task's worker was told to give;
-# on a Gerrit change both publishing modes report the same published line.
+# on a Gerrit change both publishing modes report the same published line, and
+# on GitHub both report `checks green`.
 case "$PROVIDER:$MODE" in
   gerrit:*) DONE_LINE="done: PR $URL published for review" ;;
-  *:no-mistakes|*:) DONE_LINE="done: PR $URL checks green" ;;
+  github:*|*:no-mistakes|*:) DONE_LINE="done: PR $URL checks green" ;;
   *) DONE_LINE="done: PR $URL" ;;
 esac
 # A merge records the PR it is about to merge, and that merge is pinned to the

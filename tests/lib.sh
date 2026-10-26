@@ -57,6 +57,11 @@ export FM_TEST_SEAM=1
 # tests/fm-lavish-patch.test.sh clears it to drive the patch against fakes.
 export FM_LAVISH_PATCH=0
 
+# Keep bin/fm-lavish-url.sh from reading the host's real `tailscale serve`
+# config, so a suite's Lavish URLs print the same on every machine.
+# tests/fm-lavish-url.test.sh points it at a fake.
+export FM_TAILSCALE=fm-test-no-tailscale
+
 # Clear the task-worker marker bin/fm-spawn.sh exports into ship and scout
 # panes. This suite builds git-init fixture repositories whose primary checkout
 # it runs a copied bin/fm-test-run.sh in, and that runner refuses the primary

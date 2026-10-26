@@ -193,6 +193,25 @@ test_an_idea_belongs_to_the_build_that_first_offered_it() {
   pass "an idea keeps its first build's wording, brief and credit, and refiling keeps order and link"
 }
 
+# A Lavish board link is recorded in the phone-openable form
+# bin/fm-lavish-url.sh prints, read from a fake `tailscale serve`.
+test_file_records_a_lavish_board_in_its_phone_form() {
+  local home
+  home=$(make_home phone-link)
+  make_build "$home/atlas.json" "2026-10-26 13:00Z" phone
+  cat > "$home/fakebin/tailscale" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"TCP":{"8443":{"HTTPS":true}},"Web":{"host.tail0.ts.net:8443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:4387"}}}}}'
+SH
+  chmod +x "$home/fakebin/tailscale"
+  FM_TAILSCALE="$home/fakebin/tailscale" atlas "$home" file "$home/atlas.json" \
+    --board http://host.tail0.ts.net:4387/session/0123456789abcdef >/dev/null \
+    || fail "file refused a Lavish board link"
+  atlas "$home" latest | jq -e '.board == "https://host.tail0.ts.net:8443/session/0123456789abcdef"' >/dev/null \
+    || fail "the board link was not recorded in its phone-openable form: $(atlas "$home" latest)"
+  pass "file records a Lavish board link in its phone-openable form"
+}
+
 test_file_holds_each_idea_for_the_captain
 test_refiling_and_answered_ideas
 test_file_refuses_a_bad_build
@@ -200,3 +219,4 @@ test_pick_names_the_fleet_task
 test_keep_test_reads_picks_and_results
 test_keep_test_is_not_met_once_every_idea_is_answered
 test_an_idea_belongs_to_the_build_that_first_offered_it
+test_file_records_a_lavish_board_in_its_phone_form

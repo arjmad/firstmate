@@ -22,6 +22,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-bearings-board.sh`   | Build and arm the stable interactive `/bearings lavish` fleet board                  |
 | `fm-atlas.sh` | Hand an `/atlas` build's top 7 ideas to bearings as captain holds, record the captain's picks and their measured results, and print the Atlas keep test |
 | `fm-backlog-prune.sh` | The weekly backlog prune: its Monday slot, the list each board card offered, and the drops (dated reopenable closes) or one-week snooze its answer orders |
+| `fm-lavish-url.sh`       | Print a Lavish session URL in its phone-openable form: the tailnet HTTPS origin `tailscale serve` publishes for its port |
 | `fm-lavish-patch.mjs`    | Apply, check, or remove firstmate's local Lavish chrome overlay (house dark colours, collapsible and resizable Conversation panel, fullscreen board videos) |
 | `fm-secondmate-reconcile.sh` | Queue Bearings reconcile requests for later supervision delivery and ask each mismatched home through its durable inbox with a per-home cooldown |
 | `fm-update.sh`           | Guarded self-update of firstmate and local or remote secondmate homes, reconciling redundant divergence and classifying every live mate left on the target commit for restart or fallback nudge |

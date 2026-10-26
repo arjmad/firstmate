@@ -29,7 +29,9 @@
 # The check tests that head, not whether some branch moved. In no-mistakes
 # mode the pre-validation `done: {summary}` is the pipeline handoff and is
 # not gated; only the later CI-ready `done: PR <url> checks green` is, or on a
-# Gerrit project the later `done: PR <change url> published for review`. The
+# Gerrit project the later `done: PR <change url> published for review`. A
+# direct-PR done naming a GitHub PR is refused unless it reports `checks green`
+# (fm_dod_checks_green_block owns why), except for a recorded merged PR. The
 # named head is the worker copy's HEAD, except that a done naming the task's
 # recorded pr= passes when the forge holds that head: a forge-reported
 # pr_head= in no-mistakes mode, or a recorded merge
@@ -483,14 +485,30 @@ Before that done report, give a code-changing GitHub PR its code review; a PR on
 Run \`$cli status <pr-url>\`; \`exempt\` or \`reviewed\` needs nothing more.
 On \`unreviewed\`, run Claude Code's built-in \`/code-review medium --comment <number>\` from this worktree: invoke the skill when your harness has it, and otherwise run \`claude -p '/code-review medium --comment <number>'\` as a shell command there.
 Then $fix, reply in the PR thread of every finding you do not, and after your last push run \`$cli record <pr-url>\` and confirm it prints \`reviewed\`.
-A later push that changes the PR's diff needs the review again; a rebase that leaves the diff alone does not.
+Pushes that fix or answer this review's findings are covered by the one \`record\` you run after your last push; only a push after \`record\` that changes the diff needs a new review, and a rebase that leaves the diff alone needs none.
+For a small follow-up pushed after \`record\`, run \`$cli record <pr-url> --carry\` instead of a new review; the script decides what a carry covers and refuses anything larger, and then you run \`/code-review\` again.
 If neither way of running \`/code-review\` works here, append \`blocked:\` naming why instead of done.
+EOF
+}
+
+# A direct-PR worker on GitHub reports ready only once the PR can merge on its
+# checks: bin/fm-pr-merge.sh refuses a red PR and one whose required check has
+# not reported, and a required check that never reported is absent from the
+# checks list rather than pending. fm_dod_accept_ship_done refuses that mode's
+# GitHub done: without `checks green`.
+fm_dod_checks_green_block() {
+  cat <<EOF
+On a GitHub PR, then wait for its checks at your pushed HEAD: run \`gh-axi pr checks <number> --watch --fail-fast\`, and while it waits append \`gate-wait [at=<epoch>]: checks on PR {url}\` instead of reporting done.
+A failing check is yours to fix: append \`working [at=<epoch>]: fixing {check}\`, push the fix, and wait again.
+A required check that has never reported is missing from that list rather than pending, so also read \`gh-axi pr view <number>\`: a \`merge_state\` of blocked while every listed check is green means a required check has not posted.
+A repository with no checks at all reports none, which leaves nothing to wait for.
+A required \`fleet-gate\` or \`gate\` status posts only from a full \`./check.sh\` run on a clean tree whose HEAD is already pushed: run it after your last push, never as a single-suite run, and with no untracked files left in the tree - the \`findings.json\` that \`/code-review\` writes counts.
 EOF
 }
 
 fm_dod_block() {  # <mode> <task-id> [branch] [<forge>] [<base>] [<consent>]
   local mode=$1 id=$2 forge=${4:-none} base=${5:-} consent=${6:-}
-  local branch=${3:-fm/$id} pr_base='' nm_base='' base_q contract_forge='' contract_consent='' forge_cli=gh-axi draft_check adapter
+  local branch=${3:-fm/$id} pr_base='' nm_base='' base_q contract_forge='' contract_consent='' forge_cli=gh-axi draft_check adapter done_report
   fm_forge_valid_for_mode "$forge" "$mode" fm_dod_block || return 1
   fm_base_branch_valid "$base" "$mode" "$forge" fm_dod_block || return 1
   if [ -n "$consent" ]; then
@@ -601,9 +619,15 @@ When it is implemented and committed, push your branch and open a PR with \`$for
 Before you report done, read the PR back from the forge and confirm it is not a draft $draft_check
 A draft cannot be merged, so a done report on one leaves the merge unasked.
 EOF
-      [ "$forge" != none ] || fm_dod_code_review_block direct-PR
+      done_report='PR {url}` to the status file and stop.'
+      if [ "$forge" = none ]; then
+        fm_dod_code_review_block direct-PR
+        fm_dod_checks_green_block
+        # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+        done_report='PR {url} checks green` to the status file and stop; for a PR outside GitHub, report `done [at=<epoch>]: PR {url}` instead.'
+      fi
       cat <<EOF
-Then append \`done [at=<epoch>]: PR {url}\` to the status file and stop.
+Then append \`done [at=<epoch>]: $done_report
 That \`done:\` is accepted only when this copy's HEAD - your latest commit - is pushed to your PR branch; the check tests that commit, not merely that a branch moved.
 If you deliberately keep the PR a draft, append \`paused [at=<epoch>]: {why the draft is held}\` instead of done.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
@@ -894,7 +918,7 @@ fm_dod_named_head_reachable_outside_worktree() {  # <worktree> <project> <mode> 
 # pr_head=, and the merge-notified marker; <meta> may be a captured copy
 # (bin/fm-fleet-snapshot.sh), so the marker is read from <state>.
 fm_dod_accept_ship_done() {  # <kind> <mode> <worktree> <project> <line> [<state> <id> <meta>]
-  local kind=$1 mode=$2 wt=$3 project=$4 line=$5 state=${6:-} id=${7:-} meta=${8:-} url sha gerrit
+  local kind=$1 mode=$2 wt=$3 project=$4 line=$5 state=${6:-} id=${7:-} meta=${8:-} url pr_url sha gerrit
   fm_dod_should_gate_ship_done "$kind" "$mode" "$line" || return 0
   if [ -n "$meta" ] && [ "$(fm_dod_meta_value "$meta" forge)" = external ]; then
     fm_dod_accept_external_review_done "$wt" "$project" "$line" "$meta"
@@ -903,6 +927,12 @@ fm_dod_accept_ship_done() {  # <kind> <mode> <worktree> <project> <line> [<state
   if url=$(fm_dod_pr_url_from_done_note "$(status_line_note "$line")") \
     && fm_dod_recorded_pr_on_forge "$state" "$id" "$meta" "$mode" "$url"; then
     return 0
+  fi
+  pr_url=$(status_line_note "$line" | grep -Eo 'https?://[^[:space:]]+/pull/[0-9]+' | head -n 1)
+  if [ "$mode" = direct-PR ] && [ -n "$pr_url" ] && fm_pr_url_parse "$pr_url" && [ "$FM_PR_PROVIDER" = github ] \
+    && ! fm_dod_note_reports_ci_ready "$(status_line_note "$line")"; then
+    printf '%s\n' "a direct-PR GitHub ready report is \`PR <url> checks green\`, given only once every required check at the pushed HEAD has passed"
+    return 1
   fi
   if [ -z "$wt" ] || [ ! -d "$wt" ]; then
     printf '%s\n' "named head cannot be verified: worktree missing"

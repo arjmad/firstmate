@@ -8,7 +8,7 @@ metadata:
 
 # Ship landing
 
-For PR-based ship tasks, the ready signal depends on mode: `no-mistakes` reports `done [at=<epoch>]: PR <url> checks green` after CI is green, while `direct-PR` reports `done [at=<epoch>]: PR <url>` after opening the PR, each only for a non-draft PR; a lane that deliberately holds a draft declares a wait instead, and `bin/fm-pr-check.sh` refuses to arm merge monitoring on a draft.
+For PR-based ship tasks, the ready signal depends on mode: `no-mistakes` reports `done [at=<epoch>]: PR <url> checks green` after CI is green, while `direct-PR` reports `done [at=<epoch>]: PR <url>` after opening the PR, or `done [at=<epoch>]: PR <url> checks green` on GitHub once every required check passed, each only for a non-draft PR; a lane that deliberately holds a draft declares a wait instead, and `bin/fm-pr-check.sh` refuses to arm merge monitoring on a draft.
 A task spawned with `--also <repo>` reports each companion PR as `working: companion <repo> PR <url>`: record it with `bin/fm-pr-check.sh <id> <url> --also <repo>` and merge it with `bin/fm-pr-merge.sh` under the same authority, before or with the task's own PR; teardown refuses while any companion work is unlanded.
 A worker whose task continues after its PR merges reports `ready [at=<epoch>]: PR <url>` instead (fork patch, `docs/fork-decisions.md` 2026-10-14): land it exactly like a done PR under the same merge authority, never as a decision, then leave the worker running and expect a later `done:`.
 Run `bin/fm-pr-check.sh <id> <PR url>` with the URL copied from that ready signal or the resolved checks-green `fm-crew-state.sh` line - it records `pr=` and the forge's `pr_head=` when available in the task's meta and arms the watcher's merge poll.
