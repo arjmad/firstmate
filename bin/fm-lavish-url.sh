@@ -11,9 +11,12 @@
 # here names a host or port.
 #
 # A URL is rewritten only when its host is the serve name or a loopback address
-# and a serve origin proxies its port; anything else - no tailscale, no serve
-# entry, another port, a non-session URL - passes through unchanged, so this
-# never turns a working link into a broken one. Lavish's own saved session URL
+# and a tailnet-only serve origin proxies its port; anything else - no
+# tailscale, no serve entry, a Funnel origin (public, which a board link never
+# becomes without the captain's word), another port, a non-session URL - passes
+# through unchanged, so this never turns a working link into a broken one. A
+# link host that is a bare Tailscale IP stays http, which a phone opens. Input
+# with no session URL is printed without reading tailscale at all. Lavish's own saved session URL
 # is left alone: bin/fm-procevent-lavish.sh reads the server address from it.
 #
 # Usage:
@@ -34,7 +37,7 @@ esac
 
 tailscale_cli() {
   local cli
-  local -a candidates=(tailscale /Applications/Tailscale.app/Contents/MacOS/tailscale)
+  local -a candidates=(tailscale /Applications/Tailscale.app/Contents/MacOS/Tailscale)
   [ -z "${FM_TAILSCALE:-}" ] || candidates=("$FM_TAILSCALE")
   for cli in "${candidates[@]}"; do
     command -v "$cli" >/dev/null 2>&1 && { printf '%s\n' "$cli"; return 0; }
@@ -54,13 +57,12 @@ serve_map() {
     | (.key | capture("^(?<name>[A-Za-z0-9.-]+):(?<port>[0-9]+)$")?) as $origin
     | select($origin != null)
     | select($root.TCP[$origin.port].HTTPS == true)
+    | select(($root.AllowFunnel // {})[.key] != true)
     | (.value.Handlers["/"].Proxy // "" | capture("^http://(127\\.0\\.0\\.1|localhost|\\[::1\\]):(?<port>[0-9]+)/?$")?) as $target
     | select($target != null)
     | [$target.port, ($origin.name | ascii_downcase), $origin.port] | @tsv
   ' 2>/dev/null || true
 }
-
-MAP=$(serve_map)
 
 rewrite() {
   FM_LAVISH_SERVE_MAP=$MAP perl -pe '
@@ -84,7 +86,12 @@ rewrite() {
 }
 
 if [ "$#" -gt 0 ]; then
-  printf '%s\n' "$@" | rewrite
+  INPUT=$(printf '%s\n' "$@")
 else
-  rewrite
+  INPUT=$(cat)
 fi
+case "$INPUT" in
+  */session/*) MAP=$(serve_map) ;;
+  *) MAP= ;;
+esac
+printf '%s\n' "$INPUT" | rewrite

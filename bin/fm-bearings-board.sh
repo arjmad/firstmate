@@ -471,18 +471,26 @@ lavish_board_live() {  # <establish output> <canonical-board-path>
 # this board, which is exactly the attention `--reopen` exists for - and a
 # session that is still not live after that refuses the build rather than
 # arming a poll that can never attach.
+# Print lavish-axi's session output with its session URL in the phone-openable
+# form; the rewrite is display only, so its failure prints the raw output.
+show_session_output() {  # <lavish-axi output>
+  local shown
+  shown=$("$SCRIPT_DIR/fm-lavish-url.sh" <<<"$1") && [ -n "$shown" ] || shown=$1
+  printf '%s\n' "$shown"
+}
+
 establish_board_session() {  # <board>
   local board=$1 real out status version
   BOARD_SESSION_REOPENED=0
   real=$(board_realpath "$board") || fail "cannot resolve the board path: $board"
   out=$(lavish-axi "$board") || fail "cannot establish the board Lavish session"
-  printf '%s\n' "$out" | "$SCRIPT_DIR/fm-lavish-url.sh"
+  show_session_output "$out"
   if lavish_board_live "$out" "$real"; then
     printf 'session: live\n'
     return 0
   fi
   out=$(lavish-axi "$board" --reopen) || fail "cannot reopen the ended board Lavish session"
-  printf '%s\n' "$out" | "$SCRIPT_DIR/fm-lavish-url.sh"
+  show_session_output "$out"
   if lavish_board_live "$out" "$real"; then
     BOARD_SESSION_REOPENED=1
     printf 'session: reopened\n'

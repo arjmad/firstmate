@@ -99,8 +99,28 @@ test_port_443_origin_has_no_port() {
   pass "an origin on 443 prints without a port"
 }
 
+test_funnel_origin_is_never_handed_out() {
+  local out serve="$TMP_ROOT/serve-funnel.json"
+  jq --arg n "$NAME" '. + {AllowFunnel: {($n + ":8443"): true}}' "$SERVE" > "$serve"
+  out=$(FM_TAILSCALE="$FAKE" FM_TEST_SERVE="$serve" "$URL_SH" "http://$NAME:4387/session/$SESSION")
+  [ "$out" = "http://$NAME:4387/session/$SESSION" ] || fail "a Funnel (public) origin was handed out: $out"
+  pass "a serve origin with Funnel on is never used"
+}
+
+test_text_without_a_session_url_skips_tailscale() {
+  local out log="$TMP_ROOT/calls.log" fake="$TMP_ROOT/tailscale-logged"
+  printf '#!/usr/bin/env bash\nprintf x >> %q\nexit 1\n' "$log" > "$fake"
+  chmod +x "$fake"
+  out=$(printf 'board: /tmp/b.html\nsession: live\n' | FM_TAILSCALE="$fake" "$URL_SH")
+  [ "$out" = "$(printf 'board: /tmp/b.html\nsession: live')" ] || fail "text without a session URL changed: $out"
+  [ ! -e "$log" ] || fail "tailscale was read for text with no session URL"
+  pass "text with no session URL passes through without reading tailscale"
+}
+
 test_session_url_takes_the_serve_origin
 test_other_urls_pass_through
 test_text_on_stdin_rewrites_every_session_url
 test_no_tailscale_or_serve_changes_nothing
 test_port_443_origin_has_no_port
+test_funnel_origin_is_never_handed_out
+test_text_without_a_session_url_skips_tailscale

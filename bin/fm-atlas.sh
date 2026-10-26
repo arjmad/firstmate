@@ -136,7 +136,7 @@ valid_atlas() {  # <atlas.json>
 }
 
 cmd_file() {
-  local file="" board="" offered slug title repo reason out status=0
+  local file="" board="" phone offered slug title repo reason out status=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --board) shift; board=${1:-} ;;
@@ -149,7 +149,9 @@ cmd_file() {
   [ -f "$file" ] || refuse "no such file: $file"
   case "$board" in ''|http://?*|https://?*) ;; *) refuse "--board must be an http or https URL" ;; esac
   case "$board" in *[[:space:]]*) refuse "--board must be an http or https URL" ;; esac
-  [ -z "$board" ] || board=$("$SCRIPT_DIR/fm-lavish-url.sh" "$board")
+  if [ -n "$board" ] && phone=$("$SCRIPT_DIR/fm-lavish-url.sh" "$board") && [ -n "$phone" ]; then
+    board=$phone
+  fi
   valid_atlas "$file" || refuse "$file is not an atlas.v1 build with seven ranked ideas"
   lock_record
   # Slugs some earlier build already offered: their cards are open or answered.
