@@ -625,10 +625,11 @@ The file is a home-local preference and is not inherited by secondmate homes.
 ## Task media retention (config/data-media-retention-days)
 
 Workers leave renders, clip copies, screenshots, and disk images in `data/<task>/`, and nothing removes them after teardown.
-The optional local, gitignored `config/data-media-retention-days` file holds a whole number of days N, and the locked session-start bootstrap then removes the media files of every torn-down task whose `data/<task>/` has not changed in N days.
+The optional local, gitignored `config/data-media-retention-days` file holds a whole number of days N from 1 to 3650, and the locked session-start bootstrap then removes the media files of every task that has been torn down for N days and whose `data/<task>/` has not changed in N days.
+A task counts as torn down only when it has no live record under `state/` and no open backlog row, and its N days start at the first session start that sees it so; a home whose backlog cannot be read removes nothing.
 Reports and other text files, finals, and anything inside a git checkout stay, and nothing outside this home's `data/` is touched.
 An absent file means no retention, and the file is not inherited by secondmate homes.
-Run `bin/fm-data-media-prune.sh --dry-run` to list what a run would remove today, with each file's size; without the file it previews 7 days, and `--days <N>` previews another value.
+Run `bin/fm-data-media-prune.sh --dry-run` to list what a run would remove today, with each file's size, without starting any task's clock; without the file it previews 7 days, and `--days <N>` previews another value.
 [`fm-data-media-prune.sh`'s header](../bin/fm-data-media-prune.sh) owns what counts as a torn-down task, a quiet task, a media file, and a final.
 
 ## Firstmate role (config/firstmate-role)
