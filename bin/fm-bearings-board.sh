@@ -82,6 +82,9 @@
 # the template may display the routing id. Anything else refuses before the
 # existing board is touched.
 #
+# A decision or credential card may carry `link` {url, label}: one http(s) page
+# its meta line links beside the repo, such as the Atlas board an idea came from.
+#
 # A decision card must also offer a real choice: at least two authored options
 # (the injected reconcile choice does not count), a `recommend_value` naming one
 # of them, and `allow_freeform: true`. Merge and credential cards keep their own
@@ -220,6 +223,10 @@ validate_payload() {  # <data.json>
       and (optional_string("decide"))
       and (optional_string("detail"))
       and (optional_https_url("pr_url"))
+      and ((has("link") | not)
+        or (.link | type == "object" and (.label | nonempty_string)
+          and (.url | type == "string" and test("^https?://[^[:space:]]+$")))
+          and .type != "merge")
       and optional_subject
       and (if has("subject") then .type == "decision" else true end)
       and (optional_string("freeform_hint"))

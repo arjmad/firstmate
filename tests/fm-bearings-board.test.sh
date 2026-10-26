@@ -949,6 +949,9 @@ step progress past its total|.underway = [{"id":"x","repo":"s","name":"n","state
 a dated later row with no date|.later = [{"id":"x","repo":"s","title":"t","group":"dated"}]
 a due item with no due date|.inbox = [{"key":"x","group":"due","repo":"s","title":"t","ask":"a","inputs":[],"actions":[]}]
 an unknown queue wait|.charted[0].wait = "someday"
+a card link that is not a web page|.captains_call[0].link = {"url":"file:///tmp/x.html","label":"Atlas board"}
+a card link with no label|.captains_call[0].link = {"url":"http://100.119.38.2:4387/session/1"}
+a link on a merge card|.captains_call[0].type = "merge" | .captains_call[0].risk = "low" | .captains_call[0].link = {"url":"http://h/s","label":"l"}
 EOF
   pass "build refuses each new layout field out of shape"
 }

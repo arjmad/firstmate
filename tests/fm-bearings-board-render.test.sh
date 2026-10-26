@@ -114,7 +114,8 @@ full_payload() {  # <path>
        decide:"Renew?", options:[
          {value:"lapse", label:"Let it lapse", hint:"Nothing renews."},
          {value:"renew", label:"Renew", hint:"Firstmate renews it."}],
-       recommend_value:"lapse", allow_freeform:true, close:"release"}],
+       recommend_value:"lapse", allow_freeform:true, close:"release",
+       link:{url:"http://100.119.38.2:4387/session/0123456789abcdef", label:"Atlas board"}}],
     inbox:[
       {key:"sample-worker", group:"blocking", repo:"sample", title:"Open the sample site",
        ask:"Sign in so the worker can read it.", since:"2099-02-28T20:00:00Z",
@@ -295,6 +296,7 @@ test_a_decision_card_opens_on_its_recommendation() {
     ([.sections[] | select(.key == "decisions") | .items[0].radios[] | {value, checked, recommended}]
       == [{value:"keep", checked:true, recommended:true}, {value:"upgrade", checked:false, recommended:false},
           {value:"reconcile", checked:false, recommended:false}])
+      and ([.sections[] | select(.key == "decisions") | .items[] | .meta] == ["sample", "sample · Atlas board"])
       and (.prompts[0].data | .question == "sample-tier" and .selection == "keep" and .note == "for now")
       and (.prompts[1].data | .question == "sample-domain" and .selection == "renew" and .close == "release")
   ' >/dev/null || fail "a decision card did not open on its recommendation or send its pick: $out"

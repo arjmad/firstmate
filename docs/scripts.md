@@ -20,6 +20,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-fleet-view.sh`       | Render the fleet snapshot as a human Markdown view                                   |
 | `fm-bearings-snapshot.sh` | Project the bounded remote-ledger fleet snapshot to compact TOON; `--include-prs` adds live GitHub enrichment |
 | `fm-bearings-board.sh`   | Build and arm the stable interactive `/bearings lavish` fleet board                  |
+| `fm-atlas.sh` | Hand an `/atlas` build's top 7 ideas to bearings as captain holds, record the captain's picks and their measured results, and print the Atlas keep test |
 | `fm-backlog-prune.sh` | The weekly backlog prune: its Monday slot, the list each board card offered, and the drops (dated reopenable closes) or one-week snooze its answer orders |
 | `fm-lavish-patch.mjs`    | Apply, check, or remove firstmate's local Lavish chrome overlay (house dark colours, collapsible and resizable Conversation panel, fullscreen board videos) |
 | `fm-secondmate-reconcile.sh` | Queue Bearings reconcile requests for later supervision delivery and ask each mismatched home through its durable inbox with a per-home cooldown |
