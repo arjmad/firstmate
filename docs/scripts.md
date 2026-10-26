@@ -242,7 +242,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-startup-memory-budget-lib.sh` | Startup-memory budget primitives |
 | `fm-startup-memory-budget.sh` | Read and report the local startup-memory budget |
 | `fm-state-residue-sweep.sh` | Retire watcher bookkeeping for provably gone endpoints, task-keyed records and lock owners nothing live references, and rotate supervision scratch files |
-| `fm-data-media-prune.sh` | Remove the media files torn-down, quiet tasks left in `data/<task>/` when `config/data-media-retention-days` opts in, with a `--dry-run` listing |
+| `fm-data-media-prune.sh` | Remove the video, audio, and disk images torn-down, quiet tasks left in `data/<task>/` when `config/data-media-retention-days` opts in, with a `--dry-run` listing |
 | `fm-stow-cascade.sh` | Enumerate registered secondmates and their inputs for a `/stow` cascade |
 | `fm-supervision-engine-lib.sh` | Choose the supervision host's headless engine and run one engine turn |
 | `fm-supervision-host.sh` | Run the supervision host: watcher-cycle ownership plus a headless branch session beside a non-Pi primary |

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# fm-data-media-prune.sh - remove the bulky media a torn-down task left in its
-# data/<task>/ directory once that task has been torn down and quiet for N
-# days, keeping its reports and its finals.
+# fm-data-media-prune.sh - remove the bulky video, audio, and disk images a
+# torn-down task left in its data/<task>/ directory once that task has been
+# torn down and quiet for N days, keeping its reports and its finals.
 #
 # Usage: fm-data-media-prune.sh [--dry-run] [--days <N>]
 #        --dry-run
@@ -57,8 +57,10 @@
 # torn-down, quiet task whose extension, in any case, is one of
 #   video: mp4 mov m4v webm mkv avi
 #   audio: mp3 wav m4a aac flac ogg opus
-#   image: png jpg jpeg gif webp heic tif tiff bmp
 #   disk:  iso img raw qcow2 vmdk vdi dmg
+# Still images, PDFs, and exports are never removed here: the captain's
+# 2026-10-21 ruling moves those to Drive before anything is deleted
+# (docs/fork-decisions/2026-10-26-task-media-retention.md).
 # and that is not a final. The task's own .md, .json, .txt, .html, and .htm
 # files are always kept, and a media file is a final when, ignoring case,
 #   - its name contains "final", or
@@ -197,8 +199,6 @@ media_candidates() {  # <dir>
   find "$1" "${PRUNE_ARGS[@]+"${PRUNE_ARGS[@]}"}" -type f \( \
     -iname '*.mp4' -o -iname '*.mov' -o -iname '*.m4v' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.avi' -o \
     -iname '*.mp3' -o -iname '*.wav' -o -iname '*.m4a' -o -iname '*.aac' -o -iname '*.flac' -o -iname '*.ogg' -o -iname '*.opus' -o \
-    -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.gif' -o -iname '*.webp' -o -iname '*.heic' -o \
-    -iname '*.tif' -o -iname '*.tiff' -o -iname '*.bmp' -o \
     -iname '*.iso' -o -iname '*.img' -o -iname '*.raw' -o -iname '*.qcow2' -o -iname '*.vmdk' -o -iname '*.vdi' -o -iname '*.dmg' \
     \) ! -iname '*final*' -print 2>/dev/null
 }

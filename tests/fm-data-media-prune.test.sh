@@ -59,10 +59,10 @@ The board showed clip.mp4 and frames/frame-01.png.
   put "$d/hero.mp4"
   put "$d/out/hero2.mp4"
   put "$d/cut-FINAL.mov"
-  put "$d/picks/finals.json" '["pick.jpg"]'
-  put "$d/pick.jpg"
+  put "$d/picks/finals.json" '["pick.webm"]'
+  put "$d/pick.webm"
   put "$d/checkout/.git/HEAD" "ref: refs/heads/main"
-  put "$d/checkout/asset.png"
+  put "$d/checkout/asset.mp4"
   put "$TMP_ROOT/outside.png"
   ln -s "$TMP_ROOT/outside.png" "$d/link.png"
   find "$d" -type f -exec perl -e 'my $t = time - 10 * 86400; utime $t, $t, @ARGV' {} +
@@ -97,8 +97,8 @@ run_prune() {  # <home> [args...]
   FM_HOME="$home" bash "$PRUNE" "$@" 2>&1
 }
 
-PRUNABLE="clip.mp4 frames/frame-01.png voice.WAV vm/disk.raw"
-KEPT="brief.md report.md board/index.html notes.txt hero.mp4 out/hero2.mp4 cut-FINAL.mov picks/finals.json pick.jpg checkout/.git/HEAD checkout/asset.png link.png"
+PRUNABLE="clip.mp4 voice.WAV vm/disk.raw"
+KEPT="frames/frame-01.png brief.md report.md board/index.html notes.txt hero.mp4 out/hero2.mp4 cut-FINAL.mov picks/finals.json pick.webm checkout/.git/HEAD checkout/asset.mp4 link.png"
 
 assert_task_untouched() {  # <home> <task> <msg>
   local f
@@ -118,11 +118,11 @@ test_dry_run_lists_media_and_removes_nothing() {
   start_clock "$home" done-task
   out=$(run_prune "$home" --dry-run)
   assert_contains "$out" "would remove: 4 data/done-task/clip.mp4" "dry run lists a review render with its size"
-  assert_contains "$out" "data/done-task/frames/frame-01.png" "dry run lists a nested frame"
+  assert_not_contains "$out" "frame-01.png" "still images are left to the Drive-move rule"
   assert_contains "$out" "data/done-task/voice.WAV" "dry run matches extensions in any case"
   assert_contains "$out" "data/done-task/vm/disk.raw" "dry run lists a VM disk"
-  assert_equals 5 "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" "dry run prints four files and one summary"
-  assert_contains "$out" "BOOTSTRAP_INFO: data media retention: would remove 4 files (0 MiB) from 1 torn-down tasks quiet over 7 days" \
+  assert_equals 4 "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" "dry run prints three files and one summary"
+  assert_contains "$out" "BOOTSTRAP_INFO: data media retention: would remove 3 files (0 MiB) from 1 torn-down tasks quiet over 7 days" \
     "dry run without config previews the 7-day default"
   assert_task_untouched "$home" done-task "dry run"
   pass "dry run: lists each prunable file with its size, starts no clock, and removes nothing"
@@ -153,7 +153,7 @@ test_clock_starts_at_first_sight_of_teardown() {
   [ -z "$out" ] || fail "a clock three days old is inside a 7-day retention: $out"
   backdate 8 "$home/state/data-media-retention/done-task.retired"
   out=$(run_prune "$home")
-  assert_contains "$out" "removed 4 files" "a clock past the retention lets the prune run: $out"
+  assert_contains "$out" "removed 3 files" "a clock past the retention lets the prune run: $out"
   for f in $PRUNABLE; do
     assert_absent "$home/data/done-task/$f" "the torn-down, quiet task's $f should be removed"
   done
@@ -185,7 +185,7 @@ test_configured_run_removes_only_media_of_retired_quiet_tasks() {
   start_clock "$home" gone-task
 
   out=$(run_prune "$home")
-  assert_equals "BOOTSTRAP_INFO: data media retention: removed 4 files (0 MiB) from 1 torn-down tasks quiet over 7 days" \
+  assert_equals "BOOTSTRAP_INFO: data media retention: removed 3 files (0 MiB) from 1 torn-down tasks quiet over 7 days" \
     "$out" "a configured run reports one summary line"
   for f in $PRUNABLE; do
     assert_absent "$home/data/done-task/$f" "the torn-down, quiet task's $f should be removed"
@@ -320,7 +320,7 @@ test_bootstrap_runs_prune_only_when_locked() {
   assert_task_untouched "$home" done-task "the read-only session path"
 
   out=$(run_bootstrap "$fb" "$home")
-  assert_contains "$out" "BOOTSTRAP_INFO: data media retention: removed 4 files" \
+  assert_contains "$out" "BOOTSTRAP_INFO: data media retention: removed 3 files" \
     "the locked local pass should run the prune and relay its summary: $out"
   for f in $PRUNABLE; do
     assert_absent "$home/data/done-task/$f" "the locked pass should remove $f"
