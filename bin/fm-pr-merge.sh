@@ -201,22 +201,23 @@
 # section, read live from the same view (GitHub and Forgejo body, GitLab
 # description), decides whether standing authority may merge it.
 # pr_body_merge_danger below owns the reading; it fails closed. A two-way door
-# merges as before. A body with no Door line and no Merge Danger section merges
-# as before with a notice, because older PRs and other tools carry none. Every
-# other reading is a one-way door: a one-way line anywhere outside code blocks
-# and HTML comments, an unfilled or self-contradicting value, or a Merge Danger
-# section without a Door line. The merge is refused, the task is held for the
+# merges as before. A body with no Door line, no Merge Danger section, and no
+# mention of a one-way door merges as before with a notice, because older PRs
+# and other tools carry none. Every other reading is a one-way door, including
+# a body that could not be read. The merge is refused, the task meta records
+# one_way_hold=<url> <head> for the verified head, and the task is held for the
 # captain through bin/fm-captain-hold.sh as an arjun-only call whose reason
 # names the PR and its Blast Radius line, so bearings shows it as his merge
-# call, the task meta records one_way_hold=<url>, and nothing reaches the
-# forge. A later run without --one-way-approved refuses without holding again.
-# An attended --one-way-approved, passed only on the captain's explicit current
-# word to merge that PR, merges it once that recorded hold is released through
-# `answer --release`; it refuses when no hold was recorded for the URL, never
-# skips any other gate, and, like --allow-red, is refused while the
-# away-posture record exists. Standing yolo never supplies it. Once the forge
-# accepts such a merge it is appended to state/one-way-door-merges.log as one
-# tab-separated line of epoch, task id, URL, verified head, and blast radius.
+# call; nothing reaches the forge. A later run at that head without
+# --one-way-approved refuses without holding again, while a push makes the new
+# head a new merge call. An attended --one-way-approved, passed only on the
+# captain's explicit current word to merge that PR, merges it once that hold
+# is released through `answer --release`; it refuses when no hold was recorded
+# for the URL at the verified head, never skips any other gate, and, like
+# --allow-red, is refused while the away-posture record exists. Standing yolo
+# never supplies it. Once the forge confirms such a merge landed it is appended
+# to state/one-way-door-merges.log as one tab-separated line of epoch, task id,
+# URL, verified head, and blast radius.
 # Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [--allow-no-pipeline] [--waive-review <reason>] [--one-way-approved] [-- <extra forge merge args>]
 #
 # On GitLab, this script confirms the MR is actually merged before reporting it;
@@ -747,7 +748,8 @@ FIELDS
   fi
   FM_PR_MERGE_HEAD=$live_head
   FM_PR_GITLAB_ASYNC_CONFIGURED=$async_configured
-  FM_PR_BODY=$(printf '%s' "$json" | jq -r '.description // "" | tostring' 2>/dev/null) || FM_PR_BODY=
+  FM_PR_BODY_READ=false
+  FM_PR_BODY=$(printf '%s' "$json" | jq -r '.description // "" | tostring' 2>/dev/null) && FM_PR_BODY_READ=true
 }
 
 # Pre-merge conditions for a Forgejo pull request, read from one live view of
@@ -877,7 +879,8 @@ FIELDS
   printf 'verified: %s is open and mergeable, with a successful combined status at head %s\n' \
     "$URL" "$live_head" >&2
   FM_PR_MERGE_HEAD=$live_head
-  FM_PR_BODY=$(printf '%s' "$pr_json" | jq -r '.body // "" | tostring' 2>/dev/null) || FM_PR_BODY=
+  FM_PR_BODY_READ=false
+  FM_PR_BODY=$(printf '%s' "$pr_json" | jq -r '.body // "" | tostring' 2>/dev/null) && FM_PR_BODY_READ=true
 }
 
 # The caller's own extra arguments may only name a merge method, in the same
@@ -1233,7 +1236,8 @@ EOF
     "$URL" "$live_head" >&2
   FM_PR_MERGE_HEAD=$live_head
   FM_PR_GITHUB_BASE=$base
-  FM_PR_BODY=$(printf '%s' "$json" | jq -r '.body // "" | tostring' 2>/dev/null) || FM_PR_BODY=
+  FM_PR_BODY_READ=false
+  FM_PR_BODY=$(printf '%s' "$json" | jq -r '.body // "" | tostring' 2>/dev/null) && FM_PR_BODY_READ=true
 }
 
 # Read one live GitHub pull request view after gh returns. The selected
@@ -1540,10 +1544,13 @@ require_current_away_authority() {
 # The Merge Danger reading (see the header). Reads the PR body on stdin and
 # prints the door (one-way, two-way, missing, or unreadable), the first Blast
 # Radius value, and why an unreadable door is unreadable, tab-separated.
-# Fenced code (each fence closed only by its own marker, as CommonMark does)
-# and HTML comments are examples, not the door. A Door line counts wherever it
-# stands outside those, in any list, heading, quote, emphasis, or table form,
-# so a stray one outvotes nothing toward a merge: any one-way reading holds.
+# It approximates no Markdown structure, so nothing a body nests can hide a
+# line: a Door line counts wherever it stands, code blocks and comments
+# included, and only leading list, task-box, quote, and heading markers and
+# emphasis are stripped. It fails closed, so any one-way or unreadable Door line
+# outvotes every two-way one, and a body with no Door line that still names a
+# Merge Danger section or a one-way door anywhere is unreadable rather than
+# missing; a wrong reading costs the captain a question, never a merge.
 pr_body_merge_danger() {
   awk '
     function classify(value,    one, two) {
@@ -1554,61 +1561,20 @@ pr_body_merge_danger() {
       else if (value ~ /^one[- ]?way([^a-z]|$)/) seen_one = 1
       else bad = 1
     }
-    function trim(text) {
-      sub(/^[[:space:]]+/, "", text)
-      sub(/[[:space:]]+$/, "", text)
-      return text
-    }
-    { sub(/\r$/, "") }
-    fence {
-      if ($0 ~ ("^ ? ? ?" fence_marker "+[[:space:]]*$")) fence = 0
-      next
-    }
-    comment {
-      i = index($0, "-->")
-      if (!i) next
-      $0 = substr($0, i + 3)
-      comment = 0
-    }
     {
-      while ((i = index($0, "<!--")) > 0) {
-        rest = substr($0, i + 4)
-        j = index(rest, "-->")
-        if (j) $0 = substr($0, 1, i - 1) substr(rest, j + 3)
-        else { $0 = substr($0, 1, i - 1); comment = 1; break }
-      }
-    }
-    match($0, /^ ? ? ?(```+|~~~+)/) {
-      marker = substr($0, RSTART, RLENGTH)
-      sub(/^ +/, "", marker)
-      if (substr(marker, 1, 1) == "~" || index(substr($0, RSTART + RLENGTH), "`") == 0) {
-        fence = 1
-        fence_marker = marker
-        next
-      }
-    }
-    {
+      sub(/\r$/, "")
       line = $0
-      gsub(/[*_`]/, "", line)
-      line = trim(line)
-      if (substr(line, 1, 1) == "|") {
-        cells = split(line, cell, "|")
-        name = ""
-        value = ""
-        for (k = 2; k <= cells; k++) {
-          if (trim(cell[k]) == "") continue
-          if (name == "") name = trim(cell[k])
-          else if (value == "") value = trim(cell[k])
-        }
-        sub(/:$/, "", name)
-        line = name ": " value
-      }
-      while (line ~ /^([>#+-]|[0-9]+[.)])/) {
-        sub(/^([>#+-]+|[0-9]+[.)])[[:space:]]*/, "", line)
+      gsub(/\*\*|__|`/, "", line)
+      sub(/^[[:space:]]+/, "", line)
+      while (line ~ /^([>#|*+-]|[0-9]+[.)]|\[[ xX]\])/) {
+        sub(/^([>#|*+-]+|[0-9]+[.)]|\[[ xX]\])[[:space:]]*/, "", line)
       }
       key = tolower(line)
+      gsub(/[*_]/, "", key)
+      sub(/[[:space:]]*\|[[:space:]]*/, ": ", key)
     }
-    key ~ /^merge[[:space:]]+danger/ { danger = 1 }
+    key ~ /merge[[:space:]]+danger/ { danger = 1 }
+    key ~ /one[- ]?way/ && key ~ /door/ { mentioned = 1 }
     key ~ /^door[[:space:]]*:/ {
       value = key
       sub(/^door[[:space:]]*:[[:space:]]*/, "", value)
@@ -1617,6 +1583,7 @@ pr_body_merge_danger() {
     key ~ /^blast[[:space:]]+radius[[:space:]]*:/ && blast == "" {
       blast = line
       sub(/^[^:]*:[[:space:]]*/, "", blast)
+      sub(/[[:space:]]*\|[[:space:]]*$/, "", blast)
       gsub(/\t/, " ", blast)
     }
     END {
@@ -1625,7 +1592,7 @@ pr_body_merge_danger() {
       else if (seen_one) door = "one-way"
       else if (seen_two) door = "two-way"
       else if (danger) { door = "unreadable"; why = "its Merge Danger section has no Door line" }
-      else if (fence || comment) { door = "unreadable"; why = "an unclosed code block or comment may hide its Door line" }
+      else if (mentioned) { door = "unreadable"; why = "it names a one-way door without a Door line" }
       else door = "missing"
       printf "%s\t%s\t%s\n", door, blast, why
     }
@@ -1633,19 +1600,30 @@ pr_body_merge_danger() {
 }
 
 # Whether this task's metadata records a captain hold placed for this PR's
-# one-way door, which is what --one-way-approved has to follow.
+# one-way door at the head being merged, which is what --one-way-approved has
+# to follow: a push after the captain was asked is a new merge call.
 one_way_hold_recorded() {
-  grep -qxF "one_way_hold=$URL" "$META" 2>/dev/null
+  grep -qxF "one_way_hold=$URL $FM_PR_MERGE_HEAD" "$META" 2>/dev/null
 }
 
-record_one_way_hold() {
-  local lock status=0
+# Record, or with "retract" remove, this PR head's one_way_hold line under the
+# task metadata lock.
+record_one_way_hold() {  # [retract]
+  local lock status=0 tmp
   lock=$(fm_meta_lock_path "$META") || return 1
   fm_lock_acquire_wait "$lock" || return 1
-  if [ -f "$META" ] && [ ! -L "$META" ]; then
-    one_way_hold_recorded || printf 'one_way_hold=%s\n' "$URL" >> "$META" || status=1
-  else
+  if [ ! -f "$META" ] || [ -L "$META" ]; then
     status=1
+  elif [ "${1:-}" = retract ]; then
+    if tmp=$(mktemp "$STATE/.$ID.meta.one-way.XXXXXX"); then
+      grep -vxF "one_way_hold=$URL $FM_PR_MERGE_HEAD" "$META" > "$tmp" || true
+      fm_backlog_atomic_transition publish "$tmp" "$META" "task record" "$STATE" \
+        || { rm -f "$tmp"; status=1; }
+    else
+      status=1
+    fi
+  else
+    one_way_hold_recorded || printf 'one_way_hold=%s %s\n' "$URL" "$FM_PR_MERGE_HEAD" >> "$META" || status=1
   fi
   fm_lock_release "$lock" || status=1
   return "$status"
@@ -1657,11 +1635,16 @@ record_one_way_hold() {
 # control lock first, because bin/fm-captain-hold.sh takes that same lock to
 # place the hold.
 FM_PR_BODY=
+FM_PR_BODY_READ=false
 FM_PR_ONE_WAY_BLAST=
 FM_PR_ONE_WAY_MERGE=false
 require_door_authority() {
   local reading door blast why reason hold_status=0
-  reading=$(printf '%s\n' "$FM_PR_BODY" | pr_body_merge_danger)
+  if [ "$FM_PR_BODY_READ" = true ]; then
+    reading=$(printf '%s\n' "$FM_PR_BODY" | pr_body_merge_danger)
+  else
+    reading=$(printf 'unreadable\t\tits body could not be read')
+  fi
   door=${reading%%$'\t'*}
   reading=${reading#*$'\t'}
   blast=${reading%%$'\t'*}
@@ -1686,7 +1669,7 @@ require_door_authority() {
       FM_PR_ONE_WAY_MERGE=true
       return 0
     fi
-    printf 'error: refusing to merge %s: --one-way-approved follows only a captain hold placed for this one-way door, and task %s records none; run without it first to bring the captain this merge call\n' "$URL" "$ID" >&2
+    printf 'error: refusing to merge %s: --one-way-approved follows only a captain hold placed for this one-way door at head %s, and task %s records none; run without it first to bring the captain this merge call\n' "$URL" "$FM_PR_MERGE_HEAD" "$ID" >&2
     return 1
   fi
   printf 'error: refusing to merge %s under standing authority\n' "$URL" >&2
@@ -1696,7 +1679,13 @@ require_door_authority() {
     printf '  - %s, so it is read as a one-way door\n' "$why" >&2
   fi
   if one_way_hold_recorded; then
-    printf 'error: task %s already carries the captain'"'"'s answer to this merge call; re-run with --one-way-approved only if his word was to merge it\n' "$ID" >&2
+    printf 'error: task %s already brought the captain this merge call at head %s; re-run with --one-way-approved only once his answer is recorded and his word was to merge it\n' "$ID" "$FM_PR_MERGE_HEAD" >&2
+    return 1
+  fi
+  # Recorded before the hold, under the control lock, so a concurrent run sees
+  # the call as already brought instead of placing a second hold.
+  if ! record_one_way_hold; then
+    printf 'error: the one-way door merge call for task %s could not be recorded in its metadata; nothing was held (blast radius: %s)\n' "$ID" "$blast" >&2
     return 1
   fi
   reason="One-way door PR $URL needs your explicit word to merge; blast radius: $blast"
@@ -1706,11 +1695,11 @@ require_door_authority() {
     "$SCRIPT_DIR/fm-captain-hold.sh" hold "$ID" --reason "$reason" --kind arjun-only \
     >/dev/null || hold_status=$?
   if [ "$hold_status" -ne 0 ]; then
-    printf 'error: task %s could not be held for the captain; bring him this merge call yourself (blast radius: %s), and only after his explicit word hold and answer it through bin/fm-captain-hold.sh before re-running with --one-way-approved\n' "$ID" "$blast" >&2
-    return 1
-  fi
-  if ! record_one_way_hold; then
-    printf 'error: task %s is now held for the captain'"'"'s merge call (blast radius: %s), but the hold could not be recorded in its metadata, so --one-way-approved will refuse until a re-run records it\n' "$ID" "$blast" >&2
+    if record_one_way_hold retract; then
+      printf 'error: task %s could not be held for the captain; bring him this merge call yourself (blast radius: %s), and re-run once the hold can be placed\n' "$ID" "$blast" >&2
+    else
+      printf 'actionable: task %s could not be held for the captain, and its one_way_hold metadata line for head %s could not be retracted, so --one-way-approved would pass without his answer; remove that line before anything else (blast radius: %s)\n' "$ID" "$FM_PR_MERGE_HEAD" "$blast" >&2
+    fi
     return 1
   fi
   printf 'error: task %s is now held for the captain'"'"'s merge call (blast radius: %s)\n' "$ID" "$blast" >&2
@@ -2046,7 +2035,6 @@ case "$PROVIDER" in
     if [ "$merge_status" -eq 0 ]; then
       FM_PR_GITHUB_MERGE_ACCEPTED=true
       log_code_review_waiver
-      log_one_way_merge
       persist_accepted_merge_authority || exit 1
       fm_afk_contract_lock_release || true
       fm_lock_release "$MERGE_CONTROL_LOCK" || true
@@ -2073,6 +2061,7 @@ case "$PROVIDER" in
     if [ "$FM_PR_GITHUB_MERGED" = true ]; then
       printf 'verified: %s is merged (state=%s, merged=%s, isInMergeQueue=%s)\n' \
         "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED"
+      log_one_way_merge
     elif [ "$FM_PR_GITHUB_QUEUED" = true ]; then
       printf 'verified: %s is queued (state=%s, merged=%s, isInMergeQueue=%s)\n' \
         "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED"
@@ -2109,7 +2098,6 @@ case "$PROVIDER" in
       MERGE_CONTROL_LOCK=
       exit "$merge_status"
     fi
-    log_one_way_merge
     persist_accepted_merge_authority || exit 1
     fm_afk_contract_lock_release || true
     fm_lock_release "$MERGE_CONTROL_LOCK" || true
@@ -2117,6 +2105,7 @@ case "$PROVIDER" in
     gitlab_confirm_rc=0
     gitlab_confirm_merged || gitlab_confirm_rc=$?
     [ "$gitlab_confirm_rc" -eq 0 ] || exit 0
+    log_one_way_merge
     ;;
   forgejo)
     forgejo_reject_unsupported_args "$@" || exit 1
