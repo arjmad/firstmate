@@ -1,0 +1,8 @@
+2026-10-26: Arjun chose "matt-pr A" in the helm.
+Every coding agent writes its PR body with Matt Pocock's pr template, whose Merge Danger section names the door (`**Door:** one-way|two-way`) and the blast radius.
+Firstmate brings Arjun any PR marked a one-way door before merging it, even in a `yolo` project where it would otherwise merge on its own, because a one-way door cannot be walked back.
+Two-way PRs, and PRs with no Door line, keep merging as before.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| One-way door merge gate: the live PR body's Door line decides; a one-way or unreadable door refuses standing authority and holds the task as an arjun-only captain call naming the PR and its blast radius, an attended `--one-way-approved` merges it on the captain's word, and a missing Door line merges with a notice | `bin/fm-pr-merge.sh` (`pr_body_merge_danger`, `require_door_authority`, `--one-way-approved`), `tests/fm-pr-merge.test.sh` (door cases) | `bin/fm-pr-merge.sh` (header, argument parsing, `require_current_away_authority`, the three verify functions' body read, each forge's merge path), `docs/task-lifecycle.md`, `.agents/skills/ship-landing/SKILL.md`, `docs/scripts.md` | carried | 45dd50a5 |
