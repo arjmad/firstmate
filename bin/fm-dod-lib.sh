@@ -497,9 +497,10 @@ EOF
 # GitHub done: without `checks green`.
 fm_dod_checks_green_block() {
   cat <<EOF
-Then wait for the PR's checks at your pushed HEAD: run \`gh-axi pr checks <number> --watch --fail-fast\`, and while it is still waiting append \`gate-wait [at=<epoch>]: checks on PR {url}\` once instead of reporting done.
-A failing check is yours to fix: push the fix and wait again.
+On a GitHub PR, then wait for its checks at your pushed HEAD: run \`gh-axi pr checks <number> --watch --fail-fast\`, and while it waits append \`gate-wait [at=<epoch>]: checks on PR {url}\` instead of reporting done.
+A failing check is yours to fix: append \`working [at=<epoch>]: fixing {check}\`, push the fix, and wait again.
 A required check that has never reported is missing from that list rather than pending, so also read \`gh-axi pr view <number>\`: a \`merge_state\` of blocked while every listed check is green means a required check has not posted.
+A repository with no checks at all reports none, which leaves nothing to wait for.
 A required \`fleet-gate\` or \`gate\` status posts only from a full \`./check.sh\` run on a clean tree whose HEAD is already pushed: run it after your last push, never as a single-suite run, and with no untracked files left in the tree - the \`findings.json\` that \`/code-review\` writes counts.
 EOF
 }
@@ -617,14 +618,15 @@ When it is implemented and committed, push your branch and open a PR with \`$for
 Before you report done, read the PR back from the forge and confirm it is not a draft $draft_check
 A draft cannot be merged, so a done report on one leaves the merge unasked.
 EOF
-      done_report='PR {url}'
+      done_report='PR {url}` to the status file and stop.'
       if [ "$forge" = none ]; then
         fm_dod_code_review_block direct-PR
         fm_dod_checks_green_block
-        done_report='PR {url} checks green'
+        # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+        done_report='PR {url} checks green` to the status file and stop; for a PR outside GitHub, report `done [at=<epoch>]: PR {url}` instead.'
       fi
       cat <<EOF
-Then append \`done [at=<epoch>]: $done_report\` to the status file and stop.
+Then append \`done [at=<epoch>]: $done_report
 That \`done:\` is accepted only when this copy's HEAD - your latest commit - is pushed to your PR branch; the check tests that commit, not merely that a branch moved.
 If you deliberately keep the PR a draft, append \`paused [at=<epoch>]: {why the draft is held}\` instead of done.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
@@ -915,7 +917,7 @@ fm_dod_named_head_reachable_outside_worktree() {  # <worktree> <project> <mode> 
 # pr_head=, and the merge-notified marker; <meta> may be a captured copy
 # (bin/fm-fleet-snapshot.sh), so the marker is read from <state>.
 fm_dod_accept_ship_done() {  # <kind> <mode> <worktree> <project> <line> [<state> <id> <meta>]
-  local kind=$1 mode=$2 wt=$3 project=$4 line=$5 state=${6:-} id=${7:-} meta=${8:-} url sha gerrit
+  local kind=$1 mode=$2 wt=$3 project=$4 line=$5 state=${6:-} id=${7:-} meta=${8:-} url pr_url sha gerrit
   fm_dod_should_gate_ship_done "$kind" "$mode" "$line" || return 0
   if [ -n "$meta" ] && [ "$(fm_dod_meta_value "$meta" forge)" = external ]; then
     fm_dod_accept_external_review_done "$wt" "$project" "$line" "$meta"
@@ -925,7 +927,8 @@ fm_dod_accept_ship_done() {  # <kind> <mode> <worktree> <project> <line> [<state
     && fm_dod_recorded_pr_on_forge "$state" "$id" "$meta" "$mode" "$url"; then
     return 0
   fi
-  if [ "$mode" = direct-PR ] && [ -n "$url" ] && fm_pr_url_parse "$url" && [ "$FM_PR_PROVIDER" = github ] \
+  pr_url=$(status_line_note "$line" | grep -Eo 'https?://[^[:space:]]+/pull/[0-9]+' | head -n 1)
+  if [ "$mode" = direct-PR ] && [ -n "$pr_url" ] && fm_pr_url_parse "$pr_url" && [ "$FM_PR_PROVIDER" = github ] \
     && ! fm_dod_note_reports_ci_ready "$(status_line_note "$line")"; then
     printf '%s\n' "a direct-PR GitHub ready report is \`PR <url> checks green\`, given only once every required check at the pushed HEAD has passed"
     return 1

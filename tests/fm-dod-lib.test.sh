@@ -271,6 +271,9 @@ test_direct_pr_github_done_requires_checks_green() {
   assert_contains "$reason" 'ready report is `PR <url> checks green`' "the refusal did not name the checks-green report"
   accept_done ship direct-PR "$wt" "$repo" "done: PR https://github.com/o/r/pull/5 checks green" \
     || fail "a pushed direct-PR GitHub done reporting checks green was refused"
+  reason=$(accept_done ship direct-PR "$wt" "$repo" "done: opened PR https://github.com/o/r/pull/5 for review")
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a direct-PR GitHub done naming its URL mid-note skipped the checks-green report"
   accept_done ship direct-PR "$wt" "$repo" "done: PR https://gitlab.com/o/r/-/merge_requests/5" \
     || fail "a pushed direct-PR GitLab done was held to the GitHub checks-green report"
   pass "a direct-PR GitHub done must report checks green; other forges keep the plain report"
@@ -492,9 +495,6 @@ EOF
   pass "promotion keeps a scout's recorded base branch and refuses local-only for it"
 }
 
-# A PR-based DoD on GitHub hands the worker the code review step before its
-# done report, naming a review script that runs; a forge where
-# /code-review --comment cannot post, and local-only, carry none.
 # A direct-PR GitHub DoD waits for the PR's checks, names the required-gate
 # trap, and asks for the checks-green report; other forges keep the plain one.
 test_direct_pr_dod_waits_for_checks_green() {
@@ -506,10 +506,13 @@ test_direct_pr_dod_waits_for_checks_green() {
   assert_grep 'merge_state' "$out" "direct-PR DoD does not catch a required check that never reported"
   assert_grep 'fleet-gate' "$out" "direct-PR DoD does not name the fleet-gate trap"
   assert_grep 'findings.json' "$out" "direct-PR DoD does not name the untracked review output"
+  assert_grep 'working [at=<epoch>]: fixing {check}' "$out" "direct-PR DoD leaves a fixing worker declared as waiting"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'for a PR outside GitHub, report `done [at=<epoch>]: PR {url}`' "$out" "direct-PR DoD holds a non-GitHub PR to the GitHub report"
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
   assert_grep 'Then append `done [at=<epoch>]: PR {url} checks green`' "$out" "direct-PR DoD does not ask for checks green"
   review_line=$(grep -n '^Before that done report, give a code-changing GitHub PR its code review' "$out" | cut -d: -f1)
-  checks_line=$(grep -n "^Then wait for the PR's checks" "$out" | cut -d: -f1)
+  checks_line=$(grep -n '^On a GitHub PR, then wait for its checks' "$out" | cut -d: -f1)
   done_line=$(grep -n '^Then append `done' "$out" | cut -d: -f1)
   [ "$review_line" -lt "$checks_line" ] && [ "$checks_line" -lt "$done_line" ] \
     || fail "the checks wait must follow the review and precede the done report"
@@ -521,6 +524,9 @@ test_direct_pr_dod_waits_for_checks_green() {
   pass "direct-PR GitHub DoD waits for checks and reports checks green"
 }
 
+# A PR-based DoD on GitHub hands the worker the code review step before its
+# done report, naming a review script that runs; a forge where
+# /code-review --comment cannot post, and local-only, carry none.
 test_pr_based_dod_carries_the_code_review_step() {
   local mode out cli review_line done_line
   for mode in direct-PR no-mistakes; do
