@@ -484,6 +484,11 @@ test_pr_based_dod_carries_the_code_review_step() {
     assert_grep '/code-review medium --comment <number>' "$out" "$mode: DoD does not name the review skill and level"
     assert_grep "claude -p '/code-review medium --comment <number>'" "$out" "$mode: DoD does not give a harness without the skill its headless path"
     assert_grep "$cli record <pr-url>" "$out" "$mode: DoD does not name the record step"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep 'Pushes that fix or answer this review'"'"'s findings are covered by the one `record` you run after your last push' "$out" \
+      "$mode: DoD does not say one record after the last push covers the fix round"
+    assert_grep "$cli record <pr-url> --carry" "$out" "$mode: DoD does not offer the carry for a small follow-up"
+    assert_no_grep "A later push that changes the PR's diff needs the review again" "$out" "$mode: DoD still says every fix push needs a new review"
     review_line=$(grep -n '^Before that done report, give a code-changing GitHub PR its code review' "$out" | cut -d: -f1)
     done_line=$(grep -n '^Then append `done' "$out" | cut -d: -f1)
     [ "$review_line" -lt "$done_line" ] || fail "$mode: the review step comes after the done report"

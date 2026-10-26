@@ -97,6 +97,10 @@ case "$1 $2" in
     fi
     cat "$FM_TEST_DIR/diff"
     ;;
+  "api repos/example/repo/compare/"*)
+    [ -f "$FM_TEST_DIR/compare.json" ] || exit 1
+    gh_jq "$FM_TEST_DIR/compare.json" "$@"
+    ;;
   "pr view") cat "$FM_TEST_DIR/head" ;;
   "pr comment")
     [ ! -f "$FM_TEST_DIR/comment-fail" ] || exit 1
@@ -470,6 +474,122 @@ test_status_with_the_fleet_classifier() {
   pass "fm-code-review status with the fleet classifier: Thor exempt, seed reviewed, a self-lowering table reviewed"
 }
 
+# A trusted full record for an earlier diff at <head>, plus optional extra
+# comment bodies. Args: dir head [body...]
+REVIEWED_HEAD=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+OLD_DIFF=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+full_record() {
+  local dir=$1 head=$2
+  shift 2
+  jq -c --arg b "<!-- fm-code-review v1 diff=$OLD_DIFF head=$head -->
+Code review: ran." '. + [{author_association: "OWNER", body: $b}]' "$dir/comments.json" > "$dir/comments.next"
+  mv "$dir/comments.next" "$dir/comments.json"
+}
+
+# The compare between the reviewed head and the PR head: status, then one
+# "path changes [none]" argument per file ("none" means no text patch).
+# Args: dir status file...
+write_compare() {
+  local dir=$1 status=$2 spec
+  shift 2
+  for spec in "$@"; do printf '%s\n' "$spec"; done \
+    | jq -R 'split(" ") | {filename: .[0], changes: (.[1] | tonumber)} + (if .[2] == "none" then {} else {patch: "@@"} end)' \
+    | jq -sc --arg s "$status" '{status: $s, files: .}' > "$dir/compare.json"
+}
+
+test_record_carry_covers_a_small_follow_up() {
+  local dir id
+  dir=$(make_case carry-small bin/tool.sh)
+  id=$(diff_id "$dir")
+  full_record "$dir" "$REVIEWED_HEAD"
+  write_compare "$dir" ahead 'bin/tool.sh 4' 'tests/tool.test.sh 6' 'docs/guide.md 80'
+  run_case "$dir" record "$URL" --carry
+  expect_code 0 "$RC" "carry-small: ten changed lines outside exempt paths should carry"
+  [ "$OUT" = "reviewed: diff $id of $URL carries a code review record" ] || fail "carry-small: got '$OUT'"
+  assert_grep "api repos/example/repo/compare/$REVIEWED_HEAD...$HEAD_SHA" "$dir/gh.log" "carry-small: did not compare the reviewed head with the PR head"
+  jq -r '.[-1].body' "$dir/comments.json" > "$dir/body"
+  [ "$(sed -n 1p "$dir/body")" = "<!-- fm-code-review v1 diff=$id head=$HEAD_SHA -->" ] || fail "carry-small: marker line was $(sed -n 1p "$dir/body")"
+  [ "$(sed -n 2p "$dir/body")" = "<!-- fm-code-review-carry from=$REVIEWED_HEAD lines=10 -->" ] || fail "carry-small: carry line was $(sed -n 2p "$dir/body")"
+  run_case "$dir" status "$URL"
+  expect_code 0 "$RC" "carry-small: a carried record must read as reviewed"
+
+  dir=$(make_case carry-exempt bin/tool.sh)
+  full_record "$dir" "$REVIEWED_HEAD"
+  write_compare "$dir" ahead 'docs/fork-decisions.md 400' 'data/x.csv 900'
+  run_case "$dir" record "$URL" --carry
+  expect_code 0 "$RC" "carry-exempt: an exempt-only follow-up of any size should carry"
+  pass "fm-code-review record --carry carries the last full review over a small or exempt-only follow-up"
+}
+
+test_record_carry_refuses_what_it_cannot_cover() {
+  local dir
+  dir=$(make_case carry-none bin/tool.sh)
+  write_compare "$dir" ahead 'bin/tool.sh 1'
+  run_case "$dir" record "$URL" --carry
+  expect_code 1 "$RC" "carry-none: a PR with no full record has nothing to carry"
+  assert_contains "$ERR" 'no full code review record to carry' "carry-none: error did not say why"
+
+  dir=$(make_case carry-large bin/tool.sh)
+  full_record "$dir" "$REVIEWED_HEAD"
+  write_compare "$dir" ahead 'bin/tool.sh 6' 'bin/other.sh 5' 'README.md 50'
+  run_case "$dir" record "$URL" --carry
+  expect_code 1 "$RC" "carry-large: eleven changed lines outside exempt paths must not carry"
+  assert_contains "$ERR" 'changes 11 lines outside exempt paths, more than the carry cap of 10' "carry-large: error did not name the count and cap"
+
+  dir=$(make_case carry-rebased bin/tool.sh)
+  full_record "$dir" "$REVIEWED_HEAD"
+  write_compare "$dir" diverged 'bin/tool.sh 1'
+  run_case "$dir" record "$URL" --carry
+  expect_code 1 "$RC" "carry-rebased: a head that does not descend from the reviewed head must not carry"
+  assert_contains "$ERR" 'does not descend from the reviewed head' "carry-rebased: error did not say why"
+
+  dir=$(make_case carry-binary bin/tool.sh)
+  full_record "$dir" "$REVIEWED_HEAD"
+  write_compare "$dir" ahead 'bin/logo.png 0 none'
+  run_case "$dir" record "$URL" --carry
+  expect_code 1 "$RC" "carry-binary: a non-exempt change without a text patch must not carry"
+
+  dir=$(make_case carry-renamed bin/tool.sh)
+  full_record "$dir" "$REVIEWED_HEAD"
+  write_compare "$dir" ahead 'docs/tool.md 1'
+  jq -c '.files[0].previous_filename = "bin/tool.sh"' "$dir/compare.json" > "$dir/compare.next" && mv "$dir/compare.next" "$dir/compare.json"
+  run_case "$dir" record "$URL" --carry
+  expect_code 0 "$RC" "carry-renamed: a one-line rename out of code should count its old name and carry under the cap"
+  assert_contains "$(jq -r '.[-1].body' "$dir/comments.json")" 'lines=1 -->' "carry-renamed: the rename's lines were not counted"
+
+  dir=$(make_case carry-unreadable bin/tool.sh)
+  full_record "$dir" "$REVIEWED_HEAD"
+  run_case "$dir" record "$URL" --carry
+  expect_code 2 "$RC" "carry-unreadable: a compare that cannot be read should exit 2"
+
+  for dir in "$TMP_ROOT"/carry-none "$TMP_ROOT"/carry-large "$TMP_ROOT"/carry-rebased "$TMP_ROOT"/carry-binary "$TMP_ROOT"/carry-unreadable; do
+    assert_no_grep 'pr comment' "$dir/gh.log" "$(basename "$dir"): a refused carry posted a record"
+  done
+  pass "fm-code-review record --carry refuses no full record, the cap, a rebase, an unmeasurable file, and an unreadable compare"
+}
+
+# A carry measures from the last full review, never from an earlier carry, so
+# a chain of small carries cannot add up past the cap unreviewed.
+test_record_carry_measures_from_the_last_full_review() {
+  local dir carried=cccccccccccccccccccccccccccccccccccccccc
+  dir=$(make_case carry-chain bin/tool.sh)
+  full_record "$dir" "$REVIEWED_HEAD"
+  jq -c --arg b "<!-- fm-code-review v1 diff=$OLD_DIFF head=$carried -->
+<!-- fm-code-review-carry from=$REVIEWED_HEAD lines=9 -->
+Carried." '. + [{author_association: "OWNER", body: $b}]' "$dir/comments.json" > "$dir/comments.next"
+  mv "$dir/comments.next" "$dir/comments.json"
+  jq -c '. + [{author_association: "NONE", body: "<!-- fm-code-review v1 diff=\($d) head=\($h) -->"}]' \
+    --arg d "$OLD_DIFF" --arg h dddddddddddddddddddddddddddddddddddddddd "$dir/comments.json" > "$dir/comments.next"
+  mv "$dir/comments.next" "$dir/comments.json"
+  write_compare "$dir" ahead 'bin/tool.sh 3'
+  run_case "$dir" record "$URL" --carry
+  expect_code 0 "$RC" "carry-chain: the follow-up within the cap should carry"
+  assert_grep "api repos/example/repo/compare/$REVIEWED_HEAD...$HEAD_SHA" "$dir/gh.log" "carry-chain: did not measure from the last full review"
+  assert_no_grep "compare/$carried" "$dir/gh.log" "carry-chain: measured from an earlier carry"
+  assert_no_grep "compare/dddd" "$dir/gh.log" "carry-chain: measured from an untrusted author's record"
+  pass "fm-code-review record --carry measures from the last trusted full review, not an earlier carry"
+}
+
 test_classify_exempts_records_receipts_data_seed_and_markdown_only
 test_status_with_a_table_asks_the_classifier_for_the_tier
 test_status_with_a_table_fails_closed
@@ -478,3 +598,6 @@ test_status_reads_exempt_unreviewed_and_reviewed
 test_status_handles_github_limits
 test_status_refuses_unreadable_and_non_github
 test_record_posts_once_for_the_current_diff
+test_record_carry_covers_a_small_follow_up
+test_record_carry_refuses_what_it_cannot_cover
+test_record_carry_measures_from_the_last_full_review

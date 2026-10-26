@@ -42,6 +42,23 @@
 # so a stranger's comment on a public repository cannot pose as a record. The
 # record is the reviewer's attestation; nothing here re-derives the review.
 #
+# A tiny follow-up pushed after a record may carry that review instead of
+# running a new one (Arjun's 2026-10-26 relaxation of the 2026-10-17 gate).
+# `record --carry` compares the head of the last full record (one whose comment
+# carries no carry marker) with the PR's current head through GitHub's compare
+# API, and carries the review only when the current head descends from that
+# head and the follow-up, counted cumulatively since that full review so a
+# chain of carries cannot grow past it, changes only exempt paths or at most
+# CODE_REVIEW_CARRY_LINES (10) added plus deleted lines in the rest. Ten lines
+# covers the follow-ups that retro measured looping reviews over - a test-count
+# bump, a one-line reword, a fork-decisions PR number - while any real change
+# of logic still gets a full review. A rebase, a non-exempt file GitHub shows no
+# text patch for, or a compare listing at its 300-file cap is refused. A carried
+# record adds the line
+#   <!-- fm-code-review-carry from=<full-record head> lines=<n> -->
+# after the marker, so status and bin/fm-pr-merge.sh read it as an ordinary
+# record and the next carry still measures from the full review.
+#
 # GitHub only: /code-review --comment posts to GitHub pull requests, so a
 # GitLab or Forgejo URL is refused here and bin/fm-pr-merge.sh does not apply
 # the guard to those forges.
@@ -56,11 +73,13 @@
 #       `unreviewed: diff <id> ...`. Exits 0 for exempt or reviewed, 1 for
 #       unreviewed, and 2 when the pull request cannot be read or the URL is
 #       not a GitHub pull request.
-#   fm-code-review.sh record <pr-url> [--note <text>]
+#   fm-code-review.sh record <pr-url> [--carry] [--note <text>]
 #       Posts the record for the PR's current diff, with <text> as its body
 #       when given, unless the PR is exempt or already reviewed at that diff;
 #       then prints the status line. Exits as status does, except that a
-#       record that cannot be posted or read back exits 1.
+#       record that cannot be posted or read back exits 1. With --carry it
+#       posts only a carried record, and refuses with exit 1 when the
+#       follow-up since the last full record is not one a carry covers.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -211,6 +230,78 @@ code_review_recorded_ids() {
     | sed -n 's/^<!-- fm-code-review v1 diff=\([0-9a-f]\{40,64\}\) head=[0-9a-f]\{40,64\} -->$/\1/p'
 }
 
+CODE_REVIEW_CARRY_LINES=10
+
+# The head of the last record comment from a trusted author that carries no
+# carry marker, or nothing when the PR has none.
+code_review_full_record_head() {
+  gh api --paginate "repos/$FM_PR_OWNER/$FM_PR_REPO/issues/$FM_PR_NUMBER/comments" \
+    --jq '.[] | select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") | .body | gsub("\r"; "") | select(test("(^|\n)<!-- fm-code-review-carry ") | not) | capture("(^|\n)<!-- fm-code-review v1 diff=[0-9a-f]{40,64} head=(?<head>[0-9a-f]{40,64}) -->(\n|$)") | .head' \
+    | tail -n 1
+}
+
+CODE_REVIEW_CARRY_FROM=
+CODE_REVIEW_CARRY_COUNT=
+# Sets CODE_REVIEW_CARRY_FROM and CODE_REVIEW_CARRY_COUNT when the follow-up
+# from the last full record to <head> is one a carry covers; returns 1 with
+# the reason on stderr when it is not, and 2 when it cannot be read.
+code_review_carry_check() {  # <head>
+  local head=$1 from listing state count path previous changes patch lines=0
+  if ! from=$(code_review_full_record_head); then
+    echo "error: could not read the comments of $FM_PR_URL" >&2
+    return 2
+  fi
+  if [ -z "$from" ]; then
+    echo "error: $FM_PR_URL has no full code review record to carry; run /code-review and record it" >&2
+    return 1
+  fi
+  if ! listing=$(gh api "repos/$FM_PR_OWNER/$FM_PR_REPO/compare/$from...$head" \
+    --jq '.status, (.files | length), (.files[] | [(.changes | tostring), (if .patch then "text" else "none" end), .filename, (.previous_filename // "")] | @tsv)'); then
+    echo "error: could not compare the reviewed head $from with $head on $FM_PR_URL" >&2
+    return 2
+  fi
+  state=$(printf '%s\n' "$listing" | sed -n 1p)
+  count=$(printf '%s\n' "$listing" | sed -n 2p)
+  case "$state" in
+    ahead|identical) ;;
+    *)
+      echo "error: $head does not descend from the reviewed head $from (compare status ${state:-unknown}), so the follow-up cannot be measured; run /code-review again" >&2
+      return 1
+      ;;
+  esac
+  case "$count" in
+    ''|*[!0-9]*) echo "error: could not read the files changed since $from on $FM_PR_URL" >&2; return 2 ;;
+  esac
+  if [ "$count" -ge 300 ]; then
+    echo "error: the follow-up since $from reaches GitHub's 300-file compare cap, so it cannot be measured; run /code-review again" >&2
+    return 1
+  fi
+  # The optional previous name comes last: read collapses adjacent tabs, so an
+  # empty field anywhere else would shift the ones after it.
+  while IFS=$'\t' read -r changes patch path previous; do
+    [ -n "$path" ] || continue
+    if code_review_path_exempt "$path" && { [ -z "$previous" ] || code_review_path_exempt "$previous"; }; then
+      continue
+    fi
+    if [ "$patch" != text ]; then
+      echo "error: $path changed since the reviewed head $from without a text patch, so its size cannot be measured; run /code-review again" >&2
+      return 1
+    fi
+    case "$changes" in
+      ''|*[!0-9]*) echo "error: could not read the size of $path's change since $from" >&2; return 2 ;;
+    esac
+    lines=$((lines + changes))
+  done <<EOF
+$(printf '%s\n' "$listing" | sed '1,2d')
+EOF
+  if [ "$lines" -gt "$CODE_REVIEW_CARRY_LINES" ]; then
+    echo "error: the follow-up since the reviewed head $from changes $lines lines outside exempt paths, more than the carry cap of $CODE_REVIEW_CARRY_LINES; run /code-review again" >&2
+    return 1
+  fi
+  CODE_REVIEW_CARRY_FROM=$from
+  CODE_REVIEW_CARRY_COUNT=$lines
+}
+
 CODE_REVIEW_DIFF_ID=
 CODE_REVIEW_LINE=
 # Sets CODE_REVIEW_LINE to the status line and returns 0 exempt or reviewed, 1
@@ -266,8 +357,8 @@ code_review_status() {
   return 1
 }
 
-code_review_record() {
-  local note=$1 status=0 head body
+code_review_record() {  # <note> <carry 0|1>
+  local note=$1 carry=$2 status=0 head body marker
   code_review_status || status=$?
   case "$status" in
     0) printf '%s\n' "$CODE_REVIEW_LINE"; return 0 ;;
@@ -278,8 +369,15 @@ code_review_record() {
     echo "error: could not read the head commit of $FM_PR_URL" >&2
     return 1
   fi
+  marker="<!-- fm-code-review v1 diff=$CODE_REVIEW_DIFF_ID head=$head -->"
+  if [ "$carry" = 1 ]; then
+    code_review_carry_check "$head" || return "$?"
+    marker="$marker
+<!-- fm-code-review-carry from=$CODE_REVIEW_CARRY_FROM lines=$CODE_REVIEW_CARRY_COUNT -->"
+    [ -n "$note" ] || note="Code review carried from the full review recorded at $CODE_REVIEW_CARRY_FROM: this follow-up changes $CODE_REVIEW_CARRY_COUNT lines outside exempt paths since then, within the carry cap of $CODE_REVIEW_CARRY_LINES."
+  fi
   [ -n "$note" ] || note="Code review: Claude Code \`/code-review\` (medium) ran on this diff; each finding is posted inline and was fixed or answered in its thread."
-  body="<!-- fm-code-review v1 diff=$CODE_REVIEW_DIFF_ID head=$head -->
+  body="$marker
 $note"
   if ! printf '%s\n' "$body" | gh pr comment "$FM_PR_NUMBER" --repo "$FM_PR_OWNER/$FM_PR_REPO" --body-file - >/dev/null; then
     echo "error: could not post the code review record on $FM_PR_URL" >&2
@@ -313,12 +411,17 @@ case "$cmd" in
     exit "$rc"
     ;;
   record)
-    [ "$#" -ge 1 ] || { echo "error: usage: fm-code-review.sh record <pr-url> [--note <text>]" >&2; exit 2; }
+    [ "$#" -ge 1 ] || { echo "error: usage: fm-code-review.sh record <pr-url> [--carry] [--note <text>]" >&2; exit 2; }
     code_review_parse_url "$1" || exit 2
     shift
     note=
+    carry=0
     while [ "$#" -gt 0 ]; do
       case "$1" in
+        --carry)
+          carry=1
+          shift
+          ;;
         --note)
           [ -n "${2:-}" ] || { echo "error: --note requires text" >&2; exit 2; }
           note=$2
@@ -328,7 +431,7 @@ case "$cmd" in
       esac
     done
     rc=0
-    code_review_record "$note" || rc=$?
+    code_review_record "$note" "$carry" || rc=$?
     exit "$rc"
     ;;
   -h|--help) usage ;;
