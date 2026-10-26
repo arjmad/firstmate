@@ -1,0 +1,5 @@
+PR: #112
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| The Lavish chrome overlay (revision 3) grants the board iframe fullscreen, after Arjun asked on 2026-10-25 to make the drafts sent to him on a board go full screen: a head part prepended to `dist/chrome-client.js` sets `allow="fullscreen"` and `allowfullscreen` before upstream first sets the iframe src, because Chrome reads `allow` only at navigation; apply skips fail-closed once the served iframe carries its own src or follows that script; no upstream lavish-axi PR tracks it yet, and the upstream equivalent is `allow="fullscreen"` on the iframe in the server template, after which this head part is dropped | `bin/lavish-patch/chrome-client-head.js`, `bin/fm-lavish-patch.mjs` (`REVISION`, `split`, `overlaid`, `frameLoadsAfterHead`, header), `tests/fm-lavish-patch.test.sh` | `tests/lib.sh` (`fm_fake_lavish_package` template), `docs/scripts.md`, `bootstrap-diagnostics` skill | carried | 45dd50a5 |

@@ -377,6 +377,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/fork-decisions/",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/forgejo-tea-integration.md",
       "audience": "maintainer-verification"
     },

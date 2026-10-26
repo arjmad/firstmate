@@ -1,0 +1,4 @@
+2026-10-19: Arjun approved the risk-tiered CI policy (`data/risk-tiered-ci-policy/report.md`) in the helm: "retire A+ worker, do everything you recommend", which answered its two held review calls.
+Decision: where a repository's `main` keeps a `risk-tiers.toml`, the tier table alone decides a PR's review: a Tinker PR merges without one and a Shared or Business PR carries one, so that repository's business `seed/` and `data/` files are reviewed; the separate path exemption of the [2026-10-17 decision](2026-10-17-code-review-before-merge.md) applies only to a repository without a table.
+`bin/fm-code-review.sh` asks the fleet's own classifier, `risk-tier --root <clone> --head <PR head>` (the fleet's `docs/risk-tiers.md`), rather than keeping a copy of its rules, so the merge and the fleet's gate give one answer.
+No upstream proposal.

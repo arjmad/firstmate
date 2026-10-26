@@ -1,0 +1,2 @@
+2026-10-26: Arjun widened the [2026-10-16](2026-10-16-question-tool-present-captain.md) presence window from ten minutes to thirty in the helm, picking retro candidate 12 ("30 minutes"), because firstmate often works ten to twenty minutes on a request before it has a question.
+The guard and keeper are otherwise unchanged; the [#115 fork-patch record](2026-10-26-question-pickers-presence-window-thirty-minutes.md) carries it.

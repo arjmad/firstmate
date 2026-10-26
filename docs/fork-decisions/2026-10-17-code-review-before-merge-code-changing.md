@@ -1,0 +1,5 @@
+PR: #86
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| Code review before merge for code-changing GitHub PRs: the path classifier and diff-keyed review record, the merge guard with an attended, logged `--waive-review`, and the ship Definition-of-done review step; from 2026-10-19 a `risk-tiers.toml` on `main`, where one exists, decides through the fleet's `risk-tier` instead of the path classifier (Tinker skips review) | `bin/fm-code-review.sh` (`code_review_has_table`, `code_review_tier`), `bin/fm-pr-merge.sh` (`require_code_review`, `log_code_review_waiver`, `--waive-review`), `bin/fm-dod-lib.sh` (`fm_dod_code_review_block`), `tests/fm-code-review.test.sh` | `bin/fm-pr-merge.sh`, `bin/fm-dod-lib.sh`, `AGENTS.md` section 7, `docs/task-lifecycle.md`, `.agents/skills/ship-landing`, `docs/configuration.md`, `docs/scripts.md`, `bin/fm-test-run.sh`, `tests/fm-pr-merge.test.sh`, `tests/fm-dod-lib.test.sh` | conflicted | 45dd50a5 |

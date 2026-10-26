@@ -203,6 +203,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-doc-audience-check.sh` | Validate the tracked documentation audience inventory, setup routing, and local links |
 | `fm-dod-lib.sh` | Own a ship task's Definition of done block and the named-head gate that accepts its `done:` |
 | `fm-env-lib.sh` | Shared one-key accessor for `.env`-style files |
+| `fm-fork-decisions.sh` | Check the one-file-per-record fork decisions under `docs/fork-decisions/` and print their fork-patch rows as one table |
 | `fm-gemini-lib.sh` | Identify Gemini CLI processes |
 | `fm-herdr-session-cleanup.sh` | Retire stale restored-shell Herdr presentation children at locked session start |
 | `fm-hook-host-lib.sh` | Tell which harness delivered a Claude-shaped hook payload |

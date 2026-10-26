@@ -5,7 +5,8 @@
 #   bin/fm-doc-audience-check.sh
 #   bin/fm-doc-audience-check.sh --root <repo> [--inventory <path>]
 #
-# The inventory owns classification and setup routing.
+# The inventory owns classification and setup routing. A surface path ending
+# in "/" classifies every in-scope tracked file under that directory.
 # This check validates structure only and does not keyword-lint prose.
 set -eu
 
@@ -171,10 +172,27 @@ def validate(root: Path, inventory_path: Path) -> tuple[int, int]:
     if duplicates:
         fail("surfaces classified more than once: " + ", ".join(duplicates))
 
+    # A path ending in "/" classifies every in-scope tracked file under it, so a
+    # directory of records needs no inventory edit per record.
     tracked = set(git_tracked(root, patterns))
-    classified = set(paths)
-    missing = sorted(tracked - classified)
-    extra = sorted(classified - tracked)
+    directories = sorted(path for path in paths if path.endswith("/"))
+    covered: dict[str, str] = {}
+    for path in sorted(tracked):
+        owners = [d for d in directories if path.startswith(d)]
+        if path in classifications:
+            owners.append(path)
+        if len(owners) > 1:
+            fail(f"{path}: classified more than once by " + ", ".join(owners))
+        if owners:
+            covered[path] = classifications[owners[0]]
+    missing = sorted(tracked - set(covered))
+    extra = sorted(
+        path
+        for path in paths
+        if (path not in tracked)
+        and not (path in directories and any(t.startswith(path) for t in tracked))
+    )
+    classifications = covered
     if missing or extra:
         details = []
         if missing:

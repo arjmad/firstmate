@@ -1,0 +1,5 @@
+2026-10-17: Arjun said "go, file it" in the helm on firstmate's recommendation, after the Claude Code Review GA post, to add an independent code review to the merge path for code-changing PRs.
+That product needs a Team or Enterprise plan and the fleet's accounts are Max, and the 2026-10-12 trust audit counted 827 PRs merged in two weeks, 85% of them by workers, at a median of 3 minutes from open to merge, none reviewed.
+Decision: a code-changing GitHub PR carries Claude Code's built-in `/code-review` at its medium level with `--comment` before `bin/fm-pr-merge.sh` merges it, recorded once per diff, while a PR touching only records, receipts, data, seed, or Markdown files stays exempt; standing `yolo` still merges on green once the review is recorded, and only an attended `--waive-review <reason>` on Arjun's word skips it.
+It narrows `AGENTS.md` section 7's rule against an independent reviewer for those PRs alone, and reuses the upstream skill rather than a reviewer of the fleet's own.
+No upstream proposal.
