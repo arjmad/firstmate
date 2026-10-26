@@ -190,7 +190,7 @@ test_merge_marker_binds_to_the_named_pr() {
   printf 'kind=ship\nmode=direct-PR\nworktree=%s\nproject=%s\npr=https://github.com/o/r/pull/7\n' \
     "$wt" "$repo" > "$meta"
   write_merge_marker "$state" bind github github.com o/r 7
-  reason=$(accept_done ship direct-PR "$wt" "$repo" "done: PR https://github.com/o/r/pull/9" "$state" bind "$meta")
+  reason=$(accept_done ship direct-PR "$wt" "$repo" "done: PR https://github.com/o/r/pull/9 checks green" "$state" bind "$meta")
   rc=$?
   [ "$rc" -eq 1 ] || fail "merge of recorded PR 7 accepted an unpushed done naming PR 9"
   case "$reason" in
@@ -198,7 +198,7 @@ test_merge_marker_binds_to_the_named_pr() {
     *) fail "PR 9 refusal did not name the unpushed head: $reason" ;;
   esac
   write_merge_marker "$state" bind github github.com other/r 7
-  accept_done ship direct-PR "$wt" "$repo" "done: PR https://github.com/o/r/pull/7" "$state" bind "$meta" >/dev/null \
+  accept_done ship direct-PR "$wt" "$repo" "done: PR https://github.com/o/r/pull/7 checks green" "$state" bind "$meta" >/dev/null \
     && fail "merge marker for another repository's PR 7 was accepted"
   pass "the merged-PR short-circuit applies only to the recorded PR the done line names"
 }
@@ -243,7 +243,7 @@ test_direct_pr_recorded_head_does_not_cover_unpushed_commit() {
   meta="$state/postopen.meta"
   printf 'kind=ship\nmode=direct-PR\nworktree=%s\nproject=%s\npr=https://github.com/o/r/pull/5\npr_head=%s\n' \
     "$wt" "$repo" "$pushed" > "$meta"
-  reason=$(accept_done ship direct-PR "$wt" "$repo" "done: PR https://github.com/o/r/pull/5" "$state" postopen "$meta")
+  reason=$(accept_done ship direct-PR "$wt" "$repo" "done: PR https://github.com/o/r/pull/5 checks green" "$state" postopen "$meta")
   rc=$?
   [ "$rc" -eq 1 ] || fail "direct-PR recorded pr_head accepted an unpushed later commit"
   case "$reason" in
@@ -251,6 +251,29 @@ test_direct_pr_recorded_head_does_not_cover_unpushed_commit() {
     *) fail "direct-PR refusal did not name the unpushed commit: $reason" ;;
   esac
   pass "a direct-PR recorded head does not cover a later unpushed commit"
+}
+
+# A direct-PR worker on GitHub reports ready only once its checks passed, so a
+# done naming a GitHub PR without `checks green` is refused even when its head
+# is pushed; other forges keep the plain report.
+test_direct_pr_github_done_requires_checks_green() {
+  local repo wt sha reason rc
+  repo="$TMP_ROOT/green-repo"
+  wt="$TMP_ROOT/green-wt"
+  fm_git_worktree "$repo" "$wt" fm/green
+  git -C "$wt" commit -q --allow-empty -m 'pushed fix'
+  sha=$(git -C "$wt" rev-parse HEAD)
+  git -C "$wt" update-ref refs/remotes/origin/fm/green "$sha"
+  reason=$(accept_done ship direct-PR "$wt" "$repo" "done: PR https://github.com/o/r/pull/5")
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a pushed direct-PR GitHub done without checks green was accepted"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_contains "$reason" 'ready report is `PR <url> checks green`' "the refusal did not name the checks-green report"
+  accept_done ship direct-PR "$wt" "$repo" "done: PR https://github.com/o/r/pull/5 checks green" \
+    || fail "a pushed direct-PR GitHub done reporting checks green was refused"
+  accept_done ship direct-PR "$wt" "$repo" "done: PR https://gitlab.com/o/r/-/merge_requests/5" \
+    || fail "a pushed direct-PR GitLab done was held to the GitHub checks-green report"
+  pass "a direct-PR GitHub done must report checks green; other forges keep the plain report"
 }
 
 test_ci_ready_requires_pr_reference() {
@@ -304,8 +327,8 @@ test_keyed_and_spaced_done_lines_are_gated() {
   for line in \
     'no-mistakes|done [key=fix]: PR https://github.com/o/r/pull/5 checks green' \
     'no-mistakes|done : PR https://github.com/o/r/pull/5 checks green' \
-    'direct-PR|done [key=fix]: PR https://github.com/o/r/pull/5' \
-    'direct-PR|done: [key=fix] PR https://github.com/o/r/pull/5'; do
+    'direct-PR|done [key=fix]: PR https://github.com/o/r/pull/5 checks green' \
+    'direct-PR|done: [key=fix] PR https://github.com/o/r/pull/5 checks green'; do
     mode=${line%%|*}
     rc=0
     accept_done ship "$mode" "$wt" "$repo" "${line#*|}" >/dev/null || rc=$?
@@ -472,6 +495,32 @@ EOF
 # A PR-based DoD on GitHub hands the worker the code review step before its
 # done report, naming a review script that runs; a forge where
 # /code-review --comment cannot post, and local-only, carry none.
+# A direct-PR GitHub DoD waits for the PR's checks, names the required-gate
+# trap, and asks for the checks-green report; other forges keep the plain one.
+test_direct_pr_dod_waits_for_checks_green() {
+  local out review_line checks_line done_line
+  out="$TMP_ROOT/dod-checks-direct.md"
+  fm_dod_block direct-PR dod-checks-task > "$out"
+  assert_grep 'gh-axi pr checks <number> --watch --fail-fast' "$out" "direct-PR DoD does not wait for the PR's checks"
+  assert_grep 'gate-wait [at=<epoch>]: checks on PR {url}' "$out" "direct-PR DoD does not declare the checks wait"
+  assert_grep 'merge_state' "$out" "direct-PR DoD does not catch a required check that never reported"
+  assert_grep 'fleet-gate' "$out" "direct-PR DoD does not name the fleet-gate trap"
+  assert_grep 'findings.json' "$out" "direct-PR DoD does not name the untracked review output"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'Then append `done [at=<epoch>]: PR {url} checks green`' "$out" "direct-PR DoD does not ask for checks green"
+  review_line=$(grep -n '^Before that done report, give a code-changing GitHub PR its code review' "$out" | cut -d: -f1)
+  checks_line=$(grep -n "^Then wait for the PR's checks" "$out" | cut -d: -f1)
+  done_line=$(grep -n '^Then append `done' "$out" | cut -d: -f1)
+  [ "$review_line" -lt "$checks_line" ] && [ "$checks_line" -lt "$done_line" ] \
+    || fail "the checks wait must follow the review and precede the done report"
+  out="$TMP_ROOT/dod-checks-forgejo.md"
+  fm_dod_block direct-PR dod-checks-task "" forgejo > "$out"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'Then append `done [at=<epoch>]: PR {url}` to the status file' "$out" "forgejo direct-PR DoD changed its report"
+  assert_no_grep 'gh-axi pr checks' "$out" "forgejo direct-PR DoD names a GitHub checks command"
+  pass "direct-PR GitHub DoD waits for checks and reports checks green"
+}
+
 test_pr_based_dod_carries_the_code_review_step() {
   local mode out cli review_line done_line
   for mode in direct-PR no-mistakes; do
@@ -508,6 +557,7 @@ test_recorded_merged_pr_is_landed_after_prune
 test_merge_marker_binds_to_the_named_pr
 test_forge_recorded_head_is_accepted_without_local_object
 test_direct_pr_recorded_head_does_not_cover_unpushed_commit
+test_direct_pr_github_done_requires_checks_green
 test_ci_ready_requires_pr_reference
 test_ci_ready_variants_are_gated
 test_keyed_and_spaced_done_lines_are_gated
@@ -517,6 +567,7 @@ test_standalone_local_only_needs_project_ref
 test_non_done_lines_are_not_gated
 test_fenced_and_indented_captain_lines_are_not_intent
 test_pr_based_dod_draft_check_uses_gh_axi
+test_direct_pr_dod_waits_for_checks_green
 test_pr_based_dod_carries_the_code_review_step
 test_task_placeholder_guard_sees_a_leftover_line
 test_promotion_keeps_the_recorded_base_branch
