@@ -528,7 +528,7 @@ test_direct_pr_dod_waits_for_checks_green() {
 # done report, naming a review script that runs; a forge where
 # /code-review --comment cannot post, and local-only, carry none.
 test_pr_based_dod_carries_the_code_review_step() {
-  local mode out cli review_line done_line
+  local mode out cli review_line done_line sol_line claude_line
   for mode in direct-PR no-mistakes; do
     out="$TMP_ROOT/dod-review-$mode.md"
     fm_dod_block "$mode" dod-review-task > "$out"
@@ -547,6 +547,27 @@ test_pr_based_dod_carries_the_code_review_step() {
     assert_grep 'its message says whether to run the carry again or `/code-review` again' "$out" "$mode: DoD does not say the carry's refusal names the next step"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
     assert_no_grep 'and then you run `/code-review` again' "$out" "$mode: DoD still sends the worker to a new review after every carry"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep 'first run the `tstack-sol-loop` skill' "$out" "$mode: DoD does not run the Sol pre-check"
+    assert_grep 'at most 3 rounds, never the skill'"'"'s extended 5' "$out" "$mode: DoD does not cap Sol at three rounds"
+    assert_grep 'decline nits and out-of-scope findings in one line in its ledger' "$out" "$mode: DoD does not settle Sol findings by the skill's rules"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep 'Before such a new `/code-review`, run `tstack-sol-loop` again as a fresh loop of one round on the change since the record, outside the first loop'"'"'s 3' "$out" "$mode: DoD does not give a refused carry its own Sol round"
+    assert_grep 'that user is firstmate: append `needs-decision' "$out" "$mode: DoD does not send an open Sol finding to firstmate"
+    assert_grep 'skip the loop instead, never substitute another model' "$out" "$mode: DoD gives no fallback when Sol is unreachable"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep 'append `working [at=<epoch>]: Sol skipped: {reason}` so firstmate sees it' "$out" "$mode: DoD skips Sol without telling firstmate"
+    assert_grep "$cli record <pr-url> --note 'Sol: <N> rounds, <model>, <verdict>'" "$out" "$mode: DoD does not record the Sol outcome"
+    assert_grep "--note 'Sol: skipped, <reason>'" "$out" "$mode: DoD does not record a skipped Sol loop"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep 'with three already posted, a change that would need another `/code-review` pass does not get one' "$out" "$mode: DoD does not stop a fourth review pass"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep 'comments you posted without a `fm-code-review-carry` line, rather than relying on memory' "$out" "$mode: DoD does not say how to count review passes"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    sol_line=$(grep -n 'first run the `tstack-sol-loop` skill' "$out" | cut -d: -f1)
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    claude_line=$(grep -n '^Then run Claude Code'"'"'s built-in `/code-review medium --comment <number>` once' "$out" | cut -d: -f1)
+    [ -n "$claude_line" ] && [ "$sol_line" -lt "$claude_line" ] || fail "$mode: the Sol loop does not come before the one /code-review"
     assert_no_grep "A later push that changes the PR's diff needs the review again" "$out" "$mode: DoD still says every fix push needs a new review"
     review_line=$(grep -n '^Before that done report, give a code-changing GitHub PR its code review' "$out" | cut -d: -f1)
     done_line=$(grep -n '^Then append `done' "$out" | cut -d: -f1)
@@ -554,6 +575,10 @@ test_pr_based_dod_carries_the_code_review_step() {
   done
   assert_grep 'run /no-mistakes again so the pipeline pushes it' "$TMP_ROOT/dod-review-no-mistakes.md" \
     "no-mistakes: review fixes must ride the pipeline"
+  assert_grep 'run /no-mistakes again once the loop ends so the pipeline pushes its fixes' "$TMP_ROOT/dod-review-no-mistakes.md" \
+    "no-mistakes: Sol fixes must ride the pipeline"
+  assert_grep 'push its fixes once the loop ends' "$TMP_ROOT/dod-review-direct-PR.md" \
+    "direct-PR: Sol fixes are not pushed after the loop"
   for mode in direct-PR:forgejo direct-PR:gerrit no-mistakes:forgejo local-only:none; do
     out="$TMP_ROOT/dod-review-${mode%%:*}-${mode#*:}.md"
     fm_dod_block "${mode%%:*}" dod-review-task "" "${mode#*:}" > "$out"
