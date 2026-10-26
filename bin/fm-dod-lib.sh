@@ -486,7 +486,7 @@ Run \`$cli status <pr-url>\`; \`exempt\` or \`reviewed\` needs nothing more.
 On \`unreviewed\`, run Claude Code's built-in \`/code-review medium --comment <number>\` from this worktree: invoke the skill when your harness has it, and otherwise run \`claude -p '/code-review medium --comment <number>'\` as a shell command there.
 Then $fix, reply in the PR thread of every finding you do not, and after your last push run \`$cli record <pr-url>\` and confirm it prints \`reviewed\`.
 Pushes that fix or answer this review's findings are covered by the one \`record\` you run after your last push; only a push after \`record\` that changes the diff needs a new review, and a rebase that leaves the diff alone needs none.
-For a small follow-up pushed after \`record\`, run \`$cli record <pr-url> --carry\` instead of a new review; the script decides what a carry covers and refuses anything larger, and then you run \`/code-review\` again.
+For a small follow-up pushed after \`record\`, run \`$cli record <pr-url> --carry\` instead of a new review; the script decides what a carry covers and and when it refuses, its message says whether to run the carry again or \`/code-review\` again.
 If neither way of running \`/code-review\` works here, append \`blocked:\` naming why instead of done.
 EOF
 }

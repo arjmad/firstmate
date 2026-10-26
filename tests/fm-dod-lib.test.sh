@@ -543,6 +543,10 @@ test_pr_based_dod_carries_the_code_review_step() {
     assert_grep 'Pushes that fix or answer this review'"'"'s findings are covered by the one `record` you run after your last push' "$out" \
       "$mode: DoD does not say one record after the last push covers the fix round"
     assert_grep "$cli record <pr-url> --carry" "$out" "$mode: DoD does not offer the carry for a small follow-up"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep 'its message says whether to run the carry again or `/code-review` again' "$out" "$mode: DoD does not say the carry's refusal names the next step"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_no_grep 'and then you run `/code-review` again' "$out" "$mode: DoD still sends the worker to a new review after every carry"
     assert_no_grep "A later push that changes the PR's diff needs the review again" "$out" "$mode: DoD still says every fix push needs a new review"
     review_line=$(grep -n '^Before that done report, give a code-changing GitHub PR its code review' "$out" | cut -d: -f1)
     done_line=$(grep -n '^Then append `done' "$out" | cut -d: -f1)
