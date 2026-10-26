@@ -80,12 +80,15 @@
 #       unreviewed, and 2 when the pull request cannot be read or the URL is
 #       not a GitHub pull request.
 #   fm-code-review.sh record <pr-url> [--carry] [--note <text>]
-#       Posts the record for the PR's current diff, with <text> as its body
-#       when given, unless the PR is exempt or already reviewed at that diff;
-#       then prints the status line. Exits as status does, except that a
-#       record that cannot be posted or read back exits 1. With --carry it
-#       posts only a carried record, and refuses with exit 1 when the
-#       follow-up since the last full record is not one a carry covers.
+#       Posts the record for the PR's current diff, unless the PR is exempt
+#       or already reviewed at that diff, with <text> on its own line after
+#       the standard line saying which review ran, such as the worker's
+#       `Sol: <N> rounds, <model>, <verdict>` from the tstack-sol-loop
+#       pre-check bin/fm-dod-lib.sh asks for (docs/fork-decisions.md
+#       2026-10-26 sol-loop); then prints the status line. Exits as status does,
+#       except that a record that cannot be posted or read back exits 1. With
+#       --carry it posts only a carried record, and refuses with exit 1 when
+#       the follow-up since the last full record is not one a carry covers.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -378,6 +381,7 @@ code_review_status() {
 
 code_review_record() {  # <note> <carry 0|1>
   local note=$1 carry=$2 status=0 head head0='' body marker
+  local line="Code review: Claude Code \`/code-review\` (medium) ran on this diff; each finding is posted inline and was fixed or answered in its thread."
   # A carry binds the diff it fingerprints, the head it measures, and the head
   # it records to one push: the head is read before and after both.
   if [ "$carry" = 1 ] && { ! head0=$(code_review_head) || ! fm_pr_head_valid "$head0"; }; then
@@ -403,10 +407,11 @@ code_review_record() {  # <note> <carry 0|1>
     fi
     marker="$marker
 <!-- fm-code-review-carry from=$CODE_REVIEW_CARRY_FROM lines=$CODE_REVIEW_CARRY_COUNT -->"
-    [ -n "$note" ] || note="Code review carried from the full review recorded at $CODE_REVIEW_CARRY_FROM: this follow-up changes $CODE_REVIEW_CARRY_COUNT counted lines since then, within the carry cap of $CODE_REVIEW_CARRY_LINES."
+    line="Code review carried from the full review recorded at $CODE_REVIEW_CARRY_FROM: this follow-up changes $CODE_REVIEW_CARRY_COUNT counted lines since then, within the carry cap of $CODE_REVIEW_CARRY_LINES."
   fi
-  [ -n "$note" ] || note="Code review: Claude Code \`/code-review\` (medium) ran on this diff; each finding is posted inline and was fixed or answered in its thread."
   body="$marker
+$line"
+  [ -z "$note" ] || body="$body
 $note"
   if ! printf '%s\n' "$body" | gh pr comment "$FM_PR_NUMBER" --repo "$FM_PR_OWNER/$FM_PR_REPO" --body-file - >/dev/null; then
     echo "error: could not post the code review record on $FM_PR_URL" >&2

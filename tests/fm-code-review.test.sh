@@ -340,7 +340,10 @@ test_record_posts_once_for_the_current_diff() {
   jq -r '.[0].body' "$dir/comments.json" > "$dir/body"
   [ "$(sed -n 1p "$dir/body")" = "<!-- fm-code-review v1 diff=$id head=$HEAD_SHA -->" ] \
     || fail "record: marker line was $(sed -n 1p "$dir/body")"
-  [ "$(sed -n 2p "$dir/body")" = 'Review: two findings fixed, one answered.' ] || fail "record: note was not the body"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  sed -n 2p "$dir/body" | grep -q '^Code review: Claude Code `/code-review` (medium) ran on this diff' \
+    || fail "record: the standard line did not follow the marker: $(sed -n 2p "$dir/body")"
+  [ "$(sed -n 3p "$dir/body")" = 'Review: two findings fixed, one answered.' ] || fail "record: the note did not follow the standard line"
   run_case "$dir" record "$URL"
   expect_code 0 "$RC" "record-again: an already reviewed diff should succeed"
   [ "$(grep -c '^pr comment' "$dir/gh.log")" -eq 1 ] || fail "record-again: a second record was posted"
@@ -512,13 +515,16 @@ test_record_carry_covers_a_small_follow_up() {
   id=$(diff_id "$dir")
   full_record "$dir" "$REVIEWED_HEAD"
   write_compare "$dir" ahead 'bin/tool.sh 4' 'tests/tool.test.sh 6' 'docs/guide.md 80'
-  run_case "$dir" record "$URL" --carry
+  run_case "$dir" record "$URL" --carry --note 'Sol: 1 round, gpt-6.1-sol, approved'
   expect_code 0 "$RC" "carry-small: ten changed lines outside exempt paths should carry"
   [ "$OUT" = "reviewed: diff $id of $URL carries a code review record" ] || fail "carry-small: got '$OUT'"
   assert_grep "api repos/example/repo/compare/$REVIEWED_HEAD...$HEAD_SHA" "$dir/gh.log" "carry-small: did not compare the reviewed head with the PR head"
   jq -r '.[-1].body' "$dir/comments.json" > "$dir/body"
   [ "$(sed -n 1p "$dir/body")" = "<!-- fm-code-review v1 diff=$id head=$HEAD_SHA -->" ] || fail "carry-small: marker line was $(sed -n 1p "$dir/body")"
   [ "$(sed -n 2p "$dir/body")" = "<!-- fm-code-review-carry from=$REVIEWED_HEAD lines=10 -->" ] || fail "carry-small: carry line was $(sed -n 2p "$dir/body")"
+  sed -n 3p "$dir/body" | grep -q "^Code review carried from the full review recorded at $REVIEWED_HEAD" \
+    || fail "carry-small: the carry's standard line was $(sed -n 3p "$dir/body")"
+  [ "$(sed -n 4p "$dir/body")" = 'Sol: 1 round, gpt-6.1-sol, approved' ] || fail "carry-small: the note did not follow the carry's standard line"
   run_case "$dir" status "$URL"
   expect_code 0 "$RC" "carry-small: a carried record must read as reviewed"
 

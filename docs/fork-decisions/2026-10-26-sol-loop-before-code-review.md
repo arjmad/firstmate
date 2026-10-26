@@ -1,0 +1,10 @@
+2026-10-26: Arjun adopted W1 of the code-review pass (`data/code-review-pass-1026/report.md`) on its decision board ("adopt"), after it found the one fleet review loops on the Claude account the workers need while the Codex subscription sat idle.
+Decision: before the one Claude `/code-review` that the [2026-10-17 gate](2026-10-17-code-review-before-merge.md) records, every ship worker on a code-changing GitHub PR runs tstack's sol-loop (the `tstack-sol-loop` skill), GPT Sol on the Codex subscription for at most 3 rounds under that skill's own stopping rules, so each such PR gets a second vendor's eyes and most fix-and-recheck churn moves off Claude.
+Sol is a pre-check, never the gate: the merge guard is unchanged, and the record's note names the Sol rounds, model, and verdict.
+A follow-up that the [2026-10-26 carry](2026-10-26-code-review-per-fix-round.md) refuses now gets one more Sol round before its new `/code-review`, instead of that review alone.
+A worker with no route to Sol skips it and says so in that note rather than substituting another model, an open Sol finding the skill would hand to its user goes to firstmate, and a PR that would need a fourth `/code-review` pass goes to firstmate instead of looping.
+W2, a Sol round standing in for a second Claude review on a larger follow-up, is deferred to 2026-11-11 for two weeks of data and is not built.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| The ship worker's review step runs `tstack-sol-loop` on Codex before one `/code-review`, records the Sol outcome in the record's note, skips Sol with a reason when it cannot be reached, and escalates an open Sol finding or a fourth `/code-review` pass to firstmate; `record --note` adds its text after the standard record line instead of replacing it | `bin/fm-code-review.sh` (`code_review_record`, header), `tests/fm-code-review.test.sh` | `bin/fm-dod-lib.sh` (`fm_dod_code_review_block`, header), `docs/task-lifecycle.md`, `tests/fm-dod-lib.test.sh` | carried | 45dd50a5 |

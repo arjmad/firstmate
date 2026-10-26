@@ -89,9 +89,11 @@
 # monitoring on a draft through the same reading bin/fm-pr-merge.sh uses.
 # On those two modes outside Gerrit and Forgejo, fm_dod_code_review_block then
 # has the worker give a code-changing GitHub PR its code review before the done
-# report (fork patch, docs/fork-decisions.md 2026-10-17); a no-mistakes worker
-# carries its fixes through another run so the pipeline stays the one
-# publisher. bin/fm-code-review.sh owns which PRs need it and what record counts.
+# report (fork patch, docs/fork-decisions.md 2026-10-17): a tstack-sol-loop
+# pre-check on Codex, then one /code-review (2026-10-26 sol-loop); a
+# no-mistakes worker carries its fixes through another run so the pipeline
+# stays the one publisher. bin/fm-code-review.sh owns which PRs need it and
+# what record counts.
 # This file is the one owner of the no-mistakes `--intent` contract: only the
 # brief's `## Captain's intent` subsection plus later captain words, never
 # `## Firstmate spec` and never the worker's own tradeoffs.
@@ -475,18 +477,27 @@ EOF
 }
 
 fm_dod_code_review_block() {  # <direct-PR|no-mistakes>
-  local cli fix
+  local cli fix sol_fix
   printf -v cli '%q' "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-code-review.sh"
   fix='push a fix for every finding you agree is real'
-  [ "$1" != no-mistakes ] \
-    || fix='commit a fix for every finding you agree is real and run /no-mistakes again so the pipeline pushes it'
+  sol_fix='push its fixes once the loop ends'
+  if [ "$1" = no-mistakes ]; then
+    fix='commit a fix for every finding you agree is real and run /no-mistakes again so the pipeline pushes it'
+    sol_fix='run /no-mistakes again once the loop ends so the pipeline pushes its fixes'
+  fi
   cat <<EOF
 Before that done report, give a code-changing GitHub PR its code review; a PR on any other forge skips this step.
-Run \`$cli status <pr-url>\`; \`exempt\` or \`reviewed\` needs nothing more.
-On \`unreviewed\`, run Claude Code's built-in \`/code-review medium --comment <number>\` from this worktree: invoke the skill when your harness has it, and otherwise run \`claude -p '/code-review medium --comment <number>'\` as a shell command there.
-Then $fix, reply in the PR thread of every finding you do not, and after your last push run \`$cli record <pr-url>\` and confirm it prints \`reviewed\`.
+Run \`$cli status <pr-url>\`; \`exempt\` or \`reviewed\` needs nothing more, so a tinker-tier or docs-only PR runs neither review below.
+On \`unreviewed\`, first run the \`tstack-sol-loop\` skill on your branch against the PR's base once the repository's own checks pass on it: GPT Sol on the Codex subscription reviews the change for at most 3 rounds, never the skill's extended 5, and the skill's own rules decide when the loop stops.
+Settle each Sol finding as that skill says - fix the real ones with the smallest change and decline nits and out-of-scope findings in one line in its ledger - then $sol_fix, since the skill pushes nothing during it.
+When the skill hands an open finding to its user - one disputed twice, or a blocker or should still open when the rounds run out - that user is firstmate: append \`needs-decision [at=<epoch>]: {the open Sol findings}\` and stop.
+This step is the ask that skill waits for, and where it would report a blocker because nothing here can reach Sol - the skill is not installed, Codex is not signed in, or no route runs Sol - skip the loop instead, never substitute another model, and keep the reason for the record note.
+Then run Claude Code's built-in \`/code-review medium --comment <number>\` once from this worktree: invoke the skill when your harness has it, and otherwise run \`claude -p '/code-review medium --comment <number>'\` as a shell command there.
+Then $fix, reply in the PR thread of every finding you do not, and after your last push run \`$cli record <pr-url> --note 'Sol: <N> rounds, <model>, <verdict>'\`, or \`--note 'Sol: skipped, <reason>'\` when the loop could not run, with no apostrophe in the note, and confirm it prints \`reviewed\`.
 Pushes that fix or answer this review's findings are covered by the one \`record\` you run after your last push; only a push after \`record\` that changes the diff needs a new review, and a rebase that leaves the diff alone needs none.
-For a small follow-up pushed after \`record\`, run \`$cli record <pr-url> --carry\` instead of a new review; the script decides what a carry covers and and when it refuses, its message says whether to run the carry again or \`/code-review\` again.
+For a small follow-up pushed after \`record\`, run \`$cli record <pr-url> --carry\` instead of a new review; the script decides what a carry covers, and when it refuses, its message says whether to run the carry again or \`/code-review\` again.
+Before such a new \`/code-review\`, run one more \`tstack-sol-loop\` round, a later round whose brief names the change since the record, and name that round in the new \`record\`'s note.
+Count this PR's full records, its \`fm-code-review v1\` comments without a \`fm-code-review-carry\` line, rather than relying on memory: with three already posted, a change that would need another \`/code-review\` pass does not get one: append \`needs-decision [at=<epoch>]: {why the PR keeps needing review}\` and stop instead of looping.
 If neither way of running \`/code-review\` works here, append \`blocked:\` naming why instead of done.
 EOF
 }
