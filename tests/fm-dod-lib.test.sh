@@ -552,15 +552,17 @@ test_pr_based_dod_carries_the_code_review_step() {
     assert_grep 'at most 3 rounds, never the skill'"'"'s extended 5' "$out" "$mode: DoD does not cap Sol at three rounds"
     assert_grep 'decline nits and out-of-scope findings in one line in its ledger' "$out" "$mode: DoD does not settle Sol findings by the skill's rules"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    assert_grep 'Before such a new `/code-review`, run one more `tstack-sol-loop` round' "$out" "$mode: DoD does not give a refused carry a Sol round"
+    assert_grep 'Before such a new `/code-review`, run `tstack-sol-loop` again as a fresh loop of one round on the change since the record, outside the first loop'"'"'s 3' "$out" "$mode: DoD does not give a refused carry its own Sol round"
     assert_grep 'that user is firstmate: append `needs-decision' "$out" "$mode: DoD does not send an open Sol finding to firstmate"
     assert_grep 'skip the loop instead, never substitute another model' "$out" "$mode: DoD gives no fallback when Sol is unreachable"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep 'append `working [at=<epoch>]: Sol skipped: {reason}` so firstmate sees it' "$out" "$mode: DoD skips Sol without telling firstmate"
     assert_grep "$cli record <pr-url> --note 'Sol: <N> rounds, <model>, <verdict>'" "$out" "$mode: DoD does not record the Sol outcome"
     assert_grep "--note 'Sol: skipped, <reason>'" "$out" "$mode: DoD does not record a skipped Sol loop"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
     assert_grep 'with three already posted, a change that would need another `/code-review` pass does not get one' "$out" "$mode: DoD does not stop a fourth review pass"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    assert_grep 'comments without a `fm-code-review-carry` line, rather than relying on memory' "$out" "$mode: DoD does not say how to count review passes"
+    assert_grep 'comments you posted without a `fm-code-review-carry` line, rather than relying on memory' "$out" "$mode: DoD does not say how to count review passes"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
     sol_line=$(grep -n 'first run the `tstack-sol-loop` skill' "$out" | cut -d: -f1)
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal

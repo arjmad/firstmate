@@ -85,10 +85,13 @@
 #       the standard line saying which review ran, such as the worker's
 #       `Sol: <N> rounds, <model>, <verdict>` from the tstack-sol-loop
 #       pre-check bin/fm-dod-lib.sh asks for (docs/fork-decisions.md
-#       2026-10-26 sol-loop); then prints the status line. Exits as status does,
-#       except that a record that cannot be posted or read back exits 1. With
-#       --carry it posts only a carried record, and refuses with exit 1 when
-#       the follow-up since the last full record is not one a carry covers.
+#       2026-10-26 sol-loop); a note of more than one line or holding `<!--`
+#       is refused, so it cannot pose as a marker, and a note for a diff that
+#       needs no new record is not posted and draws a warning. Then it prints
+#       the status line. Exits as status does, except that a record that
+#       cannot be posted or read back exits 1. With --carry it posts only a
+#       carried record, and refuses with exit 1 when the follow-up since the
+#       last full record is not one a carry covers.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -390,7 +393,11 @@ code_review_record() {  # <note> <carry 0|1>
   fi
   code_review_status || status=$?
   case "$status" in
-    0) printf '%s\n' "$CODE_REVIEW_LINE"; return 0 ;;
+    0)
+      [ -z "$note" ] || echo "warning: $FM_PR_URL needs no new record at this diff, so the note was not posted" >&2
+      printf '%s\n' "$CODE_REVIEW_LINE"
+      return 0
+      ;;
     1) ;;
     *) return "$status" ;;
   esac
@@ -458,6 +465,9 @@ case "$cmd" in
           ;;
         --note)
           [ -n "${2:-}" ] || { echo "error: --note requires text" >&2; exit 2; }
+          case $2 in
+            *$'\n'*|*'<!--'*) echo "error: --note must be one line without '<!--', so it cannot pose as a record marker" >&2; exit 2 ;;
+          esac
           note=$2
           shift 2
           ;;
