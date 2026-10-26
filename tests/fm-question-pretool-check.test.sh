@@ -259,10 +259,10 @@ test_present_captain_keeps_the_question_tool() {
 test_absent_captain_is_denied() {
   local actual
   give_work "$STATE"
-  captain_said 900
-  expect_deny "captain prompted 15 minutes ago" AskUserQuestion
+  captain_said 2700
+  expect_deny "captain prompted 45 minutes ago" AskUserQuestion
   actual=$(jq -r '.systemMessage' "$ERR")
-  assert_contains "$actual" "15 minutes ago, outside the 10-minute presence window" "the deny must say how long the captain has been silent"
+  assert_contains "$actual" "45 minutes ago, outside the 30-minute presence window" "the deny must say how long the captain has been silent"
   captain_silent
   expect_deny "captain never prompted" AskUserQuestion
   assert_contains "$(jq -r '.systemMessage' "$ERR")" "has sent no message in this session" "the deny must say the captain never spoke"
@@ -275,13 +275,28 @@ test_absent_captain_is_denied() {
   pass "a captain silent past the window, or present only in another session, gets today's deny"
 }
 
+test_presence_window_defaults_to_thirty_minutes() {
+  give_work "$STATE"
+  captain_said 1500
+  expect_allow "captain prompted 25 minutes ago" AskUserQuestion
+  captain_said 1900
+  expect_deny "captain prompted 31 minutes ago" AskUserQuestion
+  captain_silent
+  captain_answered 1500
+  expect_allow "captain answered a question 25 minutes ago" AskUserQuestion
+  pass "with no override the presence window is thirty minutes"
+}
+
 test_presence_window_is_configurable() {
   give_work "$STATE"
-  captain_said 900
-  expect_allow "a 20-minute window" AskUserQuestion FM_QUESTION_PRESENT_SECONDS=1200
-  expect_deny "a 5-minute window" AskUserQuestion FM_QUESTION_PRESENT_SECONDS=300
+  captain_said 2700
+  expect_allow "a 60-minute window" AskUserQuestion FM_QUESTION_PRESENT_SECONDS=3600
+  expect_deny "a 20-minute window" AskUserQuestion FM_QUESTION_PRESENT_SECONDS=1200
   expect_deny "a malformed window keeps the default" AskUserQuestion FM_QUESTION_PRESENT_SECONDS=soon
-  pass "FM_QUESTION_PRESENT_SECONDS sets the presence window and a malformed value keeps ten minutes"
+  captain_said 900
+  expect_deny "a 5-minute window" AskUserQuestion FM_QUESTION_PRESENT_SECONDS=300
+  expect_allow "a malformed window keeps thirty minutes" AskUserQuestion FM_QUESTION_PRESENT_SECONDS=soon
+  pass "FM_QUESTION_PRESENT_SECONDS sets the presence window and a malformed value keeps thirty minutes"
 }
 
 test_present_captain_without_a_keeper_is_denied() {
@@ -324,6 +339,7 @@ test_denies_blocking_question_while_work_is_under_way
 test_deny_names_the_non_blocking_route
 test_present_captain_keeps_the_question_tool
 test_absent_captain_is_denied
+test_presence_window_defaults_to_thirty_minutes
 test_presence_window_is_configurable
 test_present_captain_without_a_keeper_is_denied
 test_present_claude_payload_on_stdin_is_allowed
