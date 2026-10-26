@@ -558,6 +558,30 @@ test_pr_based_dod_carries_the_code_review_step() {
   pass "PR-based GitHub DoD carries the code review step before done"
 }
 
+# A worker that opens its own PR writes the body the one-way door merge gate
+# reads (bin/fm-pr-merge.sh); a contract whose PR body the pipeline or a review
+# tool writes, or that opens no PR, carries no such step.
+test_direct_pr_dod_writes_the_matt_pr_body() {
+  local mode out
+  for mode in direct-PR:none direct-PR:forgejo; do
+    out="$TMP_ROOT/dod-pr-body-${mode#*:}.md"
+    fm_dod_block direct-PR dod-body-task "" "${mode#*:}" > "$out"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep 'Write the PR body with the `matt-pr` skill' "$out" "$mode: DoD does not name the matt-pr skill"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep '`**Door:** one-way` or `**Door:** two-way`' "$out" "$mode: DoD does not name the Door line"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep '`**Blast Radius:**`' "$out" "$mode: DoD does not name the Blast Radius line"
+    assert_grep "waits for the captain's own word" "$out" "$mode: DoD does not say what a one-way door changes"
+  done
+  for mode in no-mistakes:none local-only:none direct-PR:gerrit; do
+    out="$TMP_ROOT/dod-pr-body-${mode%%:*}-${mode#*:}.md"
+    fm_dod_block "${mode%%:*}" dod-body-task "" "${mode#*:}" > "$out"
+    assert_no_grep 'matt-pr' "$out" "$mode: DoD asks for a PR body it does not write"
+  done
+  pass "direct-PR DoD has the worker write its PR body with matt-pr's Door and Blast Radius lines"
+}
+
 test_scout_done_is_not_gated
 test_unpushed_ship_done_is_refused
 test_no_mistakes_prevalidation_done_is_not_gated
@@ -580,6 +604,7 @@ test_fenced_and_indented_captain_lines_are_not_intent
 test_pr_based_dod_draft_check_uses_gh_axi
 test_direct_pr_dod_waits_for_checks_green
 test_pr_based_dod_carries_the_code_review_step
+test_direct_pr_dod_writes_the_matt_pr_body
 test_task_placeholder_guard_sees_a_leftover_line
 test_promotion_keeps_the_recorded_base_branch
 
