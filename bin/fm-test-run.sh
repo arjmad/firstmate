@@ -1743,7 +1743,9 @@ families_for_changed_path() {
       printf '%s\n' pure-contract-unit
       ;;
     bin/fm-fork-decisions.sh|docs/fork-decisions.md|docs/fork-decisions/*)
+      # Records link each other, so the audience suite's link check runs too.
       printf '%s\n' "__script__:fm-fork-decisions.test.sh"
+      printf '%s\n' "__script__:fm-documentation-audiences.test.sh"
       ;;
     .github/*|.gitattributes|.tasks.toml|AGENTS.md|CLAUDE.md|CONTRIBUTING.md|\
     docs/configuration.md|docs/supervision-protocols/*)

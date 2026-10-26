@@ -15,7 +15,7 @@ A reference written `docs/fork-decisions.md <date>`, or "fork decision <date>", 
 A decision opens with `<date>: ` and says who decided, where, what was decided, and why, one sentence per line.
 A fork patch holds one table whose header is `| What | Files or functions | Upstream code touched | Status | Last checked sync |`, with one row per change; rows that repeat one `What` spread a single change across files.
 A record may hold both, the decision first.
-A new record names no PR number: the squash commit that adds the file ends in `(#N)`, and `bin/fm-fork-decisions.sh patches` reads the number from there, so no follow-up commit backfills one.
+A new record names no PR number: `bin/fm-fork-decisions.sh patches` reads it from the commit that landed the file (a squash subject ending in `(#N)` or GitHub's merge commit), following renames, so no follow-up commit backfills one.
 The records migrated from the earlier single table open with a `PR: ` line instead, because the migration commit added their files; a PR value without a number names the commit.
 A later decision that changes an earlier one edits that record or adds a new dated record naming the one it supersedes.
 
@@ -26,7 +26,7 @@ The [decision to keep firstmate fixes in this fork](fork-decisions/2026-10-10-fo
 Contract:
 Every fork PR that changes upstream-owned files adds one fork-patch record naming what changed, where, and the upstream code it touches.
 Every upstream-sync PR re-checks each row `bin/fm-fork-decisions.sh patches` lists against the merged upstream and updates its status and last-checked sync in its record.
-Status is `carried` when the change still applies and upstream is unchanged there, `upstreamed` when upstream now has an equivalent so the fork change can be dropped at the next sync, or `conflicted` when upstream changed the same code and the merge needed a hand.
+Status is `carried` when the change still applies and upstream is unchanged there, `upstreamed` when upstream now has an equivalent so the fork change can be dropped at the next sync, or `conflicted` when upstream changed the same code and the merge needed a hand; a row a later patch replaced reads `superseded by #N` instead.
 A sync drops a fork change only when its row reads `upstreamed`, and the captain's merge of that sync PR is the approval.
 A sync PR lands as a merge commit, never a squash, so the next sync's merge base is the upstream commit it merged.
 The 2026-10-14 sync (#81) landed squashed, which left git's merge base at 1a868710, so the 2026-10-19 sync merged against 24f3a6b8 explicitly.
