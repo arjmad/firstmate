@@ -48,12 +48,18 @@
 # carries no carry marker) with the PR's current head through GitHub's compare
 # API, and carries the review only when the current head descends from that
 # head and the follow-up, counted cumulatively since that full review so a
-# chain of carries cannot grow past it, changes only exempt paths or at most
-# CODE_REVIEW_CARRY_LINES (10) added plus deleted lines in the rest. Ten lines
-# covers the follow-ups that retro measured looping reviews over - a test-count
-# bump, a one-line reword, a fork-decisions PR number - while any real change
-# of logic still gets a full review. A rebase, a non-exempt file GitHub shows no
-# text patch for, or a compare listing at its 300-file cap is refused. A carried
+# chain of carries cannot grow past it, changes at most CODE_REVIEW_CARRY_LINES
+# (10) added plus deleted lines. Without a risk-tiers.toml the path exemption
+# above applies, so lines in exempt paths are not counted; with a table every
+# changed line counts, because only the table may exempt a path there. Ten
+# lines covers the follow-ups that retro measured looping reviews over - a
+# test-count bump, a one-line reword, a fork-decisions PR number - while any
+# real change of logic still gets a full review. Refused: a head that does not
+# strictly descend from the reviewed head (a rebase, a merge from the base
+# branch, or an unchanged head whose diff changed because the base moved), a
+# file renamed into a counted path (its whole content is new to review), a
+# counted file GitHub shows no text patch for, a compare listing at its
+# 300-file cap, and a head that moves while the carry is measured. A carried
 # record adds the line
 #   <!-- fm-code-review-carry from=<full-record head> lines=<n> -->
 # after the marker, so status and bin/fm-pr-merge.sh read it as an ordinary
@@ -235,9 +241,11 @@ CODE_REVIEW_CARRY_LINES=10
 # The head of the last record comment from a trusted author that carries no
 # carry marker, or nothing when the PR has none.
 code_review_full_record_head() {
-  gh api --paginate "repos/$FM_PR_OWNER/$FM_PR_REPO/issues/$FM_PR_NUMBER/comments" \
-    --jq '.[] | select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") | .body | gsub("\r"; "") | select(test("(^|\n)<!-- fm-code-review-carry ") | not) | capture("(^|\n)<!-- fm-code-review v1 diff=[0-9a-f]{40,64} head=(?<head>[0-9a-f]{40,64}) -->(\n|$)") | .head' \
-    | tail -n 1
+  local heads
+  heads=$(gh api --paginate "repos/$FM_PR_OWNER/$FM_PR_REPO/issues/$FM_PR_NUMBER/comments" \
+    --jq '.[] | select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") | .body | gsub("\r"; "") | select(test("(^|\n)<!-- fm-code-review-carry ") | not) | capture("(^|\n)<!-- fm-code-review v1 diff=[0-9a-f]{40,64} head=(?<head>[0-9a-f]{40,64}) -->(\n|$)") | .head') \
+    || return 1
+  printf '%s\n' "$heads" | sed -n '$p'
 }
 
 CODE_REVIEW_CARRY_FROM=
@@ -263,7 +271,11 @@ code_review_carry_check() {  # <head>
   state=$(printf '%s\n' "$listing" | sed -n 1p)
   count=$(printf '%s\n' "$listing" | sed -n 2p)
   case "$state" in
-    ahead|identical) ;;
+    ahead) ;;
+    identical)
+      echo "error: the head $head is the reviewed head, so its diff changed only because the base moved; run /code-review again" >&2
+      return 1
+      ;;
     *)
       echo "error: $head does not descend from the reviewed head $from (compare status ${state:-unknown}), so the follow-up cannot be measured; run /code-review again" >&2
       return 1
@@ -280,8 +292,13 @@ code_review_carry_check() {  # <head>
   # empty field anywhere else would shift the ones after it.
   while IFS=$'\t' read -r changes patch path previous; do
     [ -n "$path" ] || continue
-    if code_review_path_exempt "$path" && { [ -z "$previous" ] || code_review_path_exempt "$previous"; }; then
+    if [ "$CODE_REVIEW_HAS_TABLE" != 0 ] && code_review_path_exempt "$path" \
+      && { [ -z "$previous" ] || code_review_path_exempt "$previous"; }; then
       continue
+    fi
+    if [ -n "$previous" ] && { [ "$CODE_REVIEW_HAS_TABLE" = 0 ] || ! code_review_path_exempt "$path"; }; then
+      echo "error: $previous was renamed to $path since the reviewed head $from, so its whole content is new to review; run /code-review again" >&2
+      return 1
     fi
     if [ "$patch" != text ]; then
       echo "error: $path changed since the reviewed head $from without a text patch, so its size cannot be measured; run /code-review again" >&2
@@ -295,7 +312,7 @@ code_review_carry_check() {  # <head>
 $(printf '%s\n' "$listing" | sed '1,2d')
 EOF
   if [ "$lines" -gt "$CODE_REVIEW_CARRY_LINES" ]; then
-    echo "error: the follow-up since the reviewed head $from changes $lines lines outside exempt paths, more than the carry cap of $CODE_REVIEW_CARRY_LINES; run /code-review again" >&2
+    echo "error: the follow-up since the reviewed head $from changes $lines counted lines, more than the carry cap of $CODE_REVIEW_CARRY_LINES; run /code-review again" >&2
     return 1
   fi
   CODE_REVIEW_CARRY_FROM=$from
@@ -304,6 +321,7 @@ EOF
 
 CODE_REVIEW_DIFF_ID=
 CODE_REVIEW_LINE=
+CODE_REVIEW_HAS_TABLE=
 # Sets CODE_REVIEW_LINE to the status line and returns 0 exempt or reviewed, 1
 # unreviewed, 2 unreadable; sets CODE_REVIEW_DIFF_ID for a code-changing PR.
 code_review_status() {
@@ -311,6 +329,7 @@ code_review_status() {
   CODE_REVIEW_DIFF_ID=
   CODE_REVIEW_LINE=
   code_review_has_table || status=$?
+  CODE_REVIEW_HAS_TABLE=$status
   case "$status" in
     0)
       code_review_tier || return 2
@@ -358,7 +377,13 @@ code_review_status() {
 }
 
 code_review_record() {  # <note> <carry 0|1>
-  local note=$1 carry=$2 status=0 head body marker
+  local note=$1 carry=$2 status=0 head head0='' body marker
+  # A carry binds the diff it fingerprints, the head it measures, and the head
+  # it records to one push: the head is read before and after both.
+  if [ "$carry" = 1 ] && { ! head0=$(code_review_head) || ! fm_pr_head_valid "$head0"; }; then
+    echo "error: could not read the head commit of $FM_PR_URL" >&2
+    return 1
+  fi
   code_review_status || status=$?
   case "$status" in
     0) printf '%s\n' "$CODE_REVIEW_LINE"; return 0 ;;
@@ -372,9 +397,13 @@ code_review_record() {  # <note> <carry 0|1>
   marker="<!-- fm-code-review v1 diff=$CODE_REVIEW_DIFF_ID head=$head -->"
   if [ "$carry" = 1 ]; then
     code_review_carry_check "$head" || return "$?"
+    if [ "$head" != "$head0" ] || [ "$(code_review_head 2>/dev/null)" != "$head" ]; then
+      echo "error: the head of $FM_PR_URL moved while the carry was measured; run record --carry again" >&2
+      return 1
+    fi
     marker="$marker
 <!-- fm-code-review-carry from=$CODE_REVIEW_CARRY_FROM lines=$CODE_REVIEW_CARRY_COUNT -->"
-    [ -n "$note" ] || note="Code review carried from the full review recorded at $CODE_REVIEW_CARRY_FROM: this follow-up changes $CODE_REVIEW_CARRY_COUNT lines outside exempt paths since then, within the carry cap of $CODE_REVIEW_CARRY_LINES."
+    [ -n "$note" ] || note="Code review carried from the full review recorded at $CODE_REVIEW_CARRY_FROM: this follow-up changes $CODE_REVIEW_CARRY_COUNT counted lines since then, within the carry cap of $CODE_REVIEW_CARRY_LINES."
   fi
   [ -n "$note" ] || note="Code review: Claude Code \`/code-review\` (medium) ran on this diff; each finding is posted inline and was fixed or answered in its thread."
   body="$marker

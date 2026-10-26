@@ -101,7 +101,16 @@ case "$1 $2" in
     [ -f "$FM_TEST_DIR/compare.json" ] || exit 1
     gh_jq "$FM_TEST_DIR/compare.json" "$@"
     ;;
-  "pr view") cat "$FM_TEST_DIR/head" ;;
+  "pr view")
+    # A heads file, one head per line, is read one line per call: a push
+    # landing between two reads.
+    if [ -s "$FM_TEST_DIR/heads" ]; then
+      sed -n 1p "$FM_TEST_DIR/heads"
+      sed 1d "$FM_TEST_DIR/heads" > "$FM_TEST_DIR/heads.next" && mv "$FM_TEST_DIR/heads.next" "$FM_TEST_DIR/heads"
+    else
+      cat "$FM_TEST_DIR/head"
+    fi
+    ;;
   "pr comment")
     [ ! -f "$FM_TEST_DIR/comment-fail" ] || exit 1
     body=$(cat)
@@ -534,7 +543,7 @@ test_record_carry_refuses_what_it_cannot_cover() {
   write_compare "$dir" ahead 'bin/tool.sh 6' 'bin/other.sh 5' 'README.md 50'
   run_case "$dir" record "$URL" --carry
   expect_code 1 "$RC" "carry-large: eleven changed lines outside exempt paths must not carry"
-  assert_contains "$ERR" 'changes 11 lines outside exempt paths, more than the carry cap of 10' "carry-large: error did not name the count and cap"
+  assert_contains "$ERR" 'changes 11 counted lines, more than the carry cap of 10' "carry-large: error did not name the count and cap"
 
   dir=$(make_case carry-rebased bin/tool.sh)
   full_record "$dir" "$REVIEWED_HEAD"
@@ -542,6 +551,29 @@ test_record_carry_refuses_what_it_cannot_cover() {
   run_case "$dir" record "$URL" --carry
   expect_code 1 "$RC" "carry-rebased: a head that does not descend from the reviewed head must not carry"
   assert_contains "$ERR" 'does not descend from the reviewed head' "carry-rebased: error did not say why"
+
+  dir=$(make_case carry-identical bin/tool.sh)
+  full_record "$dir" "$HEAD_SHA"
+  write_compare "$dir" identical
+  run_case "$dir" record "$URL" --carry
+  expect_code 1 "$RC" "carry-identical: a changed diff at the reviewed head (the base moved) must not carry"
+  assert_contains "$ERR" 'its diff changed only because the base moved' "carry-identical: error did not say why"
+
+  dir=$(make_case carry-rename-in bin/tool.sh)
+  full_record "$dir" "$REVIEWED_HEAD"
+  write_compare "$dir" ahead 'bin/helper.sh 1'
+  jq -c '.files[0].previous_filename = "notes/helper.md"' "$dir/compare.json" > "$dir/compare.next" && mv "$dir/compare.next" "$dir/compare.json"
+  run_case "$dir" record "$URL" --carry
+  expect_code 1 "$RC" "carry-rename-in: a file renamed from an exempt path into code must not carry"
+  assert_contains "$ERR" 'whole content is new to review' "carry-rename-in: error did not say why"
+
+  dir=$(make_case carry-moved bin/tool.sh)
+  full_record "$dir" "$REVIEWED_HEAD"
+  write_compare "$dir" ahead 'bin/tool.sh 1'
+  printf '%s\n' "$HEAD_SHA" "$HEAD_SHA" eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee > "$dir/heads"
+  run_case "$dir" record "$URL" --carry
+  expect_code 1 "$RC" "carry-moved: a head that moves while the carry is measured must not carry"
+  assert_contains "$ERR" 'moved while the carry was measured' "carry-moved: error did not say why"
 
   dir=$(make_case carry-binary bin/tool.sh)
   full_record "$dir" "$REVIEWED_HEAD"
@@ -562,10 +594,30 @@ test_record_carry_refuses_what_it_cannot_cover() {
   run_case "$dir" record "$URL" --carry
   expect_code 2 "$RC" "carry-unreadable: a compare that cannot be read should exit 2"
 
-  for dir in "$TMP_ROOT"/carry-none "$TMP_ROOT"/carry-large "$TMP_ROOT"/carry-rebased "$TMP_ROOT"/carry-binary "$TMP_ROOT"/carry-unreadable; do
+  for dir in "$TMP_ROOT"/carry-none "$TMP_ROOT"/carry-large "$TMP_ROOT"/carry-rebased "$TMP_ROOT"/carry-identical \
+    "$TMP_ROOT"/carry-rename-in "$TMP_ROOT"/carry-moved "$TMP_ROOT"/carry-binary "$TMP_ROOT"/carry-unreadable; do
     assert_no_grep 'pr comment' "$dir/gh.log" "$(basename "$dir"): a refused carry posted a record"
   done
-  pass "fm-code-review record --carry refuses no full record, the cap, a rebase, an unmeasurable file, and an unreadable compare"
+  pass "fm-code-review record --carry refuses no full record, the cap, a rebase, an unchanged head, a rename into code, a moving head, an unmeasurable file, and an unreadable compare"
+}
+
+# Under a risk-tiers.toml only the table exempts a path, so a carry counts
+# Markdown and data lines too.
+test_record_carry_counts_every_path_under_a_table() {
+  local dir
+  dir=$(make_case carry-table seed/ads.json)
+  write_table "$dir"
+  make_remote "$dir" seed/ads.json
+  printf 'business: seed/ads.json matches no rule (default business)\n' > "$dir/tier"
+  full_record "$dir" "$REVIEWED_HEAD"
+  write_compare "$dir" ahead 'AGENTS.md 400'
+  run_case "$dir" record "$URL" --carry
+  expect_code 1 "$RC" "carry-table: a large Markdown follow-up under a table must not carry"
+  assert_contains "$ERR" 'changes 400 counted lines' "carry-table: the Markdown lines were not counted"
+  write_compare "$dir" ahead 'AGENTS.md 3'
+  run_case "$dir" record "$URL" --carry
+  expect_code 0 "$RC" "carry-table: a small follow-up under a table should carry"
+  pass "fm-code-review record --carry counts every path where a risk-tiers.toml decides"
 }
 
 # A carry measures from the last full review, never from an earlier carry, so
@@ -601,3 +653,4 @@ test_record_posts_once_for_the_current_diff
 test_record_carry_covers_a_small_follow_up
 test_record_carry_refuses_what_it_cannot_cover
 test_record_carry_measures_from_the_last_full_review
+test_record_carry_counts_every_path_under_a_table
