@@ -22,7 +22,7 @@ When this session owns supervision and away mode is not active:
    Otherwise, it allows the stop when a watcher is healthy or an open auto-arm generation claim owns recovery, while fresh failure epochs advance the bounded one-time attended fail-open progression described there.
 9. Waiting on the hook-owned cycle is silent: do not send idle progress while the watcher is parked.
 10. `AskUserQuestion` holds the turn open until the captain answers, and with no turn end nothing re-arms.
-    While supervision is needed, `bin/fm-question-pretool-check.sh` allows it only for a present captain (his newest prompt or question answer in this session is within ten minutes) on a home whose keeper can keep the supervision host parked behind the open question ([supervision-host.md](../supervision-host.md#while-a-captain-question-is-open)), and denies it otherwise.
+    While supervision is needed, `bin/fm-question-pretool-check.sh` allows it only for a present captain (his newest prompt or question answer in this session is within thirty minutes) on a home whose keeper can keep the supervision host parked behind the open question ([supervision-host.md](../supervision-host.md#while-a-captain-question-is-open)), and denies it otherwise.
     While the question is open the host keeps handling the wakes it may take and holds every close for you; when the question closes, the held closes arrive in that same turn as one `Stop hook feedback` wake, handled as in step 3.
     When it is denied, ask in the turn's final message instead and end the turn; the answer arrives as an ordinary captain message.
 

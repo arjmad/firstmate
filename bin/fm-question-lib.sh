@@ -10,8 +10,9 @@
 # session is recent: his newest real prompt in the dialog mirror
 # (bin/fm-host-mirror.sh captain-epoch, which already drops rewakes and
 # operational input) or his newest answer to a question, which is a tool
-# result and so never a prompt. FM_QUESTION_PRESENT_SECONDS (default 600)
-# bounds "recent".
+# result and so never a prompt. FM_QUESTION_PRESENT_SECONDS (default 1800)
+# bounds "recent": thirty minutes, because firstmate often works ten to twenty
+# minutes on the captain's request before it has a question to ask.
 #
 # RECORDS (all under state/):
 #   .question-open      "<keeper pid>\t<identity>\t<tool use id>\t<epoch>":
@@ -43,7 +44,7 @@ fm_question_tool_blocks() {
 
 fm_question_present_window() {
   case "${FM_QUESTION_PRESENT_SECONDS:-}" in
-    ''|0*|*[!0-9]*) printf '600\n' ;;
+    ''|0*|*[!0-9]*) printf '1800\n' ;;
     *) printf '%s\n' "$FM_QUESTION_PRESENT_SECONDS" ;;
   esac
 }

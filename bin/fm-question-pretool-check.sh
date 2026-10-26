@@ -151,7 +151,7 @@ elif ! fm_question_keepable "$STATE" "$CONFIG" "$TRANSCRIPT"; then
 elif fm_question_captain_present "$STATE" "$SCRIPT_DIR"; then
   exit 0
 elif [ -n "$FM_QUESTION_CAPTAIN_AGE" ]; then
-  WHY="the captain's last message or answer in this session was $((FM_QUESTION_CAPTAIN_AGE / 60)) minutes ago, outside the $(( $(fm_question_present_window) / 60 ))-minute presence window"
+  WHY="the captain's last message or answer in this session was $(((FM_QUESTION_CAPTAIN_AGE + 59) / 60)) minutes ago, outside the $(( $(fm_question_present_window) / 60 ))-minute presence window"
 else
   WHY="the captain has sent no message in this session"
 fi
