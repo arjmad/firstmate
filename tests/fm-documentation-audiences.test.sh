@@ -135,7 +135,60 @@ MD
   pass "local links resolve while dates, versions, commands, and incident prose remain semantically reviewed"
 }
 
+# Add surfaces to the fixture inventory at <repo>: each argument is
+# "<path>=<audience>".
+add_fixture_surfaces() {
+  local repo=$1
+  shift
+  python3 - "$repo/docs/documentation-audiences.json" "$@" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+for entry in sys.argv[2:]:
+    surface, audience = entry.split("=", 1)
+    data["surfaces"].append({"path": surface, "audience": audience})
+path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+PY
+}
+
+test_directory_entry_classifies_its_files() {
+  local repo="$TMP_ROOT/directory-fixture"
+  mkdir -p "$repo/docs/records"
+  git -C "$repo" init -q
+  printf '%s\n' '[Setup](docs/setup.md) [Policy](docs/policy.md)' > "$repo/README.md"
+  printf '%s\n' '# Setup' > "$repo/docs/setup.md"
+  printf '%s\n' '# Policy' > "$repo/docs/policy.md"
+  printf '%s\n' '# Evidence' > "$repo/docs/evidence.md"
+  printf '%s\n' 'One record.' > "$repo/docs/records/2026-10-01-one.md"
+  printf '%s\n' 'Another record.' > "$repo/docs/records/2026-10-02-two.md"
+  write_fixture_inventory "$repo"
+  git -C "$repo" add README.md docs
+  run_expect_failure "unclassified: docs/records/2026-10-01-one.md, docs/records/2026-10-02-two.md" \
+    "$CHECK" --root "$repo"
+
+  add_fixture_surfaces "$repo" "docs/records/=maintainer-verification"
+  "$CHECK" --root "$repo" >/dev/null \
+    || fail "a directory entry did not classify the records under it"
+  printf '%s\n' 'A third record.' > "$repo/docs/records/2026-10-03-three.md"
+  git -C "$repo" add docs/records
+  "$CHECK" --root "$repo" >/dev/null \
+    || fail "a record added under a classified directory needed its own inventory entry"
+
+  add_fixture_surfaces "$repo" "docs/records/2026-10-01-one.md=operator-current"
+  run_expect_failure "docs/records/2026-10-01-one.md: classified more than once by docs/records/, docs/records/2026-10-01-one.md" \
+    "$CHECK" --root "$repo"
+
+  write_fixture_inventory "$repo"
+  add_fixture_surfaces "$repo" "docs/records/=maintainer-verification" "docs/none/=maintainer-verification"
+  run_expect_failure "not tracked/in scope: docs/none/" "$CHECK" --root "$repo"
+  pass "a directory entry classifies every tracked record under it, once, and only when it covers one"
+}
+
 test_repository_inventory_passes
 test_duplicate_and_setup_classification_fail
 test_required_pointer_fails
 test_local_links_and_no_keyword_heuristic
+test_directory_entry_classifies_its_files

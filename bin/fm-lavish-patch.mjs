@@ -6,8 +6,8 @@
 // panel, and fullscreen for the board's iframe, so a board's <video controls> can
 // go full screen. The overlay is bin/lavish-patch/chrome.css,
 // bin/lavish-patch/chrome-client.js, and bin/lavish-patch/chrome-client-head.js;
-// docs/fork-decisions.md records why it exists and which upstream pull requests
-// it tracks.
+// its records under docs/fork-decisions/ say why it exists and which upstream
+// pull requests it tracks.
 //
 // Usage: fm-lavish-patch.mjs apply|status|remove
 //   apply   Make the installed package's dist/chrome.css and dist/chrome-client.js

@@ -1,0 +1,5 @@
+2026-10-16: Arjun decided, reviewing the 2026-10-15 ecosystem audit, that while a question to him is unanswered firstmate keeps working everything else and only the item that needs his answer waits, over defaulting after a timeout or alerting only.
+The audit found the Claude helm parked on one open `AskUserQuestion` from 2026-10-15 05:21Z to 13:04Z: the selector holds the turn open, a Claude primary's supervision re-arms only at a turn end, and a supervision host that handed main a wake has stopped its own cycle, so no wake was handled.
+Decision: a fork-only PreToolUse guard denies the blocking question tool in a primary home whose fleet needs supervision and tells the helm to ask in its final message and end the turn; an idle home keeps the selector.
+It was chosen over letting the supervision host handle wakes during a blocked turn, which would need a new host mode and a second wake consumer racing main, and over guidance alone, because supervision infrastructure prefers deterministic enforcement to agent memory (`firstmate-coding-guidelines`), with the rule still stated in `AGENTS.md` section 9.
+No upstream proposal.

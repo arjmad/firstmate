@@ -295,7 +295,7 @@ family_for_basename() {
     fm-crew-state.test.sh|fm-captain-hold-lifecycle.test.sh|fm-progress.test.sh|\
     fm-documentation-audiences.test.sh|fm-ensure-agents-md.test.sh|fm-forge-detect.test.sh|\
     fm-google-workspace.test.sh|fm-grok-harness.test.sh|\
-    fm-fork-free-helpers.test.sh|\
+    fm-fork-decisions.test.sh|fm-fork-free-helpers.test.sh|\
     fm-harness-precedence.test.sh|\
     fm-kimi-harness.test.sh|fm-devin-harness.test.sh|fm-commandcode-harness.test.sh|fm-muse-harness.test.sh|fm-rovo-harness.test.sh|fm-agy-harness.test.sh|fm-omp-harness.test.sh|fm-polytoken-harness.test.sh|fm-herdr-lab.test.sh|fm-lint.test.sh|\
     fm-lint-workflows.test.sh|\
@@ -765,6 +765,7 @@ tests/fm-fleet-ledger.test.sh 20836
 tests/fm-fleet-snapshot-view.test.sh 24321
 tests/fm-fleet-sync.test.sh 54983
 tests/fm-forge-detect.test.sh 242
+tests/fm-fork-decisions.test.sh 2720
 tests/fm-fork-free-helpers.test.sh 756
 tests/fm-gate-refuse.test.sh 10594
 tests/fm-gemini-harness.test.sh 987
@@ -1740,6 +1741,11 @@ families_for_changed_path() {
     docs/fm-test-portable-shards.md|docs/fm-test-isolation-proof.md|\
     docs/fm-test-isolation-proof.json)
       printf '%s\n' pure-contract-unit
+      ;;
+    bin/fm-fork-decisions.sh|docs/fork-decisions.md|docs/fork-decisions/*)
+      # Records link each other, so the audience suite's link check runs too.
+      printf '%s\n' "__script__:fm-fork-decisions.test.sh"
+      printf '%s\n' "__script__:fm-documentation-audiences.test.sh"
       ;;
     .github/*|.gitattributes|.tasks.toml|AGENTS.md|CLAUDE.md|CONTRIBUTING.md|\
     docs/configuration.md|docs/supervision-protocols/*)

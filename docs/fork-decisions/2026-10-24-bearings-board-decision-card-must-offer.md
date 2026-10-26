@@ -1,0 +1,5 @@
+PR: #105
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| A bearings board decision card must offer a real choice, after Arjun objected in the helm on 2026-10-24 to a card carrying only Done plus the injected Reconcile: `build` refuses a decision card without at least two authored options, a `recommend_value` naming one of them, and `allow_freeform: true`, naming the card key and what it lacks; the template always renders the labelled note field on decision cards, and the bearings skill's board rule asks for two to four decision-specific options with hints; merge and credential cards keep their shapes | `bin/fm-bearings-board.sh` (`decision_card_gaps`, `command_build`, header), `.agents/skills/bearings/assets/board-template.html` (the note field condition), `.agents/skills/bearings/SKILL.md` (Lavish board mode), `tests/fm-bearings-board.test.sh`, `tests/fm-bearings-board-render.test.sh`, `tests/assets/board-render-harness.mjs`, `tests/fm-bearings-board-lavish-live-e2e.test.sh` (fixtures) | same files | carried | 45dd50a5 |

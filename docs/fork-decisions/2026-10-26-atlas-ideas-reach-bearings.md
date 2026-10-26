@@ -1,0 +1,5 @@
+PR: #113
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| Atlas's top 7 ideas reach bearings as ordinary cards, Arjun's approval of Atlas v1 on 2026-10-26 (picks go through bearings; keep test: at least two picked ideas, one with a measured gain): `fm-atlas.sh file` holds each idea as a reversible captain hold `atlas-<slug>` owned by the build that first offered it, `pick` names the fleet task a do-it starts, `keep-test` reads the picks and their measured results, and decision and credential cards may carry a `link` the meta line shows | `bin/fm-atlas.sh`, `tests/fm-atlas.test.sh`, `bin/fm-bearings-board.sh` (`validate_payload`), `.agents/skills/bearings/assets/board-template.html` (`metaLine`, `renderCard`), `.agents/skills/bearings/SKILL.md` (card copy, board wake, chat contract), `bin/fm-test-run.sh`, `docs/scripts.md`, `tests/fm-bearings-board.test.sh`, `tests/fm-bearings-board-render.test.sh` | same files | carried | 45dd50a5 |
