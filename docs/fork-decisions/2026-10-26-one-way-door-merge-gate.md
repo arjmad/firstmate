@@ -1,0 +1,9 @@
+2026-10-26: Arjun chose "matt-pr A" in the helm.
+Every coding agent writes its PR body with Matt Pocock's pr template, whose Merge Danger section names the door (`**Door:** one-way|two-way`) and the blast radius.
+Firstmate brings Arjun any PR marked a one-way door before merging it, even in a `yolo` project where it would otherwise merge on its own, because a one-way door cannot be walked back.
+Two-way PRs, and PRs with no Door line, keep merging as before.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| One-way door merge gate: the live PR body's Door line decides, failing closed; a one-way or unreadable door refuses standing authority and holds the task as an arjun-only captain call naming the PR and its blast radius, an attended `--one-way-approved` merges it on the captain's word only after that hold was recorded for the verified head, logged to `state/one-way-door-merges.log` once the merge is confirmed, and a body with no Door line merges with a notice | `bin/fm-pr-merge.sh` (`pr_body_merge_danger`, `require_door_authority`, `record_one_way_hold`, `log_one_way_merge`, `--one-way-approved`), `tests/fm-pr-merge.test.sh` (door cases) | `bin/fm-pr-merge.sh` (header, argument parsing, `require_current_away_authority`, the three verify functions' body read, each forge's merge path), `bin/fm-branch-prompt.sh` (away merge posture), `docs/task-lifecycle.md`, `.agents/skills/ship-landing/SKILL.md`, `docs/scripts.md` | carried | 45dd50a5 |
+| A direct-PR ship worker writes its PR body with the `matt-pr` skill, whose Merge Danger section carries the Door and Blast Radius lines the merge gate reads, because that skill's own trigger fires only when a body is asked for | `tests/fm-dod-lib.test.sh` (`test_direct_pr_dod_writes_the_matt_pr_body`) | `bin/fm-dod-lib.sh` (`fm_dod_block` direct-PR) | carried | 45dd50a5 |

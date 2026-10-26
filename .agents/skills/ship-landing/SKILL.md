@@ -21,6 +21,7 @@ In no-mistakes mode the earlier `done [at=<epoch>]: {summary}` is the pipeline h
 Tell the captain the PR's full `https://...` URL copied from the worker's ready line, the resolved checks-green crew-state line, or the task's `pr=` metadata, a concise outcome summary, and the no-mistakes risk level when applicable.
 A captain instruction to merge is explicit authority; `yolo` is the only standing routine merge authority.
 When `bin/fm-pr-merge.sh` refuses a code-changing PR as unreviewed, follow `docs/task-lifecycle.md` "Code review before merge" rather than waiving it.
+When it refuses a one-way door and holds the task, bring the captain that merge call with the PR's full URL and blast radius; after his explicit word, record it with `answer --release` and re-run with `--one-way-approved` (`docs/task-lifecycle.md` "Selected delivery path and merge authority").
 Act on a `STUCK:` line in `bin/fm-pr-merge.sh`'s output or a `check: fleet-sync:` wake; a `skipped: busy:` one needs nothing, because the scheduled sync retries it.
 For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake, print nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
 Retire a custom check only through `bin/fm-check-unregister.sh <id>` (or `bin/fm-teardown.sh` for a spawned task); never hand-compose an `rm` with `$STATE`/`$ID`.
