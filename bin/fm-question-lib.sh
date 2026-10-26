@@ -12,7 +12,7 @@
 # operational input) or his newest answer to a question, which is a tool
 # result and so never a prompt. FM_QUESTION_PRESENT_SECONDS (default 1800)
 # bounds "recent": thirty minutes, because firstmate often works ten to twenty
-# minutes on the captain's request before it has a question to ask him.
+# minutes on the captain's request before it has a question to ask.
 #
 # RECORDS (all under state/):
 #   .question-open      "<keeper pid>\t<identity>\t<tool use id>\t<epoch>":
