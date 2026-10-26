@@ -548,15 +548,19 @@ __FM_BEARINGS_BOARD_DATA__
     list.appendChild(item);
     return item;
   }
-  function metaLine(parts, prUrl) {
+  function metaLine(parts, prUrl, link) {
     var m = el("p", "fm-meta bb-item__meta");
     var text = parts.filter(Boolean).join(" · ");
-    m.appendChild(el("span", null, text + (text && prUrl ? " · " : "")));
-    if (prUrl) {
-      var a = el("a", null, prNumber(prUrl));
-      a.href = prUrl; a.title = prUrl; a.target = "_blank"; a.rel = "noopener";
+    var links = [];
+    if (prUrl) links.push({ url: prUrl, label: prNumber(prUrl) });
+    if (link) links.push(link);
+    m.appendChild(el("span", null, text + (text && links.length ? " · " : "")));
+    links.forEach(function (l, i) {
+      if (i) m.appendChild(el("span", null, " · "));
+      var a = el("a", null, l.label);
+      a.href = l.url; a.title = l.url; a.target = "_blank"; a.rel = "noopener";
       m.appendChild(a);
-    }
+    });
     return m;
   }
 
@@ -669,7 +673,7 @@ __FM_BEARINGS_BOARD_DATA__
     if (card.type === "merge") {
       meta = metaLine([card.repo, "checks green", "risk " + card.risk], card.pr_url);
     } else {
-      meta = metaLine([card.repo, card.type === "credential" ? "needs a login or key" : ""], card.pr_url);
+      meta = metaLine([card.repo, card.type === "credential" ? "needs a login or key" : ""], card.pr_url, card.link);
     }
     var ask = [card.about, card.decide, card.detail].filter(Boolean).join(" ");
     var item = itemShell(list, card.key, index, card.title, ask, meta);

@@ -125,6 +125,8 @@ Card and item copy, written by you per run:
 - A decision card carries a short noun-phrase title, one-line `about` and `decide` context rows, and two to four options specific to that decision, each with a hint saying what it does, one named in `recommend_value` (the board opens with it already chosen and offers Take all recommendations across cards), and `allow_freeform: true`.
   Never compose a generic Done-only card; `build` refuses a decision card with fewer than two distinct authored options, no `recommend_value` naming one, or no `allow_freeform`, and names what it lacks.
   Card `type` (decision, merge, credential) is your composing judgment; set `close: "release"` on a card whose task is a captain-gated WORK item.
+- An Atlas idea is a captain hold whose task id starts `atlas-`; `bin/fm-atlas.sh` files them from an `/atlas` build, and its header owns their record and the keep test.
+  Compose each as a decision card titled with the idea, with `about` its estimate and evidence and `decide` "Start this?" (both from the hold reason), options `do-it` (recommended; its hint says firstmate files the brief as fleet work) and `drop`, `allow_freeform: true`, and, when `bin/fm-atlas.sh latest` names a board, `link` {url, label "Atlas board"} to it.
 - Compose exactly one card or item per captain-held task id, consolidating several questions on one task into it; keys never repeat across `captains_call` and `inbox`.
 - Never author a `reconcile` option or action; `build` gives every decision card the standard reconcile choice and reserves the value.
 - Before carding a hold, check that its subject has not already landed and omit it when it has: put a hold's one PR in `pr_url` and a published version in `subject`, and `build` drops a card whose task, PR, or subject appears among the landed rows or whose task is no longer an open captain call.
@@ -149,6 +151,8 @@ Route every other answer yourself, by its effect, under the normal authority rul
 - `remind-at`: the backlog holds dates only, so for a due item run `bin/fm-captain-hold.sh defer <id> --until <its date> --decision-file <file>` and bring it back to the captain at that time; for a worker, steer it to wait until then.
 - `prune` (the weekly prune card): run `bin/fm-backlog-prune.sh apply <question> <pick>`, adding `values.picked` for `drop-picked`; the tap is the captain's word for exactly those closes, so ask nothing more, and echo every `dropped:` and `skipped:` line in chat.
   A note-only prune answer drops nothing.
+- An `atlas-` card answer, after the intake closed it: run `bin/fm-atlas.sh pick <id> <pick>`, and file the brief its `dispatch:` line prints as a fleet backlog task in that repo through the normal lifecycle.
+  The do-it tap is the captain's word to start that work; anything it would spend, send, or delete still asks under the normal authority rules.
 - `dispatch`: start the work its `brief` names through the normal lifecycle; `draft` prepares something for his review and never sends, files, or pays; `send-mail` sends only from an account firstmate already sends from, otherwise drafts and asks; `record` writes its values through the owning skill.
 - Once that effect is in motion on a due item, record his pick with `bin/fm-captain-hold.sh answer <id> --decision-file <file>` (`--release` when the item declares `close: release`), so the item leaves his inbox.
 - A note-only answer (no pick, route `captain instruction`) is his own words about that item: read them and act on them as a fresh captain instruction, and never close, release, or re-hold the item on the strength of a note unless the words say so.
@@ -183,6 +187,7 @@ Every `/bearings` chat response renders EXACTLY these four sections, in THIS ord
 1. **Captain's Call** - ONLY unsuppressed items that need the captain's own action now: a decision to make, a PR to approve or merge, a credential or login to provide, or a blocker only the captain can clear.
    Deferred or aged holds follow the presentation safety rule above instead.
    Include `contributions.captain` rows in this section, deduplicating any row already represented by its live captain hold or merge call.
+   Open Atlas idea holds (`atlas-` task ids) take one line: how many wait on him and the Atlas board link `bin/fm-atlas.sh latest` names.
    Show the other contribution actors only as counts beside the checked/known coverage, and disclose `captain_omitted`, `unmeasured_homes`, stale verdicts and checks with no verdict when nonzero.
    Empty-state: "Nothing needs your action right now" is allowed only when `contributions.proven_clear` is true and the existing decision set is empty.
    When the section is empty but coverage is incomplete, say that no decision is recorded and give the checked/known count; a missing coverage field is also unverified.
