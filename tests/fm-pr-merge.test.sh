@@ -4818,7 +4818,7 @@ test_two_way_and_missing_door_merge_as_today() {
 }
 
 test_one_way_door_holds_for_the_captain_until_his_word() {
-  local case_dir rc show
+  local case_dir rc show line
   case_dir=$(make_case door-one-way)
   mkdir -p "$case_dir/wt"
   add_gh_mocks "$case_dir" 7373737373737373737373737373737373737373
@@ -4865,10 +4865,12 @@ test_one_way_door_holds_for_the_captain_until_his_word() {
   rc=$?
   set -e
   expect_code 1 "$rc" "door-one-way: a one-way door without --one-way-approved must refuse again"
+  assert_grep "already carries the captain's answer" "$case_dir/stderr" \
+    "door-one-way: the answered call was not named"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "door-one-way: the forge merge ran without the captain's flag"
-  captain_hold "$case_dir" answer task-x1 --decision-file "$case_dir/decision" --release >/dev/null \
-    || fail "door-one-way: the captain's repeated answer could not be recorded"
+  captain_hold "$case_dir" open task-x1 >/dev/null 2>&1 \
+    && fail "door-one-way: an answered call was held a second time"
 
   set +e
   run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/73 --one-way-approved \
@@ -4879,6 +4881,11 @@ test_one_way_door_holds_for_the_captain_until_his_word() {
   assert_grep "merging on the captain's explicit word" "$case_dir/stderr" \
     "door-one-way: the explicit merge was not reported"
   assert_logged_gh_merge "$case_dir" 73 example/repo --squash
+  line=$(cat "$case_dir/state/one-way-door-merges.log")
+  case "$line" in
+    *$'\ttask-x1\thttps://github.com/example/repo/pull/73\thead=7373737373737373737373737373737373737373\tcustomer orders') ;;
+    *) fail "door-one-way: unexpected one-way merge log line: $line" ;;
+  esac
   pass "fm-pr-merge holds a one-way door for the captain and merges it only on his explicit word"
 }
 
@@ -4895,12 +4902,51 @@ test_unreadable_door_is_a_one_way_door_on_every_forge() {
   rc=$?
   set -e
   expect_code 1 "$rc" "door-placeholder: an unfilled Door line must refuse"
-  assert_grep 'neither one-way nor two-way' "$case_dir/stderr" \
+  assert_grep 'neither plainly one-way nor plainly two-way' "$case_dir/stderr" \
     "door-placeholder: the unreadable Door line was not named"
   assert_grep 'blast radius: not stated' "$case_dir/stderr" \
     "door-placeholder: a missing blast radius was not stated"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "door-placeholder: the forge merge ran on an unfilled Door line"
+
+  local body n=0
+  for body in \
+    '| Door | one-way |' \
+    '1. **Door:** one-way' \
+    '### Door: one-way' \
+    '_Door:_ one-way' \
+    $'```bash\n~~~\n```\n**Door:** one-way' \
+    $'```x```\n**Door:** one-way' \
+    $'```\nunclosed' \
+    'Door: two-way|one-way' \
+    $'## Merge Danger\n\n**Blast Radius:** docs'; do
+    n=$((n + 1))
+    case_dir=$(make_case "door-variant-$n")
+    mkdir -p "$case_dir/wt"
+    add_gh_mocks "$case_dir" 7676767676767676767676767676767676767676
+    file_task_x1 "$case_dir"
+    set_pr_body "$case_dir/github-view.json" body "$body"
+    set +e
+    run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/76 \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 1 "$rc" "door-variant-$n: $body must be read as a one-way door"
+    assert_no_grep 'pr merge' "$case_dir/gh.log" \
+      "door-variant-$n: the forge merge ran on $body"
+  done
+
+  case_dir=$(make_case door-comment)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" 7777777777777777777777777777777777777777
+  file_task_x1 "$case_dir"
+  set_pr_body "$case_dir/github-view.json" body $'<!--\nDoor: one-way when irreversible\n-->\n**Door:** two-way'
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/77 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "door-comment: template guidance in an HTML comment is not the door"$'\n'"$(cat "$case_dir/stderr")"
 
   case_dir=$(make_gitlab_case door-gitlab)
   file_task_x1 "$case_dir"
@@ -4926,6 +4972,26 @@ test_unreadable_door_is_a_one_way_door_on_every_forge() {
   assert_no_grep 'pulls/9/merge' "$case_dir/tea.log" \
     "door-forgejo: tea merged a one-way door"
   pass "fm-pr-merge reads an unfilled Door line as one-way and gates GitLab and Forgejo too"
+}
+
+test_one_way_approved_needs_a_recorded_hold() {
+  local case_dir rc
+  case_dir=$(make_case door-unheld-flag)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" 7878787878787878787878787878787878787878
+  file_task_x1 "$case_dir"
+  set_pr_body "$case_dir/github-view.json" body "$(one_way_body)"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/78 --one-way-approved \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "door-unheld-flag: the flag must not skip bringing the captain the call"
+  assert_grep 'records none' "$case_dir/stderr" \
+    "door-unheld-flag: the missing hold was not named"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "door-unheld-flag: the forge merge ran on a one-way door the captain never saw"
+  pass "fm-pr-merge refuses --one-way-approved for a one-way door that was never held"
 }
 
 test_one_way_approved_is_attended_only() {
@@ -5175,4 +5241,5 @@ test_allow_no_pipeline_is_attended_only_and_gitlab_only
 test_two_way_and_missing_door_merge_as_today
 test_one_way_door_holds_for_the_captain_until_his_word
 test_unreadable_door_is_a_one_way_door_on_every_forge
+test_one_way_approved_needs_a_recorded_hold
 test_one_way_approved_is_attended_only
