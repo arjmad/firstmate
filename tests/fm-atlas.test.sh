@@ -84,7 +84,7 @@ test_refiling_and_answered_ideas() {
   answer "$home" atlas-one-1 "drop"
   out=$(atlas "$home" file "$home/atlas.json") || fail "refiling the same build failed: $out"
   assert_contains "$out" "skipped: atlas-one-1 (answered in an earlier build)" "an answered idea was asked again"
-  assert_contains "$out" "held: atlas-one-2" "a still-open idea was not kept on the board"
+  assert_contains "$out" "open: atlas-one-2" "a still-open idea was not reported open"
   atlas "$home" pick atlas-one-3 drop >/dev/null || fail "pick refused"
   make_build "$home/next.json" "2026-11-02 13:00Z" one
   out=$(atlas "$home" file "$home/next.json")
@@ -137,11 +137,13 @@ test_keep_test_reads_picks_and_results() {
   [ "$(atlas "$home" keep-test | jq -r .verdict)" = open ] || fail "one build with no picks is not open"
   atlas "$home" pick atlas-one-1 do-it >/dev/null
   atlas "$home" file "$home/two.json" >/dev/null
-  [ "$(atlas "$home" keep-test | jq -r .verdict)" = not-met ] || fail "two builds with one pick is not not-met"
+  atlas "$home" keep-test | jq -e '.verdict == "open" and .unanswered == 13' >/dev/null \
+    || fail "a second build with unanswered ideas already reads as decided"
   atlas "$home" pick atlas-two-2 do-it >/dev/null
   [ "$(atlas "$home" keep-test | jq -r .verdict)" = open ] || fail "two unmeasured picks are not open"
-  atlas "$home" measure one-1 --gain no --result "no change in a week" >/dev/null
-  atlas "$home" measure two-2 --gain yes --result "\$300/week back" >/dev/null
+  atlas "$home" measure atlas-one-1 --gain no --result "no change in a week" >/dev/null \
+    || fail "measure refused the task id"
+  atlas "$home" measure two-2 --gain yes --result "\$300/week back" >/dev/null || fail "measure refused the slug"
   atlas "$home" file "$home/three.json" >/dev/null
   atlas "$home" pick atlas-three-3 do-it >/dev/null
   atlas "$home" keep-test | jq -e '.verdict == "met" and .measured_gains == 1 and (.picked | length) == 2
@@ -153,8 +155,48 @@ test_keep_test_reads_picks_and_results() {
   pass "the keep test counts the first two builds' picks and their measured gains"
 }
 
+test_keep_test_is_not_met_once_every_idea_is_answered() {
+  local home n
+  home=$(make_home notmet)
+  make_build "$home/one.json" "2026-10-26 13:00Z" one
+  make_build "$home/two.json" "2026-11-02 13:00Z" two
+  atlas "$home" file "$home/one.json" >/dev/null
+  atlas "$home" file "$home/two.json" >/dev/null
+  atlas "$home" pick atlas-one-1 do-it >/dev/null
+  for n in 2 3 4 5 6 7; do atlas "$home" pick "atlas-one-$n" drop >/dev/null; done
+  for n in 1 2 3 4 5 6 7; do atlas "$home" pick "atlas-two-$n" drop >/dev/null; done
+  atlas "$home" keep-test | jq -e '.verdict == "not-met" and .unanswered == 0' >/dev/null \
+    || fail "two builds fully answered with one pick is not not-met"
+  pass "the keep test is not met only once both builds are fully answered with fewer than two picks"
+}
+
+test_an_idea_belongs_to_the_build_that_first_offered_it() {
+  local home out
+  home=$(make_home first)
+  make_build "$home/one.json" "2026-10-26 13:00Z" one
+  make_build "$home/two.json" "2026-11-02 13:00Z" one
+  jq '.ideas[0].brief = "A reworded brief" | .ideas[0].repo = "fleet" | .ideas[0].text = "Reworded"' \
+    "$home/two.json" > "$home/two.tmp" && mv "$home/two.tmp" "$home/two.json"
+  atlas "$home" file "$home/one.json" --board http://board.example/session/1 >/dev/null
+  atlas "$home" file "$home/two.json" --board http://board.example/session/2 >/dev/null
+  out=$(atlas "$home" pick atlas-one-1 do-it)
+  assert_contains "$out" "dispatch: business	Start work on idea one 1" "the pick did not dispatch the brief on the card"
+  atlas "$home" keep-test | jq -e '.picked[0].built_at == "2026-10-26 13:00Z"' >/dev/null \
+    || fail "the pick was not credited to the build that first offered the idea"
+  # Refiling the first build keeps the build order and, without --board, its link.
+  atlas "$home" file "$home/one.json" >/dev/null
+  jq -e '[.builds[].built_at] == ["2026-10-26 13:00Z", "2026-11-02 13:00Z"] and .builds[0].board == "http://board.example/session/1"' \
+    "$home/state/atlas/record.json" >/dev/null || fail "refiling a build reordered the builds or lost its board link"
+  if atlas "$home" file "$home/one.json" --board file:///tmp/atlas.html >/dev/null 2>&1; then
+    fail "file accepted a board link bearings would refuse"
+  fi
+  pass "an idea keeps its first build's wording, brief and credit, and refiling keeps order and link"
+}
+
 test_file_holds_each_idea_for_the_captain
 test_refiling_and_answered_ideas
 test_file_refuses_a_bad_build
 test_pick_names_the_fleet_task
 test_keep_test_reads_picks_and_results
+test_keep_test_is_not_met_once_every_idea_is_answered
+test_an_idea_belongs_to_the_build_that_first_offered_it
