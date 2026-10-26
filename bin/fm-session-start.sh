@@ -19,7 +19,7 @@
 # standalone with unchanged default behavior - other flows (fm-bootstrap.sh
 # install <tools> after consent, /updatefirstmate, the afk daemon, existing
 # tests) still call them directly. The one seam this script needed -
-# bootstrap running its detect-only diagnostics without its eight mutating
+# bootstrap running its detect-only diagnostics without its nine mutating
 # sweeps - is an opt-in FM_BOOTSTRAP_DETECT_ONLY=1 flag on fm-bootstrap.sh
 # itself (default unset/0 = unchanged behavior), not a fork.
 #
@@ -32,8 +32,9 @@
 #                      (bin/fm-role.sh report), purely local, no network.
 #   2. bootstrap      - home-local stale Herdr projection cleanup runs only
 #                       when this session actually holds the lock. Detect-only
-#                       diagnostics always run. Bootstrap's eight MUTATING sweeps
+#                       diagnostics always run. Bootstrap's nine MUTATING sweeps
 #                       (same-home backlog reconciliation, the state residue sweep,
+#                       the data media retention prune,
 #                       secondmate convergence, secondmate liveness, pending remote
 #                       handoff retry, X-mode artifact writes, the Lavish chrome
 #                       patch, fleet sync) also run only when
@@ -210,8 +211,9 @@
 #   --reemit  This process ALREADY took the helm at its own startup and has
 #             only lost its context (a /clear or a compaction). Skip the
 #             mutating sweeps that startup already reconciled - the stale Herdr
-#             projection cleanup and bootstrap's eight mutating sweeps (fleet
+#             projection cleanup and bootstrap's nine mutating sweeps (fleet
 #             sync, same-home backlog reconciliation, the state residue sweep,
+#             the data media retention prune,
 #             secondmate convergence and liveness, pending remote handoff retry,
 #             X-mode artifact writes, the Lavish chrome patch) - and
 #             re-emit the rest. Wake-queue presentation is NOT skipped: queued
