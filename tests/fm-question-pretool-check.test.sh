@@ -279,8 +279,10 @@ test_presence_window_defaults_to_thirty_minutes() {
   give_work "$STATE"
   captain_said 1500
   expect_allow "captain prompted 25 minutes ago" AskUserQuestion
-  captain_said 1900
-  expect_deny "captain prompted 31 minutes ago" AskUserQuestion
+  captain_said 1830
+  expect_deny "captain prompted 30.5 minutes ago" AskUserQuestion
+  assert_contains "$(jq -r '.systemMessage' "$ERR")" "31 minutes ago, outside the 30-minute presence window" \
+    "a deny just past the window must not round the captain's silence down into it"
   captain_silent
   captain_answered 1500
   expect_allow "captain answered a question 25 minutes ago" AskUserQuestion
