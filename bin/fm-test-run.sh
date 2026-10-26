@@ -354,7 +354,7 @@ family_for_basename() {
     fm-bootstrap.test.sh|fm-bootstrap-network-parallel.test.sh|fm-fleet-sync.test.sh|fm-gate-refuse.test.sh|fm-gotmp.test.sh|\
     fm-lavish-patch.test.sh|\
     fm-session-start.test.sh|fm-sessionstart-nudge.test.sh|fm-startup-network.test.sh|\
-    fm-state-residue-sweep.test.sh|\
+    fm-state-residue-sweep.test.sh|fm-data-media-prune.test.sh|\
     fm-tangle-guard.test.sh|fm-update.test.sh)
       printf '%s\n' session-bootstrap
       ;;
@@ -755,6 +755,7 @@ tests/fm-cursor-harness.test.sh 30095
 tests/fm-cursor-primary-live-e2e.test.sh 84
 tests/fm-cursor-primary.test.sh 70956
 tests/fm-daemon.test.sh 33606
+tests/fm-data-media-prune.test.sh 3000
 tests/fm-devin-harness.test.sh 3725
 tests/fm-devin-signals-live-e2e.test.sh 63
 tests/fm-dispatch-resolve.test.sh 10085
@@ -1554,6 +1555,11 @@ families_for_changed_path() {
       # The locked bootstrap sweep that retires the watcher's per-endpoint
       # markers; its own suite drives it directly and through fm-bootstrap.sh.
       printf '%s\n' "__script__:fm-state-residue-sweep.test.sh"
+      ;;
+    bin/fm-data-media-prune.sh)
+      # The locked bootstrap prune of torn-down tasks' media; its own suite
+      # drives it directly and through fm-bootstrap.sh.
+      printf '%s\n' "__script__:fm-data-media-prune.test.sh"
       ;;
     bin/fm-quota-axi-lib.sh)
       printf '%s\n' session-bootstrap
