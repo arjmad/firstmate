@@ -22,8 +22,9 @@
 #            precedes arm, so the board can never produce an answer that has
 #            nowhere to go (captain-hold-lifecycle's ordering rule, enforced
 #            here rather than left to agent memory). Output starts with
-#            `board: <path>`, then includes lavish-axi's session output and
-#            the remaining status:
+#            `board: <path>`, then includes lavish-axi's session output, its
+#            session URL in the phone-openable form bin/fm-lavish-url.sh
+#            prints, and the remaining status:
 #              session: live | reopened
 #              served: <path>
 #              bound: <source-id>
@@ -475,13 +476,13 @@ establish_board_session() {  # <board>
   BOARD_SESSION_REOPENED=0
   real=$(board_realpath "$board") || fail "cannot resolve the board path: $board"
   out=$(lavish-axi "$board") || fail "cannot establish the board Lavish session"
-  printf '%s\n' "$out"
+  printf '%s\n' "$out" | "$SCRIPT_DIR/fm-lavish-url.sh"
   if lavish_board_live "$out" "$real"; then
     printf 'session: live\n'
     return 0
   fi
   out=$(lavish-axi "$board" --reopen) || fail "cannot reopen the ended board Lavish session"
-  printf '%s\n' "$out"
+  printf '%s\n' "$out" | "$SCRIPT_DIR/fm-lavish-url.sh"
   if lavish_board_live "$out" "$real"; then
     BOARD_SESSION_REOPENED=1
     printf 'session: reopened\n'

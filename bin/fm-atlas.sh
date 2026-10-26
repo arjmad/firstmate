@@ -33,7 +33,8 @@
 #              failed: atlas-<slug> (<why>)
 #            Then the build is recorded in the order builds were first filed;
 #            refiling one updates it in place. --board records the board link
-#            (http or https, as bearings links it); without it a refiled build
+#            (http or https, as bearings links it; a Lavish session URL in the
+#            phone-openable form bin/fm-lavish-url.sh prints); without it a refiled build
 #            keeps the link it had. Exit 1 when any hold failed, 2 for a refused
 #            argument or file.
 # latest     Print the latest build as JSON {built_at, board, file}, or
@@ -148,6 +149,7 @@ cmd_file() {
   [ -f "$file" ] || refuse "no such file: $file"
   case "$board" in ''|http://?*|https://?*) ;; *) refuse "--board must be an http or https URL" ;; esac
   case "$board" in *[[:space:]]*) refuse "--board must be an http or https URL" ;; esac
+  [ -z "$board" ] || board=$("$SCRIPT_DIR/fm-lavish-url.sh" "$board")
   valid_atlas "$file" || refuse "$file is not an atlas.v1 build with seven ranked ideas"
   lock_record
   # Slugs some earlier build already offered: their cards are open or answered.
