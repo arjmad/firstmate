@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Provision and operate an isolated Herdr lab session without risking the live
-# default session.
+# fleet's sessions.
 #
 # Usage:
 #   fm-herdr-lab.sh name <label>
@@ -25,8 +25,9 @@
 # delete is available only through teardown.
 # Both paths perform a fresh refuse-default check immediately before each
 # destructive call.
-# Provision records the running default session as a fleet-state tripwire and
-# teardown requires that record to be identical afterward.
+# Provision records every running non-lab session (default, or a named live
+# fleet such as fm-remote) as a fleet-state tripwire and teardown requires that
+# record to be identical afterward.
 # The viewer command attaches or detaches one real foreground Herdr client on
 # an owned lab session over a fixed 40-row by 120-column pty;
 # bin/fm-herdr-lab-viewer.py owns the pty mechanics.
@@ -83,14 +84,14 @@ fm_herdr_lab_fleet_state() { # <session>
     return 1
   }
   snapshot=$(printf '%s' "$sessions" | jq -c '
-    [.sessions[]? | select(.default == true)]
-    | if length == 1 and .[0].name == "default" and .[0].running == true
-      then .[0] | {name, default, running, socket_path}
-      else empty
-      end
+    [.sessions[]
+      | select(.running == true and (.default == true or (.name | startswith("fm-lab-") | not)))
+      | {name, default, running, socket_path}]
+    | sort_by(.name)
+    | if length > 0 then . else empty end
   ' 2>/dev/null)
   [ -n "$snapshot" ] || {
-    fm_herdr_lab_error "fleet-state tripwire requires exactly one running default session"
+    fm_herdr_lab_error "fleet-state tripwire requires at least one running non-lab Herdr session"
     return 1
   }
   printf '%s\n' "$snapshot"
@@ -466,7 +467,7 @@ fm_herdr_lab_check_tripwire() { # <session>
   before=$(cat "$tripwire")
   after=$(fm_herdr_lab_fleet_state "$name") || return 1
   [ "$before" = "$after" ] || {
-    fm_herdr_lab_error "FLEET-STATE TRIPWIRE FAILED: default session changed during lab work"
+    fm_herdr_lab_error "FLEET-STATE TRIPWIRE FAILED: live Herdr sessions changed during lab work"
     fm_herdr_lab_error "before: $before"
     fm_herdr_lab_error "after:  $after"
     return 1
