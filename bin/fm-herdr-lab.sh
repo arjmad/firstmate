@@ -85,7 +85,7 @@ fm_herdr_lab_fleet_state() { # <session>
   }
   snapshot=$(printf '%s' "$sessions" | jq -c '
     [.sessions[]
-      | select(.running == true and (.name | startswith("fm-lab-") | not))
+      | select(.running == true and (.default == true or (.name | startswith("fm-lab-") | not)))
       | {name, default, running, socket_path}]
     | sort_by(.name)
     | if length > 0 then . else empty end

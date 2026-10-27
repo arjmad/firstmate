@@ -274,15 +274,18 @@ test_tripwire_follows_a_non_default_live_fleet() {
 }
 
 test_unreadable_session_list_refuses_provision() {
-  local name="fm-lab-unreadable-$$" status=0
-  : > "$FAKE_LOG"
-  printf '%s\n' '[{"name":"fm-remote"' > "$FAKE_STATE/fleet.json"
-  run_with_fake fm_herdr_lab_provision "$name" >/dev/null 2>&1 || status=$?
-  expect_code 1 "$status" "an unreadable session list must refuse provisioning"
-  assert_absent "$TRIPWIRES/$name.fleet-state.json" "refused provision left a tripwire behind"
-  [ ! -f "$FAKE_STATE/$name" ] || fail "refused provision still started the lab session"
+  local name="fm-lab-unreadable-$$" status fleet
+  for fleet in '[{"name":"fm-remote"' null; do
+    status=0
+    : > "$FAKE_LOG"
+    printf '%s\n' "$fleet" > "$FAKE_STATE/fleet.json"
+    run_with_fake fm_herdr_lab_provision "$name" >/dev/null 2>&1 || status=$?
+    expect_code 1 "$status" "a session list of $fleet must refuse provisioning"
+    assert_absent "$TRIPWIRES/$name.fleet-state.json" "refused provision left a tripwire behind"
+    [ ! -f "$FAKE_STATE/$name" ] || fail "refused provision still started the lab session"
+  done
   rm -f "$FAKE_STATE/fleet.json"
-  pass "fm-herdr-lab: an unreadable session list refuses provisioning"
+  pass "fm-herdr-lab: an unreadable or malformed session list refuses provisioning"
 }
 
 test_stopped_owned_lab_can_reprovision() {
