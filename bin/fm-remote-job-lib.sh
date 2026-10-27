@@ -73,9 +73,10 @@
 # its configured FM_ROOT/bin. Every child receives env -i with the composed
 # PATH, HOME, FM_HOME, FM_ROOT_OVERRIDE, and FM_REMOTE_JOB_ACTIVE=1. The PATH
 # is intentionally filesystem-discovered rather than login-shell-derived:
-# ~/.local/bin; nvm, asdf, and mise shims/install bins; Nix; Homebrew; and the
-# system tail. No shell startup files are evaluated. Each discovered set is
-# appended in the shell's own sorted pathname-expansion order, so which install
+# ~/.local/bin; Firstmate's toolchain at ~/.local/state/firstmate/toolchain/bin;
+# nvm, asdf, and mise shims/install bins; Nix; Homebrew; and the system tail.
+# No shell startup files are evaluated. Each discovered set is appended in the
+# shell's own sorted pathname-expansion order, so which install
 # of a multi-version tool wins is fixed by this composition rather than by the
 # order the filesystem happens to return.
 #
@@ -274,6 +275,7 @@ fm_remote_job_compose_operator_path() { # <account-home>
   local account_home=$1 account_user nvm_bin
   FM_REMOTE_JOB_OPERATOR_PATH=
   fm_remote_job_path_append_if_dir "$account_home/.local/bin"
+  fm_remote_job_path_append_if_dir "$account_home/.local/state/firstmate/toolchain/bin"
   nvm_bin=$(fm_remote_job_nvm_selected_bin "$account_home" 2>/dev/null || true)
   [ -z "$nvm_bin" ] || fm_remote_job_path_append "$nvm_bin"
   fm_remote_job_path_append_if_dir "$account_home/.asdf/shims"

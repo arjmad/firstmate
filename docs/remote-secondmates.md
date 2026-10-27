@@ -144,12 +144,13 @@ The authorized child sees these directories, in this order:
 
 1. `<remote-root>/bin`.
 2. A genuine account `~/.local/bin`.
-3. The nvm default version bin.
-4. asdf shims and install bins.
-5. mise shims and install bins.
-6. Nix directories.
-7. Homebrew directories.
-8. The system tail `/usr/bin:/bin:/usr/sbin:/sbin`.
+3. Firstmate's toolchain directory `~/.local/state/firstmate/toolchain/bin`, where a host that points npm's global prefix at `~/.local/state/firstmate/toolchain` keeps the tools bootstrap installs.
+4. The nvm default version bin.
+5. asdf shims and install bins.
+6. mise shims and install bins.
+7. Nix directories.
+8. Homebrew directories.
+9. The system tail `/usr/bin:/bin:/usr/sbin:/sbin`.
 
 The Nix and package-manager order after version-manager discovery is:
 
@@ -174,7 +175,7 @@ For the three Nix locations:
 - A final `bin` symlink is resolved to its physical directory.
 - A path reached through symlinked ancestors remains in its documented position.
 
-Other final-component symlink directories, including `~/.local/bin`, are excluded.
+Other final-component symlink directories, including `~/.local/bin` and the toolchain directory, are excluded.
 
 ### Stale Herdr clients
 
