@@ -1728,7 +1728,13 @@ fm_backend_herdr_server_ensure() {  # <session>
   (
     unset FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE \
       CURSOR_AGENT CURSOR_INVOKED_AS CLAUDECODE PI_CODING_AGENT FM_PI_HARNESS GROK_AGENT FM_SUPERVISION_MODEL
-    fm_backend_herdr_cli "$session" server </dev/null >/dev/null 2>&1 &
+    client_bin=herdr
+    [ "${FM_BACKEND_HERDR_CLIENT_SESSION:-}" != "$session" ] || client_bin=$(fm_backend_herdr_bin)
+    # Background the client itself, not a shell function: a backgrounded
+    # function is a forked shell that lives as long as the server and keeps the
+    # caller's descriptors bash saved for a redirection, so a caller reading
+    # this process's output (a remote doctor --fix over SSH) never sees EOF.
+    HERDR_SESSION="$session" "$client_bin" server --session "$session" </dev/null >/dev/null 2>&1 &
   ) || return 1
   for i in $(seq 1 20); do
     running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
