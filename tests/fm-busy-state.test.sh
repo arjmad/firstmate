@@ -613,8 +613,54 @@ test_turn_ended_notification_is_generation_bound() {
   pass "the turn-ended notification rides the apply generation check"
 }
 
+apply_from_session() {  # <state> <id> <gen> <session> <busy|idle> <event> [extra...]
+  local state=$1 id=$2 gen=$3 session=$4 verdict=$5 event=$6
+  shift 6
+  printf '{"session_id":"%s","hook_event_name":"%s"}' "$session" "$event" \
+    | "$EV" apply "$state" "$id" "$verdict" --gen "$gen" --source claude-hook --event "$event" \
+      --session-from-payload "$@"
+}
+
+# A nested Claude run started inside a worker's worktree loads the same hook
+# settings, so its events carry the worker's id and gen. Only the session that
+# posted first under the gen may write the record.
+test_session_binding_refuses_a_foreign_session() {
+  local state gen before replacement
+  state=$(new_state_dir session-binding)
+  gen=$("$EV" arm "$state" t1)
+  apply_from_session "$state" t1 "$gen" worker busy user-prompt-submit \
+    || fail "the first session-carrying event was refused"
+  before=$(cat "$state/t1.busy-state")
+  for event in user-prompt-submit stop session-end; do
+    if apply_from_session "$state" t1 "$gen" nested idle "$event" --turn-ended 2>/dev/null; then
+      fail "a foreign session's $event was accepted"
+    fi
+  done
+  [ "$(cat "$state/t1.busy-state")" = "$before" ] || fail "a foreign session changed the record"
+  [ ! -e "$state/t1.turn-ended" ] || fail "a foreign session's Stop signalled a turn end"
+  [ "$(fm_busy_classify tmux w1 claude t1 "$state")" = "busy claude-hook" ] \
+    || fail "the worker must still classify busy after a nested run ends"
+  apply_from_session "$state" t1 "$gen" worker idle stop --turn-ended \
+    || fail "the bound session's Stop was refused"
+  [ -f "$state/t1.turn-ended" ] || fail "the bound session's Stop did not signal a turn end"
+  "$EV" apply "$state" t1 busy --gen "$gen" --source fm-recovery --event relaunch \
+    || fail "an event without a session payload must keep its current meaning"
+  if printf '{"hook_event_name":"Stop"}' | "$EV" apply "$state" t1 idle --gen "$gen" \
+      --source claude-hook --event stop --session-from-payload 2>/dev/null; then
+    fail "a payload naming no session was accepted"
+  fi
+  replacement=$("$EV" arm "$state" t1)
+  apply_from_session "$state" t1 "$replacement" relaunched busy user-prompt-submit \
+    || fail "a new incarnation must bind to its own first session"
+  "$EV" retire "$state" t1 --gen "$replacement" || fail "retire failed"
+  [ -z "$(find "$state" -name 't1.*' ! -name 't1.turn-ended')" ] \
+    || fail "retire left incarnation files: $(ls "$state")"
+  pass "a gen binds to its first session, refuses every other session's events, and rebinds on arm"
+}
+
 test_progress_is_generation_bound_and_not_semantic_state
 test_turn_ended_notification_is_generation_bound
+test_session_binding_refuses_a_foreign_session
 
 test_arm_seeds_busy_spawn
 test_apply_advances_seq_and_source
