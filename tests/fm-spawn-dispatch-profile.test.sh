@@ -1735,7 +1735,7 @@ assert_attribution_policy() {  # <launch-command> <what>
 assert_attribution_policy_absent() {  # <launch-command> <what>
   local launch=$1 what=$2 settings
   settings=$(claude_settings_json_arg "$launch")
-  printf '%s' "$settings" | jq -e '.feedbackDrafts == "off" and (has("attribution") | not)' >/dev/null \
+  printf '%s' "$settings" | jq -e '.feedbackDrafts == "off" and (has("attribution") | not) and .enableArtifact == false and .disableClaudeAiConnectors == true' >/dev/null \
     || fail "$what launch settings JSON still disables Claude attribution: $settings"
 }
 

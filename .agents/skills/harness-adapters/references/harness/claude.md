@@ -87,7 +87,7 @@ The controls are scoped to the launched process and never modify the captain's g
 
 ## Artifact tool and claude.ai connectors
 
-A Claude ship or scout launches with `"enableArtifact": false` and `"disableClaudeAiConnectors": true` in its inline `--settings` JSON, so it carries neither the Artifact tool nor any claude.ai connector, which fleet guidance forbids a worker from using and whose tool text costs every worker turn; a secondmate and the primary keep both.
+A Claude ship or scout launches with `"enableArtifact": false` and `"disableClaudeAiConnectors": true` in its inline `--settings` JSON, so it carries neither the Artifact tool nor any claude.ai connector (Claude Docs, Gmail, Drive, Calendar), whose tool text costs every worker turn; a secondmate and the primary keep both, so a task that needs one runs there.
 Off in `--settings` wins over user and project settings for both keys on Claude Code 2.1.310, and [the fork decision](../../../../../docs/fork-decisions/2026-10-27-worker-no-artifact-connectors.md) records the ruling and its live check.
 
 ## Task list

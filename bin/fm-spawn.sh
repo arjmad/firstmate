@@ -2595,8 +2595,9 @@ launch_template() {
   # policy in force regardless of which settings scopes end up loaded.
   # A ship or scout's inline JSON also turns off the Artifact tool
   # ("enableArtifact": false) and claude.ai connectors
-  # ("disableClaudeAiConnectors": true), which fleet guidance already forbids a
-  # worker from using and which cost every worker turn ~14k tokens of tool text
+  # ("disableClaudeAiConnectors": true), every one of them (Claude Docs, Gmail,
+  # Drive, Calendar), on the captain's ruling; together they cost every worker
+  # turn ~14k tokens of tool text
   # (docs/fork-decisions/2026-10-27-worker-no-artifact-connectors.md). Off in
   # --settings wins over user and project settings for both keys (Claude Code
   # 2.1.310 settings schema). A secondmate and the helm keep both.
