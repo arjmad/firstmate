@@ -1541,7 +1541,7 @@ test_claude_forwards_firstmate_config_dir_when_set() {
   status=$?
   expect_code 0 "$status" "claude spawn with CLAUDE_CONFIG_DIR set should succeed"
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "CLAUDE_CONFIG_DIR='$CASE_DIR/claude-work' env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 CLAUDE_CODE_ENABLE_TODO_TOOLS=1 claude --dangerously-skip-permissions $(claude_worker_add_dirs "$HOME_DIR" "$id")--settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}'" \
+  assert_contains "$launch" "CLAUDE_CONFIG_DIR='$CASE_DIR/claude-work' env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 CLAUDE_CODE_ENABLE_TODO_TOOLS=1 claude --dangerously-skip-permissions $(claude_worker_add_dirs "$HOME_DIR" "$id")--settings '{\"feedbackDrafts\":\"off\",\"enableArtifact\":false,\"disableClaudeAiConnectors\":true,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}'" \
     "claude launch did not forward firstmate's CLAUDE_CONFIG_DIR to the crewmate pane"
   pass "claude forwards firstmate's CLAUDE_CONFIG_DIR so the crewmate uses the same credential store"
 }
@@ -1735,7 +1735,7 @@ assert_attribution_policy() {  # <launch-command> <what>
 assert_attribution_policy_absent() {  # <launch-command> <what>
   local launch=$1 what=$2 settings
   settings=$(claude_settings_json_arg "$launch")
-  printf '%s' "$settings" | jq -e '.feedbackDrafts == "off" and (has("attribution") | not)' >/dev/null \
+  printf '%s' "$settings" | jq -e '.feedbackDrafts == "off" and (has("attribution") | not) and .enableArtifact == false and .disableClaudeAiConnectors == true' >/dev/null \
     || fail "$what launch settings JSON still disables Claude attribution: $settings"
 }
 
@@ -1871,6 +1871,43 @@ SH
   assert_not_contains "$(cat "$LAUNCH_LOG")" CLAUDE_CODE_ENABLE_TODO_TOOLS \
     "a codex launch must not carry the Claude task-list switch"
   pass "claude ships and scouts launch with the task list; secondmates and other harnesses do not"
+}
+
+# A Claude ship or scout launches with the Artifact tool and claude.ai
+# connectors off in its own --settings; a secondmate keeps both. Read the JSON
+# the pane's shell would hand claude, not the template.
+test_claude_task_workers_launch_without_artifact_or_connectors() {
+  local kind rec id sm out status launch settings
+  for kind in ship scout secondmate; do
+    id="claude-noartifact-$kind-z28"
+    rec=$(make_spawn_case "claude-noartifact-$kind" claude "$id")
+    read_case_record "$rec"
+    case "$kind" in
+      ship) out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR") ;;
+      scout) out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout) ;;
+      secondmate)
+        sm="$CASE_DIR/secondmate-home"
+        make_seeded_secondmate_home "$sm" "$id"
+        out=$(FM_TEST_CLAUDE_CONFIG_DIR="$CASE_DIR/claude-work" \
+          run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+        ;;
+    esac
+    status=$?
+    expect_code 0 "$status" "claude $kind spawn should succeed"$'\n'"$out"
+    launch=$(cat "$LAUNCH_LOG")
+    settings=$(claude_settings_json_arg "$launch")
+    case "$kind" in
+      secondmate)
+        printf '%s' "$settings" | jq -e 'has("enableArtifact") or has("disableClaudeAiConnectors") | not' >/dev/null \
+          || fail "claude secondmate settings turned off the Artifact tool or connectors: $settings"
+        ;;
+      *)
+        printf '%s' "$settings" | jq -e '.enableArtifact == false and .disableClaudeAiConnectors == true' >/dev/null \
+          || fail "claude $kind settings left the Artifact tool or claude.ai connectors on: $settings"
+        ;;
+    esac
+  done
+  pass "claude ships and scouts launch without the Artifact tool or claude.ai connectors; secondmates keep both"
 }
 
 test_claude_long_launch_is_delivered_intact() {
@@ -2348,7 +2385,7 @@ claude_expected_launch() {  # <launch> <home> <id> <permission-flag>
   [ "$(printf '%s' "$doorbell" | "$ROOT/bin/fm-operational-input.sh" doorbell-kind)" = launch-brief ] \
     || doorbell="not a launch-brief doorbell"
   quoted="'$(printf '%s' "$doorbell" | sed "s/'/'\\\\''/g")'"
-  printf '%s' "export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$2" "$3")$(fm_test_launch_git_prefix "$1")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 CLAUDE_CODE_ENABLE_TODO_TOOLS=1 claude $4 $(claude_worker_add_dirs "$2" "$3")--settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG --name 'ship: $3' $quoted"
+  printf '%s' "export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$2" "$3")$(fm_test_launch_git_prefix "$1")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 CLAUDE_CODE_ENABLE_TODO_TOOLS=1 claude $4 $(claude_worker_add_dirs "$2" "$3")--settings '{\"feedbackDrafts\":\"off\",\"enableArtifact\":false,\"disableClaudeAiConnectors\":true,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG --name 'ship: $3' $quoted"
 }
 
 test_claude_permission_mode_bypass_matches_absent_launch() {
@@ -2543,6 +2580,7 @@ test_claude_task_launch_carries_control_channel_authority
 test_claude_secondmate_launch_omits_task_control_channel_authority
 test_claude_launch_names_the_session_after_its_task
 test_claude_task_workers_launch_with_the_task_list
+test_claude_task_workers_launch_without_artifact_or_connectors
 test_claude_long_launch_is_delivered_intact
 test_claude_crewmate_launch_carries_the_attribution_policy
 test_keep_ai_trailers_omits_attribution_settings_and_strip_hooks

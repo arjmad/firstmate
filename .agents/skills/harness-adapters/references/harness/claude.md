@@ -85,6 +85,11 @@ Styled capture stays internal to the boolean detector; `fm-peek` and model-facin
 The spawn disables Claude's `/bug` and `/feedback` model-drafted feedback flow for every Claude worker and secondmate, preventing a fleet-launched agent from queuing or submitting a bug report on the captain's behalf.
 The controls are scoped to the launched process and never modify the captain's global Claude settings; `launch_template()` in `../../../../../bin/fm-spawn.sh` owns their exact mechanics and defense-in-depth rationale.
 
+## Artifact tool and claude.ai connectors
+
+A Claude ship or scout launches with `"enableArtifact": false` and `"disableClaudeAiConnectors": true` in its inline `--settings` JSON, so it carries neither the Artifact tool nor any claude.ai connector (Claude Docs, Gmail, Drive, Calendar), whose tool text costs every worker turn; a secondmate and the primary keep both, so a task that needs one runs there.
+Off in `--settings` wins over user and project settings for both keys on Claude Code 2.1.310, and [the fork decision](../../../../../docs/fork-decisions/2026-10-27-worker-no-artifact-connectors.md) records the ruling and its live check.
+
 ## Task list
 
 A Claude ship or scout launches with `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`, because newer models leave Claude Code's task tools (`TaskCreate`, `TaskUpdate`) out unless opted in, and its brief asks it to keep its plan there; a secondmate keeps the model default.
