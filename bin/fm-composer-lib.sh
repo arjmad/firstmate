@@ -835,19 +835,27 @@ _fm_composer_titled_rule_row() {  # <trimmed-row> <plain-rule-spaces>
 }
 
 # _fm_composer_row_is_slash_menu_selection: 0 when trimmed <row> at <row-index>
-# is the selected row of a slash-command menu drawn directly under the closing
-# rule of a composer pair that <glyph> already proved. Claude Code 2.1.310
-# (recorded live on herdr 0.9.5) marks that row with the composer's own `❯`,
+# of <plain-screen> is the selected row of a slash-command menu drawn directly
+# under the closing rule of a composer that <glyph> already proved: an
+# untitled rule pair, or the titled top rule a named launch draws
+# (_fm_composer_bare_rule_sandwich). Claude Code 2.1.310 (recorded live on
+# herdr 0.9.5, named and unnamed) marks that row with the composer's own `❯`,
 # followed by the command and a column-aligned description, so it would
 # otherwise read as a lower live composer holding the menu text.
-_fm_composer_row_is_slash_menu_selection() {  # <trimmed-row> <glyph> <row-index>
-  local rest
-  [ "$FM_COMPOSER_SCAN_PI_PAIR_FOUND" = 1 ] \
-    && [ "$FM_COMPOSER_SCAN_PI_CLOSE" -eq $(($3 - 1)) ] \
-    && [ "$FM_COMPOSER_SCAN_PI_GLYPH_ROW" -ge 0 ] \
-    && [ "$FM_COMPOSER_SCAN_PI_GLYPH" = "$2" ] || return 1
+_fm_composer_row_is_slash_menu_selection() {  # <trimmed-row> <glyph> <row-index> <plain-screen>
+  local rest above='' proven=0
+  [ "$FM_COMPOSER_SCAN_PI_LAST_SEPARATOR" -eq $(($3 - 1)) ] || return 1
   rest=${1#"$2"}
-  [[ $rest =~ ^\ +/[^[:space:]]+\ {2,}[^[:space:]] ]]
+  [[ $rest =~ ^\ +/[^[:space:]]+\ {2,}[^[:space:]] ]] || return 1
+  if [ "$FM_COMPOSER_SCAN_PI_PAIR_FOUND" = 1 ] && [ "$FM_COMPOSER_SCAN_PI_CLOSE" -eq $(($3 - 1)) ] \
+     && [ "$FM_COMPOSER_SCAN_PI_GLYPH_ROW" -ge 0 ] && [ "$FM_COMPOSER_SCAN_PI_GLYPH" = "$2" ]; then
+    proven=1
+  elif [ "$FM_COMPOSER_SCAN_BARE_ROW" -ge 0 ]; then
+    above=$(_fm_composer_screen_row "$FM_COMPOSER_SCAN_BARE_ROW" "$4")
+    fm_composer_normalize_trim_var above
+    case "$above" in "$2"*) _fm_composer_bare_rule_sandwich "$4" "$FM_COMPOSER_SCAN_BARE_ROW" && proven=1 ;; esac
+  fi
+  [ "$proven" = 1 ]
 }
 
 # Row-scan results are returned through FM_COMPOSER_SCAN_* globals (bash 3.2
@@ -986,7 +994,7 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
        && ! _fm_composer_row_is_pi_status "$trimmed"; then
       FM_COMPOSER_SCAN_SHELL_ROW=$row
     elif fm_composer_leading_agent_glyph_var glyph "$trimmed" \
-       && ! _fm_composer_row_is_slash_menu_selection "$trimmed" "$glyph" "$row"; then
+       && ! _fm_composer_row_is_slash_menu_selection "$trimmed" "$glyph" "$row" "$pane"; then
       FM_COMPOSER_SCAN_BARE_ROW=$row
     fi
     # Cursor safety: a cursor sitting on a structural edge row is never an
