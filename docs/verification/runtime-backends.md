@@ -625,6 +625,18 @@ cse_015AvzWvDjSuejijd3se5Kvj {"title": "ship: fm-name-probe-2", "environment_kin
 ```
 
 `--remote-control-session-name-prefix` only prefixes auto-generated names and was not needed.
+
+The bare task-id name was verified 2026-10-27 on Claude Code 2.1.310, herdr 0.9.5, Linux x86_64, with `remoteControlAtStartup` on, in a `bin/fm-herdr-lab.sh` session.
+Idle panes launched as `claude --dangerously-skip-permissions --name 'probe-bare-ship'` and, with a secondmate-shaped `--settings <file>`, as `--name 'secondmate'` drew the bare name in the composer's top rule.
+The Remote Control record, read with `GET /v1/sessions/<session id>` and header `anthropic-beta: ccr-byoc-2025-07-29` because the `/v1/code/sessions/` path now returns a `response_shape` object without the title, reported:
+
+```text
+session_019JdqYnZzV5VggRHqDAmdKx {"title": "probe-bare-ship", "environment_kind": "bridge", "tags": [..., "remote-control-auto"]}
+session_019JdqYjuA582ZbWJ9bzswhj {"title": "secondmate", "environment_kind": "bridge", "tags": [..., "remote-control-auto"]}
+```
+
+In the same lab the name also carried when Remote Control was enabled mid-session with `/remote-control` (tag `remote-control-repl`) and across `/exit` then `claude --resume <session id>` without `--name`, while an unnamed launch got the generated title `fafnir-snappy-nebula`.
+Claude Code's own peer-session list labels every session on another machine with the kind `Remote Control`, apart from its name, for example `scout: landed-cost-review [f6e95c]  ·  Remote Control  ·  idle`; that label is not the session's title.
 The name stays in the composer's top rule while a draft wraps, verified 2026-10-19 on Claude Code 2.1.300 and herdr 0.9.5 in a `bin/fm-herdr-lab.sh` session, with an idle `claude --name 'ship: lab-a'` pane beside an unnamed `claude` pane:
 
 ```text

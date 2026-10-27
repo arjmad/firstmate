@@ -91,8 +91,10 @@ Then launch one of the co-primary harnesses; AGENTS.md takes over from there:
 **Claude Code**
 
 ```sh
-claude
+claude --name firstmate
 ```
+
+`--name` titles the helm `firstmate` in the Claude app's Remote Control list and the `/resume` picker, beside the crew Firstmate launches under their own task ids.
 
 **Grok**
 

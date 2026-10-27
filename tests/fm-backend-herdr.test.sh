@@ -5385,7 +5385,7 @@ test_send_text_submit_named_claude_slash_menu_selection_row_is_not_the_composer(
   pass "fm_backend_herdr_send_text_submit: a named Claude 2.1.310 composer's slash-menu selection row is not read as the composer"
 }
 
-# A Claude worker launched with --name draws `<kind>: <task-id>` into its
+# A Claude worker launched with --name draws its session name into its
 # composer's TOP rule, and keeps it there while a long draft wraps (reproduced
 # live on herdr 0.9.5 with a ship worker's doorbell). The titled-rule proof
 # once accepted only a one-row draft, so a wrapped doorbell read as no

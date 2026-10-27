@@ -259,8 +259,8 @@ done
 
 # The steer must cross the composer the launch actually drew, so the case is
 # vacuous unless that composer carries the session name the spawn gave it.
-lab pane read "$PANE" --source visible 2>/dev/null | grep -F "ship: $ID" >/dev/null \
-  || fail "$WHO: the idle worker's screen does not show its session name 'ship: $ID'; the launch path this guard exists for was not exercised"
+lab pane read "$PANE" --source visible 2>/dev/null | grep -F "─ $ID ─" >/dev/null \
+  || fail "$WHO: the idle worker's composer rule does not show its session name '$ID'; the launch path this guard exists for was not exercised"
 pass "$WHO: fm-spawn launched a named Claude worker in isolated session $SESSION and it went idle"
 
 # --- steer the idle worker through the real send path ---------------------------

@@ -616,7 +616,7 @@ test_claude_threads_model_and_effort() {
   expect_code 0 "$status" "claude spawn with profile flags should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" claude sonnet high
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "$CLAUDE_CONTROL_CHANNEL_FLAG --name 'ship: $id' --model 'sonnet' --effort 'high'" \
+  assert_contains "$launch" "$CLAUDE_CONTROL_CHANNEL_FLAG --name '$id' --model 'sonnet' --effort 'high'" \
     "claude launch did not thread model and effort flags"
   assert_not_contains "$launch" "--tui-mode" "non-Pi launches must not receive Pi's TUI mode override"
   pass "claude receives --model and --effort profile flags"
@@ -1785,7 +1785,8 @@ test_claude_secondmate_launch_omits_task_control_channel_authority() {
 # doorbell, so without --name every worker shared one title in the Claude app's
 # Remote Control list and the /resume picker. Run each emitted launch through a
 # claude stub that records the --name value it actually receives after the
-# pane's shell parses the line, for every kind Firstmate launches.
+# pane's shell parses the line, for every kind Firstmate launches: the name is
+# the bare task id, a secondmate's its own id.
 test_claude_launch_names_the_session_after_its_task() {
   local kind rec id sm out status launch pane eval_out eval_rc
   for kind in ship scout secondmate; do
@@ -1822,10 +1823,10 @@ SH
     eval_out=$(fm_eval_launch "$launch" "$pane" "$FAKEBIN_DIR" "FM_FAKE_CLAUDE_NAME_OUT=$CASE_DIR/claude-name" 2>&1)
     eval_rc=$?
     [ "$eval_rc" -eq 0 ] || fail "claude $kind launch did not pass exactly one --name"$'\n'"$eval_out"
-    [ "$(cat "$CASE_DIR/claude-name")" = "$kind: $id" ] \
-      || fail "claude $kind launch named the session '$(cat "$CASE_DIR/claude-name")', not '$kind: $id'"
+    [ "$(cat "$CASE_DIR/claude-name")" = "$id" ] \
+      || fail "claude $kind launch named the session '$(cat "$CASE_DIR/claude-name")', not its bare task id '$id'"
   done
-  pass "every claude launch names its session after its kind and task id"
+  pass "every claude launch names its session after its bare task id"
 }
 
 # A Claude ship or scout runs with Claude Code's task list enabled so
@@ -2385,7 +2386,7 @@ claude_expected_launch() {  # <launch> <home> <id> <permission-flag>
   [ "$(printf '%s' "$doorbell" | "$ROOT/bin/fm-operational-input.sh" doorbell-kind)" = launch-brief ] \
     || doorbell="not a launch-brief doorbell"
   quoted="'$(printf '%s' "$doorbell" | sed "s/'/'\\\\''/g")'"
-  printf '%s' "export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$2" "$3")$(fm_test_launch_git_prefix "$1")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 CLAUDE_CODE_ENABLE_TODO_TOOLS=1 claude $4 $(claude_worker_add_dirs "$2" "$3")--settings '{\"feedbackDrafts\":\"off\",\"enableArtifact\":false,\"disableClaudeAiConnectors\":true,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG --name 'ship: $3' $quoted"
+  printf '%s' "export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$2" "$3")$(fm_test_launch_git_prefix "$1")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 CLAUDE_CODE_ENABLE_TODO_TOOLS=1 claude $4 $(claude_worker_add_dirs "$2" "$3")--settings '{\"feedbackDrafts\":\"off\",\"enableArtifact\":false,\"disableClaudeAiConnectors\":true,\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG --name '$3' $quoted"
 }
 
 test_claude_permission_mode_bypass_matches_absent_launch() {

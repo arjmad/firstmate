@@ -13,7 +13,7 @@ Busy hooks verified 2026-07-28 on Claude Code 2.1.220.
 | Model | `--model <model>`; discover through the interactive `/model` picker, with alias or full-name shape documented by `claude --help`. |
 | Effort | `--effort <low\|medium\|high\|xhigh\|max>`, verified on 2.1.196. |
 | Permissions | `--dangerously-skip-permissions` by default, or `--permission-mode auto` when `config/claude-permission-mode` is `auto`; the `auto` shape verified on 2.1.269. See [`Claude permission mode`](../../../../../docs/configuration.md#claude-permission-mode-configclaude-permission-mode) for the launch grant and configuration. |
-| Session name | `--name '<kind>: <task-id>'` on every templated ship, scout, secondmate, and relaunch launch (a caller-supplied raw launch command carries only its own flags); it replaces the auto-title Claude would take from the doorbell first message in the Remote Control session list, the `/resume` picker, and the terminal title, verified on 2.1.300 ([runtime-backends.md](../../../../../docs/verification/runtime-backends.md#claude-session-name)). |
+| Session name | `--name '<task-id>'`, the bare task id (a secondmate's own id), on every templated ship, scout, secondmate, and relaunch launch (a caller-supplied raw launch command carries only its own flags), and README's helm launch is `claude --name firstmate`; it replaces the auto-title Claude would take from the doorbell first message in the Remote Control session list, the `/resume` picker, and the terminal title, verified on 2.1.300 and 2.1.310 ([runtime-backends.md](../../../../../docs/verification/runtime-backends.md#claude-session-name)). |
 
 ## Workspace trust
 

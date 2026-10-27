@@ -3,7 +3,7 @@
 # source. The reader's step n/m comes from files Claude Code writes, so this
 # drives the installed Claude Code for real: an interactive session launched
 # the way bin/fm-spawn.sh launches a task worker (CLAUDE_CODE_ENABLE_TODO_TOOLS=1
-# and a "<kind>: <task-id>" --name) builds a three-step task list, and the
+# and a bare <task-id> --name) builds a three-step task list, and the
 # reader, given only a fixture home's task record, must find that session
 # record by name and live pid and report 1/3 with the in-progress step.
 # It fails naming the Claude Code version when any link in that chain moved.
@@ -73,7 +73,7 @@ answer_trust_dialog() {  # <screen text>
 
 PROMPT="Use the TaskCreate tool to create exactly three tasks with subjects 'Alpha step', 'Beta step', and 'Gamma step'. Then use TaskUpdate to mark 'Alpha step' completed and 'Beta step' in_progress. Do nothing else, then reply DONE."
 tmux -L "$SOCKET" new-session -d -s "$SESSION" -x 160 -y 44 -c "$PROJECT" \
-  "env $(unset_inherited) CLAUDE_CONFIG_DIR='$CLAUDE_DIR' CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 CLAUDE_CODE_ENABLE_TODO_TOOLS=1 claude --model haiku --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\"}' --name 'ship: $ID' \"$PROMPT\"; printf '\nCLAUDE_EXIT=%s\n' \"\$?\"; sleep 30"
+  "env $(unset_inherited) CLAUDE_CONFIG_DIR='$CLAUDE_DIR' CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 CLAUDE_CODE_ENABLE_TODO_TOOLS=1 claude --model haiku --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\"}' --name '$ID' \"$PROMPT\"; printf '\nCLAUDE_EXIT=%s\n' \"\$?\"; sleep 30"
 
 # Poll the reader, answering the trust dialog, until the projection shows the
 # list or the iteration budget (about 3 minutes) runs out.
@@ -88,7 +88,7 @@ while [ "$i" -lt 720 ]; do
   esac
   answer_trust_dialog "$shot" || :
   if [ -z "$SID" ]; then
-    SID=$(jq -r --arg n "ship: $ID" 'select(.name == $n) | .sessionId' "$CLAUDE_DIR"/sessions/*.json 2>/dev/null | head -1)
+    SID=$(jq -r --arg n "$ID" 'select(.name == $n) | .sessionId' "$CLAUDE_DIR"/sessions/*.json 2>/dev/null | head -1)
   fi
   got=$(FM_HOME=$HOME_DIR "$ROOT/bin/fm-progress.sh" --json \
     | jq -r '.workers[0].steps | if . == null then "none" else "\(.done)/\(.total)|\(.current)|\(.source)" end')
@@ -101,4 +101,4 @@ if [ "$got" != '1/3|Beta step|task-list' ]; then
   [ -z "$SID" ] || ls -la "$CLAUDE_DIR/tasks/$SID" >&2 2>/dev/null
   fail "Claude Code $CLAUDE_VERSION: fm-progress.sh read steps '$got', want '1/3|Beta step|task-list' (session ${SID:-not found})"
 fi
-pass "Claude Code $CLAUDE_VERSION: a worker launched with CLAUDE_CODE_ENABLE_TODO_TOOLS=1 and --name 'ship: <id>' keeps a task list fm-progress.sh reads as 1/3 · Beta step"
+pass "Claude Code $CLAUDE_VERSION: a worker launched with CLAUDE_CODE_ENABLE_TODO_TOOLS=1 and --name '<id>' keeps a task list fm-progress.sh reads as 1/3 · Beta step"
