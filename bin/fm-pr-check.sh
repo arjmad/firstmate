@@ -25,9 +25,10 @@
 # `--also <repo>`, the URL is a companion PR that a task spawned with
 # bin/fm-spawn.sh --also opened in that dependent repository. It must name a
 # repo the task record lists in also=, and it is recorded only as
-# also_pr_<repo>=<url> (replacing an earlier one): pr=, pr_head=, and the
-# task's merge poll are left untouched, because the task's own PR stays the one
-# its landing and merge outcome follow. The draft refusal applies, and the
+# also_pr_<repo>=<url> (replacing an earlier one), ahead of the pr= block that
+# must end the record: pr=, pr_head=, and the task's merge poll keep their
+# values, because the task's own PR stays the one its landing and merge outcome
+# follow. The draft refusal applies, and the
 # named-head gate is judged against that repo's companion worktree.
 # bin/fm-teardown.sh reads also_pr_<repo>= for its landed-work check and
 # bin/fm-pr-merge.sh accepts a recorded companion PR.

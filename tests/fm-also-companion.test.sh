@@ -201,7 +201,7 @@ test_pr_check_records_a_companion_pr_without_arming() {
 }
 
 test_pr_check_companion_after_the_main_pr_keeps_its_poll_valid() {
-  local id='also-prcheck-c2' out status wt main_url='https://github.com/o/sample/pull/9'
+  local id='also-prcheck-c2' out status wt dir companion_url main_url='https://github.com/o/sample/pull/9'
   local url='https://github.com/o/jobs/pull/7'
   make_case prcheck-order "$id" --also jobs
   out=$(run_spawn "$id" --mode direct-PR --yolo off --also jobs)
@@ -219,11 +219,18 @@ test_pr_check_companion_after_the_main_pr_keeps_its_poll_valid() {
   out=$(PATH="$FAKEBIN_DIR:$PATH" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
     "$ROOT/bin/fm-pr-check.sh" "$id" "$main_url" 2>&1)
   expect_code 0 "$?" "pr-check of the main PR failed: $out"
-  out=$(PATH="$FAKEBIN_DIR:$PATH" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
-    "$ROOT/bin/fm-pr-check.sh" "$id" "$url" --also jobs 2>&1)
-  status=$?
-  expect_code 0 "$status" "pr-check --also failed: $out"
+  # A second companion PR replaces the first rather than adding a line.
+  for companion_url in 'https://github.com/o/jobs/pull/6' "$url"; do
+    out=$(PATH="$FAKEBIN_DIR:$PATH" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
+      "$ROOT/bin/fm-pr-check.sh" "$id" "$companion_url" --also jobs 2>&1)
+    status=$?
+    expect_code 0 "$status" "pr-check --also failed: $out"
+  done
+  [ "$(grep -c '^also_pr_jobs=' "$HOME_DIR/state/$id.meta")" = 1 ] \
+    || fail "a repeated --also left more than one companion PR line"
   assert_grep "also_pr_jobs=$url" "$HOME_DIR/state/$id.meta" "the companion PR was not recorded"
+  [ "$(grep '^pr=' "$HOME_DIR/state/$id.meta")" = "pr=$main_url" ] \
+    || fail "recording the companion changed the task's own PR"
   # The watcher authenticates the main PR's poll through this gate and rejects
   # the task's check when the record has any other key after pr=.
   (
