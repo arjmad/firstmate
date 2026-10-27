@@ -1,7 +1,7 @@
 ---
 name: poteto
 description: >-
-  Dispatch a poteto-mode worker when the captain types /poteto <ask> in the firstmate helm, or at intake of a ship whose task class the home's data/captain.md records as a standing poteto opt-in (today bug-fix ships), so the worker runs poteto's pstack playbook inside its worktree while firstmate supervises and merges as usual.
+  Dispatch a poteto-mode worker when the captain types /poteto <ask> in the firstmate helm, or at intake of a ship whose task class the home's data/captain.md records as a standing poteto opt-in (today four ship classes: a bug fix, something slow, a live problem with no obvious cause, and restructuring shared code), so the worker runs poteto's pstack playbook inside its worktree while firstmate supervises and merges as usual.
   Never inferred from an ask's wording outside those two opt-ins.
 user-invocable: true
 metadata:
@@ -12,7 +12,7 @@ metadata:
 
 The captain opts a task into poteto's method in one of two ways: typing `/poteto <ask>` in the helm, or a standing opt-in by task class recorded in the home's `data/captain.md`.
 For `/poteto`, the ask is everything typed after the command, delivered with this invocation as its arguments.
-A standing opt-in applies when ordinary intake classifies the deliverable as a recorded class; today that is bug-fix ships, so a reported defect to reproduce and fix is dispatched this way without the command.
+A standing opt-in applies when ordinary intake classifies the deliverable as a recorded class; today `data/captain.md` records four ship classes - a bug fix, something slow (perf or hillclimb), a live problem with no obvious cause (runtime forensics), and restructuring shared code (refactoring) - so a ship of any of them is dispatched this way without the command.
 Either way the worker runs Lauren Tan's pstack playbook for the ask, and nothing else about intake, supervision, landing, or merge authority changes.
 
 The method lives in the captain's user-level Claude Code skill at `~/.claude/skills/poteto-mode/SKILL.md`, written for his own interactive sessions.
@@ -30,9 +30,9 @@ Do not follow it there; answer that the helm command is `/poteto`.
    The scaffold renders the method contract itself under `## Firstmate spec`, and it refuses when the entry skill is missing on this host; report that refusal to the captain rather than writing the method by hand.
 5. Fill `## Captain's intent` with the ask verbatim under section 11, and `## Firstmate spec` with only the task-specific build instructions the ask requires; do not restate the method, its guards, or its panel seats there.
    Add the `firstmate-coding-guidelines` load line when the project is firstmate itself.
-6. Spawn through `bin/fm-spawn.sh` with the usual `--mode` and `--yolo` plus the method's standing profile: `--harness claude --model claude-fable-5-1 --effort xhigh`.
-   Those explicit flags are the captain's per-task override under the dispatch reference (decided 2026-10-02: a poteto-mode worker always runs Fable 5.1 at xhigh effort), so pass them on every poteto-mode spawn, and never add `--fast on`.
-   The Fable quota read and its low-allowance fallback still apply, as the dispatch reference and the home's `config/crew-dispatch.json` state them.
+6. Spawn through `bin/fm-spawn.sh` with the usual `--mode` and `--yolo` and `--harness claude`, the method's one fixed axis, because the entry is a Claude Code skill.
+   Pick the model and effort per the home's `config/crew-dispatch.json` and the dispatch reference, exactly as for any other ship of that kind (decided 2026-10-13 and 2026-10-26, replacing the 2026-10-02 Fable 5.1 xhigh profile), so a poteto-mode worker runs on Fable only when that config says so, and never add `--fast on`.
+   When the matching rule names a harness other than Claude, use the Claude rule that would apply without it and say so in the dispatch reply.
    A relaunch keeps the recorded flags.
 7. Supervise, land, and merge exactly as for any other task under sections 7 to 9: the worker never merges, and the same merge authority applies.
    After promoting a poteto-mode scout, steer the worker once through `bin/fm-send.sh` that the `### Method: poteto-mode` subsection of its brief stays current for the ship half, because promotion treats the scout-time spec as context.

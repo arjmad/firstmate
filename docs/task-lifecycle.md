@@ -145,6 +145,7 @@ Keep additions task-specific rather than repeating lifecycle instructions, and a
 Every ship brief must retain the worktree-isolation assertion and stop if launched in the primary checkout.
 If a ship task touches firstmate's shared tracked material, explicitly require `firstmate-coding-guidelines` before editing.
 When the captain opted a task in with `/poteto`, or `data/captain.md` records a standing opt-in for its class, scaffold it with `--method poteto-mode`; the `poteto` skill owns that intake and its spawn profile, and the scaffold owns the generated method contract.
+Classify every ship against those recorded classes before scaffolding, whatever its id says; `bin/fm-brief.sh` warns when a ship id reads as one of them and no `--method` is given, and that warning is a prompt to re-check, never the classification itself.
 If a task will drive Herdr lifecycle behavior, scaffold with `--herdr-lab`; if that need appears after an unguarded scaffold, stop and regenerate rather than adding commands by hand.
 The generated Herdr contract must use a named non-`default` isolated lab and its guarded helper for every lifecycle action.
 
