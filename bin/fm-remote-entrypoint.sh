@@ -88,7 +88,7 @@ home_refusal() { # <configured-home>
   parent=$(dirname "${normalized:-/}")
   if [ -n "$normalized" ] && [ "$parent" != / ] && [ ! -e "$normalized" ] && [ ! -L "$normalized" ] \
     && [ ! -e "$parent" ] && [ ! -L "$parent" ]; then
-    printf 'remote home parent directory does not exist: %s; create it on the remote host, since only the home directory itself may be absent\n' "$parent"
+    printf 'remote home parent directory does not exist: %s; create it on the remote host (mkdir -p), since only the home directory itself may be absent\n' "$parent"
     return 0
   fi
   printf 'remote home is not a safe directory\n'

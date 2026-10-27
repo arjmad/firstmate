@@ -413,18 +413,23 @@ cmd_update() {
   cmd_sync "$id"
 }
 
-# A home without the seed marker never held a launched second mate (launch
-# requires it), so its route retires without touching the directory, which may
-# be a seed's leftovers or a state/ tree something recreated. --unseeded-only is
-# the parent's route-only retirement for a route with no task record: it never
+# A home without the seed marker and without this mate's endpoint record never
+# held a launched second mate (launch requires the marker and writes the
+# record), so its route retires without touching the directory, which may be a
+# seed's leftovers or a state/ tree something recreated. --unseeded-only is the
+# parent's route-only retirement for a route with no task record: it never
 # retires a seeded home.
 cmd_retire() {
   local id=$1 mode=${2:-} rc=0
   validate_id "$id"
+  case "$mode" in ''|--force|--unseeded-only) ;; *) usage ;; esac
   validate_home "$id" yes || rc=$?
   case "$rc" in
     2) printf 'already-retired: %s\n' "$id"; return 0 ;;
     3)
+      if [ -e "$(meta_path "$id")" ] || [ -L "$(meta_path "$id")" ]; then
+        die "remote home has no seed marker but holds an endpoint record for $id; refusing to retire it"
+      fi
       printf 'never-seeded: %s: %s holds no seeded secondmate home, so only the route retires and the directory is left in place\n' \
         "$id" "$TARGET_HOME"
       return 0
@@ -432,7 +437,6 @@ cmd_retire() {
   esac
   [ "$mode" != --unseeded-only ] \
     || die "remote home $TARGET_HOME is a seeded secondmate home; retiring it needs the parent's task record for $id"
-  [ -z "$mode" ] || [ "$mode" = --force ] || usage
   remote_endpoint_require "$id"
   FM_HOME="$TARGET_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$TARGET_HOME/state" \
     FM_CONFIG_OVERRIDE="$TARGET_HOME/config" "$SCRIPT_DIR/fm-guard.sh" || true

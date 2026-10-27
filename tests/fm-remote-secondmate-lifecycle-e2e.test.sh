@@ -558,7 +558,16 @@ pass "unknown readiness preserves its route and brief for reconciliation"
 # That preserved route has no task record and no seeded home; something on the
 # host may even have recreated an empty state/ there. Teardown retires the route
 # alone once the host confirms no seeded home, and never a seeded one.
-mkdir -p "$TMP_ROOT/seed-unknown-home/state"
+mkdir -p "$TMP_ROOT/seed-unknown-home/state/parent-route"
+: > "$TMP_ROOT/seed-unknown-home/state/parent-route/seed-unknown.meta"
+if seed_env "$ROOT/bin/fm-teardown.sh" seed-unknown > "$TMP_ROOT/seed-unknown-endpoint.out" 2>&1; then
+  fail "route-only retirement retired an unmarked home that still holds an endpoint record"
+fi
+assert_grep 'holds an endpoint record for seed-unknown' "$TMP_ROOT/seed-unknown-endpoint.out" \
+  "an unmarked home with an endpoint record was not refused by name"
+assert_grep '- seed-unknown ' "$TMP_ROOT/seed-parent/data/secondmates.md" \
+  "a refused route-only retirement removed the route"
+rm -rf "$TMP_ROOT/seed-unknown-home/state/parent-route"
 out=$(seed_env "$ROOT/bin/fm-teardown.sh" seed-unknown 2>&1) \
   || fail "teardown refused a route whose remote home was never seeded"$'\n'"$out"
 assert_contains "$out" 'never-seeded: seed-unknown' "route-only retirement did not say the home was never seeded"
@@ -572,7 +581,7 @@ assert_grep 'is a seeded secondmate home' "$TMP_ROOT/seed-keep-teardown.out" \
   "route-only retirement of a seeded home did not name why it refused"
 assert_grep '- seed-keep ' "$TMP_ROOT/seed-parent/data/secondmates.md" "a refused route-only retirement removed the route"
 assert_present "$TMP_ROOT/seed-keep-home/.fm-secondmate-home" "a refused route-only retirement touched the seeded home"
-pass "a route whose remote home was never seeded retires alone, and a seeded one is refused"
+pass "a route whose remote home was never seeded retires alone, and a seeded or launched one is refused"
 
 # A host that cannot hold a durable second mate must be rejected by the
 # readiness gate before any home is created on it, and the operator must get the
