@@ -1084,9 +1084,11 @@ test_failed_capture_surfaces_when_edits_change() {
   live=$(build_capture_live "$home" failskill)
   printf '#!/usr/bin/env bash\necho captured >> %s\nexit 1\n' "'$home/captures-failskill'" > "$home/fail-capture.sh"
   chmod +x "$home/fail-capture.sh"
-  cp "$home/fail-capture.sh" "$live/fail-capture.sh"
-  git -C "$live" add fail-capture.sh
-  git -C "$live" commit -qm "capture script"
+  cp "$home/fail-capture.sh" "$home/work-failskill/fail-capture.sh"
+  git -C "$home/work-failskill" add fail-capture.sh
+  git -C "$home/work-failskill" commit -qm "capture script"
+  git -C "$home/work-failskill" push -q origin main
+  git -C "$live" pull -q --ff-only
   printf 'live edit\n' >> "$live/skills/a.md"
   live_config "$home" "failskill $live capture=skills/:fail-capture.sh"
 
@@ -1095,13 +1097,58 @@ test_failed_capture_surfaces_when_edits_change() {
   wait_capture_done "$out"
   assert_equals 1 "$(runs_of "$home/captures-failskill")" "the capture ran from the checkout"
 
+  out=$(run_sync "$home" failskill)
+  assert_contains "$out" "failskill live $live: STUCK: on branch main with uncommitted changes, 0 commits behind" \
+    "a failed capture surfaces even on a current checkout"
+  assert_contains "$out" "; capture already ran for these edits (exit 1" "the STUCK line names the failed run"
+
   printf 'more\n' >> "$live/skills/a.md"
   out=$(run_sync "$home" failskill)
   assert_contains "$out" "failskill live $live: STUCK: on branch main with uncommitted changes" "a failed capture surfaces"
   assert_contains "$out" "; the last capture failed (exit 1), so ./fail-capture.sh started again" "the STUCK line names the failure"
   wait_capture_done "$out"
   assert_equals 2 "$(runs_of "$home/captures-failskill")" "the new edit state captured again"
-  pass "a failed capture surfaces as STUCK while the edits keep changing"
+  pass "a failed capture surfaces as STUCK, on a current checkout too, while the edits keep changing"
+}
+
+test_current_capture_edits_pend_without_a_wake() {
+  local home live cmd log pending
+  home=$(isolated_home)
+  live=$(build_capture_live "$home" nova)
+  cmd="$home/capture-nova.sh"
+  printf 'live edit\n' >> "$live/skills/a.md"
+  live_config "$home" "nova $live capture=skills/:$cmd"
+  log="$home/state/.fleet-sync-scheduled.log"
+  pending="$home/state/fleet-sync-stuck"
+
+  run_scheduled "$home"
+  assert_contains "$(cat "$log")" "nova live $live: capturing: 1 uncommitted path(s) under skills/ only" "the edits start a capture"
+  wait_capture_done "$(cat "$log")"
+  run_scheduled "$home"
+  assert_contains "$(cat "$log")" \
+    "nova live $live: live edits pending capture: 1 uncommitted path(s) under skills/ only, 0 commits behind origin/main" \
+    "current edits under the capture dir read as pending capture"
+  assert_not_contains "$(cat "$log")" "STUCK" "nothing blocks a fast-forward"
+  [ ! -e "$pending" ] || fail "edits pending capture on a current checkout must not wake firstmate: $(cat "$pending")"
+
+  advance_origin "$home" nova C1
+  run_scheduled "$home"
+  wait_capture_done "$(cat "$log")"
+  run_scheduled "$home"
+  assert_contains "$(cat "$pending" 2>/dev/null)" "nova live $live: STUCK: on branch main with uncommitted changes, 1 commits behind origin/main" \
+    "edits that block a fast-forward wake firstmate"
+
+  rm -f "$pending"
+  git -C "$live" stash -q
+  git -C "$live" pull -q --ff-only
+  commit_file "$live" local.txt ahead "local unique work"
+  git -C "$live" stash pop -q
+  run_scheduled "$home"
+  wait_capture_done "$(cat "$log")"
+  run_scheduled "$home"
+  assert_contains "$(cat "$pending" 2>/dev/null)" "nova live $live: STUCK:" "a checkout ahead of origin is not merely pending capture"
+  assert_contains "$(cat "$live/skills/a.md")" "live edit" "the live edit is preserved"
+  pass "edits under the capture dir on a current checkout pend capture without a wake, and STUCK only when a fast-forward is blocked"
 }
 
 test_capture_skips_edits_outside_its_dir() {
@@ -1274,6 +1321,7 @@ test_failed_post_update_carries_its_output_tail
 test_capture_starts_once_per_edit_state
 test_capture_still_running_is_not_restarted
 test_failed_capture_surfaces_when_edits_change
+test_current_capture_edits_pend_without_a_wake
 test_capture_skips_edits_outside_its_dir
 test_scheduled_interval_is_home_configurable
 test_scheduled_sync_queues_new_stuck_lines_once
