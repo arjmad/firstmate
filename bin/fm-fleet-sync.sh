@@ -77,6 +77,16 @@
 # slash is ./<command>.
 # The single-project form syncs the entries for that project name; the whole-fleet
 # form syncs every entry after the clones.
+# Settle form (--settle-capture <project>), for after a capture PR merged
+# (bin/fm-capture-land.sh): before the single-project sync, each of that
+# project's capture= checkouts first waits while a capture this sync started is
+# still running - up to FM_CAPTURE_SETTLE_WAIT_SECS (default 600), polling every
+# FM_LIVE_CHECKOUT_LOCK_POLL_SECS - so --settle never edits files under a
+# capture reading them, then runs "<command> --settle" from the checkout and
+# prints "settled: ..." or a STUCK line naming its exit. The capture command
+# owns --settle: it restores only edits origin/<default> already holds. The
+# checkout then gets the ordinary sync, which fast-forwards it once it is clean.
+# A capture still running after the wait reports "skipped: busy:" untouched.
 # Scheduled form (--scheduled): bin/fm-watch.sh starts it detached once per
 # scheduled interval, so a merge firstmate did not make still goes live. It is
 # one whole-fleet sync under the home-scoped singleton lock
@@ -91,7 +101,7 @@
 # non-blank, non-# line of $FM_HOME/config/fleet-sync-interval, else
 # FM_FLEET_SYNC_INTERVAL, else 1800; "off" or 0 disables it, and a value below
 # 300 is raised to 300.
-# Usage: fm-fleet-sync.sh [<project-dir-or-name> | --scheduled | --scheduled-interval]
+# Usage: fm-fleet-sync.sh [<project-dir-or-name> | --settle-capture <project-dir-or-name> | --scheduled | --scheduled-interval]
 # The single-project form accepts either a path (absolute, or relative to the
 # caller's cwd) or a bare "<name>"/"projects/<name>" form, resolved against
 # this home's projects dir ($FM_HOME/projects, or $FM_PROJECTS_OVERRIDE).
@@ -135,6 +145,8 @@ if ! [[ "$FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS" =~ ^([0-9]+([.][0-9]*)?|[
   FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS=1
 fi
 
+CAPTURE_SETTLE_WAIT_SECS=${FM_CAPTURE_SETTLE_WAIT_SECS:-600}
+case "$CAPTURE_SETTLE_WAIT_SECS" in ''|*[!0-9]*) CAPTURE_SETTLE_WAIT_SECS=600 ;; esac
 LIVE_LOCK_WAIT_SECS=${FM_LIVE_CHECKOUT_LOCK_WAIT_SECS:-120}
 LIVE_LOCK_POLL_SECS=${FM_LIVE_CHECKOUT_LOCK_POLL_SECS:-5}
 case "$LIVE_LOCK_WAIT_SECS" in ''|*[!0-9]*) LIVE_LOCK_WAIT_SECS=120 ;; esac
@@ -155,12 +167,18 @@ SCHEDULED_SURFACED="$STATE/.fleet-sync-surfaced"
 SCHEDULED_STUCK="$STATE/fleet-sync-stuck"
 
 usage() {
-  echo "usage: fm-fleet-sync.sh [<project-dir-or-name> | --scheduled | --scheduled-interval]" >&2
+  echo "usage: fm-fleet-sync.sh [<project-dir-or-name> | --settle-capture <project-dir-or-name> | --scheduled | --scheduled-interval]" >&2
 }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   usage
   exit 0
+fi
+SETTLE_CAPTURE=0
+if [ "${1:-}" = --settle-capture ]; then
+  [ $# -eq 2 ] && [ -n "$2" ] || { usage; exit 1; }
+  SETTLE_CAPTURE=1
+  shift
 fi
 [ $# -le 1 ] || { usage; exit 1; }
 
@@ -624,6 +642,31 @@ capture_or_report_stuck() {
   echo "$label: capturing: $CAPTURE_COUNT uncommitted path(s) under $CAPTURE_DIR only; started $CAPTURE_CMD (log $log)"
 }
 
+# settle_capture: the settle form's step for one capture= checkout (see the
+# header). Returns non-zero only when a capture is still running after the wait,
+# which leaves the checkout for the ordinary busy skip.
+settle_capture() {
+  local waited=0 log rc=0
+  while capture_running; do
+    [ "$waited" -lt "$CAPTURE_SETTLE_WAIT_SECS" ] || return 1
+    sleep "$LIVE_LOCK_POLL_SECS"
+    waited=$((waited + LIVE_LOCK_POLL_SECS))
+  done
+  log=$(mktemp "${TMPDIR:-/tmp}/fm-capture-settle.XXXXXX") || {
+    echo "$label: STUCK: could not start $CAPTURE_CMD --settle - needs attention"
+    return 0
+  }
+  (cd "$PROJ" && bash -c "$CAPTURE_CMD --settle") </dev/null >"$log" 2>&1 || rc=$?
+  cat "$log" >&2
+  if [ "$rc" = 0 ]; then
+    echo "$label: settled: $CAPTURE_CMD --settle restored $(grep -c '^settled ' "$log" || true) path(s) origin already holds"
+  else
+    echo "$label: STUCK: $CAPTURE_CMD --settle failed (exit $rc) - needs attention; last output: $(post_update_output_tail "$log")"
+  fi
+  rm -f "$log"
+  return 0
+}
+
 # One config value of $PROJ's own .git, read without needing a work tree.
 git_dir_config() {
   git --git-dir="$PROJ/.git" config --get "$1" 2>/dev/null || echo unset
@@ -921,6 +964,9 @@ sync_live_checkout() {
       echo "$label: skipped: busy: $lock is held; rerun bin/fm-fleet-sync.sh $project after it clears"
       return 0
     fi
+  fi
+  if [ -n "$CAPTURE_CMD" ] && [ "$SETTLE_CAPTURE" = 1 ]; then
+    settle_capture || true
   fi
   if [ -n "$CAPTURE_CMD" ] && capture_running; then
     echo "$label: skipped: busy: $CAPTURE_CMD is still running (log $CAPTURE_RECORD.log); the next sync retries"

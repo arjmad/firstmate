@@ -13,7 +13,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-operational-input.sh` | Construct and parse the canonical cross-language operational-input protocol |
 | `fm-bootstrap.sh`        | Detect toolchain and fleet problems, run the locked session-start sweeps, and install approved tools |
 | `fm-startup-network.sh`  | Run session start's network checks and inactive-outcome scan off its blocking path, retaining reports and durable findings |
-| `fm-fleet-sync.sh`       | Refresh project clones and configured live checkouts with safe fast-forwards, self-heals, `STUCK:` reports, branch pruning, bounded recovery from an orphaned `.git/packed-refs.lock`, and the watcher's scheduled run |
+| `fm-fleet-sync.sh`       | Refresh project clones and configured live checkouts with safe fast-forwards, self-heals, `STUCK:` reports, branch pruning, bounded recovery from an orphaned `.git/packed-refs.lock`, the post-merge `--settle-capture` form, and the watcher's scheduled run |
 | `fm-fleet-snapshot.sh`   | Print structured fleet snapshot JSON and refresh only its parent-side remote-ledger cache (schema `fm-fleet-snapshot.v1`) |
 | `fm-home-summary-refresh.sh` | Atomically publish this home's structured summary ledger                         |
 | `fm-fleet-ledger.sh`     | Append the opt-in fleet activity ledger's records ([contract](fleet-ledger.md))      |
@@ -155,6 +155,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-review-check.sh`    | Record a forge=external task's validated `review=` and `review_head=` without arming a merge watch ([design](external-review-forge.md)) |
 | `fm-external-review-lib.sh` | Shared readers for the forge=external review tool adapter, ready-URL pattern, backup remote, and remote URLs |
 | `fm-pr-merge.sh`         | Record PR metadata, merge a task's canonical full GitHub, GitLab, or Forgejo URL, refuse a Gerrit change because firstmate never submits one, refuse a code-changing GitHub PR without a recorded code review, hold a PR marked a one-way door for the captain's word, then refuse an outcome it cannot prove landed or queued |
+| `fm-capture-land.sh`     | Land one skill-capture PR of a `capture=` live checkout's project: refuse any other PR or a stale one, record a minimal task, merge through `fm-pr-merge.sh`, settle and fast-forward the live checkout, and close the record |
 | `fm-code-review.sh`      | Classify a GitHub PR as code-changing or exempt, report whether its current diff carries a code review record, and post that record |
 | `fm-pr-state.sh`         | Read-only: print one line per GitHub pull-request blocker it can see, reporting on checks that have reported rather than verdicting merge-readiness |
 | `fm-pr-reviewers.sh`     | Read-only: suggest reviewers from GitHub's own author mapping of recent commits on a pull request's changed files, never requesting one |

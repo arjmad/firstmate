@@ -1170,6 +1170,69 @@ test_capture_skips_edits_outside_its_dir() {
   pass "edits outside the capture dir are reported STUCK without a capture"
 }
 
+test_settle_capture_waits_then_settles_and_fast_forwards() {
+  local home live out cmd
+  home=$(new_home)
+  live=$(build_capture_live "$home" settler)
+  cmd="$home/settle-capture.sh"
+  # A capture command that blocks while a hold exists, and whose --settle
+  # restores the merged file the way a real capture's --settle does.
+  cat > "$cmd" <<SCRIPT
+#!/usr/bin/env bash
+if [ "\${1:-}" = --settle ]; then
+  git checkout -q HEAD -- skills/a.md
+  echo "settled skills/a.md"
+  echo settle >> '$home/settles-settler'
+  exit 0
+fi
+echo capture >> '$home/captures-settler'
+while [ -e '$home/capture-hold-settler' ]; do sleep 0.1; done
+SCRIPT
+  chmod +x "$cmd"
+  # The capture merged: origin holds the live edit, which still sits uncommitted.
+  printf 'v1\n' > "$home/work-settler/skills/a.md"
+  git -C "$home/work-settler" commit -qam "capture merged"
+  git -C "$home/work-settler" push -q origin main
+  printf 'v1\n' > "$live/skills/a.md"
+  live_config "$home" "settler $live capture=skills/:$cmd"
+  : > "$home/capture-hold-settler"
+  out=$(run_sync "$home" settler)
+  assert_contains "$out" "capturing:" "the merge's own sync starts a capture for the new edit state"
+
+  out=$(FM_CAPTURE_SETTLE_WAIT_SECS=0 run_sync "$home" --settle-capture settler)
+  assert_contains "$out" "settler live $live: skipped: busy: $cmd is still running" "a running capture defers the settle"
+  assert_equals 0 "$(runs_of "$home/settles-settler")" "--settle never runs under a running capture"
+
+  rm -f "$home/capture-hold-settler"
+  out=$(FM_LIVE_CHECKOUT_LOCK_POLL_SECS=1 run_sync "$home" --settle-capture settler)
+  assert_contains "$out" "settler live $live: settled: $cmd --settle restored 1 path(s) origin already holds" \
+    "the settle form waits for the capture, then settles"
+  assert_contains "$out" "settler live $live: synced" "the settled checkout fast-forwards"
+  assert_equals "$(git -C "$home/work-settler" rev-parse HEAD)" "$(head_sha "$live")" "the checkout is at origin"
+  assert_equals "" "$(git -C "$live" status --porcelain)" "the checkout is clean"
+  assert_equals 1 "$(runs_of "$home/settles-settler")" "--settle ran once"
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" --settle-capture 2>&1) || true
+  assert_contains "$out" "usage:" "the settle form needs a project"
+  pass "the settle form waits out a running capture, runs --settle, then fast-forwards the checkout"
+}
+
+test_settle_capture_failure_is_stuck() {
+  local home live out
+  home=$(new_home)
+  live=$(build_capture_live "$home" badsettle)
+  printf '#!/usr/bin/env bash\necho "skill-capture: HEAD is not on origin/main" >&2\nexit 1\n' > "$home/bad-settle.sh"
+  chmod +x "$home/bad-settle.sh"
+  printf 'live edit\n' >> "$live/skills/a.md"
+  live_config "$home" "badsettle $live capture=skills/:$home/bad-settle.sh"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" --settle-capture badsettle 2>&1)
+  assert_contains "$out" "badsettle live $live: STUCK:" "a failed settle is STUCK"
+  assert_contains "$out" "--settle failed (exit 1) - needs attention; last output: skill-capture: HEAD is not on origin/main" \
+    "the STUCK line names the settle's exit and output"
+  assert_contains "$(cat "$live/skills/a.md")" "live edit" "the live edit is preserved"
+  pass "a failed --settle is reported STUCK with its output"
+}
+
 test_failed_post_update_carries_its_output_tail() {
   local home live out line
   home=$(new_home)
@@ -1323,6 +1386,8 @@ test_capture_still_running_is_not_restarted
 test_failed_capture_surfaces_when_edits_change
 test_current_capture_edits_pend_without_a_wake
 test_capture_skips_edits_outside_its_dir
+test_settle_capture_waits_then_settles_and_fast_forwards
+test_settle_capture_failure_is_stuck
 test_scheduled_interval_is_home_configurable
 test_scheduled_sync_queues_new_stuck_lines_once
 test_scheduled_sync_is_a_singleton
