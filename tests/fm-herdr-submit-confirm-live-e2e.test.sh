@@ -200,7 +200,7 @@ verdict=$(fm_backend_herdr_send_text_submit "$TARGET" '/exit' 3 0.4 1.2) \
 exited=0
 i=0
 while [ "$i" -lt 30 ]; do
-  case "$(fm_backend_herdr_agent_state "$TARGET" 2>/dev/null)" in dead|missing) exited=1; break ;; esac
+  [ "$(fm_backend_herdr_agent_state "$TARGET" 2>/dev/null)" != dead ] || { exited=1; break; }
   i=$((i + 1))
   sleep 1
 done
