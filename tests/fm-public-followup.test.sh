@@ -57,7 +57,9 @@ pf_stop_remote_worker() {
     # shellcheck source=/dev/null
     . "$ROOT/bin/fm-remote-job-lib.sh"
     fm_remote_job_stop_worker_tree "$pid"
-  )
+  ) || return 1
+  # A later stop must not signal whatever process reuses the stopped pid.
+  rm -f "$pid_file"
 }
 
 pf_test_cleanup() {
@@ -71,12 +73,18 @@ pf_test_cleanup() {
   fm_test_cleanup
   if [ "$worker_stopped" -eq 0 ]; then
     echo "not ok - the remote job worker tree survived teardown" >&2
-    exit 1
+    return 1
   fi
 }
-trap pf_test_cleanup EXIT
-trap 'pf_test_cleanup; exit 130' INT
-trap 'pf_test_cleanup; exit 143' TERM
+# The EXIT trap runs once for every exit, INT and TERM included, and turns only
+# a clean exit into a failure when the worker tree survived.
+pf_exit_trap() {
+  local status=$?
+  pf_test_cleanup || [ "$status" -ne 0 ] || exit 1
+}
+trap pf_exit_trap EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 iso_utc_from_epoch() {  # <epoch>
   date -u -r "$1" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
