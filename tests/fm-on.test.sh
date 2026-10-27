@@ -290,6 +290,14 @@ expect_dir "$REMOTE_ROOT/bin"
 if [ -d "$ACCOUNT_HOME/.local/bin" ] && [ ! -L "$ACCOUNT_HOME/.local/bin" ]; then
   expect_dir "$ACCOUNT_HOME/.local/bin"
 fi
+TOOLCHAIN_DIR="$ACCOUNT_HOME/.local/state/firstmate/toolchain/bin"
+if [ -d "$TOOLCHAIN_DIR" ] && [ ! -L "$TOOLCHAIN_DIR" ]; then
+  expect_dir "$TOOLCHAIN_DIR"
+  PRESENT_CHECKED=$((PRESENT_CHECKED + 1))
+else
+  OMITTED_DIRS+=("$TOOLCHAIN_DIR")
+  ABSENT_CHECKED=$((ABSENT_CHECKED + 1))
+fi
 for candidate in "${NVM_CHILD_DIRS[@]}"; do expect_dir "$candidate"; done
 for candidate in "${DISCOVERED_DIRS[@]}"; do expect_dir "$candidate"; done
 for fixed in /usr/bin /bin /usr/sbin /sbin; do expect_dir "$fixed"; done
@@ -456,6 +464,19 @@ assert_contains "$out" 'command is not tracked by the configured remote root' "t
   || fail "the tracked-command authorization consulted checkout-local git"
 pass "tracked-command authorization excludes checkout-local git"
 
+# The entrypoint resolves the account home with HOME unset, and git dies on any
+# "~/" path in a config it still reads (on a host, the XDG config an SSH session
+# can name; here GIT_CONFIG_GLOBAL) unless it runs with that home restored.
+TILDE_GITCONFIG="$TMP_ROOT/tilde-gitconfig"
+printf '[core]\n\texcludesFile = ~/.config/git/fm-on-test-ignore\n' > "$TILDE_GITCONFIG"
+set +e
+out=$(GIT_CONFIG_GLOBAL="$TILDE_GITCONFIG" fm_on ios fm-probe-two.sh 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "a ~/ path in the account git config broke the remote entrypoint (rc=$rc): $out"
+assert_contains "$out" "home=$REMOTE_HOME" "the probe did not run when the account git config names a ~/ path"
+pass "the entrypoint runs git with the account home, so a ~/ git config path resolves"
+
 set +e
 out=$(
   # shellcheck disable=SC2329 # Exported for indirect use by fm_on.
@@ -514,6 +535,22 @@ if "$REMOTE_ROOT/bin/fm-remote-entrypoint.sh" 1 "$traversal_root_b64" "$home_b64
   fail "the fixed entrypoint accepted traversal in the configured root"
 fi
 pass "the fixed entrypoint refuses incompatible protocols and unsafe roots"
+
+# Only the home's own leaf may be absent; a missing parent is a step the
+# operator must take, so the refusal names it rather than calling the path unsafe.
+cat > "$LOCAL_HOME/data/secondmates.md" <<EOF
+- ios - iOS delivery (host: remote-mac; root: $REMOTE_ROOT; home: $TMP_ROOT/absent-parent/remote-home; scope: iOS work; projects: alpha; added 2026-08-02)
+EOF
+set +e
+out=$(fm_on ios fm-probe-two.sh 2>&1)
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail "a remote home under an absent parent was accepted"
+assert_contains "$out" "remote home parent directory does not exist: $TMP_ROOT/absent-parent" \
+  "the absent-parent refusal did not name the missing parent"
+assert_absent "$TMP_ROOT/absent-parent" "the entrypoint created the absent parent itself"
+write_registry
+pass "a remote home under an absent parent is refused with the parent named"
 
 cat >> "$LOCAL_HOME/data/secondmates.md" <<EOF
 - build - build delivery (host: remote-mac; root: $REMOTE_ROOT; home: $TMP_ROOT/other-remote-home; scope: build work; projects: beta; added 2026-08-02)

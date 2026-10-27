@@ -144,12 +144,13 @@ The authorized child sees these directories, in this order:
 
 1. `<remote-root>/bin`.
 2. A genuine account `~/.local/bin`.
-3. The nvm default version bin.
-4. asdf shims and install bins.
-5. mise shims and install bins.
-6. Nix directories.
-7. Homebrew directories.
-8. The system tail `/usr/bin:/bin:/usr/sbin:/sbin`.
+3. Firstmate's toolchain directory `~/.local/state/firstmate/toolchain/bin`, where a host that points npm's global prefix at `~/.local/state/firstmate/toolchain` keeps the tools bootstrap installs.
+4. The nvm default version bin.
+5. asdf shims and install bins.
+6. mise shims and install bins.
+7. Nix directories.
+8. Homebrew directories.
+9. The system tail `/usr/bin:/bin:/usr/sbin:/sbin`.
 
 The Nix and package-manager order after version-manager discovery is:
 
@@ -174,7 +175,7 @@ For the three Nix locations:
 - A final `bin` symlink is resolved to its physical directory.
 - A path reached through symlinked ancestors remains in its documented position.
 
-Other final-component symlink directories, including `~/.local/bin`, are excluded.
+Other final-component symlink directories, including `~/.local/bin` and the toolchain directory, are excluded.
 
 ### Stale Herdr clients
 
@@ -335,7 +336,7 @@ bin/fm-remote-home-seed.sh <id> <ssh-alias> <remote-root> <remote-home> {<projec
 | Argument | Meaning |
 | --- | --- |
 | `<remote-root>` | The remote Firstmate code clone that supplies tracked scripts. |
-| `<remote-home>` | A separate absolute path for the persistent secondmate home that must not overlap the code root. |
+| `<remote-home>` | A separate absolute path for the persistent secondmate home that must not overlap the code root; its parent directory must already exist on the host, since provisioning creates only the home itself. |
 
 ### Project origins
 
@@ -672,6 +673,11 @@ It refuses while any of these holds:
 It closes only the retiring secondmate's panes or `2ndmate-<id>` workspace in `fm-remote`.
 It never stops the shared session or removes a sibling secondmate's workspace or panes.
 SSH exit 255 preserves both the route and local records because completion is unknown.
+
+A seed registers its route before the remote home exists, so a seed interrupted before provisioning leaves a route with no task record.
+Teardown retires such a route alone once the host confirms its home is absent or carries no `.fm-secondmate-home` marker, and leaves any directory there in place.
+It refuses when the host reports a seeded home, because retiring that needs the primary's task record.
+
 `--force` remains the explicit discard path and requires the same captain authority as local secondmate discard.
 
 No generic remote delete or write surface exists:

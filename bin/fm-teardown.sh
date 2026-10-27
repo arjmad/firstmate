@@ -228,6 +228,9 @@
 # leased home releases its durable treehouse lease so the pool slot is freed,
 # never left leased forever. If the treehouse return fails, teardown leaves the
 # leased home and state in place instead of hiding a still-held lease.
+# A remote secondmate route with no task record (a seed interrupted before its
+# home was provisioned) retires route-only once its host confirms the home is
+# absent or unseeded, and refuses when the host reports a seeded home.
 # Usage: fm-teardown.sh <task-id> [--force] [--legacy-record]
 #        fm-teardown.sh --help
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
@@ -606,6 +609,43 @@ CONTROL_LOCK_HELD=1
 # down a worktree (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
 FM_LOCK_LOG_PREFIX=teardown
+
+# A remote seed registers its route before the remote home exists, so a seed
+# interrupted before provisioning leaves a route with no task record. The host
+# confirms the home was never seeded before the route alone is retired.
+unseeded_remote_route_teardown() {
+  local out rc tmp
+  fm_lease_forbid_branch "secondmate retirement (fm-teardown)"
+  LOCAL_REGISTRY_LOCK=$(secondmate_registry_lock_path "$STATE")
+  fm_lock_acquire_wait "$LOCAL_REGISTRY_LOCK" || { LOCAL_REGISTRY_LOCK=; return 1; }
+  if [ -e "$META" ] || [ -L "$META" ] || ! secondmate_registry_line_for_id "$SECONDMATE_REG" "$ID" \
+    || [ "$SECONDMATE_REGISTRY_REMOTE" -ne 1 ]; then
+    echo "error: secondmate $ID changed during route-only retirement; nothing was changed - retry teardown" >&2
+    return 1
+  fi
+  if out=$("$SCRIPT_DIR/fm-on.sh" "$ID" fm-remote-secondmate-control.sh retire "$ID" --unseeded-only < /dev/null 2>&1); then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [ "$rc" -ne 0 ]; then
+    [ -z "$out" ] || printf '%s\n' "$out" >&2
+    echo "REFUSED: remote secondmate $ID has no task record here, and its host did not confirm an absent or never-seeded home; the route is preserved" >&2
+    return 1
+  fi
+  tmp="$SECONDMATE_REG.tmp.$$"
+  grep -vE "^- $ID( |$)" "$SECONDMATE_REG" > "$tmp" || true
+  mv -f -- "$tmp" "$SECONDMATE_REG"
+  printf '%s\n' "$out"
+  printf 'teardown %s complete (route only: remote %s:%s held no seeded home)\n' \
+    "$ID" "$SECONDMATE_REGISTRY_HOST" "$SECONDMATE_REGISTRY_HOME"
+}
+if [ ! -e "$META" ] && [ ! -L "$META" ] && [ -f "$SECONDMATE_REG" ] \
+  && secondmate_registry_line_for_id "$SECONDMATE_REG" "$ID" 2>/dev/null \
+  && [ "$SECONDMATE_REGISTRY_REMOTE" -eq 1 ]; then
+  unseeded_remote_route_teardown
+  exit $?
+fi
 
 fm_backlog_record_present "$META" "task record" "$STATE" || {
   echo "error: teardown refused: $FM_BACKLOG_TRANSITION_ERROR" >&2

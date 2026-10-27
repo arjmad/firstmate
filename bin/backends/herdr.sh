@@ -382,12 +382,21 @@ fm_backend_herdr_workspace_label() {
 # compatible if a future herdr build honors it. Never used by
 # fm_backend_herdr_version_check, which is intentionally session-independent
 # (reads only .client.* fields).
-fm_backend_herdr_cli() {  # <session> <herdr-subcommand-and-args...>
-  local session=$1 rc=0 err failed_bin selected_bin client_bin=herdr
-  shift
-  if [ "${FM_BACKEND_HERDR_CLIENT_SESSION:-}" = "$session" ]; then
-    client_bin=$(fm_backend_herdr_bin)
+# fm_backend_herdr_client_bin: the herdr client a call for <session> starts
+# with - the selected client when this session's selection already ran, else
+# plain herdr.
+fm_backend_herdr_client_bin() {  # <session>
+  if [ "${FM_BACKEND_HERDR_CLIENT_SESSION:-}" = "$1" ]; then
+    fm_backend_herdr_bin
+  else
+    printf 'herdr'
   fi
+}
+
+fm_backend_herdr_cli() {  # <session> <herdr-subcommand-and-args...>
+  local session=$1 rc=0 err failed_bin selected_bin client_bin
+  shift
+  client_bin=$(fm_backend_herdr_client_bin "$session")
   # stderr is buffered (stdout streams untouched) so a protocol_mismatch
   # refusal can be recognized and retried once on a compatible client; see
   # "client selection" below. A failed command's stderr is replayed verbatim.
@@ -1728,7 +1737,12 @@ fm_backend_herdr_server_ensure() {  # <session>
   (
     unset FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE \
       CURSOR_AGENT CURSOR_INVOKED_AS CLAUDECODE PI_CODING_AGENT FM_PI_HARNESS GROK_AGENT FM_SUPERVISION_MODEL
-    fm_backend_herdr_cli "$session" server </dev/null >/dev/null 2>&1 &
+    client_bin=$(fm_backend_herdr_client_bin "$session")
+    # Background the client itself, not a shell function: a backgrounded
+    # function is a forked shell that lives as long as the server and keeps the
+    # caller's descriptors bash saved for a redirection, so a caller reading
+    # this process's output (a remote doctor --fix over SSH) never sees EOF.
+    HERDR_SESSION="$session" "$client_bin" server --session "$session" </dev/null >/dev/null 2>&1 &
   ) || return 1
   for i in $(seq 1 20); do
     running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)

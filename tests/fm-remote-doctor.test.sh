@@ -264,6 +264,10 @@ case "${1:-} ${2:-}" in
     ;;
   "server "*|"server ")
     printf 'true\n' > "$FM_FAKE_HERDR_RUNNING"
+    if [ -n "${FM_FAKE_HERDR_SERVER_HOLD:-}" ]; then
+      printf '%s\n' "$$" > "$FM_FAKE_STATE/herdr-server.pid"
+      exec /bin/sleep "$FM_FAKE_HERDR_SERVER_HOLD"
+    fi
     ;;
 esac
 exit 0
@@ -306,6 +310,7 @@ doctor() {
     FM_FAKE_LAUNCHCTL_LOG="$CASE_LAUNCHCTL_LOG" \
     FM_FAKE_FORBIDDEN_LOG="$CASE_FORBIDDEN_LOG" \
     FM_FAKE_HERDR_RUNNING="$CASE_HERDR_RUNNING" \
+    FM_FAKE_HERDR_SERVER_HOLD="${CASE_HERDR_SERVER_HOLD:-}" \
     FM_FAKE_HERDR_BIN="$CASE_BIN/herdr" \
     FM_FAKE_HERDR_SOCKET="$CASE_STATE/herdr.sock" \
     FM_FAKE_GUARD="$GUARD" \
@@ -778,6 +783,83 @@ assert_contains "$DOCTOR_OUT" 'fix herdr-server=applied:' "--fix did not report 
 assert_contains "$DOCTOR_OUT" 'check herdr-server=ok:' "the started server was not confirmed by the re-check"
 [ ! -s "$CASE_LAUNCHCTL_LOG" ] || fail "the linux path invoked launchctl"
 pass "a non-darwin host skips launch agents and starts its herdr server directly"
+
+# --- daemons --fix starts never hold the caller's output open ----------------
+# A remote seed reads the doctor's output to EOF over SSH, so a long-lived
+# server or worker that kept a copy of that pipe would hang the seed until it
+# exited.
+
+new_case Linux with-herdr no-gui
+CASE_REMOTE_JOB_ACTIVE=
+CASE_PLATFORM_OVERRIDE=Linux
+CASE_HERDR_SERVER_HOLD=30
+rm -f "$CASE_BIN/sleep" "$CASE_BIN/uname"
+mkdir -p "$CASE_HOME/.local/bin"
+for tool in herdr tasks-axi treehouse claude; do
+  ln -s "$CASE_BIN/$tool" "$CASE_HOME/.local/bin/$tool"
+done
+DOCTOR_STARTED=$SECONDS
+doctor --fix
+DOCTOR_ELAPSED=$((SECONDS - DOCTOR_STARTED))
+unset CASE_HERDR_SERVER_HOLD
+SERVER_PID=$(cat "$CASE_STATE/herdr-server.pid" 2>/dev/null || true)
+if [ -n "$SERVER_PID" ]; then HOLDER_PIDS+=("$SERVER_PID"); fi
+DOCTOR_WORKER_PID=$(cat "$CASE_HOME/.firstmate/remote-job/worker.pid" 2>/dev/null || true)
+[ "$DOCTOR_ELAPSED" -lt 20 ] \
+  || fail "--fix held its caller's output open for ${DOCTOR_ELAPSED}s, until a daemon it started exited"
+if [ -z "$SERVER_PID" ] || ! kill -0 "$SERVER_PID" 2>/dev/null; then
+  fail "the fixture herdr server was not left running"
+fi
+if [ -z "$DOCTOR_WORKER_PID" ] || ! kill -0 "$DOCTOR_WORKER_PID" 2>/dev/null; then
+  fail "--fix did not leave the remote job worker running"
+fi
+assert_contains "$DOCTOR_OUT" 'fix herdr-server=applied:' "--fix did not report starting the server"
+assert_contains "$DOCTOR_OUT" 'fix remote-job-worker=applied:' "--fix did not report starting the worker"
+kill "$SERVER_PID" 2>/dev/null || true
+kill -TERM "$DOCTOR_WORKER_PID" 2>/dev/null || true
+for _ in $(seq 1 100); do
+  kill -0 "$DOCTOR_WORKER_PID" 2>/dev/null || break
+  sleep 0.05
+done
+if kill -0 "$DOCTOR_WORKER_PID" 2>/dev/null; then
+  kill -KILL "$DOCTOR_WORKER_PID" 2>/dev/null || true
+fi
+DOCTOR_WORKER_PID=
+pass "--fix returns to its caller while the daemons it started keep running"
+
+# --- firstmate's own toolchain directory is on the worker PATH ---------------
+# Bootstrap's npm installs land in a host's chosen prefix; a home that keeps
+# Firstmate's tools in ~/.local/state/firstmate/toolchain/bin must not need a
+# hand-written wrapper for them.
+
+new_case Linux with-herdr no-gui
+CASE_REMOTE_JOB_ACTIVE=
+CASE_PLATFORM_OVERRIDE=Linux
+rm -f "$CASE_BIN/sleep" "$CASE_BIN/uname"
+TOOLCHAIN_BIN="$CASE_HOME/.local/state/firstmate/toolchain/bin"
+mkdir -p "$CASE_HOME/.local/bin" "$TOOLCHAIN_BIN"
+for tool in herdr treehouse claude; do
+  ln -s "$CASE_BIN/$tool" "$CASE_HOME/.local/bin/$tool"
+done
+mv "$CASE_BIN/tasks-axi" "$TOOLCHAIN_BIN/tasks-axi"
+doctor --fix
+DOCTOR_WORKER_PID=$(cat "$CASE_HOME/.firstmate/remote-job/worker.pid" 2>/dev/null || true)
+assert_contains "$DOCTOR_OUT" "required tasks-axi=$TOOLCHAIN_BIN/tasks-axi" \
+  "the worker PATH did not resolve tasks-axi from the toolchain directory"
+expect_code 0 "$DOCTOR_RC" "a host with tasks-axi in the toolchain directory was not ready"
+assert_absent "$CASE_HOME/.local/bin/tasks-axi" "--fix wrapped a tool the worker PATH already resolves"
+if [ -n "$DOCTOR_WORKER_PID" ]; then
+  kill -TERM "$DOCTOR_WORKER_PID" 2>/dev/null || true
+  for _ in $(seq 1 100); do
+    kill -0 "$DOCTOR_WORKER_PID" 2>/dev/null || break
+    sleep 0.05
+  done
+  if kill -0 "$DOCTOR_WORKER_PID" 2>/dev/null; then
+    kill -KILL "$DOCTOR_WORKER_PID" 2>/dev/null || true
+  fi
+fi
+DOCTOR_WORKER_PID=
+pass "the worker PATH resolves tools from firstmate's toolchain directory"
 
 # --- --fix may add only owned wrappers for version-manager tools -------------
 

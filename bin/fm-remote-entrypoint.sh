@@ -80,6 +80,20 @@ sha256_file() { # <path>
   printf '%s\n' "$digest"
 }
 
+# Only the home's own leaf may be absent (provisioning creates it), so a
+# missing parent is named as the operator step it is.
+home_refusal() { # <configured-home>
+  local normalized parent
+  normalized=$(fm_remote_job_normalize_absolute_path "$1" 2>/dev/null) || normalized=
+  parent=$(dirname "${normalized:-/}")
+  if [ -n "$normalized" ] && [ "$parent" != / ] && [ ! -e "$normalized" ] && [ ! -L "$normalized" ] \
+    && [ ! -e "$parent" ] && [ ! -L "$parent" ]; then
+    printf 'remote home parent directory does not exist: %s; create it on the remote host (mkdir -p), since only the home directory itself may be absent\n' "$parent"
+    return 0
+  fi
+  printf 'remote home is not a safe directory\n'
+}
+
 [ "$#" -eq 4 ] || die "remote entrypoint expects protocol, root, home, and argv"
 [ "$1" = "$PROTOCOL" ] || die "incompatible remote protocol: local=$1 remote=$PROTOCOL"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-remote-entrypoint.XXXXXX") || die "cannot create protocol staging directory" 70
@@ -120,7 +134,7 @@ base64_decode_to "$4" "$TMP/argv" || die "invalid base64 for argv"
 ROOT=$(<"$TMP/root")
 HOME_PATH=$(<"$TMP/home")
 ROOT=$(fm_remote_job_canonical_existing_dir "$ROOT") || die "remote root is not a safe existing directory"
-HOME_PATH=$(fm_remote_job_canonical_home "$HOME_PATH") || die "remote home is not a safe directory"
+HOME_PATH=$(fm_remote_job_canonical_home "$HOME_PATH") || die "$(home_refusal "$(<"$TMP/home")")"
 [ -f "$ROOT/AGENTS.md" ] && [ ! -L "$ROOT/AGENTS.md" ] || die "remote root is not a Firstmate checkout"
 [ -d "$ROOT/bin" ] && [ ! -L "$ROOT/bin" ] || die "remote root has no safe bin directory"
 if path_is_ancestor "$ROOT" "$HOME_PATH" || path_is_ancestor "$HOME_PATH" "$ROOT" || [ "$ROOT" = "$HOME_PATH" ]; then
@@ -138,6 +152,9 @@ COMMAND_PATH="$ROOT/bin/$COMMAND"
   || die "command is not a genuine executable in the configured remote root: $COMMAND"
 unset HOME
 ACCOUNT_HOME=$(CDPATH='' cd ~ 2>/dev/null && pwd -P) || die "cannot resolve the remote account home"
+# git expands a "~/" path in the account's own git config through HOME and
+# dies when it is unset, so restore it from the account database's answer.
+export HOME="$ACCOUNT_HOME"
 fm_remote_job_compose_operator_path "$ACCOUNT_HOME" >/dev/null
 GIT_BIN=$(fm_remote_job_operator_tool git 2>/dev/null || true)
 if [ -n "$GIT_BIN" ]; then
