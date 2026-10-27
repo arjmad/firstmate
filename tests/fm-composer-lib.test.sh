@@ -1012,7 +1012,7 @@ test_matrix_claude_titled_top_rule() {
   # predicate rejects that row, so the pair never opened, the closing rule
   # read as a lower unmatched separator, and a visibly empty composer read
   # `unknown` on every cursorless backend, refusing steers, exit, and relaunch.
-  local rule title top bottom footer screen ansi typed claude_idle
+  local rule title top bottom footer screen ansi typed claude_idle narrow_top narrow_bottom
   local scrollback short nonascii flush blank wrapped gap ruled out long n
   claude_idle=$(printf 'claude\tidle')
   rule='────────────────────────────────────────────────────────────'
@@ -1069,9 +1069,27 @@ test_matrix_claude_titled_top_rule() {
   # A non-ASCII title leaves residue and refuses rather than guessing width.
   nonascii="${rule}─── ✳ Firstmate operational input 179054604 ─"$'\n❯'"$NBSP"$'\n'"$bottom"
   assert_screen "non-ASCII titled rule" unknown "$CAPS_STYLED_NOID" "$nonascii"
-  # The rule must open with the strict separator's dash run.
+  # The rule must open with a dash, not the title.
   flush=" Firstmate operational input 1790546042 ${rule}────"$'\n❯'"$NBSP"$'\n'"$bottom"
   assert_screen "title flush at the rule's start" unknown "$CAPS_STYLED_NOID" "$flush"
+  # Claude shortens the dash run before the title as the pane narrows: a
+  # 32-column scout title leaves 7 dashes at 42 columns and 1 at 36 (Claude
+  # Code 2.1.310, live). Matching the closing rule's width is the proof, so a
+  # shorter opening run is still this composer's top edge.
+  for n in 7 1; do
+    narrow_top=$(printf '%0.s─' $(seq 1 "$n"))' scout: claude-code-optimize-1027 ─'
+    narrow_bottom=$(printf '%0.s─' $(seq 1 $((n + 35))))
+    assert_screen "narrow titled claude idle, $n-dash run, on herdr" empty "$CAPS_STYLED" \
+      "$narrow_top"$'\n❯'"$NBSP"$'\n'"$narrow_bottom"$'\n'"$footer" '' "$claude_idle"
+    out="$narrow_top"$'\n❯ : Firstmate instruction waiting: list\n  "$FM_TASK_INBOX"/*.msg in your\n  its handled/.\n'"$narrow_bottom"$'\n'"$footer"
+    assert_screen "narrow titled claude wrapped draft, $n-dash run, on herdr" pending "$CAPS_STYLED" \
+      "$out" '' "$claude_idle"
+  done
+  # A row that only opens with a dash is transcript, not a titled rule: the
+  # rule closes with one too.
+  out=$(printf '%0.s─' $(seq 1 7))' scout: claude-code-optimize-1027 x'
+  assert_screen "dash-led row that does not close with a dash" unknown "$CAPS_STYLED_NOID" \
+    "$out"$'\n❯'"$NBSP"$'\n'"$(printf '%0.s─' $(seq 1 42))"
   # The strict blank-row posture is untouched: no glyph row, no proof.
   blank="$top"$'\n\n'"$bottom"
   assert_screen "titled rule over a blank row" unknown "$CAPS_STYLED_NOID" "$blank"

@@ -636,6 +636,18 @@ The name stays in the composer's top rule while a draft wraps, verified 2026-10-
 
 `fm_task_inbox_ring herdr <lab-session>:w1:p1 <record> fm-lab-a` returned 2 on the named pane and 0 on the unnamed one until the titled-rule composer proof accepted wrapped rows, then returned 0 and the named worker acted on the doorbell.
 `tests/fm-composer-lib.test.sh` (`test_matrix_claude_titled_top_rule`) and `tests/fm-backend-herdr.test.sh` (`test_send_text_submit_claude_titled_wrapped_doorbell_is_proven_and_submitted`) pin that shape.
+Claude shortens the dash run before the name as the pane narrows, verified 2026-10-27 on Claude Code 2.1.310 by resizing an idle `claude --name 'scout: claude-code-optimize-1027'` pane in a private tmux lab server and reading its styled captures:
+
+```text
+42 columns: ─────── scout: claude-code-optimize-1027 ─
+36 columns: ─ scout: claude-code-optimize-1027 ─
+34 columns:  scout: claude-code-optimize-10… ─
+```
+
+The titled rule always matches the closing rule's width while the name fits.
+`fm_task_inbox_ring herdr` fed those 42-column captures through a stateful Herdr stub returned 2 without typing while the proof required an 8-dash opening run, and returned 0 with one typed, submitted doorbell once any opening dash run was accepted.
+Below 36 columns that name is truncated with `…` and the doorbell wraps past `FM_COMPOSER_PI_MAX_LINES`, so the composer still reads `unknown`.
+`tests/fm-backend-herdr.test.sh` (`test_send_text_submit_claude_narrow_titled_doorbell_is_proven_and_submitted`) pins the narrow shape.
 `tests/fm-spawn-dispatch-profile.test.sh` (`test_claude_launch_names_the_session_after_its_task`) pins the emitted name for ship, scout, and secondmate launches, and `tests/fm-control-relaunch.test.sh` pins it across a relaunch.
 
 ## Pi seeded-secondmate project trust
