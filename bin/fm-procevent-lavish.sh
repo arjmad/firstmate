@@ -124,7 +124,9 @@
 #
 # A bearings board answer (fm-bearings-answer.v1) feeds the intake only when
 # it closes or defers a captain hold, and never on the captain's words alone:
-#   - a decision card's picked option (`selection`) feeds as before;
+#   - a decision card's picked option (`selection`) feeds with the card's
+#     close mode, or as a deferral (mode `until=<YYYY-MM-DD>`) when the option
+#     carries the `until` date it comes back on; an unusable date feeds nothing;
 #   - an inbox item's action (`action`) feeds only for effect `close` (its
 #     card-declared mode, done by default) or `hold-until` with a valid
 #     `until` (mode `until=<YYYY-MM-DD>`), and never for a `blocking` item,
@@ -912,16 +914,15 @@ cmd_relisten() {
 
 # Print `key<TAB>answer<TAB>label[<TAB>mode]` for each non-reconcile structured choice the
 # captain submitted in a captured result; the optional mode column relays the
-# card's declared close mode (`done` or `release`) to the keyed-answer intake.
+# card's declared close mode (`done` or `release`), or `until=<date>` for a
+# deferral, to the keyed-answer intake.
 # Items come from the shared result parser above, in either emission form, and
 # only items whose `tag` field is `choice` are read.
 # The header owns the partial-output and failure contract.
 # A freeform `message` row is captain prose and is deliberately never a
 # source of decision keys. A row that does not carry both a slug-shaped `question`
 # and the versioned `selection` and `note` fields inside its `Context data:` block
-# is skipped. A time-limited rollout branch accepts the old question/answer
-# shape only for ordinary answers and rejects its bare or annotated reconcile
-# values because old rows do not separate the selected option from its note.
+# is skipped.
 # The question cap is 128 so any task id fits, including the long legacy
 # `<origin>-decision-<key>` identities pre-collapse decks still carry; the
 # security property is the slug SHAPE, which is unchanged.
@@ -944,67 +945,54 @@ cmd_choice_rows() {
       my $ctx = $1;
       my $data = eval { decode_json($ctx) };
       next unless ref($data) eq "HASH";
-      my ($key, $selected, $note, $answer, $legacy, $item_mode);
-      if (defined($data->{schema}) && !ref($data->{schema})
-          && $data->{schema} eq "fm-bearings-answer.v1") {
-        $key = $data->{question};
-        $selected = $data->{selection};
-        $note = $data->{note};
-        $selected = exists $data->{action} ? "" : $selected;
-        next if !defined($key) || ref($key) || !defined($selected) || ref($selected)
-          || !defined($note) || ref($note);
-        next unless length($note) <= 512;
-        if (exists $data->{action}) {
-          # An inbox item answer feeds the intake only when it closes or
-          # defers a captain hold (header).
-          my $action = $data->{action};
-          my $effect = $data->{effect};
-          next if !defined($action) || ref($action) || !length($action);
-          next unless $action =~ /\A[A-Za-z0-9._-]{1,128}\z/;
-          # A later pick on the same item replaces an earlier one even when
-          # firstmate, not the intake, routes it, so a superseded close or
-          # deferral is never fed.
-          my $supersede = sub {
-            return unless $key =~ /\A[A-Za-z0-9._-]{1,128}\z/ && defined $seen{$key};
-            $choices[$seen{$key}] = undef;
-            delete $seen{$key};
-          };
-          if (defined($data->{group}) && !ref($data->{group}) && $data->{group} eq "blocking") {
-            $supersede->();
-            next;
-          }
-          if (!defined($effect) || ref($effect)) { $supersede->(); next; }
-          if ($effect eq "hold-until") {
-            my $until = $data->{until};
-            if (!defined($until) || ref($until) || $until !~ /\A\d{4}-\d{2}-\d{2}\z/) {
-              $supersede->();
-              next;
-            }
-            $item_mode = "until=$until";
-          } elsif ($effect ne "close") {
-            $supersede->();
-            next;
-          }
-          $selected = $action;
-        } else {
-          next unless $selected =~ /\A[A-Za-z0-9._-]{1,128}\z/;
+      next unless defined($data->{schema}) && !ref($data->{schema})
+        && $data->{schema} eq "fm-bearings-answer.v1";
+      my $key = $data->{question};
+      my $selected = exists $data->{action} ? "" : $data->{selection};
+      my $note = $data->{note};
+      my $item_mode;
+      next if !defined($key) || ref($key) || !defined($selected) || ref($selected)
+        || !defined($note) || ref($note);
+      next unless length($note) <= 512;
+      # A later pick on the same item replaces an earlier one even when
+      # firstmate, not the intake, routes it, so a superseded close or
+      # deferral is never fed.
+      my $supersede = sub {
+        return unless $key =~ /\A[A-Za-z0-9._-]{1,128}\z/ && defined $seen{$key};
+        $choices[$seen{$key}] = undef;
+        delete $seen{$key};
+      };
+      my $deferral = sub {
+        my $until = $data->{until};
+        return undef if !defined($until) || ref($until) || $until !~ /\A[0-9]{4}-[0-9]{2}-[0-9]{2}\z/;
+        return "until=$until";
+      };
+      if (exists $data->{action}) {
+        # An inbox item answer feeds the intake only when it closes or
+        # defers a captain hold (header).
+        my $action = $data->{action};
+        my $effect = $data->{effect};
+        next if !defined($action) || ref($action) || !length($action);
+        next unless $action =~ /\A[A-Za-z0-9._-]{1,128}\z/;
+        if (defined($data->{group}) && !ref($data->{group}) && $data->{group} eq "blocking") {
+          $supersede->();
+          next;
         }
-        $answer = $selected;
-        $legacy = 0;
-      # Time-limited compatibility for captures from pre-change boards; remove
-      # once no board carrying the old question/answer context can remain armed.
-      } elsif (!exists($data->{schema}) && !exists($data->{selection})
-          && !exists($data->{note})) {
-        $key = $data->{question};
-        $answer = $data->{answer};
-        next if !defined($key) || ref($key) || !defined($answer) || ref($answer);
-        next unless length($answer) && length($answer) <= 512;
-        next if $answer eq "reconcile" || index($answer, "reconcile - ") == 0;
-        $selected = "";
-        $note = "";
-        $legacy = 1;
+        if (!defined($effect) || ref($effect)) { $supersede->(); next; }
+        if ($effect eq "hold-until") {
+          $item_mode = $deferral->();
+          if (!defined $item_mode) { $supersede->(); next; }
+        } elsif ($effect ne "close") {
+          $supersede->();
+          next;
+        }
+        $selected = $action;
       } else {
-        next;
+        next unless $selected =~ /\A[A-Za-z0-9._-]{1,128}\z/;
+        if (exists $data->{until}) {
+          $item_mode = $deferral->();
+          if (!defined $item_mode) { $supersede->(); next; }
+        }
       }
       next unless $key =~ /\A[A-Za-z0-9._-]{1,128}\z/;
       my $mode = "";
@@ -1015,18 +1003,17 @@ cmd_choice_rows() {
       }
       $mode = $item_mode if defined $item_mode;
       my $label = defined $f{text} ? $f{text} : "";
-      s/[\x00-\x1f\x7f]/ /g for ($answer, $note, $label);
+      s/[\x00-\x1f\x7f]/ /g for ($selected, $note, $label);
       $label = substr($label, 0, 512);
       if (defined $seen{$key}) { $choices[$seen{$key}] = undef }
       $seen{$key} = scalar @choices;
       push @choices, {
-        key => $key, selection => $selected, note => $note, legacy => $legacy,
-        answer => $answer, label => $label, mode => $mode
+        key => $key, selection => $selected, note => $note,
+        label => $label, mode => $mode
       };
     }
     for my $choice (grep { defined } @choices) {
       if ($selection eq "reconciles") {
-        next if $choice->{legacy};
         if ($choice->{selection} eq "reconcile") {
           print length($choice->{note})
             ? "$choice->{key}\t$choice->{note}\n"
@@ -1036,8 +1023,8 @@ cmd_choice_rows() {
       }
       next if $choice->{selection} eq "reconcile";
       print length $choice->{mode}
-        ? "$choice->{key}\t$choice->{answer}\t$choice->{label}\t$choice->{mode}\n"
-        : "$choice->{key}\t$choice->{answer}\t$choice->{label}\n";
+        ? "$choice->{key}\t$choice->{selection}\t$choice->{label}\t$choice->{mode}\n"
+        : "$choice->{key}\t$choice->{selection}\t$choice->{label}\n";
     }
     if ($malformed || @$items != $want) {
       print STDERR "error: the result is not fully accounted for: declared $want, parsed ",
@@ -1108,8 +1095,16 @@ cmd_read() {
       my $route;
       if (!length $pick) {
         $route = "captain instruction: his note alone, never a closure, release or re-hold";
+      } elsif (!$item && $pick eq "reconcile") {
+        $route = "reconcile request";
+      } elsif (!$item && exists $data->{until}) {
+        $route = $str->($data->{until}) =~ /\A[0-9]{4}-[0-9]{2}-[0-9]{2}\z/
+          ? "keyed intake (re-holds until the date)"
+          : "firstmate: later with no usable date; nothing was fed";
+      } elsif (!$item && $pick eq "later") {
+        $route = "firstmate: later with no date; the intake refuses it, so defer it yourself";
       } elsif (!$item) {
-        $route = $pick eq "reconcile" ? "reconcile request" : "keyed intake (records the pick)";
+        $route = "keyed intake (records the pick)";
       } elsif ($str->($data->{group}) eq "blocking") {
         $route = "firstmate: $effect for the blocked worker";
       } elsif ($effect eq "prune") {
@@ -1129,6 +1124,9 @@ cmd_read() {
       print "question:\n"; emit_body($str->($data->{question}));
       print "kind: ", ($item ? "inbox item" : "card"), "\n";
       print "pick:\n"; emit_body(length $pick ? $pick : "(note only)");
+      if (!$item && defined $data->{until} && !ref $data->{until}) {
+        print "until:\n"; emit_body($data->{until});
+      }
       if ($item) {
         print "effect:\n"; emit_body($effect);
         print "group:\n"; emit_body($str->($data->{group}));

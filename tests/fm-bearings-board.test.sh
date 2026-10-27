@@ -850,6 +850,30 @@ test_build_refuses_a_decision_card_without_a_real_choice() {
   pass "build refuses a decision card without two authored options, a recommendation, and free text"
 }
 
+test_a_later_option_carries_the_date_it_comes_back() {
+  local home key data out
+  home=$(make_home later-option)
+  write_valid_payload "$home/payload.json"
+  key=$(jq -r '.captains_call[0].key' "$home/payload.json")
+  assert_weak_card_refused "$home" \
+    '.captains_call[0].options += [{"value":"later","label":"Later","hint":"Back next week."}]' \
+    "$key: needs an until date on its later option" \
+    "a later option with no date to come back on"
+  assert_weak_card_refused "$home" \
+    '.captains_call[0].options += [{"value":"later","label":"Later","until":"next week"}]' \
+    "does not satisfy fm-bearings-board.v1" \
+    "a later option whose date is not a date"
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  jq '.captains_call[0].options += [{"value":"later","label":"Later","hint":"Back on the 9th.","until":"2099-03-09"}]' \
+    "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  out=$(run_board "$home" build "$data" 2>&1) || fail "a dated later option refused the board: $out"
+  extract_payload "$home/.lavish/bearings-board.html" | jq -e \
+    '.captains_call[0].options | map(select(.value == "later")) == [{"value":"later","label":"Later","hint":"Back on the 9th.","until":"2099-03-09"}]' \
+    >/dev/null || fail "the built board lost the later option's date"
+  pass "a decision card's later option must carry the date it comes back, and the board keeps it"
+}
+
 test_a_weak_card_whose_subject_landed_is_dropped_not_refused() {
   local home data out
   home=$(make_home weak-landed)
@@ -1079,6 +1103,7 @@ test_every_decision_card_carries_the_reconcile_choice
 test_build_refuses_a_payload_that_occupies_the_reconcile_value
 test_build_refuses_a_nondecision_reconcile_value
 test_build_refuses_a_decision_card_without_a_real_choice
+test_a_later_option_carries_the_date_it_comes_back
 test_merge_and_credential_cards_keep_their_own_shapes
 test_a_weak_card_whose_subject_landed_is_dropped_not_refused
 test_build_accepts_the_inbox_layout

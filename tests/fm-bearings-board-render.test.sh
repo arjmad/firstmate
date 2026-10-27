@@ -303,6 +303,23 @@ test_a_decision_card_opens_on_its_recommendation() {
   pass "a decision card opens with its recommendation chosen and sends the chosen option with its note"
 }
 
+test_a_later_pick_sends_the_date_it_comes_back() {
+  local home out
+  home=$(make_home card-later)
+  full_payload "$home/payload.json"
+  jq --arg later "$LATER_DAY" '(.captains_call[] | select(.key == "sample-domain") | .options)
+      += [{value:"later", label:"Later", hint:"Back on the 9th.", until:$later}]' \
+    "$home/payload.json" > "$home/payload.tmp" && mv "$home/payload.tmp" "$home/payload.json"
+  build_board "$home" "$home/payload.json"
+  out=$(render "$home" '[{"do":"answer","key":"sample-domain","pick":"later","note":"after the audit"}]')
+  printf '%s' "$out" | jq -e --arg later "$LATER_DAY" '
+    (.prompts | length) == 1
+      and (.prompts[0].data | .question == "sample-domain" and .selection == "later"
+            and .until == $later and .note == "after the audit" and (has("close") | not))
+  ' >/dev/null || fail "a later pick did not send its return date instead of a close: $out"
+  pass "a decision card's later pick sends the date it comes back and no close"
+}
+
 test_take_all_recommendations_confirms_then_sends_one_answer_per_card() {
   local home out
   home=$(full_board take-all)
@@ -499,6 +516,7 @@ test_an_action_carries_its_values_note_and_route
 test_an_action_with_an_empty_box_refuses_and_marks_it
 test_a_note_alone_is_sent_as_the_captains_words
 test_a_decision_card_opens_on_its_recommendation
+test_a_later_pick_sends_the_date_it_comes_back
 test_take_all_recommendations_confirms_then_sends_one_answer_per_card
 test_take_all_carries_each_cards_typed_note
 test_sections_remember_their_fold_per_viewer

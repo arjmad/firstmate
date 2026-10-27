@@ -221,6 +221,7 @@ The optional mode column carries a card-declared close:
 
 A deferral keeps the hold's kind and reason, drops a reversible self-release default because the captain has engaged, accepts the captain's own today by refusing only a date before yesterday in UTC, and treats a deferral already recorded as a no-op, so a replayed older answer never rolls a newer date back.
 It closes nothing, so a board "later" answer can never complete the call it defers.
+The exact answer value `later` is reserved for that deferral: with any other mode the intake refuses it by name, as it refuses `reconcile`, and the call stays held for firstmate to defer.
 
 Each key is reported as follows:
 
@@ -288,12 +289,11 @@ The Lavish adapter splits each capture between two commands:
 
 | Command | What it emits |
 | --- | --- |
-| `bin/fm-procevent-lavish.sh answers` | An exact non-reconcile card selection, or an inbox item's action whose effect closes (`close`) or defers to a valid date (`hold-until`) a held item; never a note sent alone, a timed `remind-at` firstmate schedules, a worker's item, or the weekly prune card's answer, which `bin/fm-backlog-prune.sh` carries out. |
+| `bin/fm-procevent-lavish.sh answers` | An exact non-reconcile card selection (a deferral to its valid `until` date when the option carries one), or an inbox item's action whose effect closes (`close`) or defers to a valid date (`hold-until`) a held item; never a note sent alone, a timed `remind-at` firstmate schedules, a worker's item, or the weekly prune card's answer, which `bin/fm-backlog-prune.sh` carries out. |
 | `reconciles` | Only task ids whose structured selection is Reconcile, carrying their notes as request provenance. |
 
-Current rows require the versioned shape and the `choice` tag.
-A time-limited rollout branch accepts ordinary answers from the old question/answer shape.
-That branch refuses the old shape's bare and separator-annotated reconcile values from both intakes, because those rows do not separate the selected option from its note.
+Rows require the versioned shape and the `choice` tag.
+The pre-versioned question/answer shape feeds neither intake, because it does not separate the selected option from typed words.
 Every other structurally uncertain capture feeds neither intake, remains announced, and cannot forge a task id from freeform prose.
 A note sent with no option or action picked is the captain's own instruction about that call: it feeds neither intake, and `read` presents it under a BOARD ANSWER block whose route says it is never a closure, so firstmate reads the words and acts on them.
 
@@ -557,6 +557,7 @@ The suite does not test the accepted merge-to-cleanup re-hold window or asynchro
 - Interrupted answer closure retains the stamp until close and restores resolution-first ordering on retry.
 - Deferral through `--until` leaves `captain_actionable` false until due.
 - A keyed `until=` deferral re-holds the task until its date, keeps its kind and words, and never closes it; a past date and a closed task are skipped by name.
+- An undated `later` answer is refused by name and never closes or releases the call, and a dated one defers it.
 
 ### Legacy paths
 
@@ -634,6 +635,7 @@ The board's half is pinned in `tests/fm-bearings-board.test.sh`:
 - Every published decision card carries exactly one reconcile option.
 - Authored options reserve that value across every card type.
 - Recommendations name authored options.
+- A `later` option must carry the `until` date it comes back on.
 - A decision card whose structured subject appears in the payload's landed rows is dropped.
   A genuinely open one is kept even when an unrelated landed id contains its key after a newline.
 - A build requires a fresh authoritative listed-open result before binding or arming.

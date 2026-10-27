@@ -708,7 +708,8 @@ __FM_BEARINGS_BOARD_DATA__
       if (tooLong(limit, [noteText])) return false;
       var ctx = { schema: "fm-bearings-answer.v1", question: card.key,
         selection: option ? option.value : "", note: noteText };
-      if (option && card.close) ctx.close = card.close;
+      if (option && option.until) ctx.until = option.until;
+      else if (option && card.close) ctx.close = card.close;
       queueAnswer(item, { item: card.title, action: option ? option.label : "", detail: "", note: noteText }, ctx);
       markSent(item, pill, option ? option.label : "Your note");
       state.sent = true;

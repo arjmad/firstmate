@@ -1647,8 +1647,8 @@ EOF
     "an unsupported card close mode defaulted to completion"
   assert_not_contains "$out" "sample-source-reconcile" \
     "a reconcile selection leaked into keyed answers"
-  assert_contains "$out" "sample-old-shape	yes" \
-    "an ordinary legacy board choice was discarded during rollout"
+  assert_not_contains "$out" "sample-old-shape" \
+    "the pre-versioned question/answer context fed a keyed answer"
   assert_not_contains "$out" "sample-old-reconcile" \
     "a legacy reconcile-shaped value reached keyed answers"
   out=$(run_lavish "$home" reconciles "$result") || fail "could not read captured reconcile selections"
@@ -1703,9 +1703,8 @@ SH
   assert_contains "$out" "captain note: re-check latest publication" \
     "the annotated reconcile selection lost its note provenance"
   show=$(tasks_in "$home" show sample-old-shape --full)
-  assert_contains "$show" "state: done" "an ordinary legacy board choice did not close its task"
-  assert_contains "$show" "Resolution mode: answered" \
-    "an ordinary legacy board choice did not use the keyed-answer intake"
+  assert_contains "$show" "state: queued" "the pre-versioned question/answer context closed its task"
+  assert_contains "$show" "held: yes" "the pre-versioned question/answer context released its task"
   show=$(tasks_in "$home" show sample-old-reconcile --full)
   assert_contains "$show" "state: queued" "a bare legacy reconcile value closed its task"
   assert_contains "$show" "held: yes" "a bare legacy reconcile value released its task"
@@ -2318,6 +2317,47 @@ test_keyed_deferral_re_holds_instead_of_closing() {
     "a past deferral date was not refused by name: $out"
   assert_contains "$out" "skipped: sample-closed-call (already closed)" "a closed task was deferred: $out"
   pass "a keyed deferral re-holds until its date, keeps the kind and the words, and never closes"
+}
+
+# "later" is a deferral, so the intake reserves the exact answer value: with an
+# until= mode it re-holds the call, and without one it is refused by name and
+# the call stays held, whichever channel or card-declared close carried it.
+test_an_undated_later_answer_never_closes() {
+  local home out rc show
+  home=$(make_home undated-later)
+  run_captain "$home" hold sample-later-card --title "Renew the sample domain" \
+    --reason "renew or lapse" --repo sample >/dev/null || fail "could not hold the later card"
+  tasks_in "$home" add sample-later-work "Gated sample work" --repo sample >/dev/null \
+    || fail "could not create the gated work item"
+  run_captain "$home" hold sample-later-work --reason "captain go needed" >/dev/null \
+    || fail "could not hold the gated work item"
+
+  set +e
+  out=$(printf 'sample-later-card\tlater\tRenew the sample domain → Later\n%s\n' \
+    "$(printf 'sample-later-work\tlater\tGated sample work → Later\trelease')" \
+    | run_captain "$home" answers --source "the board sequence 2" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "the intake accepted an undated later as an answer: $out"
+  assert_contains "$out" "refused: sample-later-card (a later answer defers the call and needs a date" \
+    "the intake did not refuse an undated later by name: $out"
+  assert_contains "$out" "refused: sample-later-work" "a card-declared release turned later into a release: $out"
+  assert_contains "$out" "answers: closed=0 deferred=0 skipped=2" "the intake miscounted the refused laters: $out"
+  for id in sample-later-card sample-later-work; do
+    show=$(tasks_in "$home" show "$id" --full)
+    assert_contains "$show" "state: queued" "an undated later closed $id: $show"
+    assert_contains "$show" "held: yes" "an undated later released $id: $show"
+    assert_not_contains "$show" "Resolution recorded" "an undated later was recorded as a resolution on $id"
+  done
+
+  out=$(printf 'sample-later-card\tlater\tRenew the sample domain → Later\tuntil=2026-07-21\n' \
+    | FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" answers --source "the board sequence 3") \
+    || fail "a dated later was refused: $out"
+  assert_contains "$out" "deferred: sample-later-card until 2026-07-21" "a dated later did not defer: $out"
+  show=$(tasks_in "$home" show sample-later-card --full)
+  assert_contains "$show" "hold_until: 2026-07-21" "a dated later did not record its date: $show"
+  assert_contains "$show" "state: queued" "a dated later closed the call: $show"
+  pass "an undated later answer is refused and never closes, and a dated one defers"
 }
 
 test_board_answer_reaches_the_keyed_answer_intake() {
@@ -4771,6 +4811,7 @@ test_unbound_source_closes_no_hold
 test_legacy_identities_keep_working
 test_board_answer_reaches_the_keyed_answer_intake
 test_keyed_deferral_re_holds_instead_of_closing
+test_an_undated_later_answer_never_closes
 test_chat_channel_feeds_the_same_keyed_answer_intake
 test_origin_slug_validation_precedes_path_construction
 test_status_resolution_over_an_open_hold_is_signalled
