@@ -138,6 +138,9 @@ COMMAND_PATH="$ROOT/bin/$COMMAND"
   || die "command is not a genuine executable in the configured remote root: $COMMAND"
 unset HOME
 ACCOUNT_HOME=$(CDPATH='' cd ~ 2>/dev/null && pwd -P) || die "cannot resolve the remote account home"
+# git expands a "~/" path in the account's own git config through HOME and
+# dies when it is unset, so restore it from the account database's answer.
+export HOME="$ACCOUNT_HOME"
 fm_remote_job_compose_operator_path "$ACCOUNT_HOME" >/dev/null
 GIT_BIN=$(fm_remote_job_operator_tool git 2>/dev/null || true)
 if [ -n "$GIT_BIN" ]; then
