@@ -990,5 +990,5 @@ tests/fm-afk-inject-herdr-e2e.test.sh
 tests/fm-afk-pi-herdr-return-e2e.test.sh
 ```
 
-Real Herdr tests use the named lab helper and default-session tripwire.
+Real Herdr tests use the named lab helper and its running non-lab session tripwire.
 [`verification/runtime-backends.md`](verification/runtime-backends.md#herdr) records the active version, CLI, projection, event, and lifecycle evidence without task-specific chronology.
