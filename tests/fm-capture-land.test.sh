@@ -57,7 +57,7 @@ STUB
   git init -q "$c/home/projects/other"
   git -C "$c/home/projects/other" remote add origin https://github.com/arjmad/other.git
   printf '%s\n' "nova ~/code/agents/nova capture=skills/:cron/skill-capture.sh echo post" \
-    "other ~/code/other" > "$c/home/config/live-checkouts"
+    "other ~/code/other ./deploy.sh capture=skills/:x" > "$c/home/config/live-checkouts"
   fm_test_tasks_toml "$c/home/.tasks.toml"
   printf '%s\n' '## In flight' '' '## Queued' '' '## Done' > "$c/home/data/backlog.md"
   set_pr "$c" OPEN false nova/skill-capture "$HEAD_SHA"
@@ -146,6 +146,7 @@ test_refused_merge_keeps_the_record_and_a_rerun_lands() {
   local c
   c=$(new_case)
   echo 1 > "$c/merge-rc"
+  echo OPEN > "$c/state-after-merge"
   land "$c" "$URL"
   assert_equals 1 "$RC" "a merge the guarded script refuses is not landed"
   assert_contains "$OUT" "not landed: bin/fm-pr-merge.sh refused $URL" "the refusal is reported"
@@ -153,6 +154,7 @@ test_refused_merge_keeps_the_record_and_a_rerun_lands() {
   assert_equals "## In flight" "$(backlog_section_of "$c" "$ID")" "the backlog item stays in flight"
   assert_absent "$c/sync.log" "nothing is settled before a merge"
   echo 0 > "$c/merge-rc"
+  rm -f "$c/state-after-merge"
   land "$c" "$URL"
   assert_equals 0 "$RC" "the re-run lands: $OUT"
   assert_contains "$OUT" "record: reusing task $ID" "the re-run reuses the record"
@@ -196,6 +198,18 @@ test_unsynced_live_checkout_is_unfinished() {
   pass "only a live checkout that ends synced counts as live"
 }
 
+test_merge_that_landed_despite_a_nonzero_exit_settles() {
+  local c
+  c=$(new_case)
+  echo 1 > "$c/merge-rc"
+  land "$c" "$URL"
+  assert_equals 0 "$RC" "the forge's merged state wins over the merge script's exit: $OUT"
+  assert_contains "$OUT" "merged, but bin/fm-pr-merge.sh exited 1" "the odd exit is reported"
+  assert_present "$c/sync.log" "the landed PR is settled"
+  assert_absent "$c/home/state/$ID.meta" "the record is closed"
+  pass "a merge that landed but exited non-zero still settles and closes"
+}
+
 test_queued_merge_keeps_the_record() {
   local c
   c=$(new_case)
@@ -223,6 +237,7 @@ test_merge_time_record_reads_the_head_without_a_worktree() {
   local c out
   c=$(new_case)
   echo 1 > "$c/merge-rc"
+  echo OPEN > "$c/state-after-merge"
   land "$c" "$URL"
   out=$(PATH="$c/fakebin:$PATH" FM_HOME="$c/home" "$c/code/bin/fm-pr-check.sh" "$ID" "$URL" 2>&1) \
     && fail "an arming pr-check on a record with no worktree must still refuse: $out"
@@ -242,5 +257,6 @@ test_refused_merge_keeps_the_record_and_a_rerun_lands
 test_merged_pr_settles_and_closes_without_merging
 test_stuck_settle_reports_after_landing
 test_unsynced_live_checkout_is_unfinished
+test_merge_that_landed_despite_a_nonzero_exit_settles
 test_queued_merge_keeps_the_record
 test_foreign_record_is_never_reused

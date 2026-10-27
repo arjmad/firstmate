@@ -95,13 +95,18 @@ if [ -f "$CONFIG/live-checkouts" ]; then
     [ -z "$PROJECT" ] || [ "$PROJECT" = "$name" ] \
       || refuse "$SLUG is the origin of more than one capture project ($PROJECT, $name)"
     PROJECT=$name
-  done < <(awk '$1 !~ /^#/ { for (i = 3; i <= NF; i++) if ($i ~ /^capture=/) { print $1; break } }' "$CONFIG/live-checkouts")
+  done < <(awk '$1 !~ /^#/ { for (i = 3; i <= NF && $i ~ /^(lock|capture)=/; i++) if ($i ~ /^capture=/) { print $1; break } }' "$CONFIG/live-checkouts")
 fi
 [ -n "$PROJECT" ] || refuse "$SLUG is no capture project's origin: no project in $PROJECTS with a capture= entry in $CONFIG/live-checkouts has it as its origin"
 fm_task_id_creation_valid "capture-$PROJECT-$FM_PR_NUMBER" || refuse "project name $PROJECT does not make a valid task id"
 ID="capture-$PROJECT-$FM_PR_NUMBER"
 META="$STATE/$ID.meta"
 BRANCH="$PROJECT/skill-capture"
+
+mkdir -p "$STATE"
+LOCK="$STATE/.capture-land-$ID.lock"
+fm_lock_acquire_wait "$LOCK" || refuse "could not take $LOCK"
+trap 'fm_lock_release "$LOCK" || true' EXIT
 
 pr_fields() {
   gh pr view "$URL" --json state,isDraft,headRefName,baseRefName,headRefOid,isCrossRepository \
@@ -111,11 +116,6 @@ FIELDS=$(pr_fields) || refuse "could not read $URL"
 IFS=$'\t' read -r PR_STATE PR_DRAFT PR_HEAD_REF PR_BASE PR_HEAD PR_FORK <<< "$FIELDS"
 [ "$PR_HEAD_REF" = "$BRANCH" ] && [ "$PR_FORK" = false ] \
   || refuse "$URL is from ${PR_HEAD_REF:-an unknown branch}, not $SLUG's capture branch $BRANCH; only capture PRs land here"
-
-mkdir -p "$STATE"
-LOCK="$STATE/.capture-land-$ID.lock"
-fm_lock_acquire_wait "$LOCK"
-trap 'fm_lock_release "$LOCK" || true' EXIT
 
 # 2-4. An open PR: preflight, record, merge.
 if [ "$PR_STATE" = OPEN ]; then
@@ -165,18 +165,23 @@ if [ "$PR_STATE" = OPEN ]; then
     echo "record: task $ID"
   fi
 
-  if ! "$SCRIPT_DIR/fm-pr-merge.sh" "$ID" "$URL"; then
-    echo "not landed: bin/fm-pr-merge.sh refused $URL (reasons above); task $ID stays in flight with its merge poll armed - re-run this command once the reason clears" >&2
-    exit 1
-  fi
-  # A merge queue accepts without merging; the record and its poll wait for it.
-  [ "$(gh pr view "$URL" --json state --jq .state 2>/dev/null || true)" = MERGED ] || {
+  MERGE_RC=0
+  "$SCRIPT_DIR/fm-pr-merge.sh" "$ID" "$URL" || MERGE_RC=$?
+  # The forge decides what happened: a merge can land and still exit non-zero
+  # (an unrecorded outcome), and a merge queue accepts without merging.
+  if [ "$(gh pr view "$URL" --json state --jq .state 2>/dev/null || true)" != MERGED ]; then
+    if [ "$MERGE_RC" != 0 ]; then
+      echo "not landed: bin/fm-pr-merge.sh refused $URL (reasons above); task $ID stays in flight with its merge poll armed - re-run this command once the reason clears" >&2
+      exit 1
+    fi
     echo "queued: $URL is not merged yet; task $ID stays in flight with its merge poll armed - re-run this command once it merges" >&2
     exit 3
-  }
+  fi
+  [ "$MERGE_RC" = 0 ] || echo "attention: $URL merged, but bin/fm-pr-merge.sh exited $MERGE_RC (above); settling anyway" >&2
 elif [ "$PR_STATE" = MERGED ]; then
   echo "already merged: $URL"
 else
+  [ ! -e "$META" ] || echo "note: task $ID's record stays for $URL; close it with bin/fm-teardown.sh $ID once nothing more lands from it" >&2
   refuse "$URL is $PR_STATE, not open or merged"
 fi
 
