@@ -32,6 +32,7 @@ Do not follow it there; answer that the helm command is `/poteto`.
    Add the `firstmate-coding-guidelines` load line when the project is firstmate itself.
 6. Spawn through `bin/fm-spawn.sh` with the usual `--mode` and `--yolo` and `--harness claude`, the method's one fixed axis, because the entry is a Claude Code skill.
    Pick the model and effort per the home's `config/crew-dispatch.json` and the dispatch reference, exactly as for any other ship of that kind (decided 2026-10-13 and 2026-10-26, replacing the 2026-10-02 Fable 5.1 xhigh profile), so a poteto-mode worker runs on Fable only when that config says so, and never add `--fast on`.
+   When the matching rule names a harness other than Claude, use the Claude rule that would apply without it and say so in the dispatch reply.
    A relaunch keeps the recorded flags.
 7. Supervise, land, and merge exactly as for any other task under sections 7 to 9: the worker never merges, and the same merge authority applies.
    After promoting a poteto-mode scout, steer the worker once through `bin/fm-send.sh` that the `### Method: poteto-mode` subsection of its brief stays current for the ship half, because promotion treats the scout-time spec as context.

@@ -1819,8 +1819,9 @@ ROWS
 }
 
 # A ship id that reads as one of the standing poteto-mode classes, scaffolded
-# without --method, warns on stderr and is still written; an opted-in ship, a
-# scout, and an id outside the classes stay quiet.
+# without --method on a host with the entry skill, is written and then warns on
+# stderr; an opted-in ship, a scout, an id outside the classes, a host without
+# the entry, and a refused scaffold stay quiet.
 test_method_warning_flags_a_standing_class_id_without_refusing() {
   local home user_home err id
   home="$TMP_ROOT/method-warn-home"
@@ -1828,11 +1829,12 @@ test_method_warning_flags_a_standing_class_id_without_refusing() {
   mkdir -p "$home/data" "$user_home/.claude/skills/poteto-mode"
   printf '# Poteto mode\n' > "$user_home/.claude/skills/poteto-mode/SKILL.md"
 
-  for id in fix-login-crash render-slow memory-leak-sweep refactor-shared-lib; do
+  for id in fix-login-crash render-slow memory-leak-sweep refactor-shared-lib Fix-Upper-Case; do
     err=$(HOME="$user_home" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" alpha --mode direct-PR 2>&1 >/dev/null) \
       || fail "$id: the warning must not refuse the scaffold"
     assert_contains "$err" "warning: task id '$id' reads as a standing poteto-mode class" "$id: no class warning"
-    assert_contains "$err" "--method poteto-mode" "$id: warning does not name the flag"
+    assert_contains "$err" "remove $home/data/$id/brief.md and re-scaffold with --method poteto-mode" \
+      "$id: warning does not give a rerun that works"
     assert_present "$home/data/$id/brief.md" "$id: warned scaffold did not write its brief"
   done
 
@@ -1845,6 +1847,13 @@ test_method_warning_flags_a_standing_class_id_without_refusing() {
   err=$(HOME="$user_home" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" prefix-fixture alpha --mode direct-PR 2>&1 >/dev/null) \
     || fail "unrelated id: scaffold failed"
   assert_not_contains "$err" "warning:" "a word that only contains a class word must not warn"
+  err=$(HOME="$TMP_ROOT/method-warn-no-entry-home" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" fix-without-entry alpha --mode direct-PR 2>&1 >/dev/null) \
+    || fail "no entry: scaffold failed"
+  assert_not_contains "$err" "warning:" "a host without the entry skill cannot use the method and must not warn"
+  mkdir -p "$home/data/fix-already-there" && : > "$home/data/fix-already-there/brief.md"
+  err=$(HOME="$user_home" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" fix-already-there alpha --mode direct-PR 2>&1 >/dev/null) \
+    && fail "existing brief: scaffold should refuse"
+  assert_not_contains "$err" "warning:" "a refused scaffold must not warn"
   pass "fm-brief.sh: a standing-class ship id without --method warns and still scaffolds"
 }
 

@@ -82,8 +82,9 @@
 # behind the helm's /poteto skill (.agents/skills/poteto/SKILL.md), which owns
 # intake and the spawn profile; no model or effort is recorded here, because
 # bin/fm-spawn.sh owns those axes. Refused on --secondmate: a charter is not a
-# task. A ship scaffolded without --method whose task id names a word of one of
-# the standing poteto-mode classes gets a stderr warning and is still written.
+# task. On a host with that entry, a ship scaffolded without --method whose task
+# id names a word of one of the standing poteto-mode classes is still written and
+# then gets a stderr warning.
 # --base-branch <branch> starts the task from origin's <branch> instead of the
 # repository default, for work that belongs on a named integration, feature, or
 # release branch. It writes a "Base branch: <branch>" line under `# Setup`, which
@@ -468,13 +469,16 @@ fi
 
 # A ship scaffolded without --method whose task id reads as one of the four
 # standing poteto-mode classes (a bug fix, something slow, a live problem,
-# restructuring shared code) gets a warning, never a refusal: {TASK} is still a
-# placeholder here, so the id is the only text to read, and data/captain.md,
-# which this script never reads, decides whether a class is opted in.
-if [ "$KIND" = ship ] && [ "$METHOD_SET" -eq 0 ]; then
-  method_class_word=
-  IFS='-_.' read -r -a method_id_words <<< "$ID"
-  for word in "${method_id_words[@]}"; do
+# restructuring shared code) gets a warning once its brief is written, never a
+# refusal: {TASK} is still a placeholder here, so the id is the only text to
+# read, and data/captain.md, which this script never reads, decides whether a
+# class is opted in. A host without the method's entry skill cannot use the
+# method, so it gets no warning.
+method_class_word=
+if [ "$KIND" = ship ] && [ "$METHOD_SET" -eq 0 ] && [ -n "${HOME:-}" ] \
+  && [ -f "$HOME/.claude/skills/poteto-mode/SKILL.md" ]; then
+  IFS='-_.' read -r -a method_id_words <<< "$(printf '%s' "$ID" | tr '[:upper:]' '[:lower:]')"
+  for word in ${method_id_words[@]+"${method_id_words[@]}"}; do
     case "$word" in
       bug|bugs|bugfix|fix|fixes|hotfix|broken|crash|crashes|regression|defect|error|errors|fail|fails|failing|failure|wrong) method_class_word=$word ;;
       slow|perf|latency|timeout|timeouts|hang|hangs|hillclimb) method_class_word=$word ;;
@@ -484,9 +488,6 @@ if [ "$KIND" = ship ] && [ "$METHOD_SET" -eq 0 ]; then
     esac
     break
   done
-  if [ -n "$method_class_word" ]; then
-    echo "warning: task id '$ID' reads as a standing poteto-mode class ('$method_class_word': bug fix, something slow, live problem, or restructuring shared code) but no --method was given; if data/captain.md records that class, re-scaffold with --method poteto-mode (.agents/skills/poteto/SKILL.md)" >&2
-  fi
 fi
 
 # The optional home-local include is read before anything is written, so an
@@ -976,4 +977,7 @@ elif [ "$FORGE" = gerrit ]; then
   echo "scaffolded: $BRIEF (ship, mode=$MODE forge=$FORGE shape=$SHAPE$METHOD_WORDS; replace {TASK} and {FIRSTMATE_SPEC})"
 else
   echo "scaffolded: $BRIEF (ship, mode=$MODE forge=$FORGE$METHOD_WORDS; replace {TASK} and {FIRSTMATE_SPEC})"
+fi
+if [ -n "$method_class_word" ]; then
+  echo "warning: task id '$ID' reads as a standing poteto-mode class ('$method_class_word': bug fix, something slow, live problem, or restructuring shared code) but no --method was given; if data/captain.md records that class, remove $BRIEF and re-scaffold with --method poteto-mode (.agents/skills/poteto/SKILL.md)" >&2
 fi
