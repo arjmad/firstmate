@@ -66,7 +66,13 @@
 # .cursor/hooks.json via pi-cursor-sdk does not dual-watch against
 # fm_watch_arm_pi. Cursor identity keeps parking despite a leaked
 # PI_CODING_AGENT. docs/turnend-guard.md owns the contract.
+#
+# Usage: fm-turnend-guard-cursor.sh   (Cursor stop hook; the stop payload arrives on stdin)
 set -u
+
+case "${1:-}" in
+  -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"

@@ -37,7 +37,13 @@
 # Config (home .env, FMX_ENV_FILE, or env): FMX_PAIRING_TOKEN (required),
 # FMX_RELAY_URL (default https://myfirstmate.io). Auth: Authorization: Bearer
 # <token>.
+#
+# Usage: fm-x-poll.sh   (takes no arguments)
 set -u
+
+case "${1:-}" in
+  -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"

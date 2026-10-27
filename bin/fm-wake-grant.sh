@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -u
 
+WAKE_GRANT_USAGE='usage: fm-wake-grant.sh activate PID GENERATION | publish GENERATION SEQUENCE... | release GENERATION | deactivate PID GENERATION'
+case "${1:-}" in
+  -h|--help) echo "$WAKE_GRANT_USAGE"; exit 0 ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
@@ -103,7 +108,7 @@ case "${1:-}" in
     rm -f -- "$BRANCH_ROWS" "$BRANCH_OWNER" "$BRANCH_ACKED" || exit 1
     ;;
   *)
-    echo "usage: fm-wake-grant.sh activate PID GENERATION | publish GENERATION SEQUENCE... | release GENERATION | deactivate PID GENERATION" >&2
+    echo "$WAKE_GRANT_USAGE" >&2
     exit 2
     ;;
 esac

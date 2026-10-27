@@ -55,7 +55,7 @@ RECEIPTS="$STATE/.supervision-host-receipts"
 
 usage() {
   sed -n '/^# Usage:/,/^# --wake/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
-  exit 2
+  exit "${1:-2}"
 }
 
 refuse() {
@@ -71,7 +71,7 @@ while [ "$#" -gt 0 ]; do
     --summary) SUMMARY=${2:-}; shift 2 || usage ;;
     --silent) SILENT=${2:-}; shift 2 || usage ;;
     --wake) WAKE=${2:-}; WAKE_SET=1; shift 2 || usage ;;
-    -h|--help) usage ;;
+    -h|--help) usage 0 2>&1 ;;
     *) usage ;;
   esac
 done

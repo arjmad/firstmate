@@ -75,14 +75,14 @@ SECONDMATES_MD="$FM_HOME/data/secondmates.md"
 # shellcheck source=bin/fm-secondmate-restart-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-restart-lib.sh"
 
-"$SCRIPT_DIR/fm-guard.sh" || true
-
 usage() { echo "usage: fm-update.sh [--help]" >&2; }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-  usage
+  usage 2>&1
   exit 0
 fi
+
+"$SCRIPT_DIR/fm-guard.sh" || true
 [ $# -eq 0 ] || { usage; exit 1; }
 
 # --- main firstmate repo ---------------------------------------------------

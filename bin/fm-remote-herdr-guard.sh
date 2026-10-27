@@ -38,6 +38,9 @@
 # stdout, which launchd routes to the agent's log.
 set -u
 
+usage() { sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+case "${1:-}" in -h|--help) usage 0 ;; esac
+
 SCRIPT_SELF=${BASH_SOURCE[0]}
 SCRIPT_DIR=${SCRIPT_SELF%/*}
 [ "$SCRIPT_DIR" != "$SCRIPT_SELF" ] || SCRIPT_DIR=.
@@ -45,7 +48,6 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$SCRIPT_DIR" && pwd -P)
 # shellcheck source=bin/fm-remote-herdr-owner-lib.sh
 . "$SCRIPT_DIR/fm-remote-herdr-owner-lib.sh"
 
-usage() { sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 [ "$#" -eq 2 ] || usage
 HERDR_BIN=$1
 SESSION=$2

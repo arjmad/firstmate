@@ -63,7 +63,7 @@ usage() {
     /^#/ { sub(/^# ?/, ""); print; next }
     { exit }
   ' "${BASH_SOURCE[0]}"
-  exit 2
+  exit "${1:-2}"
 }
 
 CANDIDATES=()
@@ -81,7 +81,7 @@ while [ "$#" -gt 0 ]; do
       CANDIDATES+=("$2")
       shift 2
       ;;
-    -h|--help|help) usage ;;
+    -h|--help|help) usage 0 ;;
     --) shift; break ;;
     -*) die "unknown option: $1" ;;
     *) CANDIDATES+=("$1") ; shift ;;

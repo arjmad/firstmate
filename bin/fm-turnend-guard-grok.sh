@@ -6,7 +6,13 @@
 # that Grok process. Field absence preserves the pre-native one-resume fallback.
 # Invalid or unreadable input starts neither path. Camel case has typed
 # precedence over the legacy snake-case spelling when both are present.
+#
+# Usage: fm-turnend-guard-grok.sh   (Grok Stop hook; the Stop payload arrives on stdin)
 set -u
+
+case "${1:-}" in
+  -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
 
 PAYLOAD=$(cat 2>/dev/null || true)
 [ -n "$PAYLOAD" ] || exit 0

@@ -1012,7 +1012,11 @@ case "${1:-}" in
     [ $# -eq 1 ] || { usage; exit 1; }
     validate_registry
     ;;
-  -h|--help|'')
+  -h|--help)
+    usage 2>&1
+    exit 0
+    ;;
+  '')
     usage
     exit 0
     ;;

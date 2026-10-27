@@ -3,7 +3,13 @@
 # primary whose current harness session has not already acquired the home lock.
 # Every silence and error path exits 0 because Claude SessionStart exit 2 blocks
 # session initialization.
+#
+# Usage: fm-sessionstart-nudge.sh   (session-open hook; takes no arguments)
 set -u
+
+case "${1:-}" in
+  -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"

@@ -23,6 +23,10 @@
 #   fm-secondmate-report.sh --doc done abcdef0123456789 data/x/report.md "see report"
 set -eu
 
+case "${1:-}" in
+  -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
+
 CALLER_FM_HOME=${FM_HOME:-}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-pending-reply-lib.sh

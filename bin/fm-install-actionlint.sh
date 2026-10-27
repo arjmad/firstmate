@@ -13,6 +13,10 @@
 #   fm-install-actionlint.sh <destination-directory>
 set -eu
 
+case "${1:-}" in
+  -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="$("$ROOT/bin/fm-lint-workflows.sh" --required-version)"
 

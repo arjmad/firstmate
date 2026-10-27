@@ -1,6 +1,11 @@
 #!/bin/bash
 # Long-lived per-account worker for remote fm-on jobs.
 #
+# Usage:
+#   fm-remote-job-worker.sh                 serve (on Linux under the restart supervisor)
+#   fm-remote-job-worker.sh --serve         serve without the supervisor
+#   fm-remote-job-worker.sh --lane <job-id> run one claimed job to publication
+#
 # This process is launched by the Firstmate-owned dev.firstmate.remote-job
 # LaunchAgent on macOS and by a detached restart supervisor on Linux. It claims
 # only complete 0700 records staged by fm-remote-job-lib.sh under the fixed
@@ -57,6 +62,13 @@
 # that dies just past the healthy threshold cannot restart without bound
 # either. fm-on's ensure path restarts a worker that gave up.
 set -u
+
+case "${1:-}" in
+  -h|--help)
+    awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"
+    exit 0
+    ;;
+esac
 
 # A non-numeric override falls back to the default rather than crashing the
 # arithmetic that bounds these loops.

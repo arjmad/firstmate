@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # fm-crew-state.sh - deterministic read of a crew's CURRENT state.
 #
+# Usage: fm-crew-state.sh <id>
+#
 # Why this exists: state/<id>.status is an append-only, best-effort EVENT LOG.
 # Crews append only wake-worthy transitions (done/needs-decision/blocked/paused/failed)
 # and nothing when they silently resume, so `tail -1` of that log reports the
@@ -161,6 +163,10 @@
 # Read-only and side-effect free. Always exits 0 on a successful read regardless
 # of state; exit 2 only on a usage error (no id).
 set -u
+
+case "${1:-}" in
+  -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"

@@ -47,7 +47,7 @@ EOF
 
 case "${1:-}" in
   -h|--help)
-    usage
+    usage 2>&1
     exit 0
     ;;
 esac

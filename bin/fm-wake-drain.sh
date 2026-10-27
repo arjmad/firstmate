@@ -18,6 +18,11 @@
 # presentation-path locks (default 10); queue mutation locks remain blocking.
 set -u
 
+WAKE_DRAIN_USAGE='usage: fm-wake-drain.sh [--ack-through SEQUENCE --recovery-generation GENERATION]'
+case "${1:-}" in
+  -h|--help) echo "$WAKE_DRAIN_USAGE"; exit 0 ;;
+esac
+
 SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
@@ -248,7 +253,7 @@ case "${1:-}" in
     case "$ACK_GENERATION" in ''|*[!A-Za-z0-9._-]*) echo "wake drain: invalid recovery generation" >&2; exit 2 ;; esac
     [ "$#" -eq 4 ] || { echo "wake drain: unexpected acknowledgement arguments" >&2; exit 2; }
     ;;
-  *) echo "usage: fm-wake-drain.sh [--ack-through SEQUENCE --recovery-generation GENERATION]" >&2; exit 2 ;;
+  *) echo "$WAKE_DRAIN_USAGE" >&2; exit 2 ;;
 esac
 
 [ "$ACTOR" != branch ] || require_branch_eligible_rows || exit 1

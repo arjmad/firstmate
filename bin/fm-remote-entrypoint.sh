@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Fixed remote entrypoint for bin/fm-on.sh.
 #
+# Usage: fm-remote-entrypoint.sh <protocol> <root-base64> <home-base64> <argv-base64>
+#
 # Install this tracked file as fm-remote-entrypoint.sh on the remote account's
 # non-interactive SSH PATH. It accepts protocol metadata plus a base64-encoded
 # NUL argv stream, validates one genuine tracked executable in <root>/bin/fm-*.sh,
@@ -30,8 +32,15 @@
 # nobody.
 set -eu
 
+case "${1:-}" in
+  -h|--help)
+    awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"
+    exit 0
+    ;;
+esac
+
 PROTOCOL=1
-DOCTOR_SHA256=78efccd6cb7a0123400e49fa323292a64c8e3c7ebd3717151be69f87735302fb
+DOCTOR_SHA256=71f93c92d19486878a94cef915b9b535ccab0d65f400d0ee45926b250985c4b2
 REAL_SOURCE=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}" 2>/dev/null) ||
   REAL_SOURCE=$(realpath "${BASH_SOURCE[0]}" 2>/dev/null) ||
   REAL_SOURCE=${BASH_SOURCE[0]}

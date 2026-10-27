@@ -2,6 +2,8 @@
 # fm-backend.sh - runtime-backend selection, meta helpers, selector resolution,
 # and dispatch for firstmate's session-provider abstraction.
 #
+# Usage: a library, sourced rather than run: . bin/fm-backend.sh
+#
 # Design: docs/architecture.md ("Runtime session backends"). P1 extracted the tmux command sequences that fm-send.sh,
 # fm-peek.sh, fm-watch.sh, fm-spawn.sh, and fm-teardown.sh already ran inline
 # into bin/backends/tmux.sh, with those SAME command sequences, so the default
@@ -44,6 +46,12 @@
 # implementation that synthesizes those events; P1 only names that seam, it
 # does not change the loop's behavior. The pull primitives also stay available
 # on their own for on-demand reads (fm-peek.sh, fm-crew-state.sh).
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  case "${1:-}" in
+    -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+  esac
+fi
 
 FM_BACKEND_SCRIPT=${BASH_SOURCE[0]:-$0}
 FM_BACKEND_LIB_DIR="$(cd "$(dirname "$FM_BACKEND_SCRIPT")" && pwd)"

@@ -119,7 +119,7 @@ WHEN_DIR="$STATE/when"
 OUTPUT_TAIL_BYTES=${FM_WHEN_OUTPUT_TAIL_BYTES:-8192}
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { awk 'NR > 1 && !/^#/ { exit } NR > 1' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { awk 'NR > 1 && !/^#/ { exit } NR > 1' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 
 spec_file()  { printf '%s/%s.spec\n' "$WHEN_DIR" "$1"; }
 trust_file() { printf '%s/%s.trust\n' "$WHEN_DIR" "$1"; }
@@ -683,6 +683,7 @@ case "${1-}" in
   retire)    shift; cmd_retire "$@" ;;
   rebind-all) shift; cmd_rebind_all "$@" ;;
   process-absent) shift; [ "$#" -eq 1 ] || usage; cmd_process_absent "$@" ;;
-  ''|-h|--help|help) usage ;;
+  '') usage ;;
+  -h|--help|help) usage 0 ;;
   *) die "unknown command: $1" ;;
 esac

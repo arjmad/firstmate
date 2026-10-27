@@ -187,9 +187,7 @@ chmod +x "$FAKEBIN/quota-axi"
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 ok() { printf 'ok - %s\n' "$1"; }
 
-if help=$("$BIN/fm-procevent-quota.sh" --help 2>&1); then
-  fail "help unexpectedly exited zero"
-fi
+help=$("$BIN/fm-procevent-quota.sh" --help 2>&1) || fail "help exited nonzero"
 printf '%s\n' "$help" | grep -Fq 'fm-procevent-quota.sh retire [--provider <provider>]' \
   || fail "help omitted the retire usage"
 if printf '%s\n' "$help" | grep -Fq 'set -u'; then

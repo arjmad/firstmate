@@ -181,9 +181,7 @@ ok() {
   printf 'ok - %s\n' "$1"
 }
 
-if help=$("$BIN/fm-quota-choose.sh" --help 2>&1); then
-  fail "help unexpectedly exited zero"
-fi
+help=$("$BIN/fm-quota-choose.sh" --help 2>&1) || fail "help exited nonzero"
 printf '%s\n' "$help" | grep -Fq \
   "candidate order and every candidate's provider is the harness's primary family." \
   || fail "help omitted the multi-provider usage restriction"

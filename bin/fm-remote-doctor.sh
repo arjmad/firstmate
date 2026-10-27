@@ -54,6 +54,9 @@
 # wrapper; those remain reported gaps.
 set -eu
 
+usage() { sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+case "${1:-}" in -h|--help) usage 0 ;; esac
+
 # Resolve this script's directory with builtins only: a host missing a required
 # tool must still reach the report that names it, not die on a bare PATH.
 SCRIPT_SELF=${BASH_SOURCE[0]}
@@ -80,8 +83,6 @@ LAUNCH_AGENT_PLIST="$LAUNCH_AGENT_DIR/$LAUNCH_AGENT_LABEL.plist"
 LAUNCH_AGENT_LOG_DIR="${HOME:-}/Library/Logs"
 LAUNCH_AGENT_LOG="$LAUNCH_AGENT_LOG_DIR/$LAUNCH_AGENT_LABEL.log"
 ENTRYPOINT_LINK="${HOME:-}/.local/bin/fm-remote-entrypoint.sh"
-
-usage() { sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 MODE=check
 case "${1:-}" in

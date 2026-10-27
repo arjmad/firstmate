@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Propose a clone's forge binding from its origin remote, for project-add intake.
+# Usage: fm-forge-detect.sh <clone-dir>
 # Prints exactly one line to stdout:
 #   forge=gerrit evidence=<the protocol fact that suggests it>
 #   forge=none
@@ -21,6 +22,10 @@
 # than told.
 # Usage: fm-forge-detect.sh <clone-dir>
 set -eu
+
+case "${1:-}" in
+  -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
 
 DIR=${1:?usage: fm-forge-detect.sh <clone-dir>}
 if [ ! -d "$DIR" ] || ! git -C "$DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then

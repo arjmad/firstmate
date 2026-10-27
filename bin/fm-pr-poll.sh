@@ -10,9 +10,20 @@
 # needs no extra tooling to follow GitHub or GitLab. The Gerrit and Forgejo
 # branches additionally need jq, which bin/fm-pr-check.sh refuses to arm those
 # watches without.
+#
+# Usage:
+#   fm-pr-poll.sh --validated <provider> <url> <host> <path> <number>
+#   <state>/<task-id>.check.sh    (no arguments; reads <task-id>.pr-poll beside it)
 set -u
 LC_ALL=C
 export LC_ALL
+
+case "${1:-}" in
+  -h|--help)
+    awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"
+    exit 0
+    ;;
+esac
 
 if [ "$#" -eq 6 ] && [ "$1" = --validated ]; then
   provider=$2

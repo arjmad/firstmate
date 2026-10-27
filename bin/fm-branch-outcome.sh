@@ -165,7 +165,7 @@ RECORDED_AGO_JQ='def recorded_ago: ([$now - .epoch, 0] | max) as $s
 
 usage() {
   echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | present | processed-init [--held-lock] | list [--recent <n>] | lookup --seqs <n,...> | startup-replay | seed-tail" >&2
-  exit 2
+  exit "${1:-2}"
 }
 
 bounded_uint() {
@@ -500,6 +500,7 @@ CMD=${1:-}
 shift 2>/dev/null || true
 
 case "$CMD" in
+  -h|--help) usage 0 2>&1 ;;
   append)
     TASK=''
     VERDICT=''

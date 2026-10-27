@@ -97,7 +97,7 @@ DOCUMENT_LOCAL_FAILURE=2
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 
 sha256_file() {
   if command -v shasum >/dev/null 2>&1; then
@@ -839,6 +839,7 @@ case "${1:-}" in
   retire) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; cmd_retire "$@" ;;
   retire-quiesce-locked) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; require_parent_lifecycle_lock "$1"; cmd_retire_quiesce_locked "$@" ;;
   retire-finalize-locked) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; require_parent_lifecycle_lock "$1"; cmd_retire_finalize_locked "$@" ;;
-  ''|-h|--help|help) usage ;;
+  -h|--help|help) usage 0 ;;
+  '') usage ;;
   *) die "unknown command: $1" ;;
 esac

@@ -60,7 +60,7 @@ usage:
   fm-busy-event.sh retire <state-dir> <id> (--gen G | --current-gen)
 See the header comment for the full contract.
 EOF
-  exit 2
+  exit "${1:-2}"
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -70,6 +70,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CMD=${1:-}
 case "$CMD" in
   arm|apply|progress|retire) shift ;;
+  -h|--help) usage 0 2>&1 ;;
   *) usage ;;
 esac
 

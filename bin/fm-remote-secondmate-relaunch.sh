@@ -20,6 +20,9 @@
 # parent's record untouched.
 set -eu
 
+usage() { sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+case "${1:-}" in -h|--help) usage 0 ;; esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
@@ -31,7 +34,6 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { sed -n '2,4p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 [ "$#" -eq 4 ] || usage
 ID=$1

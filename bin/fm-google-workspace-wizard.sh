@@ -193,6 +193,18 @@ finish() {
 # This wizard never displays a token, a refresh token, or a client secret, and it
 # never deletes or replaces a stored credential.
 
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+usage: fm-google-workspace-wizard.sh
+Walks a human through the Google Workspace steps only a human can do: the Cloud
+console, the OAuth consent, and one sign-in per account. bin/fm-google-workspace.sh
+does everything a script can do on its own. Safe to stop and re-run.
+EOF
+    exit 0
+    ;;
+esac
+
 FM="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-google-workspace.sh"
 [[ -x "$FM" ]] || { printf 'error: %s is missing\n' "$FM" >&2; exit 1; }
 
