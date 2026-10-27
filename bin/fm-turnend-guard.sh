@@ -120,9 +120,12 @@ done
 # gen: every exit records the Stop's outcome, busy when exit 2 blocks it into a
 # continuation and idle otherwise. Claude runs Stop hooks in parallel, so a
 # second Stop writer could land after this one and flip the verdict.
+# A pointer carrying session=payload hands the writer this Stop's payload, so
+# a nested claude run in the home, which loads this guard too, is refused.
+# Only a parent whose writer takes --session-from-payload writes that key.
 # shellcheck disable=SC2329 # Invoked by the EXIT trap below.
 record_parent_stop_state() {
-  local status=$? pointer="$FM_ROOT/.fm-busy-stop" key value writer='' state='' id='' gen='' verdict=idle event=stop
+  local status=$? pointer="$FM_ROOT/.fm-busy-stop" key value writer='' state='' id='' gen='' session='' verdict=idle event=stop
   [ "$CLAUDE_MODE" -eq 1 ] || return 0
   [ -f "$pointer" ] && [ ! -L "$pointer" ] || return 0
   while IFS='=' read -r key value; do
@@ -131,12 +134,17 @@ record_parent_stop_state() {
       state) state=$value ;;
       id) id=$value ;;
       gen) gen=$value ;;
+      session) session=$value ;;
     esac
   done < "$pointer"
   [ -n "$state" ] && [ -n "$id" ] && [ -n "$gen" ] && [ -x "$writer" ] || return 0
   if [ "$status" -eq 2 ]; then
     verdict=busy
     event=stop-blocked
+  fi
+  if [ "$session" = payload ]; then
+    printf '%s' "${PAYLOAD:-}" | "$writer" apply "$state" "$id" "$verdict" --gen "$gen" --source claude-hook --event "$event" --session-from-payload >/dev/null 2>&1 || true
+    return 0
   fi
   "$writer" apply "$state" "$id" "$verdict" --gen "$gen" --source claude-hook --event "$event" >/dev/null 2>&1 || true
 }

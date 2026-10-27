@@ -227,11 +227,15 @@ test_opencode_plugin_semantic_lifecycle() {
   pass "opencode plugin classifies from session.status, scoped to the latched worker session"
 }
 
-run_claude_hook() {  # <settings.json> <hook-event>
+# Claude hands every hook its event payload on stdin. The worker's own session
+# is the default; a nested run started in the worktree has another session id.
+CLAUDE_WORKER_SESSION=worker-session
+run_claude_hook() {  # <settings.json> <hook-event> [<session-id>]
   local cmd
   cmd=$(jq -r ".hooks[\"$2\"][0].hooks[0].command" "$1")
   [ -n "$cmd" ] && [ "$cmd" != null ] || fail "no $2 hook command in $1"
-  sh -c "$cmd"
+  printf '{"session_id":"%s","hook_event_name":"%s"}' "${3:-$CLAUDE_WORKER_SESSION}" "$2" \
+    | sh -c "$cmd"
 }
 
 test_claude_hooks_semantic_lifecycle() {
@@ -270,6 +274,34 @@ test_claude_hooks_semantic_lifecycle() {
   out=$(classify claude "$id" "$state")
   [ "$out" = "idle claude-hook" ] || fail "SessionEnd must classify idle, got '$out'"
   pass "claude hooks open on UserPromptSubmit and close on Stop, StopFailure, and SessionEnd"
+}
+
+# A claude -p run from the worker's shell inside its worktree loads the same
+# .claude/settings.local.json, so its hooks carry the worker's task id and gen.
+# Its turn must never close the worker's turn or signal a turn end.
+test_claude_hooks_ignore_a_nested_session() {
+  local rec id=busy-cl-nested out state settings ev
+  rec=$(make_spawn_case claude-nested claude "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  expect_code 0 $? "claude spawn should succeed: $out"
+  state="$HOME_DIR/state"
+  settings="$WT_DIR/.claude/settings.local.json"
+
+  run_claude_hook "$settings" UserPromptSubmit || fail "worker UserPromptSubmit hook failed"
+  rm -f "$state/$id.turn-ended"
+  for ev in UserPromptSubmit Stop StopFailure SessionEnd; do
+    run_claude_hook "$settings" "$ev" nested-session || fail "nested $ev hook command failed"
+  done
+  out=$(classify claude "$id" "$state")
+  [ "$out" = "busy claude-hook" ] || fail "a nested session ending must leave the worker busy, got '$out'"
+  [ ! -e "$state/$id.turn-ended" ] || fail "a nested session's Stop signalled the worker's turn end"
+
+  run_claude_hook "$settings" Stop || fail "worker Stop hook failed"
+  out=$(classify claude "$id" "$state")
+  [ "$out" = "idle claude-hook" ] || fail "the worker's own Stop must still close its turn, got '$out'"
+  [ -f "$state/$id.turn-ended" ] || fail "the worker's own Stop no longer signals a turn end"
+  pass "claude hooks from a nested session in the worktree never close the worker's turn"
 }
 
 test_claude_posttooluse_refreshes_progress_only() {
@@ -575,8 +607,8 @@ test_secondmate_claude_spawn_arms_busy_for_the_stall_gate() {
   pass "a claude secondmate spawn arms the busy contract the stall gate can see, and Stop does not wake the parent"
 }
 
-run_secondmate_stop_guard() { # <sm-home>
-  printf '{"stop_hook_active":false,"session_id":"sm-guard"}' \
+run_secondmate_stop_guard() { # <sm-home> [<session-id>]
+  printf '{"stop_hook_active":false,"session_id":"%s"}' "${2:-$CLAUDE_WORKER_SESSION}" \
     | CLAUDECODE=1 FM_ROOT_OVERRIDE="$1" FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 \
       bash "$ROOT/bin/fm-turnend-guard.sh" --claude >/dev/null 2>&1
 }
@@ -584,7 +616,9 @@ run_secondmate_stop_guard() { # <sm-home>
 run_secondmate_local_stop_hooks() { # <settings-file>
   local cmd
   jq -r '.hooks.Stop[]?.hooks[]?.command' "$1" \
-    | while IFS= read -r cmd; do sh -c "$cmd" </dev/null; done
+    | while IFS= read -r cmd; do
+        printf '{"session_id":"%s","hook_event_name":"Stop"}' "$CLAUDE_WORKER_SESSION" | sh -c "$cmd"
+      done
 }
 
 # Claude runs the --settings Stop hooks beside the home's tracked Stop
@@ -665,7 +699,12 @@ test_secondmate_claude_stop_guard_owns_the_stop_verdict() {
   [ "$out" = "busy claude-hook" ] || fail "a rewake turn after an allowed Stop must classify busy, got '$out'"
   grep -F "gen=$gen " "$state/$id.busy-state" >/dev/null \
     || fail "a rewake turn must write the spawn's gen: $(cat "$state/$id.busy-state")"
-  pass "a claude secondmate's Stop guard records busy on a blocked Stop and idle on an allowed one, in any hook order, and a rewake turn reopens busy"
+
+  # A nested claude run in the mate's home loads the tracked Stop guard too.
+  run_secondmate_stop_guard "$sm" nested-session
+  out=$(classify claude "$id" "$state")
+  [ "$out" = "busy claude-hook" ] || fail "a nested session's allowed Stop closed the mate's turn, got '$out'"
+  pass "a claude secondmate's Stop guard records busy on a blocked Stop and idle on an allowed one, in any hook order, a rewake turn reopens busy, and a nested session's Stop is refused"
 }
 
 # A leased home can lag the parent. Its older Stop guard never reads
@@ -884,6 +923,7 @@ test_pi_extension_stale_incarnation_rejected
 test_kimi_and_grok_install_no_unverified_wiring
 test_opencode_plugin_semantic_lifecycle
 test_claude_hooks_semantic_lifecycle
+test_claude_hooks_ignore_a_nested_session
 test_claude_hooks_stale_incarnation_harmless
 test_claude_posttooluse_refreshes_progress_only
 test_gemini_hooks_semantic_lifecycle
