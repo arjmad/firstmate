@@ -31,18 +31,24 @@ done
 [ "${previous:-}" = --session ] || { echo "fake herdr: missing --session before any -- delimiter" >&2; exit 90; }
 session=$last
 default_socket=$(cat "$state/default-socket")
+# fleet.json, when present, replaces the default-only live fleet.
+if [ -f "$state/fleet.json" ]; then
+  fleet=$(cat "$state/fleet.json")
+else
+  fleet=$(jq -nc --arg socket "$default_socket" '[{default:true,name:"default",running:true,socket_path:$socket}]')
+fi
 lab_state=absent
 [ ! -f "$state/$session" ] || lab_state=$(cat "$state/$session")
 
 case "$1 ${2:-}" in
   "session list")
     if [ "$lab_state" = absent ] || [ "$lab_state" = deleted ]; then
-      jq -nc --arg socket "$default_socket" '{sessions:[{default:true,name:"default",running:true,socket_path:$socket}]}'
+      jq -nc --argjson fleet "$fleet" '{sessions:$fleet}'
     else
       running=false
       [ "$lab_state" = running ] && running=true
-      jq -nc --arg socket "$default_socket" --arg name "$session" --argjson running "$running" \
-        '{sessions:[{default:true,name:"default",running:true,socket_path:$socket},{default:false,name:$name,running:$running,socket_path:("/tmp/" + $name + ".sock")}]}'
+      jq -nc --argjson fleet "$fleet" --arg name "$session" --argjson running "$running" \
+        '{sessions:($fleet + [{default:false,name:$name,running:$running,socket_path:("/tmp/" + $name + ".sock")}])}'
     fi
     ;;
   "server --session")
@@ -222,6 +228,61 @@ test_changed_default_trips_after_teardown() {
   printf '%s\n' '/home/test/.config/herdr/herdr.sock' > "$FAKE_STATE/default-socket"
   rm -f "$TRIPWIRES/$name.fleet-state.json"
   pass "fm-herdr-lab: changed default fleet state is a hard failure"
+}
+
+write_remote_fleet() { # <fm-remote running> <fm-remote socket> <sibling lab running>
+  jq -nc --argjson remote_running "$1" --arg remote_socket "$2" --argjson sibling_running "$3" '[
+    {default:true,name:"default",running:false,socket_path:"/home/test/.config/herdr/herdr.sock"},
+    {default:false,name:"fm-remote",running:$remote_running,socket_path:$remote_socket},
+    {default:false,name:"fm-lab-sibling",running:$sibling_running,socket_path:"/tmp/fm-lab-sibling.sock"}
+  ]' > "$FAKE_STATE/fleet.json"
+}
+
+test_tripwire_follows_a_non_default_live_fleet() {
+  local name="fm-lab-remote-fleet-$$" status=0 remote_socket=/home/test/.config/herdr/sessions/fm-remote/herdr.sock
+  : > "$FAKE_LOG"
+  write_remote_fleet true "$remote_socket" true
+  run_with_fake fm_herdr_lab_provision "$name" \
+    || fail "provision refused a live fleet running in a non-default session"
+  write_remote_fleet true "$remote_socket" false
+  run_with_fake fm_herdr_lab_teardown "$name" \
+    || fail "a sibling lab session change tripped the fleet-state tripwire"
+
+  run_with_fake fm_herdr_lab_provision "$name" || fail "second remote-fleet provision failed"
+  write_remote_fleet true /changed/fm-remote.sock false
+  run_with_fake fm_herdr_lab_teardown "$name" >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "a changed live non-default session must fail teardown"
+  assert_present "$TRIPWIRES/$name.fleet-state.json" "failed remote-fleet tripwire should retain evidence"
+  write_remote_fleet true "$remote_socket" false
+  run_with_fake fm_herdr_lab_teardown "$name" || fail "teardown after restoring the remote fleet failed"
+
+  status=0
+  run_with_fake fm_herdr_lab_provision "$name" || fail "third remote-fleet provision failed"
+  write_remote_fleet false "$remote_socket" false
+  run_with_fake fm_herdr_lab_teardown "$name" >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "a stopped live non-default session must fail teardown"
+  write_remote_fleet true "$remote_socket" false
+  run_with_fake fm_herdr_lab_teardown "$name" || fail "teardown after restarting the remote fleet failed"
+
+  status=0
+  write_remote_fleet false "$remote_socket" true
+  run_with_fake fm_herdr_lab_provision "$name" >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "provision with only lab sessions running must refuse"
+  assert_absent "$TRIPWIRES/$name.fleet-state.json" "refused provision left a tripwire behind"
+  rm -f "$FAKE_STATE/fleet.json"
+  pass "fm-herdr-lab: the tripwire snapshots running non-lab sessions, not only default"
+}
+
+test_unreadable_session_list_refuses_provision() {
+  local name="fm-lab-unreadable-$$" status=0
+  : > "$FAKE_LOG"
+  printf '%s\n' '[{"name":"fm-remote"' > "$FAKE_STATE/fleet.json"
+  run_with_fake fm_herdr_lab_provision "$name" >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "an unreadable session list must refuse provisioning"
+  assert_absent "$TRIPWIRES/$name.fleet-state.json" "refused provision left a tripwire behind"
+  [ ! -f "$FAKE_STATE/$name" ] || fail "refused provision still started the lab session"
+  rm -f "$FAKE_STATE/fleet.json"
+  pass "fm-herdr-lab: an unreadable session list refuses provisioning"
 }
 
 test_stopped_owned_lab_can_reprovision() {
@@ -539,6 +600,8 @@ test_provision_run_and_guarded_teardown
 test_run_scopes_session_before_double_dash
 test_missing_tripwire_blocks_destruction
 test_changed_default_trips_after_teardown
+test_tripwire_follows_a_non_default_live_fleet
+test_unreadable_session_list_refuses_provision
 test_stopped_owned_lab_can_reprovision
 test_failed_delete_retains_tripwire
 test_timed_out_provision_cancels_late_launch
