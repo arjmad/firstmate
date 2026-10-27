@@ -14,7 +14,7 @@
 #       the old gen are rejected as stale from then on.
 #
 #   apply <state-dir> <id> <busy|idle|unknown> (--gen G | --current-gen)
-#         --source S --event E [--turn-ended]
+#         --source S --event E [--turn-ended] [--session-from-payload]
 #       Append one lifecycle event: validate the gen against the armed
 #       sidecar, advance seq under the lock, atomically replace the record.
 #       --turn-ended also touches state/<id>.turn-ended, the watcher
@@ -22,7 +22,11 @@
 #       or whose incarnation is replaced right after, never signals the
 #       replacement.
 #       Adapter wiring passes the exact --gen embedded at arm time, so a
-#       hook that outlives its incarnation fails closed here. The legacy
+#       hook that outlives its incarnation fails closed here.
+#       --session-from-payload reads the hook's JSON payload on stdin and takes
+#       its session_id. The first such event under a gen binds that session
+#       in state/<id>.busy-session; any other session is refused, and so is a
+#       payload naming no session (or a missing jq). The legacy
 #       Claude fm-send --key Escape path (fm-interrupt) and firstmate recovery
 #       paths (fm-recovery) may pass --current-gen to bind to the incarnation
 #       armed right now.
@@ -34,7 +38,7 @@
 #       incarnation can never refresh its replacement's progress.
 #
 #   retire <state-dir> <id> (--gen G | --current-gen)
-#       Remove one incarnation's sidecar and record while holding the same
+#       Remove one incarnation's sidecars and record while holding the same
 #       writer lock used by arm and apply. An exact gen prevents teardown for
 #       an old task from retiring a newly armed incarnation. A missing sidecar
 #       is already retired, so any orphan record is removed idempotently.
@@ -48,7 +52,7 @@ usage() {
   cat >&2 <<'EOF'
 usage:
   fm-busy-event.sh arm <state-dir> <id> [--state busy|idle|unknown] [--source S] [--event E]
-  fm-busy-event.sh apply <state-dir> <id> <busy|idle|unknown> (--gen G | --current-gen) --source S --event E [--turn-ended]
+  fm-busy-event.sh apply <state-dir> <id> <busy|idle|unknown> (--gen G | --current-gen) --source S --event E [--turn-ended] [--session-from-payload]
   fm-busy-event.sh progress <state-dir> <id> --gen G
   fm-busy-event.sh retire <state-dir> <id> (--gen G | --current-gen)
 See the header comment for the full contract.
@@ -77,6 +81,7 @@ NEW_STATE=
 GEN=
 USE_CURRENT_GEN=0
 TURN_ENDED=0
+SESSION_FROM_PAYLOAD=0
 SOURCE=
 EVENT=
 if [ "$CMD" = apply ]; then
@@ -95,6 +100,7 @@ while [ $# -gt 0 ]; do
     --source) SOURCE=${2:-}; shift 2 || usage ;;
     --event) EVENT=${2:-}; shift 2 || usage ;;
     --turn-ended) [ "$CMD" = apply ] || usage; TURN_ENDED=1; shift ;;
+    --session-from-payload) [ "$CMD" = apply ] || usage; SESSION_FROM_PAYLOAD=1; shift ;;
     *) usage ;;
   esac
 done
@@ -108,6 +114,12 @@ fi
 
 REC=$(fm_busy_record_path "$STATE" "$ID")
 GEN_FILE=$(fm_busy_gen_path "$STATE" "$ID")
+SESSION_FILE=$(fm_busy_session_path "$STATE" "$ID")
+SESSION=
+if [ "$SESSION_FROM_PAYLOAD" = 1 ]; then
+  SESSION=$(jq -r 'if type == "object" and (.session_id | type) == "string" then .session_id else empty end' 2>/dev/null) || SESSION=
+  fm_busy_token_valid "$SESSION" || { echo "error: hook payload names no valid session_id for $ID" >&2; exit 1; }
+fi
 LOCK="$REC.lock"
 
 # Portable mtime in epoch seconds. macOS (BSD) stat uses `-f <fmt>`; Linux (GNU)
@@ -166,7 +178,7 @@ if [ "$CMD" = arm ]; then
   lock_acquire || exit 1
   {
     printf '%s\n' "$GEN" > "$GEN_FILE.tmp.$$" && mv -f "$GEN_FILE.tmp.$$" "$GEN_FILE" \
-      && write_record "$GEN" 1 && rm -f "$STATE/$ID.progress"
+      && write_record "$GEN" 1 && rm -f "$STATE/$ID.progress" "$SESSION_FILE"
   } || { lock_release; umask "$old_umask"; echo "error: arm failed for $ID" >&2; exit 1; }
   lock_release
   umask "$old_umask"
@@ -189,7 +201,7 @@ fi
 lock_acquire || { umask "$old_umask"; exit 1; }
 CURRENT=$(fm_busy_current_gen "$STATE" "$ID") || {
   if [ "$CMD" = retire ] && [ ! -e "$GEN_FILE" ] && [ ! -L "$GEN_FILE" ]; then
-    rm -f "$REC" "$STATE/$ID.progress" || {
+    rm -f "$REC" "$STATE/$ID.progress" "$SESSION_FILE" || {
       lock_release
       umask "$old_umask"
       echo "error: busy-state retirement failed for $ID" >&2
@@ -214,7 +226,7 @@ if [ "$GEN" != "$CURRENT" ]; then
   exit 1
 fi
 if [ "$CMD" = retire ]; then
-  rm -f "$GEN_FILE" "$REC" "$STATE/$ID.progress" || {
+  rm -f "$GEN_FILE" "$REC" "$STATE/$ID.progress" "$SESSION_FILE" || {
     lock_release
     umask "$old_umask"
     echo "error: busy-state retirement failed for $ID" >&2
@@ -229,6 +241,24 @@ if [ "$CMD" = progress ]; then
   lock_release
   umask "$old_umask"
   exit 0
+fi
+if [ -n "$SESSION" ]; then
+  if [ -f "$SESSION_FILE" ] && [ ! -L "$SESSION_FILE" ]; then
+    IFS= read -r bound < "$SESSION_FILE" 2>/dev/null || bound=
+    if [ "$bound" != "$SESSION" ]; then
+      lock_release
+      umask "$old_umask"
+      echo "error: busy-state event for $ID from session $SESSION, not the bound endpoint session (event rejected)" >&2
+      exit 1
+    fi
+  else
+    { printf '%s\n' "$SESSION" > "$SESSION_FILE.tmp.$$" && mv -f "$SESSION_FILE.tmp.$$" "$SESSION_FILE"; } || {
+      lock_release
+      umask "$old_umask"
+      echo "error: session binding failed for $ID" >&2
+      exit 1
+    }
+  fi
 fi
 OLD_SEQ=0
 if [ -f "$REC" ]; then
