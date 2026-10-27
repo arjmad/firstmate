@@ -66,14 +66,15 @@
 # starts once per edit state (HEAD, origin/<default> and the uncommitted content
 # under <dir>/), logging to state/live-checkouts/<key>.capture.log. While that
 # run is alive the checkout is deferred like a held lock ("skipped: busy:"), so
-# no fast-forward or post-update runs under it. Once it has finished, a
+# no fast-forward or post-update runs under it. Once it has succeeded, a
 # checkout whose HEAD is origin/<default> reports "live edits pending capture:
 # ..." - informational, since the edits block no fast-forward and wait for the
 # capture to land - while one behind or ahead of it gets the ordinary STUCK line
-# with "; capture already ran for these edits (exit N, ...)". A new edit state
-# after a failed capture starts another one, and either line then names the
-# failure. Edits outside <dir>/ are reported STUCK as before. <dir> must lie
-# inside the checkout, and a <command> without a slash is ./<command>.
+# with "; capture already ran for these edits (exit 0, ...)". A failed capture
+# is always STUCK, naming its exit, and a new edit state after it starts another
+# one under a STUCK line naming the failure. Edits outside <dir>/ are reported
+# STUCK as before. <dir> must lie inside the checkout, and a <command> without a
+# slash is ./<command>.
 # The single-project form syncs the entries for that project name; the whole-fleet
 # form syncs every entry after the clones.
 # Scheduled form (--scheduled): bin/fm-watch.sh starts it detached once per
@@ -552,25 +553,26 @@ capture_running() {
   capture_alive "$CAPTURE_PID"
 }
 
-# report_capture_held [<suffix>]: report a checkout held only by edits under its
-# capture dir. At origin/<default> nothing blocks a fast-forward, so the edits
-# only wait for their capture to land: an informational line that wakes no one.
-# Behind or ahead of it, the edits block the fast-forward and it is STUCK.
+# report_capture_held <suffix>: report a checkout held only by edits under its
+# capture dir that a capture already ran for successfully. At origin/<default>
+# nothing blocks a fast-forward, so the edits only wait for that capture to land:
+# an informational line that wakes no one. Behind or ahead of it, the edits
+# block the fast-forward and it is STUCK.
 report_capture_held() {
   local head base
   head=$(git -C "$PROJ" rev-parse HEAD 2>/dev/null) || head=""
   base=$(git -C "$PROJ" rev-parse "$BASE" 2>/dev/null) || base=""
   if [ -n "$head" ] && [ "$head" = "$base" ]; then
-    echo "$label: live edits pending capture: $CAPTURE_COUNT uncommitted path(s) under $CAPTURE_DIR only, 0 commits behind $BASE${1:-}"
+    echo "$label: live edits pending capture: $CAPTURE_COUNT uncommitted path(s) under $CAPTURE_DIR only, 0 commits behind $BASE$1"
   else
-    report_stuck "$(stuck_state)" "${1:-}"
+    report_stuck "$(stuck_state)" "$1"
   fi
 }
 
 # capture_or_report_stuck: for a live checkout whose uncommitted paths all lie
 # under its capture=<dir>/, start the capture command once per edit state (see
-# the header) and otherwise report_capture_held; report STUCK for any other
-# dirty checkout. sync_live_checkout has already deferred a checkout whose
+# the header), report_capture_held once a capture for them succeeded, and
+# report STUCK otherwise. sync_live_checkout has already deferred a checkout whose
 # capture is still running.
 capture_or_report_stuck() {
   local log fp rc="" pid
@@ -581,7 +583,7 @@ capture_or_report_stuck() {
   fi
   capture_running || true
   if [ -z "$CAPTURE_RECORD" ]; then
-    report_capture_held
+    report_stuck "$(stuck_state)"
     return 0
   fi
   log="$CAPTURE_RECORD.log"
@@ -589,11 +591,15 @@ capture_or_report_stuck() {
     rc=$(cat "$CAPTURE_RECORD.status" 2>/dev/null) || rc=""
   fi
   if [ "$CAPTURE_PRIOR" = "$fp" ]; then
-    report_capture_held "; capture already ran for these edits (exit ${rc:-unknown}, log $log)"
+    if [ "${rc:-unknown}" = 0 ]; then
+      report_capture_held "; capture already ran for these edits (exit 0, log $log)"
+    else
+      report_stuck "$(stuck_state)" "; capture already ran for these edits (exit ${rc:-unknown}, log $log)"
+    fi
     return 0
   fi
   if ! mkdir -p "$LIVE_RECORDS" 2>/dev/null; then
-    report_capture_held
+    report_stuck "$(stuck_state)"
     return 0
   fi
   rm -f "$CAPTURE_RECORD.status"
@@ -606,13 +612,13 @@ capture_or_report_stuck() {
     echo $!
   }) || pid=""
   if [ -z "$pid" ]; then
-    report_capture_held
+    report_stuck "$(stuck_state)"
     return 0
   fi
   write_live_record "$CAPTURE_RECORD" "$fp $pid"
   # A failed capture still surfaces while the edits keep changing.
   if [ -n "$CAPTURE_PRIOR" ] && [ "${rc:-unknown}" != 0 ]; then
-    report_capture_held "; the last capture failed (exit ${rc:-unknown}), so $CAPTURE_CMD started again (log $log)"
+    report_stuck "$(stuck_state)" "; the last capture failed (exit ${rc:-unknown}), so $CAPTURE_CMD started again (log $log)"
     return 0
   fi
   echo "$label: capturing: $CAPTURE_COUNT uncommitted path(s) under $CAPTURE_DIR only; started $CAPTURE_CMD (log $log)"

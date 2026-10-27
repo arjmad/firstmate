@@ -1097,22 +1097,18 @@ test_failed_capture_surfaces_when_edits_change() {
   wait_capture_done "$out"
   assert_equals 1 "$(runs_of "$home/captures-failskill")" "the capture ran from the checkout"
 
+  out=$(run_sync "$home" failskill)
+  assert_contains "$out" "failskill live $live: STUCK: on branch main with uncommitted changes, 0 commits behind" \
+    "a failed capture surfaces even on a current checkout"
+  assert_contains "$out" "; capture already ran for these edits (exit 1" "the STUCK line names the failed run"
+
   printf 'more\n' >> "$live/skills/a.md"
   out=$(run_sync "$home" failskill)
-  assert_contains "$out" "failskill live $live: live edits pending capture: 1 uncommitted path(s) under skills/ only" \
-    "a failed capture on a current checkout blocks no fast-forward"
-  assert_contains "$out" "; the last capture failed (exit 1), so ./fail-capture.sh started again" "the line names the failure"
-  wait_capture_done "$out"
-  assert_equals 2 "$(runs_of "$home/captures-failskill")" "the new edit state captured again"
-
-  advance_origin "$home" failskill C1
-  out=$(run_sync "$home" failskill)
-  assert_contains "$out" "failskill live $live: STUCK: on branch main with uncommitted changes, 1 commits behind" \
-    "a failed capture behind origin surfaces"
+  assert_contains "$out" "failskill live $live: STUCK: on branch main with uncommitted changes" "a failed capture surfaces"
   assert_contains "$out" "; the last capture failed (exit 1), so ./fail-capture.sh started again" "the STUCK line names the failure"
   wait_capture_done "$out"
-  assert_equals 3 "$(runs_of "$home/captures-failskill")" "the moved origin captured again"
-  pass "a failed capture is named while the edits keep changing, and STUCK once it blocks a fast-forward"
+  assert_equals 2 "$(runs_of "$home/captures-failskill")" "the new edit state captured again"
+  pass "a failed capture surfaces as STUCK, on a current checkout too, while the edits keep changing"
 }
 
 test_current_capture_edits_pend_without_a_wake() {

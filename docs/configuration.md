@@ -603,11 +603,11 @@ agent      ~/code/agent      capture=skills/:cron/skill-capture.sh   ./deploy.sh
 
 `bin/fm-fleet-sync.sh` fast-forwards each entry after the `projects/` clones, so the refresh `bin/fm-pr-merge.sh` runs after each merge, teardown, the [scheduled sync](#scheduled-fleet-sync-configfleet-sync-interval), and the session-start refresh all keep live checkouts current.
 The single-project form syncs only that project's entries, and the whole-fleet form syncs every entry.
-A live checkout gets the same never-forced guards as a clone: anything dirty, ahead, diverged, or off its default branch is left untouched and reported `STUCK:`.
+A live checkout gets the same never-forced guards as a clone: anything dirty, ahead, diverged, or off its default branch is left untouched and reported `STUCK:`, except the `capture=` cases below.
 A held `lock=` path defers the checkout, after a short bounded wait in the single-project form and without waiting in the whole-fleet form.
 The post-update command runs once for each new HEAD and is retried on the next sync after a failure, whose `STUCK:` line ends with the command's last few output lines.
 A `capture=` entry is for a checkout edited in place, such as a writable skills tree that a capture job turns into a PR: when only uncommitted edits under that directory hold the checkout, the sync starts the capture command detached once per edit state and reports `capturing:` instead of `STUCK:`, and defers the checkout while that capture runs.
-Once the capture has finished, edits it did not clear on a checkout already at its origin default branch read `live edits pending capture:`, which wakes no one because they block no fast-forward, and the same edits on a checkout behind or ahead of origin report `STUCK:`.
+Once the capture has succeeded, edits it did not clear on a checkout already at its origin default branch read `live edits pending capture:`, which wakes no one because they block no fast-forward, while the same edits on a checkout behind or ahead of origin, or a failed capture, report `STUCK:`.
 An entry naming the Firstmate home itself is refused, because Firstmate updates itself only through `/updatefirstmate`.
 
 The list names host paths and is not inherited by secondmate homes.
