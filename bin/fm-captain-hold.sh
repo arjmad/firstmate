@@ -156,7 +156,9 @@
 # The exact answer value `reconcile` means "go re-check reality", never "the
 # captain answered". `answers` matches it before it reads the close mode,
 # visibly refuses it, and never passes it to `answer`, so no channel and no
-# card-declared mode can turn it into a close, release, or request. A separate
+# card-declared mode can turn it into a close, release, or request. The exact
+# value `later` is the captain's deferral, so without an `until=` mode it is
+# refused the same visible way and the call stays held. A separate
 # `reconcile-requests` intake verifies a captured source's binding before it
 # records a durable request under `state/reconcile-requests/`.
 #
@@ -1791,6 +1793,11 @@ command_answers() {
         continue
         ;;
     esac
+    if [ "$answer" = later ] && [ -z "$defer_until" ]; then
+      printf 'refused: %s (a later answer defers the call and needs a date; record it with defer --until)\n' "$key"
+      skipped=$((skipped + 1))
+      continue
+    fi
     resolve_rc=0
     id=$(resolve_entry "$origin" "$key" 2>"$err") || resolve_rc=$?
     id=${id%% *}

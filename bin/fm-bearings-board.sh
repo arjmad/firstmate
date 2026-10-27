@@ -91,7 +91,9 @@
 # of them, and `allow_freeform: true`. Merge and credential cards keep their own
 # shapes. The check runs after stale cards are dropped, also refuses a decision
 # card that repeats an option value, and alone checks a decision card's
-# recommendation. The refusal names each weak card's key and what it lacks, so the
+# recommendation. An option may carry `until` (YYYY-MM-DD): picking it re-holds
+# the call until that date instead of closing it, so a `later` option must
+# carry one. The refusal names each weak card's key and what it lacks, so the
 # composer fixes the payload rather than the board shipping a Done-only card.
 #
 # THE LAYOUT IS INBOX FIRST. Beside `captains_call` (the Decisions group), the
@@ -194,6 +196,10 @@ validate_payload() {  # <data.json>
     def optional_filed:
       (has("filed") | not) or (.filed == null) or (.filed | valid_filed);
     def optional_string($name): (has($name) | not) or (.[$name] | type == "string");
+    def valid_date:
+      type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+      and (try (((. + "T00:00:00Z") | fromdateiso8601 | strftime("%Y-%m-%d")) == .) catch false);
+    def optional_date($name): (has($name) | not) or (.[$name] | valid_date);
     def optional_https_url($name):
       (has($name) | not)
       or (.[$name]
@@ -219,7 +225,8 @@ validate_payload() {  # <data.json>
         | type == "object"
           and (.value | slug(128))
           and (.label | nonempty_string)
-          and optional_string("hint")] | all)
+          and optional_string("hint")
+          and optional_date("until")] | all)
       and (optional_string("about"))
       and (optional_string("decide"))
       and (optional_string("detail"))
@@ -254,14 +261,10 @@ validate_payload() {  # <data.json>
       and optional_https_url("pr_url")
       and optional_string("artifact")
       and optional_subject;
-    def valid_date:
-      type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
-      and (try (((. + "T00:00:00Z") | fromdateiso8601 | strftime("%Y-%m-%d")) == .) catch false);
     def valid_datetime:
       type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}$")
       and (.[0:10] | valid_date)
       and ((.[11:13] | tonumber) < 24) and ((.[14:16] | tonumber) < 60);
-    def optional_date($name): (has($name) | not) or (.[$name] | valid_date);
     def charted_item:
       type == "object" and repo_marker and (.id | slug(128))
       and (.title | nonempty_string) and (.reason | type == "string")
@@ -351,7 +354,9 @@ decision_card_gaps() {  # <effective-payload.json>
             then "distinct option values" else empty end),
           (if ($card.recommend_value | type) != "string" or ($values | index($card.recommend_value)) == null
             then "a recommend_value naming one of its options" else empty end),
-          (if $card.allow_freeform != true then "allow_freeform true" else empty end)
+          (if $card.allow_freeform != true then "allow_freeform true" else empty end),
+          (if [$card.options[] | select(.value == "later" and (has("until") | not))] != []
+            then "an until date on its later option" else empty end)
         ] as $gaps
       | select($gaps | length > 0)
       | "\($card.key): needs \($gaps | join(", "))"]
