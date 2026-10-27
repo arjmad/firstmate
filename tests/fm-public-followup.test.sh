@@ -44,22 +44,47 @@ EOF
 # The remote-route cases drive the real remote job worker, which outlives the
 # command that staged its job. Stop it before the shared fixture cleanup runs,
 # and keep that cleanup (tests/lib.sh owns it) rather than replacing the trap.
-pf_test_cleanup() {
+# worker.pid names only the serving child, so a lone kill leaves its supervisor
+# and heartbeat running into rm -rf, where they re-create the state root. Stop
+# the whole isolated worker group and wait for it to exit.
+pf_stop_remote_worker() {
   local pid_file="${REMOTE_FIXTURE_JOBS:-$TMP_ROOT/remote-jobs}/worker.pid" pid
+  [ -f "$pid_file" ] || return 0
+  pid=$(cat "$pid_file" 2>/dev/null) || pid=
+  [ -n "$pid" ] || return 0
+  (
+    # Production libraries are linted independently by fm-lint.sh.
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-remote-job-lib.sh"
+    fm_remote_job_stop_worker_tree "$pid"
+  ) || return 1
+  # A later stop must not signal whatever process reuses the stopped pid.
+  rm -f "$pid_file"
+}
+
+pf_test_cleanup() {
+  local worker_stopped=1
   if [ -n "$PF_TEST_LOCK_HOLDER" ]; then
     kill "$PF_TEST_LOCK_HOLDER" 2>/dev/null || true
     wait "$PF_TEST_LOCK_HOLDER" 2>/dev/null || true
     PF_TEST_LOCK_HOLDER=
   fi
-  if [ -f "$pid_file" ]; then
-    pid=$(cat "$pid_file" 2>/dev/null) || pid=
-    [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
-  fi
+  pf_stop_remote_worker || worker_stopped=0
   fm_test_cleanup
+  if [ "$worker_stopped" -eq 0 ]; then
+    echo "not ok - the remote job worker tree survived teardown" >&2
+    return 1
+  fi
 }
-trap pf_test_cleanup EXIT
-trap 'pf_test_cleanup; exit 130' INT
-trap 'pf_test_cleanup; exit 143' TERM
+# The EXIT trap runs once for every exit, INT and TERM included, and turns only
+# a clean exit into a failure when the worker tree survived.
+pf_exit_trap() {
+  local status=$?
+  pf_test_cleanup || [ "$status" -ne 0 ] || exit 1
+}
+trap pf_exit_trap EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 iso_utc_from_epoch() {  # <epoch>
   date -u -r "$1" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
@@ -3157,6 +3182,31 @@ test_empty_remote_collection_is_healthy() {
   pass "empty reachable remote collection remains a healthy no-op"
 }
 
+# pgrep exits 1 when nothing matches, which is an answer here rather than an
+# error, and an earlier case leaves errexit on for the rest of the suite.
+fixture_worker_processes() {
+  local status=0
+  pgrep -f -- "$REMOTE_FIXTURE_ROOT/bin/fm-remote-job-worker.sh" || status=$?
+  [ "$status" -le 1 ]
+}
+
+# A worker still alive while the exit trap's rm -rf runs re-creates its state
+# root under TMP_ROOT, and the removal then fails after every case passed.
+test_remote_worker_tree_is_gone_before_fixture_cleanup() {
+  local home survivors
+  remote_fixture_prepare
+  home=$(make_home remote-worker-stop)
+  make_remote_route "$home" mini-default >/dev/null
+  seed_repro_commitment "$home" pf-worker-stop req-worker-stop secondmate:mini-default work-pending
+  run_pf_remote "$home" consume >/dev/null || fail "a reachable remote route must collect cleanly"
+  [ -n "$(fixture_worker_processes)" ] || fail "the remote route must have started the fixture's job worker"
+
+  pf_stop_remote_worker || fail "the fixture's job worker tree did not stop"
+  survivors=$(fixture_worker_processes) || fail "cannot list the fixture's job worker processes"
+  [ -z "$survivors" ] || fail "the fixture's job worker outlived its stop: $survivors"
+  pass "the remote job worker tree is gone before the fixture cleanup removes its state"
+}
+
 test_remote_brief_rejects_traversal_route_paths() {
   local home remote
   remote_fixture_prepare
@@ -4021,3 +4071,4 @@ test_rejection_wake_survives_a_poll_that_cannot_write
 test_rejection_wake_survives_a_poll_that_cannot_read
 test_an_undroppable_wake_repeats_the_same_refusal
 test_a_retained_refusal_repeats_its_wake_rather_than_a_new_one
+test_remote_worker_tree_is_gone_before_fixture_cleanup
