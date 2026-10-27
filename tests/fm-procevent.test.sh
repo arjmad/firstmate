@@ -3732,6 +3732,28 @@ assert_contains "$out" "route: firstmate: prune (bin/fm-backlog-prune.sh apply <
 assert_contains "$out" "| picked=1,3" "read dropped the prune answer's picked positions"
 pass "a board answer closes or defers only through the intake, and every other answer reaches firstmate through read"
 
+# A decision card's dated later pick feeds a deferral, never a close, and a
+# typed note or the pre-versioned question/answer context feeds nothing,
+# because only an authored option is a pick.
+{
+  printf 'session:\n  file: /board.html\n  status: feedback\nprompts[6]:\n'
+  board_choice 1 '{"schema":"fm-bearings-answer.v1","question":"card-later","selection":"later","until":"2026-11-03","note":"after the audit"}'
+  board_choice 2 '{"schema":"fm-bearings-answer.v1","question":"card-later-undated","selection":"later","until":"soon","note":""}'
+  board_choice 3 '{"schema":"fm-bearings-answer.v1","question":"card-question","selection":"","note":"explain what this is"}'
+  board_choice 4 '{"question":"card-old-freeform","answer":"lets grill on this"}'
+  board_choice 5 '{"schema":"fm-bearings-answer.v1","question":"card-redo","selection":"yes","note":""}'
+  board_choice 6 '{"schema":"fm-bearings-answer.v1","question":"card-redo","selection":"later","until":"never","note":""}'
+} > "$BOARD_ANS"
+out=$("$ROOT/bin/fm-procevent-lavish.sh" answers "$BOARD_ANS") || fail "answers failed on a later capture: $out"
+[ "$out" = "$(printf 'card-later\tlater\tReceipt 1\tuntil=2026-11-03')" ] \
+  || fail "a card's later pick or a typed note fed the intake as a close: $out"
+out=$("$ROOT/bin/fm-procevent-lavish.sh" read "$BOARD_ANS") || fail "read failed on a later capture"
+assert_contains "$out" "route: keyed intake (re-holds until the date)" "read did not name a card's deferral route"
+assert_contains "$out" "| 2026-11-03" "read dropped a card's return date"
+assert_contains "$out" "route: firstmate: later with no usable date; nothing was fed" \
+  "read claimed the intake handled a card's later with no usable date"
+pass "a card's dated later pick defers, and a typed note or the old free-text context feeds nothing"
+
 # The runner's silence seam is generic and closed by default: an adapter with no
 # `silent` command must keep announcing, so adding the seam changed nothing for
 # every adapter that has no notion of a no-op.
