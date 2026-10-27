@@ -155,7 +155,10 @@ Default fields: schema, home, generated, prs,
   secondmate_reconcile{id,spawn_gen,host,kind,ids},
   decisions_open{id,key,verb,summary,owner}, landed{id,what,artifact,owner},
   gates{id,title,blocked_by,reason,owner,filed}, reports{id,path}, recorded_prs{id,url},
+  inbox_unread{id,at,summary},
   unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
+inbox_unread is bin/fm-inbox.sh unread: unacknowledged captain inbox notes,
+  oldest first, at most 10, with omitted[] naming how many more are waiting.
 Default gates are selected newest filed first before their bound; undated gates
   retain input order after dated gates.
 landed merges this home's Done with registered secondmate homes' Done, bounded by
@@ -398,6 +401,11 @@ case ",$FIELDS," in
     fi
     ;;
 esac
+# Unread captain inbox notes come from their owner, bin/fm-inbox.sh, already
+# bounded oldest first; an unreadable inbox is disclosed rather than shown empty.
+INBOX_UNREAD=$("$SCRIPT_DIR/fm-inbox.sh" unread --json 2>/dev/null) \
+  && printf '%s' "$INBOX_UNREAD" | jq -e '.notes | type == "array"' >/dev/null 2>&1 \
+  || INBOX_UNREAD='{"total":0,"notes":[],"more":0,"unreadable":true}'
 MODEL=$(printf '%s' "$SNAP" | jq \
   --arg home "$HOME_LABEL" \
   --arg now "$NOW" \
@@ -430,6 +438,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
   --argjson prune_schedule "$PRUNE_SCHEDULE" \
   --argjson prune_age "$PRUNE_AGE_DAYS" \
   --argjson prune_n "$FM_BEARINGS_PRUNE" \
+  --argjson inbox "$INBOX_UNREAD" \
   --argjson candidate_prs "$CANDIDATE_PRS" "$FM_LANDED_JQ_DEFS"'
   def trunc($n): if . == null then null else
     (tostring | gsub("\\s+"; " ") | if (length > $n) then (.[:$n] + "…") else . end) end;
@@ -704,7 +713,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
               + ($gates_all | newest_filed_first
                  | if $all_queued == 1 then . else .[:$gates_n] end)),
       reports: (if $all_reports == 1 then $reports_all else $reports_all[:$reports_n] end),
-      recorded_prs: (if $all_recorded_prs == 1 then $recorded_prs_all else $recorded_prs_all[:$recorded_prs_n] end)
+      recorded_prs: (if $all_recorded_prs == 1 then $recorded_prs_all else $recorded_prs_all[:$recorded_prs_n] end),
+      inbox_unread: ($inbox.notes | map({id, at, summary}))
     }
   | . + (if ($unhealthy_all | length) > 0 then
            {unhealthy_endpoints:(if $all_unhealthy == 1 then $unhealthy_all else $unhealthy_all[:$unhealthy_n] end)}
@@ -786,6 +796,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         (if $all_unhealthy == 0 and ($unhealthy_all | length) > $unhealthy_n then {surface:("unhealthy_endpoints showing \($unhealthy_n) of \($unhealthy_all | length)"), reveal:"--all-unhealthy"} else empty end),
         (if $include_prs == 1 and $pr_repos_total > $pr_repos_shown then {surface:("PR repositories showing \($pr_repos_shown) of \($pr_repos_total)"), reveal:"--all-pr-repos"} else empty end),
         (if $include_prs == 1 and $pr_rows_capped > 0 then {surface:("candidate_prs showing \($candidate_prs | length) of at least \($pr_rows_min_total); capped in \($pr_rows_capped) repo(s)"), reveal:"raise FM_BEARINGS_PR_LIMIT"} else empty end),
+        (if $inbox.more > 0 then {surface:("inbox_unread showing \($inbox.notes | length) of \($inbox.total)"), reveal:"bin/fm-inbox.sh list"} else empty end),
+        (if $inbox.unreadable == true then {surface:"unread inbox notes could not be read", reveal:"bin/fm-inbox.sh list"} else empty end),
         (if $include_prs == 1 then empty else {surface:"live PR discovery + checks", reveal:"--include-prs"} end) ]) }
 ') || { echo "fm-bearings-snapshot: projection failed" >&2; exit 1; }
 

@@ -7,8 +7,10 @@
 #   note    Queue an idea for firstmate while firstmate is mid-turn and cannot
 #           answer. Writes a durable record and appends ONE `check` wake, so the
 #           note survives a crash and is presented at firstmate's next drain.
-#           `announce` may append that same wake for an already-saved note.
-#           These two are the only subcommands that touch firstmate's wake queue.
+#           `announce` may append that same wake for an already-saved note, and
+#           `rewake-due` appends it again once a day while the note stays
+#           unacknowledged. These three are the only subcommands that touch
+#           firstmate's wake queue.
 #   say     Same as `note`, but the body comes from spoken audio on stdin.
 #           Speech is an INPUT METHOD here, not an architecture: it transcribes
 #           and then takes exactly the `note` path.
@@ -31,6 +33,8 @@
 #   fm-inbox.sh ask  <question>...
 #   fm-inbox.sh list
 #   fm-inbox.sh drain [--ack <id>...]
+#   fm-inbox.sh unread [--json]
+#   fm-inbox.sh rewake-due
 #
 # `note --request-id` is the idempotent capture path: a repeat of the same
 # request id returns the original note instead of creating a second one, and
@@ -62,6 +66,15 @@
 # Each reply is stamped with a durable per-home sequence, so the receipts cursor
 # is a strict total order and two replies recorded in the same second are both
 # readable. One reply per note: a second one is refused.
+# `unread` lists the pending notes nobody has acknowledged, oldest first, capped
+# at 10 with a count of the rest; the session-start digest and the bearings
+# snapshot print it so an unacknowledged note keeps resurfacing.
+# `rewake-due` is the watcher's daily re-wake: each note still pending 24 hours
+# (FM_INBOX_REWAKE_SECONDS) after its capture or its last re-wake gets one more
+# `check` wake keyed like its first, unless that key is still queued, and the
+# time is recorded under state/inbox/.rewoken/. `drain --ack` ends both, because
+# an acknowledged note is no longer pending. FM_INBOX_NOW (epoch seconds)
+# overrides the clock for tests.
 # `ready` is the read-only primary-readiness projection (lock, wake-consumer
 # health, away posture, observation time). It never acquires the session lock
 # and never infers liveness from a lock file, a session, or a pane.
@@ -81,8 +94,8 @@
 # An absent profile means the call uses whatever credentials are already in the
 # environment, which is also what FM_INBOX_PROFILE= (empty) forces.
 #
-# `note`, `announce`, `reply`, `receipts`, `ready`, `status`, `list` and `drain`
-# need NO configuration at all, because they make no model call. The voice
+# `note`, `announce`, `reply`, `receipts`, `ready`, `status`, `list`, `drain`,
+# `unread` and `rewake-due` need NO configuration at all, because they make no model call. The voice
 # handover depends on `note`, so it keeps working in a home that has configured
 # nothing. `--json` / `receipts` / `ready` require python3, which a firstmate
 # home already uses for other tools.
@@ -91,8 +104,8 @@
 #   FM_HOME              operational home whose state/ and data/ are used.
 #
 # PRIVACY: `say` sends your audio and `ask` sends your question to Bedrock.
-# `note`, `announce`, `reply`, `receipts`, `ready`, `status`, `list` and `drain`
-# make no network call at all.
+# `note`, `announce`, `reply`, `receipts`, `ready`, `status`, `list`, `drain`,
+# `unread` and `rewake-due` make no network call at all.
 #
 # `note` is also the queueing half of the spoken interface: when the voice agent
 # in bin/fm-voice-relay.py hands real work over to firstmate, it runs this
@@ -158,7 +171,7 @@ ASK_MODEL="${FM_INBOX_ASK_MODEL:-}"
 PROFILE="${FM_INBOX_PROFILE-$(read_setting inbox-profile)}"
 
 # Resolved only by the subcommands that make a model call, so note, announce,
-# reply, receipts, ready, status, list and drain keep working in a home that
+# reply, receipts, ready, status, list, drain, unread and rewake-due keep working in a home that
 # has configured nothing.
 need_region() {
   [ -n "$REGION" ] || REGION=$(require_setting inbox-region FM_INBOX_REGION "AWS region")
@@ -202,6 +215,11 @@ REPLY_SEQ_LOCK="$INBOX/.replies.lock"
 RECEIPTS_PENDING_BOUND=20
 RECEIPTS_HANDLED_BOUND=20
 RECEIPTS_REPLIES_BOUND=20
+
+REWOKEN_DIR="$INBOX/.rewoken"
+UNREAD_BOUND=10
+REWAKE_SECONDS=${FM_INBOX_REWAKE_SECONDS:-86400}
+case "$REWAKE_SECONDS" in ''|*[!0-9]*|0) REWAKE_SECONDS=86400 ;; esac
 
 load_wake_lib() {
   local lib="$FM_ROOT/bin/fm-wake-lib.sh"
@@ -1122,6 +1140,7 @@ cmd_drain() {
     for id in "$@"; do
       if [ -f "$INBOX/$id.note" ]; then
         mv "$INBOX/$id.note" "$INBOX/handled/$id.note"
+        rm -f -- "$REWOKEN_DIR/$id"
         printf 'acked %s\n' "$id"
       else
         printf 'already-acked %s\n' "$id"
@@ -1131,6 +1150,96 @@ cmd_drain() {
   fi
   cmd_list
   printf '\nAck with: fm-inbox.sh drain --ack <id>...\n'
+}
+
+# ---------------------------------------------------------------- unread / rewake-due
+
+# Pending note ids, oldest first: every id starts with its capture epoch.
+pending_note_ids() {
+  local f
+  for f in "$INBOX"/*.note; do
+    [ -f "$f" ] || continue
+    f=${f##*/}
+    printf '%s\n' "${f%.note}"
+  done | LC_ALL=C sort -t- -k1,1n -k2
+}
+
+cmd_unread() {
+  local json=0 ids total=0 id path at summary rows=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --json) json=1; shift ;;
+      *) die "usage: fm-inbox.sh unread [--json]" ;;
+    esac
+  done
+  ids=$(pending_note_ids)
+  for id in $ids; do
+    path="$INBOX/$id.note"
+    [ -f "$path" ] || continue
+    total=$((total + 1))
+    [ "$total" -le "$UNREAD_BOUND" ] || continue
+    at=$(sed -n '/^--$/q;s/^at=//p' "$path" | head -n 1)
+    summary=$(note_summary_from_body "$(read_note_body "$path")")
+    rows="$rows$id"$'\t'"${at:-unknown}"$'\t'"$summary"$'\n'
+  done
+  if [ "$json" -eq 1 ]; then
+    need_python
+    printf '%s' "$rows" | python3 -c '
+import json, sys
+total, bound = int(sys.argv[1]), int(sys.argv[2])
+notes = []
+for line in sys.stdin.read().splitlines():
+    note_id, at, summary = (line.split("\t", 2) + ["", ""])[:3]
+    notes.append({"id": note_id, "at": at, "summary": summary})
+json.dump({"schema": "fm-inbox-unread.v1", "total": total, "bound": bound,
+           "notes": notes, "more": max(total - bound, 0)}, sys.stdout, separators=(",", ":"))
+sys.stdout.write("\n")' "$total" "$UNREAD_BOUND"
+    return 0
+  fi
+  if [ "$total" -eq 0 ]; then
+    printf '(no unread inbox notes)\n'
+    return 0
+  fi
+  printf '%s unread inbox note(s), oldest first; acknowledge each handled note with fm-inbox.sh drain --ack <id>:\n' "$total"
+  printf '%s' "$rows" | while IFS=$'\t' read -r id at summary; do
+    printf '  %s  %s  %s\n' "$id" "$at" "$summary"
+  done
+  [ "$total" -le "$UNREAD_BOUND" ] \
+    || printf '  ... and %s more (fm-inbox.sh list shows every note)\n' "$((total - UNREAD_BOUND))"
+}
+
+# One check wake per note that is still pending a full REWAKE_SECONDS after its
+# capture or its last re-wake. The pending test, the append and the marker write
+# share the wake-queue lock, so an acknowledgement that lands first wins and a
+# note whose earlier wake is still queued gets no second row.
+cmd_rewake_due() {
+  local now id path last captured age summary
+  [ "$#" -eq 0 ] || die "usage: fm-inbox.sh rewake-due"
+  [ -d "$INBOX" ] || return 0
+  now=${FM_INBOX_NOW:-$(date +%s)}
+  for id in $(pending_note_ids); do
+    last=$(cat "$REWOKEN_DIR/$id" 2>/dev/null || true)
+    case "$last" in ''|*[!0-9]*) last=${id%%-*} ;; esac
+    case "$last" in ''|*[!0-9]*) last=0 ;; esac
+    [ $((now - last)) -ge "$REWAKE_SECONDS" ] || continue
+    path="$INBOX/$id.note"
+    [ -f "$path" ] || continue
+    summary=$(note_summary_from_body "$(read_note_body "$path")")
+    captured=${id%%-*}
+    case "$captured" in ''|*[!0-9]*) captured=$last ;; esac
+    age=$(( (now - captured) / 3600 ))
+    load_wake_lib || die "cannot load the wake library to re-wake note $id"
+    fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || die "cannot take the wake-queue lock"
+    if [ -f "$path" ] && ! fm_wake_queued_keys_locked check | grep -Fxq "inbox:$id"; then
+      if fm_wake_append_locked check "inbox:$id" \
+          "check: captain inbox note $id still unacknowledged after ${age}h - $summary"; then
+        mkdir -p "$REWOKEN_DIR"
+        printf '%s\n' "$now" >"$REWOKEN_DIR/$id"
+        printf 'rewoke %s\n' "$id"
+      fi
+    fi
+    fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+  done
 }
 
 # ---------------------------------------------------------------- dispatch
@@ -1146,6 +1255,8 @@ case "${1:-}" in
   ask)      shift; cmd_ask "$@" ;;
   list)     shift; cmd_list ;;
   drain)    shift; cmd_drain "$@" ;;
+  unread)   shift; cmd_unread "$@" ;;
+  rewake-due) shift; cmd_rewake_due "$@" ;;
   ''|-h|--help|help)
     # The whole header block, found rather than counted: everything after the
     # shebang up to the first line that is not a comment. A fixed line range

@@ -731,6 +731,65 @@ test_hold_release_schedule_releases_a_due_default() {
   pass "a due schedule releases a reversible default and wakes the watcher"
 }
 
+# A captain inbox note whose first wake was drained but which nobody
+# acknowledged re-wakes the watcher once it is due; an acknowledged one never
+# does. FM_INBOX_REWAKE_SECONDS shrinks the day so the case runs in seconds.
+inbox_rewake_watch() {  # <dir> <out>
+  PATH="$1/fakebin:$PATH" FM_HOME="$1" FM_STATE_OVERRIDE="$1/state" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_CREW_STATE_BIN="$1/fakebin/fm-crew-state.sh" \
+    FM_POLL=0.2 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_SECONDMATE_LIVENESS_SECS=99999999 FM_FLEET_SYNC_INTERVAL=off FM_HOLD_RELEASE_INTERVAL=off \
+    FM_INBOX_REWAKE_INTERVAL=1 FM_INBOX_REWAKE_SECONDS=1 "$WATCH" > "$2" 2>/dev/null &
+}
+
+inbox_rewake_case() {  # <name> -> "<dir> <note-id>"
+  local dir err id
+  dir=$(make_case "$1"); dir=$(cd "$dir" && pwd -P)
+  id=$(FM_HOME="$dir" FM_STATE_OVERRIDE="$dir/state" "$ROOT/bin/fm-inbox.sh" note "look at the retro") \
+    || fail "could not queue the inbox note"
+  id=${id#queued }
+  id=${id%%$'\n'*}
+  err="$dir/drain.err"
+  FM_HOME="$dir" FM_STATE_OVERRIDE="$dir/state" "$ROOT/bin/fm-wake-drain.sh" >/dev/null 2>"$err" \
+    || fail "could not drain the note's first wake: $(cat "$err")"
+  ack_drain_err "$dir/state" "$err" >/dev/null 2>&1 || fail "could not acknowledge the drained wake"
+  sleep 2
+  printf '%s %s\n' "$dir" "$id"
+}
+
+test_unacknowledged_inbox_note_rewakes_the_watcher() {
+  local dir id out pid
+  read -r dir id <<EOF
+$(inbox_rewake_case inbox-rewake)
+EOF
+  out="$dir/watch.out"
+  inbox_rewake_watch "$dir" "$out"
+  pid=$!
+  wait_for_exit "$pid" 100 || { reap "$pid"; fail "the watcher did not wake on a due inbox note: $(cat "$out")"; }
+  grep -F 'check: captain inbox: 1 note(s) still unacknowledged after a day' "$out" >/dev/null \
+    || fail "the wake did not name the unacknowledged note count: $(cat "$out")"
+  grep "$(printf '\tcheck\tinbox:%s\t' "$id")" "$dir/state/.wake-queue" >/dev/null \
+    || fail "the re-wake was not queued durably for the note: $(cat "$dir/state/.wake-queue" 2>&1)"
+  pass "an unacknowledged inbox note re-wakes the watcher once it is due"
+}
+
+test_acknowledged_inbox_note_never_rewakes_the_watcher() {
+  local dir id out pid
+  read -r dir id <<EOF
+$(inbox_rewake_case inbox-acked)
+EOF
+  FM_HOME="$dir" FM_STATE_OVERRIDE="$dir/state" "$ROOT/bin/fm-inbox.sh" drain --ack "$id" >/dev/null \
+    || fail "could not acknowledge the note"
+  out="$dir/watch.out"
+  inbox_rewake_watch "$dir" "$out"
+  pid=$!
+  wait_poll_cycle "$dir/state" "$pid" || fail "the watcher exited before a full cycle: $(cat "$out")"
+  [ -e "$dir/state/.last-inbox-rewake" ] || { reap "$pid"; fail "the re-wake scan never ran"; }
+  wait_poll_cycle "$dir/state" "$pid" || fail "an acknowledged note woke the watcher: $(cat "$out")"
+  reap "$pid"
+  pass "an acknowledged inbox note never re-wakes the watcher"
+}
+
 # --- a live worker paused on its own background job --------------------------
 # A worker declared `paused:` on its own background job and the job then ended
 # without a new status line, so only the passage of time can tell the watcher
@@ -819,5 +878,7 @@ test_fleet_sync_stuck_lines_surface_as_one_check_wake
 test_fleet_sync_schedule_runs_the_sync_when_due
 test_hold_release_lines_surface_as_one_check_wake
 test_hold_release_schedule_releases_a_due_default
+test_unacknowledged_inbox_note_rewakes_the_watcher
+test_acknowledged_inbox_note_never_rewakes_the_watcher
 test_paused_bg_job_without_until_stays_silent_after_the_job_ends
 test_paused_bg_job_until_timeout_rechecks_after_the_job_ends

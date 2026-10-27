@@ -1136,6 +1136,34 @@ test_report_pointers_surface() {
   pass "current report pointers surface"
 }
 
+test_unread_inbox_notes_surface_oldest_first() {
+  local home fakebin json n first
+  home=$(make_home inbox); write_fixture "$home"
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '.inbox_unread == [] and (.omitted | any(.reveal == "bin/fm-inbox.sh list") | not)' \
+    >/dev/null || fail "an empty inbox must project no unread notes: $json"
+  first=$(FM_HOME="$home" "$ROOT/bin/fm-inbox.sh" note "the oldest unread note")
+  first=${first#queued }
+  first=${first%%$'\n'*}
+  sleep 1
+  for n in 2 3 4 5 6 7 8 9 10 11 12; do
+    FM_HOME="$home" "$ROOT/bin/fm-inbox.sh" note "unread note $n" >/dev/null
+  done
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e --arg first "$first" '
+    (.inbox_unread | length) == 10
+      and .inbox_unread[0].id == $first
+      and .inbox_unread[0].summary == "the oldest unread note"
+      and (.omitted | any(.surface == "inbox_unread showing 10 of 12" and .reveal == "bin/fm-inbox.sh list"))
+  ' >/dev/null || fail "unread inbox notes must surface oldest first, capped at ten, with the rest disclosed: $json"
+  FM_HOME="$home" "$ROOT/bin/fm-inbox.sh" drain --ack "$first" >/dev/null
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e --arg first "$first" '.inbox_unread | all(.[]; .id != $first)' \
+    >/dev/null || fail "an acknowledged note must leave the unread projection: $json"
+  pass "unread inbox notes surface oldest first, capped at ten, until acknowledged"
+}
+
 test_queued_item_prose_never_hides_it() {
   local home fakebin json
   home=$(make_home superseded); write_fixture "$home"
@@ -3561,6 +3589,7 @@ test_main_captain_readiness_matches_secondmate_projection
 test_completed_scout_report_not_pending
 test_open_decision_surfaces_end_to_end
 test_report_pointers_surface
+test_unread_inbox_notes_surface_oldest_first
 test_queued_item_prose_never_hides_it
 test_include_prs_is_the_only_fetch_path
 test_include_prs_maps_custom_branch_prefix_to_task

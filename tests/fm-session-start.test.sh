@@ -822,6 +822,43 @@ EOF
   pass "context digest distinguishes ABSENT, empty-but-present, and populated files"
 }
 
+# --- unread inbox notes ------------------------------------------------------
+
+unread_inbox_section() {  # <digest>
+  printf '%s\n' "$1" | awk '/^Unread inbox notes/ { flag = 1; next } /^AFK$/ { flag = 0 } flag'
+}
+
+test_unread_inbox_notes_listed() {
+  local rec root home fakebin out note_id
+  rec=$(new_world unread-inbox)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$(unread_inbox_section "$out")" "(no unread inbox notes)" \
+    "an empty inbox did not say so in the digest"
+
+  note_id=$(FM_HOME="$home" "$ROOT/bin/fm-inbox.sh" note "remember the retro note")
+  note_id=${note_id#queued }
+  note_id=${note_id%%$'\n'*}
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$(unread_inbox_section "$out")" "1 unread inbox note(s), oldest first" \
+    "the digest did not count the unread note"
+  assert_contains "$(unread_inbox_section "$out")" "$note_id" "the digest did not list the unread note id"
+  assert_contains "$(unread_inbox_section "$out")" "remember the retro note" \
+    "the digest did not show the note summary"
+
+  FM_HOME="$home" "$ROOT/bin/fm-inbox.sh" drain --ack "$note_id" >/dev/null
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$(unread_inbox_section "$out")" "$note_id" \
+    "an acknowledged note still appeared in the digest"
+
+  pass "the digest lists unread inbox notes until they are acknowledged"
+}
+
 # --- lock refusal: read-only path --------------------------------------------
 
 test_lock_refusal_read_only_path() {
@@ -3048,6 +3085,7 @@ EOF
 }
 
 test_context_digest_absent_empty_present
+test_unread_inbox_notes_listed
 test_lock_refusal_read_only_path
 test_lock_write_failure_read_only_path
 test_trace_context_effective_state_is_frozen_after_lock

@@ -1,0 +1,10 @@
+2026-10-27: Arjun picked three fixes in a retro of the main firstmate session, in its question selector: "List + daily re-wake" for unread inbox notes, a rewording of the state residue sweep line, and "All 64 now, test enforces" for `--help`.
+Decision: unacknowledged captain inbox notes are listed in the session-start digest and bearings, oldest first and capped at 10, and re-wake firstmate once a day until acknowledged.
+The sweep's kept counts are worded as record bookkeeping rather than liveness, because "0 live" was read as "no sessions are live" while every worker pane was up.
+Every `bin/fm-*.sh` entry command answers `--help` with its usage and exit 0 before any side effect, and a repo test fails for one that does not.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| Unread inbox listing and a daily re-wake per unacknowledged note, surfaced in the session-start digest, bearings, and the watcher | `bin/fm-inbox.sh` (`unread`, `rewake-due`), `tests/fm-inbox.test.sh`, `tests/fm-session-start.test.sh`, `tests/fm-bearings-snapshot.test.sh` | `bin/fm-inbox.sh`, `bin/fm-session-start.sh` (fleet-state subsection, read-once contract), `bin/fm-bearings-snapshot.sh` (`inbox_unread`), `bin/fm-watch.sh` (`inbox_rewake_tick`), `.agents/skills/bearings/SKILL.md`, `.agents/skills/operational-home-layout/SKILL.md`, `docs/scripts.md`, `docs/configuration.md` | carried | 45dd50a5 |
+| The state residue sweep line words its kept counts as watcher-record bookkeeping and points at `bin/fm-fleet-view.sh` for liveness, and AGENTS.md section 8 names `bin/fm-fleet-view.sh` as the structured fleet view | `bin/fm-state-residue-sweep.sh` (summary line) | `bin/fm-state-residue-sweep.sh`, `AGENTS.md` (section 8) | carried | 45dd50a5 |
+| Every `bin/fm-*.sh` entry command answers `--help` with its usage on stdout and exit 0 before any side effect, enforced by a repo test | `tests/fm-help.test.sh` | the `--help` branch of each `bin/fm-*.sh` entry command that lacked one | carried | 45dd50a5 |

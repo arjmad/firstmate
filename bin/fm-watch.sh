@@ -144,6 +144,10 @@
 #                          source owned closes that episode); the queued
 #                          payload names what to check. These three kinds are
 #                          joined with `;` when more than one surfaces in a cycle
+#   check: captain inbox: <n> note(s) still unacknowledged after a day
+#                          bin/fm-inbox.sh rewake-due queued one durable check
+#                          row per inbox note still pending a day after its
+#                          capture or last re-wake (inbox_rewake_tick)
 #   check: rejected unauthenticated state checks: <paths>
 #                          unsafe state checks were refused without execution
 #   check: rejected unauthenticated PR poll retirement receipts: <paths>
@@ -209,7 +213,15 @@
 # and exits 1, so a watcher whose temporary home or disposable checkout was
 # deleted stops itself instead of running on as an orphan. That check is scoped
 # to this process alone and never signals another watcher.
+#
+# Usage: fm-watch.sh   (takes no arguments; arm it through bin/fm-watch-arm.sh)
 set -u
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  case "${1:-}" in
+    -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+  esac
+fi
 
 SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -2919,6 +2931,25 @@ hold_release_tick() {
   ) </dev/null >/dev/null 2>&1 &
 }
 
+# Captain inbox re-wake (bin/fm-inbox.sh's header owns the daily cadence, the
+# pending test, and the queued-key guard). Once per FM_INBOX_REWAKE_INTERVAL
+# seconds (default 3600; 0 or off disables) the watcher runs the local
+# `fm-inbox.sh rewake-due`, which queues one durable `check:` row per due note
+# itself, and wakes once when it re-woke any.
+INBOX_REWAKE_INTERVAL=${FM_INBOX_REWAKE_INTERVAL:-3600}
+case "$INBOX_REWAKE_INTERVAL" in off) INBOX_REWAKE_INTERVAL=0 ;; ''|*[!0-9]*) INBOX_REWAKE_INTERVAL=3600 ;; esac
+inbox_rewake_tick() {
+  local out count
+  [ "$INBOX_REWAKE_INTERVAL" -gt 0 ] || return 0
+  [ -d "$STATE/inbox" ] || return 0
+  [ "$(age_of "$STATE/.last-inbox-rewake")" -ge "$INBOX_REWAKE_INTERVAL" ] || return 0
+  touch "$STATE/.last-inbox-rewake"
+  out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-inbox.sh" rewake-due 2>/dev/null) || true
+  count=$(printf '%s\n' "$out" | grep -c '^rewoke ' || true)
+  [ "$count" -gt 0 ] || return 0
+  wake "check: captain inbox: $count note(s) still unacknowledged after a day (bin/fm-inbox.sh unread)"
+}
+
 RECONCILE_REQUEST_PID=
 reconcile_requests_pending() {
   local request
@@ -3197,6 +3228,7 @@ while :; do
 
   fleet_sync_tick
   hold_release_tick
+  inbox_rewake_tick
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
   # Time-based via .last-check mtime so the cadence survives watcher restarts.
