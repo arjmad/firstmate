@@ -673,6 +673,11 @@ It refuses while any of these holds:
 It closes only the retiring secondmate's panes or `2ndmate-<id>` workspace in `fm-remote`.
 It never stops the shared session or removes a sibling secondmate's workspace or panes.
 SSH exit 255 preserves both the route and local records because completion is unknown.
+
+A seed registers its route before the remote home exists, so a seed interrupted before provisioning leaves a route with no task record.
+Teardown retires such a route alone once the host confirms its home is absent or carries no `.fm-secondmate-home` marker, and leaves any directory there in place.
+It refuses when the host reports a seeded home, because retiring that needs the primary's task record.
+
 `--force` remains the explicit discard path and requires the same captain authority as local secondmate discard.
 
 No generic remote delete or write surface exists:

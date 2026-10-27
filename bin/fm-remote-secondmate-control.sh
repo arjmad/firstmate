@@ -12,7 +12,7 @@
 #   fm-remote-secondmate-control.sh observe <id>
 #   fm-remote-secondmate-control.sh sync <id> [<parent-commit>]
 #   fm-remote-secondmate-control.sh update <id>
-#   fm-remote-secondmate-control.sh retire <id> [--force]
+#   fm-remote-secondmate-control.sh retire <id> [--force|--unseeded-only]
 #
 # Remote placement ends here, but the second-mate agent always runs on the
 # Herdr backend in the dedicated fm-remote session, so launch refuses any other
@@ -74,10 +74,14 @@ die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 validate_id() { case "$1" in ''|*[!A-Za-z0-9._-]*) die "invalid secondmate id: $1" ;; esac; }
 
-validate_home() { # <id> [allow-absent]
-  local id=$1 allow_absent=${2:-no} marker
-  if [ ! -e "$TARGET_HOME" ] && [ ! -L "$TARGET_HOME" ] && [ "$allow_absent" = yes ]; then return 2; fi
+validate_home() { # <id> [allow-unseeded]; returns 2 for an absent home, 3 for an unseeded one
+  local id=$1 allow_unseeded=${2:-no} marker
+  if [ ! -e "$TARGET_HOME" ] && [ ! -L "$TARGET_HOME" ] && [ "$allow_unseeded" = yes ]; then return 2; fi
   [ -d "$TARGET_HOME" ] && [ ! -L "$TARGET_HOME" ] || die "remote secondmate home is unavailable or unsafe"
+  if [ ! -e "$TARGET_HOME/.fm-secondmate-home" ] && [ ! -L "$TARGET_HOME/.fm-secondmate-home" ] \
+    && [ "$allow_unseeded" = yes ]; then
+    return 3
+  fi
   [ -f "$TARGET_HOME/.fm-secondmate-home" ] && [ ! -L "$TARGET_HOME/.fm-secondmate-home" ] \
     || die "remote home is not a seeded secondmate home"
   marker=$(cat "$TARGET_HOME/.fm-secondmate-home")
@@ -409,19 +413,30 @@ cmd_update() {
   cmd_sync "$id"
 }
 
+# A home without the seed marker never held a launched second mate (launch
+# requires it), so its route retires without touching the directory, which may
+# be a seed's leftovers or a state/ tree something recreated. --unseeded-only is
+# the parent's route-only retirement for a route with no task record: it never
+# retires a seeded home.
 cmd_retire() {
-  local id=$1 force=${2:-} rc
+  local id=$1 mode=${2:-} rc=0
   validate_id "$id"
   validate_home "$id" yes || rc=$?
-  if [ "${rc:-0}" -eq 2 ]; then
-    printf 'already-retired: %s\n' "$id"
-    return 0
-  fi
-  [ -z "$force" ] || [ "$force" = --force ] || usage
+  case "$rc" in
+    2) printf 'already-retired: %s\n' "$id"; return 0 ;;
+    3)
+      printf 'never-seeded: %s: %s holds no seeded secondmate home, so only the route retires and the directory is left in place\n' \
+        "$id" "$TARGET_HOME"
+      return 0
+      ;;
+  esac
+  [ "$mode" != --unseeded-only ] \
+    || die "remote home $TARGET_HOME is a seeded secondmate home; retiring it needs the parent's task record for $id"
+  [ -z "$mode" ] || [ "$mode" = --force ] || usage
   remote_endpoint_require "$id"
   FM_HOME="$TARGET_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$TARGET_HOME/state" \
     FM_CONFIG_OVERRIDE="$TARGET_HOME/config" "$SCRIPT_DIR/fm-guard.sh" || true
-  if [ -n "$force" ]; then
+  if [ -n "$mode" ]; then
     FM_HOME="$FM_ROOT" FM_ROOT_OVERRIDE="$FM_ROOT" \
       FM_STATE_OVERRIDE="$CONTROL_STATE" FM_DATA_OVERRIDE="$CONTROL_DATA" \
       FM_CONFIG_OVERRIDE="$TARGET_HOME/config" FM_TEARDOWN_GUARD_DONE=1 \
