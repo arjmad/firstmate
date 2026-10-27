@@ -154,7 +154,7 @@ fm_export_home_to_claude_env() {
   if [ -f "$CLAUDE_ENV_FILE" ] && grep -qxF -- "$line" "$CLAUDE_ENV_FILE" 2>/dev/null; then
     return 0
   fi
-  printf '%s\n' "$line" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true
+  { printf '%s\n' "$line" >> "$CLAUDE_ENV_FILE"; } 2>/dev/null || true
 }
 fm_export_home_to_claude_env
 

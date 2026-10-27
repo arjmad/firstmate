@@ -26,7 +26,7 @@ fi
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-unset NO_MISTAKES_GATE
+unset NO_MISTAKES_GATE CLAUDE_ENV_FILE
 
 TMP_ROOT=$(fm_test_tmproot fm-sessionstart-nudge)
 NUDGE="$ROOT/bin/fm-sessionstart-nudge.sh"
@@ -225,13 +225,14 @@ run_hook() {  # <root> [args...]
   local root=$1
   shift
   env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    ${CLAUDE_ENV_FILE_FIXTURE:+CLAUDE_ENV_FILE="$CLAUDE_ENV_FILE_FIXTURE"} \
     FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" PATH="$RUN_PATH" "$RUN" "$@"
 }
 
 run_hook_pi() {  # <root> [args...]
   local root=$1
   shift
-  env -u CLAUDECODE -u GROK_AGENT PI_CODING_AGENT=true FM_PI_HARNESS=pi \
+  env -u CLAUDECODE -u GROK_AGENT -u CLAUDE_ENV_FILE PI_CODING_AGENT=true FM_PI_HARNESS=pi \
     FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" PATH="$RUN_PATH" "$RUN" "$@"
 }
 
@@ -1043,8 +1044,8 @@ test_run_exports_home_to_claude_env_file() {
   local worker_env="$TMP_ROOT/run-env-worker.sh" resolved
   make_run_primary "$root"
   : > "$env_file"
-  CLAUDE_ENV_FILE="$env_file" run_hook "$root" --source startup </dev/null >/dev/null
-  CLAUDE_ENV_FILE="$env_file" run_hook "$root" --source compact </dev/null >/dev/null
+  CLAUDE_ENV_FILE_FIXTURE="$env_file" run_hook "$root" --source startup </dev/null >/dev/null
+  CLAUDE_ENV_FILE_FIXTURE="$env_file" run_hook "$root" --source compact </dev/null >/dev/null
   [ "$(grep -c '^export FM_HOME=' "$env_file")" = 1 ] \
     || fail "a primary session open did not write exactly one FM_HOME export: $(cat "$env_file")"
   # shellcheck disable=SC2016 # Expand inside the child shell that sources the env file.
@@ -1055,12 +1056,16 @@ test_run_exports_home_to_claude_env_file() {
   mkdir -p "$linked/bin" "$linked/state"
   : > "$linked/AGENTS.md"
   : > "$worker_env"
-  CLAUDE_ENV_FILE="$worker_env" run_hook "$linked" --source startup </dev/null >/dev/null
+  CLAUDE_ENV_FILE_FIXTURE="$worker_env" run_hook "$linked" --source startup </dev/null >/dev/null
   [ ! -s "$worker_env" ] || fail "a task worktree session wrote FM_HOME: $(cat "$worker_env")"
   CLAUDE_ENV_FILE="$worker_env" env NO_MISTAKES_GATE=1 FM_GATE_REFUSE_BYPASS=0 \
     FM_ROOT_OVERRIDE="$root" FM_HOME="$root" PATH="$RUN_PATH" "$RUN" --source startup </dev/null >/dev/null
   [ ! -s "$worker_env" ] || fail "a gate agent session wrote FM_HOME: $(cat "$worker_env")"
-  pass "run wrapper: a primary session exports its home to CLAUDE_ENV_FILE once, a worker or gate never does"
+  local quoted="$TMP_ROOT/run-env-it's"
+  make_run_primary "$quoted"
+  CLAUDE_ENV_FILE_FIXTURE="$worker_env" run_hook "$quoted" --source startup </dev/null >/dev/null
+  [ ! -s "$worker_env" ] || fail "a home path holding a quote wrote an export: $(cat "$worker_env")"
+  pass "run wrapper: a primary session exports its home to CLAUDE_ENV_FILE once, a worker, gate, or quoted path never does"
 }
 
 test_run_creates_missing_state_on_a_fresh_primary() {
