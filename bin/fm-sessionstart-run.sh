@@ -137,6 +137,27 @@ if [ -z "$SOURCE" ] && [ ! -t 0 ]; then
   ')
 fi
 
+# Claude Code hands SessionStart hooks a CLAUDE_ENV_FILE whose lines run before
+# every later Bash command of the session, so exporting this home there lets
+# the helm's fm-send/fm-control/fm-captain-hold calls satisfy their explicit
+# FM_HOME refusal without a hand-typed prefix. Only a session that passed the
+# primary scope check above reaches this, so a task worker keeps the FM_HOME
+# its launch set. The single-quoted plain assignment is the shape Claude Code
+# also copies into PowerShell commands; a home path holding a quote is skipped
+# rather than written in a form that shape cannot carry.
+fm_export_home_to_claude_env() {
+  local line
+  [ -n "${CLAUDE_ENV_FILE:-}" ] || return 0
+  case "$FM_HOME" in /*) ;; *) return 0 ;; esac
+  case "$FM_HOME" in *"'"*) return 0 ;; esac
+  line="export FM_HOME='$FM_HOME'"
+  if [ -f "$CLAUDE_ENV_FILE" ] && grep -qxF -- "$line" "$CLAUDE_ENV_FILE" 2>/dev/null; then
+    return 0
+  fi
+  printf '%s\n' "$line" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true
+}
+fm_export_home_to_claude_env
+
 case "$SOURCE" in
   resume|reload|fork)
     exec "$SCRIPT_DIR/fm-sessionstart-nudge.sh"
