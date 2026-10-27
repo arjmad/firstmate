@@ -32,6 +32,7 @@
 #   fm-captain-hold.sh unbind <source-id>
 #   fm-captain-hold.sh binding <source-id>
 #   fm-captain-hold.sh complete <origin-id> (--none | <task-id>...)
+#   fm-captain-hold.sh board-link <origin-id> <url>
 #   fm-captain-hold.sh verify <origin-id>
 #   fm-captain-hold.sh open <task-id> [--identity] [--distinguish-absent]
 #   fm-captain-hold.sh diverged
@@ -188,6 +189,12 @@
 # `--any-origin` stores the same `(any)` marker a plain `bind <source-id>`
 # stores. `binding` prints the stored value verbatim and `answers` accepts it,
 # so the process-event runner's feed seam is unchanged.
+#
+# `board-link` records a board's new link on every still-open captain call in
+# an origin's attested inventory, as one `Captain hold board: <url>` line plus
+# the origin and time, once per link. Scout teardown calls it when it hands a
+# finished scout's board over to firstmate and the board's link changed
+# (bin/fm-procevent.sh `adopt-task`); a closed call is skipped.
 #
 # `complete` is the shared investigation and visual-review completion gate.
 # It attests, in the origin task's metadata, the reviewed inventory of
@@ -2174,6 +2181,64 @@ reconcile_note() {
   printf 'still-open: %s\n' "$id"
 }
 
+# Record where a board that carries an origin's captain calls can now be
+# reached, on every still-open call of the origin's attested inventory. Used
+# when a finished worker's board is handed over to firstmate and its link
+# changed; a link already recorded on a call is not written again.
+command_board_link() {
+  local origin=${1:-} url=${2:-} meta keys entry resolved id rc show body stamp tmp line
+  [ "$#" -eq 2 ] || { usage >&2; exit 2; }
+  validate_slug origin-id "$origin"
+  validate_one_line url "$url"
+  case "$url" in
+    http://*|https://*) ;;
+    *) fail "board link must be an http or https URL: $url" ;;
+  esac
+  [ "${#url}" -le 512 ] || fail "board link exceeds 512 characters"
+  meta="$STATE/$origin.meta"
+  [ -f "$meta" ] || fail "origin metadata is absent: $meta"
+  [ "$(meta_value "$meta" decisions_reviewed)" = 1 ] \
+    || fail "origin $origin has no completed captain-call inventory"
+  keys=$(meta_value "$meta" decision_keys)
+  require_tasks_axi
+  line="Captain hold board: $url"
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    resolved=$(resolve_entry "$origin" "$entry") || fail "cannot resolve inventory entry $entry of $origin"
+    id=${resolved%% *}
+    rc=0
+    ( command_open "$id" ) || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      printf 'skipped: %s (not an open captain call)\n' "$id"
+      continue
+    fi
+    acquire_task_control_lock "$id"
+    task_show_or_fail "$id" "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
+    body=$(decode_shown_value "$(show_field "$show" body)") \
+      || fail "could not decode the existing body for $id"
+    case $'\n'"$body"$'\n' in
+      *$'\n'"$line"$'\n'*)
+        release_task_control_lock
+        printf 'linked: %s %s\n' "$id" "$url"
+        continue
+        ;;
+    esac
+    stamp=${FM_CAPTAIN_HOLD_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+    tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-board.XXXXXX") \
+      || fail "cannot stage the board link"
+    if ! printf '%s\n\n%s\nBoard handed over from %s at %s.\n' "$body" "$line" "$origin" "$stamp" > "$tmp" \
+      || ! tasks_axi update "$id" --body-file "$tmp" >/dev/null; then
+      rm -f -- "$tmp"
+      fail "could not record the board link on $id"
+    fi
+    rm -f -- "$tmp"
+    release_task_control_lock
+    printf 'linked: %s %s\n' "$id" "$url"
+  done <<EOF
+$(printf '%s\n' "$keys" | tr ',' '\n')
+EOF
+}
+
 command_complete() {
   local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open has_meta=0 transfer_rc transfers=() resolved
   local resolved_how attested_by_prefix='' origin_state unrecorded_origin=''
@@ -2502,6 +2567,7 @@ case "${1:-}" in
   unbind) shift; command_unbind "$@" ;;
   binding) shift; command_binding "$@" ;;
   complete) shift; command_complete "$@" ;;
+  board-link) shift; command_board_link "$@" ;;
   verify) shift; command_verify "$@" ;;
   open) shift; command_open "$@" ;;
   diverged) shift; command_diverged "$@" ;;

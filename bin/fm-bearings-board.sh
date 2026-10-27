@@ -451,20 +451,10 @@ lavish_status_field() {  # <lavish-axi output>
   printf '%s\n' "$1" | sed -n 's/^[[:space:]]*status:[[:space:]]*//p' | head -1 | tr -d '"'
 }
 
-# The server's own listing, keyed on the canonical artifact path. Rows are
-# `<file>,<status>,"<url>",<pending>`, and only a live session is listed `open`.
+# The server's own listing, read through the Lavish adapter that owns its
+# format; only a live session is listed `open`.
 lavish_session_listed_open() {  # <canonical-board-path>
-  local listing
-  listing=$(lavish-axi 2>/dev/null) || return 1
-  printf '%s\n' "$listing" | awk -v path="$1" '
-    { line = $0; sub(/^[[:space:]]+/, "", line) }
-    index(line, path ",") == 1 {
-      rest = substr(line, length(path) + 2)
-      split(rest, field, ",")
-      if (field[1] == "open") { found = 1 }
-    }
-    END { exit found ? 0 : 1 }
-  '
+  "$SCRIPT_DIR/fm-procevent-lavish.sh" listed-open "$1" 2>/dev/null
 }
 
 lavish_board_live() {  # <establish output> <canonical-board-path>

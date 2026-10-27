@@ -4084,6 +4084,133 @@ test_teardown_retires_the_task_owned_boards() {
   pass "teardown retires the task's own review boards and keeps one holding an unread round"
 }
 
+# A finished scout whose board carries a held captain call hands that board to
+# firstmate before its endpoint closes: the board keeps its link, the link is
+# recorded on the held call, and an answer the captain gives on the board after
+# the scout is gone still resolves that call through the keyed-answer intake.
+# A board with an unread round refuses the teardown with nothing changed.
+scout_board_case() {  # <name>: a scout with a held call and a board armed for it
+  local case_dir=$1 hold=task-x1-call
+  write_meta "$case_dir" no-mistakes scout
+  prepare_scout_teardown "$case_dir"
+  export FM_PROCEVENT_CLAIM_ROOT="$case_dir/claims" LAVISH_AXI_STATE_DIR="$case_dir/lavish-state"
+  fm_test_track_procevent_home "$case_dir" "$case_dir/claims"
+  fm_test_tasks_toml "$case_dir/.tasks.toml"
+  seed_backlog_in_flight "$case_dir" scout
+  cat > "$case_dir/fakebin/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+d=${LAVISH_AXI_STATE_DIR:?}
+case "${1-}" in
+  --version) printf '0.1.93\n'; exit 0 ;;
+  '')
+    printf 'sessions[1]{file,status,url,pending_prompts}:\n'
+    [ ! -s "$d/open" ] || printf '  %s,open,"x",0\n' "$(cat "$d/open")"
+    exit 0
+    ;;
+  poll)
+    while [ ! -e "$d/answer" ] && [ ! -e "$d/note" ]; do
+      [ "$SECONDS" -lt "${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}" ] || exit 75
+      sleep 0.05
+    done
+    if [ -e "$d/note" ]; then
+      rm -f "$d/note"
+      printf 'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","not yet","","message",""\n'
+      exit 0
+    fi
+    rm -f "$d/answer"
+    cat <<EOF
+session:
+  status: feedback
+  session_ended: false
+prompts[1]{uid,prompt,selector,tag,text}:
+  "2","Layout: wide\\n\\nContext data:\\n{\\n  \\"schema\\": \\"fm-bearings-answer.v1\\",\\n  \\"question\\": \\"task-x1-call\\",\\n  \\"selection\\": \\"wide\\",\\n  \\"note\\": \\"\\"\\n}","form",choice,"Layout: wide"
+EOF
+    exit 0
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/lavish-axi"
+  mkdir -p "$case_dir/data/task-x1" "$LAVISH_AXI_STATE_DIR"
+  printf '<h1>board</h1>\n' > "$case_dir/data/task-x1/board.html"
+  board=$(cd "$case_dir/data/task-x1" && pwd -P)/board.html
+  printf '%s\n' "$board" > "$LAVISH_AXI_STATE_DIR/open"
+  jq -n --arg file "$board" \
+    '{sessions:{"0123456789abcdef":{file:$file,status:"open",url:"http://127.0.0.1:14387/session/0123456789abcdef"}}}' \
+    > "$LAVISH_AXI_STATE_DIR/state.json"
+  case_env=(env FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" FM_DATA_OVERRIDE="$case_dir/data"
+    FM_CONFIG_OVERRIDE="$case_dir/config" PATH="$case_dir/fakebin:$PATH")
+  "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" hold "$hold" --title "Pick the layout" \
+    --reason "layout call on the scout board" --repo sample --origin task-x1 >/dev/null \
+    || fail "$case_dir: could not hold the scout's captain call"
+  "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" complete task-x1 "$hold" >/dev/null \
+    || fail "$case_dir: could not attest the scout's captain-call inventory"
+  "${case_env[@]}" "$ROOT/bin/fm-procevent-lavish.sh" arm "$board" --for task-x1 >/dev/null \
+    || fail "$case_dir: could not arm the scout's board"
+  sid=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$board")
+}
+
+test_scout_teardown_hands_its_board_to_firstmate() {
+  local case_dir board sid show rc
+  local -a case_env
+  command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; return 0; }
+  case_dir=$(make_case scout-board-handover)
+  scout_board_case "$case_dir"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "scout-board-handover: teardown failed: $(cat "$case_dir/stderr")"
+  assert_absent "$case_dir/state/task-x1.meta" "scout-board-handover: teardown did not complete"
+  assert_grep "adopted: $sid (from task task-x1)" "$case_dir/stdout" \
+    "scout-board-handover: teardown did not hand the board to firstmate"
+  grep -qx 'adopted_from=task-x1' "$case_dir/state/procevent/$sid.source" \
+    || fail "scout-board-handover: the board is not firstmate's after teardown"
+  [ "$("${case_env[@]}" "$ROOT/bin/fm-procevent.sh" list | awk -v id="$sid" '$1 == id { print $3 }')" = live ] \
+    || fail "scout-board-handover: the handed-over board is not listening"
+  show=$(cd "$case_dir" && tasks-axi show task-x1-call --full --file "$case_dir/data/backlog.md")
+  assert_contains "$show" "Captain hold board: http://127.0.0.1:14387/session/0123456789abcdef" \
+    "scout-board-handover: the board's link was not recorded on the held call"
+
+  : > "$LAVISH_AXI_STATE_DIR/answer"
+  for _ in $(seq 1 200); do
+    show=$(cd "$case_dir" && tasks-axi show task-x1-call --full --file "$case_dir/data/backlog.md")
+    case "$show" in *"state: done"*) break ;; esac
+    sleep 0.1
+  done
+  assert_contains "$show" "state: done" "scout-board-handover: an answer on the adopted board did not resolve the held call"
+  assert_contains "$show" "Resolution mode: answered" \
+    "scout-board-handover: the held call was not closed through the keyed-answer intake"
+  unset FM_PROCEVENT_CLAIM_ROOT LAVISH_AXI_STATE_DIR
+  pass "scout teardown hands its board to firstmate, and an answer there resolves the held call"
+}
+
+test_scout_teardown_refuses_while_its_board_has_an_unread_round() {
+  local case_dir board sid rc
+  local -a case_env
+  command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; return 0; }
+  case_dir=$(make_case scout-board-unread)
+  scout_board_case "$case_dir"
+  : > "$LAVISH_AXI_STATE_DIR/note"
+  for _ in $(seq 1 200); do [ -e "$case_dir/state/procevent-inbox/$sid.1.result" ] && break; sleep 0.1; done
+  [ -e "$case_dir/state/procevent-inbox/$sid.1.result" ] \
+    || fail "scout-board-unread: fixture round was not captured"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 1 "$rc" "scout-board-unread: teardown should refuse a board with an unread round"
+  assert_grep "kept: $sid 1" "$case_dir/stdout" "scout-board-unread: teardown did not name the unread round"
+  assert_grep "unread round on its review board" "$case_dir/stderr" "scout-board-unread: no refusal naming the round"
+  assert_present "$case_dir/state/task-x1.meta" "scout-board-unread: the refusal removed the scout's record"
+  grep -qx 'kind=task-owned' "$case_dir/state/procevent/$sid.source" \
+    || fail "scout-board-unread: the board left the scout before its round was read"
+  [ ! -e "$case_dir/state/procevent-inbox/$sid.1.handled" ] \
+    || fail "scout-board-unread: the refusal acknowledged the captain's words"
+  "${case_env[@]}" "$ROOT/bin/fm-procevent.sh" handled "$sid" 1 >/dev/null 2>&1 || true
+  "${case_env[@]}" "$ROOT/bin/fm-procevent.sh" retire "$sid" >/dev/null 2>&1 || true
+  unset FM_PROCEVENT_CLAIM_ROOT LAVISH_AXI_STATE_DIR
+  pass "scout teardown refuses, with nothing changed, while its board holds an unread round"
+}
+
 test_teardown_retains_journal_bound_to_another_pane() {
   local case_dir log closed restored
   case_dir=$(make_case retain-drifted-journal)
@@ -5639,6 +5766,8 @@ test_herdr_projection_teardown_retains_journal_when_close_unconfirmed
 test_herdr_projection_teardown_surfaces_restore_failure_without_blocking_cleanup
 test_teardown_retires_task_watcher_markers_and_orphan_journal
 test_teardown_retires_the_task_owned_boards
+test_scout_teardown_hands_its_board_to_firstmate
+test_scout_teardown_refuses_while_its_board_has_an_unread_round
 test_teardown_retains_journal_bound_to_another_pane
 test_teardown_retires_v1_journal_when_projected_workspace_gone
 test_teardown_retains_v1_journal_when_projected_workspace_present

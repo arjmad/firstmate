@@ -5476,4 +5476,144 @@ assert_absent "$RTASK/home/state/procevent/$rt_other.source" \
 [ -e "$RTASK/home/state/procevent/$rt_fm.source" ] || fail "reconcile retired firstmate's own board"
 pass "retire-task retires a torn-down task's boards and keeps only a round it left unread, which then reaches firstmate"
 
+# --- end-user-aligned regression: a finished task hands its boards over -----
+# adopt-task moves a worker-owned board to firstmate so it outlives the worker:
+# an open session keeps its link, an idle one is resumed and reports the moved
+# link, one the captain ended is left for retire-task, and an unread round keeps
+# its board with the task. The handed-over board is bound to the keyed-answer
+# intake, listening under firstmate, survives the task's record, and its next
+# round reaches firstmate rather than the gone worker.
+ADOPT="$TMP_ROOT/adopt-task"; new_home "$ADOPT/home"
+ADOPT_BIN=$(fm_fakebin "$ADOPT/bin")
+cat > "$ADOPT_BIN/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+d=${ADOPT_FAKE:?}
+case "${1-}" in
+  --version) printf '0.1.93\n'; exit 0 ;;
+  '')
+    printf 'sessions[1]{file,status,url,pending_prompts}:\n'
+    [ ! -s "$d/open" ] || while IFS= read -r f; do printf '  %s,open,"x",0\n' "$f"; done < "$d/open"
+    exit 0
+    ;;
+  poll)
+    art=${2-}
+    while [ ! -e "$art.go" ]; do
+      [ "$SECONDS" -lt "${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}" ] || exit 75
+      sleep 0.02
+    done
+    rm -f "$art.go"
+    cat "$art.reply"
+    exit 0
+    ;;
+esac
+art=$1
+real=$(cd "$(dirname "$art")" && pwd -P)/$(basename "$art")
+if [ -e "$art.ended" ]; then printf 'session:\n  status: user-ended\n'; exit 0; fi
+printf '%s\n' "$real" >> "$d/open"
+[ ! -e "$art.resume-url" ] || "$ADOPT_SESSION" "$art" "$(cat "$art.resume-url")"
+printf 'session:\n  status: opened\n'
+SH
+chmod +x "$ADOPT_BIN/lavish-axi"
+cat > "$ADOPT_BIN/session" <<SH
+#!/usr/bin/env bash
+LAVISH_AXI_STATE_DIR='$LAVISH_AXI_STATE_DIR'
+$(declare -f lavish_session)
+lavish_session "\$@"
+SH
+chmod +x "$ADOPT_BIN/session"
+export ADOPT_FAKE="$ADOPT" ADOPT_SESSION="$ADOPT_BIN/session"
+fm_test_track_procevent_home "$ADOPT/home"
+for w in worker-a worker-b worker-c worker-d; do new_task_endpoint "$ADOPT/home" "$w"; done
+ad_hex16() {  # <name>: a fixed 16-hex Lavish session id for a board name
+  local h
+  h=$(printf '%s' "$1" | od -An -tx1 | tr -d ' \n')
+  printf '%s\n' "${h}0000000000000000" | cut -c1-16
+}
+adopt_board() {  # <name> [open]: create a board and print its source id
+  printf '<h1>%s</h1>\n' "$1" > "$ADOPT/$1.html"
+  lavish_session "$ADOPT/$1.html" "http://127.0.0.1:14387/session/$(ad_hex16 "$1")"
+  [ "${2-}" != open ] || (cd "$ADOPT" && pwd -P | sed "s|\$|/$1.html|") >> "$ADOPT/open"
+  "$ROOT/bin/fm-procevent-lavish.sh" source-id "$ADOPT/$1.html"
+}
+ad() { PATH="$ADOPT_BIN:$PATH" pe "$ADOPT/home" "$@"; }
+ad_arm() { PATH="$ADOPT_BIN:$PATH" FM_HOME="$ADOPT/home" "$ROOT/bin/fm-procevent-lavish.sh" arm "$@" >/dev/null; }
+ad_live=$(adopt_board live open)
+ad_unread=$(adopt_board unread open)
+ad_idle=$(adopt_board idle)
+ad_ended=$(adopt_board ended)
+ad_other=$(adopt_board other open)
+ad_fm=$(adopt_board firstmate open)
+for b in live unread; do ad_arm "$ADOPT/$b.html" --for worker-a || fail "fixture invalid: cannot arm $b"; done
+ad_arm "$ADOPT/idle.html" --for worker-c || fail "fixture invalid: cannot arm idle"
+ad_arm "$ADOPT/ended.html" --for worker-d || fail "fixture invalid: cannot arm ended"
+ad_arm "$ADOPT/other.html" --for worker-b || fail "fixture invalid: cannot arm another task's board"
+ad_arm "$ADOPT/firstmate.html" || fail "fixture invalid: cannot arm firstmate's board"
+printf 'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","make the chart bigger","","message",""\n' \
+  > "$ADOPT/unread.html.reply"
+touch "$ADOPT/unread.html.go"
+wait_for "$ADOPT/home/state/procevent-inbox/$ad_unread.1.result" 300 \
+  || fail "fixture invalid: the unread round was not captured"
+printf 'http://127.0.0.1:24387/session/%s\n' "$(ad_hex16 idle)" > "$ADOPT/idle.html.resume-url"
+touch "$ADOPT/ended.html.ended"
+
+ad_rc=0
+ad adopt-task worker-a > "$ADOPT/out-a" 2>&1 || ad_rc=$?
+[ "$ad_rc" -eq 3 ] || fail "adopt-task did not report the board it kept with exit 3 (got $ad_rc): $(cat "$ADOPT/out-a")"
+assert_contains "$(cat "$ADOPT/out-a")" "adopted: $ad_live (from task worker-a)" "adopt-task did not hand over the open board"
+assert_contains "$(cat "$ADOPT/out-a")" "link: $ad_live http://127.0.0.1:14387/session/" "adopt-task did not name the board's link"
+assert_not_contains "$(cat "$ADOPT/out-a")" "moved: $ad_live" "an open board's unchanged link was reported as moved"
+assert_contains "$(cat "$ADOPT/out-a")" "kept: $ad_unread 1" "adopt-task did not name the unread round it kept"
+grep -qx 'adopted_from=worker-a' "$ADOPT/home/state/procevent/$ad_live.source" \
+  || fail "the handed-over board does not record the task it came from"
+! grep -q '^kind=task-owned' "$ADOPT/home/state/procevent/$ad_live.source" \
+  || fail "the handed-over board is still task-owned"
+grep -qx 'kind=task-owned' "$ADOPT/home/state/procevent/$ad_unread.source" \
+  || fail "a board with an unread round left its task"
+[ ! -e "$ADOPT/home/state/procevent-inbox/$ad_unread.1.handled" ] \
+  || fail "adopt-task acknowledged a round that carried the captain's words"
+[ "$(FM_HOME="$ADOPT/home" "$ROOT/bin/fm-captain-hold.sh" binding "$ad_live")" = "(any)" ] \
+  || fail "the handed-over board is not bound to the keyed-answer intake"
+! FM_HOME="$ADOPT/home" "$ROOT/bin/fm-captain-hold.sh" binding "$ad_unread" >/dev/null 2>&1 \
+  || fail "a kept board was bound to the keyed-answer intake"
+[ "$(ad list | awk -v id="$ad_live" '$1 == id { print $3 }')" = live ] \
+  || fail "the handed-over board is not listening under firstmate: $(ad list)"
+
+ad_rc=0
+ad adopt-task worker-c > "$ADOPT/out-c" 2>&1 || ad_rc=$?
+[ "$ad_rc" -eq 0 ] || fail "adopt-task could not hand over an idle board (exit $ad_rc): $(cat "$ADOPT/out-c")"
+assert_contains "$(cat "$ADOPT/out-c")" "link: $ad_idle http://127.0.0.1:24387/session/" "a resumed board did not report its new link"
+assert_contains "$(cat "$ADOPT/out-c")" "moved: $ad_idle http://127.0.0.1:14387/session/" "a resumed board did not report the link it moved from"
+
+ad_rc=0
+ad adopt-task worker-d > "$ADOPT/out-d" 2>&1 || ad_rc=$?
+[ "$ad_rc" -eq 0 ] || fail "a board the captain ended failed the handover (exit $ad_rc): $(cat "$ADOPT/out-d")"
+assert_contains "$(cat "$ADOPT/out-d")" "ended: $ad_ended" "adopt-task did not report a board the captain ended"
+grep -qx 'kind=task-owned' "$ADOPT/home/state/procevent/$ad_ended.source" \
+  || fail "a board the captain ended was handed over instead of left for retire-task"
+
+# Once the unread round is read and acknowledged, a rerun hands that board over
+# and finishes the one already handed over without disturbing its listener.
+ad handled "$ad_unread" 1 >/dev/null
+ad_rc=0
+ad adopt-task worker-a > "$ADOPT/out-a2" 2>&1 || ad_rc=$?
+[ "$ad_rc" -eq 0 ] || fail "the rerun did not finish the handover (exit $ad_rc): $(cat "$ADOPT/out-a2")"
+assert_contains "$(cat "$ADOPT/out-a2")" "adopted: $ad_unread (from task worker-a)" "the rerun did not hand over the acknowledged board"
+assert_contains "$(cat "$ADOPT/out-a2")" "adopted: $ad_live (from task worker-a)" "the rerun did not confirm the board it already handed over"
+grep -qx 'kind=task-owned' "$ADOPT/home/state/procevent/$ad_other.source" || fail "adopt-task touched another task's board"
+! grep -q '^adopted_from=' "$ADOPT/home/state/procevent/$ad_fm.source" || fail "adopt-task touched firstmate's board"
+
+# The worker's record goes, as teardown removes it; the handed-over board keeps
+# listening, and the captain's next words reach firstmate, not the gone task.
+rm -rf "$ADOPT/home/state/worker-a.meta" "$ADOPT/home/state/worker-a.inbox"
+ad reconcile >/dev/null 2>&1 || true
+[ -e "$ADOPT/home/state/procevent/$ad_live.source" ] || fail "reconcile retired a board firstmate adopted"
+printf 'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","ship option b","","message",""\n' \
+  > "$ADOPT/live.html.reply"
+touch "$ADOPT/live.html.go"
+for _ in $(seq 1 300); do wake_payloads "$ADOPT/home" | grep -q "$ad_live" && break; sleep 0.1; done
+assert_contains "$(wake_payloads "$ADOPT/home")" "$ad_live" "the adopted board's round did not reach firstmate"
+assert_absent "$ADOPT/home/state/worker-a.inbox" "the adopted board's round was delivered to the gone worker"
+unset ADOPT_FAKE ADOPT_SESSION
+pass "adopt-task hands a finished task's boards to firstmate, keeps one with an unread round, and leaves an ended one for retirement"
+
 printf '\nall procevent tests passed\n'

@@ -14,6 +14,8 @@
 #   fm-procevent-lavish.sh retire <artifact.html>
 #   fm-procevent-lavish.sh poll <artifact.html> [--agent-reply-file <path>]
 #   fm-procevent-lavish.sh deliver-reply poll <artifact.html> --agent-reply-file <path>
+#   fm-procevent-lavish.sh adopt poll <artifact.html> [--agent-reply-file <path>]
+#   fm-procevent-lavish.sh listed-open <artifact.html>
 #
 # classify   Print the lifecycle state a handler should act on: feedback, ended,
 #            waiting, disconnected, interrupted, missing, or unknown.
@@ -58,6 +60,19 @@
 #            3 when the installed Lavish is a confirmed older release without
 #            synchronous reply so the listener keeps the legacy path, and any
 #            other status when the reply failed or the version is unknown.
+# adopt      Run by `fm-procevent.sh adopt-task` with the listener argv it is
+#            about to hand from a finished worker to firstmate. It proves the
+#            board can still be served: an open session stays as it is, an idle
+#            one is resumed with a plain `lavish-axi <artifact>` (never
+#            `--reopen`), and one the captain ended from the browser exits 4 so
+#            the board is retired instead. It prints `link: <url>` in the
+#            phone-openable form bin/fm-lavish-url.sh gives, plus
+#            `moved-from: <url>` (or `none`) when the saved session link
+#            changed, so the caller can record the new link where the captain
+#            will find it. Any other failure exits nonzero and nothing moves.
+# listed-open
+#            Exit 0 only when the Lavish server's own session listing shows the
+#            artifact's canonical path `open`; the one parser of that listing.
 # terminal   Exit 0 when the captured result means this Lavish source will never
 #            produce another result, so the runner may retire it; any other exit
 #            keeps it armed. This is the generic adapter contract bin/fm-procevent.sh
@@ -209,12 +224,13 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 usage() { sed -n '2,/^set -u$/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; exit 2; }
 
-apply_session_host() {  # <artifact>
-  local endpoint
-  endpoint=$(perl -MJSON::PP -MCwd=realpath -MEncode=decode,FB_CROAK -e '
+# The board's saved Lavish session, validated: its URL with `url`, otherwise
+# the server host and port on two lines.
+saved_session() {  # <artifact> [url]
+  perl -MJSON::PP -MCwd=realpath -MEncode=decode,FB_CROAK -e '
     use strict;
     use warnings;
-    my ($path, $artifact) = @ARGV;
+    my ($path, $artifact, $want) = @ARGV;
     my $real = realpath($artifact) // die "cannot resolve board artifact\n";
     $real = decode("UTF-8", $real, FB_CROAK);
     open my $file, "<", $path or die "cannot read Lavish session store\n";
@@ -243,8 +259,13 @@ apply_session_host() {  # <artifact>
     $host =~ s/^\[|\]$//g;
     $host ne "0.0.0.0" && $host ne "::" && $port >= 1 && $port <= 65535
       or die "invalid saved Lavish server address\n";
-    print "$host\n$port\n";
-  ' "${LAVISH_AXI_STATE_DIR:-$HOME/.lavish-axi}/state.json" "$1") \
+    print defined($want) && $want eq "url" ? "$url\n" : "$host\n$port\n";
+  ' "${LAVISH_AXI_STATE_DIR:-$HOME/.lavish-axi}/state.json" "$@"
+}
+
+apply_session_host() {  # <artifact>
+  local endpoint
+  endpoint=$(saved_session "$1") \
     || die "cannot resolve the board server from its Lavish session: $1"
   LAVISH_AXI_HOST=${endpoint%$'\n'*}
   LAVISH_AXI_PORT=${endpoint##*$'\n'}
@@ -351,6 +372,64 @@ cmd_arm() {
   printf 'armed: %s\n' "$id"
   printf 'artifact: %s\n' "$real"
   [ -z "$task" ] || printf 'owner-task: %s\n' "$task"
+}
+
+# The server's own session listing, keyed on the canonical artifact path. Rows
+# are `<file>,<status>,"<url>",<pending>`, and only a live session is `open`.
+cmd_listed_open() {
+  local artifact=${1-} real listing
+  [ "$#" -eq 1 ] && [ -n "$artifact" ] || usage
+  real=$(perl -MCwd=realpath -e '$p = realpath($ARGV[0]); defined($p) or exit 1; print "$p\n"' "$artifact" 2>/dev/null) \
+    || return 1
+  listing=$(lavish-axi 2>/dev/null) || return 1
+  printf '%s\n' "$listing" | awk -v path="$real" '
+    { line = $0; sub(/^[[:space:]]+/, "", line) }
+    index(line, path ",") == 1 {
+      rest = substr(line, length(path) + 2)
+      split(rest, field, ",")
+      if (field[1] == "open") { found = 1 }
+    }
+    END { exit found ? 0 : 1 }
+  '
+}
+
+phone_link() {  # <url>
+  local shown
+  shown=$("$SCRIPT_DIR/fm-lavish-url.sh" "$1" 2>/dev/null) && [ -n "$shown" ] || shown=$1
+  printf '%s\n' "$shown"
+}
+
+cmd_adopt() {
+  local artifact real before after out status
+  [ "$#" -ge 2 ] && [ "$1" = poll ] || usage
+  artifact=$2
+  command -v lavish-axi >/dev/null 2>&1 || die "lavish-axi is not installed"
+  real=$(perl -MCwd=realpath -e '$p = realpath($ARGV[0]); defined($p) or exit 1; print "$p\n"' "$artifact" 2>/dev/null) \
+    || die "the board artifact is gone: $artifact"
+  [ -f "$real" ] || die "the board artifact is gone: $artifact"
+  before=$(saved_session "$real" url 2>/dev/null) || before=''
+  if ! cmd_listed_open "$real"; then
+    # A plain open resumes a session that is merely idle and refuses one the
+    # captain ended from the browser; adoption never forces a reopen.
+    out=$(lavish-axi "$real" 2>&1) || true
+    if ! cmd_listed_open "$real"; then
+      status=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*status:[[:space:]]*//p' | head -1 | tr -d '"')
+      if [ "$status" = user-ended ]; then
+        printf 'the captain ended this board from the browser\n'
+        exit 4
+      fi
+      die "the board's Lavish session is not open and could not be resumed (status ${status:-none})"
+    fi
+  fi
+  after=$(saved_session "$real" url 2>/dev/null) || die "cannot read the board's Lavish session link"
+  printf 'link: %s\n' "$(phone_link "$after")"
+  if [ "$before" != "$after" ]; then
+    if [ -n "$before" ]; then
+      printf 'moved-from: %s\n' "$(phone_link "$before")"
+    else
+      printf 'moved-from: none\n'
+    fi
+  fi
 }
 
 cmd_deliver_reply() {
@@ -1204,6 +1283,8 @@ case "${1-}" in
   retire)    shift; cmd_retire "$@" ;;
   poll)      shift; cmd_poll "$@" ;;
   deliver-reply) shift; cmd_deliver_reply "$@" ;;
+  adopt)     shift; cmd_adopt "$@" ;;
+  listed-open) shift; cmd_listed_open "$@" ;;
   source-id) shift; cmd_source_id "$@" ;;
   classify)  shift; cmd_classify "$@" ;;
   terminal)  shift; cmd_terminal "$@" ;;
