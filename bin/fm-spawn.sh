@@ -2593,6 +2593,13 @@ launch_template() {
   # sources are not guaranteed to load that scope, so a worker would
   # otherwise run with attribution back on; carrying it per launch keeps the
   # policy in force regardless of which settings scopes end up loaded.
+  # A ship or scout's inline JSON also turns off the Artifact tool
+  # ("enableArtifact": false) and claude.ai connectors
+  # ("disableClaudeAiConnectors": true), which fleet guidance already forbids a
+  # worker from using and which cost every worker turn ~14k tokens of tool text
+  # (docs/fork-decisions/2026-10-27-worker-no-artifact-connectors.md). Off in
+  # --settings wins over user and project settings for both keys (Claude Code
+  # 2.1.310 settings schema). A secondmate and the helm keep both.
   # Claude Code's --settings flag takes one value, a file path or an inline
   # JSON string (https://code.claude.com/docs/en/cli-reference). A secondmate's
   # busy hooks share that value, in state/<id>.claude-settings.json, and the
@@ -6496,7 +6503,7 @@ case "$LAUNCH" in
   if [ "$KIND" = secondmate ]; then
     LAUNCH=${LAUNCH//__CLAUDESETTINGS__/$(shell_quote "$STATE_REAL/$ID.claude-settings.json")}
   else
-    claude_settings="'{\"feedbackDrafts\":\"off\"__CLAUDEATTRIBUTION__}'"
+    claude_settings="'{\"feedbackDrafts\":\"off\",\"enableArtifact\":false,\"disableClaudeAiConnectors\":true__CLAUDEATTRIBUTION__}'"
     LAUNCH=${LAUNCH//__CLAUDESETTINGS__/$claude_settings}
   fi
   ;;
