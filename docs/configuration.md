@@ -606,7 +606,8 @@ The single-project form syncs only that project's entries, and the whole-fleet f
 A live checkout gets the same never-forced guards as a clone: anything dirty, ahead, diverged, or off its default branch is left untouched and reported `STUCK:`.
 A held `lock=` path defers the checkout, after a short bounded wait in the single-project form and without waiting in the whole-fleet form.
 The post-update command runs once for each new HEAD and is retried on the next sync after a failure, whose `STUCK:` line ends with the command's last few output lines.
-A `capture=` entry is for a checkout edited in place, such as a writable skills tree that a capture job turns into a PR: when only uncommitted edits under that directory hold the checkout, the sync starts the capture command detached once per edit state and reports `capturing:` instead of `STUCK:`, defers the checkout while that capture runs, and reports `STUCK:` again when the finished capture did not clear the checkout or failed.
+A `capture=` entry is for a checkout edited in place, such as a writable skills tree that a capture job turns into a PR: when only uncommitted edits under that directory hold the checkout, the sync starts the capture command detached once per edit state and reports `capturing:` instead of `STUCK:`, and defers the checkout while that capture runs.
+Once the capture has finished, edits it did not clear on a checkout already at its origin default branch read `live edits pending capture:`, which wakes no one because they block no fast-forward, and the same edits on a checkout behind or ahead of origin report `STUCK:`.
 An entry naming the Firstmate home itself is refused, because Firstmate updates itself only through `/updatefirstmate`.
 
 The list names host paths and is not inherited by secondmate homes.
