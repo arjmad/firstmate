@@ -5329,6 +5329,43 @@ test_send_text_submit_claude_titled_wrapped_doorbell_is_proven_and_submitted() {
   pass "fm_backend_herdr_send_text_submit: a wrapped doorbell under a titled Claude top rule is proven and submitted"
 }
 
+# A narrow pane shortens the dash run Claude draws before a long session title
+# (Claude Code 2.1.310: 7 dashes at 42 columns for a 32-column scout title).
+# The titled-rule proof once demanded 8, so the idle composer read as no
+# composer, the pre-type read refused, and every ring reported send-failed.
+test_send_text_submit_claude_narrow_titled_doorbell_is_proven_and_submitted() {
+  local dir log resp fb out enter_count text top rule
+  dir="$TMP_ROOT/submit-claude-narrow-titled"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  # shellcheck disable=SC2016 # the doorbell names $FM_TASK_INBOX literally
+  text=': Firstmate instruction waiting: list "$FM_TASK_INBOX"/*.msg in your '\''claude-code-optimize-1027.inbox'\'' steering inbox, read and act on each in numeric order, then mv each into its handled/.'
+  herdr_submit_claude_prefix "$resp" "$text"
+  top="$(printf '%0.s\xe2\x94\x80' $(seq 1 7)) scout: claude-code-optimize-1027 \xe2\x94\x80"
+  rule=$(printf '%0.s\xe2\x94\x80' $(seq 1 42))
+  {
+    printf '%b\n' "$top"
+    printf '\xe2\x9d\xaf\xc2\xa0\n'
+    printf '%s\n' "$rule"
+    printf '  \xe2\x8f\xb5\xe2\x8f\xb5 bypass permissions on (shift+tab to\n'
+  } > "$resp/2.out"
+  {
+    printf '%b\n' "$top"
+    printf '\xe2\x9d\xaf\xc2\xa0%s\n' "${text:0:38}"
+    printf '  %s\n' "${text:38:31}" "${text:69:33}" "${text:102:36}" "${text:138:35}" "${text:173}"
+    printf '%s\n' "$rule"
+    printf '  \xe2\x8f\xb5\xe2\x8f\xb5 bypass permissions on (shift+tab to\n'
+  } > "$resp/4.out"
+  printf '{"result":{"agent":{"agent":"claude","agent_status":"idle"}}}\n' > "$resp/5.out"
+  printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/7.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "$1" 3 0.01 0.01' "$ROOT" "$text" )
+  [ "$out" = empty ] || fail "a doorbell under a narrow titled Claude rule must be proven and submitted, got '$out'"
+  enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
+  [ "$enter_count" -eq 1 ] || fail "the proven narrow-titled doorbell should be submitted once, sent $enter_count Enter(s)"
+  [ "$(herdr_ctrl_u_count "$log")" -eq 0 ] || fail "a proven narrow-titled doorbell must not be cleared"
+  pass "fm_backend_herdr_send_text_submit: a doorbell under a narrow titled Claude rule is proven and submitted"
+}
+
 test_send_text_submit_lone_paste_placeholder_submits_the_long_payload() {
   local dir log resp fb out enter_count text
   dir="$TMP_ROOT/submit-paste-placeholder"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -6241,6 +6278,7 @@ test_composer_state_claude_slash_popup_pushes_composer_above_tail_window
 test_send_text_submit_claude_slash_popup_composer_is_still_proven_and_submitted
 test_send_text_submit_claude_grey_slash_command_is_proven_and_submitted
 test_send_text_submit_claude_titled_wrapped_doorbell_is_proven_and_submitted
+test_send_text_submit_claude_narrow_titled_doorbell_is_proven_and_submitted
 test_send_text_submit_lone_paste_placeholder_submits_the_long_payload
 test_send_text_submit_multiline_paste_placeholder_submits_the_long_payload
 test_send_text_submit_refuses_placeholder_followed_by_a_literal_remainder

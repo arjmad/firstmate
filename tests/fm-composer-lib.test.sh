@@ -1072,6 +1072,21 @@ test_matrix_claude_titled_top_rule() {
   # The rule must open with the strict separator's dash run.
   flush=" Firstmate operational input 1790546042 ${rule}────"$'\n❯'"$NBSP"$'\n'"$bottom"
   assert_screen "title flush at the rule's start" unknown "$CAPS_STYLED_NOID" "$flush"
+  # Claude shortens the dash run before the title as the pane narrows: a
+  # 32-column scout title leaves 7 dashes at 42 columns and 1 at 36 (Claude
+  # Code 2.1.310, live). Matching the closing rule's width is the proof, so a
+  # shorter opening run is still this composer's top edge.
+  for n in 7 1; do
+    top=$(printf '%0.s─' $(seq 1 "$n"))' scout: claude-code-optimize-1027 ─'
+    bottom=$(printf '%0.s─' $(seq 1 $((n + 35))))
+    assert_screen "narrow titled claude idle, $n-dash run, on herdr" empty "$CAPS_STYLED" \
+      "$top"$'\n❯'"$NBSP"$'\n'"$bottom"$'\n'"$footer" '' "$claude_idle"
+    wrapped="$top"$'\n❯ : Firstmate instruction waiting: list\n  "$FM_TASK_INBOX"/*.msg in your\n  its handled/.\n'"$bottom"$'\n'"$footer"
+    assert_screen "narrow titled claude wrapped doorbell, $n-dash run, on herdr" pending "$CAPS_STYLED" \
+      "$wrapped" '' "$claude_idle"
+  done
+  top="${rule}───${title}─"
+  bottom="${rule}────────────────────────────────────────────"
   # The strict blank-row posture is untouched: no glyph row, no proof.
   blank="$top"$'\n\n'"$bottom"
   assert_screen "titled rule over a blank row" unknown "$CAPS_STYLED_NOID" "$blank"
