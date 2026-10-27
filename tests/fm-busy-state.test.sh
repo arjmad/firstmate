@@ -583,6 +583,16 @@ test_progress_is_generation_bound_and_not_semantic_state() {
   [ -f "$state/t1.progress" ] || fail "progress marker missing"
   [ ! -e "$state/t1.turn-ended" ] || fail "progress emitted a completed turn"
   [ "$(cat "$state/t1.busy-state")" = "$before" ] || fail "progress changed semantic state"
+  # A Claude /clear ends the bound session and starts another in the same process.
+  apply_from_session "$state" t1 "$gen" worker idle session-end || fail "the bound session's end was refused"
+  apply_from_session "$state" t1 "$gen" cleared busy user-prompt-submit \
+    || fail "the session after the bound one ended must bind"
+  apply_from_session "$state" t1 "$gen" worker idle stop 2>/dev/null
+  expect_code 3 $? "the ended session must not write after another bound"
+  rm -f "$state/t1.busy-session"
+  ln -s "$TMP_ROOT/elsewhere" "$state/t1.busy-session"
+  apply_from_session "$state" t1 "$gen" nested idle stop 2>/dev/null
+  expect_code 3 $? "a non-regular session sidecar must fail closed"
   replacement=$("$EV" arm "$state" t1)
   [ ! -e "$state/t1.progress" ] || fail "arm retained the previous incarnation's progress"
   if "$EV" progress "$state" t1 --gen "$gen" 2>/dev/null; then fail "stale progress was accepted"; fi
@@ -632,9 +642,8 @@ test_session_binding_refuses_a_foreign_session() {
     || fail "the first session-carrying event was refused"
   before=$(cat "$state/t1.busy-state")
   for event in user-prompt-submit stop session-end; do
-    if apply_from_session "$state" t1 "$gen" nested idle "$event" --turn-ended 2>/dev/null; then
-      fail "a foreign session's $event was accepted"
-    fi
+    apply_from_session "$state" t1 "$gen" nested idle "$event" --turn-ended 2>/dev/null
+    expect_code 3 $? "a foreign session's $event must be refused as foreign"
   done
   [ "$(cat "$state/t1.busy-state")" = "$before" ] || fail "a foreign session changed the record"
   [ ! -e "$state/t1.turn-ended" ] || fail "a foreign session's Stop signalled a turn end"
@@ -649,13 +658,23 @@ test_session_binding_refuses_a_foreign_session() {
       --source claude-hook --event stop --session-from-payload 2>/dev/null; then
     fail "a payload naming no session was accepted"
   fi
+  # A Claude /clear ends the bound session and starts another in the same process.
+  apply_from_session "$state" t1 "$gen" worker idle session-end || fail "the bound session's end was refused"
+  apply_from_session "$state" t1 "$gen" cleared busy user-prompt-submit \
+    || fail "the session after the bound one ended must bind"
+  apply_from_session "$state" t1 "$gen" worker idle stop 2>/dev/null
+  expect_code 3 $? "the ended session must not write after another bound"
+  rm -f "$state/t1.busy-session"
+  ln -s "$TMP_ROOT/elsewhere" "$state/t1.busy-session"
+  apply_from_session "$state" t1 "$gen" nested idle stop 2>/dev/null
+  expect_code 3 $? "a non-regular session sidecar must fail closed"
   replacement=$("$EV" arm "$state" t1)
   apply_from_session "$state" t1 "$replacement" relaunched busy user-prompt-submit \
     || fail "a new incarnation must bind to its own first session"
   "$EV" retire "$state" t1 --gen "$replacement" || fail "retire failed"
   [ -z "$(find "$state" -name 't1.*' ! -name 't1.turn-ended')" ] \
     || fail "retire left incarnation files: $(ls "$state")"
-  pass "a gen binds to its first session, refuses every other session's events, and rebinds on arm"
+  pass "a gen binds to its first session, refuses every other session's events, and rebinds after the bound session ends or on arm"
 }
 
 test_progress_is_generation_bound_and_not_semantic_state

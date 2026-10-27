@@ -25,8 +25,10 @@
 #       hook that outlives its incarnation fails closed here.
 #       --session-from-payload reads the hook's JSON payload on stdin and takes
 #       its session_id. The first such event under a gen binds that session
-#       in state/<id>.busy-session; any other session is refused, and so is a
-#       payload naming no session (or a missing jq). The legacy
+#       in state/<id>.busy-session; any other session is refused with exit 3,
+#       and a payload naming no session (or a missing jq) with exit 1. A
+#       session-end event from the bound session releases the binding, so the
+#       session a Claude /clear starts in the same process binds next. The legacy
 #       Claude fm-send --key Escape path (fm-interrupt) and firstmate recovery
 #       paths (fm-recovery) may pass --current-gen to bind to the incarnation
 #       armed right now.
@@ -44,7 +46,8 @@
 #       is already retired, so any orphan record is removed idempotently.
 #
 # Exit codes: 0 applied; 1 refused (stale gen, unarmed task, lock timeout,
-# invalid input); 2 usage. Adapter hook command lines append `|| true` so a
+# invalid input); 2 usage; 3 refused because the event came from a session
+# other than the bound one. Adapter hook command lines append `|| true` so a
 # refusal never breaks the harness's own lifecycle.
 set -u
 
@@ -243,13 +246,16 @@ if [ "$CMD" = progress ]; then
   exit 0
 fi
 if [ -n "$SESSION" ]; then
-  if [ -f "$SESSION_FILE" ] && [ ! -L "$SESSION_FILE" ]; then
-    IFS= read -r bound < "$SESSION_FILE" 2>/dev/null || bound=
+  if [ -e "$SESSION_FILE" ] || [ -L "$SESSION_FILE" ]; then
+    bound=
+    if [ -f "$SESSION_FILE" ] && [ ! -L "$SESSION_FILE" ]; then
+      IFS= read -r bound < "$SESSION_FILE" 2>/dev/null || bound=
+    fi
     if [ "$bound" != "$SESSION" ]; then
       lock_release
       umask "$old_umask"
       echo "error: busy-state event for $ID from session $SESSION, not the bound endpoint session (event rejected)" >&2
-      exit 1
+      exit 3
     fi
   else
     { printf '%s\n' "$SESSION" > "$SESSION_FILE.tmp.$$" && mv -f "$SESSION_FILE.tmp.$$" "$SESSION_FILE"; } || {
@@ -280,6 +286,7 @@ write_record "$GEN" $((OLD_SEQ + 1)) || {
   echo "error: record write failed for $ID" >&2
   exit 1
 }
+[ -z "$SESSION" ] || [ "$EVENT" != session-end ] || rm -f "$SESSION_FILE"
 umask "$old_umask"
 # Best effort: the record already settled, so a failed touch never refuses it.
 [ "$TURN_ENDED" = 0 ] || touch "$STATE/$ID.turn-ended" 2>/dev/null || true

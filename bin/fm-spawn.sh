@@ -5796,9 +5796,10 @@ BUSY_GEN=
     # Each state event passes --session-from-payload: a claude run started
     # from the worker's shell in this directory loads the same hooks, and the
     # writer refuses its events because their session_id is not the session
-    # bound at the first event. Stop signals turn-ended through the writer
-    # for the same reason. PostToolUse stays unbound: a nested run is
-    # activity inside the worker's own tool call.
+    # bound at the first event. Stop skips its turn-ended touch only when
+    # the writer refuses it as that foreign session (exit 3). PostToolUse
+    # stays unbound: a nested run is activity inside the worker's own tool
+    # call.
     # A crewmate writes those hooks into the disposable worktree's
     # .claude/settings.local.json. A secondmate does not: that file in a
     # persistent home is where Claude Code stores the captain's "don't ask
@@ -5825,11 +5826,11 @@ BUSY_GEN=
       } >"$WT/.fm-busy-stop"
       exclude_path '.fm-busy-stop'
     else
-      stop_turnend=
+      stop_turnend="|| true"
       if [ "$busy_notify_turnend" = true ]; then
-        stop_turnend=" --turn-ended"
+        stop_turnend="; [ \$? -eq 3 ] || touch $(shell_quote "$TURNEND")"
       fi
-      j_stop=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop${stop_turnend} 2>/dev/null || true")
+      j_stop=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null $stop_turnend")
       stop_entry="\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stop\"}]}],"
     fi
     hooks_json="\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_submit\"}]}],\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_posttool\"}]}],${stop_entry}\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stopfail\"}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_sessionend\"}]}]}"

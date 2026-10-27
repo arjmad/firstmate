@@ -28,8 +28,9 @@
 # posted the gen's first session-carrying event. A session-carrying event
 # from any other session is rejected, so a nested agent run started inside
 # the worker's directory - which loads the same hook wiring, task id, and gen
-# - can never write the worker's record. Arm and retire clear it; events that
-# carry no session keep their gen-only check.
+# - can never write the worker's record. Arm and retire clear it, and so does
+# the bound session's own session-end, so the session a Claude /clear starts
+# binds next; events that carry no session keep their gen-only check.
 #
 # Semantic sources written by adapters (fm_busy_sources_for_harness owns the
 # per-harness trust table; a record whose source is not trusted for the
