@@ -25,9 +25,10 @@
 # `--also <repo>`, the URL is a companion PR that a task spawned with
 # bin/fm-spawn.sh --also opened in that dependent repository. It must name a
 # repo the task record lists in also=, and it is recorded only as
-# also_pr_<repo>=<url> (replacing an earlier one): pr=, pr_head=, and the
-# task's merge poll are left untouched, because the task's own PR stays the one
-# its landing and merge outcome follow. The draft refusal applies, and the
+# also_pr_<repo>=<url> (replacing an earlier one), ahead of the pr= block that
+# must end the record: pr=, pr_head=, and the task's merge poll keep their
+# values, because the task's own PR stays the one its landing and merge outcome
+# follow. The draft refusal applies, and the
 # named-head gate is judged against that repo's companion worktree.
 # bin/fm-teardown.sh reads also_pr_<repo>= for its landed-work check and
 # bin/fm-pr-merge.sh accepts a recorded companion PR.
@@ -175,8 +176,9 @@ if [ -n "$ALSO_REPO" ]; then
   META_LOCK=$(fm_meta_lock_path "$META") || exit 1
   fm_lock_acquire_wait "$META_LOCK"
   ALSO_TMP=$(mktemp "$STATE/.fm-pr-meta.XXXXXX") || { fm_lock_release "$META_LOCK"; exit 1; }
-  if ! { grep -v "^also_pr_$ALSO_REPO=" "$META" > "$ALSO_TMP" || [ "$?" -eq 1 ]; } \
-    || ! printf 'also_pr_%s=%s\n' "$ALSO_REPO" "$URL" >> "$ALSO_TMP" \
+  # The companion key goes before any pr= identity block, which
+  # fm_pr_metadata_identity_parse refuses unless it ends the record.
+  if ! fm_pr_meta_rewrite "$META" "also_pr_$ALSO_REPO" "also_pr_$ALSO_REPO=$URL" > "$ALSO_TMP" \
     || ! chmod 0600 "$ALSO_TMP" || ! mv -f -- "$ALSO_TMP" "$META"; then
     rm -f -- "$ALSO_TMP"
     fm_lock_release "$META_LOCK" || true
