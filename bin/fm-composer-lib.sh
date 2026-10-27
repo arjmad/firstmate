@@ -812,16 +812,18 @@ _fm_composer_pi_separator_row() {  # <trimmed-row>
 # conjunction, so it stays strictly dashes-only. This one has the single
 # consumer _fm_composer_bare_rule_sandwich.
 #
-# The row must OPEN with the same 8-column dash run the strict separator
-# requires. Width is proven by comparing canonical space strings, never by
-# `${#row}`, which counts characters under UTF-8 and bytes under LC_ALL=C
-# (issue #1988). Title text is ASCII-printable only, the same boundary
-# _fm_composer_titled_bottom_ok holds; any other glyph leaves residue, and the
-# verdict stays `unknown`, the safe direction.
+# The row must OPEN with a dash, never the title. Claude shortens that run as
+# the pane narrows (7 dashes at 42 columns before a 32-column title, 1 at 36,
+# on 2.1.310), so the strict separator's 8-column floor would refuse a live
+# composer; the width match is the proof. Width is proven by comparing
+# canonical space strings, never by `${#row}`, which counts characters under
+# UTF-8 and bytes under LC_ALL=C (issue #1988). Title text is ASCII-printable
+# only, the same boundary _fm_composer_titled_bottom_ok holds; any other glyph
+# leaves residue, and the verdict stays `unknown`, the safe direction.
 _fm_composer_titled_rule_row() {  # <trimmed-row> <plain-rule-spaces>
   local row=$1 expected=$2 spaces
   case "$row" in
-    ────────*) ;;
+    ─*) ;;
     *) return 1 ;;
   esac
   spaces=${row//─/ }
