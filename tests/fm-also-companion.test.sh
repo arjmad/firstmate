@@ -200,8 +200,43 @@ test_pr_check_records_a_companion_pr_without_arming() {
   pass "pr-check --also records a companion PR and leaves the task's own PR and poll alone"
 }
 
+test_pr_check_companion_after_the_main_pr_keeps_its_poll_valid() {
+  local id='also-prcheck-c2' out status wt main_url='https://github.com/o/sample/pull/9'
+  local url='https://github.com/o/jobs/pull/7'
+  make_case prcheck-order "$id" --also jobs
+  out=$(run_spawn "$id" --mode direct-PR --yolo off --also jobs)
+  expect_code 0 "$?" "the companion spawn failed: $out"
+  # Both branches are pushed, so each named head is reachable off its copy.
+  wt=$(grep '^worktree=' "$HOME_DIR/state/$id.meta" | tail -1 | cut -d= -f2-)
+  for dir in "$wt" "$JOBS_SLOT"; do
+    git -C "$dir" checkout --quiet -b "fm/$id"
+    printf 'change\n' > "$dir/change.txt"
+    git -C "$dir" add change.txt
+    git_commit "$dir" change
+    git -C "$dir" push --quiet origin "fm/$id"
+  done
+
+  out=$(PATH="$FAKEBIN_DIR:$PATH" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
+    "$ROOT/bin/fm-pr-check.sh" "$id" "$main_url" 2>&1)
+  expect_code 0 "$?" "pr-check of the main PR failed: $out"
+  out=$(PATH="$FAKEBIN_DIR:$PATH" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
+    "$ROOT/bin/fm-pr-check.sh" "$id" "$url" --also jobs 2>&1)
+  status=$?
+  expect_code 0 "$status" "pr-check --also failed: $out"
+  assert_grep "also_pr_jobs=$url" "$HOME_DIR/state/$id.meta" "the companion PR was not recorded"
+  # The watcher authenticates the main PR's poll through this gate and rejects
+  # the task's check when the record has any other key after pr=.
+  (
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-pr-lib.sh"
+    fm_pr_poll_artifacts_valid "$HOME_DIR/state" "$id" "$ROOT/bin/fm-pr-poll.sh"
+  ) || fail "a companion registered after the main PR invalidated its merge poll:"$'\n'"$(cat "$HOME_DIR/state/$id.meta")"
+  pass "pr-check --also after the main PR keeps the main PR's merge poll valid"
+}
+
 test_spawn_grants_a_companion_worktree
 test_spawn_refuses_a_brief_and_flag_mismatch
 test_spawn_refuses_an_unusable_companion
 test_spawn_refuses_an_external_or_unresolvable_companion_forge
 test_pr_check_records_a_companion_pr_without_arming
+test_pr_check_companion_after_the_main_pr_keeps_its_poll_valid
