@@ -827,6 +827,40 @@ fi
 DOCTOR_WORKER_PID=
 pass "--fix returns to its caller while the daemons it started keep running"
 
+# --- firstmate's own toolchain directory is on the worker PATH ---------------
+# Bootstrap's npm installs land in a host's chosen prefix; a home that keeps
+# Firstmate's tools in ~/.local/state/firstmate/toolchain/bin must not need a
+# hand-written wrapper for them.
+
+new_case Linux with-herdr no-gui
+CASE_REMOTE_JOB_ACTIVE=
+CASE_PLATFORM_OVERRIDE=Linux
+rm -f "$CASE_BIN/sleep" "$CASE_BIN/uname"
+TOOLCHAIN_BIN="$CASE_HOME/.local/state/firstmate/toolchain/bin"
+mkdir -p "$CASE_HOME/.local/bin" "$TOOLCHAIN_BIN"
+for tool in herdr treehouse claude; do
+  ln -s "$CASE_BIN/$tool" "$CASE_HOME/.local/bin/$tool"
+done
+mv "$CASE_BIN/tasks-axi" "$TOOLCHAIN_BIN/tasks-axi"
+doctor --fix
+DOCTOR_WORKER_PID=$(cat "$CASE_HOME/.firstmate/remote-job/worker.pid" 2>/dev/null || true)
+assert_contains "$DOCTOR_OUT" "required tasks-axi=$TOOLCHAIN_BIN/tasks-axi" \
+  "the worker PATH did not resolve tasks-axi from the toolchain directory"
+expect_code 0 "$DOCTOR_RC" "a host with tasks-axi in the toolchain directory was not ready"
+assert_absent "$CASE_HOME/.local/bin/tasks-axi" "--fix wrapped a tool the worker PATH already resolves"
+if [ -n "$DOCTOR_WORKER_PID" ]; then
+  kill -TERM "$DOCTOR_WORKER_PID" 2>/dev/null || true
+  for _ in $(seq 1 100); do
+    kill -0 "$DOCTOR_WORKER_PID" 2>/dev/null || break
+    sleep 0.05
+  done
+  if kill -0 "$DOCTOR_WORKER_PID" 2>/dev/null; then
+    kill -KILL "$DOCTOR_WORKER_PID" 2>/dev/null || true
+  fi
+fi
+DOCTOR_WORKER_PID=
+pass "the worker PATH resolves tools from firstmate's toolchain directory"
+
 # --- --fix may add only owned wrappers for version-manager tools -------------
 
 new_case Linux with-herdr no-gui
