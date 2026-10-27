@@ -536,6 +536,22 @@ if "$REMOTE_ROOT/bin/fm-remote-entrypoint.sh" 1 "$traversal_root_b64" "$home_b64
 fi
 pass "the fixed entrypoint refuses incompatible protocols and unsafe roots"
 
+# Only the home's own leaf may be absent; a missing parent is a step the
+# operator must take, so the refusal names it rather than calling the path unsafe.
+cat > "$LOCAL_HOME/data/secondmates.md" <<EOF
+- ios - iOS delivery (host: remote-mac; root: $REMOTE_ROOT; home: $TMP_ROOT/absent-parent/remote-home; scope: iOS work; projects: alpha; added 2026-08-02)
+EOF
+set +e
+out=$(fm_on ios fm-probe-two.sh 2>&1)
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail "a remote home under an absent parent was accepted"
+assert_contains "$out" "remote home parent directory does not exist: $TMP_ROOT/absent-parent" \
+  "the absent-parent refusal did not name the missing parent"
+assert_absent "$TMP_ROOT/absent-parent" "the entrypoint created the absent parent itself"
+write_registry
+pass "a remote home under an absent parent is refused with the parent named"
+
 cat >> "$LOCAL_HOME/data/secondmates.md" <<EOF
 - build - build delivery (host: remote-mac; root: $REMOTE_ROOT; home: $TMP_ROOT/other-remote-home; scope: build work; projects: beta; added 2026-08-02)
 EOF
