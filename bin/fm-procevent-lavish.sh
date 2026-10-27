@@ -964,7 +964,7 @@ cmd_choice_rows() {
       };
       my $deferral = sub {
         my $until = $data->{until};
-        return undef if !defined($until) || ref($until) || $until !~ /\A\d{4}-\d{2}-\d{2}\z/;
+        return undef if !defined($until) || ref($until) || $until !~ /\A[0-9]{4}-[0-9]{2}-[0-9]{2}\z/;
         return "until=$until";
       };
       if (exists $data->{action}) {
@@ -994,7 +994,6 @@ cmd_choice_rows() {
           if (!defined $item_mode) { $supersede->(); next; }
         }
       }
-      my $answer = $selected;
       next unless $key =~ /\A[A-Za-z0-9._-]{1,128}\z/;
       my $mode = "";
       if (exists $data->{close}) {
@@ -1004,13 +1003,13 @@ cmd_choice_rows() {
       }
       $mode = $item_mode if defined $item_mode;
       my $label = defined $f{text} ? $f{text} : "";
-      s/[\x00-\x1f\x7f]/ /g for ($answer, $note, $label);
+      s/[\x00-\x1f\x7f]/ /g for ($selected, $note, $label);
       $label = substr($label, 0, 512);
       if (defined $seen{$key}) { $choices[$seen{$key}] = undef }
       $seen{$key} = scalar @choices;
       push @choices, {
         key => $key, selection => $selected, note => $note,
-        answer => $answer, label => $label, mode => $mode
+        label => $label, mode => $mode
       };
     }
     for my $choice (grep { defined } @choices) {
@@ -1024,8 +1023,8 @@ cmd_choice_rows() {
       }
       next if $choice->{selection} eq "reconcile";
       print length $choice->{mode}
-        ? "$choice->{key}\t$choice->{answer}\t$choice->{label}\t$choice->{mode}\n"
-        : "$choice->{key}\t$choice->{answer}\t$choice->{label}\n";
+        ? "$choice->{key}\t$choice->{selection}\t$choice->{label}\t$choice->{mode}\n"
+        : "$choice->{key}\t$choice->{selection}\t$choice->{label}\n";
     }
     if ($malformed || @$items != $want) {
       print STDERR "error: the result is not fully accounted for: declared $want, parsed ",
@@ -1099,9 +1098,11 @@ cmd_read() {
       } elsif (!$item && $pick eq "reconcile") {
         $route = "reconcile request";
       } elsif (!$item && exists $data->{until}) {
-        $route = $str->($data->{until}) =~ /\A\d{4}-\d{2}-\d{2}\z/
+        $route = $str->($data->{until}) =~ /\A[0-9]{4}-[0-9]{2}-[0-9]{2}\z/
           ? "keyed intake (re-holds until the date)"
           : "firstmate: later with no usable date; nothing was fed";
+      } elsif (!$item && $pick eq "later") {
+        $route = "firstmate: later with no date; the intake refuses it, so defer it yourself";
       } elsif (!$item) {
         $route = "keyed intake (records the pick)";
       } elsif ($str->($data->{group}) eq "blocking") {
