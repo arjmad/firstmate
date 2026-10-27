@@ -80,9 +80,10 @@
 # entry is not a readable file under the scaffolding user's HOME, because a worker
 # told to read an absent file cannot start the method. It is the per-task opt-in
 # behind the helm's /poteto skill (.agents/skills/poteto/SKILL.md), which owns
-# intake and the Fable 5.1 xhigh spawn flags; no model or effort is recorded here,
-# because bin/fm-spawn.sh owns those axes. Refused on --secondmate: a charter is
-# not a task.
+# intake and the spawn profile; no model or effort is recorded here, because
+# bin/fm-spawn.sh owns those axes. Refused on --secondmate: a charter is not a
+# task. A ship scaffolded without --method whose task id names a word of one of
+# the standing poteto-mode classes gets a stderr warning and is still written.
 # --base-branch <branch> starts the task from origin's <branch> instead of the
 # repository default, for work that belongs on a named integration, feature, or
 # release branch. It writes a "Base branch: <branch>" line under `# Setup`, which
@@ -463,6 +464,29 @@ if [ "$METHOD_SET" -eq 1 ]; then
     exit 1
   fi
   METHOD_WORDS=" method=$METHOD"
+fi
+
+# A ship scaffolded without --method whose task id reads as one of the four
+# standing poteto-mode classes (a bug fix, something slow, a live problem,
+# restructuring shared code) gets a warning, never a refusal: {TASK} is still a
+# placeholder here, so the id is the only text to read, and data/captain.md,
+# which this script never reads, decides whether a class is opted in.
+if [ "$KIND" = ship ] && [ "$METHOD_SET" -eq 0 ]; then
+  method_class_word=
+  IFS='-_.' read -r -a method_id_words <<< "$ID"
+  for word in "${method_id_words[@]}"; do
+    case "$word" in
+      bug|bugs|bugfix|fix|fixes|hotfix|broken|crash|crashes|regression|defect|error|errors|fail|fails|failing|failure|wrong) method_class_word=$word ;;
+      slow|perf|latency|timeout|timeouts|hang|hangs|hillclimb) method_class_word=$word ;;
+      leak|leaks|stuck|flaky|wedge|wedged|spin|outage|incident) method_class_word=$word ;;
+      refactor|refactoring|restructure|restructuring|dedupe) method_class_word=$word ;;
+      *) continue ;;
+    esac
+    break
+  done
+  if [ -n "$method_class_word" ]; then
+    echo "warning: task id '$ID' reads as a standing poteto-mode class ('$method_class_word': bug fix, something slow, live problem, or restructuring shared code) but no --method was given; if data/captain.md records that class, re-scaffold with --method poteto-mode (.agents/skills/poteto/SKILL.md)" >&2
+  fi
 fi
 
 # The optional home-local include is read before anything is written, so an

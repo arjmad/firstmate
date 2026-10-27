@@ -1818,6 +1818,36 @@ ROWS
   pass "fm-brief.sh: --method is closed-set, entry-bound, and refused on charters"
 }
 
+# A ship id that reads as one of the standing poteto-mode classes, scaffolded
+# without --method, warns on stderr and is still written; an opted-in ship, a
+# scout, and an id outside the classes stay quiet.
+test_method_warning_flags_a_standing_class_id_without_refusing() {
+  local home user_home err id
+  home="$TMP_ROOT/method-warn-home"
+  user_home="$TMP_ROOT/method-warn-user-home"
+  mkdir -p "$home/data" "$user_home/.claude/skills/poteto-mode"
+  printf '# Poteto mode\n' > "$user_home/.claude/skills/poteto-mode/SKILL.md"
+
+  for id in fix-login-crash render-slow memory-leak-sweep refactor-shared-lib; do
+    err=$(HOME="$user_home" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" alpha --mode direct-PR 2>&1 >/dev/null) \
+      || fail "$id: the warning must not refuse the scaffold"
+    assert_contains "$err" "warning: task id '$id' reads as a standing poteto-mode class" "$id: no class warning"
+    assert_contains "$err" "--method poteto-mode" "$id: warning does not name the flag"
+    assert_present "$home/data/$id/brief.md" "$id: warned scaffold did not write its brief"
+  done
+
+  err=$(HOME="$user_home" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" fix-opted-in alpha --mode direct-PR --method poteto-mode 2>&1 >/dev/null) \
+    || fail "opted-in ship: scaffold failed"
+  assert_not_contains "$err" "warning:" "opted-in ship must not warn"
+  err=$(HOME="$user_home" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" fix-scout alpha --scout 2>&1 >/dev/null) \
+    || fail "scout: scaffold failed"
+  assert_not_contains "$err" "warning:" "a scout is not a ship class and must not warn"
+  err=$(HOME="$user_home" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" prefix-fixture alpha --mode direct-PR 2>&1 >/dev/null) \
+    || fail "unrelated id: scaffold failed"
+  assert_not_contains "$err" "warning:" "a word that only contains a class word must not warn"
+  pass "fm-brief.sh: a standing-class ship id without --method warns and still scaffolds"
+}
+
 # Run the fold in a child bash so the classify library's globals stay out of
 # this test's scope.
 decision_fold() {
@@ -1928,3 +1958,4 @@ test_branch_prefix_command_is_shell_safe
 test_crewmate_scaffolds_forbid_pool_administration
 test_method_poteto_mode_renders_one_shared_contract
 test_method_is_validated_and_refused_where_it_does_not_apply
+test_method_warning_flags_a_standing_class_id_without_refusing
