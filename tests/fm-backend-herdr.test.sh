@@ -5353,7 +5353,7 @@ test_send_text_submit_claude_slash_menu_selection_row_is_not_the_composer() {
 }
 
 # The same menu under a named launch: the composer's top rule carries the
-# `secondmate: <id>` title, so no untitled rule pair proves the composer and
+# session-name title, so no untitled rule pair proves the composer and
 # the titled-rule proof must (recorded live on Claude Code 2.1.310, herdr 0.9.5).
 test_send_text_submit_named_claude_slash_menu_selection_row_is_not_the_composer() {
   local dir log resp fb out enter_count text rule head
