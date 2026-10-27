@@ -44,22 +44,35 @@ EOF
 # The remote-route cases drive the real remote job worker, which outlives the
 # command that staged its job. Stop it before the shared fixture cleanup runs,
 # and keep that cleanup (tests/lib.sh owns it) rather than replacing the trap.
+# worker.pid names only the serving child, so a lone kill leaves its supervisor
+# and heartbeat running into rm -rf, where they re-create the state root. Stop
+# the whole isolated worker group and wait for it to exit.
 pf_stop_remote_worker() {
   local pid_file="${REMOTE_FIXTURE_JOBS:-$TMP_ROOT/remote-jobs}/worker.pid" pid
-  if [ -f "$pid_file" ]; then
-    pid=$(cat "$pid_file" 2>/dev/null) || pid=
-    [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
-  fi
+  [ -f "$pid_file" ] || return 0
+  pid=$(cat "$pid_file" 2>/dev/null) || pid=
+  [ -n "$pid" ] || return 0
+  (
+    # Production libraries are linted independently by fm-lint.sh.
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-remote-job-lib.sh"
+    fm_remote_job_stop_worker_tree "$pid"
+  )
 }
 
 pf_test_cleanup() {
+  local worker_stopped=1
   if [ -n "$PF_TEST_LOCK_HOLDER" ]; then
     kill "$PF_TEST_LOCK_HOLDER" 2>/dev/null || true
     wait "$PF_TEST_LOCK_HOLDER" 2>/dev/null || true
     PF_TEST_LOCK_HOLDER=
   fi
-  pf_stop_remote_worker
+  pf_stop_remote_worker || worker_stopped=0
   fm_test_cleanup
+  if [ "$worker_stopped" -eq 0 ]; then
+    echo "not ok - the remote job worker tree survived teardown" >&2
+    exit 1
+  fi
 }
 trap pf_test_cleanup EXIT
 trap 'pf_test_cleanup; exit 130' INT
