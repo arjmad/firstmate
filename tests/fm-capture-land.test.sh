@@ -41,7 +41,11 @@ STUB
 #!/usr/bin/env bash
 echo "\$*" >> '$c/gh.log'
 case "\$1 \$2" in
-  "pr view") case "\$*" in *"-q .headRefOid"*) echo $HEAD_SHA ;; *) cat '$c/pr.tsv' ;; esac ;;
+  "pr view") case "\$*" in
+      *"-q .headRefOid"*) echo $HEAD_SHA ;;
+      *"--jq .state") cat '$c/state-after-merge' 2>/dev/null || echo MERGED ;;
+      *) cat '$c/pr.tsv' ;;
+    esac ;;
   "api repos/arjmad/nova") echo main ;;
   "api repos/arjmad/nova/compare/"*) cat '$c/behind' ;;
   *) exit 1 ;;
@@ -58,6 +62,7 @@ STUB
   printf '%s\n' '## In flight' '' '## Queued' '' '## Done' > "$c/home/data/backlog.md"
   set_pr "$c" OPEN false nova/skill-capture "$HEAD_SHA"
   echo 0 > "$c/behind"
+  echo "nova live ~/code/agents/nova: synced abc..def" > "$c/sync-out"
   printf '%s\n' "$c"
 }
 
@@ -81,7 +86,6 @@ backlog_section_of() {  # <case> <id>: the backlog section holding the item
 test_lands_an_open_capture_pr_end_to_end() {
   local c
   c=$(new_case)
-  echo "nova live ~/code/agents/nova: synced to abc" > "$c/sync-out"
   land "$c" "$URL" --head "$HEAD_SHA"
   assert_equals 0 "$RC" "an open green capture PR lands: $OUT"
   assert_equals "$ID $URL" "$(cat "$c/merge.log")" "the merge goes through bin/fm-pr-merge.sh with the task record"
@@ -181,6 +185,29 @@ test_stuck_settle_reports_after_landing() {
   pass "a landed PR whose live checkout did not settle exits 3 for a re-run"
 }
 
+test_unsynced_live_checkout_is_unfinished() {
+  local c line
+  for line in "skipped: fetch failed" "capturing: 1 uncommitted path(s) under skills/ only; started x" ""; do
+    c=$(new_case)
+    if [ -n "$line" ]; then echo "nova live ~/code/agents/nova: $line" > "$c/sync-out"; else : > "$c/sync-out"; fi
+    land "$c" "$URL"
+    assert_equals 3 "$RC" "a live checkout that did not end synced is unfinished (${line:-no line}): $OUT"
+  done
+  pass "only a live checkout that ends synced counts as live"
+}
+
+test_queued_merge_keeps_the_record() {
+  local c
+  c=$(new_case)
+  echo OPEN > "$c/state-after-merge"
+  land "$c" "$URL"
+  assert_equals 3 "$RC" "a queued merge is not landed yet"
+  assert_contains "$OUT" "queued: $URL is not merged yet" "the queue is reported"
+  assert_absent "$c/sync.log" "nothing is settled before the merge lands"
+  assert_present "$c/home/state/$ID.meta" "the record and its poll stay"
+  pass "a merge the queue accepted but has not merged keeps the record"
+}
+
 test_foreign_record_is_never_reused() {
   local c
   c=$(new_case)
@@ -214,4 +241,6 @@ test_refuses_a_stale_or_draft_pr_before_recording
 test_refused_merge_keeps_the_record_and_a_rerun_lands
 test_merged_pr_settles_and_closes_without_merging
 test_stuck_settle_reports_after_landing
+test_unsynced_live_checkout_is_unfinished
+test_queued_merge_keeps_the_record
 test_foreign_record_is_never_reused

@@ -29,8 +29,9 @@
 # (state/.capture-land-<id>.lock).
 # Exit 0: landed (or already merged) and the live checkout settled and synced.
 # Exit 1: refused or failed before landing; nothing merged. Exit 2: bad usage.
-# Exit 3: landed, but the settle, sync, or close reported something to finish;
-# re-run the same command after it clears.
+# Exit 3: accepted into a merge queue but not merged yet, or landed while the
+# settle, sync, or close reported something to finish; re-run the same command
+# after it clears.
 # Usage: fm-capture-land.sh <pr-url> [--head <sha>]
 set -eu
 
@@ -168,6 +169,11 @@ if [ "$PR_STATE" = OPEN ]; then
     echo "not landed: bin/fm-pr-merge.sh refused $URL (reasons above); task $ID stays in flight with its merge poll armed - re-run this command once the reason clears" >&2
     exit 1
   fi
+  # A merge queue accepts without merging; the record and its poll wait for it.
+  [ "$(gh pr view "$URL" --json state --jq .state 2>/dev/null || true)" = MERGED ] || {
+    echo "queued: $URL is not merged yet; task $ID stays in flight with its merge poll armed - re-run this command once it merges" >&2
+    exit 3
+  }
 elif [ "$PR_STATE" = MERGED ]; then
   echo "already merged: $URL"
 else
@@ -178,7 +184,12 @@ fi
 RC=0
 SYNC_OUT=$("$SCRIPT_DIR/fm-fleet-sync.sh" --settle-capture "$PROJECTS/$PROJECT" </dev/null) || RC=3
 [ -z "$SYNC_OUT" ] || printf '%s\n' "$SYNC_OUT"
-if printf '%s\n' "$SYNC_OUT" | grep -Eq ': (STUCK:|skipped: busy:)'; then
+# Only a live checkout that ends synced, already current, or recovered went live;
+# every other outcome (STUCK, a skip, edits still pending capture) is unfinished.
+LIVE_LINES=$(printf '%s\n' "$SYNC_OUT" | grep -F "$PROJECT live " || true)
+if [ -z "$LIVE_LINES" ] \
+  || printf '%s\n' "$LIVE_LINES" | grep -Evq ': (synced|already current|recovered|settled|post-update command ran|fetch succeeded)' \
+  || ! printf '%s\n' "$LIVE_LINES" | grep -Eq ': (synced|already current|recovered)'; then
   echo "attention: $PROJECT's live checkout did not settle and go live (line above); re-run this command once it clears" >&2
   RC=3
 fi
