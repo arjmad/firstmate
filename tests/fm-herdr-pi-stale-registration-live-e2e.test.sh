@@ -65,6 +65,10 @@ fm_herdr_lab_prepare "$SESSION" || fail "could not prepare isolated Herdr lab se
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/fm-pi-stale.XXXXXX")
 SCRATCH=$(cd "$SCRATCH" && pwd)
 mkdir -p "$SCRATCH/cwd"
+# Pi files each session under a directory named for its cwd in its agent home,
+# outside the scratch the trap removes; Pi runs with --no-session so a run
+# leaves no empty fm-pi-stale.* session directory behind.
+PI_SESSION_ROOT="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/sessions"
 
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-backend.sh"
@@ -100,7 +104,7 @@ registered_status() {
 # the real Pi TUI with no prompt.
 lab pane run "$PANE_ID" zsh >/dev/null 2>&1 || fail "could not start the nested shell in the pane"
 sleep 1
-lab pane run "$PANE_ID" pi >/dev/null 2>&1 || fail "could not start pi in the pane"
+lab pane run "$PANE_ID" pi --no-session >/dev/null 2>&1 || fail "could not start pi in the pane"
 
 # Herdr creates the record with its own placeholder status (`unknown`, verified
 # 0.9.0) the moment it notices Pi, before Pi's extension reports a lifecycle
@@ -157,3 +161,7 @@ else
   note "herdr $HERDR_VERSION released the pi registration after /quit under a nested shell; the stale-registration branch was not exercised by this release, the agent-free verdict still held through agent_not_found"
   pass "real herdr $HERDR_VERSION + pi $PI_VERSION: a quit pi under a nested shell recovers as dead"
 fi
+
+LEAKED=$(find "$PI_SESSION_ROOT/" -maxdepth 1 -name "*${SCRATCH##*/}*" 2>/dev/null)
+[ -z "$LEAKED" ] || version_fail "pi wrote a session directory outside the scratch workspace: $LEAKED"
+pass "pi left no session directory for the scratch workspace"
