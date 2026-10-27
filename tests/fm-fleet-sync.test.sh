@@ -1104,6 +1104,46 @@ test_failed_capture_surfaces_when_edits_change() {
   pass "a failed capture surfaces as STUCK while the edits keep changing"
 }
 
+test_current_capture_edits_pend_without_a_wake() {
+  local home live cmd log pending
+  home=$(isolated_home)
+  live=$(build_capture_live "$home" nova)
+  cmd="$home/capture-nova.sh"
+  printf 'live edit\n' >> "$live/skills/a.md"
+  live_config "$home" "nova $live capture=skills/:$cmd"
+  log="$home/state/.fleet-sync-scheduled.log"
+  pending="$home/state/fleet-sync-stuck"
+
+  run_scheduled "$home"
+  assert_contains "$(cat "$log")" "nova live $live: capturing: 1 uncommitted path(s) under skills/ only" "the edits start a capture"
+  wait_capture_done "$(cat "$log")"
+  run_scheduled "$home"
+  assert_contains "$(cat "$log")" \
+    "nova live $live: live edits pending capture: 1 uncommitted path(s) under skills/ only, 0 commits behind origin/main" \
+    "current edits under the capture dir read as pending capture"
+  assert_not_contains "$(cat "$log")" "STUCK" "nothing blocks a fast-forward"
+  [ ! -e "$pending" ] || fail "edits pending capture on a current checkout must not wake firstmate: $(cat "$pending")"
+
+  advance_origin "$home" nova C1
+  run_scheduled "$home"
+  wait_capture_done "$(cat "$log")"
+  run_scheduled "$home"
+  assert_contains "$(cat "$pending" 2>/dev/null)" "nova live $live: STUCK: on branch main with uncommitted changes, 1 commits behind origin/main" \
+    "edits that block a fast-forward wake firstmate"
+
+  rm -f "$pending"
+  git -C "$live" stash -q
+  git -C "$live" pull -q --ff-only
+  commit_file "$live" local.txt ahead "local unique work"
+  git -C "$live" stash pop -q
+  run_scheduled "$home"
+  wait_capture_done "$(cat "$log")"
+  run_scheduled "$home"
+  assert_contains "$(cat "$pending" 2>/dev/null)" "nova live $live: STUCK:" "a checkout ahead of origin is not merely pending capture"
+  assert_contains "$(cat "$live/skills/a.md")" "live edit" "the live edit is preserved"
+  pass "edits under the capture dir on a current checkout pend capture without a wake, and STUCK only when a fast-forward is blocked"
+}
+
 test_capture_skips_edits_outside_its_dir() {
   local home live out
   home=$(new_home)
@@ -1274,6 +1314,7 @@ test_failed_post_update_carries_its_output_tail
 test_capture_starts_once_per_edit_state
 test_capture_still_running_is_not_restarted
 test_failed_capture_surfaces_when_edits_change
+test_current_capture_edits_pend_without_a_wake
 test_capture_skips_edits_outside_its_dir
 test_scheduled_interval_is_home_configurable
 test_scheduled_sync_queues_new_stuck_lines_once
