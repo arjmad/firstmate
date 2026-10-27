@@ -456,6 +456,19 @@ assert_contains "$out" 'command is not tracked by the configured remote root' "t
   || fail "the tracked-command authorization consulted checkout-local git"
 pass "tracked-command authorization excludes checkout-local git"
 
+# The entrypoint resolves the account home with HOME unset, and git dies on any
+# "~/" path in a config it still reads (on a host, the XDG config an SSH session
+# can name; here GIT_CONFIG_GLOBAL) unless it runs with that home restored.
+TILDE_GITCONFIG="$TMP_ROOT/tilde-gitconfig"
+printf '[core]\n\texcludesFile = ~/.config/git/fm-on-test-ignore\n' > "$TILDE_GITCONFIG"
+set +e
+out=$(GIT_CONFIG_GLOBAL="$TILDE_GITCONFIG" fm_on ios fm-probe-two.sh 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "a ~/ path in the account git config broke the remote entrypoint (rc=$rc): $out"
+assert_contains "$out" "home=$REMOTE_HOME" "the probe did not run when the account git config names a ~/ path"
+pass "the entrypoint runs git with the account home, so a ~/ git config path resolves"
+
 set +e
 out=$(
   # shellcheck disable=SC2329 # Exported for indirect use by fm_on.
