@@ -83,7 +83,7 @@ TARGET="$SESSION:$PANE"
 VERSION=$(PATH="$ORIGINAL_PATH" claude --version 2>/dev/null | head -1 || printf 'version-unknown')
 HERDR_VER=$(PATH="$ORIGINAL_PATH" herdr --version 2>/dev/null | head -1 || printf 'herdr-unknown')
 
-lab pane run "$PANE" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\"}'" >/dev/null \
+lab pane run "$PANE" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --name 'ship: submitlive' --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\"}'" >/dev/null \
   || fail "could not launch Claude Code ($VERSION) in the isolated Herdr pane"
 
 idle=0
@@ -195,15 +195,17 @@ verdict=$(fm_backend_herdr_send_text_submit "$TARGET" '/exit' 3 0.4 1.2) \
   || fail "send_text_submit failed to run the /exit submission against Claude Code ($VERSION) on $HERDR_VER"
 [ "$verdict" != send-failed ] \
   || fail "Claude Code ($VERSION) on $HERDR_VER: a typed /exit behind its command popup was judged unsent and cleared instead of submitted"
+# Herdr 0.9.5 can keep the agent registration after the process exits, so the
+# adapter's process-level verdict decides whether Claude actually left.
 exited=0
 i=0
 while [ "$i" -lt 30 ]; do
-  if ! lab agent get "$PANE" >/dev/null 2>&1; then exited=1; break; fi
+  [ "$(fm_backend_herdr_agent_state "$TARGET" 2>/dev/null)" != dead ] || { exited=1; break; }
   i=$((i + 1))
   sleep 1
 done
 [ "$exited" = 1 ] \
-  || fail "Claude Code ($VERSION) on $HERDR_VER: the /exit submission reported '$verdict' but the agent never exited"
+  || fail "Claude Code ($VERSION) on $HERDR_VER: the /exit submission reported '$verdict' but the agent never exited"$'\n'"$(lab pane read "$PANE" --source visible 2>/dev/null | tail -15)"
 pass "live Herdr submit confirm: Claude Code ($VERSION) on $HERDR_VER proves and submits a typed /exit behind its command popup"
 
 [ "$CHECKED" -gt 0 ] || fail "FM_HERDR_SUBMIT_CONFIRM_LIVE=1 checked no harness"

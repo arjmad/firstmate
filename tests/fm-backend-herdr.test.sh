@@ -5317,6 +5317,74 @@ test_send_text_submit_claude_grey_slash_command_is_proven_and_submitted() {
   pass "fm_backend_herdr_send_text_submit: a typed slash command Claude draws in muted truecolor grey is proven and submitted"
 }
 
+# Live Claude Code 2.1.310 under herdr 0.9.5 (recorded in a Herdr lab) draws
+# the slash-command menu below the composer's closing rule and marks its
+# selected row with the same `❯` the composer uses. That menu row once read as
+# the lowest live composer, so the payload proof saw the typed /exit plus every
+# menu description, cleared the draft, and fm-control exit reported that the
+# exit command could not be sent while the agent stayed alive.
+test_send_text_submit_claude_slash_menu_selection_row_is_not_the_composer() {
+  local dir log resp fb out enter_count text rule
+  dir="$TMP_ROOT/submit-claude-slash-menu"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  text='/exit'
+  herdr_submit_claude_prefix "$resp" "$text"
+  rule=$(printf '%0.s\xe2\x94\x80' $(seq 1 60))
+  {
+    printf ' \x1b[0m\x1b[1mClaude Code \x1b[0m\x1b[38;2;153;153;153mv2.1.310\x1b[0m\r\n'
+    printf '\r\n'
+    printf '\x1b[0m\x1b[38;2;136;136;136m%s\x1b[0m\r\n' "$rule"
+    printf '\xe2\x9d\xaf\xc2\xa0\x1b[0m\x1b[38;2;177;185;249m/exit\x1b[0m\r\n'
+    printf '\x1b[0m\x1b[38;2;136;136;136m%s\x1b[0m\r\n' "$rule"
+    printf '  \x1b[0m\x1b[38;2;177;185;249m\xe2\x9d\xaf /\x1b[0m\x1b[1m\x1b[38;2;177;185;249mexit\x1b[0m\x1b[38;2;177;185;249m                                 \x1b[0m\x1b[1m\x1b[38;2;177;185;249mExit\x1b[0m\x1b[38;2;177;185;249m the CLI\x1b[0m\r\n'
+    printf '  \x1b[0m\x1b[38;2;153;153;153m  /context                              Visualize current context usage as a colored grid\x1b[0m\r\n'
+    printf '  \x1b[0m\x1b[38;2;153;153;153m  /usage-credits                        Configure usage credits or request them from your admin when you hit a\x1b[0m\r\n'
+    printf '                                          \x1b[0m\x1b[38;2;153;153;153mlimit\x1b[0m\n'
+  } > "$resp/4.out"
+  printf '{"result":{"agent":{"agent":"claude","agent_status":"idle"}}}\n' > "$resp/5.out"
+  printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/7.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "$1" 3 0.01 0.01' "$ROOT" "$text" )
+  [ "$out" = empty ] || fail "a typed /exit above Claude 2.1.310's slash-command menu must be proven and submitted, got '$out'"
+  enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
+  [ "$enter_count" -eq 1 ] || fail "the proven slash command should be submitted once, sent $enter_count Enter(s)"
+  [ "$(herdr_ctrl_u_count "$log")" -eq 0 ] || fail "a proven slash command must not be cleared"
+  pass "fm_backend_herdr_send_text_submit: Claude 2.1.310's selected slash-menu row is not read as the composer"
+}
+
+# The same menu under a named launch: the composer's top rule carries the
+# `secondmate: <id>` title, so no untitled rule pair proves the composer and
+# the titled-rule proof must (recorded live on Claude Code 2.1.310, herdr 0.9.5).
+test_send_text_submit_named_claude_slash_menu_selection_row_is_not_the_composer() {
+  local dir log resp fb out enter_count text rule head
+  dir="$TMP_ROOT/submit-named-claude-slash-menu"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  text='/exit'
+  herdr_submit_claude_prefix "$resp" "$text"
+  rule=$(printf '%0.s\xe2\x94\x80' $(seq 1 60))
+  head=$(printf '%0.s\xe2\x94\x80' $(seq 1 32))
+  {
+    printf ' \x1b[0m\x1b[1mClaude Code \x1b[0m\x1b[38;2;153;153;153mv2.1.310\x1b[0m\r\n'
+    printf '\r\n'
+    printf '\x1b[0m\x1b[38;2;136;136;136m%s secondmate: fm-secondmate \xe2\x94\x80\x1b[0m\r\n' "$head"
+    printf '\xe2\x9d\xaf\xc2\xa0\x1b[0m\x1b[38;2;177;185;249m/exit\x1b[0m\r\n'
+    printf '\x1b[0m\x1b[38;2;136;136;136m%s\x1b[0m\r\n' "$rule"
+    printf '  \x1b[0m\x1b[38;2;177;185;249m\xe2\x9d\xaf /\x1b[0m\x1b[1m\x1b[38;2;177;185;249mexit\x1b[0m\x1b[38;2;177;185;249m                                 \x1b[0m\x1b[1m\x1b[38;2;177;185;249mExit\x1b[0m\x1b[38;2;177;185;249m the CLI\x1b[0m\r\n'
+    printf '  \x1b[0m\x1b[38;2;153;153;153m  /context                              Visualize current context usage as a colored grid\x1b[0m\r\n'
+    printf '  \x1b[0m\x1b[38;2;153;153;153m  /usage-credits                        Configure usage credits or request them from your admin when you hit a\x1b[0m\r\n'
+    printf '                                          \x1b[0m\x1b[38;2;153;153;153mlimit\x1b[0m\n'
+  } > "$resp/4.out"
+  printf '{"result":{"agent":{"agent":"claude","agent_status":"idle"}}}\n' > "$resp/5.out"
+  printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/7.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "$1" 3 0.01 0.01' "$ROOT" "$text" )
+  [ "$out" = empty ] || fail "a typed /exit in a named Claude 2.1.310 composer above its slash-command menu must be proven and submitted, got '$out'"
+  enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
+  [ "$enter_count" -eq 1 ] || fail "the proven slash command should be submitted once, sent $enter_count Enter(s)"
+  [ "$(herdr_ctrl_u_count "$log")" -eq 0 ] || fail "a proven slash command must not be cleared"
+  pass "fm_backend_herdr_send_text_submit: a named Claude 2.1.310 composer's slash-menu selection row is not read as the composer"
+}
+
 # A Claude worker launched with --name draws `<kind>: <task-id>` into its
 # composer's TOP rule, and keeps it there while a long draft wraps (reproduced
 # live on herdr 0.9.5 with a ship worker's doorbell). The titled-rule proof
@@ -6299,6 +6367,8 @@ test_send_text_submit_refuses_marked_digest_missing_its_head
 test_composer_state_claude_slash_popup_pushes_composer_above_tail_window
 test_send_text_submit_claude_slash_popup_composer_is_still_proven_and_submitted
 test_send_text_submit_claude_grey_slash_command_is_proven_and_submitted
+test_send_text_submit_claude_slash_menu_selection_row_is_not_the_composer
+test_send_text_submit_named_claude_slash_menu_selection_row_is_not_the_composer
 test_send_text_submit_claude_titled_wrapped_doorbell_is_proven_and_submitted
 test_send_text_submit_claude_narrow_titled_doorbell_is_proven_and_submitted
 test_send_text_submit_lone_paste_placeholder_submits_the_long_payload

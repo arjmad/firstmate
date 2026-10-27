@@ -1577,6 +1577,27 @@ FM_HERDR_SUBMIT_CONFIRM_LIVE=1 tests/fm-herdr-submit-confirm-live-e2e.test.sh
 ok - live Herdr submit confirm: Claude Code (2.1.283 (Claude Code)) on herdr 0.9.0 proves and submits a typed /exit behind its command popup
 ```
 
+Measured 2026-10-27 against Herdr 0.9.5 and Claude Code 2.1.310 in an isolated `fm-lab-` session.
+
+Claude Code 2.1.310 marks the selected row of the same menu with the composer's own `❯`, directly under the composer's closing rule: `❯ /exit` followed by spaces and `Exit the CLI`.
+The row scan recorded that menu row as the lowest bare composer, so the payload proof read `/exit Exit the CLI /context Visualize ...`, cleared the draft, and reported `send-failed` while Claude stayed alive; `bin/fm-secondmate-restart.sh` reported the mate unreached.
+A named launch (`claude --name 'secondmate: <id>'`, every Firstmate worker and mate) draws the same menu under a titled top rule, so no untitled rule pair proves that composer.
+The scan no longer records a glyph row as a bare composer when it sits directly under the closing rule of a composer the same glyph proved, an untitled rule pair or a titled-rule composer, reads as a slash command, and is indented past that composer's glyph row (column 2 against column 0 in both live layouts).
+The indent keeps a slash-command draft typed directly under its own composer's top rule, or below the pair, a live composer.
+Herdr 0.9.5 can keep the agent registration after Claude exits, so the live guard now decides that Claude exited from the adapter's process-level `fm_backend_herdr_agent_state` verdict rather than from the registration disappearing, and it launches Claude with `--name` as Firstmate does.
+
+```text
+ok - fm_backend_herdr_send_text_submit: Claude 2.1.310's selected slash-menu row is not read as the composer
+ok - fm_backend_herdr_send_text_submit: a named Claude 2.1.310 composer's slash-menu selection row is not read as the composer
+ok - live Herdr submit confirm: Claude Code (2.1.310 (Claude Code)) on herdr 0.9.5 proves and submits a typed /exit behind its command popup
+```
+
+Before the scan change, the same live guard printed:
+
+```text
+not ok - Claude Code (2.1.310 (Claude Code)) on herdr 0.9.5: a typed /exit behind its command popup was judged unsent and cleared instead of submitted
+```
+
 ### Claude background-task exit picker
 
 Measured 2026-10-05 against Claude Code 2.1.289 in an isolated tmux session.

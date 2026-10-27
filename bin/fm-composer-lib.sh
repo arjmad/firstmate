@@ -834,6 +834,39 @@ _fm_composer_titled_rule_row() {  # <trimmed-row> <plain-rule-spaces>
   [ "$spaces" = "$expected" ]
 }
 
+# _fm_composer_row_is_slash_menu_selection: 0 when trimmed <row> at <row-index>
+# of <plain-screen> is the selected row of a slash-command menu drawn directly
+# under the closing rule of a composer that <glyph> already proved: an
+# untitled rule pair, or the titled top rule a named launch draws
+# (_fm_composer_bare_rule_sandwich). Claude Code 2.1.310 (recorded live on
+# herdr 0.9.5, named and unnamed) marks that row with the composer's own `❯`
+# and indents it past the composer's glyph row, so it would otherwise read as a
+# lower live composer holding the menu text. The deeper indent is what tells it
+# from a draft typed directly under its composer's own top rule.
+_fm_composer_row_is_slash_menu_selection() {  # <trimmed-row> <glyph> <row-index> <plain-screen>
+  local rest proof=-1 raw lead proof_lead
+  [ "$FM_COMPOSER_SCAN_PI_LAST_SEPARATOR" -eq $(($3 - 1)) ] || return 1
+  rest=${1#"$2"}
+  [[ $rest =~ ^\ +/[^[:space:]]+ ]] || return 1
+  if [ "$FM_COMPOSER_SCAN_PI_PAIR_FOUND" = 1 ] && [ "$FM_COMPOSER_SCAN_PI_CLOSE" -eq $(($3 - 1)) ] \
+     && [ "$FM_COMPOSER_SCAN_PI_GLYPH_ROW" -ge 0 ] && [ "$FM_COMPOSER_SCAN_PI_GLYPH" = "$2" ]; then
+    proof=$FM_COMPOSER_SCAN_PI_GLYPH_ROW
+  elif [ "$FM_COMPOSER_SCAN_BARE_ROW" -ge 0 ]; then
+    raw=$(_fm_composer_screen_row "$FM_COMPOSER_SCAN_BARE_ROW" "$4")
+    fm_composer_normalize_trim_var raw
+    case "$raw" in
+      "$2"*) _fm_composer_bare_rule_sandwich "$4" "$FM_COMPOSER_SCAN_BARE_ROW" \
+               && proof=$FM_COMPOSER_SCAN_BARE_ROW ;;
+    esac
+  fi
+  [ "$proof" -ge 0 ] || return 1
+  raw=$(_fm_composer_screen_row "$3" "$4")
+  lead=${raw%%[! ]*}
+  raw=$(_fm_composer_screen_row "$proof" "$4")
+  proof_lead=${raw%%[! ]*}
+  [ "${#lead}" -gt "${#proof_lead}" ]
+}
+
 # Row-scan results are returned through FM_COMPOSER_SCAN_* globals (bash 3.2
 # has no nameref); they are internal to this owner.
 _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
@@ -969,7 +1002,8 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
     if [ "$top" -lt 0 ] && fm_composer_leading_shell_glyph_var glyph "$trimmed" \
        && ! _fm_composer_row_is_pi_status "$trimmed"; then
       FM_COMPOSER_SCAN_SHELL_ROW=$row
-    elif fm_composer_leading_agent_glyph_var glyph "$trimmed"; then
+    elif fm_composer_leading_agent_glyph_var glyph "$trimmed" \
+       && ! _fm_composer_row_is_slash_menu_selection "$trimmed" "$glyph" "$row" "$pane"; then
       FM_COMPOSER_SCAN_BARE_ROW=$row
     fi
     # Cursor safety: a cursor sitting on a structural edge row is never an
@@ -1611,7 +1645,9 @@ _fm_composer_leftbar_floor_row() {  # <trimmed-row>
 # Everything else - unclaimed activity (`Working on request...`), and above all
 # a row leading with the SAME glyph the envelope was proven by (`❯ my typed
 # draft`, which is a live composer) - is NOT furniture, so the envelope above
-# it stays stale and the verdict stays a refusal.
+# it stays stale and the verdict stays a refusal. The one same-glyph row that
+# never reaches this zone is a slash-command menu's selection row, which the
+# row scan already declines as a candidate (_fm_composer_row_is_slash_menu_selection).
 _fm_composer_row_is_composer_furniture() {  # <trimmed-row> <proof-glyph>
   local row=$1 proof=$2 glyph=''
   [ -n "$row" ] || return 1

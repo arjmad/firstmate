@@ -295,6 +295,17 @@ test_composer_footer_zone_refuses_rather_than_allows() {
     || fail "the live draft must be the extracted composer content, got '$out'"
   screen=$'╭────────────────────────╮\n│ ❯'"$NBSP"$'                     │\n╰────────────────────────╯\n❯ my typed draft'
   assert_screen "boxed: a live draft below the box keeps winning" pending "$CAPS_STYLED_NOID" "$screen"
+  #    A typed slash command is no exception: only a menu row indented past
+  #    the composer's own glyph row is a slash-command menu selection.
+  screen=$'────────────────────────\n❯'"$NBSP"$'\n────────────────────────\n❯ /review  my draft'
+  assert_screen "separated: a slash-command draft below the pair keeps winning" pending "$CAPS_STYLED_NOID" "$screen"
+  out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
+  [ "$out" = '/review my draft' ] \
+    || fail "a slash-command draft below the pair must be the extracted composer content, got '$out'"
+  screen=$'────────────────────────\n❯ an earlier prompt\n────────────────────────\n❯ /review  my draft\n────────────────────────'
+  out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
+  [ "$out" = '/review my draft' ] \
+    || fail "a slash-command draft under its own top rule must not read as a menu row, got '$out'"
   # 2. Working agent. Unclaimed activity below a proven envelope is not
   #    furniture in EITHER row order, even when one of the rows leads with a
   #    foreign agent glyph, so the envelope above it stays stale.
