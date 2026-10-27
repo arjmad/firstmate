@@ -159,6 +159,10 @@ case "${1:-}" in
       printf 'args=%s\n' "$*"
     } > "$FM_HERDR_SERVER_ENV_LOG"
     : > "$FM_HERDR_SERVER_MARKER"
+    if [ -n "${FM_HERDR_SERVER_HOLD:-}" ]; then
+      printf '%s\n' "$$" > "$FM_HERDR_SERVER_MARKER.pid"
+      exec /bin/sleep "$FM_HERDR_SERVER_HOLD"
+    fi
     ;;
 esac
 SH
@@ -1229,6 +1233,23 @@ test_server_ensure_scrubs_home_and_harness_identity() {
   assert_contains "$output" "HERDR_SESSION=fmtest" "server_ensure lost explicit Herdr session routing"
   assert_contains "$output" "args=server --session fmtest" "server_ensure lost the trailing Herdr session flag"
   pass "fm_backend_herdr_server_ensure: scrubs home and harness identity without disturbing unrelated environment or session routing"
+}
+
+# A remote doctor --fix runs this with its own output redirected while an SSH
+# caller reads that output to EOF, so the long-lived server must not keep the
+# caller's descriptors open.
+test_server_ensure_releases_caller_output() {
+  local dir marker fb started elapsed out
+  dir="$TMP_ROOT/server-release"; mkdir -p "$dir"; marker="$dir/running"
+  fb=$(make_herdr_server_env_fakebin "$dir")
+  started=$SECONDS
+  out=$(PATH="$fb:$PATH" FM_HERDR_SERVER_ENV_LOG="$dir/env" FM_HERDR_SERVER_MARKER="$marker" FM_HERDR_SERVER_HOLD=20 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest >/dev/null 2>&1; echo started' "$ROOT" 2>&1)
+  elapsed=$((SECONDS - started))
+  kill "$(cat "$marker.pid" 2>/dev/null)" 2>/dev/null || true
+  [ "$out" = started ] || fail "server_ensure did not start the server, got '$out'"
+  [ "$elapsed" -lt 10 ] || fail "server_ensure held its caller's output open for ${elapsed}s, until the server exited"
+  pass "fm_backend_herdr_server_ensure: the started server does not hold its caller's output open"
 }
 
 test_container_ensure_reuses_existing_workspace() {
@@ -6076,6 +6097,7 @@ test_workspace_ensure_other_home_ignores_the_launcher_identity
 test_container_ensure_refuses_an_ambiguous_home_label
 test_container_ensure_starts_server_and_workspace
 test_server_ensure_scrubs_home_and_harness_identity
+test_server_ensure_releases_caller_output
 test_container_ensure_reuses_existing_workspace
 test_container_ensure_creates_with_no_focus_flag
 test_container_ensure_uses_secondmate_home_label
