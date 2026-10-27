@@ -175,8 +175,9 @@ if [ -n "$ALSO_REPO" ]; then
   META_LOCK=$(fm_meta_lock_path "$META") || exit 1
   fm_lock_acquire_wait "$META_LOCK"
   ALSO_TMP=$(mktemp "$STATE/.fm-pr-meta.XXXXXX") || { fm_lock_release "$META_LOCK"; exit 1; }
-  if ! { grep -v "^also_pr_$ALSO_REPO=" "$META" > "$ALSO_TMP" || [ "$?" -eq 1 ]; } \
-    || ! printf 'also_pr_%s=%s\n' "$ALSO_REPO" "$URL" >> "$ALSO_TMP" \
+  # The companion key goes before any pr= identity block, which
+  # fm_pr_metadata_identity_parse refuses unless it ends the record.
+  if ! fm_pr_meta_rewrite "$META" "also_pr_$ALSO_REPO" "also_pr_$ALSO_REPO=$URL" > "$ALSO_TMP" \
     || ! chmod 0600 "$ALSO_TMP" || ! mv -f -- "$ALSO_TMP" "$META"; then
     rm -f -- "$ALSO_TMP"
     fm_lock_release "$META_LOCK" || true
