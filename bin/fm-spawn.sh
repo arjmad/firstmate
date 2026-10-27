@@ -3289,11 +3289,12 @@ relaunch_resume_args() {  # <harness> <backend> <target>
 # Claude app's Remote Control list, the /resume picker, and the terminal title.
 # A --name title replaces that auto-title everywhere it shows, including the
 # Remote Control session list (docs/verification/runtime-backends.md "Claude
-# session name"). The kind prefix tells ships, scouts, and secondmates apart
-# at a glance; a task id is path-safe ASCII (fm_task_id_path_safe), and the
-# value is quoted anyway. A relaunch reuses the task id, so it keeps its name.
-claude_session_name_flag() {  # <kind> <task-id>
-  printf -- '--name %s ' "$(shell_quote "$1: $2")"
+# session name"). The name is the bare task id - a secondmate's is its id, such
+# as `secondmate` - matching the helm's `firstmate` (README launch command);
+# a task id is path-safe ASCII (fm_task_id_path_safe), and the value is quoted
+# anyway. A relaunch reuses the task id, so it keeps its name.
+claude_session_name_flag() {  # <task-id>
+  printf -- '--name %s ' "$(shell_quote "$1")"
 }
 
 model_flag_for_harness() {
@@ -6505,7 +6506,7 @@ fi
 LAUNCH=${LAUNCH//__PIRESUME__/$RESUME_ARGS}
 LAUNCH=${LAUNCH//__CLAUDEPERMFLAG__/$CLAUDE_PERM_FLAG}
 case "$LAUNCH" in
-*__CLAUDENAME__*) LAUNCH=${LAUNCH//__CLAUDENAME__/"$(claude_session_name_flag "$KIND" "$ID")"} ;;
+*__CLAUDENAME__*) LAUNCH=${LAUNCH//__CLAUDENAME__/"$(claude_session_name_flag "$ID")"} ;;
 esac
 case "$LAUNCH" in
 *__CLAUDESETTINGS__*)

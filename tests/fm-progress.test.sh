@@ -3,8 +3,8 @@
 # polling display reads: helm state from its lock pid's Claude session record,
 # each recorded direct report's phase from its latest status event, its busy
 # state through the busy-record owner, and steps from the worker's own Claude
-# task list (found through its "<kind>: <id>" session name and a live pid) or a
-# [step=n/m] status token.
+# task list (found through its bare <id> session name, or a legacy
+# "<kind>: <id>" one, and a live pid) or a [step=n/m] status token.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -71,14 +71,14 @@ test_claude_worker_steps_come_from_its_live_session_task_list() {
   printf 'working [at=%s]: writing the reader\n' "$((now - 120))" > "$home/state/demo.status"
   arm_busy "$home/state" demo busy claude-hook
   # The live session carrying the launch name owns the list.
-  session "$claude" "$$" "ship: demo" sid-live 2000
+  session "$claude" "$$" "demo" sid-live 2000
   task "$claude" sid-live 1 "Port the reader" completed
   task "$claude" sid-live 2 "Write the tests" in_progress
   task "$claude" sid-live 3 "Open the PR" pending
   task "$claude" sid-live 4 "Dropped idea" deleted
   # A newer record with the same name whose process is gone is never read.
   stale=$(dead_pid)
-  session "$claude" "$stale" "ship: demo" sid-dead 9000
+  session "$claude" "$stale" "demo" sid-dead 9000
   task "$claude" sid-dead 1 "Stale step" completed
   out=$(run_json "$home") || fail "task list: reader failed"
   assert_equals 'demo|ship|claude|firstmate|working|writing the reader|busy|claude-hook' \
@@ -119,6 +119,7 @@ test_task_list_wins_over_a_status_token() {
   now=$(date +%s)
   fm_write_meta "$home/state/both.meta" kind=ship harness=claude "account=$claude" "spawn_gen=s$now.1.2"
   printf 'working [at=%s] [step=1/9]: older declaration\n' "$now" > "$home/state/both.status"
+  # A worker launched before bare-id names keeps its legacy "<kind>: <id>" name.
   session "$claude" "$$" "ship: both" sid-both 1000
   task "$claude" sid-both 1 "Only step" in_progress
   out=$(run_json "$home")
@@ -177,8 +178,8 @@ test_half_written_files_drop_only_themselves() {
   printf 'working [at=1]: going\n' > "$home/state/t.status"
   # A session record that sorts first and is mid-rewrite hides only itself.
   printf '{"pid":' > "$claude/sessions/0.json"
-  session "$claude" "$(dead_pid)" "ship: other" sid-other 1000
-  session "$claude" "$$" "ship: t" sid-torn 1000
+  session "$claude" "$(dead_pid)" "other" sid-other 1000
+  session "$claude" "$$" "t" sid-torn 1000
   task "$claude" sid-torn 1 "Whole step" in_progress
   mkdir -p "$claude/tasks/sid-torn"
   printf '{"id":"2","subject":' > "$claude/tasks/sid-torn/2.json"
@@ -197,8 +198,9 @@ test_unpinned_and_ordinary_workers_are_found_in_candidate_roots() {
   mkdir -p "$elsewhere/sessions" "$fakehome/.claude/sessions"
   fm_write_meta "$home/state/unpinned.meta" kind=ship harness=claude
   fm_write_meta "$home/state/plain.meta" kind=scout harness=claude account=ordinary
-  session "$elsewhere" "$$" "ship: unpinned" sid-u 1000
+  session "$elsewhere" "$$" "unpinned" sid-u 1000
   task "$elsewhere" sid-u 1 "Unpinned step" in_progress
+  # The legacy "<kind>: <id>" name still resolves in a candidate root.
   session "$fakehome/.claude" "$$" "scout: plain" sid-p 1000
   task "$fakehome/.claude" sid-p 1 "Ordinary step" completed
   out=$(FM_HOME=$home FM_PROGRESS_CLAUDE_DIRS=$TMP_ROOT/none:$elsewhere HOME=$fakehome \

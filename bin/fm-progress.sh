@@ -24,8 +24,9 @@
 #                                   status and statusUpdatedAt, and a Claude
 #                                   worker's sessionId, found by the session
 #                                   name bin/fm-spawn.sh gives every Claude
-#                                   launch (claude_session_name_flag:
-#                                   "<kind>: <task-id>") with a live pid
+#                                   launch (claude_session_name_flag: the bare
+#                                   <task-id>, or "<kind>: <task-id>" from a
+#                                   launch before that change) with a live pid
 #   <claude-dir>/tasks/<sessionId>/<n>.json  that worker's own Claude Code task
 #                                   list (subject, status pending|in_progress|
 #                                   completed); Claude workers launch with
@@ -206,7 +207,7 @@ for meta in "$STATE"/*.meta; do
         ordinary) add_dir "$HOME/.claude" ;;
         /*) add_dir "$m_account" ;;
       esac
-      CLAUDE_WORKERS+=("$m_kind: $id"$'\t'"$id")
+      CLAUDE_WORKERS+=("$id"$'\t'"$m_kind: $id")
       ;;
   esac
   ROWS+="$id"$'\t'"$m_kind"$'\t'"$m_harness"$'\t'"${m_project##*/}"$'\t'"$phase"$'\t'"$phase_at"$'\t'"$text"$'\t'"$m_spawn"$'\t'"$b_state"$'\t'"$b_source"$'\t'"$step"$'\n'
@@ -260,11 +261,11 @@ if [ "${#CLAUDE_WORKERS[@]}" -gt 0 ]; then
       --args "${FILE_ARGS[@]}" 2>/dev/null) || :
   fi
   for w in "${CLAUDE_WORKERS[@]}"; do
-    name=${w%%$'\t'*}
-    wid=${w#*$'\t'}
+    wid=${w%%$'\t'*}
+    legacy=${w#*$'\t'}
     best='' best_start=-1
     while IFS=$'\t' read -r s_name s_sid s_pid s_start s_dir; do
-      [ "$s_name" = "$name" ] || continue
+      [ "$s_name" = "$wid" ] || [ "$s_name" = "$legacy" ] || continue
       case "$s_sid" in ''|*/*|.*) continue ;; esac
       case "$s_start" in ''|*[!0-9]*) s_start=0 ;; esac
       kill -0 "$s_pid" 2>/dev/null || continue
