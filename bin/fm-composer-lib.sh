@@ -834,6 +834,22 @@ _fm_composer_titled_rule_row() {  # <trimmed-row> <plain-rule-spaces>
   [ "$spaces" = "$expected" ]
 }
 
+# _fm_composer_row_is_slash_menu_selection: 0 when trimmed <row> at <row-index>
+# is the selected row of a slash-command menu drawn directly under the closing
+# rule of a composer pair that <glyph> already proved. Claude Code 2.1.310
+# (recorded live on herdr 0.9.5) marks that row with the composer's own `❯`,
+# followed by the command and a column-aligned description, so it would
+# otherwise read as a lower live composer holding the menu text.
+_fm_composer_row_is_slash_menu_selection() {  # <trimmed-row> <glyph> <row-index>
+  local rest
+  [ "$FM_COMPOSER_SCAN_PI_PAIR_FOUND" = 1 ] \
+    && [ "$FM_COMPOSER_SCAN_PI_CLOSE" -eq $(($3 - 1)) ] \
+    && [ "$FM_COMPOSER_SCAN_PI_GLYPH_ROW" -ge 0 ] \
+    && [ "$FM_COMPOSER_SCAN_PI_GLYPH" = "$2" ] || return 1
+  rest=${1#"$2"}
+  [[ $rest =~ ^\ +/[^[:space:]]+\ {2,}[^[:space:]] ]]
+}
+
 # Row-scan results are returned through FM_COMPOSER_SCAN_* globals (bash 3.2
 # has no nameref); they are internal to this owner.
 _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
@@ -969,7 +985,8 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
     if [ "$top" -lt 0 ] && fm_composer_leading_shell_glyph_var glyph "$trimmed" \
        && ! _fm_composer_row_is_pi_status "$trimmed"; then
       FM_COMPOSER_SCAN_SHELL_ROW=$row
-    elif fm_composer_leading_agent_glyph_var glyph "$trimmed"; then
+    elif fm_composer_leading_agent_glyph_var glyph "$trimmed" \
+       && ! _fm_composer_row_is_slash_menu_selection "$trimmed" "$glyph" "$row"; then
       FM_COMPOSER_SCAN_BARE_ROW=$row
     fi
     # Cursor safety: a cursor sitting on a structural edge row is never an
