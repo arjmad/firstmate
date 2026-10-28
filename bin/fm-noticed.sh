@@ -66,6 +66,12 @@
 # FM_NOTICED_NOW (YYYY-MM-DD) fixes the date for tests.
 set -u
 
+usage() {
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
+}
+# Answer help before fm-wake-lib.sh, which prepares the home's state.
+case "${1:-}" in -h | --help | help) usage; exit 0 ;; esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
@@ -82,10 +88,6 @@ HOLD="$SCRIPT_DIR/fm-captain-hold.sh"
 TAB=$'\t'
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
-
-usage() {
-  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
-}
 
 refuse() {
   printf 'fm-noticed: %s\n' "$*" >&2
@@ -334,6 +336,5 @@ case "${1:-}" in
   top3) shift; cmd_top3 "$@" ;;
   unseen) shift; cmd_unseen "$@" ;;
   shown) shift; cmd_shown "$@" ;;
-  -h | --help | help) usage ;;
   *) usage >&2; exit 2 ;;
 esac
