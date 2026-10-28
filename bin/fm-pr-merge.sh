@@ -624,6 +624,11 @@ MERGE_EXPECTED_SPAWN_GEN=$FM_BACKLOG_META_SPAWN_GEN
 MERGE_CONTROL_LOCK=
 MERGE_META_LOCK=
 merge_control_cleanup() {
+  local status=$?
+  # Every refusal of a branch standing merge, ordinary gates included, leaves
+  # the merge to main (see the header); the exit status stays the gate's own.
+  [ "$status" -eq 0 ] || [ "$FM_PR_BRANCH_STANDING" = false ] \
+    || echo "error: leave this merge to main: report it with verdict captain and the PR URL (role partition: docs/pi-supervision-branch.md)" >&2
   [ -z "$MERGE_META_LOCK" ] || fm_lock_release "$MERGE_META_LOCK" || true
   fm_afk_contract_lock_release || true
   [ -z "$MERGE_CONTROL_LOCK" ] || fm_lock_release "$MERGE_CONTROL_LOCK" || true

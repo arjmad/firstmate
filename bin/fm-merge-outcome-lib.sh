@@ -52,7 +52,8 @@ FM_MERGE_OUTCOME_ALREADY_RECORDED=false
 #          routine row in the branch outcome store (bin/fm-branch-outcome.sh)
 #          instead of a check wake, so main gets a landed note and no turn,
 #          and the branch closes the task in the turn that merged it; a
-#          secondmate home reports upward exactly as for self.
+#          secondmate home reports upward exactly as for self. A main-home poll
+#          whose persisted authority is branch is routed the same way.
 # Optional <authority> is away, attended, branch, or external (the retired yolo and
 # away-grant values are still accepted for a persisted authority written before
 # the words model landed). Away, branch, external, and the retired tags are appended to
@@ -115,7 +116,10 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [autho
   if [ -n "$destination" ]; then
     fm_parent_channel_append_once "$destination" "$(status_stamp_line "$line")" || status=1
   fi
-  if [ "$status" -eq 0 ] && [ "$origin" = branch ] && [ -z "$destination" ]; then
+  # A poll that observes a branch standing merge before the merge run publishes
+  # its own outcome routes it the same silent way, so a race gives main no turn.
+  if [ "$status" -eq 0 ] && [ -z "$destination" ] \
+    && { [ "$origin" = branch ] || [ "$authority" = branch ]; }; then
     FM_HOME=$home FM_STATE_OVERRIDE=$state "$_FM_MERGE_OUTCOME_LIB_DIR/fm-branch-outcome.sh" append \
       --task "$id" --verdict routine --silent true \
       --summary "merged $id $FM_PR_URL under standing authority" \
