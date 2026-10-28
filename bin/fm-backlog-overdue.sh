@@ -11,10 +11,11 @@
 # `scan` is the watcher's hourly backstop for that: a still-open queued row is
 # overdue when tasks-axi reports its dated hold inactive, its gate opened at
 # least the grace period ago, it has no unresolved blocker, and no task record
-# (state/<id>.meta) shows it dispatched. The gate opens at 00:00 UTC of the
-# hold-until date; the grace is 12 hours (FM_BACKLOG_OVERDUE_GRACE_SECS, in
-# seconds), which leaves firstmate's own heartbeat re-evaluation of queued work
-# most of the gate's first day before this fires.
+# (state/<id>.meta) shows it dispatched. The gate opens at local midnight of
+# the hold-until date, as tasks-axi lifts it; the grace is 12 hours
+# (FM_BACKLOG_OVERDUE_GRACE_SECS, in seconds), which leaves firstmate's own
+# heartbeat re-evaluation of queued work half the gate's first day before this
+# fires.
 #
 # Each overdue row gets exactly one durable `check:` wake keyed
 # `backlog-overdue:<id>`, whose payload names the task id, its gate date, and
@@ -44,8 +45,6 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
-# shellcheck source=bin/fm-classify-lib.sh disable=SC1091
-. "$SCRIPT_DIR/fm-classify-lib.sh"
 
 MARKERS="$STATE/backlog-overdue"
 GRACE=${FM_BACKLOG_OVERDUE_GRACE_SECS:-43200}
@@ -81,6 +80,12 @@ gate_passed_rows() {  # <listing>
   '
 }
 
+# Epoch of local midnight on <YYYY-MM-DD>, the moment tasks-axi lifts that gate.
+local_midnight_epoch() {  # <date>
+  date -j -f '%Y-%m-%d %H:%M:%S' "$1 00:00:00" +%s 2>/dev/null \
+    || date -d "$1 00:00:00" +%s 2>/dev/null
+}
+
 load_wake_lib() {
   # shellcheck source=bin/fm-wake-lib.sh disable=SC1091
   FM_ROOT_OVERRIDE="$FM_ROOT" FM_HOME="$FM_HOME" STATE="$STATE" . "$SCRIPT_DIR/fm-wake-lib.sh"
@@ -106,7 +111,7 @@ cmd_scan() {
     [ -n "$id" ] || continue
     [ ! -e "$STATE/$id.meta" ] || continue
     candidates="$candidates$id"$'\n'
-    opened=$(fm_utc_iso_to_epoch "${until}T00:00:00Z") || continue
+    opened=$(local_midnight_epoch "$until") || continue
     age=$((now - opened))
     [ "$age" -ge "$GRACE" ] || continue
     marker="$MARKERS/$id"

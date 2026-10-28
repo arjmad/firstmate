@@ -14,6 +14,9 @@ unset FM_ROOT_OVERRIDE FM_DATA_OVERRIDE FM_STATE_OVERRIDE FM_CONFIG_OVERRIDE TAS
 
 command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; exit 0; }
 
+# Pin UTC so GATE_EPOCH is the local midnight tasks-axi opens the gate at;
+# the time-zone case below overrides it.
+export TZ=UTC
 # 2026-10-24T00:00:00Z, the gate of the dated rows below.
 GATE_EPOCH=1792800000
 HOUR=3600
@@ -78,6 +81,19 @@ test_grace_period_bounds_the_wake() {
   out=$(scan_at "$home" $((GATE_EPOCH + 12 * HOUR))) || fail "scan failed: $out"
   assert_equals "$out" "overdue dated-job" "an item at the end of its grace was not reported"
   pass "the wake fires once the 12-hour grace after the gate has passed, not before"
+}
+
+test_grace_runs_from_local_midnight() {
+  local home out
+  home=$(new_home local-zone)
+  add_dated "$home" dated-job 'Dated job' 2026-10-24
+  # New York opens the 2026-10-24 gate at 04:00Z, four hours after UTC midnight.
+  out=$(TZ=America/New_York scan_at "$home" $((GATE_EPOCH + 15 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "" "an item 11 hours past its local gate was reported"
+  out=$(TZ=America/New_York scan_at "$home" $((GATE_EPOCH + 16 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue dated-job" "an item 12 hours past its local gate was not reported"
+  assert_contains "$(cat "$home/state/.wake-queue")" "opened 12h ago" "the reason did not count from local midnight"
+  pass "the grace runs from the local midnight tasks-axi opens the gate at"
 }
 
 test_waiting_or_dispatched_items_stay_quiet() {
@@ -171,6 +187,7 @@ test_home_without_backlog_is_silent() {
 
 test_overdue_item_wakes_once_with_its_reason
 test_grace_period_bounds_the_wake
+test_grace_runs_from_local_midnight
 test_waiting_or_dispatched_items_stay_quiet
 test_dispatch_or_answer_clears_and_a_new_lapse_wakes_again
 test_still_queued_key_is_not_duplicated
