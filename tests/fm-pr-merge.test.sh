@@ -3887,8 +3887,8 @@ test_away_branch_actor_merges_green_under_the_record() {
   rc=$?
   set -e
   expect_code 6 "$rc" "away-branch-attended: an attended branch must be refused at the partition"
-  assert_grep 'the supervision branch never performs this action' "$case_dir/stderr" \
-    "away-branch-attended: refusal lost the partition wording"
+  assert_grep 'does not record yolo=on' "$case_dir/stderr" \
+    "away-branch-attended: refusal lost the standing-class wording"
   [ ! -e "$case_dir/gh.log" ] || assert_no_grep 'pr ' "$case_dir/gh.log" \
     "away-branch-attended: gh ran for an attended branch merge"
 
@@ -3937,6 +3937,149 @@ test_away_branch_actor_merges_green_under_the_record() {
   pass "under the away-posture record the branch merges a green task, is refused on a red check with or without --allow-red, and is refused at the partition while attended"
 }
 
+# Attended, the branch merges only the standing class Arjun named for it
+# (bin/fm-pr-merge.sh header, docs/fork-decisions.md 2026-10-27): a green,
+# reviewed, explicit two-way door GitHub pull request of a yolo task, with no
+# override flag. That merge is tagged branch and leaves main a silent landed
+# branch outcome instead of a check wake.
+# Args: case_name number door_body; leaves the case ready for a branch run.
+branch_standing_case() {
+  local case_dir id head=b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5
+  case_dir=$(make_case "$1")
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  file_task_x1 "$case_dir"
+  printf 'yolo=on\n' >> "$case_dir/state/task-x1.meta"
+  write_github_pr_files "$case_dir" bin/tool.sh
+  id=$(github_pr_diff_id "$case_dir")
+  {
+    printf '['
+    github_pr_comment OWNER "<!-- fm-code-review v1 diff=$id head=$head -->"
+    printf ']\n'
+  } > "$case_dir/github-pr-comments.json"
+  set_pr_body "$case_dir/github-view.json" body "$3"
+  printf '%s\n' "$case_dir"
+}
+
+# Args: case_dir number [merge args]...; sets RC.
+run_branch_merge() {
+  local case_dir=$1 number=$2
+  shift 2
+  set +e
+  FM_SUPERVISION_ACTOR=branch run_pr_merge "$case_dir" task-x1 "https://github.com/example/repo/pull/$number" "$@" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  RC=$?
+  set -e
+}
+
+TWO_WAY_BODY=$'## Summary\n\nA fix.\n\n## Merge Danger\n\n**Door:** two-way\n\n**Blast Radius:** one script'
+
+test_attended_branch_merges_its_standing_class() {
+  local case_dir url=https://github.com/example/repo/pull/141 row
+  case_dir=$(branch_standing_case branch-standing-green 141 "$TWO_WAY_BODY")
+  run_branch_merge "$case_dir" 141
+  expect_code 0 "$RC" "branch-standing-green: the standing class must merge for the attended branch"$'\n'"$(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 141 example/repo --squash
+  assert_grep 'is marked a two-way door' "$case_dir/stderr" \
+    "branch-standing-green: the door gate did not run"
+  assert_grep 'reviewed: diff' "$case_dir/stderr" \
+    "branch-standing-green: the code review gate did not run"
+  [ "$(sed -n 6p "$case_dir/state/task-x1.merge-authority")" = branch ] \
+    || fail "branch-standing-green: the merge authority was not persisted as branch"
+  if [ -e "$case_dir/state/.wake-queue" ]; then
+    assert_no_grep 'merge landed' "$case_dir/state/.wake-queue" \
+      "branch-standing-green: a branch merge queued a check wake for main"
+  fi
+  row=$(cat "$case_dir/state/branch-outcomes.jsonl")
+  [ "$(printf '%s' "$row" | jq -r '[.task, .verdict, .silent] | join(" ")')" = "task-x1 routine true" ] \
+    || fail "branch-standing-green: no silent routine landed outcome: $row"
+  assert_contains "$(printf '%s' "$row" | jq -r .summary)" "merged task-x1 $url" \
+    "branch-standing-green: the landed outcome did not name the PR"
+  assert_contains "$(printf '%s' "$row" | jq -r .wake)" "merge landed: task-x1 $url branch" \
+    "branch-standing-green: the landed outcome did not carry the branch tag"
+
+  # Main's own merge of the same class is unchanged: untagged, and a check wake.
+  case_dir=$(branch_standing_case main-standing-green 142 "$TWO_WAY_BODY")
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/142 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  RC=$?
+  set -e
+  expect_code 0 "$RC" "main-standing-green: main's merge changed"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep 'merge landed: task-x1 https://github.com/example/repo/pull/142' "$case_dir/state/.wake-queue" \
+    "main-standing-green: main's merge lost its check wake"
+  [ ! -e "$case_dir/state/branch-outcomes.jsonl" ] \
+    || fail "main-standing-green: main's merge wrote a branch outcome"
+  pass "the attended branch merges a green, reviewed, two-way door yolo PR, tagged branch, with a silent landed outcome and no check wake"
+}
+
+# Every case outside the class refuses the branch toward main, exit 6, with no
+# forge merge and no captain hold, naming each reason.
+assert_branch_refused() {  # <case_dir> <label> <reason>
+  expect_code 6 "$RC" "$2: the branch must be refused outside its standing class"$'\n'"$(cat "$1/stderr")"
+  assert_grep 'refused for the supervision branch' "$1/stderr" "$2: refusal lost the branch wording"
+  assert_grep "$3" "$1/stderr" "$2: refusal did not name its reason"
+  assert_grep 'leave this merge to main' "$1/stderr" "$2: refusal did not send the merge to main"
+  assert_no_grep 'pr merge' "$1/gh.log" "$2: gh pr merge ran for a refused branch merge"
+  captain_hold "$1" open task-x1 >/dev/null 2>&1 && fail "$2: a refused branch merge held the task"
+  return 0
+}
+
+test_attended_branch_refuses_outside_its_standing_class() {
+  local case_dir
+
+  case_dir=$(branch_standing_case branch-no-yolo 151 "$TWO_WAY_BODY")
+  sed -i.bak '/^yolo=/d' "$case_dir/state/task-x1.meta" && rm -f "$case_dir/state/task-x1.meta.bak"
+  printf 'yolo=off\n' >> "$case_dir/state/task-x1.meta"
+  run_branch_merge "$case_dir" 151
+  assert_branch_refused "$case_dir" branch-no-yolo 'does not record yolo=on'
+  assert_no_grep 'pr view' "$case_dir/gh.log" "branch-no-yolo: the forge was read before the actor refusal"
+
+  case_dir=$(branch_standing_case branch-door-missing 152 $'## Summary\n\nAn older PR body.')
+  run_branch_merge "$case_dir" 152
+  assert_branch_refused "$case_dir" branch-door-missing 'does not name an explicit two-way door (read: missing)'
+
+  case_dir=$(branch_standing_case branch-door-one-way 153 "$(one_way_body)")
+  run_branch_merge "$case_dir" 153
+  assert_branch_refused "$case_dir" branch-door-one-way 'does not name an explicit two-way door (read: one-way)'
+  assert_no_grep 'one_way_hold=' "$case_dir/state/task-x1.meta" \
+    "branch-door-one-way: the branch recorded a one-way merge call"
+
+  for flag in --attended-override '--allow-red ci' '--allow-missing ci' '--waive-review reason' --one-way-approved; do
+    case_dir=$(branch_standing_case "branch-flag-${flag%% *}" 154 "$TWO_WAY_BODY")
+    # shellcheck disable=SC2086 # The flag and its value split on purpose.
+    run_branch_merge "$case_dir" 154 $flag
+    assert_branch_refused "$case_dir" "branch-flag-$flag" "an override flag needs the captain's word through main"
+  done
+
+  case_dir=$(make_case branch-gitlab)
+  printf 'yolo=on\n' >> "$case_dir/state/task-x1.meta"
+  set +e
+  FM_SUPERVISION_ACTOR=branch run_pr_merge "$case_dir" task-x1 "$MR_URL" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  RC=$?
+  set -e
+  assert_branch_refused "$case_dir" branch-gitlab 'it is not a GitHub pull request'
+
+  # The ordinary gates still hold inside the class: a red check and a missing
+  # review refuse the branch as they refuse main.
+  case_dir=$(branch_standing_case branch-red 155 "$TWO_WAY_BODY")
+  write_github_red_json "$case_dir" "$(cat "$case_dir/github-head")" lint
+  set_pr_body "$case_dir/github-view.json" body "$TWO_WAY_BODY"
+  run_branch_merge "$case_dir" 155
+  expect_code 1 "$RC" "branch-red: a red check must refuse the branch"
+  assert_grep "check 'lint' is not green" "$case_dir/stderr" "branch-red: refusal did not name the red check"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "branch-red: gh pr merge ran for a red branch merge"
+
+  case_dir=$(branch_standing_case branch-unreviewed 156 "$TWO_WAY_BODY")
+  printf '%s\n' '[]' > "$case_dir/github-pr-comments.json"
+  run_branch_merge "$case_dir" 156
+  expect_code 1 "$RC" "branch-unreviewed: an unreviewed PR must refuse the branch"
+  assert_grep 'unreviewed: diff' "$case_dir/stderr" "branch-unreviewed: refusal did not name the missing review"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "branch-unreviewed: gh pr merge ran without a review"
+  pass "the attended branch is refused toward main outside its standing class, before any forge merge or captain hold"
+}
+
 # The race this closes: a branch merge passes the opening partition
 # because the live record exists, then the captain returns and archives that
 # record during the slow forge preflight. The locked authority recheck must
@@ -3960,7 +4103,7 @@ test_away_branch_refuses_when_record_archived_during_preflight() {
   expect_code 6 "$rc" "away-branch-archived-during-preflight: an archived record must refuse the branch under the lock"
   assert_grep 'main is parked' "$case_dir/stderr" \
     "away-branch-archived-during-preflight: the opening partition never saw the live record"
-  assert_grep 'the supervision branch never performs this action' "$case_dir/stderr" \
+  assert_grep 'refused for the supervision branch' "$case_dir/stderr" \
     "away-branch-archived-during-preflight: refusal lost the partition wording"
   assert_grep 'pr view' "$case_dir/gh.log" \
     "away-branch-archived-during-preflight: the forge preflight never ran"
@@ -5353,6 +5496,8 @@ test_quiet_record_keeps_merges_attended
 test_allow_red_requires_one_separate_name
 test_away_record_permits_any_green_merge_under_away_authority
 test_away_branch_actor_merges_green_under_the_record
+test_attended_branch_merges_its_standing_class
+test_attended_branch_refuses_outside_its_standing_class
 test_away_branch_refuses_when_record_archived_during_preflight
 test_away_posture_refuses_asynchronous_merge_paths
 test_away_plan_gated_403_does_not_block_the_merge
