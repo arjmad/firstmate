@@ -26,7 +26,7 @@ fi
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-unset NO_MISTAKES_GATE
+unset NO_MISTAKES_GATE CLAUDE_ENV_FILE
 
 TMP_ROOT=$(fm_test_tmproot fm-sessionstart-nudge)
 NUDGE="$ROOT/bin/fm-sessionstart-nudge.sh"
@@ -225,13 +225,14 @@ run_hook() {  # <root> [args...]
   local root=$1
   shift
   env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    ${CLAUDE_ENV_FILE_FIXTURE:+CLAUDE_ENV_FILE="$CLAUDE_ENV_FILE_FIXTURE"} \
     FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" PATH="$RUN_PATH" "$RUN" "$@"
 }
 
 run_hook_pi() {  # <root> [args...]
   local root=$1
   shift
-  env -u CLAUDECODE -u GROK_AGENT PI_CODING_AGENT=true FM_PI_HARNESS=pi \
+  env -u CLAUDECODE -u GROK_AGENT -u CLAUDE_ENV_FILE PI_CODING_AGENT=true FM_PI_HARNESS=pi \
     FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" PATH="$RUN_PATH" "$RUN" "$@"
 }
 
@@ -1037,6 +1038,36 @@ test_run_gate_and_scope_are_silent() {
   pass "run wrapper: ordinary ineligible opens stay silent-zero and Pi preflight gets an explicit silent stand-down"
 }
 
+test_run_exports_home_to_claude_env_file() {
+  local root="$TMP_ROOT/run-env-file" base="$TMP_ROOT/run-env-linked-base"
+  local linked="$TMP_ROOT/run-env-linked" env_file="$TMP_ROOT/run-env-file.sh"
+  local worker_env="$TMP_ROOT/run-env-worker.sh" resolved
+  make_run_primary "$root"
+  : > "$env_file"
+  CLAUDE_ENV_FILE_FIXTURE="$env_file" run_hook "$root" --source startup </dev/null >/dev/null
+  CLAUDE_ENV_FILE_FIXTURE="$env_file" run_hook "$root" --source compact </dev/null >/dev/null
+  [ "$(grep -c '^export FM_HOME=' "$env_file")" = 1 ] \
+    || fail "a primary session open did not write exactly one FM_HOME export: $(cat "$env_file")"
+  # shellcheck disable=SC2016 # Expand inside the child shell that sources the env file.
+  resolved=$(env -u FM_HOME bash -c '. "$1"; printf %s "$FM_HOME"' _ "$env_file")
+  [ "$resolved" = "$root" ] || fail "the env file resolved FM_HOME to '$resolved', not $root"
+
+  fm_git_worktree "$base" "$linked" fm/run-env-linked
+  mkdir -p "$linked/bin" "$linked/state"
+  : > "$linked/AGENTS.md"
+  : > "$worker_env"
+  CLAUDE_ENV_FILE_FIXTURE="$worker_env" run_hook "$linked" --source startup </dev/null >/dev/null
+  [ ! -s "$worker_env" ] || fail "a task worktree session wrote FM_HOME: $(cat "$worker_env")"
+  CLAUDE_ENV_FILE="$worker_env" env NO_MISTAKES_GATE=1 FM_GATE_REFUSE_BYPASS=0 \
+    FM_ROOT_OVERRIDE="$root" FM_HOME="$root" PATH="$RUN_PATH" "$RUN" --source startup </dev/null >/dev/null
+  [ ! -s "$worker_env" ] || fail "a gate agent session wrote FM_HOME: $(cat "$worker_env")"
+  local quoted="$TMP_ROOT/run-env-it's"
+  make_run_primary "$quoted"
+  CLAUDE_ENV_FILE_FIXTURE="$worker_env" run_hook "$quoted" --source startup </dev/null >/dev/null
+  [ ! -s "$worker_env" ] || fail "a home path holding a quote wrote an export: $(cat "$worker_env")"
+  pass "run wrapper: a primary session exports its home to CLAUDE_ENV_FILE once, a worker, gate, or quoted path never does"
+}
+
 test_run_creates_missing_state_on_a_fresh_primary() {
   local root="$TMP_ROOT/run-fresh-primary" base="$TMP_ROOT/run-fresh-linked-base"
   local linked="$TMP_ROOT/run-fresh-linked" out status=0
@@ -1113,6 +1144,7 @@ test_run_resume_delegates_to_the_nudge
 test_run_reads_source_from_the_hook_payload
 test_run_unknown_source_takes_the_helm
 test_run_gate_and_scope_are_silent
+test_run_exports_home_to_claude_env_file
 test_run_creates_missing_state_on_a_fresh_primary
 test_run_reports_a_state_dir_it_cannot_create
 test_run_reports_a_failed_session_start_as_digest_text
