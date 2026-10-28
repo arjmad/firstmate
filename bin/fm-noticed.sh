@@ -27,7 +27,9 @@
 #            matched: <id>     already open; a dated "Seen again" line was
 #                              added to its body
 #            reopened: <id>    a closed noticed item came back; it is re-held
-#            skipped: <id> (answered earlier)   a closed idea is never re-asked
+#                              (refiled fresh once Done retention archived it)
+#            skipped: <id> (answered earlier)   a closed idea is never re-asked,
+#                              archived or not
 #          A filed or reopened noticed item joins the unseen list; an idea
 #          waits for the Monday ranking (top3). --from names who saw it (a
 #          task id or an agent); nova and sapna are refused, because Sapna's
@@ -48,8 +50,10 @@
 # shown    Mark items shown after the captain reply that mentions them.
 #          Prints `shown: <id>` for each id that was unseen.
 #
-# State: state/noticed/unseen.tsv (the unseen list) and state/noticed/picked
-# (every id ever in a top 3), written under state/noticed/lock.
+# State: state/noticed/unseen.tsv (the unseen list), state/noticed/picked
+# (every id ever in a top 3) and state/noticed/filed (every id ever filed, so
+# an item Done retention archived out of the backlog is still known), written
+# under state/noticed/lock.
 # FM_NOTICED_NOW (YYYY-MM-DD) fixes the date for tests.
 set -u
 
@@ -61,6 +65,7 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 DIR="$STATE/noticed"
 UNSEEN="$DIR/unseen.tsv"
 PICKED="$DIR/picked"
+FILED="$DIR/filed"
 LOCK="$DIR/lock"
 TODAY=${FM_NOTICED_NOW:-$(date -u +%Y-%m-%d)}
 TASKS="$SCRIPT_DIR/fm-tasks-axi.sh"
@@ -171,7 +176,7 @@ cmd_file() {
   esac
   id="$kind-$slug"
   lock_state
-  if show=$("$TASKS" show "$id" 2>/dev/null); then
+  if show=$("$TASKS" show "$id" --full 2>/dev/null); then
     state=$(shown_field "$show" state)
     if [ "$state" != "done" ]; then
       append_body "$id" "$show" "Seen again $TODAY by $from: ${evidence:-$why}" \
@@ -184,7 +189,7 @@ cmd_file() {
       return 0
     fi
     "$TASKS" reopen "$id" >/dev/null || { echo "fm-noticed: could not reopen $id" >&2; exit 1; }
-    show=$("$TASKS" show "$id") || exit 1
+    show=$("$TASKS" show "$id" --full) || exit 1
     append_body "$id" "$show" "Back $TODAY, seen by $from: ${evidence:-$why}" \
       || { echo "fm-noticed: could not attach evidence to $id" >&2; exit 1; }
     "$HOLD" hold "$id" --kind reversible --reason "$(hold_reason "$kind" "$title" "$why" "$from")" >/dev/null \
@@ -193,17 +198,28 @@ cmd_file() {
     printf 'reopened: %s\n' "$id"
     return 0
   fi
-  local body
+  local body outcome=filed
+  if grep -Fxq -- "$id" "$FILED" 2>/dev/null; then
+    # Filed before, and archived out of the backlog since it closed.
+    if [ "$kind" = idea ]; then
+      printf 'skipped: %s (answered earlier)\n' "$id"
+      return 0
+    fi
+    outcome=reopened
+  fi
   body="$( [ "$kind" = idea ] && echo Idea || echo Noticed ) $TODAY by $from: $title
 Why it may matter: $why"
+  [ "$outcome" = filed ] || body="$body
+Back after an earlier $id closed; its record is in the Done archive."
   [ -z "$evidence" ] || body="$body
 Evidence: $evidence"
   "$TASKS" add "$id" "$title" --kind "$kind" ${repo:+--repo "$repo"} --body "$body" >/dev/null \
     || { echo "fm-noticed: could not add $id" >&2; exit 1; }
   "$HOLD" hold "$id" --kind reversible --reason "$(hold_reason "$kind" "$title" "$why" "$from")" >/dev/null \
     || { echo "fm-noticed: $id was added but could not be held; hold it with bin/fm-captain-hold.sh before anything dispatches" >&2; exit 1; }
+  grep -Fxq -- "$id" "$FILED" 2>/dev/null || printf '%s\n' "$id" >> "$FILED"
   [ "$kind" = noticed ] && add_unseen "$id" noticed "$title"
-  printf 'filed: %s\n' "$id"
+  printf '%s: %s\n' "$outcome" "$id"
 }
 
 cmd_collect() {

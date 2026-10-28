@@ -71,15 +71,18 @@ test_noticed_is_a_captain_hold_that_never_dispatches() {
 }
 
 test_a_duplicate_attaches_evidence() {
-  local home out show
+  local home out show long
   home=$(make_home duplicate)
-  noticed "$home" file noticed canary-red --title "Packet canary red" --why "packet may be wrong" \
+  long="packet may be wrong: $(printf 'evidence %.0s' $(seq 1 80))end-of-first-why"
+  noticed "$home" file noticed canary-red --title "Packet canary red" --why "$long" \
     --from t1 >/dev/null || fail "first file failed"
   out=$(noticed "$home" file noticed canary-red --title "Packet canary red again" --why "still red" \
     --from t2 --evidence "canary run 10-27 exit 2") || fail "second file failed: $out"
   assert_equals "matched: noticed-canary-red" "$out" "a duplicate was not matched"
   show=$(tasks "$home" show noticed-canary-red --full)
   assert_contains "$show" "Seen again 2026-10-27 by t2: canary run 10-27 exit 2" "the new evidence was not attached"
+  assert_contains "$(printf '%s\n' "$show" | grep '^  body: ')" "end-of-first-why" \
+    "attaching evidence cut the earlier body short"
   assert_equals 1 "$(noticed "$home" unseen | wc -l | tr -d ' ')" "a duplicate was listed twice"
   pass "a duplicate attaches its evidence to the open item"
 }
@@ -99,7 +102,21 @@ test_closed_items_come_back_or_stay_answered() {
   tasks "$home" "done" idea-bundle-slow >/dev/null || fail "could not close the idea fixture"
   out=$(noticed "$home" file idea bundle-slow --title "Bundle slow movers" --why "frees cash" --from t3)
   assert_equals "skipped: idea-bundle-slow (answered earlier)" "$out" "an answered idea was asked again"
-  pass "a fixed problem that recurs comes back, and an answered idea is never re-asked"
+
+  # Done retention archives closed rows out of the backlog; both rules hold after it.
+  noticed "$home" file noticed printer-down --title "Printer offline" --why "labels stall" --from t4 >/dev/null
+  tasks "$home" "done" noticed-printer-down >/dev/null || fail "could not close the fixture again"
+  printf '%s\n' 'backend = "markdown"' '[markdown]' 'path = "data/backlog.md"' \
+    'archive = "data/done-archive.md"' 'done_keep = 0' > "$home/.tasks.toml"
+  tasks "$home" prune >/dev/null || fail "could not archive the closed fixtures"
+  tasks "$home" show idea-bundle-slow >/dev/null 2>&1 && fail "the fixture was not archived"
+  out=$(noticed "$home" file idea bundle-slow --title "Bundle slow movers" --why "frees cash" --from t5)
+  assert_equals "skipped: idea-bundle-slow (answered earlier)" "$out" "an archived answered idea was asked again"
+  out=$(noticed "$home" file noticed printer-down --title "Printer offline" --why "labels stall" --from t6)
+  assert_equals "reopened: noticed-printer-down" "$out" "an archived recurring problem was not brought back"
+  assert_contains "$(tasks "$home" show noticed-printer-down --full)" "its record is in the Done archive" \
+    "the refiled problem does not point at its archived record"
+  pass "a fixed problem that recurs comes back, and an answered idea is never re-asked, archived or not"
 }
 
 test_refusals() {
@@ -155,7 +172,6 @@ test_collect_reads_the_report_then_notes() {
 test_the_drain_shows_unseen_items() {
   local home drain
   home=$(make_home drain)
-  printf 'done: finished\n' > "$home/state/some-task.status"
   drain=$(run_drain "$home") || fail "the drain failed with nothing filed"
   assert_not_contains "$drain" "NOTICED" "the drain printed an empty NOTICED section"
   noticed "$home" file noticed canary-red --title "Canary red" --why "packet" --from t1 >/dev/null
@@ -166,7 +182,7 @@ test_the_drain_shows_unseen_items() {
   noticed "$home" shown noticed-canary-red >/dev/null
   drain=$(run_drain "$home") || fail "the drain failed after marking"
   assert_not_contains "$drain" "NOTICED" "a shown item was presented again"
-  pass "the wake drain shows each unseen item until it is marked shown"
+  pass "the wake drain shows each unseen item until it is marked shown, with no worker status on file"
 }
 
 test_noticed_is_a_captain_hold_that_never_dispatches
