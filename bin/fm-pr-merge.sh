@@ -637,7 +637,8 @@ merge_control_cleanup() {
   fm_afk_contract_lock_release || true
   [ -z "$MERGE_CONTROL_LOCK" ] || fm_lock_release "$MERGE_CONTROL_LOCK" || true
   if [ "$status" -ne 0 ] && [ "$FM_PR_BRANCH_STANDING" = true ] \
-    && [ "${FM_PR_GITHUB_MERGE_ACCEPTED:-false}" != true ]; then
+    && [ "${FM_PR_GITHUB_MERGE_ACCEPTED:-false}" != true ] \
+    && [ "${FM_PR_FORGE_TOOK_MERGE:-false}" != true ]; then
     echo "error: leave this merge to main: report it with verdict captain and the PR URL (role partition: docs/pi-supervision-branch.md)" >&2
     exit "$FM_LEASE_REFUSE_EXIT"
   fi
@@ -2163,6 +2164,8 @@ case "$PROVIDER" in
         if [ "$FM_PR_GITHUB_MERGED" != true ] && [ "$FM_PR_GITHUB_QUEUED" != true ]; then
           github_report_unmerged_outcome
         else
+          # Landed or queued is not a refusal: never send it back to main to merge.
+          FM_PR_FORGE_TOOK_MERGE=true
           printf 'actionable: the merge command for %s failed, but the pull request reads back as state=%s, merged=%s, isInMergeQueue=%s\n' \
             "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED" >&2
         fi

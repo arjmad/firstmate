@@ -3138,9 +3138,9 @@ test_merged_poll_row_names_no_authority_when_no_record_grants_one() {
 }
 
 # A merge poll that observes the supervision branch's standing merge before
-# the merge run publishes its own outcome (bin/fm-pr-merge.sh header) routes it
-# silently: no check wake reaches main, and the poll retires as usual.
-test_merged_poll_of_a_branch_standing_merge_wakes_no_one() {
+# the merge run publishes its own outcome (a queued merge, a race, or a run
+# that died) still wakes main, tagged branch, so the task is always closed.
+test_merged_poll_of_a_branch_standing_merge_still_wakes_main() {
   local dir state url
   url=https://github.com/o/r/pull/1
   dir=$(make_case merged-poll-branch-standing)
@@ -3152,13 +3152,11 @@ test_merged_poll_of_a_branch_standing_merge_wakes_no_one() {
     "$ROOT" "$state" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" \
     || fail "could not persist the branch merge authority"
   run_merged_poll_cycle "$dir"
-  [ -z "$(merged_ledger_row "$state" task-a)" ] \
-    || fail "a polled branch standing merge queued a check wake: $(merged_ledger_row "$state" task-a)"
-  assert_no_grep 'task-a.check.sh: merged' "$dir/watch.out" "a polled branch standing merge woke the watcher's owner"
-  [ "$(jq -r '[.task, .verdict, .silent] | join(" ")' "$state/branch-outcomes.jsonl")" = "task-a routine true" ] \
-    || fail "a polled branch standing merge recorded no silent outcome"
+  [ "$(merged_ledger_row "$state" task-a)" = "check: merge landed: task-a $url branch" ] \
+    || fail "a polled branch standing merge did not wake main tagged branch: $(merged_ledger_row "$state" task-a)"
+  [ ! -e "$state/branch-outcomes.jsonl" ] || fail "a polled branch standing merge was recorded silently"
   assert_poll_absent "$state" task-a
-  pass "a merge poll of a branch standing merge records it silently and wakes no one"
+  pass "a merge poll of a branch standing merge still wakes main, tagged branch"
 }
 
 test_authority_persistence_refuses_rebound_metadata() {
@@ -3686,7 +3684,7 @@ test_merged_poll_reregistration_after_notification_is_absorbed
 test_merged_poll_retries_a_failed_upward_report
 test_self_merge_and_poll_publish_one_outcome
 test_merged_poll_row_carries_the_merge_authority
-test_merged_poll_of_a_branch_standing_merge_wakes_no_one
+test_merged_poll_of_a_branch_standing_merge_still_wakes_main
 test_merged_poll_row_names_no_authority_when_no_record_grants_one
 test_authority_persistence_refuses_rebound_metadata
 test_authority_persists_before_control_unlock

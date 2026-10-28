@@ -39,10 +39,6 @@ _FM_MERGE_OUTCOME_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck disable=SC2034 # Public result consumed by sourcing callers.
 FM_MERGE_OUTCOME_ALREADY_RECORDED=false
-# True when the outcome went to the silent branch outcome row (origin branch),
-# so a poll caller must not wake main for it either.
-# shellcheck disable=SC2034 # Public result consumed by sourcing callers.
-FM_MERGE_OUTCOME_SILENT=false
 
 # fm_merge_outcome_report <home> <state> <task-id> <pr-url> <origin> [authority]
 #
@@ -56,8 +52,9 @@ FM_MERGE_OUTCOME_SILENT=false
 #          routine row in the branch outcome store (bin/fm-branch-outcome.sh)
 #          instead of a check wake, so main gets a landed note and no turn,
 #          and the branch closes the task in the turn that merged it; a
-#          secondmate home reports upward exactly as for self. A main-home poll
-#          whose persisted authority is branch is routed the same way.
+#          secondmate home reports upward exactly as for self. A poll of
+#          that merge still wakes main, tagged branch, so a merge the branch
+#          could not close in its own turn is still closed.
 # Optional <authority> is away, attended, branch, or external (the retired yolo and
 # away-grant values are still accepted for a persisted authority written before
 # the words model landed). Away, branch, external, and the retired tags are appended to
@@ -79,7 +76,6 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [autho
   # shellcheck disable=SC2034 # Sourced wake helpers consume these scoped globals.
   local STATE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
   FM_MERGE_OUTCOME_ALREADY_RECORDED=false
-  FM_MERGE_OUTCOME_SILENT=false
   case "$origin" in self|poll|branch) ;; *) return 2 ;; esac
   case "$authority" in
     away|branch|external|yolo|away-grant) suffix=" $authority" ;;
@@ -121,16 +117,14 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [autho
   if [ -n "$destination" ]; then
     fm_parent_channel_append_once "$destination" "$(status_stamp_line "$line")" || status=1
   fi
-  # A poll that observes a branch standing merge before the merge run publishes
-  # its own outcome routes it the same silent way, so a race gives main no turn.
-  if [ "$status" -eq 0 ] && [ -z "$destination" ] \
-    && { [ "$origin" = branch ] || [ "$authority" = branch ]; }; then
+  # Only the branch's own merge run is silent: the branch is there to close
+  # the task. A poll that observes the merge first (a queued merge, a race, or
+  # a run that died) still wakes main, so someone closes it.
+  if [ "$status" -eq 0 ] && [ "$origin" = branch ] && [ -z "$destination" ]; then
     FM_HOME=$home FM_STATE_OVERRIDE=$state "$_FM_MERGE_OUTCOME_LIB_DIR/fm-branch-outcome.sh" append \
       --task "$id" --verdict routine --silent true \
       --summary "merged $id $FM_PR_URL under standing authority" \
       --wake "check: merge landed: $id $FM_PR_URL$suffix" >/dev/null || status=1
-    # shellcheck disable=SC2034 # Public result consumed by sourcing callers.
-    [ "$status" -ne 0 ] || FM_MERGE_OUTCOME_SILENT=true
   elif [ "$status" -eq 0 ] && [ "$wake" = true ] \
     && { [ "$origin" = poll ] || [ -z "$destination" ]; }; then
     fm_wake_append check "merged-$id-$FM_PR_URL" \

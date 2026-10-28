@@ -3380,10 +3380,6 @@ EOF
             triage_log "absorbed duplicate merged PR poll result for $id"
             continue
           fi
-          if [ "$FM_MERGE_OUTCOME_SILENT" = true ]; then
-            triage_log "recorded the supervision branch's standing merge of $id silently"
-            continue
-          fi
           wake "$reason"
         fi
         pr_poll_control_release || exit 1

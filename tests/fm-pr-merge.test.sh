@@ -3998,16 +3998,16 @@ test_attended_branch_merges_its_standing_class() {
   assert_contains "$(printf '%s' "$row" | jq -r .wake)" "merge landed: task-x1 $url branch" \
     "branch-standing-green: the landed outcome did not carry the branch tag"
 
-  # A merge poll that observes this merge first routes it the same silent way:
-  # a fresh state with the persisted branch authority queues no check wake.
+  # A merge poll that observes this merge first still wakes main, tagged
+  # branch, so a merge the branch could not close in its own turn is closed.
   local poll_state="$TMP_ROOT/branch-standing-poll-state"
   mkdir -p "$poll_state"
   bash -c '. "$1/bin/fm-merge-outcome-lib.sh"; fm_merge_outcome_report "$2" "$3" task-x1 "$4" poll branch' _ \
     "$ROOT" "$case_dir/home" "$poll_state" "$url" || fail "branch-standing-poll: the poll outcome was not recorded"
-  [ ! -e "$poll_state/.wake-queue" ] || assert_no_grep 'merge landed' "$poll_state/.wake-queue" \
-    "branch-standing-poll: a poll of a branch merge queued a check wake for main"
-  [ "$(jq -r .silent "$poll_state/branch-outcomes.jsonl")" = true ] \
-    || fail "branch-standing-poll: the poll did not record the silent landed outcome"
+  assert_grep "merge landed: task-x1 $url branch" "$poll_state/.wake-queue" \
+    "branch-standing-poll: a poll of a branch merge did not wake main"
+  [ ! -e "$poll_state/branch-outcomes.jsonl" ] \
+    || fail "branch-standing-poll: a poll of a branch merge wrote a silent outcome instead"
 
   # Main's own merge of the same class is unchanged: it writes no branch
   # outcome and its persisted authority stays attended.
@@ -4109,6 +4109,16 @@ test_attended_branch_refuses_outside_its_standing_class() {
   assert_grep 'unreviewed: diff' "$case_dir/stderr" "branch-unreviewed: refusal did not name the missing review"
   assert_no_grep 'pr merge' "$case_dir/gh.log" "branch-unreviewed: gh pr merge ran without a review"
   assert_grep 'leave this merge to main' "$case_dir/stderr" "branch-unreviewed: the ordinary refusal did not send the merge to main"
+  # A merge command that failed while the pull request reads back merged is
+  # not a refusal either.
+  case_dir=$(branch_standing_case branch-failed-but-merged 162 "$TWO_WAY_BODY")
+  printf '1\n' > "$case_dir/github-merge-rc"
+  run_branch_merge "$case_dir" 162
+  [ "$RC" -ne 6 ] || fail "branch-failed-but-merged: a merge that reads back as merged was refused toward main"
+  assert_grep 'reads back as state=MERGED' "$case_dir/stderr" "branch-failed-but-merged: the read-back was not reported"
+  assert_no_grep 'leave this merge to main' "$case_dir/stderr" \
+    "branch-failed-but-merged: a landed merge was sent back to main to merge"
+
   # A failure after the forge accepted the merge is not a refusal: it keeps
   # its own status and never asks main to merge it again.
   case_dir=$(branch_standing_case branch-accepted-unconfirmed 161 "$TWO_WAY_BODY")
