@@ -408,6 +408,8 @@ cmd_adopt() {
     || die "the board artifact is gone: $artifact"
   [ -f "$real" ] || die "the board artifact is gone: $artifact"
   before=$(saved_session "$real" url 2>/dev/null) || before=''
+  # Ask the server the board's saved session names, as poll and reply do.
+  [ -z "$before" ] || apply_session_host "$real"
   if ! cmd_listed_open "$real"; then
     # A plain open resumes a session that is merely idle and refuses one the
     # captain ended from the browser; adoption never forces a reopen.

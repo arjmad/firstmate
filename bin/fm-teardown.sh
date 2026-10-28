@@ -3914,8 +3914,25 @@ if [ "$KIND" = ship ] && [ "$ALLOC_RECORDS_ONLY" != 1 ]; then
   done
 fi
 
-# A finished scout's review board outlives the scout (see the header): before
-# anything below closes its endpoint, every board it owns is handed to
+# A Herdr close may reposition shared workspace order, so the whole
+# destructive sequence below (worktree return, pane close, record removal)
+# runs under the named-session presentation lock, acquired BEFORE anything is
+# returned or erased: a contended lock refuses here while the isolated copy,
+# every durable record, and the endpoint are all still intact for a plain
+# rerun. An unresolvable lock path (for example an unreachable server) also
+# refuses before any destructive step.
+TEARDOWN_HERDR_SESSION=
+TEARDOWN_HERDR_PANE=
+if [ "$BACKEND" = herdr ]; then
+  teardown_herdr_preflight_target "$T" "$ID" || exit 1
+  fm_backend_herdr_parse_target "$T" || exit 1
+  TEARDOWN_HERDR_SESSION=$FM_BACKEND_HERDR_SESSION
+  TEARDOWN_HERDR_PANE=$FM_BACKEND_HERDR_PANE
+fi
+
+# A finished scout's review board outlives the scout (see the header): after
+# the presentation-lock preflight and before anything below closes its
+# endpoint, every board it owns is handed to
 # firstmate, bound to the keyed-answer intake, and confirmed listening, and the
 # board's link is recorded on each still-open call of its inventory. Only a
 # scout with an attested non-empty inventory of captain calls hands boards
@@ -3953,25 +3970,9 @@ EOF
         echo "REFUSED: scout task $ID's review board could not be handed to firstmate (see the error above); its endpoint is still open, so re-run teardown once that is fixed." >&2
         exit 1
       fi
-      echo "warning: $ID's review board could not be handed to firstmate; --force retires it with the task instead" >&2
+      echo "warning: $ID's review board could not be handed to firstmate; --force retires the boards it still owns with the task, and any already handed over stay firstmate's" >&2
       ;;
   esac
-fi
-
-# A Herdr close may reposition shared workspace order, so the whole
-# destructive sequence below (worktree return, pane close, record removal)
-# runs under the named-session presentation lock, acquired BEFORE anything is
-# returned or erased: a contended lock refuses here while the isolated copy,
-# every durable record, and the endpoint are all still intact for a plain
-# rerun. An unresolvable lock path (for example an unreachable server) also
-# refuses before any destructive step.
-TEARDOWN_HERDR_SESSION=
-TEARDOWN_HERDR_PANE=
-if [ "$BACKEND" = herdr ]; then
-  teardown_herdr_preflight_target "$T" "$ID" || exit 1
-  fm_backend_herdr_parse_target "$T" || exit 1
-  TEARDOWN_HERDR_SESSION=$FM_BACKEND_HERDR_SESSION
-  TEARDOWN_HERDR_PANE=$FM_BACKEND_HERDR_PANE
 fi
 
 BACKLOG_CLOSED=0

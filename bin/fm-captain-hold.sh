@@ -192,9 +192,10 @@
 #
 # `board-link` records a board's new link on every still-open captain call in
 # an origin's attested inventory, as one `Captain hold board: <url>` line plus
-# the origin and time, once per link. Scout teardown calls it when it hands a
-# finished scout's board over to firstmate and the board's link changed
-# (bin/fm-procevent.sh `adopt-task`); a closed call is skipped.
+# the origin and time, once per link. Scout teardown calls it with each board
+# it hands over to firstmate (bin/fm-procevent.sh `adopt-task`), so the link
+# outlives the scout's status log whether or not it changed; a closed call is
+# skipped, and a call whose state cannot be read fails the command.
 #
 # `complete` is the shared investigation and visual-review completion gate.
 # It attests, in the origin task's metadata, the reviewed inventory of
@@ -2182,9 +2183,9 @@ reconcile_note() {
 }
 
 # Record where a board that carries an origin's captain calls can now be
-# reached, on every still-open call of the origin's attested inventory. Used
-# when a finished worker's board is handed over to firstmate and its link
-# changed; a link already recorded on a call is not written again.
+# reached, on every still-open call of the origin's attested inventory, when a
+# finished worker's board is handed over to firstmate; a link already recorded
+# on a call is not written again.
 command_board_link() {
   local origin=${1:-} url=${2:-} meta keys entry resolved id rc show body stamp tmp line
   [ "$#" -eq 2 ] || { usage >&2; exit 2; }
@@ -2208,10 +2209,11 @@ command_board_link() {
     id=${resolved%% *}
     rc=0
     ( command_open "$id" ) || rc=$?
-    if [ "$rc" -ne 0 ]; then
-      printf 'skipped: %s (not an open captain call)\n' "$id"
-      continue
-    fi
+    case "$rc" in
+      0) ;;
+      1) printf 'skipped: %s (not an open captain call)\n' "$id"; continue ;;
+      *) fail "cannot tell whether $id is an open captain call" ;;
+    esac
     acquire_task_control_lock "$id"
     task_show_or_fail "$id" "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
     body=$(decode_shown_value "$(show_field "$show" body)") \

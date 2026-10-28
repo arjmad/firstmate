@@ -140,9 +140,9 @@
 #            command then proves the source can still be served and names its
 #            `link:`, plus `moved-from:` when that link changed; its exit 4
 #            means the source already ended, printed as `ended:` and left for
-#            retire-task. Under the source lock the task's runner is stopped,
-#            the source is bound to the keyed-answer intake through
-#            bin/fm-captain-hold.sh unless it already has a binding, and the
+#            retire-task. Under the source lock the source is bound to the
+#            keyed-answer intake through bin/fm-captain-hold.sh unless it
+#            already has a binding, the task's runner is stopped, and the
 #            registration is republished as firstmate's own with an
 #            `adopted_from=<task-id>` line, which lets a rerun finish an
 #            interrupted handover. It returns once ensure-listening confirms
@@ -2471,14 +2471,10 @@ EOF
       printf 'error: cannot read the listener command of %s\n' "$id" >&2
       return 1
     }
-    if ! release_owned_claim_locked "$id"; then
-      fm_procevent_source_lock_release "$id"
-      printf 'error: %s\n' "$CLAIM_RELEASE_ERROR" >&2
-      return 1
-    fi
-    # Bound before the firstmate registration exists, so no firstmate listener
-    # can capture an answer the keyed-answer intake would not see. An existing
-    # binding is kept as it is.
+    # Bound before the task's listener stops and before the firstmate
+    # registration exists, so a failed bind leaves the task's board listening
+    # and no firstmate listener can capture an answer the keyed-answer intake
+    # would not see. An existing binding is kept as it is.
     if ! "$SCRIPT_DIR/fm-captain-hold.sh" binding "$id" >/dev/null 2>&1; then
       if ! "$SCRIPT_DIR/fm-captain-hold.sh" bind "$id" >/dev/null; then
         fm_procevent_source_lock_release "$id"
@@ -2487,9 +2483,17 @@ EOF
       fi
       bound=1
     fi
+    if ! release_owned_claim_locked "$id"; then
+      [ "$bound" -eq 0 ] || "$SCRIPT_DIR/fm-captain-hold.sh" unbind "$id" >/dev/null 2>&1 || true
+      fm_procevent_source_lock_release "$id"
+      printf 'error: %s\n' "$CLAIM_RELEASE_ERROR" >&2
+      return 1
+    fi
     if ! fm_procevent_adopted_registration_publish_locked "$STATE" "$adapter" "$id" "$task" "${ARGV[@]}"; then
       [ "$bound" -eq 0 ] || "$SCRIPT_DIR/fm-captain-hold.sh" unbind "$id" >/dev/null 2>&1 || true
       fm_procevent_source_lock_release "$id"
+      # The task's listener was already stopped; start it again for the task.
+      ( cmd_ensure_listening "$id" ) >/dev/null 2>&1 || true
       printf 'error: cannot publish the firstmate registration of %s\n' "$id" >&2
       return 1
     fi

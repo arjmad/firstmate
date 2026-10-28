@@ -440,6 +440,7 @@ fm_procevent_adopted_registration_publish_locked() {  # <state> <adapter> <sourc
     case "$arg" in *$'\n'*) return 1 ;; esac
   done
   reg=$(fm_procevent_registry_dir "$state")
+  (umask 077; mkdir -p "$reg") || return 1
   [ -d "$reg" ] && [ ! -L "$reg" ] || return 1
   dest="$reg/$id.source"
   tmp=$(umask 077; mktemp "$reg/.source.XXXXXX") || return 1
