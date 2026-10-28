@@ -228,3 +228,33 @@ pass "the reaper stops an abandoned worker's whole tree"
 out=$("$REAPER" 2>&1) || fail "a repeat reaper run failed: $out"
 assert_not_contains "$out" "$STALE" "the reaper reported an already-stopped worker"
 pass "the reaper is idempotent"
+
+# --- the worker starts in firstmate's slice under a lingering user manager ---
+#
+# bin/fm-linux-slice-lib.sh decides; here the fake user manager says yes, and
+# the start must still record the worker's own pid and keep its tree in its
+# own process group, because a scope execs the worker in place.
+
+CASE3="$TMP_ROOT/case3"
+mkdir -p "$CASE3/account" "$CASE3/fakebin"
+build_remote_root "$CASE3/remote-root"
+cp "$ROOT/bin/fm-linux-slice-lib.sh" "$CASE3/remote-root/bin/"
+# shellcheck source=tests/fixtures.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
+fm_test_fake_linux_user_manager "$CASE3/fakebin"
+# The platform comes from FM_REMOTE_JOB_PLATFORM_OVERRIDE, and the worker
+# itself must see the real uname.
+rm -f "$CASE3/fakebin/uname"
+SLICE_WORKER=$(PATH="$CASE3/fakebin:$PATH" FM_SYSTEMD_RUN_LOG="$CASE3/systemd-run" \
+  start_worker "$CASE3/remote-root" "$CASE3/account" "$CASE3/remote-jobs") ||
+  fail "could not start the fixture remote job worker under the fake user manager"
+track "$SLICE_WORKER"
+assert_contains "$(cat "$CASE3/systemd-run" 2>/dev/null)" "--user --scope --quiet --collect --slice=firstmate.slice" \
+  "the Linux worker did not start in firstmate.slice"
+assert_contains "$(cat "$CASE3/systemd-run" 2>/dev/null)" "pid=$SLICE_WORKER " \
+  "the scope did not run the worker in place, so the recorded pid is not the worker's"
+[ "$(pgid_of "$SLICE_WORKER")" = "$SLICE_WORKER" ] ||
+  fail "the worker started through the scope is not its own process group leader"
+pass "the Linux start path runs the worker in firstmate.slice, in place and in its own process group"
+rm -rf "$CASE3/remote-root"
+wait_gone "$SLICE_WORKER" 60 || fail "the slice worker survived its code root being pruned"

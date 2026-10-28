@@ -91,6 +91,10 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # shellcheck source=bin/fm-agent-process-lib.sh
 . "$FM_BACKEND_HERDR_ROOT/bin/fm-agent-process-lib.sh"
 
+# The systemd slice a Linux Herdr server starts in (fm_backend_herdr_server_ensure).
+# shellcheck source=bin/fm-linux-slice-lib.sh
+. "$FM_BACKEND_HERDR_ROOT/bin/fm-linux-slice-lib.sh"
+
 FM_BACKEND_HERDR_MIN_PROTOCOL=14
 # events.subscribe (the native pane.agent_status_changed push stream) and its
 # subscription_event schema first shipped at protocol 16 (verified: herdr
@@ -1738,11 +1742,15 @@ fm_backend_herdr_server_ensure() {  # <session>
     unset FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE \
       CURSOR_AGENT CURSOR_INVOKED_AS CLAUDECODE PI_CODING_AGENT FM_PI_HARNESS GROK_AGENT FM_SUPERVISION_MODEL
     client_bin=$(fm_backend_herdr_client_bin "$session")
+    # On Linux under a lingering user manager the server, and every pane it
+    # later spawns, goes in firstmate's slice rather than the caller's SSH
+    # session scope (bin/fm-linux-slice-lib.sh).
+    fm_linux_slice_prefix
     # Background the client itself, not a shell function: a backgrounded
     # function is a forked shell that lives as long as the server and keeps the
     # caller's descriptors bash saved for a redirection, so a caller reading
     # this process's output (a remote doctor --fix over SSH) never sees EOF.
-    HERDR_SESSION="$session" "$client_bin" server --session "$session" </dev/null >/dev/null 2>&1 &
+    HERDR_SESSION="$session" ${FM_LINUX_SLICE_PREFIX[@]+"${FM_LINUX_SLICE_PREFIX[@]}"} "$client_bin" server --session "$session" </dev/null >/dev/null 2>&1 &
   ) || return 1
   for i in $(seq 1 20); do
     running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)

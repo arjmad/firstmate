@@ -1488,6 +1488,31 @@ This proves that `herdr server` remains in the foreground as the launchd job, so
 
 `bin/fm-test-run.sh tests/fm-remote-herdr-guard.test.sh` pins the resulting decision table against real marker-carrying processes, and `tests/fm-remote-doctor.test.sh` pins the doctor's verdicts on the same markers.
 
+### Linux fm-remote slice
+
+Measured 2026-10-28 on Arch Linux (Omarchy) with systemd 262 (262.1-1-arch), over a non-interactive SSH session whose `XDG_RUNTIME_DIR` was `/run/user/1000`, the guarantee behind [`bin/fm-linux-slice-lib.sh`](../../bin/fm-linux-slice-lib.sh): a `systemd-run --user --scope` start keeps the started command's pid and process group, so the remote job worker's pid record and process-group stop still hold.
+
+```sh
+set -m
+nohup systemd-run --user --scope --quiet --collect --slice=fm-probe.slice sleep 20 >/dev/null 2>&1 < /dev/null &
+p=$!
+set +m
+sleep 1
+ps -o pid,pgid,ppid,args -p $p
+cat /proc/$p/cgroup
+```
+
+```text
+    PID    PGID    PPID COMMAND
+ 912397  912397  912391 /usr/bin/sleep 20
+0::/user.slice/user-1000.slice/user@1000.service/fm.slice/fm-probe.slice/run-p912397-i38678858.scope
+```
+
+The pid `$!` recorded is the command itself, which leads its own process group, and its cgroup is under the user manager rather than the SSH session's scope.
+A dash in a slice name nests it (`fm-probe.slice` landed under `fm.slice`), which is why the default slice is the undashed `firstmate.slice`.
+The same account read `Linger=no` from `loginctl show-user`, which is why the library keeps the plain start without linger: the user manager, and every unit under it, stops with the account's last session.
+`bin/fm-test-run.sh tests/fm-backend-herdr.test.sh tests/fm-remote-job-orphan-reap.test.sh` pins the decision and the in-place start against a fake user manager.
+
 ### Client selection
 
 Measured 2026-09-08 on a macOS aarch64 host running a Herdr 0.9.0 server (protocol 22) for the `fm-remote` session while `~/.local/bin/herdr` still held the self-updated 0.8.2 client (protocol 20) ahead of the Nix-managed 0.9.0 client on the remote-job `PATH`.
