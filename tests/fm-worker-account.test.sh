@@ -170,6 +170,39 @@ test_claude_pin_selects_the_root_and_sheds_ambient_credentials() {
   pass "a Claude pin selects its root and sheds the credentials that would outrank it"
 }
 
+# A pinned root is its own Claude store, MCP servers included, so a worker
+# pinned to a root that never registered the invoking session's servers starts
+# without those tools and finds out mid-task. The spawn names the gap up front
+# and still launches, because the pin is the captain's call.
+test_claude_pin_flags_mcp_servers_the_worker_root_lacks() {
+  local out rc id=acct-claude-mcp
+  new_case claude-pin-mcp claude
+  signed_in_claude_root "$CASE/work"
+  printf '%s\n' "$CASE/work" > "$HOME_DIR/config/claude-account"
+  mkdir -p "$CASE/ambient-claude"
+  printf '%s\n' '{"mcpServers":{"gbrain":{"command":"gbrain"},"gws-arjmad":{"command":"workspace-mcp"}}}' \
+    > "$CASE/ambient-claude/.claude.json"
+  printf '%s\n' '{"mcpServers":{"gbrain":{"command":"gbrain"}}}' > "$CASE/work/.claude.json"
+  out=$(spawn_ship "$id" 2>&1); rc=$?
+  expect_code 0 "$rc" "a pinned spawn missing an MCP server should still launch: $out"
+  assert_contains "$out" "warning: the Claude worker account $CASE/work lacks MCP servers this session has: gws-arjmad" \
+    "the spawn should name the MCP server the pinned worker root lacks"
+  assert_not_contains "$out" "lacks MCP servers this session has: gbrain" \
+    "a server both stores carry must not be flagged"
+  [ -s "$CASE/launch.log" ] || fail "a flagged spawn must still launch the worker"
+
+  new_case claude-pin-mcp-same claude
+  signed_in_claude_root "$CASE/work"
+  printf '%s\n' "$CASE/work" > "$HOME_DIR/config/claude-account"
+  mkdir -p "$CASE/ambient-claude"
+  printf '%s\n' '{"mcpServers":{"gbrain":{}}}' > "$CASE/ambient-claude/.claude.json"
+  printf '%s\n' '{"mcpServers":{"gbrain":{},"extra":{}}}' > "$CASE/work/.claude.json"
+  out=$(spawn_ship acct-claude-mcp-same 2>&1); rc=$?
+  expect_code 0 "$rc" "a pinned spawn with every MCP server should succeed: $out"
+  assert_not_contains "$out" "lacks MCP servers" "a worker root carrying every session server must not be flagged"
+  pass "a Claude pin names the MCP servers its worker root lacks and still launches"
+}
+
 test_claude_pin_refuses_a_signed_out_root_despite_an_ambient_login() {
   local out rc id=acct-claude-out
   new_case claude-signed-out claude
@@ -490,6 +523,7 @@ test_secondmate_account_refusals
 test_remote_secondmate_account_override_refuses_locally
 test_absent_pin_keeps_the_launch_unchanged
 test_claude_pin_selects_the_root_and_sheds_ambient_credentials
+test_claude_pin_flags_mcp_servers_the_worker_root_lacks
 test_claude_pin_refuses_a_signed_out_root_despite_an_ambient_login
 test_claude_ordinary_pin_unsets_the_config_root
 test_malformed_pins_refuse_before_launch
