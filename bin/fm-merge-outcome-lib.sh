@@ -13,6 +13,10 @@
 #   - a main home reports to the captain through the durable wake queue.
 # A poll observed in a secondmate home also receives a local durable wake after
 # the upward write, so the mate can handle its own poll observation.
+# The one merge that queues nothing is an attended merge main made itself in a
+# main home: its own fm-pr-merge.sh output is the receipt, and a wake would only
+# hand the same event back to it as a second turn. Every other merge keeps its
+# wake, because there the queue is the record the captain or branch acts on.
 # No new state file and no new transport are involved.
 #
 # Normal operation deduplicates the task's latest canonical PR identity through
@@ -30,6 +34,8 @@ _FM_MERGE_OUTCOME_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$_FM_MERGE_OUTCOME_LIB_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-parent-channel-lib.sh
 . "$_FM_MERGE_OUTCOME_LIB_DIR/fm-parent-channel-lib.sh"
+# shellcheck source=bin/fm-lease-lib.sh
+. "$_FM_MERGE_OUTCOME_LIB_DIR/fm-lease-lib.sh"
 
 # shellcheck disable=SC2034 # Public result consumed by sourcing callers.
 FM_MERGE_OUTCOME_ALREADY_RECORDED=false
@@ -57,7 +63,7 @@ FM_MERGE_OUTCOME_ALREADY_RECORDED=false
 fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [authority]
   local home=$1 state=$2 id=$3 url=$4 origin=$5
   local authority=${6-} suffix=
-  local self_rc=0 destination='' line lock status=0
+  local self_rc=0 destination='' line lock status=0 wake=true
   local provider host path number
   # shellcheck disable=SC2034 # Sourced wake helpers consume these scoped globals.
   local STATE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
@@ -82,6 +88,9 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [autho
     self_rc=$?
     [ "$self_rc" -eq 1 ] || return 3
     destination=''
+    if [ "$origin" = self ] && [ "$(fm_lease_actor 2>/dev/null)" = main ]; then
+      case "$authority" in attended|'') wake=false ;; esac
+    fi
   fi
 
   STATE=$state
@@ -100,7 +109,8 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [autho
   if [ -n "$destination" ]; then
     fm_parent_channel_append_once "$destination" "$(status_stamp_line "$line")" || status=1
   fi
-  if [ "$status" -eq 0 ] && { [ "$origin" = poll ] || [ -z "$destination" ]; }; then
+  if [ "$status" -eq 0 ] && [ "$wake" = true ] \
+    && { [ "$origin" = poll ] || [ -z "$destination" ]; }; then
     fm_wake_append check "merged-$id-$FM_PR_URL" \
       "check: merge landed: $id $FM_PR_URL$suffix" || status=1
   fi
