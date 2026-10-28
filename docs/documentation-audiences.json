@@ -601,6 +601,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/noticed-queue/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/operational-home-layout/SKILL.md",
       "audience": "agent-runtime"
     },

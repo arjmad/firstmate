@@ -4434,4 +4434,16 @@ else
   echo "teardown $ID complete (window ${T:-none}; pool slot $WT left to task $TEARDOWN_SLOT_REASSIGNED_TO${TEARDOWN_SLOT_REASSIGNED_HOME:+ (home $TEARDOWN_SLOT_REASSIGNED_HOME)}, which it was reassigned to)"
 fi
 backlog_refresh_reminder
+# Whatever the finished task noticed outside its work, or an idea it had,
+# reaches firstmate here, at the one step every ending passes (fork patch,
+# docs/fork-decisions/2026-10-27-noticed-queue.md). A read; bin/fm-noticed.sh
+# owns the format and .agents/skills/noticed-queue owns what firstmate files.
+if [ "$KIND" != secondmate ] && [ -d "$STATE" ]; then
+  TEARDOWN_NOTICED=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+    "$SCRIPT_DIR/fm-noticed.sh" collect "$ID" 2>/dev/null) || TEARDOWN_NOTICED=
+  if [ -n "$TEARDOWN_NOTICED" ]; then
+    printf '%s\n' "$TEARDOWN_NOTICED" | sed "s/^/noticed-queue: $ID left /"
+    echo "noticed-queue: file each through bin/fm-noticed.sh (noticed-queue skill)"
+  fi
+fi
 [ "$TEARDOWN_POOL_SLOT_LOST" = 0 ] || exit "$TEARDOWN_LOST_SLOT_EXIT"

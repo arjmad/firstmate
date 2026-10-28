@@ -2058,6 +2058,29 @@ test_scout_ignored_files_survive_scratch_clean() {
   pass "ignored files survive the scratch clean and plain scratch does not"
 }
 
+# What a finished task noticed outside its work, and its idea, reach firstmate
+# in teardown's output, since teardown is the one step every ending passes.
+test_scout_teardown_prints_what_it_noticed() {
+  local case_dir rc
+  case_dir=$(make_case scout-noticed)
+  write_meta "$case_dir" no-mistakes scout
+  prepare_scout_teardown "$case_dir"
+  printf '%s\n' '## Noticed and ideas' 'Noticed: the packet canary is red twice' \
+    >> "$case_dir/data/task-x1/report.md"
+  printf '%s\n' 'Idea: cache the fee table weekly' > "$case_dir/data/task-x1/notes.md"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "scout-noticed: teardown failed: $(cat "$case_dir/stderr")"
+  assert_grep "noticed-queue: task-x1 left Noticed: the packet canary is red twice (task-x1/report.md)" \
+    "$case_dir/stdout" "scout-noticed: the noticed line was not printed"
+  assert_grep "noticed-queue: task-x1 left Idea: cache the fee table weekly (task-x1/notes.md)" \
+    "$case_dir/stdout" "scout-noticed: the idea line was not printed"
+  assert_grep "noticed-queue: file each through bin/fm-noticed.sh" "$case_dir/stdout" \
+    "scout-noticed: teardown did not say how to file them"
+  pass "scout teardown prints the one noticed and one idea line the task left"
+}
+
 test_gh_error_and_content_absent_refuses() {
   local case_dir rc
   case_dir=$(make_case gh-error)
@@ -5799,6 +5822,7 @@ test_forced_secondmate_child_scout_nested_clone_returns_clean
 test_forced_secondmate_dirty_child_return_warns_and_completes
 test_return_that_removes_copy_warns_cannot_verify
 test_scout_ignored_files_survive_scratch_clean
+test_scout_teardown_prints_what_it_noticed
 test_gh_error_and_content_absent_refuses
 test_legacy_record_without_the_flag_refuses
 test_windowless_legacy_record_with_gone_worktree_tears_down

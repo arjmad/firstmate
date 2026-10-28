@@ -810,6 +810,18 @@ IFS= read -r -d '' SHARED_INFRA_RULE <<'EOF' || true
 EOF
 SHARED_INFRA_RULE=${SHARED_INFRA_RULE%$'\n'}
 BRAIN_FILING_RULE=$(fm_brain_filing_rule)
+# Noticed and ideas (fork patch, docs/fork-decisions/2026-10-27-noticed-queue.md):
+# bin/fm-teardown.sh collects these lines through bin/fm-noticed.sh collect,
+# which owns the format.
+if [ "$KIND" = scout ]; then
+  NOTICED_WHERE="your report's closing section"
+else
+  NOTICED_WHERE="\`$DATA/$ID/notes.md\`"
+fi
+NOTICED_SECTION="# Noticed and ideas
+When you notice something broken outside your task, or an idea that could make the ecosystem better, jot it in \`$DATA/$ID/notes.md\` and keep working: do not fix it, file it, or report it mid-task.
+When the task ends - done, failed, or stopped - leave at most one \`Noticed: {what is broken and why it may matter}\` line and one \`Idea: {the idea and why it may matter}\` line in $NOTICED_WHERE; firstmate collects them at teardown.
+Leave both out when nothing stood out, which is the normal case."
 
 ALSO_SECTION=
 if [ -n "$ALSO_LIST" ]; then
@@ -878,6 +890,8 @@ $CREWMATE_PAUSE_INSTRUCTIONS
 $SHARED_INFRA_RULE
 
 $WAIT_BLOCK$INBOX_SECTION
+
+$NOTICED_SECTION
 
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
@@ -964,6 +978,8 @@ $ASK_USER_BLOCK
 $SHARED_INFRA_RULE
 
 $WAIT_BLOCK$INBOX_SECTION
+
+$NOTICED_SECTION
 
 # Project memory
 A project's \`AGENTS.md\` or \`CLAUDE.md\` is loaded into every agent session in that project, so edit it only to correct information that is factually wrong - including information your own change made wrong - and never to add knowledge because it is missing.

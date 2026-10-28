@@ -3,7 +3,8 @@
 # optionally acknowledge handled records (always confirmed on stderr),
 # annotate every unread line for validated signal status keys, surface unread
 # informational status lines, latest captain-facing statuses not covered by a
-# newer branch outcome, OPEN DECISIONS, captain-call record divergence, and on
+# newer branch outcome, OPEN DECISIONS, captain-call record divergence, items
+# filed for the captain but not yet shown to him (NOTICED), and on
 # a supervision-host home the supervision session's new and unprocessed
 # outcomes (BRANCH OUTCOMES), then assert liveness.
 #
@@ -597,6 +598,44 @@ EOF
   printf 'RECORD DIVERGENCE: reconcile each one - record the captain'"'"'s own words with bin/fm-captain-hold.sh answer <task> --decision-file <path>, or re-open the status decision when that resolution was not the captain'"'"'s word.\n' || return 1
 }
 
+# Print the NOTICED section: noticed problems and this week's top ideas filed
+# for the captain that no captain reply has mentioned yet (fork patch,
+# docs/fork-decisions/2026-10-27-noticed-queue.md). bin/fm-noticed.sh owns the
+# unseen list, state/noticed/unseen.tsv; this reads the file and changes
+# nothing, so every drain repeats it until firstmate marks the items shown.
+# It runs at every drain exit, apart from the status snapshot, because unseen
+# items outlive the last worker's status file. Bounded and silent when empty,
+# and a failure never changes the drain's exit status.
+print_noticed_section() {
+  local unseen id label title shown=0 omitted=0 line output='' used=0 global_bytes=1600
+
+  unseen=$(cat "$STATE/noticed/unseen.tsv" 2>/dev/null) || return 0
+  [ -n "$unseen" ] || return 0
+  while IFS=$(printf '\t') read -r id label title; do
+    [ -n "$id" ] || continue
+    line="$id ($label): $title"
+    fm_cap_line_var "$line" 219
+    line=$FM_LINE_CAP_LINE
+    if [ $((used + ${#line} + 1)) -gt "$global_bytes" ]; then
+      omitted=$((omitted + 1))
+      continue
+    fi
+    output="$output$line
+"
+    used=$((used + ${#line} + 1))
+    shown=$((shown + 1))
+  done <<EOF
+$unseen
+EOF
+  [ "$shown" -gt 0 ] || [ "$omitted" -gt 0 ] || return 0
+  printf 'NOTICED (filed for the captain, not yet shown to him):\n' || return 1
+  printf '%s' "$output" || return 1
+  if [ "$omitted" -gt 0 ]; then
+    printf 'NOTICED: %d more omitted (byte cap)\n' "$omitted" || return 1
+  fi
+  printf 'NOTICED: mention each once in your next captain reply, then mark it: bin/fm-noticed.sh shown <id>...\n' || return 1
+}
+
 # Print BRANCH OUTCOMES: what the supervision host's session recorded since
 # main last drained (docs/supervision-host.md "Captain outcomes"). Off Pi this
 # presentation is what the Pi branch's transcript entries are. It runs only for
@@ -1021,6 +1060,7 @@ if [ ! -s "$FM_WAKE_QUEUE" ]; then
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
   DRAIN_LOCK_HELD=false
   (print_status_presentation) || true
+  print_noticed_section || true
   print_branch_outcomes_section || BRANCH_OUTCOMES_RC=1
   if [ "$RECOVERY_ACK_REQUIRED" = true ]; then
     printf 'WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 0 --recovery-generation %s\n' "${RECOVERY_MARKER_TOKEN##*:}" >&2
@@ -1043,6 +1083,7 @@ if [ "$ACTOR" = main ]; then
     fm_lock_release "$FM_WAKE_QUEUE_LOCK"
     DRAIN_LOCK_HELD=false
     (print_status_presentation) || true
+    print_noticed_section || true
     print_branch_outcomes_section || BRANCH_OUTCOMES_RC=1
     assert_watcher_liveness
     exit "$BRANCH_OUTCOMES_RC"
@@ -1106,6 +1147,7 @@ printf 'WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --a
   "$ACK_THROUGH" "${RECOVERY_MARKER_TOKEN##*:}" >&2
 
 (print_status_presentation "$RAW_ROWS") || true
+print_noticed_section || true
 print_branch_outcomes_section || BRANCH_OUTCOMES_RC=1
 assert_watcher_liveness
 exit "$BRANCH_OUTCOMES_RC"

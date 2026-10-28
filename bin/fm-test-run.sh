@@ -419,7 +419,7 @@ family_for_basename() {
     fm-supervision-host.test.sh|fm-host-mirror.test.sh)
       printf '%s\n' afk
       ;;
-    fm-atlas.test.sh|fm-backlog-prune.test.sh|\
+    fm-atlas.test.sh|fm-backlog-prune.test.sh|fm-noticed.test.sh|\
     fm-bearings-board-render.test.sh|fm-bearings-snapshot.test.sh|fm-contributions.test.sh|\
     fm-fleet-snapshot-view.test.sh|fm-home-summary-refresh.test.sh)
       printf '%s\n' snapshot-bearings
@@ -1714,7 +1714,7 @@ families_for_changed_path() {
       ;;
     bin/fm-bearings-snapshot.sh|bin/fm-fleet-snapshot.sh|bin/fm-fleet-view.sh|bin/fm-contributions.sh|bin/fm-contributions.jq|\
     bin/fm-home-summary-refresh.sh|bin/fm-backlog-prune.sh|bin/fm-backlog-prune-lib.sh|bin/fm-landed-lib.sh|\
-    bin/fm-atlas.sh)
+    bin/fm-atlas.sh|bin/fm-noticed.sh)
       printf '%s\n' snapshot-bearings
       ;;
     bin/fm-install-herdr.sh|bin/fm-install-treehouse.sh|bin/fm-herdr-ci-cleanup.sh)
