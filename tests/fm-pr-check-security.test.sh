@@ -3137,6 +3137,30 @@ test_merged_poll_row_names_no_authority_when_no_record_grants_one() {
   pass "poll distinguishes attended authorization from external landing"
 }
 
+# A merge poll that observes the supervision branch's standing merge before
+# the merge run publishes its own outcome (bin/fm-pr-merge.sh header) routes it
+# silently: no check wake reaches main, and the poll retires as usual.
+test_merged_poll_of_a_branch_standing_merge_wakes_no_one() {
+  local dir state url
+  url=https://github.com/o/r/pull/1
+  dir=$(make_case merged-poll-branch-standing)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a "$url" yolo=on
+  seed_canonical_poll "$dir" task-a "$url"
+  fm_pr_url_parse "$url" || fail "branch-standing poll fixture URL was invalid"
+  bash -c 'STATE=$2; . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-merge-authority-lib.sh"; fm_merge_authority_persist "$2" task-a "$2/task-a.meta" github "$3" "$4" "$5" branch' _ \
+    "$ROOT" "$state" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" \
+    || fail "could not persist the branch merge authority"
+  run_merged_poll_cycle "$dir"
+  [ -z "$(merged_ledger_row "$state" task-a)" ] \
+    || fail "a polled branch standing merge queued a check wake: $(merged_ledger_row "$state" task-a)"
+  assert_no_grep 'task-a.check.sh: merged' "$dir/watch.out" "a polled branch standing merge woke the watcher's owner"
+  [ "$(jq -r '[.task, .verdict, .silent] | join(" ")' "$state/branch-outcomes.jsonl")" = "task-a routine true" ] \
+    || fail "a polled branch standing merge recorded no silent outcome"
+  assert_poll_absent "$state" task-a
+  pass "a merge poll of a branch standing merge records it silently and wakes no one"
+}
+
 test_authority_persistence_refuses_rebound_metadata() {
   local dir state url_a url_b rc
   url_a=https://github.com/o/r/pull/1
@@ -3662,6 +3686,7 @@ test_merged_poll_reregistration_after_notification_is_absorbed
 test_merged_poll_retries_a_failed_upward_report
 test_self_merge_and_poll_publish_one_outcome
 test_merged_poll_row_carries_the_merge_authority
+test_merged_poll_of_a_branch_standing_merge_wakes_no_one
 test_merged_poll_row_names_no_authority_when_no_record_grants_one
 test_authority_persistence_refuses_rebound_metadata
 test_authority_persists_before_control_unlock

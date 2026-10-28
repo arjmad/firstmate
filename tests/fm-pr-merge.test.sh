@@ -4078,7 +4078,7 @@ test_attended_branch_refuses_outside_its_standing_class() {
   write_github_red_json "$case_dir" "$(cat "$case_dir/github-head")" lint
   set_pr_body "$case_dir/github-view.json" body "$TWO_WAY_BODY"
   run_branch_merge "$case_dir" 155
-  expect_code 1 "$RC" "branch-red: a red check must refuse the branch"
+  expect_code 6 "$RC" "branch-red: a red check must refuse the branch"
   assert_grep "check 'lint' is not green" "$case_dir/stderr" "branch-red: refusal did not name the red check"
   assert_no_grep 'pr merge' "$case_dir/gh.log" "branch-red: gh pr merge ran for a red branch merge"
   assert_grep 'leave this merge to main' "$case_dir/stderr" "branch-red: the ordinary refusal did not send the merge to main"
@@ -4086,7 +4086,7 @@ test_attended_branch_refuses_outside_its_standing_class() {
   case_dir=$(branch_standing_case branch-unreviewed 156 "$TWO_WAY_BODY")
   printf '%s\n' '[]' > "$case_dir/github-pr-comments.json"
   run_branch_merge "$case_dir" 156
-  expect_code 1 "$RC" "branch-unreviewed: an unreviewed PR must refuse the branch"
+  expect_code 6 "$RC" "branch-unreviewed: an unreviewed PR must refuse the branch"
   assert_grep 'unreviewed: diff' "$case_dir/stderr" "branch-unreviewed: refusal did not name the missing review"
   assert_no_grep 'pr merge' "$case_dir/gh.log" "branch-unreviewed: gh pr merge ran without a review"
   assert_grep 'leave this merge to main' "$case_dir/stderr" "branch-unreviewed: the ordinary refusal did not send the merge to main"

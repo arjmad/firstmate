@@ -232,7 +232,8 @@
 # reviewed under the ordinary gates below; and its Merge Danger names an
 # explicit two-way door, so a body with no Door line is not enough. Anything
 # else refuses the branch with exit 6 before any forge merge or captain hold,
-# naming each reason and leaving the merge to MAIN. Whether a pull request is
+# naming each reason and leaving the merge to MAIN; a refusal by the ordinary
+# gates below exits 6 for the branch the same way. Whether a pull request is
 # security-sensitive is the branch's reading under bin/fm-branch-prompt.sh,
 # since no record states it. Such a merge persists the authority branch and
 # publishes a silent landed branch outcome rather than a check wake
@@ -626,12 +627,14 @@ MERGE_META_LOCK=
 merge_control_cleanup() {
   local status=$?
   # Every refusal of a branch standing merge, ordinary gates included, leaves
-  # the merge to main (see the header); the exit status stays the gate's own.
-  [ "$status" -eq 0 ] || [ "$FM_PR_BRANCH_STANDING" = false ] \
-    || echo "error: leave this merge to main: report it with verdict captain and the PR URL (role partition: docs/pi-supervision-branch.md)" >&2
+  # the merge to main with exit 6 (see the header).
   [ -z "$MERGE_META_LOCK" ] || fm_lock_release "$MERGE_META_LOCK" || true
   fm_afk_contract_lock_release || true
   [ -z "$MERGE_CONTROL_LOCK" ] || fm_lock_release "$MERGE_CONTROL_LOCK" || true
+  if [ "$status" -ne 0 ] && [ "$FM_PR_BRANCH_STANDING" = true ]; then
+    echo "error: leave this merge to main: report it with verdict captain and the PR URL (role partition: docs/pi-supervision-branch.md)" >&2
+    exit "$FM_LEASE_REFUSE_EXIT"
+  fi
 }
 trap merge_control_cleanup EXIT
 MERGE_CONTROL_LOCK="$STATE/.control-$ID.lock"

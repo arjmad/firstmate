@@ -39,6 +39,10 @@ _FM_MERGE_OUTCOME_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck disable=SC2034 # Public result consumed by sourcing callers.
 FM_MERGE_OUTCOME_ALREADY_RECORDED=false
+# True when the outcome went to the silent branch outcome row (origin branch),
+# so a poll caller must not wake main for it either.
+# shellcheck disable=SC2034 # Public result consumed by sourcing callers.
+FM_MERGE_OUTCOME_SILENT=false
 
 # fm_merge_outcome_report <home> <state> <task-id> <pr-url> <origin> [authority]
 #
@@ -75,6 +79,7 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [autho
   # shellcheck disable=SC2034 # Sourced wake helpers consume these scoped globals.
   local STATE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
   FM_MERGE_OUTCOME_ALREADY_RECORDED=false
+  FM_MERGE_OUTCOME_SILENT=false
   case "$origin" in self|poll|branch) ;; *) return 2 ;; esac
   case "$authority" in
     away|branch|external|yolo|away-grant) suffix=" $authority" ;;
@@ -124,6 +129,8 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [autho
       --task "$id" --verdict routine --silent true \
       --summary "merged $id $FM_PR_URL under standing authority" \
       --wake "check: merge landed: $id $FM_PR_URL$suffix" >/dev/null || status=1
+    # shellcheck disable=SC2034 # Public result consumed by sourcing callers.
+    [ "$status" -ne 0 ] || FM_MERGE_OUTCOME_SILENT=true
   elif [ "$status" -eq 0 ] && [ "$wake" = true ] \
     && { [ "$origin" = poll ] || [ -z "$destination" ]; }; then
     fm_wake_append check "merged-$id-$FM_PR_URL" \
