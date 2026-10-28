@@ -71,6 +71,12 @@
 # delivers only whole lines and breaks continuity on an over-long one.
 set -u
 
+usage() { sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+
+case "${1:-}" in
+  -h|--help) usage 0 ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
@@ -97,7 +103,6 @@ DOCUMENT_LOCAL_FAILURE=2
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 
 sha256_file() {
   if command -v shasum >/dev/null 2>&1; then
@@ -839,7 +844,6 @@ case "${1:-}" in
   retire) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; cmd_retire "$@" ;;
   retire-quiesce-locked) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; require_parent_lifecycle_lock "$1"; cmd_retire_quiesce_locked "$@" ;;
   retire-finalize-locked) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; require_parent_lifecycle_lock "$1"; cmd_retire_finalize_locked "$@" ;;
-  -h|--help|help) usage 0 ;;
-  '') usage ;;
+  ''|-h|--help|help) usage ;;
   *) die "unknown command: $1" ;;
 esac

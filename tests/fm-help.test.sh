@@ -4,7 +4,8 @@
 # The sourced *-lib.sh libraries are not commands and are skipped. Each entry
 # command runs once with --help in its own throwaway FM_HOME and HOME, with the
 # external tools a command could act through (tmux, herdr, gh, git hosts,
-# downloads, model CLIs) replaced by stubs that record any call. A command
+# downloads, model CLIs) replaced by stubs that record any call. The FM_HOME
+# starts empty, so even creating its state/ directory counts as acting. A command
 # passes only when it exits 0, prints a usage line on stdout, calls none of
 # those tools, and leaves its FM_HOME, its HOME and this checkout unchanged.
 # A command that still acted on --help would fail here instead of acting.
@@ -32,8 +33,7 @@ for script in "$ROOT"/bin/fm-*.sh; do
   name=${script##*/}
   count=$((count + 1))
   case_dir="$TMP_ROOT/$name"
-  mkdir -p "$case_dir/home/state" "$case_dir/home/data" "$case_dir/home/config" \
-    "$case_dir/user" "$case_dir/fakebin" "$case_dir/cwd"
+  mkdir -p "$case_dir/home" "$case_dir/user" "$case_dir/fakebin" "$case_dir/cwd"
   for tool in $STUBS; do
     printf '#!/bin/sh\nprintf "%%s\\n" %s >> "%s"\nexit 1\n' "$tool" "$case_dir/calls" \
       > "$case_dir/fakebin/$tool"

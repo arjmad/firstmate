@@ -81,7 +81,8 @@ while [ "$#" -gt 0 ]; do
       CANDIDATES+=("$2")
       shift 2
       ;;
-    -h|--help|help) usage 0 ;;
+    -h|--help) usage 0 ;;
+    help) usage ;;
     --) shift; break ;;
     -*) die "unknown option: $1" ;;
     *) CANDIDATES+=("$1") ; shift ;;

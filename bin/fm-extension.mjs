@@ -2561,8 +2561,8 @@ async function main() {
     case "process-event": await cmdProcessEvent(args); break;
     case "cleanup-invocations": await cmdCleanupInvocations(args); break;
     case "":
-    case undefined: usage(); break;
-    case "help":
+    case undefined:
+    case "help": usage(); break;
     case "-h":
     case "--help": usage(process.stdout, 0); break;
     default: fail("usage", `unknown command: ${command}`);

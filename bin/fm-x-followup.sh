@@ -65,19 +65,6 @@
 # deterministic tests. Meta read/write lives in fm-x-lib.sh.
 set -u
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
-STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-# shellcheck source=bin/fm-x-lib.sh
-. "$SCRIPT_DIR/fm-x-lib.sh"
-# shellcheck source=bin/fm-wake-lib.sh
-. "$SCRIPT_DIR/fm-wake-lib.sh"
-
-usage() {
-  echo "usage: fm-x-followup.sh --check <task-id> | --clear <task-id> [--expect-request <request-id>] | <task-id> [--image <path>] [--final] --text-file <path> | <task-id> [--image <path>] [--final] -" >&2
-}
-
 help() {
   cat <<'EOF'
 usage: fm-x-followup.sh --check <task-id>
@@ -102,6 +89,23 @@ Options:
   -                Read follow-up text from stdin.
   --help           Show this help.
 EOF
+}
+
+case "${1:-}" in
+  -h|--help) help; exit 0 ;;
+esac
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+# shellcheck source=bin/fm-x-lib.sh
+. "$SCRIPT_DIR/fm-x-lib.sh"
+# shellcheck source=bin/fm-wake-lib.sh
+. "$SCRIPT_DIR/fm-wake-lib.sh"
+
+usage() {
+  echo "usage: fm-x-followup.sh --check <task-id> | --clear <task-id> [--expect-request <request-id>] | <task-id> [--image <path>] [--final] --text-file <path> | <task-id> [--image <path>] [--final] -" >&2
 }
 
 MAX_AGE=${FMX_FOLLOWUP_MAX_AGE_SECS:-604800}
