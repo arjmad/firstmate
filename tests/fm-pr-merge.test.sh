@@ -255,6 +255,10 @@ case "${1:-} ${2:-}" in
         fi
         exit 0
         ;;
+      *" state,mergeStateStatus,headRefOid "*)
+        cat "$FM_TEST_GH_VIEW_JSON"
+        exit 0
+        ;;
       *headRefOid*)
         cat "$FM_TEST_GH_HEAD"
         exit 0

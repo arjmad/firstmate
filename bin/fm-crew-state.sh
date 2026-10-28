@@ -262,7 +262,7 @@ emit_ship_status_done() {  # [extra-detail]
   local extra=${1:-} reason report
   if [ "$KIND" = scout ]; then
     report="${FM_DATA_OVERRIDE:-$FM_HOME/data}/$ID/report.md"
-    [ -f "$report" ] \
+    [ -s "$report" ] \
       || emit blocked status-log "scout reported done without its report at $report, which teardown requires; steer the scout to write it there"
   fi
   if reason=$(fm_dod_accept_ship_done "$KIND" "$(meta_value mode)" "$WT" "$(meta_value project)" "$LOG_LINE" "$STATE" "$ID" "$META"); then

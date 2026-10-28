@@ -1249,7 +1249,7 @@ EOF
 # merge is retried only on this read and never re-verified onto a moved head.
 github_clean_at_verified_head() {
   local json
-  json=$(gh pr view "$URL" --json state,mergeStateStatus,headRefOid,statusCheckRollup 2>/dev/null) || return 1
+  json=$(gh pr view "$URL" --json state,mergeStateStatus,headRefOid 2>/dev/null) || return 1
   printf '%s' "$json" | jq -e --arg head "$FM_PR_MERGE_HEAD" \
     '.state == "OPEN" and .mergeStateStatus == "CLEAN" and .headRefOid == $head' >/dev/null 2>&1
 }
