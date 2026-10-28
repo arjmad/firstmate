@@ -1378,6 +1378,7 @@ test_away_record_relocates_main_owned_actions_to_the_branch() {
   ln -s "$ROOT/bin" "$root/bin"
   refusal="error: PR merge (fm-pr-merge) refused for the supervision branch, which merges only a green, reviewed, two-way door GitHub pull request of a yolo task:
   - task task-x does not record yolo=on, so its standing posture does not let firstmate merge it
+  - task task-x does not record https://github.com/o/r/pull/1 as its pr=, so it is not the task's ready pull request
 error: leave this merge to main: report it with verdict captain and the PR URL (role partition: docs/pi-supervision-branch.md)"
 
   # Attended: the refusal wording every caller already pins.

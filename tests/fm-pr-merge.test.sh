@@ -3949,7 +3949,7 @@ branch_standing_case() {
   mkdir -p "$case_dir/wt"
   add_gh_mocks "$case_dir" "$head"
   file_task_x1 "$case_dir"
-  printf 'yolo=on\n' >> "$case_dir/state/task-x1.meta"
+  printf 'yolo=on\npr=https://github.com/example/repo/pull/%s\n' "$2" >> "$case_dir/state/task-x1.meta"
   write_github_pr_files "$case_dir" bin/tool.sh
   id=$(github_pr_diff_id "$case_dir")
   {
@@ -4056,6 +4056,24 @@ test_attended_branch_refuses_outside_its_standing_class() {
   assert_no_grep 'one_way_hold=' "$case_dir/state/task-x1.meta" \
     "branch-door-one-way: the branch recorded a one-way merge call"
 
+  # Only the task's own recorded pull request: none recorded, or another one.
+  case_dir=$(branch_standing_case branch-no-pr 157 "$TWO_WAY_BODY")
+  sed -i.bak '/^pr=/d' "$case_dir/state/task-x1.meta" && rm -f "$case_dir/state/task-x1.meta.bak"
+  run_branch_merge "$case_dir" 157
+  assert_branch_refused "$case_dir" branch-no-pr 'does not record https://github.com/example/repo/pull/157 as its pr='
+  case_dir=$(branch_standing_case branch-other-pr 158 "$TWO_WAY_BODY")
+  run_branch_merge "$case_dir" 159
+  assert_branch_refused "$case_dir" branch-other-pr 'does not record https://github.com/example/repo/pull/159 as its pr='
+
+  # An away record the actor gate did not read as live never lends the
+  # branch away authority.
+  case_dir=$(branch_standing_case branch-invalid-away 160 "$TWO_WAY_BODY")
+  printf 'version: 99\n' > "$case_dir/state/.afk-contract"
+  run_branch_merge "$case_dir" 160
+  expect_code 6 "$RC" "branch-invalid-away: an unreadable away record must refuse the branch"
+  assert_grep 'leave this merge to main' "$case_dir/stderr" "branch-invalid-away: refusal did not send the merge to main"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "branch-invalid-away: gh pr merge ran under an unreadable away record"
+
   for flag in --attended-override '--allow-red ci' '--allow-missing ci' '--waive-review reason' --one-way-approved; do
     case_dir=$(branch_standing_case "branch-flag-${flag%% *}" 154 "$TWO_WAY_BODY")
     # shellcheck disable=SC2086 # The flag and its value split on purpose.
@@ -4090,6 +4108,15 @@ test_attended_branch_refuses_outside_its_standing_class() {
   assert_grep 'unreviewed: diff' "$case_dir/stderr" "branch-unreviewed: refusal did not name the missing review"
   assert_no_grep 'pr merge' "$case_dir/gh.log" "branch-unreviewed: gh pr merge ran without a review"
   assert_grep 'leave this merge to main' "$case_dir/stderr" "branch-unreviewed: the ordinary refusal did not send the merge to main"
+  # A failure after the forge accepted the merge is not a refusal: it keeps
+  # its own status and never asks main to merge it again.
+  case_dir=$(branch_standing_case branch-accepted-unconfirmed 161 "$TWO_WAY_BODY")
+  printf '%s\n' 'state=OPEN' 'merged=false' 'queued=false' 'base=main' > "$case_dir/github-outcome"
+  run_branch_merge "$case_dir" 161
+  expect_code 1 "$RC" "branch-accepted-unconfirmed: an accepted but unconfirmed merge must keep its own exit"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep 'pr merge' "$case_dir/gh.log" "branch-accepted-unconfirmed: the forge merge never ran"
+  assert_no_grep 'leave this merge to main' "$case_dir/stderr" \
+    "branch-accepted-unconfirmed: an accepted merge was sent back to main to merge"
   pass "the attended branch is refused toward main outside its standing class, before any forge merge or captain hold"
 }
 

@@ -230,7 +230,8 @@
 # override flag is passed (--attended-override, --allow-red, --allow-missing,
 # --waive-review, --one-way-approved), so it is green at its live head and
 # reviewed under the ordinary gates below; and its Merge Danger names an
-# explicit two-way door, so a body with no Door line is not enough. Anything
+# explicit two-way door, so a body with no Door line is not enough; and the
+# task's pr= already names the URL, so it is the task's ready PR. Anything
 # else refuses the branch with exit 6 before any forge merge or captain hold,
 # naming each reason and leaving the merge to MAIN; a refusal by the ordinary
 # gates below exits 6 for the branch the same way. Whether a pull request is
@@ -595,6 +596,9 @@ require_merge_actor() {
   fi
   [ "$yolo" = on ] \
     || reasons="$reasons"$'\n'"  - task $ID does not record yolo=on, so its standing posture does not let firstmate merge it"
+  # A companion URL was already matched to its also_pr_<repo>= line above.
+  [ -n "$COMPANION_REPO" ] || [ "$(sed -n 's/^pr=//p' "$META" 2>/dev/null | tail -n 1)" = "$URL" ] \
+    || reasons="$reasons"$'\n'"  - task $ID does not record $URL as its pr=, so it is not the task's ready pull request"
   [ "$ATTENDED_OVERRIDE" = false ] && [ "${#ALLOW_RED[@]}" -eq 0 ] \
     && [ "${#ALLOW_MISSING[@]}" -eq 0 ] && [ -z "$WAIVE_REVIEW" ] \
     && [ "$ONE_WAY_APPROVED" = false ] && [ "$ALLOW_NO_PIPELINE" = false ] \
@@ -627,11 +631,13 @@ MERGE_META_LOCK=
 merge_control_cleanup() {
   local status=$?
   # Every refusal of a branch standing merge, ordinary gates included, leaves
-  # the merge to main with exit 6 (see the header).
+  # the merge to main with exit 6 (see the header). A failure after the forge
+  # accepted the merge keeps its own status: there is nothing left to merge.
   [ -z "$MERGE_META_LOCK" ] || fm_lock_release "$MERGE_META_LOCK" || true
   fm_afk_contract_lock_release || true
   [ -z "$MERGE_CONTROL_LOCK" ] || fm_lock_release "$MERGE_CONTROL_LOCK" || true
-  if [ "$status" -ne 0 ] && [ "$FM_PR_BRANCH_STANDING" = true ]; then
+  if [ "$status" -ne 0 ] && [ "$FM_PR_BRANCH_STANDING" = true ] \
+    && [ "${FM_PR_GITHUB_MERGE_ACCEPTED:-false}" != true ]; then
     echo "error: leave this merge to main: report it with verdict captain and the PR URL (role partition: docs/pi-supervision-branch.md)" >&2
     exit "$FM_LEASE_REFUSE_EXIT"
   fi
@@ -1566,9 +1572,15 @@ resolve_merge_authority() {
   FM_PR_MERGE_AUTHORITY=
   if fm_merge_authority_resolve "$FM_HOME" "$STATE" "$META" "$ID"; then
     FM_PR_MERGE_AUTHORITY=$FM_MERGE_AUTHORITY
-    # An attended branch standing merge (see the header) is tagged as such.
-    [ "$FM_PR_BRANCH_STANDING" = false ] || [ "$FM_PR_MERGE_AUTHORITY" != attended ] \
-      || FM_PR_MERGE_AUTHORITY=branch
+    # An attended branch standing merge (see the header) is tagged as such,
+    # and an away record the actor gate did not read as live refuses it.
+    if [ "$FM_PR_BRANCH_STANDING" = true ]; then
+      if [ "$FM_PR_MERGE_AUTHORITY" != attended ]; then
+        echo "error: PR merge refused - the away-posture record reads as $FM_PR_MERGE_AUTHORITY authority, which a branch standing merge never runs under; nothing was merged" >&2
+        return 1
+      fi
+      FM_PR_MERGE_AUTHORITY=branch
+    fi
     return 0
   fi
   echo "error: PR merge refused - the away-posture record could not be read; nothing was merged" >&2
