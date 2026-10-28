@@ -89,14 +89,14 @@ test_closed_items_come_back_or_stay_answered() {
   home=$(make_home closed)
   noticed "$home" file noticed printer-down --title "Printer offline" --why "labels stall" --from t1 >/dev/null
   noticed "$home" shown noticed-printer-down >/dev/null
-  tasks "$home" done noticed-printer-down >/dev/null || fail "could not close the fixture"
+  tasks "$home" "done" noticed-printer-down >/dev/null || fail "could not close the fixture"
   out=$(noticed "$home" file noticed printer-down --title "Printer offline again" --why "labels stall" --from t2)
   assert_equals "reopened: noticed-printer-down" "$out" "a recurring problem was not reopened"
   assert_contains "$(tasks "$home" show noticed-printer-down)" "held: yes" "the reopened item is not held"
   assert_contains "$(noticed "$home" unseen)" "noticed-printer-down" "the reopened item is not shown again"
 
   noticed "$home" file idea bundle-slow --title "Bundle slow movers" --why "frees cash" --from t1 >/dev/null
-  tasks "$home" done idea-bundle-slow >/dev/null || fail "could not close the idea fixture"
+  tasks "$home" "done" idea-bundle-slow >/dev/null || fail "could not close the idea fixture"
   out=$(noticed "$home" file idea bundle-slow --title "Bundle slow movers" --why "frees cash" --from t3)
   assert_equals "skipped: idea-bundle-slow (answered earlier)" "$out" "an answered idea was asked again"
   pass "a fixed problem that recurs comes back, and an answered idea is never re-asked"
