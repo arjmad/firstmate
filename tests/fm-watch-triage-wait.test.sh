@@ -790,8 +790,24 @@ EOF
   pass "an acknowledged inbox note never re-wakes the watcher"
 }
 
+# Lines a detached overdue scan left behind are claimed once as one wake.
+test_overdue_scan_lines_surface_as_one_check_wake() {
+  local dir state out pid
+  dir=$(make_case backlog-overdue-woke); state="$dir/state"; out="$dir/watch.out"
+  printf '%s\n' 'overdue price-ladder' 'overdue restock' > "$state/backlog-overdue-woke"
+  watch_bg "$state" "$dir/fakebin" "$out" env FM_FLEET_SYNC_INTERVAL=off FM_HOLD_RELEASE_INTERVAL=off \
+    FM_BACKLOG_OVERDUE_INTERVAL=off
+  pid=$!
+  wait_for_exit "$pid" 100 || fail "the watcher did not exit on pending overdue lines: $(cat "$out")"
+  grep -F 'check: backlog overdue: 2 dated item(s) past their gate' "$out" >/dev/null \
+    || fail "the wake did not count the overdue lines: $(cat "$out")"
+  [ ! -e "$state/backlog-overdue-woke" ] && [ ! -e "$state/.backlog-overdue-woke.claimed" ] \
+    || fail "the claimed overdue lines were left behind for a second wake"
+  pass "pending overdue scan lines surface once as a single check wake"
+}
+
 # A queued backlog item whose date gate lapsed long ago without a dispatch
-# wakes the watcher through the overdue scan, which queues its durable row.
+# wakes the watcher through the detached overdue scan, which queues its durable row.
 test_overdue_backlog_item_wakes_the_watcher() {
   local dir state out pid
   command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; return 0; }
@@ -812,8 +828,9 @@ test_overdue_backlog_item_wakes_the_watcher() {
     FM_INBOX_REWAKE_INTERVAL=off FM_BACKLOG_OVERDUE_INTERVAL=1 "$WATCH" > "$out" 2>/dev/null &
   pid=$!
   wait_for_exit "$pid" 150 || { reap "$pid"; fail "the watcher did not wake on an overdue item: $(cat "$out")"; }
-  grep -F 'check: backlog overdue: 1 dated item(s) past their gate' "$out" >/dev/null \
-    || fail "the wake did not count the overdue item: $(cat "$out")"
+  # The detached scan queues the row itself; whichever tick sees it first wakes.
+  grep -E 'check: (backlog overdue: 1 dated item|queued work: 1 check)' "$out" >/dev/null \
+    || fail "the wake did not surface the overdue item: $(cat "$out")"
   grep "$(printf '\tcheck\tbacklog-overdue:price-ladder\t')" "$state/.wake-queue" >/dev/null \
     || fail "the overdue item was not queued durably: $(cat "$state/.wake-queue" 2>&1)"
   pass "an overdue dated backlog item wakes the watcher once through its durable row"
@@ -909,6 +926,7 @@ test_hold_release_lines_surface_as_one_check_wake
 test_hold_release_schedule_releases_a_due_default
 test_unacknowledged_inbox_note_rewakes_the_watcher
 test_acknowledged_inbox_note_never_rewakes_the_watcher
+test_overdue_scan_lines_surface_as_one_check_wake
 test_overdue_backlog_item_wakes_the_watcher
 test_paused_bg_job_without_until_stays_silent_after_the_job_ends
 test_paused_bg_job_until_timeout_rechecks_after_the_job_ends

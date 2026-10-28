@@ -49,7 +49,7 @@ The captain's approval must be a current explicit instruction naming the contrib
 ## Where the boundary is enforced
 
 The gate is code, not memory: `bin/fm-role-lib.sh`'s `fm_role_gate_self_publish` applies the [lineage and publication-target policy](../../../docs/configuration.md#firstmate-role-configfirstmate-role) to publishing contracts.
-For a ship on this repository, pass the project directory to the brief as `--project`, and any captain-approved one-task consent as `--upstream-consent <host>/<owner>/<repo>` to the brief, spawn, and promotion.
+For a ship on this repository, pass the project directory to the brief as `--project` so the gate can recognize it.
 
 - `bin/fm-brief.sh --project <dir>` refuses to scaffold a publishing ship brief the home cannot authorize.
 - `bin/fm-spawn.sh` refuses to launch a ship task on this repository without a maintainer scope or matching task consent, and refuses a brief whose `upstream-consent=` disagrees with the flag.

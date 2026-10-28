@@ -30,7 +30,8 @@
 # Prints one `overdue <id>` line per wake it queued, so bin/fm-watch.sh
 # can wake once for the batch. A home with no readable tasks-axi backlog (a
 # manual backend, a missing backlog, or tasks-axi absent) prints nothing and
-# exits 0; a backlog read that fails or cannot be parsed exits 1 and leaves
+# exits 0; an unresolvable backend, or a backlog read that fails or cannot be
+# parsed, exits 1 and leaves
 # every marker in place, so a failed read never re-fires or clears anything.
 # FM_BACKLOG_OVERDUE_NOW (epoch seconds) overrides the clock for tests.
 set -u
@@ -81,9 +82,14 @@ gate_passed_rows() {  # <listing>
 }
 
 # Epoch of local midnight on <YYYY-MM-DD>, the moment tasks-axi lifts that gate.
+# Where a daylight-saving jump skips midnight, the day starts at 01:00.
 local_midnight_epoch() {  # <date>
-  date -j -f '%Y-%m-%d %H:%M:%S' "$1 00:00:00" +%s 2>/dev/null \
-    || date -d "$1 00:00:00" +%s 2>/dev/null
+  local at
+  for at in 00:00:00 01:00:00; do
+    date -j -f '%Y-%m-%d %H:%M:%S' "$1 $at" +%s 2>/dev/null && return 0
+    date -d "$1 $at" +%s 2>/dev/null && return 0
+  done
+  return 1
 }
 
 load_wake_lib() {
@@ -98,7 +104,12 @@ cmd_scan() {
   case "$now" in ''|*[!0-9]*) die "FM_BACKLOG_OVERDUE_NOW must be epoch seconds" ;; esac
   command -v tasks-axi >/dev/null 2>&1 || return 0
   ! fm_backlog_backend_manual "$CONFIG" || return 0
-  fm_backlog_tasks_axi_addressing "$DATA" || return 0
+  fm_backlog_tasks_axi_addressing "$DATA"
+  case $? in
+    0) ;;
+    2) die "backlog backend unresolved: ${FM_BACKLOG_TRANSITION_ERROR:-unknown}" ;;
+    *) return 0 ;;
+  esac
   [ -z "$FM_BACKLOG_AXI_FILE" ] || [ -f "$FM_BACKLOG_AXI_FILE" ] || return 0
   listing=$(FM_TASKS_AXI_TIMEOUT=${FM_TASKS_AXI_TIMEOUT:-15} \
     fm_backlog_row_list "$DATA" --state queued --limit 1000000 --fields hold_until,held,blocked 2>&1) \

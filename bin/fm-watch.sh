@@ -2939,21 +2939,30 @@ hold_release_tick() {
 # Overdue dated backlog work (bin/fm-backlog-overdue.sh's header owns the
 # overdue test, the grace period, and the once-per-gate marker). Once per
 # FM_BACKLOG_OVERDUE_INTERVAL seconds (default 3600; 0 or off disables) the
-# watcher runs the local `fm-backlog-overdue.sh scan`, which queues one durable
-# `check:` row per newly overdue item itself, and wakes once when it queued any.
+# watcher starts `fm-backlog-overdue.sh scan` detached, so a slow backlog
+# backend never stalls the loop. The scan queues one durable `check:` row per
+# newly overdue item itself and its `overdue <id>` lines land in
+# state/backlog-overdue-woke; the next tick claims that file and wakes once.
 BACKLOG_OVERDUE_INTERVAL=${FM_BACKLOG_OVERDUE_INTERVAL:-3600}
 case "$BACKLOG_OVERDUE_INTERVAL" in off) BACKLOG_OVERDUE_INTERVAL=0 ;; ''|*[!0-9]*) BACKLOG_OVERDUE_INTERVAL=3600 ;; esac
 backlog_overdue_tick() {
-  local out count
+  local pending="$STATE/backlog-overdue-woke" claimed="$STATE/.backlog-overdue-woke.claimed" count
+  if [ -s "$pending" ]; then
+    mv -f "$pending" "$claimed" 2>/dev/null || true
+    count=$(grep -c '^overdue ' "$claimed" 2>/dev/null || true)
+    rm -f "$claimed"
+    [ "${count:-0}" -eq 0 ] \
+      || wake "check: backlog overdue: $count dated item(s) past their gate and still not dispatched or answered (bin/fm-backlog-overdue.sh)"
+  fi
   [ "$BACKLOG_OVERDUE_INTERVAL" -gt 0 ] || return 0
   [ "$(age_of "$STATE/.last-backlog-overdue")" -ge "$BACKLOG_OVERDUE_INTERVAL" ] || return 0
   touch "$STATE/.last-backlog-overdue"
-  out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
-    "$SCRIPT_DIR/fm-backlog-overdue.sh" scan </dev/null 2>/dev/null) \
-    || triage_log "overdue backlog scan failed; the next scan retries in ${BACKLOG_OVERDUE_INTERVAL}s"
-  count=$(printf '%s\n' "$out" | grep -c '^overdue ' || true)
-  [ "$count" -gt 0 ] || return 0
-  wake "check: backlog overdue: $count dated item(s) past their gate and still not dispatched or answered (bin/fm-backlog-overdue.sh)"
+  (
+    out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+      "$SCRIPT_DIR/fm-backlog-overdue.sh" scan 2>/dev/null) \
+      || triage_log "overdue backlog scan failed; the next scan retries in ${BACKLOG_OVERDUE_INTERVAL}s"
+    [ -z "$out" ] || printf '%s\n' "$out" >> "$pending"
+  ) </dev/null >/dev/null 2>&1 &
 }
 
 # Captain inbox re-wake (bin/fm-inbox.sh's header owns the daily cadence, the

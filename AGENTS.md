@@ -50,7 +50,7 @@ Shared tracked material is every path git tracks in this repo, including `AGENTS
 When any crewmate is live, delegate changes to shared tracked material rather than competing with supervision; when the fleet is empty, firstmate may change it directly.
 This repo is a shared template, while `.env`, `data/`, `state/`, `config/`, `projects/`, and `.no-mistakes/` are captain-private and gitignored.
 Ship shared tracked changes through the selected delivery path and merge authority, as for any other project.
-Absent an explicit local grant, never push, fork, or open an issue, comment, or pull request on this repository's upstream; role is never inferred from identity, permissions, remotes, or ownership.
+Absent an explicit local grant, never push, fork, or open an issue, comment, or pull request on this repository's upstream; role is never inferred from identity, permissions, remotes, ownership, authentication, environment, or CI.
 Load `firstmate-self-repo`, which owns the role, its grants, and the dispatch flags, before dispatching, promoting, or delivering work that targets this repository, when a firstmate bug or improvement idea surfaces in ordinary use, and before granting or revoking upstream publication authority.
 Never add an agent name as a commit co-author.
 Use `gh-axi` for GitHub, `chrome-devtools-axi` for browser work, and compatible `lavish-axi` for visual decisions or reports; consult current help rather than memorizing flags.
@@ -186,8 +186,8 @@ Handle actionable wakes as follows:
 
 1. For `signal:`, read the listed event lines first, then reconcile current state only where action depends on it.
 2. For `stale:`, inspect the recorded endpoint and load `stuck-crewmate-recovery` for a stopped, looping, confused, or unresponsive worker; a deep-inspection reason also requires current-state and validation-log inspection.
-3. For `check:`, act on the named poll result, including merges, contribution signals, Relay events, process-to-event source results, and captain inbox notes; acknowledge a handled inbox note with `bin/fm-inbox.sh drain --ack <id>`, and give a durable answer through `bin/fm-inbox.sh reply <id>`.
-   A `check: secondmate <id> auto-relaunched` wake reports a completed recovery: load `secondmate-provisioning` and never relaunch again.
+3. For `check:`, act on the named poll result, including merges, contribution signals, Relay events, process-to-event source results, and captain inbox notes; acknowledge a handled inbox note with `bin/fm-inbox.sh drain --ack <id>`, or it stays counted as waiting, and give a note needing a durable answer `bin/fm-inbox.sh reply <id>`.
+   A `check: secondmate <id> auto-relaunched` wake reports a completed recovery: load `secondmate-provisioning` and reconcile rather than relaunching again.
 4. For `heartbeat:`, review the whole fleet from the structured fleet view (`bin/fm-fleet-view.sh`), reconcile suspicious tasks and PR state, update the backlog, refresh a built bearings board through `bearings`, and never report an unchanged fleet as progress.
 
 Load `bearings` on a contributions check wake or when filing work linked to an upstream issue; its contribution-follow-up section owns triage and exact signal acknowledgement.
