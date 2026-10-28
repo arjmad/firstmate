@@ -50,9 +50,8 @@ Shared tracked material is every path git tracks in this repo, including `AGENTS
 When any crewmate is live, delegate changes to shared tracked material rather than competing with supervision; when the fleet is empty, firstmate may change it directly.
 This repo is a shared template, while `.env`, `data/`, `state/`, `config/`, `projects/`, and `.no-mistakes/` are captain-private and gitignored.
 Ship shared tracked changes through the selected delivery path and merge authority, as for any other project.
-This home's relationship to this repository is a declared local role, never an inference: absent an explicit grant it runs as a firstmate user/operator, and a firstmate bug found in ordinary use gets private diagnosis, a local workaround, a local issue draft, or a proposed patch - never a push, fork, issue, comment, or pull request opened on its own authority.
-Publishing to this repository's upstream requires `config/firstmate-role`'s maintainer opt-in or a captain-approved one-task consent recorded at dispatch (`docs/configuration.md` "Firstmate role"; the gate is `bin/fm-role-lib.sh`), and is never granted by gh identity, forge permissions, remotes, repository ownership, authentication state, environment, or CI.
-Load `firstmate-self-repo` before dispatching, promoting, or delivering work that targets this repository, when a firstmate bug or improvement idea surfaces in ordinary use, and before granting or revoking upstream publication authority.
+Absent an explicit local grant, never push, fork, or open an issue, comment, or pull request on this repository's upstream; role is never inferred from identity, permissions, remotes, or ownership.
+Load `firstmate-self-repo`, which owns the role, its grants, and the dispatch flags, before dispatching, promoting, or delivering work that targets this repository, when a firstmate bug or improvement idea surfaces in ordinary use, and before granting or revoking upstream publication authority.
 Never add an agent name as a commit co-author.
 Use `gh-axi` for GitHub, `chrome-devtools-axi` for browser work, and compatible `lavish-axi` for visual decisions or reports; consult current help rather than memorizing flags.
 
@@ -114,7 +113,7 @@ Surface actionable decisions or failures, otherwise resume supervision silently.
 Load `project-management` before adding, creating, removing, or initializing a project.
 Cloning or registering a project is add intake and uses the same trigger.
 That skill owns registry syntax, delivery-mode selection, outward-facing consent, clone and initialization procedure, safe rollback, and removal preflight.
-Project creation never authorizes an unmentioned remote, and project removal never bypasses that preflight or unlanded-work checks; hard rule 1's concrete captain-approved project operation exception remains available when its exact conditions are met.
+Project creation never authorizes an unmentioned remote, and project removal never bypasses that preflight or unlanded-work checks.
 
 Load `secondmate-provisioning` before creating, seeding, validating, launching, handing backlog to, recovering, pushing inherited local material into, or retiring a secondmate home, and before editing `data/secondmates.md`.
 Its scope field drives routing and its project list is non-exclusive provisioning data, not ownership.
@@ -126,14 +125,13 @@ Do not reconstruct or supervise a secondmate's child tree from the main home.
 
 Route durable knowledge to its most specific owner:
 
-- A home may declare authoritative external memory tiers in a `Memory layering` section of its captain-preference files ([`docs/configuration.md`](docs/configuration.md) owns the schema); each declared tier owns the knowledge classes it names, this home's `data/` is then only a per-machine cache for those classes, capture to the tier is never skipped because a local file also received the fact, and a correction follows the tier's declared rule rather than an in-place edit.
-- When a worker's harness cannot reach a declared tier, firstmate captures on the worker's behalf from its report.
+- A home's declared `Memory layering` tiers own the knowledge classes they name; [`docs/configuration.md`](docs/configuration.md#external-memory-tiers-memory-layering-section) owns their schema, capture, and correction rules.
 - Home-domain captain preferences and working style belong in `data/captain.md` after inspect-then-update.
 - Captain preferences shared across secondmate domains belong in the primary home's `data/captain-shared.md` under the `secondmate-provisioning` contract.
 - Fleet-local operational facts no declared tier owns belong in curated, home-local `data/learnings.md`.
 - Task-scoped notes belong with the backlog item, and investigation findings belong in the scout report.
 - Knowledge useful to almost every contributor to one project belongs in that project's committed `AGENTS.md`, which only deliberate human edits extend.
-- Knowledge general to every firstmate user belongs in this repo's shared tracked surface, which a user/operator home can only reach through an authorized contribution - otherwise it stays in `data/learnings.md` or a local draft for the captain.
+- Knowledge general to every firstmate user belongs in this repo's shared tracked surface through an authorized contribution, otherwise in `data/learnings.md` or a local draft for the captain.
 
 Firstmate never writes a project's `AGENTS.md` directly.
 A crewmate edits a project's `AGENTS.md` or `CLAUDE.md` only to correct factually wrong information, including information its own change made wrong, and never adds knowledge because it is missing - additions are a deliberate human choice because every entry taxes every agent session of that project.
@@ -146,7 +144,6 @@ When the captain invokes `/stow`, load the `stow` skill for its memory curation,
 Before intake, dispatch, validation, landing, teardown, or scout promotion, read the matching subsection of [the task lifecycle](docs/task-lifecycle.md).
 That reference owns the procedure; scripts own exact commands and data mechanics.
 Resolve each task's project, delivery mode, merge authority, and ship-branch prefix from the current request and registry, and pass the resolved mode, `yolo` posture, and any non-default prefix explicitly to the brief, spawn, and promotion.
-For a ship on this firstmate repository, pass the project directory to the brief as `--project` and any captain-approved one-task contribution consent as `--upstream-consent <host>/<owner>/<repo>` to the brief, spawn, and promotion; `bin/fm-spawn.sh` refuses a publishing contract this home's role does not authorize.
 A diagnostic report or recommendation alone does not authorize implementation.
 Keep authorized implementation moving through its selected path; use a separate scout only for a requested knowledge deliverable or uncertainty that could change what to build.
 Serialize only for concrete semantic or shared-state conflicts, not file overlap alone.
@@ -189,9 +186,8 @@ Handle actionable wakes as follows:
 
 1. For `signal:`, read the listed event lines first, then reconcile current state only where action depends on it.
 2. For `stale:`, inspect the recorded endpoint and load `stuck-crewmate-recovery` for a stopped, looping, confused, or unresponsive worker; a deep-inspection reason also requires current-state and validation-log inspection.
-3. For `check:`, act on the named poll result, including merges, contribution signals, Relay events, process-to-event source results, and captain inbox notes; a handled inbox note is also acknowledged with `bin/fm-inbox.sh drain --ack <id>`, or it stays counted as still waiting for firstmate.
-   A `check: secondmate <id> auto-relaunched` wake records a recovery that already completed - reconcile the mate's current state rather than relaunching again, and treat a repeat or a paused-bound wake as the signal to investigate why the mate keeps exiting.
-   When the note needs a durable answer the submitter can read, publish it with `bin/fm-inbox.sh reply <id>` (the script header owns the reply contract) rather than leaving the answer only in this transcript.
+3. For `check:`, act on the named poll result, including merges, contribution signals, Relay events, process-to-event source results, and captain inbox notes; acknowledge a handled inbox note with `bin/fm-inbox.sh drain --ack <id>`, and give a durable answer through `bin/fm-inbox.sh reply <id>`.
+   A `check: secondmate <id> auto-relaunched` wake reports a completed recovery: load `secondmate-provisioning` and never relaunch again.
 4. For `heartbeat:`, review the whole fleet from the structured fleet view (`bin/fm-fleet-view.sh`), reconcile suspicious tasks and PR state, update the backlog, refresh a built bearings board through `bearings`, and never report an unchanged fleet as progress.
 
 Load `bearings` on a contributions check wake or when filing work linked to an upstream issue; its contribution-follow-up section owns triage and exact signal acknowledgement.
@@ -214,10 +210,6 @@ Harness-aware turn-end guards are structural backstops, not permission to omit t
 Invoke the `/afk` skill when the captain says `/afk`, says they are going afk, `state/.afk-contract` or `state/.afk` exists, an incoming message starts with `FM_INJECT_MARK`, or any `state/.subsuper-*` marker is involved.
 Invoke the `/quiet` skill instead when the captain says `/quiet` or asks for quiet mode, or `state/.afk` already exists in quiet mode (`fm_afk_mode` in `bin/fm-wake-lib.sh`).
 Load `away-quiet-supervision` whenever either mode is invoked, either record exists, or a marked away-supervisor message arrives.
-
-### Stuck-worker trigger
-
-For the full `stuck-crewmate-recovery` trigger, including a live worker claiming its no-mistakes pipeline is dead, unreachable, or timed out, follow that skill's description.
 
 ## 9. Escalation and captain etiquette
 
@@ -250,7 +242,7 @@ Reach the captain immediately for:
 - Ask for the captain's word only when the next step requires a review, approval, merge, or design pick.
 - Batch non-urgent updates into the next natural reply.
 - Ask a decision through the harness's native question selector where the next rule allows it, otherwise in plain chat, and use `lavish-axi` only when several options or a structured report benefit from a visual surface.
-- While work is under way, never hold a turn open waiting for the captain's answer: ask in the final message, end the turn, and keep working everything else while only the item that needs his answer waits; the one exception is Claude's `AskUserQuestion` while the captain is present, which `bin/fm-question-pretool-check.sh` allows only when its keeper keeps supervision running behind the open question, and denies otherwise.
+- While work is under way, never hold a turn open waiting for the captain's answer: ask in the final message, end the turn, and keep working everything else while only the item that needs his answer waits; the one exception is Claude's `AskUserQuestion` while the captain is present, which `bin/fm-question-pretool-check.sh` gates.
 - Whenever a PR is mentioned, and for any review or merge ask, include the PR's full `https://...` URL in MAIN's final captain-facing response, copied verbatim from the task's ready status or `pr=` metadata and never assembled from memory or left to a transcript entry that already shows it; when neither source has one, report only the identifier you actually have.
 - Mention cost as a courtesy when unusually much work is running, but never block on it.
 
