@@ -1,0 +1,8 @@
+2026-10-27: Arjun picked, in a firstmate helm retro's native selector, a landing command for capture PRs: one firstmate command records a task, merges through the guarded merge script, runs the capture job's `--settle` and fast-forwards the live checkout, and the capture note ends with "Land it: <that command>", like mail notes' "Work it:" line, for Nova and Cade.
+Why: `bin/fm-pr-merge.sh` refuses a PR with no task record, so a nightly capture PR had no supported landing path.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| `fm-capture-land.sh <pr-url> [--head <sha>]` lands one capture PR of a `capture=` live checkout's project: it refuses any other PR or a stale one before recording, keeps a minimal task record and backlog item, merges only through `fm-pr-merge.sh`, settles and syncs, and closes the record through `fm-teardown.sh` | `bin/fm-capture-land.sh`, `tests/fm-capture-land.test.sh`, `bin/fm-test-run.sh` (timing hint), `docs/scripts.md`, `docs/configuration.md` | none | carried | 45dd50a5 |
+| `fm-fleet-sync.sh --settle-capture <project>` waits out a running capture, runs `<capture command> --settle` in each of the project's `capture=` checkouts, then syncs them | `bin/fm-fleet-sync.sh` (`settle_capture`, argument parsing, `sync_live_checkout`), `tests/fm-fleet-sync.test.sh` (`test_settle_capture_*`) | `bin/fm-fleet-sync.sh` (usage, `sync_live_checkout`) | carried | 45dd50a5 |
+| A merge-time `fm-pr-check.sh` run on a record that names no worktree reads the forge head by URL instead of refusing for a missing worktree | `bin/fm-pr-check.sh` (the `pr_head` read) | `bin/fm-pr-check.sh` (the `pr_head` read) | carried | 45dd50a5 |
