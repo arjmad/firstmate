@@ -681,7 +681,7 @@ ok - unseeded path without --approve still prompts on Trust project folder?
 # all fm-pi-seeded-home-trust-live-e2e checks passed (3)
 ```
 
-Portable launch-command coverage lives in `tests/fm-spawn-dispatch-profile.test.sh` (`test_pi_seeded_secondmate_preapproves_project_trust`, `test_pi_worker_launch_omits_seeded_home_approve`, `test_pi_approve_probe_omits_unsupported_flag`).
+Portable launch-command coverage lives in `tests/fm-spawn-dispatch-profile.test.sh` (`test_pi_seeded_secondmate_preapproves_project_trust`, `test_pi_worker_launch_preapproves_worktree_trust`, `test_pi_approve_probe_omits_unsupported_flag`).
 
 ## Launch-prompt backstop signatures
 
