@@ -44,9 +44,17 @@ FM_HARNESS_NAMES=(claude codex opencode grok kimi pi-signed pi omp)
 # whole path components only is what keeps that widening safe: an ordinary path
 # such as bin/fm-claude-stop-autoarm.sh or ~/.claude/hooks/notify.sh has no
 # "claude" component and is correctly not a harness process.
+#
+# The one exception is the Claude desktop app's engine, which it installs as
+# ~/.claude/remote/ccd-cli/<version>: no component says claude, so an executable
+# directly inside that ccd-cli directory is Claude and nothing deeper is.
 fm_harness_path_name() {  # <path>
   local path=$1 name
   [ -n "$path" ] || return 1
+  case "$path" in
+    */.claude/remote/ccd-cli/*/*) ;;
+    */.claude/remote/ccd-cli/?*) printf 'claude'; return 0 ;;
+  esac
   for name in "${FM_HARNESS_NAMES[@]}"; do
     case "/$path/" in
       */"$name"/*) printf '%s' "$name"; return 0 ;;
