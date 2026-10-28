@@ -134,8 +134,9 @@
 #            outlives the worker. Called by scout teardown before it closes the
 #            worker's endpoint. Per board: a round the adapter calls silent is
 #            acknowledged as in retire-task; any other unacknowledged round
-#            keeps the board with the task and prints `kept:`, since no
-#            captured answer is ever handed over unread. The adapter's `adopt`
+#            prints `kept:` and keeps every board of the task with it, checked
+#            before any board moves, since no captured answer is ever handed
+#            over unread. The adapter's `adopt`
 #            command then proves the source can still be served and names its
 #            `link:`, plus `moved-from:` when that link changed; its exit 4
 #            means the source already ended, printed as `ended:` and left for
@@ -2407,6 +2408,10 @@ cmd_retire_task() {
 # over; 1 on any failure, which leaves whoever owned the registration owning it.
 adopt_task_source() {  # <task-id> <source-id>
   local task=$1 id=$2 adapter out rc link='' moved='' bound=0 listen_rc=0 line
+  if [ ! -e "$(source_file "$id")" ]; then
+    printf 'ended: %s (its last round ended the board)\n' "$id"
+    return 4
+  fi
   if [ "$(source_kind "$id" 2>/dev/null || true)" = task-owned ]; then
     # A round the adapter calls silent carries nothing to read and is
     # acknowledged exactly as retire-task does; a silent terminal round
@@ -2528,6 +2533,15 @@ cmd_adopt_task() {
     fi
     ids+=("$id")
   done
+  # Every board is checked before any is handed over, so one board's unread
+  # round keeps all of the task's boards with it rather than splitting them.
+  for id in "${ids[@]+"${ids[@]}"}"; do
+    [ "$(source_kind "$id" 2>/dev/null || true)" = task-owned ] || continue
+    if retire_task_unread "$task" "$id" "$(source_pending "$id")" adopt_task_kept; then
+      any_kept=1
+    fi
+  done
+  [ "$any_kept" -eq 0 ] || return 3
   for id in "${ids[@]+"${ids[@]}"}"; do
     rc=0
     adopt_task_source "$task" "$id" || rc=$?

@@ -5523,7 +5523,7 @@ SH
 chmod +x "$ADOPT_BIN/session"
 export ADOPT_FAKE="$ADOPT" ADOPT_SESSION="$ADOPT_BIN/session"
 fm_test_track_procevent_home "$ADOPT/home"
-for w in worker-a worker-b worker-c worker-d; do new_task_endpoint "$ADOPT/home" "$w"; done
+for w in worker-a worker-b worker-c worker-d worker-e; do new_task_endpoint "$ADOPT/home" "$w"; done
 ad_hex16() {  # <name>: a fixed 16-hex Lavish session id for a board name
   local h
   h=$(printf '%s' "$1" | od -An -tx1 | tr -d ' \n')
@@ -5541,42 +5541,39 @@ ad_live=$(adopt_board live open)
 ad_unread=$(adopt_board unread open)
 ad_idle=$(adopt_board idle)
 ad_ended=$(adopt_board ended)
+ad_closed=$(adopt_board closed open)
 ad_other=$(adopt_board other open)
 ad_fm=$(adopt_board firstmate open)
 for b in live unread; do ad_arm "$ADOPT/$b.html" --for worker-a || fail "fixture invalid: cannot arm $b"; done
 ad_arm "$ADOPT/idle.html" --for worker-c || fail "fixture invalid: cannot arm idle"
 ad_arm "$ADOPT/ended.html" --for worker-d || fail "fixture invalid: cannot arm ended"
+ad_arm "$ADOPT/closed.html" --for worker-e || fail "fixture invalid: cannot arm closed"
 ad_arm "$ADOPT/other.html" --for worker-b || fail "fixture invalid: cannot arm another task's board"
 ad_arm "$ADOPT/firstmate.html" || fail "fixture invalid: cannot arm firstmate's board"
 printf 'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","make the chart bigger","","message",""\n' \
   > "$ADOPT/unread.html.reply"
-touch "$ADOPT/unread.html.go"
+printf 'session:\n  status: ended\n  session_ended: true\n' > "$ADOPT/closed.html.reply"
+touch "$ADOPT/unread.html.go" "$ADOPT/closed.html.go"
 wait_for "$ADOPT/home/state/procevent-inbox/$ad_unread.1.result" 300 \
   || fail "fixture invalid: the unread round was not captured"
+wait_for "$ADOPT/home/state/procevent-inbox/$ad_closed.1.result" 300 \
+  || fail "fixture invalid: the closing round was not captured"
 printf 'http://127.0.0.1:24387/session/%s\n' "$(ad_hex16 idle)" > "$ADOPT/idle.html.resume-url"
 touch "$ADOPT/ended.html.ended"
 
 ad_rc=0
 ad adopt-task worker-a > "$ADOPT/out-a" 2>&1 || ad_rc=$?
 [ "$ad_rc" -eq 3 ] || fail "adopt-task did not report the board it kept with exit 3 (got $ad_rc): $(cat "$ADOPT/out-a")"
-assert_contains "$(cat "$ADOPT/out-a")" "adopted: $ad_live (from task worker-a)" "adopt-task did not hand over the open board"
-assert_contains "$(cat "$ADOPT/out-a")" "link: $ad_live http://127.0.0.1:14387/session/" "adopt-task did not name the board's link"
-assert_not_contains "$(cat "$ADOPT/out-a")" "moved: $ad_live" "an open board's unchanged link was reported as moved"
 assert_contains "$(cat "$ADOPT/out-a")" "kept: $ad_unread 1" "adopt-task did not name the unread round it kept"
-grep -qx 'adopted_from=worker-a' "$ADOPT/home/state/procevent/$ad_live.source" \
-  || fail "the handed-over board does not record the task it came from"
-! grep -q '^kind=task-owned' "$ADOPT/home/state/procevent/$ad_live.source" \
-  || fail "the handed-over board is still task-owned"
-grep -qx 'kind=task-owned' "$ADOPT/home/state/procevent/$ad_unread.source" \
-  || fail "a board with an unread round left its task"
+assert_not_contains "$(cat "$ADOPT/out-a")" "adopted:" "one board's unread round did not keep the task's other board with it"
+for b in "$ad_live" "$ad_unread"; do
+  grep -qx 'kind=task-owned' "$ADOPT/home/state/procevent/$b.source" \
+    || fail "a board left its task while another of its boards held an unread round"
+  ! FM_HOME="$ADOPT/home" "$ROOT/bin/fm-captain-hold.sh" binding "$b" >/dev/null 2>&1 \
+    || fail "a kept board was bound to the keyed-answer intake"
+done
 [ ! -e "$ADOPT/home/state/procevent-inbox/$ad_unread.1.handled" ] \
   || fail "adopt-task acknowledged a round that carried the captain's words"
-[ "$(FM_HOME="$ADOPT/home" "$ROOT/bin/fm-captain-hold.sh" binding "$ad_live")" = "(any)" ] \
-  || fail "the handed-over board is not bound to the keyed-answer intake"
-! FM_HOME="$ADOPT/home" "$ROOT/bin/fm-captain-hold.sh" binding "$ad_unread" >/dev/null 2>&1 \
-  || fail "a kept board was bound to the keyed-answer intake"
-[ "$(ad list | awk -v id="$ad_live" '$1 == id { print $3 }')" = live ] \
-  || fail "the handed-over board is not listening under firstmate: $(ad list)"
 
 ad_rc=0
 ad adopt-task worker-c > "$ADOPT/out-c" 2>&1 || ad_rc=$?
@@ -5591,14 +5588,38 @@ assert_contains "$(cat "$ADOPT/out-d")" "ended: $ad_ended" "adopt-task did not r
 grep -qx 'kind=task-owned' "$ADOPT/home/state/procevent/$ad_ended.source" \
   || fail "a board the captain ended was handed over instead of left for retire-task"
 
-# Once the unread round is read and acknowledged, a rerun hands that board over
-# and finishes the one already handed over without disturbing its listener.
+# A board closed with nothing said ends with its silent round, which the
+# handover acknowledges; that concludes the board, and the handover succeeds.
+ad_rc=0
+ad adopt-task worker-e > "$ADOPT/out-e" 2>&1 || ad_rc=$?
+[ "$ad_rc" -eq 0 ] || fail "a board closed with nothing said failed the handover (exit $ad_rc): $(cat "$ADOPT/out-e")"
+assert_contains "$(cat "$ADOPT/out-e")" "ended: $ad_closed" "adopt-task did not report the board its silent round ended"
+assert_absent "$ADOPT/home/state/procevent/$ad_closed.source" "a board its silent round ended is still registered"
+
+# Once the unread round is read and acknowledged, both boards are handed over,
+# and a rerun finishes an already handed-over board without disturbing it.
 ad handled "$ad_unread" 1 >/dev/null
 ad_rc=0
 ad adopt-task worker-a > "$ADOPT/out-a2" 2>&1 || ad_rc=$?
-[ "$ad_rc" -eq 0 ] || fail "the rerun did not finish the handover (exit $ad_rc): $(cat "$ADOPT/out-a2")"
-assert_contains "$(cat "$ADOPT/out-a2")" "adopted: $ad_unread (from task worker-a)" "the rerun did not hand over the acknowledged board"
-assert_contains "$(cat "$ADOPT/out-a2")" "adopted: $ad_live (from task worker-a)" "the rerun did not confirm the board it already handed over"
+[ "$ad_rc" -eq 0 ] || fail "adopt-task did not hand over the read boards (exit $ad_rc): $(cat "$ADOPT/out-a2")"
+assert_contains "$(cat "$ADOPT/out-a2")" "adopted: $ad_live (from task worker-a)" "adopt-task did not hand over the open board"
+assert_contains "$(cat "$ADOPT/out-a2")" "adopted: $ad_unread (from task worker-a)" "adopt-task did not hand over the acknowledged board"
+assert_contains "$(cat "$ADOPT/out-a2")" "link: $ad_live http://127.0.0.1:14387/session/" "adopt-task did not name the board's link"
+assert_not_contains "$(cat "$ADOPT/out-a2")" "moved: $ad_live" "an open board's unchanged link was reported as moved"
+grep -qx 'adopted_from=worker-a' "$ADOPT/home/state/procevent/$ad_live.source" \
+  || fail "the handed-over board does not record the task it came from"
+! grep -q '^kind=task-owned' "$ADOPT/home/state/procevent/$ad_live.source" \
+  || fail "the handed-over board is still task-owned"
+[ "$(FM_HOME="$ADOPT/home" "$ROOT/bin/fm-captain-hold.sh" binding "$ad_live")" = "(any)" ] \
+  || fail "the handed-over board is not bound to the keyed-answer intake"
+[ "$(ad list | awk -v id="$ad_live" '$1 == id { print $3 }')" = live ] \
+  || fail "the handed-over board is not listening under firstmate: $(ad list)"
+ad_rc=0
+ad adopt-task worker-a > "$ADOPT/out-a3" 2>&1 || ad_rc=$?
+[ "$ad_rc" -eq 0 ] || fail "a rerun did not finish an already handed-over board (exit $ad_rc): $(cat "$ADOPT/out-a3")"
+assert_contains "$(cat "$ADOPT/out-a3")" "adopted: $ad_live (from task worker-a)" "a rerun did not confirm the board it already handed over"
+[ "$(ad list | awk -v id="$ad_live" '$1 == id { print $3 }')" = live ] \
+  || fail "a rerun disturbed the handed-over board's listener: $(ad list)"
 grep -qx 'kind=task-owned' "$ADOPT/home/state/procevent/$ad_other.source" || fail "adopt-task touched another task's board"
 ! grep -q '^adopted_from=' "$ADOPT/home/state/procevent/$ad_fm.source" || fail "adopt-task touched firstmate's board"
 
