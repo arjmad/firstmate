@@ -144,6 +144,11 @@
 #                          source owned closes that episode); the queued
 #                          payload names what to check. These three kinds are
 #                          joined with `;` when more than one surfaces in a cycle
+#   check: backlog overdue: <n> dated item(s) past their gate ...
+#                          bin/fm-backlog-overdue.sh scan queued one durable
+#                          check row per queued backlog item whose date gate
+#                          opened over its grace period ago without a dispatch
+#                          or answer, once per gate (backlog_overdue_tick)
 #   check: captain inbox: <n> note(s) still unacknowledged
 #                          bin/fm-inbox.sh rewake-due queued one durable check
 #                          row per inbox note still pending a day after its
@@ -2931,6 +2936,26 @@ hold_release_tick() {
   ) </dev/null >/dev/null 2>&1 &
 }
 
+# Overdue dated backlog work (bin/fm-backlog-overdue.sh's header owns the
+# overdue test, the grace period, and the once-per-gate marker). Once per
+# FM_BACKLOG_OVERDUE_INTERVAL seconds (default 3600; 0 or off disables) the
+# watcher runs the local `fm-backlog-overdue.sh scan`, which queues one durable
+# `check:` row per newly overdue item itself, and wakes once when it queued any.
+BACKLOG_OVERDUE_INTERVAL=${FM_BACKLOG_OVERDUE_INTERVAL:-3600}
+case "$BACKLOG_OVERDUE_INTERVAL" in off) BACKLOG_OVERDUE_INTERVAL=0 ;; ''|*[!0-9]*) BACKLOG_OVERDUE_INTERVAL=3600 ;; esac
+backlog_overdue_tick() {
+  local out count
+  [ "$BACKLOG_OVERDUE_INTERVAL" -gt 0 ] || return 0
+  [ "$(age_of "$STATE/.last-backlog-overdue")" -ge "$BACKLOG_OVERDUE_INTERVAL" ] || return 0
+  touch "$STATE/.last-backlog-overdue"
+  out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-backlog-overdue.sh" scan </dev/null 2>/dev/null) \
+    || triage_log "overdue backlog scan failed; the next scan retries in ${BACKLOG_OVERDUE_INTERVAL}s"
+  count=$(printf '%s\n' "$out" | grep -c '^overdue ' || true)
+  [ "$count" -gt 0 ] || return 0
+  wake "check: backlog overdue: $count dated item(s) past their gate and still not dispatched or answered (bin/fm-backlog-overdue.sh)"
+}
+
 # Captain inbox re-wake (bin/fm-inbox.sh's header owns the daily cadence, the
 # pending test, and the queued-key guard). Once per FM_INBOX_REWAKE_INTERVAL
 # seconds (default 3600; 0 or off disables) the watcher runs the local
@@ -3229,6 +3254,7 @@ while :; do
 
   fleet_sync_tick
   hold_release_tick
+  backlog_overdue_tick
   inbox_rewake_tick
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
