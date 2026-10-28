@@ -3111,6 +3111,7 @@ RAW_COMMAND=
 WORKER_ACCOUNT_MATE=
 [ "$KIND" != secondmate ] || WORKER_ACCOUNT_MATE=$ID
 WORKER_ACCOUNT=$(fm_worker_account_select "$HARNESS" "$CONFIG" "$MODEL" "${PI_BIN:-$HARNESS}" "$RAW_COMMAND" "$WORKER_ACCOUNT_MATE") || exit 1
+SESSION_CLAUDE_STORE="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
 WORKER_ACCOUNT_DECLARED=${WORKER_ACCOUNT%%$'\t'*}
 WORKER_ACCOUNT_ROOT=${WORKER_ACCOUNT#*$'\t'}
 WORKER_ACCOUNT_PROVIDER=${WORKER_ACCOUNT_ROOT#*$'\t'}
@@ -3121,6 +3122,9 @@ if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS" = claude ]; then
   else
     unset CLAUDE_CONFIG_DIR
   fi
+  WORKER_MCP_GAP=$(fm_worker_account_claude_mcp_gap "$SESSION_CLAUDE_STORE" "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json")
+  [ -z "$WORKER_MCP_GAP" ] \
+    || echo "warning: the Claude worker account ${WORKER_ACCOUNT_ROOT:-ordinary} lacks MCP servers this session has: $WORKER_MCP_GAP; the worker starts without those tools until that root registers them" >&2
 fi
 
 secondmate_registry_value() {

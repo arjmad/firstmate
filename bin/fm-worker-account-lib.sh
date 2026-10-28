@@ -309,3 +309,19 @@ fm_worker_account_claude_shed() {
   done
   printf '%s\n' "$prefix"
 }
+
+# fm_worker_account_claude_mcp_gap <session-store> <worker-store>
+# Prints, space-separated, the user-scope MCP server names the invoking
+# session's Claude store registers and the worker's store does not. Each root
+# is its own Claude store, MCP servers included, so a worker pinned to another
+# root starts without those tools. Prints nothing when both name one store,
+# either is unreadable, or jq is absent: this is a spawn-time warning, never a
+# refusal.
+fm_worker_account_claude_mcp_gap() {
+  local session=$1 worker=$2
+  [ "$session" != "$worker" ] && [ -r "$session" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -rn --slurpfile s "$session" --slurpfile w "$worker" \
+    '(($s[0].mcpServers // {}) | keys) - (($w[0].mcpServers // {}) | keys) | join(" ")' 2>/dev/null \
+    || jq -r '(.mcpServers // {}) | keys | join(" ")' "$session" 2>/dev/null || true
+}
