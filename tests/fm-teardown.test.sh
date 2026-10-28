@@ -2065,7 +2065,7 @@ test_scout_teardown_prints_what_it_noticed() {
   case_dir=$(make_case scout-noticed)
   write_meta "$case_dir" no-mistakes scout
   prepare_scout_teardown "$case_dir"
-  printf '%s\n' '## Noticed and ideas' 'Noticed: the packet canary is red twice' 'Idea: none' \
+  printf '%s\n' '## Noticed and ideas' 'Noticed: the packet canary is red twice' \
     >> "$case_dir/data/task-x1/report.md"
   printf '%s\n' 'Idea: cache the fee table weekly' > "$case_dir/data/task-x1/notes.md"
 

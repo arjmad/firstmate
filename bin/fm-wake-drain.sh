@@ -601,15 +601,15 @@ EOF
 # Print the NOTICED section: noticed problems and this week's top ideas filed
 # for the captain that no captain reply has mentioned yet (fork patch,
 # docs/fork-decisions/2026-10-27-noticed-queue.md). bin/fm-noticed.sh owns the
-# unseen list; this reads it and changes nothing, so every drain repeats it
-# until firstmate marks the items shown. It runs at every drain exit, apart
-# from the status snapshot, because unseen items outlive the last worker's
-# status file. Bounded and silent when empty, and a failure never changes the
-# drain's exit status.
+# unseen list, state/noticed/unseen.tsv; this reads the file and changes
+# nothing, so every drain repeats it until firstmate marks the items shown.
+# It runs at every drain exit, apart from the status snapshot, because unseen
+# items outlive the last worker's status file. Bounded and silent when empty,
+# and a failure never changes the drain's exit status.
 print_noticed_section() {
   local unseen id label title shown=0 omitted=0 line output='' used=0 global_bytes=1600
 
-  unseen=$(fm_run_timed 10 "$SCRIPT_DIR/fm-noticed.sh" unseen 2>/dev/null) || return 0
+  unseen=$(cat "$STATE/noticed/unseen.tsv" 2>/dev/null) || return 0
   [ -n "$unseen" ] || return 0
   while IFS=$(printf '\t') read -r id label title; do
     [ -n "$id" ] || continue

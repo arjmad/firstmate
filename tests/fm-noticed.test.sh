@@ -124,6 +124,10 @@ test_refusals() {
   home=$(make_home refusals)
   noticed "$home" file idea x --title a --why b --from nova >/dev/null 2>&1 \
     && fail "a Nova item was filed into this backlog"
+  noticed "$home" file idea x --title a --why b --from "Nova (Sapna)" >/dev/null 2>&1 \
+    && fail "a Nova item with a longer name was filed"
+  noticed "$home" file idea x --title a --why b --from sapna-mail-1027 >/dev/null 2>&1 \
+    && fail "a Sapna task's item was filed"
   noticed "$home" file other x --title a --why b >/dev/null 2>&1 && fail "an unknown kind was accepted"
   noticed "$home" file idea Bad_Slug --title a --why b >/dev/null 2>&1 && fail "a bad slug was accepted"
   noticed "$home" file idea ok --title a --why '' >/dev/null 2>&1 && fail "an empty why was accepted"
@@ -158,15 +162,38 @@ test_collect_reads_the_report_then_notes() {
   mkdir -p "$home/data/scout-1" "$home/data/ship-1" "$home/data/quiet-1"
   printf '# Report\n\n## Noticed and ideas\n- Noticed: none\n- **Idea:** cache the fee table weekly\n' \
     > "$home/data/scout-1/report.md"
-  printf 'Noticed: Thor printer offline since Monday, labels stall\n' > "$home/data/scout-1/notes.md"
+  printf 'Noticed: a quoted research note\nIdea: an idea jotted mid-task\n' > "$home/data/scout-1/notes.md"
   out=$(noticed "$home" collect scout-1)
-  assert_contains "$out" "Noticed: Thor printer offline since Monday, labels stall (scout-1/notes.md)" \
-    "a notes line was not collected after a none in the report"
-  assert_contains "$out" "Idea: cache the fee table weekly (scout-1/report.md)" "the report's idea was not collected"
-  printf 'Idea: one\nIdea: two\n' > "$home/data/ship-1/notes.md"
-  assert_equals "Idea: one (ship-1/notes.md)" "$(noticed "$home" collect ship-1)" "more than one idea was collected"
+  assert_equals "Idea: cache the fee table weekly (scout-1/report.md)" "$out" \
+    "the report's none did not settle Noticed, or its idea was not the one collected"
+  printf 'Noticed: jotted early\nIdea: one\nwork notes\nNoticed: Thor printer offline, labels stall\nIdea: two\n' \
+    > "$home/data/ship-1/notes.md"
+  out=$(noticed "$home" collect ship-1)
+  assert_equals "Noticed: Thor printer offline, labels stall (ship-1/notes.md)
+Idea: two (ship-1/notes.md)" "$out" "the end-of-task lines were not the ones collected"
   assert_equals "" "$(noticed "$home" collect quiet-1)" "a task with nothing left printed something"
-  pass "collect takes at most one noticed and one idea, from the report then the notes"
+  noticed "$home" collect .. >/dev/null 2>&1 && fail "collect read outside the task's own records"
+  pass "collect takes the end-of-task noticed and idea lines, and a report's none settles its label"
+}
+
+test_close_settles_an_item_and_list_keeps_answered_ones() {
+  local home out
+  home=$(make_home close)
+  noticed "$home" file noticed canary-red --title "Canary red" --why "packet" --from t1 >/dev/null
+  noticed "$home" file noticed printer-down --title "Printer offline" --why "labels" --from t1 >/dev/null
+  out=$(noticed "$home" close noticed-canary-red --evidence "business PR 431 fixed the packet check")
+  assert_equals "closed: noticed-canary-red" "$out" "close did not report the item"
+  assert_contains "$(tasks "$home" show noticed-canary-red --full)" "Settled 2026-10-27: business PR 431 fixed" \
+    "the evidence was not recorded"
+  assert_contains "$(tasks "$home" show noticed-canary-red)" "state: done" "the item is still open"
+  assert_equals "noticed-printer-down	noticed	Printer offline" "$(noticed "$home" unseen)" \
+    "a closed item stayed on the unseen list"
+  printf 'Fix it\n' > "$home/answer.txt"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-captain-hold.sh" answer noticed-printer-down \
+    --decision-file "$home/answer.txt" --release >/dev/null || fail "could not answer the fixture"
+  assert_contains "$(noticed "$home" list noticed)" "noticed-printer-down" "an answered, released item left the list"
+  pass "close settles an item with its evidence and unseen entry, and list keeps answered items"
 }
 
 test_the_drain_shows_unseen_items() {
@@ -191,4 +218,5 @@ test_closed_items_come_back_or_stay_answered
 test_refusals
 test_top3_is_recorded_once_and_shown_until_marked
 test_collect_reads_the_report_then_notes
+test_close_settles_an_item_and_list_keeps_answered_ones
 test_the_drain_shows_unseen_items

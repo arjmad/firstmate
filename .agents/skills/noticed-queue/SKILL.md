@@ -42,7 +42,7 @@ The jobs launcher's Monday `[open-items]` note dispatches the open-items sweep s
 Add two duties to that scout's brief:
 
 - **Noticed re-check.** Re-check every open noticed item (`bin/fm-noticed.sh list noticed`) against live state.
-  Firstmate closes a fixed one with `bin/fm-tasks-axi.sh done <id>`, citing what fixed it, and tells Arjun in one line of the next reply about any item still broken 7 days or more after its `created` date, with the recommended fix.
+  Firstmate closes a fixed one with `bin/fm-noticed.sh close <id> --evidence <what fixed it>`, and tells Arjun in one line of the next reply about any item still broken 7 days or more after its `created` date, with the recommended fix.
 - **Top 3.** Rank the open ideas never in a top 3 with Atlas's ranking rule (the atlas skill's step 2: Ecomills and Kempf profit first, then Arjun's time), estimating each as $/week or hours/week, and return the best three with their estimates.
   Firstmate records them with `bin/fm-noticed.sh top3 <id>...`, and the drain then shows them once.
 
