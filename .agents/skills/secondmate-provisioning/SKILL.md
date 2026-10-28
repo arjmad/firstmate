@@ -226,6 +226,7 @@ bin/fm-spawn.sh <id> --secondmate
 ```
 
 Use the recorded `home=` in meta.
+A `check: secondmate <id> auto-relaunched` wake records a recovery the watcher already completed: reconcile the mate's current state rather than relaunching again, and treat a repeat or a paused-bound wake as the signal to investigate why the mate keeps exiting.
 If meta is missing but `data/secondmates.md` still registers the secondmate, respawn from the registry entry and its persistent home.
 For a remote route, the same command probes and relaunches only on the configured host.
 An SSH transport failure or unreadable remote endpoint remains unknown and must be reconciled on that host; never launch a local replacement.

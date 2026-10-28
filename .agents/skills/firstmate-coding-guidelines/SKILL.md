@@ -61,6 +61,7 @@ Apply the decision tree above to every line you are about to add to `AGENTS.md`.
 If an addition needs more than a few lines of conditional detail (detail that matters only in a specific situation) or reference detail (a wire format, an exact schema, historical rationale), you are almost certainly adding it to the wrong file.
 `AGENTS.md`'s token cost is paid by every session of every fleet member, every time, whether or not that session ever hits the situation the new lines describe.
 A skill's cost is paid only by the sessions that actually load it.
+`AGENTS.md` also has a hard ceiling: Codex silently truncates project instructions past its byte budget, and `bin/fm-agents-md-budget.sh`, run by its colocated test, fails once the file crosses that budget minus a margin.
 When in doubt, write the fact into the skill or doc first by patching that owner's existing language, and add only the one-line trigger to `AGENTS.md`.
 
 ## Trigger hygiene

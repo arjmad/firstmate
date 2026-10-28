@@ -94,6 +94,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
 - Live-checkout post-update and capture records under `state/live-checkouts/`, and the scheduled sync's log, pending `fleet-sync-stuck` lines, and surfaced set (`bin/fm-fleet-sync.sh`).
 - Pending `hold-release-woke` lines and the `.last-hold-release` cadence marker of the watcher's captain-hold default release (`bin/fm-captain-hold.sh release-due`).
+- Once-per-gate overdue markers under `state/backlog-overdue/`, pending `backlog-overdue-woke` lines, and the `.last-backlog-overdue` cadence marker of the watcher's overdue backlog scan (`bin/fm-backlog-overdue.sh`).
 - The log of captain-waived code reviews, `state/code-review-waivers.log` (`bin/fm-pr-merge.sh`).
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
@@ -800,7 +801,12 @@ The declaration is per-home untracked state under `data/`, like every other capt
 A fresh primary home has no declaration until the captain re-declares the `Memory layering` section there from their own records.
 Until then local files are the only memory owners.
 
-[`AGENTS.md`](../AGENTS.md) section 6 owns what a declaration changes about knowledge routing, and the internal [`stow` skill](../.agents/skills/stow/SKILL.md) owns how curation reads the declaration and protects tier-owned entries from pruning.
+A declaration changes knowledge routing as follows; [`AGENTS.md`](../AGENTS.md) section 6 owns the rest of the routing order.
+Each declared tier owns the knowledge classes it names, and this home's `data/` is then only a per-machine cache for those classes.
+Capture to the tier is never skipped because a local file also received the fact.
+A correction follows the tier's declared rule rather than an in-place edit.
+When a worker's harness cannot reach a declared tier, firstmate captures on the worker's behalf from its report.
+The internal [`stow` skill](../.agents/skills/stow/SKILL.md) owns how curation reads the declaration and protects tier-owned entries from pruning.
 The section counts toward the startup memory budget like the rest of its file, so keep it to the mapping rather than restating these rules.
 
 ## Startup memory budget (config/startup-memory-budget)
