@@ -2955,6 +2955,10 @@ test_single_owner_terminal_declaration_supersedes_stale_decision() {
   make_repo_on_branch "$d/wt" fm/task
   make_fakebin "$d" >/dev/null
   arm_idle_record "$d/state" task
+  # The scout's report exists, so its done: is complete rather than blocked on it.
+  mkdir -p "$d/data/task"
+  printf '# Report\n' > "$d/data/task/report.md"
+  export FM_DATA_OVERRIDE="$d/data"
   for kind in scout ship; do
     fm_write_meta "$d/state/task.meta" "window=fm:fm-task" "worktree=$d/wt" "kind=$kind" "harness=claude"
     for opener in needs-decision blocked; do
@@ -2983,6 +2987,7 @@ test_single_owner_terminal_declaration_supersedes_stale_decision() {
       done
     done
   done
+  unset FM_DATA_OVERRIDE
   pass "ship and scout terminal declarations supersede stale decisions"
 }
 
