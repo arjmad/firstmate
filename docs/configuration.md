@@ -2254,6 +2254,19 @@ The Lavish version floors and feature probe are owned by `bin/fm-bootstrap.sh`.
 
 - A second armer is refused with the current owner named, and the source list derives `listening`, `round-open`, or `dead` from the claim and handled captures without a second ownership record.
 - If the hosting worker cannot be recovered, relaunch a worker to re-host first; guarded firstmate adoption is an explicit last resort only after the old claim is proved dead.
+
+**Hand a finished scout's board to firstmate**
+
+A finished scout is never kept parked only so its board and listener stay alive.
+When a scout whose attested captain-call inventory is non-empty is torn down, `bin/fm-teardown.sh` first runs `bin/fm-procevent.sh adopt-task <task-id>`, before it closes the scout's endpoint.
+
+- Each board the scout owns moves to firstmate's own ownership, the same ownership a bearings board has: the scout's listener stops, the source is bound with `bin/fm-captain-hold.sh bind` unless it already has a binding, and a firstmate listener is confirmed running.
+- The board keeps its session link whenever Lavish still has the session open, because the artifact under `data/<task-id>/` and the shared Lavish server both outlive the scout; an idle session is resumed with a plain open, never `--reopen`.
+- Teardown records the board's current link on every still-open call of the inventory with `bin/fm-captain-hold.sh board-link`, so the link survives the scout's status log.
+- A keyed answer the captain gives on the adopted board then resolves its held call through the keyed-answer intake, and any other round reaches firstmate as an ordinary process-event `check` wake.
+- A board with an unacknowledged round that carries anything stays with the scout and the teardown refuses with nothing changed, so a captured answer is never handed over unread; read the round, acknowledge it with `bin/fm-procevent.sh handled`, then re-run the teardown.
+- A board the captain ended from the browser is retired with the scout as before, and `--force` falls back to that retirement when a handover cannot be made.
+- The landed-work and scout completion gates run first and are unchanged.
 - The cross-home gap between worker rounds remains an accepted residual until lavish-axi's exclusive listener lands.
 - The interim crew instruction emitted by `bin/fm-brief.sh` points workers at this arm-and-acknowledge contract.
 

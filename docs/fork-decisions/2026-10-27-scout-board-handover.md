@@ -1,0 +1,11 @@
+2026-10-27: Arjun decided in the retro of a firstmate helm session, through the native selector, that a finished scout's board outlives the scout: "Firstmate adopts it at close (Recommended)".
+Decision: scout teardown hands each board of a scout with held captain calls to firstmate's own Lavish ownership before it closes the scout's endpoint, keeping the session link where Lavish still has it open and binding the source to the keyed-answer intake, so finished scouts are no longer parked only to keep a board and its listener alive.
+The same retro chose to shrink the startup summary by closing that parked state rather than changing how the summary works, and 8 of the main home's 13 task records were finished scouts parked for this reason alone.
+The change is upstream-shaped: it composes upstream's own crew-hosted board, process-event, and captain-hold owners, and names nothing specific to this fleet.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| A worker-owned board can be handed to firstmate under its source lock, bound and confirmed listening, and an interrupted handover finishes on a rerun | `bin/fm-procevent.sh` (`adopt-task`, `adopt_task_source`, `release_owned_claim_locked` shared with `cmd_retire`), `bin/fm-procevent-lib.sh` (`fm_procevent_adopted_registration_publish_locked`), `tests/fm-procevent.test.sh` | same files | carried | 45dd50a5 |
+| The Lavish adapter proves a board can still be served and names its link before a handover, and owns the one parser of the session listing | `bin/fm-procevent-lavish.sh` (`adopt`, `listed-open`, `saved_session`), `bin/fm-bearings-board.sh` (`lavish_session_listed_open` delegates) | same files | carried | 45dd50a5 |
+| A handed-over board's link is recorded on each still-open call of the scout's inventory | `bin/fm-captain-hold.sh` (`board-link`) | same file | carried | 45dd50a5 |
+| Scout teardown hands its boards over before closing the endpoint and refuses while a board holds an unread round | `bin/fm-teardown.sh`, `tests/fm-teardown.test.sh`, `docs/configuration.md` "Hand a finished scout's board to firstmate", `.agents/skills/scout-completion/SKILL.md` | same files | carried | 45dd50a5 |

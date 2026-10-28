@@ -14,6 +14,7 @@
 #   fm-procevent.sh handled <source-id> <sequence>
 #   fm-procevent.sh retire <source-id> [--if-absent|--if-matches <adapter> -- <argv>...|--if-owner <registration-token>]
 #   fm-procevent.sh retire-task <task-id>
+#   fm-procevent.sh adopt-task <task-id>
 #   fm-procevent.sh sweep-home [--preflight]
 #   fm-procevent.sh binding-retirement-preflight <binding-digest>
 #   fm-procevent.sh extension-retirement <binding|transfer> <retirement-arguments...>
@@ -129,6 +130,25 @@
 #            task owned remains, 3 when a source was kept for an unread round,
 #            1 when a retire failed.
 #            Firstmate-registered sources are never touched.
+# adopt-task Hand every board <task-id> owns over to firstmate, so the board
+#            outlives the worker. Called by scout teardown before it closes the
+#            worker's endpoint. Per board: a round the adapter calls silent is
+#            acknowledged as in retire-task; any other unacknowledged round
+#            prints `kept:` and keeps every board of the task with it, checked
+#            before any board moves, since no captured answer is ever handed
+#            over unread. The adapter's `adopt`
+#            command then proves the source can still be served and names its
+#            `link:`, plus `moved-from:` when that link changed; its exit 4
+#            means the source already ended, printed as `ended:` and left for
+#            retire-task. Under the source lock the source is bound to the
+#            keyed-answer intake through bin/fm-captain-hold.sh unless it
+#            already has a binding, the task's runner is stopped, and the
+#            registration is republished as firstmate's own with an
+#            `adopted_from=<task-id>` line, which lets a rerun finish an
+#            interrupted handover. It returns once ensure-listening confirms
+#            the firstmate listener, printing `adopted:`, `link:`, and any
+#            `moved:` line. Exit 0 when nothing the task owned is left unhanded,
+#            3 when a board was kept for an unread round, 1 on any failure.
 # sweep-home Retire a bounded snapshot of this home's registrations and owned
 #            claims, then refuse unless no registration, runner record, or owned
 #            claim remains. Used by supported Firstmate home retirement.
@@ -2184,8 +2204,48 @@ cmd_handled() {
   fi
 }
 
+# Stop the runner this home owns for <source-id> and release its claim, with the
+# source lock held, so nothing this home started keeps polling a source whose
+# registration is being retired or handed over. A claim another home owns is
+# left alone. Returns 1 with CLAIM_RELEASE_ERROR set when ownership cannot be
+# read, the runner cannot be identified, or the claim cannot be released.
+CLAIM_RELEASE_ERROR=
+release_owned_claim_locked() {  # <source-id> [extension-binding-digest]
+  local id=$1 digest=${2-} owner pid token identity stop_state
+  CLAIM_RELEASE_ERROR=
+  if [ -e "$(fm_procevent_claim_path "$id")" ]; then
+    if ! fm_procevent_claim_load_locked "$id" 2>/dev/null; then
+      CLAIM_RELEASE_ERROR="cannot safely read source ownership: $id"
+      return 1
+    fi
+    fm_procevent_claim_owned_by_state "$STATE" "$FM_HOME" || return 0
+    owner=$FM_PROCEVENT_CLAIM_HOME
+    pid=$FM_PROCEVENT_CLAIM_PID
+    token=$FM_PROCEVENT_CLAIM_TOKEN
+    identity=$FM_PROCEVENT_CLAIM_IDENTITY
+    stop_runner_pid "$pid" "$identity"
+    stop_state=$?
+    if [ "$stop_state" -eq 2 ]; then
+      CLAIM_RELEASE_ERROR="cannot confirm runner identity; source remains registered: $id"
+      return 1
+    fi
+    if [ -n "$digest" ] && ! cleanup_extension_binding_invocations "$digest"; then
+      CLAIM_RELEASE_ERROR="cannot prove external adapter cleanup; source remains registered: $id"
+      return 1
+    fi
+    if ! fm_procevent_claim_reclaim_locked "$id" "$owner" "$pid" "$token"; then
+      CLAIM_RELEASE_ERROR="cannot release source ownership: $id"
+      return 1
+    fi
+    rm -f -- "$(staging_file "$id" "$token")"
+  elif [ -n "$digest" ] && ! cleanup_extension_binding_invocations "$digest"; then
+    CLAIM_RELEASE_ERROR="cannot prove external adapter cleanup; source remains registered: $id"
+    return 1
+  fi
+}
+
 cmd_retire() {
-  local id=${1-} condition=${2-} adapter='' sep='' expected_owner='' owner='' pid='' token='' identity='' stop_state owner_state
+  local id=${1-} condition=${2-} adapter='' sep='' expected_owner='' owner_state
   local extension_binding_digest='' round_owner=''
   fm_procevent_source_id_valid "$id" || die "source id must be path-safe: $id"
   case "$condition" in
@@ -2255,37 +2315,9 @@ cmd_retire() {
     fm_procevent_source_lock_release "$id"
     die "source owner cannot be proved after its registration disappeared: $id"
   fi
-  if [ -e "$(fm_procevent_claim_path "$id")" ]; then
-    if ! fm_procevent_claim_load_locked "$id" 2>/dev/null; then
-      fm_procevent_source_lock_release "$id"
-      die "cannot safely read source ownership: $id"
-    fi
-    if fm_procevent_claim_owned_by_state "$STATE" "$FM_HOME"; then
-      owner=$FM_PROCEVENT_CLAIM_HOME
-      pid=$FM_PROCEVENT_CLAIM_PID
-      token=$FM_PROCEVENT_CLAIM_TOKEN
-      identity=$FM_PROCEVENT_CLAIM_IDENTITY
-      stop_runner_pid "$pid" "$identity"
-      stop_state=$?
-      if [ "$stop_state" -eq 2 ]; then
-        fm_procevent_source_lock_release "$id"
-        die "cannot confirm runner identity; source remains registered: $id"
-      fi
-      if [ -n "$extension_binding_digest" ] \
-        && ! cleanup_extension_binding_invocations "$extension_binding_digest"; then
-        fm_procevent_source_lock_release "$id"
-        die "cannot prove external adapter cleanup; source remains registered: $id"
-      fi
-      if ! fm_procevent_claim_reclaim_locked "$id" "$owner" "$pid" "$token"; then
-        fm_procevent_source_lock_release "$id"
-        die "cannot release source ownership: $id"
-      fi
-      rm -f -- "$(staging_file "$id" "$token")"
-    fi
-  elif [ -n "$extension_binding_digest" ] \
-    && ! cleanup_extension_binding_invocations "$extension_binding_digest"; then
+  if ! release_owned_claim_locked "$id" "$extension_binding_digest"; then
     fm_procevent_source_lock_release "$id"
-    die "cannot prove external adapter cleanup; source remains registered: $id"
+    die "$CLAIM_RELEASE_ERROR"
   fi
   rm -f -- "$(source_file "$id")"
   rm -f -- "$(runner_file "$id")"
@@ -2305,11 +2337,16 @@ retire_task_kept() {  # <task> <source-id> <sequence>
     "$2" "$3" "$1" "$2" "$3"
 }
 
-# retire_task_unread <task> <source-id> <results>: acknowledge each of the
-# source's rounds in <results> its adapter calls silent and report every other
-# one as kept; succeed when any round was kept.
+adopt_task_kept() {  # <task> <source-id> <sequence>
+  printf 'kept: %s %s (task %s left this captured round unread, so its board stays with the task; read the round, acknowledge it with bin/fm-procevent.sh handled %s %s, then hand the board over again)\n' \
+    "$2" "$3" "$1" "$2" "$3"
+}
+
+# retire_task_unread <task> <source-id> <results> [<kept-reporter>]: acknowledge
+# each of the source's rounds in <results> its adapter calls silent and report
+# every other one as kept; succeed when any round was kept.
 retire_task_unread() {
-  local task=$1 id=$2 result seq adapter unread=1
+  local task=$1 id=$2 result seq adapter unread=1 report=${4:-retire_task_kept}
   while IFS= read -r result; do
     result_of_source "$result" "$id" || continue
     seq=${result%.result}; seq=${seq##*.}
@@ -2319,7 +2356,7 @@ retire_task_unread() {
       && "$SCRIPT_DIR/fm-procevent.sh" handled "$id" "$seq" </dev/null >/dev/null 2>&1; then
       continue
     fi
-    retire_task_kept "$task" "$id" "$seq"
+    "$report" "$task" "$id" "$seq"
     unread=0
   done <<EOF
 $3
@@ -2361,6 +2398,164 @@ cmd_retire_task() {
       failed=1
     fi
   done
+  [ "$failed" -eq 0 ] || return 1
+  [ "$any_kept" -eq 0 ] || return 3
+}
+
+# Hand one board a finished task owns over to firstmate (adopt-task below).
+# Returns 0 once firstmate owns it, bound and listening; 3 when an unread round
+# keeps it with the task; 4 when it has ended and there is nothing to hand
+# over; 1 on any failure, which leaves whoever owned the registration owning it.
+adopt_task_source() {  # <task-id> <source-id>
+  local task=$1 id=$2 adapter out rc link='' moved='' bound=0 listen_rc=0 line
+  if [ ! -e "$(source_file "$id")" ]; then
+    printf 'ended: %s (its last round ended the board)\n' "$id"
+    return 4
+  fi
+  if [ "$(source_kind "$id" 2>/dev/null || true)" = task-owned ]; then
+    # A round the adapter calls silent carries nothing to read and is
+    # acknowledged exactly as retire-task does; a silent terminal round
+    # concludes the board, which then has nothing left to hand over.
+    if retire_task_unread "$task" "$id" "$(source_pending "$id")" adopt_task_kept; then
+      return 3
+    fi
+    if [ ! -e "$(source_file "$id")" ]; then
+      printf 'ended: %s (its last round ended the board)\n' "$id"
+      return 4
+    fi
+  fi
+  adapter=$(read_adapter "$id") || { printf 'error: cannot read the registration of %s\n' "$id" >&2; return 1; }
+  read_argv "$id" || { printf 'error: cannot read the listener command of %s\n' "$id" >&2; return 1; }
+  # The adapter proves its source can still be served before ownership moves,
+  # and names the link the captain reaches it by. Exit 4 means the source has
+  # ended on its own side, so the board is retired the ordinary way instead.
+  rc=0
+  out=$("$(adapter_script "$adapter")" adopt "${ARGV[@]:1}" 2>&1) || rc=$?
+  if [ "$rc" -eq 4 ]; then
+    printf 'ended: %s (%s)\n' "$id" "$(printf '%s' "$out" | tr '\n' ' ' | sed 's/ *$//')"
+    return 4
+  fi
+  if [ "$rc" -ne 0 ]; then
+    printf 'error: cannot hand %s over: %s\n' "$id" "$(printf '%s' "$out" | tr '\n' ' ' | sed 's/ *$//')" >&2
+    return 1
+  fi
+  while IFS= read -r line; do
+    case "$line" in
+      'link: '*) link=${line#link: } ;;
+      'moved-from: '*) moved=${line#moved-from: } ;;
+    esac
+  done <<EOF
+$out
+EOF
+  fm_procevent_source_lock_acquire "$id" || { printf 'error: cannot lock the source: %s\n' "$id" >&2; return 1; }
+  if [ "$(source_kind "$id" 2>/dev/null || true)" = task-owned ]; then
+    if [ "$(source_owner_task "$id")" != "$task" ]; then
+      fm_procevent_source_lock_release "$id"
+      printf 'error: %s now belongs to task %s, not %s\n' "$id" "$(source_owner_task "$id")" "$task" >&2
+      return 1
+    fi
+    # A round captured since the check above is never handed over unread.
+    if source_retirement_blocked_locked "$id"; then
+      fm_procevent_source_lock_release "$id"
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        line=${line%.result}
+        adopt_task_kept "$task" "$id" "${line##*.}"
+      done <<EOF
+$(source_pending "$id")
+EOF
+      return 3
+    fi
+    read_argv "$id" || {
+      fm_procevent_source_lock_release "$id"
+      printf 'error: cannot read the listener command of %s\n' "$id" >&2
+      return 1
+    }
+    # Bound before the task's listener stops and before the firstmate
+    # registration exists, so a failed bind leaves the task's board listening
+    # and no firstmate listener can capture an answer the keyed-answer intake
+    # would not see. An existing binding is kept as it is.
+    if ! "$SCRIPT_DIR/fm-captain-hold.sh" binding "$id" >/dev/null 2>&1; then
+      if ! "$SCRIPT_DIR/fm-captain-hold.sh" bind "$id" >/dev/null; then
+        fm_procevent_source_lock_release "$id"
+        printf 'error: cannot bind %s to the keyed-answer intake\n' "$id" >&2
+        return 1
+      fi
+      bound=1
+    fi
+    if ! release_owned_claim_locked "$id"; then
+      [ "$bound" -eq 0 ] || "$SCRIPT_DIR/fm-captain-hold.sh" unbind "$id" >/dev/null 2>&1 || true
+      fm_procevent_source_lock_release "$id"
+      printf 'error: %s\n' "$CLAIM_RELEASE_ERROR" >&2
+      return 1
+    fi
+    if ! fm_procevent_adopted_registration_publish_locked "$STATE" "$adapter" "$id" "$task" "${ARGV[@]}"; then
+      [ "$bound" -eq 0 ] || "$SCRIPT_DIR/fm-captain-hold.sh" unbind "$id" >/dev/null 2>&1 || true
+      fm_procevent_source_lock_release "$id"
+      # The task's listener was already stopped; start it again for the task.
+      ( cmd_ensure_listening "$id" ) >/dev/null 2>&1 || true
+      printf 'error: cannot publish the firstmate registration of %s\n' "$id" >&2
+      return 1
+    fi
+  elif [ "$(source_field "$id" adopted_from 2>/dev/null || true)" = "$task" ]; then
+    # Handed over by an earlier, interrupted attempt: finish it.
+    if ! "$SCRIPT_DIR/fm-captain-hold.sh" binding "$id" >/dev/null 2>&1 \
+      && ! "$SCRIPT_DIR/fm-captain-hold.sh" bind "$id" >/dev/null; then
+      fm_procevent_source_lock_release "$id"
+      printf 'error: cannot bind %s to the keyed-answer intake\n' "$id" >&2
+      return 1
+    fi
+  else
+    fm_procevent_source_lock_release "$id"
+    printf 'error: %s is no longer owned by task %s\n' "$id" "$task" >&2
+    return 1
+  fi
+  fm_procevent_source_lock_release "$id"
+  ( cmd_ensure_listening "$id" ) || listen_rc=$?
+  if [ "$listen_rc" -ne 0 ]; then
+    printf 'error: %s is firstmate'"'"'s now but its listener did not start (ensure-listening exit %s); the next reconcile retries it\n' "$id" "$listen_rc" >&2
+    return 1
+  fi
+  printf 'adopted: %s (from task %s)\n' "$id" "$task"
+  [ -z "$link" ] || printf 'link: %s %s\n' "$id" "$link"
+  [ -z "$moved" ] || printf 'moved: %s %s\n' "$id" "$moved"
+  return 0
+}
+
+cmd_adopt_task() {
+  local task=${1-} rec id rc failed=0 any_kept=0
+  local -a ids=()
+  [ "$#" -eq 1 ] || usage
+  fm_pr_task_id_valid "$task" || die "task id is invalid: $task"
+  for rec in "$REG"/*.source; do
+    [ -f "$rec" ] && [ ! -L "$rec" ] || continue
+    id=${rec##*/}; id=${id%.source}
+    if [ "$(source_kind "$id" 2>/dev/null || true)" = task-owned ]; then
+      [ "$(source_owner_task "$id" 2>/dev/null || true)" = "$task" ] || continue
+    elif [ "$(source_field "$id" adopted_from 2>/dev/null || true)" != "$task" ]; then
+      continue
+    fi
+    ids+=("$id")
+  done
+  # Every board is checked before any is handed over, so one board's unread
+  # round keeps all of the task's boards with it rather than splitting them.
+  for id in "${ids[@]+"${ids[@]}"}"; do
+    [ "$(source_kind "$id" 2>/dev/null || true)" = task-owned ] || continue
+    if retire_task_unread "$task" "$id" "$(source_pending "$id")" adopt_task_kept; then
+      any_kept=1
+    fi
+  done
+  [ "$any_kept" -eq 0 ] || return 3
+  for id in "${ids[@]+"${ids[@]}"}"; do
+    rc=0
+    adopt_task_source "$task" "$id" || rc=$?
+    case "$rc" in
+      0|4) ;;
+      3) any_kept=1 ;;
+      *) failed=1 ;;
+    esac
+  done
+  owner_lease_refresh
   [ "$failed" -eq 0 ] || return 1
   [ "$any_kept" -eq 0 ] || return 3
 }
@@ -2685,6 +2880,7 @@ case "${1-}" in
   handled)            shift; cmd_handled "$@" ;;
   retire)             shift; cmd_retire "$@" ;;
   retire-task)        shift; cmd_retire_task "$@" ;;
+  adopt-task)         shift; cmd_adopt_task "$@" ;;
   sweep-home)         shift; cmd_sweep_home "$@" ;;
   binding-retirement-preflight) shift; cmd_binding_retirement_preflight "$@" ;;
   extension-retirement) shift; cmd_extension_retirement "$@" ;;
