@@ -224,6 +224,64 @@ gh_jq() {
   done
   jq -r "$filter" "$1"
 }
+# Name-status lines from git as GitHub file objects.
+revert_files_json() {
+  jq -Rsc 'split("\n") | map(select(length > 0) | split("\t")
+    | if (.[0] | startswith("R")) then {filename: .[2], previous_filename: .[1]} else {filename: .[1]} end)'
+}
+revert_api() {
+  local endpoint='' arg repo="$fixtures/revert-repo" query a b mb status
+  for arg in "$@"; do
+    case "$arg" in repos/*) endpoint=$arg; break ;; esac
+  done
+  query=${endpoint#*\?}
+  [ "$query" != "$endpoint" ] || query=
+  endpoint=${endpoint%%\?*}
+  if [ ! -d "$repo" ]; then
+    case "$endpoint" in
+      */pulls/*) printf '{"created_at":"2026-01-01T00:00:00Z","merge_commit_sha":"9999999999999999999999999999999999999999"}\n' ;;
+      */compare/*) printf '{"status":"ahead","merge_base_commit":{"sha":"8888888888888888888888888888888888888888"},"base_commit":{"sha":"8888888888888888888888888888888888888888"},"commits":[],"files":[]}\n' ;;
+      */commits) printf '[]\n' ;;
+      *) printf '{"files":[]}\n' ;;
+    esac
+    return 0
+  fi
+  case "$endpoint" in
+    */pulls/*)
+      jq -nc --arg c "$(cat "$fixtures/revert-created")" --arg m "$(cat "$fixtures/revert-merged" 2>/dev/null)" \
+        '{created_at: $c, merge_commit_sha: (if $m == "" then null else $m end)}'
+      ;;
+    */compare/*)
+      a=${endpoint##*/compare/}; b=${a#*...}; a=${a%%...*}
+      a=$(git -C "$repo" rev-parse --verify -q "$a^{commit}") || return 1
+      b=$(git -C "$repo" rev-parse --verify -q "$b^{commit}") || return 1
+      mb=$(git -C "$repo" merge-base "$a" "$b") || return 1
+      if [ "$a" = "$b" ]; then status=identical
+      elif [ "$mb" = "$a" ]; then status=ahead
+      elif [ "$mb" = "$b" ]; then status=behind
+      else status=diverged; fi
+      jq -nc --arg s "$status" --arg mb "$mb" --arg base "$a" \
+        --argjson files "$(git -C "$repo" diff --name-status -M "$mb" "$b" | revert_files_json)" \
+        --argjson dates "$(TZ=UTC git -C "$repo" log --format=%ad --date=format-local:%Y-%m-%dT%H:%M:%SZ "$mb..$b" | jq -Rsc 'split("\n") | map(select(length > 0))')" \
+        '{status: $s, merge_base_commit: {sha: $mb}, base_commit: {sha: $base}, files: $files, commits: ($dates | map({commit: {author: {date: .}}}))}'
+      ;;
+    */commits)
+      a=$(printf '%s' "$query" | tr '&' '\n' | sed -n 's/^sha=//p')
+      b=$(printf '%s' "$query" | tr '&' '\n' | sed -n 's/^since=//p')
+      git -C "$repo" log --since="$b" --format='%H%x09%P%x09%s' "$a" \
+        | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t")
+          | {sha: .[0], parents: (.[1] | split(" ") | map(select(length > 0) | {sha: .})), commit: {message: .[2]}})'
+      ;;
+    */commits/*)
+      a=${endpoint##*/commits/}
+      if git -C "$repo" rev-parse --verify -q "$a^" > /dev/null; then
+        git -C "$repo" diff --name-status -M "$a^" "$a" | revert_files_json | jq -c '{files: .}'
+      else
+        git -C "$repo" diff-tree --root -r --name-status --no-commit-id "$a" | revert_files_json | jq -c '{files: .}'
+      fi
+      ;;
+  esac
+}
 case "${1:-} ${2:-}" in
   "pr diff")
     [ ! -f "$fixtures/github-pr-diff-fail" ] || exit 1
@@ -341,6 +399,15 @@ case "${1:-} ${2:-}" in
           *) exit 1 ;;
         esac
         cat "$FM_TEST_GH_RUNS"
+        exit $?
+        ;;
+      *" repos/"*"/pulls/"*|*" repos/"*"/compare/"*|*" repos/"*"/commits"*)
+        # The landed-work reads (bin/fm-pr-revert-lib.sh), answered from the
+        # case's revert-repo git fixture the way GitHub's REST API would, or
+        # with nothing landed when the case keeps none.
+        [ ! -f "$fixtures/revert-api-fail" ] || exit 1
+        revert_api "$@" > "$fixtures/revert-api.json" || exit 1
+        gh_jq "$fixtures/revert-api.json" "$@"
         exit $?
         ;;
       *" repos/"*"/rules/branches/"*merge_queue*) ;;
@@ -4075,7 +4142,7 @@ test_attended_branch_refuses_outside_its_standing_class() {
   assert_grep 'leave this merge to main' "$case_dir/stderr" "branch-invalid-away: refusal did not send the merge to main"
   assert_no_grep 'pr merge' "$case_dir/gh.log" "branch-invalid-away: gh pr merge ran under an unreadable away record"
 
-  for flag in --attended-override '--allow-red ci' '--allow-missing ci' '--waive-review reason' --one-way-approved; do
+  for flag in --attended-override '--allow-red ci' '--allow-missing ci' '--waive-review reason' --one-way-approved --allow-revert; do
     case_dir=$(branch_standing_case "branch-flag-${flag%% *}" 154 "$TWO_WAY_BODY")
     # shellcheck disable=SC2086 # The flag and its value split on purpose.
     run_branch_merge "$case_dir" 154 $flag
@@ -5584,3 +5651,179 @@ test_one_way_approved_needs_a_recorded_hold
 test_one_way_approval_binds_to_the_head_the_captain_saw
 test_unplaceable_hold_leaves_no_approval_record
 test_one_way_approved_is_attended_only
+
+# A real history the landed-work reads are answered from (the gh mock's
+# revert_api): main starts the notes, then "Land the second note" changes
+# notes/a.md and adds notes/c.md after the pull request opened. The head is
+# stale (rebased onto that commit but committed from the tree before it, the
+# shape of a branch that silently undoes landed work), clean (on top of it,
+# adding only its own note), or old-base (branched before it, adding only its
+# own note). Every path is Markdown, so the code review gate reads exempt.
+# Leaves the landed commit in revert-landed and GitHub's squash of the head in
+# revert-merged. Args: case_dir variant
+add_revert_repo() {
+  local case_dir=$1 variant=$2 repo="$1/revert-repo" base head tree
+  revert_commit() {
+    git -C "$repo" add -A
+    GIT_AUTHOR_DATE=$1 GIT_COMMITTER_DATE=$1 git -C "$repo" commit -q -m "$2"
+  }
+  git init -q -b main "$repo"
+  mkdir -p "$repo/notes"
+  printf 'one\n' > "$repo/notes/a.md"
+  printf 'keep\n' > "$repo/notes/b.md"
+  revert_commit 2026-01-01T00:00:00Z 'Start the notes'
+  base=$(git -C "$repo" rev-parse HEAD)
+  printf '2026-01-02T00:00:00Z\n' > "$case_dir/revert-created"
+  printf 'two\n' > "$repo/notes/a.md"
+  printf 'new\n' > "$repo/notes/c.md"
+  revert_commit 2026-01-03T00:00:00Z 'Land the second note'
+  git -C "$repo" rev-parse HEAD > "$case_dir/revert-landed"
+  case "$variant" in
+    stale)
+      git -C "$repo" checkout -q -b pr
+      git -C "$repo" checkout -q "$base" -- notes
+      rm "$repo/notes/c.md"
+      ;;
+    clean) git -C "$repo" checkout -q -b pr ;;
+    old-base) git -C "$repo" checkout -q -b pr "$base" ;;
+  esac
+  printf 'mine\n' > "$repo/notes/d.md"
+  revert_commit 2026-01-04T00:00:00Z 'Add my note'
+  head=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" checkout -q main
+  tree=$(git -C "$repo" merge-tree --write-tree main "$head")
+  git -C "$repo" commit-tree "$tree" -p main -m 'Add my note (#90)' > "$case_dir/revert-merged"
+  add_gh_mocks "$case_dir" "$head"
+  # shellcheck disable=SC2046 # One argument per changed path.
+  write_github_pr_files "$case_dir" $(git -C "$repo" diff --name-only "$(git -C "$repo" merge-base main "$head")" "$head")
+}
+
+# Args: case_dir [merge args]...; sets RC.
+run_revert_merge() {
+  local case_dir=$1
+  shift
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/90 "$@" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  RC=$?
+  set -e
+}
+
+test_merge_that_undoes_landed_work_is_refused() {
+  local case_dir landed
+  case_dir=$(make_case landed-stale)
+  mkdir -p "$case_dir/wt"
+  add_revert_repo "$case_dir" stale
+  landed=$(cat "$case_dir/revert-landed")
+  run_revert_merge "$case_dir"
+  expect_code 1 "$RC" "landed-stale: a head that undoes landed work must be refused"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "would undo these commits already on main:" "$case_dir/stderr" \
+    "landed-stale: the refusal did not say what the merge undoes"
+  assert_grep "${landed:0:12} Land the second note (2 file(s) back to their content before it: notes/a.md, notes/c.md)" \
+    "$case_dir/stderr" "landed-stale: the refusal did not name the undone commit and its files"
+  assert_grep 'pass --allow-revert only on the captain' "$case_dir/stderr" \
+    "landed-stale: the refusal did not name the captain's waiver"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "landed-stale: gh pr merge ran for a head that undoes landed work"
+  pass "fm-pr-merge refuses a green PR whose head undoes a commit its base already holds, naming it"
+}
+
+test_merge_that_keeps_landed_work_verifies_both_sides() {
+  local case_dir variant
+  for variant in clean old-base; do
+    case_dir=$(make_case "landed-$variant")
+    mkdir -p "$case_dir/wt"
+    add_revert_repo "$case_dir" "$variant"
+    run_revert_merge "$case_dir"
+    expect_code 0 "$RC" "landed-$variant: a head that keeps landed work must merge"$'\n'"$(cat "$case_dir/stderr")"
+    assert_grep 'undoes no commit landed on main since 2026-01-0' "$case_dir/stderr" \
+      "landed-$variant: the pre-merge check did not report"
+    assert_grep "verified: the merged commit $(cat "$case_dir/revert-merged") undoes no commit" "$case_dir/stderr" \
+      "landed-$variant: the merged commit was not checked"
+    assert_logged_gh_merge "$case_dir" 90 example/repo --squash
+  done
+  pass "fm-pr-merge merges a PR that keeps landed work and checks the merged commit too"
+}
+
+test_merged_commit_that_undoes_landed_work_is_reported() {
+  local case_dir landed repo stale
+  case_dir=$(make_case landed-merged-stale)
+  mkdir -p "$case_dir/wt"
+  add_revert_repo "$case_dir" clean
+  repo=$case_dir/revert-repo
+  landed=$(cat "$case_dir/revert-landed")
+  # The forge lands a commit whose tree lost the landed note, though the head kept it.
+  stale=$(git -C "$repo" commit-tree "$(git -C "$repo" rev-parse "$landed^^{tree}")" -p main -m 'Add my note (#90)')
+  printf '%s\n' "$stale" > "$case_dir/revert-merged"
+  run_revert_merge "$case_dir"
+  expect_code 0 "$RC" "landed-merged-stale: a landed merge keeps its exit"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "actionable: merged https://github.com/example/repo/pull/90, and the merged commit $stale undid these commits on main" \
+    "$case_dir/stderr" "landed-merged-stale: the undone work was not reported"
+  assert_grep "${landed:0:12} Land the second note" "$case_dir/stderr" \
+    "landed-merged-stale: the report did not name the undone commit"
+  pass "fm-pr-merge reports a merged commit that undid landed work without failing the landed merge"
+}
+
+test_unreadable_landed_work_check_refuses() {
+  local case_dir
+  case_dir=$(make_case landed-unreadable)
+  mkdir -p "$case_dir/wt"
+  add_revert_repo "$case_dir" clean
+  : > "$case_dir/revert-api-fail"
+  run_revert_merge "$case_dir"
+  expect_code 1 "$RC" "landed-unreadable: an unreadable check must refuse"
+  assert_grep "whether merging it undoes landed work could not be read: the pull request's creation time could not be read" \
+    "$case_dir/stderr" "landed-unreadable: the refusal did not say what could not be read"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "landed-unreadable: gh pr merge ran unchecked"
+  pass "fm-pr-merge refuses when it cannot read whether a merge undoes landed work"
+}
+
+test_allow_revert_is_an_attended_github_waiver() {
+  local case_dir
+  case_dir=$(make_case landed-allow-revert)
+  mkdir -p "$case_dir/wt"
+  add_revert_repo "$case_dir" stale
+  run_revert_merge "$case_dir" --allow-revert
+  expect_code 0 "$RC" "landed-allow-revert: the captain's waiver must merge"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "waived: merging https://github.com/example/repo/pull/90 undoes these commits on main, on the captain's word:" \
+    "$case_dir/stderr" "landed-allow-revert: the waiver did not name what it waived"
+  assert_logged_gh_merge "$case_dir" 90 example/repo --squash
+
+  case_dir=$(make_case landed-allow-revert-unreadable)
+  mkdir -p "$case_dir/wt"
+  add_revert_repo "$case_dir" stale
+  : > "$case_dir/revert-api-fail"
+  run_revert_merge "$case_dir" --allow-revert
+  expect_code 0 "$RC" "landed-allow-revert-unreadable: the waiver covers an unreadable check"
+  assert_grep 'waived: whether merging https://github.com/example/repo/pull/90 undoes landed work could not be read' \
+    "$case_dir/stderr" "landed-allow-revert-unreadable: the waiver did not say the check was unreadable"
+
+  case_dir=$(make_case landed-allow-revert-away)
+  mkdir -p "$case_dir/wt"
+  add_revert_repo "$case_dir" stale
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  run_revert_merge "$case_dir" --allow-revert
+  expect_code 2 "$RC" "landed-allow-revert-away: --allow-revert must be refused while away"
+  assert_grep '--allow-revert is attended-only' "$case_dir/stderr" \
+    "landed-allow-revert-away: the refusal did not name attended-only"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "landed-allow-revert-away: gh pr merge ran while away"
+
+  case_dir=$(make_case landed-allow-revert-value)
+  run_revert_merge "$case_dir" --allow-revert=yes
+  expect_code 2 "$RC" "landed-allow-revert-value: --allow-revert takes no value"
+
+  case_dir=$(make_gitlab_case landed-allow-revert-gitlab)
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" --allow-revert > "$case_dir/stdout" 2> "$case_dir/stderr"
+  RC=$?
+  set -e
+  expect_code 2 "$RC" "landed-allow-revert-gitlab: --allow-revert must not apply on GitLab"
+  assert_grep '--allow-revert applies only to GitHub' "$case_dir/stderr" \
+    "landed-allow-revert-gitlab: the refusal did not name GitHub"
+  pass "fm-pr-merge's --allow-revert waives the landed-work check once, attended and on GitHub only"
+}
+
+test_merge_that_undoes_landed_work_is_refused
+test_merge_that_keeps_landed_work_verifies_both_sides
+test_merged_commit_that_undoes_landed_work_is_reported
+test_unreadable_landed_work_check_refuses
+test_allow_revert_is_an_attended_github_waiver
