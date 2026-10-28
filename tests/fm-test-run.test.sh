@@ -1211,23 +1211,36 @@ test_portable_serial_packing_budget_boundary() {
   repo="$tmp/repo"
   mkdir -p "$repo/bin" "$repo/tests"
   # Preserve the real inventory and packing policy without executing suites.
-  # Only the fixture's measured timing input changes at the boundary.
+  # Only the fixture's measured timing input changes: every serial script gets
+  # a small uniform hint and one gets the boundary weight. Keeping the real
+  # hints would tie this boundary to the real lane's spare capacity, which
+  # test_portable_serial_hint_coverage_is_reported_and_bounded owns, and once
+  # the real total grew past what nine shards hold the exact-budget case could
+  # no longer pack at all.
   while IFS= read -r script; do
     printf '#!/usr/bin/env bash\nexit 0\n' >"$repo/$script"
   done < <("$RUNNER" --list --all)
+  "$RUNNER" --list --lane portable-serial >"$tmp/serial"
 
   for weight in 1200000 1200001; do
     cp "$RUNNER" "$repo/bin/fm-test-run.sh"
-    python3 - "$repo/bin/fm-test-run.sh" "$weight" <<'PY' \
+    python3 - "$repo/bin/fm-test-run.sh" "$tmp/serial" "$weight" <<'PY' \
       || fail "could not seed the fixture's measured timing input"
 from pathlib import Path
 import re, sys
 runner = Path(sys.argv[1])
-runner.write_text(re.sub(
-    r"(?m)^tests/fm-watch-triage\.test\.sh [0-9]+$",
-    f"tests/fm-watch-triage.test.sh {sys.argv[2]}",
+hints = "\n".join(
+    f"{path} {sys.argv[3] if path == 'tests/fm-watch-triage.test.sh' else 1000}"
+    for path in Path(sys.argv[2]).read_text().split()
+)
+text, count = re.subn(
+    r"(?s)(portable_serial_weight_hints\(\) \{\n  cat <<'EOF'\n).*?(\nEOF\n)",
+    lambda m: m.group(1) + hints + m.group(2),
     runner.read_text(),
-))
+)
+if count != 1 or "tests/fm-watch-triage.test.sh" not in hints:
+    sys.exit(1)
+runner.write_text(text)
 PY
     out=$(bash "$repo/bin/fm-test-run.sh" --check-coverage 2>&1) && rc=0 || rc=$?
     if [ "$weight" -eq 1200000 ]; then
