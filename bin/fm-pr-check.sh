@@ -212,10 +212,13 @@ fi
 # bin/fm-pr-merge.sh reads a GitLab or Forgejo head live at merge time for the
 # same reason, and treats a recorded value that disagrees as stale rather than
 # authoritative.
+# A merge-time record of a task with no worktree (bin/fm-capture-land.sh) reads
+# the head by the full URL from wherever it runs, since no copy exists to read from.
 WT=$(grep '^worktree=' "$META" | tail -1 | cut -d= -f2- || true)
 PR_HEAD=
-if [ "$PROVIDER" = github ] && [ -n "$WT" ] && [ -d "$WT" ] && command -v gh >/dev/null 2>&1; then
-  if REMOTE_HEAD=$(cd "$WT" && gh pr view "$URL" --json headRefOid -q .headRefOid 2>/dev/null) \
+if [ "$PROVIDER" = github ] && command -v gh >/dev/null 2>&1 \
+  && { { [ -n "$WT" ] && [ -d "$WT" ]; } || { [ -z "$WT" ] && [ "${FM_PR_CHECK_MERGE:-}" = 1 ]; }; }; then
+  if REMOTE_HEAD=$({ [ -z "$WT" ] || cd "$WT"; } && gh pr view "$URL" --json headRefOid -q .headRefOid 2>/dev/null) \
     && fm_pr_head_valid "$REMOTE_HEAD"; then
     PR_HEAD=$REMOTE_HEAD
   fi

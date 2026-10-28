@@ -608,6 +608,7 @@ A held `lock=` path defers the checkout, after a short bounded wait in the singl
 The post-update command runs once for each new HEAD and is retried on the next sync after a failure, whose `STUCK:` line ends with the command's last few output lines.
 A `capture=` entry is for a checkout edited in place, such as a writable skills tree that a capture job turns into a PR: when only uncommitted edits under that directory hold the checkout, the sync starts the capture command detached once per edit state and reports `capturing:` instead of `STUCK:`, and defers the checkout while that capture runs.
 Once the capture has succeeded, edits it did not clear on a checkout already at its origin default branch read `live edits pending capture:`, which wakes no one because they block no fast-forward, while the same edits on a checkout behind or ahead of origin, or a failed capture, report `STUCK:`.
+A `capture=` entry also makes its project a capture project for `bin/fm-capture-land.sh <pr-url>`, which lands that project's `<project>/skill-capture` pull request through `bin/fm-pr-merge.sh`, then runs the capture command's `--settle` in the checkout and fast-forwards it with `fm-fleet-sync.sh --settle-capture <project>`; its header owns the refusals and the task record it keeps.
 An entry naming the Firstmate home itself is refused, because Firstmate updates itself only through `/updatefirstmate`.
 
 The list names host paths and is not inherited by secondmate homes.
