@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Propose a clone's forge binding from its origin remote, for project-add intake.
-# Usage: fm-forge-detect.sh <clone-dir>
 # Prints exactly one line to stdout:
 #   forge=gerrit evidence=<the protocol fact that suggests it>
 #   forge=none

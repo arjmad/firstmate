@@ -144,7 +144,7 @@
 #                          source owned closes that episode); the queued
 #                          payload names what to check. These three kinds are
 #                          joined with `;` when more than one surfaces in a cycle
-#   check: captain inbox: <n> note(s) still unacknowledged after a day
+#   check: captain inbox: <n> note(s) still unacknowledged
 #                          bin/fm-inbox.sh rewake-due queued one durable check
 #                          row per inbox note still pending a day after its
 #                          capture or last re-wake (inbox_rewake_tick)
@@ -2947,7 +2947,7 @@ inbox_rewake_tick() {
   out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-inbox.sh" rewake-due 2>/dev/null) || true
   count=$(printf '%s\n' "$out" | grep -c '^rewoke ' || true)
   [ "$count" -gt 0 ] || return 0
-  wake "check: captain inbox: $count note(s) still unacknowledged after a day (bin/fm-inbox.sh unread)"
+  wake "check: captain inbox: $count note(s) still unacknowledged (bin/fm-inbox.sh unread)"
 }
 
 RECONCILE_REQUEST_PID=

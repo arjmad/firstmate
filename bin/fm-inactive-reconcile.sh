@@ -88,7 +88,7 @@
 set -u
 
 case "${1:-}" in
-  -h|--help) sed -n '2,40{s/^# \{0,1\}//;p;}' "${BASH_SOURCE[0]}"; exit 0 ;;
+  -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
 esac
 export LC_ALL=C
 

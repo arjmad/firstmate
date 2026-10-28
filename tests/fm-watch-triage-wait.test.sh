@@ -766,7 +766,7 @@ EOF
   inbox_rewake_watch "$dir" "$out"
   pid=$!
   wait_for_exit "$pid" 100 || { reap "$pid"; fail "the watcher did not wake on a due inbox note: $(cat "$out")"; }
-  grep -F 'check: captain inbox: 1 note(s) still unacknowledged after a day' "$out" >/dev/null \
+  grep -F 'check: captain inbox: 1 note(s) still unacknowledged (bin/fm-inbox.sh unread)' "$out" >/dev/null \
     || fail "the wake did not name the unacknowledged note count: $(cat "$out")"
   grep "$(printf '\tcheck\tinbox:%s\t' "$id")" "$dir/state/.wake-queue" >/dev/null \
     || fail "the re-wake was not queued durably for the note: $(cat "$dir/state/.wake-queue" 2>&1)"

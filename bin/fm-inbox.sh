@@ -1140,7 +1140,7 @@ cmd_drain() {
     for id in "$@"; do
       if [ -f "$INBOX/$id.note" ]; then
         mv "$INBOX/$id.note" "$INBOX/handled/$id.note"
-        rm -f -- "$REWOKEN_DIR/$id"
+        ! valid_note_id "$id" || rm -f -- "$REWOKEN_DIR/$id"
         printf 'acked %s\n' "$id"
       else
         printf 'already-acked %s\n' "$id"
@@ -1213,7 +1213,7 @@ sys.stdout.write("\n")' "$total" "$UNREAD_BOUND"
 # share the wake-queue lock, so an acknowledgement that lands first wins and a
 # note whose earlier wake is still queued gets no second row.
 cmd_rewake_due() {
-  local now id path last captured age summary
+  local now id path last captured age summary queued
   [ "$#" -eq 0 ] || die "usage: fm-inbox.sh rewake-due"
   [ -d "$INBOX" ] || return 0
   now=${FM_INBOX_NOW:-$(date +%s)}
@@ -1229,13 +1229,16 @@ cmd_rewake_due() {
     case "$captured" in ''|*[!0-9]*) captured=$last ;; esac
     age=$(( (now - captured) / 3600 ))
     load_wake_lib || die "cannot load the wake library to re-wake note $id"
+    mkdir -p "$REWOKEN_DIR" || die "cannot create $REWOKEN_DIR to record re-wakes"
     fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || die "cannot take the wake-queue lock"
-    if [ -f "$path" ] && ! fm_wake_queued_keys_locked check | grep -Fxq "inbox:$id"; then
-      if fm_wake_append_locked check "inbox:$id" \
-          "check: captain inbox note $id still unacknowledged after ${age}h - $summary"; then
-        mkdir -p "$REWOKEN_DIR"
-        printf '%s\n' "$now" >"$REWOKEN_DIR/$id"
+    queued=$(fm_wake_queued_keys_locked check)
+    if [ -f "$path" ] && ! printf '%s\n' "$queued" | grep -Fxq "inbox:$id" \
+      && fm_wake_append_locked check "inbox:$id" \
+        "check: captain inbox note $id still unacknowledged after ${age}h - $summary"; then
+      if printf '%s\n' "$now" 2>/dev/null >"$REWOKEN_DIR/$id"; then
         printf 'rewoke %s\n' "$id"
+      else
+        printf 'fm-inbox: re-woke note %s but could not record it under %s\n' "$id" "$REWOKEN_DIR" >&2
       fi
     fi
     fm_lock_release "$FM_WAKE_QUEUE_LOCK"
