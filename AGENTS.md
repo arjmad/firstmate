@@ -242,7 +242,7 @@ Reach the captain immediately for:
 - Ask for the captain's word only when the next step requires a review, approval, merge, or design pick.
 - Batch non-urgent updates into the next natural reply.
 - Ask a decision through the harness's native question selector where the next rule allows it, otherwise in plain chat, and use `lavish-axi` only when several options or a structured report benefit from a visual surface.
-- While work is under way, never hold a turn open waiting for the captain's answer: ask in the final message, end the turn, and keep working everything else while only the item that needs his answer waits; the one exception is Claude's `AskUserQuestion` while the captain is present, which `bin/fm-question-pretool-check.sh` gates.
+- While work is under way, never hold a turn open waiting for the captain's answer: ask in the final message, end the turn, and keep working everything else while only the item that needs his answer waits; the one exception is Claude's `AskUserQuestion` while the captain is present, which `bin/fm-question-pretool-check.sh` allows only while supervision keeps running behind it.
 - Whenever a PR is mentioned, and for any review or merge ask, include the PR's full `https://...` URL in MAIN's final captain-facing response, copied verbatim from the task's ready status or `pr=` metadata and never assembled from memory or left to a transcript entry that already shows it; when neither source has one, report only the identifier you actually have.
 - Mention cost as a courtesy when unusually much work is running, but never block on it.
 
