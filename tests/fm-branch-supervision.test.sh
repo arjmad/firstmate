@@ -69,6 +69,12 @@ test_branch_prompt_is_byte_stable_and_above_cache_floor() {
     *"A second mate's status log is a relay channel for its child work"*"retiring a second mate is MAIN's alone"*"Report a second mate's signal wake from the status lines that wake newly presents"*"A second mate's stale wake is a liveness event: report it even when it presents no new status lines."*) ;;
     *) fail "branch prompt lost the second-mate relay, signal-span, or stale-liveness rule" ;;
   esac
+  # Arjun's 2026-10-27 standing merge class (docs/fork-decisions.md): the
+  # attended branch merges it itself and closes the task in the same turn.
+  case "$out_a" in
+    *"merge a PR outside the standing merge class below"*"# Standing merges"*"green at its live head, its merge-gate code review is recorded, its Merge Danger names a two-way door, and its task records yolo=on"*"anything security-sensitive"*"no \`check: merge landed:\` wake follows it, so close the task in the same turn"*) ;;
+    *) fail "branch prompt lost the standing merge class or its same-turn cleanup" ;;
+  esac
   pass "branch prompt is byte-stable across homes, cwd, timezone, and time, above the cache floor"
 }
 
@@ -826,7 +832,8 @@ test_main_owned_actions_refuse_the_branch_actor() {
   out=$(FM_HOME="$home" FM_SUPERVISION_ACTOR=branch "$ROOT/bin/fm-pr-merge.sh" task-x https://github.com/o/r/pull/1 2>&1)
   status=$?
   [ "$status" -eq 6 ] || fail "branch fm-pr-merge exited $status, not 6: $out"
-  assert_contains "$out" "the supervision branch never performs this action" "pr-merge refusal lost the partition wording"
+  assert_contains "$out" "refused for the supervision branch" "pr-merge refusal lost the partition wording"
+  assert_contains "$out" "leave this merge to main" "pr-merge refusal did not send the merge to main"
 
   out=$(FM_HOME="$home" FM_SUPERVISION_ACTOR=branch "$ROOT/bin/fm-merge-local.sh" task-x 2>&1)
   status=$?
@@ -1369,7 +1376,10 @@ test_away_record_relocates_main_owned_actions_to_the_branch() {
   git init -q -b main "$root"
   git -C "$root" commit -q --allow-empty -m init
   ln -s "$ROOT/bin" "$root/bin"
-  refusal="error: PR merge (fm-pr-merge) refused - the supervision branch never performs this action; report the outcome and leave it to main (role partition: docs/pi-supervision-branch.md)"
+  refusal="error: PR merge (fm-pr-merge) refused for the supervision branch, which merges only a green, reviewed, two-way door GitHub pull request of a yolo task:
+  - task task-x does not record yolo=on, so its standing posture does not let firstmate merge it
+  - task task-x does not record https://github.com/o/r/pull/1 as its pr=, so it is not the task's ready pull request
+error: leave this merge to main: report it with verdict captain and the PR URL (role partition: docs/pi-supervision-branch.md)"
 
   # Attended: the refusal wording every caller already pins.
   out=$(FM_HOME="$home" FM_SUPERVISION_ACTOR=branch "$ROOT/bin/fm-pr-merge.sh" task-x https://github.com/o/r/pull/1 2>&1)

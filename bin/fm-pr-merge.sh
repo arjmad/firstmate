@@ -221,6 +221,25 @@
 # never supplies it. Once the forge confirms such a merge landed it is appended
 # to state/one-way-door-merges.log as one tab-separated line of epoch, task id,
 # URL, verified head, and blast radius.
+#
+# Branch standing merges (fork patch, docs/fork-decisions.md 2026-10-27): while
+# attended, the supervision branch actor merges only the class Arjun named for
+# it, and require_merge_actor below owns that class. The pull request is on
+# GitHub, so it carries the merge-gate code review; the task record says
+# yolo=on, so its standing posture already lets firstmate merge it; no
+# override flag is passed (--attended-override, --allow-red, --allow-missing,
+# --waive-review, --one-way-approved), so it is green at its live head and
+# reviewed under the ordinary gates below; and its Merge Danger names an
+# explicit two-way door, so a body with no Door line is not enough; and the
+# task's pr= already names the URL, so it is the task's ready PR. Anything
+# else refuses the branch with exit 6 before any forge merge or captain hold,
+# naming each reason and leaving the merge to MAIN; a refusal by the ordinary
+# gates below exits 6 for the branch the same way. Whether a pull request is
+# security-sensitive is the branch's reading under bin/fm-branch-prompt.sh,
+# since no record states it. Such a merge persists the authority branch and
+# publishes a silent landed branch outcome rather than a check wake
+# (bin/fm-merge-outcome-lib.sh, origin branch). The away posture is unchanged:
+# a branch under a live away record merges under away authority as before.
 # Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [--allow-no-pipeline] [--waive-review <reason>] [--one-way-approved] [-- <extra forge merge args>]
 #
 # On GitLab, this script confirms the MR is actually merged before reporting it;
@@ -543,17 +562,59 @@ fi
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
-# Role partition: merging is MAIN-owned while attended; the Pi supervision
-# branch reports the green PR and never merges (contract: bin/fm-lease-lib.sh;
-# no-op in homes without a branch actor). While the away-posture record exists
-# main is parked and this one action relocates to the branch, which then meets
-# exactly the same gates below as main would: green at its live head,
-# synchronous, under the record lock. This precedes
-# reading the task record, because the wrong actor is refused for its role
-# whatever that record says.
+# Role partition: merging is MAIN-owned while attended, except the branch
+# standing class in the header (contract: bin/fm-lease-lib.sh; no-op in homes
+# without a branch actor). While the away-posture record exists main is parked
+# and this one action relocates to the branch, which then meets exactly the
+# same gates below as main would: green at its live head, synchronous, under
+# the record lock. This precedes the task record's other reads, because the
+# wrong actor is refused for its role whatever that record says.
 # shellcheck source=bin/fm-lease-lib.sh
 . "$SCRIPT_DIR/fm-lease-lib.sh"
-fm_lease_forbid_branch "PR merge (fm-pr-merge)" --away-relocated
+
+# The merge actor (see the header's branch standing paragraph). MAIN, and the
+# branch while the away record relocates MAIN's authority, pass to the gates
+# below unchanged. An attended branch passes only for the standing class; every
+# reason it falls outside is named, and it exits before any forge merge or
+# captain hold. Run
+# again under the away record's lock and from the door gate, so a posture that
+# changed in between still meets the whole class.
+FM_PR_BRANCH_STANDING=false
+FM_PR_DOOR=
+require_merge_actor() {
+  local actor reasons='' yolo=''
+  FM_PR_BRANCH_STANDING=false
+  actor=$(fm_lease_actor) || exit "$FM_LEASE_REFUSE_EXIT"
+  if [ "$actor" != branch ] || fm_lease_away_relocated; then
+    fm_lease_forbid_branch "PR merge (fm-pr-merge)" --away-relocated
+    return 0
+  fi
+  [ "$PROVIDER" = github ] \
+    || reasons="$reasons"$'\n'"  - it is not a GitHub pull request, the one forge whose merges carry the merge-gate code review"
+  if [ -f "$META" ] && [ ! -L "$META" ]; then
+    yolo=$(sed -n 's/^yolo=//p' "$META" 2>/dev/null | tail -n 1)
+  fi
+  [ "$yolo" = on ] \
+    || reasons="$reasons"$'\n'"  - task $ID does not record yolo=on, so its standing posture does not let firstmate merge it"
+  # A companion URL was already matched to its also_pr_<repo>= line above.
+  [ -n "$COMPANION_REPO" ] || [ "$(sed -n 's/^pr=//p' "$META" 2>/dev/null | tail -n 1)" = "$URL" ] \
+    || reasons="$reasons"$'\n'"  - task $ID does not record $URL as its pr=, so it is not the task's ready pull request"
+  [ "$ATTENDED_OVERRIDE" = false ] && [ "${#ALLOW_RED[@]}" -eq 0 ] \
+    && [ "${#ALLOW_MISSING[@]}" -eq 0 ] && [ -z "$WAIVE_REVIEW" ] \
+    && [ "$ONE_WAY_APPROVED" = false ] && [ "$ALLOW_NO_PIPELINE" = false ] \
+    || reasons="$reasons"$'\n'"  - an override flag needs the captain's word through main"
+  case "$FM_PR_DOOR" in
+    ''|two-way) ;;
+    *) reasons="$reasons"$'\n'"  - its Merge Danger does not name an explicit two-way door (read: $FM_PR_DOOR)" ;;
+  esac
+  if [ -n "$reasons" ]; then
+    printf 'error: PR merge (fm-pr-merge) refused for the supervision branch, which merges only a green, reviewed, two-way door GitHub pull request of a yolo task:%s\n' "$reasons" >&2
+    echo "error: leave this merge to main: report it with verdict captain and the PR URL (role partition: docs/pi-supervision-branch.md)" >&2
+    exit "$FM_LEASE_REFUSE_EXIT"
+  fi
+  FM_PR_BRANCH_STANDING=true
+}
+require_merge_actor
 
 if [ ! -f "$META" ] || [ -L "$META" ]; then
   echo "error: task metadata is unavailable" >&2
@@ -568,9 +629,19 @@ MERGE_EXPECTED_SPAWN_GEN=$FM_BACKLOG_META_SPAWN_GEN
 MERGE_CONTROL_LOCK=
 MERGE_META_LOCK=
 merge_control_cleanup() {
+  local status=$?
+  # Every refusal of a branch standing merge, ordinary gates included, leaves
+  # the merge to main with exit 6 (see the header). A failure after the forge
+  # accepted the merge keeps its own status: there is nothing left to merge.
   [ -z "$MERGE_META_LOCK" ] || fm_lock_release "$MERGE_META_LOCK" || true
   fm_afk_contract_lock_release || true
   [ -z "$MERGE_CONTROL_LOCK" ] || fm_lock_release "$MERGE_CONTROL_LOCK" || true
+  if [ "$status" -ne 0 ] && [ "$FM_PR_BRANCH_STANDING" = true ] \
+    && [ "${FM_PR_GITHUB_MERGE_ACCEPTED:-false}" != true ] \
+    && [ "${FM_PR_FORGE_TOOK_MERGE:-false}" != true ]; then
+    echo "error: leave this merge to main: report it with verdict captain and the PR URL (role partition: docs/pi-supervision-branch.md)" >&2
+    exit "$FM_LEASE_REFUSE_EXIT"
+  fi
 }
 trap merge_control_cleanup EXIT
 MERGE_CONTROL_LOCK="$STATE/.control-$ID.lock"
@@ -1502,6 +1573,15 @@ resolve_merge_authority() {
   FM_PR_MERGE_AUTHORITY=
   if fm_merge_authority_resolve "$FM_HOME" "$STATE" "$META" "$ID"; then
     FM_PR_MERGE_AUTHORITY=$FM_MERGE_AUTHORITY
+    # An attended branch standing merge (see the header) is tagged as such,
+    # and an away record the actor gate did not read as live refuses it.
+    if [ "$FM_PR_BRANCH_STANDING" = true ]; then
+      if [ "$FM_PR_MERGE_AUTHORITY" != attended ]; then
+        echo "error: PR merge refused - the away-posture record reads as $FM_PR_MERGE_AUTHORITY authority, which a branch standing merge never runs under; nothing was merged" >&2
+        return 1
+      fi
+      FM_PR_MERGE_AUTHORITY=branch
+    fi
     return 0
   fi
   echo "error: PR merge refused - the away-posture record could not be read; nothing was merged" >&2
@@ -1535,7 +1615,7 @@ require_current_away_authority() {
       return 2
     fi
   fi
-  fm_lease_forbid_branch "PR merge (fm-pr-merge)" --away-relocated
+  require_merge_actor
   resolve_merge_authority || return 1
   if [ "$FM_PR_AWAY_POSTURE" = true ] && [ "${#ALLOW_RED[@]}" -gt 0 ]; then
     echo "error: --allow-red is attended-only; while the away-posture record exists the green check is absolute" >&2
@@ -1667,6 +1747,10 @@ require_door_authority() {
   reading=${reading#*$'\t'}
   blast=${reading%%$'\t'*}
   why=${reading#*$'\t'}
+  FM_PR_DOOR=$door
+  # A branch standing merge needs an explicit two-way door, and its refusal
+  # places no captain hold: main brings that call (see the header).
+  [ "$FM_PR_BRANCH_STANDING" = false ] || require_merge_actor
   case "$door" in
     two-way)
       printf 'verified: %s is marked a two-way door\n' "$URL" >&2
@@ -2080,6 +2164,8 @@ case "$PROVIDER" in
         if [ "$FM_PR_GITHUB_MERGED" != true ] && [ "$FM_PR_GITHUB_QUEUED" != true ]; then
           github_report_unmerged_outcome
         else
+          # Landed or queued is not a refusal: never send it back to main to merge.
+          FM_PR_FORGE_TOOK_MERGE=true
           printf 'actionable: the merge command for %s failed, but the pull request reads back as state=%s, merged=%s, isInMergeQueue=%s\n' \
             "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED" >&2
         fi
@@ -2201,7 +2287,9 @@ outcome_rc=0
 if [ -n "$COMPANION_REPO" ]; then
   printf 'merged: companion %s PR %s for task %s; the task lands with its own PR\n' "$COMPANION_REPO" "$URL" "$ID"
 else
-fm_merge_outcome_report "$FM_HOME" "$STATE" "$ID" "$URL" self \
+merge_origin=self
+[ "${FM_PR_MERGE_AUTHORITY:-}" != branch ] || merge_origin=branch
+fm_merge_outcome_report "$FM_HOME" "$STATE" "$ID" "$URL" "$merge_origin" \
   "${FM_PR_MERGE_AUTHORITY:-}" || outcome_rc=$?
 fi
 case "$outcome_rc" in

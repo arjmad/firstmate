@@ -47,9 +47,17 @@ FM_MERGE_OUTCOME_ALREADY_RECORDED=false
 #   self - this home performed the merge.
 #   poll - this home's merge poll detected the merge, so the canonical outcome
 #          also wakes this home after any upward hop needed by a secondmate.
-# Optional <authority> is away, attended, or external (the retired yolo and
+#   branch - the attended supervision branch performed a standing merge
+#          (bin/fm-pr-merge.sh header). A main home records it as a silent
+#          routine row in the branch outcome store (bin/fm-branch-outcome.sh)
+#          instead of a check wake, so main gets a landed note and no turn,
+#          and the branch closes the task in the turn that merged it; a
+#          secondmate home reports upward exactly as for self. A poll of
+#          that merge still wakes main, tagged branch, so a merge the branch
+#          could not close in its own turn is still closed.
+# Optional <authority> is away, attended, branch, or external (the retired yolo and
 # away-grant values are still accepted for a persisted authority written before
-# the words model landed). Away, external, and the retired tags are appended to
+# the words model landed). Away, branch, external, and the retired tags are appended to
 # the ledger line; attended remains untagged. The merge entrypoint supplies its
 # authority after forge acceptance, while the poll supplies the persisted
 # identity-bound value or external when no matching record proves that this
@@ -68,9 +76,9 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [autho
   # shellcheck disable=SC2034 # Sourced wake helpers consume these scoped globals.
   local STATE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
   FM_MERGE_OUTCOME_ALREADY_RECORDED=false
-  case "$origin" in self|poll) ;; *) return 2 ;; esac
+  case "$origin" in self|poll|branch) ;; *) return 2 ;; esac
   case "$authority" in
-    away|external|yolo|away-grant) suffix=" $authority" ;;
+    away|branch|external|yolo|away-grant) suffix=" $authority" ;;
     attended|'') ;;
     *) return 2 ;;
   esac
@@ -109,7 +117,15 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [autho
   if [ -n "$destination" ]; then
     fm_parent_channel_append_once "$destination" "$(status_stamp_line "$line")" || status=1
   fi
-  if [ "$status" -eq 0 ] && [ "$wake" = true ] \
+  # Only the branch's own merge run is silent: the branch is there to close
+  # the task. A poll that observes the merge first (a queued merge, a race, or
+  # a run that died) still wakes main, so someone closes it.
+  if [ "$status" -eq 0 ] && [ "$origin" = branch ] && [ -z "$destination" ]; then
+    FM_HOME=$home FM_STATE_OVERRIDE=$state "$_FM_MERGE_OUTCOME_LIB_DIR/fm-branch-outcome.sh" append \
+      --task "$id" --verdict routine --silent true \
+      --summary "merged $id $FM_PR_URL under standing authority" \
+      --wake "check: merge landed: $id $FM_PR_URL$suffix" >/dev/null || status=1
+  elif [ "$status" -eq 0 ] && [ "$wake" = true ] \
     && { [ "$origin" = poll ] || [ -z "$destination" ]; }; then
     fm_wake_append check "merged-$id-$FM_PR_URL" \
       "check: merge landed: $id $FM_PR_URL$suffix" || status=1

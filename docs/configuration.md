@@ -186,7 +186,7 @@ While the away-posture record `state/.afk-contract` exists:
 
 [docs/pi-supervision-branch.md](pi-supervision-branch.md#postures) defines that posture.
 
-While attended, the branch cannot merge a PR, land local work, freshly spawn, or answer a decision.
+While attended, the branch cannot land local work, freshly spawn, or answer a decision, and merges a PR only in the standing class `bin/fm-pr-merge.sh` owns: green, reviewed, an explicit two-way door, and a `yolo` task.
 These are the bounds set by the captain-approved architecture.
 Every existing captain gate remains unchanged in either posture.
 Homes on other primary harnesses do not load the Pi branch extension; shared per-task lease behavior is owned by `bin/fm-lease-lib.sh`.
