@@ -4009,7 +4009,8 @@ test_attended_branch_merges_its_standing_class() {
   [ "$(jq -r .silent "$poll_state/branch-outcomes.jsonl")" = true ] \
     || fail "branch-standing-poll: the poll did not record the silent landed outcome"
 
-  # Main's own merge of the same class is unchanged: untagged, and a check wake.
+  # Main's own merge of the same class is unchanged: it writes no branch
+  # outcome and its persisted authority stays attended.
   case_dir=$(branch_standing_case main-standing-green 142 "$TWO_WAY_BODY")
   set +e
   run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/142 \
@@ -4017,8 +4018,8 @@ test_attended_branch_merges_its_standing_class() {
   RC=$?
   set -e
   expect_code 0 "$RC" "main-standing-green: main's merge changed"$'\n'"$(cat "$case_dir/stderr")"
-  assert_grep 'merge landed: task-x1 https://github.com/example/repo/pull/142' "$case_dir/state/.wake-queue" \
-    "main-standing-green: main's merge lost its check wake"
+  [ "$(sed -n 6p "$case_dir/state/task-x1.merge-authority")" = attended ] \
+    || fail "main-standing-green: main's merge was not persisted as attended"
   [ ! -e "$case_dir/state/branch-outcomes.jsonl" ] \
     || fail "main-standing-green: main's merge wrote a branch outcome"
   pass "the attended branch merges a green, reviewed, two-way door yolo PR, tagged branch, with a silent landed outcome and no check wake"
