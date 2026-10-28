@@ -28,6 +28,12 @@ mkdir -p "$CLAUDE_VERSION_DIR"
 ln -s /bin/bash "$CLAUDE_VERSION_DIR/2.1.220"
 VERSIONED_CLAUDE="$CLAUDE_VERSION_DIR/2.1.220"
 
+# The Claude desktop app runs its engine from ~/.claude/remote/ccd-cli/<version>.
+DESKTOP_ENGINE_DIR="$TMP_ROOT/desktop-home/.claude/remote/ccd-cli"
+mkdir -p "$DESKTOP_ENGINE_DIR"
+ln -s /bin/bash "$DESKTOP_ENGINE_DIR/2.1.308-27563e7c3b6d"
+DESKTOP_ENGINE="$DESKTOP_ENGINE_DIR/2.1.308-27563e7c3b6d"
+
 FAKEBIN=$(fm_fakebin "$TMP_ROOT/harness-bin")
 ln -s /bin/bash "$FAKEBIN/claude"
 NAMED_CLAUDE="$FAKEBIN/claude"
@@ -73,6 +79,8 @@ case "$pid:$field:${FM_TEST_CLAUDE_SHAPE:-linux}" in
   700:args=:linux) printf '%s\n' '/opt/claude/versions/2.1.220 --resume' ;;
   700:comm=:macos) printf '%s\n' '/Users/u/.local/share/claude/versions/2.1.220' ;;
   700:args=:macos) printf '%s\n' '/Users/u/.local/share/claude/versions/2.1.220 --resume' ;;
+  700:comm=:desktop) printf '%s\n' '/Users/u/.claude/remote/ccd-cli/2.1.308-27563e7c3b6d' ;;
+  700:args=:desktop) printf '%s\n' '/Users/u/.claude/remote/ccd-cli/2.1.308-27563e7c3b6d --output-format stream-json' ;;
   700:ppid=:*) printf '%s\n' 1 ;;
   *:comm=:*) printf '%s\n' bash ;;
   *:args=:*) printf '%s\n' 'bash /repo/bin/fm-claude-stop-autoarm.sh' ;;
@@ -82,7 +90,10 @@ SH
   chmod +x "$fakebin/ps"
   printf '700\n' > "$dir/state/.lock"
 
-  for shape in linux macos; do
+  # desktop is the Claude desktop app's engine, which it installs as a
+  # version-named executable under ~/.claude/remote/ccd-cli with no claude
+  # path component at all.
+  for shape in linux macos desktop; do
     got=$(FM_TEST_CLAUDE_SHAPE="$shape" lib_eval "$fakebin" 'fm_harness_ancestry_pid') \
       || fail "$shape: the version-named session was not found in the ancestry at all"
     [ "$got" = 700 ] || fail "$shape: ancestry resolved '$got', expected the version-named session pid 700"
@@ -91,7 +102,7 @@ SH
     FM_TEST_CLAUDE_SHAPE="$shape" lib_eval "$fakebin" "fm_session_lock_owned_by_self '$dir/state'" \
       || fail "$shape: the session holding the lock did not recognize itself as the owner"
   done
-  pass "session-lock: a version-named Claude Code session is identified from its install path and argv[0]"
+  pass "session-lock: a version-named Claude Code session, desktop engine included, is identified from its install path and argv[0]"
 }
 
 # A harness that is pid 1 of its own PID namespace - a container, or the
@@ -161,6 +172,10 @@ case "$pid:$field:${FM_TEST_PATH_SHAPE:-hookdir}" in
   810:args=:hookdir) printf '%s\n' '/home/u/.claude/hooks/notify.sh --quiet' ;;
   810:comm=:piprefix) printf '%s\n' '/opt/pipeline/bin/runner' ;;
   810:args=:piprefix) printf '%s\n' '/opt/pipeline/bin/runner --once' ;;
+  810:comm=:ccdserver) printf '%s\n' '/home/u/.claude/remote/srv/be1c1ca5/server' ;;
+  810:args=:ccdserver) printf '%s\n' '/home/u/.claude/remote/srv/be1c1ca5/server' ;;
+  810:comm=:ccdnested) printf '%s\n' '/home/u/.claude/remote/ccd-cli/2.1.308/lib/helper.sh' ;;
+  810:args=:ccdnested) printf '%s\n' '/home/u/.claude/remote/ccd-cli/2.1.308/lib/helper.sh' ;;
   810:ppid=:*) printf '%s\n' 1 ;;
   *:comm=:*) printf '%s\n' bash ;;
   *:args=:*) printf '%s\n' 'bash /repo/bin/fm-watch-arm.sh' ;;
@@ -173,7 +188,7 @@ SH
   # Identity may be read from an executable path, but only from whole path
   # components: anything merely living under ~/.claude, and any component that
   # merely starts with a harness name, must stay outside the harness identity.
-  for shape in hookdir piprefix; do
+  for shape in hookdir piprefix ccdserver ccdnested; do
     if FM_TEST_PATH_SHAPE="$shape" lib_eval "$fakebin" 'fm_harness_ancestry_pid'; then
       fail "$shape: an ordinary script path was treated as a harness process"
     fi
@@ -542,6 +557,17 @@ test_e2e_version_named_session_claims_the_home() {
   [ -e "$dir/state/arm-ran" ] || fail "supervision never armed for a version-named session"
   [ "$(epoch_outcome "$dir")" = rewake ] || fail "no claim was recorded, got: $(epoch_outcome "$dir")"
   pass "session-lock e2e: a version-named session claims the home and arms supervision"
+}
+
+test_e2e_desktop_engine_session_claims_the_home() {
+  local dir
+  dir="$TMP_ROOT/e2e-desktop-engine"
+  make_primary_home "$dir"
+  run_fixture_tree "$dir" "$DESKTOP_ENGINE"
+  expect_code 2 "$(hook_rc "$dir")" "a desktop-engine session must claim its home and rewake"
+  [ -e "$dir/state/arm-ran" ] || fail "supervision never armed for a desktop-engine session"
+  [ "$(epoch_outcome "$dir")" = rewake ] || fail "no claim was recorded, got: $(epoch_outcome "$dir")"
+  pass "session-lock e2e: a Claude desktop-engine session claims the home and arms supervision"
 }
 
 test_e2e_daemon_parented_session_claims_the_home() {
@@ -1223,6 +1249,7 @@ test_competing_version_named_session_is_seen_as_live
 test_same_session_id_owns_a_recycled_background_chain
 test_anchor_pid_is_the_model_loop_process_only_for_a_trusted_id
 test_e2e_version_named_session_claims_the_home
+test_e2e_desktop_engine_session_claims_the_home
 test_e2e_daemon_parented_session_claims_the_home
 test_e2e_daemon_parented_version_named_session_keeps_its_lock
 test_e2e_background_session_keeps_its_lock_across_a_recycled_chain
