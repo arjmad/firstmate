@@ -1136,7 +1136,12 @@ cmd_drain() {
     shift
     [ "$#" -gt 0 ] || die "usage: fm-inbox.sh drain --ack <id>..."
     mkdir -p "$INBOX/handled"
-    local id
+    local id locked=0
+    # Under the wake-queue lock, so a concurrent rewake-due sees the note either
+    # still pending or already acknowledged, never between the two.
+    if load_wake_lib && fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"; then
+      locked=1
+    fi
     for id in "$@"; do
       if [ -f "$INBOX/$id.note" ]; then
         mv "$INBOX/$id.note" "$INBOX/handled/$id.note"
@@ -1146,6 +1151,7 @@ cmd_drain() {
         printf 'already-acked %s\n' "$id"
       fi
     done
+    [ "$locked" -eq 0 ] || fm_lock_release "$FM_WAKE_QUEUE_LOCK"
     return 0
   fi
   cmd_list
@@ -1235,6 +1241,7 @@ cmd_rewake_due() {
     if [ -f "$path" ] && ! printf '%s\n' "$queued" | grep -Fxq "inbox:$id" \
       && fm_wake_append_locked check "inbox:$id" \
         "check: captain inbox note $id still unacknowledged after ${age}h - $summary"; then
+      note_announced "$id" || mark_announced "$id" 2>/dev/null || true
       if printf '%s\n' "$now" 2>/dev/null >"$REWOKEN_DIR/$id"; then
         printf 'rewoke %s\n' "$id"
       else

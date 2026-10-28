@@ -2944,7 +2944,8 @@ inbox_rewake_tick() {
   [ -d "$STATE/inbox" ] || return 0
   [ "$(age_of "$STATE/.last-inbox-rewake")" -ge "$INBOX_REWAKE_INTERVAL" ] || return 0
   touch "$STATE/.last-inbox-rewake"
-  out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-inbox.sh" rewake-due 2>/dev/null) || true
+  out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-inbox.sh" rewake-due 2>/dev/null) \
+    || triage_log "inbox re-wake scan failed; the next scan retries in ${INBOX_REWAKE_INTERVAL}s"
   count=$(printf '%s\n' "$out" | grep -c '^rewoke ' || true)
   [ "$count" -gt 0 ] || return 0
   wake "check: captain inbox: $count note(s) still unacknowledged (bin/fm-inbox.sh unread)"
