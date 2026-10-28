@@ -1158,21 +1158,23 @@ test_pi_seeded_secondmate_preapproves_project_trust() {
   pass "seeded Pi/pi-signed secondmate launches carry session --approve when advertised"
 }
 
-test_pi_worker_launch_omits_seeded_home_approve() {
+# A Pi worker launched into a fresh worktree of a repository that carries .pi/
+# resources parks on "Trust project folder?" until someone presses Enter, the
+# way Claude would without its worktree trust registration. The session-only
+# --approve trusts that worktree for this run alone.
+test_pi_worker_launch_preapproves_worktree_trust() {
   local rec id out status launch
-  id=profile-pi-worker-no-approve-z8f
-  rec=$(make_spawn_case profile-pi-worker-no-approve pi "$id")
+  id=profile-pi-worker-approve-z8f
+  rec=$(make_spawn_case profile-pi-worker-approve pi "$id")
   read_case_record "$rec"
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
   expect_code 0 "$status" "pi ship spawn should succeed"
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "FM_PI_HARNESS=pi '$FAKEBIN_DIR/pi' --tui-mode regular" \
-    "pi worker launch lost its regular TUI probe"
-  assert_not_contains "$launch" "--approve" \
-    "ordinary Pi worker launches must not receive secondmate seeded-home --approve"
-  pass "ordinary Pi worker launches omit --approve"
+  assert_contains "$launch" "FM_PI_HARNESS=pi '$FAKEBIN_DIR/pi' --tui-mode regular --approve" \
+    "a Pi worker launch must carry session-only --approve so it never parks on the folder-trust prompt"
+  pass "Pi worker launches pre-approve their worktree for the session"
 }
 
 test_pi_approve_probe_omits_unsupported_flag() {
@@ -2556,7 +2558,7 @@ test_pi_signed_threads_shared_pi_profile_and_preserves_identity
 test_pi_signed_missing_binary_refuses_before_endpoint_or_metadata
 test_pi_signed_persistent_secondmate_uses_pi_extensions_and_identity
 test_pi_seeded_secondmate_preapproves_project_trust
-test_pi_worker_launch_omits_seeded_home_approve
+test_pi_worker_launch_preapproves_worktree_trust
 test_pi_approve_probe_omits_unsupported_flag
 test_pi_exclude_tools_reach_ship_and_scout_launches
 test_pi_exclude_tools_worker_registry_reports
