@@ -266,6 +266,16 @@ case "${1:-} ${2:-}" in
     esac
     ;;
   "pr merge")
+    # A transient refusal: the first merge attempt fails with the forge's own
+    # words while the pull request stays open, and the next one lands.
+    if [ -f "$fixtures/github-merge-fails-once" ]; then
+      cat "$fixtures/github-merge-fails-once"
+      rm -f "$fixtures/github-merge-fails-once"
+      exit 1
+    fi
+    if [ -f "$fixtures/github-outcome-after-merge" ]; then
+      cp "$fixtures/github-outcome-after-merge" "$FM_TEST_GH_OUTCOME"
+    fi
     if [ -n "${FM_TEST_META_AT_MERGE:-}" ] && [ -f "${FM_STATE_OVERRIDE:-}/task-x1.meta" ]; then
       cat "$FM_STATE_OVERRIDE/task-x1.meta" > "$FM_TEST_META_AT_MERGE"
     fi
@@ -1043,6 +1053,61 @@ test_github_mergeable_unknown_retries_then_succeeds() {
   assert_grep 'pr=https://github.com/example/repo/pull/83' "$case_dir/state/task-x1.meta" \
     "github-mergeable-unknown-then-mergeable: pr= was not recorded"
   pass "fm-pr-merge retries a bounded number of times when mergeable is UNKNOWN and merges once it resolves"
+}
+
+# GitHub sometimes refuses a merge of a pull request that reads CLEAN, for a
+# moment such as a base branch that just moved; the same command a few seconds
+# later lands. The merge path re-reads the pull request and retries only while
+# it is still open and CLEAN at the head this run verified, and a pull request
+# that is not CLEAN keeps its immediate refusal.
+test_github_transient_refusal_of_a_clean_pr_is_retried() {
+  local case_dir rc head url
+  head=4343434343434343434343434343434343434343
+  url=https://github.com/example/repo/pull/84
+  case_dir=$(make_case github-transient-refusal-clean)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_outcome "$case_dir" OPEN false false main
+  printf '%s\n' state=MERGED merged=true queued=false base=main > "$case_dir/github-outcome-after-merge"
+  printf '%s\n' 'GraphQL: Base branch was modified. Review and try the merge again. (mergePullRequest)' \
+    > "$case_dir/github-merge-fails-once"
+  : > "$case_dir/gh-axi.log"
+  : > "$case_dir/gh.log"
+
+  set +e
+  FM_PR_GITHUB_MERGEABLE_RETRY_DELAY=0 \
+    run_pr_merge "$case_dir" task-x1 "$url" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "github-transient-refusal-clean: a CLEAN pull request refused once must land on the retry: $(cat "$case_dir/stderr")"
+  [ "$(grep -c '^pr merge ' "$case_dir/gh.log")" -eq 2 ] \
+    || fail "github-transient-refusal-clean: expected exactly 2 merge attempts, got $(grep -c '^pr merge ' "$case_dir/gh.log")"
+  assert_grep "verified: $url is merged" "$case_dir/stdout" \
+    "github-transient-refusal-clean: the landed retry was not verified"
+  assert_no_grep 'GitHub merge outcome was not successful' "$case_dir/stderr" \
+    "github-transient-refusal-clean: a landed merge was reported unmerged"
+
+  case_dir=$(make_case github-refusal-not-clean)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  sed -i.bak 's/"mergeStateStatus":"CLEAN"/"mergeStateStatus":"BLOCKED"/' "$case_dir/github-view.json"
+  write_github_outcome "$case_dir" OPEN false false main
+  printf '%s\n' 'Pull request is not mergeable: the base branch policy prohibits the merge.' \
+    > "$case_dir/github-merge-fails-once"
+  : > "$case_dir/gh-axi.log"
+  : > "$case_dir/gh.log"
+  set +e
+  FM_PR_GITHUB_MERGEABLE_RETRY_DELAY=0 \
+    run_pr_merge "$case_dir" task-x1 "$url" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-refusal-not-clean: a refused pull request that is not CLEAN must stay refused"
+  [ "$(grep -c '^pr merge ' "$case_dir/gh.log")" -eq 1 ] \
+    || fail "github-refusal-not-clean: a pull request that is not CLEAN was retried"
+  assert_grep 'state=OPEN, merged=false, isInMergeQueue=false' "$case_dir/stderr" \
+    "github-refusal-not-clean: the refusal lost its observed state"
+  pass "fm-pr-merge retries a GitHub refusal only while the pull request is still open and CLEAN at the verified head"
 }
 
 # Every attempt still reads mergeable=UNKNOWN: the bound is spent and the gate
@@ -3109,6 +3174,7 @@ test_pr_metadata_is_recorded_before_the_forge_call
 test_merge_failure_propagates_after_recording
 test_github_open_unqueued_outcome_refuses
 test_github_mergeable_unknown_retries_then_succeeds
+test_github_transient_refusal_of_a_clean_pr_is_retried
 test_github_mergeable_unknown_exhausts_bound_and_reports_pending
 test_github_mergeable_unknown_retry_rechecks_checks
 test_github_mergeable_conflicting_is_not_retried
