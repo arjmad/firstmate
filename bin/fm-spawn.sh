@@ -259,10 +259,11 @@
 #   a failed or inconclusive probe omits it so older Pi versions remain launchable.
 #   A --secondmate launch of a Firstmate-seeded home (the existing
 #   .fm-secondmate-home marker validate_firstmate_home_for_spawn already requires)
-#   also adds --approve when that help advertises it, so the first unattended
-#   launch does not stall on Pi's "Trust project folder?" dialog for that home
-#   path; --approve is session-scoped to the launch cwd and does not rewrite the
-#   operator's trust.json. Ordinary Pi worker launches never receive --approve.
+#   and every Pi worker launch add --approve when that help advertises it, so an
+#   unattended launch does not stall on Pi's "Trust project folder?" dialog for
+#   that home or a fresh worktree whose repository carries .pi resources;
+#   --approve is session-scoped to the launch cwd and does not rewrite the
+#   operator's trust.json, the Pi counterpart of the Claude worktree trust below.
 #   A missing selected executable refuses before endpoint creation, and pi-signed
 #   never falls back to pi.
 #   Devin is worker-only: --permission-mode dangerous and
@@ -491,8 +492,8 @@
 #                  (claude_session_name_flag below; supplies its own trailing space)
 #     __PIBIN__    quoted concrete Pi-family executable path resolved from PATH
 #     __PITUIMODE__ optional --tui-mode regular when that executable advertises it
-#     __PIAPPROVE__ optional --approve on a seeded Pi/pi-signed secondmate when
-#                  that executable advertises the flag (empty otherwise; session
+#     __PIAPPROVE__ optional --approve on a Pi/pi-signed launch when that
+#                  executable advertises the flag (empty otherwise; session
 #                  trust for the launch cwd only, never a trust.json rewrite)
 #     __PIEXCLUDE__ optional ` --exclude-tools '<comma-joined names>'` from
 #                  config/crew-exclude-tools on Pi/pi-signed ship and scout
@@ -2490,9 +2491,9 @@ pi_supports_tui_mode() {
 }
 
 # Same help-probe shape as pi_supports_tui_mode for the session-scoped project
-# trust flag. A seeded secondmate home carries tracked .pi/extensions that gate
-# Pi behind "Trust project folder?" on first launch; --approve trusts that
-# launch cwd for the run without rewriting ~/.pi/agent/trust.json.
+# trust flag. A seeded secondmate home, or a worktree of a repository with .pi
+# resources, gates Pi behind "Trust project folder?" on first launch; --approve
+# trusts that launch cwd for the run without rewriting ~/.pi/agent/trust.json.
 pi_supports_approve() {
   local executable=$1 help
   help=$("$executable" --help 2>&1) || return 1
@@ -3000,12 +3001,11 @@ pi | pi-signed)
     PI_TUI_MODE=' --tui-mode regular'
   fi
   LAUNCH=${LAUNCH//__PITUIMODE__/$PI_TUI_MODE}
-  # Seeded-home signal is .fm-secondmate-home (required by
-  # validate_firstmate_home_for_spawn before any secondmate launch reaches
-  # the pane). Session-only --approve; never expand to a parent path or
-  # rewrite the operator trust store.
+  # Session-only --approve for the launch cwd, a seeded secondmate home or a
+  # worker's own worktree; never expand to a parent path or rewrite the
+  # operator trust store.
   PI_APPROVE=
-  if [ "$KIND" = secondmate ] && pi_supports_approve "$PI_BIN"; then
+  if pi_supports_approve "$PI_BIN"; then
     PI_APPROVE=' --approve'
   fi
   LAUNCH=${LAUNCH//__PIAPPROVE__/$PI_APPROVE}
@@ -3111,6 +3111,7 @@ RAW_COMMAND=
 WORKER_ACCOUNT_MATE=
 [ "$KIND" != secondmate ] || WORKER_ACCOUNT_MATE=$ID
 WORKER_ACCOUNT=$(fm_worker_account_select "$HARNESS" "$CONFIG" "$MODEL" "${PI_BIN:-$HARNESS}" "$RAW_COMMAND" "$WORKER_ACCOUNT_MATE") || exit 1
+SESSION_CLAUDE_STORE="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
 WORKER_ACCOUNT_DECLARED=${WORKER_ACCOUNT%%$'\t'*}
 WORKER_ACCOUNT_ROOT=${WORKER_ACCOUNT#*$'\t'}
 WORKER_ACCOUNT_PROVIDER=${WORKER_ACCOUNT_ROOT#*$'\t'}
@@ -3121,6 +3122,9 @@ if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS" = claude ]; then
   else
     unset CLAUDE_CONFIG_DIR
   fi
+  WORKER_MCP_GAP=$(fm_worker_account_claude_mcp_gap "$SESSION_CLAUDE_STORE" "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json")
+  [ -z "$WORKER_MCP_GAP" ] \
+    || echo "warning: the Claude worker account ${WORKER_ACCOUNT_ROOT:-ordinary} lacks MCP servers this session has: $WORKER_MCP_GAP; the worker starts without those tools until that root registers them" >&2
 fi
 
 secondmate_registry_value() {

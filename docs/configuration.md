@@ -1129,6 +1129,7 @@ A home that authenticates Claude through environment credentials on purpose shou
 
 A malformed file, a root that is not a readable directory, or a signed-out account refuses the launch and names the file to fix; Firstmate never falls back to the ambient account and never changes a global login or copies a credential.
 The spawn prints the pin as `account=` (plus `account_provider=` for Pi) and records the same fields in the task record, so the session-start digest shows which account each worker launched on.
+A pinned Claude root is its own store, MCP servers included, so when it lacks a user-scope MCP server the launching session's store registers, the spawn warns with the missing server names and still launches; register them in that root to give its workers the tools.
 
 Pins are not inherited into secondmate homes: the secondmate's own workers read that home's `config/claude-account` and `config/pi-account` files independently.
 A remote secondmate is launched on its host from its own home's configuration, so create the file in that remote home.

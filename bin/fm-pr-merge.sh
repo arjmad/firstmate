@@ -25,6 +25,9 @@
 # re-checks every condition after a short bounded wait instead of refusing;
 # once that bound is spent it reports mergeability still pending rather than
 # unmergeable, with the same nonzero exit as any other refusal.
+# A merge command GitHub refuses is retried, at most twice, only while a fresh
+# read still shows the pull request open and CLEAN at the verified head; any
+# other refused pull request is reported at once.
 # A required check that never reported is absent from the checks
 # list rather than red, so github_read_required_contexts below reads the
 # required set from classic branch protection and active rulesets. Check-run
@@ -1244,6 +1247,17 @@ EOF
   FM_PR_BODY=$(printf '%s' "$json" | jq -r '.body // "" | tostring' 2>/dev/null) && FM_PR_BODY_READ=true
 }
 
+# True when a fresh read shows the pull request open, CLEAN, and still at the
+# head this run verified. CLEAN is GitHub's own verdict that every required
+# check passed, nothing conflicts, and the branch is current, so a refused
+# merge is retried only on this read and never re-verified onto a moved head.
+github_clean_at_verified_head() {
+  local json
+  json=$(gh pr view "$URL" --json state,mergeStateStatus,headRefOid 2>/dev/null) || return 1
+  printf '%s' "$json" | jq -e --arg head "$FM_PR_MERGE_HEAD" \
+    '.state == "OPEN" and .mergeStateStatus == "CLEAN" and .headRefOid == $head' >/dev/null 2>&1
+}
+
 # Read one live GitHub pull request view after gh returns. The selected
 # fields distinguish a landed pull request from a merge-queue entry and retain
 # the concrete state needed for a refusal. gh supplies the complete queue-aware
@@ -2032,10 +2046,24 @@ case "$PROVIDER" in
     require_current_away_authority || away_status=$?
     [ "$away_status" -eq 0 ] || exit "$away_status"
     refuse_github_queue_while_away || exit 2
-    merge_status=0
-    merge_output=$(gh pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" \
-      --match-head-commit "$FM_PR_MERGE_HEAD" \
-      "${merge_args[@]+"${merge_args[@]}"}" "$@" 2>&1) || merge_status=$?
+    # GitHub can refuse a merge of a pull request that reads CLEAN, for a
+    # moment such as a base branch that just moved, and the same command lands
+    # seconds later. Retry a refused merge a bounded number of times, still
+    # under the locks above and still bound to the verified head, but only
+    # while a fresh read shows the pull request open and CLEAN at that head.
+    merge_attempt=1
+    while :; do
+      merge_status=0
+      merge_output=$(gh pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" \
+        --match-head-commit "$FM_PR_MERGE_HEAD" \
+        "${merge_args[@]+"${merge_args[@]}"}" "$@" 2>&1) || merge_status=$?
+      [ "$merge_status" -ne 0 ] && [ "$merge_attempt" -lt 3 ] || break
+      sleep $((mergeable_retry_delay * merge_attempt))
+      github_clean_at_verified_head || break
+      printf 'note: GitHub refused the merge of %s but it still reads open and CLEAN at head %s; retrying (attempt %s): %s\n' \
+        "$URL" "$FM_PR_MERGE_HEAD" "$((merge_attempt + 1))" "$merge_output" >&2
+      merge_attempt=$((merge_attempt + 1))
+    done
     if [ "$merge_status" -eq 0 ]; then
       FM_PR_GITHUB_MERGE_ACCEPTED=true
       log_code_review_waiver

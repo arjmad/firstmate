@@ -27,6 +27,7 @@ For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary sin
 Retire a custom check only through `bin/fm-check-unregister.sh <id>` (or `bin/fm-teardown.sh` for a spawned task); never hand-compose an `rm` with `$STATE`/`$ID`.
 
 Tear down a ship task only after landing is confirmed.
+Chain a teardown or a steer after `bin/fm-pr-merge.sh` only on that script's own exit status (`bin/fm-pr-merge.sh ... && ...`), never after `;` or a pipe, whose status is the last command's: a refused merge exits non-zero, and a steer sent after it tells the worker its PR merged when it did not.
 A teardown refusal for uncommitted or unlanded work is a stop-and-investigate result, never an obstacle to bypass.
 Never force teardown without explicit discard authority.
 After successful teardown, record completion, retain only the configured recent Done history, and re-evaluate queued work whose blockers and time gates have cleared.

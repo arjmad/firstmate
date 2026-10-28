@@ -2955,6 +2955,10 @@ test_single_owner_terminal_declaration_supersedes_stale_decision() {
   make_repo_on_branch "$d/wt" fm/task
   make_fakebin "$d" >/dev/null
   arm_idle_record "$d/state" task
+  # The scout's report exists, so its done: is complete rather than blocked on it.
+  mkdir -p "$d/data/task"
+  printf '# Report\n' > "$d/data/task/report.md"
+  export FM_DATA_OVERRIDE="$d/data"
   for kind in scout ship; do
     fm_write_meta "$d/state/task.meta" "window=fm:fm-task" "worktree=$d/wt" "kind=$kind" "harness=claude"
     for opener in needs-decision blocked; do
@@ -2983,6 +2987,7 @@ test_single_owner_terminal_declaration_supersedes_stale_decision() {
       done
     done
   done
+  unset FM_DATA_OVERRIDE
   pass "ship and scout terminal declarations supersede stale decisions"
 }
 
@@ -3277,6 +3282,30 @@ test_scout_skips_run_lookup() {
   assert_not_contains "$out" "source: run-step" "scout ignores no-mistakes run-step"
   assert_contains "$out" "source: pane" "scout reads its semantic busy state"
   pass "scout skips the run lookup"
+}
+
+# A scout's report file is its work product and teardown refuses without it, so
+# a scout that declares done without one is blocked on that file rather than
+# finished; firstmate steers the scout to write it instead of writing a stub.
+test_scout_done_without_report_is_blocked() {
+  reset_fakes
+  local d out; d=$(new_case scout-no-report)
+  make_repo_on_branch "$d/wt" fm/scout-r
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/scout-r.meta" "window=fm:fm-scout-r" "worktree=$d/wt" "kind=scout" \
+    "harness=claude"
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" scout-r
+  printf 'done [at=1700000000]: findings written to the run'"'"'s findings.json\n' > "$d/state/scout-r.status"
+  mkdir -p "$d/data/scout-r"
+  out=$(FM_DATA_OVERRIDE="$d/data" run_crew_state "$d" scout-r)
+  assert_contains "$out" "state: blocked" "a scout done without its report must read blocked"
+  assert_contains "$out" "$d/data/scout-r/report.md" "the blocked reason must name the missing report path"
+
+  printf '# Report\n' > "$d/data/scout-r/report.md"
+  out=$(FM_DATA_OVERRIDE="$d/data" run_crew_state "$d" scout-r)
+  assert_contains "$out" "state: done" "a scout done with its report reads done"
+  pass "a scout that reports done without its report file is blocked on that file"
 }
 
 # (j) torn-down worktree and missing meta are graceful (unknown/none, exit 0)
@@ -5828,6 +5857,7 @@ test_dead_window_still_reports_terminal_run_step
 test_dead_window_still_reports_active_run_step
 test_no_timeout_uses_perl_bound
 test_scout_skips_run_lookup
+test_scout_done_without_report_is_blocked
 test_torn_down_worktree
 test_remote_alive_with_log_uses_status_log
 test_remote_alive_idle_is_healthy_not_gone

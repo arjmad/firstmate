@@ -255,6 +255,10 @@ case "${1:-} ${2:-}" in
         fi
         exit 0
         ;;
+      *" state,mergeStateStatus,headRefOid "*)
+        cat "$FM_TEST_GH_VIEW_JSON"
+        exit 0
+        ;;
       *headRefOid*)
         cat "$FM_TEST_GH_HEAD"
         exit 0
@@ -266,6 +270,16 @@ case "${1:-} ${2:-}" in
     esac
     ;;
   "pr merge")
+    # A transient refusal: the first merge attempt fails with the forge's own
+    # words while the pull request stays open, and the next one lands.
+    if [ -f "$fixtures/github-merge-fails-once" ]; then
+      cat "$fixtures/github-merge-fails-once"
+      rm -f "$fixtures/github-merge-fails-once"
+      exit 1
+    fi
+    if [ -f "$fixtures/github-outcome-after-merge" ]; then
+      cp "$fixtures/github-outcome-after-merge" "$FM_TEST_GH_OUTCOME"
+    fi
     if [ -n "${FM_TEST_META_AT_MERGE:-}" ] && [ -f "${FM_STATE_OVERRIDE:-}/task-x1.meta" ]; then
       cat "$FM_STATE_OVERRIDE/task-x1.meta" > "$FM_TEST_META_AT_MERGE"
     fi
@@ -735,6 +749,7 @@ run_pr_merge() {
   FM_TEST_GH_VIEW_JSON="$case_dir/github-view.json" \
   FM_TEST_GH_MERGEABLE_SEQUENCE="${FM_TEST_GH_MERGEABLE_SEQUENCE:-}" \
   FM_TEST_GH_MERGEABLE_CALLS="$case_dir/mergeable-calls" \
+  FM_PR_GITHUB_MERGEABLE_RETRY_DELAY="${FM_PR_GITHUB_MERGEABLE_RETRY_DELAY:-0}" \
   FM_TEST_GH_HEAD="$case_dir/github-head" \
   FM_TEST_GH_RUNS="$case_dir/github-runs.json" \
   FM_TEST_GH_MERGE_RC_FILE="$case_dir/github-merge-rc" \
@@ -1043,6 +1058,61 @@ test_github_mergeable_unknown_retries_then_succeeds() {
   assert_grep 'pr=https://github.com/example/repo/pull/83' "$case_dir/state/task-x1.meta" \
     "github-mergeable-unknown-then-mergeable: pr= was not recorded"
   pass "fm-pr-merge retries a bounded number of times when mergeable is UNKNOWN and merges once it resolves"
+}
+
+# GitHub sometimes refuses a merge of a pull request that reads CLEAN, for a
+# moment such as a base branch that just moved; the same command a few seconds
+# later lands. The merge path re-reads the pull request and retries only while
+# it is still open and CLEAN at the head this run verified, and a pull request
+# that is not CLEAN keeps its immediate refusal.
+test_github_transient_refusal_of_a_clean_pr_is_retried() {
+  local case_dir rc head url
+  head=4343434343434343434343434343434343434343
+  url=https://github.com/example/repo/pull/84
+  case_dir=$(make_case github-transient-refusal-clean)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_outcome "$case_dir" OPEN false false main
+  printf '%s\n' state=MERGED merged=true queued=false base=main > "$case_dir/github-outcome-after-merge"
+  printf '%s\n' 'GraphQL: Base branch was modified. Review and try the merge again. (mergePullRequest)' \
+    > "$case_dir/github-merge-fails-once"
+  : > "$case_dir/gh-axi.log"
+  : > "$case_dir/gh.log"
+
+  set +e
+  FM_PR_GITHUB_MERGEABLE_RETRY_DELAY=0 \
+    run_pr_merge "$case_dir" task-x1 "$url" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "github-transient-refusal-clean: a CLEAN pull request refused once must land on the retry: $(cat "$case_dir/stderr")"
+  [ "$(grep -c '^pr merge ' "$case_dir/gh.log")" -eq 2 ] \
+    || fail "github-transient-refusal-clean: expected exactly 2 merge attempts, got $(grep -c '^pr merge ' "$case_dir/gh.log")"
+  assert_grep "verified: $url is merged" "$case_dir/stdout" \
+    "github-transient-refusal-clean: the landed retry was not verified"
+  assert_no_grep 'GitHub merge outcome was not successful' "$case_dir/stderr" \
+    "github-transient-refusal-clean: a landed merge was reported unmerged"
+
+  case_dir=$(make_case github-refusal-not-clean)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  sed -i.bak 's/"mergeStateStatus":"CLEAN"/"mergeStateStatus":"BLOCKED"/' "$case_dir/github-view.json"
+  write_github_outcome "$case_dir" OPEN false false main
+  printf '%s\n' 'Pull request is not mergeable: the base branch policy prohibits the merge.' \
+    > "$case_dir/github-merge-fails-once"
+  : > "$case_dir/gh-axi.log"
+  : > "$case_dir/gh.log"
+  set +e
+  FM_PR_GITHUB_MERGEABLE_RETRY_DELAY=0 \
+    run_pr_merge "$case_dir" task-x1 "$url" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-refusal-not-clean: a refused pull request that is not CLEAN must stay refused"
+  [ "$(grep -c '^pr merge ' "$case_dir/gh.log")" -eq 1 ] \
+    || fail "github-refusal-not-clean: a pull request that is not CLEAN was retried"
+  assert_grep 'state=OPEN, merged=false, isInMergeQueue=false' "$case_dir/stderr" \
+    "github-refusal-not-clean: the refusal lost its observed state"
+  pass "fm-pr-merge retries a GitHub refusal only while the pull request is still open and CLEAN at the verified head"
 }
 
 # Every attempt still reads mergeable=UNKNOWN: the bound is spent and the gate
@@ -2933,23 +3003,40 @@ test_queued_gitlab_merge_leaves_the_poll_armed() {
   pass "a queued GitLab merge stays silent and leaves confirmation to the armed poll"
 }
 
-test_main_home_merge_leaves_a_durable_wake() {
+# The helm that ran the merge already holds its receipt on stdout, so an
+# attended merge it made itself queues no wake that would hand it a second turn
+# for the same event. Away-posture merges and merges this home only observed
+# keep their wake: there the queue is the only record the captain gets.
+test_attended_main_home_merge_queues_no_wake() {
   local case_dir url
   url=https://github.com/example/repo/pull/64
-  case_dir=$(make_home_case main-merge-wake)
+  case_dir=$(make_home_case main-merge-no-wake)
   add_gh_mocks "$case_dir" 7777777777777777777777777777777777777777
   : >"$case_dir/gh-axi.log"
 
   FM_TEST_HOME="$case_dir/home" run_pr_merge "$case_dir" task-x1 "$url" \
-    >"$case_dir/stdout" 2>"$case_dir/stderr" || fail "main-merge-wake: merge failed"
+    >"$case_dir/stdout" 2>"$case_dir/stderr" || fail "main-merge-no-wake: merge failed"
 
-  assert_grep "$url" "$case_dir/state/.wake-queue" \
-    "main-merge-wake: a merge this home performed left no durable record naming the PR"
-  [ "$(grep -c -F "$url" "$case_dir/state/.wake-queue")" -eq 1 ] \
-    || fail "main-merge-wake: one merge produced more than one durable record"
+  assert_grep "verified: $url is merged" "$case_dir/stdout" \
+    "main-merge-no-wake: the merging helm got no receipt on its own output"
+  if [ -e "$case_dir/state/.wake-queue" ]; then
+    assert_no_grep "merge landed: task-x1 $url" "$case_dir/state/.wake-queue" \
+      "main-merge-no-wake: the helm's own attended merge queued a merge-landed wake"
+  fi
+  [ -f "$case_dir/state/task-x1.pr-poll-merge-notified" ] \
+    || fail "main-merge-no-wake: the merge was not marked reported, so the poll would wake for it later"
   assert_absent "$case_dir/state/parent-replies.status" \
-    "main-merge-wake: a main home wrote a parent reply channel it does not have"
-  pass "a merge a main home performs itself leaves one durable wake naming the PR"
+    "main-merge-no-wake: a main home wrote a parent reply channel it does not have"
+
+  case_dir=$(make_home_case main-merge-away-wake)
+  add_gh_mocks "$case_dir" 7777777777777777777777777777777777777777
+  : >"$case_dir/gh-axi.log"
+  write_away_record "$case_dir" --words 'merge it when green'
+  FM_TEST_HOME="$case_dir/home" run_pr_merge "$case_dir" task-x1 "$url" \
+    >"$case_dir/stdout" 2>"$case_dir/stderr" || fail "main-merge-away-wake: merge failed"
+  [ "$(grep -c -F "merge landed: task-x1 $url away" "$case_dir/state/.wake-queue")" -eq 1 ] \
+    || fail "main-merge-away-wake: an away-posture merge left no single durable wake for the return brief"
+  pass "an attended merge the helm makes itself queues no wake, while an away-posture merge still leaves one"
 }
 
 test_queued_github_merge_leaves_the_poll_armed() {
@@ -2981,6 +3068,7 @@ test_distinct_merged_prs_keep_distinct_wakes() {
   case_dir=$(make_home_case distinct-merge-wakes)
   add_gh_mocks "$case_dir" bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
   : >"$case_dir/gh-axi.log"
+  write_away_record "$case_dir" --words 'merge both when green'
 
   FM_TEST_HOME="$case_dir/home" run_pr_merge "$case_dir" task-x1 "$first_url" \
     >"$case_dir/stdout-1" 2>"$case_dir/stderr-1" \
@@ -3015,6 +3103,7 @@ test_uncommitted_marker_retry_is_never_silent() {
   case_dir=$(make_home_case uncommitted-wake-retry)
   add_gh_mocks "$case_dir" aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   : >"$case_dir/gh-axi.log"
+  write_away_record "$case_dir" --words 'merge it when green'
   cat >"$case_dir/fakebin/mv" <<'SH'
 #!/usr/bin/env bash
 case "${!#}" in
@@ -3090,6 +3179,7 @@ test_pr_metadata_is_recorded_before_the_forge_call
 test_merge_failure_propagates_after_recording
 test_github_open_unqueued_outcome_refuses
 test_github_mergeable_unknown_retries_then_succeeds
+test_github_transient_refusal_of_a_clean_pr_is_retried
 test_github_mergeable_unknown_exhausts_bound_and_reports_pending
 test_github_mergeable_unknown_retry_rechecks_checks
 test_github_mergeable_conflicting_is_not_retried
@@ -3765,17 +3855,16 @@ test_away_record_permits_any_green_merge_under_away_authority() {
   assert_grep "merge landed: task-x1 $url away" "$case_dir/state/.wake-queue" \
     "away-attended-override: the durable outcome did not tag away"
 
-  # Without the record the merge is attended and the ledger row stays untagged.
-  case_dir=$(make_case attended-untagged)
+  # Without the record the merge is attended, so the helm's own output is its
+  # receipt and no merge-landed wake is queued at all.
+  case_dir=$(make_case attended-no-wake)
   mkdir -p "$case_dir/wt" "$case_dir/home"
   add_gh_mocks "$case_dir" "$head"
   FM_TEST_HOME="$case_dir/home" run_pr_merge "$case_dir" task-x1 "$url" \
-    > "$case_dir/stdout" 2> "$case_dir/stderr" || fail "attended-untagged: an attended green merge should succeed"
-  case "$(grep -F "merge landed: task-x1 $url" "$case_dir/state/.wake-queue")" in
-    *"$url") ;;
-    *) fail "attended-untagged: the attended outcome carried an authority tag: $(grep -F 'merge landed' "$case_dir/state/.wake-queue")" ;;
-  esac
-  pass "while the away-posture record exists any green merge lands under away authority, yolo or not, and attended merges stay untagged"
+    > "$case_dir/stdout" 2> "$case_dir/stderr" || fail "attended-no-wake: an attended green merge should succeed"
+  [ ! -e "$case_dir/state/.wake-queue" ] || assert_no_grep "merge landed: task-x1 $url" "$case_dir/state/.wake-queue" \
+    "attended-no-wake: an attended merge queued a merge-landed wake"
+  pass "while the away-posture record exists any green merge lands under away authority, yolo or not, and attended merges queue no wake"
 }
 
 # While the away-posture record exists main is parked, so the supervision
@@ -5236,7 +5325,7 @@ test_gitlab_merge_reports_upward
 test_queued_gitlab_merge_leaves_the_poll_armed
 test_failed_merge_reports_nothing
 test_gitlab_refusal_reports_nothing
-test_main_home_merge_leaves_a_durable_wake
+test_attended_main_home_merge_queues_no_wake
 test_queued_github_merge_leaves_the_poll_armed
 test_distinct_merged_prs_keep_distinct_wakes
 test_uncommitted_marker_retry_is_never_silent

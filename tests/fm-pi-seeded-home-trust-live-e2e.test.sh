@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Live guard for fm-spawn's Pi seeded-secondmate --approve preflight.
+# Live guard for fm-spawn's Pi --approve preflight, on a seeded secondmate home
+# and on a worker's worktree.
 #
 # Reproduces the Pi "Trust project folder?" stall on a freshly seeded
 # secondmate-shaped home (tracked .pi/extensions + .fm-secondmate-home) under a
@@ -135,5 +136,31 @@ fi
 CHECKED=$((CHECKED + 1))
 pass "unseeded path without --approve still prompts on Trust project folder?"
 
-[ "$CHECKED" -ge 3 ] || fail "guard checked nothing useful (checked=$CHECKED)"
+# --- 4. A worker's worktree WITH --approve starts past the dialog ----------
+# The ordinary worker launch carries the same session-only flag, so a fresh
+# worktree of a repository with .pi resources never parks on the dialog.
+WORKTREE="$LAB/worker-worktree"
+mkdir -p "$WORKTREE/.pi/extensions"
+printf 'export default function () {}\n' > "$WORKTREE/.pi/extensions/dummy.ts"
+printf '{}\n' > "$PI_DIR/trust.json"
+"$REAL_TMUX" -L "$SOCKET" new-session -d -s worker -n w -c "$WORKTREE" -- \
+  env HOME="$LAB/home-worker" PI_CODING_AGENT_DIR="$PI_DIR" PI_OFFLINE=1 \
+  "$PI_BIN" --approve --no-session --no-skills --no-prompt-templates \
+  || fail "could not launch pi with --approve in a worker worktree"
+if ! capture_until worker 'No models available|escape interrupt|dummy' 15 "$LAB/pane-worker.txt"; then
+  fail "worker worktree with --approve never reached a post-trust TUI within 15s:
+$(cat "$LAB/pane-worker.txt")"
+fi
+if grep -qiE 'Trust project folder' "$LAB/pane-worker.txt"; then
+  fail "worker worktree with --approve still showed Trust project folder?:
+$(cat "$LAB/pane-worker.txt")"
+fi
+"$REAL_TMUX" -L "$SOCKET" send-keys -t worker:w Escape >/dev/null 2>&1 || true
+"$REAL_TMUX" -L "$SOCKET" kill-session -t worker >/dev/null 2>&1 || true
+[ "$(cat "$PI_DIR/trust.json")" = '{}' ] \
+  || fail "--approve in a worker worktree rewrote the disposable trust store: $(cat "$PI_DIR/trust.json")"
+CHECKED=$((CHECKED + 1))
+pass "a worker worktree with .pi resources and --approve starts past the trust dialog without rewriting trust.json"
+
+[ "$CHECKED" -ge 4 ] || fail "guard checked nothing useful (checked=$CHECKED)"
 echo "# all fm-pi-seeded-home-trust-live-e2e checks passed ($CHECKED)"

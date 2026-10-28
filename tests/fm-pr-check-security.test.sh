@@ -819,12 +819,14 @@ test_valid_recording_and_merge_derivation() {
     >/dev/null 2>/dev/null || fail "valid merge wrapper failed"
   grep -qxF "pr merge 37 --repo my-org/repo_name.with-dots --match-head-commit $expected --merge" "$dir/gh.log" \
     || fail "merge wrapper did not preserve repository derivation, live head, and method"
-  # A merge this home performed leaves its own durable outcome, so the poll's
-  # confirmation is no longer the first the captain hears of it. Acknowledge that
-  # record before the watcher cycle below, which is what still retires the poll.
-  assert_grep 'https://github.com/my-org/repo_name.with-dots/pull/37' "$dir/home/state/.wake-queue" \
-    "a merge this home performed left no durable outcome"
-  ack_watcher_cycle "$dir/home/state" || fail "merge outcome acknowledgement failed"
+  # An attended merge the helm made itself is already reported on its own
+  # output, so it queues no wake, and its notified marker is what keeps the poll
+  # below from reporting it a second time.
+  [ -f "$dir/home/state/task-a.pr-poll-merge-notified" ] \
+    || fail "a merge this home performed left no notified marker"
+  [ ! -e "$dir/home/state/.wake-queue" ] \
+    || assert_no_grep 'merge landed: task-a' "$dir/home/state/.wake-queue" \
+      "an attended merge this home performed queued a merge-landed wake"
   # With the merge already reported, the poll's own detection is a duplicate the
   # watcher absorbs, so this cycle needs its own reason to end.
   add_stop_custom_check "$dir"
@@ -2492,9 +2494,12 @@ test_self_merge_and_poll_publish_one_outcome() {
   # Interleaving two: self publication lands but its marker commit fails. After
   # that outcome is drained, the still-armed poll must publish it again rather
   # than treating the interrupted attempt as complete and going silent.
+  # The away record keeps the self publication a wake: an attended merge the
+  # helm makes itself queues none and leaves the retry to this same poll.
   dir=$(make_case merge-outcome-uncommitted)
   state="$dir/home/state"
   write_task_meta "$dir" task-a
+  write_away_record "$dir" --words 'merge task-a when green'
   run_check_entry "$dir" task-a "$url" >/dev/null 2>"$dir/seed.err" \
     || fail "merge-outcome-uncommitted: could not arm merge poll"
   cat >"$dir/fakebin/mv" <<'SH'
