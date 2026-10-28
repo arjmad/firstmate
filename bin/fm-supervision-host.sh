@@ -195,6 +195,10 @@
 # only when FM_TEST_SEAM=1; tests/lib.sh arms the marker for isolated suites.
 set -u
 
+case "${1:-}" in
+  -h|--help) sed -n '2,/^set -u/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
 # Installed first: a hand-over requested while the host is still starting is
 # honored at its first wait instead of ending the process by default.
 HANDOVER_REQUESTED=0

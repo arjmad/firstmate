@@ -111,6 +111,16 @@
 # fm_supervision_host_primary (bin/fm-supervision-engine-lib.sh owns the seam).
 set -u
 
+fm_afk_launch_usage() {
+  sed -n '/^# Usage:/,/^# Supported backends:/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  case "${1:-}" in
+    -h|--help) fm_afk_launch_usage; exit 0 ;;
+  esac
+fi
+
 FM_AFK_LAUNCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$FM_AFK_LAUNCH_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
@@ -217,10 +227,6 @@ fm_afk_launch_lock_release() {
   pid=$(cat "$FM_AFK_LAUNCH_LOCK/pid" 2>/dev/null || true)
   [ "$pid" = "$$" ] || return 0
   rm -rf "$FM_AFK_LAUNCH_LOCK"
-}
-
-fm_afk_launch_usage() {
-  sed -n '/^# Usage:/,/^# Supported backends:/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
 }
 
 fm_afk_launch_primary_harness() {

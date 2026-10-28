@@ -137,6 +137,15 @@
 #     start, on every harness and away posture, before the drain.
 set -eu
 
+usage() {
+  echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | present | processed-init [--held-lock] | list [--recent <n>] | lookup --seqs <n,...> | startup-replay | seed-tail" >&2
+  exit "${1:-2}"
+}
+
+case "${1:-}" in
+  -h|--help) usage 0 2>&1 ;;
+esac
+
 SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
@@ -162,11 +171,6 @@ RECORDED_AGO_JQ='def recorded_ago: ([$now - .epoch, 0] | max) as $s
   | if $s < 3600 then "\($s / 60 | floor)m"
     elif $s < 172800 then "\($s / 3600 | floor)h"
     else "\($s / 86400 | floor)d" end;'
-
-usage() {
-  echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | present | processed-init [--held-lock] | list [--recent <n>] | lookup --seqs <n,...> | startup-replay | seed-tail" >&2
-  exit 2
-}
 
 bounded_uint() {
   local value=$1

@@ -15,6 +15,10 @@
 # at or above the required floor (16 for the real-Herdr family).
 set -eu
 
+case "${1:-}" in
+  -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
+
 # Exact pin - change only with a re-verified real-Herdr matrix.
 FM_HERDR_CI_VERSION=0.7.4
 FM_HERDR_CI_TAG="v${FM_HERDR_CI_VERSION}"

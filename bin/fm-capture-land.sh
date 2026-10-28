@@ -35,6 +35,10 @@
 # Usage: fm-capture-land.sh <pr-url> [--head <sha>]
 set -eu
 
+usage() { echo "usage: fm-capture-land.sh <pr-url> [--head <sha>]" >&2; }
+
+case "${1:-}" in -h|--help) usage 2>&1; exit 0 ;; esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
@@ -53,10 +57,8 @@ export FM_HOME
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 
-usage() { echo "usage: fm-capture-land.sh <pr-url> [--head <sha>]" >&2; }
 refuse() { echo "refused: $*" >&2; exit 1; }
 
-case "${1:-}" in -h|--help) usage; exit 0 ;; esac
 [ "$#" = 1 ] || { [ "$#" = 3 ] && [ "$2" = --head ]; } || { usage; exit 2; }
 WANT_HEAD=${3:-}
 if [ -n "$WANT_HEAD" ] && ! fm_pr_head_valid "$WANT_HEAD"; then

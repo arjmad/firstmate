@@ -106,6 +106,10 @@
 # records back rather than the sweep silently doing nothing.
 set -u
 
+case "${1:-}" in
+  -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
@@ -613,11 +617,11 @@ if [ "$REMOVED_ENDPOINTS" -gt 0 ] || [ "$ROTATED" -gt 0 ] \
   || [ "$REMOVED_TASK_RECORDS" -gt 0 ] || [ "$REMOVED_LOCK_OWNERS" -gt 0 ]; then
   verb=removed
   [ "$DRY_RUN" -eq 0 ] || verb='would remove'
-  printf 'BOOTSTRAP_INFO: state residue sweep: %s %s watcher record(s) for %s gone endpoint(s) and %s stale scratch file(s), %s retired-task record(s), %s dead lock owner(s); kept %s endpoint(s) still in a task record, %s live, %s unresolved, %s unmatched' \
+  printf 'BOOTSTRAP_INFO: state residue sweep: %s %s watcher record(s) for %s gone endpoint(s) and %s stale scratch file(s), %s retired-task record(s), %s dead lock owner(s); kept watcher records for %s endpoint(s) a task record names (never probed), %s probed and still running, %s unresolved, %s matching no backend this home runs' \
     "$verb" "$REMOVED_RECORDS" "$REMOVED_ENDPOINTS" "$ROTATED" \
     "$REMOVED_TASK_RECORDS" "$REMOVED_LOCK_OWNERS" \
     "$KEPT_META" "$KEPT_LIVE" "$KEPT_UNRESOLVED" "$KEPT_UNMATCHED"
   [ "$DEFERRED" -eq 0 ] || printf ', %s deferred to the next session start' "$DEFERRED"
-  printf '\n'
+  printf ' (these count watcher bookkeeping, not fleet liveness; bin/fm-fleet-view.sh shows which panes are live)\n'
 fi
 exit 0

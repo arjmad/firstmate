@@ -197,6 +197,7 @@ Every `/bearings` chat response renders EXACTLY these four sections, in THIS ord
 3. **Underway** - live work progressing on its own, one line of current state per direct report.
    Empty-state: "Nothing is underway."
 4. **Charted Next** - queued or gated work waiting on the fleet or a date, deferred or aged captain-hold safety gates, plus action-free fleet-integrity warnings.
+   List the snapshot's `inbox_unread` captain inbox notes here too, oldest first, one line each with its id and summary, plus the count `omitted` names beyond them, because firstmate still owes each one handling and its `bin/fm-inbox.sh drain --ack`.
    Empty-state: "Nothing is queued."
 
 Rules that keep the contract unambiguous:

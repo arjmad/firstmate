@@ -85,7 +85,7 @@ usage:
   fm-git-strip-ai-trailers.sh install [--no-strip] [--push-guard <guard-file>] <hooks-dir> <worktree>
   fm-git-strip-ai-trailers.sh env-file <hooks-dir> <out-file>
 EOF
-  exit 2
+  exit "${1:-2}"
 }
 
 trim_space() {
@@ -363,7 +363,7 @@ env-file)
   write_env_file "$2" "$3"
   ;;
 -h | --help)
-  usage
+  usage 0 2>&1
   ;;
 '')
   usage

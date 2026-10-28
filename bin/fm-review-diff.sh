@@ -31,16 +31,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-"$FM_ROOT/bin/fm-guard.sh" || true
 
 usage() {
   echo "usage: fm-review-diff.sh <task-id> [--stat]" >&2
 }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-  usage
+  usage 2>&1
   exit 0
 fi
+
+"$FM_ROOT/bin/fm-guard.sh" || true
 
 ID=${1:-}
 [ -n "$ID" ] || { usage; exit 1; }

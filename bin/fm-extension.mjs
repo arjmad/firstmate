@@ -2525,8 +2525,8 @@ async function cmdProcessEvent(args) {
   await runLifecycleProcessEvent(args);
 }
 
-function usage() {
-  process.stderr.write(`Trusted external Firstmate extension binding host.
+function usage(out = process.stderr, exitCode = 2) {
+  out.write(`Trusted external Firstmate extension binding host.
 
 Usage:
   bin/fm-extension.mjs bind <package-root> --adapter <name> [--adapter <name> ...] --trust-same-user-code [--consent <fact> ...] [--timeout-ms <milliseconds>]
@@ -2539,7 +2539,7 @@ Usage:
 
 The manifest file is firstmate-extension.json. Supported consent facts are network, credential-store, task-metadata, and artifact-references. The host supports only process-event-adapter/1; see docs/extension-bindings.md for its manifest, binding, handshake, and invocation contracts.
 `);
-  process.exitCode = 2;
+  process.exitCode = exitCode;
 }
 
 async function main() {
@@ -2562,9 +2562,9 @@ async function main() {
     case "cleanup-invocations": await cmdCleanupInvocations(args); break;
     case "":
     case undefined:
-    case "help":
+    case "help": usage(); break;
     case "-h":
-    case "--help": usage(); break;
+    case "--help": usage(process.stdout, 0); break;
     default: fail("usage", `unknown command: ${command}`);
   }
 }

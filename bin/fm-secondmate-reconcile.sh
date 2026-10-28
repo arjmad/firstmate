@@ -85,6 +85,32 @@
 # exits 1 when any request remains deferred; an empty queue is silent success.
 set -u
 
+usage() {
+  cat <<'EOF'
+usage: fm-secondmate-reconcile.sh request --snapshot <file>|-
+       fm-secondmate-reconcile.sh process-requests
+       fm-secondmate-reconcile.sh notify [--snapshot <file>|-]
+       fm-secondmate-reconcile.sh nudged <mate-id>
+
+request  accept exactly one captured snapshot and atomically publish at most
+         one pending request per stable reconcile target id for later supervision
+         delivery. Newer payloads replace that target's pending request without
+         disturbing other targets. It never sends or takes mate lifecycle locks.
+process-requests
+         deliver and retire durable requests. Intended for the watcher loop;
+         skipped or failed requests stay queued for a later pass.
+notify   ask every secondmate home whose backlog disagrees with its own task
+         metadata to reconcile it, at most once per home per cooldown window.
+         Reads an fm-fleet-snapshot.v1 or fm-bearings.v1 document from
+         --snapshot (or runs fm-fleet-snapshot.sh --json when omitted).
+nudged   print the epoch second of the last reconcile nudge sent to <mate-id>.
+EOF
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
@@ -119,28 +145,6 @@ release_active_locks() {
 }
 trap release_active_locks EXIT
 trap 'release_active_locks; exit 130' INT TERM
-
-usage() {
-  cat <<'EOF'
-usage: fm-secondmate-reconcile.sh request --snapshot <file>|-
-       fm-secondmate-reconcile.sh process-requests
-       fm-secondmate-reconcile.sh notify [--snapshot <file>|-]
-       fm-secondmate-reconcile.sh nudged <mate-id>
-
-request  accept exactly one captured snapshot and atomically publish at most
-         one pending request per stable reconcile target id for later supervision
-         delivery. Newer payloads replace that target's pending request without
-         disturbing other targets. It never sends or takes mate lifecycle locks.
-process-requests
-         deliver and retire durable requests. Intended for the watcher loop;
-         skipped or failed requests stay queued for a later pass.
-notify   ask every secondmate home whose backlog disagrees with its own task
-         metadata to reconcile it, at most once per home per cooldown window.
-         Reads an fm-fleet-snapshot.v1 or fm-bearings.v1 document from
-         --snapshot (or runs fm-fleet-snapshot.sh --json when omitted).
-nudged   print the epoch second of the last reconcile nudge sent to <mate-id>.
-EOF
-}
 
 fail() { echo "fm-secondmate-reconcile: $*" >&2; exit 2; }
 

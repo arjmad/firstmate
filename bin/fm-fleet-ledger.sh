@@ -66,7 +66,7 @@ TEXT_MAX_CHARS=2000
 
 usage() {
   echo "usage: fm-fleet-ledger.sh dispatched <task> <kind> <project> <harness> <model> | pr_ready <task> <url> | merged <task> pr <url> | merged <task> local | cleaned_up <task> | capture | appended <config> <state>/<task>.status" >&2
-  exit 2
+  exit "${1:-2}"
 }
 
 task_ok() {
@@ -75,6 +75,7 @@ task_ok() {
 
 cmd=${1:-}
 case "$cmd" in
+  -h|--help) usage 0 2>&1 ;;
   dispatched) { [ "$#" -eq 6 ] && task_ok "$2"; } || usage ;;
   pr_ready) { [ "$#" -eq 3 ] && task_ok "$2" && [ -n "$3" ]; } || usage ;;
   merged)

@@ -14,6 +14,10 @@
 # shipped in Treehouse 3.0.0, so the pin must stay at or above that release.
 set -eu
 
+case "${1:-}" in
+  -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
+
 FM_TREEHOUSE_CI_VERSION=3.1.1
 FM_TREEHOUSE_CI_TAG="v${FM_TREEHOUSE_CI_VERSION}"
 # Bounded download ceiling (bytes). Official 3.1.1 archives are under 8 MiB.

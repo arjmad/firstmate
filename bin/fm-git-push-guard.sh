@@ -45,7 +45,7 @@ usage:
   fm-git-push-guard.sh <guard-file> <remote-name> <remote-url>
   fm-git-push-guard.sh write <guard-file> <repo> <task-branch> <task-prefix> [<backup-remote> <backup-prefix>]
 EOF
-  exit 2
+  exit "${1:-2}"
 }
 
 refuse() {  # <message>
@@ -153,7 +153,10 @@ case "${1:-}" in
     shift
     write_guard "$@"
     ;;
-  ''|-h|--help)
+  -h|--help)
+    usage 0 2>&1
+    ;;
+  '')
     usage
     ;;
   *)

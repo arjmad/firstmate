@@ -143,7 +143,9 @@ test_gone_endpoint_swept_and_live_kept() {
     || fail "a live window must keep every marker: $(ls -a "$home/state")"
   assert_contains "$out" "BOOTSTRAP_INFO: state residue sweep: removed 12 watcher record(s) for 1 gone endpoint(s)" \
     "the summary line should count what was removed"
-  assert_contains "$out" "1 live" "the summary line should count the live endpoint that was kept"
+  assert_contains "$out" "1 probed and still running" "the summary line should count the live endpoint that was kept"
+  assert_contains "$out" "not fleet liveness; bin/fm-fleet-view.sh shows which panes are live" \
+    "the summary line must not read as a fleet liveness count"
   pass "sweep: a gone endpoint's markers are removed while a live endpoint's are kept"
 }
 
@@ -605,7 +607,7 @@ test_herdr_gone_pane_swept_live_and_stopped_server_handled() {
     || fail "a second gone pane in the same workspace should lose its markers: $out"
   [ "$(count_markers "$home" default_wGJ_p2)" -eq 12 ] || fail "a live herdr pane lost markers: $out"
   assert_contains "$out" "removed 24 watcher record(s) for 2 gone endpoint(s)" "the summary should count both gone panes: $out"
-  assert_contains "$out" "1 live" "the live pane should be counted as kept"
+  assert_contains "$out" "1 probed and still running" "the live pane should be counted as kept"
   [ "$(grep -c '^pane get' "$home/herdr-calls")" -eq 2 ] \
     || fail "each unresolved pane should be asked exactly once; got: $(cat "$home/herdr-calls")"
 

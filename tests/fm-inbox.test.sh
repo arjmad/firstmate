@@ -11,6 +11,8 @@ set -euo pipefail
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/wake-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/wake-helpers.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-inbox)
 INBOX_BIN="$ROOT/bin/fm-inbox.sh"
@@ -544,3 +546,76 @@ run_inbox "$home" drain --ack "$did" >/dev/null || fail "drain --ack failed"
 assert_absent "$home/state/inbox/$did.note" "acked note leaves pending"
 assert_present "$home/state/inbox/handled/$did.note" "acked note is in handled"
 pass "drain --ack still moves the note to handled"
+
+# --- unread lists pending notes oldest first, capped at ten -----------------
+
+note_id() {  # <note-output>
+  local id=${1#queued }
+  printf '%s\n' "${id%%$'\n'*}"
+}
+
+home=$(make_home unread)
+assert_equals "(no unread inbox notes)" "$(run_inbox "$home" unread)" \
+  "an empty inbox reports no unread notes"
+first=$(note_id "$(run_inbox "$home" note "the oldest note")")
+sleep 1
+second=$(note_id "$(run_inbox "$home" note "the newer note")")
+unread_out=$(run_inbox "$home" unread) || fail "unread should succeed"
+assert_contains "$unread_out" "2 unread inbox note(s), oldest first" "unread counts pending notes"
+order=$(printf '%s\n' "$unread_out" | grep -Eo "$first|$second" | paste -sd' ' -)
+assert_equals "$first $second" "$order" "unread lists the oldest note first"
+assert_contains "$unread_out" "the oldest note" "unread shows each note's summary"
+run_inbox "$home" drain --ack "$first" >/dev/null || fail "drain --ack failed"
+unread_out=$(run_inbox "$home" unread)
+assert_not_contains "$unread_out" "$first" "an acknowledged note leaves the unread list"
+assert_contains "$unread_out" "1 unread inbox note(s)" "the count drops after an acknowledgement"
+pass "unread lists pending notes oldest first and drops acknowledged ones"
+
+home=$(make_home unread-cap)
+for n in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  run_inbox "$home" note "capped note $n" >/dev/null || fail "note $n failed"
+done
+unread_out=$(run_inbox "$home" unread)
+assert_contains "$unread_out" "12 unread inbox note(s)" "the header counts every pending note"
+assert_equals "10" "$(printf '%s\n' "$unread_out" | grep -c 'capped note')" \
+  "unread shows at most ten notes"
+assert_contains "$unread_out" "... and 2 more" "unread names how many it left out"
+unread_json=$(run_inbox "$home" unread --json) || fail "unread --json should succeed"
+assert_equals "12" "$(printf '%s' "$unread_json" | json_get total)" "JSON total counts every note"
+assert_equals "10" "$(printf '%s' "$unread_json" | python3 -c 'import json,sys
+print(len(json.load(sys.stdin)["notes"]))')" "JSON lists at most ten notes"
+assert_equals "2" "$(printf '%s' "$unread_json" | json_get more)" "JSON names how many it left out"
+pass "unread caps the list at ten with a count of the rest"
+
+# --- rewake-due re-wakes an unacknowledged note once a day ------------------
+
+# Drain and acknowledge every queued wake, as a firstmate turn that saw the
+# note's wake but never acknowledged the note itself would.
+drain_wakes() {  # <home>
+  local err="$TMP_ROOT/drain.err"
+  FM_HOME="$1" FM_STATE_OVERRIDE="$1/state" "$ROOT/bin/fm-wake-drain.sh" >/dev/null 2>"$err" \
+    || fail "wake drain failed: $(cat "$err")"
+  ack_drain_err "$1/state" "$err" >/dev/null 2>&1 || fail "wake drain acknowledgement failed"
+}
+
+rewake() {  # <home> <seconds-from-now>
+  FM_INBOX_NOW=$(( $(date +%s) + $2 )) run_inbox "$1" rewake-due
+}
+
+home=$(make_home rewake)
+rid=$(note_id "$(run_inbox "$home" note "please look at this")")
+assert_equals "" "$(rewake "$home" 86400)" "a note whose first wake is still queued is not re-woken"
+drain_wakes "$home"
+assert_equals "" "$(rewake "$home" 3600)" "a note an hour old is not re-woken"
+assert_equals "rewoke $rid" "$(rewake "$home" 86400)" "a note 24 hours old is re-woken"
+assert_contains "$(cat "$home/state/.wake-queue")" "captain inbox note $rid still unacknowledged after 24h" \
+  "the re-wake queues a check wake naming the note"
+drain_wakes "$home"
+assert_equals "" "$(rewake "$home" 90000)" "a re-woken note waits another full day"
+assert_equals "rewoke $rid" "$(rewake "$home" $((86400 * 2)))" "the note is re-woken again a day later"
+drain_wakes "$home"
+run_inbox "$home" drain --ack "$rid" >/dev/null || fail "drain --ack failed"
+assert_equals "" "$(rewake "$home" $((86400 * 5)))" "an acknowledged note is never re-woken"
+assert_equals "(no unread inbox notes)" "$(run_inbox "$home" unread)" \
+  "an acknowledged note leaves the unread list"
+pass "rewake-due re-wakes an unacknowledged note once a day until it is acknowledged"

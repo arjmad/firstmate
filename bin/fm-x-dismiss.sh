@@ -45,6 +45,7 @@ usage() {
 
 REQ=${1:-}
 case "$REQ" in
+  -h|--help) usage 2>&1; exit 0 ;;
   '') usage; exit 2 ;;
   -*) echo "fm-x-dismiss: unknown option '$REQ'" >&2; usage; exit 2 ;;
 esac

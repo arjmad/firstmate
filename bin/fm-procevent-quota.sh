@@ -37,6 +37,19 @@
 # requested provider; details preserve each row's accountKey when present.
 set -u
 
+usage() {
+  awk '
+    NR == 1 { next }
+    /^#/ { sub(/^# ?/, ""); print; next }
+    { exit }
+  ' "${BASH_SOURCE[0]}"
+  exit "${1:-2}"
+}
+
+case "${1:-}" in
+  -h|--help) usage 0 ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
@@ -64,14 +77,6 @@ SOURCE_ID_BASE=quota
 CANONICAL_SOURCE_ID=
 PROVIDER=
 
-usage() {
-  awk '
-    NR == 1 { next }
-    /^#/ { sub(/^# ?/, ""); print; next }
-    { exit }
-  ' "${BASH_SOURCE[0]}"
-  exit 2
-}
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 
 resolve_provider() {

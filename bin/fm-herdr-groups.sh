@@ -71,9 +71,11 @@ FM_HERDR_GROUPS_TOKEN_MAX=80
 FM_HERDR_GROUPS_PANE_TOKENS="fm_group fm_state fm_task fm_sort"
 FM_HERDR_GROUPS_WORKSPACE_TOKENS="fm_group fm_state fm_group_order"
 
-usage() {
-  echo "usage: fm-herdr-groups.sh plan [<task>] | sync [<task>] | clear | order-key <task> <project-path> | sidebar-config [--apply <herdr-config.toml>]" >&2
-  exit 2
+usage() {  # [help]: --help prints to stdout and exits 0
+  local fd=2 status=2
+  [ "${1:-}" != help ] || { fd=1; status=0; }
+  echo "usage: fm-herdr-groups.sh plan [<task>] | sync [<task>] | clear | order-key <task> <project-path> | sidebar-config [--apply <herdr-config.toml>]" >&"$fd"
+  exit "$status"
 }
 
 warn() {
@@ -505,6 +507,7 @@ cmd_sidebar_config() {
 
 cmd=${1:-}
 case "$cmd" in
+  -h|--help) usage help ;;
   plan|sync)
     [ "$#" -le 2 ] || usage
     [ "$#" -lt 2 ] || task_ok "$2" || usage

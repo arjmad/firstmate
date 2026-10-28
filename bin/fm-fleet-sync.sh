@@ -111,6 +111,15 @@
 # passing its full projects/dotfiles-private path.
 set -eu
 
+usage() {
+  echo "usage: fm-fleet-sync.sh [<project-dir-or-name> | --settle-capture <project-dir-or-name> | --scheduled | --scheduled-interval]" >&2
+}
+
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  usage 2>&1
+  exit 0
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
@@ -166,14 +175,6 @@ SCHEDULED_LOG="$STATE/.fleet-sync-scheduled.log"
 SCHEDULED_SURFACED="$STATE/.fleet-sync-surfaced"
 SCHEDULED_STUCK="$STATE/fleet-sync-stuck"
 
-usage() {
-  echo "usage: fm-fleet-sync.sh [<project-dir-or-name> | --settle-capture <project-dir-or-name> | --scheduled | --scheduled-interval]" >&2
-}
-
-if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-  usage
-  exit 0
-fi
 SETTLE_CAPTURE=0
 if [ "${1:-}" = --settle-capture ]; then
   [ $# -eq 2 ] && [ -n "$2" ] || { usage; exit 1; }

@@ -179,7 +179,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-google-workspace.sh` | Operate Arjun's per-account Google Workspace instances: paths, consent, verification, runtime wiring, revocation ([google-workspace-access.md](google-workspace-access.md)) |
 | `fm-google-workspace-auth.py` | Drive one Google consent ceremony or verifying read, reporting the account that actually signed in |
 | `fm-google-workspace-wizard.sh` | Walk the captain through the attended Google Cloud, consent, and per-account sign-in steps |
-| `fm-inbox.sh`            | The captain's out-of-band capture surface: queue a note (optionally idempotent by request id), announce or repair its wake, record a durable primary reply, and emit bounded receipts and primary-readiness JSON |
+| `fm-inbox.sh`            | The captain's out-of-band capture surface: queue a note (optionally idempotent by request id), announce or repair its wake, record a durable primary reply, list unacknowledged notes oldest first, re-wake firstmate daily for each, and emit bounded receipts and primary-readiness JSON |
 | `fm-mail.sh`             | General-purpose mail plane: read unseen IMAP mail, send one SMTP message, or surface new mail as a `check` wake via `poll` (configuration in the home's gitignored `.env`) |
 | `fm-mail.py`             | The IMAP/SMTP engine behind `fm-mail.sh` |
 | `fm-mail-check.sh`       | Standing received-mail poll: `arm` registers a watcher check that runs `fm-mail.sh poll` on the watcher cadence (new mail still wakes via the poll; the check's own line also wakes unless the poll is a proven no-op), `disarm` removes it |

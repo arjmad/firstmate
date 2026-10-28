@@ -188,7 +188,7 @@ usage() {
   echo "usage: fm-claude-trust.sh <worktree> <project>" >&2
   echo "       fm-claude-trust.sh --secondmate-home <home> <id>" >&2
   echo "       fm-claude-trust.sh --lab-home <home>" >&2
-  exit 2
+  exit "${1:-2}"
 }
 
 # MODE selects which structural scope test decides the argument, and SCOPE_NOUN
@@ -211,7 +211,10 @@ case "${1:-}" in
     PROJ_ARG=
     SCOPE_NOUN="lab home"
     ;;
-  '' | -h | --help)
+  -h | --help)
+    usage 0 2>&1
+    ;;
+  '')
     usage
     ;;
   *)

@@ -3,6 +3,8 @@
 # composition for portable CI shards, local --jobs for proven-concurrent work,
 # timing markers, and the complete-regression coverage guard.
 #
+# Usage: fm-test-run.sh <selection mode> [options]
+#
 # Selection modes (exactly one of: --all, --family, --changed, --lane,
 # --proven-isolated, or script paths):
 #   fm-test-run.sh --all
@@ -782,6 +784,7 @@ tests/fm-harness-adapter-instructions-live-e2e.test.sh 85
 tests/fm-harness-adapter-references.test.sh 109
 tests/fm-harness-liveness-drift-live-e2e.test.sh 1309
 tests/fm-harness-precedence.test.sh 4368
+tests/fm-help.test.sh 2500
 tests/fm-herdr-groups.test.sh 5418
 tests/fm-herdr-pi-stale-registration-live-e2e.test.sh 59
 tests/fm-herdr-session-cleanup.test.sh 8773
@@ -2153,7 +2156,7 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     -h|--help)
-      usage
+      usage 2>&1
       exit 0
       ;;
     --)
