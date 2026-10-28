@@ -881,6 +881,7 @@ $WAIT_BLOCK$INBOX_SECTION
 
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
+That file is required even when your task names another deliverable, such as a findings file elsewhere: teardown refuses without it, so then write it as the standalone summary that points at that deliverable.
 Keep your research notes file (quotes, URLs, dates) in \`$DATA/$ID/\` beside the report, never only in the worktree, and give every \`[read]\` or \`[sub]\` claim in the report its source URL.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
 $LAVISH_LINE

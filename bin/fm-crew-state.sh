@@ -255,8 +255,16 @@ fi
 # A ship `done:` is not current-state done while bin/fm-dod-lib.sh refuses the
 # named-head reachability gate: that claim is blocked so a disposable copy is
 # not treated as finished-and-safe.
+# A scout `done:` is not current-state done while its report file is missing:
+# that file is the work product bin/fm-teardown.sh requires, so the claim is
+# blocked on it and firstmate steers the scout to write it.
 emit_ship_status_done() {  # [extra-detail]
-  local extra=${1:-} reason
+  local extra=${1:-} reason report
+  if [ "$KIND" = scout ]; then
+    report="${FM_DATA_OVERRIDE:-$FM_HOME/data}/$ID/report.md"
+    [ -f "$report" ] \
+      || emit blocked status-log "scout reported done without its report at $report, which teardown requires; steer the scout to write it there"
+  fi
   if reason=$(fm_dod_accept_ship_done "$KIND" "$(meta_value mode)" "$WT" "$(meta_value project)" "$LOG_LINE" "$STATE" "$ID" "$META"); then
     emit "done" status-log "$(status_line_note "$LOG_LINE")${extra:+${SEP}$extra}"
   fi
