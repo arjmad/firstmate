@@ -27,7 +27,12 @@
 #   - the account lingers, because without linger the user manager, and every
 #     unit under it, stops when the account's last session ends, which would
 #     kill a server an SSH session merely started;
-#   - the user manager answers on its bus.
+#   - the user manager answers on its bus. A caller whose environment was
+#     emptied (the remote entrypoint runs commands under a fixed one) has no
+#     XDG_RUNTIME_DIR, so systemctl and systemd-run cannot find that bus; the
+#     account's own /run/user/<uid>, when it exists and is the account's,
+#     stands in, and the prefix carries it to systemd-run; without it the
+#     check reaches the bus however the environment allows, as before. FM_USER_RUNTIME_ROOT_OVERRIDE replaces /run/user in tests.
 #
 # Functions:
 #   fm_linux_slice_prefix [platform]
@@ -38,7 +43,7 @@
 #     prefix stays safe under `set -u` on bash 3.2.
 
 fm_linux_slice_prefix() { # [platform]
-  local platform=${1:-} user linger
+  local platform=${1:-} user linger runtime runtime_env=()
   # shellcheck disable=SC2034 # Sourceable API consumed by herdr.sh and fm-remote-job-lib.sh.
   FM_LINUX_SLICE_PREFIX=()
   [ -n "$platform" ] || platform=$(uname -s 2>/dev/null || true)
@@ -49,7 +54,13 @@ fm_linux_slice_prefix() { # [platform]
   user=$(id -un 2>/dev/null) || return 0
   linger=$(loginctl show-user "$user" --property=Linger --value 2>/dev/null) || return 0
   [ "$linger" = yes ] || return 0
-  systemctl --user show --property=Version --value >/dev/null 2>&1 || return 0
+  if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+    runtime="${FM_USER_RUNTIME_ROOT_OVERRIDE:-/run/user}/$(id -u 2>/dev/null)"
+    if [ -d "$runtime" ] && [ -O "$runtime" ]; then
+      runtime_env=(env "XDG_RUNTIME_DIR=$runtime")
+    fi
+  fi
+  ${runtime_env[@]+"${runtime_env[@]}"} systemctl --user show --property=Version --value >/dev/null 2>&1 || return 0
   # shellcheck disable=SC2034 # Sourceable API consumed by herdr.sh and fm-remote-job-lib.sh.
-  FM_LINUX_SLICE_PREFIX=(systemd-run --user --scope --quiet --collect --slice=firstmate.slice)
+  FM_LINUX_SLICE_PREFIX=(${runtime_env[@]+"${runtime_env[@]}"} systemd-run --user --scope --quiet --collect --slice=firstmate.slice)
 }

@@ -1289,11 +1289,42 @@ test_linux_slice_prefix_decision() {
   fm_test_fake_linux_user_manager "$fb"
   out=$(PATH="$fb:$PATH" FM_SYSTEMD_SLICE='' bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix Darwin; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
   [ "$out" = "[]" ] || fail "a non-Linux platform got a slice prefix: $out"
-  out=$(PATH="$fb:$PATH" FM_SYSTEMD_SLICE='' bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
+  out=$(XDG_RUNTIME_DIR="$dir" PATH="$fb:$PATH" FM_SYSTEMD_SLICE='' bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
   [ "$out" = "[systemd-run --user --scope --quiet --collect --slice=firstmate.slice]" ] || fail "the slice prefix is wrong: $out"
   out=$(PATH="$fb:$PATH" FM_SYSTEMD_SLICE=off bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
   [ "$out" = "[]" ] || fail "FM_SYSTEMD_SLICE=off kept a slice prefix: $out"
   pass "fm_linux_slice_prefix: Linux only, and FM_SYSTEMD_SLICE=off keeps the plain start"
+}
+
+# The remote entrypoint runs commands under an emptied environment, so neither
+# XDG_RUNTIME_DIR nor a bus address reaches the slice decision; the account's
+# own runtime directory stands in for both the check and systemd-run.
+test_linux_slice_prefix_finds_the_user_bus_without_xdg_runtime_dir() {
+  local dir fb out runroot uid
+  dir="$TMP_ROOT/slice-runtime"; mkdir -p "$dir/fakebin"; fb="$dir/fakebin"
+  fm_test_fake_linux_user_manager "$fb"
+  cat > "$fb/systemctl" <<'SH'
+#!/usr/bin/env bash
+[ -n "${XDG_RUNTIME_DIR:-}${DBUS_SESSION_BUS_ADDRESS:-}" ] || exit 1
+SH
+  chmod +x "$fb/systemctl"
+  uid=$(id -u); runroot="$dir/run"; mkdir -p "$runroot/$uid"
+  out=$(XDG_RUNTIME_DIR='' PATH="$fb:$PATH" FM_SYSTEMD_SLICE='' FM_USER_RUNTIME_ROOT_OVERRIDE="$runroot" \
+    bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
+  [ "$out" = "[env XDG_RUNTIME_DIR=$runroot/$uid systemd-run --user --scope --quiet --collect --slice=firstmate.slice]" ] ||
+    fail "without XDG_RUNTIME_DIR the slice prefix did not use the account's runtime directory: $out"
+  out=$(XDG_RUNTIME_DIR='' PATH="$fb:$PATH" FM_SYSTEMD_SLICE='' FM_USER_RUNTIME_ROOT_OVERRIDE="$dir/none" \
+    bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
+  [ "$out" = "[]" ] || fail "without any runtime directory the start was not plain: $out"
+  out=$(XDG_RUNTIME_DIR='' DBUS_SESSION_BUS_ADDRESS="unix:path=$dir/bus" PATH="$fb:$PATH" FM_SYSTEMD_SLICE='' FM_USER_RUNTIME_ROOT_OVERRIDE="$dir/none" \
+    bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
+  [ "$out" = "[systemd-run --user --scope --quiet --collect --slice=firstmate.slice]" ] ||
+    fail "a bus address without a runtime directory lost the slice: $out"
+  out=$(XDG_RUNTIME_DIR="$runroot/$uid" PATH="$fb:$PATH" FM_SYSTEMD_SLICE='' FM_USER_RUNTIME_ROOT_OVERRIDE="$dir/none" \
+    bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
+  [ "$out" = "[systemd-run --user --scope --quiet --collect --slice=firstmate.slice]" ] ||
+    fail "a set XDG_RUNTIME_DIR changed the slice prefix: $out"
+  pass "fm_linux_slice_prefix: finds the user bus through the account's runtime directory when XDG_RUNTIME_DIR is unset"
 }
 
 # A remote doctor --fix runs this with its own output redirected while an SSH
@@ -6266,6 +6297,7 @@ test_server_ensure_scrubs_home_and_harness_identity
 test_server_ensure_starts_in_firstmate_slice_on_lingering_linux
 test_server_ensure_keeps_plain_start_without_lingering_manager
 test_linux_slice_prefix_decision
+test_linux_slice_prefix_finds_the_user_bus_without_xdg_runtime_dir
 test_server_ensure_releases_caller_output
 test_container_ensure_reuses_existing_workspace
 test_container_ensure_creates_with_no_focus_flag
