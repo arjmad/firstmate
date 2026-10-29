@@ -12,6 +12,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/fixtures.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 # shellcheck source=tests/herdr-test-safety.sh
 . "$(dirname "${BASH_SOURCE[0]}")/herdr-test-safety.sh"
 # shellcheck source=tests/herdr-client-pair-fixture.sh
@@ -1233,6 +1235,65 @@ test_server_ensure_scrubs_home_and_harness_identity() {
   assert_contains "$output" "HERDR_SESSION=fmtest" "server_ensure lost explicit Herdr session routing"
   assert_contains "$output" "args=server --session fmtest" "server_ensure lost the trailing Herdr session flag"
   pass "fm_backend_herdr_server_ensure: scrubs home and harness identity without disturbing unrelated environment or session routing"
+}
+
+# On a Linux host whose account lingers, the server starts in firstmate's
+# systemd slice through a scope, so the host can give agent work limits of its
+# own (bin/fm-linux-slice-lib.sh); the scrubbed environment and the session
+# routing must survive that wrapper.
+test_server_ensure_starts_in_firstmate_slice_on_lingering_linux() {
+  local dir log marker fb output runlog
+  dir="$TMP_ROOT/server-slice"; mkdir -p "$dir"; log="$dir/env"; marker="$dir/running"; runlog="$dir/systemd-run"
+  fb=$(make_herdr_server_env_fakebin "$dir")
+  fm_test_fake_linux_user_manager "$fb"
+  PATH="$fb:$PATH" FM_HERDR_SERVER_ENV_LOG="$log" FM_HERDR_SERVER_MARKER="$marker" FM_SYSTEMD_RUN_LOG="$runlog" FM_SYSTEMD_SLICE='' \
+    FM_HOME=/tmp/wrong-home CLAUDECODE=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT"
+  expect_code 0 $? "server_ensure should start through a scope on a lingering Linux user manager"
+  assert_contains "$(cat "$runlog" 2>/dev/null)" "--user --scope --quiet --collect --slice=firstmate.slice" \
+    "server_ensure did not start the server in firstmate.slice"
+  output=$(cat "$log")
+  assert_contains "$output" "FM_HOME=<unset>" "server_ensure leaked FM_HOME through the scope wrapper"
+  assert_contains "$output" "CLAUDECODE=<unset>" "server_ensure leaked CLAUDECODE through the scope wrapper"
+  assert_contains "$output" "HERDR_SESSION=fmtest" "server_ensure lost Herdr session routing through the scope wrapper"
+  assert_contains "$output" "args=server --session fmtest" "server_ensure lost the server arguments through the scope wrapper"
+  pass "fm_backend_herdr_server_ensure: starts the server in firstmate.slice on a lingering Linux user manager"
+}
+
+# Without linger the user manager stops with the account's last session and
+# takes every unit under it along, and without a reachable manager there is
+# nothing to start a scope in, so either keeps the plain start.
+test_server_ensure_keeps_plain_start_without_lingering_manager() {
+  local dir marker fb runlog case_name linger rc
+  for case_name in no-linger no-manager; do
+    dir="$TMP_ROOT/server-slice-$case_name"; mkdir -p "$dir"; marker="$dir/running"; runlog="$dir/systemd-run"
+    fb=$(make_herdr_server_env_fakebin "$dir")
+    fm_test_fake_linux_user_manager "$fb"
+    linger=yes rc=0
+    case "$case_name" in no-linger) linger=no ;; no-manager) rc=1 ;; esac
+    PATH="$fb:$PATH" FM_HERDR_SERVER_ENV_LOG="$dir/env" FM_HERDR_SERVER_MARKER="$marker" FM_SYSTEMD_RUN_LOG="$runlog" FM_SYSTEMD_SLICE='' \
+      FM_FAKE_LINGER="$linger" FM_FAKE_USER_MANAGER_RC="$rc" \
+      bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT"
+    expect_code 0 $? "server_ensure should start plainly ($case_name)"
+    [ -e "$marker" ] || fail "server_ensure did not start the server ($case_name)"
+    [ ! -e "$runlog" ] || fail "server_ensure used systemd-run ($case_name): $(cat "$runlog")"
+  done
+  pass "fm_backend_herdr_server_ensure: keeps the plain start without linger or a reachable user manager"
+}
+
+# The slice decision itself: Linux only, and FM_SYSTEMD_SLICE=off keeps the
+# plain start.
+test_linux_slice_prefix_decision() {
+  local dir fb out
+  dir="$TMP_ROOT/slice-decision"; mkdir -p "$dir/fakebin"; fb="$dir/fakebin"
+  fm_test_fake_linux_user_manager "$fb"
+  out=$(PATH="$fb:$PATH" FM_SYSTEMD_SLICE='' bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix Darwin; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
+  [ "$out" = "[]" ] || fail "a non-Linux platform got a slice prefix: $out"
+  out=$(PATH="$fb:$PATH" FM_SYSTEMD_SLICE='' bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
+  [ "$out" = "[systemd-run --user --scope --quiet --collect --slice=firstmate.slice]" ] || fail "the slice prefix is wrong: $out"
+  out=$(PATH="$fb:$PATH" FM_SYSTEMD_SLICE=off bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
+  [ "$out" = "[]" ] || fail "FM_SYSTEMD_SLICE=off kept a slice prefix: $out"
+  pass "fm_linux_slice_prefix: Linux only, and FM_SYSTEMD_SLICE=off keeps the plain start"
 }
 
 # A remote doctor --fix runs this with its own output redirected while an SSH
@@ -6202,6 +6263,9 @@ test_workspace_ensure_other_home_ignores_the_launcher_identity
 test_container_ensure_refuses_an_ambiguous_home_label
 test_container_ensure_starts_server_and_workspace
 test_server_ensure_scrubs_home_and_harness_identity
+test_server_ensure_starts_in_firstmate_slice_on_lingering_linux
+test_server_ensure_keeps_plain_start_without_lingering_manager
+test_linux_slice_prefix_decision
 test_server_ensure_releases_caller_output
 test_container_ensure_reuses_existing_workspace
 test_container_ensure_creates_with_no_focus_flag

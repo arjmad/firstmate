@@ -62,6 +62,13 @@ export FM_LAVISH_PATCH=0
 # tests/fm-lavish-url.test.sh points it at a fake.
 export FM_TAILSCALE=fm-test-no-tailscale
 
+# Fake Herdr servers and remote job workers must never reach a real Linux user
+# manager: a lingering CI runner would start them through the real
+# systemd-run (bin/fm-linux-slice-lib.sh), adding a unit and a delay a fixture
+# does not model. Slice cases enable it with FM_SYSTEMD_SLICE= and a fake
+# user manager.
+export FM_SYSTEMD_SLICE=off
+
 # Clear the task-worker marker bin/fm-spawn.sh exports into ship and scout
 # panes. This suite builds git-init fixture repositories whose primary checkout
 # it runs a copied bin/fm-test-run.sh in, and that runner refuses the primary

@@ -317,6 +317,37 @@ SH
   chmod +x "$fakebin/$name"
 }
 
+# fm_test_fake_linux_user_manager <fakebin>
+# A Linux host's user manager as bin/fm-linux-slice-lib.sh sees it: `uname -s`
+# prints Linux, `loginctl show-user` prints FM_FAKE_LINGER (default yes),
+# `systemctl --user` exits FM_FAKE_USER_MANAGER_RC (default 0), and
+# `systemd-run` appends its argv and its own pid to FM_SYSTEMD_RUN_LOG, then
+# execs the command after its options in place, as a real `--scope` run does.
+fm_test_fake_linux_user_manager() {
+  local fakebin=$1
+  cat > "$fakebin/uname" <<'SH'
+#!/usr/bin/env bash
+printf 'Linux\n'
+SH
+  cat > "$fakebin/loginctl" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "${FM_FAKE_LINGER-yes}"
+SH
+  cat > "$fakebin/systemctl" <<'SH'
+#!/usr/bin/env bash
+exit "${FM_FAKE_USER_MANAGER_RC:-0}"
+SH
+  cat > "$fakebin/systemd-run" <<'SH'
+#!/usr/bin/env bash
+printf 'pid=%s argv=%s\n' "$$" "$*" >> "${FM_SYSTEMD_RUN_LOG:-/dev/null}"
+while [ "$#" -gt 0 ]; do
+  case "$1" in -*) shift ;; *) break ;; esac
+done
+exec "$@"
+SH
+  chmod +x "$fakebin/uname" "$fakebin/loginctl" "$fakebin/systemctl" "$fakebin/systemd-run"
+}
+
 # fm_test_fake_sleep_noop <fakebin>
 fm_test_fake_sleep_noop() {
   local fakebin=$1

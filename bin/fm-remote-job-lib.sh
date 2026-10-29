@@ -1424,11 +1424,21 @@ fm_remote_job_start_linux_worker() { # <remote-root> <account-home>
     wait "$pid" 2>/dev/null || true
     FM_REMOTE_JOB_REPAIRED=1
   fi
+  # Under a lingering user manager the worker, and every job it runs, goes in
+  # firstmate's slice rather than the launching SSH session's scope
+  # (bin/fm-linux-slice-lib.sh). A scope execs in place, so the pid and process
+  # group below are still the worker's own.
+  FM_LINUX_SLICE_PREFIX=()
+  if [ -f "$root/bin/fm-linux-slice-lib.sh" ] && [ ! -L "$root/bin/fm-linux-slice-lib.sh" ]; then
+    # shellcheck source=bin/fm-linux-slice-lib.sh
+    . "$root/bin/fm-linux-slice-lib.sh"
+    fm_linux_slice_prefix "$(fm_remote_job_platform)"
+  fi
   # Job control puts the worker tree in its own process group, so a later stop
   # can signal every descendant at once without ever reaching the caller's own
   # group. Without this the group of a leaked worker is the launching command's.
   set -m
-  nohup env \
+  nohup ${FM_LINUX_SLICE_PREFIX[@]+"${FM_LINUX_SLICE_PREFIX[@]}"} env \
     HOME="$account_home" \
     FM_ROOT_OVERRIDE="$root" \
     FM_REMOTE_JOB_STATE_ROOT="$FM_REMOTE_JOB_STATE" \
