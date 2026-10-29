@@ -232,6 +232,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-remote-file.sh` | Path-confined remote file transfer for `fm-on.sh` |
 | `fm-remote-herdr-guard.sh` | launchd target that makes the Aqua login session own the fm-remote Herdr server |
 | `fm-remote-herdr-owner-lib.sh` | Discover a Herdr socket's owner and whether it was born in the Aqua login session |
+| `fm-linux-slice-lib.sh` | Decide whether a Linux Herdr server or remote job worker starts in `firstmate.slice` under a lingering user manager |
 | `fm-remote-home-provision.sh` | Provision the remote FM_HOME selected by the fixed remote entrypoint |
 | `fm-remote-inherit-push.sh` | Push the declared inherited-material allowlist to one remote secondmate route |
 | `fm-remote-inherit.sh` | Apply one inherited item inside the selected remote home |

@@ -1429,7 +1429,7 @@ fm_remote_job_start_linux_worker() { # <remote-root> <account-home>
   # (bin/fm-linux-slice-lib.sh). A scope execs in place, so the pid and process
   # group below are still the worker's own.
   FM_LINUX_SLICE_PREFIX=()
-  if [ -f "$root/bin/fm-linux-slice-lib.sh" ]; then
+  if [ -f "$root/bin/fm-linux-slice-lib.sh" ] && [ ! -L "$root/bin/fm-linux-slice-lib.sh" ]; then
     # shellcheck source=bin/fm-linux-slice-lib.sh
     . "$root/bin/fm-linux-slice-lib.sh"
     fm_linux_slice_prefix "$(fm_remote_job_platform)"
