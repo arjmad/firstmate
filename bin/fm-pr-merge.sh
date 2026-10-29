@@ -248,7 +248,7 @@
 # complete refuses too. Once the forge confirms the merge, the merged commit
 # is checked the same way against the base tip read before it, and an undone
 # commit is reported as an actionable line without changing this script's exit,
-# because the merge has already landed. An attended --allow-revert, passed only
+# because the merge has already landed, or as a note when --allow-revert allowed it. An attended --allow-revert, passed only
 # on the captain's explicit word for a pull request whose point is undoing that
 # work, waives the pre-merge refusal for one merge; like --allow-red it is
 # refused while the away-posture record exists, and it is refused on GitLab and
@@ -1933,8 +1933,13 @@ github_report_merged_reverts() {
       "$FM_PR_REVERT_MERGED" "$REVERT_BASE_BRANCH" "$FM_PR_REVERT_SINCE" >&2
     return 0
   fi
-  printf 'actionable: merged %s, and the merged commit %s undid these commits on %s; restore them in a follow-up pull request:\n' \
-    "$URL" "$FM_PR_REVERT_MERGED" "$REVERT_BASE_BRANCH" >&2
+  if [ "$ALLOW_REVERT" = true ]; then
+    printf 'note: merged %s, and the merged commit %s undid these commits on %s, as --allow-revert allowed:\n' \
+      "$URL" "$FM_PR_REVERT_MERGED" "$REVERT_BASE_BRANCH" >&2
+  else
+    printf 'actionable: merged %s, and the merged commit %s undid these commits on %s; restore them in a follow-up pull request:\n' \
+      "$URL" "$FM_PR_REVERT_MERGED" "$REVERT_BASE_BRANCH" >&2
+  fi
   printf '%s' "$FM_PR_REVERT_FOUND" | sed 's/^/  - /' >&2
 }
 

@@ -15,10 +15,15 @@
 # caught.
 #
 # The candidates are the commits reachable from a starting commit on the base
-# branch whose committer date is at or after the window start: the earlier of
+# branch whose committer date is at or after the window start, the earlier of
 # the pull request's creation and the oldest author date among its own
 # commits, so work that landed while the pull request was open is checked even
-# when the branch was rebased past it. Before a merge the start is the merge
+# when the branch was rebased past it. The 10 newest commits reachable from it
+# are candidates too whatever their dates, but count as undone only when every
+# file such a commit changed is undone, which is what a branch opened and
+# committed afterwards from an older tree does; a later fix that restores only
+# some of an earlier commit's files is left alone, while a deliberate whole
+# revert of one is reported and only an attended waiver merges it. Before a merge the start is the merge
 # base of the base branch and the head, whose ancestors are all on the base;
 # after it, the base tip read before the merge, so the pull request's own
 # commits are never candidates. A starting commit with more than 99
@@ -63,12 +68,12 @@ fm_pr_revert_compare_paths() {
 # only when some candidate exists.
 fm_pr_revert_scan() {
   local repo=$1 tip=$2 from=$3 since=$4 dir candidates line sha parent subject
-  local count=0 cmp status n reverted
+  local count=0 cmp status n reverted recent
   shift 4
   FM_PR_REVERT_FOUND=
   FM_PR_REVERT_ERROR=
   if ! candidates=$(gh api "repos/$repo/commits?sha=$from&since=$since&per_page=100" \
-    --jq '"count\t\(length)", (.[] | ["c", .sha, (.parents[0].sha // ""), (.commit.message | split("\n")[0])] | @tsv)' 2>/dev/null); then
+    --jq '"count\t\(length)", (.[] | ["c", .sha, (.parents[0].sha // "-"), (.commit.message | split("\n")[0])] | @tsv)' 2>/dev/null); then
     FM_PR_REVERT_ERROR="the commits on the base branch since $since could not be read"
     return 1
   fi
@@ -76,11 +81,17 @@ fm_pr_revert_scan() {
     count$'\t'[0-9]*) count=${candidates%%$'\n'*}; count=${count#count$'\t'} ;;
     *) FM_PR_REVERT_ERROR="the commits on the base branch since $since could not be read"; return 1 ;;
   esac
-  [ "$count" -gt 0 ] || return 0
   if [ "$count" -ge 100 ]; then
     FM_PR_REVERT_ERROR="100 or more commits landed on the base branch since $since, more than can be checked"
     return 1
   fi
+  if ! recent=$(gh api "repos/$repo/commits?sha=$from&per_page=10" \
+    --jq '.[] | ["r", .sha, (.parents[0].sha // "-"), (.commit.message | split("\n")[0])] | @tsv' 2>/dev/null); then
+    FM_PR_REVERT_ERROR="the newest commits on the base branch could not be read"
+    return 1
+  fi
+  candidates=$(printf '%s\n%s\n' "$candidates" "$recent" | awk -F '\t' '($1 == "c" || $1 == "r") && !seen[$2]++')
+  [ -n "$candidates" ] || return 0
   dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-pr-revert.XXXXXX") || {
     FM_PR_REVERT_ERROR="no scratch directory could be made"
     return 1
@@ -92,19 +103,22 @@ fm_pr_revert_scan() {
   fi
   LC_ALL=C sort -u "$dir/raw" > "$dir/change"
   while IFS=$'\t' read -r line sha parent subject; do
-    [ "$line" = c ] || continue
+    case "$line" in c|r) ;; *) continue ;; esac
     if ! fm_pr_head_valid "$sha"; then
       FM_PR_REVERT_ERROR="the commits on the base branch since $since could not be read"
       break
     fi
     # A root commit has no earlier content to be restored to.
-    [ -n "$parent" ] || continue
+    [ "$parent" != - ] || continue
     if ! fm_pr_revert_list_files --paginate "repos/$repo/commits/$sha" > "$dir/raw" 2>/dev/null; then
       FM_PR_REVERT_ERROR="the files commit $sha changed could not be read"
       break
     fi
-    LC_ALL=C sort -u "$dir/raw" | LC_ALL=C comm -12 - "$dir/change" > "$dir/shared"
+    LC_ALL=C sort -u "$dir/raw" > "$dir/files"
+    LC_ALL=C comm -12 "$dir/files" "$dir/change" > "$dir/shared"
     [ -s "$dir/shared" ] || continue
+    # An older commit counts only when the change touches every file it changed.
+    [ "$line" = c ] || ! LC_ALL=C comm -23 "$dir/files" "$dir/change" | grep -q . || continue
     if ! cmp=$(gh api "repos/$repo/compare/$parent...$tip?per_page=1" \
       --jq '.status, (.files | length | tostring), (.files[]? | .filename, (.previous_filename // empty))' 2>/dev/null); then
       FM_PR_REVERT_ERROR="the change from $parent to $tip could not be read"
@@ -126,6 +140,7 @@ fm_pr_revert_scan() {
     printf '%s\n' "$cmp" | tail -n +3 | LC_ALL=C sort -u > "$dir/differs"
     LC_ALL=C comm -23 "$dir/shared" "$dir/differs" > "$dir/undone"
     [ -s "$dir/undone" ] || continue
+    [ "$line" = c ] || cmp -s "$dir/undone" "$dir/files" || continue
     reverted=$(wc -l < "$dir/undone" | tr -d ' ')
     FM_PR_REVERT_FOUND="$FM_PR_REVERT_FOUND${sha:0:12} $subject ($reverted file(s) back to their content before it: $(head -n 3 "$dir/undone" | paste -sd ',' - | sed 's/,/, /g')$([ "$reverted" -le 3 ] || printf ', and %s more' "$((reverted - 3))"))
 "

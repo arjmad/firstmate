@@ -268,7 +268,8 @@ revert_api() {
     */commits)
       a=$(printf '%s' "$query" | tr '&' '\n' | sed -n 's/^sha=//p')
       b=$(printf '%s' "$query" | tr '&' '\n' | sed -n 's/^since=//p')
-      git -C "$repo" log --since="$b" --format='%H%x09%P%x09%s' "$a" \
+      mb=$(printf '%s' "$query" | tr '&' '\n' | sed -n 's/^per_page=//p')
+      git -C "$repo" log ${b:+--since="$b"} -n "${mb:-30}" --format='%H%x09%P%x09%s' "$a" \
         | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t")
           | {sha: .[0], parents: (.[1] | split(" ") | map(select(length > 0) | {sha: .})), commit: {message: .[2]}})'
       ;;
@@ -5658,7 +5659,8 @@ test_one_way_approved_is_attended_only
 # stale (rebased onto that commit but committed from the tree before it, the
 # shape of a branch that silently undoes landed work), clean (on top of it,
 # adding only its own note), or old-base (branched before it, adding only its
-# own note). Every path is Markdown, so the code review gate reads exempt.
+# own note); stale-late is stale opened and committed only after that commit
+# landed, the way a worker opens its PR at the end. Every path is Markdown, so the code review gate reads exempt.
 # Leaves the landed commit in revert-landed and GitHub's squash of the head in
 # revert-merged. Args: case_dir variant
 add_revert_repo() {
@@ -5679,7 +5681,7 @@ add_revert_repo() {
   revert_commit 2026-01-03T00:00:00Z 'Land the second note'
   git -C "$repo" rev-parse HEAD > "$case_dir/revert-landed"
   case "$variant" in
-    stale)
+    stale|stale-late)
       git -C "$repo" checkout -q -b pr
       git -C "$repo" checkout -q "$base" -- notes
       rm "$repo/notes/c.md"
@@ -5689,6 +5691,7 @@ add_revert_repo() {
   esac
   printf 'mine\n' > "$repo/notes/d.md"
   revert_commit 2026-01-04T00:00:00Z 'Add my note'
+  [ "$variant" != stale-late ] || printf '2026-01-05T00:00:00Z\n' > "$case_dir/revert-created"
   head=$(git -C "$repo" rev-parse HEAD)
   git -C "$repo" checkout -q main
   tree=$(git -C "$repo" merge-tree --write-tree main "$head")
@@ -5718,12 +5721,22 @@ test_merge_that_undoes_landed_work_is_refused() {
   run_revert_merge "$case_dir"
   expect_code 1 "$RC" "landed-stale: a head that undoes landed work must be refused"$'\n'"$(cat "$case_dir/stderr")"
   assert_grep "would undo these commits already on main:" "$case_dir/stderr" \
-    "landed-stale: the refusal did not say what the merge undoes"
+    "landed-stale: the refusal did not say what the merge undoes"$'\n'"$(cat "$case_dir/stderr")"
   assert_grep "${landed:0:12} Land the second note (2 file(s) back to their content before it: notes/a.md, notes/c.md)" \
     "$case_dir/stderr" "landed-stale: the refusal did not name the undone commit and its files"
   assert_grep 'pass --allow-revert only on the captain' "$case_dir/stderr" \
     "landed-stale: the refusal did not name the captain's waiver"
   assert_no_grep 'pr merge' "$case_dir/gh.log" "landed-stale: gh pr merge ran for a head that undoes landed work"
+
+  # Opened and committed after the work landed, the head is still refused.
+  case_dir=$(make_case landed-stale-late)
+  mkdir -p "$case_dir/wt"
+  add_revert_repo "$case_dir" stale-late
+  run_revert_merge "$case_dir"
+  expect_code 1 "$RC" "landed-stale-late: a late PR that undoes recent landed work must be refused"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "${landed:0:12} Land the second note (2 file(s)" "$case_dir/stderr" \
+    "landed-stale-late: the refusal did not name the undone commit"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "landed-stale-late: gh pr merge ran for a late head that undoes landed work"
   pass "fm-pr-merge refuses a green PR whose head undoes a commit its base already holds, naming it"
 }
 
@@ -5787,6 +5800,13 @@ test_allow_revert_is_an_attended_github_waiver() {
   assert_grep "waived: merging https://github.com/example/repo/pull/90 undoes these commits on main, on the captain's word:" \
     "$case_dir/stderr" "landed-allow-revert: the waiver did not name what it waived"
   assert_logged_gh_merge "$case_dir" 90 example/repo --squash
+  # The merged commit undid that work as allowed, so nothing asks to restore it.
+  git -C "$case_dir/revert-repo" commit-tree "$(git -C "$case_dir/revert-repo" rev-parse "pr^{tree}")" -p main -m 'Add my note (#90)' \
+    > "$case_dir/revert-merged"
+  run_revert_merge "$case_dir" --allow-revert
+  assert_grep 'undid these commits on main, as --allow-revert allowed:' "$case_dir/stderr" \
+    "landed-allow-revert: an allowed revert was not reported as allowed"
+  assert_no_grep 'actionable:' "$case_dir/stderr" "landed-allow-revert: an allowed revert asked for a restore"
 
   case_dir=$(make_case landed-allow-revert-unreadable)
   mkdir -p "$case_dir/wt"
