@@ -192,8 +192,18 @@ case " $* " in
     echo 'gh: Not Found (HTTP 404)' >&2
     exit 1
     ;;
+  # The landed-work reads (bin/fm-pr-revert-lib.sh), already filtered as gh's
+  # --jq would print them: nothing landed since the pull request opened.
+  *" api repos/"*"/pulls/"*" --jq .created_at "*) printf '2026-01-01T00:00:00Z\n' ;;
+  *" api repos/"*"/pulls/"*" --jq .merge_commit_sha "*) printf '%s\n' 9999999999999999999999999999999999999999 ;;
   *" api repos/"*"/pulls/"*)
     printf '%s\n' "{\"state\":\"open\",\"user\":{\"login\":\"author\"},\"head\":{\"sha\":\"${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}\"},\"draft\":false,\"mergeable\":true,\"merged_at\":null}"
+    ;;
+  *" api repos/"*"/compare/"*)
+    printf '%s\n' '8888888888888888888888888888888888888888	8888888888888888888888888888888888888888	'
+    ;;
+  *" api repos/"*"/commits?"*)
+    printf 'count\t0\n'
     ;;
   *" api repos/"*)
     printf '%s\n' '{"permissions":{"push":false}}'

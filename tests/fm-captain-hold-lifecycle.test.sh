@@ -135,6 +135,16 @@ case "${1:-} ${2:-}" in
     ;;
   # Main keeps no risk-tiers.toml, so the path exemption decides.
   "api repos/"*"/contents/risk-tiers.toml?ref=main") echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
+  # The landed-work reads (bin/fm-pr-revert-lib.sh), already through their
+  # --jq filters: nothing landed since the pull request opened.
+  "api repos/"*"/pulls/"*)
+    case "${4:-}" in
+      .created_at*) printf '%s\n' 2026-01-01T00:00:00Z ;;
+      .merge_commit_sha*) printf '%s\n' 9999999999999999999999999999999999999999 ;;
+    esac
+    ;;
+  "api repos/"*"/compare/"*) printf '%s\t%s\t\n' 8888888888888888888888888888888888888888 8888888888888888888888888888888888888888 ;;
+  "api repos/"*"/commits?"*) printf 'count\t0\n' ;;
   "api repos/"*) printf '%s\n' '{"name":"main","protected":false}' ;;
 esac
 SH

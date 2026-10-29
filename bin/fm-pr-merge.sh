@@ -228,7 +228,7 @@
 # GitHub, so it carries the merge-gate code review; the task record says
 # yolo=on, so its standing posture already lets firstmate merge it; no
 # override flag is passed (--attended-override, --allow-red, --allow-missing,
-# --waive-review, --one-way-approved), so it is green at its live head and
+# --waive-review, --one-way-approved, --allow-revert), so it is green at its live head and
 # reviewed under the ordinary gates below; and its Merge Danger names an
 # explicit two-way door, so a body with no Door line is not enough; and the
 # task's pr= already names the URL, so it is the task's ready PR. Anything
@@ -240,7 +240,21 @@
 # publishes a silent landed branch outcome rather than a check wake
 # (bin/fm-merge-outcome-lib.sh, origin branch). The away posture is unchanged:
 # a branch under a live away record merges under away authority as before.
-# Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [--allow-no-pipeline] [--waive-review <reason>] [--one-way-approved] [-- <extra forge merge args>]
+# Landed work (fork patch, docs/fork-decisions.md 2026-10-28): after the live
+# green check, a GitHub merge, companion PRs included, is refused when merging
+# the verified head would undo a commit its base branch already holds, naming
+# each such commit and the files it would restore; bin/fm-pr-revert-lib.sh owns
+# which commits are checked and what counts as undone, and a check it cannot
+# complete refuses too. Once the forge confirms the merge, the merged commit
+# is checked the same way against the base tip read before it, and an undone
+# commit is reported as an actionable line without changing this script's exit,
+# because the merge has already landed, or as a note when --allow-revert allowed it;
+# a merge left in the merge queue is not checked again when it lands. An attended --allow-revert, passed only
+# on the captain's explicit word for a pull request whose point is undoing that
+# work, waives the pre-merge refusal for one merge; like --allow-red it is
+# refused while the away-posture record exists, and it is refused on GitLab and
+# Forgejo, whose merges this check does not read yet.
+# Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [--allow-no-pipeline] [--waive-review <reason>] [--one-way-approved] [--allow-revert] [-- <extra forge merge args>]
 #
 # On GitLab, this script confirms the MR is actually merged before reporting it;
 # an auto-merge-queued or unconfirmed request leaves the poll armed and records
@@ -272,6 +286,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-merge-authority-lib.sh"
 # shellcheck source=bin/fm-afk-contract.sh
 . "$SCRIPT_DIR/fm-afk-contract.sh"
+# shellcheck source=bin/fm-pr-revert-lib.sh
+. "$SCRIPT_DIR/fm-pr-revert-lib.sh"
 
 if [ "$#" -lt 2 ]; then
   echo "error: invalid PR merge request" >&2
@@ -311,8 +327,17 @@ ALLOW_RED=()
 ALLOW_MISSING=()
 WAIVE_REVIEW=
 ONE_WAY_APPROVED=false
+ALLOW_REVERT=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --allow-revert)
+      ALLOW_REVERT=true
+      shift
+      ;;
+    --allow-revert=*)
+      echo "error: --allow-revert takes no value" >&2
+      exit 2
+      ;;
     --one-way-approved)
       ONE_WAY_APPROVED=true
       shift
@@ -392,6 +417,10 @@ if [ "${#ALLOW_RED[@]}" -gt 0 ]; then
       exit 2
       ;;
   esac
+fi
+if [ "$ALLOW_REVERT" = true ] && [ "$PROVIDER" != github ]; then
+  echo "error: --allow-revert applies only to GitHub, the one forge whose merges are checked for undone landed work" >&2
+  exit 2
 fi
 if [ -n "$WAIVE_REVIEW" ] && [ "$PROVIDER" != github ]; then
   echo "error: --waive-review applies only to GitHub, the one forge whose merges carry a code review" >&2
@@ -602,6 +631,7 @@ require_merge_actor() {
   [ "$ATTENDED_OVERRIDE" = false ] && [ "${#ALLOW_RED[@]}" -eq 0 ] \
     && [ "${#ALLOW_MISSING[@]}" -eq 0 ] && [ -z "$WAIVE_REVIEW" ] \
     && [ "$ONE_WAY_APPROVED" = false ] && [ "$ALLOW_NO_PIPELINE" = false ] \
+    && [ "$ALLOW_REVERT" = false ] \
     || reasons="$reasons"$'\n'"  - an override flag needs the captain's word through main"
   case "$FM_PR_DOOR" in
     ''|two-way) ;;
@@ -1637,6 +1667,10 @@ require_current_away_authority() {
     echo "error: --one-way-approved is attended-only; while the away-posture record exists a one-way door waits for the captain's return" >&2
     return 2
   fi
+  if [ "$FM_PR_AWAY_POSTURE" = true ] && [ "$ALLOW_REVERT" = true ]; then
+    echo "error: --allow-revert is attended-only; while the away-posture record exists a merge never undoes landed work" >&2
+    return 2
+  fi
 }
 
 # The Merge Danger reading (see the header). Reads the PR body on stdin and
@@ -1852,6 +1886,66 @@ require_code_review() {
   esac
   echo "error: run Claude Code's /code-review --comment on the pull request, fix or answer each finding, then record it with bin/fm-code-review.sh record $URL (docs/task-lifecycle.md); only an explicit captain instruction may pass --waive-review <reason>" >&2
   return 1
+}
+
+# The pre-merge landed-work check (see the header) at the verified head.
+REVERT_BASE_BRANCH=
+github_verify_no_revert() {
+  local rc=0
+  # The outcome read after the merge may reset FM_PR_GITHUB_BASE.
+  REVERT_BASE_BRANCH=$FM_PR_GITHUB_BASE
+  fm_pr_revert_check_pr "$PR_OWNER/$PR_REPO" "$PR_NUMBER" "$FM_PR_GITHUB_BASE" "$FM_PR_MERGE_HEAD" || rc=$?
+  [ -z "$FM_PR_REVERT_NOTE" ] || printf 'note: %s\n' "$FM_PR_REVERT_NOTE" >&2
+  if [ "$rc" -eq 0 ] && [ -z "$FM_PR_REVERT_FOUND" ]; then
+    printf 'verified: merging %s at head %s undoes no commit landed on %s since %s\n' \
+      "$URL" "$FM_PR_MERGE_HEAD" "$FM_PR_GITHUB_BASE" "$FM_PR_REVERT_SINCE" >&2
+    return 0
+  fi
+  if [ "$ALLOW_REVERT" = true ]; then
+    if [ "$rc" -eq 0 ]; then
+      printf 'waived: merging %s undoes these commits on %s, on the captain'"'"'s word:\n' "$URL" "$FM_PR_GITHUB_BASE" >&2
+      printf '%s' "$FM_PR_REVERT_FOUND" | sed 's/^/  - /' >&2
+    else
+      printf 'waived: whether merging %s undoes landed work could not be read (%s), on the captain'"'"'s word\n' \
+        "$URL" "$FM_PR_REVERT_ERROR" >&2
+    fi
+    return 0
+  fi
+  printf 'error: refusing to merge %s\n' "$URL" >&2
+  if [ "$rc" -eq 0 ]; then
+    printf '  - merging head %s would undo these commits already on %s:\n' "$FM_PR_MERGE_HEAD" "$FM_PR_GITHUB_BASE" >&2
+    printf '%s' "$FM_PR_REVERT_FOUND" | sed 's/^/    /' >&2
+    echo "error: the head restores files those commits changed, as a branch reset or rebased onto $FM_PR_GITHUB_BASE and committed from a stale tree does; rebuild the branch on $FM_PR_GITHUB_BASE with only its own change, or pass --allow-revert only on the captain's explicit word when undoing them is the point" >&2
+  else
+    printf '  - whether merging it undoes landed work could not be read: %s\n' "$FM_PR_REVERT_ERROR" >&2
+    echo "error: retry the merge; when the same read keeps failing, only the captain's explicit word may pass --allow-revert" >&2
+  fi
+  return 1
+}
+
+# The post-merge landed-work check (see the header): reports, never refuses.
+github_report_merged_reverts() {
+  local level=actionable
+  [ "$ALLOW_REVERT" = false ] || level=note
+  if ! fm_pr_revert_check_merged "$PR_OWNER/$PR_REPO" "$PR_NUMBER"; then
+    printf '%s: merged %s, but whether the merged commit undid landed work could not be read: %s\n' \
+      "$level" "$URL" "$FM_PR_REVERT_ERROR" >&2
+    return 0
+  fi
+  [ -z "$FM_PR_REVERT_NOTE" ] || printf 'note: %s\n' "$FM_PR_REVERT_NOTE" >&2
+  if [ -z "$FM_PR_REVERT_FOUND" ]; then
+    printf 'verified: the merged commit %s undoes no commit landed on %s since %s\n' \
+      "$FM_PR_REVERT_MERGED" "$REVERT_BASE_BRANCH" "$FM_PR_REVERT_SINCE" >&2
+    return 0
+  fi
+  if [ "$ALLOW_REVERT" = true ]; then
+    printf 'note: merged %s, and the merged commit %s undid these commits on %s, as --allow-revert allowed:\n' \
+      "$URL" "$FM_PR_REVERT_MERGED" "$REVERT_BASE_BRANCH" >&2
+  else
+    printf 'actionable: merged %s, and the merged commit %s undid these commits on %s; restore them in a follow-up pull request:\n' \
+      "$URL" "$FM_PR_REVERT_MERGED" "$REVERT_BASE_BRANCH" >&2
+  fi
+  printf '%s' "$FM_PR_REVERT_FOUND" | sed 's/^/  - /' >&2
 }
 
 # Called only once the forge accepted the merge, so the log holds waived merges
@@ -2121,6 +2215,7 @@ case "$PROVIDER" in
       fi
       exit 1
     fi
+    github_verify_no_revert || exit 1
     require_code_review || exit 1
     require_door_authority || exit 1
     # The away record is locked first, so this last presence and authority read
@@ -2168,6 +2263,7 @@ case "$PROVIDER" in
           FM_PR_FORGE_TOOK_MERGE=true
           printf 'actionable: the merge command for %s failed, but the pull request reads back as state=%s, merged=%s, isInMergeQueue=%s\n' \
             "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED" >&2
+          [ "$FM_PR_GITHUB_MERGED" != true ] || github_report_merged_reverts
         fi
       fi
       exit "$merge_status"
@@ -2180,6 +2276,7 @@ case "$PROVIDER" in
       printf 'verified: %s is merged (state=%s, merged=%s, isInMergeQueue=%s)\n' \
         "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED"
       log_one_way_merge
+      github_report_merged_reverts
     elif [ "$FM_PR_GITHUB_QUEUED" = true ]; then
       printf 'verified: %s is queued (state=%s, merged=%s, isInMergeQueue=%s)\n' \
         "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED"
