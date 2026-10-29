@@ -18,17 +18,19 @@
 # branch whose committer date is at or after the window start, the earlier of
 # the pull request's creation and the oldest author date among its own
 # commits, so work that landed while the pull request was open is checked even
-# when the branch was rebased past it. The 10 newest commits reachable from it
-# are candidates too whatever their dates, but count as undone only when every
-# file such a commit changed is undone, which is what a branch opened and
-# committed afterwards from an older tree does; a later fix that restores only
-# some of an earlier commit's files is left alone, while a deliberate whole
-# revert of one is reported and only an attended waiver merges it. Before a merge the start is the merge
-# base of the base branch and the head, whose ancestors are all on the base;
-# after it, the base tip read before the merge, so the pull request's own
-# commits are never candidates. A starting commit with more than 99
-# candidates, or a compare whose file list reaches GitHub's 300-file cap,
-# cannot be read completely and is reported unreadable rather than judged.
+# when the branch was rebased past it; only the 30 newest of them are read, and
+# FM_PR_REVERT_NOTE says so when more landed. The 10 newest commits reachable
+# from it are candidates too whatever their dates, but count as undone only
+# when every file such a commit changed is undone, which is what a branch
+# opened and committed afterwards from an older tree does; a later fix that
+# restores only some of an earlier commit's files is left alone, while a
+# deliberate whole revert of one is reported and only an attended waiver
+# merges it. A file the change renames away is never counted as undone. Before
+# a merge the start is the merge base of the base branch and the head, whose
+# ancestors are all on the base; after it, the base tip read before the merge,
+# so the pull request's own commits are never candidates. A compare that
+# reaches GitHub's 300-file cap is read again from both git trees; a truncated
+# tree, or any read that fails, is reported unreadable rather than judged.
 #
 # Every function returns 0 once the question was answered, with
 # FM_PR_REVERT_FOUND holding one line per undone commit (empty when none),
@@ -36,15 +38,19 @@
 
 FM_PR_REVERT_FOUND=
 FM_PR_REVERT_ERROR=
+FM_PR_REVERT_NOTE=
 FM_PR_REVERT_BASE_TIP=
 FM_PR_REVERT_SINCE=
 FM_PR_REVERT_MERGED=
+# Each read commit's changed paths as "<sha><TAB><path>" lines, so the check
+# after a merge does not read them again.
+FM_PR_REVERT_FILES_CACHE=
 
-# A GitHub file list on stdout, one path per line, for paths named by gh's
-# filename and previous_filename fields. Args: endpoint, with --paginate first
-# when the endpoint pages its files.
+# A GitHub file list on stdout as "N<TAB><path>" lines, plus "R<TAB><path>" for
+# each rename source. Args: endpoint, with --paginate first when the endpoint
+# pages its files.
 fm_pr_revert_list_files() {
-  gh api "$@" --jq '(if type == "array" then .[] else .files[]? end) | .filename, (.previous_filename // empty)'
+  gh api "$@" --jq '(if type == "array" then .[] else .files[]? end) | "N\t" + .filename, (.previous_filename // empty | "R\t" + .)'
 }
 
 # The paths a pull request changes, read from its paginated file list.
@@ -58,21 +64,32 @@ fm_pr_revert_pr_paths() {
 fm_pr_revert_compare_paths() {
   local out
   out=$(gh api "repos/$1/compare/$2...$3?per_page=1" \
-    --jq '(.files | length | tostring), (.files[]? | .filename, (.previous_filename // empty))') || return 1
+    --jq '(.files | length | tostring), (.files[]? | "N\t" + .filename, (.previous_filename // empty | "R\t" + .))') || return 1
   [ "${out%%$'\n'*}" -lt 300 ] 2>/dev/null || return 1
   printf '%s\n' "$out" | tail -n +2
 }
 
+# One git tree's blobs as "<path><TAB><sha>" lines, sorted. Fails on a
+# truncated tree. Args: owner/repo commit
+fm_pr_revert_tree() {
+  local out
+  out=$(gh api "repos/$1/git/trees/$2?recursive=1" \
+    --jq '(.truncated | tostring), (.tree[] | select(.type == "blob") | .path + "\t" + .sha)') || return 1
+  [ "${out%%$'\n'*}" = false ] || return 1
+  printf '%s\n' "$out" | tail -n +2 | LC_ALL=C sort
+}
+
 # The scan itself. Args: owner/repo tip from since paths-command...
-# The paths command prints the change being checked, one path per line; it runs
-# only when some candidate exists.
+# The paths command prints the change being checked in fm_pr_revert_list_files
+# form; it runs only when some candidate exists.
 fm_pr_revert_scan() {
   local repo=$1 tip=$2 from=$3 since=$4 dir candidates line sha parent subject
-  local count=0 cmp status n reverted recent
+  local count=0 cmp status n reverted recent path tab=$'\t'
   shift 4
   FM_PR_REVERT_FOUND=
   FM_PR_REVERT_ERROR=
-  if ! candidates=$(gh api "repos/$repo/commits?sha=$from&since=$since&per_page=100" \
+  FM_PR_REVERT_NOTE=
+  if ! candidates=$(gh api "repos/$repo/commits?sha=$from&since=$since&per_page=30" \
     --jq '"count\t\(length)", (.[] | ["c", .sha, (.parents[0].sha // "-"), (.commit.message | split("\n")[0])] | @tsv)' 2>/dev/null); then
     FM_PR_REVERT_ERROR="the commits on the base branch since $since could not be read"
     return 1
@@ -81,10 +98,9 @@ fm_pr_revert_scan() {
     count$'\t'[0-9]*) count=${candidates%%$'\n'*}; count=${count#count$'\t'} ;;
     *) FM_PR_REVERT_ERROR="the commits on the base branch since $since could not be read"; return 1 ;;
   esac
-  if [ "$count" -ge 100 ]; then
-    FM_PR_REVERT_ERROR="100 or more commits landed on the base branch since $since, more than can be checked"
-    return 1
-  fi
+  # shellcheck disable=SC2034 # read by the sourcing script
+  [ "$count" -lt 30 ] \
+    || FM_PR_REVERT_NOTE="only the 30 newest commits landed on the base branch since $since were checked"
   if ! recent=$(gh api "repos/$repo/commits?sha=$from&per_page=10" \
     --jq '.[] | ["r", .sha, (.parents[0].sha // "-"), (.commit.message | split("\n")[0])] | @tsv' 2>/dev/null); then
     FM_PR_REVERT_ERROR="the newest commits on the base branch could not be read"
@@ -101,7 +117,8 @@ fm_pr_revert_scan() {
     FM_PR_REVERT_ERROR="the files of the change being checked could not be read"
     return 1
   fi
-  LC_ALL=C sort -u "$dir/raw" > "$dir/change"
+  cut -f2- "$dir/raw" | LC_ALL=C sort -u > "$dir/change"
+  sed -n 's/^R\t//p' "$dir/raw" | LC_ALL=C sort -u > "$dir/renamed"
   while IFS=$'\t' read -r line sha parent subject; do
     case "$line" in c|r) ;; *) continue ;; esac
     if ! fm_pr_head_valid "$sha"; then
@@ -110,12 +127,18 @@ fm_pr_revert_scan() {
     fi
     # A root commit has no earlier content to be restored to.
     [ "$parent" != - ] || continue
-    if ! fm_pr_revert_list_files --paginate "repos/$repo/commits/$sha" > "$dir/raw" 2>/dev/null; then
-      FM_PR_REVERT_ERROR="the files commit $sha changed could not be read"
-      break
+    if ! printf '%s\n' "$FM_PR_REVERT_FILES_CACHE" | grep -q "^$sha$tab"; then
+      if ! fm_pr_revert_list_files --paginate "repos/$repo/commits/$sha" > "$dir/raw" 2>/dev/null; then
+        FM_PR_REVERT_ERROR="the files commit $sha changed could not be read"
+        break
+      fi
+      # A commit that changed no file still gets a row, so it is not read again.
+      FM_PR_REVERT_FILES_CACHE="$FM_PR_REVERT_FILES_CACHE$sha$tab
+$(cut -f2- "$dir/raw" | sed "s/^/$sha$tab/")
+"
     fi
-    LC_ALL=C sort -u "$dir/raw" > "$dir/files"
-    LC_ALL=C comm -12 "$dir/files" "$dir/change" > "$dir/shared"
+    printf '%s\n' "$FM_PR_REVERT_FILES_CACHE" | sed -n "s/^$sha$tab//p" | sed '/^$/d' | LC_ALL=C sort -u > "$dir/files"
+    LC_ALL=C comm -12 "$dir/files" "$dir/change" | LC_ALL=C comm -23 - "$dir/renamed" > "$dir/shared"
     [ -s "$dir/shared" ] || continue
     # An older commit counts only when the change touches every file it changed.
     [ "$line" = c ] || ! LC_ALL=C comm -23 "$dir/files" "$dir/change" | grep -q . || continue
@@ -133,11 +156,23 @@ fm_pr_revert_scan() {
         break
         ;;
     esac
-    if ! [ "$n" -lt 300 ] 2>/dev/null; then
-      FM_PR_REVERT_ERROR="the change from $parent to $tip reaches GitHub's 300-file compare cap"
-      break
+    if [ "$n" -lt 300 ] 2>/dev/null; then
+      printf '%s\n' "$cmp" | tail -n +3 | LC_ALL=C sort -u > "$dir/differs"
+    else
+      # The compare stops listing at its cap, so both trees decide instead.
+      if { [ -s "$dir/tip-tree" ] || fm_pr_revert_tree "$repo" "$tip" > "$dir/tip-tree"; } \
+        && fm_pr_revert_tree "$repo" "$parent" > "$dir/parent-tree"; then
+        : > "$dir/differs"
+        while IFS= read -r path; do
+          [ "$(awk -F '\t' -v p="$path" '$1 == p { print $2 }' "$dir/tip-tree")" \
+            = "$(awk -F '\t' -v p="$path" '$1 == p { print $2 }' "$dir/parent-tree")" ] \
+            || printf '%s\n' "$path" >> "$dir/differs"
+        done < "$dir/shared"
+      else
+        FM_PR_REVERT_ERROR="the trees of $parent and $tip could not be read completely"
+        break
+      fi
     fi
-    printf '%s\n' "$cmp" | tail -n +3 | LC_ALL=C sort -u > "$dir/differs"
     LC_ALL=C comm -23 "$dir/shared" "$dir/differs" > "$dir/undone"
     [ -s "$dir/undone" ] || continue
     [ "$line" = c ] || cmp -s "$dir/undone" "$dir/files" || continue

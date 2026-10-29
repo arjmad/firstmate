@@ -230,7 +230,7 @@ revert_files_json() {
     | if (.[0] | startswith("R")) then {filename: .[2], previous_filename: .[1]} else {filename: .[1]} end)'
 }
 revert_api() {
-  local endpoint='' arg repo="$fixtures/revert-repo" query a b mb status
+  local endpoint='' arg repo="$fixtures/revert-repo" query a b mb status files
   for arg in "$@"; do
     case "$arg" in repos/*) endpoint=$arg; break ;; esac
   done
@@ -242,6 +242,7 @@ revert_api() {
       */pulls/*) printf '{"created_at":"2026-01-01T00:00:00Z","merge_commit_sha":"9999999999999999999999999999999999999999"}\n' ;;
       */compare/*) printf '{"status":"ahead","merge_base_commit":{"sha":"8888888888888888888888888888888888888888"},"base_commit":{"sha":"8888888888888888888888888888888888888888"},"commits":[],"files":[]}\n' ;;
       */commits) printf '[]\n' ;;
+      */git/trees/*) printf '{"truncated":false,"tree":[]}\n' ;;
       *) printf '{"files":[]}\n' ;;
     esac
     return 0
@@ -260,8 +261,13 @@ revert_api() {
       elif [ "$mb" = "$a" ]; then status=ahead
       elif [ "$mb" = "$b" ]; then status=behind
       else status=diverged; fi
+      # A compare from the capped commit lists GitHub's 300 files at most.
+      files=$(git -C "$repo" diff --name-status -M "$mb" "$b" | revert_files_json)
+      if [ "$a" = "$(cat "$fixtures/revert-compare-cap" 2>/dev/null)" ]; then
+        files=$(jq -nc '[range(300) | {filename: "filler/\(.)"}]')
+      fi
       jq -nc --arg s "$status" --arg mb "$mb" --arg base "$a" \
-        --argjson files "$(git -C "$repo" diff --name-status -M "$mb" "$b" | revert_files_json)" \
+        --argjson files "$files" \
         --argjson dates "$(TZ=UTC git -C "$repo" log --format=%ad --date=format-local:%Y-%m-%dT%H:%M:%SZ "$mb..$b" | jq -Rsc 'split("\n") | map(select(length > 0))')" \
         '{status: $s, merge_base_commit: {sha: $mb}, base_commit: {sha: $base}, files: $files, commits: ($dates | map({commit: {author: {date: .}}}))}'
       ;;
@@ -272,6 +278,11 @@ revert_api() {
       git -C "$repo" log ${b:+--since="$b"} -n "${mb:-30}" --format='%H%x09%P%x09%s' "$a" \
         | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t")
           | {sha: .[0], parents: (.[1] | split(" ") | map(select(length > 0) | {sha: .})), commit: {message: .[2]}})'
+      ;;
+    */git/trees/*)
+      git -C "$repo" ls-tree -r "${endpoint##*/git/trees/}" \
+        | jq -Rsc '{truncated: false, tree: (split("\n") | map(select(length > 0) | split("\t") as $f
+          | ($f[0] | split(" ")) as $m | {path: $f[1], type: $m[1], sha: $m[2]}))}'
       ;;
     */commits/*)
       a=${endpoint##*/commits/}
@@ -402,7 +413,7 @@ case "${1:-} ${2:-}" in
         cat "$FM_TEST_GH_RUNS"
         exit $?
         ;;
-      *" repos/"*"/pulls/"*|*" repos/"*"/compare/"*|*" repos/"*"/commits"*)
+      *" repos/"*"/pulls/"*|*" repos/"*"/compare/"*|*" repos/"*"/commits"*|*" repos/"*"/git/trees/"*)
         # The landed-work reads (bin/fm-pr-revert-lib.sh), answered from the
         # case's revert-repo git fixture the way GitHub's REST API would, or
         # with nothing landed when the case keeps none.
@@ -5660,7 +5671,9 @@ test_one_way_approved_is_attended_only
 # shape of a branch that silently undoes landed work), clean (on top of it,
 # adding only its own note), or old-base (branched before it, adding only its
 # own note); stale-late is stale opened and committed only after that commit
-# landed, the way a worker opens its PR at the end. Every path is Markdown, so the code review gate reads exempt.
+# landed, the way a worker opens its PR at the end; followup is clean but also
+# edits the landed commit's changed note again; renamed is clean but also
+# renames the landed commit's new note away. Every path is Markdown, so the code review gate reads exempt.
 # Leaves the landed commit in revert-landed and GitHub's squash of the head in
 # revert-merged. Args: case_dir variant
 add_revert_repo() {
@@ -5687,6 +5700,14 @@ add_revert_repo() {
       rm "$repo/notes/c.md"
       ;;
     clean) git -C "$repo" checkout -q -b pr ;;
+    followup)
+      git -C "$repo" checkout -q -b pr
+      printf 'three\n' > "$repo/notes/a.md"
+      ;;
+    renamed)
+      git -C "$repo" checkout -q -b pr
+      git -C "$repo" mv notes/c.md notes/e.md
+      ;;
     old-base) git -C "$repo" checkout -q -b pr "$base" ;;
   esac
   printf 'mine\n' > "$repo/notes/d.md"
@@ -5697,8 +5718,11 @@ add_revert_repo() {
   tree=$(git -C "$repo" merge-tree --write-tree main "$head")
   git -C "$repo" commit-tree "$tree" -p main -m 'Add my note (#90)' > "$case_dir/revert-merged"
   add_gh_mocks "$case_dir" "$head"
-  # shellcheck disable=SC2046 # One argument per changed path.
-  write_github_pr_files "$case_dir" $(git -C "$repo" diff --name-only "$(git -C "$repo" merge-base main "$head")" "$head")
+  # The pull request's files as GitHub lists them, rename sources included.
+  git -C "$repo" diff --name-status -M "$(git -C "$repo" merge-base main "$head")" "$head" \
+    | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t")
+      | if (.[0] | startswith("R")) then {filename: .[2], previous_filename: .[1]} else {filename: .[1]} end)' \
+    > "$case_dir/github-pr-files.json"
 }
 
 # Args: case_dir [merge args]...; sets RC.
@@ -5728,6 +5752,16 @@ test_merge_that_undoes_landed_work_is_refused() {
     "landed-stale: the refusal did not name the captain's waiver"
   assert_no_grep 'pr merge' "$case_dir/gh.log" "landed-stale: gh pr merge ran for a head that undoes landed work"
 
+  # A compare at GitHub's 300-file cap is decided from both trees instead.
+  case_dir=$(make_case landed-stale-capped)
+  mkdir -p "$case_dir/wt"
+  add_revert_repo "$case_dir" stale
+  git -C "$case_dir/revert-repo" rev-parse "$landed^" > "$case_dir/revert-compare-cap"
+  run_revert_merge "$case_dir"
+  expect_code 1 "$RC" "landed-stale-capped: a capped compare must still refuse"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "${landed:0:12} Land the second note (2 file(s) back to their content before it: notes/a.md, notes/c.md)" \
+    "$case_dir/stderr" "landed-stale-capped: the trees did not name the undone files"
+
   # Opened and committed after the work landed, the head is still refused.
   case_dir=$(make_case landed-stale-late)
   mkdir -p "$case_dir/wt"
@@ -5742,7 +5776,7 @@ test_merge_that_undoes_landed_work_is_refused() {
 
 test_merge_that_keeps_landed_work_verifies_both_sides() {
   local case_dir variant
-  for variant in clean old-base; do
+  for variant in clean old-base followup renamed; do
     case_dir=$(make_case "landed-$variant")
     mkdir -p "$case_dir/wt"
     add_revert_repo "$case_dir" "$variant"
@@ -5753,7 +5787,20 @@ test_merge_that_keeps_landed_work_verifies_both_sides() {
     assert_grep "verified: the merged commit $(cat "$case_dir/revert-merged") undoes no commit" "$case_dir/stderr" \
       "landed-$variant: the merged commit was not checked"
     assert_logged_gh_merge "$case_dir" 90 example/repo --squash
+    # The check after the merge reuses the landed commit's files.
+    [ "$(grep -c "repos/example/repo/commits/$(cat "$case_dir/revert-landed") " "$case_dir/gh.log")" -le 1 ] \
+      || fail "landed-$variant: the landed commit's files were read twice"
   done
+
+  # A compare at GitHub's 300-file cap is decided from both trees, which show
+  # the head keeps the landed note.
+  case_dir=$(make_case landed-followup-capped)
+  mkdir -p "$case_dir/wt"
+  add_revert_repo "$case_dir" followup
+  git -C "$case_dir/revert-repo" rev-parse "$(cat "$case_dir/revert-landed")^" > "$case_dir/revert-compare-cap"
+  run_revert_merge "$case_dir"
+  expect_code 0 "$RC" "landed-followup-capped: a capped compare of a head that keeps landed work must merge"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep 'git/trees/' "$case_dir/gh.log" "landed-followup-capped: the trees were not read"
   pass "fm-pr-merge merges a PR that keeps landed work and checks the merged commit too"
 }
 

@@ -248,7 +248,8 @@
 # complete refuses too. Once the forge confirms the merge, the merged commit
 # is checked the same way against the base tip read before it, and an undone
 # commit is reported as an actionable line without changing this script's exit,
-# because the merge has already landed, or as a note when --allow-revert allowed it. An attended --allow-revert, passed only
+# because the merge has already landed, or as a note when --allow-revert allowed it;
+# a merge left in the merge queue is not checked again when it lands. An attended --allow-revert, passed only
 # on the captain's explicit word for a pull request whose point is undoing that
 # work, waives the pre-merge refusal for one merge; like --allow-red it is
 # refused while the away-posture record exists, and it is refused on GitLab and
@@ -1894,6 +1895,7 @@ github_verify_no_revert() {
   # The outcome read after the merge may reset FM_PR_GITHUB_BASE.
   REVERT_BASE_BRANCH=$FM_PR_GITHUB_BASE
   fm_pr_revert_check_pr "$PR_OWNER/$PR_REPO" "$PR_NUMBER" "$FM_PR_GITHUB_BASE" "$FM_PR_MERGE_HEAD" || rc=$?
+  [ -z "$FM_PR_REVERT_NOTE" ] || printf 'note: %s\n' "$FM_PR_REVERT_NOTE" >&2
   if [ "$rc" -eq 0 ] && [ -z "$FM_PR_REVERT_FOUND" ]; then
     printf 'verified: merging %s at head %s undoes no commit landed on %s since %s\n' \
       "$URL" "$FM_PR_MERGE_HEAD" "$FM_PR_GITHUB_BASE" "$FM_PR_REVERT_SINCE" >&2
@@ -1916,18 +1918,21 @@ github_verify_no_revert() {
     echo "error: the head restores files those commits changed, as a branch reset or rebased onto $FM_PR_GITHUB_BASE and committed from a stale tree does; rebuild the branch on $FM_PR_GITHUB_BASE with only its own change, or pass --allow-revert only on the captain's explicit word when undoing them is the point" >&2
   else
     printf '  - whether merging it undoes landed work could not be read: %s\n' "$FM_PR_REVERT_ERROR" >&2
-    echo "error: retry once GitHub answers; only the captain's explicit word may pass --allow-revert" >&2
+    echo "error: retry the merge; when the same read keeps failing, only the captain's explicit word may pass --allow-revert" >&2
   fi
   return 1
 }
 
 # The post-merge landed-work check (see the header): reports, never refuses.
 github_report_merged_reverts() {
+  local level=actionable
+  [ "$ALLOW_REVERT" = false ] || level=note
   if ! fm_pr_revert_check_merged "$PR_OWNER/$PR_REPO" "$PR_NUMBER"; then
-    printf 'actionable: merged %s, but whether the merged commit undid landed work could not be read: %s\n' \
-      "$URL" "$FM_PR_REVERT_ERROR" >&2
+    printf '%s: merged %s, but whether the merged commit undid landed work could not be read: %s\n' \
+      "$level" "$URL" "$FM_PR_REVERT_ERROR" >&2
     return 0
   fi
+  [ -z "$FM_PR_REVERT_NOTE" ] || printf 'note: %s\n' "$FM_PR_REVERT_NOTE" >&2
   if [ -z "$FM_PR_REVERT_FOUND" ]; then
     printf 'verified: the merged commit %s undoes no commit landed on %s since %s\n' \
       "$FM_PR_REVERT_MERGED" "$REVERT_BASE_BRANCH" "$FM_PR_REVERT_SINCE" >&2
@@ -2258,6 +2263,7 @@ case "$PROVIDER" in
           FM_PR_FORGE_TOOK_MERGE=true
           printf 'actionable: the merge command for %s failed, but the pull request reads back as state=%s, merged=%s, isInMergeQueue=%s\n' \
             "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED" >&2
+          [ "$FM_PR_GITHUB_MERGED" != true ] || github_report_merged_reverts
         fi
       fi
       exit "$merge_status"
