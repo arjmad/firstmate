@@ -245,7 +245,7 @@ fm_test_fake_linux_user_manager "$CASE3/fakebin"
 # The platform comes from FM_REMOTE_JOB_PLATFORM_OVERRIDE, and the worker
 # itself must see the real uname.
 rm -f "$CASE3/fakebin/uname"
-SLICE_WORKER=$(PATH="$CASE3/fakebin:$PATH" FM_SYSTEMD_RUN_LOG="$CASE3/systemd-run" FM_SYSTEMD_SLICE= \
+SLICE_WORKER=$(PATH="$CASE3/fakebin:$PATH" FM_SYSTEMD_RUN_LOG="$CASE3/systemd-run" FM_SYSTEMD_SLICE='' \
   start_worker "$CASE3/remote-root" "$CASE3/account" "$CASE3/remote-jobs") ||
   fail "could not start the fixture remote job worker under the fake user manager"
 track "$SLICE_WORKER"

@@ -1246,7 +1246,7 @@ test_server_ensure_starts_in_firstmate_slice_on_lingering_linux() {
   dir="$TMP_ROOT/server-slice"; mkdir -p "$dir"; log="$dir/env"; marker="$dir/running"; runlog="$dir/systemd-run"
   fb=$(make_herdr_server_env_fakebin "$dir")
   fm_test_fake_linux_user_manager "$fb"
-  PATH="$fb:$PATH" FM_HERDR_SERVER_ENV_LOG="$log" FM_HERDR_SERVER_MARKER="$marker" FM_SYSTEMD_RUN_LOG="$runlog" FM_SYSTEMD_SLICE= \
+  PATH="$fb:$PATH" FM_HERDR_SERVER_ENV_LOG="$log" FM_HERDR_SERVER_MARKER="$marker" FM_SYSTEMD_RUN_LOG="$runlog" FM_SYSTEMD_SLICE='' \
     FM_HOME=/tmp/wrong-home CLAUDECODE=1 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT"
   expect_code 0 $? "server_ensure should start through a scope on a lingering Linux user manager"
@@ -1271,7 +1271,7 @@ test_server_ensure_keeps_plain_start_without_lingering_manager() {
     fm_test_fake_linux_user_manager "$fb"
     linger=yes rc=0
     case "$case_name" in no-linger) linger=no ;; no-manager) rc=1 ;; esac
-    PATH="$fb:$PATH" FM_HERDR_SERVER_ENV_LOG="$dir/env" FM_HERDR_SERVER_MARKER="$marker" FM_SYSTEMD_RUN_LOG="$runlog" FM_SYSTEMD_SLICE= \
+    PATH="$fb:$PATH" FM_HERDR_SERVER_ENV_LOG="$dir/env" FM_HERDR_SERVER_MARKER="$marker" FM_SYSTEMD_RUN_LOG="$runlog" FM_SYSTEMD_SLICE='' \
       FM_FAKE_LINGER="$linger" FM_FAKE_USER_MANAGER_RC="$rc" \
       bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT"
     expect_code 0 $? "server_ensure should start plainly ($case_name)"
@@ -1287,9 +1287,9 @@ test_linux_slice_prefix_decision() {
   local dir fb out
   dir="$TMP_ROOT/slice-decision"; mkdir -p "$dir/fakebin"; fb="$dir/fakebin"
   fm_test_fake_linux_user_manager "$fb"
-  out=$(PATH="$fb:$PATH" FM_SYSTEMD_SLICE= bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix Darwin; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
+  out=$(PATH="$fb:$PATH" FM_SYSTEMD_SLICE='' bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix Darwin; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
   [ "$out" = "[]" ] || fail "a non-Linux platform got a slice prefix: $out"
-  out=$(PATH="$fb:$PATH" FM_SYSTEMD_SLICE= bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
+  out=$(PATH="$fb:$PATH" FM_SYSTEMD_SLICE='' bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
   [ "$out" = "[systemd-run --user --scope --quiet --collect --slice=firstmate.slice]" ] || fail "the slice prefix is wrong: $out"
   out=$(PATH="$fb:$PATH" FM_SYSTEMD_SLICE=off bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
   [ "$out" = "[]" ] || fail "FM_SYSTEMD_SLICE=off kept a slice prefix: $out"
