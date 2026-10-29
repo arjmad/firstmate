@@ -1281,8 +1281,8 @@ test_server_ensure_keeps_plain_start_without_lingering_manager() {
   pass "fm_backend_herdr_server_ensure: keeps the plain start without linger or a reachable user manager"
 }
 
-# The slice decision itself: Linux only, FM_SYSTEMD_SLICE names another slice
-# or turns it off, and a value that is not a slice unit is ignored.
+# The slice decision itself: Linux only, and FM_SYSTEMD_SLICE=off keeps the
+# plain start.
 test_linux_slice_prefix_decision() {
   local dir fb out
   dir="$TMP_ROOT/slice-decision"; mkdir -p "$dir/fakebin"; fb="$dir/fakebin"
@@ -1290,14 +1290,10 @@ test_linux_slice_prefix_decision() {
   out=$(PATH="$fb:$PATH" bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix Darwin; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
   [ "$out" = "[]" ] || fail "a non-Linux platform got a slice prefix: $out"
   out=$(PATH="$fb:$PATH" bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
-  [ "$out" = "[systemd-run --user --scope --quiet --collect --slice=firstmate.slice]" ] || fail "the default slice prefix is wrong: $out"
-  out=$(PATH="$fb:$PATH" FM_SYSTEMD_SLICE=agents.slice bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
-  [ "$out" = "[systemd-run --user --scope --quiet --collect --slice=agents.slice]" ] || fail "FM_SYSTEMD_SLICE did not name the slice: $out"
+  [ "$out" = "[systemd-run --user --scope --quiet --collect --slice=firstmate.slice]" ] || fail "the slice prefix is wrong: $out"
   out=$(PATH="$fb:$PATH" FM_SYSTEMD_SLICE=off bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
   [ "$out" = "[]" ] || fail "FM_SYSTEMD_SLICE=off kept a slice prefix: $out"
-  out=$(PATH="$fb:$PATH" FM_SYSTEMD_SLICE=agents bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
-  [ "$out" = "[]" ] || fail "a FM_SYSTEMD_SLICE that is not a slice unit was used: $out"
-  pass "fm_linux_slice_prefix: Linux only, overridable by FM_SYSTEMD_SLICE, off disables, non-slice values ignored"
+  pass "fm_linux_slice_prefix: Linux only, and FM_SYSTEMD_SLICE=off keeps the plain start"
 }
 
 # A remote doctor --fix runs this with its own output redirected while an SSH

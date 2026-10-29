@@ -22,7 +22,7 @@
 # The slice is used only when all of these hold, and otherwise the command
 # starts as before, in the caller's own scope:
 #   - the platform is Linux;
-#   - FM_SYSTEMD_SLICE is not `off` (it names another slice when set);
+#   - FM_SYSTEMD_SLICE is not `off`, the one value it takes;
 #   - systemd-run and loginctl resolve;
 #   - the account lingers, because without linger the user manager, and every
 #     unit under it, stops when the account's last session ends, which would
@@ -37,20 +37,19 @@
 #     ${FM_LINUX_SLICE_PREFIX[@]+"${FM_LINUX_SLICE_PREFIX[@]}"} so an empty
 #     prefix stays safe under `set -u` on bash 3.2.
 
-FM_LINUX_SLICE_DEFAULT=firstmate.slice
-
 fm_linux_slice_prefix() { # [platform]
-  local platform=${1:-} slice=${FM_SYSTEMD_SLICE:-$FM_LINUX_SLICE_DEFAULT} user linger
+  local platform=${1:-} user linger
+  # shellcheck disable=SC2034 # Sourceable API consumed by herdr.sh and fm-remote-job-lib.sh.
   FM_LINUX_SLICE_PREFIX=()
   [ -n "$platform" ] || platform=$(uname -s 2>/dev/null || true)
   case "$platform" in Linux|linux) ;; *) return 0 ;; esac
-  [ "$slice" != off ] || return 0
-  case "$slice" in *.slice) ;; *) return 0 ;; esac
+  [ "${FM_SYSTEMD_SLICE:-}" != off ] || return 0
   command -v systemd-run >/dev/null 2>&1 || return 0
   command -v loginctl >/dev/null 2>&1 || return 0
   user=$(id -un 2>/dev/null) || return 0
   linger=$(loginctl show-user "$user" --property=Linger --value 2>/dev/null) || return 0
   [ "$linger" = yes ] || return 0
   systemctl --user show --property=Version --value >/dev/null 2>&1 || return 0
-  FM_LINUX_SLICE_PREFIX=(systemd-run --user --scope --quiet --collect "--slice=$slice")
+  # shellcheck disable=SC2034 # Sourceable API consumed by herdr.sh and fm-remote-job-lib.sh.
+  FM_LINUX_SLICE_PREFIX=(systemd-run --user --scope --quiet --collect --slice=firstmate.slice)
 }

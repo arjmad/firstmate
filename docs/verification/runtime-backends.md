@@ -1511,6 +1511,7 @@ cat /proc/$p/cgroup
 The pid `$!` recorded is the command itself, which leads its own process group, and its cgroup is under the user manager rather than the SSH session's scope.
 A dash in a slice name nests it (`fm-probe.slice` landed under `fm.slice`), which is why the default slice is the undashed `firstmate.slice`.
 The same account read `Linger=no` from `loginctl show-user`, which is why the library keeps the plain start without linger: the user manager, and every unit under it, stops with the account's last session.
+Because of that, the lingering production path, a scope in `firstmate.slice` outliving the SSH session that started it, is not measured here.
 `bin/fm-test-run.sh tests/fm-backend-herdr.test.sh tests/fm-remote-job-orphan-reap.test.sh` pins the decision and the in-place start against a fake user manager.
 
 ### Client selection

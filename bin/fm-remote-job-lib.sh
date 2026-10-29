@@ -150,9 +150,6 @@ fm_remote_job_validate_settings() {
   return 0
 }
 
-# This library's own directory, for the libraries it sources on demand.
-FM_REMOTE_JOB_LIB_DIR=$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd -P)
-
 fm_remote_job_platform() {
   local raw=${FM_REMOTE_JOB_PLATFORM_OVERRIDE:-}
   [ -n "$raw" ] || raw=$(uname -s 2>/dev/null || true)
@@ -1432,9 +1429,9 @@ fm_remote_job_start_linux_worker() { # <remote-root> <account-home>
   # (bin/fm-linux-slice-lib.sh). A scope execs in place, so the pid and process
   # group below are still the worker's own.
   FM_LINUX_SLICE_PREFIX=()
-  if [ -f "$FM_REMOTE_JOB_LIB_DIR/fm-linux-slice-lib.sh" ]; then
+  if [ -f "$root/bin/fm-linux-slice-lib.sh" ]; then
     # shellcheck source=bin/fm-linux-slice-lib.sh
-    . "$FM_REMOTE_JOB_LIB_DIR/fm-linux-slice-lib.sh"
+    . "$root/bin/fm-linux-slice-lib.sh"
     fm_linux_slice_prefix "$(fm_remote_job_platform)"
   fi
   # Job control puts the worker tree in its own process group, so a later stop

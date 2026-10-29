@@ -83,7 +83,7 @@ After that bootstrap, every non-doctor `fm-on.sh` target runs through that worke
 It never runs in the SSH process or a Herdr pane.
 Linux uses the same queue and worker protocol without the Aqua-session requirement.
 On Linux, when the account lingers and its systemd user manager answers, the worker and the `fm-remote` Herdr server start in the user manager's `firstmate.slice` rather than the SSH session that started them, so every agent and job they spawn inherits it.
-Firstmate only names the slice; the host declares its limits, for example in `~/.config/systemd/user/firstmate.slice`, and `FM_SYSTEMD_SLICE` names another slice or `off` keeps the plain start.
+Firstmate only names the slice; the host declares its limits, for example in `~/.config/systemd/user/firstmate.slice`, and `FM_SYSTEMD_SLICE=off` keeps the plain start.
 The [`fm-linux-slice-lib.sh` header](../bin/fm-linux-slice-lib.sh) owns the conditions.
 The [`fm-remote-job-worker.sh` header](../bin/fm-remote-job-worker.sh) owns dispatch cadence and the quiet-scan latency for work arriving after its post-activity burst.
 Active-command and result waits use a separate sampling interval; the [`fm-remote-job-lib.sh` header](../bin/fm-remote-job-lib.sh) owns its defaults, overrides, and completion, cancellation, and timeout latency contract.
