@@ -1289,7 +1289,7 @@ test_linux_slice_prefix_decision() {
   fm_test_fake_linux_user_manager "$fb"
   out=$(PATH="$fb:$PATH" FM_SYSTEMD_SLICE='' bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix Darwin; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
   [ "$out" = "[]" ] || fail "a non-Linux platform got a slice prefix: $out"
-  out=$(PATH="$fb:$PATH" FM_SYSTEMD_SLICE='' bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
+  out=$(XDG_RUNTIME_DIR="$dir" PATH="$fb:$PATH" FM_SYSTEMD_SLICE='' bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
   [ "$out" = "[systemd-run --user --scope --quiet --collect --slice=firstmate.slice]" ] || fail "the slice prefix is wrong: $out"
   out=$(PATH="$fb:$PATH" FM_SYSTEMD_SLICE=off bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
   [ "$out" = "[]" ] || fail "FM_SYSTEMD_SLICE=off kept a slice prefix: $out"
@@ -1305,7 +1305,7 @@ test_linux_slice_prefix_finds_the_user_bus_without_xdg_runtime_dir() {
   fm_test_fake_linux_user_manager "$fb"
   cat > "$fb/systemctl" <<'SH'
 #!/usr/bin/env bash
-[ -n "${XDG_RUNTIME_DIR:-}" ] || exit 1
+[ -n "${XDG_RUNTIME_DIR:-}${DBUS_SESSION_BUS_ADDRESS:-}" ] || exit 1
 SH
   chmod +x "$fb/systemctl"
   uid=$(id -u); runroot="$dir/run"; mkdir -p "$runroot/$uid"
@@ -1316,6 +1316,10 @@ SH
   out=$(XDG_RUNTIME_DIR='' PATH="$fb:$PATH" FM_SYSTEMD_SLICE='' FM_USER_RUNTIME_ROOT_OVERRIDE="$dir/none" \
     bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
   [ "$out" = "[]" ] || fail "without any runtime directory the start was not plain: $out"
+  out=$(XDG_RUNTIME_DIR='' DBUS_SESSION_BUS_ADDRESS="unix:path=$dir/bus" PATH="$fb:$PATH" FM_SYSTEMD_SLICE='' FM_USER_RUNTIME_ROOT_OVERRIDE="$dir/none" \
+    bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
+  [ "$out" = "[systemd-run --user --scope --quiet --collect --slice=firstmate.slice]" ] ||
+    fail "a bus address without a runtime directory lost the slice: $out"
   out=$(XDG_RUNTIME_DIR="$runroot/$uid" PATH="$fb:$PATH" FM_SYSTEMD_SLICE='' FM_USER_RUNTIME_ROOT_OVERRIDE="$dir/none" \
     bash -c '. "$0/bin/fm-linux-slice-lib.sh"; fm_linux_slice_prefix; printf "[%s]" "${FM_LINUX_SLICE_PREFIX[*]-}"' "$ROOT")
   [ "$out" = "[systemd-run --user --scope --quiet --collect --slice=firstmate.slice]" ] ||
