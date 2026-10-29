@@ -323,8 +323,13 @@ SH
 # `systemctl --user` exits FM_FAKE_USER_MANAGER_RC (default 0), and
 # `systemd-run` appends its argv and its own pid to FM_SYSTEMD_RUN_LOG, then
 # execs the command after its options in place, as a real `--scope` run does.
+# It also exports XDG_RUNTIME_DIR as an owned directory beside <fakebin>, the
+# runtime directory a real user manager gives a login, so the decision does not
+# depend on the host running the test.
 fm_test_fake_linux_user_manager() {
   local fakebin=$1
+  mkdir -p "$fakebin.runtime"
+  export XDG_RUNTIME_DIR="$fakebin.runtime"
   cat > "$fakebin/uname" <<'SH'
 #!/usr/bin/env bash
 printf 'Linux\n'
