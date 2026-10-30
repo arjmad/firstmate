@@ -1107,6 +1107,16 @@ test_portable_shard_union_and_coverage_guard() {
 # measured hint and the packing over those hints stays even. Both halves went
 # unchecked until one lane grew past its CI job cap and was cancelled on every
 # run, so assert them through the guard's own reported numbers.
+test_check_coverage_is_locale_independent() {
+  # comm must agree with the C-collated sort feeding it under any caller locale.
+  local loc out
+  loc=$(locale -a 2>/dev/null | grep -iE '^(en_US|C)\.utf-?8$' | head -1 || true)
+  [ -n "$loc" ] || { echo "skip: no UTF-8 locale installed"; return 0; }
+  out=$(LC_ALL=$loc LANG=$loc "$RUNNER" --check-coverage 2>&1) \
+    || fail "check-coverage failed under $loc: $out"
+  assert_contains "$out" "FM_TEST_COVERAGE ok" "coverage guard under $loc"
+}
+
 test_portable_parallel_lanes_stay_duration_balanced() {
   local out max imbalance unhinted
   out=$("$RUNNER" --check-coverage)
@@ -1880,6 +1890,7 @@ test_exclude_family
 test_list_scheduled_proven_isolated_uses_serial_weights
 test_list_scheduled_non_lane_selections_use_serial_weights
 test_portable_shard_union_and_coverage_guard
+test_check_coverage_is_locale_independent
 test_portable_parallel_lanes_stay_duration_balanced
 test_portable_serial_shards_partition_the_serial_lane
 test_portable_serial_hint_coverage_is_reported_and_bounded
