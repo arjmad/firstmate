@@ -312,7 +312,7 @@ cmd_source_id() {
 }
 
 cmd_arm() {
-  local artifact='' task='' reply_file='' id real owner listening
+  local artifact='' task='' reply_file='' id real owner listening link
   local -a listener=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -341,6 +341,14 @@ cmd_arm() {
   id=$(cmd_source_id "$artifact") || exit 1
   real=$(perl -MCwd=realpath -e '$p = realpath($ARGV[0]); defined($p) or exit 1; print "$p\n"' "$artifact" 2>/dev/null) \
     || die "cannot resolve the artifact path: $artifact"
+  # Every poll routes through the board's saved session, which only opening the
+  # board writes, so a never-opened board would be armed over a listener that
+  # dies on its first lookup. Open it the way adoption does, never `--reopen`.
+  if ! saved_session "$real" >/dev/null 2>&1; then
+    lavish-axi "$real" >/dev/null 2>&1 || true
+    saved_session "$real" >/dev/null 2>&1 \
+      || die "the board has no saved Lavish session and opening it with lavish-axi did not create one, so no listener could reach it: $artifact"
+  fi
   listener=("$SCRIPT_DIR/fm-procevent-lavish.sh" poll "$real")
   [ -z "$reply_file" ] || listener+=(--agent-reply-file "$reply_file")
   if [ -n "$task" ]; then
@@ -377,6 +385,8 @@ cmd_arm() {
   printf 'armed: %s\n' "$id"
   printf 'artifact: %s\n' "$real"
   [ -z "$task" ] || printf 'owner-task: %s\n' "$task"
+  link=$(saved_session "$real" url 2>/dev/null) && printf 'link: %s\n' "$(phone_link "$link")"
+  return 0
 }
 
 # The server's own session listing, keyed on the canonical artifact path. Rows
