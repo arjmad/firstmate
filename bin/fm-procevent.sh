@@ -2002,17 +2002,20 @@ confirm_launched_runners() {  # <source-id><TAB><registration-identity><TAB><lau
 }
 
 # 0 when this registration generation holds a live claim, 3 when another
-# generation does, 2 when the source lock is busy so nothing was read, 1
-# otherwise.
+# generation does, 2 when the source lock is busy or the claim is uncertain or
+# leaderless so there is no verdict yet, 1 otherwise.
 generation_is_listening() {  # <source-id> <registration-identity>
   local id=$1 identity=$2 state result=1
   fm_procevent_source_lock_try_acquire "$id" || return 2
   fm_procevent_claim_state_locked "$id"
   state=$?
-  if [ "$state" -eq 0 ]; then
-    result=3
-    [ "$FM_PROCEVENT_CLAIM_REG_IDENTITY" != "$identity" ] || result=0
-  fi
+  case "$state" in
+    0)
+      result=3
+      [ "$FM_PROCEVENT_CLAIM_REG_IDENTITY" != "$identity" ] || result=0
+      ;;
+    2|3) result=2 ;;
+  esac
   fm_procevent_source_lock_release "$id"
   return "$result"
 }
@@ -2031,16 +2034,24 @@ generation_can_launch() {  # <source-id>
   return "$result"
 }
 
-# A runner that is gone after launching its source command either completed it,
-# which captured a result or retired or replaced the registration, or exited
-# with no result at all.
-listener_completed() {  # <source-id> <registration-identity> <next-sequence-before>
+# The verdict on a runner that is gone after launching its source command: 0
+# when it completed, which captured a result or retired or replaced the
+# registration, otherwise a dead listener that exited with no result at all.
+ended_listener_verdict() {  # <source-id> <registration-identity> <next-sequence-before>
   local registration
   [ "$(next_result_sequence "$1")" = "$3" ] || return 0
   registration=$(source_file "$1")
   [ -f "$registration" ] && [ ! -L "$registration" ] || return 0
   [ "$(fm_pr_file_identity "$registration" 2>/dev/null || true)" = "$2" ] || return 0
+  printf 'error: listener exited without a result: %s\n' "$1" >&2
   return 1
+}
+
+# 0 once a full launch floor has passed since <stamp>, a launch-stamp value, so
+# a runner that held the claim then and has not stamped since is not pacing.
+launch_floor_passed() {  # <stamp> <floor-seconds>
+  perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC \
+    -e 'exit(clock_gettime(CLOCK_MONOTONIC) - $ARGV[0] >= $ARGV[1] ? 0 : 1)' "$1" "$2"
 }
 
 # Public readiness for one source. A claim proves only that a runner exists: it
@@ -2049,7 +2060,8 @@ listener_completed() {  # <source-id> <registration-identity> <next-sequence-bef
 # as no result and exits. So readiness is this generation's runner still alive
 # across ENSURE_LISTENING_SETTLE_CHECKS consecutive checks once the launch stamp
 # shows its source command started, or across them from a claim already held
-# when this was called. A runner that is gone after that launch, or one that
+# when this was called once that claim's runner cannot still be waiting out its
+# launch floor. A runner that is gone after that launch, or one that
 # held the claim on entry and is gone, without completing is a dead listener
 # and a nonzero result. A claim alone is never readiness: a runner still alive
 # when the window ends gets ENSURE_LISTENING_OVERTIME_CHECKS more checks to
@@ -2066,7 +2078,7 @@ ENSURE_LISTENING_OVERTIME_CHECKS=40
 cmd_ensure_listening() {
   local id=${1-} identity before mark stamp deadline window started_once=0 listening seen=1
   local results_before child_started=0 preexisting='' held=0 runner_pid='' runner_identity='' runner_state
-  local overtime=0
+  local overtime=0 floor prior_launched=0
   [ "$#" -eq 1 ] || usage
   fm_procevent_source_id_valid "$id" || die "source id must be path-safe: $id"
   window=$(fm_procevent_launch_confirm_seconds) \
@@ -2075,6 +2087,8 @@ cmd_ensure_listening() {
     || die "source is not registered: $id"
   identity=$(fm_pr_file_identity "$(source_file "$id")" 2>/dev/null) \
     || die "cannot identify the registration: $id"
+  floor=$(fm_procevent_launch_floor_seconds) \
+    || die "FM_PROCEVENT_LAUNCH_FLOOR_SECONDS must be whole seconds from $FM_PROCEVENT_LAUNCH_FLOOR_MIN_SECONDS to $FM_PROCEVENT_LAUNCH_FLOOR_MAX_SECONDS"
   results_before=$(next_result_sequence "$id")
   before=
   if stamp=$(fm_procevent_launch_floor_stamp_path "$STATE" "$id" "$identity"); then
@@ -2094,7 +2108,14 @@ cmd_ensure_listening() {
       fm_procevent_pid_state "$runner_pid" "$runner_identity" || runner_state=$?
       case "$runner_state" in
         0)
-          if [ "$child_started" -eq 1 ] || [ "$preexisting" = 1 ]; then
+          # A runner that held the claim on entry launched before this call
+          # only if the last stamp is a full floor old; otherwise it may still
+          # be pacing, and its own stamp will show the launch.
+          if [ "$preexisting" = 1 ] && [ "$prior_launched" -eq 0 ] && [ -n "$before" ] \
+            && launch_floor_passed "$before" "$floor"; then
+            prior_launched=1
+          fi
+          if [ "$child_started" -eq 1 ] || [ "$prior_launched" -eq 1 ]; then
             held=$((held + 1))
             [ "$held" -lt "$ENSURE_LISTENING_SETTLE_CHECKS" ] || return 0
           fi
@@ -2104,9 +2125,8 @@ cmd_ensure_listening() {
           held=0
           seen=1
           if [ "$child_started" -eq 1 ] || [ "$preexisting" = 1 ]; then
-            listener_completed "$id" "$identity" "$results_before" && return 0
-            printf 'error: listener exited without a result: %s\n' "$id" >&2
-            return 1
+            ended_listener_verdict "$id" "$identity" "$results_before"
+            return
           fi
           ;;
       esac
@@ -2125,9 +2145,8 @@ cmd_ensure_listening() {
           ;;
         1)
           if [ "$child_started" -eq 1 ]; then
-            listener_completed "$id" "$identity" "$results_before" && return 0
-            printf 'error: listener exited without a result: %s\n' "$id" >&2
-            return 1
+            ended_listener_verdict "$id" "$identity" "$results_before"
+            return
           fi
           ;;
       esac

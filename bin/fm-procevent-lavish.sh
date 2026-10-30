@@ -312,7 +312,7 @@ cmd_source_id() {
 }
 
 cmd_arm() {
-  local artifact='' task='' reply_file='' id real owner listening link
+  local artifact='' task='' reply_file='' id real owner listening link session_error
   local -a listener=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -346,8 +346,8 @@ cmd_arm() {
   # dies on its first lookup. Open it the way adoption does, never `--reopen`.
   if ! saved_session "$real" >/dev/null 2>&1; then
     lavish-axi "$real" >/dev/null 2>&1 || true
-    saved_session "$real" >/dev/null 2>&1 \
-      || die "the board has no saved Lavish session and opening it with lavish-axi did not create one, so no listener could reach it: $artifact"
+    session_error=$(saved_session "$real" 2>&1 >/dev/null) \
+      || die "the board has no usable saved Lavish session even after opening it with lavish-axi (${session_error:-no reason given}), so no listener could reach it: $artifact"
   fi
   listener=("$SCRIPT_DIR/fm-procevent-lavish.sh" poll "$real")
   [ -z "$reply_file" ] || listener+=(--agent-reply-file "$reply_file")

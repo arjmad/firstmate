@@ -2197,7 +2197,7 @@ A long-polling external process is registered as a *source* through its adapter,
 **Open the Lavish artifact first**
 
 Before arming any Lavish source, open its artifact with `lavish-axi` so the saved session identifies the board's server; reply and poll attempts derive their host and port from that session and refuse missing or invalid session evidence before posting or consuming a staged worker reply.
-`bin/fm-procevent-lavish.sh arm` enforces that prerequisite: a board with no usable saved session is opened with a plain `lavish-axi <artifact>`, never `--reopen`, and when that still leaves none the arm fails with `no saved Lavish session` before registering anything, so it never reports a listener whose first poll would die.
+`bin/fm-procevent-lavish.sh arm` enforces that prerequisite: a board with no usable saved session is opened with a plain `lavish-axi <artifact>`, never `--reopen`, and when that still leaves none the arm fails with `no usable saved Lavish session` and the session store's own reason before registering anything, so it never reports a listener whose first poll would die.
 
 **Retry interrupted Lavish polls**
 

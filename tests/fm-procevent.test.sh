@@ -5444,8 +5444,8 @@ set -e
 [ "$unopened_rc" -ne 0 ] || fail "arm succeeded for a board that has no saved Lavish session"
 assert_not_contains "$(cat "$NEVER/refused.out")" "armed:" \
   "arm printed armed for a board whose listener cannot route its poll"
-assert_contains "$(cat "$NEVER/refused.err")" "no saved Lavish session" \
-  "arm's refusal did not say the board has no saved Lavish session"
+assert_contains "$(cat "$NEVER/refused.err")" "no usable saved Lavish session" \
+  "arm's refusal did not say the board has no usable saved Lavish session"
 assert_absent "$NEVER/home/state/procevent/$unopened_id.source" \
   "a refused arm left the board registered"
 [ ! -s "$NEVER_POLLS" ] || fail "a refused arm still ran the board's poll"
@@ -5492,6 +5492,23 @@ set -e
 assert_contains "$paced_out" "listener is not running: paced-src" \
   "ensure-listening did not say the pacing runner is unconfirmed"
 pe "$HDEAD" retire paced-src >/dev/null 2>&1 || true
+# The same holds for a runner reconcile relaunched just before the call, which
+# already holds the claim when ensure-listening first looks.
+pe_register "$HDEAD" lavish prepaced-src -- /bin/sh -c 'exit 1' >/dev/null
+FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=1 pe "$HDEAD" ensure-listening prepaced-src >/dev/null 2>&1 || true
+FM_PROCEVENT_LAUNCH_FLOOR_SECONDS=30 FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=1 pe "$HDEAD" reconcile >/dev/null 2>&1 || true
+[ "$(pe "$HDEAD" list | awk '$1 == "prepaced-src" { print $3 }')" = live ] \
+  || fail "fixture invalid: reconcile did not relaunch the paced source"
+set +e
+prepaced_out=$(FM_PROCEVENT_LAUNCH_FLOOR_SECONDS=30 FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=1 \
+  pe "$HDEAD" ensure-listening prepaced-src 2>&1)
+prepaced_rc=$?
+set -e
+[ "$prepaced_rc" -ne 0 ] \
+  || fail "ensure-listening reported a runner it found still waiting out its launch floor as listening"
+assert_contains "$prepaced_out" "listener is not running: prepaced-src" \
+  "ensure-listening did not say the pacing runner it found is unconfirmed"
+pe "$HDEAD" retire prepaced-src >/dev/null 2>&1 || true
 pass "ensure-listening never reports a claim whose source command has not started as listening"
 
 # A listener already listening when ensure-listening is called may complete
