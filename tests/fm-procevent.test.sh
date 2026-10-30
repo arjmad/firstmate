@@ -5374,6 +5374,162 @@ PATH="$UNDISP/bin:$PATH" FM_HOME="$UNDISP/home" \
   "$ROOT/bin/fm-procevent-lavish.sh" retire "$undisp_art" >/dev/null 2>&1 || true
 pass "arm does not launch beside a stale claim whose process group is alive"
 
+# --- end-user-aligned regression: arming a board that was never opened ------
+# A scout following its brief armed its board before ever opening it. The board
+# had no saved Lavish session, so the listener's poll died on its first routing
+# lookup a few milliseconds after starting, yet arm printed `armed` and the
+# worker was left with a dead listener and no board link. Arm now opens such a
+# board with the same plain open adoption uses, and refuses before registering
+# anything when that still leaves no saved session.
+NEVER="$TMP_ROOT/never-opened"
+mkdir -p "$NEVER/bin" "$NEVER/home/state"
+{
+  printf '#!/usr/bin/env bash\n'
+  declare -f lavish_session
+  cat <<'SH'
+case "${1-}" in
+  poll)
+    printf 'polling\n' >> "${NEVER_POLLS:?}"
+    while [ ! -e "${NEVER_RELEASE:?}" ]; do sleep 0.02; done
+    printf 'session:\n  status: ended\n'
+    ;;
+  --*|reply|'') exit 2 ;;
+  *)
+    printf '%s\n' "$1" >> "${NEVER_OPENS:?}"
+    [ -z "${NEVER_OPEN_SAVES-}" ] || lavish_session "$1"
+    printf 'url: http://127.0.0.1:14387/session/0123456789abcdef\n'
+    ;;
+esac
+SH
+} > "$NEVER/bin/lavish-axi"
+chmod +x "$NEVER/bin/lavish-axi"
+export NEVER_POLLS="$NEVER/polls" NEVER_OPENS="$NEVER/opens" NEVER_RELEASE="$NEVER/release"
+fm_test_track_procevent_home "$NEVER/home"
+
+never_art="$NEVER/board.html"
+printf '<h1>never opened</h1>\n' > "$never_art"
+never_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$never_art")
+set +e
+PATH="$NEVER/bin:$PATH" FM_HOME="$NEVER/home" NEVER_OPEN_SAVES=1 \
+  "$ROOT/bin/fm-procevent-lavish.sh" arm "$never_art" > "$NEVER/arm.out" 2> "$NEVER/arm.err"
+never_rc=$?
+set -e
+[ "$never_rc" -eq 0 ] || fail "arm of a never-opened board failed ($never_rc): $(cat "$NEVER/arm.err")"
+assert_contains "$(cat "$NEVER/arm.out")" "armed: $never_id" "arm did not report the opened board armed"
+assert_contains "$(cat "$NEVER/arm.out")" "link: http://127.0.0.1:14387/session/0123456789abcdef" \
+  "arm of a never-opened board did not print the board link"
+[ "$(grep -c . "$NEVER_OPENS")" = 1 ] || fail "arm did not open the never-opened board exactly once"
+wait_for_lines "$NEVER_POLLS" 1 || fail "the opened board's listener never reached its poll"
+sleep 1
+[ "$(pe "$NEVER/home" list | awk -v id="$never_id" '$1 == id { print $3 }')" = live ] \
+  || fail "the opened board's listener did not stay live after arm reported it armed"
+: > "$NEVER_OPENS"
+PATH="$NEVER/bin:$PATH" FM_HOME="$NEVER/home" FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=1 \
+  "$ROOT/bin/fm-procevent-lavish.sh" arm "$never_art" >/dev/null 2>&1 || true
+[ ! -s "$NEVER_OPENS" ] || fail "arm reopened a board that already has a saved session"
+touch "$NEVER_RELEASE"
+PATH="$NEVER/bin:$PATH" FM_HOME="$NEVER/home" \
+  "$ROOT/bin/fm-procevent-lavish.sh" retire "$never_art" >/dev/null 2>&1 || true
+pass "arm opens a never-opened board, prints its link, and leaves a listener that stays live"
+
+rm -f "$NEVER_RELEASE" "$NEVER_POLLS" "$NEVER_OPENS"
+unopened_art="$NEVER/unopenable.html"
+printf '<h1>cannot open</h1>\n' > "$unopened_art"
+unopened_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$unopened_art")
+set +e
+PATH="$NEVER/bin:$PATH" FM_HOME="$NEVER/home" \
+  "$ROOT/bin/fm-procevent-lavish.sh" arm "$unopened_art" > "$NEVER/refused.out" 2> "$NEVER/refused.err"
+unopened_rc=$?
+set -e
+[ "$unopened_rc" -ne 0 ] || fail "arm succeeded for a board that has no saved Lavish session"
+assert_not_contains "$(cat "$NEVER/refused.out")" "armed:" \
+  "arm printed armed for a board whose listener cannot route its poll"
+assert_contains "$(cat "$NEVER/refused.err")" "no usable saved Lavish session" \
+  "arm's refusal did not say the board has no usable saved Lavish session"
+assert_absent "$NEVER/home/state/procevent/$unopened_id.source" \
+  "a refused arm left the board registered"
+[ ! -s "$NEVER_POLLS" ] || fail "a refused arm still ran the board's poll"
+pass "arm refuses a board that opening leaves without a saved session, and registers nothing"
+unset NEVER_POLLS NEVER_OPENS NEVER_RELEASE
+
+# ensure-listening is the readiness every arm relies on. A runner whose source
+# command dies at once with no output had already given up by the time anyone
+# looked, yet its launch was taken as proof of listening. A source that
+# completes with a result is not dead, and the source that keeps blocking is
+# the listening case the arm tests above already cover.
+HDEAD="$TMP_ROOT/hdead"; new_home "$HDEAD"
+pe_register "$HDEAD" lavish dead-src -- /bin/sh -c 'printf "gone\n" >&2; exit 1' >/dev/null
+set +e
+dead_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=2 pe "$HDEAD" ensure-listening dead-src 2>&1)
+dead_rc=$?
+set -e
+[ "$dead_rc" -ne 0 ] || fail "ensure-listening reported a listener that died at once as listening"
+assert_contains "$dead_out" "listener exited without a result: dead-src" \
+  "ensure-listening did not report the dead listener"
+set +e
+dead_again=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=2 pe "$HDEAD" ensure-listening dead-src 2>&1)
+dead_rc=$?
+set -e
+[ "$dead_rc" -ne 0 ] || fail "a repeated ensure-listening reported the same dead listener as listening"
+assert_contains "$dead_again" "listener exited without a result: dead-src" \
+  "a repeated ensure-listening did not report the dead listener"
+pe "$HDEAD" retire dead-src >/dev/null 2>&1 || true
+pe_register "$HDEAD" lavish done-src -- /bin/sh -c 'printf "session:\n  status: ended\n"' >/dev/null
+FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=2 pe "$HDEAD" ensure-listening done-src >/dev/null 2>&1 \
+  || fail "ensure-listening reported a listener that completed with a result as dead"
+pass "ensure-listening reports a listener that exited without a result, not one that completed"
+
+# A claim alone is not readiness: a relaunch waiting out its launch floor holds
+# the claim but has not started its source command, which may still die.
+pe_register "$HDEAD" lavish paced-src -- /bin/sh -c 'exit 1' >/dev/null
+FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=1 pe "$HDEAD" ensure-listening paced-src >/dev/null 2>&1 || true
+set +e
+paced_out=$(FM_PROCEVENT_LAUNCH_FLOOR_SECONDS=30 FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=1 \
+  pe "$HDEAD" ensure-listening paced-src 2>&1)
+paced_rc=$?
+set -e
+[ "$paced_rc" -ne 0 ] || fail "ensure-listening reported a runner still waiting out its launch floor as listening"
+assert_contains "$paced_out" "listener is not running: paced-src" \
+  "ensure-listening did not say the pacing runner is unconfirmed"
+pe "$HDEAD" retire paced-src >/dev/null 2>&1 || true
+# The same holds for a runner reconcile relaunched just before the call, which
+# already holds the claim when ensure-listening first looks.
+pe_register "$HDEAD" lavish prepaced-src -- /bin/sh -c 'exit 1' >/dev/null
+FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=1 pe "$HDEAD" ensure-listening prepaced-src >/dev/null 2>&1 || true
+FM_PROCEVENT_LAUNCH_FLOOR_SECONDS=30 FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=1 pe "$HDEAD" reconcile >/dev/null 2>&1 || true
+[ "$(pe "$HDEAD" list | awk '$1 == "prepaced-src" { print $3 }')" = live ] \
+  || fail "fixture invalid: reconcile did not relaunch the paced source"
+set +e
+prepaced_out=$(FM_PROCEVENT_LAUNCH_FLOOR_SECONDS=30 FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=1 \
+  pe "$HDEAD" ensure-listening prepaced-src 2>&1)
+prepaced_rc=$?
+set -e
+[ "$prepaced_rc" -ne 0 ] \
+  || fail "ensure-listening reported a runner it found still waiting out its launch floor as listening"
+assert_contains "$prepaced_out" "listener is not running: prepaced-src" \
+  "ensure-listening did not say the pacing runner it found is unconfirmed"
+pe "$HDEAD" retire prepaced-src >/dev/null 2>&1 || true
+pass "ensure-listening never reports a claim whose source command has not started as listening"
+
+# A listener already listening when ensure-listening is called may complete
+# during the settle; its capture is the evidence, not a cue to launch again.
+PRE_TRIGGER="$TMP_ROOT/pre-listening-trigger"
+pe_register "$HDEAD" lavish pre-src -- "$BLOCKER" "$PRE_TRIGGER" "session:" "  status: ended" >/dev/null
+FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=2 pe "$HDEAD" ensure-listening pre-src >/dev/null 2>&1 \
+  || fail "the blocking fixture listener was not confirmed"
+( sleep 0.3; touch "$PRE_TRIGGER" ) &
+pre_toucher=$!
+set +e
+pre_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=2 pe "$HDEAD" ensure-listening pre-src 2>&1)
+pre_rc=$?
+set -e
+wait "$pre_toucher" 2>/dev/null || true
+[ "$pre_rc" -eq 0 ] \
+  || fail "ensure-listening did not count a listening runner's completion during the settle ($pre_rc): $pre_out"
+[ "$(count_results "$HDEAD" pre-src)" = 1 ] \
+  || fail "a listener completing during the settle was launched again: $(count_results "$HDEAD" pre-src) results"
+pass "ensure-listening counts an already-listening runner that completes during the settle"
+
 # --- end-user-aligned regression: a torn-down task's boards stop polling ----
 # Teardown retires every board the task owns through `retire-task`. A listening
 # board and one whose round carried nothing are retired, a round the task left

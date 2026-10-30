@@ -36,15 +36,39 @@ EOF
 }
 
 # The Lavish review adapter, run against this suite's isolated home. The
-# machine-wide process-event claim root is redirected into the fixture so arming
-# a review here can never contend with a real one on this machine.
+# machine-wide process-event claim root and Lavish session store are redirected
+# into the fixture so arming a review here can never contend with, or route
+# through, a real one on this machine.
 run_lavish() {  # <home> <command args...>
   local home=$1
   shift
+  mkdir -p "$home/lavish-state"
   PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+    LAVISH_AXI_STATE_DIR="$home/lavish-state" \
     "$ROOT/bin/fm-procevent-lavish.sh" "$@"
+}
+
+# A fake lavish-axi for a review that gets armed: arm opens a board that has no
+# saved session, and opening saves one, then the listener's poll blocks as a
+# live board's does, so it captures nothing beside the rounds a test writes.
+fake_opened_lavish() {  # <home>
+  local home=$1
+  cat > "$home/fakebin/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1-}" in
+  poll) while [ "$SECONDS" -lt 120 ]; do sleep 1; done; exit 75 ;;
+  -*|reply|'') exit 0 ;;
+esac
+perl -MJSON::PP -MCwd=realpath -e '
+  open my $out, ">", $ARGV[0] or die "$!\n";
+  print $out encode_json({ sessions => { review => { file => realpath($ARGV[1]),
+    status => "open", url => "http://127.0.0.1:14387/session/0123456789abcdef" } } });
+' "$LAVISH_AXI_STATE_DIR/state.json" "$1"
+SH
+  chmod +x "$home/fakebin/lavish-axi"
+  fm_test_track_procevent_home "$home" "$home/procevent-claims"
 }
 
 # The generic process-event runner, run against this suite's isolated home and
@@ -1610,7 +1634,7 @@ test_bound_channel_answers_close_at_answer_time() {
 
   artifact="$home/data/$id/review.html"
   printf '<h1>Sample eval proposal</h1>\n' > "$artifact"
-  fm_fake_exit0 "$home/fakebin" lavish-axi
+  fake_opened_lavish "$home"
   sid=$(run_lavish "$home" source-id "$artifact") || fail "could not derive the review source id"
   run_captain "$home" bind "$sid" >/dev/null \
     || fail "could not bind the review source to the keyed-answer intake"
@@ -2107,7 +2131,7 @@ test_unbound_source_closes_no_hold() {
 
   artifact="$home/data/$id/review.html"
   printf '<h1>Unbound</h1>\n' > "$artifact"
-  fm_fake_exit0 "$home/fakebin" lavish-axi
+  fake_opened_lavish "$home"
   sid=$(run_lavish "$home" source-id "$artifact") || fail "could not derive the unbound source id"
   run_lavish "$home" arm "$artifact" >/dev/null || fail "could not arm the unbound review"
 

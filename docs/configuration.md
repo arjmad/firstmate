@@ -2197,6 +2197,7 @@ A long-polling external process is registered as a *source* through its adapter,
 **Open the Lavish artifact first**
 
 Before arming any Lavish source, open its artifact with `lavish-axi` so the saved session identifies the board's server; reply and poll attempts derive their host and port from that session and refuse missing or invalid session evidence before posting or consuming a staged worker reply.
+`bin/fm-procevent-lavish.sh arm` enforces that prerequisite: a board with no usable saved session is opened with a plain `lavish-axi <artifact>`, never `--reopen`, and when that still leaves none the arm fails with `no usable saved Lavish session` and the session store's own reason before registering anything, so it never reports a listener whose first poll would die.
 
 **Retry interrupted Lavish polls**
 
@@ -2218,7 +2219,9 @@ After opening the artifact as required above, the worker arms it with `bin/fm-pr
 
 `arm` prints `armed` only after the process-event owner confirms this registration generation's listener is running, and otherwise returns nonzero without that line.
 
-- The confirmation is the same live claim or launch-stamp evidence `reconcile` already uses, bounded by `FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS`, and a failed confirmation retires a source that never started unless `retire` refuses because something may still own it, in which case the registration stays for `reconcile` or a human.
+- The confirmation is `bin/fm-procevent.sh ensure-listening`, bounded by `FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS`: the generation's claimed runner must stay alive for about a second after its launch stamp shows the source command started, or the runner must complete with a result, and a runner that exits with no result after launching is reported as `listener exited without a result` and fails the confirmation.
+- A failed confirmation retires a source that never started unless `retire` refuses because something may still own it, in which case the registration stays for `reconcile` or a human.
+- A confirmed `armed` also prints the board's `link:` in the phone-openable form `bin/fm-lavish-url.sh` gives.
 - An earlier registration's listener that releases the board inside the confirm window lets the new registration start, and `arm` then reports `armed` as usual.
 - When a live listener from an earlier registration of the same board still holds it when the window ends, `arm` exits zero with `still-listening` instead of `armed`, because that earlier listener keeps serving the board and the new registration takes effect only after the source is retired and armed again.
 - The arm is refused unless that task id has valid, identity-matching endpoint metadata, because a board whose owner has no endpoint would collect feedback nobody can be told about.
