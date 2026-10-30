@@ -1065,7 +1065,7 @@ test_list_scheduled_non_lane_selections_use_serial_weights() {
 }
 
 test_portable_shard_union_and_coverage_guard() {
-  local s1 s2 proven serial herdr all_count union_count overlap out lane
+  local s1 s2 proven serial herdr all_count union_count overlap out lane loc
   s1=$("$RUNNER" --list --lane portable-parallel-1)
   s2=$("$RUNNER" --list --lane portable-parallel-2)
   proven=$("$RUNNER" --list --proven-isolated)
@@ -1084,7 +1084,10 @@ test_portable_shard_union_and_coverage_guard() {
     && fail "portable lanes must not include real-herdr-gated smoke"
   printf '%s\n' "$herdr" | grep -Fq 'tests/fm-backend-herdr-smoke.test.sh' \
     || fail "herdr family must include smoke"
-  out=$("$RUNNER" --check-coverage)
+  # Run under a non-C collation when installed: comm must agree with the C-sorted inputs.
+  loc=$(locale -a 2>/dev/null | grep -iE '^en_US\.utf-?8$' | head -1 || true)
+  out=$(LC_ALL=${loc:-C} LANG=${loc:-C} "$RUNNER" --check-coverage 2>&1) \
+    || fail "coverage guard failed under ${loc:-C}: $out"
   assert_contains "$out" "FM_TEST_COVERAGE ok" "coverage guard success marker"
   all_count=$("$RUNNER" --list --all | wc -l | tr -d ' ')
   union_count=$(printf '%s\n' "$s1" "$s2" "$serial" "$herdr" | LC_ALL=C sort -u | wc -l | tr -d ' ')
@@ -1107,6 +1110,7 @@ test_portable_shard_union_and_coverage_guard() {
 # measured hint and the packing over those hints stays even. Both halves went
 # unchecked until one lane grew past its CI job cap and was cancelled on every
 # run, so assert them through the guard's own reported numbers.
+
 test_portable_parallel_lanes_stay_duration_balanced() {
   local out max imbalance unhinted
   out=$("$RUNNER" --check-coverage)
