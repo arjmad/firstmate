@@ -1110,8 +1110,8 @@ test_portable_shard_union_and_coverage_guard() {
 test_check_coverage_is_locale_independent() {
   # comm must agree with the C-collated sort feeding it under any caller locale.
   local loc out
-  loc=$(locale -a 2>/dev/null | grep -iE '^(en_US|C)\.utf-?8$' | head -1 || true)
-  [ -n "$loc" ] || { echo "skip: no UTF-8 locale installed"; return 0; }
+  loc=$(locale -a 2>/dev/null | grep -iE '^en_US\.utf-?8$' | head -1 || true)
+  [ -n "$loc" ] || { echo "skip: no en_US UTF-8 locale installed"; return 0; }
   out=$(LC_ALL=$loc LANG=$loc "$RUNNER" --check-coverage 2>&1) \
     || fail "check-coverage failed under $loc: $out"
   assert_contains "$out" "FM_TEST_COVERAGE ok" "coverage guard under $loc"
