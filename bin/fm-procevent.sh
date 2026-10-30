@@ -2049,20 +2049,24 @@ listener_completed() {  # <source-id> <registration-identity> <next-sequence-bef
 # as no result and exits. So readiness is this generation's runner still alive
 # across ENSURE_LISTENING_SETTLE_CHECKS consecutive checks once the launch stamp
 # shows its source command started, or across them from a claim already held
-# when this was called. A runner that is gone after that launch without
-# completing is a dead listener and a nonzero result. A runner still alive when
-# the window ends is pacing its launch, the same evidence reconcile accepts.
-# The settle bounds detection to deaths inside it; a later death is
-# reconcile's to relaunch and report.
+# when this was called. A runner that is gone after that launch, or one that
+# held the claim on entry and is gone, without completing is a dead listener
+# and a nonzero result. A claim alone is never readiness: a runner still alive
+# when the window ends gets ENSURE_LISTENING_OVERTIME_CHECKS more checks to
+# launch its source command and settle, and is otherwise not confirmed. The
+# settle bounds detection to deaths inside it; a later death is reconcile's to
+# relaunch and report.
 #
 # Once the claim is seen, the settle watches that runner's pid and identity
 # rather than the claim: a runner releases its claim at exit only if the source
 # lock is free at that instant, so re-reading the claim under the lock through
 # the settle would strand the claim of a runner that completes inside it.
 ENSURE_LISTENING_SETTLE_CHECKS=20
+ENSURE_LISTENING_OVERTIME_CHECKS=40
 cmd_ensure_listening() {
   local id=${1-} identity before mark stamp deadline window started_once=0 listening seen=1
   local results_before child_started=0 preexisting='' held=0 runner_pid='' runner_identity='' runner_state
+  local overtime=0
   [ "$#" -eq 1 ] || usage
   fm_procevent_source_id_valid "$id" || die "source id must be path-safe: $id"
   window=$(fm_procevent_launch_confirm_seconds) \
@@ -2099,7 +2103,7 @@ cmd_ensure_listening() {
           runner_pid=
           held=0
           seen=1
-          if [ "$child_started" -eq 1 ]; then
+          if [ "$child_started" -eq 1 ] || [ "$preexisting" = 1 ]; then
             listener_completed "$id" "$identity" "$results_before" && return 0
             printf 'error: listener exited without a result: %s\n' "$id" >&2
             return 1
@@ -2132,11 +2136,13 @@ cmd_ensure_listening() {
       detach_runner "$id"
       started_once=1
     fi
-    [ "$SECONDS" -lt "$deadline" ] || break
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      [ -n "$runner_pid" ] && [ "$overtime" -lt "$ENSURE_LISTENING_OVERTIME_CHECKS" ] || break
+      overtime=$((overtime + 1))
+    fi
     sleep 0.05
   done
   [ "$seen" -ne 3 ] || return 3
-  [ "$seen" -ne 0 ] || return 0
   printf 'error: listener is not running: %s\n' "$id" >&2
   return 1
 }

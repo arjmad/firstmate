@@ -5479,6 +5479,40 @@ FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=2 pe "$HDEAD" ensure-listening done-src >/de
   || fail "ensure-listening reported a listener that completed with a result as dead"
 pass "ensure-listening reports a listener that exited without a result, not one that completed"
 
+# A claim alone is not readiness: a relaunch waiting out its launch floor holds
+# the claim but has not started its source command, which may still die.
+pe_register "$HDEAD" lavish paced-src -- /bin/sh -c 'exit 1' >/dev/null
+FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=1 pe "$HDEAD" ensure-listening paced-src >/dev/null 2>&1 || true
+set +e
+paced_out=$(FM_PROCEVENT_LAUNCH_FLOOR_SECONDS=30 FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=1 \
+  pe "$HDEAD" ensure-listening paced-src 2>&1)
+paced_rc=$?
+set -e
+[ "$paced_rc" -ne 0 ] || fail "ensure-listening reported a runner still waiting out its launch floor as listening"
+assert_contains "$paced_out" "listener is not running: paced-src" \
+  "ensure-listening did not say the pacing runner is unconfirmed"
+pe "$HDEAD" retire paced-src >/dev/null 2>&1 || true
+pass "ensure-listening never reports a claim whose source command has not started as listening"
+
+# A listener already listening when ensure-listening is called may complete
+# during the settle; its capture is the evidence, not a cue to launch again.
+PRE_TRIGGER="$TMP_ROOT/pre-listening-trigger"
+pe_register "$HDEAD" lavish pre-src -- "$BLOCKER" "$PRE_TRIGGER" "session:" "  status: ended" >/dev/null
+FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=2 pe "$HDEAD" ensure-listening pre-src >/dev/null 2>&1 \
+  || fail "the blocking fixture listener was not confirmed"
+( sleep 0.3; touch "$PRE_TRIGGER" ) &
+pre_toucher=$!
+set +e
+pre_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=2 pe "$HDEAD" ensure-listening pre-src 2>&1)
+pre_rc=$?
+set -e
+wait "$pre_toucher" 2>/dev/null || true
+[ "$pre_rc" -eq 0 ] \
+  || fail "ensure-listening did not count a listening runner's completion during the settle ($pre_rc): $pre_out"
+[ "$(count_results "$HDEAD" pre-src)" = 1 ] \
+  || fail "a listener completing during the settle was launched again: $(count_results "$HDEAD" pre-src) results"
+pass "ensure-listening counts an already-listening runner that completes during the settle"
+
 # --- end-user-aligned regression: a torn-down task's boards stop polling ----
 # Teardown retires every board the task owns through `retire-task`. A listening
 # board and one whose round carried nothing are retired, a round the task left
