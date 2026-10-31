@@ -67,7 +67,8 @@ cat > "$LAB/payload.json" <<'JSON'
       "title": "Guard placeholder",
       "options": [{ "value": "yes", "label": "Yes" }, { "value": "no", "label": "No" }],
       "recommend_value": "yes",
-      "allow_freeform": true
+      "allow_freeform": true,
+      "case_against": "A placeholder has nothing to refuse."
     }
   ],
   "underway": [],

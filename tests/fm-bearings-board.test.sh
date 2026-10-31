@@ -154,7 +154,8 @@ write_valid_payload() {  # <path>
         { "value": "no", "label": "Keep current" }
       ],
       "recommend_value": "yes",
-      "allow_freeform": true
+      "allow_freeform": true,
+      "case_against": "It slows the first admission by a day."
     },
     {
       "key": "merge.sample-task",
@@ -656,19 +657,19 @@ test_build_drops_decision_cards_whose_subject_already_landed() {
   jq '.captains_call = [
         {"key":"landed-by-task","type":"decision","repo":"sample","title":"Already shipped",
          "options":[{"value":"yes","label":"Yes"},{"value":"no","label":"No"}],
-         "recommend_value":"yes","allow_freeform":true},
+         "recommend_value":"yes","allow_freeform":true,"case_against":"No reason to wait."},
         {"key":"timeout-reattach","type":"decision","repo":"sample","title":"Already merged",
          "pr_url":"https://github.com/sample/sample/pull/7",
          "options":[{"value":"yes","label":"Yes"},{"value":"no","label":"No"}],
-         "recommend_value":"yes","allow_freeform":true},
+         "recommend_value":"yes","allow_freeform":true,"case_against":"No reason to wait."},
         {"key":"quota-version","type":"decision","repo":"sample","title":"Old quota release",
          "subject":{"artifact":"quota-axi","version":"0.1.37"},
          "options":[{"value":"yes","label":"Yes"},{"value":"no","label":"No"}],
-         "recommend_value":"yes","allow_freeform":true},
+         "recommend_value":"yes","allow_freeform":true,"case_against":"No reason to wait."},
         {"key":"still-open","type":"decision","repo":"sample","title":"Genuinely open",
          "subject":{"artifact":"quota-axi","version":"0.2.0"},
          "options":[{"value":"yes","label":"Yes"},{"value":"no","label":"No"}],
-         "recommend_value":"yes","allow_freeform":true}
+         "recommend_value":"yes","allow_freeform":true,"case_against":"No reason to wait."}
       ]
       | .landed = [
         {"id":"landed-by-task","repo":"sample","what":"shipped it","outcome":"shipped it","owner":"crew"},
@@ -709,7 +710,7 @@ EOF
         "key":"remote-mate-call","type":"decision","repo":"sample",
         "title":"Remote secondmate decision",
         "options":[{"value":"yes","label":"Yes"},{"value":"no","label":"No"}],
-        "recommend_value":"yes","allow_freeform":true
+        "recommend_value":"yes","allow_freeform":true,"case_against":"No reason to wait."
       }]
       | .landed = []' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
 
@@ -848,6 +849,46 @@ test_build_refuses_a_decision_card_without_a_real_choice() {
     "$key: needs distinct option values" \
     "a decision card repeating one option value"
   pass "build refuses a decision card without two authored options, a recommendation, and free text"
+}
+
+test_a_decision_card_carries_the_case_against_its_recommendation() {
+  local home key data out long
+  home=$(make_home case-against)
+  write_valid_payload "$home/payload.json"
+  key=$(jq -r '.captains_call[0].key' "$home/payload.json")
+  long=$(printf 'x%.0s' $(seq 1 301))
+  assert_weak_card_refused "$home" 'del(.captains_call[0].case_against)' \
+    "$key: needs a one-line case_against of at most 300 characters" \
+    "a decision card with no case against"
+  assert_weak_card_refused "$home" '.captains_call[0].case_against = "  "' \
+    "$key: needs a one-line case_against of at most 300 characters" \
+    "a decision card with a blank case against"
+  assert_weak_card_refused "$home" '.captains_call[0].case_against = "one\ntwo"' \
+    "$key: needs a one-line case_against of at most 300 characters" \
+    "a decision card whose case against runs over two lines"
+  assert_weak_card_refused "$home" ".captains_call[0].case_against = \"$long\"" \
+    "$key: needs a one-line case_against of at most 300 characters" \
+    "a decision card whose case against is longer than one line"
+  assert_weak_card_refused "$home" '.captains_call[0].case_against = 7' \
+    "does not satisfy fm-bearings-board.v1" \
+    "a decision card whose case against is not text"
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  out=$(run_board "$home" build "$data" 2>&1) || fail "a decision card with its case against refused the board: $out"
+  out=$(run_board "$home" published) || fail "published could not read the board it just built"
+  printf '%s' "$out" | jq -e --arg key "$key" \
+    '.captains_call[] | select(.key == $key) | .case_against == "It slows the first admission by a day."' \
+    >/dev/null || fail "published did not return the built card's case against: $out"
+  pass "a decision card must carry a one-line case against, and published returns it for the next build"
+}
+
+test_published_fails_when_no_board_was_built() {
+  local home rc out
+  home=$(make_home no-board-published)
+  set +e; out=$(run_board "$home" published 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "published succeeded with no board built"
+  assert_contains "$out" "no board has been built" "published did not say why it failed: $out"
+  pass "published fails plainly when no board has been built"
 }
 
 test_a_later_option_carries_the_date_it_comes_back() {
@@ -1103,6 +1144,8 @@ test_every_decision_card_carries_the_reconcile_choice
 test_build_refuses_a_payload_that_occupies_the_reconcile_value
 test_build_refuses_a_nondecision_reconcile_value
 test_build_refuses_a_decision_card_without_a_real_choice
+test_a_decision_card_carries_the_case_against_its_recommendation
+test_published_fails_when_no_board_was_built
 test_a_later_option_carries_the_date_it_comes_back
 test_merge_and_credential_cards_keep_their_own_shapes
 test_a_weak_card_whose_subject_landed_is_dropped_not_refused

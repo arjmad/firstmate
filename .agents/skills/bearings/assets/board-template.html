@@ -292,6 +292,10 @@ textarea.fm-input { min-height: 88px; resize: vertical; }
 .bb-opts { margin-top: 6px; }
 .bb-opts .fm-opts__legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .bb-cardacts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+/* the strongest case against the recommendation, from a fresh reviewer */
+.bb-against { margin: 8px 0 0; font-size: .875rem; color: var(--fm-ink); }
+.bb-against__k { font-weight: 600; color: var(--fm-warn); }
+.bb-item.is-sent .bb-against { display: none; }
 .bb-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
 .bb-empty { color: var(--fm-muted); font-size: .9375rem; padding: 4px 0 12px; }
 .bb-takeall { display: flex; flex-direction: column; gap: 10px; padding: 4px 0 14px; }
@@ -667,6 +671,12 @@ __FM_BEARINGS_BOARD_DATA__
      as native radios with the recommendation already chosen, Send answer, and
      the note row. */
   var cards = [];
+  function againstLine(text) {
+    var p = el("p", "bb-against");
+    p.appendChild(el("span", "bb-against__k", "Case against: "));
+    p.appendChild(el("span", null, text));
+    return p;
+  }
   function renderCard(list, card) {
     var index = itemIndex++;
     var meta;
@@ -700,6 +710,7 @@ __FM_BEARINGS_BOARD_DATA__
       opts.appendChild(lab);
     });
     if (card.options.length) item.appendChild(opts);
+    if (card.case_against) item.appendChild(againstLine(card.case_against));
     var note;
     var limit;
     var state = { card: card, item: item, sent: false };
@@ -774,7 +785,10 @@ __FM_BEARINGS_BOARD_DATA__
     confirmList.textContent = "";
     pendingRecommendations().forEach(function (c) {
       var n = c.note();
-      confirmList.appendChild(el("li", null, c.card.title + " → " + c.recommended().label + (n ? " (" + n + ")" : "")));
+      var li = el("li");
+      li.appendChild(el("span", null, c.card.title + " → " + c.recommended().label + (n ? " (" + n + ")" : "")));
+      if (c.card.case_against) li.appendChild(againstLine(c.card.case_against));
+      confirmList.appendChild(li);
     });
     confirmBox.hidden = false;
     confirmSend.textContent = "Send " + pendingRecommendations().length + " answers";

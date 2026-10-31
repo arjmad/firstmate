@@ -17,7 +17,7 @@
 // Prints one JSON document:
 //   { headline, inboxCount, fleetSum, sections:[{key,title,count,open,depth,items,rows,empty,headings}],
 //     takeAll:{hidden,label,confirm:[...]}, prompts:[{text,line,data}], storage:{...}, error }
-// An item is {key,title,ask,meta,sent,pill,actions:[{value,label,hint,main}],
+// An item is {key,title,ask,against,meta,sent,pill,actions:[{value,label,hint,main}],
 //   inputs:[{name,type,value,need}],radios:[{value,label,checked,recommended}],noteNeed}.
 // A row is {title,meta,right,steps,pick}.
 import { readFileSync } from "node:fs";
@@ -175,6 +175,7 @@ function itemOf(n) {
     key: n.getAttribute("data-key"),
     title: text(n, "bb-item__title"),
     ask: text(n, "bb-item__ask"),
+    against: text(n, "bb-against"),
     meta: text(n, "bb-item__meta"),
     sent: n.has("is-sent"),
     pill: n.find((c) => c.has("bb-sent") && !c.hidden)?.textContent ?? null,

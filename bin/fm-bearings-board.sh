@@ -10,6 +10,7 @@
 # Usage:
 #   fm-bearings-board.sh build [--if-changed] <data.json>
 #   fm-bearings-board.sh path
+#   fm-bearings-board.sh published
 #
 # build      Validate the payload, drop the Captain's Call cards whose subject
 #            already landed, give every surviving decision card the standard
@@ -45,6 +46,9 @@
 #            kept beside the board as bearings-board.sha256, written only once
 #            a build has proved its listener.
 # path       Print the stable board path for this home.
+# published  Print the payload JSON of the board last built at that path, or
+#            fail when there is none, so a rebuild can carry a card's
+#            case_against forward instead of asking a reviewer again.
 #
 # A LIVE SESSION IS PROVED, NEVER ASSUMED. `lavish-axi <file>` exits 0 even
 # when it refuses to reopen a session the captain ended from the browser,
@@ -95,6 +99,14 @@
 # the call until that date instead of closing it, so a `later` option must
 # carry one. The refusal names each weak card's key and what it lacks, so the
 # composer fixes the payload rather than the board shipping a Done-only card.
+#
+# A decision card must also carry `case_against`: one line, at most 300
+# characters, the strongest reason to refuse its recommendation, written by a
+# fresh reviewer rather than the agent that proposed it (Arjun's 2026-10-30
+# eco-board pick; the bearings skill owns how the composer gets the line). The
+# board shows it under the options and beside each card in Take all
+# recommendations, so a tired yes is still a choice. Merge and credential cards
+# may carry it and are not required to.
 #
 # THE LAYOUT IS INBOX FIRST. Beside `captains_call` (the Decisions group), the
 # payload carries:
@@ -169,6 +181,11 @@ fail() {
 
 board_path() { printf '%s/.lavish/bearings-board.html\n' "$FM_HOME"; }
 
+# Print the JSON payload injected into a built board page.
+board_payload() {  # <board.html>
+  sed -n '/<script id="bearings-data" type="application\/json">/,/<\/script>/p' "$1" | sed '1d;$d'
+}
+
 sha256_stdin() {
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 | awk '{ print $1 }'
@@ -230,6 +247,7 @@ validate_payload() {  # <data.json>
       and (optional_string("about"))
       and (optional_string("decide"))
       and (optional_string("detail"))
+      and (optional_string("case_against"))
       and (optional_https_url("pr_url"))
       and ((has("link") | not)
         or (.link | type == "object" and (.label | nonempty_string)
@@ -356,7 +374,12 @@ decision_card_gaps() {  # <effective-payload.json>
             then "a recommend_value naming one of its options" else empty end),
           (if $card.allow_freeform != true then "allow_freeform true" else empty end),
           (if [$card.options[] | select(.value == "later" and (has("until") | not))] != []
-            then "an until date on its later option" else empty end)
+            then "an until date on its later option" else empty end),
+          (if ($card.case_against | type) != "string"
+              or ($card.case_against | test("^\\s*$"))
+              or ($card.case_against | test("[\\n\\r]"))
+              or ($card.case_against | length) > 300
+            then "a one-line case_against of at most 300 characters" else empty end)
         ] as $gaps
       | select($gaps | length > 0)
       | "\($card.key): needs \($gaps | join(", "))"]
@@ -634,7 +657,7 @@ command_build() {
   fi
   if [ -n "$gaps" ]; then
     rm -f -- "$effective"
-    fail "decision cards must offer a real choice: $gaps"
+    fail "decision cards must offer a real choice and its case against: $gaps"
   fi
   if ! gaps=$(inbox_item_gaps "$effective"); then
     rm -f -- "$effective"
@@ -677,8 +700,7 @@ command_build() {
   fi
   # Round-trip the injected payload back out of the built page, so a board that
   # would fail to parse in the browser fails here instead.
-  extracted=$(sed -n '/<script id="bearings-data" type="application\/json">/,/<\/script>/p' "$tmp" \
-    | sed '1d;$d')
+  extracted=$(board_payload "$tmp")
   if ! printf '%s\n' "$extracted" | jq -e --arg schema "$BOARD_SCHEMA" '.schema == $schema' >/dev/null 2>&1; then
     rm -f -- "$tmp"
     fail "the built board does not carry a readable $BOARD_SCHEMA payload"
@@ -741,9 +763,21 @@ command_build() {
     || fail "cannot record the board fingerprint"
 }
 
+command_published() {
+  local board extracted
+  [ "$#" -eq 0 ] || { usage >&2; exit 2; }
+  command -v jq >/dev/null 2>&1 || fail "jq is required"
+  board=$(board_path)
+  [ -f "$board" ] || fail "no board has been built: $board"
+  extracted=$(board_payload "$board")
+  printf '%s\n' "$extracted" | jq -e --arg schema "$BOARD_SCHEMA" 'select(.schema == $schema)' \
+    || fail "the built board does not carry a readable $BOARD_SCHEMA payload: $board"
+}
+
 case "${1-}" in
   build) shift; command_build "$@" ;;
   path) board_path ;;
+  published) shift; command_published "$@" ;;
   -h|--help|help) usage ;;
   *) usage >&2; exit 2 ;;
 esac
