@@ -14,6 +14,8 @@ set -u
 
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-busy-lib.sh"
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-classify-lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-busy-adapter-wiring)
 
@@ -304,6 +306,51 @@ test_claude_hooks_ignore_a_nested_session() {
   pass "claude hooks from a nested session in the worktree never close the worker's turn"
 }
 
+# A crewmate's StopFailure, SessionEnd, and idle_prompt hooks also append its
+# own status line through bin/fm-worker-hook-status.sh; SessionEnd's single
+# command must still release the session binding after writing.
+run_claude_hook_payload() {  # <settings.json> <jq-path-to-command> <payload-json>
+  local cmd
+  cmd=$(jq -r "$2" "$1")
+  [ -n "$cmd" ] && [ "$cmd" != null ] || fail "no hook command at $2 in $1"
+  printf '%s' "$3" | sh -c "$cmd"
+}
+
+test_claude_crewmate_hooks_write_their_own_status() {
+  local rec id=busy-cl-status out state settings status
+  rec=$(make_spawn_case claude-status claude "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  expect_code 0 $? "claude spawn should succeed: $out"
+  state="$HOME_DIR/state"
+  status="$state/$id.status"
+  settings="$WT_DIR/.claude/settings.local.json"
+  [ "$(jq -r '.hooks.Notification[0].matcher' "$settings")" = idle_prompt ] \
+    || fail "a crewmate's Notification hook must match idle_prompt only"
+
+  run_claude_hook "$settings" UserPromptSubmit || fail "UserPromptSubmit hook command failed"
+  printf 'working [at=1]: started\n' >> "$status"
+  run_claude_hook_payload "$settings" '.hooks.Notification[0].hooks[0].command' \
+    '{"session_id":"worker-session","hook_event_name":"Notification","notification_type":"idle_prompt"}' \
+    || fail "idle_prompt hook command failed"
+  status_is_paused "$(last_status_line "$status")" \
+    || fail "the spawned idle_prompt hook must declare a pause, log:"$'\n'"$(cat "$status")"
+
+  run_claude_hook_payload "$settings" '.hooks.StopFailure[0].hooks[1].command' \
+    '{"session_id":"worker-session","hook_event_name":"StopFailure","error":"server_error"}' \
+    || fail "StopFailure status hook command failed"
+  assert_contains "$(last_status_line "$status")" "API error server_error" "the spawned StopFailure hook must report the error"
+
+  run_claude_hook_payload "$settings" '.hooks.SessionEnd[0].hooks[0].command' \
+    '{"session_id":"worker-session","hook_event_name":"SessionEnd","reason":"other"}' \
+    || fail "SessionEnd hook command failed"
+  assert_contains "$(last_status_line "$status")" "session ended (other)" "the spawned SessionEnd hook must report the exit"
+  out=$(classify claude "$id" "$state")
+  [ "$out" = "idle claude-hook" ] || fail "SessionEnd must still close the turn, got '$out'"
+  [ ! -e "$state/$id.busy-session" ] || fail "SessionEnd must still release the session binding"
+  pass "a claude crewmate's StopFailure, SessionEnd, and idle_prompt hooks write its own status lines"
+}
+
 test_claude_posttooluse_refreshes_progress_only() {
   local rec id=busy-cl-3 out state settings cmd
   rec=$(make_spawn_case claude-progress claude "$id")
@@ -575,6 +622,11 @@ test_secondmate_claude_spawn_arms_busy_for_the_stall_gate() {
     "claude secondmate launch did not pass the state settings file"
   [ ! -e "$sm/.claude/settings.local.json" ] \
     || fail "claude secondmate spawn wrote the home's settings.local.json"
+  if jq -e '.hooks.Notification' "$settings" >/dev/null \
+    || [ "$(jq '.hooks.StopFailure[0].hooks | length' "$settings")" != 1 ] \
+    || jq -r '.. | .command? // empty' "$settings" | grep -q fm-worker-hook-status; then
+    fail "a secondmate reports through its parent channel and must get no worker status hooks"
+  fi
   out=$(classify claude "$id" "$state")
   [ "$out" = "busy fm-spawn" ] || fail "seeded secondmate must classify busy fm-spawn, got '$out'"
   out=$(fm_busy_classify tmux "firstmate:fm-$id" claude "$id" "$state" 'working on the charter')
@@ -924,6 +976,7 @@ test_kimi_and_grok_install_no_unverified_wiring
 test_opencode_plugin_semantic_lifecycle
 test_claude_hooks_semantic_lifecycle
 test_claude_hooks_ignore_a_nested_session
+test_claude_crewmate_hooks_write_their_own_status
 test_claude_hooks_stale_incarnation_harmless
 test_claude_posttooluse_refreshes_progress_only
 test_gemini_hooks_semantic_lifecycle

@@ -765,6 +765,9 @@ do_exit() {
       ;;
     *) die "task $ID's endpoint reads '$state' rather than a positively classified state; refusing to send a lifecycle command into an unattributed endpoint" ;;
   esac
+  # This stop is firstmate's own, so the worker's exit hook must not report it
+  # as an unexpected session end (bin/fm-worker-hook-status.sh).
+  "$SCRIPT_DIR/fm-worker-hook-status.sh" expect-exit "$STATE" "$ID" >/dev/null 2>&1 || true
   # A busy agent is interrupted first before the exit command is submitted.
   case "$(busy_verdict)" in
     busy*)

@@ -3048,6 +3048,32 @@ test_teardown_missing_busy_sidecar_completes() {
   pass "teardown completes when an exact busy-state sidecar is already absent"
 }
 
+# A Claude crewmate's SessionEnd hook (bin/fm-worker-hook-status.sh) reports
+# an exit as a blocker unless firstmate recorded that it was stopping that
+# incarnation, so teardown records it before the endpoint kill and removes it after.
+test_teardown_records_its_own_stop_before_the_kill() {
+  local case_dir gen rc seen
+  case_dir=$(make_case expect-exit)
+  write_meta "$case_dir" local-only ship
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$case_dir/state" task-x1)
+  printf 'busy_gen=%s\n' "$gen" >> "$case_dir/state/task-x1.meta"
+  cat > "$case_dir/fakebin/tmux" <<SH
+#!/usr/bin/env bash
+case "\${1:-}" in
+  kill-window|kill-pane|kill-session) cp "$case_dir/state/task-x1.exit-expected" "$case_dir/exit-expected-at-kill" 2>/dev/null || true ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/tmux"
+  rc=0
+  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "expect-exit: teardown should succeed ($(cat "$case_dir/stderr"))"
+  read -r seen _ < "$case_dir/exit-expected-at-kill" 2>/dev/null || seen=
+  [ "$seen" = "$gen" ] || fail "expect-exit: the endpoint kill must find firstmate's own stop recorded for gen $gen, got '$seen'"
+  assert_absent "$case_dir/state/task-x1.exit-expected" "expect-exit: teardown left the stop record behind"
+  pass "teardown records its own stop before the endpoint kill and removes the record after"
+}
+
 test_teardown_preserves_opencode_busy_plugin_on_pool_return() {
   local case_dir rc plugin
   case_dir=$(make_case opencode-busy-wiring)
@@ -5750,6 +5776,7 @@ test_retained_sources_still_reach_the_ordinary_refusal() {
 }
 
 test_help_is_never_read_as_a_task_id
+test_teardown_records_its_own_stop_before_the_kill
 test_teardown_preserves_opencode_busy_plugin_on_pool_return
 test_missing_startup_source_refuses_before_cleanup
 test_unreadable_startup_source_refuses_before_cleanup
