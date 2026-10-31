@@ -56,6 +56,7 @@ test_kind_arguments_are_validated() {
     "--kind reversible --default bad]option" \
     "--kind reversible" \
     "--kind reversible --default ship-it --no-default" \
+    "--kind reversible --default ship-it --until 2026-11-30" \
     "--kind arjun-only --no-default" \
     "--no-default"; do
     id=sample-$RANDOM

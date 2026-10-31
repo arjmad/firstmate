@@ -80,7 +80,7 @@ These are fork patches recorded in [`docs/fork-decisions.md`](fork-decisions.md)
 A reversible hold given `--default <option>` carries its release time in the same prefix, 72 hours after the default was first recorded.
 `release-due` records each due default as a `defaulted` resolution labelled `Default release:`, closes a question row or releases a work row, and prints one `released by default:` line per release.
 `bin/fm-watch.sh` runs it hourly and queues each line as a durable `check:` wake.
-A reversible hold must name a default, carry the captain's own `--until` deferral, or pass `--no-default`; `hold` refuses one with none of the three before any write.
+A reversible hold must name a default, carry the captain's own `--until` deferral, or pass `--no-default`; `hold` refuses one with none of the three, or a default beside a deferral, before any write.
 An arjun-only hold, a reversible hold deferred or passed `--no-default`, and any hold written without `--kind` never release themselves.
 `bin/fm-captain-hold.sh --help` owns the prefix grammar, the refusals, and the clock rules.
 `tests/fm-captain-hold-kind.test.sh` and the two `hold_release` cases in `tests/fm-watch-triage-wait.test.sh` cover them.

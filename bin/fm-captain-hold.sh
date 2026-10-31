@@ -83,8 +83,9 @@
 # question); a reversible hold with none of the three is refused before any
 # write, so a missing default is a recorded choice rather than an omission.
 # `--no-default` stores the same `[reversible]` prefix as before and is
-# refused beside `--default` or with any other kind. The kind is stored as a
-# prefix on the stored reason, so every surface that shows a hold reason shows it:
+# refused beside `--default` or with any other kind; `--default` is refused
+# beside `--until`. The kind is stored as a prefix on the stored reason, so
+# every surface that shows a hold reason shows it:
 #   [arjun-only] <reason>
 #   [reversible] <reason>
 #   [reversible; default: <option>; releases <YYYY-MM-DDTHH:MM:SSZ>] <reason>
@@ -1088,6 +1089,7 @@ validate_hold_kind_args() {  # <kind> <default-given> <default-option> <reason> 
     [ "$kind" != arjun-only ] \
       || fail "an arjun-only hold never releases itself, so it takes no --default; put the recommendation in the reason"
     [ "$kind" = reversible ] || fail "--default requires --kind reversible"
+    [ -z "$until" ] || fail "a call the captain deferred with --until takes no --default"
     validate_one_line default "$option"
     case "$option" in
       *']'*) fail "--default must not contain ]" ;;
