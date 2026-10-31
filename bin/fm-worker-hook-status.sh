@@ -7,7 +7,9 @@
 #
 #   stop-failure <state-dir> <id> --gen G --config <dir>
 #       StopFailure: the turn ended on an API error. Appends
-#       `blocked: Claude Code turn ended on API error <error>: <message>`.
+#       `blocked [key=claude-api-error]: Claude Code turn ended on API error
+#       <error>: <message>`, keyed so it never displaces a keyless decision the
+#       worker itself left open.
 #       An account or credential error (authentication_failed,
 #       oauth_org_not_allowed, account_on_hold, billing_error,
 #       cloud_credential_error) only the captain can clear carries
@@ -15,8 +17,9 @@
 #
 #   session-end <state-dir> <id> --gen G --config <dir>
 #       SessionEnd: the Claude Code process is going away. Appends
-#       `blocked: Claude Code session ended (<reason>) before the task reported
-#       done or failed`, with `[on=captain]` for reason logout. Skipped for
+#       `blocked [key=claude-session-end]: Claude Code session ended (<reason>)
+#       before the task reported done or failed`, with `[on=captain]` for
+#       reason logout. Skipped for
 #       reasons clear and resume (the process keeps running), when the newest
 #       event is already done or failed, and when firstmate itself asked for the
 #       exit (expect-exit below). Spawn runs it BEFORE the busy writer's own
@@ -152,10 +155,10 @@ case "$CMD" in
     err=$(token "$(field error)")
     msg=$(one_line "$(field last_assistant_message)" 240)
     [ -n "$msg" ] || msg=$(one_line "$(field error_details)" 240)
-    head=blocked
+    head='blocked [key=claude-api-error]'
     case "$err" in
       authentication_failed|oauth_org_not_allowed|account_on_hold|billing_error|cloud_credential_error)
-        head='blocked [on=captain]' ;;
+        head="$head [on=captain]" ;;
     esac
     line="$head: Claude Code turn ended on API error $err${msg:+: $msg}; the worker is idle until it is prompted again (StopFailure hook)"
     _fm_status_untimed "$last" last_untimed
@@ -170,8 +173,8 @@ case "$CMD" in
       case "${m_at:-}" in ''|*[!0-9]*) m_at=0 ;; esac
       [ "$m_gen" != "$GEN" ] || [ $(( $(date +%s) - m_at )) -gt "$EXPECT_SECS" ] || exit 0
     fi
-    head=blocked
-    [ "$reason" != logout ] || head='blocked [on=captain]'
+    head='blocked [key=claude-session-end]'
+    [ "$reason" != logout ] || head="$head [on=captain]"
     line="$head: Claude Code session ended ($reason) before the task reported done or failed, so no agent is running for it (SessionEnd hook)"
     ;;
   idle)

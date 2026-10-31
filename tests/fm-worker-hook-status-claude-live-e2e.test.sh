@@ -130,7 +130,7 @@ pass "Claude Code $CLAUDE_VERSION: idle_prompt in a detached pane declares the w
 # SessionEnd: an exit nobody recorded is a blocker naming the vendor reason.
 submit "/exit"
 wait_shell
-wait_status 15 '^blocked \[at=[0-9]+\]: Claude Code session ended \(prompt_input_exit\)' \
+wait_status 15 '^blocked \[key=claude-session-end\] \[at=[0-9]+\]: Claude Code session ended \(prompt_input_exit\)' \
   || fail "Claude Code $CLAUDE_VERSION's /exit wrote no session-end blocker; log:"$'\n'"$(cat "$STATUS")"
 pass "Claude Code $CLAUDE_VERSION: /exit reports an unexpected session end as a blocker"
 
@@ -157,7 +157,7 @@ pass "Claude Code $CLAUDE_VERSION: an exit firstmate recorded writes no status l
 rm -f "$STATE/$ID.exit-expected"
 launch --model claude-nonexistent-hook-probe
 submit "Reply with exactly the word OK and nothing else."
-wait_status 90 '^blocked \[at=[0-9]+\]: Claude Code turn ended on API error model_not_found' \
+wait_status 90 '^blocked \[key=claude-api-error\] \[at=[0-9]+\]: Claude Code turn ended on API error model_not_found' \
   || fail "Claude Code $CLAUDE_VERSION wrote no StopFailure blocker for an unknown model; log:"$'\n'"$(cat "$STATUS")"$'\n'"$(pane)"
 pass "Claude Code $CLAUDE_VERSION: an API-error turn end reports a blocker naming the error"
 submit "/exit"

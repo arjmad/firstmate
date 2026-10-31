@@ -5847,9 +5847,12 @@ BUSY_GEN=
     stopfail_extra=
     notification_entry=
     if [ "$KIND" != secondmate ]; then
+      # The hook runs in the worktree, so the config path must not be relative.
+      hook_config=$CONFIG
+      case "$hook_config" in /*) ;; *) hook_config="$PWD/$hook_config" ;; esac
       hook_status_cmd() {  # <subcommand>
         printf '%s %s %s %s --gen %s --config %s' "$(shell_quote "$FM_ROOT/bin/fm-worker-hook-status.sh")" "$1" \
-          "$(shell_quote "$STATE_REAL")" "$(shell_quote "$ID")" "$(shell_quote "$BUSY_GEN")" "$(shell_quote "$CONFIG")"
+          "$(shell_quote "$STATE_REAL")" "$(shell_quote "$ID")" "$(shell_quote "$BUSY_GEN")" "$(shell_quote "$hook_config")"
       }
       j_stopfail_status=$(json_escape "$(hook_status_cmd stop-failure) >/dev/null 2>&1 || true")
       j_idle_status=$(json_escape "$(hook_status_cmd idle) >/dev/null 2>&1 || true")

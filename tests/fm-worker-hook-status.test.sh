@@ -84,7 +84,13 @@ test_stop_failure_reports_a_blocker() {
   [ -n "$open" ] || fail "the StopFailure blocker must stay open until resolved"
   hook stop-failure '{"session_id":"worker-session","error":"rate_limit","last_assistant_message":"API Error: Rate limit reached"}'
   [ "$(status_lines)" -eq 2 ] || fail "an identical StopFailure on top of its own line must append nothing"
-  pass "StopFailure appends one blocked line naming the error"
+  new_case stopfail-keeps-decision
+  printf 'needs-decision [at=1]: which table?\n' > "$STATE/t1.status"
+  hook stop-failure '{"session_id":"worker-session","error":"overloaded"}' || fail "stop-failure hook failed"
+  open=$(status_open_decisions "$STATE/t1.status")
+  [ "$(printf '%s\n' "$open" | grep -c .)" -eq 2 ] \
+    || fail "the API-error blocker must open beside the worker's own decision, not replace it, open set:"$'\n'"$open"
+  pass "StopFailure appends one keyed blocked line naming the error"
 }
 
 test_stop_failure_account_errors_wait_on_the_captain() {
@@ -94,7 +100,7 @@ test_stop_failure_account_errors_wait_on_the_captain() {
     || fail "stop-failure hook failed"
   out=$(last_line)
   case "$out" in
-    'blocked [on=captain] [at='*']: Claude Code turn ended on API error authentication_failed: Please run /login now;'*) ;;
+    'blocked [key=claude-api-error] [on=captain] [at='*']: Claude Code turn ended on API error authentication_failed: Please run /login now;'*) ;;
     *) fail "an authentication failure must be a captain-tagged blocker on one line, got '$out'" ;;
   esac
   new_case stopfail-odd
@@ -110,12 +116,12 @@ test_session_end_reports_an_unexpected_exit() {
   hook session-end '{"session_id":"worker-session","reason":"other"}' || fail "session-end hook failed"
   out=$(last_line)
   case "$out" in
-    'blocked [at='*']: Claude Code session ended (other) before the task reported done or failed'*) ;;
+    'blocked [key=claude-session-end] [at='*']: Claude Code session ended (other) before the task reported done or failed'*) ;;
     *) fail "an unexpected exit must be a blocker, got '$out'" ;;
   esac
   new_case end-logout
   hook session-end '{"session_id":"worker-session","reason":"logout"}' || fail "session-end hook failed"
-  assert_contains "$(last_line)" "blocked [on=captain]" "a logout needs the captain's login"
+  assert_contains "$(last_line)" "blocked [key=claude-session-end] [on=captain]" "a logout needs the captain's login"
   pass "SessionEnd reports an exit nobody asked for as a blocker"
 }
 

@@ -768,8 +768,8 @@ do_exit() {
   # This stop is firstmate's own, so the worker's exit hook must not report it
   # as an unexpected session end (bin/fm-worker-hook-status.sh). do_exit runs
   # in a command substitution, so this subshell's EXIT trap drops the record
-  # when exit refuses before its command is delivered; a later real exit must
-  # still be reported.
+  # when exit refuses before it starts typing its command; a later real exit
+  # must still be reported.
   "$SCRIPT_DIR/fm-worker-hook-status.sh" expect-exit "$STATE" "$ID" >/dev/null 2>&1 || true
   trap 'rm -f "$STATE/$ID.exit-expected"' EXIT
   # A busy agent is interrupted first before the exit command is submitted.
@@ -819,11 +819,12 @@ do_exit() {
   # authoritative proof is the agent-state wait below. The retried Enter still
   # matters, because a slash command opens a completion popup on some TUIs that
   # swallows the first Enter.
+  # From here the exit command may land even if the send reports a failure.
+  trap - EXIT
   verdict=$(fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL") \
     || die "the exit command could not be sent to task $ID on $BACKEND"
   [ "$verdict" != send-failed ] \
     || die "the exit command could not be sent to task $ID on $BACKEND"
-  trap - EXIT
   confirm=$(settle_exit_confirm) || return $?
   state=$(wait_agent_state "$EXIT_WAIT" dead) || {
     die "exit-delivered $ID interrupt=$interrupt_result exit-command=delivered exit-confirm=$confirm agent-state=$state exit=unconfirmed; the agent did not stop within ${EXIT_WAIT}s"
