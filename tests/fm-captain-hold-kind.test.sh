@@ -53,7 +53,11 @@ test_kind_arguments_are_validated() {
     "--kind maybe" \
     "--default ship-it" \
     "--kind arjun-only --default ship-it" \
-    "--kind reversible --default bad]option"; do
+    "--kind reversible --default bad]option" \
+    "--kind reversible" \
+    "--kind reversible --default ship-it --no-default" \
+    "--kind arjun-only --no-default" \
+    "--no-default"; do
     id=sample-$RANDOM
     # shellcheck disable=SC2086 # Word splitting builds each refused argument set.
     if run_captain "$home" hold "$id" --title "Refused call" --reason "decide" $args \
@@ -74,6 +78,55 @@ test_kind_arguments_are_validated() {
     fail "a refused hold still wrote a backlog row: $(cat "$home/data/backlog.md")"
   fi
   pass "invalid kinds, defaults, and spoofed prefixes are refused before any write"
+}
+
+# A reversible call must say what happens if the captain never answers: a
+# default that releases it, his own --until deferral, or an explicit
+# --no-default. Omitting all three is refused and says how to fix it.
+test_reversible_hold_names_its_default() {
+  local home out show
+  home=$(make_home names-default)
+  if run_captain "$home" hold sample-bare --title "Bare reversible call" \
+    --reason "keep or drop" --kind reversible > "$home/out" 2> "$home/err"; then
+    fail "a reversible hold with no default, deferral, or --no-default was accepted"
+  fi
+  assert_grep "--default <option>" "$home/err" "the refusal did not name --default"
+  assert_grep "--no-default" "$home/err" "the refusal did not name --no-default"
+  if grep -q 'sample-bare' "$home/data/backlog.md"; then
+    fail "the refused reversible hold still wrote a backlog row: $(cat "$home/data/backlog.md")"
+  fi
+
+  FM_CAPTAIN_HOLD_NOW=2026-10-14T10:00:00Z run_captain "$home" hold sample-idea \
+    --title "An idea" --reason "build the widget or not" --kind reversible --no-default >/dev/null \
+    || fail "a reversible hold with --no-default was refused"
+  show=$(show_task "$home" sample-idea)
+  assert_contains "$show" '[reversible] build the widget or not' \
+    "--no-default did not store the plain reversible prefix"
+  FM_CAPTAIN_HOLD_NOW=2026-10-14T10:00:00Z run_captain "$home" hold sample-later \
+    --title "A deferred call" --reason "revisit the banner" --kind reversible --until 2026-11-30 >/dev/null \
+    || fail "a reversible hold the captain deferred with --until was refused"
+  show=$(show_task "$home" sample-later)
+  assert_contains "$show" '[reversible] revisit the banner' \
+    "the deferred reversible hold did not store the plain reversible prefix"
+
+  # A re-hold must restate the choice, so it cannot silently drop a default.
+  FM_CAPTAIN_HOLD_NOW=2026-10-14T10:00:00Z run_captain "$home" hold sample-call \
+    --title "Pick the font" --reason "serif or sans" --kind reversible --default sans >/dev/null \
+    || fail "a reversible hold with a default was refused"
+  if FM_CAPTAIN_HOLD_NOW=2026-10-15T10:00:00Z run_captain "$home" hold sample-call \
+    --reason "serif or sans, asked again" --kind reversible > "$home/out" 2> "$home/err"; then
+    fail "a reversible re-hold dropped its default without saying so"
+  fi
+  show=$(show_task "$home" sample-call)
+  assert_contains "$show" '[reversible; default: sans; releases 2026-10-17T10:00:00Z] serif or sans' \
+    "the refused re-hold changed the stored default"
+
+  out=$(FM_CAPTAIN_HOLD_NOW=2026-12-01T00:00:00Z run_captain "$home" release-due) \
+    || fail "release-due failed"
+  assert_contains "$out" "released by default: sample-call sans" "the defaulted call did not release"
+  assert_not_contains "$out" "sample-idea" "a --no-default hold released itself"
+  assert_not_contains "$out" "sample-later" "a deferred reversible hold released itself"
+  pass "a reversible hold names a default, a deferral, or --no-default, and only a default releases"
 }
 
 test_kind_prefix_shows_on_every_hold_reason() {
@@ -235,6 +288,7 @@ test_hold_records_the_captain_as_owner_and_release_hands_back() {
 }
 
 test_kind_arguments_are_validated
+test_reversible_hold_names_its_default
 test_hold_records_the_captain_as_owner_and_release_hands_back
 test_kind_prefix_shows_on_every_hold_reason
 test_due_reversible_default_releases_with_its_record

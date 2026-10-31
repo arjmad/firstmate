@@ -22,7 +22,7 @@
 # Usage:
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
 #     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] \
-#     [--kind reversible|arjun-only] [--default <option>]
+#     [--kind reversible|arjun-only] [--default <option> | --no-default]
 #   fm-captain-hold.sh release-due
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
 #   fm-captain-hold.sh defer <task-id> --until YYYY-MM-DD --decision-file <path>
@@ -68,15 +68,23 @@
 # --until`, so a "revisit later" answer is stored as a date instead of a live
 # card.
 #
-# HOLD KINDS AND DEFAULT RELEASE (fork patch, docs/fork-decisions.md 2026-10-14).
+# HOLD KINDS AND DEFAULT RELEASE (fork patches, docs/fork-decisions.md
+# 2026-10-14 and 2026-10-31).
 # `--kind` classifies the call. `arjun-only` covers money, credentials,
 # deletions, customer-facing changes, external commitments and Sapna's domain;
 # it never releases itself and refuses `--default`. `reversible` is every other
 # call. A reversible hold given `--default <option>` (one line, at most 200
 # bytes) releases itself 72 hours after that default was first recorded, which
 # enforces the captain's 2026-09-24 rule that a reversible call with a
-# recommendation does not wait on him forever. The kind is stored as a prefix
-# on the stored reason, so every surface that shows a hold reason shows it:
+# recommendation does not wait on him forever. A reversible hold must say what
+# happens if he never answers (captain's 2026-10-30 asks-cut pick): it takes
+# `--default <option>`, or `--until` when he deferred it himself, or
+# `--no-default` when no option is safe to apply unasked (an idea, an open
+# question); a reversible hold with none of the three is refused before any
+# write, so a missing default is a recorded choice rather than an omission.
+# `--no-default` stores the same `[reversible]` prefix as before and is
+# refused beside `--default` or with any other kind. The kind is stored as a
+# prefix on the stored reason, so every surface that shows a hold reason shows it:
 #   [arjun-only] <reason>
 #   [reversible] <reason>
 #   [reversible; default: <option>; releases <YYYY-MM-DDTHH:MM:SSZ>] <reason>
@@ -1064,12 +1072,18 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how> <origi
 HOLD_DEFAULT_RELEASE_SECS=259200
 HOLD_DEFAULT_OPTION_MAX_BYTES=200
 
-validate_hold_kind_args() {  # <kind> <default-given> <default-option> <reason>
-  local kind=$1 given=$2 option=$3 reason=$4
+validate_hold_kind_args() {  # <kind> <default-given> <default-option> <reason> <no-default> <until>
+  local kind=$1 given=$2 option=$3 reason=$4 no_default=$5 until=$6
   case "$kind" in
     ''|reversible|arjun-only) : ;;
     *) fail "--kind must be reversible or arjun-only: $kind" ;;
   esac
+  if [ "$no_default" = 1 ]; then
+    [ "$given" != 1 ] || fail "pass --default or --no-default, not both"
+    [ "$kind" = reversible ] || fail "--no-default requires --kind reversible"
+  elif [ "$kind" = reversible ] && [ "$given" != 1 ] && [ -z "$until" ]; then
+    fail "a reversible hold takes --default <option> so it releases itself after 72 hours; pass --until when the captain deferred it, or --no-default when no option is safe to apply unasked"
+  fi
   if [ "$given" = 1 ]; then
     [ "$kind" != arjun-only ] \
       || fail "an arjun-only hold never releases itself, so it takes no --default; put the recommendation in the reason"
@@ -1128,7 +1142,7 @@ hold_release_time() {  # <hold-set-utc-iso>
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0 stored_reason previous_origin='' hold_status=0
-  local decision_kind='' default_option='' default_given=0 releases='' existing_reason=''
+  local decision_kind='' default_option='' default_given=0 no_default=0 releases='' existing_reason=''
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -1140,13 +1154,14 @@ command_hold() {
       --until) shift; until=${1:-} ;;
       --kind) shift; decision_kind=${1:-} ;;
       --default) shift; default_option=${1:-}; default_given=1 ;;
+      --no-default) no_default=1 ;;
       *) usage >&2; exit 2 ;;
     esac
     shift
   done
   validate_slug task-id "$id"
   [ -n "$reason" ] || fail "reason must not be empty"
-  validate_hold_kind_args "$decision_kind" "$default_given" "$default_option" "$reason"
+  validate_hold_kind_args "$decision_kind" "$default_given" "$default_option" "$reason" "$no_default" "$until"
   if [ -n "$origin" ]; then
     validate_slug origin-id "$origin"
   fi
