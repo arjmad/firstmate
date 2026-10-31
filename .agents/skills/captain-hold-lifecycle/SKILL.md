@@ -23,7 +23,8 @@ The originating investigation or review is never its own inventory entry, so hol
 Put the question and its options in the hold reason, and keep one held task per genuine gate: a multi-question review is one held task pointing at its report, not a row per question. Represent that task with exactly one board card that consolidates its questions and options; never fan one task id into duplicate same-key cards.
 Register or re-hold through `bin/fm-captain-hold.sh hold`, which is idempotent per task id.
 Give every new hold a kind: `--kind arjun-only` when any option spends money, touches a credential, deletes unique data, changes what a customer sees, makes an external commitment, falls in Sapna's domain, or needs the captain's own hands; otherwise `--kind reversible`.
-A reversible call with a recommendation also takes `--default <option>`, which releases it after 72 hours as the decision of record; never give a default to a call the captain has deferred himself.
+A reversible call also takes `--default <option>`, your recommended option, which releases it after 72 hours as the decision of record; never give a default to a call the captain has deferred himself (`--until`).
+Pass `--no-default` instead only when no option is safe to apply without him, such as an idea or a question with no recommendation; the script refuses a reversible hold that carries none of the three.
 On a `check: released by default: <id> <option>` wake, act on that option as you would on an answer and tell the captain in one line what was released and to what.
 After inventorying the whole report and review surface, run `bin/fm-captain-hold.sh complete` with every captain-held task id, or with `--none` only when the reviewed surface leaves nothing waiting on the captain.
 A completed investigation and an ended visual review use this same owner and completion command; a visual tool, including Lavish, never owns a parallel completion policy.
