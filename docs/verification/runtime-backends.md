@@ -662,6 +662,38 @@ Below 36 columns that name is truncated with `…` and the doorbell wraps past `
 `tests/fm-backend-herdr.test.sh` (`test_send_text_submit_claude_narrow_titled_doorbell_is_proven_and_submitted`) pins the narrow shape.
 `tests/fm-spawn-dispatch-profile.test.sh` (`test_claude_launch_names_the_session_after_its_task`) pins the emitted name for ship, scout, and secondmate launches, and `tests/fm-control-relaunch.test.sh` pins it across a relaunch.
 
+## Claude worker status hooks
+
+Verified 2026-10-31 on Claude Code 2.1.310 (Claude Code), tmux 3.7b, macOS arm64.
+`bin/fm-worker-hook-status.sh` reads three vendor-emitted hook events, so a throwaway interactive session in a private tmux server, its worktree's `.claude/settings.local.json` logging each event's payload, recorded which ones fire in a detached pane and with which fields:
+
+```text
+Stop {"session_id":"a2862f4d-...","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"OK","background_tasks":[],...}
+Notification {"session_id":"a2862f4d-...","hook_event_name":"Notification","message":"Claude is waiting for your input","notification_type":"idle_prompt"}
+SessionEnd {"session_id":"a2862f4d-...","hook_event_name":"SessionEnd","reason":"prompt_input_exit"}
+SessionEnd {"session_id":"be9e30cf-...","hook_event_name":"SessionEnd","reason":"other"}
+StopFailure {"session_id":"4c567289-...","hook_event_name":"StopFailure","error":"model_not_found","last_assistant_message":"There's an issue with the selected model (claude-nonexistent-probe-9). It may not exist or you may not have access to it. Run /model to pick a different model."}
+```
+
+`idle_prompt` arrived 60 seconds after `Stop` in a pane nobody was attached to, so the vendor's "only when you appear to be away" gate does not suppress it there.
+`/exit` ended the session with reason `prompt_input_exit` and `tmux kill-window` with reason `other`, so firstmate's own stop (the `/exit` that `bin/fm-control.sh` exit types, the kill and process reap in `bin/fm-teardown.sh`) fires `SessionEnd` exactly as an unexpected exit does; that is why both record `expect-exit` first.
+`claude --model claude-nonexistent-probe-9` turned a prompt into `StopFailure` with `error` `model_not_found`.
+
+The live guard drives the writer itself through the same events and refreshes this record after a Claude Code upgrade:
+
+```sh
+FM_CLAUDE_WORKER_HOOKS_LIVE=1 tests/fm-worker-hook-status-claude-live-e2e.test.sh
+```
+
+```text
+ok - Claude Code 2.1.310: idle_prompt in a detached pane declares the worker's pause
+ok - Claude Code 2.1.310: /exit reports an unexpected session end as a blocker
+ok - Claude Code 2.1.310: an exit firstmate recorded writes no status line
+ok - Claude Code 2.1.310: an API-error turn end reports a blocker naming the error
+```
+
+`tests/fm-worker-hook-status.test.sh` pins the writer's lines and guards against hand-written payloads, and `tests/fm-busy-adapter-wiring.test.sh` (`test_claude_crewmate_hooks_write_their_own_status`) pins the spawned wiring.
+
 ## Pi seeded-secondmate project trust
 
 [`fm-spawn.sh --help`](../../bin/fm-spawn.sh) owns the project-trust approval contract for seeded secondmates and Pi workers, and its compatibility fallback.

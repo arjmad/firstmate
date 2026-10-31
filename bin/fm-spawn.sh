@@ -5838,7 +5838,29 @@ BUSY_GEN=
       j_stop=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null $stop_turnend")
       stop_entry="\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stop\"}]}],"
     fi
-    hooks_json="\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_submit\"}]}],\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_posttool\"}]}],${stop_entry}\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stopfail\"}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_sessionend\"}]}]}"
+    # A crewmate's StopFailure, SessionEnd, and idle_prompt hooks also append
+    # its own status line (bin/fm-worker-hook-status.sh owns which line and
+    # when). SessionEnd runs that writer first in the same command, because
+    # the busy writer's session-end event releases the session binding the
+    # status writer checks, and Claude runs one event's hooks in parallel.
+    # A secondmate reports through its parent channel, so it gets none.
+    stopfail_extra=
+    notification_entry=
+    if [ "$KIND" != secondmate ]; then
+      # The hook runs in the worktree, so the config path must not be relative.
+      hook_config=$CONFIG
+      case "$hook_config" in /*) ;; *) hook_config="$PWD/$hook_config" ;; esac
+      hook_status_cmd() {  # <subcommand>
+        printf '%s %s %s %s --gen %s --config %s' "$(shell_quote "$FM_ROOT/bin/fm-worker-hook-status.sh")" "$1" \
+          "$(shell_quote "$STATE_REAL")" "$(shell_quote "$ID")" "$(shell_quote "$BUSY_GEN")" "$(shell_quote "$hook_config")"
+      }
+      j_stopfail_status=$(json_escape "$(hook_status_cmd stop-failure) >/dev/null 2>&1 || true")
+      j_idle_status=$(json_escape "$(hook_status_cmd idle) >/dev/null 2>&1 || true")
+      j_sessionend=$(json_escape "fm_hook_payload=\$(cat); printf '%s' \"\$fm_hook_payload\" | $(hook_status_cmd session-end) >/dev/null 2>&1; printf '%s' \"\$fm_hook_payload\" | $busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
+      stopfail_extra=",{\"type\":\"command\",\"command\":\"$j_stopfail_status\"}"
+      notification_entry=",\"Notification\":[{\"matcher\":\"idle_prompt\",\"hooks\":[{\"type\":\"command\",\"command\":\"$j_idle_status\"}]}]"
+    fi
+    hooks_json="\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_submit\"}]}],\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_posttool\"}]}],${stop_entry}\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stopfail\"}${stopfail_extra}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_sessionend\"}]}]${notification_entry}}"
     if [ "$KIND" = secondmate ]; then
       session_keys='"feedbackDrafts":"off",'
       if [ "$KEEP_AI_TRAILERS" != 1 ]; then

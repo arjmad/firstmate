@@ -4066,6 +4066,11 @@ fi
 # into that task's live work, which is the exact hazard both guards exist to
 # prevent. Either verdict alone skips the worktree half; the per-task temp
 # root is still this task's own and is reaped regardless.
+if [ "$KIND" != secondmate ]; then
+  # The endpoint kill and process reap below are firstmate's own stop, so the
+  # worker's exit hook must not report it (bin/fm-worker-hook-status.sh).
+  "$SCRIPT_DIR/fm-worker-hook-status.sh" expect-exit "$STATE" "$ID" >/dev/null 2>&1 || true
+fi
 if [ "$KIND" != secondmate ] && teardown_owns_worktree && [ "$ALLOC_RECORDS_ONLY" != 1 ]; then
   conclude_task_no_mistakes_run "$WT"
   reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
@@ -4327,7 +4332,7 @@ retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
 [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" cleaned_up "$ID" || true
 status_retire_presentation_task "$STATE" "$ID" || exit 1
 fm_wake_queue_prune_task "$STATE" "$ID" "$T" 2>/dev/null || true
-rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.progress" \
+rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.progress" "$STATE/$ID.exit-expected" \
   "$(fm_wake_signal_seen_path "$STATE" "$STATE/$ID.turn-ended")" \
   "$STATE/$ID.pi-ext.ts" "$STATE/$ID.omp-ext.ts" "$STATE/$ID.grok-turnend-token" \
   "$STATE/$ID.kimi-turnend-token" "$STATE/$ID.muse-session" \

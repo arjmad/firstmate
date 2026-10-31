@@ -1039,6 +1039,33 @@ test_idle_agent_is_not_interrupted() {
   pass "fm-control exit: an idle agent goes straight to its exit command"
 }
 
+# The worker's SessionEnd hook (bin/fm-worker-hook-status.sh) reports an exit
+# as a blocker unless firstmate recorded it was about to stop that incarnation.
+test_exit_records_firstmates_own_stop_for_the_session_end_hook() {
+  local dir out rc gen recorded
+  dir=$(new_case expect-exit)
+  add_task "$dir" t1 claude
+  alive_as "$dir" claude
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$dir/home/state" t1 --state idle --source fm-spawn --event seed)
+  printf 'busy_gen=%s\n' "$gen" >> "$dir/home/state/t1.meta"
+  out=$(run_control "$dir" t1 exit); rc=$?
+  expect_code 0 "$rc" "exiting a claude agent should succeed"$'\n'"$out"
+  read -r recorded _ < "$dir/home/state/t1.exit-expected" 2>/dev/null || recorded=
+  [ "$recorded" = "$gen" ] || fail "exit must record the stopped incarnation's gen before stopping it, got '$recorded'"
+
+  # An exit that refuses before its command is delivered leaves no record, so
+  # the worker's next real exit is still reported.
+  dir=$(new_case expect-exit-refused)
+  add_task "$dir" t1 claude
+  alive_as "$dir" claude
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$dir/home/state" t1 --state idle --source fm-spawn --event seed)
+  exit_picker_screen > "$dir/fake/pane"
+  out=$(run_control "$dir" t1 exit); rc=$?
+  expect_code 1 "$rc" "an open exit picker should refuse"$'\n'"$out"
+  [ ! -e "$dir/home/state/t1.exit-expected" ] || fail "a refused exit must not leave its stop record behind"
+  pass "fm-control exit: records its own stop for the worker's SessionEnd hook, and drops it when exit refuses"
+}
+
 test_exit_drops_meta_busy_gen_with_the_sidecar() {
   local dir out rc gen changed
   dir=$(new_case codex-retire)
@@ -1414,6 +1441,7 @@ test_interrupt_refuses_when_no_agent_runs
 test_ambiguous_endpoint_refuses
 test_busy_agent_is_interrupted_before_the_exit_command
 test_idle_agent_is_not_interrupted
+test_exit_records_firstmates_own_stop_for_the_session_end_hook
 test_exit_drops_meta_busy_gen_with_the_sidecar
 test_exit_refuses_an_open_background_picker
 test_exit_confirms_the_recorded_picker_only_through_the_key_path
