@@ -181,6 +181,11 @@ fail() {
 
 board_path() { printf '%s/.lavish/bearings-board.html\n' "$FM_HOME"; }
 
+# Print the JSON payload injected into a built board page.
+board_payload() {  # <board.html>
+  sed -n '/<script id="bearings-data" type="application\/json">/,/<\/script>/p' "$1" | sed '1d;$d'
+}
+
 sha256_stdin() {
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 | awk '{ print $1 }'
@@ -652,7 +657,7 @@ command_build() {
   fi
   if [ -n "$gaps" ]; then
     rm -f -- "$effective"
-    fail "decision cards must offer a real choice: $gaps"
+    fail "decision cards must offer a real choice and its case against: $gaps"
   fi
   if ! gaps=$(inbox_item_gaps "$effective"); then
     rm -f -- "$effective"
@@ -695,8 +700,7 @@ command_build() {
   fi
   # Round-trip the injected payload back out of the built page, so a board that
   # would fail to parse in the browser fails here instead.
-  extracted=$(sed -n '/<script id="bearings-data" type="application\/json">/,/<\/script>/p' "$tmp" \
-    | sed '1d;$d')
+  extracted=$(board_payload "$tmp")
   if ! printf '%s\n' "$extracted" | jq -e --arg schema "$BOARD_SCHEMA" '.schema == $schema' >/dev/null 2>&1; then
     rm -f -- "$tmp"
     fail "the built board does not carry a readable $BOARD_SCHEMA payload"
@@ -765,8 +769,7 @@ command_published() {
   command -v jq >/dev/null 2>&1 || fail "jq is required"
   board=$(board_path)
   [ -f "$board" ] || fail "no board has been built: $board"
-  extracted=$(sed -n '/<script id="bearings-data" type="application\/json">/,/<\/script>/p' "$board" \
-    | sed '1d;$d')
+  extracted=$(board_payload "$board")
   printf '%s\n' "$extracted" | jq -e --arg schema "$BOARD_SCHEMA" 'select(.schema == $schema)' \
     || fail "the built board does not carry a readable $BOARD_SCHEMA payload: $board"
 }
