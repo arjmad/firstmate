@@ -1052,7 +1052,18 @@ test_exit_records_firstmates_own_stop_for_the_session_end_hook() {
   expect_code 0 "$rc" "exiting a claude agent should succeed"$'\n'"$out"
   read -r recorded _ < "$dir/home/state/t1.exit-expected" 2>/dev/null || recorded=
   [ "$recorded" = "$gen" ] || fail "exit must record the stopped incarnation's gen before stopping it, got '$recorded'"
-  pass "fm-control exit: records its own stop so the worker's SessionEnd hook stays quiet"
+
+  # An exit that refuses before its command is delivered leaves no record, so
+  # the worker's next real exit is still reported.
+  dir=$(new_case expect-exit-refused)
+  add_task "$dir" t1 claude
+  alive_as "$dir" claude
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$dir/home/state" t1 --state idle --source fm-spawn --event seed)
+  exit_picker_screen > "$dir/fake/pane"
+  out=$(run_control "$dir" t1 exit); rc=$?
+  expect_code 1 "$rc" "an open exit picker should refuse"$'\n'"$out"
+  [ ! -e "$dir/home/state/t1.exit-expected" ] || fail "a refused exit must not leave its stop record behind"
+  pass "fm-control exit: records its own stop for the worker's SessionEnd hook, and drops it when exit refuses"
 }
 
 test_exit_drops_meta_busy_gen_with_the_sidecar() {
