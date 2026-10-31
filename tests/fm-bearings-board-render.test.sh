@@ -109,12 +109,12 @@ full_payload() {  # <path>
        decide:"Which tier?", options:[
          {value:"keep", label:"Keep it", hint:"Nothing changes."},
          {value:"upgrade", label:"Upgrade", hint:"Firstmate drafts it for your OK."}],
-       recommend_value:"keep", allow_freeform:true},
+       recommend_value:"keep", allow_freeform:true, case_against:"The new tier adds the reports you asked for last month."},
       {key:"sample-domain", type:"decision", repo:"sample", title:"Renew the domain", about:"Unused.",
        decide:"Renew?", options:[
          {value:"lapse", label:"Let it lapse", hint:"Nothing renews."},
          {value:"renew", label:"Renew", hint:"Firstmate renews it."}],
-       recommend_value:"lapse", allow_freeform:true, close:"release",
+       recommend_value:"lapse", allow_freeform:true, close:"release", case_against:"A lapsed domain can be bought by anyone.",
        link:{url:"http://100.119.38.2:4387/session/0123456789abcdef", label:"Atlas board"}}],
     inbox:[
       {key:"sample-worker", group:"blocking", repo:"sample", title:"Open the sample site",
@@ -326,9 +326,16 @@ test_take_all_recommendations_confirms_then_sends_one_answer_per_card() {
   out=$(render "$home" '[{"do":"take-all"}]')
   printf '%s' "$out" | jq -e '
     .takeAll.hidden == false and .takeAll.label == "Take all 2 recommendations"
-      and .takeAll.confirm == ["Pick the tier → Keep it", "Renew the domain → Let it lapse"]
+      and .takeAll.confirm == [
+        "Pick the tier → Keep itCase against: The new tier adds the reports you asked for last month.",
+        "Renew the domain → Let it lapseCase against: A lapsed domain can be bought by anyone."]
       and (.prompts | length) == 0
-  ' >/dev/null || fail "take all did not list what it would send before sending: $out"
+  ' >/dev/null || fail "take all did not list what it would send, with each case against, before sending: $out"
+  printf '%s' "$out" | jq -e '
+    [.sections[] | select(.key == "decisions") | .items[] | .against] == [
+      "Case against: The new tier adds the reports you asked for last month.",
+      "Case against: A lapsed domain can be bought by anyone."]
+  ' >/dev/null || fail "a decision card did not show its case against under its options: $out"
   out=$(render "$home" '[
     {"do":"answer","key":"sample-tier","pick":"upgrade","note":"x"},
     {"do":"take-all"}]')
@@ -338,7 +345,7 @@ test_take_all_recommendations_confirms_then_sends_one_answer_per_card() {
   printf '%s' "$out" | jq -e '
     ([.prompts[].data | {question, selection}] == [{question:"sample-tier", selection:"keep"}, {question:"sample-domain", selection:"lapse"}])
   ' >/dev/null || fail "confirming take all did not send each card its own recommended answer: $out"
-  pass "take all recommendations confirms the list, then sends one keyed answer per open card"
+  pass "each decision card and take all show the case against, and take all confirms, then sends one keyed answer per open card"
 }
 
 test_take_all_carries_each_cards_typed_note() {

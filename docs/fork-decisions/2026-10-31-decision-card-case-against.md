@@ -1,0 +1,8 @@
+2026-10-31: Arjun picked the ecosystem board's `talk-case-against` card as a Keep in the helm chat on 2026-10-30 and said on 2026-10-31 to start it.
+Decision: every bearings board decision card carries one line, the strongest case against its recommendation, written by a fresh reviewer rather than the agent that proposed it.
+Why: a tired reader agrees with the agent's lean more often (the board cited Anthropic's analyst study, where analysts followed it 86% of the time), and one line of dissent beside the recommendation and inside Take all recommendations keeps a tired yes a real choice.
+No upstream proposal: the decision-card shape it extends is this fork's own patch (2026-10-24).
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| `build` refuses a decision card without `case_against`, one line of at most 300 characters, naming the card key; `published` prints the last built board's payload so a rebuild carries each line forward instead of asking a reviewer again; the template shows the line under the card's options and beside each card in the Take all confirm list; the bearings skill has the composer get each new card's line from one fresh subagent and reuse it while the card's recommendation is unchanged | `bin/fm-bearings-board.sh` (`validate_payload`, `decision_card_gaps`, `command_published`, header), `.agents/skills/bearings/assets/board-template.html` (`againstLine`, `renderCard`, Take all), `.agents/skills/bearings/SKILL.md` (Lavish board mode), `tests/fm-bearings-board.test.sh`, `tests/fm-bearings-board-render.test.sh`, `tests/assets/board-render-harness.mjs`, `tests/fm-bearings-board-lavish-live-e2e.test.sh` (fixtures) | same files | carried | 45dd50a5 |
