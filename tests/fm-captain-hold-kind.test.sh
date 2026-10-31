@@ -97,6 +97,19 @@ test_reversible_hold_names_its_default() {
     fail "the refused reversible hold still wrote a backlog row: $(cat "$home/data/backlog.md")"
   fi
 
+  if run_captain "$home" hold sample-both --title "Deferred with a default" --reason "keep or drop" \
+    --kind reversible --default keep --until 2026-11-30 > "$home/out" 2> "$home/err"; then
+    fail "a reversible hold accepted a default beside the captain's deferral"
+  fi
+  assert_grep "deferred with --until takes no --default" "$home/err" \
+    "the default-beside-deferral refusal did not say why"
+  if run_captain "$home" hold sample-both --title "Deferred with a default" --reason "keep or drop" \
+    --kind arjun-only --no-default > "$home/out" 2> "$home/err"; then
+    fail "--no-default was accepted on an arjun-only hold"
+  fi
+  assert_grep "--no-default requires --kind reversible" "$home/err" \
+    "the arjun-only --no-default refusal did not say why"
+
   FM_CAPTAIN_HOLD_NOW=2026-10-14T10:00:00Z run_captain "$home" hold sample-idea \
     --title "An idea" --reason "build the widget or not" --kind reversible --no-default >/dev/null \
     || fail "a reversible hold with --no-default was refused"
