@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Behavior tests for bin/fm-atlas.sh: an Atlas build's seven ideas become
-# ordinary captain holds bearings shows as cards, an answered idea is never
+# Behavior tests for bin/fm-atlas.sh: an Atlas build's up to seven ideas
+# become ordinary captain holds bearings shows as cards, an answered idea is never
 # asked again, a "do it" pick names the fleet task to file, and the keep test
 # reads the picks and their measured results.
 set -u
@@ -73,7 +73,27 @@ test_file_holds_each_idea_for_the_captain() {
   assert_contains "$show" "[reversible]" "the idea is not a reversible call"
   atlas "$home" latest | jq -e '.board == "http://board.example/session/1" and .built_at == "2026-10-26 13:00Z"' >/dev/null \
     || fail "latest does not name the build's board"
-  pass "file holds each of the seven ideas for the captain and records the board"
+  pass "file holds each of up to seven ideas for the captain and records the board"
+}
+
+# A build may carry fewer than seven ideas, or none when no idea passed the bar.
+test_file_holds_a_short_or_empty_build() {
+  local home out
+  home=$(make_home short)
+  make_build "$home/full.json" "2026-11-02 13:00Z" three
+  jq '.ideas |= .[:3]' "$home/full.json" > "$home/three.json"
+  out=$(atlas "$home" file "$home/three.json") || fail "file refused a three-idea build: $out"
+  assert_equals 3 "$(grep -c '^held: atlas-three-' <<<"$out")" "a three-idea build did not hold three ideas"
+  jq -n '{schema: "atlas.v1", built_at: "2026-11-09 13:00Z", ideas: []}' > "$home/empty.json"
+  out=$(atlas "$home" file "$home/empty.json" --board http://board.example/session/9) \
+    || fail "file refused an empty build: $out"
+  [ -z "$out" ] || fail "an empty build held or reported ideas: $out"
+  atlas "$home" latest | jq -e '.board == "http://board.example/session/9" and .built_at == "2026-11-09 13:00Z"' >/dev/null \
+    || fail "an empty build's board was not recorded"
+  jq -e '[.builds[] | .ideas | length] == [3, 0]' "$home/state/atlas/record.json" >/dev/null \
+    || fail "the short and empty builds were not both recorded"
+  assert_contains "$(show_task "$home" atlas-three-1)" "held: yes" "an empty build released an earlier build's open idea"
+  pass "file holds a short build's ideas and records an empty build's board"
 }
 
 test_refiling_and_answered_ideas() {
@@ -93,19 +113,23 @@ test_refiling_and_answered_ideas() {
 }
 
 test_file_refuses_a_bad_build() {
-  local home
+  local home out code
   home=$(make_home refuse)
   make_build "$home/atlas.json" "2026-10-26 13:00Z" one
-  jq '.ideas |= .[:6]' "$home/atlas.json" > "$home/six.json"
+  jq '.ideas += [.ideas[0] | .id = "A8" | .slug = "one-8"]' "$home/atlas.json" > "$home/eight.json"
   jq '.ideas[1].id = "A9"' "$home/atlas.json" > "$home/rank.json"
   jq '.ideas[2].brief = ""' "$home/atlas.json" > "$home/brief.json"
-  for bad in six rank brief; do
+  jq '.ideas |= .[1:]' "$home/atlas.json" > "$home/gap.json"
+  for bad in eight rank brief gap; do
     if atlas "$home" file "$home/$bad.json" >/dev/null 2>&1; then
       fail "file accepted a build with a $bad problem"
     fi
   done
   [ ! -e "$home/state/atlas/record.json" ] || fail "a refused build was recorded"
-  pass "file refuses a build that is not seven ranked, complete ideas"
+  out=$(atlas "$home" file "$home/eight.json" 2>&1); code=$?
+  assert_equals 2 "$code" "an eight-idea build was not refused with exit 2"
+  assert_contains "$out" "at most seven ranked ideas" "the refusal does not name the seven-idea limit"
+  pass "file refuses a build that is not up to seven ranked, complete ideas"
 }
 
 test_pick_names_the_fleet_task() {
@@ -213,6 +237,7 @@ SH
 }
 
 test_file_holds_each_idea_for_the_captain
+test_file_holds_a_short_or_empty_build
 test_refiling_and_answered_ideas
 test_file_refuses_a_bad_build
 test_pick_names_the_fleet_task

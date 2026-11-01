@@ -1,6 +1,6 @@
 ---
 name: noticed-queue
-description: Load when teardown prints a `noticed-queue:` line, an inbox note is a fleet-handoff notice, the wake drain prints NOTICED, you notice a problem outside the task at hand, the Monday `[open-items]` note arrives, or you write Atlas's top 7 ideas.
+description: Load when teardown prints a `noticed-queue:` line, an inbox note is a fleet-handoff notice, the wake drain prints NOTICED, you notice a problem outside the task at hand, the Monday `[open-items]` note arrives, or you write Atlas's ideas.
 user-invocable: false
 metadata:
   internal: true
@@ -51,7 +51,7 @@ The Atlas board itself still builds only when he asks.
 
 ## The idea bar
 
-An idea reaches Arjun, as an Atlas card or in the Monday top 3, only when it passes all six tests below; when you write Atlas's top 7, apply them before you rank.
+An idea reaches Arjun, as an Atlas card or in the Monday top 3, only when it passes all six tests below; when you write Atlas's ideas, apply them before you rank, and carry only those that pass, up to seven.
 They come from his verdicts: he dropped all seven Atlas ideas of 2026-10-26 on quality ("Didn't like the ideas [it] came up with", 2026-10-28), and on the 2026-10-30 ecosystem board he kept 22 of the 39 ideas built on tools the fleet already runs and 1 of the 10 that brought a new platform.
 
 1. **One concrete friction, seen.** Name one thing that went wrong or cost money or time, with a dated instance, and the smallest change that removes it.
