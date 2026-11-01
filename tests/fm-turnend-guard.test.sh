@@ -493,6 +493,25 @@ test_hook_registered_check_only_blocks_with_check_banner() {
   pass "fm-turnend-guard: registered-check-only supervision is named in the block banner"
 }
 
+test_hook_pending_default_release_blocks_with_its_banner() {
+  local dir out status
+  command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; return 0; }
+  dir=$(make_primary_dir "$TMP_ROOT/hook-hold-release")
+  fm_test_tasks_toml "$dir/.tasks.toml"
+  mkdir -p "$dir/data"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$dir/data/backlog.md"
+  FM_HOME="$dir" FM_STATE_OVERRIDE="$dir/state" "$ROOT/bin/fm-captain-hold.sh" hold sample-call \
+    --title "Keep the banner" --reason "keep or drop" --kind reversible --default "drop it" >/dev/null \
+    || fail "could not hold the reversible call"
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 2 "$status" "default hook mode must block a blind turn while a default release waits"
+  assert_contains "$out" "A captain call's default release is waiting, but no live watcher" \
+    "a pending default release must be named in the block banner"
+  assert_not_contains "$out" "X-mode relay polling needs supervision" \
+    "a pending default release must not be misreported as relay polling"
+  pass "fm-turnend-guard: a task-less pending default release is named in the block banner"
+}
+
 test_hook_ignores_repo_state_when_fm_home_set() {
   local dir home out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-fm-home-ignore-root")
@@ -2333,6 +2352,7 @@ test_hook_blocks_from_fm_home_state
 test_hook_x_mode_reason_sources_cadence
 test_hook_x_mode_only_blocks_in_default_mode
 test_hook_registered_check_only_blocks_with_check_banner
+test_hook_pending_default_release_blocks_with_its_banner
 test_hook_ignores_repo_state_when_fm_home_set
 test_hook_uses_state_override
 test_hook_loop_guard_allows_retry

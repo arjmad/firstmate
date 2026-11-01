@@ -267,6 +267,70 @@ test_answer_before_release_wins() {
   pass "an answer recorded before the release time wins over the default"
 }
 
+# Whether the home's supervision predicate asks for a watcher, the switch every
+# primary's turn-end guard and Claude's Stop auto-arm read.
+needs_watcher() {  # <home>
+  bash -c '. "$1"; if fm_supervision_needed "$2"; then echo yes; else echo no; fi' _ \
+    "$ROOT/bin/fm-supervision-lib.sh" "$1/state"
+}
+
+# The watcher's hourly tick is the only caller of release-due, so a home with
+# no live task must still ask for a watcher while a reversible default waits.
+test_taskless_reversible_default_keeps_a_watcher_until_released() {
+  local home out show
+  home=$(make_home taskless)
+  FM_CAPTAIN_HOLD_NOW=2026-10-14T10:00:00Z run_captain "$home" hold sample-due \
+    --title "Keep the banner" --reason "keep or drop" --kind reversible --default "drop it" >/dev/null \
+    || fail "could not hold the due call"
+  FM_CAPTAIN_HOLD_NOW=2026-10-16T10:00:00Z run_captain "$home" hold sample-later \
+    --title "Pick the font" --reason "serif or sans" --kind reversible --default sans >/dev/null \
+    || fail "could not hold the later call"
+  FM_CAPTAIN_HOLD_NOW=2026-10-14T10:00:00Z run_captain "$home" hold sample-answered \
+    --title "Pick the colour" --reason "red or blue" --kind reversible --default red >/dev/null \
+    || fail "could not hold the answered call"
+  printf 'Blue, please.\n' > "$home/answer.txt"
+  run_captain "$home" answer sample-answered --decision-file "$home/answer.txt" >/dev/null \
+    || fail "the captain's answer was refused"
+  [ -z "$(find "$home/state" -name '*.meta' 2>/dev/null)" ] || fail "the fixture has a live task"
+  assert_equals yes "$(needs_watcher "$home")" \
+    "a task-less home holding a reversible default did not ask for a watcher"
+
+  out=$(FM_CAPTAIN_HOLD_NOW=2026-10-17T10:00:00Z run_captain "$home" release-due) \
+    || fail "release-due failed when one default was due"
+  assert_equals "released by default: sample-due drop it" "$out" \
+    "release-due did not release only the due default"
+  show=$(show_task "$home" sample-due)
+  assert_contains "$show" "Resolution mode: defaulted" "the due default left no record"
+  show=$(show_task "$home" sample-later)
+  assert_contains "$show" "held: yes" "a default not yet due was released"
+  show=$(show_task "$home" sample-answered)
+  assert_contains "$show" "Blue, please." "the captain's answer was lost"
+  assert_not_contains "$show" "Resolution mode: defaulted" "a default was recorded over an answer"
+  assert_equals yes "$(needs_watcher "$home")" \
+    "the home stopped asking for a watcher while a default was still waiting"
+
+  out=$(FM_CAPTAIN_HOLD_NOW=2026-10-19T10:00:00Z run_captain "$home" release-due) \
+    || fail "release-due failed when the later default was due"
+  assert_equals "released by default: sample-later sans" "$out" "the later default did not release"
+  assert_equals no "$(needs_watcher "$home")" \
+    "the home kept asking for a watcher after every default released"
+  pass "a task-less reversible default keeps a watcher until it releases; not-due and answered calls stay"
+}
+
+# Only a default can release itself, so no other hold keeps a watcher running.
+test_holds_without_a_default_need_no_watcher() {
+  local home
+  home=$(make_home no-default-watcher)
+  FM_CAPTAIN_HOLD_NOW=2026-10-14T10:00:00Z run_captain "$home" hold sample-money \
+    --title "Pay the invoice" --reason "pay or not" --kind arjun-only >/dev/null \
+    || fail "could not hold the arjun-only call"
+  FM_CAPTAIN_HOLD_NOW=2026-10-14T10:00:00Z run_captain "$home" hold sample-idea \
+    --title "An idea" --reason "build it or not" --kind reversible --no-default >/dev/null \
+    || fail "could not hold the no-default call"
+  assert_equals no "$(needs_watcher "$home")" "a hold with no default asked for a watcher"
+  pass "arjun-only and no-default holds do not keep a watcher running"
+}
+
 # A call held for the captain is his next move, so hold records him as the
 # owner, from the first write of a row it creates; releasing the hold hands
 # the work back to the fleet, while a closing answer leaves the owner alone.
@@ -483,3 +547,5 @@ test_kind_prefix_shows_on_every_hold_reason
 test_due_reversible_default_releases_with_its_record
 test_rehold_keeps_or_restarts_the_release_clock
 test_answer_before_release_wins
+test_taskless_reversible_default_keeps_a_watcher_until_released
+test_holds_without_a_default_need_no_watcher
