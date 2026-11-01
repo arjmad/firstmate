@@ -134,6 +134,7 @@ test_secondmate_home_runs_no_sittings() {
   out=$(run_sitting "$home" $((NOV01_NOON + 60)) due) || fail "due failed in a secondmate home: $out"
   assert_equals "" "$out" "a secondmate home ran its own sitting"
   assert_equals "$OCT31_NOON" "$(cat "$home/state/.last-decision-sitting")" "a secondmate home recorded a sitting"
+  [ ! -e "$home/state/.decision-sitting-waiting" ] || fail "a secondmate's hold marked its own home as waiting for a sitting"
   pass "a secondmate home runs no sittings of its own"
 }
 
@@ -161,8 +162,37 @@ test_secondmate_calls_count_in_the_parent_sitting() {
   pass "a secondmate's waiting calls count in its parent's sitting, and a failed read retries"
 }
 
+# A released scout leaves only its held call behind: no task record, source, or
+# check. The waiting call itself must keep the home supervised so the watcher
+# that runs the sitting tick is still running when the sitting comes due.
+test_waiting_call_keeps_an_empty_home_supervised() {
+  local home out
+  home=$(make_home supervised)
+  hold_call "$home" urgent --kind arjun-only
+  [ ! -e "$home/state/.decision-sitting-waiting" ] || fail "an arjun-only call marked the home as waiting for a sitting"
+  needed() { bash -c '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_needed "$2"' _ "$ROOT" "$home/state"; }
+  if needed; then fail "an empty home with only an at-once call needed supervision"; fi
+  hold_call "$home" waits --kind reversible --no-default
+  [ -e "$home/state/.decision-sitting-waiting" ] || fail "a reversible call did not mark the home as waiting"
+  needed || fail "an empty home whose reversible call waits for a sitting did not need supervision"
+
+  printf '%s\n' "$OCT31_NOON" > "$home/state/.last-decision-sitting"
+  out=$(run_sitting "$home" $((OCT31_EVENING + 60)) due) || fail "due failed: $out"
+  [ -e "$home/state/.decision-sitting-waiting" ] || fail "a sitting with a call still waiting cleared the marker"
+  printf 'drop it\n' > "$home/decision"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-captain-hold.sh" answer waits --decision-file "$home/decision" \
+    >/dev/null || fail "could not answer the waiting call"
+  out=$(run_sitting "$home" $((NOV01_NOON + 60)) due) || fail "due failed: $out"
+  assert_equals "" "$out" "a sitting whose last call was answered still woke"
+  [ ! -e "$home/state/.decision-sitting-waiting" ] || fail "a sitting with nothing waiting left the home supervised"
+  if needed; then fail "the home still needed supervision after its sitting found nothing waiting"; fi
+  pass "a call waiting for a sitting keeps an otherwise empty home supervised until a sitting finds nothing waiting"
+}
+
 test_sittings_follow_the_named_zone_across_daylight_saving
 test_only_live_reversible_calls_wait
 test_due_sitting_wakes_once_and_an_empty_one_stays_silent
 test_secondmate_home_runs_no_sittings
 test_secondmate_calls_count_in_the_parent_sitting
+test_waiting_call_keeps_an_empty_home_supervised

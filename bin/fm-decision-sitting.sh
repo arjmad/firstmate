@@ -5,6 +5,7 @@
 #   fm-decision-sitting.sh due
 #   fm-decision-sitting.sh queued
 #   fm-decision-sitting.sh slots
+#   fm-decision-sitting.sh waiting
 #
 # The captain takes non-urgent calls at two decision sittings a day, 12:00 and
 # 20:00 New York time, as one board (fork patch, docs/fork-decisions.md
@@ -36,6 +37,14 @@
 # that fails exits 1 and leaves the marker alone, so the next tick retries.
 # In a secondmate home `due` does nothing.
 #
+# `waiting` marks this home as holding a call that may wait for a sitting, by
+# touching state/.decision-sitting-waiting; bin/fm-captain-hold.sh runs it on
+# every `reversible` hold. While the marker exists bin/fm-supervision-lib.sh
+# counts the home as needing supervision, so the watcher that runs `due` keeps
+# running after the last task is torn down. A due sitting that finds nothing
+# waiting removes the marker, unless a hold touched it after the count was read.
+# It does nothing in a secondmate home, whose parent is already supervising it.
+#
 # `queued` prints the waiting call ids, one per line (`<mate-id>/<task-id>` for
 # a secondmate's), and is read-only apart from the snapshot's own cache refresh.
 # `slots` prints the `last` and `next` sitting as `<label> <epoch> <local time>`.
@@ -56,9 +65,10 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 ZONE=${FM_DECISION_SITTING_ZONE:-America/New_York}
 TIMES=${FM_DECISION_SITTING_TIMES:-12:00 20:00}
 MARKER="$STATE/.last-decision-sitting"
+WAITING="$STATE/.decision-sitting-waiting"
 
 usage() {
-  sed -n '2,45{s/^# \{0,1\}//;p;}' "$0"
+  sed -n '2,55{s/^# \{0,1\}//;p;}' "$0"
 }
 
 die() {
@@ -188,7 +198,7 @@ record_sitting() {  # <epoch>
 }
 
 cmd_due() {
-  local now slot recorded ids count key payload queued
+  local now slot recorded ids count key payload queued stamp
   [ "$#" -eq 0 ] || die "usage: fm-decision-sitting.sh due"
   if fm_parent_channel_home_id "$FM_HOME" >/dev/null 2>&1; then
     return 0
@@ -202,12 +212,16 @@ cmd_due() {
   recorded=$(cat "$MARKER" 2>/dev/null)
   case "$recorded" in ''|*[!0-9]*) recorded=0 ;; esac
   [ "$recorded" -lt "$slot" ] || return 0
-  ids=$(queued_ids) || exit 1
+  stamp=$(mktemp "$STATE/.decision-sitting-read.XXXXXX") || die "cannot stage the sitting read under $STATE"
+  ids=$(queued_ids) || { rm -f -- "$stamp"; exit 1; }
   count=$(printf '%s\n' "$ids" | grep -c . || true)
   if [ "$count" -eq 0 ]; then
+    [ "$WAITING" -nt "$stamp" ] || rm -f -- "$WAITING"
+    rm -f -- "$stamp"
     record_sitting "$slot" || die "cannot record the sitting under $MARKER"
     return 0
   fi
+  rm -f -- "$stamp"
   key="decision-sitting:$slot"
   payload="check: decision sitting $(sitting_label "$slot"): $count call(s) waiting for the captain (bin/fm-decision-sitting.sh queued)"
   load_wake_lib || die "cannot load the wake library"
@@ -221,6 +235,14 @@ cmd_due() {
     printf '%s\n' "$payload"
   fi
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+}
+
+cmd_waiting() {
+  [ "$#" -eq 0 ] || die "usage: fm-decision-sitting.sh waiting"
+  if fm_parent_channel_home_id "$FM_HOME" >/dev/null 2>&1; then
+    return 0
+  fi
+  touch "$WAITING" || die "cannot mark $WAITING"
 }
 
 cmd_queued() {
@@ -242,6 +264,7 @@ case "${1:-}" in
   due) shift; cmd_due "$@" ;;
   queued) shift; cmd_queued "$@" ;;
   slots) shift; cmd_slots "$@" ;;
+  waiting) shift; cmd_waiting "$@" ;;
   -h|--help) usage ;;
   *) usage >&2; exit 2 ;;
 esac
