@@ -806,6 +806,56 @@ test_overdue_scan_lines_surface_as_one_check_wake() {
   pass "pending overdue scan lines surface once as a single check wake"
 }
 
+# A sitting that comes due with a call waiting wakes the watcher with its own
+# payload, even a handling successor, which never re-announces queued rows.
+test_due_decision_sitting_wakes_a_handling_successor() {
+  local dir state out pid snap
+  command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; return 0; }
+  dir=$(make_case decision-sitting); dir=$(cd "$dir" && pwd -P); state="$dir/state"; out="$dir/watch.out"
+  snap="$dir/snapshot.json"
+  jq -n '{backlog:{records:[{id:"pick-plan",structured:true,state:"queued",hold_kind:"captain",
+    hold_bucket:"live",hold_reason:"[reversible] pick a plan"}]}}' > "$snap"
+  # 2026-11-01 12:00 New York is 17:00Z; the previous sitting was 2026-10-31 20:00.
+  printf '1793491200\n' > "$state/.last-decision-sitting"
+  PATH="$dir/fakebin:$PATH" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_CREW_STATE_BIN="$dir/fakebin/fm-crew-state.sh" FM_WATCH_HANDLING_SUCCESSOR=1 \
+    FM_POLL=0.2 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_SECONDMATE_LIVENESS_SECS=99999999 FM_FLEET_SYNC_INTERVAL=off FM_HOLD_RELEASE_INTERVAL=off \
+    FM_INBOX_REWAKE_INTERVAL=off FM_BACKLOG_OVERDUE_INTERVAL=off FM_DECISION_SITTING_INTERVAL=1 \
+    FM_DECISION_SITTING_NOW=1793552460 FM_DECISION_SITTING_SNAPSHOT="$snap" "$WATCH" > "$out" 2>/dev/null &
+  pid=$!
+  wait_for_exit "$pid" 150 || { reap "$pid"; fail "a handling successor did not wake on a due sitting: $(cat "$out")"; }
+  grep -F 'check: decision sitting 2026-11-01 12:00 America/New_York: 1 call(s) waiting' "$out" >/dev/null \
+    || fail "the wake did not carry the sitting payload: $(cat "$out")"
+  grep "$(printf '\tcheck\tdecision-sitting:1793552400\t')" "$state/.wake-queue" >/dev/null \
+    || fail "the due sitting was not queued durably: $(cat "$state/.wake-queue" 2>&1)"
+  pass "a due decision sitting wakes even a handling successor with its own payload"
+}
+
+# A hand-off line whose sitting was already drained and acknowledged is
+# dropped without a wake, so one sitting never reaches the captain twice.
+test_handled_decision_sitting_line_does_not_wake_again() {
+  local dir state out pid i=0
+  dir=$(make_case decision-sitting-handled); state="$dir/state"; out="$dir/watch.out"
+  printf 'decision-sitting:1793552400\tcheck: decision sitting 2026-11-01 12:00 America/New_York: 1 call(s) waiting for the captain (bin/fm-decision-sitting.sh queued)\n' \
+    > "$state/decision-sitting-woke"
+  watch_bg "$state" "$dir/fakebin" "$out" env FM_FLEET_SYNC_INTERVAL=off FM_HOLD_RELEASE_INTERVAL=off \
+    FM_BACKLOG_OVERDUE_INTERVAL=off FM_DECISION_SITTING_INTERVAL=off
+  pid=$!
+  while [ -e "$state/decision-sitting-woke" ] || [ -e "$state/.decision-sitting-woke.claimed" ]; do
+    i=$((i + 1))
+    [ "$i" -lt 100 ] || { reap "$pid"; fail "the watcher never claimed the leftover sitting line"; }
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  wait_live "$pid" 20 || fail "a sitting whose row was already handled woke the watcher again: $(cat "$out")"
+  reap "$pid"
+  if grep -F 'check: decision sitting' "$out" >/dev/null; then
+    fail "a handled sitting was announced again: $(cat "$out")"
+  fi
+  pass "a hand-off line whose sitting was already handled does not wake again"
+}
+
 # A queued backlog item whose date gate lapsed long ago without a dispatch
 # wakes the watcher through the detached overdue scan, which queues its durable row.
 test_overdue_backlog_item_wakes_the_watcher() {
@@ -927,6 +977,8 @@ test_hold_release_schedule_releases_a_due_default
 test_unacknowledged_inbox_note_rewakes_the_watcher
 test_acknowledged_inbox_note_never_rewakes_the_watcher
 test_overdue_scan_lines_surface_as_one_check_wake
+test_due_decision_sitting_wakes_a_handling_successor
+test_handled_decision_sitting_line_does_not_wake_again
 test_overdue_backlog_item_wakes_the_watcher
 test_paused_bg_job_without_until_stays_silent_after_the_job_ends
 test_paused_bg_job_until_timeout_rechecks_after_the_job_ends

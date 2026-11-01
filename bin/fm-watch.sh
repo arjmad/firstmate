@@ -2985,6 +2985,57 @@ inbox_rewake_tick() {
   wake "check: captain inbox: $count note(s) still unacknowledged (bin/fm-inbox.sh unread)"
 }
 
+# Decision sittings (bin/fm-decision-sitting.sh's header owns the sitting
+# times, the zone, which calls wait, and the once-per-sitting marker). Once per
+# FM_DECISION_SITTING_INTERVAL seconds (default 300; 0 or off disables) the
+# watcher starts `fm-decision-sitting.sh due` detached, so the fleet snapshot a
+# due sitting reads never stalls the loop. A due sitting with calls waiting
+# queues its own durable `check:` row and prints `<key>\t<payload>`, which the
+# detached wrapper appends to state/decision-sitting-woke under the file's lock.
+# The next tick claims that file under the same lock and wakes with the payload
+# only while its key is still queued, so a sitting already drained and
+# acknowledged is never announced twice, while a handling successor, which
+# never re-announces queued rows, still surfaces a new sitting.
+DECISION_SITTING_INTERVAL=${FM_DECISION_SITTING_INTERVAL:-300}
+case "$DECISION_SITTING_INTERVAL" in off) DECISION_SITTING_INTERVAL=0 ;; ''|*[!0-9]*) DECISION_SITTING_INTERVAL=300 ;; esac
+decision_sitting_tick() {
+  local pending="$STATE/decision-sitting-woke" claimed="$STATE/.decision-sitting-woke.claimed"
+  local lock="$STATE/.decision-sitting-woke.lock" queued key payload reason='' count=0
+  if [ ! -e "$claimed" ] && [ -s "$pending" ]; then
+    fm_lock_acquire_wait "$lock" || exit 1
+    mv -f "$pending" "$claimed" 2>/dev/null || true
+    fm_lock_release "$lock" || exit 1
+  fi
+  if [ -s "$claimed" ]; then
+    fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || exit 1
+    queued=$(fm_wake_queued_keys_locked check)
+    fm_lock_release "$FM_WAKE_QUEUE_LOCK" || exit 1
+    while IFS=$'\t' read -r key payload; do
+      [ -n "$key" ] && [ -n "$payload" ] || continue
+      printf '%s\n' "$queued" | grep -Fxq "$key" || continue
+      count=$((count + 1))
+      [ -n "$reason" ] || reason=$payload
+    done < "$claimed"
+    rm -f "$claimed"
+    [ "$count" -le 1 ] || reason="$reason (and $((count - 1)) more decision-sitting row(s) queued)"
+    [ -z "$reason" ] || wake "$reason"
+  fi
+  rm -f "$claimed"
+  [ "$DECISION_SITTING_INTERVAL" -gt 0 ] || return 0
+  [ "$(age_of "$STATE/.last-decision-sitting-tick")" -ge "$DECISION_SITTING_INTERVAL" ] || return 0
+  touch "$STATE/.last-decision-sitting-tick"
+  (
+    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+      "$SCRIPT_DIR/fm-decision-sitting.sh" due 2>/dev/null \
+      | while IFS= read -r line; do
+          case "$line" in decision-sitting*$'\t'*) ;; *) continue ;; esac
+          fm_lock_acquire_wait "$lock" || continue
+          printf '%s\n' "$line" >> "$pending"
+          fm_lock_release "$lock" || true
+        done
+  ) </dev/null >/dev/null 2>&1 &
+}
+
 RECONCILE_REQUEST_PID=
 reconcile_requests_pending() {
   local request
@@ -3265,6 +3316,7 @@ while :; do
   hold_release_tick
   backlog_overdue_tick
   inbox_rewake_tick
+  decision_sitting_tick
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
   # Time-based via .last-check mtime so the cadence survives watcher restarts.
