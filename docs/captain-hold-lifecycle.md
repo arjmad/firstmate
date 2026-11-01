@@ -36,8 +36,7 @@ It never reads report bodies, review artifacts, terminal output, or chat.
 | `hold` | Creates or reuses a task and holds it for the captain. | [Creating a hold](#creating-a-hold-hold) |
 | `answer` | Records the captain's exact words and resolves the call. | [Answering a call](#answering-a-call-answer) |
 | `defer` | Records the captain's dated deferral and re-holds the call until that date, never closing it. | [Answer-time resolution](#answer-time-resolution) |
-| `choices` | Sets or replaces the choices on a call already held for the captain, keeping its reason, kind, default, and date. | [Choices](#choices) |
-| `release-due` | Releases every reversible hold whose 72-hour default is due, as the decision of record. | [Hold kinds and default release](#hold-kinds-and-default-release) |
+| `choices` | Sets or replaces the choices on a call already held for the captain, keeping its reason, kind, and date. | [Choices](#choices) |
 | `complete` | Records the reviewed captain-held task ids in the originating task's metadata. | [Recording a reviewed inventory](#recording-a-reviewed-inventory-complete) |
 | `verify` | Read-only check that scout teardown runs before removing source state. | [Checking before scout teardown](#checking-before-scout-teardown-verify) |
 | `open` | Read-only check of whether a row is still an open captain call. | [Cleanup never closes a captain call](#cleanup-never-closes-a-captain-call) |
@@ -59,7 +58,7 @@ It works in this order:
 5. It verifies the hold and timestamp, then records the captain as the row's owner.
 
 A call held for the captain is his next move, so `hold` writes `Owner: arjun` on the row ([`bin/fm-backlog-owner-lib.sh`](../bin/fm-backlog-owner-lib.sh) owns the record); a row it creates carries that line from its first write.
-Releasing the hold, by `answer --release` or a default release of a work row, hands the row back with `Owner: fleet`, because the work resumes.
+Releasing the hold with `answer --release` hands the row back with `Owner: fleet`, because the work resumes.
 
 Publishing the stamp first ensures a snapshot cannot observe a newly captain-held task without the timestamp that defines its age.
 
@@ -74,24 +73,19 @@ Repeat and edge cases:
 - The reason may contain parentheses, semicolons, quotes, and line breaks.
   [`bin/fm-hold-reason-lib.sh`](../bin/fm-hold-reason-lib.sh) owns the storage encoding and compatibility rules; [`bin/fm-tasks-axi.sh --help`](../bin/fm-tasks-axi.sh) owns the public read commands and output contract.
 
-### Hold kinds and default release
+### Hold kinds
 
 These are fork patches recorded in [`docs/fork-decisions.md`](fork-decisions.md).
 `hold --kind reversible|arjun-only` stores the kind as a prefix on the hold reason, so session start, Bearings, the away return brief, and `bin/fm-tasks-axi.sh show` all show it without a separate read.
-A reversible hold given `--default <option>` carries its release time in the same prefix, 72 hours after the default was first recorded.
-`release-due` records each due default as a `defaulted` resolution labelled `Default release:`, closes a question row or releases a work row, and prints one `released by default:` line per release.
-`bin/fm-watch.sh` runs it hourly and queues each line as a durable `check:` wake.
-While a default waits, the home counts as needing supervision even with no live task, so that hourly run still happens.
-A reversible hold must name a default, carry the captain's own `--until` deferral, or pass `--no-default`; `hold` refuses one with none of the three, or a default beside a deferral, before any write.
-An arjun-only hold, a reversible hold deferred or passed `--no-default`, and any hold written without `--kind` never release themselves.
-`bin/fm-captain-hold.sh --help` owns the prefix grammar, the refusals, and the clock rules.
-`tests/fm-captain-hold-kind.test.sh`, the two `hold_release` cases in `tests/fm-watch-triage-wait.test.sh`, and the default-release banner case in `tests/fm-turnend-guard.test.sh` cover them.
+Every hold waits for the captain's answer: the 72-hour default release was removed, and `hold` refuses its `--default` and `--no-default` flags.
+A row held before that removal may still carry a default and a release time in its prefix; it stays held like any other, and its next re-hold drops them.
+`bin/fm-captain-hold.sh --help` owns the prefix grammar and the refusals, and `tests/fm-captain-hold-kind.test.sh` covers them.
 
 ### Choices
 
 A call held for the captain may carry its own two or three choices and the recommended one, so Bearings and Launchpad offer them as buttons instead of a generic Done.
-`hold --options 'A|B' --recommend A`, with an optional one-line `--ask` question, records them on the same reason prefix as the kind, and a reversible default is the recommendation.
-`choices <task-id>` adds or replaces them on an active hold without touching its reason, kind, default, release time, or date, and `defer` keeps them.
+`hold --options 'A|B' --recommend A`, with an optional one-line `--ask` question, records them on the same reason prefix as the kind.
+`choices <task-id>` adds or replaces them on an active hold without touching its reason, kind, or date, and `defer` keeps them.
 They live and die with the reason, so a re-hold that passes none drops them.
 `bin/fm-bearings-snapshot.sh --fields board` projects them as each row's `choices`, and a row without them carries null, which a surface shows as a single Open action rather than an invented choice.
 A keyed answer whose answer or shown label names a recorded choice, ignoring case, keeps the captain's words and adds a `Choice picked:` line naming it; [Answer-time resolution](#answer-time-resolution) is otherwise unchanged.
