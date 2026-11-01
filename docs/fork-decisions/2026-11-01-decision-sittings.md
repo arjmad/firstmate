@@ -1,0 +1,11 @@
+2026-11-01: Arjun answered the nine-day landing review board's decision-sittings card "adopt", two sittings at 12:00 and 20:00 New York time.
+Decision: non-urgent captain calls wait for a decision sitting at 12:00 or 20:00 New York time and reach him there as one bearings board, while urgent, money, customer-facing, and destructive calls still reach him at once.
+Why: the review counted 171 needs-decision asks and 39 holds in nine days, about 19 a day, arriving at all hours, with 41% of dispatches between 19:00 and 02:00 New York time.
+The call's own hold kind decides: an `arjun-only` or unkinded hold goes at once, and a `reversible` one waits unless waiting would cost more than the wait; a secondmate runs no sittings of its own, and its calls count in the parent's.
+No upstream proposal: hold kinds are this fork's own patch (2026-10-14), and the sitting rides on them.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| `fm-decision-sitting.sh` finds the latest 12:00 or 20:00 sitting in the named zone, counts live reversible captain calls across this home and its secondmates, and queues one durable check wake per due sitting with calls waiting | `bin/fm-decision-sitting.sh`, `tests/fm-decision-sitting.test.sh`, `docs/scripts.md` | none (fork-only script) | carried | 45dd50a5 |
+| The watcher runs the sitting check detached on its own tick and wakes once for its payload | `bin/fm-watch.sh` (`decision_sitting_tick`, header wake list), `tests/fm-watch-triage-wait.test.sh` | watcher main loop (one added tick call) | carried | 45dd50a5 |
+| The sitting rule owns which calls wait and how a sitting runs, and section 9's at-once list points at it | `.agents/skills/captain-hold-lifecycle/SKILL.md` ("Decision sittings", description, operating sequence), `AGENTS.md` section 9, `.agents/skills/agent-skill-trigger-index/SKILL.md`, `.agents/skills/ship-landing/SKILL.md`, `.agents/skills/ask-user-authority/SKILL.md` | `AGENTS.md` section 9 (one line), `ship-landing` and `ask-user-authority` (one line each) | carried | 45dd50a5 |

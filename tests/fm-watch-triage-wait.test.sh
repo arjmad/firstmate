@@ -806,6 +806,22 @@ test_overdue_scan_lines_surface_as_one_check_wake() {
   pass "pending overdue scan lines surface once as a single check wake"
 }
 
+# A payload a detached decision-sitting check left behind is claimed once as one wake.
+test_decision_sitting_line_surfaces_as_one_check_wake() {
+  local dir state out pid line
+  line='check: decision sitting 2026-11-01 12:00 America/New_York: 2 call(s) waiting for the captain (bin/fm-decision-sitting.sh queued)'
+  dir=$(make_case decision-sitting-woke); state="$dir/state"; out="$dir/watch.out"
+  printf '%s\n' "$line" > "$state/decision-sitting-woke"
+  watch_bg "$state" "$dir/fakebin" "$out" env FM_FLEET_SYNC_INTERVAL=off FM_HOLD_RELEASE_INTERVAL=off \
+    FM_BACKLOG_OVERDUE_INTERVAL=off FM_DECISION_SITTING_INTERVAL=off
+  pid=$!
+  wait_for_exit "$pid" 100 || fail "the watcher did not exit on a pending sitting line: $(cat "$out")"
+  grep -F "$line" "$out" >/dev/null || fail "the wake did not carry the sitting payload: $(cat "$out")"
+  [ ! -e "$state/decision-sitting-woke" ] && [ ! -e "$state/.decision-sitting-woke.claimed" ] \
+    || fail "the claimed sitting line was left behind for a second wake"
+  pass "a pending decision-sitting line surfaces once as a check wake"
+}
+
 # A queued backlog item whose date gate lapsed long ago without a dispatch
 # wakes the watcher through the detached overdue scan, which queues its durable row.
 test_overdue_backlog_item_wakes_the_watcher() {
@@ -927,6 +943,7 @@ test_hold_release_schedule_releases_a_due_default
 test_unacknowledged_inbox_note_rewakes_the_watcher
 test_acknowledged_inbox_note_never_rewakes_the_watcher
 test_overdue_scan_lines_surface_as_one_check_wake
+test_decision_sitting_line_surfaces_as_one_check_wake
 test_overdue_backlog_item_wakes_the_watcher
 test_paused_bg_job_without_until_stays_silent_after_the_job_ends
 test_paused_bg_job_until_timeout_rechecks_after_the_job_ends

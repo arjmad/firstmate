@@ -845,7 +845,7 @@ fi
 
 if [ "$KIND" = scout ]; then
 if "$SCRIPT_DIR/fm-bootstrap.sh" lavish-compatible >/dev/null 2>&1; then
-  LAVISH_LINE='If your deliverable is a visual artifact the captain will review and iterate on, use the lavish-axi rule: arm your board with bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>; never run lavish-axi poll yourself. Re-arm with the reply after each nonterminal round to acknowledge it, route the board feedback through your steering inbox, write needs-decision [key=board-review] with the live board URL as '"\`$FM_ROOT/bin/fm-lavish-url.sh <url>\`"' prints it when the captain owes a decision, and stop at session_ended or an empty End without re-arming - acknowledge that final round with bin/fm-procevent.sh handled <source-id> <sequence> to conclude and retire your board.'
+  LAVISH_LINE='If your deliverable is a visual artifact the captain will review, use the lavish-axi rule: arm your board with bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>; never run lavish-axi poll yourself. Re-arm with the reply after each nonterminal round that reaches you before you finish to acknowledge it, and route the board feedback through your steering inbox. Do not wait for the captain to open the board: once the report and board are complete, put the live board URL in the report as '"\`$FM_ROOT/bin/fm-lavish-url.sh <url>\`"' prints it, hold any decision it leaves him under the completion gate below, and declare done; teardown hands your board to firstmate, whose listener carries his answers. At session_ended or an empty End, stop without re-arming and acknowledge that final round with bin/fm-procevent.sh handled <source-id> <sequence> to conclude and retire your board.'
 else
   LAVISH_LINE='Lavish is unavailable (lavish-axi is missing or below its supported version floor), so deliver your findings as a text report without Lavish, even for a visual deliverable.'
 fi
@@ -882,8 +882,9 @@ $PLAN_LINE
    copies that URL from your line rather than assembling one.
 $CREWMATE_PAUSE_INSTRUCTIONS
 5. If you hit the same obstacle twice, append \`blocked [at=<epoch>]: {why}\` and stop; firstmate will help.
-6. If a decision belongs to a human (product choices, destructive actions),
+6. If a decision belongs to a human (product choices, destructive actions) and you cannot finish the report without it,
    append \`needs-decision [at=<epoch>]: {the question} - choices: {A} | {B}[ | {C}]; recommended: {A}\` and stop. Firstmate will reply with the decision.
+   A question your finished report hands the captain is not such a decision: it goes in the report, as the Definition of done says.
    Name two or three short choices (at most 60 bytes each, no \`]\`, \`;\` or \`|\` inside one) and the one you recommend; firstmate records them on the call it holds for the captain, so they become his buttons.
    A decision or blocker on your status log stays open until a \`resolved\` line carrying its exact key lands or you declare \`done:\` or \`failed:\`, which clears every open one, firstmate's included; a later \`working:\` line never closes it.
    So declare \`done:\` only once every decision you raised was answered or no longer needs an answer; \`failed:\` is always available for an unrecoverable failure.
@@ -901,8 +902,9 @@ Keep your research notes file (quotes, URLs, dates) in \`$DATA/$ID/\` beside the
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
 $LAVISH_LINE
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
+A question your findings leave for the captain, such as which option to build or whether to adopt a recommendation, is not a reason to wait: put it in the report (and board) with its choices and your recommendation, hold it under that completion gate, and declare done; firstmate takes the call from there and releases you, and his answer starts fresh work.
 When the report is complete, append \`done [at=<epoch>]: {one-line conclusion}\` to the status file and stop.
-If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
+If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report with what that work needs; firstmate dispatches it as a fresh ship once it is authorized, so the report must carry everything that ship will need.
 EOF
 append_brief_include
 echo "scaffolded: $BRIEF (scout$METHOD_WORDS; replace {TASK} and {FIRSTMATE_SPEC})"
