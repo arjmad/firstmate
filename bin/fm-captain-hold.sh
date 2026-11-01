@@ -137,7 +137,7 @@
 # a release rather than inventing one.
 # That watcher tick is release-due's only caller, so a waiting default must keep
 # the home supervised even with no live task. `hold` writes
-# state/.hold-release-pending whenever it records a default, and
+# state/.hold-release-pending before and after it records a default, and
 # bin/fm-supervision-lib.sh counts that marker as supervision need. Each
 # release-due run then rewrites it: it sets the marker while a held row still
 # carries a default that is not due or failed to release, or cannot be read and
@@ -1389,6 +1389,13 @@ command_hold() {
   fi
   # bin/fm-hold-reason-lib.sh owns the storage constraint and reversible encoding.
   stored_reason=$(fm_hold_reason_encode "$reason") || fail "could not encode the hold reason"
+  # Mark a default as waiting before the row can carry it, so a hold stopped
+  # after this write still leaves the home supervised; the set after the write
+  # below keeps a release-due scan running in between from clearing it.
+  if [ "$default_given" = 1 ]; then
+    set_hold_release_marker \
+      || fail "task $id would hold a default release, but $HOLD_RELEASE_MARKER could not be set"
+  fi
   if [ -n "$until" ]; then
     tasks_axi hold "$id" --reason "$stored_reason" --kind captain --until "$until" >/dev/null \
       || hold_status=$?

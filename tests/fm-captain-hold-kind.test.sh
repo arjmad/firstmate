@@ -340,6 +340,28 @@ EOF
   pass "a held row release-due cannot read keeps the home supervised and fails the run"
 }
 
+# A hold that stops after the backend recorded its default must still leave the
+# home asking for a watcher, or that default would wait for one forever.
+test_interrupted_default_hold_keeps_a_watcher() {
+  local home real
+  home=$(make_home interrupted-hold)
+  real=$(command -v tasks-axi)
+  cat > "$home/fakebin/tasks-axi" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = hold ]; then "$real" "\$@"; exit 1; fi
+exec "$real" "\$@"
+EOF
+  chmod +x "$home/fakebin/tasks-axi"
+  if FM_CAPTAIN_HOLD_NOW=2026-10-14T10:00:00Z run_captain "$home" hold sample-call \
+    --title "Keep the banner" --reason "keep or drop" --kind reversible --default "drop it" \
+    >/dev/null 2>"$home/err"; then
+    fail "hold succeeded although the backend reported a failure"
+  fi
+  assert_contains "$(show_task "$home" sample-call)" "default: drop it" "the fixture did not record the default"
+  assert_equals yes "$(needs_watcher "$home")" "an interrupted hold left its default with no watcher"
+  pass "a hold interrupted after its default was recorded still keeps the home supervised"
+}
+
 # Only a default can release itself, so no other hold keeps a watcher running.
 test_holds_without_a_default_need_no_watcher() {
   local home
@@ -572,4 +594,5 @@ test_rehold_keeps_or_restarts_the_release_clock
 test_answer_before_release_wins
 test_taskless_reversible_default_keeps_a_watcher_until_released
 test_unreadable_held_row_keeps_a_watcher
+test_interrupted_default_hold_keeps_a_watcher
 test_holds_without_a_default_need_no_watcher
