@@ -176,7 +176,9 @@ in_flight waits_on is "captain" only when the worker's still-open blocker or
   line's UTC time (the oldest, when several are open); both are null otherwise.
 --fields board adds board{queued[],titles[]} for the bearings board composer:
   every queued or held backlog row of this home, with its full title, kind,
-  hold_kind, hold_until, full hold_reason, filed date, blocker ids, owned_by
+  hold_kind, hold_until, full hold_reason, choices (a captain hold's recorded
+  {options[], recommended, ask}, or null; bin/fm-captain-hold.sh owns them),
+  filed date, blocker ids, owned_by
   (arjun, fleet, or null when the row records no owner), wait (captain, date,
   outside, work, or none) and ready (wait none), plus each
   structured secondmate home's queued rows as that home's summary projects
@@ -448,6 +450,16 @@ MODEL=$(printf '%s' "$SNAP" | jq \
       elif length > $n then (if $n == 1 then "…" else (.[:($n - 1)] + "…") end)
       else . end;
   def live_captain_call: .hold_bucket == "live";
+  # The choices a captain hold records on its reason prefix
+  # (bin/fm-captain-hold.sh CHOICES owns the grammar), or null.
+  def hold_choices:
+    if .hold_kind != "captain" then null else
+      ([(.hold_reason // "") | tostring
+       | capture("^\\[(?:reversible|arjun-only)(?:; default: .+?; releases [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)?(?:; options: (?<options>[^];]+); recommended: (?<recommended>[^];]+))?(?:; ask: (?<ask>[^]]+))?\\] ")?] | first) as $m
+      | if $m == null or ($m.options == null and $m.ask == null) then null
+        else {options:(if $m.options == null then [] else ($m.options | split("|")) end),
+              recommended:$m.recommended, ask:$m.ask} end
+    end;
   def projected_deferred_hold:
     .hold_bucket != null and .hold_bucket != "live";
   def bounded_blocker_note($n):
@@ -740,7 +752,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                      else "none" end) as $wait
                   | {id, title:(.title // .id), repo:(.repo // null), kind:(.kind // null),
                      hold_kind:(.hold_kind // null), hold_until:(.hold_until // null),
-                     hold_reason:(.hold_reason // null), filed:(.since // null),
+                     hold_reason:(.hold_reason // null), choices:hold_choices, filed:(.since // null),
                      blocked_by:(.unresolved_blocker_ids // []), owner, owned_by:$owned_by,
                      wait:$wait, ready:($wait == "none")} ],
         titles: [ $in_flight_all[] | {id, name:(.full_name // .name)} ],

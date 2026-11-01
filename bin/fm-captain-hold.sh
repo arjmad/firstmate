@@ -22,7 +22,9 @@
 # Usage:
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
 #     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] \
-#     [--kind reversible|arjun-only] [--default <option> | --no-default]
+#     [--kind reversible|arjun-only] [--default <option> | --no-default] \
+#     [--options '<A>|<B>[|<C>]' [--recommend <option>]] [--ask <question>]
+#   fm-captain-hold.sh choices <task-id> --options '<A>|<B>[|<C>]' [--recommend <option>] [--ask <question>]
 #   fm-captain-hold.sh release-due
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
 #   fm-captain-hold.sh defer <task-id> --until YYYY-MM-DD --decision-file <path>
@@ -95,6 +97,32 @@
 # Re-holding an active hold with the same kind and default keeps its release
 # time; a new default restarts the 72 hours. A caller's own reason may not
 # begin with a kind prefix.
+#
+# CHOICES (fork patch, docs/fork-decisions.md 2026-10-31).
+# A call held for the captain may carry its own choices, so every surface can
+# offer them as buttons instead of a generic Done. `--options` takes two or
+# three labels split on `|`; each is one line of at most 60 bytes, holds no
+# `]` or `;`, is not the reserved answer `later` or `reconcile` in any case,
+# and differs from the others ignoring case. `--recommend` names the
+# recommended one and must equal one of them. On a reversible hold with
+# `--default` the default IS the recommendation: it must be one of the
+# options, and `--recommend`, when given, must equal it. Any other hold with
+# `--options` must pass `--recommend`. `--ask` is the call's question as the
+# captain should read it: one line of at most 200 bytes with no `]`, usable
+# with or without options. Choices need `--kind`, because they ride on the
+# same reason prefix, after the kind and any default, in this fixed order:
+#   [arjun-only; options: A|B; recommended: A; ask: Q] <reason>
+#   [reversible; options: A|B; recommended: A] <reason>
+#   [reversible; default: A; releases <T>; options: A|B; recommended: A; ask: Q] <reason>
+# That prefix is the one machine-readable record: tasks-axi `list` and `show`
+# expose it in hold_reason, and bin/fm-bearings-snapshot.sh projects it as
+# board rows' choices. Like the kind, choices live and die with the reason:
+# a re-hold that passes none drops them, and an unhold clears them. A default
+# no longer takes `;`, so the grammar stays unambiguous. `choices` sets or
+# replaces the choices on a call already held for the captain, keeping its
+# reason, kind, default, release time and date: it re-holds through `hold`,
+# which refuses when the row is no longer actively held for the captain.
+# `defer` keeps a call's choices through the re-hold.
 # `release-due` is the release half. For every open row still held for the
 # captain whose stored reason carries a reversible default whose release time
 # has passed (FM_CAPTAIN_HOLD_NOW overrides now, as for `hold`), it records the
@@ -1072,6 +1100,95 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how> <origi
 
 HOLD_DEFAULT_RELEASE_SECS=259200
 HOLD_DEFAULT_OPTION_MAX_BYTES=200
+HOLD_CHOICE_LABEL_MAX_BYTES=60
+HOLD_ASK_MAX_BYTES=200
+
+byte_length() {  # <text>
+  printf '%s' "$1" | LC_ALL=C wc -c | tr -d ' '
+}
+
+trim_text() {  # <text>
+  local text=$1
+  text=${text#"${text%%[![:space:]]*}"}
+  printf '%s' "${text%"${text##*[![:space:]]}"}"
+}
+
+lowercase() {  # <text>
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+# Validate --options/--recommend/--ask (see CHOICES in the header). Sets
+# CHOICE_OPTIONS (the trimmed labels joined by |), CHOICE_RECOMMENDED and
+# CHOICE_ASK, each empty when absent.
+CHOICE_OPTIONS=''
+CHOICE_RECOMMENDED=''
+CHOICE_ASK=''
+validate_hold_choice_args() {  # <kind> <options-given> <options> <recommend-given> <recommend> <ask-given> <ask> <default-given> <default>
+  local kind=$1 options_given=$2 options=$3 recommend_given=$4 recommend=$5 ask_given=$6 ask=$7
+  local default_given=$8 default_option=$9 label lowered seen='|' count=0 found=0
+  local -a labels=()
+  CHOICE_OPTIONS=''
+  CHOICE_RECOMMENDED=''
+  CHOICE_ASK=''
+  if [ "$options_given" = 1 ] || [ "$recommend_given" = 1 ] || [ "$ask_given" = 1 ]; then
+    [ -n "$kind" ] || fail "--options, --recommend and --ask ride on the hold-kind prefix, so they require --kind"
+  fi
+  [ "$recommend_given" != 1 ] || [ "$options_given" = 1 ] || fail "--recommend requires --options"
+  if [ "$options_given" = 1 ]; then
+    validate_one_line options "$options"
+    IFS='|' read -r -a labels <<< "$options"
+    case "$options" in *'|') labels+=('') ;; esac
+    for label in "${labels[@]}"; do
+      label=$(trim_text "$label")
+      [ -n "$label" ] || fail "--options must not hold an empty choice"
+      case "$label" in
+        *']'*|*';'*) fail "a choice must not contain ] or ;: $label" ;;
+      esac
+      [ "$(byte_length "$label")" -le "$HOLD_CHOICE_LABEL_MAX_BYTES" ] \
+        || fail "a choice must be at most $HOLD_CHOICE_LABEL_MAX_BYTES bytes: $label"
+      lowered=$(lowercase "$label")
+      case "$lowered" in
+        later|reconcile) fail "a choice must not be the reserved answer $lowered" ;;
+      esac
+      case "$seen" in
+        *"|$lowered|"*) fail "--options repeats a choice: $label" ;;
+      esac
+      seen="$seen$lowered|"
+      count=$((count + 1))
+      CHOICE_OPTIONS="${CHOICE_OPTIONS:+$CHOICE_OPTIONS|}$label"
+    done
+    [ "$count" -ge 2 ] && [ "$count" -le 3 ] || fail "--options takes two or three choices split on |"
+    if [ "$default_given" = 1 ]; then
+      [ "$recommend_given" != 1 ] || [ "$(trim_text "$recommend")" = "$default_option" ] \
+        || fail "a reversible default is its recommendation, so --recommend must equal --default"
+      recommend=$default_option
+    else
+      [ "$recommend_given" = 1 ] || fail "--options needs --recommend naming the recommended choice"
+      recommend=$(trim_text "$recommend")
+    fi
+    for label in "${labels[@]}"; do
+      [ "$(trim_text "$label")" != "$recommend" ] || found=1
+    done
+    [ "$found" = 1 ] || fail "the recommended choice must be one of --options: $recommend"
+    CHOICE_RECOMMENDED=$recommend
+  fi
+  if [ "$ask_given" = 1 ]; then
+    ask=$(trim_text "$ask")
+    validate_one_line ask "$ask"
+    case "$ask" in *']'*) fail "--ask must not contain ]" ;; esac
+    [ "$(byte_length "$ask")" -le "$HOLD_ASK_MAX_BYTES" ] \
+      || fail "--ask must be at most $HOLD_ASK_MAX_BYTES bytes"
+    CHOICE_ASK=$ask
+  fi
+}
+
+# The prefix suffix that records validated choices, empty when there are none.
+hold_choice_suffix() {
+  local suffix=''
+  [ -z "$CHOICE_OPTIONS" ] || suffix="; options: $CHOICE_OPTIONS; recommended: $CHOICE_RECOMMENDED"
+  [ -z "$CHOICE_ASK" ] || suffix="$suffix; ask: $CHOICE_ASK"
+  printf '%s' "$suffix"
+}
 
 validate_hold_kind_args() {  # <kind> <default-given> <default-option> <reason> <no-default> <until>
   local kind=$1 given=$2 option=$3 reason=$4 no_default=$5 until=$6
@@ -1092,7 +1209,7 @@ validate_hold_kind_args() {  # <kind> <default-given> <default-option> <reason> 
     [ -z "$until" ] || fail "a call the captain deferred with --until takes no --default"
     validate_one_line default "$option"
     case "$option" in
-      *']'*) fail "--default must not contain ]" ;;
+      *']'*|*';'*) fail "--default must not contain ] or ;" ;;
     esac
     [ "$(printf '%s' "$option" | LC_ALL=C wc -c | tr -d ' ')" -le "$HOLD_DEFAULT_OPTION_MAX_BYTES" ] \
       || fail "--default must be at most $HOLD_DEFAULT_OPTION_MAX_BYTES bytes"
@@ -1106,28 +1223,38 @@ validate_hold_kind_args() {  # <kind> <default-given> <default-option> <reason> 
 
 # Parse the kind prefix of a decoded reason. Sets HOLD_DECISION_KIND
 # (reversible, arjun-only, or empty when there is no prefix), HOLD_DEFAULT_OPTION
-# and HOLD_RELEASES_AT (both empty unless a reversible default is recorded).
+# and HOLD_RELEASES_AT (both empty unless a reversible default is recorded),
+# HOLD_OPTIONS and HOLD_RECOMMENDED (empty unless choices are recorded),
+# HOLD_ASK, and HOLD_REASON_REST (the reason after the prefix).
 # Returns 1 when the reason carries no kind prefix.
 HOLD_DECISION_KIND=''
 HOLD_DEFAULT_OPTION=''
 HOLD_RELEASES_AT=''
+HOLD_OPTIONS=''
+HOLD_RECOMMENDED=''
+HOLD_ASK=''
+HOLD_REASON_REST=''
 parse_hold_kind_prefix() {  # <decoded-reason>
   local reason=$1
-  local re_default='^\[reversible; default: ([^]]+); releases ([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)\] '
+  local re='^\[(reversible|arjun-only)(; default: ([^]]+); releases ([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z))?(; options: ([^];]+); recommended: ([^];]+))?(; ask: ([^]]+))?\] '
   HOLD_DECISION_KIND=''
   HOLD_DEFAULT_OPTION=''
   HOLD_RELEASES_AT=''
-  if [[ "$reason" =~ $re_default ]]; then
-    HOLD_DECISION_KIND=reversible
-    HOLD_DEFAULT_OPTION=${BASH_REMATCH[1]}
-    HOLD_RELEASES_AT=${BASH_REMATCH[2]}
-    return 0
-  fi
-  case "$reason" in
-    '[reversible] '*) HOLD_DECISION_KIND=reversible; return 0 ;;
-    '[arjun-only] '*) HOLD_DECISION_KIND=arjun-only; return 0 ;;
-  esac
-  return 1
+  HOLD_OPTIONS=''
+  HOLD_RECOMMENDED=''
+  HOLD_ASK=''
+  HOLD_REASON_REST=$reason
+  [[ "$reason" =~ $re ]] || return 1
+  # A default rides only on a reversible hold.
+  [ -z "${BASH_REMATCH[2]}" ] || [ "${BASH_REMATCH[1]}" = reversible ] || return 1
+  HOLD_DECISION_KIND=${BASH_REMATCH[1]}
+  HOLD_DEFAULT_OPTION=${BASH_REMATCH[3]}
+  HOLD_RELEASES_AT=${BASH_REMATCH[4]}
+  HOLD_OPTIONS=${BASH_REMATCH[6]}
+  HOLD_RECOMMENDED=${BASH_REMATCH[7]}
+  HOLD_ASK=${BASH_REMATCH[9]}
+  HOLD_REASON_REST=${reason:${#BASH_REMATCH[0]}}
+  return 0
 }
 
 epoch_to_utc_iso() {  # <epoch>
@@ -1145,6 +1272,7 @@ command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0 stored_reason previous_origin='' hold_status=0
   local decision_kind='' default_option='' default_given=0 no_default=0 releases='' existing_reason=''
+  local options='' options_given=0 recommend='' recommend_given=0 ask='' ask_given=0
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -1157,6 +1285,9 @@ command_hold() {
       --kind) shift; decision_kind=${1:-} ;;
       --default) shift; default_option=${1:-}; default_given=1 ;;
       --no-default) no_default=1 ;;
+      --options) shift; options=${1:-}; options_given=1 ;;
+      --recommend) shift; recommend=${1:-}; recommend_given=1 ;;
+      --ask) shift; ask=${1:-}; ask_given=1 ;;
       *) usage >&2; exit 2 ;;
     esac
     shift
@@ -1164,6 +1295,8 @@ command_hold() {
   validate_slug task-id "$id"
   [ -n "$reason" ] || fail "reason must not be empty"
   validate_hold_kind_args "$decision_kind" "$default_given" "$default_option" "$reason" "$no_default" "$until"
+  validate_hold_choice_args "$decision_kind" "$options_given" "$options" "$recommend_given" "$recommend" \
+    "$ask_given" "$ask" "$default_given" "$default_option"
   if [ -n "$origin" ]; then
     validate_slug origin-id "$origin"
   fi
@@ -1190,12 +1323,15 @@ command_hold() {
     if [ "$existing_hold_kind" = captain ] && [ "$existing_held" = yes ]; then
       preserve_hold_set=1
       existing_reason=$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")
+    elif [ "${FM_CAPTAIN_HOLD_REQUIRE_ACTIVE:-0}" = 1 ]; then
+      fail "task $id is no longer held for the captain"
     fi
     if [ -n "$title" ]; then
       existing_title=$(show_field_value "$show" title)
       [ "$existing_title" = "$title" ] || fail "existing task $id has a different title"
     fi
   else
+    [ "${FM_CAPTAIN_HOLD_REQUIRE_ACTIVE:-0}" != 1 ] || fail "task $id is no longer held for the captain"
     [ -n "$title" ] || fail "--title is required to create task $id"
     validate_one_line title "$title"
     if [ -z "$repo" ] && [ -n "$origin" ] && [ -f "$STATE/$origin.meta" ]; then
@@ -1235,9 +1371,9 @@ command_hold() {
     else
       releases=$(hold_release_time "$hold_set") || fail "could not compute the default release time"
     fi
-    reason="[reversible; default: $default_option; releases $releases] $reason"
+    reason="[reversible; default: $default_option; releases $releases$(hold_choice_suffix)] $reason"
   elif [ -n "$decision_kind" ]; then
-    reason="[$decision_kind] $reason"
+    reason="[$decision_kind$(hold_choice_suffix)] $reason"
   fi
   # bin/fm-hold-reason-lib.sh owns the storage constraint and reversible encoding.
   stored_reason=$(fm_hold_reason_encode "$reason") || fail "could not encode the hold reason"
@@ -1502,9 +1638,56 @@ command_answer() {
   fail "task $id is not held for the captain; hold it first or name the right task"
 }
 
+# Set or replace the choices on a call already held for the captain. The
+# re-hold goes through `hold` with FM_CAPTAIN_HOLD_REQUIRE_ACTIVE=1, so it
+# keeps every guard there and refuses, under that path's own lock, a row that
+# was answered, released or closed after this read.
+command_choices() {
+  local id=${1:-} show reason hold_until options_given=0 ask_given=0
+  local -a pass=() keep=()
+  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --options|--recommend|--ask)
+        [ "$1" != --options ] || options_given=1
+        [ "$1" != --ask ] || ask_given=1
+        pass+=("$1" "${2:-}")
+        shift
+        ;;
+      *) usage >&2; exit 2 ;;
+    esac
+    shift
+  done
+  validate_slug task-id "$id"
+  [ "$options_given" = 1 ] || fail "choices requires --options"
+  require_tasks_axi
+  task_show_or_fail "$id" "no task $id"
+  [ "$(show_field "$show" state)" != "done" ] || fail "task $id is already closed"
+  [ "$(show_field_value "$show" hold_kind)" = captain ] && [ "$(show_field_value "$show" held)" = yes ] \
+    || fail "task $id is not held for the captain"
+  reason=$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")
+  parse_hold_kind_prefix "$reason" \
+    || fail "task $id carries no hold kind; re-hold it with --kind and the choices"
+  hold_until=$(show_field_value "$show" hold_until)
+  [ "$hold_until" != - ] || hold_until=''
+  keep=(--kind "$HOLD_DECISION_KIND")
+  if [ -n "$HOLD_DEFAULT_OPTION" ]; then
+    keep+=(--default "$HOLD_DEFAULT_OPTION")
+  elif [ -n "$hold_until" ]; then
+    keep+=(--until "$hold_until")
+  elif [ "$HOLD_DECISION_KIND" = reversible ]; then
+    keep+=(--no-default)
+  fi
+  # An --ask the caller leaves out keeps the recorded one.
+  [ "$ask_given" = 1 ] || [ -z "$HOLD_ASK" ] || pass+=(--ask "$HOLD_ASK")
+  FM_CAPTAIN_HOLD_REQUIRE_ACTIVE=1 "$0" hold "$id" --reason "$HOLD_REASON_REST" "${keep[@]}" "${pass[@]}"
+}
+
 command_defer() {
   local id=${1:-} until='' decision_file='' show decoded hold_kind hold_until reason
   local earliest stamp marker latest tmp kind_flag='' stamp_epoch
+  local -a choice_flags=()
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -1557,7 +1740,10 @@ command_defer() {
   reason=$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")
   if parse_hold_kind_prefix "$reason"; then
     kind_flag=$HOLD_DECISION_KIND
-    reason=${reason#\[*\] }
+    reason=$HOLD_REASON_REST
+    # The call keeps its choices; a dropped default stays its recommendation.
+    [ -z "$HOLD_OPTIONS" ] || choice_flags+=(--options "$HOLD_OPTIONS" --recommend "$HOLD_RECOMMENDED")
+    [ -z "$HOLD_ASK" ] || choice_flags+=(--ask "$HOLD_ASK")
   fi
   [ -n "$reason" ] || reason="captain decision pending"
   release_task_control_lock
@@ -1566,7 +1752,7 @@ command_defer() {
   # captain's words only once the hold stands, so a call closed in between is
   # never left carrying a deferral it did not get.
   if [ -n "$kind_flag" ]; then
-    "$0" hold "$id" --reason "$reason" --kind "$kind_flag" --until "$until" >/dev/null \
+    "$0" hold "$id" --reason "$reason" --kind "$kind_flag" --until "$until" ${choice_flags[@]+"${choice_flags[@]}"} >/dev/null \
       || fail "could not re-hold $id until $until"
   else
     "$0" hold "$id" --reason "$reason" --until "$until" >/dev/null \
@@ -1744,11 +1930,29 @@ command_binding() {
 # The durable captain decision one keyed answer records. Pure function of its
 # inputs, so the same answer delivered twice is idempotent rather than a
 # conflicting decision.
-keyed_decision_text() {  # <source> <task-id> <answer> <label>
+keyed_decision_text() {  # <source> <task-id> <answer> <label> [<picked-choice>]
   printf 'Captain answered this call through %s.\n' "$1"
   printf 'Task: %s\n' "$2"
   printf 'Answer: %s\n' "$3"
   [ -z "$4" ] || printf 'Answer as shown to the captain: %s\n' "$4"
+  [ -z "${5:-}" ] || printf 'Choice picked: %s\n' "$5"
+}
+
+# The recorded choice an answer picks, matched by label ignoring case and
+# surrounding space, or nothing when the reason records no such choice.
+picked_choice() {  # <decoded-reason> <answer>
+  local wanted label
+  local -a labels=()
+  parse_hold_kind_prefix "$1" || return 0
+  [ -n "$HOLD_OPTIONS" ] || return 0
+  wanted=$(lowercase "$(trim_text "$2")")
+  IFS='|' read -r -a labels <<< "$HOLD_OPTIONS"
+  for label in "${labels[@]}"; do
+    if [ "$(lowercase "$label")" = "$wanted" ]; then
+      printf '%s' "$label"
+      return 0
+    fi
+  done
 }
 
 legacy_keyed_decision_text() {  # <source> <key> <answer> <label>
@@ -1769,7 +1973,7 @@ sanitize_reconcile_provenance() {
 command_answers() {
   local origin='' source='' row rest key answer label mode id show state hold_kind body digest legacy_digest legacy_key
   local recorded_digest recorded_mode occurrence tmp err closed=0 skipped=0 reason release_flag tab=$'\t'
-  local resolve_rc defer_until deferred=0
+  local resolve_rc defer_until deferred=0 picked replay_digest replay_label_digest
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --source) shift; source=${1:-} ;;
@@ -1847,9 +2051,26 @@ command_answers() {
       skipped=$((skipped + 1))
       continue
     fi
-    keyed_decision_text "$source" "$id" "$answer" "$label" > "$tmp" \
+    task_show "$id" || { printf 'skipped: %s (absent)\n' "$id"; skipped=$((skipped + 1)); continue; }
+    show=$TASK_SHOW_OUTPUT
+    # An answer, or the label shown with it (a board option's value is a slug
+    # and its label the choice), that names a recorded choice ignoring case is
+    # recorded verbatim plus the choice it picked. A closed call keeps its
+    # reason; a released one does not, so its replay also matches a pick
+    # recorded under the answer's or the label's own spelling.
+    reason=$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")
+    picked=$(picked_choice "$reason" "$answer")
+    [ -n "$picked" ] || [ -z "$label" ] || picked=$(picked_choice "$reason" "$label")
+    keyed_decision_text "$source" "$id" "$answer" "$label" "$picked" > "$tmp" \
       || fail "cannot stage the captain decision for $id"
     digest=$(sha256_text "$(cat "$tmp")")
+    replay_digest=$digest
+    replay_label_digest=$digest
+    if [ -z "$picked" ]; then
+      replay_digest=$(sha256_text "$(keyed_decision_text "$source" "$id" "$answer" "$label" "$answer")")
+      [ -z "$label" ] \
+        || replay_label_digest=$(sha256_text "$(keyed_decision_text "$source" "$id" "$answer" "$label" "$label")")
+    fi
     legacy_digest=''
     if [ "$id" != "$key" ]; then
       legacy_key=$key
@@ -1862,8 +2083,6 @@ command_answers() {
     if [ -n "$legacy_key" ]; then
       legacy_digest=$(sha256_text "$(legacy_keyed_decision_text "$source" "$legacy_key" "$answer" "$label")")
     fi
-    task_show "$id" || { printf 'skipped: %s (absent)\n' "$id"; skipped=$((skipped + 1)); continue; }
-    show=$TASK_SHOW_OUTPUT
     state=$(show_field "$show" state)
     hold_kind=$(show_field_value "$show" hold_kind)
     body=$(show_field "$show" body)
@@ -1884,7 +2103,8 @@ command_answers() {
     recorded_digest=$(recorded_decision_digest "$body" || true)
     recorded_mode=$(recorded_resolution_mode "$body" || true)
     if body_has_resolution_record "$body" \
-      && { [ "$recorded_digest" = "$digest" ] \
+      && { [ "$recorded_digest" = "$digest" ] || [ "$recorded_digest" = "$replay_digest" ] \
+        || [ "$recorded_digest" = "$replay_label_digest" ] \
         || { case "$body" in *"Resolution recorded by fm-decision-hold."*) true ;; *) false ;; esac \
           && [ -n "$legacy_digest" ] && [ "$recorded_digest" = "$legacy_digest" ]; }; }; then
       if { [ -z "$release_flag" ] && [ "$state" = "done" ] \
@@ -2581,6 +2801,7 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
 
 case "${1:-}" in
   hold) shift; command_hold "$@" ;;
+  choices) shift; command_choices "$@" ;;
   release-due) shift; command_release_due "$@" ;;
   answer) shift; command_answer "$@" ;;
   answers) shift; command_answers "$@" ;;
