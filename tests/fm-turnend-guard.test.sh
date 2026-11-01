@@ -505,7 +505,7 @@ test_hook_pending_default_release_blocks_with_its_banner() {
     || fail "could not hold the reversible call"
   out=$(run_hook "$dir" false); status=$?
   expect_code 2 "$status" "default hook mode must block a blind turn while a default release waits"
-  assert_contains "$out" "A captain call's default release is waiting, but no live watcher" \
+  assert_contains "$out" "A captain hold is waiting for its default release, but no live watcher" \
     "a pending default release must be named in the block banner"
   assert_not_contains "$out" "X-mode relay polling needs supervision" \
     "a pending default release must not be misreported as relay polling"
