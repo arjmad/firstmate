@@ -135,6 +135,16 @@
 # hourly tick and turns each printed line into a durable `check:` wake. A row it
 # cannot read or close is reported on stderr and left held, so a failure delays
 # a release rather than inventing one.
+# That watcher tick is release-due's only caller, so a waiting default must keep
+# the home supervised even with no live task. `hold` writes
+# state/.hold-release-pending before and after it records a default, and
+# bin/fm-supervision-lib.sh counts that marker as supervision need. Each
+# release-due run then rewrites it: it sets the marker while a held row still
+# carries a default that is not due or failed to release, or cannot be read and
+# so may carry one (that run then exits non-zero), and otherwise removes
+# it only when it still holds the token read before the scan, so a default
+# recorded mid-scan stays counted.
+# An answer leaves the marker for the next run to clear.
 #
 # `answer` records the captain's exact words and resolves the call in the same
 # act. It requires a non-empty captain decision file of at most 8192 bytes and
@@ -1379,6 +1389,13 @@ command_hold() {
   fi
   # bin/fm-hold-reason-lib.sh owns the storage constraint and reversible encoding.
   stored_reason=$(fm_hold_reason_encode "$reason") || fail "could not encode the hold reason"
+  # Mark a default as waiting before the row can carry it, so a hold stopped
+  # after this write still leaves the home supervised; the set after the write
+  # below keeps a release-due scan running in between from clearing it.
+  if [ "$default_given" = 1 ]; then
+    set_hold_release_marker \
+      || fail "task $id would hold a default release, but $HOLD_RELEASE_MARKER could not be set"
+  fi
   if [ -n "$until" ]; then
     tasks_axi hold "$id" --reason "$stored_reason" --kind captain --until "$until" >/dev/null \
       || hold_status=$?
@@ -1407,6 +1424,11 @@ command_hold() {
   [ -n "$(body_hold_set_timestamp "$(show_field_value "$show" body)")" ] \
     || fail "task $id lost its hold-set stamp while being held"
   publish_parent_hold "$id" "$occurrence" needs-decision "$reason"
+  if [ "$default_given" = 1 ]; then
+    set_hold_release_marker \
+      || printf 'actionable: task %s holds a default release, but %s could not be set; run bin/fm-captain-hold.sh release-due\n' \
+        "$id" "$HOLD_RELEASE_MARKER" >&2
+  fi
   printf '%s\n' "$id"
 }
 
@@ -1799,11 +1821,42 @@ held_captain_task_ids() {
   '
 }
 
-# The default a held row would release to now, or a non-zero return when it has
-# none due. Reads the row in THIS shell (TASK_SHOW_OUTPUT is carried back).
+# The waiting-default marker (see `release-due` in the header). It holds a
+# fresh token on every set, and a clear removes it only while it still holds
+# the token its caller read before scanning, so a default recorded mid-scan
+# keeps the home supervised.
+HOLD_RELEASE_MARKER="$STATE/.hold-release-pending"
+HOLD_RELEASE_MARKER_LOCK="$STATE/.hold-release-pending.lock"
+
+set_hold_release_marker() {
+  local tmp rc=0
+  fm_lock_acquire_wait "$HOLD_RELEASE_MARKER_LOCK" || return 1
+  tmp=$(mktemp "$HOLD_RELEASE_MARKER.XXXXXX") || rc=1
+  if [ "$rc" = 0 ]; then
+    { printf '%s-%s-%s\n' "$(date +%s)" "$$" "$RANDOM" > "$tmp" && mv -f "$tmp" "$HOLD_RELEASE_MARKER"; } || rc=1
+    rm -f "$tmp"
+  fi
+  fm_lock_release "$HOLD_RELEASE_MARKER_LOCK" || rc=1
+  return "$rc"
+}
+
+clear_hold_release_marker() {  # <token-read-before-the-scan>
+  local rc=0
+  fm_lock_acquire_wait "$HOLD_RELEASE_MARKER_LOCK" || return 1
+  if [ "$(cat "$HOLD_RELEASE_MARKER" 2>/dev/null)" = "$1" ]; then
+    rm -f "$HOLD_RELEASE_MARKER" || rc=1
+  fi
+  fm_lock_release "$HOLD_RELEASE_MARKER_LOCK" || rc=1
+  return "$rc"
+}
+
+# The default a held row would release to now. Returns 2 when the row holds a
+# reversible default that is not due yet, 3 when the row cannot be read, and 1
+# when it holds none. Reads the row in THIS shell (TASK_SHOW_OUTPUT is carried
+# back).
 hold_default_due() {  # <task-id> <now-epoch>; sets HOLD_DEFAULT_OPTION/HOLD_RELEASES_AT
   local id=$1 now=$2 show releases_epoch
-  task_show "$id" || return 1
+  task_show "$id" || return 3
   show=$TASK_SHOW_OUTPUT
   [ "$(show_field "$show" state)" != "done" ] || return 1
   [ "$(show_field_value "$show" hold_kind)" = captain ] || return 1
@@ -1811,7 +1864,7 @@ hold_default_due() {  # <task-id> <now-epoch>; sets HOLD_DEFAULT_OPTION/HOLD_REL
   parse_hold_kind_prefix "$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")" || return 1
   [ "$HOLD_DECISION_KIND" = reversible ] && [ -n "$HOLD_DEFAULT_OPTION" ] || return 1
   releases_epoch=$(fm_utc_iso_to_epoch "$HOLD_RELEASES_AT") || return 1
-  [ "$now" -ge "$releases_epoch" ]
+  [ "$now" -ge "$releases_epoch" ] || return 2
 }
 
 # Release one row to its default as the decision of record. Runs in a subshell
@@ -1821,8 +1874,9 @@ release_hold_by_default() {  # <task-id> <now-epoch>
   local id=$1 now=$2 show body option task_kind release=1 occurrence
   trap captain_hold_cleanup EXIT
   acquire_task_control_lock "$id"
-  # Re-read under the lock: an answer recorded since the scan wins.
-  hold_default_due "$id" "$now" || return 0
+  # Re-read under the lock: an answer recorded since the scan wins, and a row
+  # that cannot be read is a failure so its default stays counted as waiting.
+  hold_default_due "$id" "$now" || { [ "$?" -ne 3 ] || return 1; return 0; }
   option=$HOLD_DEFAULT_OPTION
   show=$TASK_SHOW_OUTPUT
   body=$(show_field "$show" body)
@@ -1840,22 +1894,44 @@ release_hold_by_default() {  # <task-id> <now-epoch>
 }
 
 command_release_due() {
-  local now ids id status=0
+  local now ids id status=0 due=0 waiting=0 token
   [ "$#" -eq 0 ] || { usage >&2; exit 2; }
   now=${FM_CAPTAIN_HOLD_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
   now=$(fm_utc_iso_to_epoch "$now") || fail "FM_CAPTAIN_HOLD_NOW must be a UTC YYYY-MM-DDTHH:MM:SSZ timestamp"
   require_tasks_axi
+  token=$(cat "$HOLD_RELEASE_MARKER" 2>/dev/null || true)
   ids=$(held_captain_task_ids) || fail "could not list the rows held for the captain"
   while IFS= read -r id; do
     [ -n "$id" ] || continue
-    hold_default_due "$id" "$now" || continue
+    hold_default_due "$id" "$now" || due=$?
+    if [ "$due" -ne 0 ]; then
+      [ "$due" -lt 2 ] || waiting=1
+      if [ "$due" -eq 3 ]; then
+        printf 'fm-captain-hold: %s could not be read; its default stays counted as waiting\n' "$id" >&2
+        status=1
+      fi
+      due=0
+      continue
+    fi
     ( release_hold_by_default "$id" "$now" ) || {
       printf 'fm-captain-hold: %s stays held; its default release failed\n' "$id" >&2
       status=1
+      waiting=1
     }
   done <<EOF
 $ids
 EOF
+  if [ "$waiting" = 1 ]; then
+    [ -e "$HOLD_RELEASE_MARKER" ] || set_hold_release_marker || {
+      printf 'fm-captain-hold: a default is still waiting, but %s could not be set\n' "$HOLD_RELEASE_MARKER" >&2
+      status=1
+    }
+  else
+    clear_hold_release_marker "$token" || {
+      printf 'fm-captain-hold: no default is waiting, but %s could not be cleared\n' "$HOLD_RELEASE_MARKER" >&2
+      status=1
+    }
+  fi
   return "$status"
 }
 

@@ -93,7 +93,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Per-task steering-inbox records under `state/<id>.inbox/` (`bin/fm-task-inbox-lib.sh`).
 - Parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
 - Live-checkout post-update and capture records under `state/live-checkouts/`, and the scheduled sync's log, pending `fleet-sync-stuck` lines, and surfaced set (`bin/fm-fleet-sync.sh`).
-- Pending `hold-release-woke` lines and the `.last-hold-release` cadence marker of the watcher's captain-hold default release (`bin/fm-captain-hold.sh release-due`).
+- Pending `hold-release-woke` lines and the `.last-hold-release` cadence marker of the watcher's captain-hold default release, and the `.hold-release-pending` marker that keeps a home with a waiting default supervised (`bin/fm-captain-hold.sh release-due`).
 - Once-per-gate overdue markers under `state/backlog-overdue/`, pending `backlog-overdue-woke` lines, and the `.last-backlog-overdue` cadence marker of the watcher's overdue backlog scan (`bin/fm-backlog-overdue.sh`).
 - The log of captain-waived code reviews, `state/code-review-waivers.log` (`bin/fm-pr-merge.sh`).
 
