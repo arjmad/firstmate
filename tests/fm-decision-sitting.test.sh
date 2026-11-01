@@ -200,14 +200,15 @@ test_waiting_call_keeps_an_empty_home_supervised() {
 }
 
 # Which reversible calls that are not live keep the marker: a blocked one, or
-# one dated to open by the next sitting's day; an aged one never goes live
+# one dated to be live by the next sitting; an aged one never goes live
 # again and one dated further out does not need the home supervised meanwhile.
 test_only_calls_that_can_go_live_soon_keep_the_marker() {
   local home snap bucket until expect
   home=$(make_home pending)
   snap="$home/snapshot.json"
-  # At 2026-11-01 12:01 the next sitting is 2026-11-01 20:00, so its day is 2026-11-01.
-  for row in "blocked||kept" "dated|2026-11-01|kept" "dated|2026-11-02|cleared" "aged||cleared"; do
+  # At 2026-11-01 12:01 the next sitting is 2026-11-01 20:00 New York, which is
+  # 2026-11-02 01:00 UTC, the date the snapshot buckets a dated hold by.
+  for row in "blocked||kept" "dated|2026-11-02|kept" "dated|2026-11-03|cleared" "aged||cleared"; do
     IFS='|' read -r bucket until expect <<< "$row"
     jq -n --arg b "$bucket" --arg u "$until" '{backlog:{records:[{id:"c1",structured:true,state:"queued",
       hold_kind:"captain",hold_bucket:$b,hold_until:(if $u == "" then null else $u end),

@@ -55,7 +55,7 @@
 # every write, and a due sitting that finds nothing waiting removes it only
 # when its token is unchanged since before the count was read, so a hold made
 # during the read keeps it. It also stays while this home holds a reversible
-# call that is blocked, or dated to open by the next sitting's day, because
+# call that is blocked, or dated to be live by the next sitting, because
 # either may go live before a later sitting; an aged call, or one dated past
 # the next sitting, does not keep the home supervised.
 # It does nothing in a secondmate home: the parent records every secondmate
@@ -201,8 +201,8 @@ snapshot_json() {
 
 # Every open reversible captain call that counts, one `<kind> <id>` line each:
 # `live` waits for this sitting, and `pending` is this home's blocked call, or
-# one dated to open on or before <next-day> (the next sitting's date in the
-# zone), which may go live before a later sitting. Aged calls and calls dated
+# one dated to open on or before <next-day> (the UTC date at the next sitting,
+# the date the snapshot buckets by), which may go live before a later sitting. Aged calls and calls dated
 # further out print nothing.
 reversible_calls() {  # <next-day>
   local json
@@ -225,10 +225,14 @@ reversible_calls() {  # <next-day>
     | unique | .[]' 2>/dev/null || die "the fleet snapshot could not be parsed"
 }
 
+# The UTC date at the next sitting: the snapshot buckets a dated hold as live
+# once its date is on or before the UTC date (bin/fm-fleet-snapshot.sh), so a
+# call dated on or before this day is live by that sitting.
 next_day() {  # <epoch>
   local next
   next=$(next_sitting "$1") || exit 1
-  zone_format "$next" %Y-%m-%d || die "cannot read the next sitting's date in $ZONE"
+  date -u -d "@$next" +%Y-%m-%d 2>/dev/null || date -u -r "$next" +%Y-%m-%d 2>/dev/null \
+    || die "cannot read the next sitting's UTC date"
 }
 
 queued_ids() {

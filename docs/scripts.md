@@ -195,7 +195,6 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-agy-trust.sh` | Pre-register Antigravity CLI workspace trust for a task worktree before an agy spawn |
 | `fm-allocation-lib.sh` | Own the task allocation-ownership contract for reused worktree and home pool slots |
 | `fm-backlog-overdue.sh` | Wake firstmate once for a queued backlog item whose date gate lapsed without a dispatch or answer |
-| `fm-decision-sitting.sh` | Wake firstmate once at each 12:00 and 20:00 New York decision sitting that has non-urgent captain calls waiting |
 | `fm-backlog-handoff.sh` | Hand identified in-scope backlog items from the main backlog to a secondmate's home backlog |
 | `fm-branch-dispatch.mjs` | Command-line entry to supervision-branch wake dispatch for a non-Pi supervision host |
 | `fm-branch-report.sh` | Record one handled fleet event from a supervision-host branch session in the durable outcome store |
@@ -204,6 +203,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-claude-trust.sh` | Pre-register Claude Code workspace trust for a task worktree or secondmate home before a claude spawn |
 | `fm-contributions.jq` | Projection used by `fm-contributions.sh`, whose header owns the record contract |
 | `fm-cursor-lib.sh` | Resolve the Cursor executable and identify Cursor processes |
+| `fm-decision-sitting.sh` | Wake firstmate once at each 12:00 and 20:00 New York decision sitting that has non-urgent captain calls waiting |
 | `fm-devin-config.sh` | Write a private Devin worker config that preserves the user's settings and hooks |
 | `fm-dispatch-resolve.sh` | Resolve one dispatch profile from a task brief through the opt-in typesafe.ai model |
 | `fm-doc-audience-check.sh` | Validate the tracked documentation audience inventory, setup routing, and local links |

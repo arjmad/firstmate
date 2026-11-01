@@ -3000,7 +3000,7 @@ DECISION_SITTING_INTERVAL=${FM_DECISION_SITTING_INTERVAL:-300}
 case "$DECISION_SITTING_INTERVAL" in off) DECISION_SITTING_INTERVAL=0 ;; ''|*[!0-9]*) DECISION_SITTING_INTERVAL=300 ;; esac
 decision_sitting_tick() {
   local pending="$STATE/decision-sitting-woke" claimed="$STATE/.decision-sitting-woke.claimed"
-  local lock="$STATE/.decision-sitting-woke.lock" queued key payload reason=''
+  local lock="$STATE/.decision-sitting-woke.lock" queued key payload reason='' count=0
   if [ ! -e "$claimed" ] && [ -s "$pending" ]; then
     fm_lock_acquire_wait "$lock" || exit 1
     mv -f "$pending" "$claimed" 2>/dev/null || true
@@ -3012,9 +3012,12 @@ decision_sitting_tick() {
     fm_lock_release "$FM_WAKE_QUEUE_LOCK" || exit 1
     while IFS=$'\t' read -r key payload; do
       [ -n "$key" ] && [ -n "$payload" ] || continue
-      printf '%s\n' "$queued" | grep -Fxq "$key" && reason=$payload
+      printf '%s\n' "$queued" | grep -Fxq "$key" || continue
+      count=$((count + 1))
+      [ -n "$reason" ] || reason=$payload
     done < "$claimed"
     rm -f "$claimed"
+    [ "$count" -le 1 ] || reason="$reason (and $((count - 1)) more decision-sitting row(s) queued)"
     [ -z "$reason" ] || wake "$reason"
   fi
   rm -f "$claimed"
