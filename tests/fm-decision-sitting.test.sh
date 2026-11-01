@@ -77,6 +77,10 @@ test_sittings_follow_the_named_zone_across_daylight_saving() {
   if out=$(FM_DECISION_SITTING_TIMES="12:00 25:00" run_sitting "$home" "$NOV01_NOON" slots 2>&1); then
     fail "a sitting time that is not HH:MM was accepted: $out"
   fi
+  # 2027-03-14 skips 02:00-03:00 in New York, so a 02:30 sitting does not exist that day.
+  out=$(FM_DECISION_SITTING_TIMES="02:30 12:00" run_sitting "$home" $((1805040000 + 60)) slots) \
+    || fail "a sitting time a daylight-saving jump skips broke every sitting that day: $out"
+  assert_contains "$out" "last 1805040000 2027-03-14 12:00 America/New_York" "the noon sitting beside a skipped time was wrong: $out"
   pass "sittings land at 12:00 and 20:00 New York time on both sides of the daylight-saving change"
 }
 
@@ -159,7 +163,12 @@ test_secondmate_calls_count_in_the_parent_sitting() {
   fi
   assert_equals "$OCT31_EVENING" "$(cat "$home/state/.last-decision-sitting")" \
     "a failed snapshot read advanced the sitting, so the next tick would not retry it"
-  pass "a secondmate's waiting calls count in its parent's sitting, and a failed read retries"
+  assert_equals "1" "$(awk -F '\t' '$4 ~ /^decision-sitting-failed:/ { n++ } END { print n + 0 }' "$home/state/.wake-queue")" \
+    "a sitting whose count failed did not wake firstmate"
+  FM_DECISION_SITTING_SNAPSHOT="$snap" run_sitting "$home" $((NOV01_NOON + 300)) due >/dev/null 2>&1 || true
+  assert_equals "1" "$(awk -F '\t' '$4 ~ /^decision-sitting-failed:/ { n++ } END { print n + 0 }' "$home/state/.wake-queue")" \
+    "a retried failing sitting woke firstmate again"
+  pass "a secondmate's waiting calls count in its parent's sitting, and a failed read retries and wakes once"
 }
 
 # A released scout leaves only its held call behind: no task record, source, or
@@ -187,6 +196,10 @@ test_waiting_call_keeps_an_empty_home_supervised() {
   assert_equals "" "$out" "a sitting whose last call was answered still woke"
   [ ! -e "$home/state/.decision-sitting-waiting" ] || fail "a sitting with nothing waiting left the home supervised"
   if needed; then fail "the home still needed supervision after its sitting found nothing waiting"; fi
+  hold_call "$home" later --kind reversible --until 2099-01-01
+  out=$(run_sitting "$home" $((NOV01_EVENING + 60)) due) || fail "due failed: $out"
+  assert_equals "" "$out" "a sitting with only a dated call woke"
+  [ -e "$home/state/.decision-sitting-waiting" ] || fail "a sitting cleared the marker while a dated reversible call can still go live"
   pass "a call waiting for a sitting keeps an otherwise empty home supervised until a sitting finds nothing waiting"
 }
 

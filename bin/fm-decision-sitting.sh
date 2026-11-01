@@ -31,10 +31,15 @@
 #   check: decision sitting <YYYY-MM-DD HH:MM> <zone>: <n> call(s) waiting ...
 # A sitting with nothing waiting records itself and prints nothing, so it
 # produces no captain-facing output. The marker write and the append share the
-# wake-queue lock, and a key still queued gets no second row. A missing marker
-# only starts the cadence (the next sitting is the first), and a watcher that
-# was down across several sittings fires once, for the latest. A snapshot read
-# that fails exits 1 and leaves the marker alone, so the next tick retries.
+# wake-queue lock, which also re-reads the marker so two overlapping runs wake
+# once, and a key still queued gets no second row. A missing marker only
+# starts the cadence (the next sitting is the first), and a watcher that was
+# down across several sittings fires once, for the latest. A snapshot read
+# that fails exits 1 and leaves the marker alone, so the next tick retries; the
+# first failure for a sitting also queues one `check: decision sitting <time>
+# could not count the waiting calls ...` wake keyed
+# `decision-sitting-failed:<epoch>` (recorded in
+# state/.last-decision-sitting-failed), so a sitting is never missed silently.
 # In a secondmate home `due` does nothing.
 #
 # `waiting` marks this home as holding a call that may wait for a sitting, by
@@ -42,14 +47,17 @@
 # every `reversible` hold. While the marker exists bin/fm-supervision-lib.sh
 # counts the home as needing supervision, so the watcher that runs `due` keeps
 # running after the last task is torn down. A due sitting that finds nothing
-# waiting removes the marker, unless a hold touched it after the count was read.
+# waiting removes the marker, unless a hold touched it after the count was read
+# or this home still holds a reversible call that is dated, blocked, or aged
+# and so may go live before a later sitting.
 # It does nothing in a secondmate home, whose parent is already supervising it.
 #
 # `queued` prints the waiting call ids, one per line (`<mate-id>/<task-id>` for
 # a secondmate's), and is read-only apart from the snapshot's own cache refresh.
 # `slots` prints the `last` and `next` sitting as `<label> <epoch> <local time>`.
 #
-# FM_DECISION_SITTING_TIMES (default "12:00 20:00", HH:MM in the zone) and
+# FM_DECISION_SITTING_TIMES (default "12:00 20:00", HH:MM in the zone; a time
+# a daylight-saving jump skips holds no sitting that day) and
 # FM_DECISION_SITTING_ZONE (default America/New_York) change the schedule;
 # FM_DECISION_SITTING_NOW (epoch seconds) fixes the clock and
 # FM_DECISION_SITTING_SNAPSHOT a snapshot JSON file, for tests.
@@ -66,9 +74,10 @@ ZONE=${FM_DECISION_SITTING_ZONE:-America/New_York}
 TIMES=${FM_DECISION_SITTING_TIMES:-12:00 20:00}
 MARKER="$STATE/.last-decision-sitting"
 WAITING="$STATE/.decision-sitting-waiting"
+FAILED="$STATE/.last-decision-sitting-failed"
 
 usage() {
-  sed -n '2,55{s/^# \{0,1\}//;p;}' "$0"
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
 }
 
 die() {
@@ -91,8 +100,8 @@ zone_epoch() {  # <date> <HH:MM>
 
 # <epoch> rendered in the sitting zone with <format>.
 zone_format() {  # <epoch> <format>
-  TZ=$ZONE date -r "$1" "+$2" 2>/dev/null && return 0
   TZ=$ZONE date -d "@$1" "+$2" 2>/dev/null && return 0
+  TZ=$ZONE date -r "$1" "+$2" 2>/dev/null && return 0
   return 1
 }
 
@@ -132,7 +141,8 @@ sitting_epochs() {  # <epoch>
     "$(zone_format $((midnight + 30 * 3600)) %Y-%m-%d)"; do
     [ -n "$day" ] || die "cannot read a neighbouring date in $ZONE"
     for t in $times; do
-      t=$(zone_epoch "$day" "$t") || die "cannot resolve $day $t in $ZONE"
+      # A time a daylight-saving jump skips that day holds no sitting.
+      t=$(zone_epoch "$day" "$t") || continue
       epochs="$epochs$t"$'\n'
     done
   done
@@ -170,7 +180,10 @@ snapshot_json() {
   FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-fleet-snapshot.sh" --json
 }
 
-queued_ids() {
+# Every open reversible captain call, one `<bucket> <id>` line each. A live one
+# waits for the next sitting; a dated, blocked, or aged one in this home may go
+# live later, so it keeps the home supervised without starting a sitting.
+reversible_calls() {
   local json
   command -v jq >/dev/null 2>&1 || die "jq is required to count waiting calls"
   json=$(snapshot_json 2>/dev/null) || die "the fleet snapshot could not be read"
@@ -178,14 +191,20 @@ queued_ids() {
     def waits: (. // "") | tostring | startswith("[reversible");
     ([.backlog.records[]?
        | select(.structured and .hold_kind == "captain" and .state != "done"
-                and .hold_bucket == "live" and (.hold_reason | waits))
-       | .id]
+                and .hold_bucket != null and (.hold_reason | waits))
+       | "\(if .hold_bucket == "live" then "live" else "pending" end) \(.id)"]
      + [(.secondmate_current.records // [])[] as $m
         | $m.decisions_open[]?
         | select(.source == "backlog" and .verb == "captain-hold"
                  and .hold_bucket == "live" and (.reason | waits))
-        | "\($m.id)/\(.id)"])
+        | "live \($m.id)/\(.id)"])
     | unique | .[]' 2>/dev/null || die "the fleet snapshot could not be parsed"
+}
+
+queued_ids() {
+  local calls
+  calls=$(reversible_calls) || exit 1
+  printf '%s\n' "$calls" | sed -n 's/^live //p'
 }
 
 load_wake_lib() {
@@ -197,8 +216,30 @@ record_sitting() {  # <epoch>
   printf '%s\n' "$1" > "$MARKER.tmp" && mv -f "$MARKER.tmp" "$MARKER"
 }
 
+# Queue one durable check wake keyed <key> unless it is still queued or the
+# sitting <slot> was already recorded by a run that took the lock first.
+# Prints <payload> when it queued the row.
+queue_once() {  # <slot> <key> <payload> <record-file>
+  local slot=$1 key=$2 payload=$3 record=$4 queued recorded
+  load_wake_lib || die "cannot load the wake library"
+  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || die "cannot take the wake-queue lock"
+  recorded=$(cat "$record" 2>/dev/null)
+  case "$recorded" in ''|*[!0-9]*) recorded=0 ;; esac
+  queued=$(fm_wake_queued_keys_locked check)
+  if [ "$recorded" -ge "$slot" ]; then
+    :
+  elif printf '%s\n' "$queued" | grep -Fxq "$key"; then
+    printf '%s\n' "$slot" > "$record" 2>/dev/null || true
+  elif fm_wake_append_locked check "$key" "$payload"; then
+    printf '%s\n' "$slot" > "$record" 2>/dev/null \
+      || printf 'fm-decision-sitting: woke for %s but could not record it under %s\n' "$key" "$record" >&2
+    printf '%s\n' "$payload"
+  fi
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+}
+
 cmd_due() {
-  local now slot recorded ids count key payload queued stamp
+  local now slot recorded calls count stamp err label
   [ "$#" -eq 0 ] || die "usage: fm-decision-sitting.sh due"
   if fm_parent_channel_home_id "$FM_HOME" >/dev/null 2>&1; then
     return 0
@@ -212,29 +253,30 @@ cmd_due() {
   recorded=$(cat "$MARKER" 2>/dev/null)
   case "$recorded" in ''|*[!0-9]*) recorded=0 ;; esac
   [ "$recorded" -lt "$slot" ] || return 0
+  label=$(sitting_label "$slot")
   stamp=$(mktemp "$STATE/.decision-sitting-read.XXXXXX") || die "cannot stage the sitting read under $STATE"
-  ids=$(queued_ids) || { rm -f -- "$stamp"; exit 1; }
-  count=$(printf '%s\n' "$ids" | grep -c . || true)
+  if ! calls=$(reversible_calls 2>"$stamp"); then
+    err=$(sed -n '1{s/^fm-decision-sitting: //;p;}' "$stamp")
+    rm -f -- "$stamp"
+    # Retried every tick; the captain-facing gap is reported once per sitting.
+    queue_once "$slot" "decision-sitting-failed:$slot" \
+      "check: decision sitting $label could not count the waiting calls (${err:-unknown error}); it retries every tick, so run bin/fm-decision-sitting.sh queued and hold this sitting by hand if it keeps failing" \
+      "$FAILED"
+    exit 1
+  fi
+  count=$(printf '%s\n' "$calls" | grep -c '^live ' || true)
   if [ "$count" -eq 0 ]; then
-    [ "$WAITING" -nt "$stamp" ] || rm -f -- "$WAITING"
+    if [ ! "$WAITING" -nt "$stamp" ] && ! printf '%s\n' "$calls" | grep -q '^pending '; then
+      rm -f -- "$WAITING"
+    fi
     rm -f -- "$stamp"
     record_sitting "$slot" || die "cannot record the sitting under $MARKER"
     return 0
   fi
   rm -f -- "$stamp"
-  key="decision-sitting:$slot"
-  payload="check: decision sitting $(sitting_label "$slot"): $count call(s) waiting for the captain (bin/fm-decision-sitting.sh queued)"
-  load_wake_lib || die "cannot load the wake library"
-  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || die "cannot take the wake-queue lock"
-  queued=$(fm_wake_queued_keys_locked check)
-  if printf '%s\n' "$queued" | grep -Fxq "$key"; then
-    record_sitting "$slot" || true
-  elif fm_wake_append_locked check "$key" "$payload"; then
-    record_sitting "$slot" \
-      || printf 'fm-decision-sitting: woke for %s but could not record it under %s\n' "$key" "$MARKER" >&2
-    printf '%s\n' "$payload"
-  fi
-  fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+  queue_once "$slot" "decision-sitting:$slot" \
+    "check: decision sitting $label: $count call(s) waiting for the captain (bin/fm-decision-sitting.sh queued)" \
+    "$MARKER"
 }
 
 cmd_waiting() {

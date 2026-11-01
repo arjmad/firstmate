@@ -80,7 +80,7 @@ Decide from the call's own record, once its kind is set by the rule above:
 - A call goes at once when its hold is `arjun-only` or carries no kind, which covers money, credentials and logins, deletions, anything a customer sees, external commitments, Sapna's domain, and the captain's own hands; a one-way-door merge is held `arjun-only` by `bin/fm-pr-merge.sh` and goes at once too.
 - A `reversible` call also goes at once when waiting for the next sitting would cost more than the wait: a live fault or outage, a deadline or date gate that falls before the next sitting, or anything destructive or irreversible about to happen without him.
 - Every other `reversible` call waits for the next sitting, and when you are unsure which side a call falls on, it goes at once.
-- A ready PR waiting for his merge word follows the same rule: hold its task with the kind that rule gives it, `--no-default` because a merge never releases itself, and merge choices, so `answer --release` approves it.
+- A ready PR waiting for his merge word follows the same rule: hold its task with the kind that rule gives it and merge choices, so `answer --release` approves it; a reversible merge call takes `--no-default`, because a merge never releases itself.
 
 Hold a waiting call as usual and say nothing about it until the sitting: no chat line, no question selector, no board of its own; the worker it gates stays stopped, and a scout is released instead (`scout-completion`).
 When the captain is in the conversation working the very task a call gates, ask it there; a sitting never hides a call he asks about, and an answer he gives early is recorded as any other.
