@@ -153,10 +153,6 @@
 #                          bin/fm-inbox.sh rewake-due queued one durable check
 #                          row per inbox note still pending a day after its
 #                          capture or last re-wake (inbox_rewake_tick)
-#   check: decision sitting <date> <time> <zone>: <n> call(s) waiting ...
-#                          bin/fm-decision-sitting.sh due queued one durable
-#                          check row for a captain decision sitting that came
-#                          due with calls waiting (decision_sitting_tick)
 #   check: rejected unauthenticated state checks: <paths>
 #                          unsafe state checks were refused without execution
 #   check: rejected unauthenticated PR poll retirement receipts: <paths>
@@ -2994,26 +2990,18 @@ inbox_rewake_tick() {
 # FM_DECISION_SITTING_INTERVAL seconds (default 300; 0 or off disables) the
 # watcher starts `fm-decision-sitting.sh due` detached, so the fleet snapshot a
 # due sitting reads never stalls the loop. A due sitting with calls waiting
-# queues its own durable `check:` row and its payload lands in
-# state/decision-sitting-woke; the next tick claims that file and wakes once.
+# queues its own durable `check:` row, which a later cycle surfaces as queued
+# work like any other row, so there is no second hand-off to claim.
 DECISION_SITTING_INTERVAL=${FM_DECISION_SITTING_INTERVAL:-300}
 case "$DECISION_SITTING_INTERVAL" in off) DECISION_SITTING_INTERVAL=0 ;; ''|*[!0-9]*) DECISION_SITTING_INTERVAL=300 ;; esac
 decision_sitting_tick() {
-  local pending="$STATE/decision-sitting-woke" claimed="$STATE/.decision-sitting-woke.claimed" reason
-  if [ -s "$pending" ]; then
-    mv -f "$pending" "$claimed" 2>/dev/null || true
-    reason=$(grep '^check: decision sitting ' "$claimed" 2>/dev/null | tail -1)
-    rm -f "$claimed"
-    [ -z "$reason" ] || wake "$reason"
-  fi
   [ "$DECISION_SITTING_INTERVAL" -gt 0 ] || return 0
   [ "$(age_of "$STATE/.last-decision-sitting-tick")" -ge "$DECISION_SITTING_INTERVAL" ] || return 0
   touch "$STATE/.last-decision-sitting-tick"
   (
-    out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
-      "$SCRIPT_DIR/fm-decision-sitting.sh" due 2>/dev/null) \
+    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+      "$SCRIPT_DIR/fm-decision-sitting.sh" due >/dev/null 2>&1 \
       || triage_log "decision sitting check failed; the next check retries in ${DECISION_SITTING_INTERVAL}s"
-    [ -z "$out" ] || printf '%s\n' "$out" >> "$pending"
   ) </dev/null >/dev/null 2>&1 &
 }
 

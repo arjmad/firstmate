@@ -29,12 +29,16 @@
 # call is waiting, it queues one durable `check:` wake keyed
 # `decision-sitting:<epoch>` and prints its payload:
 #   check: decision sitting <YYYY-MM-DD HH:MM> <zone>: <n> call(s) waiting ...
+# The durable row is the wake: the watcher surfaces it like any queued row.
 # A sitting with nothing waiting records itself and prints nothing, so it
 # produces no captain-facing output. The marker write and the append share the
 # wake-queue lock, which also re-reads the marker so two overlapping runs wake
 # once, and a key still queued gets no second row. A missing marker only
-# starts the cadence (the next sitting is the first), and a watcher that was
-# down across several sittings fires once, for the latest. A snapshot read
+# starts the cadence (the next sitting is the first). A sitting first seen more
+# than FM_DECISION_SITTING_GRACE seconds (default 3600) after its time, because
+# no watcher ran across it, is recorded without a wake, so its calls, and any
+# held after it, wait for the next sitting rather than arriving off schedule.
+# A snapshot read
 # that fails exits 1 and leaves the marker alone, so the next tick retries; the
 # first failure for a sitting also queues one `check: decision sitting <time>
 # could not count the waiting calls ...` wake keyed
@@ -46,18 +50,23 @@
 # touching state/.decision-sitting-waiting; bin/fm-captain-hold.sh runs it on
 # every `reversible` hold. While the marker exists bin/fm-supervision-lib.sh
 # counts the home as needing supervision, so the watcher that runs `due` keeps
-# running after the last task is torn down. A due sitting that finds nothing
-# waiting removes the marker, unless a hold touched it after the count was read
-# or this home still holds a reversible call that is dated, blocked, or aged
-# and so may go live before a later sitting.
-# It does nothing in a secondmate home, whose parent is already supervising it.
+# running after the last task is torn down. The marker holds a fresh token on
+# every write, and a due sitting that finds nothing waiting removes it only
+# when its token is unchanged since before the count was read, so a hold made
+# during the read keeps it. It also stays while this home holds a reversible
+# call that is blocked, or dated to open by the next sitting's day, because
+# either may go live before a later sitting; an aged call, or one dated past
+# the next sitting, does not keep the home supervised.
+# It does nothing in a secondmate home: the parent records every secondmate
+# under state/<mate-id>.meta, which already keeps the parent supervised.
 #
 # `queued` prints the waiting call ids, one per line (`<mate-id>/<task-id>` for
 # a secondmate's), and is read-only apart from the snapshot's own cache refresh.
 # `slots` prints the `last` and `next` sitting as `<label> <epoch> <local time>`.
 #
 # FM_DECISION_SITTING_TIMES (default "12:00 20:00", HH:MM in the zone; a time
-# a daylight-saving jump skips holds no sitting that day) and
+# a daylight-saving jump skips holds no sitting that day, under GNU and BSD
+# date alike) and
 # FM_DECISION_SITTING_ZONE (default America/New_York) change the schedule;
 # FM_DECISION_SITTING_NOW (epoch seconds) fixes the clock and
 # FM_DECISION_SITTING_SNAPSHOT a snapshot JSON file, for tests.
@@ -72,6 +81,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 ZONE=${FM_DECISION_SITTING_ZONE:-America/New_York}
 TIMES=${FM_DECISION_SITTING_TIMES:-12:00 20:00}
+GRACE=${FM_DECISION_SITTING_GRACE:-3600}
+case "$GRACE" in ''|*[!0-9]*) GRACE=3600 ;; esac
 MARKER="$STATE/.last-decision-sitting"
 WAITING="$STATE/.decision-sitting-waiting"
 FAILED="$STATE/.last-decision-sitting-failed"
@@ -91,11 +102,16 @@ now_epoch() {
   printf '%s\n' "$now"
 }
 
-# Epoch of <YYYY-MM-DD> <HH:MM> as wall-clock time in the sitting zone.
+# Epoch of <YYYY-MM-DD> <HH:MM> as wall-clock time in the sitting zone, or
+# non-zero when that wall time does not exist there. BSD date normalises a time
+# a daylight-saving jump skips instead of failing, so the result is read back.
 zone_epoch() {  # <date> <HH:MM>
-  TZ=$ZONE date -j -f '%Y-%m-%d %H:%M:%S' "$1 $2:00" +%s 2>/dev/null && return 0
-  TZ=$ZONE date -d "$1 $2:00" +%s 2>/dev/null && return 0
-  return 1
+  local epoch
+  epoch=$(TZ=$ZONE date -j -f '%Y-%m-%d %H:%M:%S' "$1 $2:00" +%s 2>/dev/null) \
+    || epoch=$(TZ=$ZONE date -d "$1 $2:00" +%s 2>/dev/null) \
+    || return 1
+  [ "$(zone_format "$epoch" '%Y-%m-%d %H:%M')" = "$1 $2" ] || return 1
+  printf '%s\n' "$epoch"
 }
 
 # <epoch> rendered in the sitting zone with <format>.
@@ -177,22 +193,29 @@ snapshot_json() {
     cat -- "$FM_DECISION_SITTING_SNAPSHOT"
     return
   fi
-  FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-fleet-snapshot.sh" --json
+  # Lift the snapshot's per-secondmate bounds so no waiting call falls past a cut.
+  FM_HOME="$FM_HOME" FM_SNAPSHOT_SECONDMATES=100000 FM_SNAPSHOT_SECONDMATE_DECISIONS=100000 \
+    "$SCRIPT_DIR/fm-fleet-snapshot.sh" --json
 }
 
-# Every open reversible captain call, one `<bucket> <id>` line each. A live one
-# waits for the next sitting; a dated, blocked, or aged one in this home may go
-# live later, so it keeps the home supervised without starting a sitting.
-reversible_calls() {
+# Every open reversible captain call that counts, one `<kind> <id>` line each:
+# `live` waits for this sitting, and `pending` is this home's blocked call, or
+# one dated to open on or before <next-day> (the next sitting's date in the
+# zone), which may go live before a later sitting. Aged calls and calls dated
+# further out print nothing.
+reversible_calls() {  # <next-day>
   local json
   command -v jq >/dev/null 2>&1 || die "jq is required to count waiting calls"
   json=$(snapshot_json 2>/dev/null) || die "the fleet snapshot could not be read"
-  printf '%s\n' "$json" | jq -r '
+  printf '%s\n' "$json" | jq -r --arg next_day "$1" '
     def waits: (. // "") | tostring | startswith("[reversible");
     ([.backlog.records[]?
        | select(.structured and .hold_kind == "captain" and .state != "done"
-                and .hold_bucket != null and (.hold_reason | waits))
-       | "\(if .hold_bucket == "live" then "live" else "pending" end) \(.id)"]
+                and (.hold_reason | waits))
+       | if .hold_bucket == "live" then "live \(.id)"
+         elif .hold_bucket == "blocked" then "pending \(.id)"
+         elif .hold_bucket == "dated" and ((.hold_until // "") | tostring) <= $next_day then "pending \(.id)"
+         else empty end]
      + [(.secondmate_current.records // [])[] as $m
         | $m.decisions_open[]?
         | select(.source == "backlog" and .verb == "captain-hold"
@@ -201,9 +224,16 @@ reversible_calls() {
     | unique | .[]' 2>/dev/null || die "the fleet snapshot could not be parsed"
 }
 
+next_day() {  # <epoch>
+  local next
+  next=$(next_sitting "$1") || exit 1
+  zone_format "$next" %Y-%m-%d || die "cannot read the next sitting's date in $ZONE"
+}
+
 queued_ids() {
-  local calls
-  calls=$(reversible_calls) || exit 1
+  local calls day
+  day=$(next_day "$(now_epoch)") || exit 1
+  calls=$(reversible_calls "$day") || exit 1
   printf '%s\n' "$calls" | sed -n 's/^live //p'
 }
 
@@ -238,8 +268,23 @@ queue_once() {  # <slot> <key> <payload> <record-file>
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
 }
 
+# Remove the waiting marker only when its token is still <token>. The rename is
+# atomic, so a `waiting` write after it creates a new marker that stays.
+clear_waiting() {  # <token>
+  local token=$1 claimed="$WAITING.clearing.$$"
+  [ -n "$token" ] || return 0
+  mv -f -- "$WAITING" "$claimed" 2>/dev/null || return 0
+  if [ "present:$(cat "$claimed" 2>/dev/null)" = "$token" ]; then
+    rm -f -- "$claimed"
+  elif [ -e "$WAITING" ]; then
+    rm -f -- "$claimed"
+  else
+    mv -f -- "$claimed" "$WAITING" 2>/dev/null || true
+  fi
+}
+
 cmd_due() {
-  local now slot recorded calls count stamp err label
+  local now slot recorded calls count stamp err label token day
   [ "$#" -eq 0 ] || die "usage: fm-decision-sitting.sh due"
   if fm_parent_channel_home_id "$FM_HOME" >/dev/null 2>&1; then
     return 0
@@ -253,9 +298,16 @@ cmd_due() {
   recorded=$(cat "$MARKER" 2>/dev/null)
   case "$recorded" in ''|*[!0-9]*) recorded=0 ;; esac
   [ "$recorded" -lt "$slot" ] || return 0
+  if [ $((now - slot)) -gt "$GRACE" ]; then
+    record_sitting "$slot" || die "cannot record the sitting under $MARKER"
+    return 0
+  fi
   label=$(sitting_label "$slot")
+  day=$(next_day "$now") || exit 1
+  token=
+  [ ! -e "$WAITING" ] || token="present:$(cat "$WAITING" 2>/dev/null || true)"
   stamp=$(mktemp "$STATE/.decision-sitting-read.XXXXXX") || die "cannot stage the sitting read under $STATE"
-  if ! calls=$(reversible_calls 2>"$stamp"); then
+  if ! calls=$(reversible_calls "$day" 2>"$stamp"); then
     err=$(sed -n '1{s/^fm-decision-sitting: //;p;}' "$stamp")
     rm -f -- "$stamp"
     # Retried every tick; the captain-facing gap is reported once per sitting.
@@ -266,9 +318,7 @@ cmd_due() {
   fi
   count=$(printf '%s\n' "$calls" | grep -c '^live ' || true)
   if [ "$count" -eq 0 ]; then
-    if [ ! "$WAITING" -nt "$stamp" ] && ! printf '%s\n' "$calls" | grep -q '^pending '; then
-      rm -f -- "$WAITING"
-    fi
+    printf '%s\n' "$calls" | grep -q '^pending ' || clear_waiting "$token"
     rm -f -- "$stamp"
     record_sitting "$slot" || die "cannot record the sitting under $MARKER"
     return 0
@@ -284,7 +334,12 @@ cmd_waiting() {
   if fm_parent_channel_home_id "$FM_HOME" >/dev/null 2>&1; then
     return 0
   fi
-  touch "$WAITING" || die "cannot mark $WAITING"
+  local tmp
+  tmp=$(mktemp "$WAITING.XXXXXX") || die "cannot stage $WAITING"
+  if ! { printf '%s.%s.%s\n' "$(date +%s)" "$$" "$RANDOM" > "$tmp" && mv -f -- "$tmp" "$WAITING"; }; then
+    rm -f -- "$tmp"
+    die "cannot mark $WAITING"
+  fi
 }
 
 cmd_queued() {

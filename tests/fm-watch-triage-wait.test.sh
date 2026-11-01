@@ -806,20 +806,31 @@ test_overdue_scan_lines_surface_as_one_check_wake() {
   pass "pending overdue scan lines surface once as a single check wake"
 }
 
-# A payload a detached decision-sitting check left behind is claimed once as one wake.
-test_decision_sitting_line_surfaces_as_one_check_wake() {
-  local dir state out pid line
-  line='check: decision sitting 2026-11-01 12:00 America/New_York: 2 call(s) waiting for the captain (bin/fm-decision-sitting.sh queued)'
-  dir=$(make_case decision-sitting-woke); state="$dir/state"; out="$dir/watch.out"
-  printf '%s\n' "$line" > "$state/decision-sitting-woke"
-  watch_bg "$state" "$dir/fakebin" "$out" env FM_FLEET_SYNC_INTERVAL=off FM_HOLD_RELEASE_INTERVAL=off \
-    FM_BACKLOG_OVERDUE_INTERVAL=off FM_DECISION_SITTING_INTERVAL=off
+# A sitting that comes due with a call waiting wakes the watcher through the
+# durable row the detached check queues, with no second hand-off to claim.
+test_due_decision_sitting_wakes_the_watcher() {
+  local dir state out pid snap
+  command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; return 0; }
+  dir=$(make_case decision-sitting); dir=$(cd "$dir" && pwd -P); state="$dir/state"; out="$dir/watch.out"
+  snap="$dir/snapshot.json"
+  jq -n '{backlog:{records:[{id:"pick-plan",structured:true,state:"queued",hold_kind:"captain",
+    hold_bucket:"live",hold_reason:"[reversible] pick a plan"}]}}' > "$snap"
+  # 2026-11-01 12:00 New York is 17:00Z; the previous sitting was 2026-10-31 20:00.
+  printf '1793491200\n' > "$state/.last-decision-sitting"
+  PATH="$dir/fakebin:$PATH" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_CREW_STATE_BIN="$dir/fakebin/fm-crew-state.sh" \
+    FM_POLL=0.2 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_SECONDMATE_LIVENESS_SECS=99999999 FM_FLEET_SYNC_INTERVAL=off FM_HOLD_RELEASE_INTERVAL=off \
+    FM_INBOX_REWAKE_INTERVAL=off FM_BACKLOG_OVERDUE_INTERVAL=off FM_DECISION_SITTING_INTERVAL=1 \
+    FM_DECISION_SITTING_NOW=1793552460 FM_DECISION_SITTING_SNAPSHOT="$snap" "$WATCH" > "$out" 2>/dev/null &
   pid=$!
-  wait_for_exit "$pid" 100 || fail "the watcher did not exit on a pending sitting line: $(cat "$out")"
-  grep -F "$line" "$out" >/dev/null || fail "the wake did not carry the sitting payload: $(cat "$out")"
-  [ ! -e "$state/decision-sitting-woke" ] && [ ! -e "$state/.decision-sitting-woke.claimed" ] \
-    || fail "the claimed sitting line was left behind for a second wake"
-  pass "a pending decision-sitting line surfaces once as a check wake"
+  wait_for_exit "$pid" 150 || { reap "$pid"; fail "the watcher did not wake on a due sitting: $(cat "$out")"; }
+  grep -F 'check: queued work: 1 check' "$out" >/dev/null \
+    || fail "the wake did not surface the queued sitting row: $(cat "$out")"
+  grep "$(printf '\tcheck\tdecision-sitting:1793552400\t')" "$state/.wake-queue" >/dev/null \
+    || fail "the due sitting was not queued durably: $(cat "$state/.wake-queue" 2>&1)"
+  [ ! -e "$state/decision-sitting-woke" ] || fail "the sitting left a second hand-off file to claim"
+  pass "a due decision sitting wakes the watcher once through its durable row"
 }
 
 # A queued backlog item whose date gate lapsed long ago without a dispatch
@@ -943,7 +954,7 @@ test_hold_release_schedule_releases_a_due_default
 test_unacknowledged_inbox_note_rewakes_the_watcher
 test_acknowledged_inbox_note_never_rewakes_the_watcher
 test_overdue_scan_lines_surface_as_one_check_wake
-test_decision_sitting_line_surfaces_as_one_check_wake
+test_due_decision_sitting_wakes_the_watcher
 test_overdue_backlog_item_wakes_the_watcher
 test_paused_bg_job_without_until_stays_silent_after_the_job_ends
 test_paused_bg_job_until_timeout_rechecks_after_the_job_ends

@@ -196,11 +196,72 @@ test_waiting_call_keeps_an_empty_home_supervised() {
   assert_equals "" "$out" "a sitting whose last call was answered still woke"
   [ ! -e "$home/state/.decision-sitting-waiting" ] || fail "a sitting with nothing waiting left the home supervised"
   if needed; then fail "the home still needed supervision after its sitting found nothing waiting"; fi
-  hold_call "$home" later --kind reversible --until 2099-01-01
-  out=$(run_sitting "$home" $((NOV01_EVENING + 60)) due) || fail "due failed: $out"
-  assert_equals "" "$out" "a sitting with only a dated call woke"
-  [ -e "$home/state/.decision-sitting-waiting" ] || fail "a sitting cleared the marker while a dated reversible call can still go live"
   pass "a call waiting for a sitting keeps an otherwise empty home supervised until a sitting finds nothing waiting"
+}
+
+# Which reversible calls that are not live keep the marker: a blocked one, or
+# one dated to open by the next sitting's day; an aged one never goes live
+# again and one dated further out does not need the home supervised meanwhile.
+test_only_calls_that_can_go_live_soon_keep_the_marker() {
+  local home snap bucket until expect
+  home=$(make_home pending)
+  snap="$home/snapshot.json"
+  # At 2026-11-01 12:01 the next sitting is 2026-11-01 20:00, so its day is 2026-11-01.
+  for row in "blocked||kept" "dated|2026-11-01|kept" "dated|2026-11-02|cleared" "aged||cleared"; do
+    IFS='|' read -r bucket until expect <<< "$row"
+    jq -n --arg b "$bucket" --arg u "$until" '{backlog:{records:[{id:"c1",structured:true,state:"queued",
+      hold_kind:"captain",hold_bucket:$b,hold_until:(if $u == "" then null else $u end),
+      hold_reason:"[reversible] decide"}]}}' > "$snap"
+    run_sitting "$home" "$NOV01_NOON" waiting || fail "waiting failed"
+    printf '%s\n' "$OCT31_EVENING" > "$home/state/.last-decision-sitting"
+    FM_DECISION_SITTING_SNAPSHOT="$snap" run_sitting "$home" $((NOV01_NOON + 60)) due >/dev/null \
+      || fail "due failed for a $bucket call"
+    if [ "$expect" = kept ]; then
+      [ -e "$home/state/.decision-sitting-waiting" ] || fail "a $bucket call ${until:+dated $until }did not keep the home supervised"
+    else
+      [ ! -e "$home/state/.decision-sitting-waiting" ] || fail "a $bucket call ${until:+dated $until }kept the home supervised"
+    fi
+  done
+  pass "only a blocked call, or one dated to open by the next sitting, keeps an empty home supervised"
+}
+
+# A hold made while a sitting is reading the snapshot keeps the marker, even
+# inside the same second, because the marker carries a fresh token.
+test_hold_during_the_read_keeps_the_marker() {
+  local home snap fifo pid
+  home=$(make_home race)
+  snap="$home/snapshot.json"; fifo="$home/snapshot.fifo"
+  jq -n '{backlog:{records:[]}}' > "$snap"
+  mkfifo "$fifo" || fail "mkfifo failed"
+  run_sitting "$home" "$NOV01_NOON" waiting || fail "waiting failed"
+  printf '%s\n' "$OCT31_EVENING" > "$home/state/.last-decision-sitting"
+  # The writer opens the FIFO only once the sitting has read the marker's token
+  # and starts its snapshot read; the new hold lands before the snapshot does.
+  ( { run_sitting "$home" "$NOV01_NOON" waiting; cat "$snap"; } > "$fifo" ) &
+  pid=$!
+  FM_DECISION_SITTING_SNAPSHOT="$fifo" run_sitting "$home" $((NOV01_NOON + 60)) due >/dev/null || fail "due failed"
+  wait "$pid"
+  [ -e "$home/state/.decision-sitting-waiting" ] || fail "a hold made during the sitting's read lost its marker"
+  pass "a hold made during a sitting's read keeps the home supervised"
+}
+
+# A sitting no watcher saw near its time is recorded without a wake, so a call
+# held after it waits for the next sitting instead of arriving off schedule.
+test_missed_sitting_is_skipped() {
+  local home snap out
+  home=$(make_home missed)
+  snap="$home/snapshot.json"
+  jq -n '{backlog:{records:[{id:"late",structured:true,state:"queued",hold_kind:"captain",
+    hold_bucket:"live",hold_reason:"[reversible] decide"}]}}' > "$snap"
+  printf '%s\n' "$OCT31_NOON" > "$home/state/.last-decision-sitting"
+  out=$(FM_DECISION_SITTING_SNAPSHOT="$snap" run_sitting "$home" $((OCT31_EVENING + 5400)) due) || fail "due failed: $out"
+  assert_equals "" "$out" "a sitting first seen 90 minutes late still woke"
+  assert_equals "0" "$(sitting_rows "$home")" "a missed sitting queued a wake"
+  assert_equals "$OCT31_EVENING" "$(cat "$home/state/.last-decision-sitting")" "the missed sitting was not recorded"
+  out=$(FM_DECISION_SITTING_SNAPSHOT="$snap" run_sitting "$home" $((NOV01_NOON + 60)) due) || fail "due failed: $out"
+  assert_contains "$out" "decision sitting 2026-11-01 12:00 America/New_York: 1 call(s) waiting" \
+    "the call did not reach the next sitting: $out"
+  pass "a sitting missed by more than its grace is skipped and its calls wait for the next one"
 }
 
 test_sittings_follow_the_named_zone_across_daylight_saving
@@ -209,3 +270,6 @@ test_due_sitting_wakes_once_and_an_empty_one_stays_silent
 test_secondmate_home_runs_no_sittings
 test_secondmate_calls_count_in_the_parent_sitting
 test_waiting_call_keeps_an_empty_home_supervised
+test_only_calls_that_can_go_live_soon_keep_the_marker
+test_hold_during_the_read_keeps_the_marker
+test_missed_sitting_is_skipped
