@@ -2986,31 +2986,29 @@ inbox_rewake_tick() {
 }
 
 # Retired decision sittings (docs/fork-decisions/2026-11-01-remove-decision-sittings.md).
-# A home that ran the removed 12:00/20:00 sittings may still hold their state:
-# the waiting marker a reversible hold set, the last-sitting record, the tick
-# stamp, or a sitting hand-off file. A captain call held while that ran may
-# never have reached the captain, because it was waiting for a sitting that no
-# longer comes. The first watcher to find any of it queues one durable
-# `check: decision sittings retired` row and wakes, when the files show a
-# sitting could have held a call, then removes them all, so the calls surface
-# now and the wake fires once. A home with none of these files does nothing.
-DECISION_SITTING_LEFTOVERS=".decision-sitting-waiting .last-decision-sitting .last-decision-sitting-failed .last-decision-sitting-tick decision-sitting-woke .decision-sitting-woke.claimed .decision-sitting-woke.lock"
+# A home that ran the removed 12:00/20:00 sittings may still hold their state
+# under state/: the waiting marker a reversible hold set, the last-sitting
+# record, the tick and failure stamps, a sitting hand-off file, or a temporary
+# copy of any of them. A captain call held while that ran may never have
+# reached the captain, because it was waiting for a sitting that no longer
+# comes. The first watcher to find any of it queues one durable
+# `check: decision sittings retired` row and wakes, unless only the tick stamp
+# or a stale lock shows (a home that never held a call), then removes it all, so the calls
+# surface now and the wake fires once. A home with none of it does nothing.
 decision_sittings_retire_tick() {
   local f found=false held=false reason
-  for f in $DECISION_SITTING_LEFTOVERS; do
-    [ -e "$STATE/$f" ] || [ -L "$STATE/$f" ] || continue
+  for f in "$STATE"/.decision-sitting-* "$STATE"/.last-decision-sitting* "$STATE"/decision-sitting-woke; do
+    [ -e "$f" ] || [ -L "$f" ] || continue
     found=true
-    case "$f" in .decision-sitting-waiting|.last-decision-sitting|decision-sitting-woke|.decision-sitting-woke.claimed) held=true ;; esac
+    case "${f##*/}" in .last-decision-sitting-tick|.decision-sitting-woke.lock) ;; *) held=true ;; esac
   done
   [ "$found" = true ] || return 0
-  reason="check: decision sittings retired: a captain call held for a 12:00 or 20:00 sitting may never have reached the captain; bring every live call on bearings' Captain's Call to him now"
+  reason="check: decision sittings retired: bring every live call on bearings' Captain's Call that has not reached the captain yet to him now, which also answers any queued \`check: decision sitting\` row"
   if [ "$held" = true ] && ! fm_wake_append check decision-sittings-retired "$reason"; then
     triage_log "could not queue the decision-sittings-retired wake; its leftover state stays for the next cycle"
     return 0
   fi
-  for f in $DECISION_SITTING_LEFTOVERS; do
-    rm -rf -- "${STATE:?}/$f"
-  done
+  rm -rf -- "$STATE"/.decision-sitting-* "$STATE"/.last-decision-sitting* "$STATE"/decision-sitting-woke
   [ "$held" = false ] || wake "$reason"
 }
 

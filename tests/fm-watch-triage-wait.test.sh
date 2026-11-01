@@ -816,16 +816,17 @@ test_leftover_sitting_state_wakes_once_to_surface_held_calls() {
   : > "$state/.decision-sitting-waiting"
   printf '1793491200\n' > "$state/.last-decision-sitting"
   : > "$state/.last-decision-sitting-tick"
+  : > "$state/.decision-sitting-waiting.clearing.4242"
   watch_bg "$state" "$dir/fakebin" "$out" env FM_FLEET_SYNC_INTERVAL=off FM_HOLD_RELEASE_INTERVAL=off \
     FM_BACKLOG_OVERDUE_INTERVAL=off
   pid=$!
   wait_for_exit "$pid" 100 || { reap "$pid"; fail "the watcher did not wake on leftover sitting state: $(cat "$out")"; }
-  grep -F "check: decision sittings retired: a captain call held for a 12:00 or 20:00 sitting may never have reached the captain; bring every live call on bearings' Captain's Call to him now" "$out" >/dev/null \
+  grep -F "check: decision sittings retired: bring every live call on bearings' Captain's Call that has not reached the captain yet to him now" "$out" >/dev/null \
     || fail "the wake did not tell firstmate to surface the held calls: $(cat "$out")"
   grep "$(printf '\tcheck\tdecision-sittings-retired\t')" "$state/.wake-queue" >/dev/null \
     || fail "the retirement wake was not queued durably: $(cat "$state/.wake-queue" 2>&1)"
   [ ! -e "$state/.decision-sitting-waiting" ] && [ ! -e "$state/.last-decision-sitting" ] \
-    && [ ! -e "$state/.last-decision-sitting-tick" ] \
+    && [ ! -e "$state/.last-decision-sitting-tick" ] && [ ! -e "$state/.decision-sitting-waiting.clearing.4242" ] \
     || fail "the sitting state was left behind for a second wake"
   ack_stopped_cycle "$state" >/dev/null || fail "could not acknowledge the retirement wake"
   : > "$out"
