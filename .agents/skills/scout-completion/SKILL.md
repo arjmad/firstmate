@@ -9,7 +9,7 @@ metadata:
 # Scout outcome and promotion
 
 A completed scout must leave a self-contained report before its scratch worktree can be discarded; read and relay its findings, record the report as the Done artifact, and re-evaluate the queue.
-Relay findings that carry a captain call together with that call, at once or at the next decision sitting as `captain-hold-lifecycle` "Decision sittings" decides; findings with no call are relayed at once.
+Relay findings that carry a captain call together with that call.
 A report may recommend implementation but does not authorize it.
 Before treating the investigation or any visual review as complete, load `captain-hold-lifecycle`; teardown enforces that shared completion gate.
 

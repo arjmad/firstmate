@@ -2,7 +2,7 @@
 name: captain-hold-lifecycle
 description: >-
   Agent-only policy for completing investigations and visual reviews without losing unresolved captain calls, and for closing what the captain owns with his actual words.
-  Load before treating an investigation, scout report, structured review, or Lavish review as complete, before ending a visual review that exposed a captain decision, when holding a new captain call or deciding whether to bring one to the captain now or at the next decision sitting, on a `check: decision sitting` wake, when recording or routing the captain's answer or a change to an earlier captain ruling, and on any RECORD DIVERGENCE line the wake drain prints.
+  Load before treating an investigation, scout report, structured review, or Lavish review as complete, before ending a visual review that exposed a captain decision, when recording or routing the captain's answer or a change to an earlier captain ruling, and on any RECORD DIVERGENCE line the wake drain prints.
 user-invocable: false
 metadata:
   internal: true
@@ -24,7 +24,7 @@ Put the question and its options in the hold reason, and keep one held task per 
 Register or re-hold through `bin/fm-captain-hold.sh hold`, which is idempotent per task id.
 Give every new hold a kind: `--kind arjun-only` when any option spends money, touches a credential, deletes unique data, changes what a customer sees, makes an external commitment, falls in Sapna's domain, or needs the captain's own hands; otherwise `--kind reversible`.
 A reversible call also takes `--default <option>`, your recommended option, which releases it after 72 hours as the decision of record; never give a default to a call the captain has deferred himself (`--until`).
-Pass `--no-default` instead only when no option is safe to apply without him, such as an idea or a question with no recommendation; the script refuses a reversible hold that carries none of the three.
+Pass `--no-default` instead only when no option is safe to apply without him, such as an idea, a question with no recommendation, or a merge call, because a merge never releases itself; the script refuses a reversible hold that carries none of the three.
 Record the call's own choices on every new hold: `--options 'A|B'` (two or three short labels, the ones a worker's `needs-decision` line names), `--recommend A` (a reversible default already is the recommendation), and a one-line `--ask` question, so his buttons say what each choice does rather than Done; leave them off only when the call has no discrete choices, and use `choices <task-id>` to add them to a call already held.
 On a `check: released by default: <id> <option>` wake, act on that option as you would on an answer and tell the captain in one line what was released and to what.
 After inventorying the whole report and review surface, run `bin/fm-captain-hold.sh complete` with every captain-held task id, or with `--none` only when the reviewed surface leaves nothing waiting on the captain.
@@ -70,34 +70,13 @@ Read such a line as "these two records disagree", never as "the captain ruled an
 Reconcile it with what actually happened - `answer` when the captain's own words exist to record, and a fresh `needs-decision` line re-opening the status decision when that resolution was not the captain's word.
 The absence of a routed work item is not a divergence and the guard never requires one: when the decision IS the deliverable there is nothing to route.
 
-## Decision sittings
-
-The captain takes non-urgent calls at two decision sittings a day, 12:00 and 20:00 New York time, as one board, while urgent calls still reach him at once (fork patch, `docs/fork-decisions.md` 2026-11-01).
-This section is the one owner of which calls wait and how a sitting runs; `bin/fm-decision-sitting.sh` owns the clock and the count, and `--help` its mechanics.
-
-Decide from the call's own record, once its kind is set by the rule above:
-
-- A call goes at once when its hold is `arjun-only` or carries no kind, which covers money, credentials and logins, deletions, anything a customer sees, external commitments, Sapna's domain, and the captain's own hands; a one-way-door merge is held `arjun-only` by `bin/fm-pr-merge.sh` and goes at once too.
-- A `reversible` call also goes at once when waiting for the next sitting would cost more than the wait: a live fault or outage, a deadline or date gate that falls before the next sitting, or anything destructive or irreversible about to happen without him.
-- Every other `reversible` call waits for the next sitting, and when you are unsure which side a call falls on, it goes at once.
-- A ready PR waiting for his merge word follows the same rule: hold its task with the kind that rule gives it and merge choices, so `answer --release` approves it; a reversible merge call takes `--no-default`, because a merge never releases itself.
-
-Hold a waiting call as usual and say nothing about it until the sitting: no chat line, no question selector, no board of its own; the worker it gates stays stopped, and a scout is released instead (`scout-completion`).
-When the captain is in the conversation working the very task a call gates, ask it there; a sitting never hides a call he asks about, and an answer he gives early is recorded as any other.
-
-`bin/fm-watch.sh` wakes with `check: decision sitting <time>: <n> call(s) waiting` only when a live reversible call is open in this home or in a secondmate home the fleet snapshot reads; a sitting with nothing waiting queues nothing, and you say nothing.
-On that wake, build the board through `bearings` Lavish board mode, whose Decisions section is the sitting's board and holds every live call, including any brought at once and still unanswered.
-Then send the captain one message: the board's link, how many calls wait, each call's one-line ask with its recommendation, and every PR's full `https://...` URL.
-His board answers reach `answers` through the board's binding, as every bearings board answer does; a call he leaves unanswered stays on the board for the next sitting, and a reversible default still releases on its own clock.
-A secondmate home runs no sittings: its `hold` still publishes the call, kind prefix included, on the parent channel at once, and the parent applies this rule when it relays, so a waiting secondmate call is counted in the parent's sitting.
-
 ## Operating sequence
 
 1. Read the complete investigation result and complete the visual review before declaring either complete.
 2. Inventory only genuine unresolved choices that require the captain, and find the task each one gates.
 3. Hold that task - or create one captain-held task for the review's open questions - with a concise reason carrying the question and options.
 4. Run `complete` with the full captain-held inventory for that review pass.
-5. Relay the choices to the captain as decisions from Bearings' Captain's Call section under `AGENTS.md` section 9, at once or at the next decision sitting as "Decision sittings" above decides; do not use the word hold in captain chat.
+5. Relay the choices to the captain as decisions from Bearings' Captain's Call section under `AGENTS.md` section 9; do not use the word hold in captain chat.
 6. Close each call only through `answer` (or a channel that feeds `answers`), close a board-requested moot call through evidence-backed `reconcile close`, record a still-active reconciliation through `reconcile note`, use `--until` when the captain defers it, or confirm a channel already closed it.
 7. Confirm Bearings reflects the outcome: answered or reconciled-moot calls leave Captain's Call, released work resumes, active reconciliations remain held, and deferred calls sit in Charted Next with their date.
 
