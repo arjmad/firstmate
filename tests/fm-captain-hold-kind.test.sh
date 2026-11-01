@@ -440,6 +440,12 @@ test_keyed_answer_records_a_pick_by_label() {
     || fail "the released pick was refused: $out"
   out=$(printf 'sample-go\tStop\tStop\trelease\n' | run_captain "$home" answers --source "test board") \
     || fail "the replayed released pick was not a no-op: $out"
+  run_captain "$home" hold sample-lower --title "Lower call" --reason "Decide" \
+    --kind arjun-only --options "Go|Stop" --recommend Go >/dev/null || fail "hold failed"
+  out=$(printf 'sample-lower\tstop\t\trelease\n' | run_captain "$home" answers --source "test chat") \
+    || fail "the lowercase released pick was refused: $out"
+  out=$(printf 'sample-lower\tstop\t\trelease\n' | run_captain "$home" answers --source "test chat") \
+    || fail "the replayed lowercase released pick was not a no-op: $out"
   run_captain "$home" hold sample-board --title "Board call" --reason "Decide" \
     --kind arjun-only --options "Deduct all|Not yet" --recommend "Deduct all" >/dev/null || fail "hold failed"
   printf 'sample-board\tdeduct-all\tDeduct all\n' | run_captain "$home" answers --source "bearings board" >/dev/null \

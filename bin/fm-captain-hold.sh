@@ -1973,7 +1973,7 @@ sanitize_reconcile_provenance() {
 command_answers() {
   local origin='' source='' row rest key answer label mode id show state hold_kind body digest legacy_digest legacy_key
   local recorded_digest recorded_mode occurrence tmp err closed=0 skipped=0 reason release_flag tab=$'\t'
-  local resolve_rc defer_until deferred=0 picked replay_digest replay_label_digest
+  local resolve_rc defer_until deferred=0 picked replay_digest recorded_pick
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --source) shift; source=${1:-} ;;
@@ -2056,8 +2056,8 @@ command_answers() {
     # An answer, or the label shown with it (a board option's value is a slug
     # and its label the choice), that names a recorded choice ignoring case is
     # recorded verbatim plus the choice it picked. A closed call keeps its
-    # reason; a released one does not, so its replay also matches a pick
-    # recorded under the answer's or the label's own spelling.
+    # reason; a released one does not, so its replay is matched against the
+    # pick its newest resolution recorded.
     reason=$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")
     picked=$(picked_choice "$reason" "$answer")
     [ -n "$picked" ] || [ -z "$label" ] || picked=$(picked_choice "$reason" "$label")
@@ -2065,11 +2065,11 @@ command_answers() {
       || fail "cannot stage the captain decision for $id"
     digest=$(sha256_text "$(cat "$tmp")")
     replay_digest=$digest
-    replay_label_digest=$digest
     if [ -z "$picked" ]; then
-      replay_digest=$(sha256_text "$(keyed_decision_text "$source" "$id" "$answer" "$label" "$answer")")
-      [ -z "$label" ] \
-        || replay_label_digest=$(sha256_text "$(keyed_decision_text "$source" "$id" "$answer" "$label" "$label")")
+      recorded_pick=$(decode_shown_value "$(show_field "$show" body)" 2>/dev/null \
+        | sed -n 's/^Choice picked: //p' | head -1)
+      [ -z "$recorded_pick" ] \
+        || replay_digest=$(sha256_text "$(keyed_decision_text "$source" "$id" "$answer" "$label" "$recorded_pick")")
     fi
     legacy_digest=''
     if [ "$id" != "$key" ]; then
@@ -2104,7 +2104,6 @@ command_answers() {
     recorded_mode=$(recorded_resolution_mode "$body" || true)
     if body_has_resolution_record "$body" \
       && { [ "$recorded_digest" = "$digest" ] || [ "$recorded_digest" = "$replay_digest" ] \
-        || [ "$recorded_digest" = "$replay_label_digest" ] \
         || { case "$body" in *"Resolution recorded by fm-decision-hold."*) true ;; *) false ;; esac \
           && [ -n "$legacy_digest" ] && [ "$recorded_digest" = "$legacy_digest" ]; }; }; then
       if { [ -z "$release_flag" ] && [ "$state" = "done" ] \
