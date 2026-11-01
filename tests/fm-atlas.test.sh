@@ -92,6 +92,7 @@ test_file_holds_a_short_or_empty_build() {
     || fail "an empty build's board was not recorded"
   jq -e '[.builds[] | .ideas | length] == [3, 0]' "$home/state/atlas/record.json" >/dev/null \
     || fail "the short and empty builds were not both recorded"
+  assert_contains "$(show_task "$home" atlas-three-1)" "held: yes" "an empty build released an earlier build's open idea"
   pass "file holds a short build's ideas and records an empty build's board"
 }
 
