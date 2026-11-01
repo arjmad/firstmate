@@ -1,0 +1,12 @@
+2026-11-01: Arjun dropped the reversible hold's 72-hour default release entirely, routed to the worker fixing the review findings on the [task-less default release](2026-11-01-hold-release-without-task.md): "DROP the automatic 72h default release entirely (simplify)".
+Decision: every captain hold waits for his answer; nothing releases itself, `hold` refuses `--default` and `--no-default`, and the watcher no longer runs `release-due`.
+Why: the release needed its own timer, a marker that kept an empty fleet supervised, and follow-up fixes for that marker, which cost more than the asks it settled.
+This supersedes the default release of the [hold kinds](2026-10-14-captain-hold-kinds.md), the [rule that a reversible hold names its default](2026-10-31-reversible-hold-names-its-default.md), and the [task-less default release](2026-11-01-hold-release-without-task.md); hold kinds and choices stay.
+The [scout release at report time](2026-11-01-scout-release.md) stays as it is.
+A row held before this change may still carry `default: <option>; releases <time>` in its reason prefix; readers accept and ignore it, and its next re-hold drops it.
+No upstream proposal: hold kinds and default release were this fork's own patch, and removing the release restores upstream's watcher and supervision predicate.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| `hold` refuses `--default` and `--no-default`, a reversible hold needs nothing beyond its kind, `release-due` is gone, and a retired default segment on an old row is parsed and ignored | `bin/fm-captain-hold.sh` (`command_hold`, `validate_hold_kind_args`, `validate_hold_choice_args`, `parse_hold_kind_prefix`, `command_choices`), `bin/fm-noticed.sh`, `bin/fm-atlas.sh`, `tests/fm-captain-hold-kind.test.sh`, `tests/fm-captain-hold-lifecycle.test.sh`, `.agents/skills/captain-hold-lifecycle/SKILL.md`, `docs/captain-hold-lifecycle.md`, `docs/scripts.md` | none (fork-owned hold-kind code) | carried | 45dd50a5 |
+| The watcher's hourly release tick, its interval setting and state files, the waiting-default supervision need, and its guard banners are removed | `bin/fm-watch.sh`, `bin/fm-supervision-lib.sh`, `bin/fm-guard.sh`, `bin/fm-turnend-guard.sh`, `tests/fm-watch-triage-wait.test.sh`, `tests/fm-turnend-guard.test.sh`, `tests/fm-claude-stop-autoarm.test.sh`, `docs/turnend-guard.md`, `docs/configuration.md` | watcher main loop (one tick call removed), supervision need predicate, guard need banners | carried | 45dd50a5 |
