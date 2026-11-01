@@ -19,7 +19,6 @@ A direct-PR worker pushes that commit to its PR branch, and a local-only worker 
 A no-mistakes worker re-validates it with /no-mistakes so the pipeline stays the one publisher; it never pushes from its copy.
 In no-mistakes mode the earlier `done [at=<epoch>]: {summary}` is the pipeline handoff and is not gated.
 Tell the captain the PR's full `https://...` URL copied from the worker's ready line, the resolved checks-green crew-state line, or the task's `pr=` metadata, a concise outcome summary, and the no-mistakes risk level when applicable.
-When the PR waits for the captain's merge word, `captain-hold-lifecycle` "Decision sittings" decides whether that call goes to him now or at the next decision sitting.
 A captain instruction to merge is explicit authority; `yolo` is the only standing routine merge authority.
 When `bin/fm-pr-merge.sh` refuses a code-changing PR as unreviewed, follow `docs/task-lifecycle.md` "Code review before merge" rather than waiving it.
 When it refuses a PR whose merge would undo landed work, steer its worker to rebuild the branch on the base with only its own change; an `actionable:` line after a landed merge naming undone commits needs a restoring follow-up PR.

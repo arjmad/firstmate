@@ -3,6 +3,7 @@ Decision: non-urgent captain calls wait for a decision sitting at 12:00 or 20:00
 Why: the review counted 171 needs-decision asks and 39 holds in nine days, about 19 a day, arriving at all hours, with 41% of dispatches between 19:00 and 02:00 New York time.
 The call's own hold kind decides: an `arjun-only` or unkinded hold goes at once, and a `reversible` one waits unless waiting would cost more than the wait; a secondmate runs no sittings of its own, and its calls count in the parent's.
 No upstream proposal: hold kinds are this fork's own patch (2026-10-14), and the sitting rides on them.
+Superseded the same day: Arjun [removed the sittings](2026-11-01-remove-decision-sittings.md), so every call reaches him at once again.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |

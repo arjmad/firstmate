@@ -301,10 +301,6 @@
 # declined, answered, repaired) are recognized everywhere a record is read, so
 # nothing already closed needs rewriting.
 #
-# Decision sittings: a `reversible` hold runs `bin/fm-decision-sitting.sh
-# waiting`, which marks this home as holding a call that may wait for the next
-# sitting so supervision keeps the watcher (and its sitting tick) running.
-#
 # Parent channel: inside a secondmate home a task held for the captain, and its
 # answer, are captain-facing facts the moment they are recorded, so `hold`
 # publishes `needs-decision [key=captain-hold-<task>-<n>]` and `answer` (and
@@ -1411,12 +1407,6 @@ command_hold() {
   [ -n "$(body_hold_set_timestamp "$(show_field_value "$show" body)")" ] \
     || fail "task $id lost its hold-set stamp while being held"
   publish_parent_hold "$id" "$occurrence" needs-decision "$reason"
-  # A reversible call may wait for a decision sitting, so keep this home
-  # supervised until one runs (bin/fm-decision-sitting.sh owns the marker).
-  if [ "$decision_kind" = reversible ]; then
-    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-decision-sitting.sh" waiting \
-      || echo "actionable: task $id waits for a decision sitting, but this home's sitting marker could not be set; run bin/fm-decision-sitting.sh waiting" >&2
-  fi
   printf '%s\n' "$id"
 }
 

@@ -69,12 +69,6 @@ export FM_TAILSCALE=fm-test-no-tailscale
 # user manager.
 export FM_SYSTEMD_SLICE=off
 
-# Keep every watcher a suite starts from launching the detached decision-sitting
-# check (bin/fm-watch.sh decision_sitting_tick), which reads a fleet snapshot
-# and writes sitting markers into the case's state directory and can outlive
-# its cleanup. Sitting cases set FM_DECISION_SITTING_INTERVAL themselves.
-export FM_DECISION_SITTING_INTERVAL=off
-
 # Clear the task-worker marker bin/fm-spawn.sh exports into ship and scout
 # panes. This suite builds git-init fixture repositories whose primary checkout
 # it runs a copied bin/fm-test-run.sh in, and that runner refuses the primary

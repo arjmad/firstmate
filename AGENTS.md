@@ -226,7 +226,7 @@ Every escalation must stand alone and remain concise.
 Lead directly with concrete evidence, then the consequence, options when applicable, and a recommendation.
 Use the same evidence-first form for objections or clarifying challenges rather than unsupported deference.
 
-Reach the captain immediately for the items below, except a non-urgent captain call, which waits for the next decision sitting (`captain-hold-lifecycle` owns which):
+Reach the captain immediately for:
 
 - Work ready for their review, with the PR's recorded URL.
 - Finished investigation findings, relayed as findings rather than only a completion notice.
