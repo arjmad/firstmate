@@ -36,6 +36,7 @@ It never reads report bodies, review artifacts, terminal output, or chat.
 | `hold` | Creates or reuses a task and holds it for the captain. | [Creating a hold](#creating-a-hold-hold) |
 | `answer` | Records the captain's exact words and resolves the call. | [Answering a call](#answering-a-call-answer) |
 | `defer` | Records the captain's dated deferral and re-holds the call until that date, never closing it. | [Answer-time resolution](#answer-time-resolution) |
+| `choices` | Sets or replaces the choices on a call already held for the captain, keeping its reason, kind, default, and date. | [Choices](#choices) |
 | `release-due` | Releases every reversible hold whose 72-hour default is due, as the decision of record. | [Hold kinds and default release](#hold-kinds-and-default-release) |
 | `complete` | Records the reviewed captain-held task ids in the originating task's metadata. | [Recording a reviewed inventory](#recording-a-reviewed-inventory-complete) |
 | `verify` | Read-only check that scout teardown runs before removing source state. | [Checking before scout teardown](#checking-before-scout-teardown-verify) |
@@ -84,6 +85,16 @@ A reversible hold must name a default, carry the captain's own `--until` deferra
 An arjun-only hold, a reversible hold deferred or passed `--no-default`, and any hold written without `--kind` never release themselves.
 `bin/fm-captain-hold.sh --help` owns the prefix grammar, the refusals, and the clock rules.
 `tests/fm-captain-hold-kind.test.sh` and the two `hold_release` cases in `tests/fm-watch-triage-wait.test.sh` cover them.
+
+### Choices
+
+A call held for the captain may carry its own two or three choices and the recommended one, so Bearings and Launchpad offer them as buttons instead of a generic Done.
+`hold --options 'A|B' --recommend A`, with an optional one-line `--ask` question, records them on the same reason prefix as the kind, and a reversible default is the recommendation.
+`choices <task-id>` adds or replaces them on an active hold without touching its reason, kind, default, release time, or date, and `defer` keeps them.
+They live and die with the reason, so a re-hold that passes none drops them.
+`bin/fm-bearings-snapshot.sh --fields board` projects them as each row's `choices`, and a row without them carries null, which a surface shows as a single Open action rather than an invented choice.
+A keyed answer whose answer or shown label names a recorded choice, ignoring case, keeps the captain's words and adds a `Choice picked:` line naming it; [Answer-time resolution](#answer-time-resolution) is otherwise unchanged.
+`bin/fm-captain-hold.sh --help` owns the grammar and refusals, and `tests/fm-captain-hold-kind.test.sh` covers them.
 
 ### Answering a call (`answer`)
 

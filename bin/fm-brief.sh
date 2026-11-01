@@ -883,7 +883,8 @@ $PLAN_LINE
 $CREWMATE_PAUSE_INSTRUCTIONS
 5. If you hit the same obstacle twice, append \`blocked [at=<epoch>]: {why}\` and stop; firstmate will help.
 6. If a decision belongs to a human (product choices, destructive actions),
-   append \`needs-decision [at=<epoch>]: {summary of options}\` and stop. Firstmate will reply with the decision.
+   append \`needs-decision [at=<epoch>]: {the question} - choices: {A} | {B}[ | {C}]; recommended: {A}\` and stop. Firstmate will reply with the decision.
+   Name two or three short choices (at most 60 bytes each, no \`]\`, \`;\` or \`|\` inside one) and the one you recommend; firstmate records them on the call it holds for the captain, so they become his buttons.
    A decision or blocker on your status log stays open until a \`resolved\` line carrying its exact key lands or you declare \`done:\` or \`failed:\`, which clears every open one, firstmate's included; a later \`working:\` line never closes it.
    So declare \`done:\` only once every decision you raised was answered or no longer needs an answer; \`failed:\` is always available for an unrecoverable failure.
    Firstmate's reply normally writes that \`resolved\` line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved [at=<epoch>]: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
@@ -970,7 +971,8 @@ $PLAN_LINE
 $CREWMATE_PAUSE_INSTRUCTIONS$SHIP_READY_INSTRUCTIONS
 5. If you hit the same obstacle twice, append \`blocked [at=<epoch>]: {why}\` and stop; firstmate will help.
 6. If a decision belongs above the implementation worker (product choices, destructive actions),
-   append \`needs-decision [at=<epoch>]: {summary of options}\` and stop. Firstmate will reply with the decision.
+   append \`needs-decision [at=<epoch>]: {the question} - choices: {A} | {B}[ | {C}]; recommended: {A}\` and stop. Firstmate will reply with the decision.
+   Name two or three short choices (at most 60 bytes each, no \`]\`, \`;\` or \`|\` inside one) and the one you recommend; firstmate records them on the call it holds for the captain, so they become his buttons.
 $ASK_USER_BLOCK
    A decision or blocker on your status log stays open until a \`resolved\` line carrying its exact key lands or you declare \`done:\` or \`failed:\`, which clears every open one, firstmate's included; a later \`working:\` line never closes it.
    So declare \`done:\` only once every decision you raised was answered or no longer needs an answer; \`failed:\` is always available for an unrecoverable failure.

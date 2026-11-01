@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Hold kinds and default release for captain-held tasks: `hold --kind` and
 # `--default`, the reason prefix every hold surface shows, and `release-due`,
-# which records a due reversible default as the decision of record; and the
-# row owner each hold and release records.
+# which records a due reversible default as the decision of record; the
+# row owner each hold and release records; and the choices a hold records
+# (`--options`, `--recommend`, `--ask`, `choices`) and the keyed pick by label.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -301,7 +302,181 @@ test_hold_records_the_captain_as_owner_and_release_hands_back() {
   pass "hold makes the captain the owner and a released hold hands the work back to the fleet"
 }
 
+test_choice_arguments_are_validated() {
+  local home id args
+  home=$(make_home choice-validation)
+  for args in \
+    "--options A|B --recommend A" \
+    "--kind arjun-only --options A|B" \
+    "--kind arjun-only --recommend A" \
+    "--kind arjun-only --options A --recommend A" \
+    "--kind arjun-only --options A|B|C|D --recommend A" \
+    "--kind arjun-only --options A|a --recommend A" \
+    "--kind arjun-only --options A||B --recommend A" \
+    "--kind arjun-only --options A|later --recommend A" \
+    "--kind arjun-only --options A|Reconcile --recommend A" \
+    "--kind arjun-only --options A;x|B --recommend B" \
+    "--kind arjun-only --options A|B --recommend C" \
+    "--kind reversible --default A --options A|B --recommend B" \
+    "--kind reversible --default C --options A|B" \
+    "--kind reversible --default A;B" \
+    "--kind arjun-only --ask has]bracket" \
+    "--kind arjun-only --ask has;semicolon"; do
+    id=choice-$RANDOM
+    # shellcheck disable=SC2086 # Word splitting builds each refused argument set.
+    if run_captain "$home" hold "$id" --title "Refused call" --reason "decide" $args \
+      > "$home/out" 2> "$home/err"; then
+      fail "hold accepted the invalid choice arguments: $args"
+    fi
+  done
+  if run_captain "$home" hold choice-spoof --title "Spoofed choices" \
+    --reason "[arjun-only; options: Pay|Skip; recommended: Pay] x" > "$home/out" 2> "$home/err"; then
+    fail "hold accepted a reason that already carries a choices prefix"
+  fi
+  if run_captain "$home" hold choice-long --title "Long choice" --reason "decide" --kind arjun-only \
+    --options "$(printf 'x%.0s' $(seq 1 61))|B" --recommend B > "$home/out" 2> "$home/err"; then
+    fail "hold accepted a choice over 60 bytes"
+  fi
+  if grep -q 'choice-' "$home/data/backlog.md"; then
+    fail "a refused hold still wrote a backlog row: $(cat "$home/data/backlog.md")"
+  fi
+  pass "hold refuses choices that are unkinded, unrecommended, too many, repeated, reserved or malformed"
+}
+
+test_choices_ride_on_the_reason_prefix() {
+  local home show
+  home=$(make_home choice-prefix)
+  run_captain "$home" hold sample-fba --title "Deduct the FBA shipment" \
+    --reason "Deducting all leaves 401 below the floor" --kind arjun-only \
+    --options " Deduct all | Not yet " --recommend "Deduct all" \
+    --ask "Deduct the whole FBA shipment from the warehouse now?" >/dev/null \
+    || fail "an arjun-only hold with choices failed"
+  show=$(show_task "$home" sample-fba)
+  assert_contains "$show" \
+    '[arjun-only; options: Deduct all|Not yet; recommended: Deduct all; ask: Deduct the whole FBA shipment from the warehouse now?] Deducting all leaves 401 below the floor' \
+    "the arjun-only choices did not ride on the reason"
+  FM_CAPTAIN_HOLD_NOW=2026-10-14T10:00:00Z run_captain "$home" hold sample-docs \
+    --title "Docs layout" --reason "Split the guide or keep one page" \
+    --kind reversible --default "split the guide" --options "split the guide|keep one page" >/dev/null \
+    || fail "a reversible hold with a default and choices failed"
+  show=$(show_task "$home" sample-docs)
+  assert_contains "$show" \
+    '[reversible; default: split the guide; releases 2026-10-17T10:00:00Z; options: split the guide|keep one page; recommended: split the guide] Split the guide' \
+    "the default did not become the recorded recommendation"
+  run_captain "$home" hold sample-idea --title "An idea" --reason "Try it?" \
+    --kind reversible --no-default --ask "Should we try it?" >/dev/null \
+    || fail "a hold with only a question failed"
+  show=$(show_task "$home" sample-idea)
+  assert_contains "$show" '[reversible; ask: Should we try it?] Try it?' "an ask without choices did not ride on the reason"
+  # A re-hold that passes no choices drops them with the old reason.
+  run_captain "$home" hold sample-fba --reason "Count first" --kind arjun-only >/dev/null \
+    || fail "the plain re-hold failed"
+  show=$(show_task "$home" sample-fba)
+  assert_contains "$show" '[arjun-only] Count first' "a re-hold without choices kept the old ones"
+  # The default release still finds a default that carries choices.
+  FM_CAPTAIN_HOLD_NOW=2026-10-18T00:00:00Z run_captain "$home" release-due > "$home/out" \
+    || fail "release-due failed on a default with choices"
+  assert_grep 'released by default: sample-docs split the guide' "$home/out" \
+    "the default with choices did not release"
+  pass "choices ride on the stored reason prefix, die with it, and keep the default release"
+}
+
+test_choices_set_choices_on_an_active_hold() {
+  local home show
+  home=$(make_home choice-set)
+  FM_CAPTAIN_HOLD_NOW=2026-10-14T10:00:00Z run_captain "$home" hold sample-docs \
+    --title "Docs layout" --reason "Split the guide (or not)" \
+    --kind reversible --default build >/dev/null || fail "the reversible hold failed"
+  FM_CAPTAIN_HOLD_NOW=2026-10-15T10:00:00Z run_captain "$home" choices sample-docs \
+    --options "build|skip" --ask "Build it?" >/dev/null || fail "choices on a default hold failed"
+  show=$(show_task "$home" sample-docs)
+  assert_contains "$show" \
+    '[reversible; default: build; releases 2026-10-17T10:00:00Z; options: build|skip; recommended: build; ask: Build it?] Split the guide (or not)' \
+    "choices did not keep the reason, default and release time"
+  run_captain "$home" choices sample-docs --options "build|wait" >/dev/null || fail "replacing choices failed"
+  show=$(show_task "$home" sample-docs)
+  assert_contains "$show" 'options: build|wait; recommended: build; ask: Build it?]' \
+    "replacing the choices did not keep the recorded question"
+  run_captain "$home" hold sample-dated --title "Dated call" --reason "Later call" \
+    --kind arjun-only --until 2026-12-01 >/dev/null || fail "the dated hold failed"
+  run_captain "$home" choices sample-dated --options "Go|Stop" --recommend Go >/dev/null \
+    || fail "choices on a dated hold failed"
+  show=$(show_task "$home" sample-dated)
+  assert_contains "$show" '[arjun-only; options: Go|Stop; recommended: Go] Later call' "choices on a dated hold were not recorded"
+  assert_contains "$show" 'hold_until: 2026-12-01' "choices dropped the hold date"
+  printf 'Arjun: later\n' > "$home/defer.txt"
+  run_captain "$home" defer sample-dated --until 2026-12-09 --decision-file "$home/defer.txt" >/dev/null \
+    || fail "the deferral failed"
+  show=$(show_task "$home" sample-dated)
+  assert_contains "$show" '[arjun-only; options: Go|Stop; recommended: Go] Later call' "a deferral dropped the choices"
+  # A re-hold between choices' read and its write is never overwritten.
+  if FM_CAPTAIN_HOLD_EXPECT_REASON="[arjun-only] an older reason" run_captain "$home" hold sample-dated \
+    --reason "Later call" --kind arjun-only --until 2026-12-09 --options "Go|Stop" --recommend Stop \
+    > "$home/out" 2> "$home/err"; then
+    fail "a re-hold whose reason changed since it was read was not refused"
+  fi
+  assert_grep "re-held since it was read" "$home/err" "the changed-reason refusal did not say why"
+  run_captain "$home" hold sample-bare --title "Bare call" --reason "no kind" >/dev/null || fail "the bare hold failed"
+  if run_captain "$home" choices sample-bare --options "A|B" --recommend A > "$home/out" 2> "$home/err"; then
+    fail "choices accepted a hold with no kind"
+  fi
+  printf 'Arjun: build\n' > "$home/answer.txt"
+  run_captain "$home" answer sample-docs --decision-file "$home/answer.txt" --release >/dev/null \
+    || fail "the release failed"
+  if run_captain "$home" choices sample-docs --options "A|B" --recommend A > "$home/out" 2> "$home/err"; then
+    fail "choices re-held a released call"
+  fi
+  assert_contains "$(show_task "$home" sample-docs)" 'held: no' "a refused choices call left the row held"
+  if run_captain "$home" choices sample-missing --options "A|B" --recommend A > "$home/out" 2> "$home/err"; then
+    fail "choices created a missing row"
+  fi
+  pass "choices sets the choices on an active hold and keeps its reason, default, date and question"
+}
+
+test_keyed_answer_records_a_pick_by_label() {
+  local home show out
+  home=$(make_home choice-pick)
+  run_captain "$home" hold sample-fba --title "Deduct the FBA shipment" --reason "Decide" \
+    --kind arjun-only --options "Deduct all|Not yet" --recommend "Deduct all" >/dev/null || fail "hold failed"
+  out=$(printf 'sample-fba\tdeduct ALL \tDeduct all\n' | run_captain "$home" answers --source "test board") \
+    || fail "the keyed pick was refused: $out"
+  show=$(show_task "$home" sample-fba)
+  assert_contains "$show" 'Answer: deduct ALL' "the pick did not keep the captain's own words"
+  assert_contains "$show" 'Choice picked: Deduct all' "the pick was not recorded as the recorded choice"
+  out=$(printf 'sample-fba\tdeduct ALL \tDeduct all\n' | run_captain "$home" answers --source "test board") \
+    || fail "the replayed pick was not a no-op: $out"
+  assert_contains "$out" 'closed: sample-fba' "the replayed pick did not report closed"
+  run_captain "$home" hold sample-go --title "Go call" --reason "Decide" \
+    --kind arjun-only --options "Go|Stop" --recommend Go >/dev/null || fail "hold failed"
+  out=$(printf 'sample-go\tStop\tStop\trelease\n' | run_captain "$home" answers --source "test board") \
+    || fail "the released pick was refused: $out"
+  out=$(printf 'sample-go\tStop\tStop\trelease\n' | run_captain "$home" answers --source "test board") \
+    || fail "the replayed released pick was not a no-op: $out"
+  run_captain "$home" hold sample-lower --title "Lower call" --reason "Decide" \
+    --kind arjun-only --options "Go|Stop" --recommend Go >/dev/null || fail "hold failed"
+  out=$(printf 'sample-lower\tstop\t\trelease\n' | run_captain "$home" answers --source "test chat") \
+    || fail "the lowercase released pick was refused: $out"
+  out=$(printf 'sample-lower\tstop\t\trelease\n' | run_captain "$home" answers --source "test chat") \
+    || fail "the replayed lowercase released pick was not a no-op: $out"
+  run_captain "$home" hold sample-board --title "Board call" --reason "Decide" \
+    --kind arjun-only --options "Deduct all|Not yet" --recommend "Deduct all" >/dev/null || fail "hold failed"
+  printf 'sample-board\tdeduct-all\tDeduct all\n' | run_captain "$home" answers --source "bearings board" >/dev/null \
+    || fail "a board pick by option value was refused"
+  assert_contains "$(show_task "$home" sample-board)" 'Choice picked: Deduct all' \
+    "a board pick whose shown label names the choice was not recorded as that pick"
+  run_captain "$home" hold sample-free --title "Free call" --reason "Decide" \
+    --kind arjun-only --options "Go|Stop" --recommend Go >/dev/null || fail "hold failed"
+  printf 'sample-free\tGo, but only on Monday\t\n' | run_captain "$home" answers --source "test chat" >/dev/null \
+    || fail "a free-text answer to a call with choices was refused"
+  assert_not_contains "$(show_task "$home" sample-free)" 'Choice picked' "a free-text answer was recorded as a pick"
+  pass "a keyed answer that names a recorded choice is recorded as that pick, replays idempotently, and free text still works"
+}
+
 test_kind_arguments_are_validated
+test_choice_arguments_are_validated
+test_choices_ride_on_the_reason_prefix
+test_choices_set_choices_on_an_active_hold
+test_keyed_answer_records_a_pick_by_label
 test_reversible_hold_names_its_default
 test_hold_records_the_captain_as_owner_and_release_hands_back
 test_kind_prefix_shows_on_every_hold_reason

@@ -2216,6 +2216,59 @@ EOF2
   pass "the recorded owner and his holds, never body text, decide what waits on the captain"
 }
 
+# A captain hold's recorded choices (bin/fm-captain-hold.sh CHOICES owns the
+# reason-prefix grammar) reach the board rows as structured fields, decoded
+# from the stored reason; a hold without them, or a row that is not a captain
+# hold, carries null.
+test_board_rows_carry_recorded_hold_choices() {
+  local home fakebin json fba docs plain
+  home=$(make_home hold-choices)
+  # shellcheck source=bin/fm-hold-reason-lib.sh
+  # shellcheck disable=SC1091
+  . "$ROOT/bin/fm-hold-reason-lib.sh"
+  fba=$(fm_hold_reason_encode '[arjun-only; options: Deduct all|Not yet; recommended: Deduct all; ask: Deduct it now (all of it)?] Deducting all leaves 401 below the floor')
+  docs=$(fm_hold_reason_encode '[reversible; default: split; releases 2026-07-13T00:00:00Z; options: split|keep|merge; recommended: split] Split the guide')
+  plain=$(fm_hold_reason_encode '[arjun-only] No choices recorded')
+  cat > "$home/data/backlog.md" <<EOF2
+# Backlog
+
+## In flight
+
+## Queued
+- [ ] fba-call - Deduct the FBA shipment (repo: business) (kind: captain) (since 2026-07-01) (hold: $fba) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Owner: arjun
+- [ ] docs-call - Docs layout (repo: firstmate) (kind: captain) (since 2026-07-01) (hold: $docs) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Owner: arjun
+- [ ] plain-call - A call with no choices (repo: firstmate) (kind: captain) (since 2026-07-01) (hold: $plain) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Owner: arjun
+- [ ] unkinded-call - A call held with no kind (repo: firstmate) (kind: captain) (since 2026-07-01) (hold: keep or undo) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Owner: arjun
+- [ ] fleet-ship - Ordinary fleet work (repo: firstmate) (kind: ship) (since 2026-07-01)
+  Owner: fleet
+
+## Done
+EOF2
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json --all-queued --fields board)
+  printf '%s' "$json" | jq -e '
+    def row($id): [.board.queued[] | select(.id == $id)][0];
+    (row("fba-call").choices == {options:["Deduct all","Not yet"], recommended:"Deduct all", ask:"Deduct it now (all of it)?"})
+      and (row("docs-call").choices == {options:["split","keep","merge"], recommended:"split", ask:null})
+      and (row("plain-call").choices == null)
+      and (row("unkinded-call") | . != null and .choices == null)
+      and (row("fleet-ship").choices == null)
+  ' >/dev/null || fail "the board rows did not carry the recorded hold choices: $json"
+  pass "board rows carry a captain hold's recorded choices, and null where none are recorded"
+}
+
 # The weekly prune card's candidates come from bin/fm-backlog-prune-lib.sh's
 # rule over structured fields and the dates written on each row: only unheld
 # fleet rows nobody touched for two weeks, never his rows, a held row, blocked
@@ -3573,6 +3626,7 @@ test_all_landed_keeps_complete_global_order
 test_landed_bounded_and_disclosed
 test_live_blocker_is_not_charted_queue_work
 test_captain_wait_and_board_rows_come_from_structured_fields
+test_board_rows_carry_recorded_hold_choices
 test_owner_decides_what_waits_on_the_captain
 test_board_prune_proposes_only_stale_fleet_rows
 test_captains_call_anti_leak
