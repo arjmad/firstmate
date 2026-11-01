@@ -317,6 +317,29 @@ test_taskless_reversible_default_keeps_a_watcher_until_released() {
   pass "a task-less reversible default keeps a watcher until it releases; not-due and answered calls stay"
 }
 
+# A held row the scan cannot read may still carry a default, so a failed read
+# keeps the home supervised and reports the failure instead of clearing it.
+test_unreadable_held_row_keeps_a_watcher() {
+  local home real status=0
+  home=$(make_home unreadable-row)
+  FM_CAPTAIN_HOLD_NOW=2026-10-14T10:00:00Z run_captain "$home" hold sample-call \
+    --title "Keep the banner" --reason "keep or drop" --kind reversible --default "drop it" >/dev/null \
+    || fail "could not hold the reversible call"
+  real=$(command -v tasks-axi)
+  cat > "$home/fakebin/tasks-axi" <<EOF
+#!/usr/bin/env bash
+case " \$* " in *" show sample-call "*) exit 1 ;; esac
+exec "$real" "\$@"
+EOF
+  chmod +x "$home/fakebin/tasks-axi"
+  FM_CAPTAIN_HOLD_NOW=2026-10-15T10:00:00Z run_captain "$home" release-due >/dev/null 2>"$home/err" \
+    || status=$?
+  [ "$status" -ne 0 ] || fail "release-due succeeded although a held row could not be read"
+  assert_grep "sample-call could not be read" "$home/err" "the read failure was not reported"
+  assert_equals yes "$(needs_watcher "$home")" "a failed read dropped the waiting default's watcher"
+  pass "a held row release-due cannot read keeps the home supervised and fails the run"
+}
+
 # Only a default can release itself, so no other hold keeps a watcher running.
 test_holds_without_a_default_need_no_watcher() {
   local home
@@ -548,4 +571,5 @@ test_due_reversible_default_releases_with_its_record
 test_rehold_keeps_or_restarts_the_release_clock
 test_answer_before_release_wins
 test_taskless_reversible_default_keeps_a_watcher_until_released
+test_unreadable_held_row_keeps_a_watcher
 test_holds_without_a_default_need_no_watcher

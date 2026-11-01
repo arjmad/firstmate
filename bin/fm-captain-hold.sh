@@ -140,7 +140,8 @@
 # state/.hold-release-pending whenever it records a default, and
 # bin/fm-supervision-lib.sh counts that marker as supervision need. Each
 # release-due run then rewrites it: it sets the marker while a held row still
-# carries a default that is not due or failed to release, and otherwise removes
+# carries a default that is not due or failed to release, or cannot be read and
+# so may carry one (that run then exits non-zero), and otherwise removes
 # it only when it still holds the token read before the scan, so a default
 # recorded mid-scan stays counted.
 # An answer leaves the marker for the next run to clear.
@@ -1843,11 +1844,12 @@ clear_hold_release_marker() {  # <token-read-before-the-scan>
 }
 
 # The default a held row would release to now. Returns 2 when the row holds a
-# reversible default that is not due yet, and 1 when it holds none. Reads the
-# row in THIS shell (TASK_SHOW_OUTPUT is carried back).
+# reversible default that is not due yet, 3 when the row cannot be read, and 1
+# when it holds none. Reads the row in THIS shell (TASK_SHOW_OUTPUT is carried
+# back).
 hold_default_due() {  # <task-id> <now-epoch>; sets HOLD_DEFAULT_OPTION/HOLD_RELEASES_AT
   local id=$1 now=$2 show releases_epoch
-  task_show "$id" || return 1
+  task_show "$id" || return 3
   show=$TASK_SHOW_OUTPUT
   [ "$(show_field "$show" state)" != "done" ] || return 1
   [ "$(show_field_value "$show" hold_kind)" = captain ] || return 1
@@ -1865,8 +1867,9 @@ release_hold_by_default() {  # <task-id> <now-epoch>
   local id=$1 now=$2 show body option task_kind release=1 occurrence
   trap captain_hold_cleanup EXIT
   acquire_task_control_lock "$id"
-  # Re-read under the lock: an answer recorded since the scan wins.
-  hold_default_due "$id" "$now" || return 0
+  # Re-read under the lock: an answer recorded since the scan wins, and a row
+  # that cannot be read is a failure so its default stays counted as waiting.
+  hold_default_due "$id" "$now" || { [ "$?" -ne 3 ] || return 1; return 0; }
   option=$HOLD_DEFAULT_OPTION
   show=$TASK_SHOW_OUTPUT
   body=$(show_field "$show" body)
@@ -1895,7 +1898,11 @@ command_release_due() {
     [ -n "$id" ] || continue
     hold_default_due "$id" "$now" || due=$?
     if [ "$due" -ne 0 ]; then
-      [ "$due" -ne 2 ] || waiting=1
+      [ "$due" -lt 2 ] || waiting=1
+      if [ "$due" -eq 3 ]; then
+        printf 'fm-captain-hold: %s could not be read; its default stays counted as waiting\n' "$id" >&2
+        status=1
+      fi
       due=0
       continue
     fi
