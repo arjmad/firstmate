@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fm-atlas.sh - hand an Atlas build's top 7 ideas to bearings, and keep the
+# fm-atlas.sh - hand an Atlas build's ideas to bearings, and keep the
 # record its keep test reads.
 #
 # Usage:
@@ -11,10 +11,11 @@
 #
 # Atlas is the on-demand fleet map the store's /atlas skill builds
 # (~/code/skills/skills/atlas). Its build writes atlas.json: schema atlas.v1,
-# built_at, and seven ideas, each {id, slug, box, tag, text, estimate,
-# evidence, repo, brief}. Atlas has no answer handling of its own: every idea
-# becomes an ordinary captain hold, so bearings shows it as a decision card and
-# its answer goes through the one keyed-answer intake like any other call.
+# built_at, and up to seven ideas (none when no idea passed the bar), each
+# {id, slug, box, tag, text, estimate, evidence, repo, brief}. Atlas has no
+# answer handling of its own: every idea becomes an ordinary captain hold, so
+# bearings shows it as a decision card and its answer goes through the one
+# keyed-answer intake like any other call.
 #
 # AN IDEA IS ITS SLUG, AS FIRST OFFERED. The task id is atlas-<slug>, and the
 # first build that lists a slug owns it: the card keeps that build's wording,
@@ -126,7 +127,7 @@ valid_atlas() {  # <atlas.json>
     def text: type == "string" and test("[^[:space:]]") and (test("[\n\r]") | not);
     .schema == "atlas.v1"
     and (.built_at | text)
-    and (.ideas | type == "array" and length == 7)
+    and (.ideas | type == "array" and length <= 7)
     and ([.ideas | to_entries[] | .key as $n | .value
       | (.id == "A\($n + 1)")
         and (.slug | type == "string" and test("^[a-z0-9]+(-[a-z0-9]+)*$"))
@@ -152,7 +153,7 @@ cmd_file() {
   if [ -n "$board" ] && phone=$("$SCRIPT_DIR/fm-lavish-url.sh" "$board") && [ -n "$phone" ]; then
     board=$phone
   fi
-  valid_atlas "$file" || refuse "$file is not an atlas.v1 build with seven ranked ideas"
+  valid_atlas "$file" || refuse "$file is not an atlas.v1 build with at most seven ranked ideas"
   lock_record
   # Slugs some earlier build already offered: their cards are open or answered.
   offered=$(record | jq -r '[.builds[].ideas[].slug] | unique[]')
