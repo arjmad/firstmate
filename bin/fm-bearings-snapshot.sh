@@ -455,7 +455,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
   def hold_choices:
     if .hold_kind != "captain" then null else
       ([(.hold_reason // "") | tostring
-       | capture("^\\[(?:reversible|arjun-only)(?:; default: .+?; releases [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)?(?:; options: (?<options>[^];]+); recommended: (?<recommended>[^];]+))?(?:; ask: (?<ask>[^]]+))?\\] ")?] | first) as $m
+       | capture("^\\[(?:reversible(?:; default: [^]]+; releases [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)?|arjun-only)(?:; options: (?<options>[^];]+); recommended: (?<recommended>[^];]+))?(?:; ask: (?<ask>[^]]+))?\\] ")?] | first) as $m
       | if $m == null or ($m.options == null and $m.ask == null) then null
         else {options:(if $m.options == null then [] else ($m.options | split("|")) end),
               recommended:$m.recommended, ask:$m.ask} end

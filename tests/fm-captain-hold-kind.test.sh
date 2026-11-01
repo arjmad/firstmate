@@ -320,7 +320,8 @@ test_choice_arguments_are_validated() {
     "--kind reversible --default A --options A|B --recommend B" \
     "--kind reversible --default C --options A|B" \
     "--kind reversible --default A;B" \
-    "--kind arjun-only --ask has]bracket"; do
+    "--kind arjun-only --ask has]bracket" \
+    "--kind arjun-only --ask has;semicolon"; do
     id=choice-$RANDOM
     # shellcheck disable=SC2086 # Word splitting builds each refused argument set.
     if run_captain "$home" hold "$id" --title "Refused call" --reason "decide" $args \
@@ -328,6 +329,10 @@ test_choice_arguments_are_validated() {
       fail "hold accepted the invalid choice arguments: $args"
     fi
   done
+  if run_captain "$home" hold choice-spoof --title "Spoofed choices" \
+    --reason "[arjun-only; options: Pay|Skip; recommended: Pay] x" > "$home/out" 2> "$home/err"; then
+    fail "hold accepted a reason that already carries a choices prefix"
+  fi
   if run_captain "$home" hold choice-long --title "Long choice" --reason "decide" --kind arjun-only \
     --options "$(printf 'x%.0s' $(seq 1 61))|B" --recommend B > "$home/out" 2> "$home/err"; then
     fail "hold accepted a choice over 60 bytes"
@@ -404,6 +409,13 @@ test_choices_set_choices_on_an_active_hold() {
     || fail "the deferral failed"
   show=$(show_task "$home" sample-dated)
   assert_contains "$show" '[arjun-only; options: Go|Stop; recommended: Go] Later call' "a deferral dropped the choices"
+  # A re-hold between choices' read and its write is never overwritten.
+  if FM_CAPTAIN_HOLD_EXPECT_REASON="[arjun-only] an older reason" run_captain "$home" hold sample-dated \
+    --reason "Later call" --kind arjun-only --until 2026-12-09 --options "Go|Stop" --recommend Stop \
+    > "$home/out" 2> "$home/err"; then
+    fail "a re-hold whose reason changed since it was read was not refused"
+  fi
+  assert_grep "re-held since it was read" "$home/err" "the changed-reason refusal did not say why"
   run_captain "$home" hold sample-bare --title "Bare call" --reason "no kind" >/dev/null || fail "the bare hold failed"
   if run_captain "$home" choices sample-bare --options "A|B" --recommend A > "$home/out" 2> "$home/err"; then
     fail "choices accepted a hold with no kind"

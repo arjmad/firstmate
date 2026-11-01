@@ -108,7 +108,7 @@
 # `--default` the default IS the recommendation: it must be one of the
 # options, and `--recommend`, when given, must equal it. Any other hold with
 # `--options` must pass `--recommend`. `--ask` is the call's question as the
-# captain should read it: one line of at most 200 bytes with no `]`, usable
+# captain should read it: one line of at most 200 bytes with no `]` or `;`, usable
 # with or without options. Choices need `--kind`, because they ride on the
 # same reason prefix, after the kind and any default, in this fixed order:
 #   [arjun-only; options: A|B; recommended: A; ask: Q] <reason>
@@ -121,7 +121,7 @@
 # no longer takes `;`, so the grammar stays unambiguous. `choices` sets or
 # replaces the choices on a call already held for the captain, keeping its
 # reason, kind, default, release time and date: it re-holds through `hold`,
-# which refuses when the row is no longer actively held for the captain.
+# which refuses when the row was answered, released or re-held since it read it.
 # `defer` keeps a call's choices through the re-hold.
 # `release-due` is the release half. For every open row still held for the
 # captain whose stored reason carries a reversible default whose release time
@@ -1175,7 +1175,7 @@ validate_hold_choice_args() {  # <kind> <options-given> <options> <recommend-giv
   if [ "$ask_given" = 1 ]; then
     ask=$(trim_text "$ask")
     validate_one_line ask "$ask"
-    case "$ask" in *']'*) fail "--ask must not contain ]" ;; esac
+    case "$ask" in *']'*|*';'*) fail "--ask must not contain ] or ;" ;; esac
     [ "$(byte_length "$ask")" -le "$HOLD_ASK_MAX_BYTES" ] \
       || fail "--ask must be at most $HOLD_ASK_MAX_BYTES bytes"
     CHOICE_ASK=$ask
@@ -1211,11 +1211,11 @@ validate_hold_kind_args() {  # <kind> <default-given> <default-option> <reason> 
     case "$option" in
       *']'*|*';'*) fail "--default must not contain ] or ;" ;;
     esac
-    [ "$(printf '%s' "$option" | LC_ALL=C wc -c | tr -d ' ')" -le "$HOLD_DEFAULT_OPTION_MAX_BYTES" ] \
+    [ "$(byte_length "$option")" -le "$HOLD_DEFAULT_OPTION_MAX_BYTES" ] \
       || fail "--default must be at most $HOLD_DEFAULT_OPTION_MAX_BYTES bytes"
   fi
   case "$reason" in
-    '[reversible]'*|'[reversible;'*|'[arjun-only]'*)
+    '[reversible]'*|'[reversible;'*|'[arjun-only]'*|'[arjun-only;'*)
       fail "the reason must not begin with a hold-kind prefix; pass --kind and --default instead"
       ;;
   esac
@@ -1323,15 +1323,17 @@ command_hold() {
     if [ "$existing_hold_kind" = captain ] && [ "$existing_held" = yes ]; then
       preserve_hold_set=1
       existing_reason=$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")
-    elif [ "${FM_CAPTAIN_HOLD_REQUIRE_ACTIVE:-0}" = 1 ]; then
+    elif [ -n "${FM_CAPTAIN_HOLD_EXPECT_REASON+set}" ]; then
       fail "task $id is no longer held for the captain"
     fi
+    [ -z "${FM_CAPTAIN_HOLD_EXPECT_REASON+set}" ] || [ "$existing_reason" = "$FM_CAPTAIN_HOLD_EXPECT_REASON" ] \
+      || fail "task $id was re-held since it was read; read it again"
     if [ -n "$title" ]; then
       existing_title=$(show_field_value "$show" title)
       [ "$existing_title" = "$title" ] || fail "existing task $id has a different title"
     fi
   else
-    [ "${FM_CAPTAIN_HOLD_REQUIRE_ACTIVE:-0}" != 1 ] || fail "task $id is no longer held for the captain"
+    [ -z "${FM_CAPTAIN_HOLD_EXPECT_REASON+set}" ] || fail "task $id is no longer held for the captain"
     [ -n "$title" ] || fail "--title is required to create task $id"
     validate_one_line title "$title"
     if [ -z "$repo" ] && [ -n "$origin" ] && [ -f "$STATE/$origin.meta" ]; then
@@ -1639,9 +1641,9 @@ command_answer() {
 }
 
 # Set or replace the choices on a call already held for the captain. The
-# re-hold goes through `hold` with FM_CAPTAIN_HOLD_REQUIRE_ACTIVE=1, so it
-# keeps every guard there and refuses, under that path's own lock, a row that
-# was answered, released or closed after this read.
+# re-hold goes through `hold` with FM_CAPTAIN_HOLD_EXPECT_REASON set to the
+# reason read here, so it keeps every guard there and refuses, under that
+# path's own lock, a row answered, released, closed or re-held since this read.
 command_choices() {
   local id=${1:-} show reason hold_until options_given=0 ask_given=0
   local -a pass=() keep=()
@@ -1681,7 +1683,7 @@ command_choices() {
   fi
   # An --ask the caller leaves out keeps the recorded one.
   [ "$ask_given" = 1 ] || [ -z "$HOLD_ASK" ] || pass+=(--ask "$HOLD_ASK")
-  FM_CAPTAIN_HOLD_REQUIRE_ACTIVE=1 "$0" hold "$id" --reason "$HOLD_REASON_REST" "${keep[@]}" "${pass[@]}"
+  FM_CAPTAIN_HOLD_EXPECT_REASON=$reason "$0" hold "$id" --reason "$HOLD_REASON_REST" "${keep[@]}" "${pass[@]}"
 }
 
 command_defer() {
