@@ -27,9 +27,10 @@
 # follows the named zone rather than a fixed UTC offset. When that sitting is
 # newer than the one recorded in state/.last-decision-sitting and at least one
 # call is waiting, it queues one durable `check:` wake keyed
-# `decision-sitting:<epoch>` and prints its payload:
+# `decision-sitting:<epoch>` and prints `<key>\t<payload>`, the payload being
 #   check: decision sitting <YYYY-MM-DD HH:MM> <zone>: <n> call(s) waiting ...
-# The durable row is the wake: the watcher surfaces it like any queued row.
+# The watcher wakes with that payload only while its key is still queued, so a
+# sitting already drained and acknowledged never wakes a second time.
 # A sitting with nothing waiting records itself and prints nothing, so it
 # produces no captain-facing output. The marker write and the append share the
 # wake-queue lock, which also re-reads the marker so two overlapping runs wake
@@ -248,7 +249,7 @@ record_sitting() {  # <epoch>
 
 # Queue one durable check wake keyed <key> unless it is still queued or the
 # sitting <slot> was already recorded by a run that took the lock first.
-# Prints <payload> when it queued the row.
+# Prints `<key>\t<payload>` when it queued the row.
 queue_once() {  # <slot> <key> <payload> <record-file>
   local slot=$1 key=$2 payload=$3 record=$4 queued recorded
   load_wake_lib || die "cannot load the wake library"
@@ -263,7 +264,7 @@ queue_once() {  # <slot> <key> <payload> <record-file>
   elif fm_wake_append_locked check "$key" "$payload"; then
     printf '%s\n' "$slot" > "$record" 2>/dev/null \
       || printf 'fm-decision-sitting: woke for %s but could not record it under %s\n' "$key" "$record" >&2
-    printf '%s\n' "$payload"
+    printf '%s\t%s\n' "$key" "$payload"
   fi
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
 }

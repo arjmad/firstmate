@@ -113,8 +113,8 @@ test_due_sitting_wakes_once_and_an_empty_one_stays_silent() {
   hold_call "$home" waits --kind reversible --no-default
   hold_call "$home" urgent --kind arjun-only
   out=$(run_sitting "$home" $((NOV01_NOON + 120)) due) || fail "due failed: $out"
-  assert_equals "check: decision sitting 2026-11-01 12:00 America/New_York: 1 call(s) waiting for the captain (bin/fm-decision-sitting.sh queued)" \
-    "$out" "the due sitting did not name its time and count"
+  assert_equals "$(printf 'decision-sitting:%s\tcheck: decision sitting 2026-11-01 12:00 America/New_York: 1 call(s) waiting for the captain (bin/fm-decision-sitting.sh queued)' "$NOV01_NOON")" \
+    "$out" "the due sitting did not print its key, time and count"
   assert_equals "1" "$(sitting_rows "$home")" "the due sitting was not queued durably"
   grep -F "$(printf '\tcheck\tdecision-sitting:%s\t' "$NOV01_NOON")" "$home/state/.wake-queue" >/dev/null \
     || fail "the wake was not keyed by its sitting: $(cat "$home/state/.wake-queue")"
