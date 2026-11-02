@@ -1800,6 +1800,7 @@ EOF
 command_retire_release() {
   local woke="$STATE/hold-release-woke" claimed="$STATE/.hold-release-woke.claimed"
   local lock="$STATE/.hold-release-woke.lock" f found=0 line id n count=0 first='' ids reason status=0
+  local -a lines=()
   [ "$#" -eq 0 ] || { usage >&2; exit 2; }
   for f in "$woke" "$claimed" "$STATE/.last-hold-release" "$STATE"/.hold-release-pending*; do
     [ -e "$f" ] || [ -L "$f" ] || continue
@@ -1813,18 +1814,24 @@ command_retire_release() {
       fm_lock_release "$lock" || fail "could not unlock $woke"
       [ -e "$claimed" ] || break
     fi
+    lines=()
+    while IFS= read -r line || [ -n "$line" ]; do
+      lines+=("$line")
+    done < "$claimed"
     n=0
-    while IFS= read -r line; do
+    while [ "$n" -lt "${#lines[@]}" ]; do
+      line=${lines[$n]}
       n=$((n + 1))
       case "$line" in 'released by default: '?*) ;; *) continue ;; esac
       id=${line#released by default: }
       id=${id%% *}
       fm_wake_append check "hold-release-$id" "check: $line" || fail "could not queue: $line"
-      tail -n "+$((n + 1))" "$claimed" > "$claimed.tmp" && mv -f "$claimed.tmp" "$claimed"
-      n=0
+      # Keep only the lines not queued yet, so a retry never queues one twice.
+      { [ "$n" -ge "${#lines[@]}" ] || printf '%s\n' "${lines[@]:$n}"; } > "$claimed.tmp" \
+        && mv -f "$claimed.tmp" "$claimed"
       count=$((count + 1))
       [ -n "$first" ] || first="check: $line"
-    done < "$claimed"
+    done
     rm -f -- "$claimed"
   done
   # A backlog that cannot hold a call for the captain carries no default.
