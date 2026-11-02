@@ -40,6 +40,13 @@ run_captain() {  # <home> <command args...>
     "$ROOT/bin/fm-captain-hold.sh" "$@"
 }
 
+run_bootstrap() {  # <home> [extra env...]
+  local home=$1
+  shift
+  PATH="$home/fakebin:$PATH" TMUX='' HERDR_ENV='' FM_HOME="$home" FM_BOOTSTRAP_NETWORK=skip \
+    env "$@" "$ROOT/bin/fm-bootstrap.sh" 2>&1
+}
+
 show_task() {  # <home> <id>
   FM_HOME="$1" "$ROOT/bin/fm-tasks-axi.sh" show "$2" --full
 }
@@ -120,7 +127,12 @@ test_choices_keeps_a_retired_default_as_the_recommendation() {
   assert_contains "$show" '[reversible; options: split|keep; recommended: split] Split the guide' \
     "choices did not take the retired default as the recommendation"
   assert_not_contains "$show" 'default: split' "choices kept the retired default"
-  pass "choices drops a retired default and keeps it as the recommendation"
+  give_retired_default "$home" sample-docs "[reversible; default: split; releases 2026-10-17T10:00:00Z] Split the guide"
+  if run_captain "$home" choices sample-docs --options "wait|skip" > "$home/out" 2> "$home/err"; then
+    fail "choices accepted options without a recommendation"
+  fi
+  assert_grep "--options needs --recommend" "$home/err" "a retired default outside the new options was offered as the recommendation"
+  pass "choices drops a retired default and keeps it as the recommendation while it is still an option"
 }
 
 # `defer` on a call with no options keeps the default in the reason.
@@ -169,6 +181,35 @@ test_retire_defaults_rewrites_every_retired_default() {
   out=$(run_captain "$home" retire-defaults) || fail "a second retire-defaults failed: $out"
   assert_equals "" "$out" "a second retire-defaults found a default again"
   pass "retire-defaults turns every retired default into the recommendation, once"
+}
+
+# A home with no live task runs no watcher, so the locked session-start
+# bootstrap retires what the release left: the leftover release line becomes a
+# durable wake row, the held default becomes the recommendation, one row names
+# that call, and the release state is gone. The read-only path leaves it alone.
+test_session_start_retires_the_release_leftovers() {
+  local home show
+  home=$(make_home retire-release)
+  printf 'tmux\n' > "$home/config/backend"
+  run_captain "$home" hold sample-bare --title "Bare call" --reason "Keep the banner" \
+    --kind reversible >/dev/null || fail "could not hold the call"
+  give_retired_default "$home" sample-bare "[reversible; default: drop it; releases 2026-10-17T10:00:00Z] Keep the banner"
+  printf '%s\n' 'released by default: sample-old ship now' > "$home/state/hold-release-woke"
+  : > "$home/state/.last-hold-release"
+  run_bootstrap "$home" FM_BOOTSTRAP_DETECT_ONLY=1 >/dev/null
+  assert_present "$home/state/hold-release-woke" "the read-only session path retired the release"
+  run_bootstrap "$home" >/dev/null
+  assert_grep "$(printf '\tcheck\thold-release-sample-old\t')" "$home/state/.wake-queue" \
+    "the leftover release line was not queued"
+  assert_grep "$(printf '\tcheck\thold-release-retired\t')" "$home/state/.wake-queue" \
+    "the retired call was not queued for the captain"
+  assert_grep "bring them to him: sample-bare" "$home/state/.wake-queue" "the retirement row did not name the call"
+  show=$(show_task "$home" sample-bare)
+  assert_contains "$show" '[reversible] Keep the banner (recommended: drop it)' "session start did not retire the default"
+  assert_absent "$home/state/hold-release-woke" "session start left the release lines"
+  assert_absent "$home/state/.last-hold-release" "session start left the release stamp"
+  assert_absent "$home/state/.hold-release-pending.retired" "session start left the retired ids"
+  pass "the locked session-start bootstrap retires the release leftovers in a home with no live task"
 }
 
 test_kind_prefix_shows_on_every_hold_reason() {
@@ -401,5 +442,6 @@ test_holds_wait_for_the_captains_answer
 test_choices_keeps_a_retired_default_as_the_recommendation
 test_defer_keeps_a_retired_default_as_the_recommendation
 test_retire_defaults_rewrites_every_retired_default
+test_session_start_retires_the_release_leftovers
 test_hold_records_the_captain_as_owner_and_release_hands_back
 test_kind_prefix_shows_on_every_hold_reason
