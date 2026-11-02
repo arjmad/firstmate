@@ -212,6 +212,28 @@ test_session_start_retires_the_release_leftovers() {
   pass "the locked session-start bootstrap retires the release leftovers in a home with no live task"
 }
 
+# A tasks-axi that is installed but cannot be confirmed compatible may still
+# hold defaults, so retire-release fails and keeps the release state for a
+# retry rather than deleting it unretired.
+test_retire_release_keeps_its_state_when_tasks_axi_is_unconfirmed() {
+  local home status=0
+  home=$(make_home retire-unconfirmed)
+  : > "$home/state/.last-hold-release"
+  : > "$home/state/.hold-release-pending"
+  cat > "$home/fakebin/tasks-axi" <<'EOF'
+#!/usr/bin/env bash
+[ "${1:-}" != --version ] || printf '%s\n' 0.0.1
+exit 0
+EOF
+  chmod +x "$home/fakebin/tasks-axi"
+  run_captain "$home" retire-release > "$home/out" 2> "$home/err" || status=$?
+  [ "$status" -ne 0 ] || fail "retire-release succeeded although tasks-axi could not be confirmed compatible"
+  assert_grep "compatible tasks-axi is required" "$home/err" "the unconfirmed tasks-axi was not reported"
+  assert_present "$home/state/.last-hold-release" "retire-release deleted the cadence stamp unretired"
+  assert_present "$home/state/.hold-release-pending" "retire-release deleted the waiting marker unretired"
+  pass "retire-release keeps its state for a retry when tasks-axi cannot be confirmed compatible"
+}
+
 test_kind_prefix_shows_on_every_hold_reason() {
   local home show
   home=$(make_home prefix)
@@ -443,5 +465,6 @@ test_choices_keeps_a_retired_default_as_the_recommendation
 test_defer_keeps_a_retired_default_as_the_recommendation
 test_retire_defaults_rewrites_every_retired_default
 test_session_start_retires_the_release_leftovers
+test_retire_release_keeps_its_state_when_tasks_axi_is_unconfirmed
 test_hold_records_the_captain_as_owner_and_release_hands_back
 test_kind_prefix_shows_on_every_hold_reason
