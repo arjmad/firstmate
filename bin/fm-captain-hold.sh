@@ -100,7 +100,8 @@
 # copy once queued, runs `retire-defaults`, queues one
 # `check: default release retired: <ids>` row for the noted ids, removes the
 # state, and prints `wake: <reason>` for its caller. A failure keeps what is
-# not done yet and exits non-zero. The locked session-start bootstrap and the
+# not done yet and exits non-zero, and a run that finds another one under way
+# does nothing. The locked session-start bootstrap and the
 # watcher both run it, so a home with no live task retires at its next
 # session start.
 # A caller's own reason may not begin with a kind prefix.
@@ -364,8 +365,13 @@ CAPTAIN_META_LOCK_HELD=0
 CAPTAIN_CONTROL_LOCK=
 CAPTAIN_CONTROL_LOCK_HELD=0
 CAPTAIN_META_TMP=
+HOLD_RETIRE_LOCK=
 captain_hold_cleanup() {
   [ -z "$CAPTAIN_META_TMP" ] || rm -f "$CAPTAIN_META_TMP" 2>/dev/null || true
+  if [ -n "$HOLD_RETIRE_LOCK" ]; then
+    fm_lock_release "$HOLD_RETIRE_LOCK" || true
+    HOLD_RETIRE_LOCK=
+  fi
   if [ "$CAPTAIN_META_LOCK_HELD" = 1 ]; then
     fm_lock_release "$CAPTAIN_META_LOCK" || true
     CAPTAIN_META_LOCK_HELD=0
@@ -1788,6 +1794,8 @@ command_retire_defaults() {
       printf 'retired default: %s %s\n' "$id" "$option"
     else
       printf 'fm-captain-hold: %s keeps its retired default; its re-hold failed\n' "$id" >&2
+      grep -vxF -- "$id" "$HOLD_RELEASE_RETIRED" > "$HOLD_RELEASE_RETIRED.tmp" || true
+      mv -f "$HOLD_RELEASE_RETIRED.tmp" "$HOLD_RELEASE_RETIRED" || true
       status=1
     fi
   done <<EOF
@@ -1807,6 +1815,9 @@ command_retire_release() {
     found=1
   done
   [ "$found" = 1 ] || return 0
+  # One run at a time; a run that finds another under way leaves it the work.
+  fm_lock_try_acquire "$STATE/.hold-release-retire.lock" || return 0
+  HOLD_RETIRE_LOCK="$STATE/.hold-release-retire.lock"
   while :; do
     if [ ! -e "$claimed" ]; then
       fm_lock_acquire_wait "$lock" || fail "could not lock $woke"
@@ -1832,11 +1843,17 @@ command_retire_release() {
       count=$((count + 1))
       [ -n "$first" ] || first="check: $line"
     done
-    rm -f -- "$claimed"
+    rm -f -- "$claimed" || fail "could not remove $claimed"
   done
-  # A backlog that cannot hold a call for the captain carries no default.
-  if fm_tasks_axi_compatible && tasks-axi hold --help 2>&1 | grep -F -- '--kind captain' >/dev/null; then
-    ( command_retire_defaults ) >/dev/null || status=1
+  # No tasks-axi, or one without captain holds, holds no default; a tasks-axi
+  # whose compatibility cannot be confirmed is a failure to retry.
+  if command -v tasks-axi >/dev/null 2>&1; then
+    if ! fm_tasks_axi_compatible; then
+      printf 'fm-captain-hold: compatible tasks-axi is required to retire the held defaults\n' >&2
+      status=1
+    elif tasks-axi hold --help 2>&1 | grep -F -- '--kind captain' >/dev/null; then
+      ( command_retire_defaults ) >/dev/null || status=1
+    fi
   fi
   ids=$(sort -u "$HOLD_RELEASE_RETIRED" 2>/dev/null | tr '\n' ' ')
   ids=${ids% }
@@ -1850,7 +1867,7 @@ command_retire_release() {
     [ "$count" -le 1 ] || reason="$reason (and $((count - 1)) more released by default)"
   fi
   if [ "$status" = 0 ]; then
-    rm -f -- "$STATE/.last-hold-release" "$STATE"/.hold-release-pending*
+    rm -f -- "$STATE/.last-hold-release" "$STATE"/.hold-release-pending* "$STATE/.hold-release-retire-failed"
     fm_lock_acquire_wait "$lock" || fail "could not lock $woke"
     [ -s "$woke" ] || rm -f -- "$woke"
     fm_lock_release "$lock" || fail "could not unlock $woke"

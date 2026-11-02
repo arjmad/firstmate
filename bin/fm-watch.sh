@@ -2963,10 +2963,11 @@ decision_sittings_retire_tick() {
 # (docs/fork-decisions/2026-11-01-drop-default-release.md). While any state the
 # removed release left is still in state/, the watcher runs
 # `fm-captain-hold.sh retire-release` (its header owns what that retires) and
-# wakes with the reason it prints. A failed run leaves
-# state/.hold-release-pending.failed, and the next run waits an hour after it.
+# wakes with the reason it prints. The path list below mirrors that header's,
+# so an ordinary cycle spawns nothing. A failed run leaves
+# state/.hold-release-retire-failed, and the next run waits an hour after it.
 hold_release_retire_tick() {
-  local f found=false out failed="$STATE/.hold-release-pending.failed" reason
+  local f found=false out failed="$STATE/.hold-release-retire-failed" reason
   for f in "$STATE"/hold-release-woke "$STATE"/.hold-release-woke.claimed "$STATE"/.last-hold-release \
     "$STATE"/.hold-release-pending*; do
     [ -e "$f" ] || [ -L "$f" ] || continue
