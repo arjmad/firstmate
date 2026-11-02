@@ -22,10 +22,11 @@
 # Usage:
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
 #     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] \
-#     [--kind reversible|arjun-only] [--default <option> | --no-default] \
+#     [--kind reversible|arjun-only] \
 #     [--options '<A>|<B>[|<C>]' [--recommend <option>]] [--ask <question>]
 #   fm-captain-hold.sh choices <task-id> --options '<A>|<B>[|<C>]' [--recommend <option>] [--ask <question>]
-#   fm-captain-hold.sh release-due
+#   fm-captain-hold.sh retire-defaults
+#   fm-captain-hold.sh retire-release
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
 #   fm-captain-hold.sh defer <task-id> --until YYYY-MM-DD --decision-file <path>
 #   fm-captain-hold.sh answers [<legacy-origin> | --any-origin] --source <provenance>   (keyed answers on stdin)
@@ -62,41 +63,48 @@
 # `hold` also records the captain as the row's owner (`Owner: arjun`, the
 # record bin/fm-backlog-owner-lib.sh owns): a call held for him is his next
 # move. A created row carries the line from its first write. Releasing a hold
-# (`answer --release`, or a default release that lifts a work row's hold)
-# hands the row back with `Owner: fleet`, because the captain has answered and
-# the work resumes; record arjun again through `fm-tasks-axi.sh owner` when
+# (`answer --release`) hands the row back with `Owner: fleet`, because the
+# captain has answered and the work resumes; record arjun again through `fm-tasks-axi.sh owner` when
 # steps of his own remain.
 # `--until` records the captain's own deferral date through `tasks-axi hold
 # --until`, so a "revisit later" answer is stored as a date instead of a live
 # card.
 #
-# HOLD KINDS AND DEFAULT RELEASE (fork patches, docs/fork-decisions.md
-# 2026-10-14 and 2026-10-31).
+# HOLD KINDS (fork patches, docs/fork-decisions.md 2026-10-14 and
+# 2026-11-01).
 # `--kind` classifies the call. `arjun-only` covers money, credentials,
 # deletions, customer-facing changes, external commitments and Sapna's domain;
-# it never releases itself and refuses `--default`. `reversible` is every other
-# call. A reversible hold given `--default <option>` (one line, at most 200
-# bytes) releases itself 72 hours after that default was first recorded, which
-# enforces the captain's 2026-09-24 rule that a reversible call with a
-# recommendation does not wait on him forever. A reversible hold must say what
-# happens if he never answers (captain's 2026-10-30 asks-cut pick): it takes
-# `--default <option>`, or `--until` when he deferred it himself, or
-# `--no-default` when no option is safe to apply unasked (an idea, an open
-# question); a reversible hold with none of the three is refused before any
-# write, so a missing default is a recorded choice rather than an omission.
-# `--no-default` stores the same `[reversible]` prefix as before and is
-# refused beside `--default` or with any other kind; `--default` is refused
-# beside `--until`. The kind is stored as a prefix on the stored reason, so
-# every surface that shows a hold reason shows it:
+# `reversible` is every other call. Every hold waits for the captain's answer:
+# nothing releases itself, and `--default` and `--no-default` are refused
+# because the 72-hour default release they configured was removed. The kind is
+# stored as a prefix on the stored reason, so every surface that shows a hold
+# reason shows it:
 #   [arjun-only] <reason>
 #   [reversible] <reason>
-#   [reversible; default: <option>; releases <YYYY-MM-DDTHH:MM:SSZ>] <reason>
 # The prefix is the only record of the kind: a hold written without `--kind`
-# (including any later re-hold, or a bare tasks-axi hold) carries no prefix and
-# never releases itself, so a kind cannot outlive the reason it was given with.
-# Re-holding an active hold with the same kind and default keeps its release
-# time; a new default restarts the 72 hours. A caller's own reason may not
-# begin with a kind prefix.
+# (including any later re-hold, or a bare tasks-axi hold) carries no prefix, so
+# a kind cannot outlive the reason it was given with. A row held before the
+# release was removed may still carry `default: <option>; releases <time>`
+# after its kind. That default was the call's recommendation, so every re-hold
+# (`choices`, `defer`, `retire-defaults`) drops the segment and keeps the
+# option: as `--recommend` when the call has options, and otherwise appended to
+# the reason as `(recommended: <option>)`. `retire-defaults` re-holds every
+# such row this way and prints `retired default: <id> <option>` for each,
+# noting each id in state/.hold-release-pending.retired before its re-hold.
+# `retire-release` retires everything the release left in this home's state/,
+# and does nothing when none of it is there: release lines a detached
+# `release-due` already applied but no wake surfaced (state/hold-release-woke,
+# which a run still going at the update can append to, and its .claimed
+# copy), the cadence stamp, and the waiting marker. It queues each line as its
+# own durable `check: released by default:` row, trimming it from the claimed
+# copy once queued, runs `retire-defaults`, queues one
+# `check: default release retired: <ids>` row for the noted ids, removes the
+# state, and prints `wake: <reason>` for its caller. A failure keeps what is
+# not done yet and exits non-zero, and a run that finds another one under way
+# does nothing. The locked session-start bootstrap and the
+# watcher both run it, so a home with no live task retires at its next
+# session start.
+# A caller's own reason may not begin with a kind prefix.
 #
 # CHOICES (fork patch, docs/fork-decisions.md 2026-10-31).
 # A call held for the captain may carry its own choices, so every surface can
@@ -104,47 +112,22 @@
 # three labels split on `|`; each is one line of at most 60 bytes, holds no
 # `]` or `;`, is not the reserved answer `later` or `reconcile` in any case,
 # and differs from the others ignoring case. `--recommend` names the
-# recommended one and must equal one of them. On a reversible hold with
-# `--default` the default IS the recommendation: it must be one of the
-# options, and `--recommend`, when given, must equal it. Any other hold with
-# `--options` must pass `--recommend`. `--ask` is the call's question as the
-# captain should read it: one line of at most 200 bytes with no `]` or `;`, usable
-# with or without options. Choices need `--kind`, because they ride on the
-# same reason prefix, after the kind and any default, in this fixed order:
+# recommended one and must equal one of them, and every hold with `--options`
+# must pass it. `--ask` is the call's question as the captain should read it:
+# one line of at most 200 bytes with no `]` or `;`, usable with or without
+# options. Choices need `--kind`, because they ride on the
+# same reason prefix, after the kind, in this fixed order:
 #   [arjun-only; options: A|B; recommended: A; ask: Q] <reason>
 #   [reversible; options: A|B; recommended: A] <reason>
-#   [reversible; default: A; releases <T>; options: A|B; recommended: A; ask: Q] <reason>
 # That prefix is the one machine-readable record: tasks-axi `list` and `show`
 # expose it in hold_reason, and bin/fm-bearings-snapshot.sh projects it as
 # board rows' choices. Like the kind, choices live and die with the reason:
-# a re-hold that passes none drops them, and an unhold clears them. A default
-# no longer takes `;`, so the grammar stays unambiguous. `choices` sets or
-# replaces the choices on a call already held for the captain, keeping its
-# reason, kind, default, release time and date: it re-holds through `hold`,
-# which refuses when the row was answered, released or re-held since it read it.
+# a re-hold that passes none drops them, and an unhold clears them. `choices`
+# sets or replaces the choices on a call already held for the captain, keeping
+# its reason, kind and date, and a retired default stands in for an omitted
+# `--recommend`: it re-holds through `hold`, which refuses when the row was
+# answered, released or re-held since it read it.
 # `defer` keeps a call's choices through the re-hold.
-# `release-due` is the release half. For every open row still held for the
-# captain whose stored reason carries a reversible default whose release time
-# has passed (FM_CAPTAIN_HOLD_NOW overrides now, as for `hold`), it records the
-# release as the decision of record - a resolution block whose mode is
-# `defaulted` and whose label is `Default release:`, so it never reads as the
-# captain's own words - then closes a captain-kind question row or lifts the
-# hold on any other work row so it resumes on the default, publishes the
-# matching parent-channel resolution in a secondmate home, and prints one line
-# `released by default: <id> <option>`. bin/fm-watch.sh runs it on its own
-# hourly tick and turns each printed line into a durable `check:` wake. A row it
-# cannot read or close is reported on stderr and left held, so a failure delays
-# a release rather than inventing one.
-# That watcher tick is release-due's only caller, so a waiting default must keep
-# the home supervised even with no live task. `hold` writes
-# state/.hold-release-pending before and after it records a default, and
-# bin/fm-supervision-lib.sh counts that marker as supervision need. Each
-# release-due run then rewrites it: it sets the marker while a held row still
-# carries a default that is not due or failed to release, or cannot be read and
-# so may carry one (that run then exits non-zero), and otherwise removes
-# it only when it still holds the token read before the scan, so a default
-# recorded mid-scan stays counted.
-# An answer leaves the marker for the next run to clear.
 #
 # `answer` records the captain's exact words and resolves the call in the same
 # act. It requires a non-empty captain decision file of at most 8192 bytes and
@@ -167,9 +150,8 @@
 # `defer` records the captain's dated deferral of an open captain hold: the
 # exact words of the decision file go on a `Captain deferred:` body block (the
 # previous body archived), and the task is re-held with `hold --until` that
-# date, keeping its kind (a reversible default is dropped, because the captain
-# has engaged) and its reason. The re-hold comes first and the words are
-# recorded once it stands, so a call closed in between never carries a deferral
+# date, keeping its kind, choices and reason. The re-hold comes first and the
+# words are recorded once it stands, so a call closed in between never carries a deferral
 # it did not get. A date may be today in the captain's own time zone, so only a
 # date before yesterday in UTC (FM_CAPTAIN_HOLD_NOW overrides now) is refused.
 # A deferral already recorded is a no-op whatever its date - when it is applied,
@@ -306,10 +288,11 @@
 # one captain call. See "record divergence" beside command_diverged below.
 #
 # Resolution records: the block written into the body names this script, the
-# decision digest, and a `Resolution mode:` of answered, released, repaired,
-# reconciled, or defaulted. Records written by the retired fm-decision-hold.sh (routed,
-# declined, answered, repaired) are recognized everywhere a record is read, so
-# nothing already closed needs rewriting.
+# decision digest, and a `Resolution mode:` of answered, released, repaired, or
+# reconciled. Records written by the retired fm-decision-hold.sh (routed,
+# declined, answered, repaired) and the `defaulted` records of the retired
+# default release are recognized everywhere a record is read, so nothing
+# already closed needs rewriting.
 #
 # Parent channel: inside a secondmate home a task held for the captain, and its
 # answer, are captain-facing facts the moment they are recorded, so `hold`
@@ -382,8 +365,13 @@ CAPTAIN_META_LOCK_HELD=0
 CAPTAIN_CONTROL_LOCK=
 CAPTAIN_CONTROL_LOCK_HELD=0
 CAPTAIN_META_TMP=
+HOLD_RETIRE_LOCK=
 captain_hold_cleanup() {
   [ -z "$CAPTAIN_META_TMP" ] || rm -f "$CAPTAIN_META_TMP" 2>/dev/null || true
+  if [ -n "$HOLD_RETIRE_LOCK" ]; then
+    fm_lock_release "$HOLD_RETIRE_LOCK" || true
+    HOLD_RETIRE_LOCK=
+  fi
   if [ "$CAPTAIN_META_LOCK_HELD" = 1 ]; then
     fm_lock_release "$CAPTAIN_META_LOCK" || true
     CAPTAIN_META_LOCK_HELD=0
@@ -705,13 +693,12 @@ closed_answer_replay_mode_compatible() {  # <mode> <task-body>
 
 # The record's label is what keeps an evidence-backed reconciliation from
 # reading as the captain's own words. `reconciled` closes a call that went moot
-# and carries verified evidence, `defaulted` records a reversible default that
-# released itself, and every other mode carries what the captain said.
+# and carries verified evidence, and every other mode carries what the captain
+# said.
 resolution_block() {  # <mode>
   local label='Captain decision:'
   case "$1" in
     reconciled) label='Reconciliation evidence:' ;;
-    defaulted) label='Default release:' ;;
   esac
   printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\n\n%s\n%s\n' \
     "$DECISION_DIGEST" "$1" "$label" "$DECISION_TEXT"
@@ -1106,10 +1093,8 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how> <origi
   printf '%s %s %s\n' "$id" "$how" "$origin_state"
 }
 
-# --- hold kinds and default release (see "HOLD KINDS AND DEFAULT RELEASE") -----
+# --- hold kinds and choices (see "HOLD KINDS" and "CHOICES") ------------------
 
-HOLD_DEFAULT_RELEASE_SECS=259200
-HOLD_DEFAULT_OPTION_MAX_BYTES=200
 HOLD_CHOICE_LABEL_MAX_BYTES=60
 HOLD_ASK_MAX_BYTES=200
 
@@ -1133,9 +1118,9 @@ lowercase() {  # <text>
 CHOICE_OPTIONS=''
 CHOICE_RECOMMENDED=''
 CHOICE_ASK=''
-validate_hold_choice_args() {  # <kind> <options-given> <options> <recommend-given> <recommend> <ask-given> <ask> <default-given> <default>
+validate_hold_choice_args() {  # <kind> <options-given> <options> <recommend-given> <recommend> <ask-given> <ask>
   local kind=$1 options_given=$2 options=$3 recommend_given=$4 recommend=$5 ask_given=$6 ask=$7
-  local default_given=$8 default_option=$9 label lowered seen='|' count=0 found=0
+  local label lowered seen='|' count=0 found=0
   local -a labels=()
   CHOICE_OPTIONS=''
   CHOICE_RECOMMENDED=''
@@ -1168,14 +1153,8 @@ validate_hold_choice_args() {  # <kind> <options-given> <options> <recommend-giv
       CHOICE_OPTIONS="${CHOICE_OPTIONS:+$CHOICE_OPTIONS|}$label"
     done
     [ "$count" -ge 2 ] && [ "$count" -le 3 ] || fail "--options takes two or three choices split on |"
-    if [ "$default_given" = 1 ]; then
-      [ "$recommend_given" != 1 ] || [ "$(trim_text "$recommend")" = "$default_option" ] \
-        || fail "a reversible default is its recommendation, so --recommend must equal --default"
-      recommend=$default_option
-    else
-      [ "$recommend_given" = 1 ] || fail "--options needs --recommend naming the recommended choice"
-      recommend=$(trim_text "$recommend")
-    fi
+    [ "$recommend_given" = 1 ] || fail "--options needs --recommend naming the recommended choice"
+    recommend=$(trim_text "$recommend")
     for label in "${labels[@]}"; do
       [ "$(trim_text "$label")" != "$recommend" ] || found=1
     done
@@ -1200,46 +1179,27 @@ hold_choice_suffix() {
   printf '%s' "$suffix"
 }
 
-validate_hold_kind_args() {  # <kind> <default-given> <default-option> <reason> <no-default> <until>
-  local kind=$1 given=$2 option=$3 reason=$4 no_default=$5 until=$6
+validate_hold_kind_args() {  # <kind> <reason>
+  local kind=$1 reason=$2
   case "$kind" in
     ''|reversible|arjun-only) : ;;
     *) fail "--kind must be reversible or arjun-only: $kind" ;;
   esac
-  if [ "$no_default" = 1 ]; then
-    [ "$given" != 1 ] || fail "pass --default or --no-default, not both"
-    [ "$kind" = reversible ] || fail "--no-default requires --kind reversible"
-  elif [ "$kind" = reversible ] && [ "$given" != 1 ] && [ -z "$until" ]; then
-    fail "a reversible hold takes --default <option> so it releases itself after 72 hours; pass --until when the captain deferred it, or --no-default when no option is safe to apply unasked"
-  fi
-  if [ "$given" = 1 ]; then
-    [ "$kind" != arjun-only ] \
-      || fail "an arjun-only hold never releases itself, so it takes no --default; put the recommendation in the reason"
-    [ "$kind" = reversible ] || fail "--default requires --kind reversible"
-    [ -z "$until" ] || fail "a call the captain deferred with --until takes no --default"
-    validate_one_line default "$option"
-    case "$option" in
-      *']'*|*';'*) fail "--default must not contain ] or ;" ;;
-    esac
-    [ "$(byte_length "$option")" -le "$HOLD_DEFAULT_OPTION_MAX_BYTES" ] \
-      || fail "--default must be at most $HOLD_DEFAULT_OPTION_MAX_BYTES bytes"
-  fi
   case "$reason" in
     '[reversible]'*|'[reversible;'*|'[arjun-only]'*|'[arjun-only;'*)
-      fail "the reason must not begin with a hold-kind prefix; pass --kind and --default instead"
+      fail "the reason must not begin with a hold-kind prefix; pass --kind instead"
       ;;
   esac
 }
 
 # Parse the kind prefix of a decoded reason. Sets HOLD_DECISION_KIND
-# (reversible, arjun-only, or empty when there is no prefix), HOLD_DEFAULT_OPTION
-# and HOLD_RELEASES_AT (both empty unless a reversible default is recorded),
-# HOLD_OPTIONS and HOLD_RECOMMENDED (empty unless choices are recorded),
-# HOLD_ASK, and HOLD_REASON_REST (the reason after the prefix).
+# (reversible, arjun-only, or empty when there is no prefix), HOLD_OPTIONS and
+# HOLD_RECOMMENDED (empty unless choices are recorded), HOLD_ASK,
+# HOLD_DEFAULT_OPTION (the option of a retired default segment, see "HOLD
+# KINDS", else empty), and HOLD_REASON_REST (the reason after the prefix).
 # Returns 1 when the reason carries no kind prefix.
 HOLD_DECISION_KIND=''
 HOLD_DEFAULT_OPTION=''
-HOLD_RELEASES_AT=''
 HOLD_OPTIONS=''
 HOLD_RECOMMENDED=''
 HOLD_ASK=''
@@ -1249,17 +1209,15 @@ parse_hold_kind_prefix() {  # <decoded-reason>
   local re='^\[(reversible|arjun-only)(; default: ([^]]+); releases ([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z))?(; options: ([^];]+); recommended: ([^];]+))?(; ask: ([^]]+))?\] '
   HOLD_DECISION_KIND=''
   HOLD_DEFAULT_OPTION=''
-  HOLD_RELEASES_AT=''
   HOLD_OPTIONS=''
   HOLD_RECOMMENDED=''
   HOLD_ASK=''
   HOLD_REASON_REST=$reason
   [[ "$reason" =~ $re ]] || return 1
-  # A default rides only on a reversible hold.
+  # A default only ever rode on a reversible hold.
   [ -z "${BASH_REMATCH[2]}" ] || [ "${BASH_REMATCH[1]}" = reversible ] || return 1
   HOLD_DECISION_KIND=${BASH_REMATCH[1]}
   HOLD_DEFAULT_OPTION=${BASH_REMATCH[3]}
-  HOLD_RELEASES_AT=${BASH_REMATCH[4]}
   HOLD_OPTIONS=${BASH_REMATCH[6]}
   HOLD_RECOMMENDED=${BASH_REMATCH[7]}
   HOLD_ASK=${BASH_REMATCH[9]}
@@ -1267,21 +1225,23 @@ parse_hold_kind_prefix() {  # <decoded-reason>
   return 0
 }
 
+# Keep a retired default as the recommendation of a call with no options, by
+# appending it to HOLD_REASON_REST (see "HOLD KINDS"). A call with options
+# already records it as `recommended:`.
+carry_retired_default() {
+  [ -n "$HOLD_DEFAULT_OPTION" ] && [ -z "$HOLD_OPTIONS" ] || return 0
+  HOLD_REASON_REST="$HOLD_REASON_REST (recommended: $HOLD_DEFAULT_OPTION)"
+}
+
 epoch_to_utc_iso() {  # <epoch>
   date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
     || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
 }
 
-hold_release_time() {  # <hold-set-utc-iso>
-  local start
-  start=$(fm_utc_iso_to_epoch "$1") || return 1
-  epoch_to_utc_iso $((start + HOLD_DEFAULT_RELEASE_SECS))
-}
-
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0 stored_reason previous_origin='' hold_status=0
-  local decision_kind='' default_option='' default_given=0 no_default=0 releases='' existing_reason=''
+  local decision_kind='' existing_reason=''
   local options='' options_given=0 recommend='' recommend_given=0 ask='' ask_given=0
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
@@ -1293,8 +1253,9 @@ command_hold() {
       --origin) shift; origin=${1:-} ;;
       --until) shift; until=${1:-} ;;
       --kind) shift; decision_kind=${1:-} ;;
-      --default) shift; default_option=${1:-}; default_given=1 ;;
-      --no-default) no_default=1 ;;
+      --default|--no-default)
+        fail "$1 was removed: holds no longer release themselves and wait for the captain's answer; give a recommendation with --options and --recommend"
+        ;;
       --options) shift; options=${1:-}; options_given=1 ;;
       --recommend) shift; recommend=${1:-}; recommend_given=1 ;;
       --ask) shift; ask=${1:-}; ask_given=1 ;;
@@ -1304,9 +1265,9 @@ command_hold() {
   done
   validate_slug task-id "$id"
   [ -n "$reason" ] || fail "reason must not be empty"
-  validate_hold_kind_args "$decision_kind" "$default_given" "$default_option" "$reason" "$no_default" "$until"
+  validate_hold_kind_args "$decision_kind" "$reason"
   validate_hold_choice_args "$decision_kind" "$options_given" "$options" "$recommend_given" "$recommend" \
-    "$ask_given" "$ask" "$default_given" "$default_option"
+    "$ask_given" "$ask"
   if [ -n "$origin" ]; then
     validate_slug origin-id "$origin"
   fi
@@ -1374,28 +1335,12 @@ command_hold() {
     previous_origin=$(body_hold_origin "$(show_field_value "$show" body)")
     write_hold_origin "$id" "$(show_field "$show" body)" "$origin" || exit $?
   fi
-  # The kind prefix rides on the stored reason (see the header). An unchanged
-  # active reversible default keeps its release time; anything else starts 72h.
-  if [ "$default_given" = 1 ]; then
-    if parse_hold_kind_prefix "$existing_reason" \
-      && [ "$HOLD_DECISION_KIND" = reversible ] && [ "$HOLD_DEFAULT_OPTION" = "$default_option" ]; then
-      releases=$HOLD_RELEASES_AT
-    else
-      releases=$(hold_release_time "$hold_set") || fail "could not compute the default release time"
-    fi
-    reason="[reversible; default: $default_option; releases $releases$(hold_choice_suffix)] $reason"
-  elif [ -n "$decision_kind" ]; then
+  # The kind prefix rides on the stored reason (see the header).
+  if [ -n "$decision_kind" ]; then
     reason="[$decision_kind$(hold_choice_suffix)] $reason"
   fi
   # bin/fm-hold-reason-lib.sh owns the storage constraint and reversible encoding.
   stored_reason=$(fm_hold_reason_encode "$reason") || fail "could not encode the hold reason"
-  # Mark a default as waiting before the row can carry it, so a hold stopped
-  # after this write still leaves the home supervised; the set after the write
-  # below keeps a release-due scan running in between from clearing it.
-  if [ "$default_given" = 1 ]; then
-    set_hold_release_marker \
-      || fail "task $id would hold a default release, but $HOLD_RELEASE_MARKER could not be set"
-  fi
   if [ -n "$until" ]; then
     tasks_axi hold "$id" --reason "$stored_reason" --kind captain --until "$until" >/dev/null \
       || hold_status=$?
@@ -1424,11 +1369,6 @@ command_hold() {
   [ -n "$(body_hold_set_timestamp "$(show_field_value "$show" body)")" ] \
     || fail "task $id lost its hold-set stamp while being held"
   publish_parent_hold "$id" "$occurrence" needs-decision "$reason"
-  if [ "$default_given" = 1 ]; then
-    set_hold_release_marker \
-      || printf 'actionable: task %s holds a default release, but %s could not be set; run bin/fm-captain-hold.sh release-due\n' \
-        "$id" "$HOLD_RELEASE_MARKER" >&2
-  fi
   printf '%s\n' "$id"
 }
 
@@ -1667,14 +1607,15 @@ command_answer() {
 # reason read here, so it keeps every guard there and refuses, under that
 # path's own lock, a row answered, released, closed or re-held since this read.
 command_choices() {
-  local id=${1:-} show reason hold_until options_given=0 ask_given=0
-  local -a pass=() keep=()
+  local id=${1:-} show reason hold_until options_given=0 ask_given=0 recommend_given=0 options='' label
+  local -a pass=() keep=() labels=()
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --options|--recommend|--ask)
-        [ "$1" != --options ] || options_given=1
+        [ "$1" != --options ] || { options_given=1; options=${2:-}; }
+        [ "$1" != --recommend ] || recommend_given=1
         [ "$1" != --ask ] || ask_given=1
         pass+=("$1" "${2:-}")
         shift
@@ -1696,15 +1637,16 @@ command_choices() {
   hold_until=$(show_field_value "$show" hold_until)
   [ "$hold_until" != - ] || hold_until=''
   keep=(--kind "$HOLD_DECISION_KIND")
-  if [ -n "$HOLD_DEFAULT_OPTION" ]; then
-    keep+=(--default "$HOLD_DEFAULT_OPTION")
-  elif [ -n "$hold_until" ]; then
-    keep+=(--until "$hold_until")
-  elif [ "$HOLD_DECISION_KIND" = reversible ]; then
-    keep+=(--no-default)
-  fi
-  # An --ask the caller leaves out keeps the recorded one.
+  [ -z "$hold_until" ] || keep+=(--until "$hold_until")
+  # An --ask the caller leaves out keeps the recorded one, and a retired
+  # default that is still one of the options stands in for a --recommend left out.
   [ "$ask_given" = 1 ] || [ -z "$HOLD_ASK" ] || pass+=(--ask "$HOLD_ASK")
+  if [ "$recommend_given" = 0 ] && [ -n "$HOLD_DEFAULT_OPTION" ]; then
+    IFS='|' read -r -a labels <<< "$options"
+    for label in "${labels[@]}"; do
+      [ "$(trim_text "$label")" != "$HOLD_DEFAULT_OPTION" ] || { pass+=(--recommend "$HOLD_DEFAULT_OPTION"); break; }
+    done
+  fi
   FM_CAPTAIN_HOLD_EXPECT_REASON=$reason "$0" hold "$id" --reason "$HOLD_REASON_REST" "${keep[@]}" "${pass[@]}"
 }
 
@@ -1764,8 +1706,9 @@ command_defer() {
   reason=$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")
   if parse_hold_kind_prefix "$reason"; then
     kind_flag=$HOLD_DECISION_KIND
+    carry_retired_default
     reason=$HOLD_REASON_REST
-    # The call keeps its choices; a dropped default stays its recommendation.
+    # The call keeps its choices.
     [ -z "$HOLD_OPTIONS" ] || choice_flags+=(--options "$HOLD_OPTIONS" --recommend "$HOLD_RECOMMENDED")
     [ -z "$HOLD_ASK" ] || choice_flags+=(--ask "$HOLD_ASK")
   fi
@@ -1821,117 +1764,115 @@ held_captain_task_ids() {
   '
 }
 
-# The waiting-default marker (see `release-due` in the header). It holds a
-# fresh token on every set, and a clear removes it only while it still holds
-# the token its caller read before scanning, so a default recorded mid-scan
-# keeps the home supervised.
-HOLD_RELEASE_MARKER="$STATE/.hold-release-pending"
-HOLD_RELEASE_MARKER_LOCK="$STATE/.hold-release-pending.lock"
+HOLD_RELEASE_RETIRED="$STATE/.hold-release-pending.retired"
 
-set_hold_release_marker() {
-  local tmp rc=0
-  fm_lock_acquire_wait "$HOLD_RELEASE_MARKER_LOCK" || return 1
-  tmp=$(mktemp "$HOLD_RELEASE_MARKER.XXXXXX") || rc=1
-  if [ "$rc" = 0 ]; then
-    { printf '%s-%s-%s\n' "$(date +%s)" "$$" "$RANDOM" > "$tmp" && mv -f "$tmp" "$HOLD_RELEASE_MARKER"; } || rc=1
-    rm -f "$tmp"
-  fi
-  fm_lock_release "$HOLD_RELEASE_MARKER_LOCK" || rc=1
-  return "$rc"
-}
-
-clear_hold_release_marker() {  # <token-read-before-the-scan>
-  local rc=0
-  fm_lock_acquire_wait "$HOLD_RELEASE_MARKER_LOCK" || return 1
-  if [ "$(cat "$HOLD_RELEASE_MARKER" 2>/dev/null)" = "$1" ]; then
-    rm -f "$HOLD_RELEASE_MARKER" || rc=1
-  fi
-  fm_lock_release "$HOLD_RELEASE_MARKER_LOCK" || rc=1
-  return "$rc"
-}
-
-# The default a held row would release to now. Returns 2 when the row holds a
-# reversible default that is not due yet, 3 when the row cannot be read, and 1
-# when it holds none. Reads the row in THIS shell (TASK_SHOW_OUTPUT is carried
-# back).
-hold_default_due() {  # <task-id> <now-epoch>; sets HOLD_DEFAULT_OPTION/HOLD_RELEASES_AT
-  local id=$1 now=$2 show releases_epoch
-  task_show "$id" || return 3
-  show=$TASK_SHOW_OUTPUT
-  [ "$(show_field "$show" state)" != "done" ] || return 1
-  [ "$(show_field_value "$show" hold_kind)" = captain ] || return 1
-  [ "$(show_field_value "$show" held)" = yes ] || return 1
-  parse_hold_kind_prefix "$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")" || return 1
-  [ "$HOLD_DECISION_KIND" = reversible ] && [ -n "$HOLD_DEFAULT_OPTION" ] || return 1
-  releases_epoch=$(fm_utc_iso_to_epoch "$HOLD_RELEASES_AT") || return 1
-  [ "$now" -ge "$releases_epoch" ] || return 2
-}
-
-# Release one row to its default as the decision of record. Runs in a subshell
-# of command_release_due so a refusal stops only this row; the control lock is
-# released by the subshell's own EXIT trap.
-release_hold_by_default() {  # <task-id> <now-epoch>
-  local id=$1 now=$2 show body option task_kind release=1 occurrence
-  trap captain_hold_cleanup EXIT
-  acquire_task_control_lock "$id"
-  # Re-read under the lock: an answer recorded since the scan wins, and a row
-  # that cannot be read is a failure so its default stays counted as waiting.
-  hold_default_due "$id" "$now" || { [ "$?" -ne 3 ] || return 1; return 0; }
-  option=$HOLD_DEFAULT_OPTION
-  show=$TASK_SHOW_OUTPUT
-  body=$(show_field "$show" body)
-  task_kind=$(show_field_value "$show" kind)
-  [ "$task_kind" != captain ] || release=0
-  DECISION_TEXT=$(printf 'Released by default: no captain answer within 72 hours of the default being recorded, due %s (standing rule of 2026-09-24; fork decision 2026-10-14).\nOption applied: %s' \
-    "$HOLD_RELEASES_AT" "$option")
-  DECISION_DIGEST=$(sha256_text "$DECISION_TEXT")
-  occurrence=$(( $(resolution_record_count "$body") + 1 ))
-  write_resolution_record "$id" defaulted "$body"
-  close_answered "$id" "$release" || fail "could not close default-released captain-held task $id"
-  remove_interrupted_answer_stamp "$id"
-  publish_parent_resolution_then_retire "$id" "$occurrence" "released by default: $option"
-  printf 'released by default: %s %s\n' "$id" "$option"
-}
-
-command_release_due() {
-  local now ids id status=0 due=0 waiting=0 token
+# `retire-defaults` (see "HOLD KINDS"). A row it cannot read or re-hold is
+# reported on stderr, keeps its segment, and fails the run so it is retried.
+command_retire_defaults() {
+  local ids id reason option status=0
+  local -a args=()
   [ "$#" -eq 0 ] || { usage >&2; exit 2; }
-  now=${FM_CAPTAIN_HOLD_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
-  now=$(fm_utc_iso_to_epoch "$now") || fail "FM_CAPTAIN_HOLD_NOW must be a UTC YYYY-MM-DDTHH:MM:SSZ timestamp"
   require_tasks_axi
-  token=$(cat "$HOLD_RELEASE_MARKER" 2>/dev/null || true)
   ids=$(held_captain_task_ids) || fail "could not list the rows held for the captain"
   while IFS= read -r id; do
     [ -n "$id" ] || continue
-    hold_default_due "$id" "$now" || due=$?
-    if [ "$due" -ne 0 ]; then
-      [ "$due" -lt 2 ] || waiting=1
-      if [ "$due" -eq 3 ]; then
-        printf 'fm-captain-hold: %s could not be read; its default stays counted as waiting\n' "$id" >&2
-        status=1
-      fi
-      due=0
+    if ! task_show "$id"; then
+      printf 'fm-captain-hold: %s could not be read; its retired default stays\n' "$id" >&2
+      status=1
       continue
     fi
-    ( release_hold_by_default "$id" "$now" ) || {
-      printf 'fm-captain-hold: %s stays held; its default release failed\n' "$id" >&2
+    [ "$(show_field_value "$TASK_SHOW_OUTPUT" held)" = yes ] || continue
+    reason=$(fm_hold_reason_decode "$(show_field_value "$TASK_SHOW_OUTPUT" hold_reason)")
+    parse_hold_kind_prefix "$reason" && [ -n "$HOLD_DEFAULT_OPTION" ] || continue
+    option=$HOLD_DEFAULT_OPTION
+    printf '%s\n' "$id" >> "$HOLD_RELEASE_RETIRED"
+    carry_retired_default
+    args=(--kind "$HOLD_DECISION_KIND")
+    [ -z "$HOLD_OPTIONS" ] || args+=(--options "$HOLD_OPTIONS" --recommend "$HOLD_RECOMMENDED")
+    [ -z "$HOLD_ASK" ] || args+=(--ask "$HOLD_ASK")
+    if FM_CAPTAIN_HOLD_EXPECT_REASON=$reason "$0" hold "$id" --reason "$HOLD_REASON_REST" "${args[@]}" >/dev/null; then
+      printf 'retired default: %s %s\n' "$id" "$option"
+    else
+      printf 'fm-captain-hold: %s keeps its retired default; its re-hold failed\n' "$id" >&2
+      grep -vxF -- "$id" "$HOLD_RELEASE_RETIRED" > "$HOLD_RELEASE_RETIRED.tmp" || true
+      mv -f "$HOLD_RELEASE_RETIRED.tmp" "$HOLD_RELEASE_RETIRED" || true
       status=1
-      waiting=1
-    }
+    fi
   done <<EOF
 $ids
 EOF
-  if [ "$waiting" = 1 ]; then
-    [ -e "$HOLD_RELEASE_MARKER" ] || set_hold_release_marker || {
-      printf 'fm-captain-hold: a default is still waiting, but %s could not be set\n' "$HOLD_RELEASE_MARKER" >&2
+  return "$status"
+}
+
+# `retire-release` (see "HOLD KINDS").
+command_retire_release() {
+  local woke="$STATE/hold-release-woke" claimed="$STATE/.hold-release-woke.claimed"
+  local lock="$STATE/.hold-release-woke.lock" f found=0 line id n count=0 first='' ids reason status=0
+  local -a lines=()
+  [ "$#" -eq 0 ] || { usage >&2; exit 2; }
+  for f in "$woke" "$claimed" "$STATE/.last-hold-release" "$STATE"/.hold-release-pending*; do
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    found=1
+  done
+  [ "$found" = 1 ] || return 0
+  # One run at a time; a run that finds another under way leaves it the work.
+  fm_lock_try_acquire "$STATE/.hold-release-retire.lock" || return 0
+  HOLD_RETIRE_LOCK="$STATE/.hold-release-retire.lock"
+  while :; do
+    if [ ! -e "$claimed" ]; then
+      fm_lock_acquire_wait "$lock" || fail "could not lock $woke"
+      [ ! -s "$woke" ] || mv -f "$woke" "$claimed" || true
+      fm_lock_release "$lock" || fail "could not unlock $woke"
+      [ -e "$claimed" ] || break
+    fi
+    lines=()
+    while IFS= read -r line || [ -n "$line" ]; do
+      lines+=("$line")
+    done < "$claimed"
+    n=0
+    while [ "$n" -lt "${#lines[@]}" ]; do
+      line=${lines[$n]}
+      n=$((n + 1))
+      case "$line" in 'released by default: '?*) ;; *) continue ;; esac
+      id=${line#released by default: }
+      id=${id%% *}
+      fm_wake_append check "hold-release-$id" "check: $line" || fail "could not queue: $line"
+      # Keep only the lines not queued yet, so a retry never queues one twice.
+      { [ "$n" -ge "${#lines[@]}" ] || printf '%s\n' "${lines[@]:$n}"; } > "$claimed.tmp" \
+        && mv -f "$claimed.tmp" "$claimed"
+      count=$((count + 1))
+      [ -n "$first" ] || first="check: $line"
+    done
+    rm -f -- "$claimed" || fail "could not remove $claimed"
+  done
+  # No tasks-axi, or one without captain holds, holds no default; a tasks-axi
+  # whose compatibility cannot be confirmed is a failure to retry.
+  if command -v tasks-axi >/dev/null 2>&1; then
+    if ! fm_tasks_axi_compatible; then
+      printf 'fm-captain-hold: compatible tasks-axi is required to retire the held defaults\n' >&2
       status=1
-    }
-  else
-    clear_hold_release_marker "$token" || {
-      printf 'fm-captain-hold: no default is waiting, but %s could not be cleared\n' "$HOLD_RELEASE_MARKER" >&2
-      status=1
-    }
+    elif tasks-axi hold --help 2>&1 | grep -F -- '--kind captain' >/dev/null; then
+      ( command_retire_defaults ) >/dev/null || status=1
+    fi
   fi
+  ids=$(sort -u "$HOLD_RELEASE_RETIRED" 2>/dev/null | tr '\n' ' ')
+  ids=${ids% }
+  if [ -n "$ids" ]; then
+    reason="check: default release retired: these captain calls no longer release themselves and now wait for the captain, so bring them to him: $ids"
+    fm_wake_append check hold-release-retired "$reason" || fail "could not queue the default-release-retired wake"
+    rm -f -- "$HOLD_RELEASE_RETIRED"
+    [ "$count" = 0 ] || reason="$reason (and $count released by default)"
+  elif [ -n "$first" ]; then
+    reason=$first
+    [ "$count" -le 1 ] || reason="$reason (and $((count - 1)) more released by default)"
+  fi
+  if [ "$status" = 0 ]; then
+    rm -f -- "$STATE/.last-hold-release" "$STATE"/.hold-release-pending* "$STATE/.hold-release-retire-failed"
+    fm_lock_acquire_wait "$lock" || fail "could not lock $woke"
+    [ -s "$woke" ] || rm -f -- "$woke"
+    fm_lock_release "$lock" || fail "could not unlock $woke"
+  fi
+  [ -z "${reason:-}" ] || printf 'wake: %s\n' "$reason"
   return "$status"
 }
 
@@ -2879,7 +2820,8 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
 case "${1:-}" in
   hold) shift; command_hold "$@" ;;
   choices) shift; command_choices "$@" ;;
-  release-due) shift; command_release_due "$@" ;;
+  retire-defaults) shift; command_retire_defaults "$@" ;;
+  retire-release) shift; command_retire_release "$@" ;;
   answer) shift; command_answer "$@" ;;
   answers) shift; command_answers "$@" ;;
   defer) shift; command_defer "$@" ;;

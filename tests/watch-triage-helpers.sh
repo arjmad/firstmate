@@ -17,7 +17,7 @@
 #                                  deferrals, and the exit picker
 #   fm-watch-triage-wait.test.sh   declared pauses and waits, `until`, waits
 #                                  on a worker's own background job, and the
-#                                  fleet-sync and hold-release schedules
+#                                  fleet-sync schedule
 #   fm-watch-triage-wedge.test.sh  the wedge threshold's declared-wait,
 #                                  parked-gate, and wait-record evidence
 #   fm-watch-triage-hold.test.sh   captain-held work, delivered workers, and

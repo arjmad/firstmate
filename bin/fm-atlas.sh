@@ -25,9 +25,8 @@
 #
 # file       Validate atlas.json, then hold each idea not yet offered for the
 #            captain through bin/fm-captain-hold.sh, titled with the idea and
-#            repo'd to its repo, kind reversible with --no-default (an idea
-#            never picks itself), the reason carrying its rank, estimate, evidence and
-#            the brief a "do it" starts. One line per idea:
+#            repo'd to its repo, kind reversible, the reason carrying its
+#            rank, estimate, evidence and the brief a "do it" starts. One line per idea:
 #              held: atlas-<slug>      newly on the board
 #              open: atlas-<slug>      still on the board from an earlier build
 #              skipped: atlas-<slug> (answered in an earlier build)
@@ -168,7 +167,7 @@ cmd_file() {
       continue
     fi
     if out=$("$SCRIPT_DIR/fm-captain-hold.sh" hold "atlas-$slug" --title "$title" --repo "$repo" \
-      --kind reversible --no-default --reason "$reason" 2>&1); then
+      --kind reversible --reason "$reason" 2>&1); then
       printf 'held: atlas-%s\n' "$slug"
     else
       case "$out" in

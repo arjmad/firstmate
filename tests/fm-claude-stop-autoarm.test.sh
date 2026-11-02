@@ -786,34 +786,6 @@ test_arms_for_registered_custom_check_without_inflight() {
   pass "auto-arm: a registered custom check arms the cycle even with no tasks in flight"
 }
 
-# A released scout can leave a reversible hold as a home's only open item; the
-# watcher's hourly tick is what releases its default, so the hook must arm for
-# it and stop arming once the default has released.
-test_arms_for_waiting_default_release_without_inflight() {
-  local dir out status
-  command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; return 0; }
-  dir=$(make_primary_dir "$TMP_ROOT/hold-release-need")
-  mkdir -p "$dir/data"
-  fm_test_tasks_toml "$dir/.tasks.toml"
-  printf '## In flight\n\n## Queued\n\n## Done\n' > "$dir/data/backlog.md"
-  FM_HOME="$dir" FM_STATE_OVERRIDE="$dir/state" FM_CAPTAIN_HOLD_NOW=2026-10-14T10:00:00Z \
-    "$ROOT/bin/fm-captain-hold.sh" hold sample-call --title "Keep the banner" \
-    --reason "keep or drop" --kind reversible --default "drop it" >/dev/null \
-    || fail "could not hold the reversible call"
-  write_arm_fixture "$dir" actionable
-  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
-  expect_code 2 "$status" "a waiting default release must keep the auto-arm active with zero tasks in flight"
-  [ -e "$dir/state/arm-ran" ] || fail "hook did not arm for the waiting default release"
-
-  FM_HOME="$dir" FM_STATE_OVERRIDE="$dir/state" FM_CAPTAIN_HOLD_NOW=2026-10-17T10:00:00Z \
-    "$ROOT/bin/fm-captain-hold.sh" release-due >/dev/null || fail "release-due failed"
-  rm -f "$dir/state/arm-ran"
-  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
-  expect_code 0 "$status" "a home whose default already released must be idle again"
-  [ ! -e "$dir/state/arm-ran" ] || fail "hook armed after the default released"
-  pass "auto-arm: a waiting default release arms the cycle with no tasks in flight, until it releases"
-}
-
 test_single_flight_admits_exactly_one_owner() {
   local dir rc1 rc2 count
   dir=$(make_primary_dir "$TMP_ROOT/single-flight")
@@ -2036,7 +2008,6 @@ test_positive_recovery_budget_contention_preserves_episode
 test_owner_mutex_contention_preserves_failure_episode_reset
 test_arms_for_x_mode_poll_need_without_inflight
 test_arms_for_registered_custom_check_without_inflight
-test_arms_for_waiting_default_release_without_inflight
 test_single_flight_admits_exactly_one_owner
 test_term_mid_arm_commits_failure_and_rewakes
 test_abandoned_owner_claim_is_reclaimed_and_rearms
