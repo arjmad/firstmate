@@ -816,6 +816,7 @@ test_leftover_default_release_state_retires_once() {
   (cd "$dir" && tasks-axi hold sample-call --kind captain --file "$dir/data/backlog.md" \
     --reason "[reversible; default: drop it; releases 2026-10-17T10:00:00Z] keep or drop") >/dev/null \
     || fail "could not give the row the retired default prefix"
+  printf '%s\n' 'released by default: sample-claimed keep it' > "$state/.hold-release-woke.claimed"
   printf '%s\n' 'released by default: sample-old ship now' > "$state/hold-release-woke"
   touch -t 200001010000 "$state/.last-hold-release"
   : > "$state/.hold-release-pending"
@@ -832,12 +833,15 @@ test_leftover_default_release_state_retires_once() {
     || fail "the retirement was not queued durably: $(cat "$state/.wake-queue" 2>&1)"
   grep "$(printf '\tcheck\thold-release-sample-old\t')" "$state/.wake-queue" >/dev/null \
     || fail "the leftover release line was not queued durably: $(cat "$state/.wake-queue" 2>&1)"
+  grep "$(printf '\tcheck\thold-release-sample-claimed\t')" "$state/.wake-queue" >/dev/null \
+    || fail "the claimed release line was not queued durably: $(cat "$state/.wake-queue" 2>&1)"
   show=$(FM_HOME="$dir" "$ROOT/bin/fm-tasks-axi.sh" show sample-call --full)
   assert_contains "$show" 'keep or drop (recommended: drop it)' "the retired default did not become the recommendation"
   assert_not_contains "$show" 'releases 2026-10-17' "the row kept its retired release time"
   assert_contains "$show" 'held: yes' "the retirement lifted the hold"
   [ ! -e "$state/hold-release-woke" ] && [ ! -e "$state/.hold-release-woke.claimed" ] \
     && [ ! -e "$state/.last-hold-release" ] && [ ! -e "$state/.hold-release-pending" ] \
+    && [ ! -e "$state/.hold-release-pending.retired" ] \
     || fail "the default-release state was left behind for a second wake"
   ack_stopped_cycle "$state" >/dev/null || fail "could not acknowledge the retirement wake"
   : > "$out"

@@ -2970,42 +2970,48 @@ decision_sittings_retire_tick() {
 # `check: released by default:` row, runs `fm-captain-hold.sh retire-defaults`
 # so every such row keeps its default only as the recommendation, queues one
 # `check: default release retired` row naming those calls when there were
-# any, wakes, and removes the state. A failed queue or retirement leaves the
-# state and retries a minute later, so the wake fires once per finding.
+# any, wakes, and removes the state. The claimed file keeps only lines not yet
+# queued, and the ids a retirement reported wait in
+# state/.hold-release-pending.retired until their row is queued, so a failure
+# retries a minute later without repeating or losing a wake.
 hold_release_retire_tick() {
-  local f found=false line id out ids='' reason='' lock="$STATE/.hold-release-woke.lock"
+  local f found=false line id out ids n failed=0 reason='' lock="$STATE/.hold-release-woke.lock"
   local stamp="$STATE/.last-hold-release" claimed="$STATE/.hold-release-woke.claimed"
-  for f in "$STATE"/hold-release-woke "$claimed" "$stamp" "$STATE"/.hold-release-pending*; do
+  local woke="$STATE/hold-release-woke" retired="$STATE/.hold-release-pending.retired"
+  for f in "$woke" "$claimed" "$stamp" "$STATE"/.hold-release-pending*; do
     [ -e "$f" ] || [ -L "$f" ] || continue
     found=true
   done
   [ "$found" = true ] || return 0
   [ ! -e "$stamp" ] || [ "$(age_of "$stamp")" -ge 60 ] || return 0
-  fm_lock_acquire_wait "$lock" || return 0
-  [ -e "$claimed" ] || [ ! -s "$STATE/hold-release-woke" ] || mv -f "$STATE/hold-release-woke" "$claimed" 2>/dev/null || true
-  fm_lock_release "$lock" || return 0
-  if [ -s "$claimed" ]; then
+  while :; do
+    if [ ! -e "$claimed" ]; then
+      fm_lock_acquire_wait "$lock" || return 0
+      [ ! -s "$woke" ] || mv -f "$woke" "$claimed" 2>/dev/null || true
+      fm_lock_release "$lock" || return 0
+      [ -e "$claimed" ] || break
+    fi
+    n=0
     while IFS= read -r line; do
+      n=$((n + 1))
       case "$line" in 'released by default: '?*) ;; *) continue ;; esac
       id=${line#released by default: }
       id=${id%% *}
       if ! fm_wake_append check "hold-release-$id" "check: $line"; then
+        tail -n "+$n" "$claimed" > "$claimed.tmp" && mv -f "$claimed.tmp" "$claimed"
         triage_log "could not queue a leftover default release; its line stays for the next cycle"
         touch "$stamp"
+        [ -z "$reason" ] || wake "$reason"
         return 0
       fi
       [ -n "$reason" ] || reason="check: $line"
     done < "$claimed"
-  fi
-  rm -f -- "$claimed"
-  if ! out=$(fm_run_timed 30 env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
-    "$SCRIPT_DIR/fm-captain-hold.sh" retire-defaults 2>/dev/null </dev/null); then
-    triage_log "could not retire every captain-hold default; retrying in a minute"
-    touch "$stamp"
-    [ -z "$reason" ] || wake "$reason"
-    return 0
-  fi
-  ids=$(printf '%s\n' "$out" | sed -n 's/^retired default: \([^ ]*\) .*/\1/p' | tr '\n' ' ')
+    rm -f -- "$claimed"
+  done
+  out=$(fm_run_timed 30 env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-captain-hold.sh" retire-defaults 2>/dev/null </dev/null) || failed=1
+  printf '%s\n' "$out" | sed -n 's/^retired default: \([^ ]*\) .*/\1/p' >> "$retired"
+  ids=$(tr '\n' ' ' < "$retired")
   ids=${ids% }
   if [ -n "$ids" ]; then
     line="check: default release retired: these captain calls no longer release themselves and now wait for the captain, so bring them to him: $ids"
@@ -3015,9 +3021,20 @@ hold_release_retire_tick() {
       [ -z "$reason" ] || wake "$reason"
       return 0
     fi
+    rm -f -- "$retired"
     reason=$line
   fi
-  rm -f -- "$STATE"/hold-release-woke "$stamp" "$STATE"/.hold-release-pending*
+  if [ "$failed" = 1 ]; then
+    triage_log "could not retire every captain-hold default; retrying in a minute"
+    touch "$stamp"
+    [ -z "$reason" ] || wake "$reason"
+    return 0
+  fi
+  rm -f -- "$stamp" "$STATE"/.hold-release-pending*
+  if fm_lock_acquire_wait "$lock"; then
+    [ -s "$woke" ] || rm -f -- "$woke"
+    fm_lock_release "$lock" || true
+  fi
   [ -z "$reason" ] || wake "$reason"
 }
 
