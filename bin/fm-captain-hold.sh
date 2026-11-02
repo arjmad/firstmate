@@ -25,6 +25,7 @@
 #     [--kind reversible|arjun-only] \
 #     [--options '<A>|<B>[|<C>]' [--recommend <option>]] [--ask <question>]
 #   fm-captain-hold.sh choices <task-id> --options '<A>|<B>[|<C>]' [--recommend <option>] [--ask <question>]
+#   fm-captain-hold.sh retire-defaults
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
 #   fm-captain-hold.sh defer <task-id> --until YYYY-MM-DD --decision-file <path>
 #   fm-captain-hold.sh answers [<legacy-origin> | --any-origin] --source <provenance>   (keyed answers on stdin)
@@ -83,8 +84,13 @@
 # (including any later re-hold, or a bare tasks-axi hold) carries no prefix, so
 # a kind cannot outlive the reason it was given with. A row held before the
 # release was removed may still carry `default: <option>; releases <time>`
-# after its kind; readers accept and ignore that segment, and the next re-hold
-# drops it. A caller's own reason may not begin with a kind prefix.
+# after its kind. That default was the call's recommendation, so every re-hold
+# (`choices`, `defer`, `retire-defaults`) drops the segment and keeps the
+# option: as `--recommend` when the call has options, and otherwise appended to
+# the reason as `(recommended: <option>)`. `retire-defaults` re-holds every
+# such row this way and prints `retired default: <id> <option>` for each; the
+# watcher runs it once after the update (bin/fm-watch.sh owns that retirement).
+# A caller's own reason may not begin with a kind prefix.
 #
 # CHOICES (fork patch, docs/fork-decisions.md 2026-10-31).
 # A call held for the captain may carry its own choices, so every surface can
@@ -104,8 +110,9 @@
 # board rows' choices. Like the kind, choices live and die with the reason:
 # a re-hold that passes none drops them, and an unhold clears them. `choices`
 # sets or replaces the choices on a call already held for the captain, keeping
-# its reason, kind and date: it re-holds through `hold`, which refuses when the
-# row was answered, released or re-held since it read it.
+# its reason, kind and date, and a retired default stands in for an omitted
+# `--recommend`: it re-holds through `hold`, which refuses when the row was
+# answered, released or re-held since it read it.
 # `defer` keeps a call's choices through the re-hold.
 #
 # `answer` records the captain's exact words and resolves the call in the same
@@ -1168,11 +1175,12 @@ validate_hold_kind_args() {  # <kind> <reason>
 
 # Parse the kind prefix of a decoded reason. Sets HOLD_DECISION_KIND
 # (reversible, arjun-only, or empty when there is no prefix), HOLD_OPTIONS and
-# HOLD_RECOMMENDED (empty unless choices are recorded), HOLD_ASK, and
-# HOLD_REASON_REST (the reason after the prefix). A retired default segment
-# (see "HOLD KINDS") is matched and ignored.
+# HOLD_RECOMMENDED (empty unless choices are recorded), HOLD_ASK,
+# HOLD_DEFAULT_OPTION (the option of a retired default segment, see "HOLD
+# KINDS", else empty), and HOLD_REASON_REST (the reason after the prefix).
 # Returns 1 when the reason carries no kind prefix.
 HOLD_DECISION_KIND=''
+HOLD_DEFAULT_OPTION=''
 HOLD_OPTIONS=''
 HOLD_RECOMMENDED=''
 HOLD_ASK=''
@@ -1181,6 +1189,7 @@ parse_hold_kind_prefix() {  # <decoded-reason>
   local reason=$1
   local re='^\[(reversible|arjun-only)(; default: ([^]]+); releases ([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z))?(; options: ([^];]+); recommended: ([^];]+))?(; ask: ([^]]+))?\] '
   HOLD_DECISION_KIND=''
+  HOLD_DEFAULT_OPTION=''
   HOLD_OPTIONS=''
   HOLD_RECOMMENDED=''
   HOLD_ASK=''
@@ -1189,11 +1198,20 @@ parse_hold_kind_prefix() {  # <decoded-reason>
   # A default only ever rode on a reversible hold.
   [ -z "${BASH_REMATCH[2]}" ] || [ "${BASH_REMATCH[1]}" = reversible ] || return 1
   HOLD_DECISION_KIND=${BASH_REMATCH[1]}
+  HOLD_DEFAULT_OPTION=${BASH_REMATCH[3]}
   HOLD_OPTIONS=${BASH_REMATCH[6]}
   HOLD_RECOMMENDED=${BASH_REMATCH[7]}
   HOLD_ASK=${BASH_REMATCH[9]}
   HOLD_REASON_REST=${reason:${#BASH_REMATCH[0]}}
   return 0
+}
+
+# Keep a retired default as the recommendation of a call with no options, by
+# appending it to HOLD_REASON_REST (see "HOLD KINDS"). A call with options
+# already records it as `recommended:`.
+carry_retired_default() {
+  [ -n "$HOLD_DEFAULT_OPTION" ] && [ -z "$HOLD_OPTIONS" ] || return 0
+  HOLD_REASON_REST="$HOLD_REASON_REST (recommended: $HOLD_DEFAULT_OPTION)"
 }
 
 epoch_to_utc_iso() {  # <epoch>
@@ -1570,7 +1588,7 @@ command_answer() {
 # reason read here, so it keeps every guard there and refuses, under that
 # path's own lock, a row answered, released, closed or re-held since this read.
 command_choices() {
-  local id=${1:-} show reason hold_until options_given=0 ask_given=0
+  local id=${1:-} show reason hold_until options_given=0 ask_given=0 recommend_given=0
   local -a pass=() keep=()
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
@@ -1578,6 +1596,7 @@ command_choices() {
     case "$1" in
       --options|--recommend|--ask)
         [ "$1" != --options ] || options_given=1
+        [ "$1" != --recommend ] || recommend_given=1
         [ "$1" != --ask ] || ask_given=1
         pass+=("$1" "${2:-}")
         shift
@@ -1600,8 +1619,10 @@ command_choices() {
   [ "$hold_until" != - ] || hold_until=''
   keep=(--kind "$HOLD_DECISION_KIND")
   [ -z "$hold_until" ] || keep+=(--until "$hold_until")
-  # An --ask the caller leaves out keeps the recorded one.
+  # An --ask the caller leaves out keeps the recorded one, and a retired
+  # default stands in for a --recommend left out.
   [ "$ask_given" = 1 ] || [ -z "$HOLD_ASK" ] || pass+=(--ask "$HOLD_ASK")
+  [ "$recommend_given" = 1 ] || [ -z "$HOLD_DEFAULT_OPTION" ] || pass+=(--recommend "$HOLD_DEFAULT_OPTION")
   FM_CAPTAIN_HOLD_EXPECT_REASON=$reason "$0" hold "$id" --reason "$HOLD_REASON_REST" "${keep[@]}" "${pass[@]}"
 }
 
@@ -1661,6 +1682,7 @@ command_defer() {
   reason=$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")
   if parse_hold_kind_prefix "$reason"; then
     kind_flag=$HOLD_DECISION_KIND
+    carry_retired_default
     reason=$HOLD_REASON_REST
     # The call keeps its choices.
     [ -z "$HOLD_OPTIONS" ] || choice_flags+=(--options "$HOLD_OPTIONS" --recommend "$HOLD_RECOMMENDED")
@@ -1701,6 +1723,56 @@ command_defer() {
       ;;
   esac
   printf 'deferred: %s until %s\n' "$id" "$until"
+}
+
+# Every open row this home holds for the captain, one id per line. The listing's
+# first field is the slug id and its last is the requested hold_kind, so a
+# quoted title holding commas cannot shift either.
+held_captain_task_ids() {
+  local listing
+  listing=$(tasks_axi list --state held --fields hold_kind --limit 100000 2>/dev/null) || return 1
+  printf '%s\n' "$listing" | awk -F, '
+    /^  [A-Za-z0-9._-]+,/ {
+      id = $1
+      sub(/^ +/, "", id)
+      if ($NF == "captain") print id
+    }
+  '
+}
+
+# `retire-defaults` (see "HOLD KINDS"). A row it cannot read or re-hold is
+# reported on stderr, keeps its segment, and fails the run so it is retried.
+command_retire_defaults() {
+  local ids id reason option status=0
+  local -a args=()
+  [ "$#" -eq 0 ] || { usage >&2; exit 2; }
+  require_tasks_axi
+  ids=$(held_captain_task_ids) || fail "could not list the rows held for the captain"
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    if ! task_show "$id"; then
+      printf 'fm-captain-hold: %s could not be read; its retired default stays\n' "$id" >&2
+      status=1
+      continue
+    fi
+    [ "$(show_field_value "$TASK_SHOW_OUTPUT" held)" = yes ] || continue
+    reason=$(fm_hold_reason_decode "$(show_field_value "$TASK_SHOW_OUTPUT" hold_reason)")
+    parse_hold_kind_prefix "$reason" && [ -n "$HOLD_DEFAULT_OPTION" ] || continue
+    option=$HOLD_DEFAULT_OPTION
+    carry_retired_default
+    args=(--kind "$HOLD_DECISION_KIND")
+    [ -z "$HOLD_OPTIONS" ] || args+=(--options "$HOLD_OPTIONS" --recommend "$HOLD_RECOMMENDED")
+    [ -z "$HOLD_ASK" ] || args+=(--ask "$HOLD_ASK")
+    if FM_CAPTAIN_HOLD_EXPECT_REASON=$reason "$0" hold "$id" --reason "$HOLD_REASON_REST" "${args[@]}" >/dev/null; then
+      printf 'retired default: %s %s\n' "$id" "$option"
+    else
+      printf 'fm-captain-hold: %s keeps its retired default; its re-hold failed\n' "$id" >&2
+      status=1
+    fi
+  done <<EOF
+$ids
+EOF
+  return "$status"
 }
 
 # --- the one keyed-answer intake, and the source bindings that feed it --------
@@ -2647,6 +2719,7 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
 case "${1:-}" in
   hold) shift; command_hold "$@" ;;
   choices) shift; command_choices "$@" ;;
+  retire-defaults) shift; command_retire_defaults "$@" ;;
   answer) shift; command_answer "$@" ;;
   answers) shift; command_answers "$@" ;;
   defer) shift; command_defer "$@" ;;

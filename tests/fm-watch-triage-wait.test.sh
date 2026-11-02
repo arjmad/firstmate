@@ -798,6 +798,56 @@ test_leftover_sitting_tick_stamp_clears_silently() {
   pass "a bare decision-sitting tick stamp clears without a wake"
 }
 
+# A home that ran the retired default release can hold release lines no wake
+# surfaced and rows that still carry a default. The watcher surfaces each line
+# as its own durable check row, turns each default into the call's
+# recommendation, wakes once to bring those calls to the captain, and clears
+# the release state, so a restarted watcher stays quiet.
+test_leftover_default_release_state_retires_once() {
+  local dir state out pid show
+  command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; return 0; }
+  dir=$(make_case hold-release-retired); dir=$(cd "$dir" && pwd -P); state="$dir/state"; out="$dir/watch.out"
+  mkdir -p "$dir/data" "$dir/config"
+  fm_test_tasks_toml "$dir/.tasks.toml"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$dir/data/backlog.md"
+  FM_HOME="$dir" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-captain-hold.sh" hold sample-call \
+    --title "Keep the banner" --reason "keep or drop" --kind reversible >/dev/null \
+    || fail "could not hold the reversible call"
+  (cd "$dir" && tasks-axi hold sample-call --kind captain --file "$dir/data/backlog.md" \
+    --reason "[reversible; default: drop it; releases 2026-10-17T10:00:00Z] keep or drop") >/dev/null \
+    || fail "could not give the row the retired default prefix"
+  printf '%s\n' 'released by default: sample-old ship now' > "$state/hold-release-woke"
+  touch -t 200001010000 "$state/.last-hold-release"
+  : > "$state/.hold-release-pending"
+  PATH="$dir/fakebin:$PATH" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_CREW_STATE_BIN="$dir/fakebin/fm-crew-state.sh" \
+    FM_POLL=0.2 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_SECONDMATE_LIVENESS_SECS=99999999 FM_FLEET_SYNC_INTERVAL=off FM_BACKLOG_OVERDUE_INTERVAL=off \
+    "$WATCH" > "$out" 2>/dev/null &
+  pid=$!
+  wait_for_exit "$pid" 150 || { reap "$pid"; fail "the watcher did not wake on leftover default-release state: $(cat "$out")"; }
+  grep -F 'check: default release retired: these captain calls no longer release themselves and now wait for the captain, so bring them to him: sample-call' "$out" >/dev/null \
+    || fail "the wake did not name the call whose default was retired: $(cat "$out")"
+  grep "$(printf '\tcheck\thold-release-retired\t')" "$state/.wake-queue" >/dev/null \
+    || fail "the retirement was not queued durably: $(cat "$state/.wake-queue" 2>&1)"
+  grep "$(printf '\tcheck\thold-release-sample-old\t')" "$state/.wake-queue" >/dev/null \
+    || fail "the leftover release line was not queued durably: $(cat "$state/.wake-queue" 2>&1)"
+  show=$(FM_HOME="$dir" "$ROOT/bin/fm-tasks-axi.sh" show sample-call --full)
+  assert_contains "$show" 'keep or drop (recommended: drop it)' "the retired default did not become the recommendation"
+  assert_not_contains "$show" 'releases 2026-10-17' "the row kept its retired release time"
+  assert_contains "$show" 'held: yes' "the retirement lifted the hold"
+  [ ! -e "$state/hold-release-woke" ] && [ ! -e "$state/.hold-release-woke.claimed" ] \
+    && [ ! -e "$state/.last-hold-release" ] && [ ! -e "$state/.hold-release-pending" ] \
+    || fail "the default-release state was left behind for a second wake"
+  ack_stopped_cycle "$state" >/dev/null || fail "could not acknowledge the retirement wake"
+  : > "$out"
+  watch_bg "$state" "$dir/fakebin" "$out" env FM_FLEET_SYNC_INTERVAL=off FM_BACKLOG_OVERDUE_INTERVAL=off
+  pid=$!
+  wait_poll_cycle "$state" "$pid" || fail "the default-release retirement woke a second time: $(cat "$out")"
+  reap "$pid"
+  pass "leftover default-release state surfaces its lines, retires each default once, and clears"
+}
+
 # A queued backlog item whose date gate lapsed long ago without a dispatch
 # wakes the watcher through the detached overdue scan, which queues its durable row.
 test_overdue_backlog_item_wakes_the_watcher() {
@@ -919,6 +969,7 @@ test_acknowledged_inbox_note_never_rewakes_the_watcher
 test_overdue_scan_lines_surface_as_one_check_wake
 test_leftover_sitting_state_wakes_once_to_surface_held_calls
 test_leftover_sitting_tick_stamp_clears_silently
+test_leftover_default_release_state_retires_once
 test_overdue_backlog_item_wakes_the_watcher
 test_paused_bg_job_without_until_stays_silent_after_the_job_ends
 test_paused_bg_job_until_timeout_rechecks_after_the_job_ends

@@ -2959,6 +2959,68 @@ decision_sittings_retire_tick() {
   [ "$held" = false ] || wake "$reason"
 }
 
+# Retired captain-hold default release
+# (docs/fork-decisions/2026-11-01-drop-default-release.md). A home that ran the
+# removed hourly release can still hold its state: release lines a detached
+# `release-due` already applied to their rows but no wake surfaced
+# (state/hold-release-woke, which a run still going at the update can append
+# to, and its .claimed copy), the cadence stamp, the waiting marker, and held
+# rows whose reason still carries a default. The first watcher to find any of
+# that state queues each leftover line as its own durable
+# `check: released by default:` row, runs `fm-captain-hold.sh retire-defaults`
+# so every such row keeps its default only as the recommendation, queues one
+# `check: default release retired` row naming those calls when there were
+# any, wakes, and removes the state. A failed queue or retirement leaves the
+# state and retries a minute later, so the wake fires once per finding.
+hold_release_retire_tick() {
+  local f found=false line id out ids='' reason='' lock="$STATE/.hold-release-woke.lock"
+  local stamp="$STATE/.last-hold-release" claimed="$STATE/.hold-release-woke.claimed"
+  for f in "$STATE"/hold-release-woke "$claimed" "$stamp" "$STATE"/.hold-release-pending*; do
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    found=true
+  done
+  [ "$found" = true ] || return 0
+  [ ! -e "$stamp" ] || [ "$(age_of "$stamp")" -ge 60 ] || return 0
+  fm_lock_acquire_wait "$lock" || return 0
+  [ -e "$claimed" ] || [ ! -s "$STATE/hold-release-woke" ] || mv -f "$STATE/hold-release-woke" "$claimed" 2>/dev/null || true
+  fm_lock_release "$lock" || return 0
+  if [ -s "$claimed" ]; then
+    while IFS= read -r line; do
+      case "$line" in 'released by default: '?*) ;; *) continue ;; esac
+      id=${line#released by default: }
+      id=${id%% *}
+      if ! fm_wake_append check "hold-release-$id" "check: $line"; then
+        triage_log "could not queue a leftover default release; its line stays for the next cycle"
+        touch "$stamp"
+        return 0
+      fi
+      [ -n "$reason" ] || reason="check: $line"
+    done < "$claimed"
+  fi
+  rm -f -- "$claimed"
+  if ! out=$(fm_run_timed 30 env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-captain-hold.sh" retire-defaults 2>/dev/null </dev/null); then
+    triage_log "could not retire every captain-hold default; retrying in a minute"
+    touch "$stamp"
+    [ -z "$reason" ] || wake "$reason"
+    return 0
+  fi
+  ids=$(printf '%s\n' "$out" | sed -n 's/^retired default: \([^ ]*\) .*/\1/p' | tr '\n' ' ')
+  ids=${ids% }
+  if [ -n "$ids" ]; then
+    line="check: default release retired: these captain calls no longer release themselves and now wait for the captain, so bring them to him: $ids"
+    if ! fm_wake_append check hold-release-retired "$line"; then
+      triage_log "could not queue the default-release-retired wake; retrying in a minute"
+      touch "$stamp"
+      [ -z "$reason" ] || wake "$reason"
+      return 0
+    fi
+    reason=$line
+  fi
+  rm -f -- "$STATE"/hold-release-woke "$stamp" "$STATE"/.hold-release-pending*
+  [ -z "$reason" ] || wake "$reason"
+}
+
 RECONCILE_REQUEST_PID=
 reconcile_requests_pending() {
   local request
@@ -3239,6 +3301,7 @@ while :; do
   backlog_overdue_tick
   inbox_rewake_tick
   decision_sittings_retire_tick
+  hold_release_retire_tick
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
   # Time-based via .last-check mtime so the cadence survives watcher restarts.

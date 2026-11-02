@@ -96,27 +96,79 @@ test_holds_wait_for_the_captains_answer() {
 }
 
 # A row held before the default release was removed can still carry its
-# `default: ...; releases ...` segment. It stays held past that time, readers
-# still see its kind, and a re-hold through `choices` or `defer` drops the
-# segment.
-test_a_row_with_a_retired_default_waits_and_loses_it_on_rehold() {
+# `default: ...; releases ...` segment. That default was the call's
+# recommendation, so each re-hold drops the segment and keeps the option.
+give_retired_default() {  # <home> <id> <decoded-prefix-and-reason>
+  (cd "$1" && tasks-axi hold "$2" --kind captain --file "$1/data/backlog.md" --reason "$3") >/dev/null \
+    || fail "could not give $2 the retired default prefix"
+}
+
+# It stays held past its old release time, and `choices` with no --recommend
+# takes the default as the recommendation.
+test_choices_keeps_a_retired_default_as_the_recommendation() {
   local home show
   home=$(make_home retired-default)
   run_captain "$home" hold sample-docs --title "Docs layout" --reason "Split the guide" \
     --kind reversible >/dev/null || fail "could not hold the call"
-  (cd "$home" && tasks-axi hold sample-docs --kind captain --file "$home/data/backlog.md" \
-    --reason "[reversible; default: split; releases 2026-10-17T10:00:00Z] Split the guide") >/dev/null \
-    || fail "could not give the row the retired default prefix"
+  give_retired_default "$home" sample-docs "[reversible; default: split; releases 2026-10-17T10:00:00Z] Split the guide"
   show=$(show_task "$home" sample-docs)
   assert_contains "$show" 'default: split; releases 2026-10-17T10:00:00Z' "the fixture did not record the retired default"
   assert_contains "$show" 'held: yes' "a row whose old release time passed was released"
   FM_CAPTAIN_HOLD_NOW=2026-10-20T10:00:00Z run_captain "$home" choices sample-docs \
-    --options "split|keep" --recommend split >/dev/null || fail "choices on a row with a retired default failed"
+    --options "split|keep" >/dev/null || fail "choices on a row with a retired default failed"
   show=$(show_task "$home" sample-docs)
   assert_contains "$show" '[reversible; options: split|keep; recommended: split] Split the guide' \
-    "choices did not keep the kind and reason of a row with a retired default"
+    "choices did not take the retired default as the recommendation"
   assert_not_contains "$show" 'default: split' "choices kept the retired default"
-  pass "a row with a retired default stays held, keeps its kind, and loses the default on re-hold"
+  pass "choices drops a retired default and keeps it as the recommendation"
+}
+
+# `defer` on a call with no options keeps the default in the reason.
+test_defer_keeps_a_retired_default_as_the_recommendation() {
+  local home show reason
+  home=$(make_home retired-default-defer)
+  run_captain "$home" hold sample-docs --title "Docs layout" --reason "Split the guide" \
+    --kind reversible >/dev/null || fail "could not hold the call"
+  give_retired_default "$home" sample-docs "[reversible; default: split; releases 2026-10-17T10:00:00Z] Split the guide"
+  printf 'Arjun: ask me next week\n' > "$home/defer.txt"
+  FM_CAPTAIN_HOLD_NOW=2026-10-20T10:00:00Z run_captain "$home" defer sample-docs --until 2026-10-27 \
+    --decision-file "$home/defer.txt" >/dev/null || fail "the deferral of a row with a retired default failed"
+  show=$(show_task "$home" sample-docs)
+  reason=$(printf '%s\n' "$show" | sed -n 's/^  hold_reason: "\(.*\)"$/\1/p')
+  reason=$(bash -c '. "$1/bin/fm-hold-reason-lib.sh"; fm_hold_reason_decode "$2"' _ "$ROOT" "$reason")
+  assert_equals '[reversible] Split the guide (recommended: split)' "$reason" \
+    "defer did not keep the retired default as the recommendation"
+  assert_contains "$show" 'hold_until: 2026-10-27' "defer did not record its date"
+  pass "defer drops a retired default and keeps it as the recommendation"
+}
+
+# `retire-defaults` re-holds every row that still carries a default, keeping it
+# as the recommendation, and leaves every other hold alone.
+test_retire_defaults_rewrites_every_retired_default() {
+  local home out show
+  home=$(make_home retire-defaults)
+  run_captain "$home" hold sample-plain --title "Plain call" --reason "Keep or drop" \
+    --kind reversible >/dev/null || fail "could not hold the plain call"
+  run_captain "$home" hold sample-choice --title "Choice call" --reason "Pick the font" \
+    --kind reversible >/dev/null || fail "could not hold the choice call"
+  give_retired_default "$home" sample-choice \
+    "[reversible; default: sans; releases 2026-10-17T10:00:00Z; options: serif|sans; recommended: sans; ask: Which font?] Pick the font"
+  run_captain "$home" hold sample-bare --title "Bare call" --reason "Keep the banner" \
+    --kind reversible >/dev/null || fail "could not hold the bare call"
+  give_retired_default "$home" sample-bare "[reversible; default: drop it; releases 2026-10-17T10:00:00Z] Keep the banner"
+  out=$(run_captain "$home" retire-defaults) || fail "retire-defaults failed: $out"
+  assert_contains "$out" 'retired default: sample-choice sans' "the choice call was not retired"
+  assert_contains "$out" 'retired default: sample-bare drop it' "the bare call was not retired"
+  assert_not_contains "$out" 'sample-plain' "a call with no default was retired"
+  show=$(show_task "$home" sample-choice)
+  assert_contains "$show" '[reversible; options: serif|sans; recommended: sans; ask: Which font?] Pick the font' \
+    "the choice call lost its choices or kept its default"
+  show=$(show_task "$home" sample-bare)
+  assert_contains "$show" '[reversible] Keep the banner (recommended: drop it)' "the bare call did not keep its default as the recommendation"
+  assert_contains "$show" 'held: yes' "retire-defaults lifted a hold"
+  out=$(run_captain "$home" retire-defaults) || fail "a second retire-defaults failed: $out"
+  assert_equals "" "$out" "a second retire-defaults found a default again"
+  pass "retire-defaults turns every retired default into the recommendation, once"
 }
 
 test_kind_prefix_shows_on_every_hold_reason() {
@@ -346,6 +398,8 @@ test_choices_ride_on_the_reason_prefix
 test_choices_set_choices_on_an_active_hold
 test_keyed_answer_records_a_pick_by_label
 test_holds_wait_for_the_captains_answer
-test_a_row_with_a_retired_default_waits_and_loses_it_on_rehold
+test_choices_keeps_a_retired_default_as_the_recommendation
+test_defer_keeps_a_retired_default_as_the_recommendation
+test_retire_defaults_rewrites_every_retired_default
 test_hold_records_the_captain_as_owner_and_release_hands_back
 test_kind_prefix_shows_on_every_hold_reason
