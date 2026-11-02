@@ -19,8 +19,8 @@
 # AN ITEM IS ITS SLUG. The task id is noticed-<slug> or idea-<slug>, and the
 # backlog kind is noticed or idea, so `fm-tasks-axi.sh list --kind noticed`
 # finds them. Every item is an ordinary captain hold through
-# bin/fm-captain-hold.sh (kind reversible with --no-default, so it never
-# releases itself), which keeps it out of dispatch: nothing here ever starts work.
+# bin/fm-captain-hold.sh (kind reversible), which keeps it out of dispatch:
+# nothing here ever starts work.
 #
 # file     File one item, or attach evidence to the item its slug already
 #          names. One line per call:
@@ -198,7 +198,7 @@ cmd_file() {
     # Reopened rows are dispatchable until held, so hold at once, and close
     # the row again if the hold fails.
     "$TASKS" reopen "$id" >/dev/null || { echo "fm-noticed: could not reopen $id" >&2; exit 1; }
-    if ! "$HOLD" hold "$id" --kind reversible --no-default --reason "$(hold_reason "$kind" "$title" "$why" "$from")" >/dev/null; then
+    if ! "$HOLD" hold "$id" --kind reversible --reason "$(hold_reason "$kind" "$title" "$why" "$from")" >/dev/null; then
       "$TASKS" "done" "$id" >/dev/null 2>&1 \
         || echo "fm-noticed: $id is reopened but unheld; hold or close it before anything dispatches" >&2
       echo "fm-noticed: could not re-hold $id" >&2
@@ -227,7 +227,7 @@ Back after an earlier $id closed; its record is in the Done archive."
 Evidence: $evidence"
   "$TASKS" add "$id" "$title" --kind "$kind" ${repo:+--repo "$repo"} --body "$body" >/dev/null \
     || { echo "fm-noticed: could not add $id" >&2; exit 1; }
-  "$HOLD" hold "$id" --kind reversible --no-default --reason "$(hold_reason "$kind" "$title" "$why" "$from")" >/dev/null \
+  "$HOLD" hold "$id" --kind reversible --reason "$(hold_reason "$kind" "$title" "$why" "$from")" >/dev/null \
     || { echo "fm-noticed: $id was added but could not be held; hold it with bin/fm-captain-hold.sh before anything dispatches" >&2; exit 1; }
   grep -Fxq -- "$id" "$FILED" 2>/dev/null || printf '%s\n' "$id" >> "$FILED"
   [ "$kind" = noticed ] && add_unseen "$id" noticed "$title"

@@ -2301,7 +2301,7 @@ test_keyed_deferral_re_holds_instead_of_closing() {
   home=$(make_home keyed-deferral)
   FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" hold sample-later-call \
     --title "Plan the sample send" --reason "pick the send plan" --repo sample \
-    --kind reversible --default plan-a >/dev/null \
+    --kind reversible >/dev/null \
     || fail "could not register the deferrable captain call"
   run_captain "$home" hold sample-closed-call --title "Closed call" \
     --reason "already answered" --repo sample >/dev/null \
@@ -2320,7 +2320,7 @@ test_keyed_deferral_re_holds_instead_of_closing() {
   reason=$(printf '%s\n' "$show" | sed -n 's/^  hold_reason: "\(.*\)"$/\1/p')
   reason=$(bash -c '. "$1/bin/fm-hold-reason-lib.sh"; fm_hold_reason_decode "$2"' _ "$ROOT" "$reason")
   [ "$reason" = "[reversible] pick the send plan" ] \
-    || fail "a deferral lost the hold kind or reason, or kept the overridden default: $reason"
+    || fail "a deferral lost the hold kind or reason: $reason"
   assert_contains "$show" "Push to Thu" "a deferral did not record the captain's words: $show"
   assert_not_contains "$show" "Resolution recorded" "a deferral was recorded as a resolution: $show"
 
