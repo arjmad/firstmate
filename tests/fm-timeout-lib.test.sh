@@ -127,6 +127,31 @@ test_kill_ends_a_term_ignoring_command_after_the_grace() {
   pass "fm_exec_timed kills a TERM-ignoring command once the grace has passed"
 }
 
+# FM_EXEC_TIMED_SIGNAL replaces TERM at the bound: a command that exits on
+# INT but ignores TERM ends at the bound rather than waiting out the grace.
+test_a_named_bound_signal_reaches_the_command_at_the_bound() {
+  local dir rc=0 started elapsed
+  dir="$TMP_ROOT/bound-signal"
+  mkdir -p "$dir"
+  started=$SECONDS
+  (
+    . "$ROOT/bin/fm-timeout-lib.sh"
+    PATH=$PERL_ONLY FM_EXEC_TIMED_SIGNAL=INT fm_exec_timed 1 30 bash -c \
+      'trap "" TERM; trap "echo int > \"\$1\"; exit 0" INT; while :; do sleep 0.1; done' _ "$dir/got"
+  ) || rc=$?
+  elapsed=$((SECONDS - started))
+  [ "$rc" -eq 124 ] || fail "an expired INT bound did not report 124 (rc=$rc)"
+  [ "$(cat "$dir/got" 2>/dev/null)" = int ] || fail "the command never received the named INT bound signal"
+  [ "$elapsed" -lt 15 ] || fail "an INT-honoring command waited out the grace (${elapsed}s): INT was not sent at the bound"
+  rc=0
+  (
+    . "$ROOT/bin/fm-timeout-lib.sh"
+    FM_EXEC_TIMED_SIGNAL=FOO fm_exec_timed 1 1 true
+  ) 2>/dev/null || rc=$?
+  [ "$rc" -eq 125 ] || fail "an unsupported FM_EXEC_TIMED_SIGNAL was not refused (rc=$rc)"
+  pass "fm_exec_timed sends FM_EXEC_TIMED_SIGNAL at the bound and refuses an unsupported one"
+}
+
 # The bounded command sits where the plain call sat: the calling subshell is
 # replaced by the bounding process, whose child the command is. This holds for
 # whichever mechanism the host selects, and for the perl watchdog explicitly.
@@ -422,6 +447,7 @@ test_run_timed_reports_the_bound_when_the_wrapper_records_a_signal_death
 test_run_timed_passes_a_natural_exit_through_a_fired_bound
 test_term_ends_a_cooperative_command_at_the_bound
 test_kill_ends_a_term_ignoring_command_after_the_grace
+test_a_named_bound_signal_reaches_the_command_at_the_bound
 test_the_bound_replaces_the_calling_shell
 test_runs_under_bash_without_bashpid
 test_a_descendant_holding_the_output_cannot_outlast_the_bound

@@ -585,6 +585,18 @@ fm_remote_job_advance_seq_hint() { # <value>
   fi
 }
 
+# fm_remote_job_seq_claim_dir <dir>: create a sequence claim directory so that
+# exactly one of several racing claimants succeeds. mkdir alone is not enough:
+# uutils coreutils mkdir 0.10 (Ubuntu 26.04's /usr/bin/mkdir) reports success
+# when a racing claimant created the directory between its existence check and
+# its mkdir(2). The winner is whoever then creates the .claimed marker inside
+# with noclobber, an O_EXCL open, so the claim reaper removes that marker
+# before its rmdir. The caller's umask sets both modes.
+fm_remote_job_seq_claim_dir() {
+  mkdir -- "$1" 2>/dev/null || return 1
+  ( set -C; : > "$1/.claimed" ) 2>/dev/null
+}
+
 fm_remote_job_next_seq() { # [stage-dir destination]
   local stage=${1:-} destination=${2:-} counter value claim attempt=0 recovered=0 maximum entry
   [ -n "$FM_REMOTE_JOB_STATE" ] && [ -n "$FM_REMOTE_JOB_SEQ_CLAIMS" ] || return 1
@@ -608,7 +620,7 @@ fm_remote_job_next_seq() { # [stage-dir destination]
     attempt=$((attempt + 1))
     value=$((value + 1))
     claim="$FM_REMOTE_JOB_SEQ_CLAIMS/$value"
-    if (umask 077; mkdir "$claim") 2>/dev/null; then
+    if (umask 077; fm_remote_job_seq_claim_dir "$claim") 2>/dev/null; then
       chmod 700 "$claim" || return 1
       fm_remote_job_advance_seq_hint "$value" || true
       if [ -n "$stage" ]; then
@@ -866,11 +878,13 @@ fm_remote_job_reap_stale() { # <account-home>
       if [ -n "$tmp" ] && printf '%s\n' "$now" > "$tmp" && chmod 600 "$tmp" \
         && mv -f -- "$tmp" "$marker"; then
         # One directory walk: ! -newer matches whole-second mtime <= cutoff
-        # (the former >= age check). Batched rmdir tolerates concurrent mkdir/rmdir races
-        # and non-empty dirs the same way the old per-claim rmdir || true did.
+        # (the former >= age check). One rm per batch removes each claim's
+        # .claimed marker first; batched rmdir tolerates concurrent mkdir/rmdir races and non-empty
+        # dirs the same way the old per-claim rmdir || true did.
+        # shellcheck disable=SC2016 # The batch shell expands its own arguments.
         find "$FM_REMOTE_JOB_SEQ_CLAIMS" -mindepth 1 -maxdepth 1 -type d \
           -name '[0-9]*' ! -name '*[!0-9]*' ! -name 0 \
-          ! -newer "$ref" -exec rmdir {} + 2>/dev/null || true
+          ! -newer "$ref" -exec bash -c 'set -- "${@/%//.claimed}"; rm -f -- "$@"; rmdir -- "${@%/.claimed}"' bash {} + 2>/dev/null || true
       else
         [ -z "$tmp" ] || rm -f -- "$tmp"
       fi

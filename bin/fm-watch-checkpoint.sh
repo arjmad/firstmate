@@ -60,8 +60,9 @@ done
 
 case "$SECONDS_ARG" in
   ''|*[!0-9]*) echo "error: --seconds must be a positive integer" >&2; exit 2 ;;
-  0) echo "error: --seconds must be greater than zero" >&2; exit 2 ;;
 esac
+SECONDS_ARG=$((10#$SECONDS_ARG))
+[ "$SECONDS_ARG" -gt 0 ] || { echo "error: --seconds must be greater than zero" >&2; exit 2; }
 
 # A checkpoint is neither an ordinary watcher start nor an Option B handling
 # successor. It keeps an announced recovery episode stable while preserving the
@@ -75,70 +76,30 @@ ERR=$(mktemp "${TMPDIR:-/tmp}/fm-watch-checkpoint.err.XXXXXX") || {
 }
 trap 'rm -f "$OUT" "$ERR"' EXIT
 
-run_with_perl_timeout() {  # <seconds> <signal> <kill-after-seconds> <command...>
-  perl -e '
-    use POSIX qw(:sys_wait_h);
-    my $seconds = shift;
-    my $signal = shift;
-    my $kill_after = shift;
-    my $pid = fork;
-    die "fork failed\n" unless defined $pid;
-    if (!$pid) {
-      setpgrp(0, 0);
-      exec @ARGV;
-      die "exec failed: $!\n";
-    }
-    my $timed_out = 0;
-    local $SIG{ALRM} = sub {
-      if ($timed_out) {
-        kill "KILL", -$pid;
-        waitpid $pid, 0;
-        exit 124;
-      }
-      $timed_out = 1;
-      kill $signal, -$pid;
-      alarm($kill_after) if $kill_after;
-    };
-    alarm $seconds;
-    while (1) {
-      my $waited = waitpid $pid, WNOHANG;
-      if ($waited == $pid) {
-        alarm 0;
-        exit($timed_out ? 124 : ($? >> 8));
-      }
-      select undef, undef, undef, 0.05;
-    }
-  ' "$@"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
+
+# fm_exec_timed owns the bound: <signal> goes to the command's own process
+# group at <seconds>, and KILL follows <grace-seconds> later. It prefers its
+# perl watchdog, which never signals itself; uutils coreutils timeout (Ubuntu
+# 26.04's default) receives its own non-TERM signal on Linux and KILLs the
+# command at once, skipping the watcher's lock cleanup.
+run_bounded() {  # <seconds> <signal> <grace-seconds> <command...>
+  local seconds=$1 signal=$2 grace=$3
+  shift 3
+  ( FM_EXEC_TIMED_SIGNAL=$signal fm_exec_timed "$seconds" "$grace" "$@" )
 }
 
-run_bounded() {  # <seconds> <signal> <kill-after-seconds> <command...>
-  local seconds=$1 signal=$2 kill_after=$3 cleanup_lock_bound
-  shift 3
-  if [ "$kill_after" -gt 0 ]; then
-    cleanup_lock_bound=${FM_WATCHER_CLEANUP_LOCK_BOUND:-2}
-    case "$cleanup_lock_bound" in
-      ''|*[!0-9]*) cleanup_lock_bound=2 ;;
-      *) cleanup_lock_bound=$((10#$cleanup_lock_bound)) ;;
-    esac
-    [ "$cleanup_lock_bound" -gt 0 ] || cleanup_lock_bound=2
-    [ "$cleanup_lock_bound" -gt "$kill_after" ] || cleanup_lock_bound=$kill_after
-    kill_after=$cleanup_lock_bound
-  fi
-  if command -v timeout >/dev/null 2>&1; then
-    if [ "$kill_after" -gt 0 ]; then
-      timeout --signal="$signal" --kill-after="${kill_after}s" "$seconds" "$@"
-    else
-      timeout --signal="$signal" "$seconds" "$@"
-    fi
-  elif command -v gtimeout >/dev/null 2>&1; then
-    if [ "$kill_after" -gt 0 ]; then
-      gtimeout --signal="$signal" --kill-after="${kill_after}s" "$seconds" "$@"
-    else
-      gtimeout --signal="$signal" "$seconds" "$@"
-    fi
-  else
-    run_with_perl_timeout "$seconds" "$signal" "$kill_after" "$@"
-  fi
+# The watcher's grace is its lock-cleanup bound, never shorter than <floor>.
+watcher_grace() {  # <floor>
+  local floor=$1 bound=${FM_WATCHER_CLEANUP_LOCK_BOUND:-2}
+  case "$bound" in
+    ''|*[!0-9]*) bound=2 ;;
+    *) bound=$((10#$bound)) ;;
+  esac
+  [ "$bound" -gt 0 ] || bound=2
+  [ "$bound" -gt "$floor" ] || bound=$floor
+  printf '%s\n' "$bound"
 }
 
 positive_or() {  # <value> <default>
@@ -161,7 +122,7 @@ if fm_supervision_host_enabled "$CONFIG" codex; then
   # The host ends its own park; the outer bound only catches a host that
   # outlived every one of its own bounds.
   FM_SUPERVISION_HOST_PRIMARY=codex FM_SUPERVISION_HOST_PARK_SECONDS=$BOUND FM_SUPERVISION_HOST_PARK_LIMIT=$LIMIT \
-    run_bounded $((LIMIT + 120)) TERM 0 "$SCRIPT_DIR/fm-supervision-host.sh" park >"$OUT" 2>"$ERR"
+    run_bounded $((LIMIT + 120)) TERM 30 "$SCRIPT_DIR/fm-supervision-host.sh" park >"$OUT" 2>"$ERR"
   RC=$?
   set -e
   if grep -E '^(signal:|stale:|check:|heartbeat($|:)|supervision-host:)' "$OUT" 2>/dev/null \
@@ -176,7 +137,7 @@ if fm_supervision_host_enabled "$CONFIG" codex; then
   fi
   [ ! -s "$OUT" ] || cat "$OUT"
   [ ! -s "$ERR" ] || cat "$ERR" >&2
-  if [ "$RC" -eq 124 ]; then
+  if fm_timed_out "$RC"; then
     echo "checkpoint: the supervision host outlived its own bound of ${BOUND}s" >&2
     exit 1
   fi
@@ -186,7 +147,7 @@ fi
 
 set +e
 # Interrupt the checkpoint's active check group so the watcher's native EXIT cleanup can release its lock; ordinary watcher shutdown still uses TERM.
-run_bounded "$SECONDS_ARG" INT 5 "$SCRIPT_DIR/fm-watch.sh" >"$OUT" 2>"$ERR"
+run_bounded "$SECONDS_ARG" INT "$(watcher_grace 5)" "$SCRIPT_DIR/fm-watch.sh" >"$OUT" 2>"$ERR"
 RC=$?
 set -e
 
@@ -203,7 +164,7 @@ if grep -E '^watcher: already running' "$OUT" "$ERR" >/dev/null 2>&1; then
   exit 1
 fi
 
-if [ "$RC" -eq 124 ]; then
+if fm_timed_out "$RC"; then
   printf 'checkpoint: no actionable wake within %ss\n' "$SECONDS_ARG"
   exit 124
 fi
