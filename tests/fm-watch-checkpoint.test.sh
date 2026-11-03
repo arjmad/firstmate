@@ -41,6 +41,19 @@ test_quiet_checkpoint_exits_124_cleanly() {
   pass "quiet checkpoint exits 124 with a clean checkpoint line and no live lock"
 }
 
+# A zero-padded bound is the same bound, not a refusal from the timeout owner.
+test_zero_padded_seconds_is_the_same_bound() {
+  local home status
+  home=$(make_home zero-padded)
+  status=0
+  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
+    "$CHECKPOINT" --seconds 01 >"$home/out.txt" 2>"$home/err.txt" || status=$?
+  expect_code 124 "$status" "zero-padded checkpoint exit: $(cat "$home/err.txt")"
+  assert_contains "$(cat "$home/out.txt")" "checkpoint: no actionable wake within 1s" \
+    "a zero-padded bound did not run as a quiet 1s checkpoint"
+  pass "a zero-padded --seconds runs as the same quiet checkpoint"
+}
+
 test_perl_bound_honors_cleanup_bound_before_escalating() {
   local home fallback_bin tool tool_path status watcher_pid
   home=$(make_home perl-fallback)
@@ -416,6 +429,7 @@ test_real_host_checkpoint_ends_quietly_at_its_bound() {
 }
 
 test_quiet_checkpoint_exits_124_cleanly
+test_zero_padded_seconds_is_the_same_bound
 test_perl_bound_honors_cleanup_bound_before_escalating
 test_quiet_checkpoint_survives_a_timeout_that_kills_at_the_bound
 test_group_term_of_the_checkpoint_reaches_the_watcher

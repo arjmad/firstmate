@@ -146,10 +146,10 @@ test_a_named_bound_signal_reaches_the_command_at_the_bound() {
   rc=0
   (
     . "$ROOT/bin/fm-timeout-lib.sh"
-    FM_EXEC_TIMED_SIGNAL='-9' fm_exec_timed 1 1 true
+    FM_EXEC_TIMED_SIGNAL=FOO fm_exec_timed 1 1 true
   ) 2>/dev/null || rc=$?
-  [ "$rc" -eq 125 ] || fail "a malformed FM_EXEC_TIMED_SIGNAL was not refused (rc=$rc)"
-  pass "fm_exec_timed sends FM_EXEC_TIMED_SIGNAL at the bound and refuses a malformed one"
+  [ "$rc" -eq 125 ] || fail "an unsupported FM_EXEC_TIMED_SIGNAL was not refused (rc=$rc)"
+  pass "fm_exec_timed sends FM_EXEC_TIMED_SIGNAL at the bound and refuses an unsupported one"
 }
 
 # The bounded command sits where the plain call sat: the calling subshell is

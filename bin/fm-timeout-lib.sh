@@ -27,8 +27,8 @@
 #       Replaces the calling shell with the bounded command, so it must be the
 #       last command of a subshell: the bound kills the command, not the
 #       caller. The command runs in its own process group; TERM goes to that
-#       group at the bound (FM_EXEC_TIMED_SIGNAL names another signal, such as
-#       INT), and KILL once <grace-seconds> more have passed,
+#       group at the bound (FM_EXEC_TIMED_SIGNAL=INT or HUP sends that signal
+#       instead), and KILL once <grace-seconds> more have passed,
 #       for a command that ignores TERM or is mid-way through work it will not
 #       abandon. A TERM, INT, or HUP delivered to the bounding process is
 #       forwarded to the group and starts the same grace. The perl watchdog
@@ -225,8 +225,9 @@ fm_exec_timed() {  # <seconds> <grace-seconds> <command...>
   signal=${FM_EXEC_TIMED_SIGNAL:-TERM}
   unset FM_EXEC_TIMED_OWNER_PID FM_EXEC_TIMED_SIGNAL
   case "$signal" in
-    '' | *[!A-Z0-9]*)
-      echo "fm_exec_timed: FM_EXEC_TIMED_SIGNAL must be a signal name such as TERM or INT" >&2
+    TERM | INT | HUP) ;;
+    *)
+      echo "fm_exec_timed: FM_EXEC_TIMED_SIGNAL must be TERM, INT, or HUP" >&2
       exit 125
       ;;
   esac
