@@ -72,7 +72,7 @@ else
 fi
 
 status=$(fm_herdr_lab_cli "$SESSION" status server --json 2>/dev/null) || fail "could not read the lab server's status"
-detached=$(printf '%s' "$status" | jq -r '.capabilities.detached_server_daemon // "absent"' 2>/dev/null)
+detached=$(printf '%s' "$status" | jq -r '(.capabilities // {}) | if has("detached_server_daemon") then .detached_server_daemon | tostring else "absent" end' 2>/dev/null)
 case "$detached" in
   true) pass "real herdr: Herdr reports detached_server_daemon for the session-leading server" ;;
   absent) echo "note: herdr $(herdr --version 2>/dev/null) reports no detached_server_daemon capability; the session id check above is the proof" >&2 ;;
