@@ -159,6 +159,7 @@ case "${1:-}" in
         printf '%s=%s\n' "$name" "$value"
       done
       printf 'args=%s\n' "$*"
+      printf 'pid=%s\n' "$$"
     } > "$FM_HERDR_SERVER_ENV_LOG"
     : > "$FM_HERDR_SERVER_MARKER"
     if [ -n "${FM_HERDR_SERVER_HOLD:-}" ]; then
@@ -1258,6 +1259,53 @@ test_server_ensure_starts_in_firstmate_slice_on_lingering_linux() {
   assert_contains "$output" "HERDR_SESSION=fmtest" "server_ensure lost Herdr session routing through the scope wrapper"
   assert_contains "$output" "args=server --session fmtest" "server_ensure lost the server arguments through the scope wrapper"
   pass "fm_backend_herdr_server_ensure: starts the server in firstmate.slice on a lingering Linux user manager"
+}
+
+# Herdr saves a server as a machine only when it leads its own Unix session
+# (upstream herdrdev/herdr#4205), so on Linux the server starts under setsid,
+# inside the same firstmate.slice scope, without a fork that would change the
+# started pid. Without setsid, or off Linux, the start is today's.
+test_server_ensure_leads_its_own_session_inside_the_slice() {
+  local dir marker fb runlog setsidlog output server_pid run_pid
+  dir="$TMP_ROOT/server-setsid"; mkdir -p "$dir"; marker="$dir/running"; runlog="$dir/systemd-run"; setsidlog="$dir/setsid"
+  fb=$(make_herdr_server_env_fakebin "$dir")
+  fm_test_fake_linux_user_manager "$fb"
+  cat > "$fb/setsid" <<'SH'
+#!/usr/bin/env bash
+printf 'pid=%s argv=%s\n' "$$" "$*" >> "$FM_SETSID_LOG"
+exec "$@"
+SH
+  chmod +x "$fb/setsid"
+  PATH="$fb:$PATH" FM_HERDR_SERVER_ENV_LOG="$dir/env" FM_HERDR_SERVER_MARKER="$marker" FM_SYSTEMD_RUN_LOG="$runlog" \
+    FM_SETSID_LOG="$setsidlog" FM_SYSTEMD_SLICE='' FM_HOME=/tmp/wrong-home \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT"
+  expect_code 0 $? "server_ensure should start under setsid on Linux"
+  assert_contains "$(cat "$runlog" 2>/dev/null)" "--slice=firstmate.slice $fb/setsid " \
+    "server_ensure did not run setsid inside the firstmate.slice scope"
+  assert_contains "$(cat "$setsidlog" 2>/dev/null)" "argv=herdr server --session fmtest" \
+    "setsid did not start the herdr server itself"
+  output=$(cat "$dir/env")
+  assert_contains "$output" "FM_HOME=<unset>" "server_ensure leaked FM_HOME through setsid"
+  assert_contains "$output" "HERDR_SESSION=fmtest" "server_ensure lost Herdr session routing through setsid"
+  server_pid=$(sed -n 's/^pid=//p' "$dir/env")
+  run_pid=$(sed -n 's/^pid=\([0-9]*\) .*/\1/p' "$runlog")
+  [ -n "$server_pid" ] && [ "$server_pid" = "$run_pid" ] && [ "$server_pid" = "$(sed -n 's/^pid=\([0-9]*\) .*/\1/p' "$setsidlog")" ] ||
+    fail "the server's pid changed between the scope, setsid and herdr: run=$run_pid setsid=$(cat "$setsidlog") server=$server_pid"
+
+  dir="$TMP_ROOT/server-no-setsid"; mkdir -p "$dir"; marker="$dir/running"; runlog="$dir/systemd-run"
+  fb=$(make_herdr_server_env_fakebin "$dir")
+  fm_test_fake_linux_user_manager "$fb"
+  PATH="$fb:$PATH" FM_HERDR_SERVER_ENV_LOG="$dir/env" FM_HERDR_SERVER_MARKER="$marker" FM_SYSTEMD_RUN_LOG="$runlog" \
+    FM_HERDR_SETSID_BIN="$dir/no-setsid" FM_SYSTEMD_SLICE='' \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT"
+  expect_code 0 $? "server_ensure should keep today's start without setsid"
+  [ -e "$marker" ] || fail "server_ensure did not start the server without setsid"
+  assert_contains "$(cat "$runlog" 2>/dev/null)" "--slice=firstmate.slice herdr server --session fmtest" \
+    "without setsid the server did not keep today's start inside the slice"
+
+  output=$(PATH="$fb:$PATH" FM_HERDR_SETSID_BIN=/bin/sh bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_session_prefix Darwin; printf "[%s]" "${FM_BACKEND_HERDR_SESSION_PREFIX[*]-}"' "$ROOT")
+  [ "$output" = "[]" ] || fail "a non-Linux platform got a setsid prefix: $output"
+  pass "fm_backend_herdr_server_ensure: on Linux the server leads its own session through setsid inside firstmate.slice, keeping its pid, and falls back without setsid"
 }
 
 # Without linger the user manager stops with the account's last session and
@@ -6295,6 +6343,7 @@ test_container_ensure_refuses_an_ambiguous_home_label
 test_container_ensure_starts_server_and_workspace
 test_server_ensure_scrubs_home_and_harness_identity
 test_server_ensure_starts_in_firstmate_slice_on_lingering_linux
+test_server_ensure_leads_its_own_session_inside_the_slice
 test_server_ensure_keeps_plain_start_without_lingering_manager
 test_linux_slice_prefix_decision
 test_linux_slice_prefix_finds_the_user_bus_without_xdg_runtime_dir
