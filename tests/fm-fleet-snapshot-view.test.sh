@@ -855,7 +855,7 @@ test_view_renders_remote_secondmate_home_and_newest_pr() {
     | .paths.home.present == null
   ' >/dev/null || fail "remote secondmate home presence should stay unchecked (null)"
   view=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$VIEW")
-  assert_contains "$view" "| https://github.com/example/business/pull/648 | /home/remote/secondmate (remote, not checked) |" \
+  assert_contains "$view" "| https://github.com/example/business/pull/648 | /home/remote/secondmate (remote on fafnir, not checked) |" \
     "view should show a remote secondmate's newest PR and unchecked home"
   assert_not_contains "$view" "/home/remote/secondmate (absent)" \
     "view must not call an unchecked remote home absent"
