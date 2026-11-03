@@ -134,7 +134,24 @@ SEQ_EXPECTED=$(seq 1 20)
   || fail "concurrent sequence claims were not unique and monotonic: $SEQ_RESULTS"
 [ "$(find "$STATE_ROOT/.seq-claims" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = 20 ] \
   || fail "concurrent sequence allocations did not retain every durable claim"
+# uutils coreutils mkdir 0.10 (Ubuntu 26.04) reports success for a directory
+# a racing claimant created first. With a mkdir on PATH that always does, a
+# rewound counter must still skip every held claim instead of reissuing one.
+UUTILS_MKDIR_BIN="$TMP_ROOT/uutils-mkdir-bin"
+mkdir -p "$UUTILS_MKDIR_BIN"
+cat > "$UUTILS_MKDIR_BIN/mkdir" <<'SH'
+#!/bin/sh
+for last in "$@"; do :; done
+/bin/mkdir "$@" 2>/dev/null || [ -d "$last" ]
+SH
+chmod +x "$UUTILS_MKDIR_BIN/mkdir"
+rm -f -- "$STATE_ROOT/seq"
+SEQ_AFTER_REWIND=$(PATH="$UUTILS_MKDIR_BIN:$PATH" fm_remote_job_next_seq) \
+  || fail "a sequence claim failed beside an exists-tolerant mkdir"
+[ "$SEQ_AFTER_REWIND" = 21 ] \
+  || fail "an exists-tolerant mkdir let a held sequence claim be reissued: $SEQ_AFTER_REWIND"
 mkdir "$STATE_ROOT/.seq-claims/999998" "$STATE_ROOT/.seq-claims/999999"
+: > "$STATE_ROOT/.seq-claims/999998/.claimed"
 touch -t 200001010000 "$STATE_ROOT/.seq-claims/999998"
 fm_remote_job_reap_stale "$ACCOUNT_HOME" || fail "sequence claim reaping failed"
 assert_absent "$STATE_ROOT/.seq-claims/999998" "an expired sequence claim survived stale reaping"
