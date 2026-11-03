@@ -54,8 +54,8 @@
 #     that is unsafe or holds nothing for the branch) stay main's. That
 #     pass-through starts the successor watcher cycle and leaves it running
 #     before the close is printed, so supervision continues when the session
-#     drops the handoff. It confirms no handling handoff, and every attended
-#     pass-through republishes downtime on the recovery marker, which an
+#     drops the handoff. It confirms no handling handoff, and every
+#     hand-back to main republishes downtime on the recovery marker, which an
 #     earlier engine turn's acknowledgement may have retired, so the re-arm
 #     owner delivers the close to main. The host records that successor's
 #     arm before relinquishing it (detach_successor owns the persistence
@@ -623,8 +623,7 @@ retire_successor() {
 exit_to_main() {  # <why> [further lines]
   local lines=${2:-} rc=0
   retire_successor
-  if [ -n "$SUCCESSOR_GENERATION" ] \
-    && ! fm_recovery_marker_publish "$STATE/.watcher-down" downtime >/dev/null 2>&1; then
+  if ! fm_recovery_marker_publish "$STATE/.watcher-down" downtime >/dev/null 2>&1; then
     log_line "to-main	downtime-unrestored	$1"
     lines=${lines:+$lines$'\n'}"supervision-host: watcher downtime could not be restored for the main hand-back"
     rc=1
@@ -1254,8 +1253,7 @@ while :; do
     # recovery marker reads downtime (leave_successor_for_main).
     # The close is not printed: the healthy successor would let its owner
     # dismiss it. The line keeps this exit from reading as a dead host.
-    if [ -n "$SUCCESSOR_GENERATION" ] \
-      && ! fm_recovery_marker_publish "$STATE/.watcher-down" downtime >/dev/null 2>&1; then
+    if ! fm_recovery_marker_publish "$STATE/.watcher-down" downtime >/dev/null 2>&1; then
       log_line "pass-through	downtime-unrestored	$(printf '%s\n' "$REASON" | head -n 1)"
       printf 'supervision-host hand-back failed: watcher downtime could not be restored for the main hand-back of %s\n' \
         "$(printf '%s\n' "$REASON" | head -n 1)"

@@ -1375,6 +1375,8 @@ test_claude_stop_hook_delivers_a_main_only_close_after_the_turn_retired_its_epis
     || fail "retired episode: the handling successor did not close during the engine turn"
   FM_HOME="$home" bash -c '. "$1"; fm_wake_queue_prune_task "$2" demo' _ \
     "$ROOT/bin/fm-wake-lib.sh" "$home/state" || fail "fixture: could not model the turn's teardown pruning the task's rows"
+  [ ! -s "$home/state/.wake-queue" ] \
+    || fail "fixture: the prune left rows, so the engine's acknowledgement would not retire the episode: $(cat "$home/state/.wake-queue")"
   printf 'continue\n' > "$home/stub-release"
   wait_until 250 hook_exited "$home" || fail "retired episode: the Stop hook did not finish: $(cat "$home/state/.supervision-host.log")"
   assert_grep 'acknowledged through' "$home/engine-ack.log" "fixture: the engine turn did not acknowledge"
