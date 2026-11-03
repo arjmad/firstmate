@@ -1726,6 +1726,32 @@ fm_backend_herdr_projection_order_best_effort() {  # <session> <created-workspac
   return 0
 }
 
+# fm_backend_herdr_server_session_prefix [platform]: set the array
+# FM_BACKEND_HERDR_SESSION_PREFIX to the words that make the server lead its
+# own Unix session, the shape Herdr's own launcher gives it. Herdr reports
+# `detached_server_daemon` only when getsid(0) == getpid(), and refuses a
+# server without it as a saved machine ("not ready for saved machines",
+# upstream herdrdev/herdr#4205). On Linux that is util-linux `setsid`, placed
+# after the slice prefix so it runs inside the same scope; the backgrounded
+# start is never a process-group leader, so `setsid` execs without forking and
+# the server keeps the started pid. Empty (today's start) on any other
+# platform or when `setsid` does not resolve. FM_HERDR_SETSID_BIN names the
+# binary instead of PATH lookup; a value that is not executable means none.
+# <platform> overrides `uname -s`.
+fm_backend_herdr_server_session_prefix() {  # [platform]
+  local platform=${1:-} bin
+  FM_BACKEND_HERDR_SESSION_PREFIX=()
+  [ -n "$platform" ] || platform=$(uname -s 2>/dev/null || true)
+  case "$platform" in Linux|linux) ;; *) return 0 ;; esac
+  if [ -n "${FM_HERDR_SETSID_BIN+set}" ]; then
+    bin=$FM_HERDR_SETSID_BIN
+  else
+    bin=$(command -v setsid 2>/dev/null) || bin=
+  fi
+  [ -n "$bin" ] && [ -x "$bin" ] || return 0
+  FM_BACKEND_HERDR_SESSION_PREFIX=("$bin")
+}
+
 # fm_backend_herdr_server_ensure: start the herdr server for <session>
 # headless (no TUI client) if not already running, mirroring tmux's `tmux
 # has-session || tmux new-session -d`. Verified: a bare socket CLI call does
@@ -1746,11 +1772,14 @@ fm_backend_herdr_server_ensure() {  # <session>
     # later spawns, goes in firstmate's slice rather than the caller's SSH
     # session scope (bin/fm-linux-slice-lib.sh).
     fm_linux_slice_prefix
+    fm_backend_herdr_server_session_prefix
     # Background the client itself, not a shell function: a backgrounded
     # function is a forked shell that lives as long as the server and keeps the
     # caller's descriptors bash saved for a redirection, so a caller reading
     # this process's output (a remote doctor --fix over SSH) never sees EOF.
-    HERDR_SESSION="$session" ${FM_LINUX_SLICE_PREFIX[@]+"${FM_LINUX_SLICE_PREFIX[@]}"} "$client_bin" server --session "$session" </dev/null >/dev/null 2>&1 &
+    HERDR_SESSION="$session" ${FM_LINUX_SLICE_PREFIX[@]+"${FM_LINUX_SLICE_PREFIX[@]}"} \
+      ${FM_BACKEND_HERDR_SESSION_PREFIX[@]+"${FM_BACKEND_HERDR_SESSION_PREFIX[@]}"} \
+      "$client_bin" server --session "$session" </dev/null >/dev/null 2>&1 &
   ) || return 1
   for i in $(seq 1 20); do
     running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
