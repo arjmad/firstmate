@@ -1278,7 +1278,7 @@ SH
   chmod +x "$fb/setsid"
   PATH="$fb:$PATH" FM_HERDR_SERVER_ENV_LOG="$dir/env" FM_HERDR_SERVER_MARKER="$marker" FM_SYSTEMD_RUN_LOG="$runlog" \
     FM_SETSID_LOG="$setsidlog" FM_SYSTEMD_SLICE='' FM_HOME=/tmp/wrong-home \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT"
+    bash -c 'unset FM_HERDR_SETSID_BIN; . "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT"
   expect_code 0 $? "server_ensure should start under setsid on Linux"
   assert_contains "$(cat "$runlog" 2>/dev/null)" "--slice=firstmate.slice $fb/setsid " \
     "server_ensure did not run setsid inside the firstmate.slice scope"
