@@ -54,10 +54,12 @@
 #     that is unsafe or holds nothing for the branch) stay main's. That
 #     pass-through starts the successor watcher cycle and leaves it running
 #     before the close is printed, so supervision continues when the session
-#     drops the handoff. It confirms no handling handoff, so the recovery
-#     marker still reads downtime and the re-arm owner delivers the close to
-#     main. The host records that successor's arm before relinquishing it
-#     (detach_successor owns the persistence check and failure path). The
+#     drops the handoff. It confirms no handling handoff, and every attended
+#     pass-through republishes downtime on the recovery marker, which an
+#     earlier engine turn's acknowledgement may have retired, so the re-arm
+#     owner delivers the close to main. The host records that successor's
+#     arm before relinquishing it (detach_successor owns the persistence
+#     check and failure path). The
 #     session's next park without --restart requests a take-over of its cycle
 #     rather than an ordinary attach; bin/fm-watch-arm.sh's --take-over header owns the
 #     conditions under which that restores a single owner and the fallback;
@@ -738,8 +740,9 @@ detach_successor() {
 
 # Start the same successor a handled wake starts and leave it running. It
 # confirms no handling handoff: main, not the engine, handles this close, and
-# the re-arm owner delivers it only while the recovery marker still reads
-# downtime (autoarm_commit in bin/fm-claude-stop-autoarm.sh). A failed start
+# the re-arm owner delivers it only while the recovery marker reads downtime
+# (autoarm_commit in bin/fm-claude-stop-autoarm.sh), which the caller
+# republishes before it prints the close. A failed start
 # returns 1; the caller still prints the close unchanged.
 leave_successor_for_main() {
   if ! ARM_OWN_GROUP=1 start_successor "$CLOSED_ARM_PID"; then
@@ -1191,6 +1194,15 @@ while :; do
       fi
       if [ "$ATTENDED_WHY" = main-only ]; then
         leave_successor_for_main || true
+      fi
+      # An earlier engine turn's acknowledgement can retire this close's
+      # episode, as when that turn's teardown pruned its rows; the re-arm
+      # owner delivers only on downtime, so republish it before handing back.
+      if ! fm_recovery_marker_publish "$STATE/.watcher-down" downtime >/dev/null 2>&1; then
+        log_line "pass-through	downtime-unrestored	$(printf '%s\n' "$REASON" | head -n 1)"
+        printf 'supervision-host hand-back failed: watcher downtime could not be restored for the main hand-back of %s\n' \
+          "$(printf '%s\n' "$REASON" | head -n 1)"
+        exit 1
       fi
       emit
       exit 0
