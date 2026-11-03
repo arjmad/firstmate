@@ -1351,6 +1351,39 @@ test_claude_stop_hook_restores_handoff_when_successor_closed_mid_engine_turn() {
   pass "host+hook: a successor that closes during a held engine turn does not suppress the branch-outcome rewake"
 }
 
+# The live failure (2026-11-02): an engine turn tore its task down while that
+# task's handling successor closed on a main-only close. Teardown pruned the
+# task's queue rows, so the engine's acknowledgement found the queue empty and
+# retired the recovery episode. The host still handed the close to main and
+# left its successor running, but the Stop hook delivers only on downtime, so
+# it exited 0. Main was never woken, and the successor's later real close
+# reached no reader for 3.4 hours.
+test_claude_stop_hook_delivers_a_main_only_close_after_the_turn_retired_its_episode() {
+  local home successor
+  home=$(make_primary_home hook-main-only-after-retired-episode)
+  ln -s "$ROOT/.agents" "$home/.agents"
+  echo held > "$home/stub-mode"
+  mkfifo "$home/stub-release"
+  start_hook_session "$home"
+  turn_end "$home"
+  wait_until 150 watcher_live "$home" || fail "retired episode: the Stop hook never started a watcher cycle"
+  append_status "$home" 'routine progress'
+  wait_until 250 test -s "$home/stub-ready" || fail "retired episode: the engine did not reach its hold"
+  successor=$(cat "$home/state/.watch.lock/pid")
+  append_status "$home" 'which export format?' needs-decision
+  wait_until 250 bash -c '! kill -0 "$1" 2>/dev/null' _ "$successor" \
+    || fail "retired episode: the handling successor did not close during the engine turn"
+  FM_HOME="$home" bash -c '. "$1"; fm_wake_queue_prune_task "$2" demo' _ \
+    "$ROOT/bin/fm-wake-lib.sh" "$home/state" || fail "fixture: could not model the turn's teardown pruning the task's rows"
+  printf 'continue\n' > "$home/stub-release"
+  wait_until 250 hook_exited "$home" || fail "retired episode: the Stop hook did not finish: $(cat "$home/state/.supervision-host.log")"
+  assert_grep 'acknowledged through' "$home/engine-ack.log" "fixture: the engine turn did not acknowledge"
+  assert_re '	pass-through	attended	main-only	' "$home/state/.supervision-host.log" "fixture: the close was not a main-only pass-through"
+  assert_rewoke_main "$home" "retired episode"
+  watcher_live "$home" || fail "retired episode: the pass-through left no successor watcher"
+  pass "host+hook: a main-only close whose episode the engine turn retired still rewakes main"
+}
+
 # The live repro (2026-09-28): a quiet record live with no daemon flag parked a
 # present Claude captain, whose worker's captain outcomes waited for a return.
 # Through the real Stop hook the outcome now rewakes main, with no away note.
@@ -3210,6 +3243,7 @@ test_keeper_without_a_held_close_exits_silently_and_inert_when_absent() {
 
 test_claude_stop_hook_restores_handoff_when_successor_closed_before_exit_to_main
 test_claude_stop_hook_restores_handoff_when_successor_closed_mid_engine_turn
+test_claude_stop_hook_delivers_a_main_only_close_after_the_turn_retired_its_episode
 test_claude_stop_hook_notifies_when_closed_successor_downtime_restore_fails
 test_claude_stop_hook_notifies_when_closed_announced_successor_downtime_restore_fails
 test_park_exit_probe_uses_half_second_child_sleeps
