@@ -41,13 +41,14 @@ test_quiet_checkpoint_exits_124_cleanly() {
   pass "quiet checkpoint exits 124 with a clean checkpoint line and no live lock"
 }
 
-test_perl_timeout_fallback_honors_cleanup_bound_before_escalating() {
+test_perl_bound_honors_cleanup_bound_before_escalating() {
   local home fallback_bin tool tool_path status watcher_pid
   home=$(make_home perl-fallback)
   fallback_bin="$home/fallback-bin"
   mkdir -p "$home/root/bin" "$fallback_bin"
   cp "$CHECKPOINT" "$home/root/bin/fm-watch-checkpoint.sh"
   cp "$ROOT/bin/fm-supervision-engine-lib.sh" "$home/root/bin/fm-supervision-engine-lib.sh"
+  cp "$ROOT/bin/fm-timeout-lib.sh" "$home/root/bin/fm-timeout-lib.sh"
   for tool in bash dirname mktemp rm perl grep cat; do
     tool_path=$(command -v "$tool") || fail "could not locate $tool for the Perl fallback fixture"
     ln -s "$tool_path" "$fallback_bin/$tool"
@@ -77,17 +78,84 @@ PL
   PATH="$fallback_bin" FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_WATCHER_CLEANUP_LOCK_BOUND=8 \
     "$home/root/bin/fm-watch-checkpoint.sh" --seconds 1 >"$home/out.txt" 2>"$home/err.txt" || status=$?
 
-  expect_code 124 "$status" "Perl fallback checkpoint exit"
+  expect_code 124 "$status" "Perl bound checkpoint exit"
   assert_contains "$(cat "$home/out.txt")" "checkpoint: no actionable wake within 1s" \
-    "Perl fallback did not return a quiet checkpoint"
-  [ -e "$home/cleanup-reached" ] || fail "the Perl fallback killed the watcher before its 8-second cleanup bound"
+    "Perl bound did not return a quiet checkpoint"
+  [ -e "$home/cleanup-reached" ] || fail "the Perl bound killed the watcher before its 8-second cleanup bound"
   [ ! -e "$home/natural-exit" ] || fail "the INT-ignoring watcher exited naturally instead of being killed"
   [ -s "$home/watcher.pid" ] || fail "the INT-ignoring watcher did not start"
   watcher_pid=$(cat "$home/watcher.pid")
   if kill -0 "$watcher_pid" 2>/dev/null; then
-    fail "the INT-ignoring watcher survived the Perl fallback escalation"
+    fail "the INT-ignoring watcher survived the Perl bound escalation"
   fi
-  pass "Perl fallback honors the cleanup bound before escalating an INT-ignoring direct watcher"
+  pass "Perl bound honors the cleanup bound before escalating an INT-ignoring direct watcher"
+}
+
+# uutils coreutils timeout, the default timeout on Ubuntu 26.04, receives its
+# own non-TERM bound signal on Linux and KILLs the command at once with 137.
+# While perl is available, a timeout on PATH that behaves that way must not
+# be what bounds the checkpoint, so a quiet checkpoint stays 124 with its
+# watcher's lock released.
+test_quiet_checkpoint_survives_a_timeout_that_kills_at_the_bound() {
+  local home fakebin status
+  home=$(make_home kill-at-bound)
+  fakebin="$home/fakebin"
+  mkdir -p "$fakebin"
+  cat > "$fakebin/timeout" <<'SH'
+#!/usr/bin/env bash
+while [ "$#" -gt 0 ]; do
+  case "$1" in --*) shift ;; *) break ;; esac
+done
+seconds=$1
+shift
+"$@" &
+child=$!
+sleep "$seconds"
+kill -KILL "$child" 2>/dev/null
+wait "$child" 2>/dev/null
+exit 137
+SH
+  chmod +x "$fakebin/timeout"
+  status=0
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
+    "$CHECKPOINT" --seconds 1 >"$home/out.txt" 2>"$home/err.txt" || status=$?
+  expect_code 124 "$status" "checkpoint beside a kill-at-bound timeout"
+  assert_contains "$(cat "$home/out.txt")" "checkpoint: no actionable wake within 1s" \
+    "checkpoint beside a kill-at-bound timeout was not quiet"
+  assert_absent "$home/state/.watch.lock/pid" "watch lock pid survived beside a kill-at-bound timeout"
+  pass "a quiet checkpoint stays quiet and clean beside a timeout that kills at the bound"
+}
+
+# An outer group kill of the checkpoint reaches the bounding process, not the
+# watcher's own group, so the bound must forward it for the watcher to clean up.
+test_group_term_of_the_checkpoint_reaches_the_watcher() {
+  local home status checkpoint_pid watcher_pid i
+  home=$(make_home group-term)
+  set -m
+  FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
+    "$CHECKPOINT" --seconds 60 >"$home/out.txt" 2>"$home/err.txt" &
+  checkpoint_pid=$!
+  set +m
+  wait_for_checkpoint_lock "$home" || {
+    kill -KILL -- "-$checkpoint_pid" 2>/dev/null || true
+    fail "the checkpoint watcher never took its lock"
+  }
+  watcher_pid=$(cat "$home/state/.watch.lock/pid")
+  kill -TERM -- "-$checkpoint_pid" 2>/dev/null || fail "could not signal the checkpoint's process group"
+  status=0
+  wait "$checkpoint_pid" 2>/dev/null || status=$?
+  i=0
+  while [ "$i" -lt 100 ] && kill -0 "$watcher_pid" 2>/dev/null; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  if kill -0 "$watcher_pid" 2>/dev/null; then
+    kill -KILL "$watcher_pid" 2>/dev/null || true
+    fail "the watcher outlived a TERM of its checkpoint's process group"
+  fi
+  assert_absent "$home/state/.watch.lock/pid" "the watcher did not release its lock after its checkpoint was stopped"
+  [ "$status" -ne 0 ] || fail "a stopped checkpoint reported success"
+  pass "a TERM of the checkpoint's process group stops the watcher through its cleanup"
 }
 
 test_announced_recovery_is_not_reannounced_by_next_checkpoint() {
@@ -240,6 +308,7 @@ make_host_home() {  # <name>
   mkdir -p "$home/root/bin"
   cp "$CHECKPOINT" "$home/root/bin/fm-watch-checkpoint.sh"
   cp "$ROOT/bin/fm-supervision-engine-lib.sh" "$home/root/bin/fm-supervision-engine-lib.sh"
+  cp "$ROOT/bin/fm-timeout-lib.sh" "$home/root/bin/fm-timeout-lib.sh"
   cat > "$home/root/bin/fm-supervision-host.sh" <<'SH'
 #!/usr/bin/env bash
 printf 'args=%s\nprimary=%s\npark=%s\nlimit=%s\n' "$*" "${FM_SUPERVISION_HOST_PRIMARY:-}" \
@@ -347,7 +416,9 @@ test_real_host_checkpoint_ends_quietly_at_its_bound() {
 }
 
 test_quiet_checkpoint_exits_124_cleanly
-test_perl_timeout_fallback_honors_cleanup_bound_before_escalating
+test_perl_bound_honors_cleanup_bound_before_escalating
+test_quiet_checkpoint_survives_a_timeout_that_kills_at_the_bound
+test_group_term_of_the_checkpoint_reaches_the_watcher
 test_announced_recovery_is_not_reannounced_by_next_checkpoint
 test_never_announced_recovery_is_announced_once
 test_queue_append_during_checkpoint_still_resurfaces

@@ -27,7 +27,8 @@
 #       Replaces the calling shell with the bounded command, so it must be the
 #       last command of a subshell: the bound kills the command, not the
 #       caller. The command runs in its own process group; TERM goes to that
-#       group at the bound, and KILL once <grace-seconds> more have passed,
+#       group at the bound (FM_EXEC_TIMED_SIGNAL names another signal, such as
+#       INT), and KILL once <grace-seconds> more have passed,
 #       for a command that ignores TERM or is mid-way through work it will not
 #       abandon. A TERM, INT, or HUP delivered to the bounding process is
 #       forwarded to the group and starts the same grace. The perl watchdog
@@ -206,7 +207,7 @@ fm_timed_out() {  # <status>
 # which keeps the bound off perl's platform-dependent syscall-restart signal
 # semantics and off the drift of counting sleep intervals.
 fm_exec_timed() {  # <seconds> <grace-seconds> <command...>
-  local seconds=${1:-} grace=${2:-} value owner
+  local seconds=${1:-} grace=${2:-} value owner signal
   for value in "$seconds" "$grace"; do
     case "$value" in
       '' | 0* | *[!0-9]*)
@@ -221,10 +222,17 @@ fm_exec_timed() {  # <seconds> <grace-seconds> <command...>
     exit 125
   fi
   owner=${FM_EXEC_TIMED_OWNER_PID:-$$}
-  unset FM_EXEC_TIMED_OWNER_PID
+  signal=${FM_EXEC_TIMED_SIGNAL:-TERM}
+  unset FM_EXEC_TIMED_OWNER_PID FM_EXEC_TIMED_SIGNAL
+  case "$signal" in
+    '' | *[!A-Z0-9]*)
+      echo "fm_exec_timed: FM_EXEC_TIMED_SIGNAL must be a signal name such as TERM or INT" >&2
+      exit 125
+      ;;
+  esac
   if command -v perl >/dev/null 2>&1; then
     exec perl -MPOSIX=WNOHANG,setpgid -MTime::HiRes=time -e '
-      my ($bound, $grace, $owner, $shell_parent) = (shift, shift, shift, shift);
+      my ($bound, $grace, $signal, $owner, $shell_parent) = (shift, shift, shift, shift, shift);
       # exec preserves the shell PID, including in Bash 3.2 subshells where
       # BASHPID is unavailable. Keep the pre-exec parent for startup races.
       $owner = $shell_parent if $owner == $$;
@@ -267,18 +275,18 @@ fm_exec_timed() {  # <seconds> <grace-seconds> <command...>
         } elsif (time >= $deadline) {
           $timed_out = 1;
           $kill_at = time + $grace;
-          kill "TERM", -$pid;
+          kill $signal, -$pid;
         } elsif (getppid() != $parent || !kill(0, $owner)) {
           $kill_at = time + $grace;
           kill "TERM", -$pid;
         }
         select undef, undef, undef, 0.05;
       }
-    ' -- "$seconds" "$grace" "$owner" "$PPID" "$@"
+    ' -- "$seconds" "$grace" "$signal" "$owner" "$PPID" "$@"
   elif command -v timeout >/dev/null 2>&1; then
-    exec timeout -k "$grace" "$seconds" "$@"
+    exec timeout -s "$signal" -k "$grace" "$seconds" "$@"
   elif command -v gtimeout >/dev/null 2>&1; then
-    exec gtimeout -k "$grace" "$seconds" "$@"
+    exec gtimeout -s "$signal" -k "$grace" "$seconds" "$@"
   fi
   printf 'fm_exec_timed: cannot bound %s within %ss: none of perl, timeout, or gtimeout is available\n' "${1##*/}" "$seconds" >&2
   exit 127
