@@ -25,6 +25,7 @@ pass() { printf 'ok - %s\n' "$1"; }
 
 command -v herdr >/dev/null 2>&1 || { echo "skip: herdr not found"; exit 0; }
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the herdr adapter)"; exit 0; }
+unset FM_HERDR_SETSID_BIN
 [ "$(uname -s)" = Linux ] || { echo "skip: the setsid server start is Linux-only"; exit 0; }
 command -v setsid >/dev/null 2>&1 || { echo "skip: setsid not found, so the server keeps the plain start"; exit 0; }
 
