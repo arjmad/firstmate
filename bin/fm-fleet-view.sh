@@ -43,6 +43,7 @@ printf '%s\n' "$SNAPSHOT" | jq -r '
     else "-" end;
   def path_of($t):
     if $t.paths.home.present then $t.paths.home.path
+    elif $t.paths.home.present == null and $t.paths.home.path != null then $t.paths.home.path + " (remote, not checked)"
     elif $t.paths.home.path != null then $t.paths.home.path + " (absent)"
     elif $t.paths.worktree.present then $t.paths.worktree.path
     elif $t.paths.worktree.path != null then $t.paths.worktree.path + " (absent)"

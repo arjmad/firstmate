@@ -831,6 +831,39 @@ test_view_renders_dead_secondmate_agent_status() {
   pass "fleet view renders secondmate agent liveness"
 }
 
+test_view_renders_remote_secondmate_home_and_newest_pr() {
+  local home fakebin view out
+  home=$(make_home remote-secondmate)
+  fm_write_meta "$home/state/remote-mate.meta" \
+    "window=fm-remote:secondmate" \
+    "harness=claude" \
+    "kind=secondmate" \
+    "mode=secondmate" \
+    "home=/home/remote/secondmate" \
+    "remote_host=fafnir" \
+    "remote_root=/home/remote/firstmate" \
+    "remote_backend=herdr" \
+    "projects=alpha"
+  {
+    printf 'done: first PR https://github.com/example/firstmate/pull/150\n'
+    printf 'done: newer PR https://github.com/example/business/pull/648\n'
+  } > "$home/state/remote-mate.status"
+  fakebin=$(make_fakebin "$home")
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e '
+    .tasks[] | select(.id == "remote-mate")
+    | .paths.home.present == null
+  ' >/dev/null || fail "remote secondmate home presence should stay unchecked (null)"
+  view=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$VIEW")
+  assert_contains "$view" "| https://github.com/example/business/pull/648 | /home/remote/secondmate (remote, not checked) |" \
+    "view should show a remote secondmate's newest PR and unchecked home"
+  assert_not_contains "$view" "/home/remote/secondmate (absent)" \
+    "view must not call an unchecked remote home absent"
+  assert_not_contains "$view" "pull/150" \
+    "view must not show a secondmate's first-ever PR over its newest"
+  pass "fleet view renders a remote secondmate's unchecked home and newest PR"
+}
+
 # A still-open decision must survive a LATER, UNRELATED terminal event on the same
 # append-only stream. This is the fmdev masking bug: last-event-wins read the trailing
 # `done` and reported pending_decision=false while a needs-decision was still open. The
@@ -1170,3 +1203,4 @@ test_scout_reports_include_teardown_reports
 test_backlog_tasks_axi_forms_and_overrides
 test_view_renders_snapshot
 test_view_renders_dead_secondmate_agent_status
+test_view_renders_remote_secondmate_home_and_newest_pr
