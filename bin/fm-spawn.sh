@@ -5717,6 +5717,14 @@ fi
 # wiring only through a launch-template flag (--settings, -e) that a raw
 # command does not carry, so the record would never be updated.
 busy_notify_turnend=true
+# A templated Claude launch on Herdr also gets a resume file, written beside
+# the launch file below; any other launch of this id must not leave an earlier
+# one for a later resume to run.
+CLAUDE_RESUME_FILE=
+if [ "$HARNESS" = claude ] && [ "$BACKEND" = herdr ] && [ "$RAW_LAUNCH" -eq 0 ]; then
+  CLAUDE_RESUME_FILE="$STATE_REAL/$ID.claude-resume.sh"
+fi
+rm -f "$STATE_REAL/$ID.claude-resume.sh" "$STATE_REAL/$ID.claude-resume.sh.session" "$STATE_REAL/$ID.claude-resume.git-config.sh"
 WIRING_HARNESS=$HARNESS
 if [ "$KIND" = secondmate ]; then
   busy_notify_turnend=false
@@ -5860,7 +5868,16 @@ BUSY_GEN=
       stopfail_extra=",{\"type\":\"command\",\"command\":\"$j_stopfail_status\"}"
       notification_entry=",\"Notification\":[{\"matcher\":\"idle_prompt\",\"hooks\":[{\"type\":\"command\",\"command\":\"$j_idle_status\"}]}]"
     fi
-    hooks_json="\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_submit\"}]}],\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_posttool\"}]}],${stop_entry}\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stopfail\"}${stopfail_extra}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_sessionend\"}]}]${notification_entry}}"
+    # On Herdr, SessionStart reports this launch's resume file
+    # (CLAUDE_RESUME_FILE, written with the launch below) as the pane's resume
+    # command, so a Herdr restore resumes on the same account and contract
+    # (bin/fm-herdr-claude-resume.sh owns why and how).
+    sessionstart_entry=
+    if [ -n "$CLAUDE_RESUME_FILE" ]; then
+      j_sessionstart=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-herdr-claude-resume.sh") hook $(shell_quote "$CLAUDE_RESUME_FILE") $(shell_quote "$(fm_busy_session_path "$STATE_REAL" "$ID")") || true")
+      sessionstart_entry=",\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_sessionstart\"}]}]"
+    fi
+    hooks_json="\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_submit\"}]}],\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_posttool\"}]}],${stop_entry}\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stopfail\"}${stopfail_extra}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_sessionend\"}]}]${notification_entry}${sessionstart_entry}}"
     if [ "$KIND" = secondmate ]; then
       session_keys='"feedbackDrafts":"off",'
       if [ "$KEEP_AI_TRAILERS" != 1 ]; then
@@ -6594,6 +6611,7 @@ polytoken)
   ;;
 esac
 LAUNCH=${LAUNCH//__WORKTREE__/$sq_worktree}
+BRIEF_DOORBELL_ARG=
 # A record-backed launch brief is published into the state dir of the pane
 # receiving it, which for a secondmate is its own home, not this primary's.
 case "$LAUNCH" in
@@ -6606,7 +6624,9 @@ case "$LAUNCH" in
     echo "error: could not publish the launch brief for $ID as an operational-inbox record under $brief_opstate; $HARNESS strips the typed operational marker, so the worker was not launched" >&2
     exit 1
   }
-  LAUNCH=${LAUNCH//__BRIEFDOORBELL__/"$(shell_quote "$brief_doorbell")"}
+  # Substituted once the agent command is complete, below, where the resume
+  # command is cut from the same line.
+  BRIEF_DOORBELL_ARG=$(shell_quote "$brief_doorbell")
   ;;
 esac
 case "$LAUNCH" in
@@ -6680,6 +6700,18 @@ if [ "$KIND" = secondmate ]; then
   # injected carrier and this on/off snapshot are guaranteed to agree.
   LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_PUBLIC_FOLLOWUP_PRIMARY_HOME=$sq_primary_home FM_HOME=$sq_home FM_TRACE_CONTEXT=$SPAWN_TRACE_EFFECTIVE FM_SUPERVISION_MODEL=$supervision_model $LAUNCH"
 fi
+# The agent command is now complete: account pin, environment, and every flag.
+# A Herdr resume runs the same command with the launch brief replaced by
+# `--resume "$1"`, its session id; the shell-level exports the pane gets below
+# are added to it there.
+CLAUDE_RESUME_LAUNCH=
+if [ -n "$CLAUDE_RESUME_FILE" ]; then
+  # shellcheck disable=SC2016 # "$1" expands when the resume file runs.
+  case "$LAUNCH" in
+  *__BRIEFDOORBELL__*) CLAUDE_RESUME_LAUNCH=${LAUNCH//__BRIEFDOORBELL__/'--resume "$1"'} ;;
+  esac
+fi
+LAUNCH=${LAUNCH//__BRIEFDOORBELL__/"$BRIEF_DOORBELL_ARG"}
 # Implement the launch-delivery contract in this script's header. The full
 # home-identity hash isolates equal task ids across homes, and the spawn token in
 # the final filename keeps a buffered source line bound to this incarnation.
@@ -6723,6 +6755,12 @@ LAUNCH_DIR="/tmp/fm-$ID+$LAUNCH_HOME_TOKEN"
 if [ "$GIT_HOOKS_INSTALLED" = 1 ]; then
   GIT_CONFIG_ENV_FILE=$(shell_quote "$LAUNCH_DIR/git-config.$SPAWN_GEN.sh")
   LAUNCH="$(shell_quote "$FM_ROOT/bin/fm-git-strip-ai-trailers.sh") env-file $(shell_quote "$GIT_HOOKS_DIR") $GIT_CONFIG_ENV_FILE && . $GIT_CONFIG_ENV_FILE || return 1 2>/dev/null || exit 1; $LAUNCH"
+  # A Herdr resume keeps these hooks, the push guard among them; its env file
+  # sits beside the resume file, since the launch directory may not survive.
+  if [ -n "$CLAUDE_RESUME_LAUNCH" ]; then
+    resume_git_env=$(shell_quote "$STATE_REAL/$ID.claude-resume.git-config.sh")
+    CLAUDE_RESUME_LAUNCH="$(shell_quote "$FM_ROOT/bin/fm-git-strip-ai-trailers.sh") env-file $(shell_quote "$GIT_HOOKS_DIR") $resume_git_env && . $resume_git_env || exit 1; $CLAUDE_RESUME_LAUNCH"
+  fi
 fi
 # Every agent this fleet launches - crewmate, scout, and secondmate, on a fresh
 # spawn and on a relaunch alike - runs with the compact-adviser kill switch on.
@@ -6736,16 +6774,22 @@ fi
 # LAUNCH_ENV_PREFIX construction below sets it again at the `env -i` boundary,
 # so under an enabled allowlist the switch is established before the wrapping
 # `/bin/sh` starts rather than only inside the command that shell runs.
+# Each of these exports reaches a Herdr resume as well (CLAUDE_RESUME_LAUNCH
+# above), so a resumed agent keeps the same environment contract.
+launch_prepend_export() {  # <statement>
+  LAUNCH="$1; $LAUNCH"
+  [ -z "$CLAUDE_RESUME_LAUNCH" ] || CLAUDE_RESUME_LAUNCH="$1; $CLAUDE_RESUME_LAUNCH"
+}
 if [ "$LAVISH_AXI_HOST_CONFIG_PRESENT" = 1 ]; then
-  LAUNCH="export LAVISH_AXI_HOST=$(shell_quote "$LAVISH_AXI_HOST"); $LAUNCH"
+  launch_prepend_export "export LAVISH_AXI_HOST=$(shell_quote "$LAVISH_AXI_HOST")"
 fi
 # Every launch also exports the absolute path of this task's steering inbox, so
 # the constant doorbell line (bin/fm-task-inbox-lib.sh) can name
 # "$FM_TASK_INBOX" instead of a path that grows with the home's depth. Like the
 # kill switch below it is an export statement, so it survives a compound raw
 # launch and the launch-env-allowlist `env -i` wrapper.
-LAUNCH="export FM_TASK_INBOX=$(shell_quote "$STATE_REAL/$ID.inbox"); $LAUNCH"
-LAUNCH="export COMPACT_ADVISER_DISABLE=1; $LAUNCH"
+launch_prepend_export "export FM_TASK_INBOX=$(shell_quote "$STATE_REAL/$ID.inbox")"
+launch_prepend_export "export COMPACT_ADVISER_DISABLE=1"
 # When the live-harness gate has exported DISABLE_AUTOUPDATER into this spawn's
 # own environment, carry it into the launch command text so Claude Code's
 # auto-updater cannot rewrite the shared binary during a live run. Embedding the
@@ -6754,7 +6798,7 @@ LAUNCH="export COMPACT_ADVISER_DISABLE=1; $LAUNCH"
 # constructs the pane command without the gate's environment. It is gated on the
 # value being set here so ordinary spawns are unchanged.
 if [ -n "${DISABLE_AUTOUPDATER:-}" ]; then
-  LAUNCH="export DISABLE_AUTOUPDATER=$(shell_quote "$DISABLE_AUTOUPDATER"); $LAUNCH"
+  launch_prepend_export "export DISABLE_AUTOUPDATER=$(shell_quote "$DISABLE_AUTOUPDATER")"
 fi
 if [ -z "$SPAWN_TRACEPARENT" ] && [ "$RELAUNCH" -eq 1 ]; then
   LAUNCH="unset TRACEPARENT; $LAUNCH"
@@ -6807,10 +6851,14 @@ fi
 # Send through the exact channel that already ships GOTMPDIR, so every backend
 # and harness - ship, scout, and secondmate - gets it before launch. Skipped
 # entirely when trace context is off.
+# The trace context a Herdr resume carries: the launch's own, unless the
+# launch drops it below.
+RESUME_TRACEPARENT=$SPAWN_TRACEPARENT
 if [ -n "$SPAWN_TRACEPARENT" ]; then
   if spawn_send_text_line "$T" "export TRACEPARENT=$SPAWN_TRACEPARENT"; then
     if ! spawn_record_traceparent; then
       LAUNCH="unset TRACEPARENT; $LAUNCH"
+      RESUME_TRACEPARENT=
     fi
   else
     TRACE_SEND_STATUS=$?
@@ -6819,6 +6867,7 @@ if [ -n "$SPAWN_TRACEPARENT" ]; then
       exit 1
     fi
     LAUNCH="unset TRACEPARENT; $LAUNCH"
+    RESUME_TRACEPARENT=
   fi
 fi
 if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
@@ -6865,6 +6914,42 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
     LAUNCH_ENV_PREFIX="$LAUNCH_ENV_PREFIX "'${TRACEPARENT+"TRACEPARENT=$TRACEPARENT"}'
   fi
   LAUNCH="$LAUNCH_ENV_PREFIX /bin/sh -c $(shell_quote "$LAUNCH")"
+  [ -z "$CLAUDE_RESUME_LAUNCH" ] \
+    || CLAUDE_RESUME_LAUNCH="$LAUNCH_ENV_PREFIX /bin/sh -c $(shell_quote "$CLAUDE_RESUME_LAUNCH") fm-resume \"\$1\""
+fi
+# The Herdr resume file: `sh <file> <session-id>` resumes that session with
+# this launch's account, environment, and flags. It lives in the state dir
+# rather than the launch directory under /tmp, because a Herdr restore can
+# follow a reboot. Herdr restores a pane in the directory it was created in,
+# not the worktree the launch moved into, so the file returns there first; the
+# exports the pane shell is sent before the launch below are repeated too, the
+# Go temp directory recreated in case a reboot cleared /tmp.
+# A write failure only loses the full resume command: the hook then reports
+# nothing and Herdr keeps its own bare resume, as before this file existed.
+if [ -n "$CLAUDE_RESUME_LAUNCH" ]; then
+  resume_task_export=
+  if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
+    resume_task_export="export FM_TASK_ID=$ID"
+  fi
+  if ! (umask 077 && {
+    printf '# Herdr resume command for Firstmate agent %s, written by bin/fm-spawn.sh.\n' "$ID"
+    printf '# Run as: sh %s <claude-session-id> (bin/fm-herdr-claude-resume.sh reports it).\n' "$CLAUDE_RESUME_FILE"
+    # shellcheck disable=SC2016 # $1 and $0 expand when the resume file runs.
+    printf '%s\n' '[ -n "${1:-}" ] || { echo "usage: sh $0 <claude-session-id>" >&2; exit 2; }'
+    printf 'cd %s || exit 1\n' "$sq_worktree"
+    # shellcheck disable=SC2016 # $GOTMPDIR expands when the resume file runs.
+    printf 'export GOTMPDIR=%s; mkdir -p "$GOTMPDIR"\n' "$(shell_quote "$TASK_TMP/gotmp")"
+    [ -z "$resume_task_export" ] || printf '%s\n' "$resume_task_export"
+    if [ -n "$RESUME_TRACEPARENT" ]; then
+      printf 'export TRACEPARENT=%s\n' "$(shell_quote "$RESUME_TRACEPARENT")"
+    else
+      printf 'unset TRACEPARENT\n'
+    fi
+    printf '%s\n' "$CLAUDE_RESUME_LAUNCH"
+  } >"$CLAUDE_RESUME_FILE.tmp" && mv -f "$CLAUDE_RESUME_FILE.tmp" "$CLAUDE_RESUME_FILE"); then
+    rm -f "$CLAUDE_RESUME_FILE.tmp"
+    echo "warning: could not write the Herdr resume file $CLAUDE_RESUME_FILE; a Herdr restore of $ID will resume without its launch contract" >&2
+  fi
 fi
 if ! (umask 077 && mkdir "$LAUNCH_DIR") 2>/dev/null; then
   if [ -L "$LAUNCH_DIR" ] || [ ! -d "$LAUNCH_DIR" ] || [ ! -O "$LAUNCH_DIR" ] ||

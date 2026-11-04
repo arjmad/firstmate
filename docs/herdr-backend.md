@@ -24,6 +24,7 @@ Herdr provides the terminal session while Treehouse continues to provide task wo
 | What task metadata records for a Herdr endpoint | [Endpoint metadata](#endpoint-metadata) |
 | How text and keys reach a worker and how delivery is confirmed | [Current transport behavior](#current-transport-behavior) and [Composer and injection safety](#composer-and-injection-safety) |
 | What happens after a Herdr server restart and how liveness is judged | [Restart and liveness behavior](#restart-and-liveness-behavior) |
+| What command a restored Claude pane runs to resume | [Native agent resume](#native-agent-resume) |
 | How blocked transitions arrive and what happens without protocol 16 | [Push events and polling fallback](#push-events-and-polling-fallback) |
 | Where the away daemon runs and how it stops | [Away-mode supervisor support](#away-mode-supervisor-support) |
 | Stopping or deleting Herdr sessions during verification | [Destructive lab safety](#destructive-lab-safety) |
@@ -854,6 +855,19 @@ The process-level proof only decides whether that registration is backed by a ru
 The session-start sweep and the watcher's dedicated secondmate liveness tick use this probe.
 Idle secondmates remain exempt from stale-pane escalation.
 [Secondmate endpoint recovery](architecture.md) owns the shared supervision mechanism.
+
+### Native agent resume
+
+With `[session] resume_agents_on_restore` on, Herdr's default, a server restart re-runs each restored agent pane from the resume command reported for it.
+Herdr's own Claude integration reports only the session id, from which Herdr builds a bare `claude --resume <id>` in the pane's login shell: no `CLAUDE_CONFIG_DIR` account pin, no `--settings` hooks, no permission mode, model, effort, `--add-dir` grant, or name.
+A pinned agent then resumes on the ambient store, which may not be signed in or onboarded, and liveness still reads it as alive.
+
+So every templated Claude launch on Herdr leaves `state/<id>.claude-resume.sh`: the agent's own launch, environment and exports included, with the launch brief replaced by `--resume "$1"`.
+Its `SessionStart` hook, `bin/fm-herdr-claude-resume.sh`, reports `sh <that file> <session id>` for the pane under Herdr's own `herdr:claude` source, a little after Herdr's hook for the same event, because Herdr applies only a report newer than its last one.
+Herdr prefers a reported resume command over the bare one it builds, and the hook fires again for the resumed, cleared, or compacted session, so the command follows the current session.
+A nested `claude -p` the worker runs in its worktree loads the same hook, so the hook reports only the session the worker's busy-state binding names, and a delayed report gives way to a later session.
+Outside Herdr, for a raw launch command, or for another harness, nothing is written or reported, and teardown removes the file.
+The portable halves are `tests/fm-herdr-claude-resume.test.sh` and `tests/fm-control-relaunch.test.sh`; the live restore is the last phase of `tests/fm-spawn-steer-herdr-live-e2e.test.sh`.
 
 ## Agent status authority and relaunch
 
