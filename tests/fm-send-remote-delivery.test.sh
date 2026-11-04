@@ -29,6 +29,9 @@
 #      slash) keeps its exit-3 delivered-unconfirmed contract, never closes a
 #      --resolve-key decision unconfirmed, and keeps a marked expectation
 #      armed.
+#   9. A remote --supersedes request records the explicit relation on its own
+#      parent expectation exactly as a local one does, and an unknown id is
+#      refused before anything crosses the transport.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -785,6 +788,37 @@ test_local_pending_does_not_close_resolve_key() {
   pass "fm-send local: an unconfirmed submit still never closes a --resolve-key decision"
 }
 
+test_remote_supersedes_records_relation() {
+  local dir fb ssh_log home rhome rc err old new pend
+  dir="$TMP_ROOT/remote-supersedes"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); ssh_log="$dir/ssh.log"; : > "$ssh_log"
+  rhome=$(setup_remote_secondmate_home remote-supersedes)
+  home=$(setup_remote_parent_home remote-supersedes "$rhome")
+  send_env "$fb" "$home" "$ssh_log" "$SEND" rsm "original ask" >/dev/null 2>&1 \
+    || fail "setup: the first remote send failed"
+  old=$(fm_pending_reply_get "$(pending_record "$home")" corr_id)
+  [ -n "$old" ] || fail "setup: the first remote send must create an expectation"
+
+  : > "$ssh_log"
+  rc=0
+  err=$(send_env "$fb" "$home" "$ssh_log" "$SEND" rsm --supersedes 0123456789abcdef "revised ask" 2>&1 >/dev/null) || rc=$?
+  [ "$rc" -ne 0 ] || fail "an unknown --supersedes id must be refused for a remote mate"
+  assert_contains "$err" "names no pending-reply record" "the remote refusal must name its cause"
+  [ ! -s "$ssh_log" ] || fail "a refused --supersedes must not cross the remote transport"
+
+  rc=0
+  send_env "$fb" "$home" "$ssh_log" "$SEND" rsm --supersedes "$old" "revised ask" >/dev/null 2>"$dir/err" || rc=$?
+  expect_code 0 "$rc" "a valid remote --supersedes send must succeed: $(cat "$dir/err")"
+  new=''
+  for pend in "$home/state/pending-replies"/*; do
+    [ "$(fm_pending_reply_get "$pend" supersedes)" = "$old" ] || continue
+    new=$(fm_pending_reply_get "$pend" corr_id)
+  done
+  [ -n "$new" ] && [ "$new" != "$old" ] \
+    || fail "the remote replacement's own expectation must record the relation"
+  pass "fm-send remote: --supersedes records the relation and refuses an unknown id before the transport"
+}
+
 test_remote_steer_lands_in_remote_inbox
 test_remote_rerun_is_idempotent
 test_remote_retry_failure_preserves_ambiguous_expectation
@@ -801,5 +835,6 @@ test_remote_send_budget_bounds_busy_lane
 test_local_pending_reports_delivered_unconfirmed
 test_local_pending_does_not_close_resolve_key
 test_local_secondmate_pending_keeps_expectation_armed
+test_remote_supersedes_records_relation
 
 echo "all fm-send-remote-delivery tests passed"
