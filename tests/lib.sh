@@ -85,6 +85,20 @@ unset FM_TASK_ID
 # against an ambient override sets TASKS_AXI_FILE itself.
 unset TASKS_AXI_FILE TASKS_AXI_BACKEND
 
+# Put Firstmate's toolchain directory (docs/remote-secondmates.md, "Worker PATH
+# order") ahead on PATH as an absolute path while HOME is still the real one.
+# A host may reach those tools through ~/.local/bin forwarders that exec
+# "$HOME/.local/state/firstmate/toolchain/bin/<tool>", and a suite that swaps
+# HOME for a fixture would otherwise resolve tasks-axi or gh-axi to a path
+# that does not exist. A host without the directory keeps its PATH unchanged.
+if [ -n "${HOME:-}" ] && [ -d "$HOME/.local/state/firstmate/toolchain/bin" ]; then
+  case ":$PATH:" in
+    ":$HOME/.local/state/firstmate/toolchain/bin:"*) ;;
+    *) PATH="$HOME/.local/state/firstmate/toolchain/bin:$PATH" ;;
+  esac
+  export PATH
+fi
+
 # Write the tracked default backlog configuration into a fixture home. Never copy
 # "$ROOT/.tasks.toml": an operator's primary checkout keeps a gitignored override
 # there (for example a beads backend at its live backlog), so a copy points the
