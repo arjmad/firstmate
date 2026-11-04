@@ -1614,9 +1614,9 @@ Before the resume file returned to the worktree, the same restore resumed the co
 Observed 2026-11-03 against Herdr 0.9.5 and Claude Code 2.1.318, run as `FM_SPAWN_STEER_LIVE=1 FM_SPAWN_STEER_LIVE_ACCOUNT=<signed-in store> tests/fm-spawn-steer-herdr-live-e2e.test.sh`:
 
 ```text
-ok - Claude Code (2.1.318 (Claude Code)) on herdr 0.9.5: fm-spawn launched a named Claude worker in isolated session fm-lab-spawn-steer-live-83665-31420 and it went idle
+ok - Claude Code (2.1.318 (Claude Code)) on herdr 0.9.5: fm-spawn launched a named Claude worker in isolated session fm-lab-spawn-steer-live-81128-17818 and it went idle
 ok - Claude Code (2.1.318 (Claude Code)) on herdr 0.9.5: fm-send's doorbell reached the idle named worker, which acted and acknowledged
-ok - Claude Code (2.1.318 (Claude Code)) on herdr 0.9.5: a Herdr restore resumed session b73875d1-b9b8-4970-ab53-e0de7d088656 with its launch flags on CLAUDE_CONFIG_DIR=/Users/arjmad/.claude-ecomills
+ok - Claude Code (2.1.318 (Claude Code)) on herdr 0.9.5: a Herdr restore resumed session 96fd4d46-ed13-4515-aa2a-934e8c515357 with its launch flags on CLAUDE_CONFIG_DIR=/Users/arjmad/.claude-ecomills
 ```
 
 The lab session's saved layout held the reported command for the pane, `"agent_resume":{"source":"herdr:claude","agent":"claude","argv":["sh","<home>/state/<id>.claude-resume.sh","<session-id>"]}`, beside Herdr's own `agent_session` reference.
