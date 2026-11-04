@@ -2563,6 +2563,71 @@ test_herdr_reclaim_adopts_a_pane_that_outlived_its_server() {
   pass "reclaim: a herdr pane that outlived its stopped server is adopted, never orphaned beside a new tab"
 }
 
+# A Herdr restore re-runs whatever resume command the pane reported, so a
+# Claude launch on Herdr leaves one that is its own launch with the brief
+# swapped for the resumed session, and a SessionStart hook that reports it.
+test_herdr_claude_launch_leaves_its_full_resume_command() {
+  local dir out rc=0 id=rl-resume resume settings hook recorded
+  herdr_case_or_skip herdr-resume "$id" || {
+    echo "skip - herdr relaunch needs jq (the herdr adapter parses JSON with it)"
+    return 0
+  }
+  dir=$HERDR_CASE_DIR
+  mkdir -p "$dir/home/config" "$dir/work"
+  : > "$dir/work/.credentials.json"
+  printf '%s\n' "$dir/work" > "$dir/home/config/claude-account"
+  # Signed in only under the pinned root; any other call records how the
+  # resume file started it.
+  cat > "$dir/fakebin/claude" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = auth ] && [ "${2:-}" = status ]; then
+  [ -f "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" ]
+  exit
+fi
+{
+  printf 'CLAUDE_CONFIG_DIR=%s\n' "${CLAUDE_CONFIG_DIR-<unset>}"
+  printf 'FM_TASK_ID=%s\n' "${FM_TASK_ID-<unset>}"
+  printf 'FM_TASK_INBOX=%s\n' "${FM_TASK_INBOX-<unset>}"
+  printf 'COMPACT_ADVISER_DISABLE=%s\n' "${COMPACT_ADVISER_DISABLE-<unset>}"
+  printf 'core.hooksPath=%s\n' "$(git config --get core.hooksPath)"
+  printf 'arg=%s\n' "$@"
+} > "$FM_FAKE_DIR/resumed-claude"
+SH
+  chmod +x "$dir/fakebin/claude"
+
+  out=$(run_spawn "$dir" "$id" --relaunch --harness claude --model opus --effort high) || rc=$?
+  expect_code 0 "$rc" "a Herdr Claude relaunch should complete"$'\n'"$out"
+
+  resume="$dir/home/state/$id.claude-resume.sh"
+  assert_present "$resume" "a Claude launch on Herdr must leave its resume file"
+  settings="$dir/wt/.claude/settings.local.json"
+  hook=$(jq -r '.hooks.SessionStart[0].hooks[0].command // empty' "$settings")
+  assert_contains "$hook" "fm-herdr-claude-resume.sh' hook '$resume'" \
+    "the worker's SessionStart hook must report that resume file"
+
+  env -i PATH="$dir/fakebin:$PATH" HOME="$dir/user-home" FM_FAKE_DIR="$dir/fake" \
+    CLAUDE_CONFIG_DIR=/wrong/store sh "$resume" sess-1234 \
+    || fail "the resume file did not run"
+  recorded=$(cat "$dir/fake/resumed-claude")
+  assert_contains "$recorded" "CLAUDE_CONFIG_DIR=$dir/work" \
+    "a resume must run on the pinned account, not the pane's ambient store"
+  assert_contains "$recorded" "FM_TASK_ID=$id" "a resume must keep the task id export"
+  assert_contains "$recorded" "FM_TASK_INBOX=$dir/home/state/$id.inbox" \
+    "a resume must keep the steering inbox export"
+  assert_contains "$recorded" "COMPACT_ADVISER_DISABLE=1" "a resume must keep the compact-adviser switch"
+  assert_contains "$recorded" "core.hooksPath=$dir/home/state/$id.git-hooks" \
+    "a resume must keep the task's git hooks, the push guard among them"
+  local want
+  for want in $'arg=--resume\narg=sess-1234' arg=--dangerously-skip-permissions arg=--settings \
+    $'arg=--model\narg=opus' $'arg=--effort\narg=high' $'arg=--name\narg='"$id" arg=--add-dir \
+    arg=--append-system-prompt; do
+    assert_contains "$recorded" "$want" "a resume must keep the launch flag: $want"
+  done
+  assert_not_contains "$recorded" "operational input waiting" \
+    "a resume must not replay the launch brief"
+  pass "fm-spawn on Herdr: a Claude launch leaves a resume command with its account, environment, and flags"
+}
+
 test_herdr_exit_reports_already_stopped_when_the_pane_outlived_its_server() {
   local dir out rc=0
   herdr_case_or_skip gone-herdr-exit rl72 || {
@@ -2924,6 +2989,7 @@ test_tmux_refuses_when_the_server_is_gone
 test_reclaim_refuses_an_unreadable_endpoint
 test_herdr_relaunch_resumes_only_the_registered_pi_session
 test_herdr_reclaim_adopts_a_pane_that_outlived_its_server
+test_herdr_claude_launch_leaves_its_full_resume_command
 test_herdr_exit_reports_already_stopped_when_the_pane_outlived_its_server
 test_herdr_rebind_stays_in_the_recorded_session
 test_herdr_reclaim_refuses_an_agent_that_came_back
