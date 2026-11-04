@@ -659,12 +659,8 @@ if [ "$SUPERSEDES_SET" = 1 ]; then
       echo "error: --supersedes cannot accompany --key" >&2
       exit 1
     }
-  # A correlation-reusing resend is checked against its recorded relation below.
-  if [ "${FM_PENDING_REPLY_EXISTING_CORR+x}" != x ] &&
-    ! supersedes_reason=$(fm_pending_reply_supersedable "$STATE" "$SUPERSEDES_CORR" "$TARGET_TASK_ID"); then
-    echo "error: --supersedes '$SUPERSEDES_CORR' $supersedes_reason; nothing was sent" >&2
-    exit 1
-  fi
+  # The id itself is validated where the new expectation is created, and a
+  # correlation-reusing resend against its recorded relation, both before sending.
 fi
 
 if [ -n "$RESOLVE_KEYS" ]; then
@@ -893,6 +889,11 @@ else
       fi
       if [ -z "$TARGET_TASK_ID" ]; then
         echo "error: cannot create pending-reply expectation without a resolvable secondmate task id" >&2
+        exit 1
+      fi
+      if [ "$SUPERSEDES_SET" = 1 ] &&
+        ! supersedes_reason=$(fm_pending_reply_supersedable "$STATE" "$SUPERSEDES_CORR" "$TARGET_TASK_ID"); then
+        echo "error: --supersedes '$SUPERSEDES_CORR' $supersedes_reason; nothing was sent" >&2
         exit 1
       fi
       PENDING_REPLY_CORR=$(fm_pending_reply_create "$FM_HOME" "$STATE" "$TARGET_TASK_ID" "$MESSAGE" "$SUPERSEDES_CORR") ||

@@ -2208,6 +2208,24 @@ test_superseded_escalation_closes_and_chain_settles() {
   pass "a superseded escalated request closes its decision, and a chain settles from its answered tip"
 }
 
+test_own_answer_wins_over_supersession() {
+  local home state status old new rec
+  home=$(setup_parent supersede-own-answer)
+  state="$home/state"
+  status="$state/hibit.status"
+  export FM_PENDING_REPLY_NOW=45000
+  old=$(supersede_due_request "$home" "$state" hibit "first ask")
+  new=$(supersede_due_request "$home" "$state" hibit "second ask" "$old")
+  printf 'done [corr=%s]: second done\n' "$new" >> "$status"
+  printf 'done [corr=%s]: data/hibit/report.md\n' "$old" >> "$status"
+  fm_pending_reply_try_resolve "$state" "$old" || fail "the older request should resolve"
+  rec=$(fm_pending_reply_path "$state" "$old")
+  [ "$(fm_pending_reply_get "$rec" resolved_via)" = document ] \
+    || fail "a request's own answer must win over supersession, got $(fm_pending_reply_get "$rec" resolved_via)"
+  [ -z "$(fm_pending_reply_get "$rec" superseded_by)" ] || fail "an own answer records no superseder"
+  pass "a request that answered itself keeps its own resolution, not superseded"
+}
+
 test_superseded_unanswered_keeps_recovery() {
   local home state hook_log old new lines
   home=$(setup_parent supersede-unanswered)
@@ -2362,6 +2380,16 @@ test_fm_send_supersedes_records_and_validates() {
     "$SEND" hibit --supersedes "$old" "revised ask" >/dev/null 2>&1 || rc=$?
   expect_code 0 "$rc" "a resend repeating its recorded relation must succeed"
   [ "$(fm_pending_reply_get "$rec" supersedes)" = "$old" ] || fail "the resend must keep the relation"
+  # A resend that reuses the correlation embedded in its own text is the same
+  # resend, so the older request resolving meanwhile does not refuse it.
+  printf 'done [corr=%s]: original answered after all\n' "$old" >> "$state/hibit.status"
+  fm_pending_reply_try_resolve "$state" "$old" || fail "setup: the older request should resolve"
+  run_send "$fb" "$home" "$log" hibit --supersedes "$old" "${FM_FROMFIRST_MARK}corr=${new} revised ask" \
+    || fail "an embedded-correlation resend repeating its relation must succeed"
+  [ "$(fm_pending_reply_extract_corr "$(latest_record_body "$home" hibit)")" = "$new" ] \
+    || fail "the embedded-correlation resend must reuse its correlation"
+  refuse_supersedes "a --key send" "cannot accompany --key" \
+    hibit --supersedes "$new" --key Enter
   pass "fm-send --supersedes records the relation and refuses bad ids before sending"
 }
 
@@ -2418,6 +2446,7 @@ test_same_kind_escalation_reopens_after_operator_close
 test_superseded_answered_request_is_never_reposted
 test_superseded_escalation_closes_and_chain_settles
 test_superseded_unanswered_keeps_recovery
+test_own_answer_wins_over_supersession
 test_answered_request_without_relation_is_not_a_replacement
 test_remote_superseded_answered_request_is_never_reposted
 test_fm_send_supersedes_records_and_validates

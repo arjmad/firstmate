@@ -117,9 +117,9 @@
 # relation is recorded only on the newer record's supersedes= field. Once the
 # newer request is answered - its record resolved, its own correlated report in
 # its own task's status log, or it is itself superseded by an answered request
-# - the older record is settled resolved with resolved_via=superseded under its
-# per-correlation lock (_fm_pending_reply_try_resolve_locked), which closes any
-# escalation it opened. Every repost, re-ring, and escalation path takes that
+# - and the older record has no correlated report of its own, it is settled
+# resolved with resolved_via=superseded under its per-correlation lock
+# (_fm_pending_reply_try_resolve_locked), which closes any escalation it opened. Every repost, re-ring, and escalation path takes that
 # locked resolve immediately before firing, and fm_pending_reply_corr_reusable
 # refuses to resend it, so a superseded request whose replacement was answered
 # is never reposted. Supersession is never inferred from other answers on the
@@ -278,20 +278,19 @@ fm_pending_reply_corr_reusable() {  # <state-dir> <corr_id> <task_id>
   rec=$(fm_pending_reply_path "$state" "$corr")
   [ -f "$rec" ] || return 1
   [ "$(fm_pending_reply_get "$rec" task_id)" = "$task_id" ] || return 1
-  # A request whose explicit replacement was answered is never resent.
-  ! _fm_pending_reply_answered_superseder "$state" "$corr" "$task_id" 0 >/dev/null || return 1
   phase=$(fm_pending_reply_get "$rec" phase)
   case "$phase" in
-    awaiting_report|recovery_sending|recovery_sent) return 0 ;;
+    awaiting_report|recovery_sending|recovery_sent) ;;
     delivery_unknown|escalated)
       # Undelivered only: a delivery-unknown escalation stays the owner's to
       # resend, while an escalation after delivery guards a missed report.
       delivered=$(fm_pending_reply_get "$rec" delivered_epoch)
-      [ -z "$delivered" ]
-      return $?
+      [ -z "$delivered" ] || return 1
       ;;
+    *) return 1 ;;
   esac
-  return 1
+  # A request whose explicit replacement was answered is never resent.
+  ! _fm_pending_reply_answered_superseder "$state" "$corr" "$task_id" 0 >/dev/null
 }
 
 # Rewrite one key in a pending-reply record atomically. Other keys preserved.
@@ -344,7 +343,7 @@ fm_pending_reply_create() {  # <parent-home> <state-dir> <task_id> <request-text
   local dir rec corr now summary status_path tmp
   [ -n "$parent_home" ] && [ -n "$state" ] && [ -n "$task_id" ] || return 2
   if [ -n "$supersedes" ]; then
-    fm_pending_reply_supersedable "$state" "$supersedes" "$task_id" || return 2
+    fm_pending_reply_supersedable "$state" "$supersedes" "$task_id" >/dev/null || return 2
   fi
   dir=$(fm_pending_reply_dir "$state")
   mkdir -p "$dir" || return 1
@@ -751,6 +750,25 @@ _fm_pending_reply_answered_superseder() {  # <state-dir> <corr_id> <task_id> <de
   return 1
 }
 
+# Settle <corr_id> as superseded when an explicit replacement was answered.
+# Caller holds the per-correlation lock. 0 settled; 1 no answered replacement or
+# a failed write (a failure after the phase write still leaves it resolved).
+_fm_pending_reply_settle_superseded_locked() {  # <state-dir> <corr_id> <record-path>
+  local state=$1 corr=$2 rec=$3 superseder now
+  superseder=$(_fm_pending_reply_answered_superseder "$state" "$corr" \
+    "$(fm_pending_reply_get "$rec" task_id)" 0) || return 1
+  now=$(fm_pending_reply_now)
+  fm_pending_reply_set "$rec" phase resolved || return 1
+  if [ -z "$(fm_pending_reply_get "$rec" delivered_epoch)" ]; then
+    rm -f "$(fm_pending_reply_delivery_confirmation_path "$state" "$corr")" 2>/dev/null || true
+  fi
+  fm_pending_reply_set "$rec" resolved_epoch "$now" || return 1
+  fm_pending_reply_set "$rec" resolved_via superseded || return 1
+  fm_pending_reply_set "$rec" superseded_by "$superseder" || return 1
+  _fm_pending_reply_close_escalation_locked "$state" "$corr" || true
+  return 0
+}
+
 # Idempotently resolve an expectation from a correlated parent report.
 # Returns 0 when the record is resolved after the call (already or newly).
 fm_pending_reply_try_resolve() {  # <state-dir> <corr_id> [status-file-override]
@@ -775,7 +793,7 @@ fm_pending_reply_try_resolve() {  # <state-dir> <corr_id> [status-file-override]
 
 _fm_pending_reply_try_resolve_locked() {  # <state-dir> <corr_id> [status-file-override]
   local state=$1 corr=$2 status_override=${3-}
-  local rec phase delivered marker status_file signature previous line via now superseder
+  local rec phase delivered marker status_file signature previous line via now
   local unconfirmed=0
   rec=$(fm_pending_reply_path "$state" "$corr")
   [ -f "$rec" ] || return 1
@@ -786,22 +804,13 @@ _fm_pending_reply_try_resolve_locked() {  # <state-dir> <corr_id> [status-file-o
   fi
   delivered=$(fm_pending_reply_get "$rec" delivered_epoch)
   marker=$(fm_pending_reply_delivery_confirmation_path "$state" "$corr")
-  # An answered explicit replacement settles this request whatever its delivery
-  # state, ahead of the scan-signature cache below, which would otherwise hide
-  # an answer that landed in a status write this record already scanned.
-  if superseder=$(_fm_pending_reply_answered_superseder "$state" "$corr" \
-    "$(fm_pending_reply_get "$rec" task_id)" 0); then
-    now=$(fm_pending_reply_now)
-    fm_pending_reply_set "$rec" phase resolved || return 1
-    [ -n "$delivered" ] || rm -f "$marker" 2>/dev/null || true
-    fm_pending_reply_set "$rec" resolved_epoch "$now" || return 1
-    fm_pending_reply_set "$rec" resolved_via superseded || return 1
-    fm_pending_reply_set "$rec" superseded_by "$superseder" || return 1
-    _fm_pending_reply_close_escalation_locked "$state" "$corr" || true
-    return 0
-  fi
   if [ -z "$delivered" ]; then
-    _fm_pending_reply_has_delivery_evidence "$state" "$corr" "$rec" || return 1
+    if ! _fm_pending_reply_has_delivery_evidence "$state" "$corr" "$rec"; then
+      # No correlated line can answer it, but an answered replacement still
+      # settles a request that never provably went out.
+      _fm_pending_reply_settle_superseded_locked "$state" "$corr" "$rec"
+      return $?
+    fi
     unconfirmed=1
   fi
   status_file=$(fm_pending_reply_get "$rec" parent_status)
@@ -818,6 +827,11 @@ _fm_pending_reply_try_resolve_locked() {  # <state-dir> <corr_id> [status-file-o
   fi
   line=$(fm_pending_reply_find_resolve_line "$status_file" "$corr")
   if [ -z "$line" ]; then
+    # Its own answer wins; otherwise an answered explicit replacement settles
+    # it. That answer is a write to this same task's status log, so the scan
+    # signature gate above never hides it.
+    _fm_pending_reply_settle_superseded_locked "$state" "$corr" "$rec" && return 0
+    [ "$(fm_pending_reply_get "$rec" phase)" != resolved ] || return 1
     if [ -z "$status_override" ] && [ "$unconfirmed" = 0 ]; then
       fm_pending_reply_set "$rec" parent_status_scan_signature "$signature" || return 1
     fi
