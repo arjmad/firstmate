@@ -19,8 +19,14 @@
 # idle, checks that its composer carries the session name, and steers it with
 # the real bin/fm-send.sh. The worker must act on the steer (create a named
 # file) and acknowledge it (mv the record into handled/), and fm-send must not
-# report that its doorbell missed. It fails naming the Claude and Herdr
-# versions.
+# report that its doorbell missed. It then stops and restarts the lab session's
+# Herdr server, attaches a viewer so Herdr's native agent resume runs, and
+# checks that the restored pane resumed the same Claude session through the
+# resume command the launch reported (bin/fm-herdr-claude-resume.sh): with its
+# --settings, permission mode, model, effort, --add-dir grant and name, and,
+# when FM_SPAWN_STEER_LIVE_ACCOUNT names a signed-in Claude config directory to
+# pin the worker to, on that CLAUDE_CONFIG_DIR rather than the ambient store.
+# It fails naming the Claude and Herdr versions.
 #
 # Isolation: every Herdr call, including those fm-spawn and fm-send make
 # through bin/backends/herdr.sh, reaches the named lab session through
@@ -34,10 +40,11 @@
 # Run it with FM_SPAWN_STEER_LIVE=1 (or FM_LIVE=1) before merging a change to
 # launch, session naming, or composer code; bin/fm-test-run.sh --changed
 # selects it for those files. It spends one short Claude worker turn plus one
-# steered turn. FM_SPAWN_STEER_LIVE_MODEL (default sonnet) and
-# FM_SPAWN_STEER_LIVE_TIMEOUT (seconds per wait, default 300) tune it. Record
-# the dated result in docs/verification/runtime-backends.md ("Spawn-and-steer
-# smoke").
+# steered turn; the resume sends no prompt. FM_SPAWN_STEER_LIVE_MODEL (default
+# sonnet), FM_SPAWN_STEER_LIVE_TIMEOUT (seconds per wait, default 300), and
+# FM_SPAWN_STEER_LIVE_ACCOUNT (absolute Claude config directory; default none,
+# the ordinary store) tune it. Record the dated result in
+# docs/verification/runtime-backends.md ("Spawn-and-steer smoke").
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -63,6 +70,8 @@ ORIGINAL_PATH=$PATH
 TIMEOUT=${FM_SPAWN_STEER_LIVE_TIMEOUT:-300}
 MODEL=${FM_SPAWN_STEER_LIVE_MODEL:-sonnet}
 case "$TIMEOUT" in ''|*[!0-9]*) fail "FM_SPAWN_STEER_LIVE_TIMEOUT takes seconds" ;; esac
+ACCOUNT=${FM_SPAWN_STEER_LIVE_ACCOUNT:-}
+case "$ACCOUNT" in ''|/*) ;; *) fail "FM_SPAWN_STEER_LIVE_ACCOUNT takes an absolute Claude config directory" ;; esac
 SESSION=$("$LAB_HELPER" name spawn-steer-live) || fail "could not name an isolated Herdr lab session"
 TMP_ROOT=
 LAB_HOME=
@@ -107,6 +116,11 @@ cleanup() {
     [ -n "$dir" ] && [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] || continue
     if ! "$ROOT/bin/fm-live-lab.sh" forget-claude "$dir" >/dev/null; then
       printf 'not ok - could not remove the Claude project entries under %s\n' "$dir" >&2
+      rc=1
+    fi
+    # A pinned spawn registers its trust in the pinned store.
+    if [ -n "$ACCOUNT" ] && ! CLAUDE_CONFIG_DIR="$ACCOUNT" "$ROOT/bin/fm-live-lab.sh" forget-claude "$dir" >/dev/null; then
+      printf 'not ok - could not remove the Claude project entries under %s from %s\n' "$dir" "$ACCOUNT" >&2
       rc=1
     fi
     [ "$dir" = "$TMP_ROOT" ] || rm -rf "$dir"
@@ -188,6 +202,7 @@ WHO="Claude Code (${CLAUDE_VERSION:-version-unknown}) on ${HERDR_VERSION:-herdr-
 mkdir -p "$LAB_HOME/config" "$LAB_HOME/data" "$LAB_HOME/projects" "$TMP_ROOT/origins"
 printf 'herdr\n' > "$LAB_HOME/config/backend"
 printf 'off\n' > "$LAB_HOME/config/herdr-presentation-spaces"
+[ -z "$ACCOUNT" ] || printf '%s\n' "$ACCOUNT" > "$LAB_HOME/config/claude-account"
 SEED="$TMP_ROOT/origins/smoke-seed"
 git init -q -b main "$SEED"
 printf '# smoke\n\nA scratch project for the spawn-and-steer smoke guard.\n' > "$SEED/README.md"
@@ -287,3 +302,62 @@ if [ ! -f "$HANDLED" ] || [ ! -e "$ACTED" ]; then
   fail "$WHO: the idle worker did not honor the steer within ${TIMEOUT}s (acted=$([ -e "$ACTED" ] && echo yes || echo no) acked=$([ -f "$HANDLED" ] && echo yes || echo no))"
 fi
 pass "$WHO: fm-send's doorbell reached the idle named worker, which acted and acknowledged"
+
+# --- restore: a Herdr server restart resumes the worker on its launch contract ---
+
+SID=$(lab agent get "$PANE" 2>/dev/null | jq -r '.result.agent.agent_session.value // empty')
+[ -n "$SID" ] || fail "$WHO: Herdr holds no Claude session for the worker's pane"
+RESUME="$LAB_HOME/state/$ID.claude-resume.sh"
+[ -f "$RESUME" ] || fail "the spawn left no Herdr resume file at $RESUME"
+# The SessionStart hook reports after its last delay (5s); a restart before
+# that would test Herdr's bare resume instead.
+sleep 8
+PATH="$ORIGINAL_PATH" "$LAB_HELPER" stop "$SESSION" >/dev/null || fail "could not stop the lab session"
+i=0
+while [ "$i" -lt 30 ]; do
+  [ "$(lab status --json 2>/dev/null | jq -r '.server.running // empty')" = false ] && break
+  i=$((i + 1))
+  sleep 1
+done
+PATH="$ORIGINAL_PATH" "$LAB_HELPER" provision "$SESSION" >/dev/null || fail "could not restart the lab session"
+# Herdr resumes restored agents only once a client attaches.
+PATH="$ORIGINAL_PATH" "$LAB_HELPER" viewer start "$SESSION" >/dev/null || fail "could not attach a lab viewer"
+RESUMED=
+i=0
+while [ "$i" -lt "$TIMEOUT" ]; do
+  RESUMED=$(lab pane process-info "$PANE" 2>/dev/null \
+    | jq -c '[.result.process_info.foreground_processes[]? | select(.argv | index("--resume"))][0] // empty' 2>/dev/null)
+  [ -n "$RESUMED" ] && break
+  i=$((i + 1))
+  sleep 1
+done
+[ -n "$RESUMED" ] || fail "$WHO: the restored pane never ran a resumed Claude: $(lab pane read "$PANE" --source visible 2>/dev/null | grep '[^[:space:]]' | tail -8)"
+ARGV=$(printf '%s' "$RESUMED" | jq -r '.argv[]')
+for want in $'--resume\n'"$SID" --dangerously-skip-permissions --settings $'--name\n'"$ID" \
+  $'--model\n'"$MODEL" $'--effort\nlow' --add-dir; do
+  case $'\n'"$ARGV"$'\n' in
+    *$'\n'"$want"$'\n'*) ;;
+    *) fail "$WHO: the resumed Claude lost its launch flag '$want'; argv: $(printf '%s' "$ARGV" | tr '\n' ' ')" ;;
+  esac
+done
+RPID=$(printf '%s' "$RESUMED" | jq -r '.pid')
+if [ -r "/proc/$RPID/environ" ]; then
+  RENV=$(tr '\0' '\n' < "/proc/$RPID/environ")
+else
+  RENV=$(ps eww -o command= -p "$RPID" 2>/dev/null | tr ' ' '\n')
+fi
+if [ -n "$ACCOUNT" ]; then
+  printf '%s\n' "$RENV" | grep -qxF "CLAUDE_CONFIG_DIR=$ACCOUNT" \
+    || fail "$WHO: the resumed Claude does not run on the pinned account $ACCOUNT"
+fi
+idle=0
+i=0
+while [ "$i" -lt "$TIMEOUT" ]; do
+  case "$(lab agent get "$PANE" 2>/dev/null | jq -r '.result.agent.agent_status // empty')" in
+    idle|done) idle=1; break ;;
+  esac
+  i=$((i + 1))
+  sleep 1
+done
+[ "$idle" = 1 ] || fail "$WHO: the resumed worker never went idle: $(lab pane read "$PANE" --source visible 2>/dev/null | grep '[^[:space:]]' | tail -8)"
+pass "$WHO: a Herdr restore resumed session $SID with its launch flags${ACCOUNT:+ on CLAUDE_CONFIG_DIR=$ACCOUNT}"
