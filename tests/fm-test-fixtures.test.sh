@@ -323,6 +323,31 @@ SH
   pass "agent stand-in: a multicall sleep is refused, and the compiled stand-in survives a harness name"
 )
 
+# A host may reach tasks-axi through a ~/.local/bin forwarder that execs
+# "$HOME/.local/state/firstmate/toolchain/bin/tasks-axi", so a suite that swaps
+# HOME for a fixture must still resolve the real tool. A host without that
+# toolchain directory keeps the PATH it had.
+test_toolchain_survives_a_fixture_home() (
+  local dir="$TMP_ROOT/toolchain" real_home="$TMP_ROOT/toolchain/real-home" out
+  mkdir -p "$real_home/.local/bin" "$real_home/.local/state/firstmate/toolchain/bin" "$dir/fixture-home" "$dir/bare-home"
+  cat > "$real_home/.local/bin/tasks-axi" <<'SH'
+#!/bin/sh
+exec "$HOME/.local/state/firstmate/toolchain/bin/tasks-axi" "$@"
+SH
+  printf '#!/bin/sh\necho "toolchain tasks-axi $*"\n' > "$real_home/.local/state/firstmate/toolchain/bin/tasks-axi"
+  chmod +x "$real_home/.local/bin/tasks-axi" "$real_home/.local/state/firstmate/toolchain/bin/tasks-axi"
+
+  out=$(HOME="$real_home" PATH="$real_home/.local/bin:/usr/bin:/bin" \
+    bash -c '. "$1/tests/lib.sh"; HOME=$2; tasks-axi --version' _ "$ROOT" "$dir/fixture-home" 2>&1) \
+    || fail "a suite that swaps HOME must still run the toolchain's tasks-axi, got: $out"
+  assert_equals "toolchain tasks-axi --version" "$out" "a swapped HOME resolved tasks-axi to the wrong tool"
+
+  out=$(HOME="$dir/bare-home" PATH="/usr/bin:/bin" bash -c '. "$1/tests/lib.sh"; printf %s "$PATH"' _ "$ROOT") \
+    || fail "sourcing the library without a toolchain directory failed: $out"
+  assert_equals "/usr/bin:/bin" "$out" "a home without the toolchain directory must keep its PATH"
+  pass "toolchain: a fixture HOME still resolves forwarded tools, and a bare home keeps its PATH"
+)
+
 # An inherited absolute GIT_DIR (a linked-worktree hook exports one) overrides
 # `git -C`, so fixture setup would commit, move refs, and register worktrees in
 # the caller's repository; GIT_INDEX_FILE and GIT_COMMON_DIR redirect the index
@@ -393,6 +418,7 @@ SH
 test_git_config_isolation || fail "Git fixture config isolation"
 test_inherited_git_location_isolation || fail "Git fixture location isolation"
 test_agent_standin_survives_a_multicall_sleep || fail "agent stand-in multicall case"
+test_toolchain_survives_a_fixture_home || fail "toolchain fixture-home case"
 test_touch_epoch_preserves_repeated_dst_hour
 test_no_mistakes_version_constant
 test_no_mistakes_init_doctor_markers
