@@ -5724,7 +5724,7 @@ CLAUDE_RESUME_FILE=
 if [ "$HARNESS" = claude ] && [ "$BACKEND" = herdr ] && [ "$RAW_LAUNCH" -eq 0 ]; then
   CLAUDE_RESUME_FILE="$STATE_REAL/$ID.claude-resume.sh"
 fi
-rm -f "$STATE_REAL/$ID.claude-resume.sh" "$STATE_REAL/$ID.claude-resume.git-config.sh"
+rm -f "$STATE_REAL/$ID.claude-resume.sh" "$STATE_REAL/$ID.claude-resume.sh.session" "$STATE_REAL/$ID.claude-resume.git-config.sh"
 WIRING_HARNESS=$HARNESS
 if [ "$KIND" = secondmate ]; then
   busy_notify_turnend=false
@@ -5874,7 +5874,7 @@ BUSY_GEN=
     # (bin/fm-herdr-claude-resume.sh owns why and how).
     sessionstart_entry=
     if [ -n "$CLAUDE_RESUME_FILE" ]; then
-      j_sessionstart=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-herdr-claude-resume.sh") hook $(shell_quote "$CLAUDE_RESUME_FILE") || true")
+      j_sessionstart=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-herdr-claude-resume.sh") hook $(shell_quote "$CLAUDE_RESUME_FILE") $(shell_quote "$(fm_busy_session_path "$STATE_REAL" "$ID")") || true")
       sessionstart_entry=",\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_sessionstart\"}]}]"
     fi
     hooks_json="\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_submit\"}]}],\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_posttool\"}]}],${stop_entry}\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stopfail\"}${stopfail_extra}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_sessionend\"}]}]${notification_entry}${sessionstart_entry}}"
@@ -6851,10 +6851,14 @@ fi
 # Send through the exact channel that already ships GOTMPDIR, so every backend
 # and harness - ship, scout, and secondmate - gets it before launch. Skipped
 # entirely when trace context is off.
+# The trace context a Herdr resume carries: the launch's own, unless the
+# launch drops it below.
+RESUME_TRACEPARENT=$SPAWN_TRACEPARENT
 if [ -n "$SPAWN_TRACEPARENT" ]; then
   if spawn_send_text_line "$T" "export TRACEPARENT=$SPAWN_TRACEPARENT"; then
     if ! spawn_record_traceparent; then
       LAUNCH="unset TRACEPARENT; $LAUNCH"
+      RESUME_TRACEPARENT=
     fi
   else
     TRACE_SEND_STATUS=$?
@@ -6863,6 +6867,7 @@ if [ -n "$SPAWN_TRACEPARENT" ]; then
       exit 1
     fi
     LAUNCH="unset TRACEPARENT; $LAUNCH"
+    RESUME_TRACEPARENT=
   fi
 fi
 if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
@@ -6935,8 +6940,8 @@ if [ -n "$CLAUDE_RESUME_LAUNCH" ]; then
     # shellcheck disable=SC2016 # $GOTMPDIR expands when the resume file runs.
     printf 'export GOTMPDIR=%s; mkdir -p "$GOTMPDIR"\n' "$(shell_quote "$TASK_TMP/gotmp")"
     [ -z "$resume_task_export" ] || printf '%s\n' "$resume_task_export"
-    if [ -n "$SPAWN_TRACEPARENT" ]; then
-      printf 'export TRACEPARENT=%s\n' "$(shell_quote "$SPAWN_TRACEPARENT")"
+    if [ -n "$RESUME_TRACEPARENT" ]; then
+      printf 'export TRACEPARENT=%s\n' "$(shell_quote "$RESUME_TRACEPARENT")"
     else
       printf 'unset TRACEPARENT\n'
     fi

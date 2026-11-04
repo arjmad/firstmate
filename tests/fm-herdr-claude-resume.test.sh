@@ -12,6 +12,7 @@ TMP_ROOT=$(fm_test_tmproot fm-herdr-claude-resume)
 FAKE_HERDR="$TMP_ROOT/herdr"
 LOG="$TMP_ROOT/herdr.log"
 RESUME="$TMP_ROOT/agent.claude-resume.sh"
+BOUND="$TMP_ROOT/agent.busy-session"
 printf 'echo resumed\n' > "$RESUME"
 cat > "$FAKE_HERDR" <<SH
 #!/usr/bin/env bash
@@ -55,7 +56,7 @@ test_report_sends_the_full_resume_command() {
 test_hook_reports_after_returning() {
   local rc=0
   : > "$LOG"
-  payload sess-2 | in_pane "$SCRIPT" hook "$RESUME" || rc=$?
+  payload sess-2 | in_pane "$SCRIPT" hook "$RESUME" "$BOUND" || rc=$?
   expect_code 0 "$rc" "the hook must exit 0"
   wait_for_log || fail "the hook never reported"
   assert_contains "$(cat "$LOG")" "--agent-session-id sess-2 --session-start-source resume -- sh $RESUME sess-2" \
@@ -65,18 +66,21 @@ test_hook_reports_after_returning() {
 
 test_hook_does_nothing_it_should_not() {
   local name rc
-  for name in outside subagent bad-session missing-file relative-file other-event; do
+  for name in outside subagent bad-session missing-file relative-file other-event nested; do
     : > "$LOG"
+    rm -f "$BOUND"
     rc=0
     case "$name" in
+      nested) printf 'sess-worker\n' > "$BOUND"
+        payload sess-3 | in_pane "$SCRIPT" hook "$RESUME" "$BOUND" || rc=$? ;;
       outside) payload sess-3 | env -u HERDR_ENV -u HERDR_PANE_ID HERDR_BIN_PATH="$FAKE_HERDR" \
-        FM_HERDR_RESUME_DELAYS=0 "$SCRIPT" hook "$RESUME" || rc=$? ;;
-      subagent) payload sess-3 ',"agent_id":"sub-1"' | in_pane "$SCRIPT" hook "$RESUME" || rc=$? ;;
-      bad-session) payload "it's" | in_pane "$SCRIPT" hook "$RESUME" || rc=$? ;;
-      missing-file) payload sess-3 | in_pane "$SCRIPT" hook "$TMP_ROOT/absent.sh" || rc=$? ;;
-      relative-file) payload sess-3 | in_pane "$SCRIPT" hook agent.claude-resume.sh || rc=$? ;;
+        FM_HERDR_RESUME_DELAYS=0 "$SCRIPT" hook "$RESUME" "$BOUND" || rc=$? ;;
+      subagent) payload sess-3 ',"agent_id":"sub-1"' | in_pane "$SCRIPT" hook "$RESUME" "$BOUND" || rc=$? ;;
+      bad-session) payload "it's" | in_pane "$SCRIPT" hook "$RESUME" "$BOUND" || rc=$? ;;
+      missing-file) payload sess-3 | in_pane "$SCRIPT" hook "$TMP_ROOT/absent.sh" "$BOUND" || rc=$? ;;
+      relative-file) payload sess-3 | in_pane "$SCRIPT" hook agent.claude-resume.sh "$BOUND" || rc=$? ;;
       other-event) printf '{"hook_event_name":"Stop","session_id":"sess-3"}' \
-        | in_pane "$SCRIPT" hook "$RESUME" || rc=$? ;;
+        | in_pane "$SCRIPT" hook "$RESUME" "$BOUND" || rc=$? ;;
     esac
     expect_code 0 "$rc" "the hook must exit 0 ($name)"
     sleep 0.5
@@ -84,9 +88,35 @@ test_hook_does_nothing_it_should_not() {
   done
   : > "$LOG"
   rc=0
-  printf 'not json' | in_pane "$SCRIPT" hook "$RESUME" || rc=$?
+  printf 'not json' | in_pane "$SCRIPT" hook "$RESUME" "$BOUND" || rc=$?
   expect_code 0 "$rc" "a malformed payload must not fail Claude's startup"
-  pass "hook: stays silent outside Herdr, for a subagent, a bad session or file, or another event"
+  rm -f "$BOUND"
+  pass "hook: stays silent outside Herdr, for a subagent, a nested session, a bad session or file, or another event"
+}
+
+test_hook_reports_the_bound_session() {
+  local rc=0
+  : > "$LOG"
+  printf 'sess-5\n' > "$BOUND"
+  payload sess-5 | in_pane "$SCRIPT" hook "$RESUME" "$BOUND" || rc=$?
+  expect_code 0 "$rc" "the hook must exit 0"
+  wait_for_log || fail "the hook never reported the session the worker is bound to"
+  assert_contains "$(cat "$LOG")" "--agent-session-id sess-5 " "the hook must report the bound session"
+  rm -f "$BOUND"
+  pass "hook: reports the session the worker's busy binding names"
+}
+
+# A /clear starts a new session inside a pending report's delay; the cleared
+# session's delayed report must not land after its successor's.
+test_hook_drops_a_superseded_report() {
+  : > "$LOG"
+  payload sess-old | in_pane env FM_HERDR_RESUME_DELAYS=2 "$SCRIPT" hook "$RESUME" "$BOUND"
+  payload sess-new | in_pane "$SCRIPT" hook "$RESUME" "$BOUND"
+  wait_for_log || fail "the new session was never reported"
+  sleep 3
+  assert_contains "$(cat "$LOG")" "--agent-session-id sess-new " "the new session must be reported"
+  assert_not_contains "$(cat "$LOG")" "sess-old" "a superseded session's delayed report must be dropped"
+  pass "hook: a cleared session's delayed report never overrides its successor"
 }
 
 test_report_refuses_outside_a_pane() {
@@ -101,4 +131,6 @@ test_report_refuses_outside_a_pane() {
 test_report_sends_the_full_resume_command
 test_hook_reports_after_returning
 test_hook_does_nothing_it_should_not
+test_hook_reports_the_bound_session
+test_hook_drops_a_superseded_report
 test_report_refuses_outside_a_pane

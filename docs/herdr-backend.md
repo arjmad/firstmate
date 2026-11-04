@@ -865,6 +865,7 @@ A pinned agent then resumes on the ambient store, which may not be signed in or 
 So every templated Claude launch on Herdr leaves `state/<id>.claude-resume.sh`: the agent's own launch, environment and exports included, with the launch brief replaced by `--resume "$1"`.
 Its `SessionStart` hook, `bin/fm-herdr-claude-resume.sh`, reports `sh <that file> <session id>` for the pane under Herdr's own `herdr:claude` source, a little after Herdr's hook for the same event, because Herdr applies only a report newer than its last one.
 Herdr prefers a reported resume command over the bare one it builds, and the hook fires again for the resumed, cleared, or compacted session, so the command follows the current session.
+A nested `claude -p` the worker runs in its worktree loads the same hook, so the hook reports only the session the worker's busy-state binding names, and a delayed report gives way to a later session.
 Outside Herdr, for a raw launch command, or for another harness, nothing is written or reported, and teardown removes the file.
 The portable halves are `tests/fm-herdr-claude-resume.test.sh` and `tests/fm-control-relaunch.test.sh`; the live restore is the last phase of `tests/fm-spawn-steer-herdr-live-e2e.test.sh`.
 

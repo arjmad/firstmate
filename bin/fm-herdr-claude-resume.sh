@@ -14,15 +14,22 @@
 #
 # Usage:
 #
-#   fm-herdr-claude-resume.sh hook <resume-file>
+#   fm-herdr-claude-resume.sh hook <resume-file> <bound-session-file>
 #       Claude Code SessionStart hook; the hook payload arrives on stdin.
 #       Outside a Herdr pane, for a subagent, for a payload without a usable
-#       session id, or for an unusable resume file it does nothing. Otherwise
-#       it returns at once and, detached, sends `report` after each delay in
+#       session id, or for an unusable resume file it does nothing. It also
+#       does nothing for a session other than the one <bound-session-file>
+#       (the worker's busy-state binding, bin/fm-busy-lib.sh) names, when it
+#       names one: a nested `claude -p` run in the worktree loads the same
+#       hooks and pane environment, and must not become the pane's resume.
+#       Otherwise it records the session in <resume-file>.session, returns at
+#       once and, detached, sends `report` after each delay in
 #       FM_HERDR_RESUME_DELAYS (seconds, space separated, default "1 5"), so
 #       its report follows the one Herdr's own hook sends for the same event:
 #       Herdr applies a report only when its --seq is newer than the last one
-#       from that source, and both hooks run in parallel.
+#       from that source, and both hooks run in parallel. A delayed report is
+#       dropped once a later session has been recorded, so a session the
+#       worker cleared cannot override its successor.
 #       Always exits 0, so it can never block or fail Claude's startup.
 #
 #   fm-herdr-claude-resume.sh report <resume-file> <session-id> [<start-source>]
@@ -61,13 +68,26 @@ fm_herdr_resume_in_pane() {
 }
 
 # Nanoseconds since the epoch, comparable with the time_ns() Herdr's own hook
-# uses as its --seq. EPOCHREALTIME is a bash builtin; its separator follows the
-# locale, so keep only the digits.
+# uses as its --seq. EPOCHREALTIME is a bash 5 builtin; its separator follows
+# the locale, so keep only the digits. Older bash falls back to whole seconds,
+# still newer than Herdr's report because every report waits at least the
+# first delay after it.
 fm_herdr_resume_now_ns() {
   local raw=${EPOCHREALTIME:-}
   raw=${raw//[!0-9]/}
-  [ -n "$raw" ] || return 1
-  printf '%s000' "$raw"
+  if [ -n "$raw" ]; then
+    printf '%s000' "$raw"
+    return 0
+  fi
+  raw=$(date +%s 2>/dev/null) || return 1
+  [[ "$raw" =~ ^[0-9]+$ ]] || return 1
+  printf '%s000000000' "$raw"
+}
+
+fm_herdr_resume_first_line() {  # <file>
+  local line=
+  [ -f "$1" ] && IFS= read -r line < "$1" 2>/dev/null
+  printf '%s' "$line"
 }
 
 fm_herdr_resume_report() {  # <resume-file> <session-id> [<start-source>]
@@ -84,8 +104,8 @@ fm_herdr_resume_report() {  # <resume-file> <session-id> [<start-source>]
   "$herdr_bin" "${args[@]}" -- sh "$file" "$sid" >/dev/null
 }
 
-fm_herdr_resume_hook() {  # <resume-file>
-  local file=${1-} payload event agent_id sid start_source delays delay
+fm_herdr_resume_hook() {  # <resume-file> <bound-session-file>
+  local file=${1-} bound_file=${2-} payload event agent_id sid start_source delays delay bound
   payload=$(cat 2>/dev/null) || payload=
   fm_herdr_resume_in_pane || return 0
   fm_herdr_resume_usable_file "$file" || return 0
@@ -96,12 +116,16 @@ fm_herdr_resume_hook() {  # <resume-file>
   [ -z "$agent_id" ] || return 0
   sid=$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null) || return 0
   fm_herdr_resume_usable_session "$sid" || return 0
+  bound=$(fm_herdr_resume_first_line "$bound_file")
+  [ -z "$bound" ] || [ "$bound" = "$sid" ] || return 0
+  { printf '%s\n' "$sid" > "$file.session.tmp.$$" && mv -f "$file.session.tmp.$$" "$file.session"; } 2>/dev/null || return 0
   start_source=$(printf '%s' "$payload" | jq -r '.source // empty' 2>/dev/null) || start_source=
   delays=${FM_HERDR_RESUME_DELAYS:-1 5}
   (
     for delay in $delays; do
       [[ "$delay" =~ ^[0-9]+$ ]] || continue
       sleep "$delay"
+      [ "$(fm_herdr_resume_first_line "$file.session")" = "$sid" ] || break
       fm_herdr_resume_report "$file" "$sid" "$start_source" || true
     done
   ) </dev/null >/dev/null 2>&1 &
@@ -112,16 +136,16 @@ main() {
   local cmd=${1-}
   case "$cmd" in
     hook)
-      [ "$#" -eq 2 ] || exit 0
-      fm_herdr_resume_hook "$2"
+      [ "$#" -eq 3 ] || exit 0
+      fm_herdr_resume_hook "$2" "$3"
       exit 0
       ;;
     report)
-      [ "$#" -ge 3 ] && [ "$#" -le 4 ] || { sed -n '2,40p' "$0" >&2; exit 2; }
+      [ "$#" -ge 3 ] && [ "$#" -le 4 ] || { sed -n '/^set -u$/q;2,$p' "$0" >&2; exit 2; }
       fm_herdr_resume_report "$2" "$3" "${4-}"
       ;;
-    -h | --help | help) sed -n '2,40p' "$0" ;;
-    *) sed -n '2,40p' "$0" >&2; exit 2 ;;
+    -h | --help | help) sed -n '/^set -u$/q;2,$p' "$0" ;;
+    *) sed -n '/^set -u$/q;2,$p' "$0" >&2; exit 2 ;;
   esac
 }
 
