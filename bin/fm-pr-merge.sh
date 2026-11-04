@@ -254,6 +254,25 @@
 # work, waives the pre-merge refusal for one merge; like --allow-red it is
 # refused while the away-posture record exists, and it is refused on GitLab and
 # Forgejo, whose merges this check does not read yet.
+# Behind base (fork patch, docs/fork-decisions.md 2026-11-03): GitHub refuses
+# to merge a pull request whose base branch requires it up to date while
+# mergeStateStatus reads BEHIND. Once every gate above passes at the verified
+# head, such a pull request is updated from its base once through GitHub's
+# update-branch API, a merge commit bound to that head with
+# expected_head_sha, never a rebase or force-push. A refused update, such as a
+# conflict, leaves the pull request as it was and refuses, naming the conflict
+# so the task's worker can resolve it. The run then waits, at most
+# FM_PR_GITHUB_UPDATE_TIMEOUT seconds (default 900) polling every
+# FM_PR_GITHUB_UPDATE_POLL seconds (default 15), with the task's control lock
+# released, until the new head shows every unwaived required check and no
+# check still running; a timeout refuses as not merged, and a run stopped
+# mid-wait leaves an updated pull request that a later run merges once green. Every gate then runs again on the
+# new head: green and required checks, landed work, the code review, whose
+# record carries over only while bin/fm-code-review.sh still reads the diff
+# as reviewed and otherwise refuses for a fresh review, and the door. A head
+# still BEHIND after that one update refuses. A one-way door merging on
+# --one-way-approved and a caller-requested --auto are never updated, because
+# the new head would be a new merge call or the update would outlive this run.
 # Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [--allow-no-pipeline] [--waive-review <reason>] [--one-way-approved] [--allow-revert] [-- <extra forge merge args>]
 #
 # On GitLab, this script confirms the MR is actually merged before reporting it;
@@ -1344,6 +1363,7 @@ EOF
     "$URL" "$live_head" >&2
   FM_PR_MERGE_HEAD=$live_head
   FM_PR_GITHUB_BASE=$base
+  FM_PR_GITHUB_MERGE_STATE=$merge_state
   FM_PR_BODY_READ=false
   FM_PR_BODY=$(printf '%s' "$json" | jq -r '.body // "" | tostring' 2>/dev/null) && FM_PR_BODY_READ=true
 }
@@ -1357,6 +1377,113 @@ github_clean_at_verified_head() {
   json=$(gh pr view "$URL" --json state,mergeStateStatus,headRefOid 2>/dev/null) || return 1
   printf '%s' "$json" | jq -e --arg head "$FM_PR_MERGE_HEAD" \
     '.state == "OPEN" and .mergeStateStatus == "CLEAN" and .headRefOid == $head' >/dev/null 2>&1
+}
+
+# Behind base (see the header). True when the verified pull request is BEHIND
+# its base and this run should update it before merging: a direct merge of a
+# two-way door, never one merging on --one-way-approved, whose new head would
+# be a new merge call, and never a caller-requested --auto. A second BEHIND
+# read after this run already updated once refuses: the base moved again.
+FM_PR_GITHUB_MERGE_STATE=
+FM_PR_GITHUB_BRANCH_UPDATED=false
+github_branch_needs_update() {
+  [ "$FM_PR_GITHUB_MERGE_STATE" = BEHIND ] || return 1
+  [ "$FM_PR_ONE_WAY_MERGE" = false ] || return 1
+  ! caller_requested_auto_merge "$@" || return 1
+  if [ "$FM_PR_GITHUB_BRANCH_UPDATED" = true ]; then
+    printf 'error: refusing to merge %s: its head branch is behind %s again after this run updated it once, so the base moved meanwhile; nothing was merged, re-run to update it again\n' \
+      "$URL" "$FM_PR_GITHUB_BASE" >&2
+    exit 1
+  fi
+}
+
+# Take the task's control lock again after the update wait, with the same
+# incarnation and captain-hold checks the run made when it first took it.
+github_retake_control_lock() {
+  MERGE_CONTROL_LOCK="$STATE/.control-$ID.lock"
+  fm_lock_acquire_wait "$MERGE_CONTROL_LOCK"
+  if ! fm_backlog_meta_spawn_gen_optional "$META" "$STATE" \
+    || [ "$FM_BACKLOG_META_SPAWN_GEN" != "$MERGE_EXPECTED_SPAWN_GEN" ]; then
+    echo "error: task $ID changed while its branch update was checked; refusing" >&2
+    return 1
+  fi
+  require_released_captain_hold
+}
+
+# Update the pull request's branch from its base through GitHub's merge-style
+# update-branch API, bound to the verified head, so a push in between fails the
+# update; it never rebases or force-pushes. Then wait, bounded, until GitHub
+# shows a new head whose check rollup has every unwaived required check and no
+# check still running. The task's control lock is released for the wait, so
+# the watcher and other task controls are not blocked behind it, and taken
+# again after; the caller re-runs every pre-merge gate on that head, which
+# judges the finished checks.
+github_update_branch_from_base() {
+  local old_head=$FM_PR_MERGE_HEAD out rc=0 expected timeout interval start json verdict=''
+  timeout=${FM_PR_GITHUB_UPDATE_TIMEOUT:-900}
+  case "$timeout" in '' | *[!0-9]*) timeout=900 ;; esac
+  interval=${FM_PR_GITHUB_UPDATE_POLL:-15}
+  case "$interval" in '' | *[!0-9]*) interval=15 ;; 0) interval=1 ;; esac
+  expected=$(jq -nc --argjson required "$FM_PR_GITHUB_REQUIRED" \
+    --arg waived "${ALLOW_MISSING[0]:-}" '[$required[].context] - [$waived] | unique') || expected='[]'
+  printf 'note: %s is behind %s with no conflict; updating its branch with a merge commit from %s (never a rebase or force-push), then waiting up to %ss for its checks at the new head; if this run is stopped, re-run once they pass\n' \
+    "$URL" "$FM_PR_GITHUB_BASE" "$FM_PR_GITHUB_BASE" "$timeout" >&2
+  out=$(gh api -X PUT "repos/$PR_OWNER/$PR_REPO/pulls/$PR_NUMBER/update-branch" \
+    -f "expected_head_sha=$old_head" 2>&1) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'error: refusing to merge %s: GitHub could not update its branch from %s, so the pull request was left as it was and nothing was merged; the forge said:\n' \
+      "$URL" "$FM_PR_GITHUB_BASE" >&2
+    printf '%s\n' "$out" | sed 's/^/error: > /' >&2
+    case "$out" in
+      *[Cc]onflict*)
+        printf 'error: its branch conflicts with %s: steer task %s'"'"'s worker to merge %s into its branch, resolve the conflict, and push\n' \
+          "$FM_PR_GITHUB_BASE" "$ID" "$FM_PR_GITHUB_BASE" >&2
+        ;;
+      *)
+        printf 'error: when the branch conflicts with %s, steer task %s'"'"'s worker to merge %s into it, resolve the conflict, and push; when its head moved, re-run\n' \
+          "$FM_PR_GITHUB_BASE" "$ID" "$FM_PR_GITHUB_BASE" >&2
+        ;;
+    esac
+    return 1
+  fi
+  FM_PR_GITHUB_BRANCH_UPDATED=true
+  fm_lock_release "$MERGE_CONTROL_LOCK" || true
+  MERGE_CONTROL_LOCK=
+  start=$(date +%s)
+  while :; do
+    verdict=
+    if json=$(gh pr view "$URL" --json headRefOid,statusCheckRollup 2>/dev/null) && [ -n "$json" ]; then
+      verdict=$(printf '%s' "$json" | jq -r --arg old "$old_head" --argjson expected "$expected" '
+        (.headRefOid // "") as $head
+        | if $head == "" or $head == $old then "head"
+          else
+            [ .statusCheckRollup[]
+              | if .__typename == "CheckRun"
+                then {name: (.name // ""), pending: (.status != "COMPLETED")}
+                else {name: (.context // ""), pending: (.state == "PENDING" or .state == "EXPECTED")} end ] as $runs
+            | ([$runs[] | select(.pending) | .name] + ($expected - [$runs[] | .name]))
+            | map(if . == "" then "(unnamed check)" else . end) | unique
+            | if length == 0 then "settled" else "waiting " + join(", ") end
+          end' 2>/dev/null) || verdict=
+    fi
+    if [ "$verdict" = settled ]; then
+      printf 'note: %s was updated from %s and every check has finished at its new head; re-checking every merge condition there\n' \
+        "$URL" "$FM_PR_GITHUB_BASE" >&2
+      github_retake_control_lock
+      return
+    fi
+    if [ "$(($(date +%s) - start))" -ge "$timeout" ]; then
+      case "$verdict" in
+        head) verdict="GitHub does not show the updated head yet" ;;
+        waiting\ *) verdict="still waiting on: ${verdict#waiting }" ;;
+        *) verdict="its checks could not be read" ;;
+      esac
+      printf 'error: not merged: %s was updated from %s, but its checks at the new head did not finish within %ss (%s); re-run once they finish\n' \
+        "$URL" "$FM_PR_GITHUB_BASE" "$timeout" "$verdict" >&2
+      return 1
+    fi
+    sleep "$interval"
+  done
 }
 
 # Read one live GitHub pull request view after gh returns. The selected
@@ -1858,9 +1985,11 @@ log_one_way_merge() {
 # reads fails the merge itself. Sets CODE_REVIEW_WAIVED when the waiver is the
 # only thing letting the merge proceed, for log_code_review_waiver below.
 CODE_REVIEW_WAIVED=false
+CODE_REVIEW_STATUS=0
 require_code_review() {
   local line status=0
   line=$("$SCRIPT_DIR/fm-code-review.sh" status "$URL") || status=$?
+  CODE_REVIEW_STATUS=$status
   case "$status" in
     0)
       printf 'verified: %s\n' "$line" >&2
@@ -2196,28 +2325,39 @@ case "$PROVIDER" in
       [0-9] | 10) ;;
       *) mergeable_retry_delay=3 ;;
     esac
-    mergeable_attempt=1
+    # A pull request BEHIND its base is updated from it once and every gate
+    # below runs again on the new head (see the header's behind-base paragraph).
     while :; do
-      mergeable_status=0
-      github_verify_mergeable || mergeable_status=$?
-      if [ "$mergeable_status" -eq 0 ]; then
-        break
+      mergeable_attempt=1
+      while :; do
+        mergeable_status=0
+        github_verify_mergeable || mergeable_status=$?
+        if [ "$mergeable_status" -eq 0 ]; then
+          break
+        fi
+        if [ "$mergeable_status" -ne 3 ] || [ "$mergeable_attempt" -ge 5 ]; then
+          break
+        fi
+        sleep "$mergeable_retry_delay"
+        mergeable_attempt=$((mergeable_attempt + 1))
+      done
+      if [ "$mergeable_status" -ne 0 ]; then
+        if [ "$mergeable_status" -eq 3 ]; then
+          printf 'error: mergeability for %s is still being computed by GitHub; retry shortly\n' "$URL" >&2
+        fi
+        exit 1
       fi
-      if [ "$mergeable_status" -ne 3 ] || [ "$mergeable_attempt" -ge 5 ]; then
-        break
+      github_verify_no_revert || exit 1
+      if ! require_code_review; then
+        [ "$FM_PR_GITHUB_BRANCH_UPDATED" = false ] || [ "$CODE_REVIEW_STATUS" -ne 1 ] \
+          || printf 'error: the update from %s changed the pull request'"'"'s diff, so its earlier review record does not cover head %s; it needs a fresh review before it merges\n' \
+            "$FM_PR_GITHUB_BASE" "$FM_PR_MERGE_HEAD" >&2
+        exit 1
       fi
-      sleep "$mergeable_retry_delay"
-      mergeable_attempt=$((mergeable_attempt + 1))
+      require_door_authority || exit 1
+      github_branch_needs_update "$@" || break
+      github_update_branch_from_base || exit 1
     done
-    if [ "$mergeable_status" -ne 0 ]; then
-      if [ "$mergeable_status" -eq 3 ]; then
-        printf 'error: mergeability for %s is still being computed by GitHub; retry shortly\n' "$URL" >&2
-      fi
-      exit 1
-    fi
-    github_verify_no_revert || exit 1
-    require_code_review || exit 1
-    require_door_authority || exit 1
     # The away record is locked first, so this last presence and authority read
     # and the forge command below share one live-owner critical section.
     hold_away_record_for_merge || exit 1
