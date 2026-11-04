@@ -388,6 +388,23 @@ case "${1:-} ${2:-}" in
     # reads: the branch itself, and its rules read without the merge-queue
     # filter the queue reader below applies.
     case " $* " in
+      *" repos/"*"/pulls/"*"/update-branch "*)
+        # GitHub's merge-style branch update: a refusal answers with the
+        # forge's own words; otherwise the pull request moves to the case's
+        # updated head, and its diff to the updated diff when the case has one.
+        if [ -f "$fixtures/github-update-branch-fail" ]; then
+          cat "$fixtures/github-update-branch-fail" >&2
+          exit 1
+        fi
+        if [ -f "$fixtures/github-view-after-update.json" ]; then
+          cp "$fixtures/github-view-after-update.json" "$FM_TEST_GH_VIEW_JSON"
+          jq -r .headRefOid "$FM_TEST_GH_VIEW_JSON" > "$FM_TEST_GH_HEAD"
+        fi
+        [ ! -f "$fixtures/github-pr-diff-after-update" ] \
+          || cp "$fixtures/github-pr-diff-after-update" "$fixtures/github-pr-diff"
+        printf '{"message":"Updating pull request branch."}\n'
+        exit 0
+        ;;
       *" repos/"*"/pulls/"*"/files "*)
         [ ! -f "$fixtures/github-pr-files-fail" ] || exit 1
         gh_jq "$fixtures/github-pr-files.json" "$@"
@@ -3248,7 +3265,155 @@ test_secondmate_without_parent_binding_is_loud() {
   pass "a secondmate home that cannot report upward says so instead of merging in silence"
 }
 
+# A pull request GitHub reads as BEHIND its base, with no conflict and every
+# check green. Its update moves it to updated_head, whose rollup the case
+# writes with the given entries (default: the same green ci check).
+# Args: case_dir head updated_head [<rollup-entry-json>...]
+add_behind_case() {
+  local case_dir=$1 head=$2 updated=$3 rollup='' entry
+  shift 3
+  add_gh_mocks "$case_dir" "$head"
+  sed -i.bak 's/"mergeStateStatus":"CLEAN"/"mergeStateStatus":"BEHIND"/' "$case_dir/github-view.json"
+  [ "$#" -gt 0 ] || set -- "$(check_run ci COMPLETED SUCCESS)"
+  for entry in "$@"; do
+    rollup="${rollup:+$rollup,}$entry"
+  done
+  cat > "$case_dir/github-view-after-update.json" <<JSON
+{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$updated","baseRefName":"main","statusCheckRollup":[$rollup]}
+JSON
+  : > "$case_dir/gh-axi.log"
+  : > "$case_dir/gh.log"
+}
+
+run_behind_case() {
+  local case_dir=$1
+  shift
+  set +e
+  FM_PR_GITHUB_UPDATE_POLL=0 run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 "$@" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  RC=$?
+  set -e
+}
+
+test_behind_pr_is_updated_from_base_then_merged_at_the_new_head() {
+  local case_dir head=be41dbe41dbe41dbe41dbe41dbe41dbe41dbe41d updated=a11a11a11a11a11a11a11a11a11a11a11a11a11a
+  case_dir=$(make_case behind-updated-merges)
+  mkdir -p "$case_dir/wt"
+  add_behind_case "$case_dir" "$head" "$updated"
+  run_behind_case "$case_dir"
+  expect_code 0 "$RC" "behind-updated-merges: a green two-way PR behind its base must update and merge: $(cat "$case_dir/stderr")"
+  assert_grep "api -X PUT repos/example/repo/pulls/95/update-branch -f expected_head_sha=$head" "$case_dir/gh.log" \
+    "behind-updated-merges: the update was not GitHub's merge-style update bound to the verified head"
+  [ "$(grep -c 'update-branch' "$case_dir/gh.log")" -eq 1 ] \
+    || fail "behind-updated-merges: the branch was updated more than once"
+  assert_logged_gh_merge "$case_dir" 95 example/repo --squash
+  assert_no_grep "match-head-commit $head" "$case_dir/gh.log" \
+    "behind-updated-merges: the merge was bound to the head before the update"
+  assert_grep "with every unwaived required check reported and every unwaived check green at head $updated" "$case_dir/stderr" \
+    "behind-updated-merges: the gates did not run again at the updated head"
+  assert_grep "verified: https://github.com/example/repo/pull/95 is merged" "$case_dir/stdout" \
+    "behind-updated-merges: the landed merge was not verified"
+
+  case_dir=$(make_case clean-not-updated)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  : > "$case_dir/gh.log"
+  run_behind_case "$case_dir"
+  expect_code 0 "$RC" "clean-not-updated: a CLEAN PR must merge"
+  assert_no_grep 'update-branch' "$case_dir/gh.log" "clean-not-updated: a PR that is not behind was updated"
+  pass "fm-pr-merge updates a green two-way PR that is only behind its base, re-checks it at the new head, and merges it there"
+}
+
+test_behind_pr_whose_update_fails_is_left_untouched() {
+  local case_dir head=be42dbe42dbe42dbe42dbe42dbe42dbe42dbe42d
+  case_dir=$(make_case behind-conflict)
+  mkdir -p "$case_dir/wt"
+  add_behind_case "$case_dir" "$head" a12a12a12a12a12a12a12a12a12a12a12a12a12a
+  printf '%s\n' 'gh: merge conflict between base and head (HTTP 422)' > "$case_dir/github-update-branch-fail"
+  run_behind_case "$case_dir"
+  expect_code 1 "$RC" "behind-conflict: a failed update must refuse"
+  assert_grep 'error: > gh: merge conflict between base and head' "$case_dir/stderr" \
+    "behind-conflict: the forge's own words were not quoted"
+  assert_grep "conflicts with main: steer task task-x1's worker to merge main into its branch" "$case_dir/stderr" \
+    "behind-conflict: the refusal did not name the conflict and the worker"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "behind-conflict: a merge ran after the update failed"
+  pass "fm-pr-merge refuses, merging nothing, when GitHub cannot update a behind PR from its base"
+}
+
+test_behind_pr_whose_checks_do_not_finish_is_not_merged() {
+  local case_dir head=be43dbe43dbe43dbe43dbe43dbe43dbe43dbe43d updated=a13a13a13a13a13a13a13a13a13a13a13a13a13a
+  case_dir=$(make_case behind-checks-pending)
+  mkdir -p "$case_dir/wt"
+  write_github_required "$case_dir" classic:gate
+  add_behind_case "$case_dir" "$head" "$updated" "$(check_run ci IN_PROGRESS -)"
+  sed -i.bak 's/"statusCheckRollup":\[/"statusCheckRollup":[{"__typename":"StatusContext","context":"gate","state":"SUCCESS"},/' \
+    "$case_dir/github-view.json"
+  FM_PR_GITHUB_UPDATE_TIMEOUT=0 run_behind_case "$case_dir"
+  expect_code 1 "$RC" "behind-checks-pending: checks that never finish at the new head must refuse"
+  assert_grep "did not finish within 0s (still waiting on: ci, gate)" "$case_dir/stderr" \
+    "behind-checks-pending: the timeout did not name the pending and unreported checks"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "behind-checks-pending: a merge ran before the checks finished"
+  pass "fm-pr-merge reports a behind PR as not merged when its checks at the updated head do not finish in time"
+}
+
+test_behind_pr_whose_update_changes_the_reviewed_diff_needs_a_fresh_review() {
+  local case_dir head=be44dbe44dbe44dbe44dbe44dbe44dbe44dbe44d updated=a14a14a14a14a14a14a14a14a14a14a14a14a14a id
+  case_dir=$(make_case behind-review-stale)
+  mkdir -p "$case_dir/wt"
+  add_behind_case "$case_dir" "$head" "$updated"
+  write_github_pr_files "$case_dir" bin/tool.sh
+  id=$(github_pr_diff_id "$case_dir")
+  {
+    printf '['
+    github_pr_comment OWNER "<!-- fm-code-review v1 diff=$id head=$head -->"
+    printf ']\n'
+  } > "$case_dir/github-pr-comments.json"
+  sed 's/^+echo new$/+echo newer/' "$case_dir/github-pr-diff" > "$case_dir/github-pr-diff-after-update"
+  run_behind_case "$case_dir"
+  expect_code 1 "$RC" "behind-review-stale: a diff the update changed must not carry the old review"
+  assert_grep "reviewed: diff $id" "$case_dir/stderr" "behind-review-stale: the review did not pass before the update"
+  assert_grep "earlier review record does not cover head $updated; it needs a fresh review" "$case_dir/stderr" \
+    "behind-review-stale: the refusal did not say the update needs a fresh review"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "behind-review-stale: a merge ran without a review of the updated diff"
+
+  case_dir=$(make_case behind-review-carried)
+  mkdir -p "$case_dir/wt"
+  add_behind_case "$case_dir" "$head" "$updated"
+  write_github_pr_files "$case_dir" bin/tool.sh
+  id=$(github_pr_diff_id "$case_dir")
+  {
+    printf '['
+    github_pr_comment OWNER "<!-- fm-code-review v1 diff=$id head=$head -->"
+    printf ']\n'
+  } > "$case_dir/github-pr-comments.json"
+  run_behind_case "$case_dir"
+  expect_code 0 "$RC" "behind-review-carried: an update that leaves the diff alone keeps its review: $(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 95 example/repo --squash
+  pass "fm-pr-merge keeps a behind PR's review only while the update leaves its reviewed diff unchanged"
+}
+
+test_behind_pr_still_behind_after_its_update_is_refused() {
+  local case_dir head=be45dbe45dbe45dbe45dbe45dbe45dbe45dbe45d updated=a15a15a15a15a15a15a15a15a15a15a15a15a15a
+  case_dir=$(make_case behind-again)
+  mkdir -p "$case_dir/wt"
+  add_behind_case "$case_dir" "$head" "$updated"
+  sed -i.bak 's/"mergeStateStatus":"CLEAN"/"mergeStateStatus":"BEHIND"/' "$case_dir/github-view-after-update.json"
+  run_behind_case "$case_dir"
+  expect_code 1 "$RC" "behind-again: a head still behind after one update must refuse"
+  assert_grep 'is behind main again after this run updated it once' "$case_dir/stderr" \
+    "behind-again: the refusal did not say the base moved again"
+  [ "$(grep -c 'update-branch' "$case_dir/gh.log")" -eq 1 ] \
+    || fail "behind-again: the branch was updated more than once"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "behind-again: a merge ran on a head still behind"
+  pass "fm-pr-merge updates a behind PR once per run and refuses when the base moved again"
+}
+
 test_github_zero_exit_queue_required_refuses_with_exact_retry
+test_behind_pr_is_updated_from_base_then_merged_at_the_new_head
+test_behind_pr_whose_update_fails_is_left_untouched
+test_behind_pr_whose_checks_do_not_finish_is_not_merged
+test_behind_pr_whose_update_changes_the_reviewed_diff_needs_a_fresh_review
+test_behind_pr_still_behind_after_its_update_is_refused
 test_github_closed_unqueued_outcome_omits_retry_flags
 test_github_agreeing_queue_rules_keep_retry_guidance
 test_github_conflicting_queue_rules_report_ambiguity
@@ -4114,6 +4279,26 @@ assert_branch_refused() {  # <case_dir> <label> <reason>
   assert_no_grep 'pr merge' "$1/gh.log" "$2: gh pr merge ran for a refused branch merge"
   captain_hold "$1" open task-x1 >/dev/null 2>&1 && fail "$2: a refused branch merge held the task"
   return 0
+}
+
+# The 2026-11-03 fork patch: a ready PR whose task records no pr= yet is not
+# left to main; the branch records it through fm-pr-check.sh, exactly as
+# ship-landing does, and the same standing merge then lands under every gate.
+test_attended_branch_records_a_ready_pr_then_merges_it() {
+  local case_dir url=https://github.com/example/repo/pull/161 rc=0
+  case_dir=$(branch_standing_case branch-records-then-merges 161 "$TWO_WAY_BODY")
+  sed -i.bak '/^pr=/d' "$case_dir/state/task-x1.meta" && rm -f "$case_dir/state/task-x1.meta.bak"
+  FM_SUPERVISION_ACTOR=branch FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$case_dir/home" \
+    FM_STATE_OVERRIDE="$case_dir/state" FM_TEST_GH_LOG="$case_dir/gh.log" \
+    FM_TEST_GH_AXI_LOG="$case_dir/gh-axi.log" FM_TEST_GH_VIEW_JSON="$case_dir/github-view.json" \
+    FM_TEST_GH_HEAD="$case_dir/github-head" HOME="$case_dir/user-home" PATH="$case_dir/fakebin:$PATH" \
+    "$ROOT/bin/fm-pr-check.sh" task-x1 "$url" > "$case_dir/check-stdout" 2> "$case_dir/check-stderr" || rc=$?
+  expect_code 0 "$rc" "branch-records-then-merges: the branch could not record the ready PR: $(cat "$case_dir/check-stderr")"
+  assert_grep "pr=$url" "$case_dir/state/task-x1.meta" "branch-records-then-merges: fm-pr-check.sh did not record pr="
+  run_branch_merge "$case_dir" 161
+  expect_code 0 "$RC" "branch-records-then-merges: the recorded PR must merge for the attended branch"$'\n'"$(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 161 example/repo --squash
+  pass "the attended branch records a ready PR whose task lacks pr= through fm-pr-check.sh, then merges it under its standing class"
 }
 
 test_attended_branch_refuses_outside_its_standing_class() {
@@ -5628,6 +5813,7 @@ test_away_record_permits_any_green_merge_under_away_authority
 test_away_branch_actor_merges_green_under_the_record
 test_attended_branch_merges_its_standing_class
 test_attended_branch_refuses_outside_its_standing_class
+test_attended_branch_records_a_ready_pr_then_merges_it
 test_away_branch_refuses_when_record_archived_during_preflight
 test_away_posture_refuses_asynchronous_merge_paths
 test_away_plan_gated_403_does_not_block_the_merge

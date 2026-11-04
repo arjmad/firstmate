@@ -75,6 +75,12 @@ test_branch_prompt_is_byte_stable_and_above_cache_floor() {
     *"merge a PR outside the standing merge class below"*"# Standing merges"*"green at its live head, its merge-gate code review is recorded, its Merge Danger names a two-way door, and its task records yolo=on"*"anything security-sensitive"*"no \`check: merge landed:\` wake follows it, so close the task in the same turn"*) ;;
     *) fail "branch prompt lost the standing merge class or its same-turn cleanup" ;;
   esac
+  # The 2026-11-03 fork patch: a ready PR whose task records no pr= is
+  # recorded through fm-pr-check.sh and merged, not left to main.
+  case "$out_a" in
+    *"# Standing merges"*"When the task records no \`pr=\` yet"*"first run \`bin/fm-pr-check.sh <task> <url>\` with the URL copied from that \`done:\` or checks-green ready line"*"a missing \`pr=\` alone never leaves the merge to MAIN"*) ;;
+    *) fail "branch prompt lost the rule to record a ready PR with fm-pr-check.sh before merging it" ;;
+  esac
   pass "branch prompt is byte-stable across homes, cwd, timezone, and time, above the cache floor"
 }
 
