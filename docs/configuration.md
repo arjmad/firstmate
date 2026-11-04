@@ -894,7 +894,7 @@ short 15
 ```
 
 `load` spills while the machine's 5-minute load average is above the number, `workers` spills once this home holds that many worker records, and at least one of them is required.
-`short` is optional: work expected to take fewer minutes stays in the main home even when a scope fits, because a handoff costs more than it saves.
+`short` is optional: work expected to take fewer minutes stays in the main home even when a scope fits, because a handoff costs more than it saves, but it still spills while the home is past a threshold.
 Without the file, placement follows secondmate scope alone.
 `bin/fm-intake-spill.sh` measures the home against the file and prints the verdict that [the intake rule](task-lifecycle.md#intake-and-authority) applies; its header owns the format, the counting, and why a malformed file exits 2 instead of reading as absent.
 
