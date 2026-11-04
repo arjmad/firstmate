@@ -85,6 +85,12 @@ unset FM_TASK_ID
 # against an ambient override sets TASKS_AXI_FILE itself.
 unset TASKS_AXI_FILE TASKS_AXI_BACKEND
 
+# Clear an inherited DISABLE_AUTOUPDATER. bin/fm-spawn.sh deliberately passes an
+# ambient value through as a launch-line export, so a host whose agent
+# environment exports it would break every exact-launch assertion; fm_live_gate
+# and the cases that verify the pass-through set it themselves.
+unset DISABLE_AUTOUPDATER
+
 # Write the tracked default backlog configuration into a fixture home. Never copy
 # "$ROOT/.tasks.toml": an operator's primary checkout keeps a gitignored override
 # there (for example a beads backend at its live backlog), so a copy points the
