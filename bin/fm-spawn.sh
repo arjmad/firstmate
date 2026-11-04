@@ -6917,7 +6917,8 @@ fi
 # rather than the launch directory under /tmp, because a Herdr restore can
 # follow a reboot. Herdr restores a pane in the directory it was created in,
 # not the worktree the launch moved into, so the file returns there first; the
-# task id the pane shell is sent before the launch below is repeated too.
+# exports the pane shell is sent before the launch below are repeated too, the
+# Go temp directory recreated in case a reboot cleared /tmp.
 # A write failure only loses the full resume command: the hook then reports
 # nothing and Herdr keeps its own bare resume, as before this file existed.
 if [ -n "$CLAUDE_RESUME_LAUNCH" ]; then
@@ -6931,7 +6932,14 @@ if [ -n "$CLAUDE_RESUME_LAUNCH" ]; then
     # shellcheck disable=SC2016 # $1 and $0 expand when the resume file runs.
     printf '%s\n' '[ -n "${1:-}" ] || { echo "usage: sh $0 <claude-session-id>" >&2; exit 2; }'
     printf 'cd %s || exit 1\n' "$sq_worktree"
+    # shellcheck disable=SC2016 # $GOTMPDIR expands when the resume file runs.
+    printf 'export GOTMPDIR=%s; mkdir -p "$GOTMPDIR"\n' "$(shell_quote "$TASK_TMP/gotmp")"
     [ -z "$resume_task_export" ] || printf '%s\n' "$resume_task_export"
+    if [ -n "$SPAWN_TRACEPARENT" ]; then
+      printf 'export TRACEPARENT=%s\n' "$(shell_quote "$SPAWN_TRACEPARENT")"
+    else
+      printf 'unset TRACEPARENT\n'
+    fi
     printf '%s\n' "$CLAUDE_RESUME_LAUNCH"
   } >"$CLAUDE_RESUME_FILE.tmp" && mv -f "$CLAUDE_RESUME_FILE.tmp" "$CLAUDE_RESUME_FILE"); then
     rm -f "$CLAUDE_RESUME_FILE.tmp"

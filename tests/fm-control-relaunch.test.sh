@@ -2587,6 +2587,8 @@ fi
 {
   printf 'CLAUDE_CONFIG_DIR=%s\n' "${CLAUDE_CONFIG_DIR-<unset>}"
   printf 'FM_TASK_ID=%s\n' "${FM_TASK_ID-<unset>}"
+  printf 'GOTMPDIR=%s\n' "${GOTMPDIR-<unset>}"
+  printf 'TRACEPARENT=%s\n' "${TRACEPARENT-<unset>}"
   printf 'FM_TASK_INBOX=%s\n' "${FM_TASK_INBOX-<unset>}"
   printf 'COMPACT_ADVISER_DISABLE=%s\n' "${COMPACT_ADVISER_DISABLE-<unset>}"
   printf 'core.hooksPath=%s\n' "$(git config --get core.hooksPath)"
@@ -2606,7 +2608,8 @@ SH
   assert_contains "$hook" "fm-herdr-claude-resume.sh' hook '$resume'" \
     "the worker's SessionStart hook must report that resume file"
 
-  (cd "$dir" && env -i PATH="$dir/fakebin:$PATH" HOME="$dir/user-home" FM_FAKE_DIR="$dir/fake" \
+  rm -rf "/tmp/fm-$id/gotmp"
+  (cd "$dir" && env -i PATH="$dir/fakebin:$PATH" HOME="$dir/user-home" FM_FAKE_DIR="$dir/fake" TRACEPARENT=stale \
     CLAUDE_CONFIG_DIR=/wrong/store sh "$resume" sess-1234) \
     || fail "the resume file did not run"
   recorded=$(cat "$dir/fake/resumed-claude")
@@ -2615,6 +2618,9 @@ SH
   assert_contains "$recorded" "cwd=$(cd "$dir/wt" && pwd -P)" \
     "a resume must return to the worktree, not the pane's restored directory"
   assert_contains "$recorded" "FM_TASK_ID=$id" "a resume must keep the task id export"
+  assert_contains "$recorded" "GOTMPDIR=/tmp/fm-$id/gotmp" "a resume must keep the task's Go temp directory"
+  assert_present "/tmp/fm-$id/gotmp" "a resume must recreate the Go temp directory a reboot cleared"
+  assert_contains "$recorded" "TRACEPARENT=<unset>" "a resume must not carry a stale pane trace context"
   assert_contains "$recorded" "FM_TASK_INBOX=$dir/home/state/$id.inbox" \
     "a resume must keep the steering inbox export"
   assert_contains "$recorded" "COMPACT_ADVISER_DISABLE=1" "a resume must keep the compact-adviser switch"
