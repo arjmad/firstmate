@@ -325,13 +325,15 @@ PATH="$ORIGINAL_PATH" "$LAB_HELPER" viewer start "$SESSION" >/dev/null || fail "
 RESUMED=
 i=0
 while [ "$i" -lt "$TIMEOUT" ]; do
-  RESUMED=$(lab pane process-info "$PANE" 2>/dev/null \
+  RESUMED=$(lab pane process-info --pane "$PANE" 2>/dev/null \
     | jq -c '[.result.process_info.foreground_processes[]? | select(.argv | index("--resume"))][0] // empty' 2>/dev/null)
   [ -n "$RESUMED" ] && break
   i=$((i + 1))
   sleep 1
 done
 [ -n "$RESUMED" ] || fail "$WHO: the restored pane never ran a resumed Claude: $(lab pane read "$PANE" --source visible 2>/dev/null | grep '[^[:space:]]' | tail -8)"
+RCWD=$(lab agent get "$PANE" 2>/dev/null | jq -r '.result.agent.foreground_cwd // empty')
+[ "$RCWD" = "$WORKTREE" ] || fail "$WHO: the resumed Claude runs in '$RCWD', not its worktree $WORKTREE"
 ARGV=$(printf '%s' "$RESUMED" | jq -r '.argv[]')
 for want in $'--resume\n'"$SID" --dangerously-skip-permissions --settings $'--name\n'"$ID" \
   $'--model\n'"$MODEL" $'--effort\nlow' --add-dir; do
