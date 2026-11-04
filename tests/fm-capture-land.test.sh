@@ -52,6 +52,14 @@ case "\$1 \$2" in
 esac
 STUB
   chmod +x "$c/fakebin/gh"
+  # The record's tmux-shaped endpoint is one no server holds, so teardown's
+  # close must read exactly that, even on a host with no tmux installed.
+  cat > "$c/fakebin/tmux" <<'STUB'
+#!/usr/bin/env bash
+echo "no server running on /tmp/tmux-fm-capture-land/default" >&2
+exit 1
+STUB
+  chmod +x "$c/fakebin/tmux"
   git init -q "$c/home/projects/nova"
   git -C "$c/home/projects/nova" remote add origin git@github.com:arjmad/nova.git
   git init -q "$c/home/projects/other"
