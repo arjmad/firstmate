@@ -3289,7 +3289,7 @@ run_behind_case() {
   local case_dir=$1
   shift
   set +e
-  FM_PR_GITHUB_UPDATE_POLL=0 run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 "$@" \
+  FM_PR_GITHUB_UPDATE_POLL=1 run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 "$@" \
     > "$case_dir/stdout" 2> "$case_dir/stderr"
   RC=$?
   set -e
@@ -3321,6 +3321,32 @@ test_behind_pr_is_updated_from_base_then_merged_at_the_new_head() {
   run_behind_case "$case_dir"
   expect_code 0 "$RC" "clean-not-updated: a CLEAN PR must merge"
   assert_no_grep 'update-branch' "$case_dir/gh.log" "clean-not-updated: a PR that is not behind was updated"
+  # A check that reported at the old head but does not run again on the
+  # update's merge commit, such as a label-triggered one, is not waited for.
+  case_dir=$(make_case behind-old-only-check)
+  mkdir -p "$case_dir/wt"
+  add_behind_case "$case_dir" "$head" "$updated"
+  sed -i.bak 's/"statusCheckRollup":\[/"statusCheckRollup":[{"__typename":"StatusContext","context":"label-check","state":"SUCCESS"},/' \
+    "$case_dir/github-view.json"
+  FM_PR_GITHUB_UPDATE_TIMEOUT=0 run_behind_case "$case_dir"
+  expect_code 0 "$RC" "behind-old-only-check: a check that does not re-run must not hold the merge: $(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 95 example/repo --squash
+
+  # The task's control lock is released for the wait, so the watcher and
+  # other task controls are not blocked behind it.
+  case_dir=$(make_case behind-lock-released)
+  mkdir -p "$case_dir/wt"
+  add_behind_case "$case_dir" "$head" "$updated" "$(check_run ci IN_PROGRESS -)"
+  cat > "$case_dir/fakebin/sleep" <<SH
+#!/usr/bin/env bash
+{ [ -e "$case_dir/state/.control-task-x1.lock" ] || [ -L "$case_dir/state/.control-task-x1.lock" ]; } && echo held >> "$case_dir/lock-at-wait" || echo free >> "$case_dir/lock-at-wait"
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/sleep"
+  FM_PR_GITHUB_UPDATE_TIMEOUT=1 run_behind_case "$case_dir"
+  expect_code 1 "$RC" "behind-lock-released: a check still running must time out"
+  assert_no_grep held "$case_dir/lock-at-wait" "behind-lock-released: the task's control lock was held through the wait"
+  assert_grep free "$case_dir/lock-at-wait" "behind-lock-released: the wait did not run"
   pass "fm-pr-merge updates a green two-way PR that is only behind its base, re-checks it at the new head, and merges it there"
 }
 
@@ -3408,12 +3434,31 @@ test_behind_pr_still_behind_after_its_update_is_refused() {
   pass "fm-pr-merge updates a behind PR once per run and refuses when the base moved again"
 }
 
+test_behind_pr_is_not_updated_for_a_one_way_approval_or_auto() {
+  local case_dir head=be46dbe46dbe46dbe46dbe46dbe46dbe46dbe46d updated=a16a16a16a16a16a16a16a16a16a16a16a16a16a
+  case_dir=$(make_case behind-one-way-approved)
+  mkdir -p "$case_dir/wt"
+  add_behind_case "$case_dir" "$head" "$updated"
+  file_task_x1 "$case_dir"
+  set_pr_body "$case_dir/github-view.json" body "$(one_way_body)"
+  printf 'one_way_hold=https://github.com/example/repo/pull/95 %s\n' "$head" >> "$case_dir/state/task-x1.meta"
+  run_behind_case "$case_dir" --one-way-approved
+  assert_grep "merging on the captain's explicit word" "$case_dir/stderr" \
+    "behind-one-way-approved: the approved one-way door did not reach its merge"
+  assert_no_grep 'update-branch' "$case_dir/gh.log" \
+    "behind-one-way-approved: an approved one-way door's head was moved"
+
+  case_dir=$(make_case behind-auto)
+  mkdir -p "$case_dir/wt"
+  add_behind_case "$case_dir" "$head" "$updated"
+  run_behind_case "$case_dir" --attended-override -- --auto
+  assert_grep "match-head-commit $head --squash --auto" "$case_dir/gh.log" \
+    "behind-auto: the caller's --auto merge was not attempted at the verified head"
+  assert_no_grep 'update-branch' "$case_dir/gh.log" "behind-auto: a caller-requested --auto was updated"
+  pass "fm-pr-merge never updates a behind PR merging on --one-way-approved or a caller's --auto"
+}
+
 test_github_zero_exit_queue_required_refuses_with_exact_retry
-test_behind_pr_is_updated_from_base_then_merged_at_the_new_head
-test_behind_pr_whose_update_fails_is_left_untouched
-test_behind_pr_whose_checks_do_not_finish_is_not_merged
-test_behind_pr_whose_update_changes_the_reviewed_diff_needs_a_fresh_review
-test_behind_pr_still_behind_after_its_update_is_refused
 test_github_closed_unqueued_outcome_omits_retry_flags
 test_github_agreeing_queue_rules_keep_retry_guidance
 test_github_conflicting_queue_rules_report_ambiguity
@@ -6080,3 +6125,9 @@ test_merge_that_keeps_landed_work_verifies_both_sides
 test_merged_commit_that_undoes_landed_work_is_reported
 test_unreadable_landed_work_check_refuses
 test_allow_revert_is_an_attended_github_waiver
+test_behind_pr_is_updated_from_base_then_merged_at_the_new_head
+test_behind_pr_whose_update_fails_is_left_untouched
+test_behind_pr_whose_checks_do_not_finish_is_not_merged
+test_behind_pr_whose_update_changes_the_reviewed_diff_needs_a_fresh_review
+test_behind_pr_still_behind_after_its_update_is_refused
+test_behind_pr_is_not_updated_for_a_one_way_approval_or_auto
