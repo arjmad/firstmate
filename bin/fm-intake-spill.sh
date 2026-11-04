@@ -17,10 +17,11 @@
 # Declaration: config/intake-spill in this home (FM_CONFIG_OVERRIDE selects the
 # config directory). It is home-local and not inherited by secondmate homes,
 # which do not spawn secondmates. One `<key> <value>` pair per line; blank lines
-# and lines starting with `#` are ignored:
+# and lines whose first word starts with `#` are ignored:
 #   to <secondmate-id>   required; a secondmate registered in data/secondmates.md
 #   load <number>        spill while this machine's 5-minute load average is
-#                        above <number>
+#                        above <number>; needs a remote `to`, because a local
+#                        secondmate shares this machine's load
 #   workers <count>      spill while this home holds at least <count> worker
 #                        records (fm-afk-contract.sh live-workers: every
 #                        state/*.meta that is not a secondmate)
@@ -86,15 +87,13 @@ lineno=0
 while IFS= read -r line || [ -n "$line" ]; do
   lineno=$((lineno + 1))
   line=${line%$'\r'}
-  case "$line" in '' | '#'*) continue ;; esac
   read -r key value extra <<<"$line"
-  [ -n "${key:-}" ] || continue
+  case "${key:-}" in '' | '#'*) continue ;; esac
   [ -n "${value:-}" ] && [ -z "${extra:-}" ] || die "$decl line $lineno: expected '<key> <value>'"
   case "$seen" in *"|$key|"*) die "$decl line $lineno: '$key' is declared twice" ;; esac
   seen="$seen$key|"
   case "$key" in
     to)
-      case "$value" in *[!A-Za-z0-9._-]*) die "$decl line $lineno: '$value' is not a secondmate id" ;; esac
       to=$value
       ;;
     load)
@@ -117,6 +116,10 @@ done <"$decl"
 [ -n "$load_max" ] || [ -n "$workers_max" ] || die "$decl declares neither 'load' nor 'workers'"
 secondmate_registry_line_for_id "$DATA/secondmates.md" "$to" \
   || die "spill target '$to' is not one registered secondmate in $DATA/secondmates.md"
+# A local secondmate runs on this machine, so moving work there sheds none of
+# its load; only its own worker slots are relief.
+[ -z "$load_max" ] || [ "$SECONDMATE_REGISTRY_REMOTE" = 1 ] \
+  || die "'load' needs a remote spill target; '$to' runs on this machine and shares its load"
 
 # The 5-minute load average: steadier than the 1-minute figure, so one short
 # build does not move a placement.

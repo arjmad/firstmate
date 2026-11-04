@@ -17,7 +17,8 @@ TOOL="$ROOT/bin/fm-intake-spill.sh"
 TMP_ROOT=$(fm_test_tmproot fm-intake-spill)
 HOME_DIR="$TMP_ROOT/home"
 mkdir -p "$HOME_DIR/config" "$HOME_DIR/data" "$HOME_DIR/state"
-printf '%s\n' "- offbox - Runs firstmate and skills work on the second machine. (home: $TMP_ROOT/offbox; scope: firstmate and skills work that needs no main-machine access; projects: firstmate; added 2026-11-04)" \
+printf '%s\n' "- offbox - Runs firstmate and skills work on the second machine. (host: offbox-ssh; root: /srv/firstmate; home: /srv/offbox; scope: firstmate and skills work that needs no main-machine access; projects: firstmate; added 2026-11-04)" \
+  "- nextdoor - Runs docs work on this machine. (home: $TMP_ROOT/nextdoor; scope: docs work; projects: firstmate; added 2026-11-04)" \
   > "$HOME_DIR/data/secondmates.md"
 DECL="$HOME_DIR/config/intake-spill"
 code='' out='' err=''
@@ -54,7 +55,7 @@ pass "an undeclared home is off and placement is scope alone"
 
 # --- load threshold -----------------------------------------------------------
 
-printf '%s\n' '# spill to the second machine when this one is busy' 'to offbox' 'load 12' 'workers 10' 'short 15' > "$DECL"
+printf '%s\n' '# spill to the second machine when this one is busy' '  # an indented comment' 'to offbox' 'load 12' 'workers 10' 'short 15' > "$DECL"
 FM_INTAKE_SPILL_LOADAVG=18.42 run code out err
 expect_code 0 "$code" "a high load exits 0"
 assert_contains "$out" "spill: yes" "load above threshold spills"
@@ -91,6 +92,15 @@ FM_INTAKE_SPILL_LOADAVG=garbage run code out err
 assert_contains "$out" "spill: yes" "the worker threshold still applies when load is unknown"
 pass "an unmeasurable load is disclosed and leaves the worker threshold in force"
 
+# --- local spill target -------------------------------------------------------
+
+printf '%s\n' 'to nextdoor' 'workers 10' > "$DECL"
+FM_INTAKE_SPILL_LOADAVG=40 run code out err
+expect_code 0 "$code" "a local target with only a worker threshold is readable"
+assert_contains "$out" "spill: yes" "a local target still relieves this home's worker slots"
+assert_contains "$out" "to: nextdoor" "the local target takes the worker spill"
+pass "a local secondmate can take a worker-slot spill"
+
 # --- unreadable declarations ----------------------------------------------------
 
 bad() {  # <label> <expected-stderr> <lines...>
@@ -109,6 +119,7 @@ bad "duplicate key" "declared twice" 'to offbox' 'load 12' 'load 14'
 bad "unknown key" "unknown key 'cap'" 'to offbox' 'cap 12'
 bad "malformed load" "is not a non-negative number" 'to offbox' 'load high'
 bad "zero workers" "is not a positive integer" 'to offbox' 'workers 0'
+bad "load to a local target" "needs a remote spill target" 'to nextdoor' 'load 12'
 bad "extra field" "expected '<key> <value>'" 'to offbox load 12'
 run code out err extra
 expect_code 2 "$code" "an argument is a usage error"

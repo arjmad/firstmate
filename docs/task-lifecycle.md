@@ -14,7 +14,7 @@ Place every ship and scout at intake, before dispatch or handoff, and record whe
 Route by the nature of the work against each registered secondmate scope, not by a non-exclusive clone list.
 Keep `local-only` work in the main home.
 Send in-scope work to the fitting secondmate unless it is blocked, the captain explicitly redirects it, or it is shorter than the home's declared `short` minutes; do not read the secondmate's chat because marked routed replies return through its status or referenced document.
-Before keeping work in the main home, run `bin/fm-intake-spill.sh`: on `spill: yes`, send work that needs nothing only this home can reach to its named secondmate instead (declaration: [`configuration.md`](configuration.md#intake-spill-configintake-spill) "Intake spill").
+Before keeping work in the main home, run `bin/fm-intake-spill.sh`: on `spill: yes`, send work that is not `local-only` and needs nothing only this home can reach to the secondmate whose scope fits it, otherwise to the spill's named secondmate (declaration: [`configuration.md`](configuration.md#intake-spill-configintake-spill) "Intake spill").
 If no secondmate scope fits and nothing spills, use the main home or discuss creating an appropriate persistent secondmate.
 For one-off or infrequent operational work, start with the simplest direct end-to-end path.
 Do not build wrappers, control planes, policy layers, custom verifiers, or automation unless the direct path exposes a concrete blocker or repeated need that justifies the added machinery.
