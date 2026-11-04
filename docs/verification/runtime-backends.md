@@ -1607,6 +1607,20 @@ ok - Claude Code (2.1.300 (Claude Code)) on herdr 0.9.5: fm-spawn launched a nam
 ok - Claude Code (2.1.300 (Claude Code)) on herdr 0.9.5: fm-send's doorbell reached the idle named worker, which acted and acknowledged
 ```
 
+Since 2026-11-03 the guard ends with a restore: it stops and restarts the lab session's Herdr server, attaches a lab viewer, and requires the pane to resume the worker's Claude session through the resume command the launch reported, in the worktree, with `--settings`, the permission flag, model, effort, `--add-dir` and `--name`, then go idle.
+With `FM_SPAWN_STEER_LIVE_ACCOUNT` set to a signed-in Claude config directory, the worker is pinned to it and the resumed process must carry that `CLAUDE_CONFIG_DIR`.
+Before the resume file returned to the worktree, the same restore resumed the conversation in the pane's restored directory, the project's primary checkout.
+
+Observed 2026-11-03 against Herdr 0.9.5 and Claude Code 2.1.318, run as `FM_SPAWN_STEER_LIVE=1 FM_SPAWN_STEER_LIVE_ACCOUNT=<signed-in store> tests/fm-spawn-steer-herdr-live-e2e.test.sh`:
+
+```text
+ok - Claude Code (2.1.318 (Claude Code)) on herdr 0.9.5: fm-spawn launched a named Claude worker in isolated session fm-lab-spawn-steer-live-83665-31420 and it went idle
+ok - Claude Code (2.1.318 (Claude Code)) on herdr 0.9.5: fm-send's doorbell reached the idle named worker, which acted and acknowledged
+ok - Claude Code (2.1.318 (Claude Code)) on herdr 0.9.5: a Herdr restore resumed session b73875d1-b9b8-4970-ab53-e0de7d088656 with its launch flags on CLAUDE_CONFIG_DIR=/Users/arjmad/.claude-ecomills
+```
+
+The lab session's saved layout held the reported command for the pane, `"agent_resume":{"source":"herdr:claude","agent":"claude","argv":["sh","<home>/state/<id>.claude-resume.sh","<session-id>"]}`, beside Herdr's own `agent_session` reference.
+
 Observed 2026-10-19 with the PR 88 composer change reverted:
 
 ```text
