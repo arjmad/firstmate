@@ -85,6 +85,12 @@ unset FM_TASK_ID
 # against an ambient override sets TASKS_AXI_FILE itself.
 unset TASKS_AXI_FILE TASKS_AXI_BACKEND
 
+# Clear an inherited DISABLE_AUTOUPDATER. bin/fm-spawn.sh deliberately passes an
+# ambient value through as a launch-line export, so a host whose agent
+# environment exports it would break every exact-launch assertion; fm_live_gate
+# and the cases that verify the pass-through set it themselves.
+unset DISABLE_AUTOUPDATER
+
 # Put Firstmate's toolchain directory (docs/remote-secondmates.md, "Worker PATH
 # order") ahead on PATH as an absolute path while HOME is still the real one.
 # A host may reach those tools through ~/.local/bin forwarders that exec
