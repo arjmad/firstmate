@@ -36,6 +36,13 @@
 #      uncached status read - accepting any verb - immediately before firing
 #  18. A same-kind escalation after an operator close appends again and reopens
 #      the decision; a retry while that decision is still open appends nothing
+#  19. Explicit supersession (fm-send --supersedes): an older request whose
+#      recorded replacement was answered is settled and never reposted or
+#      escalated, locally and remotely and through a chain; an unanswered
+#      replacement leaves the older request's recovery unchanged; a later
+#      answered request without the relation is never treated as a
+#      replacement; fm-send records the relation and refuses an unknown,
+#      malformed, foreign, or resolved id before sending anything
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -2037,6 +2044,7 @@ test_same_kind_escalation_reopens_after_operator_close() {
     home=$(setup_parent same-kind)
     state="$home/state"
     fm_write_secondmate_meta "$state/mate.meta" "$home/sm" "sess:fm-mate"
+    # shellcheck disable=SC2030
     export FM_PENDING_REPLY_NOW=10000
     corr=$(fm_pending_reply_create "$home" "$state" mate "wake after lost transport")
     status="$state/mate.status"
@@ -2101,6 +2109,262 @@ test_same_kind_escalation_reopens_after_operator_close() {
   pass "a same-kind escalation after an operator close opens the decision again"
 }
 
+# --- explicit supersession (fm-send --supersedes) ----------------------------
+
+# A delivered request whose request turn completed: its recovery is due now
+# (grace 0) unless something settles it first.
+supersede_due_request() {  # <home> <state> <task> <summary> [supersedes]
+  local corr
+  corr=$(fm_pending_reply_create "$1" "$2" "$3" "$4" "${5-}") || return 1
+  fm_pending_reply_mark_delivered "$2" "$corr"
+  fm_pending_reply_mark_turn_completed "$2" "$corr" request
+  printf '%s' "$corr"
+}
+
+test_superseded_answered_request_is_never_reposted() {
+  local home state status hook_log old new rec
+  home=$(setup_parent supersede-answered)
+  state="$home/state"
+  status="$state/hibit.status"
+  hook_log="$TMP_ROOT/supersede-answered.log"
+  : > "$hook_log"
+  # Invoked indirectly through FM_PENDING_REPLY_SEND_HOOK.
+  # shellcheck disable=SC2329
+  supersede_hook() { printf '%s\n' "$2" >> "$hook_log"; }
+  export -f supersede_hook
+  export FM_PENDING_REPLY_SEND_HOOK=supersede_hook
+  # Reset the clock fixture after the isolated subshell tests above.
+  # shellcheck disable=SC2031
+  export FM_PENDING_REPLY_NOW=40000
+  old=$(supersede_due_request "$home" "$state" hibit "ship the old plan")
+  new=$(supersede_due_request "$home" "$state" hibit "ship the revised plan" "$old")
+  rec=$(fm_pending_reply_path "$state" "$new")
+  [ "$(fm_pending_reply_get "$rec" supersedes)" = "$old" ] \
+    || fail "the newer record must carry the explicit relation"
+  # The replacement's answer is in the log but its own record is not settled
+  # yet - the tick can reach the older record first - and the older record has
+  # already scanned that log, so only the relation can stop its repost.
+  printf 'done [corr=%s]: revised plan shipped\n' "$new" >> "$status"
+  fm_pending_reply_set "$(fm_pending_reply_path "$state" "$old")" \
+    parent_status_scan_signature "$(fm_pending_reply_file_signature "$status")"
+  fm_pending_reply_tick_one "$state" "$old" idle || fail "tick should succeed"
+  [ ! -s "$hook_log" ] || fail "a request whose replacement was answered must never be reposted"$'\n'"$(cat "$hook_log")"
+  rec=$(fm_pending_reply_path "$state" "$old")
+  [ "$(phase_of "$state" "$old")" = resolved ] \
+    || fail "the superseded request must be settled, got $(phase_of "$state" "$old")"
+  [ "$(fm_pending_reply_get "$rec" resolved_via)" = superseded ] \
+    || fail "resolved_via should be superseded"
+  [ "$(fm_pending_reply_get "$rec" superseded_by)" = "$new" ] \
+    || fail "superseded_by should name the answered replacement"
+  if fm_pending_reply_corr_reusable "$state" "$old" hibit; then
+    fail "a settled superseded correlation must not be reusable for a resend"
+  fi
+  fm_pending_reply_tick_one "$state" "$new" idle || fail "tick should succeed"
+  [ "$(phase_of "$state" "$new")" = resolved ] || fail "the replacement should resolve on its own answer"
+  if fm_pending_reply_task_has_open "$state" hibit; then
+    fail "a settled superseded request must stop counting as waiting"
+  fi
+  [ ! -s "$hook_log" ] || fail "no repost may be sent for either request"
+  unset FM_PENDING_REPLY_SEND_HOOK
+  pass "an older request whose explicit replacement was answered is settled and never reposted"
+}
+
+test_superseded_escalation_closes_and_chain_settles() {
+  local home state status hook_log old mid new open
+  home=$(setup_parent supersede-escalated)
+  state="$home/state"
+  status="$state/hibit.status"
+  hook_log="$TMP_ROOT/supersede-escalated.log"
+  : > "$hook_log"
+  # shellcheck disable=SC2329
+  supersede_esc_hook() { printf '%s\n' sent >> "$hook_log"; }
+  export -f supersede_esc_hook
+  export FM_PENDING_REPLY_SEND_HOOK=supersede_esc_hook
+  export FM_PENDING_REPLY_NOW=41000
+  # The oldest request already missed twice and escalated.
+  old=$(supersede_due_request "$home" "$state" hibit "first ask")
+  fm_pending_reply_send_recovery "$state" "$old" || fail "setup: recovery failed"
+  fm_pending_reply_mark_turn_completed "$state" "$old" recovery
+  fm_pending_reply_maybe_escalate "$state" "$old" || fail "setup: escalation failed"
+  open=$(status_open_decisions "$status" | cut -f1)
+  [ "$open" = "pending-reply-$old" ] || fail "setup: escalation should be open, got '$open'"
+  : > "$hook_log"
+  # A chain old <- mid <- new; only the newest is answered.
+  mid=$(supersede_due_request "$home" "$state" hibit "second ask" "$old")
+  new=$(supersede_due_request "$home" "$state" hibit "third ask" "$mid")
+  printf 'done [corr=%s]: third ask done\n' "$new" >> "$status"
+  fm_pending_reply_tick_one "$state" "$mid" idle || fail "tick should succeed"
+  fm_pending_reply_tick_one "$state" "$old" idle || fail "tick should succeed"
+  [ ! -s "$hook_log" ] || fail "no request in an answered chain may be reposted"
+  [ "$(phase_of "$state" "$mid")" = resolved ] || fail "the middle request must settle through the chain"
+  [ "$(phase_of "$state" "$old")" = resolved ] || fail "the oldest request must settle through the chain"
+  [ "$(fm_pending_reply_get "$(fm_pending_reply_path "$state" "$old")" superseded_by)" = "$mid" ] \
+    || fail "the oldest request is superseded by its direct replacement"
+  open=$(status_open_decisions "$status" | cut -f1)
+  [ -z "$open" ] || fail "the settled request's escalation decision must close, still open: '$open'"
+  assert_grep "pending-reply-resolved: task=hibit pending-reply-id=$old via=superseded" "$status" \
+    "the close must speak the reserved-key vocabulary with via=superseded"
+  unset FM_PENDING_REPLY_SEND_HOOK
+  pass "a superseded escalated request closes its decision, and a chain settles from its answered tip"
+}
+
+test_superseded_unanswered_keeps_recovery() {
+  local home state hook_log old new lines
+  home=$(setup_parent supersede-unanswered)
+  state="$home/state"
+  hook_log="$TMP_ROOT/supersede-unanswered.log"
+  : > "$hook_log"
+  # shellcheck disable=SC2329
+  supersede_open_hook() { printf '%s\t%s\n' "$1" "$2" >> "$hook_log"; }
+  export -f supersede_open_hook
+  export FM_PENDING_REPLY_SEND_HOOK=supersede_open_hook
+  export FM_PENDING_REPLY_NOW=42000
+  old=$(supersede_due_request "$home" "$state" hibit "original ask")
+  new=$(supersede_due_request "$home" "$state" hibit "replacement ask" "$old")
+  # Documented choice: until the replacement is answered nothing replaced the
+  # older request's answer, so its one recovery repost still fires.
+  fm_pending_reply_tick_one "$state" "$old" idle || fail "tick should succeed"
+  [ "$(phase_of "$state" "$old")" = recovery_sent ] \
+    || fail "an unanswered replacement must leave the older recovery unchanged, got $(phase_of "$state" "$old")"
+  lines=$(grep -c "corr=$old" "$hook_log" || true)
+  [ "$lines" = 1 ] || fail "expected exactly one recovery for the older request, got $lines"
+  [ "$(phase_of "$state" "$new")" = awaiting_report ] || fail "the replacement stays open"
+  unset FM_PENDING_REPLY_SEND_HOOK
+  pass "a superseded request whose replacement is unanswered keeps its ordinary recovery"
+}
+
+test_answered_request_without_relation_is_not_a_replacement() {
+  local home state status hook_log first second
+  home=$(setup_parent supersede-none)
+  state="$home/state"
+  status="$state/hibit.status"
+  hook_log="$TMP_ROOT/supersede-none.log"
+  : > "$hook_log"
+  # shellcheck disable=SC2329
+  supersede_none_hook() { printf '%s\t%s\n' "$1" "$2" >> "$hook_log"; }
+  export -f supersede_none_hook
+  export FM_PENDING_REPLY_SEND_HOOK=supersede_none_hook
+  export FM_PENDING_REPLY_NOW=43000
+  first=$(supersede_due_request "$home" "$state" hibit "first unrelated ask")
+  second=$(supersede_due_request "$home" "$state" hibit "second unrelated ask")
+  printf 'done [corr=%s]: second done\n' "$second" >> "$status"
+  fm_pending_reply_tick_one "$state" "$second" idle || fail "tick should succeed"
+  fm_pending_reply_tick_one "$state" "$first" idle || fail "tick should succeed"
+  [ "$(phase_of "$state" "$second")" = resolved ] || fail "the answered request resolves"
+  [ "$(phase_of "$state" "$first")" = recovery_sent ] \
+    || fail "a later answer without the relation must never settle another request, got $(phase_of "$state" "$first")"
+  [ -z "$(fm_pending_reply_get "$(fm_pending_reply_path "$state" "$first")" superseded_by)" ] \
+    || fail "no supersession may be inferred"
+  unset FM_PENDING_REPLY_SEND_HOOK
+  pass "an answered request without an explicit relation never settles another request"
+}
+
+test_remote_superseded_answered_request_is_never_reposted() {
+  local home state hook_log old new
+  home=$(setup_parent supersede-remote)
+  state="$home/state"
+  hook_log="$TMP_ROOT/supersede-remote.log"
+  : > "$hook_log"
+  # shellcheck disable=SC2329
+  supersede_remote_hook() { printf '%s\n' sent >> "$hook_log"; }
+  export -f supersede_remote_hook
+  export FM_PENDING_REPLY_SEND_HOOK=supersede_remote_hook
+  export FM_PENDING_REPLY_NOW=44000
+  fm_write_meta "$state/ios.meta" \
+    "window=fm-remote:w1:p1" "harness=claude" "kind=secondmate" "mode=secondmate" \
+    "remote_host=remote-mac" "remote_root=/remote/root" "remote_backend=herdr"
+  old=$(supersede_due_request "$home" "$state" ios "old build ask")
+  new=$(supersede_due_request "$home" "$state" ios "new build ask" "$old")
+  # The mirror caught up and carried only the replacement's answer.
+  printf 'done [corr=%s]: build green\n' "$new" >> "$state/ios.status"
+  fm_pending_reply_note_remote_channel_caught_up "$state" ios 44000
+  fm_pending_reply_tick_one "$state" "$old" idle || fail "tick should succeed"
+  [ ! -s "$hook_log" ] || fail "a remote superseded request must never be reposted"
+  [ "$(phase_of "$state" "$old")" = resolved ] || fail "the remote superseded request must settle"
+  [ "$(fm_pending_reply_get "$(fm_pending_reply_path "$state" "$old")" resolved_via)" = superseded ] \
+    || fail "resolved_via should be superseded"
+  unset FM_PENDING_REPLY_SEND_HOOK
+  pass "a remote secondmate's superseded request settles exactly as a local one"
+}
+
+test_fm_send_supersedes_records_and_validates() {
+  local dir fb log home state old other resolved new rec rc err before
+  dir="$TMP_ROOT/send-supersedes"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/send.log"
+  home=$(setup_parent send-supersedes)
+  state="$home/state"
+  fm_write_secondmate_meta "$state/hibit.meta" "$home/hibit" "sess:fm-hibit"
+  fm_write_secondmate_meta "$state/other.meta" "$home/other" "sess:fm-other"
+  fm_write_meta "$state/crew.meta" "window=sess:fm-crew" "endpoint_task_id=crew" \
+    "worktree=$home/crew" "project=$home/crew" "harness=echo" "kind=ship"
+  run_send "$fb" "$home" "$log" hibit "original ask" || fail "setup: first send failed"
+  old=$(fm_pending_reply_extract_corr "$(latest_record_body "$home" hibit)")
+  run_send "$fb" "$home" "$log" other "foreign ask" || fail "setup: foreign send failed"
+  other=$(fm_pending_reply_extract_corr "$(latest_record_body "$home" other)")
+  run_send "$fb" "$home" "$log" hibit "answered ask" || fail "setup: answered send failed"
+  resolved=$(fm_pending_reply_extract_corr "$(latest_record_body "$home" hibit)")
+  printf 'done [corr=%s]: answered\n' "$resolved" >> "$state/hibit.status"
+  fm_pending_reply_try_resolve "$state" "$resolved" || fail "setup: resolve failed"
+
+  refuse_supersedes() {  # <label> <expected-error> <fm-send args...>
+    local label=$1 want=$2 count_before count_after
+    shift 2
+    count_before=$(find "$state/pending-replies" -maxdepth 1 -type f ! -name '.*' | wc -l | tr -d ' ')
+    before=$(find "$state" -path '*.inbox/*.msg' | sort)
+    rc=0
+    err=$(env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_LOG="$log" \
+      FM_SEND_SETTLE=0 "$SEND" "$@" 2>&1 >/dev/null) || rc=$?
+    [ "$rc" -ne 0 ] || fail "$label must be refused"
+    assert_contains "$err" "$want" "$label must name its cause"
+    count_after=$(find "$state/pending-replies" -maxdepth 1 -type f ! -name '.*' | wc -l | tr -d ' ')
+    [ "$count_after" = "$count_before" ] || fail "$label must create no expectation"
+    [ "$(find "$state" -path '*.inbox/*.msg' | sort)" = "$before" ] || fail "$label must send nothing"
+  }
+  refuse_supersedes "an unknown id" "names no pending-reply record" \
+    hibit --supersedes 0123456789abcdef "replacement"
+  refuse_supersedes "a malformed id" "16-lowercase-hex" \
+    hibit --supersedes nothex "replacement"
+  refuse_supersedes "another task's id" "belongs to a different task" \
+    hibit --supersedes "$other" "replacement"
+  refuse_supersedes "a resolved id" "already resolved" \
+    hibit --supersedes "$resolved" "replacement"
+  refuse_supersedes "fire-and-forget" "cannot accompany --fire-and-forget" \
+    hibit --fire-and-forget 00112233445566aa --supersedes "$old" "replacement"
+  refuse_supersedes "a crewmate target" "requires a recorded secondmate task selector" \
+    crew --supersedes "$old" "replacement"
+  refuse_supersedes "a duplicate flag" "duplicate --supersedes" \
+    hibit --supersedes "$old" --supersedes "$old" "replacement"
+
+  run_send "$fb" "$home" "$log" hibit --supersedes "$old" "revised ask" \
+    || fail "a valid --supersedes send must succeed"
+  new=$(fm_pending_reply_extract_corr "$(latest_record_body "$home" hibit)")
+  [ -n "$new" ] && [ "$new" != "$old" ] || fail "the replacement must get its own correlation"
+  rec=$(fm_pending_reply_path "$state" "$new")
+  [ "$(fm_pending_reply_get "$rec" supersedes)" = "$old" ] \
+    || fail "fm-send must record the relation on the new record"
+  [ -z "$(fm_pending_reply_get "$(fm_pending_reply_path "$state" "$old")" supersedes)" ] \
+    || fail "the older record is not rewritten by the relation"
+  case "$(latest_record_body "$home" hibit)" in
+    *--supersedes*|*"$old"*) fail "the relation is parent bookkeeping and must not travel in the request" ;;
+  esac
+
+  # A correlation-reusing resend keeps its recorded relation and cannot change it.
+  rc=0
+  err=$(env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_LOG="$log" \
+    FM_SEND_SETTLE=0 FM_PENDING_REPLY_EXISTING_CORR="$new" \
+    "$SEND" hibit --supersedes "$other" "revised ask" 2>&1 >/dev/null) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a resend naming a different relation must be refused"
+  assert_contains "$err" "does not match the relation recorded" \
+    "a resend naming a different relation must name its cause"
+  rc=0
+  env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_SEND_LOG="$log" \
+    FM_SEND_SETTLE=0 FM_PENDING_REPLY_EXISTING_CORR="$new" \
+    "$SEND" hibit --supersedes "$old" "revised ask" >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "a resend repeating its recorded relation must succeed"
+  [ "$(fm_pending_reply_get "$rec" supersedes)" = "$old" ] || fail "the resend must keep the relation"
+  pass "fm-send --supersedes records the relation and refuses bad ids before sending"
+}
+
 # --- run --------------------------------------------------------------------
 
 test_normal_correlated_reply_resolves_once
@@ -2151,5 +2415,11 @@ test_remote_parent_replies_is_not_wrong_home
 test_local_parent_replies_is_wrong_home_evidence
 test_escalated_undelivered_correlation_stays_retryable
 test_same_kind_escalation_reopens_after_operator_close
+test_superseded_answered_request_is_never_reposted
+test_superseded_escalation_closes_and_chain_settles
+test_superseded_unanswered_keeps_recovery
+test_answered_request_without_relation_is_not_a_replacement
+test_remote_superseded_answered_request_is_never_reposted
+test_fm_send_supersedes_records_and_validates
 
 printf 'ok - all pending-reply tests passed\n'

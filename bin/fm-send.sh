@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Steer a task by durable record: write the message into the task's steering
 # inbox and ring a constant doorbell line into its terminal, best-effort.
-# Usage: fm-send.sh <target> [--resolve-key <key>]... [--fire-and-forget <delivery-id>] <text...>
+# Usage: fm-send.sh <target> [--resolve-key <key>]... [--fire-and-forget <delivery-id>] [--supersedes <corr-id>] <text...>
 #   <target> may be an exact task id, a legacy fm-<id> task label resolved
 #   through this home's state/<id>.meta, or an explicit well-formed backend
 #   target. fm-send refuses unresolved guesses rather than falling back to a
@@ -119,6 +119,14 @@
 # sent with --fire-and-forget <16-hex-delivery-id> uses the same inbox transport
 # without creating a reply expectation; its delivery id makes uncertain retries
 # idempotent while allowing a later identical instruction to be distinct.
+# A reply-bearing marked secondmate request sent with --supersedes <corr-id>
+# records, on its new expectation, that it explicitly replaces that older open
+# request to the same task; once the new request is answered the older one is
+# settled and never reposted (bin/fm-pending-reply-lib.sh owns the rule).
+# fm-send never infers the relation, and refuses before sending when the id is
+# malformed, unknown in this home, another task's, or already resolved, and
+# with --fire-and-forget or --key. A correlation-reusing resend keeps the
+# relation recorded at creation; naming a different one there is refused.
 #
 # Remote secondmate delivery: the send crosses fm-on.sh to a host-local leg
 # (bin/fm-remote-secondmate-control.sh cmd_send) that writes the message as a
@@ -466,6 +474,8 @@ fi
 # message exactly as before, so ordinary sends are byte-identical.
 RESOLVE_KEYS=
 FIRE_AND_FORGET_ID=
+SUPERSEDES_CORR=
+SUPERSEDES_SET=0
 fm_send_add_resolve_key() { # <key>
   local k=$1
   case "$k" in
@@ -515,6 +525,24 @@ while :; do
     }
     FIRE_AND_FORGET_ID=${1#--fire-and-forget=}
     shift
+    ;;
+  --supersedes | --supersedes=*)
+    [ "$SUPERSEDES_SET" = 0 ] || {
+      echo "error: duplicate --supersedes" >&2
+      exit 1
+    }
+    if [ "$1" = --supersedes ]; then
+      [ $# -ge 2 ] || {
+        echo "error: --supersedes requires a correlation id" >&2
+        exit 1
+      }
+      SUPERSEDES_CORR=$2
+      shift 2
+    else
+      SUPERSEDES_CORR=${1#--supersedes=}
+      shift
+    fi
+    SUPERSEDES_SET=1
     ;;
   *) break ;;
   esac
@@ -612,6 +640,31 @@ if [ -n "$FIRE_AND_FORGET_ID" ]; then
       echo "error: --fire-and-forget cannot accompany --resolve-key" >&2
       exit 1
     }
+fi
+
+# Validate --supersedes before any durable mutation or send (header contract).
+if [ "$SUPERSEDES_SET" = 1 ]; then
+  [ "$MARK_FROM_FIRSTMATE" = 1 ] ||
+    {
+      echo "error: --supersedes requires a recorded secondmate task selector; only a marked secondmate request has a reply expectation to supersede" >&2
+      exit 1
+    }
+  [ -z "$FIRE_AND_FORGET_ID" ] ||
+    {
+      echo "error: --supersedes cannot accompany --fire-and-forget; a fire-and-forget request has no reply that could settle the older one" >&2
+      exit 1
+    }
+  [ "${1:-}" != "--key" ] ||
+    {
+      echo "error: --supersedes cannot accompany --key" >&2
+      exit 1
+    }
+  # A correlation-reusing resend is checked against its recorded relation below.
+  if [ "${FM_PENDING_REPLY_EXISTING_CORR+x}" != x ] &&
+    ! supersedes_reason=$(fm_pending_reply_supersedable "$STATE" "$SUPERSEDES_CORR" "$TARGET_TASK_ID"); then
+    echo "error: --supersedes '$SUPERSEDES_CORR' $supersedes_reason; nothing was sent" >&2
+    exit 1
+  fi
 fi
 
 if [ -n "$RESOLVE_KEYS" ]; then
@@ -828,6 +881,11 @@ else
     if [ -n "$existing_corr" ] &&
       fm_pending_reply_corr_reusable "$STATE" "$existing_corr" "$TARGET_TASK_ID"; then
       PENDING_REPLY_CORR=$existing_corr
+      if [ "$SUPERSEDES_SET" = 1 ] &&
+        [ "$(fm_pending_reply_get "$(fm_pending_reply_path "$STATE" "$existing_corr")" supersedes)" != "$SUPERSEDES_CORR" ]; then
+        echo "error: --supersedes '$SUPERSEDES_CORR' does not match the relation recorded when correlation $existing_corr was created; a resend cannot change what a request supersedes; nothing was sent" >&2
+        exit 1
+      fi
     else
       if [ "$existing_corr_explicit" = 1 ]; then
         echo "error: explicitly requested pending-reply correlation '${existing_corr:-empty}' is not reusable for $TARGET_TASK_ID; refusing to mint a replacement correlation" >&2
@@ -837,7 +895,7 @@ else
         echo "error: cannot create pending-reply expectation without a resolvable secondmate task id" >&2
         exit 1
       fi
-      PENDING_REPLY_CORR=$(fm_pending_reply_create "$FM_HOME" "$STATE" "$TARGET_TASK_ID" "$MESSAGE") ||
+      PENDING_REPLY_CORR=$(fm_pending_reply_create "$FM_HOME" "$STATE" "$TARGET_TASK_ID" "$MESSAGE" "$SUPERSEDES_CORR") ||
         {
           echo "error: failed to create parent pending-reply expectation for $TARGET_TASK_ID" >&2
           exit 1
