@@ -10,10 +10,12 @@ Resolve the project independently for every request.
 An explicit project wins, a clear follow-up inherits its referent, and otherwise match the request against the registry, work under way, and project code or README.
 Proceed on one confident match while naming the project in plain language; ask one concise question when multiple or no projects plausibly match.
 
+Place every ship and scout at intake, before dispatch or handoff, and record where it runs and the one-line reason in its backlog item note.
 Route by the nature of the work against each registered secondmate scope, not by a non-exclusive clone list.
 Keep `local-only` work in the main home.
-Send in-scope work to the fitting secondmate unless it is blocked or the captain explicitly redirects it; do not read the secondmate's chat because marked routed replies return through its status or referenced document.
-If no secondmate scope fits, use the main home or discuss creating an appropriate persistent secondmate.
+Send in-scope work to the fitting secondmate unless it is blocked, the captain explicitly redirects it, or it is shorter than the home's declared `short` minutes; do not read the secondmate's chat because marked routed replies return through its status or referenced document.
+Before keeping work in the main home, run `bin/fm-intake-spill.sh`: on `spill: yes`, send work that needs nothing only this home can reach to its named secondmate instead (declaration: [`configuration.md`](configuration.md#intake-spill-configintake-spill) "Intake spill").
+If no secondmate scope fits and nothing spills, use the main home or discuss creating an appropriate persistent secondmate.
 For one-off or infrequent operational work, start with the simplest direct end-to-end path.
 Do not build wrappers, control planes, policy layers, custom verifiers, or automation unless the direct path exposes a concrete blocker or repeated need that justifies the added machinery.
 

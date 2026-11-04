@@ -12,7 +12,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), [worker tool exclusions](#worker-tool-exclusions-configcrew-exclude-tools), [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist), and its [Orca environment source](#orca-environment-source-configlaunch-env-tmux-session) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), [external memory tiers](#external-memory-tiers-memory-layering-section), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
-| Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
+| Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) and [intake spill](#intake-spill-configintake-spill) |
 | Keeping running checkouts current after merges | [Live checkouts](#live-checkouts-configlive-checkouts) and [scheduled fleet sync](#scheduled-fleet-sync-configfleet-sync-interval) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
 
@@ -878,6 +878,25 @@ A remote route adds `host:` and `root:` before the existing fields and places th
 
 Use `fm-home-seed.sh validate` to check the complete operational registry contract documented by the command itself.
 The main first mate routes by reading those scopes with judgment; the project list is provisioning data, not exclusive ownership.
+
+### Intake spill (config/intake-spill)
+
+The optional local, gitignored `config/intake-spill` lets the main first mate send work to a secondmate while its own machine is busy, not only when a scope fits.
+It is the primary's own setting and is not inherited, because secondmates do not spawn secondmates.
+One `<key> <value>` pair per line names the secondmate that takes the spill and the thresholds:
+
+```text
+# past either threshold, work that does not need this home goes to offbox
+to offbox
+load 12
+workers 10
+short 15
+```
+
+`load` spills while the machine's 5-minute load average is above the number, `workers` spills once this home holds that many worker records, and at least one of them is required.
+`short` is optional: work expected to take fewer minutes stays in the main home even when a scope fits, because a handoff costs more than it saves.
+Without the file, placement follows secondmate scope alone.
+`bin/fm-intake-spill.sh` measures the home against the file and prints the verdict that [the intake rule](task-lifecycle.md#intake-and-authority) applies; its header owns the format, the counting, and why a malformed file exits 2 instead of reading as absent.
 
 ### Provision a local home
 
