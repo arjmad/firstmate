@@ -393,6 +393,11 @@ first_pr_url_in_file() {  # <file>
   grep -Eo 'https?://[^[:space:])"]+/pull/[0-9]+' "$1" 2>/dev/null | head -1
 }
 
+last_pr_url_in_file() {  # <file> - a persistent secondmate's newest PR, not its first-ever one
+  [ -f "$1" ] || return 1
+  grep -Eo 'https?://[^[:space:])"]+/pull/[0-9]+' "$1" 2>/dev/null | tail -1
+}
+
 backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
   local backlog=${1:-$BACKLOG}
   if [ ! -f "$backlog" ]; then
@@ -794,7 +799,11 @@ task_json_lines() {
     pr=$(meta_value "$meta" pr)
     pr_source=meta
     if [ -z "$pr" ]; then
-      pr_from_status=$(first_pr_url_in_file "$status_log" || true)
+      if [ "$kind" = secondmate ]; then
+        pr_from_status=$(last_pr_url_in_file "$status_log" || true)
+      else
+        pr_from_status=$(first_pr_url_in_file "$status_log" || true)
+      fi
       pr=$pr_from_status
       pr_source=status_event
     fi
