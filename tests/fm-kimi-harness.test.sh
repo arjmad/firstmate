@@ -11,10 +11,6 @@ set -u
 # meant to control. Drop the ambient markers so the asserted verdict does not
 # depend on which harness launched the suite.
 unset CLAUDECODE PI_CODING_AGENT FM_PI_HARNESS GROK_AGENT CURSOR_AGENT CURSOR_INVOKED_AS
-# fm-spawn passes an ambient DISABLE_AUTOUPDATER through as a launch-line
-# export (intended), which the exact-launch assertions do not expect; drop it
-# so hosts that export it (the Fafnir agent env) do not report a false failure.
-unset DISABLE_AUTOUPDATER
 
 SPAWN="$ROOT/bin/fm-spawn.sh"
 TEARDOWN="$ROOT/bin/fm-teardown.sh"
