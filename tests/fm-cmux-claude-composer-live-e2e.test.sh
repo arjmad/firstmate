@@ -40,6 +40,12 @@ cmux ping >/dev/null 2>&1 || fail "FM_CMUX_CLAUDE_COMPOSER_LIVE=1 but the cmux s
 
 LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-cmux-claude-composer.XXXXXX") || fail "could not create an isolated cmux Claude lab"
 trap cleanup EXIT
+# Physical, so the worktree path the pane reports compares against it as a prefix.
+LAB=$(cd "$LAB" && pwd -P) || fail "could not resolve the isolated cmux Claude lab"
+# shellcheck source=tests/treehouse-helpers.sh
+. "$ROOT/tests/treehouse-helpers.sh"
+# The probe pool lives under LAB, so removing LAB removes it.
+treehouse_test_isolate "$LAB" || fail "could not isolate the Treehouse pool root"
 mkdir -p "$LAB/config" "$LAB/data/$TASK" "$LAB/projects/comms" "$LAB/state"
 printf 'cmux\n' > "$LAB/config/backend"
 
@@ -47,7 +53,10 @@ git -C "$LAB/projects/comms" init -q -b main || fail "could not initialize the i
 git -C "$LAB/projects/comms" config user.email 'cmux-composer-test@example.invalid'
 git -C "$LAB/projects/comms" config user.name 'cmux composer test'
 printf 'cmux Claude composer probe\n' > "$LAB/projects/comms/README.md"
-git -C "$LAB/projects/comms" add README.md
+# The worker pane's shell comes from the cmux app, not this test, so the
+# exported TREEHOUSE_ROOT cannot reach its `treehouse get`; the repository pins it.
+treehouse_test_pin_repo "$LAB/projects/comms"
+git -C "$LAB/projects/comms" add README.md treehouse.toml
 git -C "$LAB/projects/comms" commit -qm 'fixture: initialize cmux Claude composer probe'
 
 STATUS="$LAB/state/$TASK.status"
@@ -77,6 +86,8 @@ export FM_HOME
 fm_backend_source cmux || fail "could not source the cmux adapter"
 TARGET=$(awk -F= '/^window=/{print $2}' "$LAB/state/$TASK.meta")
 [ -n "$TARGET" ] || fail "the cmux probe did not record its endpoint"
+WT=$(sed -n 's/^worktree=//p' "$LAB/state/$TASK.meta")
+treehouse_test_require_isolated_worktree "$WT" >&2 || fail "the cmux probe acquired a worktree in the fleet's pool storage"
 
 for _ in $(seq 1 45); do
   CAPTURE=$(fm_backend_cmux_capture "$TARGET" 200 "$TASK" 2>/dev/null || true)
@@ -108,3 +119,7 @@ CAPTURE=$(fm_backend_cmux_capture "$TARGET" 200 "$TASK")
 COUNT=$(printf '%s\n' "$CAPTURE" | grep -cF '❯ ALBATROSS' || true)
 [ "$COUNT" -eq 1 ] || fail "expected exactly one submitted ALBATROSS steer, found $COUNT"
 pass "cmux confirms one steer, closes the keyed decision, and leaves no duplicate"
+
+LEAKED_SLOTS=$(treehouse_test_production_slots "$LAB") \
+  || fail "the cmux probe left slots in the fleet's Treehouse pool storage:"$'\n'"$LEAKED_SLOTS"
+pass "real Treehouse: the cmux probe pool stayed under the test's own root"

@@ -1,36 +1,15 @@
 #!/usr/bin/env bash
 # Keep a real-Treehouse test's pools out of the fleet's pool storage.
 #
-# Treehouse keeps each repository's pool at <root>/.treehouse/<repo>-<hash>,
-# where <root> is --root, else TREEHOUSE_ROOT, else the `root` key of
-# ~/.config/treehouse/config.toml, else $HOME (verified on treehouse v3.1.5).
 # A test that acquires real slots for a temporary repository and only returns
-# them leaves its pool in that shared storage, and deleting the repository
-# afterwards leaves every slot pointing at a missing git dir. Pointing
-# TREEHOUSE_ROOT inside the test's own temporary root instead makes removing
-# that root remove the pool with it.
+# them leaves its pool in the shared storage bin/fm-treehouse-storage-lib.sh
+# resolves, and deleting the repository afterwards leaves every slot pointing at
+# a missing git dir. Pointing TREEHOUSE_ROOT inside the test's own temporary
+# root instead makes removing that root remove the pool with it.
 set -u
 
-# treehouse_test_production_storage: print the pool storage Treehouse would use
-# for this user with no test isolation, or nothing when the configured root is
-# relative (an in-project pool has no single shared storage to watch).
-treehouse_test_production_storage() {
-  local root=${TREEHOUSE_ROOT:-} config="$HOME/.config/treehouse/config.toml"
-  if [ -z "$root" ] && [ -f "$config" ]; then
-    # Only a top-level key counts, so stop at the first table header.
-    root=$(sed -n -e '/^[[:space:]]*\[/q' \
-      -e 's/^[[:space:]]*root[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
-      -e "s/^[[:space:]]*root[[:space:]]*=[[:space:]]*'\([^']*\)'.*/\1/p" "$config" | head -n 1)
-  fi
-  root=${root:-$HOME}
-  case "$root" in
-    \~) root=$HOME ;;
-    \~/*) root="$HOME/${root#\~/}" ;;
-  esac
-  case "$root" in
-    /*) printf '%s/.treehouse\n' "${root%/}" ;;
-  esac
-}
+# shellcheck source=bin/fm-treehouse-storage-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/fm-treehouse-storage-lib.sh"
 
 # treehouse_test_isolate <test-root>: point every Treehouse call this test and
 # its children make at <test-root>/treehouse, remembering the storage they would
@@ -38,10 +17,19 @@ treehouse_test_production_storage() {
 # runs `treehouse get` in a shell that inherits the lab server's environment,
 # not the spawn's.
 treehouse_test_isolate() {
-  TREEHOUSE_TEST_PRODUCTION_STORAGE=$(treehouse_test_production_storage)
+  TREEHOUSE_TEST_PRODUCTION_STORAGE=$(fm_treehouse_storage)
   TREEHOUSE_TEST_ROOT="$1/treehouse"
   mkdir -p "$TREEHOUSE_TEST_ROOT" || return 1
   export TREEHOUSE_ROOT="$TREEHOUSE_TEST_ROOT"
+}
+
+# treehouse_test_pin_repo <repo>: write <repo>/treehouse.toml naming the
+# isolated root, after treehouse_test_isolate. Use it when `treehouse get` runs
+# in a shell that does not inherit this test's environment, such as a cmux pane,
+# whose shell comes from the cmux app; a caller's TREEHOUSE_ROOT still outranks
+# the file. The file replaces the user's Treehouse config for that repository.
+treehouse_test_pin_repo() {
+  printf "root = '%s'\n" "$TREEHOUSE_TEST_ROOT" > "$1/treehouse.toml"
 }
 
 # treehouse_test_require_isolated_worktree <worktree>: succeed only when the

@@ -82,7 +82,7 @@ PROVISIONED=0
 # an entry; bin/fm-live-lab.sh down holds labs to the same check.
 # shellcheck source=tests/treehouse-helpers.sh
 . "$ROOT/tests/treehouse-helpers.sh"
-TREEHOUSE_DIR=$(treehouse_test_production_storage)
+TREEHOUSE_DIR=$(fm_treehouse_storage)
 treehouse_listing() { find "$TREEHOUSE_DIR" -mindepth 1 -maxdepth 1 -exec basename {} \; 2>/dev/null | sort; }
 TREEHOUSE_BEFORE=$(treehouse_listing)
 

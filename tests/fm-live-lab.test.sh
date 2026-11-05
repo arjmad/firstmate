@@ -295,16 +295,16 @@ run_check "$C"
 assert_contains "$CHECK_OUT" "ok worker: $WORKER_ID parked on $GATE" "current pause passes readiness"
 pass "worker readiness follows current crew state and the recorded accessible gate"
 
-# treehouse: a worker pool must land inside the lab, never in ~/.treehouse.
+# treehouse: a worker pool must land inside the lab, never in the recorded pool storage.
 mkdir "$HOME/.treehouse/notes-leaked"
 run_check "$C"
-assert_contains "$CHECK_OUT" "fail treehouse: new ~/.treehouse entries: notes-leaked" "treehouse names the leaked pool"
+assert_contains "$CHECK_OUT" "fail treehouse: new $HOME/.treehouse entries: notes-leaked" "treehouse names the leaked pool"
 rmdir "$HOME/.treehouse/notes-leaked"
 LATER_HOME="$TMP_ROOT/later-home"
 mkdir -p "$LATER_HOME"
 CHECK_OUT=$(HOME="$LATER_HOME" "$LIVE_LAB" check "$C" 2>&1)
 expect_code 0 "$?" "the Claude lab is ready again after every restore, even from a shell with another HOME: $CHECK_OUT"
-pass "treehouse fails when a pool lands in ~/.treehouse"
+pass "treehouse fails when a pool lands in the recorded pool storage"
 
 # ---- Pi lab: extensions and the session-only trust store -------------------
 

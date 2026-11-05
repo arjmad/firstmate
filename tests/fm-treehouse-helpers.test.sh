@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Behavior tests for tests/treehouse-helpers.sh, the helper that keeps a
-# real-Treehouse test's pools out of the fleet's pool storage: resolving that
-# storage the way Treehouse does, pointing TREEHOUSE_ROOT inside the test root,
-# refusing a worktree outside it, and reporting any production slot whose git
-# link points into the test root. Every case runs under a fake HOME, so the
-# real user's Treehouse config and pools are never read or written; the last
-# case proves the override against a real Treehouse where one is installed.
+# real-Treehouse test's pools out of the fleet's pool storage, and for the
+# bin/fm-treehouse-storage-lib.sh resolver it loads: resolving that storage the
+# way Treehouse does, pointing TREEHOUSE_ROOT inside the test root, refusing a
+# worktree outside it, and reporting any production slot whose git link points
+# into the test root. Every case runs under a fake HOME, so the real user's
+# Treehouse config and pools are never read or written; the last two cases prove
+# the override and the repository pin against a real Treehouse where one is
+# installed.
 # shellcheck disable=SC2016 # each in_home script expands its own arguments
 set -u
 
@@ -32,33 +34,33 @@ write_config() {  # <home> <root-value>
 # --- production storage resolution -------------------------------------------
 
 HOME_NONE="$TMP_ROOT/home-none"; mkdir -p "$HOME_NONE"
-assert_equals "$HOME_NONE/.treehouse" "$(in_home "$HOME_NONE" treehouse_test_production_storage)" \
+assert_equals "$HOME_NONE/.treehouse" "$(in_home "$HOME_NONE" fm_treehouse_storage)" \
   "with no config, production storage is \$HOME/.treehouse"
 
 HOME_ABS="$TMP_ROOT/home-abs"; write_config "$HOME_ABS" "$TMP_ROOT/fleet-root/"
-assert_equals "$TMP_ROOT/fleet-root/.treehouse" "$(in_home "$HOME_ABS" treehouse_test_production_storage)" \
+assert_equals "$TMP_ROOT/fleet-root/.treehouse" "$(in_home "$HOME_ABS" fm_treehouse_storage)" \
   "an absolute config root names production storage"
 
 HOME_TILDE="$TMP_ROOT/home-tilde"; write_config "$HOME_TILDE" \~/worktrees
-assert_equals "$HOME_TILDE/worktrees/.treehouse" "$(in_home "$HOME_TILDE" treehouse_test_production_storage)" \
+assert_equals "$HOME_TILDE/worktrees/.treehouse" "$(in_home "$HOME_TILDE" fm_treehouse_storage)" \
   "a home-relative config root expands against HOME"
 
 HOME_SQ="$TMP_ROOT/home-sq"; mkdir -p "$HOME_SQ/.config/treehouse"
 printf "root = '%s'\n" "$TMP_ROOT/sq-root" > "$HOME_SQ/.config/treehouse/config.toml"
-assert_equals "$TMP_ROOT/sq-root/.treehouse" "$(in_home "$HOME_SQ" treehouse_test_production_storage)" \
+assert_equals "$TMP_ROOT/sq-root/.treehouse" "$(in_home "$HOME_SQ" fm_treehouse_storage)" \
   "a single-quoted config root names production storage"
 
 HOME_TABLE="$TMP_ROOT/home-table"; mkdir -p "$HOME_TABLE/.config/treehouse"
 printf 'max_trees = 8\n\n[hooks]\nroot = "%s"\n' "$TMP_ROOT/table-root" > "$HOME_TABLE/.config/treehouse/config.toml"
-assert_equals "$HOME_TABLE/.treehouse" "$(in_home "$HOME_TABLE" treehouse_test_production_storage)" \
+assert_equals "$HOME_TABLE/.treehouse" "$(in_home "$HOME_TABLE" fm_treehouse_storage)" \
   "a root key under another table is not the top-level root"
 
 HOME_REL="$TMP_ROOT/home-rel"; write_config "$HOME_REL" "."
-assert_equals "" "$(in_home "$HOME_REL" treehouse_test_production_storage)" \
+assert_equals "" "$(in_home "$HOME_REL" fm_treehouse_storage)" \
   "an in-project config root has no single production storage"
 
 assert_equals "$TMP_ROOT/env-root/.treehouse" \
-  "$(in_home "$HOME_ABS" 'TREEHOUSE_ROOT=$1 treehouse_test_production_storage' "$TMP_ROOT/env-root")" \
+  "$(in_home "$HOME_ABS" 'TREEHOUSE_ROOT=$1 fm_treehouse_storage' "$TMP_ROOT/env-root")" \
   "a caller's TREEHOUSE_ROOT outranks the config root"
 pass "production pool storage resolves in Treehouse's own precedence order"
 
