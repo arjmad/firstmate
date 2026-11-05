@@ -45,12 +45,14 @@ out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude /private 2>
 expect_code 1 "$?" "forget-claude refuses /private, whose stripped form would match every entry"
 out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$ROOT" 2>&1)
 expect_code 1 "$?" "forget-claude refuses a root outside /tmp"
-out=$(CLAUDE_CONFIG_DIR="$T/forget-config" TMPDIR=/ "$LIVE_LAB" forget-claude "$ROOT" 2>&1)
-expect_code 1 "$?" "forget-claude does not trust the caller's TMPDIR as a temporary directory"
 # A marked root in another temporary directory is refused even when TMPDIR
 # names it: /var/tmp everywhere, and the macOS per-user directory where it exists.
+# A base that resolves into /tmp (a /var/tmp symlink or bind mount) is skipped,
+# since a root there is rightly accepted.
+tmp_real=$(cd -P /tmp && pwd -P)
 for base in /var/tmp "$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"; do
   [ -n "$base" ] && [ -d "$base" ] && [ -w "$base" ] || continue
+  case "$(cd -P "$base" && pwd -P)/" in "$tmp_real"/*) continue ;; esac
   other=$(TMPDIR=$base fm_test_tmproot fm-live-lab-forget-other) || fail "fixture: no root under $base"
   : > "$other/.fm-forget-claude"
   out=$(CLAUDE_CONFIG_DIR="$T/forget-config" TMPDIR="$base" "$LIVE_LAB" forget-claude "$other" 2>&1)

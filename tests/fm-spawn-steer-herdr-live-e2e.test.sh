@@ -88,27 +88,32 @@ treehouse_listing() { find "$TREEHOUSE_DIR" -mindepth 1 -maxdepth 1 -exec basena
 TREEHOUSE_BEFORE=$(treehouse_listing)
 
 # The two temporary directories a spawn of $ID keeps: /tmp/fm-<id> and
-# /tmp/fm-<id>+<sha256 of the spawning home>.
-# The hash falls back to sha256sum as bin/fm-spawn.sh's does.
+# /tmp/fm-<id>+<sha256 of the spawning home's physical path>, hashed with
+# shasum or else sha256sum as bin/fm-spawn.sh does. Computed once, into
+# TASK_TMP_DIRS, right before the spawn.
+TASK_TMP_DIRS=()
 task_tmp_dirs() {
-  local hash
-  [ -n "$LAB_HOME" ] || return 0
+  local home hash
+  home=$(cd -P "$LAB_HOME" 2>/dev/null && pwd -P) || home=$LAB_HOME
   if command -v shasum >/dev/null 2>&1; then
-    hash=$(printf '%s' "$LAB_HOME" | shasum -a 256 | awk '{print $1}')
+    hash=$(printf '%s' "$home" | shasum -a 256 | awk '{print $1}')
   else
-    hash=$(printf '%s' "$LAB_HOME" | sha256sum 2>/dev/null | awk '{print $1}')
+    hash=$(printf '%s' "$home" | sha256sum 2>/dev/null | awk '{print $1}')
   fi
   printf '%s\n' "/tmp/fm-$ID"
   [ -z "$hash" ] || printf '%s\n' "/tmp/fm-$ID+$hash"
 }
 
-# Declare a root this run just created to bin/fm-live-lab.sh forget-claude.
+# Declare roots this run just created to bin/fm-live-lab.sh forget-claude.
+# Every root is attempted before a failure is reported, so one failed write
+# cannot leave a later root undeclared.
 mark_created() {  # <dir>...
-  local dir
+  local dir failed=''
   for dir in "$@"; do
     [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] || continue
-    : > "$dir/.fm-forget-claude" || fail "could not mark $dir for its Claude-entry cleanup"
+    : > "$dir/.fm-forget-claude" || failed="$failed $dir"
   done
+  [ -z "$failed" ] || fail "could not mark$failed for its Claude-entry cleanup"
 }
 
 treehouse_unchanged() {  # reports and fails when the operator's pool gained an entry
@@ -120,16 +125,17 @@ treehouse_unchanged() {  # reports and fails when the operator's pool gained an 
 }
 
 cleanup() {
-  local rc=$? dir keep_root=0 forgotten
+  local rc=$? dir keep_root=0 failed_stores existing=''
+  local -a roots=()
   trap - EXIT
+  [ -z "$TMP_ROOT" ] || roots+=("$TMP_ROOT")
+  # Task directories are this run's only once its spawn has started.
+  [ "$SPAWN_RAN" = 0 ] || roots+=(${TASK_TMP_DIRS[@]+"${TASK_TMP_DIRS[@]}"})
   if [ "$PROVISIONED" = 1 ] && ! PATH="$ORIGINAL_PATH" "$LAB_HELPER" teardown "$SESSION"; then
     # A worker that may still be running could write its Claude entry back, so
     # every root and its entries stay for a later cleanup.
-    if [ "$SPAWN_RAN" = 1 ]; then
-      printf 'not ok - lab teardown failed; kept %s and this run'"'"'s task directories with their Claude entries\n' "${TMP_ROOT:-the temporary root}" >&2
-    else
-      printf 'not ok - lab teardown failed; kept %s with its Claude entries\n' "${TMP_ROOT:-the temporary root}" >&2
-    fi
+    for dir in ${roots[@]+"${roots[@]}"}; do [ ! -d "$dir" ] || existing="$existing $dir"; done
+    printf 'not ok - lab teardown failed; kept with their Claude entries:%s\n' "${existing:- nothing}" >&2
     treehouse_unchanged
     exit 1
   fi
@@ -140,20 +146,17 @@ cleanup() {
   # Cleanup never writes the marker: mark_created wrote it as each root was
   # created, so a task directory left unmarked by an interrupted spawn is
   # refused by forget-claude and kept here rather than removed.
-  # Task directories are this run's only once its spawn has started.
-  for dir in "$TMP_ROOT" $([ "$SPAWN_RAN" = 0 ] || task_tmp_dirs); do
-    [ -n "$dir" ] && [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] || continue
-    forgotten=1
-    if ! "$ROOT/bin/fm-live-lab.sh" forget-claude "$dir" >/dev/null; then
-      forgotten=0
-    fi
+  for dir in ${roots[@]+"${roots[@]}"}; do
+    [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] || continue
+    failed_stores=''
+    "$ROOT/bin/fm-live-lab.sh" forget-claude "$dir" >/dev/null || failed_stores=' the default Claude store'
     # A pinned spawn registers its trust in the pinned store.
     if [ -n "$ACCOUNT" ] && ! CLAUDE_CONFIG_DIR="$ACCOUNT" "$ROOT/bin/fm-live-lab.sh" forget-claude "$dir" >/dev/null; then
-      forgotten=0
+      failed_stores="$failed_stores CLAUDE_CONFIG_DIR=$ACCOUNT"
     fi
-    if [ "$forgotten" = 0 ]; then
+    if [ -n "$failed_stores" ]; then
       if [ -f "$dir/.fm-forget-claude" ]; then
-        printf 'not ok - could not remove the Claude project entries under %s; kept it for a later forget-claude\n' "$dir" >&2
+        printf 'not ok - could not remove the Claude project entries under %s from%s; kept it for a later forget-claude against that store\n' "$dir" "$failed_stores" >&2
       else
         printf 'not ok - %s was never declared to forget-claude (an interrupted spawn); kept it, so remove its Claude project entries by hand before deleting it\n' "$dir" >&2
       fi
@@ -270,8 +273,8 @@ PY
 
 # fm-spawn can reuse an existing /tmp/fm-<id>, and mark_created below declares
 # whatever is there after the spawn, so nothing may be there before it.
-# shellcheck disable=SC2046 # Each line is one path without spaces.
-for dir in $(task_tmp_dirs); do
+while IFS= read -r dir; do TASK_TMP_DIRS+=("$dir"); done < <(task_tmp_dirs)
+for dir in ${TASK_TMP_DIRS[@]+"${TASK_TMP_DIRS[@]}"}; do
   [ ! -e "$dir" ] || fail "$dir already exists before this run's spawn; refusing to declare a directory this run did not create"
 done
 spawn_rc=0
@@ -280,8 +283,7 @@ SPAWN_RAN=1
   --mode local-only --yolo off --harness claude --model "$MODEL" --effort low --backend herdr) \
   > "$TMP_ROOT/spawn.out" 2>&1 || spawn_rc=$?
 # The spawn just created this run's task directories, whatever its outcome.
-# shellcheck disable=SC2046 # Each line is one path without spaces.
-mark_created $(task_tmp_dirs)
+mark_created ${TASK_TMP_DIRS[@]+"${TASK_TMP_DIRS[@]}"}
 [ "$spawn_rc" = 0 ] \
   || fail "fm-spawn could not launch a Claude worker for $WHO: $(tail -5 "$TMP_ROOT/spawn.out")"
 TARGET=$(sed -n 's/^window=//p' "$LAB_HOME/state/$ID.meta" | head -n 1)
