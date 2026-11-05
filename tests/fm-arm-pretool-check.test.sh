@@ -248,6 +248,36 @@ test_direct_policy_contract() {
   assert_policy direct-heredoc-watcher $'deny\twatcher-redirection' "$heredoc_watcher"
 }
 
+# The hook passes the home as a physical path (pwd -P) unless FM_HOME names it,
+# and either side may spell the same home through a symlink, as macOS does for
+# every path under /tmp. The home's own x-mode.env stays an approved setup
+# source either way, and a symlink to any other directory stays denied.
+test_symlinked_home_x_mode_source() {
+  local home other link other_link output
+  home=$(CDPATH='' cd -- "$ROOT" && pwd -P)
+  other="$MATRIX_TMP/not-firstmate"
+  mkdir -p "$other/config"
+  link="$MATRIX_TMP/home-link"
+  other_link="$MATRIX_TMP/other-link"
+  ln -s "$home" "$link"
+  ln -s "$other" "$other_link"
+  [ "$link" != "$home" ] || fail "the symlinked spelling must differ from the physical home"
+  output=$(node "$POLICY" --root "$home" --home "$home" \
+    --command "source '$link/config/x-mode.env'; bin/fm-watch-checkpoint.sh --seconds 180") \
+    || fail "symlinked-home policy invocation failed"
+  [ "$output" = allow ] || fail "sourcing the home's x-mode.env through a symlink must allow, got: $output"
+  output=$(node "$POLICY" --root "$home" --home "$home" \
+    --command "source '$other_link/config/x-mode.env'; bin/fm-watch-checkpoint.sh --seconds 180") \
+    || fail "foreign-symlink policy invocation failed"
+  case "$output" in
+    deny$'\t'watcher-bundled$'\t'*) : ;;
+    *) fail "sourcing another directory's x-mode.env through a symlink must deny, got: $output" ;;
+  esac
+  FM_HOME="$link" "$CHECK" --command "source '$home/config/x-mode.env'; bin/fm-watch-checkpoint.sh --seconds 180" >/dev/null 2>&1 \
+    || fail "the hook under a symlinked FM_HOME must allow sourcing the home's physical x-mode.env"
+  pass "the home's x-mode.env is approved through a symlinked spelling, another directory's is not"
+}
+
 # --- CLI parsing -------------------------------------------------------------
 
 test_command_equals_form() {
@@ -465,6 +495,7 @@ test_shellcheck_clean() {
 
 test_full_acceptance_matrix
 test_direct_policy_contract
+test_symlinked_home_x_mode_source
 test_command_equals_form
 test_background_flag_accepted_and_non_gating
 test_unknown_flag_errors

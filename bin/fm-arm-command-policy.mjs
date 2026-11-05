@@ -870,7 +870,18 @@ function analyzeProgram(command, context, depth = 0) {
 function xModePathAllowed(value, home) {
   if (value === "config/x-mode.env" || value === "./config/x-mode.env") return true;
   if (!path.isAbsolute(value)) return false;
-  return path.normalize(value) === path.join(path.normalize(home), "config/x-mode.env");
+  const normalized = path.normalize(value);
+  if (normalized === path.join(path.normalize(home), "config/x-mode.env")) return true;
+  // The hook's home is physical (pwd -P) unless FM_HOME names it, and either
+  // side may spell the same home through a symlink (macOS /tmp is
+  // /private/tmp), so compare the resolved directories.
+  const suffix = `${path.sep}config${path.sep}x-mode.env`;
+  if (!normalized.endsWith(suffix)) return false;
+  try {
+    return realpathSync(normalized.slice(0, -suffix.length) || path.sep) === realpathSync(home);
+  } catch {
+    return false;
+  }
 }
 
 function ordinaryWordsOnly(tokens) {
