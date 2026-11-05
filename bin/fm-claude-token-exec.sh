@@ -20,8 +20,15 @@
 # always dropped first, so only the handed-over file can supply one.
 set -u
 
+usage="usage: fm-claude-token-exec.sh <token-file> <command> [<arg>...]"
+case "${1:-}" in
+-h | --help)
+  printf '%s\n' "$usage"
+  exit 0
+  ;;
+esac
 [ "$#" -ge 2 ] || {
-  echo "usage: fm-claude-token-exec.sh <token-file> <command> [<arg>...]" >&2
+  echo "$usage" >&2
   exit 2
 }
 file=$1
