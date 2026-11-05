@@ -81,6 +81,13 @@ Each effective `FM_HOME` contains private operational directories.
 - Learnings, backlog, briefs, scout reports, and the optional per-task no-mistakes pipeline-spend ledger.
 - Explicitly installed content-addressed extension packages under `data/extensions/packages/`.
 
+Task material under `data/` follows one retention rule once its task has been closed for more than 60 days:
+
+- Text records stay in the home: the task's `report.md`, `notes.md`, and any brief or decisions text.
+- Binaries (images, PDFs, exports) move to the owning business area's shared drive folder, resolved by folder ID, never by name path.
+- Binaries move only as one captain-approved batch at a time, and each move is logged by file ID.
+- Nothing is deleted from the home before its copy has landed in the drive.
+
 `state/` holds runtime records:
 
 - Task metadata, append-only status events, and endpoint signals.
