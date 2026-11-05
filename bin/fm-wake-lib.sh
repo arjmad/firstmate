@@ -2702,7 +2702,10 @@ fm_wake_branch_grant_live() {  # <rows-file> <owner-file>
 # 2 check", or nothing for none: a signal row whose payload opens with
 # needs-decision: (the watcher's mark for a decision-owned file) counts as
 # decision-owned, and a row whose kind is not signal, stale, check, or heartbeat
-# counts as other. An absent queue owns no rows. Read without the queue lock: a
+# counts as other. A stale row for a decision-owned task carries no such mark and
+# counts as stale: that ownership lives in task records, which this count never
+# reads. A queue that is absent, empty, or not a regular file owns no rows, as
+# before. Read without the queue lock: a
 # torn read can only mis-count one poll, and the drain re-derives the set under
 # the lock before it presents or mutates anything. Fails when the queue exists
 # but cannot be read.
@@ -2711,7 +2714,7 @@ fm_wake_actor_row_kinds() {  # <main|branch> --count|--summary [<rows-file> <own
   case "$actor" in main|branch) ;; *) return 2 ;; esac
   case "$mode" in --count|--summary) ;; *) return 2 ;; esac
   local rows=${3:-$STATE/.branch-eligible-rows} owner=${4:-$STATE/.branch-eligible-owner} grant=''
-  if [ ! -e "$FM_WAKE_QUEUE" ]; then
+  if [ ! -f "$FM_WAKE_QUEUE" ] || [ ! -s "$FM_WAKE_QUEUE" ]; then
     [ "$mode" = --summary ] || printf '0\n'
     return 0
   fi
@@ -2721,7 +2724,9 @@ fm_wake_actor_row_kinds() {  # <main|branch> --count|--summary [<rows-file> <own
     [ "$mode" = --summary ] || printf '0\n'
     return 0
   fi
-  [ -f "$FM_WAKE_QUEUE" ] && [ -r "$FM_WAKE_QUEUE" ] || return 1
+  # Unreadable is checked here so the failure contract does not rest on awk; the
+  # awk exit status below still decides a queue that turns unreadable after it.
+  [ -r "$FM_WAKE_QUEUE" ] || return 1
   awk -F '\t' -v seqs="$grant" -v actor="$actor" -v mode="$mode" '
     BEGIN { if (seqs != "") while ((getline line < seqs) > 0) reserved[line] = 1 }
     {
@@ -2754,7 +2759,10 @@ fm_wake_actor_pending_count() {  # <actor> [<rows-file> <owner-file>]
     "${3:-$STATE/.branch-eligible-owner}") || count=''
   # A queue that exists but cannot be counted (unreadable file, unreadable
   # state/) is not evidence of an empty queue: report a pending row so callers
-  # still raise the alarm on a queue nobody can prove is drained.
+  # still raise the alarm on a queue nobody can prove is drained. A failed count
+  # is decided by the helper's exit status, not by what it printed, because an
+  # awk that reaches END after failing to open the queue would otherwise report
+  # 0 rows.
   case "$count" in ''|*[!0-9]*) count=1 ;; esac
   printf '%s\n' "$count"
 }
