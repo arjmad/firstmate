@@ -85,7 +85,12 @@
 # capture reading them, then runs "<command> --settle" from the checkout and
 # prints "settled: ..." or a STUCK line naming its exit. The capture command
 # owns --settle: it restores only edits origin/<default> already holds. The
-# checkout then gets the ordinary sync, which fast-forwards it once it is clean.
+# settle runs only when that restore lets the checkout fast-forward (on
+# <default> at an ancestor of the freshly fetched origin/<default>, with every
+# uncommitted path under <dir>/ already holding origin's content); otherwise it
+# prints "settle held: <reason>" and leaves the edits live, since restoring some
+# of them under a blocked fast-forward would run older text until it clears.
+# The checkout then gets the ordinary sync, which fast-forwards it once it is clean.
 # A capture still running after the wait reports "skipped: busy:" untouched.
 # Scheduled form (--scheduled): bin/fm-watch.sh starts it detached once per
 # scheduled interval, so a merge firstmate did not make still goes live. It is
@@ -643,6 +648,47 @@ capture_or_report_stuck() {
   echo "$label: capturing: $CAPTURE_COUNT uncommitted path(s) under $CAPTURE_DIR only; started $CAPTURE_CMD (log $log)"
 }
 
+# settle_can_fast_forward: true when the checkout, once --settle restores the
+# edits origin/<default> already holds, can fast-forward: it is on <default> at
+# an ancestor of origin/<default>, and every uncommitted path lies under
+# $CAPTURE_DIR with the content origin/<default> holds. Otherwise sets
+# SETTLE_HELD to the first reason.
+settle_can_fast_forward() {
+  local default base path here there
+  if ! fetch_with_packed_refs_lock_guard; then
+    SETTLE_HELD="fetch failed: $(first_line "$FETCH_OUTPUT")"
+    return 1
+  fi
+  if ! default=$(default_branch) || ! git -C "$PROJ" rev-parse --verify --quiet "origin/$default^{commit}" >/dev/null; then
+    SETTLE_HELD="cannot resolve origin's default branch"
+    return 1
+  fi
+  base="origin/$default"
+  if [ "$(git -C "$PROJ" symbolic-ref --short HEAD 2>/dev/null)" != "$default" ] \
+      || ! git -C "$PROJ" merge-base --is-ancestor HEAD "$base" 2>/dev/null; then
+    SETTLE_HELD="the checkout is not on $default at an ancestor of $base"
+    return 1
+  fi
+  while IFS= read -r -d '' path; do
+    case "$path" in
+      "$CAPTURE_DIR"*) ;;
+      *) SETTLE_HELD="$path lies outside $CAPTURE_DIR"; return 1 ;;
+    esac
+    here=""
+    if [ -L "$PROJ/$path" ]; then
+      here=$(printf '%s' "$(readlink "$PROJ/$path")" | git -C "$PROJ" hash-object --stdin)
+    elif [ -f "$PROJ/$path" ]; then
+      here=$(git -C "$PROJ" hash-object -- "$path")
+    fi
+    there=$(git -C "$PROJ" rev-parse --quiet --verify "$base:$path" 2>/dev/null) || there=""
+    if [ "$here" != "$there" ]; then
+      SETTLE_HELD="$path is not what $base holds yet"
+      return 1
+    fi
+  done < <({ git -C "$PROJ" diff -z --name-only --no-renames HEAD
+    git -C "$PROJ" ls-files -z --others --exclude-standard; } 2>/dev/null | sort -zu)
+}
+
 # settle_capture: the settle form's step for one capture= checkout (see the
 # header). Returns non-zero only when a capture is still running after the wait,
 # which leaves the checkout for the ordinary busy skip.
@@ -653,6 +699,10 @@ settle_capture() {
     sleep "$LIVE_LOCK_POLL_SECS"
     waited=$((waited + LIVE_LOCK_POLL_SECS))
   done
+  if ! settle_can_fast_forward; then
+    echo "$label: settle held: $SETTLE_HELD, so $CAPTURE_CMD --settle did not run; restoring edits origin already holds would leave this checkout on older text until it can fast-forward"
+    return 0
+  fi
   log=$(mktemp "${TMPDIR:-/tmp}/fm-capture-settle.XXXXXX") || {
     echo "$label: STUCK: could not start $CAPTURE_CMD --settle - needs attention"
     return 0
