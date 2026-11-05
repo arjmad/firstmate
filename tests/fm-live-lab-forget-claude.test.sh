@@ -30,9 +30,9 @@ mkdir -p "$T/forget-config" "$F/forget-root/home/wt" "$F/forget-unmarked"
 cat > "$T/forget-config/.claude.json" <<JSON
 {"numStartups": 3, "projects": {"$F/forget-root/home/wt": {"hasTrustDialogAccepted": true}, "$F/forget-root": {"hasTrustDialogAccepted": true}, "$F/forget-rootless": {"hasTrustDialogAccepted": true}, "/elsewhere": {"hasTrustDialogAccepted": true}}}
 JSON
-out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$F/forget-root" 2>&1)
-expect_code 0 "$?" "forget-claude succeeds on a disposable root"
-assert_contains "$out" "2" "forget-claude reports the two entries it removed"
+out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$F/forget-root" 2>"$T/forget.err")
+expect_code 0 "$?" "forget-claude succeeds on a disposable root: $(cat "$T/forget.err")"
+[ "$out" = 2 ] || fail "forget-claude should print exactly the two entries it removed: $out"
 kept=$(jq -r '.projects | keys | sort | join(",")' "$T/forget-config/.claude.json")
 [ "$kept" = "$F/forget-rootless,/elsewhere" ] || [ "$kept" = "/elsewhere,$F/forget-rootless" ] \
   || fail "forget-claude kept the wrong entries: $kept"
@@ -81,10 +81,10 @@ lock_store "$S"
 mkdir "$S/.claude.json.lock"
 set_mtime "$S/.claude.json.lock" 3600  # never stale, however slow this host runs
 before=$(digest "$S/.claude.json")
-CLAUDE_CONFIG_DIR="$S" "$LIVE_LAB" forget-claude "$F/forget-root" > "$T/held.out" 2>&1 &
+CLAUDE_CONFIG_DIR="$S" "$LIVE_LAB" forget-claude "$F/forget-root" > "$T/held.out" 2> "$T/held.err" &
 held_pid=$!
 sleep 1
-kill -0 "$held_pid" 2>/dev/null || fail "forget-claude finished while another writer held the store lock: $(cat "$T/held.out")"
+kill -0 "$held_pid" 2>/dev/null || fail "forget-claude finished while another writer held the store lock: $(cat "$T/held.out" "$T/held.err")"
 [ "$(digest "$S/.claude.json")" = "$before" ] || fail "forget-claude rewrote the store while another writer held its lock"
 jq '.vendorWrite = true' "$S/.claude.json" > "$S/.claude.json.vendor" && mv "$S/.claude.json.vendor" "$S/.claude.json"
 rmdir "$S/.claude.json.lock"
