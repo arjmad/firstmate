@@ -96,9 +96,10 @@ task_tmp_dirs() {
   if command -v shasum >/dev/null 2>&1; then
     hash=$(printf '%s' "$LAB_HOME" | shasum -a 256 | awk '{print $1}')
   else
-    hash=$(printf '%s' "$LAB_HOME" | sha256sum | awk '{print $1}')
+    hash=$(printf '%s' "$LAB_HOME" | sha256sum 2>/dev/null | awk '{print $1}')
   fi
-  printf '%s\n' "/tmp/fm-$ID" "/tmp/fm-$ID+$hash"
+  printf '%s\n' "/tmp/fm-$ID"
+  [ -z "$hash" ] || printf '%s\n' "/tmp/fm-$ID+$hash"
 }
 
 # Declare a root this run just created to bin/fm-live-lab.sh forget-claude.
@@ -110,13 +111,26 @@ mark_created() {  # <dir>...
   done
 }
 
+treehouse_unchanged() {  # reports and fails when the operator's pool gained an entry
+  local added
+  added=$(comm -13 <(printf '%s\n' "$TREEHOUSE_BEFORE") <(treehouse_listing))
+  [ -n "$added" ] || return 0
+  printf 'not ok - %s gained entries during the run; left as is: %s\n' "$TREEHOUSE_DIR" "$(printf '%s' "$added" | tr '\n' ' ')" >&2
+  return 1
+}
+
 cleanup() {
-  local rc=$? dir added keep_root=0 forgotten
+  local rc=$? dir keep_root=0 forgotten
   trap - EXIT
   if [ "$PROVISIONED" = 1 ] && ! PATH="$ORIGINAL_PATH" "$LAB_HELPER" teardown "$SESSION"; then
     # A worker that may still be running could write its Claude entry back, so
     # every root and its entries stay for a later cleanup.
-    printf 'not ok - lab teardown failed; kept %s and this run'"'"'s task directories with their Claude entries\n' "${TMP_ROOT:-the temporary root}" >&2
+    if [ "$SPAWN_RAN" = 1 ]; then
+      printf 'not ok - lab teardown failed; kept %s and this run'"'"'s task directories with their Claude entries\n' "${TMP_ROOT:-the temporary root}" >&2
+    else
+      printf 'not ok - lab teardown failed; kept %s with its Claude entries\n' "${TMP_ROOT:-the temporary root}" >&2
+    fi
+    treehouse_unchanged
     exit 1
   fi
   # A spawn keeps /tmp/fm-<id> and /tmp/fm-<id>+<sha256 of the spawning home>;
@@ -137,19 +151,20 @@ cleanup() {
     if [ -n "$ACCOUNT" ] && ! CLAUDE_CONFIG_DIR="$ACCOUNT" "$ROOT/bin/fm-live-lab.sh" forget-claude "$dir" >/dev/null; then
       forgotten=0
     fi
-    if [ "$forgotten" = 1 ]; then
-      [ "$dir" = "$TMP_ROOT" ] || rm -rf "$dir"
-    else
-      printf 'not ok - could not remove the Claude project entries under %s; kept it for a later forget-claude\n' "$dir" >&2
+    if [ "$forgotten" = 0 ]; then
+      if [ -f "$dir/.fm-forget-claude" ]; then
+        printf 'not ok - could not remove the Claude project entries under %s; kept it for a later forget-claude\n' "$dir" >&2
+      else
+        printf 'not ok - %s was never declared to forget-claude (an interrupted spawn); kept it, so remove its Claude project entries by hand before deleting it\n' "$dir" >&2
+      fi
       rc=1
       [ "$dir" != "$TMP_ROOT" ] || keep_root=1
+    elif [ "$dir" != "$TMP_ROOT" ]; then
+      chmod -R u+w "$dir" 2>/dev/null
+      rm -rf "$dir" || { printf 'not ok - could not remove %s\n' "$dir" >&2; rc=1; }
     fi
   done
-  added=$(comm -13 <(printf '%s\n' "$TREEHOUSE_BEFORE") <(treehouse_listing))
-  if [ -n "$added" ]; then
-    printf 'not ok - %s gained entries during the run; left as is: %s\n' "$TREEHOUSE_DIR" "$(printf '%s' "$added" | tr '\n' ' ')" >&2
-    rc=1
-  fi
+  treehouse_unchanged || rc=1
   if [ -n "$TMP_ROOT" ] && [ "$keep_root" = 0 ]; then
     chmod -R u+w "$TMP_ROOT" 2>/dev/null
     rm -rf "$TMP_ROOT"

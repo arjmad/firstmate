@@ -22,8 +22,7 @@ unset CLAUDE_CONFIG_DIR
 
 # forget-claude removes exactly the Claude project entries at or under its root,
 # for a live test that spawns Claude workers without a lab record. Its root
-# lives under /tmp whatever TMPDIR says, since forget-claude takes only a
-# system temporary directory.
+# lives under /tmp whatever TMPDIR says, since forget-claude takes only /tmp.
 F=$(TMPDIR=/tmp fm_test_tmproot fm-live-lab-forget) || fail "fixture: no /tmp root"
 mkdir -p "$T/forget-config" "$F/forget-root/home/wt" "$F/forget-unmarked"
 : > "$F/forget-root/.fm-forget-claude"
@@ -45,9 +44,19 @@ expect_code 1 "$?" "forget-claude refuses / as its root"
 out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude /private 2>&1)
 expect_code 1 "$?" "forget-claude refuses /private, whose stripped form would match every entry"
 out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$ROOT" 2>&1)
-expect_code 1 "$?" "forget-claude refuses a root outside every temporary directory"
+expect_code 1 "$?" "forget-claude refuses a root outside /tmp"
 out=$(CLAUDE_CONFIG_DIR="$T/forget-config" TMPDIR=/ "$LIVE_LAB" forget-claude "$ROOT" 2>&1)
 expect_code 1 "$?" "forget-claude does not trust the caller's TMPDIR as a temporary directory"
+# A marked root in another temporary directory is refused even when TMPDIR
+# names it: /var/tmp everywhere, and the macOS per-user directory where it exists.
+for base in /var/tmp "$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"; do
+  [ -n "$base" ] && [ -d "$base" ] && [ -w "$base" ] || continue
+  other=$(TMPDIR=$base fm_test_tmproot fm-live-lab-forget-other) || fail "fixture: no root under $base"
+  : > "$other/.fm-forget-claude"
+  out=$(CLAUDE_CONFIG_DIR="$T/forget-config" TMPDIR="$base" "$LIVE_LAB" forget-claude "$other" 2>&1)
+  expect_code 1 "$?" "forget-claude refuses a marked root under $base"
+  assert_contains "$out" "inside /tmp" "the refusal for $base names the /tmp rule"
+done
 out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$F/forget-unmarked" 2>&1)
 expect_code 1 "$?" "forget-claude refuses a root its creator did not mark, such as a live task's directory"
 assert_contains "$out" ".fm-forget-claude" "the refusal names the missing marker"
