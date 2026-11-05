@@ -3121,8 +3121,9 @@ resurface_after_downtime() {
     fi
     [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || return 0
   fi
-  # wake exits, so the flag reaches watcher_cleanup only for this delivery; a
-  # wake that returned must not leave it set for a later, unrelated one.
+  # wake exits, so the flag reaches watcher_cleanup only for this delivery. The
+  # reset after it runs only when a test overrides wake with a callback that
+  # returns, so that delivery cannot leave the flag set for a later one.
   WATCHER_RESURFACED=1
   wake "$(resurface_reason)"
   WATCHER_RESURFACED=0
@@ -3132,19 +3133,17 @@ resurface_after_downtime() {
 # a row another process appended (an inbox note, a merge outcome) or one queued
 # while no non-successor cycle ran has no wake of its own, so this path is how
 # it reaches main. When main has rows queued the recovery counts them by kind -
-# "check: queued work: 1 needs-decision, 2 check" - so the banner and the ledger
+# "check: queued work: 1 decision-owned, 2 check" - so the banner and the ledger
 # show what is waiting instead of reading as downtime. It never copies a row's
 # payload: payloads can carry outside text (a mail subject, an inbox note), and
 # this line is main's trigger, not drain output read as evidence. Main's rows
-# are the ones fm_wake_main_row_kinds counts, the same set main's pending count
-# uses. It stays a check reason on purpose: routing is unchanged and every
+# are the ones fm_wake_actor_row_kinds counts for main, the same set main's
+# pending count uses. It stays a check reason on purpose: routing is unchanged and every
 # recovery still reaches main. A recovery with nothing for main, such as an
 # interrupted handling turn, keeps the generic reason.
 resurface_reason() {
-  local summary=''
-  if [ -s "$FM_WAKE_QUEUE" ]; then
-    summary=$(fm_wake_main_row_kinds --summary 2>/dev/null) || summary=''
-  fi
+  local summary
+  summary=$(fm_wake_actor_row_kinds main --summary 2>/dev/null) || summary=''
   if [ -n "$summary" ]; then
     printf 'check: queued work: %s\n' "$summary"
   else

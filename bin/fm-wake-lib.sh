@@ -2694,32 +2694,47 @@ fm_wake_branch_grant_live() {  # <rows-file> <owner-file>
   fm_wake_grant_rows_valid "$1" && fm_wake_branch_owner_matches "$2"
 }
 
-# Main's queued rows: every structurally valid row a live branch grant does not
-# reserve, plus every structurally invalid row. --count prints how many.
-# --summary prints them counted by kind in one line, decisions first, such as
-# "1 needs-decision, 2 check", or nothing for none: a signal row whose payload
-# opens with needs-decision: counts as needs-decision, and a row whose kind is
-# not signal, stale, check, or heartbeat counts as other. Read without the
-# queue lock: a torn read can only mis-count one poll, and the drain re-derives
-# the set under the lock before it presents or mutates anything. Fails when the
-# queue exists but cannot be read.
-fm_wake_main_row_kinds() {  # --count|--summary [<rows-file> <owner-file>]
-  local mode=${1:-}
-  case "$mode" in --count|--summary) shift ;; *) return 2 ;; esac
-  local rows=${1:-$STATE/.branch-eligible-rows} owner=${2:-$STATE/.branch-eligible-owner} grant=''
-  if [ ! -f "$FM_WAKE_QUEUE" ]; then
+# The queued rows <actor> owns, read in one awk pass. Main owns every
+# structurally valid row a live branch grant does not reserve, plus every
+# structurally invalid row; the branch owns exactly the valid rows its live grant
+# names, and none without one. --count prints how many. --summary prints them
+# counted by kind in one line, decisions first, such as "1 decision-owned,
+# 2 check", or nothing for none: a signal row whose payload opens with
+# needs-decision: (the watcher's mark for a decision-owned file) counts as
+# decision-owned, and a row whose kind is not signal, stale, check, or heartbeat
+# counts as other. A stale row for a decision-owned task carries no such mark and
+# counts as stale: that ownership lives in task records, which this count never
+# reads. A queue that is absent, empty, or not a regular file owns no rows, as
+# before. Read without the queue lock: a
+# torn read can only mis-count one poll, and the drain re-derives the set under
+# the lock before it presents or mutates anything. Fails when the queue exists
+# but cannot be read.
+fm_wake_actor_row_kinds() {  # <main|branch> --count|--summary [<rows-file> <owner-file>]
+  local actor=${1:-} mode=${2:-}
+  case "$actor" in main|branch) ;; *) return 2 ;; esac
+  case "$mode" in --count|--summary) ;; *) return 2 ;; esac
+  local rows=${3:-$STATE/.branch-eligible-rows} owner=${4:-$STATE/.branch-eligible-owner} grant=''
+  if [ ! -f "$FM_WAKE_QUEUE" ] || [ ! -s "$FM_WAKE_QUEUE" ]; then
     [ "$mode" = --summary ] || printf '0\n'
     return 0
   fi
   if fm_wake_branch_grant_live "$rows" "$owner"; then
     grant=$rows
+  elif [ "$actor" = branch ]; then
+    [ "$mode" = --summary ] || printf '0\n'
+    return 0
   fi
-  awk -F '\t' -v seqs="$grant" -v mode="$mode" '
+  # Unreadable is checked here so the failure contract does not rest on awk; the
+  # awk exit status below still decides a queue that turns unreadable after it.
+  [ -r "$FM_WAKE_QUEUE" ] || return 1
+  awk -F '\t' -v seqs="$grant" -v actor="$actor" -v mode="$mode" '
     BEGIN { if (seqs != "") while ((getline line < seqs) > 0) reserved[line] = 1 }
     {
-      if (NF < 5 || $2 !~ /^[0-9]+$/) kind = "other"
-      else if ($2 in reserved) next
-      else if ($3 == "signal" && index($5, "needs-decision:") == 1) kind = "needs-decision"
+      valid = (NF >= 5 && $2 ~ /^[0-9]+$/)
+      held = valid && ($2 in reserved)
+      if (actor == "branch" ? !held : held) next
+      if (!valid) kind = "other"
+      else if ($3 == "signal" && index($5, "needs-decision:") == 1) kind = "decision-owned"
       else if ($3 == "signal" || $3 == "stale" || $3 == "check" || $3 == "heartbeat") kind = $3
       else kind = "other"
       total++
@@ -2727,7 +2742,7 @@ fm_wake_main_row_kinds() {  # --count|--summary [<rows-file> <owner-file>]
     }
     END {
       if (mode == "--count") { print total + 0; exit }
-      split("needs-decision signal stale check heartbeat other", order, " ")
+      split("decision-owned signal stale check heartbeat other", order, " ")
       for (i = 1; i <= 6; i++) if (n[order[i]] > 0) out = out (out == "" ? "" : ", ") n[order[i]] " " order[i]
       if (out != "") print out
     }
@@ -2736,27 +2751,18 @@ fm_wake_main_row_kinds() {  # --count|--summary [<rows-file> <owner-file>]
 
 # How many queued rows <actor> can act on right now - exactly the rows a drain
 # by that actor would present or retire, and therefore the only rows worth
-# telling that actor to drain. Main owns the rows fm_wake_main_row_kinds counts.
-# The branch owns exactly the rows its live grant names.
+# telling that actor to drain; fm_wake_actor_row_kinds owns which rows those are.
 fm_wake_actor_pending_count() {  # <actor> [<rows-file> <owner-file>]
-  local actor=${1:-main} rows=${2:-$STATE/.branch-eligible-rows}
-  local owner=${3:-$STATE/.branch-eligible-owner} count=''
-  [ -f "$FM_WAKE_QUEUE" ] || { printf '0\n'; return 0; }
-  if [ "$actor" = branch ]; then
-    fm_wake_branch_grant_live "$rows" "$owner" || { printf '0\n'; return 0; }
-    count=$(awk -F '\t' -v seqs="$rows" '
-      BEGIN { while ((getline line < seqs) > 0) keep[line] = 1 }
-      NF >= 5 && $2 ~ /^[0-9]+$/ && ($2 in keep) { n++ }
-      END { print n + 0 }
-    ' "$FM_WAKE_QUEUE") || count=''
-  else
-    count=$(fm_wake_main_row_kinds --count "$rows" "$owner") || count=''
-  fi
+  local actor=${1:-main} count=''
+  [ "$actor" = branch ] || actor=main
+  count=$(fm_wake_actor_row_kinds "$actor" --count "${2:-$STATE/.branch-eligible-rows}" \
+    "${3:-$STATE/.branch-eligible-owner}") || count=''
   # A queue that exists but cannot be counted (unreadable file, unreadable
   # state/) is not evidence of an empty queue: report a pending row so callers
   # still raise the alarm on a queue nobody can prove is drained. A failed count
-  # is decided by awk's exit status, not by what it printed, because an awk that
-  # reaches END after failing to open the queue would otherwise report 0 rows.
+  # is decided by the helper's exit status, not by what it printed, because an
+  # awk that reaches END after failing to open the queue would otherwise report
+  # 0 rows.
   case "$count" in ''|*[!0-9]*) count=1 ;; esac
   printf '%s\n' "$count"
 }

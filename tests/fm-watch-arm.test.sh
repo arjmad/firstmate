@@ -993,7 +993,7 @@ test_recovery_names_queued_work() {
     || fail "fixture: decision row append failed"
   start_rearm_arm "$home" "$state" "$fakebin" "$dir/decision.out"
   wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "a decision-owned row was stranded at re-arm"
-  grep -Fx 'check: queued work: 1 needs-decision, 1 check' "$dir/decision.out" >/dev/null \
+  grep -Fx 'check: queued work: 1 decision-owned, 1 check' "$dir/decision.out" >/dev/null \
     || fail "a decision was not listed ahead of an older check row: $(cat "$dir/decision.out")"
   ack_wakes "$state" || fail "decision queue acknowledgement failed"
 
