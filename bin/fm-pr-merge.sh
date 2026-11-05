@@ -1876,7 +1876,7 @@ record_one_way_hold() {  # [retract]
   elif [ "${1:-}" = retract ] || ! one_way_hold_recorded; then
     if tmp=$(mktemp "$STATE/.$ID.meta.one-way.XXXXXX"); then
       if [ "${1:-}" = retract ]; then
-        grep -vxF "$line" "$META" > "$tmp" || true
+        grep -vxF "$line" "$META" > "$tmp" || [ "$?" -eq 1 ] || status=1
       else
         fm_pr_meta_rewrite "$META" "" "$line" > "$tmp" || status=1
       fi
