@@ -1224,9 +1224,6 @@ test_settle_capture_failure_is_stuck() {
   printf '#!/usr/bin/env bash\necho "skill-capture: HEAD is not on origin/main" >&2\nexit 1\n' > "$home/bad-settle.sh"
   chmod +x "$home/bad-settle.sh"
   printf 'live edit\n' >> "$live/skills/a.md"
-  cp "$live/skills/a.md" "$home/work-badsettle/skills/a.md"
-  git -C "$home/work-badsettle" commit -qam "capture merged"
-  git -C "$home/work-badsettle" push -q origin main
   live_config "$home" "badsettle $live capture=skills/:$home/bad-settle.sh"
   out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" --settle-capture badsettle 2>&1)
   assert_contains "$out" "badsettle live $live: STUCK:" "a failed settle is STUCK"

@@ -260,7 +260,9 @@ test_merge_time_record_reads_the_head_without_a_worktree() {
 # A real bin/fm-fleet-sync.sh settles a real live checkout: Nova's edit to
 # skills/a.md is captured and merged, while skills/b.md holds an edit origin
 # does not have yet, so the fast-forward stays blocked. The settle must not
-# restore a.md to its pre-edit text under that block.
+# leave a.md at its pre-edit text under that block. Like Nova's capture, the
+# fixture settles a path whose text matches origin's apart from trailing
+# whitespace, so the live a.md carries some.
 test_settle_never_reverts_a_landed_edit_the_fast_forward_cannot_bring_back() {
   local c live work
   c=$(new_case)
@@ -278,7 +280,7 @@ test_settle_never_reverts_a_landed_edit_the_fast_forward_cannot_bring_back() {
   git -C "$work" commit -qm skills
   git -C "$work" push -q origin main
   git clone -q "$c/origin.git" "$live"
-  printf 'new\n' > "$live/skills/a.md"
+  printf 'new  \n' > "$live/skills/a.md"
   printf 'b-pending\n' > "$live/skills/b.md"
   printf 'new\n' > "$work/skills/a.md"
   git -C "$work" commit -qam "capture merged"
@@ -288,7 +290,7 @@ test_settle_never_reverts_a_landed_edit_the_fast_forward_cannot_bring_back() {
 [ "${1:-}" = --settle ] || exit 0
 git fetch -q origin
 git diff --name-only HEAD -- skills/ | while IFS= read -r path; do
-  [ "$(git hash-object -- "$path")" = "$(git rev-parse -q --verify "origin/main:$path")" ] || continue
+  [ "$(sed 's/[[:space:]]*$//' "$path" | git hash-object --stdin)" = "$(git rev-parse -q --verify "origin/main:$path")" ] || continue
   git checkout -q HEAD -- "$path"
   echo "settled $path"
 done
@@ -301,7 +303,7 @@ SCRIPT
   assert_equals 3 "$RC" "a checkout the fast-forward cannot reach is unfinished: $OUT"
   assert_equals new "$(cat "$live/skills/a.md")" "the landed edit stays in the live checkout: $OUT"
   assert_equals b-pending "$(cat "$live/skills/b.md")" "the pending edit is untouched"
-  assert_contains "$OUT" "nova live $live: settle held: skills/b.md is not what origin/main holds yet" "the held settle names the blocking path"
+  assert_contains "$OUT" "nova live $live: settle held: skills/b.md is still uncommitted" "the held settle names the blocking path"
   assert_not_contains "$OUT" "nova live $live: synced" "the blocked checkout did not fast-forward"
 
   git -C "$live" add skills/b.md
@@ -309,7 +311,7 @@ SCRIPT
   GIT_SSH_COMMAND=false land "$c" "$URL"
   assert_equals 3 "$RC" "a staged edit also blocks the fast-forward: $OUT"
   assert_equals new "$(cat "$live/skills/a.md")" "a staged edit never lets the settle revert the landed edit: $OUT"
-  assert_contains "$OUT" "nova live $live: settle held: the index holds staged changes" "the held settle names the staged changes"
+  assert_contains "$OUT" "nova live $live: settle held: skills/b.md is still uncommitted" "the held settle names the staged path"
   git -C "$live" reset -q
   printf 'b-pending\n' > "$live/skills/b.md"
 
