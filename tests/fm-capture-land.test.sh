@@ -304,6 +304,15 @@ SCRIPT
   assert_contains "$OUT" "nova live $live: settle held: skills/b.md is not what origin/main holds yet" "the held settle names the blocking path"
   assert_not_contains "$OUT" "nova live $live: synced" "the blocked checkout did not fast-forward"
 
+  git -C "$live" add skills/b.md
+  printf 'b0\n' > "$live/skills/b.md"
+  GIT_SSH_COMMAND=false land "$c" "$URL"
+  assert_equals 3 "$RC" "a staged edit also blocks the fast-forward: $OUT"
+  assert_equals new "$(cat "$live/skills/a.md")" "a staged edit never lets the settle revert the landed edit: $OUT"
+  assert_contains "$OUT" "nova live $live: settle held: the index holds staged changes" "the held settle names the staged changes"
+  git -C "$live" reset -q
+  printf 'b-pending\n' > "$live/skills/b.md"
+
   printf 'b-pending\n' > "$work/skills/b.md"
   git -C "$work" commit -qam "second capture merged"
   git -C "$work" push -q origin main

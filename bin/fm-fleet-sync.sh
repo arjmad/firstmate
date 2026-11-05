@@ -650,9 +650,9 @@ capture_or_report_stuck() {
 
 # settle_can_fast_forward: true when the checkout, once --settle restores the
 # edits origin/<default> already holds, can fast-forward: it is on <default> at
-# an ancestor of origin/<default>, and every uncommitted path lies under
-# $CAPTURE_DIR with the content origin/<default> holds. Otherwise sets
-# SETTLE_HELD to the first reason.
+# an ancestor of origin/<default>, nothing is staged, and every uncommitted path
+# lies under $CAPTURE_DIR with the content origin/<default> holds. Otherwise
+# sets SETTLE_HELD to the first reason.
 settle_can_fast_forward() {
   local default base path here there
   if ! fetch_with_packed_refs_lock_guard; then
@@ -667,6 +667,10 @@ settle_can_fast_forward() {
   if [ "$(git -C "$PROJ" symbolic-ref --short HEAD 2>/dev/null)" != "$default" ] \
       || ! git -C "$PROJ" merge-base --is-ancestor HEAD "$base" 2>/dev/null; then
     SETTLE_HELD="the checkout is not on $default at an ancestor of $base"
+    return 1
+  fi
+  if ! git -C "$PROJ" diff --cached --quiet HEAD 2>/dev/null; then
+    SETTLE_HELD="the index holds staged changes"
     return 1
   fi
   while IFS= read -r -d '' path; do
