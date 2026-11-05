@@ -32,11 +32,10 @@ if [ -f "$file" ] && [ ! -L "$file" ] && [ -O "$file" ]; then
   token=$(<"$file") || token=
   rm -f -- "$file" || echo "warning: could not remove the handed-over setup-token file $file; remove it by hand" >&2
 fi
-case "$token" in
-'' | *[[:space:]]*)
+if [ -n "$token" ]; then
+  export CLAUDE_CODE_OAUTH_TOKEN="$token"
+else
   echo "firstmate: no setup-token handed to this launch; the worker runs on its pinned account's stored login" >&2
-  ;;
-*) export CLAUDE_CODE_OAUTH_TOKEN="$token" ;;
-esac
+fi
 unset token
 exec env "$@"

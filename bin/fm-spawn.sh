@@ -1628,9 +1628,12 @@ spawn_orca_reclaim_launch_file() {
 
 spawn_abort_cleanup() {
   local status=$?
-  # A failed spawn never leaves a staged setup-token behind. Removing it before
-  # a delivered launch ran only starts that worker on its stored login.
-  if [ "$status" -ne 0 ] && [ -n "$SPAWN_STAGED_CLAUDE_TOKEN_FILE" ]; then
+  # A staged setup-token stays only for a launch this spawn delivered and
+  # completed; any other exit removes it, a signal included, since bash runs
+  # this trap with status 0 for an untrapped fatal signal. Removing it before a
+  # delivered launch ran only starts that worker on its stored login.
+  if [ -n "$SPAWN_STAGED_CLAUDE_TOKEN_FILE" ] &&
+    { [ "$status" -ne 0 ] || [ "$SPAWN_LAUNCH_SENT" = 0 ]; }; then
     rm -f -- "$SPAWN_STAGED_CLAUDE_TOKEN_FILE" 2>/dev/null || true
   fi
   if [ "$RELAUNCH_REPLACEMENT_PENDING" = 1 ] &&
@@ -3245,7 +3248,9 @@ WORKER_ACCOUNT_ROOT=${WORKER_ACCOUNT_ROOT%%$'\t'*}
 # decided here, while CLAUDE_CONFIG_DIR is still this session's own root.
 WORKER_ACCOUNT_CLAUDE_TOKEN=0
 if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS" = claude ]; then
-  ! fm_worker_account_claude_token_carry "$WORKER_ACCOUNT_ROOT" || WORKER_ACCOUNT_CLAUDE_TOKEN=1
+  if fm_worker_account_claude_token_carry "$WORKER_ACCOUNT_ROOT"; then
+    WORKER_ACCOUNT_CLAUDE_TOKEN=1
+  fi
   if [ -n "$WORKER_ACCOUNT_ROOT" ]; then
     export CLAUDE_CONFIG_DIR=$WORKER_ACCOUNT_ROOT
   else

@@ -332,8 +332,8 @@ fm_worker_account_claude_token_carry() {
     [ -z "$worker" ] && [ -z "$session" ]
     return
   fi
-  a=$(cd "$worker" 2>/dev/null && pwd -P) || return 1
-  b=$(cd "$session" 2>/dev/null && pwd -P) || return 1
+  a=$(CDPATH='' cd -- "$worker" 2>/dev/null && pwd -P) || return 1
+  b=$(CDPATH='' cd -- "$session" 2>/dev/null && pwd -P) || return 1
   [ "$a" = "$b" ]
 }
 
