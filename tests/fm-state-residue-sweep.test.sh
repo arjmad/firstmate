@@ -520,10 +520,6 @@ test_home_summary_scratch_rotates_by_age() {
   pass "sweep: orphaned home-summary scratch rotates by age, the ledger and log stay"
 }
 
-# bin/fm-watch-arm.sh captures its watcher child's stdout in
-# state/.watch-arm-output.<random> for that watcher's whole life, which in an
-# idle home can outlast the scratch age, so age alone never retires it while a
-# live watcher holds this home's lock.
 test_watch_arm_scratch_rotates_unless_a_watcher_runs() {
   local home fb now live
   home=$(new_home watch-arm-scratch); fb=$(make_tmux "$TMP_ROOT/watch-arm-scratch")
@@ -549,10 +545,7 @@ test_watch_arm_scratch_rotates_unless_a_watcher_runs() {
   pass "sweep: orphaned watch-arm captures rotate by age unless a live watcher holds the lock"
 }
 
-# seed_task_state <home> <task-id>: the per-task state a spawn leaves under
-# state/, already acknowledged: a steering inbox with one handled steer and the
-# read-only commit-msg hooks directory.
-seed_task_state() {
+seed_task_state() {  # <home> <task-id>
   local state="$1/state" id=$2
   mkdir -p "$state/$id.inbox/handled" "$state/$id.git-hooks"
   printf 'schema=fm-task-inbox.v1\n--\nsteer\n' > "$state/$id.inbox/handled/001.msg"
@@ -560,8 +553,7 @@ seed_task_state() {
   chmod 0555 "$state/$id.git-hooks"
 }
 
-# seed_journal <home> <task-id> <token>: a version 1 Herdr presentation journal.
-seed_journal() {
+seed_journal() {  # <home> <task-id> <token>
   printf 'version=1\ntask_id=%s\nprojection_id=%s\n' "$2" "$3" > "$1/state/$2.herdr-presentation"
 }
 
@@ -581,14 +573,10 @@ test_retired_task_state_swept_and_live_kept() {
     seed_task_records "$home" "$id"
   done
   seed_journal "$home" done.task "$gone_tok"
-  # A done task whose projected workspace is still open: fm-herdr-session-cleanup.sh
-  # needs its journal to close it.
   seed_journal "$home" shown "$shown_tok"
   seed_journal "$home" live "$live_tok"
-  # A live task keeps its journal even once its workspace is gone.
   seed_journal "$home" pending "$gone_tok"
   printf 'window=default:w9:p1\nbackend=herdr\nkind=ship\n' > "$state/live.meta"
-  # An inbox still holding an unhandled steer keeps its task live.
   printf 'schema=fm-task-inbox.v1\n--\nunread\n' > "$state/pending.inbox/002.msg"
 
   out=$(run_sweep_herdr "$fb" "$home" --dry-run)
@@ -612,7 +600,6 @@ test_retired_task_state_swept_and_live_kept() {
   done
   [ -f "$state/pending.inbox/002.msg" ] || fail "an unhandled steer must never be swept"
 
-  # A workspace list that cannot be read proves nothing gone.
   seed_journal "$home" unread.task "$gone_tok"
   herdr_world "$home" garbled "" claude
   run_sweep_herdr "$fb" "$home" >/dev/null
