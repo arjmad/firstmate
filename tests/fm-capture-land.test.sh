@@ -257,7 +257,65 @@ test_merge_time_record_reads_the_head_without_a_worktree() {
   pass "bin/fm-pr-check.sh reads the forge head for a merge-time record that names no worktree"
 }
 
+# A real bin/fm-fleet-sync.sh settles a real live checkout: Nova's edit to
+# skills/a.md is captured and merged, while skills/b.md holds an edit origin
+# does not have yet, so the fast-forward stays blocked. The settle must not
+# restore a.md to its pre-edit text under that block.
+test_settle_never_reverts_a_landed_edit_the_fast_forward_cannot_bring_back() {
+  local c live work
+  c=$(new_case)
+  cp "$ROOT/bin/fm-fleet-sync.sh" "$c/code/bin/fm-fleet-sync.sh"
+  live="$c/live" work="$c/work"
+  git init -q --bare "$c/origin.git"
+  git -C "$c/origin.git" symbolic-ref HEAD refs/heads/main
+  git init -q "$work"
+  git -C "$work" symbolic-ref HEAD refs/heads/main
+  git -C "$work" remote add origin "$c/origin.git"
+  mkdir -p "$work/skills"
+  printf 'old\n' > "$work/skills/a.md"
+  printf 'b0\n' > "$work/skills/b.md"
+  git -C "$work" add skills
+  git -C "$work" commit -qm skills
+  git -C "$work" push -q origin main
+  git clone -q "$c/origin.git" "$live"
+  printf 'new\n' > "$live/skills/a.md"
+  printf 'b-pending\n' > "$live/skills/b.md"
+  printf 'new\n' > "$work/skills/a.md"
+  git -C "$work" commit -qam "capture merged"
+  git -C "$work" push -q origin main
+  cat > "$c/capture.sh" <<'SCRIPT'
+#!/usr/bin/env bash
+[ "${1:-}" = --settle ] || exit 0
+git fetch -q origin
+git diff --name-only HEAD -- skills/ | while IFS= read -r path; do
+  [ "$(git hash-object -- "$path")" = "$(git rev-parse -q --verify "origin/main:$path")" ] || continue
+  git checkout -q HEAD -- "$path"
+  echo "settled $path"
+done
+SCRIPT
+  chmod +x "$c/capture.sh"
+  printf '%s\n' "nova $live capture=skills/:$c/capture.sh" > "$c/home/config/live-checkouts"
+  set_pr "$c" MERGED false nova/skill-capture "$HEAD_SHA"
+
+  GIT_SSH_COMMAND=false land "$c" "$URL"
+  assert_equals 3 "$RC" "a checkout the fast-forward cannot reach is unfinished: $OUT"
+  assert_equals new "$(cat "$live/skills/a.md")" "the landed edit stays in the live checkout: $OUT"
+  assert_equals b-pending "$(cat "$live/skills/b.md")" "the pending edit is untouched"
+  assert_contains "$OUT" "nova live $live: settle held: skills/b.md is not what origin/main holds yet" "the held settle names the blocking path"
+  assert_not_contains "$OUT" "nova live $live: synced" "the blocked checkout did not fast-forward"
+
+  printf 'b-pending\n' > "$work/skills/b.md"
+  git -C "$work" commit -qam "second capture merged"
+  git -C "$work" push -q origin main
+  GIT_SSH_COMMAND=false land "$c" "$URL"
+  assert_equals 0 "$RC" "once origin holds every edit the settle runs and the checkout goes live: $OUT"
+  assert_equals "$(git -C "$work" rev-parse HEAD)" "$(git -C "$live" rev-parse HEAD)" "the live checkout is at origin"
+  assert_equals "" "$(git -C "$live" status --porcelain)" "the live checkout is clean"
+  pass "a settle the fast-forward cannot follow leaves the landed edit in place"
+}
+
 test_lands_an_open_capture_pr_end_to_end
+test_settle_never_reverts_a_landed_edit_the_fast_forward_cannot_bring_back
 test_merge_time_record_reads_the_head_without_a_worktree
 test_refuses_a_pr_that_is_not_a_capture_pr
 test_refuses_a_stale_or_draft_pr_before_recording
