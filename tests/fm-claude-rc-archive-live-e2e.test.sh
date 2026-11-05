@@ -108,7 +108,7 @@ before=$(rc_api GET "/v1/sessions/$BRIDGE" | jq -r '.session_status // .status /
 [ "$before" != archived ] || fail "Claude Code $CLAUDE_VERSION: $BRIDGE was already archived after SIGKILL, so this guard proves nothing"
 
 found=$("$ROOT/bin/fm-claude-rc-archive.sh" find "$ID" "$PROJECT" "$CLAUDE_DIR")
-[ "$found" = "$(cd -P "$CLAUDE_DIR" && pwd -P)"$'\t'"$BRIDGE" ] \
+[ "$found" = "$CLAUDE_DIR"$'\t'"$BRIDGE" ] \
   || fail "Claude Code $CLAUDE_VERSION: find printed '$found', want the killed session $BRIDGE"
 report=$(printf '%s\n' "$found" | "$ROOT/bin/fm-claude-rc-archive.sh" archive "$ID" 2>&1)
 [ "$report" = "archived Claude Remote Control session $BRIDGE for $ID" ] \

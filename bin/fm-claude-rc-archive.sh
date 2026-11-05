@@ -24,6 +24,9 @@
 #     that record is exactly the entry still listed. Candidate roots, as in
 #     bin/fm-progress.sh: the task's meta account= (`ordinary` is
 #     $HOME/.claude), this process's CLAUDE_CONFIG_DIR, and $HOME/.claude.
+#     Each root is read once and printed as first written, because that is
+#     the CLAUDE_CONFIG_DIR a pinned worker ran with and the string Claude
+#     Code hashes into the root's keychain service name.
 #     Prints nothing when nothing matches; always exits 0 on a valid request.
 #   fm-claude-rc-archive.sh archive [<task-id>]
 #     Read find's lines on stdin and archive each session with
@@ -35,14 +38,16 @@
 #     "-<first 8 hex of sha256(root)>" suffix for a set CLAUDE_CONFIG_DIR),
 #     then <root>/.credentials.json, its plaintext store on Linux and its
 #     fallback on macOS, which a running Claude leaves stale once the keychain
-#     holds its login. The first unexpired token wins; an expired one is
-#     never sent. HTTP 200, or 409 (already archived), is success.
+#     holds its login. The first token valid for at least another minute
+#     wins, and no later store is read; an expired one is never sent.
+#     HTTP 200, or 409 (already archived), is success.
 #     Best effort: each failure - no stored token, only expired ones, no
 #     curl, a refused or timed-out request - prints one `warning:` line to
 #     stderr, and the command still exits 0, so a caller never blocks on it.
 #     The token travels on curl's stdin config, never on a command line.
 #
-# Sourcing this file defines rc_token without running a command, so a live
+# Sourcing this file (in a subshell: it sets `set -u`, its globals, and its
+# helper functions) defines rc_token without dispatching a command, so a live
 # guard authorizes its own API calls with the same token the helper sends.
 #
 # Environment:
@@ -52,6 +57,9 @@
 #
 # Exit 0 on success or best-effort failure, 2 on a usage error.
 set -u
+
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fm-timeout-lib.sh"
 
 API_BASE=${FM_CLAUDE_RC_API_BASE:-https://api.anthropic.com}
 TIMEOUT=${FM_CLAUDE_RC_TIMEOUT:-10}
@@ -66,7 +74,7 @@ physical_dir() {  # <dir>: its physical path, or empty when it cannot be resolve
 }
 
 cmd_find() {
-  local id=${1:-} launch=${2:-} account=${3:-} launch_phys d dirs=() seen=' ' f
+  local id=${1:-} launch=${2:-} account=${3:-} launch_phys d phys dirs=() seen=' ' f
   if [ -z "$id" ] || [ -z "$launch" ]; then
     usage >&2
     return 2
@@ -80,10 +88,10 @@ cmd_find() {
   dirs+=("${CLAUDE_CONFIG_DIR:-}" "$HOME/.claude")
   for d in "${dirs[@]}"; do
     [ -n "$d" ] && [ -d "$d/sessions" ] || continue
-    d=$(physical_dir "$d")
-    [ -n "$d" ] || continue
-    case "$seen" in *" $d "*) continue ;; esac
-    seen+="$d "
+    phys=$(physical_dir "$d")
+    [ -n "$phys" ] || continue
+    case "$seen" in *" $phys "*) continue ;; esac
+    seen+="$phys "
     for f in "$d"/sessions/*.json; do
       [ -f "$f" ] || continue
       jq -r --arg id "$id" --arg l "$launch" --arg lp "$launch_phys" --arg d "$d" '
@@ -97,28 +105,19 @@ cmd_find() {
   return 0
 }
 
-bounded() {  # <seconds> <command...>: run it, killed after <seconds> where a timer exists
-  local secs=$1
-  shift
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "$secs" "$@"
-  elif command -v perl >/dev/null 2>&1; then
-    perl -e 'alarm shift; exec @ARGV or exit 127' "$secs" "$@"
-  else
-    "$@"
-  fi
-}
-
 keychain_services() {  # <claude-dir>: the keychain service names Claude Code may key to it
-  local dir=$1 base='Claude Code-credentials' d hash
-  [ "$dir" != "$(physical_dir "$HOME/.claude")" ] || printf '%s\n' "$base"
+  local dir=$1 base='Claude Code-credentials' phys d hash
+  phys=$(physical_dir "$dir")
+  [ "$phys" != "$(physical_dir "$HOME/.claude")" ] || printf '%s\n' "$base"
   for d in "$dir" "${CLAUDE_CONFIG_DIR:-}"; do
     [ -n "$d" ] || continue
-    [ "$d" = "$dir" ] || [ "$(physical_dir "$d")" = "$dir" ] || continue
+    [ "$d" = "$dir" ] || [ "$(physical_dir "$d")" = "$phys" ] || continue
     if command -v shasum >/dev/null 2>&1; then
       hash=$(printf '%s' "$d" | shasum -a 256)
-    else
+    elif command -v sha256sum >/dev/null 2>&1; then
       hash=$(printf '%s' "$d" | sha256sum)
+    else
+      continue
     fi
     printf '%s-%s\n' "$base" "${hash:0:8}"
   done | awk '!seen[$0]++'
@@ -131,42 +130,49 @@ keychain_account() {  # Claude Code's keychain account: $USER, or its fallback n
   printf '%s\n' "$user"
 }
 
-# rc_token <claude-dir>: set RC_TOKEN to the first unexpired stored OAuth access
-# token for that root, keychain before .credentials.json, or set it empty and
+# rc_token <claude-dir>: set RC_TOKEN to the first stored OAuth access token
+# for that root still valid for a minute, keychain before .credentials.json,
+# reading no further store once one is found, or set it empty and
 # RC_TOKEN_PROBLEM to why. Never prints the token.
 rc_token() {
-  local dir=$1 svc account row tok exp now expired='' docs=() doc
+  local dir=$1 svc account doc rc now expired='' locked=''
   RC_TOKEN='' RC_TOKEN_PROBLEM="no stored OAuth token in $dir"
+  now=$(date +%s)
   if command -v security >/dev/null 2>&1; then
     account=$(keychain_account)
     while IFS= read -r svc; do
-      doc=$(bounded "$TIMEOUT" security find-generic-password -a "$account" -w -s "$svc" 2>/dev/null) || doc=''
-      [ -z "$doc" ] || docs+=("$doc")
+      doc=$(fm_run_timed "$TIMEOUT" security find-generic-password -a "$account" -w -s "$svc" 2>/dev/null) && rc=0 || rc=$?
+      [ "$rc" != 36 ] || locked=1
+      [ "$rc" = 0 ] || continue
+      rc_token_take "$doc" && return 0
     done < <(keychain_services "$dir")
   fi
   doc=$(cat "$dir/.credentials.json" 2>/dev/null) || doc=''
-  [ -z "$doc" ] || docs+=("$doc")
-  now=$(date +%s)
-  for doc in ${docs[@]+"${docs[@]}"}; do
-    row=$(printf '%s\n' "$doc" | jq -r '.claudeAiOauth // empty
-      | select((.accessToken | type) == "string")
-      | [.accessToken, ((.expiresAt // "") | tostring)] | @tsv' 2>/dev/null) || row=''
-    tok=${row%%$'\t'*} exp=${row#*$'\t'}
-    case "$tok" in ''|*[!A-Za-z0-9_.~+/=-]*) continue ;; esac
-    case "$exp" in
-      '') ;;
-      *[!0-9]*) continue ;;
-      *) if [ "$((exp / 1000))" -le "$now" ]; then
-           [ -n "$expired" ] || expired=$exp
-           continue
-         fi ;;
-    esac
-    RC_TOKEN=$tok
-    return 0
-  done
+  rc_token_take "$doc" && return 0
   [ -z "$expired" ] \
     || RC_TOKEN_PROBLEM="the stored OAuth token for $dir expired at $(jq -rn --argjson e "$expired" '$e / 1000 | floor | todate')"
+  [ -z "$locked" ] \
+    || RC_TOKEN_PROBLEM+="; the login keychain could not be read here (security exit 36: run outside the macOS Aqua login session)"
   return 0
+}
+
+rc_token_take() {  # <credentials json>: one store's check, using rc_token's now and expired
+  local row tok exp
+  [ -n "$1" ] || return 1
+  row=$(printf '%s\n' "$1" | jq -r '.claudeAiOauth // empty
+    | select((.accessToken | type) == "string")
+    | [.accessToken, ((.expiresAt // "") | tostring)] | @tsv' 2>/dev/null) || row=''
+  tok=${row%%$'\t'*} exp=${row#*$'\t'}
+  case "$tok" in ''|*[!A-Za-z0-9_.~+/=-]*) return 1 ;; esac
+  case "$exp" in
+    '') ;;
+    *[!0-9]*) return 1 ;;
+    *) if [ "$((exp / 1000))" -le "$((now + 60))" ]; then
+         [ -n "$expired" ] || expired=$exp
+         return 1
+       fi ;;
+  esac
+  RC_TOKEN=$tok
 }
 
 archive_one() {  # <claude-dir> <session-id> <label>

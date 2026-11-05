@@ -201,8 +201,8 @@ test_archive_prefers_the_keychain_login_over_a_stale_file() {
   [ "$err" = "archived Claude Remote Control session session_01AAA for task-a" ] \
     || fail "keychain: unexpected report: $err"
   [ "$(sent_token "$c")" = sk-ant-oat01-KEYCHAIN_live ] || fail "keychain: sent '$(sent_token "$c")', want the keychain login"
-  grep -qx 'fm-tester|Claude Code-credentials' "$c/keychain/reads.log" \
-    || fail "keychain: the default root must read Claude Code's unsuffixed item as \$USER: $(cat "$c/keychain/reads.log")"
+  [ "$(cat "$c/keychain/reads.log")" = 'fm-tester|Claude Code-credentials' ] \
+    || fail "keychain: the default root must read only Claude Code's unsuffixed item, as \$USER: $(cat "$c/keychain/reads.log")"
   ! grep -q 'KEYCHAIN_live' "$c/curl.log" || fail "keychain: the token reached curl's argv"
   pass "archive on the ordinary root sends the keychain login, not a stale .credentials.json"
 }
@@ -221,6 +221,21 @@ test_archive_reads_a_pinned_roots_suffixed_keychain_item() {
   ! grep -qx 'fm-tester|Claude Code-credentials' "$c/keychain/reads.log" \
     || fail "pinned: a pinned root must never read the ordinary login's item"
   pass "archive on a pinned root reads the keychain item Claude Code keys to that root"
+}
+
+test_find_keeps_a_pinned_roots_spelling_for_its_keychain_item() {
+  local c found err
+  c=$(make_case keychain-symlink)
+  rm "$c/root/.credentials.json"
+  ln -s "$c/root" "$c/root-link"
+  session_record "$c/root" 301 task-a "$c/wt" session_01GGG
+  login_json sk-ant-oat01-LINK_live "$FRESH_MS" > "$c/keychain/Claude Code-credentials-$(sha8 "$c/root-link")"
+  found=$(run_find "$c" task-a "$c/wt" "$c/root-link")
+  [ "$found" = "$c/root-link"$'\t'session_01GGG ] || fail "spelling: find must print the pin as written, got: $found"
+  err=$(run_archive "$c" task-a "$found" 2>&1 >/dev/null)
+  [ "$err" = "archived Claude Remote Control session session_01GGG for task-a" ] || fail "spelling: unexpected report: $err"
+  [ "$(sent_token "$c")" = sk-ant-oat01-LINK_live ] || fail "spelling: sent '$(sent_token "$c")', want the item hashed from the pin as written"
+  pass "a pinned root written through a symlink keeps that spelling, the one Claude Code hashes into its keychain item"
 }
 
 test_archive_falls_back_to_the_file_when_the_keychain_cannot_answer() {
@@ -249,7 +264,13 @@ test_archive_never_sends_an_expired_token() {
   [ "$err" = "warning: could not archive Claude Remote Control session session_01AAA for task-a: the stored OAuth token for $c/home/.claude expired at 2023-11-14T22:13:20Z" ] \
     || fail "expired: unexpected report: $err"
   [ ! -e "$c/curl.log" ] || fail "expired: curl ran with an expired token"
-  pass "archive sends no request when every stored token has expired, and says when it expired"
+  login_json sk-ant-oat01-FILE_closing "$(( ($(date +%s) + 30) * 1000 ))" > "$c/home/.claude/.credentials.json"
+  run_archive "$c" task-a "$c/home/.claude"$'\t'session_01AAA >/dev/null 2>&1
+  [ ! -e "$c/curl.log" ] || fail "expired: curl ran with a token 30 seconds from expiry"
+  err=$(FAKE_KEYCHAIN_LOCKED=1 run_archive "$c" task-a "$c/home/.claude"$'\t'session_01AAA 2>&1 >/dev/null)
+  case "$err" in *"expired at "*"; the login keychain could not be read here (security exit 36: run outside the macOS Aqua login session)") ;;
+    *) fail "locked: the warning must say the keychain was unreadable, got: $err" ;; esac
+  pass "archive sends no request when every stored token has expired or is about to, and says when, and whether the keychain was readable"
 }
 
 test_find_names_only_the_tasks_own_sessions
@@ -261,5 +282,6 @@ test_archive_failures_warn_once_and_exit_zero
 test_archive_with_empty_input_does_nothing
 test_archive_prefers_the_keychain_login_over_a_stale_file
 test_archive_reads_a_pinned_roots_suffixed_keychain_item
+test_find_keeps_a_pinned_roots_spelling_for_its_keychain_item
 test_archive_falls_back_to_the_file_when_the_keychain_cannot_answer
 test_archive_never_sends_an_expired_token
