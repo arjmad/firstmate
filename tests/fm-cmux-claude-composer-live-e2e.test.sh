@@ -41,7 +41,8 @@ cmux ping >/dev/null 2>&1 || fail "FM_CMUX_CLAUDE_COMPOSER_LIVE=1 but the cmux s
 LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-cmux-claude-composer.XXXXXX") || fail "could not create an isolated cmux Claude lab"
 trap cleanup EXIT
 # Physical, so the worktree path the pane reports compares against it as a prefix.
-LAB=$(cd "$LAB" && pwd -P) || fail "could not resolve the isolated cmux Claude lab"
+PHYSICAL_LAB=$(cd "$LAB" && pwd -P) || fail "could not resolve the isolated cmux Claude lab"
+LAB=$PHYSICAL_LAB
 # shellcheck source=tests/treehouse-helpers.sh
 . "$ROOT/tests/treehouse-helpers.sh"
 # The probe pool lives under LAB, so removing LAB removes it.
@@ -55,7 +56,7 @@ git -C "$LAB/projects/comms" config user.name 'cmux composer test'
 printf 'cmux Claude composer probe\n' > "$LAB/projects/comms/README.md"
 # The worker pane's shell comes from the cmux app, not this test, so the
 # exported TREEHOUSE_ROOT cannot reach its `treehouse get`; the repository pins it.
-treehouse_test_pin_repo "$LAB/projects/comms"
+treehouse_test_pin_repo "$LAB/projects/comms" || fail "could not pin the probe repository's Treehouse root"
 git -C "$LAB/projects/comms" add README.md treehouse.toml
 git -C "$LAB/projects/comms" commit -qm 'fixture: initialize cmux Claude composer probe'
 

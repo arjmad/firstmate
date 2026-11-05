@@ -130,7 +130,7 @@ RECORD_TOKEN='fm-live-lab v1'
 PI_TRUST_STORE="$HOME/.pi/agent/trust.json"
 # shellcheck source=bin/fm-treehouse-storage-lib.sh
 . "$SCRIPT_DIR/fm-treehouse-storage-lib.sh"
-TREEHOUSE_DIR=$(fm_treehouse_storage)
+TREEHOUSE_DIR=
 
 die() { echo "fm-live-lab: $*" >&2; exit 1; }
 help_text() { sed -n '/^# Usage:/,/^# up builds/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; }
@@ -368,7 +368,8 @@ check_treehouse() {
   local added
   added=$(comm -13 "$ROOT/.treehouse-before" <(treehouse_listing | sort) 2>/dev/null)
   [ -z "$added" ] || { echo "fail treehouse: new $TREEHOUSE_DIR entries: $(printf '%s' "$added" | tr '\n' ' ')"; return 1; }
-  echo "ok treehouse: ${TREEHOUSE_DIR:-no shared pool storage} unchanged"
+  [ -n "$TREEHOUSE_DIR" ] || { echo "ok treehouse: skipped, the configured root is relative, so no shared pool storage exists"; return 0; }
+  echo "ok treehouse: $TREEHOUSE_DIR unchanged"
 }
 
 run_checks() {
@@ -522,6 +523,10 @@ cmd_up() {
   MATE_ID="lab${NONCE:0:12}-mate" WORKER_ID="lab${NONCE:0:12}-worker"
   GATE="$LAB/data/$WORKER_ID/gate"
   PI_TRUST_BEFORE=$(digest "$PI_TRUST_STORE")
+  # Lab processes start from lab_env_base, not this shell, so a worker that
+  # missed the lab's TREEHOUSE_ROOT lands in the configured storage, never in
+  # this caller's.
+  TREEHOUSE_DIR=$(TREEHOUSE_ROOT='' fm_treehouse_storage)
   treehouse_listing | sort > "$ROOT/.treehouse-before"
   {
     echo "$RECORD_TOKEN"

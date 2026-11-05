@@ -13,7 +13,8 @@ printf '{}\n' > "$HOME/.pi/agent/trust.json"
 # watch is under it, not the empty default ~/.treehouse beside it.
 printf 'root = "%s"\n' "$TMP_ROOT/fleet-root" > "$HOME/.config/treehouse/config.toml"
 mkdir -p "$TMP_ROOT/fleet-root/.treehouse"
-unset TREEHOUSE_ROOT
+# A caller's own TREEHOUSE_ROOT never reaches a lab process, so up ignores it.
+export TREEHOUSE_ROOT="$TMP_ROOT/caller-root"
 unset CLAUDE_CONFIG_DIR TMUX
 
 # A source checkout with a stubbed mate launch: it creates the same observable
