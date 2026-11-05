@@ -18,6 +18,9 @@ command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the her
 herdr_forget_inherited_pane
 
 TMP_ROOT=$(fm_test_tmproot fm-herdr-groups)
+# The adapter canonicalizes the fake session's socket directory, and /tmp is a
+# symlink to /private/tmp on macOS.
+GROUPS_SOCKET="$(cd -P /tmp && pwd -P)/fm-groups-s1.sock"
 TOKEN_A='AbCdEfGhIjKlMnOpQrStUv'
 
 # make_fake_herdr <dir>: a `herdr` stand-in that logs every call (one line,
@@ -246,7 +249,7 @@ test_sync_reports_only_differences_and_sets_the_view() {
   assert_equals "1" "$(printf '%s\n' "$ws_reports" | grep -c 'report-metadata')" "workspace reports"
   assert_contains "$ws_reports" "workspace report-metadata w2 --source firstmate --token fm_group=storefront --token fm_state=running --token fm_group_order=000.storefront" \
     "only the exactly bound projected workspace gets workspace tokens"
-  assert_equals "/tmp/fm-groups-s1.sock	set" "$(cat "$FAKE_VIEW_LOG")" "agents view set once for the session"
+  assert_equals "$GROUPS_SOCKET	set" "$(cat "$FAKE_VIEW_LOG")" "agents view set once for the session"
 
   : > "$FAKE_HERDR_LOG"; : > "$FAKE_VIEW_LOG"
   rm -f "$HOME_DIR/state/flat-task.meta"
@@ -261,7 +264,7 @@ test_sync_reports_only_differences_and_sets_the_view() {
     "$(reports pane)" "a status change reports only the changed pane tokens"
   assert_contains "$(reports workspace)" "--token fm_state=needs-captain --session s1" "workspace status token follows"
   assert_not_contains "$(reports workspace)" "fm_group=" "unchanged workspace tokens are not re-reported"
-  assert_equals "/tmp/fm-groups-s1.sock	set" "$(cat "$FAKE_VIEW_LOG")" "agents view re-set after a pane change"
+  assert_equals "$GROUPS_SOCKET	set" "$(cat "$FAKE_VIEW_LOG")" "agents view re-set after a pane change"
   assert_not_contains "$(cat "$FAKE_HERDR_LOG")" $'\x1fmove' "sync never moves anything"
   assert_not_contains "$(cat "$FAKE_HERDR_LOG")" $'\x1fclose' "sync never closes anything"
   assert_not_contains "$(cat "$FAKE_HERDR_LOG")" $'\x1ffocus' "sync never changes focus"
@@ -291,7 +294,7 @@ test_clear_removes_tokens_and_the_view_even_when_off() {
   add_v2_journal web-run w2
   write_live_lists 1
   out=$(groups clear 2>&1) || fail "clear failed: $out"
-  assert_equals "/tmp/fm-groups-s1.sock	clear" "$(cat "$FAKE_VIEW_LOG")" "agents view cleared"
+  assert_equals "$GROUPS_SOCKET	clear" "$(cat "$FAKE_VIEW_LOG")" "agents view cleared"
   assert_contains "$(reports pane)" "pane report-metadata w2:p2 --source firstmate --clear-token fm_group --clear-token fm_state --clear-token fm_task --clear-token fm_sort" \
     "pane tokens cleared"
   assert_contains "$(reports workspace)" "workspace report-metadata w2 --source firstmate --clear-token fm_group --clear-token fm_state --clear-token fm_group_order" \
