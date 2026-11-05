@@ -24,7 +24,7 @@
 # lab primary, by default; mate and worker name the lab's own tasks). pane
 # prints a window's recent scrollback. down stops every lab process, removes the
 # lab's Claude trust entries by one atomic replace, removes <lab-root>, and exits
-# non-zero if the recorded Pi trust store or ~/.treehouse gained changes.
+# non-zero if the recorded Pi trust store or Treehouse pool storage gained changes.
 # forget-claude is that same Claude-entry removal alone, for a live test that
 # spawns Claude workers under its own temporary <root> without a lab record: it
 # removes every project entry at or under <root> from the store
@@ -52,12 +52,13 @@
 #                    in a lab), started from an empty environment so no inherited
 #                    TMUX, Herdr, or Pi marker reaches a lab process.
 #                    TREEHOUSE_ROOT points into <lab-root>, so a worker's pool
-#                    never lands in ~/.treehouse, and DISABLE_AUTOUPDATER=1
+#                    never lands in the user's Treehouse pool storage
+#                    (bin/fm-treehouse-storage-lib.sh), and DISABLE_AUTOUPDATER=1
 #                    keeps Claude Code from replacing the shared binary under
 #                    a running lab, as every live run does (tests/lib.sh).
 #                    A set CLAUDE_CONFIG_DIR (absolute) is passed to every lab
 #                    process. up records the Claude store, Pi trust store, and
-#                    ~/.treehouse it selected, so check and down use those same
+#                    pool storage it selected, so check and down use those same
 #                    paths even from a later shell with another HOME.
 #   trust            Claude: bin/fm-claude-trust.sh --lab-home for the primary
 #                    and the spawn's own registration for the mate and worker. Pi:
@@ -106,7 +107,7 @@
 #                 --supervision-host off, its inherited flag and disabled host
 #                 gate are also required.
 #   worker        --worker: its current crew state is paused on the gate.
-#   treehouse     ~/.treehouse gained no entry since up began.
+#   treehouse     the recorded pool storage gained no entry since up began.
 #
 # down refuses any path without the lab record up writes. It kills only the
 # lab's recorded private tmux server and launch pane PIDs, and their descendants;
@@ -114,8 +115,8 @@
 # lab's spawns kept under /tmp, including a failed spawn's; removes every
 # project entry at or under <lab-root> from the recorded Claude store, following
 # a symlinked store to its target (compare-and-swap atomic replace, unrelated
-# entries kept); reports a changed Pi trust store or a new
-# ~/.treehouse entry without touching either; and removes <lab-root>.
+# entries kept); reports a changed Pi trust store or a new pool-storage
+# entry without touching either; and removes <lab-root>.
 # Transcripts under ~/.claude/projects are left as history. The lab never uses
 # Herdr.
 set -u
@@ -127,7 +128,9 @@ CLAUDE_TRUST="$SCRIPT_DIR/fm-claude-trust.sh"
 RECORD_NAME=.fm-live-lab
 RECORD_TOKEN='fm-live-lab v1'
 PI_TRUST_STORE="$HOME/.pi/agent/trust.json"
-TREEHOUSE_DIR="$HOME/.treehouse"
+# shellcheck source=bin/fm-treehouse-storage-lib.sh
+. "$SCRIPT_DIR/fm-treehouse-storage-lib.sh"
+TREEHOUSE_DIR=
 
 die() { echo "fm-live-lab: $*" >&2; exit 1; }
 help_text() { sed -n '/^# Usage:/,/^# up builds/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; }
@@ -364,8 +367,9 @@ check_worker() {
 check_treehouse() {
   local added
   added=$(comm -13 "$ROOT/.treehouse-before" <(treehouse_listing | sort) 2>/dev/null)
-  [ -z "$added" ] || { echo "fail treehouse: new ~/.treehouse entries: $(printf '%s' "$added" | tr '\n' ' ')"; return 1; }
-  echo "ok treehouse: ~/.treehouse unchanged"
+  [ -z "$added" ] || { echo "fail treehouse: new $TREEHOUSE_DIR entries: $(printf '%s' "$added" | tr '\n' ' ')"; return 1; }
+  [ -n "$TREEHOUSE_DIR" ] || { echo "ok treehouse: skipped, the configured root is relative, so no shared pool storage exists"; return 0; }
+  echo "ok treehouse: $TREEHOUSE_DIR unchanged"
 }
 
 run_checks() {
@@ -519,6 +523,10 @@ cmd_up() {
   MATE_ID="lab${NONCE:0:12}-mate" WORKER_ID="lab${NONCE:0:12}-worker"
   GATE="$LAB/data/$WORKER_ID/gate"
   PI_TRUST_BEFORE=$(digest "$PI_TRUST_STORE")
+  # Lab processes start from lab_env_base, not this shell, so a worker that
+  # missed the lab's TREEHOUSE_ROOT lands in the configured storage, never in
+  # this caller's.
+  TREEHOUSE_DIR=$(TREEHOUSE_ROOT='' fm_treehouse_storage)
   treehouse_listing | sort > "$ROOT/.treehouse-before"
   {
     echo "$RECORD_TOKEN"
@@ -835,7 +843,7 @@ cmd_down() {
   fi
   added=$(comm -13 "$ROOT/.treehouse-before" <(treehouse_listing | sort) 2>/dev/null)
   if [ -n "$added" ]; then
-    echo "warning: ~/.treehouse gained entries during the lab; left as is: $(printf '%s' "$added" | tr '\n' ' ')" >&2
+    echo "warning: $TREEHOUSE_DIR gained entries during the lab; left as is: $(printf '%s' "$added" | tr '\n' ' ')" >&2
     rc=1
   fi
   chmod -R u+w "$ROOT" 2>/dev/null

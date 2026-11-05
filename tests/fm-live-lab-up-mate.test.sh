@@ -7,8 +7,14 @@ set -u
 command -v tmux >/dev/null 2>&1 || { echo 'ok - skipped: tmux is not installed'; exit 0; }
 TMP_ROOT=$(fm_test_tmproot fm-live-up-mate)
 export HOME="$TMP_ROOT/user"
-mkdir -p "$HOME/.pi/agent" "$HOME/.treehouse" "$TMP_ROOT/source/bin" "$TMP_ROOT/fakebin"
+mkdir -p "$HOME/.pi/agent" "$HOME/.treehouse" "$HOME/.config/treehouse" "$TMP_ROOT/source/bin" "$TMP_ROOT/fakebin"
 printf '{}\n' > "$HOME/.pi/agent/trust.json"
+# A configured Treehouse root, as on a fleet host: the pool storage up must
+# watch is under it, not the empty default ~/.treehouse beside it.
+printf 'root = "%s"\n' "$TMP_ROOT/fleet-root" > "$HOME/.config/treehouse/config.toml"
+mkdir -p "$TMP_ROOT/fleet-root/.treehouse"
+# A caller's own TREEHOUSE_ROOT never reaches a lab process, so up ignores it.
+export TREEHOUSE_ROOT="$TMP_ROOT/caller-root"
 unset CLAUDE_CONFIG_DIR TMUX
 
 # A source checkout with a stubbed mate launch: it creates the same observable
@@ -60,6 +66,8 @@ for mode in off on; do
   assert_not_contains "$out" 'HOST_OFF: unbound variable' "up $mode sets mate readiness state"
   assert_contains "$out" 'ok mate:' "up $mode checks the launched mate"
   assert_contains "$out" 'primary: claude' "up $mode reaches primary launch"
+  assert_equals "$TMP_ROOT/fleet-root/.treehouse" "$(sed -n 's/^treehouse_dir=//p' "$lab/.fm-live-lab")" \
+    "up $mode records the configured Treehouse pool storage"
   if [ "$mode" = off ]; then
     assert_present "$lab/mate/config/supervision-host-off" "off mate receives inherited opt-out"
   else
