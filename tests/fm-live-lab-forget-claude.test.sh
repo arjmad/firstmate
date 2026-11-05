@@ -22,17 +22,16 @@ unset CLAUDE_CONFIG_DIR
 
 # forget-claude removes exactly the Claude project entries at or under its root,
 # for a live test that spawns Claude workers without a lab record. Its root
-# lives under /tmp whatever TMPDIR says, since forget-claude takes only a
-# system temporary directory.
+# lives under /tmp whatever TMPDIR says, since forget-claude takes only /tmp.
 F=$(TMPDIR=/tmp fm_test_tmproot fm-live-lab-forget) || fail "fixture: no /tmp root"
 mkdir -p "$T/forget-config" "$F/forget-root/home/wt" "$F/forget-unmarked"
 : > "$F/forget-root/.fm-forget-claude"
 cat > "$T/forget-config/.claude.json" <<JSON
 {"numStartups": 3, "projects": {"$F/forget-root/home/wt": {"hasTrustDialogAccepted": true}, "$F/forget-root": {"hasTrustDialogAccepted": true}, "$F/forget-rootless": {"hasTrustDialogAccepted": true}, "/elsewhere": {"hasTrustDialogAccepted": true}}}
 JSON
-out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$F/forget-root" 2>&1)
-expect_code 0 "$?" "forget-claude succeeds on a disposable root"
-assert_contains "$out" "2" "forget-claude reports the two entries it removed"
+out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$F/forget-root" 2>"$T/forget.err")
+expect_code 0 "$?" "forget-claude succeeds on a disposable root: $(cat "$T/forget.err")"
+[ "$out" = 2 ] || fail "forget-claude should print exactly the two entries it removed: $out"
 kept=$(jq -r '.projects | keys | sort | join(",")' "$T/forget-config/.claude.json")
 [ "$kept" = "$F/forget-rootless,/elsewhere" ] || [ "$kept" = "/elsewhere,$F/forget-rootless" ] \
   || fail "forget-claude kept the wrong entries: $kept"
@@ -45,9 +44,21 @@ expect_code 1 "$?" "forget-claude refuses / as its root"
 out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude /private 2>&1)
 expect_code 1 "$?" "forget-claude refuses /private, whose stripped form would match every entry"
 out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$ROOT" 2>&1)
-expect_code 1 "$?" "forget-claude refuses a root outside every temporary directory"
-out=$(CLAUDE_CONFIG_DIR="$T/forget-config" TMPDIR=/ "$LIVE_LAB" forget-claude "$ROOT" 2>&1)
-expect_code 1 "$?" "forget-claude does not trust the caller's TMPDIR as a temporary directory"
+expect_code 1 "$?" "forget-claude refuses a root outside /tmp"
+# A marked root in another temporary directory is refused even when TMPDIR
+# names it: /var/tmp everywhere, and the macOS per-user directory where it exists.
+# A base that resolves into /tmp (a /var/tmp symlink or bind mount) is skipped,
+# since a root there is rightly accepted.
+tmp_real=$(cd -P /tmp && pwd -P)
+for base in /var/tmp "$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"; do
+  [ -n "$base" ] && [ -d "$base" ] && [ -w "$base" ] || continue
+  case "$(cd -P "$base" && pwd -P)/" in "$tmp_real"/*) continue ;; esac
+  other=$(TMPDIR=$base fm_test_tmproot fm-live-lab-forget-other) || fail "fixture: no root under $base"
+  : > "$other/.fm-forget-claude"
+  out=$(CLAUDE_CONFIG_DIR="$T/forget-config" TMPDIR="$base" "$LIVE_LAB" forget-claude "$other" 2>&1)
+  expect_code 1 "$?" "forget-claude refuses a marked root under $base"
+  assert_contains "$out" "inside /tmp" "the refusal for $base names the /tmp rule"
+done
 out=$(CLAUDE_CONFIG_DIR="$T/forget-config" "$LIVE_LAB" forget-claude "$F/forget-unmarked" 2>&1)
 expect_code 1 "$?" "forget-claude refuses a root its creator did not mark, such as a live task's directory"
 assert_contains "$out" ".fm-forget-claude" "the refusal names the missing marker"
@@ -81,10 +92,10 @@ lock_store "$S"
 mkdir "$S/.claude.json.lock"
 set_mtime "$S/.claude.json.lock" 3600  # never stale, however slow this host runs
 before=$(digest "$S/.claude.json")
-CLAUDE_CONFIG_DIR="$S" "$LIVE_LAB" forget-claude "$F/forget-root" > "$T/held.out" 2>&1 &
+CLAUDE_CONFIG_DIR="$S" "$LIVE_LAB" forget-claude "$F/forget-root" > "$T/held.out" 2> "$T/held.err" &
 held_pid=$!
 sleep 1
-kill -0 "$held_pid" 2>/dev/null || fail "forget-claude finished while another writer held the store lock: $(cat "$T/held.out")"
+kill -0 "$held_pid" 2>/dev/null || fail "forget-claude finished while another writer held the store lock: $(cat "$T/held.out" "$T/held.err")"
 [ "$(digest "$S/.claude.json")" = "$before" ] || fail "forget-claude rewrote the store while another writer held its lock"
 jq '.vendorWrite = true' "$S/.claude.json" > "$S/.claude.json.vendor" && mv "$S/.claude.json.vendor" "$S/.claude.json"
 rmdir "$S/.claude.json.lock"
