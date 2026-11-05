@@ -557,6 +557,14 @@ seed_journal() {  # <home> <task-id> <token>
   printf 'version=1\ntask_id=%s\nprojection_id=%s\n' "$2" "$3" > "$1/state/$2.herdr-presentation"
 }
 
+seed_journal_v2() {  # <home> <task-id> <token> <session>
+  {
+    printf 'version=2\ntask_id=%s\nprojection_id=%s\nhome=%s\n' "$2" "$3" "$1"
+    printf 'session=%s\nworkspace_id=w7\ntab_id=w7:t1\npane_id=w7:p1\n' "$4"
+    printf 'parent_workspace_id=w1\nparent_label=firstmate\nworkspace_label=\342\224\224 %s \302\267 p:%s\ntask_label=fm-%s\n' "$2" "$3" "$2"
+  } > "$1/state/$2.herdr-presentation"
+}
+
 test_retired_task_state_swept_and_live_kept() {
   command -v jq >/dev/null 2>&1 || { pass "sweep (task state): skipped - jq not installed"; return 0; }
   local home fb out state id gone_tok shown_tok live_tok
@@ -568,11 +576,12 @@ test_retired_task_state_swept_and_live_kept() {
   shown_tok=BBBBBBBBBBBBBBBBBBBBBB
   live_tok=CCCCCCCCCCCCCCCCCCCCCC
   printf 'workspaces=%s %s\n' "$shown_tok" "$live_tok" >> "$home/herdr-world"
-  for id in done.task shown live pending; do
+  for id in done.task v2done shown live pending; do
     seed_task_state "$home" "$id"
     seed_task_records "$home" "$id"
   done
   seed_journal "$home" done.task "$gone_tok"
+  seed_journal_v2 "$home" v2done "$gone_tok" other
   seed_journal "$home" shown "$shown_tok"
   seed_journal "$home" live "$live_tok"
   seed_journal "$home" pending "$gone_tok"
@@ -586,11 +595,13 @@ test_retired_task_state_swept_and_live_kept() {
     "--dry-run should list each retired-task state entry it would remove: $out"
 
   out=$(run_sweep_herdr "$fb" "$home")
-  for id in done.task.inbox done.task.git-hooks done.task.herdr-presentation shown.inbox shown.git-hooks; do
+  for id in done.task.inbox done.task.git-hooks done.task.herdr-presentation v2done.herdr-presentation shown.inbox shown.git-hooks; do
     [ ! -e "$state/$id" ] || fail "retired-task state $id should be swept: $(ls -a "$state")"
   done
   [ "$(count_task_records "$home" done.task)" -eq 0 ] \
     || fail "a task whose inbox holds only handled steers is not live; its records should go: $(ls -a "$state")"
+  grep -q '^workspace list --session other$' "$home/herdr-calls" \
+    || fail "a version 2 journal must be checked in the session it records: $(cat "$home/herdr-calls")"
   [ -f "$state/shown.herdr-presentation" ] \
     || fail "a journal whose projected workspace is still open must survive for the Herdr session cleanup"
   for id in live pending; do
@@ -605,6 +616,10 @@ test_retired_task_state_swept_and_live_kept() {
   run_sweep_herdr "$fb" "$home" >/dev/null
   [ -f "$state/unread.task.herdr-presentation" ] \
     || fail "a journal must survive when the workspace list cannot be read"
+  herdr_world "$home" stopped "" claude
+  run_sweep_herdr "$fb" "$home" >/dev/null
+  [ -f "$state/unread.task.herdr-presentation" ] \
+    || fail "a journal must survive a stopped server, which may restore its workspace"
   pass "sweep: a retired task's inbox, hooks, and closed-workspace journal are swept; live state kept"
 }
 
@@ -653,6 +668,7 @@ case "${1:-} ${2:-}" in
   "workspace list")
     case "$running" in
       running) ;;
+      stopped) printf '%s\n' '{"error":{"code":"server_not_running"}}' >&2; exit 1 ;;
       *) printf '%s\n' 'garbled'; exit 0 ;;
     esac
     printf '{"result":{"workspaces":['

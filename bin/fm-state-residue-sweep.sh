@@ -112,7 +112,11 @@
 # the summary line reports the deferred count. The inventories are one call
 # per candidate and are read only when at least one unprotected key is on
 # disk, so a converged home, or one whose only markers belong to current task
-# records, makes no backend call at all.
+# records, makes no watcher-record backend call at all. Each presentation journal
+# of a task that is not live costs one workspace-list call per run, outside
+# that budget; a gone workspace's journal is removed by that call, so only a
+# journal whose workspace is still open, or whose server cannot be read, is
+# asked again.
 #
 # Dry run and the summary line are the only stdout. The kept counts are
 # reported so an operator can see that a live or unreadable endpoint held its
