@@ -49,7 +49,13 @@
 #           tokens while other workers use them.
 # A pinned Claude launch also unsets the environment credentials Claude ranks
 # above the root's stored login, so an ambient API key or token cannot outrank
-# the pin. Pi ranks a root's stored credentials above environment variables,
+# the pin. The one exception is the launching session's own setup-token: a
+# worker pinned to the launching session's own root receives that session's
+# CLAUDE_CODE_OAUTH_TOKEN (fm_worker_account_claude_token_carry, delivered by
+# bin/fm-claude-token-exec.sh), so it runs on the same credential as the helm
+# that launched it. The sign-in check still asks about the root's stored
+# login, which a token cannot stand in for: `claude auth status` accepts any
+# token without validating it. Pi ranks a root's stored credentials above environment variables,
 # and the check refuses a provider the root has not stored, so a pinned Pi
 # launch unsets nothing.
 
@@ -308,6 +314,27 @@ fm_worker_account_claude_shed() {
     prefix="$prefix -u $var"
   done
   printf '%s\n' "$prefix"
+}
+
+# fm_worker_account_claude_token_carry <worker-root>
+# Returns 0 when a pinned Claude launch should carry this process's own
+# CLAUDE_CODE_OAUTH_TOKEN: the variable is set and non-empty, and the pinned
+# worker root (empty for the ordinary account) is this process's own Claude
+# root, CLAUDE_CONFIG_DIR, compared as the same directory (both unset counts
+# as the same). The launching session is the helm, whose setup-token belongs
+# to that root's account, so the worker receives exactly the helm's own
+# credential; a worker pinned to any other root keeps shedding the token.
+# Call it before the spawn moves CLAUDE_CONFIG_DIR to the worker root.
+fm_worker_account_claude_token_carry() {
+  local worker=$1 session=${CLAUDE_CONFIG_DIR:-} a b
+  [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || return 1
+  if [ -z "$worker" ] || [ -z "$session" ]; then
+    [ -z "$worker" ] && [ -z "$session" ]
+    return
+  fi
+  a=$(CDPATH='' cd -- "$worker" 2>/dev/null && pwd -P) || return 1
+  b=$(CDPATH='' cd -- "$session" 2>/dev/null && pwd -P) || return 1
+  [ "$a" = "$b" ]
 }
 
 # fm_worker_account_claude_mcp_gap <session-store> <worker-store>

@@ -472,7 +472,10 @@
 #   refuses before any endpoint, worktree, or record exists when the file is
 #   malformed, the root is unusable, or the runner's own check says it is not
 #   signed in. A pinned Claude launch sheds the environment credentials Claude
-#   ranks above the root's login; a pinned Pi launch needs --model
+#   ranks above the root's login, except that a worker pinned to this
+#   process's own root gets this process's CLAUDE_CODE_OAUTH_TOKEN back
+#   through a consume-once private file in its launch directory
+#   (bin/fm-claude-token-exec.sh); a pinned Pi launch needs --model
 #   <provider>/<id> for a declared provider and also carries --provider, and a
 #   raw Pi command refuses. The pin is recorded as account= (and Pi's
 #   account_provider=) in the task record and on the spawned line. A local
@@ -1545,6 +1548,7 @@ GIT_HOOKS_DIR=
 SPAWN_LAUNCH_SENT=0
 SPAWN_ENDPOINT_CLOSED=0
 SPAWN_STAGED_LAUNCH_FILE=
+SPAWN_STAGED_CLAUDE_TOKEN_FILE=
 
 spawn_fresh_commit_rollback() {
   if fm_backlog_atomic_transition rollback "$STATE/$ID.meta" \
@@ -1624,6 +1628,14 @@ spawn_orca_reclaim_launch_file() {
 
 spawn_abort_cleanup() {
   local status=$?
+  # A staged setup-token stays only for a launch this spawn delivered and
+  # completed; any other exit removes it, a signal included, since bash runs
+  # this trap with status 0 for an untrapped fatal signal. Removing it before a
+  # delivered launch ran only starts that worker on its stored login.
+  if [ -n "$SPAWN_STAGED_CLAUDE_TOKEN_FILE" ] &&
+    { [ "$status" -ne 0 ] || [ "$SPAWN_LAUNCH_SENT" = 0 ]; }; then
+    rm -f -- "$SPAWN_STAGED_CLAUDE_TOKEN_FILE" 2>/dev/null || true
+  fi
   if [ "$RELAUNCH_REPLACEMENT_PENDING" = 1 ] &&
     [ "$SPAWN_META_PUBLISH_STARTED" = 1 ] &&
     [ -n "$SPAWN_META_TMP" ] &&
@@ -3232,7 +3244,13 @@ WORKER_ACCOUNT_DECLARED=${WORKER_ACCOUNT%%$'\t'*}
 WORKER_ACCOUNT_ROOT=${WORKER_ACCOUNT#*$'\t'}
 WORKER_ACCOUNT_PROVIDER=${WORKER_ACCOUNT_ROOT#*$'\t'}
 WORKER_ACCOUNT_ROOT=${WORKER_ACCOUNT_ROOT%%$'\t'*}
+# Whether the pinned Claude worker carries this session's own setup-token;
+# decided here, while CLAUDE_CONFIG_DIR is still this session's own root.
+WORKER_ACCOUNT_CLAUDE_TOKEN=0
 if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS" = claude ]; then
+  if fm_worker_account_claude_token_carry "$WORKER_ACCOUNT_ROOT"; then
+    WORKER_ACCOUNT_CLAUDE_TOKEN=1
+  fi
   if [ -n "$WORKER_ACCOUNT_ROOT" ]; then
     export CLAUDE_CONFIG_DIR=$WORKER_ACCOUNT_ROOT
   else
@@ -6708,6 +6726,33 @@ claude | codex | opencode | pi | pi-signed | grok | kimi | gemini | muse | rovo 
   LAUNCH="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI $LAUNCH"
   ;;
 esac
+# Implement the launch-delivery contract in this script's header. The full
+# home-identity hash isolates equal task ids across homes, and the spawn token in
+# the final filename keeps a buffered source line bound to this incarnation.
+spawn_launch_home_token() {
+  local home=$1 root hash
+  root=$(cd "$home" 2>/dev/null && pwd -P) || root=$home
+  if command -v shasum >/dev/null 2>&1; then
+    hash=$(printf '%s' "$root" | shasum -a 256 | awk '{print $1}')
+  elif command -v sha256sum >/dev/null 2>&1; then
+    hash=$(printf '%s' "$root" | sha256sum | awk '{print $1}')
+  else
+    return 1
+  fi
+  case "$hash" in
+    *[!0-9a-fA-F]*|'') return 1 ;;
+  esac
+  printf '%s' "$hash"
+}
+LAUNCH_HOME_TOKEN=$(spawn_launch_home_token "$FM_HOME") || LAUNCH_HOME_TOKEN=
+if [ -z "$LAUNCH_HOME_TOKEN" ]; then
+  echo "error: could not derive a home identity for the staged launch file" >&2
+  exit 1
+fi
+case "$SPAWN_GEN" in
+  *[!A-Za-z0-9.]*|'') echo "error: spawn incarnation token is not a usable launch-file nonce" >&2; exit 1 ;;
+esac
+LAUNCH_DIR="/tmp/fm-$ID+$LAUNCH_HOME_TOKEN"
 # Crewmate panes are created by a long-lived tmux/herdr daemon that does not
 # inherit firstmate's current environment, so a bare `claude` in the pane falls
 # back to the default ~/.claude store even when firstmate itself runs under a
@@ -6717,10 +6762,20 @@ esac
 # an unset value is the single-store default and needs no prefix.
 # A home's worker account pin replaces that forwarding: the launch names the
 # pinned root (or unsets the variable for the ordinary Claude account) and
-# sheds the environment credentials Claude ranks above the root's login.
+# sheds the environment credentials Claude ranks above the root's login. A
+# worker pinned to this session's own root then gets this session's
+# setup-token back through bin/fm-claude-token-exec.sh, which reads the private
+# file staged beside the launch file below; the value never enters the launch
+# text, and a Herdr resume, which finds the file consumed, runs on the stored
+# login.
+CLAUDE_TOKEN_FILE=
 if [ -n "$WORKER_ACCOUNT" ]; then
   case "$HARNESS" in
   claude)
+    if [ "$WORKER_ACCOUNT_CLAUDE_TOKEN" = 1 ]; then
+      CLAUDE_TOKEN_FILE="$LAUNCH_DIR/claude-token.$SPAWN_GEN"
+      LAUNCH="$(shell_quote "$FM_ROOT/bin/fm-claude-token-exec.sh") $(shell_quote "$CLAUDE_TOKEN_FILE") $LAUNCH"
+    fi
     if [ -n "$WORKER_ACCOUNT_ROOT" ]; then
       LAUNCH="$(fm_worker_account_claude_shed) CLAUDE_CONFIG_DIR=$(shell_quote "$WORKER_ACCOUNT_ROOT") $LAUNCH"
     else
@@ -6777,33 +6832,6 @@ if [ -n "$CLAUDE_RESUME_FILE" ]; then
   esac
 fi
 LAUNCH=${LAUNCH//__BRIEFDOORBELL__/"$BRIEF_DOORBELL_ARG"}
-# Implement the launch-delivery contract in this script's header. The full
-# home-identity hash isolates equal task ids across homes, and the spawn token in
-# the final filename keeps a buffered source line bound to this incarnation.
-spawn_launch_home_token() {
-  local home=$1 root hash
-  root=$(cd "$home" 2>/dev/null && pwd -P) || root=$home
-  if command -v shasum >/dev/null 2>&1; then
-    hash=$(printf '%s' "$root" | shasum -a 256 | awk '{print $1}')
-  elif command -v sha256sum >/dev/null 2>&1; then
-    hash=$(printf '%s' "$root" | sha256sum | awk '{print $1}')
-  else
-    return 1
-  fi
-  case "$hash" in
-    *[!0-9a-fA-F]*|'') return 1 ;;
-  esac
-  printf '%s' "$hash"
-}
-LAUNCH_HOME_TOKEN=$(spawn_launch_home_token "$FM_HOME") || LAUNCH_HOME_TOKEN=
-if [ -z "$LAUNCH_HOME_TOKEN" ]; then
-  echo "error: could not derive a home identity for the staged launch file" >&2
-  exit 1
-fi
-case "$SPAWN_GEN" in
-  *[!A-Za-z0-9.]*|'') echo "error: spawn incarnation token is not a usable launch-file nonce" >&2; exit 1 ;;
-esac
-LAUNCH_DIR="/tmp/fm-$ID+$LAUNCH_HOME_TOKEN"
 # Pane-scoped override: git in this worker reads our commit-msg strip without
 # rewriting the project's core.hooksPath. GIT_CONFIG_* takes precedence over
 # config files and is inherited by child git processes. When the home opts in
@@ -7042,6 +7070,22 @@ if ! (umask 077 && printf '%s\n' "$LAUNCH" >"$LAUNCH_STAGE" &&
   exit 1
 fi
 SPAWN_STAGED_LAUNCH_FILE=$LAUNCH_FILE
+# The setup-token a pinned Claude worker carries (the account-pin block above):
+# written with a shell builtin, so the value is never an argument, and consumed
+# by bin/fm-claude-token-exec.sh as the worker starts.
+if [ -n "$CLAUDE_TOKEN_FILE" ]; then
+  if [ -e "$CLAUDE_TOKEN_FILE" ] || [ -L "$CLAUDE_TOKEN_FILE" ]; then
+    echo "error: task setup-token file $CLAUDE_TOKEN_FILE already exists; refusing to replace it" >&2
+    exit 1
+  fi
+  SPAWN_STAGED_CLAUDE_TOKEN_FILE=$CLAUDE_TOKEN_FILE
+  if ! (umask 077 && printf '%s' "$CLAUDE_CODE_OAUTH_TOKEN" >"$LAUNCH_STAGE" &&
+    chmod 0600 "$LAUNCH_STAGE" && mv -f "$LAUNCH_STAGE" "$CLAUDE_TOKEN_FILE"); then
+    rm -f "$LAUNCH_STAGE"
+    echo "error: could not stage the worker's setup-token at $CLAUDE_TOKEN_FILE" >&2
+    exit 1
+  fi
+fi
 if [ "$ORCA_LAUNCH_ENV_ENABLED" = 1 ]; then
   # Bash runs the EXIT trap for an untrapped fatal signal with status 0, which
   # abort cleanup reads as success, so exit with the signal's status instead

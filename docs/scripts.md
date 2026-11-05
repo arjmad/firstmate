@@ -203,6 +203,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-branch-report.sh` | Record one handled fleet event from a supervision-host branch session in the durable outcome store |
 | `fm-cd-command-policy.mjs` | Decide whether a shell command persistently changes the primary firstmate shell's directory |
 | `fm-cd-pretool-check.sh` | PreToolUse transport for the cd-guard command policy |
+| `fm-claude-token-exec.sh` | Hand a pinned Claude worker the launching session's own setup-token from a consume-once private file, then run the worker |
 | `fm-claude-trust.sh` | Pre-register Claude Code workspace trust for a task worktree or secondmate home before a claude spawn |
 | `fm-contributions.jq` | Projection used by `fm-contributions.sh`, whose header owns the record contract |
 | `fm-cursor-lib.sh` | Resolve the Cursor executable and identify Cursor processes |

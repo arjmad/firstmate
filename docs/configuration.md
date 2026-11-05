@@ -1155,7 +1155,13 @@ The check runs with only `HOME`, `PATH`, `TMPDIR`, `USER`, `LOGNAME`, and the pi
 A pinned Claude launch also unsets the environment credentials Claude ranks above a stored login, such as `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, and the Bedrock and Vertex switches ([authentication precedence](https://code.claude.com/docs/en/authentication#authentication-precedence)).
 Pi ranks a root's stored logins above environment variables, so a pinned Pi launch unsets nothing.
 
-A home that authenticates Claude through environment credentials on purpose should leave the pin absent.
+One credential comes back: when the pinned root is the launching session's own Claude root (both `CLAUDE_CONFIG_DIR` values name the same directory, or both are unset) and that session has `CLAUDE_CODE_OAUTH_TOKEN` set, the worker receives that same token, so it runs on the credential the helm itself runs on, such as a long-lived `claude setup-token` token.
+A worker pinned to any other root never receives it.
+The spawn hands the token over through a private file in the task's launch directory that the worker launch reads and removes as it starts ([`bin/fm-claude-token-exec.sh`](../bin/fm-claude-token-exec.sh)), so the value never appears in the launch command, the pane, or the task record.
+A launch that finds no such file, such as a Herdr resume after the first start consumed it, or a spawn from a process that has no token, starts on the root's stored login.
+The sign-in check above still asks about the root's stored login, because `claude auth status` accepts any token without validating it, and quota reads use that login too.
+
+A home that authenticates Claude through other environment credentials on purpose should leave the pin absent.
 
 ### Failures, reporting, and inheritance
 
