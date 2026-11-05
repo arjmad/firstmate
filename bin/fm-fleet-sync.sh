@@ -84,8 +84,13 @@
 # FM_LIVE_CHECKOUT_LOCK_POLL_SECS - so --settle never edits files under a
 # capture reading them, then runs "<command> --settle" from the checkout and
 # prints "settled: ..." or a STUCK line naming its exit. The capture command
-# owns --settle: it restores only edits origin/<default> already holds. The
-# checkout then gets the ordinary sync, which fast-forwards it once it is clean.
+# owns --settle: it restores only edits origin/<default> already holds, and
+# prints "settled <path>" for each. When the checkout then still cannot
+# fast-forward (still uncommitted, off <default>, or not an ancestor of
+# origin/<default>), each settled path the settle left at HEAD's text gets
+# origin/<default>'s text back and the line reads "settle held: <reason>", so a
+# blocked fast-forward never leaves the checkout running older text.
+# The checkout then gets the ordinary sync, which fast-forwards it once it is clean.
 # A capture still running after the wait reports "skipped: busy:" untouched.
 # Scheduled form (--scheduled): bin/fm-watch.sh starts it detached once per
 # scheduled interval, so a merge firstmate did not make still goes live. It is
@@ -643,11 +648,31 @@ capture_or_report_stuck() {
   echo "$label: capturing: $CAPTURE_COUNT uncommitted path(s) under $CAPTURE_DIR only; started $CAPTURE_CMD (log $log)"
 }
 
+# settle_blocker: sets SETTLE_BLOCKER to why the checkout cannot fast-forward to
+# origin/<default> as it stands, empty when it can, and SETTLE_BASE to that ref.
+settle_blocker() {
+  local default path
+  SETTLE_BLOCKER="" SETTLE_BASE=""
+  if ! default=$(default_branch) || ! git -C "$PROJ" rev-parse --verify --quiet "origin/$default^{commit}" >/dev/null; then
+    SETTLE_BLOCKER="cannot resolve origin's default branch"
+    return 0
+  fi
+  SETTLE_BASE="origin/$default"
+  path=$(git -C "$PROJ" -c core.quotePath=false status --porcelain 2>/dev/null | head -1)
+  if [ -n "$path" ]; then
+    SETTLE_BLOCKER="${path:3} is still uncommitted"
+  elif [ "$(git -C "$PROJ" symbolic-ref --short HEAD 2>/dev/null)" != "$default" ]; then
+    SETTLE_BLOCKER="the checkout is not on $default"
+  elif ! git -C "$PROJ" merge-base --is-ancestor HEAD "$SETTLE_BASE" 2>/dev/null; then
+    SETTLE_BLOCKER="HEAD is not an ancestor of $SETTLE_BASE"
+  fi
+}
+
 # settle_capture: the settle form's step for one capture= checkout (see the
 # header). Returns non-zero only when a capture is still running after the wait,
 # which leaves the checkout for the ordinary busy skip.
 settle_capture() {
-  local waited=0 log rc=0
+  local waited=0 log rc=0 path kept=0
   while capture_running; do
     [ "$waited" -lt "$CAPTURE_SETTLE_WAIT_SECS" ] || return 1
     sleep "$LIVE_LOCK_POLL_SECS"
@@ -659,10 +684,20 @@ settle_capture() {
   }
   (cd "$PROJ" && bash -c "$CAPTURE_CMD --settle") </dev/null >"$log" 2>&1 || rc=$?
   cat "$log" >&2
-  if [ "$rc" = 0 ]; then
-    echo "$label: settled: $CAPTURE_CMD --settle restored $(grep -c '^settled ' "$log" || true) path(s) origin already holds"
-  else
+  settle_blocker
+  if [ -n "$SETTLE_BLOCKER" ] && [ -n "$SETTLE_BASE" ]; then
+    # Give each path the settle left at HEAD's text origin's text back.
+    while IFS= read -r path; do
+      [ -z "$(git -C "$PROJ" status --porcelain -- "$path" 2>/dev/null)" ] || continue
+      git -C "$PROJ" restore --source="$SETTLE_BASE" --worktree -- "$path" 2>/dev/null && kept=$((kept + 1))
+    done < <(sed -n 's/^settled //p' "$log")
+  fi
+  if [ "$rc" != 0 ]; then
     echo "$label: STUCK: $CAPTURE_CMD --settle failed (exit $rc) - needs attention; last output: $(post_update_output_tail "$log")"
+  elif [ -n "$SETTLE_BLOCKER" ]; then
+    echo "$label: settle held: $SETTLE_BLOCKER, so the checkout cannot fast-forward yet; kept $kept settled path(s) at ${SETTLE_BASE:-origin}'s text"
+  else
+    echo "$label: settled: $CAPTURE_CMD --settle restored $(grep -c '^settled ' "$log" || true) path(s) origin already holds"
   fi
   rm -f "$log"
   return 0
