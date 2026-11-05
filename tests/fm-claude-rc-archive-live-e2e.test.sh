@@ -28,11 +28,13 @@ CLAUDE_DIR=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
 API=${FM_CLAUDE_RC_API_BASE:-https://api.anthropic.com}
 DRIVER_PID='' CLAUDE_PID='' BRIDGE=''
 
-# One Remote Control API call with the account's stored token on curl's stdin.
+# One Remote Control API call on curl's stdin, authorized by the token the
+# helper itself resolves for this root (keychain first on macOS).
 rc_api() {  # <method> <path>
   local token
-  token=$(jq -r '.claudeAiOauth.accessToken // empty' "$CLAUDE_DIR/.credentials.json" 2>/dev/null) || token=''
-  [ -n "$token" ] || fail "Claude Code $CLAUDE_VERSION: no stored OAuth token in $CLAUDE_DIR"
+  # shellcheck source=bin/fm-claude-rc-archive.sh
+  token=$(. "$ROOT/bin/fm-claude-rc-archive.sh" && rc_token "$CLAUDE_DIR" && printf '%s' "$RC_TOKEN") || token=''
+  [ -n "$token" ] || fail "Claude Code $CLAUDE_VERSION: no unexpired stored OAuth token for $CLAUDE_DIR"
   printf 'header = "Authorization: Bearer %s"\n' "$token" \
     | curl -sS --config - --max-time 15 -X "$1" -H 'anthropic-version: 2023-06-01' \
         -H 'anthropic-beta: ccr-byoc-2025-07-29' "$API$2"

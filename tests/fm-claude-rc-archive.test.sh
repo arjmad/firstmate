@@ -3,7 +3,8 @@
 # own Claude Remote Control sessions (name AND launch directory must match),
 # and `archive` sends Claude Code's own archive request with the token kept off
 # the command line, treating every failure as a one-line warning and exit 0.
-# A PATH-shimmed curl stands in for the API; nothing here reaches the network.
+# A PATH-shimmed curl stands in for the API and a PATH-shimmed security for the
+# macOS login keychain; nothing here reaches the network or a real keychain.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -26,8 +27,34 @@ cat >> "$FAKE_CURL_LOG.stdin"
 printf '%s' "${FAKE_CURL_CODE:-200}"
 [ "${FAKE_CURL_CODE:-200}" != 000 ] || exit 28
 SH
-  chmod +x "$c/fakebin/curl"
+  # security find-generic-password -a <account> -w -s <service>: logs the
+  # account and service, prints keychain/<service> when the account is
+  # FAKE_KEYCHAIN_ACCOUNT, exits 36 (interaction not allowed, a locked
+  # keychain) under FAKE_KEYCHAIN_LOCKED=1, and otherwise 44 (not found).
+  mkdir -p "$c/keychain"
+  cat > "$c/fakebin/security" <<'SH'
+#!/usr/bin/env bash
+[ "$#" = 6 ] && [ "$1 $2 $4 $5" = "find-generic-password -a -w -s" ] || exit 2
+printf '%s|%s\n' "$3" "$6" >> "$FAKE_KEYCHAIN_DIR/reads.log"
+[ "${FAKE_KEYCHAIN_LOCKED:-}" != 1 ] || exit 36
+[ "$3" = "${FAKE_KEYCHAIN_ACCOUNT:-}" ] && [ -f "$FAKE_KEYCHAIN_DIR/$6" ] || exit 44
+cat "$FAKE_KEYCHAIN_DIR/$6"
+SH
+  chmod +x "$c/fakebin/curl" "$c/fakebin/security"
   printf '%s\n' "$c"
+}
+
+FRESH_MS=$(( ($(date +%s) + 3600) * 1000 ))
+STALE_MS=1700000000000  # 2023-11-14T22:13:20Z
+
+login_json() {  # <token> <expiresAt ms>: a Claude Code credentials document
+  jq -nc --arg t "$1" --argjson e "$2" '{claudeAiOauth: {accessToken: $t, refreshToken: "r", expiresAt: $e}}'
+}
+
+sha8() {  # <text>: the first 8 hex digits of its sha256
+  local h
+  if command -v shasum >/dev/null 2>&1; then h=$(printf '%s' "$1" | shasum -a 256); else h=$(printf '%s' "$1" | sha256sum); fi
+  printf '%s\n' "${h:0:8}"
 }
 
 session_record() {  # <root> <pid> <name> <cwd> [<bridge id>]
@@ -49,8 +76,13 @@ run_find() {  # <case> <task-id> <launch-dir> [<account>]
 
 run_archive() {  # <case> <task-id> <stdin-lines>
   local c=$1 id=$2 lines=$3
-  printf '%s\n' "$lines" | HOME="$c/home" CLAUDE_CONFIG_DIR='' FAKE_CURL_LOG="$c/curl.log" \
+  printf '%s\n' "$lines" | HOME="$c/home" CLAUDE_CONFIG_DIR="${RUN_CLAUDE_CONFIG_DIR:-}" USER=fm-tester \
+    FAKE_CURL_LOG="$c/curl.log" FAKE_KEYCHAIN_DIR="$c/keychain" FAKE_KEYCHAIN_ACCOUNT=fm-tester \
     FM_CLAUDE_RC_API_BASE=https://api.example.invalid PATH="$c/fakebin:$PATH" "$ARCHIVE" archive "$id"
+}
+
+sent_token() {  # <case>: the bearer token curl received on its stdin config
+  sed -n 's/^header = "Authorization: Bearer \(.*\)"$/\1/p' "$1/curl.log.stdin" 2>/dev/null
 }
 
 test_find_names_only_the_tasks_own_sessions() {
@@ -160,6 +192,66 @@ test_archive_with_empty_input_does_nothing() {
   pass "archive with no found sessions sends nothing"
 }
 
+test_archive_prefers_the_keychain_login_over_a_stale_file() {
+  local c err
+  c=$(make_case keychain-ordinary)
+  login_json sk-ant-oat01-FILE_stale "$STALE_MS" > "$c/home/.claude/.credentials.json"
+  login_json sk-ant-oat01-KEYCHAIN_live "$FRESH_MS" > "$c/keychain/Claude Code-credentials"
+  err=$(run_archive "$c" task-a "$c/home/.claude"$'\t'session_01AAA 2>&1 >/dev/null)
+  [ "$err" = "archived Claude Remote Control session session_01AAA for task-a" ] \
+    || fail "keychain: unexpected report: $err"
+  [ "$(sent_token "$c")" = sk-ant-oat01-KEYCHAIN_live ] || fail "keychain: sent '$(sent_token "$c")', want the keychain login"
+  grep -qx 'fm-tester|Claude Code-credentials' "$c/keychain/reads.log" \
+    || fail "keychain: the default root must read Claude Code's unsuffixed item as \$USER: $(cat "$c/keychain/reads.log")"
+  ! grep -q 'KEYCHAIN_live' "$c/curl.log" || fail "keychain: the token reached curl's argv"
+  pass "archive on the ordinary root sends the keychain login, not a stale .credentials.json"
+}
+
+test_archive_reads_a_pinned_roots_suffixed_keychain_item() {
+  local c err svc
+  c=$(make_case keychain-pinned)
+  rm "$c/root/.credentials.json"
+  svc="Claude Code-credentials-$(sha8 "$c/root")"
+  login_json sk-ant-oat01-PINNED_live "$FRESH_MS" > "$c/keychain/$svc"
+  login_json sk-ant-oat01-WRONG_root "$FRESH_MS" > "$c/keychain/Claude Code-credentials"
+  err=$(RUN_CLAUDE_CONFIG_DIR="$c/root" run_archive "$c" task-a "$c/root"$'\t'session_01AAA 2>&1 >/dev/null)
+  [ "$err" = "archived Claude Remote Control session session_01AAA for task-a" ] \
+    || fail "pinned: unexpected report: $err"
+  [ "$(sent_token "$c")" = sk-ant-oat01-PINNED_live ] || fail "pinned: sent '$(sent_token "$c")', want the root's own item"
+  ! grep -qx 'fm-tester|Claude Code-credentials' "$c/keychain/reads.log" \
+    || fail "pinned: a pinned root must never read the ordinary login's item"
+  pass "archive on a pinned root reads the keychain item Claude Code keys to that root"
+}
+
+test_archive_falls_back_to_the_file_when_the_keychain_cannot_answer() {
+  local c err
+  c=$(make_case keychain-locked)
+  login_json sk-ant-oat01-FILE_live "$FRESH_MS" > "$c/home/.claude/.credentials.json"
+  login_json sk-ant-oat01-KEYCHAIN_live "$FRESH_MS" > "$c/keychain/Claude Code-credentials"
+  err=$(FAKE_KEYCHAIN_LOCKED=1 run_archive "$c" task-a "$c/home/.claude"$'\t'session_01AAA 2>&1 >/dev/null)
+  [ "$err" = "archived Claude Remote Control session session_01AAA for task-a" ] \
+    || fail "locked: unexpected report: $err"
+  [ "$(sent_token "$c")" = sk-ant-oat01-FILE_live ] || fail "locked: sent '$(sent_token "$c")', want the file's token"
+  : > "$c/curl.log.stdin"
+  login_json sk-ant-oat01-KEYCHAIN_stale "$STALE_MS" > "$c/keychain/Claude Code-credentials"
+  run_archive "$c" task-a "$c/home/.claude"$'\t'session_01AAA >/dev/null 2>&1
+  [ "$(sent_token "$c")" = sk-ant-oat01-FILE_live ] || fail "stale keychain: sent '$(sent_token "$c")', want the file's unexpired token"
+  pass "archive uses .credentials.json when the keychain is locked or holds only an expired login"
+}
+
+test_archive_never_sends_an_expired_token() {
+  local c err rc
+  c=$(make_case expired)
+  login_json sk-ant-oat01-FILE_stale "$STALE_MS" > "$c/home/.claude/.credentials.json"
+  login_json sk-ant-oat01-KEYCHAIN_stale "$STALE_MS" > "$c/keychain/Claude Code-credentials"
+  err=$(run_archive "$c" task-a "$c/home/.claude"$'\t'session_01AAA 2>&1 >/dev/null) && rc=0 || rc=$?
+  expect_code 0 "$rc" "expired: exit 0"
+  [ "$err" = "warning: could not archive Claude Remote Control session session_01AAA for task-a: the stored OAuth token for $c/home/.claude expired at 2023-11-14T22:13:20Z" ] \
+    || fail "expired: unexpected report: $err"
+  [ ! -e "$c/curl.log" ] || fail "expired: curl ran with an expired token"
+  pass "archive sends no request when every stored token has expired, and says when it expired"
+}
+
 test_find_names_only_the_tasks_own_sessions
 test_find_matches_a_symlinked_launch_dir_and_dedupes_roots
 test_find_with_nothing_recorded_prints_nothing
@@ -167,3 +259,7 @@ test_archive_sends_claudes_request_without_the_token_on_argv
 test_archive_treats_409_as_already_archived
 test_archive_failures_warn_once_and_exit_zero
 test_archive_with_empty_input_does_nothing
+test_archive_prefers_the_keychain_login_over_a_stale_file
+test_archive_reads_a_pinned_roots_suffixed_keychain_item
+test_archive_falls_back_to_the_file_when_the_keychain_cannot_answer
+test_archive_never_sends_an_expired_token

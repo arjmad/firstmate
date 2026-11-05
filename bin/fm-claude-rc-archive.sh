@@ -28,16 +28,27 @@
 #   fm-claude-rc-archive.sh archive [<task-id>]
 #     Read find's lines on stdin and archive each session with
 #     POST <api>/v1/code/sessions/cse_<id>/archive, the request Claude Code
-#     itself sends, authorized by the OAuth access token stored in that root's
-#     .credentials.json. HTTP 200, or 409 (already archived), is success.
-#     Best effort: each failure - no stored token (a macOS Keychain login), no
+#     itself sends, authorized by that root's stored OAuth access token, read
+#     from the stores Claude Code itself reads, in its order: where the macOS
+#     `security` tool exists, the login-keychain item Claude Code keys to the
+#     root ("Claude Code-credentials" for $HOME/.claude, with a
+#     "-<first 8 hex of sha256(root)>" suffix for a set CLAUDE_CONFIG_DIR),
+#     then <root>/.credentials.json, its plaintext store on Linux and its
+#     fallback on macOS, which a running Claude leaves stale once the keychain
+#     holds its login. The first unexpired token wins; an expired one is
+#     never sent. HTTP 200, or 409 (already archived), is success.
+#     Best effort: each failure - no stored token, only expired ones, no
 #     curl, a refused or timed-out request - prints one `warning:` line to
 #     stderr, and the command still exits 0, so a caller never blocks on it.
 #     The token travels on curl's stdin config, never on a command line.
 #
+# Sourcing this file defines rc_token without running a command, so a live
+# guard authorizes its own API calls with the same token the helper sends.
+#
 # Environment:
 #   FM_CLAUDE_RC_API_BASE   API origin (default https://api.anthropic.com)
-#   FM_CLAUDE_RC_TIMEOUT    per-request ceiling in whole seconds, at least 1 (default 10)
+#   FM_CLAUDE_RC_TIMEOUT    per-request ceiling in whole seconds, at least 1 (default 10);
+#                           also bounds each keychain read
 #
 # Exit 0 on success or best-effort failure, 2 on a usage error.
 set -u
@@ -86,6 +97,78 @@ cmd_find() {
   return 0
 }
 
+bounded() {  # <seconds> <command...>: run it, killed after <seconds> where a timer exists
+  local secs=$1
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+  elif command -v perl >/dev/null 2>&1; then
+    perl -e 'alarm shift; exec @ARGV or exit 127' "$secs" "$@"
+  else
+    "$@"
+  fi
+}
+
+keychain_services() {  # <claude-dir>: the keychain service names Claude Code may key to it
+  local dir=$1 base='Claude Code-credentials' d hash
+  [ "$dir" != "$(physical_dir "$HOME/.claude")" ] || printf '%s\n' "$base"
+  for d in "$dir" "${CLAUDE_CONFIG_DIR:-}"; do
+    [ -n "$d" ] || continue
+    [ "$d" = "$dir" ] || [ "$(physical_dir "$d")" = "$dir" ] || continue
+    if command -v shasum >/dev/null 2>&1; then
+      hash=$(printf '%s' "$d" | shasum -a 256)
+    else
+      hash=$(printf '%s' "$d" | sha256sum)
+    fi
+    printf '%s-%s\n' "$base" "${hash:0:8}"
+  done | awk '!seen[$0]++'
+}
+
+keychain_account() {  # Claude Code's keychain account: $USER, or its fallback name
+  local user=${USER:-}
+  [ -n "$user" ] || user=$(id -un 2>/dev/null) || user=''
+  case "$user" in ''|*[!A-Za-z0-9._-]*) user=claude-code-user ;; esac
+  printf '%s\n' "$user"
+}
+
+# rc_token <claude-dir>: set RC_TOKEN to the first unexpired stored OAuth access
+# token for that root, keychain before .credentials.json, or set it empty and
+# RC_TOKEN_PROBLEM to why. Never prints the token.
+rc_token() {
+  local dir=$1 svc account row tok exp now expired='' docs=() doc
+  RC_TOKEN='' RC_TOKEN_PROBLEM="no stored OAuth token in $dir"
+  if command -v security >/dev/null 2>&1; then
+    account=$(keychain_account)
+    while IFS= read -r svc; do
+      doc=$(bounded "$TIMEOUT" security find-generic-password -a "$account" -w -s "$svc" 2>/dev/null) || doc=''
+      [ -z "$doc" ] || docs+=("$doc")
+    done < <(keychain_services "$dir")
+  fi
+  doc=$(cat "$dir/.credentials.json" 2>/dev/null) || doc=''
+  [ -z "$doc" ] || docs+=("$doc")
+  now=$(date +%s)
+  for doc in ${docs[@]+"${docs[@]}"}; do
+    row=$(printf '%s\n' "$doc" | jq -r '.claudeAiOauth // empty
+      | select((.accessToken | type) == "string")
+      | [.accessToken, ((.expiresAt // "") | tostring)] | @tsv' 2>/dev/null) || row=''
+    tok=${row%%$'\t'*} exp=${row#*$'\t'}
+    case "$tok" in ''|*[!A-Za-z0-9_.~+/=-]*) continue ;; esac
+    case "$exp" in
+      '') ;;
+      *[!0-9]*) continue ;;
+      *) if [ "$((exp / 1000))" -le "$now" ]; then
+           [ -n "$expired" ] || expired=$exp
+           continue
+         fi ;;
+    esac
+    RC_TOKEN=$tok
+    return 0
+  done
+  [ -z "$expired" ] \
+    || RC_TOKEN_PROBLEM="the stored OAuth token for $dir expired at $(jq -rn --argjson e "$expired" '$e / 1000 | floor | todate')"
+  return 0
+}
+
 archive_one() {  # <claude-dir> <session-id> <label>
   local dir=$1 sid=$2 label=$3 cse token code
   case "$sid" in
@@ -102,11 +185,12 @@ archive_one() {  # <claude-dir> <session-id> <label>
     echo "warning: could not archive Claude Remote Control session $sid$label: curl is not installed" >&2
     return 0
   fi
-  token=$(jq -r '.claudeAiOauth.accessToken // empty' "$dir/.credentials.json" 2>/dev/null) || token=''
-  case "$token" in ''|*[!A-Za-z0-9_.~+/=-]*)
-    echo "warning: could not archive Claude Remote Control session $sid$label: no stored OAuth token in $dir" >&2
-    return 0 ;;
-  esac
+  rc_token "$dir"
+  token=$RC_TOKEN
+  if [ -z "$token" ]; then
+    echo "warning: could not archive Claude Remote Control session $sid$label: $RC_TOKEN_PROBLEM" >&2
+    return 0
+  fi
   code=$(printf 'header = "Authorization: Bearer %s"\n' "$token" \
     | curl -sS -o /dev/null -w '%{http_code}' --config - \
         --connect-timeout 5 --max-time "$TIMEOUT" -X POST \
@@ -133,9 +217,11 @@ cmd_archive() {
   return 0
 }
 
-case "${1:-}" in
-  find) shift; cmd_find "$@" ;;
-  archive) shift; cmd_archive "$@" ;;
-  -h|--help) usage; exit 0 ;;
-  *) usage >&2; exit 2 ;;
-esac
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  case "${1:-}" in
+    find) shift; cmd_find "$@" ;;
+    archive) shift; cmd_archive "$@" ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+  esac
+fi
