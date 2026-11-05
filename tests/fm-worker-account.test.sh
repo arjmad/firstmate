@@ -363,6 +363,89 @@ test_raw_claude_command_receives_the_pin() {
   pass "a raw Claude launch command receives the home's pin"
 }
 
+# The helm runs on its account's setup-token (CLAUDE_CODE_OAUTH_TOKEN) rather
+# than its store's login. A worker pinned to the helm's own root gets that same
+# token through a consume-once private file, so the value is never launch text,
+# a record, or left on disk; a worker pinned to any other root keeps shedding
+# it, so the token can never reach another account's worker.
+HELM_TOKEN=dummy-helm-setup-token-0000
+
+# assert_token_only_in_handoff <id>: the dummy token appears in no file under
+# the home or the task's launch directory except the staged hand-over file.
+assert_token_only_in_handoff() {
+  local hits
+  hits=$(grep -rlF -- "$HELM_TOKEN" "$HOME_DIR" /tmp/fm-"$1"+* "$CASE/launch.log" 2>/dev/null | grep -v '/claude-token\.' || true)
+  [ -z "$hits" ] || fail "the setup-token value leaked into: $hits"
+}
+
+test_claude_pin_to_the_helm_root_carries_the_helm_token() {
+  local out rc id=acct-token-own files
+  new_case token-own claude
+  signed_in_claude_root "$CASE/ambient-claude"
+  printf '%s\n' "$CASE/ambient-claude/" > "$HOME_DIR/config/claude-account"
+  out=$(CLAUDE_CODE_OAUTH_TOKEN=$HELM_TOKEN spawn_ship "$id"); rc=$?
+  expect_code 0 "$rc" "a Claude spawn pinned to the helm's own root should succeed: $out"
+  assert_not_contains "$out" "$HELM_TOKEN" "the spawn must never print the setup-token"
+  files=$(find /tmp -maxdepth 2 -path "/tmp/fm-$id+*/claude-token.*" -perm 0600 2>/dev/null | wc -l)
+  [ "$files" -eq 1 ] || fail "the spawn should stage exactly one private setup-token file, found $files"
+  assert_token_only_in_handoff "$id"
+  run_pane
+  assert_grep "CLAUDE_CODE_OAUTH_TOKEN=$HELM_TOKEN" "$CASE/claude-worker" \
+    "a worker pinned to the helm's own root should run on the helm's setup-token"
+  assert_grep "CLAUDE_CONFIG_DIR=$CASE/ambient-claude/" "$CASE/claude-worker" "the worker should keep the pinned root"
+  assert_grep "ANTHROPIC_API_KEY=unset" "$CASE/claude-worker" "an ambient API key must still not outrank the pin"
+  [ -z "$(find /tmp -maxdepth 2 -path "/tmp/fm-$id+*/claude-token.*" 2>/dev/null)" ] \
+    || fail "the worker launch must consume the setup-token file"
+  # A second run of the same launch, as a Herdr resume is, finds the file gone
+  # and starts on the stored login, never on the pane's ambient token.
+  run_pane
+  assert_grep "CLAUDE_CODE_OAUTH_TOKEN=unset" "$CASE/claude-worker" \
+    "a rerun after the hand-over was consumed must run on the stored login"
+
+  new_case token-ordinary claude
+  signed_in_claude_root "$HOME_DIR/user-home/.claude"
+  printf 'ordinary\n' > "$HOME_DIR/config/claude-account"
+  fm_test_spawn_brief "$HOME_DIR" acct-token-ordinary
+  out=$(FM_FAKE_LAUNCH_LOG="$CASE/launch.log" CLAUDE_CODE_OAUTH_TOKEN=$HELM_TOKEN \
+    fm_test_run_spawn "$HOME_DIR" "$WT" "$FAKEBIN" acct-token-ordinary "$PROJ" --mode no-mistakes --yolo off); rc=$?
+  expect_code 0 "$rc" "an ordinary pin launched from an unset-root helm should succeed: $out"
+  run_pane
+  assert_grep "CLAUDE_CODE_OAUTH_TOKEN=$HELM_TOKEN" "$CASE/claude-worker" \
+    "an ordinary pin launched from a helm on the ordinary account should carry its token"
+  assert_grep "CLAUDE_CONFIG_DIR=unset" "$CASE/claude-worker" "the ordinary pin must still unset the root"
+  pass "a Claude worker pinned to the helm's own root runs on the helm's setup-token, handed over once"
+}
+
+test_claude_pin_to_another_root_never_carries_the_helm_token() {
+  local out rc id=acct-token-other
+  new_case token-other claude
+  signed_in_claude_root "$CASE/work"
+  printf '%s\n' "$CASE/work" > "$HOME_DIR/config/claude-account"
+  out=$(CLAUDE_CODE_OAUTH_TOKEN=$HELM_TOKEN spawn_ship "$id"); rc=$?
+  expect_code 0 "$rc" "a Claude spawn pinned to another root should succeed: $out"
+  [ -z "$(find /tmp -maxdepth 2 -path "/tmp/fm-$id+*/claude-token.*" 2>/dev/null)" ] \
+    || fail "a worker pinned to another root must not get a setup-token file"
+  assert_no_grep "fm-claude-token-exec" "$CASE/launch.log" "a worker pinned to another root must not get the hand-over"
+  run_pane
+  assert_grep "CLAUDE_CODE_OAUTH_TOKEN=unset" "$CASE/claude-worker" \
+    "the helm's token must never reach a worker pinned to another account's root"
+
+  new_case token-ordinary-other claude
+  signed_in_claude_root "$HOME_DIR/user-home/.claude"
+  printf 'ordinary\n' > "$HOME_DIR/config/claude-account"
+  out=$(CLAUDE_CODE_OAUTH_TOKEN=$HELM_TOKEN spawn_ship acct-token-ordinary-other); rc=$?
+  expect_code 0 "$rc" "an ordinary pin launched from a helm on another root should succeed: $out"
+  run_pane
+  assert_grep "CLAUDE_CODE_OAUTH_TOKEN=unset" "$CASE/claude-worker" \
+    "a helm on a set root must not hand its token to an ordinary-account worker"
+
+  new_case token-unpinned claude
+  out=$(CLAUDE_CODE_OAUTH_TOKEN=$HELM_TOKEN spawn_ship acct-token-unpinned); rc=$?
+  expect_code 0 "$rc" "an unpinned Claude spawn should succeed: $out"
+  assert_no_grep "fm-claude-token-exec" "$CASE/launch.log" "an unpinned launch must stay unchanged"
+  pass "the helm's setup-token never reaches a worker pinned to another root, and unpinned launches are unchanged"
+}
+
 test_raw_claude_account_override_refuses_under_a_pin() {
   local out rc id=acct-raw-override var
   new_case raw-override claude
@@ -532,6 +615,8 @@ test_pi_pin_refusals
 test_pi_extension_provider_and_old_pi_fall_back_to_the_model_listing
 test_a_pin_governs_only_its_own_runner
 test_raw_claude_command_receives_the_pin
+test_claude_pin_to_the_helm_root_carries_the_helm_token
+test_claude_pin_to_another_root_never_carries_the_helm_token
 test_raw_claude_account_override_refuses_under_a_pin
 test_raw_claude_account_override_is_kept_without_a_pin
 test_local_secondmate_reads_the_launching_home_pin
