@@ -43,7 +43,7 @@ This fork has no server-side merge enforcement: `main` has no ruleset, no classi
 [`bin/fm-pr-merge.sh`](bin/fm-pr-merge.sh) is the merge guard: it refuses unless every check is green at the PR's current head and every required check GitHub reports has reported.
 Because GitHub reports no required checks here, that second test is empty today, so a job that never started is not caught by GitHub and the guard rests on the checks that did report.
 
-The CI layout's actual job contexts are `Lint 1of8` through `Lint 8of8` (one per lint matrix partition), `Test coverage guard`, `Repo invariants`, `Stock macOS Bash snapshot compatibility`, `Behavior portable parallel 1`, `Behavior portable parallel 2`, `Behavior portable serial 1` through `Behavior portable serial 10`, `Behavior tests (Herdr)`, and `Behavior timing aggregate`.
+The CI layout's actual job contexts are `Lint 1of8` through `Lint 8of8` (one per lint matrix partition), `Test coverage guard`, `Repo invariants`, `Stock macOS Bash snapshot compatibility`, `Behavior portable parallel 1`, `Behavior portable parallel 2`, `Behavior portable serial 1` through `Behavior portable serial 13`, `Behavior tests (Herdr)`, and `Behavior timing aggregate`.
 This fork has no no-mistakes compliance job, so unlike upstream it has no compliance context.
 The timing aggregate is not a substitute for individual jobs because it can succeed while collecting evidence from a failed run.
 
