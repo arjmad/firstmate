@@ -2875,7 +2875,8 @@ case "${1:-} ${2:-}" in
     case "$payload" in
       *'encode launch-brief'* | *'Firstmate operational input waiting: read'*)
         printf '%s\n' "$payload" > "$D/launched-command"
-        printf '%s' "$id" > "$D/herdr-launched-pane" ;;
+        printf '%s' "$id" > "$D/herdr-launched-pane"
+        [ -z "${FM_FAKE_LAUNCH_TRANSPORT_FAIL_AFTER_START:-}" ] || exit 1 ;;
     esac ;;
   *) : ;;
 esac
@@ -3012,6 +3013,24 @@ test_herdr_rebind_keeps_a_journal_whose_workspace_survives() {
   assert_not_contains "$(grep '^workspace create' "$dir/fake/herdr-log" || true)" "p:" \
     "a rebind that cannot retire the journal must not create a second projection"
   pass "reclaim: a herdr rebind leaves a journal whose workspace survives untouched and falls back flat"
+}
+
+test_herdr_projected_rebind_keeps_the_endpoint_its_published_record_names() {
+  local dir out rc=0 pane
+  herdr_helm_case helm-rebind-postpub rl81 || {
+    echo "skip - herdr rebind needs jq (the herdr adapter parses JSON with it)"
+    return 0
+  }
+  dir=$HERDR_CASE_DIR
+  out=$(FM_FAKE_LAUNCH_TRANSPORT_FAIL_AFTER_START=1 \
+    run_spawn_from_helm "$dir" rl81 --relaunch --harness claude) || rc=$?
+  expect_code 1 "$rc" "a post-publication launch failure should fail closed"$'\n'"$out"
+  pane=$(meta_field "$dir" rl81 herdr_pane_id)
+  [ -n "$pane" ] && [ "$pane" != w70:p2 ] \
+    || fail "the replacement record was not published before the launch failed (recorded '$pane')"$'\n'"$out"
+  jq -e --arg p "$pane" 'any(.tabs[]; .pane_id == $p)' "$dir/fake/herdr-state.json" >/dev/null \
+    || fail "abort cleanup closed the projected endpoint the published record names ($pane)"$'\n'"$out"
+  pass "reclaim: a projected herdr rebind keeps the endpoint its published record names when a later step fails"
 }
 
 test_herdr_reclaim_of_a_secondmate_names_its_own_owner() {
@@ -3241,6 +3260,7 @@ test_herdr_rebind_failure_from_a_plain_shell_names_the_real_cause
 test_herdr_rebind_from_the_helm_gets_its_own_workspace
 test_herdr_rebind_retires_a_journal_whose_workspace_is_gone
 test_herdr_rebind_keeps_a_journal_whose_workspace_survives
+test_herdr_projected_rebind_keeps_the_endpoint_its_published_record_names
 test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it
 test_relaunch_moves_a_drifted_item_back_in_flight
 test_away_branch_relaunch_accepts_existing_dispatchable_items
