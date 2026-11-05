@@ -114,9 +114,10 @@
 # runs bin/fm-lab-home.sh teardown; removes the task temp and launch dirs the
 # lab's spawns kept under /tmp, including a failed spawn's; removes every
 # project entry at or under <lab-root> from the recorded Claude store, following
-# a symlinked store to its target (compare-and-swap atomic replace, unrelated
-# entries kept); reports a changed Pi trust store or a new pool-storage
-# entry without touching either; and removes <lab-root>.
+# a symlinked store to its target (one atomic replace under the store lock
+# Claude Code itself takes, unrelated entries kept); reports a changed Pi trust
+# store or a new pool-storage entry without touching either; and removes
+# <lab-root>.
 # Transcripts under ~/.claude/projects are left as history. The lab never uses
 # Herdr.
 set -u
@@ -719,6 +720,20 @@ live_pids() {
   done <<< "$1"
 }
 
+# Claude Code serialises its own writes to the store through a lock directory
+# next to it, <store>.lock, made with mkdir and treated as stale once its mtime
+# is 10 seconds old (proper-lockfile, read from the 2.1.318 bundle). The rewrite
+# below takes that same lock for the milliseconds its read, rewrite, and rename
+# take, and a Claude save that finds it held waits and then re-reads. Claude
+# writes without the lock only after about 14 seconds of retries, far past that
+# hold; the fingerprint recheck below is the guard left for that case. A stale lock
+# is broken only if the directory moved aside is still the one judged stale; a
+# fresh one held past the wait fails closed with the store untouched. The rename
+# also needs the lock still ours and under half the stale age, so a stalled run
+# gives up rather than write after Claude could have broken its lock; what
+# remains is the instant between that check and the rename. Inside the lock the
+# fingerprint recheck still guards against writers that do not take it, such as
+# bin/fm-claude-trust.sh.
 forget_claude_entries() {  # remove every project entry at or under ROOT; prints the count
   [ -e "$CLAUDE_STORE" ] || { echo 0; return 0; }
   node - "$CLAUDE_STORE" "$ROOT" "${ROOT#/private}" <<'NODE'
@@ -733,37 +748,99 @@ if (!stat.isFile() || stat.uid !== process.getuid()) {
 }
 const inLab = (key) => roots.some((r) => key === r || key.startsWith(`${r}/`));
 const fingerprint = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
-for (let attempt = 0; attempt < 3; attempt += 1) {
-  const original = fs.readFileSync(store);
-  const root = JSON.parse(original.toString("utf8"));
-  const projects = root.projects;
-  if (projects === undefined) { console.log(0); process.exit(0); }
-  if (projects === null || typeof projects !== "object" || Array.isArray(projects)) {
-    console.error(`error: ${store} has a non-object "projects" value`); process.exit(1);
+const lockDir = `${link}.lock`;
+const STALE_MS = 10000;
+const WAIT_MS = 15000;
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const lockStat = () => { try { return fs.statSync(lockDir); } catch (err) { if (err.code === "ENOENT") return null; throw err; } };
+// A stale lock is broken by renaming it aside and checking that the directory
+// moved is the one judged stale. If a fresh lock replaced it in between, the
+// run stops without writing, so that holder's write is never overwritten.
+class Refused extends Error {}
+const sameLock = (a, b) => a !== null && b !== null && a.ino === b.ino && a.mtimeMs === b.mtimeMs;
+const breakStale = (held) => {
+  if (!held.isDirectory()) {
+    throw new Refused(`error: ${lockDir} is not a lock directory; remove it by hand; ${store} is unchanged`);
   }
-  const removed = Object.keys(projects).filter(inLab);
-  if (removed.length === 0) { console.log(0); process.exit(0); }
-  const kept = Object.keys(projects).filter((k) => !inLab(k));
-  for (const key of removed) delete projects[key];
-  const tmp = path.join(path.dirname(store), `.claude.json.fm-live-lab.${process.pid}.${crypto.randomBytes(8).toString("hex")}`);
-  fs.writeFileSync(tmp, `${JSON.stringify(root, null, 2)}\n`, { mode: fs.statSync(store).mode & 0o777, flag: "wx" });
-  let renamed = false;
-  try {
-    if (fingerprint(fs.readFileSync(store)) !== fingerprint(original)) continue;
-    fs.renameSync(tmp, store);
-    renamed = true;
-  } finally {
-    if (!renamed) fs.rmSync(tmp, { force: true });
+  const grave = `${lockDir}.fm-live-lab-stale.${process.pid}.${crypto.randomBytes(8).toString("hex")}`;
+  try { fs.renameSync(lockDir, grave); } catch (err) { if (err.code === "ENOENT") return; throw err; }
+  if (sameLock(fs.statSync(grave), held)) {
+    try { fs.rmdirSync(grave); } catch { /* an unexpected non-empty lock stays aside */ }
+    return;
   }
-  const back = Object.keys(JSON.parse(fs.readFileSync(store, "utf8")).projects || {});
-  if (back.some(inLab) || kept.some((k) => !back.includes(k))) {
-    console.error(`error: ${store} did not keep exactly the non-lab entries`); process.exit(1);
+  // A fresh lock replaced the stale one before the rename: put it back unless a
+  // newer one already took the name, and stop without writing.
+  if (lockStat() === null) {
+    try { fs.renameSync(grave, lockDir); } catch { /* left aside; its holder keeps writing */ }
   }
-  console.log(removed.length);
-  process.exit(0);
+  throw new Refused(`error: a fresh ${lockDir} replaced the stale one while it was being broken; ${store} is unchanged`);
+};
+const acquire = () => {
+  const deadline = Date.now() + WAIT_MS;
+  for (let delay = 50; ; delay = Math.min(delay * 2, 1000)) {
+    if (Date.now() >= deadline) {
+      throw new Refused(`error: ${lockDir} stayed held by another writer for ${WAIT_MS / 1000}s; ${store} is unchanged`);
+    }
+    let made = false;
+    try { fs.mkdirSync(lockDir); made = true; } catch (err) { if (err.code !== "EEXIST") throw err; }
+    const held = lockStat();
+    if (made && held !== null) return { lock: held, at: Date.now() };
+    if (!made && held === null) continue;
+    if (!made && Date.now() - held.mtimeMs > STALE_MS) { breakStale(held); continue; }
+    sleep(delay);
+  }
+};
+// Still ours, and young enough that Claude cannot yet judge it stale: a run
+// that stalled (a suspended process, a slow disk) gives up rather than rename.
+const ours = (mine) => sameLock(lockStat(), mine.lock) && Date.now() - mine.at < STALE_MS / 2;
+const rewrite = (mine) => {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const original = fs.readFileSync(store);
+    const root = JSON.parse(original.toString("utf8"));
+    const projects = root.projects;
+    if (projects === undefined) return [0, "0"];
+    if (projects === null || typeof projects !== "object" || Array.isArray(projects)) {
+      return [1, `error: ${store} has a non-object "projects" value`];
+    }
+    const removed = Object.keys(projects).filter(inLab);
+    if (removed.length === 0) return [0, "0"];
+    const kept = Object.keys(projects).filter((k) => !inLab(k));
+    for (const key of removed) delete projects[key];
+    const tmp = path.join(path.dirname(store), `.claude.json.fm-live-lab.${process.pid}.${crypto.randomBytes(8).toString("hex")}`);
+    fs.writeFileSync(tmp, `${JSON.stringify(root, null, 2)}\n`, { mode: fs.statSync(store).mode & 0o777, flag: "wx" });
+    let renamed = false;
+    try {
+      if (!ours(mine)) return [1, `error: ${lockDir} was taken over or went stale while lab entries were being removed; ${store} is unchanged`];
+      if (fingerprint(fs.readFileSync(store)) !== fingerprint(original)) continue;
+      fs.renameSync(tmp, store);
+      renamed = true;
+    } finally {
+      if (!renamed) fs.rmSync(tmp, { force: true });
+    }
+    const back = Object.keys(JSON.parse(fs.readFileSync(store, "utf8")).projects || {});
+    if (back.some(inLab) || kept.some((k) => !back.includes(k))) {
+      return [1, `error: ${store} did not keep exactly the non-lab entries`];
+    }
+    return [0, String(removed.length)];
+  }
+  return [1, `error: ${store} kept changing while lab entries were being removed`];
+};
+let mine;
+try {
+  mine = acquire();
+} catch (err) {
+  if (!(err instanceof Refused)) throw err;
+  console.error(err.message);
+  process.exit(1);
 }
-console.error(`error: ${store} kept changing while lab entries were being removed`);
-process.exit(1);
+let result;
+try {
+  result = rewrite(mine);
+} finally {
+  if (sameLock(lockStat(), mine.lock)) fs.rmdirSync(lockDir);
+}
+(result[0] === 0 ? console.log : console.error)(result[1]);
+process.exit(result[0]);
 NODE
 }
 

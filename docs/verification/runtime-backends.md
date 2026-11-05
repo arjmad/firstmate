@@ -518,6 +518,25 @@ The lab home was deleted and the test entry was removed from the store and verif
 That automated spawn case runs against a fake claude, so it asserts the store entry and the launch command and nothing more; the live arms above are what establish that the entry actually suppresses the dialog.
 The composer-classification record below observes the same gate from the other side, where an untrusted worktree left Claude, Grok, and Muse unverified because the guard reads a first-launch trust dialog as an unreadable composer.
 
+## Claude store lock
+
+Verified 2026-11-04 on Claude Code 2.1.318, Linux x86_64.
+Claude Code serialises its writes to `.claude.json` through proper-lockfile: it makes a directory named `<store>.lock` with mkdir, treats one whose mtime is 10 seconds old as stale, and retries a held lock with backoff before writing.
+`bin/fm-live-lab.sh forget-claude` takes that same lock around its rewrite, so a Claude save arriving between its read and its rename waits instead of being lost; Claude writes without the lock only after about 14 seconds of retries, far longer than that hold.
+A first start on an empty store records its initial fields without the lock, which is why the guard primes the store before probing; a live store is never in that state.
+The guard holds the lock on a throwaway store, runs a real `claude mcp add -s user`, and checks that nothing is written until the lock is released:
+
+```sh
+tests/fm-claude-store-lock-live-e2e.test.sh
+```
+
+```text
+ok - Claude Code 2.1.318: a store write waits on <store>.lock and lands after release
+```
+
+It spends no model tokens, so it runs by default wherever `claude`, `node`, `jq` and `timeout` are installed and is the refresh command after a Claude Code upgrade.
+`tests/fm-live-lab-forget-claude.test.sh` pins forget-claude's side portably: it waits on a held lock and keeps the holder's write, breaks a stale lock, and fails closed with the store untouched when a fresh lock stays held past its 15-second wait.
+
 ## Claude exit confirmation
 
 Verified 2026-09-12 on Claude Code 2.1.269, tmux 3.6a, macOS arm64.
