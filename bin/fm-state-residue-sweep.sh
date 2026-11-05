@@ -58,10 +58,19 @@
 # through the writers' own path helpers and keeps exactly those. A task is live
 # when any of these names it: a current state/<id>.meta, a state/<id>.status log
 # (it may still hold unread lines or an open decision), a state/<id>.turn-ended
-# file, a state/<id>.inbox, or a durable wake-queue key naming the task's
-# status, turn-ended, or check file, or a signal wake keyed by the bare task id
-# (keys naming nothing of those files protect nothing, because these records
-# only describe them). The sweep runs
+# file, a state/<id>.inbox holding an unhandled NNN.msg steer, or a durable
+# wake-queue key naming the task's status, turn-ended, or check file, or a
+# signal wake keyed by the bare task id (keys naming nothing of those files
+# protect nothing, because these records only describe them). An inbox whose
+# steers were all acknowledged into handled/ is residue, not liveness. The same
+# test retires three pieces of per-task state a spawn leaves that a
+# non-teardown ending never removes: the steering inbox state/<id>.inbox, the
+# read-only commit-msg hooks directory state/<id>.git-hooks, and the Herdr
+# presentation journal state/<id>.herdr-presentation. The journal is the only
+# record bin/fm-herdr-session-cleanup.sh can match a stale projected pane by, so
+# it is removed only once fm_backend_herdr_projection_token_workspace_gone has
+# read the journal's session (its recorded one, else this home's) and found no
+# workspace still carrying its token; any read failure keeps it. The sweep runs
 # under the session lock before the session can dispatch, so no task appears
 # between that read and the removal. The watcher's per-wake process-event marker
 # .seen-procevent-<hex key> (fm_wake_procevent_marker_path) is removed once its
@@ -82,14 +91,18 @@
 #
 # Scratch rotation. bin/fm-claude-stop-autoarm.sh captures each arm attempt in
 # state/.claude-autoarm-output.<random>, bin/fm-wake-drain.sh stages a row
-# rewrite in state/.wake-rows.consume.<random>, and
+# rewrite in state/.wake-rows.consume.<random>,
 # bin/fm-home-summary-refresh.sh stages state/.home-summary.json.<random> and
-# state/.home-summary-error.<random>; each removes its file on every ordinary
-# path, so one older than FM_STATE_RESIDUE_SCRATCH_MAX_AGE_DAYS was orphaned by
-# a killed process and is removed. The threshold is a constant, not a config
-# file: no live scratch file is ever that old (an arm attempt lasts seconds; a
-# row rewrite holds the queue lock; a summary refresh is bounded at a minute),
-# so there is nothing to tune.
+# state/.home-summary-error.<random>, and bin/fm-watch-arm.sh captures its
+# watcher child's stdout in state/.watch-arm-output.<random>; each removes its
+# file on every path a trap can catch, so one older than
+# FM_STATE_RESIDUE_SCRATCH_MAX_AGE_DAYS was orphaned by a killed process and is
+# removed. The threshold is a constant, not a config file: no other live
+# scratch file is ever that old (an arm attempt lasts seconds; a row rewrite
+# holds the queue lock; a summary refresh is bounded at a minute), so there is
+# nothing to tune. A watch-arm capture lives as long as its watcher, and an idle
+# home's watcher can run for days, so those are kept outright while a live pid
+# holds this home's state/.watch.lock.
 #
 # Cost bound. Every backend question is one CLI call plus its JSON parse
 # (about 45 ms each against a scripted herdr on 2026-09-17), and a home that
@@ -99,7 +112,11 @@
 # the summary line reports the deferred count. The inventories are one call
 # per candidate and are read only when at least one unprotected key is on
 # disk, so a converged home, or one whose only markers belong to current task
-# records, makes no backend call at all.
+# records, makes no watcher-record backend call at all. Each presentation journal
+# of a task that is not live costs one workspace-list call per run, outside
+# that budget; a gone workspace's journal is removed by that call, so only a
+# journal whose workspace is still open, or whose server cannot be read, is
+# asked again.
 #
 # Dry run and the summary line are the only stdout. The kept counts are
 # reported so an operator can see that a live or unreadable endpoint held its
@@ -134,7 +151,7 @@ FM_STATE_RESIDUE_OWNER_MIN_AGE_SECONDS=3600
 # Longest prefixes first, so `.stale-since-K` is read as key K under
 # `.stale-since-` and never as key `since-K` under `.stale-`.
 FM_STATE_RESIDUE_PREFIXES='.stale-since- .paused-rechecked- .paused-resurfaced- .writing-since- .writing-resurfaced- .waiting-resurfaced- .wedge-escalations- .churn-since- .hash- .count- .stale- .paused-'
-FM_STATE_RESIDUE_SCRATCH_PREFIXES='.claude-autoarm-output. .wake-rows.consume. .home-summary.json. .home-summary-error.'
+FM_STATE_RESIDUE_SCRATCH_PREFIXES='.claude-autoarm-output. .wake-rows.consume. .home-summary.json. .home-summary-error. .watch-arm-output.'
 
 DRY_RUN=0
 case "${1:-}" in
@@ -392,12 +409,13 @@ sweep_endpoint_records() {
 # queued process-event key and of every source still registered or holding an
 # unacknowledged capture.
 KEEP_RECORDS=
+LIVE_TASKS=
 PROCEVENT_LIVE=
 PROCEVENT_SOURCES=
 keep_record() { KEEP_RECORDS="$KEEP_RECORDS|${1##*/}|"; }
 reference_task() {  # <task-id>
   local status turn heartbeat
-  case "$KEEP_RECORDS" in *"|.$1.branch-outcome-index|"*) return 0 ;; esac
+  case "$LIVE_TASKS" in *"|$1|"*) return 0 ;; esac
   status=$(fm_wake_signal_seen_path "$STATE" "$STATE/$1.status") || return 1
   turn=$(fm_wake_signal_seen_path "$STATE" "$STATE/$1.turn-ended") || return 1
   heartbeat=$(status_heartbeat_seen_marker_path "$STATE" "$1") || return 1
@@ -406,6 +424,7 @@ reference_task() {  # <task-id>
   keep_record "$status"
   keep_record "$turn"
   keep_record "$heartbeat"
+  LIVE_TASKS="$LIVE_TASKS|$1|"
 }
 procevent_live() {  # <queue-key or key prefix>
   local marker
@@ -418,12 +437,20 @@ procevent_live_source() {  # <source-id>
   procevent_live "procevent:$1:"
 }
 collect_referenced() {
-  local path name key keys kind status
+  local path name key keys kind status msg
   _fm_wake_require_classify || return 1
-  for path in "$STATE"/*.meta "$STATE"/*.status "$STATE"/*.turn-ended "$STATE"/*.inbox; do
+  for path in "$STATE"/*.meta "$STATE"/*.status "$STATE"/*.turn-ended; do
     [ -e "$path" ] || [ -L "$path" ] || continue
     name=${path##*/}
     reference_task "${name%.*}" || return 1
+  done
+  for path in "$STATE"/*.inbox; do
+    name=${path##*/}
+    for msg in "$path"/*.msg; do
+      [ -e "$msg" ] || [ -L "$msg" ] || continue
+      reference_task "${name%.inbox}" || return 1
+      break
+    done
   done
   for path in "$(fm_procevent_registry_dir "$STATE")"/*.source; do
     [ -e "$path" ] || [ -L "$path" ] || continue
@@ -508,6 +535,37 @@ sweep_task_records() {
   done
 }
 
+sweep_task_state() {
+  local path name id session
+  local -a journals=()
+  fm_backend_source herdr 2>/dev/null && journals=("$STATE"/*"$FM_BACKEND_HERDR_PRESENTATION_JOURNAL_SUFFIX")
+  for path in "$STATE"/*.inbox "$STATE"/*.git-hooks "${journals[@]+"${journals[@]}"}"; do
+    [ ! -L "$path" ] || continue
+    name=${path##*/}
+    case "$name" in
+      *.inbox) id=${name%.inbox}; [ -d "$path" ] || continue ;;
+      *.git-hooks) id=${name%.git-hooks}; [ -d "$path" ] || continue ;;
+      *) id=${name%"$FM_BACKEND_HERDR_PRESENTATION_JOURNAL_SUFFIX"}; [ -f "$path" ] || continue ;;
+    esac
+    case "$LIVE_TASKS" in *"|$id|"*) continue ;; esac
+    if [ -f "$path" ]; then
+      fm_backend_herdr_projection_journal_snapshot "$path" "$id" || continue
+      session=${FM_BACKEND_HERDR_JOURNAL_SESSION:-$(fm_backend_herdr_session)}
+      fm_backend_herdr_projection_token_workspace_gone "$session" "$path" "$id" || continue
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+      printf 'would retire retired-task record %s\n' "$name"
+    else
+      [ -f "$path" ] || chmod u+w "$path" 2>/dev/null || true
+      if ! rm -rf -- "$path" || [ -e "$path" ]; then
+        warn "could not remove $path"
+        continue
+      fi
+    fi
+    REMOVED_TASK_RECORDS=$((REMOVED_TASK_RECORDS + 1))
+  done
+}
+
 # --- dead lock owners -----------------------------------------------------------
 
 # Compared by name rather than full path, unlike fm_lock_points_to_owner: a lock
@@ -569,9 +627,13 @@ sweep_lock_owners() {
 # --- scratch rotation ----------------------------------------------------------
 
 rotate_scratch() {
-  local prefix path max_age
+  local prefix path max_age watcher_pid
   max_age=$((FM_STATE_RESIDUE_SCRATCH_MAX_AGE_DAYS * 86400))
+  watcher_pid=$(cat "$STATE/.watch.lock/pid" 2>/dev/null || true)
   for prefix in $FM_STATE_RESIDUE_SCRATCH_PREFIXES; do
+    if [ "$prefix" = .watch-arm-output. ] && fm_pid_alive "$watcher_pid"; then
+      continue
+    fi
     for path in "$STATE/$prefix"*; do
       [ -f "$path" ] && [ ! -L "$path" ] || continue
       [ "$(fm_path_age "$path")" -gt "$max_age" ] || continue
@@ -607,6 +669,7 @@ fi
 # Without the complete set of live names nothing task-keyed may be removed.
 if collect_referenced; then
   sweep_task_records
+  sweep_task_state
 else
   warn "could not name every live task's records; kept all task-keyed records"
 fi

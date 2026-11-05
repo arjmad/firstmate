@@ -23,7 +23,12 @@
 #     home-summary refresh rotate only once older than the documented age, and
 #     never while fresh.
 #   - The task-keyed records of a task nothing live references are retired;
-#     a meta, status log, turn-ended file, inbox, or queued wake keeps them.
+#     a meta, status log, turn-ended file, inbox holding an unhandled steer, or
+#     queued wake keeps them.
+#   - A retired task's steering inbox and hooks directory are swept, and its
+#     Herdr presentation journal once the workspace it names is proven gone.
+#   - A watch-arm capture rotates by age only while no live watcher holds the
+#     lock.
 #   - A lock owner is retired only when old, unlinked, and its pid is dead.
 #   - The read-only session path (FM_BOOTSTRAP_DETECT_ONLY=1) runs no sweep.
 #   - --dry-run reports the same verdicts and removes nothing.
@@ -515,6 +520,109 @@ test_home_summary_scratch_rotates_by_age() {
   pass "sweep: orphaned home-summary scratch rotates by age, the ledger and log stay"
 }
 
+test_watch_arm_scratch_rotates_unless_a_watcher_runs() {
+  local home fb now live
+  home=$(new_home watch-arm-scratch); fb=$(make_tmux "$TMP_ROOT/watch-arm-scratch")
+  world "$home" "" ok zsh
+  now=$(date +%s)
+  : > "$home/state/.watch-arm-output.OLD001"
+  : > "$home/state/.watch-arm-output.NEW001"
+  fm_touch_epoch $((now - 8 * 86400)) "$home/state/.watch-arm-output.OLD001"
+
+  sleep 300 &
+  live=$!
+  mkdir "$home/state/.watch.lock"
+  printf '%s\n' "$live" > "$home/state/.watch.lock/pid"
+  run_sweep "$fb" "$home" >/dev/null
+  kill "$live" 2>/dev/null; wait "$live" 2>/dev/null
+  [ -e "$home/state/.watch-arm-output.OLD001" ] \
+    || fail "an old arm capture must survive while a live watcher holds the lock: it may be that watcher's stdout"
+
+  run_sweep "$fb" "$home" >/dev/null
+  [ ! -e "$home/state/.watch-arm-output.OLD001" ] \
+    || fail "an 8-day-old arm capture should rotate once no live watcher holds the lock"
+  [ -e "$home/state/.watch-arm-output.NEW001" ] || fail "a fresh arm capture must survive"
+  pass "sweep: orphaned watch-arm captures rotate by age unless a live watcher holds the lock"
+}
+
+seed_task_state() {  # <home> <task-id>
+  local state="$1/state" id=$2
+  mkdir -p "$state/$id.inbox/handled" "$state/$id.git-hooks"
+  printf 'schema=fm-task-inbox.v1\n--\nsteer\n' > "$state/$id.inbox/handled/001.msg"
+  printf '#!/bin/sh\n' > "$state/$id.git-hooks/commit-msg"
+  chmod 0555 "$state/$id.git-hooks"
+}
+
+seed_journal() {  # <home> <task-id> <token>
+  printf 'version=1\ntask_id=%s\nprojection_id=%s\n' "$2" "$3" > "$1/state/$2.herdr-presentation"
+}
+
+seed_journal_v2() {  # <home> <task-id> <token> <session>
+  {
+    printf 'version=2\ntask_id=%s\nprojection_id=%s\nhome=%s\n' "$2" "$3" "$1"
+    printf 'session=%s\nworkspace_id=w7\ntab_id=w7:t1\npane_id=w7:p1\n' "$4"
+    printf 'parent_workspace_id=w1\nparent_label=firstmate\nworkspace_label=\342\224\224 %s \302\267 p:%s\ntask_label=fm-%s\n' "$2" "$3" "$2"
+  } > "$1/state/$2.herdr-presentation"
+}
+
+test_retired_task_state_swept_and_live_kept() {
+  command -v jq >/dev/null 2>&1 || { pass "sweep (task state): skipped - jq not installed"; return 0; }
+  local home fb out state id gone_tok shown_tok live_tok
+  home=$(new_home task-state); fb=$(make_herdr "$TMP_ROOT/task-state")
+  state="$home/state"
+  printf 'herdr\n' > "$home/config/backend"
+  herdr_world "$home" running "" claude
+  gone_tok=AAAAAAAAAAAAAAAAAAAAAA
+  shown_tok=BBBBBBBBBBBBBBBBBBBBBB
+  live_tok=CCCCCCCCCCCCCCCCCCCCCC
+  printf 'workspaces=%s %s\n' "$shown_tok" "$live_tok" >> "$home/herdr-world"
+  for id in done.task v2done shown live pending; do
+    seed_task_state "$home" "$id"
+    seed_task_records "$home" "$id"
+  done
+  seed_journal "$home" done.task "$gone_tok"
+  seed_journal_v2 "$home" v2done "$gone_tok" other
+  seed_journal "$home" shown "$shown_tok"
+  seed_journal "$home" live "$live_tok"
+  seed_journal "$home" pending "$gone_tok"
+  printf 'window=default:w9:p1\nbackend=herdr\nkind=ship\n' > "$state/live.meta"
+  printf 'schema=fm-task-inbox.v1\n--\nunread\n' > "$state/pending.inbox/002.msg"
+
+  out=$(run_sweep_herdr "$fb" "$home" --dry-run)
+  [ -d "$state/done.task.inbox" ] && [ -d "$state/done.task.git-hooks" ] && [ -f "$state/done.task.herdr-presentation" ] \
+    || fail "--dry-run removed a retired task's state"
+  assert_contains "$out" "would retire retired-task record done.task.git-hooks" \
+    "--dry-run should list each retired-task state entry it would remove: $out"
+
+  out=$(run_sweep_herdr "$fb" "$home")
+  for id in done.task.inbox done.task.git-hooks done.task.herdr-presentation v2done.herdr-presentation shown.inbox shown.git-hooks; do
+    [ ! -e "$state/$id" ] || fail "retired-task state $id should be swept: $(ls -a "$state")"
+  done
+  [ "$(count_task_records "$home" done.task)" -eq 0 ] \
+    || fail "a task whose inbox holds only handled steers is not live; its records should go: $(ls -a "$state")"
+  grep -q '^workspace list --session other$' "$home/herdr-calls" \
+    || fail "a version 2 journal must be checked in the session it records: $(cat "$home/herdr-calls")"
+  [ -f "$state/shown.herdr-presentation" ] \
+    || fail "a journal whose projected workspace is still open must survive for the Herdr session cleanup"
+  for id in live pending; do
+    [ -d "$state/$id.inbox" ] && [ -d "$state/$id.git-hooks" ] && [ -f "$state/$id.herdr-presentation" ] \
+      || fail "live task $id must keep its state: $(ls -a "$state")"
+    [ "$(count_task_records "$home" "$id")" -eq 4 ] || fail "live task $id must keep its records"
+  done
+  [ -f "$state/pending.inbox/002.msg" ] || fail "an unhandled steer must never be swept"
+
+  seed_journal "$home" unread.task "$gone_tok"
+  herdr_world "$home" garbled "" claude
+  run_sweep_herdr "$fb" "$home" >/dev/null
+  [ -f "$state/unread.task.herdr-presentation" ] \
+    || fail "a journal must survive when the workspace list cannot be read"
+  herdr_world "$home" stopped "" claude
+  run_sweep_herdr "$fb" "$home" >/dev/null
+  [ -f "$state/unread.task.herdr-presentation" ] \
+    || fail "a journal must survive a stopped server, which may restore its workspace"
+  pass "sweep: a retired task's inbox, hooks, and closed-workspace journal are swept; live state kept"
+}
+
 make_herdr() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
@@ -557,6 +665,21 @@ case "${1:-} ${2:-}" in
     done
     printf '%s\n' '{"error":{"code":"pane_not_found"}}' >&2
     exit 1 ;;
+  "workspace list")
+    case "$running" in
+      running) ;;
+      stopped) printf '%s\n' '{"error":{"code":"server_not_running"}}' >&2; exit 1 ;;
+      *) printf '%s\n' 'garbled'; exit 0 ;;
+    esac
+    printf '{"result":{"workspaces":['
+    first=1
+    for t in $(val workspaces); do
+      [ "$first" -eq 1 ] || printf ','
+      first=0
+      printf '{"workspace_id":"w%s","label":"\\u2514 task \\u00b7 p:%s"}' "${t%"${t#?}"}" "$t"
+    done
+    printf ']}}\n'
+    exit 0 ;;
   "agent get")
     printf '%s\n' '{"result":{"agent":{"agent_status":"idle"}}}'
     exit 0 ;;
@@ -720,5 +843,7 @@ test_retired_task_records_swept_and_referenced_kept
 test_task_records_kept_when_live_names_are_unknown
 test_dead_lock_owners_swept_and_live_kept
 test_home_summary_scratch_rotates_by_age
+test_watch_arm_scratch_rotates_unless_a_watcher_runs
+test_retired_task_state_swept_and_live_kept
 test_herdr_gone_pane_swept_live_and_stopped_server_handled
 test_bootstrap_runs_sweep_only_when_locked
