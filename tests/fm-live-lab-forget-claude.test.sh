@@ -79,6 +79,7 @@ JSON
 S="$T/lock-held"
 lock_store "$S"
 mkdir "$S/.claude.json.lock"
+set_mtime "$S/.claude.json.lock" 3600  # never stale, however slow this host runs
 before=$(digest "$S/.claude.json")
 CLAUDE_CONFIG_DIR="$S" "$LIVE_LAB" forget-claude "$F/forget-root" > "$T/held.out" 2>&1 &
 held_pid=$!
@@ -118,4 +119,17 @@ expect_code 1 "$?" "forget-claude refuses while the store lock stays held"
 assert_contains "$out" ".claude.json.lock" "the refusal names the held lock"
 [ "$(digest "$S/.claude.json")" = "$before" ] || fail "a refused forget-claude changed a locked store"
 [ -d "$S/.claude.json.lock" ] || fail "forget-claude removed a lock it did not hold"
+# A regular file where the lock directory belongs is no lock to break: refused,
+# left in place, and nothing renamed aside next to the store.
+S="$T/lock-file"
+lock_store "$S"
+: > "$S/.claude.json.lock"
+set_mtime "$S/.claude.json.lock" -60
+before=$(digest "$S/.claude.json")
+out=$(CLAUDE_CONFIG_DIR="$S" "$LIVE_LAB" forget-claude "$F/forget-root" 2>&1)
+expect_code 1 "$?" "forget-claude refuses a non-directory store lock"
+assert_contains "$out" "is not a lock directory" "the refusal names the non-directory lock"
+[ "$(digest "$S/.claude.json")" = "$before" ] || fail "a refused forget-claude changed the store behind a file lock"
+[ -f "$S/.claude.json.lock" ] && [ -z "$(find "$S" -name '.claude.json.lock.*')" ] \
+  || fail "forget-claude moved a non-directory lock aside"
 pass "fm-live-lab.sh forget-claude rewrites the store only under Claude Code's own lock"

@@ -723,8 +723,10 @@ live_pids() {
 # Claude Code serialises its own writes to the store through a lock directory
 # next to it, <store>.lock, made with mkdir and treated as stale once its mtime
 # is 10 seconds old (proper-lockfile, read from the 2.1.318 bundle). The rewrite
-# below takes that same lock, so a Claude session cannot write the store between
-# our read and our rename: it waits for the lock and then re-reads. A stale lock
+# below takes that same lock for the milliseconds its read, rewrite, and rename
+# take, and a Claude save that finds it held waits and then re-reads. Claude
+# writes without the lock only after about 14 seconds of retries, far past that
+# hold; the fingerprint recheck below is the guard left for that case. A stale lock
 # is broken only if the directory moved aside is still the one judged stale; a
 # fresh one held past the wait fails closed with the store untouched. The rename
 # also needs the lock still ours and under half the stale age, so a stalled run
@@ -755,14 +757,23 @@ const lockStat = () => { try { return fs.statSync(lockDir); } catch (err) { if (
 // moved is the one judged stale. If a fresh lock replaced it in between, the
 // run stops without writing, so that holder's write is never overwritten.
 class Refused extends Error {}
+const sameLock = (a, b) => a !== null && b !== null && a.ino === b.ino && a.mtimeMs === b.mtimeMs;
 const breakStale = (held) => {
+  if (!held.isDirectory()) {
+    throw new Refused(`error: ${lockDir} is not a lock directory; remove it by hand; ${store} is unchanged`);
+  }
   const grave = `${lockDir}.fm-live-lab-stale.${process.pid}.${crypto.randomBytes(8).toString("hex")}`;
   try { fs.renameSync(lockDir, grave); } catch (err) { if (err.code === "ENOENT") return; throw err; }
-  const moved = fs.statSync(grave);
-  try { fs.rmdirSync(grave); } catch { /* an unexpected non-empty lock stays aside */ }
-  if (moved.ino !== held.ino || moved.mtimeMs !== held.mtimeMs) {
-    throw new Refused(`error: a fresh ${lockDir} replaced the stale one while it was being broken; ${store} is unchanged`);
+  if (sameLock(fs.statSync(grave), held)) {
+    try { fs.rmdirSync(grave); } catch { /* an unexpected non-empty lock stays aside */ }
+    return;
   }
+  // A fresh lock replaced the stale one before the rename: put it back unless a
+  // newer one already took the name, and stop without writing.
+  if (lockStat() === null) {
+    try { fs.renameSync(grave, lockDir); } catch { /* left aside; its holder keeps writing */ }
+  }
+  throw new Refused(`error: a fresh ${lockDir} replaced the stale one while it was being broken; ${store} is unchanged`);
 };
 const acquire = () => {
   const deadline = Date.now() + WAIT_MS;
@@ -781,11 +792,7 @@ const acquire = () => {
 };
 // Still ours, and young enough that Claude cannot yet judge it stale: a run
 // that stalled (a suspended process, a slow disk) gives up rather than rename.
-const ours = (mine) => {
-  const now = lockStat();
-  return now !== null && now.ino === mine.lock.ino && now.mtimeMs === mine.lock.mtimeMs
-    && Date.now() - mine.at < STALE_MS / 2;
-};
+const ours = (mine) => sameLock(lockStat(), mine.lock) && Date.now() - mine.at < STALE_MS / 2;
 const rewrite = (mine) => {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const original = fs.readFileSync(store);
@@ -830,8 +837,7 @@ let result;
 try {
   result = rewrite(mine);
 } finally {
-  const now = lockStat();
-  if (now !== null && now.ino === mine.lock.ino && now.mtimeMs === mine.lock.mtimeMs) fs.rmdirSync(lockDir);
+  if (sameLock(lockStat(), mine.lock)) fs.rmdirSync(lockDir);
 }
 (result[0] === 0 ? console.log : console.error)(result[1]);
 process.exit(result[0]);

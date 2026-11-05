@@ -522,7 +522,7 @@ The composer-classification record below observes the same gate from the other s
 
 Verified 2026-11-04 on Claude Code 2.1.318, Linux x86_64.
 Claude Code serialises its writes to `.claude.json` through proper-lockfile: it makes a directory named `<store>.lock` with mkdir, treats one whose mtime is 10 seconds old as stale, and retries a held lock with backoff before writing.
-`bin/fm-live-lab.sh forget-claude` takes that same lock around its rewrite, so a Claude write cannot land between its read and its rename and be lost.
+`bin/fm-live-lab.sh forget-claude` takes that same lock around its rewrite, so a Claude save arriving between its read and its rename waits instead of being lost; Claude writes without the lock only after about 14 seconds of retries, far longer than that hold.
 A first start on an empty store records its initial fields without the lock, which is why the guard primes the store before probing; a live store is never in that state.
 The guard holds the lock on a throwaway store, runs a real `claude mcp add -s user`, and checks that nothing is written until the lock is released:
 
