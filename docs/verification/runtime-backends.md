@@ -662,6 +662,27 @@ Below 36 columns that name is truncated with `…` and the doorbell wraps past `
 `tests/fm-backend-herdr.test.sh` (`test_send_text_submit_claude_narrow_titled_doorbell_is_proven_and_submitted`) pins the narrow shape.
 `tests/fm-spawn-dispatch-profile.test.sh` (`test_claude_launch_names_the_session_after_its_task`) pins the emitted name for ship, scout, and secondmate launches, and `tests/fm-control-relaunch.test.sh` pins it across a relaunch.
 
+## Claude Remote Control archive
+
+Verified 2026-11-05 on Claude Code 2.1.318 (Claude Code), Linux x86_64, with `remoteControlAtStartup` on, against throwaway sessions launched in a pty as `claude --dangerously-skip-permissions --name 'fm-probe-archive-<epoch>'` in an empty temporary directory.
+While Remote Control is connected, the session record `<config-dir>/sessions/<pid>.json` carries the entry's id as `"bridgeSessionId": "session_<id>"` beside `"name"` and `"cwd"`.
+A Claude ended by SIGHUP, as a closed pane ends it, archives its own entry and deletes that record; one ended by SIGKILL leaves both behind, its entry listed as `idle`:
+
+```text
+SIGHUP  session_01B8Qr3JD8FdbBJH9C7AZzvQ {"session_status": "archived", "connection_status": "disconnected", "status_bucket": "completed"}  record deleted
+SIGKILL session_01B8Qr3HWD8hgn1FQqb2uxSC {"session_status": "idle", "connection_status": "connected", "status_bucket": "review_ready"}   record kept
+```
+
+Claude Code's own archive request, found in its bundled client as `archiveRemoteSession`, is `POST https://api.anthropic.com/v1/code/sessions/cse_<id>/archive` with body `{}` and headers `Authorization: Bearer <OAuth access token>`, `anthropic-version: 2023-06-01`; the token is the one `<config-dir>/.credentials.json` stores as `claudeAiOauth.accessToken`, so every Claude worker's own login holds it.
+Sent for the SIGKILLed entry it answered `HTTP 200` with `"status": "archived", "status_bucket": "completed"`, a repeat answered `HTTP 200` again, and the client treats `409` as already archived.
+The archived entry left the active list the app reads: `GET /v1/code/sessions?limit=100&statuses=active` returned 16 rows, none of them the probe, while the unfiltered list showed it as `archived`.
+`DELETE /v1/sessions/session_<id>` with header `anthropic-beta: ccr-byoc-2025-07-29` answered `{"type": "session_deleted"}` and removed an entry outright; teardown archives rather than deletes, as Claude Code does on a clean exit.
+`bin/fm-claude-rc-archive.sh` sends that archive request for `bin/fm-teardown.sh`, and `FM_CLAUDE_RC_ARCHIVE_LIVE_E2E=1 tests/fm-claude-rc-archive-live-e2e.test.sh` refreshes this record by SIGKILLing a named Remote Control session, archiving it through the helper, and deleting it:
+
+```text
+ok - Claude Code 2.1.318 (Claude Code): a SIGKILLed worker's Remote Control session (idle) is found by name and launch dir and archived
+```
+
 ## Claude worker status hooks
 
 Verified 2026-10-31 on Claude Code 2.1.310 (Claude Code), tmux 3.7b, macOS arm64.

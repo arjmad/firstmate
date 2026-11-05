@@ -1,0 +1,6 @@
+2026-11-05: Arjun asked firstmate to find out whether teardown could archive the Claude Remote Control entries finished workers leave in his Claude desktop sidebar, and to add it, while Remote Control stays on for workers.
+A probe on throwaway sessions found Claude Code's own archive request, and that a Claude killed before its clean-exit archive leaves its entry listed, so teardown now finds each Claude task's entries before it stops the task and archives them once its endpoint is closed, best effort.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| Teardown archives a Claude task's Remote Control session entries, including a retired secondmate's own and each Claude child's | `bin/fm-claude-rc-archive.sh`, `bin/fm-teardown.sh` (`claude_rc_sessions_find`, `claude_rc_sessions_archive`, `cleanup_firstmate_home_children`), `tests/fm-claude-rc-archive.test.sh`, `tests/fm-claude-rc-archive-live-e2e.test.sh`, `tests/fm-teardown.test.sh`, `bin/fm-test-run.sh` (families, serial hints, changed-file map), `docs/verification/runtime-backends.md` | `bin/fm-teardown.sh`, `tests/fm-teardown.test.sh`, `bin/fm-test-run.sh`, `docs/verification/runtime-backends.md` | carried | 45dd50a5 |
