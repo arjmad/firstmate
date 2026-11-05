@@ -2781,6 +2781,258 @@ test_herdr_rebind_failure_from_a_plain_shell_names_the_real_cause() {
   pass "reclaim: a rebind refused from a plain shell reports the real cause, not a fabricated session mismatch"
 }
 
+# --- herdr: a rebind run from the helm's own pane ---------------------------
+#
+# A relaunch whose recorded pane is gone mints a fresh endpoint. Run from the
+# helm, the launching process carries the helm's own Herdr pane identity, and a
+# worker placed in the helm's workspace shares its lifetime. A fresh spawn with
+# presentation spaces on gets its own disposable workspace bound under that
+# parent, so a rebind must too.
+#
+# Stateful jq-backed fake only - never a real herdr session. It models the
+# reads the launcher-identity proof, the presentation lock and the projected
+# create make: one named session with one socket, focus, workspace/tab/pane
+# topology, and an agent that exists only on the pane the launch brief reached.
+make_herdr_projection_stub() {  # <case-dir>
+  local fb="$1/fakebin"
+  mkdir -p "$fb"
+  rm -f "$fb/sleep"
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+D=$FM_FAKE_DIR
+S="$D/herdr-state.json"
+printf '%s\n' "$*" >> "$D/herdr-log"
+q() { jq "$@" "$S"; }
+save() { local tmp="$S.tmp.$$"; cat > "$tmp" && mv "$tmp" "$S"; }
+args=("$@")
+ws=""; label=""; ses=${HERDR_SESSION:-default}
+for ((i=0; i<${#args[@]}; i++)); do
+  case "${args[$i]}" in
+    --workspace) ws=${args[$((i+1))]:-} ;;
+    --label) label=${args[$((i+1))]:-} ;;
+    --session) ses=${args[$((i+1))]:-} ;;
+  esac
+done
+id=${3:-}
+case "${1:-} ${2:-}" in
+  'status --json')
+    printf '{"client":{"version":"0.9.0","protocol":22},"server":{"running":true,"version":"0.9.0","protocol":22}}\n' ;;
+  'server '*) : ;;
+  'session list')
+    printf '{"sessions":[{"name":"%s","running":true,"socket_path":"%s"}]}\n' "$ses" "$D/herdr.sock" ;;
+  'terminal title')
+    printf '{"result":{"reason":"no_foreground_client"}}\n' ;;
+  'workspace list')
+    q '{result:{workspaces:[.workspaces[] as $w | $w + {active_tab_id: ([.tabs[] | select(.workspace_id == $w.workspace_id and .focused)][0].tab_id // null)}]}}' ;;
+  'workspace get')
+    q --arg w "$id" 'if any(.workspaces[]; .workspace_id == $w) then {result:{workspace:(.workspaces[] | select(.workspace_id == $w))}} else {error:{code:"workspace_not_found"}} end' ;;
+  'workspace create')
+    n=$(q -r '.next'); w="w$n"; t="$w:t1"; p="$w:p1"
+    q --arg w "$w" --arg l "$label" --arg t "$t" --arg p "$p" \
+      '.workspaces += [{workspace_id:$w, label:$l, focused:false}]
+       | .tabs += [{tab_id:$t, label:"1", workspace_id:$w, pane_id:$p, focused:false}]
+       | .next += 1' | save
+    printf '{"result":{"workspace":{"workspace_id":"%s","label":"%s"},"tab":{"tab_id":"%s"},"root_pane":{"pane_id":"%s"}}}\n' "$w" "$label" "$t" "$p" ;;
+  'tab list')
+    q --arg w "$ws" '{result:{tabs:[.tabs[] | select(.workspace_id == $w)]}}' ;;
+  'tab get')
+    q --arg t "$id" 'if any(.tabs[]; .tab_id == $t) then {result:{tab:(.tabs[] | select(.tab_id == $t))}} else {error:{code:"tab_not_found"}} end' ;;
+  'tab create')
+    n=$(q -r '.next'); t="$ws:t$n"; p="$ws:p$n"
+    q --arg w "$ws" --arg l "$label" --arg t "$t" --arg p "$p" \
+      '.tabs += [{tab_id:$t, label:$l, workspace_id:$w, pane_id:$p, focused:false}] | .next += 1' | save
+    printf '%s\n' "$*" >> "$D/herdr-created-tabs"
+    printf '{"result":{"tab":{"tab_id":"%s"},"root_pane":{"pane_id":"%s"}}}\n' "$t" "$p" ;;
+  'tab focus')
+    q --arg t "$id" '(.tabs[] | select(.tab_id == $t) | .workspace_id) as $w
+      | .tabs |= map(.focused = (.tab_id == $t)) | .workspaces |= map(.focused = (.workspace_id == $w))' | save ;;
+  'tab close')
+    q --arg t "$id" '.tabs |= map(select(.tab_id != $t))
+      | . as $s | .workspaces |= map(select(.workspace_id as $w | any($s.tabs[]; .workspace_id == $w)))' | save ;;
+  'pane get')
+    q --arg p "$id" --arg cwd "$(cat "$D/cwd")" 'if any(.tabs[]; .pane_id == $p)
+      then {result:{pane:((.tabs[] | select(.pane_id == $p)) | {pane_id, tab_id, workspace_id, foreground_cwd:$cwd})}}
+      else {error:{code:"pane_not_found"}} end' ;;
+  'pane list')
+    q --arg w "$ws" '{result:{panes:[.tabs[] | select(.workspace_id == $w) | {pane_id, tab_id, workspace_id}]}}' ;;
+  'pane close')
+    q --arg p "$id" '.tabs |= map(select(.pane_id != $p))
+      | . as $s | .workspaces |= map(select(.workspace_id as $w | any($s.tabs[]; .workspace_id == $w)))' | save ;;
+  'agent get')
+    if [ "$id" = "$(cat "$D/herdr-launched-pane" 2>/dev/null)" ]; then
+      printf '{"result":{"agent":{"agent_status":"idle"}}}\n'
+    else
+      printf '{"error":{"code":"agent_not_found"}}\n'
+    fi ;;
+  'pane process-info')
+    printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":4242,"foreground_processes":[{"pid":4243,"name":"claude","argv":["claude"],"cmdline":"claude"}]}}}\n' "$id" ;;
+  'pane send-text')
+    payload=${4:-}
+    case "$payload" in
+      ". '"*"'") staged=${payload#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || payload=$(cat "$staged") ;;
+    esac
+    case "$payload" in
+      *'encode launch-brief'* | *'Firstmate operational input waiting: read'*)
+        printf '%s\n' "$payload" > "$D/launched-command"
+        printf '%s' "$id" > "$D/herdr-launched-pane"
+        [ -z "${FM_FAKE_LAUNCH_TRANSPORT_FAIL_AFTER_START:-}" ] || exit 1 ;;
+    esac ;;
+  *) : ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/herdr"
+}
+
+# herdr_helm_case <name> <id>: a herdr ship task whose recorded pane w70:p2 is
+# gone, with the helm's own workspace w85 holding the helm pane w85:p1 and
+# owning focus. Sets HERDR_CASE_DIR.
+herdr_helm_case() {  # <name> <id>
+  HERDR_CASE_DIR=
+  command -v jq >/dev/null 2>&1 || return 1
+  HERDR_CASE_DIR=$(new_case "$1" "$2")
+  add_herdr_ship_task "$HERDR_CASE_DIR" "$2" fmlab '%none'
+  rm -f "$HERDR_CASE_DIR/fake/herdr-stopped"
+  sed -i.bak -e "s/^window=.*/window=fmlab:w70:p2/" -e "s/^herdr_workspace_id=.*/herdr_workspace_id=w70/" \
+    -e "s/^herdr_tab_id=.*/herdr_tab_id=w70:t2/" -e "s/^herdr_pane_id=.*/herdr_pane_id=w70:p2/" \
+    "$HERDR_CASE_DIR/home/state/$2.meta"
+  rm -f "$HERDR_CASE_DIR/home/state/$2.meta.bak"
+  printf '%s\n' '{"next":90,"workspaces":[{"workspace_id":"w85","label":"firstmate","focused":true}],"tabs":[{"tab_id":"w85:t1","label":"helm","workspace_id":"w85","pane_id":"w85:p1","focused":true}]}' \
+    > "$HERDR_CASE_DIR/fake/herdr-state.json"
+  make_herdr_projection_stub "$HERDR_CASE_DIR"
+  return 0
+}
+
+run_spawn_from_helm() {  # <case-dir> <args...>
+  local dir=$1; shift
+  mkdir -p "$dir/user-home"
+  env -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID \
+    HERDR_ENV=1 HERDR_PANE_ID=w85:p1 HERDR_SESSION=fmlab HERDR_SOCKET_PATH="$dir/fake/herdr.sock" \
+    PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
+    HOME="$dir/user-home" CLAUDE_CONFIG_DIR='' \
+    FM_SPAWN_NO_GUARD=1 GROK_HOME="$dir/grokhome" \
+    "$SPAWN" "$@" 2>&1
+}
+
+test_herdr_rebind_from_the_helm_gets_its_own_workspace() {
+  local dir out rc=0 log ws journal
+  herdr_helm_case helm-rebind rl78 || {
+    echo "skip - herdr rebind needs jq (the herdr adapter parses JSON with it)"
+    return 0
+  }
+  dir=$HERDR_CASE_DIR
+
+  out=$(run_spawn_from_helm "$dir" rl78 --relaunch --harness claude) || rc=$?
+  log=$(cat "$dir/fake/herdr-log")
+  expect_code 0 "$rc" "a herdr task whose pane is gone should be rebound from the helm"$'\n'"$out"$'\n'"$log"
+
+  ws=$(meta_field "$dir" rl78 herdr_workspace_id)
+  [ -n "$ws" ] && [ "$ws" != w85 ] \
+    || fail "the rebound worker was placed in the helm's own workspace w85 (recorded '$ws')"$'\n'"$out"
+  assert_not_contains "$(cat "$dir/fake/herdr-created-tabs")" "--workspace w85 " \
+    "a rebind from the helm must not create its tab in the helm's workspace"
+  [ "$(jq -r --arg w "$ws" '.workspaces[] | select(.workspace_id == $w) | .label' "$dir/fake/herdr-state.json")" = "└ rl78 · p:$(sed -n 's/^projection_id=//p' "$dir/home/state/rl78.herdr-presentation")" ] \
+    || fail "the rebound worker's workspace is not its own presentation projection"$'\n'"$(cat "$dir/fake/herdr-state.json")"
+  journal="$dir/home/state/rl78.herdr-presentation"
+  [ "$(sed -n 's/^version=//p' "$journal")" = 2 ] \
+    || fail "the rebind did not publish an exact restart binding"$'\n'"$(cat "$journal" 2>/dev/null)"
+  [ "$(sed -n 's/^parent_workspace_id=//p' "$journal")" = w85 ] \
+    || fail "the rebind's projection is not bound under the helm's workspace"$'\n'"$(cat "$journal")"
+  [ "$(sed -n 's/^pane_id=//p' "$journal")" = "$(meta_field "$dir" rl78 herdr_pane_id)" ] \
+    || fail "the projection binding and the task record name different panes"
+  [ "$(jq -r '.workspaces[] | select(.focused) | .workspace_id' "$dir/fake/herdr-state.json")" = w85 ] \
+    || fail "the rebind stole focus from the helm"
+  pass "reclaim: a herdr rebind run from the helm gets its own projected workspace, never the helm's"
+}
+
+# write_stale_projection_journal <case-dir> <id> <workspace>: a version 2
+# binding left by an earlier projected spawn whose workspace <workspace> held
+# the task's old pane.
+write_stale_projection_journal() {  # <case-dir> <id> <workspace>
+  local dir=$1 id=$2 ws=$3 token=AAAAAAAAAAAAAAAAAAAAAA
+  {
+    echo "version=2"
+    echo "task_id=$id"
+    echo "projection_id=$token"
+    echo "home=$(cd "$dir/home" && pwd -P)"
+    echo "session=fmlab"
+    echo "workspace_id=$ws"
+    echo "tab_id=$ws:t1"
+    echo "pane_id=$ws:p1"
+    echo "parent_workspace_id=w85"
+    echo "parent_label=firstmate"
+    echo "workspace_label=└ $id · p:$token"
+    echo "task_label=fm-$id"
+  } > "$dir/home/state/$id.herdr-presentation"
+}
+
+test_herdr_rebind_retires_a_journal_whose_workspace_is_gone() {
+  local dir out rc=0 ws
+  herdr_helm_case helm-rebind-stale rl79 || {
+    echo "skip - herdr rebind needs jq (the herdr adapter parses JSON with it)"
+    return 0
+  }
+  dir=$HERDR_CASE_DIR
+  # The task was first projected into w60; that workspace went with its pane,
+  # and an earlier flat rebind then put it in w70. The journal still names w60.
+  write_stale_projection_journal "$dir" rl79 w60
+
+  out=$(run_spawn_from_helm "$dir" rl79 --relaunch --harness claude) || rc=$?
+  expect_code 0 "$rc" "a rebind over a journal whose workspace is gone should succeed"$'\n'"$out"
+  ws=$(meta_field "$dir" rl79 herdr_workspace_id)
+  [ -n "$ws" ] && [ "$ws" != w85 ] \
+    || fail "a stale journal sent the rebound worker back to the helm's workspace (recorded '$ws')"$'\n'"$out"
+  [ "$(sed -n 's/^workspace_id=//p' "$dir/home/state/rl79.herdr-presentation")" = "$ws" ] \
+    || fail "the stale journal was not replaced by the new projection's binding"
+  assert_not_contains "$(cat "$dir/home/state/rl79.herdr-presentation")" "AAAAAAAAAAAAAAAAAAAAAA" \
+    "the replacement journal kept the retired projection token"
+  pass "reclaim: a herdr rebind retires a projection journal whose workspace is gone and projects afresh"
+}
+
+test_herdr_rebind_keeps_a_journal_whose_workspace_survives() {
+  local dir out rc=0 before
+  herdr_helm_case helm-rebind-live rl80 || {
+    echo "skip - herdr rebind needs jq (the herdr adapter parses JSON with it)"
+    return 0
+  }
+  dir=$HERDR_CASE_DIR
+  write_stale_projection_journal "$dir" rl80 w60
+  # The old projected workspace is still there, holding a tab of its own.
+  jq '.workspaces += [{workspace_id:"w60", label:"└ rl80 · p:AAAAAAAAAAAAAAAAAAAAAA", focused:false}]
+      | .tabs += [{tab_id:"w60:t3", label:"notes", workspace_id:"w60", pane_id:"w60:p3", focused:false}]' \
+    "$dir/fake/herdr-state.json" > "$dir/fake/herdr-state.json.new" && mv "$dir/fake/herdr-state.json.new" "$dir/fake/herdr-state.json"
+  before=$(cat "$dir/home/state/rl80.herdr-presentation")
+
+  out=$(run_spawn_from_helm "$dir" rl80 --relaunch --harness claude) || rc=$?
+  expect_code 0 "$rc" "a rebind beside a surviving projected workspace should still rebind"$'\n'"$out"
+  [ "$(cat "$dir/home/state/rl80.herdr-presentation")" = "$before" ] \
+    || fail "a journal that still names a live projected workspace was rewritten"
+  assert_contains "$out" "still names a projected workspace" \
+    "the flat fallback should say why it did not project"
+  assert_not_contains "$(grep '^workspace create' "$dir/fake/herdr-log" || true)" "p:" \
+    "a rebind that cannot retire the journal must not create a second projection"
+  pass "reclaim: a herdr rebind leaves a journal whose workspace survives untouched and falls back flat"
+}
+
+test_herdr_projected_rebind_keeps_the_endpoint_its_published_record_names() {
+  local dir out rc=0 pane
+  herdr_helm_case helm-rebind-postpub rl81 || {
+    echo "skip - herdr rebind needs jq (the herdr adapter parses JSON with it)"
+    return 0
+  }
+  dir=$HERDR_CASE_DIR
+  out=$(FM_FAKE_LAUNCH_TRANSPORT_FAIL_AFTER_START=1 \
+    run_spawn_from_helm "$dir" rl81 --relaunch --harness claude) || rc=$?
+  expect_code 1 "$rc" "a post-publication launch failure should fail closed"$'\n'"$out"
+  pane=$(meta_field "$dir" rl81 herdr_pane_id)
+  [ -n "$pane" ] && [ "$pane" != w70:p2 ] \
+    || fail "the replacement record was not published before the launch failed (recorded '$pane')"$'\n'"$out"
+  jq -e --arg p "$pane" 'any(.tabs[]; .pane_id == $p)' "$dir/fake/herdr-state.json" >/dev/null \
+    || fail "abort cleanup closed the projected endpoint the published record names ($pane)"$'\n'"$out"
+  pass "reclaim: a projected herdr rebind keeps the endpoint its published record names when a later step fails"
+}
+
 test_herdr_reclaim_of_a_secondmate_names_its_own_owner() {
   local dir out rc
   herdr_case_or_skip gone-herdr-secondmate rl76 fmlab '%none' || {
@@ -3005,6 +3257,10 @@ test_herdr_reclaim_refuses_an_agent_that_came_back
 test_herdr_reclaim_keeps_the_task_whole
 test_herdr_reclaim_of_a_secondmate_names_its_own_owner
 test_herdr_rebind_failure_from_a_plain_shell_names_the_real_cause
+test_herdr_rebind_from_the_helm_gets_its_own_workspace
+test_herdr_rebind_retires_a_journal_whose_workspace_is_gone
+test_herdr_rebind_keeps_a_journal_whose_workspace_survives
+test_herdr_projected_rebind_keeps_the_endpoint_its_published_record_names
 test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it
 test_relaunch_moves_a_drifted_item_back_in_flight
 test_away_branch_relaunch_accepts_existing_dispatchable_items
