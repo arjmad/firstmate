@@ -259,7 +259,7 @@ test_present_captain_keeps_the_question_tool() {
 test_absent_captain_is_denied() {
   local actual
   give_work "$STATE"
-  captain_said 2700
+  captain_said 2670  # 44.5 minutes: the deny rounds up, so a slow runner still reads 45
   expect_deny "captain prompted 45 minutes ago" AskUserQuestion
   actual=$(jq -r '.systemMessage' "$ERR")
   assert_contains "$actual" "45 minutes ago, outside the 30-minute presence window" "the deny must say how long the captain has been silent"
