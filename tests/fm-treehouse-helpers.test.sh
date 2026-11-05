@@ -129,3 +129,17 @@ compgen -G "$REAL_ROOT/treehouse/.treehouse/repo-*" >/dev/null \
 [ ! -e "$TMP_ROOT/real-fleet-root" ] \
   || fail "Treehouse $TREEHOUSE_VERSION wrote into the configured fleet root despite TREEHOUSE_ROOT"
 pass "real Treehouse $TREEHOUSE_VERSION keeps the pool under the isolated root and out of the configured fleet root"
+
+# A pane whose shell the test cannot export into (the cmux app's, for one) runs
+# `treehouse get` without the isolated TREEHOUSE_ROOT; the repository's own
+# treehouse.toml must then still hold its pool under the isolated root.
+PIN_ROOT="$TMP_ROOT/case-pin"
+fm_git_init_commit "$PIN_ROOT/repo"
+in_home "$REAL_HOME" 'treehouse_test_isolate "$1" && treehouse_test_pin_repo "$1/repo" && cd "$1/repo" \
+  && env -u TREEHOUSE_ROOT treehouse status --json >/dev/null' "$PIN_ROOT" \
+  || fail "treehouse status failed in the pinned repository"
+compgen -G "$PIN_ROOT/treehouse/.treehouse/repo-*" >/dev/null \
+  || fail "Treehouse $TREEHOUSE_VERSION ignored the pinned repository's root without TREEHOUSE_ROOT"
+[ ! -e "$TMP_ROOT/real-fleet-root" ] \
+  || fail "Treehouse $TREEHOUSE_VERSION wrote the pinned repository's pool into the configured fleet root"
+pass "real Treehouse $TREEHOUSE_VERSION keeps a pinned repository's pool under the isolated root with no TREEHOUSE_ROOT"
