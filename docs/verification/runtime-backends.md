@@ -692,7 +692,10 @@ SIGHUP  session_01B8Qr3JD8FdbBJH9C7AZzvQ {"session_status": "archived", "connect
 SIGKILL session_01B8Qr3HWD8hgn1FQqb2uxSC {"session_status": "idle", "connection_status": "connected", "status_bucket": "review_ready"}   record kept
 ```
 
-Claude Code's own archive request, found in its bundled client as `archiveRemoteSession`, is `POST https://api.anthropic.com/v1/code/sessions/cse_<id>/archive` with body `{}` and headers `Authorization: Bearer <OAuth access token>`, `anthropic-version: 2023-06-01`; the token is the one `<config-dir>/.credentials.json` stores as `claudeAiOauth.accessToken`, so every Claude worker's own login holds it.
+Claude Code's own archive request, found in its bundled client as `archiveRemoteSession`, is `POST https://api.anthropic.com/v1/code/sessions/cse_<id>/archive` with body `{}` and headers `Authorization: Bearer <OAuth access token>`, `anthropic-version: 2023-06-01`; the token is the worker's own login, `claudeAiOauth.accessToken` with `expiresAt` in milliseconds.
+On Linux that login lives in `<config-dir>/.credentials.json`.
+On macOS Claude Code reads it with `security find-generic-password -a "$USER" -w -s "Claude Code-credentials"`, the service carrying a `-<first 8 hex of sha256(config dir)>` suffix when `CLAUDE_CONFIG_DIR` is set, and falls back to `.credentials.json` only when that read fails (exit 36 outside the Aqua login session, or 44 when absent).
+Verified 2026-11-05 on Claude Code 2.1.318, macOS (Darwin) on Heimdall: the running Claude kept its keychain item fresh while `~/.claude/.credentials.json` still held a token that expired at `2026-11-04T08:17:10Z`, which the API answers with `HTTP 401`.
 Sent for the SIGKILLed entry it answered `HTTP 200` with `"status": "archived", "status_bucket": "completed"`, a repeat answered `HTTP 200` again, and the client treats `409` as already archived.
 The archived entry left the active list the app reads: `GET /v1/code/sessions?limit=100&statuses=active` returned 16 rows, none of them the probe, while the unfiltered list showed it as `archived`.
 `DELETE /v1/sessions/session_<id>` with header `anthropic-beta: ccr-byoc-2025-07-29` answered `{"type": "session_deleted"}` and removed an entry outright; teardown archives rather than deletes, as Claude Code does on a clean exit.
@@ -700,6 +703,18 @@ The archived entry left the active list the app reads: `GET /v1/code/sessions?li
 
 ```text
 ok - Claude Code 2.1.318 (Claude Code): a SIGKILLed worker's Remote Control session (idle) is found by name and launch dir and archived
+```
+
+On macOS run the guard from the Aqua login session, as teardown runs (a `gui/<uid>` LaunchAgent or a pane of a launchd-born Herdr server), because an SSH shell cannot read the keychain.
+Run 2026-11-05 on Heimdall from a throwaway `gui/501` LaunchAgent (`launchctl managername` printed `Aqua`), with main's previous file-only helper tried first on the same SIGKILLed session:
+
+```text
+probe: keychain "Claude Code-credentials" account arjmad: exit 0 expiresAt 2026-11-05T05:58:17Z
+probe: file /Users/arjmad/.claude/.credentials.json expiresAt 2026-11-04T08:17:10Z
+probe: main's helper (before this fix) -> warning: could not archive Claude Remote Control session session_01B8Qr3Knt3AU8SxwPufBoEv for fm-probe-archive401-1793852804: HTTP 401
+probe: fixed helper -> archived Claude Remote Control session session_01B8Qr3Knt3AU8SxwPufBoEv for fm-probe-archive401-1793852804
+probe: GET /v1/sessions/session_01B8Qr3Knt3AU8SxwPufBoEv after -> session_status=archived
+ok - Claude Code 2.1.318 (Claude Code) on Darwin: a SIGKILLed worker's Remote Control session (pending) is found by name and launch dir and archived
 ```
 
 ## Claude worker status hooks
