@@ -370,10 +370,11 @@ test_raw_claude_command_receives_the_pin() {
 # it, so the token can never reach another account's worker.
 HELM_TOKEN=dummy-helm-setup-token-0000
 
-# launch_dir <id>: this case's own staged-launch directory, named by the task
-# id and the hash of the physical home, so a directory another run left behind
-# under the same id is never counted.
-launch_dir() {
+# set_launch_dir <id>: point LAUNCH_DIR at this case's own staged-launch
+# directory, named by the task id and the hash of the physical home, so a
+# directory another run left behind under the same id is never counted. It runs
+# in the test's shell, so a failure here stops the case.
+set_launch_dir() {
   local root hash
   root=$(cd "$HOME_DIR" && pwd -P) || fail "cannot resolve the case home"
   if command -v shasum >/dev/null 2>&1; then
@@ -381,28 +382,20 @@ launch_dir() {
   else
     hash=$(printf '%s' "$root" | sha256sum | awk '{print $1}')
   fi
-  printf '/tmp/fm-%s+%s' "$1" "$hash"
+  LAUNCH_DIR="/tmp/fm-$1+$hash"
+  [ -d "$LAUNCH_DIR" ] || fail "the spawn should create its launch directory $LAUNCH_DIR"
 }
 
-# assert_launch_dir <id>: the spawn staged its launch in this case's directory,
-# so a token-file absence found there is never vacuous.
-assert_launch_dir() {
-  local dir
-  dir=$(launch_dir "$1")
-  [ -d "$dir" ] || fail "the spawn should create its launch directory $dir"
-}
-
-# token_files <id> [find-test...]: the setup-token files in this case's launch
-# directory.
+# token_files [find-test...]: the setup-token files in LAUNCH_DIR.
 token_files() {
-  find "$(launch_dir "$1")" -maxdepth 1 -name 'claude-token.*' "${@:2}"
+  find "$LAUNCH_DIR" -maxdepth 1 -name 'claude-token.*' "$@"
 }
 
-# assert_token_only_in_handoff <id>: the dummy token appears in no file under
-# the home or the task's launch directory except the staged hand-over file.
+# assert_token_only_in_handoff: the dummy token appears in no file under the
+# home or LAUNCH_DIR except the staged hand-over file.
 assert_token_only_in_handoff() {
   local hits
-  hits=$(grep -rlF -- "$HELM_TOKEN" "$HOME_DIR" "$(launch_dir "$1")" "$CASE/launch.log" 2>/dev/null | grep -v '/claude-token\.' || true)
+  hits=$(grep -rlF -- "$HELM_TOKEN" "$HOME_DIR" "$LAUNCH_DIR" "$CASE/launch.log" 2>/dev/null | grep -v '/claude-token\.' || true)
   [ -z "$hits" ] || fail "the setup-token value leaked into: $hits"
 }
 
@@ -414,16 +407,16 @@ test_claude_pin_to_the_helm_root_carries_the_helm_token() {
   out=$(CLAUDE_CODE_OAUTH_TOKEN=$HELM_TOKEN spawn_ship "$id"); rc=$?
   expect_code 0 "$rc" "a Claude spawn pinned to the helm's own root should succeed: $out"
   assert_not_contains "$out" "$HELM_TOKEN" "the spawn must never print the setup-token"
-  assert_launch_dir "$id"
-  files=$(token_files "$id" -perm 0600 | wc -l | tr -d '[:space:]')
+  set_launch_dir "$id"
+  files=$(token_files -perm 0600 | wc -l | tr -d '[:space:]')
   [ "$files" -eq 1 ] || fail "the spawn should stage exactly one private setup-token file, found $files"
-  assert_token_only_in_handoff "$id"
+  assert_token_only_in_handoff
   run_pane
   assert_grep "CLAUDE_CODE_OAUTH_TOKEN=$HELM_TOKEN" "$CASE/claude-worker" \
     "a worker pinned to the helm's own root should run on the helm's setup-token"
   assert_grep "CLAUDE_CONFIG_DIR=$CASE/ambient-claude/" "$CASE/claude-worker" "the worker should keep the pinned root"
   assert_grep "ANTHROPIC_API_KEY=unset" "$CASE/claude-worker" "an ambient API key must still not outrank the pin"
-  [ -z "$(token_files "$id")" ] \
+  [ -z "$(token_files)" ] \
     || fail "the worker launch must consume the setup-token file"
   # A second run of the same launch, as a Herdr resume is, finds the file gone
   # and starts on the stored login, never on the pane's ambient token.
@@ -452,8 +445,8 @@ test_claude_pin_to_another_root_never_carries_the_helm_token() {
   printf '%s\n' "$CASE/work" > "$HOME_DIR/config/claude-account"
   out=$(CLAUDE_CODE_OAUTH_TOKEN=$HELM_TOKEN spawn_ship "$id"); rc=$?
   expect_code 0 "$rc" "a Claude spawn pinned to another root should succeed: $out"
-  assert_launch_dir "$id"
-  [ -z "$(token_files "$id")" ] \
+  set_launch_dir "$id"
+  [ -z "$(token_files)" ] \
     || fail "a worker pinned to another root must not get a setup-token file"
   assert_no_grep "fm-claude-token-exec" "$CASE/launch.log" "a worker pinned to another root must not get the hand-over"
   run_pane

@@ -872,8 +872,9 @@ function xModePathAllowed(value, home) {
   if (!path.isAbsolute(value)) return false;
   const normalized = path.normalize(value);
   if (normalized === path.join(path.normalize(home), "config/x-mode.env")) return true;
-  // The hook passes a physical home, so a symlinked spelling of that same
-  // home (macOS /tmp is /private/tmp) is compared by its resolved directory.
+  // The hook's home is physical (pwd -P) unless FM_HOME names it, and either
+  // side may spell the same home through a symlink (macOS /tmp is
+  // /private/tmp), so compare the resolved directories.
   const suffix = `${path.sep}config${path.sep}x-mode.env`;
   if (!normalized.endsWith(suffix)) return false;
   try {

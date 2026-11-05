@@ -248,10 +248,10 @@ test_direct_policy_contract() {
   assert_policy direct-heredoc-watcher $'deny\twatcher-redirection' "$heredoc_watcher"
 }
 
-# The hook passes the home as a physical path (pwd -P), while a command may
-# spell the same home through a symlink, as macOS does for every path under
-# /tmp. The home's own x-mode.env stays an approved setup source either way,
-# and a symlink to any other directory stays denied.
+# The hook passes the home as a physical path (pwd -P) unless FM_HOME names it,
+# and either side may spell the same home through a symlink, as macOS does for
+# every path under /tmp. The home's own x-mode.env stays an approved setup
+# source either way, and a symlink to any other directory stays denied.
 test_symlinked_home_x_mode_source() {
   local home other link other_link output
   home=$(CDPATH='' cd -- "$ROOT" && pwd -P)
@@ -273,6 +273,8 @@ test_symlinked_home_x_mode_source() {
     deny$'\t'watcher-bundled$'\t'*) : ;;
     *) fail "sourcing another directory's x-mode.env through a symlink must deny, got: $output" ;;
   esac
+  FM_HOME="$link" "$CHECK" --command "source '$home/config/x-mode.env'; bin/fm-watch-checkpoint.sh --seconds 180" >/dev/null 2>&1 \
+    || fail "the hook under a symlinked FM_HOME must allow sourcing the home's physical x-mode.env"
   pass "the home's x-mode.env is approved through a symlinked spelling, another directory's is not"
 }
 
