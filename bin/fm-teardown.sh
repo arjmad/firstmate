@@ -542,6 +542,8 @@ SM_LIVENESS_LOCK=
 META_LOCK=
 META_LOCK_HELD=0
 DESCENDANT_LOCK_PATHS=()
+CLAUDE_RC_PENDING_IDS=()
+CLAUDE_RC_PENDING_LINES=()
 DESCENDANT_TASK_STATES=()
 DESCENDANT_TASK_IDS=()
 DESCENDANT_TASK_KINDS=()
@@ -590,6 +592,9 @@ teardown_release_locks() {
     TREEHOUSE_PROJECT_LOCK_HELD=0
   fi
   fm_lease_guard_release || true
+  if declare -F claude_rc_sessions_flush >/dev/null 2>&1; then
+    claude_rc_sessions_flush
+  fi
   return "$status"
 }
 trap teardown_release_locks EXIT
@@ -3583,8 +3588,10 @@ endpoint_close_refusal() {  # <subject> <backend> <target> <honors-force>
 # The Claude Remote Control entries a Claude task leaves in the Claude app's
 # session list (bin/fm-claude-rc-archive.sh owns the lookup and the request).
 # They are found before the task's Claude is stopped, because a cleanly exiting
-# Claude deletes its session record, and archived only once the endpoint is
-# closed. Best effort: nothing here can refuse or fail a teardown.
+# Claude deletes its session record, queued once the endpoint is closed, and
+# archived by the EXIT trap after every lock is released, so a slow API never
+# holds another spawn or teardown. Best effort: nothing here can refuse or
+# fail a teardown.
 claude_rc_sessions_find() {  # <meta> <task-id> <launch-dir>
   case "$(meta_value "$1" harness)" in claude*) ;; *) return 0 ;; esac
   [ -n "$3" ] || return 0
@@ -3597,7 +3604,18 @@ claude_rc_sessions_archive() {  # <meta> <task-id> <found-lines>
     echo "note: no Claude Remote Control session recorded for $2; nothing to archive" >&2
     return 0
   fi
-  printf '%s\n' "$3" | "$SCRIPT_DIR/fm-claude-rc-archive.sh" archive "$2" || true
+  CLAUDE_RC_PENDING_IDS+=("$2")
+  CLAUDE_RC_PENDING_LINES+=("$3")
+}
+
+claude_rc_sessions_flush() {
+  local i
+  for ((i = 0; i < ${#CLAUDE_RC_PENDING_IDS[@]}; i++)); do
+    printf '%s\n' "${CLAUDE_RC_PENDING_LINES[$i]}" \
+      | "$SCRIPT_DIR/fm-claude-rc-archive.sh" archive "${CLAUDE_RC_PENDING_IDS[$i]}" || true
+  done
+  CLAUDE_RC_PENDING_IDS=()
+  CLAUDE_RC_PENDING_LINES=()
 }
 
 cleanup_firstmate_home_children() {

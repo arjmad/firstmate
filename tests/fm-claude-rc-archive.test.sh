@@ -107,6 +107,10 @@ test_archive_sends_claudes_request_without_the_token_on_argv() {
   ! grep -q 'FAKE_token' "$c/curl.log" || fail "archive: the token reached curl's argv"
   grep -qx 'header = "Authorization: Bearer sk-ant-oat01-FAKE_token-123"' "$c/curl.log.stdin" \
     || fail "archive: the token did not travel on curl's stdin config"
+  : > "$c/curl.log"
+  printf '%s\n' "$c/root"$'\t'session_01AAA | HOME="$c/home" CLAUDE_CONFIG_DIR='' FAKE_CURL_LOG="$c/curl.log" \
+    FM_CLAUDE_RC_TIMEOUT=0 PATH="$c/fakebin:$PATH" "$ARCHIVE" archive task-a 2>/dev/null
+  grep -q -- '--max-time 10 ' "$c/curl.log" || fail "archive: a zero timeout must not lift curl's ceiling: $(cat "$c/curl.log")"
   pass "archive POSTs Claude Code's archive request with the token on stdin, not argv"
 }
 

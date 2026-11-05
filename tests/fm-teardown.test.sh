@@ -5199,6 +5199,9 @@ make_claude_rc_case() {
   cat > "$case_dir/fakebin/curl" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FAKE_CURL_LOG"
+for lock in "${FAKE_CURL_LOCKS:-}"/.meta-task-x1.lock "${FAKE_CURL_LOCKS:-}"/.control-task-x1.lock; do
+  [ ! -e "$lock" ] || printf 'LOCK_HELD %s\n' "$lock" >> "$FAKE_CURL_LOG"
+done
 cat > /dev/null
 printf '%s' "${FAKE_CURL_CODE:-200}"
 SH
@@ -5210,13 +5213,16 @@ test_claude_teardown_archives_its_remote_control_session() {
   local case_dir rc
   case_dir=$(make_claude_rc_case claude-rc-archive)
   set +e
-  CLAUDE_CONFIG_DIR='' FAKE_CURL_LOG="$case_dir/curl.log" FM_CLAUDE_RC_API_BASE=https://api.example.invalid \
+  CLAUDE_CONFIG_DIR='' FAKE_CURL_LOG="$case_dir/curl.log" FAKE_CURL_LOCKS="$case_dir/state" \
+    FM_CLAUDE_RC_API_BASE=https://api.example.invalid \
     run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
   rc=$?
   set -e
   expect_code 0 "$rc" "claude-rc: teardown should succeed: $(cat "$case_dir/stderr")"
   grep -q '/v1/code/sessions/cse_01TASKX1/archive' "$case_dir/curl.log" 2>/dev/null \
     || fail "claude-rc: no archive request for the task's session"
+  ! grep -q LOCK_HELD "$case_dir/curl.log" \
+    || fail "claude-rc: the archive request ran while teardown still held a task lock: $(grep LOCK_HELD "$case_dir/curl.log")"
   grep -qx 'archived Claude Remote Control session session_01TASKX1 for task-x1' "$case_dir/stderr" \
     || fail "claude-rc: no archive report on stderr"
   [ ! -e "$case_dir/state/task-x1.meta" ] || fail "claude-rc: task record survived the teardown"

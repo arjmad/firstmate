@@ -37,14 +37,14 @@
 #
 # Environment:
 #   FM_CLAUDE_RC_API_BASE   API origin (default https://api.anthropic.com)
-#   FM_CLAUDE_RC_TIMEOUT    per-request ceiling in seconds (default 10)
+#   FM_CLAUDE_RC_TIMEOUT    per-request ceiling in whole seconds, at least 1 (default 10)
 #
 # Exit 0 on success or best-effort failure, 2 on a usage error.
 set -u
 
 API_BASE=${FM_CLAUDE_RC_API_BASE:-https://api.anthropic.com}
 TIMEOUT=${FM_CLAUDE_RC_TIMEOUT:-10}
-case "$TIMEOUT" in ''|*[!0-9]*) TIMEOUT=10 ;; esac
+case "$TIMEOUT" in ''|*[!0-9]*|0*) TIMEOUT=10 ;; esac
 
 usage() {
   sed -n '/^# Usage:/,/^# Exit /p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
