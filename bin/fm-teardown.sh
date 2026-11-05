@@ -12,6 +12,10 @@
 # the one site where --force overrides it, and bin/fm-backend.sh's
 # fm_backend_kill owns what each backend can prove about its own close - an
 # already-exited endpoint is not a failure and stays silent.
+# Once a Claude task's endpoint is closed, including each Claude child of a
+# retired secondmate, its Claude Remote Control entries are archived so they
+# leave the Claude app's session list; bin/fm-claude-rc-archive.sh owns that,
+# and its failure prints one line and never blocks the teardown.
 # Removing state/<id>.meta and landing the backlog transition are one step, not
 # two: bin/fm-backlog-transition-lib.sh owns that invariant, and both halves run
 # under the task's own meta lock before this script reports success. Because the
@@ -538,6 +542,8 @@ SM_LIVENESS_LOCK=
 META_LOCK=
 META_LOCK_HELD=0
 DESCENDANT_LOCK_PATHS=()
+CLAUDE_RC_PENDING_IDS=()
+CLAUDE_RC_PENDING_LINES=()
 DESCENDANT_TASK_STATES=()
 DESCENDANT_TASK_IDS=()
 DESCENDANT_TASK_KINDS=()
@@ -586,6 +592,9 @@ teardown_release_locks() {
     TREEHOUSE_PROJECT_LOCK_HELD=0
   fi
   fm_lease_guard_release || true
+  if declare -F claude_rc_sessions_flush >/dev/null 2>&1; then
+    claude_rc_sessions_flush
+  fi
   return "$status"
 }
 trap teardown_release_locks EXIT
@@ -3576,8 +3585,41 @@ endpoint_close_refusal() {  # <subject> <backend> <target> <honors-force>
   return 1
 }
 
+# The Claude Remote Control entries a Claude task leaves in the Claude app's
+# session list (bin/fm-claude-rc-archive.sh owns the lookup and the request).
+# They are found before the task's Claude is stopped, because a cleanly exiting
+# Claude deletes its session record, queued once the endpoint is closed, and
+# archived by the EXIT trap after every lock is released, so a slow API never
+# holds another spawn or teardown. Best effort: nothing here can refuse or
+# fail a teardown.
+claude_rc_sessions_find() {  # <meta> <task-id> <launch-dir>
+  case "$(meta_value "$1" harness)" in claude*) ;; *) return 0 ;; esac
+  [ -n "$3" ] || return 0
+  "$SCRIPT_DIR/fm-claude-rc-archive.sh" find "$2" "$3" "$(meta_value "$1" account)" 2>/dev/null || true
+}
+
+claude_rc_sessions_archive() {  # <meta> <task-id> <found-lines>
+  case "$(meta_value "$1" harness)" in claude*) ;; *) return 0 ;; esac
+  if [ -z "$3" ]; then
+    echo "note: no Claude Remote Control session recorded for $2; nothing to archive" >&2
+    return 0
+  fi
+  CLAUDE_RC_PENDING_IDS+=("$2")
+  CLAUDE_RC_PENDING_LINES+=("$3")
+}
+
+claude_rc_sessions_flush() {
+  local i
+  for ((i = 0; i < ${#CLAUDE_RC_PENDING_IDS[@]}; i++)); do
+    printf '%s\n' "${CLAUDE_RC_PENDING_LINES[$i]}" \
+      | "$SCRIPT_DIR/fm-claude-rc-archive.sh" archive "${CLAUDE_RC_PENDING_IDS[$i]}" || true
+  done
+  CLAUDE_RC_PENDING_IDS=()
+  CLAUDE_RC_PENDING_LINES=()
+}
+
 cleanup_firstmate_home_children() {
-  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc child_busy_gen child_records_only child_owner_rc child_lease_holder child_pool_slot
+  local home=$1 sub_state child_rc_sessions child_launch child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc child_busy_gen child_records_only child_owner_rc child_lease_holder child_pool_slot
   sub_state="$home/state"
   [ -d "$sub_state" ] || return 0
   for child_meta in "$sub_state"/*.meta; do
@@ -3609,6 +3651,12 @@ cleanup_firstmate_home_children() {
         validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
       fi
     fi
+    child_launch=$child_wt
+    if [ "$child_kind" = secondmate ]; then
+      child_launch=$(meta_value "$child_meta" home)
+      [ -n "$child_launch" ] || child_launch=$child_wt
+    fi
+    child_rc_sessions=$(claude_rc_sessions_find "$child_meta" "$child_id" "$child_launch")
     if [ -n "$child_t" ]; then
       if [ "$child_backend" = herdr ]; then
         fm_backend_herdr_parse_target "$child_t" || return 1
@@ -3631,6 +3679,7 @@ cleanup_firstmate_home_children() {
           || { endpoint_close_refusal "child $child_id" "$child_backend" "$child_t" 0; return 1; }
       fi
     fi
+    claude_rc_sessions_archive "$child_meta" "$child_id" "$child_rc_sessions"
     # The allocation half for this child - its home, its Orca worktree, or its
     # pooled slot. Under records-only retirement none of it runs; the loop falls
     # through to the record retirement below.
@@ -4067,6 +4116,11 @@ fi
 # into that task's live work, which is the exact hazard both guards exist to
 # prevent. Either verdict alone skips the worktree half; the per-task temp
 # root is still this task's own and is reaped regardless.
+if [ "$KIND" = secondmate ] && [ -n "$HOME_PATH" ]; then
+  CLAUDE_RC_SESSIONS=$(claude_rc_sessions_find "$META" "$ID" "$HOME_PATH")
+else
+  CLAUDE_RC_SESSIONS=$(claude_rc_sessions_find "$META" "$ID" "$WT")
+fi
 if [ "$KIND" != secondmate ]; then
   # The endpoint kill and process reap below are firstmate's own stop, so the
   # worker's exit hook must not report it (bin/fm-worker-hook-status.sh).
@@ -4268,6 +4322,7 @@ if [ "$BACKEND" = herdr ]; then
     exit 1
   fi
 fi
+claude_rc_sessions_archive "$META" "$ID" "$CLAUDE_RC_SESSIONS"
 if [ "$KIND" != secondmate ]; then
   if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
       "$SCRIPT_DIR/fm-inactive-reconcile.sh" report "$ID"; then

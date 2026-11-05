@@ -5180,6 +5180,132 @@ test_own_autonomous_run_is_left_alone() {
   pass "a task-owned autonomous running step is left alone rather than aborted"
 }
 
+# A landed Claude ship whose Claude session record (name task-x1, cwd the task
+# worktree) sits in its pinned Claude root, with a curl shim that logs each
+# archive request and answers FAKE_CURL_CODE. Echoes the case dir.
+make_claude_rc_case() {
+  local case_dir wt_head
+  case_dir=$(make_case "$1")
+  write_meta "$case_dir" local-only ship
+  printf '%s\n' "harness=${2:-claude}" "account=$case_dir/claude" >> "$case_dir/state/task-x1.meta"
+  wt_commit "$case_dir" "landed work"
+  wt_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  git -C "$case_dir/project" update-ref refs/heads/main "$wt_head"
+  mkdir -p "$case_dir/claude/sessions"
+  printf '{"claudeAiOauth":{"accessToken":"fake-token"}}\n' > "$case_dir/claude/.credentials.json"
+  jq -n --arg c "$case_dir/wt" \
+    '{pid: 999999, kind: "interactive", name: "task-x1", cwd: $c, sessionId: "u", bridgeSessionId: "session_01TASKX1"}' \
+    > "$case_dir/claude/sessions/999999.json"
+  cat > "$case_dir/fakebin/curl" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_CURL_LOG"
+for lock in "${FAKE_CURL_LOCKS:-}"/.meta-task-x1.lock "${FAKE_CURL_LOCKS:-}"/.control-task-x1.lock; do
+  [ ! -e "$lock" ] || printf 'LOCK_HELD %s\n' "$lock" >> "$FAKE_CURL_LOG"
+done
+cat > /dev/null
+printf '%s' "${FAKE_CURL_CODE:-200}"
+SH
+  chmod +x "$case_dir/fakebin/curl"
+  printf '%s\n' "$case_dir"
+}
+
+test_claude_teardown_archives_its_remote_control_session() {
+  local case_dir rc
+  case_dir=$(make_claude_rc_case claude-rc-archive)
+  set +e
+  CLAUDE_CONFIG_DIR='' FAKE_CURL_LOG="$case_dir/curl.log" FAKE_CURL_LOCKS="$case_dir/state" \
+    FM_CLAUDE_RC_API_BASE=https://api.example.invalid \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "claude-rc: teardown should succeed: $(cat "$case_dir/stderr")"
+  grep -q '/v1/code/sessions/cse_01TASKX1/archive' "$case_dir/curl.log" 2>/dev/null \
+    || fail "claude-rc: no archive request for the task's session"
+  ! grep -q LOCK_HELD "$case_dir/curl.log" \
+    || fail "claude-rc: the archive request ran while teardown still held a task lock: $(grep LOCK_HELD "$case_dir/curl.log")"
+  grep -qx 'archived Claude Remote Control session session_01TASKX1 for task-x1' "$case_dir/stderr" \
+    || fail "claude-rc: no archive report on stderr"
+  [ ! -e "$case_dir/state/task-x1.meta" ] || fail "claude-rc: task record survived the teardown"
+  pass "a Claude task's teardown archives its Remote Control session after the endpoint closes"
+}
+
+test_claude_rc_archive_failure_never_blocks_teardown() {
+  local case_dir rc
+  case_dir=$(make_claude_rc_case claude-rc-fail)
+  set +e
+  CLAUDE_CONFIG_DIR='' FAKE_CURL_LOG="$case_dir/curl.log" FAKE_CURL_CODE=500 \
+    FM_CLAUDE_RC_API_BASE=https://api.example.invalid \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "claude-rc-fail: a failed archive must not fail teardown"
+  [ "$(grep -c 'Claude Remote Control' "$case_dir/stderr")" = 1 ] \
+    || fail "claude-rc-fail: expected exactly one archive line, got: $(cat "$case_dir/stderr")"
+  grep -qx 'warning: could not archive Claude Remote Control session session_01TASKX1 for task-x1: HTTP 500' \
+    "$case_dir/stderr" || fail "claude-rc-fail: no one-line warning"
+  [ ! -e "$case_dir/state/task-x1.meta" ] || fail "claude-rc-fail: task record survived the teardown"
+
+  case_dir=$(make_claude_rc_case claude-rc-missing)
+  rm "$case_dir/claude/sessions/999999.json"
+  set +e
+  CLAUDE_CONFIG_DIR='' FAKE_CURL_LOG="$case_dir/curl.log" FM_CLAUDE_RC_API_BASE=https://api.example.invalid \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "claude-rc-missing: a missing session id must not fail teardown"
+  grep -qx 'note: no Claude Remote Control session recorded for task-x1; nothing to archive' "$case_dir/stderr" \
+    || fail "claude-rc-missing: no one-line note"
+  [ ! -e "$case_dir/curl.log" ] || fail "claude-rc-missing: an archive request was sent"
+
+  case_dir=$(make_claude_rc_case claude-rc-codex codex)
+  set +e
+  CLAUDE_CONFIG_DIR='' FAKE_CURL_LOG="$case_dir/curl.log" FM_CLAUDE_RC_API_BASE=https://api.example.invalid \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "claude-rc-codex: teardown should succeed"
+  ! grep -q 'Claude Remote Control' "$case_dir/stderr" || fail "claude-rc-codex: a non-Claude task mentioned Remote Control"
+  [ ! -e "$case_dir/curl.log" ] || fail "claude-rc-codex: an archive request was sent for a non-Claude task"
+  pass "a failed or missing Remote Control archive prints one line and never blocks teardown; non-Claude tasks skip it"
+}
+
+test_forced_secondmate_teardown_archives_its_own_and_childrens_rc_sessions() {
+  local case_dir home rc
+  case_dir=$(make_case claude-rc-secondmate)
+  write_meta "$case_dir" local-only secondmate
+  configure_secondmate_with_tmux_children "$case_dir"
+  home="$case_dir/secondmate-home"
+  printf '%s\n' harness=claude "account=$case_dir/claude" >> "$case_dir/state/task-x1.meta"
+  printf '%s\n' harness=claude "account=$case_dir/claude" >> "$home/state/child-a.meta"
+  printf '%s\n' harness=codex >> "$home/state/child-b.meta"
+  mkdir -p "$case_dir/claude/sessions"
+  printf '{"claudeAiOauth":{"accessToken":"fake-token"}}\n' > "$case_dir/claude/.credentials.json"
+  jq -n --arg c "$home" '{pid: 999991, name: "task-x1", cwd: $c, bridgeSessionId: "session_01MATE"}' \
+    > "$case_dir/claude/sessions/999991.json"
+  jq -n --arg c "$case_dir/child-a-wt" '{pid: 999992, name: "child-a", cwd: $c, bridgeSessionId: "session_01CHILDA"}' \
+    > "$case_dir/claude/sessions/999992.json"
+  jq -n --arg c "$case_dir/child-b-wt" '{pid: 999993, name: "child-b", cwd: $c, bridgeSessionId: "session_01CHILDB"}' \
+    > "$case_dir/claude/sessions/999993.json"
+  cat > "$case_dir/fakebin/curl" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_CURL_LOG"
+cat > /dev/null
+printf 200
+SH
+  chmod +x "$case_dir/fakebin/curl"
+  rc=0
+  CLAUDE_CONFIG_DIR='' FAKE_CURL_LOG="$case_dir/curl.log" FM_CLAUDE_RC_API_BASE=https://api.example.invalid \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "claude-rc-secondmate: forced teardown should complete: $(cat "$case_dir/stderr")"
+  grep -q '/v1/code/sessions/cse_01CHILDA/archive' "$case_dir/curl.log" \
+    || fail "claude-rc-secondmate: the Claude child's session was not archived"
+  grep -q '/v1/code/sessions/cse_01MATE/archive' "$case_dir/curl.log" \
+    || fail "claude-rc-secondmate: the secondmate's own session was not archived"
+  ! grep -q CHILDB "$case_dir/curl.log" || fail "claude-rc-secondmate: a non-Claude child's record was archived"
+  [ "$(wc -l < "$case_dir/curl.log" | tr -d ' ')" = 2 ] || fail "claude-rc-secondmate: expected exactly two archive requests"
+  pass "a forced secondmate teardown archives its own and each Claude child's Remote Control session"
+}
+
 test_leaked_worktree_process_is_reaped() {
   local case_dir rc pid
   case_dir=$(make_case leaked-process-reap)
@@ -5917,3 +6043,6 @@ test_pushed_follow_up_after_merged_pr_refuses
 test_unrecorded_open_pr_found_by_branch_refuses
 test_closed_unmerged_pr_refuses_when_content_absent
 test_open_companion_pr_refuses
+test_claude_teardown_archives_its_remote_control_session
+test_claude_rc_archive_failure_never_blocks_teardown
+test_forced_secondmate_teardown_archives_its_own_and_childrens_rc_sessions
