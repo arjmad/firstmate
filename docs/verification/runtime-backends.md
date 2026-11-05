@@ -692,9 +692,9 @@ Run 2026-11-05 on Heimdall from a throwaway `gui/501` LaunchAgent (`launchctl ma
 ```text
 probe: keychain "Claude Code-credentials" account arjmad: exit 0 expiresAt 2026-11-05T05:58:17Z
 probe: file /Users/arjmad/.claude/.credentials.json expiresAt 2026-11-04T08:17:10Z
-probe: main's helper (before this fix) -> warning: could not archive Claude Remote Control session session_01B8Qr3Hmc5vz4eLcw1TMrQY for fm-probe-archive401-1793851527: HTTP 401
-probe: fixed helper -> archived Claude Remote Control session session_01B8Qr3Hmc5vz4eLcw1TMrQY for fm-probe-archive401-1793851527
-probe: GET /v1/sessions/session_01B8Qr3Hmc5vz4eLcw1TMrQY after -> session_status=archived
+probe: main's helper (before this fix) -> warning: could not archive Claude Remote Control session session_01B8Qr3Knt3AU8SxwPufBoEv for fm-probe-archive401-1793852804: HTTP 401
+probe: fixed helper -> archived Claude Remote Control session session_01B8Qr3Knt3AU8SxwPufBoEv for fm-probe-archive401-1793852804
+probe: GET /v1/sessions/session_01B8Qr3Knt3AU8SxwPufBoEv after -> session_status=archived
 ok - Claude Code 2.1.318 (Claude Code) on Darwin: a SIGKILLed worker's Remote Control session (pending) is found by name and launch dir and archived
 ```
 
