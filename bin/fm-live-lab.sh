@@ -208,7 +208,8 @@ lab_run() {  # [NAME=VALUE...] <command...>: run in the lab's clean environment
 # nothing. A name is matched here and never passed as a target, because tmux
 # resolves a target it cannot find, even an exact =name, to the current window,
 # while a stale window id fails. mate and worker name the lab's own tasks, whose
-# windows the spawn recorded in their metadata.
+# windows the spawn recorded in their metadata. The id leads because it never
+# holds a space, and tmux 3.7 prints a tab in a format as an underscore.
 window_id() {
   local name=$1 window
   case "$name" in
@@ -217,8 +218,8 @@ window_id() {
   esac
   window=$(sed -n 's/^window=//p' "$LAB/state/$name.meta" 2>/dev/null)
   [ -z "$window" ] || name=${window#*:}
-  lab_tmux list-windows -t firstmate -F "#{window_name}$(printf '\t')#{window_id}" 2>/dev/null \
-    | awk -F '\t' -v n="$name" '$1 == n { print $2; exit }'
+  lab_tmux list-windows -t firstmate -F '#{window_id} #{window_name}' 2>/dev/null \
+    | awk -v n="$name" '{ id = $1; sub(/^[^ ]+ /, "") } $0 == n { print id; exit }'
 }
 
 window_field() {  # <name> <format>
