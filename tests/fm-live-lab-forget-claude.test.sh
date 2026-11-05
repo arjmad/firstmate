@@ -63,7 +63,7 @@ pass "fm-live-lab.sh forget-claude removes only the Claude entries under its roo
 set_mtime() {
   node -e 'const t=Date.now()/1000+Number(process.argv[2]);require("node:fs").utimesSync(process.argv[1],t,t)' "$1" "$2"
 }
-digest() { shasum -a 256 "$1" | awk '{print $1}'; }
+digest() { cksum < "$1"; }
 
 # lock_store <dir>: a store with one entry under the marked root and one outside.
 lock_store() {
@@ -104,6 +104,7 @@ out=$(CLAUDE_CONFIG_DIR="$S" "$LIVE_LAB" forget-claude "$F/forget-root" 2>&1)
 expect_code 0 "$?" "forget-claude breaks a stale store lock: $out"
 [ "$(jq -r '.projects | keys | join(",")' "$S/.claude.json")" = /elsewhere ] || fail "forget-claude did not rewrite past a stale lock"
 [ ! -e "$S/.claude.json.lock" ] || fail "forget-claude left the broken lock behind"
+[ -z "$(find "$S" -name '.claude.json.lock.*')" ] || fail "forget-claude left the stale lock it moved aside"
 
 # A lock that stays fresh past the wait fails closed: the store is untouched and
 # the other writer's lock is left in place.

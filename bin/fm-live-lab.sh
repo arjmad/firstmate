@@ -725,9 +725,13 @@ live_pids() {
 # is 10 seconds old (proper-lockfile, read from the 2.1.318 bundle). The rewrite
 # below takes that same lock, so a Claude session cannot write the store between
 # our read and our rename: it waits for the lock and then re-reads. A stale lock
-# is broken as Claude breaks it; a fresh one held past the wait fails closed with
-# the store untouched. Inside the lock the fingerprint recheck still guards
-# against writers that do not take it, such as bin/fm-claude-trust.sh.
+# is broken only if the directory moved aside is still the one judged stale; a
+# fresh one held past the wait fails closed with the store untouched. The rename
+# also needs the lock still ours and under half the stale age, so a stalled run
+# gives up rather than write after Claude could have broken its lock; what
+# remains is the instant between that check and the rename. Inside the lock the
+# fingerprint recheck still guards against writers that do not take it, such as
+# bin/fm-claude-trust.sh.
 forget_claude_entries() {  # remove every project entry at or under ROOT; prints the count
   [ -e "$CLAUDE_STORE" ] || { echo 0; return 0; }
   node - "$CLAUDE_STORE" "$ROOT" "${ROOT#/private}" <<'NODE'
@@ -747,25 +751,41 @@ const STALE_MS = 10000;
 const WAIT_MS = 15000;
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 const lockStat = () => { try { return fs.statSync(lockDir); } catch (err) { if (err.code === "ENOENT") return null; throw err; } };
+// A stale lock is broken by renaming it aside and checking that the directory
+// moved is the one judged stale. If a fresh lock replaced it in between, the
+// run stops without writing, so that holder's write is never overwritten.
+class Refused extends Error {}
+const breakStale = (held) => {
+  const grave = `${lockDir}.fm-live-lab-stale.${process.pid}.${crypto.randomBytes(8).toString("hex")}`;
+  try { fs.renameSync(lockDir, grave); } catch (err) { if (err.code === "ENOENT") return; throw err; }
+  const moved = fs.statSync(grave);
+  try { fs.rmdirSync(grave); } catch { /* an unexpected non-empty lock stays aside */ }
+  if (moved.ino !== held.ino || moved.mtimeMs !== held.mtimeMs) {
+    throw new Refused(`error: a fresh ${lockDir} replaced the stale one while it was being broken; ${store} is unchanged`);
+  }
+};
 const acquire = () => {
   const deadline = Date.now() + WAIT_MS;
   for (let delay = 50; ; delay = Math.min(delay * 2, 1000)) {
-    try {
-      fs.mkdirSync(lockDir);
-      const taken = lockStat();
-      if (taken !== null) return taken;
-      continue;
-    } catch (err) { if (err.code !== "EEXIST") throw err; }
-    const held = lockStat();
-    if (held !== null && Date.now() - held.mtimeMs > STALE_MS) {
-      try { fs.rmdirSync(lockDir); } catch (err) { if (err.code !== "ENOENT") throw err; }
-      continue;
+    if (Date.now() >= deadline) {
+      throw new Refused(`error: ${lockDir} stayed held by another writer for ${WAIT_MS / 1000}s; ${store} is unchanged`);
     }
-    if (Date.now() >= deadline) return null;
+    let made = false;
+    try { fs.mkdirSync(lockDir); made = true; } catch (err) { if (err.code !== "EEXIST") throw err; }
+    const held = lockStat();
+    if (made && held !== null) return { lock: held, at: Date.now() };
+    if (!made && held === null) continue;
+    if (!made && Date.now() - held.mtimeMs > STALE_MS) { breakStale(held); continue; }
     sleep(delay);
   }
 };
-const ours = (mine) => { const now = lockStat(); return now !== null && now.ino === mine.ino && now.mtimeMs === mine.mtimeMs; };
+// Still ours, and young enough that Claude cannot yet judge it stale: a run
+// that stalled (a suspended process, a slow disk) gives up rather than rename.
+const ours = (mine) => {
+  const now = lockStat();
+  return now !== null && now.ino === mine.lock.ino && now.mtimeMs === mine.lock.mtimeMs
+    && Date.now() - mine.at < STALE_MS / 2;
+};
 const rewrite = (mine) => {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const original = fs.readFileSync(store);
@@ -783,7 +803,7 @@ const rewrite = (mine) => {
     fs.writeFileSync(tmp, `${JSON.stringify(root, null, 2)}\n`, { mode: fs.statSync(store).mode & 0o777, flag: "wx" });
     let renamed = false;
     try {
-      if (!ours(mine)) return [1, `error: ${lockDir} was taken over while lab entries were being removed`];
+      if (!ours(mine)) return [1, `error: ${lockDir} was taken over or went stale while lab entries were being removed; ${store} is unchanged`];
       if (fingerprint(fs.readFileSync(store)) !== fingerprint(original)) continue;
       fs.renameSync(tmp, store);
       renamed = true;
@@ -798,16 +818,20 @@ const rewrite = (mine) => {
   }
   return [1, `error: ${store} kept changing while lab entries were being removed`];
 };
-const mine = acquire();
-if (mine === null) {
-  console.error(`error: ${lockDir} stayed held by another writer for ${WAIT_MS / 1000}s; ${store} is unchanged`);
+let mine;
+try {
+  mine = acquire();
+} catch (err) {
+  if (!(err instanceof Refused)) throw err;
+  console.error(err.message);
   process.exit(1);
 }
 let result;
 try {
   result = rewrite(mine);
 } finally {
-  if (ours(mine)) fs.rmdirSync(lockDir);
+  const now = lockStat();
+  if (now !== null && now.ino === mine.lock.ino && now.mtimeMs === mine.lock.mtimeMs) fs.rmdirSync(lockDir);
 }
 (result[0] === 0 ? console.log : console.error)(result[1]);
 process.exit(result[0]);

@@ -24,7 +24,10 @@ fm_live_gate default-on FM_CLAUDE_STORE_LOCK_LIVE claude node jq timeout
 CLAUDE_VERSION=$(claude --version 2>/dev/null | awk 'NR == 1 {print $1}')
 LAB=
 cleanup() {
-  [ -n "${PROBE_PID:-}" ] && kill "$PROBE_PID" 2>/dev/null
+  if [ -n "${PROBE_PID:-}" ]; then
+    kill "$PROBE_PID" 2>/dev/null
+    wait "$PROBE_PID" 2>/dev/null
+  fi
   [ -n "$LAB" ] && rm -rf -- "$LAB"
 }
 trap cleanup EXIT
@@ -35,10 +38,12 @@ mkdir -p "$LAB/config" "$LAB/home"
 printf '{"projects": {}}\n' > "$STORE"
 
 in_lab() {  # <command...>: run claude against the throwaway store only
-  (cd "$LAB" && env HOME="$LAB/home" CLAUDE_CONFIG_DIR="$LAB/config" DISABLE_AUTOUPDATER=1 \
+  # exec, so a backgrounded call's PID is timeout's own and cleanup's TERM
+  # reaches claude through it.
+  (cd "$LAB" && exec env HOME="$LAB/home" CLAUDE_CONFIG_DIR="$LAB/config" DISABLE_AUTOUPDATER=1 \
     timeout 60 "$@")
 }
-digest() { shasum -a 256 "$1" | awk '{print $1}'; }
+digest() { cksum < "$1"; }
 
 # Claude's first start on an empty store records its initial fields without the
 # lock, so prime the store first; the probe then exercises an ordinary write.
