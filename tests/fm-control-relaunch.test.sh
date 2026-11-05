@@ -2945,6 +2945,75 @@ test_herdr_rebind_from_the_helm_gets_its_own_workspace() {
   pass "reclaim: a herdr rebind run from the helm gets its own projected workspace, never the helm's"
 }
 
+# write_stale_projection_journal <case-dir> <id> <workspace>: a version 2
+# binding left by an earlier projected spawn whose workspace <workspace> held
+# the task's old pane.
+write_stale_projection_journal() {  # <case-dir> <id> <workspace>
+  local dir=$1 id=$2 ws=$3 token=AAAAAAAAAAAAAAAAAAAAAA
+  {
+    echo "version=2"
+    echo "task_id=$id"
+    echo "projection_id=$token"
+    echo "home=$(cd "$dir/home" && pwd -P)"
+    echo "session=fmlab"
+    echo "workspace_id=$ws"
+    echo "tab_id=$ws:t1"
+    echo "pane_id=$ws:p1"
+    echo "parent_workspace_id=w85"
+    echo "parent_label=firstmate"
+    echo "workspace_label=└ $id · p:$token"
+    echo "task_label=fm-$id"
+  } > "$dir/home/state/$id.herdr-presentation"
+}
+
+test_herdr_rebind_retires_a_journal_whose_workspace_is_gone() {
+  local dir out rc=0 ws
+  herdr_helm_case helm-rebind-stale rl79 || {
+    echo "skip - herdr rebind needs jq (the herdr adapter parses JSON with it)"
+    return 0
+  }
+  dir=$HERDR_CASE_DIR
+  # The task was first projected into w60; that workspace went with its pane,
+  # and an earlier flat rebind then put it in w70. The journal still names w60.
+  write_stale_projection_journal "$dir" rl79 w60
+
+  out=$(run_spawn_from_helm "$dir" rl79 --relaunch --harness claude) || rc=$?
+  expect_code 0 "$rc" "a rebind over a journal whose workspace is gone should succeed"$'\n'"$out"
+  ws=$(meta_field "$dir" rl79 herdr_workspace_id)
+  [ -n "$ws" ] && [ "$ws" != w85 ] \
+    || fail "a stale journal sent the rebound worker back to the helm's workspace (recorded '$ws')"$'\n'"$out"
+  [ "$(sed -n 's/^workspace_id=//p' "$dir/home/state/rl79.herdr-presentation")" = "$ws" ] \
+    || fail "the stale journal was not replaced by the new projection's binding"
+  assert_not_contains "$(cat "$dir/home/state/rl79.herdr-presentation")" "AAAAAAAAAAAAAAAAAAAAAA" \
+    "the replacement journal kept the retired projection token"
+  pass "reclaim: a herdr rebind retires a projection journal whose workspace is gone and projects afresh"
+}
+
+test_herdr_rebind_keeps_a_journal_whose_workspace_survives() {
+  local dir out rc=0 before
+  herdr_helm_case helm-rebind-live rl80 || {
+    echo "skip - herdr rebind needs jq (the herdr adapter parses JSON with it)"
+    return 0
+  }
+  dir=$HERDR_CASE_DIR
+  write_stale_projection_journal "$dir" rl80 w60
+  # The old projected workspace is still there, holding a tab of its own.
+  jq '.workspaces += [{workspace_id:"w60", label:"└ rl80 · p:AAAAAAAAAAAAAAAAAAAAAA", focused:false}]
+      | .tabs += [{tab_id:"w60:t3", label:"notes", workspace_id:"w60", pane_id:"w60:p3", focused:false}]' \
+    "$dir/fake/herdr-state.json" > "$dir/fake/herdr-state.json.new" && mv "$dir/fake/herdr-state.json.new" "$dir/fake/herdr-state.json"
+  before=$(cat "$dir/home/state/rl80.herdr-presentation")
+
+  out=$(run_spawn_from_helm "$dir" rl80 --relaunch --harness claude) || rc=$?
+  expect_code 0 "$rc" "a rebind beside a surviving projected workspace should still rebind"$'\n'"$out"
+  [ "$(cat "$dir/home/state/rl80.herdr-presentation")" = "$before" ] \
+    || fail "a journal that still names a live projected workspace was rewritten"
+  assert_contains "$out" "still names a projected workspace" \
+    "the flat fallback should say why it did not project"
+  assert_not_contains "$(grep '^workspace create' "$dir/fake/herdr-log" || true)" "p:" \
+    "a rebind that cannot retire the journal must not create a second projection"
+  pass "reclaim: a herdr rebind leaves a journal whose workspace survives untouched and falls back flat"
+}
+
 test_herdr_reclaim_of_a_secondmate_names_its_own_owner() {
   local dir out rc
   herdr_case_or_skip gone-herdr-secondmate rl76 fmlab '%none' || {
@@ -3170,6 +3239,8 @@ test_herdr_reclaim_keeps_the_task_whole
 test_herdr_reclaim_of_a_secondmate_names_its_own_owner
 test_herdr_rebind_failure_from_a_plain_shell_names_the_real_cause
 test_herdr_rebind_from_the_helm_gets_its_own_workspace
+test_herdr_rebind_retires_a_journal_whose_workspace_is_gone
+test_herdr_rebind_keeps_a_journal_whose_workspace_survives
 test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it
 test_relaunch_moves_a_drifted_item_back_in_flight
 test_away_branch_relaunch_accepts_existing_dispatchable_items
