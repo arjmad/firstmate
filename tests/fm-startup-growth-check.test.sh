@@ -320,8 +320,11 @@ test_over_long_finding_set_is_capped_with_the_shared_marker() {
   while [ "${#seg}" -lt 100 ]; do
     seg="${seg}memory"
   done
+  # The budget reason echoes this path, so ~880 bytes already pushes the finding
+  # set past the 1000-character wake cap, while the deepest file stays under
+  # macOS's 1024-byte PATH_MAX (Linux allows 4096).
   deep="$home/data"
-  while [ "${#deep}" -lt 1200 ]; do
+  while [ "${#deep}" -lt 880 ]; do
     deep="$deep/$seg"
   done
   mkdir -p "$deep"
