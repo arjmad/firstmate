@@ -5434,6 +5434,11 @@ test_one_way_door_holds_for_the_captain_until_his_word() {
   assert_contains "$show" \
     '[arjun-only] One-way door PR https://github.com/example/repo/pull/73 needs your explicit word to merge; blast radius: customer orders' \
     "door-one-way: the hold reason does not carry the PR and its blast radius"
+  assert_grep 'one_way_hold=https://github.com/example/repo/pull/73 7373737373737373737373737373737373737373' \
+    "$case_dir/state/task-x1.meta" "door-one-way: the merge call was not recorded in the task metadata"
+  bash -c '. "$1/bin/fm-pr-lib.sh" && fm_pr_poll_artifacts_valid "$2" task-x1 "$1/bin/fm-pr-poll.sh"' \
+    _ "$ROOT" "$case_dir/state" \
+    || fail "door-one-way: the recorded merge call left the PR poll unauthenticated, so the watcher rejects it"
 
   # While held, even the captain's flag waits for the hold's release.
   set +e
