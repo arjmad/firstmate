@@ -4156,6 +4156,16 @@ case "${1-}" in
     [ ! -s "$d/open" ] || printf '  %s,open,"x",0\n' "$(cat "$d/open")"
     exit 0
     ;;
+  *.html)
+    # Opening the board resumes its session unless the case keeps it closed:
+    # fail-once refuses only the next resume, fail-always every one.
+    if [ -e "$d/fail-once" ]; then
+      rm -f "$d/fail-once"
+    elif [ ! -e "$d/fail-always" ]; then
+      printf '%s\n' "$1" > "$d/open"
+    fi
+    exit 0
+    ;;
   poll)
     while [ ! -e "$d/answer" ] && [ ! -e "$d/note" ]; do
       [ "$SECONDS" -lt "${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}" ] || exit 75
@@ -4258,6 +4268,54 @@ test_scout_teardown_refuses_while_its_board_has_an_unread_round() {
   "${case_env[@]}" "$ROOT/bin/fm-procevent.sh" retire "$sid" >/dev/null 2>&1 || true
   unset FM_PROCEVENT_CLAIM_ROOT LAVISH_AXI_STATE_DIR
   pass "scout teardown refuses, with nothing changed, while its board holds an unread round"
+}
+
+# A handover that fails is tried once more, and a refusal names the cause on
+# its own line, so a caller that keeps only the last line still sees why.
+test_scout_teardown_retries_a_failed_board_handover_once() {
+  local case_dir board sid rc
+  local -a case_env
+  command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; return 0; }
+  case_dir=$(make_case scout-board-retry)
+  scout_board_case "$case_dir"
+  : > "$LAVISH_AXI_STATE_DIR/open"
+  : > "$LAVISH_AXI_STATE_DIR/fail-once"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "scout-board-retry: a handover that failed once was not retried: $(cat "$case_dir/stderr")"
+  grep -q "review board could not be handed to firstmate: .*could not be resumed.*; retrying once" "$case_dir/stderr" \
+    || fail "scout-board-retry: the retry did not name the first attempt's cause: $(cat "$case_dir/stderr")"
+  assert_grep "adopted: $sid (from task task-x1)" "$case_dir/stdout" \
+    "scout-board-retry: the retry did not hand the board to firstmate"
+  assert_absent "$case_dir/state/task-x1.meta" "scout-board-retry: teardown did not complete after the retry"
+  "${case_env[@]}" "$ROOT/bin/fm-procevent.sh" retire "$sid" >/dev/null 2>&1 || true
+  unset FM_PROCEVENT_CLAIM_ROOT LAVISH_AXI_STATE_DIR
+  pass "scout teardown retries a failed board handover once and completes when the retry succeeds"
+}
+
+test_scout_teardown_refusal_names_the_handover_cause() {
+  local case_dir board sid rc
+  local -a case_env
+  command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; return 0; }
+  case_dir=$(make_case scout-board-refused)
+  scout_board_case "$case_dir"
+  : > "$LAVISH_AXI_STATE_DIR/open"
+  : > "$LAVISH_AXI_STATE_DIR/fail-always"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 1 "$rc" "scout-board-refused: teardown should refuse a board it cannot hand over"
+  assert_grep "retrying once" "$case_dir/stderr" "scout-board-refused: teardown refused without retrying"
+  tail -n 1 "$case_dir/stderr" | grep -q "^REFUSED: scout task task-x1's review board could not be handed to firstmate: .*could not be resumed (status none)" \
+    || fail "scout-board-refused: the last line does not carry the cause: $(tail -n 1 "$case_dir/stderr")"
+  assert_no_grep "see the error above" "$case_dir/stderr" "scout-board-refused: the refusal still points elsewhere for its cause"
+  assert_present "$case_dir/state/task-x1.meta" "scout-board-refused: the refusal removed the scout's record"
+  grep -qx 'kind=task-owned' "$case_dir/state/procevent/$sid.source" \
+    || fail "scout-board-refused: the board left the scout although the handover failed"
+  "${case_env[@]}" "$ROOT/bin/fm-procevent.sh" retire "$sid" >/dev/null 2>&1 || true
+  unset FM_PROCEVENT_CLAIM_ROOT LAVISH_AXI_STATE_DIR
+  pass "scout teardown refuses a board it cannot hand over after one retry, with the cause on the REFUSED line"
 }
 
 test_teardown_retains_journal_bound_to_another_pane() {
@@ -5944,6 +6002,8 @@ test_teardown_retires_task_watcher_markers_and_orphan_journal
 test_teardown_retires_the_task_owned_boards
 test_scout_teardown_hands_its_board_to_firstmate
 test_scout_teardown_refuses_while_its_board_has_an_unread_round
+test_scout_teardown_retries_a_failed_board_handover_once
+test_scout_teardown_refusal_names_the_handover_cause
 test_teardown_retains_journal_bound_to_another_pane
 test_teardown_retires_v1_journal_when_projected_workspace_gone
 test_teardown_retains_v1_journal_when_projected_workspace_present
