@@ -3980,6 +3980,47 @@ if [ "$BACKEND" = herdr ]; then
   TEARDOWN_HERDR_PANE=$FM_BACKEND_HERDR_PANE
 fi
 
+# One handover attempt of the block below. Passes adopt-task's and board-link's
+# output through and keeps their error lines as TEARDOWN_ADOPT_CAUSE, so a
+# refusal can name its cause; sets TEARDOWN_ADOPT_RC to adopt-task's exit, or 1
+# when a link could not be recorded.
+teardown_adopt_boards() {
+  local out err err_file adopt_tag _adopt_sid adopt_link
+  TEARDOWN_ADOPT_RC=0
+  TEARDOWN_ADOPT_CAUSE=
+  err_file=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-teardown-adopt.XXXXXX") || {
+    TEARDOWN_ADOPT_RC=1
+    TEARDOWN_ADOPT_CAUSE="teardown could not create a file for the handover's error output"
+    return 0
+  }
+  out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+    FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-procevent.sh" adopt-task "$ID" </dev/null 2>"$err_file") \
+    || TEARDOWN_ADOPT_RC=$?
+  [ -z "$out" ] || printf '%s\n' "$out"
+  while IFS=' ' read -r adopt_tag _adopt_sid adopt_link; do
+    [ "$adopt_tag" = link: ] && [ -n "$adopt_link" ] || continue
+    if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+        FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" board-link "$ID" "$adopt_link" 2>>"$err_file"; then
+      TEARDOWN_ADOPT_RC=1
+      echo "error: $ID's board is firstmate's now, but its link $adopt_link could not be recorded on its held calls" >>"$err_file"
+    fi
+  done <<EOF
+$out
+EOF
+  err=$(cat "$err_file" 2>/dev/null || true)
+  rm -f "$err_file"
+  [ -z "$err" ] || printf '%s\n' "$err" >&2
+  while IFS= read -r adopt_tag; do
+    case "$adopt_tag" in
+      'error: '*) TEARDOWN_ADOPT_CAUSE=${TEARDOWN_ADOPT_CAUSE:+$TEARDOWN_ADOPT_CAUSE; }${adopt_tag#error: } ;;
+    esac
+  done <<EOF
+$err
+EOF
+  [ -n "$TEARDOWN_ADOPT_CAUSE" ] ||
+    TEARDOWN_ADOPT_CAUSE="fm-procevent.sh adopt-task exited $TEARDOWN_ADOPT_RC without naming a cause"
+}
+
 # A finished scout's review board outlives the scout (see the header): after
 # the presentation-lock preflight and before anything below closes its
 # endpoint, every board it owns is handed to
@@ -3987,24 +4028,21 @@ fi
 # board's link is recorded on each still-open call of its inventory. Only a
 # scout with an attested non-empty inventory of captain calls hands boards
 # over; any other board is retired after the record is gone, as before.
+# A failed handover is tried once more before teardown refuses, since
+# adopt-task finishes an interrupted handover and board-link records each link
+# once; the refusal then carries the cause itself, so a caller that keeps only
+# the last line still sees why.
 if [ "$KIND" = scout ] && [ -d "$STATE/procevent" ] \
   && [ "$(meta_value "$META" decisions_reviewed)" = 1 ] \
   && [ -n "$(meta_value "$META" decision_keys)" ]; then
-  TEARDOWN_ADOPT_RC=0
-  TEARDOWN_ADOPT_OUT=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
-    FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-procevent.sh" adopt-task "$ID" </dev/null) \
-    || TEARDOWN_ADOPT_RC=$?
-  [ -z "$TEARDOWN_ADOPT_OUT" ] || printf '%s\n' "$TEARDOWN_ADOPT_OUT"
-  while IFS=' ' read -r adopt_tag _adopt_sid adopt_link; do
-    [ "$adopt_tag" = link: ] && [ -n "$adopt_link" ] || continue
-    if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
-        FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" board-link "$ID" "$adopt_link"; then
-      TEARDOWN_ADOPT_RC=1
-      echo "error: $ID's board is firstmate's now, but its link $adopt_link could not be recorded on its held calls" >&2
-    fi
-  done <<EOF
-$TEARDOWN_ADOPT_OUT
-EOF
+  teardown_adopt_boards
+  case "$TEARDOWN_ADOPT_RC" in
+    0|3) ;;
+    *)
+      echo "warning: $ID's review board could not be handed to firstmate: $TEARDOWN_ADOPT_CAUSE; retrying once" >&2
+      teardown_adopt_boards
+      ;;
+  esac
   case "$TEARDOWN_ADOPT_RC" in
     0) ;;
     3)
@@ -4017,10 +4055,10 @@ EOF
       ;;
     *)
       if [ "$FORCE" != "--force" ]; then
-        echo "REFUSED: scout task $ID's review board could not be handed to firstmate (see the error above); its endpoint is still open, so re-run teardown once that is fixed." >&2
+        echo "REFUSED: scout task $ID's review board could not be handed to firstmate: $TEARDOWN_ADOPT_CAUSE; its endpoint is still open, so re-run teardown once that is fixed." >&2
         exit 1
       fi
-      echo "warning: $ID's review board could not be handed to firstmate; --force retires the boards it still owns with the task, and any already handed over stay firstmate's" >&2
+      echo "warning: $ID's review board could not be handed to firstmate: $TEARDOWN_ADOPT_CAUSE; --force retires the boards it still owns with the task, and any already handed over stay firstmate's" >&2
       ;;
   esac
 fi
