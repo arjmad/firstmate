@@ -2959,6 +2959,27 @@ decision_sittings_retire_tick() {
   [ "$held" = false ] || wake "$reason"
 }
 
+# State residue sweep at the heartbeat. A session can run for days, so the
+# session-start sweep alone lets leftover records build up; every heartbeat
+# asks bin/fm-state-residue-sweep.sh --heartbeat, which sweeps at most hourly
+# and whose header owns what it retires and how it stays safe mid-session. Its
+# summary and warnings go to the triage log, never onto the wake channel.
+residue_sweep_tick() {
+  local out line rc=0
+  out=$(fm_run_timed 60 env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-state-residue-sweep.sh" --heartbeat 2>&1 </dev/null) || rc=$?
+  case "$rc" in
+    0) ;;
+    124) triage_log "state residue sweep did not finish within its 60s bound; the next heartbeat retries" ;;
+    *) triage_log "state residue sweep exited with status $rc; the next heartbeat retries" ;;
+  esac
+  while IFS= read -r line; do
+    [ -z "$line" ] || triage_log "$line"
+  done <<EOF
+$out
+EOF
+}
+
 # Retired captain-hold default release
 # (docs/fork-decisions/2026-11-01-drop-default-release.md). While any state the
 # removed release left is still in state/, the watcher runs
@@ -3791,6 +3812,7 @@ EOF
   hb=$(( HEARTBEAT * (1 << streak) ))
   [ "$hb" -gt "$HEARTBEAT_MAX" ] && hb=$HEARTBEAT_MAX
   if [ "$(age_of "$STATE/.last-heartbeat")" -ge "$hb" ]; then
+    residue_sweep_tick
     # Triage: in always-on mode a heartbeat is benign unless the cheap fleet-scan
     # turns up a captain-relevant status the per-wake path missed. Absorb the
     # no-change case (advance the schedule and back off exactly as wake() would,

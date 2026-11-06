@@ -308,7 +308,7 @@ test_dry_run_reports_and_removes_nothing() {
   [ -e "$home/state/.claude-autoarm-output.OLD001" ] || fail "dry run removed a scratch file"
 
   out=$(run_sweep "$fb" "$home" --bogus)
-  assert_contains "$out" "usage: fm-state-residue-sweep.sh [--dry-run]" "an unknown flag should print usage"
+  assert_contains "$out" "usage: fm-state-residue-sweep.sh [--dry-run | --heartbeat]" "an unknown flag should print usage"
   pass "sweep: --dry-run reports every verdict and removes nothing"
 }
 
@@ -350,7 +350,7 @@ test_query_budget_defers_the_remainder() {
   out=$(run_sweep "$fb" "$home")
 
   assert_contains "$out" "removed 200 watcher record(s) for 200 gone endpoint(s)" "the budget bounds one run's questions: $out"
-  assert_contains "$out" "2 deferred to the next session start" "the remainder should be reported as deferred: $out"
+  assert_contains "$out" "2 deferred to the next sweep" "the remainder should be reported as deferred: $out"
   [ "$(find "$home/state" -name '.hash-firstmate_fm-gone*' | wc -l | tr -d ' ')" -eq 2 ] \
     || fail "exactly the deferred keys should remain"
 
@@ -435,6 +435,159 @@ test_retired_task_records_swept_and_referenced_kept() {
     || fail "a process-event marker with nothing behind it should be retired"
   assert_contains "$out" "5 retired-task record(s)" "the summary line should count retired-task records: $out"
   pass "sweep: records of tasks nothing references are retired, referenced ones kept"
+}
+
+# hold_task_set_lock <home> <ready-file>: hold the home's task-set lock from a
+# live background process, the way a spawn publishing a task does; prints its pid.
+hold_task_set_lock() {
+  local lock="$1/state/.task-set.lock" ready=$2 i=0
+  (
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-wake-lib.sh"
+    fm_lock_try_acquire "$lock" || exit 1
+    fm_lock_set_role "$lock" task-spawn || exit 1
+    trap 'fm_lock_release "$lock"' EXIT
+    : > "$ready"
+    sleep 30
+  ) >/dev/null 2>&1 &
+  while [ ! -e "$ready" ] && [ "$i" -lt 100 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -e "$ready" ] || fail "the test could not take the task-set lock"
+  printf '%s\n' "$!"
+}
+
+# A mid-session sweep must not retire the state of a task a spawn is still
+# publishing, so the task-keyed pass waits its turn behind the task-set lock.
+test_task_records_kept_while_the_task_set_is_locked() {
+  local home fb out state holder now
+  home=$(new_home task-set-locked); fb=$(make_tmux "$TMP_ROOT/task-set-locked")
+  state="$home/state"
+  world "$home" "" ok zsh
+  now=$(date +%s)
+  seed_task_records "$home" being.spawned
+  seed_task_state "$home" being.spawned
+  printf 'old\n' > "$state/.wake-rows.consume.OLD003"
+  fm_touch_epoch $((now - 8 * 86400)) "$state/.wake-rows.consume.OLD003"
+  holder=$(hold_task_set_lock "$home" "$TMP_ROOT/task-set-locked/ready")
+
+  out=$(run_sweep "$fb" "$home")
+  [ "$(count_task_records "$home" being.spawned)" -eq 4 ] && [ -d "$state/being.spawned.inbox" ] \
+    || { kill "$holder" 2>/dev/null; fail "a sweep removed task state while a spawn held the task set: $(ls -a "$state")"; }
+  [ ! -e "$state/.wake-rows.consume.OLD003" ] \
+    || { kill "$holder" 2>/dev/null; fail "a held task set must not stop the rest of the sweep"; }
+  assert_contains "$out" "task set is locked" "the sweep should say why it kept task-keyed records: $out"
+  kill "$holder" 2>/dev/null
+  wait "$holder" 2>/dev/null
+
+  run_sweep "$fb" "$home" >/dev/null
+  [ "$(count_task_records "$home" being.spawned)" -eq 0 ] && [ ! -e "$state/being.spawned.inbox" ] \
+    || fail "the next sweep should retire the task state once the task set is free: $(ls -a "$state")"
+  pass "sweep: task-keyed records wait behind a held task-set lock; everything else still sweeps"
+}
+
+# A spawn or forced teardown refuses another holder of the task set at once,
+# but waits out the sweep's brief hold, so an hourly sweep never fails a spawn.
+test_task_set_acquire_waits_out_only_the_sweep() {
+  local dir lock ready holder rc i
+  dir="$TMP_ROOT/task-set-acquire"; mkdir -p "$dir/state"
+  lock="$dir/state/.task-set.lock"; ready="$dir/ready"
+  (
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-wake-lib.sh"
+    fm_lock_try_acquire "$lock" || exit 1
+    fm_lock_set_role "$lock" residue-sweep || exit 1
+    : > "$ready"
+    sleep 1
+    fm_lock_release "$lock"
+  ) >/dev/null 2>&1 &
+  holder=$!
+  i=0
+  while [ ! -e "$ready" ] && [ "$i" -lt 100 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -e "$ready" ] || fail "the test could not hold the task-set lock as the residue sweep"
+  rc=0
+  bash -c '. "$1/bin/fm-wake-lib.sh"; fm_task_set_lock_try_acquire "$2" && fm_lock_release "$2"' _ "$ROOT" "$lock" || rc=$?
+  wait "$holder" 2>/dev/null
+  [ "$rc" -eq 0 ] || fail "a spawn's task-set acquire should wait out the residue sweep's hold"
+
+  rm -f "$ready"
+  holder=$(hold_task_set_lock "$dir" "$ready")
+  rc=0
+  SECONDS=0
+  bash -c '. "$1/bin/fm-wake-lib.sh"; fm_task_set_lock_try_acquire "$2"' _ "$ROOT" "$lock" || rc=$?
+  kill "$holder" 2>/dev/null
+  wait "$holder" 2>/dev/null
+  [ "$rc" -ne 0 ] || fail "a spawn's task-set acquire must refuse another spawn's hold"
+  [ "$SECONDS" -lt 5 ] || fail "a spawn's task-set acquire must refuse another spawn's hold without waiting"
+
+  # A spawn that takes the lock during the wait is refused as soon as its role
+  # says so, not after the full wait.
+  rm -f "$ready"
+  (
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-wake-lib.sh"
+    fm_lock_try_acquire "$lock" || exit 1
+    fm_lock_set_role "$lock" residue-sweep || exit 1
+    : > "$ready"
+    sleep 1
+    fm_lock_set_role "$lock" task-spawn || exit 1
+    sleep 20
+    fm_lock_release "$lock"
+  ) >/dev/null 2>&1 &
+  holder=$!
+  i=0
+  while [ ! -e "$ready" ] && [ "$i" -lt 100 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -e "$ready" ] || fail "the test could not hold the task-set lock as the residue sweep"
+  rc=0
+  SECONDS=0
+  bash -c '. "$1/bin/fm-wake-lib.sh"; fm_task_set_lock_try_acquire "$2"' _ "$ROOT" "$lock" || rc=$?
+  kill "$holder" 2>/dev/null
+  wait "$holder" 2>/dev/null
+  [ "$rc" -ne 0 ] || fail "a spawn's task-set acquire must refuse a spawn that took the lock during its wait"
+  [ "$SECONDS" -lt 10 ] || fail "a spawn's task-set acquire must refuse as soon as the holder is a spawn, not after its full wait"
+  pass "task-set lock: a spawn waits out the residue sweep's hold and refuses any other"
+}
+
+# The watcher's heartbeat asks for a sweep often, so --heartbeat runs at most
+# once an hour, counting the session-start sweep.
+test_heartbeat_mode_runs_at_most_hourly() {
+  local home fb out state now
+  home=$(new_home heartbeat-mode); fb=$(make_tmux "$TMP_ROOT/heartbeat-mode")
+  state="$home/state"
+  world "$home" "" ok zsh
+  now=$(date +%s)
+  seed_task_records "$home" first.gone
+
+  out=$(run_sweep "$fb" "$home" --heartbeat)
+  [ "$(count_task_records "$home" first.gone)" -eq 0 ] \
+    || fail "a heartbeat with no earlier sweep on record should sweep: $out"
+
+  seed_task_records "$home" second.gone
+  out=$(run_sweep "$fb" "$home" --heartbeat)
+  [ "$(count_task_records "$home" second.gone)" -eq 4 ] \
+    || fail "a heartbeat inside the hour after a sweep should do nothing: $out"
+  [ -z "$out" ] || fail "a throttled heartbeat sweep should be silent: $out"
+
+  fm_touch_epoch $((now - 3601)) "$state/.residue-sweep-last"
+  run_sweep "$fb" "$home" --heartbeat >/dev/null
+  [ "$(count_task_records "$home" second.gone)" -eq 0 ] \
+    || fail "a heartbeat over an hour after the last sweep should sweep again"
+
+  seed_task_records "$home" third.gone
+  run_sweep "$fb" "$home" >/dev/null
+  [ "$(count_task_records "$home" third.gone)" -eq 0 ] || fail "the session-start sweep is never throttled"
+  seed_task_records "$home" fourth.gone
+  run_sweep "$fb" "$home" --heartbeat >/dev/null
+  [ "$(count_task_records "$home" fourth.gone)" -eq 4 ] \
+    || fail "a session-start sweep should count toward the hourly heartbeat throttle"
+  pass "sweep: --heartbeat runs at most once an hour after any sweep"
 }
 
 # A sweep that cannot name every live task's records removes none of them.
@@ -840,6 +993,9 @@ test_dry_run_reports_and_removes_nothing
 test_only_marker_family_files_are_touched
 test_query_budget_defers_the_remainder
 test_retired_task_records_swept_and_referenced_kept
+test_task_records_kept_while_the_task_set_is_locked
+test_heartbeat_mode_runs_at_most_hourly
+test_task_set_acquire_waits_out_only_the_sweep
 test_task_records_kept_when_live_names_are_unknown
 test_dead_lock_owners_swept_and_live_kept
 test_home_summary_scratch_rotates_by_age

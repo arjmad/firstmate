@@ -488,7 +488,7 @@ fm_lock_clean_known_files() {
 fm_lock_set_role() {
   local lockdir=$1 role=$2 current pid back
   case "$role" in
-    autoarm|terminal-check|task-spawn|forced-teardown) : ;;
+    autoarm|terminal-check|task-spawn|forced-teardown|residue-sweep) : ;;
     *) return 1 ;;
   esac
   fm_current_pid current || return 1
@@ -1435,6 +1435,22 @@ fm_task_set_lock_path() {  # <state-dir>
   [ -n "$state" ] || return 1
   case "$state" in *[$'\n\r\t']*) return 1 ;; esac
   printf '%s/.task-set.lock\n' "$state"
+}
+
+# fm_task_set_lock_try_acquire <lock>: take the task-set lock for a spawn or a
+# forced teardown, which refuse rather than wait on each other. The one holder
+# they wait out is bin/fm-state-residue-sweep.sh (role residue-sweep), which
+# holds it for the seconds its task-keyed pass takes, so its hourly run never
+# fails a spawn. The holder's role is reread on every attempt, so a holder
+# that is anything but the sweep, including one that takes the lock during the
+# wait, is refused at once, and the wait refuses after a minute.
+fm_task_set_lock_try_acquire() {  # <lock>
+  local lock=$1 deadline=$((SECONDS + 60))
+  while ! fm_lock_try_acquire "$lock"; do
+    [ "$(fm_lock_role "$lock" 2>/dev/null || true)" = residue-sweep ] || return 1
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep 0.1
+  done
 }
 
 # The top-most firstmate home reachable from this one on THIS machine, used as
