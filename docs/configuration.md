@@ -2312,6 +2312,17 @@ When a scout whose attested captain-call inventory is non-empty is torn down, `b
 - The cross-home gap between worker rounds remains an accepted residual until lavish-axi's exclusive listener lands.
 - The interim crew instruction emitted by `bin/fm-brief.sh` points workers at this arm-and-acknowledge contract.
 
+**Retire quiet and concluded boards**
+
+A board firstmate owns or adopted is not listened to forever: `bin/fm-procevent.sh retire-quiet-boards` retires it after `FM_PROCEVENT_BOARD_QUIET_SECONDS` (default 1209600, 14 days) with no round, and retires an adopted board as soon as every backlog row carrying its adoption is closed.
+
+- A round is the board's registration or a captured result its adapter does not call silent, so a closed browser or a Lavish server restart never keeps a board alive.
+- An adopted board's rows are the ones carrying the `Board handed over from <task-id> at` line that `board-link` wrote at adoption; with no such row, only the quiet rule applies, so an unreadable or pruned backlog never retires a board early.
+- A worker-owned board, an adopted board whose task has a record again, and a board with an unacknowledged round are never retired.
+- Retirement is the ordinary `retire` path, which stops the listener and drops the board's decision binding, so a very late answer on a retired board no longer arrives; arming the board again restores it, and the bearings board build arms its own board again on its next refresh.
+- Each retirement prints one `board-retired:` line naming the source, the reason, and the quiet days, and appends it with a UTC timestamp to `state/procevent/board-retirements.log`.
+- `reconcile` runs the sweep at most once per `FM_PROCEVENT_BOARD_SWEEP_SECONDS` (default 3600; 0 runs it every cycle) and counts each retirement as `stopped`; an unusable value of either setting skips the sweep.
+
 **Register deterministic condition and action watches**
 
 The `when` adapter (`bin/fm-procevent-when.sh`) registers a deterministic condition and action once.
@@ -2714,6 +2725,8 @@ FM_PROCEVENT_OWNER_LEASE_SECONDS=600    # how long a source runner keeps going w
 FM_PROCEVENT_OWNER_CHECK_SECONDS=15     # a runner guard's detection interval, read twice per interval; 1..3600
 FM_PROCEVENT_LAUNCH_FLOOR_SECONDS=1     # minimum interval between launches of one registration generation's source command; 1..3600
 FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=3   # how long reconcile waits for the runners it started to prove they are running; 1..600, keep well below FM_POLL
+FM_PROCEVENT_BOARD_QUIET_SECONDS=1209600   # retire a firstmate-owned or adopted Lavish board after this long with no round; whole seconds, at least 1
+FM_PROCEVENT_BOARD_SWEEP_SECONDS=3600   # how often reconcile runs that board sweep; 0 runs it every cycle
 FM_WHEN_OUTPUT_TAIL_BYTES=8192          # bound on the command-output tail inside one condition->action outcome document
 FM_CODEX_WATCH_CHECKPOINT=180   # seconds per foreground watcher checkpoint in Codex primary supervision
 FM_CODEX_WATCH_CHECKPOINT_AWAY=3600  # requested away checkpoint bound on a home that runs the supervision host; longer of this and attended bound, capped at 27000
