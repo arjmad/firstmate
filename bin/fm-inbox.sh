@@ -24,7 +24,7 @@
 # Usage:
 #   fm-inbox.sh note [--request-id <id>] [--json] [--] <text>...
 #   fm-inbox.sh note [--request-id <id>] [--json] -   (body from stdin)
-#   fm-inbox.sh announce [--json] <id>
+#   fm-inbox.sh announce [--json] [--why <text>] <id>
 #   fm-inbox.sh reply [--json] <id> <text>... | reply [--json] <id> -
 #   fm-inbox.sh receipts [--after <cursor>] [--all-pending] [--all-handled] [--all-replies]
 #   fm-inbox.sh ready
@@ -42,7 +42,11 @@
 # retry are distinguishable. The binding is recorded before announcement, so a
 # crash between save and wake still replays the original note. Without
 # --request-id the historical one-note-per-call behaviour is unchanged.
-# `announce` repairs the wake for an already-saved note without creating another.
+# `announce` repairs the wake for an already-saved note without creating another;
+# --why puts one line of context ahead of the note's summary in that wake.
+# A pending note `bin/fm-capture-autoland.sh take` claims (an opted-in green
+# skill-capture note) is not announced by `note`: its lander lands it and
+# acknowledges it, or announces it with --why when the land fails.
 # A note already acknowledged (in handled/) gets no wake from `announce` or a
 # request-id replay; both report it as acknowledged and exit 0.
 # It refuses a note whose announcement state is UNKNOWN: a note written before
@@ -383,6 +387,18 @@ announce_note() {  # <id> <summary>
 finish_note_result() {  # <outcome> <id> <request-id> <json> <strict-exit> <summary>
   local outcome=$1 id=$2 request_id=$3 json=$4 strict=$5 summary=$6
   local announced=0 acknowledged=0 path="$INBOX/$id.note" rc=0
+  # An opted-in green capture note is landed instead of announced; the lander
+  # announces it itself on any failure (bin/fm-capture-autoland.sh).
+  if [ -f "$path" ] && ! note_announced "$id" \
+    && "$FM_ROOT/bin/fm-capture-autoland.sh" take "$id" >/dev/null 2>&1; then
+    if [ "$json" -eq 1 ]; then
+      emit_note_json "$outcome" "$id" "$request_id" 1 0 "$path"
+    else
+      if [ "$outcome" = replay ]; then printf 'replay %s\n' "$id"; else printf 'queued %s\n' "$id"; fi
+      printf '  %s\n  landing automatically; firstmate hears only if it fails.\n' "$summary"
+    fi
+    return 0
+  fi
   announce_note "$id" "$summary" || rc=$?
   case "$rc" in
     0) announced=1 ;;
@@ -517,16 +533,20 @@ cmd_note() {
 }
 
 cmd_announce() {
-  local json=0 id summary path state rc=0
-  if [ "${1:-}" = "--json" ]; then
-    json=1
-    shift
-  fi
+  local json=0 id summary path state rc=0 why=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --json) json=1; shift ;;
+      --why) [ "$#" -ge 2 ] || die "usage: fm-inbox.sh announce [--json] [--why <text>] <id>"; why=$(printf '%s' "$2" | tr '\n\t' '  '); shift 2 ;;
+      *) break ;;
+    esac
+  done
   id=${1:-}
-  [ -n "$id" ] || die "usage: fm-inbox.sh announce [--json] <id>"
+  [ -n "$id" ] || die "usage: fm-inbox.sh announce [--json] [--why <text>] <id>"
   valid_note_id "$id" || die "invalid note id"
   path=$(note_path "$id") || die "no such note: $id"
   summary=$(note_summary_from_body "$(read_note_body "$path")")
+  [ -z "$why" ] || summary="$why - $summary"
   state=$(note_announce_state "$id" "$path")
   if [ "$state" != true ] && [ "$path" = "$INBOX/handled/$id.note" ]; then
     state=acknowledged
