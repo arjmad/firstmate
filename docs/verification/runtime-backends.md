@@ -749,6 +749,29 @@ ok - Claude Code 2.1.310: an API-error turn end reports a blocker naming the err
 
 `tests/fm-worker-hook-status.test.sh` pins the writer's lines and guards against hand-written payloads, and `tests/fm-busy-adapter-wiring.test.sh` (`test_claude_crewmate_hooks_write_their_own_status`) pins the spawned wiring.
 
+## Claude worker steering-inbox hook
+
+Verified 2026-11-06 on Claude Code 2.1.318 (Claude Code), Linux (Arch) on Fafnir, headless `claude -p --model haiku`.
+`bin/fm-inbox-posttool-hook.sh` prints Claude Code's PostToolUse JSON with `hookSpecificOutput.additionalContext`, and Claude Code hands that context to the model beside the tool result.
+With a steer waiting in a lab inbox and the busy writer's session binding on `UserPromptSubmit`, `--output-format stream-json --verbose --include-hook-events` showed the hook's response after one `echo` call:
+
+```text
+{"stdout":"{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Firstmate instruction waiting: read <lab>/state/lt.inbox/001.msg, act on it, then mv it into <lab>/state/lt.inbox/handled/.\"}}\n","exit_code":0}
+```
+
+A second headless session in the same lab, whose `session_id` differed from the bound one, got an empty hook response, so a nested `claude` run never spends the announcement.
+The live guard asks the model to quote the path it was told about and refreshes this record after a Claude Code upgrade:
+
+```sh
+FM_CLAUDE_INBOX_HOOK_LIVE=1 tests/fm-inbox-posttool-hook-claude-live-e2e.test.sh
+```
+
+```text
+ok - Claude Code 2.1.318 hands the inbox hook's waiting-steer note to the model after a tool call
+```
+
+`tests/fm-busy-adapter-wiring.test.sh` (`test_claude_posttooluse_announces_waiting_steer_once`) pins the announce-once, session, and incarnation guards and the spawned wiring.
+
 ## Pi seeded-secondmate project trust
 
 [`fm-spawn.sh --help`](../../bin/fm-spawn.sh) owns the project-trust approval contract for seeded secondmates and Pi workers, and its compatibility fallback.

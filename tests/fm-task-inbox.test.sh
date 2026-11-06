@@ -702,7 +702,7 @@ test_watcher_rerings_idle_pane_quietly() {
 busy_steer_check() {  # <case-dir> [capture] [busy-max]
   PATH="$1/fakebin:$PATH" FM_STATE_OVERRIDE="$1/state" FM_SEND_LOG="$1/send.log" \
     FM_FAKE_TMUX_CAPTURE="${2:-$1/busy.capture}" FM_BUSY_REGEX=BUSYTOKEN \
-    FM_TASK_INBOX_GRACE_SECS=0 FM_TASK_INBOX_BUSY_MAX="${3-2}" \
+    FM_TASK_INBOX_GRACE_SECS="${BUSY_GRACE:-0}" FM_TASK_INBOX_BUSY_MAX="${3-2}" \
     bash -c '. "$1" && inbox_steer_check sess:fm-t1 t1' _ "$WATCH" > "$1/check.out" 2>&1
 }
 
@@ -835,6 +835,41 @@ test_watcher_nonbusy_reset_failure_escalates_once() {
   grep -q 'Firstmate instruction waiting' "$dir/send.log" || fail "$mode repair did not restore delivery"
   [ "$(cut -f1 "$dir/state/t1.inbox/.ring-state")" = "${rec##*/}" ] || fail "$mode repair lost the delivery ladder"
   pass "watcher: persistent $mode busy-reset failure escalates once and later instructions still deliver"
+}
+
+# The watcher polls far more often than the grace, so a busy deferral counts
+# at most once per grace period: the budget bounds time spent busy, not polls.
+test_watcher_busy_budget_counts_once_per_grace() {
+  local dir check last
+  dir=$(busy_case busy-spacing)
+  for check in 1 2 3 4; do
+    BUSY_GRACE=60 busy_steer_check "$dir"
+    [ ! -s "$dir/state/.wake-queue" ] || fail "busy polls inside one grace escalated at check $check"
+  done
+  [ "$(cut -f2 "$dir/state/t1.inbox/.busy-state")" = 1 ] \
+    || fail "busy polls inside one grace counted more than one deferral"
+  # Age the last counted deferral past the grace: the next busy poll counts.
+  last=$(cut -f3 "$dir/state/t1.inbox/.busy-state")
+  printf '001.msg\t1\t%s\n' "$((last - 61))" > "$dir/state/t1.inbox/.busy-state"
+  BUSY_GRACE=60 busy_steer_check "$dir"
+  grep -q 'stuck-busy after 2 consecutive' "$dir/state/.wake-queue" \
+    || fail "a busy poll one grace after the last deferral did not count"
+  [ ! -s "$dir/send.log" ] || fail "spaced busy deferrals typed into the pane"
+  pass "watcher: busy deferrals count at most once per grace period"
+}
+
+# The default budget is 6 deferrals one grace apart: about 9 minutes at 90 s.
+test_watcher_busy_default_budget() {
+  local dir check
+  dir=$(busy_case busy-default)
+  for check in 1 2 3 4 5; do
+    busy_steer_check "$dir" "$dir/busy.capture" ''
+    [ ! -s "$dir/state/.wake-queue" ] || fail "default busy budget escalated early at $check"
+  done
+  busy_steer_check "$dir" "$dir/busy.capture" ''
+  grep -q 'stuck-busy after 6 consecutive' "$dir/state/.wake-queue" \
+    || fail "default busy budget did not escalate at 6"
+  pass "watcher: the default busy budget escalates at 6 deferrals"
 }
 
 test_watcher_busy_limit_validation() {
@@ -1204,12 +1239,14 @@ test_watcher_successor_busy_reset_failure_surfaces idle
 test_watcher_successor_busy_reset_failure_surfaces busy
 test_watcher_nonbusy_reset_failure_escalates_once idle
 test_watcher_nonbusy_reset_failure_escalates_once protected
-test_watcher_busy_limit_validation 999999999999999999999999999999 2
-test_watcher_busy_limit_validation 1000000000 2
-test_watcher_busy_limit_validation 0 2
-test_watcher_busy_limit_validation 000 2
-test_watcher_busy_limit_validation '' 2
-test_watcher_busy_limit_validation invalid 2
+test_watcher_busy_limit_validation 999999999999999999999999999999 6
+test_watcher_busy_limit_validation 1000000000 6
+test_watcher_busy_limit_validation 0 6
+test_watcher_busy_limit_validation 000 6
+test_watcher_busy_limit_validation '' 6
+test_watcher_busy_limit_validation invalid 6
+test_watcher_busy_budget_counts_once_per_grace
+test_watcher_busy_default_budget
 test_watcher_busy_limit_validation 1 1
 test_watcher_busy_limit_validation 3 3
 test_watcher_retry_ignores_busy_reset_failure

@@ -5934,6 +5934,7 @@ BUSY_GEN=
     # A secondmate reports through its parent channel, so it gets none.
     stopfail_extra=
     notification_entry=
+    posttool_extra=
     if [ "$KIND" != secondmate ]; then
       # The hook runs in the worktree, so the config path must not be relative.
       hook_config=$CONFIG
@@ -5946,6 +5947,11 @@ BUSY_GEN=
       j_idle_status=$(json_escape "$(hook_status_cmd idle) >/dev/null 2>&1 || true")
       j_sessionend=$(json_escape "fm_hook_payload=\$(cat); printf '%s' \"\$fm_hook_payload\" | $(hook_status_cmd session-end) >/dev/null 2>&1; printf '%s' \"\$fm_hook_payload\" | $busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
       stopfail_extra=",{\"type\":\"command\",\"command\":\"$j_stopfail_status\"}"
+      # A second PostToolUse hook tells the worker mid-turn that a steer is
+      # waiting in its inbox, since the watcher's doorbell never types into a
+      # busy pane (bin/fm-inbox-posttool-hook.sh owns the announcement).
+      j_inbox_posttool=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-inbox-posttool-hook.sh") $(shell_quote "$STATE_REAL") $(shell_quote "$ID") --gen $(shell_quote "$BUSY_GEN") 2>/dev/null || true")
+      posttool_extra=",{\"type\":\"command\",\"command\":\"$j_inbox_posttool\"}"
       notification_entry=",\"Notification\":[{\"matcher\":\"idle_prompt\",\"hooks\":[{\"type\":\"command\",\"command\":\"$j_idle_status\"}]}]"
     fi
     # On Herdr, SessionStart reports this launch's resume file
@@ -5957,7 +5963,7 @@ BUSY_GEN=
       j_sessionstart=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-herdr-claude-resume.sh") hook $(shell_quote "$CLAUDE_RESUME_FILE") $(shell_quote "$(fm_busy_session_path "$STATE_REAL" "$ID")") || true")
       sessionstart_entry=",\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_sessionstart\"}]}]"
     fi
-    hooks_json="\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_submit\"}]}],\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_posttool\"}]}],${stop_entry}\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stopfail\"}${stopfail_extra}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_sessionend\"}]}]${notification_entry}${sessionstart_entry}}"
+    hooks_json="\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_submit\"}]}],\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_posttool\"}${posttool_extra}]}],${stop_entry}\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_stopfail\"}${stopfail_extra}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"$j_sessionend\"}]}]${notification_entry}${sessionstart_entry}}"
     if [ "$KIND" = secondmate ]; then
       session_keys='"feedbackDrafts":"off",'
       if [ "$KEEP_AI_TRAILERS" != 1 ]; then
