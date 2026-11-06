@@ -242,6 +242,9 @@
 #   every place held prints one `deferred:` line and exits 75 before any brief
 #   render, endpoint, worktree, record, or backlog move exists, so the task stays
 #   exactly as queued as it was; an unreadable declaration refuses with exit 1.
+#   A Treehouse-backed spawn whose project pool is full (bin/fm-wake-lib.sh's
+#   fm_treehouse_pool_full) is deferred the same way, under the same lock, with
+#   one `deferred: <project> pool full (N/N): held by ...` line.
 #   A batch reports such a pair as `batch: DEFERRED` and exits 75 when nothing
 #   else failed. A relaunch and a --secondmate spawn are never counted against
 #   capacity.
@@ -3999,6 +4002,11 @@ if [ -n "$SPAWN_PROJECT_CAPACITY" ]; then
     echo "deferred: project $(basename "$PROJ_ABS") admits $SPAWN_PROJECT_CAPACITY worker(s) at once on this machine ($FM_PROJECT_CAPACITY_FILE) and $FM_PROJECT_CAPACITY_OCCUPANTS already hold a place ($FM_PROJECT_CAPACITY_OCCUPANT_IDS); task $ID was not launched and its backlog item stays queued - dispatch it again once one of them records its ready PR or is cleaned up" >&2
     exit "$FM_PROJECT_CAPACITY_DEFER_EXIT"
   fi
+fi
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] &&
+  fm_treehouse_pool_full "$PROJ_ABS"; then
+  echo "deferred: $(basename "$PROJ_ABS") pool full ($FM_TREEHOUSE_POOL_SLOTS/$FM_TREEHOUSE_POOL_CAP): held by $FM_TREEHOUSE_POOL_HOLDERS; every Treehouse worktree slot is busy at the pool's max_trees cap, so task $ID was not launched and its backlog item stays queued - dispatch it again once one of them is cleaned up" >&2
+  exit "$FM_PROJECT_CAPACITY_DEFER_EXIT"
 fi
 [ -f "$BRIEF" ] || {
   echo "error: task $ID has no brief at inaccessible data path $BRIEF" >&2

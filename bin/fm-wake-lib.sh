@@ -1588,6 +1588,66 @@ fm_treehouse_pool_slot() {  # <project-dir> <worktree>
   [ "$project_common" = "$slot_common" ]
 }
 
+# The max_trees cap Treehouse applies to <project-dir>'s pool, read from the
+# one config file it reads for that project (bin/fm-treehouse-storage-lib.sh
+# owns which file that is), or its default of 16 when that file sets none
+# (treehouse v3.1.8). Fails when the cap cannot be read as a positive number.
+fm_treehouse_max_trees() {  # <project-dir>
+  local config="$1/treehouse.toml" line value
+  [ -e "$config" ] || config="${HOME:-}/.config/treehouse/config.toml"
+  [ -e "$config" ] || { printf '16\n'; return 0; }
+  [ -f "$config" ] && [ -r "$config" ] || return 1
+  line=$(sed -n -e '/^[[:space:]]*\[/q' -e '/^[[:space:]]*max_trees[[:space:]]*=/p' "$config" | head -n 1)
+  [ -n "$line" ] || { printf '16\n'; return 0; }
+  value=${line#*=}
+  value=${value%%#*}
+  value=$(printf '%s' "$value" | tr -d '[:space:]')
+  case "$value" in ''|*[!0-9]*|0*) return 1 ;; esac
+  printf '%s\n' "$value"
+}
+
+# Succeed when <project-dir>'s Treehouse pool cannot hand out a slot: every slot
+# is leased, in use, or dirty, and the pool already holds its max_trees cap, so
+# `treehouse get` would refuse at once. A spawn types that get into a pane and
+# watches only the pane's directory, so it checks here first rather than waiting
+# out its isolation window. Anything this cannot read - no Treehouse or jq, an
+# unreadable status or cap, a slot status it does not know - answers not full,
+# leaving Treehouse to decide. When full, sets FM_TREEHOUSE_POOL_SLOTS,
+# FM_TREEHOUSE_POOL_CAP, and FM_TREEHOUSE_POOL_HOLDERS (each slot's lease
+# holder, or its slot name and why it is busy, comma-separated).
+# shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
+fm_treehouse_pool_full() {  # <project-dir>
+  local project=$1 cap status out line
+  FM_TREEHOUSE_POOL_SLOTS=
+  FM_TREEHOUSE_POOL_CAP=
+  FM_TREEHOUSE_POOL_HOLDERS=
+  command -v treehouse >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 1
+  cap=$(fm_treehouse_max_trees "$project") || return 1
+  status=$( (CDPATH='' cd -- "$project" && treehouse status --json) </dev/null 2>/dev/null) || return 1
+  out=$(printf '%s' "$status" | jq -r --argjson cap "$cap" '
+    def clean: tostring | gsub("[\u0000-\u001f\u007f]"; "?");
+    if type != "array" or length < $cap
+      or any(.[]; (.status | IN("leased", "in-use", "dirty")) | not)
+    then empty
+    else
+      "slots=\(length)",
+      "holders=" + ([.[] |
+        if .status == "leased" and ((.lease_holder // "") != "") then (.lease_holder | clean)
+        elif .status == "leased" then "slot \(.name | clean) (unlabelled lease)"
+        elif .status == "in-use" then "slot \(.name | clean) (in use)"
+        else "slot \(.name | clean) (dirty)"
+        end] | join(", "))
+    end' 2>/dev/null) || return 1
+  [ -n "$out" ] || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      slots=*) FM_TREEHOUSE_POOL_SLOTS=${line#slots=} ;;
+      holders=*) FM_TREEHOUSE_POOL_HOLDERS=${line#holders=} ;;
+    esac
+  done <<< "$out"
+  FM_TREEHOUSE_POOL_CAP=$cap
+}
+
 # Slot ownership: which task a Treehouse pool slot currently belongs to.
 #
 # Crewmate and scout spawns acquire their slot through the interactive,
