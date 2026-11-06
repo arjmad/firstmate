@@ -4013,12 +4013,16 @@ EOF
   while IFS= read -r adopt_tag; do
     case "$adopt_tag" in
       'error: '*) TEARDOWN_ADOPT_CAUSE=${TEARDOWN_ADOPT_CAUSE:+$TEARDOWN_ADOPT_CAUSE; }${adopt_tag#error: } ;;
+      'fm-captain-hold: '*) TEARDOWN_ADOPT_CAUSE=${TEARDOWN_ADOPT_CAUSE:+$TEARDOWN_ADOPT_CAUSE; }$adopt_tag ;;
     esac
   done <<EOF
 $err
 EOF
-  [ -n "$TEARDOWN_ADOPT_CAUSE" ] ||
-    TEARDOWN_ADOPT_CAUSE="fm-procevent.sh adopt-task exited $TEARDOWN_ADOPT_RC without naming a cause"
+  case "$TEARDOWN_ADOPT_RC" in
+    0|3) ;;
+    *) [ -n "$TEARDOWN_ADOPT_CAUSE" ] ||
+      TEARDOWN_ADOPT_CAUSE="fm-procevent.sh adopt-task exited $TEARDOWN_ADOPT_RC without naming a cause" ;;
+  esac
 }
 
 # A finished scout's review board outlives the scout (see the header): after
