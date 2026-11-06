@@ -1043,8 +1043,8 @@ handle_wake() {  # <reason-lines>
   TURN_RESULT=$result
   TURN_ERRORS=$errors
   ENGINE_RUNNING=1
-  # Backgrounded and waited, so a signal to the host is handled at once
-  # instead of after the whole turn; the cleanup stops the engine.
+  # Backgrounded and waited, so a stop signal (HUP, TERM, INT) is handled at
+  # once instead of after the whole turn; the cleanup stops the engine.
   (
     export FM_HOME STATE
     [ -z "${FM_STATE_OVERRIDE:-}" ] || export FM_STATE_OVERRIDE
@@ -1059,8 +1059,14 @@ handle_wake() {  # <reason-lines>
       "$result" "$errors" "$ENGINE_PID_FILE"
   ) &
   ENGINE_SUBSHELL=$!
+  # A trapped signal (the hand-over SIGUSR1) returns wait early with 128+n
+  # while the engine runs on, so the turn's status comes from a later wait.
   wait "$ENGINE_SUBSHELL"
   rc=$?
+  while [ "$rc" -gt 128 ] && fm_pid_alive "$ENGINE_SUBSHELL"; do
+    wait "$ENGINE_SUBSHELL"
+    rc=$?
+  done
   ENGINE_SUBSHELL=
   ENGINE_RUNNING=0
   release_branch_leases
