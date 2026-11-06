@@ -44,9 +44,9 @@
 # --request-id the historical one-note-per-call behaviour is unchanged.
 # `announce` repairs the wake for an already-saved note without creating another;
 # --why puts one line of context ahead of the note's summary in that wake.
-# A pending note `bin/fm-capture-autoland.sh take` claims (an opted-in green
-# skill-capture note) is not announced by `note`: its lander lands it and
-# acknowledges it, or announces it with --why when the land fails.
+# A plain `note` (no --request-id or --json) that `bin/fm-capture-autoland.sh
+# take` claims, an opted-in green skill-capture note, is not announced: its
+# lander lands and acknowledges it, or announces it with --why when that fails.
 # A note already acknowledged (in handled/) gets no wake from `announce` or a
 # request-id replay; both report it as acknowledged and exit 0.
 # It refuses a note whose announcement state is UNKNOWN: a note written before
@@ -387,16 +387,13 @@ announce_note() {  # <id> <summary>
 finish_note_result() {  # <outcome> <id> <request-id> <json> <strict-exit> <summary>
   local outcome=$1 id=$2 request_id=$3 json=$4 strict=$5 summary=$6
   local announced=0 acknowledged=0 path="$INBOX/$id.note" rc=0
-  # An opted-in green capture note is landed instead of announced; the lander
-  # announces it itself on any failure (bin/fm-capture-autoland.sh).
-  if [ -f "$path" ] && ! note_announced "$id" \
+  # A plain note that is an opted-in green capture note is landed instead of
+  # announced; the lander announces it itself on any failure
+  # (bin/fm-capture-autoland.sh). --request-id and --json callers keep the
+  # strict announced contract, so they never take this path.
+  if [ "$strict" -eq 0 ] && [ -f "$CONFIG/capture-autoland" ] && [ -f "$path" ] \
     && "$FM_ROOT/bin/fm-capture-autoland.sh" take "$id" >/dev/null 2>&1; then
-    if [ "$json" -eq 1 ]; then
-      emit_note_json "$outcome" "$id" "$request_id" 1 0 "$path"
-    else
-      if [ "$outcome" = replay ]; then printf 'replay %s\n' "$id"; else printf 'queued %s\n' "$id"; fi
-      printf '  %s\n  landing automatically; firstmate hears only if it fails.\n' "$summary"
-    fi
+    printf 'queued %s\n  %s\n  landing automatically; firstmate hears only if it fails.\n' "$id" "$summary"
     return 0
   fi
   announce_note "$id" "$summary" || rc=$?

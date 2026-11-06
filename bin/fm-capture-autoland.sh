@@ -32,7 +32,8 @@
 #          - the Land it command is this repository's own
 #            bin/fm-capture-land.sh (the same file, by -ef). The note's path is
 #            never executed: `run` executes this repository's copy.
-# take   Called by bin/fm-inbox.sh for a pending note before it announces it.
+# take   Called by a plain bin/fm-inbox.sh note (no --request-id or --json)
+#        for its pending note before it announces it.
 #        Exit 0 means the note now belongs to the lander and must not be
 #        announced: it matched, and either this call started its detached
 #        `run` or an earlier call already had (state/inbox/autoland/<id>.taken,
@@ -42,8 +43,9 @@
 #        the note is still pending and still matches, runs
 #        `fm-capture-land.sh <pr-url> --head <sha>` with output to
 #        state/inbox/autoland/<id>.log, then acknowledges the note with
-#        `fm-inbox.sh drain --ack <id>` on exit 0, or wakes firstmate with
-#        `fm-inbox.sh announce --why <reason> <id>` on any other exit.
+#        `fm-inbox.sh drain --ack <id>` on exit 0, removing its marker and
+#        log, or wakes firstmate with `fm-inbox.sh announce --why <reason> <id>`
+#        on any other exit, keeping the log the reason names.
 #
 # Recovery: a lander that dies before either step leaves the note pending and
 # unannounced; bin/fm-inbox.sh rewake-due re-wakes it within a day and
@@ -126,7 +128,7 @@ cmd_take() {
 }
 
 cmd_run() {
-  local id=${1-} found url sha rc=0 log last
+  local id=${1-} found url sha rc=0 log out last
   note_id_valid "$id" || { echo "invalid note id: $id" >&2; return 2; }
   log="$DIR/$id.log"
   if [ ! -f "$INBOX/$id.note" ]; then
@@ -139,12 +141,14 @@ cmd_run() {
   fi
   read -r url sha <<< "$found"
   echo "autoland: $LAND $url --head $sha"
-  "$LAND" "$url" --head "$sha" </dev/null || rc=$?
+  out=$("$LAND" "$url" --head "$sha" </dev/null 2>&1) || rc=$?
+  [ -z "$out" ] || printf '%s\n' "$out"
   if [ "$rc" = 0 ]; then
-    "$SCRIPT_DIR/fm-inbox.sh" drain --ack "$id"
+    "$SCRIPT_DIR/fm-inbox.sh" drain --ack "$id" || return 1
+    rm -f -- "$DIR/$id.taken" "$log"
     return 0
   fi
-  last=$(grep -v '^autoland: ' "$log" 2>/dev/null | tail -n 1 | tr '\t' ' ' | cut -c1-160)
+  last=$(printf '%s\n' "$out" | tail -n 1 | tr '\t' ' ' | cut -c1-160)
   "$SCRIPT_DIR/fm-inbox.sh" announce --why "capture autoland failed (exit $rc): ${last:-no output}; log $log" "$id"
   return 1
 }

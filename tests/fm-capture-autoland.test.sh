@@ -52,8 +52,7 @@ wakes() {
 note_id() { sed -n 's/^queued //p' <<< "$1" | head -n 1; }
 
 wait_settled() {  # <case> <id>: until the lander acknowledged or announced
-  local i
-  for i in $(seq 1 100); do
+  for _ in $(seq 1 100); do
     [ -f "$1/home/state/inbox/handled/$2.note" ] && return 0
     [ "$(wakes "$1")" != 0 ] && return 0
     sleep 0.1
@@ -71,6 +70,8 @@ test_green_note_lands_without_a_wake() {
   assert_equals "$URL --head $SHA" "$(cat "$c/land.log")" "the lander runs fm-capture-land.sh with the note's arguments"
   [ -f "$c/home/state/inbox/handled/$id.note" ] || fail "a landed note is acknowledged"
   assert_equals 0 "$(wakes "$c")" "a landed note never wakes firstmate"
+  [ ! -e "$c/home/state/inbox/autoland/$id.taken" ] && [ ! -e "$c/home/state/inbox/autoland/$id.log" ] \
+    || fail "a landed note leaves no marker or log behind"
 }
 
 test_failed_land_wakes_with_the_reason() {
@@ -107,7 +108,7 @@ assert_announced_unlanded() {  # <case> <body> <what>
 }
 
 test_non_matching_notes_are_announced() {
-  local c
+  local c out
   c=$(new_case)
   assert_announced_unlanded "$c" "[nova-skills] skill capture: 2 path(s) in $URL; merge when ./check.sh passes; gate red at $SHA: check: x" "red note"
   c=$(new_case)
@@ -124,6 +125,11 @@ test_non_matching_notes_are_announced() {
 extra line" "an extra line"
   c=$(new_case)
   assert_announced_unlanded "$c" "$(green_body "$c") --force" "an extra argument"
+  c=$(new_case)
+  out=$(green_body "$c" | FM_HOME="$c/home" "$c/bin/fm-inbox.sh" note --request-id r1 -)
+  assert_contains "$out" "firstmate will pick this up" "a --request-id note keeps its strict announced contract"
+  sleep 0.3
+  [ ! -f "$c/land.log" ] || fail "a --request-id note never reaches the lander"
 }
 
 test_match_prints_url_and_head() {
