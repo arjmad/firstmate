@@ -87,6 +87,8 @@ Task material under `data/` follows one retention rule once its task has been cl
 - Binaries (images, PDFs, exports) move to the owning business area's shared drive folder, resolved by folder ID, never by name path.
 - Binaries move only as one captain-approved batch at a time, and each move is logged by file ID.
 - Nothing is deleted from the home before its copy has landed in the drive.
+- `data/archive/` holds 281 task folders from 2026-08-28 to 2026-10-07 that were moved out of `data/` by hand before this rule existed; a cited `data/<task>/` path that is gone is at `data/archive/<task>/`.
+  Evidence another repository cites is copied into that repository's records, not cited by its path here.
 
 `state/` holds runtime records:
 
