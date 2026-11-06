@@ -393,6 +393,7 @@ family_for_basename() {
     fm-secondmate-busy-contract-live-e2e.test.sh|\
     fm-calm-claude-mod-plugin.test.sh|fm-calm-claude-mod-live-e2e.test.sh|\
     fm-progress-claude-live-e2e.test.sh|fm-claude-rc-archive-live-e2e.test.sh|\
+    fm-inbox-posttool-hook-claude-live-e2e.test.sh|\
     fm-calm-pi-queue-retention-live-e2e.test.sh|\
     fm-herdr-submit-confirm-live-e2e.test.sh|fm-claude-store-lock-live-e2e.test.sh)
       printf '%s\n' live-harness-optin

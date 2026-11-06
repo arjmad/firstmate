@@ -384,6 +384,71 @@ test_claude_posttooluse_refreshes_progress_only() {
   pass "claude PostToolUse refreshes the generation-bound progress marker without touching busy state or turn-ended"
 }
 
+# A ship or scout's second PostToolUse hook (bin/fm-inbox-posttool-hook.sh)
+# announces each waiting steer once, as context on the next tool result, only
+# to the worker's own bound session and incarnation.
+test_claude_posttooluse_announces_waiting_steer_once() {
+  local rec id=busy-cl-inbox out state settings cmd rec1 rec2 inbox
+  rec=$(make_spawn_case claude-inbox claude "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  expect_code 0 $? "claude spawn should succeed: $out"
+  state="$HOME_DIR/state"
+  settings="$WT_DIR/.claude/settings.local.json"
+  inbox="$state/$id.inbox"
+  cmd='.hooks.PostToolUse[0].hooks[1].command'
+  case "$(jq -r "$cmd" "$settings")" in
+    *fm-inbox-posttool-hook.sh*" --gen "*) ;;
+    *) fail "a crewmate's second PostToolUse hook must be the generation-bound inbox announcer" ;;
+  esac
+  run_claude_hook "$settings" UserPromptSubmit || fail "UserPromptSubmit hook command failed"
+  out=$(run_claude_hook_payload "$settings" "$cmd" '{"session_id":"worker-session","hook_event_name":"PostToolUse"}') \
+    || fail "inbox hook failed on an empty inbox"
+  [ -z "$out" ] || fail "an empty inbox must announce nothing, got '$out'"
+
+  rec1=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_task_inbox_write "$2" "$3" "first steer"' _ \
+    "$ROOT/bin/fm-task-inbox-lib.sh" "$state" "$id") || fail "could not enqueue a steer"
+  out=$(run_claude_hook_payload "$settings" "$cmd" '{"session_id":"nested-session","hook_event_name":"PostToolUse"}')
+  [ -z "$out" ] || fail "a nested session must not see or spend the announcement, got '$out'"
+  out=$(run_claude_hook_payload "$settings" "$cmd" '{"session_id":"worker-session","agent_id":"sub1","agent_type":"general-purpose","hook_event_name":"PostToolUse"}')
+  [ -z "$out" ] || fail "a subagent's tool call must not see or spend the announcement, got '$out'"
+  out=$(run_claude_hook_payload "$settings" "$cmd" '{"session_id":"worker-session","hook_event_name":"PostToolUse"}') \
+    || fail "inbox hook failed with a waiting steer"
+  [ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName')" = PostToolUse ] \
+    || fail "announcement must be PostToolUse hook JSON, got '$out'"
+  [ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext')" = \
+    "Firstmate instruction waiting: read $rec1, act on it, then mv it into $inbox/handled/." ] \
+    || fail "announcement must name the waiting record and its acknowledgement, got '$out'"
+  out=$(run_claude_hook_payload "$settings" "$cmd" '{"session_id":"worker-session","hook_event_name":"PostToolUse"}')
+  [ -z "$out" ] || fail "a steer must be announced once, got '$out'"
+  [ -f "$rec1" ] || fail "the announcement must leave the record for the worker to acknowledge"
+
+  rec2=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_task_inbox_write "$2" "$3" "second steer"' _ \
+    "$ROOT/bin/fm-task-inbox-lib.sh" "$state" "$id") || fail "could not enqueue a second steer"
+  # The hook's own state argument wins over an FM_STATE_OVERRIDE in its environment.
+  out=$(FM_STATE_OVERRIDE="$TMP_ROOT/another-home-state" run_claude_hook_payload "$settings" "$cmd" '{"session_id":"worker-session","hook_event_name":"PostToolUse"}')
+  [ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext')" = \
+    "Firstmate instruction waiting: read $rec2, act on it, then mv it into $inbox/handled/." ] \
+    || fail "a later steer must be announced alone, got '$out'"
+
+  # A relaunched worker is a new session: it hears every record still waiting.
+  run_claude_hook "$settings" SessionEnd || fail "SessionEnd hook command failed"
+  run_claude_hook "$settings" UserPromptSubmit relaunched-session || fail "relaunch UserPromptSubmit failed"
+  out=$(run_claude_hook_payload "$settings" "$cmd" '{"session_id":"relaunched-session","hook_event_name":"PostToolUse"}')
+  [ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext')" = \
+    "Firstmate instruction waiting: read $rec1, act on it, then mv it into $inbox/handled/."$'\n'"Firstmate instruction waiting: read $rec2, act on it, then mv it into $inbox/handled/." ] \
+    || fail "a relaunched session must hear every waiting steer in order, got '$out'"
+
+  # A superseded incarnation's hook stays silent and still exits 0.
+  FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_task_inbox_write "$2" "$3" "third steer"' _ \
+    "$ROOT/bin/fm-task-inbox-lib.sh" "$state" "$id" >/dev/null
+  "$ROOT/bin/fm-busy-event.sh" arm "$state" "$id" >/dev/null
+  out=$(run_claude_hook_payload "$settings" "$cmd" '{"session_id":"relaunched-session","hook_event_name":"PostToolUse"}') \
+    || fail "a stale-gen inbox hook must still exit 0"
+  [ -z "$out" ] || fail "a stale-gen inbox hook must announce nothing, got '$out'"
+  pass "a claude crewmate's PostToolUse hook announces each waiting steer once to its own session, never to a subagent or nested run"
+}
+
 test_claude_hooks_stale_incarnation_harmless() {
   local rec id=busy-cl-2 out state settings
   rec=$(make_spawn_case claude-stale claude "$id")
@@ -803,6 +868,8 @@ test_secondmate_claude_spawn_leaves_local_settings_untouched() {
   jq -e '.hooks.UserPromptSubmit and .feedbackDrafts == "off"' \
     "$state/$id.claude-settings.json" >/dev/null \
     || fail "busy hooks were not written to the state settings file"
+  [ "$(jq '.hooks.PostToolUse[0].hooks | length' "$state/$id.claude-settings.json")" = 1 ] \
+    || fail "a secondmate must not get the task worker's inbox announcement hook"
   pass "a claude secondmate spawn leaves an existing settings.local.json untouched"
 }
 
@@ -979,6 +1046,7 @@ test_claude_hooks_ignore_a_nested_session
 test_claude_crewmate_hooks_write_their_own_status
 test_claude_hooks_stale_incarnation_harmless
 test_claude_posttooluse_refreshes_progress_only
+test_claude_posttooluse_announces_waiting_steer_once
 test_gemini_hooks_semantic_lifecycle
 test_gemini_hooks_stale_incarnation_harmless
 test_raw_gemini_launch_has_no_semantic_wiring
