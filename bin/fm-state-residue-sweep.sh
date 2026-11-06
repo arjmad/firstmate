@@ -4,7 +4,7 @@
 # task-keyed records and dead lock owners nothing live references, and rotate
 # the scratch files supervision scripts can leave behind.
 #
-# Usage: fm-state-residue-sweep.sh [--dry-run]
+# Usage: fm-state-residue-sweep.sh [--dry-run | --heartbeat]
 #          Prints one "BOOTSTRAP_INFO: state residue sweep: ..." line when
 #          something was removed (or, under --dry-run, would have been) and
 #          nothing otherwise. Every problem is a "warning:" on stderr and the
@@ -12,11 +12,22 @@
 #        --dry-run
 #          Classify and report exactly as a real run would, remove nothing, and
 #          list each endpoint and scratch file that would be retired.
+#        --heartbeat
+#          Sweep only when the last sweep of either kind finished at least
+#          FM_STATE_RESIDUE_HEARTBEAT_INTERVAL_SECONDS ago (state/.residue-sweep-last
+#          records it), and otherwise exit silently.
 #
-# The caller must already hold this Firstmate home's session lock:
-# bin/fm-bootstrap.sh runs this as one of its locked MUTATING sweeps and skips
-# it under FM_BOOTSTRAP_DETECT_ONLY=1 exactly like the others. Running it by
-# hand while a live session holds the lock is safe only for --dry-run.
+# Two callers run it, each inside this home's session: bin/fm-bootstrap.sh at
+# session start, as one of its locked MUTATING sweeps it skips under
+# FM_BOOTSTRAP_DETECT_ONLY=1 exactly like the others, and bin/fm-watch.sh at
+# every heartbeat with --heartbeat, so a session that runs for days still
+# sweeps hourly. A mid-session sweep can overlap a spawn or a forced teardown,
+# so the task-keyed pass below runs only while this sweep holds the home's
+# task-set lock (fm_task_set_lock_path, bin/fm-wake-lib.sh), the lock a fresh
+# spawn holds from its first per-task file until its record is published; when
+# another holder has it, that pass is skipped with a warning and the rest of
+# the sweep still runs. Running it by hand from outside the session that owns
+# the home is safe only for --dry-run.
 #
 # What it sweeps. bin/fm-watch.sh keeps one family of marker files per
 # supervised endpoint, each named by fm_backend_window_key (bin/fm-backend.sh)
@@ -70,9 +81,9 @@
 # record bin/fm-herdr-session-cleanup.sh can match a stale projected pane by, so
 # it is removed only once fm_backend_herdr_projection_token_workspace_gone has
 # read the journal's session (its recorded one, else this home's) and found no
-# workspace still carrying its token; any read failure keeps it. The sweep runs
-# under the session lock before the session can dispatch, so no task appears
-# between that read and the removal. The watcher's per-wake process-event marker
+# workspace still carrying its token; any read failure keeps it. This pass holds
+# the task-set lock, so no task appears between that read and the removal. The
+# watcher's per-wake process-event marker
 # .seen-procevent-<hex key> (fm_wake_procevent_marker_path) is removed once its
 # key is no longer queued and its source has neither a registration nor an
 # unacknowledged captured result; the live keys are encoded forward and
@@ -108,7 +119,7 @@
 # (about 45 ms each against a scripted herdr on 2026-09-17), and a home that
 # has accumulated hundreds of dead keys would ask them all on its first run,
 # so the sweep asks at most FM_STATE_RESIDUE_QUERY_BUDGET endpoints per run -
-# under ten seconds of session start - and leaves the rest for the next one;
+# under ten seconds - and leaves the rest for the next sweep;
 # the summary line reports the deferred count. The inventories are one call
 # per candidate and are read only when at least one unprotected key is on
 # disk, so a converged home, or one whose only markers belong to current task
@@ -147,6 +158,8 @@ FM_STATE_RESIDUE_SCRATCH_MAX_AGE_DAYS=7
 FM_STATE_RESIDUE_QUERY_BUDGET=200
 # An unlinked lock owner younger than this may still be mid-acquire.
 FM_STATE_RESIDUE_OWNER_MIN_AGE_SECONDS=3600
+# --heartbeat sweeps only when the last sweep is at least this old.
+FM_STATE_RESIDUE_HEARTBEAT_INTERVAL_SECONDS=3600
 
 # Longest prefixes first, so `.stale-since-K` is read as key K under
 # `.stale-since-` and never as key `since-K` under `.stale-`.
@@ -154,11 +167,16 @@ FM_STATE_RESIDUE_PREFIXES='.stale-since- .paused-rechecked- .paused-resurfaced- 
 FM_STATE_RESIDUE_SCRATCH_PREFIXES='.claude-autoarm-output. .wake-rows.consume. .home-summary.json. .home-summary-error. .watch-arm-output.'
 
 DRY_RUN=0
+HEARTBEAT=0
+USAGE='usage: fm-state-residue-sweep.sh [--dry-run | --heartbeat]'
 case "${1:-}" in
   '') ;;
-  --dry-run) DRY_RUN=1; [ "$#" -eq 1 ] || { echo "usage: fm-state-residue-sweep.sh [--dry-run]" >&2; exit 2; } ;;
-  *) echo "usage: fm-state-residue-sweep.sh [--dry-run]" >&2; exit 2 ;;
+  --dry-run) DRY_RUN=1 ;;
+  --heartbeat) HEARTBEAT=1 ;;
+  *) echo "$USAGE" >&2; exit 2 ;;
 esac
+[ "$#" -le 1 ] || { echo "$USAGE" >&2; exit 2; }
+LAST_SWEEP="$STATE/.residue-sweep-last"
 
 warn() { printf 'warning: state residue sweep: %s\n' "$*" >&2; }
 
@@ -659,6 +677,11 @@ REMOVED_RECORDS=0 REMOVED_ENDPOINTS=0 ROTATED=0 QUERIES=0 DEFERRED=0
 REMOVED_TASK_RECORDS=0 REMOVED_LOCK_OWNERS=0
 KEPT_META=0 KEPT_LIVE=0 KEPT_UNRESOLVED=0 KEPT_UNMATCHED=0
 
+if [ "$HEARTBEAT" -eq 1 ] && { [ -e "$LAST_SWEEP" ] || [ -L "$LAST_SWEEP" ]; } \
+  && [ "$(fm_path_age "$LAST_SWEEP")" -lt "$FM_STATE_RESIDUE_HEARTBEAT_INTERVAL_SECONDS" ]; then
+  exit 0
+fi
+
 collect_protected
 collect_keys
 if [ -n "$KEYS" ]; then
@@ -666,15 +689,31 @@ if [ -n "$KEYS" ]; then
   read_inventories
   sweep_endpoint_records
 fi
+# A dry run removes nothing, so it never takes the lock a spawn would wait on.
+TASK_SET_LOCK=$(fm_task_set_lock_path "$STATE")
+TASK_SET_LOCK_HELD=0
+trap '[ "$TASK_SET_LOCK_HELD" -eq 0 ] || fm_lock_release "$TASK_SET_LOCK"' EXIT
+trap 'exit 143' TERM INT HUP
+if [ "$DRY_RUN" -eq 0 ] && fm_lock_try_acquire "$TASK_SET_LOCK"; then
+  TASK_SET_LOCK_HELD=1
+  fm_lock_set_role "$TASK_SET_LOCK" residue-sweep || true
+fi
+if [ "$DRY_RUN" -eq 0 ] && [ "$TASK_SET_LOCK_HELD" -eq 0 ]; then
+  warn "the task set is locked by a spawn or teardown in progress; kept all task-keyed records for the next sweep"
 # Without the complete set of live names nothing task-keyed may be removed.
-if collect_referenced; then
+elif collect_referenced; then
   sweep_task_records
   sweep_task_state
 else
   warn "could not name every live task's records; kept all task-keyed records"
 fi
+if [ "$TASK_SET_LOCK_HELD" -eq 1 ]; then
+  TASK_SET_LOCK_HELD=0
+  fm_lock_release "$TASK_SET_LOCK" || true
+fi
 sweep_lock_owners
 rotate_scratch
+[ "$DRY_RUN" -eq 1 ] || touch "$LAST_SWEEP" 2>/dev/null || warn "could not record this sweep in $LAST_SWEEP"
 
 if [ "$REMOVED_ENDPOINTS" -gt 0 ] || [ "$ROTATED" -gt 0 ] \
   || [ "$REMOVED_TASK_RECORDS" -gt 0 ] || [ "$REMOVED_LOCK_OWNERS" -gt 0 ]; then
@@ -684,7 +723,7 @@ if [ "$REMOVED_ENDPOINTS" -gt 0 ] || [ "$ROTATED" -gt 0 ] \
     "$verb" "$REMOVED_RECORDS" "$REMOVED_ENDPOINTS" "$ROTATED" \
     "$REMOVED_TASK_RECORDS" "$REMOVED_LOCK_OWNERS" \
     "$KEPT_META" "$KEPT_LIVE" "$KEPT_UNRESOLVED" "$KEPT_UNMATCHED"
-  [ "$DEFERRED" -eq 0 ] || printf ', %s deferred to the next session start' "$DEFERRED"
+  [ "$DEFERRED" -eq 0 ] || printf ', %s deferred to the next sweep' "$DEFERRED"
   printf ' (these count watcher bookkeeping, not fleet liveness; bin/fm-fleet-view.sh shows which panes are live)\n'
 fi
 exit 0

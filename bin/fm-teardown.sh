@@ -3223,7 +3223,7 @@ collect_descendant_task_locks() {
     echo "REFUSED: secondmate home $home has an invalid task-set lock path; forced teardown changed nothing" >&2
     return 1
   }
-  if ! fm_lock_try_acquire "$task_set_lock"; then
+  if ! fm_task_set_lock_try_acquire "$task_set_lock"; then
     echo "REFUSED: secondmate home $home is publishing a task right now (task-set lock is held); forced teardown changed nothing" >&2
     return 1
   fi

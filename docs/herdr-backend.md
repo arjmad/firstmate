@@ -256,6 +256,8 @@ Creation proceeds in this order:
 2. After the new workspace converges to one exact task endpoint beneath one exact parent workspace id, the journal advances to a version 2 binding.
    That binding records the physical home, named session, endpoint, parent, and immutable expected labels.
 
+A fresh spawn that fails before it publishes its task record removes the journal it published once no workspace in its session carries the token, so a retry of the same id is projected again rather than warning and falling back flat.
+
 Another parent with the same presentation label does not prevent publication or participate in restart reclaim.
 
 The token is visible in the workspace title, because Herdr exposes no verified hidden persistent field.

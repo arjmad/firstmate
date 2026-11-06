@@ -172,8 +172,10 @@
 #   then creates a disposable
 #   workspace containing only the ordinary task pane. A successful clean create
 #   upgrades its attempt journal with exact home, session, workspace, tab, pane,
-#   parent, and label bindings. On a same-identity restart, that complete binding
-#   plus authoritative metadata may replace one exact agent-free husk in place.
+#   parent, and label bindings. A spawn that exits without a task record removes
+#   the journal it wrote once no workspace carries its token. On a same-identity
+#   restart, that complete binding plus authoritative metadata may replace one
+#   exact agent-free husk in place.
 #   The journal, visible token, and labels alone are never endpoint or ownership
 #   authority, and every ambiguous recovery stays on the flat fallback after
 #   duplicate-agent risk is independently absent. Treehouse allocation and task
@@ -1507,6 +1509,7 @@ HERDR_PROJECTION_ABORT_CLEANUP=0
 HERDR_PROJECTION_ABORT_SESSION=
 HERDR_PROJECTION_ABORT_TASK_PANE=
 HERDR_PROJECTION_ABORT_SEEDED_PANE=
+HERDR_PROJECTION_JOURNAL_SESSION=
 HERDR_PRESENTATION_ORDER_LOCK=
 HERDR_PRESENTATION_ORDER_LOCK_HELD=0
 SPAWN_TASK_LOCK=
@@ -1675,6 +1678,17 @@ spawn_abort_cleanup() {
       "$HERDR_PROJECTION_ABORT_TASK_PANE" \
       "$HERDR_PROJECTION_ABORT_SEEDED_PANE" || true
   fi
+  # The presentation journal this spawn published names nothing once no task
+  # record exists and no workspace carries its token, and a retry that found it
+  # would warn and spawn flat, so it goes with the failed attempt. Any other
+  # verdict keeps it for recovery, as teardown keeps an unproven attempt.
+  if [ -n "$HERDR_PROJECTION_JOURNAL_SESSION" ] &&
+    [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ] &&
+    fm_backend_herdr_projection_token_workspace_gone \
+      "$HERDR_PROJECTION_JOURNAL_SESSION" "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
+    rm -f -- "$HERDR_PRESENTATION_JOURNAL"
+  fi
+  HERDR_PROJECTION_JOURNAL_SESSION=
   if [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" = 1 ]; then
     HERDR_PRESENTATION_ORDER_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
@@ -2034,6 +2048,7 @@ spawn_herdr_project_task() {
     return 0
   fi
   HERDR_PROJECTION_ID=$(fm_backend_herdr_projection_journal_create "$STATE" "$ID") || exit 1
+  HERDR_PROJECTION_JOURNAL_SESSION=$session
   HERDR_PROJECTION_LABEL=$(fm_backend_herdr_projection_workspace_label "$ID" "$HERDR_PROJECTION_ID")
   if ! HERDR_SESSION="$session" FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_create_task \
     "$cwd" "$HERDR_PROJECTION_LABEL" "$W"; then
@@ -2305,18 +2320,23 @@ if [ "$RELAUNCH" -eq 0 ]; then
   # tests.
   #
   # Refusing rather than waiting is the fail-closed direction: the home may be
-  # moments from removal, so there is nothing worth waiting for.
+  # moments from removal, so there is nothing worth waiting for. The state
+  # residue sweep's brief hold is the one exception fm_task_set_lock_try_acquire
+  # waits out.
   SPAWN_TASK_SET_LOCK=$(fm_task_set_lock_path "$STATE") || {
     echo "error: could not resolve the task-set lock for $STATE" >&2
     exit 1
   }
-  if ! fm_lock_try_acquire "$SPAWN_TASK_SET_LOCK"; then
+  if ! fm_task_set_lock_try_acquire "$SPAWN_TASK_SET_LOCK"; then
     case "$(fm_lock_role "$SPAWN_TASK_SET_LOCK" 2>/dev/null || true)" in
       task-spawn)
         echo "error: this home's task set is locked by another spawn; refusing to create task $ID rather than racing it" >&2
         ;;
       forced-teardown)
         echo "error: this home's task set is locked by a forced teardown; refusing to create task $ID rather than racing it" >&2
+        ;;
+      residue-sweep)
+        echo "error: the state residue sweep still holds this home's task set after a minute; refusing to create task $ID rather than racing it" >&2
         ;;
       *)
         echo "error: this home's task set is locked by another operation; refusing to create task $ID rather than racing it" >&2
