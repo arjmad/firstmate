@@ -1868,21 +1868,26 @@ one_way_hold_recorded() {
 # Record, or with "retract" remove, this PR head's one_way_hold line under the
 # task metadata lock.
 record_one_way_hold() {  # [retract]
-  local lock status=0 tmp
+  local lock status=0 tmp line="one_way_hold=$URL $FM_PR_MERGE_HEAD"
   lock=$(fm_meta_lock_path "$META") || return 1
   fm_lock_acquire_wait "$lock" || return 1
   if [ ! -f "$META" ] || [ -L "$META" ]; then
     status=1
-  elif [ "${1:-}" = retract ]; then
+  elif [ "${1:-}" = retract ] || ! one_way_hold_recorded; then
     if tmp=$(mktemp "$STATE/.$ID.meta.one-way.XXXXXX"); then
-      grep -vxF "one_way_hold=$URL $FM_PR_MERGE_HEAD" "$META" > "$tmp" || true
-      fm_backlog_atomic_transition publish "$tmp" "$META" "task record" "$STATE" \
-        || { rm -f "$tmp"; status=1; }
+      if [ "${1:-}" = retract ]; then
+        grep -vxF "$line" "$META" > "$tmp" || [ "$?" -eq 1 ] || status=1
+      else
+        fm_pr_meta_rewrite "$META" "" "$line" > "$tmp" || status=1
+      fi
+      if [ "$status" -ne 0 ] \
+        || ! fm_backlog_atomic_transition publish "$tmp" "$META" "task record" "$STATE"; then
+        rm -f "$tmp"
+        status=1
+      fi
     else
       status=1
     fi
-  else
-    one_way_hold_recorded || printf 'one_way_hold=%s %s\n' "$URL" "$FM_PR_MERGE_HEAD" >> "$META" || status=1
   fi
   fm_lock_release "$lock" || status=1
   return "$status"
