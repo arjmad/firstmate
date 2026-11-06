@@ -46,13 +46,14 @@ usage() {  # [exit-code]
 
 case "${1:-}" in -h|--help) usage 0 ;; esac
 [ "$#" -eq 4 ] && [ "$3" = --gen ] || usage 2 >&2
-STATE=$1
-ID=$2
-GEN=$4
+# Hook-local names: the sourced libraries assign STATE from FM_STATE_OVERRIDE.
+HOOK_STATE=$1
+HOOK_ID=$2
+HOOK_GEN=$4
 
 # Nothing waiting is the common case on every tool call: answer it before
 # reading the payload or sourcing anything.
-set -- "$STATE/$ID.inbox"/*.msg
+set -- "$HOOK_STATE/$HOOK_ID.inbox"/*.msg
 [ -e "$1" ] || exit 0
 
 command -v jq >/dev/null 2>&1 || exit 0
@@ -61,24 +62,24 @@ command -v jq >/dev/null 2>&1 || exit 0
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/fm-task-inbox-lib.sh"
 
-fm_busy_token_valid "$GEN" || exit 0
-current=$(fm_busy_current_gen "$STATE" "$ID") || exit 0
-[ "$GEN" = "$current" ] || exit 0
+fm_busy_token_valid "$HOOK_GEN" || exit 0
+current=$(fm_busy_current_gen "$HOOK_STATE" "$HOOK_ID") || exit 0
+[ "$HOOK_GEN" = "$current" ] || exit 0
 payload=$(cat) || payload=
 session=$(printf '%s' "$payload" | jq -r 'if type == "object" and (.session_id | type) == "string" then .session_id else empty end' 2>/dev/null) || session=
 fm_busy_token_valid "$session" || exit 0
 agent=$(printf '%s' "$payload" | jq -r 'if type == "object" and (.agent_id | type) == "string" then .agent_id else empty end' 2>/dev/null) || exit 0
 [ -z "$agent" ] || exit 0
-SESSION_FILE=$(fm_busy_session_path "$STATE" "$ID")
+SESSION_FILE=$(fm_busy_session_path "$HOOK_STATE" "$HOOK_ID")
 bound=
 if [ -f "$SESSION_FILE" ] && [ ! -L "$SESSION_FILE" ]; then
   IFS= read -r bound < "$SESSION_FILE" 2>/dev/null || bound=
 fi
 [ "$bound" = "$session" ] || exit 0
 
-records=$(fm_task_inbox_announce_new "$STATE" "$ID" "$session" 2>/dev/null) || exit 0
+records=$(fm_task_inbox_announce_new "$HOOK_STATE" "$HOOK_ID" "$session" 2>/dev/null) || exit 0
 [ -n "$records" ] || exit 0
-inbox=$(fm_task_inbox_dir "$STATE" "$ID")
+inbox=$(fm_task_inbox_dir "$HOOK_STATE" "$HOOK_ID")
 context=
 while IFS= read -r rec; do
   [ -n "$rec" ] || continue

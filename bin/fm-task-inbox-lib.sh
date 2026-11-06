@@ -456,6 +456,21 @@ fm_task_inbox_announce_new() {  # <state-dir> <task-id> <owner>
   dir=$(fm_task_inbox_dir "$1" "$2")
   set -- "$dir"/*.msg
   [ -e "$1" ] || return 0
+  # Lock-free early return: nothing waiting is newer than this owner's mark.
+  { IFS=$(printf '\t') read -r marked announced < "$dir/.hook-announced"; } 2>/dev/null || true
+  if [ "${marked:-}" = "$owner" ]; then
+    case "${announced:-}" in ''|*[!0-9]*) ;; *)
+      max=0
+      for f in "$@"; do
+        n=$(fm_task_inbox_seq_of "${f##*/}") || continue
+        [ "$n" -le "$max" ] || max=$n
+      done
+      [ "$max" -gt "$announced" ] || return 0
+      ;;
+    esac
+  fi
+  marked=
+  announced=
   lock="$dir/.seq.lock"
   fm_task_inbox_lock_acquire "$lock" || return 1
   { IFS=$(printf '\t') read -r marked announced < "$dir/.hook-announced"; } 2>/dev/null || true

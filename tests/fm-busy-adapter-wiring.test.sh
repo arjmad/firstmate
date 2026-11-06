@@ -425,7 +425,8 @@ test_claude_posttooluse_announces_waiting_steer_once() {
 
   rec2=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_task_inbox_write "$2" "$3" "second steer"' _ \
     "$ROOT/bin/fm-task-inbox-lib.sh" "$state" "$id") || fail "could not enqueue a second steer"
-  out=$(run_claude_hook_payload "$settings" "$cmd" '{"session_id":"worker-session","hook_event_name":"PostToolUse"}')
+  # The hook's own state argument wins over an FM_STATE_OVERRIDE in its environment.
+  out=$(FM_STATE_OVERRIDE="$TMP_ROOT/another-home-state" run_claude_hook_payload "$settings" "$cmd" '{"session_id":"worker-session","hook_event_name":"PostToolUse"}')
   [ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext')" = \
     "Firstmate instruction waiting: read $rec2, act on it, then mv it into $inbox/handled/." ] \
     || fail "a later steer must be announced alone, got '$out'"
