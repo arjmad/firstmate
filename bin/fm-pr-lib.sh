@@ -334,6 +334,14 @@ fm_pr_file_link_count() {
   fi
 }
 
+fm_pr_file_mtime() {
+  if [ "$(uname)" = Darwin ]; then
+    /usr/bin/stat -f %m "$1" 2>/dev/null
+  else
+    stat -c %Y "$1" 2>/dev/null
+  fi
+}
+
 fm_pr_file_inode() {
   if [ "$(uname)" = Darwin ]; then
     /usr/bin/stat -f %i "$1" 2>/dev/null

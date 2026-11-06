@@ -15,6 +15,7 @@
 #   fm-procevent.sh retire <source-id> [--if-absent|--if-matches <adapter> -- <argv>...|--if-owner <registration-token>]
 #   fm-procevent.sh retire-task <task-id>
 #   fm-procevent.sh adopt-task <task-id>
+#   fm-procevent.sh retire-quiet-boards
 #   fm-procevent.sh sweep-home [--preflight]
 #   fm-procevent.sh binding-retirement-preflight <binding-digest>
 #   fm-procevent.sh extension-retirement <binding|transfer> <retirement-arguments...>
@@ -73,7 +74,9 @@
 #            republish every durably captured result with no handled
 #            acknowledgement yet - regardless of any earlier publication - and
 #            start a runner for any registered source that has no live owner and
-#            no open task-owned round. This is liveness repair only - it never
+#            no open task-owned round. On its own cadence it first runs
+#            retire-quiet-boards, printing each `board-retired:` line and
+#            counting it as stopped. This is liveness repair only - it never
 #            discovers results by
 #            polling the source, because the child blocks on the source itself.
 #            A start is REPORTED only once it is confirmed: starting a runner is
@@ -152,6 +155,25 @@
 #            the firstmate listener, printing `adopted:`, `link:`, and any
 #            `moved:` line. Exit 0 when nothing the task owned is left unhanded,
 #            3 when a board was kept for an unread round, 1 on any failure.
+# retire-quiet-boards
+#            Retire, through `retire`, every Lavish board firstmate
+#            owns or adopted that has had no round for
+#            FM_PROCEVENT_BOARD_QUIET_SECONDS (default 14 days), or, for an
+#            adopted board, whose backlog rows have all closed. A round is the
+#            board's registration, its decision binding being written again,
+#            or a captured result its adapter does not call silent. A board's
+#            rows are those carrying the `Board handed over from <task-id> at`
+#            line board-link wrote at adoption, read in full; with no such row
+#            the quiet rule alone applies. A worker-owned board, an adopted
+#            board whose task has a record or status log again, and a board
+#            registered again during the sweep are never retired; a captured
+#            round stays captured and announced until handled. Each
+#            retirement prints one `board-retired:` line, and each retirement
+#            or refused retirement is appended, timestamped, to
+#            procevent/board-retirements.log.
+#            Reconcile runs this at most once per
+#            FM_PROCEVENT_BOARD_SWEEP_SECONDS (default 3600; 0 runs it every
+#            cycle), and an unusable setting skips it.
 # sweep-home Retire a bounded snapshot of this home's registrations and owned
 #            claims, then refuse unless no registration, runner record, or owned
 #            claim remains. Used by supported Firstmate home retirement.
@@ -1754,8 +1776,181 @@ stranded_leaderless_detail() {  # <source-id>
   printf '%s' "its runner died and its polling child may still be attached to the source's session, so reconcile preserves that claim and starts no replacement, and nothing automatic will touch that group. Verify whether anything is still polling $1; once that process group is empty, the next reconcile reclaims the source on its own."
 }
 
+# A whole number of seconds from the named variable, or its default when unset
+# or empty; anything else is refused so the caller fails closed.
+board_seconds_setting() {  # <variable-name> <default> <minimum>
+  local value=${!1:-$2}
+  case "$value" in ''|*[!0-9]*) return 1 ;; esac
+  [ "${#value}" -le 9 ] && [ "$value" -ge "$3" ] || return 1
+  printf '%s\n' "$value"
+}
+
+# The newest round of one board: the time its registration or its decision
+# binding (bin/fm-captain-hold.sh `bind`, which every full bearings build
+# rewrites) was last written, or the capture time of its newest round the
+# adapter does not call silent. A silent round (a closed browser, the Lavish
+# server restarting under the listener) is not the captain coming back, so it
+# never keeps a board alive. Rounds are walked newest first and the walk stops
+# at the first one that counts or is older than what is already known.
+board_last_round() {  # <source-id> <adapter>
+  local id=$1 adapter=$2 last stamp result seq
+  last=$(fm_pr_file_mtime "$(source_file "$id")") || return 1
+  stamp=$(fm_pr_file_mtime "$STATE/decision-bindings/$id.origin") || stamp=0
+  [ "$stamp" -le "$last" ] || last=$stamp
+  while IFS=$'\t' read -r seq result; do
+    [ -n "$result" ] && [ -f "$result" ] && [ ! -L "$result" ] || continue
+    stamp=$(fm_pr_file_mtime "$result") || continue
+    [ "$stamp" -gt "$last" ] || break
+    adapter_result_is_silent "$adapter" "$result" && continue
+    last=$stamp
+    break
+  done < <(
+    for result in "$(fm_procevent_inbox_dir "$STATE")/$id".*.result; do
+      result_of_source "$result" "$id" || continue
+      seq=${result%.result}; seq=${seq##*.}
+      [[ $seq =~ ^[0-9]+$ ]] || continue
+      printf '%s\t%s\n' "$seq" "$result"
+    done | sort -rn -k1,1
+  )
+  printf '%s\n' "$last"
+}
+
+# Read, in full, which adopted boards each backlog row carries: one
+# `<state> <task-id>` line per `Board handed over from <task-id> at` line that
+# `bin/fm-captain-hold.sh board-link` wrote at adoption. `list` truncates long
+# bodies, so every row is read through `show --full`.
+board_backlog_handovers() {
+  local rows line id state body origin
+  rows=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-tasks-axi.sh" list --limit 1000000 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    case "$line" in '  '[!\ -]*) ;; *) continue ;; esac
+    line=${line#  }
+    id=${line%%,*}
+    state=${line#*,}
+    state=${state%%,*}
+    body=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-tasks-axi.sh" show "$id" --full 2>/dev/null) || return 1
+    while IFS= read -r origin; do
+      origin=${origin#Board handed over from }
+      origin=${origin% at }
+      [ -n "$origin" ] && printf '%s %s\n' "$state" "$origin"
+    done < <(printf '%s\n' "$body" | grep -o 'Board handed over from [A-Za-z0-9._-]* at ' || true)
+  done <<EOF
+$rows
+EOF
+}
+
+# Positive evidence that an adopted board's backlog rows have all closed: at
+# least one row carries its handover line and none of those rows is still
+# open. No such row at all is no evidence, so the board is then left to the
+# quiet rule rather than retired on an unreadable or pruned backlog.
+board_rows_closed() {  # <adopted-from-task-id> <board_backlog_handovers output>
+  local state origin found=0
+  while read -r state origin; do
+    [ "$origin" = "$1" ] || continue
+    found=1
+    [ "$state" = "done" ] || return 1
+  done <<EOF
+$2
+EOF
+  [ "$found" -eq 1 ]
+}
+
+board_retire_log() {  # <line>
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$REG/board-retirements.log" 2>/dev/null || true
+}
+
+cmd_retire_quiet_boards() {
+  local quiet now rec id adapter adopted task_state task_path last reason identity
+  local backlog='' backlog_state=pending days log_line
+  [ "$#" -eq 0 ] || usage
+  quiet=$(board_seconds_setting FM_PROCEVENT_BOARD_QUIET_SECONDS 1209600 1) \
+    || die "FM_PROCEVENT_BOARD_QUIET_SECONDS must be whole seconds of at least 1"
+  [ -d "$REG" ] || return 0
+  now=$(date +%s)
+  for rec in "$REG"/*.source; do
+    [ -f "$rec" ] && [ ! -L "$rec" ] || continue
+    id=${rec##*/}; id=${id%.source}
+    fm_procevent_source_id_valid "$id" || continue
+    identity=$(fm_pr_file_identity "$rec" 2>/dev/null) || continue
+    adapter=$(read_adapter "$id" 2>/dev/null) || continue
+    [ "$adapter" = lavish ] || continue
+    # A worker-owned board is hosted by its task; teardown retires it.
+    [ "$(source_kind "$id" 2>/dev/null || true)" != task-owned ] || continue
+    # Only a built-in registration with a stored listener is a board here.
+    read_argv "$id" || continue
+    adopted=$(source_field "$id" adopted_from 2>/dev/null || true)
+    # A task that took the board back, or is being relaunched (its status log
+    # survives a relaunch), hosts it again.
+    if [ -n "$adopted" ]; then
+      task_state=0
+      for task_path in "$STATE/$adopted.meta" "$STATE/$adopted.status"; do
+        if [ -e "$task_path" ] || [ -L "$task_path" ]; then task_state=1; fi
+      done
+      [ "$task_state" -eq 0 ] || continue
+    fi
+    reason=
+    if [ -n "$adopted" ]; then
+      if [ "$backlog_state" = pending ]; then
+        if backlog=$(board_backlog_handovers); then
+          backlog_state=loaded
+        else
+          backlog_state=unreadable
+        fi
+      fi
+      if [ "$backlog_state" = loaded ] && board_rows_closed "$adopted" "$backlog"; then
+        reason="row-closed"
+      fi
+    fi
+    last=$(board_last_round "$id" "$adapter") || continue
+    if [ -z "$reason" ] && [ $((now - last)) -ge "$quiet" ]; then
+      reason=quiet
+    fi
+    [ -n "$reason" ] || continue
+    # The registration must still be the one read above: a board armed or
+    # handed over again during the sweep is not this one. A plain record is
+    # also retired only on an exact match; an adopted record has no exact
+    # matcher and is retired by id.
+    [ "$(fm_pr_file_identity "$(source_file "$id")" 2>/dev/null)" = "$identity" ] || continue
+    if [ -n "$adopted" ]; then
+      set -- "$id"
+    else
+      set -- "$id" --if-matches "$adapter" -- "${ARGV[@]}"
+    fi
+    if ! "$SCRIPT_DIR/fm-procevent.sh" retire "$@" >/dev/null 2>&1; then
+      board_retire_log "board-retire-failed: $id reason=$reason"
+      printf 'board-retire-failed: %s\n' "$id" >&2
+      continue
+    fi
+    days=$(( (now - last) / 86400 ))
+    log_line="board-retired: $id reason=$reason quiet_days=$days${adopted:+ adopted_from=$adopted}"
+    board_retire_log "$log_line"
+    printf '%s\n' "$log_line"
+  done
+}
+
+# Run the board sweep from reconcile at most once per
+# FM_PROCEVENT_BOARD_SWEEP_SECONDS, because it reads the backlog and asks the
+# adapter about recent rounds. The stamp is written before the sweep so a
+# failing sweep does not run on every cycle, and a stamp that cannot be written
+# does not turn the sweep off. An unusable setting skips the sweep, so nothing
+# is retired on a value nobody meant.
+board_sweep_due() {
+  local every stamp last now
+  every=$(board_seconds_setting FM_PROCEVENT_BOARD_SWEEP_SECONDS 3600 0) || return 1
+  board_seconds_setting FM_PROCEVENT_BOARD_QUIET_SECONDS 1209600 1 >/dev/null || return 1
+  stamp="$REG/.board-sweep"
+  now=$(date +%s)
+  if [ "$every" -gt 0 ] && [ -f "$stamp" ] && [ ! -L "$stamp" ]; then
+    last=$(head -1 "$stamp" 2>/dev/null)
+    case "$last" in ''|*[!0-9]*) last=0 ;; esac
+    [ $((now - last)) -ge "$every" ] || [ "$last" -gt "$now" ] || return 1
+  fi
+  printf '%s\n' "$now" > "$stamp" 2>/dev/null || true
+}
+
 cmd_reconcile() {
   local rec id published started=0 stopped=0 uncertain=0 failed=0 claim owner pid token identity claim_state stop_state task_pending
+  local board_line
   local launch_identity launch_stamp launch_mark unconfirmed entry
   local -a launched=()
   # Rejected before anything is launched, and by name. A window this command
@@ -1765,6 +1960,15 @@ cmd_reconcile() {
     || die "FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS must be whole seconds from $FM_PROCEVENT_LAUNCH_CONFIRM_MIN_SECONDS to $FM_PROCEVENT_LAUNCH_CONFIRM_MAX_SECONDS"
   owner_lease_refresh
   published=$(publish_pending)
+
+  # Retire firstmate's quiet or concluded boards before anything is relaunched.
+  if [ -d "$REG" ] && board_sweep_due; then
+    while IFS= read -r board_line; do
+      case "$board_line" in
+        'board-retired: '*) printf '%s\n' "$board_line"; stopped=$((stopped + 1)) ;;
+      esac
+    done < <(cmd_retire_quiet_boards 2>/dev/null)
+  fi
 
   # Stop a runner this home owns whose source is no longer registered. Without
   # this, unregistering a source that never completes leaves its child blocked
@@ -2983,6 +3187,7 @@ case "${1-}" in
   retire)             shift; cmd_retire "$@" ;;
   retire-task)        shift; cmd_retire_task "$@" ;;
   adopt-task)         shift; cmd_adopt_task "$@" ;;
+  retire-quiet-boards) shift; cmd_retire_quiet_boards "$@" ;;
   sweep-home)         shift; cmd_sweep_home "$@" ;;
   binding-retirement-preflight) shift; cmd_binding_retirement_preflight "$@" ;;
   extension-retirement) shift; cmd_extension_retirement "$@" ;;

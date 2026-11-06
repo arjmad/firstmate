@@ -140,6 +140,7 @@ The crew-hosted recovery ordering and arm-and-acknowledge rule are owned by the 
   Teardown retires a task's own boards; a `kept: <source-id> <sequence>` line in its output is a round the task left unread, which then reaches you as an ordinary process-event wake: read it and acknowledge it with `handled`, which retires the board at once for a final round and through the next reconcile otherwise.
   An ordinary ended review needs no cleanup from you and produces no further wake.
   Retire any other finished source with the adapter's `retire`, which stays safe and idempotent even for one that already retired.
+  A board you own or adopted is retired on its own after 14 days with no round, or once every backlog row carrying an adopted board has closed; the [operating contract](../../../docs/configuration.md#process-to-event-sources-stateprocevent) owns that rule, and arming the board again is how you keep listening past it.
   Retirement stops future completions; it is independent of acknowledging a result already captured, which only `handled` does.
 
 `process-event source stranded` or `process-event source failed to start` (queue keys `procevent:<source-id>:stranded:<claim-token>` and `procevent:<source-id>:launch-failed:<registration-identity>-<episode-nonce>`)
