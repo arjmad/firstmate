@@ -3127,6 +3127,31 @@ test_handover_leaves_the_watcher_for_the_next_park() {
   pass "host: SIGUSR1 hands the running cycle to the next park, which takes it over"
 }
 
+test_handover_during_an_engine_turn_waits_for_the_turn() {
+  local home host
+  home=$(make_home question-handover-mid-turn attended)
+  echo held > "$home/stub-mode"
+  mkfifo "$home/stub-release"
+  FM_SUPERVISION_HOST_ARM_OWN_GROUP=1 start_host "$home"
+  wait_until 150 watcher_live "$home" || fail "mid-turn handover: the host never started a watcher cycle"
+  append_status "$home" 'step one'
+  wait_until 250 test -s "$home/stub-ready" || fail "mid-turn handover: the engine did not reach its hold"
+  host=$(awk -F '\t' '$1 == "host" { print $2; exit }' "$home/state/.supervision-host")
+  kill -USR1 "$host"
+  sleep 1
+  [ ! -s "$home/host.rc" ] || fail "mid-turn handover: the host left its park while the engine turn ran: $(cat "$home/host.out")"
+  assert_no_re '	failed	' "$home/state/.supervision-host.log" "mid-turn handover: a still-running engine turn was recorded as failed"
+  printf 'continue\n' > "$home/stub-release"
+  wait_until 250 host_exited "$home" || fail "mid-turn handover: the host did not hand over after the turn: $(cat "$home/state/.supervision-host.log")"
+  assert_re '	handled	turn=[^	]*	posture=attended	rc=0	reports=1	' "$home/state/.supervision-host.log" \
+    "mid-turn handover: the engine turn the signal interrupted was not recorded as handled"
+  assert_no_re '	failed	' "$home/state/.supervision-host.log" "mid-turn handover: the interrupted turn was recorded as failed"
+  expect_code 0 "$(cat "$home/host.rc")" "a hand-over after the turn exits 0"
+  assert_grep 'supervision-host stood down: handed over the watcher cycle to the next park' "$home/host.out" \
+    "mid-turn handover: the host must hand over once the turn ends, not give the wake to main"
+  pass "host: SIGUSR1 during an engine turn waits for the turn, records it handled, then hands over"
+}
+
 # One Claude session that asks a question: the keeper runs as the session's
 # asyncRewake PreToolUse hook. With "parked" the session first parks a host as
 # its previous turn's Stop hook would have.
@@ -3322,6 +3347,7 @@ test_host_outside_the_lock_owner_stands_down
 test_superseded_host_leaves_the_owner_untouched
 test_open_question_holds_main_closes_and_keeps_handling_wakes
 test_handover_leaves_the_watcher_for_the_next_park
+test_handover_during_an_engine_turn_waits_for_the_turn
 test_keeper_handles_wakes_while_the_question_is_open
 test_keeper_uses_the_park_already_running
 test_keeper_without_a_held_close_exits_silently_and_inert_when_absent
