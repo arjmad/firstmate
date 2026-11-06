@@ -2048,10 +2048,12 @@ spawn_herdr_project_task() {
     return 0
   fi
   HERDR_PROJECTION_ID=$(fm_backend_herdr_projection_journal_create "$STATE" "$ID") || exit 1
-  HERDR_PROJECTION_JOURNAL_SESSION=$session
   HERDR_PROJECTION_LABEL=$(fm_backend_herdr_projection_workspace_label "$ID" "$HERDR_PROJECTION_ID")
+  # Armed only once the create call has returned, so a spawn killed while the
+  # create is in flight keeps the journal a late-landing workspace needs.
   if ! HERDR_SESSION="$session" FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_create_task \
     "$cwd" "$HERDR_PROJECTION_LABEL" "$W"; then
+    HERDR_PROJECTION_JOURNAL_SESSION=$session
     if [ "${FM_BACKEND_HERDR_PROJECTION_CLEANUP_SAFE:-0}" = 1 ]; then
       HERDR_PROJECTION_ABORT_CLEANUP=1
       HERDR_PROJECTION_ABORT_SESSION=$FM_BACKEND_HERDR_PROJECTION_SESSION
@@ -2060,6 +2062,7 @@ spawn_herdr_project_task() {
     fi
     exit 1
   fi
+  HERDR_PROJECTION_JOURNAL_SESSION=$session
   HERDR_PROJECTED=1
   HERDR_SES=$FM_BACKEND_HERDR_PROJECTION_SESSION
   HERDR_WORKSPACE_ID=$FM_BACKEND_HERDR_PROJECTION_WORKSPACE_ID

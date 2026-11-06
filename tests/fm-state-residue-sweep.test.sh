@@ -523,6 +523,35 @@ test_task_set_acquire_waits_out_only_the_sweep() {
   wait "$holder" 2>/dev/null
   [ "$rc" -ne 0 ] || fail "a spawn's task-set acquire must refuse another spawn's hold"
   [ "$SECONDS" -lt 5 ] || fail "a spawn's task-set acquire must refuse another spawn's hold without waiting"
+
+  # A spawn that takes the lock during the wait is refused as soon as its role
+  # says so, not after the full wait.
+  rm -f "$ready"
+  (
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-wake-lib.sh"
+    fm_lock_try_acquire "$lock" || exit 1
+    fm_lock_set_role "$lock" residue-sweep || exit 1
+    : > "$ready"
+    sleep 1
+    fm_lock_set_role "$lock" task-spawn || exit 1
+    sleep 20
+    fm_lock_release "$lock"
+  ) >/dev/null 2>&1 &
+  holder=$!
+  i=0
+  while [ ! -e "$ready" ] && [ "$i" -lt 100 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -e "$ready" ] || fail "the test could not hold the task-set lock as the residue sweep"
+  rc=0
+  SECONDS=0
+  bash -c '. "$1/bin/fm-wake-lib.sh"; fm_task_set_lock_try_acquire "$2"' _ "$ROOT" "$lock" || rc=$?
+  kill "$holder" 2>/dev/null
+  wait "$holder" 2>/dev/null
+  [ "$rc" -ne 0 ] || fail "a spawn's task-set acquire must refuse a spawn that took the lock during its wait"
+  [ "$SECONDS" -lt 10 ] || fail "a spawn's task-set acquire must refuse as soon as the holder is a spawn, not after its full wait"
   pass "task-set lock: a spawn waits out the residue sweep's hold and refuses any other"
 }
 

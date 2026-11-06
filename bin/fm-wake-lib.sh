@@ -1441,12 +1441,16 @@ fm_task_set_lock_path() {  # <state-dir>
 # forced teardown, which refuse rather than wait on each other. The one holder
 # they wait out is bin/fm-state-residue-sweep.sh (role residue-sweep), which
 # holds it for the seconds its task-keyed pass takes, so its hourly run never
-# fails a spawn; the wait is bounded and then refuses like any other holder.
+# fails a spawn. The holder's role is reread on every attempt, so a holder
+# that is anything but the sweep, including one that takes the lock during the
+# wait, is refused at once, and the wait refuses after a minute.
 fm_task_set_lock_try_acquire() {  # <lock>
-  local lock=$1
-  fm_lock_try_acquire "$lock" && return 0
-  [ "$(fm_lock_role "$lock" 2>/dev/null || true)" = residue-sweep ] || return 1
-  fm_lock_acquire_wait_max "$lock" 60
+  local lock=$1 deadline=$((SECONDS + 60))
+  while ! fm_lock_try_acquire "$lock"; do
+    [ "$(fm_lock_role "$lock" 2>/dev/null || true)" = residue-sweep ] || return 1
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep 0.1
+  done
 }
 
 # The top-most firstmate home reachable from this one on THIS machine, used as

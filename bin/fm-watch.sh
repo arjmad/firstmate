@@ -2965,10 +2965,14 @@ decision_sittings_retire_tick() {
 # and whose header owns what it retires and how it stays safe mid-session. Its
 # summary and warnings go to the triage log, never onto the wake channel.
 residue_sweep_tick() {
-  local out line
+  local out line rc=0
   out=$(fm_run_timed 60 env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
-    "$SCRIPT_DIR/fm-state-residue-sweep.sh" --heartbeat 2>&1 </dev/null) \
-    || triage_log "state residue sweep did not finish within its bound; the next heartbeat retries"
+    "$SCRIPT_DIR/fm-state-residue-sweep.sh" --heartbeat 2>&1 </dev/null) || rc=$?
+  case "$rc" in
+    0) ;;
+    124) triage_log "state residue sweep did not finish within its 60s bound; the next heartbeat retries" ;;
+    *) triage_log "state residue sweep exited with status $rc; the next heartbeat retries" ;;
+  esac
   while IFS= read -r line; do
     [ -z "$line" ] || triage_log "$line"
   done <<EOF
