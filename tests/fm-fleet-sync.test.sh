@@ -1394,13 +1394,13 @@ test_running_post_update_reports_activating() {
   run_sync "$home" fleet >/dev/null
   advance_origin "$home" fleet C1
   : > "$home/hold-fleet"
-  run_sync "$home" fleet > "$home/first-sync.out" &
+  TZ=XXX-14 run_sync "$home" fleet > "$home/first-sync.out" &
   bg=$!
   while [ "$(runs_of "$home/runs-fleet")" = 0 ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
   assert_equals 1 "$(runs_of "$home/runs-fleet")" "the first sync's activation is running"
 
   advance_origin "$home" fleet C2
-  out=$(run_sync "$home" fleet)
+  out=$(TZ=UTC0 run_sync "$home" fleet)
   assert_not_contains "$out" "STUCK" "a live activation is not STUCK"
   printf '%s\n' "$out" | grep -Eq "^fleet live $live: activating: post-update command already running \(pid [0-9]+, since [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\)" \
     || fail "a live activation reads activating (pid, since); got: $out"
@@ -1413,7 +1413,7 @@ test_running_post_update_reports_activating() {
   assert_contains "$out" "fleet live $live: post-update command ran at $(git -C "$live" rev-parse --short HEAD)" \
     "the next sync activates the commit that arrived meanwhile"
   assert_equals 2 "$(runs_of "$home/runs-fleet")" "the deferred commit ran once"
-  pass "a post-update command still running from another sync reads activating (pid, since), and the next sync runs it for the newer HEAD"
+  pass "a post-update command still running from another sync, even one in another time zone, reads activating (pid, since), and the next sync runs it for the newer HEAD"
 }
 
 test_scheduled_sync_is_a_singleton() {

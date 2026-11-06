@@ -106,8 +106,9 @@
 # turns into one "check: fleet-sync: ..." wake; $STATE/.fleet-sync-surfaced
 # holds the current STUCK episodes, each the checkout and its stuck state without
 # the "N commits behind" count, the capture suffix after it, or a post-update
-# output tail, so one episode wakes once however far upstream moves meanwhile,
-# and one that clears and returns wakes again. Every
+# output tail, so a checkout that falls further behind origin or retries its
+# capture wakes once, and one that clears and returns wakes again. A failed
+# post-update command's line names its commit, so it wakes again at a new one. Every
 # other outcome, including a "skipped: busy:" lock, stays silent for the next run.
 # --scheduled-interval prints the interval in seconds, 0 when off: the first
 # non-blank, non-# line of $FM_HOME/config/fleet-sync-interval, else
@@ -930,12 +931,13 @@ post_update_output_tail() {
 
 # post_update_still_running <running-file>: true while the process the file
 # names is alive with the start stamp it recorded, so a reused pid never
-# counts; sets RUNNING_PID and RUNNING_SINCE.
+# counts; sets RUNNING_PID and RUNNING_SINCE. The stamp is read in the C locale
+# and UTC, so syncs started under different environments agree on it.
 post_update_still_running() {
   local started
   RUNNING_PID="" RUNNING_SINCE=""
   [ -f "$1" ] && { read -r RUNNING_PID RUNNING_SINCE; read -r started; } < "$1" 2>/dev/null \
-    && [ -n "$started" ] && [ "$(ps -p "$RUNNING_PID" -o lstart= 2>/dev/null)" = "$started" ]
+    && [ -n "$started" ] && [ "$(LC_ALL=C TZ=UTC0 ps -p "$RUNNING_PID" -o lstart= 2>/dev/null)" = "$started" ]
 }
 
 # exec_recording_run <running-file> <command>: write this process's pid, start
@@ -945,7 +947,7 @@ post_update_still_running() {
 exec_recording_run() {
   # shellcheck disable=SC2016 # $$, $1 and $2 expand in the new shell
   exec bash -c '{ printf "%s %s\n" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      ps -p "$$" -o lstart=; } > "$1.tmp.$$" 2>/dev/null && mv -f "$1.tmp.$$" "$1" 2>/dev/null
+      LC_ALL=C TZ=UTC0 ps -p "$$" -o lstart=; } > "$1.tmp.$$" 2>/dev/null && mv -f "$1.tmp.$$" "$1" 2>/dev/null
     exec bash -c "$2"' fm-post-update "$1" "$2"
 }
 
