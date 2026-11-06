@@ -1804,15 +1804,19 @@ board_last_round() {  # <source-id> <adapter>
     adapter_result_is_silent "$adapter" "$result" && continue
     last=$stamp
     break
-  done < <(
-    for result in "$(fm_procevent_inbox_dir "$STATE")/$id".*.result; do
-      result_of_source "$result" "$id" || continue
-      seq=${result%.result}; seq=${seq##*.}
-      case "$seq" in ''|*[!0-9]*) continue ;; esac
-      printf '%s\t%s\n' "$seq" "$result"
-    done | sort -rn -k1,1
-  )
+  done < <(board_rounds_newest_first "$id")
   printf '%s\n' "$last"
+}
+
+# Every captured round of one board as `<sequence><TAB><result>`, newest first.
+board_rounds_newest_first() {  # <source-id>
+  local result seq
+  for result in "$(fm_procevent_inbox_dir "$STATE")/$1".*.result; do
+    result_of_source "$result" "$1" || continue
+    seq=${result%.result}; seq=${seq##*.}
+    case "$seq" in ''|*[!0-9]*) continue ;; esac
+    printf '%s\t%s\n' "$seq" "$result"
+  done | sort -rn -k1,1
 }
 
 # Read, in full, which adopted boards each backlog row carries: one
