@@ -37,7 +37,7 @@ jq -n \
 
 answer=$(cd "$LAB/work" && timeout 300 claude -p --model haiku --settings "$LAB/settings.json" \
   --allowedTools 'Bash(echo:*)' --output-format json \
-  'Run the Bash command `echo one`. Then reply with only the exact file path named by any note that appeared beside the tool result, or NONE if no note appeared. Do not read or move any file.' \
+  "Run the Bash command \`echo one\`. Then reply with only the exact file path named by any note that appeared beside the tool result, or NONE if no note appeared. Do not read or move any file." \
   2>"$LAB/claude.err" | jq -r '.result // empty') || answer=
 [ "$(cut -f2 "$LAB/state/$ID.inbox/.hook-announced" 2>/dev/null)" = 1 ] \
   || fail "Claude Code $CLAUDE_VERSION did not run the inbox hook for its bound session after a tool call: $(cat "$LAB/claude.err")"
