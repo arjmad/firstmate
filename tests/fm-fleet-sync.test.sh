@@ -1323,6 +1323,96 @@ test_scheduled_sync_queues_new_stuck_lines_once() {
   pass "the scheduled sync syncs the fleet, skips busy locks, and queues each STUCK state once"
 }
 
+test_scheduled_stuck_episode_wakes_once() {
+  local home live log pending
+  home=$(isolated_home)
+  live=$(build_capture_live "$home" nova)
+  printf '#!/usr/bin/env bash\necho "resolve by hand: skills/a.md"\nexit 1\n' > "$home/conflict-capture.sh"
+  chmod +x "$home/conflict-capture.sh"
+  printf 'live edit\n' >> "$live/skills/a.md"
+  live_config "$home" "nova $live capture=skills/:$home/conflict-capture.sh"
+  log="$home/state/.fleet-sync-scheduled.log"
+  pending="$home/state/fleet-sync-stuck"
+
+  run_scheduled "$home"
+  wait_capture_done "$(cat "$log")"
+  run_scheduled "$home"
+  assert_contains "$(cat "$pending" 2>/dev/null)" "nova live $live: STUCK: on branch main with uncommitted changes" \
+    "the episode wakes firstmate once"
+  rm -f "$pending"
+
+  advance_origin "$home" nova C1
+  run_scheduled "$home"
+  assert_contains "$(cat "$log")" "1 commits behind origin/main - needs attention; the last capture failed" \
+    "the capture retry flips the suffix"
+  wait_capture_done "$(cat "$log")"
+  advance_origin "$home" nova C2
+  run_scheduled "$home"
+  wait_capture_done "$(cat "$log")"
+  run_scheduled "$home"
+  assert_contains "$(cat "$log")" "2 commits behind origin/main - needs attention; capture already ran for these edits (exit 1" \
+    "the behind count moved"
+  [ ! -e "$pending" ] || fail "a moving behind count or capture suffix must not wake firstmate again: $(cat "$pending")"
+
+  printf '%s\n' "nova live $live: STUCK: on branch main with uncommitted changes, 9 commits behind origin/main - needs attention; capture already ran for these edits (exit 1, log x)" \
+    > "$home/state/.fleet-sync-surfaced"
+  run_scheduled "$home"
+  [ ! -e "$pending" ] || fail "a surfaced set written with whole lines still matches the episode: $(cat "$pending")"
+  pass "one STUCK episode wakes once, whatever its behind count or capture suffix"
+}
+
+# build_activation_live <home> <name>: a live checkout whose post-update command
+# holds its own one-at-a-time lock the way fleet-activate-merged does, blocking
+# while $home/hold-<name> exists, and refusing a second run with exit 1.
+build_activation_live() {
+  local home=$1 name=$2 live
+  live=$(build_live "$home" "$name")
+  cat > "$home/activate-$name.sh" <<SCRIPT
+#!/usr/bin/env bash
+lock='$home/activating-$name'
+if ! mkdir "\$lock" 2>/dev/null; then
+  echo "another activation (pid \$(cat "\$lock/pid")) is activating; the next sync tries again"
+  exit 1
+fi
+echo \$\$ > "\$lock/pid"
+echo run >> '$home/runs-$name'
+while [ -e '$home/hold-$name' ]; do sleep 0.1; done
+rm -rf "\$lock"
+SCRIPT
+  chmod +x "$home/activate-$name.sh"
+  printf '%s\n' "$live"
+}
+
+test_running_post_update_reports_activating() {
+  local home live out bg i=0
+  home=$(new_home)
+  live=$(build_activation_live "$home" fleet)
+  live_config "$home" "fleet $live $home/activate-fleet.sh"
+  run_sync "$home" fleet >/dev/null
+  advance_origin "$home" fleet C1
+  : > "$home/hold-fleet"
+  run_sync "$home" fleet > "$home/first-sync.out" &
+  bg=$!
+  while [ "$(runs_of "$home/runs-fleet")" = 0 ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  assert_equals 1 "$(runs_of "$home/runs-fleet")" "the first sync's activation is running"
+
+  advance_origin "$home" fleet C2
+  out=$(run_sync "$home" fleet)
+  assert_not_contains "$out" "STUCK" "a live activation is not STUCK"
+  printf '%s\n' "$out" | grep -Eq "^fleet live $live: activating: post-update command already running \(pid [0-9]+, since [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\)" \
+    || fail "a live activation reads activating (pid, since); got: $out"
+  assert_equals 1 "$(runs_of "$home/runs-fleet")" "no second activation starts under the live one"
+
+  rm -f "$home/hold-fleet"
+  wait "$bg"
+  assert_contains "$(cat "$home/first-sync.out")" "fleet live $live: post-update command ran" "the first activation finishes"
+  out=$(run_sync "$home" fleet)
+  assert_contains "$out" "fleet live $live: post-update command ran at $(git -C "$live" rev-parse --short HEAD)" \
+    "the next sync activates the commit that arrived meanwhile"
+  assert_equals 2 "$(runs_of "$home/runs-fleet")" "the deferred commit ran once"
+  pass "a post-update command still running from another sync reads activating (pid, since), and the next sync runs it for the newer HEAD"
+}
+
 test_scheduled_sync_is_a_singleton() {
   local home clone holder before
   home=$(isolated_home)
@@ -1391,4 +1481,6 @@ test_settle_capture_failure_is_stuck
 test_scheduled_interval_is_home_configurable
 test_scheduled_sync_queues_new_stuck_lines_once
 test_scheduled_sync_is_a_singleton
+test_scheduled_stuck_episode_wakes_once
+test_running_post_update_reports_activating
 test_prune_requires_landed_proof
