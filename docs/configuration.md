@@ -613,6 +613,7 @@ The single-project form syncs only that project's entries, and the whole-fleet f
 A live checkout gets the same never-forced guards as a clone: anything dirty, ahead, diverged, or off its default branch is left untouched and reported `STUCK:`, except the `capture=` cases below.
 A held `lock=` path defers the checkout, after a short bounded wait in the single-project form and without waiting in the whole-fleet form.
 The post-update command runs once for each new HEAD and is retried on the next sync after a failure, whose `STUCK:` line ends with the command's last few output lines.
+A sync that finds the command still running from another sync starts no second run and reports `activating:` with that run's pid and start time instead of `STUCK:`.
 A `capture=` entry is for a checkout edited in place, such as a writable skills tree that a capture job turns into a PR: when only uncommitted edits under that directory hold the checkout, the sync starts the capture command detached once per edit state and reports `capturing:` instead of `STUCK:`, and defers the checkout while that capture runs.
 Once the capture has succeeded, edits it did not clear on a checkout already at its origin default branch read `live edits pending capture:`, which wakes no one because they block no fast-forward, while the same edits on a checkout behind or ahead of origin, or a failed capture, report `STUCK:`.
 A `capture=` entry also makes its project a capture project for `bin/fm-capture-land.sh <pr-url>`, which lands that project's `<project>/skill-capture` pull request through `bin/fm-pr-merge.sh`, then runs the capture command's `--settle` in the checkout and fast-forwards it with `fm-fleet-sync.sh --settle-capture <project>`; its header owns the refusals and the task record it keeps.
@@ -626,7 +627,7 @@ The list names host paths and is not inherited by secondmate homes.
 
 The watcher runs one whole-fleet `bin/fm-fleet-sync.sh` every 30 minutes by default, so a merge made outside firstmate - on the forge, or by another harness - still reaches project clones and live checkouts the same day.
 It runs detached from the watcher's poll loop and adds no scheduled service of its own.
-Only a `STUCK:` line wakes firstmate, as one `check: fleet-sync:` wake, and an unchanged stuck state wakes once rather than on every run; a `skipped: busy:` live checkout is silently retried next time.
+Only a `STUCK:` line wakes firstmate, as one `check: fleet-sync:` wake, and one stuck episode, a checkout in one stuck state, wakes once rather than on every run, even as its count of commits behind origin changes; a `skipped: busy:` live checkout is silently retried next time.
 The optional local, gitignored `config/fleet-sync-interval` file sets the interval in seconds, with a 300-second floor, or turns the schedule off with `off`.
 With the file absent, `FM_FLEET_SYNC_INTERVAL` or the 1800-second default applies, and a change takes effect when the watcher next starts.
 The file is a home-local preference and is not inherited by secondmate homes.
