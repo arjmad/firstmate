@@ -143,7 +143,7 @@ Run `build` once after composing the payload.
 Its serve-first sequence publishes the board, establishes and verifies its Lavish session with `lavish-axi`, reopens an ended session when necessary, and only then binds the answer source and proves a live polling listener; use the session URL it prints in the chat digest, which `bin/fm-lavish-url.sh` has already put in its phone-openable https form; pass any other Lavish session URL through that script before giving it to the captain.
 Never bind or arm the board before its session is listed open.
 Never run `lavish-axi poll` for the board yourself: the armed source's supervised runner owns the blocking poll, and both the build and the watcher's ordinary reconcile repair a missing listener, so no conversational turn ever blocks on the board.
-After 14 days with no round, reconcile retires the board's listener like any other quiet board, and the next build arms it again.
+Every full build counts as a round, so reconcile retires the board's listener only after 14 days with neither a full build nor an answer, and the next build arms it again.
 
 ### Handling a board wake
 

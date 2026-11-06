@@ -93,6 +93,12 @@ test_quiet_rule_and_kept_boards() {
 owner_task=worker-a'
   board "$home" lavish-rehosted "$OLD" 'adopted_from=scout-live'
   printf 'window=x\n' > "$home/state/scout-live.meta"
+  board "$home" lavish-relaunching "$OLD" 'adopted_from=scout-relaunching'
+  printf 'working [at=1]: relaunched\n' > "$home/state/scout-relaunching.status"
+  board "$home" lavish-rebuilt "$OLD"
+  mkdir -p "$home/state/decision-bindings"
+  printf 'schema=fm-decision-binding.v1\norigin=(any)\n' > "$home/state/decision-bindings/lavish-rebuilt.origin"
+  fm_touch_epoch "$RECENT" "$home/state/decision-bindings/lavish-rebuilt.origin"
 
   out=$(pe "$home" retire-quiet-boards) || fail "retire-quiet-boards failed: $out"
 
@@ -107,6 +113,8 @@ owner_task=worker-a'
     || fail "retiring a board touched its unread round"
   registered "$home" lavish-worker || fail "a worker-owned board was retired"
   registered "$home" lavish-rehosted || fail "an adopted board whose task is live again was retired"
+  registered "$home" lavish-relaunching || fail "an adopted board whose task is being relaunched was retired"
+  registered "$home" lavish-rebuilt || fail "a board whose binding was written again two days ago was retired"
   assert_grep "board-retired: lavish-quiet reason=quiet" "$home/state/procevent/board-retirements.log" "the durable retirement log"
   [ "$(printf '%s\n' "$out" | grep -c '^board-retired: ')" = 3 ] || fail "expected exactly three retirements, got: $out"
 
@@ -116,7 +124,7 @@ owner_task=worker-a'
   rc=0
   FM_PROCEVENT_BOARD_QUIET_SECONDS=2w pe "$home" retire-quiet-boards >/dev/null 2>&1 || rc=$?
   expect_code 1 "$rc" "an unusable quiet setting"
-  pass "quiet boards retire keeping their unread rounds, and hosted, answered, or worker-owned boards stay"
+  pass "quiet boards retire keeping their unread rounds, and hosted, rebuilt, answered, or worker-owned boards stay"
 }
 
 test_adopted_board_retires_when_its_rows_close() {
@@ -131,6 +139,11 @@ Board handed over from scout-a at 2026-11-01T00:00:00Z."
   axi "$home" add call-b1 "open call" --body "Board handed over from scout-b at 2026-11-01T00:00:00Z."
   board "$home" lavish-prefix "$RECENT" 'adopted_from=scout'
   board "$home" lavish-unlinked "$RECENT" 'adopted_from=scout-c'
+  board "$home" lavish-long "$RECENT" 'adopted_from=scout-d'
+  axi "$home" add call-d1 "closed call" --body "Board handed over from scout-d at 2026-11-01T00:00:00Z."
+  axi "$home" "done" call-d1
+  axi "$home" add call-d2 "long open call" --body "$(printf 'context %.0s' $(seq 1 120))
+Board handed over from scout-d at 2026-11-01T00:00:00Z."
 
   out=$(pe "$home" retire-quiet-boards) || fail "retire-quiet-boards failed: $out"
   registered "$home" lavish-closed || fail "an adopted board with open rows was retired"
@@ -146,6 +159,7 @@ Board handed over from scout-a at 2026-11-01T00:00:00Z."
   registered "$home" lavish-open || fail "an adopted board with an open row was retired"
   registered "$home" lavish-prefix || fail "a task id that prefixes another task's id matched its rows"
   registered "$home" lavish-unlinked || fail "an adopted board with no linked row was retired before its quiet period"
+  registered "$home" lavish-long || fail "an open row whose long body hides its handover line from list was missed"
   pass "an adopted board retires once every backlog row carrying it has closed"
 }
 

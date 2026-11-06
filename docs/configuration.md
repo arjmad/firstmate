@@ -2316,11 +2316,11 @@ When a scout whose attested captain-call inventory is non-empty is torn down, `b
 
 A board firstmate owns or adopted is not listened to forever: `bin/fm-procevent.sh retire-quiet-boards` retires it after `FM_PROCEVENT_BOARD_QUIET_SECONDS` (default 1209600, 14 days) with no round, and retires an adopted board as soon as every backlog row carrying its adoption is closed.
 
-- A round is the board's registration or a captured result its adapter does not call silent, so a closed browser or a Lavish server restart never keeps a board alive.
+- A round is the board's registration, its decision binding being written again (every full bearings board build does this), or a captured result its adapter does not call silent, so a closed browser or a Lavish server restart never keeps a board alive.
 - An adopted board's rows are the ones carrying the `Board handed over from <task-id> at` line that `board-link` wrote at adoption; with no such row, only the quiet rule applies, so an unreadable or pruned backlog never retires a board early.
-- A worker-owned board and an adopted board whose task has a record again are never retired, and retiring a board never touches its captured rounds, which stay announced until handled.
-- Retirement is the ordinary `retire` path, which stops the listener and drops the board's decision binding, so a very late answer on a retired board no longer arrives; arming the board again restores it, and the bearings board build arms its own board again on its next refresh.
-- Each retirement prints one `board-retired:` line naming the source, the reason, and the quiet days, and appends it with a UTC timestamp to `state/procevent/board-retirements.log`.
+- A worker-owned board, an adopted board whose task has a record or status log again, and a board registered again during the sweep are never retired, and retiring a board never touches its captured rounds, which stay announced until handled.
+- Retirement is the ordinary `retire` path, which stops the listener and drops the board's decision binding, so a very late answer on a retired board no longer arrives; arming the board again restores it, and the bearings board build arms its own board again on its next full build.
+- Each retirement prints one `board-retired:` line naming the source, the reason, and the quiet days, and each retirement or refused retirement is appended with a UTC timestamp to `state/procevent/board-retirements.log`.
 - `reconcile` runs the sweep at most once per `FM_PROCEVENT_BOARD_SWEEP_SECONDS` (default 3600; 0 runs it every cycle) and counts each retirement as `stopped`; an unusable value of either setting skips the sweep.
 
 **Register deterministic condition and action watches**
