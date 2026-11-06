@@ -414,7 +414,8 @@ family_for_basename() {
       ;;
     fm-check-unregister.test.sh|fm-code-review.test.sh|fm-pipeline-spend.test.sh|fm-pr-check-security.test.sh|\
     fm-pr-merge.test.sh|fm-pr-reviewers.test.sh|fm-pr-state.test.sh|\
-    fm-review-diff.test.sh|fm-teardown.test.sh|fm-claude-rc-archive.test.sh|fm-x-mode.test.sh)
+    fm-review-diff.test.sh|fm-teardown.test.sh|fm-claude-rc-archive.test.sh|fm-x-mode.test.sh|\
+    fm-data-scratch-prune.test.sh)
       printf '%s\n' pr-forge
       ;;
     fm-afk-contract.test.sh|fm-afk-inject-e2e.test.sh|fm-afk-return.test.sh|\
@@ -770,6 +771,7 @@ tests/fm-cursor-primary-live-e2e.test.sh 82
 tests/fm-cursor-primary.test.sh 77285
 tests/fm-daemon.test.sh 55455
 tests/fm-data-media-prune.test.sh 5382
+tests/fm-data-scratch-prune.test.sh 600
 tests/fm-devin-harness.test.sh 4401
 tests/fm-devin-signals-live-e2e.test.sh 122
 tests/fm-dispatch-resolve.test.sh 12665
@@ -1702,6 +1704,11 @@ families_for_changed_path() {
       ;;
     bin/fm-pr-*|bin/fm-merge-local.sh|bin/fm-teardown.sh|bin/fm-review-diff.sh|\
     bin/fm-x-*|bin/fm-check*|bin/fm-pipeline-spend.sh)
+      printf '%s\n' pr-forge
+      ;;
+    bin/fm-data-scratch-prune.sh)
+      # Teardown's data scratch prune; its own suite and fm-teardown.test.sh
+      # drive it (pr-forge).
       printf '%s\n' pr-forge
       ;;
     bin/fm-claude-rc-archive.sh)

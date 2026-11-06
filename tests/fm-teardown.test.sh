@@ -2081,6 +2081,37 @@ test_scout_teardown_prints_what_it_noticed() {
   pass "scout teardown prints the one noticed and one idea line the task left"
 }
 
+# A finished task's reproducible scratch leaves data/<id>/ at teardown, while a
+# checkout holding unlanded work, and the report, stay.
+test_teardown_deletes_task_data_scratch() {
+  local case_dir rc d
+  case_dir=$(make_case scratch-prune)
+  write_meta "$case_dir" no-mistakes scout
+  prepare_scout_teardown "$case_dir"
+  d="$case_dir/data/task-x1"
+  seed_nested_clone_and_scratch "$case_dir" "$d"
+  git clone -q "$case_dir/nested-src" "$d/unlanded"
+  printf 'more\n' >> "$d/unlanded/payload.txt"
+  git -C "$d/unlanded" -c user.email=t@t -c user.name=t commit -q -am unlanded
+  mkdir -p "$d/node_modules/dep"
+  printf 'x\n' > "$d/node_modules/dep/index.js"
+  printf '\177ELFpayload' > "$d/tool"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "scratch-prune: teardown failed: $(cat "$case_dir/stderr")"
+  assert_absent "$d/scratch-clone" "scratch-prune: the clean pushed clone survived"
+  assert_absent "$d/node_modules" "scratch-prune: node_modules survived"
+  assert_absent "$d/tool" "scratch-prune: the tool binary survived"
+  assert_present "$d/unlanded/payload.txt" "scratch-prune: the checkout with unlanded work was removed"
+  assert_present "$d/report.md" "scratch-prune: the report was removed"
+  assert_present "$d/scratch.txt" "scratch-prune: a text file was removed"
+  assert_grep "data-scratch: kept checkout task-x1/unlanded: commits no remote-tracking branch holds" \
+    "$case_dir/stdout" "scratch-prune: teardown did not name the kept checkout"
+  assert_grep "data-scratch: removed 3 items (" "$case_dir/stdout" "scratch-prune: teardown did not summarize"
+  pass "teardown deletes the task's clean clones, node_modules, and binaries and names a kept checkout"
+}
+
 test_gh_error_and_content_absent_refuses() {
   local case_dir rc
   case_dir=$(make_case gh-error)
@@ -5976,6 +6007,7 @@ test_forced_secondmate_dirty_child_return_warns_and_completes
 test_return_that_removes_copy_warns_cannot_verify
 test_scout_ignored_files_survive_scratch_clean
 test_scout_teardown_prints_what_it_noticed
+test_teardown_deletes_task_data_scratch
 test_gh_error_and_content_absent_refuses
 test_legacy_record_without_the_flag_refuses
 test_windowless_legacy_record_with_gone_worktree_tears_down
