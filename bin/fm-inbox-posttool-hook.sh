@@ -33,18 +33,19 @@
 #
 # Prints nothing and exits 0 when there is nothing new, the hook is refused, or
 # jq is missing; a failure never prints partial output. Exit codes: 0 always
-# except 2 usage. The hook command line also appends `|| true`, and PostToolUse
-# cannot block a call in any case.
+# except 2 usage; --help prints the usage line and exits 0. The hook command
+# line also appends `|| true`, and PostToolUse cannot block a call in any case.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-usage() {
-  echo "usage: fm-inbox-posttool-hook.sh <state-dir> <id> --gen G" >&2
-  exit 2
+usage() {  # [exit-code]
+  echo "usage: fm-inbox-posttool-hook.sh <state-dir> <id> --gen G"
+  exit "${1:-2}"
 }
 
-[ "$#" -eq 4 ] && [ "$3" = --gen ] || usage
+case "${1:-}" in -h|--help) usage 0 ;; esac
+[ "$#" -eq 4 ] && [ "$3" = --gen ] || usage 2 >&2
 STATE=$1
 ID=$2
 GEN=$4
