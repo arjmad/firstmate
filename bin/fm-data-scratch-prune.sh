@@ -15,7 +15,7 @@
 #
 # Output, one line per item, paths relative to the parent of <task-data-dir>:
 #   data-scratch: removed checkout|node_modules|binary <task>/<path> (<KiB> KiB)
-#   data-scratch: kept checkout <task>/<path>: <why>
+#   data-scratch: kept checkout|node_modules <task>/<path>: <why>
 # then, when anything was (or would be) removed,
 #   data-scratch: removed <n> items (<MiB> MiB) from <task>/
 # A problem is a `warning:` on stderr. A missing folder prints nothing; an
@@ -31,8 +31,9 @@
 #   - `git status --porcelain --untracked-files=all` succeeds and is empty,
 #     except for a nested checkout this run removes;
 #   - it holds no stash;
-#   - HEAD and every local branch are reachable from a remote-tracking branch
-#     (`git rev-list HEAD --branches --not --remotes` succeeds and is empty), so
+#   - HEAD, every local branch, and every tag are reachable from a
+#     remote-tracking branch
+#     (`git rev-list HEAD --branches --tags --not --remotes` succeeds and is empty), so
 #     a checkout with no remote, no commit, or a history git cannot read stays;
 #   - git resolves it as its own top level, so a broken .git never lets git
 #     answer for an enclosing repository;
@@ -44,7 +45,8 @@
 # removed checkout, as they are not work git would land.
 #
 # What else is removed, outside every checkout:
-#   - every directory named node_modules (not a symlink), whole;
+#   - every directory named node_modules (not a symlink), whole, unless it
+#     holds a kept checkout, which keeps it and is named;
 #   - every regular file (not a symlink) whose first bytes are an ELF or Mach-O
 #     header: the downloaded tool binaries.
 # Text, images, PDFs, archives, and exports are never removed here; the
@@ -158,7 +160,7 @@ EOF
     echo "a stash"
     return
   fi
-  unpushed=$(git -C "$root" rev-list -n 1 HEAD --branches --not --remotes 2>/dev/null) || { echo "git cannot read its commits"; return; }
+  unpushed=$(git -C "$root" rev-list -n 1 HEAD --branches --tags --not --remotes 2>/dev/null) || { echo "git cannot read its commits"; return; }
   [ -z "$unpushed" ] || echo "commits no remote-tracking branch holds"
 }
 
@@ -175,17 +177,22 @@ while IFS= read -r root; do
   fi
 done < "$WORK/roots"
 
-# inside_checkout: filter stdin paths, dropping any inside a checkout root
-# (kept ones are untouchable; removed ones are already gone or, dry, counted).
+# inside_checkout: filter stdin paths, dropping any that is or is inside a
+# checkout root (kept ones are untouchable; removed ones are already gone or,
+# dry, counted).
 inside_checkout() {
   awk 'FILENAME == ARGV[1] { roots[++n] = $0 "/"; next }
-    { for (i = 1; i <= n; i++) if (index($0, roots[i]) == 1) next; print }' "$WORK/roots" -
+    { for (i = 1; i <= n; i++) if (index($0 "/", roots[i]) == 1) next; print }' "$WORK/roots" -
 }
 
 find "$DIR" -name .git -prune -o -type d -name node_modules -prune -print 2>/dev/null \
   | inside_checkout > "$WORK/node-modules"
 while IFS= read -r nm; do
   [ -d "$nm" ] && [ ! -L "$nm" ] || continue
+  if awk -v n="$nm/" 'index($0, n) == 1 { found = 1 } END { exit !found }' "$WORK/kept"; then
+    printf 'data-scratch: kept node_modules %s/%s: it holds a kept checkout\n' "$TASK" "${nm#"$DIR"/}"
+    continue
+  fi
   remove node_modules "$nm" || true
 done < "$WORK/node-modules"
 

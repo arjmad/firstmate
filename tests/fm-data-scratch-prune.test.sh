@@ -63,6 +63,20 @@ make_task() {
   printf 'stash me\n' >> "$d/clones/stashed/README.md"
   git -C "$d/clones/stashed" stash -q
   fm_git_init_commit "$d/clones/no-remote"
+  # Work reachable only from a local tag.
+  clone "$ORIGIN" "$d/clones/tagged"
+  printf 'tagged\n' >> "$d/clones/tagged/README.md"
+  git -C "$d/clones/tagged" commit -qam tagged
+  git -C "$d/clones/tagged" tag keep-me
+  git -C "$d/clones/tagged" reset -q --hard origin/main
+  # A git dependency with unlanded work inside node_modules keeps the folder,
+  # and so does a node_modules that is itself a dirty checkout.
+  clone "$ORIGIN" "$d/gitdep/node_modules/dep"
+  printf 'more\n' >> "$d/gitdep/node_modules/dep/README.md"
+  git -C "$d/gitdep/node_modules/dep" commit -qam unpushed
+  put "$d/gitdep/node_modules/other/index.js"
+  clone "$ORIGIN" "$d/vendored/node_modules"
+  printf 'edit\n' >> "$d/vendored/node_modules/README.md"
 
   # A clean outer clone holding a clean inner clone: both go.
   clone "$ORIGIN" "$d/nest/outer"
@@ -109,7 +123,8 @@ GONE="clones/clean nest/outer web/node_modules tools/shellcheck tools/claude-dar
 KEPT="brief.md report.md notes.md shot.png answers.json web/package.json
 clones/dirty/README.md clones/dirty/node_modules/dep/index.js clones/dirty/bin/tool
 clones/untracked/new-file.txt clones/unpushed/README.md clones/stashed/README.md
-clones/no-remote/README.md held/outer/README.md held/outer/inner/README.md
+clones/no-remote/README.md clones/tagged/README.md gitdep/node_modules/dep/README.md
+gitdep/node_modules/other/index.js vendored/node_modules/README.md held/outer/README.md held/outer/inner/README.md
 linked/main/README.md linked/side/README.md shared/lender/README.md
 shared/borrower/README.md broken/unique.txt linked-modules aliased/node_modules tools/gbrain"
 
@@ -145,6 +160,11 @@ test_real_run_removes_only_reproducible_scratch() {
   assert_contains "$out" "data-scratch: kept checkout real/clones/unpushed: commits no remote-tracking branch holds" "unpushed reason"
   assert_contains "$out" "data-scratch: kept checkout real/clones/stashed: a stash" "stash reason"
   assert_contains "$out" "data-scratch: kept checkout real/clones/no-remote: commits no remote-tracking branch holds" "no-remote reason"
+  assert_contains "$out" "data-scratch: kept checkout real/clones/tagged: commits no remote-tracking branch holds" "tagged reason"
+  assert_contains "$out" "data-scratch: kept checkout real/gitdep/node_modules/dep: commits no remote-tracking branch holds" "git dependency reason"
+  assert_contains "$out" "data-scratch: kept node_modules real/gitdep/node_modules: it holds a kept checkout" "node_modules holding work"
+  assert_contains "$out" "data-scratch: kept checkout real/vendored/node_modules: uncommitted changes" "node_modules checkout reason"
+  assert_not_contains "$out" "removed node_modules real/vendored/node_modules" "a node_modules checkout is not removed as node_modules"
   assert_contains "$out" "data-scratch: kept checkout real/held/outer/inner: commits no remote-tracking branch holds" "held inner reason"
   assert_contains "$out" "data-scratch: kept checkout real/held/outer: it holds a kept checkout" "held outer reason"
   assert_contains "$out" "data-scratch: kept checkout real/linked/main: it has linked worktrees" "linked main reason"
