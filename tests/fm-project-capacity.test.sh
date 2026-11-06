@@ -122,8 +122,15 @@ case "${1:-}" in
 esac
 exit 0
 SH
+  # A pool status read is not a change to the pool, so it is logged apart from
+  # the calls a deferred spawn must never make.
   cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
+if [ "${1:-}" = status ]; then
+  printf 'treehouse %s\n' "$*" >> "$FM_FAKE_CALL_LOG.status"
+  [ -z "${FM_FAKE_TREEHOUSE_STATUS:-}" ] || cat "$FM_FAKE_TREEHOUSE_STATUS"
+  exit 0
+fi
 printf 'treehouse %s\n' "$*" >> "$FM_FAKE_CALL_LOG"
 exit 0
 SH
@@ -649,6 +656,100 @@ SH
   pass "an Orca spawn takes the shared project lock whenever a same-origin clone is capped and defers before creating anything"
 }
 
+# --- worktree pool capacity -------------------------------------------------
+
+# One `treehouse status --json` slot per argument, each written <name>:<status>[:<holder>].
+write_pool_status() {  # <file> <slot>...
+  local file=$1 slot name status holder sep=''
+  shift
+  {
+    printf '['
+    for slot in "$@"; do
+      IFS=: read -r name status holder <<< "$slot"
+      printf '%s{"name":"%s","path":"/pool/%s/project","status":"%s","lease_holder":"%s","processes":[]}' \
+        "$sep" "$name" "$name" "$status" "${holder:-}"
+      sep=,
+    done
+    printf ']\n'
+  } > "$file"
+}
+
+# The reported incident: every slot of the project's Treehouse pool is busy and
+# the pool is at its max_trees cap, so `treehouse get` can only refuse. The
+# spawn defers at once, names the holders, and leaves the item queued, exactly
+# like a declared-capacity deferral, instead of waiting out its isolation window
+# and blaming worktree isolation.
+test_full_pool_defers_at_once_naming_its_holders() {
+  local case_dir home out rc=0 before worktrees started elapsed
+  case_dir=$(make_case pool-full task-c)
+  home="$case_dir/home"
+  printf 'max_trees = 3\n' > "$case_dir/project/treehouse.toml"
+  write_pool_status "$case_dir/pool.json" 1:leased:live-a 2:in-use 3:dirty
+  before=$(call_count "$case_dir")
+  worktrees=$(worktree_list "$case_dir")
+  started=$SECONDS
+  out=$(FM_FAKE_TREEHOUSE_STATUS="$case_dir/pool.json" \
+    spawn_ship "$case_dir" task-c "$case_dir/project") || rc=$?
+  elapsed=$((SECONDS - started))
+  expect_code "$DEFER_EXIT" "$rc" "a spawn into a full worktree pool was not deferred: $out"
+  [ "$elapsed" -lt 20 ] || fail "a spawn into a full worktree pool took ${elapsed}s to give up"
+  assert_contains "$out" "deferred: project pool full (3/3): held by live-a, slot 2 (in use), slot 3 (dirty)" \
+    "the deferral did not name the full pool and its holders"
+  assert_contains "$out" "task task-c was not launched and its backlog item stays queued" \
+    "the pool-full deferral did not say the task stays queued"
+  assert_not_contains "$out" "did not enter an isolated worktree" \
+    "a full pool was still reported as an isolation failure"
+  assert_nothing_created "$case_dir" "$home" task-c "$before" "$worktrees"
+  pass "a spawn into a full worktree pool defers at once, names its holders, and leaves the item queued"
+}
+
+# The cap is the one Treehouse reads: with no treehouse.toml in the project, the
+# user's config; a pool whose only free slot is available, or which is still
+# below its cap, admits the worker.
+test_pool_with_room_admits_the_worker() {
+  local case_dir home fake_home out rc=0
+  case_dir=$(make_case pool-room task-c task-d task-e)
+  home="$case_dir/home"
+  fake_home="$case_dir/user-home"
+  mkdir -p "$fake_home/.config/treehouse"
+  printf '# fleet cap\nmax_trees = 2\n' > "$fake_home/.config/treehouse/config.toml"
+  cp "$HOME/.gitconfig" "$fake_home/.gitconfig" 2>/dev/null || :
+
+  write_pool_status "$case_dir/pool.json" 1:leased:live-a 2:available
+  out=$(HOME="$fake_home" FM_FAKE_TREEHOUSE_STATUS="$case_dir/pool.json" spawn_ship "$case_dir" task-c) || rc=$?
+  expect_code 0 "$rc" "a pool with an available slot refused a spawn: $out"
+  assert_not_contains "$out" "pool full" "a pool with an available slot reported itself full"
+
+  write_pool_status "$case_dir/pool.json" 1:leased:live-a
+  rc=0
+  out=$(HOME="$fake_home" FM_FAKE_TREEHOUSE_STATUS="$case_dir/pool.json" spawn_ship "$case_dir" task-d) || rc=$?
+  expect_code 0 "$rc" "a pool below its user-config cap refused a spawn: $out"
+
+  write_pool_status "$case_dir/pool.json" 1:leased:live-a 2:leased:live-b
+  rc=0
+  out=$(HOME="$fake_home" FM_FAKE_TREEHOUSE_STATUS="$case_dir/pool.json" \
+    spawn_ship "$case_dir" task-e "$case_dir/project") || rc=$?
+  expect_code "$DEFER_EXIT" "$rc" "a pool full at its user-config cap was not deferred: $out"
+  assert_contains "$out" "pool full (2/2): held by live-a, live-b" "the user-config cap was not the cap applied"
+  pass "a pool with an available slot or room below its cap admits the worker, and the user config sets the cap"
+}
+
+# A project's own treehouse.toml replaces the user config whole, so without a
+# max_trees line its cap is Treehouse's default of 16, not the user's.
+test_project_config_without_a_cap_uses_the_treehouse_default() {
+  local case_dir fake_home out rc=0
+  case_dir=$(make_case pool-default task-c)
+  fake_home="$case_dir/user-home"
+  mkdir -p "$fake_home/.config/treehouse"
+  printf 'max_trees = 1\n' > "$fake_home/.config/treehouse/config.toml"
+  cp "$HOME/.gitconfig" "$fake_home/.gitconfig" 2>/dev/null || :
+  printf 'root = "/elsewhere"\n' > "$case_dir/project/treehouse.toml"
+  write_pool_status "$case_dir/pool.json" 1:leased:live-a 2:leased:live-b
+  out=$(HOME="$fake_home" FM_FAKE_TREEHOUSE_STATUS="$case_dir/pool.json" spawn_ship "$case_dir" task-c) || rc=$?
+  expect_code 0 "$rc" "a project config with no max_trees took the user's cap: $out"
+  pass "a project's treehouse.toml without max_trees leaves the cap at Treehouse's default"
+}
+
 test_undeclared_capacity_keeps_dispatch_uncapped
 test_available_capacity_admits_the_worker
 test_exhausted_capacity_defers_without_leaving_anything_behind
@@ -665,3 +766,6 @@ test_failed_spawn_after_admission_holds_no_place
 test_unreadable_declaration_refuses_every_spawn
 test_batch_reports_a_deferred_pair
 test_orca_spawn_is_admitted_under_the_shared_project_lock
+test_full_pool_defers_at_once_naming_its_holders
+test_pool_with_room_admits_the_worker
+test_project_config_without_a_cap_uses_the_treehouse_default
