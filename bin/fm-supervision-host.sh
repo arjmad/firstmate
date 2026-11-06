@@ -1043,8 +1043,8 @@ handle_wake() {  # <reason-lines>
   TURN_RESULT=$result
   TURN_ERRORS=$errors
   ENGINE_RUNNING=1
-  # Backgrounded and waited, so a signal to the host is handled at once
-  # instead of after the whole turn; the cleanup stops the engine.
+  # Backgrounded and waited, so a stop signal (HUP, TERM, INT) is handled at
+  # once instead of after the whole turn; the cleanup stops the engine.
   (
     export FM_HOME STATE
     [ -z "${FM_STATE_OVERRIDE:-}" ] || export FM_STATE_OVERRIDE
