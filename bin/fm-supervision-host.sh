@@ -1059,8 +1059,14 @@ handle_wake() {  # <reason-lines>
       "$result" "$errors" "$ENGINE_PID_FILE"
   ) &
   ENGINE_SUBSHELL=$!
+  # A trapped signal (the hand-over SIGUSR1) returns wait early with 128+n
+  # while the engine runs on, so the turn's status comes from a later wait.
   wait "$ENGINE_SUBSHELL"
   rc=$?
+  while [ "$rc" -gt 128 ] && fm_pid_alive "$ENGINE_SUBSHELL"; do
+    wait "$ENGINE_SUBSHELL"
+    rc=$?
+  done
   ENGINE_SUBSHELL=
   ENGINE_RUNNING=0
   release_branch_leases
