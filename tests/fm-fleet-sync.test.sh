@@ -34,6 +34,9 @@
 # held lock= path defers it, the firstmate home itself is refused, the
 # single-project form syncs only that project's entries, and a capture= entry
 # starts its capture once per edit state when only edits under its dir hold it.
+# A post-update command still running from another sync reads "activating:"
+# rather than STUCK, and the scheduled sync wakes once per STUCK episode however
+# far behind origin the checkout falls.
 set -u
 
 # shellcheck source=tests/lib.sh

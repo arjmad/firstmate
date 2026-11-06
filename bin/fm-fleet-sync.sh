@@ -53,6 +53,11 @@
 # state/live-checkouts/<key> records. A first sighting with no record runs it only
 # when this sync moved HEAD; otherwise it just records the current HEAD. A failed
 # command reports STUCK and never records that HEAD, so the next sync retries it.
+# While it runs, state/live-checkouts/<key>.running holds its pid, start time and
+# process start stamp; another sync of that checkout that finds the same process
+# still alive starts no second run and prints "activating: post-update command
+# already running (pid <pid>, since <time>)" instead, leaving the next sync to run
+# it for the newer HEAD.
 # Its output still goes to stderr, and a failure's STUCK line also ends with
 # "; last output: " and the command's last POST_UPDATE_TAIL_LINES non-blank lines
 # joined with " / ", so a relay that keeps only stdout still names the reason.
@@ -99,8 +104,10 @@
 # with its full stdout kept in $STATE/.fleet-sync-scheduled.log. Each STUCK line not already
 # surfaced is appended to $STATE/fleet-sync-stuck, which the watcher claims and
 # turns into one "check: fleet-sync: ..." wake; $STATE/.fleet-sync-surfaced
-# holds the current STUCK set (post-update output tail removed), so an unchanged
-# STUCK state wakes once, and one that clears and returns wakes again. Every
+# holds the current STUCK episodes, each the checkout and its stuck state without
+# the "N commits behind" count, the capture suffix after it, or a post-update
+# output tail, so one episode wakes once however far upstream moves meanwhile,
+# and one that clears and returns wakes again. Every
 # other outcome, including a "skipped: busy:" lock, stays silent for the next run.
 # --scheduled-interval prints the interval in seconds, 0 when off: the first
 # non-blank, non-# line of $FM_HOME/config/fleet-sync-interval, else
@@ -218,10 +225,12 @@ scheduled_interval() {
   esac
 }
 
-# stuck_key <line>: a STUCK line without its post-update output tail, so the same
-# failure with different log noise is not surfaced again.
-stuck_key() {
-  printf '%s\n' "${1%%; last output: *}"
+# stuck_keys: each STUCK line on stdin reduced to its episode - the checkout and
+# its stuck state - by dropping a post-update output tail and everything from a
+# report_stuck line's "N commits behind" on, so an upstream commit or a capture
+# retry is not a new episode.
+stuck_keys() {
+  sed -E -e 's/; last output: .*$//' -e 's/, ([0-9]+|\?) commits behind .*$//'
 }
 
 # replace_file <path> <content>: atomically replace <path> with <content> plus a
@@ -249,10 +258,10 @@ run_scheduled() {
   out=$(mktemp "$STATE/.fleet-sync-scheduled.out.XXXXXX") || return 0
   "$SCRIPT_DIR/fm-fleet-sync.sh" </dev/null >"$out" 2>/dev/null || true
   mv -f "$out" "$SCHEDULED_LOG" 2>/dev/null || { rm -f "$out"; return 0; }
-  [ ! -f "$SCHEDULED_SURFACED" ] || surfaced=$(cat "$SCHEDULED_SURFACED" 2>/dev/null || true)
+  [ ! -f "$SCHEDULED_SURFACED" ] || surfaced=$(stuck_keys < "$SCHEDULED_SURFACED" 2>/dev/null || true)
   while IFS= read -r line; do
     case "$line" in *': STUCK:'*) ;; *) continue ;; esac
-    key=$(stuck_key "$line")
+    key=$(printf '%s\n' "$line" | stuck_keys)
     current="$current$key"$'\n'
     if ! printf '%s\n' "$surfaced" | grep -Fxq -- "$key"; then
       new="$new$line"$'\n'
@@ -919,6 +928,27 @@ post_update_output_tail() {
   printf '%s\n' "$joined"
 }
 
+# post_update_still_running <running-file>: true while the process the file
+# names is alive with the start stamp it recorded, so a reused pid never
+# counts; sets RUNNING_PID and RUNNING_SINCE.
+post_update_still_running() {
+  local started
+  RUNNING_PID="" RUNNING_SINCE=""
+  [ -f "$1" ] && { read -r RUNNING_PID RUNNING_SINCE; read -r started; } < "$1" 2>/dev/null \
+    && [ -n "$started" ] && [ "$(ps -p "$RUNNING_PID" -o lstart= 2>/dev/null)" = "$started" ]
+}
+
+# exec_recording_run <running-file> <command>: write this process's pid, start
+# time and start stamp to <running-file>, then exec <command> as this same
+# process. Not a background job: without job control bash starts one with
+# SIGINT ignored, and a non-interactive shell cannot trap a signal ignored on entry.
+exec_recording_run() {
+  # shellcheck disable=SC2016 # $$, $1 and $2 expand in the new shell
+  exec bash -c '{ printf "%s %s\n" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      ps -p "$$" -o lstart=; } > "$1.tmp.$$" 2>/dev/null && mv -f "$1.tmp.$$" "$1" 2>/dev/null
+    exec bash -c "$2"' fm-post-update "$1" "$2"
+}
+
 # run_post_update <command> <fast-forwarded yes|no>: run the entry's post-update
 # command when the checkout's HEAD differs from the commit the command last
 # succeeded for (see the header), recording HEAD after a success.
@@ -931,6 +961,10 @@ run_post_update() {
   if [ -n "$recorded" ] && [ "$recorded" = "$head" ]; then
     return 0
   fi
+  if post_update_still_running "$record.running"; then
+    echo "$label: activating: post-update command already running (pid $RUNNING_PID, since $RUNNING_SINCE); the next sync runs it for $(git -C "$PROJ" rev-parse --short HEAD) if it still needs to"
+    return 0
+  fi
   if [ -z "$recorded" ] && [ "$moved" = no ]; then
     write_live_record "$record" "$head"
     return 0
@@ -939,7 +973,9 @@ run_post_update() {
   # failure carries its reason on stdout: bootstrap and the scheduled sync keep
   # only stdout's STUCK line.
   output=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-sync-post-update.XXXXXX" 2>/dev/null) || output=/dev/null
-  (cd "$PROJ" && bash -c "$cmd") </dev/null >"$output" 2>&1 || rc=$?
+  mkdir -p "$LIVE_RECORDS" 2>/dev/null || true
+  (cd "$PROJ" && exec_recording_run "$record.running" "$cmd") </dev/null >"$output" 2>&1 || rc=$?
+  rm -f "$record.running"
   [ "$output" = /dev/null ] || cat "$output" >&2 || true
   if [ "$rc" -ne 0 ]; then
     # A first-sighting failure still leaves a record that matches no commit, so
