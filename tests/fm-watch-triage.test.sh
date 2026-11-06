@@ -2814,6 +2814,34 @@ test_heartbeat_no_change_absorbed() {
   pass "a heartbeat with no captain-relevant change is absorbed and backs off the cadence"
 }
 
+# A session runs for days, so leftovers must not wait for the next session
+# start: the heartbeat retires them while the watcher keeps polling.
+test_heartbeat_runs_the_state_residue_sweep() {
+  local dir state fakebin out pid i
+  dir=$(make_case heartbeat-residue); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
+  printf 'orphaned\n' > "$state/.wake-rows.consume.OLD001"
+  fm_touch_epoch $(( $(date +%s) - 8 * 86400 )) "$state/.wake-rows.consume.OLD001"
+  printf 'x' > "$state/.seen-gone-task_status"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
+  pid=$!
+  i=0
+  while [ "$i" -lt 200 ]; do
+    [ -e "$state/.wake-rows.consume.OLD001" ] || break
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  kill -0 "$pid" 2>/dev/null || fail "watcher exited around a residue-sweeping heartbeat: $(cat "$out")"
+  [ ! -e "$state/.wake-rows.consume.OLD001" ] \
+    || { reap "$pid"; fail "a heartbeat did not rotate an orphaned scratch file older than the documented age"; }
+  [ ! -e "$state/.seen-gone-task_status" ] \
+    || { reap "$pid"; fail "a heartbeat did not retire the record of a task nothing live references"; }
+  [ ! -s "$out" ] || { reap "$pid"; fail "the heartbeat sweep printed onto the wake channel: $(cat "$out")"; }
+  reap "$pid"
+  pass "a heartbeat runs the state residue sweep without waking firstmate"
+}
+
 test_heartbeat_backstop_surfaces_a_masked_status() {
   local dir state fakebin out sig pid
   dir=$(make_case heartbeat-masked); state="$dir/state"; fakebin="$dir/fakebin"
@@ -3047,6 +3075,7 @@ test_procevent_surface_serializes_with_drain
 test_procevent_surface_crash_boundaries
 test_procevent_marker_failure_exits_and_replays
 test_heartbeat_no_change_absorbed
+test_heartbeat_runs_the_state_residue_sweep
 test_heartbeat_backstop_surfaces_unsurfaced_status
 test_heartbeat_backstop_surfaces_a_masked_status
 test_beacon_stays_fresh_while_absorbing

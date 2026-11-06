@@ -159,9 +159,12 @@ if [ "$status" -eq 0 ] && [ "$mutation" = workspace-create ]; then
       printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$ACTIVE_SEEDED_CONTROL/seeded-pane"
       ;;
     $'└ abort-a · p:'*|$'└ abort-b · p:'*)
-      task=${label#$'└ '}; task=${task%% *}
-      mkdir -p "$POST_CREATE_ABORT_CONTROL/$task"
-      printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.workspace.workspace_id')" > "$POST_CREATE_ABORT_CONTROL/$task/workspace"
+      # Only an armed fixture records, so a later clean retry of the id runs.
+      if [ -d "$POST_CREATE_ABORT_CONTROL" ]; then
+        task=${label#$'└ '}; task=${task%% *}
+        mkdir -p "$POST_CREATE_ABORT_CONTROL/$task"
+        printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.workspace.workspace_id')" > "$POST_CREATE_ABORT_CONTROL/$task/workspace"
+      fi
       ;;
   esac
 fi
@@ -172,9 +175,11 @@ if [ "$status" -eq 0 ] && [ "$mutation" = tab-create ]; then
       printf '%s\n' task-created > "$ACTIVE_SEEDED_CONTROL/stage"
       ;;
     fm-abort-a|fm-abort-b)
-      task=${label#fm-}
-      mkdir -p "$POST_CREATE_ABORT_CONTROL/$task"
-      printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$POST_CREATE_ABORT_CONTROL/$task/task-pane"
+      if [ -d "$POST_CREATE_ABORT_CONTROL" ]; then
+        task=${label#fm-}
+        mkdir -p "$POST_CREATE_ABORT_CONTROL/$task"
+        printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$POST_CREATE_ABORT_CONTROL/$task/task-pane"
+      fi
       ;;
   esac
 fi
@@ -902,8 +907,27 @@ done
 [ ! -e "$HOME_DIR/state/abort-a.meta" ] && [ ! -e "$HOME_DIR/state/abort-b.meta" ] \
   || fail "post-create abort fixtures published task metadata before launch"
 rm -rf "$POST_CREATE_ABORT_CONTROL"
-rm -f "$HOME_DIR/state/abort-a.herdr-presentation" "$HOME_DIR/state/abort-b.herdr-presentation"
+for ABORT_ID in abort-a abort-b; do
+  [ ! -e "$HOME_DIR/state/$ABORT_ID.herdr-presentation" ] \
+    || fail "aborted projected spawn $ABORT_ID left its presentation journal behind"
+done
 pass "real Herdr lab: concurrent post-create abort cleanup stays serialized with exact focus restoration"
+
+# A retry of an aborted id must project again rather than warn about the failed
+# attempt and fall back flat.
+spawn_task abort-a "$HOME_DIR" "$PROJECT_DIR" > "$TMP_ROOT/abort-a-retry.out" 2> "$TMP_ROOT/abort-a-retry.err" \
+  || fail "a clean retry of aborted projected spawn abort-a failed: $(cat "$TMP_ROOT/abort-a-retry.err")"
+if grep -F "no exact herdr presentation token match" "$TMP_ROOT/abort-a-retry.err" >/dev/null 2>&1; then
+  fail "a clean retry of an aborted projected spawn warned about the failed attempt: $(cat "$TMP_ROOT/abort-a-retry.err")"
+fi
+RETRY_LABEL=$(lab workspace get "$(grep '^herdr_workspace_id=' "$HOME_DIR/state/abort-a.meta" | cut -d= -f2-)" | jq -r '.result.workspace.label')
+case "$RETRY_LABEL" in
+  $'└ abort-a · p:'*) ;;
+  *) fail "a clean retry of an aborted projected spawn was not projected: $RETRY_LABEL" ;;
+esac
+teardown_task abort-a "$HOME_DIR" > "$TMP_ROOT/abort-a-retry-teardown.out" 2> "$TMP_ROOT/abort-a-retry-teardown.err" \
+  || fail "teardown of the retried abort-a failed: $(cat "$TMP_ROOT/abort-a-retry-teardown.err")"
+pass "real Herdr lab: a retry after an aborted projected spawn projects again without a stale-journal warning"
 
 SHAPE_CLEANUP_AUDIT_START=$(focus_audit_line_count)
 teardown_task shape "$HOME_DIR" > "$TMP_ROOT/on-teardown.out" 2> "$TMP_ROOT/on-teardown.err" \
