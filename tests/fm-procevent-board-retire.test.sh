@@ -2,8 +2,8 @@
 # Behavior tests for bin/fm-procevent.sh retire-quiet-boards and the reconcile
 # cadence that runs it: a Lavish board firstmate owns or adopted is retired
 # after a quiet period with no round, or once an adopted board's backlog rows
-# have all closed, while a worker-owned board, a board its task hosts again, and
-# a board with an unread round are kept.
+# have all closed, while a worker-owned board and a board its task hosts again
+# are kept, and a retired board's unread rounds stay captured.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -102,11 +102,13 @@ owner_task=worker-a'
   assert_contains "$out" "board-retired: lavish-only-silent reason=quiet" "a silent round does not count as a round"
   registered "$home" lavish-fresh || fail "a board published two days ago was retired"
   registered "$home" lavish-answered || fail "a board answered two days ago was retired"
-  registered "$home" lavish-unread || fail "a board with an unread round was retired"
+  registered "$home" lavish-unread && fail "a board whose only round is an unread one 15 days old stayed registered"
+  [ -f "$home/state/procevent-inbox/lavish-unread.1.result" ] && [ ! -e "$home/state/procevent-inbox/lavish-unread.1.handled" ] \
+    || fail "retiring a board touched its unread round"
   registered "$home" lavish-worker || fail "a worker-owned board was retired"
   registered "$home" lavish-rehosted || fail "an adopted board whose task is live again was retired"
   assert_grep "board-retired: lavish-quiet reason=quiet" "$home/state/procevent/board-retirements.log" "the durable retirement log"
-  [ "$(printf '%s\n' "$out" | grep -c '^board-retired: ')" = 2 ] || fail "expected exactly two retirements, got: $out"
+  [ "$(printf '%s\n' "$out" | grep -c '^board-retired: ')" = 3 ] || fail "expected exactly three retirements, got: $out"
 
   FM_PROCEVENT_BOARD_QUIET_SECONDS=$DAY pe "$home" retire-quiet-boards >/dev/null \
     || fail "a one-day quiet setting failed"
@@ -114,7 +116,7 @@ owner_task=worker-a'
   rc=0
   FM_PROCEVENT_BOARD_QUIET_SECONDS=2w pe "$home" retire-quiet-boards >/dev/null 2>&1 || rc=$?
   expect_code 1 "$rc" "an unusable quiet setting"
-  pass "quiet boards retire and hosted, answered, unread, or worker-owned boards stay"
+  pass "quiet boards retire keeping their unread rounds, and hosted, answered, or worker-owned boards stay"
 }
 
 test_adopted_board_retires_when_its_rows_close() {
@@ -133,11 +135,11 @@ Board handed over from scout-a at 2026-11-01T00:00:00Z."
   out=$(pe "$home" retire-quiet-boards) || fail "retire-quiet-boards failed: $out"
   registered "$home" lavish-closed || fail "an adopted board with open rows was retired"
 
-  axi "$home" done call-a1
+  axi "$home" "done" call-a1
   out=$(pe "$home" retire-quiet-boards) || fail "retire-quiet-boards failed: $out"
   registered "$home" lavish-closed || fail "an adopted board was retired while one of its rows is open"
 
-  axi "$home" done call-a2
+  axi "$home" "done" call-a2
   out=$(pe "$home" retire-quiet-boards) || fail "retire-quiet-boards failed: $out"
   registered "$home" lavish-closed && fail "an adopted board whose rows all closed stayed registered"
   assert_contains "$out" "board-retired: lavish-closed reason=row-closed quiet_days=2 adopted_from=scout-a" "the row-closed retirement line"

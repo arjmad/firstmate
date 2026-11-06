@@ -164,9 +164,9 @@
 #            call silent. A board's rows are those carrying the
 #            `Board handed over from <task-id> at` line board-link wrote at
 #            adoption; with no such row the quiet rule alone applies. A
-#            worker-owned board, an adopted board whose task has a record
-#            again, and a board with an unacknowledged round are never
-#            retired. Each retirement prints one `board-retired:` line and is
+#            worker-owned board and an adopted board whose task has a record
+#            again are never retired; a captured round stays captured and
+#            announced until handled. Each retirement prints one `board-retired:` line and is
 #            appended, timestamped, to procevent/board-retirements.log.
 #            Reconcile runs this at most once per
 #            FM_PROCEVENT_BOARD_SWEEP_SECONDS (default 3600; 0 runs it every
@@ -1830,14 +1830,13 @@ EOF
 }
 
 cmd_retire_quiet_boards() {
-  local quiet now rec id adapter adopted all_pending pending_line has_pending last reason
+  local quiet now rec id adapter adopted last reason
   local backlog='' backlog_state=pending days log_line
   [ "$#" -eq 0 ] || usage
   quiet=$(board_seconds_setting FM_PROCEVENT_BOARD_QUIET_SECONDS 1209600 1) \
     || die "FM_PROCEVENT_BOARD_QUIET_SECONDS must be whole seconds of at least 1"
   [ -d "$REG" ] || return 0
   now=$(date +%s)
-  all_pending=$(fm_procevent_pending "$STATE")
   for rec in "$REG"/*.source; do
     [ -f "$rec" ] && [ ! -L "$rec" ] || continue
     id=${rec##*/}; id=${id%.source}
@@ -1854,15 +1853,6 @@ cmd_retire_quiet_boards() {
     if [ -n "$adopted" ] && { [ -e "$STATE/$adopted.meta" ] || [ -L "$STATE/$adopted.meta" ]; }; then
       continue
     fi
-    # An unread round is not quiet, and firstmate still owes it a read.
-    has_pending=0
-    while IFS= read -r pending_line; do
-      [ -n "$pending_line" ] || continue
-      if result_of_source "$pending_line" "$id"; then has_pending=1; break; fi
-    done <<EOF
-$all_pending
-EOF
-    [ "$has_pending" -eq 0 ] || continue
     reason=
     if [ -n "$adopted" ]; then
       if [ "$backlog_state" = pending ]; then
