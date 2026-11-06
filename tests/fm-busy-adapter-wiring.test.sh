@@ -410,6 +410,8 @@ test_claude_posttooluse_announces_waiting_steer_once() {
     "$ROOT/bin/fm-task-inbox-lib.sh" "$state" "$id") || fail "could not enqueue a steer"
   out=$(run_claude_hook_payload "$settings" "$cmd" '{"session_id":"nested-session","hook_event_name":"PostToolUse"}')
   [ -z "$out" ] || fail "a nested session must not see or spend the announcement, got '$out'"
+  out=$(run_claude_hook_payload "$settings" "$cmd" '{"session_id":"worker-session","agent_id":"sub1","agent_type":"general-purpose","hook_event_name":"PostToolUse"}')
+  [ -z "$out" ] || fail "a subagent's tool call must not see or spend the announcement, got '$out'"
   out=$(run_claude_hook_payload "$settings" "$cmd" '{"session_id":"worker-session","hook_event_name":"PostToolUse"}') \
     || fail "inbox hook failed with a waiting steer"
   [ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName')" = PostToolUse ] \
@@ -428,14 +430,22 @@ test_claude_posttooluse_announces_waiting_steer_once() {
     "Firstmate instruction waiting: read $rec2, act on it, then mv it into $inbox/handled/." ] \
     || fail "a later steer must be announced alone, got '$out'"
 
+  # A relaunched worker is a new session: it hears every record still waiting.
+  run_claude_hook "$settings" SessionEnd || fail "SessionEnd hook command failed"
+  run_claude_hook "$settings" UserPromptSubmit relaunched-session || fail "relaunch UserPromptSubmit failed"
+  out=$(run_claude_hook_payload "$settings" "$cmd" '{"session_id":"relaunched-session","hook_event_name":"PostToolUse"}')
+  [ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext')" = \
+    "Firstmate instruction waiting: read $rec1, act on it, then mv it into $inbox/handled/."$'\n'"Firstmate instruction waiting: read $rec2, act on it, then mv it into $inbox/handled/." ] \
+    || fail "a relaunched session must hear every waiting steer in order, got '$out'"
+
   # A superseded incarnation's hook stays silent and still exits 0.
   FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_task_inbox_write "$2" "$3" "third steer"' _ \
     "$ROOT/bin/fm-task-inbox-lib.sh" "$state" "$id" >/dev/null
   "$ROOT/bin/fm-busy-event.sh" arm "$state" "$id" >/dev/null
-  out=$(run_claude_hook_payload "$settings" "$cmd" '{"session_id":"worker-session","hook_event_name":"PostToolUse"}') \
+  out=$(run_claude_hook_payload "$settings" "$cmd" '{"session_id":"relaunched-session","hook_event_name":"PostToolUse"}') \
     || fail "a stale-gen inbox hook must still exit 0"
   [ -z "$out" ] || fail "a stale-gen inbox hook must announce nothing, got '$out'"
-  pass "a claude crewmate's PostToolUse hook announces each waiting steer once to its own session"
+  pass "a claude crewmate's PostToolUse hook announces each waiting steer once to its own session, never to a subagent or nested run"
 }
 
 test_claude_hooks_stale_incarnation_harmless() {

@@ -858,6 +858,18 @@ test_watcher_busy_budget_counts_once_per_grace() {
   pass "watcher: busy deferrals count at most once per grace period"
 }
 
+# A clock stepped back behind the last counted deferral must not stall the budget.
+test_watcher_busy_budget_survives_clock_step_back() {
+  local dir
+  dir=$(busy_case busy-clock-back)
+  BUSY_GRACE=60 busy_steer_check "$dir"
+  printf '001.msg\t1\t%s\n' "$(( $(date +%s) + 600 ))" > "$dir/state/t1.inbox/.busy-state"
+  BUSY_GRACE=60 busy_steer_check "$dir"
+  grep -q 'stuck-busy after 2 consecutive' "$dir/state/.wake-queue" \
+    || fail "a busy poll after the clock stepped back did not count"
+  pass "watcher: a clock stepped back behind the last deferral still counts"
+}
+
 # The default budget is 6 deferrals one grace apart: about 9 minutes at 90 s.
 test_watcher_busy_default_budget() {
   local dir check
@@ -1246,6 +1258,7 @@ test_watcher_busy_limit_validation 000 6
 test_watcher_busy_limit_validation '' 6
 test_watcher_busy_limit_validation invalid 6
 test_watcher_busy_budget_counts_once_per_grace
+test_watcher_busy_budget_survives_clock_step_back
 test_watcher_busy_default_budget
 test_watcher_busy_limit_validation 1 1
 test_watcher_busy_limit_validation 3 3

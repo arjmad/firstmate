@@ -760,6 +760,13 @@ With a steer waiting in a lab inbox and the busy writer's session binding on `Us
 ```
 
 A second headless session in the same lab, whose `session_id` differed from the bound one, got an empty hook response, so a nested `claude` run never spends the announcement.
+A subagent's tool call fires the worker's `PostToolUse` hook with the worker's own `session_id` and a non-null `agent_id`, so the hook skips any payload naming an `agent_id`; a payload-logging hook recorded, for one run that had a general-purpose subagent run `echo from-sub`:
+
+```text
+{"session_id":"354921b1-...","agent_id":null,"agent_type":null,"tool_name":"Agent","cmd":null}
+{"session_id":"354921b1-...","agent_id":null,"agent_type":null,"tool_name":"Bash","cmd":"echo from-main"}
+{"session_id":"354921b1-...","agent_id":"a007320c98d43d8a2","agent_type":"general-purpose","tool_name":"Bash","cmd":"echo from-sub"}
+```
 The live guard asks the model to quote the path it was told about and refreshes this record after a Claude Code upgrade:
 
 ```sh

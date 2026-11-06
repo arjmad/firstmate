@@ -30,8 +30,9 @@
 #   <task>.inbox/.ring-state   watcher re-ring ladder: "<msg>\t<count>\t<epoch>"
 #   <task>.inbox/.busy-state   consecutive busy deferrals: "<msg>\t<count>\t<epoch>",
 #                              epoch = when the last deferral was counted
-#   <task>.inbox/.hook-announced  highest record sequence a worker-side harness
-#                              hook already announced (fm_task_inbox_announce_new)
+#   <task>.inbox/.hook-announced  "<owner>\t<seq>": highest record sequence a
+#                              worker-side harness hook already announced to
+#                              <owner>, its session (fm_task_inbox_announce_new)
 #   <task>.inbox/.escalated    oldest-message name already surfaced as stale,
 #                              so later polls suppress another escalation
 #   <task>.inbox/.retry-ring   name of a fire-and-forget record still owed its
@@ -149,7 +150,8 @@ fm_task_inbox_record_busy() {  # <state-dir> <task-id> <record-path>
   case "${last:-}" in ''|*[!0-9]*) last=0 ;; esac
   [ -f "$3" ] || { printf '0'; return 0; }
   now=$(date +%s)
-  if [ "$count" -gt 0 ] && [ "$((now - last))" -lt "$(fm_task_inbox_grace_secs)" ]; then
+  # A clock stepped back past the last count counts, rather than stalling.
+  if [ "$count" -gt 0 ] && [ "$now" -ge "$last" ] && [ "$((now - last))" -lt "$(fm_task_inbox_grace_secs)" ]; then
     printf '%s' "$count"
     return 0
   fi
@@ -440,21 +442,25 @@ fm_task_inbox_oldest_unhandled() {  # <state-dir> <task-id>
   printf '%s' "$best"
 }
 
-# Paths of unhandled records a worker-side harness hook has not announced yet,
-# one per line in numeric order, then advance .hook-announced past them, so
-# each record is announced once (bin/fm-inbox-posttool-hook.sh). Sequences are
-# never reused, so the highest announced sequence is the whole bookkeeping.
-# Prints nothing when every record was already announced. Fails, announcing
-# nothing, when the lock or the marker cannot be taken or written.
-fm_task_inbox_announce_new() {  # <state-dir> <task-id>
-  local dir lock announced max f n list='' status=0
+# Paths of unhandled records a worker-side harness hook has not announced to
+# <owner> yet, one per line in numeric order, then advance .hook-announced past
+# them, so each record is announced once per owner
+# (bin/fm-inbox-posttool-hook.sh passes the worker's session). Sequences are
+# never reused, so the highest announced sequence is the whole bookkeeping; a
+# new owner, such as a relaunched worker's session, starts from zero and hears
+# every record still waiting. Prints nothing when every record was already
+# announced. Fails, announcing nothing, when the lock or the marker cannot be
+# taken or written.
+fm_task_inbox_announce_new() {  # <state-dir> <task-id> <owner>
+  local dir owner=$3 lock marked announced max f n list='' status=0
   dir=$(fm_task_inbox_dir "$1" "$2")
   set -- "$dir"/*.msg
   [ -e "$1" ] || return 0
   lock="$dir/.seq.lock"
   fm_task_inbox_lock_acquire "$lock" || return 1
-  announced=$(cat "$dir/.hook-announced" 2>/dev/null || true)
-  case "$announced" in ''|*[!0-9]*) announced=0 ;; esac
+  { IFS=$(printf '\t') read -r marked announced < "$dir/.hook-announced"; } 2>/dev/null || true
+  [ "${marked:-}" = "$owner" ] || announced=0
+  case "${announced:-}" in ''|*[!0-9]*) announced=0 ;; esac
   max=$announced
   while read -r n f; do
     [ -n "${f:-}" ] && [ "$n" -gt "$announced" ] || continue
@@ -467,7 +473,7 @@ $(for f in "$dir"/*.msg; do
   done | sort -n)
 EOF
   if [ "$max" -gt "$announced" ]; then
-    { printf '%s\n' "$max" > "$dir/.hook-announced.tmp" && mv -f "$dir/.hook-announced.tmp" "$dir/.hook-announced"; } 2>/dev/null || status=1
+    { printf '%s\t%s\n' "$owner" "$max" > "$dir/.hook-announced.tmp" && mv -f "$dir/.hook-announced.tmp" "$dir/.hook-announced"; } 2>/dev/null || status=1
   fi
   fm_lock_release "$lock"
   [ "$status" -eq 0 ] || return 1

@@ -23,7 +23,13 @@
 # bin/fm-worker-hook-status.sh does: --gen must equal the armed busy gen
 # (bin/fm-busy-lib.sh), and the payload's session_id must equal the bound
 # session in state/<id>.busy-session, so a nested `claude` run in the worktree,
-# which loads the same hooks, never spends the announcement.
+# which loads the same hooks, never spends the announcement. A tool call made
+# inside one of the worker's subagents carries the worker's session_id plus an
+# agent_id (verified on Claude Code 2.1.318), so a payload naming an agent_id
+# is skipped too: the note waits for the worker's own next tool call, which
+# includes the Agent call that returns from the subagent. The announcement
+# bookkeeping is keyed to the session, so a relaunched worker hears again
+# every record still waiting.
 #
 # Prints nothing and exits 0 when there is nothing new, the hook is refused, or
 # jq is missing; a failure never prints partial output. Exit codes: 0 always
@@ -57,8 +63,11 @@ command -v jq >/dev/null 2>&1 || exit 0
 fm_busy_token_valid "$GEN" || exit 0
 current=$(fm_busy_current_gen "$STATE" "$ID") || exit 0
 [ "$GEN" = "$current" ] || exit 0
-session=$(jq -r 'if type == "object" and (.session_id | type) == "string" then .session_id else empty end' 2>/dev/null) || session=
+payload=$(cat) || payload=
+session=$(printf '%s' "$payload" | jq -r 'if type == "object" and (.session_id | type) == "string" then .session_id else empty end' 2>/dev/null) || session=
 fm_busy_token_valid "$session" || exit 0
+agent=$(printf '%s' "$payload" | jq -r 'if type == "object" and (.agent_id | type) == "string" then .agent_id else empty end' 2>/dev/null) || exit 0
+[ -z "$agent" ] || exit 0
 SESSION_FILE=$(fm_busy_session_path "$STATE" "$ID")
 bound=
 if [ -f "$SESSION_FILE" ] && [ ! -L "$SESSION_FILE" ]; then
@@ -66,7 +75,7 @@ if [ -f "$SESSION_FILE" ] && [ ! -L "$SESSION_FILE" ]; then
 fi
 [ "$bound" = "$session" ] || exit 0
 
-records=$(fm_task_inbox_announce_new "$STATE" "$ID" 2>/dev/null) || exit 0
+records=$(fm_task_inbox_announce_new "$STATE" "$ID" "$session" 2>/dev/null) || exit 0
 [ -n "$records" ] || exit 0
 inbox=$(fm_task_inbox_dir "$STATE" "$ID")
 context=
