@@ -1898,7 +1898,7 @@ cmd_retire_quiet_boards() {
         fi
       fi
       if [ "$backlog_state" = loaded ] && board_rows_closed "$adopted" "$backlog"; then
-        reason=row-closed
+        reason="row-closed"
       fi
     fi
     last=$(board_last_round "$id" "$adapter") || continue
