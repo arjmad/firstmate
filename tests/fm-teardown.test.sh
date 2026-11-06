@@ -2095,7 +2095,7 @@ test_teardown_deletes_task_data_scratch() {
   git -C "$d/unlanded" -c user.email=t@t -c user.name=t commit -q -am unlanded
   mkdir -p "$d/node_modules/dep"
   printf 'x\n' > "$d/node_modules/dep/index.js"
-  printf '\177ELFpayload' > "$d/tool"
+  printf '\177ELF\002\001\001\000\000\000\000\000\000\000\000\000\002\000payload' > "$d/tool"
 
   rc=0
   run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?

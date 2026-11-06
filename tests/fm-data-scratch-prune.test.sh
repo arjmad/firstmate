@@ -20,14 +20,15 @@ put() {  # <file> [content]
   printf '%s\n' "${2:-x}" > "$1"
 }
 
-elf() {  # <file>: a stand-in Linux tool binary
+elf() {  # <file> [e_type octal]: a stand-in Linux ELF, an executable by default
   mkdir -p "$(dirname "$1")"
-  printf '\177ELF\002\001\001\000payload' > "$1"
+  printf '\177ELF\002\001\001\000\000\000\000\000\000\000\000\000' > "$1"
+  printf '%b' "\\0${2:-002}\\000payload" >> "$1"
 }
 
-macho() {  # <file>: a stand-in macOS tool binary
+macho() {  # <file>: a stand-in macOS tool binary (64-bit executable)
   mkdir -p "$(dirname "$1")"
-  printf '\317\372\355\376payload' > "$1"
+  printf '\317\372\355\376\007\000\000\001\003\000\000\000\002\000\000\000payload' > "$1"
 }
 
 clone() {  # <origin> <dir>
@@ -81,6 +82,16 @@ make_task() {
   # A clean outer clone holding a clean inner clone: both go.
   clone "$ORIGIN" "$d/nest/outer"
   clone "$ORIGIN" "$d/nest/outer/inner"
+  # A clean outer clone holding a clean inner clone whose name needs quoting.
+  clone "$ORIGIN" "$d/nest/quoted"
+  clone "$ORIGIN" "$d/nest/quoted/in ner"
+  # An unpushed outer clone keeps the clean clone inside it.
+  clone "$ORIGIN" "$d/nest/unpushed"
+  printf 'more\n' >> "$d/nest/unpushed/README.md"
+  git -C "$d/nest/unpushed" commit -qam unpushed
+  clone "$ORIGIN" "$d/nest/unpushed/inner"
+  # A clean clone whose remote is another clone in the same task folder.
+  clone "$d/clones/clean" "$d/clones/of-clean"
   # A clean outer clone holding an unpushed inner clone: both stay.
   clone "$ORIGIN" "$d/held/outer"
   clone "$ORIGIN" "$d/held/outer/inner"
@@ -101,12 +112,20 @@ make_task() {
   put "$d/broken/unique.txt"
 
   put "$d/web/node_modules/dep/index.js"
+  # A name holding a newline must never make its first line a deletion target.
+  put "$d/we/keep.txt"
+  put "$d/we
+ird/node_modules/dep/index.js"
   put "$d/web/package.json" '{}'
   mkdir -p "$TMP_ROOT/$1/elsewhere/node_modules"
   ln -s "$TMP_ROOT/$1/elsewhere/node_modules" "$d/linked-modules"
   mkdir -p "$d/aliased"
   ln -s "$TMP_ROOT/$1/elsewhere/node_modules" "$d/aliased/node_modules"
   elf "$d/tools/shellcheck"
+  elf "$d/crash/core.1234" 004
+  elf "$d/build/main.o" 001
+  mkdir -p "$d/java"
+  printf '\312\376\272\276\000\000\000\101payload-payload' > "$d/java/Main.class"
   macho "$d/tools/claude-darwin"
   elf "$TMP_ROOT/$1/elsewhere/gbrain"
   ln -s "$TMP_ROOT/$1/elsewhere/gbrain" "$d/tools/gbrain"
@@ -119,14 +138,15 @@ make_task() {
   printf '%s\n' "$d"
 }
 
-GONE="clones/clean nest/outer web/node_modules tools/shellcheck tools/claude-darwin"
+GONE="clones/clean nest/outer nest/quoted web/node_modules tools/shellcheck tools/claude-darwin"
 KEPT="brief.md report.md notes.md shot.png answers.json web/package.json
 clones/dirty/README.md clones/dirty/node_modules/dep/index.js clones/dirty/bin/tool
 clones/untracked/new-file.txt clones/unpushed/README.md clones/stashed/README.md
 clones/no-remote/README.md clones/tagged/README.md gitdep/node_modules/dep/README.md
 gitdep/node_modules/other/index.js vendored/node_modules/README.md held/outer/README.md held/outer/inner/README.md
 linked/main/README.md linked/side/README.md shared/lender/README.md
-shared/borrower/README.md broken/unique.txt linked-modules aliased/node_modules tools/gbrain"
+shared/borrower/README.md broken/unique.txt clones/of-clean/README.md
+nest/unpushed/README.md nest/unpushed/inner/README.md crash/core.1234 build/main.o java/Main.class linked-modules aliased/node_modules tools/gbrain"
 
 assert_kept() {  # <dir> <msg>
   local f
@@ -145,13 +165,19 @@ test_real_run_removes_only_reproducible_scratch() {
     assert_absent "$d/$f" "real run: $f should be removed: $out"
   done
   assert_kept "$d" "real run"
-  assert_absent "$d/nest/outer/inner" "real run: the clean inner clone should go with its clean outer clone"
   assert_present "$TMP_ROOT/real/elsewhere/node_modules" "real run must not follow a node_modules symlink"
   assert_present "$TMP_ROOT/real/elsewhere/gbrain" "real run must not follow a binary symlink"
 
-  assert_contains "$out" "data-scratch: removed checkout real/clones/clean (" "names the clean clone"
-  assert_contains "$out" "data-scratch: removed checkout real/nest/outer/inner (" "names the inner clone"
   assert_contains "$out" "data-scratch: removed checkout real/nest/outer (" "names the outer clone"
+  assert_not_contains "$out" "real/nest/outer/inner" "the inner clone goes with its outer clone, unnamed"
+  assert_contains "$out" "data-scratch: removed checkout real/nest/quoted (" "a quoted inner name still lets its outer clone go"
+  assert_contains "$out" "data-scratch: kept checkout real/nest/unpushed: commits no remote-tracking branch holds" "unpushed outer reason"
+  assert_contains "$out" "data-scratch: kept checkout real/nest/unpushed/inner: it is inside a kept checkout" "a clean clone inside a kept one stays"
+  assert_contains "$out" "data-scratch: removed checkout real/clones/clean (" "names the clean clone"
+  assert_contains "$out" "data-scratch: kept checkout real/clones/of-clean: its remote is inside this task folder" "a clone of a task-local clone stays"
+  assert_not_contains "$out" "core.1234" "a core dump is not a tool binary"
+  assert_not_contains "$out" "main.o" "an object file is not a tool binary"
+  assert_not_contains "$out" "Main.class" "a Java class is not a tool binary"
   assert_contains "$out" "data-scratch: removed node_modules real/web/node_modules (" "names node_modules"
   assert_contains "$out" "data-scratch: removed binary real/tools/shellcheck (" "names the ELF binary"
   assert_contains "$out" "data-scratch: removed binary real/tools/claude-darwin (" "names the Mach-O binary"
@@ -187,7 +213,7 @@ test_dry_run_lists_the_same_and_removes_nothing() {
     assert_present "$d/$f" "dry run removed $f"
   done
   assert_kept "$d" "dry run"
-  assert_contains "$out" "data-scratch: would remove checkout dry/nest/outer/inner (" "dry run names the inner clone"
+  assert_contains "$out" "data-scratch: would remove checkout dry/nest/quoted (" "dry run decides a quoted inner name as the real run does"
   assert_contains "$out" "data-scratch: would remove checkout dry/nest/outer (" "dry run decides the outer clone as the real run would"
   assert_contains "$out" "data-scratch: would remove binary dry/tools/shellcheck (" "dry run names the binary"
   assert_not_contains "$out" "would remove checkout dry/clones/dirty" "dry run keeps the dirty clone"
