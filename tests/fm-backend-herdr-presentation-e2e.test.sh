@@ -270,6 +270,12 @@ chmod +x "$FAKEBIN/herdr" "$FAKEBIN/treehouse"
 chmod +x "$FAKEBIN/herdr-workspace-mover"
 export PATH="$FAKEBIN:$PATH"
 export FM_BACKEND_HERDR_WORKSPACE_MOVER="$FAKEBIN/herdr-workspace-mover"
+# A stand-in live agent, kept off PATH: its process name is what both Herdr's
+# detection and the adapter's process-level proof read as a running harness.
+FAKE_CLAUDE="$TMP_ROOT/live-agent/claude"
+mkdir -p "${FAKE_CLAUDE%/*}"
+printf '#!/bin/bash\nwhile :; do sleep 1; done\n' > "$FAKE_CLAUDE"
+chmod +x "$FAKE_CLAUDE"
 
 # shellcheck source=tests/herdr-test-safety.sh
 . "$ROOT/tests/herdr-test-safety.sh"
@@ -278,6 +284,11 @@ export FM_BACKEND_HERDR_WORKSPACE_MOVER="$FAKEBIN/herdr-workspace-mover"
 # as a cross-session parent identity. Every projection below is anchored on the
 # parent this suite sets up, not on the developer's own workspace.
 herdr_forget_inherited_pane
+# A run launched from a Claude Code agent inherits its wrapper's HERDR_AGENT
+# hint, and Herdr registers every pane of a server started with it as that
+# agent. Pin the hint here so every runner proves the lab server drops it,
+# which is what keeps restored shell panes agent-free for the reclaim below.
+export HERDR_AGENT=claude
 
 HERDR_LAB_SESSION=$(PATH="$HERDR_ORIGINAL_PATH" \
   "$HERDR_LAB_HELPER" name fm-herdr-presentation-projection)
@@ -1252,8 +1263,52 @@ for RESTART_ID in fm-hibit-resume-r1 wheelhouse-healing-r1; do
   rm -f "$ANCHOR_META"
   lab pane get "$OLD_RESTART_PANE" >/dev/null 2>&1 \
     || fail "$RESTART_ID restart did not preserve the projected pane structurally"
-  if lab agent get "$OLD_RESTART_PANE" >/dev/null 2>&1; then
-    fail "$RESTART_ID restart fixture unexpectedly retained a registered agent"
+  # Herdr registers a pane within about a second of seeing an agent hint, so
+  # one immediate read could pass before a false registration lands.
+  for _ in 1 2 3 4 5 6; do
+    if lab agent get "$OLD_RESTART_PANE" >/dev/null 2>&1; then
+      fail "$RESTART_ID restart fixture unexpectedly registered an agent: $(lab agent get "$OLD_RESTART_PANE")"
+    fi
+    sleep 0.5
+  done
+  if [ "$RESTART_ID" = fm-hibit-resume-r1 ]; then
+    # A real agent running in the restored pane must still refuse the reclaim
+    # and leave the exact pane, binding, and workspace untouched.
+    lab pane run "$OLD_RESTART_PANE" "$FAKE_CLAUDE" >/dev/null \
+      || fail "could not start a live agent in the $RESTART_ID restored pane"
+    LIVE_REGISTERED=0
+    for _ in $(seq 1 40); do
+      if lab agent get "$OLD_RESTART_PANE" >/dev/null 2>&1; then
+        LIVE_REGISTERED=1
+        break
+      fi
+      sleep 0.25
+    done
+    [ "$LIVE_REGISTERED" -eq 1 ] || fail "Herdr never registered the live agent in the $RESTART_ID restored pane"
+    if spawn_task "$RESTART_ID" "$HOME_DIR" "$RECOVERY_PROJECT_DIR" > "$TMP_ROOT/$RESTART_ID-live.out" 2> "$TMP_ROOT/$RESTART_ID-live.err"; then
+      fail "$RESTART_ID reclaim launched a duplicate over a live agent"
+    fi
+    grep -E "is (live|unknown); refusing duplicate launch" "$TMP_ROOT/$RESTART_ID-live.err" >/dev/null 2>&1 \
+      || fail "$RESTART_ID live-agent refusal did not name the live pane: $(cat "$TMP_ROOT/$RESTART_ID-live.err")"
+    lab pane get "$OLD_RESTART_PANE" >/dev/null 2>&1 \
+      || fail "$RESTART_ID live-agent refusal closed the agent's pane"
+    [ "$(grep '^herdr_pane_id=' "$RESTART_META" | cut -d= -f2-)" = "$OLD_RESTART_PANE" ] \
+      || fail "$RESTART_ID live-agent refusal rewrote the task record"
+    [ "$(grep '^pane_id=' "$HOME_DIR/state/$RESTART_ID.herdr-presentation" | cut -d= -f2-)" = "$OLD_RESTART_PANE" ] \
+      || fail "$RESTART_ID live-agent refusal moved the journal binding"
+    [ "$(lab pane list --workspace "$OLD_RESTART_WSID" | jq '.result.panes | length')" = 1 ] \
+      || fail "$RESTART_ID live-agent refusal added a pane to the projected workspace"
+    lab pane send-keys "$OLD_RESTART_PANE" ctrl+c >/dev/null \
+      || fail "could not stop the live agent in the $RESTART_ID restored pane"
+    LIVE_RELEASED=0
+    for _ in $(seq 1 40); do
+      if ! lab agent get "$OLD_RESTART_PANE" >/dev/null 2>&1; then
+        LIVE_RELEASED=1
+        break
+      fi
+      sleep 0.25
+    done
+    [ "$LIVE_RELEASED" -eq 1 ] || fail "Herdr kept the exited agent registered in the $RESTART_ID restored pane"
   fi
   RECLAIM_FOCUS=$(focus_snapshot)
   spawn_task "$RESTART_ID" "$HOME_DIR" "$RECOVERY_PROJECT_DIR" > "$TMP_ROOT/$RESTART_ID-reclaim.out" 2> "$TMP_ROOT/$RESTART_ID-reclaim.err" \
@@ -1601,8 +1656,12 @@ assert_no_projection_mutation_since "$START" "agent-free duplicate-token recover
 lab workspace get "$DUP1_WSID" >/dev/null 2>&1 || fail "duplicate-token recovery removed the first quarantined workspace"
 lab workspace get "$DUP2_WSID" >/dev/null 2>&1 || fail "duplicate-token recovery removed the second quarantined workspace"
 
-lab pane report-agent "$DUP1_PANE" --source fm-projection-e2e --agent test-agent --state idle >/dev/null \
+# Herdr drops a reported registration for an agent label it does not know
+# within about two seconds, so report a known one and confirm it took.
+lab pane report-agent "$DUP1_PANE" --source fm-projection-e2e --agent claude --state idle >/dev/null \
   || fail "could not register the duplicate-live-agent risk fixture"
+lab agent get "$DUP1_PANE" >/dev/null 2>&1 \
+  || fail "Herdr did not register the duplicate-live-agent risk fixture"
 START=$(log_line_count)
 if fm_backend_herdr_projection_recovery_allows_flat "$HERDR_LAB_SESSION" "$DUP_JOURNAL" duplicate1; then
   fail "a duplicate token match with a registered agent should refuse fallback"
