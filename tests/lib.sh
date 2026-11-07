@@ -543,7 +543,9 @@ SH
 # the lease. `get --lease [--lease-holder <holder>]` (run from inside a
 # repository) leases the first unleased slot of each pool listed in
 # $FM_FAKE_TREEHOUSE_GET_POOLS whose repository is the caller's and prints its
-# path; an interactive `get` exits 0. Every call is logged as
+# path; an interactive `get` exits 0. `status --json` (run from inside a
+# repository) prints those same slots in Treehouse's status shape, each
+# `leased` with its holder or `available`. Every call is logged as
 # `treehouse <arg>...` to $FM_RUNTIME_LOG when set; every other command exits 0.
 fm_fake_treehouse_pool() {
   local fakebin=$1
@@ -590,6 +592,29 @@ NODE
     done
     echo "no free worktree in the pool" >&2
     exit 1
+    ;;
+  status)
+    common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 1
+    common=$(cd "$common" && pwd -P) || exit 1
+    exec node - "$common" ${FM_FAKE_TREEHOUSE_GET_POOLS:-} <<'NODE'
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const [common, ...pools] = process.argv.slice(2);
+const real = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
+const slots = [];
+for (const pool of pools) {
+  for (const slot of JSON.parse(fs.readFileSync(`${pool}/treehouse-state.json`, "utf8")).worktrees) {
+    let owner;
+    try {
+      owner = real(execFileSync("git", ["-C", slot.path, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).trim());
+    } catch { continue; }
+    if (owner !== common) continue;
+    slots.push({ name: slot.name, path: slot.path, status: slot.leased ? "leased" : "available",
+      lease_holder: slot.leased ? slot.lease_holder : "", processes: [] });
+  }
+}
+process.stdout.write(`${JSON.stringify(slots)}\n`);
+NODE
     ;;
   lease)
     pool=$(cd ../.. && pwd -P) || exit 1
