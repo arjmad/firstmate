@@ -187,6 +187,77 @@ test_reconcile_runs_the_sweep_on_its_cadence() {
   pass "reconcile sweeps quiet boards at most once per cadence"
 }
 
+test_conditional_retire_matches_owned_boards() {
+  local home rc
+  home=$(new_home owned-match)
+  board "$home" lavish-adopted "$RECENT" 'adopted_from=scout-a'
+  rc=0
+  pe "$home" retire lavish-adopted --if-matches lavish -- "$BLOCKER" "$home/never-lavish-adopted" >/dev/null 2>&1 || rc=$?
+  expect_code 1 "$rc" "a plain match against an adopted board"
+  rc=0
+  pe "$home" retire lavish-adopted --if-matches lavish --adopted-from scout-b -- "$BLOCKER" "$home/never-lavish-adopted" >/dev/null 2>&1 || rc=$?
+  expect_code 1 "$rc" "an adopted match naming another task"
+  registered "$home" lavish-adopted || fail "a mismatched conditional retire dropped the adopted board"
+  pe "$home" retire lavish-adopted --if-matches lavish --adopted-from scout-a -- "$BLOCKER" "$home/never-lavish-adopted" >/dev/null \
+    || fail "an exact adopted match did not retire the adopted board"
+  registered "$home" lavish-adopted && fail "an exact adopted match left the board registered"
+
+  board "$home" lavish-worker "$RECENT" 'kind=task-owned
+owner_task=worker-a'
+  rc=0
+  pe "$home" retire lavish-worker --if-matches lavish --adopted-from worker-a -- "$BLOCKER" "$home/never-lavish-worker" >/dev/null 2>&1 || rc=$?
+  expect_code 1 "$rc" "an adopted match against a task-owned board"
+  rc=0
+  pe "$home" retire lavish-worker --if-matches lavish --owner-task worker-b -- "$BLOCKER" "$home/never-lavish-worker" >/dev/null 2>&1 || rc=$?
+  expect_code 1 "$rc" "a task-owned match naming another task"
+  registered "$home" lavish-worker || fail "a mismatched conditional retire dropped the task-owned board"
+  pe "$home" retire lavish-worker --if-matches lavish --owner-task worker-a -- "$BLOCKER" "$home/never-lavish-worker" >/dev/null \
+    || fail "an exact task-owned match did not retire the task-owned board"
+  registered "$home" lavish-worker && fail "an exact task-owned match left the board registered"
+  pass "a conditional retire matches adopted and task-owned boards exactly"
+}
+
+# A board re-armed after the sweep read it must survive the sweep. The sweep
+# calls its own bin directory's fm-procevent.sh to retire, so a copy of bin/
+# whose fm-procevent.sh replaces the registration just before passing a retire
+# through lands the re-arm inside that window.
+test_sweep_leaves_a_board_rearmed_mid_sweep() {
+  local home bin out reg
+  home=$(new_home rearm)
+  bin="$TMP_ROOT/rearm-bin"
+  cp -R "$ROOT/bin" "$bin"
+  mv "$bin/fm-procevent.sh" "$bin/fm-procevent-real.sh"
+  cat > "$bin/fm-procevent.sh" <<'SH'
+#!/usr/bin/env bash
+dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+if [ "${1-}" = retire ] && [ -f "$FM_HOME/rearm/${2-}.source" ]; then
+  mv -f -- "$FM_HOME/rearm/$2.source" "$FM_HOME/state/procevent/$2.source"
+fi
+exec "$dir/fm-procevent-real.sh" "$@"
+SH
+  chmod +x "$bin/fm-procevent.sh"
+  reg="$home/state/procevent"
+  mkdir -p "$home/rearm"
+  board "$home" lavish-adopted "$OLD" 'adopted_from=scout-a'
+  board "$home" lavish-plain "$OLD"
+  # The re-armed records: the same boards listening on a new link.
+  for id in lavish-adopted lavish-plain; do
+    sed 's/never-/moved-/' "$reg/$id.source" > "$home/rearm/$id.source"
+    chmod 600 "$home/rearm/$id.source"
+  done
+
+  out=$(FM_HOME="$home" "$bin/fm-procevent-real.sh" retire-quiet-boards 2>&1) \
+    || fail "retire-quiet-boards failed: $out"
+  registered "$home" lavish-adopted || fail "the sweep retired an adopted board re-armed after its read"
+  assert_grep "moved-lavish-adopted" "$reg/lavish-adopted.source" "the re-armed adopted board's registration"
+  registered "$home" lavish-plain || fail "the sweep retired a plain board re-armed after its read"
+  assert_grep "moved-lavish-plain" "$reg/lavish-plain.source" "the re-armed plain board's registration"
+  assert_not_contains "$out" "board-retired:" "a sweep over re-armed boards"
+  pass "the sweep leaves a board re-armed between its read and its retire"
+}
+
 test_quiet_rule_and_kept_boards
 test_adopted_board_retires_when_its_rows_close
+test_conditional_retire_matches_owned_boards
+test_sweep_leaves_a_board_rearmed_mid_sweep
 test_reconcile_runs_the_sweep_on_its_cadence
