@@ -34,9 +34,9 @@
 # checkout the captain-private $FM_HOME/config/live-checkouts lists - a working
 # copy outside projects/ that something actually runs from (a scheduled job's
 # repo, a symlinked skills tree, a service's source). One entry per line:
-#   <project> <path> [lock=<lock-path>] [capture=<dir>/:<command>] [post-update command...]
-# Blank lines and lines starting with # are ignored; a leading ~/ in <path> or
-# <lock-path> expands to $HOME. An absent file means no live checkouts.
+#   <project> <path> [lock=<lock-path>] [capture=<dir>/:<command>] [running=<pid-file>] [post-update command...]
+# Blank lines and lines starting with # are ignored; a leading ~/ in <path>,
+# <lock-path> or <pid-file> expands to $HOME. An absent file means no live checkouts.
 # Each live checkout gets the same guards as a clone - clone root, origin, clean
 # tree, on its default branch (or the safe detached-HEAD self-heal), merge
 # --ff-only, else a loud STUCK line - but never branch pruning and never the
@@ -57,7 +57,12 @@
 # process start stamp; another sync of that checkout that finds the same process
 # still alive starts no second run and prints "activating: post-update command
 # already running (pid <pid>, since <time>)" instead, leaving the next sync to run
-# it for the newer HEAD.
+# it for the newer HEAD. running=<pid-file> extends that to a run fleet-sync did
+# not start (by hand, or by another tool): it names the file the command's own
+# one-at-a-time guard writes its pid to, and while that pid is a live process
+# that started no later than the file was written, so a reused pid never counts,
+# the sync prints the same "activating:" line with the file's write time as
+# <time>. A dead or reused pid there is no run, so the command runs as usual.
 # Its output still goes to stderr, and a failure's STUCK line also ends with
 # "; last output: " and the command's last POST_UPDATE_TAIL_LINES non-blank lines
 # joined with " / ", so a relay that keeps only stdout still names the reason.
@@ -940,6 +945,30 @@ post_update_still_running() {
     && [ -n "$started" ] && [ "$(LC_ALL=C TZ=UTC0 ps -p "$RUNNING_PID" -o lstart= 2>/dev/null)" = "$started" ]
 }
 
+# post_update_running_by_pid_file <pid-file>: true while the pid <pid-file>
+# holds is a live process that started no later than the file was written (one
+# second of slack for ps and mtime rounding), so a pid reused after the run
+# ended never counts; sets RUNNING_PID and RUNNING_SINCE, the file's write time.
+post_update_running_by_pid_file() {
+  local pid="" age written
+  RUNNING_PID="" RUNNING_SINCE=""
+  [ -n "$1" ] && [ -f "$1" ] || return 1
+  read -r pid _ < "$1" 2>/dev/null || [ -n "$pid" ] || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  age=$(ps -p "$pid" -o etime= 2>/dev/null | LC_ALL=C awk 'NF == 1 {
+      n = split($1, part, ":"); days = 0
+      if (index(part[1], "-") > 0) { split(part[1], dh, "-"); days = dh[1]; part[1] = dh[2] }
+      secs = 0; for (i = 1; i <= n; i++) secs = secs * 60 + part[i]
+      print secs + days * 86400 }')
+  case "$age" in ''|*[!0-9]*) return 1 ;; esac
+  written=$(fm_lock_path_mtime "$1") || return 1
+  case "$written" in ''|*[!0-9]*) return 1 ;; esac
+  [ $(( $(date +%s) - age )) -le $((written + 1)) ] || return 1
+  RUNNING_PID=$pid
+  RUNNING_SINCE=$(date -u -r "$written" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -d "@$written" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || RUNNING_SINCE=$written
+}
+
 # exec_recording_run <running-file> <command>: write this process's pid, start
 # time and start stamp to <running-file>, then exec <command> as this same
 # process. Not a background job: without job control bash starts one with
@@ -963,7 +992,7 @@ run_post_update() {
   if [ -n "$recorded" ] && [ "$recorded" = "$head" ]; then
     return 0
   fi
-  if post_update_still_running "$record.running"; then
+  if post_update_still_running "$record.running" || post_update_running_by_pid_file "$RUNNING_PID_FILE"; then
     echo "$label: activating: post-update command already running (pid $RUNNING_PID, since $RUNNING_SINCE); the next sync runs it for $(git -C "$PROJ" rev-parse --short HEAD) if it still needs to"
     return 0
   fi
@@ -1008,10 +1037,12 @@ write_live_record() {
   fi
 }
 
-# sync_live_checkout <project> <path> <lock> <capture> <command> <lock-wait-secs>
+# sync_live_checkout <project> <path> <lock> <capture> <command> <lock-wait-secs> <pid-file>
 sync_live_checkout() {
   local project=$1 path=$2 lock=$3 capture=$4 cmd=$5 wait_secs=$6 self before moved
   PROJ=$(expand_home "$path")
+  RUNNING_PID_FILE=""
+  [ -z "$7" ] || RUNNING_PID_FILE=$(expand_home "$7")
   label="$project live $path"
   CAPTURE_DIR="" CAPTURE_CMD=""
   if [ -n "$capture" ]; then
@@ -1061,7 +1092,7 @@ sync_live_checkout() {
 # sync_live_checkouts <project-or-empty> <lock-wait-secs>: sync the configured
 # live checkouts for one project, or every entry when the project is empty.
 sync_live_checkouts() {
-  local only=$1 wait_secs=$2 line project path lock capture cmd rest token n=0
+  local only=$1 wait_secs=$2 line project path lock capture running cmd rest token n=0
   [ -f "$LIVE_CHECKOUTS_FILE" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n + 1))
@@ -1078,12 +1109,13 @@ sync_live_checkouts() {
       continue
     fi
     [ -z "$only" ] || [ "$project" = "$only" ] || continue
-    lock="" capture=""
+    lock="" capture="" running=""
     while :; do
       token=${rest%%[[:space:]]*}
       case "$token" in
         lock=*) lock=${token#lock=} ;;
         capture=*) capture=${token#capture=} ;;
+        running=*) running=${token#running=} ;;
         *) break ;;
       esac
       rest=${rest#"$token"}
@@ -1099,7 +1131,7 @@ sync_live_checkouts() {
       continue
     fi
     cmd=$rest
-    sync_live_checkout "$project" "$path" "$lock" "$capture" "$cmd" "$wait_secs"
+    sync_live_checkout "$project" "$path" "$lock" "$capture" "$cmd" "$wait_secs" "$running"
   done < "$LIVE_CHECKOUTS_FILE"
 }
 
