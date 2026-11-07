@@ -403,7 +403,13 @@ make_project() {  # <dir>
   mkdir -p "$dir"
   git -C "$dir" init -q
   printf '# Herdr projection E2E fixture\n' > "$dir/README.md"
-  git -C "$dir" add README.md
+  # The cross-home wave holds ten pool slots at once, more than a host's
+  # user-level Treehouse cap may allow (the fleet sets 8), and a get past the
+  # cap refuses. A repository file replaces that user config, so pin the pool
+  # root and a cap this suite fits under.
+  treehouse_test_pin_repo "$dir" || fail "could not pin the fixture project's Treehouse config"
+  printf 'max_trees = 16\n' >> "$dir/treehouse.toml"
+  git -C "$dir" add README.md treehouse.toml
   git -C "$dir" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
   git clone --quiet --bare "$dir" "$dir.origin.git"
   git -C "$dir" remote add origin "file://$dir.origin.git"
