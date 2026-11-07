@@ -435,7 +435,10 @@ fm_herdr_lab_provision() { # <session>
   else
     fm_herdr_lab_prepare "$name" || return 1
   fi
-  fm_herdr_lab_raw "$name" server >/dev/null 2>&1 &
+  # The server hands its environment to every pane it creates or restores, and
+  # Herdr registers any pane carrying a harness wrapper's HERDR_AGENT hint as
+  # that agent, so drop it as fm_backend_herdr_server_ensure does.
+  HERDR_SESSION="$name" env -u HERDR_AGENT herdr server --session "$name" >/dev/null 2>&1 &
   server_pid=$!
   attempt=0
   max_attempts=300
