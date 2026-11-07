@@ -12,7 +12,7 @@
 #   fm-procevent.sh reconcile
 #   fm-procevent.sh classify <result-file>
 #   fm-procevent.sh handled <source-id> <sequence>
-#   fm-procevent.sh retire <source-id> [--if-absent|--if-matches <adapter> -- <argv>...|--if-owner <registration-token>]
+#   fm-procevent.sh retire <source-id> [--if-absent|--if-matches <adapter> [--adopted-from <task-id>|--owner-task <task-id>] -- <argv>...|--if-owner <registration-token>]
 #   fm-procevent.sh retire-task <task-id>
 #   fm-procevent.sh adopt-task <task-id>
 #   fm-procevent.sh retire-quiet-boards
@@ -118,10 +118,12 @@
 #            already retired itself on its adapter's terminal verdict. Existing
 #            unconditional built-in retirement remains compatible. An external
 #            registration requires --if-owner. --if-matches compares a complete
-#            built-in registration, --if-absent refuses while any registration
-#            exists, and --if-owner removes only the exact extension registration
-#            token printed by register-extension, so a stale owner cannot retire
-#            a replacement generation.
+#            built-in registration: a plain firstmate one, or with
+#            --adopted-from or --owner-task the one adopt-task handed over from
+#            that task or the one that task owns. --if-absent refuses while any
+#            registration exists, and --if-owner removes only the exact
+#            extension registration token printed by register-extension, so a
+#            stale owner cannot retire a replacement generation.
 # retire-task
 #            Retire every task-owned source <task-id> holds, through `retire`,
 #            when that task is torn down. An unacknowledged captured round the
@@ -1907,16 +1909,13 @@ cmd_retire_quiet_boards() {
     fi
     [ -n "$reason" ] || continue
     # The registration must still be the one read above: a board armed or
-    # handed over again during the sweep is not this one. A plain record is
-    # also retired only on an exact match; an adopted record has no exact
-    # matcher and is retired by id.
+    # handed over again during the sweep is not this one. The retire is also
+    # conditional on the record content read above, so a re-arm that changes
+    # that record after this check is refused under the source lock.
     [ "$(fm_pr_file_identity "$(source_file "$id")" 2>/dev/null)" = "$identity" ] || continue
-    if [ -n "$adopted" ]; then
-      set -- "$id"
-    else
-      set -- "$id" --if-matches "$adapter" -- "${ARGV[@]}"
-    fi
-    if ! "$SCRIPT_DIR/fm-procevent.sh" retire "$@" >/dev/null 2>&1; then
+    set -- "$id" --if-matches "$adapter"
+    [ -z "$adopted" ] || set -- "$@" --adopted-from "$adopted"
+    if ! "$SCRIPT_DIR/fm-procevent.sh" retire "$@" -- "${ARGV[@]}" >/dev/null 2>&1; then
       board_retire_log "board-retire-failed: $id reason=$reason"
       printf 'board-retire-failed: %s\n' "$id" >&2
       continue
@@ -2552,7 +2551,7 @@ release_owned_claim_locked() {  # <source-id> [extension-binding-digest]
 
 cmd_retire() {
   local id=${1-} condition=${2-} adapter='' sep='' expected_owner='' owner_state
-  local extension_binding_digest='' round_owner=''
+  local extension_binding_digest='' round_owner='' record_owner=firstmate
   fm_procevent_source_id_valid "$id" || die "source id must be path-safe: $id"
   case "$condition" in
     '') [ "$#" -eq 1 ] || usage ;;
@@ -2565,8 +2564,16 @@ cmd_retire() {
       ;;
     --if-matches)
       adapter=${3-}
-      sep=${4-}
-      shift 4 2>/dev/null || usage
+      shift 3 2>/dev/null || usage
+      case "${1-}" in
+        --adopted-from|--owner-task)
+          fm_pr_task_id_valid "${2-}" || die "task id is invalid: ${2-}"
+          if [ "$1" = --adopted-from ]; then record_owner="adopted:$2"; else record_owner="task:$2"; fi
+          shift 2
+          ;;
+      esac
+      sep=${1-}
+      shift 1 2>/dev/null || usage
       fm_procevent_adapter_valid "$adapter" \
         || die "adapter name must be lowercase alphanumeric or dash: $adapter"
       [ "$sep" = -- ] && [ "$#" -ge 1 ] || usage
@@ -2600,7 +2607,7 @@ cmd_retire() {
         die "source registration does not match the expected owner: $id"
         ;;
       --if-matches)
-        if ! fm_procevent_registration_matches_locked "$STATE" "$adapter" "$id" "$@"; then
+        if ! fm_procevent_registration_matches_locked "$STATE" "$adapter" "$record_owner" "$id" "$@"; then
           fm_procevent_source_lock_release "$id"
           die "source registration does not match the expected owner: $id"
         fi
