@@ -136,21 +136,33 @@ test_full_companion_pool_defers_before_anything_is_taken() {
   assert_no_grep "treehouse <get>" "$log" "a deferred spawn asked Treehouse for a worktree"
   assert_no_grep "treehouse <lease>" "$log" "a deferred spawn leased a worktree"
   [ "$(lease_holder "$JOBS_POOL")" = other-task ] || fail "the deferral changed the companion slot's lease"
-  pass "a spawn whose companion pool is full defers with exit 75, names the holders, and takes nothing"
+
+  id='also-pool-full-mismatch-c1'
+  make_case pool-full-mismatch "$id"
+  printf 'max_trees = 1\n' > "$JOBS_DIR/treehouse.toml"
+  lease_to "$JOBS_POOL" other-task
+  out=$(run_spawn "$id" --mode direct-PR --yolo off --also jobs)
+  status=$?
+  expect_code 1 "$status" "a full companion pool deferred a spawn whose --also disagrees with its brief"$'\n'"$out"
+  assert_contains "$out" "dependent repositories mismatch" "the mismatch refusal was hidden by the full pool"
+  pass "a spawn whose companion pool is full defers with exit 75, names the holders, and takes nothing, after --also is validated"
 }
 
 # A companion lease Treehouse refuses for any other reason fails the spawn with
 # Treehouse's own error, and returns the task's own slot it already took.
 test_refused_companion_lease_shows_treehouse_error() {
-  local id='also-get-refused-c1' out status
+  local id='also-get-refused-c1' out status log
   make_case get-refused "$id" --also jobs
   lease_to "$JOBS_POOL" other-task
-  out=$(run_spawn "$id" --mode direct-PR --yolo off --also jobs)
+  log="$CASE_DIR/runtime.log"
+  out=$(FM_RUNTIME_LOG="$log" run_spawn "$id" --mode direct-PR --yolo off --also jobs)
   status=$?
   expect_code 1 "$status" "a spawn whose companion lease was refused did not fail"$'\n'"$out"
   assert_contains "$out" "treehouse could not lease a companion worktree of jobs for task $id: no free worktree in the pool" \
     "the refusal hid Treehouse's own error"
   assert_absent "$HOME_DIR/state/$id.meta" "a refused spawn published a task record"
+  assert_grep "treehouse <lease>" "$log" "the spawn never leased the task's own slot, so its return is untested"
+  assert_grep "treehouse <return> <--if-lease-holder> <$id>" "$log" "the refused spawn did not return the task's own slot"
   [ -z "$(lease_holder "$CASE_DIR/sample-pool")" ] || fail "a refused spawn kept the task's own slot leased"
   [ "$(lease_holder "$JOBS_POOL")" = other-task ] || fail "the refusal changed the companion slot's lease"
   pass "a refused companion lease names Treehouse's error and returns the task's own slot"
