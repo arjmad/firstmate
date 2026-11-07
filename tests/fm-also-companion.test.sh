@@ -109,6 +109,65 @@ test_spawn_grants_a_companion_worktree() {
   pass "spawn --also leases, claims, refreshes, records, and lists one companion worktree"
 }
 
+lease_to() {  # <pool> <holder>
+  node -e 'const fs = require("fs"); const s = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    Object.assign(s.worktrees[0], { leased: true, lease_id: "held", lease_holder: process.argv[2] });
+    fs.writeFileSync(process.argv[1], JSON.stringify(s))' "$1/treehouse-state.json" "$2"
+}
+
+# A companion pool with every slot busy at its max_trees cap defers the spawn
+# exactly as a full primary pool does: exit 75 naming the holders, before any
+# launch brief, endpoint, or slot of either pool is taken.
+test_full_companion_pool_defers_before_anything_is_taken() {
+  local id='also-pool-full-c1' out status log
+  make_case pool-full "$id" --also jobs
+  printf 'max_trees = 1\n' > "$JOBS_DIR/treehouse.toml"
+  lease_to "$JOBS_POOL" other-task
+  log="$CASE_DIR/runtime.log"
+  out=$(FM_RUNTIME_LOG="$log" run_spawn "$id" --mode direct-PR --yolo off --also jobs)
+  status=$?
+  expect_code 75 "$status" "a spawn whose companion pool is full was not deferred"$'\n'"$out"
+  assert_contains "$out" "deferred: jobs pool full (1/1): held by other-task" \
+    "the deferral did not name the full companion pool and its holders"
+  assert_contains "$out" "task $id was not launched and its backlog item stays queued" \
+    "the companion pool-full deferral did not say the task stays queued"
+  assert_absent "$HOME_DIR/state/$id.meta" "a deferred spawn published a task record"
+  assert_absent "$HOME_DIR/data/$id/launch-brief.md" "a deferred spawn rendered a launch brief"
+  assert_no_grep "treehouse <get>" "$log" "a deferred spawn asked Treehouse for a worktree"
+  assert_no_grep "treehouse <lease>" "$log" "a deferred spawn leased a worktree"
+  [ "$(lease_holder "$JOBS_POOL")" = other-task ] || fail "the deferral changed the companion slot's lease"
+
+  id='also-pool-full-mismatch-c1'
+  make_case pool-full-mismatch "$id"
+  printf 'max_trees = 1\n' > "$JOBS_DIR/treehouse.toml"
+  lease_to "$JOBS_POOL" other-task
+  out=$(run_spawn "$id" --mode direct-PR --yolo off --also jobs)
+  status=$?
+  expect_code 1 "$status" "a full companion pool deferred a spawn whose --also disagrees with its brief"$'\n'"$out"
+  assert_contains "$out" "dependent repositories mismatch" "the mismatch refusal was hidden by the full pool"
+  pass "a spawn whose companion pool is full defers with exit 75, names the holders, and takes nothing, after --also is validated"
+}
+
+# A companion lease Treehouse refuses for any other reason fails the spawn with
+# Treehouse's own error, and returns the task's own slot it already took.
+test_refused_companion_lease_shows_treehouse_error() {
+  local id='also-get-refused-c1' out status log
+  make_case get-refused "$id" --also jobs
+  lease_to "$JOBS_POOL" other-task
+  log="$CASE_DIR/runtime.log"
+  out=$(FM_RUNTIME_LOG="$log" run_spawn "$id" --mode direct-PR --yolo off --also jobs)
+  status=$?
+  expect_code 1 "$status" "a spawn whose companion lease was refused did not fail"$'\n'"$out"
+  assert_contains "$out" "treehouse could not lease a companion worktree of jobs for task $id: no free worktree in the pool" \
+    "the refusal hid Treehouse's own error"
+  assert_absent "$HOME_DIR/state/$id.meta" "a refused spawn published a task record"
+  assert_grep "treehouse <lease>" "$log" "the spawn never leased the task's own slot, so its return is untested"
+  assert_grep "treehouse <return> <--if-lease-holder> <$id>" "$log" "the refused spawn did not return the task's own slot"
+  [ -z "$(lease_holder "$CASE_DIR/sample-pool")" ] || fail "a refused spawn kept the task's own slot leased"
+  [ "$(lease_holder "$JOBS_POOL")" = other-task ] || fail "the refusal changed the companion slot's lease"
+  pass "a refused companion lease names Treehouse's error and returns the task's own slot"
+}
+
 test_spawn_refuses_a_brief_and_flag_mismatch() {
   local id='also-mismatch-c1' out status
   make_case mismatch "$id" --also jobs
@@ -242,6 +301,8 @@ test_pr_check_companion_after_the_main_pr_keeps_its_poll_valid() {
 }
 
 test_spawn_grants_a_companion_worktree
+test_full_companion_pool_defers_before_anything_is_taken
+test_refused_companion_lease_shows_treehouse_error
 test_spawn_refuses_a_brief_and_flag_mismatch
 test_spawn_refuses_an_unusable_companion
 test_spawn_refuses_an_external_or_unresolvable_companion_forge

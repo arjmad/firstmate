@@ -52,7 +52,8 @@
 #   project. After the task's own slot is leased, each companion slot is taken
 #   with `treehouse get --lease --lease-holder <task-id>` under that project's
 #   Treehouse lock (waited for at most 60 seconds, then refused, so two spawns
-#   naming each other's projects cannot deadlock), claimed for the task,
+#   naming each other's projects cannot deadlock; a refusal carries Treehouse's
+#   own error), claimed for the task,
 #   refreshed to origin's default branch, and listed under "Companion worktrees"
 #   at the end of the launch brief. The task record carries also=<repos> and
 #   also_worktree_<repo>= and also_project_<repo>= per repo; a relaunch keeps
@@ -246,7 +247,10 @@
 #   exactly as queued as it was; an unreadable declaration refuses with exit 1.
 #   A Treehouse-backed spawn whose project pool is full (bin/fm-wake-lib.sh's
 #   fm_treehouse_pool_full) is deferred the same way, under the same lock, with
-#   one `deferred: <project> pool full (N/N): held by ...` line.
+#   one `deferred: <project> pool full (N/N): held by ...` line. A ship whose
+#   validated --also companion pool is full is deferred the same way, naming
+#   that repository; that check reads the pool without the companion's lock, so
+#   a companion slot taken in between still fails its later lease with exit 1.
 #   A batch reports such a pair as `batch: DEFERRED` and exits 75 when nothing
 #   else failed. A relaunch and a --secondmate spawn are never counted against
 #   capacity.
@@ -4035,6 +4039,58 @@ fi
   echo "error: task $ID has no brief at inaccessible data path $BRIEF" >&2
   exit 1
 }
+
+# Dependent repositories (--also; see the header). Resolved before any launch
+# brief, endpoint, worktree, or record exists, so every refusal and full
+# companion pool deferral here leaves nothing.
+ALSO_PROJECTS=()
+if [ "$KIND" = ship ] && [ "$RELAUNCH" -eq 0 ]; then
+  BRIEF_ALSO=$(sed -n 's/^Dependent repositories: //p' "$BRIEF")
+  [ "$(printf '%s\n' "$BRIEF_ALSO" | grep -c .)" -le 1 ] || {
+    echo "error: $BRIEF records more than one Dependent repositories line; re-scaffold it with bin/fm-brief.sh --also" >&2
+    exit 1
+  }
+  SPAWN_ALSO="${ALSO_REPOS[*]-}"
+  [ "$BRIEF_ALSO" = "$SPAWN_ALSO" ] || {
+    echo "error: dependent repositories mismatch for $ID: the brief says '${BRIEF_ALSO:-none}' but this spawn passed --also '${SPAWN_ALSO:-none}'; pass the brief's repositories with --also, in its order" >&2
+    exit 1
+  }
+  if [ "${#ALSO_REPOS[@]}" -gt 0 ]; then
+    [ "$BACKEND" != orca ] || {
+      echo "error: --also needs Treehouse companion slots; the Orca backend owns its single worktree, so spawn $ID on a session-provider backend" >&2
+      exit 1
+    }
+    PROJ_ABS_PHYSICAL=$(cd "$PROJ_ABS" && pwd -P)
+    for also_repo in "${ALSO_REPOS[@]}"; do
+      case "$also_repo" in
+        ''|-*|*[!A-Za-z0-9_-]*)
+          echo "error: --also takes a registered project name of letters, digits, '-' and '_' (got '$also_repo')" >&2
+          exit 1 ;;
+      esac
+      also_dir="$PROJECTS/$also_repo"
+      also_top=$(git -C "$also_dir" rev-parse --show-toplevel 2>/dev/null) || {
+        echo "error: --also $also_repo names no project clone at $also_dir" >&2
+        exit 1
+      }
+      also_abs=$(cd "$also_dir" && pwd -P)
+      [ "$(cd "$also_top" && pwd -P)" = "$also_abs" ] || {
+        echo "error: --also $also_repo resolves to $also_top, not the clone root $also_abs" >&2
+        exit 1
+      }
+      [ "$also_abs" != "$PROJ_ABS_PHYSICAL" ] || {
+        echo "error: --also $also_repo is this task's own project" >&2
+        exit 1
+      }
+      ALSO_PROJECTS+=("$also_abs")
+    done
+    for also_i in "${!ALSO_PROJECTS[@]}"; do
+      fm_treehouse_pool_full "${ALSO_PROJECTS[$also_i]}" || continue
+      echo "deferred: ${ALSO_REPOS[$also_i]} pool full ($FM_TREEHOUSE_POOL_SLOTS/$FM_TREEHOUSE_POOL_CAP): held by $FM_TREEHOUSE_POOL_HOLDERS; every Treehouse worktree slot of companion repository ${ALSO_REPOS[$also_i]} is busy at the pool's max_trees cap, so task $ID was not launched and its backlog item stays queued - dispatch it again once one of them is cleaned up" >&2
+      exit "$FM_PROJECT_CAPACITY_DEFER_EXIT"
+    done
+  fi
+fi
+
 if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   if fm_brief_task_placeholders_present "$BRIEF"; then
     echo "error: $BRIEF still contains {TASK} or {FIRSTMATE_SPEC}; fill ## Captain's intent and ## Firstmate spec before spawn" >&2
@@ -4098,51 +4154,6 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
     rm -f -- "$BRIEF_TMP"
     echo "error: could not publish current launch contract for $SOURCE_BRIEF" >&2
     exit 1
-  fi
-fi
-
-# Dependent repositories (--also; see the header). Resolved before any
-# endpoint, worktree, or record exists, so every refusal here leaves nothing.
-ALSO_PROJECTS=()
-if [ "$KIND" = ship ] && [ "$RELAUNCH" -eq 0 ]; then
-  BRIEF_ALSO=$(sed -n 's/^Dependent repositories: //p' "$BRIEF")
-  [ "$(printf '%s\n' "$BRIEF_ALSO" | grep -c .)" -le 1 ] || {
-    echo "error: $BRIEF records more than one Dependent repositories line; re-scaffold it with bin/fm-brief.sh --also" >&2
-    exit 1
-  }
-  SPAWN_ALSO="${ALSO_REPOS[*]-}"
-  [ "$BRIEF_ALSO" = "$SPAWN_ALSO" ] || {
-    echo "error: dependent repositories mismatch for $ID: the brief says '${BRIEF_ALSO:-none}' but this spawn passed --also '${SPAWN_ALSO:-none}'; pass the brief's repositories with --also, in its order" >&2
-    exit 1
-  }
-  if [ "${#ALSO_REPOS[@]}" -gt 0 ]; then
-    [ "$BACKEND" != orca ] || {
-      echo "error: --also needs Treehouse companion slots; the Orca backend owns its single worktree, so spawn $ID on a session-provider backend" >&2
-      exit 1
-    }
-    PROJ_ABS_PHYSICAL=$(cd "$PROJ_ABS" && pwd -P)
-    for also_repo in "${ALSO_REPOS[@]}"; do
-      case "$also_repo" in
-        ''|-*|*[!A-Za-z0-9_-]*)
-          echo "error: --also takes a registered project name of letters, digits, '-' and '_' (got '$also_repo')" >&2
-          exit 1 ;;
-      esac
-      also_dir="$PROJECTS/$also_repo"
-      also_top=$(git -C "$also_dir" rev-parse --show-toplevel 2>/dev/null) || {
-        echo "error: --also $also_repo names no project clone at $also_dir" >&2
-        exit 1
-      }
-      also_abs=$(cd "$also_dir" && pwd -P)
-      [ "$(cd "$also_top" && pwd -P)" = "$also_abs" ] || {
-        echo "error: --also $also_repo resolves to $also_top, not the clone root $also_abs" >&2
-        exit 1
-      }
-      [ "$also_abs" != "$PROJ_ABS_PHYSICAL" ] || {
-        echo "error: --also $also_repo is this task's own project" >&2
-        exit 1
-      }
-      ALSO_PROJECTS+=("$also_abs")
-    done
   fi
 fi
 
@@ -4537,7 +4548,7 @@ spawn_worktree_has_origin_config() { # <worktree>
 # to SPAWN_ALSO_LEASED_PATHS before anything else can fail, so the abort
 # cleanup returns it, and to SPAWN_ALSO_PATHS once it is claimed and fresh.
 spawn_take_companion_slot() { # <repo> <project>
-  local repo=$1 proj=$2 out path path_real top
+  local repo=$1 proj=$2 out err err_file path path_real top
   SPAWN_ALSO_LOCK=$(fm_treehouse_project_lock_path "$proj") || {
     echo "error: could not resolve the shared Treehouse project lock for companion project $proj" >&2
     return 1
@@ -4547,10 +4558,17 @@ spawn_take_companion_slot() { # <repo> <project>
     return 1
   }
   SPAWN_ALSO_LOCK_HELD=1
-  out=$( (cd "$proj" && treehouse get --lease --lease-holder "$ID") </dev/null 2>/dev/null ) || {
-    echo "error: treehouse could not lease a companion worktree of $repo for task $ID" >&2
+  err_file=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-spawn-also.XXXXXX") || {
+    echo "error: could not create a file for treehouse's error output while leasing a companion worktree of $repo for task $ID" >&2
     return 1
   }
+  if ! out=$( (cd "$proj" && treehouse get --lease --lease-holder "$ID") </dev/null 2>"$err_file" ); then
+    err=$(sed '/^[[:space:]]*$/d' "$err_file" | tr '\n\t' '  ' | tr -d '[:cntrl:]')
+    rm -f -- "$err_file"
+    echo "error: treehouse could not lease a companion worktree of $repo for task $ID${err:+: ${err% }}" >&2
+    return 1
+  fi
+  rm -f -- "$err_file"
   path=$(printf '%s\n' "$out" | sed '/^$/d' | tail -n 1)
   [ -n "$path" ] && [ -d "$path" ] || {
     echo "error: treehouse leased no usable companion worktree of $repo for task $ID (got '${path:-nothing}')" >&2
