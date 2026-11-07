@@ -1657,9 +1657,10 @@ lab workspace get "$DUP1_WSID" >/dev/null 2>&1 || fail "duplicate-token recovery
 lab workspace get "$DUP2_WSID" >/dev/null 2>&1 || fail "duplicate-token recovery removed the second quarantined workspace"
 
 # Herdr drops a reported registration for an agent label it does not know
-# within about two seconds, so report a known one and confirm it took.
+# within about two seconds, so report a known one and confirm it outlasts that.
 lab pane report-agent "$DUP1_PANE" --source fm-projection-e2e --agent claude --state idle >/dev/null \
   || fail "could not register the duplicate-live-agent risk fixture"
+sleep 3
 lab agent get "$DUP1_PANE" >/dev/null 2>&1 \
   || fail "Herdr did not register the duplicate-live-agent risk fixture"
 START=$(log_line_count)

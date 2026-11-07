@@ -49,6 +49,10 @@ command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the her
 # inherited from the terminal it was launched in must not follow spawn into it
 # as a cross-session parent identity (tests/herdr-test-safety.sh).
 herdr_forget_inherited_pane
+# A run launched from a Claude Code agent inherits its wrapper's HERDR_AGENT
+# hint. Pin it so every runner proves fm_backend_herdr_server_ensure drops it;
+# otherwise each restored husk below registers as claude and is refused.
+export HERDR_AGENT=claude
 
 SESSION="fm-lab-respawn-idem-e2e-$$"
 export HERDR_SESSION="$SESSION"
@@ -165,9 +169,10 @@ pass "fixed: the workspace holds exactly the 2 replacement tabs after both respa
 # that actually has something registered in it.
 
 # Herdr drops a reported registration for an agent label it does not know
-# within about two seconds, so report a known one and confirm it took.
+# within about two seconds, so report a known one and confirm it outlasts that.
 herdr pane report-agent "$NEW_CREW_PANE_ID" --source fm-respawn-e2e --agent claude --state idle --session "$SESSION" >/dev/null 2>&1 \
   || fail "could not register a live agent on the respawned crewmate-shaped pane"
+sleep 3
 herdr agent get "$NEW_CREW_PANE_ID" --session "$SESSION" >/dev/null 2>&1 \
   || fail "Herdr did not register the live agent on the respawned crewmate-shaped pane"
 

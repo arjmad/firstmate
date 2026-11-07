@@ -142,9 +142,10 @@ if [ -z "$LIVE_DUP_TAB_ID" ] || [ -z "$LIVE_DUP_PANE_ID" ]; then
   fail "live-duplicate scenario tab creation did not return ids"
 fi
 # Herdr drops a reported registration for an agent label it does not know
-# within about two seconds, so report a known one and confirm it took.
+# within about two seconds, so report a known one and confirm it outlasts that.
 herdr pane report-agent "$LIVE_DUP_PANE_ID" --source fm-smoke-test --agent claude --state idle --session "$SESSION" >/dev/null 2>&1 \
   || fail "could not register a live agent on the live-duplicate scenario's pane"
+sleep 3
 herdr agent get "$LIVE_DUP_PANE_ID" --session "$SESSION" >/dev/null 2>&1 \
   || fail "Herdr did not register the live agent on the live-duplicate scenario's pane"
 if fm_backend_herdr_create_task "$CONTAINER" "$LIVE_DUP_LABEL" /tmp >/dev/null 2>&1; then
