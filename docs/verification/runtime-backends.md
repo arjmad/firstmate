@@ -2363,6 +2363,29 @@ poll 8: {"agent_status":"working","session":".../2026-09-21T14-10-08-776Z_01a0c4
 
 The read that supplies the reference is `bin/backends/herdr.sh`'s `fm_backend_herdr_pane_agent_session_ref`, the per-harness rule is `bin/fm-control-lib.sh`'s `fm_control_relaunch_resume_flag`, and the launch argument is composed by `relaunch_resume_args` in `bin/fm-spawn.sh`; `docs/herdr-backend.md` "Agent status authority and relaunch" owns the contract. Nothing here changes `resume` as a control verb, and only a relaunch asks for it.
 
+### Agent-detection hint in the server environment
+
+Measured 2026-11-07 on Linux x86_64 against Herdr 0.9.5 in isolated `fm-lab-` sessions provisioned through `bin/fm-herdr-lab.sh`.
+
+A pane takes its environment from the Herdr server process, not from the client call that creates it, and Herdr registers any pane whose environment carries `HERDR_AGENT=<label>` as that agent even when only a shell runs there.
+The fleet's Claude wrapper sets that hint for its own process, so a server started from inside a Claude agent registered every pane it created or restored.
+Each run below created a workspace whose pane ran `sh -c 'while :; do sleep 60; done'`, then stopped and re-provisioned the session and read the restored pane:
+
+```text
+server HERDR_AGENT=claude, client HERDR_AGENT=claude:  before stop {"agent":"claude","agent_status":"unknown"}; restored pane (only -zsh) registers claude unknown within 1s, idle by 4s
+server HERDR_AGENT unset,  client HERDR_AGENT=claude:  agent_not_found before the stop and through 6s after the restore
+server HERDR_AGENT=claude, client HERDR_AGENT unset:   claude registered before the stop and after the restore
+```
+
+`herdr agent explain` on such a pane names no matched rule and reports `fallback_reason` `default_known_agent_idle_fallback`.
+The restored husk then reads `unknown`, or `stale-agent` once Herdr's fallback reports `idle`, so the same-identity reclaim and `create_task` husk replacement refused it.
+`fm_backend_herdr_server_ensure` and `bin/fm-herdr-lab.sh provision` therefore start the server without `HERDR_AGENT`; a real agent still registers from its own process, as the next measurement shows.
+
+With the hint dropped from the server, a foreground process whose kernel name is `claude` (a `#!/bin/bash` sleep loop) registered as `claude` within a second, `unknown` and then `idle`, and `ctrl+c` released the registration within a second.
+`herdr pane report-agent ... --agent <label> --state idle` exits 0 for any label, but a label Herdr does not know (`test-agent`, `fm-smoke-live-agent`, `fm-respawn-live-agent`) is gone from `agent get` within about two seconds, while `claude` and `pi` stayed registered across a polling window of over 20 seconds.
+So the live-duplicate fixtures in `tests/fm-backend-herdr-presentation-e2e.test.sh`, `tests/fm-backend-herdr-smoke.test.sh`, and `tests/fm-backend-herdr-respawn-idem-e2e.test.sh` report `claude` and assert the registration took.
+`tests/fm-backend-herdr-presentation-e2e.test.sh` refreshes this record: it exports the hint, asserts the restored pane stays agent-free across the detection window, and proves a live `claude` process in that pane still refuses the reclaim.
+
 ### Away-mode transport
 
 The away daemon is no longer launched on Pi; the away posture there is the record `bin/fm-afk-contract.sh` owns.

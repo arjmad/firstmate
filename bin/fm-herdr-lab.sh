@@ -61,16 +61,20 @@ fm_herdr_lab_tripwire_path() { # <session>
   printf '%s/%s.fleet-state.json' "$(fm_herdr_lab_state_dir)" "$1"
 }
 
+# Every call drops HERDR_AGENT: a server hands its environment to every pane it
+# creates or restores, and Herdr registers any pane carrying a harness
+# wrapper's HERDR_AGENT hint as that agent, as fm_backend_herdr_server_ensure
+# also prevents.
 fm_herdr_lab_raw() { # <session> <herdr arguments...>
   local name=$1 i
   shift
   local -a args=("$@")
   for ((i = 0; i < ${#args[@]}; i++)); do
     [ "${args[i]}" = -- ] || continue
-    HERDR_SESSION="$name" herdr "${args[@]:0:i}" --session "$name" "${args[@]:i}"
+    HERDR_SESSION="$name" env -u HERDR_AGENT herdr "${args[@]:0:i}" --session "$name" "${args[@]:i}"
     return
   done
-  HERDR_SESSION="$name" herdr "$@" --session "$name"
+  HERDR_SESSION="$name" env -u HERDR_AGENT herdr "$@" --session "$name"
 }
 
 fm_herdr_lab_session_list() { # <session>

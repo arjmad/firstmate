@@ -652,10 +652,12 @@ An environment variable alone is not reliable when another Herdr server is runni
 When the selected named server is not running, the adapter launches it without these inherited values:
 
 - Firstmate home and directory overrides.
-- Harness identity markers.
+- Harness identity markers, including the `HERDR_AGENT` agent-detection hint a harness wrapper sets for its own process.
 - The supervision-model override.
 
 Herdr passes its server startup environment to every later pane, so retaining those values could misroute panes for another Firstmate home or harness.
+Herdr registers any pane carrying `HERDR_AGENT` as that agent even when only a shell runs there, so a restored shell husk would never read as agent-free and its same-identity reclaim would be refused.
+`bin/fm-herdr-lab.sh` drops the same hint when it provisions a lab server.
 An already-running server is reused without restart or environment changes.
 Explicit named-session routing and unrelated launch environment remain intact.
 

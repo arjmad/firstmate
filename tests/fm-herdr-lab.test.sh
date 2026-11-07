@@ -52,6 +52,7 @@ case "$1 ${2:-}" in
     fi
     ;;
   "server --session")
+    printf '%s\n' "${HERDR_AGENT-<unset>}" > "$state/$session.server-herdr-agent"
     if [ "${FM_FAKE_HERDR_SERVER_DELAY:-0}" != 0 ]; then
       "$FM_FAKE_HERDR_REAL_SLEEP" "$FM_FAKE_HERDR_SERVER_DELAY"
     fi
@@ -203,6 +204,18 @@ test_run_scopes_session_before_double_dash() {
 
   run_with_fake fm_herdr_lab_teardown "$name" || fail "double-dash fixture teardown failed"
   pass "fm-herdr-lab: run keeps the lab session a Herdr option before any -- delimiter"
+}
+
+# The lab server hands its startup environment to every pane it creates or
+# restores, and Herdr registers a pane as the agent HERDR_AGENT names whatever
+# actually runs there; a harness wrapper that sets that hint must not reach it.
+test_provision_drops_inherited_agent_detection_hint() {
+  local name="fm-lab-agent-hint-$$"
+  HERDR_AGENT=claude run_with_fake fm_herdr_lab_provision "$name" || fail "agent-hint fixture provision failed"
+  [ "$(cat "$FAKE_STATE/$name.server-herdr-agent")" = '<unset>' ] \
+    || fail "provision passed the caller's HERDR_AGENT to the lab server: $(cat "$FAKE_STATE/$name.server-herdr-agent")"
+  run_with_fake fm_herdr_lab_teardown "$name" || fail "agent-hint fixture teardown failed"
+  pass "fm-herdr-lab: provision starts the lab server without an inherited agent-detection hint"
 }
 
 test_missing_tripwire_blocks_destruction() {
@@ -601,6 +614,7 @@ test_viewer_launcher_refuses_unsafe_arguments() {
 test_refuses_unsafe_names
 test_provision_run_and_guarded_teardown
 test_run_scopes_session_before_double_dash
+test_provision_drops_inherited_agent_detection_hint
 test_missing_tripwire_blocks_destruction
 test_changed_default_trips_after_teardown
 test_tripwire_follows_a_non_default_live_fleet

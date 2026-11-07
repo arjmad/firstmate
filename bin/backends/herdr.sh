@@ -1758,15 +1758,18 @@ fm_backend_herdr_server_session_prefix() {  # [platform]
 # NOT auto-start the server, so this must run before any workspace/tab/pane
 # call. The server outlives its launcher and passes its startup environment to
 # every later pane, so remove home, harness identity, and supervision selection
-# inherited from whichever agent happened to start it. Bounded poll for the
-# server to report running.
+# inherited from whichever agent happened to start it. That includes
+# HERDR_AGENT, the agent-detection hint a harness wrapper sets for its own
+# process: Herdr registers every pane carrying it as that agent even when only
+# a shell runs there, and a restored shell husk would then never read
+# agent-free. Bounded poll for the server to report running.
 fm_backend_herdr_server_ensure() {  # <session>
   local session=$1 running out i
   running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
   [ "$running" = "true" ] && return 0
   (
     unset FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE \
-      CURSOR_AGENT CURSOR_INVOKED_AS CLAUDECODE PI_CODING_AGENT FM_PI_HARNESS GROK_AGENT FM_SUPERVISION_MODEL
+      CURSOR_AGENT CURSOR_INVOKED_AS CLAUDECODE PI_CODING_AGENT FM_PI_HARNESS GROK_AGENT FM_SUPERVISION_MODEL HERDR_AGENT
     client_bin=$(fm_backend_herdr_client_bin "$session")
     # On Linux under a lingering user manager the server, and every pane it
     # later spawns, goes in firstmate's slice rather than the caller's SSH
