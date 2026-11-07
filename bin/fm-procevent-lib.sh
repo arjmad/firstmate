@@ -561,12 +561,27 @@ fm_procevent_extension_registration_load_locked() {  # <state> <source-id>
   fm_procevent_extension_registration_token_valid "$FM_PROCEVENT_EXTENSION_REGISTRATION_TOKEN" || return 2
 }
 
-# Exact legacy registration comparison used by conditional built-in retirement.
-fm_procevent_registration_matches_locked() {  # <state> <adapter> <source-id> <argv...>
-  local state=$1 adapter=$2 id=$3 reg dest tmp arg status=1
-  shift 3
+# Exact registration comparison used by conditional built-in retirement. The
+# owner is `firstmate` for a plain record, `adopted:<task-id>` for a record
+# fm_procevent_adopted_registration_publish_locked wrote, and
+# `task:<task-id>` for one fm_procevent_task_registration_publish_locked wrote.
+fm_procevent_registration_matches_locked() {  # <state> <adapter> <owner> <source-id> <argv...>
+  local state=$1 adapter=$2 owner=$3 id=$4 reg dest tmp arg status=1 owner_lines
+  shift 4
   fm_procevent_adapter_valid "$adapter" || return 1
   fm_procevent_source_id_valid "$id" || return 1
+  case "$owner" in
+    firstmate) owner_lines= ;;
+    adopted:*)
+      fm_pr_task_id_valid "${owner#adopted:}" || return 1
+      owner_lines="adopted_from=${owner#adopted:}"$'\n'
+      ;;
+    task:*)
+      fm_pr_task_id_valid "${owner#task:}" || return 1
+      owner_lines="kind=task-owned"$'\n'"owner_task=${owner#task:}"$'\n'
+      ;;
+    *) return 1 ;;
+  esac
   [ "$#" -ge 1 ] || return 1
   for arg in "$@"; do
     case "$arg" in *$'\n'*) return 1 ;; esac
@@ -578,6 +593,7 @@ fm_procevent_registration_matches_locked() {  # <state> <adapter> <source-id> <a
   tmp=$(umask 077; mktemp "$reg/.source-match.XXXXXX") || return 1
   if {
     printf 'adapter=%s\n' "$adapter"
+    printf '%s' "$owner_lines"
     printf 'argc=%s\n' "$#"
     printf 'argv:\n'
     printf '%s\n' "$@"
