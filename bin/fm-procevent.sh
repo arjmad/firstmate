@@ -1910,8 +1910,8 @@ cmd_retire_quiet_boards() {
     [ -n "$reason" ] || continue
     # The registration must still be the one read above: a board armed or
     # handed over again during the sweep is not this one. The retire is also
-    # conditional on the exact record read above, so a re-arm landing after
-    # this check is refused under the source lock.
+    # conditional on the record content read above, so a re-arm that changes
+    # that record after this check is refused under the source lock.
     [ "$(fm_pr_file_identity "$(source_file "$id")" 2>/dev/null)" = "$identity" ] || continue
     set -- "$id" --if-matches "$adapter"
     [ -z "$adopted" ] || set -- "$@" --adopted-from "$adopted"
