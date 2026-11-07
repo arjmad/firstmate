@@ -993,6 +993,9 @@ run_post_update() {
     return 0
   fi
   if post_update_still_running "$record.running" || post_update_running_by_pid_file "$RUNNING_PID_FILE"; then
+    # A first sighting this sync fast-forwarded still owes a run, so leave a
+    # record that matches no commit rather than none.
+    [ -n "$recorded" ] || [ "$moved" = no ] || write_live_record "$record" pending
     echo "$label: activating: post-update command already running (pid $RUNNING_PID, since $RUNNING_SINCE); the next sync runs it for $(git -C "$PROJ" rev-parse --short HEAD) if it still needs to"
     return 0
   fi
