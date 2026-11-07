@@ -81,7 +81,13 @@ Each effective `FM_HOME` contains private operational directories.
 - Learnings, backlog, briefs, scout reports, and the optional per-task no-mistakes pipeline-spend ledger.
 - Explicitly installed content-addressed extension packages under `data/extensions/packages/`.
 
-Task material under `data/` follows one retention rule once its task has been closed for more than 60 days:
+Reproducible scratch leaves a task's `data/<id>/` at teardown, deleted rather than archived (`bin/fm-data-scratch-prune.sh` owns the exact tests):
+
+- Nested git checkouts with nothing uncommitted, stashed, or unpushed.
+- `node_modules` folders and downloaded tool binaries.
+- A checkout holding unlanded work is never deleted; teardown keeps it and names it with its reason.
+
+Everything else under `data/` follows one retention rule once its task has been closed for more than 60 days:
 
 - Text records stay in the home: the task's `report.md`, `notes.md`, and any brief or decisions text.
 - Binaries (images, PDFs, exports) move to the owning business area's shared drive folder, resolved by folder ID, never by name path.

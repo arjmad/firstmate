@@ -136,7 +136,9 @@
 # refuses the teardown with nothing changed; --force instead falls back to the
 # retirement above.
 # data/<id>/ is deliberately left in place: a successor spawn reads brief.md
-# from it.
+# from it. Only its reproducible scratch goes, through
+# bin/fm-data-scratch-prune.sh under the meta lock just before the task record
+# is removed; a checkout holding unlanded work stays and is named.
 # Companion worktrees (fork patch, docs/fork-decisions.md 2026-10-14): a ship
 # spawned with bin/fm-spawn.sh --also records also=<repos> with
 # also_worktree_<repo>= and also_project_<repo>= per repo, and
@@ -4468,6 +4470,12 @@ if [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ];
   else
     echo "warning: retaining herdr presentation journal for $ID; it still names a projected workspace the session-start sweep owns, not the closed endpoint" >&2
   fi
+fi
+# The task's reproducible scratch leaves data/<id>/ while its meta lock still
+# keeps a successor spawn of the same id out: bin/fm-data-scratch-prune.sh owns
+# what goes, what stays, and its report lines.
+if [ "$KIND" != secondmate ] && [ -d "$DATA/$ID" ]; then
+  "$SCRIPT_DIR/fm-data-scratch-prune.sh" "$DATA/$ID" </dev/null || true
 fi
 # The record is gone, so the backlog must not still show this task in flight
 # when teardown reports success. Still under this task's meta lock, so a steer
