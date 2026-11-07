@@ -605,7 +605,7 @@ See [`fleet-ledger.md`](fleet-ledger.md) for the opt-in setup, record contract, 
 ## Live checkouts (config/live-checkouts)
 
 The optional local, gitignored `config/live-checkouts` file lists working copies outside `projects/` that something runs from, so a merged PR goes live without a hand `git pull`.
-Each line is `<project> <path> [lock=<lock-path>] [capture=<dir>/:<command>] [post-update command]`, where a leading `~/` expands to `$HOME` and blank or `#` lines are ignored.
+Each line is `<project> <path> [lock=<lock-path>] [capture=<dir>/:<command>] [running=<pid-file>] [post-update command]`, where a leading `~/` expands to `$HOME` and blank or `#` lines are ignored.
 An absent file means no live checkouts.
 
 ```text
@@ -622,6 +622,7 @@ A live checkout gets the same never-forced guards as a clone: anything dirty, ah
 A held `lock=` path defers the checkout, after a short bounded wait in the single-project form and without waiting in the whole-fleet form.
 The post-update command runs once for each new HEAD and is retried on the next sync after a failure, whose `STUCK:` line ends with the command's last few output lines.
 A sync that finds the command still running from another sync starts no second run and reports `activating:` with that run's pid and start time instead of `STUCK:`.
+A `running=<pid-file>` entry extends that to a run fleet-sync did not start: it names the file the command's own one-at-a-time guard writes its pid to, and while that pid is a live process that started no later than the file was written (with a second of slack for clock rounding), the sync reports the same `activating:` line instead of `STUCK:`.
 A `capture=` entry is for a checkout edited in place, such as a writable skills tree that a capture job turns into a PR: when only uncommitted edits under that directory hold the checkout, the sync starts the capture command detached once per edit state and reports `capturing:` instead of `STUCK:`, and defers the checkout while that capture runs.
 Once the capture has succeeded, edits it did not clear on a checkout already at its origin default branch read `live edits pending capture:`, which wakes no one because they block no fast-forward, while the same edits on a checkout behind or ahead of origin, or a failed capture, report `STUCK:`.
 A `capture=` entry also makes its project a capture project for `bin/fm-capture-land.sh <pr-url>`, which lands that project's `<project>/skill-capture` pull request through `bin/fm-pr-merge.sh`, then runs the capture command's `--settle` in the checkout and fast-forwards it with `fm-fleet-sync.sh --settle-capture <project>`; its header owns the refusals and the task record it keeps.

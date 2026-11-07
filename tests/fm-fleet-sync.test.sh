@@ -34,8 +34,9 @@
 # held lock= path defers it, the firstmate home itself is refused, the
 # single-project form syncs only that project's entries, and a capture= entry
 # starts its capture once per edit state when only edits under its dir hold it.
-# A post-update command still running from another sync reads "activating:"
-# rather than STUCK, and the scheduled sync wakes once per STUCK episode however
+# A post-update command still running from another sync, or from a run fleet-sync
+# did not start whose live pid its running= pid file proves, reads "activating:"
+# rather than STUCK, while a dead or reused pid there still reads STUCK, and the scheduled sync wakes once per STUCK episode however
 # far behind origin the checkout falls.
 set -u
 
@@ -1416,6 +1417,85 @@ test_running_post_update_reports_activating() {
   pass "a post-update command still running from another sync, even one in another time zone, reads activating (pid, since), and the next sync runs it for the newer HEAD"
 }
 
+test_foreign_live_activation_reports_activating() {
+  local home live out foreign i=0
+  home=$(new_home)
+  live=$(build_activation_live "$home" foreign)
+  live_config "$home" "foreign $live running=$home/activating-foreign/pid $home/activate-foreign.sh"
+  run_sync "$home" foreign >/dev/null
+  : > "$home/hold-foreign"
+  "$home/activate-foreign.sh" >/dev/null 2>&1 &
+  foreign=$!
+  while [ "$(runs_of "$home/runs-foreign")" = 0 ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  assert_equals 1 "$(runs_of "$home/runs-foreign")" "an activation fleet-sync did not start is running"
+
+  advance_origin "$home" foreign C1
+  out=$(run_sync "$home" foreign)
+  rm -f "$home/hold-foreign"
+  assert_not_contains "$out" "STUCK" "a live activation fleet-sync did not start is not STUCK"
+  printf '%s\n' "$out" | grep -Eq "^foreign live $live: activating: post-update command already running \(pid $foreign, since [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\)" \
+    || fail "the foreign run reads activating with its pid and start time; got: $out"
+  wait "$foreign"
+  assert_equals 1 "$(runs_of "$home/runs-foreign")" "no second activation starts under the foreign one"
+
+  out=$(run_sync "$home" foreign)
+  assert_contains "$out" "foreign live $live: post-update command ran at $(git -C "$live" rev-parse --short HEAD)" \
+    "the next sync runs the deferred commit"
+  assert_equals 2 "$(runs_of "$home/runs-foreign")" "the deferred commit ran once"
+  pass "a live post-update run fleet-sync did not start, proven by its running= pid file, reads activating (pid, since), and the next sync runs it"
+}
+
+test_foreign_activation_on_first_sighting_still_runs_after() {
+  local home live out foreign i=0
+  home=$(new_home)
+  live=$(build_activation_live "$home" firstseen)
+  live_config "$home" "firstseen $live running=$home/activating-firstseen/pid $home/activate-firstseen.sh"
+  : > "$home/hold-firstseen"
+  "$home/activate-firstseen.sh" >/dev/null 2>&1 &
+  foreign=$!
+  while [ "$(runs_of "$home/runs-firstseen")" = 0 ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  advance_origin "$home" firstseen C1
+  out=$(run_sync "$home" firstseen)
+  rm -f "$home/hold-firstseen"
+  wait "$foreign"
+  assert_contains "$out" "firstseen live $live: activating: post-update command already running (pid $foreign" \
+    "a first sighting that fast-forwards under a foreign run reads activating"
+  out=$(run_sync "$home" firstseen)
+  assert_contains "$out" "firstseen live $live: post-update command ran at $(git -C "$live" rev-parse --short HEAD)" \
+    "the sync after the foreign run ends runs the command for the commit it fast-forwarded to"
+  assert_equals 2 "$(runs_of "$home/runs-firstseen")" "the fast-forwarded commit ran once"
+  pass "a first sighting that fast-forwards while a foreign run is live still runs the command once that run ends"
+}
+
+test_dead_or_reused_running_pid_stays_stuck() {
+  local home live out dead reused
+  home=$(new_home)
+  live=$(build_activation_live "$home" leftover)
+  live_config "$home" "leftover $live running=$home/activating-leftover/pid $home/activate-leftover.sh"
+  run_sync "$home" leftover >/dev/null
+  mkdir "$home/activating-leftover"
+  sh -c 'exit 0' &
+  dead=$!
+  wait "$dead"
+  echo "$dead" > "$home/activating-leftover/pid"
+  advance_origin "$home" leftover C1
+  out=$(run_sync "$home" leftover)
+  assert_contains "$out" "leftover live $live: STUCK: post-update command failed (exit 1)" "a dead pid in the pid file is not a live run"
+
+  sleep 30 &
+  reused=$!
+  echo "$reused" > "$home/activating-leftover/pid"
+  TZ=UTC touch -t "$(date -u -r "$(( $(date +%s) - 3600 ))" +%Y%m%d%H%M.%S 2>/dev/null || date -u -d "@$(($(date +%s) - 3600))" +%Y%m%d%H%M.%S)" \
+    "$home/activating-leftover/pid"
+  out=$(run_sync "$home" leftover)
+  kill "$reused" 2>/dev/null || true
+  wait "$reused" 2>/dev/null || true
+  assert_contains "$out" "leftover live $live: STUCK: post-update command failed (exit 1)" \
+    "a live pid that started after the pid file was written is a reused pid, not the run"
+  assert_equals 0 "$(runs_of "$home/runs-leftover")" "the stale lock never let the command run"
+  pass "a running= pid file naming a dead pid, or a pid reused after the file was written, still reads STUCK"
+}
+
 test_scheduled_sync_is_a_singleton() {
   local home clone holder before
   home=$(isolated_home)
@@ -1486,4 +1566,7 @@ test_scheduled_sync_queues_new_stuck_lines_once
 test_scheduled_sync_is_a_singleton
 test_scheduled_stuck_episode_wakes_once
 test_running_post_update_reports_activating
+test_foreign_live_activation_reports_activating
+test_foreign_activation_on_first_sighting_still_runs_after
+test_dead_or_reused_running_pid_stays_stuck
 test_prune_requires_landed_proof
