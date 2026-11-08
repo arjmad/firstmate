@@ -23,15 +23,24 @@ git -C "$PRIMARY" init -q
 COPY="$STATE/.digest-read/$SID.txt"
 PENDING="$STATE/.digest-read/$SID.pending"
 
-# write_digest <file> <lines>: a digest whose first line is the head cue naming
-# the copy, padded past the default 10,000-character spill threshold.
+# write_digest <file> <lines> [tag]: a digest shaped like the real one - a fixed
+# cue line, then a line naming the copy - padded past the default
+# 10,000-character spill threshold. Two digests of one session differ only in
+# their body, which the tag changes.
 write_digest() {
-  local file=$1 lines=$2
+  local file=$1 lines=$2 tag=${3:-a}
   mkdir -p "$(dirname "$file")"
   {
-    printf 'READ CUE: if this output ends with "Output too large", read it. Saved at %s\n' "$COPY"
-    awk -v n="$lines" 'BEGIN { for (i = 2; i <= n; i++) printf "digest line %04d padding padding padding padding\n", i }'
+    printf 'READ CUE: if this output ends with "Output too large ... Full output saved to <path>",\n'
+    printf 'It is also saved at %s\n' "$COPY"
+    awk -v n="$lines" -v tag="$tag" 'BEGIN { for (i = 3; i <= n; i++) printf "digest %s line %04d padding padding padding\n", tag, i }'
   } > "$file"
+}
+
+# spill_of <copy> <spill>: Claude's saved hook output, final newline trimmed.
+spill_of() {
+  mkdir -p "$(dirname "$2")"
+  head -c "$(($(wc -c < "$1") - 1))" "$1" > "$2"
 }
 
 arm() {
@@ -147,8 +156,8 @@ test_spill_file_counts_only_when_it_is_this_digest() {
   local other_session="$TMP_ROOT/claude/proj/$OTHER_SID/tool-results/hook-1234-stdout.txt"
   reset_arm 1000
   mkdir -p "$(dirname "$spill")" "$(dirname "$other_session")"
-  cp "$COPY" "$spill"
-  cp "$COPY" "$other_session"
+  spill_of "$COPY" "$spill"
+  spill_of "$COPY" "$other_session"
   printf 'some other hook output\n' > "$foreign"
   expect_allow "Read of the spill" "$(payload "$SID" Read "$spill")"
   expect_deny "Read of another hook's spill" "$(payload "$SID" Read "$foreign")"
@@ -158,7 +167,15 @@ test_spill_file_counts_only_when_it_is_this_digest() {
   run_record "$(payload "$SID" Read "$spill" 1 500)"
   run_record "$(payload "$SID" Read "$COPY" 501 500)"
   [ ! -e "$PENDING" ] || fail "reads split across the spill and the copy did not disarm"
-  pass "the saved hook output counts as the digest only when its head cue matches"
+
+  # After a re-emit, the earlier spill of the same session shares the cue
+  # lines but is not this digest, so reading it neither passes nor counts.
+  write_digest "$COPY" 1000 b
+  arm
+  expect_deny "Read of the session's older spill" "$(payload "$SID" Read "$spill")"
+  run_record "$(payload "$SID" Read "$spill")"
+  [ -f "$PENDING" ] || fail "reading an older spill of the same session disarmed the new digest"
+  pass "the saved hook output counts as the digest only when it holds exactly this digest"
 }
 
 test_rearm_requires_a_fresh_read() {

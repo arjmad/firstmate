@@ -27,8 +27,8 @@
 #       records older than two days. Prints nothing; always exits 0.
 #   <PreToolUse JSON on stdin> | fm-digest-read-check.sh check --claude
 #       ALLOW (exit 0, no output) when the session is not armed, when the tool
-#       is Read on the digest copy or on this session's saved hook output whose
-#       first line matches the copy, when FM_ALLOW_UNREAD_DIGEST=1, outside a
+#       is Read on the digest copy or on this session's saved hook output that
+#       holds exactly this digest, when FM_ALLOW_UNREAD_DIGEST=1, outside a
 #       genuine primary home, and on malformed transport or missing jq.
 #       DENY (exit 2, Claude deny object on stderr, stdout empty) otherwise,
 #       naming the copy and the lines still unread.
@@ -105,10 +105,12 @@ parse_payload() {
 }
 
 # accepted_path <session> <copy> <path>: the copy itself, or this session's
-# saved hook output whose first line is the copy's first line (the head cue,
-# which names this session's copy, so another hook's spill never matches).
+# saved hook output when it holds exactly this digest. Claude saves the hook
+# stdout with its final newline trimmed (verified live, Claude Code 2.1.318),
+# so the saved file must equal the copy with at most that one byte missing; an
+# older digest of the same session, or another hook's output, never matches.
 accepted_path() {
-  local session=$1 copy=$2 path=$3 first_copy first_path
+  local session=$1 copy=$2 path=$3 copy_size path_size
   [ -n "$path" ] || return 1
   [ "$path" = "$copy" ] && return 0
   case "$path" in
@@ -116,9 +118,11 @@ accepted_path() {
     *) return 1 ;;
   esac
   [ -f "$path" ] || return 1
-  first_copy=$(head -n 1 "$copy" 2>/dev/null) || return 1
-  first_path=$(head -n 1 "$path" 2>/dev/null) || return 1
-  [ -n "$first_copy" ] && [ "$first_copy" = "$first_path" ]
+  copy_size=$(wc -c < "$copy" 2>/dev/null | tr -d '[:space:]')
+  path_size=$(wc -c < "$path" 2>/dev/null | tr -d '[:space:]')
+  case "$copy_size$path_size" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$path_size" -eq "$copy_size" ] || [ "$path_size" -eq $((copy_size - 1)) ] || return 1
+  head -c "$path_size" "$copy" 2>/dev/null | cmp -s - "$path"
 }
 
 # unread_ranges <pending> <total>: the uncovered line ranges, "a-b, c-d".
@@ -134,6 +138,14 @@ unread_ranges() {
       print out
     }
   ' "$1" 2>/dev/null
+}
+
+any_armed() {
+  local f
+  for f in "$DIR"/*.pending; do
+    [ -f "$f" ] && return 0
+  done
+  return 1
 }
 
 load_arm() {
@@ -159,8 +171,10 @@ EOF_PARSED
 cmd_check() {
   local total unread reason escaped
   [ "${FM_ALLOW_UNREAD_DIGEST:-}" != "1" ] || return 0
-  # The arm lookup comes first because it is cheap and this runs on every tool
-  # call; the scope check then keeps a linked task worktree inert.
+  # This runs on every tool call, so a home with no arm record at all returns
+  # before reading the payload; the scope check then keeps a linked task
+  # worktree inert.
+  any_armed || return 0
   load_arm || return 0
   # shellcheck source=bin/fm-primary-scope-lib.sh
   . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
@@ -178,6 +192,7 @@ cmd_check() {
 
 cmd_record() {
   local start limit end total unread
+  any_armed || return 0
   load_arm || return 0
   [ "$TOOL" = Read ] || return 0
   accepted_path "$SESSION" "$COPY" "$FILE_PATH" || return 0
