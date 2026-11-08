@@ -1725,6 +1725,48 @@ test_crewmate_scaffolds_forbid_pool_administration() {
   pass "fm-brief.sh: every crewmate scaffold forbids administering the shared worktree pool"
 }
 
+# A scout's `pkill -f "node server/index.js"` matched and restarted live
+# services sharing that command line. Every crewmate scaffold must tell the
+# worker to stop only processes it started, by the pid it recorded, and name the
+# pattern kills it must never use, inside the shared rule that ship and scout
+# emit byte-identically.
+test_crewmate_scaffolds_require_pid_based_process_stops() {
+  local home id brief rule
+  home="$TMP_ROOT/pid-stop-home"
+  mkdir -p "$home/data"
+
+  for id in pid-stop-no-mistakes pid-stop-direct-PR pid-stop-local-only pid-stop-scout; do
+    case "$id" in
+      *scout) FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" alpha --scout >/dev/null 2>&1 ;;
+      *) FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" alpha --mode "${id#pid-stop-}" >/dev/null 2>&1 ;;
+    esac || fail "fm-brief.sh exited non-zero scaffolding $id"
+    brief="$home/data/$id/brief.md"
+    rule="$TMP_ROOT/$id.rule"
+    awk '/^7\. Never administer/,/^$/' "$brief" >"$rule"
+    [ -s "$rule" ] || fail "$id brief emitted no shared-infrastructure rule"
+    assert_grep "by the pid you recorded" "$rule" \
+      "$id brief did not require stopping a started process by its recorded pid"
+    # shellcheck disable=SC2016 # Literal command text must remain unexpanded.
+    assert_grep '`pkill`, `killall`' "$rule" \
+      "$id brief did not name the pattern kills a worker must never use"
+    assert_grep "live services" "$rule" \
+      "$id brief did not say why a pattern kill is unsafe"
+    # shellcheck disable=SC2016 # Literal command text must remain unexpanded.
+    assert_grep '(set -m; <command> & echo $! > <pidfile>)' "$rule" \
+      "$id brief did not record the pid in the launching command as its own process group"
+    assert_grep 'kill -- -<pid>' "$rule" \
+      "$id brief did not stop the recorded process group with its children"
+  done
+
+  FM_SECONDMATE_CHARTER='Supervise the alpha domain.' \
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" pid-stop-mate --secondmate alpha >/dev/null 2>&1 \
+    || fail "fm-brief.sh --secondmate exited non-zero"
+  assert_no_grep "by the pid you recorded" "$home/data/pid-stop-mate/brief.md" \
+    "secondmate charter unexpectedly inherited the crewmate shared-infrastructure rule"
+
+  pass "fm-brief.sh: every crewmate scaffold requires stopping started processes by recorded pid"
+}
+
 # --method poteto-mode is the captain's per-task opt-in behind the helm's
 # /poteto skill: one shared method block under ## Firstmate spec, below the
 # placeholder firstmate still fills, identical across every ship mode and the
@@ -1965,6 +2007,7 @@ test_branch_prefix_is_refused_where_it_does_not_apply
 test_branch_prefix_value_is_validated
 test_branch_prefix_command_is_shell_safe
 test_crewmate_scaffolds_forbid_pool_administration
+test_crewmate_scaffolds_require_pid_based_process_stops
 test_method_poteto_mode_renders_one_shared_contract
 test_method_is_validated_and_refused_where_it_does_not_apply
 test_method_warning_flags_a_standing_class_id_without_refusing
