@@ -1751,6 +1751,11 @@ test_crewmate_scaffolds_require_pid_based_process_stops() {
       "$id brief did not name the pattern kills a worker must never use"
     assert_grep "live services" "$rule" \
       "$id brief did not say why a pattern kill is unsafe"
+    # shellcheck disable=SC2016 # Literal command text must remain unexpanded.
+    assert_grep '(set -m; <command> & echo $! > <pidfile>)' "$rule" \
+      "$id brief did not record the pid in the launching command as its own process group"
+    assert_grep 'kill -- -<pid>' "$rule" \
+      "$id brief did not stop the recorded process group with its children"
   done
 
   FM_SECONDMATE_CHARTER='Supervise the alpha domain.' \

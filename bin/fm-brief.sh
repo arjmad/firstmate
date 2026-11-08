@@ -809,13 +809,18 @@ IFS= read -r -d '' SHARED_INFRA_RULE <<'EOF' || true
      that it is free, and returning your own worktree is firstmate's job at cleanup, not yours.
    - The processes on this host: live services and other lanes' agent sessions run beside yours,
      often under the same user and with the same command line as a scratch copy you start. Stop
-     only a process you started, by the pid you recorded when you started it (`$!` after a
-     background launch, or the pid file your own launch wrote), and confirm that pid is still
-     yours before you signal it. Never stop anything by name or command-line pattern -
-     `pkill`, `killall`, `pkill -f`, or `kill $(pgrep ...)` - because the same pattern matches live
-     services and other agents, and stopping one restarts or ends work you do not own.
-   If you genuinely need a second checkout, another slot, the daemon touched, or a process you did
-   not start stopped, append
+     only what you started, by the pid you recorded when you started it. Record it in the same
+     command that starts the process, because `$!` does not survive into a later tool call, and
+     start it as its own process group so its children stop with it:
+     `(set -m; <command> & echo $! > <pidfile>)`. To stop it, check that
+     `ps -o args= -p <pid>` still shows the command you launched, then run `kill -- -<pid>`.
+     Stopping something through its own handle is also fine: your harness's stop for its own
+     background task, `docker compose down` for your compose project, or a `kill-server` on the
+     tmux socket you created. Never stop anything by name or command-line pattern -
+     `pkill`, `killall`, `pkill -f`, or `kill $(pgrep ...)` - because the same pattern matches
+     live services and other agents, and stopping one restarts or ends work you do not own.
+   If you genuinely need a second checkout, another slot, or the daemon touched, or need a process
+   you did not start stopped, append
    `blocked [at=<epoch>]: {what you need}` and stop; firstmate arranges it.
 EOF
 SHARED_INFRA_RULE=${SHARED_INFRA_RULE%$'\n'}
