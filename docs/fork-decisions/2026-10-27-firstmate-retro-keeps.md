@@ -1,0 +1,3 @@
+2026-10-27: Arjun's firstmate retro ruling, kept in the main home's `data/captain.md` until Arjun approved moving its rulings to their owners in the helm on 2026-11-08 ("i approve all"), and recorded here word for word:
+Firstmate retro (10-27): keep upstream's read-once startup and OPEN DECISIONS shapes (shrink open state instead); every bin command answers --help; capture PRs land via the command in the note.
+The `--help` rule is the [retro inbox, re-wake and help sweep](2026-10-27-retro-inbox-rewake-help-sweep.md) record, and the capture landing is the [capture PR land command](2026-10-27-capture-pr-land-command.md) record.
