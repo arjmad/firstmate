@@ -1201,6 +1201,17 @@ cmd_start() {
     fm_procevent_source_lock_release "$CLAIM_ID" 2>/dev/null || true
   }
   trap release_start_claim EXIT
+  # A TERM or HUP sent to this leader alone would otherwise end it through the
+  # EXIT trap and leave its source child polling in this group. The leader
+  # ignores its own group signal so the exit status names the signal it got.
+  stop_own_group() {  # <exit-status>
+    trap '' TERM HUP
+    kill -TERM -- -"$$" 2>/dev/null || true
+    trap - TERM HUP
+    exit "$1"
+  }
+  trap 'stop_own_group 143' TERM
+  trap 'stop_own_group 129' HUP
   # 0 when this runner should poll again. The adapter's relisten command is the
   # only adapter-specific signal; a replacement registration is adopted only
   # when this claim still owns it and the registered command is unchanged.
@@ -1420,7 +1431,10 @@ EOF
         $truncated = 1 if $take < $count;
       }
       exit($truncated ? 3 : 0);
-    ' "$MAX_OUTPUT_BYTES" <&4 > "$out"
+    ' "$MAX_OUTPUT_BYTES" <&4 > "$out" &
+    # Waited on rather than run in the foreground, because bash defers a trap
+    # until a foreground command ends and this one ends only with the source.
+    wait "$!"
     bound_rc=$?
     exec 4<&-
     wait "$launch_pid"
@@ -2485,9 +2499,9 @@ stop_proved_group() {  # <pgid>
 }
 
 # Stop the source children this home's dead runner generations left behind.
-# A runner leader that dies on its own - a signal to it alone runs its exit
-# trap and releases its claim - leaves its polling child running in the dead
-# leader's process group, still holding whatever the source allows only one of,
+# A runner leader stops its own group on TERM or HUP, but one killed alone by
+# KILL, or one from before that handling, leaves its polling child running in
+# the dead leader's process group, still holding whatever the source allows only one of,
 # such as a Lavish board's single listener. Each record record_source_child
 # wrote proves one such group: the recorded runner must be gone or reused, the
 # recorded child must still be alive with its recorded start stamp, and it must

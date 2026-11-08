@@ -2495,7 +2495,8 @@ The one proof that does reach it is the runner's per-generation record of its so
 
 **Retire orphaned source children at session start**
 
-A runner leader that dies on its own from a catchable signal runs its exit trap, which releases its claim while its source child keeps running in the dead leader's process group.
+A runner leader signalled alone by TERM or HUP stops its own process group before its exit trap releases its claim, so its source child ends with it.
+A leader killed alone by KILL cannot, and its source child keeps running in the dead leader's process group.
 For a Lavish board that child still holds the board's single listener, so every later runner's poll is refused with `LISTENER_ACTIVE` until the child ends.
 Every built-in runner therefore records its source child by pid and start stamp under its claim token, and a locked session start runs `bin/fm-procevent.sh retire-orphans`; an extension source records none, so its orphan is not retired this way.
 That command stops a recorded group only while the recorded runner is gone or reused and the recorded child is still alive with its recorded start stamp inside the group that runner led.
