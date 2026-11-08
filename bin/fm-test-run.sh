@@ -1590,6 +1590,13 @@ families_for_changed_path() {
       printf '%s\n' session-bootstrap
       printf '%s\n' "__script__:fm-brief.test.sh"
       ;;
+    bin/fm-claude-store-lock.mjs)
+      # Claude Code's store lock, taken by the spawn's trust registration and
+      # forget-claude; the live guard proves the vendor side.
+      printf '%s\n' "__script__:fm-claude-trust.test.sh"
+      printf '%s\n' "__script__:fm-live-lab-forget-claude.test.sh"
+      printf '%s\n' "__script__:fm-claude-store-lock-live-e2e.test.sh"
+      ;;
     bin/fm-lavish-patch.mjs|bin/lavish-patch/*)
       # Firstmate's local Lavish chrome overlay; its suite drives it directly
       # and through fm-bootstrap.sh.

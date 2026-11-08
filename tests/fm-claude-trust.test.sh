@@ -584,6 +584,18 @@ test_registration_waits_for_the_store_lock() {
     [ ! -e "$lock" ] || fail "$layout: registration left the store lock behind"
     [ "$layout" = plain ] || [ -L "$store" ] || fail "$layout: the store symlink was replaced by a regular file"
   done
+  # Claude never takes a lock beside the target, so one there is no writer to
+  # wait for and is not registration's to remove.
+  mkdir "$data.lock"
+  set_mtime "$data.lock" 3600
+  rec=$(make_case lock-target-only)
+  read_case "$rec"
+  ln -s "$data" "$CONFIG/.claude.json"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ")
+  expect_code 0 $? "a lock beside the symlink's target must not block registration: $out"
+  assert_trusted "$data" "$WT" "the worktree was not trusted past a lock beside the target"
+  [ -d "$data.lock" ] || fail "registration removed a lock beside the symlink's target"
+  rmdir "$data.lock"
   pass "fm-claude-trust.sh: registers trust only under Claude Code's own store lock, keyed on the store path"
 }
 

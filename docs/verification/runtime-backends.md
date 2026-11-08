@@ -520,11 +520,12 @@ The composer-classification record below observes the same gate from the other s
 
 ## Claude store lock
 
-Verified 2026-11-04 on Claude Code 2.1.318, Linux x86_64.
+Verified 2026-11-08 on Claude Code 2.1.318, Linux x86_64.
 Claude Code serialises its writes to `.claude.json` through proper-lockfile: it makes a directory named `<store>.lock` with mkdir, treats one whose mtime is 10 seconds old as stale, and retries a held lock with backoff before writing.
-`bin/fm-live-lab.sh forget-claude` takes that same lock around its rewrite, so a Claude save arriving between its read and its rename waits instead of being lost; Claude writes without the lock only after about 14 seconds of retries, far longer than that hold.
+It keys that lock on the store path it was given: for a symlinked store it waits on the lock beside the link and not on one beside the target, and it writes through the link without replacing it.
+`bin/fm-claude-store-lock.mjs` takes that same lock for every firstmate rewrite of the store, `bin/fm-claude-trust.sh` on each Claude spawn and `bin/fm-live-lab.sh forget-claude`, so a Claude save arriving between a read and its rename waits instead of being lost; Claude writes without the lock only after about 14 seconds of retries, far longer than that hold.
 A first start on an empty store records its initial fields without the lock, which is why the guard primes the store before probing; a live store is never in that state.
-The guard holds the lock on a throwaway store, runs a real `claude mcp add -s user`, and checks that nothing is written until the lock is released:
+The guard holds the lock on a throwaway store, runs a real `claude mcp add -s user`, and checks that nothing is written until the lock is released, then repeats with the store symlinked and checks that a lock beside the target does not hold the write:
 
 ```sh
 tests/fm-claude-store-lock-live-e2e.test.sh
@@ -532,10 +533,12 @@ tests/fm-claude-store-lock-live-e2e.test.sh
 
 ```text
 ok - Claude Code 2.1.318: a store write waits on <store>.lock and lands after release
+ok - Claude Code 2.1.318: a symlinked store is locked beside the link, not beside its target
 ```
 
 It spends no model tokens, so it runs by default wherever `claude`, `node`, `jq` and `timeout` are installed and is the refresh command after a Claude Code upgrade.
 `tests/fm-live-lab-forget-claude.test.sh` pins forget-claude's side portably: it waits on a held lock and keeps the holder's write, breaks a stale lock, and fails closed with the store untouched when a fresh lock stays held past its 15-second wait.
+`tests/fm-claude-trust.test.sh` pins the spawn registration's side the same way, including a symlinked store locked beside the link and not held by a lock beside its target.
 
 ## Claude exit confirmation
 

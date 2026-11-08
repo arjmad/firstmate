@@ -229,8 +229,9 @@ esac
 
 refuse() { echo "error: refusing to pre-register Claude trust: $1" >&2; exit 1; }
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 # shellcheck source=bin/fm-gate-refuse-lib.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fm-gate-refuse-lib.sh"
+. "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 
 real_dir() { (cd -P -- "$1" 2>/dev/null && pwd -P); }
 
@@ -391,6 +392,9 @@ fi
 command -v node >/dev/null 2>&1 || refuse "node is required to record workspace trust and was not found on PATH"
 
 STORE="$CONFIG_DIR_REAL/.claude.json"
+# Claude Code locks the store beside the path it was given, never beside a
+# symlink's target, so the lock is keyed on this unresolved path.
+STORE_LINK=$STORE
 # A dotfile manager or a synced folder legitimately symlinks this store, so the
 # link is followed to its final target and every check below judges that target.
 # Ownership is the property that matters: another user's file is refused however
@@ -415,22 +419,18 @@ fi
 # Losing the VENDOR's write is the serious one: this renames a whole
 # re-serialisation over the file, so anything Claude changed since the read -
 # oauthAccount, user-scope mcpServers, another project's history - would be gone,
-# in a format this does not own. So the bytes read are fingerprinted and
-# re-checked immediately before the rename, and a store that moved is not
-# overwritten: the whole read-modify-write is retried once, and a second move
-# refuses rather than clobbering.
-#
-# That narrows the window; it does not close it. Rename cannot be conditioned on
-# content, so a write landing between the final check and the rename is still
-# lost, and this claims no more than that.
+# in a format this does not own. So the whole read-modify-write runs under the
+# store lock Claude Code itself takes, through bin/fm-claude-store-lock.mjs, which
+# owns that protocol: a Claude save waits for it and then re-reads. The bytes
+# read are also fingerprinted and re-checked immediately before the rename, for
+# a writer that does not take the lock; a store that moved is not overwritten:
+# the whole read-modify-write is retried once, and a second move refuses rather
+# than clobbering.
 #
 # Losing OUR entry is the mild one: a vendor rewrite that drops it only resurrects
 # the dialog this registration removes, which reaches firstmate as an ordinary
 # stale wake and a relaunch registers again. The readback catches it within these
 # attempts, and it must fail loudly rather than report a trust it did not leave.
-# ponytail: fingerprint-and-refuse, not a lock; flock is absent on macOS and
-# cannot stop a vendor session's own rewrite anyway.
-#
 # In worktree mode every flag lands on both the worktree entry and the project
 # entry in the same read-modify-write attempt, so a single rename either
 # records all of it or none of it - there is no state where the worktree entry
@@ -462,11 +462,12 @@ if [ "$MODE" = worktree ]; then
 else
   WRITE_ARGS=("$STORE" "$MODE" "$TARGET_REAL" "" "$TRUST_FLAG" "$IMPORT_FLAGS")
 fi
-if ! node - "${WRITE_ARGS[@]}" <<'NODE'
-const fs = require("node:fs");
-const path = require("node:path");
-const crypto = require("node:crypto");
-const [store, mode, target, project, trustFlag, importFlagsJson] = process.argv.slice(2);
+if ! node --input-type=module - "$SCRIPT_DIR/fm-claude-store-lock.mjs" "$STORE_LINK" "${WRITE_ARGS[@]}" <<'NODE'
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+import { pathToFileURL } from "node:url";
+const [lib, storeLink, store, mode, target, project, trustFlag, importFlagsJson] = process.argv.slice(2);
 const importFlags = JSON.parse(importFlagsJson);
 const readStore = () => {
   try {
@@ -507,7 +508,7 @@ const declinedExternalImports = (projects, key) =>
 // value, is NOT consent (see the block comment above this script's node call).
 const approvedExternalImports = (projects, key) =>
   projects?.[key]?.hasClaudeMdExternalIncludesApproved === true;
-const attempt = () => {
+const attempt = (replaceStore) => {
   const original = readStore();
   const before = fingerprint(original);
   let root = {};
@@ -557,7 +558,7 @@ const attempt = () => {
   let renamed = false;
   try {
     if (fingerprint(readStore()) !== before) return "moved";
-    fs.renameSync(tmp, store);
+    replaceStore(tmp);
     renamed = true;
   } finally {
     if (!renamed) fs.rmSync(tmp, { force: true });
@@ -566,21 +567,23 @@ const attempt = () => {
   const landed = keys.every(([key, flags]) => flagsLanded(back.projects, key, flags));
   return landed ? "recorded" : "dropped";
 };
-try {
+const record = (replaceStore) => {
   for (let i = 0; i < 3; i += 1) {
-    const result = attempt();
-    if (result === "recorded") process.exit(0);
+    const result = attempt(replaceStore);
+    if (result === "recorded") return;
     if (result === "moved" && i >= 1) {
-      console.error(`error: ${store} was modified while trust was being recorded; refusing to overwrite it`);
-      process.exit(1);
+      throw new Error(`${store} was modified while trust was being recorded; refusing to overwrite it`);
     }
   }
+  throw new Error(`${store} did not retain trust for ${target}${project ? ` and ${project}` : ""} after 3 attempts`);
+};
+try {
+  const { withClaudeStoreLock } = await import(pathToFileURL(lib).href);
+  withClaudeStoreLock({ storeLink, writeTarget: store, doing: "trust was being recorded" }, record);
 } catch (err) {
   console.error(`error: ${err.message}`);
   process.exit(1);
 }
-console.error(`error: ${store} did not retain trust for ${target}${project ? ` and ${project}` : ""} after 3 attempts`);
-process.exit(1);
 NODE
 then
   if [ "$MODE" = worktree ]; then
