@@ -12,9 +12,8 @@
 # installed Claude Code: with the lock held, a real `claude mcp add -s user`
 # writes nothing, and it lands its write once the lock is released; for a
 # symlinked store it waits on the link's lock and not on the target's. It
-# spends no model tokens, so it runs
-# wherever claude, node, jq and timeout are installed; FM_CLAUDE_STORE_LOCK_LIVE=0 (or
-# FM_LIVE=0) turns it off.
+# spends no model tokens, so it runs wherever claude, node, jq and timeout are
+# installed; FM_CLAUDE_STORE_LOCK_LIVE=0 (or FM_LIVE=0) turns it off.
 #
 # Isolation: CLAUDE_CONFIG_DIR and HOME both point into a throwaway /tmp root,
 # so the real ~/.claude.json and ~/.claude are never read or written.
