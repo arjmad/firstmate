@@ -2369,9 +2369,13 @@ test_defer_batch_moves_tagged_calls_together() {
       || fail "could not register $id"
   done
   tasks_in "$home" add fleet-d "Fleet errand" >/dev/null || fail "could not add fleet-d"
-  for id in office-a office-b fleet-d; do
+  FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" hold office-done \
+    --title "Answered office task" --reason "pick a day" --repo sample --kind reversible >/dev/null \
+    || fail "could not register office-done"
+  for id in office-a office-b fleet-d office-done; do
     run_fm_tasks_axi "$home" batch "$id" office >/dev/null || fail "could not tag $id"
   done
+  tasks_in "$home" "done" office-done >/dev/null || fail "could not close office-done"
   printf 'Arjun 2026-07-14: all office rows to Friday\n' > "$home/batch.txt"
   out=$(FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" defer-batch office --until 2026-07-17 \
     --decision-file "$home/batch.txt") || fail "defer-batch failed: $out"
@@ -2380,6 +2384,7 @@ test_defer_batch_moves_tagged_calls_together() {
   assert_contains "$out" "defer-batch: office deferred=2 failed=0" "defer-batch miscounted"
   assert_not_contains "$out" "other-c" "defer-batch touched an untagged call"
   assert_not_contains "$out" "fleet-d" "defer-batch touched a row not held for the captain"
+  assert_not_contains "$out" "office-done" "defer-batch touched a closed call"
   assert_contains "$(tasks_in "$home" show office-b --full)" "all office rows to Friday" "the batch words were not recorded"
   assert_not_contains "$(tasks_in "$home" show other-c --full)" "hold_until: 2026-07-17" "an untagged call moved"
   if out=$(FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" defer-batch nothing --until 2026-07-17 \

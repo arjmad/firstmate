@@ -114,9 +114,19 @@ fm_backlog_row_trim_trailing_blank() {  # <text>
 # for a non-empty value, a new one at the end, above a trailing owner line so
 # the owner stays last.
 fm_backlog_row_field_body_with() {
-  local field=$1 body=${2:-} value=${3:-} pattern label kept owner_line
+  local field=$1 body=${2:-} value=${3:-} pattern label kept owner_line rest
   pattern=$(fm_backlog_row_field_pattern "$field") || return 1
   label=$(fm_backlog_row_field_label "$field") || return 1
+  # A trailing owner line stays last (bin/fm-backlog-owner-lib.sh): detach it,
+  # write the field on the rest, and put it back.
+  rest=$(fm_backlog_row_trim_trailing_blank "$body")
+  owner_line=$(printf '%s\n' "$rest" | tail -1)
+  if [ -n "$value" ] && printf '%s\n' "$owner_line" | grep -Eq '^[[:space:]]*Owner:[[:space:]]*(arjun|fleet)[[:space:]]*$'; then
+    rest=$(fm_backlog_row_trim_trailing_blank "$(printf '%s\n' "$rest" | sed '$d')")
+    fm_backlog_row_field_body_with "$field" "$rest" "$value"
+    printf '\n%s\n' "$owner_line"
+    return 0
+  fi
   # Removing the line also drops a blank line before it that would otherwise
   # double up with the one after it.
   kept=$(printf '%s\n' "$body" | PATTERN=$pattern awk '
@@ -130,20 +140,6 @@ fm_backlog_row_field_body_with() {
     }
   ')
   kept=$(fm_backlog_row_trim_trailing_blank "$kept")
-  # A trailing owner line stays last (bin/fm-backlog-owner-lib.sh).
-  owner_line=$(printf '%s\n' "$kept" | tail -1)
-  if [ -n "$value" ] && printf '%s\n' "$owner_line" | grep -Eq '^[[:space:]]*Owner:[[:space:]]*(arjun|fleet)[[:space:]]*$'; then
-    kept=$(fm_backlog_row_trim_trailing_blank "$(printf '%s\n' "$kept" | sed '$d')")
-    if [ -n "$kept" ]; then
-      fm_backlog_row_field_body_with "$field" "$kept" "$value"
-    else
-      printf '%s: %s\n' "$label" "$value"
-    fi | {
-      cat
-      printf '\n%s\n' "$owner_line"
-    }
-    return 0
-  fi
   if [ -z "$value" ]; then
     [ -z "$kept" ] || printf '%s\n' "$kept"
   elif printf '%s\n' "$kept" | tail -1 | grep -Eq '^(Due|Batch): '; then

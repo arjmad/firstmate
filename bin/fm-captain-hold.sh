@@ -1926,7 +1926,7 @@ command_defer_batch() {
     /^  [A-Za-z0-9._-]+,/ {
       id = $1
       sub(/^ +/, "", id)
-      if ($NF == "captain") print id
+      if ($2 != "done" && $NF == "captain") print id
     }
   ')
   for id in $ids; do
