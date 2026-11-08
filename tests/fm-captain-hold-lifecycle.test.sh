@@ -2376,7 +2376,8 @@ test_defer_batch_moves_tagged_calls_together() {
     run_fm_tasks_axi "$home" batch "$id" office >/dev/null || fail "could not tag $id"
   done
   tasks_in "$home" "done" office-done >/dev/null || fail "could not close office-done"
-  printf 'Arjun 2026-07-14: all office rows to Friday\n' > "$home/batch.txt"
+  # His words quote field-looking lines, which must never read as the rows' own.
+  printf 'Arjun 2026-07-14: all office rows to Friday\nDue: 2099-12-31\nBatch: other\n' > "$home/batch.txt"
   out=$(FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" defer-batch office --until 2026-07-17 \
     --decision-file "$home/batch.txt") || fail "defer-batch failed: $out"
   assert_contains "$out" "deferred: office-a until 2026-07-17" "defer-batch skipped a tagged call"
@@ -2386,6 +2387,13 @@ test_defer_batch_moves_tagged_calls_together() {
   assert_not_contains "$out" "fleet-d" "defer-batch touched a row not held for the captain"
   assert_not_contains "$out" "office-done" "defer-batch touched a closed call"
   assert_contains "$(tasks_in "$home" show office-b --full)" "all office rows to Friday" "the batch words were not recorded"
+  assert_equals office "$(run_fm_tasks_axi "$home" batch office-b)" "a Batch: line in his words replaced the row's tag"
+  assert_equals 2026-07-15 "$(run_fm_tasks_axi "$home" due office-b)" "a Due: line in his words replaced the row's due date"
+  if out=$(run_captain "$home" defer-batch office --until 2026-07-18 2>&1); then
+    fail "defer-batch ran without the captain's words: $out"
+  fi
+  assert_contains "$out" "--decision-file is required" "a missing --decision-file was not refused by name before any row"
+  assert_not_contains "$out" "failed:" "a missing --decision-file failed each row instead of the command"
   assert_not_contains "$(tasks_in "$home" show other-c --full)" "hold_until: 2026-07-17" "an untagged call moved"
   if out=$(FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" defer-batch nothing --until 2026-07-17 \
     --decision-file "$home/batch.txt" 2>&1); then

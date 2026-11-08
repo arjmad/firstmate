@@ -44,10 +44,11 @@
 # bin/fm-backlog-row-lib.sh owns the hold kinds and the line formats):
 # `hold` takes one of the four hold kinds, `--kind captain|external|future|
 # parked`, and a date: a back-on date, `--until YYYY-MM-DD`, which for an
-# external wait is its recheck date, or else a `Due:` date the row already
-# records. A hold without a kind or a date is refused; a new captain call
-# without `--until` goes through bin/fm-captain-hold.sh hold, which records
-# its due date. `add` refuses a title that
+# external wait is its recheck date, and which a captain call may replace
+# with a `Due:` date the row already records. A hold without a kind or a date
+# is refused (a help read is not checked); a new captain call without
+# `--until` goes through bin/fm-captain-hold.sh hold, which records its due
+# date. `add` refuses a title that
 # opens with a `[YYYY-MM-DD]` date, as does `update --title`. `add` also takes
 # `--due YYYY-MM-DD`, the real deadline, and `--batch <tag>`, a group the
 # captain moves together, which the wrapper consumes into `Due:` and `Batch:`
@@ -109,8 +110,8 @@
 #     fleet on a row held for the captain, a control lock not freed in time,
 #     or an `update` with a new body whose row id is not first or whose row
 #     cannot be read;
-#   - a `hold` without one of the four kinds, or with neither a valid
-#     `--until` date nor a recorded due date, a title that opens with a
+#   - a `hold` without one of the four kinds, or without a valid `--until`
+#     date (a captain call: nor a recorded due date), a title that opens with a
 #     date, an invalid `--due` date or
 #     `--batch` tag, or `due`/`batch` on a row that does not exist.
 # Otherwise the exit status is tasks-axi's own, unless decoding a read fails;
@@ -335,7 +336,11 @@ refuse_fleet_on_captain_hold() {  # <id>
 
 # The row-shape refusals described in the header, before anything runs.
 guard_row_shape() {
-  local kind until title i
+  local kind until title i arg
+  # A help read writes nothing, so it reaches tasks-axi unchecked.
+  for arg in ${ARGS[@]+"${ARGS[@]}"}; do
+    case "$arg" in -h|--help) return 0 ;; esac
+  done
   case "${ARGS[0]:-}" in
     hold)
       kind=$(arg_value --kind) || kind=
@@ -346,19 +351,22 @@ guard_row_shape() {
         fm_backlog_date_valid "$until" || fail "--until must be a YYYY-MM-DD date: $until"
         return 0
       fi
-      # No back-on date: the row's recorded due date is its date.
-      case "${ARGS[1]:-}" in
-        ''|-*) ;;
-        *)
-          if shown_body "${ARGS[1]}" && [ -n "$(fm_backlog_row_field_of_body due "$SHOWN_BODY")" ]; then
-            return 0
-          fi
-          ;;
-      esac
+      # No back-on date: a captain call stays live, so its recorded due date
+      # is its date. Other kinds need --until, which is what lifts them.
       case "$kind" in
-        captain) fail "a captain call needs a date: hold it through bin/fm-captain-hold.sh hold, which gives a new call a due date, or pass --until YYYY-MM-DD" ;;
-        external) fail "an external wait needs its recheck date: pass --until YYYY-MM-DD for when to check on it, or record a due date first" ;;
-        *) fail "a hold needs its back-on date: pass --until YYYY-MM-DD for when the row comes back, or record a due date first" ;;
+        captain)
+          case "${ARGS[1]:-}" in
+            ''|-*) ;;
+            *)
+              if shown_body "${ARGS[1]}" && [ -n "$(fm_backlog_row_field_of_body due "$SHOWN_BODY")" ]; then
+                return 0
+              fi
+              ;;
+          esac
+          fail "a captain call needs a date: hold it through bin/fm-captain-hold.sh hold, which gives a new call a due date, or pass --until YYYY-MM-DD"
+          ;;
+        external) fail "an external wait needs its recheck date: pass --until YYYY-MM-DD for when to check on it" ;;
+        *) fail "a hold needs its back-on date: pass --until YYYY-MM-DD for when the row comes back" ;;
       esac
       ;;
     add|create)

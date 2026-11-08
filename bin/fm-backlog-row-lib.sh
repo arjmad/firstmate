@@ -13,10 +13,11 @@
 #   external  someone else must act, even when the captain owns the follow-up;
 #   future    nothing to do until a date;
 #   parked    someday.
-# Every hold carries a date: its back-on date (tasks-axi's hold-until), which
-# for an external wait is the recheck date, or else the row's due date. A new
-# captain call stays live with no back-on date, because tasks-axi lifts a hold
-# on its date, and carries a due date instead (bin/fm-captain-hold.sh).
+# Every hold carries a date: future, parked and external holds their back-on
+# date (tasks-axi's hold-until, which for an external wait is the recheck
+# date), since that is what lifts them. A new captain call stays live with no
+# back-on date, because tasks-axi lifts a hold on its date, and carries a due
+# date instead (bin/fm-captain-hold.sh).
 #
 # Two dates stay apart. The back-on date is when the row comes back; the due
 # date is the real deadline, and a snooze never moves it. tasks-axi has no due

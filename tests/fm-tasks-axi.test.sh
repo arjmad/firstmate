@@ -446,8 +446,13 @@ test_wrapper_row_shape() {
   assert_grep "(hold-kind: external) (hold-until: 2026-11-12)" "$dir/home/data/backlog.md" \
     "the external wait did not record its recheck date"
   wrapper_from_code "$dir" add rs-due "File the return" --due 2026-12-15 >/dev/null || fail "could not add rs-due"
-  wrapper_from_code "$dir" hold rs-due --reason "after the season" --kind future >/dev/null \
-    || fail "a hold on a row with a recorded due date was refused"
+  out=$(wrapper_from_code "$dir" hold rs-due --reason "after the season" --kind future 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "a future hold with only a due date, which nothing would lift"
+  wrapper_from_code "$dir" hold rs-due --reason "his call" --kind captain >/dev/null \
+    || fail "a captain hold on a row with a recorded due date was refused"
+  out=$(wrapper_from_code "$dir" hold --help 2>&1) || fail "hold --help was refused: $out"
+  assert_not_contains "$out" "a hold needs" "hold --help ran the hold refusals"
   out=$(wrapper_from_code "$dir" hold rs-1 --reason "his call" --kind captain 2>&1)
   rc=$?
   expect_code 2 "$rc" "an undated captain hold through the wrapper"

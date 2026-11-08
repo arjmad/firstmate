@@ -1345,7 +1345,7 @@ command_hold() {
     [ -n "$repo" ] || repo=firstmate
     validate_one_line repo "$repo"
     [ -z "$origin" ] || body=$(printf 'Origin: %s' "$origin")
-    [ -n "$due" ] || [ -n "$until" ] || due=$(captain_call_default_due)
+    [ -n "$due" ] || [ -n "$until" ] || due=$(captain_call_default_due) || exit 1
     [ -z "$due" ] || body=$(fm_backlog_row_field_body_with due "$body" "$due")
     body=$(fm_backlog_owner_body_with "$body" arjun)
     # tasks-axi add never passes --due. Beads due.required would refuse this
@@ -1365,7 +1365,7 @@ command_hold() {
   # A new call with no back-on date records its due date (see the header).
   recorded_due=$(fm_backlog_row_field_of_body due "$(show_field_value "$show" body)")
   if [ -z "$due" ] && [ -z "$until" ] && [ "$preserve_hold_set" = 0 ] && [ -z "$recorded_due" ]; then
-    due=$(captain_call_default_due)
+    due=$(captain_call_default_due) || exit 1
   fi
   if [ -n "$due" ] && [ "$due" != "$recorded_due" ]; then
     write_due "$id" "$due" "$show" || fail "could not record the due date $due on $id"
@@ -1722,7 +1722,8 @@ command_choices() {
 # The deferral record in a decoded body (see `defer` in the header). With
 # DEFERRAL_PART=body it prints the body without any `Captain deferred:` block,
 # `Captain deferrals replaced:` line or canonical (last) owner line, which the
-# writer puts back last; with DEFERRAL_PART=replaced it prints
+# writer puts back last; with DEFERRAL_PART=kept it removes only that line and
+# the owner line, keeping every block; with DEFERRAL_PART=replaced it prints
 # the replaced-deferral entries those carried, one per line, oldest first. A
 # block's words end where their text matches the block's decision digest; a
 # block whose words were edited since ends at its first blank or row-field line.
@@ -1745,7 +1746,7 @@ deferral_record() {  # <decoded-body>
         $i++;
         next;
       }
-      if ($l[$i] =~ /^Captain deferred: \S+$/ && $i < $#l
+      if ($ENV{DEFERRAL_PART} ne "kept" && $l[$i] =~ /^Captain deferred: \S+$/ && $i < $#l
         && $l[$i + 1] =~ /^Captain deferral: until (\d{4}-\d{2}-\d{2}) \| decision digest: ([0-9a-f]{64})$/) {
         my ($until, $digest) = ($1, $2);
         my $end;
@@ -1779,27 +1780,32 @@ deferral_record() {  # <decoded-body>
   '
 }
 
-# The current deferral block plus the replaced-deferral line, on <stripped-body>.
-deferral_body() {  # <stripped-body> <stamp> <marker> <words> <replaced-entries> <owner-or-empty>
-  local body=$1 stamp=$2 marker=$3 words=$4 replaced=$5 owner=$6
-  local block="Captain deferred: $stamp"$'\n'"$marker"$'\n'"$words"
-  [ -z "$replaced" ] || block="$block"$'\n\n'"Captain deferrals replaced: $(printf '%s\n' "$replaced" | paste -sd ';' - | sed 's/;/; /g')"
-  if [ -n "$body" ]; then
-    body="$body"$'\n\n'"$block"
-  else
-    body=$block
-  fi
-  # The owner line stays last (bin/fm-backlog-owner-lib.sh).
-  if [ -n "$owner" ]; then
-    fm_backlog_owner_body_with "$body" "$owner"
-  else
-    printf '%s\n' "$body"
-  fi
+# The row body after a deferral: <content> (a deferral_record output), then
+# <block> when given, the replaced-deferral line, the row's Due: and Batch:
+# lines, and the owner line, in that order. The row fields follow the
+# captain's verbatim words so a field-looking line inside them never reads as
+# the row's own (bin/fm-backlog-row-lib.sh readers take the last line).
+deferral_body() {  # <content> <block-or-empty> <replaced-entries> <owner-or-empty>
+  local body=$1 block=$2 replaced=$3 owner=$4 due batch fields=''
+  due=$(fm_backlog_row_field_of_body due "$body")
+  batch=$(fm_backlog_row_field_of_body batch "$body")
+  [ -z "$due" ] || body=$(fm_backlog_row_field_body_with due "$body" '')
+  [ -z "$batch" ] || body=$(fm_backlog_row_field_body_with batch "$body" '')
+  body=$(fm_backlog_row_trim_trailing_blank "$body")
+  [ -z "$block" ] || body="${body:+$body$'\n\n'}$block"
+  [ -z "$replaced" ] || body="${body:+$body$'\n\n'}Captain deferrals replaced: $(printf '%s\n' "$replaced" | paste -sd ';' - | sed 's/;/; /g')"
+  [ -z "$due" ] || fields="Due: $due"
+  [ -z "$batch" ] || fields="${fields:+$fields$'\n'}Batch: $batch"
+  [ -z "$fields" ] || body="${body:+$body$'\n\n'}$fields"
+  # The owner line stays last (bin/fm-backlog-owner-lib.sh); it is appended
+  # rather than rewritten, so an owner-looking line in the words stays put.
+  [ -z "$owner" ] || body="${body:+$body$'\n\n'}$FM_BACKLOG_OWNER_PREFIX$owner"
+  printf '%s\n' "$body"
 }
 
 command_defer() {
   local id=${1:-} until='' decision_file='' show decoded hold_kind hold_until reason
-  local earliest stamp marker latest tmp kind_flag='' stamp_epoch new_reason='' replaced
+  local earliest stamp marker latest tmp kind_flag='' stamp_epoch new_reason='' replaced content block
   local -a choice_flags=()
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
@@ -1886,13 +1892,30 @@ command_defer() {
   decoded=$(decode_shown_value "$(show_field "$show" body)") \
     || fail "could not decode the existing body for $id"
   latest=$(printf '%s\n' "$decoded" | grep '^Captain deferral: until ' | tail -1)
+  replaced=$(DEFERRAL_PART=replaced deferral_record "$decoded")
   case "$latest" in
     "$marker") : ;;
     *)
+      if [ "$(show_field_value "$show" hold_until)" != "$until" ]; then
+        # A concurrent deferral re-held the call after this one did, so its
+        # date and words stand and this one is recorded as replaced.
+        printf '%s\n' "$replaced" | grep -Fxq "until $until #${DECISION_DIGEST:0:16}" && {
+          printf 'deferred: %s until %s\n' "$id" "$until"
+          return 0
+        }
+        content=$(DEFERRAL_PART=kept deferral_record "$decoded")
+        block=''
+        # Only the replaced line's own entries, since the blocks stay.
+        replaced=$(printf '%s\n' "$decoded" | sed -n 's/^Captain deferrals replaced: //p' | sed 's/; /\
+/g'; printf '%s\n' "until $until #${DECISION_DIGEST:0:16}")
+        replaced=$(printf '%s\n' "$replaced" | sed '/^$/d')
+      else
+        content=$(deferral_record "$decoded")
+        block="Captain deferred: $stamp"$'\n'"$marker"$'\n'"$DECISION_TEXT"
+      fi
       tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-defer.XXXXXX") \
         || fail "cannot stage the deferral for $id"
-      if ! deferral_body "$(deferral_record "$decoded")" "$stamp" "$marker" "$DECISION_TEXT" \
-        "$(DEFERRAL_PART=replaced deferral_record "$decoded")" "$(fm_backlog_owner_of_body "$decoded")" > "$tmp"; then
+      if ! deferral_body "$content" "$block" "$replaced" "$(fm_backlog_owner_of_body "$decoded")" > "$tmp"; then
         rm -f -- "$tmp"
         fail "cannot stage the deferral for $id"
       fi
@@ -1915,11 +1938,19 @@ command_defer_batch() {
   fm_backlog_batch_valid "$tag" || fail "a batch tag is lowercase letters, digits and dashes, at most 40 characters: $tag"
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --until|--decision-file|--reason) pass+=("$1" "${2:-}"); shift ;;
+      --until|--decision-file|--reason)
+        [ "$#" -ge 2 ] && [ -n "$2" ] || fail "$1 needs a value"
+        [ "$1" != --until ] || fm_backlog_date_valid "$2" || fail "--until must be a YYYY-MM-DD date: $2"
+        [ "$1" != --decision-file ] || load_decision "$2"
+        pass+=("$1" "$2")
+        shift
+        ;;
       *) usage >&2; exit 2 ;;
     esac
     shift
   done
+  [ -n "$DECISION_DIGEST" ] || fail "--decision-file is required; a deferral records the captain's words"
+  printf '%s\n' "${pass[@]}" | grep -Fxq -- --until || fail "--until is required"
   require_tasks_axi
   listing=$(tasks_axi list --fields hold_kind --limit 100000) || fail "could not list this home's backlog"
   ids=$(printf '%s\n' "$listing" | awk -F, '
