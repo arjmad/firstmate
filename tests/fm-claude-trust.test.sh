@@ -540,6 +540,72 @@ test_symlinked_store_to_an_owned_target_is_accepted() {
   pass "fm-claude-trust.sh: follows a store symlink to this user's own file and leaves the link intact"
 }
 
+# set_mtime <path> <seconds from now>: portable across GNU and BSD touch.
+set_mtime() {
+  node -e 'const t=Date.now()/1000+Number(process.argv[2]);require("node:fs").utimesSync(process.argv[1],t,t)' "$1" "$2"
+}
+digest() { cksum < "$1"; }
+
+# A Claude session holding <store>.lock is mid-write. The spawn's registration
+# must wait for it rather than rename over the store, then register on top of
+# what that session wrote, so neither write is lost. Claude Code keys the lock
+# on the store path it was given, so a symlinked store is locked beside the
+# link, not beside its target.
+test_registration_waits_for_the_store_lock() {
+  local rec layout store data lock before pid out
+  for layout in plain symlinked; do
+    rec=$(make_case "lock-held-$layout")
+    read_case "$rec"
+    store="$CONFIG/.claude.json"
+    data=$store
+    if [ "$layout" = symlinked ]; then
+      data="$CASE_DIR/dotfiles/.claude.json"
+      mkdir -p "$CASE_DIR/dotfiles"
+      ln -s "$data" "$store"
+    fi
+    printf '%s\n' '{"numStartups":3,"projects":{}}' > "$data"
+    lock="$store.lock"
+    mkdir "$lock"
+    set_mtime "$lock" 3600  # never stale, however slow this host runs
+    before=$(digest "$data")
+    run_trust "$CONFIG" "$WT" "$PROJ" > "$CASE_DIR/held.out" &
+    pid=$!
+    sleep 1
+    kill -0 "$pid" 2>/dev/null \
+      || fail "$layout: registration finished while another writer held $lock: $(cat "$CASE_DIR/held.out")"
+    [ "$(digest "$data")" = "$before" ] || fail "$layout: registration rewrote the store while another writer held its lock"
+    node -e 'const fs=require("node:fs");const p=process.argv[1];const j=JSON.parse(fs.readFileSync(p,"utf8"));j.vendorWrite=true;fs.writeFileSync(p,JSON.stringify(j,null,2)+"\n")' "$data"
+    rmdir "$lock"
+    wait "$pid"
+    expect_code 0 $? "$layout: registration succeeds once the store lock is released: $(cat "$CASE_DIR/held.out")"
+    assert_store_value "$data" true "$layout: the lock holder's write was lost" vendorWrite
+    assert_trusted "$data" "$WT" "$layout: the worktree was not trusted after the lock was released"
+    assert_trusted "$data" "$PROJ" "$layout: the project root was not trusted after the lock was released"
+    [ ! -e "$lock" ] || fail "$layout: registration left the store lock behind"
+    [ "$layout" = plain ] || [ -L "$store" ] || fail "$layout: the store symlink was replaced by a regular file"
+  done
+  pass "fm-claude-trust.sh: registers trust only under Claude Code's own store lock, keyed on the store path"
+}
+
+# A lock that stays fresh past the wait means another writer is still mid-write:
+# the spawn refuses with the store untouched and that writer's lock in place.
+test_registration_refuses_a_store_lock_held_past_the_wait() {
+  local rec store before out
+  rec=$(make_case lock-fresh)
+  read_case "$rec"
+  store="$CONFIG/.claude.json"
+  printf '%s\n' '{"numStartups":3,"projects":{}}' > "$store"
+  mkdir "$store.lock"
+  set_mtime "$store.lock" 3600
+  before=$(digest "$store")
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ")
+  expect_code 1 $? "registration must refuse while the store lock stays held: $out"
+  assert_contains "$out" ".claude.json.lock" "the refusal did not name the held lock"
+  [ "$(digest "$store")" = "$before" ] || fail "a refused registration changed a locked store"
+  [ -d "$store.lock" ] || fail "registration removed a lock it did not hold"
+  pass "fm-claude-trust.sh: refuses with the store untouched when its lock stays held"
+}
+
 # Registering trust is what keeps a worker off the dialog, so a missing node
 # refuses rather than degrades: proceeding would launch the worker straight into
 # the dialog this control exists to remove.
@@ -859,6 +925,8 @@ test_project_argument_that_is_itself_a_worktree_resolves_to_the_primary_checkout
 test_unrelated_store_content_is_preserved
 test_symlinked_store_to_a_foreign_owned_target_is_refused
 test_symlinked_store_to_an_owned_target_is_accepted
+test_registration_waits_for_the_store_lock
+test_registration_refuses_a_store_lock_held_past_the_wait
 test_corrupt_store_fails_closed
 test_missing_node_is_refused
 test_scope_refusal_stays_fail_closed_without_node
