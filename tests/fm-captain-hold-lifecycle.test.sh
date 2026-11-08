@@ -112,6 +112,18 @@ run_captain() {  # <home> <command args...>
     FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-captain-hold.sh" "$@"
 }
 
+run_fm_tasks_axi() {  # <home> <command args...>
+  local home=$1
+  shift
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-tasks-axi.sh" "$@"
+}
+
+# The decoded hold reason of a tasks-axi show read.
+fm_hold_reason_decode_stream_for() {  # <show-output>
+  printf '%s\n' "$1" | bash -c '. "$1/bin/fm-hold-reason-lib.sh"; fm_hold_reason_decode_stream' _ "$ROOT"
+}
+
 # Completes <id>'s captain-call inventory through a separate held task, because
 # the origin task is never accepted as its own inventory entry.
 complete_through_sibling() {  # <home> <origin-id>
@@ -2281,6 +2293,104 @@ test_legacy_identities_keep_working() {
   assert_contains "$out" "closed: $id-decision-fourth-choice" \
     "the origin-free legacy replay digest was treated as drift"
   pass "legacy identities, metadata, bindings, and the shim keep working"
+}
+
+# A deferral replaces the row's deferral record instead of adding to it
+# (docs/fork-decisions/2026-11-08-backlog-row-shape.md): two deferrals leave
+# one current block, the replaced words go to the note archive, a replay of the
+# replaced one stays a no-op, `--reason` replaces the reason while the kind
+# stays, and the owner line stays last.
+test_deferral_replaces_instead_of_appending() {
+  local home show body
+  home=$(make_home deferral-replaces)
+  FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" hold sample-office \
+    --title "Count the office mats" --reason "pick the count day" --repo sample --kind reversible >/dev/null \
+    || fail "could not register the office call"
+  printf 'Arjun 2026-07-14: Monday at the office\nsecond line\n\nafter a blank line\n' > "$home/first.txt"
+  printf 'Arjun 2026-07-15: Friday instead\n' > "$home/second.txt"
+  FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" defer sample-office --until 2026-07-20 \
+    --decision-file "$home/first.txt" >/dev/null || fail "the first deferral failed"
+  FM_CAPTAIN_HOLD_NOW=2026-07-15T12:00:00Z run_captain "$home" defer sample-office --until 2026-07-24 \
+    --decision-file "$home/second.txt" --reason "moved to Friday at the office" >/dev/null \
+    || fail "the second deferral failed"
+  show=$(tasks_in "$home" show sample-office --full)
+  body=$(printf '%s\n' "$show" | sed -n 's/^  body: //p')
+  assert_contains "$show" "hold_until: 2026-07-24" "the second deferral did not move the date"
+  assert_contains "$(run_captain "$home" open sample-office >/dev/null && echo open)" open \
+    "the deferred call is no longer an open captain call"
+  assert_contains "$(fm_hold_reason_decode_stream_for "$show")" "[reversible] moved to Friday at the office" \
+    "--reason did not replace the reason while keeping the kind"
+  [ "$(printf '%s' "$body" | grep -o 'Captain deferred:' | wc -l | tr -d ' ')" = 1 ] \
+    || fail "two deferrals did not leave one current block: $body"
+  assert_contains "$body" "Friday instead" "the current block lost the newest words"
+  assert_not_contains "$body" "Monday at the office" "the replaced words stayed on the row"
+  assert_not_contains "$body" "after a blank line" "a multi-paragraph replaced block left a fragment"
+  assert_contains "$body" "Captain deferrals replaced: until 2026-07-20 #" "the replaced deferral left no entry"
+  case "$body" in *'Owner: arjun"') : ;; *) fail "the owner line is not last after a deferral: $body" ;; esac
+  assert_grep "Monday at the office" "$home/data/note-archive.md" "the replaced words were not archived"
+
+  FM_CAPTAIN_HOLD_NOW=2026-07-15T12:00:00Z run_captain "$home" defer sample-office --until 2026-07-20 \
+    --decision-file "$home/first.txt" >/dev/null || fail "a replayed replaced deferral was refused"
+  assert_contains "$(tasks_in "$home" show sample-office --full)" "hold_until: 2026-07-24" \
+    "a replayed replaced deferral rolled the date back"
+
+  # A row whose newest deferral block was recorded the old appending way but
+  # whose date never applied: replaying that deferral applies it, and the next
+  # one replaces every old block.
+  printf 'Arjun: legacy later\n' > "$home/legacy.txt"
+  printf 'Older note\n\nCaptain deferred: 2026-07-10T00:00:00Z\nCaptain deferral: until 2026-07-28 | decision digest: %s\nArjun: legacy later\n\nOwner: arjun\n' \
+    "$(printf 'Arjun: legacy later' | sha256sum | cut -d' ' -f1)" > "$home/legacy-body.txt"
+  FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" hold sample-legacy \
+    --title "Legacy deferred call" --reason "pick a day" --repo sample --kind reversible >/dev/null \
+    || fail "could not register the legacy call"
+  run_fm_tasks_axi "$home" update sample-legacy --body-file "$home/legacy-body.txt" >/dev/null \
+    || fail "could not write the legacy body"
+  FM_CAPTAIN_HOLD_NOW=2026-07-15T12:00:00Z run_captain "$home" defer sample-legacy --until 2026-07-28 \
+    --decision-file "$home/legacy.txt" >/dev/null || fail "replaying the unapplied legacy deferral failed"
+  assert_contains "$(tasks_in "$home" show sample-legacy --full)" "hold_until: 2026-07-28" \
+    "a recorded deferral whose date never applied was not applied on replay"
+  FM_CAPTAIN_HOLD_NOW=2026-07-15T12:00:00Z run_captain "$home" defer sample-legacy --until 2026-07-30 \
+    --decision-file "$home/second.txt" >/dev/null || fail "deferring the legacy call failed"
+  body=$(tasks_in "$home" show sample-legacy --full | sed -n 's/^  body: //p')
+  assert_not_contains "$body" "legacy later" "a legacy deferral block stayed on the row"
+  assert_contains "$body" "Older note" "replacing a legacy block removed the row's own note"
+  assert_contains "$body" "Captain deferrals replaced: until 2026-07-28 #" "the legacy deferral left no entry"
+  pass "a deferral replaces the row's deferral record, archives the old words, and a replay stays a no-op"
+}
+
+# `defer-batch` defers every captain call carrying the batch tag together, and
+# leaves untagged calls and tagged rows not held for the captain alone.
+test_defer_batch_moves_tagged_calls_together() {
+  local home out
+  home=$(make_home defer-batch)
+  for id in office-a office-b other-c; do
+    FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" hold "$id" \
+      --title "Warehouse task $id" --reason "pick a day" --repo sample --kind reversible >/dev/null \
+      || fail "could not register $id"
+  done
+  tasks_in "$home" add fleet-d "Fleet errand" >/dev/null || fail "could not add fleet-d"
+  for id in office-a office-b fleet-d; do
+    run_fm_tasks_axi "$home" batch "$id" office >/dev/null || fail "could not tag $id"
+  done
+  printf 'Arjun 2026-07-14: all office rows to Friday\n' > "$home/batch.txt"
+  out=$(FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" defer-batch office --until 2026-07-17 \
+    --decision-file "$home/batch.txt") || fail "defer-batch failed: $out"
+  assert_contains "$out" "deferred: office-a until 2026-07-17" "defer-batch skipped a tagged call"
+  assert_contains "$out" "deferred: office-b until 2026-07-17" "defer-batch skipped a tagged call"
+  assert_contains "$out" "defer-batch: office deferred=2 failed=0" "defer-batch miscounted"
+  assert_not_contains "$out" "other-c" "defer-batch touched an untagged call"
+  assert_not_contains "$out" "fleet-d" "defer-batch touched a row not held for the captain"
+  assert_contains "$(tasks_in "$home" show office-b --full)" "all office rows to Friday" "the batch words were not recorded"
+  assert_not_contains "$(tasks_in "$home" show other-c --full)" "hold_until: 2026-07-17" "an untagged call moved"
+  if out=$(FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" defer-batch nothing --until 2026-07-17 \
+    --decision-file "$home/batch.txt" 2>&1); then
+    fail "defer-batch accepted a tag no call carries: $out"
+  fi
+  assert_contains "$out" "no open captain call carries batch nothing" "an empty batch was not refused by name"
+  if out=$(run_captain "$home" defer-batch Office --until 2026-07-17 --decision-file "$home/batch.txt" 2>&1); then
+    fail "defer-batch accepted an invalid tag: $out"
+  fi
+  pass "defer-batch moves every captain call carrying the tag together and nothing else"
 }
 
 # A board answer must reach the keyed-answer intake through the RUNNER, not just
@@ -4845,6 +4955,8 @@ test_unbound_source_closes_no_hold
 test_legacy_identities_keep_working
 test_board_answer_reaches_the_keyed_answer_intake
 test_keyed_deferral_re_holds_instead_of_closing
+test_deferral_replaces_instead_of_appending
+test_defer_batch_moves_tagged_calls_together
 test_an_undated_later_answer_never_closes
 test_chat_channel_feeds_the_same_keyed_answer_intake
 test_origin_slug_validation_precedes_path_construction

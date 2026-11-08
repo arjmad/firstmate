@@ -21,14 +21,15 @@
 #
 # Usage:
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
-#     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] \
+#     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] [--due YYYY-MM-DD] \
 #     [--kind reversible|arjun-only] \
 #     [--options '<A>|<B>[|<C>]' [--recommend <option>]] [--ask <question>]
 #   fm-captain-hold.sh choices <task-id> --options '<A>|<B>[|<C>]' [--recommend <option>] [--ask <question>]
 #   fm-captain-hold.sh retire-defaults
 #   fm-captain-hold.sh retire-release
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
-#   fm-captain-hold.sh defer <task-id> --until YYYY-MM-DD --decision-file <path>
+#   fm-captain-hold.sh defer <task-id> --until YYYY-MM-DD --decision-file <path> [--reason <reason>]
+#   fm-captain-hold.sh defer-batch <tag> --until YYYY-MM-DD --decision-file <path> [--reason <reason>]
 #   fm-captain-hold.sh answers [<legacy-origin> | --any-origin] --source <provenance>   (keyed answers on stdin)
 #   fm-captain-hold.sh reconcile-requests --source-id <source-id> --source <provenance>   (task ids on stdin)
 #   fm-captain-hold.sh bind <source-id> [<legacy-origin> | --any-origin]
@@ -69,6 +70,14 @@
 # `--until` records the captain's own deferral date through `tasks-axi hold
 # --until`, so a "revisit later" answer is stored as a date instead of a live
 # card.
+# Every captain call carries a date (fork patch,
+# docs/fork-decisions/2026-11-08-backlog-row-shape.md). A new call - the row is
+# not already held for the captain - filed without `--until` stays live, with
+# no back-on date, and records a `Due: YYYY-MM-DD` body line
+# (bin/fm-backlog-row-lib.sh owns it): the date `--due` names, else the one the
+# row already records, else the next day (the local date, or the day after
+# FM_CAPTAIN_HOLD_NOW's). `--due` also records its date on any other hold. A
+# title opening with a `[YYYY-MM-DD]` date is refused when creating a row.
 #
 # HOLD KINDS (fork patches, docs/fork-decisions.md 2026-10-14 and
 # 2026-11-01).
@@ -148,15 +157,30 @@
 # `held:` bit, prove the captain owned it.
 #
 # `defer` records the captain's dated deferral of an open captain hold: the
-# exact words of the decision file go on a `Captain deferred:` body block (the
-# previous body archived), and the task is re-held with `hold --until` that
-# date, keeping its kind, choices and reason. The re-hold comes first and the
-# words are recorded once it stands, so a call closed in between never carries a deferral
-# it did not get. A date may be today in the captain's own time zone, so only a
-# date before yesterday in UTC (FM_CAPTAIN_HOLD_NOW overrides now) is refused.
-# A deferral already recorded is a no-op whatever its date - when it is applied,
-# or when a newer deferral has replaced it, so a replayed older answer never
-# rolls the date back. It never closes or releases anything.
+# task is re-held with `hold --until` that date, keeping its kind, choices and
+# reason, or with `--reason` replacing the reason while the kind and choices
+# stay. The re-hold comes first and the words are recorded once it stands, so
+# a call closed in between never carries a deferral it did not get. The exact
+# words of the decision file then REPLACE the row's deferral record rather than
+# adding to it (fork patch, docs/fork-decisions/2026-11-08-backlog-row-shape.md):
+# the body keeps one current `Captain deferred:` block, every earlier block
+# leaves the body, and the previous body is archived through tasks-axi
+# --archive-body, so the replaced words stay recoverable in the note archive.
+# Each replaced deferral leaves only its date and a short digest on one
+# `Captain deferrals replaced:` line. A date may be today in the captain's own
+# time zone, so only a date before yesterday in UTC (FM_CAPTAIN_HOLD_NOW
+# overrides now) is refused. A deferral already recorded is a no-op whatever
+# its date - when it is applied, or when a newer deferral has replaced it (its
+# entry on that line), so a replayed older answer never rolls the date back.
+# It never closes or releases anything.
+#
+# `defer-batch` defers every open captain call whose body carries `Batch:
+# <tag>` (bin/fm-backlog-row-lib.sh owns the line) together, through `defer`
+# above with the same date, words and optional reason, and prints each row's
+# `deferred:` or `failed:` line and a `defer-batch: <tag> deferred=<n>
+# failed=<n>` summary. A row carrying the tag that is not held for the captain
+# is left alone, since only his calls are his to defer. It fails when no
+# captain call carries the tag or any row fails.
 #
 # ONE KEYED-ANSWER INTAKE, FED BY EVERY CHANNEL.
 # "A keyed answer resolves its matching captain-held task" is a single
@@ -344,6 +368,9 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # shellcheck source=bin/fm-backlog-owner-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-backlog-owner-lib.sh"
+# shellcheck source=bin/fm-backlog-row-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-backlog-row-lib.sh"
 # shellcheck source=bin/fm-parent-channel-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-parent-channel-lib.sh"
@@ -1241,7 +1268,7 @@ epoch_to_utc_iso() {  # <epoch>
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0 stored_reason previous_origin='' hold_status=0
-  local decision_kind='' existing_reason=''
+  local decision_kind='' existing_reason='' due='' recorded_due
   local options='' options_given=0 recommend='' recommend_given=0 ask='' ask_given=0
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
@@ -1252,6 +1279,7 @@ command_hold() {
       --repo) shift; repo=${1:-} ;;
       --origin) shift; origin=${1:-} ;;
       --until) shift; until=${1:-} ;;
+      --due) shift; due=${1:-}; fm_backlog_date_valid "$due" || fail "--due must be a YYYY-MM-DD date: $due" ;;
       --kind) shift; decision_kind=${1:-} ;;
       --default|--no-default)
         fail "$1 was removed: holds no longer release themselves and wait for the captain's answer; give a recommendation with --options and --recommend"
@@ -1307,6 +1335,8 @@ command_hold() {
     [ -z "${FM_CAPTAIN_HOLD_EXPECT_REASON+set}" ] || fail "task $id is no longer held for the captain"
     [ -n "$title" ] || fail "--title is required to create task $id"
     validate_one_line title "$title"
+    ! fm_backlog_title_dated "$title" \
+      || fail "a title names the next action, not a date: drop the leading date and pass it as --until"
     if [ -z "$repo" ] && [ -n "$origin" ] && [ -f "$STATE/$origin.meta" ]; then
       repo=$(meta_value "$STATE/$origin.meta" project)
       repo=${repo%/}
@@ -1315,6 +1345,8 @@ command_hold() {
     [ -n "$repo" ] || repo=firstmate
     validate_one_line repo "$repo"
     [ -z "$origin" ] || body=$(printf 'Origin: %s' "$origin")
+    [ -n "$due" ] || [ -n "$until" ] || due=$(captain_call_default_due)
+    [ -z "$due" ] || body=$(fm_backlog_row_field_body_with due "$body" "$due")
     body=$(fm_backlog_owner_body_with "$body" arjun)
     # tasks-axi add never passes --due. Beads due.required would refuse this
     # create, and captain holds have no due semantics, so waive it for this
@@ -1330,6 +1362,15 @@ command_hold() {
   task_show_or_fail "$id" "task $id disappeared while recording its hold-set stamp"
   [ -n "$(body_hold_set_timestamp "$(show_field_value "$show" body)")" ] \
     || fail "task $id did not retain its hold-set stamp"
+  # A new call with no back-on date records its due date (see the header).
+  recorded_due=$(fm_backlog_row_field_of_body due "$(show_field_value "$show" body)")
+  if [ -z "$due" ] && [ -z "$until" ] && [ "$preserve_hold_set" = 0 ] && [ -z "$recorded_due" ]; then
+    due=$(captain_call_default_due)
+  fi
+  if [ -n "$due" ] && [ "$due" != "$recorded_due" ]; then
+    write_due "$id" "$due" "$show" || fail "could not record the due date $due on $id"
+    task_show_or_fail "$id" "task $id disappeared while recording its due date"
+  fi
   if [ -n "$origin" ]; then
     origin=$(task_identity "$origin") || exit $?
     previous_origin=$(body_hold_origin "$(show_field_value "$show" body)")
@@ -1437,6 +1478,34 @@ apply_pending_retained_artifact() {  # <task-id>
 # A caller holding a fresh read of the row passes it to spare a backend read.
 # OWNER_WRITTEN says whether the body changed.
 OWNER_WRITTEN=0
+# The due date a new captain call gets when no one names one: the next day.
+captain_call_default_due() {
+  local today epoch next
+  if [ -n "${FM_CAPTAIN_HOLD_NOW:-}" ]; then
+    today=${FM_CAPTAIN_HOLD_NOW%%T*}
+  else
+    today=$(date +%Y-%m-%d)
+  fi
+  epoch=$(fm_utc_iso_to_epoch "${today}T12:00:00Z") || fail "cannot read the date $today"
+  next=$(epoch_to_utc_iso $((epoch + 86400))) || fail "cannot compute the day after $today"
+  printf '%s\n' "${next%%T*}"
+}
+
+# Record <due> as the row's Due: line, keeping the owner line last.
+write_due() {  # <task-id> <due> <fresh-show-output>
+  local id=$1 due=$2 show=$3 body owner tmp
+  body=$(show_field_value "$show" body) || return 1
+  body=$(fm_backlog_row_field_body_with due "$body" "$due") || return 1
+  owner=$(fm_backlog_owner_of_body "$body")
+  [ -z "$owner" ] || body=$(fm_backlog_owner_body_with "$body" "$owner")
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-due.XXXXXX") || return 1
+  if ! printf '%s\n' "$body" > "$tmp" || ! tasks_axi update "$id" --body-file "$tmp" >/dev/null; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+  rm -f -- "$tmp"
+}
+
 write_owner() {  # <task-id> <owner> [<fresh-show-output>]
   local id=$1 owner=$2 show=${3:-} body tmp
   OWNER_WRITTEN=0
@@ -1650,9 +1719,87 @@ command_choices() {
   FM_CAPTAIN_HOLD_EXPECT_REASON=$reason "$0" hold "$id" --reason "$HOLD_REASON_REST" "${keep[@]}" "${pass[@]}"
 }
 
+# The deferral record in a decoded body (see `defer` in the header). With
+# DEFERRAL_PART=body it prints the body without any `Captain deferred:` block,
+# `Captain deferrals replaced:` line or canonical (last) owner line, which the
+# writer puts back last; with DEFERRAL_PART=replaced it prints
+# the replaced-deferral entries those carried, one per line, oldest first. A
+# block's words end where their text matches the block's decision digest; a
+# block whose words were edited since ends at its first blank or row-field line.
+deferral_record() {  # <decoded-body>
+  printf '%s' "$1" | DEFERRAL_PART=${DEFERRAL_PART:-body} perl -e '
+    use strict; use warnings; use Digest::SHA qw(sha256_hex);
+    local $/; my $body = <STDIN>; $body = "" unless defined $body;
+    my @l = split /\n/, $body, -1;
+    my (@keep, @replaced);
+    my $owner;
+    for my $k (0 .. $#l) { $owner = $k if $l[$k] =~ /^\s*Owner:\s*(arjun|fleet)\s*$/; }
+    # A removal leaves at most one blank line where it was.
+    my $removed = 0;
+    my $i = 0;
+    while ($i <= $#l) {
+      if (defined $owner && $i == $owner) { $removed = 1; $i++; next; }
+      if ($l[$i] =~ /^Captain deferrals replaced: (.*)$/) {
+        push @replaced, grep { length } split /; /, $1;
+        $removed = 1;
+        $i++;
+        next;
+      }
+      if ($l[$i] =~ /^Captain deferred: \S+$/ && $i < $#l
+        && $l[$i + 1] =~ /^Captain deferral: until (\d{4}-\d{2}-\d{2}) \| decision digest: ([0-9a-f]{64})$/) {
+        my ($until, $digest) = ($1, $2);
+        my $end;
+        for my $j ($i + 2 .. $#l) {
+          if (sha256_hex(join("\n", @l[$i + 2 .. $j])) eq $digest) { $end = $j; last; }
+        }
+        unless (defined $end) {
+          $end = $i + 1;
+          while ($end < $#l && $l[$end + 1] !~ /^\s*$/ && $l[$end + 1] !~ /^\s*(Owner|Due|Batch):/
+            && $l[$end + 1] !~ /^Captain deferr/) { $end++; }
+        }
+        push @replaced, "until $until #" . substr($digest, 0, 16);
+        $removed = 1;
+        $i = $end + 1;
+        next;
+      }
+      if ($l[$i] =~ /^\s*$/) {
+        push @keep, $l[$i] unless $removed && @keep && $keep[-1] =~ /^\s*$/;
+      } else {
+        push @keep, $l[$i];
+        $removed = 0;
+      }
+      $i++;
+    }
+    if ($ENV{DEFERRAL_PART} eq "replaced") {
+      print "$_\n" for @replaced;
+    } else {
+      pop @keep while @keep && $keep[-1] =~ /^\s*$/;
+      print join("\n", @keep);
+    }
+  '
+}
+
+# The current deferral block plus the replaced-deferral line, on <stripped-body>.
+deferral_body() {  # <stripped-body> <stamp> <marker> <words> <replaced-entries> <owner-or-empty>
+  local body=$1 stamp=$2 marker=$3 words=$4 replaced=$5 owner=$6
+  local block="Captain deferred: $stamp"$'\n'"$marker"$'\n'"$words"
+  [ -z "$replaced" ] || block="$block"$'\n\n'"Captain deferrals replaced: $(printf '%s\n' "$replaced" | paste -sd ';' - | sed 's/;/; /g')"
+  if [ -n "$body" ]; then
+    body="$body"$'\n\n'"$block"
+  else
+    body=$block
+  fi
+  # The owner line stays last (bin/fm-backlog-owner-lib.sh).
+  if [ -n "$owner" ]; then
+    fm_backlog_owner_body_with "$body" "$owner"
+  else
+    printf '%s\n' "$body"
+  fi
+}
+
 command_defer() {
   local id=${1:-} until='' decision_file='' show decoded hold_kind hold_until reason
-  local earliest stamp marker latest tmp kind_flag='' stamp_epoch
+  local earliest stamp marker latest tmp kind_flag='' stamp_epoch new_reason='' replaced
   local -a choice_flags=()
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
@@ -1660,6 +1807,7 @@ command_defer() {
     case "$1" in
       --until) shift; until=${1:-} ;;
       --decision-file) shift; decision_file=${1:-} ;;
+      --reason) shift; new_reason=${1:-}; [ -n "$new_reason" ] || fail "--reason must not be empty" ;;
       *) usage >&2; exit 2 ;;
     esac
     shift
@@ -1689,6 +1837,12 @@ command_defer() {
   decoded=$(decode_shown_value "$(show_field "$show" body)") \
     || fail "could not decode the existing body for $id"
   latest=$(printf '%s\n' "$decoded" | grep '^Captain deferral: until ' | tail -1)
+  replaced=$(DEFERRAL_PART=replaced deferral_record "$decoded")
+  if [ "$latest" != "$marker" ] && printf '%s\n' "$replaced" | grep -Fxq "until $until #${DECISION_DIGEST:0:16}"; then
+    # A newer deferral replaced this one, so a replay never rolls the date back.
+    printf 'deferred: %s until %s\n' "$id" "$until"
+    return 0
+  fi
   case "$decoded" in
     *"$marker"*)
       # Recorded before: a no-op when it is applied or a newer deferral has
@@ -1712,6 +1866,7 @@ command_defer() {
     [ -z "$HOLD_OPTIONS" ] || choice_flags+=(--options "$HOLD_OPTIONS" --recommend "$HOLD_RECOMMENDED")
     [ -z "$HOLD_ASK" ] || choice_flags+=(--ask "$HOLD_ASK")
   fi
+  [ -z "$new_reason" ] || reason=$new_reason
   [ -n "$reason" ] || reason="captain decision pending"
   release_task_control_lock
 
@@ -1730,12 +1885,14 @@ command_defer() {
   [ "$(show_field "$show" state)" != "done" ] || fail "task $id was closed while it was being deferred"
   decoded=$(decode_shown_value "$(show_field "$show" body)") \
     || fail "could not decode the existing body for $id"
-  case "$decoded" in
-    *"$marker"*) : ;;
+  latest=$(printf '%s\n' "$decoded" | grep '^Captain deferral: until ' | tail -1)
+  case "$latest" in
+    "$marker") : ;;
     *)
       tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-defer.XXXXXX") \
         || fail "cannot stage the deferral for $id"
-      if ! printf '%s\n\nCaptain deferred: %s\n%s\n%s\n' "$decoded" "$stamp" "$marker" "$DECISION_TEXT" > "$tmp"; then
+      if ! deferral_body "$(deferral_record "$decoded")" "$stamp" "$marker" "$DECISION_TEXT" \
+        "$(DEFERRAL_PART=replaced deferral_record "$decoded")" "$(fm_backlog_owner_of_body "$decoded")" > "$tmp"; then
         rm -f -- "$tmp"
         fail "cannot stage the deferral for $id"
       fi
@@ -1747,6 +1904,46 @@ command_defer() {
       ;;
   esac
   printf 'deferred: %s until %s\n' "$id" "$until"
+}
+
+# `defer-batch` (see the header).
+command_defer_batch() {
+  local tag=${1:-} listing ids id body deferred=0 failed=0 out
+  local -a pass=()
+  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+  shift
+  fm_backlog_batch_valid "$tag" || fail "a batch tag is lowercase letters, digits and dashes, at most 40 characters: $tag"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --until|--decision-file|--reason) pass+=("$1" "${2:-}"); shift ;;
+      *) usage >&2; exit 2 ;;
+    esac
+    shift
+  done
+  require_tasks_axi
+  listing=$(tasks_axi list --fields hold_kind --limit 100000) || fail "could not list this home's backlog"
+  ids=$(printf '%s\n' "$listing" | awk -F, '
+    /^  [A-Za-z0-9._-]+,/ {
+      id = $1
+      sub(/^ +/, "", id)
+      if ($NF == "captain") print id
+    }
+  ')
+  for id in $ids; do
+    task_show_or_fail "$id" "task $id disappeared while reading its batch"
+    body=$(decode_shown_value "$(show_field "$show" body)") || { failed=$((failed + 1)); printf 'failed: %s (could not read its body)\n' "$id"; continue; }
+    [ "$(fm_backlog_row_field_of_body batch "$body")" = "$tag" ] || continue
+    if out=$("$0" defer "$id" ${pass[@]+"${pass[@]}"} 2>&1); then
+      deferred=$((deferred + 1))
+      printf '%s\n' "$out"
+    else
+      failed=$((failed + 1))
+      printf 'failed: %s (%s)\n' "$id" "$(printf '%s' "$out" | tr '\n' ' ')"
+    fi
+  done
+  printf 'defer-batch: %s deferred=%s failed=%s\n' "$tag" "$deferred" "$failed"
+  [ $((deferred + failed)) -gt 0 ] || fail "no open captain call carries batch $tag"
+  [ "$failed" = 0 ]
 }
 
 # Every open row this home holds for the captain, one id per line. The listing's
@@ -2825,6 +3022,7 @@ case "${1:-}" in
   answer) shift; command_answer "$@" ;;
   answers) shift; command_answers "$@" ;;
   defer) shift; command_defer "$@" ;;
+  defer-batch) shift; command_defer_batch "$@" ;;
   reconcile-requests) shift; command_reconcile_requests "$@" ;;
   bind) shift; command_bind "$@" ;;
   unbind) shift; command_unbind "$@" ;;

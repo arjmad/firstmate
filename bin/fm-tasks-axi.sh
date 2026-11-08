@@ -3,6 +3,8 @@
 #
 # Usage: fm-tasks-axi.sh [<tasks-axi command> [args...]]
 #        fm-tasks-axi.sh owner <id> [arjun|fleet]
+#        fm-tasks-axi.sh due <id> [YYYY-MM-DD|-]
+#        fm-tasks-axi.sh batch <id> [<tag>|-]
 #        fm-tasks-axi.sh --help
 #
 # Every routine firstmate backlog read or mutation goes through this command
@@ -37,6 +39,24 @@
 # on it: re-hold fleet work that comes back on a date as a `future` hold first.
 # Every row read here is bounded like the lifecycle transitions' reads
 # (FM_BACKLOG_ROW_TIMEOUT_SECS).
+#
+# Row shape (fork patch, docs/fork-decisions/2026-11-08-backlog-row-shape.md;
+# bin/fm-backlog-row-lib.sh owns the hold kinds and the line formats):
+# `hold` takes one of the four hold kinds, `--kind captain|external|future|
+# parked`, and a date: a back-on date, `--until YYYY-MM-DD`, which for an
+# external wait is its recheck date, or else a `Due:` date the row already
+# records. A hold without a kind or a date is refused; a new captain call
+# without `--until` goes through bin/fm-captain-hold.sh hold, which records
+# its due date. `add` refuses a title that
+# opens with a `[YYYY-MM-DD]` date, as does `update --title`. `add` also takes
+# `--due YYYY-MM-DD`, the real deadline, and `--batch <tag>`, a group the
+# captain moves together, which the wrapper consumes into `Due:` and `Batch:`
+# body lines. `update` with a new body that names neither carries the row's
+# recorded ones, as it carries the owner. The wrapper-only subcommands
+# `due <id>` and `batch <id>` print the recorded value (`-` when none), and
+# `due <id> YYYY-MM-DD|-` and `batch <id> <tag>|-` record or clear it under the
+# same control lock as `owner`. Rows already in the backlog stay readable as
+# they are.
 #
 # Superseded-ruling guard (opt-in): when the home-private `config/captain-name`
 # names the captain (one name per line; blank and `#` lines ignored), `hold`,
@@ -88,7 +108,11 @@
 #     other than arjun or fleet, `owner` on a row that does not exist,
 #     fleet on a row held for the captain, a control lock not freed in time,
 #     or an `update` with a new body whose row id is not first or whose row
-#     cannot be read.
+#     cannot be read;
+#   - a `hold` without one of the four kinds, or with neither a valid
+#     `--until` date nor a recorded due date, a title that opens with a
+#     date, an invalid `--due` date or
+#     `--batch` tag, or `due`/`batch` on a row that does not exist.
 # Otherwise the exit status is tasks-axi's own, unless decoding a read fails;
 # in that case the decoder's nonzero status is returned.
 set -u
@@ -107,6 +131,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-hold-reason-lib.sh"
 # shellcheck source=bin/fm-backlog-owner-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backlog-owner-lib.sh"
+# shellcheck source=bin/fm-backlog-row-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-backlog-row-lib.sh"
 
 usage() {
   awk '
@@ -140,8 +166,13 @@ absolute_from_caller() {  # <path-value>
 ARGS=()
 CITE_OLDER_QUOTE=0
 OWNER=
+DUE=
+DUE_GIVEN=0
+BATCH=
+BATCH_GIVEN=0
 path_value_next=0
 owner_value_next=0
+row_value_next=
 for arg in "$@"; do
   if [ "$path_value_next" = 1 ]; then
     ARGS+=("$(absolute_from_caller "$arg")")
@@ -153,7 +184,24 @@ for arg in "$@"; do
     owner_value_next=0
     continue
   fi
+  case "$row_value_next" in
+    due) DUE=$arg; row_value_next=; continue ;;
+    batch) BATCH=$arg; row_value_next=; continue ;;
+  esac
   case "$arg" in
+    --due|--due=*|--batch|--batch=*)
+      case "${1:-}" in
+        add|create)
+          case "$arg" in
+            --due) DUE_GIVEN=1; row_value_next='due' ;;
+            --due=*) DUE_GIVEN=1; DUE=${arg#--due=} ;;
+            --batch) BATCH_GIVEN=1; row_value_next='batch' ;;
+            --batch=*) BATCH_GIVEN=1; BATCH=${arg#--batch=} ;;
+          esac
+          ;;
+        *) ARGS+=("$arg") ;;
+      esac
+      ;;
     --owner|--owner=*)
       case "${1:-}" in
         add|create)
@@ -201,6 +249,10 @@ done
 if [ -n "$OWNER" ] && ! fm_backlog_owner_valid "$OWNER"; then
   fail "--owner must be arjun or fleet, not $OWNER"
 fi
+[ -z "$row_value_next" ] || fail "--$row_value_next needs a value"
+[ "$DUE_GIVEN" = 0 ] || fm_backlog_date_valid "$DUE" || fail "--due must be a YYYY-MM-DD date: $DUE"
+[ "$BATCH_GIVEN" = 0 ] || fm_backlog_batch_valid "$BATCH" \
+  || fail "--batch must be a lowercase tag of letters, digits and dashes, at most 40 characters: $BATCH"
 
 # The value of the last <flag> in ARGS; fails when the flag is absent.
 arg_value() {  # <flag>
@@ -281,6 +333,50 @@ refuse_fleet_on_captain_hold() {  # <id>
   fail "$1 is held for the captain, so it waits on him; answer the hold, or re-hold fleet work that comes back on a date with hold --kind future --until, before naming the fleet"
 }
 
+# The row-shape refusals described in the header, before anything runs.
+guard_row_shape() {
+  local kind until title i
+  case "${ARGS[0]:-}" in
+    hold)
+      kind=$(arg_value --kind) || kind=
+      fm_backlog_hold_kind_valid "$kind" \
+        || fail "a hold needs --kind captain (the captain's answer or hands), external (someone else must act), future (nothing until a date) or parked (someday)"
+      until=$(arg_value --until) || until=
+      if [ -n "$until" ]; then
+        fm_backlog_date_valid "$until" || fail "--until must be a YYYY-MM-DD date: $until"
+        return 0
+      fi
+      # No back-on date: the row's recorded due date is its date.
+      case "${ARGS[1]:-}" in
+        ''|-*) ;;
+        *)
+          if shown_body "${ARGS[1]}" && [ -n "$(fm_backlog_row_field_of_body due "$SHOWN_BODY")" ]; then
+            return 0
+          fi
+          ;;
+      esac
+      case "$kind" in
+        captain) fail "a captain call needs a date: hold it through bin/fm-captain-hold.sh hold, which gives a new call a due date, or pass --until YYYY-MM-DD" ;;
+        external) fail "an external wait needs its recheck date: pass --until YYYY-MM-DD for when to check on it, or record a due date first" ;;
+        *) fail "a hold needs its back-on date: pass --until YYYY-MM-DD for when the row comes back, or record a due date first" ;;
+      esac
+      ;;
+    add|create)
+      for i in 1 2; do
+        title=${ARGS[$i]:-}
+        case "$title" in -*) break ;; esac
+        ! fm_backlog_title_dated "$title" \
+          || fail "a title names the next action, not a date: drop the leading date and record it as the hold's --until or the row's --due"
+      done
+      ;;
+    update|edit)
+      if title=$(arg_value --title) && fm_backlog_title_dated "$title"; then
+        fail "a title names the next action, not a date: drop the leading date and record it as the hold's --until or the row's due date"
+      fi
+      ;;
+  esac
+}
+
 # Hold bin/fm-captain-hold.sh's per-task control lock for the rest of this
 # command, bounded, so an owner rewrite never replays a body that a
 # concurrent hold or answer has just changed.
@@ -295,9 +391,10 @@ task_lock() {  # <id>
   trap 'fm_lock_release "$TASK_LOCK"' EXIT
 }
 
-# add/create: name the owner at filing (see the header).
+# add/create: name the owner at filing (see the header), and record any
+# --due and --batch lines above it.
 prepare_add_owner() {
-  local kind recorded
+  local kind recorded body
   kind=$(arg_value --kind) || kind=
   if given_body; then :; else GIVEN_BODY=; fi
   if [ -z "$OWNER" ]; then
@@ -308,27 +405,40 @@ prepare_add_owner() {
       fail "a kind=captain row must name its owner: --owner arjun when only the captain can move it, --owner fleet when the fleet does the work and reports to him"
     fi
   fi
-  stage_body "$(fm_backlog_owner_body_with "$GIVEN_BODY" "$OWNER")"
+  body=$GIVEN_BODY
+  [ "$DUE_GIVEN" = 0 ] || body=$(fm_backlog_row_field_body_with due "$body" "$DUE")
+  [ "$BATCH_GIVEN" = 0 ] || body=$(fm_backlog_row_field_body_with batch "$body" "$BATCH")
+  stage_body "$(fm_backlog_owner_body_with "$body" "$OWNER")"
 }
 
-# update with a new body: keep the recorded owner when the new body names none.
+# update with a new body: keep the recorded owner, due date and batch tag when
+# the new body names none.
 prepare_update_owner() {
-  local id=${ARGS[1]:-} named recorded=
+  local id=${ARGS[1]:-} named recorded='' body field value carried=0
   given_body || return 0
   named=$(fm_backlog_owner_of_body "$GIVEN_BODY")
-  if [ "$named" != arjun ]; then
-    case "$id" in
-      ''|-*) fail "name the row id right after update, so its owner can be checked and carried into the new body" ;;
-    esac
-    shown_body "$id" || fail "cannot read $id to check and carry its owner into the new body"
-    [ "$named" != fleet ] || ! shown_captain_hold || refuse_fleet_on_captain_hold "$id"
-    [ -n "$named" ] || recorded=$(fm_backlog_owner_of_body "$SHOWN_BODY")
+  body=$GIVEN_BODY
+  case "$id" in
+    ''|-*) fail "name the row id right after update, so its owner, due date and batch tag can be checked and carried into the new body" ;;
+  esac
+  shown_body "$id" || fail "cannot read $id to check and carry its owner, due date and batch tag into the new body"
+  [ "$named" != fleet ] || ! shown_captain_hold || refuse_fleet_on_captain_hold "$id"
+  [ -n "$named" ] || recorded=$(fm_backlog_owner_of_body "$SHOWN_BODY")
+  for field in due batch; do
+    [ -z "$(fm_backlog_row_field_of_body "$field" "$body")" ] || continue
+    value=$(fm_backlog_row_field_of_body "$field" "$SHOWN_BODY")
+    [ -n "$value" ] || continue
+    body=$(fm_backlog_row_field_body_with "$field" "$body" "$value")
+    carried=1
+  done
+  if [ -z "$recorded" ] && [ "$carried" = 1 ]; then
+    recorded=$(fm_backlog_owner_of_body "$body")
   fi
   if [ -n "$recorded" ]; then
-    stage_body "$(fm_backlog_owner_body_with "$GIVEN_BODY" "$recorded")"
-  elif [ "$GIVEN_BODY_STDIN" = 1 ]; then
+    stage_body "$(fm_backlog_owner_body_with "$body" "$recorded")"
+  elif [ "$GIVEN_BODY_STDIN" = 1 ] || [ "$carried" = 1 ]; then
     # Standard input is already read, so hand tasks-axi the body as a file.
-    stage_body "$GIVEN_BODY"
+    stage_body "$body"
   fi
 }
 
@@ -360,6 +470,44 @@ command_owner() {
   fi
   rm -f -- "$OWNER_BODY_FILE"
   printf 'ok: owner %s -> %s\n' "$id" "$want"
+}
+
+# The wrapper-only `due <id> [YYYY-MM-DD|-]` and `batch <id> [<tag>|-]`
+# subcommands.
+command_row_field() {  # <due|batch>
+  local field=$1 id=${ARGS[1]:-} want=${ARGS[2]:-} recorded body owner
+  case "$id" in ''|-*) fail "usage: $field <id> [value|-]" ;; esac
+  [ "${#ARGS[@]}" -le 3 ] || fail "usage: $field <id> [value|-]"
+  if [ -n "$want" ] && [ "$want" != - ]; then
+    case "$field" in
+      due) fm_backlog_date_valid "$want" || fail "a due date must be YYYY-MM-DD: $want" ;;
+      batch) fm_backlog_batch_valid "$want" \
+        || fail "a batch tag is lowercase letters, digits and dashes, at most 40 characters: $want" ;;
+    esac
+  fi
+  [ -z "$want" ] || task_lock "$id"
+  shown_body "$id" || fail "no backlog row $id in this home"
+  recorded=$(fm_backlog_row_field_of_body "$field" "$SHOWN_BODY")
+  if [ -z "$want" ]; then
+    printf '%s\n' "${recorded:--}"
+    return 0
+  fi
+  [ "$want" != - ] || want=
+  if [ "$recorded" = "$want" ]; then
+    printf 'ok: %s %s already %s\n' "$field" "$id" "${want:--}"
+    return 0
+  fi
+  body=$(fm_backlog_row_field_body_with "$field" "$SHOWN_BODY" "$want")
+  owner=$(fm_backlog_owner_of_body "$SHOWN_BODY")
+  [ -z "$owner" ] || body=$(fm_backlog_owner_body_with "$body" "$owner")
+  ARGS=(update "$id")
+  stage_body "$body"
+  if ! tasks-axi "${ARGS[@]}" >/dev/null; then
+    rm -f -- "$OWNER_BODY_FILE"
+    fail "could not record $field ${want:--} on $id"
+  fi
+  rm -f -- "$OWNER_BODY_FILE"
+  printf 'ok: %s %s -> %s\n' "$field" "$id" "${want:--}"
 }
 
 # The superseded-ruling guard described in the header. Each helper prints
@@ -440,6 +588,7 @@ else
   unset TASKS_AXI_FILE
 fi
 
+guard_row_shape
 guard_superseded_quote
 
 cd "$FM_BACKLOG_AXI_ROOT" || fail "cannot enter the backlog root $FM_BACKLOG_AXI_ROOT"
@@ -451,6 +600,10 @@ case "${1:-}" in
     ;;
   owner)
     command_owner
+    exit $?
+    ;;
+  due|batch)
+    command_row_field "$1"
     exit $?
     ;;
   add|create)
