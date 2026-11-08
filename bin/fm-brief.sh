@@ -131,9 +131,11 @@
 # apart.
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
 # Both crewmate scaffolds carry one shared rule against administering the
-# infrastructure every lane shares - the no-mistakes daemon and the worktree pool
-# their own slot came from - so ship and scout cannot drift apart. A secondmate
-# charter omits it: that home allocates and returns slots for its own crewmates.
+# infrastructure every lane shares - the no-mistakes daemon, the worktree pool
+# their own slot came from, and the host's processes, which a worker stops only
+# by the pid it recorded and never by a pkill/killall pattern - so ship and scout
+# cannot drift apart. A secondmate charter omits it: that home allocates and
+# returns slots for its own crewmates.
 # --mode, --forge, and --shape are refused on scout and secondmate scaffolds: a
 # scout's deliverable is a report rather than a merge, and a charter is not a
 # delivery contract.
@@ -785,7 +787,7 @@ fi
 # The secondmate charter deliberately omits this rule because a secondmate
 # legitimately allocates and returns slots for crewmates in its own home.
 IFS= read -r -d '' SHARED_INFRA_RULE <<'EOF' || true
-7. Never administer infrastructure that every lane shares. Two things are shared:
+7. Never administer infrastructure that every lane shares. Three things are shared:
    - The `no-mistakes` daemon - one instance serving every lane/home, so stopping, restarting, or
      updating it kills other lanes' in-flight pipeline runs; only firstmate manages the daemon.
      Before you append `blocked:` about the pipeline, run `no-mistakes daemon status` and
@@ -805,7 +807,15 @@ IFS= read -r -d '' SHARED_INFRA_RULE <<'EOF' || true
      get/return/remove/prune, the equivalent operations on any other worktree provider or runtime
      backend, and `git worktree add|remove|move|prune`. A slot that looks unused is not evidence
      that it is free, and returning your own worktree is firstmate's job at cleanup, not yours.
-   If you genuinely need a second checkout, another slot, or the daemon touched, append
+   - The processes on this host: live services and other lanes' agent sessions run beside yours,
+     often under the same user and with the same command line as a scratch copy you start. Stop
+     only a process you started, by the pid you recorded when you started it (`$!` after a
+     background launch, or the pid file your own launch wrote), and confirm that pid is still
+     yours before you signal it. Never stop anything by name or command-line pattern -
+     `pkill`, `killall`, `pkill -f`, or `kill $(pgrep ...)` - because the same pattern matches live
+     services and other agents, and stopping one restarts or ends work you do not own.
+   If you genuinely need a second checkout, another slot, the daemon touched, or a process you did
+   not start stopped, append
    `blocked [at=<epoch>]: {what you need}` and stop; firstmate arranges it.
 EOF
 SHARED_INFRA_RULE=${SHARED_INFRA_RULE%$'\n'}
