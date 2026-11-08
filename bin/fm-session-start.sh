@@ -152,7 +152,10 @@
 #   - Every in-flight, held, and blocked row is listed IN FULL, with its
 #     hold_kind/hold_reason and blocked_by. Those are the rows AGENTS.md
 #     sections 7 and 10 make actionable at startup, so they are never bounded
-#     away.
+#     away. The one exception (fork patch, print_held_far_folded): an unblocked
+#     queued held row whose gate is more than FAR_HOLD_DAYS out cannot act this
+#     week, so the held group counts those in one `parked until later:` line
+#     naming the command that lists them.
 #   - Only the plain queued (dispatchable-now) listing is bounded, by
 #     FM_SESSION_START_QUEUED_LIMIT, default 20. Anything it omits is disclosed
 #     with an exact remainder count and the command that shows the rest, so a
@@ -523,23 +526,107 @@ print_ready_queued_bounded() {
   '
 }
 
+# Fold far-parked held rows into one count line (Arjun 2026-11-08, fork patch
+# docs/fork-decisions/2026-11-08-far-holds-count-line.md). The held listing is
+# asked for with hold_until appended; a row folds only when it is queued, names
+# no blocker, and its gate - hold_until, else a leading [YYYY-MM-DD] title date -
+# falls after today plus FAR_HOLD_DAYS, so `tasks-axi ready --include-held`
+# lists every folded row. Every kept row and the header lose the hold_until
+# column again, so they print exactly as the plain listing would. Fields split
+# as bin/fm-hold-reason-lib.sh splits them: a quoted value with backslash
+# escapes, or a run of non-commas. An unrecognized listing passes through.
+FAR_HOLD_DAYS=7
+
+far_hold_horizon() {
+  date -d "+$FAR_HOLD_DAYS days" +%Y-%m-%d 2>/dev/null \
+    || date -v+"$FAR_HOLD_DAYS"d +%Y-%m-%d 2>/dev/null
+}
+
+print_held_far_folded() {
+  local held=$1 horizon
+  horizon=$(far_hold_horizon) || horizon=''
+  printf '%s\n' "$held" | awk -v horizon="$horizon" -v days="$FAR_HOLD_DAYS" '
+    function split_row(s, out,   n, i, c, q, f) {
+      n = 0; f = ""; q = 0
+      for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (q) {
+          f = f c
+          if (c == "\\") { i++; f = f substr(s, i, 1) } else if (c == "\"") q = 0
+        } else if (c == "\"") { q = 1; f = f c }
+        else if (c == ",") { out[++n] = f; f = "" }
+        else f = f c
+      }
+      out[++n] = f
+      return n
+    }
+    function unquote(v) { if (v ~ /^".*"$/) v = substr(v, 2, length(v) - 2); return v }
+    function is_date(v) { return v ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ }
+    { line[++lines] = $0 }
+    /^count: [0-9]+$/ && !count_at { count_at = lines; next }
+    /^tasks\[[0-9]+\]\{.*,hold_until\}:$/ && !head_at {
+      head_at = lines
+      spec = $0; sub(/^tasks\[[0-9]+\]\{/, "", spec); sub(/\}:$/, "", spec)
+      ncol = split(spec, names, ",")
+      for (i = 1; i <= ncol; i++) col[names[i]] = i
+      in_rows = 1
+      next
+    }
+    in_rows && /^  / {
+      # hold_until is the last column and never holds a comma, so cutting the
+      # last field restores the row exactly; only the gate test needs a split.
+      sub(/,[^,]*$/, "", line[lines])
+      last_row = lines
+      if (split_row(substr($0, 3), f) != ncol) next
+      gate = unquote(f[col["hold_until"]])
+      if (!is_date(gate)) {
+        gate = unquote(f[col["title"]])
+        gate = (gate ~ /^\[[0-9-]+\]/) ? substr(gate, 2, 10) : ""
+      }
+      if (horizon != "" && is_date(gate) && gate > horizon \
+          && f[col["state"]] == "queued" && f[col["blocked_by"]] == "none") {
+        folded++; drop[lines] = 1
+      }
+      next
+    }
+    in_rows { in_rows = 0 }
+    END {
+      if (!head_at) { for (i = 1; i <= lines; i++) print line[i]; exit }
+      total = line[head_at]; sub(/^tasks\[/, "", total); sub(/\].*$/, "", total)
+      kept = total - folded
+      if (count_at) line[count_at] = "count: " kept
+      sub(/^tasks\[[0-9]+\]/, "tasks[" kept "]", line[head_at])
+      sub(/,hold_until\}:$/, "}:", line[head_at])
+      if (!last_row) last_row = head_at
+      for (i = 1; i <= lines; i++) {
+        if (!drop[i]) print line[i]
+        if (i == last_row && folded) {
+          printf "parked until later: %d held row%s gated more than %d days out (bin/fm-tasks-axi.sh ready --include-held lists them)\n", \
+            folded, (folded == 1 ? "" : "s"), days
+        }
+      }
+    }
+  '
+}
+
 print_backlog_tasks_axi_compact() {
   local path=$1 in_flight held blocked ready err
   if ! in_flight=$(tasks-axi list --file "$path" --state in_flight --fields "$BACKLOG_FIELDS" 2>&1); then
     err=$in_flight
-  elif ! held=$(tasks-axi list --file "$path" --state held --fields "$BACKLOG_FIELDS" 2>&1); then
+  elif ! held=$(tasks-axi list --file "$path" --state held --fields "$BACKLOG_FIELDS,hold_until" 2>&1); then
     err=$held
   elif ! blocked=$(tasks-axi list --file "$path" --state queued --blocked --fields "$BACKLOG_FIELDS" 2>&1); then
     err=$blocked
   elif ! ready=$(tasks-axi ready --file "$path" 2>&1); then
     err=$ready
   else
-    printf 'compact backlog listing (tasks-axi; done rows omitted; every in-flight, held, and blocked row shown in full; ready queued bounded to %s; task bodies omitted)\n' \
+    printf 'compact backlog listing (tasks-axi; done rows omitted; every in-flight, held, and blocked row shown in full except held rows gated more than %s days out, which are counted; ready queued bounded to %s; task bodies omitted)\n' \
+      "$FAR_HOLD_DAYS" \
       "$QUEUED_LIMIT"
     printf '\nin flight:\n'
     printf '%s\n' "$in_flight" | fm_hold_reason_decode_stream | strip_axi_help
     printf '\nheld (captain- or time-gated; an in-flight item that is also held appears in both groups):\n'
-    printf '%s\n' "$held" | fm_hold_reason_decode_stream | strip_axi_help
+    print_held_far_folded "$held" | fm_hold_reason_decode_stream | strip_axi_help
     printf '\nblocked queued:\n'
     printf '%s\n' "$blocked" | fm_hold_reason_decode_stream | strip_axi_help
     printf '\nready queued (dispatchable now):\n'
