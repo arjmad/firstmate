@@ -18,7 +18,8 @@
 #   fm-procevent-lavish.sh listed-open <artifact.html>
 #
 # classify   Print the lifecycle state a handler should act on: feedback, ended,
-#            waiting, disconnected, interrupted, missing, or unknown.
+#            waiting, disconnected, interrupted, listener-active, missing, or
+#            unknown.
 # read       Print a structured presentation of one already-captured result so a
 #            handler consumes every queued item without grepping the raw file.
 #            It is read-only over the capture: it does not arm, poll, or change
@@ -94,11 +95,13 @@
 # Closing a review surface that carried nothing is the single most common Lavish
 # result: the captain reads a board, says nothing, and closes it. Announcing that
 # put a wake in front of the handler whose entire content was that nothing
-# happened. `silent` therefore holds three narrow, positively-determined shapes -
+# happened. `silent` therefore holds four narrow, positively-determined shapes -
 # a session this adapter classifies `ended` that carries no queued content block
 # at all, `browser_disconnected`, which carries no answer while the session
-# remains open, and an isolated `interrupted` capture, described below - and
-# every other result stays announced.
+# remains open, an isolated `interrupted` capture, described below, and a
+# `listener-active` refusal, the server's typed LISTENER_ACTIVE answer that
+# another poll already holds this board's one listener slot, which carries no
+# item and leaves the board armed - and every other result stays announced.
 #
 # Deliberately narrow, in both directions. A `Send & End` close carrying the
 # captain's actual answer arrives as `status: feedback` with `session_ended`, so
@@ -502,6 +505,25 @@ interrupted_payload() {  # <file>
   ' "$1"
 }
 
+# The one definition of the listener-active payload: exit 0 when the whole file
+# is one `error:` line, the exact `code: LISTENER_ACTIVE` line, and at most one
+# inline `help[N]:` suggestion line, 1 when it is anything else, and 2 when it
+# cannot be read. Only the typed code is matched, never the human message; any
+# further line, such as a content block, makes it a result that is announced.
+listener_active_payload() {  # <file>
+  perl -e '
+    use strict;
+    use warnings;
+    open my $fh, "<", $ARGV[0] or exit 2;
+    binmode $fh;
+    local $/;
+    my $bytes = <$fh>;
+    defined $bytes or $bytes = "";
+    close $fh or exit 2;
+    exit($bytes =~ /\Aerror: [^\n]+\ncode: LISTENER_ACTIVE\n(?:help\[[0-9]+\]: [^\n]+\n)?\z/ ? 0 : 1);
+  ' "$1"
+}
+
 # Stage a poll response that may be the interruption and stream anything that
 # provably is not. Exit 10 when the whole response is held in <response-file>
 # and nothing was printed, so the caller can test it with interrupted_payload;
@@ -698,6 +720,10 @@ cmd_classify() {
   esac
   if interrupted_payload "$file"; then
     printf 'interrupted\n'
+    return 0
+  fi
+  if listener_active_payload "$file"; then
+    printf 'listener-active\n'
     return 0
   fi
   error_message=$(awk 'NR == 1 && /^error:[[:space:]]*/ { sub(/^error:[[:space:]]*/, ""); print }' "$file")
@@ -972,16 +998,18 @@ interruption_repeats() {  # <result-file>
 # announcing, for the generic runner's silence seam. Lavish's notion of "nothing
 # was said" lives here and nowhere else: an ended session carrying no queued
 # content block is a board the captain closed without saying anything, a
-# disconnected window carries no answer, and an isolated interruption is the
-# server restarting under the listener; the handler learns nothing from being
-# told. Anything else - a real answer, a missing or waiting session, a repeated
-# interruption, an unreadable result - is announced.
+# disconnected window carries no answer, an isolated interruption is the
+# server restarting under the listener, and a listener-active refusal is a
+# second poll the server turned away while another one holds the board; the
+# handler learns nothing from being told. Anything else - a real answer, a
+# missing or waiting session, a repeated interruption, an unreadable result -
+# is announced.
 cmd_silent() {
   local file=${1-} content_rc lifecycle
   [ -n "$file" ] || usage
   [ -f "$file" ] && [ ! -L "$file" ] || die "result file does not exist: $file"
   lifecycle=$(cmd_classify "$file")
-  [ "$lifecycle" = disconnected ] && return 0
+  case "$lifecycle" in disconnected|listener-active) return 0 ;; esac
   if [ "$lifecycle" = interrupted ]; then
     interruption_repeats "$file" && return 1
     return 0

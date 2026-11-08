@@ -16,6 +16,7 @@
 #   fm-procevent.sh retire-task <task-id>
 #   fm-procevent.sh adopt-task <task-id>
 #   fm-procevent.sh retire-quiet-boards
+#   fm-procevent.sh retire-orphans
 #   fm-procevent.sh sweep-home [--preflight]
 #   fm-procevent.sh binding-retirement-preflight <binding-digest>
 #   fm-procevent.sh extension-retirement <binding|transfer> <retirement-arguments...>
@@ -176,6 +177,14 @@
 #            Reconcile runs this at most once per
 #            FM_PROCEVENT_BOARD_SWEEP_SECONDS (default 3600; 0 runs it every
 #            cycle), and an unusable setting skips it.
+# retire-orphans
+#            Stop the source children this home's dead runner generations left
+#            running. Every built-in runner records its source child by pid
+#            and start stamp under its claim token; a record proves a group only while
+#            its runner is gone or reused and its child is alive with that
+#            stamp in the group the runner led. Prints `orphan-stopped:
+#            <source-id> group=<pgid>` per stopped group. A live generation and
+#            every other home are never touched. Locked session start runs it.
 # sweep-home Retire a bounded snapshot of this home's registrations and owned
 #            claims, then refuse unless no registration, runner record, or owned
 #            claim remains. Used by supported Firstmate home retirement.
@@ -513,6 +522,7 @@ source_retirement_blocked_locked() {  # <source-id>
   [ -n "$(source_pending "$1" | head -1)" ]
 }
 runner_file()  { printf '%s/%s.runner\n' "$REG" "$1"; }
+child_record_file() { printf '%s/.%s.%s.child\n' "$REG" "$1" "$2"; }
 staging_file() { printf '%s/.%s.%s.output\n' "$REG" "$1" "$2"; }
 stranded_file() { printf '%s/.%s.stranded\n' "$REG" "$1"; }
 launch_failed_file() { printf '%s/.%s.launch-failed\n' "$REG" "$1"; }
@@ -1382,6 +1392,7 @@ EOF
     }
     "${ARGV[@]}" >&5 5>&- 4<&- 2>/dev/null &
     launch_pid=$!
+    record_source_child "$id" "$launch_pid" || true
     exec 5>&-
     rm -f -- "$launch_ready"
     fm_procevent_source_lock_release "$id" \
@@ -1414,6 +1425,7 @@ EOF
     exec 4<&-
     wait "$launch_pid"
     rc=$?
+    rm -f -- "$(child_record_file "$id" "$CLAIM_TOKEN")"
     case "$bound_rc" in
       0) ;;
       3) truncated=1 ;;
@@ -1560,6 +1572,25 @@ retire_owned_terminal_source() {  # <source-id>
   fi
   fm_procevent_source_lock_release "$id"
   return "$status"
+}
+
+# Record this generation's source child by pid and start stamp, beside the
+# runner's own pid and identity, so a later session can prove which process
+# group a dead runner left behind and stop it (cmd_retire_orphans). The file is
+# keyed by claim token, so a replacement generation never overwrites a dead
+# one's record. Best effort: a source that cannot be recorded still runs.
+record_source_child() {  # <source-id> <child-pid>
+  local record tmp stamp
+  [ -n "${RUNNER_IDENTITY-}" ] || RUNNER_IDENTITY=$(fm_pid_identity "$$" 2>/dev/null) || return 1
+  stamp=$(fm_procevent_pid_start_stamp "$2") || return 1
+  record=$(child_record_file "$1" "$CLAIM_TOKEN")
+  tmp=$(umask 077; mktemp "$REG/.child.XXXXXX") || return 1
+  if ! printf 'source=%s\nrunner=%s\nrunner_identity=%s\nchild=%s\nchild_start=%s\n' \
+      "$1" "$$" "$RUNNER_IDENTITY" "$2" "$stamp" > "$tmp" \
+    || ! mv -f -- "$tmp" "$record"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
 }
 
 # Bind this runner's lifetime to the home that owns it. Started once the
@@ -2375,11 +2406,11 @@ cmd_ensure_listening() {
 # reparented, which is exactly how a source that never completes leaks.
 # docs/configuration.md owns the operating contract and unproved-group limits.
 # A leaderless group nobody in this call ever proved remains refused for every
-# caller, and that untouched refusal is what makes a crashed leader's group
-# permanent. Relaxing it is a SEPARATE OPEN QUESTION, not something this path
-# assumes: an unresolved question has to be marked unresolved where the decision
-# is made, because a reader who does not know it is open will read a bare refusal
-# as settled design and eventually relax it.
+# caller here. The one other proof is the per-generation source-child record:
+# cmd_retire_orphans stops a dead leader's group only when the recorded child
+# is still in it with its recorded start stamp (captain decision 2026-11-07,
+# docs/fork-decisions/2026-11-07-retire-orphaned-polls.md). Every other
+# leaderless group stays refused, and relaxing that is a separate open question.
 runner_group_signal() {  # <signal> <pid> <identity> [proved]
   local signal=$1 pid=$2 identity=$3 proved=${4-} state pgid
   if [ -n "$proved" ]; then
@@ -2429,6 +2460,91 @@ stop_runner_pid() {  # <pid> <identity>
     i=$((i + 1))
   done
   return 2
+}
+
+# Signal a process group whose generation the caller already proved, TERM
+# first and KILL after the same bounded waits stop_runner_pid uses. 0 once the
+# group is empty, 2 when it outlived both signals.
+stop_proved_group() {  # <pgid>
+  local signal i
+  for signal in TERM KILL; do
+    runner_group_signal "$signal" "$1" '' proved
+    case "$?" in
+      0) ;;
+      1) return 0 ;;
+      *) return 2 ;;
+    esac
+    i=0
+    while [ "$i" -lt 20 ]; do
+      kill -0 -"$1" 2>/dev/null || return 0
+      sleep 0.1
+      i=$((i + 1))
+    done
+  done
+  return 2
+}
+
+# Stop the source children this home's dead runner generations left behind.
+# A runner leader that dies on its own - a signal to it alone runs its exit
+# trap and releases its claim - leaves its polling child running in the dead
+# leader's process group, still holding whatever the source allows only one of,
+# such as a Lavish board's single listener. Each record record_source_child
+# wrote proves one such group: the recorded runner must be gone or reused, the
+# recorded child must still be alive with its recorded start stamp, and it must
+# still be in the group the runner led. Only then is that group stopped. A live
+# or unreadable runner, or a live child whose stamp or group cannot be read,
+# keeps its record; a record whose child is gone or no longer matches is
+# dropped without a signal. Records live in this home's own
+# registry, so another home's children are never read. Prints one
+# `orphan-stopped: <source-id> group=<pgid>` line per stopped group; exits 1
+# when a proved group outlived its stop, 0 otherwise.
+cmd_retire_orphans() {
+  local record line source runner runner_identity child child_start stamp pgid status=0
+  [ "$#" -eq 0 ] || usage
+  [ -d "$REG" ] && [ ! -L "$REG" ] || return 0
+  for record in "$REG"/.*.child; do
+    [ -f "$record" ] && [ ! -L "$record" ] || continue
+    source='' runner='' runner_identity='' child='' child_start=''
+    while IFS= read -r line; do
+      case "$line" in
+        source=*) source=${line#source=} ;;
+        runner=*) runner=${line#runner=} ;;
+        runner_identity=*) runner_identity=${line#runner_identity=} ;;
+        child=*) child=${line#child=} ;;
+        child_start=*) child_start=${line#child_start=} ;;
+      esac
+    done < "$record"
+    case "$runner:$child" in
+      *[!0-9:]*|:*|*:) rm -f -- "$record"; continue ;;
+    esac
+    fm_procevent_source_id_valid "$source" && [ -n "$runner_identity" ] && [ -n "$child_start" ] \
+      || { rm -f -- "$record"; continue; }
+    fm_procevent_pid_state "$runner" "$runner_identity"
+    case "$?" in
+      0|2) continue ;;
+    esac
+    if ! kill -0 "$child" 2>/dev/null; then
+      rm -f -- "$record"
+      continue
+    fi
+    stamp=$(fm_procevent_pid_start_stamp "$child" 2>/dev/null) || stamp=
+    pgid=$(ps -o pgid= -p "$child" 2>/dev/null | tr -d '[:space:]') || pgid=
+    [ -n "$stamp" ] && [ -n "$pgid" ] || continue
+    if [ "$stamp" != "$child_start" ] || [ "$pgid" != "$runner" ]; then
+      rm -f -- "$record"
+      continue
+    fi
+    # KNOWN LIMIT, as in runner_group_signal: the proof and the signal are not
+    # atomic. The start stamp is what keeps a reused pid out of that window.
+    if stop_proved_group "$runner"; then
+      printf 'orphan-stopped: %s group=%s\n' "$source" "$runner"
+      rm -f -- "$record"
+    else
+      printf 'error: the orphaned process group %s of %s outlived TERM and KILL\n' "$runner" "$source" >&2
+      status=1
+    fi
+  done
+  return "$status"
 }
 
 # The owned handling interface: durably and idempotently record that a
@@ -3195,6 +3311,7 @@ case "${1-}" in
   retire-task)        shift; cmd_retire_task "$@" ;;
   adopt-task)         shift; cmd_adopt_task "$@" ;;
   retire-quiet-boards) shift; cmd_retire_quiet_boards "$@" ;;
+  retire-orphans)     shift; cmd_retire_orphans "$@" ;;
   sweep-home)         shift; cmd_sweep_home "$@" ;;
   binding-retirement-preflight) shift; cmd_binding_retirement_preflight "$@" ;;
   extension-retirement) shift; cmd_extension_retirement "$@" ;;

@@ -30,7 +30,9 @@
 #                       mutating step runs.
 #   1b. home role    - the resolved firstmate-repository role line
 #                      (bin/fm-role.sh report), purely local, no network.
-#   2. bootstrap      - home-local stale Herdr projection cleanup runs only
+#   2. bootstrap      - home-local stale Herdr projection cleanup and the
+#                       retirement of polls a dead process-event runner left
+#                       running (bin/fm-procevent.sh retire-orphans) run only
 #                       when this session actually holds the lock. Detect-only
 #                       diagnostics always run. Bootstrap's ten MUTATING sweeps
 #                       (same-home backlog reconciliation, the state residue sweep,
@@ -688,7 +690,8 @@ if [ "$REEMIT" -eq 1 ]; then
   printf 'context. Lock ownership is re-verified and the durable records below are\n'
   printf 'reprinted, but the sweeps startup already reconciled - project clone refresh,\n'
   printf 'secondmate convergence and liveness, pending remote handoff\n'
-  printf 'retry, X-mode artifact writes, and stale Herdr child cleanup - are NOT repeated.\n'
+  printf 'retry, X-mode artifact writes, stale Herdr child cleanup, and orphaned poll\n'
+  printf 'retirement - are NOT repeated.\n'
   printf 'Queued wakes ARE still drained: they arrived after startup and are this turn work.\n'
 else
   section "SESSION START - $FM_HOME"
@@ -707,7 +710,7 @@ if [ "$LOCK_RC" -ne 0 ]; then
     printf '%s\n' "$BAR"
     printf '●  READ-ONLY SESSION - FLEET LOCK OWNERSHIP WAS NOT VERIFIED\n'
     printf '●  %s\n' "$LOCK_OUT"
-    printf '●  Skipping every mutating step: stale Herdr child cleanup,\n'
+    printf '●  Skipping every mutating step: stale Herdr child cleanup, orphaned poll retirement,\n'
     printf '●  secondmate convergence, secondmate liveness, pending remote handoff retry,\n'
     printf '●  X-mode artifacts, fleet sync, and wake-queue drain. Detect-only bootstrap\n'
     printf '●  diagnostics and the rest of this read-only-safe digest still ran below.\n'
@@ -769,6 +772,8 @@ elif [ "$REEMIT" -eq 1 ]; then
 else
   BOOT_OUT=$(
     "$SCRIPT_DIR/fm-herdr-session-cleanup.sh" 2>&1 || true
+    { FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-procevent.sh" retire-orphans 2>&3 \
+      | sed 's/^/BOOTSTRAP_INFO: /'; } 3>&1 || true
     FM_BOOTSTRAP_NETWORK=skip FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" \
       "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1
   )

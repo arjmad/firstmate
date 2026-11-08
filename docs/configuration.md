@@ -2386,7 +2386,7 @@ Whether a captured result is a routine no-op is adapter knowledge too, and the r
 
 **Lavish silence rules**
 
-- For Lavish that verdict covers three shapes - a session the adapter classifies `ended` that carries no queued content block at all, which is a review surface closed with nothing said, `browser_disconnected` (classified `disconnected`), which carries no answer while the session remains open, and an isolated `interrupted` capture under the [interrupted-poll retry rule](#process-to-event-sources-stateprocevent), which is the server restarting under the listener.
+- For Lavish that verdict covers four shapes - a session the adapter classifies `ended` that carries no queued content block at all, which is a review surface closed with nothing said, `browser_disconnected` (classified `disconnected`), which carries no answer while the session remains open, an isolated `interrupted` capture under the [interrupted-poll retry rule](#process-to-event-sources-stateprocevent), which is the server restarting under the listener, and a `LISTENER_ACTIVE` refusal (classified `listener-active`), which is the server turning away a second poll while another one holds the board's single listener.
 - Any recognized top-level `prompts` or `feedback` block counts as content regardless of its declared count, and a malformed header makes the result indeterminate rather than empty.
 - A `Send & End` close carrying the captain's answer arrives as `status: feedback` with `session_ended`, so it classifies `feedback` and is announced unchanged, as is any `ended` result that still carries content, a repeated `interrupted` capture, and every `waiting`, `missing`, `unknown`, or unreadable result.
 
@@ -2490,7 +2490,17 @@ It reports `already owned` and changes nothing.
 `retire`, `reconcile`, `sweep-home`, and the guard all refuse the surviving group permanently, so the source stops listening.
 Recovery there is a human verifying whether the dead runner's polling child is still attached to the source; once that process group is empty the generation reads as gone and the next `reconcile` reclaims the source on its own.
 
-Nothing automatic signals that group, and whether it may ever be signalled remains an open decision; the repaired guard does not close this gap.
+Nothing automatic signals that group on the leader's identity alone; the repaired guard does not close this gap, and whether such an unproved group may ever be signalled remains an open decision.
+The one proof that does reach it is the runner's per-generation record of its source child, described next.
+
+**Retire orphaned source children at session start**
+
+A runner leader that dies on its own from a catchable signal runs its exit trap, which releases its claim while its source child keeps running in the dead leader's process group.
+For a Lavish board that child still holds the board's single listener, so every later runner's poll is refused with `LISTENER_ACTIVE` until the child ends.
+Every built-in runner therefore records its source child by pid and start stamp under its claim token, and a locked session start runs `bin/fm-procevent.sh retire-orphans`; an extension source records none, so its orphan is not retired this way.
+That command stops a recorded group only while the recorded runner is gone or reused and the recorded child is still alive with its recorded start stamp inside the group that runner led.
+A live or unreadable runner, or a live child whose stamp cannot be read, keeps its record, a record whose child is gone or no longer matches is dropped without a signal, and records live in the home's own registry, so another home's children are never read.
+Each stopped group prints `orphan-stopped: <source-id> group=<pgid>`, which session start reports as a `BOOTSTRAP_INFO:` fact.
 
 **Report stranded claims**
 
