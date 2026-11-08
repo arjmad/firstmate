@@ -1,4 +1,6 @@
 2026-11-06: Arjun picked "Land green captures automatically" on the audit board's nova-autoland card, widening the capture landing of the 2026-10-27 [capture PR land command](2026-10-27-capture-pr-land-command.md) record.
+It also widens Arjun's earlier responder grant, kept in the main home's `data/captain.md` until he approved moving its rulings to their owners in the helm on 2026-11-08 ("i approve all"), and recorded here word for word:
+Responder (2026-10-21): the always-on responder may merge Nova's green nightly skill-capture PRs itself (that class only, receipt in the morning message); further grants wait for scout responder-design-scout.
 A green Nova skill-capture note now lands without a firstmate turn: its `Land it:` arguments run through `bin/fm-capture-land.sh`, whose own guards and `bin/fm-pr-merge.sh`'s still decide, and only a failed or unfinished land reaches firstmate.
 Why: the runtime audit of 2026-11-05 counted 20 to 48 `[nova-skills]` notes a day, each a main-session turn spent running the note's one command by hand.
 The grant covers the subject tags a home lists in its `config/capture-autoland`; the main firstmate arms it in its home with `printf '%s\n' '[nova-skills]' >> config/capture-autoland`, and removing the line or the file withdraws it.
