@@ -35,7 +35,7 @@ It never reads report bodies, review artifacts, terminal output, or chat.
 | --- | --- | --- |
 | `hold` | Creates or reuses a task and holds it for the captain. | [Creating a hold](#creating-a-hold-hold) |
 | `answer` | Records the captain's exact words and resolves the call. | [Answering a call](#answering-a-call-answer) |
-| `defer` | Records the captain's dated deferral and re-holds the call until that date, never closing it. | [Answer-time resolution](#answer-time-resolution) |
+| `defer` | Records the captain's dated deferral and re-holds the call until that date, never closing it; `defer-batch` does so for every call carrying one `Batch:` tag. | [Answer-time resolution](#answer-time-resolution) |
 | `choices` | Sets or replaces the choices on a call already held for the captain, keeping its reason, kind, and date. | [Choices](#choices) |
 | `complete` | Records the reviewed captain-held task ids in the originating task's metadata. | [Recording a reviewed inventory](#recording-a-reviewed-inventory-complete) |
 | `verify` | Read-only check that scout teardown runs before removing source state. | [Checking before scout teardown](#checking-before-scout-teardown-verify) |
@@ -227,7 +227,8 @@ The optional mode column carries a card-declared close:
 | `until=YYYY-MM-DD` | The captain's deferral: `defer` records his words and re-holds the task `--until` that date, reported `deferred:`. |
 | Any other value | Skipped. |
 
-A deferral keeps the hold's kind and reason, drops a reversible self-release default because the captain has engaged, accepts the captain's own today by refusing only a date before yesterday in UTC, and treats a deferral already recorded as a no-op, so a replayed older answer never rolls a newer date back.
+A deferral keeps the hold's kind and reason (or replaces the reason with `--reason`), drops a reversible self-release default because the captain has engaged, accepts the captain's own today by refusing only a date before yesterday in UTC, and treats a deferral already recorded as a no-op, so a replayed older answer never rolls a newer date back.
+Its words replace the row's previous deferral rather than adding a block: the old body goes to the note archive, and each replaced deferral leaves only its date and a short digest on one line, which is what keeps a replay of it a no-op.
 It closes nothing, so a board "later" answer can never complete the call it defers.
 The exact answer value `later` is reserved for that deferral: with any other mode the intake refuses it by name, as it refuses `reconcile`, and the call stays held for firstmate to defer.
 

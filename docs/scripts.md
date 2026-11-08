@@ -124,6 +124,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-tasks-axi.sh`        | Run `tasks-axi` against this home's backlog from any working directory               |
 | `fm-tasks-axi-lib.sh`    | Shared backlog-backend selector and `tasks-axi` compatibility probe                  |
 | `fm-backlog-owner-lib.sh` | Single owner of a backlog row's `Owner:` record (arjun or fleet): values, kind default, read and rewrite |
+| `fm-backlog-row-lib.sh` | Single owner of a backlog row's shape: the four hold kinds and their dates, undated titles, and the `Due:` and `Batch:` lines |
 | `fm-backlog-prune-lib.sh` | Single owner of which backlog rows the weekly prune proposes and of the drop note a pruned row carries |
 | `fm-backlog-transition-lib.sh` | Pair task-record changes with their backlog transitions and replay interrupted closes |
 | `fm-quota-axi-lib.sh`    | Shared `quota-axi` compatibility floor and quota snapshot schema validation           |

@@ -122,6 +122,11 @@ It tracks work items only, never agents; persistent secondmates never appear as 
 Work routed to a secondmate is recorded in that secondmate home's own backlog, not the main backlog.
 Every open row names its owner at filing, `arjun` when only the captain can move it and `fleet` when firstmate or a crewmate does, including a dated check the fleet reports back on; `bin/fm-tasks-axi.sh add --owner` sets it (required for `--kind captain`), `bin/fm-tasks-axi.sh owner <id>` reads or changes it, and the captain's inbox shows his holds and the rows he owns, never another fleet row ([`bin/fm-backlog-owner-lib.sh`](../bin/fm-backlog-owner-lib.sh) owns the record).
 A decision is simply a task held for the captain: create the task with `bin/fm-tasks-axi.sh add` when needed, then always hold it through `bin/fm-captain-hold.sh hold <id> --reason "<reason>"` with the kind and choices the [captain-hold lifecycle](../.agents/skills/captain-hold-lifecycle/SKILL.md) gives it, or `--until <date>` when the captain defers it.
+A row's title is its next action in plain words and never opens with a date; its fields say the rest ([`bin/fm-backlog-row-lib.sh`](../bin/fm-backlog-row-lib.sh) owns the hold kinds and line formats).
+A hold uses one of four kinds strictly: `captain` needs his answer or his hands, `external` waits on someone else to act even when he owns the follow-up, `future` has nothing to do until a date, and `parked` is someday.
+Every hold carries a date: `future` and `parked` a back-on date (`--until`), `external` a recheck date (`--until`), and a captain call either the date he names or, when new and undated, a `Due:` date of the next day, so it stays live today with no back-on date, because tasks-axi lifts a hold on its back-on date and a new call dated today would read as ready work.
+A real deadline is a `Due: YYYY-MM-DD` body line (`add --due`, `due <id>`), kept apart from the back-on date so a snooze never moves it.
+Rows the captain moves together carry one `Batch: <tag>` line (`add --batch`, `batch <id>`), and `bin/fm-captain-hold.sh defer-batch <tag>` defers every captain call carrying it at once.
 Fleet work that only comes back on a date is a `future` hold with `--until`, never a captain hold.
 When a main-side thread such as a pending captain decision or relay reminder is worth durable tracking, file it as its own work item and hold it through that wrapper.
 Captain calls discovered by investigations or visual reviews follow `captain-hold-lifecycle`, which owns their completion gate and recorded-answer rules.
@@ -134,7 +139,7 @@ Use compatible `tasks-axi` when the configured backend selects it, always throug
 `secondmate-provisioning` and `bin/fm-backlog-handoff.sh` own cross-home handoff safety.
 
 Keep free-form notes free of temporary paths, moving versions, ephemeral identifiers, and copied state that will rot.
-Inspect the current task note before replacing its considered body, and archive the superseded body when recoverability matters rather than appending by default.
+Inspect the current task note before replacing its considered body, and archive the superseded body when recoverability matters rather than appending by default; a captain's deferral replaces the row's deferral record and archives the old words the same way.
 Verify volatile details against their authoritative config, live system, or API before acting, and correct or delete stale prose immediately.
 Preserve durable structured identifiers, dependencies, and completion artifact links, and route reusable knowledge to section 6 rather than scattering it through task notes.
 

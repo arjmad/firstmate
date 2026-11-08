@@ -144,7 +144,7 @@ test_wrapper_writes_through_to_home() {
     wrapper_from_code "$dir" "done" "ship-$i" >/dev/null || fail "done ship-$i failed"
   done
   wrapper_from_code "$dir" add call-1 "captain call" >/dev/null || fail "add call-1 failed"
-  wrapper_from_code "$dir" hold call-1 --reason "awaiting the captain" --kind captain >/dev/null \
+  wrapper_from_code "$dir" hold call-1 --reason "awaiting the captain" --kind captain --until 2030-01-01 >/dev/null \
     || fail "hold call-1 failed"
   printf 'RELATIVE-BODY-MARKER\n' > "$dir/code/body.md"
   wrapper_from_code "$dir" update call-1 --body-file body.md >/dev/null \
@@ -276,7 +276,7 @@ test_wrapper_owner_at_filing() {
   out=$(wrapper_from_code "$dir" update --body "id last" ow-cap 2>&1)
   rc=$?
   expect_code 2 "$rc" "update with the row id after the body"
-  wrapper_from_code "$dir" hold ow-file --reason "his call" --kind captain >/dev/null || fail "could not hold ow-file"
+  wrapper_from_code "$dir" hold ow-file --reason "his call" --kind captain --until 2030-01-01 >/dev/null || fail "could not hold ow-file"
   out=$(wrapper_from_code "$dir" owner ow-file fleet 2>&1)
   rc=$?
   expect_code 2 "$rc" "owner fleet on a captain-held row"
@@ -326,13 +326,13 @@ test_wrapper_hold_quote_guard() {
   printf '## Progress note (2026-12-01T10:00:00Z)\nArjunx 2026-12-02 is not the captain\n' \
     > "$dir/home/data/q-1/brief.md"
 
-  wrapper_from_code "$dir" hold q-1 --kind parked --reason "Arjun 2026-09-30: park it" >/dev/null \
+  wrapper_from_code "$dir" hold q-1 --kind parked --until 2030-01-01 --reason "Arjun 2026-09-30: park it" >/dev/null \
     || fail "a hold was refused with no config/captain-name"
   wrapper_from_code "$dir" unhold q-1 >/dev/null || fail "unhold q-1 failed"
 
   printf '# the captain\n\nArjun\n' > "$dir/home/config/captain-name"
   before=$(cat "$dir/home/data/backlog.md")
-  out=$(wrapper_from_code "$dir" hold q-1 --kind parked --reason "Arjun 2026-09-30: park it" 2>&1)
+  out=$(wrapper_from_code "$dir" hold q-1 --kind parked --until 2030-01-01 --reason "Arjun 2026-09-30: park it" 2>&1)
   rc=$?
   expect_code 2 "$rc" "older quote than a handled steer"
   assert_contains "$out" "dated 2026-09-30" "the refusal did not name the cited date"
@@ -340,34 +340,124 @@ test_wrapper_hold_quote_guard() {
     "the refusal did not name the newest quote and its source"
   assert_contains "$out" "--cite-older-quote" "the refusal did not name the override"
   assert_equals "$before" "$(cat "$dir/home/data/backlog.md")" "a refused hold changed the backlog"
-  out=$(wrapper_from_code "$dir" hold q-1 --kind parked "--reason=Arjun, 2026-09-30: park it" 2>&1)
+  out=$(wrapper_from_code "$dir" hold q-1 --kind parked --until 2030-01-01 "--reason=Arjun, 2026-09-30: park it" 2>&1)
   rc=$?
   expect_code 2 "$rc" "older quote through --reason="
 
-  wrapper_from_code "$dir" hold q-1 --kind parked --reason "Arjun 2026-09-30: park it" --cite-older-quote >/dev/null \
+  wrapper_from_code "$dir" hold q-1 --kind parked --until 2030-01-01 --reason "Arjun 2026-09-30: park it" --cite-older-quote >/dev/null \
     || fail "--cite-older-quote did not let the older quote stand"
   assert_grep "Arjun 2026-09-30: park it" "$dir/home/data/backlog.md" "the overridden hold was not recorded"
   wrapper_from_code "$dir" unhold q-1 >/dev/null || fail "unhold q-1 failed"
-  wrapper_from_code "$dir" hold q-1 --kind parked --reason "Arjun 2026-10-05: wait for the window" >/dev/null \
+  wrapper_from_code "$dir" hold q-1 --kind parked --until 2030-01-01 --reason "Arjun 2026-10-05: wait for the window" >/dev/null \
     || fail "a hold citing the newest quote was refused"
   wrapper_from_code "$dir" unhold q-1 >/dev/null || fail "unhold q-1 failed"
-  wrapper_from_code "$dir" hold q-1 --kind load --reason "waiting on a free slot" >/dev/null \
+  wrapper_from_code "$dir" hold q-1 --kind future --until 2030-01-01 --reason "waiting on a free slot" >/dev/null \
     || fail "a hold citing no captain quote was refused"
   wrapper_from_code "$dir" unhold q-1 >/dev/null || fail "unhold q-1 failed"
 
   printf 'Captain ruling, Arjun on 2026-10-07: retire it\n' >> "$dir/home/data/q-1/brief.md"
-  out=$(wrapper_from_code "$dir" hold q-1 --reason "Arjun 2026-10-05: wait for the window" 2>&1)
+  out=$(wrapper_from_code "$dir" hold q-1 --kind parked --until 2030-01-01 --reason "Arjun 2026-10-05: wait for the window" 2>&1)
   rc=$?
   expect_code 2 "$rc" "older quote than the brief"
   assert_contains "$out" "is 2026-10-07 (in $dir/home/data/q-1/brief.md)" "the brief's quote was not found"
 
   printf 'Arjun 2026-10-08: decided in chat\n' > "$dir/body.md"
   wrapper_from_code "$dir" update q-1 --body-file "$dir/body.md" >/dev/null || fail "update q-1 failed"
-  out=$(wrapper_from_code "$dir" hold q-1 --reason "Arjun 2026-10-07: retire it" 2>&1)
+  out=$(wrapper_from_code "$dir" hold q-1 --kind parked --until 2030-01-01 --reason "Arjun 2026-10-07: retire it" 2>&1)
   rc=$?
   expect_code 2 "$rc" "older quote than the row"
   assert_contains "$out" "is 2026-10-08 (in its backlog row)" "the row's quote was not found"
   pass "fm-tasks-axi.sh refuses a hold citing an older captain quote only when config/captain-name is set, unless overridden"
+}
+
+# Row shape (bin/fm-backlog-row-lib.sh): strict hold kinds with their dates,
+# no dates in titles, and Due: and Batch: lines that survive a body rewrite.
+test_wrapper_row_shape() {
+  local dir out rc body
+  dir=$(make_split row-shape)
+
+  out=$(wrapper_from_code "$dir" add rs-dated "[2026-11-09] call the vendor" 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "add with a dated title"
+  assert_contains "$out" "not a date" "the dated-title refusal did not say why"
+  assert_no_grep "rs-dated" "$dir/home/data/backlog.md" "a refused dated title was still added"
+
+  wrapper_from_code "$dir" add rs-1 "Call the vendor" --due 2026-11-20 --batch office --body "first note" >/dev/null \
+    || fail "add with --due and --batch failed"
+  assert_equals 2026-11-20 "$(wrapper_from_code "$dir" due rs-1)" "add --due was not recorded"
+  assert_equals office "$(wrapper_from_code "$dir" batch rs-1)" "add --batch was not recorded"
+  assert_equals fleet "$(wrapper_from_code "$dir" owner rs-1)" "the owner was not recorded beside the row fields"
+  body=$(wrapper_from_code "$dir" show rs-1 --full)
+  assert_contains "$body" 'first note\n\nDue: 2026-11-20\nBatch: office\n\nOwner: fleet' "the row fields are not one block above the owner"
+
+  out=$(wrapper_from_code "$dir" update rs-1 --title "[2026-11-01] call the vendor" 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "update with a dated title"
+
+  wrapper_from_code "$dir" update rs-1 --body "second note" >/dev/null || fail "update --body failed"
+  assert_equals 2026-11-20 "$(wrapper_from_code "$dir" due rs-1)" "a body rewrite dropped the due date"
+  assert_equals office "$(wrapper_from_code "$dir" batch rs-1)" "a body rewrite dropped the batch tag"
+  assert_equals fleet "$(wrapper_from_code "$dir" owner rs-1)" "a body rewrite dropped the owner"
+
+  out=$(wrapper_from_code "$dir" due rs-1 2026-12-01) || fail "due could not change the date"
+  assert_contains "$out" "rs-1 -> 2026-12-01" "due did not report the change"
+  out=$(wrapper_from_code "$dir" due rs-1 2026-12-01)
+  assert_contains "$out" "already 2026-12-01" "a repeated due was not a no-op"
+  wrapper_from_code "$dir" batch rs-1 - >/dev/null || fail "batch could not clear the tag"
+  assert_equals - "$(wrapper_from_code "$dir" batch rs-1)" "a cleared batch tag is still recorded"
+  [ "$(grep -c '^  Due: ' "$dir/home/data/backlog.md")" = 1 ] \
+    || fail "the row does not carry exactly one due line: $(cat "$dir/home/data/backlog.md")"
+  out=$(wrapper_from_code "$dir" due rs-1 2026-02-30 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "due with an impossible date"
+  out=$(wrapper_from_code "$dir" batch rs-1 Office 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "batch with an uppercase tag"
+  out=$(wrapper_from_code "$dir" due rs-missing 2026-12-01 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "due on a missing row"
+  out=$(wrapper_from_code "$dir" add rs-bad "Bad due" --due 2026-13-01 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "add with an invalid --due"
+
+  wrapper_from_code "$dir" due rs-1 - >/dev/null || fail "due could not clear the date"
+  out=$(wrapper_from_code "$dir" hold rs-1 --reason "waiting" --until 2026-12-01 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "hold without a kind"
+  out=$(wrapper_from_code "$dir" hold rs-1 --reason "waiting" --kind load --until 2026-12-01 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "hold of a kind outside the four"
+  for kind in future parked; do
+    out=$(wrapper_from_code "$dir" hold rs-1 --reason "waiting" --kind "$kind" 2>&1)
+    rc=$?
+    expect_code 2 "$rc" "a $kind hold without a date"
+    assert_contains "$out" "back-on date" "the undated $kind refusal did not ask for its back-on date"
+  done
+  out=$(wrapper_from_code "$dir" hold rs-1 --reason "vendor reply" --kind external 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "an external wait without a date"
+  assert_contains "$out" "recheck date" "the undated external refusal did not ask for a recheck date"
+  out=$(wrapper_from_code "$dir" hold rs-1 --reason "vendor reply" --kind external --until 2026-11-31 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "an external wait with an impossible date"
+  assert_no_grep "hold-kind" "$dir/home/data/backlog.md" "a refused hold still wrote"
+  wrapper_from_code "$dir" hold rs-1 --reason "vendor reply" --kind external --until 2026-11-12 >/dev/null \
+    || fail "a dated external wait was refused"
+  assert_grep "(hold-kind: external) (hold-until: 2026-11-12)" "$dir/home/data/backlog.md" \
+    "the external wait did not record its recheck date"
+  wrapper_from_code "$dir" add rs-due "File the return" --due 2026-12-15 >/dev/null || fail "could not add rs-due"
+  out=$(wrapper_from_code "$dir" hold rs-due --reason "after the season" --kind future 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "a future hold with only a due date, which nothing would lift"
+  wrapper_from_code "$dir" hold rs-due --reason "his call" --kind captain >/dev/null \
+    || fail "a captain hold on a row with a recorded due date was refused"
+  out=$(wrapper_from_code "$dir" hold --help 2>&1) || fail "hold --help was refused: $out"
+  assert_not_contains "$out" "a hold needs" "hold --help ran the hold refusals"
+  out=$(wrapper_from_code "$dir" hold rs-1 --reason "his call" --kind captain 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "an undated captain hold through the wrapper"
+  assert_contains "$out" "fm-captain-hold.sh hold" "the undated captain refusal did not name the captain-hold path"
+  pass "fm-tasks-axi.sh keeps dates out of titles, holds to the four kinds with their dates, and keeps Due: and Batch: lines"
 }
 
 test_guard_reports_regular_code_root_backlog
@@ -382,6 +472,7 @@ if [ "$HAVE_TASKS_AXI" = 1 ]; then
   test_wrapper_owner_at_filing
   test_wrapper_single_home
   test_wrapper_hold_quote_guard
+  test_wrapper_row_shape
 else
   echo "skip: tasks-axi not found; home-addressing cases not run"
 fi

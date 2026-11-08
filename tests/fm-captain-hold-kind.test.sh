@@ -455,6 +455,48 @@ test_keyed_answer_records_a_pick_by_label() {
   pass "a keyed answer that names a recorded choice is recorded as that pick, replays idempotently, and free text still works"
 }
 
+# Every captain call carries a date (docs/fork-decisions/2026-11-08-backlog-row-shape.md):
+# a new call filed without --until stays live and records a next-day Due:
+# line, --due names another, a deferred call keeps its back-on date, a re-hold
+# of a live call adds nothing, and a dated title is refused when creating.
+test_new_call_records_a_due_date() {
+  local home show out
+  home=$(make_home due-date)
+  FM_CAPTAIN_HOLD_NOW=2026-07-31T22:00:00Z run_captain "$home" hold sample-new --title "Pick the route" \
+    --reason "Decide" --kind reversible >/dev/null || fail "an undated new call was refused"
+  show=$(show_task "$home" sample-new)
+  assert_contains "$show" 'held: yes' "an undated new call is not live"
+  assert_contains "$show" 'hold_until: "-"' "an undated new call got a back-on date"
+  assert_contains "$show" 'Due: 2026-08-01' "an undated new call did not get the next day as its due date"
+  FM_CAPTAIN_HOLD_NOW=2026-08-02T10:00:00Z run_captain "$home" hold sample-new --reason "Decide again" --kind reversible >/dev/null \
+    || fail "re-holding a live call failed"
+  [ "$(show_task "$home" sample-new | grep -o 'Due: ' | wc -l | tr -d ' ')" = 1 ] \
+    || fail "re-holding a live call changed its due date: $(show_task "$home" sample-new)"
+  assert_contains "$(show_task "$home" sample-new)" 'Due: 2026-08-01' "re-holding a live call moved its due date"
+
+  run_captain "$home" hold sample-named --title "Sign the lease" --reason "Sign" --due 2026-09-14 >/dev/null \
+    || fail "a call with --due was refused"
+  assert_contains "$(show_task "$home" sample-named)" 'Due: 2026-09-14' "--due was not recorded"
+  run_captain "$home" hold sample-later --title "Review later" --reason "Review" --until 2026-09-01 >/dev/null \
+    || fail "a dated call was refused"
+  show=$(show_task "$home" sample-later)
+  assert_contains "$show" 'hold_until: 2026-09-01' "a dated call lost its back-on date"
+  assert_not_contains "$show" 'Due: ' "a call with a back-on date got a default due date"
+  FM_HOME="$home" "$ROOT/bin/fm-tasks-axi.sh" add sample-existing "Existing work" --due 2026-10-01 >/dev/null \
+    || fail "could not add a row with a due date"
+  run_captain "$home" hold sample-existing --reason "Decide" >/dev/null || fail "holding a row with a due date failed"
+  assert_contains "$(show_task "$home" sample-existing)" 'Due: 2026-10-01' "holding a row replaced its own due date"
+
+  if out=$(run_captain "$home" hold sample-dated --title "[2026-08-01] Pick the route" --reason "Decide" 2>&1); then
+    fail "a dated title was accepted: $out"
+  fi
+  assert_contains "$out" "not a date" "the dated-title refusal did not say why"
+  if out=$(run_captain "$home" hold sample-bad --title "Bad due" --reason "Decide" --due 2026-02-30 2>&1); then
+    fail "an impossible --due was accepted: $out"
+  fi
+  pass "a new undated captain call stays live with a next-day due date, and --due, --until and an existing due date are kept"
+}
+
 test_kind_arguments_are_validated
 test_choice_arguments_are_validated
 test_choices_ride_on_the_reason_prefix
@@ -468,3 +510,4 @@ test_session_start_retires_the_release_leftovers
 test_retire_release_keeps_its_state_when_tasks_axi_is_unconfirmed
 test_hold_records_the_captain_as_owner_and_release_hands_back
 test_kind_prefix_shows_on_every_hold_reason
+test_new_call_records_a_due_date
