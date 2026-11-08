@@ -88,7 +88,9 @@ cmd_arm() {
   printf 'copy %s\n' "$copy" > "$pending" 2>/dev/null || true
 }
 
-# Prints "<session>\t<tool>\t<file_path>\t<offset>\t<limit>" from a hook payload.
+# Prints "<session> <tool> <file_path> <offset> <limit>" from a hook payload,
+# separated by the 0x1f unit separator: a whitespace separator such as a tab
+# would let `read` collapse an empty offset and shift the limit into its place.
 parse_payload() {
   local payload=$1
   [ -n "$payload" ] || return 1
@@ -97,7 +99,8 @@ parse_payload() {
     [ (.session_id // ""), (.tool_name // ""),
       ((.tool_input // {}) | .file_path // ""),
       ((.tool_input // {}) | (.offset // "") | tostring),
-      ((.tool_input // {}) | (.limit // "") | tostring) ] | @tsv
+      ((.tool_input // {}) | (.limit // "") | tostring) ]
+    | map(gsub("[\u001f\n]"; " ")) | join("\u001f")
   ' 2>/dev/null
 }
 
@@ -139,7 +142,7 @@ load_arm() {
   local payload parsed
   payload=$(cat 2>/dev/null || true)
   parsed=$(parse_payload "$payload") || return 1
-  IFS=$'\t' read -r SESSION TOOL FILE_PATH OFFSET LIMIT <<EOF_PARSED
+  IFS=$'\037' read -r SESSION TOOL FILE_PATH OFFSET LIMIT <<EOF_PARSED
 $parsed
 EOF_PARSED
   valid_session "${SESSION:-}" || return 1

@@ -129,6 +129,15 @@ test_chunked_reads_disarm_only_when_every_line_is_covered() {
   reset_arm 1000
   run_record "$(payload "$SID" Read "$COPY")"
   [ ! -e "$PENDING" ] || fail "one default 2000-line read of a 1000-line digest did not disarm"
+
+  # A limit with no offset starts at line 1; it must not be read as an offset.
+  reset_arm 1000
+  run_record "$(payload "$SID" Read "$COPY" "" 600)"
+  run_record "$(payload "$SID" Read "$COPY" 1 600)"
+  [ -f "$PENDING" ] || fail "a limit-only read was recorded past line 600, clearing unread lines"
+  run_check "$(payload "$SID" Bash)" || true
+  jq -e '.systemMessage | contains("still unread: 601-1000")' "$ERR" >/dev/null 2>&1 \
+    || fail "a limit-only read was not recorded as lines 1-600: $(cat "$ERR")"
   pass "chunked reads disarm only once every line is covered, and a default read covers 2000 lines"
 }
 
