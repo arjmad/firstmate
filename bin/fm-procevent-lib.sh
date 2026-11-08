@@ -765,6 +765,31 @@ fm_procevent_group_alive() {
   kill -0 -"$1" 2>/dev/null
 }
 
+# fm_procevent_pid_start_stamp <pid>
+# Print when <pid> started, which survives exec and changes on pid reuse:
+# /proc stat field 22 where a Linux-compatible /proc exists, otherwise ps's
+# lstart pinned to the C locale and UTC. A runner records its source child
+# with this right after fork, before the child's exec has changed its command
+# line, which is why the stamp leaves the command line out.
+fm_procevent_pid_start_stamp() {
+  local pid=$1 proc_root stat_line started
+  local -a fields
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
+  if [ -r "$proc_root/$pid/stat" ]; then
+    stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1
+    read -r -a fields <<< "${stat_line##*)}"
+    [ "${#fields[@]}" -ge 20 ] || return 1
+    case "${fields[19]}" in ''|*[!0-9]*) return 1 ;; esac
+    printf 'starttime=%s\n' "${fields[19]}"
+    return 0
+  fi
+  started=$(LC_ALL=C TZ=UTC0 ps -p "$pid" -o lstart= 2>/dev/null \
+    | sed 's/^[[:space:]]*//; s/[[:space:]]*$//') || return 1
+  [ -n "$started" ] || return 1
+  printf 'lstart=%s\n' "$started"
+}
+
 # fm_procevent_pid_state <pid> <identity>
 # 0 live match, 1 stale, 2 uncertain, 3 ambiguous leaderless group.
 #

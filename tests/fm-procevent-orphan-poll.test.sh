@@ -184,7 +184,7 @@ pass "a poll that collides with an orphaned listener is recorded without a wake"
 read -r H2 ID2 L2 < <(new_board restart)
 ORPHAN2=$(listener_pid "$L2")
 GROUP2=$(orphan_board "$H2" "$ID2" "$L2") || exit 1
-read -r H3 ID3 L3 < <(new_board live)
+read -r H3 _ L3 < <(new_board live)
 until_true 100 listener_held "$L3" || fail "live: the first poll never took the listener"
 LIVE3=$(listener_pid "$L3")
 read -r H4 ID4 L4 < <(new_board elsewhere)
