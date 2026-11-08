@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
-# Live guard for the Claude store lock that bin/fm-live-lab.sh forget-claude
-# takes around its ~/.claude.json rewrite.
+# Live guard for the Claude store lock that bin/fm-claude-store-lock.mjs takes
+# for every firstmate ~/.claude.json rewrite (fm-claude-trust.sh on each Claude
+# spawn and fm-live-lab.sh forget-claude).
 #
-# forget-claude avoids losing a Claude session's write by taking the same lock
+# Those writers avoid losing a Claude session's write by taking the same lock
 # Claude Code takes: a directory named <store>.lock, made with mkdir and stale
-# once its mtime is 10 seconds old. That lock path is a vendor fact, so
-# tests/fm-live-lab-forget-claude.test.sh can only pin forget-claude's side of
-# it. This guard proves the other side against the installed Claude Code: with
-# the lock held, a real `claude mcp add -s user` writes nothing, and it lands
-# its write once the lock is released. It spends no model tokens, so it runs
-# wherever claude, node, jq and timeout are installed; FM_CLAUDE_STORE_LOCK_LIVE=0 (or
-# FM_LIVE=0) turns it off.
+# once its mtime is 10 seconds old, keyed on the store path Claude was given
+# even when that path is a symlink. Those are vendor facts, so
+# tests/fm-claude-trust.test.sh and tests/fm-live-lab-forget-claude.test.sh can
+# only pin firstmate's side. This guard proves the other side against the
+# installed Claude Code: with the lock held, a real `claude mcp add -s user`
+# writes nothing, and it lands its write once the lock is released; for a
+# symlinked store it waits on the link's lock and not on the target's. It
+# spends no model tokens, so it runs wherever claude, node, jq and timeout are
+# installed; FM_CLAUDE_STORE_LOCK_LIVE=0 (or FM_LIVE=0) turns it off.
 #
 # Isolation: CLAUDE_CONFIG_DIR and HOME both point into a throwaway /tmp root,
 # so the real ~/.claude.json and ~/.claude are never read or written.
@@ -68,3 +71,47 @@ expect_code 0 "$rc" "Claude Code $CLAUDE_VERSION: claude mcp add after the lock 
 [ "$(jq -r '.mcpServers | has("fm-store-lock-probe")' "$STORE")" = true ] \
   || fail "Claude Code $CLAUDE_VERSION: claude did not land its write after the lock was released"
 pass "Claude Code $CLAUDE_VERSION: a store write waits on <store>.lock and lands after release"
+
+# A symlinked store: the lock beside the link holds Claude's write, and a lock
+# beside the target does not.
+TARGET="$LAB/dotfiles/.claude.json"
+mkdir -p "$LAB/dotfiles"
+mv "$STORE" "$TARGET"
+ln -s "$TARGET" "$STORE"
+mkdir "$STORE.lock"
+node -e 'const t=Date.now()/1000+3600;require("node:fs").utimesSync(process.argv[1],t,t)' "$STORE.lock"
+before=$(digest "$TARGET")
+in_lab claude mcp add -s user fm-store-lock-link -- /bin/true >"$LAB/link.out" 2>&1 &
+PROBE_PID=$!
+sleep 3
+kill -0 "$PROBE_PID" 2>/dev/null \
+  || fail "Claude Code $CLAUDE_VERSION: claude finished while the symlinked store's $STORE.lock was held: $(cat "$LAB/link.out")"
+[ "$(digest "$TARGET")" = "$before" ] \
+  || fail "Claude Code $CLAUDE_VERSION: claude wrote a symlinked store while the link's lock was held"
+rmdir "$STORE.lock"
+wait "$PROBE_PID"
+rc=$?
+PROBE_PID=
+expect_code 0 "$rc" "Claude Code $CLAUDE_VERSION: claude mcp add on a symlinked store after the lock was released"
+[ "$(jq -r '.mcpServers | has("fm-store-lock-link")' "$TARGET")" = true ] \
+  || fail "Claude Code $CLAUDE_VERSION: claude did not land its write in the symlink's target"
+# Claude writes past a held lock after about 14 seconds anyway, so only a write
+# about as prompt as an unlocked one proves the target's lock was not waited on.
+started=$SECONDS
+in_lab claude mcp add -s user fm-store-lock-baseline -- /bin/true >"$LAB/baseline.out" 2>&1 \
+  || fail "Claude Code $CLAUDE_VERSION: an unlocked claude mcp add on a symlinked store failed: $(cat "$LAB/baseline.out")"
+baseline=$((SECONDS - started))
+mkdir "$TARGET.lock"
+node -e 'const t=Date.now()/1000+3600;require("node:fs").utimesSync(process.argv[1],t,t)' "$TARGET.lock"
+started=$SECONDS
+in_lab claude mcp add -s user fm-store-lock-target -- /bin/true >"$LAB/target.out" 2>&1
+rc=$?
+elapsed=$((SECONDS - started))
+rmdir "$TARGET.lock"
+expect_code 0 "$rc" "Claude Code $CLAUDE_VERSION: claude mcp add on a symlinked store with a lock beside its target: $(cat "$LAB/target.out")"
+[ "$elapsed" -lt $((baseline + 6)) ] \
+  || fail "Claude Code $CLAUDE_VERSION: claude took ${elapsed}s (unlocked: ${baseline}s) with a lock beside the symlink's target, so it waited on that lock"
+[ "$(jq -r '.mcpServers | has("fm-store-lock-target")' "$TARGET")" = true ] \
+  || fail "Claude Code $CLAUDE_VERSION: claude did not write past a lock beside the symlink's target"
+[ -L "$STORE" ] || fail "Claude Code $CLAUDE_VERSION: claude replaced the store symlink with a regular file"
+pass "Claude Code $CLAUDE_VERSION: a symlinked store is locked beside the link, not beside its target"

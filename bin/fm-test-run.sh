@@ -755,7 +755,7 @@ tests/fm-claude-rc-archive-live-e2e.test.sh 84
 tests/fm-claude-rc-archive.test.sh 1500
 tests/fm-claude-stop-autoarm-live-e2e.test.sh 77
 tests/fm-claude-stop-autoarm.test.sh 61558
-tests/fm-claude-trust.test.sh 14509
+tests/fm-claude-trust.test.sh 26298
 tests/fm-cmux-claude-composer-live-e2e.test.sh 83
 tests/fm-code-review.test.sh 6704
 tests/fm-codex-continuity-live-e2e.test.sh 80
@@ -1589,6 +1589,13 @@ families_for_changed_path() {
     bin/fm-bootstrap.sh)
       printf '%s\n' session-bootstrap
       printf '%s\n' "__script__:fm-brief.test.sh"
+      ;;
+    bin/fm-claude-store-lock.mjs)
+      # Claude Code's store lock, taken by the spawn's trust registration and
+      # forget-claude; the live guard proves the vendor side.
+      printf '%s\n' "__script__:fm-claude-trust.test.sh"
+      printf '%s\n' "__script__:fm-live-lab-forget-claude.test.sh"
+      printf '%s\n' "__script__:fm-claude-store-lock-live-e2e.test.sh"
       ;;
     bin/fm-lavish-patch.mjs|bin/lavish-patch/*)
       # Firstmate's local Lavish chrome overlay; its suite drives it directly

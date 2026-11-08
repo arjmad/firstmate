@@ -2,15 +2,15 @@
 # Behavior tests for a dead runner generation's orphaned source child and for
 # the Lavish LISTENER_ACTIVE result it causes.
 #
-# A runner leader that dies on its own from a catchable signal runs its exit
-# trap, which releases the source claim while its polling child - the Lavish
-# poll wrapper and its `lavish-axi poll` - keeps running in the dead leader's
-# process group and keeps the board's one listener slot. Every later runner
-# for that source then gets LISTENER_ACTIVE. These tests drive the real adapter
-# and runner against a fake `lavish-axi` that keeps exactly that one-listener
-# rule, then check that session start stops the orphan by its recorded pid and
-# start stamp, leaves a live generation and another home alone, and that a
-# LISTENER_ACTIVE capture never wakes the helm.
+# A runner leader stopped alone by TERM or HUP stops its own process group, so
+# its polling child - the Lavish poll wrapper and its `lavish-axi poll` - ends
+# with it. A leader that dies alone from KILL cannot, and leaves that child
+# running in the dead leader's process group, keeping the board's one listener
+# slot. Every later runner for that source then gets LISTENER_ACTIVE. These
+# tests drive the real adapter and runner against a fake `lavish-axi` that
+# keeps exactly that one-listener rule, then check that session start stops the
+# orphan by its recorded pid and start stamp, leaves a live generation and
+# another home alone, and that a LISTENER_ACTIVE capture never wakes the helm.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -112,14 +112,15 @@ new_board() {
   printf '%s %s %s\n' "$home" "$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$art")" "$listen"
 }
 
-# orphan_board <home> <source-id> <listener-dir>: signal the live runner leader
-# alone, the way a dying session's signal can reach it, and print its group.
+# orphan_board <home> <source-id> <listener-dir>: KILL the live runner leader
+# alone, the one signal it cannot answer by stopping its group, and print that
+# group.
 orphan_board() {
   local home=$1 id=$2 listen=$3 runner
   until_true 100 listener_held "$listen" || fail "$id: the first poll never took the listener"
   runner=$(cat "$home/state/procevent/$id.runner") || fail "$id: no runner record"
   printf '%s\n' "$runner" >> "$ORPHAN_GROUPS"
-  kill -TERM "$runner"
+  kill -KILL "$runner"
   until_true 50 pid_gone "$runner" || fail "$id: the runner leader did not exit"
   printf '%s\n' "$runner"
 }
@@ -165,15 +166,30 @@ assert_equals unknown "$("$LAVISH" classify "$RESULTS/replaced.result")" \
   || fail "a LISTENER_REPLACED capture must still be announced"
 pass "LISTENER_ACTIVE classifies listener-active, stays silent, and keeps the board armed"
 
+# --- a runner leader stopped by TERM or HUP takes its source child with it --
+for signal in TERM HUP; do
+  read -r HS IDS LS < <(new_board "leader-$signal")
+  until_true 100 listener_held "$LS" || fail "leader-$signal: the first poll never took the listener"
+  CHILD=$(listener_pid "$LS")
+  RUNNER=$(cat "$HS/state/procevent/$IDS.runner") || fail "leader-$signal: no runner record"
+  printf '%s\n' "$RUNNER" >> "$ORPHAN_GROUPS"
+  kill -"$signal" "$RUNNER"
+  until_true 50 pid_gone "$RUNNER" || fail "leader-$signal: the runner leader did not exit on $signal"
+  until_true 50 group_gone "$RUNNER" \
+    || fail "a runner leader stopped by $signal left its process group running: $(ps -eo pid=,pgid=,args= | awk -v g="$RUNNER" '$2 == g')"
+  pid_gone "$CHILD" || fail "a runner leader stopped by $signal left its polling listener running"
+  pass "a runner leader stopped by $signal stops its own process group"
+done
+
 # --- an orphaned poll no longer wakes the helm -----------------------------
-read -r H1 ID1 L1 < <(new_board quiet)
-ORPHAN1=$(listener_pid "$L1")
-orphan_board "$H1" "$ID1" "$L1" >/dev/null || exit 1
-kill -0 "$ORPHAN1" 2>/dev/null \
-  || fail "fixture: the orphaned listener should outlive its runner leader"
-LAVISH_LISTENER_DIR="$L1" LAVISH_RELEASE="$TMP_ROOT/quiet/release" pe "$H1" reconcile >/dev/null 2>&1 || true
+# A listener this suite starts in its own group stands in for an orphan that
+# already holds the board when its first runner polls.
+mkdir -p "$TMP_ROOT/quiet/listener/held"
+(set -m; sleep 600 & printf '%s\n' "$!" > "$TMP_ROOT/quiet/listener/held/pid")
+cat "$TMP_ROOT/quiet/listener/held/pid" >> "$ORPHAN_GROUPS"
+read -r H1 ID1 _ < <(new_board quiet)
 until_true 100 test -e "$H1/state/procevent-inbox/$ID1.1.result" \
-  || fail "the next runner never captured its colliding poll"
+  || fail "the runner never captured its colliding poll"
 runner_finished() { [ ! -e "$1/state/procevent/$2.runner" ]; }
 until_true 100 runner_finished "$H1" "$ID1" || fail "the colliding runner did not finish its round"
 assert_equals 0 "$(wake_count "$H1")" \
