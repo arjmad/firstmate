@@ -11,7 +11,7 @@
 # discretion - the helm is taken before the model's first turn, whatever the
 # first turn is.
 #
-# Usage: fm-sessionstart-run.sh [--source <source>] [--pi-prerequisite]
+# Usage: fm-sessionstart-run.sh [--source <source>] [--pi-prerequisite] [--claude]
 #   --source  The harness's own session-open source. When omitted, the source is
 #             read from a Claude/Codex-shaped JSON hook payload on stdin
 #             (the `source` field). An unreadable or unrecognized source is
@@ -22,6 +22,12 @@
 #             exits 3 so provider preflight can distinguish it from an eligible
 #             native attempt that settled without output. Every ordinary hook
 #             invocation retains the always-zero compatibility contract below.
+#   --claude  Supplied only by the tracked .claude/settings.json entry. When the
+#             payload carries a session_id, the digest is saved to
+#             state/.digest-read/<session>.txt before it is printed, and
+#             bin/fm-digest-read-check.sh arms its forced read when the digest
+#             is too large for Claude Code to show inline (fork patch,
+#             docs/fork-decisions/2026-11-07-forced-digest-read.md).
 #
 # Source routing (see docs/sessionstart-nudge.md for the per-harness names):
 #   startup, new            full digest - this process has not taken the helm
@@ -68,6 +74,8 @@ COMPLETION_FILE="$STATE/.session-start-complete"
 
 SOURCE=
 PI_PREREQUISITE=0
+CLAUDE_HOST=0
+SESSION_ID=
 while [ $# -gt 0 ]; do
   case "$1" in
     --source)
@@ -78,6 +86,7 @@ while [ $# -gt 0 ]; do
       ;;
     --source=*) SOURCE=${1#--source=}; shift ;;
     --pi-prerequisite) PI_PREREQUISITE=1; shift ;;
+    --claude) CLAUDE_HOST=1; shift ;;
     *) shift ;;
   esac
 done
@@ -139,7 +148,31 @@ if [ -z "$SOURCE" ] && [ ! -t 0 ]; then
     seen == 1 { seen = 0 }
     $0 == "source" { seen = 1 }
   ')
+  if [ "$CLAUDE_HOST" = 1 ] && command -v jq >/dev/null 2>&1; then
+    SESSION_ID=$(printf '%s' "$PAYLOAD" | jq -r '.session_id // empty' 2>/dev/null || true)
+  fi
 fi
+
+# run_digest <args...>: run the digest to stdout. A Claude session with a usable
+# session id gets it saved first, printed from the saved copy, and its forced
+# read armed; any failure to save falls back to printing it directly.
+run_digest() {
+  local dir copy out
+  case "$SESSION_ID" in
+    ''|*[!A-Za-z0-9_-]*) "$SCRIPT_DIR/fm-session-start.sh" "$@" || true; return 0 ;;
+  esac
+  dir="$STATE/.digest-read"
+  copy="$dir/$SESSION_ID.txt"
+  if ! mkdir -p "$dir" 2>/dev/null || ! : > "$copy" 2>/dev/null; then
+    "$SCRIPT_DIR/fm-session-start.sh" "$@" || true
+    return 0
+  fi
+  # The digest writes the file it only names in its cue, so out is the same path.
+  out=$copy
+  FM_SESSION_START_DIGEST_COPY="$copy" "$SCRIPT_DIR/fm-session-start.sh" "$@" > "$out" || true
+  cat "$out"
+  "$SCRIPT_DIR/fm-digest-read-check.sh" arm "$SESSION_ID" "$copy" >/dev/null 2>&1 || true
+}
 
 # Claude Code hands SessionStart hooks a CLAUDE_ENV_FILE whose lines run before
 # every later Bash command of the session, so exporting this home there lets
@@ -168,13 +201,13 @@ case "$SOURCE" in
     ;;
   clear|compact)
     if session_start_completed; then
-      "$SCRIPT_DIR/fm-session-start.sh" --reemit --source "$SOURCE" || true
+      run_digest --reemit --source "$SOURCE"
     else
-      "$SCRIPT_DIR/fm-session-start.sh" --source "$SOURCE" || true
+      run_digest --source "$SOURCE"
     fi
     ;;
   *)
-    "$SCRIPT_DIR/fm-session-start.sh" --source "$SOURCE" || true
+    run_digest --source "$SOURCE"
     ;;
 esac
 exit 0

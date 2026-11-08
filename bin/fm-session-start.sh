@@ -230,8 +230,9 @@
 #             same-session Claude id as its own, so the re-emit proceeds, while
 #             a lock another live session took meanwhile still produces the
 #             ordinary read-only path. A re-emit prints a short RE-EMIT CUE
-#             first, so a harness that spills a large output and shows only its
-#             head still tells the model to read the saved full output.
+#             first, and a startup a READ CUE, so a harness that spills a large
+#             output and shows only its head still tells the model to read the
+#             saved full output.
 #
 #   --source  The native session-open source, supplied only by
 #             fm-sessionstart-run.sh. A genuine `startup` that owns the active
@@ -678,13 +679,22 @@ if [ "$REEMIT" -eq 0 ] && [ "$SESSION_SOURCE" = startup ]; then
   AGENTS_START_HASH=$(hash_file_sha256 "$FM_ROOT/AGENTS.md" 2>/dev/null || true)
 fi
 
+# First in the output on purpose, on every path: a harness that spills a large
+# hook output delivers only a short head inline (Claude: about 2,000
+# characters), and CONTEXT prints last, so this cue is the part that must
+# survive the spill. fm-sessionstart-run.sh sets FM_SESSION_START_DIGEST_COPY
+# when it saves this digest for bin/fm-digest-read-check.sh, which then refuses
+# every other tool until the saved copy or the spill has been read.
+CUE_LABEL='READ CUE'
+[ "$REEMIT" -eq 0 ] || CUE_LABEL='RE-EMIT CUE'
+printf '%s: if this output ends with "Output too large ... Full output saved to <path>",\n' "$CUE_LABEL"
+printf 'read that whole file now, before acting. Otherwise read data/captain.md, data/captain-shared.md,\n'
+printf 'and data/learnings.md under %s now if any of them is missing below.\n' "$DATA"
+if [ -n "${FM_SESSION_START_DIGEST_COPY:-}" ]; then
+  printf 'It is also saved at %s; when it is cut to a preview, every other tool is refused until one of them is read in full.\n' \
+    "$FM_SESSION_START_DIGEST_COPY"
+fi
 if [ "$REEMIT" -eq 1 ]; then
-  # First in the output on purpose: a harness that spills a large hook output
-  # delivers only a short head inline (Claude: about 2,000 characters), and
-  # CONTEXT prints last, so this cue is the part that must survive the spill.
-  printf 'RE-EMIT CUE: if this output ends with "Output too large ... Full output saved to <path>",\n'
-  printf 'read that whole file now, before acting. Otherwise read data/captain.md, data/captain-shared.md,\n'
-  printf 'and data/learnings.md under %s now if any of them is missing below.\n' "$DATA"
   section "SESSION START (CONTEXT RE-EMIT) - $FM_HOME"
   printf 'This session already took the helm at its own startup and has only lost its\n'
   printf 'context. Lock ownership is re-verified and the durable records below are\n'
