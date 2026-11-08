@@ -2497,9 +2497,9 @@ The one proof that does reach it is the runner's per-generation record of its so
 
 A runner leader that dies on its own from a catchable signal runs its exit trap, which releases its claim while its source child keeps running in the dead leader's process group.
 For a Lavish board that child still holds the board's single listener, so every later runner's poll is refused with `LISTENER_ACTIVE` until the child ends.
-Every runner therefore records its source child by pid and start stamp under its claim token, and a locked session start runs `bin/fm-procevent.sh retire-orphans`.
+Every built-in runner therefore records its source child by pid and start stamp under its claim token, and a locked session start runs `bin/fm-procevent.sh retire-orphans`; an extension source records none, so its orphan is not retired this way.
 That command stops a recorded group only while the recorded runner is gone or reused and the recorded child is still alive with its recorded start stamp inside the group that runner led.
-A live or unreadable runner keeps its record, a record whose child cannot be proved is dropped without a signal, and records live in the home's own registry, so another home's children are never read.
+A live or unreadable runner, or a live child whose stamp cannot be read, keeps its record, a record whose child is gone or no longer matches is dropped without a signal, and records live in the home's own registry, so another home's children are never read.
 Each stopped group prints `orphan-stopped: <source-id> group=<pgid>`, which session start reports as a `BOOTSTRAP_INFO:` fact.
 
 **Report stranded claims**

@@ -179,8 +179,8 @@
 #            cycle), and an unusable setting skips it.
 # retire-orphans
 #            Stop the source children this home's dead runner generations left
-#            running. Every runner records its source child by pid and start
-#            stamp under its claim token; a record proves a group only while
+#            running. Every built-in runner records its source child by pid
+#            and start stamp under its claim token; a record proves a group only while
 #            its runner is gone or reused and its child is alive with that
 #            stamp in the group the runner led. Prints `orphan-stopped:
 #            <source-id> group=<pgid>` per stopped group. A live generation and
@@ -2492,8 +2492,9 @@ stop_proved_group() {  # <pgid>
 # wrote proves one such group: the recorded runner must be gone or reused, the
 # recorded child must still be alive with its recorded start stamp, and it must
 # still be in the group the runner led. Only then is that group stopped. A live
-# or unreadable runner keeps its record; a record whose child is gone or no
-# longer matches is dropped without a signal. Records live in this home's own
+# or unreadable runner, or a live child whose stamp or group cannot be read,
+# keeps its record; a record whose child is gone or no longer matches is
+# dropped without a signal. Records live in this home's own
 # registry, so another home's children are never read. Prints one
 # `orphan-stopped: <source-id> group=<pgid>` line per stopped group; exits 1
 # when a proved group outlived its stop, 0 otherwise.
@@ -2522,9 +2523,14 @@ cmd_retire_orphans() {
     case "$?" in
       0|2) continue ;;
     esac
+    if ! kill -0 "$child" 2>/dev/null; then
+      rm -f -- "$record"
+      continue
+    fi
     stamp=$(fm_procevent_pid_start_stamp "$child" 2>/dev/null) || stamp=
     pgid=$(ps -o pgid= -p "$child" 2>/dev/null | tr -d '[:space:]') || pgid=
-    if [ -z "$stamp" ] || [ "$stamp" != "$child_start" ] || [ "$pgid" != "$runner" ]; then
+    [ -n "$stamp" ] && [ -n "$pgid" ] || continue
+    if [ "$stamp" != "$child_start" ] || [ "$pgid" != "$runner" ]; then
       rm -f -- "$record"
       continue
     fi
