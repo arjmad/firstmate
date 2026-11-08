@@ -586,11 +586,14 @@ test_registration_waits_for_the_store_lock() {
   done
   # Claude never takes a lock beside the target, so one there is no writer to
   # wait for and is not registration's to remove.
-  mkdir "$data.lock"
-  set_mtime "$data.lock" 3600
   rec=$(make_case lock-target-only)
   read_case "$rec"
+  data="$CASE_DIR/dotfiles/.claude.json"
+  mkdir -p "$CASE_DIR/dotfiles"
+  printf '%s\n' '{"numStartups":3,"projects":{}}' > "$data"
   ln -s "$data" "$CONFIG/.claude.json"
+  mkdir "$data.lock"
+  set_mtime "$data.lock" 3600
   out=$(run_trust "$CONFIG" "$WT" "$PROJ")
   expect_code 0 $? "a lock beside the symlink's target must not block registration: $out"
   assert_trusted "$data" "$WT" "the worktree was not trusted past a lock beside the target"

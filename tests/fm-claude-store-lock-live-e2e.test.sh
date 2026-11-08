@@ -95,18 +95,22 @@ PROBE_PID=
 expect_code 0 "$rc" "Claude Code $CLAUDE_VERSION: claude mcp add on a symlinked store after the lock was released"
 [ "$(jq -r '.mcpServers | has("fm-store-lock-link")' "$TARGET")" = true ] \
   || fail "Claude Code $CLAUDE_VERSION: claude did not land its write in the symlink's target"
+# Claude writes past a held lock after about 14 seconds anyway, so only a write
+# about as prompt as an unlocked one proves the target's lock was not waited on.
+started=$SECONDS
+in_lab claude mcp add -s user fm-store-lock-baseline -- /bin/true >"$LAB/baseline.out" 2>&1 \
+  || fail "Claude Code $CLAUDE_VERSION: an unlocked claude mcp add on a symlinked store failed: $(cat "$LAB/baseline.out")"
+baseline=$((SECONDS - started))
 mkdir "$TARGET.lock"
 node -e 'const t=Date.now()/1000+3600;require("node:fs").utimesSync(process.argv[1],t,t)' "$TARGET.lock"
-# Claude writes past a held lock after about 14 seconds anyway, so only a
-# prompt write proves the target's lock was not waited on.
 started=$SECONDS
 in_lab claude mcp add -s user fm-store-lock-target -- /bin/true >"$LAB/target.out" 2>&1
 rc=$?
 elapsed=$((SECONDS - started))
 rmdir "$TARGET.lock"
 expect_code 0 "$rc" "Claude Code $CLAUDE_VERSION: claude mcp add on a symlinked store with a lock beside its target: $(cat "$LAB/target.out")"
-[ "$elapsed" -lt 8 ] \
-  || fail "Claude Code $CLAUDE_VERSION: claude took ${elapsed}s with a lock beside the symlink's target, so it waited on that lock"
+[ "$elapsed" -lt $((baseline + 6)) ] \
+  || fail "Claude Code $CLAUDE_VERSION: claude took ${elapsed}s (unlocked: ${baseline}s) with a lock beside the symlink's target, so it waited on that lock"
 [ "$(jq -r '.mcpServers | has("fm-store-lock-target")' "$TARGET")" = true ] \
   || fail "Claude Code $CLAUDE_VERSION: claude did not write past a lock beside the symlink's target"
 [ -L "$STORE" ] || fail "Claude Code $CLAUDE_VERSION: claude replaced the store symlink with a regular file"
