@@ -234,9 +234,18 @@ WORLD_ROOT="$TMP_ROOT/session/root"
 git init -q -b main "$WORLD_ROOT"
 git -C "$WORLD_ROOT" -c user.name=fmtest -c user.email=fmtest@example.invalid commit -q --allow-empty -m init
 mkdir -p "$H5/data" "$H5/config"
+# The session lock anchors on a harness process in the caller's ancestry, so
+# session start runs under an interpreter named like one; without it the start
+# is read-only and skips every mutating step.
+HARNESS_BIN="$TMP_ROOT/session/harness"
+mkdir -p "$HARNESS_BIN"
+ln -s "$(command -v bash)" "$HARNESS_BIN/claude"
 SS_OUT=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
-  FM_HOME="$H5" FM_ROOT_OVERRIDE="$WORLD_ROOT" "$ROOT/bin/fm-session-start.sh" 2>&1) || true
-until_true 50 pid_gone "$ORPHAN5" || fail "a locked session start left the dead generation's listener running"
+  FM_HOME="$H5" FM_ROOT_OVERRIDE="$WORLD_ROOT" \
+  "$HARNESS_BIN/claude" "$ROOT/bin/fm-session-start.sh" 2>&1) || true
+assert_not_contains "$SS_OUT" "READ-ONLY SESSION" "the fixture session start must hold the lock"
+until_true 50 pid_gone "$ORPHAN5" \
+  || fail "a locked session start left the dead generation's listener running"$'\n'"$SS_OUT"
 assert_contains "$SS_OUT" "BOOTSTRAP_INFO: orphan-stopped: $ID5" \
   "session start must report the orphan it stopped as a completed fact"
 pass "a locked session start stops a dead generation's orphaned poll"
