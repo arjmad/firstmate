@@ -165,6 +165,21 @@ assert_equals unknown "$("$LAVISH" classify "$RESULTS/replaced.result")" \
   || fail "a LISTENER_REPLACED capture must still be announced"
 pass "LISTENER_ACTIVE classifies listener-active, stays silent, and keeps the board armed"
 
+# --- a runner leader stopped by TERM or HUP takes its source child with it --
+for signal in TERM HUP; do
+  read -r HS IDS LS < <(new_board "leader-$signal")
+  until_true 100 listener_held "$LS" || fail "leader-$signal: the first poll never took the listener"
+  CHILD=$(listener_pid "$LS")
+  RUNNER=$(cat "$HS/state/procevent/$IDS.runner") || fail "leader-$signal: no runner record"
+  printf '%s\n' "$RUNNER" >> "$ORPHAN_GROUPS"
+  kill -"$signal" "$RUNNER"
+  until_true 50 pid_gone "$RUNNER" || fail "leader-$signal: the runner leader did not exit on $signal"
+  until_true 50 group_gone "$RUNNER" \
+    || fail "a runner leader stopped by $signal left its process group running: $(ps -eo pid=,pgid=,args= | awk -v g="$RUNNER" '$2 == g')"
+  pid_gone "$CHILD" || fail "a runner leader stopped by $signal left its polling listener running"
+  pass "a runner leader stopped by $signal stops its own process group"
+done
+
 # --- an orphaned poll no longer wakes the helm -----------------------------
 read -r H1 ID1 L1 < <(new_board quiet)
 ORPHAN1=$(listener_pid "$L1")
