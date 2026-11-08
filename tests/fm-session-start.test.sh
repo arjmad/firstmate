@@ -2444,6 +2444,9 @@ FIXTURE
 
   normal=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_not_contains "$normal" "RE-EMIT CUE" "a normal start printed the re-emit cue"
+  head2k=$(printf '%s' "$normal" | head -c 2000)
+  assert_contains "$head2k" "READ CUE" "a normal start's read cue is not inside the first 2000 characters"
+  assert_contains "$head2k" "Full output saved to" "a normal start's read cue does not point at the saved output"
 
   reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
     env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
@@ -2453,7 +2456,7 @@ FIXTURE
   assert_contains "$head2k" "RE-EMIT CUE" "the re-emit cue is not inside the first 2000 characters"
   assert_contains "$head2k" "Full output saved to" "the re-emit cue does not point at the saved output"
 
-  pass "--reemit puts its read cue in the first 2000 characters and a normal start omits it"
+  pass "both a startup and a --reemit put their read cue in the first 2000 characters, and only a re-emit labels it RE-EMIT"
 }
 
 test_reemit_skips_startup_sweeps_but_keeps_the_wake_drain() {

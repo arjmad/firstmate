@@ -244,7 +244,9 @@ The wrapper reads `source` from the hook payload.
 Native stdout context injection is supported.
 Claude caps one hook output string at 10,000 characters.
 Above the cap the model receives a preview of the first 2,000 characters plus the path of a saved file, and is not asked to read that file.
-A context re-emit therefore prints a short `RE-EMIT CUE` first, which tells the model to read the saved file.
+Every digest therefore prints a short read cue first (`READ CUE` at startup, `RE-EMIT CUE` on a re-emit), which tells the model to read the saved file.
+The cue alone was not enough, so the Claude entry passes `--claude`: the wrapper saves the digest to `state/.digest-read/<session>.txt` before printing it, and `bin/fm-digest-read-check.sh` (registered as a `PreToolUse` and a `PostToolUse` hook) refuses every tool but a Read of that digest until each of its lines has been read, whenever it is over the cap.
+That script's header owns the arm, check, and record mechanics.
 
 ### Codex exec
 
@@ -385,6 +387,11 @@ Firstmate registers nothing for `preCompact`.
 So a compacted Cursor session keeps whatever context survived rather than receiving a fresh digest.
 
 ## Regression coverage
+
+### Forced digest read
+
+`tests/fm-digest-read-check.test.sh` is a portable suite.
+It proves that only a digest over the cap arms, that an armed session may only Read its digest, that chunked reads disarm only once every line is covered, that a re-emit re-arms, that every fail-open path stays open, and that the wrapper saves and arms only for Claude.
 
 ### Wrapper and Pi extension suite
 

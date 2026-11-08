@@ -305,7 +305,7 @@ family_for_basename() {
     fm-calm-claude-mod.test.sh|\
     fm-harness-adapter-references.test.sh|fm-project-mode.test.sh|\
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|\
-    fm-subagent-pretool-check.test.sh|\
+    fm-subagent-pretool-check.test.sh|fm-digest-read-check.test.sh|\
     fm-supervision-instructions.test.sh|fm-task-delivery.test.sh|\
     fm-timeout-lib.test.sh|\
     fm-tmux-submit-busy.test.sh|fm-trace-context-lib.test.sh|\
@@ -1677,6 +1677,7 @@ families_for_changed_path() {
       # The run tier's two harness-supplied facts (source vocabulary and
       # context-reset stdout injection) only show up against a real harness.
       printf '%s\n' __script__:fm-pi-windows-shell-invocation.test.sh
+      printf '%s\n' __script__:fm-digest-read-check.test.sh
       printf '%s\n' session-bootstrap
       printf '%s\n' live-harness-optin
       # Both primary extensions publish the same session-ownership marker, and

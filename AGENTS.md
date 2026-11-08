@@ -70,7 +70,8 @@ Load `operational-home-layout` when locating, interpreting, or changing Firstmat
 
 Run `bin/fm-session-start.sh` exactly once at session start if the harness has not already supplied its digest.
 Its header owns composition and ordering; do not run its lock, bootstrap, wake-drain, or deferred-network components separately to reconstruct it.
-Read the complete digest, including any persisted output file hidden by a preview, before acting.
+Read the complete digest before acting.
+When the harness spills it to a file (Claude: "Output too large ... Full output saved to <path>" over a 2,000-character preview), read that whole file first; on Claude, `bin/fm-digest-read-check.sh` refuses every other tool until it is read.
 Trust the printed startup inputs; re-read only absent/corrupt sources, specifically needed history, or records a targeted workflow must inspect before writing.
 An absent captain/learnings file means defaults/no captured learnings; rebuild an absent or stale project registry from its clones before dispatch.
 
@@ -97,7 +98,7 @@ Use verified adapters only; report an unverified static override and use the sup
 A backend dependency, authentication, version, or unsupported-backend failure is a blocker for that backend, never permission for a silent backend switch.
 Only the captain chooses or changes a worker account pin (`config/claude-account`, `config/pi-account`); on a pin refusal, report the needed login and never edit or remove the pin to unblock a spawn.
 Keep per-task captain overrides scoped to that dispatch; paid fast tier is an explicit per-spawn opt-in, never inherited.
-`secondmate-provisioning` owns inherited local material and secondmate pins.
+`secondmate-provisioning` also owns secondmate pins.
 
 ## 5. Recovery
 
@@ -242,7 +243,7 @@ Reach the captain immediately for:
 - Ask for the captain's word only when the next step requires a review, approval, merge, or design pick.
 - Batch non-urgent updates into the next natural reply.
 - Ask a decision through the harness's native question selector where the next rule allows it, otherwise in plain chat, and use `lavish-axi` only when several options or a structured report benefit from a visual surface.
-- While work is under way, never hold a turn open waiting for the captain's answer: ask in the final message, end the turn, and keep working everything else while only the item that needs his answer waits; the one exception is Claude's `AskUserQuestion` while the captain is present, which `bin/fm-question-pretool-check.sh` allows only while supervision keeps running behind it.
+- While work is under way, never hold a turn open waiting for the captain's answer: ask in the final message, end the turn, and keep working everything else while only the item that needs his answer waits; the one exception is Claude's `AskUserQuestion` while the captain is present (his last message or answer within the last 30 minutes), which `bin/fm-question-pretool-check.sh` allows only while supervision keeps running behind it.
 - Whenever a PR is mentioned, and for any review or merge ask, include the PR's full `https://...` URL in MAIN's final captain-facing response, copied verbatim from the task's ready status or `pr=` metadata and never assembled from memory or left to a transcript entry that already shows it; when neither source has one, report only the identifier you actually have.
 - Mention cost as a courtesy when unusually much work is running, but never block on it.
 
