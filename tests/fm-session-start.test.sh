@@ -117,10 +117,9 @@ SH
 # queued, and the dispatchable ready set) and REFUSES anything the recovery
 # listing must never ask for: a body field, an unfiltered whole-backlog listing,
 # or done rows. FM_FAKE_TASKS_AXI_READY sizes the ready set so the queued bound
-# can be driven past its limit. Only the held group may ask for body, which the
-# startup listing reads for a due date and must never print; it answers with
-# hold_until and body last, and FM_FAKE_TASKS_AXI_HELD_ROWS names a file of
-# held rows in that shape to answer with instead of the default one.
+# can be driven past its limit. The held group carries hold_until when it is
+# asked for, as tasks-axi does, and FM_FAKE_TASKS_AXI_HELD_ROWS names a file of
+# held rows (hold_until last) to answer with instead of the default one.
 make_fake_tasks_axi_compact() {
   local fakebin=$1
   cat > "$fakebin/tasks-axi" <<'SH'
@@ -175,7 +174,6 @@ case "${1:-}" in
     ;;
   list)
     case "$*" in
-      *'--state held --fields '*',hold_until,body'*) ;;
       *'--fields '*'body'*|*'--fields='*'body'*)
         printf '%s\n' 'unexpected body field requested' >&2
         exit 9
@@ -191,17 +189,17 @@ case "${1:-}" in
         task_header 1
         printf '%s\n' '  compact-startup,in_flight,ship,firstmate,Compact startup digest,none,captain,captain choice pending'
         ;;
-      *'--state held'*'hold_until,body'*)
+      *'--state held'*'hold_until'*)
         rows=${FM_FAKE_TASKS_AXI_HELD_ROWS:-}
         if [ -n "$rows" ]; then
           n=$(grep -c . "$rows")
           printf 'count: %s\n' "$n"
-          printf 'tasks[%s]{id,state,kind,repo,title,blocked_by,hold_kind,hold_reason,hold_until,body}:\n' "$n"
+          printf 'tasks[%s]{id,state,kind,repo,title,blocked_by,hold_kind,hold_reason,hold_until}:\n' "$n"
           cat "$rows"
         else
           printf 'count: 1\n'
-          printf 'tasks[1]{id,state,kind,repo,title,blocked_by,hold_kind,hold_reason,hold_until,body}:\n'
-          printf '%s\n' '  held-queued,queued,ship,firstmate,Held queued work,none,captain,captain choice pending,"-","HELD-BODY-LINE"'
+          printf 'tasks[1]{id,state,kind,repo,title,blocked_by,hold_kind,hold_reason,hold_until}:\n'
+          printf '%s\n' '  held-queued,queued,ship,firstmate,Held queued work,none,captain,captain choice pending,"-"'
         fi
         ;;
       *'--state held'*)
@@ -2099,7 +2097,6 @@ EOF
 ' "tasks-axi compact listing omitted a held row, its hold metadata, or its hold_until"
   assert_not_contains "$out" "parked until " \
     "a held listing with no far-gated row printed a parked count line"
-  assert_not_contains "$out" "HELD-BODY-LINE" "tasks-axi compact digest leaked a held task body"
   assert_contains "$out" 'blocked-followup,queued,scout,firstmate,Follow compact startup,compact-startup,"-","-"' \
     "tasks-axi compact listing omitted blocked-by metadata"
   assert_contains "$out" "ready-3,queued,ship,firstmate,Ready item 3" \
@@ -2142,9 +2139,10 @@ date_in_days() {
 # docs/fork-decisions/2026-11-08-far-holds-count-line.md). A row back exactly 7
 # days out, an undated captain hold, a far in-flight row, a far row with a
 # blocker, and a far row due within 14 days all stay in full with hold_until;
-# no body reaches the digest, and the other groups are untouched.
+# the listing never asks tasks-axi for a body (the fake refuses one), no body
+# reaches the digest, and the other groups are untouched.
 test_backlog_held_far_gated_rows_fold_into_one_count_line_per_month() {
-  local rec root home fakebin out rows far later edge near due_soon due_late held_group m1 m2
+  local rec root home fakebin out rows far later edge near due_soon due_late held_group m1 m2 i
   rec=$(new_world backlog-held-far-fold)
   IFS='|' read -r root home fakebin <<EOF
 $rec
@@ -2164,17 +2162,30 @@ EOF
   m2=${later%-*}
   rows="$home/held-rows"
   {
-    printf '  far-dated,queued,ship,firstmate,Far dated hold,none,future,start after launch,%s,""\n' "$far"
-    printf '  near-dated,queued,ship,firstmate,Near dated hold,none,future,"soon, really",%s,"BODY-SECRET one\\nBODY-SECRET two"\n' "$near"
-    printf '  title-far,queued,ship,firstmate,"[%s] Title dated, with comma",none,captain,captain call,"-",""\n' "$far"
-    printf '  edge-seven,queued,ship,firstmate,Gate seven days out,none,future,soon,%s,""\n' "$edge"
-    printf '  undated-captain,queued,ship,firstmate,Undated captain hold,none,captain,captain choice pending,"-",""\n'
-    printf '  far-in-flight,in_flight,ship,firstmate,Far in flight,none,future,later,%s,""\n' "$far"
-    printf '  far-blocked,queued,ship,firstmate,Far blocked,base-x,future,later,%s,""\n' "$far"
-    printf '  later-dated,queued,ship,firstmate,Later dated hold,none,future,later,%s,"BODY-SECRET, with a comma"\n' "$later"
-    printf '  due-soon,queued,ship,firstmate,Due soon,none,future,later,%s,"BODY-SECRET notes\\nDue: %s"\n' "$later" "$due_soon"
-    printf '  due-late,queued,ship,firstmate,Due later,none,future,later,%s,"Due: %s\\nBODY-SECRET"\n' "$later" "$due_late"
+    printf '  far-dated,queued,ship,firstmate,Far dated hold,none,future,start after launch,%s\n' "$far"
+    printf '  near-dated,queued,ship,firstmate,Near dated hold,none,future,"soon, really",%s\n' "$near"
+    printf '  title-far,queued,ship,firstmate,"[%s] Title dated, with comma",none,captain,captain call,"-"\n' "$far"
+    printf '  edge-seven,queued,ship,firstmate,Gate seven days out,none,future,soon,%s\n' "$edge"
+    printf '  undated-captain,queued,ship,firstmate,Undated captain hold,none,captain,captain choice pending,"-"\n'
+    printf '  far-in-flight,in_flight,ship,firstmate,Far in flight,none,future,later,%s\n' "$far"
+    printf '  far-blocked,queued,ship,firstmate,Far blocked,base-x,future,later,%s\n' "$far"
+    printf '  later-dated,queued,ship,firstmate,Later dated hold,none,future,later,%s\n' "$later"
+    printf '  due-soon,queued,ship,firstmate,Due soon,none,future,later,%s\n' "$later"
+    printf '  due-late,queued,ship,firstmate,Due later,none,future,later,%s\n' "$later"
   } > "$rows"
+  # Due dates come from the backlog file's own bodies, because `tasks-axi list`
+  # cuts a body at 500 characters; due-soon's Due line sits past that point.
+  {
+    printf -- '- [ ] due-soon - Due soon (repo: firstmate) (kind: ship) (hold: later) (hold-until: %s)\n' "$later"
+    i=1
+    while [ "$i" -le 12 ]; do
+      printf '  BODY-SECRET note line %s padded well past the listing body limit\n' "$i"
+      i=$((i + 1))
+    done
+    printf '  Due: %s\n' "$due_soon"
+    printf -- '- [ ] due-late - Due later (repo: firstmate) (kind: ship) (hold: later) (hold-until: %s)\n' "$later"
+    printf '  Due: %s\n' "$due_late"
+  } >> "$home/data/backlog.md"
 
   out=$(FM_FAKE_TASKS_AXI_HELD_ROWS="$rows" run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   held_group=$(printf '%s\n' "$out" | sed -n '/^held (captain- or time-gated/,/^blocked queued:/p')
