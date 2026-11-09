@@ -229,6 +229,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-line-cap-lib.sh` | Shared per-line cap for agent-facing digest lines |
 | `fm-lint-workflows.sh` | Run pinned actionlint over every GitHub workflow |
 | `fm-lint.sh` | Single owner of firstmate's ShellCheck lint definition for CI and the pre-push gate |
+| `fm-ci-plan.sh` | Plans the behavior scripts and lint roots a pull request touches, or the full suite with a reason, and gates each CI check on that plan |
 | `fm-merge-command-policy.mjs` | Decide whether a shell command merges a PR directly through the GitHub CLI instead of `fm-pr-merge.sh` |
 | `fm-merge-pretool-check.sh` | PreToolUse transport for the merge-guard command policy |
 | `fm-procevent-extension-capture.pl` | Capture and hand off a process-to-event extension result for `fm-procevent.sh` |

@@ -125,13 +125,23 @@ Portable shards, each portable serial shard, and the Herdr lane upload runner-ge
 CI requires its per-root bounds, so an unenforceable deadline or address-space limit refuses lint rather than running uncapped; the script header owns the envelope, per-root execution contract, and memory fallback.
 Its `--list-files` interface exposes partition membership; `tests/fm-lint.test.sh` verifies complete/disjoint executed roots, initial analysis flags, and fallback reporting.
 The workflow uploads each partition's quiet telemetry plus its per-root lifecycle sidecar to distinguish analysis cost, memory use, and host contention.
-No fast mode, path skips, or paid runner provisioning is part of this layout.
+No fast mode or paid runner provisioning is part of this layout; a pull request narrows it only through the affected-shard plan below.
 
 The longer-term performance objective remains a complete green run under fifteen minutes including start delay, but the current supervision-host floor alone exceeds that objective.
 The immediate packing target is the runner's modeled script budget, not a claim that more shards alone can make an indivisible script faster.
 The layout uses twenty-four long-lived Linux jobs (thirteen serial, two parallel, Herdr, eight lint), plus short checks and macOS; insufficient shared account capacity can erase the packing gain.
 Compare complete before/after runs, preserve cancelled and partial-run evidence, and measure a representative normal-run sample before claiming a P95 improvement.
 The workflow retains per-PR supersession without cancelling main pushes or changing the compliance workflow's event semantics.
+
+## Affected-shard planning
+
+A pull request runs only the CI work its change touches.
+The `CI plan` job runs `bin/fm-ci-plan.sh plan`, which records the behavior scripts `bin/fm-test-run.sh --changed` selects and the lint roots whose analysis can see a changed file.
+Every lint partition, behavior lane, the Herdr lane and the macOS job keep their check names, run `bin/fm-ci-plan.sh gate` after checkout, and no-op every later step when nothing they own is affected, so an unaffected check still reports success.
+A touched behavior lane runs only its selected scripts through `bin/fm-test-run.sh --only`; a touched lint partition runs whole.
+A `workflow_dispatch` given a `base` ref plans the dispatched branch against that ref as a pull request would, so a branch's plan can be tried on GitHub before it has a pull request.
+Pushes, `workflow_dispatch` without a `base` input, the `full-ci` label, CI configuration, shared libraries, broadly sourced files, more than 25 changed files, deletions under `bin/` or `tests/`, and unmapped paths run the full suite instead.
+The script header owns the plan format, the full-suite rules, their measured thresholds, and the gate contract; `tests/fm-ci-plan.test.sh` and `tests/fm-ci-workflow.test.sh` hold them.
 
 ## Local entry points
 
