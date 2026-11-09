@@ -1,0 +1,15 @@
+2026-11-08: Arjun approved a single funnel for noticed items and ideas at the helm ("Yes want it setup that way"), and the same day ruled that the Monday top 3 ranks by what matters to him rather than profit first.
+Decision: workers, Cade, Codex and the second mate hand what they notice to firstmate, never to Arjun directly, and an agent in a live chat with him may add one line at the end of that reply.
+Firstmate acts first: it fixes a routine item inside the fleet's standing authority without reaching him, merges a duplicate, and keeps an idea that fails the idea bar filed and unshown.
+Only two things reach him: a noticed item urgent or doing harm (money, customers, account health, security), told NOW in a message of its own, and the Monday `triage-weekly` row, which brings the few items that need his call, each with a recommendation and a one-tap answer, and parks the rest.
+Firstmate no longer mentions each noticed item in its next reply, unless it is urgent or bears on the topic at hand.
+The Monday top 3 ranks ideas by what matters: keep Ecomills and Kempf healthy and growing, spend his time only where needed, take initiative across the ecosystem, and leave work making the next one easier.
+This changes the "shows each noticed item once" and "Atlas's ranking rule" parts of the [2026-10-27 noticed queue](2026-10-27-noticed-queue.md); the idea bar of [2026-10-31](2026-10-31-idea-bar.md) is unchanged.
+Why: each mention in the next reply cost his attention for items that did not need him, while urgent harm and the calls only he can make still reach him on time.
+No upstream proposal: the noticed queue is this fork's own patch.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| `file --now` lists a noticed item as urgent (label `now`), whether filed, matched or reopened, keeps it urgent until shown, and refuses it on an idea; every other unseen row waits for the Monday triage | `bin/fm-noticed.sh` (`cmd_file`, `list_noticed`, `drop_unseen`, header), `tests/fm-noticed.test.sh` (`test_now_marks_an_item_urgent`) | none (fork-only script) | carried | 45dd50a5 |
+| The wake drain's NOTICED section prints only `now` rows and says to tell the captain in a message of its own, replacing the mention-in-the-next-reply line | `bin/fm-wake-drain.sh` (`print_noticed_section`, header), `tests/fm-noticed.test.sh` (`test_the_drain_shows_only_urgent_items`) | none (fork-only section) | carried | 45dd50a5 |
+| The skill's one funnel, Acting first, What reaches him and Monday triage, and the top 3 ranked by what matters | `.agents/skills/noticed-queue/SKILL.md` | none (fork-only skill) | carried | 45dd50a5 |
