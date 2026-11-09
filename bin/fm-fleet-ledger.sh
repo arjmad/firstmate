@@ -11,7 +11,8 @@
 # Producers:
 #   bin/fm-brief.sh              appended (in every worker's status command,
 #                                right after its unchanged plain append)
-#   bin/fm-spawn.sh              dispatched (fresh spawns only, never relaunch)
+#   bin/fm-spawn.sh              dispatched (every launch except --relaunch, so
+#                                a second mate's respawn records one each time)
 #   bin/fm-watch.sh              capture, once per poll cycle
 #   bin/fm-pr-check.sh           pr_ready (a PR registered for review, not the
 #                                merge-time re-record from bin/fm-pr-merge.sh)
@@ -35,6 +36,10 @@
 # for a later capture. Records are appended before the offset is saved, so an
 # interrupted capture repeats records rather than losing them. Without any
 # grown log, capture returns after one size listing and sources nothing.
+# A capture that starts at byte 0 (no offset, or a reset one) skips a line
+# carrying a well-formed [at=] stamp when a task.status record with the same
+# at, state, key, and text is already in the ledger for that task, so a lost
+# or reset offset does not record a stamped line twice.
 # appended captures only that task, so a worker's status line is recorded as
 # soon as the worker writes it; the byte offset keeps the per-poll capture from
 # recording it again. Its arguments name the home, because a worker has no
@@ -43,7 +48,8 @@
 # pr_ready, merged, and cleaned_up first capture their own task, so its status
 # records precede them. cleaned_up then deletes the task's offset, because teardown
 # retires that status log right after. dispatched deletes any leftover offset
-# so a reused task id starts at byte 0 of its fresh log.
+# so a reused task id starts at byte 0 of its fresh log, except that a second
+# mate whose status log exists keeps it, so its respawn keeps the log's place.
 # Every write holds state/.fleet-ledger.lock.
 #
 # Environment: FM_HOME, FM_STATE_OVERRIDE, and FM_CONFIG_OVERRIDE resolve the
@@ -141,27 +147,49 @@ load_libs() {
   LIBS_LOADED=1
 }
 
-# append <event> <task> <jq-object-of-extra-members> [jq --arg pairs...]
-append() {
-  local event=$1 task=$2 extra=$3 line
+# record <event> <task> <jq-object-of-extra-members> [jq --arg pairs...]
+record() {
+  local event=$1 task=$2 extra=$3
   shift 3
-  line=$(jq -cn --arg event "$event" --arg task "$task" "$@" \
-    "def n: if . == \"\" then null else . end; {v: 1, ts: (now | floor), event: \$event, task: \$task} + ($extra)") \
-    || return 1
+  jq -cn --arg event "$event" --arg task "$task" "$@" \
+    "def n: if . == \"\" then null else . end; {v: 1, ts: (now | floor), event: \$event, task: \$task} + ($extra)"
+}
+
+append() { # same arguments as record
+  local line
+  line=$(record "$@") || return 1
   printf '%s\n' "$line" >> "$LEDGER"
 }
 
+# The identity of a stamped status record; capture records each one once per task.
+STAMPED_KEY='select(.event == "task.status" and .at != null) | [.at, .state, .key, .text]'
+DEDUPE=0
+RECORDED_KEYS=
+
+load_recorded_keys() { # <task>: RECORDED_KEYS gets one stamped key per line
+  [ -s "$LEDGER" ] || return 0
+  RECORDED_KEYS=$(grep -F "\"task\":\"$1\"" "$LEDGER" |
+    jq -cR --arg task "$1" "fromjson? | select(.task == \$task) | $STAMPED_KEY") || RECORDED_KEYS=
+}
+
 # The status-line grammar belongs to bin/fm-classify-lib.sh; this only projects it.
-append_status() { # <task> <status-line>
-  local task=$1 line=$2 verb key text
+append_status() { # <task> <status-line>; DEDUPE=1 checks a stamped line against RECORDED_KEYS
+  local task=$1 line=$2 verb key text at rec id
   status_line_verb "$line" verb
   case "$verb" in [a-z]*) case "$verb" in *[!a-z-]*) verb='' ;; esac ;; *) verb='' ;; esac
   key=$(_fm_decision_key "$line" 2>/dev/null) || key=''
   [ "$key" != default ] || key=''
+  _fm_status_at_epoch "$line" at || at=''
   text=${line#*:}
-  append task.status "$task" \
-    "{state: (\$state | n), key: (\$key | n), text: \$text[0:$TEXT_MAX_CHARS]}" \
-    --arg state "$verb" --arg key "$key" --arg text "$text"
+  rec=$(record task.status "$task" \
+    "{state: (\$state | n), key: (\$key | n), text: \$text[0:$TEXT_MAX_CHARS], at: (\$at | if . == \"\" then null else tonumber end)}" \
+    --arg state "$verb" --arg key "$key" --arg text "$text" --arg at "$at") || return 1
+  if [ "$DEDUPE" = 1 ] && [ -n "$at" ]; then
+    id=$(jq -c "$STAMPED_KEY" <<< "$rec") || return 1
+    case $'\n'"$RECORDED_KEYS"$'\n' in *$'\n'"$id"$'\n'*) return 0 ;; esac
+    RECORDED_KEYS+=$'\n'"$id"
+  fi
+  printf '%s\n' "$rec" >> "$LEDGER"
 }
 
 capture_task() { # <task>; caller holds the lock
@@ -180,6 +208,11 @@ capture_task() { # <task>; caller holds the lock
   tail=${data##*$'\n'}
   complete=${data%"$tail"}
   [ -n "$complete" ] || return 0
+  DEDUPE=0
+  RECORDED_KEYS=
+  if [ "$offset" -eq 0 ]; then
+    case "$complete" in *'[at='*) DEDUPE=1; load_recorded_keys "$task" ;; esac
+  fi
   while IFS= read -r line; do
     [ -n "${line//[[:space:]]/}" ] || continue
     append_status "$task" "$line" || return 1
@@ -208,7 +241,8 @@ case "$cmd" in
     capture_task "$APPENDED_TASK" || rc=1
     ;;
   dispatched)
-    rm -f -- "$(offset_path "$2")"
+    { [ "$3" = secondmate ] && [ -f "$STATE/$2.status" ] && [ ! -L "$STATE/$2.status" ]; } ||
+      rm -f -- "$(offset_path "$2")"
     append task.dispatched "$2" \
       '{kind: ($kind | n), project: ($project | n), harness: ($harness | n), model: ($model | n)}' \
       --arg kind "$3" --arg project "$4" --arg harness "$5" --arg model "$6" || rc=1

@@ -113,11 +113,11 @@ test_flag_on_records_the_task_lifecycle() {
   rows=$(ledger_rows '[.event, .task] + (del(.v, .ts, .event, .task) | to_entries | map(.value))')
   assert_equals "$(cat <<EOF
 ["task.dispatched","$TASK","ship","sample","claude",null]
-["task.status","$TASK","working",null," setup done"]
-["task.status","$TASK","needs-decision","pick-one"," choose \"a\"\\\\b or c"]
-["task.status","$TASK","resolved","pick-one"," [key=pick-one]  chose a"]
-["task.status","$TASK",null,null,"partial line without its newline finished"]
-["task.status","$TASK","done",null," ready in branch"]
+["task.status","$TASK","working",null," setup done",1790000000]
+["task.status","$TASK","needs-decision","pick-one"," choose \"a\"\\\\b or c",null]
+["task.status","$TASK","resolved","pick-one"," [key=pick-one]  chose a",null]
+["task.status","$TASK",null,null,"partial line without its newline finished",null]
+["task.status","$TASK","done",null," ready in branch",null]
 ["task.merged","$TASK","local"]
 ["task.cleaned_up","$TASK"]
 EOF
@@ -287,6 +287,58 @@ test_flag_off_writes_nothing() {
   pass "flag off: the whole lifecycle leaves no ledger file, offset, or lock"
 }
 
+ledger() {  # <fm-fleet-ledger.sh arguments...>
+  in_home "$ROOT/bin/fm-fleet-ledger.sh" "$@" || fail "fm-fleet-ledger.sh $* failed"
+}
+
+test_secondmate_respawn_keeps_its_place() {
+  make_case on-respawn on
+  printf 'working: one\nneeds-decision: two\n' > "$HOME_DIR/state/$TASK.status"
+  ledger dispatched "$TASK" secondmate "" claude ""
+  ledger capture
+  ledger dispatched "$TASK" secondmate "" claude ""
+  ledger capture
+  assert_equals "$(cat <<'EOF'
+["task.dispatched",null]
+["task.status"," one"]
+["task.status"," two"]
+["task.dispatched",null]
+EOF
+)" "$(ledger_rows '[.event, .text]')" "ledger rows after a respawn"
+  pass "a second mate's respawn keeps its status log's place, so its earlier lines are not recorded again"
+}
+
+test_fresh_dispatch_starts_at_byte_zero() {
+  make_case on-fresh on
+  printf '30\n' > "$HOME_DIR/state/.$TASK.fleet-ledger-offset"
+  printf 'working [at=1790000000]: setup done\n' > "$HOME_DIR/state/$TASK.status"
+  ledger dispatched "$TASK" ship sample claude ""
+  ledger capture
+  assert_equals '["task.dispatched",null]
+["task.status"," setup done"]' "$(ledger_rows '[.event, .text]')" "ledger rows after a fresh dispatch"
+  pass "a fresh dispatch drops a leftover offset even when its worker wrote first, so the new status log is recorded from its first byte"
+}
+
+test_capture_skips_an_already_recorded_stamped_line() {
+  make_case on-dedupe on
+  printf '%s\n' 'working [at=1790000000]: same' 'working: unstamped' > "$HOME_DIR/state/$TASK.status"
+  ledger capture
+  rm -f "$HOME_DIR/state/.$TASK.fleet-ledger-offset"
+  printf '%s\n' 'working [at=1790000000]: same' 'working [at=1790000000]: other text' >> "$HOME_DIR/state/$TASK.status"
+  ledger capture
+  assert_equals "$(cat <<'EOF'
+[1790000000," same"]
+[null," unstamped"]
+[null," unstamped"]
+[1790000000," other text"]
+EOF
+)" "$(ledger_rows 'select(.event == "task.status") | [.at, .text]')" "status rows after a replayed capture"
+  pass "capture records a stamped line once per task even when its offset is lost, and keeps recording unstamped lines and new text"
+}
+
+test_secondmate_respawn_keeps_its_place
+test_fresh_dispatch_starts_at_byte_zero
+test_capture_skips_an_already_recorded_stamped_line
 test_flag_on_records_the_task_lifecycle
 test_flag_on_records_a_pr_merge_once
 test_flag_on_records_a_pr_registration
