@@ -216,7 +216,7 @@ test_the_drain_shows_only_urgent_items() {
   assert_contains "$drain" "noticed-refunds-failing: Refunds failing" "the urgent item is missing from the section"
   assert_not_contains "$drain" "canary-red" "a waiting item was shown beside the urgent one"
   assert_not_contains "$drain" "bundle-slow" "a top idea was shown beside the urgent one"
-  assert_contains "$drain" "in a message of its own" "the section does not say to tell him on its own"
+  assert_contains "$drain" "leading your final captain-facing message" "the section does not say to lead his reply with it"
   assert_contains "$drain" "bin/fm-noticed.sh shown <id>" "the section does not say how to mark it shown"
   noticed "$home" shown noticed-refunds-failing >/dev/null
   drain=$(run_drain "$home") || fail "the drain failed after marking"

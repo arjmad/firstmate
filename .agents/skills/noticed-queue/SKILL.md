@@ -46,7 +46,7 @@ Firstmate settles what it can before anything reaches Arjun.
 Only two things reach Arjun from this queue.
 
 - **NOW.** A noticed item filed with `--now`, urgent or doing harm (money, customers, account health, security), is the only thing the wake drain's NOTICED section prints.
-  Tell him in a message of its own, not folded into another reply, then run `bin/fm-noticed.sh shown <id>...`.
+  Tell him this turn, leading the turn's final captain-facing message with it rather than burying it in other news, then run `bin/fm-noticed.sh shown <id>...`.
 - **WEEKLY.** Everything else waits for the Monday triage below, which brings only the few items that need his call.
 
 Do not mention a filed item in your next reply, unless it is a NOW item or bears on the topic at hand.

@@ -636,7 +636,7 @@ EOF
   if [ "$omitted" -gt 0 ]; then
     printf 'NOTICED: %d more omitted (byte cap)\n' "$omitted" || return 1
   fi
-  printf 'NOTICED: tell the captain now, in a message of its own rather than folded into another reply, then mark each: bin/fm-noticed.sh shown <id>...\n' || return 1
+  printf 'NOTICED: tell the captain this turn, leading your final captain-facing message with it, then mark each: bin/fm-noticed.sh shown <id>...\n' || return 1
 }
 
 # Print BRANCH OUTCOMES: what the supervision host's session recorded since
