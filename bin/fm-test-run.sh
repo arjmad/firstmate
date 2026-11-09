@@ -153,11 +153,14 @@
 # shared tests/assets/ file. A test that names either is selected as that
 # SCRIPT, because the reference is per-script evidence. Consumer bin/ scripts
 # still resolve through the curated map, so recorded family-level coupling still
-# expands to the whole family. Every changed bin/ path, curated or not, also
+# expands to the whole family. Changed paths are read with --no-renames, so a
+# rename maps both its old and new path. Every changed bin/ path, curated or not, also
 # selects each test that names its basename, so a suite outside the curated
 # family that exercises the script directly is never left out.
 # Documentation (README.md, LICENSE, assets/, docs/, .gitignore) selects the
-# suites that name its path, per script; any tracked prose file (*.md, *.mdx,
+# suites that name its path, per script, and a non-prose file there (a docs/
+# JSON inventory, an asset) that no suite names is refused like any unmapped
+# path; any tracked prose file (*.md, *.mdx,
 # *.rst, *.txt, docs/examples/) also selects tests/fm-documentation-audiences.test.sh,
 # because that suite checks every prose file without naming one.
 # tests/lib.sh, tests/fixtures.sh, tests/*-helpers.sh and tests/*-fixture.sh are
@@ -1893,7 +1896,18 @@ families_for_changed_path() {
       printf '%s\n' "__unmapped__:$path"
       ;;
     README.md|LICENSE|assets/*|docs/*|.gitignore)
-      scripts_for_test_reference "$path" || true
+      case "$path" in
+        *.md|*.mdx|*.rst|*.txt|LICENSE|.gitignore)
+          scripts_for_test_reference "$path" || true
+          ;;
+        *)
+          if [ -e "$path" ]; then
+            scripts_for_test_reference "$path" || printf '%s\n' "__unmapped__:$path"
+          else
+            scripts_for_test_reference "$path" || true
+          fi
+          ;;
+      esac
       ;;
     *)
       if [ -e "$path" ]; then
@@ -1944,8 +1958,8 @@ select_changed() {
         fi
         ;;
     esac
-  done < <(git -C "$ROOT" diff --name-only "${base}...HEAD" 2>/dev/null; \
-           git -C "$ROOT" diff --name-only HEAD 2>/dev/null; \
+  done < <(git -C "$ROOT" diff --name-only --no-renames "${base}...HEAD" 2>/dev/null; \
+           git -C "$ROOT" diff --name-only --no-renames HEAD 2>/dev/null; \
            git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null)
 
   # Dedup families

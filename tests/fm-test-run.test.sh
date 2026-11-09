@@ -559,6 +559,36 @@ test_changed_curated_bin_also_selects_its_direct_readers() {
   pass "a changed curated bin script selects its curated suite and every suite naming it"
 }
 
+# A renamed document still selects the suites naming its old path, and a
+# non-prose documentation file no suite names is refused rather than silently
+# selecting nothing.
+test_changed_documentation_renames_and_unread_files() {
+  local tmp repo listed err
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-changed-docs-edge.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+  printf 'a page\n' >"$repo/docs/zz-old-page.md"
+  printf '# docs/zz-old-page.md\n' >>"$repo/tests/fm-brief.test.sh"
+  printf '{}\n' >"$repo/docs/zz-inventory.json"
+  git -C "$repo" add -A
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm "docs fixtures"
+
+  git -C "$repo" mv docs/zz-old-page.md docs/zz-new-page.md
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm "rename"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD~1)
+  assert_contains "$listed" "tests/fm-brief.test.sh" \
+    "a suite naming a renamed document's old path must be selected"
+
+  printf '{"x":1}\n' >"$repo/docs/zz-inventory.json"
+  if err=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1); then
+    fail "an unread non-prose documentation file must be refused, got: $err"
+  fi
+  assert_contains "$err" "no changed-test mapping for source path: docs/zz-inventory.json" \
+    "the refusal must name the unread file"
+  rm -rf "$tmp"
+  pass "a renamed document selects its old readers, and an unread non-prose document is refused"
+}
+
 # Exercise begin/end markers from real fixture processes to prove the automatic
 # changed-suite default and its explicit serial override.
 test_changed_uses_bounded_automatic_concurrency() {
@@ -1954,6 +1984,7 @@ test_shell_line_ending_policy_selects_runner_contract
 test_changed_dependency_selection_and_unmapped_failure
 test_changed_bin_reference_selects_per_script_not_per_family
 test_changed_curated_bin_also_selects_its_direct_readers
+test_changed_documentation_renames_and_unread_files
 test_changed_documentation_selects_its_readers_and_tree_checkers
 test_only_file_narrows_a_selection_and_refuses_strangers
 test_changed_uses_bounded_automatic_concurrency
