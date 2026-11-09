@@ -1,0 +1,6 @@
+PR: #136
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| The composer scan does not read Claude Code 2.1.310's selected slash-menu row, drawn with the composer's own `❯` under its closing rule, as a lower live composer, so a typed `/exit` is proven and submitted; the 2026-11-09 sync narrowed it to titled composer rules beside upstream's popup demotion | `bin/fm-composer-lib.sh` (`_fm_composer_row_is_slash_menu_selection`, `_fm_composer_scan_screen`), `tests/fm-backend-herdr.test.sh` (`test_send_text_submit_claude_slash_menu_selection_row_is_not_the_composer`, `test_send_text_submit_named_claude_slash_menu_selection_row_is_not_the_composer`), `tests/fm-composer-lib.test.sh` | `bin/fm-composer-lib.sh` (`_fm_composer_bare_is_popup_selection`), `tests/fm-composer-lib.test.sh` | conflicted | c8d8fdad |
+| The opt-in submit-confirm live guard launches Claude with `--name` as Firstmate does and checks exit through `fm_backend_herdr_agent_state`, and the dated 2.1.310 measurement is recorded | `tests/fm-herdr-submit-confirm-live-e2e.test.sh`, `docs/verification/runtime-backends.md` ("Claude exit behind the slash-command popup") | `tests/fm-herdr-submit-confirm-live-e2e.test.sh`, `docs/verification/runtime-backends.md` | conflicted | c8d8fdad |
