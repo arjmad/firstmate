@@ -3089,7 +3089,8 @@ test_codex_permission_modes() {
       status=$?
       expect_code 0 "$status" "Codex $kind spawn under $mode should succeed: $out"
       launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
-      flags="codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' "
+      # This fork pins the standard tier on every Codex launch (-c service_tier).
+      flags="codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' -c 'service_tier=\"default\"' "
       if [ "$mode" = restricted ]; then
         flags+='--sandbox workspace-write --ask-for-approval on-request '
         assert_not_contains "$launch" '--dangerously-bypass-approvals-and-sandbox' "restricted must not bypass approvals"

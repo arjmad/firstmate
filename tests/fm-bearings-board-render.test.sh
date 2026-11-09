@@ -538,6 +538,7 @@ EOF
   calls=$(printf '%s' "$snapshot" | jq '[.decisions_open[] | {
     key:.key,type:"decision",repo:"sample",title:"Rollout scope",decide:.question,
     options:[{value:"a",label:"Retain the workflow"},{value:"b",label:"Defer the migration"}],
+    recommend_value:"a",allow_freeform:true,
     case_against:"The migration waits for another review."}]')
   full_payload "$home/payload.json"
   jq --argjson calls "$calls" '.captains_call = $calls' "$home/payload.json" > "$home/payload.tmp" \
