@@ -121,7 +121,8 @@ init_changed_fixture_repo() {
     fm-backend-cmux.test.sh \
     fm-backend-zellij.test.sh \
     fm-control-herdr-smoke.test.sh \
-    fm-backend-orca.test.sh; do
+    fm-backend-orca.test.sh \
+    fm-fork-decisions.test.sh; do
     printf '#!/usr/bin/env bash\n# tests/lib.sh\n' >"$repo/tests/$script"
     chmod +x "$repo/tests/$script"
   done
@@ -443,6 +444,68 @@ test_changed_dependency_selection_and_unmapped_failure() {
   pass "changed selection covers dependents, fails closed for live unmapped source, and accepts retired unconsumed source"
 }
 
+test_changed_documentation_selects_its_readers_and_tree_checkers() {
+  local tmp repo listed
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-changed-docs.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+
+  printf 'new page\n' >"$repo/docs/unnamed-page.md"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD) \
+    || fail "an unnamed document must never die as unmapped"
+  [ "$listed" = "tests/fm-documentation-audiences.test.sh" ] \
+    || fail "an unnamed document must select only the tree-wide prose check, got: $listed"
+  rm "$repo/docs/unnamed-page.md"
+
+  printf 'named page\n' >"$repo/docs/named-page.md"
+  printf '# docs/named-page.md\n' >>"$repo/tests/fm-brief.test.sh"
+  git -C "$repo" add tests/fm-brief.test.sh
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm reader
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD | LC_ALL=C sort)
+  [ "$listed" = "$(printf '%s\n' tests/fm-brief.test.sh tests/fm-documentation-audiences.test.sh)" ] \
+    || fail "a named document must select its reader per script and the prose check, got: $listed"
+  rm "$repo/docs/named-page.md"
+
+  mkdir -p "$repo/docs/fork-decisions"
+  printf 'record\n' >"$repo/docs/fork-decisions/2026-11-09-probe.md"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$listed" "tests/fm-fork-decisions.test.sh" \
+    "a new fork-decision record must select the suite that checks every record"
+  rm -r "$repo/docs/fork-decisions"
+
+  printf 'license\n' >"$repo/LICENSE"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD) \
+    || fail "a non-prose document must never die as unmapped"
+  [ -z "$listed" ] || fail "an unnamed non-prose document must select nothing, got: $listed"
+
+  rm -rf "$tmp"
+  pass "documents select the suites naming them and the tree-wide checkers, and never die"
+}
+
+test_only_file_narrows_a_selection_and_refuses_strangers() {
+  local tmp lane members first second listed err
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-only.XXXXXX")
+  lane=portable-parallel-1
+  members=$("$RUNNER" --list --lane "$lane") || fail "could not list $lane"
+  first=$(printf '%s\n' "$members" | sed -n 1p)
+  second=$(printf '%s\n' "$members" | sed -n 2p)
+  [ -n "$first" ] && [ -n "$second" ] || fail "$lane needs two members for this test"
+  printf '%s\n' "$second" "$first" >"$tmp/only"
+  listed=$("$RUNNER" --list --lane "$lane" --only "$tmp/only") || fail "--only on lane members must pass"
+  [ "$listed" = "$(printf '%s\n' "$first" "$second")" ] \
+    || fail "--only must keep exactly the listed members in selection order, got: $listed"
+  : >"$tmp/empty"
+  listed=$("$RUNNER" --list --lane "$lane" --only "$tmp/empty") || fail "an empty --only file must pass"
+  [ -z "$listed" ] || fail "an empty --only file must select nothing, got: $listed"
+  printf '%s\n' "$first" tests/fm-not-a-member.test.sh >"$tmp/stranger"
+  if err=$("$RUNNER" --list --lane "$lane" --only "$tmp/stranger" 2>&1); then
+    fail "--only must refuse a script outside the selection"
+  fi
+  assert_contains "$err" "tests/fm-not-a-member.test.sh" "the refusal must name the stranger"
+  rm -rf "$tmp"
+  pass "--only narrows a lane to its listed members and refuses a script outside it"
+}
+
 # A direct test reference is per-script evidence. Widening it to the referencing
 # test's whole family is what turned a one-line change to a shared helper into
 # every real-Herdr E2E, including scripts with no dependency on it at all.
@@ -472,6 +535,58 @@ test_changed_bin_reference_selects_per_script_not_per_family() {
 
   rm -rf "$tmp"
   pass "a bin reference selects the referencing scripts, and consumers still select their curated families"
+}
+
+# A curated arm names a script's own suite, but another suite that exercises the
+# script directly must still run when it changes.
+test_changed_curated_bin_also_selects_its_direct_readers() {
+  local tmp repo listed
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-changed-readers.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+  printf '# bin/fm-quota-choose.sh\n' >>"$repo/tests/fm-bearings-snapshot.test.sh"
+  git -C "$repo" add -A
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm "reader names the curated script"
+
+  printf '\n' >>"$repo/bin/fm-quota-choose.sh"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+
+  assert_contains "$listed" "tests/fm-quota-choose.test.sh" \
+    "the curated suite of the changed script must still be selected"
+  assert_contains "$listed" "tests/fm-bearings-snapshot.test.sh" \
+    "a suite outside the curated arm that names the changed script must be selected"
+  rm -rf "$tmp"
+  pass "a changed curated bin script selects its curated suite and every suite naming it"
+}
+
+# A renamed document still selects the suites naming its old path, and a
+# non-prose documentation file no suite names is refused rather than silently
+# selecting nothing.
+test_changed_documentation_renames_and_unread_files() {
+  local tmp repo listed err
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-changed-docs-edge.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+  printf 'a page\n' >"$repo/docs/zz-old-page.md"
+  printf '# docs/zz-old-page.md\n' >>"$repo/tests/fm-brief.test.sh"
+  printf '{}\n' >"$repo/docs/zz-inventory.json"
+  git -C "$repo" add -A
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm "docs fixtures"
+
+  git -C "$repo" mv docs/zz-old-page.md docs/zz-new-page.md
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm "rename"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD~1)
+  assert_contains "$listed" "tests/fm-brief.test.sh" \
+    "a suite naming a renamed document's old path must be selected"
+
+  printf '{"x":1}\n' >"$repo/docs/zz-inventory.json"
+  if err=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>&1); then
+    fail "an unread non-prose documentation file must be refused, got: $err"
+  fi
+  assert_contains "$err" "no changed-test mapping for source path: docs/zz-inventory.json" \
+    "the refusal must name the unread file"
+  rm -rf "$tmp"
+  pass "a renamed document selects its old readers, and an unread non-prose document is refused"
 }
 
 # Exercise begin/end markers from real fixture processes to prove the automatic
@@ -730,7 +845,7 @@ test_empty_selection_emits_summary() {
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-empty.XXXXXX")
   repo="$tmp/repo"
   init_changed_fixture_repo "$repo"
-  printf 'documentation only\n' >"$repo/README.md"
+  printf 'ignored-only\n' >"$repo/.gitignore"
   out=$(cd "$repo" && bin/fm-test-run.sh --changed --base HEAD --json "$tmp/artifacts/timing.json" 2>"$tmp/err") \
     || fail "empty valid changed selection must pass"
   printf '%s\n' "$out" | grep -Eq \
@@ -1868,6 +1983,10 @@ test_changed_runner_surfaces_select_their_family
 test_shell_line_ending_policy_selects_runner_contract
 test_changed_dependency_selection_and_unmapped_failure
 test_changed_bin_reference_selects_per_script_not_per_family
+test_changed_curated_bin_also_selects_its_direct_readers
+test_changed_documentation_renames_and_unread_files
+test_changed_documentation_selects_its_readers_and_tree_checkers
+test_only_file_narrows_a_selection_and_refuses_strangers
 test_changed_uses_bounded_automatic_concurrency
 test_windows_posix_mode_emulation_does_not_fail_parallel_runs
 test_script_list_uses_bounded_automatic_concurrency

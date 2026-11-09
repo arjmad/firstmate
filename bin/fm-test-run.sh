@@ -44,6 +44,12 @@
 #                   Every other selection uses serial weights alone.
 #                   Equal weights are ordered by path under LC_ALL=C.
 #   --base <ref>    with --changed, compare against this ref (default: origin/main)
+#   --only <file>   after selection (and --exclude-family), keep only the
+#                   scripts listed one per line in <file>, in selection order.
+#                   A listed script outside the selection is refused, so a
+#                   list built for another lane or commit fails loudly. The
+#                   lane's other rules (serial lanes, ofN refusal, gate-skip
+#                   flags, timing artifact) are unchanged.
 #   --exclude-family <name>
 #                   drop scripts whose primary family matches <name> after selection
 #                   (repeatable; portable CI lanes exclude real-herdr-gated so the
@@ -147,7 +153,16 @@
 # shared tests/assets/ file. A test that names either is selected as that
 # SCRIPT, because the reference is per-script evidence. Consumer bin/ scripts
 # still resolve through the curated map, so recorded family-level coupling still
-# expands to the whole family.
+# expands to the whole family. Changed paths are read with --no-renames, so a
+# rename maps both its old and new path. Every changed bin/ path, curated or not, also
+# selects each test that names its basename, so a suite outside the curated
+# family that exercises the script directly is never left out.
+# Documentation (README.md, LICENSE, assets/, docs/, .gitignore) selects the
+# suites that name its path, per script, and a non-prose file there (a docs/
+# JSON inventory, an asset) that no suite names is refused like any unmapped
+# path; any tracked prose file (*.md, *.mdx,
+# *.rst, *.txt, docs/examples/) also selects tests/fm-documentation-audiences.test.sh,
+# because that suite checks every prose file without naming one.
 # tests/lib.sh, tests/fixtures.sh, tests/*-helpers.sh and tests/*-fixture.sh are
 # shared files that map to the suites naming them; a fixture under
 # tests/fixtures/<dir>/ is mapped by that directory instead. Curated family arms
@@ -170,6 +185,7 @@ cd "$ROOT" || exit 1
 
 MODE=
 LIST_ONLY=0
+ONLY_FILE=
 LIST_SCHEDULED=0
 LIST_FAMILIES=0
 LIST_CONCURRENT_SAFE_FAMILIES=0
@@ -1490,6 +1506,11 @@ families_for_unmapped_bin() {
 families_for_changed_path() {
   local path=$1 fixture_ref
   case "$path" in
+    *.md|*.mdx|*.rst|*.txt|docs/examples/*)
+      printf '%s\n' __script__:fm-documentation-audiences.test.sh
+      ;;
+  esac
+  case "$path" in
     tests/fm-backend-herdr-eventwait.test.py)
       printf '%s\n' real-herdr-gated
       printf '%s\n' backend-dispatch
@@ -1875,6 +1896,18 @@ families_for_changed_path() {
       printf '%s\n' "__unmapped__:$path"
       ;;
     README.md|LICENSE|assets/*|docs/*|.gitignore)
+      case "$path" in
+        *.md|*.mdx|*.rst|*.txt|LICENSE|.gitignore)
+          scripts_for_test_reference "$path" || true
+          ;;
+        *)
+          if [ -e "$path" ]; then
+            scripts_for_test_reference "$path" || printf '%s\n' "__unmapped__:$path"
+          else
+            scripts_for_test_reference "$path" || true
+          fi
+          ;;
+      esac
       ;;
     *)
       if [ -e "$path" ]; then
@@ -1916,8 +1949,17 @@ select_changed() {
           ;;
       esac
     done < <(families_for_changed_path "$path")
-  done < <(git -C "$ROOT" diff --name-only "${base}...HEAD" 2>/dev/null; \
-           git -C "$ROOT" diff --name-only HEAD 2>/dev/null; \
+    case "$path" in
+      bin/*)
+        if [ -e "$path" ]; then
+          while IFS= read -r entry; do
+            [ -n "$entry" ] && wanted_scripts+=("${entry#__script__:}")
+          done < <(scripts_for_test_reference "$(basename "$path")" || true)
+        fi
+        ;;
+    esac
+  done < <(git -C "$ROOT" diff --name-only --no-renames "${base}...HEAD" 2>/dev/null; \
+           git -C "$ROOT" diff --name-only --no-renames HEAD 2>/dev/null; \
            git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null)
 
   # Dedup families
@@ -1993,6 +2035,35 @@ apply_exclude_families() {
       fi
     done
     [ "$keep" -eq 1 ] && kept+=("$s")
+  done
+  SCRIPTS=("${kept[@]+"${kept[@]}"}")
+}
+
+apply_only_file() {
+  local s want found
+  local -a wanted=() kept=()
+  [ -n "$ONLY_FILE" ] || return 0
+  [ -f "$ONLY_FILE" ] || die "--only file not found: $ONLY_FILE"
+  while IFS= read -r want || [ -n "$want" ]; do
+    [ -n "$want" ] || continue
+    want=${want#./}
+    found=0
+    for s in "${SCRIPTS[@]+"${SCRIPTS[@]}"}"; do
+      if [ "$s" = "$want" ]; then
+        found=1
+        break
+      fi
+    done
+    [ "$found" -eq 1 ] || die "--only lists $want, which is not in the $SELECTION_DESC selection"
+    wanted+=("$want")
+  done <"$ONLY_FILE"
+  for s in "${SCRIPTS[@]+"${SCRIPTS[@]}"}"; do
+    for want in "${wanted[@]+"${wanted[@]}"}"; do
+      if [ "$s" = "$want" ]; then
+        kept+=("$s")
+        break
+      fi
+    done
   done
   SCRIPTS=("${kept[@]+"${kept[@]}"}")
 }
@@ -2201,6 +2272,15 @@ while [ "$#" -gt 0 ]; do
       # For aggregation we accept only input JSON paths as free args after this.
       MODE=aggregate
       ;;
+    --only)
+      [ "$#" -gt 1 ] || die "--only requires a file of script paths"
+      ONLY_FILE=$2
+      shift 2
+      ;;
+    --only=*)
+      ONLY_FILE=${1#--only=}
+      shift
+      ;;
     --exclude-family)
       [ "$#" -gt 1 ] || die "--exclude-family requires a name"
       EXCLUDE_FAMILIES+=("$2")
@@ -2342,6 +2422,10 @@ esac
 apply_exclude_families
 if [ "${#EXCLUDE_FAMILIES[@]}" -gt 0 ]; then
   SELECTION_DESC="${SELECTION_DESC};exclude-family=$(IFS=,; printf '%s' "${EXCLUDE_FAMILIES[*]}")"
+fi
+apply_only_file
+if [ -n "$ONLY_FILE" ]; then
+  SELECTION_DESC="${SELECTION_DESC};only=${#SCRIPTS[@]}"
 fi
 if [ -n "$FAIL_ON_GATE_SKIP" ]; then
   SELECTION_DESC="${SELECTION_DESC};fail-on-gate-skip=$FAIL_ON_GATE_SKIP"
