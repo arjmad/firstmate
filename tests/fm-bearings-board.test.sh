@@ -431,7 +431,7 @@ SH
 }
 
 # The build prints the session URL in the phone-openable form the host's
-# `tailscale serve` publishes (bin/fm-lavish-url.sh), while its own liveness
+# `tailscale serve` publishes (bin/fm-lavish-link.sh), while its own liveness
 # check still reads lavish-axi's raw output, and prints the raw URL when no
 # serve origin exists.
 test_build_prints_the_phone_openable_session_url() {

@@ -311,6 +311,33 @@ test_shell_line_ending_policy_selects_runner_contract() {
   pass "shell line-ending policy selects runner coverage"
 }
 
+test_changed_remote_inheritance_selects_generation_contract() {
+  local tmp repo listed source
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-inheritance.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+  printf '#!/usr/bin/env bash\n' >"$repo/tests/fm-remote-inherit-generation.test.sh"
+  chmod +x "$repo/tests/fm-remote-inherit-generation.test.sh"
+  for source in fm-remote-inherit-push.sh fm-remote-inherit.sh fm-secondmate-nudge-lib.sh; do
+    : >"$repo/bin/$source"
+  done
+  git -C "$repo" add .
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm inheritance-fixture
+  for source in fm-remote-inherit-push.sh fm-remote-inherit.sh fm-secondmate-nudge-lib.sh; do
+    printf '\n' >>"$repo/bin/$source"
+    listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+    assert_contains "$listed" "tests/fm-remote-inherit-generation.test.sh" \
+      "$source change must select the generation regression"
+    assert_contains "$listed" "tests/fm-secondmate-safety.test.sh" \
+      "$source change must retain secondmate coverage"
+    assert_not_contains "$listed" "tests/fm-ask-user-authority.test.sh" \
+      "$source change must not select the whole pure-contract-unit family"
+    git -C "$repo" checkout -q -- "bin/$source"
+  done
+  rm -rf "$tmp"
+  pass "changed inheritance sender, receiver and counter select the focused generation contract"
+}
+
 test_changed_dependency_selection_and_unmapped_failure() {
   local tmp repo listed rc
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-changed.XXXXXX")
@@ -1122,6 +1149,21 @@ test_exclude_family() {
   pass "exclude-family drops the named primary family after selection"
 }
 
+test_tern_family_selection() {
+  local listed families
+  families=$("$RUNNER" --list-families)
+  printf '%s\n' "$families" | grep -qx tern || fail "--list-families must name the tern family"
+  listed=$("$RUNNER" --list --family tern)
+  assert_contains "$listed" "tests/fm-backend-tern.test.sh" "family tern must select the fake-CLI suite"
+  assert_contains "$listed" "tests/fm-backend-tern-smoke.test.sh" "family tern must select the real-binary smoke test"
+  assert_not_contains "$listed" "tests/tern-test-safety.sh" "the safety helper is a shared library, not a runnable suite"
+  assert_not_contains "$listed" "tests/fm-backend-cmux.test.sh" "family tern must not absorb the cmux suite"
+  # The scripts are real members of the portable lanes, so the coverage guard
+  # (every tests/*.test.sh belongs to exactly one lane) sees them.
+  "$RUNNER" --list-lanes >/dev/null || fail "--list-lanes failed with the tern scripts present"
+  pass "fm-test-run: family tern selects the tern suite and smoke test, and the lane coverage guard accepts them"
+}
+
 test_list_scheduled_proven_isolated_uses_serial_weights() {
   local tmp
   tmp=$(fm_test_tmproot fm-test-run-proven-schedule)
@@ -1573,6 +1615,39 @@ test_changed_shared_fixture_selects_its_readers() {
   pass "a changed shared test fixture selects its readers while an unread tests/ path still refuses"
 }
 
+# Suites outside backend-dispatch source the T3 fake and the T3 adapter, so a
+# change to either selects the suites that read them as well.
+test_changed_t3_sources_select_their_readers() {
+  local tmp repo listed
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-t3.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+  mkdir -p "$repo/bin/backends"
+  : >"$repo/bin/backends/t3code.sh"
+  : >"$repo/tests/t3-fake-lib.sh"
+  printf '#!/usr/bin/env bash\n# tests/lib.sh\n. tests/t3-fake-lib.sh\n' >"$repo/tests/fm-secondmate-restart.test.sh"
+  chmod +x "$repo/tests/fm-secondmate-restart.test.sh"
+  printf '# bin/backends/t3code.sh\n' >>"$repo/bin/fm-supervisor-target-lib.sh"
+  git -C "$repo" add .
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm t3
+
+  printf '\n' >>"$repo/tests/t3-fake-lib.sh"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$listed" "tests/fm-secondmate-restart.test.sh" \
+    "a changed T3 fake selects the suite that sources it"
+  git -C "$repo" checkout -q -- tests/t3-fake-lib.sh
+
+  printf '\n' >>"$repo/bin/backends/t3code.sh"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$listed" "tests/fm-backend.test.sh" \
+    "a changed T3 adapter still selects backend-dispatch"
+  assert_contains "$listed" "tests/fm-daemon.test.sh" \
+    "a changed T3 adapter selects the curated family of a script that consumes it"
+
+  rm -rf "$tmp"
+  pass "a changed T3 fake or adapter selects the suites that read it beyond backend-dispatch"
+}
+
 # Workers are handed scripts in order, so the slowest script must start first or
 # it runs alone at the tail and throws away most of the concurrency.
 test_concurrent_runs_are_ordered_longest_first() {
@@ -1981,6 +2056,7 @@ test_changed_file_selection_is_conservative
 test_task_marker_refuses_the_primary_checkout
 test_changed_runner_surfaces_select_their_family
 test_shell_line_ending_policy_selects_runner_contract
+test_changed_remote_inheritance_selects_generation_contract
 test_changed_dependency_selection_and_unmapped_failure
 test_changed_bin_reference_selects_per_script_not_per_family
 test_changed_curated_bin_also_selects_its_direct_readers
@@ -2000,6 +2076,7 @@ test_a_run_that_ran_records_no_skip_reason
 test_live_guards_expect_a_capability_skip_class
 test_fail_on_gate_skip_token
 test_exclude_family
+test_tern_family_selection
 test_list_scheduled_proven_isolated_uses_serial_weights
 test_list_scheduled_non_lane_selections_use_serial_weights
 test_portable_shard_union_and_coverage_guard
@@ -2012,6 +2089,7 @@ test_jobs_requires_proven_isolated
 test_jobs_admits_a_concurrent_safe_family
 test_unmapped_new_test_never_inherits_family_concurrency
 test_changed_shared_fixture_selects_its_readers
+test_changed_t3_sources_select_their_readers
 test_concurrent_runs_are_ordered_longest_first
 test_per_script_timeout_bounds_a_hang
 test_changed_bound_gives_slow_watcher_suites_headroom

@@ -51,6 +51,14 @@ wakes() {
 
 note_id() { sed -n 's/^queued //p' <<< "$1" | head -n 1; }
 
+wait_cleaned() {  # <case> <id>: until the lander removed its marker and log
+  for _ in $(seq 1 100); do
+    [ ! -e "$1/home/state/inbox/autoland/$2.taken" ] && [ ! -e "$1/home/state/inbox/autoland/$2.log" ] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
 wait_settled() {  # <case> <id>: until the lander acknowledged or announced
   for _ in $(seq 1 100); do
     [ -f "$1/home/state/inbox/handled/$2.note" ] && return 0
@@ -70,8 +78,9 @@ test_green_note_lands_without_a_wake() {
   assert_equals "$URL --head $SHA" "$(cat "$c/land.log")" "the lander runs fm-capture-land.sh with the note's arguments"
   [ -f "$c/home/state/inbox/handled/$id.note" ] || fail "a landed note is acknowledged"
   assert_equals 0 "$(wakes "$c")" "a landed note never wakes firstmate"
-  [ ! -e "$c/home/state/inbox/autoland/$id.taken" ] && [ ! -e "$c/home/state/inbox/autoland/$id.log" ] \
-    || fail "a landed note leaves no marker or log behind"
+  # The lander acknowledges first and removes its marker and log after the
+  # acknowledgement returns, so wait for that last step before asserting it.
+  wait_cleaned "$c" "$id" || fail "a landed note leaves no marker or log behind"
 }
 
 test_failed_land_wakes_with_the_reason() {

@@ -4,4 +4,4 @@ Why: those edits wait only for the capture PR to land, whose settle fast-forward
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| A capture-held checkout behind origin whose capture log names an open PR reads `capture-pending <PR url>`, which the scheduled sync never queues as a wake | `bin/fm-fleet-sync.sh` (`capture_open_pr`, `report_capture_held`, header), `tests/fm-fleet-sync.test.sh` (`test_open_capture_pr_pends_instead_of_stuck`), `docs/configuration.md` live-checkouts `capture=` paragraph | `bin/fm-fleet-sync.sh` (header), `docs/configuration.md` | carried | 45dd50a5 |
+| A capture-held checkout behind origin whose capture log names an open PR reads `capture-pending <PR url>`, which the scheduled sync never queues as a wake | `bin/fm-fleet-sync.sh` (`capture_open_pr`, `report_capture_held`, header), `tests/fm-fleet-sync.test.sh` (`test_open_capture_pr_pends_instead_of_stuck`), `docs/configuration.md` live-checkouts `capture=` paragraph | `bin/fm-fleet-sync.sh` (header), `docs/configuration.md` | carried | c8d8fdad |

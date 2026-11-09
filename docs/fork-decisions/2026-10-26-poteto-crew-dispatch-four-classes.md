@@ -6,5 +6,5 @@ The mode keeps the name `poteto-mode` and its five-seat panel; the ten typed `ps
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| `/poteto` spawns on the model and effort `config/crew-dispatch.json` picks instead of Fable 5.1 xhigh, and its standing opt-in names four ship classes | `.agents/skills/poteto/SKILL.md`, `README.md` | `README.md` | carried | 45dd50a5 |
-| A ship scaffolded without `--method` whose task id reads as a standing poteto-mode class gets a stderr warning, and intake names the check | `bin/fm-brief.sh` (method validation, ship scaffold report, header), `docs/task-lifecycle.md`, `tests/fm-brief.test.sh` | `bin/fm-brief.sh`, `docs/task-lifecycle.md`, `tests/fm-brief.test.sh` | carried | 45dd50a5 |
+| `/poteto` spawns on the model and effort `config/crew-dispatch.json` picks instead of Fable 5.1 xhigh, and its standing opt-in names four ship classes | `.agents/skills/poteto/SKILL.md`, `README.md` | `README.md` | carried | c8d8fdad |
+| A ship scaffolded without `--method` whose task id reads as a standing poteto-mode class gets a stderr warning, and intake names the check | `bin/fm-brief.sh` (method validation, ship scaffold report, header), `docs/task-lifecycle.md`, `tests/fm-brief.test.sh` | `bin/fm-brief.sh`, `docs/task-lifecycle.md`, `tests/fm-brief.test.sh` | carried | c8d8fdad |

@@ -6,5 +6,5 @@ No upstream proposal: it composes the fork's scout release and `[on=captain]` st
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| Firstmate releases a merged ship whose only remaining step is the captain's own, holding that step on the ship's row and tearing the worker down | `.agents/skills/ship-landing/SKILL.md` | the ship landing and cleanup procedure | carried | 45dd50a5 |
-| The ship brief tells a worker whose only post-merge step is the captain's to name it on its `done:` line rather than report `ready:` or wait | `bin/fm-brief.sh` (`SHIP_READY_INSTRUCTIONS`, header), `tests/fm-brief.test.sh` (custom pause verb test), `tests/fm-dod-lib.test.sh` (`test_captain_step_done_is_a_ci_ready_done`) | ship brief text | carried | 45dd50a5 |
+| Firstmate releases a merged ship whose only remaining step is the captain's own, holding that step on the ship's row and tearing the worker down | `.agents/skills/ship-landing/SKILL.md` | the ship landing and cleanup procedure | carried | c8d8fdad |
+| The ship brief tells a worker whose only post-merge step is the captain's to name it on its `done:` line rather than report `ready:` or wait | `bin/fm-brief.sh` (`SHIP_READY_INSTRUCTIONS`, header), `tests/fm-brief.test.sh` (custom pause verb test), `tests/fm-dod-lib.test.sh` (`test_captain_step_done_is_a_ci_ready_done`) | ship brief text | carried | c8d8fdad |

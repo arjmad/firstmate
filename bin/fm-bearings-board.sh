@@ -24,7 +24,7 @@
 #            nowhere to go (captain-hold-lifecycle's ordering rule, enforced
 #            here rather than left to agent memory). Output starts with
 #            `board: <path>`, then includes lavish-axi's session output, its
-#            session URL in the phone-openable form bin/fm-lavish-url.sh
+#            session URL in the phone-openable form bin/fm-lavish-link.sh
 #            prints, and the remaining status:
 #              session: live | reopened
 #              served: <path>
@@ -493,7 +493,7 @@ lavish_board_live() {  # <establish output> <canonical-board-path>
 # form; the rewrite is display only, so its failure prints the raw output.
 show_session_output() {  # <lavish-axi output>
   local shown
-  shown=$("$SCRIPT_DIR/fm-lavish-url.sh" <<<"$1") && [ -n "$shown" ] || shown=$1
+  shown=$("$SCRIPT_DIR/fm-lavish-link.sh" <<<"$1") && [ -n "$shown" ] || shown=$1
   printf '%s\n' "$shown"
 }
 

@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # labeled lets the full-ci go-ahead start the full suite; see the
+    # outside pull request gate below.
     types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
     inputs:
@@ -16,20 +18,21 @@ on:
 permissions:
   contents: read
 
-# Per-PR supersession: a new push to the same PR replaces that PR's in-flight
-# CI instead of letting superseded heads keep the full hosted-runner fan-out.
-# The group uses the PR number for pull_request events, so every run of one PR
-# shares a group, and falls back to the unique run id for push events, so each
-# main push gets its own group and is never cancelled. Cancellation is likewise
-# limited to pull_request events. Evidence and rationale: the September 12
-# Actions starvation report, section 3 "Workflow mechanics to ship first".
+# Supersession: a new push to the same PR replaces that PR's in-flight CI
+# instead of letting superseded heads keep the full hosted-runner fan-out, and
+# main pushes share one group so only the newest merge's run finishes; it
+# covers the merges before it, each of which passed the full suite as a PR.
+# A workflow_dispatch run falls back to its unique run id, so it is never
+# cancelled by another.
 # A label other than full-ci gets a unique, non-cancelling group, so adding
-# one never cancels a running suite (ported from upstream 14d06b04).
+# one never cancels a running suite. Evidence and rationale: the September 12
+# Actions starvation report, section 3 "Workflow mechanics to ship first", and
+# the October 28 concurrency measurements behind the full-ci gate.
 # Upstream's separate compliance workflow keeps its own event-specific groups;
 # this fork carries no compliance workflow (#19), so this is its only group.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci' && github.run_id) || github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ (github.event_name == 'push' && 'main') || (github.event.action == 'labeled' && github.event.label.name != 'full-ci' && github.run_id) || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
 
 # Timeout policy: docs/fm-test-portable-shards.md "Timeouts" owns the three
 # tiers and their rationale; tests/fm-ci-workflow.test.sh guards this workflow.
@@ -44,20 +47,31 @@ concurrency:
 # at the trigger stays pending and blocks the merge. CONTRIBUTING.md documents
 # the variables.
 #
+# Outside pull request gate: the full suite (lint, every test lane, macOS and
+# the timing aggregate) runs on main pushes, workflow_dispatch runs, PRs from
+# this repository's own branches, PRs whose author has write access (OWNER,
+# MEMBER, COLLABORATOR), and PRs carrying the full-ci label, which the
+# maintainer or their fleet adds when a PR is picked up for review. Any other
+# PR runs only the CI plan, the coverage guard and the invariants, and the Full
+# suite job fails naming the label, so no outside PR looks fully tested before
+# the go-ahead. A label event for any other label runs nothing: a PR still
+# waiting for the go-ahead already carries the failing verdict from its push.
+# GitHub still publishes a skipped check for every job of that label event's
+# run, and a newer skipped check with a job's own name would replace and mask
+# an earlier failure, so each job that skips there takes a "Not run for label - "
+# name prefix instead. The condition is repeated per job for the same reason as
+# the fork opt-out; CONTRIBUTING.md documents the label.
+#
 # Affected-shard planning (fork patch, docs/fork-decisions/2026-11-09-ci-affected-shards.md):
 # bin/fm-ci-plan.sh's header owns what a change selects and when it falls back
 # to the full suite. Each job that needs the plan gates its steps rather than
 # using a job-level if, because a matrix job skipped by its if reports a check
 # whose matrix name never expands. A failed plan skips those jobs and leaves
-# the CI plan check red, which bin/fm-pr-merge.sh refuses to merge past. A
-# label event for any other label runs nothing, and every job takes a
-# "Not run for label - " name prefix there so a newer skipped check never
-# replaces and masks an earlier result under the job's own name (ported from
-# upstream 14d06b04).
+# the CI plan check red, which bin/fm-pr-merge.sh refuses to merge past.
 jobs:
   plan:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}CI plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
     # Fast tier: planning is a few seconds of git and file listing.
     timeout-minutes: 5
@@ -94,9 +108,9 @@ jobs:
 
   lint:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Lint ${{ matrix.partition }}of${{ strategy.job-total }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: plan
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     # Upstream lints as two canonical partitions. Full extended analysis over
@@ -182,7 +196,7 @@ jobs:
   # and that the portable serial CI shards partition that serial lane exactly.
   test-coverage:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Test coverage guard
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
     # Fast tier: the coverage guard is a seconds-long local computation.
     timeout-minutes: 5
@@ -195,9 +209,9 @@ jobs:
   # set only. Composition owner: bin/fm-test-run.sh (docs/fm-test-portable-shards.md).
   tests-portable-parallel-1:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Behavior portable parallel 1
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: plan
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     steps:
@@ -256,9 +270,9 @@ jobs:
 
   tests-portable-parallel-2:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Behavior portable parallel 2
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: plan
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     steps:
@@ -316,7 +330,7 @@ jobs:
   # whose "ofN" disagrees with it (docs/fm-test-portable-shards.md).
   tests-portable-serial:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Behavior portable serial ${{ matrix.shard }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: plan
     env:
       # job-total rather than a literal, so shrinking or growing the matrix
@@ -324,14 +338,14 @@ jobs:
       # leaving a shard of the required lane unrun.
       FM_SERIAL_LANE: portable-serial-${{ matrix.shard }}of${{ strategy.job-total }}
       FM_SERIAL_SHARD: ${{ matrix.shard }}
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     strategy:
       # Every shard reports so one failure never hides another shard's result.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -415,9 +429,9 @@ jobs:
   # the failure evidence and move the job to macOS rather than skip assertions.
   tests-herdr:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Behavior tests (Herdr)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: plan
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
     # Heavy tier (see the timeout policy above): the last-resort job backstop.
     # The family-run step below owns the hang tripwire, so a wedged suite fails
     # there with the always() cleanup and timing upload still running.
@@ -552,10 +566,115 @@ jobs:
             ${{ runner.temp }}/fm-herdr/default-server.log
           if-no-files-found: warn
 
+  # Required real-herdr-core (`hc`) lane: pinned install, serial hc family,
+  # hard-fail on "skip: hc not found". Mirrors tests-herdr's posture: the
+  # lab (bin/fm-hc-lab.sh) gives each session a private core, a fleet-state
+  # tripwire, and a serve/hold daemon sweep at teardown.
+  tests-hc:
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Behavior tests (herdr-core)
+    runs-on: ubuntu-24.04
+    needs: plan
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
+    # Heavy tier (see the timeout policy above): the last-resort job backstop.
+    # The family-run step below owns the hang tripwire, so a wedged suite fails
+    # there with the always() cleanup and timing upload still running.
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Plan gate
+        id: gate
+        env:
+          FM_CI_PLAN: ${{ needs.plan.outputs.plan }}
+        run: bin/fm-ci-plan.sh gate lane hc --only-out "$RUNNER_TEMP/fm-ci-only.txt"
+      - name: Not affected by this change
+        if: steps.gate.outputs.run != 'true'
+        run: echo "No herdr-core test is affected; see the CI plan summary."
+      - name: Require tools for real herdr-core
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          set -eu
+          command -v jq >/dev/null || { echo "::error::jq is required"; exit 1; }
+          command -v curl >/dev/null || { echo "::error::curl is required"; exit 1; }
+          command -v tar >/dev/null || { echo "::error::tar is required"; exit 1; }
+          command -v sha256sum >/dev/null || { echo "::error::sha256sum is required"; exit 1; }
+          jq --version
+      - name: Install pinned herdr-core
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          set -eu
+          bin/fm-install-hc.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Install pinned Treehouse
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          set -eu
+          bin/fm-install-treehouse.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Assert herdr-core pin and Treehouse presence
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          set -eu
+          command -v herdr-core >/dev/null || { echo "::error::herdr-core not on PATH after install"; exit 1; }
+          command -v treehouse >/dev/null || { echo "::error::treehouse not on PATH after install"; exit 1; }
+          herdr-core --version
+          treehouse --version
+          version=$(herdr-core --version | awk '{print $2; exit}')
+          [ "$version" = "0.1.14" ] || {
+            echo "::error::expected exact herdr-core pin 0.1.14, got ${version:-<empty>}"
+            exit 1
+          }
+      - name: Snapshot pre-suite hc lab sessions
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/fm-hc"
+          bin/fm-hc-ci-cleanup.sh snapshot "$RUNNER_TEMP/fm-hc/sessions-before.txt"
+      - name: Run hc family (serial, required)
+        if: steps.gate.outputs.run == 'true'
+        id: run-real-hc-family
+        # Heavy tier step tripwire: above the healthy wall and far below the
+        # job backstop, so a hang fails this step and cleanup runs.
+        timeout-minutes: 20
+        env:
+          FM_CI_ONLY: ${{ steps.gate.outputs.only }}
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/fm-test"
+          # Pin the same resolved binary for the adapter, lab, and cleanup.
+          export FM_HC_BIN
+          FM_HC_BIN=$(command -v herdr-core)
+          # Serial only. Fail if any script reports hc not found. Live
+          # harness credential tests stay outside this family (opt-in env only).
+          bin/fm-test-run.sh --family hc ${FM_CI_ONLY:+--only "$FM_CI_ONLY"} \
+            --fail-on-gate-skip 'hc not found' \
+            --json "$RUNNER_TEMP/fm-test/fm-test-timing-hc.json"
+      - name: Cleanup job-owned hc lab sessions
+        id: cleanup-hc-lab-sessions
+        if: always() && steps.gate.outputs.run == 'true'
+        run: |
+          set -eu
+          export FM_HC_BIN
+          FM_HC_BIN=$(command -v herdr-core)
+          bin/fm-hc-ci-cleanup.sh teardown "$RUNNER_TEMP/fm-hc/sessions-before.txt" || {
+            echo "::warning::lab session cleanup reported a problem; see logs"
+            exit 1
+          }
+      - name: Upload hc timing and diagnostics
+        if: always() && steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fm-test-timing-hc
+          path: |
+            ${{ runner.temp }}/fm-test/fm-test-timing-hc.json
+            ${{ runner.temp }}/fm-hc/sessions-before.txt
+          if-no-files-found: warn
+
   # Aggregate per-lane timing into one summary artifact for critical-path review.
   tests-timing-aggregate:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Behavior timing aggregate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Fast tier: aggregation is seconds of work over lane artifacts.
     timeout-minutes: 5
     needs:
@@ -563,7 +682,8 @@ jobs:
       - tests-portable-parallel-2
       - tests-portable-serial
       - tests-herdr
-    if: ${{ always() && !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
+      - tests-hc
+    if: ${{ always() && !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
     steps:
       - uses: actions/checkout@v6
       - name: Download lane timing artifacts
@@ -597,7 +717,7 @@ jobs:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Stock macOS Bash snapshot compatibility
     runs-on: macos-latest
     needs: plan
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && vars.FM_CI_SKIP_MACOS != '1' && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && vars.FM_CI_SKIP_MACOS != '1' && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     steps:
@@ -638,74 +758,34 @@ jobs:
           export PATH
           command -v tasks-axi >/dev/null || { echo "::error::tasks-axi is required for the stock Bash regressions"; exit 1; }
 
-          # These two suites run every test they define, so the expected count
-          # is the number of test functions in the file rather than a pinned
-          # number each new test would have to bump.
-          snapshot_output=$(/bin/bash tests/fm-fleet-snapshot-view.test.sh)
-          printf '%s\n' "$snapshot_output"
-          snapshot_count=$(printf '%s\n' "$snapshot_output" | grep -c '^ok - ')
-          snapshot_expected=$(grep -c '^test_[a-z0-9_]*()' tests/fm-fleet-snapshot-view.test.sh)
-          [ "$snapshot_expected" -gt 0 ] && [ "$snapshot_count" -eq "$snapshot_expected" ] || {
-            echo "::error::expected $snapshot_expected snapshot/fleet-view tests, got $snapshot_count"
-            exit 1
-          }
-
-          bearings_output=$(/bin/bash tests/fm-bearings-snapshot.test.sh)
-          printf '%s\n' "$bearings_output"
-          bearings_count=$(printf '%s\n' "$bearings_output" | grep -c '^ok - ')
-          bearings_expected=$(grep -c '^test_[a-z0-9_]*()' tests/fm-bearings-snapshot.test.sh)
-          [ "$bearings_expected" -gt 0 ] && [ "$bearings_count" -eq "$bearings_expected" ] || {
-            echo "::error::expected $bearings_expected Bearings tests, got $bearings_count"
-            exit 1
-          }
+          # Each suite declares its own TAP plan; the helper fails an early
+          # exit 0 that does not reach FM_TEST_COMPLETE or whose ok count
+          # disagrees with the plan. Per-suite totals live in the test files.
+          /bin/bash bin/fm-test-tap-verify.sh tests/fm-fleet-snapshot-view.test.sh
+          /bin/bash bin/fm-test-tap-verify.sh tests/fm-bearings-snapshot.test.sh
 
           # The full public-followup suite is not a stock-bash snapshot; run only
           # the empty-lock register regression under real /bin/bash 3.2.
-          pf_output=$(FM_TEST_ONLY=test_first_register_succeeds_with_empty_lock_list_under_bash32 \
-            /bin/bash tests/fm-public-followup.test.sh)
-          printf '%s\n' "$pf_output"
-          pf_count=$(printf '%s\n' "$pf_output" | grep -c '^ok - ')
-          [ "$pf_count" -eq 1 ] || {
-            echo "::error::expected 1 public-followup bash 3.2 register regression, got $pf_count"
-            exit 1
-          }
+          FM_TEST_STOCK_BASH=1 /bin/bash bin/fm-test-tap-verify.sh \
+            tests/fm-public-followup.test.sh
 
           # Same shape for the watcher's churn-deferral regression: an already-
           # marked churn window expands an empty array that only stock Bash
           # treats as an unbound variable under set -u.
-          churn_output=$(FM_TEST_ONLY=test_turn_ended_churn_existing_marker_absorbed \
-            /bin/bash tests/fm-watch-triage.test.sh)
-          printf '%s\n' "$churn_output"
-          churn_count=$(printf '%s\n' "$churn_output" | grep -c '^ok - ')
-          [ "$churn_count" -eq 1 ] || {
-            echo "::error::expected 1 watcher churn-deferral bash 3.2 regression, got $churn_count"
-            exit 1
-          }
+          FM_TEST_STOCK_BASH=1 /bin/bash bin/fm-test-tap-verify.sh \
+            tests/fm-watch-triage.test.sh
 
           # The fork-free hot-path helpers must stay byte-identical to the
           # commands they replace under stock Bash 3.2, which lacks the
           # printf %(...)T clock and falls back to date.
-          helpers_output=$(/bin/bash tests/fm-fork-free-helpers.test.sh)
-          printf '%s\n' "$helpers_output"
-          helpers_count=$(printf '%s\n' "$helpers_output" | grep -c '^ok - ')
-          [ "$helpers_count" -eq 6 ] || {
-            echo "::error::expected 6 fork-free helper bash 3.2 regressions, got $helpers_count"
-            exit 1
-          }
+          /bin/bash bin/fm-test-tap-verify.sh tests/fm-fork-free-helpers.test.sh
 
-          backend_output=$(FM_TEST_ONLY=test_backend_source_requires_adapter_file \
-            FM_TEST_BASH=/bin/bash \
-            /bin/bash tests/fm-backend.test.sh)
-          printf '%s\n' "$backend_output"
-          backend_count=$(printf '%s\n' "$backend_output" | grep -c '^ok - ')
-          [ "$backend_count" -eq 2 ] || {
-            echo "::error::expected 2 backend adapter-file bash 3.2 regressions, got $backend_count"
-            exit 1
-          }
+          FM_TEST_STOCK_BASH=1 FM_TEST_BASH=/bin/bash \
+            /bin/bash bin/fm-test-tap-verify.sh tests/fm-backend.test.sh
 
   invariants:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Repo invariants
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
     # Fast tier: the invariant checks are seconds-long file comparisons.
     timeout-minutes: 5
@@ -731,3 +811,42 @@ jobs:
             printf '%s\n' "$tracked"
             exit 1
           fi
+
+  # The Full suite verdict: one check that fails until an outside PR has the
+  # full-ci go-ahead and otherwise fails when any lane failed or was cancelled.
+  # It runs even when every lane is skipped, because a skipped job would read
+  # as passing. On an unrelated label event it skips under the prefixed name
+  # like every other job: that run is never cancelled, so a verdict it computed
+  # from its older event could finish after, and mask, a later full-ci pass.
+  full-suite:
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Full suite
+    runs-on: ubuntu-24.04
+    # Fast tier: the verdict reads its needed jobs' results.
+    timeout-minutes: 5
+    needs:
+      - lint
+      - test-coverage
+      - tests-portable-parallel-1
+      - tests-portable-parallel-2
+      - tests-portable-serial
+      - tests-herdr
+      - tests-hc
+      - macos-stock-bash
+      - invariants
+    if: ${{ always() && !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
+    steps:
+      - name: Require the full-ci go-ahead and passing lanes
+        env:
+          FM_CI_FULL: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
+          FM_CI_LANES_FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          set -eu
+          if [ "$FM_CI_FULL" != true ]; then
+            echo "::error::The full suite runs on outside pull requests only after a maintainer adds the full-ci label; see CONTRIBUTING.md."
+            exit 1
+          fi
+          if [ "$FM_CI_LANES_FAILED" = true ]; then
+            echo "::error::A full-suite job failed or was cancelled; see the failed jobs in this run."
+            exit 1
+          fi
+          echo "Full suite passed."

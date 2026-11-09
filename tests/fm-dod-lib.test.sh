@@ -555,7 +555,7 @@ test_direct_pr_dod_waits_for_checks_green() {
 # done report, naming a review script that runs; a forge where
 # /code-review --comment cannot post, and local-only, carry none.
 test_pr_based_dod_carries_the_code_review_step() {
-  local mode out cli review_line done_line sol_line claude_line
+  local mode out cli review_line done_line sol_line claude_line recheck_line
   for mode in direct-PR no-mistakes; do
     out="$TMP_ROOT/dod-review-$mode.md"
     fm_dod_block "$mode" dod-review-task > "$out"
@@ -606,6 +606,17 @@ test_pr_based_dod_carries_the_code_review_step() {
     "no-mistakes: Sol fixes must ride the pipeline"
   assert_grep 'push its fixes once the loop ends' "$TMP_ROOT/dod-review-direct-PR.md" \
     "direct-PR: Sol fixes are not pushed after the loop"
+  # A pr=manual no-mistakes ship opens its PR by hand and still carries the step.
+  out="$TMP_ROOT/dod-review-manual.md"
+  fm_dod_block no-mistakes dod-review-task "" none "" "" manual > "$out"
+  assert_grep '/code-review medium --comment <number>' "$out" "pr=manual: DoD does not carry the code review step"
+  assert_grep 'beyond the code-review step below' "$out" "pr=manual: DoD forbids the review's own PR comments"
+  review_line=$(grep -n '^Before that done report, give a code-changing GitHub PR its code review' "$out" | cut -d: -f1)
+  done_line=$(grep -n '^Then append `done' "$out" | cut -d: -f1)
+  [ -n "$review_line" ] && [ "$review_line" -lt "$done_line" ] || fail "pr=manual: the review step does not come before the done report"
+  recheck_line=$(grep -n '^When the review led you to push, wait for the PR'"'"'s checks again' "$out" | cut -d: -f1)
+  [ -n "$recheck_line" ] && [ "$review_line" -lt "$recheck_line" ] && [ "$recheck_line" -lt "$done_line" ] \
+    || fail "pr=manual: the checks are not waited for again after the review's push"
   for mode in direct-PR:forgejo direct-PR:gerrit no-mistakes:forgejo local-only:none; do
     out="$TMP_ROOT/dod-review-${mode%%:*}-${mode#*:}.md"
     fm_dod_block "${mode%%:*}" dod-review-task "" "${mode#*:}" > "$out"

@@ -30,8 +30,10 @@
 # the home is safe only for --dry-run.
 #
 # What it sweeps. bin/fm-watch.sh keeps one family of marker files per
-# supervised endpoint, each named by fm_backend_window_key (bin/fm-backend.sh)
-# of that endpoint's target:
+# supervised endpoint. Markers a watcher wrote before the v3 key change are
+# named by fm_backend_window_key (bin/fm-backend.sh) of that endpoint's target,
+# and only those are retired here; current `v3.<sha256>` markers (window_key,
+# bin/fm-watch-key-lib.sh) cannot be traced back to an endpoint and are kept:
 #   .hash-<key> .count-<key> .stale-<key> .stale-since-<key>
 #   .wedge-escalations-<key> .churn-since-<key> .paused-<key>
 #   .paused-rechecked-<key> .paused-resurfaced-<key> .writing-since-<key>
