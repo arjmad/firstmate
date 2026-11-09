@@ -539,7 +539,7 @@ test_busy_cycle_keeps_the_declared_pause_throttle() {
   printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/parked.meta"
   printf 'paused: waiting on two benchmark runs\n' > "$statusf"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-parked_status"
-  key=$(printf '%s' "$window" | tr ':/.' '___')
+  key=$(watch_window_key "$window")
   throttle="$state/.paused-resurfaced-$key"
 
   printf 'parked, elapsed 1s' > "$capture_file"
@@ -1208,7 +1208,7 @@ test_paused_authoritative_working_preserves_wedge_timer() {
 # while a done worker with NO pr= record keeps alarming on every new hash.
 
 delivered_key() {
-  printf '%s' test:fm-delivered | tr ':/.' '___'
+  watch_window_key test:fm-delivered
 }
 
 # One watcher against a delivered fixture. The crew-state verdict is the

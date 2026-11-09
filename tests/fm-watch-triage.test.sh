@@ -3387,7 +3387,7 @@ test_busy_pane_claude_tool_progress_resets_age() {
   printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/busy-claude.meta"
   printf 'working: setup complete\n' > "$state/busy-claude.status"
   sig=$(seen_sig "$state/busy-claude.status"); printf '%s' "$sig" > "$state/.seen-busy-claude_status"
-  key=$(printf '%s' "$window" | tr ':/.' '___')
+  key=$(watch_window_key "$window")
   pane_hash=$(hash_text "Working...")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
@@ -4092,7 +4092,7 @@ test_wedge_escalation_deferred_while_worktree_process_runs() {
   printf 'window=%s\nkind=ship\nworktree=%s\n' "$window" "$wt" > "$state/gate.meta"
   printf 'working: running the gate\n' > "$state/gate.status"
   sig=$(seen_sig "$state/gate.status"); printf '%s' "$sig" > "$state/.seen-gate_status"
-  key=$(printf '%s' "$window" | tr ':/.' '___')
+  key=$(watch_window_key "$window")
   pane_hash=$(hash_text "Waiting for task")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
@@ -4165,7 +4165,7 @@ test_process_deferral_resurfaces_on_the_bounded_cadence() {
   printf 'window=%s\nkind=ship\nworktree=%s\n' "$window" "$wt" > "$state/gatechurn.meta"
   printf 'working: running the gate\n' > "$state/gatechurn.status"
   sig=$(seen_sig "$state/gatechurn.status"); printf '%s' "$sig" > "$state/.seen-gatechurn_status"
-  key=$(printf '%s' "$window" | tr ':/.' '___')
+  key=$(watch_window_key "$window")
   pane_hash=$(hash_text "Waiting for task")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"

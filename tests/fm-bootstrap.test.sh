@@ -1338,7 +1338,9 @@ test_pr_health_monitor_arms_only_with_its_flag() {
       [ -f "$case_dir/home/state/pr-health.check.sh" ] && [ -f "$case_dir/home/state/pr-health.check-trust" ] \
         || fail "bootstrap did not register the PR health monitor: $(ls -A "$case_dir/home/state")"
     else
-      [ -z "$(ls -A "$case_dir/home/state")" ] \
+      # This fork's residue sweep stamps its own last run on every bootstrap
+      # (state/.residue-sweep-last); nothing else may appear.
+      [ "$(find "$case_dir/home/state" -mindepth 1 ! -name .residue-sweep-last -print -quit)" = "" ] \
         || fail "bootstrap without the PR health flag left state: $(ls -A "$case_dir/home/state")"
     fi
   done

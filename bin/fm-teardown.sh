@@ -2002,7 +2002,7 @@ delivery_pr_state() {  # <branch>
       . "$1"
       fm_pr_url_parse "$2" || exit 1
       case "$FM_PR_PROVIDER" in
-        github) fm_pr_github_read_record "$FM_PR_OWNER" "$FM_PR_REPO" "$FM_PR_NUMBER" ;;
+        github) fm_pr_github_read_record "$FM_PR_HOST" "$FM_PR_OWNER" "$FM_PR_REPO" "$FM_PR_NUMBER" ;;
         gitlab) fm_pr_gitlab_read_record "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" ;;
         forgejo) fm_pr_forgejo_read_record "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" ;;
         gerrit) fm_pr_gerrit_read_record "$FM_PR_HOST" "$FM_PR_NUMBER" ;;
@@ -2015,7 +2015,7 @@ delivery_pr_state() {  # <branch>
     [ -n "$state" ] || return 1
     [ "$merged" = true ] || [ "$merged" = false ] || return 1
   else
-    DELIVERY_PR_NUMBER=$(pr_number_from_branch "$branch") || return 2
+    DELIVERY_PR_NUMBER=$(fm_pr_number_from_branch "$WT" "$branch") || return 2
     # shellcheck disable=SC2016  # The inner script expands after bash -c receives positional args.
     out=$(fm_run_timed "$DELIVERY_PR_READ_TIMEOUT" bash -c 'cd "$1" && gh-axi pr view "$2"' \
       _ "$WT" "$DELIVERY_PR_NUMBER" 2>/dev/null) || return 2

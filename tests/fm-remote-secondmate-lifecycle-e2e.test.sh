@@ -1967,7 +1967,7 @@ assert_grep 'already-retired: ios' "$TMP_ROOT/retired-force.out" "forced retirem
 bogus_rc=0
 remote_control_retire ios --bogus > "$TMP_ROOT/retired-bogus.out" 2>&1 || bogus_rc=$?
 [ "$bogus_rc" -eq 2 ] || fail "an invalid retire option on an absent home did not fail with usage (exit $bogus_rc)"
-assert_grep 'fm-remote-secondmate-control.sh retire <id> [--force]' "$TMP_ROOT/retired-bogus.out" "an invalid retire option did not print usage"
+assert_grep 'fm-remote-secondmate-control.sh retire <id> [--force|--unseeded-only]' "$TMP_ROOT/retired-bogus.out" "an invalid retire option did not print usage"
 assert_no_grep 'already-retired' "$TMP_ROOT/retired-bogus.out" "an invalid retire option reported a retirement"
 assert_absent "$REMOTE_HOME" "retiring an absent home recreated it"
 pass "an absent remote home retires only with the dispatcher's arguments and is never recreated"
