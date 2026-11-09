@@ -8,11 +8,13 @@ metadata:
 
 # Noticed queue and idea capture
 
-Arjun's design of 2026-10-27 (brain facts 8944, 8990, 9027, 9064 on `systems/platform/firstmate`): agents stay on task, but what they notice is kept, and good ideas reach him without noise.
+Arjun's design of 2026-10-27 (brain facts 8944, 8990, 9027, 9064 on `systems/platform/firstmate`), funnelled on 2026-11-08: agents stay on task, what they notice is kept, and only what needs him reaches him.
 A **noticed** item is something broken outside the task that noticed it.
 An **idea** is something that could make the ecosystem better.
-Both are captain holds, so nothing here ever dispatches work; a pick or fix starts only from his answer.
+Both are captain holds, so filing never dispatches work; a pick starts only from his answer, and a routine fix starts from firstmate (see Acting first).
 `bin/fm-noticed.sh --help` owns the mechanics; this file owns the judgment.
+
+One funnel: workers, Cade, Codex and the second mate hand what they notice to firstmate, never to Arjun directly; an agent already in a live chat with him may add one line at the end of that reply.
 
 ## Filing
 
@@ -22,30 +24,49 @@ Each task yields at most one noticed and one idea; `none` and an empty section a
 
 1. Run `bin/fm-noticed.sh list` and look for an open item about the same broken thing or the same idea.
    Reuse its slug when one matches, so `file` attaches the new evidence instead of filing a duplicate.
-2. File with `bin/fm-noticed.sh file noticed|idea <slug> --title <one line> --why <why it may matter> --from <task or agent> [--repo <repo>] [--evidence <pointer>]`.
+2. File with `bin/fm-noticed.sh file noticed|idea <slug> --title <one line> --why <why it may matter> --from <task or agent> [--repo <repo>] [--evidence <pointer>] [--now]`.
    Capture the observation and why it may matter; leave value unknown until ranking.
+   Add `--now` only to a noticed item that is urgent or doing harm now: money, customers, account health or security; filing an open item's slug again with `--now` makes it urgent.
 3. Acknowledge a fleet-handoff notice with `bin/fm-inbox.sh drain --ack <id>`, and reply with the item id through `bin/fm-inbox.sh reply <id>`.
 
-Done when every collected line is filed, matched, or judged not an item, with each judgment in one line of your next captain reply.
+Done when every collected line is filed, matched, or judged not an item.
 Sapna's agents never file here: a Nova notice is refused, and a secondmate home files into its own backlog.
 Mining transcripts for items is out of scope.
 
-## Showing each item once
+## Acting first
 
-The wake drain's NOTICED section lists noticed items and this week's top ideas no captain reply has mentioned.
-Mention each in one plain line in your next captain reply, then run `bin/fm-noticed.sh shown <id>...`.
-A filed idea is not mentioned on its own; it waits for the Monday ranking.
+Firstmate settles what it can before anything reaches Arjun.
 
-## Monday: sweep and top 3
+- **Routine.** A noticed item inside the fleet's standing authority (a broken test, a stale doc, a small bug) is fixed without interrupting him: file the fix as ordinary work, dispatch it, and once it lands close the item with `bin/fm-noticed.sh close <id> --evidence <what changed> --fixed --pr <PR URL>` (the PR is required), which records the fix for the Monday triage (Arjun, 2026-11-08: "i want to be made aware of noticed changes you make").
+- **Duplicate.** A repeat sighting is matched to its open item at filing and never becomes a second one.
+- **Below the bar.** An idea that fails the idea bar stays filed and unshown.
+
+## What reaches him
+
+Only two things reach Arjun from this queue.
+
+- **NOW.** A noticed item filed with `--now`, urgent or doing harm (money, customers, account health, security), is the only thing the wake drain's NOTICED section prints.
+  Tell him this turn, leading the turn's final captain-facing message with it rather than burying it in other news, then run `bin/fm-noticed.sh shown <id>...`.
+- **WEEKLY.** Everything else waits for the Monday triage below, which lists the fixes firstmate made on its own and brings only the few items that need his call.
+
+Do not mention a filed item in your next reply, unless it is a NOW item or bears on the topic at hand.
+
+## Monday: sweep, top 3 and triage
 
 The jobs launcher's Monday `[open-items]` note dispatches the open-items sweep scout.
 Add two duties to that scout's brief:
 
 - **Noticed re-check.** Re-check every open noticed item (`bin/fm-noticed.sh list noticed`) against live state.
-  Firstmate closes a fixed one with `bin/fm-noticed.sh close <id> --evidence <what fixed it>`, and tells Arjun in one line of the next reply about any item still broken 7 days or more after its `created` date, with the recommended fix.
-- **Top 3.** Rank the open ideas never in a top 3 that pass the idea bar below with Atlas's ranking rule (the atlas skill's step 2: Ecomills and Kempf profit first, then Arjun's time), estimating each as $/week or hours/week, and return the best three with their estimates.
+  Firstmate closes one fixed elsewhere with `bin/fm-noticed.sh close <id> --evidence <what fixed it>`, fixes a routine one under Acting first, and carries to the triage any item still broken 7 days or more after its `created` date that needs his call, with the recommended fix.
+- **Top 3.** Rank the open ideas never in a top 3 that pass the idea bar below by what matters to Arjun (his 2026-11-08 ruling): keep Ecomills and Kempf healthy and growing, spend his time only where needed, take initiative across the ecosystem, and leave work making the next one easier.
+  Estimate each as $/week or hours/week, and return the best three with their estimates.
   Return fewer, or none, rather than fill a place with an idea that fails the bar, and name in one line the test each passed-over idea failed.
-  Firstmate records them with `bin/fm-noticed.sh top3 <id>...`, and the drain then shows them once.
+  Firstmate records them with `bin/fm-noticed.sh top3 <id>...`.
+
+The weekly `triage-weekly` backlog row is where the result reaches him.
+Open it with a "Fixed on my own this week" list: one line per `fixed` row of `bin/fm-noticed.sh unseen`, naming the item, what changed and the PR URL.
+Then bring only the items from `unseen` and the sweep that need his call, the top 3 included, each with a recommendation and a one-tap answer, and park everything else.
+Then mark every unseen item the triage covered, brought or parked, with `bin/fm-noticed.sh shown <id>...`, so next week's unseen list holds only what arrived since.
 
 The Atlas board itself still builds only when he asks.
 

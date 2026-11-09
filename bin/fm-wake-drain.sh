@@ -4,7 +4,7 @@
 # annotate every unread line for validated signal status keys, surface unread
 # informational status lines, latest captain-facing statuses not covered by a
 # newer branch outcome, OPEN DECISIONS, captain-call record divergence, items
-# filed for the captain but not yet shown to him (NOTICED), and on
+# urgent enough to tell the captain now (NOTICED), and on
 # a supervision-host home the supervision session's new and unprocessed
 # outcomes (BRANCH OUTCOMES), then assert liveness.
 #
@@ -598,11 +598,13 @@ EOF
   printf 'RECORD DIVERGENCE: reconcile each one - record the captain'"'"'s own words with bin/fm-captain-hold.sh answer <task> --decision-file <path>, or re-open the status decision when that resolution was not the captain'"'"'s word.\n' || return 1
 }
 
-# Print the NOTICED section: noticed problems and this week's top ideas filed
-# for the captain that no captain reply has mentioned yet (fork patch,
-# docs/fork-decisions/2026-10-27-noticed-queue.md). bin/fm-noticed.sh owns the
-# unseen list, state/noticed/unseen.tsv; this reads the file and changes
-# nothing, so every drain repeats it until firstmate marks the items shown.
+# Print the NOTICED section: the noticed problems filed as urgent or doing harm
+# (label `now`) that the captain has not been told yet (fork patches,
+# docs/fork-decisions/2026-10-27-noticed-queue.md and
+# 2026-11-08-noticed-funnel.md). Every other unseen row waits for the Monday
+# triage and is never printed here. bin/fm-noticed.sh owns the unseen list,
+# state/noticed/unseen.tsv; this reads the file and changes nothing, so every
+# drain repeats a `now` row until firstmate marks it shown.
 # It runs at every drain exit, apart from the status snapshot, because unseen
 # items outlive the last worker's status file. Bounded and silent when empty,
 # and a failure never changes the drain's exit status.
@@ -613,7 +615,8 @@ print_noticed_section() {
   [ -n "$unseen" ] || return 0
   while IFS=$(printf '\t') read -r id label title; do
     [ -n "$id" ] || continue
-    line="$id ($label): $title"
+    [ "$label" = now ] || continue
+    line="$id: $title"
     fm_cap_line_var "$line" 219
     line=$FM_LINE_CAP_LINE
     if [ $((used + ${#line} + 1)) -gt "$global_bytes" ]; then
@@ -628,12 +631,12 @@ print_noticed_section() {
 $unseen
 EOF
   [ "$shown" -gt 0 ] || [ "$omitted" -gt 0 ] || return 0
-  printf 'NOTICED (filed for the captain, not yet shown to him):\n' || return 1
+  printf 'NOTICED (urgent or doing harm, not yet told to the captain):\n' || return 1
   printf '%s' "$output" || return 1
   if [ "$omitted" -gt 0 ]; then
     printf 'NOTICED: %d more omitted (byte cap)\n' "$omitted" || return 1
   fi
-  printf 'NOTICED: mention each once in your next captain reply, then mark it: bin/fm-noticed.sh shown <id>...\n' || return 1
+  printf 'NOTICED: tell the captain this turn, leading your final captain-facing message with it, then mark each: bin/fm-noticed.sh shown <id>...\n' || return 1
 }
 
 # Print BRANCH OUTCOMES: what the supervision host's session recorded since

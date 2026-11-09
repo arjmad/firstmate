@@ -2,8 +2,8 @@
 # Behavior tests for bin/fm-noticed.sh: a noticed problem or an idea becomes a
 # captain hold that never dispatches, a duplicate attaches evidence instead of
 # filing twice, a finished task's lines are collected, the Monday top 3 is
-# recorded once, and the wake drain shows each unseen item until it is marked
-# shown.
+# recorded once, every unseen item waits for the Monday triage, and the wake
+# drain shows only an urgent (--now) item, until it is marked shown.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -196,20 +196,104 @@ test_close_settles_an_item_and_list_keeps_answered_ones() {
   pass "close settles an item with its evidence and unseen entry, and list keeps answered items"
 }
 
-test_the_drain_shows_unseen_items() {
+test_a_fix_on_its_own_waits_for_the_triage() {
+  local home out drain
+  home=$(make_home fixed)
+  noticed "$home" file noticed stale-doc --title "Stale setup doc" --why "new hosts misconfigure" --from t1 >/dev/null
+  out=$(noticed "$home" close noticed-stale-doc --evidence "rewrote the setup steps" --fixed \
+    --pr https://github.com/o/r/pull/7) || fail "close --fixed refused a noticed item: $out"
+  assert_equals "closed: noticed-stale-doc" "$out" "close --fixed did not report the item"
+  assert_contains "$(tasks "$home" show noticed-stale-doc --full)" \
+    "Settled 2026-10-27: rewrote the setup steps (https://github.com/o/r/pull/7) Fixed by firstmate on its own." \
+    "the fix, its PR and who fixed it were not recorded"
+  assert_equals "noticed-stale-doc	fixed	Stale setup doc - rewrote the setup steps (https://github.com/o/r/pull/7)" \
+    "$(noticed "$home" unseen)" "the fix is not listed for the Monday triage"
+  drain=$(run_drain "$home") || fail "the drain failed with a fix listed"
+  assert_not_contains "$drain" "NOTICED" "a fix on its own interrupted the captain"
+  assert_equals "shown: noticed-stale-doc" "$(noticed "$home" shown noticed-stale-doc)" "the triage could not mark the fix"
+  assert_equals "" "$(noticed "$home" unseen)" "a reported fix stayed listed"
+
+  noticed "$home" file noticed stale-doc --title "Stale setup doc" --why "still wrong" --from t2 >/dev/null
+  noticed "$home" close noticed-stale-doc --evidence "second fix" --fixed --pr https://github.com/o/r/pull/8 >/dev/null
+  out=$(noticed "$home" file noticed stale-doc --title "Stale setup doc" --why "broken again" --from t3)
+  assert_equals "reopened: noticed-stale-doc" "$out" "a problem back after a fix on its own was not reopened"
+  assert_equals "noticed-stale-doc	noticed	Stale setup doc" "$(noticed "$home" unseen)" \
+    "a problem back after its fix is still reported as fixed"
+
+  noticed "$home" file noticed refunds --title "Refunds failing" --why "customers unpaid" --from t1 --now >/dev/null
+  noticed "$home" close noticed-refunds --evidence "retried the refunds" --fixed --pr https://github.com/o/r/pull/9 >/dev/null
+  assert_contains "$(noticed "$home" unseen)" "noticed-refunds	now	Refunds failing" \
+    "closing an urgent item before he was told dropped it from the drain"
+
+  noticed "$home" file noticed printer --title "Printer offline" --why "labels" --from t1 >/dev/null
+  noticed "$home" close noticed-printer --evidence x --fixed >/dev/null 2>&1 && fail "a fix on its own was recorded without its PR"
+  assert_contains "$(tasks "$home" show noticed-printer)" "state: queued" "a refused close still closed the item"
+  noticed "$home" file idea faster --title a --why b --from t1 >/dev/null
+  noticed "$home" close idea-faster --evidence x --fixed --pr https://github.com/o/r/pull/1 >/dev/null 2>&1 \
+    && fail "an idea was closed as fixed on its own"
+  assert_contains "$(tasks "$home" show idea-faster)" "state: queued" "a refused close still closed the idea"
+  pass "a fix firstmate makes on its own needs its PR, waits for the Monday triage, gives way to a recurrence, and never hides an untold urgent item"
+}
+
+test_the_drain_shows_only_urgent_items() {
   local home drain
   home=$(make_home drain)
   drain=$(run_drain "$home") || fail "the drain failed with nothing filed"
   assert_not_contains "$drain" "NOTICED" "the drain printed an empty NOTICED section"
   noticed "$home" file noticed canary-red --title "Canary red" --why "packet" --from t1 >/dev/null
-  drain=$(run_drain "$home") || fail "the drain failed with an unseen item"
-  assert_contains "$drain" "NOTICED (filed for the captain, not yet shown to him):" "the section is missing"
-  assert_contains "$drain" "noticed-canary-red (noticed): Canary red" "the item is missing from the section"
+  noticed "$home" file idea bundle-slow --title "Bundle slow movers" --why "frees cash" --from t1 >/dev/null
+  noticed "$home" top3 idea-bundle-slow >/dev/null
+  # A row an earlier version listed for the next reply waits for the triage too.
+  printf 'noticed-old\tnoticed\tOld item\n' >> "$home/state/noticed/unseen.tsv"
+  drain=$(run_drain "$home") || fail "the drain failed with unseen items"
+  assert_not_contains "$drain" "NOTICED" "the drain showed an item that waits for the Monday triage"
+  assert_equals 3 "$(noticed "$home" unseen | wc -l | tr -d ' ')" "the waiting items left the unseen list"
+  noticed "$home" file noticed refunds-failing --title "Refunds failing" --why "customers unpaid" \
+    --from t2 --now >/dev/null
+  drain=$(run_drain "$home") || fail "the drain failed with an urgent item"
+  assert_contains "$drain" "NOTICED (urgent or doing harm, not yet told to the captain):" "the section is missing"
+  assert_contains "$drain" "noticed-refunds-failing: Refunds failing" "the urgent item is missing from the section"
+  assert_not_contains "$drain" "canary-red" "a waiting item was shown beside the urgent one"
+  assert_not_contains "$drain" "bundle-slow" "a top idea was shown beside the urgent one"
+  assert_contains "$drain" "leading your final captain-facing message" "the section does not say to lead his reply with it"
   assert_contains "$drain" "bin/fm-noticed.sh shown <id>" "the section does not say how to mark it shown"
-  noticed "$home" shown noticed-canary-red >/dev/null
+  noticed "$home" shown noticed-refunds-failing >/dev/null
   drain=$(run_drain "$home") || fail "the drain failed after marking"
   assert_not_contains "$drain" "NOTICED" "a shown item was presented again"
-  pass "the wake drain shows each unseen item until it is marked shown, with no worker status on file"
+  pass "the wake drain shows only an urgent item, until it is marked shown, with no worker status on file"
+}
+
+test_now_marks_an_item_urgent() {
+  local home out
+  home=$(make_home now)
+  out=$(noticed "$home" file noticed refunds-failing --title "Refunds failing" --why "customers unpaid" \
+    --from t1 --now) || fail "file refused --now: $out"
+  assert_equals "filed: noticed-refunds-failing" "$out" "a --now item was not filed"
+  assert_contains "$(tasks "$home" show noticed-refunds-failing)" "held: yes" "a --now item is not held"
+  assert_equals "noticed-refunds-failing	now	Refunds failing" "$(noticed "$home" unseen)" \
+    "a --now item is not on the unseen list as now"
+  noticed "$home" file noticed refunds-failing --title "Refunds failing" --why "still" --from t2 >/dev/null
+  assert_equals "noticed-refunds-failing	now	Refunds failing" "$(noticed "$home" unseen)" \
+    "a later sighting without --now demoted the urgent item"
+
+  noticed "$home" file noticed canary-red --title "Canary red" --why "packet" --from t1 >/dev/null
+  out=$(noticed "$home" file noticed canary-red --title "Canary red" --why "orders lost" --from t2 --now)
+  assert_equals "matched: noticed-canary-red" "$out" "an urgent duplicate was not matched"
+  assert_contains "$(noticed "$home" unseen)" "noticed-canary-red	now	Canary red" \
+    "an urgent duplicate did not make the open item urgent"
+  assert_equals 2 "$(noticed "$home" unseen | wc -l | tr -d ' ')" "making an item urgent listed it twice"
+
+  noticed "$home" shown noticed-canary-red >/dev/null
+  tasks "$home" "done" noticed-canary-red >/dev/null || fail "could not close the fixture"
+  out=$(noticed "$home" file noticed canary-red --title "Canary red" --why "again" --from t3 --now)
+  assert_equals "reopened: noticed-canary-red" "$out" "an urgent recurrence was not reopened"
+  assert_contains "$(noticed "$home" unseen)" "noticed-canary-red	now	Canary red" \
+    "an urgent recurrence is not listed as now"
+
+  noticed "$home" file idea faster --title a --why b --from t1 --now >/dev/null 2>&1 \
+    && fail "an idea was filed as urgent"
+  assert_equals "" "$(noticed "$home" unseen | grep idea- || true)" "a refused urgent idea was listed"
+  pass "--now files, matches or reopens a noticed item as urgent, keeps it urgent, and refuses an idea"
 }
 
 test_noticed_is_a_captain_hold_that_never_dispatches
@@ -219,4 +303,6 @@ test_refusals
 test_top3_is_recorded_once_and_shown_until_marked
 test_collect_reads_the_report_then_notes
 test_close_settles_an_item_and_list_keeps_answered_ones
-test_the_drain_shows_unseen_items
+test_now_marks_an_item_urgent
+test_a_fix_on_its_own_waits_for_the_triage
+test_the_drain_shows_only_urgent_items
