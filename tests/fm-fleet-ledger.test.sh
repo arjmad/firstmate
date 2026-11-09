@@ -293,7 +293,7 @@ ledger() {  # <fm-fleet-ledger.sh arguments...>
 
 test_secondmate_respawn_keeps_its_place() {
   make_case on-respawn on
-  printf 'working [at=1790000000]: one\nneeds-decision [at=1790000100]: two\n' > "$HOME_DIR/state/$TASK.status"
+  printf 'working: one\nneeds-decision: two\n' > "$HOME_DIR/state/$TASK.status"
   ledger dispatched "$TASK" secondmate "" claude ""
   ledger capture
   ledger dispatched "$TASK" secondmate "" claude ""
@@ -310,7 +310,7 @@ EOF
 
 test_fresh_dispatch_starts_at_byte_zero() {
   make_case on-fresh on
-  printf '500\n' > "$HOME_DIR/state/.$TASK.fleet-ledger-offset"
+  printf '30\n' > "$HOME_DIR/state/.$TASK.fleet-ledger-offset"
   ledger dispatched "$TASK" ship sample claude ""
   printf 'working [at=1790000000]: setup done\n' > "$HOME_DIR/state/$TASK.status"
   ledger capture
