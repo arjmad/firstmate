@@ -359,33 +359,37 @@ test_lock_churn_leaves_no_stray_owner_link() {
   # an acquirer whose link creation followed the winner's lock link into its
   # owner directory left a stray link there, so the winner's release could not
   # remove that directory.
-  local dir state lockdir overlaps i pids pid leftovers strays
+  local dir state lockdir overlaps wins i pids pid leftovers strays
   dir=$(make_case lock-churn)
   state="$dir/state"
   lockdir="$state/.contend.lock"
   overlaps="$dir/overlaps"
+  wins="$dir/wins"
   : > "$overlaps"
+  : > "$wins"
   pids=
   i=1
   while [ "$i" -le 16 ]; do
     FM_STATE_OVERRIDE="$state" bash -c '
       . "$1"
       k=0
-      while [ "$k" -lt 15 ]; do
+      while [ "$k" -lt 25 ]; do
         if fm_lock_try_acquire "$2"; then
+          printf "win\n" >> "$5"
           mkdir "$3/held" 2>/dev/null || printf "overlap\n" >> "$4"
           rmdir "$3/held" 2>/dev/null
           fm_lock_release "$2"
         fi
         k=$((k + 1))
       done
-    ' _ "$LIB" "$lockdir" "$dir" "$overlaps" &
+    ' _ "$LIB" "$lockdir" "$dir" "$overlaps" "$wins" &
     pids="$pids $!"
     i=$((i + 1))
   done
   for pid in $pids; do
     wait "$pid" 2>/dev/null || true
   done
+  [ "$(wc -l < "$wins")" -gt 1 ] || fail "churning acquirers took the lock $(wc -l < "$wins" | tr -d ' ') time(s), too few to race"
   [ ! -s "$overlaps" ] || fail "two acquirers held the lock at once $(wc -l < "$overlaps") time(s)"
   [ ! -e "$lockdir" ] && [ ! -L "$lockdir" ] || fail "the lock outlived every holder's release"
   leftovers=$(find "$state" -maxdepth 1 -name '.contend.lock.owner.*' | wc -l | tr -d ' ')
