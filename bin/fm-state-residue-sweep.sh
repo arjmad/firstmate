@@ -97,8 +97,11 @@
 # at it, the pid it records is not running, and it is older than
 # FM_STATE_RESIDUE_OWNER_MIN_AGE_SECONDS - an acquirer is inside that window for
 # well under a second before it links. Removal deletes only the lock library's
-# own known files and then the empty directory; one holding anything else is
-# kept with a warning, in a dry run too.
+# own known files, any stray owner link, and then the empty directory; one
+# holding anything else is kept with a warning, in a dry run too. A stray owner
+# link is a link named after a sibling owner of the same lock and pointing at
+# it: an acquirer before ln -sn followed the lock link into this directory and
+# left it there, so the holder's release could not remove the directory.
 #
 # Scratch rotation. bin/fm-claude-stop-autoarm.sh captures each arm attempt in
 # state/.claude-autoarm-output.<random>, bin/fm-wake-drain.sh stages a row
@@ -597,14 +600,23 @@ lock_points_at() {  # <link> <owner-basename>
   [ "${target##*/}" = "$2" ]
 }
 
-# owner_holds_only_lock_files <dir>: every entry is one the lock library writes,
-# so fm_lock_discard_owner empties it and a dry run can promise the removal.
+is_stray_owner_link() {  # <entry> <owner-basename>
+  local base=${1##*/} target
+  [ -L "$1" ] || return 1
+  case "$base" in "${2%.owner.*}".owner.??????) ;; *) return 1 ;; esac
+  target=$(readlink "$1" 2>/dev/null) || return 1
+  [ "${target##*/}" = "$base" ]
+}
+
+# owner_holds_only_lock_files <dir>: every entry is one the lock library writes
+# or a stray owner link, so the removal empties it and a dry run can promise it.
 owner_holds_only_lock_files() {
   local entry known found
   for entry in "$1"/* "$1"/.*; do
     case "${entry##*/}" in
       '*'|'.*'|.|..) continue ;;
     esac
+    is_stray_owner_link "$entry" "${1##*/}" && continue
     found=0
     for known in "${FM_LOCK_KNOWN_FILES[@]}"; do
       [ "${entry##*/}" = "$known" ] && { found=1; break; }
@@ -614,7 +626,7 @@ owner_holds_only_lock_files() {
 }
 
 sweep_lock_owners() {
-  local path name lock pid
+  local path name lock pid entry
   for path in "$STATE"/*.owner.?????? "$STATE"/.*.owner.??????; do
     [ -d "$path" ] && [ ! -L "$path" ] || continue
     name=${path##*/}
@@ -633,6 +645,9 @@ sweep_lock_owners() {
       REMOVED_LOCK_OWNERS=$((REMOVED_LOCK_OWNERS + 1))
       continue
     fi
+    for entry in "$path"/* "$path"/.*; do
+      is_stray_owner_link "$entry" "$name" && rm -f "$entry"
+    done
     fm_lock_discard_owner "$path"
     if [ -e "$path" ]; then
       warn "could not remove lock owner $name"

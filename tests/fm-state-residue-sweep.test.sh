@@ -29,7 +29,8 @@
 #     Herdr presentation journal once the workspace it names is proven gone.
 #   - A watch-arm capture rotates by age only while no live watcher holds the
 #     lock.
-#   - A lock owner is retired only when old, unlinked, and its pid is dead.
+#   - A lock owner is retired only when old, unlinked, and its pid is dead,
+#     including one that holds only stray links to its own lock's owners.
 #   - The read-only session path (FM_BOOTSTRAP_DETECT_ONLY=1) runs no sweep.
 #   - --dry-run reports the same verdicts and removes nothing.
 #   - Silence when nothing was removed; one BOOTSTRAP_INFO line otherwise.
@@ -650,6 +651,51 @@ test_dead_lock_owners_swept_and_live_kept() {
   pass "sweep: only old, unlinked lock owners of dead processes are retired"
 }
 
+test_stray_owner_links_retired_and_live_kept() {
+  # A contender's link creation once followed the lock link into the winner's
+  # owner directory and left a link to its own owner there, so the winner's
+  # release emptied the directory of its own files but could not remove it.
+  local home fb out state old o
+  home=$(new_home stray-links); fb=$(make_tmux "$TMP_ROOT/stray-links")
+  state="$home/state"
+  world "$home" "" ok zsh
+  old=$(( $(date +%s) - 2 * 3600 ))
+  for o in .race.lock.owner.AAAAAA .race.lock.owner.BBBBBB .live.lock.owner.CCCCCC \
+    .other.lock.owner.DDDDDD; do
+    mkdir "$state/$o"
+  done
+  ln -s "$state/.race.lock.owner.XXXXX1" "$state/.race.lock.owner.AAAAAA/.race.lock.owner.XXXXX1"
+  ln -s "$state/.race.lock.owner.XXXXX2" "$state/.race.lock.owner.BBBBBB/.race.lock.owner.XXXXX2"
+  ln -s "$state/.race.lock.owner.XXXXX3" "$state/.race.lock.owner.BBBBBB/.race.lock.owner.XXXXX3"
+  ln -s "$state/.live.lock.owner.XXXXX4" "$state/.live.lock.owner.CCCCCC/.live.lock.owner.XXXXX4"
+  ln -s "$state/.live.lock.owner.CCCCCC" "$state/.live.lock"
+  ln -s /etc "$state/.other.lock.owner.DDDDDD/.other.lock.owner.XXXXX5"
+  for o in .race.lock.owner.AAAAAA .race.lock.owner.BBBBBB .live.lock.owner.CCCCCC \
+    .other.lock.owner.DDDDDD; do
+    fm_touch_epoch "$old" "$state/$o"
+  done
+
+  out=$(run_sweep "$fb" "$home" --dry-run)
+  assert_contains "$out" "would retire dead lock owner .race.lock.owner.AAAAAA" \
+    "--dry-run should list an owner whose only entry is a stray owner link: $out"
+  assert_contains "$out" "would retire dead lock owner .race.lock.owner.BBBBBB" \
+    "--dry-run should list an owner holding several stray owner links: $out"
+  [ -L "$state/.race.lock.owner.AAAAAA/.race.lock.owner.XXXXX1" ] || fail "--dry-run removed a stray owner link"
+
+  out=$(run_sweep "$fb" "$home")
+
+  [ ! -e "$state/.race.lock.owner.AAAAAA" ] || fail "an owner holding only a stray owner link should be retired"
+  [ ! -e "$state/.race.lock.owner.BBBBBB" ] || fail "an owner holding only stray owner links should be retired"
+  [ -L "$state/.live.lock.owner.CCCCCC/.live.lock.owner.XXXXX4" ] \
+    || fail "the owner a lock points at must keep its entries"
+  [ -L "$state/.other.lock.owner.DDDDDD/.other.lock.owner.XXXXX5" ] \
+    || fail "a link that does not name its own owner directory is not a stray owner link"
+  assert_contains "$out" "kept lock owner .other.lock.owner.DDDDDD" \
+    "the sweep should report the owner it keeps: $out"
+  assert_contains "$out" "2 dead lock owner(s)" "the summary line should count retired lock owners: $out"
+  pass "sweep: an owner holding only stray owner links is retired and a live one is kept"
+}
+
 test_home_summary_scratch_rotates_by_age() {
   local home fb now
   home=$(new_home summary-scratch); fb=$(make_tmux "$TMP_ROOT/summary-scratch")
@@ -998,6 +1044,7 @@ test_heartbeat_mode_runs_at_most_hourly
 test_task_set_acquire_waits_out_only_the_sweep
 test_task_records_kept_when_live_names_are_unknown
 test_dead_lock_owners_swept_and_live_kept
+test_stray_owner_links_retired_and_live_kept
 test_home_summary_scratch_rotates_by_age
 test_watch_arm_scratch_rotates_unless_a_watcher_runs
 test_retired_task_state_swept_and_live_kept
