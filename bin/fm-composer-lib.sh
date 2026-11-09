@@ -1911,9 +1911,11 @@ _fm_composer_leftbar_floor_row() {  # <trimmed-row>
 # Everything else - unclaimed activity (`Working on request...`), and above all
 # a row leading with the SAME glyph the envelope was proven by (`❯ my typed
 # draft`, which is a live composer) - is NOT furniture, so the envelope above
-# it stays stale and the verdict stays a refusal. The one same-glyph row that
-# never reaches this zone is a slash-command menu's selection row, which the
-# row scan already declines as a candidate (_fm_composer_row_is_slash_menu_selection).
+# it stays stale and the verdict stays a refusal. A slash-command menu's
+# selection row is the one same-glyph row handled elsewhere: under a titled
+# composer the row scan declines it as a candidate
+# (_fm_composer_row_is_slash_menu_selection), and under an untitled rule pair
+# _fm_composer_bare_is_popup_selection demotes it.
 _fm_composer_row_is_composer_furniture() {  # <trimmed-row> <proof-glyph>
   local row=$1 proof=$2 glyph=''
   [ -n "$row" ] || return 1

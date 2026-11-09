@@ -4466,6 +4466,28 @@ if teardown_owns_worktree && [ "$ALLOC_RECORDS_ONLY" != 1 ] && [ -d "$WT" ] && [
   validate_worktree_teardown_safety || exit 1
 fi
 
+# The same reap and post-reap check for each companion copy, before anything
+# destructive runs, so a refusal leaves every copy, lease, and record intact for
+# a rerun. A lock a reaped git process left behind is cleared and rechecked as
+# the first proof does.
+for also_i in "${!TEARDOWN_ALSO_WTS[@]}"; do
+  also_wt=${TEARDOWN_ALSO_WTS[$also_i]}
+  reap_task_worktree_processes companion "$also_wt" || exit 1
+  [ "$FORCE" != "--force" ] || continue
+  also_pr=$(meta_value "$META" "also_pr_${TEARDOWN_ALSO_REPOS[$also_i]}")
+  also_rc=0
+  teardown_companion_safety "$also_wt" "${TEARDOWN_ALSO_PROJECTS[$also_i]}" "$also_pr" || also_rc=$?
+  if [ "$also_rc" -eq "$TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED" ]; then
+    cleanup_stale_lock_for_safety_check "$also_wt" || exit 1
+    also_rc=0
+    teardown_companion_safety "$also_wt" "${TEARDOWN_ALSO_PROJECTS[$also_i]}" "$also_pr" || also_rc=$?
+  fi
+  if [ "$also_rc" -ne 0 ]; then
+    echo "REFUSED: task $ID's companion worktree of ${TEARDOWN_ALSO_REPOS[$also_i]} ($also_wt) holds work written during teardown that has not landed; nothing was returned." >&2
+    exit 1
+  fi
+done
+
 if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
 # Roll the accepted legacy incarnation's stamp back to the record's exact
 # pre-stamp bytes. Uses perl - already in the teardown lifecycle's curated PATH
@@ -4640,15 +4662,6 @@ for also_i in "${!TEARDOWN_ALSO_WTS[@]}"; do
   also_wt=${TEARDOWN_ALSO_WTS[$also_i]}
   also_project=${TEARDOWN_ALSO_PROJECTS[$also_i]}
   also_label="companion worktree of ${TEARDOWN_ALSO_REPOS[$also_i]}"
-  reap_task_worktree_processes companion "$also_wt" || exit 1
-  # Upstream's post-reap re-validation of the task copy, applied to each
-  # companion: work its last process wrote after the check above must not be
-  # deleted with the branch or returned with the slot.
-  if [ "$FORCE" != "--force" ] \
-    && ! teardown_companion_safety "$also_wt" "$also_project" "$(meta_value "$META" "also_pr_${TEARDOWN_ALSO_REPOS[$also_i]}")"; then
-    echo "REFUSED: task $ID's $also_label ($also_wt) holds work written during teardown that has not landed; it keeps its branch and lease for review." >&2
-    exit 1
-  fi
   also_branch=$(git -C "$also_wt" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
   if [ "$also_branch" != HEAD ] && git -C "$also_wt" checkout --detach -q 2>/dev/null; then
     git -C "$also_wt" branch -D "$also_branch" >/dev/null 2>&1 || true

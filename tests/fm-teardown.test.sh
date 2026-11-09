@@ -2129,6 +2129,9 @@ SH
     || fail "companion-late: the companion task branch was detached or deleted"
   [ "$(companion_lease_holder "$case_dir")" = task-x1 ] \
     || fail "companion-late: the companion slot lease was released"
+  [ "$(git -C "$case_dir/wt" symbolic-ref --short HEAD 2>/dev/null)" = fm/task-x1 ] \
+    || fail "companion-late: the refusal came after the task copy lost its branch"
+  assert_present "$case_dir/state/task-x1.meta" "companion-late: the task record was removed"
   pass "teardown refuses and keeps a companion worktree its last process edited during the reap"
 }
 
