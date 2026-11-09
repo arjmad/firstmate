@@ -123,7 +123,8 @@ case "${1-}" in
     if [ -s "$state/open" ]; then
       while IFS= read -r listed; do
         [ -n "$listed" ] || continue
-        printf '  %s,open,"http://127.0.0.1:4387/session/0123456789abcdef",0\n' "$listed"
+        url=$(jq -r --arg file "$listed" 'first(.sessions[] | select(.file == $file) | .url) // empty' "$state/state.json" 2>/dev/null)
+        printf '  %s,open,"%s",0\n' "$listed" "${url:-http://127.0.0.1:4387/session/0123456789abcdef}"
       done < "$state/open"
     fi
     exit 0
@@ -133,10 +134,24 @@ esac
 file=$1
 real=$(cd "$(dirname "$file")" && pwd -P)/$(basename "$file")
 [ -e "$state/refuse-open" ] || printf '%s\n' "$real" >> "$state/open"
-jq -n --arg file "$real" \
-  '{sessions:{"0123456789abcdef":{file:$file,url:"http://127.0.0.1:4387/session/0123456789abcdef"}}}' \
-  > "$state/state.json"
-printf 'session:\n  file: %s\n  url: "http://127.0.0.1:4387/session/0123456789abcdef"\n  status: opened\n' "$real"
+# Like Lavish, each file keeps its own session; the first one opened in a state
+# directory gets the fixed id the single-capture cases assert.
+until mkdir "$state/state.lock" 2>/dev/null; do sleep 0.01; done
+trap 'rmdir "$state/state.lock" 2>/dev/null' EXIT
+[ -s "$state/state.json" ] || printf '{"sessions":{}}\n' > "$state/state.json"
+id=$(jq -r --arg file "$real" 'first(.sessions | to_entries[] | select(.value.file == $file) | .key) // empty' "$state/state.json")
+if [ -z "$id" ]; then
+  if [ "$(jq '.sessions | length' "$state/state.json")" -eq 0 ]; then
+    id=0123456789abcdef
+  else
+    id=$(printf '%s' "$real" | cksum | awk '{printf "%016x", $1}')
+  fi
+fi
+url="http://127.0.0.1:4387/session/$id"
+jq --arg id "$id" --arg file "$real" --arg url "$url" '.sessions[$id] = {file:$file,url:$url}' \
+  "$state/state.json" > "$state/state.json.tmp.$$" && mv -f "$state/state.json.tmp.$$" "$state/state.json"
+rmdir "$state/state.lock" 2>/dev/null; trap - EXIT
+printf 'session:\n  file: %s\n  url: "%s"\n  status: opened\n' "$real" "$url"
 SH
   chmod +x "$fakebin/lavish-axi"
   printf '%s\n' "$home"

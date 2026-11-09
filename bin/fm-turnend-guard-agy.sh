@@ -36,6 +36,10 @@
 #     cleanly with {} if a newer Stop hook superseded this park while waiting.
 set -u
 
+case "${1:-}" in
+  -h|--help) printf 'Usage: fm-turnend-guard-agy.sh (see below)\n\n'; awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"

@@ -20,6 +20,10 @@
 # Removing the opt-in, losing the pinned session, or entering daemon-backed
 # away mode stops retries and leaves the current arm for its next owner.
 set -u
+
+case "${1:-}" in
+  -h|--help) printf 'Usage: fm-supervision-handoff.sh (see below)\n\n'; awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
 umask 077
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_HOME="${FM_HOME:?}"

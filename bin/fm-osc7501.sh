@@ -120,6 +120,10 @@
 # FM_OSC7501_INTERVAL/_HEARTBEAT/_PROBE_SECS tune the loop and version probe.
 set -u
 
+case "${1:-}" in
+  -h|--help) printf 'Usage: fm-osc7501.sh (see below)\n\n'; awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"

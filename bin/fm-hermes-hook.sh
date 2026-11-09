@@ -5,6 +5,10 @@
 # rotate the session id without losing the end notification. Busy
 # events and turn-ended notifications use the shared generation-bound writer.
 set -eu
+
+case "${1:-}" in
+  -h|--help) printf 'Usage: fm-hermes-hook.sh (see below)\n\n'; awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE=${1:?state required}
 ID=${2:?task id required}

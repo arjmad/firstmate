@@ -18,6 +18,10 @@
 # `herdr-core` before the `hc` alias, so the asset name is what gets installed.
 set -eu
 
+case "${1:-}" in
+  -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
+
 FM_HC_PIN_VERSION=0.1.14
 # Bounded download ceiling (bytes). The largest official 0.1.14 tarball is
 # under 3 MiB.

@@ -20,6 +20,10 @@
 set -eu
 
 case "${1:-}" in
+  -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
+
+case "${1:-}" in
   check|install|cleanup) ;;
   *) echo "usage: fm-t3code-codex-env.sh check|install|cleanup <worktree> [NAME=VALUE...]" >&2; exit 1 ;;
 esac

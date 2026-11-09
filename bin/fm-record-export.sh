@@ -14,6 +14,10 @@
 # commit. Teardown already owns that lock and sets FM_RECORD_EXPORT_META_LOCK_HELD.
 set -eu
 
+case "${1:-}" in
+  -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
+
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 FM_ROOT=${FM_ROOT_OVERRIDE:-$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd -P)}
 FM_HOME=${FM_HOME:-$FM_ROOT}

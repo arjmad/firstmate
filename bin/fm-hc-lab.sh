@@ -42,6 +42,10 @@
 # the lab directory for inspection, never reducing the failure to a warning.
 set -u
 
+case "${1:-}" in
+  -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
+
 fm_hclab_error() {
   echo "fm-hc-lab: $*" >&2
 }

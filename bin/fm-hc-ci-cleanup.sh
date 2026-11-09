@@ -22,6 +22,10 @@
 #   fm-hc-ci-cleanup.sh teardown <snapshot-path>
 set -eu
 
+case "${1:-}" in
+  -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
+
 die() {
   printf 'fm-hc-ci-cleanup.sh: %s\n' "$*" >&2
   exit 1
