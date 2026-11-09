@@ -5365,7 +5365,7 @@ spawn_take_companion_slot() { # <repo> <project>
   }
   fm_lock_release "$SPAWN_ALSO_LOCK" || return 1
   SPAWN_ALSO_LOCK_HELD=0
-  freshen_spawn_worktree_base "$path" "" || return 1
+  freshen_spawn_worktree_base "$path" "" "$proj" "$MODE" || return 1
   SPAWN_ALSO_PATHS+=("$path")
 }
 

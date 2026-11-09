@@ -2095,6 +2095,43 @@ test_landed_companion_worktree_is_returned() {
   pass "teardown returns a landed companion worktree with its lease and claim"
 }
 
+# A companion edited by the worker's last process while teardown reaps it must
+# not be deleted with its branch or returned with its slot (upstream's post-reap
+# re-validation, applied to the fork's companion worktrees).
+test_companion_work_written_at_reap_is_preserved() {
+  local case_dir slot rc
+  case_dir=$(make_case companion-late)
+  write_meta "$case_dir" direct-PR ship
+  slot=$(add_companion_slot "$case_dir")
+  printf 'companion change\n' > "$slot/companion.txt"
+  git -C "$slot" add companion.txt
+  git -C "$slot" -c user.email=t@t -c user.name=t commit -q -m "companion work"
+  git -C "$slot" push -q origin fm/task-x1
+  cat > "$case_dir/fakebin/lsof" <<'SH'
+#!/usr/bin/env bash
+# The reaper's scan (`lsof -a -d cwd`) runs only after every pre-destructive
+# check, so the companion's last write lands between its first check and its
+# reap.
+case "$*" in
+  *"-d cwd"*) [ -e "$FM_LATE_SLOT/late.txt" ] || printf 'late edit\n' > "$FM_LATE_SLOT/late.txt" ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/lsof"
+  set +e
+  FM_LATE_SLOT="$slot" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "companion-late: late companion work must refuse teardown: $(cat "$case_dir/stderr")"
+  assert_grep "written during teardown" "$case_dir/stderr" "companion-late: the refusal did not name the late work"
+  assert_present "$slot/late.txt" "companion-late: the late companion edit was lost"
+  [ "$(git -C "$slot" symbolic-ref --short HEAD)" = fm/task-x1 ] \
+    || fail "companion-late: the companion task branch was detached or deleted"
+  [ "$(companion_lease_holder "$case_dir")" = task-x1 ] \
+    || fail "companion-late: the companion slot lease was released"
+  pass "teardown refuses and keeps a companion worktree its last process edited during the reap"
+}
+
 # Push the worktree's task branch to origin so remote reachability alone would
 # call it landed. Args: case_dir
 push_task_branch_to_origin() {
@@ -7416,6 +7453,7 @@ test_process_exit_during_identity_lookup_does_not_refuse
 test_run_abort_precedes_process_reap_precedes_worktree_removal
 test_companion_worktree_with_unlanded_work_refuses
 test_landed_companion_worktree_is_returned
+test_companion_work_written_at_reap_is_preserved
 test_reassigned_companion_worktree_is_untouched
 test_pushed_branch_with_open_pr_refuses
 test_pushed_branch_with_merged_pr_allows
