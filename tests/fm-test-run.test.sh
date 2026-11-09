@@ -537,6 +537,28 @@ test_changed_bin_reference_selects_per_script_not_per_family() {
   pass "a bin reference selects the referencing scripts, and consumers still select their curated families"
 }
 
+# A curated arm names a script's own suite, but another suite that exercises the
+# script directly must still run when it changes.
+test_changed_curated_bin_also_selects_its_direct_readers() {
+  local tmp repo listed
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-changed-readers.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+  printf '# bin/fm-quota-choose.sh\n' >>"$repo/tests/fm-bearings-snapshot.test.sh"
+  git -C "$repo" add -A
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm "reader names the curated script"
+
+  printf '\n' >>"$repo/bin/fm-quota-choose.sh"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+
+  assert_contains "$listed" "tests/fm-quota-choose.test.sh" \
+    "the curated suite of the changed script must still be selected"
+  assert_contains "$listed" "tests/fm-bearings-snapshot.test.sh" \
+    "a suite outside the curated arm that names the changed script must be selected"
+  rm -rf "$tmp"
+  pass "a changed curated bin script selects its curated suite and every suite naming it"
+}
+
 # Exercise begin/end markers from real fixture processes to prove the automatic
 # changed-suite default and its explicit serial override.
 test_changed_uses_bounded_automatic_concurrency() {
@@ -1931,6 +1953,7 @@ test_changed_runner_surfaces_select_their_family
 test_shell_line_ending_policy_selects_runner_contract
 test_changed_dependency_selection_and_unmapped_failure
 test_changed_bin_reference_selects_per_script_not_per_family
+test_changed_curated_bin_also_selects_its_direct_readers
 test_changed_documentation_selects_its_readers_and_tree_checkers
 test_only_file_narrows_a_selection_and_refuses_strangers
 test_changed_uses_bounded_automatic_concurrency
