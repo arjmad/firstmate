@@ -29,8 +29,8 @@ Readers must ignore members and events they do not recognize, so later versions 
 
 | Event              | Extra members                                  | Written when |
 | ------------------ | ---------------------------------------------- | ------------ |
-| `task.dispatched`  | `kind`, `project`, `harness`, `model`          | A new worker or second mate is launched. A relaunch of an existing task is not recorded. |
-| `task.status`      | `state`, `key`, `text`                         | A complete, nonblank line in the task's status log is captured. |
+| `task.dispatched`  | `kind`, `project`, `harness`, `model`          | A new worker or second mate is launched, and again each time a second mate is respawned. A worker's relaunch of an existing task is not recorded. |
+| `task.status`      | `state`, `key`, `text`, `at`                   | A complete, nonblank line in the task's status log is captured. |
 | `task.pr_ready`    | `pr`                                           | Firstmate records the task's PR as ready for review. |
 | `task.merged`      | `via` (`"pr"` or `"local"`), plus `pr` when `via` is `"pr"` | The task's PR merge is recorded, or its local-only branch landed. |
 | `task.cleaned_up`  | none                                           | The task's worker and local copy were removed. |
@@ -43,13 +43,14 @@ It is written each time firstmate records a PR for the task, so registering a re
 `task.status` members: `state` is the status line's leading word, such as `working`, `needs-decision`, `blocked`, `paused`, `done`, `failed`, or `resolved`, or `null` when the line has none.
 `key` is the line's `[key=...]` decision key, or `null`.
 `text` is the status line after its first colon, verbatim, capped at 2000 characters; if the line has no colon, it is the whole line.
+`at` is the line's `[at=...]` emission time in Unix seconds, or `null` when the line has no well-formed stamp.
 
 Example:
 
 ```json
 {"v":1,"ts":1790132857,"event":"task.dispatched","task":"fix-login","kind":"ship","project":"webapp","harness":"claude","model":null}
-{"v":1,"ts":1790132870,"event":"task.status","task":"fix-login","state":"working","key":null,"text":" bug reproduced"}
-{"v":1,"ts":1790133400,"event":"task.status","task":"fix-login","state":"done","key":null,"text":" PR https://github.com/acme/webapp/pull/7 checks green"}
+{"v":1,"ts":1790132870,"event":"task.status","task":"fix-login","state":"working","key":null,"text":" bug reproduced","at":1790132869}
+{"v":1,"ts":1790133400,"event":"task.status","task":"fix-login","state":"done","key":null,"text":" PR https://github.com/acme/webapp/pull/7 checks green","at":1790133399}
 {"v":1,"ts":1790133410,"event":"task.pr_ready","task":"fix-login","pr":"https://github.com/acme/webapp/pull/7"}
 {"v":1,"ts":1790133900,"event":"task.merged","task":"fix-login","via":"pr","pr":"https://github.com/acme/webapp/pull/7"}
 {"v":1,"ts":1790133960,"event":"task.cleaned_up","task":"fix-login"}
@@ -65,7 +66,9 @@ Example:
   - lines a remote second mate reports, which reach this home through firstmate's relay;
   - lines written while the immediate record fails, for example when the ledger file cannot be written.
   Recording `task.pr_ready`, `task.merged`, or `task.cleaned_up` first records that task's pending status lines.
-- Captured status lines are delivered at least once unless a write fails or a crash loses unflushed records: an interrupted capture can repeat records, so a reader that must not double-count should tolerate duplicates.
+- Captured status lines are delivered at least once unless a write fails or a crash loses unflushed records.
+  A line with an `at` stamp is recorded once per task: a capture skips it when a `task.status` record with the same `at`, `state`, `key`, and `text` is already in the ledger for that task.
+  An unstamped line can repeat after an interrupted capture, so a reader that must not double-count should tolerate duplicates of those.
 - A status record can appear just before its task's `task.dispatched` record when the worker writes a status line in the moment between its launch and that record.
 - When a home turns the ledger on, status lines already in a live task's log are recorded on that task's next capture (which may be a worker status command, PR registration, merge, cleanup, or monitor poll); tasks dispatched or cleaned up while the flag was absent have no record of that.
 - There is no sequence number and no gap detection.

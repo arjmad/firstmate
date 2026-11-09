@@ -113,11 +113,11 @@ test_flag_on_records_the_task_lifecycle() {
   rows=$(ledger_rows '[.event, .task] + (del(.v, .ts, .event, .task) | to_entries | map(.value))')
   assert_equals "$(cat <<EOF
 ["task.dispatched","$TASK","ship","sample","claude",null]
-["task.status","$TASK","working",null," setup done"]
-["task.status","$TASK","needs-decision","pick-one"," choose \"a\"\\\\b or c"]
-["task.status","$TASK","resolved","pick-one"," [key=pick-one]  chose a"]
-["task.status","$TASK",null,null,"partial line without its newline finished"]
-["task.status","$TASK","done",null," ready in branch"]
+["task.status","$TASK","working",null," setup done",1790000000]
+["task.status","$TASK","needs-decision","pick-one"," choose \"a\"\\\\b or c",null]
+["task.status","$TASK","resolved","pick-one"," [key=pick-one]  chose a",null]
+["task.status","$TASK",null,null,"partial line without its newline finished",null]
+["task.status","$TASK","done",null," ready in branch",null]
 ["task.merged","$TASK","local"]
 ["task.cleaned_up","$TASK"]
 EOF
