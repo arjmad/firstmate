@@ -1155,6 +1155,54 @@ test_current_capture_edits_pend_without_a_wake() {
   pass "edits under the capture dir on a current checkout pend capture without a wake, and STUCK only when a fast-forward is blocked"
 }
 
+test_open_capture_pr_pends_instead_of_stuck() {
+  local home live cmd log pending fakebin pr
+  home=$(isolated_home)
+  live=$(build_capture_live "$home" nova)
+  cmd="$home/capture-nova.sh"
+  pr="https://github.com/example/nova/pull/7"
+  printf "echo 'skill capture: 1 path(s) in %s'\n" "$pr" >> "$cmd"
+  fakebin="$home/fb-gh"; mkdir -p "$fakebin"
+  cat > "$fakebin/gh" <<SH
+#!/usr/bin/env bash
+[ "\$*" = "pr view $pr --json state --jq .state" ] || exit 1
+cat '$home/gh-state'
+SH
+  chmod +x "$fakebin/gh"
+  echo OPEN > "$home/gh-state"
+  advance_origin "$home" nova C1
+  printf 'live edit\n' >> "$live/skills/a.md"
+  live_config "$home" "nova $live capture=skills/:$cmd"
+  log="$home/state/.fleet-sync-scheduled.log"
+  pending="$home/state/fleet-sync-stuck"
+
+  PATH="$fakebin:$PATH" run_scheduled "$home"
+  wait_capture_done "$(cat "$log")"
+  PATH="$fakebin:$PATH" run_scheduled "$home"
+  assert_contains "$(cat "$log")" \
+    "nova live $live: capture-pending $pr: 1 uncommitted path(s) under skills/ only, 1 commits behind origin/main" \
+    "edits behind origin whose capture PR is open read as capture-pending"
+  assert_not_contains "$(cat "$log")" "STUCK" "an open capture PR is not STUCK"
+  [ ! -e "$pending" ] || fail "an open capture PR must not wake firstmate: $(cat "$pending")"
+
+  echo CLOSED > "$home/gh-state"
+  PATH="$fakebin:$PATH" run_scheduled "$home"
+  assert_contains "$(cat "$pending" 2>/dev/null)" "nova live $live: STUCK: on branch main with uncommitted changes, 1 commits behind origin/main" \
+    "with no open capture PR the blocked fast-forward wakes firstmate"
+
+  rm -f "$pending"
+  echo MERGED > "$home/gh-state"
+  cp "$live/skills/a.md" "$home/work-nova/skills/a.md"
+  git -C "$home/work-nova" commit -qam "capture landed"
+  git -C "$home/work-nova" push -q origin main
+  git -C "$live" checkout -q -- skills/a.md
+  PATH="$fakebin:$PATH" run_scheduled "$home"
+  assert_equals "$(git -C "$live" rev-parse origin/main)" "$(head_sha "$live")" "the settled checkout fast-forwards once its capture landed"
+  assert_contains "$(cat "$live/skills/a.md")" "live edit" "the landed edit is live"
+  [ ! -e "$pending" ] || fail "a landed capture must not wake firstmate: $(cat "$pending")"
+  pass "an open capture PR reads capture-pending without a wake, STUCK returns without one, and the landed capture fast-forwards"
+}
+
 test_capture_skips_edits_outside_its_dir() {
   local home live out
   home=$(new_home)
@@ -1558,6 +1606,7 @@ test_capture_starts_once_per_edit_state
 test_capture_still_running_is_not_restarted
 test_failed_capture_surfaces_when_edits_change
 test_current_capture_edits_pend_without_a_wake
+test_open_capture_pr_pends_instead_of_stuck
 test_capture_skips_edits_outside_its_dir
 test_settle_capture_waits_then_settles_and_fast_forwards
 test_settle_capture_failure_is_stuck
