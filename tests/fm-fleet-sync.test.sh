@@ -1166,6 +1166,7 @@ test_open_capture_pr_pends_instead_of_stuck() {
   cat > "$fakebin/gh" <<SH
 #!/usr/bin/env bash
 [ "\$*" = "pr view $pr --json state --jq .state" ] || exit 1
+[ "\$(cat '$home/gh-state')" != FAIL ] || exit 1
 cat '$home/gh-state'
 SH
   chmod +x "$fakebin/gh"
@@ -1185,22 +1186,27 @@ SH
   assert_not_contains "$(cat "$log")" "STUCK" "an open capture PR is not STUCK"
   [ ! -e "$pending" ] || fail "an open capture PR must not wake firstmate: $(cat "$pending")"
 
+  echo FAIL > "$home/gh-state"
+  : > "$log"
+  PATH="$fakebin:$PATH" run_scheduled "$home"
+  assert_contains "$(cat "$log")" "nova live $live: capture-pending $pr:" "a failed PR read keeps the last open reading"
+  [ ! -e "$pending" ] || fail "a failed PR read must not wake firstmate: $(cat "$pending")"
+
   echo CLOSED > "$home/gh-state"
   PATH="$fakebin:$PATH" run_scheduled "$home"
   assert_contains "$(cat "$pending" 2>/dev/null)" "nova live $live: STUCK: on branch main with uncommitted changes, 1 commits behind origin/main" \
     "with no open capture PR the blocked fast-forward wakes firstmate"
 
   rm -f "$pending"
-  echo MERGED > "$home/gh-state"
   cp "$live/skills/a.md" "$home/work-nova/skills/a.md"
   git -C "$home/work-nova" commit -qam "capture landed"
   git -C "$home/work-nova" push -q origin main
   git -C "$live" checkout -q -- skills/a.md
   PATH="$fakebin:$PATH" run_scheduled "$home"
-  assert_equals "$(git -C "$live" rev-parse origin/main)" "$(head_sha "$live")" "the settled checkout fast-forwards once its capture landed"
+  assert_equals "$(git -C "$live" rev-parse origin/main)" "$(head_sha "$live")" "once the landed edits are settled the next sync fast-forwards"
   assert_contains "$(cat "$live/skills/a.md")" "live edit" "the landed edit is live"
   [ ! -e "$pending" ] || fail "a landed capture must not wake firstmate: $(cat "$pending")"
-  pass "an open capture PR reads capture-pending without a wake, STUCK returns without one, and the landed capture fast-forwards"
+  pass "an open capture PR reads capture-pending without a wake, a closed one is STUCK again, and a settled checkout fast-forwards"
 }
 
 test_capture_skips_edits_outside_its_dir() {

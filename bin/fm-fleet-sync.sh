@@ -80,12 +80,14 @@
 # checkout whose HEAD is origin/<default> reports "live edits pending capture:
 # ..." - informational, since the edits block no fast-forward and wait for the
 # capture to land. One behind it whose capture log names a pull request that
-# `gh pr view` reads as open reports "capture-pending <PR url>: ..." - also
-# informational, since landing that PR settles and fast-forwards it (see the
-# settle form). One ahead of it, or behind it with no open capture PR, gets the
-# ordinary STUCK line with "; capture already ran for these edits (exit 0,
-# ...)". A failed capture
-# is always STUCK, naming its exit, and a new edit state after it starts another
+# `gh pr view` reads as open, within FM_CAPTURE_PR_READ_SECS (default 10),
+# reports "capture-pending <PR url>: ..." - also informational, since landing
+# that PR settles and fast-forwards it (see the settle form). A read that fails
+# keeps the last open reading of that same URL, recorded in
+# state/live-checkouts/<key>.capture.pr, so a gh outage wakes no one. One ahead
+# of it, or behind it with no open capture PR, gets the ordinary STUCK line with
+# "; capture already ran for these edits (exit 0, ...)". A failed capture is
+# always STUCK, naming its exit, and a new edit state after it starts another
 # one under a STUCK line naming the failure. Edits outside <dir>/ are reported
 # STUCK as before. <dir> must lie inside the checkout, and a <command> without a
 # slash is ./<command>.
@@ -157,6 +159,8 @@ case "$LIVE_RECORDS" in /*) ;; *) LIVE_RECORDS="$PWD/$LIVE_RECORDS" ;; esac
 # Inert unless FM_TIMING_LOG names a file; only the deferred network stage sets it.
 # shellcheck source=bin/fm-timing-lib.sh
 . "$SCRIPT_DIR/fm-timing-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 FM_LOCK_LOG_PREFIX=fleet-sync
 "$FM_ROOT/bin/fm-guard.sh" || true
 
@@ -178,6 +182,8 @@ fi
 
 CAPTURE_SETTLE_WAIT_SECS=${FM_CAPTURE_SETTLE_WAIT_SECS:-600}
 case "$CAPTURE_SETTLE_WAIT_SECS" in ''|*[!0-9]*) CAPTURE_SETTLE_WAIT_SECS=600 ;; esac
+CAPTURE_PR_READ_SECS=${FM_CAPTURE_PR_READ_SECS:-10}
+case "$CAPTURE_PR_READ_SECS" in ''|0|*[!0-9]*) CAPTURE_PR_READ_SECS=10 ;; esac
 LIVE_LOCK_WAIT_SECS=${FM_LIVE_CHECKOUT_LOCK_WAIT_SECS:-120}
 LIVE_LOCK_POLL_SECS=${FM_LIVE_CHECKOUT_LOCK_POLL_SECS:-5}
 case "$LIVE_LOCK_WAIT_SECS" in ''|*[!0-9]*) LIVE_LOCK_WAIT_SECS=120 ;; esac
@@ -597,12 +603,18 @@ capture_running() {
 }
 
 # capture_open_pr: print the last pull request URL the capture's log names
-# when gh reads that PR as still open; false otherwise, gh absent included.
+# when gh reads that PR as still open, or cannot read it and last read it open;
+# false otherwise.
 capture_open_pr() {
-  local url
+  local url state
   url=$(grep -Eo 'https://[^[:space:]]+/pull/[0-9]+' "$CAPTURE_RECORD.log" 2>/dev/null | tail -1) || url=""
   [ -n "$url" ] || return 1
-  [ "$(GH_PROMPT_DISABLED=1 gh pr view "$url" --json state --jq .state 2>/dev/null)" = OPEN ] || return 1
+  state=$(GH_PROMPT_DISABLED=1 fm_run_timed "$CAPTURE_PR_READ_SECS" gh pr view "$url" --json state --jq .state 2>/dev/null) || state=""
+  case "$state" in
+    OPEN) write_live_record "$CAPTURE_RECORD.pr" "$url" ;;
+    '') [ "$(cat "$CAPTURE_RECORD.pr" 2>/dev/null)" = "$url" ] || return 1 ;;
+    *) rm -f "$CAPTURE_RECORD.pr"; return 1 ;;
+  esac
   printf '%s\n' "$url"
 }
 
