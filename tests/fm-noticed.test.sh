@@ -196,6 +196,29 @@ test_close_settles_an_item_and_list_keeps_answered_ones() {
   pass "close settles an item with its evidence and unseen entry, and list keeps answered items"
 }
 
+test_a_fix_on_its_own_waits_for_the_triage() {
+  local home out drain
+  home=$(make_home fixed)
+  noticed "$home" file noticed stale-doc --title "Stale setup doc" --why "new hosts misconfigure" --from t1 >/dev/null
+  out=$(noticed "$home" close noticed-stale-doc --evidence "rewrote the setup steps" --fixed \
+    --pr https://github.com/o/r/pull/7) || fail "close --fixed refused a noticed item: $out"
+  assert_equals "closed: noticed-stale-doc" "$out" "close --fixed did not report the item"
+  assert_contains "$(tasks "$home" show noticed-stale-doc --full)" \
+    "Settled 2026-10-27: rewrote the setup steps (https://github.com/o/r/pull/7) Fixed by firstmate on its own." \
+    "the fix, its PR and who fixed it were not recorded"
+  assert_equals "noticed-stale-doc	fixed	Stale setup doc - rewrote the setup steps (https://github.com/o/r/pull/7)" \
+    "$(noticed "$home" unseen)" "the fix is not listed for the Monday triage"
+  drain=$(run_drain "$home") || fail "the drain failed with a fix listed"
+  assert_not_contains "$drain" "NOTICED" "a fix on its own interrupted the captain"
+  assert_equals "shown: noticed-stale-doc" "$(noticed "$home" shown noticed-stale-doc)" "the triage could not mark the fix"
+  assert_equals "" "$(noticed "$home" unseen)" "a reported fix stayed listed"
+
+  noticed "$home" file idea faster --title a --why b --from t1 >/dev/null
+  noticed "$home" close idea-faster --evidence x --fixed >/dev/null 2>&1 && fail "an idea was closed as fixed on its own"
+  assert_contains "$(tasks "$home" show idea-faster)" "state: queued" "a refused close still closed the idea"
+  pass "a fix firstmate makes on its own is recorded with its PR and waits for the Monday triage"
+}
+
 test_the_drain_shows_only_urgent_items() {
   local home drain
   home=$(make_home drain)
@@ -265,4 +288,5 @@ test_top3_is_recorded_once_and_shown_until_marked
 test_collect_reads_the_report_then_notes
 test_close_settles_an_item_and_list_keeps_answered_ones
 test_now_marks_an_item_urgent
+test_a_fix_on_its_own_waits_for_the_triage
 test_the_drain_shows_only_urgent_items

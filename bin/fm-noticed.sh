@@ -11,7 +11,7 @@
 #   fm-noticed.sh top3 <idea-id>...
 #   fm-noticed.sh unseen
 #   fm-noticed.sh shown <id>...
-#   fm-noticed.sh close <id> --evidence <text>
+#   fm-noticed.sh close <id> --evidence <text> [--fixed] [--pr <url>]
 #
 # .agents/skills/noticed-queue/SKILL.md owns the policy: who files, when, how
 # to match a duplicate, and what the Monday sweep and ranking do. This script
@@ -56,15 +56,19 @@
 #          labelled `top idea`. One line per id: `top: <id>`, or
 #          `refused: <id> (<why>)` with exit 1.
 # unseen   Print what firstmate has not yet shown the captain, one
-#          `<id><TAB><label><TAB><title>` line each, label `now`, `noticed`
-#          or `top idea`. A read; bin/fm-wake-drain.sh prints its `now` rows
-#          every drain, and the Monday triage reads the rest.
+#          `<id><TAB><label><TAB><title>` line each, label `now`, `noticed`,
+#          `top idea` or `fixed`. A read; bin/fm-wake-drain.sh prints its
+#          `now` rows every drain, and the Monday triage reads the rest.
 # shown    Mark items shown after the captain message or Monday triage that
 #          brought them to him.
 #          Prints `shown: <id>` for each id that was unseen.
 # close    Close an item that is settled (fixed, or replaced by other work):
-#          add a dated `Settled:` line with the evidence, mark it done, and
-#          drop it from the unseen list. Prints `closed: <id>`.
+#          add a dated `Settled:` line with the evidence and any --pr URL,
+#          mark it done, and drop it from the unseen list. --fixed says
+#          firstmate fixed a noticed item on its own: the item rejoins the
+#          unseen list labelled `fixed`, titled `<title> - <evidence>` and the
+#          PR URL, for the Monday triage's "Fixed on my own this week" list;
+#          an idea refuses it. Prints `closed: <id>`.
 #
 # State: state/noticed/unseen.tsv (the unseen list), state/noticed/picked
 # (every id ever in a top 3) and state/noticed/filed (every id ever filed, so
@@ -335,22 +339,33 @@ cmd_shown() {
 }
 
 cmd_close() {
-  local id=${1:-} evidence=''
+  local id=${1:-} evidence='' fixed=0 pr='' settled show title=''
   [ $# -ge 1 ] || refuse "close needs an id"
   shift
   while [ $# -gt 0 ]; do
     case "$1" in
       --evidence) evidence=${2-}; shift ;;
+      --fixed) fixed=1 ;;
+      --pr) pr=${2-}; shift ;;
       *) refuse "unknown option $1" ;;
     esac
     shift
   done
   case "$id" in noticed-* | idea-*) ;; *) refuse "close takes a noticed- or idea- id (got $id)" ;; esac
   one_line --evidence "$evidence"
+  [ -z "$pr" ] || one_line --pr "$pr"
+  [ "$fixed" = 0 ] || [ "${id%%-*}" = noticed ] || refuse "--fixed records a noticed item firstmate fixed; an idea waits for his pick"
+  settled="Settled $TODAY: $evidence${pr:+ ($pr)}"
+  [ "$fixed" = 0 ] || settled="$settled Fixed by firstmate on its own."
   lock_state
-  append_body "$id" "Settled $TODAY: $evidence" || { echo "fm-noticed: could not record the evidence on $id" >&2; exit 1; }
+  if [ "$fixed" = 1 ]; then
+    show=$("$TASKS" show "$id" 2>/dev/null) || { echo "fm-noticed: could not read $id" >&2; exit 1; }
+    title=$(shown_field "$show" title)
+  fi
+  append_body "$id" "$settled" || { echo "fm-noticed: could not record the evidence on $id" >&2; exit 1; }
   "$TASKS" "done" "$id" >/dev/null || { echo "fm-noticed: could not close $id" >&2; exit 1; }
   drop_unseen "$id"
+  [ "$fixed" = 0 ] || add_unseen "$id" fixed "$title - $evidence${pr:+ ($pr)}"
   printf 'closed: %s\n' "$id"
 }
 
