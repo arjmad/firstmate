@@ -177,6 +177,33 @@ test_recorded_merged_pr_is_landed_after_prune() {
   pass "a recorded merged PR satisfies the gate after prune"
 }
 
+test_captain_step_done_is_a_ci_ready_done() {
+  local repo wt meta state line
+  repo="$TMP_ROOT/captain-step-repo"
+  wt="$TMP_ROOT/captain-step-wt"
+  state="$TMP_ROOT/captain-step-state"
+  mkdir -p "$state"
+  fm_git_worktree "$repo" "$wt" fm/captain-step
+  git -C "$wt" commit -q --allow-empty -m 'fix; only the captain step remains after merge'
+  meta="$state/captain-step.meta"
+  printf 'kind=ship\nmode=direct-PR\nworktree=%s\nproject=%s\npr=https://github.com/o/r/pull/7\n' \
+    "$wt" "$repo" > "$meta"
+  line="done [at=1794200000]: PR https://github.com/o/r/pull/7 checks green; captain step: link the bank account at the office"
+  fm_dod_note_reports_ci_ready "$(status_line_note "$line")" \
+    || fail "a done line ending in its captain step no longer reads as a CI-ready PR"
+  if accept_done ship direct-PR "$wt" "$repo" "$line" "$state" captain-step "$meta" >/dev/null; then
+    fail "a captain-step done was accepted while its head existed only in the worker copy"
+  fi
+  git -C "$wt" update-ref refs/remotes/origin/fm/captain-step HEAD
+  accept_done ship direct-PR "$wt" "$repo" "$line" "$state" captain-step "$meta" \
+    || fail "a pushed captain-step done was refused before its merge"
+  git -C "$wt" update-ref -d refs/remotes/origin/fm/captain-step
+  write_merge_marker "$state" captain-step github github.com o/r 7
+  accept_done ship direct-PR "$wt" "$repo" "$line" "$state" captain-step "$meta" \
+    || fail "a captain-step done reported after the merge was refused once its branch was pruned"
+  pass "a done line ending in its captain step reads as CI-ready and passes the named-head gate before and after merge"
+}
+
 test_merge_marker_binds_to_the_named_pr() {
   local repo wt meta state reason rc sha
   repo="$TMP_ROOT/bind-repo"
@@ -618,6 +645,7 @@ test_remote_containing_named_head_is_accepted
 test_moved_branch_without_named_head_is_refused
 test_free_text_sha_is_not_the_named_head
 test_recorded_merged_pr_is_landed_after_prune
+test_captain_step_done_is_a_ci_ready_done
 test_merge_marker_binds_to_the_named_pr
 test_forge_recorded_head_is_accepted_without_local_object
 test_direct_pr_recorded_head_does_not_cover_unpushed_commit
