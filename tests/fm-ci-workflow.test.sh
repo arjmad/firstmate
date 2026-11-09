@@ -9,6 +9,12 @@
 # three-tier timeout policy that docs/fm-test-portable-shards.md "Timeouts"
 # owns (fast, normal, heavy), so no job drifts back to a one-off number.
 #
+# They hold the affected-shard planning wiring: every job that consumes the
+# plan job's output runs a gate step after its checkout and gates every later
+# step on it, label events other than full-ci run nothing under prefixed
+# names in their own non-cancelling group, and full-ci and workflow_dispatch
+# run every job. What the plan selects is tests/fm-ci-plan.test.sh's subject.
+#
 # They also hold the fork opt-out: the repository variables FM_CI_SKIP_PUSH and
 # FM_CI_SKIP_MACOS let a fork skip the push run and the macOS job through a
 # job-level condition, while with neither set every job runs exactly as before.
@@ -154,7 +160,7 @@ end
 # Resolve the workflow's concurrency contract under one simulated event and
 # print "<group><TAB><cancel-in-progress>".
 resolve_concurrency() {
-  local event=$1 pr_number=$2 run_id=$3
+  local event=$1 pr_number=$2 run_id=$3 action=${4:-} label=${5:-}
   ruby -ryaml -e "$EXPRESSION_RUBY" -e '
 doc = YAML.load_file(ARGV[0])
 concurrency = doc.fetch("concurrency")
@@ -163,6 +169,8 @@ context = {
   "github.event_name" => ARGV[1],
   "github.event.pull_request.number" => ARGV[2],
   "github.run_id" => ARGV[3],
+  "github.event.action" => ARGV[4],
+  "github.event.label.name" => ARGV[5],
 }
 
 interpolate = lambda do |raw|
@@ -171,23 +179,25 @@ end
 
 puts [interpolate.call(concurrency.fetch("group")),
       interpolate.call(concurrency.fetch("cancel-in-progress"))].join("\t")
-' "$CI_WORKFLOW" "$event" "$pr_number" "$run_id"
+' "$CI_WORKFLOW" "$event" "$pr_number" "$run_id" "$action" "$label"
 }
 
 # Print, one per line in workflow order, the jobs whose job-level `if`
 # resolves true under one simulated event and fork variable setting; an unset
 # repository variable reads as the empty string, as GitHub documents.
-jobs_running_under() {  # <event> <FM_CI_SKIP_PUSH> <FM_CI_SKIP_MACOS>
+jobs_running_under() {  # <event> <FM_CI_SKIP_PUSH> <FM_CI_SKIP_MACOS> [<action> <label>]
   ruby -ryaml -e "$EXPRESSION_RUBY" -e '
 context = {
   "github.event_name" => ARGV[1],
   "vars.FM_CI_SKIP_PUSH" => ARGV[2],
   "vars.FM_CI_SKIP_MACOS" => ARGV[3],
+  "github.event.action" => ARGV[4],
+  "github.event.label.name" => ARGV[5],
 }
 YAML.load_file(ARGV[0]).fetch("jobs").each do |name, job|
   puts name if Expression.condition(job["if"], context)
 end
-' "$CI_WORKFLOW" "$1" "$2" "$3"
+' "$CI_WORKFLOW" "$1" "$2" "$3" "${4:-}" "${5:-}"
 }
 
 job_timeout() {
@@ -199,7 +209,7 @@ puts YAML.load_file(ARGV[0]).fetch("jobs").fetch(ARGV[1]).fetch("timeout-minutes
 # Tier membership is the executable inventory of the timeout policy: a new job
 # must join a tier, and a job-level value outside these tiers is exactly the
 # one-off number the policy removed.
-FAST_TIER_JOBS='test-coverage invariants tests-timing-aggregate'
+FAST_TIER_JOBS='plan test-coverage invariants tests-timing-aggregate'
 NORMAL_TIER_JOBS='lint tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial macos-stock-bash'
 HEAVY_TIER_JOBS='tests-herdr'
 
@@ -334,7 +344,7 @@ raise "no run-real-herdr-family step" unless index
 teardown = steps.index { |s| s["id"] == "cleanup-herdr-lab-sessions" }
 raise "no cleanup-herdr-lab-sessions step" unless teardown
 raise "teardown must follow the family-run step" unless teardown > index
-raise "teardown must run under always()" unless steps[teardown]["if"].to_s.strip == "always()"
+raise "teardown must run under always()" unless steps[teardown]["if"].to_s.strip == "always() && steps.gate.outputs.run == \x27true\x27"
 puts steps[index].fetch("timeout-minutes", "none")
 ' "$CI_WORKFLOW" tests-herdr) || fail "could not read the Herdr family-run step"
   case "$step" in ''|*[!0-9]*) fail "the Herdr family-run step needs its own timeout-minutes, got $step" ;; esac
@@ -386,6 +396,8 @@ context = {
   "vars.FM_CI_SKIP_PUSH" => ARGV[3],
   "vars.FM_CI_SKIP_MACOS" => ARGV[4],
   "needs.status" => ARGV[5],
+  "github.event.action" => "",
+  "github.event.label.name" => "",
 }
 puts Expression.condition(YAML.load_file(ARGV[0]).fetch("jobs").fetch(ARGV[1])["if"], context)
 ' "$CI_WORKFLOW" "$@"
@@ -407,6 +419,73 @@ push         - true
 push         1 false
 TABLE
   pass "the timing aggregate still runs after a failed lane unless the push run is skipped"
+}
+
+test_label_events_get_their_own_group_unless_full_ci() {
+  local push labeled full
+  push=$(resolve_concurrency pull_request 108 900001 synchronize '') || fail "could not resolve PR concurrency"
+  labeled=$(resolve_concurrency pull_request 108 900002 labeled docs) || fail "could not resolve label concurrency"
+  full=$(resolve_concurrency pull_request 108 900003 labeled full-ci) || fail "could not resolve full-ci concurrency"
+  [ "$(group_of "$labeled")" != "$(group_of "$push")" ] \
+    || fail "an unrelated label event must not share the PR's group"
+  [ "$(cancel_of "$labeled")" = false ] || fail "an unrelated label event must cancel nothing"
+  [ "$(group_of "$full")" = "$(group_of "$push")" ] || fail "adding full-ci must join the PR's group"
+  [ "$(cancel_of "$full")" = true ] || fail "adding full-ci must supersede the PR's running suite"
+  pass "an unrelated label gets its own non-cancelling group, and full-ci supersedes the PR's run"
+}
+
+test_label_events_run_all_or_nothing_under_prefixed_names() {
+  local all actual
+  all=$(workflow_jobs) || fail "could not list ci.yml jobs"
+  printf '%s\n' "$all" | grep -qx plan || fail "the plan job is missing from ci.yml"
+  actual=$(jobs_running_under pull_request '' '' labeled docs) || fail "could not resolve the label conditions"
+  [ -z "$actual" ] || fail "an unrelated label event must run no job, ran: $(printf '%s' "$actual" | tr '\n' ' ')"
+  actual=$(jobs_running_under pull_request '' '' labeled full-ci) || fail "could not resolve the full-ci conditions"
+  [ "$actual" = "$all" ] || fail "a full-ci label event must run every job"
+  actual=$(jobs_running_under workflow_dispatch '' '') || fail "could not resolve the dispatch conditions"
+  [ "$actual" = "$all" ] || fail "workflow_dispatch must run every job"
+  ruby -ryaml -e "$EXPRESSION_RUBY" - "$CI_WORKFLOW" <<'RUBY' || fail "label name prefix contract"
+YAML.load_file(ARGV[0]).fetch("jobs").each do |id, job|
+  name = job.fetch("name")
+  prefix = name[/\A\$\{\{(.+?)\}\}/, 1] or raise "#{id} has no name prefix expression"
+  rest = name.sub(/\A\$\{\{.+?\}\}/, "")
+  raise "#{id} keeps no own name after its prefix" if rest.strip.empty?
+  [["labeled", "docs", "Not run for label - "], ["labeled", "full-ci", ""], ["synchronize", "", ""]].each do |action, label, want|
+    got = Expression.evaluate(prefix, {"github.event.action" => action, "github.event.label.name" => label}).to_s
+    raise "#{id} prefix under #{action} #{label.inspect} is #{got.inspect}, wanted #{want.inspect}" unless got == want
+  end
+end
+RUBY
+  pass "full-ci and workflow_dispatch run every job, and any other label runs none under prefixed names"
+}
+
+test_plan_consumers_gate_every_later_step() {
+  ruby -ryaml - "$CI_WORKFLOW" <<'RUBY' || fail "plan gate contract"
+jobs = YAML.load_file(ARGV[0]).fetch("jobs")
+consumers = jobs.select { |_, job| Array(job["needs"]).include?("plan") }
+expected = %w[lint tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial tests-herdr macos-stock-bash]
+raise "plan consumers are #{consumers.keys.sort}, wanted #{expected.sort}" unless consumers.keys.sort == expected.sort
+consumers.each do |id, job|
+  steps = job.fetch("steps")
+  raise "#{id} must check out first" unless steps[0]["uses"].to_s.start_with?("actions/checkout@")
+  gate = steps[1]
+  raise "#{id} must run the plan gate second" unless gate["id"] == "gate" && gate["run"].to_s.include?("bin/fm-ci-plan.sh gate")
+  raise "#{id} gate must read the plan job output" unless gate.dig("env", "FM_CI_PLAN") == "${{ needs.plan.outputs.plan }}"
+  steps[2..].each do |step|
+    cond = step["if"].to_s
+    label = step["name"] || step["uses"]
+    next if cond == "steps.gate.outputs.run != 'true'"
+    unless cond == "steps.gate.outputs.run == 'true'" || cond == "always() && steps.gate.outputs.run == 'true'"
+      raise "#{id} step #{label.inspect} is not gated (if: #{cond.inspect})"
+    end
+  end
+  runs = steps.select { |step| step["run"].to_s.include?("bin/fm-test-run.sh") }
+  runs.each do |step|
+    raise "#{id} behavior run must pass the gate's only list" unless step["run"].include?('${FM_CI_ONLY:+--only "$FM_CI_ONLY"}') && step.dig("env", "FM_CI_ONLY") == "${{ steps.gate.outputs.only }}"
+  end
+end
+RUBY
+  pass "every plan consumer gates each step after its checkout and gate, and behavior lanes pass the selected scripts"
 }
 
 test_ci_matrices_match_executable_partitions() {
@@ -440,6 +519,9 @@ RUBY
 }
 
 test_ci_matrices_match_executable_partitions
+test_label_events_get_their_own_group_unless_full_ci
+test_label_events_run_all_or_nothing_under_prefixed_names
+test_plan_consumers_gate_every_later_step
 test_pr_pushes_supersede_within_one_pr
 test_separate_prs_do_not_cancel_each_other
 test_main_pushes_are_never_cancelled
