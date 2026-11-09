@@ -125,8 +125,8 @@ Single-task crewmate signals keep their existing Pi payload and attended-host wh
 
 For a stale row, `scopeForUnreadWake` folds the mapped task's status log.
 A stale row is a liveness ping, so it excludes the row only while an open `needs-decision` has not yet been shown: the decision was not already open at the status-presentation cursor, or a line after the cursor re-raised its key.
-A decision a drain already presented, or one closed by a `captain-held` line (written only after `bin/fm-captain-hold.sh` verifies the captain's hold), leaves the ping to the branch; a missing or unmatched cursor counts nothing as shown.
-Such a stale row is still withheld from every wake, a heartbeat included, while an unread decision row for its task waits in the queue, and a signal trigger for that task stays on main as it did before this rule.
+A decision a drain already presented, or one closed by a `captain-held` line (written only after `bin/fm-captain-hold.sh` verifies the captain's hold), leaves the ping to the branch; a missing or unmatched cursor counts no open `needs-decision` as shown.
+Such a stale row is still withheld from every wake, a heartbeat included, while an unread decision-owned row for its task waits in the queue (on the attended host that includes a crewmate signal row its whole-log rule owns), and a signal trigger for that task stays on main as it did before this rule.
 An unreadable or symlinked status log fails the scope closed rather than influencing routing.
 
 Before cross-referencing them, the dispatcher resolves trigger keys and every currently unread excluded decision row to task identity.

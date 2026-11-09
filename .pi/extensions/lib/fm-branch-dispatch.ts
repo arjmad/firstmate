@@ -409,6 +409,8 @@ function staleDecisionUnshown(
   heldVerb: string,
   reservedPrefixes: readonly string[],
 ): boolean {
+  if (![...open.values()].includes("needs-decision")) return false;
+  if (presented.length === 0) return true;
   const shown = openDecisions(presented, resolveVerb, heldVerb, reservedPrefixes);
   const reraised = new Set<string>();
   for (const line of unread) {
@@ -596,17 +598,19 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
             }
             const statusLines = nonBlankLines(contents.toString("utf8"));
             const open = openDecisions(statusLines, resolveVerb, heldVerb, reservedPrefixes);
-            const presented = nonBlankLines(contents.subarray(0, spanOffset).toString("utf8"));
-            const unread = nonBlankLines(contents.subarray(spanOffset).toString("utf8"));
             const wholeLogOwned = [...open.values()].includes("needs-decision") ||
               statusLineVerb(statusLines.at(-1) ?? "") === heldVerb;
-            ownership = spanRule
-              ? spanIsDecisionOwned(open, presented, unread, resolveVerb, heldVerb, reservedPrefixes) ? "owned" : "none"
-              : shownRule
-                ? staleDecisionUnshown(open, presented, unread, resolveVerb, heldVerb, reservedPrefixes)
-                  ? "owned"
-                  : wholeLogOwned ? "shown" : "none"
-                : wholeLogOwned ? "owned" : "none";
+            const presented = (): string[] => nonBlankLines(contents.subarray(0, spanOffset).toString("utf8"));
+            const unread = (): string[] => nonBlankLines(contents.subarray(spanOffset).toString("utf8"));
+            if (spanRule) {
+              ownership = spanIsDecisionOwned(open, presented(), unread(), resolveVerb, heldVerb, reservedPrefixes) ? "owned" : "none";
+            } else if (!wholeLogOwned) {
+              ownership = "none";
+            } else if (shownRule && !staleDecisionUnshown(open, presented(), unread(), resolveVerb, heldVerb, reservedPrefixes)) {
+              ownership = "shown";
+            } else {
+              ownership = "owned";
+            }
             staleDecisionCache.set(ownershipKey, { version, config, ownership });
             if (staleDecisionCache.size > 512) {
               staleDecisionCache.delete(staleDecisionCache.keys().next().value!);
