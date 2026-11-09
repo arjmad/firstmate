@@ -64,11 +64,13 @@
 #          Prints `shown: <id>` for each id that was unseen.
 # close    Close an item that is settled (fixed, or replaced by other work):
 #          add a dated `Settled:` line with the evidence and any --pr URL,
-#          mark it done, and drop it from the unseen list. --fixed says
-#          firstmate fixed a noticed item on its own: the item rejoins the
-#          unseen list labelled `fixed`, titled `<title> - <evidence>` and the
-#          PR URL, for the Monday triage's "Fixed on my own this week" list;
-#          an idea refuses it. Prints `closed: <id>`.
+#          mark it done, and drop it from the unseen list, except a `now`
+#          row the captain has not been told yet. --fixed, which needs --pr,
+#          says firstmate fixed a noticed item on its own: the item rejoins
+#          the unseen list labelled `fixed`, titled `<title> - <evidence>` and
+#          the PR URL, for the Monday triage's "Fixed on my own this week"
+#          list, unless a `now` row keeps it; an idea refuses it. A later
+#          sighting replaces a `fixed` row. Prints `closed: <id>`.
 #
 # State: state/noticed/unseen.tsv (the unseen list), state/noticed/picked
 # (every id ever in a top 3) and state/noticed/filed (every id ever filed, so
@@ -159,13 +161,15 @@ drop_unseen() {  # <id>; call under lock_state
 }
 
 # A noticed item joins the unseen list to wait for the Monday triage, or as
-# `now` when urgent; an existing `noticed` row is relabelled `now`.
+# `now` when urgent; an existing `noticed` row is relabelled `now`, and a
+# `fixed` row is replaced, because the item is broken again.
 list_noticed() {  # <id> <title> <now 0|1>; call under lock_state
   if [ "$3" = 1 ]; then
     grep -q "^$1${TAB}now$TAB" "$UNSEEN" 2>/dev/null && return 0
     drop_unseen "$1"
     add_unseen "$1" now "$2"
   else
+    ! grep -q "^$1${TAB}fixed$TAB" "$UNSEEN" 2>/dev/null || drop_unseen "$1"
     add_unseen "$1" noticed "$2"
   fi
 }
@@ -355,6 +359,7 @@ cmd_close() {
   one_line --evidence "$evidence"
   [ -z "$pr" ] || one_line --pr "$pr"
   [ "$fixed" = 0 ] || [ "${id%%-*}" = noticed ] || refuse "--fixed records a noticed item firstmate fixed; an idea waits for his pick"
+  [ "$fixed" = 0 ] || [ -n "$pr" ] || refuse "--fixed needs --pr <url>, so the Monday triage can link the fix"
   settled="Settled $TODAY: $evidence${pr:+ ($pr)}"
   [ "$fixed" = 0 ] || settled="$settled Fixed by firstmate on its own."
   lock_state
@@ -364,8 +369,11 @@ cmd_close() {
   fi
   append_body "$id" "$settled" || { echo "fm-noticed: could not record the evidence on $id" >&2; exit 1; }
   "$TASKS" "done" "$id" >/dev/null || { echo "fm-noticed: could not close $id" >&2; exit 1; }
-  drop_unseen "$id"
-  [ "$fixed" = 0 ] || add_unseen "$id" fixed "$title - $evidence${pr:+ ($pr)}"
+  # An urgent row he has not been told about yet stays for the drain.
+  if ! grep -q "^$id${TAB}now$TAB" "$UNSEEN" 2>/dev/null; then
+    drop_unseen "$id"
+    [ "$fixed" = 0 ] || add_unseen "$id" fixed "$title - $evidence ($pr)"
+  fi
   printf 'closed: %s\n' "$id"
 }
 

@@ -37,7 +37,7 @@ Mining transcripts for items is out of scope.
 
 Firstmate settles what it can before anything reaches Arjun.
 
-- **Routine.** A noticed item inside the fleet's standing authority (a broken test, a stale doc, a small bug) is fixed without interrupting him: file the fix as ordinary work, dispatch it, and once it lands close the item with `bin/fm-noticed.sh close <id> --evidence <what changed> --fixed --pr <PR URL>`, which records the fix for the Monday triage (Arjun, 2026-11-08: "i want to be made aware of noticed changes you make").
+- **Routine.** A noticed item inside the fleet's standing authority (a broken test, a stale doc, a small bug) is fixed without interrupting him: file the fix as ordinary work, dispatch it, and once it lands close the item with `bin/fm-noticed.sh close <id> --evidence <what changed> --fixed --pr <PR URL>` (the PR is required), which records the fix for the Monday triage (Arjun, 2026-11-08: "i want to be made aware of noticed changes you make").
 - **Duplicate.** A repeat sighting is matched to its open item at filing and never becomes a second one.
 - **Below the bar.** An idea that fails the idea bar stays filed and unshown.
 

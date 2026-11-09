@@ -213,10 +213,26 @@ test_a_fix_on_its_own_waits_for_the_triage() {
   assert_equals "shown: noticed-stale-doc" "$(noticed "$home" shown noticed-stale-doc)" "the triage could not mark the fix"
   assert_equals "" "$(noticed "$home" unseen)" "a reported fix stayed listed"
 
+  noticed "$home" file noticed stale-doc --title "Stale setup doc" --why "still wrong" --from t2 >/dev/null
+  noticed "$home" close noticed-stale-doc --evidence "second fix" --fixed --pr https://github.com/o/r/pull/8 >/dev/null
+  out=$(noticed "$home" file noticed stale-doc --title "Stale setup doc" --why "broken again" --from t3)
+  assert_equals "reopened: noticed-stale-doc" "$out" "a problem back after a fix on its own was not reopened"
+  assert_equals "noticed-stale-doc	noticed	Stale setup doc" "$(noticed "$home" unseen)" \
+    "a problem back after its fix is still reported as fixed"
+
+  noticed "$home" file noticed refunds --title "Refunds failing" --why "customers unpaid" --from t1 --now >/dev/null
+  noticed "$home" close noticed-refunds --evidence "retried the refunds" --fixed --pr https://github.com/o/r/pull/9 >/dev/null
+  assert_contains "$(noticed "$home" unseen)" "noticed-refunds	now	Refunds failing" \
+    "closing an urgent item before he was told dropped it from the drain"
+
+  noticed "$home" file noticed printer --title "Printer offline" --why "labels" --from t1 >/dev/null
+  noticed "$home" close noticed-printer --evidence x --fixed >/dev/null 2>&1 && fail "a fix on its own was recorded without its PR"
+  assert_contains "$(tasks "$home" show noticed-printer)" "state: queued" "a refused close still closed the item"
   noticed "$home" file idea faster --title a --why b --from t1 >/dev/null
-  noticed "$home" close idea-faster --evidence x --fixed >/dev/null 2>&1 && fail "an idea was closed as fixed on its own"
+  noticed "$home" close idea-faster --evidence x --fixed --pr https://github.com/o/r/pull/1 >/dev/null 2>&1 \
+    && fail "an idea was closed as fixed on its own"
   assert_contains "$(tasks "$home" show idea-faster)" "state: queued" "a refused close still closed the idea"
-  pass "a fix firstmate makes on its own is recorded with its PR and waits for the Monday triage"
+  pass "a fix firstmate makes on its own needs its PR, waits for the Monday triage, gives way to a recurrence, and never hides an untold urgent item"
 }
 
 test_the_drain_shows_only_urgent_items() {
