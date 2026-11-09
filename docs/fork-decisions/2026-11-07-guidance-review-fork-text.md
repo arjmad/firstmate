@@ -6,5 +6,5 @@ No upstream proposal: every line changed here is fork text.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| Board rules move to a reference the skill reads before composing, answering, or refreshing the board, and the `case_against` reviewer is a fresh headless `claude -p` session on Claude | `.agents/skills/bearings/SKILL.md` (Lavish board mode), `.agents/skills/bearings/references/board.md` (new), `docs/documentation-audiences.json` | `.agents/skills/bearings/SKILL.md` | carried | 45dd50a5 |
-| The question rule names the 30-minute presence window, and section 4 keeps only the secondmate pins | `AGENTS.md` sections 4 and 9 | none (fork text) | carried | 45dd50a5 |
+| Board rules move to a reference the skill reads before composing, answering, or refreshing the board, and the `case_against` reviewer is a fresh headless `claude -p` session on Claude | `.agents/skills/bearings/SKILL.md` (Lavish board mode), `.agents/skills/bearings/references/board.md` (new), `docs/documentation-audiences.json` | `.agents/skills/bearings/SKILL.md` | conflicted | c8d8fdad |
+| The question rule names the 30-minute presence window, and section 4 keeps only the secondmate pins | `AGENTS.md` sections 4 and 9 | none (fork text) | carried | c8d8fdad |

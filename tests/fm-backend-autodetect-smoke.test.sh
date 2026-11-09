@@ -22,7 +22,7 @@
 #
 # Safety (2026-07-02 incident): every test-owned Herdr operation goes through
 # bin/fm-herdr-lab.sh, which appends the named session flag and verifies the
-# default fleet session is unchanged after teardown. Never replace the helper
+# configured fleet session is unchanged after teardown. Never replace the helper
 # with an ambient HERDR_SESSION-only command.
 set -u
 
@@ -192,7 +192,7 @@ pass "real Treehouse: the scratch project pool stayed under the test's own root"
 
 if ! cleanup_all; then
   trap - EXIT
-  fail "isolated Herdr lab teardown failed or the default fleet session changed"
+  fail "isolated Herdr lab teardown failed or the configured fleet session changed"
 fi
 trap - EXIT
-pass "real herdr: isolated lab session removed and default fleet session unchanged"
+pass "real herdr: isolated lab session removed and configured fleet session unchanged"

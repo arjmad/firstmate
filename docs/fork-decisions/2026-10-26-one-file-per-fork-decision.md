@@ -7,5 +7,5 @@ No upstream proposal.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| One file per fork decision or fork patch, checked and listed by `fm-fork-decisions.sh` | `bin/fm-fork-decisions.sh`, `tests/fm-fork-decisions.test.sh`, `docs/fork-decisions.md`, `docs/fork-decisions/` | `bin/fm-test-run.sh` (family, changed-path, serial hint), `docs/scripts.md`, `bootstrap-diagnostics` skill | carried | 45dd50a5 |
-| A documentation inventory surface ending in `/` classifies every tracked prose file under that directory | `bin/fm-doc-audience-check.sh` (`validate`, header), `tests/fm-documentation-audiences.test.sh` | same files, `docs/documentation-audiences.json`, `docs/documentation-audiences.md` | carried | 45dd50a5 |
+| One file per fork decision or fork patch, checked and listed by `fm-fork-decisions.sh` | `bin/fm-fork-decisions.sh`, `tests/fm-fork-decisions.test.sh`, `docs/fork-decisions.md`, `docs/fork-decisions/` | `bin/fm-test-run.sh` (family, changed-path, serial hint), `docs/scripts.md`, `bootstrap-diagnostics` skill | carried | c8d8fdad |
+| A documentation inventory surface ending in `/` classifies every tracked prose file under that directory | `bin/fm-doc-audience-check.sh` (`validate`, header), `tests/fm-documentation-audiences.test.sh` | same files, `docs/documentation-audiences.json`, `docs/documentation-audiences.md` | carried | c8d8fdad |

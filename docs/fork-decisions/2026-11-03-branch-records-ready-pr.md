@@ -5,4 +5,4 @@ No upstream proposal: the branch's standing merge class is this fork's own patch
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| The branch prompt's standing merges tell the branch to record a ready PR whose task lacks `pr=` through `bin/fm-pr-check.sh` before merging it, and say a missing `pr=` alone never leaves the merge to main | `bin/fm-branch-prompt.sh` ("Standing merges"), `tests/fm-branch-supervision.test.sh` (prompt rule), `tests/fm-pr-merge.test.sh` (`test_attended_branch_records_a_ready_pr_then_merges_it`) | none (fork-owned standing merge prose) | carried | 45dd50a5 |
+| The branch prompt's standing merges tell the branch to record a ready PR whose task lacks `pr=` through `bin/fm-pr-check.sh` before merging it, and say a missing `pr=` alone never leaves the merge to main | `bin/fm-branch-prompt.sh` ("Standing merges"), `tests/fm-branch-supervision.test.sh` (prompt rule), `tests/fm-pr-merge.test.sh` (`test_attended_branch_records_a_ready_pr_then_merges_it`) | none (fork-owned standing merge prose) | carried | c8d8fdad |

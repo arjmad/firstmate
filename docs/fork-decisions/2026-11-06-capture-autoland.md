@@ -7,5 +7,5 @@ The grant covers the subject tags a home lists in its `config/capture-autoland`;
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| `fm-capture-autoland.sh` lands an opted-in green capture note through `fm-capture-land.sh`, acknowledging it on success and announcing it with the failure otherwise | `bin/fm-capture-autoland.sh`, `tests/fm-capture-autoland.test.sh`, `docs/scripts.md`, `docs/configuration.md` (live checkouts) | none | carried | 45dd50a5 |
-| `fm-inbox.sh note` hands a note `fm-capture-autoland.sh take` claims to its lander instead of announcing it, and `announce --why` puts a reason ahead of the note's summary in the wake | `bin/fm-inbox.sh` (`finish_note_result`, `cmd_announce`, header) | `bin/fm-inbox.sh` (`finish_note_result`, `cmd_announce`, header) | carried | 45dd50a5 |
+| `fm-capture-autoland.sh` lands an opted-in green capture note through `fm-capture-land.sh`, acknowledging it on success and announcing it with the failure otherwise | `bin/fm-capture-autoland.sh`, `tests/fm-capture-autoland.test.sh`, `docs/scripts.md`, `docs/configuration.md` (live checkouts) | none | carried | c8d8fdad |
+| `fm-inbox.sh note` hands a note `fm-capture-autoland.sh take` claims to its lander instead of announcing it, and `announce --why` puts a reason ahead of the note's summary in the wake | `bin/fm-inbox.sh` (`finish_note_result`, `cmd_announce`, header) | `bin/fm-inbox.sh` (`finish_note_result`, `cmd_announce`, header) | carried | c8d8fdad |

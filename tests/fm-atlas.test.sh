@@ -218,7 +218,7 @@ test_an_idea_belongs_to_the_build_that_first_offered_it() {
 }
 
 # A Lavish board link is recorded in the phone-openable form
-# bin/fm-lavish-url.sh prints, read from a fake `tailscale serve`.
+# bin/fm-lavish-link.sh prints, read from a fake `tailscale serve`.
 test_file_records_a_lavish_board_in_its_phone_form() {
   local home
   home=$(make_home phone-link)

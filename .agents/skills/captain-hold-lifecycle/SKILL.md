@@ -1,7 +1,6 @@
 ---
 name: captain-hold-lifecycle
 description: >-
-  Agent-only policy for completing investigations and visual reviews without losing unresolved captain calls, and for closing what the captain owns with his actual words.
   Load before treating an investigation, scout report, structured review, or Lavish review as complete, before ending a visual review that exposed a captain decision, when recording or routing the captain's answer or a change to an earlier captain ruling, and on any RECORD DIVERGENCE line the wake drain prints.
 user-invocable: false
 metadata:
@@ -26,7 +25,9 @@ Give every new hold a kind: `--kind arjun-only` when any option spends money, to
 Every hold waits for the captain's answer; no kind releases itself, and the script refuses the retired `--default` and `--no-default` flags.
 Until the one-time retirement of the old 72-hour default release (`retire-release`, run by the locked session start and the watcher) has drained a home, it can still surface two wakes: on `check: released by default: <id> <option>`, the row was already closed or resumed on that option, so act on it as you would on an answer and tell the captain in one line what was released and to what; on `check: default release retired: <ids>`, bring those calls to the captain now, because they no longer settle themselves.
 Record the call's own choices on every new hold: `--options 'A|B'` (two or three short labels, the ones a worker's `needs-decision` line names), `--recommend A`, and a one-line `--ask` question, so his buttons say what each choice does rather than Done; leave them off only when the call has no discrete choices, and use `choices <task-id>` to add them to a call already held.
-After inventorying the whole report and review surface, run `bin/fm-captain-hold.sh complete` with every captain-held task id, or with `--none` only when the reviewed surface leaves nothing waiting on the captain.
+After inventorying the whole report and review surface, firstmate runs `bin/fm-captain-hold.sh complete` with every captain-held task id, or with `--none` when nothing waits on the captain.
+A scout may attest its own empty inventory only through the narrow command exception in its generated brief's Definition of done.
+For a non-empty inventory or a refused command, the scout reports to firstmate rather than writing metadata or backlog records.
 A completed investigation and an ended visual review use this same owner and completion command; a visual tool, including Lavish, never owns a parallel completion policy.
 Run the command in the originating work's authoritative `FM_HOME`; secondmate-owned work registers in that secondmate home's backlog, and a question already held anywhere is never re-registered as a second row.
 Do not close a captain-held task merely because the originating investigation completed, its report was archived, its visual review ended, or its task was torn down.
@@ -73,8 +74,8 @@ The absence of a routed work item is not a divergence and the guard never requir
 
 1. Read the complete investigation result and complete the visual review before declaring either complete.
 2. Inventory only genuine unresolved choices that require the captain, and find the task each one gates.
-3. Hold that task - or create one captain-held task for the review's open questions - with a concise reason carrying the question and options.
-4. Run `complete` with the full captain-held inventory for that review pass.
+3. Firstmate holds that task - or creates one captain-held task for the review's open questions - with a concise reason carrying the question and options.
+4. Attest the full inventory for that review pass under the caller authority in Policy above.
 5. Relay the choices to the captain as decisions from Bearings' Captain's Call section under `AGENTS.md` section 9; do not use the word hold in captain chat.
 6. Close each call only through `answer` (or a channel that feeds `answers`), close a board-requested moot call through evidence-backed `reconcile close`, record a still-active reconciliation through `reconcile note`, use `--until` when the captain defers it, or confirm a channel already closed it.
 7. Confirm Bearings reflects the outcome: answered or reconciled-moot calls leave Captain's Call, released work resumes, active reconciliations remain held, and deferred calls sit in Charted Next with their date.

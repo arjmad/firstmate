@@ -4,4 +4,4 @@ Empty watch-arm captures from killed arms also piled up, because the scratch rot
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| The startup residue sweep retires a retired task's inbox, hooks directory, and closed-workspace presentation journal, counts an inbox live only while it holds an unhandled steer, and rotates orphaned watch-arm captures while no live watcher holds the lock | `bin/fm-state-residue-sweep.sh` (`collect_referenced`, `sweep_task_state`, `rotate_scratch`), `tests/fm-state-residue-sweep.test.sh` | `bin/fm-state-residue-sweep.sh`, `tests/fm-state-residue-sweep.test.sh` | carried | 31b2bfaa |
+| The startup residue sweep retires a retired task's inbox, hooks directory, and closed-workspace presentation journal, counts an inbox live only while it holds an unhandled steer, and rotates orphaned watch-arm captures while no live watcher holds the lock | `bin/fm-state-residue-sweep.sh` (`collect_referenced`, `sweep_task_state`, `rotate_scratch`), `tests/fm-state-residue-sweep.test.sh` | `bin/fm-state-residue-sweep.sh`, `tests/fm-state-residue-sweep.test.sh` | carried | c8d8fdad |

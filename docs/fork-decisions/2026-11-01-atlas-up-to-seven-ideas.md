@@ -5,4 +5,4 @@ No upstream proposal: Atlas is this fork's own patch (2026-10-26).
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| `fm-atlas.sh file` accepts a build of zero to seven ranked ideas and still refuses eight or more, and the idea bar's Atlas trigger and wording say Atlas's ideas rather than its top 7 | `bin/fm-atlas.sh` (`valid_atlas`, header), `tests/fm-atlas.test.sh`, `docs/scripts.md`, `.agents/skills/noticed-queue/SKILL.md` (description, The idea bar), `.agents/skills/agent-skill-trigger-index/SKILL.md` | none (fork-only script and skill) | carried | 45dd50a5 |
+| `fm-atlas.sh file` accepts a build of zero to seven ranked ideas and still refuses eight or more, and the idea bar's Atlas trigger and wording say Atlas's ideas rather than its top 7 | `bin/fm-atlas.sh` (`valid_atlas`, header), `tests/fm-atlas.test.sh`, `docs/scripts.md`, `.agents/skills/noticed-queue/SKILL.md` (description, The idea bar), `.agents/skills/agent-skill-trigger-index/SKILL.md` | none (fork-only script and skill) | carried | c8d8fdad |

@@ -96,7 +96,7 @@ At every crewmate/scout intake, read its [dispatch reference](.agents/skills/har
 That reference owns dispatch policy; `quota-array-dispatch` owns matched-array selection and `harness-adapters` owns supported roles and model/effort rules.
 Use verified adapters only; report an unverified static override and use the supported fallback under the router's safety contract.
 A backend dependency, authentication, version, or unsupported-backend failure is a blocker for that backend, never permission for a silent backend switch.
-Only the captain chooses or changes a worker account pin (`config/claude-account`, `config/pi-account`); on a pin refusal, report the needed login and never edit or remove the pin to unblock a spawn.
+Only the captain chooses or changes a worker account pin (`config/claude-account`, `config/claude-accounts`, `config/pi-account`); on a pin refusal, report the needed login; never edit or remove a pin to unblock a spawn.
 Keep per-task captain overrides scoped to that dispatch; paid fast tier is an explicit per-spawn opt-in, never inherited.
 `secondmate-provisioning` also owns secondmate pins.
 

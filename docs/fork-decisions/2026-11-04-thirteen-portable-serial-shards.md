@@ -3,4 +3,4 @@ The serial hints had fallen far below fork CI durations, and the refreshed hints
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| Serial hints refreshed from five green fork runs, and thirteen portable serial shards | `bin/fm-test-run.sh` (`PORTABLE_SERIAL_SHARDS`, `portable_serial_weight_hints`), `.github/workflows/ci.yml` (`tests-portable-serial` matrix), `docs/fm-test-portable-shards.md`, `CONTRIBUTING.md` | `bin/fm-test-run.sh`, `.github/workflows/ci.yml` | carried | 957bd124 |
+| Serial hints refreshed from five green fork runs, and thirteen portable serial shards | `bin/fm-test-run.sh` (`PORTABLE_SERIAL_SHARDS`, `portable_serial_weight_hints`), `.github/workflows/ci.yml` (`tests-portable-serial` matrix), `docs/fm-test-portable-shards.md`, `CONTRIBUTING.md` | `bin/fm-test-run.sh`, `.github/workflows/ci.yml` | conflicted | c8d8fdad |

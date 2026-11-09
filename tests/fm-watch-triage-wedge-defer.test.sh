@@ -1,28 +1,13 @@
 #!/usr/bin/env bash
-# tests/fm-watch-triage-wedge.test.sh - the evidence the watcher's wedge
-# threshold consults before escalating: the worker's own declared wait, the
-# crew's parked-gate state and whether a human still owes it an answer, an
-# unconfigured home, and refusal of a half-filled wait record.
-# Shared fixtures and the family map live in tests/watch-triage-helpers.sh.
+# Behavior tests for watcher wedge-threshold deferrals to declared waits,
+# captain holds, parked gates, worker blockers, and validation runs
+# (bin/fm-watch.sh). Shared fixtures live in tests/watch-triage-helpers.sh.
 set -u
 
 # shellcheck source=tests/watch-triage-helpers.sh
 . "$(dirname "${BASH_SOURCE[0]}")/watch-triage-helpers.sh"
 
-# --- the wedge threshold consults the worker's own declared wait ------------
-# Upstream kunchenguid/firstmate#3909 and #2614: wedge_timer_check escalated on
-# elapsed idle time alone, without ever asking whether the worker had already
-# said why its pane was quiet. Nothing re-consulted that declaration once the
-# timer was running, so the ladder climbed for as long as the wait lasted and
-# each escalation cost a supervising turn. Past FM_WEDGE_DEMAND_INSPECT_COUNT
-# every repeat also carried demand-deep-inspection, which by its own wording
-# forbids re-absorbing on the run-step or pane state, so the supervisor could not
-# even use the evidence that was there.
-#
-# Both directions are pinned in each case below, because a bound that only
-# proves the quiet direction would be indistinguishable from simply deleting
-# wedge detection: the lane WITHOUT a declaration must keep the identical
-# schedule, escalation count, reason and demand-deep-inspection wording.
+TMP_ROOT=$(fm_test_tmproot fm-watch-triage-wedge-defer-tests)
 
 # Arm the opt-in parked-gate wait evidence for a fixture built above.
 arm_parked_gate() {  # <case-dir>
@@ -44,7 +29,7 @@ test_wedge_threshold_defers_to_a_declared_wait_under_a_working_verdict() {
   dir=$(wedge_threshold_fixture declared-wait-working \
     'paused: final validation at step 6/6 - clean whole-assembly baseline (~20 min)' 0)
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
-  window="test:fm-wedge"; key=$(printf '%s' "$window" | tr ':/.' '___')
+  window="test:fm-wedge"; key=$(watch_window_key "$window")
   n=1
   while [ "$n" -le 3 ]; do
     wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" absorb \
@@ -127,7 +112,7 @@ test_wedge_threshold_keeps_a_wait_past_a_default_key_answer() {
   dir=$(wedge_threshold_fixture default-answer-after-wait \
     "$(printf 'needs-decision: which color\npaused: waiting on the vendor release\nresolved [key=default]: answered: blue')" 0)
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
-  window="test:fm-wedge"; key=$(printf '%s' "$window" | tr ':/.' '___')
+  window="test:fm-wedge"; key=$(watch_window_key "$window")
   n=1
   while [ "$n" -le 3 ]; do
     wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" absorb \
@@ -163,7 +148,7 @@ test_wedge_threshold_recheck_names_the_captain_for_a_held_lane() {
   dir=$(wedge_threshold_fixture captain-held-wait \
     'captain-held: which retention window wins' 2000)
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
-  window="test:fm-wedge"; key=$(printf '%s' "$window" | tr ':/.' '___')
+  window="test:fm-wedge"; key=$(watch_window_key "$window")
   FM_TEST_PAUSE_RESURFACE=240 wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" exit \
     || fail "a captain-held lane older than the recheck cadence was never rechecked: $(cat "$out")"
   grep -F 'awaiting the captain' "$out" >/dev/null \
@@ -262,7 +247,7 @@ test_wedge_threshold_defers_to_a_backlog_captain_hold() {
   local working='state: working · source: run-step · ci running'
   command -v tasks-axi >/dev/null 2>&1 \
     || { echo "skip: tasks-axi not found (backlog captain hold wedge bound)"; return 0; }
-  window="test:fm-wedge"; key=$(printf '%s' "$window" | tr ':/.' '___')
+  window="test:fm-wedge"; key=$(watch_window_key "$window")
 
   # A fresh status line is no record of when the hold began, so the first
   # threshold rechecks it once, as a wait on the captain with no wait age.
@@ -367,7 +352,7 @@ test_wedge_threshold_defers_to_a_parked_gate_awaiting_a_human() {
   # ladder away.
   local crewmate='state: parked · source: run-step · parked at fix_review (ask-user: authority decision follow-up): 2 finding(s) · run: 01RUNGATE'
 
-  window="test:fm-wedge"; key=$(printf '%s' "$window" | tr ':/.' '___')
+  window="test:fm-wedge"; key=$(watch_window_key "$window")
 
   # The log every case here shares: the crew escalated the gate's question and
   # nobody has answered it yet, so its decision fold still holds one open
@@ -521,7 +506,7 @@ test_wedge_threshold_parked_gate_is_off_until_armed() {
   local human='state: parked · source: run-step · parked at awaiting_approval: 2 finding(s) · ask-user: authority decision · run: 01RUNGATE'
   local escalated='needs-decision [key=nm-01RUNGATE-review]: the gate raised an authority question
 working: still parked at that gate'
-  window="test:fm-wedge"; key=$(printf '%s' "$window" | tr ':/.' '___')
+  window="test:fm-wedge"; key=$(watch_window_key "$window")
 
   dir=$(wedge_threshold_fixture parked-gate-unarmed "$escalated" 2000)
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
@@ -586,7 +571,7 @@ working: still parked at that gate'
 test_wedge_threshold_parked_gate_needs_an_unanswered_decision() {
   local dir state fakebin out capture window key n
   local human='state: parked · source: run-step · parked at awaiting_approval: 2 finding(s) · ask-user: authority decision · run: 01RUNGATE'
-  window="test:fm-wedge"; key=$(printf '%s' "$window" | tr ':/.' '___')
+  window="test:fm-wedge"; key=$(watch_window_key "$window")
 
   # Answered, not yet relayed. The gate verdict is byte-identical to the one the
   # test above defers on; only the closing `resolved` line differs, and the
@@ -639,6 +624,121 @@ resolved [key=nm-01RUNGATE-review]: firstmate chose the second fix' 2000)
   pass "a parked human-owed gate is deferred only while its decision is still open, so an answered-but-unrelayed gate, an unescalated one, and one holding only a blocker all keep the unchanged ladder"
 }
 
+# --- a worker's own newest blocker or decision, behind its opt-in flag -------
+# Upstream kunchenguid/firstmate#6899: a lane whose newest line is the worker's
+# own `blocked:` or `needs-decision:` already woke firstmate, so in a home that
+# armed config/wedge-defer-worker-wait the wedge timer defers it to the bounded
+# recheck instead of climbing the ladder. `blocked:` is the verb pinned here
+# because the parked-gate evidence above deliberately refuses it. A `blocked:`
+# last line is captain-relevant, so every fixture arms the wedge timer (the
+# fourth argument) to reach it through the overridden-terminal-status branch.
+arm_worker_wait() {  # <case-dir>
+  : > "$1/config/wedge-defer-worker-wait"
+}
+
+test_wedge_threshold_defers_to_a_worker_blocker() {
+  local dir state fakebin out capture window key n reported case_log
+  local working='state: working · source: run-step · ci running'
+  window="test:fm-wedge"; key=$(watch_window_key "$window")
+
+  dir=$(wedge_threshold_fixture worker-blocker-fresh \
+    'working: wiring the client
+blocked: need the API key for the staging account' 0 600)
+  arm_worker_wait "$dir"
+  state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  n=1
+  while [ "$n" -le 3 ]; do
+    wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" absorb \
+      || fail "a worker blocker wedge-escalated at threshold $n in an armed home: $(cat "$out")"
+    n=$((n + 1))
+  done
+  [ "$(wedge_stale_wakes "$state" "$window")" -eq 0 ] \
+    || fail "a worker blocker queued a wake inside the recheck cadence: $(cat "$state/.wake-queue")"
+  [ ! -e "$state/.wedge-escalations-$key" ] \
+    || fail "a worker blocker counted $(cat "$state/.wedge-escalations-$key") wedge escalation(s)"
+
+  # The deferral is bounded: once the blocker is older than the cadence it
+  # re-surfaces once, aged from the line, naming firstmate and the clearing action.
+  dir=$(wedge_threshold_fixture worker-blocker-aged 'blocked: need the API key for the staging account' 2000 600)
+  arm_worker_wait "$dir"
+  state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" exit \
+    || fail "a worker blocker older than the recheck cadence was never rechecked: $(cat "$out")"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the worker-blocker recheck"
+  reported=$(wedge_reported_wait_secs "$out")
+  [ -n "$reported" ] && [ "$reported" -ge 1900 ] \
+    || fail "the worker-blocker recheck reported '${reported}'s rather than the blocker's age: $(cat "$out")"
+  grep -F 'declared blocker, awaiting firstmate' "$out" >/dev/null \
+    || fail "the worker-blocker recheck did not name its evidence and firstmate: $(cat "$out")"
+  grep -F 'clear the reported blocker' "$out" >/dev/null \
+    || fail "the worker-blocker recheck lost its blocker-specific action: $(cat "$out")"
+  grep -F 'possible wedge' "$out" >/dev/null \
+    && fail "the worker-blocker recheck was worded as a possible wedge: $(cat "$out")"
+  [ ! -e "$state/.wedge-escalations-$key" ] \
+    || fail "the worker-blocker recheck raised the escalation count"
+
+  dir=$(wedge_threshold_fixture worker-decision-aged 'needs-decision [key=scope]: ship the narrow fix or the broad one' 2000 600)
+  arm_worker_wait "$dir"
+  state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" exit \
+    || fail "a worker decision older than the recheck cadence was never rechecked: $(cat "$out")"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the worker-decision recheck"
+  grep -F 'declared decision, awaiting firstmate' "$out" >/dev/null \
+    || fail "the worker-decision recheck did not name its evidence and firstmate: $(cat "$out")"
+  grep -F 'answer the reported decision' "$out" >/dev/null \
+    || fail "the worker-decision recheck lost its decision-specific action: $(cat "$out")"
+
+  # Each of these ends or never starts the deferral, so the lane keeps the ladder:
+  # a newer worker line, a resolved line, a supervisor-reserved key, and an inbox
+  # record the worker acknowledged after writing the blocker.
+  for case_log in \
+    'blocked: need the API key for the staging account
+working: resumed without it' \
+    'blocked: need the API key for the staging account
+resolved: firstmate supplied the key' \
+    'blocked [key=remote-reply-continuity-mate1]: the remote reply mirror stopped' \
+    'blocked: need the API key for the staging account|handled'; do
+    dir=$(wedge_threshold_fixture worker-blocker-ended "${case_log%|handled}" 2000 600)
+    arm_worker_wait "$dir"
+    state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
+    case "$case_log" in
+      *'|handled')
+        mkdir -p "$state/wedge.inbox/handled"
+        printf 'schema=fm-task-inbox.v1\n--\nthe key is in the vault\n' > "$state/wedge.inbox/handled/001.msg"
+        ;;
+    esac
+    wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" exit \
+      || fail "an ended or supervisor-owned blocker never escalated: ${case_log}: $(cat "$out")"
+    ack_stopped_cycle "$state" || fail "could not acknowledge the ended-blocker escalation"
+    grep -F 'possible wedge, escalation 1' "$out" >/dev/null \
+      || fail "an ended or supervisor-owned blocker did not keep the ladder: ${case_log}: $(cat "$out")"
+  done
+  pass "in an armed home a worker's own open newest blocker or decision is deferred to the bounded recheck, and a newer line, a resolved line, a reserved key, or a newer acknowledged inbox record keeps the ladder"
+}
+
+# Absent config/wedge-defer-worker-wait the same aged blocker escalates with the
+# byte-identical reason it had before this evidence existed, and writes no
+# recheck throttle.
+test_wedge_threshold_worker_wait_is_off_until_armed() {
+  local dir state fakebin out capture window key
+  local working='state: working · source: run-step · ci running'
+  window="test:fm-wedge"; key=$(watch_window_key "$window")
+  dir=$(wedge_threshold_fixture worker-blocker-unarmed 'blocked: need the API key for the staging account' 2000 600)
+  state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  [ ! -e "$dir/config/wedge-defer-worker-wait" ] \
+    || fail "the unarmed fixture armed the flag, so it proves nothing"
+  wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" exit \
+    || fail "an unarmed home stopped escalating a worker blocker: $(cat "$out")"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the unarmed worker-blocker escalation"
+  grep -Ex 'stale: test:fm-wedge \(idle [0-9]+s, possible wedge, escalation 1\)' "$out" >/dev/null \
+    || fail "an unarmed home changed the wedge reason for a worker blocker: $(cat "$out")"
+  grep -F 'declared blocker' "$out" >/dev/null \
+    && fail "an unarmed home deferred a worker blocker: $(cat "$out")"
+  [ ! -e "$state/.waiting-resurfaced-$key" ] \
+    || fail "an unarmed home wrote the worker-wait recheck throttle"
+  pass "with config/wedge-defer-worker-wait absent a worker blocker keeps the byte-identical wedge reason"
+}
+
 # --- a wait record that does not carry every field is refused ----------------
 # wait_record joins its five fields with US and wedge_defer_wait parses them with
 # `IFS=<us> read`, so consecutive delimiters yield genuinely EMPTY fields and no
@@ -661,10 +761,11 @@ resolved [key=nm-01RUNGATE-review]: firstmate chose the second fix' 2000)
 # than on stdout, because fail() exits the shell it runs in and a command
 # substitution would swallow a setup failure here.
 run_malformed_wait_record_round() {  # <name> <evidence-body>
-  local name=$1 body=$2 dir state out
+  local name=$1 body=$2 dir state out key
   dir=$(make_case "$name"); state="$dir/state"
   printf 'working: validation under way\n' > "$state/wedge.status"
-  printf '%s\n' "$(( $(date +%s) - 600 ))" > "$state/.stale-since-test_fm-wedge"
+  key=$(watch_window_key test:fm-wedge)
+  printf '%s\n' "$(( $(date +%s) - 600 ))" > "$state/.stale-since-$key"
 
   out="$dir/defer.out"
   FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=1 FM_PAUSE_RESURFACE_SECS=999 \
@@ -678,10 +779,10 @@ run_malformed_wait_record_round() {  # <name> <evidence-body>
       # child shell has none of.
       fm_backend_agent_state() { printf alive; }
       eval "wedge_wait_evidence() { $2 ; }"
-      wedge_timer_check "test:fm-wedge" "$FM_STATE_OVERRIDE/.stale-since-test_fm-wedge" \
-        "non-terminal stale" "$FM_STATE_OVERRIDE/.wedge-escalations-test_fm-wedge" wedge \
+      wedge_timer_check "test:fm-wedge" "$FM_STATE_OVERRIDE/.stale-since-$3" \
+        "non-terminal stale" "$FM_STATE_OVERRIDE/.wedge-escalations-$3" wedge \
         malformed-record-pane
-    ' _ "$WATCH" "$body" > "$out" 2>&1 \
+    ' _ "$WATCH" "$body" "$key" > "$out" 2>&1 \
     || fail "the wedge timer failed on a malformed wait record ($name): $(cat "$out")"
   MALFORMED_STATE=$state
 }
@@ -692,7 +793,7 @@ assert_malformed_record_kept_the_ladder() {  # <state> <what>
     || fail "$what did not keep the unchanged ladder: $(cat "$state/.wake-queue" 2>/dev/null)"
   grep -F 'rechecked on a long cadence not a wedge' "$state/.wake-queue" >/dev/null \
     && fail "$what was deferred on a record that is not what it claims: $(cat "$state/.wake-queue")"
-  [ "$(cat "$state/.wedge-escalations-test_fm-wedge" 2>/dev/null || echo 0)" -eq 1 ] \
+  [ "$(cat "$state/.wedge-escalations-$(watch_window_key test:fm-wedge)" 2>/dev/null || echo 0)" -eq 1 ] \
     || fail "$what did not count its escalation"
 }
 
@@ -721,13 +822,168 @@ test_wedge_defer_refuses_a_half_filled_wait_record() {
   pass "a wait record missing a field the recheck must print, or carrying one it must not, is refused and the lane escalates exactly as it would have"
 }
 
-watch_triage_run_only
+# --- an executing no-mistakes run is liveness, not a wedge candidate ---------
+# While the pipeline runs or fixes a round the worker is idle behind its own
+# blocking drive call, so a static pane is exactly what a healthy lane looks
+# like. The attributed run step says so, and in a home that armed
+# config/wedge-defer-validating the wedge timer defers to it on the same long
+# recheck cadence as every other deferral instead of re-escalating a possible
+# wedge each FM_STALE_ESCALATE_SECS.
+arm_validating() {  # <case-dir>
+  : > "$1/config/wedge-defer-validating"
+}
 
-test_wedge_threshold_defers_to_a_declared_wait_under_a_working_verdict
-test_wedge_threshold_keeps_a_wait_past_a_default_key_answer
-test_wedge_threshold_recheck_names_the_captain_for_a_held_lane
-test_wedge_threshold_defers_to_a_backlog_captain_hold
-test_wedge_threshold_defers_to_a_parked_gate_awaiting_a_human
-test_wedge_threshold_parked_gate_needs_an_unanswered_decision
-test_wedge_threshold_parked_gate_is_off_until_armed
-test_wedge_defer_refuses_a_half_filled_wait_record
+test_wedge_threshold_defers_to_an_executing_validation_run() {
+  local dir state fakebin out capture window key n verdict step queued
+  window="test:fm-wedge"; key=$(watch_window_key "$window")
+
+  for step in running fixing; do
+    verdict="state: working · source: run-step · validating ($step) · run: 01RUNLIVE"
+    dir=$(wedge_threshold_fixture "validating-$step" 'working: handed to validation' 0)
+    arm_validating "$dir"
+    state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
+    n=1
+    while [ "$n" -le 3 ]; do
+      wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$verdict" absorb \
+        || fail "a $step validation run wedge-escalated at threshold $n: $(cat "$out")"
+      n=$((n + 1))
+    done
+    [ "$(wedge_stale_wakes "$state" "$window")" -eq 0 ] \
+      || fail "a $step validation run queued a stale wake: $(cat "$state/.wake-queue")"
+    grep -F 'possible wedge' "$out" >/dev/null \
+      && fail "a $step validation run was reported as a possible wedge: $(cat "$out")"
+    [ ! -e "$state/.wedge-escalations-$key" ] \
+      || fail "a $step validation run counted $(cat "$state/.wedge-escalations-$key") wedge escalation(s)"
+    [ "$(cat "$state/.validating-since-$key" 2>/dev/null || true)" = 01RUNLIVE ] \
+      || fail "the $step deferral chain was not bound to its run"
+  done
+
+  # The deferral is bounded, not a cancellation: a run record that keeps saying
+  # running for longer than the recheck cadence is rechecked once, worded as the
+  # validating run it is rather than as a wedge, and then quiet again.
+  # The wedge timer is pre-armed so the first poll is already at the threshold
+  # rather than a timer repair, which would restart the chain under test.
+  verdict='state: working · source: run-step · validating (running) · run: 01RUNLIVE'
+  dir=$(wedge_threshold_fixture validating-aged 'working: handed to validation' 0 5)
+  arm_validating "$dir"
+  state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  printf '01RUNLIVE' > "$state/.validating-since-$key"
+  set_mtime "$(( $(date +%s) - 2000 ))" "$state/.validating-since-$key"
+  FM_TEST_PAUSE_RESURFACE=240 wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$verdict" exit \
+    || fail "a validation run older than the recheck cadence was never rechecked: $(cat "$out")"
+  grep -F 'no-mistakes run 01RUNLIVE validating (running)' "$out" >/dev/null \
+    || fail "the validating recheck did not name its run: $(cat "$out")"
+  grep -F 'rechecked on a long cadence not a wedge; confirm the run is still progressing' "$out" >/dev/null \
+    || fail "the validating recheck lost its action: $(cat "$out")"
+  grep -F 'possible wedge' "$out" >/dev/null \
+    && fail "the validating recheck was worded as a possible wedge: $(cat "$out")"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the validating recheck"
+  queued=$(wedge_stale_wakes "$state" "$window")
+  FM_TEST_PAUSE_RESURFACE=240 wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$verdict" absorb \
+    || fail "the validating recheck repeated inside its cadence: $(cat "$out")"
+  [ "$(wedge_stale_wakes "$state" "$window")" -eq "$queued" ] \
+    || fail "the validating recheck queued a further wake inside its cadence"
+
+  # A replacement run starts its own chain, so an old run's age cannot make the
+  # new one re-surface at once.
+  dir=$(wedge_threshold_fixture validating-new-run 'working: handed to validation' 0 5)
+  arm_validating "$dir"
+  state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  printf '01RUNOLD' > "$state/.validating-since-$key"
+  set_mtime "$(( $(date +%s) - 2000 ))" "$state/.validating-since-$key"
+  FM_TEST_PAUSE_RESURFACE=240 wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$verdict" absorb \
+    || fail "a replacement run inherited the previous run's recheck age: $(cat "$out")"
+  [ "$(cat "$state/.validating-since-$key")" = 01RUNLIVE ] \
+    || fail "a replacement run did not rebind the deferral chain"
+  pass "a running or fixing validation run is deferred on the long recheck cadence rather than wedge-escalated"
+}
+
+# Every run state that does not prove a round is executing keeps the unchanged
+# ladder even where the flag is armed: a parked gate, a terminal run, a ci
+# monitor, a coarse ledger row, a verdict naming no run, no run at all, and an
+# unreadable verdict.
+test_wedge_threshold_escalates_when_no_run_is_executing() {
+  local dir state fakebin out capture window key n spec name verdict
+  window="test:fm-wedge"; key=$(watch_window_key "$window")
+  for spec in \
+    'parked|state: parked · source: run-step · parked at awaiting_approval: 2 finding(s) · run: 01RUNLIVE' \
+    'failed|state: failed · source: run-step · run failed · run: 01RUNLIVE' \
+    'done|state: done · source: run-step · checks green: PR ready for review · run: 01RUNLIVE' \
+    'ci|state: working · source: run-step · ci running · run: 01RUNLIVE' \
+    'coarse|state: working · source: run-step · validating (background run)' \
+    'runless|state: working · source: run-step · validating (running)' \
+    'absent|state: working · source: pane · busy' \
+    'unreadable|error: no-mistakes status timed out'; do
+    name=${spec%%|*}; verdict=${spec#*|}
+    dir=$(wedge_threshold_fixture "not-executing-$name" 'working: handed to validation' 0)
+    arm_validating "$dir"
+    state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
+    n=1
+    while [ "$n" -le 3 ]; do
+      wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$verdict" exit \
+        || fail "a $name run stopped escalating at threshold $n: $(cat "$out")"
+      ack_stopped_cycle "$state" || fail "could not acknowledge $name escalation $n"
+      grep -F "possible wedge, escalation $n" "$out" >/dev/null \
+        || fail "a $name run did not reach escalation $n: $(cat "$out")"
+      n=$((n + 1))
+    done
+    grep -F 'demand-deep-inspection: same pane has wedge-escalated 3 times in a row' "$out" >/dev/null \
+      || fail "a $name run lost the demand-deep-inspection wording: $(cat "$out")"
+    [ ! -e "$state/.validating-since-$key" ] \
+      || fail "a $name run started a validating deferral chain"
+  done
+  pass "parked, terminal, ci-monitoring, coarse, runless, absent and unreadable runs keep the unchanged wedge ladder"
+}
+
+# Absent config/wedge-defer-validating an executing run is no deferral at all:
+# the lane escalates on the unchanged schedule and wording, and the consult is
+# never reached, so no current-state read is spent and no chain is started.
+test_wedge_threshold_validating_run_is_off_until_armed() {
+  local dir state fakebin out capture window key n probes
+  local verdict='state: working · source: run-step · validating (running) · run: 01RUNLIVE'
+  window="test:fm-wedge"; key=$(watch_window_key "$window")
+  dir=$(wedge_threshold_fixture validating-unarmed 'working: handed to validation' 0)
+  state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  [ ! -e "$dir/config/wedge-defer-validating" ] \
+    || fail "the unarmed fixture armed the flag, so it proves nothing"
+  export FM_FAKE_CREW_STATE_LOG="$dir/crew-state.calls"
+  : > "$FM_FAKE_CREW_STATE_LOG"
+  n=1
+  while [ "$n" -le 3 ]; do
+    wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$verdict" exit \
+      || fail "an unarmed home stopped escalating a running validation at threshold $n: $(cat "$out")"
+    ack_stopped_cycle "$state" || fail "could not acknowledge unarmed validating escalation $n"
+    grep -F "possible wedge, escalation $n" "$out" >/dev/null \
+      || fail "an unarmed home did not reach escalation $n: $(cat "$out")"
+    n=$((n + 1))
+  done
+  probes=$(wc -l < "$FM_FAKE_CREW_STATE_LOG" | tr -d ' ')
+  unset FM_FAKE_CREW_STATE_LOG
+  grep -F 'demand-deep-inspection: same pane has wedge-escalated 3 times in a row' "$out" >/dev/null \
+    || fail "an unarmed home lost the demand-deep-inspection wording: $(cat "$out")"
+  [ "$probes" -eq 0 ] \
+    || fail "an unarmed home spent $probes current-state read(s) on a running validation over three thresholds"
+  [ ! -e "$state/.validating-since-$key" ] \
+    || fail "an unarmed home started a validating deferral chain"
+  pass "with config/wedge-defer-validating absent a running validation keeps the unchanged ladder, wording and reads"
+}
+
+if [ -n "${FM_TEST_ONLY:-}" ]; then
+  "$FM_TEST_ONLY"
+  exit 0
+fi
+
+fm_test_run \
+  test_wedge_threshold_defers_to_a_declared_wait_under_a_working_verdict \
+  test_wedge_threshold_keeps_a_wait_past_a_default_key_answer \
+  test_wedge_threshold_recheck_names_the_captain_for_a_held_lane \
+  test_wedge_threshold_defers_to_a_backlog_captain_hold \
+  test_wedge_threshold_defers_to_a_parked_gate_awaiting_a_human \
+  test_wedge_threshold_parked_gate_needs_an_unanswered_decision \
+  test_wedge_threshold_parked_gate_is_off_until_armed \
+  test_wedge_threshold_defers_to_a_worker_blocker \
+  test_wedge_threshold_worker_wait_is_off_until_armed \
+  test_wedge_defer_refuses_a_half_filled_wait_record \
+  test_wedge_threshold_defers_to_an_executing_validation_run \
+  test_wedge_threshold_escalates_when_no_run_is_executing \
+  test_wedge_threshold_validating_run_is_off_until_armed

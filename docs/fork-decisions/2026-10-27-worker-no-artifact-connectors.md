@@ -7,4 +7,4 @@ No upstream proposal.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| A Claude ship or scout launches with the Artifact tool and claude.ai connectors off in its inline `--settings` JSON | `bin/fm-spawn.sh` (`launch_template` claude comment, inline `claude_settings`), `tests/fm-spawn-dispatch-profile.test.sh`, `tests/fm-backend-orca.test.sh`, `.agents/skills/harness-adapters/references/harness/claude.md` | same files | carried | 45dd50a5 |
+| A Claude ship or scout launches with the Artifact tool and claude.ai connectors off in its inline `--settings` JSON | `bin/fm-spawn.sh` (`launch_template` claude comment, inline `claude_settings`), `tests/fm-spawn-dispatch-profile.test.sh`, `tests/fm-backend-orca.test.sh`, `.agents/skills/harness-adapters/references/harness/claude.md` | same files | carried | c8d8fdad |

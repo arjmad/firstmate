@@ -67,7 +67,7 @@
 #            one is resumed with a plain `lavish-axi <artifact>` (never
 #            `--reopen`), and one the captain ended from the browser exits 4 so
 #            the board is retired instead. It prints `link: <url>` in the
-#            phone-openable form bin/fm-lavish-url.sh gives, plus
+#            phone-openable form bin/fm-lavish-link.sh gives, plus
 #            `moved-from: <url>` (or `none`) when the saved session link
 #            changed, so the caller can record the new link where the captain
 #            will find it. Any other failure exits nonzero and nothing moves.
@@ -413,7 +413,7 @@ cmd_listed_open() {
 
 phone_link() {  # <url>
   local shown
-  shown=$("$SCRIPT_DIR/fm-lavish-url.sh" "$1" 2>/dev/null) && [ -n "$shown" ] || shown=$1
+  shown=$("$SCRIPT_DIR/fm-lavish-link.sh" "$1" 2>/dev/null) && [ -n "$shown" ] || shown=$1
   printf '%s\n' "$shown"
 }
 

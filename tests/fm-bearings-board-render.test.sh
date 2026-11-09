@@ -517,6 +517,41 @@ test_prune_answers_name_the_offer_and_what_to_drop() {
   pass "prune answers name the recorded offer: Drop all after a confirm, the ticked positions, or keep"
 }
 
+test_full_snapshot_question_reaches_the_rendered_decision() {
+  local home a b reason snapshot calls out
+  home=$(make_home full-decision-question)
+  a='A: retain the existing workflow through the complete staged verification and preserve all current integrations until each dependency has reported its result.'
+  b='B: defer the independent migration until the remaining review has finished, keeping the full fallback route and the final café / 東京 approval.'
+  reason="Which route should proceed? $a $b"
+  cat > "$home/data/backlog.md" <<EOF
+## In flight
+
+## Queued
+- [ ] scope-call - Choose rollout scope (repo: sample) (kind: captain) (hold: $reason) (hold-kind: captain)
+
+## Done
+EOF
+  snapshot=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-bearings-snapshot.sh" --json) \
+    || fail "the decision snapshot failed"
+  # Composition consumes the complete recorded question directly. Options are
+  # authored explicitly here, never inferred by parsing the stored prose.
+  calls=$(printf '%s' "$snapshot" | jq '[.decisions_open[] | {
+    key:.key,type:"decision",repo:"sample",title:"Rollout scope",decide:.question,
+    options:[{value:"a",label:"Retain the workflow"},{value:"b",label:"Defer the migration"}],
+    case_against:"The migration waits for another review."}]')
+  full_payload "$home/payload.json"
+  jq --argjson calls "$calls" '.captains_call = $calls' "$home/payload.json" > "$home/payload.tmp" \
+    && mv "$home/payload.tmp" "$home/payload.json"
+  build_board "$home" "$home/payload.json"
+  out=$(render "$home")
+  printf '%s' "$out" | jq -e --arg question "Choose rollout scope: $reason" --arg a "$a" --arg b "$b" '
+    .error == ""
+      and ([.sections[] | select(.key == "decisions") | .items[]]
+        | length == 1 and (.[0].ask | contains($question) and contains($a) and contains($b)))
+  ' >/dev/null || fail "the rendered call lost its full question or final option: $out"
+  pass "the complete snapshot question and options reach rendered decision text"
+}
+
 test_the_inbox_comes_first_in_folding_sections
 test_an_inbox_item_shows_its_own_actions_and_value_boxes
 test_an_action_carries_its_values_note_and_route
@@ -532,3 +567,4 @@ test_an_empty_board_says_so_in_each_place
 test_the_template_fails_closed_on_unreadable_data
 test_the_prune_card_sits_in_the_inbox_with_its_three_answers
 test_prune_answers_name_the_offer_and_what_to_drop
+test_full_snapshot_question_reaches_the_rendered_decision
