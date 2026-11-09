@@ -131,6 +131,13 @@ export interface UnreadWakeScope {
    */
   needsDecisionKeys: string[];
   /**
+   * The "key" field of every stale row this scan left claimable because its
+   * task's only decision was already shown (staleDecisionUnshown). A signal
+   * trigger for one of these tasks stays on main exactly as it did before the
+   * shown-decision rule; a stale trigger does not.
+   */
+  shownDecisionKeys: string[];
+  /**
    * The check-kind rows included in eligibleSeqs. Non-empty only in the away
    * posture, where the branch takes main's rows too; a check row names no
    * task, so a prompt that claims one is not scoped by task.
@@ -153,6 +160,7 @@ const EMPTY_SCOPE: UnreadWakeScope = {
   eligibleTasks: [],
   corrupted: false,
   needsDecisionKeys: [],
+  shownDecisionKeys: [],
   checkSeqs: [],
   heartbeatSeqs: [],
   taskByWakeKey: {},
@@ -165,6 +173,7 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
   eligibleTasks: [],
   corrupted: true,
   needsDecisionKeys: [],
+  shownDecisionKeys: [],
   checkSeqs: [],
   heartbeatSeqs: [],
   taskByWakeKey: {},
@@ -274,10 +283,15 @@ function statusLineNote(rawLine: string): string {
   return match ? note.slice(match[0].length).trimStart() : note;
 }
 
+// "owned": the row is main's for a decision; "shown": a stale row whose task's
+// only decision was already shown, which still vetoes a signal trigger for
+// that task exactly as before; "none": no decision reason.
+type DecisionOwnership = "owned" | "shown" | "none";
+
 interface StaleDecisionCacheEntry {
   version: string;
   config: string;
-  decisionOwned: boolean;
+  ownership: DecisionOwnership;
 }
 
 const staleDecisionCache = new Map<string, StaleDecisionCacheEntry>();
@@ -462,7 +476,12 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
   const needsDecisionKeys: string[] = [];
   const checkSeqs: string[] = [];
   const heartbeatSeqs: string[] = [];
-  const staleDecisionOwnership = new Map<string, boolean>();
+  const staleDecisionOwnership = new Map<string, DecisionOwnership>();
+  const shownDecisionKeys: string[] = [];
+  // Stale rows claimed under the shown-decision rule, re-checked after the
+  // scan against every unread decision row for the same task.
+  const shownStaleClaims: { seq: string; key: string; task: string }[] = [];
+  const taskProjects: { seq: string; task: string; project: string }[] = [];
   const resolveVerb = process.env.FM_CLASSIFY_RESOLVE_VERB || "resolved";
   const heldVerb = process.env.FM_CLASSIFY_CAPTAIN_HELD_VERB || "captain-held";
   const reservedPrefixes = (process.env.FM_CLASSIFY_RESERVED_KEY_PREFIXES || "pending-reply-")
@@ -548,7 +567,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
         } catch {
           return UNSAFE_SCOPE;
         }
-        let decisionOwned = false;
+        let ownership: DecisionOwnership = "none";
         if (version) {
           let cursor: { ident: string; offset: number } | null | undefined;
           if (spanRule || shownRule) {
@@ -558,7 +577,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
           const config = spanRule || shownRule ? `${decisionConfig}\0${cursor?.ident ?? ""}\0${cursor?.offset ?? 0}` : decisionConfig;
           const cached = staleDecisionCache.get(ownershipKey);
           if (cached?.version === version && cached.config === config) {
-            decisionOwned = cached.decisionOwned;
+            ownership = cached.ownership;
           } else {
             let contents: Buffer;
             let spanOffset = 0;
@@ -579,12 +598,16 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
             const open = openDecisions(statusLines, resolveVerb, heldVerb, reservedPrefixes);
             const presented = nonBlankLines(contents.subarray(0, spanOffset).toString("utf8"));
             const unread = nonBlankLines(contents.subarray(spanOffset).toString("utf8"));
-            decisionOwned = spanRule
-              ? spanIsDecisionOwned(open, presented, unread, resolveVerb, heldVerb, reservedPrefixes)
+            const wholeLogOwned = [...open.values()].includes("needs-decision") ||
+              statusLineVerb(statusLines.at(-1) ?? "") === heldVerb;
+            ownership = spanRule
+              ? spanIsDecisionOwned(open, presented, unread, resolveVerb, heldVerb, reservedPrefixes) ? "owned" : "none"
               : shownRule
                 ? staleDecisionUnshown(open, presented, unread, resolveVerb, heldVerb, reservedPrefixes)
-                : [...open.values()].includes("needs-decision") || statusLineVerb(statusLines.at(-1) ?? "") === heldVerb;
-            staleDecisionCache.set(ownershipKey, { version, config, decisionOwned });
+                  ? "owned"
+                  : wholeLogOwned ? "shown" : "none"
+                : wholeLogOwned ? "owned" : "none";
+            staleDecisionCache.set(ownershipKey, { version, config, ownership });
             if (staleDecisionCache.size > 512) {
               staleDecisionCache.delete(staleDecisionCache.keys().next().value!);
             }
@@ -592,16 +615,38 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
         } else {
           staleDecisionCache.delete(ownershipKey);
         }
-        staleDecisionOwnership.set(ownershipKey, decisionOwned);
+        staleDecisionOwnership.set(ownershipKey, ownership);
       }
-      if (staleDecisionOwnership.get(ownershipKey)) {
+      const ownership = staleDecisionOwnership.get(ownershipKey);
+      if (ownership === "owned") {
         needsDecisionKeys.push(key);
         if (!afk) continue;
+      } else if (ownership === "shown") {
+        shownDecisionKeys.push(key);
+        if (!afk) shownStaleClaims.push({ seq, key, task });
       }
     }
-    projects.add(project);
-    eligibleTasks.add(task);
+    taskProjects.push({ seq, task, project });
     eligibleSeqs.push(seq);
+  }
+  // A shown-decision stale row is still main's while any unread decision row
+  // for its task waits in this queue, whatever the row order, so no other wake
+  // (a heartbeat included) claims it ahead of that decision.
+  const taskOf = (key: string): string => taskByKey.get(key) ?? taskByKey.get(key.replace(/^fm-/, "")) ?? key;
+  const unreadDecisionTasks = new Set(needsDecisionKeys.map(taskOf));
+  const withheld = new Set<string>();
+  for (const claim of shownStaleClaims) {
+    if (!unreadDecisionTasks.has(claim.task)) continue;
+    withheld.add(claim.seq);
+    needsDecisionKeys.push(claim.key);
+  }
+  if (withheld.size > 0) {
+    for (let i = eligibleSeqs.length - 1; i >= 0; i -= 1) if (withheld.has(eligibleSeqs[i])) eligibleSeqs.splice(i, 1);
+  }
+  for (const claim of taskProjects) {
+    if (withheld.has(claim.seq)) continue;
+    projects.add(claim.project);
+    eligibleTasks.add(claim.task);
   }
   const eligible = eligibleSeqs.length > 0;
   // Reached only after every row passed classification without a veto. A scan
@@ -619,6 +664,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
     eligibleTasks: [...eligibleTasks],
     corrupted: false,
     needsDecisionKeys,
+    shownDecisionKeys,
     checkSeqs,
     heartbeatSeqs,
     taskByWakeKey: Object.fromEntries(taskByKey),
@@ -676,7 +722,10 @@ export function branchOfferForWake(state: string, message: string, afk: boolean,
       : [];
   const taskIdentity = (key: string): string =>
     scope.taskByWakeKey[key] ?? scope.taskByWakeKey[key.replace(/^fm-/, "")] ?? key;
-  const needsDecisionTasks = new Set(scope.needsDecisionKeys.map(taskIdentity));
+  const needsDecisionTasks = new Set([
+    ...scope.needsDecisionKeys,
+    ...(/^signal:/.test(message) ? scope.shownDecisionKeys : []),
+  ].map(taskIdentity));
   const isNeedsDecisionTrigger = triggerKeys.some((key) => needsDecisionTasks.has(taskIdentity(key)));
   const attendedEligible = !isCheckTrigger && !isNeedsDecisionTrigger && (
     afk ? scopeForUnreadWake(state, heartbeat, false).eligible : scope.eligible

@@ -5387,20 +5387,25 @@ stage("mate", hold, "done: sample-d PR merged\n");
 rmSync(`${state}/.status-presentation-cursor`);
 if (verdicts().some(Boolean)) throw new Error("a missing presentation cursor did not fall back to the whole log");
 
-// A stale row keeps its own shown-decision rule, and a co-queued signal row for
-// the same second mate keeps its own verdict in either order: a same-key update
-// sends the signal to main while the already-shown hold leaves the stale
-// liveness ping to the branch.
-for (const [order, queue, signalSeq, staleSeq] of [
-  ["stale first", "1\t1\tstale\tmate\tstale: mate\n1\t2\tsignal\tmate.status\tsignal: mate.status", "2", "1"],
-  ["signal first", "1\t1\tsignal\tmate.status\tsignal: mate.status\n1\t2\tstale\tmate\tstale: mate", "1", "2"],
+// A stale row keeps its own shown-decision rule beside a co-queued signal row
+// for the same second mate, in either order: a routine span over an
+// already-shown hold leaves both rows to the branch, while a same-key update
+// owns a decision and keeps the stale row behind it on main too.
+for (const [order, queue] of [
+  ["stale first", "1\t1\tstale\tmate\tstale: mate\n1\t2\tsignal\tmate.status\tsignal: mate.status"],
+  ["signal first", "1\t1\tsignal\tmate.status\tsignal: mate.status\n1\t2\tstale\tmate\tstale: mate"],
 ]) {
-  stage("mate", hold, "working [key=old-hold]: still gathering evidence\n");
-  writeFileSync(`${state}/.wake-queue`, queue);
-  for (const attendedHost of [false, true]) {
-    const scope = scopeForUnreadWake(state, false, false, attendedHost);
-    if (scope.eligibleSeqs.includes(signalSeq) || !scope.eligibleSeqs.includes(staleSeq)) {
-      throw new Error(`${order}: signal and stale rows for one second mate shared a verdict: ${JSON.stringify(scope)}`);
+  for (const [span, toBranch] of [
+    ["done: sample-e PR merged\n", true],
+    ["working [key=old-hold]: still gathering evidence\n", false],
+  ]) {
+    stage("mate", hold, span);
+    writeFileSync(`${state}/.wake-queue`, queue);
+    for (const attendedHost of [false, true]) {
+      const scope = scopeForUnreadWake(state, false, false, attendedHost);
+      if (scope.eligibleSeqs.length !== (toBranch ? 2 : 0)) {
+        throw new Error(`${order}, ${span.trim()}: expected ${toBranch ? "both rows on the branch" : "both rows on main"}: ${JSON.stringify(scope)}`);
+      }
     }
   }
 }
@@ -5440,7 +5445,7 @@ import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, rmSync, writeFileSync } from "node:fs";
 
-const { branchOfferForWake } = await import(pathToFileURL(process.env.LIB).href);
+const { branchOfferForWake, scopeForUnreadWake } = await import(pathToFileURL(process.env.LIB).href);
 const state = `${process.env.FM_HOME}/state`;
 const staleRow = "1\t1\tstale\tcrew-window\tstale: crew-window (idle)";
 const staleWake = "stale: crew-window (idle)";
@@ -5497,6 +5502,37 @@ for (const [attendedHost, toBranch] of [[false, true], [true, false]]) {
   const verdict = branchOfferForWake(state, `signal: ${state}/crew.status`, false, attendedHost);
   if (verdict.eligible !== toBranch) {
     throw new Error(`a crewmate status wake changed routing (host=${attendedHost}): ${JSON.stringify(verdict)}`);
+  }
+}
+
+// No other wake claims a shown-decision stale row ahead of its task's unread
+// decision row, whatever the row order.
+for (const queue of [
+  ["1\t1\tsignal\tcrew.status\tneeds-decision: crew.status", "1\t2\tstale\tcrew-window\tstale: crew-window (idle)", "1\t3\theartbeat\theartbeat\theartbeat"],
+  ["1\t2\tstale\tcrew-window\tstale: crew-window (idle)", "1\t1\tsignal\tcrew.status\tneeds-decision: crew.status", "1\t3\theartbeat\theartbeat\theartbeat"],
+]) {
+  stage(asked, "", queue);
+  for (const attendedHost of [false, true]) {
+    const scope = scopeForUnreadWake(state, true, false, attendedHost);
+    if (scope.eligibleSeqs.join(",") !== "3" || scope.eligibleTasks.length !== 0) {
+      throw new Error(`a heartbeat claimed a stale row ahead of its unread decision (host=${attendedHost}): ${JSON.stringify(scope)}`);
+    }
+  }
+}
+
+// A Pi signal trigger beside a shown-decision stale row stays on main, as it did
+// before the shown-decision rule. That stale trigger goes to the branch on Pi;
+// on the attended host the same routine signal row is decision-owned by its
+// whole-log rule, so it holds the stale row behind it on main.
+stage(asked, "working: routine follow-up\n", ["1\t1\tsignal\tcrew.status\tsignal: crew.status", staleRow.replace("\t1\tstale", "\t2\tstale")]);
+for (const attendedHost of [false, true]) {
+  if (branchOfferForWake(state, `signal: ${state}/crew.status`, false, attendedHost).eligible) {
+    throw new Error(`a signal trigger beside a shown-decision stale row left main (host=${attendedHost})`);
+  }
+}
+for (const [attendedHost, toBranch] of [[false, true], [true, false]]) {
+  if (branchOfferForWake(state, staleWake, false, attendedHost).eligible !== toBranch) {
+    throw new Error(`stale beside a routine signal row: expected ${toBranch ? "branch" : "main"} (host=${attendedHost})`);
   }
 }
 process.exit(0);
