@@ -9,7 +9,7 @@
 # plan prints one JSON plan on stdout and exits 0 whenever it can read the
 # repository; it never decides which shard runs, only what the change touches:
 #   {"version":1,"head":"<sha>","mode":"affected"|"full","reasons":[...],
-#    "changed":[...],"tests":[...],"lint_roots":[...]}
+#    "changed":[...],"changed_count":<n>,"tests":[...],"lint_roots":[...]}
 # tests is the behavior scripts `bin/fm-test-run.sh --list --changed` selects,
 # and lint_roots is every canonical ShellCheck root (`bin/fm-lint.sh
 # --list-files` in CI) whose analysis can see a changed file: the changed roots
@@ -21,7 +21,9 @@
 # rename lists both sides; uncommitted work is not read, so run it on a clean
 # tree.
 #
-# Full mode empties tests and lint_roots and means "run everything".
+# Full mode empties tests and lint_roots and means "run everything"; it keeps
+# at most FM_CI_PLAN_MAX_FILES reasons and changed paths, so a sync touching
+# thousands of files still fits the plan in one job output.
 # plan chooses full, giving every reason that applies, when:
 #   - the event is not pull_request (push, workflow_dispatch, anything else);
 #   - the labels include full-ci;
@@ -126,14 +128,14 @@ lint_closure() {
 }
 
 emit_plan() {
-  local head=$1 mode=$2 reasons=$3 changed=$4 tests=$5 roots=$6
-  jq -n -c --arg head "$head" --arg mode "$mode" \
+  local head=$1 mode=$2 reasons=$3 changed=$4 tests=$5 roots=$6 count=$7
+  jq -n -c --arg head "$head" --arg mode "$mode" --argjson count "$count" \
     --argjson reasons "$(lines_to_json <"$reasons")" \
     --argjson changed "$(lines_to_json <"$changed")" \
     --argjson tests "$(lines_to_json <"$tests")" \
     --argjson roots "$(lines_to_json <"$roots")" \
     '{version: 1, head: $head, mode: $mode, reasons: $reasons,
-      changed: $changed, tests: $tests, lint_roots: $roots}'
+      changed: $changed, changed_count: $count, tests: $tests, lint_roots: $roots}'
 }
 
 compute_plan() {
@@ -198,7 +200,7 @@ compute_plan() {
 }
 
 cmd_plan() {
-  local event='' labels='' base='' work head mode
+  local event='' labels='' base='' work head mode count f
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --event) [ "$#" -gt 1 ] || die "--event requires a name"; event=$2; shift 2 ;;
@@ -214,14 +216,20 @@ cmd_plan() {
   if ! compute_plan "$work" "$event" "$labels" "$base"; then
     cat "$work/error" >"$work/reasons" 2>/dev/null || echo "error: planning failed" >"$work/reasons"
   fi
+  count=$(grep -c . "$work/changed" 2>/dev/null || true)
   if [ -s "$work/reasons" ]; then
     mode=full
     : >"$work/tests"
     : >"$work/roots"
+    # A sync can change thousands of paths, and the plan travels as one
+    # argument and one environment variable, each capped at 128 KiB on Linux.
+    for f in reasons changed; do
+      head -n "$MAX_FILES" "$work/$f" >"$work/$f.cut" && mv "$work/$f.cut" "$work/$f"
+    done
   else
     mode=affected
   fi
-  emit_plan "$head" "$mode" "$work/reasons" "$work/changed" "$work/tests" "$work/roots" \
+  emit_plan "$head" "$mode" "$work/reasons" "$work/changed" "$work/tests" "$work/roots" "${count:-0}" \
     || { rm -rf "$work"; die "could not encode the plan"; }
   rm -rf "$work"
 }
@@ -321,7 +329,7 @@ cmd_explain() {
     (if .mode == "full" then (.reasons | map("- " + .) | .[]) else
       "\(.tests | length) behavior scripts and \(.lint_roots | length) lint roots are affected." end),
     "",
-    "Changed files (\(.changed | length)):",
+    "Changed files (\(.changed_count // (.changed | length))\(if (.changed_count // 0) > (.changed | length) then ", first \(.changed | length) listed" else "" end)):",
     "",
     (.changed | map("- `" + . + "`") | .[])'
 }

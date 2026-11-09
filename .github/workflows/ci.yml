@@ -84,6 +84,9 @@ jobs:
           elif [ "$event" = workflow_dispatch ] && [ -n "$FM_CI_DISPATCH_BASE" ]; then
             event=pull_request
             base=$FM_CI_DISPATCH_BASE
+            # The checkout has remote-tracking branches only, so a bare
+            # branch name such as main resolves as origin/main.
+            git rev-parse --verify --quiet "$base^{commit}" >/dev/null || base=origin/$base
           fi
           plan=$(bin/fm-ci-plan.sh plan --event "$event" --labels "$FM_CI_LABELS" ${base:+--base "$base"})
           printf 'plan=%s\n' "$plan" >> "$GITHUB_OUTPUT"

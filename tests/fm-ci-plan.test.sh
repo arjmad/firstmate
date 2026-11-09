@@ -176,7 +176,10 @@ test_full_triggers_give_their_reason() {
   reset_copy
   for i in $(seq 1 26); do printf 'page %s\n' "$i" >"$COPY/docs/zz-page-$i.md"; done
   commit_all many
-  assert_full "$(plan_pr)" "26 changed files is more than 25"
+  plan=$(plan_pr)
+  assert_full "$plan" "26 changed files is more than 25"
+  [ "$(printf '%s' "$plan" | jq '[.changed_count, (.changed | length)] | join(" ")' -r)" = "26 25" ] \
+    || fail "a full plan must count every changed path but list at most 25: $plan"
 
   reset_copy
   git -C "$COPY" rm -q bin/fm-zz-top.sh
