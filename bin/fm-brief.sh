@@ -150,6 +150,9 @@
 # or policy gate, and ship scaffolds add `ready:` for an open PR that only waits
 # to land; bin/fm-classify-lib.sh owns how supervisors read both, and neither is
 # ever a needs-decision (fork patch, docs/fork-decisions.md 2026-10-14).
+# A ship whose PR merged and whose only remaining step is the captain's own
+# reports done naming that step rather than waiting on it (fork patch,
+# docs/fork-decisions.md 2026-11-09); ship-landing owns the release.
 # Emission-time syntax and legacy unknown-time handling are owned by
 # bin/fm-classify-lib.sh; each scaffold renders the stamp as a literal <epoch>
 # placeholder the worker replaces with a numeric Unix time as it appends, so a
@@ -218,6 +221,7 @@ EOF
 IFS= read -r -d '' SHIP_READY_INSTRUCTIONS <<EOF || true
    Use \`$FM_CLASSIFY_READY_VERB [at=<epoch>]: PR {url}\` when your PR is open and ready to land but your task continues after it merges, such as a step that needs the merged code or a companion PR that must land first.
    You may not merge it, and landing it is firstmate's under the project's merge posture, so a PR waiting to land is never a \`needs-decision\`; when nothing remains for you once it is open, report \`done:\` under the Definition of done instead.
+   Once your PR has merged and only a step the captain must take himself remains (an action on his own hands or machine, such as linking an account or a launch only he can run), do not wait on it as a \`blocked [on=captain]\`: append \`done [at=<epoch>]: PR {url} merged; captain step: {the exact action}\` and stop; firstmate holds that step for him and releases you, and his answer starts a fresh ship for anything left after it.
 EOF
 
 resolve_directory_input() {

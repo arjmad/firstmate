@@ -177,6 +177,31 @@ test_recorded_merged_pr_is_landed_after_prune() {
   pass "a recorded merged PR satisfies the gate after prune"
 }
 
+test_merged_pr_captain_step_done_is_accepted() {
+  local repo wt meta state line reason rc
+  repo="$TMP_ROOT/captain-step-repo"
+  wt="$TMP_ROOT/captain-step-wt"
+  state="$TMP_ROOT/captain-step-state"
+  mkdir -p "$state"
+  fm_git_worktree "$repo" "$wt" fm/captain-step
+  git -C "$wt" commit -q --allow-empty -m 'fix, merged; only the captain step remains'
+  meta="$state/captain-step.meta"
+  printf 'kind=ship\nmode=direct-PR\nworktree=%s\nproject=%s\npr=https://github.com/o/r/pull/7\n' \
+    "$wt" "$repo" > "$meta"
+  line="done [at=1794200000]: PR https://github.com/o/r/pull/7 merged; captain step: link the bank account at the office"
+  reason=$(accept_done ship direct-PR "$wt" "$repo" "$line" "$state" captain-step "$meta")
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a captain-step done was accepted before its PR was recorded merged"
+  case "$reason" in
+    *"checks green"*) ;;
+    *) fail "pre-merge captain-step done refusal did not ask for checks green: $reason" ;;
+  esac
+  write_merge_marker "$state" captain-step github github.com o/r 7
+  accept_done ship direct-PR "$wt" "$repo" "$line" "$state" captain-step "$meta" \
+    || fail "a ship released on its captain step after merge was refused by the done gate"
+  pass "a merged ship's captain-step done passes the gate only after the merge is recorded"
+}
+
 test_merge_marker_binds_to_the_named_pr() {
   local repo wt meta state reason rc sha
   repo="$TMP_ROOT/bind-repo"
@@ -618,6 +643,7 @@ test_remote_containing_named_head_is_accepted
 test_moved_branch_without_named_head_is_refused
 test_free_text_sha_is_not_the_named_head
 test_recorded_merged_pr_is_landed_after_prune
+test_merged_pr_captain_step_done_is_accepted
 test_merge_marker_binds_to_the_named_pr
 test_forge_recorded_head_is_accepted_without_local_object
 test_direct_pr_recorded_head_does_not_cover_unpushed_commit
