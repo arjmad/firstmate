@@ -124,7 +124,9 @@ The status-presentation cursor bounds that span, and a missing or unmatched curs
 Single-task crewmate signals keep their existing Pi payload and attended-host whole-log rules, except that the TypeScript decision fold now ignores bare transition words without a colon or complete key token, matching `bin/fm-classify-lib.sh` on both crewmate and second-mate logs.
 
 For a stale row, `scopeForUnreadWake` folds the mapped task's status log.
-It excludes the row when any `needs-decision` remains open or the current meaningful declaration is `captain-held`.
+A stale row is a liveness ping, so it excludes the row only while an open `needs-decision` has not yet been shown: the decision was not already open at the status-presentation cursor, or a line after the cursor re-raised its key.
+A decision a drain already presented, or one closed by a `captain-held` line (written only after `bin/fm-captain-hold.sh` verifies the captain's hold), leaves the ping to the branch; a missing or unmatched cursor counts no open `needs-decision` as shown.
+Such a stale row is still withheld from every wake, a heartbeat included, while an unread decision-owned row for its task waits in the queue (on the attended host that includes a crewmate signal row its whole-log rule owns), and a signal trigger for that task stays on main as it did before this rule.
 An unreadable or symlinked status log fails the scope closed rather than influencing routing.
 
 Before cross-referencing them, the dispatcher resolves trigger keys and every currently unread excluded decision row to task identity.
@@ -656,6 +658,7 @@ The generated prompt includes the [scout-completion](../.agents/skills/scout-com
 - Cache key, and model and effort selection.
 - In `test_branch_dispatch_classifies_main_only_rows_and_writes_the_eligible_snapshot`: decision-owned signal and stale rows' exclusion from `eligibleSeqs`, their presence in `needsDecisionKeys`, task alias resolution, reserved-key configuration, status-log race and symlink refusal, non-vetoing behavior for unrelated eligible rows, and decision-only queues reading as ordinary main-only absence.
 - In `test_branch_dispatch_routes_secondmate_signal_by_new_span`: second-mate signal routing by new span on the Pi and attended-host paths, including an unrelated open hold, mixed, same-key, stamped-key, key-less blocked, and resolution spans, the whole-log fallback, stale-row isolation, and crewmate routing.
+- In `test_branch_dispatch_routes_stale_by_shown_decision`: stale routing by whether the task's decision was already shown, on both paths: presented and captain-held decisions go to the branch; unpresented, re-raised, uncursored, second unshown, and unread-row decisions stay on main; the decision signal and crewmate status wakes keep their routing.
 - In `test_branch_dispatch_resolves_terminal_keyed_orca_stale_row`: a unique Orca `terminal=` handle resolving to its task and project in routine and heartbeat scans, and conflicting terminal, window, or task aliases refusing the whole scan in either record order.
 
 `tests/fm-branch-supervision.test.sh` covers:
@@ -689,7 +692,7 @@ For the away posture:
 
 Other tests remain where they were:
 
-- The branch-offer, heartbeat-offer, heartbeat-not-ridden-by-main-only-rows, main-only-check-class, captain-held-stale-stays-on-main, and mixed-signal-routing tests remain in `tests/fm-pi-watch-extension.test.sh`.
+- The branch-offer, heartbeat-offer, heartbeat-not-ridden-by-main-only-rows, main-only-check-class, captain-held-signal-stays-on-main, and mixed-signal-routing tests remain in `tests/fm-pi-watch-extension.test.sh`.
   The last two routing classes exercise `offerWakeToBranch`'s trigger-key cross-reference end to end.
 - The recovery test remains in `tests/fm-session-start.test.sh`.
 - The per-actor consume regression remains in `tests/fm-wake-queue.test.sh`.

@@ -124,12 +124,19 @@ export interface UnreadWakeScope {
   /**
    * The exact "key" field of every decision-owned signal or stale row this
    * scan excluded. Signal rows are marked by bin/fm-watch.sh; stale rows are
-   * decision-owned when their task has an open needs-decision or its current
-   * declaration is captain-held. fm-primary-pi-watch.ts cross-references these
+   * decision-owned when their task has an open needs-decision not yet shown
+   * (staleDecisionUnshown). fm-primary-pi-watch.ts cross-references these
    * keys against the current trigger so its entire coalesced batch is forced
    * to main.
    */
   needsDecisionKeys: string[];
+  /**
+   * The "key" field of every stale row this scan left claimable because its
+   * task's only decision was already shown (staleDecisionUnshown). A signal
+   * trigger for one of these tasks stays on main exactly as it did before the
+   * shown-decision rule; a stale trigger does not.
+   */
+  shownDecisionKeys: string[];
   /**
    * The check-kind rows included in eligibleSeqs. Non-empty only in the away
    * posture, where the branch takes main's rows too; a check row names no
@@ -153,6 +160,7 @@ const EMPTY_SCOPE: UnreadWakeScope = {
   eligibleTasks: [],
   corrupted: false,
   needsDecisionKeys: [],
+  shownDecisionKeys: [],
   checkSeqs: [],
   heartbeatSeqs: [],
   taskByWakeKey: {},
@@ -165,6 +173,7 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
   eligibleTasks: [],
   corrupted: true,
   needsDecisionKeys: [],
+  shownDecisionKeys: [],
   checkSeqs: [],
   heartbeatSeqs: [],
   taskByWakeKey: {},
@@ -185,7 +194,7 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
 //
 // A signal row marked "needs-decision:" by the watcher, a second-mate signal
 // whose presented span owns a decision (spanIsDecisionOwned), or a stale row
-// for a task with an open needs-decision or a current captain-held declaration
+// for a task with an open needs-decision not yet shown (staleDecisionUnshown)
 // gets the identical treatment: excluded from eligibleSeqs, never a scan veto,
 // and forced to main on its own triggering close (fm-primary-pi-watch.ts's
 // offerWakeToBranch). Heartbeat handling remains independent.
@@ -274,10 +283,15 @@ function statusLineNote(rawLine: string): string {
   return match ? note.slice(match[0].length).trimStart() : note;
 }
 
+// "owned": the row is main's for a decision; "shown": a stale row whose task's
+// only decision was already shown, which still vetoes a signal trigger for
+// that task exactly as before; "none": no decision reason.
+type DecisionOwnership = "owned" | "shown" | "none";
+
 interface StaleDecisionCacheEntry {
   version: string;
   config: string;
-  decisionOwned: boolean;
+  ownership: DecisionOwnership;
 }
 
 const staleDecisionCache = new Map<string, StaleDecisionCacheEntry>();
@@ -380,6 +394,34 @@ function spanIsDecisionOwned(
   return false;
 }
 
+// A stale row is a liveness ping, so it is decision-owned only while its
+// task's open needs-decision has not yet been shown: the decision was not
+// already open at the end of the presented span, or an unread line re-raised
+// its key. A `captain-held` close is shown by construction, because
+// bin/fm-captain-hold.sh writes it only after verifying the captain's hold. A
+// missing or unmatched cursor leaves the whole log unread, so the row stays on
+// main. docs/pi-supervision-branch.md owns the routing contract.
+function staleDecisionUnshown(
+  open: ReadonlyMap<string, string>,
+  presented: readonly string[],
+  unread: readonly string[],
+  resolveVerb: string,
+  heldVerb: string,
+  reservedPrefixes: readonly string[],
+): boolean {
+  if (![...open.values()].includes("needs-decision")) return false;
+  if (presented.length === 0) return true;
+  const shown = openDecisions(presented, resolveVerb, heldVerb, reservedPrefixes);
+  const reraised = new Set<string>();
+  for (const line of unread) {
+    for (const key of openDecisions([line], resolveVerb, heldVerb, reservedPrefixes).keys()) reraised.add(key);
+  }
+  for (const [key, verb] of open) {
+    if (verb === "needs-decision" && (shown.get(key) !== "needs-decision" || reraised.has(key))) return true;
+  }
+  return false;
+}
+
 export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = false, attendedHost = false): UnreadWakeScope {
   let queue = "";
   try {
@@ -436,7 +478,12 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
   const needsDecisionKeys: string[] = [];
   const checkSeqs: string[] = [];
   const heartbeatSeqs: string[] = [];
-  const staleDecisionOwnership = new Map<string, boolean>();
+  const staleDecisionOwnership = new Map<string, DecisionOwnership>();
+  const shownDecisionKeys: string[] = [];
+  // Stale rows claimed under the shown-decision rule, re-checked after the
+  // scan against every unread decision row for the same task.
+  const shownStaleClaims: { seq: string; key: string; task: string }[] = [];
+  const taskProjects: { seq: string; task: string; project: string }[] = [];
   const resolveVerb = process.env.FM_CLASSIFY_RESOLVE_VERB || "resolved";
   const heldVerb = process.env.FM_CLASSIFY_CAPTAIN_HELD_VERB || "captain-held";
   const reservedPrefixes = (process.env.FM_CLASSIFY_RESERVED_KEY_PREFIXES || "pending-reply-")
@@ -511,6 +558,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
     // before its task gained a main-owned decision, so it checks the whole
     // log; Pi retains its existing per-row scan.
     const spanRule = kind === "signal" && secondmates.has(task);
+    const shownRule = kind === "stale";
     if (task && (kind === "stale" || (kind === "signal" && (attendedHost || spanRule)))) {
       const statusPath = `${state}/${task}.status`;
       const ownershipKey = `${kind}\0${statusPath}`;
@@ -521,17 +569,17 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
         } catch {
           return UNSAFE_SCOPE;
         }
-        let decisionOwned = false;
+        let ownership: DecisionOwnership = "none";
         if (version) {
           let cursor: { ident: string; offset: number } | null | undefined;
-          if (spanRule) {
+          if (spanRule || shownRule) {
             if (presentationCursor === undefined) presentationCursor = readPresentationCursor(state);
             cursor = presentationCursor?.get(task);
           }
-          const config = spanRule ? `${decisionConfig}\0${cursor?.ident ?? ""}\0${cursor?.offset ?? 0}` : decisionConfig;
+          const config = spanRule || shownRule ? `${decisionConfig}\0${cursor?.ident ?? ""}\0${cursor?.offset ?? 0}` : decisionConfig;
           const cached = staleDecisionCache.get(ownershipKey);
           if (cached?.version === version && cached.config === config) {
-            decisionOwned = cached.decisionOwned;
+            ownership = cached.ownership;
           } else {
             let contents: Buffer;
             let spanOffset = 0;
@@ -550,17 +598,20 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
             }
             const statusLines = nonBlankLines(contents.toString("utf8"));
             const open = openDecisions(statusLines, resolveVerb, heldVerb, reservedPrefixes);
-            decisionOwned = spanRule
-              ? spanIsDecisionOwned(
-                open,
-                nonBlankLines(contents.subarray(0, spanOffset).toString("utf8")),
-                nonBlankLines(contents.subarray(spanOffset).toString("utf8")),
-                resolveVerb,
-                heldVerb,
-                reservedPrefixes,
-              )
-              : [...open.values()].includes("needs-decision") || statusLineVerb(statusLines.at(-1) ?? "") === heldVerb;
-            staleDecisionCache.set(ownershipKey, { version, config, decisionOwned });
+            const wholeLogOwned = [...open.values()].includes("needs-decision") ||
+              statusLineVerb(statusLines.at(-1) ?? "") === heldVerb;
+            const presented = (): string[] => nonBlankLines(contents.subarray(0, spanOffset).toString("utf8"));
+            const unread = (): string[] => nonBlankLines(contents.subarray(spanOffset).toString("utf8"));
+            if (spanRule) {
+              ownership = spanIsDecisionOwned(open, presented(), unread(), resolveVerb, heldVerb, reservedPrefixes) ? "owned" : "none";
+            } else if (!wholeLogOwned) {
+              ownership = "none";
+            } else if (shownRule && !staleDecisionUnshown(open, presented(), unread(), resolveVerb, heldVerb, reservedPrefixes)) {
+              ownership = "shown";
+            } else {
+              ownership = "owned";
+            }
+            staleDecisionCache.set(ownershipKey, { version, config, ownership });
             if (staleDecisionCache.size > 512) {
               staleDecisionCache.delete(staleDecisionCache.keys().next().value!);
             }
@@ -568,16 +619,38 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
         } else {
           staleDecisionCache.delete(ownershipKey);
         }
-        staleDecisionOwnership.set(ownershipKey, decisionOwned);
+        staleDecisionOwnership.set(ownershipKey, ownership);
       }
-      if (staleDecisionOwnership.get(ownershipKey)) {
+      const ownership = staleDecisionOwnership.get(ownershipKey);
+      if (ownership === "owned") {
         needsDecisionKeys.push(key);
         if (!afk) continue;
+      } else if (ownership === "shown") {
+        shownDecisionKeys.push(key);
+        if (!afk) shownStaleClaims.push({ seq, key, task });
       }
     }
-    projects.add(project);
-    eligibleTasks.add(task);
+    taskProjects.push({ seq, task, project });
     eligibleSeqs.push(seq);
+  }
+  // A shown-decision stale row is still main's while any unread decision row
+  // for its task waits in this queue, whatever the row order, so no other wake
+  // (a heartbeat included) claims it ahead of that decision.
+  const taskOf = (key: string): string => taskByKey.get(key) ?? taskByKey.get(key.replace(/^fm-/, "")) ?? key;
+  const unreadDecisionTasks = new Set(needsDecisionKeys.map(taskOf));
+  const withheld = new Set<string>();
+  for (const claim of shownStaleClaims) {
+    if (!unreadDecisionTasks.has(claim.task)) continue;
+    withheld.add(claim.seq);
+    needsDecisionKeys.push(claim.key);
+  }
+  if (withheld.size > 0) {
+    for (let i = eligibleSeqs.length - 1; i >= 0; i -= 1) if (withheld.has(eligibleSeqs[i])) eligibleSeqs.splice(i, 1);
+  }
+  for (const claim of taskProjects) {
+    if (withheld.has(claim.seq)) continue;
+    projects.add(claim.project);
+    eligibleTasks.add(claim.task);
   }
   const eligible = eligibleSeqs.length > 0;
   // Reached only after every row passed classification without a veto. A scan
@@ -595,6 +668,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
     eligibleTasks: [...eligibleTasks],
     corrupted: false,
     needsDecisionKeys,
+    shownDecisionKeys,
     checkSeqs,
     heartbeatSeqs,
     taskByWakeKey: Object.fromEntries(taskByKey),
@@ -628,8 +702,9 @@ export interface BranchOfferVerdict {
 // trigger itself slip past main's delivery.
 //
 // A signal close containing a needs-decision status file, or a stale close for
-// a captain-held task, gets the identical main-only treatment as a check-kind
-// trigger. The cross-reference deliberately includes every unread decision
+// a task whose open decision is not yet shown, gets the identical main-only
+// treatment as a check-kind trigger; a stale close whose task's only decision
+// was already shown is a plain liveness ping the branch may take. The cross-reference deliberately includes every unread decision
 // row: until that row is read, a later signal or stale trigger for the same
 // task stays on main. Other tasks and heartbeat handling remain independent.
 //
@@ -651,7 +726,10 @@ export function branchOfferForWake(state: string, message: string, afk: boolean,
       : [];
   const taskIdentity = (key: string): string =>
     scope.taskByWakeKey[key] ?? scope.taskByWakeKey[key.replace(/^fm-/, "")] ?? key;
-  const needsDecisionTasks = new Set(scope.needsDecisionKeys.map(taskIdentity));
+  const needsDecisionTasks = new Set([
+    ...scope.needsDecisionKeys,
+    ...(/^signal:/.test(message) ? scope.shownDecisionKeys : []),
+  ].map(taskIdentity));
   const isNeedsDecisionTrigger = triggerKeys.some((key) => needsDecisionTasks.has(taskIdentity(key)));
   const attendedEligible = !isCheckTrigger && !isNeedsDecisionTrigger && (
     afk ? scopeForUnreadWake(state, heartbeat, false).eligible : scope.eligible

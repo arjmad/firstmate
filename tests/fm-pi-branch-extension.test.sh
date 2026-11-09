@@ -4805,8 +4805,9 @@ if (needsDecisionOnly.eligible || needsDecisionOnly.eligibleSeqs.length !== 0 ||
   throw new Error(`a needs-decision-only queue must be ordinary main-only absence: ${JSON.stringify(needsDecisionOnly)}`);
 }
 
-// A captain-held task's bounded stale recheck is itself a decision wake. It is
-// excluded while an unrelated routine row remains independently branch-owned.
+// A captain-held close was already shown to the captain (bin/fm-captain-hold.sh
+// writes it only after verifying his hold), so the task's stale recheck is a
+// plain liveness ping the branch may claim beside an unrelated routine row.
 writeFileSync(`${state}/task-a.status`, "captain-held [key=route]: awaiting the captain\n \t \n");
 writeFileSync(
   `${state}/.wake-queue`,
@@ -4816,14 +4817,11 @@ writeFileSync(
   ].join("\n"),
 );
 const captainHeldMixed = scopeForUnreadWake(state, false);
-if (!captainHeldMixed.eligible || captainHeldMixed.eligibleSeqs.join(",") !== "2") {
-  throw new Error(`a captain-held stale row was offered to the branch: ${JSON.stringify(captainHeldMixed)}`);
-}
-if (captainHeldMixed.needsDecisionKeys.join(",") !== "fm-window") {
-  throw new Error(`the captain-held stale key was not marked main-owned: ${JSON.stringify(captainHeldMixed)}`);
+if (captainHeldMixed.eligibleSeqs.join(",") !== "1,2" || captainHeldMixed.needsDecisionKeys.length !== 0) {
+  throw new Error(`a captain-held stale row was kept from the branch: ${JSON.stringify(captainHeldMixed)}`);
 }
 
-writeFileSync(`${state}/task-a.status`, "captain-held [key=route]: awaiting a second captain reminder\n \n");
+writeFileSync(`${state}/task-a.status`, "needs-decision [key=route]: awaiting a second captain reminder\n \n");
 writeFileSync(
   `${state}/.wake-queue`,
   [
@@ -4834,23 +4832,23 @@ writeFileSync(
 );
 countedStatusPath = `${state}/task-a.status`;
 countedStatusReads = 0;
-const repeatedCaptainHeld = scopeForUnreadWake(state, false);
+const repeatedUnshown = scopeForUnreadWake(state, false);
 if (countedStatusReads !== 1) {
   throw new Error(`one status was read ${countedStatusReads} times for repeated stale rows`);
 }
-if (!repeatedCaptainHeld.eligible || repeatedCaptainHeld.eligibleSeqs.join(",") !== "3" ||
-  repeatedCaptainHeld.needsDecisionKeys.join(",") !== "fm-window,fm-window") {
-  throw new Error(`repeated stale reminders changed classification: ${JSON.stringify(repeatedCaptainHeld)}`);
+if (!repeatedUnshown.eligible || repeatedUnshown.eligibleSeqs.join(",") !== "3" ||
+  repeatedUnshown.needsDecisionKeys.join(",") !== "fm-window,fm-window") {
+  throw new Error(`repeated stale reminders changed classification: ${JSON.stringify(repeatedUnshown)}`);
 }
-const repeatedCaptainHeldNextScan = scopeForUnreadWake(state, false);
-if (countedStatusReads !== 1 || repeatedCaptainHeldNextScan.needsDecisionKeys.join(",") !== "fm-window,fm-window") {
-  throw new Error(`an unchanged status was not reused across scans: reads=${countedStatusReads} scope=${JSON.stringify(repeatedCaptainHeldNextScan)}`);
+const repeatedUnshownNextScan = scopeForUnreadWake(state, false);
+if (countedStatusReads !== 1 || repeatedUnshownNextScan.needsDecisionKeys.join(",") !== "fm-window,fm-window") {
+  throw new Error(`an unchanged status was not reused across scans: reads=${countedStatusReads} scope=${JSON.stringify(repeatedUnshownNextScan)}`);
 }
-writeFileSync(`${state}/task-a.status`, "captain-held [key=route]: awaiting the captain\nworking: resumed after answer\n");
-const changedCaptainHeld = scopeForUnreadWake(state, false);
-if (countedStatusReads !== 2 || changedCaptainHeld.eligibleSeqs.join(",") !== "1,2,3" ||
-  changedCaptainHeld.needsDecisionKeys.length !== 0) {
-  throw new Error(`a changed status did not invalidate its cached decision: reads=${countedStatusReads} scope=${JSON.stringify(changedCaptainHeld)}`);
+writeFileSync(`${state}/task-a.status`, "needs-decision [key=route]: awaiting the captain\nresolved [key=route]: answered\n");
+const changedUnshown = scopeForUnreadWake(state, false);
+if (countedStatusReads !== 2 || changedUnshown.eligibleSeqs.join(",") !== "1,2,3" ||
+  changedUnshown.needsDecisionKeys.length !== 0) {
+  throw new Error(`a changed status did not invalidate its cached decision: reads=${countedStatusReads} scope=${JSON.stringify(changedUnshown)}`);
 }
 countedStatusPath = "";
 writeFileSync(
@@ -4887,11 +4885,14 @@ if (!customResolved.eligible || customResolved.eligibleSeqs.slice().sort().join(
 }
 
 process.env.FM_CLASSIFY_CAPTAIN_HELD_VERB = "awaiting-captain";
-writeFileSync(`${state}/task-a.status`, "awaiting-captain [key=cleanup]: awaiting the captain\n");
+writeFileSync(
+  `${state}/task-a.status`,
+  "needs-decision [key=cleanup]: choose destructive cleanup\nawaiting-captain [key=cleanup]: awaiting the captain\n",
+);
 const customHeld = scopeForUnreadWake(state, false);
-if (!customHeld.eligible || customHeld.eligibleSeqs.join(",") !== "2" ||
-  customHeld.needsDecisionKeys.join(",") !== "fm-window") {
-  throw new Error(`a custom captain-held verb was offered to the branch: ${JSON.stringify(customHeld)}`);
+if (!customHeld.eligible || customHeld.eligibleSeqs.slice().sort().join(",") !== "1,2" ||
+  customHeld.needsDecisionKeys.length !== 0) {
+  throw new Error(`a custom captain-held verb did not close the stale decision as shown: ${JSON.stringify(customHeld)}`);
 }
 delete process.env.FM_CLASSIFY_RESOLVE_VERB;
 delete process.env.FM_CLASSIFY_CAPTAIN_HELD_VERB;
@@ -5386,18 +5387,25 @@ stage("mate", hold, "done: sample-d PR merged\n");
 rmSync(`${state}/.status-presentation-cursor`);
 if (verdicts().some(Boolean)) throw new Error("a missing presentation cursor did not fall back to the whole log");
 
-// A stale row stays a whole-log liveness check, and a co-queued signal row for
-// the same second mate keeps its own verdict in either order.
-for (const [order, queue, signalSeq, staleSeq] of [
-  ["stale first", "1\t1\tstale\tmate\tstale: mate\n1\t2\tsignal\tmate.status\tsignal: mate.status", "2", "1"],
-  ["signal first", "1\t1\tsignal\tmate.status\tsignal: mate.status\n1\t2\tstale\tmate\tstale: mate", "1", "2"],
+// A stale row keeps its own shown-decision rule beside a co-queued signal row
+// for the same second mate, in either order: a routine span over an
+// already-shown hold leaves both rows to the branch, while a same-key update
+// owns a decision and keeps the stale row behind it on main too.
+for (const [order, queue] of [
+  ["stale first", "1\t1\tstale\tmate\tstale: mate\n1\t2\tsignal\tmate.status\tsignal: mate.status"],
+  ["signal first", "1\t1\tsignal\tmate.status\tsignal: mate.status\n1\t2\tstale\tmate\tstale: mate"],
 ]) {
-  stage("mate", hold, "done: sample-e PR merged\n");
-  writeFileSync(`${state}/.wake-queue`, queue);
-  for (const attendedHost of [false, true]) {
-    const scope = scopeForUnreadWake(state, false, false, attendedHost);
-    if (!scope.eligibleSeqs.includes(signalSeq) || scope.eligibleSeqs.includes(staleSeq)) {
-      throw new Error(`${order}: signal and stale rows for one second mate shared a verdict: ${JSON.stringify(scope)}`);
+  for (const [span, toBranch] of [
+    ["done: sample-e PR merged\n", true],
+    ["working [key=old-hold]: still gathering evidence\n", false],
+  ]) {
+    stage("mate", hold, span);
+    writeFileSync(`${state}/.wake-queue`, queue);
+    for (const attendedHost of [false, true]) {
+      const scope = scopeForUnreadWake(state, false, false, attendedHost);
+      if (scope.eligibleSeqs.length !== (toBranch ? 2 : 0)) {
+        throw new Error(`${order}, ${span.trim()}: expected ${toBranch ? "both rows on the branch" : "both rows on main"}: ${JSON.stringify(scope)}`);
+      }
     }
   }
 }
@@ -5412,7 +5420,127 @@ EOF
   status=$?
   out=$(cat "$TMP_ROOT/node-output")
   expect_code 0 "$status" "second-mate signal rows must be routed by their new span: $out"
-  pass "second-mate signal rows route by their new span while crewmate and stale routing stay unchanged"
+  pass "second-mate signal rows route by their new span while crewmate signal routing stays unchanged and stale rows keep their own rule"
+}
+
+# A stale row is a liveness ping, so it reaches main for its task's decision
+# only while that decision has not yet been shown: still open past the
+# presentation cursor bin/fm-classify-lib.sh writes, re-raised since, or still
+# unread in the queue. A decision already presented, or closed into a verified
+# captain hold, leaves the ping to the branch on both routing paths, while
+# status wakes and the decision rows themselves keep their routing.
+test_branch_dispatch_routes_stale_by_shown_decision() {
+  local repo home out status
+  repo="$TMP_ROOT/dispatch-stale-shown-root"
+  home="$TMP_ROOT/dispatch-stale-shown-home"
+  mkdir -p "$repo/.pi/extensions/lib" "$home/state" "$home/projects/approved"
+  cp "$ROOT/.pi/extensions/lib/fm-branch-dispatch.ts" "$repo/.pi/extensions/lib/fm-branch-dispatch.ts"
+  cp "$ROOT/.pi/extensions/lib/fm-native-contract.ts" "$repo/.pi/extensions/lib/fm-native-contract.ts"
+  cp "$ROOT/.pi/extensions/lib/fm-async-exec.ts" "$repo/.pi/extensions/lib/fm-async-exec.ts"
+  cp "$ROOT/.pi/extensions/lib/fm-branch-model-picker.ts" "$repo/.pi/extensions/lib/fm-branch-model-picker.ts"
+  printf 'project=%s/projects/approved\nwindow=crew-window\nkind=ship\n' "$home" > "$home/state/crew.meta"
+  LIB="$repo/.pi/extensions/lib/fm-branch-dispatch.ts" FM_HOME="$home" CLASSIFY_LIB="$ROOT/bin/fm-classify-lib.sh" \
+    node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+import { execFileSync } from "node:child_process";
+import { appendFileSync, rmSync, writeFileSync } from "node:fs";
+
+const { branchOfferForWake, scopeForUnreadWake } = await import(pathToFileURL(process.env.LIB).href);
+const state = `${process.env.FM_HOME}/state`;
+const staleRow = "1\t1\tstale\tcrew-window\tstale: crew-window (idle)";
+const staleWake = "stale: crew-window (idle)";
+
+// Write the presented history, commit the presentation cursor at its end
+// through the real writer, then append the unread lines.
+function stage(presented, unread, queue = [staleRow]) {
+  const path = `${state}/crew.status`;
+  writeFileSync(path, presented);
+  execFileSync("bash", ["-c",
+    'set -e; . "$1"; ident=$(_fm_open_decisions_file_ident "$2/$3.status"); ' +
+    'status_commit_presentation_snapshot "$2" "$(printf "%s\\t%s\\t%s" "$3" "$4" "$ident")"',
+    "_", process.env.CLASSIFY_LIB, state, "crew", String(Buffer.byteLength(presented))]);
+  appendFileSync(path, unread);
+  writeFileSync(`${state}/.wake-queue`, queue.join("\n"));
+}
+
+// The Pi dispatcher and the attended supervision host must agree.
+function expectOffer(label, wake, toBranch) {
+  for (const attendedHost of [false, true]) {
+    const verdict = branchOfferForWake(state, wake, false, attendedHost);
+    if (verdict.eligible !== toBranch || verdict.awayOnly) {
+      throw new Error(`${label}: expected ${toBranch ? "branch" : "main"} (host=${attendedHost}): ${JSON.stringify(verdict)}`);
+    }
+  }
+}
+
+const asked = "needs-decision [at=1790000000] [key=route]: which route?\n";
+
+stage(asked, "");
+expectOffer("stale with an already-presented decision", staleWake, true);
+stage(asked, "working: still waiting on the answer\n");
+expectOffer("stale with a presented decision and later routine lines", staleWake, true);
+stage("working: history\n", "captain-held [key=route]: tracked by crew-route\n");
+expectOffer("stale with a decision closed into a captain hold", staleWake, true);
+
+stage("working: history\n", asked);
+expectOffer("stale with a decision not yet presented", staleWake, false);
+stage(asked, "");
+rmSync(`${state}/.status-presentation-cursor`);
+expectOffer("stale with no presentation cursor", staleWake, false);
+stage(asked, "needs-decision [key=route]: which route, now with a deadline?\n");
+expectOffer("stale with a presented decision re-raised since", staleWake, false);
+stage(asked, "needs-decision [key=budget]: which budget?\n");
+expectOffer("stale with a shown decision beside an unshown one", staleWake, false);
+stage(asked, "", ["1\t1\tsignal\tcrew.status\tneeds-decision: crew.status", "1\t2\tstale\tcrew-window\tstale: crew-window (idle)"]);
+expectOffer("stale behind its task's unread decision row", staleWake, false);
+
+// The decision row and status wakes keep today's routing beside a shown decision.
+stage(asked, "", ["1\t1\tsignal\tcrew.status\tneeds-decision: crew.status"]);
+expectOffer("the decision signal itself", `signal: ${state}/crew.status`, false);
+stage(asked, "working: routine follow-up\n", ["1\t1\tsignal\tcrew.status\tsignal: crew.status"]);
+for (const [attendedHost, toBranch] of [[false, true], [true, false]]) {
+  const verdict = branchOfferForWake(state, `signal: ${state}/crew.status`, false, attendedHost);
+  if (verdict.eligible !== toBranch) {
+    throw new Error(`a crewmate status wake changed routing (host=${attendedHost}): ${JSON.stringify(verdict)}`);
+  }
+}
+
+// No other wake claims a shown-decision stale row ahead of its task's unread
+// decision row, whatever the row order.
+for (const queue of [
+  ["1\t1\tsignal\tcrew.status\tneeds-decision: crew.status", "1\t2\tstale\tcrew-window\tstale: crew-window (idle)", "1\t3\theartbeat\theartbeat\theartbeat"],
+  ["1\t2\tstale\tcrew-window\tstale: crew-window (idle)", "1\t1\tsignal\tcrew.status\tneeds-decision: crew.status", "1\t3\theartbeat\theartbeat\theartbeat"],
+]) {
+  stage(asked, "", queue);
+  for (const attendedHost of [false, true]) {
+    const scope = scopeForUnreadWake(state, true, false, attendedHost);
+    if (scope.eligibleSeqs.join(",") !== "3" || scope.eligibleTasks.length !== 0) {
+      throw new Error(`a heartbeat claimed a stale row ahead of its unread decision (host=${attendedHost}): ${JSON.stringify(scope)}`);
+    }
+  }
+}
+
+// A Pi signal trigger beside a shown-decision stale row stays on main, as it did
+// before the shown-decision rule. That stale trigger goes to the branch on Pi;
+// on the attended host the same routine signal row is decision-owned by its
+// whole-log rule, so it holds the stale row behind it on main.
+stage(asked, "working: routine follow-up\n", ["1\t1\tsignal\tcrew.status\tsignal: crew.status", staleRow.replace("\t1\tstale", "\t2\tstale")]);
+for (const attendedHost of [false, true]) {
+  if (branchOfferForWake(state, `signal: ${state}/crew.status`, false, attendedHost).eligible) {
+    throw new Error(`a signal trigger beside a shown-decision stale row left main (host=${attendedHost})`);
+  }
+}
+for (const [attendedHost, toBranch] of [[false, true], [true, false]]) {
+  if (branchOfferForWake(state, staleWake, false, attendedHost).eligible !== toBranch) {
+    throw new Error(`stale beside a routine signal row: expected ${toBranch ? "branch" : "main"} (host=${attendedHost})`);
+  }
+}
+process.exit(0);
+EOF
+  status=$?
+  out=$(cat "$TMP_ROOT/node-output")
+  expect_code 0 "$status" "stale rows must route by whether their decision was already shown: $out"
+  pass "a stale ping on a task whose decision was already shown goes to the branch while unshown decisions and status wakes keep their routing"
 }
 
 # The model picker's bounded scrolling and its search ranking are Pi's own
@@ -6342,6 +6470,7 @@ test_branch_dispatch_retires_a_torn_down_tasks_rows_without_vetoing_the_queue
 test_branch_dispatch_resolves_terminal_keyed_orca_stale_row
 test_branch_dispatch_keeps_project_with_canonical_owner
 test_branch_dispatch_routes_secondmate_signal_by_new_span
+test_branch_dispatch_routes_stale_by_shown_decision
 test_branch_cache_key_is_per_home_stable
 test_branch_default_on_heartbeat_afk_and_fallback
 test_away_record_parks_main_and_presents_after_archive

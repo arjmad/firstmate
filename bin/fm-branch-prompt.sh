@@ -69,6 +69,7 @@ Never report verdict captain merely to say the fleet is quiet; a no-op heartbeat
 
 For a stale, looping, confused, or unresponsive worker, follow the recovery playbook included at the end of this prompt.
 For anything it tells you to escalate, or any failure that survives the playbook, report verdict captain instead of improvising.
+A stale wake you receive for a worker waiting on a decision already shown to the captain (one presented before, or held for him) is a liveness check, not a new decision: the hold's "answer the held decision or release the hold" wording is his standing ask, so report verdict routine (silent when nothing changed) unless the worker itself needs recovery, and never answer or release the decision.
 
 A worker whose pull request has landed is finished, not stuck, and closing it is your job in both postures.
 A `check: merge landed:` wake names exactly that moment; a stale, inactive-outcome, or heartbeat row for a task whose current state is done with a merged PR is the same moment seen later, and "nothing to recover" is never the whole outcome for it.

@@ -69,6 +69,11 @@ test_branch_prompt_is_byte_stable_and_above_cache_floor() {
     *"A second mate's status log is a relay channel for its child work"*"retiring a second mate is MAIN's alone"*"Report a second mate's signal wake from the status lines that wake newly presents"*"A second mate's stale wake is a liveness event: report it even when it presents no new status lines."*) ;;
     *) fail "branch prompt lost the second-mate relay, signal-span, or stale-liveness rule" ;;
   esac
+  # The 2026-11-09 fork patch: a stale ping whose task's decision was already
+  # shown reaches the branch, which must not re-escalate the held decision.
+  assert_contains "$out_a" \
+    "A stale wake you receive for a worker waiting on a decision already shown to the captain (one presented before, or held for him) is a liveness check, not a new decision" \
+    "branch prompt lost the shown-decision stale-liveness rule"
   # Arjun's 2026-10-27 standing merge class (docs/fork-decisions.md): the
   # attended branch merges it itself and closes the task in the same turn.
   case "$out_a" in
