@@ -79,8 +79,12 @@
 # no fast-forward or post-update runs under it. Once it has succeeded, a
 # checkout whose HEAD is origin/<default> reports "live edits pending capture:
 # ..." - informational, since the edits block no fast-forward and wait for the
-# capture to land - while one behind or ahead of it gets the ordinary STUCK line
-# with "; capture already ran for these edits (exit 0, ...)". A failed capture
+# capture to land. One behind it whose capture log names a pull request that
+# `gh pr view` reads as open reports "capture-pending <PR url>: ..." - also
+# informational, since landing that PR settles and fast-forwards it (see the
+# settle form). One ahead of it, or behind it with no open capture PR, gets the
+# ordinary STUCK line with "; capture already ran for these edits (exit 0,
+# ...)". A failed capture
 # is always STUCK, naming its exit, and a new edit state after it starts another
 # one under a STUCK line naming the failure. Edits outside <dir>/ are reported
 # STUCK as before. <dir> must lie inside the checkout, and a <command> without a
@@ -592,17 +596,33 @@ capture_running() {
   capture_alive "$CAPTURE_PID"
 }
 
+# capture_open_pr: print the last pull request URL the capture's log names
+# when gh reads that PR as still open; false otherwise, gh absent included.
+capture_open_pr() {
+  local url
+  url=$(grep -Eo 'https://[^[:space:]]+/pull/[0-9]+' "$CAPTURE_RECORD.log" 2>/dev/null | tail -1) || url=""
+  [ -n "$url" ] || return 1
+  [ "$(GH_PROMPT_DISABLED=1 gh pr view "$url" --json state --jq .state 2>/dev/null)" = OPEN ] || return 1
+  printf '%s\n' "$url"
+}
+
 # report_capture_held <suffix>: report a checkout held only by edits under its
 # capture dir that a capture already ran for successfully. At origin/<default>
 # nothing blocks a fast-forward, so the edits only wait for that capture to land:
-# an informational line that wakes no one. Behind or ahead of it, the edits
-# block the fast-forward and it is STUCK.
+# an informational line that wakes no one. Behind it with that capture's PR
+# still open, the edits wait for the same landing, whose settle then
+# fast-forwards it: "capture-pending <PR>", which wakes no one either. Ahead of
+# it, or behind it with no open capture PR, the edits block the fast-forward
+# and it is STUCK.
 report_capture_held() {
-  local head base
+  local head base pr behind
   head=$(git -C "$PROJ" rev-parse HEAD 2>/dev/null) || head=""
   base=$(git -C "$PROJ" rev-parse "$BASE" 2>/dev/null) || base=""
   if [ -n "$head" ] && [ "$head" = "$base" ]; then
     echo "$label: live edits pending capture: $CAPTURE_COUNT uncommitted path(s) under $CAPTURE_DIR only, 0 commits behind $BASE$1"
+  elif git -C "$PROJ" merge-base --is-ancestor HEAD "$BASE" 2>/dev/null && pr=$(capture_open_pr); then
+    behind=$(git -C "$PROJ" rev-list --count "HEAD..$BASE" 2>/dev/null) || behind="?"
+    echo "$label: capture-pending $pr: $CAPTURE_COUNT uncommitted path(s) under $CAPTURE_DIR only, $behind commits behind $BASE; fast-forwards once it lands$1"
   else
     report_stuck "$(stuck_state)" "$1"
   fi
