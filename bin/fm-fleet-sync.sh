@@ -79,9 +79,15 @@
 # no fast-forward or post-update runs under it. Once it has succeeded, a
 # checkout whose HEAD is origin/<default> reports "live edits pending capture:
 # ..." - informational, since the edits block no fast-forward and wait for the
-# capture to land - while one behind or ahead of it gets the ordinary STUCK line
-# with "; capture already ran for these edits (exit 0, ...)". A failed capture
-# is always STUCK, naming its exit, and a new edit state after it starts another
+# capture to land. One behind it whose capture log names a pull request that
+# `gh pr view` reads as open, within FM_CAPTURE_PR_READ_SECS (default 10),
+# reports "capture-pending <PR url>: ..." - also informational, since landing
+# that PR settles and fast-forwards it (see the settle form). A read that fails
+# keeps the last open reading of that same URL, recorded in
+# state/live-checkouts/<key>.capture.pr, so a gh outage wakes no one. One ahead
+# of it, or behind it with no open capture PR, gets the ordinary STUCK line with
+# "; capture already ran for these edits (exit 0, ...)". A failed capture is
+# always STUCK, naming its exit, and a new edit state after it starts another
 # one under a STUCK line naming the failure. Edits outside <dir>/ are reported
 # STUCK as before. <dir> must lie inside the checkout, and a <command> without a
 # slash is ./<command>.
@@ -153,6 +159,8 @@ case "$LIVE_RECORDS" in /*) ;; *) LIVE_RECORDS="$PWD/$LIVE_RECORDS" ;; esac
 # Inert unless FM_TIMING_LOG names a file; only the deferred network stage sets it.
 # shellcheck source=bin/fm-timing-lib.sh
 . "$SCRIPT_DIR/fm-timing-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 FM_LOCK_LOG_PREFIX=fleet-sync
 "$FM_ROOT/bin/fm-guard.sh" || true
 
@@ -174,6 +182,8 @@ fi
 
 CAPTURE_SETTLE_WAIT_SECS=${FM_CAPTURE_SETTLE_WAIT_SECS:-600}
 case "$CAPTURE_SETTLE_WAIT_SECS" in ''|*[!0-9]*) CAPTURE_SETTLE_WAIT_SECS=600 ;; esac
+CAPTURE_PR_READ_SECS=${FM_CAPTURE_PR_READ_SECS:-10}
+case "$CAPTURE_PR_READ_SECS" in ''|0|*[!0-9]*) CAPTURE_PR_READ_SECS=10 ;; esac
 LIVE_LOCK_WAIT_SECS=${FM_LIVE_CHECKOUT_LOCK_WAIT_SECS:-120}
 LIVE_LOCK_POLL_SECS=${FM_LIVE_CHECKOUT_LOCK_POLL_SECS:-5}
 case "$LIVE_LOCK_WAIT_SECS" in ''|*[!0-9]*) LIVE_LOCK_WAIT_SECS=120 ;; esac
@@ -592,17 +602,39 @@ capture_running() {
   capture_alive "$CAPTURE_PID"
 }
 
+# capture_open_pr: print the last pull request URL the capture's log names
+# when gh reads that PR as still open, or cannot read it and last read it open;
+# false otherwise.
+capture_open_pr() {
+  local url state
+  url=$(grep -Eo 'https://[^[:space:]]+/pull/[0-9]+' "$CAPTURE_RECORD.log" 2>/dev/null | tail -1) || url=""
+  [ -n "$url" ] || return 1
+  state=$(GH_PROMPT_DISABLED=1 fm_run_timed "$CAPTURE_PR_READ_SECS" gh pr view "$url" --json state --jq .state 2>/dev/null) || state=""
+  case "$state" in
+    OPEN) write_live_record "$CAPTURE_RECORD.pr" "$url" ;;
+    '') [ "$(cat "$CAPTURE_RECORD.pr" 2>/dev/null)" = "$url" ] || return 1 ;;
+    *) rm -f "$CAPTURE_RECORD.pr"; return 1 ;;
+  esac
+  printf '%s\n' "$url"
+}
+
 # report_capture_held <suffix>: report a checkout held only by edits under its
 # capture dir that a capture already ran for successfully. At origin/<default>
 # nothing blocks a fast-forward, so the edits only wait for that capture to land:
-# an informational line that wakes no one. Behind or ahead of it, the edits
-# block the fast-forward and it is STUCK.
+# an informational line that wakes no one. Behind it with that capture's PR
+# still open, the edits wait for the same landing, whose settle then
+# fast-forwards it: "capture-pending <PR>", which wakes no one either. Ahead of
+# it, or behind it with no open capture PR, the edits block the fast-forward
+# and it is STUCK.
 report_capture_held() {
-  local head base
+  local head base pr behind
   head=$(git -C "$PROJ" rev-parse HEAD 2>/dev/null) || head=""
   base=$(git -C "$PROJ" rev-parse "$BASE" 2>/dev/null) || base=""
   if [ -n "$head" ] && [ "$head" = "$base" ]; then
     echo "$label: live edits pending capture: $CAPTURE_COUNT uncommitted path(s) under $CAPTURE_DIR only, 0 commits behind $BASE$1"
+  elif git -C "$PROJ" merge-base --is-ancestor HEAD "$BASE" 2>/dev/null && pr=$(capture_open_pr); then
+    behind=$(git -C "$PROJ" rev-list --count "HEAD..$BASE" 2>/dev/null) || behind="?"
+    echo "$label: capture-pending $pr: $CAPTURE_COUNT uncommitted path(s) under $CAPTURE_DIR only, $behind commits behind $BASE; fast-forwards once it lands$1"
   else
     report_stuck "$(stuck_state)" "$1"
   fi
