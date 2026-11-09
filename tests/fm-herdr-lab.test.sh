@@ -337,6 +337,8 @@ test_custom_fleet_session_tripwire() {
     || fail "the unnamed tripwire did not record only the running custom fleet session"
   FM_FAKE_HERDR_FLEET=fleet-main run_with_fake fm_herdr_lab_teardown "$name" \
     || fail "an unnamed custom fleet failed teardown"
+  [ "$(cat "$FAKE_STATE/$name")" = deleted ] || fail "the unnamed custom fleet teardown did not delete the lab session"
+  rm -f "$FAKE_STATE/$name"
 
   status=0
   FM_HERDR_LAB_FLEET_SESSION=default FM_FAKE_HERDR_FLEET=fleet-main \

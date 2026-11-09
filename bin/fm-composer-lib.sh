@@ -997,22 +997,23 @@ _fm_composer_titled_rule_row() {  # <trimmed-row> <plain-rule-spaces>
 
 # _fm_composer_row_is_slash_menu_selection: 0 when trimmed <row> at <row-index>
 # of <plain-screen> is the selected row of a slash-command menu drawn directly
-# under the closing rule of a composer that <glyph> already proved: an
-# untitled rule pair, or the titled top rule a named launch draws
-# (_fm_composer_bare_rule_sandwich). Claude Code 2.1.310 (recorded live on
-# herdr 0.9.5, named and unnamed) marks that row with the composer's own `❯`
-# and indents it past the composer's glyph row, so it would otherwise read as a
-# lower live composer holding the menu text. The deeper indent is what tells it
-# from a draft typed directly under its composer's own top rule.
+# under the closing rule of a titled composer that <glyph> already proved: the
+# titled top rule a named launch draws (_fm_composer_bare_rule_sandwich).
+# Claude Code 2.1.310 (recorded live on herdr 0.9.5) marks that row with the
+# composer's own `❯` and indents it past the composer's glyph row, so it would
+# otherwise read as a lower live composer holding the menu text. The deeper
+# indent is what tells it from a draft typed directly under its composer's own
+# top rule. An untitled rule pair is _fm_composer_bare_is_popup_selection's
+# case, which reads the ghost-stripped composer this plain-screen scan cannot.
+# Like that check, this one may only ever refuse: the row must have the menu
+# shape (`/name` or a truncated `…name`, a gap, then a description), and the
+# proving composer must hold the typed `/` text that opened the menu.
 _fm_composer_row_is_slash_menu_selection() {  # <trimmed-row> <glyph> <row-index> <plain-screen>
   local rest proof=-1 raw lead proof_lead
   [ "$FM_COMPOSER_SCAN_PI_LAST_SEPARATOR" -eq $(($3 - 1)) ] || return 1
   rest=${1#"$2"}
-  [[ $rest =~ ^\ +/[^[:space:]]+ ]] || return 1
-  if [ "$FM_COMPOSER_SCAN_PI_PAIR_FOUND" = 1 ] && [ "$FM_COMPOSER_SCAN_PI_CLOSE" -eq $(($3 - 1)) ] \
-     && [ "$FM_COMPOSER_SCAN_PI_GLYPH_ROW" -ge 0 ] && [ "$FM_COMPOSER_SCAN_PI_GLYPH" = "$2" ]; then
-    proof=$FM_COMPOSER_SCAN_PI_GLYPH_ROW
-  elif [ "$FM_COMPOSER_SCAN_BARE_ROW" -ge 0 ]; then
+  [[ $rest =~ ^\ +(/|…)[^[:space:]]+\ \ +[^[:space:]] ]] || return 1
+  if [ "$FM_COMPOSER_SCAN_BARE_ROW" -ge 0 ]; then
     raw=$(_fm_composer_screen_row "$FM_COMPOSER_SCAN_BARE_ROW" "$4")
     fm_composer_normalize_trim_var raw
     case "$raw" in
@@ -1020,12 +1021,23 @@ _fm_composer_row_is_slash_menu_selection() {  # <trimmed-row> <glyph> <row-index
                && proof=$FM_COMPOSER_SCAN_BARE_ROW ;;
     esac
   fi
-  [ "$proof" -ge 0 ] || return 1
+  [ "$proof" -ge 1 ] || return 1
+  # The sandwich also accepts an untitled rule; only a rule carrying a title
+  # (a named launch) is this check's case.
+  raw=$(_fm_composer_screen_row "$((proof - 1))" "$4")
+  fm_composer_normalize_trim_var raw
+  case "${raw//─/}" in '') return 1 ;; esac
   raw=$(_fm_composer_screen_row "$3" "$4")
   lead=${raw%%[! ]*}
   raw=$(_fm_composer_screen_row "$proof" "$4")
   proof_lead=${raw%%[! ]*}
-  [ "${#lead}" -gt "${#proof_lead}" ]
+  [ "${#lead}" -gt "${#proof_lead}" ] || return 1
+  # Typing `/` is what opens the menu, so the proving composer must hold typed
+  # slash text; an empty composer above a menu-shaped row keeps the row as its
+  # own reading, and this exclusion can only ever refuse, never read empty.
+  fm_composer_normalize_trim_var raw
+  rest=${raw#"$2"}
+  [[ $rest =~ ^[[:space:]]*/ ]]
 }
 
 # Row-scan results are returned through FM_COMPOSER_SCAN_* globals (bash 3.2
