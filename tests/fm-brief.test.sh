@@ -1057,7 +1057,7 @@ SIGNALS
         assert_grep 'so a PR waiting to land is never a `needs-decision`' "$brief" \
           "$kind brief did not keep a ready PR out of needs-decision"
         # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
-        assert_grep 'append `done [at=<epoch>]: PR {url} merged; captain step: {the exact action}` and stop' "$brief" \
+        assert_grep 'end the `done:` line the Definition of done names with `; captain step: {the exact action}` and stop' "$brief" \
           "$kind brief did not release a merged ship whose only step is the captain's"
         ;;
       *)

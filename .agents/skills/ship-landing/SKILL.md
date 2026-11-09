@@ -33,11 +33,11 @@ A teardown refusal for uncommitted or unlanded work is a stop-and-investigate re
 Never force teardown without explicit discard authority.
 After successful teardown, record completion, retain only the configured recent Done history, and re-evaluate queued work whose blockers and time gates have cleared.
 
-Release a ship whose only remaining step is the captain's own (fork patch, `docs/fork-decisions.md` 2026-11-09), mirroring the scout release in `scout-completion`: once its PR, and every companion PR, has merged and nothing is left but an action he must take himself - a physical step, a sign-in, a launch on his own machine - the ship's work is done.
-Its brief tells it to report `done: PR <url> merged; captain step: <action>` rather than wait; a ship already waiting on such a step with `blocked [on=captain]` after its merge is the same case.
-In the turn that reads that report, hold the ship's own row for him with `bin/fm-captain-hold.sh hold <ship-id> --kind arjun-only --reason '<the exact action>'`, adding what the follow-up would check when one remains, then tear the ship down through `bin/fm-teardown.sh` without waiting for him.
-Teardown keeps that row open as his call with the deliverable recorded, and its landed-work test is unchanged: a ship with any unmerged PR or unlanded work is never released by this rule, and a refusal is investigated, never forced.
-When he reports the step done, record his words with `answer`; only when work remains after his step, add `--release` and dispatch a fresh short ship whose brief carries them.
+Release a ship whose only remaining step is the captain's own (fork patch, `docs/fork-decisions.md` 2026-11-09), mirroring the scout release in `scout-completion`: when nothing is left after its PR merges but an action he must take himself - a physical step, a sign-in, a launch on his own machine - the ship's work is done.
+Its brief tells it to end its ready `done:` line with `; captain step: <action>` rather than report `ready:` or wait; a ship already waiting on such a step with `blocked [on=captain]` after its merge is the same case, and teardown retires that blocker with its status log.
+Land that PR exactly like any other done PR; once landing is confirmed, hold the ship's own row for him with `bin/fm-captain-hold.sh hold <ship-id> --kind arjun-only --reason <the exact action>`, adding what the follow-up would check when one remains, then tear the ship down through `bin/fm-teardown.sh` without waiting for him.
+Teardown keeps that row open as his call with the deliverable recorded, and its landed-work and companion gates are unchanged: a ship with any unmerged PR or unlanded work is never released by this rule, and a refusal is investigated, never forced.
+When he reports the step done, record his words with `answer <ship-id> --decision-file <path>`; only when work remains after his step, add `--release` and dispatch a fresh short ship whose brief carries them.
 A captain call that gates the work before its merge, such as a design choice or a login the change itself needs, still waits on the live worker.
 
 A secondmate is persistent and an empty queue is healthy.
