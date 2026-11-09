@@ -67,7 +67,8 @@ Example:
   - lines written while the immediate record fails, for example when the ledger file cannot be written.
   Recording `task.pr_ready`, `task.merged`, or `task.cleaned_up` first records that task's pending status lines.
 - Captured status lines are delivered at least once unless a write fails or a crash loses unflushed records.
-  A line with an `at` stamp is recorded once per task: a capture skips it when a `task.status` record with the same `at`, `state`, `key`, and `text` is already in the ledger for that task.
+  A capture that reads a task's status log from its first byte, because its saved place was lost or reset, skips a stamped line when a `task.status` record with the same `at`, `state`, `key`, and `text` is already in the ledger for that task.
+  Records written before `at` existed carry no `at`, so they never match.
   An unstamped line can repeat after an interrupted capture, so a reader that must not double-count should tolerate duplicates of those.
 - A status record can appear just before its task's `task.dispatched` record when the worker writes a status line in the moment between its launch and that record.
 - When a home turns the ledger on, status lines already in a live task's log are recorded on that task's next capture (which may be a worker status command, PR registration, merge, cleanup, or monitor poll); tasks dispatched or cleaned up while the flag was absent have no record of that.

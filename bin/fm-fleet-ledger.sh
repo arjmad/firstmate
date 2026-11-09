@@ -36,9 +36,10 @@
 # for a later capture. Records are appended before the offset is saved, so an
 # interrupted capture repeats records rather than losing them. Without any
 # grown log, capture returns after one size listing and sources nothing.
-# capture skips a line carrying a well-formed [at=] stamp when a task.status
-# record with the same at, state, key, and text is already in the ledger for
-# that task, so a lost or reset offset does not record a stamped line twice.
+# A capture that starts at byte 0 (no offset, or a reset one) skips a line
+# carrying a well-formed [at=] stamp when a task.status record with the same
+# at, state, key, and text is already in the ledger for that task, so a lost
+# or reset offset does not record a stamped line twice.
 # appended captures only that task, so a worker's status line is recorded as
 # soon as the worker writes it; the byte offset keeps the per-poll capture from
 # recording it again. Its arguments name the home, because a worker has no
@@ -46,9 +47,9 @@
 # the status file's directory.
 # pr_ready, merged, and cleaned_up first capture their own task, so its status
 # records precede them. cleaned_up then deletes the task's offset, because teardown
-# retires that status log right after. dispatched deletes a leftover offset
-# only while the task has no status log, so a reused task id starts at byte 0
-# of its fresh log and a second mate's respawn keeps its log's place.
+# retires that status log right after. dispatched deletes any leftover offset
+# so a reused task id starts at byte 0 of its fresh log, except that a second
+# mate whose status log exists keeps it, so its respawn keeps the log's place.
 # Every write holds state/.fleet-ledger.lock.
 #
 # Environment: FM_HOME, FM_STATE_OVERRIDE, and FM_CONFIG_OVERRIDE resolve the
@@ -162,6 +163,7 @@ append() { # same arguments as record
 
 # The identity of a stamped status record; capture records each one once per task.
 STAMPED_KEY='select(.event == "task.status" and .at != null) | [.at, .state, .key, .text]'
+DEDUPE=0
 RECORDED_KEYS=
 
 load_recorded_keys() { # <task>: RECORDED_KEYS gets one stamped key per line
@@ -171,7 +173,7 @@ load_recorded_keys() { # <task>: RECORDED_KEYS gets one stamped key per line
 }
 
 # The status-line grammar belongs to bin/fm-classify-lib.sh; this only projects it.
-append_status() { # <task> <status-line>; caller loaded RECORDED_KEYS for a stamped line
+append_status() { # <task> <status-line>; DEDUPE=1 checks a stamped line against RECORDED_KEYS
   local task=$1 line=$2 verb key text at rec id
   status_line_verb "$line" verb
   case "$verb" in [a-z]*) case "$verb" in *[!a-z-]*) verb='' ;; esac ;; *) verb='' ;; esac
@@ -182,7 +184,7 @@ append_status() { # <task> <status-line>; caller loaded RECORDED_KEYS for a stam
   rec=$(record task.status "$task" \
     "{state: (\$state | n), key: (\$key | n), text: \$text[0:$TEXT_MAX_CHARS], at: (\$at | if . == \"\" then null else tonumber end)}" \
     --arg state "$verb" --arg key "$key" --arg text "$text" --arg at "$at") || return 1
-  if [ -n "$at" ]; then
+  if [ "$DEDUPE" = 1 ] && [ -n "$at" ]; then
     id=$(jq -c "$STAMPED_KEY" <<< "$rec") || return 1
     case $'\n'"$RECORDED_KEYS"$'\n' in *$'\n'"$id"$'\n'*) return 0 ;; esac
     RECORDED_KEYS+=$'\n'"$id"
@@ -206,8 +208,11 @@ capture_task() { # <task>; caller holds the lock
   tail=${data##*$'\n'}
   complete=${data%"$tail"}
   [ -n "$complete" ] || return 0
+  DEDUPE=0
   RECORDED_KEYS=
-  case "$complete" in *'[at='*) load_recorded_keys "$task" ;; esac
+  if [ "$offset" -eq 0 ]; then
+    case "$complete" in *'[at='*) DEDUPE=1; load_recorded_keys "$task" ;; esac
+  fi
   while IFS= read -r line; do
     [ -n "${line//[[:space:]]/}" ] || continue
     append_status "$task" "$line" || return 1
@@ -236,7 +241,8 @@ case "$cmd" in
     capture_task "$APPENDED_TASK" || rc=1
     ;;
   dispatched)
-    [ -f "$STATE/$2.status" ] && [ ! -L "$STATE/$2.status" ] || rm -f -- "$(offset_path "$2")"
+    { [ "$3" = secondmate ] && [ -f "$STATE/$2.status" ] && [ ! -L "$STATE/$2.status" ]; } ||
+      rm -f -- "$(offset_path "$2")"
     append task.dispatched "$2" \
       '{kind: ($kind | n), project: ($project | n), harness: ($harness | n), model: ($model | n)}' \
       --arg kind "$3" --arg project "$4" --arg harness "$5" --arg model "$6" || rc=1

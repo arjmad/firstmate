@@ -311,12 +311,12 @@ EOF
 test_fresh_dispatch_starts_at_byte_zero() {
   make_case on-fresh on
   printf '30\n' > "$HOME_DIR/state/.$TASK.fleet-ledger-offset"
-  ledger dispatched "$TASK" ship sample claude ""
   printf 'working [at=1790000000]: setup done\n' > "$HOME_DIR/state/$TASK.status"
+  ledger dispatched "$TASK" ship sample claude ""
   ledger capture
   assert_equals '["task.dispatched",null]
 ["task.status"," setup done"]' "$(ledger_rows '[.event, .text]')" "ledger rows after a fresh dispatch"
-  pass "a fresh dispatch drops a leftover offset, so the task's new status log is recorded from its first byte"
+  pass "a fresh dispatch drops a leftover offset even when its worker wrote first, so the new status log is recorded from its first byte"
 }
 
 test_capture_skips_an_already_recorded_stamped_line() {
