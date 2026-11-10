@@ -182,8 +182,9 @@
 # A live-harness-optin guard is added only when its name matches as above: the
 # firstmate-coding-guidelines skill owns when the live guards run. When the
 # --changed map refuses a path, --near names it, since CI's plan then runs the
-# full suite, and adds CI-unexercised suites from the other paths alone. An
-# empty --near selection succeeds: CI is still the proof.
+# full suite, and adds every CI-unexercised suite, because that path's own are
+# unknown. Any other selection failure, and a base with no merge base, is
+# refused. An empty --near selection succeeds: CI is still the proof.
 # Documentation (README.md, LICENSE, assets/, docs/, .gitignore) selects the
 # suites that name its path, per script, and a non-prose file there (a docs/
 # JSON inventory, an asset) that no suite names is refused like any unmapped
@@ -2159,7 +2160,7 @@ changed_paths() {
   git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null
 }
 
-select_changed() {  # <base> [<path>]: one given path instead of the branch's
+select_changed() {  # <base> [<paths>]: these newline-separated paths instead of the branch's
   local base=$1 path entry fam script_name s paths
   local -a wanted_families=()
   local -a wanted_scripts=()
@@ -2249,8 +2250,14 @@ changed_selection() {
 
 # The narrow local run; the header's --near paragraph owns the contract.
 select_near() {
-  local base=$1 path stem s fam paths changed_list
+  local base=$1 path stem s fam paths changed_list err
   local -a near=()
+  # Without a merge base the branch diff is empty, which would read as "no
+  # suites near" and pass, so refuse instead.
+  git -C "$ROOT" rev-parse --verify "$base" >/dev/null 2>&1 \
+    || die "changed-file base ref not found: $base (pass --base <ref>)"
+  git -C "$ROOT" merge-base "$base" HEAD >/dev/null 2>&1 \
+    || die "--near: no merge base between $base and HEAD (fetch more history or pass --base <ref>)"
   paths=$(changed_paths "$base") || exit $?
   while IFS= read -r path; do
     [ -n "$path" ] || continue
@@ -2275,26 +2282,28 @@ select_near() {
     esac
     case "$path" in
       *.md|*.mdx|*.rst|*.txt|docs/examples/*)
-        near+=(tests/fm-documentation-audiences.test.sh)
+        [ ! -f tests/fm-documentation-audiences.test.sh ] \
+          || near+=(tests/fm-documentation-audiences.test.sh)
         ;;
     esac
   done <<<"$paths"
   while IFS= read -r s; do
     [ -z "$s" ] || add_script "$s"
   done < <(printf '%s\n' "${near[@]+"${near[@]}"}" | LC_ALL=C sort -u)
-  # select_changed exits on a path its map refuses, so it runs in a subshell;
-  # after a refusal, each path is mapped alone so the others still count.
-  if ! changed_list=$(changed_selection "$base" 2>/dev/null); then
-    changed_list=
-    while IFS= read -r path; do
-      [ -n "$path" ] || continue
-      if s=$(changed_selection "$base" "$path" 2>/dev/null); then
-        changed_list+="$s"$'\n'
-      else
-        log "--near: the --changed map refuses $path, so CI runs its full suite"
-      fi
-    done <<<"$paths"
+  # select_changed exits on a path its map refuses, so it runs in a subshell.
+  # A refused path's own suites are unknown, so every CI-unexercised suite
+  # runs; any other failure is an error, never a refusal.
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-test-run-near.XXXXXX")
+  if ! changed_list=$(changed_selection "$base" "$paths" 2>"$err"); then
+    if ! grep -q 'no changed-test mapping for source path' "$err"; then
+      cat "$err" >&2
+      rm -f "$err"
+      die "--near: the --changed selection failed"
+    fi
+    log "--near: $(sed 's/^fm-test-run: //' "$err" | head -n 1), so CI runs its full suite; adding every CI-unexercised suite"
+    changed_list=$(all_repo_tests)
   fi
+  rm -f "$err"
   while IFS= read -r s; do
     [ -n "$s" ] || continue
     fam=$(family_for_basename "$(basename "$s")")
