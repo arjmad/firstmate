@@ -364,6 +364,25 @@ assert_equals "$third" "$(printf '%s' "$after_lost" | json_get replies 0 id)" \
   "a reply recorded after the counter was lost is still after the client cursor"
 pass "the reply cursor never goes backwards when the sequence counter is lost"
 
+# A help flag is never recorded as the reply body, because a recorded reply
+# cannot be replaced.
+home=$(make_home reply-help)
+mkdir -p "$home/state/inbox"
+hid="1700000000-helpme"
+printf 'id=%s\nat=2026-01-01T00:00:00Z\nsource=text\nannounce_marker=1\n--\nq\n' \
+  "$hid" > "$home/state/inbox/$hid.note"
+for args in "--help" "-h" "$hid --help" "$hid -h" "--json $hid --help"; do
+  set +e
+  # shellcheck disable=SC2086
+  help_out=$(run_inbox "$home" reply $args 2>&1)
+  help_code=$?
+  set -e
+  expect_code 1 "$help_code" "reply $args exits as a usage request"
+  assert_contains "$help_out" "usage: fm-inbox.sh reply" "reply $args prints the reply usage"
+done
+[ ! -e "$home/state/inbox/.replies/$hid" ] || fail "a help flag was recorded as the reply"
+pass "reply prints usage for -h and --help and records nothing"
+
 # A reply without a valid sequence is malformed: it gets no invented position
 # and receipts say so instead of silently ordering it.
 home=$(make_home malformed-reply)
