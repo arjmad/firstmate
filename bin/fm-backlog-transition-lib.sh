@@ -156,6 +156,35 @@ fm_backlog_file() {  # <data-dir>
   fi
 }
 
+# The Done archive that markdown retention moves closed rows into, which no
+# tasks-axi read returns. tasks-axi's own source precedence picks the
+# [markdown] archive key: the backlog root's .tasks.toml first, then the
+# user-level $HOME/.tasks-axi/config.toml; a relative value resolves against
+# the backlog root wherever it was configured, and with neither set the archive
+# is done-archive.md beside the backlog file. Returns 1 when the configured
+# backend keeps no markdown archive, and 2 when the data directory or the
+# backend configuration cannot be read.
+fm_backlog_markdown_archive() {  # <data-dir>
+  local data root backend archive file
+  data=$(fm_backlog_data_absolute "$1") || return 2
+  root=$(fm_backlog_root "$data") || return 2
+  backend=$(fm_tasks_axi_backend "$root" 2>/dev/null) || return 2
+  [ "$backend" = markdown ] || return 1
+  archive=$(fm_tasks_axi_toml_section_entries "$root/.tasks.toml" markdown archive | sed -n 's/^archive //p' | head -1)
+  if [ -z "$archive" ] && [ -n "${HOME:-}" ]; then
+    archive=$(fm_tasks_axi_toml_section_entries "$HOME/.tasks-axi/config.toml" markdown archive | sed -n 's/^archive //p' | head -1)
+  fi
+  case "$archive" in
+    '')
+      file=$(fm_backlog_file "$data") || return 2
+      archive="${file%/*}/done-archive.md"
+      ;;
+    /*) ;;
+    *) archive="$root/$archive" ;;
+  esac
+  printf '%s\n' "$archive"
+}
+
 # The directory a backlog's own `.tasks.toml` is resolved from.
 fm_backlog_root() {  # <data-dir>
   local data parent

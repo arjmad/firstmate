@@ -5,6 +5,7 @@
 #        fm-tasks-axi.sh owner <id> [arjun|fleet]
 #        fm-tasks-axi.sh due <id> [YYYY-MM-DD|-]
 #        fm-tasks-axi.sh batch <id> [<tag>|-]
+#        fm-tasks-axi.sh archive-path
 #        fm-tasks-axi.sh --help
 #
 # Every routine firstmate backlog read or mutation goes through this command
@@ -58,6 +59,13 @@
 # `due <id> YYYY-MM-DD|-` and `batch <id> <tag>|-` record or clear it under the
 # same control lock as `owner`. Rows already in the backlog stay readable as
 # they are.
+#
+# Done archive: tasks-axi never reads back the rows that markdown retention
+# moved out of the backlog. The wrapper-only subcommand `archive-path` prints
+# where this home's configured archive lives (bin/fm-backlog-transition-lib.sh
+# fm_backlog_markdown_archive owns the resolution), whether or not it exists
+# yet; it prints nothing when the backend keeps no markdown archive, and
+# refuses when the backend configuration cannot be read.
 #
 # Superseded-ruling guard (opt-in): when the home-private `config/captain-name`
 # names the captain (one name per line; blank and `#` lines ignored), `hold`,
@@ -613,6 +621,17 @@ case "${1:-}" in
   due|batch)
     command_row_field "$1"
     exit $?
+    ;;
+  archive-path)
+    [ "$#" -eq 1 ] || fail "archive-path takes no arguments"
+    archive_status=0
+    archive=$(fm_backlog_markdown_archive "$DATA") || archive_status=$?
+    case "$archive_status" in
+      0) printf '%s\n' "$archive" ;;
+      1) ;;
+      *) fail "the Done archive of $DATA cannot be resolved" ;;
+    esac
+    exit 0
     ;;
   add|create)
     prepare_add_owner
