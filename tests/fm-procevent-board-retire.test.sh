@@ -163,6 +163,45 @@ Board handed over from scout-d at 2026-11-01T00:00:00Z."
   pass "an adopted board retires once every backlog row carrying it has closed"
 }
 
+# Done retention moves a closed row out of the backlog into the configured
+# archive, so a carrying row the sweep must see can live there alone.
+test_adopted_board_retires_when_its_rows_are_archived() {
+  local home out unreadable
+  home=$(new_home archived)
+  board "$home" lavish-archived "$RECENT" 'adopted_from=scout-e'
+  axi "$home" add call-e1 "archived call" --body "Board handed over from scout-e at 2026-11-01T00:00:00Z."
+  board "$home" lavish-half "$RECENT" 'adopted_from=scout-f'
+  axi "$home" add call-f1 "archived half" --body "Board handed over from scout-f at 2026-11-01T00:00:00Z."
+  axi "$home" add call-f2 "open half" --body "Board handed over from scout-f at 2026-11-01T00:00:00Z."
+  board "$home" lavish-nowhere "$RECENT" 'adopted_from=scout-g'
+  axi "$home" "done" call-e1 --keep 0
+  axi "$home" "done" call-f1 --keep 0
+  assert_grep "Board handed over from scout-e at" "$home/data/done-archive.md" "the archived carrying row"
+  assert_no_grep "scout-e" "$home/data/backlog.md" "the live backlog after retention"
+
+  # A closed live row beside an archive that cannot be read is not the whole
+  # picture. A directory where the archive should be is unreadable even to root.
+  unreadable=$(new_home archive-unreadable)
+  board "$unreadable" lavish-archived "$RECENT" 'adopted_from=scout-e'
+  axi "$unreadable" add call-e2 "live closed call" --body "Board handed over from scout-e at 2026-11-01T00:00:00Z."
+  axi "$unreadable" "done" call-e2
+  mkdir "$unreadable/data/done-archive.md"
+
+  out=$(pe "$home" retire-quiet-boards) || fail "retire-quiet-boards failed: $out"
+  registered "$home" lavish-archived && fail "an adopted board whose only carrying row is archived stayed registered"
+  assert_contains "$out" "board-retired: lavish-archived reason=row-closed quiet_days=2 adopted_from=scout-e" "the archived row's retirement line"
+  registered "$home" lavish-half || fail "an adopted board with an archived row and an open live row was retired"
+  registered "$home" lavish-nowhere || fail "an adopted board with no carrying row in the backlog or archive was retired early"
+
+  out=$(pe "$unreadable" retire-quiet-boards) || fail "retire-quiet-boards failed with an unreadable archive: $out"
+  registered "$unreadable" lavish-archived || fail "an unreadable archive retired an adopted board early"
+  rmdir "$unreadable/data/done-archive.md"
+  cp "$home/data/done-archive.md" "$unreadable/data/done-archive.md"
+  out=$(pe "$unreadable" retire-quiet-boards) || fail "retire-quiet-boards failed: $out"
+  assert_contains "$out" "board-retired: lavish-archived reason=row-closed" "the same board once its archive reads"
+  pass "an adopted board retires once its carrying rows are closed in the backlog or the archive"
+}
+
 test_reconcile_runs_the_sweep_on_its_cadence() {
   local home out
   home=$(new_home cadence)
@@ -258,6 +297,7 @@ SH
 
 test_quiet_rule_and_kept_boards
 test_adopted_board_retires_when_its_rows_close
+test_adopted_board_retires_when_its_rows_are_archived
 test_conditional_retire_matches_owned_boards
 test_sweep_leaves_a_board_rearmed_mid_sweep
 test_reconcile_runs_the_sweep_on_its_cadence
