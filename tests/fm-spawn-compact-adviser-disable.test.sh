@@ -30,7 +30,7 @@ make_case() {
   shift 2
   case_dir="$TMP_ROOT/$name"
   home="$case_dir/home"
-  proj="$case_dir/project"
+  proj="$home/projects/project"
   wt="$case_dir/wt"
   launchlog="$case_dir/launch.log"
   panelog="$case_dir/pane.log"
@@ -432,6 +432,10 @@ test_launch_preserves_literal_home_and_brief_paths() {
     if [ "$name" = literal ]; then
       mv "$HOME_DIR" "$CASE_DIR/R&D \"double\" 'single' home"
       HOME_DIR="$CASE_DIR/R&D \"double\" 'single' home"
+      # The project clone lives under the home's projects/, so it moved too.
+      PROJ_DIR="$HOME_DIR/projects/project"
+      git -C "$PROJ_DIR" worktree repair "$WT_DIR" || fail "literal path: could not repair the moved worktree"
+      git -C "$PROJ_DIR" remote set-url origin "$PROJ_DIR.origin.git"
     fi
     out=$(run_case_spawn "$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
     status=$?

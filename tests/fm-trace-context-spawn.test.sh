@@ -122,7 +122,7 @@ make_spawn_case() {
   local name=$1 case_dir home proj wt fakebin launchlog id
   case_dir="$TMP_ROOT/$name"
   home="$case_dir/home"
-  proj="$case_dir/project"
+  proj="$home/projects/project"
   wt="$case_dir/wt"
   launchlog="$case_dir/launch.log"
   fakebin=$(make_spawn_fakebin "$case_dir/fake")
@@ -261,7 +261,7 @@ run_two_level() {
   # Spawn 2: the secondmate launches its own worker with exactly that inherited
   # env, reading the secondmate home's own (inherited) config.
   worker_id="w-$name"
-  wproj="$base/wproj"
+  wproj="$sm/projects/wproj"
   wwt="$base/wwt"
   fm_git_worktree "$wproj" "$wwt" "wt-$name"
   mkdir -p "$sm/state" "$sm/projects" "$sm/data/$worker_id"
@@ -555,8 +555,8 @@ test_two_routed_tasks_through_one_secondmate_root_distinct_traces() {
 
   id_a=routed-a-z1
   id_b=routed-b-z1
-  proj_a="$base/proj-a"; wt_a="$base/wt-a"
-  proj_b="$base/proj-b"; wt_b="$base/wt-b"
+  proj_a="$sm/projects/proj-a"; wt_a="$base/wt-a"
+  proj_b="$sm/projects/proj-b"; wt_b="$base/wt-b"
   fm_git_worktree "$proj_a" "$wt_a" wt-routed-a
   fm_git_worktree "$proj_b" "$wt_b" wt-routed-b
   mkdir -p "$sm/data/$id_a" "$sm/data/$id_b"

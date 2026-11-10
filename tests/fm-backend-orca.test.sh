@@ -495,7 +495,7 @@ test_worktree_create_removes_worktree_when_path_missing() {
 test_spawn_preserves_orca_metadata_when_pathless_worktree_cleanup_fails() {
   local proj data state config id out status
   id="orcapathlessz6"
-  proj="$TMP_ROOT/pathless-cleanup-project"
+  proj="$TMP_ROOT/projects/pathless-cleanup-project"
   data="$TMP_ROOT/pathless-cleanup-data"
   state="$TMP_ROOT/pathless-cleanup-state"
   config="$TMP_ROOT/pathless-cleanup-config"
@@ -516,7 +516,7 @@ test_spawn_preserves_orca_metadata_when_pathless_worktree_cleanup_fails() {
   printf '{"ok":false,"error":{"code":"worktree_not_removed","message":"worktree not removed"}}\n' > "$RESP/5.out"
   out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
-    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE="$TMP_ROOT/projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend orca 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "Orca spawn should fail when path parsing and cleanup fail"
@@ -535,7 +535,7 @@ test_spawn_preserves_orca_metadata_when_pathless_worktree_cleanup_fails() {
 test_spawn_writes_orca_metadata_and_launches_harness() {
   local proj wt data state config id out log staged launch
   id="orcaspawnz1"
-  proj="$TMP_ROOT/spawn-project"
+  proj="$TMP_ROOT/projects/spawn-project"
   wt="$TMP_ROOT/spawn-wt"
   data="$TMP_ROOT/spawn-data"
   state="$TMP_ROOT/spawn-state"
@@ -551,7 +551,7 @@ test_spawn_writes_orca_metadata_and_launches_harness() {
   printf '{"ok":true,"result":{"worktree":{"id":"wt-spawn::/orca/wt-spawn","path":"%s"},"terminal":{"handle":"term-spawn"}}}\n' "$wt" > "$RESP/3.out"
   out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
-    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE="$TMP_ROOT/projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend orca 2>&1 )
   expect_code 0 $? "fm-spawn.sh --backend orca should succeed with fake Orca"$'\n'"$out"
   assert_contains "$out" "spawned $id harness=claude kind=ship mode=no-mistakes yolo=off window=fm-$id worktree=$wt" \
@@ -606,7 +606,7 @@ test_spawn_refuses_orca_secondmate_before_home_mutation() {
 test_spawn_refuses_orca_when_runtime_not_ready() {
   local proj data state config id out status
   id="orcaruntimez6"
-  proj="$TMP_ROOT/runtime-down-project"
+  proj="$TMP_ROOT/projects/runtime-down-project"
   data="$TMP_ROOT/runtime-down-data"
   state="$TMP_ROOT/runtime-down-state"
   config="$TMP_ROOT/runtime-down-config"
@@ -619,7 +619,7 @@ test_spawn_refuses_orca_when_runtime_not_ready() {
   printf '{"ok":true,"result":{"runtime":{"reachable":false,"state":"starting"}}}\n' > "$RESP/1.out"
   out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" FM_ORCA_STATUS_RESPONSE=sequence \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
-    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE="$TMP_ROOT/projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend orca 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "fm-spawn.sh --backend orca should refuse when Orca runtime is not ready"
@@ -636,7 +636,7 @@ test_spawn_refuses_orca_when_runtime_not_ready() {
 test_spawn_refuses_orca_nonisolated_worktree() {
   local proj data state config id out status
   id="orcabadwtz4"
-  proj="$TMP_ROOT/bad-spawn-project"
+  proj="$TMP_ROOT/projects/bad-spawn-project"
   data="$TMP_ROOT/bad-spawn-data"
   state="$TMP_ROOT/bad-spawn-state"
   config="$TMP_ROOT/bad-spawn-config"
@@ -651,7 +651,7 @@ test_spawn_refuses_orca_nonisolated_worktree() {
   printf '{"ok":true,"result":{"worktree":{"id":"wt-bad::/orca/wt-bad","path":"%s"},"terminal":{"handle":"term-bad"}}}\n' "$proj" > "$RESP/3.out"
   out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
-    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE="$TMP_ROOT/projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend orca 2>&1 )
   status=$?
   expect_code 1 "$status" "fm-spawn.sh --backend orca should refuse a primary checkout worktree"
@@ -670,7 +670,7 @@ test_spawn_refuses_orca_nonisolated_worktree() {
 test_spawn_removes_orca_worktree_when_terminal_create_fails() {
   local proj wt data state config id out status
   id="orcatermfailz8"
-  proj="$TMP_ROOT/terminal-fail-project"
+  proj="$TMP_ROOT/projects/terminal-fail-project"
   wt="$TMP_ROOT/terminal-fail-wt"
   data="$TMP_ROOT/terminal-fail-data"
   state="$TMP_ROOT/terminal-fail-state"
@@ -686,7 +686,7 @@ test_spawn_removes_orca_worktree_when_terminal_create_fails() {
   printf '1\n' > "$RESP/4.exit"
   out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
-    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE="$TMP_ROOT/projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend orca 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "Orca spawn should fail when terminal creation fails"
@@ -703,7 +703,7 @@ test_spawn_removes_orca_worktree_when_terminal_create_fails() {
 test_spawn_preserves_orca_metadata_when_abort_cleanup_fails() {
   local proj wt data state config id out status
   id="orcacleanupleakz0"
-  proj="$TMP_ROOT/cleanup-fail-project"
+  proj="$TMP_ROOT/projects/cleanup-fail-project"
   wt="$TMP_ROOT/cleanup-fail-wt"
   data="$TMP_ROOT/cleanup-fail-data"
   state="$TMP_ROOT/cleanup-fail-state"
@@ -720,7 +720,7 @@ test_spawn_preserves_orca_metadata_when_abort_cleanup_fails() {
   printf '1\n' > "$RESP/5.exit"
   out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
-    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE="$TMP_ROOT/projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend orca 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "Orca spawn should fail when terminal creation and abort cleanup fail"
@@ -737,7 +737,7 @@ test_spawn_preserves_orca_metadata_when_abort_cleanup_fails() {
 test_spawn_releases_orca_resources_when_metadata_write_fails() {
   local proj wt data state config id out status
   id="orcametafailz9"
-  proj="$TMP_ROOT/meta-fail-project"
+  proj="$TMP_ROOT/projects/meta-fail-project"
   wt="$TMP_ROOT/meta-fail-wt"
   data="$TMP_ROOT/meta-fail-data"
   state="$TMP_ROOT/meta-fail-state"
@@ -752,7 +752,7 @@ test_spawn_releases_orca_resources_when_metadata_write_fails() {
   printf '{"ok":true,"result":{"terminal":{"handle":"term-meta-fail"}}}\n' > "$RESP/4.out"
   out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
-    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE="$TMP_ROOT/projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend orca 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "Orca spawn should fail when metadata cannot be written"
@@ -852,7 +852,7 @@ test_target_exists_rejects_orca_error_json() {
 test_scout_teardown_removes_orca_worktree_via_helper() {
   local proj wt data state config id out rc neutral
   id="orcateardownz3"
-  proj="$TMP_ROOT/teardown-project"
+  proj="$TMP_ROOT/projects/teardown-project"
   wt="$TMP_ROOT/teardown-wt"
   data="$TMP_ROOT/teardown-data"
   state="$TMP_ROOT/teardown-state"
@@ -887,7 +887,7 @@ test_scout_teardown_removes_orca_worktree_via_helper() {
 test_scout_teardown_refuses_orca_id_path_mismatch() {
   local proj wt other_wt data state config id out rc neutral
   id="orcascoutmismatchz5"
-  proj="$TMP_ROOT/scout-mismatch-project"
+  proj="$TMP_ROOT/projects/scout-mismatch-project"
   wt="$TMP_ROOT/scout-mismatch-wt"
   other_wt="$TMP_ROOT/scout-mismatch-other-wt"
   data="$TMP_ROOT/scout-mismatch-data"
@@ -926,7 +926,7 @@ test_scout_teardown_refuses_orca_id_path_mismatch() {
 test_teardown_removes_orca_worktree_when_path_missing() {
   local proj wt data state config id out rc neutral
   id="orcamissingpathz7"
-  proj="$TMP_ROOT/missing-path-project"
+  proj="$TMP_ROOT/projects/missing-path-project"
   wt="$TMP_ROOT/missing-path-wt"
   data="$TMP_ROOT/missing-path-data"
   state="$TMP_ROOT/missing-path-state"
@@ -959,7 +959,7 @@ test_teardown_removes_orca_worktree_when_path_missing() {
 test_teardown_preserves_metadata_when_orca_remove_error_json() {
   local proj wt data state config id out rc neutral
   id="orcaremoveerrz2"
-  proj="$TMP_ROOT/remove-error-project"
+  proj="$TMP_ROOT/projects/remove-error-project"
   wt="$TMP_ROOT/remove-error-wt"
   data="$TMP_ROOT/remove-error-data"
   state="$TMP_ROOT/remove-error-state"
@@ -991,7 +991,7 @@ test_teardown_preserves_metadata_when_orca_remove_error_json() {
 test_scout_teardown_refuses_orca_missing_report_when_path_missing() {
   local proj wt data state config id out rc neutral
   id="orcanoreportz4"
-  proj="$TMP_ROOT/missing-report-project"
+  proj="$TMP_ROOT/projects/missing-report-project"
   wt="$TMP_ROOT/missing-report-wt"
   data="$TMP_ROOT/missing-report-data"
   state="$TMP_ROOT/missing-report-state"
@@ -1020,7 +1020,7 @@ test_scout_teardown_refuses_orca_missing_report_when_path_missing() {
 test_ship_teardown_refuses_orca_missing_worktree_path() {
   local proj wt data state config id out rc neutral
   id="orcashipmissingz8"
-  proj="$TMP_ROOT/missing-ship-project"
+  proj="$TMP_ROOT/projects/missing-ship-project"
   wt="$TMP_ROOT/missing-ship-wt"
   data="$TMP_ROOT/missing-ship-data"
   state="$TMP_ROOT/missing-ship-state"
@@ -1051,7 +1051,7 @@ test_ship_teardown_refuses_orca_missing_worktree_path() {
 test_ship_teardown_removes_orca_worktree_when_id_path_matches() {
   local proj wt data state config id out rc neutral
   id="orcashipmatchz2"
-  proj="$TMP_ROOT/ship-match-project"
+  proj="$TMP_ROOT/projects/ship-match-project"
   wt="$TMP_ROOT/ship-match-wt"
   data="$TMP_ROOT/ship-match-data"
   state="$TMP_ROOT/ship-match-state"
@@ -1086,7 +1086,7 @@ test_ship_teardown_removes_orca_worktree_when_id_path_matches() {
 test_ship_teardown_refuses_orca_unresolvable_worktree_id() {
   local proj wt data state config id out rc neutral
   id="orcashipunresolvedz1"
-  proj="$TMP_ROOT/ship-unresolved-project"
+  proj="$TMP_ROOT/projects/ship-unresolved-project"
   wt="$TMP_ROOT/ship-unresolved-wt"
   data="$TMP_ROOT/ship-unresolved-data"
   state="$TMP_ROOT/ship-unresolved-state"
@@ -1123,7 +1123,7 @@ test_ship_teardown_refuses_orca_unresolvable_worktree_id() {
 test_ship_teardown_refuses_orca_id_path_mismatch() {
   local proj wt other_wt data state config id out rc neutral
   id="orcashipmismatchz9"
-  proj="$TMP_ROOT/ship-mismatch-project"
+  proj="$TMP_ROOT/projects/ship-mismatch-project"
   wt="$TMP_ROOT/ship-mismatch-wt"
   other_wt="$TMP_ROOT/ship-mismatch-other-wt"
   data="$TMP_ROOT/ship-mismatch-data"
@@ -1162,7 +1162,7 @@ test_ship_teardown_refuses_orca_id_path_mismatch() {
 test_teardown_refuses_orca_missing_worktree_id() {
   local proj wt data state config id out rc neutral
   id="orcamissingidz5"
-  proj="$TMP_ROOT/missing-id-project"
+  proj="$TMP_ROOT/projects/missing-id-project"
   wt="$TMP_ROOT/missing-id-wt"
   data="$TMP_ROOT/missing-id-data"
   state="$TMP_ROOT/missing-id-state"
@@ -1193,7 +1193,7 @@ test_teardown_refuses_orca_missing_worktree_id() {
 test_teardown_refuses_orca_worktree_without_terminal_handle() {
   local proj wt data state config id out rc neutral
   id="orcanotermz0"
-  proj="$TMP_ROOT/no-terminal-project"
+  proj="$TMP_ROOT/projects/no-terminal-project"
   wt="$TMP_ROOT/no-terminal-wt"
   data="$TMP_ROOT/no-terminal-data"
   state="$TMP_ROOT/no-terminal-state"

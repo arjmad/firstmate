@@ -577,8 +577,8 @@ assert_no_projection_mutation_since() {  # <line-count> <case-name>
 }
 
 HOME_DIR="$TMP_ROOT/home"
-PROJECT_DIR="$TMP_ROOT/project"
-RECOVERY_PROJECT_DIR="$TMP_ROOT/recovery-project"
+PROJECT_DIR="$HOME_DIR/projects/project"
+RECOVERY_PROJECT_DIR="$HOME_DIR/projects/recovery-project"
 mkdir -p "$HOME_DIR/state" "$HOME_DIR/config" \
   "$HOME_DIR/data/anchor" "$HOME_DIR/data/shape" \
   "$HOME_DIR/data/order-a" "$HOME_DIR/data/order-b" \

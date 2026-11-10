@@ -62,7 +62,7 @@ case "$1 $2" in
     done
     wt="$DIR/orca-worktrees/$name"
     mkdir -p "$DIR/orca-worktrees"
-    git -C "$DIR/project" worktree add --quiet -b "orca-$name" "$wt" >&2 || exit 1
+    git -C "$DIR/home/projects/project" worktree add --quiet -b "orca-$name" "$wt" >&2 || exit 1
     printf '{"ok":true,"result":{"worktree":{"id":"wt-%s","path":"%s"}}}\n' "$name" "$wt"
     exit 0
     ;;
@@ -154,7 +154,7 @@ test_orca_fresh_spawn_enters_the_worktree_it_created() {
   touch "$home/state/.last-watcher-beat"
   printf 'codex\n' > "$home/config/crew-harness"
   printf 'manual\n' > "$home/config/backlog-backend"
-  fm_git_init_commit "$case_dir/project"
+  fm_git_init_commit "$case_dir/home/projects/project"
   mkdir -p "$home/data/$id"
   cat > "$home/data/$id/brief.md" <<EOF
 # Task
@@ -170,7 +170,7 @@ EOF
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_TEST_ORCA_DIR="$case_dir" PATH="$fb:$PATH" \
-    "$SPAWN" "$id" "$case_dir/project" --mode no-mistakes --yolo off --backend orca 2>&1)
+    "$SPAWN" "$id" "$case_dir/home/projects/project" --mode no-mistakes --yolo off --backend orca 2>&1)
   status=$?
 
   expect_code 0 "$status" "an Orca-backed spawn should succeed"$'\n'"$out"
@@ -251,7 +251,7 @@ test_orca_launch_uses_controlled_tmux_environment() {
       *) printf 'GH_TOKEN\n' > "$home/config/launch-env-allowlist" ;;
     esac
     [ "$setting" != missing ] || printf 'FM_TEST_ABSENT\n' >> "$home/config/launch-env-allowlist"
-    fm_git_init_commit "$case_dir/project"
+    fm_git_init_commit "$case_dir/home/projects/project"
     cat > "$home/data/$id/brief.md" <<EOF
 # Task
 ## Captain's intent
@@ -294,7 +294,7 @@ EOF
       FM_TEST_SOURCE_UNAVAILABLE="$([ "$setting" = unavailable ] && echo 1 || echo 0)" \
       FM_TEST_ORCA_SEND_FAIL="$([ "$setting" = sendfail ] && echo 1 || echo 0)" \
       FM_TEST_ORCA_CONSUME=1 \
-      PATH="$fb:$PATH" "$SPAWN" "$id" "$case_dir/project" \
+      PATH="$fb:$PATH" "$SPAWN" "$id" "$case_dir/home/projects/project" \
       --mode direct-PR --yolo off --backend orca --harness "/bin/sh '$case_dir/probe.sh' '$case_dir/stage-path'" 2>&1)
     status=$?
     if [ "$setting" = absent ] || [ "$setting" = unavailable ] || [ "$setting" = malformed ] || [ "$setting" = nonregular ] || [ "$setting" = missing ]; then
@@ -397,7 +397,7 @@ test_orca_spawn_waits_for_a_slow_pane_before_a_later_failure() {
   printf '%s\n' '# Backlog' '' '## In flight' '' '## Queued' '' '## Done' > "$home/data/backlog.md"
   printf 'backend = "markdown"\n\n[markdown]\npath = "data/backlog.md"\n' > "$home/.tasks.toml"
   "$real_axi" add "$id" "item for $id" --kind ship --file "$home/data/backlog.md" >/dev/null
-  fm_git_init_commit "$case_dir/project"
+  fm_git_init_commit "$case_dir/home/projects/project"
   cat > "$home/data/$id/brief.md" <<EOF
 # Task
 ## Captain's intent
@@ -422,7 +422,7 @@ SH
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_TEST_ORCA_DIR="$case_dir" \
     FM_TEST_ORCA_LOG="$case_dir/terminal.log" FM_TEST_ORCA_CONSUME=1 FM_TEST_ORCA_CONSUME_DELAY=3 \
-    PATH="$fb:$PATH" "$SPAWN" "$id" "$case_dir/project" --mode no-mistakes --yolo off --backend orca 2>&1)
+    PATH="$fb:$PATH" "$SPAWN" "$id" "$case_dir/home/projects/project" --mode no-mistakes --yolo off --backend orca 2>&1)
   status=$?
   [ "$status" -ne 0 ] || fail "a spawn whose backlog transition failed reported success: $out"
   assert_contains "$out" "could not be moved to In flight" "the spawn did not fail at the backlog transition"
@@ -445,7 +445,7 @@ test_orca_unrun_launch_file_is_reclaimed() {
   printf 'manual\n' > "$home/config/backlog-backend"
   printf 'scoped-source\n' > "$home/config/launch-env-tmux-session"
   printf 'GH_TOKEN\n' > "$home/config/launch-env-allowlist"
-  fm_git_init_commit "$case_dir/project"
+  fm_git_init_commit "$case_dir/home/projects/project"
   cat > "$home/data/$id/brief.md" <<EOF
 # Task
 ## Captain's intent
@@ -462,7 +462,7 @@ EOF
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_TEST_ORCA_DIR="$case_dir" FM_ORCA_LAUNCH_CONSUME_POLLS=2 \
     FM_TEST_ORCA_LOG="$case_dir/terminal.log" PATH="$fb:$PATH" \
-    "$SPAWN" "$id" "$case_dir/project" --mode no-mistakes --yolo off --backend orca 2>&1)
+    "$SPAWN" "$id" "$case_dir/home/projects/project" --mode no-mistakes --yolo off --backend orca 2>&1)
   status=$?
   expect_code 1 "$status" "a spawn whose pane never ran the launch command must fail: $out"
   assert_contains "$out" "did not run the launch command" "the failure must name the unrun launch command"
@@ -487,7 +487,7 @@ test_orca_pane_wins_launch_file_race_at_deadline() {
   printf 'manual\n' > "$home/config/backlog-backend"
   printf 'scoped-source\n' > "$home/config/launch-env-tmux-session"
   printf 'GH_TOKEN\n' > "$home/config/launch-env-allowlist"
-  fm_git_init_commit "$case_dir/project"
+  fm_git_init_commit "$case_dir/home/projects/project"
   cat > "$home/data/$id/brief.md" <<EOF
 # Task
 ## Captain's intent
@@ -514,7 +514,7 @@ SH
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_TEST_ORCA_DIR="$case_dir" FM_ORCA_LAUNCH_CONSUME_POLLS=2 \
     FM_TEST_ORCA_LOG="$case_dir/terminal.log" PATH="$fb:$PATH" \
-    "$SPAWN" "$id" "$case_dir/project" --mode no-mistakes --yolo off --backend orca 2>&1)
+    "$SPAWN" "$id" "$case_dir/home/projects/project" --mode no-mistakes --yolo off --backend orca 2>&1)
   status=$?
   expect_code 0 "$status" "a spawn whose pane won the launch-file race must succeed: $out"
   assert_contains "$out" "spawned $id" "the spawn must report success when the pane consumed the launch file"
@@ -538,7 +538,7 @@ test_orca_launch_file_delete_failure_keeps_terminal() {
   printf 'manual\n' > "$home/config/backlog-backend"
   printf 'scoped-source\n' > "$home/config/launch-env-tmux-session"
   printf 'GH_TOKEN\n' > "$home/config/launch-env-allowlist"
-  fm_git_init_commit "$case_dir/project"
+  fm_git_init_commit "$case_dir/home/projects/project"
   cat > "$home/data/$id/brief.md" <<EOF
 # Task
 ## Captain's intent
@@ -555,7 +555,7 @@ EOF
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_TEST_ORCA_DIR="$case_dir" FM_ORCA_LAUNCH_CONSUME_POLLS=10 \
     FM_TEST_ORCA_LOG="$case_dir/terminal.log" FM_TEST_ORCA_RM_FAIL=1 PATH="$fb:$PATH" \
-    "$SPAWN" "$id" "$case_dir/project" --mode no-mistakes --yolo off --backend orca 2>&1)
+    "$SPAWN" "$id" "$case_dir/home/projects/project" --mode no-mistakes --yolo off --backend orca 2>&1)
   status=$?
   expect_code 1 "$status" "a spawn whose pane could not remove the launch file must fail: $out"
   assert_contains "$(cat "$case_dir/pane.out")" 'cannot remove private launch file' "the pane must refuse the worker launch"
@@ -586,7 +586,7 @@ test_orca_interrupted_spawn_reclaims_launch_file() {
       printf 'manual\n' > "$home/config/backlog-backend"
       printf 'scoped-source\n' > "$home/config/launch-env-tmux-session"
       printf 'GH_TOKEN\n' > "$home/config/launch-env-allowlist"
-      fm_git_init_commit "$case_dir/project"
+      fm_git_init_commit "$case_dir/home/projects/project"
       cat > "$home/data/$id/brief.md" <<EOF
 # Task
 ## Captain's intent
@@ -607,7 +607,7 @@ EOF
         FM_TEST_ORCA_LOG="$case_dir/terminal.log" \
         FM_TEST_ORCA_HOLD_TEXT="$([ "$phase" = enter ] && echo 1 || echo 0)" \
         PATH="$fb:$PATH" python3 -c 'import os,signal,sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1], sys.argv[1:])' \
-        "$SPAWN" "$id" "$case_dir/project" --mode direct-PR --yolo off --backend orca \
+        "$SPAWN" "$id" "$case_dir/home/projects/project" --mode direct-PR --yolo off --backend orca \
         --harness "touch '$case_dir/worker-ran'" > "$case_dir/spawn.log" 2>&1 &
       pid=$!
       for ((i = 0; i < 300; i++)); do
@@ -671,7 +671,7 @@ test_orca_interrupted_spawn_before_send_removes_launch_file() {
     printf 'manual\n' > "$home/config/backlog-backend"
     printf 'scoped-source\n' > "$home/config/launch-env-tmux-session"
     printf 'GH_TOKEN\n' > "$home/config/launch-env-allowlist"
-    fm_git_init_commit "$case_dir/project"
+    fm_git_init_commit "$case_dir/home/projects/project"
     cat > "$home/data/$id/brief.md" <<EOF
 # Task
 ## Captain's intent
@@ -701,7 +701,7 @@ SH
       FM_SPAWN_NO_GUARD=1 FM_TEST_ORCA_DIR="$case_dir" \
       FM_TEST_ORCA_LOG="$case_dir/terminal.log" \
       PATH="$fb:$PATH" python3 -c 'import os,signal,sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1], sys.argv[1:])' \
-      "$SPAWN" "$id" "$case_dir/project" --mode direct-PR --yolo off --backend orca \
+      "$SPAWN" "$id" "$case_dir/home/projects/project" --mode direct-PR --yolo off --backend orca \
       --harness "touch '$case_dir/worker-ran'" > "$case_dir/spawn.log" 2>&1 &
     pid=$!
     for ((i = 0; i < 300; i++)); do
@@ -769,7 +769,7 @@ test_orca_allowlist_without_source_warns() {
     else
       : > "$home/config/launch-env-allowlist"
     fi
-    fm_git_init_commit "$case_dir/project"
+    fm_git_init_commit "$case_dir/home/projects/project"
     cat > "$home/data/$id/brief.md" <<EOF
 # Task
 ## Captain's intent
@@ -783,7 +783,7 @@ EOF
       FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
       FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
       FM_SPAWN_NO_GUARD=1 FM_TEST_ORCA_DIR="$case_dir" PATH="$fb:$PATH" \
-      "$SPAWN" "$id" "$case_dir/project" --mode no-mistakes --yolo off --backend orca 2>&1)
+      "$SPAWN" "$id" "$case_dir/home/projects/project" --mode no-mistakes --yolo off --backend orca 2>&1)
     status=$?
     expect_code 0 "$status" "an Orca allowlist without a source should still spawn"$'\n'"$out"
     if [ "$allowlist" = named ]; then

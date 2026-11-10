@@ -1245,7 +1245,7 @@ test_control_relaunch_refused_before_any_dispatch() {
   fb=$(make_treehouse_fakebin "$CASE_DIR")
   out=$( HOME="$SPAWN_HOME" PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$CTRL_WT" \
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$CTRL_STATE" FM_DATA_OVERRIDE="$CTRL_DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
-    FM_PROJECTS_OVERRIDE="$CASE_DIR/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE="$CASE_DIR/projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" --relaunch 2>&1 ); rc=$?
   expect_code 1 "$rc" "fm-spawn --relaunch on a t3code task must refuse on its own"$'\n'"$out"
   assert_contains "$out" "cannot launch a replacement agent" "the launch owner's refusal must name the missing replacement"
@@ -1257,7 +1257,7 @@ test_spawn_codex_refuses_tracked_codex_config() {
   local proj wt data state id out rc fb
   id=$(t3_uid t3codextrk1)
   t3_case spawn-codex-tracked
-  proj="$CASE_DIR/spawn-project"; wt="$CASE_DIR/spawn-wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
+  proj="$CASE_DIR/projects/spawn-project"; wt="$CASE_DIR/spawn-wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   mkdir -p "$proj/.codex" "$data/$id" "$state" "$CASE_DIR/home/state"
   printf '[shell_environment_policy]\ninherit = "all"\n' > "$proj/.codex/config.toml"
@@ -1269,7 +1269,7 @@ test_spawn_codex_refuses_tracked_codex_config() {
   fb=$(make_treehouse_fakebin "$CASE_DIR")
   out=$( HOME="$SPAWN_HOME" PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$wt" \
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$CONFIG" \
-    FM_PROJECTS_OVERRIDE="$CASE_DIR/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE="$CASE_DIR/projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" codex --scout --model gpt-5.6-sol --backend t3code 2>&1 ); rc=$?
   expect_code 1 "$rc" "a codex t3code spawn must refuse a project that tracks .codex/config.toml"$'\n'"$out"
   assert_contains "$out" ".codex/config.toml" "the refusal must name the tracked file"
@@ -1286,7 +1286,7 @@ test_spawn_codex_preserves_tracked_codex_config() {
   id=$(t3_uid t3codextrk2)
   t3_task_id "$id"
   t3_case spawn-codex-tracked-compatible
-  proj="$CASE_DIR/spawn-project"; wt="$CASE_DIR/spawn-wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
+  proj="$CASE_DIR/projects/spawn-project"; wt="$CASE_DIR/spawn-wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   mkdir -p "$proj/.codex" "$data/$id" "$state" "$CASE_DIR/home/state"
   original="$CASE_DIR/original.toml"
@@ -1302,7 +1302,7 @@ test_spawn_codex_preserves_tracked_codex_config() {
   fb=$(make_treehouse_fakebin "$CASE_DIR")
   out=$( HOME="$SPAWN_HOME" PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$wt" \
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$CONFIG" \
-    FM_PROJECTS_OVERRIDE="$CASE_DIR/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE="$CASE_DIR/projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" codex --scout --model gpt-5.6-sol --backend t3code 2>&1 ); rc=$?
   expect_code 0 "$rc" "a codex t3code spawn must accept compatible tracked configuration"$'\n'"$out"
   [ "$(t3_toml_env "$wt/.codex/config.toml" FM_TASK_ID)" = "$id" ] || fail "tracked config must deliver FM_TASK_ID"
@@ -1378,7 +1378,7 @@ test_spawn_claude_refuses_tracked_claude_local_md() {
   local proj wt data state id out rc fb
   id=$(t3_uid t3claudetrk1)
   t3_case spawn-claude-tracked
-  proj="$CASE_DIR/spawn-project"; wt="$CASE_DIR/spawn-wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
+  proj="$CASE_DIR/projects/spawn-project"; wt="$CASE_DIR/spawn-wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   mkdir -p "$data/$id" "$state" "$CASE_DIR/home/state"
   printf 'project instructions\n' > "$proj/CLAUDE.local.md"
@@ -1390,7 +1390,7 @@ test_spawn_claude_refuses_tracked_claude_local_md() {
   fb=$(make_treehouse_fakebin "$CASE_DIR")
   out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$wt" \
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$CONFIG" \
-    FM_PROJECTS_OVERRIDE="$CASE_DIR/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE="$CASE_DIR/projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --scout --model claude-sonnet-5 --backend t3code 2>&1 ); rc=$?
   expect_code 1 "$rc" "a claude t3code spawn must refuse a project that tracks CLAUDE.local.md"$'\n'"$out"
   assert_contains "$out" "tracks CLAUDE.local.md" "the refusal must name the tracked file"
@@ -1405,7 +1405,7 @@ test_spawn_claude_refuses_worktree_symlink() {
   id=$(t3_uid t3claudelink)
   t3_task_id "$id"
   t3_case spawn-claude-symlink
-  proj="$CASE_DIR/spawn-project"; wt="$CASE_DIR/spawn-wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
+  proj="$CASE_DIR/projects/spawn-project"; wt="$CASE_DIR/spawn-wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   mkdir -p "$data/$id" "$state" "$CASE_DIR/home/state"
   target="$CASE_DIR/project-instructions"
@@ -1419,7 +1419,7 @@ test_spawn_claude_refuses_worktree_symlink() {
   fb=$(make_treehouse_fakebin "$CASE_DIR")
   out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$wt" \
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$CONFIG" \
-    FM_PROJECTS_OVERRIDE="$CASE_DIR/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE="$CASE_DIR/projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --scout --model claude-sonnet-5 --backend t3code 2>&1 ); rc=$?
   expect_code 1 "$rc" "a symlinked worktree channel must refuse"
   assert_contains "$out" "CLAUDE.local.md already exists" "refusal must name the channel"
@@ -1506,7 +1506,7 @@ test_spawn_leases_slot_creates_thread_and_starts_launch_turn() {
   id=$(t3_uid t3spawnz1)
   t3_task_id "$id"
   t3_case spawn
-  proj="$CASE_DIR/spawn-project"
+  proj="$CASE_DIR/projects/spawn-project"
   wt="$CASE_DIR/spawn-wt"
   data="$CASE_DIR/data"
   state="$CASE_DIR/state"
@@ -1518,7 +1518,7 @@ test_spawn_leases_slot_creates_thread_and_starts_launch_turn() {
   fb=$(make_treehouse_fakebin "$CASE_DIR")
   out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$wt" \
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$CONFIG" \
-    FM_PROJECTS_OVERRIDE="$CASE_DIR/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE="$CASE_DIR/projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --model claude-sonnet-5 --effort high --backend t3code 2>&1 )
   expect_code 0 $? "fm-spawn.sh --backend t3code should succeed against the fake T3 server"$'\n'"$out"
   assert_contains "$out" "spawned $id harness=claude kind=ship mode=no-mistakes yolo=off window=fm-$id worktree=$wt" \
@@ -1578,7 +1578,7 @@ test_spawn_codex_scout_writes_toml_env_with_traceparent() {
   id=$(t3_uid t3codexz1)
   t3_task_id "$id"
   t3_case spawn-codex
-  proj="$CASE_DIR/spawn-project"; wt="$CASE_DIR/spawn-wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
+  proj="$CASE_DIR/projects/spawn-project"; wt="$CASE_DIR/spawn-wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   mkdir -p "$data/$id" "$state" "$CASE_DIR/home/state"
   write_spawn_brief "$data" "$id"
@@ -1591,7 +1591,7 @@ test_spawn_codex_scout_writes_toml_env_with_traceparent() {
   fb=$(make_treehouse_fakebin "$CASE_DIR")
   out=$( HOME="$SPAWN_HOME" PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$wt" \
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$CONFIG" \
-    FM_PROJECTS_OVERRIDE="$CASE_DIR/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE="$CASE_DIR/projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" codex --scout --model gpt-5.6-sol --backend t3code 2>&1 )
   expect_code 0 $? "a codex scout on t3code should spawn against the fake T3 server"$'\n'"$out"
   toml="$wt/.codex/config.toml"
@@ -1624,7 +1624,7 @@ test_spawn_codex_warns_unless_codex_trusts_the_project() {
     id=$(t3_uid "t3trust$trust")
     t3_task_id "$id"
     t3_case "spawn-codex-trust-$trust"
-    proj="$CASE_DIR/spawn-project"; wt="$CASE_DIR/spawn-wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
+    proj="$CASE_DIR/projects/spawn-project"; wt="$CASE_DIR/spawn-wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
     codex_home="$CASE_DIR/codex-home"
     fm_git_worktree "$proj" "$wt" "fm/$id"
     mkdir -p "$data/$id" "$state" "$CASE_DIR/home/state" "$codex_home"
@@ -1635,7 +1635,7 @@ test_spawn_codex_warns_unless_codex_trusts_the_project() {
     fb=$(make_treehouse_fakebin "$CASE_DIR")
     out=$( HOME="$SPAWN_HOME" CODEX_HOME="$codex_home" PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$wt" \
       FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$CONFIG" \
-      FM_PROJECTS_OVERRIDE="$CASE_DIR/unused-projects" FM_SPAWN_NO_GUARD=1 \
+      FM_PROJECTS_OVERRIDE="$CASE_DIR/projects" FM_SPAWN_NO_GUARD=1 \
       "$ROOT/bin/fm-spawn.sh" "$id" "$proj" codex --scout --model gpt-5.6-sol --backend t3code 2>&1 ); rc=$?
     expect_code 0 "$rc" "a codex t3code spawn with Codex trust '$trust' must still launch"$'\n'"$out"
     [ "$(t3_dispatch_types)" = "t3_thread_launch t3_thread_send" ] || fail "trust '$trust': spawn must launch then send the brief, got '$(t3_dispatch_types)'"
@@ -1804,7 +1804,7 @@ test_spawn_refuses_t3code_when_token_rejected() {
   fb=$(make_treehouse_fakebin "$CASE_DIR")
   out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$proj" \
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$CONFIG" \
-    FM_PROJECTS_OVERRIDE="$CASE_DIR/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE="$CASE_DIR/projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend t3code 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "fm-spawn.sh --backend t3code should refuse when the T3 server rejects the credential"
@@ -1820,7 +1820,7 @@ test_spawn_refuses_t3code_when_token_rejected() {
 t3_worker_setup() {
   local id=$1
   t3_task_id "$id"
-  WORKER_PROJ="$CASE_DIR/spawn-project"; WORKER_WT="$CASE_DIR/spawn-wt"
+  WORKER_PROJ="$CASE_DIR/projects/spawn-project"; WORKER_WT="$CASE_DIR/spawn-wt"
   fm_git_worktree "$WORKER_PROJ" "$WORKER_WT" "fm/$id"
   mkdir -p "$CASE_DIR/data/$id" "$CASE_DIR/state" "$CASE_DIR/home/state"
   write_spawn_brief "$CASE_DIR/data" "$id"
@@ -1835,7 +1835,7 @@ t3_worker_spawn() {
   fb=$(make_treehouse_fakebin "$CASE_DIR")
   HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$WORKER_WT" \
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$CASE_DIR/state" FM_DATA_OVERRIDE="$CASE_DIR/data" FM_CONFIG_OVERRIDE="$CONFIG" \
-    FM_PROJECTS_OVERRIDE="$CASE_DIR/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE="$CASE_DIR/projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$WORKER_PROJ" "$harness" --scout --backend t3code "$@" 2>&1
 }
 

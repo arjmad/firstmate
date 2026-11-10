@@ -29,7 +29,7 @@ make_lease_case() {
   local name=$1 harness=${2:-codex} dir home proj wt fb d
   dir="$TMP_ROOT/$name"
   home="$dir/home"
-  proj="$dir/project"
+  proj="$home/projects/project"
   wt="$dir/slot"
   d="$dir/fake"
   fb="$dir/fakebin"
@@ -141,7 +141,7 @@ run_lease_spawn() {  # <case-dir> <id> [extra spawn args...]
     PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
     FM_FAKE_SLOT="$dir/slot" HOME="$dir/user-home" CLAUDE_CONFIG_DIR='' \
     FM_SPAWN_NO_GUARD=1 \
-    "$SPAWN" "$id" "$dir/project" --backend herdr --mode no-mistakes --yolo off "$@" 2>&1
+    "$SPAWN" "$id" "$dir/home/projects/project" --backend herdr --mode no-mistakes --yolo off "$@" 2>&1
 }
 
 test_fresh_spawn_leases_and_moves_the_top_level_shell() {
@@ -281,7 +281,7 @@ test_never_moving_worktree_entry() {
   [ "$status" -ne 0 ] || fail "a pane that never moves was accepted"
   assert_contains "$out" "not its recorded worktree" "wrong cwd did not refuse"
   assert_contains "$out" "Herdr pane 'default:%9'" "refusal did not identify the pane"
-  assert_contains "$out" "last foreground_cwd='$dir/project'" "refusal lost the last cwd"
+  assert_contains "$out" "last foreground_cwd='$dir/home/projects/project'" "refusal lost the last cwd"
   assert_contains "$out" "agent_status='shell-starting'" "refusal lost agent status"
   [ "$(cat "$dir/fake/cd-sends")" = 2 ] || fail "a stuck pane received more than one retry"
   [ ! -e "$dir/fake/launched-command" ] || fail "a harness started outside its copy"

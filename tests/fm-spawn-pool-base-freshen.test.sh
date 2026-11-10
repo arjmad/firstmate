@@ -27,7 +27,7 @@ make_case() {
   local name=$1 id=$2 default=${3:-main} case_dir home project origin pool publisher fakebin initial
   case_dir="$TMP_ROOT/$name"
   home="$case_dir/home"
-  project="$case_dir/project"
+  project="$home/projects/project"
   origin="$case_dir/origin.git"
   pool="$case_dir/pool"
   publisher="$case_dir/publisher"
@@ -111,7 +111,9 @@ test_linked_spawning_home_rejects_primary_before_refresh() {
     rec=$(make_case "linked-$returned" "$id")
     read_case_record "$rec"
     primary=$PROJECT_DIR
-    spawning="$CASE_DIR/secondmate"
+    # A linked worktree of the registered clone, placed under projects/ so the
+    # only thing wrong with it is that its git common dir is the primary's.
+    spawning="$HOME_DIR/projects/secondmate"
     git -C "$primary" worktree add --quiet --detach "$spawning" HEAD
     PROJECT_DIR=$spawning
     case "$returned" in
@@ -146,30 +148,19 @@ test_linked_spawning_home_rejects_primary_before_refresh() {
       fi
       printf '# evidence end\n'
     fi
-    if [ "$returned" = scout ]; then
-      expect_code 0 "$status" "a genuine scout copy from a linked home should launch"$'\n'"$out"
-      assert_grep "worktree=$POOL_DIR" "$HOME_DIR/state/$id.meta" \
-        "spawn did not record the genuine scout copy"
-      [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$(git -C "$POOL_DIR" rev-parse origin/main)" ] \
-        || fail "spawn did not refresh the genuine scout copy"
-    else
-      [ "$status" -ne 0 ] || fail "linked spawning home accepted $returned as a disposable copy"
-      # None of these is an isolated copy, so the worktree poll never adopts one
-      # and the wait runs out instead: the spawning directory fails the poll's
-      # own project comparison, and the repository primary (named directly or
-      # through a symlink) fails the isolation screen the poll shares with the
-      # guard. The refusal names the last path the pane reported.
-      assert_contains "$out" "did not enter an isolated worktree" \
-        "spawn did not explain its isolation refusal"
-      assert_contains "$out" "last seen" "refusal did not name the path the pane reported"
-      [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "refused spawn published task metadata"
-      [ ! -e "$primary/.git/FETCH_HEAD" ] || fail "refused spawn fetched before proving isolation"
-    fi
+    # Whatever the pool would hand back, even a genuine scout copy, a project
+    # whose worktrees belong to another checkout is refused before any worktree
+    # is taken or refreshed.
+    [ "$status" -ne 0 ] || fail "linked spawning home launched with $returned as its copy"
+    assert_contains "$out" "is not its own clone" \
+      "spawn did not refuse the linked worktree as a project"
+    [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "refused spawn published task metadata"
+    [ ! -e "$primary/.git/FETCH_HEAD" ] || fail "refused spawn fetched before refusing"
     [ "$(git -C "$primary" rev-parse HEAD)" = "$INITIAL_SHA" ] \
       || fail "spawn reset the repository primary from a linked home"
     [ "$(git -C "$primary" reflog)" = "$before_reflog" ] \
       || fail "spawn touched the primary reflog from a linked home"
-    pass "linked spawning home: $returned preserves the primary before any refresh"
+    pass "linked spawning home: $returned is refused before the primary is touched"
   done
 }
 
@@ -229,7 +220,7 @@ make_originless_case() {  # <name> <id>
   local name=$1 id=$2 case_dir home project pool fakebin initial
   case_dir="$TMP_ROOT/$name"
   home="$case_dir/home"
-  project="$case_dir/project"
+  project="$home/projects/project"
   pool="$case_dir/pool"
   fakebin=$(make_spawn_fakebin "$case_dir/fake")
 
@@ -574,7 +565,7 @@ make_submodule_case() {  # <name> <id>
   local name=$1 id=$2 case_dir home project origin pool publisher fakebin sub subpin1 subpin2 advanced
   case_dir="$TMP_ROOT/$name"
   home="$case_dir/home"
-  project="$case_dir/project"
+  project="$home/projects/project"
   origin="$case_dir/origin.git"
   pool="$case_dir/pool"
   publisher="$case_dir/publisher"
@@ -1369,7 +1360,7 @@ make_local_landing_case() { # <name> <id> <landings>
   local name=$1 id=$2 landings=$3 case_dir home project origin pool fakebin frozen n
   case_dir="$TMP_ROOT/$name"
   home="$case_dir/home"
-  project="$case_dir/project"
+  project="$home/projects/project"
   origin="$case_dir/origin.git"
   pool="$case_dir/pool"
   fakebin=$(make_spawn_fakebin "$case_dir/fake")

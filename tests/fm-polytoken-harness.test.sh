@@ -783,7 +783,7 @@ make_polytoken_spawn_case() {
   local name=$1 id=$2 case_dir home proj wt fakebin
   case_dir="$TMP_ROOT/$name"
   home="$case_dir/home"
-  proj="$case_dir/project"
+  proj="$home/projects/project"
   wt="$case_dir/wt"
   mkdir -p "$home/data/$id" "$home/projects" "$home/state" "$home/config" \
     "$home/.config/polytoken"

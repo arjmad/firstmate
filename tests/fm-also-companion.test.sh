@@ -50,7 +50,7 @@ make_case() {  # <name> <task-id> [brief-args...]
   mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config"
   printf 'codex\n' > "$home/config/crew-harness"
   touch "$home/state/.last-watcher-beat"
-  rec=$(make_repo_with_slot "$case_dir" sample "$case_dir/sample")
+  rec=$(make_repo_with_slot "$case_dir" sample "$home/projects/sample")
   IFS='|' read -r PROJECT_DIR POOL_DIR _ <<EOF
 $rec
 EOF
