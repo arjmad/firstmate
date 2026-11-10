@@ -100,7 +100,8 @@ CONFIG_FORMAT="accepted format, one setting per line: 'account <slug> <email>', 
 
 config_die() { die "$CONFIG_FILE: $*; $CONFIG_FORMAT"; }
 
-# load_config fills ACCOUNTS, BWS_PROJECT_ID, and BWS_SECRET_KEY from CONFIG_FILE and
+# load_config fills ACCOUNTS, BWS_PROJECT_ID, BWS_SECRET_KEY, and ALLOWED_FILE_DIRS
+# (default FM_HOME/data) from CONFIG_FILE and
 # refuses anything it cannot fully accept. There is deliberately no fallback table:
 # an account that is not in the file does not exist as far as this script is concerned.
 load_config() {

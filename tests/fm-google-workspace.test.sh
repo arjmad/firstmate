@@ -311,7 +311,7 @@ test_attachment_directory_survives_a_reinstall() {
   : > "$log"
   CLAUDE_STUB_LOG="$log" gws "$root" claude-install >/dev/null || fail "claude-install failed"
   CLAUDE_STUB_LOG="$log" gws "$root" claude-install >/dev/null || fail "claude-install is not repeatable"
-  expect_code 6 "$(grep -c "ALLOWED_FILE_DIRS=$FM_TEST_HOME/data " "$log")" "every server on every run gets the home's data directory by default"
+  expect_code 6 "$(grep -cF "ALLOWED_FILE_DIRS=$FM_TEST_HOME/data " "$log")" "every server on every run gets the home's data directory by default"
   assert_contains "$(gws "$root" claude-config)" "\"ALLOWED_FILE_DIRS\": \"$FM_TEST_HOME/data\"" "claude-config matches what claude-install registers"
   write_config "account alpha $PERSONAL_ACCOUNT
 allowed_file_dirs $TMP_ROOT/attachments"
