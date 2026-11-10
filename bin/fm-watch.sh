@@ -3986,31 +3986,6 @@ $out
 EOF
 }
 
-# Retired captain-hold default release
-# (docs/fork-decisions/2026-11-01-drop-default-release.md). While any state the
-# removed release left is still in state/, the watcher runs
-# `fm-captain-hold.sh retire-release` (its header owns what that retires) and
-# wakes with the reason it prints. The path list below mirrors that header's,
-# so an ordinary cycle spawns nothing. A failed run leaves
-# state/.hold-release-retire-failed, and the next run waits an hour after it.
-hold_release_retire_tick() {
-  local f found=false out failed="$STATE/.hold-release-retire-failed" reason
-  for f in "$STATE"/hold-release-woke "$STATE"/.hold-release-woke.claimed "$STATE"/.last-hold-release \
-    "$STATE"/.hold-release-pending*; do
-    [ -e "$f" ] || [ -L "$f" ] || continue
-    found=true
-  done
-  [ "$found" = true ] || return 0
-  [ ! -e "$failed" ] || [ "$(age_of "$failed")" -ge 3600 ] || return 0
-  if ! out=$(fm_run_timed 60 env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
-    "$SCRIPT_DIR/fm-captain-hold.sh" retire-release 2>/dev/null </dev/null); then
-    triage_log "could not retire every leftover of the captain-hold default release; retrying in an hour"
-    touch "$failed"
-  fi
-  reason=$(printf '%s\n' "$out" | sed -n 's/^wake: //p' | tail -1)
-  [ -z "$reason" ] || wake "$reason"
-}
-
 RECONCILE_REQUEST_PID=
 reconcile_requests_pending() {
   local request
@@ -4430,7 +4405,6 @@ while :; do
   backlog_overdue_tick
   inbox_rewake_tick
   decision_sittings_retire_tick
-  hold_release_retire_tick
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
   # Time-based via .last-check mtime so the cadence survives watcher restarts.
