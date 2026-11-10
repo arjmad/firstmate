@@ -77,7 +77,7 @@ SH
 new_case() {
   CASE="$TMP_ROOT/$1"
   HOME_DIR="$CASE/home"
-  PROJ="$CASE/project"
+  PROJ="$HOME_DIR/projects/project"
   WT="$CASE/wt"
   FAKEBIN=$(fm_test_make_spawn_fakebin "$CASE/fake")
   make_account_fakes "$FAKEBIN" "$CASE"
