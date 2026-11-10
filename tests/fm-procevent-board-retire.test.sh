@@ -79,8 +79,8 @@ round() {  # <home> <source-id> <sequence> <epoch> <silent|said> [unread]
 registered() { [ -f "$1/state/procevent/$2.source" ]; }
 
 archive_at() {  # <home> <archive path relative to the home>
-  sed "s#^archive = .*#archive = \"$2\"#" "$1/.tasks.toml" > "$1/tasks.toml.new" \
-    && mv "$1/tasks.toml.new" "$1/.tasks.toml" || fail "cannot point the archive at $2"
+  sed "s#^archive = .*#archive = \"$2\"#" "$1/.tasks.toml" > "$1/tasks.toml.new" || fail "cannot point the archive at $2"
+  mv "$1/tasks.toml.new" "$1/.tasks.toml" || fail "cannot point the archive at $2"
 }
 
 test_quiet_rule_and_kept_boards() {
