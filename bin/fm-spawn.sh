@@ -4850,6 +4850,7 @@ if [ "$KIND" = ship ] && [ "$RELAUNCH" -eq 0 ]; then
         echo "error: --also $also_repo names no project clone at $also_dir" >&2
         exit 1
       }
+      require_registered_clone "$also_dir" || exit 1
       also_abs=$(cd "$also_dir" && pwd -P)
       [ "$(cd "$also_top" && pwd -P)" = "$also_abs" ] || {
         echo "error: --also $also_repo resolves to $also_top, not the clone root $also_abs" >&2
