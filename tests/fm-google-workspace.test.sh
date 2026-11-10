@@ -325,6 +325,81 @@ allowed_file_dirs /b"
   pass "the attachment directory survives a reinstall"
 }
 
+# write_tool_list <path> writes a tool list in the shared shape: comments, a header that
+# names more columns than the reader needs, and rows whose claude column decides.
+write_tool_list() {
+  printf '%s\n' '# fixture tool list' '' \
+    "$(printf 'tool\tservice\tclaude\tcade')" \
+    "$(printf 'search_gmail_messages\tgmail\ton\ton')" \
+    "$(printf 'manage_out_of_office\tcalendar\toff\tsend')" \
+    "$(printf 'get_events\tcalendar\ton\ton')" \
+    "$(printf 'manage_focus_time\tcalendar\toff\toff')" > "$1"
+}
+
+test_the_claude_tool_list_disables_its_off_tools_on_claude_code_only() {
+  local root log list argv claude hermes out code
+  root=$(new_root toollist)
+  log="$TMP_ROOT/toollist.log"
+  list="$TMP_ROOT/tools.tsv"
+  write_tool_list "$list"
+  write_config "account alpha $PERSONAL_ACCOUNT
+account ops   $WORKSPACE_ACCOUNT
+claude_tool_list $list"
+  argv=$(gws "$root" argv | tail -n +2 | tr '\n' ' ')
+  claude=$(gws "$root" claude-config | python3 -c 'import json, sys; print(" ".join(json.load(sys.stdin)["mcpServers"]["gws-ops"]["args"]) + " ")')
+  assert_equals "${argv}--disabled-tools manage_out_of_office manage_focus_time " "$claude" "Claude Code args are the invocation plus the off tools, in file order"
+  : > "$log"
+  CLAUDE_STUB_LOG="$log" gws "$root" claude-install >/dev/null || fail "claude-install failed with a tool list"
+  expect_code 2 "$(grep -cF -- "contacts:full --disabled-tools manage_out_of_office manage_focus_time" "$log")" "claude-install registers every server with the off tools"
+  assert_no_grep "search_gmail_messages" "$log" "an on tool is never disabled"
+  assert_not_contains "$(gws "$root" argv)" "--disabled-tools" "the shared invocation carries no Claude Code subtraction"
+  hermes=$(gws "$root" hermes-config)
+  assert_not_contains "$hermes" "--disabled-tools" "the Hermes block carries no Claude Code subtraction"
+
+  printf 'tool\tclaude\nget_events\ton\n' > "$list"
+  assert_not_contains "$(gws "$root" claude-config)" "--disabled-tools" "a list with nothing off adds no flag"
+
+  printf 'tool\tclaude\nget_events\tmaybe\n' > "$list"
+  out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a claude value other than on or off refuses claude-config"
+  assert_contains "$out" "claude value must be on or off" "the refusal names the bad value"
+  printf 'tool\tclaude\nget_events\toff\nget_events\ton\n' > "$list"
+  out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a duplicate tool refuses claude-config"
+  assert_contains "$out" "duplicate tool get_events" "the refusal names the duplicate tool"
+  printf 'tool\tclaude\r\nget_events\toff\r\n' > "$list"
+  assert_contains "$(gws "$root" claude-config | tr -d '\n ')" '"--disabled-tools","get_events"' "a CRLF list reads like an LF one"
+  printf 'tool\tclaude\n' > "$list"
+  out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a list with no tool rows refuses claude-config"
+  assert_contains "$out" "no tool rows" "the refusal names the empty list"
+  printf 'tool\tclaude\tclaude\nget_events\toff\ton\n' > "$list"
+  out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a header naming claude twice refuses claude-config"
+  printf 'name\tclaude\nget_events\toff\n' > "$list"
+  : > "$log"
+  out=$(CLAUDE_STUB_LOG="$log" gws "$root" claude-install 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a list without a tool column refuses claude-install"
+  assert_contains "$out" "one tool and one claude column" "the refusal names the missing columns"
+  assert_no_grep "mcp add" "$log" "a refused list registers no server"
+  rm -f "$list"
+  out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a missing list refuses claude-config"
+  assert_contains "$out" "not a readable file" "the refusal names the missing list"
+  write_tool_list "$list"
+  write_config "claude_tool_list $list
+claude_tool_list $list"
+  out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a duplicate claude_tool_list refuses claude-config"
+  assert_contains "$out" "duplicate claude_tool_list" "the refusal names the duplicate setting"
+  write_config "claude_tool_list tools.tsv"
+  out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a relative claude_tool_list refuses claude-config"
+  assert_contains "$out" "absolute path" "the refusal asks for an absolute path"
+  write_config
+  pass "the claude tool list disables its off tools on Claude Code only"
+}
+
 test_only_a_desktop_oauth_client_is_installed_and_kept_private() {
   local root out code mode
   root=$(new_root clientsecret)
@@ -444,6 +519,7 @@ test_revoke_without_confirmation_deletes_nothing
 test_revoke_deletes_only_that_accounts_own_credentials
 test_registering_with_claude_code_keeps_the_accounts_apart
 test_attachment_directory_survives_a_reinstall
+test_the_claude_tool_list_disables_its_off_tools_on_claude_code_only
 test_only_a_desktop_oauth_client_is_installed_and_kept_private
 test_auth_refuses_before_an_oauth_client_exists
 test_the_consent_driver_refuses_without_a_server_invocation
