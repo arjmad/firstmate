@@ -15,6 +15,11 @@ set -u
 SPAWN="$ROOT/bin/fm-spawn.sh"
 TMP_ROOT=$(fm_test_tmproot fm-spawn-batch)
 export FM_BACKEND=tmux
+# The pool-capacity check runs the real `treehouse status`, which creates an
+# empty pool for the fixture repository; keep it out of the fleet's storage.
+# shellcheck source=tests/treehouse-helpers.sh
+. "$ROOT/tests/treehouse-helpers.sh"
+treehouse_test_isolate "$TMP_ROOT" || fail "could not isolate the Treehouse pool root"
 
 # Clear ambient firstmate overrides so the behavior test owns its environment.
 run_spawn() {

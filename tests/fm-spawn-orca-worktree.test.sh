@@ -28,6 +28,11 @@ set -u
 
 SPAWN="$ROOT/bin/fm-spawn.sh"
 TMP_ROOT=$(fm_test_tmproot fm-spawn-orca-worktree)
+# The pool-capacity check runs the real `treehouse status`, which creates an
+# empty pool for the fixture repository; keep it out of the fleet's storage.
+# shellcheck source=tests/treehouse-helpers.sh
+. "$ROOT/tests/treehouse-helpers.sh"
+treehouse_test_isolate "$TMP_ROOT" || fail "could not isolate the Treehouse pool root"
 
 # make_orca_fakebin <dir>: a fake `orca` CLI that performs a REAL `git
 # worktree add` for `worktree create` (so spawn_worktree_isolated's checks are
