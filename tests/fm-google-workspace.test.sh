@@ -304,6 +304,27 @@ test_registering_with_claude_code_keeps_the_accounts_apart() {
   pass "registering with Claude Code keeps the accounts apart"
 }
 
+test_attachment_directory_survives_a_reinstall() {
+  local root log
+  root=$(new_root allowed)
+  log="$TMP_ROOT/allowed.log"
+  : > "$log"
+  CLAUDE_STUB_LOG="$log" gws "$root" claude-install >/dev/null || fail "claude-install failed"
+  CLAUDE_STUB_LOG="$log" gws "$root" claude-install >/dev/null || fail "claude-install is not repeatable"
+  expect_code 6 "$(grep -c "ALLOWED_FILE_DIRS=$FM_TEST_HOME/data " "$log")" "every server on every run gets the home's data directory by default"
+  assert_contains "$(gws "$root" claude-config)" "\"ALLOWED_FILE_DIRS\": \"$FM_TEST_HOME/data\"" "claude-config matches what claude-install registers"
+  write_config "account alpha $PERSONAL_ACCOUNT
+allowed_file_dirs $TMP_ROOT/attachments"
+  : > "$log"
+  CLAUDE_STUB_LOG="$log" gws "$root" claude-install >/dev/null || fail "claude-install failed with a configured directory"
+  assert_grep "ALLOWED_FILE_DIRS=$TMP_ROOT/attachments " "$log" "a configured directory replaces the default"
+  write_config "allowed_file_dirs /a
+allowed_file_dirs /b"
+  gws "$root" claude-install >/dev/null 2>&1 && fail "a duplicate allowed_file_dirs was accepted"
+  write_config
+  pass "the attachment directory survives a reinstall"
+}
+
 test_only_a_desktop_oauth_client_is_installed_and_kept_private() {
   local root out code mode
   root=$(new_root clientsecret)
@@ -422,6 +443,7 @@ test_reauthorizing_never_clears_another_accounts_credential
 test_revoke_without_confirmation_deletes_nothing
 test_revoke_deletes_only_that_accounts_own_credentials
 test_registering_with_claude_code_keeps_the_accounts_apart
+test_attachment_directory_survives_a_reinstall
 test_only_a_desktop_oauth_client_is_installed_and_kept_private
 test_auth_refuses_before_an_oauth_client_exists
 test_the_consent_driver_refuses_without_a_server_invocation
