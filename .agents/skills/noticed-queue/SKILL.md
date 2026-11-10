@@ -91,15 +91,18 @@ An idea that fails a test stays filed and unranked; its next sighting may bring 
 ## Weekly exploration scout
 
 The same Monday note dispatches one read-only exploration scout.
-Its area rotates by ISO week number (`date -u +%V`) modulo 3:
+Its area rotates by ISO week number (`date -u +%V`) modulo 4:
 
-| Week mod 3 | Area |
+| Week mod 4 | Area |
 | --- | --- |
 | 0 | Amazon and Walmart program, fee, policy and seller-API changes |
 | 1 | Upstream features of tools the fleet uses (Claude Code, Codex, Hermes, GBrain, Shopify, Nix tools), favouring what replaces custom code |
 | 2 | Business-data blind spots: slow movers, margin leaks, returns, ad spend not paying back |
+| 3 | Code audit, one repository per turn |
 
 Competitors are not on the rotation.
+The code audit loads the `improve` skill from the skills store (`skills/improve`) and runs it at the `quick` level on one repository; its report carries the findings table and the rejected claims, it sends no notice, and firstmate files the findings as one batch.
+Its repository is the first registered project in `data/projects.md` order with no earlier audit, else the one audited longest ago; an audit is a `data/explore-audit-*/report.md`, which names its repository and commit, plus `business` at `05a4200` on 2026-11-09, audited before the rotation.
 Scaffold it with `bin/fm-brief.sh explore-<area>-<mmdd> <repo> --scout` and dispatch it like any scout on the worker account, which is the Ecomills Claude account; its budget is that one scout's share of the account's week.
 Skip the week rather than add a second scout or a paid tier, and say so once.
 The brief is read-only everywhere: no spend, no store or listing change, nothing customer-visible.
