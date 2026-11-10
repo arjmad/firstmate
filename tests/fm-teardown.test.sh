@@ -2666,6 +2666,31 @@ SH
     fi
     assert_absent "$case_dir/session-claude/.claude.json" "claude-trust-$retire: the session's own store must stay untouched"
   done
+  # A worktree recorded through a symlinked parent is registered by its
+  # resolved path, and teardown still finds that entry.
+  case_dir=$(make_case claude-trust-symlink)
+  write_meta "$case_dir" no-mistakes scout "$case_dir/link/wt"
+  ln -s "$case_dir" "$case_dir/link"
+  prepare_scout_teardown "$case_dir"
+  mkdir -p "$case_dir/claude-account"
+  printf '%s\n' 'harness=claude' "account=$case_dir/claude-account" >> "$case_dir/state/task-x1.meta"
+  store="$case_dir/claude-account/.claude.json"
+  printf '{"projects": {"%s": {"hasTrustDialogAccepted": true}}}\n' "$case_dir/wt" > "$store"
+  cat > "$case_dir/fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = return ]; then
+  for last in "$@"; do :; done
+  case "$last" in /*) rm -rf -- "$last" ;; esac
+fi
+exit 0
+SH
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "claude-trust-symlink: teardown failed: $(cat "$case_dir/stderr")"
+  assert_absent "$case_dir/wt" "claude-trust-symlink: the fake pool did not retire the slot"
+  node -e 'const j = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+    process.exit(Object.keys(j.projects).length === 0 ? 0 : 1)' "$store" \
+    || fail "claude-trust-symlink: the resolved-path entry must go: $(cat "$store")"
   pass "teardown removes a Claude trust entry only for a launch directory it retired, from the launch's own store"
 }
 

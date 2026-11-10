@@ -65,15 +65,17 @@
 #         setup.py, or setup.cfg file, so its source is there to rebuild it
 #         (dist); one holding any image or PDF stays and is named, so a built
 #         deliverable is never lost;
-#     the walk does not look inside one, so a folder nested in another is
-#     decided with its holder, and a like-named directory that is none of
-#     these is left alone;
+#     a folder nested in one is decided with its holder, and a like-named
+#     directory that is none of these is left alone, though a dependency
+#     folder inside it is still found;
 #   - unless --keep-binaries, every regular file (not a symlink) whose header
 #     marks an ELF or Mach-O executable or shared library: the downloaded tool
 #     binaries. Core dumps, object files, and Java classes stay, and so does
 #     a binary inside a dependency folder this run decided.
-# Text, images, PDFs, archives, and exports are never removed here; the
-# 60-day retention rule in docs/configuration.md owns those.
+# Outside a removed checkout or dependency folder, text, images, PDFs,
+# archives, and exports are never removed here; the 60-day retention rule in
+# docs/configuration.md owns those. A dist folder is build output its manifest
+# rebuilds, so what it holds goes with it unless it holds an image or PDF.
 set -u
 
 usage() {
@@ -294,10 +296,15 @@ holds_image_or_pdf() {
 # Every dependency folder this run decides, kept or removed, so the binary
 # walk below leaves what is inside it alone.
 : > "$WORK/deps"
-find "$DIR" -name .git -prune -o -type d \( -name node_modules -o -name .venv -o -name dist \) -print -prune 2>/dev/null \
+# find lists a directory before anything inside it, so a folder nested in one
+# already decided is skipped, while one inside a like-named directory that is
+# no dependency folder is still found.
+find "$DIR" -name .git -prune -o -type d -name node_modules -print -prune \
+  -o -type d \( -name .venv -o -name dist \) -print 2>/dev/null \
   | under_dir | inside_checkout > "$WORK/dep-candidates"
 while IFS= read -r dep; do
   [ -d "$dep" ] && [ ! -L "$dep" ] || continue
+  ! has_ancestor "$dep" "$WORK/deps" || continue
   kind=$(dep_kind "$dep")
   [ -n "$kind" ] || continue
   printf '%s\n' "$dep" >> "$WORK/deps"

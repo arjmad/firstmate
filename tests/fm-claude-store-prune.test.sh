@@ -158,6 +158,7 @@ test_refusals() {
   run_prune "$c/config" --missing >/dev/null || code=$?
   expect_code 1 "$code" "a non-object projects value"
   assert_equals "$before" "$(cat "$c/config/.claude.json")" "a refused store is unchanged"
+  assert_absent "$c/config/.claude.json.lock" "a refusal inside the store lock must release it"
   assert_equals 0 "$(backups "$c/config")" "a refused run writes no backup"
   pass "refusals: bad arguments exit 2; a relative CLAUDE_CONFIG_DIR or a malformed store exits 1 unchanged"
 }

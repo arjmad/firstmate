@@ -52,8 +52,9 @@
 # remove from it today, images and PDFs are what only a captain-approved Drive
 # batch moves (docs/configuration.md), and other is the rest, kept checkouts
 # included. A problem is a `warning:` on stderr. An unusable option or config
-# value exits 2; every other outcome exits 0 so a session start continues, and
-# a backlog that cannot be read removes nothing.
+# value exits 2, except the size trigger's, which warns and uses the default;
+# every other outcome exits 0 so a session start continues, and a backlog that
+# cannot be read removes nothing.
 #
 # What counts as a task. Every directory directly under data/ that holds a
 # brief.md (bin/fm-brief.sh writes it at dispatch) and is not a symlink. Other
@@ -113,7 +114,11 @@
 # quiet task, whose header owns that rule: a nested checkout only when it is
 # clean, holds no stash, and every commit it has is on a remote-tracking
 # branch, and node_modules, .venv, and dist folders. Images, PDFs, reports,
-# binaries, and every other file stay.
+# binaries, and every other file stay. A real run reports only what it
+# removed; teardown and --dry-run name each kept checkout and why. As at
+# teardown, a secondmate's data/<id>/ is never touched: an id
+# data/secondmates.md names, or a folder holding a children/ directory of
+# retired children's records, is skipped.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -196,20 +201,29 @@ retention_days() {
 
 DAYS=$(retention_days "$DAYS" "$CONFIG/data-media-retention-days") || exit 2
 SCRATCH_DAYS=$(retention_days "$SCRATCH_DAYS" "$CONFIG/data-scratch-retention-days") || exit 2
-SIZE_MIB=$(config_value "$CONFIG/data-size-trigger-mib") || exit 2
-SIZE_MIB=$(whole_number "${SIZE_MIB:-$DEFAULT_SIZE_MIB}" "$MAX_SIZE_MIB" "the data size trigger in MiB") || exit 2
+# The size trigger only reports, so an unusable value falls back to the
+# default with a warning rather than stopping the retention a home opted in to.
+SIZE_MIB=$(config_value "$CONFIG/data-size-trigger-mib" 2>/dev/null) || SIZE_MIB=bad
+SIZE_MIB=$(whole_number "${SIZE_MIB:-$DEFAULT_SIZE_MIB}" "$MAX_SIZE_MIB" "the data size trigger in MiB" 2>/dev/null) || {
+  echo "warning: $CONFIG/data-size-trigger-mib is not a whole number of MiB from 1 to $MAX_SIZE_MIB; using $DEFAULT_SIZE_MIB" >&2
+  SIZE_MIB=$DEFAULT_SIZE_MIB
+}
 QUIET_MINUTES=$((${DAYS:-0} * 1440))
 SCRATCH_QUIET_MINUTES=$((${SCRATCH_DAYS:-0} * 1440))
 
 [ -d "$DATA" ] || exit 0
 
-# data/'s size and each top-level entry's, in KiB, from one du.
+# measure_data: data/'s size and each top-level entry's, in KiB, from one du,
+# and whether data/ is over the size trigger.
 DATA_REAL=$(cd "$DATA" && pwd -P) || exit 0
-DU_OUT=$(du -k -d 1 "$DATA_REAL" 2>/dev/null)
-DATA_KIB=$(printf '%s\n' "$DU_OUT" | awk -F '\t' -v d="$DATA_REAL" '$2 == d { print $1 }')
-case "$DATA_KIB" in ''|*[!0-9]*) DATA_KIB=0 ;; esac
-OVER_SIZE=0
-[ "$DATA_KIB" -le $((SIZE_MIB * 1024)) ] || OVER_SIZE=1
+measure_data() {
+  DU_OUT=$(du -k -d 1 "$DATA_REAL" 2>/dev/null)
+  DATA_KIB=$(printf '%s\n' "$DU_OUT" | awk -F '\t' -v d="$DATA_REAL" '$2 == d { print $1 }')
+  case "$DATA_KIB" in ''|*[!0-9]*) DATA_KIB=0 ;; esac
+  OVER_SIZE=0
+  [ "$DATA_KIB" -le $((SIZE_MIB * 1024)) ] || OVER_SIZE=1
+}
+measure_data
 [ -n "$DAYS" ] || [ -n "$SCRATCH_DAYS" ] || [ "$OVER_SIZE" -eq 1 ] || exit 0
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fm-data-media-prune.XXXXXX") || { echo "warning: data media retention skipped: cannot create a scratch directory" >&2; exit 0; }
@@ -391,11 +405,13 @@ size_task() {
     k += substr($0, RSTART + 1, RLENGTH - 6) } END { printf "%d\n", k }')
   dep=$(printf '%s\n' "$out" | awk '/^data-scratch: would remove (node_modules|venv|dist) / && match($0, /\([0-9]+ KiB\)$/) {
     k += substr($0, RSTART + 1, RLENGTH - 6) } END { printf "%d\n", k }')
-  # Images and PDFs outside every checkout and dependency folder: the files
-  # only a captain-approved Drive batch moves.
+  # Images and PDFs outside every checkout and every dependency folder scratch
+  # retention would remove: the files only a captain-approved Drive batch moves.
   find "$dir" -name .git -prune -print 2>/dev/null | sed 's|/\.git$||' > "$WORK/git-roots"
+  printf '%s\n' "$out" | sed -n 's|^data-scratch: would remove [a-z_]* \(.*\) ([0-9]* KiB)$|\1|p' \
+    | while IFS= read -r rel; do printf '%s\n' "$DATA/$rel"; done >> "$WORK/git-roots"
   prune_args
-  find "$dir" "${PRUNE_ARGS[@]+"${PRUNE_ARGS[@]}"}" -type d \( -name node_modules -o -name .venv -o -name dist \) -prune \
+  find "$dir" "${PRUNE_ARGS[@]+"${PRUNE_ARGS[@]}"}" -type d -name node_modules -prune \
     -o -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.gif' -o -iname '*.webp' \
     -o -iname '*.svg' -o -iname '*.heic' -o -iname '*.heif' -o -iname '*.tif' -o -iname '*.tiff' -o -iname '*.bmp' \
     -o -iname '*.avif' -o -iname '*.ico' -o -iname '*.pdf' \) -print 2>/dev/null \
@@ -431,6 +447,8 @@ task_names() {  # stdin paths under data/ -> the task directory names, once each
 PRUNE_ARGS=()
 MEDIA_TASKS=$NL
 [ -z "$DAYS" ] || MEDIA_TASKS="$NL$(media_candidates "$DATA" | task_names)$NL"
+# Every id data/secondmates.md names, as whole words.
+SECONDMATE_IDS="$NL$( [ ! -f "$DATA/secondmates.md" ] || grep -o '[A-Za-z0-9._-][A-Za-z0-9._-]*' "$DATA/secondmates.md" | sort -u)$NL"
 SCRATCH_TASKS=$NL
 [ -z "$SCRATCH_DAYS" ] || SCRATCH_TASKS="$NL$(find "$DATA" -mindepth 2 \( -name .git -o -type d \( -name node_modules -o -name .venv -o -name dist \) \) \
   -prune -print 2>/dev/null | task_names)$NL"
@@ -445,8 +463,16 @@ for dir in "$DATA"/*/; do
     continue
   fi
   printf '%s\n' "$task" >> "$WORK/retired"
+  # Teardown never applies the scratch rule to a secondmate's data/<id>/, so
+  # neither does retention: a registered secondmate, or a folder holding
+  # retired children's records, is skipped.
   case "$SCRATCH_TASKS" in
-    *"$NL$task$NL"*) ! files_quiet "$dir" "$SCRATCH_QUIET_MINUTES" || scratch_task "$dir" ;;
+    *"$NL$task$NL"*)
+      if [ ! -e "$dir/children" ] && ! case "$SECONDMATE_IDS" in *"$NL$task$NL"*) true ;; *) false ;; esac \
+        && files_quiet "$dir" "$SCRATCH_QUIET_MINUTES"; then
+        scratch_task "$dir"
+      fi
+      ;;
   esac
   [ -n "$DAYS" ] || continue
   if [ ! -f "$clock" ]; then
@@ -485,11 +511,7 @@ fi
 
 # The size trigger, measured again when this run removed anything.
 if [ "$DRY_RUN" -eq 0 ] && [ $((TOTAL_FILES + SCRATCH_ITEMS)) -gt 0 ]; then
-  DU_OUT=$(du -k -d 1 "$DATA_REAL" 2>/dev/null)
-  DATA_KIB=$(printf '%s\n' "$DU_OUT" | awk -F '\t' -v d="$DATA_REAL" '$2 == d { print $1 }')
-  case "$DATA_KIB" in ''|*[!0-9]*) DATA_KIB=0 ;; esac
-  OVER_SIZE=0
-  [ "$DATA_KIB" -le $((SIZE_MIB * 1024)) ] || OVER_SIZE=1
+  measure_data
 fi
 if [ "$OVER_SIZE" -eq 1 ]; then
   # Each torn-down task's KiB from the du above, largest first.

@@ -345,11 +345,13 @@ test_scratch_real_run_removes_only_clean_checkouts_and_dependency_folders() {
   home=$(new_home scratch-real \
     "- [ ] queued-task - Briefed, not spawned (repo: x) (kind: ship) (since 2026-10-01)")
   printf '7\n' > "$home/config/data-scratch-retention-days"
-  for task in done-task live-task queued-task recent-task; do
+  for task in done-task live-task queued-task recent-task sm-reg sm-retired; do
     make_scratch_task "$home" "$task"
   done
   put "$home/state/live-task.meta" "window=x"
   put "$home/data/recent-task/new-note.md"
+  printf '%s\n' '# Secondmates' '- sm-reg - scope: business (home: /elsewhere)' > "$home/data/secondmates.md"
+  mkdir -p "$home/data/sm-retired/children/old-child"
   out=$(run_prune "$home")
   assert_equals "BOOTSTRAP_INFO: data scratch retention: removed 2 items (0 MiB) from 1 torn-down tasks quiet over 7 days" \
     "$out" "a configured run reports one summary line"
@@ -364,6 +366,8 @@ test_scratch_real_run_removes_only_clean_checkouts_and_dependency_folders() {
   assert_scratch_untouched "$home" live-task "a task with a meta"
   assert_scratch_untouched "$home" queued-task "a task whose backlog row is open"
   assert_scratch_untouched "$home" recent-task "a task with a file newer than the retention"
+  assert_scratch_untouched "$home" sm-reg "a registered secondmate's data folder"
+  assert_scratch_untouched "$home" sm-retired "a folder holding retired children's records"
   assert_absent "$home/state/data-media-retention" "scratch retention starts no media clock"
   out=$(run_prune "$home")
   [ -z "$out" ] || fail "a converged home must stay silent: $out"
@@ -392,6 +396,8 @@ test_size_trigger_names_the_largest_torn_down_tasks() {
   put "$home/data/big-task/brief.md" "# Task"
   mib "$home/data/big-task/web/node_modules/dep/blob" 2
   put "$home/data/big-task/web/package.json" '{}'
+  put "$home/data/big-task/kit/package.json" '{}'
+  mib "$home/data/big-task/kit/dist/manual.pdf" 1
   mib "$home/data/big-task/shots/screen.png" 1
   mib "$home/data/big-task/out.pdf" 1
   mib "$home/data/big-task/export.csv" 1
@@ -410,7 +416,7 @@ test_size_trigger_names_the_largest_torn_down_tasks() {
   assert_contains "$out" ", over the 1 MiB trigger; its largest torn-down tasks follow." "the trigger names itself"
   assert_contains "$out" "images and PDFs move to Drive only as one captain-approved batch (docs/configuration.md)" \
     "the trigger names the Drive rule for images and PDFs"
-  assert_contains "$out" "BOOTSTRAP_INFO: data size: big-task 5 MiB: 0 MiB clean checkouts, 2 MiB dependency folders, 1 MiB images, 1 MiB PDFs, 1 MiB other" \
+  assert_contains "$out" "BOOTSTRAP_INFO: data size: big-task 6 MiB: 0 MiB clean checkouts, 2 MiB dependency folders, 1 MiB images, 2 MiB PDFs, 1 MiB other" \
     "the largest task's line says what it holds"
   assert_contains "$out" "BOOTSTRAP_INFO: data size: small-task 1 MiB: " "the next task follows"
   assert_not_contains "$out" "live-task" "a live task is not a torn-down task"
@@ -418,7 +424,7 @@ test_size_trigger_names_the_largest_torn_down_tasks() {
     || fail "the largest task comes first: $out"
   assert_present "$home/data/big-task/web/node_modules/dep/blob" "the size trigger removes nothing"
   out=$(run_prune "$home" --dry-run | grep -v '^data-scratch: ')
-  assert_contains "$out" "BOOTSTRAP_INFO: data size: big-task 5 MiB" "a dry run reports the trigger too"
+  assert_contains "$out" "BOOTSTRAP_INFO: data size: big-task 6 MiB" "a dry run reports the trigger too"
 
   rm "$home/data/backlog.md"
   out=$(run_prune "$home")
@@ -427,9 +433,16 @@ test_size_trigger_names_the_largest_torn_down_tasks() {
   for bad in 0 lots 16777217; do
     printf '%s\n' "$bad" > "$home/config/data-size-trigger-mib"
     code=0
-    run_prune "$home" >/dev/null || code=$?
-    expect_code 2 "$code" "size trigger value '$bad'"
+    out=$(run_prune "$home") || code=$?
+    expect_code 0 "$code" "size trigger value '$bad'"
+    assert_contains "$out" "data-size-trigger-mib is not a whole number of MiB" "a bad size trigger is named"
   done
+  home=$(new_home size-bad)
+  printf '7\n' > "$home/config/data-scratch-retention-days"
+  printf 'lots\n' > "$home/config/data-size-trigger-mib"
+  make_scratch_task "$home" done-task
+  out=$(run_prune "$home")
+  assert_absent "$home/data/done-task/clones/clean" "a bad size trigger must not stop the retention a home opted in to: $out"
   pass "size trigger: over the configured size, names the largest torn-down tasks and what each holds, and removes nothing"
 }
 

@@ -145,6 +145,7 @@ ird/node_modules/dep/index.js"
   put "$d/logo/setup.py"
   put "$d/logo/dist/assets/Logo.PNG"
   put "$d/loose/dist/tool.txt"
+  put "$d/loose/dist/site/node_modules/dep/index.js"
   ln -s "$TMP_ROOT/$1/elsewhere/gbrain" "$d/tools/gbrain"
 
   # The home itself is a clean git repository that ignores data/.
@@ -155,7 +156,7 @@ ird/node_modules/dep/index.js"
   printf '%s\n' "$d"
 }
 
-GONE="clones/clean nest/outer nest/quoted web/node_modules py/.venv site/dist tools/shellcheck tools/claude-darwin"
+GONE="clones/clean nest/outer nest/quoted web/node_modules py/.venv site/dist loose/dist/site/node_modules tools/shellcheck tools/claude-darwin"
 KEPT="brief.md report.md notes.md shot.png answers.json web/package.json
 clones/dirty/README.md clones/dirty/node_modules/dep/index.js clones/dirty/bin/tool
 clones/untracked/new-file.txt clones/unpushed/README.md clones/stashed/README.md
@@ -220,9 +221,10 @@ test_real_run_removes_only_reproducible_scratch() {
   assert_contains "$out" "data-scratch: kept dist real/brochure/dist: it holds images or PDFs" "a dist holding a PDF stays"
   assert_contains "$out" "data-scratch: kept dist real/logo/dist: it holds images or PDFs" "a dist holding an image stays"
   assert_not_contains "$out" "native.so" "a library inside a removed venv is not counted again as a binary"
-  assert_not_contains "$out" "loose/dist" "a dist with no manifest is not a dependency folder"
+  assert_not_contains "$out" "dist real/loose/dist" "a dist with no manifest is not a dependency folder"
+  assert_contains "$out" "data-scratch: removed node_modules real/loose/dist/site/node_modules (" "a node_modules inside a plain dist is still found"
   assert_not_contains "$out" "notvenv" "a .venv with no pyvenv.cfg is not a dependency folder"
-  assert_contains "$out" "data-scratch: removed 8 items (" "summary counts every removed item"
+  assert_contains "$out" "data-scratch: removed 9 items (" "summary counts every removed item"
   assert_contains "$out" " from real/" "summary names the task"
   ! git -C "$d/linked/main" worktree list --porcelain | grep -q prunable \
     || fail "real run left a dangling linked worktree"
@@ -242,7 +244,7 @@ test_dry_run_lists_the_same_and_removes_nothing() {
   assert_contains "$out" "data-scratch: would remove checkout dry/nest/outer (" "dry run decides the outer clone as the real run would"
   assert_contains "$out" "data-scratch: would remove binary dry/tools/shellcheck (" "dry run names the binary"
   assert_not_contains "$out" "would remove checkout dry/clones/dirty" "dry run keeps the dirty clone"
-  assert_contains "$out" "data-scratch: would remove 8 items (" "dry run summary"
+  assert_contains "$out" "data-scratch: would remove 9 items (" "dry run summary"
   pass "dry run: classifies exactly as a real run and changes nothing"
 }
 
@@ -250,14 +252,14 @@ test_keep_binaries_removes_only_checkouts_and_dependency_folders() {
   local d out f
   d=$(make_task keepbin)
   out=$(bash "$PRUNE" --keep-binaries "$d" 2>&1)
-  for f in clones/clean nest/outer nest/quoted web/node_modules py/.venv site/dist; do
+  for f in clones/clean nest/outer nest/quoted web/node_modules py/.venv site/dist loose/dist/site/node_modules; do
     assert_absent "$d/$f" "--keep-binaries: $f should be removed: $out"
   done
   assert_present "$d/tools/shellcheck" "--keep-binaries keeps the ELF binary"
   assert_present "$d/tools/claude-darwin" "--keep-binaries keeps the Mach-O binary"
   assert_kept "$d" "--keep-binaries"
   assert_not_contains "$out" " binary " "--keep-binaries names no binary"
-  assert_contains "$out" "data-scratch: removed 6 items (" "--keep-binaries summary"
+  assert_contains "$out" "data-scratch: removed 7 items (" "--keep-binaries summary"
   pass "--keep-binaries: clean checkouts and dependency folders go; binaries, work, and text stay"
 }
 

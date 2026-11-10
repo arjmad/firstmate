@@ -100,7 +100,14 @@ import crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
 const [lib, link, mode, dryRun, stamp, target] = process.argv.slice(2);
 const { withClaudeStoreLock, StoreLockRefused } = await import(pathToFileURL(lib).href);
-const fail = (msg) => { console.error(`error: ${msg}`); process.exit(1); };
+// A refusal throws, so one raised inside the store lock still unwinds through
+// the lock's own release before the process exits.
+class Refused extends Error {}
+const fail = (msg) => { throw new Refused(msg); };
+process.on("uncaughtException", (err) => {
+  console.error(err instanceof Refused ? `error: ${err.message}` : err);
+  process.exit(1);
+});
 let store;
 try { store = fs.realpathSync(link); } catch { fail(`${link} is a symlink whose target cannot be resolved`); }
 const stat = fs.statSync(store);

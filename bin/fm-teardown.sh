@@ -4822,17 +4822,25 @@ fi
 # teardown has retired that directory the entry points nowhere, so it leaves
 # the store the launch wrote it to. bin/fm-claude-store-prune.sh removes the
 # entry only when the directory is gone, so a returned pool slot, which a later
-# task reuses, keeps it.
+# task reuses, keeps it. The trust script keys the entry by the resolved path,
+# so the recorded path is tried both as recorded and with its surviving parent
+# resolved.
+teardown_forget_claude_trust_path() {  # <path>
+  case "$TRUST_ACCOUNT" in
+    '') "$SCRIPT_DIR/fm-claude-store-prune.sh" --path "$1" ;;
+    ordinary) env -u CLAUDE_CONFIG_DIR "$SCRIPT_DIR/fm-claude-store-prune.sh" --path "$1" ;;
+    /*) CLAUDE_CONFIG_DIR=$TRUST_ACCOUNT "$SCRIPT_DIR/fm-claude-store-prune.sh" --path "$1" ;;
+  esac
+}
 teardown_forget_claude_trust() {
-  local dir=$WT
+  local dir=$WT parent
   case "$TRUST_HARNESS" in claude*) ;; *) return 0 ;; esac
   [ "$KIND" != secondmate ] || dir=$HOME_PATH
+  dir=${dir%/}
   case "$dir" in /?*) ;; *) return 0 ;; esac
-  case "$TRUST_ACCOUNT" in
-    '') "$SCRIPT_DIR/fm-claude-store-prune.sh" --path "$dir" ;;
-    ordinary) env -u CLAUDE_CONFIG_DIR "$SCRIPT_DIR/fm-claude-store-prune.sh" --path "$dir" ;;
-    /*) CLAUDE_CONFIG_DIR=$TRUST_ACCOUNT "$SCRIPT_DIR/fm-claude-store-prune.sh" --path "$dir" ;;
-  esac
+  teardown_forget_claude_trust_path "$dir"
+  parent=$(cd -P -- "${dir%/*}/" 2>/dev/null && pwd -P) || return 0
+  [ "${parent%/}/${dir##*/}" = "$dir" ] || teardown_forget_claude_trust_path "${parent%/}/${dir##*/}"
 }
 teardown_forget_claude_trust </dev/null || true
 # The record is gone, so the backlog must not still show this task in flight
