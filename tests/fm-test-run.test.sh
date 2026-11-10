@@ -616,6 +616,105 @@ test_changed_documentation_renames_and_unread_files() {
   pass "a renamed document selects its old readers, and an unread non-prose document is refused"
 }
 
+# --near is the narrow local pre-push run: only the suites named for a changed
+# file, plus the --changed suites CI cannot exercise. Each case drives the real
+# runner in a fixture repository and compares it with --changed.
+test_near_selects_only_named_suites_and_ci_unexercised_ones() {
+  local tmp repo listed changed out rc branch
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-near.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+  # The automatic per-script bound needs the real timeout library.
+  cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/fm-timeout-lib.sh"
+  git -C "$repo" add .
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm near-fixtures
+
+  # A bin/ script selects the suite named for it, and runs it.
+  printf '\n' >>"$repo/bin/fm-quota-choose.sh"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --near --base HEAD)
+  [ "$listed" = "tests/fm-quota-choose.test.sh" ] \
+    || { rm -rf "$tmp"; fail "--near for bin/fm-quota-choose.sh listed: $listed"; }
+  out=$(cd "$repo" && bin/fm-test-run.sh --near --base HEAD 2>/dev/null) \
+    || { rm -rf "$tmp"; fail "--near did not run its selection: $out"; }
+  assert_contains "$out" "FM_TEST_SUMMARY total=1 failed=0" \
+    "--near must run exactly the one named suite"
+  git -C "$repo" reset -q --hard
+
+  # A backend selects its fm-backend-<stem> suite, and leaves out the wider
+  # --changed families CI runs, including the one with its own CI lane.
+  mkdir -p "$repo/bin/backends"
+  printf '\n' >"$repo/bin/backends/herdr.sh"
+  changed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$changed" "tests/fm-brief.test.sh" \
+    "fixture drift: --changed for a Herdr backend must select pure-contract-unit"
+  assert_contains "$changed" "tests/fm-control-herdr-smoke.test.sh" \
+    "fixture drift: --changed for a Herdr backend must select real-herdr-gated"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --near --base HEAD)
+  [ "$listed" = "tests/fm-backend-herdr-smoke.test.sh" ] \
+    || { rm -rf "$tmp"; fail "--near for bin/backends/herdr.sh listed: $listed"; }
+  git -C "$repo" clean -qfd
+
+  # A suite CI can only skip (orca has no CI lane) is added from the --changed
+  # map even though no name connects it to the changed path.
+  printf '\n' >>"$repo/tests/fixtures/demo/demo-fixture.sh"
+  changed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$changed" "tests/fm-backend-orca.test.sh" \
+    "fixture drift: --changed for the demo fixture must select its orca reader"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --near --base HEAD)
+  [ "$listed" = "tests/fm-backend-orca.test.sh" ] \
+    || { rm -rf "$tmp"; fail "--near did not add the CI-unexercised orca suite: $listed"; }
+  git -C "$repo" reset -q --hard
+
+  # A changed suite selects itself, and prose selects the audience checker.
+  printf '\n' >>"$repo/tests/fm-daemon.test.sh"
+  printf 'a page\n' >"$repo/docs/zz-near-page.md"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --near --base HEAD | LC_ALL=C sort)
+  [ "$listed" = "$(printf '%s\n' tests/fm-daemon.test.sh tests/fm-documentation-audiences.test.sh)" ] \
+    || { rm -rf "$tmp"; fail "--near for a changed suite and a prose file listed: $listed"; }
+  git -C "$repo" reset -q --hard
+  git -C "$repo" clean -qfd
+
+  # A path the --changed map refuses leaves CI to run its full suite and its
+  # own suites unknown, so --near names it and adds every CI-unexercised suite,
+  # but none of the --changed suites CI runs.
+  printf '\n' >>"$repo/bin/unmapped-source.sh"
+  if (cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD) >/dev/null 2>&1; then
+    rm -rf "$tmp"
+    fail "fixture drift: --changed must refuse bin/unmapped-source.sh"
+  fi
+  rc=0
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --near --base HEAD 2>"$tmp/err") || rc=$?
+  [ "$rc" -eq 0 ] || { rm -rf "$tmp"; fail "--near must not fail on a path --changed refuses: $(cat "$tmp/err")"; }
+  assert_contains "$(cat "$tmp/err")" "no changed-test mapping for source path: bin/unmapped-source.sh" \
+    "--near must name the path the --changed map refused"
+  [ "$out" = "$(printf '%s\n' tests/fm-backend-cmux.test.sh tests/fm-backend-orca.test.sh tests/fm-backend-zellij.test.sh)" ] \
+    || { rm -rf "$tmp"; fail "a refused path must add every CI-unexercised suite and nothing else: $out"; }
+  git -C "$repo" reset -q --hard
+
+  # A mapped change that names no suite is an empty, successful selection.
+  printf '\n' >>"$repo/bin/fm-control-lib.sh"
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --near --base HEAD 2>&1) \
+    || { rm -rf "$tmp"; fail "--near must succeed with no suites near the change: $out"; }
+  assert_contains "$out" "no suites near the changes" \
+    "--near must say its selection is empty"
+  git -C "$repo" reset -q --hard
+
+  # A base with no merge base would read as an empty diff, so it is refused.
+  branch=$(git -C "$repo" symbolic-ref --short HEAD)
+  git -C "$repo" checkout -q --orphan unrelated
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm unrelated
+  git -C "$repo" checkout -q "$branch"
+  if out=$(cd "$repo" && bin/fm-test-run.sh --list --near --base unrelated 2>&1); then
+    rm -rf "$tmp"
+    fail "--near must refuse a base with no merge base, got: $out"
+  fi
+  assert_contains "$out" "no merge base between unrelated and HEAD" \
+    "--near must say why it refused the base"
+
+  rm -rf "$tmp"
+  pass "--near selects the suites named for each change plus the ones CI cannot exercise"
+}
+
 # Exercise begin/end markers from real fixture processes to prove the automatic
 # changed-suite default and its explicit serial override.
 test_changed_uses_bounded_automatic_concurrency() {
@@ -2097,6 +2196,7 @@ test_changed_bin_reference_selects_per_script_not_per_family
 test_changed_curated_bin_also_selects_its_direct_readers
 test_changed_documentation_renames_and_unread_files
 test_changed_documentation_selects_its_readers_and_tree_checkers
+test_near_selects_only_named_suites_and_ci_unexercised_ones
 test_only_file_narrows_a_selection_and_refuses_strangers
 test_changed_uses_bounded_automatic_concurrency
 test_windows_posix_mode_emulation_does_not_fail_parallel_runs
