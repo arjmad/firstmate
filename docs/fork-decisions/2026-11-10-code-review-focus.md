@@ -1,0 +1,12 @@
+2026-11-10: Arjun, in the helm, shown the review-value measurement of both merge-path reviews, answered "Keep both on everything": every PR keeps the Sol loop and the `/code-review`, and firstmate cuts only the `/code-review`'s declined findings.
+Decision: the merge-gate `/code-review` runs with firstmate's merge-gate focus in its own arguments, printed by `bin/fm-code-review.sh args <pr-url>`, so it skips the kinds of finding authors declined and keeps full recall on correctness bugs and wrong instructions.
+The focus rides in the skill's arguments because the skill runs in a forked context that sees only them: an appended system prompt never reached it.
+Why: in the sample, `/code-review` raised 6.7 findings per code PR and authors declined 43% of them, each with a written answer; its cleanup, altitude, hardening, and test-quality findings and those with a speculative trigger held none of its 70 real defects.
+Measured before it landed by replaying 73 of the sample's review runs (every run that caught a real defect, plus 20 random others) against the unchanged review, with blind judges: findings fell from 602 to 298, findings an author would decline from 305 to 92, and real defects from 54 to 52.
+Over two replays each, the unchanged review found 50 of the runs' 70 historic defects and the focused one 49; 6 that the unchanged review found were missed by both focused replays and 5 the other way, which is within the review's own run-to-run variance (one unchanged replay finds about two thirds of them).
+The review stays on every code-changing PR, at the same level, with the same record and every merge guard in `bin/fm-pr-merge.sh`.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| `args` prints the `/code-review` arguments for a PR: `medium --comment <number>` and the merge-gate focus | `bin/fm-code-review.sh` (`code_review_focus`, `args`, header), `tests/fm-code-review.test.sh`, `docs/scripts.md` | none | carried | c8d8fdad |
+| A ship worker's review step runs `/code-review` with the arguments `args` prints, in its harness or headless, and the merge refusal names them | `bin/fm-dod-lib.sh` (`fm_dod_code_review_block`, header), `tests/fm-dod-lib.test.sh`, `bin/fm-pr-merge.sh` (unreviewed refusal message), `docs/task-lifecycle.md` (Code review before merge) | `bin/fm-dod-lib.sh` (`fm_dod_code_review_block`), `docs/task-lifecycle.md` | carried | c8d8fdad |

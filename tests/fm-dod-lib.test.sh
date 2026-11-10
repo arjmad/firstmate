@@ -563,8 +563,12 @@ test_pr_based_dod_carries_the_code_review_step() {
     cli=$(sed -n 's/^Run `\([^ ]*\) status <pr-url>`.*/\1/p' "$out")
     [ -n "$cli" ] || fail "$mode: DoD does not carry the code review step"
     "$cli" classify bin/x.sh | grep -qx code-changing || fail "$mode: the DoD's review script does not run: $cli"
-    assert_grep '/code-review medium --comment <number>' "$out" "$mode: DoD does not name the review skill and level"
-    assert_grep "claude -p '/code-review medium --comment <number>'" "$out" "$mode: DoD does not give a harness without the skill its headless path"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep 'once from this worktree with the arguments `'"$cli"' args <pr-url>` prints, which are `medium --comment <number>` followed by firstmate'"'"'s merge-gate focus' "$out" "$mode: DoD does not run the review with the focus arguments"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep 'claude -p "/code-review $('"$cli"' args <pr-url>)"' "$out" "$mode: DoD does not give a harness without the skill its headless path"
+    "$cli" args https://github.com/example/repo/pull/3 | grep -q '^medium --comment 3 Merge-gate focus for this review: ' \
+      || fail "$mode: the DoD's review script does not print the review arguments"
     assert_grep "$cli record <pr-url>" "$out" "$mode: DoD does not name the record step"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
     assert_grep 'Pushes that fix or answer this review'"'"'s findings are covered by the one `record` you run after your last push' "$out" \
@@ -593,7 +597,7 @@ test_pr_based_dod_carries_the_code_review_step() {
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
     sol_line=$(grep -n 'first run the `tstack-sol-loop` skill' "$out" | cut -d: -f1)
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    claude_line=$(grep -n '^Then run Claude Code'"'"'s built-in `/code-review medium --comment <number>` once' "$out" | cut -d: -f1)
+    claude_line=$(grep -n '^Then run Claude Code'"'"'s built-in `/code-review` once from this worktree with the arguments' "$out" | cut -d: -f1)
     [ -n "$claude_line" ] && [ "$sol_line" -lt "$claude_line" ] || fail "$mode: the Sol loop does not come before the one /code-review"
     assert_no_grep "A later push that changes the PR's diff needs the review again" "$out" "$mode: DoD still says every fix push needs a new review"
     review_line=$(grep -n '^Before that done report, give a code-changing GitHub PR its code review' "$out" | cut -d: -f1)
@@ -609,7 +613,8 @@ test_pr_based_dod_carries_the_code_review_step() {
   # A pr=manual no-mistakes ship opens its PR by hand and still carries the step.
   out="$TMP_ROOT/dod-review-manual.md"
   fm_dod_block no-mistakes dod-review-task "" none "" "" manual > "$out"
-  assert_grep '/code-review medium --comment <number>' "$out" "pr=manual: DoD does not carry the code review step"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'which are `medium --comment <number>` followed by firstmate'"'"'s merge-gate focus' "$out" "pr=manual: DoD does not carry the code review step"
   assert_grep 'beyond the code-review step below' "$out" "pr=manual: DoD forbids the review's own PR comments"
   review_line=$(grep -n '^Before that done report, give a code-changing GitHub PR its code review' "$out" | cut -d: -f1)
   done_line=$(grep -n '^Then append `done' "$out" | cut -d: -f1)
