@@ -43,7 +43,7 @@ TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
 # and never writes the developer's own ~/.claude.json or agent Claude store.
 export CLAUDE_CONFIG_DIR="$TMP_ROOT/claude-config"
 mkdir -p "$CLAUDE_CONFIG_DIR"
-trap 't3_fake_stop; rm -rf -- "$TMP_ROOT"' EXIT
+trap 't3_fake_stop; fm_test_cleanup' EXIT
 
 # A session-provider stub that models the two things this pass depends on: the
 # harness exit command stops the agent, a launch brief starts the replacement,

@@ -25,8 +25,6 @@
 #     [--kind reversible|arjun-only] \
 #     [--options '<A>|<B>[|<C>]' [--recommend <option>]] [--ask <question>]
 #   fm-captain-hold.sh choices <task-id> --options '<A>|<B>[|<C>]' [--recommend <option>] [--ask <question>]
-#   fm-captain-hold.sh retire-defaults
-#   fm-captain-hold.sh retire-release
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
 #   fm-captain-hold.sh defer <task-id> --until YYYY-MM-DD --decision-file <path> [--reason <reason>]
 #   fm-captain-hold.sh defer-batch <tag> --until YYYY-MM-DD --decision-file <path> [--reason <reason>]
@@ -95,24 +93,9 @@
 # a kind cannot outlive the reason it was given with. A row held before the
 # release was removed may still carry `default: <option>; releases <time>`
 # after its kind. That default was the call's recommendation, so every re-hold
-# (`choices`, `defer`, `retire-defaults`) drops the segment and keeps the
+# (`choices`, `defer`) drops the segment and keeps the
 # option: as `--recommend` when the call has options, and otherwise appended to
-# the reason as `(recommended: <option>)`. `retire-defaults` re-holds every
-# such row this way and prints `retired default: <id> <option>` for each,
-# noting each id in state/.hold-release-pending.retired before its re-hold.
-# `retire-release` retires everything the release left in this home's state/,
-# and does nothing when none of it is there: release lines a detached
-# `release-due` already applied but no wake surfaced (state/hold-release-woke,
-# which a run still going at the update can append to, and its .claimed
-# copy), the cadence stamp, and the waiting marker. It queues each line as its
-# own durable `check: released by default:` row, trimming it from the claimed
-# copy once queued, runs `retire-defaults`, queues one
-# `check: default release retired: <ids>` row for the noted ids, removes the
-# state, and prints `wake: <reason>` for its caller. A failure keeps what is
-# not done yet and exits non-zero, and a run that finds another one under way
-# does nothing. The locked session-start bootstrap and the
-# watcher both run it, so a home with no live task retires at its next
-# session start.
+# the reason as `(recommended: <option>)`.
 # A caller's own reason may not begin with a kind prefix.
 #
 # CHOICES (fork patch, docs/fork-decisions.md 2026-10-31).
@@ -414,13 +397,8 @@ CAPTAIN_META_LOCK_HELD=0
 CAPTAIN_CONTROL_LOCK=
 CAPTAIN_CONTROL_LOCK_HELD=0
 CAPTAIN_META_TMP=
-HOLD_RETIRE_LOCK=
 captain_hold_cleanup() {
   [ -z "$CAPTAIN_META_TMP" ] || rm -f "$CAPTAIN_META_TMP" 2>/dev/null || true
-  if [ -n "$HOLD_RETIRE_LOCK" ]; then
-    fm_lock_release "$HOLD_RETIRE_LOCK" || true
-    HOLD_RETIRE_LOCK=
-  fi
   if [ "$CAPTAIN_META_LOCK_HELD" = 1 ]; then
     fm_lock_release "$CAPTAIN_META_LOCK" || true
     CAPTAIN_META_LOCK_HELD=0
@@ -2051,133 +2029,6 @@ command_defer_batch() {
   [ "$failed" = 0 ]
 }
 
-# Every open row this home holds for the captain, one id per line. The listing's
-# first field is the slug id and its last is the requested hold_kind, so a
-# quoted title holding commas cannot shift either.
-held_captain_task_ids() {
-  local listing
-  listing=$(tasks_axi list --state held --fields hold_kind --limit 100000 2>/dev/null) || return 1
-  printf '%s\n' "$listing" | awk -F, '
-    /^  [A-Za-z0-9._-]+,/ {
-      id = $1
-      sub(/^ +/, "", id)
-      if ($NF == "captain") print id
-    }
-  '
-}
-
-HOLD_RELEASE_RETIRED="$STATE/.hold-release-pending.retired"
-
-# `retire-defaults` (see "HOLD KINDS"). A row it cannot read or re-hold is
-# reported on stderr, keeps its segment, and fails the run so it is retried.
-command_retire_defaults() {
-  local ids id reason option status=0
-  local -a args=()
-  [ "$#" -eq 0 ] || { usage >&2; exit 2; }
-  require_tasks_axi
-  ids=$(held_captain_task_ids) || fail "could not list the rows held for the captain"
-  while IFS= read -r id; do
-    [ -n "$id" ] || continue
-    if ! task_show "$id"; then
-      printf 'fm-captain-hold: %s could not be read; its retired default stays\n' "$id" >&2
-      status=1
-      continue
-    fi
-    [ "$(show_field_value "$TASK_SHOW_OUTPUT" held)" = yes ] || continue
-    reason=$(fm_hold_reason_decode "$(show_field_value "$TASK_SHOW_OUTPUT" hold_reason)")
-    parse_hold_kind_prefix "$reason" && [ -n "$HOLD_DEFAULT_OPTION" ] || continue
-    option=$HOLD_DEFAULT_OPTION
-    printf '%s\n' "$id" >> "$HOLD_RELEASE_RETIRED"
-    carry_retired_default
-    args=(--kind "$HOLD_DECISION_KIND")
-    [ -z "$HOLD_OPTIONS" ] || args+=(--options "$HOLD_OPTIONS" --recommend "$HOLD_RECOMMENDED")
-    [ -z "$HOLD_ASK" ] || args+=(--ask "$HOLD_ASK")
-    if FM_CAPTAIN_HOLD_EXPECT_REASON=$reason "$0" hold "$id" --reason "$HOLD_REASON_REST" "${args[@]}" >/dev/null; then
-      printf 'retired default: %s %s\n' "$id" "$option"
-    else
-      printf 'fm-captain-hold: %s keeps its retired default; its re-hold failed\n' "$id" >&2
-      grep -vxF -- "$id" "$HOLD_RELEASE_RETIRED" > "$HOLD_RELEASE_RETIRED.tmp" || true
-      mv -f "$HOLD_RELEASE_RETIRED.tmp" "$HOLD_RELEASE_RETIRED" || true
-      status=1
-    fi
-  done <<EOF
-$ids
-EOF
-  return "$status"
-}
-
-# `retire-release` (see "HOLD KINDS").
-command_retire_release() {
-  local woke="$STATE/hold-release-woke" claimed="$STATE/.hold-release-woke.claimed"
-  local lock="$STATE/.hold-release-woke.lock" f found=0 line id n count=0 first='' ids reason status=0
-  local -a lines=()
-  [ "$#" -eq 0 ] || { usage >&2; exit 2; }
-  for f in "$woke" "$claimed" "$STATE/.last-hold-release" "$STATE"/.hold-release-pending*; do
-    [ -e "$f" ] || [ -L "$f" ] || continue
-    found=1
-  done
-  [ "$found" = 1 ] || return 0
-  # One run at a time; a run that finds another under way leaves it the work.
-  fm_lock_try_acquire "$STATE/.hold-release-retire.lock" || return 0
-  HOLD_RETIRE_LOCK="$STATE/.hold-release-retire.lock"
-  while :; do
-    if [ ! -e "$claimed" ]; then
-      fm_lock_acquire_wait "$lock" || fail "could not lock $woke"
-      [ ! -s "$woke" ] || mv -f "$woke" "$claimed" || true
-      fm_lock_release "$lock" || fail "could not unlock $woke"
-      [ -e "$claimed" ] || break
-    fi
-    lines=()
-    while IFS= read -r line || [ -n "$line" ]; do
-      lines+=("$line")
-    done < "$claimed"
-    n=0
-    while [ "$n" -lt "${#lines[@]}" ]; do
-      line=${lines[$n]}
-      n=$((n + 1))
-      case "$line" in 'released by default: '?*) ;; *) continue ;; esac
-      id=${line#released by default: }
-      id=${id%% *}
-      fm_wake_append check "hold-release-$id" "check: $line" || fail "could not queue: $line"
-      # Keep only the lines not queued yet, so a retry never queues one twice.
-      { [ "$n" -ge "${#lines[@]}" ] || printf '%s\n' "${lines[@]:$n}"; } > "$claimed.tmp" \
-        && mv -f "$claimed.tmp" "$claimed"
-      count=$((count + 1))
-      [ -n "$first" ] || first="check: $line"
-    done
-    rm -f -- "$claimed" || fail "could not remove $claimed"
-  done
-  # No tasks-axi, or one without captain holds, holds no default; a tasks-axi
-  # whose compatibility cannot be confirmed is a failure to retry.
-  if command -v tasks-axi >/dev/null 2>&1; then
-    if ! fm_tasks_axi_compatible; then
-      printf 'fm-captain-hold: compatible tasks-axi is required to retire the held defaults\n' >&2
-      status=1
-    elif tasks-axi hold --help 2>&1 | grep -F -- '--kind captain' >/dev/null; then
-      ( command_retire_defaults ) >/dev/null || status=1
-    fi
-  fi
-  ids=$(sort -u "$HOLD_RELEASE_RETIRED" 2>/dev/null | tr '\n' ' ')
-  ids=${ids% }
-  if [ -n "$ids" ]; then
-    reason="check: default release retired: these captain calls no longer release themselves and now wait for the captain, so bring them to him: $ids"
-    fm_wake_append check hold-release-retired "$reason" || fail "could not queue the default-release-retired wake"
-    rm -f -- "$HOLD_RELEASE_RETIRED"
-    [ "$count" = 0 ] || reason="$reason (and $count released by default)"
-  elif [ -n "$first" ]; then
-    reason=$first
-    [ "$count" -le 1 ] || reason="$reason (and $((count - 1)) more released by default)"
-  fi
-  if [ "$status" = 0 ]; then
-    rm -f -- "$STATE/.last-hold-release" "$STATE"/.hold-release-pending* "$STATE/.hold-release-retire-failed"
-    fm_lock_acquire_wait "$lock" || fail "could not lock $woke"
-    [ -s "$woke" ] || rm -f -- "$woke"
-    fm_lock_release "$lock" || fail "could not unlock $woke"
-  fi
-  [ -z "${reason:-}" ] || printf 'wake: %s\n' "$reason"
-  return "$status"
-}
-
 # --- the one keyed-answer intake, and the source bindings that feed it --------
 
 BINDING_DIR="$STATE/decision-bindings"
@@ -3127,8 +2978,6 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
 case "${1:-}" in
   hold) shift; command_hold "$@" ;;
   choices) shift; command_choices "$@" ;;
-  retire-defaults) shift; command_retire_defaults "$@" ;;
-  retire-release) shift; command_retire_release "$@" ;;
   answer) shift; command_answer "$@" ;;
   answers) shift; command_answers "$@" ;;
   defer) shift; command_defer "$@" ;;

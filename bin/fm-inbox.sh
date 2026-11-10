@@ -629,6 +629,8 @@ cmd_reply() {
     shift
   fi
   id=${1:-}
+  case "$id" in -h|--help) id="" ;; esac
+  case "${2:-}" in -h|--help) id="" ;; esac
   [ -n "$id" ] || die "usage: fm-inbox.sh reply [--json] <id> <text>... (or: reply [--json] <id> -)"
   shift
   valid_note_id "$id" || die "invalid note id"

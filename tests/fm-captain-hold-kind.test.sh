@@ -40,13 +40,6 @@ run_captain() {  # <home> <command args...>
     "$ROOT/bin/fm-captain-hold.sh" "$@"
 }
 
-run_bootstrap() {  # <home> [extra env...]
-  local home=$1
-  shift
-  PATH="$home/fakebin:$PATH" TMUX='' HERDR_ENV='' FM_HOME="$home" FM_BOOTSTRAP_NETWORK=skip \
-    env "$@" "$ROOT/bin/fm-bootstrap.sh" 2>&1
-}
-
 show_task() {  # <home> <id>
   FM_HOME="$1" "$ROOT/bin/fm-tasks-axi.sh" show "$2" --full
 }
@@ -152,86 +145,6 @@ test_defer_keeps_a_retired_default_as_the_recommendation() {
     "defer did not keep the retired default as the recommendation"
   assert_contains "$show" 'hold_until: 2026-10-27' "defer did not record its date"
   pass "defer drops a retired default and keeps it as the recommendation"
-}
-
-# `retire-defaults` re-holds every row that still carries a default, keeping it
-# as the recommendation, and leaves every other hold alone.
-test_retire_defaults_rewrites_every_retired_default() {
-  local home out show
-  home=$(make_home retire-defaults)
-  run_captain "$home" hold sample-plain --title "Plain call" --reason "Keep or drop" \
-    --kind reversible >/dev/null || fail "could not hold the plain call"
-  run_captain "$home" hold sample-choice --title "Choice call" --reason "Pick the font" \
-    --kind reversible >/dev/null || fail "could not hold the choice call"
-  give_retired_default "$home" sample-choice \
-    "[reversible; default: sans; releases 2026-10-17T10:00:00Z; options: serif|sans; recommended: sans; ask: Which font?] Pick the font"
-  run_captain "$home" hold sample-bare --title "Bare call" --reason "Keep the banner" \
-    --kind reversible >/dev/null || fail "could not hold the bare call"
-  give_retired_default "$home" sample-bare "[reversible; default: drop it; releases 2026-10-17T10:00:00Z] Keep the banner"
-  out=$(run_captain "$home" retire-defaults) || fail "retire-defaults failed: $out"
-  assert_contains "$out" 'retired default: sample-choice sans' "the choice call was not retired"
-  assert_contains "$out" 'retired default: sample-bare drop it' "the bare call was not retired"
-  assert_not_contains "$out" 'sample-plain' "a call with no default was retired"
-  show=$(show_task "$home" sample-choice)
-  assert_contains "$show" '[reversible; options: serif|sans; recommended: sans; ask: Which font?] Pick the font' \
-    "the choice call lost its choices or kept its default"
-  show=$(show_task "$home" sample-bare)
-  assert_contains "$show" '[reversible] Keep the banner (recommended: drop it)' "the bare call did not keep its default as the recommendation"
-  assert_contains "$show" 'held: yes' "retire-defaults lifted a hold"
-  out=$(run_captain "$home" retire-defaults) || fail "a second retire-defaults failed: $out"
-  assert_equals "" "$out" "a second retire-defaults found a default again"
-  pass "retire-defaults turns every retired default into the recommendation, once"
-}
-
-# A home with no live task runs no watcher, so the locked session-start
-# bootstrap retires what the release left: the leftover release line becomes a
-# durable wake row, the held default becomes the recommendation, one row names
-# that call, and the release state is gone. The read-only path leaves it alone.
-test_session_start_retires_the_release_leftovers() {
-  local home show
-  home=$(make_home retire-release)
-  printf 'tmux\n' > "$home/config/backend"
-  run_captain "$home" hold sample-bare --title "Bare call" --reason "Keep the banner" \
-    --kind reversible >/dev/null || fail "could not hold the call"
-  give_retired_default "$home" sample-bare "[reversible; default: drop it; releases 2026-10-17T10:00:00Z] Keep the banner"
-  printf '%s\n' 'released by default: sample-old ship now' > "$home/state/hold-release-woke"
-  : > "$home/state/.last-hold-release"
-  run_bootstrap "$home" FM_BOOTSTRAP_DETECT_ONLY=1 >/dev/null
-  assert_present "$home/state/hold-release-woke" "the read-only session path retired the release"
-  run_bootstrap "$home" >/dev/null
-  assert_grep "$(printf '\tcheck\thold-release-sample-old\t')" "$home/state/.wake-queue" \
-    "the leftover release line was not queued"
-  assert_grep "$(printf '\tcheck\thold-release-retired\t')" "$home/state/.wake-queue" \
-    "the retired call was not queued for the captain"
-  assert_grep "bring them to him: sample-bare" "$home/state/.wake-queue" "the retirement row did not name the call"
-  show=$(show_task "$home" sample-bare)
-  assert_contains "$show" '[reversible] Keep the banner (recommended: drop it)' "session start did not retire the default"
-  assert_absent "$home/state/hold-release-woke" "session start left the release lines"
-  assert_absent "$home/state/.last-hold-release" "session start left the release stamp"
-  assert_absent "$home/state/.hold-release-pending.retired" "session start left the retired ids"
-  pass "the locked session-start bootstrap retires the release leftovers in a home with no live task"
-}
-
-# A tasks-axi that is installed but cannot be confirmed compatible may still
-# hold defaults, so retire-release fails and keeps the release state for a
-# retry rather than deleting it unretired.
-test_retire_release_keeps_its_state_when_tasks_axi_is_unconfirmed() {
-  local home status=0
-  home=$(make_home retire-unconfirmed)
-  : > "$home/state/.last-hold-release"
-  : > "$home/state/.hold-release-pending"
-  cat > "$home/fakebin/tasks-axi" <<'EOF'
-#!/usr/bin/env bash
-[ "${1:-}" != --version ] || printf '%s\n' 0.0.1
-exit 0
-EOF
-  chmod +x "$home/fakebin/tasks-axi"
-  run_captain "$home" retire-release > "$home/out" 2> "$home/err" || status=$?
-  [ "$status" -ne 0 ] || fail "retire-release succeeded although tasks-axi could not be confirmed compatible"
-  assert_grep "compatible tasks-axi is required" "$home/err" "the unconfirmed tasks-axi was not reported"
-  assert_present "$home/state/.last-hold-release" "retire-release deleted the cadence stamp unretired"
-  assert_present "$home/state/.hold-release-pending" "retire-release deleted the waiting marker unretired"
-  pass "retire-release keeps its state for a retry when tasks-axi cannot be confirmed compatible"
 }
 
 test_kind_prefix_shows_on_every_hold_reason() {
@@ -505,9 +418,6 @@ test_keyed_answer_records_a_pick_by_label
 test_holds_wait_for_the_captains_answer
 test_choices_keeps_a_retired_default_as_the_recommendation
 test_defer_keeps_a_retired_default_as_the_recommendation
-test_retire_defaults_rewrites_every_retired_default
-test_session_start_retires_the_release_leftovers
-test_retire_release_keeps_its_state_when_tasks_axi_is_unconfirmed
 test_hold_records_the_captain_as_owner_and_release_hands_back
 test_kind_prefix_shows_on_every_hold_reason
 test_new_call_records_a_due_date
