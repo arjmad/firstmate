@@ -177,12 +177,12 @@
 # and tests/fm-backend-<s>-*.test.sh for bin/backends/; and for a prose file,
 # tests/fm-documentation-audiences.test.sh. It then adds every --changed suite
 # whose family CI cannot exercise: an optional-binary backend family (see the
-# gate-skip classes below) with no dedicated CI lane, because a suite that only
+# gate-skip classes below) whose binary no CI lane installs, because a suite that only
 # skips in CI is proven nowhere unless it runs on a host that has its binary.
 # A live-harness-optin guard is added only when its name matches as above: the
 # firstmate-coding-guidelines skill owns when the live guards run. When the
-# --changed map refuses a path, --near still runs its own selection, says so,
-# and adds no CI-unexercised suites; CI's plan then runs the full suite. An
+# --changed map refuses a path, --near names it, since CI's plan then runs the
+# full suite, and adds CI-unexercised suites from the other paths alone. An
 # empty --near selection succeeds: CI is still the proof.
 # Documentation (README.md, LICENSE, assets/, docs/, .gitignore) selects the
 # suites that name its path, per script, and a non-prose file there (a docs/
@@ -2159,12 +2159,16 @@ changed_paths() {
   git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null
 }
 
-select_changed() {
+select_changed() {  # <base> [<path>]: one given path instead of the branch's
   local base=$1 path entry fam script_name s paths
   local -a wanted_families=()
   local -a wanted_scripts=()
 
-  paths=$(changed_paths "$base") || exit $?
+  if [ "$#" -gt 1 ]; then
+    paths=$2
+  else
+    paths=$(changed_paths "$base") || exit $?
+  fi
 
   while IFS= read -r path; do
     [ -n "$path" ] || continue
@@ -2225,18 +2229,21 @@ select_changed() {
   fi
 }
 
-# True when <family> is a backend whose binary no CI lane installs: an
-# optional-binary family other than hc, which select_lane runs as a dedicated
-# CI lane. CI only ever records such a suite's skip, so --near runs it locally.
+# True when <family> is a backend whose binary no CI lane installs, so CI only
+# ever records its suites' skip and --near runs them locally instead. hc has
+# its own CI lane, and snapshot-bearings needs only jq, which CI runners carry.
 family_ci_unexercised() {
-  [ "$1" != hc ] && [ "$(expected_gate_skip_for_family "$1")" = optional-binary ]
+  case "$1" in
+    hc|snapshot-bearings) return 1 ;;
+  esac
+  [ "$(expected_gate_skip_for_family "$1")" = optional-binary ]
 }
 
-# Print the --changed selection without touching SCRIPTS; exits as
-# select_changed does on a path its map refuses.
+# Print the --changed selection (select_changed's arguments) without touching
+# SCRIPTS; exits as select_changed does on a path its map refuses.
 changed_selection() {
   local -a SCRIPTS=()
-  select_changed "$1"
+  select_changed "$@"
   printf '%s\n' "${SCRIPTS[@]+"${SCRIPTS[@]}"}"
 }
 
@@ -2275,16 +2282,24 @@ select_near() {
   while IFS= read -r s; do
     [ -z "$s" ] || add_script "$s"
   done < <(printf '%s\n' "${near[@]+"${near[@]}"}" | LC_ALL=C sort -u)
-  # select_changed exits on a path its map refuses, so it runs in a subshell.
-  if changed_list=$(changed_selection "$base" 2>/dev/null); then
-    while IFS= read -r s; do
-      [ -n "$s" ] || continue
-      fam=$(family_for_basename "$(basename "$s")")
-      family_ci_unexercised "$fam" && add_script "$s"
-    done <<<"$changed_list"
-  else
-    log "--near: the --changed map refuses a changed path, so CI runs its full suite; no CI-unexercised suites were added (run --list --changed to see the path)"
+  # select_changed exits on a path its map refuses, so it runs in a subshell;
+  # after a refusal, each path is mapped alone so the others still count.
+  if ! changed_list=$(changed_selection "$base" 2>/dev/null); then
+    changed_list=
+    while IFS= read -r path; do
+      [ -n "$path" ] || continue
+      if s=$(changed_selection "$base" "$path" 2>/dev/null); then
+        changed_list+="$s"$'\n'
+      else
+        log "--near: the --changed map refuses $path, so CI runs its full suite"
+      fi
+    done <<<"$paths"
   fi
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    fam=$(family_for_basename "$(basename "$s")")
+    family_ci_unexercised "$fam" && add_script "$s"
+  done <<<"$changed_list"
   if [ "${#SCRIPTS[@]}" -eq 0 ]; then
     log "no suites near the changes vs $base; the pull request's CI is the proof"
   fi

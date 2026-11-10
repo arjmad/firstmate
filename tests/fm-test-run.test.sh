@@ -675,8 +675,9 @@ test_near_selects_only_named_suites_and_ci_unexercised_ones() {
   git -C "$repo" clean -qfd
 
   # A path the --changed map refuses leaves CI to run its full suite; --near
-  # still succeeds with its own (here empty) selection and says why.
+  # names it and still adds the CI-unexercised suites the other paths select.
   printf '\n' >>"$repo/bin/unmapped-source.sh"
+  printf '\n' >>"$repo/tests/fixtures/demo/demo-fixture.sh"
   if (cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD) >/dev/null 2>&1; then
     rm -rf "$tmp"
     fail "fixture drift: --changed must refuse bin/unmapped-source.sh"
@@ -684,8 +685,14 @@ test_near_selects_only_named_suites_and_ci_unexercised_ones() {
   rc=0
   out=$(cd "$repo" && bin/fm-test-run.sh --list --near --base HEAD 2>&1) || rc=$?
   [ "$rc" -eq 0 ] || { rm -rf "$tmp"; fail "--near must not fail on a path --changed refuses: $out"; }
-  assert_contains "$out" "the --changed map refuses a changed path" \
-    "--near must say the --changed map refused a path"
+  assert_contains "$out" "the --changed map refuses bin/unmapped-source.sh" \
+    "--near must name the path the --changed map refused"
+  assert_contains "$out" "tests/fm-backend-orca.test.sh" \
+    "a refused path must not drop the CI-unexercised suite another path selects"
+  git -C "$repo" reset -q --hard
+  printf '\n' >>"$repo/bin/unmapped-source.sh"
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --near --base HEAD 2>&1) \
+    || { rm -rf "$tmp"; fail "--near must not fail on a lone refused path: $out"; }
   assert_contains "$out" "no suites near the changes" \
     "--near must say its selection is empty"
 

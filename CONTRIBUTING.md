@@ -106,7 +106,7 @@ The `firstmate-coding-guidelines` skill owns the rule that local no-mistakes Tes
 On this repository the pull request's CI is the proof, so before you push, run only `bin/fm-test-run.sh --near`: the suites named for each changed file, plus the backend suites CI can only gate-skip.
 `bin/fm-test-run.sh --list --near` prints that selection without running it, and the runner's header owns how a changed file maps to its suites.
 Do not run `--all`, `--changed`, or every suite that touches your change before pushing; CI plans and runs that wider set, and every push, a review fix included, runs the whole branch's plan again.
-Run more locally only to reproduce a failing CI lane, or to switch on a gated live guard CI cannot run, such as the launch-code guard the `firstmate-coding-guidelines` skill names, which `--near` selects but runs only when asked.
+Run more locally only to reproduce a failing CI lane, or to run by name a gated live guard CI cannot run, such as the launch-code guard the `firstmate-coding-guidelines` skill names.
 `bin/fm-pr-merge.sh` still refuses a pull request with a red or unreported check, so a suite the local run missed stops the merge, not the push.
 When you do name subjects, pass them to `bin/fm-test-run.sh` rather than chaining `bash tests/a.test.sh && bash tests/b.test.sh`, because a list of script paths gets the same bounded concurrency as `--near`.
 The pipeline publishes that evidence itself, so never hand-commit `.no-mistakes/` paths onto a feature branch; CI rejects them as tracked personal fleet paths.
