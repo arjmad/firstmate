@@ -196,6 +196,18 @@ test_adopted_board_retires_when_its_rows_are_archived() {
   out=$(pe "$unreadable" retire-quiet-boards) || fail "retire-quiet-boards failed with an unreadable archive: $out"
   registered "$unreadable" lavish-archived || fail "an unreadable archive retired an adopted board early"
   rmdir "$unreadable/data/done-archive.md"
+  # An archive whose directory cannot be searched cannot be told absent.
+  mkdir "$unreadable/data/locked"
+  cp "$home/data/done-archive.md" "$unreadable/data/locked/done-archive.md"
+  sed 's#^archive = .*#archive = "data/locked/done-archive.md"#' "$unreadable/.tasks.toml" > "$unreadable/tasks.toml.new"
+  mv "$unreadable/tasks.toml.new" "$unreadable/.tasks.toml"
+  chmod 000 "$unreadable/data/locked"
+  if [ ! -x "$unreadable/data/locked" ]; then
+    out=$(pe "$unreadable" retire-quiet-boards) || fail "retire-quiet-boards failed with an unsearchable archive directory: $out"
+    registered "$unreadable" lavish-archived || fail "an archive in an unsearchable directory retired an adopted board early"
+  fi
+  chmod 700 "$unreadable/data/locked"
+  fm_test_tasks_toml "$unreadable/.tasks.toml"
   cp "$home/data/done-archive.md" "$unreadable/data/done-archive.md"
   out=$(pe "$unreadable" retire-quiet-boards) || fail "retire-quiet-boards failed: $out"
   assert_contains "$out" "board-retired: lavish-archived reason=row-closed" "the same board once its archive reads"
