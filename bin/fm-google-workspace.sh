@@ -49,8 +49,16 @@
 #   bws_project_id <uuid>
 #   bws_secret_key <name>
 #   allowed_file_dirs <path>   optional; defaults to the home's data directory
-# claude-install and claude-config pass it to every server as ALLOWED_FILE_DIRS, the
-# directories workspace-mcp may read attachments from.
+#   claude_tool_list <path>    optional; no tool is disabled without it
+# claude-install and claude-config pass allowed_file_dirs to every server as
+# ALLOWED_FILE_DIRS, the directories workspace-mcp may read attachments from.
+# claude_tool_list names a tab-separated tool list: '#' comment and blank lines, then a
+# header row naming at least a 'tool' and a 'claude' column, then one row per tool whose
+# claude value is 'on' or 'off'. claude-install and claude-config append every 'off'
+# tool, in file order, to each Claude Code server's argv as --disabled-tools; the argv,
+# hermes-config, and the consent driver never carry it. A missing or malformed list, a
+# bad tool name, or a duplicate tool refuses both rather than registering a server
+# with the tools it was meant to remove.
 # Blank lines and '#' comments are ignored. There is no built-in table: a missing,
 # unreadable, or malformed file, a duplicate slug or email, or an implausible email
 # refuses every subcommand except help, naming the file and the accepted format.
@@ -78,6 +86,7 @@ ACCOUNTS=""
 BWS_PROJECT_ID=""
 BWS_SECRET_KEY=""
 ALLOWED_FILE_DIRS=""
+CLAUDE_TOOL_LIST=""
 
 # The exact per-service permission levels. --permissions is the only flag that moves
 # the OAuth token boundary: --tool-tier and --disabled-tools shrink the tool list while
@@ -94,9 +103,9 @@ CLAUDE_BIN="${FM_GWS_CLAUDE:-claude}"
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-usage() { sed -n '21,61p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '21,69p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed 's/^# \{0,1\}//'; }
 
-CONFIG_FORMAT="accepted format, one setting per line: 'account <slug> <email>', 'bws_project_id <uuid>', 'bws_secret_key <name>', optional 'allowed_file_dirs <path>'"
+CONFIG_FORMAT="accepted format, one setting per line: 'account <slug> <email>', 'bws_project_id <uuid>', 'bws_secret_key <name>', optional 'allowed_file_dirs <path>', optional 'claude_tool_list <path>'"
 
 config_die() { die "$CONFIG_FILE: $*; $CONFIG_FORMAT"; }
 
@@ -145,6 +154,11 @@ load_config() {
         [ -z "$ALLOWED_FILE_DIRS" ] || config_die "line $lineno: duplicate $key"
         ALLOWED_FILE_DIRS="$2"
         ;;
+      claude_tool_list)
+        [ "$#" -eq 2 ] || config_die "line $lineno: expected 'claude_tool_list <path>'"
+        [ -z "$CLAUDE_TOOL_LIST" ] || config_die "line $lineno: duplicate $key"
+        CLAUDE_TOOL_LIST="$2"
+        ;;
       *) config_die "line $lineno: unknown setting '$key'" ;;
     esac
   done < "$CONFIG_FILE"
@@ -191,6 +205,40 @@ server_argv() {
   printf '%s\n' --single-user --permissions
   # shellcheck disable=SC2086 # deliberate word splitting: one permission token per line
   printf '%s\n' $PERMISSIONS
+}
+
+# claude_disabled_tools prints the claude_tool_list's 'off' tools one per line, in file
+# order, and nothing when no list is configured; it fails, naming the list, on anything
+# the header comment above does not accept.
+claude_disabled_tools() {
+  [ -n "$CLAUDE_TOOL_LIST" ] || return 0
+  [ -f "$CLAUDE_TOOL_LIST" ] && [ -r "$CLAUDE_TOOL_LIST" ] \
+    || die "$CONFIG_FILE: claude_tool_list $CLAUDE_TOOL_LIST is not a readable file"
+  local out
+  out=$(awk -F'\t' '
+    /^#/ || /^[[:space:]]*$/ { next }
+    !header {
+      header = 1
+      for (i = 1; i <= NF; i++) { if ($i == "tool") t = i; if ($i == "claude") c = i }
+      if (!t || !c) { print "the header row names no tool and claude columns"; bad = 1; exit }
+      next
+    }
+    $t !~ /^[a-z][a-z0-9_]*$/ { print "line " NR ": bad tool name \"" $t "\""; bad = 1; exit }
+    seen[$t]++ { print "line " NR ": duplicate tool " $t; bad = 1; exit }
+    $c != "on" && $c != "off" { print "line " NR ": " $t " claude value must be on or off"; bad = 1; exit }
+    $c == "off" { print $t }
+    END { if (!bad && !header) { print "no header row"; bad = 1 } exit bad }' "$CLAUDE_TOOL_LIST") \
+    || die "$CLAUDE_TOOL_LIST (claude_tool_list): ${out##*$'\n'}"
+  [ -z "$out" ] || printf '%s\n' "$out"
+}
+
+# claude_argv is server_argv plus Claude Code's own subtraction: --disabled-tools and the
+# claude_tool_list's 'off' tools, or nothing when none is off.
+claude_argv() {
+  local off
+  off=$(claude_disabled_tools) || exit 1
+  server_argv
+  [ -z "$off" ] || printf '%s\n' --disabled-tools "$off"
 }
 
 file_mode() {
@@ -415,8 +463,9 @@ cmd_status() {
 
 cmd_claude_config() {
   local command argv
-  command=$(server_argv | head -n 1)
-  argv=$(server_argv | tail -n +2)
+  argv=$(claude_argv) || exit 1
+  command=$(head -n 1 <<<"$argv")
+  argv=$(tail -n +2 <<<"$argv")
   accounts_rows | python3 -c 'import json, sys
 args = sys.argv[1].split()
 accounts_root, client_secret, command, allowed = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
@@ -441,7 +490,7 @@ print(json.dumps({"mcpServers": servers}, indent=2))' "$argv" "$ACCOUNTS_ROOT" "
 cmd_claude_install() {
   command -v "$CLAUDE_BIN" >/dev/null 2>&1 || die "$CLAUDE_BIN is not on PATH"
   local slug email argv
-  argv=$(server_argv)
+  argv=$(claude_argv) || exit 1
   accounts_rows | while IFS=$'\t' read -r slug email; do
     "$CLAUDE_BIN" mcp remove -s user "gws-$slug" >/dev/null 2>&1 || true
     # shellcheck disable=SC2086 # deliberate word splitting: one argv token per line
