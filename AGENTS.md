@@ -64,7 +64,6 @@ Use an explicit `FM_HOME` when steering, so another home's state cannot be selec
 Keep the primary shell in this home: use `git -C <dir>`, an absolute path, or a subshell `(cd <dir> && ...)`, because the cd guard (`docs/cd-guard.md`) denies a top-level `cd`.
 Read the current record before replacing it; use its owning helper rather than hand-editing runtime state.
 Shared tracked surfaces and private ignored paths are defined in section 1; section 6 owns knowledge placement, regardless of harness memory.
-Load `operational-home-layout` when locating, interpreting, or changing Firstmate home, config, data, state, project, or generated runtime paths.
 
 ## 3. Session start (run once at every session start)
 
@@ -84,9 +83,7 @@ The emitted supervision block selects this harness's protocol; the startup scrip
 
 Bootstrap detects first and installs only with the captain's scoped authorization and within host policy; continue unrelated work when a missing tool is irrelevant to it.
 Dispatch requires the essential launch tools and confirmed GitHub authentication; unavailable visual presentation does not block nonvisual work.
-Load `bootstrap-diagnostics` for actionable diagnostics; silent output and completed `BOOTSTRAP_INFO:` facts need no action, except its stated interrupted-cleanup trigger.
 `secondmate-provisioning` owns startup secondmate sync, liveness, and inherited material.
-Load `session-start-recovery` when the digest reports unfinished checks, actionable diagnostics, recovery inputs, or output requiring interpretation.
 For startup diagnostics or mechanism changes, read `bin/fm-session-start.sh`, [startup routing](docs/sessionstart-nudge.md), and the relevant emitted protocol under `docs/supervision-protocols/`.
 
 ## 4. Harness and runtime dispatch
@@ -112,7 +109,6 @@ Surface actionable decisions or failures, otherwise resume supervision silently.
 ## 6. Project and knowledge management
 
 Load `project-management` before adding, creating, removing, or initializing a project.
-Cloning or registering a project is add intake and uses the same trigger.
 That skill owns registry syntax, delivery-mode selection, outward-facing consent, clone and initialization procedure, safe rollback, and removal preflight.
 Project creation never authorizes an unmentioned remote, and project removal never bypasses that preflight or unlanded-work checks.
 
@@ -159,7 +155,6 @@ Load `ask-user-authority` and `validation-supervision` before deciding or answer
 A no-mistakes worker owns its active validation run; follow the lifecycle reference before superseding work or recovering a reported failed pipeline.
 
 Verify landing before teardown; preserve uncommitted or unlanded work unless its discard is explicitly authorized.
-Load `validation-supervision` when a ship starts or already has an active no-mistakes validation run, `ship-landing` when a ship reports a PR or ready branch and before task cleanup, and `scout-completion` when a scout reports completion or is considered for promotion.
 Read and relay a scout's self-contained report, and load `captain-hold-lifecycle` before declaring an investigation or visual review complete.
 A persistent secondmate's empty queue is healthy, not authority to retire it.
 
@@ -190,8 +185,6 @@ Handle actionable wakes as follows:
 3. For `check:`, act on the named poll result, including merges, contribution signals, Relay events, process-to-event source results, and captain inbox notes; acknowledge a handled inbox note with `bin/fm-inbox.sh drain --ack <id>`, or it stays counted as waiting, and give a note needing a durable answer `bin/fm-inbox.sh reply <id>`.
    A `check: secondmate <id> auto-relaunched` wake reports a completed recovery: load `secondmate-provisioning` and reconcile rather than relaunching again.
 4. For `heartbeat:`, review the whole fleet from the structured fleet view (`bin/fm-fleet-view.sh`), reconcile suspicious tasks and PR state, update the backlog, refresh a built bearings board through `bearings`, and never report an unchanged fleet as progress.
-
-Load `bearings` on a contributions check wake or when filing work linked to an upstream issue; its contribution-follow-up section owns triage and exact signal acknowledgement.
 
 When any wake reports a merged PR for a project cloned in this home, refresh that clone through the guarded fleet-sync path.
 When Relay-linked work reaches a milestone or terminal state, load `fmx-respond`; before terminal teardown, use its promised-final reconciliation when a typed public commitment exists, otherwise post the final completion follow-up so the link clears even if earlier follow-ups were spent.
