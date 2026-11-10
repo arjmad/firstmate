@@ -538,7 +538,7 @@ fm_dod_code_review_block() {  # <direct-PR|no-mistakes>
   cat <<EOF
 Before that done report, give a code-changing GitHub PR its code review; a PR on any other forge skips this step.
 Run \`$cli status <pr-url>\`; \`exempt\` or \`reviewed\` needs nothing more, so a tinker-tier or docs-only PR runs neither review below.
-On \`unreviewed\`, first run the \`tstack-sol-loop\` skill on your branch against the PR's base once the repository's own checks pass on it: GPT Sol on the Codex subscription reviews the change for at most 3 rounds, never the skill's extended 5, and the skill's own rules decide when the loop stops.
+On \`unreviewed\`, first run the \`tstack-sol-loop\` skill on your branch against the PR's base once the local checks the repository's contribution guide names pass on it: GPT Sol on the Codex subscription reviews the change for at most 3 rounds, never the skill's extended 5, and the skill's own rules decide when the loop stops.
 Settle each Sol finding as that skill says - fix the real ones with the smallest change and decline nits and out-of-scope findings in one line in its ledger - then $sol_fix, since the skill pushes nothing during it, and add the PR-body line the skill asks for.
 When the skill hands an open finding to its user - one disputed twice, or a blocker or should still open when the rounds run out - that user is firstmate: append \`needs-decision [at=<epoch>]: {the open Sol findings}\` and stop.
 This step is the ask that skill waits for, and where it would report a blocker because nothing here can reach Sol - the skill is not installed, Codex is not signed in, or no route runs Sol - skip the loop instead, never substitute another model, append \`working [at=<epoch>]: Sol skipped: {reason}\` so firstmate sees it, and keep the reason for the record note.
@@ -718,7 +718,7 @@ Delivery contract: mode=direct-PR$contract_forge$contract_consent
 Ship branch: $branch
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
-When it is implemented and committed, push your branch and open a PR with \`$forge_cli\` that is ready for review, not a draft$pr_base.
+When it is implemented and committed, run the local checks the repository's contribution guide names for your change, then push your branch and open a PR with \`$forge_cli\` that is ready for review, not a draft$pr_base.
 Write the PR body with the \`matt-pr\` skill, around any lines the repository requires: a Summary, its Evidence, and a Merge Danger section with a \`**Door:** one-way\` or \`**Door:** two-way\` line and a \`**Blast Radius:**\` line; where that skill name does not resolve, write those same three sections yourself.
 Mark it a one-way door when the change cannot be walked back, such as destroyed data or a published commitment: a one-way PR waits for the captain's own word before it merges, under any merge posture.
 Before you report done, read the PR back from the forge and confirm it is not a draft $draft_check

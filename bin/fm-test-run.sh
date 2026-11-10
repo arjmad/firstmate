@@ -5,11 +5,12 @@
 #
 # Usage: fm-test-run.sh <selection mode> [options]
 #
-# Selection modes (exactly one of: --all, --family, --changed, --lane,
+# Selection modes (exactly one of: --all, --family, --changed, --near, --lane,
 # --proven-isolated, or script paths):
 #   fm-test-run.sh --all
 #   fm-test-run.sh --family <name>
 #   fm-test-run.sh --changed [--base <git-ref>]
+#   fm-test-run.sh --near [--base <git-ref>]
 #   fm-test-run.sh --lane portable-parallel-1|portable-parallel-2|portable-serial
 #   fm-test-run.sh --lane portable-serial-<k>of<n>   (one CI serial shard)
 #   fm-test-run.sh --lane real-herdr-gated|hc        (the Herdr and herdr-core CI lanes)
@@ -20,6 +21,7 @@
 #   fm-test-run.sh --list --all
 #   fm-test-run.sh --list --family <name>
 #   fm-test-run.sh --list --lane portable-parallel-1
+#   fm-test-run.sh --list --near   (the suites a changed file maps to)
 #   fm-test-run.sh --list-scheduled --family <name>
 #   fm-test-run.sh --list-scheduled --lane portable-parallel-1
 #   fm-test-run.sh --list-families
@@ -44,7 +46,8 @@
 #                   parallel hints, falling back to serial weights if missing.
 #                   Every other selection uses serial weights alone.
 #                   Equal weights are ordered by path under LC_ALL=C.
-#   --base <ref>    with --changed, compare against this ref (default: origin/main)
+#   --base <ref>    with --changed or --near, compare against this ref
+#                   (default: origin/main)
 #   --only <file>   after selection (and --exclude-family), keep only the
 #                   scripts listed one per line in <file>, in selection order.
 #                   A listed script outside the selection is refused, so a
@@ -61,8 +64,8 @@
 #                   The required Herdr CI lane uses this so a missing pin cannot
 #                   silently pass as a gate skip.
 #   --jobs N        run the selected scripts with up to N concurrent workers.
-#                   Plain --changed and a plain list of script paths use
-#                   min(4, cpus) workers when multiple selected scripts are
+#                   Plain --changed, plain --near, and a plain list of script
+#                   paths use min(4, cpus) workers when multiple selected scripts are
 #                   admissible; --lane, --family, and --all stay serial unless
 #                   asked for concurrency explicitly.
 #                   N>1 is allowed only when every selected script is proven
@@ -75,12 +78,13 @@
 #                   proof run in a separate phase for each family. Concurrent
 #                   phases use serial weights, longest-hint-first. Unproven stateful
 #                   scripts run serially after all concurrent phases. Default is
-#                   1 (serial) except for plain --changed and a plain list of
-#                   script paths, which use the bounded automatic scheduler.
+#                   1 (serial) except for plain --changed, plain --near, and a
+#                   plain list of script paths, which use the bounded
+#                   automatic scheduler.
 #   --per-script-timeout-secs N
 #                   terminate a script that runs longer than N seconds and
 #                   record it as exit 124 (0 disables, the default). The
-#                   --changed applies 1500s automatically, above the current
+#                   --changed and --near apply 1500s automatically, above the current
 #                   slowest CI hint with margin; exceeding it becomes a bounded
 #                   failure, not proof of a hang. --max-wall-ms is checked
 #                   after the run and so cannot catch a hang on its own.
@@ -165,6 +169,21 @@
 # rename maps both its old and new path. Every changed bin/ path, curated or not, also
 # selects each test that names its basename, so a suite outside the curated
 # family that exercises the script directly is never left out.
+# --near is the narrow local pre-push run on the firstmate repository, where the
+# pull request's CI is the proof (CONTRIBUTING.md "Development" owns that
+# policy). It reads the same changed paths as --changed and selects, per path:
+# a changed tests/*.test.sh itself; for a bin/ path with basename stem <s>,
+# tests/<s>.test.sh and tests/<s>-*.test.sh, plus tests/fm-backend-<s>.test.sh
+# and tests/fm-backend-<s>-*.test.sh for bin/backends/; and for a prose file,
+# tests/fm-documentation-audiences.test.sh. It then adds every --changed suite
+# whose family CI cannot exercise: an optional-binary backend family (see the
+# gate-skip classes below) with no dedicated CI lane, because a suite that only
+# skips in CI is proven nowhere unless it runs on a host that has its binary.
+# A live-harness-optin guard is added only when its name matches as above: the
+# firstmate-coding-guidelines skill owns when the live guards run. When the
+# --changed map refuses a path, --near still runs its own selection, says so,
+# and adds no CI-unexercised suites; CI's plan then runs the full suite. An
+# empty --near selection succeeds: CI is still the proof.
 # Documentation (README.md, LICENSE, assets/, docs/, .gitignore) selects the
 # suites that name its path, per script, and a non-prose file there (a docs/
 # JSON inventory, an asset) that no suite names is refused like any unmapped
@@ -2128,14 +2147,24 @@ families_for_changed_path() {
   esac
 }
 
-select_changed() {
-  local base=$1 path entry fam script_name s
-  local -a wanted_families=()
-  local -a wanted_scripts=()
-
+# The paths a branch changes against <base>: committed since the merge base,
+# uncommitted, and untracked. Read with --no-renames, so a rename lists both.
+changed_paths() {
+  local base=$1
   if ! git -C "$ROOT" rev-parse --verify "$base" >/dev/null 2>&1; then
     die "changed-file base ref not found: $base (pass --base <ref>)"
   fi
+  git -C "$ROOT" diff --name-only --no-renames "${base}...HEAD" 2>/dev/null
+  git -C "$ROOT" diff --name-only --no-renames HEAD 2>/dev/null
+  git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null
+}
+
+select_changed() {
+  local base=$1 path entry fam script_name s paths
+  local -a wanted_families=()
+  local -a wanted_scripts=()
+
+  paths=$(changed_paths "$base") || exit $?
 
   while IFS= read -r path; do
     [ -n "$path" ] || continue
@@ -2163,9 +2192,7 @@ select_changed() {
         fi
         ;;
     esac
-  done < <(git -C "$ROOT" diff --name-only --no-renames "${base}...HEAD" 2>/dev/null; \
-           git -C "$ROOT" diff --name-only --no-renames HEAD 2>/dev/null; \
-           git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null)
+  done <<<"$paths"
 
   # Dedup families
   local f seen_f
@@ -2195,6 +2222,71 @@ select_changed() {
 
   if [ "${#SCRIPTS[@]}" -eq 0 ]; then
     log "no tests selected for changes vs $base (map is conservative; use --all for the complete suite)"
+  fi
+}
+
+# True when <family> is a backend whose binary no CI lane installs: an
+# optional-binary family other than hc, which select_lane runs as a dedicated
+# CI lane. CI only ever records such a suite's skip, so --near runs it locally.
+family_ci_unexercised() {
+  [ "$1" != hc ] && [ "$(expected_gate_skip_for_family "$1")" = optional-binary ]
+}
+
+# Print the --changed selection without touching SCRIPTS; exits as
+# select_changed does on a path its map refuses.
+changed_selection() {
+  local -a SCRIPTS=()
+  select_changed "$1"
+  printf '%s\n' "${SCRIPTS[@]+"${SCRIPTS[@]}"}"
+}
+
+# The narrow local run; the header's --near paragraph owns the contract.
+select_near() {
+  local base=$1 path stem s fam paths changed_list
+  local -a near=()
+  paths=$(changed_paths "$base") || exit $?
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    case "$path" in
+      tests/*.test.sh)
+        [ ! -f "$path" ] || near+=("$path")
+        ;;
+      bin/*)
+        stem=$(basename "$path")
+        stem=${stem%.*}
+        for s in "tests/$stem.test.sh" "tests/$stem"-*.test.sh; do
+          [ ! -f "$s" ] || near+=("$s")
+        done
+        case "$path" in
+          bin/backends/*)
+            for s in "tests/fm-backend-$stem.test.sh" "tests/fm-backend-$stem"-*.test.sh; do
+              [ ! -f "$s" ] || near+=("$s")
+            done
+            ;;
+        esac
+        ;;
+    esac
+    case "$path" in
+      *.md|*.mdx|*.rst|*.txt|docs/examples/*)
+        near+=(tests/fm-documentation-audiences.test.sh)
+        ;;
+    esac
+  done <<<"$paths"
+  while IFS= read -r s; do
+    [ -z "$s" ] || add_script "$s"
+  done < <(printf '%s\n' "${near[@]+"${near[@]}"}" | LC_ALL=C sort -u)
+  # select_changed exits on a path its map refuses, so it runs in a subshell.
+  if changed_list=$(changed_selection "$base" 2>/dev/null); then
+    while IFS= read -r s; do
+      [ -n "$s" ] || continue
+      fam=$(family_for_basename "$(basename "$s")")
+      family_ci_unexercised "$fam" && add_script "$s"
+    done <<<"$changed_list"
+  else
+    log "--near: the --changed map refuses a changed path, so CI runs its full suite; no CI-unexercised suites were added (run --list --changed to see the path)"
+  fi
+  if [ "${#SCRIPTS[@]}" -eq 0 ]; then
+    log "no suites near the changes vs $base; the pull request's CI is the proof"
   fi
 }
 
@@ -2387,6 +2479,11 @@ while [ "$#" -gt 0 ]; do
     --changed)
       [ -z "$MODE" ] || die "only one selection mode is allowed"
       MODE=changed
+      shift
+      ;;
+    --near)
+      [ -z "$MODE" ] || die "only one selection mode is allowed"
+      MODE=near
       shift
       ;;
     --base)
@@ -2610,6 +2707,10 @@ case "${MODE:-}" in
     select_changed "$BASE_REF"
     SELECTION_DESC="changed:base=$BASE_REF"
     ;;
+  near)
+    select_near "$BASE_REF"
+    SELECTION_DESC="near:base=$BASE_REF"
+    ;;
   scripts)
     # Normalize and re-add through add_script for consistent paths.
     raw=("${SCRIPTS[@]+"${SCRIPTS[@]}"}")
@@ -2620,7 +2721,7 @@ case "${MODE:-}" in
     SELECTION_DESC="scripts"
     ;;
   *)
-    die "select with --all, --family <name>, --lane <name>, --proven-isolated, --changed, or one or more script paths (see --help)"
+    die "select with --all, --family <name>, --lane <name>, --proven-isolated, --changed, --near, or one or more script paths (see --help)"
     ;;
 esac
 
@@ -2698,7 +2799,7 @@ for s in "${SCRIPTS[@]}"; do
   [ -x "$s" ] || [ -r "$s" ] || die "test script not readable: $s"
 done
 
-# Plain --changed and a plain list of script paths both use the bounded
+# Plain --changed, plain --near, and a plain list of script paths all use the bounded
 # representative-suite scheduler; numeric --jobs retains the strict all-script
 # admission rule below. Naming scripts is how a local verification round asks
 # for exactly those subjects, so it gets bounded concurrency rather than a
@@ -2707,8 +2808,8 @@ done
 # lane must stay strictly serial, --family is what the required Herdr lane runs,
 # and --all is a deliberate complete regression.
 AUTO_CONCURRENCY=0
-if { [ "$MODE" = changed ] || [ "$MODE" = scripts ]; } && [ "$JOBS_EXPLICIT" -eq 0 ]; then
-  if [ "$MODE" = changed ] && [ "${#SCRIPTS[@]}" -gt 0 ] && [ "$PER_SCRIPT_TIMEOUT_SECS" -eq 0 ]; then
+if { [ "$MODE" = changed ] || [ "$MODE" = near ] || [ "$MODE" = scripts ]; } && [ "$JOBS_EXPLICIT" -eq 0 ]; then
+  if { [ "$MODE" = changed ] || [ "$MODE" = near ]; } && [ "${#SCRIPTS[@]}" -gt 0 ] && [ "$PER_SCRIPT_TIMEOUT_SECS" -eq 0 ]; then
     PER_SCRIPT_TIMEOUT_SECS=$CHANGED_DEFAULT_TIMEOUT_SECS
   fi
   auto_admissible=0
@@ -2722,7 +2823,7 @@ if { [ "$MODE" = changed ] || [ "$MODE" = scripts ]; } && [ "$JOBS_EXPLICIT" -eq
     [ "$JOBS" -eq 1 ] || AUTO_CONCURRENCY=1
   fi
 fi
-if [ "$JOBS" -gt 1 ] || [ "$MODE" = changed ] || [ "$MODE" = scripts ]; then
+if [ "$JOBS" -gt 1 ] || [ "$MODE" = changed ] || [ "$MODE" = near ] || [ "$MODE" = scripts ]; then
   SELECTION_DESC="${SELECTION_DESC};jobs=$JOBS"
 fi
 
