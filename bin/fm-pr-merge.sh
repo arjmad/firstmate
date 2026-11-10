@@ -2257,7 +2257,7 @@ require_code_review() {
       printf 'error: refusing to merge %s\n  - its code review state could not be read\n' "$URL" >&2
       ;;
   esac
-  echo "error: run Claude Code's /code-review --comment on the pull request, fix or answer each finding, then record it with bin/fm-code-review.sh record $URL (docs/task-lifecycle.md); only an explicit captain instruction may pass --waive-review <reason>" >&2
+  echo "error: run Claude Code's /code-review with the arguments bin/fm-code-review.sh args $URL prints, fix or answer each finding, then record it with bin/fm-code-review.sh record $URL (docs/task-lifecycle.md); only an explicit captain instruction may pass --waive-review <reason>" >&2
   return 1
 }
 

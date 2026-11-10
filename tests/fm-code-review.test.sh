@@ -330,6 +330,25 @@ test_status_refuses_unreadable_and_non_github() {
   pass "fm-code-review status refuses unreadable PRs and non-GitHub URLs"
 }
 
+test_args_carry_the_merge_gate_focus() {
+  local dir
+  dir=$(make_case args bin/tool.sh)
+  run_case "$dir" args "$URL"
+  expect_code 0 "$RC" "args: a GitHub PR URL should print the review arguments"
+  [ "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" = 1 ] || fail "args: the arguments must be one line, got: $OUT"
+  case "$OUT" in
+    'medium --comment 12 Merge-gate focus for this review: '*) ;;
+    *) fail "args: the arguments do not start with the level, --comment, the number, and the focus: $OUT" ;;
+  esac
+  assert_contains "$OUT" 'run gh pr view 12 --repo github.com/example/repo --json title,body' "args: the focus does not name this PR's description"
+  [ ! -s "$dir/gh.log" ] || fail "args: printing the arguments must not call gh"
+  run_case "$dir" args https://gitlab.example/group/project/-/merge_requests/7
+  expect_code 2 "$RC" "args-gitlab: a GitLab URL gets no review arguments"
+  run_case "$dir" args
+  expect_code 2 "$RC" "args-usage: a missing URL is a usage error"
+  pass "fm-code-review args prints the one-line review arguments with the merge-gate focus"
+}
+
 test_record_posts_once_for_the_current_diff() {
   local dir id
   dir=$(make_case record bin/tool.sh)
@@ -668,6 +687,7 @@ test_status_with_the_fleet_classifier
 test_status_reads_exempt_unreviewed_and_reviewed
 test_status_handles_github_limits
 test_status_refuses_unreadable_and_non_github
+test_args_carry_the_merge_gate_focus
 test_record_posts_once_for_the_current_diff
 test_record_carry_covers_a_small_follow_up
 test_record_carry_refuses_what_it_cannot_cover

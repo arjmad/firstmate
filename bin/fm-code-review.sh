@@ -26,7 +26,14 @@
 # since the files it leaves unlisted cannot be classified.
 #
 # The review is Claude Code's built-in /code-review skill at its medium level
-# with --comment, which posts each finding as an inline PR comment. Once every
+# with --comment, which posts each finding as an inline PR comment, run with
+# the arguments `args` prints: the level, --comment, the PR number, and
+# firstmate's merge-gate focus (fork patch,
+# docs/fork-decisions/2026-11-10-code-review-focus.md). The skill runs in a
+# forked context that sees only its own arguments, so the focus rides there:
+# it skips the finding kinds authors declined (cleanup, altitude, test quality,
+# hardening for states nothing produces, intended behavior, pre-existing code)
+# and keeps full recall on correctness bugs and wrong instructions. Once every
 # finding is fixed or answered in its thread and the last push is in, `record`
 # posts one PR comment carrying the marker line
 #   <!-- fm-code-review v1 diff=<diff-id> head=<sha> -->
@@ -70,6 +77,10 @@
 # the guard to those forges.
 #
 # Usage:
+#   fm-code-review.sh args <pr-url>
+#       Prints, on one line, the arguments to run /code-review with for the
+#       pull request: `medium --comment <number>` and then the merge-gate
+#       focus. Exits 0, or 2 when the URL is not a GitHub pull request.
 #   fm-code-review.sh classify [<path>...]
 #       Paths from the arguments, or one per line on stdin when there are none,
 #       classified as a repository without a table classifies them. Prints
@@ -183,6 +194,22 @@ code_review_tier() {
   esac
   CODE_REVIEW_TIER=
   return 2
+}
+
+# The merge-gate focus, one rule per line; `args` joins it into one line,
+# because the skill folds its arguments into one review-target line anyway.
+code_review_focus() {
+  cat <<EOF
+Merge-gate focus for this review: the author must fix or answer in writing every finding you report, and many past findings here were declined. These rules remove the kinds of finding that authors decline; they do not raise the bar for a real defect. Keep hunting correctness bugs and wrong instructions with full recall, and report every one that survives the rules below, up to the cap; spend the room these rules free on correctness: before you finish, go over each changed function, each removed line, and each changed procedure step once more for a defect you have not listed.
+1. A finding is something that makes code, configuration, or an executed document (a skill, procedure, agent contract, or record that an agent acts on) do the wrong thing in ordinary use, or a document statement that is false and would lead its reader to a wrong action. For a document agents follow step by step, an agent applying a step literally is ordinary use, so a step that omits, contradicts, or misstates what the rest of the system requires is a finding even when a general rule elsewhere says otherwise.
+2. Skip the cleanup, altitude, and preference angles entirely: duplication or reuse of a helper, simplification, refactoring, naming, wording, line wrapping, style, a fix at a different depth, and cost or speed unless it makes something fail or time out in ordinary use.
+3. Skip test-quality findings (a weak, flaky, or missing test, an unfaithful stub, a misleading test label) unless a test now passes while the behavior it covers is broken.
+4. Skip defensive hardening (a fallback, validation, or a guard) for an input, platform, tool version, or future caller that nothing in the repository shows occurs; when the finding needs such a trigger, look for its producer or caller first and drop it if there is none. A network call that hangs or fails, another process or a concurrent run, a stuck or dead process, and records or state written before this change are ordinary triggers, not speculative ones.
+5. Read the pull request's title and description before judging intent: run gh pr view $FM_PR_NUMBER --repo $FM_PR_HOST/$FM_PR_OWNER/$FM_PR_REPO --json title,body. Behavior that the description, or a spec, decision, or record it cites, states as intended is not a finding unless it breaks something that text does not account for.
+6. Before you report that something is missing or unguarded, check the callers, wrappers, and owning documents outside the changed lines; drop it only when you can cite the code or step that already prevents the failure on the path this change affects.
+7. Report a problem in unchanged code only when this diff introduces it, exposes it, or makes it reachable.
+8. A clear violation of a written rule in a CLAUDE.md or AGENTS.md that governs the changed file is still a finding when you can quote the rule and the line that breaks it.
+EOF
 }
 
 code_review_parse_url() {
@@ -436,6 +463,11 @@ $note"
 cmd=${1-}
 [ "$#" -eq 0 ] || shift
 case "$cmd" in
+  args)
+    [ "$#" -eq 1 ] || { echo "error: usage: fm-code-review.sh args <pr-url>" >&2; exit 2; }
+    code_review_parse_url "$1" || exit 2
+    printf 'medium --comment %s %s\n' "$FM_PR_NUMBER" "$(code_review_focus | tr '\n' ' ' | sed 's/ *$//')"
+    ;;
   classify)
     if [ "$#" -gt 0 ]; then
       printf '%s\n' "$@" | code_review_classify_stream
@@ -480,7 +512,7 @@ case "$cmd" in
     ;;
   -h|--help) usage ;;
   *)
-    echo "error: usage: fm-code-review.sh classify|status|record (see --help)" >&2
+    echo "error: usage: fm-code-review.sh args|classify|status|record (see --help)" >&2
     exit 2
     ;;
 esac

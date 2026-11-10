@@ -100,7 +100,8 @@
 # On those two modes outside Gerrit and Forgejo, fm_dod_code_review_block then
 # has the worker give a code-changing GitHub PR its code review before the done
 # report (fork patch, docs/fork-decisions.md 2026-10-17): a tstack-sol-loop
-# pre-check on Codex, then one /code-review (2026-10-26 sol-loop); a
+# pre-check on Codex, then one /code-review (2026-10-26 sol-loop) run with
+# the arguments bin/fm-code-review.sh args prints (2026-11-10 focus); a
 # no-mistakes worker carries its fixes through another run so the pipeline
 # stays the one publisher. bin/fm-code-review.sh owns which PRs need it and
 # what record counts.
@@ -542,7 +543,7 @@ On \`unreviewed\`, first run the \`tstack-sol-loop\` skill on your branch agains
 Settle each Sol finding as that skill says - fix the real ones with the smallest change and decline nits and out-of-scope findings in one line in its ledger - then $sol_fix, since the skill pushes nothing during it, and add the PR-body line the skill asks for.
 When the skill hands an open finding to its user - one disputed twice, or a blocker or should still open when the rounds run out - that user is firstmate: append \`needs-decision [at=<epoch>]: {the open Sol findings}\` and stop.
 This step is the ask that skill waits for, and where it would report a blocker because nothing here can reach Sol - the skill is not installed, Codex is not signed in, or no route runs Sol - skip the loop instead, never substitute another model, append \`working [at=<epoch>]: Sol skipped: {reason}\` so firstmate sees it, and keep the reason for the record note.
-Then run Claude Code's built-in \`/code-review medium --comment <number>\` once from this worktree: invoke the skill when your harness has it, and otherwise run \`claude -p '/code-review medium --comment <number>'\` as a shell command there.
+Then run Claude Code's built-in \`/code-review\` once from this worktree with the arguments \`$cli args <pr-url>\` prints, which are \`medium --comment <number>\` followed by firstmate's merge-gate focus: invoke the skill with exactly those arguments when your harness has it, and otherwise run \`a=\$($cli args <pr-url>) && claude -p "/code-review \$a"\` as a shell command there, so a refused URL runs no review.
 Then $fix, reply in the PR thread of every finding you do not, and after your last push run \`$cli record <pr-url> --note 'Sol: <N> rounds, <model>, <verdict>'\`, or \`--note 'Sol: skipped, <reason>'\` when the loop could not run, with no apostrophe in the note, and confirm it prints \`reviewed\`.
 Pushes that fix or answer this review's findings are covered by the one \`record\` you run after your last push; only a push after \`record\` that changes the diff needs a new review, and a rebase that leaves the diff alone needs none.
 For a small follow-up pushed after \`record\`, run \`$cli record <pr-url> --carry\` instead of a new review; the script decides what a carry covers, and when it refuses, its message says whether to run the carry again or \`/code-review\` again.
