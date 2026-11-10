@@ -1,0 +1,12 @@
+2026-11-10: Arjun asked for an ecosystem subtraction pass, and a grill that day let firstmate ship each cut or fix that can be undone; this record covers its firstmate batch.
+Decision: fix `fm-inbox.sh reply` so a help flag prints its usage and records nothing, because a recorded reply cannot be replaced.
+Decision: remove the one-time retirement of the dropped default release, because no home holds release leftovers and no backlog row keeps a `; releases` default; this supersedes the retirement row of the [drop-default-release record](2026-11-01-drop-default-release.md), and a re-hold still keeps an old row's default as its recommendation.
+Decision: the secondmate-restart test's EXIT trap calls the shared test cleanup, so the read-only `*.git-hooks` dirs its secondmate homes hold are removed with the rest of its temp root.
+No upstream proposal: the inbox and test fixes are small enough to carry until a sync, and the retirement was this fork's own code.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| `reply` prints its usage for `-h` or `--help` in the note-id or body position instead of recording the flag as the reply | `bin/fm-inbox.sh` (`cmd_reply`), `tests/fm-inbox.test.sh` (reply help case) | `bin/fm-inbox.sh` (`cmd_reply`), `tests/fm-inbox.test.sh` | carried | c8d8fdad |
+| The default-release retirement is removed: `retire-release`, `retire-defaults`, the watcher tick, the bootstrap sweep, and their tests and docs | `bin/fm-captain-hold.sh` (header, usage, `captain_hold_cleanup`, `held_captain_task_ids`, `command_retire_defaults`, `command_retire_release`), `bin/fm-watch.sh` (`hold_release_retire_tick`), `bin/fm-bootstrap.sh` (header, locked local sweeps), `bin/fm-session-start.sh` (header), `.agents/skills/captain-hold-lifecycle/SKILL.md`, `docs/captain-hold-lifecycle.md`, `tests/fm-captain-hold-kind.test.sh`, `tests/fm-watch-triage-pause.test.sh` | watcher main loop (the added tick call removed), bootstrap's locked MUTATING sweep list, session-start header | carried | c8d8fdad |
+| The secondmate-restart test's EXIT trap runs `fm_test_cleanup` instead of a plain `rm -rf` | `tests/fm-secondmate-restart.test.sh` (EXIT trap) | `tests/fm-secondmate-restart.test.sh` | carried | c8d8fdad |
+| `AGENTS.md` drops six lines that only repeated a skill description's load trigger | `AGENTS.md` (sections 2, 3, 6, 7, 8) | `AGENTS.md` | carried | c8d8fdad |
