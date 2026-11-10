@@ -202,6 +202,30 @@ fm_tasks_axi_backend_from_toml() {  # <toml-path>
   ' "$toml"
 }
 
+# Section-aware extraction from a tasks-axi TOML file: only the named keys
+# inside the named section, comments stripped. Prints "<key> <value>" lines.
+fm_tasks_axi_toml_section_entries() {  # <toml-file> <section> <key-alternation>
+  [ -f "$1" ] || return 0
+  LC_ALL=C awk -v section="[$2]" -v keys="^($3)[[:space:]]*=" '
+    function trim(v) { sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v); return v }
+    BEGIN { insection = 0 }
+    {
+      line = $0
+      sub(/[[:space:]]*#.*/, "", line)
+      line = trim(line)
+      if (line ~ /^\[[^]]+\]$/) { insection = (line == section); next }
+      if (!insection) next
+      if (line ~ keys) {
+        key = line
+        sub(/[[:space:]]*=.*/, "", key)
+        sub(/^[^=]*=[[:space:]]*/, "", line)
+        gsub(/^"|"$/, "", line); gsub(/^'\''|'\''$/, "", line)
+        printf "%s %s\n", key, line
+      }
+    }
+  ' "$1"
+}
+
 # Resolve the active tasks-axi backend with the same precedence as tasks-axi.
 fm_tasks_axi_backend_resolve() {  # <tasks-axi-working-directory>
   local root=$1 backend

@@ -78,6 +78,11 @@ round() {  # <home> <source-id> <sequence> <epoch> <silent|said> [unread]
 
 registered() { [ -f "$1/state/procevent/$2.source" ]; }
 
+archive_at() {  # <home> <archive path relative to the home>
+  sed "s#^archive = .*#archive = \"$2\"#" "$1/.tasks.toml" > "$1/tasks.toml.new" || fail "cannot point the archive at $2"
+  mv "$1/tasks.toml.new" "$1/.tasks.toml" || fail "cannot point the archive at $2"
+}
+
 test_quiet_rule_and_kept_boards() {
   local home out rc
   home=$(new_home quiet)
@@ -161,6 +166,70 @@ Board handed over from scout-d at 2026-11-01T00:00:00Z."
   registered "$home" lavish-unlinked || fail "an adopted board with no linked row was retired before its quiet period"
   registered "$home" lavish-long || fail "an open row whose long body hides its handover line from list was missed"
   pass "an adopted board retires once every backlog row carrying it has closed"
+}
+
+# Done retention moves a closed row out of the backlog into the configured
+# archive, so a carrying row the sweep must see can live there alone.
+test_adopted_board_retires_when_its_rows_are_archived() {
+  local home out unreadable
+  home=$(new_home archived)
+  board "$home" lavish-archived "$RECENT" 'adopted_from=scout-e'
+  axi "$home" add call-e1 "archived call" --body "Board handed over from scout-e at 2026-11-01T00:00:00Z."
+  board "$home" lavish-half "$RECENT" 'adopted_from=scout-f'
+  axi "$home" add call-f1 "archived half" --body "Board handed over from scout-f at 2026-11-01T00:00:00Z."
+  axi "$home" add call-f2 "open half" --body "Board handed over from scout-f at 2026-11-01T00:00:00Z."
+  board "$home" lavish-nowhere "$RECENT" 'adopted_from=scout-g'
+  axi "$home" "done" call-e1 --keep 0
+  axi "$home" "done" call-f1 --keep 0
+  assert_grep "Board handed over from scout-e at" "$home/data/done-archive.md" "the archived carrying row"
+  assert_no_grep "scout-e" "$home/data/backlog.md" "the live backlog after retention"
+
+  # A closed live row beside an archive that cannot be read is not the whole
+  # picture. A directory where the archive should be is unreadable even to root.
+  unreadable=$(new_home archive-unreadable)
+  board "$unreadable" lavish-archived "$RECENT" 'adopted_from=scout-e'
+  axi "$unreadable" add call-e2 "live closed call" --body "Board handed over from scout-e at 2026-11-01T00:00:00Z."
+  axi "$unreadable" "done" call-e2
+  mkdir "$unreadable/data/done-archive.md"
+
+  out=$(pe "$home" retire-quiet-boards) || fail "retire-quiet-boards failed: $out"
+  registered "$home" lavish-archived && fail "an adopted board whose only carrying row is archived stayed registered"
+  assert_contains "$out" "board-retired: lavish-archived reason=row-closed quiet_days=2 adopted_from=scout-e" "the archived row's retirement line"
+  registered "$home" lavish-half || fail "an adopted board with an archived row and an open live row was retired"
+  registered "$home" lavish-nowhere || fail "an adopted board with no carrying row in the backlog or archive was retired early"
+
+  out=$(pe "$unreadable" retire-quiet-boards) || fail "retire-quiet-boards failed with an unreadable archive: $out"
+  registered "$unreadable" lavish-archived || fail "an unreadable archive retired an adopted board early"
+  rmdir "$unreadable/data/done-archive.md"
+  # An archive whose directory cannot be searched cannot be told absent: a
+  # regular file as its parent blocks even root, and a mode-000 one blocks others.
+  : > "$unreadable/data/plain"
+  archive_at "$unreadable" data/plain/done-archive.md
+  out=$(pe "$unreadable" retire-quiet-boards) || fail "retire-quiet-boards failed with a file as the archive's parent: $out"
+  registered "$unreadable" lavish-archived || fail "an archive under a regular file retired an adopted board early"
+  mkdir "$unreadable/data/locked"
+  cp "$home/data/done-archive.md" "$unreadable/data/locked/done-archive.md"
+  archive_at "$unreadable" data/locked/done-archive.md
+  chmod 000 "$unreadable/data/locked"
+  if [ -x "$unreadable/data/locked" ]; then
+    echo "skip: a mode-000 archive directory is still searchable here (root)"
+  else
+    out=$(pe "$unreadable" retire-quiet-boards) || fail "retire-quiet-boards failed with an unsearchable archive directory: $out"
+    registered "$unreadable" lavish-archived || fail "an archive in an unsearchable directory retired an adopted board early"
+  fi
+  chmod 700 "$unreadable/data/locked"
+  fm_test_tasks_toml "$unreadable/.tasks.toml"
+  cp "$home/data/done-archive.md" "$unreadable/data/done-archive.md"
+  out=$(pe "$unreadable" retire-quiet-boards) || fail "retire-quiet-boards failed: $out"
+  assert_contains "$out" "board-retired: lavish-archived reason=row-closed" "the same board once its archive reads"
+
+  # An archive configured into a directory retention has not created yet is
+  # absent, so the closed live row alone retires the board.
+  board "$unreadable" lavish-archived "$RECENT" 'adopted_from=scout-e'
+  archive_at "$unreadable" data/later/done-archive.md
+  out=$(pe "$unreadable" retire-quiet-boards) || fail "retire-quiet-boards failed with a missing archive directory: $out"
+  assert_contains "$out" "board-retired: lavish-archived reason=row-closed" "a board whose archive directory does not exist yet"
+  pass "an adopted board retires once its carrying rows are closed in the backlog or the archive"
 }
 
 test_reconcile_runs_the_sweep_on_its_cadence() {
@@ -258,6 +327,7 @@ SH
 
 test_quiet_rule_and_kept_boards
 test_adopted_board_retires_when_its_rows_close
+test_adopted_board_retires_when_its_rows_are_archived
 test_conditional_retire_matches_owned_boards
 test_sweep_leaves_a_board_rearmed_mid_sweep
 test_reconcile_runs_the_sweep_on_its_cadence
