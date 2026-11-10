@@ -4520,21 +4520,28 @@ resolve_project_dir_arg() {
 # repository (a live checkout such as ~/nix or the home itself) adds a slot to
 # the shared pool that is a worktree of that checkout's .git. Both the directory
 # and its git common dir are compared physically, so a symlinked entry or a
-# worktree of another repository under projects/ is refused too.
+# worktree of another repository under projects/ is refused too. Every git
+# answer it cannot read refuses, and inherited Git location variables are
+# cleared first so the probe reads the directory's own layout.
 require_registered_clone() {
   local proj=$1 proj_real projects_real common
-  proj_real=$(cd "$proj" 2>/dev/null && pwd -P) || {
-    echo "error: spawn refused: project $proj is not a directory" >&2
+  if [ -z "$proj" ] || ! proj_real=$(cd "$proj" 2>/dev/null && pwd -P); then
+    echo "error: spawn refused: project '${proj:-<empty>}' is not a directory" >&2
     return 1
-  }
+  fi
   projects_real=$(cd "$PROJECTS" 2>/dev/null && pwd -P) || projects_real=
   if [ -z "$projects_real" ] || [ "$(dirname "$proj_real")" != "$projects_real" ]; then
     echo "error: spawn refused: project $proj resolves to $proj_real, which is not a clone directly under this home's projects/ ($PROJECTS); a worktree is only taken from a registered clone, never from a live checkout - pass projects/<name>, or register the repository first (project-management skill)" >&2
     return 1
   fi
-  git -C "$proj_real" rev-parse --git-dir >/dev/null 2>&1 || return 0
-  common=$(git -C "$proj_real" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) &&
-    common=$(cd "$common" && pwd -P) || common=
+  common=$(
+    unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_INDEX_FILE \
+      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CEILING_DIRECTORIES GIT_NAMESPACE \
+      GIT_DISCOVERY_ACROSS_FILESYSTEM GIT_CONFIG GIT_CONFIG_GLOBAL \
+      GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM GIT_CONFIG_COUNT
+    common=$(git -C "$proj_real" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) &&
+      cd "$common" 2>/dev/null && pwd -P
+  ) || common=
   if [ "$common" != "$proj_real/.git" ]; then
     echo "error: spawn refused: project $proj_real is not its own clone (its git common dir is ${common:-unreadable}, not $proj_real/.git), so its worktrees would belong to another checkout" >&2
     return 1

@@ -94,6 +94,11 @@ test_live_checkout_refused() {
   assert_refused "a projects/ symlink to a live checkout is refused" "$REFUSAL" "$TMP_ROOT" live-link projects/linked
   assert_refused "a projects/ entry that is a worktree of a live checkout is refused" "$NOT_OWN" "$TMP_ROOT" live-wt projects/wt
   assert_refused "a scout from a live checkout is refused" "$REFUSAL" "$TMP_ROOT" live-scout "$LIVE" --scout
+  # An inherited GIT_DIR must not make the probe read another repository.
+  GIT_DIR="$LIVE/.git" assert_admitted "an inherited GIT_DIR does not refuse a registered clone" "$TMP_ROOT" clone-env projects/repo
+  # A projects/ entry that is not its own git clone fails closed.
+  mkdir -p "$HOME_DIR/projects/plain"
+  assert_refused "a projects/ entry that is not a git clone is refused" "$NOT_OWN" "$TMP_ROOT" plain projects/plain
 }
 
 test_registered_clone_admitted() {
