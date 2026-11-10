@@ -204,7 +204,21 @@ test_unreadable_declaration_refuses() {
   pass "an unreadable placement rule refuses the spawn rather than guessing"
 }
 
+# A declaration without a first rule is intake's spill judgment only, so even
+# a malformed one never gates a spawn.
+test_spill_only_declaration_never_gates() {
+  local case_dir out rc=0
+  case_dir=$(make_case spill-only task-a)
+  printf '%s\n' 'to faf' 'load high' > "$case_dir/home/config/intake-spill"
+  out=$(spawn_ship "$case_dir" task-a) || rc=$?
+  expect_code 0 "$rc" "a spill-only declaration refused a spawn: $out"
+  assert_contains "$out" "spawned task-a" "a spill-only declaration kept the spawn from launching"
+  [ ! -s "$case_dir/ssh.log" ] || fail "a spill-only declaration probed the remote host"
+  pass "a declaration without a first rule never gates a spawn"
+}
+
 test_free_secondmate_refuses_the_local_spawn
+test_spill_only_declaration_never_gates
 test_fallback_launches_here_and_records_the_reason
 test_override_skips_the_probe_and_is_recorded
 test_project_outside_the_rule_is_untouched

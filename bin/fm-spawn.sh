@@ -303,17 +303,18 @@
 #   not admit prints `deferred:` and exits 75 with the task exactly as queued,
 #   and an unreadable declaration refuses with exit 1.
 #   Placement by rule: when this home's config/intake-spill declares a `first`
-#   rule naming the project (bin/fm-intake-spill.sh owns the rule, the remote
+#   rule (bin/fm-intake-spill.sh owns the rule, the remote
 #   probe, and the once-only captain notice), a fresh ship or scout spawn asks
 #   `fm-intake-spill.sh --project <name>` before the task-set or spawn lock is
-#   taken and before any brief render, endpoint, worktree, or record exists. While the rule's remote secondmate is
-#   running with a free slot, the local spawn is refused with exit 1 and the
+#   taken and before any brief render, endpoint, worktree, or record exists.
+#   While the rule's remote secondmate is running with a free slot, the local spawn is refused with exit 1 and the
 #   task stays queued for routing there. On a fallback the spawn continues and
 #   records placement=fallback and placement_reason=<why> in the task record,
 #   and the first fallback in this home also prints `placement-notice:` for the
 #   captain. --placement-override <reason> records the captain's redirect as
 #   placement_override= and skips the probe; it is refused on secondmates and
-#   relaunches. An unreadable declaration refuses the spawn with exit 1.
+#   relaunches. A declaration with a first rule that cannot be read refuses the
+#   spawn with exit 1; one without a first rule never gates a spawn.
 #   A batch reports such a pair as `batch: DEFERRED` and exits 75 when nothing
 #   else failed. A relaunch and a --secondmate spawn are never counted against
 #   either capacity.
@@ -2729,8 +2730,11 @@ fi
 # path that does not resolve is refused by that check.
 PLACEMENT_FALLBACK_REASON=
 SPAWN_PLACEMENT_PROJECT=
+# Only a declaration that names a first rule gates spawns; a spill alone is
+# intake's judgment and never refuses one.
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$PLACEMENT_OVERRIDE_SET" -eq 0 ] &&
-  { [ -e "$CONFIG/intake-spill" ] || [ -L "$CONFIG/intake-spill" ]; }; then
+  { [ -e "$CONFIG/intake-spill" ] || [ -L "$CONFIG/intake-spill" ]; } &&
+  { [ ! -r "$CONFIG/intake-spill" ] || grep -Eq '^[[:space:]]*first([[:space:]]|$)' "$CONFIG/intake-spill"; }; then
   case "${POS[1]:-}" in
   projects/*) SPAWN_PLACEMENT_PROJECT="$PROJECTS/${POS[1]#projects/}" ;;
   *) SPAWN_PLACEMENT_PROJECT=${POS[1]:-} ;;

@@ -248,6 +248,10 @@ bad "a local first secondmate" "'first' needs a remote secondmate" 'first nextdo
 bad "an unregistered first secondmate" "is not one registered secondmate" 'first elsewhere firstmate'
 bad "a first rule with no project" "expected 'first <secondmate-id> <project>...'" 'first offbox'
 bad "a first rule named twice" "declared twice" 'first offbox firstmate' 'first offbox skills'
+bad "a wildcard first project" "project '*' is not a clone name" 'first offbox *'
+printf '%s\n' 'first offbox firstmate' 'short 15' > "$DECL"
+run code out err
+assert_contains "$out" "short: 15" "a short declared beside a first rule alone is still printed"
 run code out err --project
 expect_code 2 "$code" "--project without a name is a usage error"
 run code out err --project 'a/b'

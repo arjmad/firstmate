@@ -52,7 +52,8 @@
 #   to: <secondmate-id>       absent when off
 #   load: <value> (above <n> spills) | <value> (not declared) | unknown (...)
 #   workers: <count> (at <n> spills) | <count> (not declared)
-#   short: <minutes> | none   absent when off
+#   short: <minutes> | none   absent when off, except a short declared beside
+#                             a first rule alone
 # With --project, three more lines follow (first-notice only on a fallback):
 #   first: <secondmate-id> | fallback | none
 #   first-reason: <one line>  for the backlog note and the task record
@@ -143,10 +144,11 @@ while IFS= read -r line || [ -n "$line" ]; do
   if [ "$key" = first ]; then
     [ -n "${value:-}" ] && [ -n "${extra:-}" ] || die "$decl line $lineno: expected 'first <secondmate-id> <project>...'"
     first_id=$value
-    for p in $extra; do
+    read -r -a first_list <<<"$extra"
+    for p in "${first_list[@]}"; do
       case "$p" in -* | *[!A-Za-z0-9._-]*) die "$decl line $lineno: project '$p' is not a clone name" ;; esac
     done
-    first_projects=" $extra "
+    first_projects=" ${first_list[*]} "
     continue
   fi
   [ -n "${value:-}" ] && [ -z "${extra:-}" ] || die "$decl line $lineno: expected '<key> <value>'"
@@ -211,6 +213,7 @@ measure_load() {
 
 if [ "$spill_declared" = 0 ]; then
   printf 'spill: off\nreason: config/intake-spill declares no spill, so placement follows secondmate scope and its first rule\n'
+  [ -z "$short" ] || printf 'short: %s\n' "$short"
 else
   load=$(measure_load) || load=
   [[ "$load" =~ ^[0-9]+([.][0-9]+)?$ ]] || load=
@@ -292,7 +295,8 @@ first_verdict() {  # <first|fallback> <reason>
   printf 'first: fallback\nfirst-reason: %s\n' "$reason"
   # The captain hears about the first fallback once, not once per task. The
   # noclobber create is atomic, so two racing intakes tell him exactly once.
-  if [ -d "$STATE" ] && (set -C && printf '%s %s\n' "$(date +%s)" "$reason" >"$STATE/.intake-first-told") 2>/dev/null; then
+  # Without a state directory nothing can be recorded, so every fallback tells.
+  if [ ! -d "$STATE" ] || (set -C && printf '%s %s\n' "$(date +%s)" "$reason" >"$STATE/.intake-first-told") 2>/dev/null; then
     printf 'first-notice: tell the captain\n'
   else
     printf 'first-notice: already told\n'
@@ -311,7 +315,7 @@ if no_answer "$remote_rc"; then
 fi
 endpoint=$(printf '%s\n' "$remote_out" | tail -1)
 if [ "$remote_rc" -ne 0 ]; then
-  first_verdict fallback "$first_id answered but its endpoint state could not be read (exit $remote_rc)"
+  first_verdict fallback "the endpoint state of $first_id could not be read (fm-on.sh or the remote control exited $remote_rc)"
   exit 0
 fi
 if [ "$endpoint" != alive ]; then
