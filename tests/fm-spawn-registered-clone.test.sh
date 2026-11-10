@@ -79,6 +79,9 @@ assert_admitted() {  # <label> <cwd> <id> <project>
   out=$(run_spawn "$@")
   assert_not_contains "$out" "$REFUSAL" "$label: a registered clone was refused"
   assert_not_contains "$out" "$NOT_OWN" "$label: a registered clone was refused as a worktree"
+  # These cases carry no brief, so reaching the later brief check proves the
+  # spawn went past the projects/ rule rather than failing before it.
+  assert_contains "$out" "has no brief" "$label: the spawn stopped before the projects/ rule was passed"
   pass "$label"
 }
 
