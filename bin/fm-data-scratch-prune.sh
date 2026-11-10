@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
 # fm-data-scratch-prune.sh - delete the reproducible scratch a task left in its
 # data/<task>/ folder: nested git checkouts with nothing uncommitted or
-# unpushed, node_modules folders, and downloaded tool binaries. Reports,
-# briefs, notes, and every other file stay.
+# unpushed, dependency folders (node_modules, Python virtual environments, and
+# build output), and downloaded tool binaries. Reports, briefs, notes, and
+# every other file stay.
 #
-# Usage: fm-data-scratch-prune.sh [--dry-run] <task-data-dir>
+# Usage: fm-data-scratch-prune.sh [--dry-run] [--keep-binaries] <task-data-dir>
 #        --dry-run
 #          Classify exactly as a real run would and change nothing; each
 #          `removed` line below reads `would remove` instead.
+#        --keep-binaries
+#          Remove only checkouts and dependency folders; tool binaries stay.
 #
 # bin/fm-teardown.sh runs this real (not dry) on data/<id>/ under the task's
 # meta lock, after its landed-work gates pass and just before its record is
 # removed, so the rule applies at teardown with no clock and no batch.
+# bin/fm-data-media-prune.sh runs it with --keep-binaries on tasks torn down
+# and quiet for N days, when that home opts in to scratch retention.
 # By hand it is safe on any task folder whose task is not running.
 #
 # Output, one line per item, paths relative to the parent of <task-data-dir>:
-#   data-scratch: removed checkout|node_modules|binary <task>/<path> (<KiB> KiB)
-#   data-scratch: kept checkout|node_modules <task>/<path>: <why>
+#   data-scratch: removed checkout|node_modules|venv|dist|binary <task>/<path> (<KiB> KiB)
+#   data-scratch: kept checkout|node_modules|venv|dist <task>/<path>: <why>
 # then, when anything was (or would be) removed,
 #   data-scratch: removed <n> items (<MiB> MiB) from <task>/
 # A problem is a `warning:` on stderr. A missing folder prints nothing; an
@@ -52,11 +57,21 @@
 # nothing in it.
 #
 # What else is removed, outside every checkout:
-#   - every directory named node_modules (not a symlink), whole, unless it
-#     holds a kept checkout, which keeps it and is named;
-#   - every regular file (not a symlink) whose header marks an ELF or Mach-O
-#     executable or shared library: the downloaded tool binaries. Core dumps,
-#     object files, and Java classes stay.
+#   - every dependency folder (not a symlink), whole, unless it holds a kept
+#     checkout, which keeps it and is named. A dependency folder is
+#       - a directory named node_modules;
+#       - a directory named .venv holding a pyvenv.cfg file (venv);
+#       - a directory named dist beside a package.json, pyproject.toml,
+#         setup.py, or setup.cfg file, so its source is there to rebuild it
+#         (dist); one holding any image or PDF stays and is named, so a built
+#         deliverable is never lost;
+#     the walk does not look inside one, so a folder nested in another is
+#     decided with its holder, and a like-named directory that is none of
+#     these is left alone;
+#   - unless --keep-binaries, every regular file (not a symlink) whose header
+#     marks an ELF or Mach-O executable or shared library: the downloaded tool
+#     binaries. Core dumps, object files, and Java classes stay, and so does
+#     a binary inside a dependency folder this run decided.
 # Text, images, PDFs, archives, and exports are never removed here; the
 # 60-day retention rule in docs/configuration.md owns those.
 set -u
@@ -66,10 +81,12 @@ usage() {
 }
 
 DRY_RUN=0
+KEEP_BINARIES=0
 DIR=
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
+    --keep-binaries) KEEP_BINARIES=1 ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "error: unknown argument: $1" >&2; exit 2 ;;
     *)
@@ -79,7 +96,7 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-[ -n "$DIR" ] || { echo "error: usage: fm-data-scratch-prune.sh [--dry-run] <task-data-dir>" >&2; exit 2; }
+[ -n "$DIR" ] || { echo "error: usage: fm-data-scratch-prune.sh [--dry-run] [--keep-binaries] <task-data-dir>" >&2; exit 2; }
 [ -d "$DIR" ] && [ ! -L "$DIR" ] || exit 0
 DIR=$(cd "$DIR" && pwd -P) || exit 0
 TASK=${DIR##*/}
@@ -245,16 +262,55 @@ inside_checkout() {
     { for (i = 1; i <= n; i++) if (index($0 "/", roots[i]) == 1) next; print }' "$WORK/roots" -
 }
 
-find "$DIR" -name .git -prune -o -type d -name node_modules -prune -print 2>/dev/null \
-  | under_dir | inside_checkout > "$WORK/node-modules"
-while IFS= read -r nm; do
-  [ "${nm##*/}" = node_modules ] && [ -d "$nm" ] && [ ! -L "$nm" ] || continue
-  if has_descendant "$nm" "$WORK/kept"; then
-    printf 'data-scratch: kept node_modules %s/%s: it holds a kept checkout\n' "$TASK" "${nm#"$DIR"/}"
+# dep_kind <dir>: print the dependency-folder kind of <dir> (header), or
+# nothing when it is none.
+dep_kind() {
+  local manifest
+  case "${1##*/}" in
+    node_modules) echo node_modules ;;
+    .venv) [ -f "$1/pyvenv.cfg" ] && [ ! -L "$1/pyvenv.cfg" ] && echo venv ;;
+    dist)
+      for manifest in package.json pyproject.toml setup.py setup.cfg; do
+        if [ -f "${1%/*}/$manifest" ] && [ ! -L "${1%/*}/$manifest" ]; then
+          echo dist
+          return
+        fi
+      done
+      ;;
+  esac
+}
+
+# holds_image_or_pdf <dir>: true when <dir> holds an image or a PDF, or when
+# the scan fails, so an unreadable folder stays.
+holds_image_or_pdf() {
+  local found
+  found=$(find "$1" -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.gif' \
+    -o -iname '*.webp' -o -iname '*.svg' -o -iname '*.heic' -o -iname '*.heif' -o -iname '*.tif' \
+    -o -iname '*.tiff' -o -iname '*.bmp' -o -iname '*.avif' -o -iname '*.ico' -o -iname '*.pdf' \) \
+    -print 2>/dev/null | head -n 1) || return 0
+  [ -n "$found" ]
+}
+
+# Every dependency folder this run decides, kept or removed, so the binary
+# walk below leaves what is inside it alone.
+: > "$WORK/deps"
+find "$DIR" -name .git -prune -o -type d \( -name node_modules -o -name .venv -o -name dist \) -print -prune 2>/dev/null \
+  | under_dir | inside_checkout > "$WORK/dep-candidates"
+while IFS= read -r dep; do
+  [ -d "$dep" ] && [ ! -L "$dep" ] || continue
+  kind=$(dep_kind "$dep")
+  [ -n "$kind" ] || continue
+  printf '%s\n' "$dep" >> "$WORK/deps"
+  if has_descendant "$dep" "$WORK/kept"; then
+    printf 'data-scratch: kept %s %s/%s: it holds a kept checkout\n' "$kind" "$TASK" "${dep#"$DIR"/}"
     continue
   fi
-  remove node_modules "$nm" || true
-done < "$WORK/node-modules"
+  if [ "$kind" = dist ] && holds_image_or_pdf "$dep"; then
+    printf 'data-scratch: kept dist %s/%s: it holds images or PDFs\n' "$TASK" "${dep#"$DIR"/}"
+    continue
+  fi
+  remove "$kind" "$dep" || true
+done < "$WORK/dep-candidates"
 
 # tool_binary <file>: true for an ELF or Mach-O executable or shared library.
 # Core dumps, object files, and Java classes share those magic numbers and stay.
@@ -288,13 +344,17 @@ tool_binary() {
   esac
 }
 
-find "$DIR" \( -name .git -o -type d -name node_modules \) -prune -o -type f -size +0 -print 2>/dev/null \
-  | under_dir | inside_checkout > "$WORK/files"
-while IFS= read -r file; do
-  [ -f "$file" ] && [ ! -L "$file" ] || continue
-  tool_binary "$file" || continue
-  remove binary "$file" || true
-done < "$WORK/files"
+if [ "$KEEP_BINARIES" -eq 0 ]; then
+  find "$DIR" \( -name .git -o -type d -name node_modules \) -prune -o -type f -size +0 -print 2>/dev/null \
+    | under_dir | inside_checkout \
+    | awk 'FILENAME == ARGV[1] { deps[++n] = $0 "/"; next }
+      { for (i = 1; i <= n; i++) if (index($0, deps[i]) == 1) next; print }' "$WORK/deps" - > "$WORK/files"
+  while IFS= read -r file; do
+    [ -f "$file" ] && [ ! -L "$file" ] || continue
+    tool_binary "$file" || continue
+    remove binary "$file" || true
+  done < "$WORK/files"
+fi
 
 if [ "$TOTAL_ITEMS" -gt 0 ]; then
   printf 'data-scratch: %s %s items (%s MiB) from %s/\n' "$VERB" "$TOTAL_ITEMS" "$((TOTAL_KIB / 1024))" "$TASK"

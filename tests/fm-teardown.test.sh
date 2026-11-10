@@ -2623,6 +2623,52 @@ test_teardown_deletes_task_data_scratch() {
   pass "teardown deletes the task's clean clones, node_modules, and binaries and names a kept checkout"
 }
 
+# A Claude task's workspace-trust entry leaves the store its launch used once
+# teardown has retired the launch directory, and only then: a returned pool
+# slot keeps its entry, and every other entry stays.
+test_teardown_forgets_claude_trust_for_a_retired_slot() {
+  local case_dir rc store retire
+  for retire in kept retired; do
+    case_dir=$(make_case "claude-trust-$retire")
+    write_meta "$case_dir" no-mistakes scout
+    prepare_scout_teardown "$case_dir"
+    mkdir -p "$case_dir/claude-account"
+    printf '%s\n' 'harness=claude' "account=$case_dir/claude-account" >> "$case_dir/state/task-x1.meta"
+    store="$case_dir/claude-account/.claude.json"
+    printf '{"projects": {"%s": {"hasTrustDialogAccepted": true}, "%s": {"hasTrustDialogAccepted": true}}}\n' \
+      "$case_dir/wt" "$case_dir/other-gone" > "$store"
+    if [ "$retire" = retired ]; then
+      # A pool that retires the slot it is handed back, as a removed worktree is.
+      cat > "$case_dir/fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = return ]; then
+  for last in "$@"; do :; done
+  case "$last" in /*) rm -rf -- "$last" ;; esac
+fi
+exit 0
+SH
+    fi
+    rc=0
+    CLAUDE_CONFIG_DIR="$case_dir/session-claude" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+    expect_code 0 "$rc" "claude-trust-$retire: teardown failed: $(cat "$case_dir/stderr")"
+    if [ "$retire" = retired ]; then
+      assert_absent "$case_dir/wt" "claude-trust-retired: the fake pool did not retire the slot"
+      node -e 'const j = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+        process.exit(Object.keys(j.projects).join(" ") === process.argv[2] ? 0 : 1)' "$store" "$case_dir/other-gone" \
+        || fail "claude-trust-retired: only the retired slot's entry may go: $(cat "$store")"
+      assert_grep "claude store: removed 1 of 2 project entries from $store" "$case_dir/stdout" \
+        "claude-trust-retired: teardown did not name the removed entry"
+    else
+      assert_present "$case_dir/wt" "claude-trust-kept: the returned slot must still exist"
+      node -e 'const j = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+        process.exit(Object.keys(j.projects).length === 2 ? 0 : 1)' "$store" \
+        || fail "claude-trust-kept: a returned slot keeps its entry: $(cat "$store")"
+    fi
+    assert_absent "$case_dir/session-claude/.claude.json" "claude-trust-$retire: the session's own store must stay untouched"
+  done
+  pass "teardown removes a Claude trust entry only for a launch directory it retired, from the launch's own store"
+}
+
 test_gh_error_and_content_absent_refuses() {
   local case_dir rc
   case_dir=$(make_case gh-error)
@@ -7395,6 +7441,7 @@ test_return_that_removes_copy_warns_cannot_verify
 test_scout_ignored_files_survive_scratch_clean
 test_scout_teardown_prints_what_it_noticed
 test_teardown_deletes_task_data_scratch
+test_teardown_forgets_claude_trust_for_a_retired_slot
 test_gh_error_and_content_absent_refuses
 test_legacy_record_without_the_flag_refuses
 test_windowless_legacy_record_with_gone_worktree_tears_down

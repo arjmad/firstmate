@@ -104,6 +104,13 @@
 #   FM_TEST_SLOWEST rank=<k> script=<path> duration_ms=<n>
 #   FM_TEST_BUDGET max_wall_ms=<n> duration_ms=<n>   (only with --max-wall-ms)
 #
+# Claude store isolation:
+#   Each executed script gets its own empty CLAUDE_CONFIG_DIR under this run's
+#   scratch directory, so a spawn or relaunch it drives records Claude
+#   workspace trust there rather than in the developer's own store. A script in
+#   the live-harness-optin family, or named *-live-e2e.test.sh, keeps the
+#   caller's CLAUDE_CONFIG_DIR because it drives the real signed-in Claude.
+#
 # Placement refusal:
 #   A task worker is assigned an isolated worktree, and that placement is
 #   checked only when its task starts. When FM_TASK_ID marks such a worker and
@@ -444,7 +451,7 @@ family_for_basename() {
     fm-check-unregister.test.sh|fm-code-review.test.sh|fm-pipeline-spend.test.sh|fm-pr-check-security.test.sh|\
     fm-pr-health.test.sh|fm-pr-merge.test.sh|fm-pr-reviewers.test.sh|fm-pr-state.test.sh|\
     fm-review-diff.test.sh|fm-teardown.test.sh|fm-claude-rc-archive.test.sh|fm-x-mode.test.sh|\
-    fm-data-scratch-prune.test.sh)
+    fm-data-scratch-prune.test.sh|fm-claude-store-prune.test.sh)
       printf '%s\n' pr-forge
       ;;
     fm-afk-contract.test.sh|fm-afk-inject-e2e.test.sh|fm-afk-return.test.sh|\
@@ -824,6 +831,7 @@ tests/fm-claude-rc-archive-live-e2e.test.sh 84
 tests/fm-claude-rc-archive.test.sh 1500
 tests/fm-claude-stop-autoarm-live-e2e.test.sh 77
 tests/fm-claude-stop-autoarm.test.sh 61558
+tests/fm-claude-store-prune.test.sh 1500
 tests/fm-claude-trust.test.sh 26298
 tests/fm-cmux-claude-composer-live-e2e.test.sh 83
 tests/fm-code-review.test.sh 6704
@@ -1748,7 +1756,13 @@ families_for_changed_path() {
       # forget-claude; the live guard proves the vendor side.
       printf '%s\n' "__script__:fm-claude-trust.test.sh"
       printf '%s\n' "__script__:fm-live-lab-forget-claude.test.sh"
+      printf '%s\n' "__script__:fm-claude-store-prune.test.sh"
       printf '%s\n' "__script__:fm-claude-store-lock-live-e2e.test.sh"
+      ;;
+    bin/fm-claude-store-prune.sh)
+      # The Claude store's dead-entry prune; its own suite and teardown's
+      # (pr-forge) drive it.
+      printf '%s\n' pr-forge
       ;;
     bin/fm-lavish-patch.mjs|bin/lavish-patch/*)
       # Firstmate's local Lavish chrome overlay; its suite drives it directly
@@ -1761,8 +1775,8 @@ families_for_changed_path() {
       printf '%s\n' "__script__:fm-state-residue-sweep.test.sh"
       ;;
     bin/fm-data-media-prune.sh)
-      # The locked bootstrap prune of torn-down tasks' media; its own suite
-      # drives it directly and through fm-bootstrap.sh.
+      # The locked bootstrap retention prune and data size trigger; its own
+      # suite drives it directly and through fm-bootstrap.sh.
       printf '%s\n' "__script__:fm-data-media-prune.test.sh"
       ;;
     bin/fm-quota-axi-lib.sh)
@@ -1907,8 +1921,9 @@ families_for_changed_path() {
       ;;
     bin/fm-data-scratch-prune.sh)
       # Teardown's data scratch prune; its own suite and fm-teardown.test.sh
-      # drive it (pr-forge).
+      # drive it (pr-forge), and so does the retention prune's scratch part.
       printf '%s\n' pr-forge
+      printf '%s\n' "__script__:fm-data-media-prune.test.sh"
       ;;
     bin/fm-claude-rc-archive.sh)
       # Teardown's Remote Control archive (pr-forge) and its live guard.
@@ -2887,8 +2902,22 @@ run_script_bounded() {  # <script> <out> <stream> <id>
   local GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM
   # shellcheck source=tests/git-config-helpers.sh
   . "$ROOT/tests/git-config-helpers.sh" || return
+  # Every suite gets its own throwaway Claude store, so a spawn or relaunch it
+  # drives records workspace trust there and never in the developer's own
+  # ~/.claude.json or agent Claude store. A live guard drives the real signed-in
+  # Claude, so the live-harness-optin family and every *-live-e2e script keep
+  # the caller's store. Declared local like the git variables above, so the
+  # runner's own environment is left as the caller had it.
+  local CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR-}
+  case "$(family_for_basename "${script##*/}")/${script##*/}" in
+    live-harness-optin/*|*-live-e2e.test.sh) ;;
+    *)
+      CLAUDE_CONFIG_DIR=$RUN_TMP/claude-config/$id
+      mkdir -p "$CLAUDE_CONFIG_DIR" || return
+      export CLAUDE_CONFIG_DIR
+      ;;
+  esac
   local rc
-  : "$id"
   set +e
   if [ "$stream" -eq 1 ]; then
     if [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ]; then

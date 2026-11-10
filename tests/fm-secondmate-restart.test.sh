@@ -38,6 +38,11 @@ fm_git_identity fmtest fmtest@example.com
 TMP_ROOT=$(fm_test_tmproot fm-secondmate-restart)
 mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
+# Every relaunch here pre-registers Claude workspace trust for a throwaway
+# secondmate home (bin/fm-claude-trust.sh), so the suite uses a throwaway store
+# and never writes the developer's own ~/.claude.json or agent Claude store.
+export CLAUDE_CONFIG_DIR="$TMP_ROOT/claude-config"
+mkdir -p "$CLAUDE_CONFIG_DIR"
 trap 't3_fake_stop; rm -rf -- "$TMP_ROOT"' EXIT
 
 # A session-provider stub that models the two things this pass depends on: the

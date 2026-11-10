@@ -1779,6 +1779,41 @@ SH
   pass "the automatic --changed bound gives the slow watcher suite at least 1500s"
 }
 
+test_each_suite_gets_a_throwaway_claude_store() {
+  local tmp repo caller rc ordinary live
+  tmp=$(mktemp -d)
+  repo="$tmp/repo"
+  caller="$tmp/caller-claude"
+  mkdir -p "$repo/bin" "$repo/tests" "$caller"
+  cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  cp "$ROOT/tests/git-config-helpers.sh" "$repo/tests/"
+  chmod +x "$repo/bin/fm-test-run.sh"
+  for script in fm-brief.test.sh fm-worker-account-live-e2e.test.sh; do
+    cat >"$repo/tests/$script" <<'SH'
+#!/usr/bin/env bash
+printf 'store=%s\n' "${CLAUDE_CONFIG_DIR-unset}"
+[ -d "${CLAUDE_CONFIG_DIR-/nonexistent}" ] && echo "store-exists"
+echo "ok - reported its Claude store"
+SH
+  done
+  set +e
+  (cd "$repo" && CLAUDE_CONFIG_DIR="$caller" bin/fm-test-run.sh --jobs 1 \
+    tests/fm-brief.test.sh tests/fm-worker-account-live-e2e.test.sh) >"$tmp/out" 2>"$tmp/err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "store isolation run failed, got $rc: $(cat "$tmp/out" "$tmp/err")"
+  ordinary=$(awk '/FM_TEST_BEGIN .*fm-brief/ { on = 1 } on && /^store=/ { sub(/^store=/, ""); print; exit }' "$tmp/out")
+  live=$(awk '/FM_TEST_BEGIN .*live-e2e/ { on = 1 } on && /^store=/ { sub(/^store=/, ""); print; exit }' "$tmp/out")
+  [ -n "$ordinary" ] && [ "$ordinary" != unset ] && [ "$ordinary" != "$caller" ] \
+    || fail "an ordinary suite must get its own Claude store, got '$ordinary': $(cat "$tmp/out")"
+  grep -q '^store-exists$' "$tmp/out" || fail "the throwaway Claude store must exist: $(cat "$tmp/out")"
+  [ "$live" = "$caller" ] || fail "a live guard must keep the caller's Claude store, got '$live'"
+  [ ! -e "$ordinary" ] || fail "the throwaway Claude store must go with the run: $ordinary"
+  [ -z "$(ls -A "$caller")" ] || fail "the caller's Claude store must stay untouched"
+  rm -rf "$tmp"
+  pass "each suite gets a throwaway Claude store; a live guard keeps the caller's"
+}
+
 test_max_wall_ms_is_a_result_not_advice() {
   local tmp repo runner fast rc summary_duration budget_duration
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-budget.XXXXXX")
@@ -2093,6 +2128,7 @@ test_changed_t3_sources_select_their_readers
 test_concurrent_runs_are_ordered_longest_first
 test_per_script_timeout_bounds_a_hang
 test_changed_bound_gives_slow_watcher_suites_headroom
+test_each_suite_gets_a_throwaway_claude_store
 test_max_wall_ms_is_a_result_not_advice
 test_jobs_parallel_scheduler_and_failure_propagation
 test_herdr_ci_family_run_has_a_step_timeout
