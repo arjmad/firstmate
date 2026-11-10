@@ -305,8 +305,8 @@
 #   Placement by rule: when this home's config/intake-spill declares a `first`
 #   rule naming the project (bin/fm-intake-spill.sh owns the rule, the remote
 #   probe, and the once-only captain notice), a fresh ship or scout spawn asks
-#   `fm-intake-spill.sh --project <name>` before any lock, brief render,
-#   endpoint, worktree, or record exists. While the rule's remote secondmate is
+#   `fm-intake-spill.sh --project <name>` before the task-set or spawn lock is
+#   taken and before any brief render, endpoint, worktree, or record exists. While the rule's remote secondmate is
 #   running with a free slot, the local spawn is refused with exit 1 and the
 #   task stays queued for routing there. On a fallback the spawn continues and
 #   records placement=fallback and placement_reason=<why> in the task record,
@@ -2721,6 +2721,50 @@ if [ "$RELAUNCH" -eq 1 ]; then
     exit 1
   fi
 fi
+# Placement by rule (see the header; bin/fm-intake-spill.sh owns the rule and
+# its probe). Asked before the task-set and per-task spawn locks are taken,
+# because the probe crosses the network and other spawns refuse rather than
+# wait on those locks, and before anything exists, so a refusal leaves the task
+# queued. The project is named the way the clone check below resolves it; a
+# path that does not resolve is refused by that check.
+PLACEMENT_FALLBACK_REASON=
+SPAWN_PLACEMENT_PROJECT=
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$PLACEMENT_OVERRIDE_SET" -eq 0 ] &&
+  { [ -e "$CONFIG/intake-spill" ] || [ -L "$CONFIG/intake-spill" ]; }; then
+  case "${POS[1]:-}" in
+  projects/*) SPAWN_PLACEMENT_PROJECT="$PROJECTS/${POS[1]#projects/}" ;;
+  *) SPAWN_PLACEMENT_PROJECT=${POS[1]:-} ;;
+  esac
+  SPAWN_PLACEMENT_PROJECT=$(cd "$SPAWN_PLACEMENT_PROJECT" 2>/dev/null && pwd) || SPAWN_PLACEMENT_PROJECT=
+  SPAWN_PLACEMENT_PROJECT=${SPAWN_PLACEMENT_PROJECT:+$(basename "$SPAWN_PLACEMENT_PROJECT")}
+  # A rule names projects as plain words, so no other name can be in one.
+  case "$SPAWN_PLACEMENT_PROJECT" in -* | *[!A-Za-z0-9._-]*) SPAWN_PLACEMENT_PROJECT= ;; esac
+fi
+if [ -n "$SPAWN_PLACEMENT_PROJECT" ]; then
+  SPAWN_PLACEMENT_RC=0
+  SPAWN_PLACEMENT_OUT=$(FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG FM_DATA_OVERRIDE=$DATA \
+    "$SCRIPT_DIR/fm-intake-spill.sh" --project "$SPAWN_PLACEMENT_PROJECT" </dev/null) || SPAWN_PLACEMENT_RC=$?
+  if [ "$SPAWN_PLACEMENT_RC" -ne 0 ]; then
+    echo "error: spawn refused: this home's placement rule cannot be read (bin/fm-intake-spill.sh exited $SPAWN_PLACEMENT_RC); fix config/intake-spill so the captain's placement is known (docs/configuration.md \"Intake spill\")" >&2
+    exit 1
+  fi
+  SPAWN_PLACEMENT_FIRST=$(printf '%s\n' "$SPAWN_PLACEMENT_OUT" | sed -n 's/^first: //p' | tail -1)
+  SPAWN_PLACEMENT_REASON=$(printf '%s\n' "$SPAWN_PLACEMENT_OUT" | sed -n 's/^first-reason: //p' | tail -1)
+  case "$SPAWN_PLACEMENT_FIRST" in
+  none | '') ;;
+  fallback)
+    PLACEMENT_FALLBACK_REASON=${SPAWN_PLACEMENT_REASON:-the placement probe gave no reason}
+    echo "placement: $SPAWN_PLACEMENT_PROJECT work falls back to this home: $PLACEMENT_FALLBACK_REASON" >&2
+    if printf '%s\n' "$SPAWN_PLACEMENT_OUT" | grep -qx 'first-notice: tell the captain'; then
+      echo "placement-notice: first fallback in this home - tell the captain once: $PLACEMENT_FALLBACK_REASON" >&2
+    fi
+    ;;
+  *)
+    echo "error: spawn refused: the placement rule in config/intake-spill sends $SPAWN_PLACEMENT_PROJECT work to secondmate $SPAWN_PLACEMENT_FIRST first, and ${SPAWN_PLACEMENT_REASON:-it has a free slot}; route task $ID there, or pass --placement-override <reason> when the captain redirects it" >&2
+    exit 1
+    ;;
+  esac
+fi
 ORCA_LAUNCH_ENV_ENABLED=0
 ORCA_LAUNCH_ENV_ARGS=
 if [ "$RELAUNCH" -eq 0 ]; then
@@ -4774,36 +4818,6 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] &&
   ! git -C "$PROJ_ABS" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
   echo "error: spawn refused: project $PROJ_ABS has no commit yet (unborn HEAD), so there is nothing to branch a worktree from; make one commit in the project, for example 'git -C $PROJ_ABS commit --allow-empty -m \"chore: initial commit\"', then spawn again" >&2
   exit 1
-fi
-# Placement by rule (see the header; bin/fm-intake-spill.sh owns the rule and
-# its probe). Asked before any lock is taken, because the probe crosses the
-# network, and before anything exists, so a refusal leaves the task queued.
-PLACEMENT_FALLBACK_REASON=
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$PLACEMENT_OVERRIDE_SET" -eq 0 ] &&
-  { [ -e "$CONFIG/intake-spill" ] || [ -L "$CONFIG/intake-spill" ]; }; then
-  SPAWN_PLACEMENT_RC=0
-  SPAWN_PLACEMENT_OUT=$(FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG FM_DATA_OVERRIDE=$DATA \
-    "$SCRIPT_DIR/fm-intake-spill.sh" --project "$(basename "$PROJ_ABS")" </dev/null) || SPAWN_PLACEMENT_RC=$?
-  if [ "$SPAWN_PLACEMENT_RC" -ne 0 ]; then
-    echo "error: spawn refused: this home's placement rule cannot be read (bin/fm-intake-spill.sh exited $SPAWN_PLACEMENT_RC); fix config/intake-spill so the captain's placement is known (docs/configuration.md \"Intake spill\")" >&2
-    exit 1
-  fi
-  SPAWN_PLACEMENT_FIRST=$(printf '%s\n' "$SPAWN_PLACEMENT_OUT" | sed -n 's/^first: //p' | tail -1)
-  SPAWN_PLACEMENT_REASON=$(printf '%s\n' "$SPAWN_PLACEMENT_OUT" | sed -n 's/^first-reason: //p' | tail -1)
-  case "$SPAWN_PLACEMENT_FIRST" in
-  none | '') ;;
-  fallback)
-    PLACEMENT_FALLBACK_REASON=${SPAWN_PLACEMENT_REASON:-the placement probe gave no reason}
-    echo "placement: $(basename "$PROJ_ABS") work falls back to this home: $PLACEMENT_FALLBACK_REASON" >&2
-    if printf '%s\n' "$SPAWN_PLACEMENT_OUT" | grep -qx 'first-notice: tell the captain'; then
-      echo "placement-notice: first fallback in this home - tell the captain once: $PLACEMENT_FALLBACK_REASON" >&2
-    fi
-    ;;
-  *)
-    echo "error: spawn refused: the placement rule in config/intake-spill sends $(basename "$PROJ_ABS") work to secondmate $SPAWN_PLACEMENT_FIRST first, and ${SPAWN_PLACEMENT_REASON:-it has a free slot}; route task $ID there, or pass --placement-override <reason> when the captain redirects it" >&2
-    exit 1
-    ;;
-  esac
 fi
 # Project capacity admission (bin/fm-project-capacity-lib.sh owns the
 # declaration, what holds a place, and why this is race-safe). A fresh worker

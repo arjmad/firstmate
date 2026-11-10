@@ -232,6 +232,8 @@ printf '{"schema":"fm-lane-capacity.v1","lanes":{"count":0},"cap":{"target":null
 nofree "no remote lane capacity" "declares no config/lane-capacity"
 printf 'not json\n' > "$CAP_DOC"
 nofree "an unreadable answer" "lane capacity could not be read"
+printf '{"schema":"fm-lane-capacity.v1","lanes":{"count":1},"cap":{"target":4,"status":"ok"},"pressure":{"level":"critical","basis":"beat","avail_gb":0.5,"total_gb":32},"limits":{"min_avail_gb":null},"verdict":{"admit":false,"free_lanes":0,"reasons":["pressure critical"]}}\n' > "$CAP_DOC"
+nofree "a fixed cap judged on a pressure beat" "memory: 0.5 GB available, 3.2 GB kept"
 fixed_doc 4 1
 first_run code out err --project offline-business
 assert_contains "$out" "first: offbox" "a fixed cap with room takes the work"

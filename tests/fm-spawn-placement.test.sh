@@ -80,6 +80,10 @@ SH
 for last in "$@"; do :; done
 cmd=$(printf '%s' "$last" | { base64 -d 2>/dev/null || base64 -D; } | tr '\0' ' ')
 printf '%s\n' "$cmd" >> "$FM_FAKE_SSH_LOG"
+# The probe crosses the network, so no spawn lock may be held while it runs.
+for lock in "$FM_HOME/state/.task-set.lock" "$FM_HOME"/state/.spawn-*.lock; do
+  [ ! -e "$lock" ] || printf 'LOCK HELD DURING PROBE: %s\n' "$lock" >> "$FM_FAKE_SSH_LOG"
+done
 [ "${FM_FAKE_SSH_RC:-0}" = 0 ] || exit "$FM_FAKE_SSH_RC"
 case "$cmd" in
   fm-remote-secondmate-control.sh*) printf 'alive\n' ;;
@@ -142,6 +146,7 @@ test_free_secondmate_refuses_the_local_spawn() {
   assert_contains "$out" "faf is running and has 2 free slot(s)" "the refusal names why the secondmate takes it"
   assert_contains "$out" "--placement-override" "the refusal names the captain's redirect"
   assert_contains "$(cat "$case_dir/ssh.log")" "fm-capacity.sh --json" "the spawn probed the remote lane capacity"
+  assert_not_contains "$(cat "$case_dir/ssh.log")" "LOCK HELD DURING PROBE" "the probe ran while a spawn lock was held"
   assert_nothing_created "$case_dir" task-a
   pass "a fresh spawn the first rule sends to a running secondmate with a free slot is refused and leaves nothing"
 }
@@ -161,6 +166,7 @@ test_fallback_launches_here_and_records_the_reason() {
   expect_code 0 "$rc" "a second fallback spawn was refused: $out"
   assert_contains "$out" "faf has no free slot" "a full secondmate falls back with its reason"
   assert_not_contains "$out" "placement-notice:" "a later fallback does not tell the captain again"
+  assert_not_contains "$(cat "$case_dir/ssh.log")" "LOCK HELD DURING PROBE" "the probe ran while a spawn lock was held"
   pass "a fallback launches here, records the reason on the task, and tells the captain only once"
 }
 

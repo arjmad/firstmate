@@ -68,7 +68,8 @@
 # count memory and the lane ceiling only: in auto mode the smaller of the
 # budget's memory and ceiling figures, and none while its memory-pressure or
 # swap gate is closed; with a fixed cap the cap minus its lanes, and none while
-# a memory constraint holds. CPU load, GPU use, a reserve flag, and captain
+# a memory constraint holds or its published available memory leaves under
+# 1 GB above min-avail-gb (else the larger of 10% of RAM and 2 GB). CPU load, GPU use, a reserve flag, and captain
 # presence never count, so a machine its owner is gaming on stays available.
 # A remote home without config/lane-capacity has no measured slots, and the
 # rule falls back with that reason. The first fallback in this home prints
@@ -341,7 +342,10 @@ slots=$(printf '%s' "$remote_out" | jq -r '
         | "\($s)\t\($s) free slot(s) under its memory ceiling (\(.lanes.count) lane(s) running)" end
   elif .cap.status == "ok" then
     ([.verdict.reasons[]? | strings | select(startswith("memory"))]) as $mr
+    | (.pressure.avail_gb) as $a | (.pressure.total_gb) as $t
+    | (.limits.min_avail_gb // (if $t == null then 2 else ([$t * 0.10, 2] | max) end)) as $kept
     | if ($mr | length) > 0 then "0\t\($mr[0])"
+      elif $a != null and ($a - $kept) < 1 then "0\tmemory: \($a) GB available, \($kept) GB kept"
       else ([.cap.target - .lanes.count, 0] | max) as $s
         | "\($s)\t\($s) free slot(s): \(.lanes.count) of \(.cap.target) lane(s) running" end
   elif .cap.status == "invalid" then "none\tits config/lane-capacity is invalid"
