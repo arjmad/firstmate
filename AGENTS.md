@@ -51,7 +51,6 @@ When any crewmate is live, delegate changes to shared tracked material rather th
 This repo is a shared template, while `.env`, `data/`, `state/`, `config/`, `projects/`, and `.no-mistakes/` are captain-private and gitignored.
 Ship shared tracked changes through the selected delivery path and merge authority, as for any other project.
 Absent an explicit local grant, never push, fork, or open an issue, comment, or pull request on this repository's upstream; role is never inferred from identity, permissions, remotes, ownership, authentication, environment, or CI.
-Load `firstmate-self-repo`, which owns the role, its grants, and the dispatch flags, before dispatching, promoting, or delivering work that targets this repository, when a firstmate bug or improvement idea surfaces in ordinary use, and before granting or revoking upstream publication authority.
 Never add an agent name as a commit co-author.
 Use `gh-axi` for GitHub, `chrome-devtools-axi` for browser work, and compatible `lavish-axi` for visual decisions or reports; consult current help rather than memorizing flags.
 
@@ -88,8 +87,7 @@ For startup diagnostics or mechanism changes, read `bin/fm-session-start.sh`, [s
 
 ## 4. Harness and runtime dispatch
 
-Load `harness-adapters` before spawn, recovery, trust handling, skill invocation, interrupt, exit, resume, or adapter verification.
-At every crewmate/scout intake, read its [dispatch reference](.agents/skills/harness-adapters/references/common/dispatch.md) for configured profile resolution, current quota evidence, and runtime selection.
+At every crewmate/scout intake, read the `harness-adapters` [dispatch reference](.agents/skills/harness-adapters/references/common/dispatch.md) for configured profile resolution, current quota evidence, and runtime selection.
 That reference owns dispatch policy; `quota-array-dispatch` owns matched-array selection and `harness-adapters` owns supported roles and model/effort rules.
 Use verified adapters only; report an unverified static override and use the supported fallback under the router's safety contract.
 A backend dependency, authentication, version, or unsupported-backend failure is a blocker for that backend, never permission for a silent backend switch.
@@ -108,12 +106,9 @@ Surface actionable decisions or failures, otherwise resume supervision silently.
 
 ## 6. Project and knowledge management
 
-Load `project-management` before adding, creating, removing, or initializing a project.
-That skill owns registry syntax, delivery-mode selection, outward-facing consent, clone and initialization procedure, safe rollback, and removal preflight.
-Project creation never authorizes an unmentioned remote, and project removal never bypasses that preflight or unlanded-work checks.
+Project creation never authorizes an unmentioned remote, and project removal never bypasses the `project-management` removal preflight or unlanded-work checks.
 
-Load `secondmate-provisioning` before creating, seeding, validating, launching, handing backlog to, recovering, pushing inherited local material into, or retiring a secondmate home, and before editing `data/secondmates.md`.
-Its scope field drives routing and its project list is non-exclusive provisioning data, not ownership.
+A `data/secondmates.md` entry's scope field drives routing and its project list is non-exclusive provisioning data, not ownership.
 Keep `local-only` work in the main home.
 
 A secondmate is idle by default and acts only on work routed by the main firstmate.
@@ -134,7 +129,7 @@ Firstmate never writes a project's `AGENTS.md` directly.
 A crewmate edits a project's `AGENTS.md` or `CLAUDE.md` only to correct factually wrong information, including information its own change made wrong, and never adds knowledge because it is missing - additions are a deliberate human choice because every entry taxes every agent session of that project.
 A correction edits only the wrong text and never runs `bin/fm-ensure-agents-md.sh`, a manual project-initialization utility whose inserted sections and created pointer are themselves additions.
 Keep fleet delivery posture and captain-private strategy out of project memory.
-When the captain invokes `/stow`, load the `stow` skill for its memory curation, knowledge routing, and persistence of the open work records this session is holding; it files and corrects only the open work that session is holding, and never reconciles the backlog against repository or PR reality.
+When the captain invokes `/stow`, load the `stow` skill; it files and corrects only the open work that session is holding, and never reconciles the backlog against repository or PR reality.
 
 ## 7. Task lifecycle
 
@@ -155,7 +150,7 @@ Load `ask-user-authority` and `validation-supervision` before deciding or answer
 A no-mistakes worker owns its active validation run; follow the lifecycle reference before superseding work or recovering a reported failed pipeline.
 
 Verify landing before teardown; preserve uncommitted or unlanded work unless its discard is explicitly authorized.
-Read and relay a scout's self-contained report, and load `captain-hold-lifecycle` before declaring an investigation or visual review complete.
+Read and relay a scout's self-contained report.
 A persistent secondmate's empty queue is healthy, not authority to retire it.
 
 ## 8. Supervision protocol
@@ -212,7 +207,6 @@ Translate internal status and implementation terminology into what the captain n
 On every harness, whenever a turn calls for a captain-facing reply, its **final response message** must stand alone with all key information from the whole turn: outcomes, consequences, any decision or approval needed, and relevant URLs or identifiers, even if already stated in a mid-turn or pre-tool message.
 The captain may see only the final message; repeat the essentials there, not the full transcript or anchor.
 This final-message rule is a visibility recap: it may list all outstanding decisions and their URLs, but it does not override, replace, or combine any separate per-decision ask messages required by a harness's no-batching rule.
-Protocol regression example: reporting a completed fix and its recorded PR URL mid-turn, then using tools and ending with only `Awaiting your merge call.`, is incomplete; the final message must name the completed fix, include that same full PR URL, and ask whether to merge.
 Read worker reports as evidence rather than forwarding raw logs or status labels.
 Private evidence reports may retain exact paths, identifiers, and diagnostic output.
 
@@ -244,7 +238,7 @@ Reach the captain immediately for:
 
 Before filing, holding, updating, or handing off work, read [Backlog contract](docs/task-lifecycle.md#backlog-contract).
 Record work in its owning home's backlog, using `bin/fm-tasks-axi.sh` or the configured manual backend; secondmates themselves are not work items.
-Hold decisions through `bin/fm-captain-hold.sh`, and load `captain-hold-lifecycle` for investigation/visual-review decisions.
+Hold decisions through `bin/fm-captain-hold.sh`.
 File before dispatch; spawn and teardown own automatic state transitions where configured.
 Re-evaluate queued work after teardown, heartbeat, and a recorded PR-ready handoff on a capacity-capped project, respecting unresolved dependencies, time gates, and project capacity.
 Keep notes current and reusable knowledge with section 6's owners.
@@ -261,21 +255,8 @@ Load `secondmate-provisioning` for charter briefs and preserve their idle-by-def
 
 Firstmate's shared instruction surface reaches running homes only after it lands on the default branch and those homes fast-forward.
 Only `AGENTS.md`, `bin/`, and `.agents/skills/` are loaded by a running firstmate; public `skills/` is an installer-facing surface.
-When the captain invokes `/updatefirstmate` or asks to update firstmate, load the `/updatefirstmate` skill.
-The skill owns the guarded fleet update and restart procedure; it never touches anything under `projects/`.
+The `/updatefirstmate` skill owns the guarded fleet update and restart procedure; it never touches anything under `projects/`.
 
-## 13. Agent-only reference skills
-
-Skill descriptions are the always-loaded trigger index; load each agent-only skill only at its stated trigger.
-Load `agent-skill-trigger-index` only when auditing or maintaining the complete trigger index.
-
-## 14. Relay
+## 13. Relay
 
 When Relay is enabled, load `fmx-respond` for its activation, authority, mention, follow-up, and public-loop contract.
-
-## Maintaining this file
-
-Keep this file for knowledge useful to almost every future agent session in this project.
-Do not repeat what the codebase already shows; point to the authoritative file, skill, command, or doc.
-Prefer rewriting or pruning existing entries over appending new ones.
-When updating this file, preserve every safety boundary and keep the always-loaded contract concise.

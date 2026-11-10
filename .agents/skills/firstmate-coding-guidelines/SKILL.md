@@ -55,7 +55,7 @@ The model to copy is `AGENTS.md` section 8's "Away-mode and quiet-mode stub": it
 
 ## Size discipline
 
-Apply the decision tree above to every line you are about to add to `AGENTS.md`.
+Apply the decision tree above to every line you are about to add to `AGENTS.md`, and keep every safety boundary when you rewrite or prune it.
 If an addition needs more than a few lines of conditional detail (detail that matters only in a specific situation) or reference detail (a wire format, an exact schema, historical rationale), you are almost certainly adding it to the wrong file.
 `AGENTS.md`'s token cost is paid by every session of every fleet member, every time, whether or not that session ever hits the situation the new lines describe.
 A skill's cost is paid only by the sessions that actually load it.
