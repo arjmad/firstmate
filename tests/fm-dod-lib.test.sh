@@ -566,7 +566,7 @@ test_pr_based_dod_carries_the_code_review_step() {
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
     assert_grep 'once from this worktree with the arguments `'"$cli"' args <pr-url>` prints, which are `medium --comment <number>` followed by firstmate'"'"'s merge-gate focus' "$out" "$mode: DoD does not run the review with the focus arguments"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    assert_grep 'claude -p "/code-review $('"$cli"' args <pr-url>)"' "$out" "$mode: DoD does not give a harness without the skill its headless path"
+    assert_grep 'a=$('"$cli"' args <pr-url>) && claude -p "/code-review $a"' "$out" "$mode: DoD does not give a harness without the skill its headless path"
     "$cli" args https://github.com/example/repo/pull/3 | grep -q '^medium --comment 3 Merge-gate focus for this review: ' \
       || fail "$mode: the DoD's review script does not print the review arguments"
     assert_grep "$cli record <pr-url>" "$out" "$mode: DoD does not name the record step"

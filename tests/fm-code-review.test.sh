@@ -340,7 +340,7 @@ test_args_carry_the_merge_gate_focus() {
     'medium --comment 12 Merge-gate focus for this review: '*) ;;
     *) fail "args: the arguments do not start with the level, --comment, the number, and the focus: $OUT" ;;
   esac
-  assert_contains "$OUT" 'run gh pr view 12 --repo example/repo --json title,body' "args: the focus does not name this PR's description"
+  assert_contains "$OUT" 'run gh pr view 12 --repo github.com/example/repo --json title,body' "args: the focus does not name this PR's description"
   [ ! -s "$dir/gh.log" ] || fail "args: printing the arguments must not call gh"
   run_case "$dir" args https://gitlab.example/group/project/-/merge_requests/7
   expect_code 2 "$RC" "args-gitlab: a GitLab URL gets no review arguments"
