@@ -12,7 +12,7 @@ make_spawn_case() {
   local name=$1 case_dir home proj wt fakebin grok_home id
   case_dir="$TMP_ROOT/$name"
   home="$case_dir/home"
-  proj="$case_dir/project"
+  proj="$home/projects/project"
   wt="$case_dir/wt"
   fakebin=$(make_spawn_fakebin "$case_dir/fake" gh-axi gh)
   grok_home="$case_dir/grok"

@@ -65,7 +65,7 @@ printf '%s\n' "$consent" | jq -e '.enabled == false and .send == false and .offe
 pass "$VERSION: native first-run offer recognized, No thanks confirmed, TUI ready and decline persisted"
 H="$LAB/home"
 WT="$LAB/wt"
-PROJ="$LAB/project"
+PROJ="$H/projects/project"
 ID=hermes-live
 fm_test_spawn_home "$H" hermes
 fm_git_worktree "$PROJ" "$WT" hermes-live

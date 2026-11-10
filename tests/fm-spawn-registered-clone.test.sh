@@ -33,6 +33,8 @@ commit_repo() {  # <dir>
 setup() {
   mkdir -p "$HOME_DIR/data" "$HOME_DIR/projects" "$HOME_DIR/state" "$HOME_DIR/config" "$FAKEBIN" "$(dirname "$LIVE")"
   touch "$HOME_DIR/state/.last-watcher-beat"
+  # Name the crew harness so the spawn never depends on what this host detects.
+  printf 'codex\n' > "$HOME_DIR/config/crew-harness"
   git init -q "$LIVE" || fail "could not create the live checkout fixture"
   commit_repo "$LIVE" || fail "could not commit the live checkout fixture"
   git -C "$LIVE" remote add origin https://example.invalid/acme/repo.git

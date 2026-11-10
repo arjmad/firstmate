@@ -200,7 +200,7 @@ SH_TMUX
 chmod +x "$fakebin/tmux"
 
 home="$case_dir/home"
-proj="$case_dir/project"
+proj="$home/projects/project"
 wt="$case_dir/wt"
 fm_test_spawn_home "$home" hermes
 fm_git_worktree "$proj" "$wt" hermes-test

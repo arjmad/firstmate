@@ -163,7 +163,7 @@ test_spawn_isolation_abort() {
   local home proj fakebin out status
   home="$TMP_ROOT/spawn-home"
   mkdir -p "$home/data"
-  proj=$(make_repo "$TMP_ROOT/spawn-proj")
+  proj=$(make_repo "$home/projects/spawn-proj")
   fakebin=$(make_spawn_fakebin "$TMP_ROOT/spawn-fake")
   # The assertions concern identity, not how long an unchanged cwd is polled.
   fm_test_fake_sleep_noop "$fakebin"
@@ -270,7 +270,7 @@ test_spawn_tmux_window_construction() {
   local home proj fakebin rec wt out status
   home="$TMP_ROOT/spawn-rec-home"
   mkdir -p "$home/data"
-  proj=$(make_repo "$TMP_ROOT/spawn-rec-proj")
+  proj=$(make_repo "$home/projects/spawn-rec-proj")
   fakebin=$(make_spawn_record_fakebin "$TMP_ROOT/spawn-rec-fake")
   rec="$TMP_ROOT/spawn-rec.log"
   : > "$rec"

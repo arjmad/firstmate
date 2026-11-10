@@ -209,7 +209,7 @@ test_disable_autoupdater_reaches_the_claude_pane_on_the_fm_spawn_launch_path() {
   # separate case this cannot cover without launcher support.)
   local case_dir home proj wt fakebin launchlog panebin panelog launch rc
   case_dir="$TMP_ROOT/spawn-launch-path"
-  home="$case_dir/home"; proj="$case_dir/proj"; wt="$case_dir/wt"
+  home="$case_dir/home"; proj="$home/projects/proj"; wt="$case_dir/wt"
   launchlog="$case_dir/launch.log"
   fakebin=$(make_spawn_fakebin "$case_dir/fake" gh gh-axi)
   fm_test_spawn_home "$home" claude
@@ -252,7 +252,7 @@ test_disable_autoupdater_survives_a_daemon_pane_that_never_inherited_it() {
   # command text rather than relying on the pane inheriting it.
   local case_dir home proj wt fakebin launchlog panebin panelog launch rc
   case_dir="$TMP_ROOT/spawn-daemon-path"
-  home="$case_dir/home"; proj="$case_dir/proj"; wt="$case_dir/wt"
+  home="$case_dir/home"; proj="$home/projects/proj"; wt="$case_dir/wt"
   launchlog="$case_dir/launch.log"
   fakebin=$(make_spawn_fakebin "$case_dir/fake" gh gh-axi)
   fm_test_spawn_home "$home" claude

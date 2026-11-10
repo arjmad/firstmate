@@ -42,7 +42,7 @@ fail() { printf 'not ok - %s: %s\n' "$VERSION" "$1" >&2; exit 1; }
 . "$ROOT/bin/fm-composer-lib.sh"
 H="$LAB/home"
 WT="$LAB/wt"
-PROJ="$LAB/project"
+PROJ="$H/projects/project"
 ID=devin-live
 fm_test_spawn_home "$H" devin
 fm_git_worktree "$PROJ" "$WT" devin-live

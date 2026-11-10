@@ -20,7 +20,7 @@ make_case() {
   local name=$1 id=$2 tokens=${3:-direct-PR forge=external}
   CASE_DIR="$TMP_ROOT/$name"
   HOME_DIR="$CASE_DIR/home"
-  PROJECT_DIR="$CASE_DIR/project"
+  PROJECT_DIR="$HOME_DIR/projects/project"
   ORIGIN_DIR="$CASE_DIR/origin.git"
   POOL_DIR="$CASE_DIR/pool"
   FAKEBIN_DIR=$(make_spawn_fakebin "$CASE_DIR/fake")
