@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--dispatch-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait] [--also <repo>]...
-#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--dispatch-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--dispatch-override <reason>] [--placement-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait] [--also <repo>]...
+#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--dispatch-override <reason>] [--placement-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--backend <name>] --secondmate
 #   A fresh ship or scout <project-dir> must resolve, physically, to a clone
 #   directly under this home's projects/ whose git common dir is its own .git;
@@ -302,6 +302,19 @@
 #   it) and keeps holding it through metadata publication; a verdict that does
 #   not admit prints `deferred:` and exits 75 with the task exactly as queued,
 #   and an unreadable declaration refuses with exit 1.
+#   Placement by rule: when this home's config/intake-spill declares a `first`
+#   rule (bin/fm-intake-spill.sh owns the rule, the remote
+#   probe, and the once-only captain notice), a fresh ship or scout spawn asks
+#   `fm-intake-spill.sh --project <name>` before the task-set or spawn lock is
+#   taken and before any brief render, endpoint, worktree, or record exists.
+#   While the rule's remote secondmate is running with a free slot, the local spawn is refused with exit 1 and the
+#   task stays queued for routing there. On a fallback the spawn continues and
+#   records placement=fallback and placement_reason=<why> in the task record,
+#   and the first fallback in this home also prints `placement-notice:` for the
+#   captain. --placement-override <reason> records the captain's redirect as
+#   placement_override= and skips the probe; it is refused on secondmates and
+#   relaunches. A declaration with a first rule that cannot be read refuses the
+#   spawn with exit 1; one without a first rule never gates a spawn.
 #   A batch reports such a pair as `batch: DEFERRED` and exits 75 when nothing
 #   else failed. A relaunch and a --secondmate spawn are never counted against
 #   either capacity.
@@ -1065,6 +1078,8 @@ HARNESS_ARG=
 MODEL=
 EFFORT=
 DISPATCH_OVERRIDE=
+PLACEMENT_OVERRIDE=
+PLACEMENT_OVERRIDE_SET=0
 BACKEND_ARG=
 MODE=
 YOLO=
@@ -1117,6 +1132,10 @@ for a in "$@"; do
       EFFORT_SET=1
       ;;
     dispatch-override) DISPATCH_OVERRIDE=$a ;;
+    placement-override)
+      PLACEMENT_OVERRIDE=$a
+      PLACEMENT_OVERRIDE_SET=1
+      ;;
     hermes-profile)
       HERMES_PROFILE=$a
       HERMES_PROFILE_SET=1
@@ -1196,6 +1215,11 @@ for a in "$@"; do
     ;;
   --dispatch-override) want_value=dispatch-override ;;
   --dispatch-override=*) DISPATCH_OVERRIDE=${a#--dispatch-override=} ;;
+  --placement-override) want_value=placement-override ;;
+  --placement-override=*)
+    PLACEMENT_OVERRIDE=${a#--placement-override=}
+    PLACEMENT_OVERRIDE_SET=1
+    ;;
   --hermes-profile) want_value=hermes-profile ;;
   --hermes-profile=*) HERMES_PROFILE=${a#--hermes-profile=}; HERMES_PROFILE_SET=1 ;;
   --backend) want_value=backend ;;
@@ -1378,6 +1402,10 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: --relaunch reuses the task's recorded companion worktrees; --also cannot add one" >&2
     exit 1
   }
+  [ "$PLACEMENT_OVERRIDE_SET" -eq 0 ] || {
+    echo "error: --relaunch keeps the task where it already runs; --placement-override applies only to a fresh ship or scout" >&2
+    exit 1
+  }
 else
   # Delivery contract (AGENTS.md section 7). A ship task's mode and yolo are
   # firstmate's per-task decision, so they are required and closed-set validated
@@ -1446,7 +1474,19 @@ else
       echo "error: --also applies only to ship spawns; a scout changes no repository and a secondmate allocates its own crews' worktrees" >&2
       exit 1
     }
+    [ "$KIND" != secondmate ] || [ "$PLACEMENT_OVERRIDE_SET" -eq 0 ] || {
+      echo "error: --placement-override applies only to ship and scout spawns; a secondmate is placed by its registry route" >&2
+      exit 1
+    }
   fi
+fi
+if [ "$PLACEMENT_OVERRIDE_SET" -eq 1 ]; then
+  case "$PLACEMENT_OVERRIDE" in
+  '' | *[![:print:]]*)
+    echo 'error: --placement-override must be a printable reason' >&2
+    exit 1
+    ;;
+  esac
 fi
 
 spawn_remote_secondmate() {
@@ -2540,6 +2580,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
   [ -z "$DISPATCH_OVERRIDE" ] || shared_args+=(--dispatch-override "$DISPATCH_OVERRIDE")
+  [ "$PLACEMENT_OVERRIDE_SET" -eq 0 ] || shared_args+=(--placement-override "$PLACEMENT_OVERRIDE")
   [ "$HERMES_PROFILE_SET" -eq 0 ] || shared_args+=(--hermes-profile "$HERMES_PROFILE")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
   # One delivery contract applies to every pair in a batch, exactly like the shared
@@ -2680,6 +2721,53 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: another lifecycle action is already running for task $ID" >&2
     exit 1
   fi
+fi
+# Placement by rule (see the header; bin/fm-intake-spill.sh owns the rule and
+# its probe). Asked before the task-set and per-task spawn locks are taken,
+# because the probe crosses the network and other spawns refuse rather than
+# wait on those locks, and before anything exists, so a refusal leaves the task
+# queued. The project is named the way the clone check below resolves it; a
+# path that does not resolve is refused by that check.
+PLACEMENT_FALLBACK_REASON=
+SPAWN_PLACEMENT_PROJECT=
+# Only a declaration that names a first rule gates spawns; a spill alone is
+# intake's judgment and never refuses one.
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$PLACEMENT_OVERRIDE_SET" -eq 0 ] &&
+  { [ -e "$CONFIG/intake-spill" ] || [ -L "$CONFIG/intake-spill" ]; } &&
+  { [ ! -r "$CONFIG/intake-spill" ] || grep -Eq '^[[:space:]]*first([[:space:]]|$)' "$CONFIG/intake-spill"; }; then
+  case "${POS[1]:-}" in
+  projects/*) SPAWN_PLACEMENT_PROJECT="$PROJECTS/${POS[1]#projects/}" ;;
+  *) SPAWN_PLACEMENT_PROJECT=${POS[1]:-} ;;
+  esac
+  SPAWN_PLACEMENT_PROJECT=$(cd "$SPAWN_PLACEMENT_PROJECT" 2>/dev/null && pwd) || SPAWN_PLACEMENT_PROJECT=
+  SPAWN_PLACEMENT_PROJECT=${SPAWN_PLACEMENT_PROJECT:+$(basename "$SPAWN_PLACEMENT_PROJECT")}
+  # A rule names projects as plain words, so no other name can be in one.
+  case "$SPAWN_PLACEMENT_PROJECT" in -* | *[!A-Za-z0-9._-]*) SPAWN_PLACEMENT_PROJECT= ;; esac
+fi
+if [ -n "$SPAWN_PLACEMENT_PROJECT" ]; then
+  SPAWN_PLACEMENT_RC=0
+  SPAWN_PLACEMENT_OUT=$(FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG FM_DATA_OVERRIDE=$DATA \
+    "$SCRIPT_DIR/fm-intake-spill.sh" --project "$SPAWN_PLACEMENT_PROJECT" </dev/null) || SPAWN_PLACEMENT_RC=$?
+  if [ "$SPAWN_PLACEMENT_RC" -ne 0 ]; then
+    echo "error: spawn refused: this home's placement rule cannot be read (bin/fm-intake-spill.sh exited $SPAWN_PLACEMENT_RC); fix config/intake-spill so the captain's placement is known (docs/configuration.md \"Intake spill\")" >&2
+    exit 1
+  fi
+  SPAWN_PLACEMENT_FIRST=$(printf '%s\n' "$SPAWN_PLACEMENT_OUT" | sed -n 's/^first: //p' | tail -1)
+  SPAWN_PLACEMENT_REASON=$(printf '%s\n' "$SPAWN_PLACEMENT_OUT" | sed -n 's/^first-reason: //p' | tail -1)
+  case "$SPAWN_PLACEMENT_FIRST" in
+  none | '') ;;
+  fallback)
+    PLACEMENT_FALLBACK_REASON=${SPAWN_PLACEMENT_REASON:-the placement probe gave no reason}
+    echo "placement: $SPAWN_PLACEMENT_PROJECT work falls back to this home: $PLACEMENT_FALLBACK_REASON" >&2
+    if printf '%s\n' "$SPAWN_PLACEMENT_OUT" | grep -qx 'first-notice: tell the captain'; then
+      echo "placement-notice: first fallback in this home - tell the captain once: $PLACEMENT_FALLBACK_REASON" >&2
+    fi
+    ;;
+  *)
+    echo "error: spawn refused: the placement rule in config/intake-spill sends $SPAWN_PLACEMENT_PROJECT work to secondmate $SPAWN_PLACEMENT_FIRST first, and ${SPAWN_PLACEMENT_REASON:-it has a free slot}; route task $ID there, or pass --placement-override <reason> when the captain redirects it" >&2
+    exit 1
+    ;;
+  esac
 fi
 ORCA_LAUNCH_ENV_ENABLED=0
 ORCA_LAUNCH_ENV_ARGS=
@@ -8040,6 +8128,11 @@ preserve_relaunch_meta() {
   echo "effort=${EFFORT:-default}"
   echo "fast=$FAST"
   [ -z "$DISPATCH_OVERRIDE" ] || printf 'dispatch_override=%s\n' "$DISPATCH_OVERRIDE"
+  if [ -n "$PLACEMENT_FALLBACK_REASON" ]; then
+    echo "placement=fallback"
+    printf 'placement_reason=%s\n' "$PLACEMENT_FALLBACK_REASON"
+  fi
+  [ "$PLACEMENT_OVERRIDE_SET" -eq 0 ] || printf 'placement_override=%s\n' "$PLACEMENT_OVERRIDE"
   # The detected OpenCode major, recorded so fm-control sends the exit key this
   # agent's TUI understands. Written only when a version was resolved, so a
   # non-opencode or undetectable task record stays byte-identical.

@@ -29,7 +29,7 @@ config/secondmate-accounts/<id>/claude-account config/secondmate-accounts/<id>/p
 config/secondmate-accounts/<id>/omp-profile  optional PRIMARY-home omp profile name for one local omp secondmate's own agent (`omp --profile <name>`); LOCAL, gitignored, not inherited; absent adds no flag; see docs/configuration.md "Per-secondmate omp profile"
 config/crew-dispatch.json  optional crewmate dispatch profiles; LOCAL, gitignored; firstmate-maintained but human-editable natural-language rules that choose a per-task harness/model/effort profile (section 4). Inherited by secondmate homes
 config/project-capacity  optional per-machine count of workers each named project admits at once, read from the root home by every local home; LOCAL, gitignored; see docs/configuration.md "Project capacity"
-config/intake-spill  optional PRIMARY-home load and worker thresholds past which intake sends work that does not need this home to a named secondmate; LOCAL, gitignored, not inherited; see docs/configuration.md "Intake spill"
+config/intake-spill  optional PRIMARY-home load and worker thresholds past which intake sends work that does not need this home to a named secondmate, and the `first` rule sending named projects to a remote secondmate first; LOCAL, gitignored, not inherited; see docs/configuration.md "Intake spill"
 config/secondmate-harness  primary-local secondmate runtime pins; see docs/configuration.md "Choose the secondmate harness" for schema, precedence, and inheritance
 config/lane-capacity  optional lane cap and limits for this home, read by bin/fm-capacity.sh and the opt-in that makes its watcher publish state/lane-capacity.json; LOCAL, gitignored, not inherited by secondmate homes; see docs/configuration.md "Lane capacity"
 config/backlog-backend  backlog backend override; LOCAL, gitignored; absent or "tasks-axi" = the configured tasks-axi backend, "manual" = force routine backlog updates to hand-editing; inherited by secondmate homes (section 10)
@@ -147,6 +147,7 @@ state/               runtime records and signals; gitignored
   x-outbox/          generated Relay dry-run reply and dismiss previews; inspect it when FMX_DRY_RUN is set (section 14)
   public-followup/   generated private transport for promised public replies: retained open-loop registrations, typed terminal-result inbox, results staged for an owning home on another machine, accepted/rejected ledgers, and retirement receipts (section 14; bin/fm-public-followup.sh)
   x-poll.error x-poll.claim-error  generated Relay and offer-claim diagnostic dedupe markers
+  .intake-first-told  marks that the captain was told about this home's first placement fallback, so later fallbacks stay quiet; created only by bin/fm-intake-spill.sh; remove it to re-arm the notice
   .startup-network.*  status, report, per-step elapsed timings, inline-print claim, and lock for the deferred startup stage that runs network checks and the inactive-outcome scan off the digest's blocking path; bin/fm-startup-network.sh
   .wake-queue        durable queued wakes retained until post-handling acknowledgement: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
   .watcher-down      private generation-bound recovery state coupling watcher downtime, durable wake presentation, and post-handling acknowledgement; never touch
