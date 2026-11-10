@@ -1389,6 +1389,19 @@ short 15
 `load` needs a remote `to` secondmate, because a local one shares this machine's load.
 `short` is optional: work expected to take fewer minutes stays in the main home even when a scope fits, because a handoff costs more than it saves, but it still spills while the home is past a threshold.
 Without the file, placement follows secondmate scope alone.
+
+A `first` line is a placement rule instead of a threshold: `first <secondmate-id> <project>...` sends fresh ships and scouts for those projects to that remote secondmate first.
+
+```text
+# firstmate, skills and business work runs on the second machine first
+first offbox firstmate skills offline-business
+```
+
+The work falls back to the main home only when the secondmate does not answer over SSH, is not running, or has no free slot under its memory ceiling.
+Free slots come from the secondmate home's own lane capacity, read live over the remote route, so that home needs a `config/lane-capacity` (`auto` measures its memory); without one every placement falls back and says why.
+CPU load, GPU use, a reserve flag, and the machine's owner being at it never count, so a machine its owner is gaming on stays available.
+`bin/fm-spawn.sh` judges the rule before every fresh ship or scout: it refuses a local spawn the rule sends to an available secondmate, and on a fallback it launches here and records the reason in the task record.
+A file may hold a spill, a first rule, or both.
 `bin/fm-intake-spill.sh` measures the home against the file and prints the verdict that [the intake rule](task-lifecycle.md#intake-and-authority) applies; its header owns the format, the counting, and why a malformed file exits 2 instead of reading as absent.
 
 ### Provision a local home

@@ -464,7 +464,8 @@ family_for_basename() {
     fm-trace-context-spawn.test.sh|fm-spawn-worktree-settle.test.sh|\
     fm-spawn-compact-adviser-disable.test.sh|\
     fm-spawn-compact-adviser-disable-remote.test.sh|\
-    fm-project-capacity.test.sh|fm-intake-spill.test.sh|fm-lane-capacity-integration.test.sh|\
+    fm-project-capacity.test.sh|fm-intake-spill.test.sh|fm-spawn-placement.test.sh|\
+    fm-lane-capacity-integration.test.sh|\
     fm-teardown-endpoint-safety.test.sh)
       printf '%s\n' backend-dispatch
       ;;
@@ -913,7 +914,7 @@ tests/fm-host-mirror.test.sh 15819
 tests/fm-inactive-reconcile.test.sh 79111
 tests/fm-inbox.test.sh 15647
 tests/fm-install-herdr.test.sh 1000
-tests/fm-intake-spill.test.sh 833
+tests/fm-intake-spill.test.sh 1556
 tests/fm-jev-mem-guard.test.sh 426
 tests/fm-kimi-harness.test.sh 76548
 tests/fm-kimi-trust-prompt-live-e2e.test.sh 60
@@ -1025,6 +1026,7 @@ tests/fm-spawn-compact-adviser-disable.test.sh 33201
 tests/fm-spawn-dispatch-profile.test.sh 438838
 tests/fm-spawn-external-review.test.sh 6935
 tests/fm-spawn-orca-worktree.test.sh 58463
+tests/fm-spawn-placement.test.sh 8764
 tests/fm-spawn-pool-base-freshen.test.sh 121462
 tests/fm-spawn-steer-herdr-live-e2e.test.sh 85
 tests/fm-spawn-worktree-settle.test.sh 12312
