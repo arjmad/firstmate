@@ -261,6 +261,22 @@ test_keep_binaries_removes_only_checkouts_and_dependency_folders() {
   pass "--keep-binaries: clean checkouts and dependency folders go; binaries, work, and text stay"
 }
 
+test_unreadable_dist_stays() {
+  local d out
+  [ "$(id -u)" -ne 0 ] || { pass "skip: root reads every folder, so an unreadable dist cannot be built"; return; }
+  d="$TMP_ROOT/unreadable/data/unreadable"
+  put "$d/brief.md"
+  put "$d/site/package.json" '{}'
+  put "$d/site/dist/app.js"
+  put "$d/site/dist/locked/maybe.pdf"
+  chmod 000 "$d/site/dist/locked"
+  out=$(bash "$PRUNE" "$d" 2>&1)
+  chmod 755 "$d/site/dist/locked"
+  assert_present "$d/site/dist/app.js" "a dist the scan could not read must stay: $out"
+  assert_contains "$out" "data-scratch: kept dist unreadable/site/dist: it holds images or PDFs" "the kept dist is named"
+  pass "a dist whose image and PDF scan fails stays"
+}
+
 test_nothing_to_do_and_bad_arguments() {
   local d out rc
   d="$TMP_ROOT/plain/data/plain"
@@ -293,4 +309,5 @@ test_nothing_to_do_and_bad_arguments() {
 test_real_run_removes_only_reproducible_scratch
 test_dry_run_lists_the_same_and_removes_nothing
 test_keep_binaries_removes_only_checkouts_and_dependency_folders
+test_unreadable_dist_stays
 test_nothing_to_do_and_bad_arguments

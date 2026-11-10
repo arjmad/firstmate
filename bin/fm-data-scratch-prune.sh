@@ -287,7 +287,7 @@ holds_image_or_pdf() {
   found=$(find "$1" -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.gif' \
     -o -iname '*.webp' -o -iname '*.svg' -o -iname '*.heic' -o -iname '*.heif' -o -iname '*.tif' \
     -o -iname '*.tiff' -o -iname '*.bmp' -o -iname '*.avif' -o -iname '*.ico' -o -iname '*.pdf' \) \
-    -print 2>/dev/null | head -n 1) || return 0
+    -print -quit 2>/dev/null) || return 0
   [ -n "$found" ]
 }
 
