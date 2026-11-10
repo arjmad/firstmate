@@ -36,9 +36,10 @@
 #                       when this session actually holds the lock. Detect-only
 #                       diagnostics always run. Bootstrap's nine MUTATING sweeps
 #                       (same-home backlog reconciliation, the state residue sweep,
-#                       the data media retention prune, secondmate convergence, secondmate liveness, pending remote
-#                       handoff retry, X-mode artifact writes, the Lavish chrome
-#                       patch, fleet sync) also run only when
+#                       the data media retention prune, secondmate convergence,
+#                       secondmate liveness, pending remote handoff retry, X-mode
+#                       artifact writes, the Lavish chrome patch, fleet sync)
+#                       also run only when
 #                       locked; the four network sweeps run in the deferred
 #                       stage rather than this synchronous bootstrap section.
 #   3. wake-drain     - presents durable wakes and advances recovery handling
