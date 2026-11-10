@@ -25,7 +25,6 @@ The [decision to keep firstmate fixes in this fork](fork-decisions/2026-10-10-fo
 
 Contract:
 Every fork PR that changes upstream-owned files adds one fork-patch record naming what changed, where, and the upstream code it touches.
-2026-11-09: Arjun decided in helm chat that every fork PR gets its fork-patch record without asking him, and a missing record is filed as routine work.
 Every upstream-sync PR re-checks each row `bin/fm-fork-decisions.sh patches` lists against the merged upstream and updates its status and last-checked sync in its record.
 Status is `carried` when the change still applies and upstream is unchanged there, `upstreamed` when upstream now has an equivalent so the fork change can be dropped at the next sync, or `conflicted` when upstream changed the same code and the merge needed a hand; a row a later patch replaced reads `superseded by #N` instead.
 A sync drops a fork change only when its row reads `upstreamed`, and the captain's merge of that sync PR is the approval.
