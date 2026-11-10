@@ -82,7 +82,7 @@ export XDG_STATE_HOME="$HC_LAB_DIR/env/xdg-state" \
 unset HC_TERMINAL_ID HC_TERMINAL_SOCKET HC_SCOPE HC_SOCKET HERDR_APP_HOME
 
 FM_HOME_DIR=$TMP_ROOT/home
-PROJ=$TMP_ROOT/scratch-project
+PROJ=$TMP_ROOT/projects/scratch-project
 # <root-home>/state must exist: the shared Treehouse project lock resolves
 # under it (bin/fm-wake-lib.sh fm_treehouse_project_lock_path).
 mkdir -p "$FM_HOME_DIR/state" "$PROJ"
@@ -124,7 +124,7 @@ SCRUB="env -u TMUX -u FM_BACKEND -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SESSION 
 spawn_one() {  # <id> <launch-line> -> spawn with the caller's extra env already in place
   write_brief "$1"
   $SCRUB FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
-    FM_CONFIG_OVERRIDE="$CONFIG" FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" \
+    FM_CONFIG_OVERRIDE="$CONFIG" FM_PROJECTS_OVERRIDE="$TMP_ROOT/projects" \
     FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$1" "$PROJ" "$2" --mode no-mistakes --yolo off
 }

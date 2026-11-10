@@ -21,7 +21,7 @@ make_case() {
   shift 3
   CASE_DIR="$TMP_ROOT/$name"
   HOME_DIR="$CASE_DIR/home"
-  PROJECT_DIR="$CASE_DIR/project"
+  PROJECT_DIR="$HOME_DIR/projects/project"
   POOL_DIR="$CASE_DIR/pool"
   FAKEBIN_DIR=$(make_spawn_fakebin "$CASE_DIR/fake")
   mkdir -p "$HOME_DIR/data" "$HOME_DIR/projects" "$HOME_DIR/state" "$HOME_DIR/config"

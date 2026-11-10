@@ -27,10 +27,10 @@ trap 'fm_test_remove_tree "$DEPENDENCY_ROOT"' EXIT
 WORKER_ROOT="$DEPENDENCY_ROOT/worker"
 fakebin=$(make_spawn_fakebin "$WORKER_ROOT/fake" pi)
 fm_test_spawn_home "$WORKER_ROOT/home" pi
-fm_git_worktree "$WORKER_ROOT/project" "$WORKER_ROOT/wt" worker-types
+fm_git_worktree "$WORKER_ROOT/home/projects/project" "$WORKER_ROOT/wt" worker-types
 fm_test_spawn_brief "$WORKER_ROOT/home" worker-types
 fm_test_run_spawn "$WORKER_ROOT/home" "$WORKER_ROOT/wt" "$fakebin" \
-  worker-types "$WORKER_ROOT/project" --mode direct-PR --yolo off >/dev/null || exit 1
+  worker-types "$WORKER_ROOT/home/projects/project" --mode direct-PR --yolo off >/dev/null || exit 1
 cp "$WORKER_ROOT/home/state/worker-types.pi-ext.ts" "$DEPENDENCY_ROOT/fm-worker.ts"
 
 printf 'Pi production-consumer typechecks: npm %s\n' "$(npm --version)"

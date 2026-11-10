@@ -45,7 +45,7 @@ SH
 make_case() {  # <name> <on|off>
   local dir="$TMP_ROOT/$1"
   HOME_DIR="$dir/home"
-  PROJ_DIR="$dir/sample"
+  PROJ_DIR="$HOME_DIR/projects/sample"
   TASK="$1-t1"
   WT_DIR="$dir/wt"
   mkdir -p "$HOME_DIR/data/$TASK" "$HOME_DIR/projects" "$HOME_DIR/state" "$HOME_DIR/config" "$HOME_DIR/user-home"

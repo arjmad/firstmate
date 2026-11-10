@@ -31,7 +31,7 @@ for case_label in $cases; do
   enabled=300
   [ "$case_label" != disabled ] || enabled=0
   home="$TMP_ROOT/home-$case_label"
-  project="$TMP_ROOT/project-$case_label"
+  project="$home/projects/project-$case_label"
   wt="$TMP_ROOT/wt-$case_label"
   fm_test_spawn_home "$home" pi
   fm_git_worktree "$project" "$wt" "stream-$case_label"

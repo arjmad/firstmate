@@ -39,7 +39,7 @@ capture_codex_launch() {
   local case_dir home proj wt fakebin launchlog id
   case_dir="$TMP_ROOT/$name"
   home="$case_dir/home"
-  proj="$case_dir/project"
+  proj="$home/projects/project"
   wt="$case_dir/wt"
   launchlog="$case_dir/launch.log"
   id="codex-hook-layer-$name"

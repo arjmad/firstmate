@@ -676,7 +676,7 @@ test_refused_spawn_leaves_no_task_state() {
   local case_dir home proj wt config fakebin out id
   case_dir="$TMP_ROOT/refused-spawn"
   home="$case_dir/home"
-  proj="$case_dir/project"
+  proj="$home/projects/project"
   wt="$case_dir/wt"
   config="$case_dir/claude-config"
   id="refusedspawn$$"
@@ -724,7 +724,7 @@ test_claude_spawn_pretrusts_its_worktree_and_reaches_the_brief() {
   local case_dir home proj wt config fakebin launch_log out launch doorbell record
   case_dir="$TMP_ROOT/spawn"
   home="$case_dir/home"
-  proj="$case_dir/project"
+  proj="$home/projects/project"
   wt="$case_dir/wt"
   config="$case_dir/claude-config"
   launch_log="$case_dir/launch.log"

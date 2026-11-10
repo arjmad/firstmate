@@ -235,7 +235,7 @@ spawn_ship() {  # <case-dir> <id> [pane-path]
   local case_dir=$1 id=$2 pane=${3:-}
   [ -n "$pane" ] || pane=$(new_worktree "$case_dir" "$id")
   probe_env "$case_dir" env FM_ROOT_OVERRIDE='' FM_HOME="$case_dir/home" \
-    FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE='' \
+    FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' FM_PROJECTS_OVERRIDE="$case_dir" FM_CONFIG_OVERRIDE='' \
     FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" FM_BACKEND=tmux \
     FM_FAKE_PANE_PATH="$pane" FM_FAKE_CALL_LOG="$case_dir/calls.log" \
     "$SPAWN" "$id" "$case_dir/project" --mode no-mistakes --yolo off 2>&1
@@ -504,7 +504,7 @@ live_spawn() {  # <case-dir> <id> [pane]
   local case_dir=$1 id=$2 pane=${3:-}
   [ -n "$pane" ] || pane=$(new_worktree "$case_dir" "$id")
   PATH="$case_dir/fakebin-spawn:$PATH" FM_ROOT_OVERRIDE='' FM_HOME="$case_dir/home" \
-    FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE='' \
+    FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' FM_PROJECTS_OVERRIDE="$case_dir" FM_CONFIG_OVERRIDE='' \
     FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" FM_BACKEND=tmux \
     FM_FAKE_PANE_PATH="$pane" FM_FAKE_CALL_LOG="$case_dir/calls.log" \
     "$SPAWN" "$id" "$case_dir/project" --mode no-mistakes --yolo off 2>&1

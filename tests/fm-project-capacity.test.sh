@@ -190,11 +190,13 @@ new_worktree() {  # <case-dir> <name>
   printf '%s\n' "$1/wt-$2"
 }
 
+# Every clone a case spawns from sits directly under <case-dir>, so that is the
+# projects dir a spawn resolves; SPAWN_PROJECTS names another one (a mate's).
 run_spawn() {  # <case-dir> <home> <pane-path> <args...>
   local case_dir=$1 home=$2 pane=$3
   shift 3
   FM_ROOT_OVERRIDE='' FM_HOME="$home" \
-    FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE='' \
+    FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' FM_PROJECTS_OVERRIDE="${SPAWN_PROJECTS:-$case_dir}" FM_CONFIG_OVERRIDE='' \
     FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" FM_BACKEND=tmux \
     FM_FAKE_PANE_PATH="$pane" FM_FAKE_CALL_LOG="$case_dir/calls.log" \
     PATH="$case_dir/fakebin:$PATH" \
@@ -447,14 +449,14 @@ test_capacity_is_shared_by_every_local_home() {
   declare_capacity "$root" "project 1"
   write_live "$root" live-a "$case_dir/project"
   git -C "$mate_project" worktree add --quiet -b wt-m "$case_dir/wt-m"
-  out=$(run_spawn "$case_dir" "$mate" "$case_dir/wt-m" task-m "$mate_project" --mode no-mistakes --yolo off) || rc=$?
+  out=$(SPAWN_PROJECTS="$mate/projects" run_spawn "$case_dir" "$mate" "$case_dir/wt-m" task-m "$mate_project" --mode no-mistakes --yolo off) || rc=$?
   expect_code "$DEFER_EXIT" "$rc" "a local secondmate launched past the machine's capacity: $out"
   assert_contains "$out" "admits 1 worker(s) at once on this machine ($root/config/project-capacity) and 1 already hold a place (live-a in $root)" \
     "the secondmate did not count the root home's worker against the root's declaration"
   assert_absent "$mate/state/task-m.meta" "the deferred secondmate spawn published a record"
   printf 'pr=%s\n' "https://github.com/o/r/pull/8" >> "$root/state/live-a.meta"
   rc=0
-  out=$(run_spawn "$case_dir" "$mate" "$case_dir/wt-m" task-m "$mate_project" --mode no-mistakes --yolo off) || rc=$?
+  out=$(SPAWN_PROJECTS="$mate/projects" run_spawn "$case_dir" "$mate" "$case_dir/wt-m" task-m "$mate_project" --mode no-mistakes --yolo off) || rc=$?
   expect_code 0 "$rc" "the remote home's worker, or a handed-off one, took the machine's place: $out"
   pass "every local home shares one declared capacity per project origin, and remote homes do not count"
 }

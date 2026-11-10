@@ -85,7 +85,7 @@ make_settle_case() {
   local name=$1 id=$2 stale_reads=$3 case_dir home proj wt stale fakebin countfile
   case_dir="$TMP_ROOT/$name"
   home="$case_dir/home"
-  proj="$case_dir/project"
+  proj="$home/projects/project"
   wt="$case_dir/wt"
   stale="$case_dir/stale-other-checkout"
   countfile="$case_dir/pane-call-count"
@@ -178,13 +178,15 @@ make_primary_case() {
   local name=$1 id=$2 stale_reads=$3 case_dir home primary proj wt fakebin countfile
   case_dir="$TMP_ROOT/$name"
   home="$case_dir/home"
-  primary="$case_dir/primary"
-  proj="$case_dir/mate"
+  # The project is the registered clone, so it is also the repository primary
+  # the pane can transiently report.
+  primary="$home/projects/project"
+  proj=$primary
   wt="$case_dir/slot"
   countfile="$case_dir/pane-call-count"
   fakebin=$(make_settle_fakebin "$case_dir/fake")
   fm_test_spawn_home "$home" codex
-  fm_git_worktree "$primary" "$proj" "mate-$name"
+  fm_git_init_commit "$primary"
   git -C "$primary" worktree add --quiet -b "slot-$name" "$wt"
   fm_test_spawn_brief "$home" "$id" "Exercise primary-checkout transient detection for $id."
   printf '%s\n' "$case_dir|$home|$proj|$wt|$primary|$fakebin|$countfile|$stale_reads"
@@ -226,7 +228,7 @@ test_primary_checkout_that_never_settles_fails_at_the_deadline() {
     "spawn did not explain that the pane never reached an isolated worktree"
   assert_contains "$out" "$STALE_DIR" \
     "the refusal did not name the path the pane kept reporting"
-  assert_contains "$out" "repository's primary checkout" \
+  assert_contains "$out" "it is the spawning project itself" \
     "the refusal did not say why that path was rejected"
   [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "refused spawn published task metadata"
   pass "a pane stuck on the primary checkout fails loudly at the deadline"
@@ -237,7 +239,7 @@ test_unborn_head_project_is_refused_at_once() {
   id=settle-unborn-head-z5
   rec=$(make_settle_case settle-unborn "$id" 0)
   read_settle_record "$rec"
-  PROJ_DIR="$TMP_ROOT/settle-unborn/unborn-project"
+  PROJ_DIR="$HOME_DIR/projects/unborn-project"
   git init -q "$PROJ_DIR"
 
   started=$SECONDS

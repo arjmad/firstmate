@@ -81,20 +81,20 @@ case "$FLOOR_STATUS" in
 esac
 HERDR_SOCKET_PATH=$(lab session list --json | jq -er --arg session "$HERDR_LAB_SESSION" '.sessions[] | select(.name == $session) | .socket_path')
 export HERDR_SOCKET_PATH
-fm_git_init_commit "$TMP_ROOT/project"
-PARENT=$(lab workspace create --cwd "$TMP_ROOT/project" --label firstmate --focus)
+fm_git_init_commit "$TMP_ROOT/projects/project"
+PARENT=$(lab workspace create --cwd "$TMP_ROOT/projects/project" --label firstmate --focus)
 HERDR_PANE_ID=$(printf '%s' "$PARENT" | jq -er '.result.root_pane.pane_id')
 export HERDR_PANE_ID
 for DELAY_ENTRY in 0 1; do
   export DELAY_ENTRY
   CASE="$TMP_ROOT/case-$DELAY_ENTRY"
   mkdir -p "$CASE"
-  git clone -q "$TMP_ROOT/project" "$CASE/slot"
+  git clone -q "$TMP_ROOT/projects/project" "$CASE/slot"
   export TEST_SLOT="$CASE/slot"
   fm_test_spawn_home "$CASE/home" codex
   fm_test_spawn_brief "$CASE/home" projected-cd 'Exercise a projected shell worktree entry.'
-  if ! PATH="$TMP_ROOT/fakebin:$PATH" FM_HOME="$CASE/home" FM_ROOT_OVERRIDE="$ROOT" FM_SPAWN_NO_GUARD=1 HERDR_SESSION="$HERDR_LAB_SESSION" \
-    bash "$ROOT/bin/fm-spawn.sh" projected-cd "$TMP_ROOT/project" "sh -c 'while :; do sleep 60; done'" --backend herdr --mode no-mistakes --yolo off > "$CASE/spawn.log" 2>&1; then
+  if ! PATH="$TMP_ROOT/fakebin:$PATH" FM_HOME="$CASE/home" FM_PROJECTS_OVERRIDE="$TMP_ROOT/projects" FM_ROOT_OVERRIDE="$ROOT" FM_SPAWN_NO_GUARD=1 HERDR_SESSION="$HERDR_LAB_SESSION" \
+    bash "$ROOT/bin/fm-spawn.sh" projected-cd "$TMP_ROOT/projects/project" "sh -c 'while :; do sleep 60; done'" --backend herdr --mode no-mistakes --yolo off > "$CASE/spawn.log" 2>&1; then
     cat "$CASE/spawn.log" >&2
     fail "Herdr $VERSION projected spawn failed (delayed=$DELAY_ENTRY)"
   fi

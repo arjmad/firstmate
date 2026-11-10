@@ -470,7 +470,10 @@ spawn_task() {  # <id> <home> <project> [extra fm-spawn args...]; SPAWN_DEADLINE
   shift 3
   local -a deadline_cmd=()
   [ -z "${SPAWN_DEADLINE_SECONDS:-}" ] || deadline_cmd=(fm_run_timed "$SPAWN_DEADLINE_SECONDS")
+  # Every home here deliberately shares the primary's project clones and one
+  # pool, so each spawn names the primary's projects dir as its own.
   FM_GATE_REFUSE_BYPASS=1 FM_SPAWN_NO_GUARD=1 FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_PROJECTS_OVERRIDE="$(dirname "$project")" \
     ${deadline_cmd[@]+"${deadline_cmd[@]}"} "$ROOT/bin/fm-spawn.sh" "$id" "$project" "sh -c 'while :; do sleep 60; done'" \
     --mode no-mistakes --yolo off --backend herdr "$@"
 }
@@ -577,8 +580,8 @@ assert_no_projection_mutation_since() {  # <line-count> <case-name>
 }
 
 HOME_DIR="$TMP_ROOT/home"
-PROJECT_DIR="$TMP_ROOT/project"
-RECOVERY_PROJECT_DIR="$TMP_ROOT/recovery-project"
+PROJECT_DIR="$HOME_DIR/projects/project"
+RECOVERY_PROJECT_DIR="$HOME_DIR/projects/recovery-project"
 mkdir -p "$HOME_DIR/state" "$HOME_DIR/config" \
   "$HOME_DIR/data/anchor" "$HOME_DIR/data/shape" \
   "$HOME_DIR/data/order-a" "$HOME_DIR/data/order-b" \

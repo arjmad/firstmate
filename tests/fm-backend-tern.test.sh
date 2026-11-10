@@ -1592,7 +1592,7 @@ SH
 make_spawn_case() {
   local name=$1 id=$2 dir home proj wt fakebin
   dir="$TMP_ROOT/spawn-$name"
-  home="$dir/home"; proj="$dir/project"; wt="$dir/wt"
+  home="$dir/home"; proj="$home/projects/project"; wt="$dir/wt"
   fakebin=$(fm_test_make_spawn_fakebin "$dir/fake")
   install_stateful_fake_tern "$fakebin"
   fm_test_spawn_home "$home" codex

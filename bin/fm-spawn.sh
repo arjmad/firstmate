@@ -4,6 +4,11 @@
 # Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--dispatch-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait] [--also <repo>]...
 #        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--dispatch-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--backend <name>] --secondmate
+#   A fresh ship or scout <project-dir> must resolve, physically, to a clone
+#   directly under this home's projects/ whose git common dir is its own .git;
+#   any other checkout (a live one such as ~/nix, `.` in the home, a projects/
+#   symlink, or a worktree of another repository) is refused before a worktree
+#   is taken, because Treehouse pools every checkout of one origin together.
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
 #   per task at intake (AGENTS.md section 7); data/projects.md holds the captain's
@@ -392,12 +397,12 @@
 #   configured host for a remote home. Skipped syncs warn and launch unchanged.
 #   Ship/scout spawns refuse to launch unless the resolved task path is a real
 #   git worktree root distinct from both the spawning project and its repository's
-#   primary checkout, including when the spawning project is a linked worktree.
+#   primary checkout (a fresh spawn from a project that is itself a linked
+#   worktree is already refused by the projects/ clone rule above).
 #   On the backends that discover that path by reading the task pane's own cwd,
 #   the same isolation test screens every read: a pane still showing the project
 #   or the repository primary while `treehouse get` prepares the slot is waited
-#   out as a transient rather than adopted and then refused, so a home that is
-#   itself a linked worktree of the project repository still launches. A pane
+#   out as a transient rather than adopted and then refused. A pane
 #   that never reaches an isolated worktree refuses at the end of that wait,
 #   naming the last path seen and why it was rejected.
 #   A fresh ship or scout with a detected origin first proves that origin is reachable, before
@@ -4509,6 +4514,40 @@ resolve_project_dir_arg() {
   esac
 }
 
+# require_registered_clone <project-dir>: refuse a fresh ship or scout whose
+# project is not a clone directly under this home's projects/. Treehouse keys a
+# pool by the origin URL, so a get run from any other checkout of the same
+# repository (a live checkout such as ~/nix or the home itself) adds a slot to
+# the shared pool that is a worktree of that checkout's .git. Both the directory
+# and its git common dir are compared physically, so a symlinked entry or a
+# worktree of another repository under projects/ is refused too. Every git
+# answer it cannot read refuses, and inherited Git location variables are
+# cleared first so the probe reads the directory's own layout.
+require_registered_clone() {
+  local proj=$1 proj_real projects_real common
+  if [ -z "$proj" ] || ! proj_real=$(cd "$proj" 2>/dev/null && pwd -P); then
+    echo "error: spawn refused: project '${proj:-<empty>}' is not a directory" >&2
+    return 1
+  fi
+  projects_real=$(cd "$PROJECTS" 2>/dev/null && pwd -P) || projects_real=
+  if [ -z "$projects_real" ] || [ "$(dirname "$proj_real")" != "$projects_real" ]; then
+    echo "error: spawn refused: project $proj resolves to $proj_real, which is not a clone directly under this home's projects/ ($PROJECTS); a worktree is only taken from a registered clone, never from a live checkout - pass projects/<name>, or register the repository first (project-management skill)" >&2
+    return 1
+  fi
+  common=$(
+    unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_INDEX_FILE \
+      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CEILING_DIRECTORIES GIT_NAMESPACE \
+      GIT_DISCOVERY_ACROSS_FILESYSTEM GIT_CONFIG GIT_CONFIG_GLOBAL \
+      GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM GIT_CONFIG_COUNT
+    common=$(git -C "$proj_real" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) &&
+      cd "$common" 2>/dev/null && pwd -P
+  ) || common=
+  if [ "$common" != "$proj_real/.git" ]; then
+    echo "error: spawn refused: project $proj_real is not its own clone (its git common dir is ${common:-unreadable}, not $proj_real/.git), so its worktrees would belong to another checkout" >&2
+    return 1
+  fi
+}
+
 path_is_ancestor_of() {
   local ancestor=$1 path=$2
   [ -n "$ancestor" ] || return 1
@@ -4688,6 +4727,7 @@ else
   PROJ_ABS="$(cd "$(resolve_project_dir_arg "$PROJ")" && pwd)"
   WT=""
   BRIEF="$DATA/$ID/brief.md"
+  [ "$RELAUNCH" -eq 1 ] || require_registered_clone "$PROJ_ABS" || exit 1
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] &&
   git -C "$PROJ_ABS" rev-parse --git-dir >/dev/null 2>&1 &&
@@ -4817,6 +4857,7 @@ if [ "$KIND" = ship ] && [ "$RELAUNCH" -eq 0 ]; then
         echo "error: --also $also_repo names no project clone at $also_dir" >&2
         exit 1
       }
+      require_registered_clone "$also_dir" || exit 1
       also_abs=$(cd "$also_dir" && pwd -P)
       [ "$(cd "$also_top" && pwd -P)" = "$also_abs" ] || {
         echo "error: --also $also_repo resolves to $also_top, not the clone root $also_abs" >&2

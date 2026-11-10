@@ -106,7 +106,7 @@ case_dir="$TMP_ROOT/spawn"
 fakebin=$(make_spawn_fakebin "$case_dir/fake" claude)
 fm_fake_exit0 "$fakebin" devin
 home="$case_dir/home"
-proj="$case_dir/project"
+proj="$home/projects/project"
 wt="$case_dir/wt"
 fm_test_spawn_home "$home" devin
 fm_git_worktree "$proj" "$wt" devin-test

@@ -81,7 +81,7 @@ trap cleanup EXIT
 
 H="$LAB/fm"
 U="$LAB/user-home"
-PROJ="$LAB/project"
+PROJ="$H/projects/project"
 WT="$LAB/wt"
 "$LAB_HOME_HELPER" create "$H" >/dev/null || fail "could not mark the lab home"
 LAB_TMUX_DIR=$("$LAB_HOME_HELPER" tmux-dir "$H") || fail "could not isolate tmux"

@@ -329,7 +329,7 @@ run_spawn() {
 test_spawn_refuses_and_admits() {
   local home proj fakebin wt out rc
   home="$TMP/spawn-home"; mkdir -p "$home/data"
-  proj=$(make_normal_repo "$TMP/spawn-proj")
+  proj=$(make_normal_repo "$home/projects/spawn-proj")
   fm_git_add_origin "$proj" "$TMP/spawn-origin.git"
   fakebin=$(make_spawn_fakebin "$TMP/spawn-fake")
   wt="$TMP/spawn-wt"

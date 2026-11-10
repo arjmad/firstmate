@@ -50,7 +50,7 @@ make_case() {  # <name> <task-id> [brief-args...]
   mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config"
   printf 'codex\n' > "$home/config/crew-harness"
   touch "$home/state/.last-watcher-beat"
-  rec=$(make_repo_with_slot "$case_dir" sample "$case_dir/sample")
+  rec=$(make_repo_with_slot "$case_dir" sample "$home/projects/sample")
   IFS='|' read -r PROJECT_DIR POOL_DIR _ <<EOF
 $rec
 EOF
@@ -196,6 +196,20 @@ test_spawn_refuses_an_unusable_companion() {
   [ "$status" -ne 0 ] || fail "--also launched with no project clone for the companion"
   assert_contains "$out" "names no project clone" "the missing-project refusal did not say why"
   assert_absent "$HOME_DIR/state/$id.meta" "a refused spawn published a task record"
+
+  # A projects/ entry that is only a symlink to a checkout elsewhere would
+  # lease its companion slot from that live checkout.
+  id='also-symlink-c1'
+  make_case symlink "$id" --also jobs
+  mv "$HOME_DIR/projects/jobs" "$CASE_DIR/live-jobs"
+  ln -s "$CASE_DIR/live-jobs" "$HOME_DIR/projects/jobs"
+  out=$(run_spawn "$id" --mode direct-PR --yolo off --also jobs)
+  status=$?
+  [ "$status" -ne 0 ] || fail "--also launched from a projects/ symlink to a live checkout"
+  assert_contains "$out" "is not a clone directly under this home's projects/" \
+    "the symlinked-companion refusal did not say why"$'\n'"$out"
+  assert_absent "$HOME_DIR/state/$id.meta" "a refused spawn published a task record"
+  [ -z "$(lease_holder "$JOBS_POOL")" ] || fail "a refused spawn leased a companion slot"
 
   id='also-scout-c1'
   make_case scout "$id"

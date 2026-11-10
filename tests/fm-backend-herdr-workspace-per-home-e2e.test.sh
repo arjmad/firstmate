@@ -132,8 +132,9 @@ make_scratch_project() {  # <dir>
   git -C "$dir" remote add origin "file://$dir.origin.git"
 }
 
-PROJ1="$TMP_ROOT/scratch-project-1"; make_scratch_project "$PROJ1"
-PROJ2="$TMP_ROOT/scratch-project-2"; make_scratch_project "$PROJ2"
+# Each crewmate spawns from a clone under its own home's projects/.
+PROJ1="$PRIMARY_HOME/projects/scratch-project-1"; make_scratch_project "$PROJ1"
+PROJ2="$SM_HOME/projects/scratch-project-2"; make_scratch_project "$PROJ2"
 
 # --- 1. primary-shaped home: a crewmate spawns into the "firstmate" space ---
 
