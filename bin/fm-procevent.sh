@@ -1891,19 +1891,22 @@ board_last_round() {  # <source-id> <adapter>
 # bodies, so every live row is read through `show --full`. Done retention moves
 # closed rows into the configured Done archive, which no tasks-axi read
 # returns, so the archive's rows are read too: a checked row is `done` and any
-# other is `archived-open`. An archive that cannot be read, or whose directory
-# cannot be searched to tell, fails the whole read rather than dropping its rows.
+# other is `archived-open`. An archive that cannot be read, or whose nearest
+# existing ancestor directory cannot be searched to tell whether it exists,
+# fails the whole read rather than dropping its rows.
 board_backlog_handovers() {
-  local rows line id state body origin archive
+  local rows line id state body origin archive dir
   rows=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-tasks-axi.sh" list --limit 1000000 2>/dev/null) || return 1
   archive=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-tasks-axi.sh" archive-path 2>/dev/null) || return 1
   if [ -n "$archive" ]; then
-    [ -d "${archive%/*}" ] && [ -x "${archive%/*}" ] || return 1
+    dir=${archive%/*}
+    while [ -n "$dir" ] && [ ! -e "$dir" ] && [ ! -L "$dir" ]; do dir=${dir%/*}; done
+    [ -d "${dir:-/}" ] && [ -x "${dir:-/}" ] || return 1
   fi
   if [ -n "$archive" ] && { [ -e "$archive" ] || [ -L "$archive" ]; }; then
     [ -f "$archive" ] && [ -r "$archive" ] || return 1
     LC_ALL=C awk '
-      /^- \[.\] / { state = (substr($0, 4, 1) == "x") ? "done" : "archived-open"; inrow = 1 }
+      /^- \[.\] / { state = (substr($0, 4, 1) ~ /[xX]/) ? "done" : "archived-open"; inrow = 1 }
       !/^- \[.\] / && !(inrow && ($0 == "" || $0 ~ /^[[:space:]]/)) { inrow = 0 }
       inrow {
         rest = $0

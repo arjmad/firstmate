@@ -78,6 +78,11 @@ round() {  # <home> <source-id> <sequence> <epoch> <silent|said> [unread]
 
 registered() { [ -f "$1/state/procevent/$2.source" ]; }
 
+archive_at() {  # <home> <archive path relative to the home>
+  sed "s#^archive = .*#archive = \"$2\"#" "$1/.tasks.toml" > "$1/tasks.toml.new" \
+    && mv "$1/tasks.toml.new" "$1/.tasks.toml" || fail "cannot point the archive at $2"
+}
+
 test_quiet_rule_and_kept_boards() {
   local home out rc
   home=$(new_home quiet)
@@ -196,13 +201,19 @@ test_adopted_board_retires_when_its_rows_are_archived() {
   out=$(pe "$unreadable" retire-quiet-boards) || fail "retire-quiet-boards failed with an unreadable archive: $out"
   registered "$unreadable" lavish-archived || fail "an unreadable archive retired an adopted board early"
   rmdir "$unreadable/data/done-archive.md"
-  # An archive whose directory cannot be searched cannot be told absent.
+  # An archive whose directory cannot be searched cannot be told absent: a
+  # regular file as its parent blocks even root, and a mode-000 one blocks others.
+  : > "$unreadable/data/plain"
+  archive_at "$unreadable" data/plain/done-archive.md
+  out=$(pe "$unreadable" retire-quiet-boards) || fail "retire-quiet-boards failed with a file as the archive's parent: $out"
+  registered "$unreadable" lavish-archived || fail "an archive under a regular file retired an adopted board early"
   mkdir "$unreadable/data/locked"
   cp "$home/data/done-archive.md" "$unreadable/data/locked/done-archive.md"
-  sed 's#^archive = .*#archive = "data/locked/done-archive.md"#' "$unreadable/.tasks.toml" > "$unreadable/tasks.toml.new"
-  mv "$unreadable/tasks.toml.new" "$unreadable/.tasks.toml"
+  archive_at "$unreadable" data/locked/done-archive.md
   chmod 000 "$unreadable/data/locked"
-  if [ ! -x "$unreadable/data/locked" ]; then
+  if [ -x "$unreadable/data/locked" ]; then
+    echo "skip: a mode-000 archive directory is still searchable here (root)"
+  else
     out=$(pe "$unreadable" retire-quiet-boards) || fail "retire-quiet-boards failed with an unsearchable archive directory: $out"
     registered "$unreadable" lavish-archived || fail "an archive in an unsearchable directory retired an adopted board early"
   fi
@@ -211,6 +222,13 @@ test_adopted_board_retires_when_its_rows_are_archived() {
   cp "$home/data/done-archive.md" "$unreadable/data/done-archive.md"
   out=$(pe "$unreadable" retire-quiet-boards) || fail "retire-quiet-boards failed: $out"
   assert_contains "$out" "board-retired: lavish-archived reason=row-closed" "the same board once its archive reads"
+
+  # An archive configured into a directory retention has not created yet is
+  # absent, so the closed live row alone retires the board.
+  board "$unreadable" lavish-archived "$RECENT" 'adopted_from=scout-e'
+  archive_at "$unreadable" data/later/done-archive.md
+  out=$(pe "$unreadable" retire-quiet-boards) || fail "retire-quiet-boards failed with a missing archive directory: $out"
+  assert_contains "$out" "board-retired: lavish-archived reason=row-closed" "a board whose archive directory does not exist yet"
   pass "an adopted board retires once its carrying rows are closed in the backlog or the archive"
 }
 
