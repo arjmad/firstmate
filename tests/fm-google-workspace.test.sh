@@ -366,19 +366,36 @@ claude_tool_list $list"
   printf 'tool\tclaude\nget_events\toff\nget_events\ton\n' > "$list"
   out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
   expect_code 1 "$code" "a duplicate tool refuses claude-config"
+  assert_contains "$out" "duplicate tool get_events" "the refusal names the duplicate tool"
+  printf 'tool\tclaude\r\nget_events\toff\r\n' > "$list"
+  assert_contains "$(gws "$root" claude-config | tr -d '\n ')" '"--disabled-tools","get_events"' "a CRLF list reads like an LF one"
+  printf 'tool\tclaude\n' > "$list"
+  out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a list with no tool rows refuses claude-config"
+  assert_contains "$out" "no tool rows" "the refusal names the empty list"
+  printf 'tool\tclaude\tclaude\nget_events\toff\ton\n' > "$list"
+  out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a header naming claude twice refuses claude-config"
   printf 'name\tclaude\nget_events\toff\n' > "$list"
   : > "$log"
   out=$(CLAUDE_STUB_LOG="$log" gws "$root" claude-install 2>&1) && code=0 || code=$?
   expect_code 1 "$code" "a list without a tool column refuses claude-install"
-  assert_contains "$out" "no tool and claude columns" "the refusal names the missing columns"
+  assert_contains "$out" "one tool and one claude column" "the refusal names the missing columns"
   assert_no_grep "mcp add" "$log" "a refused list registers no server"
   rm -f "$list"
   out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
   expect_code 1 "$code" "a missing list refuses claude-config"
   assert_contains "$out" "not a readable file" "the refusal names the missing list"
-  write_config "claude_tool_list /a
-claude_tool_list /b"
-  gws "$root" claude-config >/dev/null 2>&1 && fail "a duplicate claude_tool_list was accepted"
+  write_tool_list "$list"
+  write_config "claude_tool_list $list
+claude_tool_list $list"
+  out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a duplicate claude_tool_list refuses claude-config"
+  assert_contains "$out" "duplicate claude_tool_list" "the refusal names the duplicate setting"
+  write_config "claude_tool_list tools.tsv"
+  out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a relative claude_tool_list refuses claude-config"
+  assert_contains "$out" "absolute path" "the refusal asks for an absolute path"
   write_config
   pass "the claude tool list disables its off tools on Claude Code only"
 }

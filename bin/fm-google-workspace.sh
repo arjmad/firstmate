@@ -52,13 +52,14 @@
 #   claude_tool_list <path>    optional; no tool is disabled without it
 # claude-install and claude-config pass allowed_file_dirs to every server as
 # ALLOWED_FILE_DIRS, the directories workspace-mcp may read attachments from.
-# claude_tool_list names a tab-separated tool list: '#' comment and blank lines, then a
-# header row naming at least a 'tool' and a 'claude' column, then one row per tool whose
-# claude value is 'on' or 'off'. claude-install and claude-config append every 'off'
-# tool, in file order, to each Claude Code server's argv as --disabled-tools; the argv,
-# hermes-config, and the consent driver never carry it. A missing or malformed list, a
-# bad tool name, or a duplicate tool refuses both rather than registering a server
-# with the tools it was meant to remove.
+# claude_tool_list names, by absolute path, a tab-separated tool list: '#' comment and
+# blank lines, then a header row naming one 'tool' and one 'claude' column among any
+# others, then one row per tool whose claude value is 'on' or 'off'. claude-install and
+# claude-config append every 'off' tool, in file order, to each Claude Code server's
+# argv as --disabled-tools; the argv, hermes-config, and the consent driver never carry
+# it. A missing or malformed list, one with no tool rows, a bad tool name, or a
+# duplicate tool refuses both rather than registering a server with the tools it was
+# meant to remove.
 # Blank lines and '#' comments are ignored. There is no built-in table: a missing,
 # unreadable, or malformed file, a duplicate slug or email, or an implausible email
 # refuses every subcommand except help, naming the file and the accepted format.
@@ -103,14 +104,14 @@ CLAUDE_BIN="${FM_GWS_CLAUDE:-claude}"
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-usage() { sed -n '21,69p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '21,70p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed 's/^# \{0,1\}//'; }
 
 CONFIG_FORMAT="accepted format, one setting per line: 'account <slug> <email>', 'bws_project_id <uuid>', 'bws_secret_key <name>', optional 'allowed_file_dirs <path>', optional 'claude_tool_list <path>'"
 
 config_die() { die "$CONFIG_FILE: $*; $CONFIG_FORMAT"; }
 
-# load_config fills ACCOUNTS, BWS_PROJECT_ID, BWS_SECRET_KEY, and ALLOWED_FILE_DIRS
-# (default FM_HOME/data) from CONFIG_FILE and
+# load_config fills ACCOUNTS, BWS_PROJECT_ID, BWS_SECRET_KEY, ALLOWED_FILE_DIRS
+# (default FM_HOME/data), and CLAUDE_TOOL_LIST from CONFIG_FILE and
 # refuses anything it cannot fully accept. There is deliberately no fallback table:
 # an account that is not in the file does not exist as far as this script is concerned.
 load_config() {
@@ -157,6 +158,7 @@ load_config() {
       claude_tool_list)
         [ "$#" -eq 2 ] || config_die "line $lineno: expected 'claude_tool_list <path>'"
         [ -z "$CLAUDE_TOOL_LIST" ] || config_die "line $lineno: duplicate $key"
+        case "$2" in /*) ;; *) config_die "line $lineno: claude_tool_list must be an absolute path" ;; esac
         CLAUDE_TOOL_LIST="$2"
         ;;
       *) config_die "line $lineno: unknown setting '$key'" ;;
@@ -216,18 +218,23 @@ claude_disabled_tools() {
     || die "$CONFIG_FILE: claude_tool_list $CLAUDE_TOOL_LIST is not a readable file"
   local out
   out=$(awk -F'\t' '
+    { sub(/\r$/, "") }
     /^#/ || /^[[:space:]]*$/ { next }
     !header {
       header = 1
-      for (i = 1; i <= NF; i++) { if ($i == "tool") t = i; if ($i == "claude") c = i }
-      if (!t || !c) { print "the header row names no tool and claude columns"; bad = 1; exit }
+      for (i = 1; i <= NF; i++) {
+        if ($i == "tool") { if (t) dup = 1; t = i }
+        if ($i == "claude") { if (c) dup = 1; c = i }
+      }
+      if (!t || !c || dup) { print "the header row must name one tool and one claude column"; bad = 1; exit }
       next
     }
+    { rows++ }
     $t !~ /^[a-z][a-z0-9_]*$/ { print "line " NR ": bad tool name \"" $t "\""; bad = 1; exit }
     seen[$t]++ { print "line " NR ": duplicate tool " $t; bad = 1; exit }
     $c != "on" && $c != "off" { print "line " NR ": " $t " claude value must be on or off"; bad = 1; exit }
     $c == "off" { print $t }
-    END { if (!bad && !header) { print "no header row"; bad = 1 } exit bad }' "$CLAUDE_TOOL_LIST") \
+    END { if (!bad && !rows) { print "no tool rows"; bad = 1 } exit bad }' "$CLAUDE_TOOL_LIST") \
     || die "$CLAUDE_TOOL_LIST (claude_tool_list): ${out##*$'\n'}"
   [ -z "$out" ] || printf '%s\n' "$out"
 }
