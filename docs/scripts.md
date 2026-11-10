@@ -231,6 +231,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-cd-pretool-check.sh` | PreToolUse transport for the cd-guard command policy |
 | `fm-ci-plan.sh` | Plans the behavior scripts and lint roots a pull request touches, or the full suite with a reason, and gates each CI check on that plan |
 | `fm-claude-token-exec.sh` | Hand a pinned Claude worker the launching session's own setup-token from a consume-once private file, then run the worker |
+| `fm-claude-store-prune.sh` | Remove Claude store project entries whose paths no longer exist - every one by hand after a dated backup, with a `--dry-run` listing, or one retired launch directory at teardown |
 | `fm-claude-trust.sh` | Pre-register Claude Code workspace trust for a task worktree or secondmate home before a claude spawn |
 | `fm-contributions.jq` | Projection used by `fm-contributions.sh`, whose header owns the record contract |
 | `fm-cursor-lib.sh` | Resolve the Cursor executable and identify Cursor processes |
@@ -279,8 +280,8 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-startup-memory-budget-lib.sh` | Startup-memory budget primitives |
 | `fm-startup-memory-budget.sh` | Read and report the local startup-memory budget |
 | `fm-state-residue-sweep.sh` | Retire watcher bookkeeping for provably gone endpoints, task-keyed records and lock owners nothing live references, and rotate supervision scratch files |
-| `fm-data-media-prune.sh` | Remove the video, audio, and disk images torn-down, quiet tasks left in `data/<task>/` when `config/data-media-retention-days` opts in, with a `--dry-run` listing |
-| `fm-data-scratch-prune.sh` | Delete a task's reproducible scratch from `data/<task>/` at teardown - clean pushed nested checkouts, `node_modules`, and tool binaries - keeping and naming any checkout with unlanded work, with a `--dry-run` listing |
+| `fm-data-media-prune.sh` | Retention prune for torn-down, quiet tasks' `data/<task>/`: remove video, audio, and disk images when `config/data-media-retention-days` opts in, reapply the scratch rule when `config/data-scratch-retention-days` opts in, and report the largest torn-down tasks when `data/` is over its size trigger, with a `--dry-run` listing |
+| `fm-data-scratch-prune.sh` | Delete a task's reproducible scratch from `data/<task>/` at teardown - clean pushed nested checkouts, dependency folders, and tool binaries - keeping and naming any checkout with unlanded work, with a `--dry-run` listing |
 | `fm-stow-cascade.sh` | Enumerate registered secondmates and their inputs for a `/stow` cascade |
 | `fm-supervision-engine-lib.sh` | Choose the supervision host's headless engine and run one engine turn |
 | `fm-supervision-host.sh` | Run the supervision host: watcher-cycle ownership plus a headless branch session beside a non-Pi primary |

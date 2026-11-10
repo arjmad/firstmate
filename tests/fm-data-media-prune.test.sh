@@ -2,8 +2,10 @@
 # Behavior tests for bin/fm-data-media-prune.sh: which torn-down, quiet tasks
 # lose which media files, what always stays (text, finals, git checkouts,
 # symlinks, live tasks, open backlog rows), the retention clock teardown has no
-# timestamp for, the dry-run listing, the opt-in config and its limits, and its
-# seat among bin/fm-bootstrap.sh's locked MUTATING sweeps.
+# timestamp for, the dry-run listing, the opt-in config and its limits, the
+# separately opted-in scratch retention (clean pushed checkouts and dependency
+# folders only), the data size trigger, and its seat among
+# bin/fm-bootstrap.sh's locked MUTATING sweeps.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -97,6 +99,12 @@ run_prune() {  # <home> [args...]
   FM_HOME="$home" bash "$PRUNE" "$@" 2>&1
 }
 
+# run_media <home> [args...]: run_prune without the scratch part's own lines,
+# which a dry run previews for every torn-down task.
+run_media() {
+  run_prune "$@" | grep -v '^data-scratch: ' || true
+}
+
 PRUNABLE="clip.mp4 voice.WAV vm/disk.raw"
 KEPT="frames/frame-01.png brief.md report.md board/index.html notes.txt hero.mp4 out/hero2.mp4 cut-FINAL.mov picks/finals.json pick.webm checkout/.git/HEAD checkout/asset.mp4 link.png"
 
@@ -111,12 +119,12 @@ test_dry_run_lists_media_and_removes_nothing() {
   local home out
   home=$(new_home dry)
   make_task "$home" done-task
-  out=$(run_prune "$home" --dry-run)
+  out=$(run_media "$home" --dry-run)
   assert_equals "data media retention: would start the retention clock for 1 torn-down tasks" "$out" \
     "a dry run before any clock lists nothing and names the clock it would start"
   assert_absent "$home/state/data-media-retention" "a dry run must not start a clock"
   start_clock "$home" done-task
-  out=$(run_prune "$home" --dry-run)
+  out=$(run_media "$home" --dry-run)
   assert_contains "$out" "would remove: 4 data/done-task/clip.mp4" "dry run lists a review render with its size"
   assert_not_contains "$out" "frame-01.png" "still images are left to the Drive-move rule"
   assert_contains "$out" "data/done-task/voice.WAV" "dry run matches extensions in any case"
@@ -233,15 +241,15 @@ test_days_option_and_bad_values() {
   home=$(new_home days)
   make_task "$home" done-task
   start_clock "$home" done-task
-  out=$(run_prune "$home" --dry-run --days 20)
+  out=$(run_media "$home" --dry-run --days 20)
   [ -z "$out" ] || fail "a task quiet for 10 days is inside a 20-day retention: $out"
   printf '20\n' > "$home/config/data-media-retention-days"
-  out=$(run_prune "$home" --dry-run --days 5)
+  out=$(run_media "$home" --dry-run --days 5)
   assert_contains "$out" "quiet over 5 days" "--days overrides the config"
   printf '07\n' > "$home/config/data-media-retention-days"
-  out=$(run_prune "$home" --dry-run)
+  out=$(run_media "$home" --dry-run)
   assert_contains "$out" "quiet over 7 days" "a leading zero reads as decimal"
-  out=$(run_prune "$home" --dry-run --days 3650)
+  out=$(run_media "$home" --dry-run --days 3650)
   [ -z "$out" ] || fail "the longest retention keeps a 10-day-old task: $out"
   for bad in 0 00 -3 7d 3651 9999999999999999 ''; do
     printf '%s\n' "$bad" > "$home/config/data-media-retention-days"
@@ -254,6 +262,188 @@ test_days_option_and_bad_values() {
   expect_code 2 "$code" "--days without a value"
   assert_task_untouched "$home" done-task "refused runs"
   pass "retention days: 1 to 3650 with --days over config, and anything else exits 2 without removing"
+}
+
+# --- scratch retention --------------------------------------------------------
+
+fm_git_identity
+ORIGIN="$TMP_ROOT/origin.git"
+fm_git_init_commit "$TMP_ROOT/seed"
+git clone -q --bare "$TMP_ROOT/seed" "$ORIGIN"
+
+# make_scratch_task <home> <task>: a torn-down task holding a clean pushed
+# clone and node_modules (scratch), work no remote holds in four shapes, and
+# files every retention keeps; every file ten days old.
+make_scratch_task() {
+  local d=$1/data/$2 c
+  put "$d/brief.md" "# Task"
+  put "$d/report.md" "# Report"
+  put "$d/shot.png"
+  put "$d/out.pdf"
+  printf '\177ELF\002\001\001\000\000\000\000\000\000\000\000\000\002\000payload' > "$d/tool"
+  put "$d/web/package.json" '{}'
+  put "$d/web/node_modules/dep/index.js"
+  for c in clean dirty untracked unpushed stashed; do
+    mkdir -p "$d/clones"
+    git clone -q "$ORIGIN" "$d/clones/$c"
+  done
+  printf 'edit\n' >> "$d/clones/dirty/README.md"
+  put "$d/clones/untracked/new.txt"
+  printf 'more\n' >> "$d/clones/unpushed/README.md"
+  git -C "$d/clones/unpushed" commit -qam unpushed
+  printf 'stash me\n' >> "$d/clones/stashed/README.md"
+  git -C "$d/clones/stashed" stash -q
+  find "$d" -type f -exec perl -e 'my $t = time - 10 * 86400; utime $t, $t, @ARGV' {} +
+}
+
+SCRATCH_GONE="clones/clean web/node_modules"
+SCRATCH_KEPT="brief.md report.md shot.png out.pdf tool web/package.json clones/dirty/README.md
+clones/untracked/new.txt clones/unpushed/README.md clones/stashed/README.md"
+
+assert_scratch_untouched() {  # <home> <task> <msg>
+  local f
+  for f in $SCRATCH_GONE $SCRATCH_KEPT; do
+    [ -e "$1/data/$2/$f" ] || fail "$3: $2/$f was removed"
+  done
+}
+
+test_scratch_retention_is_its_own_opt_in() {
+  local home out
+  home=$(new_home scratch-off)
+  make_scratch_task "$home" done-task
+  out=$(run_prune "$home")
+  [ -z "$out" ] || fail "a home with no retention config must stay silent: $out"
+  printf '7\n' > "$home/config/data-media-retention-days"
+  start_clock "$home" done-task
+  out=$(run_prune "$home")
+  assert_not_contains "$out" "data scratch retention" "media retention alone must not start scratch retention"
+  assert_scratch_untouched "$home" done-task "a home opted in to media retention only"
+  pass "scratch retention: off without its own config, even where media retention is on"
+}
+
+test_scratch_dry_run_lists_and_removes_nothing() {
+  local home out
+  home=$(new_home scratch-dry)
+  make_scratch_task "$home" done-task
+  out=$(run_prune "$home" --dry-run)
+  assert_contains "$out" "data-scratch: would remove checkout done-task/clones/clean (" "dry run names the clean clone"
+  assert_contains "$out" "data-scratch: would remove node_modules done-task/web/node_modules (" "dry run names node_modules"
+  assert_contains "$out" "data-scratch: kept checkout done-task/clones/dirty: uncommitted changes" "dry run names the dirty clone"
+  assert_contains "$out" "data-scratch: kept checkout done-task/clones/untracked: uncommitted changes" "dry run names the untracked clone"
+  assert_contains "$out" "data-scratch: kept checkout done-task/clones/unpushed: commits no remote-tracking branch holds" "dry run names the unpushed clone"
+  assert_contains "$out" "data-scratch: kept checkout done-task/clones/stashed: a stash" "dry run names the stashed clone"
+  assert_not_contains "$out" "binary" "scratch retention never removes a binary"
+  assert_contains "$out" "BOOTSTRAP_INFO: data scratch retention: would remove 2 items (0 MiB) from 1 torn-down tasks quiet over 7 days" \
+    "dry run without config previews the 7-day default"
+  assert_scratch_untouched "$home" done-task "dry run"
+  assert_absent "$home/state/data-media-retention" "a dry run must not start a clock"
+  pass "scratch dry run: lists what would go and what stays, and removes nothing"
+}
+
+test_scratch_real_run_removes_only_clean_checkouts_and_dependency_folders() {
+  local home out f task
+  home=$(new_home scratch-real \
+    "- [ ] queued-task - Briefed, not spawned (repo: x) (kind: ship) (since 2026-10-01)")
+  printf '7\n' > "$home/config/data-scratch-retention-days"
+  for task in done-task live-task queued-task recent-task sm-reg sm-retired; do
+    make_scratch_task "$home" "$task"
+  done
+  put "$home/state/live-task.meta" "window=x"
+  put "$home/data/recent-task/new-note.md"
+  printf '%s\n' '# Secondmates' '- sm-reg - scope: business (home: /elsewhere)' > "$home/data/secondmates.md"
+  mkdir -p "$home/data/sm-retired/children/old-child"
+  out=$(run_prune "$home")
+  assert_equals "BOOTSTRAP_INFO: data scratch retention: removed 2 items (0 MiB) from 1 torn-down tasks quiet over 7 days" \
+    "$out" "a configured run reports one summary line"
+  for f in $SCRATCH_GONE; do
+    assert_absent "$home/data/done-task/$f" "the torn-down, quiet task's $f should be removed"
+  done
+  for f in $SCRATCH_KEPT; do
+    assert_present "$home/data/done-task/$f" "done-task/$f should be kept"
+  done
+  git -C "$home/data/done-task/clones/stashed" rev-parse -q --verify refs/stash >/dev/null \
+    || fail "the stash must survive"
+  assert_scratch_untouched "$home" live-task "a task with a meta"
+  assert_scratch_untouched "$home" queued-task "a task whose backlog row is open"
+  assert_scratch_untouched "$home" recent-task "a task with a file newer than the retention"
+  assert_scratch_untouched "$home" sm-reg "a registered secondmate's data folder"
+  assert_scratch_untouched "$home" sm-retired "a folder holding retired children's records"
+  assert_absent "$home/state/data-media-retention" "scratch retention starts no media clock"
+  out=$(run_prune "$home")
+  [ -z "$out" ] || fail "a converged home must stay silent: $out"
+  out=$(run_prune "$home" --scratch-days 20)
+  [ -z "$out" ] || fail "--scratch-days overrides the config: $out"
+  local code=0
+  run_prune "$home" --scratch-days 0 >/dev/null || code=$?
+  expect_code 2 "$code" "--scratch-days 0"
+  printf 'soon\n' > "$home/config/data-scratch-retention-days"
+  code=0
+  run_prune "$home" >/dev/null || code=$?
+  expect_code 2 "$code" "a bad scratch config value"
+  pass "scratch real run: only clean pushed checkouts and dependency folders of torn-down quiet tasks go"
+}
+
+# --- data size trigger ---------------------------------------------------------
+
+mib() {  # <file> <MiB>: a file of exactly <MiB> MiB of real blocks
+  mkdir -p "$(dirname "$1")"
+  dd if=/dev/zero of="$1" bs=1048576 count="$2" 2>/dev/null
+}
+
+test_size_trigger_names_the_largest_torn_down_tasks() {
+  local home out
+  home=$(new_home size)
+  put "$home/data/big-task/brief.md" "# Task"
+  mib "$home/data/big-task/web/node_modules/dep/blob" 2
+  put "$home/data/big-task/web/package.json" '{}'
+  put "$home/data/big-task/kit/package.json" '{}'
+  mib "$home/data/big-task/kit/dist/manual.pdf" 1
+  mib "$home/data/big-task/shots/screen.png" 1
+  mib "$home/data/big-task/out.pdf" 1
+  mib "$home/data/big-task/export.csv" 1
+  put "$home/data/small-task/brief.md" "# Task"
+  mib "$home/data/small-task/notes.bin" 1
+  put "$home/data/live-task/brief.md" "# Task"
+  mib "$home/data/live-task/huge.bin" 4
+  put "$home/state/live-task.meta" "window=x"
+
+  out=$(run_prune "$home")
+  [ -z "$out" ] || fail "data/ under the default trigger must stay silent: $out"
+
+  printf '1\n' > "$home/config/data-size-trigger-mib"
+  out=$(run_prune "$home")
+  assert_contains "$out" "BOOTSTRAP_INFO: data size: data/ holds " "the trigger names data/'s size"
+  assert_contains "$out" ", over the 1 MiB trigger; its largest torn-down tasks follow." "the trigger names itself"
+  assert_contains "$out" "images and PDFs move to Drive only as one captain-approved batch (docs/configuration.md)" \
+    "the trigger names the Drive rule for images and PDFs"
+  assert_contains "$out" "BOOTSTRAP_INFO: data size: big-task 6 MiB: 0 MiB clean checkouts, 2 MiB dependency folders, 1 MiB images, 2 MiB PDFs, 1 MiB other" \
+    "the largest task's line says what it holds"
+  assert_contains "$out" "BOOTSTRAP_INFO: data size: small-task 1 MiB: " "the next task follows"
+  assert_not_contains "$out" "live-task" "a live task is not a torn-down task"
+  [ "$(printf '%s\n' "$out" | grep -n 'big-task' | cut -d: -f1)" -lt "$(printf '%s\n' "$out" | grep -n 'small-task' | cut -d: -f1)" ] \
+    || fail "the largest task comes first: $out"
+  assert_present "$home/data/big-task/web/node_modules/dep/blob" "the size trigger removes nothing"
+  out=$(run_prune "$home" --dry-run | grep -v '^data-scratch: ')
+  assert_contains "$out" "BOOTSTRAP_INFO: data size: big-task 6 MiB" "a dry run reports the trigger too"
+
+  rm "$home/data/backlog.md"
+  out=$(run_prune "$home")
+  assert_contains "$out" "over the 1 MiB trigger; torn-down tasks are unknown because the backlog could not be read" \
+    "a backlog that cannot be read still reports the size"
+  for bad in 0 lots 16777217; do
+    printf '%s\n' "$bad" > "$home/config/data-size-trigger-mib"
+    code=0
+    out=$(run_prune "$home") || code=$?
+    expect_code 0 "$code" "size trigger value '$bad'"
+    assert_contains "$out" "data-size-trigger-mib is not a whole number of MiB" "a bad size trigger is named"
+  done
+  home=$(new_home size-bad)
+  printf '7\n' > "$home/config/data-scratch-retention-days"
+  printf 'lots\n' > "$home/config/data-size-trigger-mib"
+  make_scratch_task "$home" done-task
+  out=$(run_prune "$home")
+  assert_absent "$home/data/done-task/clones/clean" "a bad size trigger must not stop the retention a home opted in to: $out"
+  pass "size trigger: over the configured size, names the largest torn-down tasks and what each holds, and removes nothing"
 }
 
 # --- bootstrap seat -----------------------------------------------------------
@@ -335,4 +525,8 @@ test_clock_starts_at_first_sight_of_teardown
 test_configured_run_removes_only_media_of_retired_quiet_tasks
 test_unreadable_backlog_removes_nothing
 test_days_option_and_bad_values
+test_scratch_retention_is_its_own_opt_in
+test_scratch_dry_run_lists_and_removes_nothing
+test_scratch_real_run_removes_only_clean_checkouts_and_dependency_folders
+test_size_trigger_names_the_largest_torn_down_tasks
 test_bootstrap_runs_prune_only_when_locked

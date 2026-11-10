@@ -133,9 +133,11 @@
 #          owns what it retires and how an endpoint is proven gone; it runs on
 #          the local pass only and reports through its own BOOTSTRAP_INFO line.
 #          data_media_prune is bin/fm-data-media-prune.sh, whose header owns
-#          which torn-down tasks' media it removes; it does nothing unless
-#          config/data-media-retention-days is set, runs on the local pass only,
-#          and reports through its own BOOTSTRAP_INFO line.
+#          which torn-down tasks' media and scratch it removes and its data
+#          size trigger; it removes nothing unless
+#          config/data-media-retention-days or
+#          config/data-scratch-retention-days is set, runs on the local pass
+#          only, and reports through its own BOOTSTRAP_INFO lines.
 #          hold_release_retire is `bin/fm-captain-hold.sh retire-release`,
 #          bounded at 30 seconds, whose header owns what it retires; it runs on
 #          the local pass only, prints nothing, and does nothing once the
@@ -1563,8 +1565,9 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ] && local_phase; then
   # that reconciliation just restored still protects its endpoint's markers.
   # The sweep never exits nonzero; a problem is a warning it prints itself.
   "$SCRIPT_DIR/fm-state-residue-sweep.sh" || true
-  # Bulky media of torn-down, quiet tasks under data/, opt-in by config. It
-  # exits nonzero only for an unusable configured value, which it names.
+  # Bulky media and reproducible scratch of torn-down, quiet tasks under data/,
+  # each opt-in by config, and the data size trigger. It exits nonzero only for
+  # an unusable configured value, which it names.
   "$SCRIPT_DIR/fm-data-media-prune.sh" || true
   # What the removed captain-hold default release left behind, once, so a home
   # with no live task to start a watcher still retires it; the session's wake

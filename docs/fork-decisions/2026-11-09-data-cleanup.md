@@ -1,0 +1,12 @@
+2026-11-09: Arjun answered "Build it" on the review-ships decision board card "Build the firstmate data clean-up?", whose promise was that only re-creatable clones and dead entries are removed and images, PDFs, and reports stay.
+Decision: the retention prune gains a scratch part, opted in separately through `config/data-scratch-retention-days`, that reapplies teardown's scratch rule (clean pushed nested checkouts and dependency folders, never binaries) to tasks torn down and quiet for N days.
+Every session start reports the largest torn-down tasks and what each holds once `data/` passes a size trigger, 4 GiB by default, and images and PDFs still move to Drive only in captain-approved batches.
+Every test suite the runner executes gets a throwaway Claude store, teardown removes the Claude trust entry of a launch directory it retired, and a one-off script removes the Claude store's project entries whose paths no longer exist after a dated backup.
+The 2026-11-09 Heimdall measurement behind it: `data/` held 6.5 GB across 2,513 task folders, and `~/.claude.json` held 166 project entries, 87 of them for missing paths.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| The scratch rule also removes a Python `.venv` and `dist` build output beside its manifest (unless it holds an image or PDF), and `--keep-binaries` limits it to checkouts and dependency folders | `bin/fm-data-scratch-prune.sh`, `tests/fm-data-scratch-prune.test.sh` | none | carried | c8d8fdad |
+| Opt-in scratch retention for torn-down, quiet tasks and an always-on data size trigger in the retention prune | `bin/fm-data-media-prune.sh`, `tests/fm-data-media-prune.test.sh` | `bin/fm-bootstrap.sh` (header, sweep comment), `docs/configuration.md`, `docs/scripts.md` | carried | c8d8fdad |
+| Each suite the runner executes gets a throwaway `CLAUDE_CONFIG_DIR`, live guards excepted, and the secondmate restart suite sets its own | `run_script_bounded` in `bin/fm-test-run.sh` | `bin/fm-test-run.sh` (header, `run_script_bounded`, pr-forge family, changed map, serial hint), `tests/fm-test-run.test.sh`, `tests/fm-secondmate-restart.test.sh` | carried | c8d8fdad |
+| Teardown removes a Claude task's workspace-trust entry once the launch directory it retired is gone, and a one-off prune removes every dead project entry after a dated backup | `bin/fm-claude-store-prune.sh`, `tests/fm-claude-store-prune.test.sh` | `bin/fm-teardown.sh` (header, final cleanup step), `tests/fm-teardown.test.sh` | carried | c8d8fdad |

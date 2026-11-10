@@ -105,8 +105,10 @@ Each effective `FM_HOME` contains private operational directories.
 Reproducible scratch leaves a task's `data/<id>/` at teardown, deleted rather than archived (`bin/fm-data-scratch-prune.sh` owns the exact tests):
 
 - Nested git checkouts with nothing uncommitted, stashed, or unpushed.
-- `node_modules` folders and downloaded tool binaries.
+- Dependency folders: `node_modules`, a Python `.venv`, and `dist` build output beside its package manifest unless it holds an image or PDF.
+- Downloaded tool binaries.
 - A checkout holding unlanded work is never deleted; teardown keeps it and names it with its reason.
+- A task torn down before this rule, or whose checkout was pushed later, gets the same rule again through [task scratch retention](#task-scratch-retention-configdata-scratch-retention-days).
 
 Everything else under `data/` follows one retention rule once its task has been closed for more than 60 days:
 
@@ -831,6 +833,22 @@ Only video, audio, and disk images are removed; still images, PDFs, and exports,
 An absent file means no retention, and the file is not inherited by secondmate homes.
 Run `bin/fm-data-media-prune.sh --dry-run` to list what a run would remove today, with each file's size, without starting any task's clock; without the file it previews 7 days, and `--days <N>` previews another value.
 [`fm-data-media-prune.sh`'s header](../bin/fm-data-media-prune.sh) owns what counts as a torn-down task, a quiet task, a media file, and a final.
+
+## Task scratch retention (config/data-scratch-retention-days)
+
+Teardown deletes a task's reproducible scratch from `data/<task>/`, but tasks torn down before that rule, and checkouts pushed after their teardown, still hold it.
+The optional local, gitignored `config/data-scratch-retention-days` file holds a whole number of days N from 1 to 3650, and the locked session-start bootstrap then applies teardown's scratch rule again to every task that is torn down and whose `data/<task>/` has not changed in N days.
+It removes only nested checkouts that are clean, hold no stash, and have every commit on a remote-tracking branch, and dependency folders; images, PDFs, reports, binaries, and every other file stay.
+It is opted in separately from media retention, so a home that opted in to one never starts the other, and the file is not inherited by secondmate homes.
+Run `bin/fm-data-media-prune.sh --dry-run` to list what it would remove and what it keeps with the reason; without the file it previews 7 days, and `--scratch-days <N>` previews another value.
+A one-off real run by hand is `bin/fm-data-media-prune.sh --scratch-days <N>` from the session that holds this home's lock.
+[`fm-data-scratch-prune.sh`'s header](../bin/fm-data-scratch-prune.sh) owns which checkouts and folders go.
+
+## Data size trigger (config/data-size-trigger-mib)
+
+At every locked session start, when this home's `data/` holds more than the trigger, the bootstrap prints `BOOTSTRAP_INFO: data size:` lines naming the five largest torn-down tasks and how much of each is clean checkouts, dependency folders, images, PDFs, and other files.
+The optional local, gitignored `config/data-size-trigger-mib` file holds the trigger as a whole number of MiB from 1 to 16777216; without it the trigger is 4096 MiB (4 GiB).
+The lines change nothing: clean checkouts and dependency folders go through task scratch retention, and images and PDFs follow the Drive rule above, one captain-approved batch at a time.
 
 ## Firstmate role (config/firstmate-role)
 

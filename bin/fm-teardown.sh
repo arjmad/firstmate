@@ -148,7 +148,10 @@
 # data/<id>/ is deliberately left in place: a successor spawn reads brief.md
 # from it. Only its reproducible scratch goes, through
 # bin/fm-data-scratch-prune.sh under the meta lock just before the task record
-# is removed; a checkout holding unlanded work stays and is named.
+# is removed; a checkout holding unlanded work stays and is named. A Claude
+# task's workspace-trust entry for a launch directory this teardown retired
+# leaves the Claude store at the same point, through
+# bin/fm-claude-store-prune.sh --path.
 # Companion worktrees (fork patch, docs/fork-decisions.md 2026-10-14): a ship
 # spawned with bin/fm-spawn.sh --also records also=<repos> with
 # also_worktree_<repo>= and also_project_<repo>= per repo, and
@@ -1406,6 +1409,10 @@ fi
 # validator rather than probing or closing an ambient current window.
 WT=$(fm_meta_get "$META" worktree)
 PROJ=$(fm_meta_get "$META" project)
+# The harness and Claude account pin the launch recorded its workspace trust
+# under, read now because the record is gone by the time that entry is retired.
+TRUST_HARNESS=$(fm_meta_get "$META" harness)
+TRUST_ACCOUNT=$(fm_meta_get "$META" account)
 # Second cleanup authorization check, still metadata-only and still ahead of
 # fm-guard, any backend command, file removal, branch deletion, or worktree
 # return: decide whether this task is the ONLY record claiming this allocation.
@@ -4810,6 +4817,32 @@ fi
 if [ "$KIND" != secondmate ] && [ -d "$DATA/$ID" ]; then
   "$SCRIPT_DIR/fm-data-scratch-prune.sh" "$DATA/$ID" </dev/null || true
 fi
+# A Claude launch registered workspace trust for the directory it started in
+# (bin/fm-claude-trust.sh): the task worktree, or a secondmate's home. Once this
+# teardown has retired that directory the entry points nowhere, so it leaves
+# the store the launch wrote it to. bin/fm-claude-store-prune.sh removes the
+# entry only when the directory is gone, so a returned pool slot, which a later
+# task reuses, keeps it. The trust script keys the entry by the resolved path,
+# so the recorded path is tried both as recorded and with its surviving parent
+# resolved.
+teardown_forget_claude_trust_path() {  # <path>
+  case "$TRUST_ACCOUNT" in
+    '') "$SCRIPT_DIR/fm-claude-store-prune.sh" --path "$1" ;;
+    ordinary) env -u CLAUDE_CONFIG_DIR "$SCRIPT_DIR/fm-claude-store-prune.sh" --path "$1" ;;
+    /*) CLAUDE_CONFIG_DIR=$TRUST_ACCOUNT "$SCRIPT_DIR/fm-claude-store-prune.sh" --path "$1" ;;
+  esac
+}
+teardown_forget_claude_trust() {
+  local dir=$WT parent
+  case "$TRUST_HARNESS" in claude*) ;; *) return 0 ;; esac
+  [ "$KIND" != secondmate ] || dir=$HOME_PATH
+  dir=${dir%/}
+  case "$dir" in /?*) ;; *) return 0 ;; esac
+  teardown_forget_claude_trust_path "$dir"
+  parent=$(cd -P -- "${dir%/*}/" 2>/dev/null && pwd -P) || return 0
+  [ "${parent%/}/${dir##*/}" = "$dir" ] || teardown_forget_claude_trust_path "${parent%/}/${dir##*/}"
+}
+teardown_forget_claude_trust </dev/null || true
 # The record is gone, so the backlog must not still show this task in flight
 # when teardown reports success. Still under this task's meta lock, so a steer
 # racing the same id stays serialized exactly as it was before. A captain-held
