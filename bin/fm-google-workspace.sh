@@ -48,6 +48,9 @@
 #   account <slug> <email>
 #   bws_project_id <uuid>
 #   bws_secret_key <name>
+#   allowed_file_dirs <path>   optional; defaults to the home's data directory
+# claude-install and claude-config pass it to every server as ALLOWED_FILE_DIRS, the
+# directories workspace-mcp may read attachments from.
 # Blank lines and '#' comments are ignored. There is no built-in table: a missing,
 # unreadable, or malformed file, a duplicate slug or email, or an implausible email
 # refuses every subcommand except help, naming the file and the accepted format.
@@ -74,6 +77,7 @@ CONFIG_FILE="$CONFIG/google-workspace"
 ACCOUNTS=""
 BWS_PROJECT_ID=""
 BWS_SECRET_KEY=""
+ALLOWED_FILE_DIRS=""
 
 # The exact per-service permission levels. --permissions is the only flag that moves
 # the OAuth token boundary: --tool-tier and --disabled-tools shrink the tool list while
@@ -90,13 +94,14 @@ CLAUDE_BIN="${FM_GWS_CLAUDE:-claude}"
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-usage() { sed -n '21,58p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '21,61p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed 's/^# \{0,1\}//'; }
 
-CONFIG_FORMAT="accepted format, one setting per line: 'account <slug> <email>', 'bws_project_id <uuid>', 'bws_secret_key <name>'"
+CONFIG_FORMAT="accepted format, one setting per line: 'account <slug> <email>', 'bws_project_id <uuid>', 'bws_secret_key <name>', optional 'allowed_file_dirs <path>'"
 
 config_die() { die "$CONFIG_FILE: $*; $CONFIG_FORMAT"; }
 
-# load_config fills ACCOUNTS, BWS_PROJECT_ID, and BWS_SECRET_KEY from CONFIG_FILE and
+# load_config fills ACCOUNTS, BWS_PROJECT_ID, BWS_SECRET_KEY, and ALLOWED_FILE_DIRS
+# (default FM_HOME/data) from CONFIG_FILE and
 # refuses anything it cannot fully accept. There is deliberately no fallback table:
 # an account that is not in the file does not exist as far as this script is concerned.
 load_config() {
@@ -135,9 +140,15 @@ load_config() {
           BWS_SECRET_KEY="$value"
         fi
         ;;
+      allowed_file_dirs)
+        [ "$#" -eq 2 ] || config_die "line $lineno: expected 'allowed_file_dirs <path>'"
+        [ -z "$ALLOWED_FILE_DIRS" ] || config_die "line $lineno: duplicate $key"
+        ALLOWED_FILE_DIRS="$2"
+        ;;
       *) config_die "line $lineno: unknown setting '$key'" ;;
     esac
   done < "$CONFIG_FILE"
+  [ -n "$ALLOWED_FILE_DIRS" ] || ALLOWED_FILE_DIRS="$FM_HOME/data"
 }
 
 require_bws_config() {
@@ -408,7 +419,7 @@ cmd_claude_config() {
   argv=$(server_argv | tail -n +2)
   accounts_rows | python3 -c 'import json, sys
 args = sys.argv[1].split()
-accounts_root, client_secret, command = sys.argv[2], sys.argv[3], sys.argv[4]
+accounts_root, client_secret, command, allowed = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 servers = {}
 for line in sys.stdin.read().splitlines():
     if not line.strip():
@@ -421,9 +432,10 @@ for line in sys.stdin.read().splitlines():
         "env": {
             "WORKSPACE_MCP_CREDENTIALS_DIR": accounts_root + "/" + slug,
             "GOOGLE_CLIENT_SECRET_PATH": client_secret,
+            "ALLOWED_FILE_DIRS": allowed,
         },
     }
-print(json.dumps({"mcpServers": servers}, indent=2))' "$argv" "$ACCOUNTS_ROOT" "$CLIENT_SECRET_FILE" "$command"
+print(json.dumps({"mcpServers": servers}, indent=2))' "$argv" "$ACCOUNTS_ROOT" "$CLIENT_SECRET_FILE" "$command" "$ALLOWED_FILE_DIRS"
 }
 
 cmd_claude_install() {
@@ -436,6 +448,7 @@ cmd_claude_install() {
     "$CLAUDE_BIN" mcp add -s user "gws-$slug" \
       -e "WORKSPACE_MCP_CREDENTIALS_DIR=$ACCOUNTS_ROOT/$slug" \
       -e "GOOGLE_CLIENT_SECRET_PATH=$CLIENT_SECRET_FILE" \
+      -e "ALLOWED_FILE_DIRS=$ALLOWED_FILE_DIRS" \
       -- $argv >/dev/null || die "cannot register gws-$slug with Claude Code"
     printf 'registered: gws-%s -> %s\n' "$slug" "$email"
   done

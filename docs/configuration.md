@@ -1088,9 +1088,10 @@ The flag is a home-local supervision-noise preference and is not inherited by se
 ## Google Workspace accounts (config/google-workspace)
 
 The local, gitignored `config/google-workspace` file is the account table for `bin/fm-google-workspace.sh` and its wizard: which Google accounts this home's agents may reach, plus where the shared OAuth client is kept in Bitwarden.
-It is one setting per line, whitespace-separated, with blank lines and `#` comments ignored: `account <slug> <email>` once per account, `bws_project_id <uuid>`, and `bws_secret_key <name>`.
+It is one setting per line, whitespace-separated, with blank lines and `#` comments ignored: `account <slug> <email>` once per account, `bws_project_id <uuid>`, `bws_secret_key <name>`, and the optional `allowed_file_dirs <path>`.
 A slug is lowercase letters, digits, `_`, or `-`, names the account's credentials directory and its `gws-<slug>` server, and is what the account-taking subcommands accept beside the full email.
 The file is the account boundary's enforcement point, so there is no built-in table to fall back to: an account absent from the file cannot be reached by any subcommand, and a missing, unreadable, or malformed file, an unknown setting, a duplicate slug or email, or an implausible email address refuses every subcommand except help, naming the file and the accepted format.
+The optional `allowed_file_dirs <path>` names the directory `workspace-mcp` may read attachments from; `claude-install` and `claude-config` pass it to every `gws-<slug>` server as `ALLOWED_FILE_DIRS`, and it defaults to the home's `data/` directory, so a re-install keeps it instead of dropping a hand-set value.
 The two Bitwarden settings are required only by `client-secret push-bws` and `client-secret pull-bws`, which refuse without them.
 Adding a row grants agents a mailbox, so it is a captain decision rather than a maintenance edit.
 The file is per home and is not inherited by secondmate homes.

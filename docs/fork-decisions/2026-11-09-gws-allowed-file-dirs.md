@@ -1,0 +1,3 @@
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| `config/google-workspace` gains an optional `allowed_file_dirs <path>` (default the home's `data/`), and `claude-install` and `claude-config` pass it to every `gws-<slug>` server as `ALLOWED_FILE_DIRS`, so a re-install no longer drops the hand-set attachment directory | `bin/fm-google-workspace.sh` (header, `load_config`, `cmd_claude_config`, `cmd_claude_install`), `docs/configuration.md` (Google Workspace accounts), `tests/fm-google-workspace.test.sh` (`test_attachment_directory_survives_a_reinstall`) | `docs/configuration.md` (Google Workspace accounts) | carried | c8d8fdad |
