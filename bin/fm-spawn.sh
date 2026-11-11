@@ -578,6 +578,12 @@
 #   docs/configuration.md "Worker tool exclusions" owns config/crew-exclude-tools
 #   and its operator contract. Resolve it with bin/fm-exclude-tools-lib.sh
 #   before provisioning; __PIEXCLUDE__ below owns the Pi launch substitution.
+# Worker-denied MCP servers:
+#   docs/configuration.md "Worker-denied MCP servers" owns
+#   config/worker-denied-mcp-servers. Resolve it with
+#   bin/fm-exclude-tools-lib.sh before provisioning; a Claude ship or scout
+#   then carries "deniedMcpServers":[{"serverName":"<name>"},...] in its
+#   inline __CLAUDESETTINGS__ JSON.
 # Worker account pin (config/claude-account, config/pi-account):
 #   Opt-in. docs/configuration.md's "Worker account pin" section owns unpinned
 #   account selection. A present file pins every supported launch of
@@ -3373,6 +3379,10 @@ launch_template() {
   # (docs/fork-decisions/2026-10-27-worker-no-artifact-connectors.md). Off in
   # --settings wins over user and project settings for both keys (Claude Code
   # 2.1.310 settings schema). A secondmate and the helm keep both.
+  # The same inline JSON carries "deniedMcpServers" for the servers
+  # config/worker-denied-mcp-servers lists, which Claude Code refuses to start
+  # for that session alone ("MCP server blocked by enterprise policy", 2.1.319)
+  # (docs/fork-decisions/2026-11-11-worker-denied-mcp-servers.md).
   # Claude Code's --settings flag takes one value, a file path or an inline
   # JSON string (https://code.claude.com/docs/en/cli-reference). A secondmate's
   # busy hooks share that value, in state/<id>.claude-settings.json, and the
@@ -3858,8 +3868,12 @@ fi
 # config/crew-exclude-tools (header above): refuse before worker provisioning
 # if this launch cannot honor the list. Secondmate agents are not covered.
 EXCLUDE_TOOLS=
+# config/worker-denied-mcp-servers (header above) likewise refuses before
+# provisioning when a Claude ship or scout cannot carry its denial.
+DENIED_MCP_SERVERS=
 if [ "$KIND" != secondmate ]; then
   EXCLUDE_TOOLS=$(fm_exclude_tools_check "$HARNESS" "$RAW_LAUNCH" "$CONFIG") || exit 1
+  DENIED_MCP_SERVERS=$(fm_worker_denied_mcp_servers_check "$HARNESS" "$RAW_LAUNCH" "$BACKEND" "$CONFIG") || exit 1
 fi
 
 case "$HARNESS" in
@@ -4075,6 +4089,17 @@ if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS" = claude ]; then
     unset CLAUDE_CONFIG_DIR
   fi
   WORKER_MCP_GAP=$(fm_worker_account_claude_mcp_gap "$SESSION_CLAUDE_STORE" "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json")
+  # A server the worker is denied anyway is no gap worth a warning.
+  if [ -n "$WORKER_MCP_GAP" ] && [ -n "$DENIED_MCP_SERVERS" ]; then
+    worker_mcp_gap_kept=
+    for worker_mcp_gap_name in $WORKER_MCP_GAP; do
+      case ",$DENIED_MCP_SERVERS," in
+      *",$worker_mcp_gap_name,"*) ;;
+      *) worker_mcp_gap_kept="${worker_mcp_gap_kept:+$worker_mcp_gap_kept }$worker_mcp_gap_name" ;;
+      esac
+    done
+    WORKER_MCP_GAP=$worker_mcp_gap_kept
+  fi
   [ -z "$WORKER_MCP_GAP" ] \
     || echo "warning: the Claude worker account ${WORKER_ACCOUNT_ROOT:-ordinary} lacks MCP servers this session has: $WORKER_MCP_GAP; the worker starts without those tools until that root registers them" >&2
 fi
@@ -8369,7 +8394,17 @@ case "$LAUNCH" in
   if [ "$KIND" = secondmate ]; then
     LAUNCH=${LAUNCH//__CLAUDESETTINGS__/$(shell_quote "$STATE_REAL/$ID.claude-settings.json")}
   else
-    claude_settings="'{\"feedbackDrafts\":\"off\",\"enableArtifact\":false,\"disableClaudeAiConnectors\":true__CLAUDEATTRIBUTION__}'"
+    # config/worker-denied-mcp-servers names are validated to letters, digits,
+    # _ . and -, so they need no JSON or shell quoting here.
+    claude_denied_mcp=
+    if [ -n "$DENIED_MCP_SERVERS" ]; then
+      IFS=, read -r -a claude_denied_names <<<"$DENIED_MCP_SERVERS"
+      for claude_denied_name in "${claude_denied_names[@]}"; do
+        claude_denied_mcp="${claude_denied_mcp:+$claude_denied_mcp,}{\"serverName\":\"$claude_denied_name\"}"
+      done
+      claude_denied_mcp=",\"deniedMcpServers\":[$claude_denied_mcp]"
+    fi
+    claude_settings="'{\"feedbackDrafts\":\"off\",\"enableArtifact\":false,\"disableClaudeAiConnectors\":true${claude_denied_mcp}__CLAUDEATTRIBUTION__}'"
     LAUNCH=${LAUNCH//__CLAUDESETTINGS__/$claude_settings}
   fi
   ;;

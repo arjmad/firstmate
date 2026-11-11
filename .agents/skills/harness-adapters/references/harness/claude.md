@@ -97,6 +97,10 @@ A Claude ship or scout launches with `"enableArtifact": false` and `"disableClau
 In this fleet, the user-scope settings `~/nix` deploys turn both off for the primary and secondmates too, so no firstmate session here carries either.
 Off in `--settings` wins over user and project settings for both keys on Claude Code 2.1.310, and [the fork decision](../../../../../docs/fork-decisions/2026-10-27-worker-no-artifact-connectors.md) records the ruling and its live check.
 
+## Worker-denied MCP servers
+
+A Claude ship or scout from a home with `config/worker-denied-mcp-servers` also carries `"deniedMcpServers"` for each listed server in that inline `--settings` JSON; [`docs/configuration.md`](../../../../../docs/configuration.md#worker-denied-mcp-servers-configworker-denied-mcp-servers) owns the file and its refusals.
+
 ## Task list
 
 A Claude ship or scout launches with `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`, because newer models leave Claude Code's task tools (`TaskCreate`, `TaskUpdate`) out unless opted in, and its brief asks it to keep its plan there; a secondmate keeps the model default.
