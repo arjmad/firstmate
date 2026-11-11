@@ -629,6 +629,21 @@ If you deliberately keep the PR a draft, append \`paused [at=<epoch>]: {why the 
 EOF
 }
 
+# fm_dod_short_loop_block prints the short-loop floor every generated ship and
+# scout brief carries in its Definition of done, on every harness. A poteto-mode
+# brief (bin/fm-brief.sh --method) omits it, because that method already runs
+# these steps; the caller decides, since only it knows the method.
+fm_dod_short_loop_block() {
+  cat <<'EOF'
+Short-loop floor (every task):
+1. State the goal and the smallest change that reaches it.
+2. For a defect, reproduce it before you change code.
+3. Prove the change where it runs, and say what you ran and saw.
+4. Do a comment pass on your diff before you open a PR or hand it off.
+5. Report honestly what you did not prove.
+EOF
+}
+
 fm_dod_block() {  # <mode> <task-id> [branch] [<forge>] [<base>] [<consent>] [<pr>]
   local mode=$1 id=$2 forge=${4:-none} base=${5:-} consent=${6:-} pr=${7:-auto}
   local branch=${3:-fm/$id} pr_base='' nm_base='' base_q contract_forge='' contract_consent='' forge_cli=gh-axi draft_check adapter done_report

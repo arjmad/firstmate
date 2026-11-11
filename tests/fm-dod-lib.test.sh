@@ -21,6 +21,15 @@ write_merge_marker() {  # <state> <id> <provider> <host> <path> <number>
   chmod 600 "$1/$2.pr-poll-merge-notified"
 }
 
+test_short_loop_floor_has_five_steps() {
+  local out
+  out=$(fm_dod_short_loop_block)
+  [ "$(printf '%s\n' "$out" | grep -c '^[1-5]\. ')" -eq 5 ] || fail "short-loop floor must list five numbered steps"
+  assert_contains "$out" "reproduce it before you change code" "short-loop floor lacks the reproduce step"
+  assert_contains "$out" "did not prove" "short-loop floor lacks the honest-gaps step"
+  pass "short-loop floor lists its five steps"
+}
+
 test_scout_done_is_not_gated() {
   local repo wt
   repo="$TMP_ROOT/scout-repo"
@@ -671,6 +680,7 @@ test_direct_pr_dod_writes_the_matt_pr_body() {
   pass "direct-PR DoD has the worker write its PR body with matt-pr's Door and Blast Radius lines"
 }
 
+test_short_loop_floor_has_five_steps
 test_scout_done_is_not_gated
 test_unpushed_ship_done_is_refused
 test_no_mistakes_prevalidation_done_is_not_gated
