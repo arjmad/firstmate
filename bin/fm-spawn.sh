@@ -3873,7 +3873,13 @@ EXCLUDE_TOOLS=
 DENIED_MCP_SERVERS=
 if [ "$KIND" != secondmate ]; then
   EXCLUDE_TOOLS=$(fm_exclude_tools_check "$HARNESS" "$RAW_LAUNCH" "$CONFIG") || exit 1
-  DENIED_MCP_SERVERS=$(fm_worker_denied_mcp_servers_check "$HARNESS" "$RAW_LAUNCH" "$BACKEND" "$CONFIG") || exit 1
+  # A raw command can reach claude behind a wrapper (env, npx, a script), so
+  # any raw command that names claude is checked as a claude launch.
+  denied_mcp_harness=$HARNESS
+  if [ "$RAW_LAUNCH" = 1 ]; then
+    case "$LAUNCH" in *[Cc][Ll][Aa][Uu][Dd][Ee]*) denied_mcp_harness=claude ;; esac
+  fi
+  DENIED_MCP_SERVERS=$(fm_worker_denied_mcp_servers_check "$denied_mcp_harness" "$RAW_LAUNCH" "$BACKEND" "$CONFIG") || exit 1
 fi
 
 case "$HARNESS" in
@@ -4092,7 +4098,8 @@ if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS" = claude ]; then
   # A server the worker is denied anyway is no gap worth a warning.
   if [ -n "$WORKER_MCP_GAP" ] && [ -n "$DENIED_MCP_SERVERS" ]; then
     worker_mcp_gap_kept=
-    for worker_mcp_gap_name in $WORKER_MCP_GAP; do
+    read -r -a worker_mcp_gap_names <<<"$WORKER_MCP_GAP"
+    for worker_mcp_gap_name in "${worker_mcp_gap_names[@]}"; do
       case ",$DENIED_MCP_SERVERS," in
       *",$worker_mcp_gap_name,"*) ;;
       *) worker_mcp_gap_kept="${worker_mcp_gap_kept:+$worker_mcp_gap_kept }$worker_mcp_gap_name" ;;

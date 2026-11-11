@@ -81,8 +81,9 @@ fm_exclude_tools_check() {
 # Refuses when the file is invalid, or when it lists servers and this launch
 # cannot carry Claude's deniedMcpServers setting: a raw command, whose flags
 # firstmate does not build, or T3 Code, which builds its own provider command.
-# Every other runtime loads none of these Claude servers, so it neither reads
-# nor refuses on the file.
+# Every other runtime does not read Claude's MCP configuration, so it neither
+# reads nor refuses on the file. bin/fm-spawn.sh passes claude for any raw
+# command that names claude.
 fm_worker_denied_mcp_servers_check() {
   local harness=$1 raw=$2 backend=$3 config=$4 names
   [ "$harness" = claude ] || return 0

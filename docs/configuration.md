@@ -1727,8 +1727,8 @@ The file is inherited into secondmate homes under the [`secondmate-provisioning`
 With no file, or a file with no entries, every launch is unchanged.
 
 The file fails closed: when it is present but dangling, unreadable, not a regular file, or has a malformed entry, a Claude ship or scout spawn or relaunch refuses before its endpoint, local copy, or task record exists, and a relaunch refuses before it stops the running worker.
-A non-empty list also refuses a raw `claude` launch command and the T3 Code backend, because Firstmate does not build those command lines.
-Other runtimes load none of these Claude servers, so they neither read nor refuse on the file.
+A non-empty list also refuses a raw launch command that names `claude`, including behind a wrapper such as `env` or `npx`, and the T3 Code backend, because Firstmate does not build those command lines.
+Other runtimes do not read Claude's MCP configuration, so they neither read nor refuse on the file; a server registered in another runtime's own MCP configuration is not covered.
 [`bin/fm-exclude-tools-lib.sh`](../bin/fm-exclude-tools-lib.sh) implements the parsing and refusals, and [`bin/fm-spawn.sh`](../bin/fm-spawn.sh)'s header owns the launch mechanics.
 
 ## Worker account pin (config/claude-account, config/pi-account)

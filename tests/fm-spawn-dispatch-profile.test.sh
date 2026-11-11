@@ -2502,7 +2502,7 @@ test_claude_task_workers_launch_with_denied_mcp_servers() {
 
 test_claude_denied_mcp_servers_fail_closed() {
   local rec id out status n=0 setup
-  for setup in dangling malformed directory raw; do
+  for setup in dangling malformed directory raw raw-env; do
     n=$((n + 1))
     id="claude-denymcp-refuse-$setup-z32"
     rec=$(make_spawn_case "claude-denymcp-refuse-$setup" claude "$id")
@@ -2511,10 +2511,12 @@ test_claude_denied_mcp_servers_fail_closed() {
       dangling) ln -s "$CASE_DIR/fleet/worker-denied-mcp-servers" "$HOME_DIR/config/worker-denied-mcp-servers" ;;
       malformed) write_denied_mcp_file "$HOME_DIR" 'homeassistant' 'two words' ;;
       directory) mkdir "$HOME_DIR/config/worker-denied-mcp-servers" ;;
-      raw) write_denied_mcp_file "$HOME_DIR" 'homeassistant' ;;
+      raw | raw-env) write_denied_mcp_file "$HOME_DIR" 'homeassistant' ;;
     esac
     if [ "$setup" = raw ]; then
       out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "claude --dangerously-skip-permissions" 2>&1)
+    elif [ "$setup" = raw-env ]; then
+      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "env -u CLAUDECODE claude --dangerously-skip-permissions" 2>&1)
     else
       out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
     fi
