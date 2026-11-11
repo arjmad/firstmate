@@ -69,7 +69,9 @@
 # `reply` is how the primary publishes its actual answer against a note id.
 # Each reply is stamped with a durable per-home sequence, so the receipts cursor
 # is a strict total order and two replies recorded in the same second are both
-# readable. One reply per note: a second one is refused.
+# readable. One reply per note: a second one is refused. A sender reads its
+# reply back through the request id it noted under, so a reply on a note with
+# none adds a line saying nothing outside this home can read it.
 # `unread` lists the pending notes nobody has acknowledged, oldest first, capped
 # at 10 with a count of the rest; the session-start digest and the bearings
 # snapshot print it so an unacknowledged note keeps resurfacing.
@@ -685,6 +687,10 @@ sys.stdout.write("\n")
 PY
   else
     printf 'replied %s\n' "$id"
+    if awk '/^--$/ { exit } /^request_id=./ { found = 1; exit } END { exit !found }' "$path"; then
+      return 0
+    fi
+    printf '  no request id: this note'"'"'s sender has no handle to read the reply back; if it must reach them, answer through their own lane\n'
   fi
 }
 
