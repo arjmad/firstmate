@@ -8,13 +8,12 @@
 #                 [--now]
 #   fm-noticed.sh collect <task-id>
 #   fm-noticed.sh list [noticed|idea]
-#   fm-noticed.sh top3 <idea-id>...
 #   fm-noticed.sh unseen
 #   fm-noticed.sh shown <id>...
 #   fm-noticed.sh close <id> --evidence <text> [--fixed] [--pr <url>]
 #
 # .agents/skills/noticed-queue/SKILL.md owns the policy: who files, when, how
-# to match a duplicate, and what the Monday sweep and ranking do. This script
+# to match a duplicate, and what the Monday sweep and triage do. This script
 # owns the mechanics. Firstmate is its only caller.
 #
 # AN ITEM IS ITS SLUG. The task id is noticed-<slug> or idea-<slug>, and the
@@ -33,8 +32,7 @@
 #            skipped: <id> (answered earlier)   a closed idea is never re-asked,
 #                              archived or not
 #          A filed or reopened noticed item joins the unseen list labelled
-#          `noticed`, where it waits for the Monday triage; an idea waits for
-#          the Monday ranking (top3). --now marks a noticed item urgent or
+#          `noticed`; it and an idea wait for the Monday triage. --now marks a noticed item urgent or
 #          doing harm (money, customers, account health, security): filed,
 #          matched or reopened, it joins the unseen list labelled `now`, the
 #          only label the wake drain prints, and an idea refuses it. Once
@@ -51,13 +49,9 @@
 # list     The open items of one kind, or both, held or not, with the date
 #          each was filed (tasks-axi's list; the sweep reads age from
 #          `created`).
-# top3     Record up to three ideas as this week's top picks: each must be an
-#          open idea-<slug> never picked before. Picks join the unseen list
-#          labelled `top idea`. One line per id: `top: <id>`, or
-#          `refused: <id> (<why>)` with exit 1.
 # unseen   Print what firstmate has not yet shown the captain, one
-#          `<id><TAB><label><TAB><title>` line each, label `now`, `noticed`,
-#          `top idea` or `fixed`. A read; bin/fm-wake-drain.sh prints its
+#          `<id><TAB><label><TAB><title>` line each, label `now`, `noticed`
+#          or `fixed`. A read; bin/fm-wake-drain.sh prints its
 #          `now` rows every drain, and the Monday triage reads the rest.
 # shown    Mark items shown after the captain message or Monday triage that
 #          brought them to him.
@@ -72,8 +66,7 @@
 #          list, unless a `now` row keeps it; an idea refuses it. A later
 #          sighting replaces a `fixed` row. Prints `closed: <id>`.
 #
-# State: state/noticed/unseen.tsv (the unseen list), state/noticed/picked
-# (every id ever in a top 3) and state/noticed/filed (every id ever filed, so
+# State: state/noticed/unseen.tsv (the unseen list) and state/noticed/filed (every id ever filed, so
 # an item Done retention archived out of the backlog is still known), written
 # under state/noticed/lock (bin/fm-wake-lib.sh's lock, with its stale-owner
 # recovery).
@@ -89,7 +82,6 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 DIR="$STATE/noticed"
 UNSEEN="$DIR/unseen.tsv"
-PICKED="$DIR/picked"
 FILED="$DIR/filed"
 LOCK="$DIR/lock"
 TODAY=${FM_NOTICED_NOW:-$(date -u +%Y-%m-%d)}
@@ -211,7 +203,7 @@ cmd_file() {
     shift
   done
   case "$kind" in noticed | idea) ;; *) refuse "kind must be noticed or idea (got $kind)" ;; esac
-  [ "$now" = 0 ] || [ "$kind" = noticed ] || refuse "--now marks an urgent noticed item; an idea waits for the Monday ranking"
+  [ "$now" = 0 ] || [ "$kind" = noticed ] || refuse "--now marks an urgent noticed item; an idea waits for the Monday triage"
   valid_slug "$slug" || refuse "slug must be lowercase-kebab (got $slug)"
   one_line --title "$title"
   one_line --why "$why"
@@ -305,25 +297,6 @@ cmd_list() {
   done
 }
 
-cmd_top3() {
-  local id show status=0
-  [ $# -ge 1 ] && [ $# -le 3 ] || refuse "top3 takes one to three idea ids"
-  lock_state
-  for id in "$@"; do
-    case "$id" in idea-*) ;; *) printf 'refused: %s (not an idea)\n' "$id"; status=1; continue ;; esac
-    if grep -Fxq -- "$id" "$PICKED" 2>/dev/null; then
-      printf 'refused: %s (already in an earlier top 3)\n' "$id"; status=1; continue
-    fi
-    if ! "$HOLD" open "$id" >/dev/null 2>&1 || ! show=$("$TASKS" show "$id" 2>/dev/null); then
-      printf 'refused: %s (not an open idea)\n' "$id"; status=1; continue
-    fi
-    printf '%s\n' "$id" >> "$PICKED"
-    add_unseen "$id" "top idea" "$(shown_field "$show" title)"
-    printf 'top: %s\n' "$id"
-  done
-  return "$status"
-}
-
 cmd_unseen() {
   [ $# -eq 0 ] || refuse "unseen takes no arguments"
   [ -f "$UNSEEN" ] && cat "$UNSEEN"
@@ -382,7 +355,6 @@ case "${1:-}" in
   close) shift; cmd_close "$@" ;;
   collect) shift; cmd_collect "$@" ;;
   list) shift; cmd_list "$@" ;;
-  top3) shift; cmd_top3 "$@" ;;
   unseen) shift; cmd_unseen "$@" ;;
   shown) shift; cmd_shown "$@" ;;
   -h | --help | help) usage ;;

@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Behavior tests for bin/fm-noticed.sh: a noticed problem or an idea becomes a
 # captain hold that never dispatches, a duplicate attaches evidence instead of
-# filing twice, a finished task's lines are collected, the Monday top 3 is
-# recorded once, every unseen item waits for the Monday triage, and the wake
-# drain shows only an urgent (--now) item, until it is marked shown.
+# filing twice, a finished task's lines are collected, every unseen item waits for the Monday
+# triage, and the wake drain shows only an urgent (--now) item, until it is marked shown.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -136,26 +135,6 @@ test_refusals() {
   pass "Nova items, unknown kinds, bad slugs and empty reasons are refused"
 }
 
-test_top3_is_recorded_once_and_shown_until_marked() {
-  local home out
-  home=$(make_home top3)
-  noticed "$home" file idea bundle-slow --title "Bundle slow movers" --why "frees cash" --from t1 >/dev/null
-  noticed "$home" file noticed canary-red --title "Canary red" --why "packet" --from t1 >/dev/null
-  assert_equals "" "$(noticed "$home" unseen | grep idea- || true)" "an idea was shown before the ranking"
-  out=$(noticed "$home" top3 idea-bundle-slow noticed-canary-red idea-missing)
-  assert_equals 1 "$?" "top3 accepted a non-idea"
-  assert_contains "$out" "top: idea-bundle-slow" "the idea was not recorded"
-  assert_contains "$out" "refused: noticed-canary-red (not an idea)" "a noticed item was ranked"
-  assert_contains "$out" "refused: idea-missing (not an open idea)" "a missing idea was ranked"
-  assert_contains "$(noticed "$home" top3 idea-bundle-slow)" "already in an earlier top 3" \
-    "an idea was picked twice"
-  assert_contains "$(noticed "$home" unseen)" "idea-bundle-slow	top idea	Bundle slow movers" \
-    "the pick is not on the unseen list"
-  assert_equals "shown: idea-bundle-slow" "$(noticed "$home" shown idea-bundle-slow)" "shown did not mark the pick"
-  assert_equals "noticed-canary-red	noticed	Canary red" "$(noticed "$home" unseen)" "shown removed the wrong item"
-  pass "the top 3 takes open ideas once, and each stays unseen until marked shown"
-}
-
 test_collect_reads_the_report_then_notes() {
   local home out
   home=$(make_home collect)
@@ -242,19 +221,18 @@ test_the_drain_shows_only_urgent_items() {
   assert_not_contains "$drain" "NOTICED" "the drain printed an empty NOTICED section"
   noticed "$home" file noticed canary-red --title "Canary red" --why "packet" --from t1 >/dev/null
   noticed "$home" file idea bundle-slow --title "Bundle slow movers" --why "frees cash" --from t1 >/dev/null
-  noticed "$home" top3 idea-bundle-slow >/dev/null
   # A row an earlier version listed for the next reply waits for the triage too.
   printf 'noticed-old\tnoticed\tOld item\n' >> "$home/state/noticed/unseen.tsv"
   drain=$(run_drain "$home") || fail "the drain failed with unseen items"
   assert_not_contains "$drain" "NOTICED" "the drain showed an item that waits for the Monday triage"
-  assert_equals 3 "$(noticed "$home" unseen | wc -l | tr -d ' ')" "the waiting items left the unseen list"
+  assert_equals 2 "$(noticed "$home" unseen | wc -l | tr -d ' ')" "the waiting items left the unseen list"
   noticed "$home" file noticed refunds-failing --title "Refunds failing" --why "customers unpaid" \
     --from t2 --now >/dev/null
   drain=$(run_drain "$home") || fail "the drain failed with an urgent item"
   assert_contains "$drain" "NOTICED (urgent or doing harm, not yet told to the captain):" "the section is missing"
   assert_contains "$drain" "noticed-refunds-failing: Refunds failing" "the urgent item is missing from the section"
   assert_not_contains "$drain" "canary-red" "a waiting item was shown beside the urgent one"
-  assert_not_contains "$drain" "bundle-slow" "a top idea was shown beside the urgent one"
+  assert_not_contains "$drain" "bundle-slow" "an idea was shown beside the urgent one"
   assert_contains "$drain" "leading your final captain-facing message" "the section does not say to lead his reply with it"
   assert_contains "$drain" "bin/fm-noticed.sh shown <id>" "the section does not say how to mark it shown"
   noticed "$home" shown noticed-refunds-failing >/dev/null
@@ -300,7 +278,6 @@ test_noticed_is_a_captain_hold_that_never_dispatches
 test_a_duplicate_attaches_evidence
 test_closed_items_come_back_or_stay_answered
 test_refusals
-test_top3_is_recorded_once_and_shown_until_marked
 test_collect_reads_the_report_then_notes
 test_close_settles_an_item_and_list_keeps_answered_ones
 test_now_marks_an_item_urgent

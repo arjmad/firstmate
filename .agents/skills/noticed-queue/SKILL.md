@@ -25,7 +25,7 @@ Each task yields at most one noticed and one idea; `none` and an empty section a
 1. Run `bin/fm-noticed.sh list` and look for an open item about the same broken thing or the same idea.
    Reuse its slug when one matches, so `file` attaches the new evidence instead of filing a duplicate.
 2. File with `bin/fm-noticed.sh file noticed|idea <slug> --title <one line> --why <why it may matter> --from <task or agent> [--repo <repo>] [--evidence <pointer>] [--now]`.
-   Capture the observation and why it may matter; leave value unknown until ranking.
+   Capture the observation and why it may matter; leave value unknown until the triage.
    Add `--now` only to a noticed item that is urgent or doing harm now: money, customers, account health or security; filing an open item's slug again with `--now` makes it urgent.
 3. Acknowledge a fleet-handoff notice with `bin/fm-inbox.sh drain --ack <id>`, and reply with the item id through `bin/fm-inbox.sh reply <id>`.
 
@@ -51,28 +51,25 @@ Only two things reach Arjun from this queue.
 
 Do not mention a filed item in your next reply, unless it is a NOW item or bears on the topic at hand.
 
-## Monday: sweep, top 3 and triage
+## Monday: sweep and triage
 
 The jobs launcher's Monday `[open-items]` note dispatches the open-items sweep scout.
 Add two duties to that scout's brief:
 
 - **Noticed re-check.** Re-check every open noticed item (`bin/fm-noticed.sh list noticed`) against live state.
   Firstmate closes one fixed elsewhere with `bin/fm-noticed.sh close <id> --evidence <what fixed it>`, fixes a routine one under Acting first, and carries to the triage any item still broken 7 days or more after its `created` date that needs his call, with the recommended fix.
-- **Top 3.** Rank the open ideas never in a top 3 that pass the idea bar below by what matters to Arjun (his 2026-11-08 ruling): keep Ecomills and Kempf healthy and growing, spend his time only where needed, take initiative across the ecosystem, and leave work making the next one easier.
-  Estimate each as $/week or hours/week, and return the best three with their estimates.
-  Return fewer, or none, rather than fill a place with an idea that fails the bar, and name in one line the test each passed-over idea failed.
-  Firstmate records them with `bin/fm-noticed.sh top3 <id>...`.
+- **Ideas.** Check every open idea (`bin/fm-noticed.sh list idea`) against the idea bar below, and return each one that passes as one line.
 
 The weekly `triage-weekly` backlog row is where the result reaches him.
 Open it with a "Fixed on my own this week" list: one line per `fixed` row of `bin/fm-noticed.sh unseen`, naming the item, what changed and the PR URL.
-Then bring only the items from `unseen` and the sweep that need his call, the top 3 included, each with a recommendation and a one-tap answer, and park everything else.
+Then bring only the items from `unseen` and the sweep that need his call, each passing idea as one line, each with a recommendation and a one-tap answer, and park everything else.
 Then mark every unseen item the triage covered, brought or parked, with `bin/fm-noticed.sh shown <id>...`, so next week's unseen list holds only what arrived since.
 
 The Atlas board itself still builds only when he asks.
 
 ## The idea bar
 
-An idea reaches Arjun, as an Atlas card or in the Monday top 3, only when it passes all six tests below; when you write Atlas's ideas, apply them before you rank, and carry only those that pass, up to seven.
+An idea reaches Arjun, as an Atlas card or in the Monday triage, only when it passes all six tests below; when you write Atlas's ideas, apply them before you rank, and carry only those that pass, up to seven.
 They come from his verdicts: he dropped all seven Atlas ideas of 2026-10-26 on quality ("Didn't like the ideas [it] came up with", 2026-10-28), and on the 2026-10-30 ecosystem board he kept 22 of the 39 ideas built on tools the fleet already runs and 1 of the 10 that brought a new platform.
 
 1. **One concrete friction, seen.** Name one thing that went wrong or cost money or time, with a dated instance, and the smallest change that removes it.
@@ -106,7 +103,7 @@ Its repository is the first registered project in `data/projects.md` order with 
 Scaffold it with `bin/fm-brief.sh explore-<area>-<mmdd> <repo> --scout` and dispatch it like any scout on the worker account, which is the Ecomills Claude account; its budget is that one scout's share of the account's week.
 Skip the week rather than add a second scout or a paid tier, and say so once.
 The brief is read-only everywhere: no spend, no store or listing change, nothing customer-visible.
-Its findings reach Arjun only through idea capture and the Monday top 3, never as a message of their own.
+Its findings reach Arjun only through idea capture and the Monday triage, never as a message of their own.
 Put the idea bar in its brief, so its ideas arrive already shaped to pass it.
 
 ## Review
