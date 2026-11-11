@@ -531,15 +531,15 @@ EOF
 # trimmed, or claude-opus-5-5 when the file is absent or empty (fork patch,
 # docs/fork-decisions/2026-11-11-code-review-model.md). The fleet's
 # `fleet-mode` command writes the file; firstmate only reads it. An id holding
-# anything but letters, digits, dot, dash, underscore, slash, colon, or
-# brackets falls back to the default, so it cannot inject shell text.
+# anything but letters, digits, dot, dash, underscore, slash, colon, or @
+# falls back to the default, so it cannot inject shell or glob text.
 fm_dod_code_review_model() {
   local cfg model=
   cfg=${CONFIG:-${FM_CONFIG_OVERRIDE:-${FM_HOME:-}/config}}
   [ ! -f "$cfg/code-review-model" ] || IFS= read -r model < "$cfg/code-review-model" || true
   model=${model//[[:space:]]/}
   case $model in
-    ''|*[!A-Za-z0-9._/:@\[\]-]*) model=claude-opus-5-5 ;;
+    ''|*[!A-Za-z0-9._/:@-]*) model=claude-opus-5-5 ;;
   esac
   printf '%s\n' "$model"
 }
@@ -563,6 +563,7 @@ When the skill hands an open finding to its user - one disputed twice, or a bloc
 This step is the ask that skill waits for, and where it would report a blocker because nothing here can reach Sol - the skill is not installed, Codex is not signed in, or no route runs Sol - skip the loop instead, never substitute another model, append \`working [at=<epoch>]: Sol skipped: {reason}\` so firstmate sees it, and keep the reason for the record note.
 Then run Claude Code's built-in \`/code-review\` once from this worktree with the arguments \`$cli args <pr-url>\` prints, which are \`medium --comment <number>\` followed by firstmate's merge-gate focus: the review runs on the pinned model \`$model\`, so run it as the shell command \`a=\$($cli args <pr-url>) && claude -p --model $model "/code-review \$a"\` there, so a refused URL runs no review.
 Do not invoke the skill in your own session instead: an in-session skill runs on the session's model, and a worker cannot switch its own session's model, so only the headless command pins it.
+A medium review takes longer than a shell tool's default time limit, so run that command in the background or with your harness's longest command timeout, and wait for it to exit before you go on.
 Then $fix, reply in the PR thread of every finding you do not, and after your last push run \`$cli record <pr-url> --note 'Sol: <N> rounds, <model>, <verdict>'\`, or \`--note 'Sol: skipped, <reason>'\` when the loop could not run, with no apostrophe in the note, and confirm it prints \`reviewed\`.
 Pushes that fix or answer this review's findings are covered by the one \`record\` you run after your last push; only a push after \`record\` that changes the diff needs a new review, and a rebase that leaves the diff alone needs none.
 For a small follow-up pushed after \`record\`, run \`$cli record <pr-url> --carry\` instead of a new review; the script decides what a carry covers, and when it refuses, its message says whether to run the carry again or \`/code-review\` again.

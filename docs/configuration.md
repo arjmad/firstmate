@@ -305,7 +305,7 @@ The merge-gate `/code-review` a ship worker runs on its own PR always names a mo
 `<model>` is the first line of gitignored `config/code-review-model`, trimmed, or `claude-opus-5-5` when the file is absent or empty, or holds characters a model id does not.
 The fleet's `fleet-mode` command writes this file (normal: `claude-opus-5-5`, heavy: `claude-fable-5-2`); firstmate only reads it, when it writes a brief, so a change reaches the next brief and not a running worker.
 `bin/fm-dod-lib.sh` (`fm_dod_code_review_model`) owns the read.
-A secondmate home inherits the primary's file like the rest of the inheritable config (`FM_INHERITABLE_CONFIG` in `bin/fm-config-inherit-lib.sh`), so one `fleet-mode` switch reaches every home's next brief.
+A secondmate home inherits the primary's file like the rest of the inheritable config (`FM_INHERITABLE_CONFIG` in `bin/fm-config-inherit-lib.sh`), so a `fleet-mode` switch reaches a secondmate's briefs at its next inheritance convergence (its spawn, the bootstrap secondmate sweep, or `bin/fm-config-push.sh`).
 
 ## Pi supervision branch model and effort (config/supervision-branch-model, config/supervision-branch-effort)
 
