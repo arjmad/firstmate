@@ -551,6 +551,23 @@ test_direct_pr_dod_waits_for_checks_green() {
   pass "direct-PR GitHub DoD waits for checks and reports checks green"
 }
 
+# The review model comes from <config>/code-review-model, defaulting to
+# claude-opus-5-5 when absent, empty, or not a plain model id.
+test_code_review_model_pin() {
+  local cfg="$TMP_ROOT/review-model-cfg" out
+  mkdir -p "$cfg"
+  [ "$(CONFIG=$cfg fm_dod_code_review_model)" = claude-opus-5-5 ] || fail "absent file: review model is not the default"
+  : > "$cfg/code-review-model"
+  [ "$(CONFIG=$cfg fm_dod_code_review_model)" = claude-opus-5-5 ] || fail "empty file: review model is not the default"
+  printf ' claude-fable-5-2 \nignored\n' > "$cfg/code-review-model"
+  [ "$(CONFIG=$cfg fm_dod_code_review_model)" = claude-fable-5-2 ] || fail "file: review model is not its first trimmed line"
+  out=$(CONFIG=$cfg fm_dod_code_review_block direct-PR)
+  assert_contains "$out" 'claude -p --model claude-fable-5-2 "/code-review' "the review command does not carry the pinned model"
+  printf 'x;rm -rf ~\n' > "$cfg/code-review-model"
+  [ "$(CONFIG=$cfg fm_dod_code_review_model)" = claude-opus-5-5 ] || fail "unsafe id: review model is not the default"
+  pass "code review model pin reads config/code-review-model with a claude-opus-5-5 default"
+}
+
 # A PR-based DoD on GitHub hands the worker the code review step before its
 # done report, naming a review script that runs; a forge where
 # /code-review --comment cannot post, and local-only, carry none.
@@ -566,7 +583,7 @@ test_pr_based_dod_carries_the_code_review_step() {
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
     assert_grep 'once from this worktree with the arguments `'"$cli"' args <pr-url>` prints, which are `medium --comment <number>` followed by firstmate'"'"'s merge-gate focus' "$out" "$mode: DoD does not run the review with the focus arguments"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    assert_grep 'a=$('"$cli"' args <pr-url>) && claude -p "/code-review $a"' "$out" "$mode: DoD does not give a harness without the skill its headless path"
+    assert_grep 'a=$('"$cli"' args <pr-url>) && claude -p --model claude-opus-5-5 "/code-review $a"' "$out" "$mode: DoD does not run the review headless on the default pinned model"
     "$cli" args https://github.com/example/repo/pull/3 | grep -q '^medium --comment 3 Merge-gate focus for this review: ' \
       || fail "$mode: the DoD's review script does not print the review arguments"
     assert_grep "$cli record <pr-url>" "$out" "$mode: DoD does not name the record step"
@@ -685,6 +702,7 @@ test_promotion_keeps_the_recorded_base_branch
 # skill name, so a session that registers the skill loads it by name, and must
 # name the skill file as the fallback for a session where the name does not
 # resolve.
+test_code_review_model_pin
 test_worker_role_names_skill_and_fallback_file() {
   local role_file path
   role_file="$TMP_ROOT/worker-role.txt"
