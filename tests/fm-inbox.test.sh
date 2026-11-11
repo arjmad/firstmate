@@ -383,6 +383,24 @@ done
 [ ! -e "$home/state/inbox/.replies/$hid" ] || fail "a help flag was recorded as the reply"
 pass "reply prints usage for -h and --help and records nothing"
 
+# A reply on a note with no request id is still recorded, but says that its
+# sender has no handle to read it back; a note with one says nothing extra.
+home=$(make_home reply-reader)
+mkdir -p "$home/state/inbox"
+printf 'id=1700000000-plainn\nat=2026-01-01T00:00:00Z\nsource=text\nannounce_marker=1\n--\n[nova->arjun] allowlist a host\n' \
+  > "$home/state/inbox/1700000000-plainn.note"
+printf 'id=1700000000-reqidd\nat=2026-01-01T00:00:00Z\nsource=text\nannounce_marker=1\nrequest_id=handoff:nova-x-aa\n--\nfiled\n' \
+  > "$home/state/inbox/1700000000-reqidd.note"
+plain_out=$(run_inbox "$home" reply 1700000000-plainn "done") || fail "a reply on a plain note should be recorded"
+assert_contains "$plain_out" "replied 1700000000-plainn" "the plain reply is recorded"
+assert_contains "$plain_out" "no request id" "the plain reply says nothing can read it back"
+filed_out=$(run_inbox "$home" reply 1700000000-reqidd "done") || fail "a reply on a filed note should be recorded"
+assert_equals "replied 1700000000-reqidd" "$filed_out" "a reply its sender reads back prints only the record"
+plain_json=$(run_inbox "$home" receipts --all-replies | python3 -c 'import json,sys
+print(len(json.load(sys.stdin)["replies"]))')
+assert_equals "2" "$plain_json" "both replies are recorded"
+pass "a reply on a note with no request id says its sender cannot read it back"
+
 # A reply without a valid sequence is malformed: it gets no invented position
 # and receipts say so instead of silently ordering it.
 home=$(make_home malformed-reply)
