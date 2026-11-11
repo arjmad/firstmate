@@ -487,6 +487,14 @@ if [ "$METHOD_SET" -eq 1 ]; then
   METHOD_WORDS=" method=$METHOD"
 fi
 
+# The short-loop floor (bin/fm-dod-lib.sh owns its text) opens every ship and
+# scout Definition of done, except under poteto-mode, which already runs it.
+SHORT_LOOP_BLOCK=
+if [ "$METHOD_SET" -eq 0 ]; then
+  SHORT_LOOP_BLOCK=$(fm_dod_short_loop_block)
+fi
+SCOUT_FLOOR=${SHORT_LOOP_BLOCK:+$SHORT_LOOP_BLOCK$'\n'}
+
 # A ship scaffolded without --method whose task id reads as one of the four
 # standing poteto-mode classes (a bug fix, something slow, a live problem,
 # restructuring shared code) gets a warning once its brief is written, never a
@@ -939,7 +947,7 @@ $WAIT_BLOCK$INBOX_SECTION
 $NOTICED_SECTION
 
 # Definition of done
-Write your findings to \`$DATA/$ID/report.md\`.
+${SCOUT_FLOOR}Write your findings to \`$DATA/$ID/report.md\`.
 That file is required even when your task names another deliverable, such as a findings file elsewhere: teardown refuses without it, so then write it as the standalone summary that points at that deliverable.
 Keep your research notes file (quotes, URLs, dates) in \`$DATA/$ID/\` beside the report, never only in the worktree, and give every \`[read]\` or \`[sub]\` claim in the report its source URL.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
@@ -978,6 +986,7 @@ case "$MODE" in
 esac
 RULE1=$(fm_ship_rule_one "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH") || exit 1
 DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$PR_TEXT") || exit 1
+[ -z "$SHORT_LOOP_BLOCK" ] || DOD=$(printf '%s\n' "$DOD" | fm_dod_with_short_loop_floor) || exit 1
 
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.

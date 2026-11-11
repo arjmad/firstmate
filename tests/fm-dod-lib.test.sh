@@ -21,6 +21,47 @@ write_merge_marker() {  # <state> <id> <provider> <host> <path> <number>
   chmod 600 "$1/$2.pr-poll-merge-notified"
 }
 
+test_short_loop_floor_has_five_steps() {
+  local out
+  out=$(fm_dod_short_loop_block)
+  [ "$(printf '%s\n' "$out" | grep -c '^[1-5]\. ')" -eq 5 ] || fail "short-loop floor must list five numbered steps"
+  assert_contains "$out" "reproduce it before you change code" "short-loop floor lacks the reproduce step"
+  assert_contains "$out" "did not prove" "short-loop floor lacks the honest-gaps step"
+  pass "short-loop floor lists its five steps"
+}
+
+# Promotion demotes a scout-time method to context, so every promoted ship gets
+# the floor once in its new contract, placed before the terminal done steps.
+test_promotion_carries_the_short_loop_floor() {
+  local home id meta out method instr floor_at done_at
+  home="$TMP_ROOT/promote-floor-home"
+  for method in none poteto-mode; do
+    id="promote-floor-$method"
+    meta="$home/state/$id.meta"
+    mkdir -p "$home/state" "$home/data/$id"
+    printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\n' "$id" > "$meta"
+    {
+      printf '# Task\n## Captain%ss intent\nFix the bug.\n\n## Firstmate spec\nReproduce it first.\n' "'"
+      [ "$method" = none ] || printf '\n### Method: poteto-mode\nFollow the entry.\n'
+      printf '\n# Setup\nThis is a SCOUT task: the deliverable is a written report, not a PR.\n'
+    } > "$home/data/$id/brief.md"
+    out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$ROOT/bin/fm-promote.sh" "$id" --mode direct-PR --yolo off 2>&1) \
+      || fail "promoting a $method scout failed: $out"
+    instr="$home/data/$id/ship-instructions.md"
+    [ "$(grep -c '^Short-loop floor' "$instr")" -eq 1 ] || fail "$method: promoted ship must carry the floor exactly once"
+    floor_at=$(grep -n '^Short-loop floor' "$instr" | cut -d: -f1)
+    done_at=$(grep -n 'checks green` to the status file and stop' "$instr" | head -1 | cut -d: -f1)
+    [ -n "$done_at" ] && [ "$floor_at" -lt "$done_at" ] || fail "$method: the floor must come before the done step"
+  done
+  pass "promotion carries the short-loop floor before the done step"
+}
+
+test_floor_placement_refuses_a_dod_without_ship_branch() {
+  printf '# Definition of done\nno branch line\n' | fm_dod_with_short_loop_floor >/dev/null 2>&1 \
+    && fail "placing the floor must refuse a DoD with no Ship branch line"
+  pass "floor placement refuses a DoD with no Ship branch line"
+}
+
 test_scout_done_is_not_gated() {
   local repo wt
   repo="$TMP_ROOT/scout-repo"
@@ -671,6 +712,9 @@ test_direct_pr_dod_writes_the_matt_pr_body() {
   pass "direct-PR DoD has the worker write its PR body with matt-pr's Door and Blast Radius lines"
 }
 
+test_short_loop_floor_has_five_steps
+test_promotion_carries_the_short_loop_floor
+test_floor_placement_refuses_a_dod_without_ship_branch
 test_scout_done_is_not_gated
 test_unpushed_ship_done_is_refused
 test_no_mistakes_prevalidation_done_is_not_gated
