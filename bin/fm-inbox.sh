@@ -69,7 +69,9 @@
 # `reply` is how the primary publishes its actual answer against a note id.
 # Each reply is stamped with a durable per-home sequence, so the receipts cursor
 # is a strict total order and two replies recorded in the same second are both
-# readable. One reply per note: a second one is refused.
+# readable. One reply per note: a second one is refused. A sender finds its
+# reply through the request id it noted under, so a reply on a note with none
+# adds a line saying such a sender cannot find it.
 # `unread` lists the pending notes nobody has acknowledged, oldest first, capped
 # at 10 with a count of the rest; the session-start digest and the bearings
 # snapshot print it so an unacknowledged note keeps resurfacing.
@@ -685,6 +687,11 @@ sys.stdout.write("\n")
 PY
   else
     printf 'replied %s\n' "$id"
+    # Pending first, then handled: drain --ack renames the note in between, so
+    # one of the two always opens.
+    [ -z "$(sed -n '/^--$/q;/^request_id=./p' "$INBOX/$id.note" "$INBOX/handled/$id.note" 2>/dev/null)" ] ||
+      return 0
+    printf '  no request id: a sender that filed none cannot find this reply; if it must reach them, answer through their own lane\n'
   fi
 }
 
