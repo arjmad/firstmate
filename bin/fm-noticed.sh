@@ -32,7 +32,8 @@
 #            skipped: <id> (answered earlier)   a closed idea is never re-asked,
 #                              archived or not
 #          A filed or reopened noticed item joins the unseen list labelled
-#          `noticed`; it and an idea wait for the Monday triage. --now marks a noticed item urgent or
+#          `noticed`, where it waits for the Monday triage; an idea gets no unseen
+#          row, and the Monday sweep reads it from `list idea`. --now marks a noticed item urgent or
 #          doing harm (money, customers, account health, security): filed,
 #          matched or reopened, it joins the unseen list labelled `now`, the
 #          only label the wake drain prints, and an idea refuses it. Once

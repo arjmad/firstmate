@@ -58,11 +58,11 @@ Add two duties to that scout's brief:
 
 - **Noticed re-check.** Re-check every open noticed item (`bin/fm-noticed.sh list noticed`) against live state.
   Firstmate closes one fixed elsewhere with `bin/fm-noticed.sh close <id> --evidence <what fixed it>`, fixes a routine one under Acting first, and carries to the triage any item still broken 7 days or more after its `created` date that needs his call, with the recommended fix.
-- **Ideas.** Check every open idea (`bin/fm-noticed.sh list idea`) against the idea bar below, and return each one that passes as one line.
+- **Ideas.** Check every open idea (`bin/fm-noticed.sh list idea`) filed in the 7 days before the sweep against the idea bar below, and return each one that passes as one line.
 
 The weekly `triage-weekly` backlog row is where the result reaches him.
 Open it with a "Fixed on my own this week" list: one line per `fixed` row of `bin/fm-noticed.sh unseen`, naming the item, what changed and the PR URL.
-Then bring only the items from `unseen` and the sweep that need his call, each passing idea as one line, each with a recommendation and a one-tap answer, and park everything else.
+Then bring only the items from `unseen` and the sweep that need his call, each with a recommendation and a one-tap answer and each passing idea in one line, and park everything else.
 Then mark every unseen item the triage covered, brought or parked, with `bin/fm-noticed.sh shown <id>...`, so next week's unseen list holds only what arrived since.
 
 The Atlas board itself still builds only when he asks.
@@ -83,7 +83,7 @@ They come from his verdicts: he dropped all seven Atlas ideas of 2026-10-26 on q
    Sales moved, agent hours and queue time are not his units: "$4,292/week moved", "~$1,900/week sales" and "~61 h/week of agent queue time" were all dropped.
 6. **Built on what the fleet runs.** Prefer an upstream feature or a tool already in use; a new platform, device or vendor needs a payoff that clears its cost and upkeep.
 
-An idea that fails a test stays filed and unranked; its next sighting may bring the evidence that passes it.
+An idea that fails a test stays filed and unshown; its next sighting may bring the evidence that passes it.
 
 ## Weekly exploration scout
 
