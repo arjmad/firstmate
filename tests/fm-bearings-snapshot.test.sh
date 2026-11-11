@@ -2340,6 +2340,18 @@ test_captain_calls_fold_into_their_groups() {
   Batch: place:office
 
   Owner: fleet
+- [ ] shed-a - Sweep the shed (repo: business) (kind: captain) (since 2026-07-01) (hold: at the shed) (hold-kind: captain) (hold-until: 2099-02-01)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Batch: place:barn
+
+  Owner: arjun
+- [ ] shed-b - Oil the gate (repo: business) (kind: captain) (since 2026-07-01) (hold: at the shed) (hold-kind: captain) (hold-until: 2099-01-15)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Batch: place:barn
+
+  Owner: arjun
 
 ## Done
 EOF2
@@ -2348,8 +2360,8 @@ EOF2
   printf '%s' "$json" | jq -e '
     def dec($id): [.decisions_open[] | select(.id == $id)][0];
     def row($id): [.board.queued[] | select(.id == $id)][0];
-    (.decisions_open | length) == 5
-      and (.decisions_open | map(.id)) == ["place:office","board:review-1111","quick-c","hands-d","solo-e"]
+    (.decisions_open | length) == 6
+      and (.decisions_open | map(.id)) == ["place:office","board:review-1111","quick-c","hands-d","solo-e","place:barn"]
       and (dec("place:office") | .verb == "captain-batch" and .class == "place" and .key == "place:office"
            and (.members | map(.id)) == ["office-a","office-b"] and (.summary | startswith("2 calls: ")))
       and (dec("board:review-1111") | .class == "board" and (.members | length) == 2)
@@ -2360,9 +2372,20 @@ EOF2
       and (row("quick-c").group == "quick")
       and (row("fleet-f") | .batch == "place:office" and .group == null)
       and (.board.groups == [
-            {batch:"board:review-1111", group:"board", owner:"(main)", ids:["board-a","board-b"], count:2, all_recommended:true},
-            {batch:"place:office", group:"place", owner:"(main)", ids:["office-a","office-b"], count:2, all_recommended:false}])
+            {batch:"board:review-1111", group:"board", owner:"(main)", ids:["board-a","board-b"], count:2, all_recommended:true, back:null},
+            {batch:"place:barn", group:"place", owner:"(main)", ids:["shed-a","shed-b"], count:2, all_recommended:false, back:"2099-01-15"},
+            {batch:"place:office", group:"place", owner:"(main)", ids:["office-a","office-b"], count:2, all_recommended:false, back:null}])
   ' >/dev/null || fail "captain calls did not fold into their groups: $json"
+  # The default view folds before it filters: a group with one live member
+  # shows whole, and a group no member of which is live stays out.
+  sed -i 's/^- \[ \] office-b - Post the cheque (repo: business) (kind: captain) (since 2026-07-01) (hold: at the office) (hold-kind: captain)$/& (hold-until: 2099-03-01)/' "$home/data/backlog.md"
+  json=$(FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=100000 run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    ([.decisions_open[] | select(.id == "place:office")][0] | .verb == "captain-batch" and (.members | map(.id)) == ["office-a","office-b"])
+      and ([.decisions_open[] | select(.id == "office-a" or .id == "office-b")] | length) == 0
+      and ([.decisions_open[] | select(.id == "place:barn" or .id == "shed-a" or .id == "shed-b")] | length) == 0
+      and ([.decisions_open[] | has("live")] | any | not)
+  ' >/dev/null || fail "the default view showed a group member alone or a group with no live member: $json"
   pass "captain calls fold into their groups from structured fields, and a group of one stays its own row"
 }
 

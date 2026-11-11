@@ -250,6 +250,13 @@ test_a_routine_item_is_never_held_for_him() {
   assert_equals "reopened: noticed-dead-link" "$out" "a routine item back after its drop was not reopened"
   assert_not_contains "$(tasks "$home" show noticed-dead-link --full)" "held: yes" "a reopened routine item was held"
   assert_equals "" "$(noticed "$home" unseen)" "a reopened routine item still reads as dropped"
+  noticed "$home" file noticed held-once --title "Held once" --why "first" --from t1 >/dev/null
+  noticed "$home" close noticed-held-once --evidence "settled" >/dev/null
+  out=$(noticed "$home" file noticed held-once --title "Held once" --why "back" --from t2 --routine) \
+    || fail "a held item back as routine could not be reopened: $out"
+  assert_equals "reopened: noticed-held-once" "$out" "a held item back as routine was not reopened"
+  assert_not_contains "$(tasks "$home" show noticed-held-once --full)" "held: yes" "a routine recurrence kept its old captain hold"
+  assert_equals fleet "$(tasks "$home" owner noticed-held-once)" "a routine recurrence is not the fleet's"
   pass "a routine item is the fleet's own work, never held for him, and reaches him only once fixed or dropped"
 }
 

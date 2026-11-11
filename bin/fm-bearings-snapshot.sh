@@ -200,8 +200,9 @@ in_flight waits_on is "captain" only when the worker's still-open blocker or
   visible, apart from the public-followup obligations tasks-axi files itself,
   which are always the fleet's.
   board.groups lists each group of two or more captain rows sharing a home and
-  a Batch: tag: batch, group, owner, ids, count, and all_recommended (every
-  member records a recommended choice).
+  a Batch: tag: batch, group, owner, ids, count, all_recommended (every
+  member records a recommended choice), and back, the earliest back-on date
+  when every member is moved to a later date, else null.
   board.prune is the weekly backlog prune card's input: due (its weekly
   slot is open and a candidate exists), slot, open, snoozed_until, age_days,
   the candidates bin/fm-backlog-prune-lib.sh selects (oldest touch first, each
@@ -484,6 +485,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
     else "hands" end;
   # Fold the decision rows sharing one owner and Batch: tag into one group row
   # at the place of its first member; a group of one stays that member row.
+  # It runs before the live filter, so a group shows whole while any member
+  # is live, and never as one member alone.
   def fold_groups:
     . as $rows
     | reduce range(0; length) as $i ({out:[], at:{}};
@@ -505,7 +508,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                summary:(("\($n) calls: " + ([.members[].summary] | join("; "))) | trunc(90)),
                question:([.members[].question] | join("\n")),
                owner, batch, class,
-               members:[.members[] | {id, key, summary, question}]}
+               members:[.members[] | {id, key, summary, question}],
+               live:any(.members[]; .live)}
           end);
   def projected_deferred_hold:
     .hold_bucket != null and .hold_bucket != "live";
@@ -649,17 +653,16 @@ MODEL=$(printf '%s' "$SNAP" | jq \
   | ([ .backlog.records[]
          | . as $record
          | select(.structured and .hold_bucket != null)
-         | select(($all_decisions == 1) or live_captain_call)
-         | {id,key:.id,verb:"captain-hold",
+         | {id,key:.id,verb:"captain-hold",live:live_captain_call,
             summary:hold_summary(.title; .hold_reason),
             question:(.title + ": " + .hold_reason),owner:"(main)",
             batch:(.batch // null), class:call_class(hold_choices)} ]
      + [ (.secondmate_current.records // [])[] as $m
          | ([ $m.decisions_open[]?
               | select(.source == "backlog" and .verb == "captain-hold")
-              | select(($all_decisions == 1) or live_captain_call)
+              | live_captain_call as $live
               | ({hold_kind:"captain", hold_reason:(.reason // "")} | hold_choices) as $c
-              | {id:($m.id + "/" + .id),key,verb,
+              | {id:($m.id + "/" + .id),key,verb,live:$live,
                  summary:hold_summary((.summary // .id);
                                       (.reason // "captain decision pending")),
                  question:(.question // ((.summary // .id) + ": " + (.reason // "captain decision pending"))),owner:$m.id,
@@ -671,12 +674,13 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                             | select(.source == "backlog" and .verb == "captain-hold")
                             | .id]
                          | index($id) | not)
-                | {id:($m.id + "/" + .id),key:.id,verb:"captain-hold",
+                | {id:($m.id + "/" + .id),key:.id,verb:"captain-hold",live:live_captain_call,
                    summary:hold_summary((.title // .id);
                                         (.hold_reason // "captain decision pending")),
                    question:(.question // ((.title // .id) + ": " + (.hold_reason // "captain decision pending"))),owner:$m.id,
                    batch:(.batch // null), class:call_class(hold_choices)} ])[] ]
-     | fold_groups) as $decisions_all
+     | fold_groups
+     | map(select(($all_decisions == 1) or .live) | del(.live))) as $decisions_all
   | ([ .backlog.records[]
          | . as $record
          | select(.structured and projected_deferred_hold) ]
@@ -827,7 +831,9 @@ MODEL=$(printf '%s' "$SNAP" | jq \
          | map(select(length > 1)
                | {batch:.[0].batch, group:.[0].group, owner:.[0].owner,
                   ids:map(.id), count:length,
-                  all_recommended:all(.[]; .choices.recommended != null)}))
+                  all_recommended:all(.[]; .choices.recommended != null),
+                  back:(if all(.[]; .hold_until != null and .hold_until > $today)
+                        then (map(.hold_until) | min) else null end)}))
      else . end)
   | . + (if $f_paths then {paths:[ $snap.tasks[] | {id, worktree:(.paths.worktree.path // "-"), home:(.paths.home.path // "-"), status:.paths.status_log.path, report:.paths.report.path} ]} else {} end)
   | . + (if $f_actions then {actions:[ $snap.tasks[] | {id, watch:(.actions.watch // .actions.send // "-"), steer:(.actions.steer // .actions.send // "-")} ]} else {} end)
