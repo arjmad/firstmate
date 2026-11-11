@@ -40,7 +40,7 @@ SH
 cat > "$FAKEBIN/claude" <<'SH'
 #!/usr/bin/env bash
 set -u
-printf 'claude %s ccd=%s key=%s\n' "$*" "${CLAUDE_CONFIG_DIR-<unset>}" "${ANTHROPIC_API_KEY-<unset>}" >> "${FAKE_LOG:?}"
+printf 'claude %s ccd=%s key=%s cwd=%s\n' "$*" "${CLAUDE_CONFIG_DIR-<unset>}" "${ANTHROPIC_API_KEY-<unset>}" "$PWD" >> "${FAKE_LOG:?}"
 [ "${FAKE_CLAUDE_FAIL:-0}" = 1 ] && exit 1
 [ "$*" = "-p /usage" ] || exit 2
 cat <<'OUT'
@@ -74,6 +74,7 @@ assert_equals '[{"scope":"all_models","pct":78},{"scope":"model:fable","pct":69}
 assert_not_contains "$out" '"effectivePercentRemaining":14' "the personal account's 14% never reaches dispatch"
 assert_contains "$(cat "$LOG")" "quota-axi --json ccd=$PIN_ROOT key=<unset>" "quota-axi reads the pinned root with ranked credentials shed"
 assert_contains "$(cat "$LOG")" "claude -p /usage ccd=$PIN_ROOT key=<unset>" "claude /usage reads the pinned root with ranked credentials shed"
+assert_equals '1' "$(grep -c '^claude -p /usage .* cwd=/$' "$LOG")" "claude /usage runs from / so no project SessionStart hook fires"
 assert_equals '50' "$(printf '%s' "$out" | jq '.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[0].effectivePercentRemaining')" "other providers are untouched"
 assert_equals 'null' "$(printf '%s' "$out" | jq '[.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[].selection] | first')" "no spendPriority is invented"
 # shellcheck source=bin/fm-quota-axi-lib.sh

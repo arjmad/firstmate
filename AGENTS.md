@@ -134,7 +134,7 @@ Firstmate never writes a project's `AGENTS.md` directly.
 A crewmate edits a project's `AGENTS.md` or `CLAUDE.md` only to correct factually wrong information, including information its own change made wrong, and never adds knowledge because it is missing - additions are a deliberate human choice because every entry taxes every agent session of that project.
 A correction edits only the wrong text and never runs `bin/fm-ensure-agents-md.sh`, a manual project-initialization utility whose inserted sections and created pointer are themselves additions.
 Keep fleet delivery posture and captain-private strategy out of project memory.
-When the captain invokes `/stow`, load the `stow` skill for its memory curation, knowledge routing, and persistence of the open work records this session is holding; it files and corrects only the open work that session is holding, and never reconciles the backlog against repository or PR reality.
+When the captain invokes `/stow`, load the `stow` skill; it files and corrects only the open work that session is holding, and never reconciles the backlog against repository or PR reality.
 
 ## 7. Task lifecycle
 
@@ -212,7 +212,6 @@ Translate internal status and implementation terminology into what the captain n
 On every harness, whenever a turn calls for a captain-facing reply, its **final response message** must stand alone with all key information from the whole turn: outcomes, consequences, any decision or approval needed, and relevant URLs or identifiers, even if already stated in a mid-turn or pre-tool message.
 The captain may see only the final message; repeat the essentials there, not the full transcript or anchor.
 This final-message rule is a visibility recap: it may list all outstanding decisions and their URLs, but it does not override, replace, or combine any separate per-decision ask messages required by a harness's no-batching rule.
-Protocol regression example: reporting a completed fix and its recorded PR URL mid-turn, then using tools and ending with only `Awaiting your merge call.`, is incomplete; the final message must name the completed fix, include that same full PR URL, and ask whether to merge.
 Read worker reports as evidence rather than forwarding raw logs or status labels.
 Private evidence reports may retain exact paths, identifiers, and diagnostic output.
 
@@ -244,7 +243,7 @@ Reach the captain immediately for:
 
 Before filing, holding, updating, or handing off work, read [Backlog contract](docs/task-lifecycle.md#backlog-contract).
 Record work in its owning home's backlog, using `bin/fm-tasks-axi.sh` or the configured manual backend; secondmates themselves are not work items.
-Hold decisions through `bin/fm-captain-hold.sh`, and load `captain-hold-lifecycle` for investigation/visual-review decisions.
+Hold decisions through `bin/fm-captain-hold.sh`.
 File before dispatch; spawn and teardown own automatic state transitions where configured.
 Re-evaluate queued work after teardown, heartbeat, and a recorded PR-ready handoff on a capacity-capped project, respecting unresolved dependencies, time gates, and project capacity.
 Keep notes current and reusable knowledge with section 6's owners.
@@ -261,8 +260,7 @@ Load `secondmate-provisioning` for charter briefs and preserve their idle-by-def
 
 Firstmate's shared instruction surface reaches running homes only after it lands on the default branch and those homes fast-forward.
 Only `AGENTS.md`, `bin/`, and `.agents/skills/` are loaded by a running firstmate; public `skills/` is an installer-facing surface.
-When the captain invokes `/updatefirstmate` or asks to update firstmate, load the `/updatefirstmate` skill.
-The skill owns the guarded fleet update and restart procedure; it never touches anything under `projects/`.
+The `/updatefirstmate` skill owns the guarded fleet update and restart procedure; it never touches anything under `projects/`.
 
 ## 13. Agent-only reference skills
 

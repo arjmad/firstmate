@@ -65,10 +65,12 @@ if [ -n "$root" ]; then pinned+=("CLAUDE_CONFIG_DIR=$root"); else pinned+=(-u CL
 
 # Prints one JSON object of remaining percentages from `claude -p /usage`:
 # {"session":N,"week":N,"models":{"<name>":N}}; returns 1 when unreadable.
+# It runs from / so a caller inside a firstmate home does not fire that
+# project's SessionStart hook, which would build a full digest for one probe.
 claude_usage() {
   local text
   command -v claude >/dev/null 2>&1 || return 1
-  text=$(fm_run_timed "$FM_QUOTA_CLAUDE_USAGE_SECONDS" "${pinned[@]}" \
+  text=$(cd / && fm_run_timed "$FM_QUOTA_CLAUDE_USAGE_SECONDS" "${pinned[@]}" \
     claude -p /usage 2>/dev/null </dev/null) || return 1
   printf '%s\n' "$text" | perl -ne '
     BEGIN { %m = () }
