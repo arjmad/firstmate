@@ -82,6 +82,14 @@
 set -u
 export LC_ALL=C
 
+# --help answers before any library is sourced: fm-wake-lib.sh creates state/.
+case "${1:-}" in
+  -h | --help)
+    awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"
+    exit 0
+    ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
@@ -647,7 +655,6 @@ case "${1:-}" in
     shift
     cmd_waiter "$@"
     ;;
-  -h | --help) usage ;;
   *)
     usage >&2
     exit 2
