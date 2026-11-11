@@ -49,15 +49,18 @@
 # task lock (state/.task-set.lock, state/.spawn-*.lock, state/.control-*.lock);
 # this move's handover is in progress or done (state/.account-drain-handover;
 # one called off or failed may be retried); or no
-# handover_command is configured (it then prints what to run by hand). Then it
+# handover_command is configured (it then prints what to run by hand). An
+# away, quiet or busy-lock refusal, or a waiter that stands down for one,
+# clears the announcement, so the check raises the move again once it
+# clears. Then it
 # starts one detached waiter, which takes the task-set lock (role
 # account-handover) so no spawn or forced teardown starts behind it, and sends
 # the captain one line through notify_command naming the account to pick in
 # the Claude app. A failed notify aborts the waiter and the helm keeps
 # running. The waiter waits a grace period (FM_ACCOUNT_DRAIN_GRACE, default
 # 30 seconds) so the helm can end its turn, rechecks the lock holder, the
-# away or quiet record and the task locks, sends SIGTERM to the lock holder's anchor pid, waits for it to
-# exit (FM_ACCOUNT_DRAIN_EXIT_WAIT, default 60 seconds; it never escalates to
+# away or quiet record and the task locks, sends SIGTERM to the lock
+# holder's anchor pid (a POSIX pid only), waits for it to exit (FM_ACCOUNT_DRAIN_EXIT_WAIT, default 60 seconds; it never escalates to
 # SIGKILL), releases the task-set lock and runs handover_command, which owns
 # the fresh start and its own failure report (the fleet's helm-autostart pages
 # when no helm takes the lock). Workers keep running: the fresh helm's
@@ -163,7 +166,7 @@ account_name() {
   local -a words
   if configured; then
     while IFS= read -r line || [ -n "$line" ]; do
-      case "$line" in [[:space:]]*'#'* | '#'*) continue ;; esac
+      case "${line#"${line%%[![:space:]]*}"}" in '#'*) continue ;; esac
       key=${line%%=*}
       [ "$key" != "$line" ] || continue
       key=$(printf '%s' "$key" | tr -d '[:space:]')
@@ -409,8 +412,9 @@ cmd_both_low() {
   jq -e '.both_low == true' <<<"$json" >/dev/null 2>&1 || return 1
   jq -r --argjson now "$(date +%s)" '
     "both Claude accounts are at or under the floor (drain file \($now - .t)s old): "
-    + ([(.resets // {}) | to_entries[] | select(.value | type == "number")
-        | "\(.key) resets \(.value | floor | todate)"] | if length == 0 then "no reset times" else join(", ") end)' <<<"$json"
+    + ([(.resets | if type == "object" then to_entries[] else empty end) | select(.value | type == "number")
+        | "\(.key) resets \(.value | floor | todate)"] | if length == 0 then "no reset times" else join(", ") end)' <<<"$json" \
+    || return 1
   printf 'spill: --harness %s --model %s --effort %s\n' "$harness" "$model" "$effort"
 }
 
@@ -420,10 +424,18 @@ cmd_handover() {
   fm_session_lock_owned_by_self "$STATE" \
     || refuse "this process is not inside the helm that holds the session lock; nothing changed"
   read_session || refuse "no session record names the current lock holder; nothing changed (bin/fm-session-start.sh records it)"
+  case "$SESSION_PID" in
+    '' | *[!0-9]*) refuse "the session lock names a non-POSIX pid ($SESSION_PID), which this handover cannot end; nothing changed" ;;
+  esac
   move_pending || refuse "no account move is pending: this helm and the launch line name the same account"
-  away_or_quiet && refuse "an away or quiet record exists (state/.afk-contract or state/.afk); the handover waits until that mode ends, and this helm keeps running"
+  # An away/quiet or busy refusal clears the announcement, so the check raises
+  # the move again once that condition clears.
+  away_or_quiet && { rm -f -- "$ANNOUNCED_RECORD"; refuse "an away or quiet record exists (state/.afk-contract or state/.afk); the handover waits until that mode ends, and this helm keeps running"; }
   busy=$(busy_task_locks)
-  [ -z "$busy" ] || refuse "a spawn, teardown or merge holds a task lock ($(printf '%s' "$busy" | tr '\n' ' ' | sed 's/ $//')); run handover again once it finishes"
+  if [ -n "$busy" ]; then
+    rm -f -- "$ANNOUNCED_RECORD"
+    refuse "a spawn, teardown or merge holds a task lock ($(printf '%s' "$busy" | tr '\n' ' ' | sed 's/ $//')); the check raises the move again"
+  fi
   key="$SESSION_PID $LINE_STORE"
   # One handover per move: one in progress or done refuses; one that was
   # called off or failed before a fresh helm started may be retried.
@@ -465,6 +477,7 @@ t=$(date +%s)" || refuse "could not write $HANDOVER_RECORD; nothing changed"
   done
   if [ "$status" != armed ]; then
     : > "$HANDOVER_ABORT"
+    [ "$status" != starting ] || waiter_status "$key" "failed (the waiter did not arm)" || true
     refuse "the handover waiter did not arm (status: ${status:-none}; see state/account-drain-handover.log), so this helm keeps running on $from_label"
   fi
 
@@ -478,6 +491,10 @@ t=$(date +%s)" || refuse "could not write $HANDOVER_RECORD; nothing changed"
       refuse "the notify_command failed, so the handover was called off and this helm keeps running on $from_label"
       ;;
   esac
+  [ "$(record_field "$HANDOVER_RECORD" status)" = armed ] || {
+    : > "$HANDOVER_ABORT"
+    refuse "the handover waiter stood down before the go ($(record_field "$HANDOVER_RECORD" status)), so this helm keeps running on $from_label"
+  }
   waiter_status "$key" go || {
     : > "$HANDOVER_ABORT"
     refuse "could not release the handover waiter, so this helm keeps running on $from_label"
@@ -538,6 +555,7 @@ cmd_waiter() {
   if away_or_quiet; then
     printf '%s waiter: an away or quiet record appeared; nothing ended\n' "$(date -u +%FT%TZ)"
     waiter_status "$key" aborted
+    rm -f -- "$ANNOUNCED_RECORD"
     notify "Firstmate helm: the move to $(account_label "$to") waits because away or quiet mode started; the helm keeps running on $(account_label "$from")." || true
     exit 0
   fi
@@ -545,6 +563,7 @@ cmd_waiter() {
   if [ -n "$busy" ]; then
     printf '%s waiter: task locks are held (%s); nothing ended\n' "$(date -u +%FT%TZ)" "$(printf '%s' "$busy" | tr '\n' ' ')"
     waiter_status "$key" failed
+    rm -f -- "$ANNOUNCED_RECORD"
     notify "Firstmate helm: the move to $(account_label "$to") stopped because a spawn, teardown or merge started; the helm keeps running on $(account_label "$from")." || true
     exit 1
   fi

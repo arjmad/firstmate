@@ -240,6 +240,11 @@ test_both_low_answers() {
   assert_contains "$out" "ecomills resets 2026-11-18T01:00:00Z" "the answer must name the ecomills reset"
   assert_contains "$out" "main resets 2026-11-19T01:00:00Z" "the answer must name the main reset"
   assert_contains "$out" "spill: --harness pi --model openai-codex/gpt-6.1-sol --effort high" "the answer must name the spill"
+  jq -cn --argjson t "$(date +%s)" '{version: 1, t: $t, both_low: true, resets: "soon"}' > "$home/drain.json"
+  out=$(run_drain "$home" both-low)
+  assert_contains "$(printf '%s\n' "$out" | sed -n 1p)" "both Claude accounts are at or under the floor" \
+    "a resets field of another shape must still lead with the reason line"
+  assert_contains "$out" "no reset times" "and say no reset times were given"
   drain "$home" 4000 true
   rc=0
   run_drain "$home" both-low >/dev/null 2>&1 || rc=$?
@@ -308,10 +313,13 @@ test_handover_refusals_leave_the_helm_running() {
   printf '#!/bin/sh\nexit 0\n' > "$TMP_ROOT/refuse-start"
   chmod +x "$TMP_ROOT/refuse-start"
   printf 'handover_command=%s\n' "$TMP_ROOT/refuse-start" >> "$home/config/account-drain"
+  assert_contains "$(run_drain "$home" check)" "account-moved:" "the move must be announced"
+  assert_equals "" "$(run_drain "$home" check)" "and only once"
   mkdir -p "$home/state/.control-busy-task.lock"
   printf '%s\n' "$$" > "$home/state/.control-busy-task.lock/pid"
   helm_handover "$dir"
   assert_grep "holds a task lock (.control-busy-task.lock)" "$dir/handover.out" "a held task lock must refuse the handover: $(cat "$dir/handover.out")"
+  assert_contains "$(run_drain "$home" check)" "account-moved:" "a busy refusal must let the check raise the move again"
   rm -rf "$home/state/.control-busy-task.lock"
   : > "$home/state/.afk"
   helm_handover "$dir"
@@ -421,6 +429,8 @@ test_waiter_stands_down_when_away_mode_starts_in_the_grace() {
   wait_for_file_line "$home/state/.account-drain-handover" "status=aborted" 100 \
     || fail "the waiter must stand down when away mode starts during its grace: $(cat "$home/state/account-drain-handover.log")"
   kill -0 "$pid" 2>/dev/null || fail "away mode starting in the grace must leave the helm running"
+  rm -f "$home/state/.afk-contract"
+  assert_contains "$(run_drain "$home" check)" "account-moved:" "once away mode ends, the check must raise the move again"
   cleanup_helms
   pass "fm-account-drain: the waiter stands down when away mode starts during its grace"
 }

@@ -3762,11 +3762,13 @@ if [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ] && [ -f "$CONFIG/crew-disp
 fi
 
 # Both Claude accounts low (bin/fm-account-drain.sh owns the policy and its
-# inputs): a Claude ship or scout, fresh or relaunched, is refused before any
+# inputs): a fresh Claude ship or scout is refused before any
 # endpoint, worktree, or record exists, naming both reset times and the home's
 # spill profile; the dispatch reference routes the task there. No answer from
 # that script (unconfigured, spill off, no fresh drain file) changes nothing.
-if [ "$KIND" != secondmate ] && [ "$HARNESS" = claude ] \
+# A relaunch is exempt: it recovers a worker that already runs on its
+# recorded harness, and refusing it would strand that task.
+if [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ] && [ "$HARNESS" = claude ] \
   && both_low=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
     "$FM_ROOT/bin/fm-account-drain.sh" both-low 2>/dev/null); then
   echo "error: spawn refused - $(printf '%s\n' "$both_low" | sed -n 1p); start task $ID on the spill profile instead: $(printf '%s\n' "$both_low" | sed -n 's/^spill: //p') --dispatch-override 'both Claude accounts low (bin/fm-account-drain.sh both-low)'" >&2
