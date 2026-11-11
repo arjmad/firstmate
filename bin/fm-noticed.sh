@@ -255,11 +255,11 @@ cmd_file() {
     fi
     "$TASKS" reopen "$id" >/dev/null || { echo "fm-noticed: could not reopen $id" >&2; exit 1; }
     if [ "$routine" = 1 ]; then
-      # A reopen restores the hold it closed with; a routine recurrence is
-      # the fleet's, so lift it before naming the fleet.
-      if [ "$(shown_field "$("$TASKS" show "$id" 2>/dev/null)" held)" = yes ]; then
-        "$TASKS" unhold "$id" >/dev/null || { echo "fm-noticed: $id is reopened but still held; unhold it before anything else" >&2; exit 1; }
-      fi
+      # A reopen restores the hold it closed with, even one whose date has
+      # passed; a routine recurrence is the fleet's, so lift it first.
+      case "$(shown_field "$("$TASKS" show "$id" 2>/dev/null)" hold_kind)" in '' | - | null) ;; *)
+        "$TASKS" unhold "$id" >/dev/null || { echo "fm-noticed: $id is reopened but still held; unhold it before anything else" >&2; exit 1; } ;;
+      esac
       "$TASKS" owner "$id" fleet >/dev/null \
         || { echo "fm-noticed: $id is reopened but its owner could not be set to the fleet" >&2; exit 1; }
       append_body "$id" "Back $TODAY, seen by $from: ${evidence:-$why}" \

@@ -668,7 +668,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                  question:(.question // ((.summary // .id) + ": " + (.reason // "captain decision pending"))),owner:$m.id,
                  batch:(.batch // null), class:call_class($c)} ]
             + [ $m.queued[]?
-                | select($all_decisions == 1 and .hold_kind == "captain")
+                | select(.hold_kind == "captain")
                 | select(.id as $id
                          | [$m.decisions_open[]?
                             | select(.source == "backlog" and .verb == "captain-hold")

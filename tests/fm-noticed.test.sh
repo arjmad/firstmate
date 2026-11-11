@@ -257,6 +257,15 @@ test_a_routine_item_is_never_held_for_him() {
   assert_equals "reopened: noticed-held-once" "$out" "a held item back as routine was not reopened"
   assert_not_contains "$(tasks "$home" show noticed-held-once --full)" "held: yes" "a routine recurrence kept its old captain hold"
   assert_equals fleet "$(tasks "$home" owner noticed-held-once)" "a routine recurrence is not the fleet's"
+  # A dated hold whose date has passed reads unheld but still carries its kind.
+  noticed "$home" file noticed held-dated --title "Held dated" --why "first" --from t1 >/dev/null
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-captain-hold.sh" hold noticed-held-dated --reason "later" --until 2026-01-01 >/dev/null \
+    || fail "could not date the hold"
+  noticed "$home" close noticed-held-dated --evidence "settled" >/dev/null
+  out=$(noticed "$home" file noticed held-dated --title "Held dated" --why "back" --from t2 --routine) \
+    || fail "a past-dated held item back as routine could not be reopened: $out"
+  assert_equals fleet "$(tasks "$home" owner noticed-held-dated)" "a past-dated routine recurrence is not the fleet's"
   pass "a routine item is the fleet's own work, never held for him, and reaches him only once fixed or dropped"
 }
 

@@ -3795,9 +3795,40 @@ test_supplied_secondmate_questions_and_legacy_optional_fields() {
   pass "supplied secondmate questions preserve text with missing optional fields"
 }
 
+# A secondmate home's group folds the same way: its live member and its dated
+# sibling show as one group row by default, never the live member alone.
+test_secondmate_group_never_shows_one_member_alone() {
+  local home remote fakebin json
+  home=$(make_home mate-group-parent)
+  make_remote_ledger_fleet "$home" 1
+  remote="$TMP_ROOT/remote-ledger-home-1"
+  jq '
+    .decisions_open = [
+      {id:"shelf-a",key:"shelf-a",verb:"captain-hold",source:"backlog",hold_bucket:"live",
+       summary:"Shelf A",reason:"at the office",batch:"place:office"}]
+    | .queued = [
+      {id:"shelf-a",title:"Shelf A",hold_kind:"captain",hold_bucket:"live",hold_reason:"at the office",batch:"place:office"},
+      {id:"shelf-b",title:"Shelf B",hold_kind:"captain",hold_bucket:"dated",hold_until:"2099-01-01",
+       hold_reason:"at the office",batch:"place:office"}]
+    | .counts.decisions_open = 1 | .counts.queued = 2
+  ' "$remote/state/home-summary.json" > "$remote/state/full-summary.json"
+  mv "$remote/state/full-summary.json" "$remote/state/home-summary.json"
+  fakebin=$(make_remote_ledger_ssh "$home")
+  json=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_SSH_BIN="$fakebin/fake-ssh" \
+    FM_TEST_LEDGER_CALL_LOG="$home/ledger-calls.log" FM_SNAPSHOT_NOW_EPOCH=1000 \
+    "$BEARINGS" --json)
+  printf '%s' "$json" | jq -e '
+    [.decisions_open[] | select(.owner == "ledger-1")] as $rows
+    | ($rows | map(.id)) == ["ledger-1/place:office"]
+      and ($rows[0] | .verb == "captain-batch" and (.members | map(.id)) == ["ledger-1/shelf-a", "ledger-1/shelf-b"])
+  ' >/dev/null || fail "a secondmate group member showed alone: $json"
+  pass "a secondmate group folds whole by default, and never shows one member alone"
+}
+
 fm_test_run \
   test_full_captain_questions_survive_local_and_secondmate_projection \
   test_supplied_secondmate_questions_and_legacy_optional_fields \
+  test_secondmate_group_never_shows_one_member_alone \
   test_task_teardown_during_metadata_capture_does_not_abort_snapshot \
   test_current_state_uses_captured_status_observation \
   test_relaunched_task_does_not_inherit_reused_endpoint_state \
