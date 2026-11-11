@@ -2678,6 +2678,45 @@ That writes `state/usage-warner.check.sh` and binds its bytes with `bin/fm-check
 `arm` refuses on any platform other than macOS.
 `bin/fm-usage-warner.sh disarm` removes the shim, its trust binding, and the de-dupe record (`state/.usage-warner`).
 
+## Account drain (config/account-drain)
+
+`config/account-drain` is an optional local, gitignored file for a home whose helm and Claude workers draw on two Claude accounts that an outside quota watch moves between.
+It is opt-in: with no file, an unconfigured home sees no behaviour change.
+It turns on two things: the helm hands itself over when its launch line (`config/primary-harness`) moved to another account, and, when its spill switch is on, Claude ships and scouts stop while both accounts are low.
+This section is the single owner of the schema; [`bin/fm-account-drain.sh`](../bin/fm-account-drain.sh) owns the check, handover, and both-low mechanics.
+
+One `key=value` per line; `#` starts a comment line; the last line for a key wins.
+
+| Key | Value | Effect when unset |
+| --- | --- | --- |
+| `drain_file` | Path (leading `~/` allowed) of the quota watch's JSON drain file | No both-low answer, and no second input to the move check |
+| `account.<name>` | Space-separated Claude stores that are account `<name>`: `ordinary` (no `CLAUDE_CONFIG_DIR`) or a store path | Accounts are named by their store |
+| `label.<name>` | What the captain picks in the Claude app for `<name>`, such as its sign-in address | The account name |
+| `handover_command` | The command that starts a fresh helm once the session lock frees, such as the host's existing helm autostart | The move is reported with the manual restart, and nothing ends |
+| `notify_command` | A command that takes one message as its last argument and sends it to the captain | The helm relays the line in chat |
+| `handover_marker` | Path of the capability marker the quota watch reads | No marker is written |
+| `both_low_spill` | `off`, or `<harness> <model> <effort>` for ships and scouts while both accounts are low | `off` |
+
+The drain file is read only when its `version` is 1 and its `t` is within 30 minutes; an absent, stale, or unreadable one changes nothing.
+Its `both_low`, `resets`, and `launch_line_account` fields are the ones read.
+
+Arm the move check once per home with `bin/fm-account-drain.sh arm`, which writes and registers `state/account-drain.check.sh`; each locked session start records the helm's own account in `state/.account-drain-session`.
+The check raises one `account-moved` check wake per move and tells the helm to run `/stow` and then `bin/fm-account-drain.sh handover` at its next idle moment.
+`bin/fm-account-drain.sh disarm` removes the shim, its trust binding, and the announcement record.
+
+Example:
+
+```
+drain_file=~/.local/state/quota-watch/drain.json
+account.ecomills=~/.claude-ecomills
+account.main=ordinary ~/.claude
+label.ecomills=arjun@ecomills.com
+handover_command=~/nix/bin/helm-autostart
+notify_command=~/code/jobs/launchers/notify.sh
+handover_marker=~/.local/state/firstmate/helm-handover.json
+both_low_spill=off
+```
+
 ## Mail plane (.env)
 
 The mail plane (bin/fm-mail.sh) reads unseen IMAP messages and sends one SMTP message.
