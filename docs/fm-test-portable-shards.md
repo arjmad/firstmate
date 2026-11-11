@@ -63,7 +63,7 @@ The 2026-11-09 sync added upstream's new serial scripts at their upstream hints 
 
 ## Parallel lanes
 
-The two parallel lanes use longest-processing-time assignment over those hints, and each CI lane runs its members two at a time with `--jobs 2`, longest first.
+The two parallel lanes use longest-processing-time assignment over those hints, and each CI lane runs its members two at a time with `--jobs 2`.
 Every member is proven isolated, so two-wide execution changes only the lane's wall time; a lane's expected duration is the larger of its longest hint and about half its hint sum.
 On 2026-11-11 every parallel hint took the slowest successful `duration_ms` from the parallel artifacts of eight green fork runs, from [42913949765](https://github.com/arjmad/firstmate/actions/runs/42913949765) to [43074988852](https://github.com/arjmad/firstmate/actions/runs/43074988852), because the lanes then ran their members one at a time for 21 to 30 minutes against the 30-minute cap.
 [`tests/fm-pi-primary-types.test.sh`](../tests/fm-pi-primary-types.test.sh) owns its typecheck dependencies independently of the lane's installed Pi runtime.
