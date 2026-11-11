@@ -27,11 +27,20 @@
 #   Due: YYYY-MM-DD
 #   Batch: <tag>
 #
-# A Batch tag (a lowercase slug such as `office`) groups rows the captain moves
-# together; bin/fm-captain-hold.sh `defer-batch` defers every captain call
-# carrying it. A reader takes the last matching line, a writer replaces only
-# that line, and a body that names none has none. Startup and board readers
-# outside this file depend on this exact `Due:` format.
+# A Batch tag groups rows the captain works off together, and names its group
+# by structured fields only (fork patch,
+# docs/fork-decisions/2026-11-11-calls-grouped-by-what-it-takes.md):
+#   Batch: place:<name>      an errand list for one place, such as
+#                            `place:office`; <name> is a lowercase slug
+#   Batch: board:<task-id>   a member of the board that task id carries
+# A bare lowercase slug (`Batch: office`, written before the prefixes) still
+# reads, and counts as a place list. fm_backlog_batch_class owns the group
+# class a tag gives. bin/fm-captain-hold.sh `defer-batch` defers, and
+# `answer-batch` answers, every captain call carrying one tag. A reader takes
+# the last matching line, a writer replaces only that line, and a body that
+# names none has none. Startup and board readers outside this file depend on
+# this exact `Due:` format, and bin/fm-fleet-snapshot.sh reads the `Batch:`
+# line with the same pattern.
 #
 # This file defines functions only.
 
@@ -65,10 +74,25 @@ fm_backlog_date_valid() {
   [ "$day" -le "$max" ]
 }
 
-# fm_backlog_batch_valid <tag>: succeed for a lowercase slug tag.
+# fm_backlog_batch_valid <tag>: succeed for `place:<slug>`, `board:<task-id>`,
+# or a bare lowercase slug, each part lowercase; a board id is at most 116
+# characters, so the board's `batch.board.<id>` item key stays within 128.
 fm_backlog_batch_valid() {
-  [[ "${1:-}" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]]
+  [[ "${1:-}" =~ ^(place:)?[a-z0-9][a-z0-9-]{0,39}$ ]] \
+    || [[ "${1:-}" =~ ^board:[a-z0-9][a-z0-9._-]{0,115}$ ]]
 }
+
+# fm_backlog_batch_class <tag>: print the group class a tag gives, `board` or
+# `place` (a bare legacy slug is a place list).
+fm_backlog_batch_class() {
+  case "${1:-}" in
+    board:*) printf 'board' ;;
+    *) printf 'place' ;;
+  esac
+}
+
+# shellcheck disable=SC2034  # read by the scripts that source this file
+FM_BACKLOG_BATCH_RULE='a batch tag is place:<name> or board:<task-id> in lowercase letters, digits and dashes (a task id may also hold dots and underscores), or a bare legacy slug'
 
 # fm_backlog_title_dated <title>: succeed when the title opens with a
 # `[YYYY-MM-DD]` date, which belongs in the hold or the Due: line instead.
@@ -81,7 +105,7 @@ fm_backlog_title_dated() {
 fm_backlog_row_field_pattern() {  # <due|batch>
   case "$1" in
     due) printf '%s' '^[[:space:]]*Due:[[:space:]]*([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])[[:space:]]*$' ;;
-    batch) printf '%s' '^[[:space:]]*Batch:[[:space:]]*([a-z0-9][a-z0-9-]*)[[:space:]]*$' ;;
+    batch) printf '%s' '^[[:space:]]*Batch:[[:space:]]*((place:)?[a-z0-9][a-z0-9-]*|board:[a-z0-9][a-z0-9._-]*)[[:space:]]*$' ;;
     *) return 1 ;;
   esac
 }

@@ -28,6 +28,7 @@
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
 #   fm-captain-hold.sh defer <task-id> --until YYYY-MM-DD --decision-file <path> [--reason <reason>]
 #   fm-captain-hold.sh defer-batch <tag> --until YYYY-MM-DD --decision-file <path> [--reason <reason>]
+#   fm-captain-hold.sh answer-batch <tag> --decision-file <path> [--release | --recommended]
 #   fm-captain-hold.sh answers [<legacy-origin> | --any-origin] --source <provenance>   (keyed answers on stdin)
 #   fm-captain-hold.sh reconcile-requests --source-id <source-id> --source <provenance>   (task ids on stdin)
 #   fm-captain-hold.sh bind <source-id> [<legacy-origin> | --any-origin]
@@ -170,6 +171,22 @@
 # failed=<n>` summary. A row carrying the tag that is not held for the captain
 # is left alone, since only his calls are his to defer. It fails when no
 # captain call carries the tag or any row fails.
+#
+# `answer-batch` is one answer on a whole group (fork patch,
+# docs/fork-decisions/2026-11-11-calls-grouped-by-what-it-takes.md): it
+# answers every open captain call carrying `Batch: <tag>` through `answer`
+# above with the same words, so each member closes (or, with `--release`,
+# resumes) under every guard `answer` keeps. `--release` is attended-only
+# like `answer --release`, and is refused before any member is touched.
+# `--recommended` is the board's Accept all recommended: each member's record
+# adds a `Choice picked: <its recommended choice>` line under the words, and
+# a member that records no recommended choice is left open and reported
+# `left: <id> (no recommended choice)`, because it still needs his own pick.
+# It prints each member's `answered:`, `released:`, `left:` or `failed:`
+# line and an `answer-batch: <tag> answered=<n> left=<n> failed=<n>`
+# summary, and fails when no captain call carries the tag or any member
+# fails. A replay is safe: a member already closed by the same words no
+# longer carries an open call, so it is not touched again.
 #
 # ONE KEYED-ANSWER INTAKE, FED BY EVERY CHANNEL.
 # "A keyed answer resolves its matching captain-held task" is a single
@@ -1981,13 +1998,36 @@ command_defer() {
   printf 'deferred: %s until %s\n' "$id" "$until"
 }
 
+# Print the ids of every open captain call whose body carries `Batch: <tag>`,
+# one per line; a row whose body cannot be read prints `!<id>`.
+batch_member_ids() {  # <tag>
+  local tag=$1 listing ids id body
+  listing=$(tasks_axi list --fields hold_kind --limit 100000) || fail "could not list this home's backlog"
+  ids=$(printf '%s\n' "$listing" | awk -F, '
+    /^  [A-Za-z0-9._-]+,/ {
+      id = $1
+      sub(/^ +/, "", id)
+      if ($2 != "done" && $NF == "captain") print id
+    }
+  ')
+  for id in $ids; do
+    task_show_or_fail "$id" "task $id disappeared while reading its batch"
+    if ! body=$(decode_shown_value "$(show_field "$show" body)"); then
+      printf '!%s\n' "$id"
+      continue
+    fi
+    [ "$(fm_backlog_row_field_of_body batch "$body")" = "$tag" ] || continue
+    printf '%s\n' "$id"
+  done
+}
+
 # `defer-batch` (see the header).
 command_defer_batch() {
-  local tag=${1:-} listing ids id body deferred=0 failed=0 out
+  local tag=${1:-} members id deferred=0 failed=0 out
   local -a pass=()
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
-  fm_backlog_batch_valid "$tag" || fail "a batch tag is lowercase letters, digits and dashes, at most 40 characters: $tag"
+  fm_backlog_batch_valid "$tag" || fail "$FM_BACKLOG_BATCH_RULE: $tag"
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --until|--decision-file|--reason)
@@ -2004,18 +2044,11 @@ command_defer_batch() {
   [ -n "$DECISION_DIGEST" ] || fail "--decision-file is required; a deferral records the captain's words"
   printf '%s\n' "${pass[@]}" | grep -Fxq -- --until || fail "--until is required"
   require_tasks_axi
-  listing=$(tasks_axi list --fields hold_kind --limit 100000) || fail "could not list this home's backlog"
-  ids=$(printf '%s\n' "$listing" | awk -F, '
-    /^  [A-Za-z0-9._-]+,/ {
-      id = $1
-      sub(/^ +/, "", id)
-      if ($2 != "done" && $NF == "captain") print id
-    }
-  ')
-  for id in $ids; do
-    task_show_or_fail "$id" "task $id disappeared while reading its batch"
-    body=$(decode_shown_value "$(show_field "$show" body)") || { failed=$((failed + 1)); printf 'failed: %s (could not read its body)\n' "$id"; continue; }
-    [ "$(fm_backlog_row_field_of_body batch "$body")" = "$tag" ] || continue
+  members=$(batch_member_ids "$tag")
+  for id in $members; do
+    case "$id" in
+      '!'*) failed=$((failed + 1)); printf 'failed: %s (could not read its body)\n' "${id#!}"; continue ;;
+    esac
     if out=$("$0" defer "$id" ${pass[@]+"${pass[@]}"} 2>&1); then
       deferred=$((deferred + 1))
       printf '%s\n' "$out"
@@ -2026,6 +2059,73 @@ command_defer_batch() {
   done
   printf 'defer-batch: %s deferred=%s failed=%s\n' "$tag" "$deferred" "$failed"
   [ $((deferred + failed)) -gt 0 ] || fail "no open captain call carries batch $tag"
+  [ "$failed" = 0 ]
+}
+
+# `answer-batch` (see the header).
+command_answer_batch() {
+  local tag=${1:-} decision_file='' mode='' members id answered=0 left=0 failed=0 out reason pick member_file
+  local -a pass=()
+  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+  shift
+  fm_backlog_batch_valid "$tag" || fail "$FM_BACKLOG_BATCH_RULE: $tag"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --decision-file)
+        [ "$#" -ge 2 ] && [ -n "$2" ] || fail "$1 needs a value"
+        decision_file=$2
+        shift
+        ;;
+      --release|--recommended)
+        [ -z "$mode" ] || [ "$mode" = "$1" ] || fail "--release and --recommended do not combine"
+        mode=$1
+        ;;
+      *) usage >&2; exit 2 ;;
+    esac
+    shift
+  done
+  load_decision "$decision_file"
+  if [ "$mode" = --release ]; then
+    release_attended || fail "batch $tag stays held: $RELEASE_AWAY_REASON"
+    pass=(--release)
+  fi
+  require_tasks_axi
+  members=$(batch_member_ids "$tag")
+  for id in $members; do
+    case "$id" in
+      '!'*) failed=$((failed + 1)); printf 'failed: %s (could not read its body)\n' "${id#!}"; continue ;;
+    esac
+    member_file=$decision_file
+    if [ "$mode" = --recommended ]; then
+      task_show_or_fail "$id" "task $id disappeared while reading its choices"
+      reason=$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")
+      pick=''
+      if parse_hold_kind_prefix "$reason"; then
+        pick=$HOLD_RECOMMENDED
+      fi
+      if [ -z "$pick" ]; then
+        left=$((left + 1))
+        printf 'left: %s (no recommended choice)\n' "$id"
+        continue
+      fi
+      member_file=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-batch.XXXXXX") \
+        || fail "cannot stage the decision for $id"
+      if ! printf '%s\nChoice picked: %s\n' "$DECISION_TEXT" "$pick" > "$member_file"; then
+        rm -f -- "$member_file"
+        fail "cannot stage the decision for $id"
+      fi
+    fi
+    if out=$("$0" answer "$id" --decision-file "$member_file" ${pass[@]+"${pass[@]}"} 2>&1); then
+      answered=$((answered + 1))
+      printf '%s\n' "$out"
+    else
+      failed=$((failed + 1))
+      printf 'failed: %s (%s)\n' "$id" "$(printf '%s' "$out" | tr '\n' ' ')"
+    fi
+    [ "$member_file" = "$decision_file" ] || rm -f -- "$member_file"
+  done
+  printf 'answer-batch: %s answered=%s left=%s failed=%s\n' "$tag" "$answered" "$left" "$failed"
+  [ $((answered + left + failed)) -gt 0 ] || fail "no open captain call carries batch $tag"
   [ "$failed" = 0 ]
 }
 
@@ -2982,6 +3082,7 @@ case "${1:-}" in
   answers) shift; command_answers "$@" ;;
   defer) shift; command_defer "$@" ;;
   defer-batch) shift; command_defer_batch "$@" ;;
+  answer-batch) shift; command_answer_batch "$@" ;;
   reconcile-requests) shift; command_reconcile_requests "$@" ;;
   bind) shift; command_bind "$@" ;;
   unbind) shift; command_unbind "$@" ;;

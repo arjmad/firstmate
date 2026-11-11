@@ -157,7 +157,11 @@
 #     captain's own instruction for firstmate to read, never a closure.
 #   - the weekly prune card's answers (group `prune`, effect `prune`) never
 #     feed it: they name rows that are not captain holds, and
-#     bin/fm-backlog-prune.sh carries them out from `read`.
+#     bin/fm-backlog-prune.sh carries them out from `read`;
+#   - a group's answers (group `batch`, the batch-* effects) never feed it:
+#     their key names a Batch: tag rather than a task, so firstmate runs
+#     bin/fm-captain-hold.sh answer-batch or defer-batch on the tag, or answers
+#     each ticked member, from `read`.
 # Every other effect is firstmate's to route (bearings skill), from `read`.
 # `answers` and `reconciles` use the same parser as `read` for either emission
 # form. Malformed content or a declared/parsed count mismatch prints a diagnostic
@@ -1233,6 +1237,14 @@ cmd_read() {
         $route = "firstmate: $effect for the blocked worker";
       } elsif ($effect eq "prune") {
         $route = "firstmate: prune (bin/fm-backlog-prune.sh apply <question> <pick> [values.picked]); nothing was fed";
+      } elsif ($effect eq "batch-answer") {
+        $route = "firstmate: answer-batch <batch> (with --release when close is release); nothing was fed";
+      } elsif ($effect eq "batch-recommended") {
+        $route = "firstmate: answer-batch <batch> --recommended; nothing was fed";
+      } elsif ($effect eq "batch-defer") {
+        $route = "firstmate: defer-batch <batch> --until <until>; nothing was fed";
+      } elsif ($effect eq "batch-pick") {
+        $route = "firstmate: answer each id in values.picked; nothing was fed";
       } elsif ($effect eq "close") {
         $route = "keyed intake (records the pick and closes)";
       } elsif ($effect eq "hold-until" && $str->($data->{until}) =~ /\A\d{4}-\d{2}-\d{2}\z/) {
@@ -1254,7 +1266,7 @@ cmd_read() {
       if ($item) {
         print "effect:\n"; emit_body($effect);
         print "group:\n"; emit_body($str->($data->{group}));
-        for my $k (qw(until at brief close)) {
+        for my $k (qw(batch until at brief close)) {
           next unless defined $data->{$k} && !ref $data->{$k};
           print "$k:\n"; emit_body($data->{$k});
         }

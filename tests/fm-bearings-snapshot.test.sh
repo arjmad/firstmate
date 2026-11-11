@@ -2280,6 +2280,121 @@ EOF2
   pass "board rows carry a captain hold's recorded choices, and null where none are recorded"
 }
 
+# A captain call's group comes from structured fields only: its Batch: tag
+# (board: or place:) or, untagged, whether it records choices. Calls sharing a
+# tag fold into one decision row, and a group of one stays its member's row.
+test_captain_calls_fold_into_their_groups() {
+  local home fakebin json quick board_a board_b
+  home=$(make_home call-groups)
+  # shellcheck source=bin/fm-hold-reason-lib.sh
+  # shellcheck disable=SC1091
+  . "$ROOT/bin/fm-hold-reason-lib.sh"
+  quick=$(fm_hold_reason_encode '[reversible; options: Yes|No; recommended: Yes] Renew the domain')
+  board_a=$(fm_hold_reason_encode '[reversible; options: Keep|Drop; recommended: Keep] Card A')
+  board_b=$(fm_hold_reason_encode '[reversible; options: Ship|Wait; recommended: Wait] Card B')
+  cat > "$home/data/backlog.md" <<EOF2
+# Backlog
+
+## In flight
+
+## Queued
+- [ ] office-a - Sign the lease copy (repo: business) (kind: captain) (since 2026-07-01) (hold: at the office) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Batch: place:office
+
+  Owner: arjun
+- [ ] board-a - Card A (repo: firstmate) (kind: captain) (since 2026-07-01) (hold: $board_a) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Batch: board:review-1111
+
+  Owner: arjun
+- [ ] quick-c - Renew the domain (repo: business) (kind: captain) (since 2026-07-01) (hold: $quick) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Owner: arjun
+- [ ] office-b - Post the cheque (repo: business) (kind: captain) (since 2026-07-01) (hold: at the office) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Batch: place:office
+
+  Owner: arjun
+- [ ] board-b - Card B (repo: firstmate) (kind: captain) (since 2026-07-01) (hold: $board_b) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Batch: board:review-1111
+
+  Owner: arjun
+- [ ] hands-d - Photograph the mats (repo: business) (kind: captain) (since 2026-07-01) (hold: needs his camera; Batch: place:fake) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Owner: arjun
+- [ ] solo-e - Count the shed (repo: business) (kind: captain) (since 2026-07-01) (hold: at the shed) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Batch: shed
+
+  Owner: arjun
+- [ ] fleet-f - Fleet errand (repo: firstmate) (kind: ship) (since 2026-07-01)
+  Batch: place:office
+
+  Owner: fleet
+- [ ] own-g - His own errand, not held (repo: business) (kind: ship) (since 2026-07-01)
+  Batch: place:office
+
+  Owner: arjun
+- [ ] shed-a - Sweep the shed (repo: business) (kind: captain) (since 2026-07-01) (hold: at the shed) (hold-kind: captain) (hold-until: 2099-02-01)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Batch: place:barn
+
+  Owner: arjun
+- [ ] shed-b - Oil the gate (repo: business) (kind: captain) (since 2026-07-01) (hold: at the shed) (hold-kind: captain) (hold-until: 2099-01-15)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Batch: place:barn
+
+  Owner: arjun
+
+## Done
+EOF2
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json --all-decisions --all-queued --fields board)
+  printf '%s' "$json" | jq -e '
+    def dec($id): [.decisions_open[] | select(.id == $id)][0];
+    def row($id): [.board.queued[] | select(.id == $id)][0];
+    (.decisions_open | length) == 6
+      and (.decisions_open | map(.id)) == ["place:office","board:review-1111","quick-c","hands-d","solo-e","place:barn"]
+      and (dec("place:office") | .verb == "captain-batch" and .class == "place" and .key == "place:office"
+           and (.members | map(.id)) == ["office-a","office-b"] and (.summary | startswith("2 calls: ")))
+      and (dec("board:review-1111") | .class == "board" and (.members | length) == 2)
+      and (dec("quick-c") | .class == "quick" and .batch == null and .verb == "captain-hold")
+      and (dec("hands-d") | .class == "hands" and .batch == null)
+      and (dec("solo-e") | .class == "place" and .batch == "shed" and (has("members") | not))
+      and (row("office-a") | .batch == "place:office" and .group == "place")
+      and (row("quick-c").group == "quick")
+      and (row("fleet-f") | .batch == "place:office" and .group == null)
+      and (.board.groups == [
+            {batch:"board:review-1111", group:"board", owner:"(main)", ids:["board-a","board-b"], count:2, all_recommended:true, back:null},
+            {batch:"place:barn", group:"place", owner:"(main)", ids:["shed-a","shed-b"], count:2, all_recommended:false, back:"2099-01-15"},
+            {batch:"place:office", group:"place", owner:"(main)", ids:["office-a","office-b"], count:2, all_recommended:false, back:null}])
+  ' >/dev/null || fail "captain calls did not fold into their groups: $json"
+  # The default view folds before it filters: a group with one live member
+  # shows whole, and a group no member of which is live stays out.
+  sed -i 's/^- \[ \] office-b - Post the cheque (repo: business) (kind: captain) (since 2026-07-01) (hold: at the office) (hold-kind: captain)$/& (hold-until: 2099-03-01)/' "$home/data/backlog.md"
+  json=$(FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=100000 run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    ([.decisions_open[] | select(.id == "place:office")][0] | .verb == "captain-batch" and (.members | map(.id)) == ["office-a","office-b"])
+      and ([.decisions_open[] | select(.id == "office-a" or .id == "office-b")] | length) == 0
+      and ([.decisions_open[] | select(.id == "place:barn" or .id == "shed-a" or .id == "shed-b")] | length) == 0
+      and ([.decisions_open[] | has("live")] | any | not)
+      and ([.gates[] | select(.id == "office-b")] | length) == 0
+      and ([.gates[] | select(.id == "shed-a" or .id == "shed-b")] | length) == 2
+  ' >/dev/null || fail "the default view showed a group member alone or a group with no live member: $json"
+  pass "captain calls fold into their groups from structured fields, and a group of one stays its own row"
+}
+
 # The weekly prune card's candidates come from bin/fm-backlog-prune-lib.sh's
 # rule over structured fields and the dates written on each row: only unheld
 # fleet rows nobody touched for two weeks, never his rows, a held row, blocked
@@ -3686,9 +3801,40 @@ test_supplied_secondmate_questions_and_legacy_optional_fields() {
   pass "supplied secondmate questions preserve text with missing optional fields"
 }
 
+# A secondmate home's group folds the same way: its live member and its dated
+# sibling show as one group row by default, never the live member alone.
+test_secondmate_group_never_shows_one_member_alone() {
+  local home remote fakebin json
+  home=$(make_home mate-group-parent)
+  make_remote_ledger_fleet "$home" 1
+  remote="$TMP_ROOT/remote-ledger-home-1"
+  jq '
+    .decisions_open = [
+      {id:"shelf-a",key:"shelf-a",verb:"captain-hold",source:"backlog",hold_bucket:"live",
+       summary:"Shelf A",reason:"at the office",batch:"place:office"}]
+    | .queued = [
+      {id:"shelf-a",title:"Shelf A",hold_kind:"captain",hold_bucket:"live",hold_reason:"at the office",batch:"place:office"},
+      {id:"shelf-b",title:"Shelf B",hold_kind:"captain",hold_bucket:"dated",hold_until:"2099-01-01",
+       hold_reason:"at the office",batch:"place:office"}]
+    | .counts.decisions_open = 1 | .counts.queued = 2
+  ' "$remote/state/home-summary.json" > "$remote/state/full-summary.json"
+  mv "$remote/state/full-summary.json" "$remote/state/home-summary.json"
+  fakebin=$(make_remote_ledger_ssh "$home")
+  json=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_SSH_BIN="$fakebin/fake-ssh" \
+    FM_TEST_LEDGER_CALL_LOG="$home/ledger-calls.log" FM_SNAPSHOT_NOW_EPOCH=1000 \
+    "$BEARINGS" --json)
+  printf '%s' "$json" | jq -e '
+    [.decisions_open[] | select(.owner == "ledger-1")] as $rows
+    | ($rows | map(.id)) == ["ledger-1/place:office"]
+      and ($rows[0] | .verb == "captain-batch" and (.members | map(.id)) == ["ledger-1/shelf-a", "ledger-1/shelf-b"])
+  ' >/dev/null || fail "a secondmate group member showed alone: $json"
+  pass "a secondmate group folds whole by default, and never shows one member alone"
+}
+
 fm_test_run \
   test_full_captain_questions_survive_local_and_secondmate_projection \
   test_supplied_secondmate_questions_and_legacy_optional_fields \
+  test_secondmate_group_never_shows_one_member_alone \
   test_task_teardown_during_metadata_capture_does_not_abort_snapshot \
   test_current_state_uses_captured_status_observation \
   test_relaunched_task_does_not_inherit_reused_endpoint_state \
@@ -3724,6 +3870,7 @@ fm_test_run \
   test_live_blocker_is_not_charted_queue_work \
   test_captain_wait_and_board_rows_come_from_structured_fields \
   test_board_rows_carry_recorded_hold_choices \
+  test_captain_calls_fold_into_their_groups \
   test_owner_decides_what_waits_on_the_captain \
   test_board_prune_proposes_only_stale_fleet_rows \
   test_captains_call_anti_leak \

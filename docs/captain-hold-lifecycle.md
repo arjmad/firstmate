@@ -34,7 +34,7 @@ It never reads report bodies, review artifacts, terminal output, or chat.
 | Subcommand | What it does | Details |
 | --- | --- | --- |
 | `hold` | Creates or reuses a task and holds it for the captain. | [Creating a hold](#creating-a-hold-hold) |
-| `answer` | Records the captain's exact words and resolves the call. | [Answering a call](#answering-a-call-answer) |
+| `answer` | Records the captain's exact words and resolves the call; `answer-batch` does so for every call carrying one `Batch:` tag, and `--recommended` records each member's own recommended choice. | [Answering a call](#answering-a-call-answer) |
 | `defer` | Records the captain's dated deferral and re-holds the call until that date, never closing it; `defer-batch` does so for every call carrying one `Batch:` tag. | [Answer-time resolution](#answer-time-resolution) |
 | `choices` | Sets or replaces the choices on a call already held for the captain, keeping its reason, kind, and date. | [Choices](#choices) |
 | `complete` | Records the reviewed captain-held task ids in the originating task's metadata. | [Recording a reviewed inventory](#recording-a-reviewed-inventory-complete) |

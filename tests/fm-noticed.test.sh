@@ -214,6 +214,95 @@ test_a_fix_on_its_own_waits_for_the_triage() {
   pass "a fix firstmate makes on its own needs its PR, waits for the Monday triage, gives way to a recurrence, and never hides an untold urgent item"
 }
 
+# Rule 1 of 2026-11-11: an undoable fix inside the fleet's authority is never
+# held for him. A routine item is the fleet's own work, and reaches him only in
+# the Monday "Handled for you" list once fixed or dropped.
+test_a_routine_item_is_never_held_for_him() {
+  local home out show
+  home=$(make_home routine)
+  out=$(noticed "$home" file noticed lint-drift --title "Lint config drifted" --why "CI may pass bad code" \
+    --from t1 --repo firstmate --routine) || fail "file --routine refused a noticed item: $out"
+  assert_equals "filed: noticed-lint-drift" "$out" "file --routine did not report the item"
+  show=$(tasks "$home" show noticed-lint-drift --full)
+  assert_not_contains "$show" "held: yes" "a routine item was held for the captain"
+  assert_equals fleet "$(tasks "$home" owner noticed-lint-drift)" "a routine item is not the fleet's"
+  assert_equals "" "$(noticed "$home" unseen)" "a routine item waits to be shown before it is handled"
+  out=$(noticed "$home" file noticed lint-drift --title "Lint config drifted" --why "seen again" --from t2 --routine)
+  assert_equals "matched: noticed-lint-drift" "$out" "a routine item filed again was not matched"
+  # A ship's teardown may close the row before firstmate records the fix.
+  tasks "$home" "done" noticed-lint-drift >/dev/null || fail "could not close the routine row"
+  out=$(noticed "$home" close noticed-lint-drift --evidence "pinned the lint config" --fixed \
+    --pr https://github.com/o/r/pull/3) || fail "close --fixed refused a row already closed: $out"
+  assert_equals "noticed-lint-drift	fixed	Lint config drifted - pinned the lint config (https://github.com/o/r/pull/3)" \
+    "$(noticed "$home" unseen)" "a routine fix is not listed for the Monday triage"
+  noticed "$home" shown noticed-lint-drift >/dev/null
+  noticed "$home" file noticed dead-link --title "Dead doc link" --why "readers get lost" --from t1 --routine >/dev/null
+  out=$(noticed "$home" close noticed-dead-link --evidence "the page was retired on purpose" --dropped) \
+    || fail "close --dropped refused: $out"
+  assert_equals "noticed-dead-link	dropped	Dead doc link - the page was retired on purpose" \
+    "$(noticed "$home" unseen)" "a drop on its own is not listed for the Monday triage"
+  assert_contains "$(tasks "$home" show noticed-dead-link --full)" "Dropped by firstmate on its own." "the drop was not recorded"
+  noticed "$home" close noticed-dead-link --evidence x --fixed --dropped --pr https://github.com/o/r/pull/4 >/dev/null 2>&1 \
+    && fail "close accepted --fixed with --dropped"
+  noticed "$home" file idea quicker --title a --why b --from t1 --routine >/dev/null 2>&1 \
+    && fail "an idea was filed routine"
+  out=$(noticed "$home" file noticed dead-link --title "Dead doc link" --why "back" --from t3 --routine)
+  assert_equals "reopened: noticed-dead-link" "$out" "a routine item back after its drop was not reopened"
+  assert_not_contains "$(tasks "$home" show noticed-dead-link --full)" "held: yes" "a reopened routine item was held"
+  assert_equals "" "$(noticed "$home" unseen)" "a reopened routine item still reads as dropped"
+  noticed "$home" file noticed held-once --title "Held once" --why "first" --from t1 >/dev/null
+  noticed "$home" close noticed-held-once --evidence "settled" >/dev/null
+  out=$(noticed "$home" file noticed held-once --title "Held once" --why "back" --from t2 --routine) \
+    || fail "a held item back as routine could not be reopened: $out"
+  assert_equals "reopened: noticed-held-once" "$out" "a held item back as routine was not reopened"
+  assert_not_contains "$(tasks "$home" show noticed-held-once --full)" "held: yes" "a routine recurrence kept its old captain hold"
+  assert_equals fleet "$(tasks "$home" owner noticed-held-once)" "a routine recurrence is not the fleet's"
+  # A dated hold whose date has passed reads unheld but still carries its kind.
+  noticed "$home" file noticed held-dated --title "Held dated" --why "first" --from t1 >/dev/null
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-captain-hold.sh" hold noticed-held-dated --reason "later" --until 2026-01-01 >/dev/null \
+    || fail "could not date the hold"
+  noticed "$home" close noticed-held-dated --evidence "settled" >/dev/null
+  out=$(noticed "$home" file noticed held-dated --title "Held dated" --why "back" --from t2 --routine) \
+    || fail "a past-dated held item back as routine could not be reopened: $out"
+  assert_equals fleet "$(tasks "$home" owner noticed-held-dated)" "a past-dated routine recurrence is not the fleet's"
+  pass "a routine item is the fleet's own work, never held for him, and reaches him only once fixed or dropped"
+}
+
+# Rule 3 of 2026-11-11: a call held 14 days with no date shows once in the
+# Monday triage's "Waiting 2+ weeks", from the snapshot's aged bucket.
+test_waiting_lists_each_aged_call_once() {
+  local home out
+  home=$(make_home waiting)
+  cat > "$home/data/backlog.md" <<'EOF2'
+## In flight
+
+## Queued
+- [ ] old-call - Pick the mat colour (repo: business) (kind: captain) (since 2026-01-01) (hold: which colour) (hold-kind: captain)
+  Captain hold set: 2026-01-02T00:00:00Z
+
+  Owner: arjun
+- [ ] dated-call - Renew the lease (repo: business) (kind: captain) (since 2026-01-01) (hold: later) (hold-kind: captain) (hold-until: 2099-01-01)
+  Captain hold set: 2026-01-02T00:00:00Z
+
+  Owner: arjun
+- [ ] new-call - Fresh call (repo: business) (kind: captain) (since 2099-01-01) (hold: today) (hold-kind: captain)
+  Captain hold set: 2099-01-01T00:00:00Z
+
+  Owner: arjun
+
+## Done
+EOF2
+  out=$(noticed "$home" waiting) || fail "waiting failed: $out"
+  assert_contains "$out" "old-call	" "an aged call is not listed as waiting"
+  assert_contains "$out" "	Pick the mat colour" "a waiting call lost its title"
+  assert_not_contains "$out" "dated-call" "a dated call was listed as waiting"
+  assert_not_contains "$out" "new-call" "a fresh call was listed as waiting"
+  assert_equals "shown: old-call" "$(noticed "$home" waiting --shown old-call)" "waiting --shown did not mark the call"
+  assert_equals "" "$(noticed "$home" waiting)" "a call shown once was listed again"
+  pass "waiting lists each call held 14 days with no date once, from the aged bucket"
+}
+
 test_the_drain_shows_only_urgent_items() {
   local home drain
   home=$(make_home drain)
@@ -282,4 +371,6 @@ test_collect_reads_the_report_then_notes
 test_close_settles_an_item_and_list_keeps_answered_ones
 test_now_marks_an_item_urgent
 test_a_fix_on_its_own_waits_for_the_triage
+test_a_routine_item_is_never_held_for_him
+test_waiting_lists_each_aged_call_once
 test_the_drain_shows_only_urgent_items

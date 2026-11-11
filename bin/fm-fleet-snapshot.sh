@@ -26,6 +26,9 @@
 #     owned_by is the row's recorded owner, "arjun" or "fleet", read from its
 #     machine-written `Owner:` body line (bin/fm-backlog-owner-lib.sh owns that
 #     record), else null for a row filed before owners existed.
+#     batch is the row's `Batch:` tag (bin/fm-backlog-row-lib.sh owns the line
+#     and its pattern), else null; bin/fm-bearings-snapshot.sh derives a captain
+#     call's group from it.
 #     Repeated blocker tokens remain ordered; a blocker resolves only when its
 #     structured record is Done, and missing ids stay open.
 #     There is no separate decision type: any captain-held task is the same
@@ -292,6 +295,7 @@ Every captain hold carries hold_bucket, decided only from structured fields and
 never from hold reason or body prose: "blocked", "dated", "aged", or "live".
 Every structured row and every summary queued row carries owned_by: "arjun",
 "fleet", or null when unrecorded; it never changes a captain hold's bucket.
+Each also carries batch, its `Batch:` tag or null.
 An undated hold ages once its hold-set timestamp is at least
 FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS old (default 14; 0 ages every hold with a
 non-negative computed age); legacy holds without a stamp fall back to their
@@ -518,6 +522,7 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
              hold_until:metadata($rest; "hold-until"),
              hold_set:null,
              owned_by:null,
+             batch:null,
              blocked_by:cap($rest; ".*blocked-by:[[:space:]]*(?<v>[^[:space:])]+).*"),
              blocked_by_ids:blocked_by_ids($rest),
              blocked_reason:blocked_reason($rest),
@@ -561,6 +566,7 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
                   else cap(.body_lines[-1]; "^(?<v>local main)$")
                   end))
           | .owned_by = ([.body_lines[] | capture("^Owner:[[:space:]]*(?<v>arjun|fleet)[[:space:]]*$")? | .v] | last)
+          | .batch = ([.body_lines[] | capture("^Batch:[[:space:]]*(?<v>(place:)?[a-z0-9][a-z0-9-]*|board:[a-z0-9][a-z0-9._-]*)[[:space:]]*$")? | .v] | last)
           | .body_excerpt = ((.body_lines
               | map(select(test("^Owner:[[:space:]]*(arjun|fleet)[[:space:]]*$") | not))
               | join(" "))[:240])
@@ -1047,7 +1053,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
              question:(.title + ": " + .hold_reason),
             hold_until:(.hold_until // null),
             hold_bucket:(.hold_bucket // null),
-            hold_age_days:(.hold_age_days // null),source:"backlog"} ]) as $captain_holds_all
+            hold_age_days:(.hold_age_days // null),batch:(.batch // null),source:"backlog"} ]) as $captain_holds_all
     | ([ $backlog.records[]? | select(landed_record)
          | {id:(.id | trunc(120)),title:(.title | trunc(120)),
             kind:((.kind // null) | if . == null then null else trunc(40) end),
@@ -1164,6 +1170,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
           hold_age_days:(.hold_age_days // null),
           captain_actionable:(.captain_actionable // false),
           owned_by:(.owned_by // null),
+          batch:(.batch // null),
           repo:((.repo // null) | if . == null then null else trunc(120) end),
           kind:((.kind // null) | if . == null then null else trunc(40) end),
           since:((.since // null) | if . == null then null else trunc(40) end)}]

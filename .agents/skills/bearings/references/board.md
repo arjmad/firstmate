@@ -15,7 +15,11 @@ Placement, from structured fields only (never from reason or body prose):
 A row is the captain's when it is held for him or its recorded owner is `arjun` and no unfinished work blocks it: `board.queued` marks those `wait: captain`, and a fleet-owned row never enters his inbox or Later, whatever its kind.
 
 - **Blocking a worker** (`inbox[]`, group `blocking`, key = the task id): every `in_flight` row whose `waits_on` is `captain`, the worker's structured `[on=captain]` status tag; `since` is that row's `since`.
-- **Decisions** (`captains_call[]`): every live captain call with no `hold_until`, plus each PR ready to merge and each needed credential.
+- **Groups** (`inbox[]`, group `batch`): one item per `board.groups` entry, a group of his calls sharing one `Batch:` tag (`bin/fm-backlog-row-lib.sh` owns the tags); `batch` = its tag, `class` = its `group`, key = `batch.` plus the tag with `:` written as `.`, and `members` = each id with its full title and, from its `choices`, its `recommended`.
+  A member never shows alone: it gets no card, due item, or Later row of its own, and one answer on the group works all of them.
+  A group whose `back` is set was moved as a whole: it waits in Later as one `dated` row instead (`id` its key, the group's title, `back` its date).
+  A board group's actions are Accept all recommended (`batch-recommended`) and a Move (`batch-defer`); a place list's are Done all (`batch-answer`), Tick each (`batch-pick`), and Move list (`batch-defer` with one date input).
+- **Decisions** (`captains_call[]`): every other live captain call with no `hold_until`, quick calls (group `quick`) first by due date, then the calls that take his own hands, plus each PR ready to merge and each needed credential.
 - **Due** (`inbox[]`, group `due`, key = the held task id, `due` = its `hold_until`): every `board.queued` row whose `wait` is `captain` and whose `hold_until` falls within the next 7 days, or has passed (the board shows those as Overdue).
 - **Later** (`later[]`): every other `wait: captain` row - group `dated` with `back` = its later `hold_until`, group `held` for a held row with no date (aged, blocked, or waiting outside), and group `unheld` for a row he owns that is not held (Arjun's 2026-10-25 call).
 - **Underway** (`underway[]`): every other `in_flight` row.
@@ -64,6 +68,8 @@ Route every other answer yourself, by its effect, under the normal authority rul
 
 - `resume-worker`: steer the blocked worker with the action, its values, and the note through `bin/fm-send.sh`, resolving its `[on=captain]` key.
 - `remind-at`: the backlog holds dates only, so for a due item run `bin/fm-captain-hold.sh defer <id> --until <its date> --decision-file <file>` and bring it back to the captain at that time; for a worker, steer it to wait until then.
+- A group answer (group `batch`) names its tag on the `batch:` line, and you always route it, under the same attended rule as a single answer: `batch-answer` runs `bin/fm-captain-hold.sh answer-batch <batch> --decision-file <file>` (`--release` when the item declares `close: release`), `batch-recommended` runs it with `--recommended`, `batch-defer` runs `defer-batch <batch> --until <until> --decision-file <file>`, and `batch-pick` runs `answer <id> --decision-file <file>` for each id in `values.picked`.
+  Echo every member line it prints in chat, and reconcile any `left:` or `failed:` member yourself.
 - `prune` (the weekly prune card): run `bin/fm-backlog-prune.sh apply <question> <pick>`, adding `values.picked` for `drop-picked`; the tap is the captain's word for exactly those closes, so ask nothing more, and echo every `dropped:` and `skipped:` line in chat.
   A note-only prune answer drops nothing.
 - An `atlas-` card answer, after the intake closed it: run `bin/fm-atlas.sh pick <id> <pick>`, and file the brief its `dispatch:` line prints as a fleet backlog task in that repo through the normal lifecycle.

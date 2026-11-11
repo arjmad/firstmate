@@ -1021,6 +1021,61 @@ test_build_names_every_inbox_item_that_does_not_say_what_it_does() {
   pass "build names every inbox item whose actions do not say plainly what the fleet does"
 }
 
+# A group of calls sharing one Batch: tag is one inbox item: its members ride
+# on it and never show alone, and it takes only the batch effects.
+BATCH_ITEMS='[
+  {"key":"batch.place.office","group":"batch","batch":"place:office","class":"place","repo":"business",
+   "title":"Office errands","ask":"Work the list at the office.",
+   "members":[{"id":"office-a","title":"Sign the lease copy"},{"id":"office-b","title":"Post the cheque"}],
+   "inputs":[{"name":"day","label":"Move to","type":"date"}],
+   "actions":[
+     {"value":"done-all","label":"Done all","hint":"Closes every errand on the list.","effect":"batch-answer","reads":[]},
+     {"value":"tick","label":"Tick each","hint":"Closes only the ones you tick.","effect":"batch-pick","reads":[]},
+     {"value":"move","label":"Move list","hint":"Brings the whole list back on that day.","effect":"batch-defer","reads":["day"]}]},
+  {"key":"batch.board.review-1111","group":"batch","batch":"board:review-1111","class":"board","repo":"firstmate",
+   "title":"Review board","ask":"Accept the recommendations, or open the board.",
+   "members":[{"id":"card-a","title":"Card A","recommended":"Keep"},{"id":"card-b","title":"Card B","recommended":"Wait"}],
+   "inputs":[],
+   "actions":[
+     {"value":"accept","label":"Accept all recommended","hint":"Records each card at its recommended choice.","effect":"batch-recommended","reads":[]},
+     {"value":"later","label":"Next week","hint":"Brings the board back next Monday.","effect":"batch-defer","until":"2026-09-07","reads":[]}]}
+]'
+
+test_build_accepts_and_checks_a_batch_group() {
+  local home data board
+  home=$(make_home batch-group)
+  data="$home/payload.json"
+  board="$home/.lavish/bearings-board.html"
+  write_valid_payload "$data"
+  jq --argjson inbox "$BATCH_ITEMS" '.inbox = $inbox' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  run_board "$home" build "$data" >/dev/null || fail "a valid batch group payload was refused"
+  extract_payload "$board" | jq -e '[.inbox[] | select(.group == "batch")] | length == 2' >/dev/null \
+    || fail "the built board lost its batch groups"
+  home=$(make_home batch-group-weak)
+  assert_weak_card_refused "$home" \
+    ".inbox = $BATCH_ITEMS | .inbox[0].actions[0].effect = \"batch-recommended\"" \
+    "batch.place.office: needs a board group for Accept all recommended on action done-all" \
+    "Accept all recommended on a place list"
+  assert_weak_card_refused "$home" \
+    ".inbox = $BATCH_ITEMS | .inbox[0].actions[0].effect = \"close\"" \
+    "batch.place.office: needs no close on action done-all, since only a batch group takes the batch effects" \
+    "a single-call effect on a group"
+  assert_weak_card_refused "$home" \
+    ".inbox = $BATCH_ITEMS + $INBOX_ITEMS | .inbox[3].actions[2].effect = \"batch-answer\"" \
+    "sample-count: needs no batch-answer on action never, since only a batch group takes the batch effects" \
+    "a batch effect on a single call"
+  assert_weak_card_refused "$home" \
+    ".inbox = $BATCH_ITEMS | .inbox[0].actions[2].reads = []" \
+    "either an until date or one date input on action move" "a Move list with no date"
+  assert_weak_card_refused "$home" \
+    ".inbox = $BATCH_ITEMS | .inbox[1].members[0].id = .captains_call[0].key" \
+    "batch.board.review-1111: needs members no card or item also shows" "a member also carded alone"
+  assert_weak_card_refused "$home" \
+    ".inbox = $BATCH_ITEMS | .inbox[1].members[0].id = \"office-a\"" \
+    "members in no other group (office-a)" "a member of two groups"
+  pass "build accepts a batch group and refuses one that mixes single-call effects or shows a member twice"
+}
+
 test_build_refuses_the_new_fields_out_of_shape() {
   local home data rc out case filter
   home=$(make_home new-fields)
@@ -1041,6 +1096,10 @@ a due item with no due date|.inbox = [{"key":"x","group":"due","repo":"s","title
 an unknown queue wait|.charted[0].wait = "someday"
 a card link that is not a web page|.captains_call[0].link = {"url":"file:///tmp/x.html","label":"Atlas board"}
 a card link with no label|.captains_call[0].link = {"url":"http://100.119.38.2:4387/session/1"}
+a batch group whose key does not match its tag|.inbox = [{"key":"batch.place.shed","group":"batch","batch":"place:office","class":"place","repo":"s","title":"t","ask":"a","members":[{"id":"a","title":"A"},{"id":"b","title":"B"}],"inputs":[],"actions":[]}]
+a batch group of one|.inbox = [{"key":"batch.place.office","group":"batch","batch":"place:office","class":"place","repo":"s","title":"t","ask":"a","members":[{"id":"a","title":"A"}],"inputs":[],"actions":[]}]
+a batch group whose class does not match its tag|.inbox = [{"key":"batch.place.office","group":"batch","batch":"place:office","class":"board","repo":"s","title":"t","ask":"a","members":[{"id":"a","title":"A"},{"id":"b","title":"B"}],"inputs":[],"actions":[]}]
+members on a due item|.inbox = [{"key":"x","group":"due","due":"2026-09-01","repo":"s","title":"t","ask":"a","members":[{"id":"a","title":"A"},{"id":"b","title":"B"}],"inputs":[],"actions":[]}]
 a link on a merge card|.captains_call[0].type = "merge" | .captains_call[0].risk = "low" | .captains_call[0].link = {"url":"http://h/s","label":"l"}
 EOF
   pass "build refuses each new layout field out of shape"
@@ -1151,6 +1210,7 @@ test_merge_and_credential_cards_keep_their_own_shapes
 test_a_weak_card_whose_subject_landed_is_dropped_not_refused
 test_build_accepts_the_inbox_layout
 test_build_names_every_inbox_item_that_does_not_say_what_it_does
+test_build_accepts_and_checks_a_batch_group
 test_build_refuses_the_new_fields_out_of_shape
 test_build_if_changed_skips_an_unchanged_board
 test_build_records_the_prune_offer_and_keys_the_card
