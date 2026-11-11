@@ -527,8 +527,26 @@ There is no pull request, no \`gh-axi\` call, and no forge CI result to report: 
 EOF
 }
 
+# The review model a home pins: the first line of <config>/code-review-model,
+# trimmed, or claude-opus-5-5 when the file is absent or empty (fork patch,
+# docs/fork-decisions/2026-11-11-code-review-model.md). The fleet's
+# `fleet-mode` command writes the file; firstmate only reads it. An id holding
+# anything but letters, digits, dot, dash, underscore, slash, colon, or
+# brackets falls back to the default, so it cannot inject shell text.
+fm_dod_code_review_model() {
+  local cfg model=
+  cfg=${CONFIG:-${FM_CONFIG_OVERRIDE:-${FM_HOME:-}/config}}
+  [ ! -f "$cfg/code-review-model" ] || IFS= read -r model < "$cfg/code-review-model" || true
+  model=${model//[[:space:]]/}
+  case $model in
+    ''|*[!A-Za-z0-9._/:@\[\]-]*) model=claude-opus-5-5 ;;
+  esac
+  printf '%s\n' "$model"
+}
+
 fm_dod_code_review_block() {  # <direct-PR|no-mistakes>
-  local cli fix sol_fix
+  local cli fix sol_fix model
+  model=$(fm_dod_code_review_model)
   printf -v cli '%q' "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-code-review.sh"
   fix='push a fix for every finding you agree is real'
   sol_fix='push its fixes once the loop ends'
@@ -543,13 +561,14 @@ On \`unreviewed\`, first run the \`tstack-sol-loop\` skill on your branch agains
 Settle each Sol finding as that skill says - fix the real ones with the smallest change and decline nits and out-of-scope findings in one line in its ledger - then $sol_fix, since the skill pushes nothing during it, and add the PR-body line the skill asks for.
 When the skill hands an open finding to its user - one disputed twice, or a blocker or should still open when the rounds run out - that user is firstmate: append \`needs-decision [at=<epoch>]: {the open Sol findings}\` and stop.
 This step is the ask that skill waits for, and where it would report a blocker because nothing here can reach Sol - the skill is not installed, Codex is not signed in, or no route runs Sol - skip the loop instead, never substitute another model, append \`working [at=<epoch>]: Sol skipped: {reason}\` so firstmate sees it, and keep the reason for the record note.
-Then run Claude Code's built-in \`/code-review\` once from this worktree with the arguments \`$cli args <pr-url>\` prints, which are \`medium --comment <number>\` followed by firstmate's merge-gate focus: invoke the skill with exactly those arguments when your harness has it, and otherwise run \`a=\$($cli args <pr-url>) && claude -p "/code-review \$a"\` as a shell command there, so a refused URL runs no review.
+Then run Claude Code's built-in \`/code-review\` once from this worktree with the arguments \`$cli args <pr-url>\` prints, which are \`medium --comment <number>\` followed by firstmate's merge-gate focus: the review runs on the pinned model \`$model\`, so run it as the shell command \`a=\$($cli args <pr-url>) && claude -p --model $model "/code-review \$a"\` there, so a refused URL runs no review.
+Do not invoke the skill in your own session instead: an in-session skill runs on the session's model, and a worker cannot switch its own session's model, so only the headless command pins it.
 Then $fix, reply in the PR thread of every finding you do not, and after your last push run \`$cli record <pr-url> --note 'Sol: <N> rounds, <model>, <verdict>'\`, or \`--note 'Sol: skipped, <reason>'\` when the loop could not run, with no apostrophe in the note, and confirm it prints \`reviewed\`.
 Pushes that fix or answer this review's findings are covered by the one \`record\` you run after your last push; only a push after \`record\` that changes the diff needs a new review, and a rebase that leaves the diff alone needs none.
 For a small follow-up pushed after \`record\`, run \`$cli record <pr-url> --carry\` instead of a new review; the script decides what a carry covers, and when it refuses, its message says whether to run the carry again or \`/code-review\` again.
 Before such a new \`/code-review\`, run \`tstack-sol-loop\` again as a fresh loop of one round on the change since the record, outside the first loop's 3, settle and escalate its findings as above, and name that round in the new \`record\`'s note.
 Count this PR's full records, the \`fm-code-review v1\` comments you posted without a \`fm-code-review-carry\` line, rather than relying on memory: with three already posted, a change that would need another \`/code-review\` pass does not get one: append \`needs-decision [at=<epoch>]: {why the PR keeps needing review}\` and stop instead of looping.
-If neither way of running \`/code-review\` works here, append \`blocked:\` naming why instead of done.
+If the headless \`/code-review\` command cannot run here, append \`blocked:\` naming why instead of done.
 EOF
 }
 
