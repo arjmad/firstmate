@@ -2340,6 +2340,10 @@ test_captain_calls_fold_into_their_groups() {
   Batch: place:office
 
   Owner: fleet
+- [ ] own-g - His own errand, not held (repo: business) (kind: ship) (since 2026-07-01)
+  Batch: place:office
+
+  Owner: arjun
 - [ ] shed-a - Sweep the shed (repo: business) (kind: captain) (since 2026-07-01) (hold: at the shed) (hold-kind: captain) (hold-until: 2099-02-01)
   Captain hold set: 2026-07-10T00:00:00Z
 
@@ -2385,6 +2389,8 @@ EOF2
       and ([.decisions_open[] | select(.id == "office-a" or .id == "office-b")] | length) == 0
       and ([.decisions_open[] | select(.id == "place:barn" or .id == "shed-a" or .id == "shed-b")] | length) == 0
       and ([.decisions_open[] | has("live")] | any | not)
+      and ([.gates[] | select(.id == "office-b")] | length) == 0
+      and ([.gates[] | select(.id == "shed-a" or .id == "shed-b")] | length) == 2
   ' >/dev/null || fail "the default view showed a group member alone or a group with no live member: $json"
   pass "captain calls fold into their groups from structured fields, and a group of one stays its own row"
 }

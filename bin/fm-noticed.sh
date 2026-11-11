@@ -304,6 +304,7 @@ Evidence: $evidence"
 Routine: firstmate fixes or drops this on its own." >/dev/null \
       || { echo "fm-noticed: could not add $id" >&2; exit 1; }
     grep -Fxq -- "$id" "$FILED" 2>/dev/null || printf '%s\n' "$id" >> "$FILED"
+    ! grep -Eq "^$id$TAB(fixed|dropped)$TAB" "$UNSEEN" 2>/dev/null || drop_unseen "$id"
     [ "$now" = 0 ] || list_noticed "$id" "$title" 1
     printf '%s: %s\n' "$outcome" "$id"
     return 0
@@ -409,7 +410,7 @@ cmd_close() {
 }
 
 cmd_waiting() {
-  local id snapshot
+  local id snapshot rows days title
   if [ "${1:-}" = --shown ]; then
     shift
     [ $# -ge 1 ] || refuse "waiting --shown needs at least one id"
@@ -424,14 +425,16 @@ cmd_waiting() {
   [ $# -eq 0 ] || refuse "waiting takes no arguments, or --shown <id>..."
   snapshot=$("$SCRIPT_DIR/fm-fleet-snapshot.sh" --contribution-input) \
     || { echo "fm-noticed: could not read the backlog snapshot" >&2; exit 1; }
-  printf '%s' "$snapshot" | jq -r '
+  rows=$(printf '%s' "$snapshot" | jq -r '
     .backlog.records[]
     | select(.structured and .hold_bucket == "aged")
-    | [.id, (.hold_age_days | tostring), .title] | @tsv' \
-    | while IFS=$TAB read -r id days title; do
-        grep -Fxq -- "$id" "$WAITING_SHOWN" 2>/dev/null && continue
-        printf '%s\t%s\t%s\n' "$id" "$days" "$title"
-      done
+    | [.id, ((.hold_age_days // "?") | tostring), .title] | @tsv') \
+    || { echo "fm-noticed: could not read the aged calls from the snapshot" >&2; exit 1; }
+  [ -n "$rows" ] || return 0
+  while IFS=$TAB read -r id days title; do
+    grep -Fxq -- "$id" "$WAITING_SHOWN" 2>/dev/null && continue
+    printf '%s\t%s\t%s\n' "$id" "$days" "$title"
+  done <<< "$rows"
 }
 
 case "${1:-}" in

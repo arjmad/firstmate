@@ -310,7 +310,7 @@ validate_payload() {  # <data.json>
       and optional_string("brief");
     def batch_tag:
       type == "string"
-      and (test("^(place:)?[a-z0-9][a-z0-9-]{0,39}$") or test("^board:[a-z0-9][a-z0-9._-]{0,127}$"));
+      and (test("^(place:)?[a-z0-9][a-z0-9-]{0,39}$") or test("^board:[a-z0-9][a-z0-9._-]{0,115}$"));
     def batch_member:
       type == "object" and (.id | slug(128)) and (.title | nonempty_string)
       and optional_string("recommended");
@@ -485,11 +485,7 @@ inbox_item_gaps() {  # <payload.json>
               (if (.effect == "batch-answer" or .effect == "batch-recommended" or .effect == "batch-pick")
                   and (.reads | length) > 0
                 then "no inputs read by action \(.value)" else empty end),
-              (if .effect == "batch-defer"
-                  and ((has("until") | not) == ([.reads[] as $r | $item.inputs[] | select(.name == $r and .type == "date")] | length != 1)
-                    or (.reads | length) > 1)
-                then "either an until date or one date input on action \(.value)" else empty end),
-              (if .effect == "hold-until"
+              (if (.effect == "hold-until" or .effect == "batch-defer")
                   and ((has("until") | not) == ([.reads[] as $r | $item.inputs[] | select(.name == $r and .type == "date")] | length != 1)
                     or (.reads | length) > 1)
                 then "either an until date or one date input on action \(.value)" else empty end),
@@ -499,7 +495,7 @@ inbox_item_gaps() {  # <payload.json>
                 then "either an at time or one datetime-local input on action \(.value)" else empty end),
               (if .effect == "dispatch" and ((.brief // "") | test("[^[:space:]]") | not)
                 then "a one-line brief on dispatch action \(.value)" else empty end),
-              (if .effect != "hold-until" and .effect != "batch-defer" and has("until")
+              (if (.effect == "hold-until" or .effect == "batch-defer" | not) and has("until")
                 then "no until on non-hold-until action \(.value)" else empty end),
               (if .effect != "remind-at" and has("at")
                 then "no at on non-remind-at action \(.value)" else empty end)),

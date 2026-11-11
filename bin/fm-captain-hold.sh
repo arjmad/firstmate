@@ -2102,7 +2102,6 @@ command_answer_batch() {
       pick=''
       if parse_hold_kind_prefix "$reason"; then
         pick=$HOLD_RECOMMENDED
-        [ -n "$pick" ] || pick=$HOLD_DEFAULT_OPTION
       fi
       if [ -z "$pick" ]; then
         left=$((left + 1))

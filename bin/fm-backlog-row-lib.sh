@@ -75,10 +75,11 @@ fm_backlog_date_valid() {
 }
 
 # fm_backlog_batch_valid <tag>: succeed for `place:<slug>`, `board:<task-id>`,
-# or a bare lowercase slug, each part lowercase.
+# or a bare lowercase slug, each part lowercase; a board id is at most 116
+# characters, so the board's `batch.board.<id>` item key stays within 128.
 fm_backlog_batch_valid() {
   [[ "${1:-}" =~ ^(place:)?[a-z0-9][a-z0-9-]{0,39}$ ]] \
-    || [[ "${1:-}" =~ ^board:[a-z0-9][a-z0-9._-]{0,127}$ ]]
+    || [[ "${1:-}" =~ ^board:[a-z0-9][a-z0-9._-]{0,115}$ ]]
 }
 
 # fm_backlog_batch_class <tag>: print the group class a tag gives, `board` or

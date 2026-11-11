@@ -199,8 +199,9 @@ in_flight waits_on is "captain" only when the worker's still-open blocker or
   falls back to kind=captain, and omitted[] counts those rows so the gap stays
   visible, apart from the public-followup obligations tasks-axi files itself,
   which are always the fleet's.
-  board.groups lists each group of two or more captain rows sharing a home and
-  a Batch: tag: batch, group, owner, ids, count, all_recommended (every
+  board.groups lists each group of two or more of this home's captain calls
+  sharing a Batch: tag, the members answer-batch and defer-batch act on (a
+  secondmate home works its own groups): batch, group, owner, ids, count, all_recommended (every
   member records a recommended choice), and back, the earliest back-on date
   when every member is moved to a later date, else null.
   board.prune is the weekly backlog prune card's input: due (its weekly
@@ -511,6 +512,10 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                members:[.members[] | {id, key, summary, question}],
                live:any(.members[]; .live)}
           end);
+  # A captain call that rides on a group row shown under owner $owner.
+  def in_shown_group($folded; $owner):
+    .batch as $batch
+    | .hold_kind == "captain" and $batch != null and (($folded | index($owner + " " + $batch)) != null);
   def projected_deferred_hold:
     .hold_bucket != null and .hold_bucket != "live";
   def bounded_blocker_note($n):
@@ -689,6 +694,9 @@ MODEL=$(printf '%s' "$SNAP" | jq \
      + [ (.secondmate_current.records // [])[] | .queued[]?
          | select(.hold_kind == "captain" and projected_deferred_hold) ]
      | length) as $decisions_marked_deferred
+  # The owner and tag of every group row shown, so its deferred members ride on
+  # it rather than also showing alone as gates.
+  | ([$decisions_all[] | select(.verb == "captain-batch") | .owner + " " + .batch]) as $folded_groups
   | (if ($return_catchup.pending // false) then
        [{id:"(return-catchup)",
          title:((if ($return_catchup.blockers // 0) > 0 then
@@ -717,12 +725,14 @@ MODEL=$(printf '%s' "$SNAP" | jq \
               (.state == "in_flight" and .current_role == "held" and ($working_ids | index($record.id) | not))))
          | select(.captain_actionable != true)
          | select((.hold_bucket == null) or ($all_decisions == 0))
+         | select(in_shown_group($folded_groups; "(main)") | not)
          | as_gate("(main)") ]
      + [ (.secondmate_current.records // [])[] as $m
          | select($m.provenance.selected == "structured-home")
          | $m.queued[]?
          | select(.captain_actionable != true)
          | select((.hold_bucket == null) or ($all_decisions == 0))
+         | select(in_shown_group($folded_groups; $m.id) | not)
          | as_gate($m.id) ]) as $gates_all
   | ([ .scout_reports[]
        | . as $r
@@ -828,7 +838,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                    more:([($c | length) - $prune_n, 0] | max)}
                   + (if $prune_schedule.error then {error:$prune_schedule.error} else {} end))}} else {} end)
   | (if $f_board then
-       .board.groups = ([.board.queued[] | select(.wait == "captain" and .batch != null)]
+       .board.groups = ([.board.queued[]
+           | select(.owner == "(main)" and .hold_kind == "captain" and .batch != null)]
          | group_by([.owner, .batch])
          | map(select(length > 1)
                | {batch:.[0].batch, group:.[0].group, owner:.[0].owner,
