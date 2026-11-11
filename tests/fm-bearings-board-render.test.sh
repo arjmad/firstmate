@@ -517,6 +517,75 @@ test_prune_answers_name_the_offer_and_what_to_drop() {
   pass "prune answers name the recorded offer: Drop all after a confirm, the ticked positions, or keep"
 }
 
+# A group of calls renders as one inbox item with its members as lines:
+# boards first, then places, right after Decisions; Tick each sends only the
+# ticked members, and every group answer names its Batch: tag.
+batch_board() {  # <name> -> home with the full payload plus two groups built
+  local home
+  home=$(make_home "$1")
+  full_payload "$home/payload.json"
+  jq '.inbox += [
+    {key:"batch.place.office", group:"batch", batch:"place:office", class:"place", repo:"business",
+     title:"Office errands", ask:"Work the list at the office.",
+     members:[{id:"office-a", title:"Sign the lease copy"}, {id:"office-b", title:"Post the cheque"}],
+     inputs:[{name:"day", label:"Move to", type:"date"}],
+     actions:[
+       {value:"done-all", label:"Done all", hint:"Closes every errand on the list.", effect:"batch-answer", reads:[]},
+       {value:"tick", label:"Tick each", hint:"Closes only the ones you tick.", effect:"batch-pick", reads:[]},
+       {value:"move", label:"Move list", hint:"Brings the list back that day.", effect:"batch-defer", reads:["day"]}]},
+    {key:"batch.board.review-1111", group:"batch", batch:"board:review-1111", class:"board", repo:"firstmate",
+     title:"Review board", ask:"Accept the recommendations.",
+     members:[{id:"card-a", title:"Card A", recommended:"Keep"}, {id:"card-b", title:"Card B", recommended:"Wait"}],
+     inputs:[],
+     actions:[
+       {value:"accept", label:"Accept all recommended", hint:"Records each card at its recommendation.", effect:"batch-recommended", reads:[]},
+       {value:"later", label:"Next week", hint:"Brings the board back next week.", effect:"batch-defer", until:"2099-03-02", reads:[]}]}]' \
+    "$home/payload.json" > "$home/payload.json.tmp" && mv "$home/payload.json.tmp" "$home/payload.json"
+  build_board "$home" "$home/payload.json"
+  printf '%s\n' "$home"
+}
+
+test_a_group_of_calls_is_one_item_with_its_members() {
+  local home out
+  home=$(batch_board batch-layout)
+  out=$(render "$home")
+  printf '%s' "$out" | jq -e --arg soon "$SOON" '
+    .error == "" and .inboxCount == "8"
+      and ([.sections[] | select(.depth == 0) | .key]
+        == ["blocking", "decisions", "batch-board", "batch-place", "overdue", "due-" + $soon, "later", "underway", "landed", "queued"])
+      and ([.sections[] | select(.key == "batch-place")][0]
+        | .title == "Places" and .count == "1"
+          and (.items[0] | .title == "Office errands" and .meta == "business · 2 calls"
+            and ([.actions[].value] == ["done-all", "tick", "move"]))
+          and ([.rows[] | {title, pick}] == [{title:"Sign the lease copy", pick:true}, {title:"Post the cheque", pick:true}]))
+      and ([.sections[] | select(.key == "batch-board")][0]
+        | .title == "Boards"
+          and ([.rows[] | {title, meta, pick}] == [
+            {title:"Card A", meta:"recommended: Keep", pick:false},
+            {title:"Card B", meta:"recommended: Wait", pick:false}]))
+  ' >/dev/null || fail "a group of calls did not render as one item with its members: $out"
+  out=$(render "$home" '[
+    {"do":"action","key":"batch.place.office","value":"tick"},
+    {"do":"tick","key":"batch.place.office","picks":["office-b"]},
+    {"do":"action","key":"batch.place.office","value":"tick"},
+    {"do":"action","key":"batch.board.review-1111","value":"accept","note":"all fine"}]')
+  printf '%s' "$out" | jq -e '
+    (.prompts | length) == 2
+      and (.prompts[0].data | .question == "batch.place.office" and .group == "batch" and .batch == "place:office"
+            and .action == "tick" and .effect == "batch-pick" and .values == {picked:"office-b"})
+      and (.prompts[0].line == "Office errands → Tick each · Post the cheque")
+      and (.prompts[1].data | .batch == "board:review-1111" and .effect == "batch-recommended" and .note == "all fine")
+  ' >/dev/null || fail "group answers did not carry their tag and ticked members: $out"
+  out=$(render "$home" '[{"do":"action","key":"batch.place.office","value":"move","values":{"day":"2099-03-05"}},
+    {"do":"action","key":"batch.board.review-1111","value":"later"}]')
+  printf '%s' "$out" | jq -e '
+    (.prompts | length) == 2
+      and (.prompts[0].data | .effect == "batch-defer" and .until == "2099-03-05")
+      and (.prompts[1].data | .effect == "batch-defer" and .until == "2099-03-02")
+  ' >/dev/null || fail "Move list did not send its date: $out"
+  pass "a group of calls is one inbox item with its members as lines, and its answers name the group"
+}
+
 test_full_snapshot_question_reaches_the_rendered_decision() {
   local home a b reason snapshot calls out
   home=$(make_home full-decision-question)
@@ -554,6 +623,7 @@ EOF
 }
 
 test_the_inbox_comes_first_in_folding_sections
+test_a_group_of_calls_is_one_item_with_its_members
 test_an_inbox_item_shows_its_own_actions_and_value_boxes
 test_an_action_carries_its_values_note_and_route
 test_an_action_with_an_empty_box_refuses_and_marks_it

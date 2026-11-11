@@ -413,6 +413,17 @@ test_wrapper_row_shape() {
   out=$(wrapper_from_code "$dir" batch rs-1 Office 2>&1)
   rc=$?
   expect_code 2 "$rc" "batch with an uppercase tag"
+  # A group names itself by structured fields: a place list or a board.
+  wrapper_from_code "$dir" batch rs-1 place:office >/dev/null || fail "batch refused a place tag"
+  assert_equals place:office "$(wrapper_from_code "$dir" batch rs-1)" "a place tag was not recorded"
+  wrapper_from_code "$dir" batch rs-1 board:pricing-review.1111 >/dev/null || fail "batch refused a board tag"
+  assert_equals board:pricing-review.1111 "$(wrapper_from_code "$dir" batch rs-1)" "a board tag was not recorded"
+  for bad in place:Office shelf:office board: place:a.b; do
+    out=$(wrapper_from_code "$dir" batch rs-1 "$bad" 2>&1)
+    rc=$?
+    expect_code 2 "$rc" "batch with the tag $bad"
+  done
+  wrapper_from_code "$dir" batch rs-1 - >/dev/null || fail "batch could not clear a board tag"
   out=$(wrapper_from_code "$dir" due rs-missing 2026-12-01 2>&1)
   rc=$?
   expect_code 2 "$rc" "due on a missing row"

@@ -155,7 +155,7 @@ Default fields: schema, home, generated, prs,
   in_flight{id,kind,state,repo,name,doing,waits_on,since},
   secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
   secondmate_reconcile{id,spawn_gen,host,kind,ids},
-  decisions_open{id,key,verb,summary,question,owner}, landed{id,what,artifact,owner},
+  decisions_open{id,key,verb,summary,question,owner,batch,class,members?}, landed{id,what,artifact,owner},
   gates{id,title,blocked_by,reason,owner,filed}, reports{id,path}, recorded_prs{id,url},
   inbox_unread{id,at,summary},
   unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
@@ -165,6 +165,11 @@ Default gates are selected newest filed first before their bound; undated gates
   retain input order after dated gates.
 Decision presentation uses question, the full title and hold reason; summary
   remains a bounded overview and must not substitute for the question/options.
+Every decision row carries batch (its Batch: tag or null) and class, its group:
+  board or place for a tagged call, else quick when it records choices and
+  hands when it does not. Calls of one home sharing a tag fold into one row with
+  verb captain-batch, id and key the tag, and members[] {id,key,summary,question};
+  the bound counts that row once.
 landed merges this home's Done with registered secondmate homes' Done, bounded by
   a per-home cap (FM_BEARINGS_LANDED_PER_HOME) and an overall cap (FM_BEARINGS_LANDED),
   with omitted[] disclosure. Default selection is balanced across deterministic home
@@ -178,13 +183,14 @@ For every registered secondmate, readable structured facts from its own home are
 in_flight waits_on is "captain" only when the worker's still-open blocker or
   question carries the structured [on=captain] status tag, and since is that
   line's UTC time (the oldest, when several are open); both are null otherwise.
---fields board adds board{queued[],titles[]} for the bearings board composer:
+--fields board adds board{queued[],titles[],groups[]} for the bearings board composer:
   every queued or held backlog row of this home, with its full title, kind,
   hold_kind, hold_until, full hold_reason, choices (a captain hold's recorded
   {options[], recommended, ask}, or null; bin/fm-captain-hold.sh owns them),
   filed date, blocker ids, owned_by
   (arjun, fleet, or null when the row records no owner), wait (captain, date,
-  outside, work, or none) and ready (wait none), plus each
+  outside, work, or none), ready (wait none), batch, and group (a captain
+  row's class as on decision rows, else null), plus each
   structured secondmate home's queued rows as that home's summary projects
   them (bounded, titles as it shortened them), and every in_flight id with its
   full name. wait is captain for every captain hold, and for every row owned_by
@@ -193,6 +199,9 @@ in_flight waits_on is "captain" only when the worker's still-open blocker or
   falls back to kind=captain, and omitted[] counts those rows so the gap stays
   visible, apart from the public-followup obligations tasks-axi files itself,
   which are always the fleet's.
+  board.groups lists each group of two or more captain rows sharing a home and
+  a Batch: tag: batch, group, owner, ids, count, and all_recommended (every
+  member records a recommended choice).
   board.prune is the weekly backlog prune card's input: due (its weekly
   slot is open and a candidate exists), slot, open, snoozed_until, age_days,
   the candidates bin/fm-backlog-prune-lib.sh selects (oldest touch first, each
@@ -464,6 +473,40 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         else {options:(if $m.options == null then [] else ($m.options | split("|")) end),
               recommended:$m.recommended, ask:$m.ask} end
     end;
+  # The group a captain call belongs to (fork patch,
+  # docs/fork-decisions/2026-11-11-calls-grouped-by-what-it-takes.md), from
+  # structured fields only: a board: tag is a board, any other tag a place
+  # list (bin/fm-backlog-row-lib.sh owns the tags), and an untagged call is
+  # quick when it records choices, else it takes his own hands.
+  def call_class($choices):
+    if .batch != null then (if (.batch | startswith("board:")) then "board" else "place" end)
+    elif $choices != null and (($choices.options // []) | length) > 0 then "quick"
+    else "hands" end;
+  # Fold the decision rows sharing one owner and Batch: tag into one group row
+  # at the place of its first member; a group of one stays that member row.
+  def fold_groups:
+    . as $rows
+    | reduce range(0; length) as $i ({out:[], at:{}};
+        $rows[$i] as $r
+        | if $r.batch == null then .out += [$r]
+          else ($r.owner + " " + $r.batch) as $k
+          | if .at[$k] == null then
+              .at[$k] = (.out | length)
+              | .out += [{id:(if $r.owner == "(main)" then $r.batch else ($r.owner + "/" + $r.batch) end),
+                          key:$r.batch, verb:"captain-batch", owner:$r.owner,
+                          batch:$r.batch, class:$r.class, members:[$r]}]
+            else .out[.at[$k]].members += [$r] end
+          end)
+    | .out
+    | map(if .verb != "captain-batch" then .
+          elif (.members | length) == 1 then .members[0]
+          else (.members | length) as $n
+            | {id, key, verb,
+               summary:(("\($n) calls: " + ([.members[].summary] | join("; "))) | trunc(90)),
+               question:([.members[].question] | join("\n")),
+               owner, batch, class,
+               members:[.members[] | {id, key, summary, question}]}
+          end);
   def projected_deferred_hold:
     .hold_bucket != null and .hold_bucket != "live";
   def bounded_blocker_note($n):
@@ -609,15 +652,18 @@ MODEL=$(printf '%s' "$SNAP" | jq \
          | select(($all_decisions == 1) or live_captain_call)
          | {id,key:.id,verb:"captain-hold",
             summary:hold_summary(.title; .hold_reason),
-            question:(.title + ": " + .hold_reason),owner:"(main)"} ]
+            question:(.title + ": " + .hold_reason),owner:"(main)",
+            batch:(.batch // null), class:call_class(hold_choices)} ]
      + [ (.secondmate_current.records // [])[] as $m
          | ([ $m.decisions_open[]?
               | select(.source == "backlog" and .verb == "captain-hold")
               | select(($all_decisions == 1) or live_captain_call)
+              | ({hold_kind:"captain", hold_reason:(.reason // "")} | hold_choices) as $c
               | {id:($m.id + "/" + .id),key,verb,
                  summary:hold_summary((.summary // .id);
                                       (.reason // "captain decision pending")),
-                 question:(.question // ((.summary // .id) + ": " + (.reason // "captain decision pending"))),owner:$m.id} ]
+                 question:(.question // ((.summary // .id) + ": " + (.reason // "captain decision pending"))),owner:$m.id,
+                 batch:(.batch // null), class:call_class($c)} ]
             + [ $m.queued[]?
                 | select($all_decisions == 1 and .hold_kind == "captain")
                 | select(.id as $id
@@ -628,7 +674,9 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                 | {id:($m.id + "/" + .id),key:.id,verb:"captain-hold",
                    summary:hold_summary((.title // .id);
                                         (.hold_reason // "captain decision pending")),
-                   question:(.question // ((.title // .id) + ": " + (.hold_reason // "captain decision pending"))),owner:$m.id} ])[] ]) as $decisions_all
+                   question:(.question // ((.title // .id) + ": " + (.hold_reason // "captain decision pending"))),owner:$m.id,
+                   batch:(.batch // null), class:call_class(hold_choices)} ])[] ]
+     | fold_groups) as $decisions_all
   | ([ .backlog.records[]
          | . as $record
          | select(.structured and projected_deferred_hold) ]
@@ -757,11 +805,14 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                      elif .hold_kind != null then "work"
                      elif $owned_by == null and .kind == "captain" then "captain"
                      else "none" end) as $wait
+                  | hold_choices as $choices
                   | {id, title:(.title // .id), repo:(.repo // null), kind:(.kind // null),
                      hold_kind:(.hold_kind // null), hold_until:(.hold_until // null),
-                     hold_reason:(.hold_reason // null), choices:hold_choices, filed:(.since // null),
+                     hold_reason:(.hold_reason // null), choices:$choices, filed:(.since // null),
                      blocked_by:(.unresolved_blocker_ids // []), owner, owned_by:$owned_by,
-                     wait:$wait, ready:($wait == "none")} ],
+                     wait:$wait, ready:($wait == "none"),
+                     batch:(.batch // null),
+                     group:(if $wait == "captain" then call_class($choices) else null end)} ],
         titles: [ $in_flight_all[] | {id, name:(.full_name // .name)} ],
         prune: (prune_candidates($snap.backlog.records; $today; $prune_age;
                   [$snap.tasks[] | select(.kind != "secondmate") | .id]) as $c
@@ -770,6 +821,14 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                    age_days:$prune_age, candidates:$c[:$prune_n],
                    more:([($c | length) - $prune_n, 0] | max)}
                   + (if $prune_schedule.error then {error:$prune_schedule.error} else {} end))}} else {} end)
+  | (if $f_board then
+       .board.groups = ([.board.queued[] | select(.wait == "captain" and .batch != null)]
+         | group_by([.owner, .batch])
+         | map(select(length > 1)
+               | {batch:.[0].batch, group:.[0].group, owner:.[0].owner,
+                  ids:map(.id), count:length,
+                  all_recommended:all(.[]; .choices.recommended != null)}))
+     else . end)
   | . + (if $f_paths then {paths:[ $snap.tasks[] | {id, worktree:(.paths.worktree.path // "-"), home:(.paths.home.path // "-"), status:.paths.status_log.path, report:.paths.report.path} ]} else {} end)
   | . + (if $f_actions then {actions:[ $snap.tasks[] | {id, watch:(.actions.watch // .actions.send // "-"), steer:(.actions.steer // .actions.send // "-")} ]} else {} end)
   | . + (if $f_endpoints then {endpoints:[ $snap.tasks[] | {id, backend, target:(.endpoint.target // "-"), exists:.endpoint.exists, agent:.endpoint.agent_alive} ]} else {} end)

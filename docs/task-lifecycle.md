@@ -130,7 +130,9 @@ A row's title is its next action in plain words and never opens with a date; its
 A hold uses one of four kinds strictly: `captain` needs his answer or his hands, `external` waits on someone else to act even when he owns the follow-up, `future` has nothing to do until a date, and `parked` is someday.
 Every hold carries a date: `future` and `parked` a back-on date (`--until`), `external` a recheck date (`--until`), and a captain call either the date he names or, when new and undated, a `Due:` date of the next day, so it stays live today with no back-on date, because tasks-axi lifts a hold on its back-on date and a new call dated today would read as ready work.
 A real deadline is a `Due: YYYY-MM-DD` body line (`add --due`, `due <id>`), kept apart from the back-on date so a snooze never moves it.
-Rows the captain moves together carry one `Batch: <tag>` line (`add --batch`, `batch <id>`), and `bin/fm-captain-hold.sh defer-batch <tag>` defers every captain call carrying it at once.
+Rows the captain works off together carry one `Batch: <tag>` line (`add --batch`, `batch <id>`): `place:<name>` for one place's errand list, `board:<task-id>` for the members of one board.
+A member is one held row and never shows alone, while a call with its own outside deadline stays its own call and gets no tag.
+`bin/fm-captain-hold.sh defer-batch <tag>` defers, and `answer-batch <tag>` answers, every captain call carrying the tag at once.
 Fleet work that only comes back on a date is a `future` hold with `--until`, never a captain hold.
 When a main-side thread such as a pending captain decision or relay reminder is worth durable tracking, file it as its own work item and hold it through that wrapper.
 Captain calls discovered by investigations or visual reviews follow `captain-hold-lifecycle`, which owns their completion gate and recorded-answer rules.

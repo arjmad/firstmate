@@ -329,6 +329,8 @@ textarea.fm-input { min-height: 88px; resize: vertical; }
 .bb-dispatch__count { flex: 1 1 auto; font-size: .875rem; font-weight: 600; color: var(--fm-muted); }
 .bb-dispatch .fm-btn[disabled] { opacity: .45; cursor: not-allowed; }
 .bb-prune { margin-top: 10px; }
+.bb-members { margin-top: 6px; }
+.bb-item.is-sent .bb-members .bb-pick { display: none; }
 .bb-prune .bb-confirm { margin-bottom: 8px; }
 .bb-foot .fm-meta { font-family: var(--fm-font-mono); }
 @media (min-width: 720px) {
@@ -573,10 +575,36 @@ __FM_BEARINGS_BOARD_DATA__
   var itemIndex = 0;
   function renderInboxItem(list, it) {
     var index = itemIndex++;
+    var isBatch = it.group === "batch" && Array.isArray(it.members);
     var meta = it.group === "blocking"
       ? metaLine([it.repo, it.since ? "worker waiting since " + whenWords(it.since) : "worker waiting"], it.pr_url)
+      : isBatch ? metaLine([it.repo, it.members.length + " calls"], it.pr_url)
       : metaLine([it.repo], it.pr_url);
     var item = itemShell(list, it.key, index, it.title, it.ask, meta);
+    /* A group's members ride on it as lines; Tick each puts a box on each. */
+    var ticks = [];
+    if (isBatch) {
+      var canTick = it.actions.some(function (a) { return a.effect === "batch-pick"; });
+      var ml = el("ul", "bb-list bb-members");
+      it.members.forEach(function (m) {
+        var t = cleanTitle(m.title);
+        var row = el(canTick ? "label" : "div", "bb-row" + (canTick ? " bb-row--pick" : ""));
+        if (canTick) {
+          var box = el("input", "bb-pick");
+          box.type = "checkbox";
+          box.value = m.id;
+          box.setAttribute("aria-label", "Tick " + t.title);
+          ticks.push({ box: box, title: t.title });
+          row.appendChild(box);
+        }
+        row.appendChild(el("span", "bb-row__t", t.title));
+        if (m.recommended) row.appendChild(el("span", "fm-meta bb-row__m", "recommended: " + m.recommended));
+        var li = el("li");
+        li.appendChild(row);
+        ml.appendChild(li);
+      });
+      item.appendChild(ml);
+    }
     var inputs = {};
     var placed = {};
     var acts = el("div", "bb-acts");
@@ -642,14 +670,25 @@ __FM_BEARINGS_BOARD_DATA__
           missing.input.focus();
           return;
         }
+        if (a.effect === "batch-pick") {
+          var picked = ticks.filter(function (t) { return t.box.checked; });
+          if (!picked.length) {
+            if (ticks[0]) ticks[0].box.focus();
+            return;
+          }
+          values.picked = picked.map(function (t) { return t.box.value; }).join(",");
+          detail.push(picked.slice(0, 3).map(function (t) { return t.title; }).join("; ")
+            + (picked.length > 3 ? " +" + (picked.length - 3) + " more" : ""));
+        }
         var noteText = note.value.trim();
         if (tooLong(limit, [noteText].concat(Object.keys(values).map(function (k) { return values[k]; })))) return;
         var ctx = { schema: "fm-bearings-answer.v1", question: it.key, group: it.group,
           action: a.value, effect: a.effect, values: values, note: noteText };
-        if (a.effect === "hold-until") ctx.until = a.until || values[a.reads[0]];
+        if (isBatch) ctx.batch = it.batch;
+        if (a.effect === "hold-until" || a.effect === "batch-defer") ctx.until = a.until || values[a.reads[0]];
         if (a.effect === "remind-at") ctx.at = a.at || values[a.reads[0]];
         if (a.effect === "dispatch") ctx.brief = a.brief;
-        if (a.effect === "close" && it.close) ctx.close = it.close;
+        if ((a.effect === "close" || a.effect === "batch-answer") && it.close) ctx.close = it.close;
         queueAnswer(item, { item: it.title, action: a.label, detail: detail.join(", "), note: noteText }, ctx);
         markSent(item, pill, a.label);
       });
@@ -802,6 +841,7 @@ __FM_BEARINGS_BOARD_DATA__
   /* ---- Waiting on you ---- */
   var inbox = document.getElementById("bb-inbox");
   var blocking = data.inbox.filter(function (i) { return i.group === "blocking"; });
+  var batches = data.inbox.filter(function (i) { return i.group === "batch"; });
   var due = data.inbox.filter(function (i) { return i.group === "due"; })
     .slice().sort(function (a, b) { return a.due < b.due ? -1 : a.due > b.due ? 1 : 0; });
   var prune = data.prune && Array.isArray(data.prune.candidates) && data.prune.candidates.length ? data.prune : null;
@@ -828,6 +868,14 @@ __FM_BEARINGS_BOARD_DATA__
     decisionsBody.appendChild(el("p", "bb-empty", "No open decisions."));
   }
   refreshTakeAll();
+  /* A group of calls is one item: boards first, then each place list. */
+  [{ c: "board", h: "Boards" }, { c: "place", h: "Places" }].forEach(function (g) {
+    var rows = batches.filter(function (i) { return i.class === g.c; });
+    if (!rows.length) return;
+    var gl = el("ul", "bb-list");
+    rows.forEach(function (i) { renderInboxItem(gl, i); });
+    section(inbox, "batch-" + g.c, g.h, rows.length, true).appendChild(gl);
+  });
   var overdue = due.filter(function (i) { return i.due < today; });
   if (overdue.length) {
     var ol = el("ul", "bb-list");

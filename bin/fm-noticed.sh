@@ -5,12 +5,13 @@
 # Usage:
 #   fm-noticed.sh file noticed|idea <slug> --title <text> --why <text>
 #                 [--from <task-or-agent>] [--repo <name>] [--evidence <text>]
-#                 [--now]
+#                 [--now] [--routine]
 #   fm-noticed.sh collect <task-id>
 #   fm-noticed.sh list [noticed|idea]
 #   fm-noticed.sh unseen
 #   fm-noticed.sh shown <id>...
-#   fm-noticed.sh close <id> --evidence <text> [--fixed] [--pr <url>]
+#   fm-noticed.sh close <id> --evidence <text> [--fixed --pr <url> | --dropped]
+#   fm-noticed.sh waiting [--shown <id>...]
 #
 # .agents/skills/noticed-queue/SKILL.md owns the policy: who files, when, how
 # to match a duplicate, and what the Monday sweep and triage do. This script
@@ -18,9 +19,11 @@
 #
 # AN ITEM IS ITS SLUG. The task id is noticed-<slug> or idea-<slug>, and the
 # backlog kind is noticed or idea, so `fm-tasks-axi.sh list --kind noticed`
-# finds them. Every item is an ordinary captain hold through
-# bin/fm-captain-hold.sh (kind reversible), which keeps it out of dispatch:
-# nothing here ever starts work.
+# finds them. An item is an ordinary captain hold through
+# bin/fm-captain-hold.sh (kind reversible), which keeps it out of dispatch,
+# unless it is filed --routine: then it is the fleet's own work, held for no
+# one (fork patch, docs/fork-decisions/2026-11-11-calls-grouped-by-what-it-takes.md).
+# Nothing here ever starts work.
 #
 # file     File one item, or attach evidence to the item its slug already
 #          names. One line per call:
@@ -37,7 +40,14 @@
 #          doing harm (money, customers, account health, security): filed,
 #          matched or reopened, it joins the unseen list labelled `now`, the
 #          only label the wake drain prints, and an idea refuses it. Once
-#          `now`, a row stays `now` until marked shown. --from names who saw it (a
+#          `now`, a row stays `now` until marked shown. --routine files a
+#          noticed item firstmate will fix or drop on its own, an undoable
+#          change inside its authority that needs no decision of his: the row
+#          is not held, its owner is the fleet, and it joins no unseen list
+#          until `close --fixed` or `--dropped` lists it for the Monday
+#          triage (a --now row is still listed now); an idea refuses it. An
+#          open item filed again only gains its evidence, --routine or not.
+#          --from names who saw it (a
 #          task id or an agent); one naming nova or sapna is refused, because
 #          Sapna's agents never file into this backlog. A body rewrite takes
 #          bin/fm-captain-hold.sh's per-task control lock, so it never replays
@@ -63,12 +73,24 @@
 #          row the captain has not been told yet. --fixed, which needs --pr,
 #          says firstmate fixed a noticed item on its own: the item rejoins
 #          the unseen list labelled `fixed`, titled `<title> - <evidence>` and
-#          the PR URL, for the Monday triage's "Fixed on my own this week"
-#          list, unless a `now` row keeps it; an idea refuses it. A later
-#          sighting replaces a `fixed` row. Prints `closed: <id>`.
+#          the PR URL, for the Monday triage's "Handled for you" list,
+#          unless a `now` row keeps it; an idea refuses it. --dropped says
+#          firstmate dropped a noticed item on its own: it joins that list
+#          labelled `dropped`, titled `<title> - <evidence>`; an idea refuses
+#          it, and it does not combine with --fixed. A later sighting replaces
+#          a `fixed` or `dropped` row. A row already closed (a routine item
+#          whose ship's teardown closed it) is recorded without a second
+#          close. Prints `closed: <id>`.
+# waiting  Print each captain call held 14 days or more with no date - the
+#          canonical snapshot's `aged` bucket, read through
+#          bin/fm-fleet-snapshot.sh --contribution-input - that no Monday
+#          triage has shown yet, one `<id><TAB><days held><TAB><title>` line
+#          each, for the triage's "Waiting 2+ weeks" section. --shown marks
+#          ids shown, so each call shows there once; prints `shown: <id>`.
 #
-# State: state/noticed/unseen.tsv (the unseen list) and state/noticed/filed (every id ever filed, so
-# an item Done retention archived out of the backlog is still known), written
+# State: state/noticed/unseen.tsv (the unseen list), state/noticed/filed (every id ever filed, so
+# an item Done retention archived out of the backlog is still known), and
+# state/noticed/waiting-shown (the calls a triage showed as waiting), written
 # under state/noticed/lock (bin/fm-wake-lib.sh's lock, with its stale-owner
 # recovery).
 # FM_NOTICED_NOW (YYYY-MM-DD) fixes the date for tests.
@@ -84,6 +106,7 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 DIR="$STATE/noticed"
 UNSEEN="$DIR/unseen.tsv"
 FILED="$DIR/filed"
+WAITING_SHOWN="$DIR/waiting-shown"
 LOCK="$DIR/lock"
 TODAY=${FM_NOTICED_NOW:-$(date -u +%Y-%m-%d)}
 TASKS="$SCRIPT_DIR/fm-tasks-axi.sh"
@@ -155,14 +178,14 @@ drop_unseen() {  # <id>; call under lock_state
 
 # A noticed item joins the unseen list to wait for the Monday triage, or as
 # `now` when urgent; an existing `noticed` row is relabelled `now`, and a
-# `fixed` row is replaced, because the item is broken again.
+# `fixed` or `dropped` row is replaced, because the item is broken again.
 list_noticed() {  # <id> <title> <now 0|1>; call under lock_state
   if [ "$3" = 1 ]; then
     grep -q "^$1${TAB}now$TAB" "$UNSEEN" 2>/dev/null && return 0
     drop_unseen "$1"
     add_unseen "$1" now "$2"
   else
-    ! grep -q "^$1${TAB}fixed$TAB" "$UNSEEN" 2>/dev/null || drop_unseen "$1"
+    ! grep -Eq "^$1$TAB(fixed|dropped)$TAB" "$UNSEEN" 2>/dev/null || drop_unseen "$1"
     add_unseen "$1" noticed "$2"
   fi
 }
@@ -188,7 +211,7 @@ hold_reason() {  # <kind> <title> <why> <from>
 }
 
 cmd_file() {
-  local kind=${1:-} slug=${2:-} title='' why='' from=firstmate repo='' evidence='' now=0 id show state
+  local kind=${1:-} slug=${2:-} title='' why='' from=firstmate repo='' evidence='' now=0 routine=0 id show state
   [ $# -ge 2 ] || refuse "file needs noticed|idea and a slug"
   shift 2
   while [ $# -gt 0 ]; do
@@ -199,12 +222,14 @@ cmd_file() {
       --repo) repo=${2-}; shift ;;
       --evidence) evidence=${2-}; shift ;;
       --now) now=1 ;;
+      --routine) routine=1 ;;
       *) refuse "unknown option $1" ;;
     esac
     shift
   done
   case "$kind" in noticed | idea) ;; *) refuse "kind must be noticed or idea (got $kind)" ;; esac
   [ "$now" = 0 ] || [ "$kind" = noticed ] || refuse "--now marks an urgent noticed item; an idea waits for the Monday triage"
+  [ "$routine" = 0 ] || [ "$kind" = noticed ] || refuse "--routine files a noticed item firstmate fixes or drops; an idea waits for the Monday triage"
   valid_slug "$slug" || refuse "slug must be lowercase-kebab (got $slug)"
   one_line --title "$title"
   one_line --why "$why"
@@ -228,9 +253,20 @@ cmd_file() {
       printf 'skipped: %s (answered earlier)\n' "$id"
       return 0
     fi
+    "$TASKS" reopen "$id" >/dev/null || { echo "fm-noticed: could not reopen $id" >&2; exit 1; }
+    if [ "$routine" = 1 ]; then
+      "$TASKS" owner "$id" fleet >/dev/null \
+        || { echo "fm-noticed: $id is reopened but its owner could not be set to the fleet" >&2; exit 1; }
+      append_body "$id" "Back $TODAY, seen by $from: ${evidence:-$why}" \
+        || { echo "fm-noticed: $id is reopened but its new evidence was not attached" >&2; exit 1; }
+      # Broken again: its fix or drop no longer stands.
+      ! grep -Eq "^$id$TAB(fixed|dropped)$TAB" "$UNSEEN" 2>/dev/null || drop_unseen "$id"
+      [ "$now" = 0 ] || list_noticed "$id" "$title" 1
+      printf 'reopened: %s\n' "$id"
+      return 0
+    fi
     # Reopened rows are dispatchable until held, so hold at once, and close
     # the row again if the hold fails.
-    "$TASKS" reopen "$id" >/dev/null || { echo "fm-noticed: could not reopen $id" >&2; exit 1; }
     if ! "$HOLD" hold "$id" --kind reversible --reason "$(hold_reason "$kind" "$title" "$why" "$from")" >/dev/null; then
       "$TASKS" "done" "$id" >/dev/null 2>&1 \
         || echo "fm-noticed: $id is reopened but unheld; hold or close it before anything dispatches" >&2
@@ -258,6 +294,15 @@ Why it may matter: $why"
 Back after an earlier $id closed; its record is in the Done archive."
   [ -z "$evidence" ] || body="$body
 Evidence: $evidence"
+  if [ "$routine" = 1 ]; then
+    "$TASKS" add "$id" "$title" --kind "$kind" --owner fleet ${repo:+--repo "$repo"} --body "$body
+Routine: firstmate fixes or drops this on its own." >/dev/null \
+      || { echo "fm-noticed: could not add $id" >&2; exit 1; }
+    grep -Fxq -- "$id" "$FILED" 2>/dev/null || printf '%s\n' "$id" >> "$FILED"
+    [ "$now" = 0 ] || list_noticed "$id" "$title" 1
+    printf '%s: %s\n' "$outcome" "$id"
+    return 0
+  fi
   "$TASKS" add "$id" "$title" --kind "$kind" ${repo:+--repo "$repo"} --body "$body" >/dev/null \
     || { echo "fm-noticed: could not add $id" >&2; exit 1; }
   "$HOLD" hold "$id" --kind reversible --reason "$(hold_reason "$kind" "$title" "$why" "$from")" >/dev/null \
@@ -317,13 +362,14 @@ cmd_shown() {
 }
 
 cmd_close() {
-  local id=${1:-} evidence='' fixed=0 pr='' settled show title=''
+  local id=${1:-} evidence='' fixed=0 dropped=0 pr='' settled show title='' label=''
   [ $# -ge 1 ] || refuse "close needs an id"
   shift
   while [ $# -gt 0 ]; do
     case "$1" in
       --evidence) evidence=${2-}; shift ;;
       --fixed) fixed=1 ;;
+      --dropped) dropped=1 ;;
       --pr) pr=${2-}; shift ;;
       *) refuse "unknown option $1" ;;
     esac
@@ -334,25 +380,58 @@ cmd_close() {
   [ -z "$pr" ] || one_line --pr "$pr"
   [ "$fixed" = 0 ] || [ "${id%%-*}" = noticed ] || refuse "--fixed records a noticed item firstmate fixed; an idea waits for his pick"
   [ "$fixed" = 0 ] || [ -n "$pr" ] || refuse "--fixed needs --pr <url>, so the Monday triage can link the fix"
+  [ "$dropped" = 0 ] || [ "$fixed" = 0 ] || refuse "--fixed and --dropped do not combine"
+  [ "$dropped" = 0 ] || [ "${id%%-*}" = noticed ] || refuse "--dropped records a noticed item firstmate dropped; an idea waits for his pick"
   settled="Settled $TODAY: $evidence${pr:+ ($pr)}"
-  [ "$fixed" = 0 ] || settled="$settled Fixed by firstmate on its own."
+  [ "$fixed" = 0 ] || { settled="$settled Fixed by firstmate on its own."; label=fixed; }
+  [ "$dropped" = 0 ] || { settled="$settled Dropped by firstmate on its own."; label=dropped; }
   lock_state
-  if [ "$fixed" = 1 ]; then
-    show=$("$TASKS" show "$id" 2>/dev/null) || { echo "fm-noticed: could not read $id" >&2; exit 1; }
-    title=$(shown_field "$show" title)
-  fi
+  show=$("$TASKS" show "$id" 2>/dev/null) || { echo "fm-noticed: could not read $id" >&2; exit 1; }
+  title=$(shown_field "$show" title)
   append_body "$id" "$settled" || { echo "fm-noticed: could not record the evidence on $id" >&2; exit 1; }
-  "$TASKS" "done" "$id" >/dev/null || { echo "fm-noticed: could not close $id" >&2; exit 1; }
+  if [ "$(shown_field "$show" state)" != "done" ]; then
+    "$TASKS" "done" "$id" >/dev/null || { echo "fm-noticed: could not close $id" >&2; exit 1; }
+  fi
   # An urgent row he has not been told about yet stays for the drain.
   if ! grep -q "^$id${TAB}now$TAB" "$UNSEEN" 2>/dev/null; then
     drop_unseen "$id"
-    [ "$fixed" = 0 ] || add_unseen "$id" fixed "$title - $evidence ($pr)"
+    case "$label" in
+      fixed) add_unseen "$id" fixed "$title - $evidence ($pr)" ;;
+      dropped) add_unseen "$id" dropped "$title - $evidence" ;;
+    esac
   fi
   printf 'closed: %s\n' "$id"
 }
 
+cmd_waiting() {
+  local id snapshot
+  if [ "${1:-}" = --shown ]; then
+    shift
+    [ $# -ge 1 ] || refuse "waiting --shown needs at least one id"
+    lock_state
+    for id in "$@"; do
+      [[ $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || refuse "bad task id $id"
+      grep -Fxq -- "$id" "$WAITING_SHOWN" 2>/dev/null || printf '%s\n' "$id" >> "$WAITING_SHOWN"
+      printf 'shown: %s\n' "$id"
+    done
+    return 0
+  fi
+  [ $# -eq 0 ] || refuse "waiting takes no arguments, or --shown <id>..."
+  snapshot=$("$SCRIPT_DIR/fm-fleet-snapshot.sh" --contribution-input) \
+    || { echo "fm-noticed: could not read the backlog snapshot" >&2; exit 1; }
+  printf '%s' "$snapshot" | jq -r '
+    .backlog.records[]
+    | select(.structured and .hold_bucket == "aged")
+    | [.id, (.hold_age_days | tostring), .title] | @tsv' \
+    | while IFS=$TAB read -r id days title; do
+        grep -Fxq -- "$id" "$WAITING_SHOWN" 2>/dev/null && continue
+        printf '%s\t%s\t%s\n' "$id" "$days" "$title"
+      done
+}
+
 case "${1:-}" in
   file) shift; cmd_file "$@" ;;
+  waiting) shift; cmd_waiting "$@" ;;
   close) shift; cmd_close "$@" ;;
   collect) shift; cmd_collect "$@" ;;
   list) shift; cmd_list "$@" ;;

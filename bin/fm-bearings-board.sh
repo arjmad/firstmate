@@ -114,7 +114,12 @@
 #             ask, repo, inputs[], actions[]} plus optional since, pr_url and
 #             close. group `blocking` is a worker blocked on him (key = that
 #             task id); group `due` is a captain hold due on `due` (YYYY-MM-DD,
-#             key = the held task id). inputs[] are value boxes {name, label,
+#             key = the held task id); group `batch` is one group of his calls
+#             sharing a `Batch:` tag (bin/fm-backlog-row-lib.sh owns the tags),
+#             with `batch` its tag, key `batch.` plus the tag with `:` read as
+#             `.`, `class` board or place to match the tag, and members[] two or
+#             more {id, title, recommended?}, each a captain-held task id that
+#             no card or other item uses. inputs[] are value boxes {name, label,
 #             type number|date|datetime-local|text, default?}; actions[] are
 #             two or three {value, label, hint, effect, reads[]} plus until, at
 #             or brief as the effect needs. inbox_item_gaps below owns the
@@ -303,11 +308,25 @@ validate_payload() {  # <data.json>
       and optional_date("until")
       and ((has("at") | not) or (.at | valid_datetime))
       and optional_string("brief");
+    def batch_tag:
+      type == "string"
+      and (test("^(place:)?[a-z0-9][a-z0-9-]{0,39}$") or test("^board:[a-z0-9][a-z0-9._-]{0,127}$"));
+    def batch_member:
+      type == "object" and (.id | slug(128)) and (.title | nonempty_string)
+      and optional_string("recommended");
     def inbox_item:
       type == "object"
       and (.key | slug(128))
-      and (.group == "blocking" or .group == "due")
+      and (.group == "blocking" or .group == "due" or .group == "batch")
       and (if .group == "due" then (.due | valid_date) else (has("due") | not) end)
+      and (if .group == "batch" then
+             (.batch | batch_tag)
+             and (.key == ("batch." + (.batch | gsub(":"; "."))))
+             and (.class == (if (.batch | startswith("board:")) then "board" else "place" end))
+             and (.members | type == "array") and (.members | length) >= 2
+             and ([.members[] | batch_member] | all)
+             and ([.members[].id] | length) == ([.members[].id] | unique | length)
+           else (has("batch") | not) and (has("members") | not) end)
       and repo_marker
       and (.title | nonempty_string)
       and (.ask | nonempty_string)
@@ -400,14 +419,26 @@ decision_card_gaps() {  # <effective-payload.json>
 #   draft          prepare something for the captain's review, never sent or paid
 #   send-mail      send mail under firstmate's normal account rules
 #   record         write the values it reads to their owning record
+#   batch-answer       answer every call of a `batch` group with one tap, Done
+#                      all (fm-captain-hold.sh answer-batch; --release with
+#                      close: release)
+#   batch-recommended  Accept all recommended on a board group (answer-batch
+#                      --recommended)
+#   batch-defer        Move list: defer every call of the group to its own
+#                      `until`, or the one date input it reads (defer-batch)
+#   batch-pick         Tick each: the board sends the ticked members as
+#                      values.picked, comma-separated ids, and firstmate answers
+#                      each one
 # A blocking item is a worker waiting on the captain, not a captain hold, so it
-# may not close or re-hold anything.
-INBOX_EFFECTS='resume-worker close hold-until remind-at dispatch draft send-mail record'
+# may not close or re-hold anything. A batch item takes only the batch effects,
+# which no other item takes, and Accept all recommended needs a board group.
+INBOX_EFFECTS='resume-worker close hold-until remind-at dispatch draft send-mail record batch-answer batch-recommended batch-defer batch-pick'
 inbox_item_gaps() {  # <payload.json>
   jq -r --arg effects "$INBOX_EFFECTS" '
     ($effects | split(" ")) as $effects
     | . as $payload
     | ([.captains_call[].key] + [.inbox[].key]) as $keys
+    | ([.inbox[] | select(.group == "batch") | .members[].id]) as $member_ids
     | [.inbox[]
       | . as $item
       | [.inputs[].name] as $names
@@ -416,6 +447,18 @@ inbox_item_gaps() {  # <payload.json>
       | [
           (if ([$keys[] | select(. == $item.key)] | length) > 1
             then "a key no other item or card uses" else empty end),
+          (if ($member_ids | index($item.key)) != null
+            then "a key that is not a member of a group, since a member never shows alone" else empty end),
+          (if .group == "batch"
+            then ([.members[].id | select(. as $m | ($keys | index($m)) != null)]
+                  | if length > 0 then "members no card or item also shows (\(join(",")))" else empty end)
+            else empty end),
+          (if .group == "batch"
+            then ([.members[].id] as $mine
+                  | [$payload.inbox[] | select(.group == "batch" and .key != $item.key) | .members[].id
+                     | select(. as $m | ($mine | index($m)) != null)]
+                  | if length > 0 then "members in no other group (\(unique | join(",")))" else empty end)
+            else empty end),
           (if (.actions | length) < 2 or (.actions | length) > 3
             then "two or three actions (has \(.actions | length))" else empty end),
           (if ($values | length) != ($values | unique | length)
@@ -435,6 +478,17 @@ inbox_item_gaps() {  # <payload.json>
               (if $item.group == "blocking"
                   and (.effect == "close" or .effect == "hold-until")
                 then "no \(.effect) on action \(.value), since a blocking item is not a captain hold" else empty end),
+              (if ($item.group == "batch") != (.effect | startswith("batch-"))
+                then "no \(.effect) on action \(.value), since only a batch group takes the batch effects" else empty end),
+              (if .effect == "batch-recommended" and $item.class != "board"
+                then "a board group for Accept all recommended on action \(.value)" else empty end),
+              (if (.effect == "batch-answer" or .effect == "batch-recommended" or .effect == "batch-pick")
+                  and (.reads | length) > 0
+                then "no inputs read by action \(.value)" else empty end),
+              (if .effect == "batch-defer"
+                  and ((has("until") | not) == ([.reads[] as $r | $item.inputs[] | select(.name == $r and .type == "date")] | length != 1)
+                    or (.reads | length) > 1)
+                then "either an until date or one date input on action \(.value)" else empty end),
               (if .effect == "hold-until"
                   and ((has("until") | not) == ([.reads[] as $r | $item.inputs[] | select(.name == $r and .type == "date")] | length != 1)
                     or (.reads | length) > 1)
@@ -445,7 +499,7 @@ inbox_item_gaps() {  # <payload.json>
                 then "either an at time or one datetime-local input on action \(.value)" else empty end),
               (if .effect == "dispatch" and ((.brief // "") | test("[^[:space:]]") | not)
                 then "a one-line brief on dispatch action \(.value)" else empty end),
-              (if .effect != "hold-until" and has("until")
+              (if .effect != "hold-until" and .effect != "batch-defer" and has("until")
                 then "no until on non-hold-until action \(.value)" else empty end),
               (if .effect != "remind-at" and has("at")
                 then "no at on non-remind-at action \(.value)" else empty end)),

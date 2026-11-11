@@ -3849,7 +3849,7 @@ board_choice() {  # <uid> <json-context>
 }
 BOARD_ANS="$TMP_ROOT/board-answers-result"
 {
-  printf 'session:\n  file: /board.html\n  status: feedback\nprompts[14]:\n'
+  printf 'session:\n  file: /board.html\n  status: feedback\nprompts[16]:\n'
   board_choice 1 '{"schema":"fm-bearings-answer.v1","question":"due-close","group":"due","action":"drop","effect":"close","values":{},"note":""}'
   board_choice 2 '{"schema":"fm-bearings-answer.v1","question":"due-release","group":"due","action":"go","effect":"close","close":"release","values":{},"note":"after lunch"}'
   board_choice 3 '{"schema":"fm-bearings-answer.v1","question":"due-later","group":"due","action":"thu","effect":"hold-until","until":"2026-10-29","values":{},"note":""}'
@@ -3864,6 +3864,8 @@ BOARD_ANS="$TMP_ROOT/board-answers-result"
   board_choice 12 '{"schema":"fm-bearings-answer.v1","question":"due-undated","group":"due","action":"done","effect":"close","values":{},"note":""}'
   board_choice 13 '{"schema":"fm-bearings-answer.v1","question":"due-undated","group":"due","action":"later","effect":"hold-until","until":"soon","values":{},"note":""}'
   board_choice 14 '{"schema":"fm-bearings-answer.v1","question":"prune.2026-10-26.0123abcd","group":"prune","action":"drop-picked","effect":"prune","values":{"picked":"1,3"},"note":""}'
+  board_choice 15 '{"schema":"fm-bearings-answer.v1","question":"batch.place.office","group":"batch","batch":"place:office","action":"done-all","effect":"batch-answer","values":{},"note":""}'
+  board_choice 16 '{"schema":"fm-bearings-answer.v1","question":"batch.board.review-1111","group":"batch","batch":"board:review-1111","action":"move","effect":"batch-defer","until":"2026-11-02","values":{},"note":""}'
 } > "$BOARD_ANS"
 out=$("$ROOT/bin/fm-procevent-lavish.sh" answers "$BOARD_ANS") || fail "answers failed on a board capture: $out"
 expected=$(printf 'due-close\tdrop\tReceipt 1\ndue-release\tgo\tReceipt 2\trelease\ndue-later\tthu\tReceipt 3\tuntil=2026-10-29')
@@ -3883,6 +3885,11 @@ assert_contains "$out" "| when=2026-10-26T10:00" "read dropped an answer's value
 assert_contains "$out" "route: firstmate: prune (bin/fm-backlog-prune.sh apply <question> <pick> [values.picked]); nothing was fed" \
   "read did not hand a prune answer to firstmate"
 assert_contains "$out" "| picked=1,3" "read dropped the prune answer's picked positions"
+assert_contains "$out" "route: firstmate: answer-batch <batch> (with --release when close is release); nothing was fed" \
+  "read did not hand a group answer to firstmate"
+assert_contains "$out" "route: firstmate: defer-batch <batch> --until <until>; nothing was fed" \
+  "read did not hand a group move to firstmate"
+assert_contains "$out" "| place:office" "read dropped the group's Batch: tag"
 pass "a board answer closes or defers only through the intake, and every other answer reaches firstmate through read"
 
 # A decision card's dated later pick feeds a deferral, never a close, and a

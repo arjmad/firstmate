@@ -2577,6 +2577,64 @@ test_defer_batch_moves_tagged_calls_together() {
   pass "defer-batch moves every captain call carrying the tag together and nothing else"
 }
 
+# `answer-batch` is one answer on a whole group: it closes every captain call
+# carrying the tag with the same words, or with --recommended records each
+# member's own recommended choice and leaves a member without one open.
+test_answer_batch_answers_a_group_at_once() {
+  local home out
+  home=$(make_home answer-batch)
+  for id in shelf-a shelf-b; do
+    run_captain "$home" hold "$id" --title "Shelf $id" --reason "tick it off" --repo sample \
+      --kind reversible >/dev/null || fail "could not register $id"
+    run_fm_tasks_axi "$home" batch "$id" place:office >/dev/null || fail "could not tag $id"
+  done
+  run_captain "$home" hold other-c --title "Other call" --reason "not on the list" --repo sample \
+    --kind reversible >/dev/null || fail "could not register other-c"
+  printf 'Arjun: done all at the office\n' > "$home/done-all.txt"
+  out=$(run_captain "$home" answer-batch place:office --decision-file "$home/done-all.txt") \
+    || fail "answer-batch failed: $out"
+  assert_contains "$out" "answered: shelf-a" "answer-batch skipped a member"
+  assert_contains "$out" "answered: shelf-b" "answer-batch skipped a member"
+  assert_contains "$out" "answer-batch: place:office answered=2 left=0 failed=0" "answer-batch miscounted"
+  assert_not_contains "$out" "other-c" "answer-batch touched an untagged call"
+  assert_contains "$(tasks_in "$home" show shelf-b --full)" "done all at the office" "the group words were not recorded"
+  assert_contains "$(tasks_in "$home" show shelf-b --full)" "state: done" "a member was not closed"
+  assert_not_contains "$(tasks_in "$home" show other-c --full)" "state: done" "an untagged call closed"
+  if out=$(run_captain "$home" answer-batch place:office --decision-file "$home/done-all.txt" 2>&1); then
+    fail "answer-batch on a settled group did not refuse: $out"
+  fi
+  assert_contains "$out" "no open captain call carries batch place:office" "a settled group was not named"
+
+  run_captain "$home" hold board-a --title "Card A" --reason "pick one" --repo sample --kind reversible \
+    --options 'Keep|Drop' --recommend Keep >/dev/null || fail "could not register board-a"
+  run_captain "$home" hold board-b --title "Card B" --reason "pick one" --repo sample --kind reversible \
+    --options 'Ship|Wait' --recommend Wait >/dev/null || fail "could not register board-b"
+  run_captain "$home" hold board-c --title "Card C" --reason "his own words" --repo sample \
+    --kind reversible >/dev/null || fail "could not register board-c"
+  for id in board-a board-b board-c; do
+    run_fm_tasks_axi "$home" batch "$id" board:review-1111 >/dev/null || fail "could not tag $id"
+  done
+  printf 'Arjun: accept all recommended\n' > "$home/accept.txt"
+  out=$(run_captain "$home" answer-batch board:review-1111 --decision-file "$home/accept.txt" --recommended) \
+    || fail "answer-batch --recommended failed: $out"
+  assert_contains "$out" "left: board-c (no recommended choice)" "a member without a recommendation was not left open"
+  assert_contains "$out" "answer-batch: board:review-1111 answered=2 left=1 failed=0" "--recommended miscounted"
+  assert_contains "$(tasks_in "$home" show board-a --full)" "Choice picked: Keep" "board-a did not record its recommendation"
+  assert_contains "$(tasks_in "$home" show board-b --full)" "Choice picked: Wait" "board-b did not record its recommendation"
+  assert_not_contains "$(tasks_in "$home" show board-c --full)" "state: done" "a member without a recommendation closed"
+  if out=$(run_captain "$home" answer-batch board:review-1111 --decision-file "$home/accept.txt" --release --recommended 2>&1); then
+    fail "answer-batch accepted --release with --recommended: $out"
+  fi
+  printf 'away\n%s\n' "$(date +%s)" > "$home/state/.afk"
+  if out=$(run_captain "$home" answer-batch board:review-1111 --decision-file "$home/accept.txt" --release 2>&1); then
+    fail "answer-batch released while away: $out"
+  fi
+  assert_contains "$out" "stays held" "an away release was not refused by name"
+  assert_not_contains "$(tasks_in "$home" show board-c --full)" "Resolution recorded" "an away release touched a member"
+  rm -f "$home/state/.afk"
+  pass "answer-batch answers every call in a group at once, and --recommended picks each member's own"
+}
+
 # A board answer must reach the keyed-answer intake through the RUNNER, not just
 # through a hand-fed `answers` call. The captain answered ten calls on a bearings
 # board, the board accepted them, and nothing collected them: the source that
@@ -5464,6 +5522,7 @@ test_board_answer_reaches_the_keyed_answer_intake
 test_keyed_deferral_re_holds_instead_of_closing
 test_deferral_replaces_instead_of_appending
 test_defer_batch_moves_tagged_calls_together
+test_answer_batch_answers_a_group_at_once
 test_an_undated_later_answer_never_closes
 test_chat_channel_feeds_the_same_keyed_answer_intake
 test_origin_slug_validation_precedes_path_construction

@@ -261,7 +261,7 @@ fi
 [ -z "$row_value_next" ] || fail "--$row_value_next needs a value"
 [ "$DUE_GIVEN" = 0 ] || fm_backlog_date_valid "$DUE" || fail "--due must be a YYYY-MM-DD date: $DUE"
 [ "$BATCH_GIVEN" = 0 ] || fm_backlog_batch_valid "$BATCH" \
-  || fail "--batch must be a lowercase tag of letters, digits and dashes, at most 40 characters: $BATCH"
+  || fail "--batch: $FM_BACKLOG_BATCH_RULE: $BATCH"
 
 # The value of the last <flag> in ARGS; fails when the flag is absent.
 arg_value() {  # <flag>
@@ -498,7 +498,7 @@ command_row_field() {  # <due|batch>
     case "$field" in
       due) fm_backlog_date_valid "$want" || fail "a due date must be YYYY-MM-DD: $want" ;;
       batch) fm_backlog_batch_valid "$want" \
-        || fail "a batch tag is lowercase letters, digits and dashes, at most 40 characters: $want" ;;
+        || fail "$FM_BACKLOG_BATCH_RULE: $want" ;;
     esac
   fi
   [ -z "$want" ] || task_lock "$id"

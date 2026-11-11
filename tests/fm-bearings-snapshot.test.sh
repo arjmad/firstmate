@@ -2280,6 +2280,92 @@ EOF2
   pass "board rows carry a captain hold's recorded choices, and null where none are recorded"
 }
 
+# A captain call's group comes from structured fields only: its Batch: tag
+# (board: or place:) or, untagged, whether it records choices. Calls sharing a
+# tag fold into one decision row, and a group of one stays its member's row.
+test_captain_calls_fold_into_their_groups() {
+  local home fakebin json quick board_a board_b
+  home=$(make_home call-groups)
+  # shellcheck source=bin/fm-hold-reason-lib.sh
+  # shellcheck disable=SC1091
+  . "$ROOT/bin/fm-hold-reason-lib.sh"
+  quick=$(fm_hold_reason_encode '[reversible; options: Yes|No; recommended: Yes] Renew the domain')
+  board_a=$(fm_hold_reason_encode '[reversible; options: Keep|Drop; recommended: Keep] Card A')
+  board_b=$(fm_hold_reason_encode '[reversible; options: Ship|Wait; recommended: Wait] Card B')
+  cat > "$home/data/backlog.md" <<EOF2
+# Backlog
+
+## In flight
+
+## Queued
+- [ ] office-a - Sign the lease copy (repo: business) (kind: captain) (since 2026-07-01) (hold: at the office) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Batch: place:office
+
+  Owner: arjun
+- [ ] board-a - Card A (repo: firstmate) (kind: captain) (since 2026-07-01) (hold: $board_a) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Batch: board:review-1111
+
+  Owner: arjun
+- [ ] quick-c - Renew the domain (repo: business) (kind: captain) (since 2026-07-01) (hold: $quick) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Owner: arjun
+- [ ] office-b - Post the cheque (repo: business) (kind: captain) (since 2026-07-01) (hold: at the office) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Batch: place:office
+
+  Owner: arjun
+- [ ] board-b - Card B (repo: firstmate) (kind: captain) (since 2026-07-01) (hold: $board_b) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Batch: board:review-1111
+
+  Owner: arjun
+- [ ] hands-d - Photograph the mats (repo: business) (kind: captain) (since 2026-07-01) (hold: needs his camera; Batch: place:fake) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Owner: arjun
+- [ ] solo-e - Count the shed (repo: business) (kind: captain) (since 2026-07-01) (hold: at the shed) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+
+  Batch: shed
+
+  Owner: arjun
+- [ ] fleet-f - Fleet errand (repo: firstmate) (kind: ship) (since 2026-07-01)
+  Batch: place:office
+
+  Owner: fleet
+
+## Done
+EOF2
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json --all-decisions --all-queued --fields board)
+  printf '%s' "$json" | jq -e '
+    def dec($id): [.decisions_open[] | select(.id == $id)][0];
+    def row($id): [.board.queued[] | select(.id == $id)][0];
+    (.decisions_open | length) == 5
+      and (.decisions_open | map(.id)) == ["place:office","board:review-1111","quick-c","hands-d","solo-e"]
+      and (dec("place:office") | .verb == "captain-batch" and .class == "place" and .key == "place:office"
+           and (.members | map(.id)) == ["office-a","office-b"] and (.summary | startswith("2 calls: ")))
+      and (dec("board:review-1111") | .class == "board" and (.members | length) == 2)
+      and (dec("quick-c") | .class == "quick" and .batch == null and .verb == "captain-hold")
+      and (dec("hands-d") | .class == "hands" and .batch == null)
+      and (dec("solo-e") | .class == "place" and .batch == "shed" and (has("members") | not))
+      and (row("office-a") | .batch == "place:office" and .group == "place")
+      and (row("quick-c").group == "quick")
+      and (row("fleet-f") | .batch == "place:office" and .group == null)
+      and (.board.groups == [
+            {batch:"board:review-1111", group:"board", owner:"(main)", ids:["board-a","board-b"], count:2, all_recommended:true},
+            {batch:"place:office", group:"place", owner:"(main)", ids:["office-a","office-b"], count:2, all_recommended:false}])
+  ' >/dev/null || fail "captain calls did not fold into their groups: $json"
+  pass "captain calls fold into their groups from structured fields, and a group of one stays its own row"
+}
+
 # The weekly prune card's candidates come from bin/fm-backlog-prune-lib.sh's
 # rule over structured fields and the dates written on each row: only unheld
 # fleet rows nobody touched for two weeks, never his rows, a held row, blocked
@@ -3724,6 +3810,7 @@ fm_test_run \
   test_live_blocker_is_not_charted_queue_work \
   test_captain_wait_and_board_rows_come_from_structured_fields \
   test_board_rows_carry_recorded_hold_choices \
+  test_captain_calls_fold_into_their_groups \
   test_owner_decides_what_waits_on_the_captain \
   test_board_prune_proposes_only_stale_fleet_rows \
   test_captains_call_anti_leak \
