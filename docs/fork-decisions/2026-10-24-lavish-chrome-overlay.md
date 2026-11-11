@@ -2,5 +2,6 @@
 Upstream lavish-axi had no collapse: its open PRs #429 (resizable and collapsible), #455 and #409 (a hide toggle), and #351 compete for it, and #203 and #204 for chrome appearance, none merged.
 Decision ("Local patch now"): firstmate's own Lavish install carries one local overlay, `bin/fm-lavish-patch.mjs` with `bin/lavish-patch/`, that adds a Conversation panel collapse toggle and drag-resize on desktop and maps Lavish's chrome onto the fleet-html C1 navy tokens; bootstrap re-applies it on its locked pass after any Lavish upgrade and skips it with one diagnostic when upstream's chrome no longer matches.
 The overlay adapts #455's bar toggle and #429's resize handle and reuses their `lavish-axi:panel-collapsed` and `lavish-axi:panel-width` storage keys; it steps aside on its own once upstream ships either control, and is then dropped with its fork-patch record.
+Changed on [2026-11-11](2026-11-11-lavish-overlay-revision-4-drops-collapse.md): lavish-axi 0.1.94 ships #455's collapse, so the overlay's collapse toggle is retired and the rest of the overlay stays; only an upstream resize handle still makes the overlay step aside.
 The toolchain stays on lavish-axi 0.1.90, because 0.1.91 and 0.1.92 change only an empty-send hint, a help line, and a design-reference claim, and the overlay applies to 0.1.92 unchanged.
 No upstream proposal.

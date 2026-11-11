@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // fm-lavish-patch.mjs - apply, check, or remove firstmate's local overlay on
 // lavish-axi's browser chrome: the fleet-html house dark colours for Lavish's own
-// bar, panel, buttons and inputs, a collapsible, drag-resizable desktop
-// Conversation panel, one-line receipts for bearings board answers in that
-// panel, and fullscreen for the board's iframe, so a board's <video controls> can
-// go full screen. The overlay is bin/lavish-patch/chrome.css,
+// bar, panel, buttons and inputs, a drag-resizable desktop Conversation panel,
+// one-line receipts for bearings board answers in that panel, and fullscreen for
+// the board's iframe, so a board's <video controls> can go full screen. Hiding
+// the panel is Lavish's own bar toggle, which the overlay only restyles. The
+// overlay is bin/lavish-patch/chrome.css,
 // bin/lavish-patch/chrome-client.js, and bin/lavish-patch/chrome-client-head.js;
 // its records under docs/fork-decisions/ say why it exists and which upstream
 // pull requests it tracks.
@@ -16,8 +17,8 @@
 //           Silent when they already do, or when a newer overlay revision is
 //           installed. Prints
 //           "BOOTSTRAP_INFO: lavish-axi <version> chrome patch applied" after
-//           writing. When upstream's files no longer match what the overlay
-//           expects, or upstream already ships its own panel collapse, it writes
+//           writing. When upstream's files do not match what the overlay
+//           expects, or upstream already ships its own panel resize, it writes
 //           nothing and prints one
 //           "LAVISH_PATCH: skipped: lavish-axi <version> <reason>" line: Lavish
 //           keeps working unpatched. A read or write failure prints one
@@ -54,20 +55,23 @@
 //
 // Fail closed: before writing, every anchor in ANCHORS must be present in
 // upstream's own content. They are what the overlay relies on: the tokens it
-// remaps or reads, the desktop panel column, the phone breakpoint, and the
-// element ids the script attaches to. The head part also needs the served
+// remaps or reads, the desktop panel column, the phone breakpoint, the element
+// ids the script attaches to, and upstream's own panel collapse (the
+// sidebarToggle lavish-axi ships since 0.1.94), which the overlay restyles
+// instead of adding one. The head part also needs the served
 // artifact iframe to carry no src of its own and to come before the
 // chrome-client.js script tag, so that the iframe exists when the head runs and
 // has not yet navigated; frameLoadsAfterHead checks both. A file whose head part
-// has lost its end marker is skipped rather than stacked. UPSTREAM_COLLAPSE
-// names upstream's own collapse controls (PR #455's sidebarToggle, PR #429's panelResizer); once one
-// ships, the overlay steps aside so the patch can be dropped.
+// has lost its end marker is skipped rather than stacked. UPSTREAM_RESIZE names
+// upstream's own resize control (PR #429's panelResizer); once it ships, the
+// overlay steps aside rather than add a second handle, until its resize part is
+// dropped.
 
 import { chmodSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const REVISION = 3;
+const REVISION = 4;
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OVERLAY_DIR = join(HERE, "lavish-patch");
 const BEGIN = "fm-lavish-patch:begin";
@@ -93,21 +97,21 @@ const ANCHORS = {
     "--w-bold:",
     "--dur-fast:",
     "--ease:",
+    '.sidebar-toggle[aria-expanded="false"]',
   ],
   "cli.mjs": [
     'new URL("./chrome.css", import.meta.url)',
     'new URL("./chrome-client.js", import.meta.url)',
     'class="layout"',
     'id="panel"',
-    'id="panelScroll"',
-    'id="moreWrap"',
+    'id="sidebarToggle"',
     'id="chatLog"',
     'id="queuedLog"',
     'data-artifact-src=',
   ],
 };
 
-const UPSTREAM_COLLAPSE = ['id="sidebarToggle"', 'id="panelResizer"'];
+const UPSTREAM_RESIZE = 'id="panelResizer"';
 
 // The reason the head part would run too late for the server template in cli,
 // or null when the artifact iframe has no src and precedes the client script.
@@ -194,7 +198,7 @@ function overlaid(target, pristine) {
 }
 
 // Every target with its current and wanted content. Throws Skip when upstream
-// no longer matches the overlay, and Error when a file cannot be read.
+// does not match the overlay, and Error when a file cannot be read.
 function inspect(pkg) {
   const dist = join(pkg.dir, "dist");
   const files = TARGETS.map((target) => {
@@ -217,14 +221,13 @@ function inspect(pkg) {
   const sources = { "chrome.css": files[0].pristine, "cli.mjs": cli };
   for (const [file, anchors] of Object.entries(ANCHORS)) {
     const missing = anchors.find((anchor) => !sources[file].includes(anchor));
-    if (missing) throw new Skip(`dist/${file} no longer contains ${JSON.stringify(missing)} the overlay relies on`);
+    if (missing) throw new Skip(`dist/${file} does not contain ${JSON.stringify(missing)} the overlay relies on`);
   }
   const late = frameLoadsAfterHead(cli);
   if (late) throw new Skip(late);
   const damaged = TARGETS.find((target, i) => target.head && files[i].pristine.startsWith(target.open + HEAD_BEGIN));
   if (damaged) throw new Skip(`dist/${damaged.file} has an overlay head part without its end marker; reinstall lavish-axi`);
-  const own = UPSTREAM_COLLAPSE.find((marker) => cli.includes(marker));
-  if (own) throw new Skip(`ships its own conversation-panel collapse (${own}); drop this patch`);
+  if (cli.includes(UPSTREAM_RESIZE)) throw new Skip(`ships its own conversation-panel resize (${UPSTREAM_RESIZE}); drop the overlay's resize part`);
   return files;
 }
 

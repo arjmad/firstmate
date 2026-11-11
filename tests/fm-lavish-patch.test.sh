@@ -16,11 +16,15 @@
 #     newer checkout of the shared toolchain, is never downgraded.
 #   - remove restores upstream's bytes exactly, including a file that had no
 #     trailing newline.
-#   - Fail closed: when upstream no longer carries what the overlay relies on,
-#     or ships its own panel collapse, apply prints one LAVISH_PATCH skip line,
-#     exits 3, and writes nothing; that includes an artifact iframe that no
-#     longer gets its src from upstream's script or no longer exists when that
-#     script starts, and a head part that lost its end marker.
+#   - Fail closed: when upstream does not carry what the overlay relies on, or
+#     ships its own panel resize, apply prints one LAVISH_PATCH skip line,
+#     exits 3, and writes nothing; that includes a Lavish from before its own
+#     panel collapse, an artifact iframe that no longer gets its src from
+#     upstream's script or no longer exists when that script starts, and a head
+#     part that lost its end marker.
+#   - The overlay adds one resize handle to the desktop panel and no control to
+#     the bar, so Lavish's own toggle stays the only panel collapse; the handle
+#     keeps the chosen width and does nothing at phone width.
 #   - A revision 2 install, which had no head part, is upgraded to both parts.
 #   - No lavish-axi package on PATH (absent, or a stub that is not an npm
 #     install) is silent, and FM_LAVISH_PATCH=0 turns apply off.
@@ -52,7 +56,7 @@ patch() {
 
 new_package() {  # <case> [version] -> echoes the toolchain prefix
   local prefix="$TMP_ROOT/$1"
-  fm_fake_lavish_package "$prefix" "${2:-0.1.90}" >/dev/null || fail "could not build the fake lavish-axi package"
+  fm_fake_lavish_package "$prefix" "${2:-0.1.96}" >/dev/null || fail "could not build the fake lavish-axi package"
   printf '%s\n' "$prefix"
 }
 
@@ -78,12 +82,12 @@ test_apply_appends_the_overlay_once() {
   prefix=$(new_package apply)
   pristine="$TMP_ROOT/apply-pristine"
   snapshot "$prefix" "$pristine"
-  assert_equals "unpatched 0.1.90" "$(patch "$prefix" status)" "a fresh install reads as unpatched"
+  assert_equals "unpatched 0.1.96" "$(patch "$prefix" status)" "a fresh install reads as unpatched"
 
   out=$(patch "$prefix" apply); rc=$?
   expect_code 0 "$rc" "apply"
-  assert_equals "BOOTSTRAP_INFO: lavish-axi 0.1.90 chrome patch applied" "$out" "apply should report the write once"
-  assert_equals "applied 0.1.90" "$(patch "$prefix" status)" "status after apply"
+  assert_equals "BOOTSTRAP_INFO: lavish-axi 0.1.96 chrome patch applied" "$out" "apply should report the write once"
+  assert_equals "applied 0.1.96" "$(patch "$prefix" status)" "status after apply"
   head -c "$(wc -c < "$pristine/chrome.css")" "$(dist "$prefix")/chrome.css" | cmp -s - "$pristine/chrome.css" \
     || fail "apply must keep upstream's chrome.css content ahead of the overlay"
   head -n 1 "$(dist "$prefix")/chrome-client.js" | grep -q '^// fm-lavish-patch:head-begin r[0-9]*$' \
@@ -125,15 +129,15 @@ test_older_revision_is_replaced_not_stacked() {
   prefix=$(new_package stale)
   old=$(other_checkout older -1)
   env PATH="$prefix/bin:$BASE_PATH" "$prefix/bin/node" "$old" apply >/dev/null
-  assert_equals "stale 0.1.90" "$(patch "$prefix" status)" "an older overlay revision reads as stale"
+  assert_equals "stale 0.1.96" "$(patch "$prefix" status)" "an older overlay revision reads as stale"
 
   out=$(patch "$prefix" apply)
-  assert_equals "BOOTSTRAP_INFO: lavish-axi 0.1.90 chrome patch applied" "$out" "apply over a stale revision"
+  assert_equals "BOOTSTRAP_INFO: lavish-axi 0.1.96 chrome patch applied" "$out" "apply over a stale revision"
   assert_not_contains "$(cat "$(dist "$prefix")/chrome.css" "$(dist "$prefix")/chrome-client.js")" "older overlay revision" \
     "the older revision must be replaced"
   assert_contains "$(cat "$(dist "$prefix")/chrome.css")" "$(cat "$ROOT/bin/lavish-patch/chrome.css")" "the current overlay replaces it"
   patch "$prefix" remove >/dev/null
-  assert_equals "unpatched 0.1.90" "$(patch "$prefix" status)" "remove after a replaced revision"
+  assert_equals "unpatched 0.1.96" "$(patch "$prefix" status)" "remove after a replaced revision"
   pass "apply: an older overlay revision is replaced, never stacked"
 }
 
@@ -147,7 +151,7 @@ test_newer_revision_is_never_downgraded() {
   expect_code 0 "$rc" "apply under a newer revision"
   assert_equals "" "$out" "an older checkout leaves a newer revision alone, silently"
   same_files "$prefix" "$TMP_ROOT/newer-installed" || fail "an older checkout must not downgrade a newer revision"
-  assert_equals "newer 0.1.90" "$(patch "$prefix" status)" "status names the newer revision"
+  assert_equals "newer 0.1.96" "$(patch "$prefix" status)" "status names the newer revision"
   out=$(patch "$prefix" apply)
   assert_equals "" "$out" "repeated session starts on the older checkout stay silent"
   pass "apply: a newer overlay revision from another checkout is never downgraded"
@@ -163,7 +167,7 @@ test_unreadable_overlay_fails_in_one_line() {
   snapshot "$prefix" "$pristine"
   out=$(env PATH="$prefix/bin:$BASE_PATH" "$prefix/bin/node" "$bin/fm-lavish-patch.mjs" apply 2>&1); rc=$?
   expect_code 1 "$rc" "apply without its overlay files"
-  assert_contains "$out" "LAVISH_PATCH: failed: lavish-axi 0.1.90 cannot read overlay bin/lavish-patch/chrome.css" "a missing overlay is a failed line"
+  assert_contains "$out" "LAVISH_PATCH: failed: lavish-axi 0.1.96 cannot read overlay bin/lavish-patch/chrome.css" "a missing overlay is a failed line"
   assert_equals 1 "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" "the failure is exactly one line, not a stack trace"
   same_files "$prefix" "$pristine" || fail "a failed apply must write nothing"
   pass "apply: an unreadable overlay is one failed line and writes nothing"
@@ -177,10 +181,10 @@ test_remove_restores_upstream_bytes() {
   pristine="$TMP_ROOT/remove-pristine"
   snapshot "$prefix" "$pristine"
   patch "$prefix" apply >/dev/null
-  assert_equals "removed 0.1.90" "$(patch "$prefix" remove)" "remove reports what it stripped"
+  assert_equals "removed 0.1.96" "$(patch "$prefix" remove)" "remove reports what it stripped"
   same_files "$prefix" "$pristine" || fail "remove must restore upstream's bytes exactly"
   assert_equals 640 "$(file_mode "$(dist "$prefix")/chrome.css")" "remove should keep the mode"
-  assert_equals "unpatched 0.1.90" "$(patch "$prefix" remove)" "a second remove has nothing to strip"
+  assert_equals "unpatched 0.1.96" "$(patch "$prefix" remove)" "a second remove has nothing to strip"
   pass "remove: restores upstream's exact bytes, with or without a trailing newline"
 }
 
@@ -193,17 +197,30 @@ test_fails_closed_when_upstream_moved() {
   snapshot "$prefix" "$pristine"
   out=$(patch "$prefix" apply); rc=$?
   expect_code 3 "$rc" "apply on a moved upstream"
-  assert_contains "$out" "LAVISH_PATCH: skipped: lavish-axi 0.2.0 dist/chrome.css no longer contains" "a moved upstream is one skip line"
+  assert_contains "$out" "LAVISH_PATCH: skipped: lavish-axi 0.2.0 dist/chrome.css does not contain" "a moved upstream is one skip line"
   assert_equals 1 "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" "the skip is exactly one line"
   same_files "$prefix" "$pristine" || fail "a skipped apply must write nothing"
   assert_contains "$(patch "$prefix" status)" "incompatible 0.2.0:" "status names the incompatibility"
 
   prefix=$(new_package template 0.2.0)
-  sed 's/id="moreWrap"/id="overflowMenu"/' "$(dist "$prefix")/cli.mjs" > "$TMP_ROOT/template.mjs"
+  sed 's/id="chatLog"/id="transcript"/' "$(dist "$prefix")/cli.mjs" > "$TMP_ROOT/template.mjs"
   cat "$TMP_ROOT/template.mjs" > "$(dist "$prefix")/cli.mjs"
   out=$(patch "$prefix" apply); rc=$?
   expect_code 3 "$rc" "apply on a changed chrome template"
-  assert_contains "$out" "LAVISH_PATCH: skipped: lavish-axi 0.2.0 dist/cli.mjs no longer contains" "a changed template is a skip"
+  assert_contains "$out" "LAVISH_PATCH: skipped: lavish-axi 0.2.0 dist/cli.mjs does not contain" "a changed template is a skip"
+
+  # A Lavish from before its own panel collapse: the overlay no longer brings
+  # one, so it must not leave boards with no way to hide the panel.
+  prefix=$(new_package no-collapse 0.1.93)
+  sed 's/<button class="sidebar-toggle"[^>]*><\/button>//' "$(dist "$prefix")/cli.mjs" > "$TMP_ROOT/no-collapse.mjs"
+  cat "$TMP_ROOT/no-collapse.mjs" > "$(dist "$prefix")/cli.mjs"
+  pristine="$TMP_ROOT/no-collapse-pristine"
+  snapshot "$prefix" "$pristine"
+  out=$(patch "$prefix" apply); rc=$?
+  expect_code 3 "$rc" "apply on a Lavish without its own panel collapse"
+  assert_contains "$out" 'LAVISH_PATCH: skipped: lavish-axi 0.1.93 dist/cli.mjs does not contain "id=\"sidebarToggle\""' \
+    "a Lavish without its own collapse is a skip"
+  same_files "$prefix" "$pristine" || fail "a skipped apply must write nothing"
 
   prefix=$(new_package static-src 0.2.0)
   sed 's/data-artifact-src=/src=/' "$(dist "$prefix")/cli.mjs" > "$TMP_ROOT/static-src.mjs"
@@ -212,7 +229,7 @@ test_fails_closed_when_upstream_moved() {
   snapshot "$prefix" "$pristine"
   out=$(patch "$prefix" apply); rc=$?
   expect_code 3 "$rc" "apply when the iframe src is in the served HTML"
-  assert_contains "$out" 'no longer contains "data-artifact-src="' "an iframe loaded before any script runs is a skip"
+  assert_contains "$out" 'does not contain "data-artifact-src="' "an iframe loaded before any script runs is a skip"
   same_files "$prefix" "$pristine" || fail "a skipped apply must write nothing"
 
   prefix=$(new_package both-src 0.2.0)
@@ -239,28 +256,92 @@ test_fails_closed_when_upstream_moved() {
   expect_code 3 "$rc" "apply over a head part without its end marker"
   assert_contains "$out" "has an overlay head part without its end marker" "a damaged head part is a skip"
   same_files "$prefix" "$pristine" || fail "a damaged head part must not be stacked on"
-  pass "apply: fails closed with one skip line when upstream no longer matches"
+  pass "apply: fails closed with one skip line when upstream does not match"
 }
 
-test_steps_aside_when_upstream_ships_collapse() {
+test_steps_aside_when_upstream_ships_resize() {
   local prefix out rc pristine
   prefix=$(new_package upstreamed 0.2.0)
-  printf '%s\n' 'var toggle = '"'"'<button class="sidebar-toggle" id="sidebarToggle"></button>'"'"';' >> "$(dist "$prefix")/cli.mjs"
+  printf '%s\n' 'var resizer = '"'"'<div class="panel-resizer" id="panelResizer"></div>'"'"';' >> "$(dist "$prefix")/cli.mjs"
   pristine="$TMP_ROOT/upstreamed-pristine"
   snapshot "$prefix" "$pristine"
   out=$(patch "$prefix" apply); rc=$?
-  expect_code 3 "$rc" "apply once upstream ships a collapse"
-  assert_contains "$out" "ships its own conversation-panel collapse" "an upstream collapse is reported"
-  assert_contains "$out" "drop this patch" "the skip says the patch can be dropped"
-  same_files "$prefix" "$pristine" || fail "apply must not layer a second collapse over upstream's"
-  pass "apply: steps aside once upstream ships its own panel collapse"
+  expect_code 3 "$rc" "apply once upstream ships a resize"
+  assert_contains "$out" "ships its own conversation-panel resize" "an upstream resize is reported"
+  assert_contains "$out" "drop the overlay's resize part" "the skip says which part to drop"
+  same_files "$prefix" "$pristine" || fail "apply must not layer a second resize handle over upstream's"
+  pass "apply: steps aside once upstream ships its own panel resize"
+}
+
+# The overlay's panel controls, run under a minimal DOM that holds Lavish's own
+# bar toggle and panel: it adds one resize handle to the panel and nothing to
+# the bar, the handle's keys change and keep the width, and at phone width it
+# leaves the width to upstream's sheet.
+run_panel_overlay() {  # [phone]
+  node - "$ROOT/bin/lavish-patch/chrome-client.js" "${1:-}" <<'JS'
+const { readFileSync } = require("node:fs");
+const [file, phone] = process.argv.slice(2);
+const created = [];
+class El {
+  constructor(tag, id) {
+    this.tag = tag; this.id = id || ""; this.className = ""; this.children = []; this.attrs = {}; this.listeners = {};
+  }
+  get firstChild() { return this.children[0] || null; }
+  setAttribute(name, value) { this.attrs[name] = String(value); }
+  addEventListener(type, fn) { this.listeners[type] = fn; }
+  insertBefore(node, before) { const at = this.children.indexOf(before); this.children.splice(at < 0 ? this.children.length : at, 0, node); return node; }
+  querySelector(sel) { return this.children.find((c) => c.className.split(" ").includes(sel.slice(1))) || null; }
+  contains() { return false; }
+  focus() {}
+}
+const toggle = new El("button", "sidebarToggle");
+const bar = new El("div"); bar.children.push(toggle);
+const panel = new El("aside", "panel"); panel.children.push(new El("div", "panelScroll"));
+const props = new Map();
+const store = new Map();
+globalThis.document = {
+  documentElement: { style: { setProperty: (k, v) => props.set(k, v), removeProperty: (k) => props.delete(k) } },
+  body: { classList: { add() {}, remove() {} } },
+  getElementById: (id) => (id === "panel" ? panel : id === "sidebarToggle" ? toggle : null),
+  createElement: (tag) => { const el = new El(tag); created.push(el); return el; },
+};
+globalThis.getComputedStyle = () => ({ getPropertyValue: (name) => (name === "--panel-w" ? "360px" : "") });
+globalThis.window = {
+  innerWidth: 1440,
+  matchMedia: () => ({ matches: phone === "phone", addEventListener() {} }),
+  localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) },
+  addEventListener() {},
+};
+new Function(readFileSync(file, "utf8"))();
+const handle = panel.children[0];
+const start = props.get("--panel-w") ?? null;
+handle.listeners.keydown({ key: "ArrowLeft", preventDefault() {} });
+console.log(JSON.stringify({
+  created: created.map((el) => el.tag + "." + el.className), barChildren: bar.children.map((el) => el.id),
+  handle: handle.className, role: handle.attrs.role, start, afterKey: props.get("--panel-w") ?? null,
+  stored: Object.fromEntries(store) }));
+JS
+}
+
+test_overlay_adds_a_resize_handle_and_no_second_collapse() {
+  local out
+  out=$(run_panel_overlay) || fail "the overlay could not run under the panel shim"
+  printf '%s' "$out" | jq -e '
+    .created == ["div.fm-panel-resizer"] and .barChildren == ["sidebarToggle"]
+      and .handle == "fm-panel-resizer" and .role == "separator"
+      and .start == "360px" and .afterKey == "376px" and .stored == { "lavish-axi:panel-width": "376" }
+  ' >/dev/null || fail "the overlay must add one resize handle that keeps its width, and no bar control: $out"
+  out=$(run_panel_overlay phone) || fail "the overlay could not run under the panel shim at phone width"
+  printf '%s' "$out" | jq -e '.barChildren == ["sidebarToggle"] and .start == null and .afterKey == null and .stored == {}' >/dev/null \
+    || fail "at phone width the overlay must leave the panel width to upstream: $out"
+  pass "overlay: one resize handle on the desktop panel, no second collapse control, nothing at phone width"
 }
 
 test_absent_and_disabled_are_silent() {
   local stub out rc prefix
   stub="$TMP_ROOT/stub/bin"
   mkdir -p "$stub"
-  fm_fake_version_tool "$stub" lavish-axi FM_FAKE_LAVISH_AXI_VERSION 0.1.90
+  fm_fake_version_tool "$stub" lavish-axi FM_FAKE_LAVISH_AXI_VERSION 0.1.96
   ln -sf "$(command -v node)" "$stub/node"
   out=$(env PATH="$stub:$BASE_PATH" "$stub/node" "$PATCH" apply); rc=$?
   expect_code 0 "$rc" "apply with a non-npm lavish-axi"
@@ -273,7 +354,7 @@ test_absent_and_disabled_are_silent() {
   out=$(env FM_LAVISH_PATCH=0 PATH="$prefix/bin:$BASE_PATH" "$prefix/bin/node" "$PATCH" apply); rc=$?
   expect_code 0 "$rc" "disabled apply"
   assert_equals "" "$out" "FM_LAVISH_PATCH=0 is silent"
-  assert_equals "unpatched 0.1.90" "$(patch "$prefix" status)" "FM_LAVISH_PATCH=0 writes nothing"
+  assert_equals "unpatched 0.1.96" "$(patch "$prefix" status)" "FM_LAVISH_PATCH=0 writes nothing"
   pass "apply: no package and FM_LAVISH_PATCH=0 are silent no-ops"
 }
 
@@ -299,10 +380,10 @@ test_bootstrap_applies_on_the_locked_pass_only() {
 
   out=$(run_bootstrap "$prefix" "$home" FM_BOOTSTRAP_DETECT_ONLY=1)
   assert_not_contains "$out" "chrome patch" "a read-only session must not patch Lavish: $out"
-  assert_equals "unpatched 0.1.90" "$(patch "$prefix" status)" "detect-only wrote nothing"
+  assert_equals "unpatched 0.1.96" "$(patch "$prefix" status)" "detect-only wrote nothing"
 
   out=$(run_bootstrap "$prefix" "$home")
-  assert_contains "$out" "BOOTSTRAP_INFO: lavish-axi 0.1.90 chrome patch applied" "the locked local pass applies the patch: $out"
+  assert_contains "$out" "BOOTSTRAP_INFO: lavish-axi 0.1.96 chrome patch applied" "the locked local pass applies the patch: $out"
   out=$(run_bootstrap "$prefix" "$home")
   assert_not_contains "$out" "chrome patch" "a patched install keeps bootstrap silent: $out"
   assert_not_contains "$out" "LAVISH_PATCH" "a patched install keeps bootstrap silent: $out"
@@ -319,8 +400,8 @@ test_bootstrap_install_applies_after_installing() {
   fm_fake_exit0 "$fakebin" npm
   out=$(env FM_HOME="$home" PATH="$prefix/bin:$fakebin:$BASE_PATH" bash "$ROOT/bin/fm-bootstrap.sh" install lavish-axi 2>&1)
   assert_contains "$out" "installing lavish-axi:" "install runs the install command: $out"
-  assert_contains "$out" "BOOTSTRAP_INFO: lavish-axi 0.1.90 chrome patch applied" "install applies the patch: $out"
-  assert_equals "applied 0.1.90" "$(patch "$prefix" status)" "status after install"
+  assert_contains "$out" "BOOTSTRAP_INFO: lavish-axi 0.1.96 chrome patch applied" "install applies the patch: $out"
+  assert_equals "applied 0.1.96" "$(patch "$prefix" status)" "status after install"
   pass "bootstrap: install lavish-axi applies the chrome patch straight away"
 }
 
@@ -335,7 +416,7 @@ test_bootstrap_failed_install_does_not_patch() {
   chmod +x "$fakebin/npm"
   out=$(env FM_HOME="$home" PATH="$prefix/bin:$fakebin:$BASE_PATH" bash "$ROOT/bin/fm-bootstrap.sh" install lavish-axi 2>&1)
   assert_not_contains "$out" "chrome patch applied" "a failed install must not report a patch: $out"
-  assert_equals "unpatched 0.1.90" "$(patch "$prefix" status)" "a failed install leaves Lavish alone"
+  assert_equals "unpatched 0.1.96" "$(patch "$prefix" status)" "a failed install leaves Lavish alone"
   pass "bootstrap: a failed install lavish-axi applies nothing"
 }
 
@@ -450,12 +531,12 @@ test_revision_2_install_gains_the_head() {
   snapshot "$prefix" "$pristine"
   client="$(dist "$prefix")/chrome-client.js"
   printf '\n// fm-lavish-patch:begin r2\n// the revision 2 overlay\n// fm-lavish-patch:end\n' >> "$client"
-  assert_equals "stale 0.1.90" "$(patch "$prefix" status)" "a revision 2 install, which had no head part, reads as stale"
+  assert_equals "stale 0.1.96" "$(patch "$prefix" status)" "a revision 2 install, which had no head part, reads as stale"
   out=$(patch "$prefix" apply)
-  assert_equals "BOOTSTRAP_INFO: lavish-axi 0.1.90 chrome patch applied" "$out" "apply over revision 2"
+  assert_equals "BOOTSTRAP_INFO: lavish-axi 0.1.96 chrome patch applied" "$out" "apply over revision 2"
   head -n 1 "$client" | grep -q '^// fm-lavish-patch:head-begin r[0-9]*$' || fail "the upgrade must add the head part"
   assert_not_contains "$(cat "$client")" "revision 2 overlay" "the revision 2 overlay must be replaced"
-  assert_equals "applied 0.1.90" "$(patch "$prefix" status)" "status after the upgrade"
+  assert_equals "applied 0.1.96" "$(patch "$prefix" status)" "status after the upgrade"
   patch "$prefix" remove >/dev/null
   same_files "$prefix" "$pristine" || fail "remove after the upgrade must restore upstream's bytes exactly"
   pass "apply: a revision 2 install gains the head part, and remove still restores upstream"
@@ -469,7 +550,8 @@ test_newer_revision_is_never_downgraded
 test_unreadable_overlay_fails_in_one_line
 test_remove_restores_upstream_bytes
 test_fails_closed_when_upstream_moved
-test_steps_aside_when_upstream_ships_collapse
+test_steps_aside_when_upstream_ships_resize
+test_overlay_adds_a_resize_handle_and_no_second_collapse
 test_absent_and_disabled_are_silent
 test_bootstrap_applies_on_the_locked_pass_only
 test_bootstrap_install_applies_after_installing
