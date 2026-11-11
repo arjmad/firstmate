@@ -55,8 +55,8 @@
 # the captain one line through notify_command naming the account to pick in
 # the Claude app. A failed notify aborts the waiter and the helm keeps
 # running. The waiter waits a grace period (FM_ACCOUNT_DRAIN_GRACE, default
-# 30 seconds) so the helm can end its turn, rechecks the lock holder and the
-# task locks, sends SIGTERM to the lock holder's anchor pid, waits for it to
+# 30 seconds) so the helm can end its turn, rechecks the lock holder, the
+# away or quiet record and the task locks, sends SIGTERM to the lock holder's anchor pid, waits for it to
 # exit (FM_ACCOUNT_DRAIN_EXIT_WAIT, default 60 seconds; it never escalates to
 # SIGKILL), releases the task-set lock and runs handover_command, which owns
 # the fresh start and its own failure report (the fleet's helm-autostart pages
@@ -353,9 +353,10 @@ write_marker() {
 }
 
 # --- notify -------------------------------------------------------------------------
+# notify <message>: 0 sent, 1 the configured command failed, 2 none configured.
 notify() {  # <message>
   command_words notify_command || return 2
-  fm_run_timed "$NOTIFY_TIMEOUT" "${CMD_WORDS[@]}" "$1" >/dev/null 2>&1
+  fm_run_timed "$NOTIFY_TIMEOUT" "${CMD_WORDS[@]}" "$1" >/dev/null 2>&1 || return 1
 }
 
 # --- subcommands ----------------------------------------------------------------------
@@ -533,6 +534,12 @@ cmd_waiter() {
     waiter_status "$key" failed
     notify "Firstmate helm: the move to $(account_label "$to") stopped because the helm changed before it could end; no helm was ended." || true
     exit 1
+  fi
+  if away_or_quiet; then
+    printf '%s waiter: an away or quiet record appeared; nothing ended\n' "$(date -u +%FT%TZ)"
+    waiter_status "$key" aborted
+    notify "Firstmate helm: the move to $(account_label "$to") waits because away or quiet mode started; the helm keeps running on $(account_label "$from")." || true
+    exit 0
   fi
   busy=$(busy_task_locks "$lock")
   if [ -n "$busy" ]; then

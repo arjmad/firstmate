@@ -89,7 +89,7 @@ start_helm() {
   # a subshell, and $! must be the helm's own pid.
   env -u CLAUDE_PID -u CLAUDE_CODE_SESSION_ID -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS \
     "${store_env[@]}" FM_HOME="$home" FM_ROOT_OVERRIDE='' PATH="$FAKEBIN:$BASE_PATH" \
-    FM_ACCOUNT_DRAIN_GRACE=1 FM_ACCOUNT_DRAIN_EXIT_WAIT=10 \
+    FM_ACCOUNT_DRAIN_GRACE="${HELM_GRACE:-1}" FM_ACCOUNT_DRAIN_EXIT_WAIT=10 \
     "$FAKEBIN/claude" -c '
       bin=$0 dir=$1
       "$bin/fm-lock.sh" || exit 1
@@ -317,6 +317,12 @@ test_handover_refusals_leave_the_helm_running() {
   helm_handover "$dir"
   assert_grep "away or quiet record exists" "$dir/handover.out" "away mode must refuse the handover"
   rm -f "$home/state/.afk"
+  printf '#!/bin/sh\nexit 2\n' > "$TMP_ROOT/refuse-notify-2"
+  chmod +x "$TMP_ROOT/refuse-notify-2"
+  printf 'notify_command=%s\n' "$TMP_ROOT/refuse-notify-2" >> "$home/config/account-drain"
+  helm_handover "$dir"
+  assert_grep "notify_command failed" "$dir/handover.out" "a notify command exiting 2 is a failure, not an unconfigured notify"
+  wait_for_file_line "$home/state/.account-drain-handover" "status=aborted" || fail "the called-off waiter must stand down"
   printf 'notify_command=false\n' >> "$home/config/account-drain"
   helm_handover "$dir"
   assert_grep "notify_command failed" "$dir/handover.out" "a failed notify must call the handover off"
@@ -400,6 +406,25 @@ SH
   pass "fm-account-drain: handover ends the old helm, the start command brings a fresh one, and workers survive"
 }
 
+test_waiter_stands_down_when_away_mode_starts_in_the_grace() {
+  local home dir pid
+  home=$(make_home grace-away)
+  dir="$TMP_ROOT/grace-away-helm"
+  printf '#!/bin/sh\nexit 0\n' > "$TMP_ROOT/grace-away-start"
+  chmod +x "$TMP_ROOT/grace-away-start"
+  printf 'handover_command=%s\n' "$TMP_ROOT/grace-away-start" >> "$home/config/account-drain"
+  pid=$(HELM_GRACE=4 start_helm "$home" "$STORE_ECO" "$dir")
+  printf 'claude\n' > "$home/config/primary-harness"
+  helm_handover "$dir"
+  assert_grep "handover armed" "$dir/handover.out" "handover must arm: $(cat "$dir/handover.out")"
+  : > "$home/state/.afk-contract"
+  wait_for_file_line "$home/state/.account-drain-handover" "status=aborted" 100 \
+    || fail "the waiter must stand down when away mode starts during its grace: $(cat "$home/state/account-drain-handover.log")"
+  kill -0 "$pid" 2>/dev/null || fail "away mode starting in the grace must leave the helm running"
+  cleanup_helms
+  pass "fm-account-drain: the waiter stands down when away mode starts during its grace"
+}
+
 test_handover_is_once_per_move() {
   local home dir pid
   home=$(make_home once)
@@ -431,4 +456,5 @@ fm_test_run \
   test_spawn_refuses_a_claude_ship_while_both_low \
   test_handover_refusals_leave_the_helm_running \
   test_handover_moves_the_helm_and_workers_survive \
+  test_waiter_stands_down_when_away_mode_starts_in_the_grace \
   test_handover_is_once_per_move
