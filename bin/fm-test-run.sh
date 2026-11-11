@@ -617,8 +617,8 @@ tests/fm-x-mode.test.sh
 EOF
 }
 
-# Per-script serial CI duration hints, one "<path> <ms>" per line, used to
-# pack only the two portable parallel lanes. Measurement provenance and the
+# Per-script one-at-a-time CI duration hints, one "<path> <ms>" per line,
+# used to pack the two portable parallel lanes and order their two-wide runs. Measurement provenance and the
 # refresh procedure are owned by docs/fm-test-portable-shards.md.
 portable_parallel_weight_hints() {
   cat <<'EOF'
@@ -643,7 +643,7 @@ tests/fm-send-settle.test.sh 3267
 tests/fm-send-strict.test.sh 5224
 tests/fm-spawn-batch.test.sh 3908
 tests/fm-supervision-instructions.test.sh 1710
-tests/fm-t3-mcp.test.sh 30377
+tests/fm-t3-mcp.test.sh 57613
 tests/fm-test-run.test.sh 502781
 tests/fm-tmux-submit-busy.test.sh 3303
 tests/fm-transition-lib.test.sh 298
@@ -672,9 +672,9 @@ list_portable_parallel_1() {
 tests/fm-captain-hold-lifecycle.test.sh
 tests/fm-lint.test.sh
 tests/fm-crew-state.test.sh
+tests/fm-t3-mcp.test.sh
 tests/fm-x-mode.test.sh
 tests/fm-pi-primary-types.test.sh
-tests/fm-t3-mcp.test.sh
 tests/fm-cd-pretool-check.test.sh
 tests/fm-review-diff.test.sh
 tests/fm-send-popup-settle.test.sh
@@ -2901,7 +2901,7 @@ if [ "$JOBS" -gt 1 ]; then
       fi
       # Longest first within each isolation phase: workers are handed scripts
       # in order, so starting the longest last strands it at the tail.
-      printf '%s\t%s\t%s\n' "$phase" "$(portable_serial_weight_for "$s")" "$s" >>"$SCHEDULE_TMP"
+      printf '%s\t%s\t%s\n' "$phase" "$(portable_parallel_weight_for "$s")" "$s" >>"$SCHEDULE_TMP"
     else
       SERIAL_TAIL_SCRIPTS+=("$s")
     fi
