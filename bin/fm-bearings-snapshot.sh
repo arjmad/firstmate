@@ -668,13 +668,15 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                  question:(.question // ((.summary // .id) + ": " + (.reason // "captain decision pending"))),owner:$m.id,
                  batch:(.batch // null), class:call_class($c)} ]
             + [ $m.queued[]?
-                | select(.hold_kind == "captain")
+                # By default a queued row past the home summary bound enters
+                # only to complete its group, and never makes a row live.
+                | select(.hold_kind == "captain" and ($all_decisions == 1 or .batch != null))
                 | select(.id as $id
                          | [$m.decisions_open[]?
                             | select(.source == "backlog" and .verb == "captain-hold")
                             | .id]
                          | index($id) | not)
-                | {id:($m.id + "/" + .id),key:.id,verb:"captain-hold",live:live_captain_call,
+                | {id:($m.id + "/" + .id),key:.id,verb:"captain-hold",live:($all_decisions == 1),
                    summary:hold_summary((.title // .id);
                                         (.hold_reason // "captain decision pending")),
                    question:(.question // ((.title // .id) + ": " + (.hold_reason // "captain decision pending"))),owner:$m.id,
