@@ -30,6 +30,30 @@ test_short_loop_floor_has_five_steps() {
   pass "short-loop floor lists its five steps"
 }
 
+test_promotion_carries_the_short_loop_floor_unless_poteto() {
+  local home id meta out method
+  home="$TMP_ROOT/promote-floor-home"
+  for method in none poteto-mode; do
+    id="promote-floor-$method"
+    meta="$home/state/$id.meta"
+    mkdir -p "$home/state" "$home/data/$id"
+    printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\n' "$id" > "$meta"
+    {
+      printf '# Task\n## Captain%ss intent\nFix the bug.\n\n## Firstmate spec\nReproduce it first.\n' "'"
+      [ "$method" = none ] || printf '\n### Method: poteto-mode\nFollow the entry.\n'
+      printf '\n# Setup\nThis is a SCOUT task: the deliverable is a written report, not a PR.\n'
+    } > "$home/data/$id/brief.md"
+    out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$ROOT/bin/fm-promote.sh" "$id" --mode direct-PR --yolo off 2>&1) \
+      || fail "promoting a $method scout failed: $out"
+    if [ "$method" = none ]; then
+      assert_grep 'Short-loop floor' "$home/data/$id/ship-instructions.md" "a promoted scout lacks the short-loop floor"
+    else
+      assert_no_grep 'Short-loop floor' "$home/data/$id/ship-instructions.md" "a promoted poteto-mode scout printed the short-loop floor"
+    fi
+  done
+  pass "promotion carries the short-loop floor unless the scout is poteto-mode"
+}
+
 test_scout_done_is_not_gated() {
   local repo wt
   repo="$TMP_ROOT/scout-repo"
@@ -681,6 +705,7 @@ test_direct_pr_dod_writes_the_matt_pr_body() {
 }
 
 test_short_loop_floor_has_five_steps
+test_promotion_carries_the_short_loop_floor_unless_poteto
 test_scout_done_is_not_gated
 test_unpushed_ship_done_is_refused
 test_no_mistakes_prevalidation_done_is_not_gated

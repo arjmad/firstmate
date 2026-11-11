@@ -356,7 +356,9 @@ EOF
   fi
   printf '\n'
   fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$PR_TEXT"
-  fm_dod_short_loop_block
+  # A poteto-mode scout already runs the short-loop floor; bin/fm-brief.sh's
+  # method block heading marks it.
+  grep -qx '### Method: poteto-mode' "$SCOUT_BRIEF" || fm_dod_short_loop_block
 }
 mkdir -p "$DATA/$ID"
 [ ! -d "$INSTRUCTIONS" ] || { echo "error: ship instructions path is a directory: $INSTRUCTIONS" >&2; exit 1; }
