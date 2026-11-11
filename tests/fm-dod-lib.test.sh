@@ -30,8 +30,10 @@ test_short_loop_floor_has_five_steps() {
   pass "short-loop floor lists its five steps"
 }
 
-test_promotion_carries_the_short_loop_floor_unless_poteto() {
-  local home id meta out method
+# Promotion demotes a scout-time method to context, so every promoted ship gets
+# the floor once in its new contract, placed before the terminal done steps.
+test_promotion_carries_the_short_loop_floor() {
+  local home id meta out method instr floor_at done_at
   home="$TMP_ROOT/promote-floor-home"
   for method in none poteto-mode; do
     id="promote-floor-$method"
@@ -45,13 +47,19 @@ test_promotion_carries_the_short_loop_floor_unless_poteto() {
     } > "$home/data/$id/brief.md"
     out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$ROOT/bin/fm-promote.sh" "$id" --mode direct-PR --yolo off 2>&1) \
       || fail "promoting a $method scout failed: $out"
-    if [ "$method" = none ]; then
-      assert_grep 'Short-loop floor' "$home/data/$id/ship-instructions.md" "a promoted scout lacks the short-loop floor"
-    else
-      assert_no_grep 'Short-loop floor' "$home/data/$id/ship-instructions.md" "a promoted poteto-mode scout printed the short-loop floor"
-    fi
+    instr="$home/data/$id/ship-instructions.md"
+    [ "$(grep -c '^Short-loop floor' "$instr")" -eq 1 ] || fail "$method: promoted ship must carry the floor exactly once"
+    floor_at=$(grep -n '^Short-loop floor' "$instr" | cut -d: -f1)
+    done_at=$(grep -n 'checks green` to the status file and stop' "$instr" | head -1 | cut -d: -f1)
+    [ -n "$done_at" ] && [ "$floor_at" -lt "$done_at" ] || fail "$method: the floor must come before the done step"
   done
-  pass "promotion carries the short-loop floor unless the scout is poteto-mode"
+  pass "promotion carries the short-loop floor before the done step"
+}
+
+test_floor_placement_refuses_a_dod_without_ship_branch() {
+  printf '# Definition of done\nno branch line\n' | fm_dod_with_short_loop_floor >/dev/null 2>&1 \
+    && fail "placing the floor must refuse a DoD with no Ship branch line"
+  pass "floor placement refuses a DoD with no Ship branch line"
 }
 
 test_scout_done_is_not_gated() {
@@ -705,7 +713,8 @@ test_direct_pr_dod_writes_the_matt_pr_body() {
 }
 
 test_short_loop_floor_has_five_steps
-test_promotion_carries_the_short_loop_floor_unless_poteto
+test_promotion_carries_the_short_loop_floor
+test_floor_placement_refuses_a_dod_without_ship_branch
 test_scout_done_is_not_gated
 test_unpushed_ship_done_is_refused
 test_no_mistakes_prevalidation_done_is_not_gated

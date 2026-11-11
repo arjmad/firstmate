@@ -1867,7 +1867,7 @@ test_method_poteto_mode_renders_one_shared_contract() {
     assert_contains "$spec" 'append a `needs-decision:` line instead' \
       "$mode: method block does not route captain questions through firstmate"
     assert_no_grep "EOF" "$brief" "$mode: method brief leaked a heredoc marker"
-    assert_no_grep "Short-loop floor" "$brief" "$mode: a poteto-mode brief printed the short-loop floor twice"
+    assert_no_grep "Short-loop floor" "$brief" "$mode: a poteto-mode ship brief printed the short-loop floor"
   done
   # The block sits below the placeholder, so the fill target stays the first line.
   awk '/^## Firstmate spec$/{s=1; next} s && NF {print; exit}' "$home/data/brief-method-direct-PR/brief.md" \
@@ -1899,6 +1899,13 @@ test_method_poteto_mode_renders_one_shared_contract() {
     fm_brief_heading_body "$home/data/$brief/brief.md" "# Definition of done" | grep -qx "5. Report honestly what you did not prove." \
       || fail "$brief: a brief without a method lacks the short-loop floor in its Definition of done"
   done
+  mkdir -p "$home/config"
+  printf 'Publish with the review tool.\n' > "$home/config/external-review.md"
+  # forge=external ships direct-PR only.
+  HOME="$user_home" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-floor-ext alpha --mode direct-PR --forge external >/dev/null 2>&1 \
+    || fail "direct-PR forge=external brief exited non-zero"
+  awk '/^Short-loop floor/{f=NR} /^## Review tool instructions/{r=NR} END{exit !(f && r && f<r)}' "$home/data/brief-floor-ext/brief.md" \
+    || fail "forge=external: the floor must precede the home review-tool section"
   pass "fm-brief.sh: --method poteto-mode renders one shared contract under ## Firstmate spec"
 }
 

@@ -487,6 +487,14 @@ if [ "$METHOD_SET" -eq 1 ]; then
   METHOD_WORDS=" method=$METHOD"
 fi
 
+# The short-loop floor (bin/fm-dod-lib.sh owns its text) opens every ship and
+# scout Definition of done, except under poteto-mode, which already runs it.
+SHORT_LOOP_BLOCK=
+if [ "$METHOD_SET" -eq 0 ]; then
+  SHORT_LOOP_BLOCK=$(fm_dod_short_loop_block)
+fi
+SCOUT_FLOOR=${SHORT_LOOP_BLOCK:+$SHORT_LOOP_BLOCK$'\n'}
+
 # A ship scaffolded without --method whose task id reads as one of the four
 # standing poteto-mode classes (a bug fix, something slow, a live problem,
 # restructuring shared code) gets a warning once its brief is written, never a
@@ -494,12 +502,6 @@ fi
 # read, and data/captain.md, which this script never reads, decides whether a
 # class is opted in. A host without the method's entry skill cannot use the
 # method, so it gets no warning.
-# The short-loop floor (bin/fm-dod-lib.sh owns its text) closes every ship and
-# scout Definition of done, except under poteto-mode, which already runs it.
-SHORT_LOOP_BLOCK=
-if [ "$METHOD_SET" -eq 0 ]; then
-  SHORT_LOOP_BLOCK=$(fm_dod_short_loop_block)$'\n'
-fi
 method_class_word=
 if [ "$KIND" = ship ] && [ "$METHOD_SET" -eq 0 ] && [ -n "${HOME:-}" ] \
   && [ -f "$HOME/.claude/skills/poteto-mode/SKILL.md" ]; then
@@ -945,12 +947,12 @@ $WAIT_BLOCK$INBOX_SECTION
 $NOTICED_SECTION
 
 # Definition of done
-Write your findings to \`$DATA/$ID/report.md\`.
+${SCOUT_FLOOR}Write your findings to \`$DATA/$ID/report.md\`.
 That file is required even when your task names another deliverable, such as a findings file elsewhere: teardown refuses without it, so then write it as the standalone summary that points at that deliverable.
 Keep your research notes file (quotes, URLs, dates) in \`$DATA/$ID/\` beside the report, never only in the worktree, and give every \`[read]\` or \`[sub]\` claim in the report its source URL.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
 $LAVISH_LINE
-${SHORT_LOOP_BLOCK}Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
+Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
 A question your findings leave for the captain, such as which option to build or whether to adopt a recommendation, is not a reason to wait: put it in the report (and board) with its choices and your recommendation, hold it under that completion gate, and declare done; firstmate takes the call from there and releases you, and his answer starts fresh work.
 Only when the reviewed inventory is empty, run \`FM_HOME=$(shell_quote "$FM_HOME") bash $(shell_quote "$FM_ROOT/bin/fm-captain-hold.sh") complete $(shell_quote "$ID") --none\`.
 This exception permits only that command, not direct metadata edits, another task, or any backlog write.
@@ -984,7 +986,7 @@ case "$MODE" in
 esac
 RULE1=$(fm_ship_rule_one "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH") || exit 1
 DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$PR_TEXT") || exit 1
-[ -z "$SHORT_LOOP_BLOCK" ] || DOD="$DOD"$'\n'"${SHORT_LOOP_BLOCK%$'\n'}"
+[ -z "$SHORT_LOOP_BLOCK" ] || DOD=$(printf '%s\n' "$DOD" | fm_dod_with_short_loop_floor) || exit 1
 
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.

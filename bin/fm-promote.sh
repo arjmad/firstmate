@@ -355,10 +355,11 @@ EOF
     printf '%s\n' "$PROMOTION_ASK_USER_BLOCK"
   fi
   printf '\n'
-  fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$PR_TEXT"
-  # A poteto-mode scout already runs the short-loop floor; bin/fm-brief.sh's
-  # method block heading marks it.
-  grep -qx '### Method: poteto-mode' "$SCOUT_BRIEF" || fm_dod_short_loop_block
+  # Promotion demotes any scout-time method to context, so every promoted ship
+  # carries the short-loop floor.
+  local dod
+  dod=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$PR_TEXT") || return 1
+  printf '%s\n' "$dod" | fm_dod_with_short_loop_floor
 }
 mkdir -p "$DATA/$ID"
 [ ! -d "$INSTRUCTIONS" ] || { echo "error: ship instructions path is a directory: $INSTRUCTIONS" >&2; exit 1; }
