@@ -617,37 +617,37 @@ tests/fm-x-mode.test.sh
 EOF
 }
 
-# Per-script serial CI duration hints, one "<path> <ms>" per line, used to
-# pack only the two portable parallel lanes. Measurement provenance and the
+# Per-script one-at-a-time CI duration hints, one "<path> <ms>" per line,
+# used to pack the two portable parallel lanes and order their two-wide runs. Measurement provenance and the
 # refresh procedure are owned by docs/fm-test-portable-shards.md.
 portable_parallel_weight_hints() {
   cat <<'EOF'
-tests/fm-arm-pretool-check.test.sh 33778
-tests/fm-backend-herdr.test.sh 36331
-tests/fm-backend-t3code.test.sh 239245
-tests/fm-brief.test.sh 10594
-tests/fm-captain-hold-lifecycle.test.sh 343658
-tests/fm-cd-pretool-check.test.sh 16801
-tests/fm-composer-ghost.test.sh 2292
-tests/fm-composer-lib.test.sh 9521
-tests/fm-crew-state.test.sh 82058
-tests/fm-ensure-agents-md.test.sh 895
-tests/fm-grok-harness.test.sh 7666
-tests/fm-herdr-lab.test.sh 18325
-tests/fm-lint.test.sh 252498
-tests/fm-pi-primary-types.test.sh 5426
-tests/fm-pr-merge.test.sh 300199
-tests/fm-review-diff.test.sh 4134
-tests/fm-send-popup-settle.test.sh 6624
-tests/fm-send-settle.test.sh 2310
-tests/fm-send-strict.test.sh 4804
-tests/fm-spawn-batch.test.sh 2987
-tests/fm-supervision-instructions.test.sh 809
+tests/fm-arm-pretool-check.test.sh 36039
+tests/fm-backend-herdr.test.sh 49108
+tests/fm-backend-t3code.test.sh 243284
+tests/fm-brief.test.sh 21309
+tests/fm-captain-hold-lifecycle.test.sh 961794
+tests/fm-cd-pretool-check.test.sh 21914
+tests/fm-composer-ghost.test.sh 2945
+tests/fm-composer-lib.test.sh 30580
+tests/fm-crew-state.test.sh 132043
+tests/fm-ensure-agents-md.test.sh 945
+tests/fm-grok-harness.test.sh 9494
+tests/fm-herdr-lab.test.sh 28650
+tests/fm-lint.test.sh 446567
+tests/fm-pi-primary-types.test.sh 34762
+tests/fm-pr-merge.test.sh 772695
+tests/fm-review-diff.test.sh 19291
+tests/fm-send-popup-settle.test.sh 9143
+tests/fm-send-settle.test.sh 3267
+tests/fm-send-strict.test.sh 5224
+tests/fm-spawn-batch.test.sh 3908
+tests/fm-supervision-instructions.test.sh 1710
 tests/fm-t3-mcp.test.sh 57613
-tests/fm-test-run.test.sh 156781
-tests/fm-tmux-submit-busy.test.sh 2600
-tests/fm-transition-lib.test.sh 101
-tests/fm-x-mode.test.sh 29896
+tests/fm-test-run.test.sh 502781
+tests/fm-tmux-submit-busy.test.sh 3303
+tests/fm-transition-lib.test.sh 298
+tests/fm-x-mode.test.sh 43087
 EOF
 }
 
@@ -670,17 +670,17 @@ portable_parallel_lane_weight() {
 list_portable_parallel_1() {
   cat <<'EOF'
 tests/fm-captain-hold-lifecycle.test.sh
-tests/fm-backend-t3code.test.sh
+tests/fm-lint.test.sh
 tests/fm-crew-state.test.sh
 tests/fm-t3-mcp.test.sh
-tests/fm-arm-pretool-check.test.sh
-tests/fm-herdr-lab.test.sh
-tests/fm-cd-pretool-check.test.sh
-tests/fm-grok-harness.test.sh
+tests/fm-x-mode.test.sh
 tests/fm-pi-primary-types.test.sh
+tests/fm-cd-pretool-check.test.sh
 tests/fm-review-diff.test.sh
-tests/fm-tmux-submit-busy.test.sh
+tests/fm-send-popup-settle.test.sh
+tests/fm-spawn-batch.test.sh
 tests/fm-composer-ghost.test.sh
+tests/fm-ensure-agents-md.test.sh
 tests/fm-transition-lib.test.sh
 EOF
 }
@@ -689,17 +689,17 @@ EOF
 list_portable_parallel_2() {
   cat <<'EOF'
 tests/fm-pr-merge.test.sh
-tests/fm-lint.test.sh
 tests/fm-test-run.test.sh
+tests/fm-backend-t3code.test.sh
 tests/fm-backend-herdr.test.sh
-tests/fm-x-mode.test.sh
-tests/fm-brief.test.sh
+tests/fm-arm-pretool-check.test.sh
 tests/fm-composer-lib.test.sh
-tests/fm-send-popup-settle.test.sh
+tests/fm-herdr-lab.test.sh
+tests/fm-brief.test.sh
+tests/fm-grok-harness.test.sh
 tests/fm-send-strict.test.sh
-tests/fm-spawn-batch.test.sh
+tests/fm-tmux-submit-busy.test.sh
 tests/fm-send-settle.test.sh
-tests/fm-ensure-agents-md.test.sh
 tests/fm-supervision-instructions.test.sh
 EOF
 }
@@ -2901,7 +2901,7 @@ if [ "$JOBS" -gt 1 ]; then
       fi
       # Longest first within each isolation phase: workers are handed scripts
       # in order, so starting the longest last strands it at the tail.
-      printf '%s\t%s\t%s\n' "$phase" "$(portable_serial_weight_for "$s")" "$s" >>"$SCHEDULE_TMP"
+      printf '%s\t%s\t%s\n' "$phase" "$(portable_parallel_weight_for "$s")" "$s" >>"$SCHEDULE_TMP"
     else
       SERIAL_TAIL_SCRIPTS+=("$s")
     fi
