@@ -2,12 +2,13 @@
 // lavish-axi's dist/chrome-client.js and owns when it is applied and removed.
 // Desktop Conversation panel drag-to-resize, adapted from kunchenguid/lavish-axi PR #429 (a resize
 // handle on the panel's inner edge with a stored width). The storage key is the one that PR uses,
-// so a viewer's width carries over when upstream ships its own. Above the phone breakpoint only;
-// the phone sheet is untouched. Hiding the panel is Lavish's own bar toggle, which takes this
-// handle away with the panel.
+// so a viewer's width carries over when upstream ships its own, and this part stands down once
+// the page has that PR's own handle (id="panelResizer"). Above the phone breakpoint only; the
+// phone sheet is untouched. Hiding the panel is Lavish's own bar toggle, which takes this handle
+// away with the panel.
 (() => {
   const panel = document.getElementById("panel");
-  if (!panel || panel.querySelector(".fm-panel-resizer")) return;
+  if (!panel || document.getElementById("panelResizer") || panel.querySelector(".fm-panel-resizer")) return;
 
   const WIDTH_KEY = "lavish-axi:panel-width";
   const MIN_PANEL = 280;

@@ -18,10 +18,10 @@
 //           installed. Prints
 //           "BOOTSTRAP_INFO: lavish-axi <version> chrome patch applied" after
 //           writing. When upstream's files do not match what the overlay
-//           expects, or upstream already ships its own panel resize, it writes
-//           nothing and prints one
+//           expects, it writes nothing and prints one
 //           "LAVISH_PATCH: skipped: lavish-axi <version> <reason>" line: Lavish
-//           keeps working unpatched. A read or write failure prints one
+//           keeps working as it was, unpatched or under the older overlay
+//           revision it already carries. A read or write failure prints one
 //           "LAVISH_PATCH: failed: lavish-axi <version> <reason>" line.
 //           Exit 0 when applied, current, newer, absent, or disabled; 3 when
 //           skipped; 1 when failed.
@@ -47,7 +47,8 @@
 // only when it navigates. Both begin lines carry REVISION, and every
 // change to bin/lavish-patch/ bumps it: several homes on different firstmate
 // commits share one toolchain install, so apply replaces only an older
-// revision and leaves a newer one alone rather than downgrading it. Writes are
+// revision and leaves a newer one alone rather than downgrading it, without
+// checking upstream against this checkout's older expectations. Writes are
 // staged as same-directory temporary files with each original's mode and
 // renamed into place only once every one is written. The Lavish server reads
 // both files on every request, so a running board picks the change up on its
@@ -62,10 +63,11 @@
 // artifact iframe to carry no src of its own and to come before the
 // chrome-client.js script tag, so that the iframe exists when the head runs and
 // has not yet navigated; frameLoadsAfterHead checks both. A file whose head part
-// has lost its end marker is skipped rather than stacked. UPSTREAM_RESIZE names
-// upstream's own resize control (PR #429's panelResizer); once it ships, the
-// overlay steps aside rather than add a second handle, until its resize part is
-// dropped.
+// has lost its end marker is skipped rather than stacked. A part upstream may
+// ship next does not make apply skip: the resize part stands down in the browser
+// once upstream serves its own handle (PR #429's panelResizer), which
+// bin/lavish-patch/chrome-client.js checks, so the rest of the overlay keeps
+// applying until that part is dropped.
 
 import { chmodSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
@@ -97,7 +99,6 @@ const ANCHORS = {
     "--w-bold:",
     "--dur-fast:",
     "--ease:",
-    '.sidebar-toggle[aria-expanded="false"]',
   ],
   "cli.mjs": [
     'new URL("./chrome.css", import.meta.url)',
@@ -110,8 +111,6 @@ const ANCHORS = {
     'data-artifact-src=',
   ],
 };
-
-const UPSTREAM_RESIZE = 'id="panelResizer"';
 
 // The reason the head part would run too late for the server template in cli,
 // or null when the artifact iframe has no src and precedes the client script.
@@ -197,8 +196,12 @@ function overlaid(target, pristine) {
   return head + pristine + tail;
 }
 
+const newer = (files) => files.some((f) => f.revision !== null && f.revision > REVISION);
+
 // Every target with its current and wanted content. Throws Skip when upstream
-// does not match the overlay, and Error when a file cannot be read.
+// does not match the overlay, and Error when a file cannot be read. A newer
+// installed revision is returned unchecked: this checkout will not write over
+// it, and its own expectations of upstream may be out of date.
 function inspect(pkg) {
   const dist = join(pkg.dir, "dist");
   const files = TARGETS.map((target) => {
@@ -212,6 +215,7 @@ function inspect(pkg) {
     const { pristine, revision } = split(target, content);
     return { path, content, pristine, revision, wanted: overlaid(target, pristine) };
   });
+  if (newer(files)) return files;
   let cli;
   try {
     cli = readFileSync(join(dist, "cli.mjs"), "utf8");
@@ -227,11 +231,8 @@ function inspect(pkg) {
   if (late) throw new Skip(late);
   const damaged = TARGETS.find((target, i) => target.head && files[i].pristine.startsWith(target.open + HEAD_BEGIN));
   if (damaged) throw new Skip(`dist/${damaged.file} has an overlay head part without its end marker; reinstall lavish-axi`);
-  if (cli.includes(UPSTREAM_RESIZE)) throw new Skip(`ships its own conversation-panel resize (${UPSTREAM_RESIZE}); drop the overlay's resize part`);
   return files;
 }
-
-const newer = (files) => files.some((f) => f.revision !== null && f.revision > REVISION);
 
 // Stage every new content beside its file first, then rename them all into
 // place, so a failed write changes nothing.

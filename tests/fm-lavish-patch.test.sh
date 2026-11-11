@@ -16,15 +16,17 @@
 #     newer checkout of the shared toolchain, is never downgraded.
 #   - remove restores upstream's bytes exactly, including a file that had no
 #     trailing newline.
-#   - Fail closed: when upstream does not carry what the overlay relies on, or
-#     ships its own panel resize, apply prints one LAVISH_PATCH skip line,
-#     exits 3, and writes nothing; that includes a Lavish from before its own
-#     panel collapse, an artifact iframe that no longer gets its src from
-#     upstream's script or no longer exists when that script starts, and a head
-#     part that lost its end marker.
-#   - The overlay adds one resize handle to the desktop panel and no control to
-#     the bar, so Lavish's own toggle stays the only panel collapse; the handle
-#     keeps the chosen width and does nothing at phone width.
+#   - Fail closed: when upstream does not carry what the overlay relies on,
+#     apply prints one LAVISH_PATCH skip line, exits 3, and writes nothing; that
+#     includes a Lavish from before its own panel collapse, an artifact iframe
+#     that no longer gets its src from upstream's script or no longer exists
+#     when that script starts, and a head part that lost its end marker.
+#   - A newer installed revision keeps an older checkout silent even on an
+#     upstream that checkout's anchors do not match.
+#   - The overlay creates one resize handle on the desktop panel and no other
+#     element, so Lavish's own toggle stays the only panel collapse; the handle
+#     keeps the chosen width, does nothing at phone width, and is not added
+#     beside upstream's own resize handle, which does not make apply skip.
 #   - A revision 2 install, which had no head part, is upgraded to both parts.
 #   - No lavish-axi package on PATH (absent, or a stub that is not an npm
 #     install) is silent, and FM_LAVISH_PATCH=0 turns apply off.
@@ -154,6 +156,16 @@ test_newer_revision_is_never_downgraded() {
   assert_equals "newer 0.1.96" "$(patch "$prefix" status)" "status names the newer revision"
   out=$(patch "$prefix" apply)
   assert_equals "" "$out" "repeated session starts on the older checkout stay silent"
+
+  # The newer revision may be for an upstream this checkout's anchors no longer
+  # match; the older checkout still has nothing to do and nothing to report.
+  sed 's/id="chatLog"/id="transcript"/' "$(dist "$prefix")/cli.mjs" > "$TMP_ROOT/newer-moved.mjs"
+  cat "$TMP_ROOT/newer-moved.mjs" > "$(dist "$prefix")/cli.mjs"
+  out=$(patch "$prefix" apply); rc=$?
+  expect_code 0 "$rc" "apply under a newer revision on an upstream this checkout does not match"
+  assert_equals "" "$out" "a newer revision keeps an older checkout silent whatever upstream looks like"
+  assert_equals "newer 0.1.96" "$(patch "$prefix" status)" "status still names the newer revision"
+  same_files "$prefix" "$TMP_ROOT/newer-installed" || fail "an older checkout must not touch a newer revision"
   pass "apply: a newer overlay revision from another checkout is never downgraded"
 }
 
@@ -209,11 +221,15 @@ test_fails_closed_when_upstream_moved() {
   expect_code 3 "$rc" "apply on a changed chrome template"
   assert_contains "$out" "LAVISH_PATCH: skipped: lavish-axi 0.2.0 dist/cli.mjs does not contain" "a changed template is a skip"
 
-  # A Lavish from before its own panel collapse: the overlay no longer brings
-  # one, so it must not leave boards with no way to hide the panel.
+  # A Lavish from before its own panel collapse, with neither the button nor
+  # its style rule: the overlay no longer brings a collapse, so it must not
+  # leave boards with no way to hide the panel, and the reason names the toggle.
   prefix=$(new_package no-collapse 0.1.93)
   sed 's/<button class="sidebar-toggle"[^>]*><\/button>//' "$(dist "$prefix")/cli.mjs" > "$TMP_ROOT/no-collapse.mjs"
   cat "$TMP_ROOT/no-collapse.mjs" > "$(dist "$prefix")/cli.mjs"
+  sed '/^\.sidebar-toggle/,/^}/d' "$(dist "$prefix")/chrome.css" > "$TMP_ROOT/no-collapse.css"
+  cat "$TMP_ROOT/no-collapse.css" > "$(dist "$prefix")/chrome.css"
+  assert_not_contains "$(cat "$(dist "$prefix")/cli.mjs" "$(dist "$prefix")/chrome.css")" "sidebar" "the fixture models a Lavish with no collapse at all"
   pristine="$TMP_ROOT/no-collapse-pristine"
   snapshot "$prefix" "$pristine"
   out=$(patch "$prefix" apply); rc=$?
@@ -259,28 +275,26 @@ test_fails_closed_when_upstream_moved() {
   pass "apply: fails closed with one skip line when upstream does not match"
 }
 
-test_steps_aside_when_upstream_ships_resize() {
-  local prefix out rc pristine
+test_keeps_applying_when_upstream_ships_resize() {
+  local prefix out rc
   prefix=$(new_package upstreamed 0.2.0)
   printf '%s\n' 'var resizer = '"'"'<div class="panel-resizer" id="panelResizer"></div>'"'"';' >> "$(dist "$prefix")/cli.mjs"
-  pristine="$TMP_ROOT/upstreamed-pristine"
-  snapshot "$prefix" "$pristine"
   out=$(patch "$prefix" apply); rc=$?
-  expect_code 3 "$rc" "apply once upstream ships a resize"
-  assert_contains "$out" "ships its own conversation-panel resize" "an upstream resize is reported"
-  assert_contains "$out" "drop the overlay's resize part" "the skip says which part to drop"
-  same_files "$prefix" "$pristine" || fail "apply must not layer a second resize handle over upstream's"
-  pass "apply: steps aside once upstream ships its own panel resize"
+  expect_code 0 "$rc" "apply once upstream ships a resize"
+  assert_equals "BOOTSTRAP_INFO: lavish-axi 0.2.0 chrome patch applied" "$out" "an upstream resize does not make apply skip"
+  assert_equals "applied 0.2.0" "$(patch "$prefix" status)" "status once upstream ships a resize"
+  pass "apply: keeps applying once upstream ships its own panel resize"
 }
 
-# The overlay's panel controls, run under a minimal DOM that holds Lavish's own
-# bar toggle and panel: it adds one resize handle to the panel and nothing to
-# the bar, the handle's keys change and keep the width, and at phone width it
-# leaves the width to upstream's sheet.
-run_panel_overlay() {  # [phone]
+# The overlay's panel part, run under a minimal DOM that holds the panel: it
+# creates one resize handle and no other element, so Lavish's own toggle stays
+# the only panel collapse; the handle's keys change and keep the width; at phone
+# width it leaves the width to upstream's sheet; and on a page that already has
+# upstream's own handle it adds nothing.
+run_panel_overlay() {  # [phone|upstream-resize]
   node - "$ROOT/bin/lavish-patch/chrome-client.js" "${1:-}" <<'JS'
 const { readFileSync } = require("node:fs");
-const [file, phone] = process.argv.slice(2);
+const [file, mode] = process.argv.slice(2);
 const created = [];
 class El {
   constructor(tag, id) {
@@ -291,35 +305,31 @@ class El {
   addEventListener(type, fn) { this.listeners[type] = fn; }
   insertBefore(node, before) { const at = this.children.indexOf(before); this.children.splice(at < 0 ? this.children.length : at, 0, node); return node; }
   querySelector(sel) { return this.children.find((c) => c.className.split(" ").includes(sel.slice(1))) || null; }
-  contains() { return false; }
-  focus() {}
 }
-const toggle = new El("button", "sidebarToggle");
-const bar = new El("div"); bar.children.push(toggle);
 const panel = new El("aside", "panel"); panel.children.push(new El("div", "panelScroll"));
+const upstreamHandle = mode === "upstream-resize" ? new El("div", "panelResizer") : null;
 const props = new Map();
 const store = new Map();
 globalThis.document = {
   documentElement: { style: { setProperty: (k, v) => props.set(k, v), removeProperty: (k) => props.delete(k) } },
   body: { classList: { add() {}, remove() {} } },
-  getElementById: (id) => (id === "panel" ? panel : id === "sidebarToggle" ? toggle : null),
+  getElementById: (id) => (id === "panel" ? panel : id === "panelResizer" ? upstreamHandle : null),
   createElement: (tag) => { const el = new El(tag); created.push(el); return el; },
 };
 globalThis.getComputedStyle = () => ({ getPropertyValue: (name) => (name === "--panel-w" ? "360px" : "") });
 globalThis.window = {
   innerWidth: 1440,
-  matchMedia: () => ({ matches: phone === "phone", addEventListener() {} }),
+  matchMedia: () => ({ matches: mode === "phone", addEventListener() {} }),
   localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) },
   addEventListener() {},
 };
 new Function(readFileSync(file, "utf8"))();
-const handle = panel.children[0];
+const handle = panel.querySelector(".fm-panel-resizer");
 const start = props.get("--panel-w") ?? null;
-handle.listeners.keydown({ key: "ArrowLeft", preventDefault() {} });
+if (handle) handle.listeners.keydown({ key: "ArrowLeft", preventDefault() {} });
 console.log(JSON.stringify({
-  created: created.map((el) => el.tag + "." + el.className), barChildren: bar.children.map((el) => el.id),
-  handle: handle.className, role: handle.attrs.role, start, afterKey: props.get("--panel-w") ?? null,
-  stored: Object.fromEntries(store) }));
+  created: created.map((el) => el.tag + "." + el.className), panelChildren: panel.children.map((el) => el.id || el.className),
+  role: handle ? handle.attrs.role : null, start, afterKey: props.get("--panel-w") ?? null, stored: Object.fromEntries(store) }));
 JS
 }
 
@@ -327,14 +337,16 @@ test_overlay_adds_a_resize_handle_and_no_second_collapse() {
   local out
   out=$(run_panel_overlay) || fail "the overlay could not run under the panel shim"
   printf '%s' "$out" | jq -e '
-    .created == ["div.fm-panel-resizer"] and .barChildren == ["sidebarToggle"]
-      and .handle == "fm-panel-resizer" and .role == "separator"
+    .created == ["div.fm-panel-resizer"] and .panelChildren == ["fm-panel-resizer", "panelScroll"] and .role == "separator"
       and .start == "360px" and .afterKey == "376px" and .stored == { "lavish-axi:panel-width": "376" }
-  ' >/dev/null || fail "the overlay must add one resize handle that keeps its width, and no bar control: $out"
+  ' >/dev/null || fail "the overlay must create one resize handle that keeps its width, and nothing else: $out"
   out=$(run_panel_overlay phone) || fail "the overlay could not run under the panel shim at phone width"
-  printf '%s' "$out" | jq -e '.barChildren == ["sidebarToggle"] and .start == null and .afterKey == null and .stored == {}' >/dev/null \
+  printf '%s' "$out" | jq -e '.created == ["div.fm-panel-resizer"] and .start == null and .afterKey == null and .stored == {}' >/dev/null \
     || fail "at phone width the overlay must leave the panel width to upstream: $out"
-  pass "overlay: one resize handle on the desktop panel, no second collapse control, nothing at phone width"
+  out=$(run_panel_overlay upstream-resize) || fail "the overlay could not run under the panel shim beside upstream's handle"
+  printf '%s' "$out" | jq -e '.created == [] and .panelChildren == ["panelScroll"] and .start == null and .stored == {}' >/dev/null \
+    || fail "beside upstream's own resize handle the overlay must add nothing: $out"
+  pass "overlay: one resize handle on the desktop panel, no second collapse control, nothing at phone width or beside upstream's handle"
 }
 
 test_absent_and_disabled_are_silent() {
@@ -550,7 +562,7 @@ test_newer_revision_is_never_downgraded
 test_unreadable_overlay_fails_in_one_line
 test_remove_restores_upstream_bytes
 test_fails_closed_when_upstream_moved
-test_steps_aside_when_upstream_ships_resize
+test_keeps_applying_when_upstream_ships_resize
 test_overlay_adds_a_resize_handle_and_no_second_collapse
 test_absent_and_disabled_are_silent
 test_bootstrap_applies_on_the_locked_pass_only
