@@ -3,9 +3,9 @@
    1. The fleet-html house style (Dracula, dark only; ~/code/skills/skills/fleet-html/house.css v2)
       for Lavish's own chrome: the bar, the Conversation panel, buttons and inputs. Artifacts are
       untouched; they keep their own look inside the iframe.
-   2. A collapse control and drag-to-resize for the desktop Conversation panel, adapted from
-      kunchenguid/lavish-axi PR #455 (bar toggle) and PR #429 (resize handle). Desktop only: the
-      phone bottom sheet below 861px keeps upstream's layout. */
+   2. Drag-to-resize for the desktop Conversation panel, adapted from kunchenguid/lavish-axi
+      PR #429 (resize handle). Desktop only: the phone bottom sheet below 861px keeps upstream's
+      layout. Hiding the panel is Lavish's own bar toggle, which only takes the house look here. */
 :root {
   /* house primitives, values copied from house.css v2 */
   --fm-night-950: #282a36;
@@ -68,8 +68,15 @@
   filter: brightness(1.08);
 }
 .composer textarea,
-.more-button {
+.more-button,
+.sidebar-toggle {
   border-color: var(--border-strong);
+}
+.sidebar-toggle[aria-expanded="false"] {
+  border-color: var(--accent);
+}
+.sidebar-toggle-count {
+  font-size: 12px;
 }
 .warnings-button {
   border-color: var(--fm-yellow-200);
@@ -100,58 +107,7 @@
   background: var(--fm-scrim);
 }
 
-/* Desktop Conversation panel: bar toggle and resize handle */
-.fm-panel-toggle {
-  position: relative;
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  border: 1px solid var(--border-strong);
-  background: transparent;
-  color: var(--fg-dim);
-  border-radius: 9px;
-  cursor: pointer;
-  padding: 0;
-}
-.fm-panel-toggle:hover {
-  background: var(--bg-elevated);
-  color: var(--fg);
-}
-.fm-panel-toggle[aria-expanded="false"] {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-.fm-panel-toggle-count {
-  position: absolute;
-  top: -6px;
-  right: -6px;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: var(--radius-pill);
-  background: var(--accent);
-  color: var(--accent-ink);
-  font-size: 12px;
-  font-weight: var(--w-bold);
-  line-height: 18px;
-  text-align: center;
-}
-.fm-panel-toggle-count[hidden] {
-  display: none;
-}
-.fm-panel-toggle.is-unread::after {
-  content: "";
-  position: absolute;
-  top: -3px;
-  right: -3px;
-  width: 8px;
-  height: 8px;
-  border-radius: var(--radius-pill);
-  background: var(--accent);
-  box-shadow: 0 0 0 2px var(--bg-bar);
-}
+/* Desktop Conversation panel: resize handle */
 .fm-panel-resizer {
   position: absolute;
   top: 0;
@@ -205,21 +161,14 @@ body.fm-panel-resizing {
 body.fm-panel-resizing iframe {
   pointer-events: none;
 }
-/* The exact complement of the phone breakpoint, so a stored desktop preference can never hide the
-   phone dock. */
+/* The exact complement of the phone breakpoint: the handle hangs off the desktop panel, and the
+   phone sheet keeps upstream's own positioning. */
 @media not all and (max-width: 860px) {
   .panel {
     position: relative;
   }
-  body.fm-panel-collapsed .layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  body.fm-panel-collapsed .panel {
-    display: none;
-  }
 }
 @media (max-width: 860px) {
-  .fm-panel-toggle,
   .fm-panel-resizer {
     display: none;
   }

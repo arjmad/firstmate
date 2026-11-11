@@ -938,7 +938,7 @@ fm_fake_lavish_package() {
 #!/usr/bin/env node
 var chromeClientUrl = new URL("./chrome-client.js", import.meta.url);
 var chromeCssUrl = new URL("./chrome.css", import.meta.url);
-var template = '<div class="layout"><div class="frame"><iframe id="artifact" sandbox="allow-scripts" data-artifact-src="/artifact/key/index.html"></iframe></div><aside class="panel" id="panel"><div id="panelScroll"><div id="chatLog"></div><div id="queuedLog"></div></div></aside></div><div class="more-wrap" id="moreWrap"></div><script src="/chrome-client.js"></script>';
+var template = '<div class="bar"><button class="sidebar-toggle" id="sidebarToggle" type="button" aria-controls="panel" aria-expanded="true"></button><div class="more-wrap" id="moreWrap"></div></div><div class="layout"><div class="frame"><iframe id="artifact" sandbox="allow-scripts" data-artifact-src="/artifact/key/index.html"></iframe></div><aside class="panel" id="panel"><div id="panelScroll"><div id="chatLog"></div><div id="queuedLog"></div></div></aside></div><script src="/chrome-client.js"></script>';
 if (process.argv[2] === "--version") console.log("$version");
 JS
   chmod +x "$pkg/dist/cli.mjs"
@@ -953,6 +953,9 @@ JS
   --w-bold: 700;
   --dur-fast: 120ms;
   --ease: cubic-bezier(0.2, 0.6, 0.2, 1);
+}
+.sidebar-toggle[aria-expanded="false"] {
+  color: #f4c95d;
 }
 .layout {
   grid-template-columns: minmax(0, 1fr) var(--panel-w);

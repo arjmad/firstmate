@@ -25,7 +25,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-backlog-prune.sh` | The weekly backlog prune: its Monday slot, the list each board card offered, and the drops (dated reopenable closes) or one-week snooze its answer orders |
 | `fm-lavish-link.sh`      | Print a Lavish session URL in its phone-openable form: the tailnet HTTPS origin `tailscale serve` publishes for its port |
 | `fm-lavish-url.sh`       | Capture a website into an armed Lavish review and route its feedback to a project backlog |
-| `fm-lavish-patch.mjs`    | Apply, check, or remove firstmate's local Lavish chrome overlay (house dark colours, collapsible and resizable Conversation panel, fullscreen board videos) |
+| `fm-lavish-patch.mjs`    | Apply, check, or remove firstmate's local Lavish chrome overlay (house dark colours, resizable Conversation panel, one-line bearings receipts, fullscreen board videos) |
 | `fm-secondmate-reconcile.sh` | Queue Bearings reconcile requests for later supervision delivery and ask each mismatched home through its durable inbox with a per-home cooldown |
 | `fm-update.sh`           | Guarded self-update of firstmate and local or remote secondmate homes, reconciling redundant divergence and classifying every live mate left on the target commit for restart or fallback nudge |
 | `fm-secondmate-restart.sh` | Persist open conversational work, then restart eligible second mates or report the fallback outcome |
