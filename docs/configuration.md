@@ -1721,13 +1721,13 @@ It exists for servers kept to the captain's own sessions and the helm, which a w
 Each Claude ship and scout launch carries `"deniedMcpServers":[{"serverName":"<name>"},...]` in its inline `--settings` JSON, and Claude Code then refuses to start those servers for that session alone.
 The helm, the captain's own sessions, and a secondmate's own agent keep them.
 
-The file uses the format of `config/crew-exclude-tools` above, with one server name per line instead of one tool name.
+The file uses the format of `config/crew-exclude-tools` above, with one server name per line instead of one tool name, and a name may not contain `.`, which Claude's setting does not accept.
 It may be a symlink, so a home can point it at a list another repository deploys.
 The file is inherited into secondmate homes under the [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md) inherited-local-material contract, so a secondmate's own Claude workers are denied the same servers.
 With no file, or a file with no entries, every launch is unchanged.
 
 The file fails closed: when it is present but dangling, unreadable, not a regular file, or has a malformed entry, a Claude ship or scout spawn or relaunch refuses before its endpoint, local copy, or task record exists, and a relaunch refuses before it stops the running worker.
-A non-empty list also refuses a raw launch command that names `claude`, including behind a wrapper such as `env` or `npx`, and the T3 Code backend, because Firstmate does not build those command lines.
+A non-empty list also refuses every raw launch command, because one can reach Claude behind any wrapper, and the T3 Code backend, because Firstmate does not build those command lines.
 Other runtimes do not read Claude's MCP configuration, so they neither read nor refuse on the file; a server registered in another runtime's own MCP configuration is not covered.
 [`bin/fm-exclude-tools-lib.sh`](../bin/fm-exclude-tools-lib.sh) implements the parsing and refusals, and [`bin/fm-spawn.sh`](../bin/fm-spawn.sh)'s header owns the launch mechanics.
 

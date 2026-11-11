@@ -2502,7 +2502,7 @@ test_claude_task_workers_launch_with_denied_mcp_servers() {
 
 test_claude_denied_mcp_servers_fail_closed() {
   local rec id out status n=0 setup
-  for setup in dangling malformed directory raw raw-env; do
+  for setup in dangling malformed dotted directory raw raw-env raw-other; do
     n=$((n + 1))
     id="claude-denymcp-refuse-$setup-z32"
     rec=$(make_spawn_case "claude-denymcp-refuse-$setup" claude "$id")
@@ -2511,10 +2511,13 @@ test_claude_denied_mcp_servers_fail_closed() {
       dangling) ln -s "$CASE_DIR/fleet/worker-denied-mcp-servers" "$HOME_DIR/config/worker-denied-mcp-servers" ;;
       malformed) write_denied_mcp_file "$HOME_DIR" 'homeassistant' 'two words' ;;
       directory) mkdir "$HOME_DIR/config/worker-denied-mcp-servers" ;;
-      raw | raw-env) write_denied_mcp_file "$HOME_DIR" 'homeassistant' ;;
+      dotted) write_denied_mcp_file "$HOME_DIR" 'home.assistant' ;;
+      raw | raw-env | raw-other) write_denied_mcp_file "$HOME_DIR" 'homeassistant' ;;
     esac
     if [ "$setup" = raw ]; then
       out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "claude --dangerously-skip-permissions" 2>&1)
+    elif [ "$setup" = raw-other ]; then
+      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "./worker.sh --go" 2>&1)
     elif [ "$setup" = raw-env ]; then
       out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "env -u CLAUDECODE claude --dangerously-skip-permissions" 2>&1)
     else
@@ -2535,7 +2538,7 @@ test_claude_denied_mcp_servers_fail_closed() {
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
   status=$?
   expect_code 0 "$status" "a codex spawn must not refuse on the Claude denied-server list"$'\n'"$out"
-  pass "an unreadable or malformed denied-server list, or a raw claude command, refuses before any launch or record"
+  pass "an unreadable or malformed denied-server list, or any raw command, refuses before any launch or record"
 }
 
 test_claude_long_launch_is_delivered_intact() {

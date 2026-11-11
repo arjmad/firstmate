@@ -79,18 +79,25 @@ fm_exclude_tools_check() {
 # for a Claude ship or scout launch, print the comma-joined server names
 # config/worker-denied-mcp-servers lists, empty when the home lists none.
 # Refuses when the file is invalid, or when it lists servers and this launch
-# cannot carry Claude's deniedMcpServers setting: a raw command, whose flags
-# firstmate does not build, or T3 Code, which builds its own provider command.
-# Every other runtime does not read Claude's MCP configuration, so it neither
-# reads nor refuses on the file. bin/fm-spawn.sh passes claude for any raw
-# command that names claude.
+# cannot carry Claude's deniedMcpServers setting: any raw command, which can
+# reach claude behind a wrapper firstmate cannot see through, or T3 Code,
+# which builds its own provider command. Names use only letters, digits, _
+# and -, the server-name form Claude's setting accepts. Every other runtime
+# does not read Claude's MCP configuration, so it neither reads nor refuses
+# on the file.
 fm_worker_denied_mcp_servers_check() {
   local harness=$1 raw=$2 backend=$3 config=$4 names
-  [ "$harness" = claude ] || return 0
+  [ "$raw" = 1 ] || [ "$harness" = claude ] || return 0
   names=$(fm_config_name_list "$config" worker-denied-mcp-servers 'MCP server name') || return 1
   [ -n "$names" ] || return 0
+  case "$names" in
+  *.*)
+    echo "error: config/worker-denied-mcp-servers has a server name with '.'; Claude's deniedMcpServers accepts only letters, digits, _ and -" >&2
+    return 1
+    ;;
+  esac
   if [ "$raw" = 1 ]; then
-    echo "error: config/worker-denied-mcp-servers lists MCP servers a worker must not load, but a raw claude launch command cannot carry that denial; launch with the claude harness name instead" >&2
+    echo "error: config/worker-denied-mcp-servers lists MCP servers a worker must not load, but a raw launch command cannot carry that denial; launch with a harness name instead" >&2
     return 1
   fi
   if [ "$backend" = t3code ]; then

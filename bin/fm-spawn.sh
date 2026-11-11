@@ -3873,13 +3873,7 @@ EXCLUDE_TOOLS=
 DENIED_MCP_SERVERS=
 if [ "$KIND" != secondmate ]; then
   EXCLUDE_TOOLS=$(fm_exclude_tools_check "$HARNESS" "$RAW_LAUNCH" "$CONFIG") || exit 1
-  # A raw command can reach claude behind a wrapper (env, npx, a script), so
-  # any raw command that names claude is checked as a claude launch.
-  denied_mcp_harness=$HARNESS
-  if [ "$RAW_LAUNCH" = 1 ]; then
-    case "$LAUNCH" in *[Cc][Ll][Aa][Uu][Dd][Ee]*) denied_mcp_harness=claude ;; esac
-  fi
-  DENIED_MCP_SERVERS=$(fm_worker_denied_mcp_servers_check "$denied_mcp_harness" "$RAW_LAUNCH" "$BACKEND" "$CONFIG") || exit 1
+  DENIED_MCP_SERVERS=$(fm_worker_denied_mcp_servers_check "$HARNESS" "$RAW_LAUNCH" "$BACKEND" "$CONFIG") || exit 1
 fi
 
 case "$HARNESS" in
