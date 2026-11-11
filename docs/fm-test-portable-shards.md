@@ -60,11 +60,12 @@ A serial script those runs did not measure keeps its earlier hint.
 Those runs' serial jobs took up to 29 of their 30 minutes, because many hints had fallen far below the scripts' real durations.
 The refreshed hints sum to about 243 minutes, more than ten shards can hold under the 20-minute modeled budget, so the lane then had thirteen shards.
 The 2026-11-09 sync added upstream's new serial scripts at their upstream hints and kept the slower of each shared hint, which needs fifteen shards under the same budget.
-The parallel table keeps upstream's values, because both fork parallel jobs complete in about 13 minutes or less.
 
 ## Parallel lanes
 
-The two parallel lanes use longest-processing-time assignment over those hints.
+The two parallel lanes use longest-processing-time assignment over those hints, and each CI lane runs its members two at a time with `--jobs 2`, longest first.
+Every member is proven isolated, so two-wide execution changes only the lane's wall time; a lane's expected duration is the larger of its longest hint and about half its hint sum.
+On 2026-11-11 every parallel hint took the slowest successful `duration_ms` from the parallel artifacts of eight green fork runs, from [42913949765](https://github.com/arjmad/firstmate/actions/runs/42913949765) to [43074988852](https://github.com/arjmad/firstmate/actions/runs/43074988852), because the lanes then ran their members one at a time for 21 to 30 minutes against the 30-minute cap.
 [`tests/fm-pi-primary-types.test.sh`](../tests/fm-pi-primary-types.test.sh) owns its typecheck dependencies independently of the lane's installed Pi runtime.
 [`bin/fm-test-run.sh`](../bin/fm-test-run.sh) holds the duration values in `portable_parallel_weight_hints` and the ordered memberships and lane-specific prerequisite constraints beside `list_portable_parallel_1` and `list_portable_parallel_2`.
 Read the derived packing estimates with that runner's `--check-coverage`; its header and `--help` own the output fields and the selection-specific `--list-scheduled` weight rules.
