@@ -2812,6 +2812,9 @@ if [ "$RELAUNCH" -eq 0 ]; then
       residue-sweep)
         echo "error: the state residue sweep still holds this home's task set after a minute; refusing to create task $ID rather than racing it" >&2
         ;;
+      account-handover)
+        echo "error: this helm is handing itself over to another Claude account (bin/fm-account-drain.sh handover); refusing to create task $ID - the fresh helm dispatches it" >&2
+        ;;
       *)
         echo "error: this home's task set is locked by another operation; refusing to create task $ID rather than racing it" >&2
         ;;
@@ -3756,6 +3759,20 @@ if [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ] && [ -f "$CONFIG/crew-disp
     echo "error: launch flags do not match the clear dispatch selection --harness $selected_harness${selected_model:+ --model $selected_model}${selected_effort:+ --effort $selected_effort} recorded in $DISPATCH_RECORD; pass those flags with no raw launch command, or record this task's override with --dispatch-override <reason>" >&2
     exit 1
   fi
+fi
+
+# Both Claude accounts low (bin/fm-account-drain.sh owns the policy and its
+# inputs): a fresh Claude ship or scout is refused before any
+# endpoint, worktree, or record exists, naming both reset times and the home's
+# spill profile; the dispatch reference routes the task there. No answer from
+# that script (unconfigured, spill off, no fresh drain file) changes nothing.
+# A relaunch is exempt: it recovers a worker that already runs on its
+# recorded harness, and refusing it would strand that task.
+if [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ] && [ "$HARNESS" = claude ] \
+  && both_low=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$FM_ROOT/bin/fm-account-drain.sh" both-low 2>/dev/null); then
+  echo "error: spawn refused - $(printf '%s\n' "$both_low" | sed -n 1p); start task $ID on the spill profile instead: $(printf '%s\n' "$both_low" | sed -n 's/^spill: //p') --dispatch-override 'both Claude accounts low (bin/fm-account-drain.sh both-low)'" >&2
+  exit 1
 fi
 
 # muse, gemini, devin, commandcode, polytoken, cortex, and kiro are verified as CREWMATE/SCOUT adapters only. A secondmate is

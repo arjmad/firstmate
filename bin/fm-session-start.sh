@@ -860,6 +860,9 @@ if [ "$READ_ONLY" -eq 0 ]; then
   # session-start result. A context re-emit is not another session start.
   if [ "$REEMIT" -eq 0 ]; then
     "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+    # Side-band and best-effort too: record which Claude account this helm
+    # runs on, for the opt-in account-move check (bin/fm-account-drain.sh).
+    "$SCRIPT_DIR/fm-account-drain.sh" record-session >/dev/null 2>&1 || true
   fi
   # Every network call and the potentially slow inactive-outcome startup scan
   # are launched HERE, detached and bounded, so they run concurrently with the
