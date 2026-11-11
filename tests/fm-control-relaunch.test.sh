@@ -1279,6 +1279,25 @@ test_exclude_tools_refusals_happen_before_the_agent_stops() {
   pass "fm-control relaunch: exclusion-list refusals happen before the running agent stops"
 }
 
+test_claude_denied_mcp_servers_follow_the_relaunch() {
+  local dir out rc id=rl-claude-denymcp
+  dir=$(new_case claude-denymcp "$id")
+  add_ship_task "$dir" "$id" claude
+  mkdir -p "$dir/home/config"
+  printf '%s\n' 'two words' > "$dir/home/config/worker-denied-mcp-servers"
+  out=$(run_control "$dir" "$id" relaunch --note "bad list"); rc=$?
+  expect_code 1 "$rc" "a malformed denied-server list must refuse the relaunch"
+  assert_contains "$out" "config/worker-denied-mcp-servers has a malformed entry" "refusal must name the entry"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "a malformed denied-server list stopped the running agent"
+  [ ! -s "$dir/fake/literal" ] || fail "a refused relaunch sent lifecycle input"
+  printf '%s\n' 'homeassistant' 'monarch' > "$dir/home/config/worker-denied-mcp-servers"
+  out=$(run_control "$dir" "$id" relaunch --note "keep denial"); rc=$?
+  expect_code 0 "$rc" "a Claude relaunch with a denied-server list should succeed"$'\n'"$out"
+  assert_contains "$(cat "$dir/fake/literal")" '"deniedMcpServers":[{"serverName":"homeassistant"},{"serverName":"monarch"}]' \
+    "the relaunched Claude worker must keep the home's denied MCP servers"
+  pass "fm-control relaunch: a Claude replacement keeps the denied MCP servers, and a bad list refuses before the agent stops"
+}
+
 test_explicit_model_wins_over_the_recorded_one() {
   local dir out rc
   dir=$(new_case explicit rl7)
@@ -3575,6 +3594,7 @@ test_account_list_relaunch_refusals_happen_before_stop
 test_secondmate_account_pin_follows_relaunch_and_refuses_before_stop
 test_pi_exclude_tools_follow_the_relaunch
 test_exclude_tools_refusals_happen_before_the_agent_stops
+test_claude_denied_mcp_servers_follow_the_relaunch
 test_explicit_model_wins_over_the_recorded_one
 test_relaunch_onto_an_unverified_harness_is_refused
 test_prior_harness_turnend_registry_entry_is_cleared

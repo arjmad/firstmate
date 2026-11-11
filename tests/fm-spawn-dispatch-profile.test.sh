@@ -2446,6 +2446,101 @@ test_claude_task_workers_launch_without_artifact_or_connectors() {
   pass "claude ships and scouts launch without the Artifact tool or claude.ai connectors; secondmates keep both"
 }
 
+# config/worker-denied-mcp-servers: a Claude ship or scout launches with the
+# listed servers in deniedMcpServers, read from the JSON the pane's shell would
+# hand claude; a secondmate keeps them, and an unreadable list fails closed.
+write_denied_mcp_file() {  # <home> <line>...
+  local home=$1
+  shift
+  printf '%s\n' "$@" > "$home/config/worker-denied-mcp-servers"
+}
+
+test_claude_task_workers_launch_with_denied_mcp_servers() {
+  local kind rec id sm out status settings
+  for kind in ship scout secondmate; do
+    id="claude-denymcp-$kind-z31"
+    rec=$(make_spawn_case "claude-denymcp-$kind" claude "$id")
+    read_case_record "$rec"
+    write_denied_mcp_file "$HOME_DIR" '# kept to the captain and the helm' '' '  homeassistant  ' 'monarch'
+    case "$kind" in
+      ship) out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR") ;;
+      scout) out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout) ;;
+      secondmate)
+        sm="$CASE_DIR/secondmate-home"
+        make_seeded_secondmate_home "$sm" "$id"
+        out=$(FM_TEST_CLAUDE_CONFIG_DIR="$CASE_DIR/claude-work" \
+          run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+        ;;
+    esac
+    status=$?
+    expect_code 0 "$status" "claude $kind spawn with a denied-server list should succeed"$'\n'"$out"
+    settings=$(claude_settings_json_arg "$(cat "$LAUNCH_LOG")")
+    case "$kind" in
+      secondmate)
+        printf '%s' "$settings" | jq -e 'has("deniedMcpServers") | not' >/dev/null \
+          || fail "claude secondmate settings denied MCP servers: $settings"
+        ;;
+      *)
+        printf '%s' "$settings" | jq -e '.deniedMcpServers == [{"serverName":"homeassistant"},{"serverName":"monarch"}] and .enableArtifact == false and .feedbackDrafts == "off"' >/dev/null \
+          || fail "claude $kind settings did not deny the listed MCP servers: $settings"
+        ;;
+    esac
+  done
+  # Without the file, or with no entries, the settings carry no denial.
+  id=claude-denymcp-empty-z31
+  rec=$(make_spawn_case claude-denymcp-empty claude "$id")
+  read_case_record "$rec"
+  write_denied_mcp_file "$HOME_DIR" '# nothing denied'
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "claude spawn with an empty denied-server list should succeed"$'\n'"$out"
+  settings=$(claude_settings_json_arg "$(cat "$LAUNCH_LOG")")
+  printf '%s' "$settings" | jq -e 'has("deniedMcpServers") | not' >/dev/null \
+    || fail "an empty denied-server list still added deniedMcpServers: $settings"
+  pass "claude ships and scouts launch with the home's denied MCP servers; secondmates and an empty list add none"
+}
+
+test_claude_denied_mcp_servers_fail_closed() {
+  local rec id out status n=0 setup
+  for setup in dangling malformed dotted directory raw raw-env raw-other; do
+    n=$((n + 1))
+    id="claude-denymcp-refuse-$setup-z32"
+    rec=$(make_spawn_case "claude-denymcp-refuse-$setup" claude "$id")
+    read_case_record "$rec"
+    case "$setup" in
+      dangling) ln -s "$CASE_DIR/fleet/worker-denied-mcp-servers" "$HOME_DIR/config/worker-denied-mcp-servers" ;;
+      malformed) write_denied_mcp_file "$HOME_DIR" 'homeassistant' 'two words' ;;
+      directory) mkdir "$HOME_DIR/config/worker-denied-mcp-servers" ;;
+      dotted) write_denied_mcp_file "$HOME_DIR" 'home.assistant' ;;
+      raw | raw-env | raw-other) write_denied_mcp_file "$HOME_DIR" 'homeassistant' ;;
+    esac
+    if [ "$setup" = raw ]; then
+      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "claude --dangerously-skip-permissions" 2>&1)
+    elif [ "$setup" = raw-other ]; then
+      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "./worker.sh --go" 2>&1)
+    elif [ "$setup" = raw-env ]; then
+      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "env -u CLAUDECODE claude --dangerously-skip-permissions" 2>&1)
+    else
+      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
+    fi
+    status=$?
+    expect_code 1 "$status" "claude spawn with a $setup denied-server list must refuse"$'\n'"$out"
+    assert_contains "$out" "config/worker-denied-mcp-servers" "the $setup refusal must name the config file"
+    [ ! -s "$LAUNCH_LOG" ] || fail "claude launched despite a $setup denied-server list"
+    [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "the $setup refusal still wrote a task record"
+  done
+  # Another runtime loads none of these Claude servers, so it neither reads
+  # nor refuses on the list.
+  id=claude-denymcp-codex-z33
+  rec=$(make_spawn_case claude-denymcp-codex codex "$id")
+  read_case_record "$rec"
+  ln -s "$CASE_DIR/fleet/worker-denied-mcp-servers" "$HOME_DIR/config/worker-denied-mcp-servers"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
+  status=$?
+  expect_code 0 "$status" "a codex spawn must not refuse on the Claude denied-server list"$'\n'"$out"
+  pass "an unreadable or malformed denied-server list, or any raw command, refuses before any launch or record"
+}
+
 test_claude_long_launch_is_delivered_intact() {
   local rec id out status launch expected
   id=profile-claude-long-launch-z24
@@ -3274,6 +3369,8 @@ test_claude_secondmate_launch_omits_task_control_channel_authority
 test_claude_launch_names_the_session_after_its_task
 test_claude_task_workers_launch_with_the_task_list
 test_claude_task_workers_launch_without_artifact_or_connectors
+test_claude_task_workers_launch_with_denied_mcp_servers
+test_claude_denied_mcp_servers_fail_closed
 test_claude_long_launch_is_delivered_intact
 test_claude_crewmate_launch_carries_the_attribution_policy
 test_keep_ai_trailers_omits_attribution_settings_and_strip_hooks
