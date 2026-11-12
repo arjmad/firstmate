@@ -2001,6 +2001,35 @@ Before the scan change, the same live guard printed:
 not ok - Claude Code (2.1.310 (Claude Code)) on herdr 0.9.5: a typed /exit behind its command popup was judged unsent and cleared instead of submitted
 ```
 
+#### Claude Code 2.1.319 composer holding only a newline
+
+Measured 2026-11-12 against Herdr 0.9.5 and Claude Code 2.1.319 in isolated `fm-lab-` sessions.
+
+A named Claude composer whose draft is a single newline draws the titled top rule, a bare `❯`, one blank row, and the closing rule, which looks like an empty composer.
+The titled-rule sandwich accepted only non-blank wrapped rows between the glyph row and the closing rule, so that screen classified `unknown`, the Claude payload proof refused to type, and every steering doorbell reported "did not reach" until someone typed by hand.
+The sandwich now accepts blank rows at the end of the draft; a non-blank row after a blank one still refuses, and blank rows count against `FM_COMPOSER_PI_MAX_LINES`.
+A doorbell typed into that draft lands on the blank row and is proven and submitted, and Claude receives it with a leading newline.
+Portable tests run against real captures (`tests/captures/claude-2.1.319-newline-draft`):
+
+```text
+ok - fm_composer_classify_screen: a Claude composer holding only a newline reads empty and its typed text is proven
+ok - fm_backend_herdr_send_text_submit: a doorbell is typed into a Claude composer holding only a newline and submitted
+```
+
+Before the change, the same tests printed:
+
+```text
+not ok - a newline-only draft on herdr: expected empty, got 'unknown'
+not ok - a doorbell typed into a newline-only composer must be submitted, got 'send-failed'
+```
+
+Live guard after the change:
+
+```text
+FM_HERDR_SUBMIT_CONFIRM_LIVE=1 tests/fm-herdr-submit-confirm-live-e2e.test.sh
+ok - live Herdr submit confirm: Claude Code (2.1.319 (Claude Code)) on herdr 0.9.5 submits a steer into a composer holding only a newline
+```
+
 ### Claude background-task exit picker
 
 Measured 2026-10-05 against Claude Code 2.1.289 in an isolated tmux session.

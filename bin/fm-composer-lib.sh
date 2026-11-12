@@ -2046,11 +2046,13 @@ _fm_composer_bare_is_popup_selection() {  # <plain-screen> <screen> <styled> <ro
 # _fm_composer_bare_rule_sandwich: 0 when bare agent-glyph <row> sits in its
 # own titled composer: a titled rule directly above it and the screen's only
 # unmatched separator below it, which is that composer's closing rule. Only the
-# draft's own wrapped rows may stand between the glyph row and that rule: a
-# doorbell longer than one composer row wraps, and Claude keeps the title in
-# the top rule while it does. The draft is held to the untitled pair's row
-# bound, FM_COMPOSER_PI_MAX_LINES, so a titled pair is never looser than an
-# untitled one.
+# draft's own rows may stand between the glyph row and that rule: a doorbell
+# longer than one composer row wraps, and Claude keeps the title in the top
+# rule while it does; a draft ending in a newline draws blank rows at its end,
+# which look like an empty composer (Claude Code 2.1.319, the remote
+# secondmate's "did not reach" on an idle pane). The draft is held to the
+# untitled pair's row bound, FM_COMPOSER_PI_MAX_LINES, so a titled pair is never
+# looser than an untitled one.
 #
 # The cursorless staleness rule reads an unmatched separator BELOW a candidate
 # as proof the candidate is scrollback. A titled top rule never opens the
@@ -2058,10 +2060,11 @@ _fm_composer_bare_is_popup_selection() {  # <plain-screen> <screen> <styled> <ro
 # separator and a genuinely idle composer read `unknown`. The titled rule
 # directly above and an unbroken wrap down to the closing rule keep the
 # staleness rule intact everywhere else: a glyph stranded in scrollback has
-# transcript rows, not its own rules, around it, and a blank row or any other
-# rule between it and the lower separator still refuses.
+# transcript rows, not its own rules, around it, and a non-blank row after a
+# blank one, or any other rule, between it and the lower separator still
+# refuses.
 _fm_composer_bare_rule_sandwich() {  # <plain-screen> <row>
-  local plain=$1 row=$2 close=$FM_COMPOSER_SCAN_PI_LAST_SEPARATOR next above below max
+  local plain=$1 row=$2 close=$FM_COMPOSER_SCAN_PI_LAST_SEPARATOR next above below max blank=0
   max=$FM_COMPOSER_PI_MAX_LINES
   case "$max" in ''|*[!0-9]*|0) max=8 ;; esac
   [ "$row" -ge 1 ] && [ "$close" -gt "$row" ] && [ "$((close - row))" -le "$max" ] || return 1
@@ -2069,7 +2072,11 @@ _fm_composer_bare_rule_sandwich() {  # <plain-screen> <row>
   while [ "$next" -lt "$close" ]; do
     below=$(_fm_composer_screen_row "$next" "$plain")
     fm_composer_normalize_trim_var below
-    _fm_composer_bare_wrap_row "$below" || return 1
+    if [ -z "$below" ]; then
+      blank=1
+    elif [ "$blank" = 1 ] || ! _fm_composer_bare_wrap_row "$below"; then
+      return 1
+    fi
     next=$((next + 1))
   done
   below=$(_fm_composer_screen_row "$close" "$plain")

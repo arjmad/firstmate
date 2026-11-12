@@ -493,11 +493,13 @@ test_claude_newline_only_draft_reads_empty_and_typed_text_is_proven() {
   out=$(FM_COMPOSER_GHOST_LUMA_MAX=0 fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
   [ "$out" = "$doorbell" ] || fail "the doorbell typed below the blank row must read back whole, got '$out'"
   assert_screen "the doorbell typed into a newline-only draft on herdr" pending "$CAPS_STYLED" "$screen" '' "$claude_idle"
-  # The blank row is accepted only inside the composer's own titled rules: the
-  # same shape under an untitled rule is still not proven to be the composer.
+  # Blank rows count against the composer's row bound like wrapped rows do, so
+  # a titled glyph row far above the closing rule is still not the composer.
   rule='────────────────────────'
-  screen=$'transcript line\n'"$rule"$'\n❯'"$NBSP"$'\n\n'"$rule"$'\n  bypass permissions'
-  assert_screen "a glyph and blank row under an untitled rule" unknown "$CAPS_STYLED_NOID" "$screen"
+  screen=$'transcript line\n─────────── secondmate ─\n❯'"$NBSP"$'\n\n'"$rule"$'\n  bypass permissions'
+  assert_screen "a titled glyph row above one blank row" empty "$CAPS_STYLED_NOID" "$screen"
+  screen=$'transcript line\n─────────── secondmate ─\n❯'"$NBSP"$'\n\n\n\n\n\n\n\n\n'"$rule"$'\n  bypass permissions'
+  assert_screen "a titled glyph row above more blank rows than the bound" unknown "$CAPS_STYLED_NOID" "$screen"
   pass "fm_composer_classify_screen: a Claude composer holding only a newline reads empty and its typed text is proven"
 }
 

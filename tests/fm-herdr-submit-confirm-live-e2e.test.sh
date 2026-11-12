@@ -5,8 +5,9 @@
 # a busy-queued Enter can keep proven pending text visible. A stub cannot prove
 # either signal. This guard launches real Claude Code in an isolated Herdr lab
 # and requires fm_backend_herdr_send_text_submit to report empty for a landed
-# idle steer. It then requires the same submit path to prove and submit typed
-# slash commands behind the command popup Claude renders below the composer
+# idle steer, and the same for a steer into a composer that holds only a
+# newline (it looks empty). It then requires the same submit path to prove and
+# submit typed slash commands behind the command popup Claude renders below the composer
 # (the fm-control exit breakage on 2.1.283, and on 2.1.291 the popup's selected
 # row carrying a `❯` marker of its own): /context must confirm delivered,
 # render its report, and leave the agent alive, and /exit must actually exit
@@ -144,6 +145,42 @@ done
 [ "$landed" = 1 ] \
   || fail "Claude Code ($VERSION) on $HERDR_VER: submit reported '$verdict' but the expected reply never rendered"
 pass "live Herdr submit confirm: Claude Code ($VERSION) on $HERDR_VER reports empty and renders the requested reply in isolated session $SESSION"
+
+# A composer holding only a newline looks empty but draws a blank row inside
+# the titled rules; that row once made the pre-send proof refuse, so every
+# doorbell "did not reach" the pane. Leave a newline-only draft (a typed `\`
+# then Enter), and the next steer must still be typed, submitted and answered.
+i=0
+while [ "$i" -lt 45 ]; do
+  st=$(lab agent get "$PANE" 2>/dev/null | jq -r '.result.agent.agent_status // empty')
+  case "$st" in idle|done) break ;; esac
+  i=$((i + 1))
+  sleep 1
+done
+lab pane send-text "$PANE" "\\" >/dev/null || fail "could not type the newline draft's backslash"
+sleep 0.3
+lab pane send-keys "$PANE" enter >/dev/null || fail "could not turn the backslash into a newline draft"
+sleep 1.5
+NL_TOKEN="FMHERDRNLPONG$$_$RANDOM"
+verdict=$(fm_backend_herdr_send_text_submit "$TARGET" "Reply with exactly $NL_TOKEN and nothing else." 3 0.4 0.4) \
+  || fail "send_text_submit failed to run against a newline-only draft in Claude Code ($VERSION) on $HERDR_VER"
+[ "$verdict" = empty ] \
+  || fail "Claude Code ($VERSION) on $HERDR_VER: a steer into a newline-only draft must confirm empty, got '$verdict'"
+landed=0
+i=0
+while [ "$i" -lt 45 ]; do
+  screen=$(lab pane read "$PANE" --source recent --lines 200 2>/dev/null || true)
+  occurrences=$(printf '%s\n' "$screen" | grep -F -c "$NL_TOKEN" || true)
+  if [ "$occurrences" -ge 2 ]; then
+    landed=1
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+[ "$landed" = 1 ] \
+  || fail "Claude Code ($VERSION) on $HERDR_VER: a steer into a newline-only draft reported '$verdict' but the expected reply never rendered"
+pass "live Herdr submit confirm: Claude Code ($VERSION) on $HERDR_VER submits a steer into a composer holding only a newline"
 
 # Away-mode digests start with U+2063, which Claude's composer read-back drops.
 # The pre-Enter proof must still accept the rest of the payload.
