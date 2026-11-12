@@ -294,6 +294,40 @@ test_remote_steer_lands_in_remote_inbox() {
   pass "fm-send remote: a text steer lands as a durable remote inbox record and exits 0 at enqueue"
 }
 
+# The remote leg rings the remote pane through its own Herdr. When that submit
+# types the doorbell but cannot prove the turn started, the parent sender must
+# hear that the turn start is unconfirmed: the remote leg's notice crosses the
+# transport on stderr, and the send still exits 0 because the record is durable.
+test_remote_unconfirmed_ring_is_reported() {
+  local dir fb ssh_log home rhome rc err
+  dir="$TMP_ROOT/remote-unconfirmed"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); ssh_log="$dir/ssh.log"; : > "$ssh_log"
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_FAKE_HERDR_LOG"
+case "$*" in
+  "status --json"*) printf '{"client":{"version":"0.9.5","protocol":14},"server":{"running":true}}\n' ;;
+  *"agent get"*) printf '{"result":{"agent":{"agent":"codex","agent_status":"idle"}}}\n' ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/herdr"
+  rhome=$(setup_remote_secondmate_home remote-unconfirmed)
+  home=$(setup_remote_parent_home remote-unconfirmed "$rhome")
+  rc=0
+  send_env "$fb" "$home" "$ssh_log" FM_FAKE_HERDR_LOG="$dir/herdr.log" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
+    "$SEND" rsm "please rename the metric" >"$dir/out" 2>"$dir/err" || rc=$?
+  err=$(cat "$dir/err")
+  expect_code 0 "$rc" "an unconfirmed remote doorbell must not fail a durably recorded steer: $err"
+  [ -n "$(remote_inbox_records "$rhome")" ] || fail "the steer must land in the remote steering inbox"
+  assert_grep 'Firstmate instruction waiting' "$dir/herdr.log" "the remote doorbell should be typed into the Herdr pane"
+  assert_contains "$err" "turn start is unconfirmed" \
+    "the parent sender must hear that the remote turn start is unconfirmed"
+  assert_not_contains "$err" "did not reach" \
+    "a typed remote doorbell must not be reported as one that never reached the pane"
+  pass "fm-send remote: a remote doorbell whose turn start is unproven reaches the sender as unconfirmed"
+}
+
 test_remote_rerun_is_idempotent() {
   local dir fb ssh_log home rhome rc err count pend corr expected_cmd arg quoted rec ssh_before resend_cmd
   dir="$TMP_ROOT/remote-idem"; mkdir -p "$dir"
@@ -854,6 +888,7 @@ test_remote_supersedes_records_relation() {
 
 test_remote_large_steer_uses_stdin
 test_remote_steer_lands_in_remote_inbox
+test_remote_unconfirmed_ring_is_reported
 test_remote_rerun_is_idempotent
 test_remote_retry_failure_preserves_ambiguous_expectation
 test_remote_fire_and_forget_never_arms_reply_recovery

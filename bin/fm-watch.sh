@@ -1061,9 +1061,10 @@ secondmate_idle_ring_safe() {  # <window>
 # mate reads it as a parent request that expects no reply, never as captain
 # intervention. The worker's ordinary wake-handling turn drains its own home's
 # wake queue; this parent never rewrites that foreign queue. 0 iff the ring
-# call returned 0.
+# typed the doorbell (returned 0, or 4 with its turn start unconfirmed): the
+# caller then waits one more interval and alerts if the mate never drains.
 secondmate_ring_to_drain() {  # <task> <window>
-  local task=$1 w=$2 rec backend delivery_id
+  local task=$1 w=$2 rec backend delivery_id rc=0
   backend=$(window_backend "$w")
   delivery_id=$(LC_ALL=C od -An -v -tx1 -N 8 /dev/urandom 2>/dev/null | tr -d ' \n') || return 1
   case "$delivery_id" in ''|*[!0-9a-f]*) return 1 ;; esac
@@ -1071,7 +1072,8 @@ secondmate_ring_to_drain() {  # <task> <window>
   rec=$(fm_task_inbox_write "$STATE" "$task" \
     "${FM_FROMFIRST_MARK}delivery=${delivery_id} Drain pending rows in this home's wake queue, then resume idle supervision." \
     fire-and-forget) || return 1
-  fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")"
+  fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" || rc=$?
+  [ "$rc" -eq 0 ] || [ "$rc" -eq 4 ]
 }
 
 # Surface one durable parent check when the foreign queue's drain position has

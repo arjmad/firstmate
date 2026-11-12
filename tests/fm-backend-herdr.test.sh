@@ -5916,6 +5916,46 @@ test_send_text_submit_claude_newline_only_draft_is_typed_and_submitted() {
   pass "fm_backend_herdr_send_text_submit: a doorbell is typed into a Claude composer holding only newlines and submitted"
 }
 
+# A doorbell ring through Herdr whose submit cannot prove the turn started must
+# not read as a confirmed ring. The fake answers by subcommand: the agent stays
+# idle and every pane read is empty, so the submit verdict is unknown and the
+# ring returns 4; once Enter flips the agent to working the same ring returns 0.
+test_ring_through_herdr_reports_unconfirmed_turn_start() {
+  local dir fb state rec rc mode
+  dir="$TMP_ROOT/ring-unconfirmed"; fb="$dir/fakebin"; state="$dir/state"
+  mkdir -p "$fb" "$state"
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_HERDR_LOG"
+case "$*" in
+  "status --json"*) printf '{"client":{"version":"0.9.5","protocol":14},"server":{"running":true}}\n' ;;
+  *"agent get"*)
+    if [ "$FM_FAKE_TURN_STARTS" = 1 ] && grep -q 'send-keys .* enter' "$FM_HERDR_LOG"; then
+      printf '{"result":{"agent":{"agent":"codex","agent_status":"working"}}}\n'
+    else
+      printf '{"result":{"agent":{"agent":"codex","agent_status":"idle"}}}\n'
+    fi ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/herdr"
+  rec=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1/bin/fm-task-inbox-lib.sh"; fm_task_inbox_write "$2" t1 "please continue"' _ "$ROOT" "$state")
+  for mode in 0 1; do
+    : > "$dir/log"
+    rc=0
+    PATH="$fb:$PATH" FM_HERDR_LOG="$dir/log" FM_FAKE_TURN_STARTS=$mode FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
+      FM_STATE_OVERRIDE="$state" \
+      bash -c '. "$1/bin/fm-task-inbox-lib.sh"; fm_task_inbox_ring herdr default:w1:p2 "$2" fm-t1' _ "$ROOT" "$rec" || rc=$?
+    grep -qF 'Firstmate instruction waiting' "$dir/log" || fail "turn-starts=$mode: the doorbell was not typed into the Herdr pane"
+    if [ "$mode" = 0 ]; then
+      [ "$rc" = 4 ] || fail "a Herdr doorbell whose turn start stays unproven must report unconfirmed (4), got rc $rc"
+    else
+      [ "$rc" = 0 ] || fail "a Herdr doorbell whose turn visibly started must report rung (0), got rc $rc"
+    fi
+  done
+  pass "fm_task_inbox_ring on Herdr: an unproven turn start reports unconfirmed and a started turn reports rung"
+}
+
 # The marked popup row must not weaken the head-truncation protection: a
 # composer holding only a suffix, a paste placeholder followed by a literal
 # remainder, or only a prefix of the payload is still refused and cleared while
@@ -7105,6 +7145,7 @@ test_send_text_submit_claude_slash_popup_composer_is_still_proven_and_submitted
 test_composer_content_claude_2_1_291_marked_popup_row_is_not_the_composer
 test_send_text_submit_claude_2_1_291_marked_popup_row_is_proven_and_submitted
 test_send_text_submit_claude_newline_only_draft_is_typed_and_submitted
+test_ring_through_herdr_reports_unconfirmed_turn_start
 test_send_text_submit_claude_2_1_291_popup_still_refuses_a_partial_payload
 test_send_text_submit_claude_grey_slash_command_is_proven_and_submitted
 test_send_text_submit_claude_slash_menu_selection_row_is_not_the_composer

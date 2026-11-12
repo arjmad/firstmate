@@ -401,6 +401,12 @@ test_ring_submits_its_own_stuck_doorbell() {
     [ "$(cat "$composer")" = "$other" ] || fail "other pending text was changed: $(cat "$composer")"
   done
 
+  : > "$log"; printf '%s' "$doorbell" > "$composer"; echo 2 > "$drops"
+  rc=0; ring || rc=$?
+  [ "$rc" = 4 ] || fail "a stuck doorbell whose both Enters are lost must report unconfirmed (4), got rc $rc"
+  [ ! -s "$log" ] || fail "a stuck doorbell whose Enters were lost was submitted:"$'\n'"$(cat "$log")"
+  [ "$(cat "$composer")" = "$doorbell" ] || fail "a stuck doorbell whose Enters were lost should stay in the composer"
+
   : > "$log"; : > "$composer"; echo 1 > "$drops"
   rc=0; ring || rc=$?
   [ "$rc" = 0 ] || fail "a ring whose first Enter is lost should still report rung, got rc $rc"
@@ -408,6 +414,47 @@ test_ring_submits_its_own_stuck_doorbell() {
     || fail "the retry Enter should submit the doorbell once:"$'\n'"$(cat "$log")"
   [ ! -s "$composer" ] || fail "a lost Enter left the doorbell unsubmitted"
   pass "inbox: the ring submits its own stuck doorbell, skips other pending text, and retries a lost Enter once on both paths"
+}
+
+# A typed doorbell whose submit cannot prove the turn started is not a
+# confirmed ring: every Enter swallowed leaves the composer pending, and a pane
+# the classifier cannot read leaves the verdict unknown. Both return 4, so a
+# sender can say the turn start is unconfirmed; a landed submit still returns 0.
+test_ring_reports_unconfirmed_turn_start() {
+  local dir state rec doorbell log composer drops rc capture
+  dir="$TMP_ROOT/ring-unconfirmed"
+  state="$dir/state"
+  mkdir -p "$state"
+  make_composer_stub "$dir"
+  rec=$(inbox_lib "$state" fm_task_inbox_write "$state" t1 "please continue")
+  doorbell=$(inbox_lib "$state" fm_task_inbox_doorbell_line "$rec")
+  log="$dir/send.log"; composer="$dir/composer"; drops="$dir/drops"
+
+  : > "$log"; : > "$composer"; echo 99 > "$drops"
+  rc=0
+  PATH="$dir/fakebin:$PATH" FM_SEND_LOG="$log" FM_FAKE_COMPOSER="$composer" \
+    FM_FAKE_DROP_ENTERS="$drops" inbox_lib "$state" fm_task_inbox_ring tmux sess:fm-t1 "$rec" fm-t1 || rc=$?
+  [ "$rc" = 4 ] || fail "a doorbell whose every Enter was swallowed must report unconfirmed (4), got rc $rc"
+  [ "$(cat "$composer")" = "$doorbell" ] || fail "the swallowed doorbell should still sit in the composer"
+  [ ! -s "$log" ] || fail "a swallowed doorbell must not be submitted:"$'\n'"$(cat "$log")"
+
+  : > "$log"; : > "$composer"; echo 0 > "$drops"
+  rc=0
+  PATH="$dir/fakebin:$PATH" FM_SEND_LOG="$log" FM_FAKE_COMPOSER="$composer" \
+    FM_FAKE_DROP_ENTERS="$drops" inbox_lib "$state" fm_task_inbox_ring tmux sess:fm-t1 "$rec" fm-t1 || rc=$?
+  [ "$rc" = 0 ] || fail "a doorbell the composer proves submitted must report rung (0), got rc $rc"
+  [ "$(cat "$log")" = "SUBMIT: $doorbell" ] || fail "the doorbell should be submitted once:"$'\n'"$(cat "$log")"
+
+  make_watch_stubs "$dir/unreadable" >/dev/null
+  capture="$dir/unreadable/pane.txt"
+  printf 'some program output\nwith no composer\n' > "$capture"
+  : > "$log"
+  rc=0
+  PATH="$dir/unreadable/fakebin:$PATH" FM_SEND_LOG="$log" FM_FAKE_TMUX_CAPTURE="$capture" \
+    inbox_lib "$state" fm_task_inbox_ring tmux sess:fm-t1 "$rec" fm-t1 || rc=$?
+  [ "$rc" = 4 ] || fail "a doorbell typed into a pane the classifier cannot read must report unconfirmed (4), got rc $rc"
+  grep -qF 'Firstmate instruction waiting' "$log" || fail "an unreadable pane must still receive the doorbell"
+  pass "inbox: a typed doorbell whose turn start is unproven reports unconfirmed, and a proven submit still reports rung"
 }
 
 test_idempotent_write_dedups_exact_body() {
@@ -1424,6 +1471,7 @@ test_doorbell_is_a_shell_noop
 test_doorbell_rejects_terminal_controls
 test_ring_skips_dead_agent
 test_ring_submits_its_own_stuck_doorbell
+test_ring_reports_unconfirmed_turn_start
 test_idempotent_write_dedups_exact_body
 test_idempotent_write_prefilters_history
 test_idempotent_write_prefilter_preserves_exact_bodies

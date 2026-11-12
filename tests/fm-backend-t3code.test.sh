@@ -2297,6 +2297,24 @@ test_held_send_local_failure_stays_unconfirmed() {
   pass "t3code send: a held request id stays unconfirmed when the next attempt fails locally, and the retry lands once"
 }
 
+# A doorbell ring on T3 whose send reply is lost reads unconfirmed from the
+# adapter, so the ring must report the turn start unconfirmed (4), never rung.
+test_ring_with_lost_send_reply_reports_unconfirmed() {
+  local rc rec thread=mcp:6d7e8f9a-1b2c-4d3e-8f4a-3456789abcde
+  t3_case ring-lost-reply
+  t3_world "$(t3_thread_json "$thread" completed false)"
+  t3_world_set 'w.dropReplyTools = { t3_thread_send: 1 }'
+  mkdir -p "$CASE_DIR/state"
+  rec=$(t3_run '. "$0/bin/fm-task-inbox-lib.sh"; fm_task_inbox_write "$1" t1 "please continue"' "$CASE_DIR/state") \
+    || fail "could not write the inbox record"
+  rc=0
+  t3_run '. "$0/bin/fm-task-inbox-lib.sh"; fm_task_inbox_ring t3code "$1" "$2" fm-t1' "$thread" "$rec" 2>/dev/null || rc=$?
+  expect_code 4 "$rc" "a T3 doorbell whose send reply was lost must report its turn start unconfirmed"
+  node -e 'const w = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.exit((w.threads[process.argv[2]].items || []).some((i) => String(i.text).includes("Firstmate instruction waiting")) ? 0 : 1)' "$T3_FAKE_WORLD" "$thread" \
+    || fail "the T3 doorbell was never sent"
+  pass "t3code ring: a doorbell whose send reply is lost reports unconfirmed"
+}
+
 # T3 commits a send before replying. A reply lost after the request went out
 # must read unconfirmed, through the adapter and through fm-send, and a resend
 # must reuse the request id so the message lands once.
@@ -2756,6 +2774,7 @@ test_capture_renders_activity_and_status
 test_send_key_mapping
 test_send_text_submit_verdicts
 test_lost_send_reply_is_unconfirmed_and_resend_is_idempotent
+test_ring_with_lost_send_reply_reports_unconfirmed
 test_held_send_local_failure_stays_unconfirmed
 test_lost_send_reply_to_secondmate_names_armed_correlation
 test_status_table
