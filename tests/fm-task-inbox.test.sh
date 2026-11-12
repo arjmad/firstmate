@@ -401,6 +401,12 @@ test_ring_submits_its_own_stuck_doorbell() {
     [ "$(cat "$composer")" = "$other" ] || fail "other pending text was changed: $(cat "$composer")"
   done
 
+  : > "$log"; printf '%s' "$doorbell" > "$composer"; echo 2 > "$drops"
+  rc=0; ring || rc=$?
+  [ "$rc" = 4 ] || fail "a stuck doorbell whose both Enters are lost must report unconfirmed (4), got rc $rc"
+  [ ! -s "$log" ] || fail "a stuck doorbell whose Enters were lost was submitted:"$'\n'"$(cat "$log")"
+  [ "$(cat "$composer")" = "$doorbell" ] || fail "a stuck doorbell whose Enters were lost should stay in the composer"
+
   : > "$log"; : > "$composer"; echo 1 > "$drops"
   rc=0; ring || rc=$?
   [ "$rc" = 0 ] || fail "a ring whose first Enter is lost should still report rung, got rc $rc"
