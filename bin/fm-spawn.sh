@@ -584,6 +584,13 @@
 #   bin/fm-exclude-tools-lib.sh before provisioning; a Claude ship or scout
 #   then carries "deniedMcpServers":[{"serverName":"<name>"},...] in its
 #   inline __CLAUDESETTINGS__ JSON.
+# Worker compaction window:
+#   docs/configuration.md "Worker compaction window" owns
+#   config/crew-compact-window. Resolve it with bin/fm-exclude-tools-lib.sh
+#   before provisioning; a Claude ship or scout launched from its template
+#   then carries CLAUDE_CODE_AUTO_COMPACT_WINDOW=<tokens> in the command
+#   prefix (__CLAUDECOMPACT__), inside any launch-env-allowlist `env -i`
+#   wrapper, and records compact_window=<tokens>.
 # Worker account pin (config/claude-account, config/pi-account):
 #   Opt-in. docs/configuration.md's "Worker account pin" section owns unpinned
 #   account selection. A present file pins every supported launch of
@@ -621,6 +628,9 @@
 #   Launch templates live in launch_template() below; placeholders replaced before launch:
 #     __BRIEF__    absolute path to data/<task-id>/brief.md
 #     __CLAUDEPERMFLAG__ the claude permission flag selected by config/claude-permission-mode
+#     __CLAUDECOMPACT__ `CLAUDE_CODE_AUTO_COMPACT_WINDOW=<tokens> ` from
+#                  config/crew-compact-window on a Claude ship or scout
+#                  (supplies its own trailing space, empty otherwise)
 #     __CLAUDEADDDIRS__ quoted --add-dir flags granting exactly this task's
 #                  Firstmate channel directories (claude_add_dirs_flag below;
 #                  supplies its own trailing space, empty never used)
@@ -3410,9 +3420,12 @@ launch_template() {
   # bin/fm-progress.sh reads it from <config-dir>/tasks/<sessionId>/ as the
   # worker's step n/m. A secondmate supervises rather than steps, so it keeps
   # the model default.
+  # __CLAUDECOMPACT__ is a ship or scout's compaction window from
+  # config/crew-compact-window (header above); a secondmate keeps the
+  # harness default.
   claude)
     printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 '
-    [ "$kind" = secondmate ] || printf '%s' 'CLAUDE_CODE_ENABLE_TODO_TOOLS=1 '
+    [ "$kind" = secondmate ] || printf '%s' 'CLAUDE_CODE_ENABLE_TODO_TOOLS=1 __CLAUDECOMPACT__'
     printf '%s' 'claude __CLAUDEPERMFLAG__ __CLAUDEADDDIRS__--settings __CLAUDESETTINGS__ '
     if [ "$kind" != secondmate ]; then
       printf '%s' "--append-system-prompt '$(spawn_claude_task_channel_statement)' "
@@ -3871,9 +3884,18 @@ EXCLUDE_TOOLS=
 # config/worker-denied-mcp-servers (header above) likewise refuses before
 # provisioning when a Claude ship or scout cannot carry its denial.
 DENIED_MCP_SERVERS=
+# config/crew-compact-window (header above) refuses before provisioning when
+# malformed. Only a templated launch can carry it: a raw command is the
+# operator's own, and backend=t3code builds its own claude command.
+COMPACT_WINDOW=
 if [ "$KIND" != secondmate ]; then
   EXCLUDE_TOOLS=$(fm_exclude_tools_check "$HARNESS" "$RAW_LAUNCH" "$CONFIG") || exit 1
   DENIED_MCP_SERVERS=$(fm_worker_denied_mcp_servers_check "$HARNESS" "$RAW_LAUNCH" "$BACKEND" "$CONFIG") || exit 1
+  COMPACT_WINDOW=$(fm_crew_compact_window_check "$HARNESS" "$CONFIG") || exit 1
+  if [ -n "$COMPACT_WINDOW" ] && { [ "$RAW_LAUNCH" = 1 ] || [ "$BACKEND" = t3code ]; }; then
+    echo "notice: config/crew-compact-window is not applied to a raw launch command or backend=t3code; $ID launches with the harness default" >&2
+    COMPACT_WINDOW=
+  fi
 fi
 
 case "$HARNESS" in
@@ -8142,7 +8164,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 # a preserved pr= identity block last, and repairs a record an earlier writer
 # left with a key after it, so the PR merge watch can still read the record.
 preserve_relaunch_meta() {
-  fm_pr_meta_rewrite "$RELAUNCH_META" "window endpoint_task_id worktree project harness hermes_profile hermes_home kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort fast opencode_version account account_provider omp_profile busy_gen spawn_gen approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id t3_thread_id t3_project_id tern_session_id tern_tab_id tern_block_id hc_session hc_terminal home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential"
+  fm_pr_meta_rewrite "$RELAUNCH_META" "window endpoint_task_id worktree project harness hermes_profile hermes_home kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort fast opencode_version account account_provider omp_profile compact_window busy_gen spawn_gen approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id t3_thread_id t3_project_id tern_session_id tern_tab_id tern_block_id hc_session hc_terminal home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential"
 }
 {
   echo "window=$META_WINDOW"
@@ -8187,6 +8209,8 @@ preserve_relaunch_meta() {
   # The per-secondmate omp profile pin, only when one applies, so every other
   # task record stays byte-identical.
   [ -z "$OMP_PROFILE_PIN" ] || echo "omp_profile=$OMP_PROFILE_PIN"
+  # The Claude compaction window this launch carries, only when one applies.
+  [ -z "$COMPACT_WINDOW" ] || echo "compact_window=$COMPACT_WINDOW"
   [ "$HARNESS" != hermes ] || { echo "hermes_profile=$HERMES_PROFILE"; echo "hermes_home=$HERMES_PROFILE_HOME"; }
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   echo "spawn_gen=$SPAWN_GEN"
@@ -8387,6 +8411,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
 fi
 LAUNCH=${LAUNCH//__PIRESUME__/$RESUME_ARGS}
 LAUNCH=${LAUNCH//__CLAUDEPERMFLAG__/$CLAUDE_PERM_FLAG}
+LAUNCH=${LAUNCH//__CLAUDECOMPACT__/${COMPACT_WINDOW:+CLAUDE_CODE_AUTO_COMPACT_WINDOW=$COMPACT_WINDOW }}
 case "$LAUNCH" in
 *__CLAUDENAME__*) LAUNCH=${LAUNCH//__CLAUDENAME__/"$(claude_session_name_flag "$ID")"} ;;
 esac
@@ -9252,6 +9277,7 @@ SPAWN_ACCOUNT=
 [ -z "$WORKER_ACCOUNT" ] || SPAWN_ACCOUNT=" account=$WORKER_ACCOUNT_DECLARED"
 [ -z "$WORKER_ACCOUNT_PROVIDER" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT account_provider=$WORKER_ACCOUNT_PROVIDER"
 [ -z "$OMP_PROFILE_PIN" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT omp_profile=$OMP_PROFILE_PIN"
+[ -z "$COMPACT_WINDOW" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT compact_window=$COMPACT_WINDOW"
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 [ ! -e "$CONFIG/fleet-ledger" ] || [ "$RELAUNCH" -eq 1 ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" dispatched "$ID" "$KIND" "${PROJ_ABS##*/}" "$HARNESS" "$MODEL" || true
 # Opt-in Herdr project groups (docs/herdr-backend.md "Project groups") tag the

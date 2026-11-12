@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # fm-exclude-tools-lib.sh - shared parsing and runtime-support checks for the
-# lists that keep tools out of this home's ship and scout workers,
-# config/crew-exclude-tools and config/worker-denied-mcp-servers, sourced by
-# bin/fm-spawn.sh and bin/fm-control.sh.
+# worker launch config files of this home's ship and scout workers: the lists
+# that keep tools out of them, config/crew-exclude-tools and
+# config/worker-denied-mcp-servers, and the Claude compaction window,
+# config/crew-compact-window. Sourced by bin/fm-spawn.sh and bin/fm-control.sh.
 #
-# docs/configuration.md "Worker tool exclusions" and "Worker-denied MCP
-# servers" own the file formats and operator contracts; bin/fm-spawn.sh's
-# header owns launch-flag mechanics.
+# docs/configuration.md "Worker tool exclusions", "Worker-denied MCP
+# servers", and "Worker compaction window" own the file formats and operator
+# contracts; bin/fm-spawn.sh's header owns launch-flag mechanics.
 # Name verification belongs inside the worker's loaded-tool registry, never
 # in an out-of-band server connection from these launch-time checks.
 
@@ -105,4 +106,35 @@ fm_worker_denied_mcp_servers_check() {
     return 1
   fi
   printf '%s' "$names"
+}
+
+# fm_crew_compact_window_check <harness> <config-dir>: for a Claude ship or
+# scout launch, print the token count config/crew-compact-window declares,
+# empty when the file is absent. The file holds # comment lines (and blank
+# lines) plus exactly one integer from 100000 to 1000000, the range Claude
+# Code accepts for CLAUDE_CODE_AUTO_COMPACT_WINDOW. Non-zero with the reason
+# on stderr when the file is dangling, nonregular, unreadable, or holds
+# anything else. Every other runtime neither reads nor refuses on the file.
+fm_crew_compact_window_check() {
+  local harness=$1 config=$2 value
+  [ "$harness" = claude ] || return 0
+  value=$(fm_config_name_list "$config" crew-compact-window 'token count') || return 1
+  [ -n "$value" ] || {
+    [ ! -e "$config/crew-compact-window" ] || {
+      echo "error: config/crew-compact-window holds no token count; write one integer from 100000 to 1000000, or remove the file" >&2
+      return 1
+    }
+    return 0
+  }
+  case "$value" in
+  *,* | *[!0-9]* | 0*)
+    echo "error: config/crew-compact-window must hold exactly one integer from 100000 to 1000000 (with # comment lines allowed), not '$value'" >&2
+    return 1
+    ;;
+  esac
+  if [ "${#value}" -gt 7 ] || [ "$value" -lt 100000 ] || [ "$value" -gt 1000000 ]; then
+    echo "error: config/crew-compact-window holds $value; Claude Code accepts a compaction window from 100000 to 1000000 tokens" >&2
+    return 1
+  fi
+  printf '%s' "$value"
 }
