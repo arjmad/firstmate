@@ -33,7 +33,8 @@
 # its post-update command runs once per new HEAD and is retried after a failure, a
 # held lock= path defers it, the firstmate home itself is refused, the
 # single-project form syncs only that project's entries, and a capture= entry
-# starts its capture once per edit state when only edits under its dir hold it.
+# starts its capture once per edit state when only edits under its dir hold it,
+# unless capture-start=off leaves that capture to its own scheduled job.
 # A post-update command still running from another sync, or from a run fleet-sync
 # did not start whose live pid its running= pid file proves, reads "activating:"
 # rather than STUCK, while a dead or reused pid there still reads STUCK, and the scheduled sync wakes once per STUCK episode however
@@ -1209,6 +1210,86 @@ SH
   pass "an open capture PR reads capture-pending without a wake, a closed one is STUCK again, and a settled checkout fast-forwards"
 }
 
+test_capture_start_off_waits_for_the_scheduled_capture() {
+  local home live cmd log pending out
+  home=$(isolated_home)
+  live=$(build_capture_live "$home" nova)
+  cmd="$home/capture-nova.sh"
+  printf 'live edit\n' >> "$live/skills/a.md"
+  live_config "$home" "nova $live capture=skills/:$cmd capture-start=off"
+  log="$home/state/.fleet-sync-scheduled.log"
+  pending="$home/state/fleet-sync-stuck"
+
+  run_scheduled "$home"
+  run_scheduled "$home"
+  assert_equals 0 "$(runs_of "$home/captures-nova")" "the sync never starts a capture-start=off capture"
+  assert_contains "$(cat "$log")" \
+    "nova live $live: live edits wait for the scheduled capture: 1 uncommitted path(s) under skills/ only, 0 commits behind origin/main" \
+    "current edits under the capture dir read as waiting for the scheduled capture"
+  assert_not_contains "$(cat "$log")" "STUCK" "nothing blocks a fast-forward"
+  [ ! -e "$pending" ] || fail "edits waiting for the scheduled capture must not wake firstmate: $(cat "$pending")"
+
+  advance_origin "$home" nova C1
+  run_scheduled "$home"
+  run_scheduled "$home"
+  assert_equals 0 "$(runs_of "$home/captures-nova")" "falling behind origin starts no capture either"
+  assert_contains "$(cat "$log")" \
+    "nova live $live: live edits wait for the scheduled capture: 1 uncommitted path(s) under skills/ only, 1 commits behind origin/main; fast-forwards once it lands" \
+    "edits behind origin wait for the scheduled capture"
+  assert_not_contains "$(cat "$log")" "STUCK" "a checkout behind origin with waiting edits is not STUCK"
+  [ ! -e "$pending" ] || fail "a checkout behind origin with waiting edits must not wake firstmate: $(cat "$pending")"
+
+  printf 'local edit\n' >> "$live/file.txt"
+  run_scheduled "$home"
+  assert_contains "$(cat "$pending" 2>/dev/null)" "nova live $live: STUCK: on branch main with uncommitted changes" \
+    "an edit outside the capture dir still wakes firstmate"
+  git -C "$live" checkout -q -- file.txt
+  rm -f "$pending"
+  run_scheduled "$home"
+  [ ! -e "$pending" ] || fail "edits back under the capture dir only must not wake firstmate: $(cat "$pending")"
+
+  git -C "$live" stash -q
+  git -C "$live" pull -q --ff-only
+  commit_file "$live" local.txt ahead "local unique work"
+  git -C "$live" stash pop -q
+  run_scheduled "$home"
+  assert_contains "$(cat "$pending" 2>/dev/null)" "nova live $live: STUCK:" "a checkout ahead of origin still wakes firstmate"
+  assert_equals 0 "$(runs_of "$home/captures-nova")" "no capture ran at any point"
+  assert_contains "$(cat "$live/skills/a.md")" "live edit" "the live edit is preserved"
+
+  live_config "$home" "nova $live capture=skills/:$cmd capture-start=sometimes"
+  out=$(run_sync "$home" nova)
+  assert_contains "$out" "live-checkouts: skipped: line 1 capture-start= wants off or sync" "an unknown capture-start= is refused by line"
+  live_config "$home" "nova $live capture-start=off"
+  out=$(run_sync "$home" nova)
+  assert_contains "$out" "live-checkouts: skipped: line 1 capture-start= needs a capture= entry" "capture-start= without capture= is refused"
+  pass "a capture-start=off checkout never starts its capture and waits for it without a wake, behind origin too"
+}
+
+test_settle_capture_runs_for_capture_start_off() {
+  local home live cmd out
+  home=$(new_home)
+  live=$(build_capture_live "$home" daily)
+  cmd="$home/settle-daily.sh"
+  cat > "$cmd" <<SCRIPT
+#!/usr/bin/env bash
+[ "\${1:-}" = --settle ] || { echo started >> '$home/captures-daily'; exit 0; }
+git checkout -q -- skills/a.md && echo "settled skills/a.md"
+SCRIPT
+  chmod +x "$cmd"
+  printf 'live edit\n' >> "$live/skills/a.md"
+  cp "$live/skills/a.md" "$home/work-daily/skills/a.md"
+  git -C "$home/work-daily" commit -qam "capture landed"
+  git -C "$home/work-daily" push -q origin main
+  live_config "$home" "daily $live capture=skills/:$cmd capture-start=off"
+
+  out=$(run_sync "$home" --settle-capture daily)
+  assert_contains "$out" "daily live $live: settled: $cmd --settle restored 1 path(s)" "the settle form still runs the capture command's --settle"
+  assert_equals "$(git -C "$live" rev-parse origin/main)" "$(head_sha "$live")" "the settled checkout fast-forwards"
+  assert_equals 0 "$(runs_of "$home/captures-daily")" "the settle form starts no capture"
+  pass "the settle form still settles and fast-forwards a capture-start=off checkout"
+}
+
 test_capture_skips_edits_outside_its_dir() {
   local home live out
   home=$(new_home)
@@ -1613,6 +1694,8 @@ test_capture_still_running_is_not_restarted
 test_failed_capture_surfaces_when_edits_change
 test_current_capture_edits_pend_without_a_wake
 test_open_capture_pr_pends_instead_of_stuck
+test_capture_start_off_waits_for_the_scheduled_capture
+test_settle_capture_runs_for_capture_start_off
 test_capture_skips_edits_outside_its_dir
 test_settle_capture_waits_then_settles_and_fast_forwards
 test_settle_capture_failure_is_stuck

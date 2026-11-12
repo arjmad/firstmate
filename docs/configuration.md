@@ -793,7 +793,7 @@ See [`fleet-ledger.md`](fleet-ledger.md) for the opt-in setup, record contract, 
 ## Live checkouts (config/live-checkouts)
 
 The optional local, gitignored `config/live-checkouts` file lists working copies outside `projects/` that something runs from, so a merged PR goes live without a hand `git pull`.
-Each line is `<project> <path> [lock=<lock-path>] [capture=<dir>/:<command>] [running=<pid-file>] [post-update command]`, where a leading `~/` expands to `$HOME` and blank or `#` lines are ignored.
+Each line is `<project> <path> [lock=<lock-path>] [capture=<dir>/:<command>] [capture-start=off|sync] [running=<pid-file>] [post-update command]`, where a leading `~/` expands to `$HOME` and blank or `#` lines are ignored.
 An absent file means no live checkouts.
 
 ```text
@@ -802,6 +802,7 @@ jobs       ~/code/jobs
 skills     ~/code/skills                                 ~/code/skills/scripts/deploy.sh
 runner     ~/code/runner     lock=~/Library/Caches/runner/cycle.lock
 agent      ~/code/agent      capture=skills/:cron/skill-capture.sh   ./deploy.sh
+nightly    ~/code/nightly    capture=skills/:scripts/skill-capture.sh capture-start=off
 ```
 
 `bin/fm-fleet-sync.sh` fast-forwards each entry after the `projects/` clones, so the refresh `bin/fm-pr-merge.sh` runs after each merge, teardown, the [scheduled sync](#scheduled-fleet-sync-configfleet-sync-interval), and the session-start refresh all keep live checkouts current.
@@ -815,6 +816,9 @@ A `capture=` entry is for a checkout edited in place, such as a writable skills 
 Once the capture has succeeded, edits it did not clear on a checkout already at its origin default branch read `live edits pending capture:`, which wakes no one because they block no fast-forward.
 The same edits on a checkout behind origin read `capture-pending <PR url>:` while the pull request the capture's log names is still open, which wakes no one either because landing it settles and fast-forwards the checkout.
 The same edits on a checkout ahead of origin, or behind it with no open capture PR, or a failed capture, report `STUCK:`.
+`capture-start=off` is for a capture project whose own scheduled job, such as a nightly cron, runs its capture: the sync never starts the capture command, and edits only under the capture directory on a checkout at or behind origin read `live edits wait for the scheduled capture:`, which wakes no one because that job's capture lands and fast-forwards it.
+The same edits on a checkout ahead of origin or diverged from it still report `STUCK:`, and `capture-start=sync`, the default, keeps the sync-started capture above.
+Because the sync cannot see that job's run, give the entry a `lock=` naming a path the job holds while it runs, so neither the sync nor the settle touches the checkout under it.
 A `capture=` entry also makes its project a capture project for `bin/fm-capture-land.sh <pr-url>`, which lands that project's `<project>/skill-capture` pull request through `bin/fm-pr-merge.sh`, then runs the capture command's `--settle` in the checkout and fast-forwards it with `fm-fleet-sync.sh --settle-capture <project>`; its header owns the refusals and the task record it keeps.
 A local, gitignored `config/capture-autoland` naming a capture note's subject tag, one per line such as `[nova-skills]`, makes `bin/fm-inbox.sh note` hand that job's green capture note to `bin/fm-capture-autoland.sh` instead of waking firstmate: it runs the note's `fm-capture-land.sh` arguments, acknowledges the note when the land succeeds, and announces it with the failure otherwise; its header owns the match rules and recovery, and an absent file keeps every note announced.
 An entry naming the Firstmate home itself is refused, because Firstmate updates itself only through `/updatefirstmate`.

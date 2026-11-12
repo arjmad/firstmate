@@ -107,6 +107,17 @@ test_lands_an_open_capture_pr_end_to_end() {
   pass "an open capture PR is recorded, merged, settled, synced, and closed"
 }
 
+test_capture_start_off_entry_still_lands() {
+  local c
+  c=$(new_case)
+  printf '%s\n' "nova ~/code/agents/nova lock=~/nova.lock capture-start=off running=~/nova.pid capture=skills/:cron/skill-capture.sh" \
+    > "$c/home/config/live-checkouts"
+  land "$c" "$URL" --head "$HEAD_SHA"
+  assert_equals 0 "$RC" "a capture-start=off entry is still a capture project: $OUT"
+  assert_equals "--settle-capture $c/home/projects/nova" "$(head -1 "$c/sync.log")" "its live checkout is still settled"
+  pass "a capture project whose capture the sync never starts still lands and settles"
+}
+
 test_refuses_a_pr_that_is_not_a_capture_pr() {
   local c
   c=$(new_case)
@@ -193,6 +204,24 @@ test_stuck_settle_reports_after_landing() {
   assert_contains "$OUT" "did not settle and go live" "the unfinished settle is reported"
   assert_absent "$c/home/state/$ID.meta" "the landed record is still closed"
   pass "a landed PR whose live checkout did not settle exits 3 for a re-run"
+}
+
+test_edits_waiting_for_the_scheduled_capture_still_land() {
+  local c waiting
+  c=$(new_case)
+  waiting="nova live ~/code/agents/nova: live edits wait for the scheduled capture: 1 uncommitted path(s) under skills/ only, 1 commits behind origin/main; fast-forwards once it lands"
+  printf '%s\n' "nova live ~/code/agents/nova: settle held: skills/b.md is still uncommitted, so the checkout cannot fast-forward yet; kept 1 settled path(s) at origin/main's text" \
+    "$waiting" > "$c/sync-out"
+  land "$c" "$URL"
+  assert_equals 0 "$RC" "newer edits waiting for the scheduled capture do not make a landed PR unfinished: $OUT"
+  assert_contains "$OUT" "landed: $URL; nova's live checkout keeps the landed paths at origin's text and fast-forwards once the scheduled capture of its newer edits lands" \
+    "the outcome says the checkout catches up after the next scheduled capture"
+  assert_absent "$c/home/state/$ID.meta" "the record is closed"
+  c=$(new_case)
+  printf '%s\n' "nova live ~/code/agents/nova: STUCK: cron/skill-capture.sh --settle failed (exit 1) - needs attention" "$waiting" > "$c/sync-out"
+  land "$c" "$URL"
+  assert_equals 3 "$RC" "a failed settle stays unfinished beside waiting edits"
+  pass "a landed PR whose live checkout holds newer edits for the scheduled capture still finishes"
 }
 
 test_unsynced_live_checkout_is_unfinished() {
@@ -328,11 +357,13 @@ SCRIPT
 test_lands_an_open_capture_pr_end_to_end
 test_settle_never_reverts_a_landed_edit_the_fast_forward_cannot_bring_back
 test_merge_time_record_reads_the_head_without_a_worktree
+test_capture_start_off_entry_still_lands
 test_refuses_a_pr_that_is_not_a_capture_pr
 test_refuses_a_stale_or_draft_pr_before_recording
 test_refused_merge_keeps_the_record_and_a_rerun_lands
 test_merged_pr_settles_and_closes_without_merging
 test_stuck_settle_reports_after_landing
+test_edits_waiting_for_the_scheduled_capture_still_land
 test_unsynced_live_checkout_is_unfinished
 test_merge_that_landed_despite_a_nonzero_exit_settles
 test_queued_merge_keeps_the_record
