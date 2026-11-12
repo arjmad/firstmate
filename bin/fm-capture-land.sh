@@ -27,7 +27,9 @@
 # It is idempotent: a re-run on a merged PR skips straight to the settle and the
 # close, and an existing record for the PR is reused. One run per PR at a time
 # (state/.capture-land-<id>.lock).
-# Exit 0: landed (or already merged) and the live checkout settled and synced.
+# Exit 0: landed (or already merged) and the live checkout settled and synced,
+# or, for a capture-start=off checkout, settled with newer edits waiting for its
+# scheduled capture.
 # Exit 1: refused or failed before landing; nothing merged. Exit 2: bad usage.
 # Exit 3: accepted into a merge queue but not merged yet, or landed while the
 # settle, sync, or close reported something to finish; re-run the same command
@@ -193,10 +195,21 @@ SYNC_OUT=$("$SCRIPT_DIR/fm-fleet-sync.sh" --settle-capture "$PROJECTS/$PROJECT" 
 [ -z "$SYNC_OUT" ] || printf '%s\n' "$SYNC_OUT"
 # Only a live checkout that ends synced, already current, or recovered went live;
 # every other outcome (STUCK, a skip, edits still pending capture) is unfinished.
+# A capture-start=off checkout whose newer edits wait for its scheduled capture
+# also counts: the settle kept the landed paths at origin's text ("settle held"),
+# and the checkout fast-forwards once that scheduled capture lands.
 LIVE_LINES=$(printf '%s\n' "$SYNC_OUT" | grep -F "$PROJECT live " || true)
+OK_LINES='synced|already current|recovered|settled|post-update command ran|fetch succeeded'
+WENT_LIVE='synced|already current|recovered'
+WAITING=no
+if printf '%s\n' "$LIVE_LINES" | grep -q ': live edits wait for the scheduled capture: '; then
+  OK_LINES="$OK_LINES|settle held|live edits wait for the scheduled capture"
+  WENT_LIVE="$WENT_LIVE|live edits wait for the scheduled capture"
+  WAITING=yes
+fi
 if [ -z "$LIVE_LINES" ] \
-  || printf '%s\n' "$LIVE_LINES" | grep -Evq ': (synced|already current|recovered|settled|post-update command ran|fetch succeeded)' \
-  || ! printf '%s\n' "$LIVE_LINES" | grep -Eq ': (synced|already current|recovered)'; then
+  || printf '%s\n' "$LIVE_LINES" | grep -Evq ": ($OK_LINES)" \
+  || ! printf '%s\n' "$LIVE_LINES" | grep -Eq ": ($WENT_LIVE)"; then
   echo "attention: $PROJECT's live checkout did not settle and go live (line above); re-run this command once it clears" >&2
   RC=3
 fi
@@ -213,5 +226,9 @@ if [ -e "$META" ]; then
     RC=3
   fi
 fi
-[ "$RC" != 0 ] || echo "landed: $URL; $PROJECT's live checkout is settled and synced"
+if [ "$RC" = 0 ] && [ "$WAITING" = yes ]; then
+  echo "landed: $URL; $PROJECT's live checkout keeps the landed paths at origin's text and fast-forwards once the scheduled capture of its newer edits lands"
+elif [ "$RC" = 0 ]; then
+  echo "landed: $URL; $PROJECT's live checkout is settled and synced"
+fi
 exit "$RC"
