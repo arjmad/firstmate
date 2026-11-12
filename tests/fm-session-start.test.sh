@@ -2145,12 +2145,20 @@ EOF
   pass "compatible tasks-axi backlog rendering drops done rows and keeps every in-flight, held, and blocked row"
 }
 
-# date_in_days <n>: the local date <n> days from today (n may be negative),
-# GNU date or BSD date.
+# date_in_days <n> [<format>]: the UTC date (or <format>) <n> days from now (n
+# may be negative), GNU date or BSD date; UTC, as the digest and
+# bin/fm-fleet-snapshot.sh decide dates.
 date_in_days() {
+  local n=$1 format=${2:-%Y-%m-%d}
+  case "$n" in -*) ;; *) n="+$n" ;; esac
+  date -u -d "$n days" +"$format" 2>/dev/null || date -u -v"$n"d +"$format"
+}
+
+# utc_stamp_hours <n>: the UTC timestamp <n> hours from now (n may be negative).
+utc_stamp_hours() {
   local n=$1
   case "$n" in -*) ;; *) n="+$n" ;; esac
-  date -d "$n days" +%Y-%m-%d 2>/dev/null || date -v"$n"d +%Y-%m-%d
+  date -u -d "$n hours" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v"$n"H +%Y-%m-%dT%H:%M:%SZ
 }
 
 # The held group lists a row in full only when the helm can act on it now - a
@@ -2158,8 +2166,9 @@ date_in_days() {
 # other row in one line per group (fork patch
 # docs/fork-decisions/2026-11-12-lean-reentry-digest.md). A captain call is
 # live exactly when bin/fm-fleet-snapshot.sh's hold_bucket is "live": not dated
-# into the future and not an undated hold 14 or more days old (its hold-set
-# stamp, else its since date). Counted captain calls group as the bearings
+# into the future and not an undated hold 14 or more whole UTC days old (its
+# hold-set timestamp, else its since date); the 13d23h and 14d1h stamps pin
+# that boundary. Counted captain calls group as the bearings
 # board groups them (board, place, quick, hands) and the rest by hold kind,
 # each split by Batch: tag or repo. A held row the in-flight or blocked group
 # already prints is not printed again. The listing never asks tasks-axi for a
@@ -2188,6 +2197,8 @@ EOF
   rows="$home/held-rows"
   {
     printf '  live-call,queued,ship,firstmate,Live captain call,none,captain,pick one,"-"\n'
+  printf '  edge-live,queued,ship,firstmate,Call 13 days 23 hours old,none,captain,still live,"-"\n'
+  printf '  edge-aged,queued,ship,firstmate,Call 14 days 1 hour old,none,captain,aged,"-"\n'
     printf '  aged-call,queued,ship,firstmate,Aged captain call,none,captain,waiting long,"-"\n'
     printf '  aged-quick,queued,ship,firstmate,Aged quick call,none,captain,"[reversible; options: A|B; recommended: A] pick","-"\n'
     printf '  dated-call,queued,ship,firstmate,Dated captain call,none,captain,later,%s\n' "$back10"
@@ -2200,6 +2211,7 @@ EOF
     printf '  due-late,queued,ship,firstmate,Due later,none,future,later,%s\n' "$back40"
     printf '  title-dated,queued,task,business,"[%s] Title dated, with comma",none,external,waiting,"-"\n' "$due_near"
     printf '  external-undated,queued,task,business,Waiting on a buyer,none,external,waiting,"-"\n'
+    printf '  external-store,queued,task,business,Waiting at the store,none,external,waiting,"-"\n'
     printf '  compact-startup,in_flight,ship,firstmate,Compact startup digest,none,captain,captain choice pending,"-"\n'
     printf '  blocked-followup,queued,scout,firstmate,Follow compact startup,compact-startup,future,later,%s\n' "$back40"
   } > "$rows"
@@ -2208,6 +2220,12 @@ EOF
   {
     printf -- '- [ ] live-call - Live captain call (repo: firstmate) (kind: ship) (since %s)\n' "$older"
     printf '  Captain hold set: %sT10:00:00Z\n' "$recent"
+    printf -- '- [ ] edge-live - Call 13 days 23 hours old (repo: firstmate) (kind: ship) (since %s)\n' "$older"
+    printf '  Captain hold set: %s\n' "$(utc_stamp_hours -335)"
+    printf -- '- [ ] edge-aged - Call 14 days 1 hour old (repo: firstmate) (kind: ship) (since %s)\n' "$older"
+    printf '  Captain hold set: %s\n' "$(utc_stamp_hours -337)"
+    printf -- '- [ ] external-store - Waiting at the store (repo: business) (kind: task)\n'
+    printf '  Batch: place:store\n'
     printf -- '- [ ] aged-call - Aged captain call (repo: firstmate) (kind: ship) (since %s)\n' "$older"
     printf '  Captain hold set: %sT10:00:00Z\n' "$old"
     printf -- '- [ ] aged-quick - Aged quick call (repo: firstmate) (kind: ship) (since %s)\n' "$older"
@@ -2230,20 +2248,21 @@ EOF
   out=$(FM_FAKE_TASKS_AXI_HELD_ROWS="$rows" run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   held_group=$(printf '%s\n' "$out" | sed -n '/^held (captain- or time-gated/,/^blocked queued:/p')
 
-  assert_contains "$held_group" "count: 5
-tasks[5]{id,state,kind,repo,title,blocked_by,hold_kind,hold_reason,hold_until}:
+  assert_contains "$held_group" "count: 6
+tasks[6]{id,state,kind,repo,title,blocked_by,hold_kind,hold_reason,hold_until}:
   live-call,queued,ship,firstmate,Live captain call,none,captain,pick one,\"-\"
+  edge-live,queued,ship,firstmate,Call 13 days 23 hours old,none,captain,still live,\"-\"
   passed-call,queued,ship,firstmate,Captain call back today,none,captain,back now,$today
   near-future,queued,ship,firstmate,\"Near future hold title...\",none,future,soon,$near
   due-soon,queued,ship,firstmate,Due soon,none,future,later,$back40
   title-dated,queued,task,business,\"[$due_near] Title dated, with comma\",none,external,waiting,\"-\"
-(15 held: 5 above - live captain calls and rows due or back within 2 days; 2 listed under in flight or blocked queued; 8 counted below)
+(18 held: 6 above - live captain calls and rows due or back within 2 days; 2 listed under in flight or blocked queued; 10 counted below)
 counted held rows, by group (bin/fm-tasks-axi.sh list --state held --fields blocked_by,hold_kind,hold_reason,hold_until lists every one):
   captain board: 1 (board:subpass-board 1)
   captain place: 1 (office 1); next back $back12
   captain quick: 1 (firstmate 1)
-  captain hands: 2 (firstmate 2); next back $back10
-  external: 1 (business 1)
+  captain hands: 3 (firstmate 3); next back $back10
+  external: 2 (business 1, place:store 1)
   future: 2 (firstmate 1, skills 1); next back $near_out
 " "the held group did not keep live calls and near rows whole and count the rest per group"
   assert_not_contains "$held_group" "compact-startup," "a held row the in-flight group lists was printed again"

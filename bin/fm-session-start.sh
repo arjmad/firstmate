@@ -521,8 +521,9 @@ strip_axi_help() {
 # "Live" is bin/fm-fleet-snapshot.sh's hold_bucket "live", read from the same
 # structured fields: a captain hold that is not blocked, whose hold_until is
 # absent or not after today, and that is not an undated hold at least
-# FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS old (its `Captain hold set:` stamp, else its
-# `since` date). A row's back-on date is its hold_until, else a leading
+# FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS whole days old (its `Captain hold set:`
+# stamp, else its `since` date at midnight), all in UTC as the snapshot
+# computes them. A row's back-on date is its hold_until, else a leading
 # [YYYY-MM-DD] title date, and its due date is its `Due:` body line. Body facts
 # come from the backlog file itself, because `tasks-axi list` cuts bodies, and
 # bin/fm-backlog-row-lib.sh owns the Due: and Batch: patterns. Fields split as
@@ -533,10 +534,13 @@ HOLD_AGE_DAYS=${FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS:-14}
 case "$HOLD_AGE_DAYS" in ''|*[!0-9]*) HOLD_AGE_DAYS=14 ;; esac
 HELD_LIST_COMMAND="bin/fm-tasks-axi.sh list --state held --fields $BACKLOG_FIELDS,hold_until"
 
-date_in_days() {  # <signed days>: the local date that many days from today
-  local n=$1
+# date_in_days <signed days> [<format>]: the UTC date (or <format>) that many
+# days from now; UTC, because bin/fm-fleet-snapshot.sh decides hold buckets in
+# UTC.
+date_in_days() {
+  local n=$1 format=${2:-%Y-%m-%d}
   case "$n" in -*) ;; *) n="+$n" ;; esac
-  date -d "$n days" +%Y-%m-%d 2>/dev/null || date -v"$n"d +%Y-%m-%d 2>/dev/null
+  date -u -d "$n days" +"$format" 2>/dev/null || date -u -v"$n"d +"$format" 2>/dev/null
 }
 
 # backlog_row_facts <path>: one "<id> TAB <due> TAB <batch> TAB <hold-set> TAB
@@ -565,8 +569,9 @@ backlog_row_facts() {
     id != "" && /^[[:space:]]+[^[:space:]]/ {
       if (first) {
         first = 0
-        if (match($0, /^[[:space:]]*Captain hold set:[[:space:]]*[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/))
-          set = substr($0, RSTART + RLENGTH - 10, 10)
+        if (match($0, /^[[:space:]]*Captain hold set:[[:space:]]*[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9](T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z)?[[:space:]]*$/)) {
+          set = substr($0, RSTART, RLENGTH); sub(/^[[:space:]]*Captain hold set:[[:space:]]*/, "", set); sub(/[[:space:]]+$/, "", set)
+        }
       }
       if ($0 ~ due_re) { v = $0; sub(/^[[:space:]]*Due:[[:space:]]*/, "", v); due = substr(v, 1, 10) }
       if ($0 ~ batch_re) { v = $0; sub(/^[[:space:]]*Batch:[[:space:]]*/, "", v); sub(/[[:space:]]+$/, "", v); batch = v }
@@ -634,9 +639,11 @@ print_ready_queued_bounded() {
 # stay in full, and every other row is counted per group after the table.
 print_held_counted() {
   local listed=$1 today near cutoff
-  today=$(date +%Y-%m-%d)
+  today=$(date -u +%Y-%m-%d)
   near=$(date_in_days "$NEAR_DAYS") || near=''
-  cutoff=$(date_in_days "-$HOLD_AGE_DAYS") || cutoff=''
+  # An undated hold is aged once whole days since its stamp reach the bound,
+  # so its stamp is at or before this instant.
+  cutoff=$(date_in_days "-$HOLD_AGE_DAYS" '%Y-%m-%dT%H:%M:%SZ') || cutoff=''
   if [ -z "$near" ] || [ -z "$cutoff" ]; then
     cat
     return 0
@@ -656,6 +663,10 @@ print_held_counted() {
     }
     function unquote(v) { if (v ~ /^".*"$/) v = substr(v, 2, length(v) - 2); return v }
     function is_date(v) { return v ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ }
+    function stamp_time(v) {
+      if (is_date(v)) return v "T00:00:00Z"
+      return (v ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/) ? v : ""
+    }
     function quick(r,   p, o) {
       p = index(r, "]"); o = index(r, "; options: ")
       return r ~ /^\[(reversible|arjun-only)/ && o > 0 && o < p
@@ -713,18 +724,19 @@ print_held_counted() {
       if (hold_kind == "captain") {
         if (is_date(until_date)) live = (until_date <= today)
         else {
-          stamp = hold_set[id]
-          if (!is_date(stamp)) stamp = since[id]
-          live = !(is_date(stamp) && stamp <= cutoff)
+          stamp = stamp_time(hold_set[id])
+          if (stamp == "") stamp = stamp_time(since[id])
+          live = !(stamp != "" && stamp <= cutoff)
         }
       }
       if (live || soon) { shown++; next }
       drop[lines] = 1; counted++
       repo = unquote(f[col["repo"]])
       tag = (id in batch && batch[id] != "-") ? batch[id] : ""
+      part = (tag != "") ? tag : repo
       if (hold_kind == "captain" && tag != "") count((tag ~ /^board:/) ? "captain board" : "captain place", tag, back)
       else if (hold_kind == "captain") count(quick(unquote(f[col["hold_reason"]])) ? "captain quick" : "captain hands", repo, back)
-      else count((hold_kind == "" || hold_kind == "-") ? "held" : hold_kind, repo, back)
+      else count((hold_kind == "" || hold_kind == "-") ? "held" : hold_kind, part, back)
       next
     }
     in_rows { in_rows = 0 }
