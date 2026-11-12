@@ -1772,6 +1772,13 @@ test_crewmate_scaffolds_forbid_pool_administration() {
     || fail "scout brief leading-cd rule is missing or differs from the ship brief"
   assert_grep "every sub-agent you launch" "$brief" "scout brief did not pass the leading-cd rule to sub-agents"
 
+  # Rule 9: an email address on a command line stops the worker on a harness
+  # confirmation nobody answers, so both scaffolds must carry the rule.
+  for b in "$home/data/brief-pool-no-mistakes/brief.md" "$brief"; do
+    assert_grep "9. Keep every email address out of your command lines" "$b" "$b: brief lacks the email-address rule"
+    assert_grep "confirmation nobody can answer" "$b" "$b: email-address rule lost its reason"
+  done
+
   # The daemon half of the rule survived the fold.
   assert_grep "no-mistakes" "$brief" "scout brief lost the shared no-mistakes daemon rule"
   # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.

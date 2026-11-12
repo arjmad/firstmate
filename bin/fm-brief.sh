@@ -878,10 +878,12 @@ As soon as a companion PR is open, append \`working [at=<epoch>]: companion <rep
 "
 fi
 
-# One shared string keeps the ship and scout shell-path rule identical.
+# One shared string keeps the ship and scout shell-command rules identical.
 IFS= read -r -d '' SHARED_NO_CD_RULE <<'EOF' || true
 8. Never start a shell command with `cd`, and never run a search whose path depends on the current directory.
    Use absolute paths, `git -C <abs>`, or a `( cd <abs> && ... )` subshell.
+   Pass this rule to every sub-agent you launch.
+9. Keep every email address out of your command lines: put it in a file the command reads, or in a script, and do not echo it, because the harness stops such a command for a confirmation nobody can answer.
    Pass this rule to every sub-agent you launch.
 EOF
 SHARED_NO_CD_RULE=${SHARED_NO_CD_RULE%$'\n'}
