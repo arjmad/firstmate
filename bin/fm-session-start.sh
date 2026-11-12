@@ -779,11 +779,13 @@ print_held_counted() {
 
 print_backlog_tasks_axi_compact() {
   local path=$1 in_flight held blocked ready err listed
-  if ! in_flight=$(tasks-axi list --file "$path" --state in_flight --fields "$BACKLOG_FIELDS" 2>&1); then
+  # Every group asks for hold_until, so a held row the held group leaves to the
+  # in-flight or blocked group still shows its back-on date there.
+  if ! in_flight=$(tasks-axi list --file "$path" --state in_flight --fields "$BACKLOG_FIELDS,hold_until" 2>&1); then
     err=$in_flight
   elif ! held=$(tasks-axi list --file "$path" --state held --fields "$BACKLOG_FIELDS,hold_until" 2>&1); then
     err=$held
-  elif ! blocked=$(tasks-axi list --file "$path" --state queued --blocked --fields "$BACKLOG_FIELDS" 2>&1); then
+  elif ! blocked=$(tasks-axi list --file "$path" --state queued --blocked --fields "$BACKLOG_FIELDS,hold_until" 2>&1); then
     err=$blocked
   elif ! ready=$(tasks-axi ready --file "$path" 2>&1); then
     err=$ready

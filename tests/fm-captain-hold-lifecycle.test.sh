@@ -5238,7 +5238,7 @@ test_hold_reason_round_trips_awkward_characters() {
     if [ "$id" = sample-dated-call ]; then
       # Inside the 2 days the startup digest lists in full; a later dated call
       # is counted in its group's line and would hide the reason checked below.
-      until_args=(--until "$(date -d '+2 days' +%Y-%m-%d 2>/dev/null || date -v+2d +%Y-%m-%d)")
+      until_args=(--until "$(date -u -d '+2 days' +%Y-%m-%d 2>/dev/null || date -u -v+2d +%Y-%m-%d)")
       reason='fm-hold-v1:bm9ydGg='
     fi
     quoted_reason=$(jq -cn --arg value "$reason" '$value')

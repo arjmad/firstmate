@@ -86,7 +86,7 @@ Repeat and edge cases:
 ### Hold kinds
 
 These are fork patches recorded in [`docs/fork-decisions.md`](fork-decisions.md).
-`hold --kind reversible|arjun-only` stores the kind as a prefix on the hold reason, so session start, Bearings, the away return brief, and `bin/fm-tasks-axi.sh show` all show it without a separate read.
+`hold --kind reversible|arjun-only` stores the kind as a prefix on the hold reason, so Bearings, the away return brief, `bin/fm-tasks-axi.sh show`, and session start for every call it prints in full show it without a separate read; session start counts a call that is not live and not due or back within 2 days, and `bin/fm-tasks-axi.sh list --state held` shows its prefix.
 Every hold waits for the captain's answer: the 72-hour default release was removed, and `hold` refuses its `--default` and `--no-default` flags.
 A row held before that removal may still carry a default and a release time in its prefix; it stays held like any other, and each re-hold keeps that default as the call's recommendation and drops the segment.
 `bin/fm-captain-hold.sh --help` owns the prefix grammar and the refusals, and `tests/fm-captain-hold-kind.test.sh` covers them.

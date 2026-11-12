@@ -2133,11 +2133,11 @@ EOF
   # The fake refuses a body field, an unfiltered listing, and a done listing, so
   # a clean render already proves those were never asked for; pin the group
   # filters the listing is built from.
-  assert_grep "--state in_flight --fields blocked_by,hold_kind,hold_reason" "$log" \
+  assert_grep "--state in_flight --fields blocked_by,hold_kind,hold_reason,hold_until" "$log" \
     "session start did not ask tasks-axi for the in-flight group"
   assert_grep "--state held --fields blocked_by,hold_kind,hold_reason" "$log" \
     "session start did not ask tasks-axi for the held group"
-  assert_grep "--state queued --blocked --fields blocked_by,hold_kind,hold_reason" "$log" \
+  assert_grep "--state queued --blocked --fields blocked_by,hold_kind,hold_reason,hold_until" "$log" \
     "session start did not ask tasks-axi for the blocked queued group"
   assert_grep "ready --file $home/data/backlog.md" "$log" \
     "session start did not ask tasks-axi for the dispatchable queued set"
