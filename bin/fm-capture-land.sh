@@ -97,7 +97,7 @@ if [ -f "$CONFIG/live-checkouts" ]; then
     [ -z "$PROJECT" ] || [ "$PROJECT" = "$name" ] \
       || refuse "$SLUG is the origin of more than one capture project ($PROJECT, $name)"
     PROJECT=$name
-  done < <(awk '$1 !~ /^#/ { for (i = 3; i <= NF && $i ~ /^(lock|capture)=/; i++) if ($i ~ /^capture=/) { print $1; break } }' "$CONFIG/live-checkouts")
+  done < <(awk '$1 !~ /^#/ { for (i = 3; i <= NF && $i ~ /^(lock|capture|capture-start|running)=/; i++) if ($i ~ /^capture=/) { print $1; break } }' "$CONFIG/live-checkouts")
 fi
 [ -n "$PROJECT" ] || refuse "$SLUG is no capture project's origin: no project in $PROJECTS with a capture= entry in $CONFIG/live-checkouts has it as its origin"
 fm_task_id_creation_valid "capture-$PROJECT-$FM_PR_NUMBER" || refuse "project name $PROJECT does not make a valid task id"

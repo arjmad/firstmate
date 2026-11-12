@@ -1,0 +1,8 @@
+2026-11-12: Arjun asked in the helm for Cade's and Nova's skill capture to run once a day, early in the morning while the fleet is quiet, not hourly.
+Decision: a `config/live-checkouts` entry can carry `capture-start=off`, so the fleet sync never starts its capture while `bin/fm-capture-land.sh` still lands and settles its PRs; its edits read `live edits wait for the scheduled capture:`, which wakes no one, at or behind origin.
+Why: Heimdall's daily capture job already runs at 02:00 ET, but the 30-minute scheduled sync and every merge's sync started each capture project's capture whenever its live skills edits changed, which opened six Nova capture PRs in about two hours, each needing a code review.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| `capture-start=off` on a live-checkout entry stops the sync starting its capture and reports its waiting edits as informational at or behind origin | `bin/fm-fleet-sync.sh` (header, `report_capture_waiting`, `capture_or_report_stuck`, `sync_live_checkout`, `sync_live_checkouts`), `tests/fm-fleet-sync.test.sh` (`test_capture_start_off_*`, `test_settle_capture_runs_for_capture_start_off`), `docs/configuration.md` live-checkouts section | `bin/fm-fleet-sync.sh` (header, `sync_live_checkout`, `sync_live_checkouts`), `docs/configuration.md` | carried | c8d8fdad |
+| A `capture-start=` or `running=` token before `capture=` still marks the entry a capture project | `bin/fm-capture-land.sh` (capture-project lookup), `tests/fm-capture-land.test.sh` (`test_capture_start_off_entry_still_lands`) | none | carried | c8d8fdad |

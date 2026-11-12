@@ -34,7 +34,7 @@
 # checkout the captain-private $FM_HOME/config/live-checkouts lists - a working
 # copy outside projects/ that something actually runs from (a scheduled job's
 # repo, a symlinked skills tree, a service's source). One entry per line:
-#   <project> <path> [lock=<lock-path>] [capture=<dir>/:<command>] [running=<pid-file>] [post-update command...]
+#   <project> <path> [lock=<lock-path>] [capture=<dir>/:<command>] [capture-start=off|sync] [running=<pid-file>] [post-update command...]
 # Blank lines and lines starting with # are ignored; a leading ~/ in <path>,
 # <lock-path> or <pid-file> expands to $HOME. An absent file means no live checkouts.
 # Each live checkout gets the same guards as a clone - clone root, origin, clean
@@ -91,6 +91,14 @@
 # one under a STUCK line naming the failure. Edits outside <dir>/ are reported
 # STUCK as before. <dir> must lie inside the checkout, and a <command> without a
 # slash is ./<command>.
+# capture-start=off keeps the entry a capture project - bin/fm-capture-land.sh
+# still lands its PRs and the settle form still runs "<command> --settle" - but
+# the sync never starts <command>: its own scheduled job does. A checkout held
+# only by edits under <dir>/ that is at or behind origin/<default> reports "live
+# edits wait for the scheduled capture: ..." (behind it, ending "; fast-forwards
+# once it lands"), which wakes no one; one ahead of it or diverged is STUCK.
+# capture-start=sync, the default, is the behavior above. Either value needs a
+# capture= on the same line.
 # The single-project form syncs the entries for that project name; the whole-fleet
 # form syncs every entry after the clones.
 # Settle form (--settle-capture <project>), for after a capture PR merged
@@ -191,9 +199,11 @@ case "$LIVE_LOCK_POLL_SECS" in ''|*[!0-9]*|0) LIVE_LOCK_POLL_SECS=5 ;; esac
 # A failed post-update command's STUCK line carries this much of its output.
 POST_UPDATE_TAIL_LINES=3
 POST_UPDATE_TAIL_CHARS=200
-# The current live checkout's capture=<dir>/:<command>; empty for clones.
+# The current live checkout's capture=<dir>/:<command> and capture-start=;
+# empty for clones.
 CAPTURE_DIR=""
 CAPTURE_CMD=""
+CAPTURE_START=sync
 
 SCHEDULED_INTERVAL_FILE="$CONFIG/fleet-sync-interval"
 SCHEDULED_INTERVAL_DEFAULT=1800
@@ -640,15 +650,41 @@ report_capture_held() {
   fi
 }
 
+# report_capture_waiting: report a capture-start=off checkout held only by
+# edits under its capture dir. Its own scheduled job captures them, so at or
+# behind origin/<default> they only wait for that capture to land, whose settle
+# then fast-forwards it: informational. Ahead of it or diverged, it is STUCK.
+report_capture_waiting() {
+  local behind
+  if git -C "$PROJ" merge-base --is-ancestor HEAD "$BASE" 2>/dev/null \
+      && behind=$(git -C "$PROJ" rev-list --count "HEAD..$BASE" 2>/dev/null); then
+    if [ "$behind" = 0 ]; then
+      echo "$label: live edits wait for the scheduled capture: $CAPTURE_COUNT uncommitted path(s) under $CAPTURE_DIR only, 0 commits behind $BASE"
+    else
+      echo "$label: live edits wait for the scheduled capture: $CAPTURE_COUNT uncommitted path(s) under $CAPTURE_DIR only, $behind commits behind $BASE; fast-forwards once it lands"
+    fi
+  else
+    report_stuck "$(stuck_state)"
+  fi
+}
+
 # capture_or_report_stuck: for a live checkout whose uncommitted paths all lie
-# under its capture=<dir>/, start the capture command once per edit state (see
-# the header), report_capture_held once a capture for them succeeded, and
-# report STUCK otherwise. sync_live_checkout has already deferred a checkout whose
-# capture is still running.
+# under its capture=<dir>/, report_capture_waiting when capture-start=off, else
+# start the capture command once per edit state (see the header),
+# report_capture_held once a capture for them succeeded, and report STUCK
+# otherwise. sync_live_checkout has already deferred a checkout whose capture is
+# still running.
 capture_or_report_stuck() {
   local log fp rc="" pid
-  if [ -z "$CAPTURE_CMD" ] || ! capture_paths_only \
-      || ! fp=$(capture_fingerprint) || [ -z "$fp" ]; then
+  if [ -z "$CAPTURE_CMD" ] || ! capture_paths_only; then
+    report_stuck "$(stuck_state)"
+    return 0
+  fi
+  if [ "$CAPTURE_START" = off ]; then
+    report_capture_waiting
+    return 0
+  fi
+  if ! fp=$(capture_fingerprint) || [ -z "$fp" ]; then
     report_stuck "$(stuck_state)"
     return 0
   fi
@@ -1072,9 +1108,10 @@ write_live_record() {
   fi
 }
 
-# sync_live_checkout <project> <path> <lock> <capture> <command> <lock-wait-secs> <pid-file>
+# sync_live_checkout <project> <path> <lock> <capture> <command> <lock-wait-secs> <pid-file> <capture-start>
 sync_live_checkout() {
   local project=$1 path=$2 lock=$3 capture=$4 cmd=$5 wait_secs=$6 self before moved
+  CAPTURE_START=${8:-sync}
   PROJ=$(expand_home "$path")
   RUNNING_PID_FILE=""
   [ -z "$7" ] || RUNNING_PID_FILE=$(expand_home "$7")
@@ -1127,7 +1164,7 @@ sync_live_checkout() {
 # sync_live_checkouts <project-or-empty> <lock-wait-secs>: sync the configured
 # live checkouts for one project, or every entry when the project is empty.
 sync_live_checkouts() {
-  local only=$1 wait_secs=$2 line project path lock capture running cmd rest token n=0
+  local only=$1 wait_secs=$2 line project path lock capture capture_start running cmd rest token n=0
   [ -f "$LIVE_CHECKOUTS_FILE" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n + 1))
@@ -1144,12 +1181,13 @@ sync_live_checkouts() {
       continue
     fi
     [ -z "$only" ] || [ "$project" = "$only" ] || continue
-    lock="" capture="" running=""
+    lock="" capture="" capture_start="" running=""
     while :; do
       token=${rest%%[[:space:]]*}
       case "$token" in
         lock=*) lock=${token#lock=} ;;
         capture=*) capture=${token#capture=} ;;
+        capture-start=*) capture_start=${token#capture-start=} ;;
         running=*) running=${token#running=} ;;
         *) break ;;
       esac
@@ -1165,8 +1203,19 @@ sync_live_checkouts() {
       echo "live-checkouts: skipped: line $n capture= wants <dir>/:<command> with <dir> inside the checkout"
       continue
     fi
+    case "$capture_start" in
+      ''|off|sync) ;;
+      *)
+        echo "live-checkouts: skipped: line $n capture-start= wants off or sync"
+        continue
+        ;;
+    esac
+    if [ -n "$capture_start" ] && [ -z "$capture" ]; then
+      echo "live-checkouts: skipped: line $n capture-start= needs a capture= entry"
+      continue
+    fi
     cmd=$rest
-    sync_live_checkout "$project" "$path" "$lock" "$capture" "$cmd" "$wait_secs" "$running"
+    sync_live_checkout "$project" "$path" "$lock" "$capture" "$cmd" "$wait_secs" "$running" "$capture_start"
   done < "$LIVE_CHECKOUTS_FILE"
 }
 
