@@ -386,12 +386,13 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 
 # Ring the doorbell, best-effort: one endpoint-liveness pre-check, one advisory
 # composer pre-check, then the backend's submit machinery with a minimal retry
-# budget, verdict discarded.
+# budget, whose verdict picks the return value.
 # Returns 0 rang, 1 skipped because the composer PROVENLY holds pending text
 # other than our own doorbell (the watcher re-rings later), 2 the backend send
 # failed, 3 skipped because the endpoint is positively dead or missing (nothing
-# typed; recovery owns the record), 4 typed but the submit could not prove the
-# turn started (its verdict was unknown, pending, or pending-unproven), so a
+# typed; recovery owns the record), 4 typed but the turn start is unproven: the
+# submit verdict was not exact `empty` (unknown, pending, pending-unproven, an
+# API backend's unconfirmed), or our held doorbell outlived both Enters, so a
 # sender must report the turn start unconfirmed. No return value is delivery
 # proof; the acknowledgement move is the only delivery signal.
 # The skip is deliberately narrow: only an exact `pending` verdict can defer,
@@ -422,7 +423,9 @@ fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
       sleep 0.3
       fm_task_inbox_composer_holds "$backend" "$target" "$line" "$label" || return 0
       fm_backend_send_key "$backend" "$target" Enter "$label" >/dev/null 2>&1 || return 2
-      return 0
+      sleep 0.3
+      fm_task_inbox_composer_holds "$backend" "$target" "$line" "$label" || return 0
+      return 4
       ;;
   esac
   # Accepted residual race: terminal input and Enter are separate delivery
@@ -433,10 +436,10 @@ fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
     return 2
   fi
   case "$verdict" in
+    empty) return 0 ;;
     send-failed) return 2 ;;
-    unknown|pending|pending-unproven) return 4 ;;
   esac
-  return 0
+  return 4
 }
 
 # Whether the composer's content, ignoring line wrapping, is exactly <line>.
