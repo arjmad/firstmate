@@ -1229,9 +1229,9 @@ EOF
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_contains "$out" "working: step 7" "default status tail missing the most recent line"
-  assert_contains "$out" "working: step 3" "default status tail (5 lines) missing an expected recent line"
-  assert_not_contains "$out" "working: step 1" "default status tail (5 lines) leaked an older line"
-  assert_contains "$out" "$home/state/task-a.status" "digest did not print the full status log path for a deeper read"
+  assert_contains "$out" "working: step 5" "default status tail (3 lines) missing an expected recent line"
+  assert_not_contains "$out" "working: step 4" "default status tail (3 lines) leaked an older line"
+  assert_contains "$out" "last 3 line(s) of $home/state/<id>.status" "digest did not name the full status log path for a deeper read"
   assert_contains "$out" "a bounded tail of every state/*.status" "read-once contract does not distinguish bounded status tails"
 
   out=$(FM_SESSION_START_STATUS_TAIL=2 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
@@ -1270,11 +1270,11 @@ EOF
   assert_contains "$out" " [truncated]" "an over-long status line was not marked as truncated"
   assert_contains "$out" "working: short line kept whole" "the cap mangled a status line already under it"
   assert_contains "$out" "each capped at 220 characters" "the status tail header does not disclose its per-line cap"
-  assert_contains "$out" "$home/state/task-cap.status" "a capped tail dropped the full log path that recovers the rest"
+  assert_contains "$out" "$home/state/<id>.status" "a capped tail dropped the full log path that recovers the rest"
 
   # Nothing the tail emits may exceed the cap, and the padded line really was
   # long enough to exercise it.
-  tail_section=$(printf '%s\n' "$out" | awk '/^status tail \(/ { flag = 1; next } flag && /^$/ { flag = 0 } flag')
+  tail_section=$(printf '%s\n' "$out" | awk '/^status tail:$/ { flag = 1; next } flag && /^$/ { flag = 0 } flag')
   longest=$(printf '%s\n' "$tail_section" | awk '{ if (length($0) > max) max = length($0) } END { print max + 0 }')
   [ "$longest" -le 220 ] || fail "a status tail line ran $longest characters past the 220-character cap"
   capped=$(printf '%s\n' "$tail_section" | grep -c ' \[truncated\]$')
@@ -1302,8 +1302,8 @@ EOF
   assert_contains "$out" "Orphan status logs (state/*.status without matching .meta)" "digest did not label orphan status logs"
   assert_contains "$out" "--- task-orphan ---" "digest did not print the orphan status id"
   assert_contains "$out" "working: orphan step 6" "orphan status tail missing the newest line"
-  assert_not_contains "$out" "working: orphan step 1" "orphan status tail was not bounded"
-  assert_contains "$out" "$home/state/task-orphan.status" "orphan status tail did not print the full log path"
+  assert_not_contains "$out" "working: orphan step 5" "an orphan status log printed more than its newest line"
+  assert_contains "$out" "$home/state/<id>.status (an orphan log shows its last line)" "orphan status tail did not name the full log path"
 
   matched_count=$(printf '%s\n' "$out" | grep -F -c 'working: surfaced once')
   orphan_count=$(printf '%s\n' "$out" | grep -F -c 'working: orphan step 6')
@@ -2100,7 +2100,7 @@ EOF
   out=$(FM_FAKE_TASKS_AXI_LOG="$log" FM_FAKE_TASKS_AXI_READY=3 \
     run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
-  assert_contains "$out" "compact backlog listing (tasks-axi; done rows omitted; every in-flight and blocked row shown in full, and every held row that is undated, back within 7 days, or due within 14 days; later held rows counted per month; ready queued bounded to 20; task bodies omitted)" \
+  assert_contains "$out" 'compact backlog listing (tasks-axi; done rows omitted; every in-flight and blocked row in full; a held row in full only when it is a live captain call or due or back within 2 days, every other held row counted per group; ready queued as id, kind, repo and due date, bounded to 20; titles cut at 80 characters end in "..."; task bodies omitted)' \
     "compatible tasks-axi backend did not render the compact backlog listing"
   assert_contains "$out" "tasks[1]{id,state,kind,repo,title,blocked_by,hold_kind,hold_reason}:" \
     "tasks-axi compact listing omitted the expected structured field header"
@@ -2108,11 +2108,14 @@ EOF
     "tasks-axi compact listing omitted in-flight identity, state, or hold metadata"
   assert_contains "$out" '  held-queued,queued,ship,firstmate,Held queued work,none,captain,captain choice pending,"-"
 ' "tasks-axi compact listing omitted a held row, its hold metadata, or its hold_until"
-  assert_not_contains "$out" "parked until " \
-    "a held listing with no far-gated row printed a parked count line"
+  assert_not_contains "$out" "counted held rows, by group" \
+    "a held listing with only a live captain call printed a counted line"
   assert_contains "$out" 'blocked-followup,queued,scout,firstmate,Follow compact startup,compact-startup,"-","-"' \
     "tasks-axi compact listing omitted blocked-by metadata"
-  assert_contains "$out" "ready-3,queued,ship,firstmate,Ready item 3" \
+  assert_contains "$out" "ready[3]{id,kind,repo,due}:
+  ready-1,ship,firstmate,-" \
+    "tasks-axi compact listing did not slim the ready rows to id, kind, repo and due date"
+  assert_contains "$out" "  ready-3,ship,firstmate,-" \
     "tasks-axi compact listing omitted a dispatchable queued row inside the bound"
   assert_not_contains "$out" "OVERSIZED-BODY-LINE" "tasks-axi compact digest leaked an in-flight task body"
   assert_not_contains "$out" "QUEUED-BODY-LINE" "tasks-axi compact digest leaked a queued task body"
@@ -2142,21 +2145,28 @@ EOF
   pass "compatible tasks-axi backlog rendering drops done rows and keeps every in-flight, held, and blocked row"
 }
 
-# date_in_days <n>: the local date <n> days from today, GNU date or BSD date.
+# date_in_days <n>: the local date <n> days from today (n may be negative),
+# GNU date or BSD date.
 date_in_days() {
-  date -d "+$1 days" +%Y-%m-%d 2>/dev/null || date -v+"$1"d +%Y-%m-%d
+  local n=$1
+  case "$n" in -*) ;; *) n="+$n" ;; esac
+  date -d "$n days" +%Y-%m-%d 2>/dev/null || date -v"$n"d +%Y-%m-%d
 }
 
-# Held rows that come back more than 7 days out fold into one count line per
-# month of that date (fork patch
-# docs/fork-decisions/2026-11-08-far-holds-count-line.md). A row back exactly 7
-# days out, an undated captain hold, a far in-flight row, a far row with a
-# blocker, and a far row due within 14 days all stay in full with hold_until;
-# the listing never asks tasks-axi for a body (the fake refuses one), no body
-# reaches the digest, and the other groups are untouched.
-test_backlog_held_far_gated_rows_fold_into_one_count_line_per_month() {
-  local rec root home fakebin out rows far later edge near due_soon due_late held_group m1 m2 i
-  rec=$(new_world backlog-held-far-fold)
+# The held group lists a row in full only when the helm can act on it now - a
+# live captain call, or a row due or back within 2 days - and counts every
+# other row in one line per group (fork patch
+# docs/fork-decisions/2026-11-12-lean-reentry-digest.md). A captain call is
+# live exactly when bin/fm-fleet-snapshot.sh's hold_bucket is "live": not dated
+# into the future and not an undated hold 14 or more days old (its hold-set
+# stamp, else its since date). Counted captain calls group as the bearings
+# board groups them (board, place, quick, hands) and the rest by hold kind,
+# each split by Batch: tag or repo. A held row the in-flight or blocked group
+# already prints is not printed again. The listing never asks tasks-axi for a
+# body (the fake refuses one) and prints none.
+test_backlog_held_rows_show_live_calls_and_near_dates_and_count_the_rest() {
+  local rec root home fakebin out rows held_group i today recent old older near near_out back10 back12 back40 due_near due_out
+  rec=$(new_world backlog-held-counted)
   IFS='|' read -r root home fakebin <<EOF
 $rec
 EOF
@@ -2164,70 +2174,90 @@ EOF
   make_fake_tasks_axi_compact "$fakebin"
   make_fake_ps_claude "$fakebin"
   write_long_body_backlog "$home/data/backlog.md"
-  # 8 and 40 days out are always in different months.
-  far=$(date_in_days 8)
-  later=$(date_in_days 40)
-  edge=$(date_in_days 7)
+  today=$(date_in_days 0)
+  recent=$(date_in_days -3)
+  old=$(date_in_days -20)
+  older=$(date_in_days -30)
   near=$(date_in_days 2)
-  due_soon=$(date_in_days 14)
-  due_late=$(date_in_days 15)
-  m1=${far%-*}
-  m2=${later%-*}
+  near_out=$(date_in_days 3)
+  back10=$(date_in_days 10)
+  back12=$(date_in_days 12)
+  back40=$(date_in_days 40)
+  due_near=$(date_in_days 1)
+  due_out=$(date_in_days 3)
   rows="$home/held-rows"
   {
-    printf '  far-dated,queued,ship,firstmate,Far dated hold,none,future,start after launch,%s\n' "$far"
-    printf '  near-dated,queued,ship,firstmate,Near dated hold,none,future,"soon, really",%s\n' "$near"
-    printf '  title-far,queued,ship,firstmate,"[%s] Title dated, with comma",none,captain,captain call,"-"\n' "$far"
-    printf '  edge-seven,queued,ship,firstmate,Gate seven days out,none,future,soon,%s\n' "$edge"
-    printf '  undated-captain,queued,ship,firstmate,Undated captain hold,none,captain,captain choice pending,"-"\n'
-    printf '  far-in-flight,in_flight,ship,firstmate,Far in flight,none,future,later,%s\n' "$far"
-    printf '  far-blocked,queued,ship,firstmate,Far blocked,base-x,future,later,%s\n' "$far"
-    printf '  later-dated,queued,ship,firstmate,Later dated hold,none,future,later,%s\n' "$later"
-    printf '  due-soon,queued,ship,firstmate,Due soon,none,future,later,%s\n' "$later"
-    printf '  due-late,queued,ship,firstmate,Due later,none,future,later,%s\n' "$later"
+    printf '  live-call,queued,ship,firstmate,Live captain call,none,captain,pick one,"-"\n'
+    printf '  aged-call,queued,ship,firstmate,Aged captain call,none,captain,waiting long,"-"\n'
+    printf '  aged-quick,queued,ship,firstmate,Aged quick call,none,captain,"[reversible; options: A|B; recommended: A] pick","-"\n'
+    printf '  dated-call,queued,ship,firstmate,Dated captain call,none,captain,later,%s\n' "$back10"
+    printf '  passed-call,queued,ship,firstmate,Captain call back today,none,captain,back now,%s\n' "$today"
+    printf '  board-member,queued,noticed,fleet,Board member,none,captain,on the board,"-"\n'
+    printf '  place-member,queued,task,business,Office errand,none,captain,at the office,%s\n' "$back12"
+    printf '  near-future,queued,ship,firstmate,"Near future hold title\\n... (truncated, 98 chars total - use show near-future --full to see complete text)",none,future,soon,%s\n' "$near"
+    printf '  far-future,queued,ship,skills,Far future hold,none,future,later,%s\n' "$near_out"
+    printf '  due-soon,queued,ship,firstmate,Due soon,none,future,later,%s\n' "$back40"
+    printf '  due-late,queued,ship,firstmate,Due later,none,future,later,%s\n' "$back40"
+    printf '  title-dated,queued,task,business,"[%s] Title dated, with comma",none,external,waiting,"-"\n' "$due_near"
+    printf '  external-undated,queued,task,business,Waiting on a buyer,none,external,waiting,"-"\n'
+    printf '  compact-startup,in_flight,ship,firstmate,Compact startup digest,none,captain,captain choice pending,"-"\n'
+    printf '  blocked-followup,queued,scout,firstmate,Follow compact startup,compact-startup,future,later,%s\n' "$back40"
   } > "$rows"
-  # Due dates come from the backlog file's own bodies, because `tasks-axi list`
-  # cuts a body at 500 characters; due-soon's Due line sits past that point.
+  # Hold-set stamps, since dates, Due: and Batch: lines come from the backlog
+  # file's own bodies, because `tasks-axi list` cuts a body at 500 characters.
   {
-    printf -- '- [ ] due-soon - Due soon (repo: firstmate) (kind: ship) (hold: later) (hold-until: %s)\n' "$later"
+    printf -- '- [ ] live-call - Live captain call (repo: firstmate) (kind: ship) (since %s)\n' "$older"
+    printf '  Captain hold set: %sT10:00:00Z\n' "$recent"
+    printf -- '- [ ] aged-call - Aged captain call (repo: firstmate) (kind: ship) (since %s)\n' "$older"
+    printf '  Captain hold set: %sT10:00:00Z\n' "$old"
+    printf -- '- [ ] aged-quick - Aged quick call (repo: firstmate) (kind: ship) (since %s)\n' "$older"
+    printf -- '- [ ] board-member - Board member (repo: fleet) (kind: noticed) (since %s)\n' "$older"
+    printf '  Captain hold set: %sT10:00:00Z\n' "$old"
+    printf '  Batch: board:subpass-board\n'
+    printf -- '- [ ] place-member - Office errand (repo: business) (kind: task) (since %s)\n' "$older"
+    printf '  Batch: office\n'
+    printf -- '- [ ] due-soon - Due soon (repo: firstmate) (kind: ship) (hold: later)\n'
     i=1
     while [ "$i" -le 12 ]; do
       printf '  BODY-SECRET note line %s padded well past the listing body limit\n' "$i"
       i=$((i + 1))
     done
-    printf '  Due: %s\n' "$due_soon"
-    printf -- '- [ ] due-late - Due later (repo: firstmate) (kind: ship) (hold: later) (hold-until: %s)\n' "$later"
-    printf '  Due: %s\n' "$due_late"
+    printf '  Due: %s\n' "$due_near"
+    printf -- '- [ ] due-late - Due later (repo: firstmate) (kind: ship) (hold: later)\n'
+    printf '  Due: %s\n' "$due_out"
   } >> "$home/data/backlog.md"
 
   out=$(FM_FAKE_TASKS_AXI_HELD_ROWS="$rows" run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   held_group=$(printf '%s\n' "$out" | sed -n '/^held (captain- or time-gated/,/^blocked queued:/p')
 
-  assert_contains "$held_group" "count: 6
-tasks[6]{id,state,kind,repo,title,blocked_by,hold_kind,hold_reason,hold_until}:
-  near-dated,queued,ship,firstmate,Near dated hold,none,future,\"soon, really\",$near
-  edge-seven,queued,ship,firstmate,Gate seven days out,none,future,soon,$edge
-  undated-captain,queued,ship,firstmate,Undated captain hold,none,captain,captain choice pending,\"-\"
-  far-in-flight,in_flight,ship,firstmate,Far in flight,none,future,later,$far
-  far-blocked,queued,ship,firstmate,Far blocked,base-x,future,later,$far
-  due-soon,queued,ship,firstmate,Due soon,none,future,later,$later
-parked until $m1: 2 held rows (bin/fm-tasks-axi.sh ready --include-held lists them)
-parked until $m2: 2 held rows (bin/fm-tasks-axi.sh ready --include-held lists them)
-" "the held group did not keep near, undated, in-flight, blocked, and due-soon rows whole and count the later ones per month"
-  assert_not_contains "$out" "far-dated," "a held row back more than 7 days out was listed in full"
-  assert_not_contains "$out" "title-far," "a held row whose title date is more than 7 days out was listed in full"
-  assert_not_contains "$out" "later-dated," "a held row back more than 7 days out was listed in full"
-  assert_not_contains "$out" "due-late," "a held row due more than 14 days out was listed in full"
+  assert_contains "$held_group" "count: 5
+tasks[5]{id,state,kind,repo,title,blocked_by,hold_kind,hold_reason,hold_until}:
+  live-call,queued,ship,firstmate,Live captain call,none,captain,pick one,\"-\"
+  passed-call,queued,ship,firstmate,Captain call back today,none,captain,back now,$today
+  near-future,queued,ship,firstmate,\"Near future hold title...\",none,future,soon,$near
+  due-soon,queued,ship,firstmate,Due soon,none,future,later,$back40
+  title-dated,queued,task,business,\"[$due_near] Title dated, with comma\",none,external,waiting,\"-\"
+(15 held: 5 above - live captain calls and rows due or back within 2 days; 2 listed under in flight or blocked queued; 8 counted below)
+counted held rows, by group (bin/fm-tasks-axi.sh list --state held --fields blocked_by,hold_kind,hold_reason,hold_until lists every one):
+  captain board: 1 (board:subpass-board 1)
+  captain place: 1 (office 1); next back $back12
+  captain quick: 1 (firstmate 1)
+  captain hands: 2 (firstmate 2); next back $back10
+  external: 1 (business 1)
+  future: 2 (firstmate 1, skills 1); next back $near_out
+" "the held group did not keep live calls and near rows whole and count the rest per group"
+  assert_not_contains "$held_group" "compact-startup," "a held row the in-flight group lists was printed again"
+  assert_not_contains "$held_group" "blocked-followup," "a held row the blocked group lists was printed again"
+  assert_not_contains "$out" "parked until " "the replaced count line per month still printed"
   assert_not_contains "$out" "BODY-SECRET" "the held listing leaked a task body"
   assert_not_contains "$out" "Due: " "the held listing leaked a due line"
+  assert_not_contains "$out" "(truncated, " "a cut title kept tasks-axi's long truncation pointer"
   assert_contains "$out" "  compact-startup,in_flight,ship,firstmate,Compact startup digest,none,captain,captain choice pending" \
-    "the in-flight group changed when held rows folded"
+    "the in-flight group changed when held rows were counted"
   assert_contains "$out" '  blocked-followup,queued,scout,firstmate,Follow compact startup,compact-startup,"-","-"' \
-    "the blocked queued group changed when held rows folded"
-  assert_contains "$out" "  ready-2,queued,ship,firstmate,Ready item 2" \
-    "the ready group changed when held rows folded"
+    "the blocked queued group changed when held rows were counted"
 
-  pass "held rows back more than 7 days out and not due soon fold into one count line per month, and every other row prints in full"
+  pass "held rows print in full only as live captain calls or when due or back within 2 days, and the rest are counted per group"
 }
 
 # The bound may only ever cut the dispatchable-now listing, and whatever it cuts
@@ -2242,16 +2272,27 @@ EOF
   make_fake_tasks_axi_compact "$fakebin"
   make_fake_ps_claude "$fakebin"
   write_long_body_backlog "$home/data/backlog.md"
+  # A ready row due within 2 days is shown even past the bound, with its date;
+  # one due later is not.
+  {
+    printf -- '- [ ] ready-6 - Ready item 6 (repo: firstmate) (kind: ship)\n'
+    printf '  Due: %s\n' "$(date_in_days 3)"
+    printf -- '- [ ] ready-7 - Ready item 7 (repo: firstmate) (kind: ship)\n'
+    printf '  Due: %s\n' "$(date_in_days 2)"
+  } >> "$home/data/backlog.md"
 
   out=$(FM_FAKE_TASKS_AXI_READY=7 FM_SESSION_START_QUEUED_LIMIT=3 \
     run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
-  assert_contains "$out" "ready-3,queued,ship,firstmate,Ready item 3" \
+  assert_contains "$out" "  ready-3,ship,firstmate,-" \
     "the queued bound dropped a row inside its own limit"
-  assert_not_contains "$out" "ready-4,queued" "the queued bound did not actually bound the ready listing"
-  assert_contains "$out" "(shown 3 of 7 ready queued item(s))" \
+  assert_not_contains "$out" "ready-4," "the queued bound did not actually bound the ready listing"
+  assert_not_contains "$out" "ready-6," "the queued bound let through a row due more than 2 days out"
+  assert_contains "$out" "  ready-7,ship,firstmate,$(date_in_days 2)" \
+    "the queued bound hid a row due within 2 days"
+  assert_contains "$out" "(shown 4 of 7 ready queued item(s); a row due within 2 days is always shown)" \
     "the bounded queued listing did not report what it showed"
-  assert_contains "$out" "(4 more queued - bin/fm-tasks-axi.sh ready)" \
+  assert_contains "$out" "(3 more queued - bin/fm-tasks-axi.sh ready)" \
     "the bounded queued listing did not disclose an exact remainder and how to see it"
 
   # The bound is for dispatchable work only: held and blocked rows stay whole.
@@ -3279,7 +3320,7 @@ test_non_pi_session_start_leaves_branch_state_untouched
 test_session_start_seeds_the_outcome_display_tail_while_away
 test_backlog_compact_tasks_axi_omits_bodies_and_keeps_metadata
 test_backlog_queued_bound_discloses_its_remainder
-test_backlog_held_far_gated_rows_fold_into_one_count_line_per_month
+test_backlog_held_rows_show_live_calls_and_near_dates_and_count_the_rest
 test_backlog_compact_manual_backend_skips_indented_bodies
 test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback
 test_fleet_digest_empty_fleet

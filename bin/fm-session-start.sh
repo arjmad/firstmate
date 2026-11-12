@@ -148,18 +148,21 @@
 #   - `done` rows are never listed. Retained completion history belongs to the
 #     reporting surfaces (bin/fm-bearings-snapshot.sh, /ahoy), and at startup it
 #     is pure weight - 10 done rows cost 3.3KB in an observed main-home digest.
-#   - Every in-flight, held, and blocked row is listed IN FULL, with its
+#   - Every in-flight and blocked row is listed IN FULL, with its
 #     hold_kind/hold_reason and blocked_by. Those are the rows AGENTS.md
 #     sections 7 and 10 make actionable at startup, so they are never bounded
-#     away. The one exception (fork patch, print_held_far_folded): an unblocked
-#     queued held row that comes back more than FAR_HOLD_DAYS out and is not due
-#     within DUE_SOON_DAYS cannot act this week, so the held group counts those
-#     in one `parked until <YYYY-MM>:` line per month naming the command that
-#     lists them.
-#   - Only the plain queued (dispatchable-now) listing is bounded, by
-#     FM_SESSION_START_QUEUED_LIMIT, default 20. Anything it omits is disclosed
-#     with an exact remainder count and the command that shows the rest, so a
-#     deep queue costs a counter rather than kilobytes.
+#     away.
+#   - A held row is listed in full only when the helm can act on it now: a
+#     live captain call, or a row due or back within NEAR_DAYS (fork patch,
+#     print_held_counted). Every other held row is counted in one line per
+#     group naming the command that lists them all, and a held row the
+#     in-flight or blocked group already lists is not printed twice.
+#   - Only the ready (dispatchable-now) listing is bounded, by
+#     FM_SESSION_START_QUEUED_LIMIT, default 20, and it keeps each row's id,
+#     kind, repo and due date; a row due within NEAR_DAYS is always shown.
+#     Anything it omits is disclosed with an exact remainder count and the
+#     command that shows the rest, so a deep queue costs a counter rather than
+#     kilobytes.
 #     (This replaces FM_SESSION_START_BACKLOG_LIMIT, which bounded the whole
 #     listing indiscriminately and so could drop a held or blocked row.)
 # When compatible tasks-axi is selected and available, the shared tasks-axi
@@ -172,17 +175,18 @@
 # When manual mode is selected, or tasks-axi is unavailable or incompatible,
 # this script prints only backlog section headings and item title lines, so
 # title-line hold and blocked-by metadata remain visible while indented bodies
-# stay out of the startup digest; the same never-bound-a-held-or-blocked-row
-# rule applies, recognized there from the title line's own hold/blocked-by
-# markers.
+# stay out of the startup digest; that fallback keeps every held and blocked
+# title line, recognized from the title line's own hold/blocked-by markers.
 # Full bodies are targeted follow-up only: `bin/fm-tasks-axi.sh show <id> --full` when
 # compatible tasks-axi is available, or `data/backlog.md` when the file body is
 # truly needed.
 #
-# STATUS TAILS: FM_SESSION_START_STATUS_TAIL bounds how many lines each task's
-# tail prints, and bin/fm-line-cap-lib.sh bounds how long each of those lines
-# may be. Both bounds are safe because the section prints every task's full
-# status log path, and AGENTS.md section 8 treats a status line as a wake EVENT
+# STATUS TAILS: FM_SESSION_START_STATUS_TAIL (default 3) bounds how many lines
+# each task's tail prints, an orphan log (no task record) prints only its
+# newest line, and bin/fm-line-cap-lib.sh bounds how long each line may be.
+# The bounds are safe because the section names every full status log's path
+# once, the wake drain's OPEN DECISIONS folds every still-open decision from
+# whole logs, and AGENTS.md section 8 treats a status line as a wake EVENT
 # rather than current state - bin/fm-crew-state.sh owns current state.
 #
 # RUNTIME BOUND: the digest is now executed through a native session-open
@@ -388,6 +392,8 @@ PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 . "$SCRIPT_DIR/fm-line-cap-lib.sh"
 # shellcheck source=bin/fm-hold-reason-lib.sh
 . "$SCRIPT_DIR/fm-hold-reason-lib.sh"
+# shellcheck source=bin/fm-backlog-row-lib.sh
+. "$SCRIPT_DIR/fm-backlog-row-lib.sh"
 
 # One tasks-axi compatibility verdict per session start. The probe costs three
 # tasks-axi subprocesses and this digest needs the same answer twice - here for
@@ -401,8 +407,8 @@ PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 if fm_tasks_axi_compatible; then TASKS_AXI_COMPATIBLE=1; else TASKS_AXI_COMPATIBLE=0; fi
 TASKS_AXI_CHECK_REASON=$(fm_tasks_axi_check_reason)
 
-STATUS_TAIL=${FM_SESSION_START_STATUS_TAIL:-5}
-case "$STATUS_TAIL" in ''|*[!0-9]*) STATUS_TAIL=5 ;; esac
+STATUS_TAIL=${FM_SESSION_START_STATUS_TAIL:-3}
+case "$STATUS_TAIL" in ''|*[!0-9]*) STATUS_TAIL=3 ;; esac
 QUEUED_LIMIT=${FM_SESSION_START_QUEUED_LIMIT:-20}
 case "$QUEUED_LIMIT" in ''|*[!0-9]*|0) QUEUED_LIMIT=20 ;; esac
 # One per-task endpoint read may never outlive this bound: a hung backend CLI
@@ -502,24 +508,118 @@ strip_axi_help() {
   awk '/^help\[/ { exit } { print }'
 }
 
-# Bound the dispatchable-now listing without rewriting the tool's own rendering:
-# `tasks-axi ready` rows are the indented lines under its ready[N]{...} header,
-# and every other line it prints (its count, its public-followup line) passes
-# through untouched. Whatever is cut is disclosed exactly.
+# The re-entry listing (fork patch,
+# docs/fork-decisions/2026-11-12-lean-reentry-digest.md, which replaces the
+# 2026-11-08 count line per month). A held row prints in full only when it is a
+# live captain call or is due or back within NEAR_DAYS; every other held row is
+# counted in one line per group, using the groups of
+# docs/fork-decisions/2026-11-11-calls-grouped-by-what-it-takes.md for captain
+# calls (board, place, quick, hands) and the hold kind for the rest, each split
+# by Batch: tag or repo. A held row that the in-flight or blocked group already
+# prints is not printed twice. The ready group keeps id, kind, repo and due date.
+#
+# "Live" is bin/fm-fleet-snapshot.sh's hold_bucket "live", read from the same
+# structured fields: a captain hold that is not blocked, whose hold_until is
+# absent or not after today, and that is not an undated hold at least
+# FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS old (its `Captain hold set:` stamp, else its
+# `since` date). A row's back-on date is its hold_until, else a leading
+# [YYYY-MM-DD] title date, and its due date is its `Due:` body line. Body facts
+# come from the backlog file itself, because `tasks-axi list` cuts bodies, and
+# bin/fm-backlog-row-lib.sh owns the Due: and Batch: patterns. Fields split as
+# bin/fm-hold-reason-lib.sh splits them: a quoted value with backslash escapes,
+# or a run of non-commas. An unrecognized listing passes through unchanged.
+NEAR_DAYS=2
+HOLD_AGE_DAYS=${FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS:-14}
+case "$HOLD_AGE_DAYS" in ''|*[!0-9]*) HOLD_AGE_DAYS=14 ;; esac
+HELD_LIST_COMMAND="bin/fm-tasks-axi.sh list --state held --fields $BACKLOG_FIELDS,hold_until"
+
+date_in_days() {  # <signed days>: the local date that many days from today
+  local n=$1
+  case "$n" in -*) ;; *) n="+$n" ;; esac
+  date -d "$n days" +%Y-%m-%d 2>/dev/null || date -v"$n"d +%Y-%m-%d 2>/dev/null
+}
+
+# backlog_row_facts <path>: one "<id> TAB <due> TAB <batch> TAB <hold-set> TAB
+# <since>" line per backlog item in the markdown backend's `- [ ] <id> - ...`
+# form, "-" for a fact the row lacks. The hold-set stamp is read from the
+# first body line only, as bin/fm-fleet-snapshot.sh reads it; a reader takes
+# the last Due: and Batch: line, as bin/fm-backlog-row-lib.sh says.
+backlog_row_facts() {
+  local due_re batch_re
+  due_re=$(fm_backlog_row_field_pattern due) || return 0
+  batch_re=$(fm_backlog_row_field_pattern batch) || return 0
+  LC_ALL=C awk -v due_re="$due_re" -v batch_re="$batch_re" '
+    function dash(v) { return v == "" ? "-" : v }
+    function flush() {
+      if (id != "") print id "\t" dash(due) "\t" dash(batch) "\t" dash(set) "\t" dash(since)
+      id = ""
+    }
+    /^[-*] \[.\] [^ ]+ / {
+      flush()
+      rest = $0; sub(/^[-*] \[.\] /, "", rest); split(rest, w, " "); id = w[1]
+      due = ""; batch = ""; set = ""; since = ""; first = 1
+      if (match($0, /\(since [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)/)) since = substr($0, RSTART + 7, 10)
+      next
+    }
+    /^[^[:space:]]/ { flush(); next }
+    id != "" && /^[[:space:]]+[^[:space:]]/ {
+      if (first) {
+        first = 0
+        if (match($0, /^[[:space:]]*Captain hold set:[[:space:]]*[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/))
+          set = substr($0, RSTART + RLENGTH - 10, 10)
+      }
+      if ($0 ~ due_re) { v = $0; sub(/^[[:space:]]*Due:[[:space:]]*/, "", v); due = substr(v, 1, 10) }
+      if ($0 ~ batch_re) { v = $0; sub(/^[[:space:]]*Batch:[[:space:]]*/, "", v); sub(/[[:space:]]+$/, "", v); batch = v }
+    }
+    END { flush() }
+  ' "$1" 2>/dev/null
+}
+
+# listing_ids: the row ids of every tasks-axi table on stdin, one per line.
+listing_ids() {
+  awk '/^[a-z_]+\[[0-9]+\]\{/ { rows = 1; next } rows && /^  / { split(substr($0, 3), f, ","); print f[1]; next } { rows = 0 }'
+}
+
+# tasks-axi marks a title it cut at 80 characters with a long pointer to
+# `show <id> --full`; the section prints that pointer once, so each cut title
+# keeps only "...".
+shorten_axi_titles() {
+  sed -E 's/\\n\.\.\. \(truncated, [0-9]+ chars total - use show [^ ]+ --full to see complete text\)/.../g'
+}
+
+# Bound the dispatchable-now listing and keep each row's id, kind, repo and due
+# date: the brief and body are read at dispatch (`show <id> --full`), and the
+# due date is what can make a ready row urgent. A row due within NEAR_DAYS is
+# always shown; the bound cuts only the others, and whatever it cuts is
+# disclosed exactly. Every other line tasks-axi prints (its count, its
+# public-followup line) passes through untouched.
 print_ready_queued_bounded() {
-  local ready=$1
-  printf '%s\n' "$ready" | awk -v max="$QUEUED_LIMIT" '
+  local ready=$1 near
+  near=$(date_in_days "$NEAR_DAYS") || near=''
+  printf '%s\n' "$ready" | FM_ROW_FACTS="$ROW_FACTS" LC_ALL=C awk -v max="$QUEUED_LIMIT" -v near="$near" -v near_days="$NEAR_DAYS" '
+    BEGIN {
+      n = split(ENVIRON["FM_ROW_FACTS"], fl, "\n")
+      for (i = 1; i <= n; i++) { split(fl[i], f, "\t"); if (f[2] ~ /^[0-9]/) due[f[1]] = f[2] }
+    }
     /^help\[/ { exit }
-    /^ready\[/ { rows = 1; print; next }
+    /^ready\[[0-9]+\]\{id,state,kind,repo,title\}:$/ {
+      rows = 1; slim = 1; hdr = $0; sub(/\{.*$/, "{id,kind,repo,due}:", hdr); print hdr; next
+    }
+    /^ready\[/ { rows = 1; slim = 0; print; next }
     rows && /^[[:space:]]/ {
       total++
-      if (shown < max) { print; shown++ }
+      split(substr($0, 3), f, ",")
+      d = (f[1] in due) ? due[f[1]] : "-"
+      urgent = (near != "" && d != "-" && d <= near)
+      if (shown < max || urgent) {
+        print (slim ? "  " f[1] "," f[3] "," f[4] "," d : $0); shown++
+      }
       next
     }
     { rows = 0; print }
     END {
       if (total > 0) {
-        printf "(shown %d of %d ready queued item(s))\n", shown, total
+        printf "(shown %d of %d ready queued item(s); a row due within %d days is always shown)\n", shown, total, near_days
         if (total > shown) {
           printf "(%d more queued - bin/fm-tasks-axi.sh ready)\n", total - shown
         }
@@ -528,43 +628,22 @@ print_ready_queued_bounded() {
   '
 }
 
-# Fold far-parked held rows into one count line per month (Arjun 2026-11-08,
-# fork patch docs/fork-decisions/2026-11-08-far-holds-count-line.md). This
-# applies to the tasks-axi listing only; the title-line fallback is unchanged.
-# The held listing is asked for with hold_until appended, and stays shown on
-# every printed row. A row's back-on date is its hold_until, else a leading
-# [YYYY-MM-DD] title date, and its due date is a `Due: YYYY-MM-DD` body line,
-# read from the backlog file itself because `tasks-axi list` truncates bodies.
-# A row folds only when it is queued, names no blocker, comes back more than
-# FAR_HOLD_DAYS out, and is not due within DUE_SOON_DAYS, so
-# `tasks-axi ready --include-held` lists every folded row. Fields split as
-# bin/fm-hold-reason-lib.sh splits them: a quoted value with backslash escapes,
-# or a run of non-commas. An unrecognized listing passes through unchanged.
-FAR_HOLD_DAYS=7
-DUE_SOON_DAYS=14
-
-date_in_days() {
-  date -d "+$1 days" +%Y-%m-%d 2>/dev/null || date -v+"$1"d +%Y-%m-%d 2>/dev/null
-}
-
-# backlog_due_dates <path>: "<id> <YYYY-MM-DD>" for each item whose indented
-# body carries a `Due:` line, in the markdown backend's `- [ ] <id> - ...` form.
-backlog_due_dates() {
-  awk '
-    /^[-*] \[.\] [^ ]+ / { id = $4; next }
-    /^[^[:space:]]/ { id = ""; next }
-    id != "" && !(id in seen) && /^[[:space:]]+Due: [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9][[:space:]]*$/ {
-      seen[id] = 1; print id, $2
-    }
-  ' "$1" 2>/dev/null
-}
-
-print_held_far_folded() {
-  local held=$1 path=$2 back_horizon due_horizon dues
-  back_horizon=$(date_in_days "$FAR_HOLD_DAYS") || back_horizon=''
-  due_horizon=$(date_in_days "$DUE_SOON_DAYS") || due_horizon=''
-  dues=$(backlog_due_dates "$path" | tr '\n' ' ')
-  printf '%s\n' "$held" | LC_ALL=C awk -v back_horizon="$back_horizon" -v due_horizon="$due_horizon" -v dues="$dues" '
+# print_held_counted <listed-ids>: the held listing on stdin, decoded and with
+# its help block stripped. Rows already listed in the in-flight or blocked
+# group are dropped, live captain calls and rows due or back within NEAR_DAYS
+# stay in full, and every other row is counted per group after the table.
+print_held_counted() {
+  local listed=$1 today near cutoff
+  today=$(date +%Y-%m-%d)
+  near=$(date_in_days "$NEAR_DAYS") || near=''
+  cutoff=$(date_in_days "-$HOLD_AGE_DAYS") || cutoff=''
+  if [ -z "$near" ] || [ -z "$cutoff" ]; then
+    cat
+    return 0
+  fi
+  FM_ROW_FACTS="$ROW_FACTS" FM_LISTED_IDS="$listed" LC_ALL=C awk \
+    -v today="$today" -v near="$near" -v cutoff="$cutoff" -v near_days="$NEAR_DAYS" \
+    -v list_command="$HELD_LIST_COMMAND" '
     function split_row(s, out,   n) {
       n = 0
       while (1) {
@@ -577,7 +656,33 @@ print_held_far_folded() {
     }
     function unquote(v) { if (v ~ /^".*"$/) v = substr(v, 2, length(v) - 2); return v }
     function is_date(v) { return v ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ }
-    BEGIN { n = split(dues, kv, " "); for (i = 1; i + 1 <= n; i += 2) due[kv[i]] = kv[i + 1] }
+    function quick(r,   p, o) {
+      p = index(r, "]"); o = index(r, "; options: ")
+      return r ~ /^\[(reversible|arjun-only)/ && o > 0 && o < p
+    }
+    function count(g, part, back) {
+      if (!(g in groups)) { groups[g] = 0; gnames[++ngroups] = g }
+      groups[g]++
+      if (!((g, part) in parts)) { parts[g, part] = 0; pnames[g, ++nparts[g]] = part }
+      parts[g, part]++
+      if (is_date(back) && back > today && (!(g in next_back) || back < next_back[g])) next_back[g] = back
+    }
+    function rank(g) {
+      if (g == "captain board") return "0"
+      if (g == "captain place") return "1"
+      if (g == "captain quick") return "2"
+      if (g == "captain hands") return "3"
+      return "4" g
+    }
+    BEGIN {
+      n = split(ENVIRON["FM_ROW_FACTS"], fl, "\n")
+      for (i = 1; i <= n; i++) {
+        if (split(fl[i], f, "\t") < 5) continue
+        due[f[1]] = f[2]; batch[f[1]] = f[3]; hold_set[f[1]] = f[4]; since[f[1]] = f[5]
+      }
+      n = split(ENVIRON["FM_LISTED_IDS"], ll, "\n")
+      for (i = 1; i <= n; i++) if (ll[i] != "") listed[ll[i]] = 1
+    }
     { line[++lines] = $0 }
     /^count: [0-9]+$/ && !count_at { count_at = lines; next }
     /^tasks\[[0-9]+\]\{.*,hold_until\}:$/ && !head_at {
@@ -590,41 +695,70 @@ print_held_far_folded() {
     }
     in_rows && /^  / {
       last_row = lines
-      if (split_row(substr($0, 3), f) != ncol) next
-      back = unquote(f[col["hold_until"]])
+      total++
+      # A row that does not split cleanly is printed whole, never guessed at.
+      if (split_row(substr($0, 3), f) != ncol) { shown++; next }
+      id = f[col["id"]]
+      if (id in listed) { drop[lines] = 1; elsewhere++; next }
+      hold_kind = unquote(f[col["hold_kind"]])
+      until_date = unquote(f[col["hold_until"]])
+      back = until_date
       if (!is_date(back)) {
         back = unquote(f[col["title"]])
         back = (back ~ /^\[[0-9-]+\]/) ? substr(back, 2, 10) : ""
       }
-      d = due[f[col["id"]]]
-      if (back_horizon != "" && due_horizon != "" && is_date(back) && back > back_horizon \
-          && !(d != "" && d <= due_horizon) \
-          && f[col["state"]] == "queued" && f[col["blocked_by"]] == "none") {
-        month = substr(back, 1, 7)
-        if (!(month in parked)) months[++nmonths] = month
-        parked[month]++; folded++; drop[lines] = 1
+      d = (id in due) ? due[id] : ""
+      soon = (is_date(back) && back <= near) || (is_date(d) && d <= near)
+      live = 0
+      if (hold_kind == "captain") {
+        if (is_date(until_date)) live = (until_date <= today)
+        else {
+          stamp = hold_set[id]
+          if (!is_date(stamp)) stamp = since[id]
+          live = !(is_date(stamp) && stamp <= cutoff)
+        }
       }
+      if (live || soon) { shown++; next }
+      drop[lines] = 1; counted++
+      repo = unquote(f[col["repo"]])
+      tag = (id in batch && batch[id] != "-") ? batch[id] : ""
+      if (hold_kind == "captain" && tag != "") count((tag ~ /^board:/) ? "captain board" : "captain place", tag, back)
+      else if (hold_kind == "captain") count(quick(unquote(f[col["hold_reason"]])) ? "captain quick" : "captain hands", repo, back)
+      else count((hold_kind == "" || hold_kind == "-") ? "held" : hold_kind, repo, back)
       next
     }
     in_rows { in_rows = 0 }
     END {
       if (head_at) {
-        total = line[head_at]; sub(/^tasks\[/, "", total); sub(/\].*$/, "", total)
-        if (count_at) line[count_at] = "count: " (total - folded)
-        sub(/^tasks\[[0-9]+\]/, "tasks[" (total - folded) "]", line[head_at])
+        if (count_at) line[count_at] = "count: " shown
+        sub(/^tasks\[[0-9]+\]/, "tasks[" shown "]", line[head_at])
       }
-      for (i = 2; i <= nmonths; i++) {
-        m = months[i]
-        for (j = i - 1; j >= 1 && months[j] > m; j--) months[j + 1] = months[j]
-        months[j + 1] = m
+      for (i = 2; i <= ngroups; i++) {
+        g = gnames[i]
+        for (j = i - 1; j >= 1 && rank(gnames[j]) > rank(g); j--) gnames[j + 1] = gnames[j]
+        gnames[j + 1] = g
       }
+      at = last_row ? last_row : head_at
       for (i = 1; i <= lines; i++) {
         if (!drop[i]) print line[i]
-        if (i == last_row) {
-          for (k = 1; k <= nmonths; k++) {
-            printf "parked until %s: %d held row%s (bin/fm-tasks-axi.sh ready --include-held lists them)\n", \
-              months[k], parked[months[k]], (parked[months[k]] == 1 ? "" : "s")
+        if (i != at || !head_at || elsewhere + counted == 0) continue
+        printf "(%d held: %d above - live captain calls and rows due or back within %d days; %d listed under in flight or blocked queued; %d counted below)\n", \
+          total, shown, near_days, elsewhere, counted
+        if (counted == 0) continue
+        printf "counted held rows, by group (%s lists every one):\n", list_command
+        for (k = 1; k <= ngroups; k++) {
+          g = gnames[k]
+          # Parts by count, most first, then by name.
+          np = nparts[g]
+          for (a = 1; a <= np; a++) order[a] = pnames[g, a]
+          for (a = 2; a <= np; a++) {
+            p = order[a]
+            for (b = a - 1; b >= 1 && (parts[g, order[b]] < parts[g, p] || (parts[g, order[b]] == parts[g, p] && order[b] > p)); b--) order[b + 1] = order[b]
+            order[b + 1] = p
           }
+          detail = ""
+          for (a = 1; a <= np; a++) detail = detail (a > 1 ? ", " : "") order[a] " " parts[g, order[a]]
+          printf "  %s: %d (%s)%s\n", g, groups[g], detail, ((g in next_back) ? "; next back " next_back[g] : "")
         }
       }
     }
@@ -632,7 +766,7 @@ print_held_far_folded() {
 }
 
 print_backlog_tasks_axi_compact() {
-  local path=$1 in_flight held blocked ready err
+  local path=$1 in_flight held blocked ready err listed
   if ! in_flight=$(tasks-axi list --file "$path" --state in_flight --fields "$BACKLOG_FIELDS" 2>&1); then
     err=$in_flight
   elif ! held=$(tasks-axi list --file "$path" --state held --fields "$BACKLOG_FIELDS,hold_until" 2>&1); then
@@ -642,15 +776,17 @@ print_backlog_tasks_axi_compact() {
   elif ! ready=$(tasks-axi ready --file "$path" 2>&1); then
     err=$ready
   else
-    printf 'compact backlog listing (tasks-axi; done rows omitted; every in-flight and blocked row shown in full, and every held row that is undated, back within %s days, or due within %s days; later held rows counted per month; ready queued bounded to %s; task bodies omitted)\n' \
-      "$FAR_HOLD_DAYS" "$DUE_SOON_DAYS" \
-      "$QUEUED_LIMIT"
+    ROW_FACTS=$(backlog_row_facts "$path")
+    listed=$(printf '%s\n%s\n' "$(printf '%s\n' "$in_flight" | strip_axi_help)" \
+      "$(printf '%s\n' "$blocked" | strip_axi_help)" | listing_ids)
+    printf 'compact backlog listing (tasks-axi; done rows omitted; every in-flight and blocked row in full; a held row in full only when it is a live captain call or due or back within %s days, every other held row counted per group; ready queued as id, kind, repo and due date, bounded to %s; titles cut at 80 characters end in "..."; task bodies omitted)\n' \
+      "$NEAR_DAYS" "$QUEUED_LIMIT"
     printf '\nin flight:\n'
-    printf '%s\n' "$in_flight" | fm_hold_reason_decode_stream | strip_axi_help
-    printf '\nheld (captain- or time-gated; an in-flight item that is also held appears in both groups):\n'
-    print_held_far_folded "$held" "$path" | fm_hold_reason_decode_stream | strip_axi_help
+    printf '%s\n' "$in_flight" | fm_hold_reason_decode_stream | strip_axi_help | shorten_axi_titles
+    printf '\nheld (captain- or time-gated; a held row already listed under in flight or blocked queued is not repeated):\n'
+    printf '%s\n' "$held" | fm_hold_reason_decode_stream | strip_axi_help | shorten_axi_titles | print_held_counted "$listed"
     printf '\nblocked queued:\n'
-    printf '%s\n' "$blocked" | fm_hold_reason_decode_stream | strip_axi_help
+    printf '%s\n' "$blocked" | fm_hold_reason_decode_stream | strip_axi_help | shorten_axi_titles
     printf '\nready queued (dispatchable now):\n'
     print_ready_queued_bounded "$ready"
     return 0
@@ -681,17 +817,23 @@ print_backlog_compact() {
   fi
 }
 
-print_status_tail() {
-  local status=$1 line
-  printf 'status tail (last %s line(s), each capped at %s characters, wake-EVENT history, not current state; full log: %s):\n' \
-    "$STATUS_TAIL" "$FM_LINE_CAP_DEFAULT" "$status"
+# print_status_tail_legend: the terms every tail below shares, printed once per
+# section rather than once per task.
+print_status_tail_legend() {
+  printf 'Each status tail below is the last %s line(s) of %s/<id>.status (an orphan log shows its last line), each capped at %s characters: wake-EVENT history, not current state.\n' \
+    "$STATUS_TAIL" "$STATE" "$FM_LINE_CAP_DEFAULT"
+}
+
+print_status_tail() {  # <status-file> [<lines>]
+  local status=$1 lines=${2:-$STATUS_TAIL} line
+  printf 'status tail:\n'
   # A crewmate writes its own status lines, so their length is unbounded: one
   # observed line ran 865 characters. Cap each one the way the wake digest's
   # OPEN DECISIONS section does; the lede carries the state word and the key,
-  # and the full log path above reaches the rest.
+  # and the full log at the path the legend names reaches the rest.
   while IFS= read -r line || [ -n "$line" ]; do
     fm_cap_line "$line"
-  done < <(tail -n "$STATUS_TAIL" "$status")
+  done < <(tail -n "$lines" "$status")
 }
 
 # fm_session_start_endpoint_read <backend> <target> [expected-label]: ONE
@@ -1036,10 +1178,12 @@ Go to a source directly only when:
   - this digest flagged it ABSENT (then rebuild or create it per AGENTS.md),
   - its contents looked unparseable or corrupt,
   - an individual full status log is needed for older wake-event history, or a
-    status line was capped and its tail matters (each task's full log path is
-    printed with its tail),
-  - a full task body is needed (bin/fm-tasks-axi.sh show <id> --full, or data/backlog.md),
-  - the backlog listing disclosed omitted queued items and this turn needs them,
+    status line was capped and its tail matters (the status tail legend names
+    each task's full log path),
+  - a full task body or full title is needed (bin/fm-tasks-axi.sh show <id> --full,
+    or data/backlog.md),
+  - the backlog listing counted held rows or omitted queued items and this turn
+    needs them (the listing names the command that lists them),
   - the NETWORK CHECKS section reported its checks still IN PROGRESS and this
     turn needs their verdict (bin/fm-startup-network.sh report),
   - or a STARTUP TRUNCATED banner named the stage that would have printed it, in
@@ -1056,6 +1200,7 @@ section "FLEET STATE"
 print_backlog_compact "$DATA/backlog.md" "data/backlog.md"
 
 subsection "Work under way (state/*.meta)"
+print_status_tail_legend
 META_FOUND=0
 for meta in "$STATE"/*.meta; do
   [ -f "$meta" ] || continue
@@ -1102,7 +1247,9 @@ for status in "$STATE"/*.status; do
   [ -f "$STATE/$id.meta" ] && continue
   ORPHAN_STATUS_FOUND=1
   printf '\n--- %s ---\n' "$id"
-  print_status_tail "$status"
+  # No task record means no worker to recover: its open decisions are already
+  # folded into the wake drain's OPEN DECISIONS, so its newest line is enough.
+  print_status_tail "$status" 1
 done
 [ "$ORPHAN_STATUS_FOUND" -eq 1 ] || printf '(none)\n'
 
