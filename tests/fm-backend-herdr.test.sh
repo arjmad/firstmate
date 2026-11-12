@@ -5892,24 +5892,28 @@ test_send_text_submit_claude_2_1_291_marked_popup_row_is_proven_and_submitted() 
 # typed there lands on the blank row and must be proven and submitted once.
 # The screens are real captures (Herdr 0.9.5, Claude Code 2.1.319).
 test_send_text_submit_claude_newline_only_draft_is_typed_and_submitted() {
-  local dir log resp fb out enter_count text cap=$ROOT/tests/captures/claude-2.1.319-newline-draft
+  local dir log resp fb out enter_count text pair blank typed cap=$ROOT/tests/captures/claude-2.1.319-newline-draft
   text=": Firstmate instruction waiting: list \"\$FM_TASK_INBOX\"/*.msg in your 'secondmate.inbox' steering inbox, read and act on each in numeric order, then mv each into its handled/."
-  dir="$TMP_ROOT/submit-claude-newline-only-draft"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
-  herdr_submit_claude_prefix "$resp" "$text"
-  cat "$cap/newline-only.ansi" > "$resp/2.out"
-  cat "$cap/doorbell-typed.ansi" > "$resp/4.out"
-  printf '{"result":{"agent":{"agent":"claude","agent_status":"idle"}}}\n' > "$resp/5.out"
-  printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/7.out"
-  fb=$(make_herdr_fakebin "$dir")
-  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "$1" 3 0.01 0.01' "$ROOT" "$text" )
-  [ "$out" = empty ] || fail "a doorbell typed into a newline-only composer must be submitted, got '$out'"
-  grep -F $'\x1f''pane'$'\x1f''send-text'$'\x1f''w1:p2'$'\x1f'"$text" "$log" >/dev/null \
-    || fail "the doorbell must be typed into the newline-only composer"
-  enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
-  [ "$enter_count" -eq 1 ] || fail "the proven doorbell should be submitted once, sent $enter_count Enter(s)"
-  [ "$(herdr_ctrl_u_count "$log")" -eq 0 ] || fail "a proven doorbell must not be cleared"
-  pass "fm_backend_herdr_send_text_submit: a doorbell is typed into a Claude composer holding only a newline and submitted"
+  for pair in newline-only:doorbell-typed two-newlines:two-newlines-doorbell-typed; do
+    blank=${pair%%:*}
+    typed=${pair#*:}
+    dir="$TMP_ROOT/submit-claude-$blank-draft"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+    herdr_submit_claude_prefix "$resp" "$text"
+    cat "$cap/$blank.ansi" > "$resp/2.out"
+    cat "$cap/$typed.ansi" > "$resp/4.out"
+    printf '{"result":{"agent":{"agent":"claude","agent_status":"idle"}}}\n' > "$resp/5.out"
+    printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/7.out"
+    fb=$(make_herdr_fakebin "$dir")
+    out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
+      bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "$1" 3 0.01 0.01' "$ROOT" "$text" )
+    [ "$out" = empty ] || fail "$blank: a doorbell typed into a composer holding only newlines must be submitted, got '$out'"
+    grep -F $'\x1f''pane'$'\x1f''send-text'$'\x1f''w1:p2'$'\x1f'"$text" "$log" >/dev/null \
+      || fail "$blank: the doorbell must be typed into the composer"
+    enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
+    [ "$enter_count" -eq 1 ] || fail "$blank: the proven doorbell should be submitted once, sent $enter_count Enter(s)"
+    [ "$(herdr_ctrl_u_count "$log")" -eq 0 ] || fail "$blank: a proven doorbell must not be cleared"
+  done
+  pass "fm_backend_herdr_send_text_submit: a doorbell is typed into a Claude composer holding only newlines and submitted"
 }
 
 # The marked popup row must not weaken the head-truncation protection: a

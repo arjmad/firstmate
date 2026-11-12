@@ -483,16 +483,21 @@ test_claude_newline_only_draft_reads_empty_and_typed_text_is_proven() {
   local dir=$ROOT/tests/captures/claude-2.1.319-newline-draft screen out rc claude_idle doorbell rule
   claude_idle=$(printf 'claude\tidle')
   doorbell=": Firstmate instruction waiting: list \"\$FM_TASK_INBOX\"/*.msg in your 'secondmate.inbox' steering inbox, read and act on each in numeric order, then mv each into its handled/."
-  screen=$(cat "$dir/newline-only.ansi")
-  assert_screen "a newline-only draft on herdr" empty "$CAPS_STYLED" "$screen" '' "$claude_idle"
-  assert_screen "a newline-only draft on zellij" empty "$CAPS_STYLED_NOID" "$screen"
-  out=$(FM_COMPOSER_GHOST_LUMA_MAX=0 fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen"); rc=$?
-  [ "$rc" -eq 0 ] || fail "a newline-only draft must be readable, extraction returned $rc"
-  [ -z "${out//[[:space:]]/}" ] || fail "a newline-only draft holds no text, got '$out'"
-  screen=$(cat "$dir/doorbell-typed.ansi")
-  out=$(FM_COMPOSER_GHOST_LUMA_MAX=0 fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
-  [ "$out" = "$doorbell" ] || fail "the doorbell typed below the blank row must read back whole, got '$out'"
-  assert_screen "the doorbell typed into a newline-only draft on herdr" pending "$CAPS_STYLED" "$screen" '' "$claude_idle"
+  local blank typed
+  for blank in newline-only two-newlines; do
+    screen=$(cat "$dir/$blank.ansi")
+    assert_screen "$blank on herdr" empty "$CAPS_STYLED" "$screen" '' "$claude_idle"
+    assert_screen "$blank on zellij" empty "$CAPS_STYLED_NOID" "$screen"
+    out=$(FM_COMPOSER_GHOST_LUMA_MAX=0 fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen"); rc=$?
+    [ "$rc" -eq 0 ] || fail "$blank must be readable, extraction returned $rc"
+    [ -z "${out//[[:space:]]/}" ] || fail "$blank holds no text, got '$out'"
+  done
+  for typed in doorbell-typed two-newlines-doorbell-typed; do
+    screen=$(cat "$dir/$typed.ansi")
+    out=$(FM_COMPOSER_GHOST_LUMA_MAX=0 fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
+    [ "$out" = "$doorbell" ] || fail "$typed: the doorbell typed below the blank rows must read back whole, got '$out'"
+    assert_screen "$typed on herdr" pending "$CAPS_STYLED" "$screen" '' "$claude_idle"
+  done
   # Blank rows count against the composer's row bound like wrapped rows do, so
   # a titled glyph row far above the closing rule is still not the composer.
   rule='────────────────────────'

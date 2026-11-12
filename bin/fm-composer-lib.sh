@@ -2048,11 +2048,14 @@ _fm_composer_bare_is_popup_selection() {  # <plain-screen> <screen> <styled> <ro
 # unmatched separator below it, which is that composer's closing rule. Only the
 # draft's own rows may stand between the glyph row and that rule: a doorbell
 # longer than one composer row wraps, and Claude keeps the title in the top
-# rule while it does; a draft ending in a newline draws blank rows at its end,
-# which look like an empty composer (Claude Code 2.1.319, the remote
-# secondmate's "did not reach" on an idle pane). The draft is held to the
-# untitled pair's row bound, FM_COMPOSER_PI_MAX_LINES, so a titled pair is never
-# looser than an untitled one.
+# rule while it does. Newlines in the draft draw blank rows: a draft of only
+# newlines looks like an empty composer (Claude Code 2.1.319, the remote
+# secondmate's "did not reach" on an idle pane), and text typed into it lands
+# below them. So blank rows may lead the draft when the glyph row holds no
+# text, and may end it; a non-blank row after a blank one that followed text
+# still refuses. The draft is held to the untitled pair's row bound,
+# FM_COMPOSER_PI_MAX_LINES, so a titled pair is never looser than an untitled
+# one, and the caller reads every row down to the closing rule as the draft.
 #
 # The cursorless staleness rule reads an unmatched separator BELOW a candidate
 # as proof the candidate is scrollback. A titled top rule never opens the
@@ -2060,22 +2063,31 @@ _fm_composer_bare_is_popup_selection() {  # <plain-screen> <screen> <styled> <ro
 # separator and a genuinely idle composer read `unknown`. The titled rule
 # directly above and an unbroken wrap down to the closing rule keep the
 # staleness rule intact everywhere else: a glyph stranded in scrollback has
-# transcript rows, not its own rules, around it, and a non-blank row after a
-# blank one, or any other rule, between it and the lower separator still
+# transcript rows, not its own rules, around it, and a blank gap inside the
+# draft's text, or any other rule, between it and the lower separator still
 # refuses.
 _fm_composer_bare_rule_sandwich() {  # <plain-screen> <row>
-  local plain=$1 row=$2 close=$FM_COMPOSER_SCAN_PI_LAST_SEPARATOR next above below max blank=0
+  local plain=$1 row=$2 close=$FM_COMPOSER_SCAN_PI_LAST_SEPARATOR next above below max glyph phase=lead
   max=$FM_COMPOSER_PI_MAX_LINES
   case "$max" in ''|*[!0-9]*|0) max=8 ;; esac
   [ "$row" -ge 1 ] && [ "$close" -gt "$row" ] && [ "$((close - row))" -le "$max" ] || return 1
+  below=$(_fm_composer_screen_row "$row" "$plain")
+  fm_composer_normalize_trim_var below
+  if fm_composer_leading_agent_glyph_var glyph "$below"; then
+    below=${below#*"$glyph"}
+    fm_composer_normalize_trim_var below
+  fi
+  [ -z "$below" ] || phase=text
   next=$((row + 1))
   while [ "$next" -lt "$close" ]; do
     below=$(_fm_composer_screen_row "$next" "$plain")
     fm_composer_normalize_trim_var below
     if [ -z "$below" ]; then
-      blank=1
-    elif [ "$blank" = 1 ] || ! _fm_composer_bare_wrap_row "$below"; then
+      [ "$phase" = lead ] || phase=trail
+    elif [ "$phase" = trail ] || ! _fm_composer_bare_wrap_row "$below"; then
       return 1
+    else
+      phase=text
     fi
     next=$((next + 1))
   done
@@ -2088,7 +2100,7 @@ _fm_composer_bare_rule_sandwich() {  # <plain-screen> <row>
 }
 
 _fm_composer_select_cursorless() {  # <plain-screen> <screen> <styled>
-  local plain=$1 screen=$2 styled=$3 generic=-1 next boundary raw trimmed glyph bare footer=0
+  local plain=$1 screen=$2 styled=$3 generic=-1 next boundary raw trimmed glyph bare footer=0 sandwich=0
   FM_COMPOSER_SELECTED_KIND=
   FM_COMPOSER_SELECTED_FIRST=-1
   FM_COMPOSER_SELECTED_LAST=-1
@@ -2151,6 +2163,7 @@ _fm_composer_select_cursorless() {  # <plain-screen> <screen> <styled>
       FM_COMPOSER_SELECTED_KIND=
       return 1
     fi
+    sandwich=1
   fi
   if [ "$FM_COMPOSER_SCAN_SHELL_ROW" -gt "$generic" ]; then
     FM_COMPOSER_SELECTED_KIND=
@@ -2169,6 +2182,12 @@ _fm_composer_select_cursorless() {  # <plain-screen> <screen> <styled>
         fm_composer_idle_matches "$trimmed" "$FM_COMPOSER_HINTED_IDLE_RE_DEFAULT" sensitive \
           && next=-1
       fi
+    fi
+    # The sandwich already proved every row down to the closing rule is the
+    # draft, blank rows of a newline included, so the draft runs to that rule.
+    if [ "$sandwich" = 1 ] && [ "$next" -ge 0 ]; then
+      FM_COMPOSER_SELECTED_LAST=$((FM_COMPOSER_SCAN_PI_LAST_SEPARATOR - 1))
+      next=-1
     fi
     while [ "$next" -ge 0 ]; do
       trimmed=$(_fm_composer_screen_row "$next" "$plain")
