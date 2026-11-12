@@ -107,6 +107,17 @@ test_lands_an_open_capture_pr_end_to_end() {
   pass "an open capture PR is recorded, merged, settled, synced, and closed"
 }
 
+test_capture_start_off_entry_still_lands() {
+  local c
+  c=$(new_case)
+  printf '%s\n' "nova ~/code/agents/nova lock=~/nova.lock capture-start=off running=~/nova.pid capture=skills/:cron/skill-capture.sh" \
+    > "$c/home/config/live-checkouts"
+  land "$c" "$URL" --head "$HEAD_SHA"
+  assert_equals 0 "$RC" "a capture-start=off entry is still a capture project: $OUT"
+  assert_equals "--settle-capture $c/home/projects/nova" "$(head -1 "$c/sync.log")" "its live checkout is still settled"
+  pass "a capture project whose capture the sync never starts still lands and settles"
+}
+
 test_refuses_a_pr_that_is_not_a_capture_pr() {
   local c
   c=$(new_case)
@@ -328,6 +339,7 @@ SCRIPT
 test_lands_an_open_capture_pr_end_to_end
 test_settle_never_reverts_a_landed_edit_the_fast_forward_cannot_bring_back
 test_merge_time_record_reads_the_head_without_a_worktree
+test_capture_start_off_entry_still_lands
 test_refuses_a_pr_that_is_not_a_capture_pr
 test_refuses_a_stale_or_draft_pr_before_recording
 test_refused_merge_keeps_the_record_and_a_rerun_lands
