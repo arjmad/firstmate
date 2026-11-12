@@ -5236,9 +5236,9 @@ test_hold_reason_round_trips_awkward_characters() {
     until_args=()
     reason=$'  Pick route (north); say "yes" or \'no\' - 100% sure %28x%29, café\t\\slash\r\nSecond line\n\n'
     if [ "$id" = sample-dated-call ]; then
-      # Inside the 7 days the startup digest lists in full; a later gate folds
-      # into its parked count line and would hide the reason checked below.
-      until_args=(--until "$(date -d '+3 days' +%Y-%m-%d 2>/dev/null || date -v+3d +%Y-%m-%d)")
+      # Inside the 2 days the startup digest lists in full; a later dated call
+      # is counted in its group's line and would hide the reason checked below.
+      until_args=(--until "$(date -d '+2 days' +%Y-%m-%d 2>/dev/null || date -v+2d +%Y-%m-%d)")
       reason='fm-hold-v1:bm9ydGg='
     fi
     quoted_reason=$(jq -cn --arg value "$reason" '$value')
