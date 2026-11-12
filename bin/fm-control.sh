@@ -97,9 +97,9 @@
 #              omp profile pin (bin/fm-omp-profile-lib.sh) before the old agent
 #              stops.
 #              The same pre-stop refusal applies to this home's worker tool
-#              exclusions and worker-denied MCP servers
-#              (bin/fm-exclude-tools-lib.sh): a malformed or unreadable list,
-#              or a replacement launch that cannot honor it.
+#              exclusions, worker-denied MCP servers, and Claude compaction
+#              window (bin/fm-exclude-tools-lib.sh): a malformed or unreadable
+#              file, or a replacement launch that cannot honor its list.
 #              Refused on t3code before anything is stopped: a T3 thread
 #              keeps its conversation, so a new turn or a provider change on
 #              it continues the same agent rather than a fresh one
@@ -1160,13 +1160,14 @@ resolve_relaunch_profile() {
         | grep -qxF "$(fm_polytoken_hooks_file "$WT")" \
       || fm_polytoken_require_hooks_free "$WT" || return 1
   fi
-  # Likewise config/crew-exclude-tools and config/worker-denied-mcp-servers: a
-  # malformed or unreadable file, or a replacement launch that cannot honor
-  # the list, refuses here, before the old agent stops. Secondmate agents are
-  # not covered.
+  # Likewise config/crew-exclude-tools, config/worker-denied-mcp-servers, and
+  # config/crew-compact-window: a malformed or unreadable file, or a
+  # replacement launch that cannot honor the list, refuses here, before the
+  # old agent stops. Secondmate agents are not covered.
   if [ "$KIND" != secondmate ]; then
     fm_exclude_tools_check "$TARGET_HARNESS" 0 "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" >/dev/null || return 1
     fm_worker_denied_mcp_servers_check "$TARGET_HARNESS" 0 "$BACKEND" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" >/dev/null || return 1
+    fm_crew_compact_window_check "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" >/dev/null || return 1
   fi
 }
 

@@ -2541,6 +2541,131 @@ test_claude_denied_mcp_servers_fail_closed() {
   pass "an unreadable or malformed denied-server list, or any raw command, refuses before any launch or record"
 }
 
+# config/crew-compact-window: a Claude ship or scout runs with
+# CLAUDE_CODE_AUTO_COMPACT_WINDOW at the home's window and records it, even
+# under a launch-env allowlist that does not name it and over an ambient
+# value; a secondmate keeps the ambient environment and inherits the file for
+# its own workers.
+write_compact_window_file() {  # <home> <line>...
+  local home=$1
+  shift
+  printf '%s\n' "$@" > "$home/config/crew-compact-window"
+}
+
+test_claude_task_workers_launch_with_compact_window() {
+  local kind rec id sm out status pane eval_out want got
+  for kind in ship scout secondmate; do
+    id="claude-compact-$kind-z34"
+    rec=$(make_spawn_case "claude-compact-$kind" claude "$id")
+    read_case_record "$rec"
+    write_compact_window_file "$HOME_DIR" '# Claude workers compact at 400K' '' '  400000  '
+    pane=$WT_DIR
+    case "$kind" in
+      ship)
+        # The allowlist rebuilds the environment from names it lists; the
+        # window is not ambient, so it must survive without being listed.
+        printf 'FM_FAKE_CLAUDE_COMPACT_OUT\n' > "$HOME_DIR/config/launch-env-allowlist"
+        out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+        ;;
+      scout) out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout) ;;
+      secondmate)
+        sm="$CASE_DIR/secondmate-home"
+        make_seeded_secondmate_home "$sm" "$id"
+        pane=$sm
+        out=$(FM_TEST_CLAUDE_CONFIG_DIR="$CASE_DIR/claude-work" \
+          run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+        ;;
+    esac
+    status=$?
+    expect_code 0 "$status" "claude $kind spawn with a compaction window should succeed"$'\n'"$out"
+    cat > "$FAKEBIN_DIR/claude" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "${CLAUDE_CODE_AUTO_COMPACT_WINDOW-unset}" > "$FM_FAKE_CLAUDE_COMPACT_OUT"
+SH
+    chmod +x "$FAKEBIN_DIR/claude"
+    eval_out=$(CLAUDE_CODE_AUTO_COMPACT_WINDOW=ambient fm_eval_launch "$(cat "$LAUNCH_LOG")" "$pane" "$FAKEBIN_DIR" \
+      "FM_FAKE_CLAUDE_COMPACT_OUT=$CASE_DIR/claude-compact" 2>&1) \
+      || fail "claude $kind launch did not run"$'\n'"$eval_out"
+    got=$(cat "$CASE_DIR/claude-compact")
+    case "$kind" in
+      secondmate)
+        want=ambient
+        assert_no_grep compact_window= "$HOME_DIR/state/$id.meta" "a secondmate record must not carry a compaction window"
+        cmp -s "$HOME_DIR/config/crew-compact-window" "$sm/config/crew-compact-window" \
+          || fail "the secondmate home did not inherit config/crew-compact-window for its own workers"
+        ;;
+      *)
+        want=400000
+        assert_grep compact_window=400000 "$HOME_DIR/state/$id.meta" "the $kind record must carry compact_window=400000"
+        assert_contains "$out" " compact_window=400000" "the $kind spawned line must name the compaction window"
+        ;;
+    esac
+    [ "$got" = "$want" ] || fail "claude $kind launch set CLAUDE_CODE_AUTO_COMPACT_WINDOW='$got', want '$want'"
+  done
+  # Removing the primary's file restores absence downstream on the next
+  # inheritance pass.
+  (
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-config-inherit-lib.sh"
+    rm "$HOME_DIR/config/crew-compact-window"
+    propagate_secondmate_inheritance "$HOME_DIR" "$sm" >/dev/null
+  ) || fail "compaction window removal failed to converge"
+  [ ! -e "$sm/config/crew-compact-window" ] || fail "the secondmate home kept a removed compaction window"
+  pass "claude ships and scouts launch with and record the home's compaction window; secondmates inherit the file and keep their own default"
+}
+
+test_claude_compact_window_absent_or_other_runtime_changes_nothing() {
+  local rec id out status
+  id=claude-compact-absent-z35
+  rec=$(make_spawn_case claude-compact-absent claude "$id")
+  read_case_record "$rec"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "claude spawn with no compaction window should succeed"$'\n'"$out"
+  assert_not_contains "$(cat "$LAUNCH_LOG")" CLAUDE_CODE_AUTO_COMPACT_WINDOW \
+    "a home with no compaction window must launch on the harness default"
+  assert_no_grep compact_window= "$HOME_DIR/state/$id.meta" "a home with no window must record none"
+  # Another runtime does not read the Claude window, so even a malformed file
+  # neither applies nor refuses there.
+  id=claude-compact-codex-z35
+  rec=$(make_spawn_case claude-compact-codex codex "$id")
+  read_case_record "$rec"
+  write_compact_window_file "$HOME_DIR" 'not a number'
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
+  status=$?
+  expect_code 0 "$status" "a codex spawn must not refuse on the Claude compaction window"$'\n'"$out"
+  assert_not_contains "$(cat "$LAUNCH_LOG")" CLAUDE_CODE_AUTO_COMPACT_WINDOW \
+    "a codex launch must not carry the Claude compaction window"
+  pass "with no compaction window, or on another runtime, the launch and record are unchanged"
+}
+
+test_claude_compact_window_fails_closed() {
+  local rec id out status setup
+  for setup in dangling directory comments-only two-values words below above leading-zero huge; do
+    id="claude-compact-refuse-$setup-z36"
+    rec=$(make_spawn_case "claude-compact-refuse-$setup" claude "$id")
+    read_case_record "$rec"
+    case "$setup" in
+      dangling) ln -s "$CASE_DIR/fleet/crew-compact-window" "$HOME_DIR/config/crew-compact-window" ;;
+      directory) mkdir "$HOME_DIR/config/crew-compact-window" ;;
+      comments-only) write_compact_window_file "$HOME_DIR" '# 400000' ;;
+      two-values) write_compact_window_file "$HOME_DIR" 400000 300000 ;;
+      words) write_compact_window_file "$HOME_DIR" 400k ;;
+      below) write_compact_window_file "$HOME_DIR" 99999 ;;
+      above) write_compact_window_file "$HOME_DIR" 1000001 ;;
+      leading-zero) write_compact_window_file "$HOME_DIR" 0400000 ;;
+      huge) write_compact_window_file "$HOME_DIR" 99999999999999999999 ;;
+    esac
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
+    status=$?
+    expect_code 1 "$status" "claude spawn with a $setup compaction window must refuse"$'\n'"$out"
+    assert_contains "$out" "config/crew-compact-window" "the $setup refusal must name the config file"
+    [ ! -s "$LAUNCH_LOG" ] || fail "claude launched despite a $setup compaction window"
+    [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "the $setup refusal still wrote a task record"
+  done
+  pass "an unreadable, empty, malformed, or out-of-range compaction window refuses before any launch or record"
+}
+
 test_claude_long_launch_is_delivered_intact() {
   local rec id out status launch expected
   id=profile-claude-long-launch-z24
@@ -3371,6 +3496,9 @@ test_claude_task_workers_launch_with_the_task_list
 test_claude_task_workers_launch_without_artifact_or_connectors
 test_claude_task_workers_launch_with_denied_mcp_servers
 test_claude_denied_mcp_servers_fail_closed
+test_claude_task_workers_launch_with_compact_window
+test_claude_compact_window_absent_or_other_runtime_changes_nothing
+test_claude_compact_window_fails_closed
 test_claude_long_launch_is_delivered_intact
 test_claude_crewmate_launch_carries_the_attribution_policy
 test_keep_ai_trailers_omits_attribution_settings_and_strip_hooks

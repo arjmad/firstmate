@@ -1735,6 +1735,25 @@ A non-empty list also refuses every raw launch command, because one can reach Cl
 Other runtimes do not read Claude's MCP configuration, so they neither read nor refuse on the file; a server registered in another runtime's own MCP configuration is not covered.
 [`bin/fm-exclude-tools-lib.sh`](../bin/fm-exclude-tools-lib.sh) implements the parsing and refusals, and [`bin/fm-spawn.sh`](../bin/fm-spawn.sh)'s header owns the launch mechanics.
 
+## Worker compaction window (config/crew-compact-window)
+
+The optional local, gitignored `config/crew-compact-window` sets the context size at which this home's Claude ships and scouts auto-compact.
+It holds `#` comment lines, blank lines, and exactly one integer token count from 100000 to 1000000, the range Claude Code accepts:
+
+```text
+# Claude workers compact at 400K
+400000
+```
+
+Each Claude ship and scout launch then carries `CLAUDE_CODE_AUTO_COMPACT_WINDOW=<tokens>` in its command prefix, on a fresh spawn, a relaunch, and a Herdr resume alike, and its task record and `spawned` line carry `compact_window=<tokens>`.
+The assignment sits inside the command a `config/launch-env-allowlist` launch wraps, so the allowlist never strips it, and it overrides an ambient value or a user-scope `autoCompactWindow` setting.
+A secondmate's own agent, the helm, other runtimes, a raw launch command, and the T3 Code backend keep the harness default; a raw or T3 Code launch prints a notice saying so.
+With no file, every launch is unchanged.
+The file is read on every spawn and relaunch, and is inherited into secondmate homes under the [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md) inherited-local-material contract, so a secondmate's own Claude workers compact at the same window.
+
+The file fails closed: when it is present but dangling, unreadable, not a regular file, empty of a value, or holds anything other than one integer in range, a Claude ship or scout spawn or relaunch refuses before its endpoint, local copy, or task record exists, and a relaunch refuses before it stops the running worker.
+[`bin/fm-exclude-tools-lib.sh`](../bin/fm-exclude-tools-lib.sh) implements the parsing and refusals, and [`bin/fm-spawn.sh`](../bin/fm-spawn.sh)'s header owns the launch mechanics.
+
 ## Worker account pin (config/claude-account, config/pi-account)
 
 A home that mixes accounts for one runner, such as a work login and a personal one, can pin the account its own Claude and Pi workers launch on.
