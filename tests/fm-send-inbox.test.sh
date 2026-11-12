@@ -44,7 +44,8 @@ TMP_ROOT=$(cd "$TMP_ROOT" && pwd)
 
 # Stub tmux: logs literal typed text to FM_SEND_LOG and lets the submit and
 # composer paths reach clean verdicts. FM_FAKE_TMUX_COMPOSER=pending renders a
-# composer visibly holding text; FM_FAKE_TMUX_SEND_FAIL=1 fails send-keys.
+# composer visibly holding text, FM_FAKE_TMUX_COMPOSER=unreadable renders no
+# composer at all, and FM_FAKE_TMUX_SEND_FAIL=1 fails send-keys.
 make_stubs() { # <dir> -> echoes fakebin dir
   local dir=$1 fb="$1/fakebin"
   mkdir -p "$fb"
@@ -73,6 +74,8 @@ case "${1:-}" in
   capture-pane)
     if [ "${FM_FAKE_TMUX_COMPOSER:-}" = pending ]; then
       printf '╭──────────────╮\n│ leftover txt │\n╰──────────────╯\n'
+    elif [ "${FM_FAKE_TMUX_COMPOSER:-}" = unreadable ]; then
+      printf 'program output with no composer\n'
     else
       printf '╭────╮\n│    │\n╰────╯\n'
     fi
@@ -240,6 +243,48 @@ test_failed_ring_is_still_sent() {
   assert_contains "$(cat "$err")" "watcher will re-ring" \
     "the failed-ring notice should point at the re-ring"
   pass "fm-send inbox: a failed doorbell is still a durably sent steer"
+}
+
+# A doorbell typed into a pane whose turn start the submit cannot prove is
+# still a sent steer, but the sender must hear that the turn start is
+# unconfirmed rather than nothing, and a fire-and-forget record is owed its one
+# retry ring as when the ring did not land.
+test_unconfirmed_ring_is_reported() {
+  local dir err rc
+  dir=$(setup_case unconfirmed)
+  err="$dir/send.err"
+  run_send "$dir" "$err" FM_FAKE_TMUX_COMPOSER=unreadable -- t1 "steer into an unreadable pane"
+  rc=$?
+  expect_code 0 "$rc" "an unconfirmed doorbell must not fail the send"
+  [ -f "$dir/home/state/t1.inbox/001.msg" ] || fail "the steer was not recorded"
+  grep -qF 'Firstmate instruction waiting' "$dir/send.log" || fail "the doorbell should still be typed"
+  assert_contains "$(cat "$err")" "turn start is unconfirmed" \
+    "an unproven ring must tell the sender the turn start is unconfirmed"
+  assert_contains "$(cat "$err")" "watcher will re-ring" \
+    "the unconfirmed notice should point at the re-ring"
+  assert_not_contains "$(cat "$err")" "did not reach" \
+    "a typed doorbell must not be reported as one that never reached the pane"
+
+  run_send "$dir" "$err" -- t1 "steer into a readable pane"
+  rc=$?
+  expect_code 0 "$rc" "a confirmed doorbell should succeed"
+  assert_not_contains "$(cat "$err")" "unconfirmed" \
+    "a confirmed doorbell must not be reported as unconfirmed"
+
+  dir=$(setup_case unconfirmed-faf)
+  mkdir -p "$dir/home/config"
+  : > "$dir/home/config/wait-no-turns"
+  err="$dir/send.err"
+  rm -f "$dir/home/state/t1.meta"
+  fm_write_secondmate_meta "$dir/home/state/domain.meta" "$dir/home" "sess:fm-t1" alpha claude
+  run_send "$dir" "$err" FM_FAKE_TMUX_COMPOSER=unreadable -- \
+    fm-domain --fire-and-forget 0123456789abcdef "reconcile your books"; rc=$?
+  expect_code 0 "$rc" "an unconfirmed fire-and-forget ring is still a sent steer"
+  [ "$(cat "$dir/home/state/domain.inbox/.retry-ring" 2>/dev/null)" = 001.msg ] \
+    || fail "an unconfirmed fire-and-forget ring did not owe its one retry"
+  assert_contains "$(cat "$err")" "the watcher will ring it once more" \
+    "the unconfirmed notice should promise exactly one retry"
+  pass "fm-send inbox: an unproven doorbell is reported as unconfirmed and a fire-and-forget one owes its retry"
 }
 
 # Contract: a fire-and-forget record stays outside the re-ring ladder, so a
@@ -510,6 +555,7 @@ test_multiline_steer_is_legal
 test_resend_enqueues_new_sequence
 test_pending_composer_skips_ring_advisorily
 test_failed_ring_is_still_sent
+test_unconfirmed_ring_is_reported
 test_fire_and_forget_unlanded_ring_owes_one_retry
 test_fire_and_forget_retry_stays_off_without_the_flag
 test_harness_invocations_stay_typed
