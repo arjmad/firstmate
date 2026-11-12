@@ -471,6 +471,43 @@ test_claude_slash_popup_demotion_only_ever_refuses() {
   pass "fm_composer_classify_screen: the popup demotion needs typed slash text and the popup row shape, and never reads empty"
 }
 
+# A Claude composer can hold nothing but a newline: the titled rule, a bare `❯`,
+# one blank draft row, then the closing rule. A person sees an empty composer,
+# but that blank row stopped the titled-rule sandwich, so the idle composer
+# read `unknown`, the Claude payload proof refused to type, and every steering
+# doorbell to that pane reported "did not reach" until someone typed by hand
+# (the remote secondmate, 2026-11-04 to 2026-11-11). The screens are real
+# captures (Herdr 0.9.5, Claude Code 2.1.319), reduced to the composer, its
+# rules, and the footer with their SGR bytes and CR LF row ends intact.
+test_claude_newline_only_draft_reads_empty_and_typed_text_is_proven() {
+  local dir=$ROOT/tests/captures/claude-2.1.319-newline-draft screen out rc claude_idle doorbell rule
+  claude_idle=$(printf 'claude\tidle')
+  doorbell=": Firstmate instruction waiting: list \"\$FM_TASK_INBOX\"/*.msg in your 'secondmate.inbox' steering inbox, read and act on each in numeric order, then mv each into its handled/."
+  local blank typed
+  for blank in newline-only two-newlines; do
+    screen=$(cat "$dir/$blank.ansi")
+    assert_screen "$blank on herdr" empty "$CAPS_STYLED" "$screen" '' "$claude_idle"
+    assert_screen "$blank on zellij" empty "$CAPS_STYLED_NOID" "$screen"
+    out=$(FM_COMPOSER_GHOST_LUMA_MAX=0 fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen"); rc=$?
+    [ "$rc" -eq 0 ] || fail "$blank must be readable, extraction returned $rc"
+    [ -z "${out//[[:space:]]/}" ] || fail "$blank holds no text, got '$out'"
+  done
+  for typed in doorbell-typed two-newlines-doorbell-typed; do
+    screen=$(cat "$dir/$typed.ansi")
+    out=$(FM_COMPOSER_GHOST_LUMA_MAX=0 fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
+    [ "$out" = "$doorbell" ] || fail "$typed: the doorbell typed below the blank rows must read back whole, got '$out'"
+    assert_screen "$typed on herdr" pending "$CAPS_STYLED" "$screen" '' "$claude_idle"
+  done
+  # Blank rows count against the composer's row bound like wrapped rows do, so
+  # a titled glyph row far above the closing rule is still not the composer.
+  rule='────────────────────────'
+  screen=$'transcript line\n─────────── secondmate ─\n❯'"$NBSP"$'\n\n'"$rule"$'\n  bypass permissions'
+  assert_screen "a titled glyph row above one blank row" empty "$CAPS_STYLED_NOID" "$screen"
+  screen=$'transcript line\n─────────── secondmate ─\n❯'"$NBSP"$'\n\n\n\n\n\n\n\n\n'"$rule"$'\n  bypass permissions'
+  assert_screen "a titled glyph row above more blank rows than the bound" unknown "$CAPS_STYLED_NOID" "$screen"
+  pass "fm_composer_classify_screen: a Claude composer holding only a newline reads empty and its typed text is proven"
+}
+
 test_matrix_codex_dim_hint_row() {
   # Real idle codex: bold `›`, reset, then an SGR-2 dim hint. Styled captures
   # strip the ghost and prove empty; plain captures must defer as unknown -
@@ -1742,6 +1779,7 @@ test_composer_footer_zone_is_shape_independent
 test_composer_footer_zone_refuses_rather_than_allows
 test_claude_slash_popup_marked_row_is_not_a_second_composer
 test_claude_slash_popup_demotion_only_ever_refuses
+test_claude_newline_only_draft_reads_empty_and_typed_text_is_proven
 test_matrix_codex_dim_hint_row
 test_matrix_muse_truecolor_glyph_survives_signal_loss
 test_matrix_cursor_reverse_video_placeholder_remnant

@@ -1,0 +1,8 @@
+[0m[38;2;136;136;136m─────────────────────────────────────────────────────────────────────────────────────────────── secondmate: secondmate ─[0m
+❯ 
+
+  : Firstmate instruction waiting: list "$FM_TASK_INBOX"/*.msg in your 'secondmate.inbox' steering inbox, read and act
+  on each in numeric order, then mv each into its handled/.
+[0m[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+  [0m[38;2;255;107;128m⏵⏵ bypass permissions on[0m[38;2;153;153;153m (shift+tab to cycle)                                                 [0m    [0m[38;2;153;153;153m◐ medium · /effort[0m
+                                                                                                                   [0m[38;2;78;186;101m/rc[0m
