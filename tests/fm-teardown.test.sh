@@ -771,17 +771,22 @@ test_local_only_fork_remote_allows() {
 }
 
 test_teardown_closes_the_backlog_item_itself() {
-  local case_dir out
+  local case_dir out handoff_note
   case_dir=$(make_case tasks-axi-close)
   write_meta "$case_dir" no-mistakes ship
   printf '%s\n' 'pr=https://github.com/example/repo/pull/7' >> "$case_dir/state/task-x1.meta"
   seed_backlog_in_flight "$case_dir"
+  # The row came in as a fleet handoff, so its close answers the sender.
+  handoff_note=$(FM_STATE_OVERRIDE="$case_dir/state" "$ROOT/bin/fm-inbox.sh" note \
+    --request-id handoff:task-x1 --json "[claude] handoff task-x1: ship it" | jq -r .id)
 
   out=$(run_teardown "$case_dir") || fail "teardown failed with a real backlog"
   [ "$(backlog_row_state "$case_dir")" = "done" ] \
     || fail "teardown returned success while its backlog item was still open: $(backlog_row_state "$case_dir")"
   assert_grep 'https://github.com/example/repo/pull/7' "$case_dir/data/backlog.md" \
     "closed backlog item did not record the task's PR"
+  assert_grep 'PR: https://github.com/example/repo/pull/7' "$case_dir/state/inbox/.replies/$handoff_note" \
+    "teardown's close did not answer the row's handoff note with its PR"
   assert_absent "$case_dir/state/task-x1.backlog-close" \
     "a landed close left its pending-close record behind"
   printf '%s\n' "$out" | grep -F 'bin/fm-tasks-axi.sh ready' >/dev/null \

@@ -27,7 +27,7 @@ Each task yields at most one noticed and one idea; `none` and an empty section a
 2. File with `bin/fm-noticed.sh file noticed|idea <slug> --title <one line> --why <why it may matter> --from <task or agent> [--repo <repo>] [--evidence <pointer>] [--now] [--routine]`, adding `--routine` to a noticed item Acting first settles on its own.
    Capture the observation and why it may matter; leave value unknown until the triage.
    Add `--now` only to a noticed item that is urgent or doing harm now: money, customers, account health or security; filing an open item's slug again with `--now` makes it urgent.
-3. Acknowledge a fleet-handoff notice with `bin/fm-inbox.sh drain --ack <id>`, and reply with the item id through `bin/fm-inbox.sh reply <id>`.
+3. Acknowledge a fleet-handoff notice with `bin/fm-inbox.sh drain --ack <id>` and nothing more: a notice has no read-back, so a reply to it reaches nobody.
 
 Done when every collected line is filed, matched, or judged not an item.
 Sapna's agents never file here: a Nova notice is refused, and a secondmate home files into its own backlog.

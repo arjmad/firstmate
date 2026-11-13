@@ -471,6 +471,55 @@ test_wrapper_row_shape() {
   pass "fm-tasks-axi.sh keeps dates out of titles, holds to the four kinds with their dates, and keeps Due: and Batch: lines"
 }
 
+# A handoff row's close answers its handoff note (request id handoff:<id>) when
+# nobody replied by hand: done carries the close's links, rm carries --reason,
+# a row with no handoff note is untouched, and a reply already written stands.
+test_wrapper_close_writes_handoff_reply() {
+  local dir out note1 note2 note3 receipts
+  dir=$(make_split close-reply)
+  fm_test_tasks_toml "$dir/home/.tasks.toml"
+  inbox() { FM_HOME="$dir/home" "$ROOT/bin/fm-inbox.sh" "$@"; }
+  note_of() { python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])'; }
+  reply_of() {  # <note-id>
+    inbox receipts --all-pending --all-handled --all-replies | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+for n in d["pending"] + d["handled"]:
+    if n["id"] == sys.argv[1]:
+        print((n.get("reply") or {}).get("body") or "NO-REPLY")' "$1"
+  }
+  for id in hf-done hf-rm hf-plain hf-answered; do
+    wrapper_from_code "$dir" add "$id" "Handoff $id" --kind task >/dev/null || fail "could not add $id"
+  done
+  note1=$(inbox note --request-id handoff:hf-done --json "[claude] handoff hf-done" | note_of)
+  note2=$(inbox note --request-id handoff:hf-rm --json "[claude] handoff hf-rm" | note_of)
+  note3=$(inbox note --request-id handoff:hf-answered --json "[claude] handoff hf-answered" | note_of)
+  inbox drain --ack "$note1" >/dev/null
+  inbox reply "$note3" "Answered by hand first" >/dev/null || fail "hand reply failed"
+
+  out=$(wrapper_from_code "$dir" "done" hf-done --pr https://github.com/o/r/pull/7 --json 2>/dev/null) \
+    || fail "done hf-done failed"
+  printf '%s' "$out" | python3 -c 'import json,sys; json.load(sys.stdin)' \
+    || fail "done --json stdout is no longer plain JSON: $out"
+  receipts=$(reply_of "$note1")
+  assert_contains "$receipts" "Done: firstmate closed backlog item hf-done" "done did not write the handoff reply"
+  assert_contains "$receipts" "PR: https://github.com/o/r/pull/7" "the done reply lost the PR link"
+
+  wrapper_from_code "$dir" rm hf-rm --reason "duplicate of hf-done" >/dev/null 2>&1 || fail "rm hf-rm failed"
+  receipts=$(reply_of "$note2")
+  assert_contains "$receipts" "Removed: firstmate took backlog item hf-rm off its backlog" "rm did not write the handoff reply"
+  assert_contains "$receipts" "Reason: duplicate of hf-done" "the rm reply lost the reason"
+  assert_no_grep "hf-rm" "$dir/home/data/backlog.md" "rm --reason did not remove the row"
+
+  out=$(wrapper_from_code "$dir" "done" hf-plain 2>&1) || fail "done hf-plain failed: $out"
+  assert_not_contains "$out" "replied" "a row with no handoff note got a reply"
+  assert_not_contains "$out" "not written" "a row with no handoff note warned"
+
+  wrapper_from_code "$dir" "done" hf-answered >/dev/null 2>&1 || fail "done hf-answered failed"
+  assert_equals "Answered by hand first" "$(reply_of "$note3")" "the close overwrote a reply written by hand"
+  pass "fm-tasks-axi.sh done and rm answer a handoff note nobody answered, and leave others alone"
+}
+
 test_guard_reports_regular_code_root_backlog
 test_guard_reports_foreign_link_and_archive
 test_guard_silent_for_single_home
@@ -484,6 +533,7 @@ if [ "$HAVE_TASKS_AXI" = 1 ]; then
   test_wrapper_single_home
   test_wrapper_hold_quote_guard
   test_wrapper_row_shape
+  test_wrapper_close_writes_handoff_reply
 else
   echo "skip: tasks-axi not found; home-addressing cases not run"
 fi
