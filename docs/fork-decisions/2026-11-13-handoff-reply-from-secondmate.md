@@ -1,7 +1,7 @@
 2026-11-13: The main firstmate released the 2026-11-13 idea row for dispatch under Arjun's standing rule that the fleet fixes reversible idea rows that pay off.
 A handoff row moved to a secondmate closed in that home, which holds no handoff note, so its sender got no scripted reply.
 Decision: the main home answers that note from the mate's terminal line on its parent channel, through the same `close-reply`, on every watcher poll.
-A failed line answers as removed, and a done line that carries a PR waits for that PR's merged line.
+A failed line answers as removed, and a ship child's done line is not an answer: its PR's merged line is.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |

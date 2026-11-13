@@ -744,13 +744,16 @@ lone=$(hand_off "$home" hf-10)
 printf '%s\n' \
   "working [at=1794600000]: dispatched hf-1" \
   "done [key=child-outcome-hf-1-done-0a1b2c3d] [at=1794600100]: child hf-1 done: PR https://github.com/o/r/pull/7 checks green pr=https://github.com/o/r/pull/7 mode=direct-PR yolo=on" \
+  "done [key=child-outcome-hf-1-done-1b2c3d4e] [at=1794600110]: child hf-1 done: handed to validation mode=no-mistakes yolo=on" \
+  "done [key=inactive-outcome-2c3d4e5f] [at=1794600120]: inactive terminal child=hf-1 fingerprint=abc" \
   >"$home/state/sm-1.status"
-assert_equals "" "$(run_inbox "$home" close-handed-off)" "a done line carrying a PR waits for its merge"
+assert_equals "" "$(run_inbox "$home" close-handed-off)" "a ship child's done, with or without a PR, waits for its merge"
 assert_equals "0" "$(reply_count "$home")" "no reply is written before the PR merges"
 printf '%s\n' "done [key=merged-hf-1] [at=1794600200]: merged hf-1 https://github.com/o/r/pull/7 yolo" \
+  "done [key=child-outcome-hf-1-done-3d4e5f6a] [at=1794600210]: child hf-1 done: PR https://github.com/o/r/pull/7 checks green pr=https://github.com/o/r/pull/7 mode=direct-PR" \
   >>"$home/state/sm-1.status"
 assert_equals "replied $nid (handoff hf-1 done)" "$(run_inbox "$home" close-handed-off)" \
-  "the merged line answers the handoff as done"
+  "the merged line answers the handoff as done, even before a later ship done line"
 body=$(run_inbox "$home" receipts --all-replies | json_get replies 0 body)
 assert_contains "$body" "Done: firstmate closed backlog item hf-1" "the reply says the item is done"
 assert_contains "$body" "PR: https://github.com/o/r/pull/7" "the reply carries the merged PR"
@@ -764,21 +767,27 @@ home=$(make_home handed-off-failed)
 fid=$(hand_off "$home" hf-2)
 sid=$(hand_off "$home" hf-3)
 iid=$(hand_off "$home" hf-4)
+cid=$(hand_off "$home" hf-7)
 printf '%s\n' \
   "failed [key=child-outcome-hf-2-failed-1a2b3c4d] [at=1794600100]: child hf-2 failed: the API refused the token mode=direct-PR" \
   "done [key=hf-3] [at=1794600150]: scouted; nothing to change" \
+  "done [key=child-outcome-hf-7-done-4e5f6a7b] [at=1794600155]: child hf-7 done: findings ready report=data/hf-7/report.md" \
   "failed [key=inactive-outcome-9f8e7d6c] [at=1794600160]: inactive terminal child=hf-4 fingerprint=abc" \
   >"$home/state/sm-1.status"
 out=$(run_inbox "$home" close-handed-off)
 assert_contains "$out" "replied $fid (handoff hf-2 removed)" "a failed child line answers as removed"
 assert_contains "$out" "replied $sid (handoff hf-3 done)" "the mate's own done line keyed by the item answers as done"
 assert_contains "$out" "replied $iid (handoff hf-4 removed)" "a failed inactive-outcome line answers as removed"
+assert_contains "$out" "replied $cid (handoff hf-7 done)" "a scout child's done line answers as done"
 receipts=$(run_inbox "$home" receipts --all-replies)
 assert_contains "$receipts" "Reason: secondmate sm-1 reported it failed: the API refused the token" \
   "the removed reply carries the failure note without the scripted fields"
 assert_not_contains "$receipts" "mode=direct-PR" "the scripted fields stay out of the reply"
 assert_contains "$receipts" "Note: secondmate sm-1 reported it done: scouted; nothing to change" \
   "the done reply carries the mate's note"
+assert_contains "$receipts" "Reason: secondmate sm-1 reported it failed: its task ended without a final status line" \
+  "the inactive failure says why it carries no note"
+assert_contains "$receipts" "Report: data/hf-7/report.md" "the scout's done reply carries its report"
 pass "close-handed-off answers failed and keyed done lines"
 
 home=$(make_home handed-off-duplicate)

@@ -820,8 +820,9 @@ strip_outcome_fields() {  # <text>
 }
 
 # What one parent-channel line says about handed-off item <item>: nothing
-# (non-zero), `wait` for a done that carries a PR, which its merged line
-# answers, or `<done|removed> <pr> <report> <text>` split by the unit separator.
+# (non-zero), or `<done|removed> <pr> <report> <text>` split by the unit
+# separator. A ship child's done (its line carries mode=, a scout's none) and an
+# inactive done are not answers: the ship's merged line is.
 handed_off_outcome() {  # <item> <status-line>
   local item=$1 line=$2 verb key note pr='' report='' text=''
   status_line_verb "$line" verb
@@ -841,20 +842,17 @@ handed_off_outcome() {  # <item> <status-line>
         case "$note" in "child $item $verb:"*) ;; *) return 1 ;; esac
         text=${note#"child $item $verb:"}
         text=${text#"${text%%[![:space:]]*}"}
-        pr=$(note_field "$text" pr) || pr=''
         report=$(note_field "$text" report) || report=''
+        [ "$verb" != "done" ] || ! note_field "$text" mode >/dev/null || return 1
         text=$(strip_outcome_fields "$text")
         ;;
       inactive-outcome-*)
+        [ "$verb" != "done" ] || return 1
         case "$note " in *" child=$item "*) ;; *) return 1 ;; esac
-        pr=$(note_field "$note" pr) || pr=''
+        text='its task ended without a final status line'
         ;;
       *) return 1 ;;
     esac
-    if [ "$verb" = "done" ] && [ -n "$pr" ]; then
-      printf 'wait\n'
-      return 0
-    fi
   fi
   [ "$verb" = "done" ] || verb=removed
   printf '%s\037%s\037%s\037%s\n' "$verb" "$pr" "$report" "${text//$'\037'/ }"
@@ -866,13 +864,14 @@ handed_off_outcome() {  # <item> <status-line>
 # as state/<mate-id>.status (docs/secondmate-parent-channel.md), is what tells
 # this home it ended. For each state/inbox/.handed-off/<item> (holding the mate
 # id) the latest line there naming the item decides, through close-reply:
-#   done [key=merged-<item>]: merged <item> <url>             done, with the PR
-#   <state> [key=child-outcome-...]: child <item> <state>: ... done, or removed
-#   <state> [key=inactive-outcome-...]: ... child=<item> ...   done, or removed
-#   done|failed [key=<item>]: <note>                           done, or removed
-# A failed line answers as removed with its note as the reason. A done that
-# carries a PR waits for that PR's merged line, so a PR that never merges is
-# never reported done. close-reply writes at most one reply per note and the
+#   done [key=merged-<item>]: merged <item> <url>              done, with the PR
+#   done [key=child-outcome-...]: child <item> done: ...        done, scouts only
+#   failed [key=child-outcome-...]: child <item> failed: ...    removed
+#   failed [key=inactive-outcome-...]: ... child=<item> ...     removed
+#   done|failed [key=<item>]: <note>                            done, or removed
+# A failed line answers as removed with its note as the reason. A ship child's
+# done is not an answer, because no-mistakes publishes it before validation and
+# a PR may never merge; its merged line is. close-reply writes at most one reply per note and the
 # marker goes once its note has a reply, so a re-read or a duplicate mirrored
 # line answers nothing twice. The watcher runs this on every poll.
 cmd_close_handed_off() {
@@ -896,7 +895,6 @@ cmd_close_handed_off() {
     pick=''
     while IFS= read -r line || [ -n "$line" ]; do
       outcome=$(handed_off_outcome "$item" "$line") || continue
-      [ "$outcome" != wait ] || outcome=''
       pick=$outcome
     done < <(grep -F -- "$item" "$status" || true)
     [ -n "$pick" ] || continue
