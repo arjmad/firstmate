@@ -4850,6 +4850,9 @@ teardown_forget_claude_trust </dev/null || true
 # ordering, the row returns to Queued with its deliverable recorded.
 if [ "$BACKLOG_CLOSED" = 1 ]; then
   BACKLOG_CLOSE_MARKER=$(fm_backlog_close_marker_path "$STATE" "$ID") || exit 1
+  # A forced teardown may discard work that never landed, so its close writes
+  # no handoff reply; bin/fm-inbox.sh unread resurfaces the unanswered note.
+  [ "$FORCE" != --force ] || export FM_HANDOFF_CLOSE_REPLY=skip
   if ! fm_backlog_atomic_transition "$BACKLOG_TRANSITION" "$STATE/$ID.meta" "$BACKLOG_CLOSE_MARKER" \
       "$DATA" "$ID" "$STATE" "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}"; then
     fm_lock_release "$META_LOCK"

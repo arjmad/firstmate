@@ -86,6 +86,9 @@ if ! declare -F fm_pr_url_parse >/dev/null 2>&1; then
   . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-pr-lib.sh"
 fi
 
+# bin/fm-inbox.sh lives beside this library; the close transition calls it.
+FM_BACKLOG_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Latched when a row read hits its bound. fm_backlog_row_show runs inside a
 # command substitution, so the subshell can READ this latch but cannot set it;
 # the callers that capture its status own the write.
@@ -881,7 +884,24 @@ fm_backlog_close_transition() {
   shift 5
   [ -z "$meta" ] || fm_backlog_record_remove "$meta" "task record" "$state" || return 1
   fm_backlog_done "$data" "$id" "$@" || return 1
+  fm_backlog_close_reply "$state" "$data" "$id" "$@"
   fm_backlog_record_remove "$marker" "pending-close record" "$state"
+}
+
+# Answer a closed row's handoff note through bin/fm-inbox.sh close-reply, which
+# owns the reply and ignores a row no handoff filed. The row is already done,
+# so a failure only warns and never fails the transition; replay re-runs the
+# close and close-reply skips a note already answered. FM_HANDOFF_CLOSE_REPLY=skip
+# (a forced teardown, whose work may never have landed) writes nothing.
+fm_backlog_close_reply() {  # <state-dir> <data-dir> <id> [done flag...]
+  local state=$1 data=$2 id=$3
+  shift 3
+  [ "${FM_HANDOFF_CLOSE_REPLY:-}" != skip ] || return 0
+  [ -x "$FM_BACKLOG_LIB_DIR/fm-inbox.sh" ] || return 0
+  FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" \
+    "$FM_BACKLOG_LIB_DIR/fm-inbox.sh" close-reply "$id" "done" "$@" >/dev/null 2>&1 \
+    || printf 'fm-backlog: %s closed, but its handoff reply was not written; answer it with bin/fm-inbox.sh reply\n' "$id" >&2
+  return 0
 }
 
 # The captain-held twin of the close transition: same record, same ordering,

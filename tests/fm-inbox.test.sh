@@ -658,3 +658,66 @@ assert_equals "" "$(rewake "$home" $((86400 * 5)))" "an acknowledged note is nev
 assert_equals "(no unread inbox notes)" "$(run_inbox "$home" unread)" \
   "an acknowledged note leaves the unread list"
 pass "rewake-due re-wakes an unacknowledged note once a day until it is acknowledged"
+
+# --- note --acknowledged saves a record that wakes nobody ------------------------
+
+home=$(make_home acknowledged)
+out=$(run_inbox "$home" note --acknowledged --request-id report:relay-1 --json "[cade] report relay-1: told Arjun") \
+  || fail "note --acknowledged should succeed"
+aid=$(printf '%s' "$out" | json_get id)
+assert_equals "True" "$(printf '%s' "$out" | json_get acknowledged)" "an acknowledged note reports acknowledged"
+assert_equals "False" "$(printf '%s' "$out" | json_get announced)" "an acknowledged note is not announced"
+assert_equals "0" "$(count_notes "$home")" "an acknowledged note is not pending"
+[ -f "$home/state/inbox/handled/$aid.note" ] || fail "an acknowledged note is saved under handled/"
+assert_equals "0" "$(count_wakes "$home")" "an acknowledged note appends no wake"
+out=$(run_inbox "$home" note --acknowledged --request-id report:relay-1 --json "[cade] report relay-1: told Arjun")
+assert_equals "replay" "$(printf '%s' "$out" | json_get outcome)" "a repeat of the request id replays"
+assert_equals "0" "$(count_wakes "$home")" "the replay appends no wake either"
+pass "note --acknowledged saves straight into handled/ with no wake, idempotently"
+
+# --- close-reply answers a handoff note only when nobody did ---------------------
+
+home=$(make_home close-reply)
+assert_equals "" "$(run_inbox "$home" close-reply hf-none "done" --pr https://github.com/o/r/pull/1)" \
+  "a row no handoff filed is a silent no-op"
+hid=$(run_inbox "$home" note --request-id handoff:hf-1 --json "[codex] handoff hf-1: fix it" | json_get id)
+assert_equals "replied $hid (handoff hf-1 removed)" \
+  "$(run_inbox "$home" close-reply hf-1 removed --reason "out of scope")" "close-reply records the reply"
+body=$(run_inbox "$home" receipts --all-replies | json_get replies 0 body)
+assert_contains "$body" "Reason: out of scope" "the removed reply carries the reason"
+assert_equals "already-replied $hid (handoff hf-1)" "$(run_inbox "$home" close-reply hf-1 "done")" \
+  "a second close leaves the first reply alone"
+pass "close-reply answers a handoff note once and ignores rows without one"
+
+# --- unread lists acknowledged handoffs closed with no reply ---------------------
+
+home=$(make_home unreplied)
+old=$(run_inbox "$home" note --request-id handoff:hf-gone --json "[claude] handoff hf-gone: the forgotten one" | json_get id)
+answered=$(run_inbox "$home" note --request-id handoff:hf-answered --json "[claude] handoff hf-answered" | json_get id)
+plain=$(run_inbox "$home" note --json "plain note, no handoff" | json_get id)
+run_inbox "$home" drain --ack "$old" "$answered" "$plain" >/dev/null
+run_inbox "$home" reply "$answered" "done" >/dev/null
+assert_not_contains "$(run_inbox "$home" unread)" "$old" "a handoff acknowledged under a day ago is not listed yet"
+later=$(( $(date +%s) + 90000 ))
+out=$(FM_INBOX_NOW=$later run_inbox "$home" unread)
+assert_contains "$out" "1 acknowledged handoff note(s) with no reply and no open backlog row" "unread counts the unanswered handoff"
+assert_contains "$out" "$old" "unread names the unanswered handoff's note"
+assert_contains "$out" "handoff hf-gone" "unread names the handoff's backlog item"
+assert_not_contains "$out" "$answered" "an answered handoff is not listed"
+assert_not_contains "$out" "$plain" "a note that is not a handoff is not listed"
+json=$(FM_INBOX_NOW=$later run_inbox "$home" unread --json)
+assert_equals "hf-gone" "$(printf '%s' "$json" | json_get unreplied_handoffs 0 item)" \
+  "unread --json lists the unanswered handoff"
+mkdir -p "$home/state/inbox/.handed-off" && printf 'sm-1\n' >"$home/state/inbox/.handed-off/hf-gone"
+assert_not_contains "$(FM_INBOX_NOW=$later run_inbox "$home" unread)" "$old" \
+  "a handoff moved to a secondmate closes there and is not listed"
+rm -f "$home/state/inbox/.handed-off/hf-gone"
+if command -v tasks-axi >/dev/null 2>&1; then
+  fm_test_tasks_toml "$home/.tasks.toml"
+  printf '## In flight\n\n## Queued\n\n## Done\n' >"$home/data/backlog.md"
+  FM_HOME="$home" "$ROOT/bin/fm-tasks-axi.sh" add hf-gone "Still queued" --kind task >/dev/null \
+    || fail "could not add the open row"
+  assert_not_contains "$(FM_INBOX_NOW=$later run_inbox "$home" unread)" "$old" \
+    "a handoff whose row is still open waits for its close reply"
+fi
+pass "unread lists acknowledged handoff notes a day old with no reply and no open row"

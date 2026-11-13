@@ -60,6 +60,18 @@
 # same control lock as `owner`. Rows already in the backlog stay readable as
 # they are.
 #
+# Handoff replies: after `done` (or `close`) and `rm` (or `delete`) succeed, the
+# wrapper runs bin/fm-inbox.sh close-reply, which answers the row's handoff note
+# (request id handoff:<id>) when it has no reply yet: done with the close's
+# --pr/--report/--note, or removed with the reason `rm` takes as
+# `--reason <text>`, which the wrapper consumes. A row no handoff filed is
+# untouched, and the reply never changes the close's exit status or stdout.
+# A caller whose close is not the work being done sets FM_HANDOFF_CLOSE_REPLY:
+# `removed` answers as removed with the --note as the reason (the weekly prune
+# drops rows through `done`), and `skip` writes nothing, leaving the reply to a
+# person (bin/fm-inbox.sh unread resurfaces it). A help read writes nothing.
+# Reply before closing when you have a fuller answer: a note keeps one reply.
+#
 # Done archive: tasks-axi never reads back the rows that markdown retention
 # moved out of the backlog. The wrapper-only subcommand `archive-path` prints
 # where this home's configured archive lives (bin/fm-backlog-transition-lib.sh
@@ -174,6 +186,8 @@ absolute_from_caller() {  # <path-value>
 
 ARGS=()
 CITE_OLDER_QUOTE=0
+REASON=
+reason_value_next=0
 OWNER=
 DUE=
 DUE_GIVEN=0
@@ -191,6 +205,11 @@ for arg in "$@"; do
   if [ "$owner_value_next" = 1 ]; then
     OWNER=$arg
     owner_value_next=0
+    continue
+  fi
+  if [ "$reason_value_next" = 1 ]; then
+    REASON=$arg
+    reason_value_next=0
     continue
   fi
   case "$row_value_next" in
@@ -234,6 +253,18 @@ for arg in "$@"; do
       esac
       ARGS+=("$arg")
       ;;
+    --reason|--reason=*)
+      case "${1:-}" in
+        rm|delete)
+          if [ "$arg" = --reason ]; then
+            reason_value_next=1
+          else
+            REASON=${arg#--reason=}
+          fi
+          ;;
+        *) ARGS+=("$arg") ;;
+      esac
+      ;;
     --cite-older-quote)
       if [ "${1:-}" = hold ]; then
         CITE_OLDER_QUOTE=1
@@ -255,6 +286,7 @@ for arg in "$@"; do
 done
 
 [ "$owner_value_next" = 0 ] || fail "--owner needs a value: arjun or fleet"
+[ "$reason_value_next" = 0 ] || fail "--reason needs a value"
 if [ -n "$OWNER" ] && ! fm_backlog_owner_valid "$OWNER"; then
   fail "--owner must be arjun or fleet, not $OWNER"
 fi
@@ -588,6 +620,38 @@ guard_superseded_quote() {
   fi
 }
 
+# After a successful done/close or rm/delete, answer the row's handoff note
+# through bin/fm-inbox.sh close-reply, which owns the reply and does nothing
+# for a row no handoff filed. The close already landed, so a failure here only
+# warns on stderr and never changes the exit status or stdout (--json stays
+# parseable).
+close_reply() {  # <verb>
+  local verb=$1 id='' arg how="done" i=1 note=''
+  local -a flags=()
+  [ "${FM_HANDOFF_CLOSE_REPLY:-}" != skip ] || return 0
+  while [ "$i" -lt "${#ARGS[@]}" ]; do
+    arg=${ARGS[$i]}
+    case "$arg" in
+      --note) note=${ARGS[$((i + 1))]:-}; flags+=("$arg" "$note"); i=$((i + 1)) ;;
+      --note=*) note=${arg#--note=}; flags+=("$arg") ;;
+      --pr|--report) flags+=("$arg" "${ARGS[$((i + 1))]:-}"); i=$((i + 1)) ;;
+      --pr=*|--report=*) flags+=("$arg") ;;
+      --keep) i=$((i + 1)) ;;
+      -h|--help) return 0 ;;
+      -*) ;;
+      *) [ -n "$id" ] || id=$arg ;;
+    esac
+    i=$((i + 1))
+  done
+  [ -n "$id" ] || return 0
+  case "$verb" in rm|delete) how=removed; flags=(--reason "$REASON") ;; esac
+  [ "${FM_HANDOFF_CLOSE_REPLY:-}" != removed ] || { how=removed; flags=(--reason "${REASON:-$note}"); }
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-inbox.sh" close-reply "$id" "$how" ${flags[@]+"${flags[@]}"} >&2 \
+    || printf 'fm-tasks-axi: %s %s landed, but its handoff reply was not written; answer it with bin/fm-inbox.sh reply\n' "$verb" "$id" >&2
+  return 0
+}
+
 command -v tasks-axi >/dev/null 2>&1 || fail "tasks-axi is not on PATH; run bin/fm-bootstrap.sh for the install command"
 
 FM_BACKLOG_TRANSITION_ERROR=
@@ -646,4 +710,12 @@ if [ -n "$OWNER_BODY_FILE" ]; then
   rm -f -- "$OWNER_BODY_FILE"
   exit "$status"
 fi
+case "${1:-}" in
+  done|close|rm|delete)
+    status=0
+    tasks-axi ${ARGS[@]+"${ARGS[@]}"} || status=$?
+    [ "$status" -eq 0 ] && close_reply "$1"
+    exit "$status"
+    ;;
+esac
 exec tasks-axi ${ARGS[@]+"${ARGS[@]}"}

@@ -22,10 +22,12 @@
 #           fleet work and must not become fleet work.
 #
 # Usage:
-#   fm-inbox.sh note [--request-id <id>] [--json] [--] <text>...
-#   fm-inbox.sh note [--request-id <id>] [--json] -   (body from stdin)
+#   fm-inbox.sh note [--request-id <id>] [--json] [--acknowledged] [--] <text>...
+#   fm-inbox.sh note [--request-id <id>] [--json] [--acknowledged] -   (body from stdin)
 #   fm-inbox.sh announce [--json] [--why <text>] <id>
 #   fm-inbox.sh reply [--json] <id> <text>... | reply [--json] <id> -
+#   fm-inbox.sh close-reply <item-id> done|removed [--pr <url>] [--report <path>]
+#                [--note <text>] [--reason <text>]
 #   fm-inbox.sh receipts [--after <cursor>] [--all-pending] [--all-handled] [--all-replies]
 #   fm-inbox.sh ready
 #   fm-inbox.sh say  [<file.wav>]       (default: audio on stdin)
@@ -42,6 +44,9 @@
 # retry are distinguishable. The binding is recorded before announcement, so a
 # crash between save and wake still replays the original note. Without
 # --request-id the historical one-note-per-call behaviour is unchanged.
+# `note --acknowledged` saves the note straight into handled/ and appends no
+# wake: a record for firstmate's history that needs no turn, such as a relay
+# confirming it passed an answer on.
 # `announce` repairs the wake for an already-saved note without creating another;
 # --why puts one line of context ahead of the note's summary in that wake.
 # A plain `note` (no --request-id or --json) that `bin/fm-capture-autoland.sh
@@ -72,9 +77,17 @@
 # readable. One reply per note: a second one is refused. A sender finds its
 # reply through the request id it noted under, so a reply on a note with none
 # adds a line saying such a sender cannot find it.
+# `close-reply` is the scripted reply a backlog close writes: bin/fm-tasks-axi.sh
+# `done`/`rm` and the teardown close call it with the row id and the close's own
+# links, and when the row has a handoff note (request id handoff:<item-id>) with
+# no reply yet it records "Done ..." with the links, or "Removed ..." with the
+# reason. No handoff note, or one already answered, is a silent no-op.
 # `unread` lists the pending notes nobody has acknowledged, oldest first, capped
 # at 10 with a count of the rest; the session-start digest and the bearings
-# snapshot print it so an unacknowledged note keeps resurfacing.
+# snapshot print it so an unacknowledged note keeps resurfacing. It also lists
+# acknowledged handoff notes 24 hours (FM_INBOX_REWAKE_SECONDS) past capture
+# that still have no reply while their backlog row is closed or gone (JSON
+# `unreplied_handoffs`), so a handoff closed without an answer resurfaces.
 # `rewake-due` is the watcher's daily re-wake: each note still pending 24 hours
 # (FM_INBOX_REWAKE_SECONDS) after its capture or its last re-wake gets one more
 # `check` wake keyed like its first, unless that key is still queued, and the
@@ -100,7 +113,7 @@
 # An absent profile means the call uses whatever credentials are already in the
 # environment, which is also what FM_INBOX_PROFILE= (empty) forces.
 #
-# `note`, `announce`, `reply`, `receipts`, `ready`, `status`, `list`, `drain`,
+# `note`, `announce`, `reply`, `close-reply`, `receipts`, `ready`, `status`, `list`, `drain`,
 # `unread` and `rewake-due` need NO configuration at all, because they make no model call. The voice
 # handover depends on `note`, so it keeps working in a home that has configured
 # nothing. `--json` / `receipts` / `ready` require python3, which a firstmate
@@ -110,8 +123,8 @@
 #   FM_HOME              operational home whose state/ and data/ are used.
 #
 # PRIVACY: `say` sends your audio and `ask` sends your question to Bedrock.
-# `note`, `announce`, `reply`, `receipts`, `ready`, `status`, `list`, `drain`,
-# `unread` and `rewake-due` make no network call at all.
+# `note`, `announce`, `reply`, `close-reply`, `receipts`, `ready`, `status`, `list`,
+# `drain`, `unread` and `rewake-due` make no network call at all.
 #
 # `note` is also the queueing half of the spoken interface: when the voice agent
 # in bin/fm-voice-relay.py hands real work over to firstmate, it runs this
@@ -213,6 +226,8 @@ aws_call() {
 # ---------------------------------------------------------------- note
 
 REQUESTS="$INBOX/.requests"
+# Where a new note is saved: pending, or handled/ for `note --acknowledged`.
+NOTE_DEST="$INBOX"
 ANNOUNCED_DIR="$INBOX/.announced"
 REPLIES="$INBOX/.replies"
 
@@ -450,7 +465,7 @@ publish_from_reservation() {  # <request-id> <source> <body> <extra>
   if [ ! -f "$INBOX/$id.note" ] && [ ! -f "$INBOX/handled/$id.note" ]; then
     tmp=$(mktemp "$INBOX/.staging-XXXXXX")
     write_note_file "$tmp" "$id" "$source" "$body" "$extra" "$request_id"
-    mv "$tmp" "$INBOX/$id.note"
+    mv "$tmp" "$NOTE_DEST/$id.note"
   fi
   printf '%s\n' "$id"
 }
@@ -458,11 +473,11 @@ publish_from_reservation() {  # <request-id> <source> <body> <extra>
 queue_note() {
   local source=$1 body=$2 extra=${3:-} request_id=${4:-} json=${5:-0}
   local strict=0
-  if [ -n "$request_id" ] || [ "$json" -eq 1 ]; then
+  if [ -n "$request_id" ] || [ "$json" -eq 1 ] || [ "$NOTE_DEST" != "$INBOX" ]; then
     strict=1
   fi
   [ -n "${body//[[:space:]]/}" ] || die "refusing to queue an empty note"
-  mkdir -p "$INBOX"
+  mkdir -p "$INBOX" "$NOTE_DEST"
 
   local tmp id summary staging_name reserved
 
@@ -487,7 +502,7 @@ queue_note() {
       finish_note_result replay "$id" "$request_id" "$json" "$strict" "$summary"
       return $?
     fi
-    mv "$tmp" "$INBOX/$id.note"
+    mv "$tmp" "$NOTE_DEST/$id.note"
     summary=$(note_summary_from_body "$body")
     finish_note_result created "$id" "$request_id" "$json" "$strict" "$summary"
     return $?
@@ -497,7 +512,7 @@ queue_note() {
   staging_name=$(basename "$tmp")
   id="$(date +%s)-${staging_name#.staging-}"
   write_note_file "$tmp" "$id" "$source" "$body" "$extra" ""
-  mv "$tmp" "$INBOX/$id.note"
+  mv "$tmp" "$NOTE_DEST/$id.note"
   summary=$(note_summary_from_body "$body")
   finish_note_result created "$id" "" "$json" "$strict" "$summary"
 }
@@ -507,22 +522,23 @@ cmd_note() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --json) json=1; shift ;;
+      --acknowledged) NOTE_DEST="$INBOX/handled"; shift ;;
       --request-id)
-        [ "$#" -ge 2 ] || die "usage: fm-inbox.sh note [--request-id <id>] [--json] [--] <text>... (or: note -)"
+        [ "$#" -ge 2 ] || die "usage: fm-inbox.sh note [--request-id <id>] [--json] [--acknowledged] [--] <text>... (or: note -)"
         request_id=$2
         valid_request_id "$request_id" \
           || die "invalid request id (use 1-128 characters: A-Za-z0-9._:-)"
         shift 2
         ;;
       --) shift; break ;;
-      -h|--help) die "usage: fm-inbox.sh note [--request-id <id>] [--json] [--] <text>... (or: note -)" ;;
+      -h|--help) die "usage: fm-inbox.sh note [--request-id <id>] [--json] [--acknowledged] [--] <text>... (or: note -)" ;;
       *) break ;;
     esac
   done
   if [ "$#" -eq 0 ]; then
-    die "usage: fm-inbox.sh note [--request-id <id>] [--json] [--] <text>... (or: note -)"
+    die "usage: fm-inbox.sh note [--request-id <id>] [--json] [--acknowledged] [--] <text>... (or: note -)"
   elif [ "$1" = "-" ]; then
-    [ "$#" -eq 1 ] || die "usage: fm-inbox.sh note [--request-id <id>] [--json] -"
+    [ "$#" -eq 1 ] || die "usage: fm-inbox.sh note [--request-id <id>] [--json] [--acknowledged] -"
     body=$(cat; printf .)
     body=${body%.}
   else
@@ -624,8 +640,38 @@ next_reply_seq() {
   printf '%s\n' "$seq"
 }
 
+# Record <body> as the one reply to note <id>. Returns 4, writing nothing, when
+# the note already has its reply, and 1 when the sequence cannot be claimed.
+record_reply() {  # <id> <body>
+  local id=$1 body=$2 seq staging
+  mkdir -p "$REPLIES" || return 1
+  load_wake_lib || return 1
+  fm_lock_acquire_wait "$REPLY_SEQ_LOCK" || return 1
+  if [ -f "$REPLIES/$id" ]; then
+    fm_lock_release "$REPLY_SEQ_LOCK"
+    return 4
+  fi
+  if ! seq=$(next_reply_seq) || ! staging=$(mktemp "$REPLIES/.staging-XXXXXX"); then
+    fm_lock_release "$REPLY_SEQ_LOCK"
+    return 1
+  fi
+  {
+    printf 'id=%s\n' "$id"
+    printf 'at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'seq=%s\n' "$seq"
+    printf -- '--\n'
+    printf '%s' "$body"
+    case "$body" in
+      *$'\n') ;;
+      *) printf '\n' ;;
+    esac
+  } >"$staging"
+  mv "$staging" "$REPLIES/$id"
+  fm_lock_release "$REPLY_SEQ_LOCK"
+}
+
 cmd_reply() {
-  local json=0 id body path staging seq
+  local json=0 id body path rc=0
   if [ "${1:-}" = "--json" ]; then
     json=1
     shift
@@ -647,31 +693,9 @@ cmd_reply() {
     body="$*"
   fi
   [ -n "${body//[[:space:]]/}" ] || die "refusing to record an empty reply"
-  mkdir -p "$REPLIES"
-  load_wake_lib || die "the reply sequence needs $FM_ROOT/bin/fm-wake-lib.sh"
-  fm_lock_acquire_wait "$REPLY_SEQ_LOCK" || die "could not claim the reply sequence"
-  if [ -f "$REPLIES/$id" ]; then
-    fm_lock_release "$REPLY_SEQ_LOCK"
-    die "reply already recorded for $id"
-  fi
-  if ! seq=$(next_reply_seq); then
-    fm_lock_release "$REPLY_SEQ_LOCK"
-    die "could not claim the reply sequence"
-  fi
-  staging=$(mktemp "$REPLIES/.staging-XXXXXX")
-  {
-    printf 'id=%s\n' "$id"
-    printf 'at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    printf 'seq=%s\n' "$seq"
-    printf -- '--\n'
-    printf '%s' "$body"
-    case "$body" in
-      *$'\n') ;;
-      *) printf '\n' ;;
-    esac
-  } >"$staging"
-  mv "$staging" "$REPLIES/$id"
-  fm_lock_release "$REPLY_SEQ_LOCK"
+  record_reply "$id" "$body" || rc=$?
+  [ "$rc" -ne 4 ] || die "reply already recorded for $id (a backlog close writes one when none exists: reply before closing, or close with done --note or rm --reason)"
+  [ "$rc" -eq 0 ] || die "could not claim the reply sequence"
   if [ "$json" -eq 1 ]; then
     need_python
     python3 - "$id" "$REPLIES/$id" <<'PY'
@@ -693,6 +717,64 @@ PY
       return 0
     printf '  no request id: a sender that filed none cannot find this reply; if it must reach them, answer through their own lane\n'
   fi
+}
+
+# Answer the handoff note filed for backlog item <item> (request id
+# handoff:<item>) from the close itself, so the sender hears the outcome even
+# when nobody writes a reply by hand. A row with no handoff note, or a note
+# that already has its reply, is left alone and exits 0. Callers pass the
+# close's own tasks-axi flags; unknown ones are ignored.
+cmd_close_reply() {
+  local usage="usage: fm-inbox.sh close-reply <item-id> done|removed [--pr <url>] [--report <path>] [--note <text>] [--reason <text>]"
+  local item=${1:-} how=${2:-} pr='' report='' note='' reason='' rid note_id body rc=0
+  [ -n "$item" ] && [ -n "$how" ] || die "$usage"
+  case "$how" in done|removed) ;; *) die "$usage" ;; esac
+  shift 2
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --pr|--report|--note|--reason)
+        [ "$#" -ge 2 ] || die "$usage"
+        case "$1" in
+          --pr) pr=$2 ;;
+          --report) report=$2 ;;
+          --note) note=$2 ;;
+          --reason) reason=$2 ;;
+        esac
+        shift 2 ;;
+      --pr=*) pr=${1#*=}; shift ;;
+      --report=*) report=${1#*=}; shift ;;
+      --note=*) note=${1#*=}; shift ;;
+      --reason=*) reason=${1#*=}; shift ;;
+      *) shift ;;
+    esac
+  done
+  rid="handoff:$item"
+  valid_request_id "$rid" || return 0
+  [ -f "$REQUESTS/$rid" ] || return 0
+  note_id=$(tr -d '\r' <"$REQUESTS/$rid")
+  note_id=${note_id%%$'\n'*}
+  valid_note_id "$note_id" && note_path "$note_id" >/dev/null || return 0
+  if [ -f "$REPLIES/$note_id" ]; then
+    printf 'already-replied %s (handoff %s)\n' "$note_id" "$item"
+    return 0
+  fi
+  if [ "$how" = "done" ]; then
+    body="Done: firstmate closed backlog item $item on $(date -u +%Y-%m-%d)."
+    [ -z "$pr" ] || body="$body"$'\n'"PR: $pr"
+    [ -z "$report" ] || body="$body"$'\n'"Report: $report"
+    [ -z "$note" ] || body="$body"$'\n'"Note: $note"
+    [ -n "$pr$report$note" ] || body="$body"$'\n'"The close recorded no PR, report or note."
+  else
+    body="Removed: firstmate took backlog item $item off its backlog on $(date -u +%Y-%m-%d) without doing it."
+    body="$body"$'\n'"Reason: ${reason:-none recorded}"
+  fi
+  body="$body"$'\n'"(Written by the close itself, because no reply was recorded before it.)"
+  record_reply "$note_id" "$body" || rc=$?
+  case "$rc" in
+    0) printf 'replied %s (handoff %s %s)\n' "$note_id" "$item" "$how" ;;
+    4) printf 'already-replied %s (handoff %s)\n' "$note_id" "$item" ;;
+    *) die "could not record the close reply for handoff $item on note $note_id" ;;
+  esac
 }
 
 cmd_receipts() {
@@ -1196,8 +1278,42 @@ pending_note_ids() {
   done | LC_ALL=C sort -t- -k1,1n -k2
 }
 
+# Acknowledged handoff notes (request id handoff:<item>) captured at least
+# REWAKE_SECONDS ago that have no reply and whose backlog row is no longer open:
+# a handoff closed without an answer, which nothing else would resurface. A row
+# still queued, in flight or held gets its reply when it closes, so it is not
+# listed, nor is a row bin/fm-backlog-handoff.sh moved to a secondmate
+# (.handed-off/<item>), which closes in that home. A row that cannot be read is
+# listed rather than hidden. One
+# tab-separated line each, oldest first: note id, captured at, item, summary.
+unreplied_handoff_rows() {
+  local now f id rid item captured at summary show state
+  [ -d "$INBOX/handled" ] || return 0
+  now=${FM_INBOX_NOW:-$(date +%s)}
+  for f in "$INBOX/handled"/*.note; do
+    [ -f "$f" ] || continue
+    id=${f##*/}
+    id=${id%.note}
+    [ ! -f "$REPLIES/$id" ] || continue
+    rid=$(sed -n '/^--$/q;s/^request_id=//p' "$f" | head -n 1)
+    case "$rid" in handoff:?*) item=${rid#handoff:} ;; *) continue ;; esac
+    [ ! -f "$INBOX/.handed-off/$item" ] || continue
+    captured=${id%%-*}
+    case "$captured" in ''|*[!0-9]*) continue ;; esac
+    [ $((now - captured)) -ge "$REWAKE_SECONDS" ] || continue
+    if show=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+        FM_CONFIG_OVERRIDE="$CONFIG" "$FM_ROOT/bin/fm-tasks-axi.sh" show "$item" 2>/dev/null); then
+      state=$(printf '%s\n' "$show" | sed -n 's/^  state: //p' | head -n 1)
+      [ "$state" = "done" ] || continue
+    fi
+    at=$(sed -n '/^--$/q;s/^at=//p' "$f" | head -n 1)
+    summary=$(note_summary_from_body "$(read_note_body "$f")")
+    printf '%s\t%s\t%s\t%s\n' "$id" "${at:-unknown}" "$item" "$summary"
+  done | LC_ALL=C sort -t- -k1,1n -k2
+}
+
 cmd_unread() {
-  local json=0 ids total=0 id path at summary rows=''
+  local json=0 ids total=0 id path at summary rows='' unreplied item
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --json) json=1; shift ;;
@@ -1214,30 +1330,51 @@ cmd_unread() {
     summary=$(note_summary_from_body "$(read_note_body "$path")")
     rows="$rows$id"$'\t'"${at:-unknown}"$'\t'"$summary"$'\n'
   done
+  unreplied=$(unreplied_handoff_rows)
   if [ "$json" -eq 1 ]; then
     need_python
-    printf '%s' "$rows" | python3 -c '
+    { printf '%s' "$rows"; printf '%s\n' '--unreplied--'; printf '%s' "$unreplied"; } | python3 -c '
 import json, sys
 total, bound = int(sys.argv[1]), int(sys.argv[2])
-notes = []
+notes, unreplied = [], []
+target = notes
 for line in sys.stdin.read().splitlines():
-    note_id, at, summary = (line.split("\t", 2) + ["", ""])[:3]
-    notes.append({"id": note_id, "at": at, "summary": summary})
+    if line == "--unreplied--":
+        target = unreplied
+        continue
+    if not line:
+        continue
+    if target is notes:
+        note_id, at, summary = (line.split("\t", 2) + ["", ""])[:3]
+        notes.append({"id": note_id, "at": at, "summary": summary})
+    else:
+        note_id, at, item, summary = (line.split("\t", 3) + ["", "", ""])[:4]
+        unreplied.append({"id": note_id, "at": at, "item": item, "summary": summary})
 json.dump({"schema": "fm-inbox-unread.v1", "total": total, "bound": bound,
-           "notes": notes, "more": max(total - bound, 0)}, sys.stdout, separators=(",", ":"))
+           "notes": notes, "more": max(total - bound, 0),
+           "unreplied_handoffs": unreplied}, sys.stdout, separators=(",", ":"))
 sys.stdout.write("\n")' "$total" "$UNREAD_BOUND"
     return 0
   fi
   if [ "$total" -eq 0 ]; then
     printf '(no unread inbox notes)\n'
-    return 0
+  else
+    printf '%s unread inbox note(s), oldest first; acknowledge each handled note with fm-inbox.sh drain --ack <id>:\n' "$total"
+    printf '%s' "$rows" | while IFS=$'\t' read -r id at summary; do
+      printf '  %s  %s  %s\n' "$id" "$at" "$summary"
+    done
+    [ "$total" -le "$UNREAD_BOUND" ] \
+      || printf '  ... and %s more (fm-inbox.sh list shows every note)\n' "$((total - UNREAD_BOUND))"
   fi
-  printf '%s unread inbox note(s), oldest first; acknowledge each handled note with fm-inbox.sh drain --ack <id>:\n' "$total"
-  printf '%s' "$rows" | while IFS=$'\t' read -r id at summary; do
-    printf '  %s  %s  %s\n' "$id" "$at" "$summary"
+  [ -n "$unreplied" ] || return 0
+  total=$(printf '%s\n' "$unreplied" | grep -c .)
+  printf '%s acknowledged handoff note(s) with no reply and no open backlog row; the sender has heard nothing, so answer each with fm-inbox.sh reply <id>:\n' \
+    "$total"
+  printf '%s\n' "$unreplied" | head -n "$UNREAD_BOUND" | while IFS=$'\t' read -r id at item summary; do
+    printf '  %s  %s  handoff %s  %s\n' "$id" "$at" "$item" "$summary"
   done
   [ "$total" -le "$UNREAD_BOUND" ] \
-    || printf '  ... and %s more (fm-inbox.sh list shows every note)\n' "$((total - UNREAD_BOUND))"
+    || printf '  ... and %s more (fm-inbox.sh unread --json lists every one)\n' "$((total - UNREAD_BOUND))"
 }
 
 # One check wake per note that is still pending a full REWAKE_SECONDS after its
@@ -1284,6 +1421,7 @@ case "${1:-}" in
   note)     shift; cmd_note "$@" ;;
   announce) shift; cmd_announce "$@" ;;
   reply)    shift; cmd_reply "$@" ;;
+  close-reply) shift; cmd_close_reply "$@" ;;
   receipts) shift; cmd_receipts "$@" ;;
   ready)    shift; cmd_ready "$@" ;;
   say)      shift; cmd_say "$@" ;;
