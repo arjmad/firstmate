@@ -332,8 +332,8 @@ test_fire_and_forget_retry_stays_off_without_the_flag() {
   expect_code 0 "$rc" "a skipped fire-and-forget ring is still a sent steer"
   [ ! -e "$dir/home/state/domain.inbox/.retry-ring" ] \
     || fail "an absent flag still owed a fire-and-forget retry"
-  assert_contains "$(cat "$err")" "nothing will ring it again (fire-and-forget steers skip the re-ring ladder)" \
-    "an absent flag should say that nothing re-rings a fire-and-forget steer"
+  assert_contains "$(cat "$err")" "the re-ring ladder skips fire-and-forget records" \
+    "an absent flag should say the ladder skips a fire-and-forget steer"
   case "$(cat "$err")" in
   *"the watcher will re-ring"*) fail "a fire-and-forget notice must not promise a re-ring" ;;
   esac

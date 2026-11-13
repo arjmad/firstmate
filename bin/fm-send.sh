@@ -1275,9 +1275,9 @@ else
     fm_task_inbox_ring "$TARGET_BACKEND" "$T" "$INBOX_RECORD" "$EXPECTED_LABEL" || ring_rc=$?
     ring_retry="the watcher will re-ring"
     # A fire-and-forget record never enters the re-ring ladder, so without
-    # config/wait-no-turns nothing rings it again.
+    # config/wait-no-turns it waits for the next ring into the inbox.
     [ -z "$FIRE_AND_FORGET_ID" ] \
-      || ring_retry="nothing will ring it again (fire-and-forget steers skip the re-ring ladder)"
+      || ring_retry="the re-ring ladder skips fire-and-forget records, so it waits for the next ring into that inbox or the agent's own inbox check; do not resend it"
     if [ -n "$FIRE_AND_FORGET_ID" ] \
       && [ -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/wait-no-turns" ]; then
       case "$ring_rc" in
