@@ -760,7 +760,7 @@ assert_contains "$body" "PR: https://github.com/o/r/pull/7" "the reply carries t
 assert_contains "$body" "secondmate sm-1 reported it done" "the reply names the secondmate"
 [ ! -e "$home/state/inbox/.handed-off/hf-1" ] || fail "an answered handoff keeps its handed-off marker"
 [ -e "$home/state/inbox/.handed-off/hf-10" ] || fail "an item whose id only starts like the answered one lost its marker"
-assert_equals "1" "$(reply_count "$home")" "an item whose id only starts like the answered one gets no reply"
+[ ! -e "$home/state/inbox/.replies/$lone" ] || fail "an item whose id only starts like the answered one got a reply"
 pass "close-handed-off answers a moved row's handoff once its PR merges"
 
 home=$(make_home handed-off-failed)
