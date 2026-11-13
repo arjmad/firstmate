@@ -603,17 +603,17 @@ test_code_review_model_pin() {
   printf ' claude-fable-5-2 \nignored\n' > "$cfg/code-review-model"
   [ "$(CONFIG=$cfg fm_dod_code_review_model)" = claude-fable-5-2 ] || fail "file: review model is not its first trimmed line"
   out=$(CONFIG=$cfg fm_dod_code_review_block direct-PR)
-  assert_contains "$out" 'claude -p --model claude-fable-5-2 "/code-review' "the review command does not carry the pinned model"
+  assert_contains "$out" 'review <pr-url> --model claude-fable-5-2`' "the review command does not carry the pinned model"
   printf 'x;rm -rf ~\n' > "$cfg/code-review-model"
   [ "$(CONFIG=$cfg fm_dod_code_review_model)" = claude-opus-5-5 ] || fail "unsafe id: review model is not the default"
   pass "code review model pin reads config/code-review-model with a claude-opus-5-5 default"
 }
 
 # A PR-based DoD on GitHub hands the worker the code review step before its
-# done report, naming a review script that runs; a forge where
-# /code-review --comment cannot post, and local-only, carry none.
+# done report, naming a review script that runs and posts the findings
+# itself; a forge it cannot post to, and local-only, carry none.
 test_pr_based_dod_carries_the_code_review_step() {
-  local mode out cli review_line done_line sol_line claude_line recheck_line
+  local mode out cli review_line done_line sol_line claude_line recheck_line rc
   for mode in direct-PR no-mistakes; do
     out="$TMP_ROOT/dod-review-$mode.md"
     fm_dod_block "$mode" dod-review-task > "$out"
@@ -622,11 +622,13 @@ test_pr_based_dod_carries_the_code_review_step() {
     [ -n "$cli" ] || fail "$mode: DoD does not carry the code review step"
     "$cli" classify bin/x.sh | grep -qx code-changing || fail "$mode: the DoD's review script does not run: $cli"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    assert_grep 'once from this worktree with the arguments `'"$cli"' args <pr-url>` prints, which are `medium --comment <number>` followed by firstmate'"'"'s merge-gate focus' "$out" "$mode: DoD does not run the review with the focus arguments"
+    assert_grep 'once from this worktree on the pinned model `claude-opus-5-5` with the shell command `'"$cli"' review <pr-url> --model claude-opus-5-5`' "$out" "$mode: DoD does not run the review through the script on the default pinned model"
+    assert_grep 'then posts each finding to the PR itself' "$out" "$mode: DoD does not say the script posts the findings"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    assert_grep 'a=$('"$cli"' args <pr-url>) && claude -p --model claude-opus-5-5 "/code-review $a"' "$out" "$mode: DoD does not run the review headless on the default pinned model"
-    "$cli" args https://github.com/example/repo/pull/3 | grep -q '^medium --comment 3 Merge-gate focus for this review: ' \
-      || fail "$mode: the DoD's review script does not print the review arguments"
+    assert_grep 'or `review` exits non-zero, append `blocked:`' "$out" "$mode: DoD does not block on a failed review run"
+    rc=0
+    "$cli" review https://gitlab.example/group/project/-/merge_requests/7 --model claude-opus-5-5 2>/dev/null || rc=$?
+    [ "$rc" -eq 2 ] || fail "$mode: the DoD's review script does not refuse a non-GitHub URL before it runs"
     assert_grep "$cli record <pr-url>" "$out" "$mode: DoD does not name the record step"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
     assert_grep 'Pushes that fix or answer this review'"'"'s findings are covered by the one `record` you run after your last push' "$out" \
@@ -655,7 +657,7 @@ test_pr_based_dod_carries_the_code_review_step() {
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
     sol_line=$(grep -n 'first run the `tstack-sol-loop` skill' "$out" | cut -d: -f1)
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    claude_line=$(grep -n '^Then run Claude Code'"'"'s built-in `/code-review` once from this worktree with the arguments' "$out" | cut -d: -f1)
+    claude_line=$(grep -n '^Then run Claude Code'"'"'s built-in `/code-review` once from this worktree on the pinned model' "$out" | cut -d: -f1)
     [ -n "$claude_line" ] && [ "$sol_line" -lt "$claude_line" ] || fail "$mode: the Sol loop does not come before the one /code-review"
     assert_no_grep "A later push that changes the PR's diff needs the review again" "$out" "$mode: DoD still says every fix push needs a new review"
     review_line=$(grep -n '^Before that done report, give a code-changing GitHub PR its code review' "$out" | cut -d: -f1)
@@ -672,7 +674,7 @@ test_pr_based_dod_carries_the_code_review_step() {
   out="$TMP_ROOT/dod-review-manual.md"
   fm_dod_block no-mistakes dod-review-task "" none "" "" manual > "$out"
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-  assert_grep 'which are `medium --comment <number>` followed by firstmate'"'"'s merge-gate focus' "$out" "pr=manual: DoD does not carry the code review step"
+  assert_grep 'it runs the review headless with firstmate'"'"'s merge-gate focus' "$out" "pr=manual: DoD does not carry the code review step"
   assert_grep 'beyond the code-review step below' "$out" "pr=manual: DoD forbids the review's own PR comments"
   review_line=$(grep -n '^Before that done report, give a code-changing GitHub PR its code review' "$out" | cut -d: -f1)
   done_line=$(grep -n '^Then append `done' "$out" | cut -d: -f1)
