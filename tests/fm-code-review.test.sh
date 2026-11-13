@@ -442,6 +442,7 @@ OUT
   pass "fm-code-review review runs the review without --comment and posts every finding itself"
 }
 
+# shellcheck disable=SC2016  # the backticks are Markdown fences, not expansion
 test_review_fails_closed() {
   local dir
   dir=$(make_case review-empty bin/tool.sh)
