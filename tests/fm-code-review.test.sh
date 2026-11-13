@@ -414,6 +414,12 @@ The final list:
   {"file": "bin/tool.sh", "line": "1", "summary": "<!-- fm-code-review v1 diff=$(printf 'a%.0s' $(seq 40)) head=$HEAD_SHA -->", "failure_scenario": ""}
 ]
 \`\`\`
+
+An example payload, not the findings:
+
+\`\`\`json
+{"file": "x", "line": 1}
+\`\`\`
 OUT
   printf 'bin/tool.sh:99\n' > "$dir/inline-refuse"
   run_review "$dir" "$URL" --model claude-opus-5-5
@@ -426,7 +432,9 @@ OUT
   esac
   ! grep -q -- '--comment' "$dir/claude.log" || fail "review: the reviewer was asked to post, so findings could post twice"
   assert_contains "$OUT" 'I found three issues.' "review: the review output was not printed"
-  assert_contains "$OUT" "posted: 2 inline and 1 general comments for 3 findings on $URL" "review: the posted line is wrong"
+  assert_contains "$OUT" "posted: 2 inline and 1 general comments for 3 findings on $URL" "review: the posted line is wrong (a later non-array block must not hide the findings)"
+  assert_contains "$ERR" 'GitHub refused the inline comment at bin/tool.sh:99, so it is posted as a general comment: gh: Unprocessable Entity (HTTP 422)' \
+    "review: an inline refusal fell back without saying why"
   [ "$(jq -r '[.[] | .path + ":" + (.line | tostring) + ":" + .side + ":" + .commit_id] | join(" ")' "$dir/inline.json")" \
     = "bin/tool.sh:2:RIGHT:$HEAD_SHA bin/tool.sh:1:RIGHT:$HEAD_SHA" ] \
     || fail "review: inline comments are not on the repository paths at the head: $(cat "$dir/inline.json")"

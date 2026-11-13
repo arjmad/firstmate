@@ -4,6 +4,7 @@ The skill's posting step is optional by its own text ("fall back to `gh api` ...
 Decision: `bin/fm-code-review.sh review <pr-url> --model <model>` runs the headless review with no `--comment` and posts every finding of the JSON findings block the skill ends its reply with, inline on the PR's head, or as a general PR comment naming the file and line when GitHub refuses the inline one; the ship brief and the merge refusal name that command.
 One poster, the script, so nothing posts twice and no reviewer judgment decides whether findings reach the forge.
 `args` keeps printing the hand-run form with `--comment` for workers briefed before this change.
+This replaces the `args` route that [the 2026-11-10 focus record](2026-11-10-code-review-focus.md) and [the 2026-11-11 model record](2026-11-11-code-review-model.md) name for the ship worker's step; the focus and the model pin are unchanged.
 The record a merge checks is unchanged.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |

@@ -237,12 +237,13 @@ CODE_REVIEW_POSTED_GENERAL=0
 # never pose as a record marker. Returns 1 when any finding could not be
 # posted either way.
 code_review_post_findings() {  # <findings-file>
-  local findings=$1 head top count i finding path line body failed=0
+  local findings=$1 head top count i finding path line body err failed=0
   if ! head=$(code_review_head) || ! fm_pr_head_valid "$head"; then
     echo "error: could not read the head commit of $FM_PR_URL, so no finding was posted" >&2
     return 1
   fi
   top=$(git rev-parse --show-toplevel 2>/dev/null) || top=
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-code-review.XXXXXX") || return 1
   count=$(jq 'length' "$findings")
   i=0
   while [ "$i" -lt "$count" ]; do
@@ -259,10 +260,11 @@ code_review_post_findings() {  # <findings-file>
       *)
         if [ -n "$path" ] && jq -n --arg body "$body" --arg commit "$head" --arg path "$path" --argjson line "$line" \
           '{body: $body, commit_id: $commit, path: $path, line: $line, side: "RIGHT"}' \
-          | gh api -X POST "repos/$FM_PR_OWNER/$FM_PR_REPO/pulls/$FM_PR_NUMBER/comments" --input - >/dev/null 2>&1; then
+          | gh api -X POST "repos/$FM_PR_OWNER/$FM_PR_REPO/pulls/$FM_PR_NUMBER/comments" --input - >/dev/null 2>"$err"; then
           CODE_REVIEW_POSTED_INLINE=$((CODE_REVIEW_POSTED_INLINE + 1))
           continue
         fi
+        echo "warning: GitHub refused the inline comment at $path:$line, so it is posted as a general comment: $(tr '\n' ' ' < "$err")" >&2
         ;;
     esac
     # shellcheck disable=SC2016  # the backticks are Markdown, not expansion
@@ -274,6 +276,7 @@ code_review_post_findings() {  # <findings-file>
       failed=1
     fi
   done
+  rm -f "$err"
   return "$failed"
 }
 
@@ -282,7 +285,7 @@ code_review_post_findings() {  # <findings-file>
 # findings and post none; the run here passes no --comment and posts every
 # finding of the JSON findings block the skill always ends its reply with.
 code_review_run() {  # <model>
-  local model=$1 out findings rc
+  local model=$1 out findings rc blocks
   local -a piped
   out=$(mktemp "${TMPDIR:-/tmp}/fm-code-review-output.XXXXXX") || return 1
   findings=$(mktemp "${TMPDIR:-/tmp}/fm-code-review-findings.XXXXXX") || return 1
@@ -298,11 +301,20 @@ code_review_run() {  # <model>
     echo "error: the headless /code-review exited $rc, so no finding was posted; its output is in $out" >&2
     return 1
   fi
-  # The last fenced json block that parses as an array is the findings list.
-  awk '/^```json[[:space:]]*$/ { inblock = 1; buf = ""; next }
-       /^```[[:space:]]*$/ && inblock { inblock = 0; last = buf; next }
-       inblock { buf = buf $0 "\n" }
-       END { printf "%s", last }' "$out" > "$findings"
+  # The last fenced json block that parses as an array is the findings list;
+  # awk writes each block to its own numbered file, read back from the last.
+  blocks=$(awk -v base="$findings" '/^```json[[:space:]]*$/ { inblock = 1; n++; printf "" > (base "." n); next }
+       /^```[[:space:]]*$/ && inblock { inblock = 0; close(base "." n); next }
+       inblock { print > (base "." n) }
+       END { print n + 0 }' "$out")
+  : > "$findings"
+  while [ "$blocks" -gt 0 ]; do
+    if [ ! -s "$findings" ] && jq -e 'type == "array"' "$findings.$blocks" >/dev/null 2>&1; then
+      cp "$findings.$blocks" "$findings"
+    fi
+    rm -f "$findings.$blocks"
+    blocks=$((blocks - 1))
+  done
   if ! jq -e 'type == "array"' "$findings" >/dev/null 2>&1; then
     rm -f "$findings"
     echo "error: the review printed no JSON findings block, so no finding was posted; its output is in $out" >&2
