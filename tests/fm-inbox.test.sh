@@ -721,3 +721,115 @@ if command -v tasks-axi >/dev/null 2>&1; then
     "a handoff whose row is still open waits for its close reply"
 fi
 pass "unread lists acknowledged handoff notes a day old with no reply and no open row"
+
+# --- close-handed-off answers a moved row from the secondmate's terminal line ----
+
+# A row fm-backlog-handoff.sh moved to secondmate sm-1, with its handoff note.
+hand_off() {  # <home> <item> -> note id
+  local id
+  id=$(run_inbox "$1" note --request-id "handoff:$2" --json "[claude] handoff $2: do it" | json_get id)
+  run_inbox "$1" drain --ack "$id" >/dev/null
+  mkdir -p "$1/state/inbox/.handed-off"
+  printf 'sm-1\n' >"$1/state/inbox/.handed-off/$2"
+  printf '%s\n' "$id"
+}
+
+reply_count() {
+  find "$1/state/inbox/.replies" -maxdepth 1 -type f ! -name '.*' 2>/dev/null | wc -l | tr -d ' '
+}
+
+home=$(make_home handed-off-pr)
+nid=$(hand_off "$home" hf-1)
+lone=$(hand_off "$home" hf-10)
+printf '%s\n' \
+  "working [at=1794600000]: dispatched hf-1" \
+  "done [key=child-outcome-hf-1-done-0a1b2c3d] [at=1794600100]: child hf-1 done: PR https://github.com/o/r/pull/7 checks green pr=https://github.com/o/r/pull/7 mode=direct-PR yolo=on" \
+  "done [key=child-outcome-hf-1-done-1b2c3d4e] [at=1794600110]: child hf-1 done: handed to validation mode=no-mistakes yolo=on" \
+  "done [key=inactive-outcome-2c3d4e5f] [at=1794600120]: inactive terminal child=hf-1 fingerprint=abc" \
+  >"$home/state/sm-1.status"
+assert_equals "" "$(run_inbox "$home" close-handed-off)" "a ship child's done, with or without a PR, waits for its merge"
+assert_equals "0" "$(reply_count "$home")" "no reply is written before the PR merges"
+printf '%s\n' "done [key=merged-hf-1] [at=1794600200]: merged hf-1 https://github.com/o/r/pull/7 yolo" \
+  "done [key=child-outcome-hf-1-done-3d4e5f6a] [at=1794600210]: child hf-1 done: PR https://github.com/o/r/pull/7 checks green pr=https://github.com/o/r/pull/7 mode=direct-PR" \
+  >>"$home/state/sm-1.status"
+assert_equals "replied $nid (handoff hf-1 done)" "$(run_inbox "$home" close-handed-off)" \
+  "the merged line answers the handoff as done, even before a later ship done line"
+body=$(run_inbox "$home" receipts --all-replies | json_get replies 0 body)
+assert_contains "$body" "Done: firstmate closed backlog item hf-1" "the reply says the item is done"
+assert_contains "$body" "PR: https://github.com/o/r/pull/7" "the reply carries the merged PR"
+assert_contains "$body" "secondmate sm-1 reported it done" "the reply names the secondmate"
+[ ! -e "$home/state/inbox/.handed-off/hf-1" ] || fail "an answered handoff keeps its handed-off marker"
+[ -e "$home/state/inbox/.handed-off/hf-10" ] || fail "an item whose id only starts like the answered one lost its marker"
+[ ! -e "$home/state/inbox/.replies/$lone" ] || fail "an item whose id only starts like the answered one got a reply"
+pass "close-handed-off answers a moved row's handoff once its PR merges"
+
+home=$(make_home handed-off-failed)
+fid=$(hand_off "$home" hf-2)
+sid=$(hand_off "$home" hf-3)
+iid=$(hand_off "$home" hf-4)
+cid=$(hand_off "$home" hf-7)
+printf '%s\n' \
+  "failed [key=child-outcome-hf-2-failed-1a2b3c4d] [at=1794600100]: child hf-2 failed: the API refused the token mode=direct-PR" \
+  "done [key=hf-3] [at=1794600150]: scouted; nothing to change" \
+  "done [key=child-outcome-hf-7-done-4e5f6a7b] [at=1794600155]: child hf-7 done: findings ready report=data/hf-7/report.md" \
+  "failed [key=inactive-outcome-9f8e7d6c] [at=1794600160]: inactive terminal child=hf-4 fingerprint=abc" \
+  >"$home/state/sm-1.status"
+out=$(run_inbox "$home" close-handed-off)
+assert_contains "$out" "replied $fid (handoff hf-2 removed)" "a failed child line answers as removed"
+assert_contains "$out" "replied $sid (handoff hf-3 done)" "the mate's own done line keyed by the item answers as done"
+assert_contains "$out" "replied $iid (handoff hf-4 removed)" "a failed inactive-outcome line answers as removed"
+assert_contains "$out" "replied $cid (handoff hf-7 done)" "a scout child's done line answers as done"
+receipts=$(run_inbox "$home" receipts --all-replies)
+assert_contains "$receipts" "Reason: secondmate sm-1 reported it failed: the API refused the token" \
+  "the removed reply carries the failure note without the scripted fields"
+assert_not_contains "$receipts" "mode=direct-PR" "the scripted fields stay out of the reply"
+assert_contains "$receipts" "Note: secondmate sm-1 reported it done: scouted; nothing to change" \
+  "the done reply carries the mate's note"
+assert_contains "$receipts" "Reason: secondmate sm-1 reported it failed: its task ended without a final status line" \
+  "the inactive failure says why it carries no note"
+assert_contains "$receipts" "Report: data/hf-7/report.md (as secondmate sm-1 reported it)" \
+  "the scout's done reply carries its report, named as the mate's"
+pass "close-handed-off answers failed and keyed done lines"
+
+home=$(make_home handed-off-duplicate)
+did=$(hand_off "$home" hf-5)
+merged="done [key=merged-hf-5] [at=1794600200]: merged hf-5 https://github.com/o/r/pull/9"
+printf '%s\n' "$merged" "$merged" >"$home/state/sm-1.status"
+assert_equals "replied $did (handoff hf-5 done)" "$(run_inbox "$home" close-handed-off)" \
+  "duplicate mirrored lines write one reply"
+printf '%s\n' "$merged" >>"$home/state/sm-1.status"
+printf 'sm-1\n' >"$home/state/inbox/.handed-off/hf-5"
+assert_equals "" "$(run_inbox "$home" close-handed-off)" "a re-read after the reply writes nothing"
+[ ! -e "$home/state/inbox/.handed-off/hf-5" ] || fail "a re-read leaves the answered marker behind"
+assert_equals "1" "$(reply_count "$home")" "the note keeps exactly one reply"
+pass "close-handed-off answers a handoff once across duplicate lines and re-reads"
+
+home=$(make_home handed-off-boundaries)
+printf '%s\n' "failed [key=child-outcome-hf-8-failed-5f6a7b8c] [at=1794500000]: child hf-8 failed: an earlier run" \
+  >"$home/state/sm-1.status"
+eid=$(hand_off "$home" hf-8)
+printf 'sm-1\n%s\n' "$(wc -c <"$home/state/sm-1.status" | tr -d ' ')" >"$home/state/inbox/.handed-off/hf-8"
+kid=$(hand_off "$home" hf-9)
+printf 'sm-1\n%s\n' "$(wc -c <"$home/state/sm-1.status" | tr -d ' ')" >"$home/state/inbox/.handed-off/hf-9"
+printf '%s\n' "done [key=hf-9] [at=1794600100]: PR ready https://github.com/o/r/pull/12" >>"$home/state/sm-1.status"
+printf '%s' "done [key=merged-hf-8] [at=1794600200]: merged hf-8 https://github.com/o/r/pull/1" >>"$home/state/sm-1.status"
+assert_equals "" "$(run_inbox "$home" close-handed-off)" \
+  "a line from before the move, a keyed ready report, and an unfinished line answer nothing"
+printf '3\n' >>"$home/state/sm-1.status"
+assert_equals "replied $eid (handoff hf-8 done)" "$(run_inbox "$home" close-handed-off)" \
+  "the merged line answers once it is complete"
+assert_contains "$(run_inbox "$home" receipts --all-replies)" "PR: https://github.com/o/r/pull/13" \
+  "the reply carries the complete PR link"
+[ -e "$home/state/inbox/.handed-off/hf-9" ] || fail "a keyed ready report answered the handoff ($kid)"
+pass "close-handed-off reads only complete lines written after the move, and not a keyed ready report"
+
+home=$(make_home handed-off-no-note)
+mkdir -p "$home/state/inbox/.handed-off"
+printf 'sm-1\n' >"$home/state/inbox/.handed-off/hf-6"
+printf '%s\n' "done [key=merged-hf-6] [at=1794600200]: merged hf-6 https://github.com/o/r/pull/11" \
+  >"$home/state/sm-1.status"
+assert_equals "" "$(run_inbox "$home" close-handed-off)" "a moved row with no handoff note is a silent no-op"
+assert_equals "0" "$(reply_count "$home")" "a moved row with no handoff note gets no reply"
+home=$(make_home handed-off-none)
+assert_equals "" "$(run_inbox "$home" close-handed-off)" "a home with nothing handed off is a silent no-op"
+pass "close-handed-off ignores a moved row with no handoff note"

@@ -103,8 +103,11 @@ EOF
     || fail "handoff to a live receiver failed: $(cat "$out")"
   grep -F 'wake-item' "$sub/data/backlog.md" >/dev/null \
     || fail "live receiver did not receive the routed backlog item"
-  [ "$(cat "$home/state/inbox/.handed-off/wake-item" 2>/dev/null)" = design ] \
+  [ "$(head -n 1 "$home/state/inbox/.handed-off/wake-item" 2>/dev/null)" = design ] \
     || fail "a moved handoff row was not recorded as handed off to its secondmate"
+  case "$(sed -n 2p "$home/state/inbox/.handed-off/wake-item" 2>/dev/null)" in
+    ''|*[!0-9]*) fail "a moved handoff row did not record the channel offset at the move" ;;
+  esac
   grep -F 'send-keys' "$TMP_ROOT/live-wake-tmux.log" >/dev/null \
     || fail "handoff did not ring the live receiver endpoint"
   assert_contains "$(inbox_body_stream "$home/state" design)" \

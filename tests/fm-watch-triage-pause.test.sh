@@ -1772,6 +1772,30 @@ EOF
   pass "an acknowledged inbox note never re-wakes the watcher"
 }
 
+# A handoff row moved to a secondmate is answered by the watcher's own poll once
+# the mate's merged line reaches this home's copy of its parent channel.
+test_secondmate_merged_line_answers_a_moved_handoff() {
+  local dir state out pid i reply
+  dir=$(make_case handed-off-reply); dir=$(cd "$dir" && pwd -P); state="$dir/state"; out="$dir/watch.out"
+  FM_HOME="$dir" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-inbox.sh" note --acknowledged \
+    --request-id handoff:hf-1 "[claude] handoff hf-1: fix it" >/dev/null || fail "could not save the handoff note"
+  mkdir -p "$state/inbox/.handed-off"
+  printf 'sm-1\n' > "$state/inbox/.handed-off/hf-1"
+  printf '%s\n' "done [key=merged-hf-1] [at=1794600200]: merged hf-1 https://github.com/o/r/pull/7" > "$state/sm-1.status"
+  inbox_rewake_watch "$dir" "$out"
+  pid=$!
+  i=0
+  while [ "$i" -lt 100 ] && [ -e "$state/inbox/.handed-off/hf-1" ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  reap "$pid"
+  [ ! -e "$state/inbox/.handed-off/hf-1" ] || fail "the watcher poll never answered the moved handoff: $(cat "$out")"
+  reply=$(cat "$state/inbox/.replies"/[0-9]* 2>/dev/null || true)
+  case "$reply" in *"PR: https://github.com/o/r/pull/7"*) ;; *) fail "the reply does not carry the merged PR: $reply" ;; esac
+  pass "the watcher poll answers a moved handoff from the secondmate's merged line"
+}
+
 # Lines a detached overdue scan left behind are claimed once as one wake.
 test_overdue_scan_lines_surface_as_one_check_wake() {
   local dir state out pid
@@ -2284,6 +2308,7 @@ fm_test_run \
   test_fleet_sync_schedule_runs_the_sync_when_due \
   test_unacknowledged_inbox_note_rewakes_the_watcher \
   test_acknowledged_inbox_note_never_rewakes_the_watcher \
+  test_secondmate_merged_line_answers_a_moved_handoff \
   test_overdue_scan_lines_surface_as_one_check_wake \
   test_leftover_sitting_state_wakes_once_to_surface_held_calls \
   test_leftover_sitting_tick_stamp_clears_silently \
