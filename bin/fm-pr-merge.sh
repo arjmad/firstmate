@@ -241,7 +241,7 @@
 # state/code-review-waivers.log as one tab-separated line of epoch, task id,
 # URL, verified head, and reason. Like --allow-red it is
 # refused while the away-posture record exists. GitLab and Forgejo merges are
-# not reviewed here, because /code-review --comment posts to GitHub only, and
+# not reviewed here, because the review posts its findings to GitHub only, and
 # --waive-review is refused on them.
 #
 # One-way doors (fork patch, docs/fork-decisions.md 2026-10-26): once every
@@ -2257,7 +2257,7 @@ require_code_review() {
       printf 'error: refusing to merge %s\n  - its code review state could not be read\n' "$URL" >&2
       ;;
   esac
-  echo "error: run Claude Code's /code-review headless on the pinned model, claude -p --model <config/code-review-model, default claude-opus-5-5> with the arguments bin/fm-code-review.sh args $URL prints, fix or answer each finding, then record it with bin/fm-code-review.sh record $URL (docs/task-lifecycle.md); only an explicit captain instruction may pass --waive-review <reason>" >&2
+  echo "error: run Claude Code's /code-review headless on the pinned model with bin/fm-code-review.sh review $URL --model <config/code-review-model, default claude-opus-5-5>, which posts its findings to the PR, fix or answer each finding, then record it with bin/fm-code-review.sh record $URL (docs/task-lifecycle.md); only an explicit captain instruction may pass --waive-review <reason>" >&2
   return 1
 }
 

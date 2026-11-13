@@ -100,8 +100,9 @@
 # On those two modes outside Gerrit and Forgejo, fm_dod_code_review_block then
 # has the worker give a code-changing GitHub PR its code review before the done
 # report (fork patch, docs/fork-decisions.md 2026-10-17): a tstack-sol-loop
-# pre-check on Codex, then one /code-review (2026-10-26 sol-loop) run with
-# the arguments bin/fm-code-review.sh args prints (2026-11-10 focus); a
+# pre-check on Codex, then one /code-review (2026-10-26 sol-loop) run by
+# bin/fm-code-review.sh review, which adds the merge-gate focus (2026-11-10
+# focus) and posts the findings itself (2026-11-13 posts findings); a
 # no-mistakes worker carries its fixes through another run so the pipeline
 # stays the one publisher. bin/fm-code-review.sh owns which PRs need it and
 # what record counts.
@@ -561,7 +562,7 @@ On \`unreviewed\`, first run the \`tstack-sol-loop\` skill on your branch agains
 Settle each Sol finding as that skill says - fix the real ones with the smallest change and decline nits and out-of-scope findings in one line in its ledger - then $sol_fix, since the skill pushes nothing during it, and add the PR-body line the skill asks for.
 When the skill hands an open finding to its user - one disputed twice, or a blocker or should still open when the rounds run out - that user is firstmate: append \`needs-decision [at=<epoch>]: {the open Sol findings}\` and stop.
 This step is the ask that skill waits for, and where it would report a blocker because nothing here can reach Sol - the skill is not installed, Codex is not signed in, or no route runs Sol - skip the loop instead, never substitute another model, append \`working [at=<epoch>]: Sol skipped: {reason}\` so firstmate sees it, and keep the reason for the record note.
-Then run Claude Code's built-in \`/code-review\` once from this worktree with the arguments \`$cli args <pr-url>\` prints, which are \`medium --comment <number>\` followed by firstmate's merge-gate focus: the review runs on the pinned model \`$model\`, so run it as the shell command \`a=\$($cli args <pr-url>) && claude -p --model $model "/code-review \$a"\` there, so a refused URL runs no review.
+Then run Claude Code's built-in \`/code-review\` once from this worktree on the pinned model \`$model\` with the shell command \`$cli review <pr-url> --model $model\`: it runs the review headless with firstmate's merge-gate focus and then posts each finding to the PR itself, and a refused URL runs no review.
 Do not invoke the skill in your own session instead: an in-session skill runs on the session's model, and a worker cannot switch its own session's model, so only the headless command pins it.
 A medium review takes longer than a shell tool's default time limit, so run that command in the background or with your harness's longest command timeout, and wait for it to exit before you go on.
 Then $fix, reply in the PR thread of every finding you do not, and after your last push run \`$cli record <pr-url> --note 'Sol: <N> rounds, <model>, <verdict>'\`, or \`--note 'Sol: skipped, <reason>'\` when the loop could not run, with no apostrophe in the note, and confirm it prints \`reviewed\`.
@@ -569,7 +570,7 @@ Pushes that fix or answer this review's findings are covered by the one \`record
 For a small follow-up pushed after \`record\`, run \`$cli record <pr-url> --carry\` instead of a new review; the script decides what a carry covers, and when it refuses, its message says whether to run the carry again or \`/code-review\` again.
 Before such a new \`/code-review\`, run \`tstack-sol-loop\` again as a fresh loop of one round on the change since the record, outside the first loop's 3, settle and escalate its findings as above, and name that round in the new \`record\`'s note.
 Count this PR's full records, the \`fm-code-review v1\` comments you posted without a \`fm-code-review-carry\` line, rather than relying on memory: with three already posted, a change that would need another \`/code-review\` pass does not get one: append \`needs-decision [at=<epoch>]: {why the PR keeps needing review}\` and stop instead of looping.
-If the headless \`/code-review\` command cannot run here, append \`blocked:\` naming why instead of done.
+If the headless \`/code-review\` command cannot run here, or \`review\` exits non-zero, append \`blocked:\` naming its error instead of done.
 EOF
 }
 

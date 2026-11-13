@@ -301,7 +301,7 @@ A task-level routine no-change outcome or a no-change heartbeat explicitly repor
 
 ## Code review model (config/code-review-model)
 
-The merge-gate `/code-review` a ship worker runs on its own PR always names a model: the brief's headless command is `claude -p --model <model> ...`.
+The merge-gate `/code-review` a ship worker runs on its own PR always names a model: the brief's command is `bin/fm-code-review.sh review <pr-url> --model <model>`, which runs `claude -p --model <model> ...`.
 `<model>` is the first line of gitignored `config/code-review-model`, trimmed, or `claude-opus-5-5` when the file is absent or empty, or holds characters a model id does not.
 The fleet's `fleet-mode` command writes this file (normal: `claude-opus-5-5`, heavy: `claude-fable-5-2`); firstmate only reads it, when it writes a brief, so a change reaches the next brief and not a running worker.
 `bin/fm-dod-lib.sh` (`fm_dod_code_review_model`) owns the read.

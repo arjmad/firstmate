@@ -25,15 +25,22 @@
 # 3000 changed files, so a pull request at that cap counts as code-changing,
 # since the files it leaves unlisted cannot be classified.
 #
-# The review is Claude Code's built-in /code-review skill at its medium level
-# with --comment, which posts each finding as an inline PR comment, run with
-# the arguments `args` prints: the level, --comment, the PR number, and
+# The review is Claude Code's built-in /code-review skill at its medium level,
+# run headless by `review` on the home's pinned model with the PR number and
 # firstmate's merge-gate focus (fork patch,
 # docs/fork-decisions/2026-11-10-code-review-focus.md). The skill runs in a
 # forked context that sees only its own arguments, so the focus rides there:
 # it skips the finding kinds authors declined (cleanup, altitude, test quality,
 # hardening for states nothing produces, intended behavior, pre-existing code)
-# and keeps full recall on correctness bugs and wrong instructions. Once every
+# and keeps full recall on correctness bugs and wrong instructions. `review`
+# then posts each finding itself (fork patch,
+# docs/fork-decisions/2026-11-13-code-review-posts-findings.md): the skill's
+# own --comment posting is optional in its prompt, and reviewers skipped it on
+# PRs that had findings, so the run passes no --comment and posts every finding
+# of the JSON findings block the skill ends its reply with, inline on the PR's
+# head, or as a general PR comment naming the file and line when GitHub
+# refuses the inline one. `args` still prints the hand-run form with --comment
+# for a worker briefed before `review` existed. Once every
 # finding is fixed or answered in its thread and the last push is in, `record`
 # posts one PR comment carrying the marker line
 #   <!-- fm-code-review v1 diff=<diff-id> head=<sha> -->
@@ -72,14 +79,23 @@
 # after the marker, so status and bin/fm-pr-merge.sh read it as an ordinary
 # record and the next carry still measures from the full review.
 #
-# GitHub only: /code-review --comment posts to GitHub pull requests, so a
-# GitLab or Forgejo URL is refused here and bin/fm-pr-merge.sh does not apply
-# the guard to those forges.
+# GitHub only: the findings post to GitHub pull requests, so a GitLab or
+# Forgejo URL is refused here and bin/fm-pr-merge.sh does not apply the guard
+# to those forges.
 #
 # Usage:
+#   fm-code-review.sh review <pr-url> --model <model>
+#       Runs `claude -p --model <model> "/code-review medium <number> <focus>"`
+#       from the current directory, printing its output, then posts each
+#       finding of its JSON findings block and prints one `posted:` line.
+#       Exits 0 when every finding posted (none is fine), 1 when the review
+#       failed, printed no findings block, or a finding could not be posted
+#       (the output file is named, and nothing is retried), and 2 for a usage
+#       error or a URL that is not a GitHub pull request. The run takes many
+#       minutes, longer than a shell tool's default time limit.
 #   fm-code-review.sh args <pr-url>
-#       Prints, on one line, the arguments to run /code-review with for the
-#       pull request: `medium --comment <number>` and then the merge-gate
+#       Prints, on one line, the arguments a hand-run /code-review takes for
+#       the pull request: `medium --comment <number>` and then the merge-gate
 #       focus. Exits 0, or 2 when the URL is not a GitHub pull request.
 #   fm-code-review.sh classify [<path>...]
 #       Paths from the arguments, or one per line on stdin when there are none,
@@ -210,6 +226,113 @@ Merge-gate focus for this review: the author must fix or answer in writing every
 7. Report a problem in unchanged code only when this diff introduces it, exposes it, or makes it reachable.
 8. A clear violation of a written rule in a CLAUDE.md or AGENTS.md that governs the changed file is still a finding when you can quote the rule and the line that breaks it.
 EOF
+}
+
+CODE_REVIEW_POSTED_INLINE=0
+CODE_REVIEW_POSTED_GENERAL=0
+# Posts each finding of a JSON findings array file as an inline comment on
+# the PR's head, or as a general PR comment naming its file and line when
+# GitHub refuses the inline one (a line outside the diff, a path outside the
+# repository). A `<!--` in the reviewer's text becomes `< !--`, so a finding can
+# never pose as a record marker. Returns 1 when any finding could not be
+# posted either way.
+code_review_post_findings() {  # <findings-file>
+  local findings=$1 head top count i finding path line body err failed=0
+  if ! head=$(code_review_head) || ! fm_pr_head_valid "$head"; then
+    echo "error: could not read the head commit of $FM_PR_URL, so no finding was posted" >&2
+    return 1
+  fi
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || top=
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-code-review.XXXXXX") || return 1
+  count=$(jq 'length' "$findings")
+  i=0
+  while [ "$i" -lt "$count" ]; do
+    finding=$(jq -c ".[$i]" "$findings")
+    i=$((i + 1))
+    path=$(printf '%s' "$finding" | jq -r '.file // "" | tostring')
+    [ -z "$top" ] || path=${path#"$top"/}
+    path=${path#./}
+    line=$(printf '%s' "$finding" | jq -r '.line // "" | tostring')
+    body=$(printf '%s' "$finding" | jq -r '[(.summary // "" | tostring), (.failure_scenario // "" | tostring | select(. != "") | "Failure scenario: " + .)] | map(select(. != "")) | join("\n\n")')
+    body=${body//<!--/< !--}
+    case "$line" in
+      ''|0|*[!0-9]*) ;;
+      *)
+        if [ -n "$path" ] && jq -n --arg body "$body" --arg commit "$head" --arg path "$path" --argjson line "$line" \
+          '{body: $body, commit_id: $commit, path: $path, line: $line, side: "RIGHT"}' \
+          | gh api -X POST "repos/$FM_PR_OWNER/$FM_PR_REPO/pulls/$FM_PR_NUMBER/comments" --input - >/dev/null 2>"$err"; then
+          CODE_REVIEW_POSTED_INLINE=$((CODE_REVIEW_POSTED_INLINE + 1))
+          continue
+        fi
+        echo "warning: GitHub refused the inline comment at $path:$line, so it is posted as a general comment: $(tr '\n' ' ' < "$err")" >&2
+        ;;
+    esac
+    # shellcheck disable=SC2016  # the backticks are Markdown, not expansion
+    if printf '`%s:%s`: %s\n' "${path:-?}" "${line:-?}" "$body" \
+      | gh pr comment "$FM_PR_NUMBER" --repo "$FM_PR_OWNER/$FM_PR_REPO" --body-file - >/dev/null; then
+      CODE_REVIEW_POSTED_GENERAL=$((CODE_REVIEW_POSTED_GENERAL + 1))
+    else
+      echo "error: could not post the finding at ${path:-?}:${line:-?} on $FM_PR_URL" >&2
+      failed=1
+    fi
+  done
+  rm -f "$err"
+  return "$failed"
+}
+
+# Runs the merge-gate review headless and posts its findings. The skill's own
+# --comment posting is optional by its prompt, so a reviewer may print its
+# findings and post none; the run here passes no --comment and posts every
+# finding of the JSON findings block the skill always ends its reply with.
+code_review_run() {  # <model>
+  local model=$1 out findings rc blocks
+  local -a piped
+  out=$(mktemp "${TMPDIR:-/tmp}/fm-code-review-output.XXXXXX") || return 1
+  findings=$(mktemp "${TMPDIR:-/tmp}/fm-code-review-findings.XXXXXX") || return 1
+  set +e
+  claude -p --model "$model" "/code-review medium $FM_PR_NUMBER $(code_review_focus_line)" \
+    < /dev/null | tee "$out"
+  piped=("${PIPESTATUS[@]}")
+  set -e
+  rc=${piped[0]}
+  [ "$rc" -ne 0 ] || rc=${piped[1]}
+  if [ "$rc" -ne 0 ]; then
+    rm -f "$findings"
+    echo "error: the headless /code-review exited $rc, so no finding was posted; its output is in $out" >&2
+    return 1
+  fi
+  # The last fenced json block that parses as an array is the findings list;
+  # awk writes each block to its own numbered file, read back from the last.
+  blocks=$(awk -v base="$findings" '/^```json[[:space:]]*$/ { inblock = 1; n++; printf "" > (base "." n); next }
+       /^```[[:space:]]*$/ && inblock { inblock = 0; close(base "." n); next }
+       inblock { print > (base "." n) }
+       END { print n + 0 }' "$out")
+  : > "$findings"
+  while [ "$blocks" -gt 0 ]; do
+    if [ ! -s "$findings" ] && jq -e 'type == "array"' "$findings.$blocks" >/dev/null 2>&1; then
+      cp "$findings.$blocks" "$findings"
+    fi
+    rm -f "$findings.$blocks"
+    blocks=$((blocks - 1))
+  done
+  if ! jq -e 'type == "array"' "$findings" >/dev/null 2>&1; then
+    rm -f "$findings"
+    echo "error: the review printed no JSON findings block, so no finding was posted; its output is in $out" >&2
+    return 1
+  fi
+  rc=0
+  code_review_post_findings "$findings" || rc=1
+  echo "posted: $CODE_REVIEW_POSTED_INLINE inline and $CODE_REVIEW_POSTED_GENERAL general comments for $(jq 'length' "$findings") findings on $FM_PR_URL"
+  rm -f "$findings"
+  if [ "$rc" -ne 0 ]; then
+    echo "error: a finding could not be posted; the review output is in $out" >&2
+    return 1
+  fi
+  rm -f "$out"
+}
+
+code_review_focus_line() {
+  code_review_focus | tr '\n' ' ' | sed 's/ *$//'
 }
 
 code_review_parse_url() {
@@ -466,7 +589,27 @@ case "$cmd" in
   args)
     [ "$#" -eq 1 ] || { echo "error: usage: fm-code-review.sh args <pr-url>" >&2; exit 2; }
     code_review_parse_url "$1" || exit 2
-    printf 'medium --comment %s %s\n' "$FM_PR_NUMBER" "$(code_review_focus | tr '\n' ' ' | sed 's/ *$//')"
+    printf 'medium --comment %s %s\n' "$FM_PR_NUMBER" "$(code_review_focus_line)"
+    ;;
+  review)
+    [ "$#" -ge 1 ] || { echo "error: usage: fm-code-review.sh review <pr-url> --model <model>" >&2; exit 2; }
+    code_review_parse_url "$1" || exit 2
+    shift
+    model=
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --model)
+          [ -n "${2:-}" ] || { echo "error: --model requires a model id" >&2; exit 2; }
+          model=$2
+          shift 2
+          ;;
+        *) echo "error: unknown review argument: $1" >&2; exit 2 ;;
+      esac
+    done
+    [ -n "$model" ] || { echo "error: review needs --model <model>, the home's pinned review model" >&2; exit 2; }
+    rc=0
+    code_review_run "$model" || rc=$?
+    exit "$rc"
     ;;
   classify)
     if [ "$#" -gt 0 ]; then
@@ -512,7 +655,7 @@ case "$cmd" in
     ;;
   -h|--help) usage ;;
   *)
-    echo "error: usage: fm-code-review.sh args|classify|status|record (see --help)" >&2
+    echo "error: usage: fm-code-review.sh review|args|classify|status|record (see --help)" >&2
     exit 2
     ;;
 esac

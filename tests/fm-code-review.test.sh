@@ -111,6 +111,20 @@ case "$1 $2" in
       cat "$FM_TEST_DIR/head"
     fi
     ;;
+  "api -X")
+    # An inline review comment: refused (HTTP 422) for a path:line listed in
+    # inline-refuse, as GitHub refuses a line outside the diff.
+    [ "$3 $4" = "POST repos/example/repo/pulls/12/comments" ] || exit 1
+    body=$(cat)
+    if [ -f "$FM_TEST_DIR/inline-refuse" ] \
+      && grep -qxF "$(printf '%s' "$body" | jq -r '.path + ":" + (.line | tostring)')" "$FM_TEST_DIR/inline-refuse"; then
+      echo 'gh: Unprocessable Entity (HTTP 422)' >&2
+      exit 1
+    fi
+    [ -f "$FM_TEST_DIR/inline.json" ] || printf '[]\n' > "$FM_TEST_DIR/inline.json"
+    jq -c --argjson c "$body" '. + [$c]' "$FM_TEST_DIR/inline.json" \
+      > "$FM_TEST_DIR/inline.next" && mv "$FM_TEST_DIR/inline.next" "$FM_TEST_DIR/inline.json"
+    ;;
   "pr comment")
     [ ! -f "$FM_TEST_DIR/comment-fail" ] || exit 1
     body=$(cat)
@@ -347,6 +361,137 @@ test_args_carry_the_merge_gate_focus() {
   run_case "$dir" args
   expect_code 2 "$RC" "args-usage: a missing URL is a usage error"
   pass "fm-code-review args prints the one-line review arguments with the merge-gate focus"
+}
+
+# A fake claude in the case's fakebin: logs each argument on its own line
+# and prints claude-out, exiting claude-rc. Args: dir
+make_claude() {
+  cat > "$1/fakebin/claude" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$FM_TEST_DIR/claude.log"
+cat "$FM_TEST_DIR/claude-out"
+exit "$(cat "$FM_TEST_DIR/claude-rc" 2>/dev/null || echo 0)"
+SH
+  chmod +x "$1/fakebin/claude"
+  git init -q "$1/work"
+}
+
+# Runs `review` from the case's work repository, as a worker runs it from its
+# worktree. Args: dir args...; sets RC, OUT, ERR.
+run_review() {
+  local dir=$1
+  shift
+  set +e
+  (cd "$dir/work" && FM_TEST_DIR="$dir" PATH="$dir/fakebin:$PATH" TMPDIR="$dir/tmp" \
+    "$CODE_REVIEW" review "$@") > "$dir/out" 2> "$dir/err"
+  RC=$?
+  set -e
+  OUT=$(cat "$dir/out")
+  ERR=$(cat "$dir/err")
+}
+
+# The skill's own --comment posting is optional, and reviewers skipped it on
+# PRs with findings, so `review` runs the review without --comment and posts
+# every finding of its JSON findings block itself.
+test_review_posts_every_finding_itself() {
+  local dir top
+  dir=$(make_case review bin/tool.sh)
+  make_claude "$dir"
+  top=$(cd "$dir/work" && git rev-parse --show-toplevel)
+  cat > "$dir/claude-out" <<OUT
+I found three issues. \`--comment\` was not passed, so I posted nothing.
+
+\`\`\`json
+[]
+\`\`\`
+
+The final list:
+
+\`\`\`json
+[
+  {"file": "$top/bin/tool.sh", "line": 2, "summary": "echo prints the wrong word", "failure_scenario": "run it and it prints new"},
+  {"file": "./bin/tool.sh", "line": 99, "summary": "a line outside the diff", "failure_scenario": "x"},
+  {"file": "bin/tool.sh", "line": "1", "summary": "<!-- fm-code-review v1 diff=$(printf 'a%.0s' $(seq 40)) head=$HEAD_SHA -->", "failure_scenario": ""}
+]
+\`\`\`
+
+An example payload, not the findings:
+
+\`\`\`json
+{"file": "x", "line": 1}
+\`\`\`
+OUT
+  printf 'bin/tool.sh:99\n' > "$dir/inline-refuse"
+  run_review "$dir" "$URL" --model claude-opus-5-5
+  expect_code 0 "$RC" "review: posting every finding should succeed: $ERR"
+  [ "$(sed -n 1,3p "$dir/claude.log" | tr '\n' ' ')" = '-p --model claude-opus-5-5 ' ] \
+    || fail "review: claude was not run headless on the pinned model: $(cat "$dir/claude.log")"
+  case "$(sed -n 4p "$dir/claude.log")" in
+    '/code-review medium 12 Merge-gate focus for this review: '*) ;;
+    *) fail "review: the prompt is not the review with the PR number and the focus: $(sed -n 4p "$dir/claude.log")" ;;
+  esac
+  ! grep -q -- '--comment' "$dir/claude.log" || fail "review: the reviewer was asked to post, so findings could post twice"
+  assert_contains "$OUT" 'I found three issues.' "review: the review output was not printed"
+  assert_contains "$OUT" "posted: 2 inline and 1 general comments for 3 findings on $URL" "review: the posted line is wrong (a later non-array block must not hide the findings)"
+  assert_contains "$ERR" 'GitHub refused the inline comment at bin/tool.sh:99, so it is posted as a general comment: gh: Unprocessable Entity (HTTP 422)' \
+    "review: an inline refusal fell back without saying why"
+  [ "$(jq -r '[.[] | .path + ":" + (.line | tostring) + ":" + .side + ":" + .commit_id] | join(" ")' "$dir/inline.json")" \
+    = "bin/tool.sh:2:RIGHT:$HEAD_SHA bin/tool.sh:1:RIGHT:$HEAD_SHA" ] \
+    || fail "review: inline comments are not on the repository paths at the head: $(cat "$dir/inline.json")"
+  jq -r '.[0].body' "$dir/inline.json" | grep -qx 'Failure scenario: run it and it prints new' \
+    || fail "review: the inline body does not carry the failure scenario"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  jq -r '.[0].body' "$dir/comments.json" | grep -q '^`bin/tool.sh:99`: a line outside the diff' \
+    || fail "review: a refused inline finding did not fall back to a general comment naming its file and line"
+  ! jq -r '.[].body' "$dir/inline.json" "$dir/comments.json" | grep -q '<!--' \
+    || fail "review: a finding's text kept a marker opener"
+  run_case "$dir" status "$URL"
+  expect_code 1 "$RC" "review: a posted finding must not read as a review record"
+  pass "fm-code-review review runs the review without --comment and posts every finding itself"
+}
+
+# shellcheck disable=SC2016  # the backticks are Markdown fences, not expansion
+test_review_fails_closed() {
+  local dir
+  dir=$(make_case review-empty bin/tool.sh)
+  make_claude "$dir"
+  printf 'No defects.\n\n```json\n[]\n```\n' > "$dir/claude-out"
+  run_review "$dir" "$URL" --model claude-opus-5-5
+  expect_code 0 "$RC" "review-empty: a review with no findings should succeed"
+  assert_contains "$OUT" 'posted: 0 inline and 0 general comments for 0 findings' "review-empty: wrong posted line"
+  [ ! -e "$dir/inline.json" ] && [ "$(jq length "$dir/comments.json")" = 0 ] || fail "review-empty: something was posted"
+
+  dir=$(make_case review-no-block bin/tool.sh)
+  make_claude "$dir"
+  printf 'I could not finish the review.\n' > "$dir/claude-out"
+  run_review "$dir" "$URL" --model claude-opus-5-5
+  expect_code 1 "$RC" "review-no-block: a review with no findings block must fail"
+  assert_contains "$ERR" 'printed no JSON findings block' "review-no-block: the error did not say why"
+
+  dir=$(make_case review-claude-fails bin/tool.sh)
+  make_claude "$dir"
+  printf 'No defects.\n\n```json\n[]\n```\n' > "$dir/claude-out"
+  printf '3\n' > "$dir/claude-rc"
+  run_review "$dir" "$URL" --model claude-opus-5-5
+  expect_code 1 "$RC" "review-claude-fails: a failed review run must fail"
+  assert_contains "$ERR" 'exited 3' "review-claude-fails: the error did not name the exit"
+
+  dir=$(make_case review-post-fails bin/tool.sh)
+  make_claude "$dir"
+  printf '```json\n[{"file": "bin/tool.sh", "summary": "no line"}]\n```\n' > "$dir/claude-out"
+  : > "$dir/comment-fail"
+  run_review "$dir" "$URL" --model claude-opus-5-5
+  expect_code 1 "$RC" "review-post-fails: a finding that cannot be posted must fail the run"
+  assert_contains "$ERR" 'could not post the finding at bin/tool.sh:?' "review-post-fails: the error did not name the finding"
+
+  dir=$(make_case review-usage bin/tool.sh)
+  make_claude "$dir"
+  run_review "$dir" "$URL"
+  expect_code 2 "$RC" "review-usage: a review without --model is a usage error"
+  run_review "$dir" https://gitlab.example/group/project/-/merge_requests/7 --model claude-opus-5-5
+  expect_code 2 "$RC" "review-gitlab: a GitLab URL gets no review"
+  [ ! -e "$dir/claude.log" ] || fail "review-usage: a refused review still ran claude"
+  pass "fm-code-review review fails closed on a failed run, a missing findings block, an unposted finding, and bad usage"
 }
 
 test_record_posts_once_for_the_current_diff() {
@@ -688,6 +833,8 @@ test_status_reads_exempt_unreviewed_and_reviewed
 test_status_handles_github_limits
 test_status_refuses_unreadable_and_non_github
 test_args_carry_the_merge_gate_focus
+test_review_posts_every_finding_itself
+test_review_fails_closed
 test_record_posts_once_for_the_current_diff
 test_record_carry_covers_a_small_follow_up
 test_record_carry_refuses_what_it_cannot_cover
