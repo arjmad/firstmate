@@ -3940,6 +3940,20 @@ inbox_rewake_tick() {
   wake "check: captain inbox: $count note(s) still unacknowledged (bin/fm-inbox.sh unread)"
 }
 
+# A handoff row moved to a secondmate closes in that home, so the mate's terminal
+# line on its parent channel answers the row's handoff note here
+# (fm-inbox.sh close-handed-off). The reply belongs to the handoff's sender, so
+# this wakes nobody; it costs one directory read while nothing is handed off.
+handed_off_reply_tick() {
+  local marker
+  for marker in "$STATE/inbox/.handed-off"/*; do
+    [ -f "$marker" ] || continue
+    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-inbox.sh" close-handed-off >/dev/null 2>&1 \
+      || triage_log "handed-off reply scan failed; the next poll retries"
+    return 0
+  done
+}
+
 # Retired decision sittings (docs/fork-decisions/2026-11-01-remove-decision-sittings.md).
 # A home that ran the removed 12:00/20:00 sittings may still hold their state
 # under state/: the waiting marker a reversible hold set, the last-sitting
@@ -4406,6 +4420,7 @@ while :; do
   fleet_sync_tick
   backlog_overdue_tick
   inbox_rewake_tick
+  handed_off_reply_tick
   decision_sittings_retire_tick
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).

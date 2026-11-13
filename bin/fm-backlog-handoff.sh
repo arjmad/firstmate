@@ -739,8 +739,9 @@ remote_deliver_outbox() { # <secondmate-id> <outbox-path>
 
 # A moved row a fleet handoff filed (request id handoff:<key>) closes in the
 # secondmate's home, whose inbox holds no handoff note, so its close writes no
-# reply here. Record the move under state/inbox/.handed-off/ so bin/fm-inbox.sh
-# unread does not report the row as closed with its sender unanswered.
+# reply. Record the move under state/inbox/.handed-off/ so bin/fm-inbox.sh
+# unread does not report the row as closed with its sender unanswered, and so
+# fm-inbox.sh close-handed-off answers it from the mate's terminal line.
 mark_handed_off() { # <secondmate-id> <keys...>
   local id=$1 key
   shift

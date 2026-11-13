@@ -28,6 +28,7 @@
 #   fm-inbox.sh reply [--json] <id> <text>... | reply [--json] <id> -
 #   fm-inbox.sh close-reply <item-id> done|removed [--pr <url>] [--report <path>]
 #                [--note <text>] [--reason <text>]
+#   fm-inbox.sh close-handed-off
 #   fm-inbox.sh receipts [--after <cursor>] [--all-pending] [--all-handled] [--all-replies]
 #   fm-inbox.sh ready
 #   fm-inbox.sh say  [<file.wav>]       (default: audio on stdin)
@@ -82,6 +83,9 @@
 # links, and when the row has a handoff note (request id handoff:<item-id>) with
 # no reply yet it records "Done ..." with the links, or "Removed ..." with the
 # reason. No handoff note, or one already answered, is a silent no-op.
+# `close-handed-off` writes that same reply for a row bin/fm-backlog-handoff.sh
+# moved to a secondmate, from the terminal line the mate's parent channel
+# carries into this home; the watcher runs it every poll (cmd_close_handed_off).
 # `unread` lists the pending notes nobody has acknowledged, oldest first, capped
 # at 10 with a count of the rest; the session-start digest and the bearings
 # snapshot print it so an unacknowledged note keeps resurfacing. It also lists
@@ -113,8 +117,8 @@
 # An absent profile means the call uses whatever credentials are already in the
 # environment, which is also what FM_INBOX_PROFILE= (empty) forces.
 #
-# `note`, `announce`, `reply`, `close-reply`, `receipts`, `ready`, `status`, `list`, `drain`,
-# `unread` and `rewake-due` need NO configuration at all, because they make no model call. The voice
+# `note`, `announce`, `reply`, `close-reply`, `close-handed-off`, `receipts`, `ready`, `status`,
+# `list`, `drain`, `unread` and `rewake-due` need NO configuration at all, because they make no model call. The voice
 # handover depends on `note`, so it keeps working in a home that has configured
 # nothing. `--json` / `receipts` / `ready` require python3, which a firstmate
 # home already uses for other tools.
@@ -123,8 +127,8 @@
 #   FM_HOME              operational home whose state/ and data/ are used.
 #
 # PRIVACY: `say` sends your audio and `ask` sends your question to Bedrock.
-# `note`, `announce`, `reply`, `close-reply`, `receipts`, `ready`, `status`, `list`,
-# `drain`, `unread` and `rewake-due` make no network call at all.
+# `note`, `announce`, `reply`, `close-reply`, `close-handed-off`, `receipts`, `ready`, `status`,
+# `list`, `drain`, `unread` and `rewake-due` make no network call at all.
 #
 # `note` is also the queueing half of the spoken interface: when the voice agent
 # in bin/fm-voice-relay.py hands real work over to firstmate, it runs this
@@ -249,6 +253,15 @@ load_wake_lib() {
   # shellcheck source=bin/fm-wake-lib.sh
   FM_ROOT_OVERRIDE="$FM_ROOT" FM_HOME="$FM_HOME" STATE="$STATE" . "$lib"
   FM_INBOX_WAKE_LIB=1
+}
+
+# The shared status-line readers (verb, key, note), for close-handed-off.
+load_classify_lib() {
+  local lib="$FM_ROOT/bin/fm-classify-lib.sh"
+  command -v status_line_verb >/dev/null 2>&1 && return 0
+  [ -r "$lib" ] || return 1
+  # shellcheck source=bin/fm-classify-lib.sh
+  . "$lib"
 }
 
 need_python() {
@@ -719,6 +732,18 @@ PY
   fi
 }
 
+# The id of the saved note a fleet handoff filed for backlog item <item>
+# (request id handoff:<item>), or non-zero when no such note exists.
+handoff_note_id() {  # <item>
+  local rid="handoff:$1" note_id
+  valid_request_id "$rid" || return 1
+  [ -f "$REQUESTS/$rid" ] || return 1
+  note_id=$(tr -d '\r' <"$REQUESTS/$rid")
+  note_id=${note_id%%$'\n'*}
+  valid_note_id "$note_id" && note_path "$note_id" >/dev/null || return 1
+  printf '%s\n' "$note_id"
+}
+
 # Answer the handoff note filed for backlog item <item> (request id
 # handoff:<item>) from the close itself, so the sender hears the outcome even
 # when nobody writes a reply by hand. A row with no handoff note, or a note
@@ -726,7 +751,7 @@ PY
 # close's own tasks-axi flags; unknown ones are ignored.
 cmd_close_reply() {
   local usage="usage: fm-inbox.sh close-reply <item-id> done|removed [--pr <url>] [--report <path>] [--note <text>] [--reason <text>]"
-  local item=${1:-} how=${2:-} pr='' report='' note='' reason='' rid note_id body rc=0
+  local item=${1:-} how=${2:-} pr='' report='' note='' reason='' note_id body rc=0
   [ -n "$item" ] && [ -n "$how" ] || die "$usage"
   case "$how" in done|removed) ;; *) die "$usage" ;; esac
   shift 2
@@ -748,12 +773,7 @@ cmd_close_reply() {
       *) shift ;;
     esac
   done
-  rid="handoff:$item"
-  valid_request_id "$rid" || return 0
-  [ -f "$REQUESTS/$rid" ] || return 0
-  note_id=$(tr -d '\r' <"$REQUESTS/$rid")
-  note_id=${note_id%%$'\n'*}
-  valid_note_id "$note_id" && note_path "$note_id" >/dev/null || return 0
+  note_id=$(handoff_note_id "$item") || return 0
   if [ -f "$REPLIES/$note_id" ]; then
     printf 'already-replied %s (handoff %s)\n' "$note_id" "$item"
     return 0
@@ -775,6 +795,129 @@ cmd_close_reply() {
     4) printf 'already-replied %s (handoff %s)\n' "$note_id" "$item" ;;
     *) die "could not record the close reply for handoff $item on note $note_id" ;;
   esac
+}
+
+# The value of the last " <name>=<value>" token in <text>, or non-zero.
+note_field() {  # <text> <name>
+  local text=" $1" name=$2 value
+  case "$text" in *" $name="*) ;; *) return 1 ;; esac
+  value=${text##*" $name="}
+  printf '%s' "${value%%[[:space:]]*}"
+}
+
+# <text> without the trailing pr=, mode=, yolo= and report= tokens a scripted
+# child outcome line appends after the worker's own note.
+strip_outcome_fields() {  # <text>
+  local text=$1 last
+  while [ -n "$text" ]; do
+    last=${text##*[[:space:]]}
+    case "$last" in pr=*|mode=*|yolo=*|report=*) ;; *) break ;; esac
+    [ "$last" != "$text" ] || { text=''; break; }
+    text=${text%"$last"}
+    text=${text%"${text##*[![:space:]]}"}
+  done
+  printf '%s' "$text"
+}
+
+# What one parent-channel line says about handed-off item <item>: nothing
+# (non-zero), `wait` for a done that carries a PR, which its merged line
+# answers, or `<done|removed> <pr> <report> <text>` split by the unit separator.
+handed_off_outcome() {  # <item> <status-line>
+  local item=$1 line=$2 verb key note pr='' report='' text=''
+  status_line_verb "$line" verb
+  case "$verb" in done|failed) ;; *) return 1 ;; esac
+  key=$(_fm_decision_key "$line" '') || return 1
+  note=$(status_line_note "$line")
+  if [ "$key" = "merged-$item" ]; then
+    [ "$verb" = "done" ] || return 1
+    case "$note" in "merged $item "?*) ;; *) return 1 ;; esac
+    pr=${note#"merged $item "}
+    pr=${pr%%[[:space:]]*}
+  elif [ "$key" = "$item" ]; then
+    text=$note
+  else
+    case "$key" in
+      child-outcome-*)
+        case "$note" in "child $item $verb:"*) ;; *) return 1 ;; esac
+        text=${note#"child $item $verb:"}
+        text=${text#"${text%%[![:space:]]*}"}
+        pr=$(note_field "$text" pr) || pr=''
+        report=$(note_field "$text" report) || report=''
+        text=$(strip_outcome_fields "$text")
+        ;;
+      inactive-outcome-*)
+        case "$note " in *" child=$item "*) ;; *) return 1 ;; esac
+        pr=$(note_field "$note" pr) || pr=''
+        ;;
+      *) return 1 ;;
+    esac
+    if [ "$verb" = "done" ] && [ -n "$pr" ]; then
+      printf 'wait\n'
+      return 0
+    fi
+  fi
+  [ "$verb" = "done" ] || verb=removed
+  printf '%s\037%s\037%s\037%s\n' "$verb" "$pr" "$report" "${text//$'\037'/ }"
+}
+
+# Answer the handoff notes of rows bin/fm-backlog-handoff.sh moved to a
+# secondmate. Such a row closes in the mate's home, which holds no handoff note,
+# so no close here answers it; the mate's parent channel, which this home holds
+# as state/<mate-id>.status (docs/secondmate-parent-channel.md), is what tells
+# this home it ended. For each state/inbox/.handed-off/<item> (holding the mate
+# id) the latest line there naming the item decides, through close-reply:
+#   done [key=merged-<item>]: merged <item> <url>             done, with the PR
+#   <state> [key=child-outcome-...]: child <item> <state>: ... done, or removed
+#   <state> [key=inactive-outcome-...]: ... child=<item> ...   done, or removed
+#   done|failed [key=<item>]: <note>                           done, or removed
+# A failed line answers as removed with its note as the reason. A done that
+# carries a PR waits for that PR's merged line, so a PR that never merges is
+# never reported done. close-reply writes at most one reply per note and the
+# marker goes once its note has a reply, so a re-read or a duplicate mirrored
+# line answers nothing twice. The watcher runs this on every poll.
+cmd_close_handed_off() {
+  local marker item mate status line outcome pick note_id how pr report text out failed=0
+  local -a flags
+  [ "$#" -eq 0 ] || die "usage: fm-inbox.sh close-handed-off"
+  [ -d "$INBOX/.handed-off" ] || return 0
+  load_classify_lib || die "cannot load the status-line readers"
+  for marker in "$INBOX/.handed-off"/*; do
+    [ -f "$marker" ] && [ ! -L "$marker" ] || continue
+    item=${marker##*/}
+    note_id=$(handoff_note_id "$item") || continue
+    if [ -f "$REPLIES/$note_id" ]; then
+      rm -f "$marker"
+      continue
+    fi
+    mate=$(head -n 1 "$marker" | tr -d '\r')
+    case "$mate" in ''|.*|*/*|*[!A-Za-z0-9._-]*) continue ;; esac
+    status="$STATE/$mate.status"
+    [ -f "$status" ] && [ ! -L "$status" ] || continue
+    pick=''
+    while IFS= read -r line || [ -n "$line" ]; do
+      outcome=$(handed_off_outcome "$item" "$line") || continue
+      [ "$outcome" != wait ] || outcome=''
+      pick=$outcome
+    done < <(grep -F -- "$item" "$status" || true)
+    [ -n "$pick" ] || continue
+    IFS=$'\037' read -r how pr report text <<<"$pick"
+    flags=()
+    if [ "$how" = "done" ]; then
+      [ -z "$pr" ] || flags+=(--pr "$pr")
+      [ -z "$report" ] || flags+=(--report "$report")
+      flags+=(--note "secondmate $mate reported it done${text:+: $text}")
+    else
+      flags+=(--reason "secondmate $mate reported it failed${text:+: $text}")
+    fi
+    if out=$(cmd_close_reply "$item" "$how" "${flags[@]}"); then
+      [ -z "$out" ] || printf '%s\n' "$out"
+    else
+      failed=1
+      continue
+    fi
+    [ ! -f "$REPLIES/$note_id" ] || rm -f "$marker"
+  done
+  return "$failed"
 }
 
 cmd_receipts() {
@@ -1283,7 +1426,8 @@ pending_note_ids() {
 # a handoff closed without an answer, which nothing else would resurface. A row
 # still queued, in flight or held gets its reply when it closes, so it is not
 # listed, nor is a row bin/fm-backlog-handoff.sh moved to a secondmate
-# (.handed-off/<item>), which closes in that home. A row that cannot be read is
+# (.handed-off/<item>), which closes in that home and is answered by
+# close-handed-off from the mate's terminal line. A row that cannot be read is
 # listed rather than hidden. One
 # tab-separated line each, oldest first: note id, captured at, item, summary.
 unreplied_handoff_rows() {
@@ -1422,6 +1566,7 @@ case "${1:-}" in
   announce) shift; cmd_announce "$@" ;;
   reply)    shift; cmd_reply "$@" ;;
   close-reply) shift; cmd_close_reply "$@" ;;
+  close-handed-off) shift; cmd_close_handed_off "$@" ;;
   receipts) shift; cmd_receipts "$@" ;;
   ready)    shift; cmd_ready "$@" ;;
   say)      shift; cmd_say "$@" ;;
