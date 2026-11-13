@@ -475,7 +475,7 @@ test_wrapper_row_shape() {
 # nobody replied by hand: done carries the close's links, rm carries --reason,
 # a row with no handoff note is untouched, and a reply already written stands.
 test_wrapper_close_writes_handoff_reply() {
-  local dir out note1 note2 note3 receipts
+  local dir out note1 note2 note3 note4 note5 receipts
   dir=$(make_split close-reply)
   fm_test_tasks_toml "$dir/home/.tasks.toml"
   inbox() { FM_HOME="$dir/home" "$ROOT/bin/fm-inbox.sh" "$@"; }
@@ -518,8 +518,21 @@ for n in d["pending"] + d["handled"]:
   wrapper_from_code "$dir" add hf-help "Handoff hf-help" --kind task >/dev/null || fail "could not add hf-help"
   inbox note --request-id handoff:hf-help --json "[claude] handoff hf-help" >/dev/null
   wrapper_from_code "$dir" "done" hf-help --help >/dev/null 2>&1 || fail "done --help failed"
-  [ ! -d "$dir/home/state/inbox/.replies" ] || [ -z "$(grep -l '^Done: .*hf-help' "$dir/home/state/inbox/.replies"/* 2>/dev/null)" ] \
+  ! grep -qs '^Done: .*hf-help' "$dir/home/state/inbox/.replies"/* \
     || fail "a help read wrote the handoff reply while the row stays open"
+
+  wrapper_from_code "$dir" add hf-pruned "Handoff hf-pruned" --kind task >/dev/null || fail "could not add hf-pruned"
+  note4=$(inbox note --request-id handoff:hf-pruned --json "[claude] handoff hf-pruned" | note_of)
+  FM_HANDOFF_CLOSE_REPLY=removed wrapper_from_code "$dir" "done" hf-pruned --note "dropped by the prune" \
+    >/dev/null 2>&1 || fail "done hf-pruned failed"
+  receipts=$(reply_of "$note4")
+  assert_contains "$receipts" "Removed: firstmate took backlog item hf-pruned" "a prune drop read as done"
+  assert_contains "$receipts" "Reason: dropped by the prune" "the prune's note is not the reason"
+  wrapper_from_code "$dir" add hf-skip "Handoff hf-skip" --kind task >/dev/null || fail "could not add hf-skip"
+  note5=$(inbox note --request-id handoff:hf-skip --json "[claude] handoff hf-skip" | note_of)
+  FM_HANDOFF_CLOSE_REPLY=skip wrapper_from_code "$dir" "done" hf-skip >/dev/null 2>&1 \
+    || fail "done hf-skip failed"
+  assert_equals "NO-REPLY" "$(reply_of "$note5")" "a skipped close still wrote the reply"
 
   wrapper_from_code "$dir" "done" hf-answered >/dev/null 2>&1 || fail "done hf-answered failed"
   assert_equals "Answered by hand first" "$(reply_of "$note3")" "the close overwrote a reply written by hand"

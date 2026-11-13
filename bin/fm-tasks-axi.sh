@@ -66,6 +66,11 @@
 # --pr/--report/--note, or removed with the reason `rm` takes as
 # `--reason <text>`, which the wrapper consumes. A row no handoff filed is
 # untouched, and the reply never changes the close's exit status or stdout.
+# A caller whose close is not the work being done sets FM_HANDOFF_CLOSE_REPLY:
+# `removed` answers as removed with the --note as the reason (the weekly prune
+# drops rows through `done`), and `skip` writes nothing, leaving the reply to a
+# person (bin/fm-inbox.sh unread resurfaces it). A help read writes nothing.
+# Reply before closing when you have a fuller answer: a note keeps one reply.
 #
 # Done archive: tasks-axi never reads back the rows that markdown retention
 # moved out of the backlog. The wrapper-only subcommand `archive-path` prints
@@ -621,13 +626,16 @@ guard_superseded_quote() {
 # warns on stderr and never changes the exit status or stdout (--json stays
 # parseable).
 close_reply() {  # <verb>
-  local verb=$1 id='' arg how="done" i=1
+  local verb=$1 id='' arg how="done" i=1 note=''
   local -a flags=()
+  [ "${FM_HANDOFF_CLOSE_REPLY:-}" != skip ] || return 0
   while [ "$i" -lt "${#ARGS[@]}" ]; do
     arg=${ARGS[$i]}
     case "$arg" in
-      --pr|--report|--note) flags+=("$arg" "${ARGS[$((i + 1))]:-}"); i=$((i + 1)) ;;
-      --pr=*|--report=*|--note=*) flags+=("$arg") ;;
+      --note) note=${ARGS[$((i + 1))]:-}; flags+=("$arg" "$note"); i=$((i + 1)) ;;
+      --note=*) note=${arg#--note=}; flags+=("$arg") ;;
+      --pr|--report) flags+=("$arg" "${ARGS[$((i + 1))]:-}"); i=$((i + 1)) ;;
+      --pr=*|--report=*) flags+=("$arg") ;;
       --keep) i=$((i + 1)) ;;
       -h|--help) return 0 ;;
       -*) ;;
@@ -637,6 +645,7 @@ close_reply() {  # <verb>
   done
   [ -n "$id" ] || return 0
   case "$verb" in rm|delete) how=removed; flags=(--reason "$REASON") ;; esac
+  [ "${FM_HANDOFF_CLOSE_REPLY:-}" != removed ] || { how=removed; flags=(--reason "${REASON:-$note}"); }
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
     "$SCRIPT_DIR/fm-inbox.sh" close-reply "$id" "$how" ${flags[@]+"${flags[@]}"} >&2 \
     || printf 'fm-tasks-axi: %s %s landed, but its handoff reply was not written; answer it with bin/fm-inbox.sh reply\n' "$verb" "$id" >&2

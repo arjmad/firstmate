@@ -891,10 +891,12 @@ fm_backlog_close_transition() {
 # Answer a closed row's handoff note through bin/fm-inbox.sh close-reply, which
 # owns the reply and ignores a row no handoff filed. The row is already done,
 # so a failure only warns and never fails the transition; replay re-runs the
-# close and close-reply skips a note already answered.
+# close and close-reply skips a note already answered. FM_HANDOFF_CLOSE_REPLY=skip
+# (a forced teardown, whose work may never have landed) writes nothing.
 fm_backlog_close_reply() {  # <state-dir> <data-dir> <id> [done flag...]
   local state=$1 data=$2 id=$3
   shift 3
+  [ "${FM_HANDOFF_CLOSE_REPLY:-}" != skip ] || return 0
   [ -x "$FM_BACKLOG_LIB_DIR/fm-inbox.sh" ] || return 0
   FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" \
     "$FM_BACKLOG_LIB_DIR/fm-inbox.sh" close-reply "$id" "done" "$@" >/dev/null 2>&1 \

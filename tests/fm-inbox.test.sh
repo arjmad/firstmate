@@ -708,6 +708,10 @@ assert_not_contains "$out" "$plain" "a note that is not a handoff is not listed"
 json=$(FM_INBOX_NOW=$later run_inbox "$home" unread --json)
 assert_equals "hf-gone" "$(printf '%s' "$json" | json_get unreplied_handoffs 0 item)" \
   "unread --json lists the unanswered handoff"
+mkdir -p "$home/state/inbox/.handed-off" && printf 'sm-1\n' >"$home/state/inbox/.handed-off/hf-gone"
+assert_not_contains "$(FM_INBOX_NOW=$later run_inbox "$home" unread)" "$old" \
+  "a handoff moved to a secondmate closes there and is not listed"
+rm -f "$home/state/inbox/.handed-off/hf-gone"
 if command -v tasks-axi >/dev/null 2>&1; then
   fm_test_tasks_toml "$home/.tasks.toml"
   printf '## In flight\n\n## Queued\n\n## Done\n' >"$home/data/backlog.md"

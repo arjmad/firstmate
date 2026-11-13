@@ -89,6 +89,9 @@ EOF
 ## Done
 EOF
   printf '## Queued\n\n## Done\n' > "$sub/data/backlog.md"
+  # The row came in as a fleet handoff, so the move records where it went.
+  mkdir -p "$home/state/inbox/.requests"
+  printf '1-x\n' > "$home/state/inbox/.requests/handoff:wake-item"
   fakebin=$(make_fake_tmux "$TMP_ROOT/live-wake-fake")
   out="$TMP_ROOT/live-wake.out"
   FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" PATH="$fakebin:$PATH" \
@@ -100,6 +103,8 @@ EOF
     || fail "handoff to a live receiver failed: $(cat "$out")"
   grep -F 'wake-item' "$sub/data/backlog.md" >/dev/null \
     || fail "live receiver did not receive the routed backlog item"
+  [ "$(cat "$home/state/inbox/.handed-off/wake-item" 2>/dev/null)" = design ] \
+    || fail "a moved handoff row was not recorded as handed off to its secondmate"
   grep -F 'send-keys' "$TMP_ROOT/live-wake-tmux.log" >/dev/null \
     || fail "handoff did not ring the live receiver endpoint"
   assert_contains "$(inbox_body_stream "$home/state" design)" \

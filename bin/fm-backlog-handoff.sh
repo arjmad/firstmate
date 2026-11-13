@@ -737,6 +737,21 @@ remote_deliver_outbox() { # <secondmate-id> <outbox-path>
   printf '%s\n' "$receive_out"
 }
 
+# A moved row a fleet handoff filed (request id handoff:<key>) closes in the
+# secondmate's home, whose inbox holds no handoff note, so its close writes no
+# reply here. Record the move under state/inbox/.handed-off/ so bin/fm-inbox.sh
+# unread does not report the row as closed with its sender unanswered.
+mark_handed_off() { # <secondmate-id> <keys...>
+  local id=$1 key
+  shift
+  for key in "$@"; do
+    [ -f "$STATE/inbox/.requests/handoff:$key" ] || continue
+    mkdir -p "$STATE/inbox/.handed-off" 2>/dev/null \
+      && printf '%s\n' "$id" > "$STATE/inbox/.handed-off/$key" 2>/dev/null \
+      || echo "warning: could not record that handoff $key moved to $id; fm-inbox.sh unread may list it as unanswered" >&2
+  done
+}
+
 remove_interrupted_source_duplicates() { # <outbox> <keys...>
   local outbox=$1 key progress remaining pass=0
   shift
@@ -842,6 +857,7 @@ remote_handoff() { # <secondmate-id> <keys...>
   # deleting only duplicates that tasks-axi itself confirms are dependency-safe.
   remove_interrupted_source_duplicates "$outbox" "${requested[@]}" || return 1
   remote_deliver_outbox "$id" "$outbox" || return 1
+  mark_handed_off "$id" "${requested[@]}"
   echo "handed off ${#requested[@]} item(s) to remote secondmate $id: ${requested[*]}"
   [ "${#already[@]}" -eq 0 ] || echo "  already staged (recovered): ${already[*]}"
   warn_stale_public_commitments "$id" "${requested[@]}"
@@ -1091,6 +1107,7 @@ if ! MV_OUT=$(tasks-axi mv "${TO_MOVE[@]}" --file "$MAIN_BACKLOG" --to "$SUB_BAC
   exit 1
 fi
 
+mark_handed_off "$ID" "${TO_MOVE[@]}"
 echo "handed off ${#TO_MOVE[@]} item(s) to $ID: ${TO_MOVE[*]}"
 echo "  into $SUB_BACKLOG"
 receiver_wake_promote_prepared "$ID" "$REQUESTED_BATCH" || {

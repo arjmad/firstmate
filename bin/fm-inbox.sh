@@ -694,7 +694,7 @@ cmd_reply() {
   fi
   [ -n "${body//[[:space:]]/}" ] || die "refusing to record an empty reply"
   record_reply "$id" "$body" || rc=$?
-  [ "$rc" -ne 4 ] || die "reply already recorded for $id"
+  [ "$rc" -ne 4 ] || die "reply already recorded for $id (a backlog close writes one when none exists: reply before closing, or close with done --note or rm --reason)"
   [ "$rc" -eq 0 ] || die "could not claim the reply sequence"
   if [ "$json" -eq 1 ]; then
     need_python
@@ -1282,7 +1282,9 @@ pending_note_ids() {
 # REWAKE_SECONDS ago that have no reply and whose backlog row is no longer open:
 # a handoff closed without an answer, which nothing else would resurface. A row
 # still queued, in flight or held gets its reply when it closes, so it is not
-# listed. A row that cannot be read is listed rather than hidden. One
+# listed, nor is a row bin/fm-backlog-handoff.sh moved to a secondmate
+# (.handed-off/<item>), which closes in that home. A row that cannot be read is
+# listed rather than hidden. One
 # tab-separated line each, oldest first: note id, captured at, item, summary.
 unreplied_handoff_rows() {
   local now f id rid item captured at summary show state
@@ -1295,6 +1297,7 @@ unreplied_handoff_rows() {
     [ ! -f "$REPLIES/$id" ] || continue
     rid=$(sed -n '/^--$/q;s/^request_id=//p' "$f" | head -n 1)
     case "$rid" in handoff:?*) item=${rid#handoff:} ;; *) continue ;; esac
+    [ ! -f "$INBOX/.handed-off/$item" ] || continue
     captured=${id%%-*}
     case "$captured" in ''|*[!0-9]*) continue ;; esac
     [ $((now - captured)) -ge "$REWAKE_SECONDS" ] || continue

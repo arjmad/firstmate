@@ -274,7 +274,7 @@ command_apply() {
     [ -n "$id" ] || continue
     if [ -n "$why" ]; then
       printf 'skipped: %s (%s)\n' "$id" "$why"
-    elif "$SCRIPT_DIR/fm-tasks-axi.sh" 'done' "$id" --note "$note" >/dev/null 2>&1; then
+    elif FM_HANDOFF_CLOSE_REPLY=removed "$SCRIPT_DIR/fm-tasks-axi.sh" 'done' "$id" --note "$note" >/dev/null 2>&1; then
       printf 'dropped: %s\n' "$id"
     else
       printf 'failed: %s\n' "$id"
