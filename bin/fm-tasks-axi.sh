@@ -629,6 +629,7 @@ close_reply() {  # <verb>
       --pr|--report|--note) flags+=("$arg" "${ARGS[$((i + 1))]:-}"); i=$((i + 1)) ;;
       --pr=*|--report=*|--note=*) flags+=("$arg") ;;
       --keep) i=$((i + 1)) ;;
+      -h|--help) return 0 ;;
       -*) ;;
       *) [ -n "$id" ] || id=$arg ;;
     esac

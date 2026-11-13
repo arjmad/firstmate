@@ -515,6 +515,12 @@ for n in d["pending"] + d["handled"]:
   assert_not_contains "$out" "replied" "a row with no handoff note got a reply"
   assert_not_contains "$out" "not written" "a row with no handoff note warned"
 
+  wrapper_from_code "$dir" add hf-help "Handoff hf-help" --kind task >/dev/null || fail "could not add hf-help"
+  inbox note --request-id handoff:hf-help --json "[claude] handoff hf-help" >/dev/null
+  wrapper_from_code "$dir" "done" hf-help --help >/dev/null 2>&1 || fail "done --help failed"
+  [ ! -d "$dir/home/state/inbox/.replies" ] || [ -z "$(grep -l '^Done: .*hf-help' "$dir/home/state/inbox/.replies"/* 2>/dev/null)" ] \
+    || fail "a help read wrote the handoff reply while the row stays open"
+
   wrapper_from_code "$dir" "done" hf-answered >/dev/null 2>&1 || fail "done hf-answered failed"
   assert_equals "Answered by hand first" "$(reply_of "$note3")" "the close overwrote a reply written by hand"
   pass "fm-tasks-axi.sh done and rm answer a handoff note nobody answered, and leave others alone"
