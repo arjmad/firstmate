@@ -835,6 +835,8 @@ handed_off_outcome() {  # <item> <status-line>
     pr=${note#"merged $item "}
     pr=${pr%%[[:space:]]*}
   elif [ "$key" = "$item" ]; then
+    # The mate keys its own ready-for-review report this way too.
+    case "$verb $note" in "done "*://*) return 1 ;; esac
     text=$note
   else
     case "$key" in
@@ -868,14 +870,16 @@ handed_off_outcome() {  # <item> <status-line>
 #   done [key=child-outcome-...]: child <item> done: ...        done, scouts only
 #   failed [key=child-outcome-...]: child <item> failed: ...    removed
 #   failed [key=inactive-outcome-...]: ... child=<item> ...     removed
-#   done|failed [key=<item>]: <note>                            done, or removed
+#   done|failed [key=<item>]: <note>, with no URL on a done     done, or removed
 # A failed line answers as removed with its note as the reason. A ship child's
 # done is not an answer, because no-mistakes publishes it before validation and
 # a PR may never merge; its merged line is. close-reply writes at most one reply per note and the
 # marker goes once its note has a reply, so a re-read or a duplicate mirrored
-# line answers nothing twice. The watcher runs this on every poll.
+# line answers nothing twice. Only lines appended after the move (the marker's
+# second line, a byte offset) and ending in a newline are read. The watcher runs
+# this on every poll.
 cmd_close_handed_off() {
-  local marker item mate status line outcome pick note_id how pr report text out failed=0
+  local marker item mate offset status chunk line outcome pick note_id how pr report text out failed=0
   local -a flags
   [ "$#" -eq 0 ] || die "usage: fm-inbox.sh close-handed-off"
   [ -d "$INBOX/.handed-off" ] || return 0
@@ -888,21 +892,28 @@ cmd_close_handed_off() {
       rm -f "$marker"
       continue
     fi
-    mate=$(head -n 1 "$marker" | tr -d '\r')
+    mate=$(sed -n 1p "$marker" | tr -d '\r')
+    offset=$(sed -n 2p "$marker" | tr -d '\r')
     case "$mate" in ''|.*|*/*|*[!A-Za-z0-9._-]*) continue ;; esac
+    case "$offset" in ''|*[!0-9]*) offset=0 ;; esac
     status="$STATE/$mate.status"
     [ -f "$status" ] && [ ! -L "$status" ] || continue
+    # A channel smaller than the offset was replaced since the move.
+    [ "$(wc -c < "$status" | tr -d ' ')" -ge "$offset" ] || offset=0
+    chunk=$(tail -c +"$((offset + 1))" "$status"; printf .)
+    chunk=${chunk%.}
+    case "$chunk" in *$'\n') ;; *$'\n'*) chunk=${chunk%$'\n'*}$'\n' ;; *) chunk='' ;; esac
     pick=''
-    while IFS= read -r line || [ -n "$line" ]; do
+    while IFS= read -r line; do
       outcome=$(handed_off_outcome "$item" "$line") || continue
       pick=$outcome
-    done < <(grep -F -- "$item" "$status" || true)
+    done < <(printf '%s' "$chunk" | grep -F -- "$item" || true)
     [ -n "$pick" ] || continue
     IFS=$'\037' read -r how pr report text <<<"$pick"
     flags=()
     if [ "$how" = "done" ]; then
       [ -z "$pr" ] || flags+=(--pr "$pr")
-      [ -z "$report" ] || flags+=(--report "$report")
+      [ -z "$report" ] || flags+=(--report "$report (as secondmate $mate reported it)")
       flags+=(--note "secondmate $mate reported it done${text:+: $text}")
     else
       flags+=(--reason "secondmate $mate reported it failed${text:+: $text}")

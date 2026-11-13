@@ -741,14 +741,17 @@ remote_deliver_outbox() { # <secondmate-id> <outbox-path>
 # secondmate's home, whose inbox holds no handoff note, so its close writes no
 # reply. Record the move under state/inbox/.handed-off/ so bin/fm-inbox.sh
 # unread does not report the row as closed with its sender unanswered, and so
-# fm-inbox.sh close-handed-off answers it from the mate's terminal line.
+# fm-inbox.sh close-handed-off answers it from the mate's terminal line. The
+# second line is the size of this home's copy of the mate's channel at the move,
+# so a line an earlier task with the same key left there answers nothing.
 mark_handed_off() { # <secondmate-id> <keys...>
-  local id=$1 key
+  local id=$1 key offset=0
   shift
+  [ ! -f "$STATE/$id.status" ] || offset=$(wc -c < "$STATE/$id.status" | tr -d ' ') || offset=0
   for key in "$@"; do
     [ -f "$STATE/inbox/.requests/handoff:$key" ] || continue
     mkdir -p "$STATE/inbox/.handed-off" 2>/dev/null \
-      && printf '%s\n' "$id" > "$STATE/inbox/.handed-off/$key" 2>/dev/null \
+      && printf '%s\n%s\n' "$id" "${offset:-0}" > "$STATE/inbox/.handed-off/$key" 2>/dev/null \
       || echo "warning: could not record that handoff $key moved to $id; fm-inbox.sh unread may list it as unanswered" >&2
   done
 }

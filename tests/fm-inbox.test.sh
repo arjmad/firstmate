@@ -787,7 +787,8 @@ assert_contains "$receipts" "Note: secondmate sm-1 reported it done: scouted; no
   "the done reply carries the mate's note"
 assert_contains "$receipts" "Reason: secondmate sm-1 reported it failed: its task ended without a final status line" \
   "the inactive failure says why it carries no note"
-assert_contains "$receipts" "Report: data/hf-7/report.md" "the scout's done reply carries its report"
+assert_contains "$receipts" "Report: data/hf-7/report.md (as secondmate sm-1 reported it)" \
+  "the scout's done reply carries its report, named as the mate's"
 pass "close-handed-off answers failed and keyed done lines"
 
 home=$(make_home handed-off-duplicate)
@@ -802,6 +803,25 @@ assert_equals "" "$(run_inbox "$home" close-handed-off)" "a re-read after the re
 [ ! -e "$home/state/inbox/.handed-off/hf-5" ] || fail "a re-read leaves the answered marker behind"
 assert_equals "1" "$(reply_count "$home")" "the note keeps exactly one reply"
 pass "close-handed-off answers a handoff once across duplicate lines and re-reads"
+
+home=$(make_home handed-off-boundaries)
+printf '%s\n' "failed [key=child-outcome-hf-8-failed-5f6a7b8c] [at=1794500000]: child hf-8 failed: an earlier run" \
+  >"$home/state/sm-1.status"
+eid=$(hand_off "$home" hf-8)
+printf 'sm-1\n%s\n' "$(wc -c <"$home/state/sm-1.status" | tr -d ' ')" >"$home/state/inbox/.handed-off/hf-8"
+kid=$(hand_off "$home" hf-9)
+printf 'sm-1\n%s\n' "$(wc -c <"$home/state/sm-1.status" | tr -d ' ')" >"$home/state/inbox/.handed-off/hf-9"
+printf '%s\n' "done [key=hf-9] [at=1794600100]: PR ready https://github.com/o/r/pull/12" >>"$home/state/sm-1.status"
+printf '%s' "done [key=merged-hf-8] [at=1794600200]: merged hf-8 https://github.com/o/r/pull/1" >>"$home/state/sm-1.status"
+assert_equals "" "$(run_inbox "$home" close-handed-off)" \
+  "a line from before the move, a keyed ready report, and an unfinished line answer nothing"
+printf '3\n' >>"$home/state/sm-1.status"
+assert_equals "replied $eid (handoff hf-8 done)" "$(run_inbox "$home" close-handed-off)" \
+  "the merged line answers once it is complete"
+assert_contains "$(run_inbox "$home" receipts --all-replies)" "PR: https://github.com/o/r/pull/13" \
+  "the reply carries the complete PR link"
+[ -e "$home/state/inbox/.handed-off/hf-9" ] || fail "a keyed ready report answered the handoff ($kid)"
+pass "close-handed-off reads only complete lines written after the move, and not a keyed ready report"
 
 home=$(make_home handed-off-no-note)
 mkdir -p "$home/state/inbox/.handed-off"
