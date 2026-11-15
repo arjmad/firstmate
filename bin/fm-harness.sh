@@ -25,6 +25,14 @@
 #                                        codex-native/<id>. Other efforts retain
 #                                        their adapter's existing policy. Native
 #                                        Codex validates model support at startup.
+#        fm-harness.sh validate-advisor <harness> <model> <advisor>
+#                                        Refuse a Claude advisor (a crew-dispatch
+#                                        profile's `advisor`) unless the harness is
+#                                        the claude adapter, the advisor is a plain
+#                                        model alias or id, and the model is explicit
+#                                        and not a Fable model: a Fable main accepts
+#                                        only a Fable advisor, doubling Fable use.
+#                                        An empty or `default` advisor always passes.
 #        fm-harness.sh ancestry [<pid>] print "<strength> <harness>" for the nearest
 #                                        harness process at or above <pid> (default this
 #                                        process), or nothing when the walk finds none.
@@ -684,8 +692,37 @@ validate_native_effort() {
   return 1
 }
 
+validate_advisor() {
+  local harness=${1:-} model=${2:-} advisor=${3:-}
+  case "$advisor" in '' | default) return 0 ;; esac
+  case "$advisor" in
+    *[!A-Za-z0-9._-]*)
+      echo "error: advisor takes a Claude model alias or id such as fable, not '$advisor'" >&2
+      return 1
+      ;;
+  esac
+  if [ "$harness" != claude ]; then
+    echo "error: advisor applies only to the claude adapter, not harness '$harness'" >&2
+    return 1
+  fi
+  case "$model" in
+    '' | default)
+      echo "error: advisor needs an explicit model, so a Fable main model cannot slip in through the harness default" >&2
+      return 1
+      ;;
+  esac
+  case "$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')" in
+    *fable*)
+      echo "error: advisor is refused on Fable main model '$model': a Fable main accepts only a Fable advisor, which doubles Fable use" >&2
+      return 1
+      ;;
+  esac
+  return 0
+}
+
 case "${1:-}" in
   validate-native-effort) shift; validate_native_effort "$@" ;;
+  validate-advisor) shift; validate_advisor "$@" ;;
   ancestry)
     case "${2:-}" in
       ''|*[!0-9]*) [ -z "${2:-}" ] || { echo "error: ancestry takes a numeric pid" >&2; exit 2; } ;;

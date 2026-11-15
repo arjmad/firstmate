@@ -77,11 +77,12 @@ A relaunch does take one session reference when the endpoint's own runtime recor
 `relaunch` is the only verb that changes durable records, so it runs as a transaction with a journal at `state/<id>.control-relaunch`, the prior record preserved beside it, and a ship or scout's prior instructions preserved when a progress note is appended.
 
 1. **Resolve the profile.**
-   An explicit `--harness`, `--model`, or `--effort` wins.
+   An explicit `--harness`, `--model`, `--effort`, or `--advisor` wins.
    Without an explicit harness, a `kind=secondmate` task re-resolves its [configured runtime pin for that mate](configuration.md#choose-the-secondmate-harness) before the checkpoint.
    A ship or scout keeps the harness already recorded for it, because that harness comes from firstmate's dispatch-profile judgment at intake and must not be silently re-read from configuration.
    A recorded raw-command basename that differs from its resolved adapter cannot reproduce the command actually running, so relaunch refuses before the checkpoint unless the caller passes an explicit `--harness` to choose the replacement runtime deliberately.
    A harness change resets model and effort unless they are named too, because a model chosen for one adapter does not transfer to another.
+   A recorded [Claude advisor](configuration.md#crew-dispatch-profiles-configcrew-dispatchjson) carries over only while the harness and model stay the same, and an unpairable one refuses before the old agent stops.
    A Claude or Pi replacement must also pass the home's [worker account pin](configuration.md#worker-account-pin-configclaude-account-configpi-account), or a secondmate's own [per-secondmate account pin](configuration.md#per-secondmate-account-pins) when one is set, so a pin that no longer resolves or is signed out refuses before the old agent stops.
    Under a declared [Claude account list](configuration.md#several-claude-accounts-configclaude-accounts), a Claude ship or scout keeps its recorded account, and `--account <entry>` moves it to another declared one after the same check.
    An omp secondmate replacement likewise passes its [per-secondmate omp profile](configuration.md#per-secondmate-omp-profile) file check before the old agent stops.

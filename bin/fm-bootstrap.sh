@@ -1259,6 +1259,17 @@ crew_dispatch_validate() {
       ($items | any(has("floor") and floor_bad(.floor; false)));
     def malformed_quota_scopes($items):
       ($items | any(has("quota_scope") and (((.quota_scope | type) != "string") or (.quota_scope | length) == 0)));
+    # bin/fm-harness.sh validate-advisor owns the advisor rule: a plain model
+    # alias or id, on harness claude with an explicit non-Fable main model.
+    def bad_advisors:
+      configured_profiles
+      | map(select(has("advisor")))
+      | map(select(((.advisor | type) != "string") or (.advisor | test("^[A-Za-z0-9._-]+$") | not)
+          or .harness != "claude"
+          or ((.model | type) != "string") or .model == "default"
+          or (.model | ascii_downcase | contains("fable"))))
+      | map("\(.harness):\(.model // "default")")
+      | unique;
     def bad_efforts:
       configured_profiles
       | map({h: .harness, m: .model, e: .effort})
@@ -1307,6 +1318,7 @@ crew_dispatch_validate() {
         | unique) as $bad_harnesses
       | if ($bad_harnesses | length) > 0 then "unverified harness: " + ($bad_harnesses | join(", "))
         elif (bad_efforts | length) > 0 then "invalid effort: " + (bad_efforts | join(", "))
+        elif (bad_advisors | length) > 0 then "advisor needs harness claude with an explicit non-Fable model and a plain model name: " + (bad_advisors | join(", "))
         else empty
         end
     end
