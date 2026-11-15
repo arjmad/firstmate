@@ -1329,6 +1329,63 @@ test_claude_compact_window_follows_the_relaunch() {
   pass "fm-control relaunch: a Claude replacement carries and records the compaction window, and a bad one refuses before the agent stops"
 }
 
+# The Claude advisor (bin/fm-spawn.sh --advisor): a relaunch on the same
+# harness and model keeps the recorded advisor; a model change drops it; an
+# explicit `default` clears it; and an unpairable advisor refuses before the
+# running agent stops.
+test_claude_advisor_follows_the_relaunch() {
+  local dir out rc id=rl-claude-advisor meta
+  dir=$(new_case claude-advisor "$id")
+  add_ship_task "$dir" "$id" claude
+  meta="$dir/home/state/$id.meta"
+  sed -i 's/^model=default$/model=claude-opus-5-5/' "$meta"
+  printf 'advisor=fable\n' >> "$meta"
+  out=$(run_control "$dir" "$id" relaunch --note "keep advisor"); rc=$?
+  expect_code 0 "$rc" "a Claude relaunch with a recorded advisor should succeed"$'\n'"$out"
+  assert_contains "$(cat "$dir/fake/literal")" "--model 'claude-opus-5-5' --advisor 'fable' " \
+    "the relaunched Claude worker must keep its recorded advisor"
+  [ "$(meta_field "$dir" "$id" advisor)" = fable ] \
+    || fail "the relaunch must record advisor=fable, got '$(meta_field "$dir" "$id" advisor)'"
+  out=$(run_control "$dir" "$id" relaunch --model claude-fable-5-2 --advisor fable --note "fable main"); rc=$?
+  expect_code 1 "$rc" "an advisor on a Fable main must refuse the relaunch"
+  assert_contains "$out" "Fable main model" "the refusal must say why"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "a refused advisor relaunch stopped the running agent"
+  : > "$dir/fake/literal"
+  out=$(run_control "$dir" "$id" relaunch --model claude-sonnet-5-5 --note "new model"); rc=$?
+  expect_code 0 "$rc" "a Claude relaunch onto another model should succeed"$'\n'"$out"
+  assert_not_contains "$(cat "$dir/fake/literal")" "--advisor" \
+    "an advisor chosen for one main model must not carry to another"
+  [ -z "$(meta_field "$dir" "$id" advisor)" ] || fail "a model change must drop advisor from the record"
+  out=$(run_control "$dir" "$id" relaunch --advisor fable --note "advisor back"); rc=$?
+  expect_code 0 "$rc" "an explicit advisor on relaunch should succeed"$'\n'"$out"
+  [ "$(meta_field "$dir" "$id" advisor)" = fable ] || fail "an explicit advisor must be recorded"
+  : > "$dir/fake/literal"
+  out=$(run_control "$dir" "$id" relaunch --advisor default --note "advisor off"); rc=$?
+  expect_code 0 "$rc" "an explicit default advisor should succeed"$'\n'"$out"
+  assert_not_contains "$(cat "$dir/fake/literal")" "--advisor" "an explicit default must clear the advisor"
+  [ -z "$(meta_field "$dir" "$id" advisor)" ] || fail "an explicit default must drop advisor from the record"
+  pass "fm-control relaunch: a Claude replacement keeps its advisor on the same model, drops it on a model change, and refuses a Fable main first"
+}
+
+test_secondmate_relaunch_refuses_an_advisor() {
+  local dir home out rc
+  dir=$(new_case smadvisor sma1)
+  home="$dir/home"
+  fm_git_worktree "$dir/proj" "$dir/smhome" sma-branch
+  mkdir -p "$dir/smhome/state" "$dir/smhome/data" "$dir/smhome/bin" "$home/data/sma1"
+  printf 'sma1\n' > "$dir/smhome/.fm-secondmate-home"
+  printf '%s\n' "window=fmses:fm-sma1" "endpoint_task_id=sma1" "worktree=$dir/smhome" "project=$dir/smhome" \
+    "harness=claude" "kind=secondmate" "mode=secondmate" "yolo=off" "model=claude-opus-5-5" "effort=default" \
+    "home=$dir/smhome" > "$home/state/sma1.meta"
+  printf '%s\n' "fm-sma1" > "$dir/fake/windows"
+  printf '%s' "$dir/smhome" > "$dir/fake/cwd"
+  out=$(run_control "$dir" sma1 relaunch --harness claude --model claude-opus-5-5 --advisor fable); rc=$?
+  expect_code 1 "$rc" "a secondmate relaunch with an advisor must refuse"
+  assert_contains "$out" "never a secondmate" "the refusal must say why"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "a refused secondmate advisor relaunch stopped the running agent"
+  pass "fm-control relaunch: a secondmate refuses an advisor before its agent stops"
+}
+
 test_explicit_model_wins_over_the_recorded_one() {
   local dir out rc
   dir=$(new_case explicit rl7)
@@ -3630,6 +3687,8 @@ test_pi_exclude_tools_follow_the_relaunch
 test_exclude_tools_refusals_happen_before_the_agent_stops
 test_claude_denied_mcp_servers_follow_the_relaunch
 test_claude_compact_window_follows_the_relaunch
+test_claude_advisor_follows_the_relaunch
+test_secondmate_relaunch_refuses_an_advisor
 test_explicit_model_wins_over_the_recorded_one
 test_relaunch_onto_an_unverified_harness_is_refused
 test_prior_harness_turnend_registry_entry_is_cleared

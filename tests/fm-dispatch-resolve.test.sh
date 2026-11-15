@@ -1965,6 +1965,11 @@ for bad in \
   '{"rules":[{"when":"x","use":{"harness":"codex"}}],"default":[{"harness":"claude","model":"opus"},{"harness":"claude","model":"opus"}]}|default must not contain duplicate harness, model, and effort profiles' \
   '{"rules":[{"when":"x","use":{"harness":"spaceship"}}]}|each use profile must name a verified harness' \
   '{"rules":[{"when":"x","use":{"harness":"grok","effort":"max"}}]}|each use profile effort must be supported by its harness and model' \
+  '{"rules":[{"when":"x","use":{"harness":"codex","model":"gpt-5.5","advisor":"fable"}}]}|each use profile advisor needs harness claude with an explicit non-Fable model and a plain model name' \
+  '{"rules":[{"when":"x","use":{"harness":"claude","model":"claude-fable-5-2","advisor":"fable"}}]}|each use profile advisor needs harness claude with an explicit non-Fable model and a plain model name' \
+  '{"rules":[{"when":"x","use":{"harness":"claude","advisor":"fable"}}]}|each use profile advisor needs harness claude with an explicit non-Fable model and a plain model name' \
+  '{"rules":[{"when":"x","use":{"harness":"claude","model":"claude-opus-5-5","advisor":"fa ble"}}]}|each use profile advisor needs harness claude with an explicit non-Fable model and a plain model name' \
+  '{"rules":[{"when":"x","use":{"harness":"codex"}}],"default":{"harness":"claude","model":"Fable","advisor":"fable"}}|each default profile advisor needs harness claude with an explicit non-Fable model and a plain model name' \
   '{"rules":[{"when":"x","use":{"harness":"opencode","model":"anthropic/claude-sonnet-4-5"}}]}|use profiles whose harness lacks one authoritative provider family require provider: opencode' \
   '{"rules":[{"when":"x","use":{"harness":"rovo"}}]}|use profiles whose harness lacks one authoritative provider family require provider: rovo' \
   '{"rules":[{"when":"x","use":{"harness":"codex"}}],"default":{"harness":"pi","model":"anthropic/claude-sonnet-5"}}|default profiles whose harness lacks one authoritative provider family require provider: pi'; do
@@ -2008,6 +2013,24 @@ assert_contains "$out" 'quota ranking off: home declares a single shared quota' 
 assert_absent "$LOG/quota-axi.calls" "shared-quota never reads quota-axi"
 [ "$(printf '%s\n' "$out" | grep -c 'quota ranking off')" -ge 3 ] || fail "shared-quota states the opt-out on every candidate line"
 pass "shared-quota opt-out: no quota snapshot, deterministic declared-order pick, opt-out stated on every candidate"
+
+# --- a profile advisor travels on the profile line and the task record -------
+jq '.shared_quota = true | .rules[3].use[0].model = "claude-opus-5-5" | .rules[3].use[0].advisor = "fable"' "$BASE_RULES" > "$RULES"
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+TYPESAFE_API_KEY=$KEY run code out err "$TASK_BRIEF" --project pager
+expect_code 0 "$code" "a clear advisor profile exits 0"
+assert_contains "$out" "  profile: --harness 'claude' --model 'claude-opus-5-5' --effort 'high' --advisor 'fable'" "the profile line carries the advisor"
+assert_equals '{"harness":"claude","model":"claude-opus-5-5","effort":"high","advisor":"fable"}' \
+  "$(jq -c '.profile' "$TASK_RECORD")" "the task record carries the advisor for fm-spawn"
+jq '.shared_quota = true' "$BASE_RULES" > "$RULES"
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+TYPESAFE_API_KEY=$KEY run code out err "$TASK_BRIEF" --project pager
+assert_equals '{"harness":"claude","model":"sonnet","effort":"high"}' \
+  "$(jq -c '.profile' "$TASK_RECORD")" "a profile without an advisor records none"
+cp "$BASE_RULES" "$RULES"
+pass "a profile advisor is printed with the profile line and recorded for fm-spawn; a profile without one is unchanged"
 
 # --- shared-quota: an unmet rule-level floor is bypassed too -----------------
 # rule_1 declares floor model:fable >= 20% but the fixture has 15% there, so the

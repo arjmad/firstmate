@@ -108,13 +108,13 @@ enable_dispatch_profile() {
 
 # Writes the task record bin/fm-dispatch-resolve.sh leaves in data/<id>/ (its
 # documented shape: task, status, and profile with null for an unset axis).
-record_dispatch() {  # <home> <id> <status> [<harness> <model> <effort>]
+record_dispatch() {  # <home> <id> <status> [<harness> <model> <effort> [<advisor>]]
   local home=$1 id=$2 status=$3
   mkdir -p "$home/data/$id"
-  jq -cn --arg id "$id" --arg status "$status" --arg h "${4:-}" --arg m "${5:-}" --arg e "${6:-}" '
+  jq -cn --arg id "$id" --arg status "$status" --arg h "${4:-}" --arg m "${5:-}" --arg e "${6:-}" --arg a "${7:-}" '
     def opt: if . == "" then null else . end;
     {task: $id, status: $status,
-     profile: (if $status == "clear" then {harness: $h, model: ($m | opt), effort: ($e | opt)} else null end)}' \
+     profile: (if $status == "clear" then {harness: $h, model: ($m | opt), effort: ($e | opt)} + (if $a == "" then {} else {advisor: $a} end) else null end)}' \
     > "$home/data/$id/dispatch-resolution.json"
 }
 
@@ -2666,6 +2666,118 @@ test_claude_compact_window_fails_closed() {
   pass "an unreadable, empty, malformed, or out-of-range compaction window refuses before any launch or record"
 }
 
+# --advisor: a Claude ship or scout with an explicit non-Fable model launches
+# with `--advisor <model>` and records advisor=; every launch that cannot honor
+# the pairing refuses before any endpoint or record exists.
+claude_launch_args() {  # <pane> -> the argv the launched claude received, one per line
+  cat > "$FAKEBIN_DIR/claude" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$FM_FAKE_CLAUDE_ARGS_OUT"
+SH
+  chmod +x "$FAKEBIN_DIR/claude"
+  fm_eval_launch "$(cat "$LAUNCH_LOG")" "$1" "$FAKEBIN_DIR" \
+    "FM_FAKE_CLAUDE_ARGS_OUT=$CASE_DIR/claude-args" >/dev/null 2>&1 \
+    || fail "claude launch did not run"
+  cat "$CASE_DIR/claude-args"
+}
+
+test_claude_advisor_renders_for_opus_workers() {
+  local kind rec id out status args
+  for kind in ship scout; do
+    id="claude-advisor-$kind-z37"
+    rec=$(make_spawn_case "claude-advisor-$kind" claude "$id")
+    read_case_record "$rec"
+    case "$kind" in
+      ship) out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+        --model claude-opus-5-5 --effort high --advisor fable) ;;
+      scout) out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout \
+        --model claude-opus-5-5 --advisor fable) ;;
+    esac
+    status=$?
+    expect_code 0 "$status" "claude $kind spawn with an opus model and a fable advisor should succeed"$'\n'"$out"
+    args=$(claude_launch_args "$WT_DIR")
+    printf '%s\n' "$args" | grep -A1 -x -- --advisor | grep -qx fable \
+      || fail "the $kind launch must pass --advisor fable, got:"$'\n'"$args"
+    printf '%s\n' "$args" | grep -A1 -x -- --model | grep -qx claude-opus-5-5 \
+      || fail "the $kind launch must keep --model claude-opus-5-5"
+    assert_grep advisor=fable "$HOME_DIR/state/$id.meta" "the $kind record must carry advisor=fable"
+    assert_contains "$out" " advisor=fable" "the $kind spawned line must name the advisor"
+  done
+  id=claude-advisor-none-z37
+  rec=$(make_spawn_case claude-advisor-none claude "$id")
+  read_case_record "$rec"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model claude-opus-5-5)
+  status=$?
+  expect_code 0 "$status" "claude spawn with no advisor should succeed"$'\n'"$out"
+  args=$(claude_launch_args "$WT_DIR")
+  printf '%s\n' "$args" | grep -qx -- --advisor && fail "a launch with no advisor must not pass --advisor"
+  assert_no_grep advisor= "$HOME_DIR/state/$id.meta" "a launch with no advisor must record none"
+  # `default` means no advisor, so it renders none even on a Fable main.
+  id=claude-advisor-default-z37
+  rec=$(make_spawn_case claude-advisor-default claude "$id")
+  read_case_record "$rec"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model claude-fable-5-2 --advisor default)
+  status=$?
+  expect_code 0 "$status" "a default advisor should launch with no advisor"$'\n'"$out"
+  args=$(claude_launch_args "$WT_DIR")
+  printf '%s\n' "$args" | grep -qx -- --advisor && fail "a default advisor must not pass --advisor"
+  assert_no_grep advisor= "$HOME_DIR/state/$id.meta" "a default advisor must record none"
+  pass "claude opus ships and scouts launch with and record --advisor fable; no advisor or a default one leaves the launch unchanged"
+}
+
+test_claude_advisor_refuses_unpairable_launches() {
+  local setup rec id out status harness want
+  local -a args
+  for setup in fable-id fable-alias no-model codex secondmate bad-value; do
+    id="claude-advisor-refuse-$setup-z38"
+    harness=claude
+    [ "$setup" != codex ] || harness=codex
+    rec=$(make_spawn_case "claude-advisor-refuse-$setup" "$harness" "$id")
+    read_case_record "$rec"
+    args=("$id" "$PROJ_DIR" --mode no-mistakes --yolo off)
+    case "$setup" in
+      fable-id) args+=(--model claude-fable-5-2 --advisor fable); want="Fable main model" ;;
+      fable-alias) args+=(--model Fable --advisor fable); want="Fable main model" ;;
+      no-model) args+=(--advisor fable); want="explicit model" ;;
+      codex) args+=(--model gpt-5 --advisor fable); want="only to the claude adapter" ;;
+      secondmate)
+        make_seeded_secondmate_home "$CASE_DIR/secondmate-home" "$id"
+        args=("$id" "$CASE_DIR/secondmate-home" --secondmate --model claude-opus-5-5 --advisor fable)
+        want="never a secondmate"
+        ;;
+      bad-value) args+=(--model claude-opus-5-5 '--advisor=fa ble'); want="model alias or id" ;;
+    esac
+    out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "${args[@]}" 2>&1)
+    status=$?
+    [ "$status" -ne 0 ] || fail "the $setup advisor launch must refuse"$'\n'"$out"
+    assert_contains "$out" "$want" "the $setup refusal must say why"
+    [ ! -s "$LAUNCH_LOG" ] || fail "claude launched despite the $setup advisor refusal"
+    [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "the $setup advisor refusal still wrote a task record"
+  done
+  pass "an advisor on a Fable main, an implicit model, another harness, a secondmate, or a malformed value refuses before any launch or record"
+}
+
+test_claude_advisor_must_match_the_dispatch_selection() {
+  local rec id out status
+  id=claude-advisor-dispatch-z39
+  rec=$(make_spawn_case claude-advisor-dispatch claude "$id")
+  read_case_record "$rec"
+  enable_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id" clear claude claude-opus-5-5 high fable
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+    --harness claude --model claude-opus-5-5 --effort high 2>&1)
+  status=$?
+  expect_code 1 "$status" "a spawn that drops the selected advisor must refuse"$'\n'"$out"
+  assert_contains "$out" "--advisor fable" "the refusal must name the selected advisor"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "the mismatch refusal still wrote a task record"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+    --harness claude --model claude-opus-5-5 --effort high --advisor fable 2>&1)
+  status=$?
+  expect_code 0 "$status" "a spawn passing the selected profile line should succeed"$'\n'"$out"
+  assert_grep advisor=fable "$HOME_DIR/state/$id.meta" "the dispatched record must carry advisor=fable"
+  pass "a clear dispatch selection's advisor must be passed, like its model and effort"
+}
+
 test_claude_long_launch_is_delivered_intact() {
   local rec id out status launch expected
   id=profile-claude-long-launch-z24
@@ -3499,6 +3611,9 @@ test_claude_denied_mcp_servers_fail_closed
 test_claude_task_workers_launch_with_compact_window
 test_claude_compact_window_absent_or_other_runtime_changes_nothing
 test_claude_compact_window_fails_closed
+test_claude_advisor_renders_for_opus_workers
+test_claude_advisor_refuses_unpairable_launches
+test_claude_advisor_must_match_the_dispatch_selection
 test_claude_long_launch_is_delivered_intact
 test_claude_crewmate_launch_carries_the_attribution_policy
 test_keep_ai_trailers_omits_attribution_settings_and_strip_hooks

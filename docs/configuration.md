@@ -2079,7 +2079,7 @@ Firstmate cannot see which part of a worker's life uses the resource, so the num
 
 `config/crew-dispatch.json` is an optional local, gitignored file containing natural-language rules that firstmate reads before dispatching a crewmate or scout.
 Firstmate chooses the best matching rule with judgment; shell scripts do not match the natural-language rules.
-Firstmate resolves the rule's profile object or array under `AGENTS.md` section 4 and `quota-array-dispatch`, then passes only concrete `--harness`, `--model`, and `--effort` flags to `fm-spawn.sh`.
+Firstmate resolves the rule's profile object or array under `AGENTS.md` section 4 and `quota-array-dispatch`, then passes only concrete `--harness`, `--model`, `--effort`, and `--advisor` flags to `fm-spawn.sh`.
 
 **Spawn requirements**
 
@@ -2103,7 +2103,7 @@ This section is the single owner of the canonical schema and its per-field seman
       "min_confidence": 0.85,
       "floor": { "scope": "<quota-axi scope>", "min_percent": 20, "provider": "<quota-axi provider>" },
       "use": [
-        { "harness": "<adapter>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max|ultra, optional>", "provider": "<optional quota-axi provider>", "quota_scope": "<optional quota-axi scope>", "floor": { "scope": "<quota-axi scope>", "min_percent": 50 } }
+        { "harness": "<adapter>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max|ultra, optional>", "advisor": "<optional Claude advisor model, claude only>", "provider": "<optional quota-axi provider>", "quota_scope": "<optional quota-axi scope>", "floor": { "scope": "<quota-axi scope>", "min_percent": 50 } }
       ],
       "why": "<optional rationale that helps firstmate choose>"
     }
@@ -2123,6 +2123,7 @@ This section is the single owner of the canonical schema and its per-field seman
 | `use` and optional top-level `default` | Accept one profile object or a non-empty array of profile objects; the single-object form remains fully backward-compatible. |
 | Profile `harness` | Required in every profile. |
 | Profile `model` and `effort`; rule `why` | Optional. |
+| Profile `advisor` | Optional; see "Claude advisor" below. |
 | Top-level `preferred_provider` | Optional provider-family preference, applied after eligibility checks under `quota-array-dispatch`. |
 | Top-level `shared_quota` | Optional; see "Shared-quota opt-out" below. |
 
@@ -2143,6 +2144,17 @@ With it set, typed dispatch resolution makes no `quota-axi` call, applies no quo
 Firstmate's own `quota-array-dispatch` intake honors the same declaration.
 Without the setting, or with `"shared_quota": false`, behavior is unchanged.
 The declared value must be a boolean; anything else is an actionable configuration error reported like any other malformed rule.
+
+**Claude advisor**
+
+A profile `advisor` names the model a Claude worker consults at decision points, such as `"advisor": "fable"`.
+`fm-spawn.sh` passes it to a Claude ship or scout as `--advisor <model>`, which sets the advisor for that one session without writing Claude settings (Claude Code 2.1.321 or later for a Fable advisor).
+It is valid only with harness `claude` and an explicit `model` that is not a Fable model; anything else is a configuration error at bootstrap and in typed resolution, and `fm-spawn.sh` refuses the launch.
+The Fable refusal is deliberate: a Fable main model accepts only a Fable advisor, so the pairing would double Fable use, and refusing is visible where silently dropping the field would not be.
+The value must be a plain model alias or id (letters, digits, `.`, `_`, `-`), and `bin/fm-harness.sh validate-advisor` owns the rule.
+The task record keeps it as `advisor=`, and `bin/fm-control.sh relaunch` keeps it only while the harness and model stay the same; a secondmate never takes one.
+Each advisor call spends the advisor model's usage on top of the worker's own.
+Arjun chose this for the Opus 5.5 workers on 2026-11-14 ("Yes let's do it"; [fork decision](fork-decisions/2026-11-14-claude-advisor.md)), so a home that wants it adds `"advisor": "fable"` to each `claude-opus-5-5` profile.
 
 **Fields applied only by typed resolution**
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--dispatch-override <reason>] [--placement-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait] [--also <repo>]...
-#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--dispatch-override <reason>] [--placement-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--advisor <model>] [--fast <on|off>] [--dispatch-override <reason>] [--placement-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait] [--also <repo>]...
+#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--advisor <model>] [--fast <on|off>] [--dispatch-override <reason>] [--placement-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--backend <name>] --secondmate
 #   A fresh ship or scout <project-dir> must resolve, physically, to a clone
 #   directly under this home's projects/ whose git common dir is its own .git;
@@ -87,7 +87,7 @@
 #   first in the private launch-brief overlay, including the exact task-owned
 #   steering inbox. This never rewrites a project's instruction files or a
 #   secondmate's charter.
-#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--fast <on|off>] [--account <entry>]
+#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--advisor <model>] [--fast <on|off>] [--account <entry>]
 #   --relaunch launches a replacement agent for an EXISTING task into that
 #   task's own recorded worktree, reusing its recorded endpoint when that
 #   endpoint still exists, instead of creating either from scratch. It is
@@ -140,6 +140,15 @@
 #   from that harness's launch rather than guessed. Ultra is the explicit
 #   exception: bin/fm-harness.sh validate-native-effort owns its model scope;
 #   supported Pi launches receive --codex-effort ultra, never --thinking ultra.
+#   --advisor <model> is the optional Claude advisor profile axis (a crew-dispatch
+#   profile's `advisor`, docs/configuration.md "Claude advisor"): a claude ship
+#   or scout launch receives `--advisor <model>`, which sets the advisor for that
+#   one session without writing settings. It is refused before anything exists
+#   on a secondmate, backend=t3code, or any pairing bin/fm-harness.sh
+#   validate-advisor refuses (another harness, a raw launch command, no explicit
+#   --model, or a Fable main model). The value is recorded as advisor= in the
+#   task record and on the spawned line only when set, and bin/fm-control.sh
+#   relaunch passes it back; like --model it is not read from config here.
 #   --fast <on|off> is this task's model priority ("fast") tier, default off.
 #   Off is the captain's standing orchestration default: every firstmate-launched
 #   worker runs standard tier even when the launching machine's own config or a
@@ -639,6 +648,8 @@
 #                  state/<task-id>.claude-settings.json for a secondmate
 #     __CLAUDENAME__ the claude --name flag carrying this launch's session name
 #                  (claude_session_name_flag below; supplies its own trailing space)
+#     __CLAUDEADVISOR__ `--advisor <model> ` from --advisor on a Claude ship or
+#                  scout (supplies its own trailing space, empty otherwise)
 #     __PIBIN__    quoted concrete Pi-family executable path resolved from PATH
 #     __PITUIMODE__ optional --tui-mode regular when that executable advertises it
 #     __PIAPPROVE__ optional --approve on a Pi/pi-signed launch when that
@@ -1093,6 +1104,8 @@ KIND_SET=0
 HARNESS_ARG=
 MODEL=
 EFFORT=
+ADVISOR=
+ADVISOR_SET=0
 DISPATCH_OVERRIDE=
 PLACEMENT_OVERRIDE=
 PLACEMENT_OVERRIDE_SET=0
@@ -1146,6 +1159,10 @@ for a in "$@"; do
     effort)
       EFFORT=$a
       EFFORT_SET=1
+      ;;
+    advisor)
+      ADVISOR=$a
+      ADVISOR_SET=1
       ;;
     dispatch-override) DISPATCH_OVERRIDE=$a ;;
     placement-override)
@@ -1228,6 +1245,11 @@ for a in "$@"; do
   --effort=*)
     EFFORT=${a#--effort=}
     EFFORT_SET=1
+    ;;
+  --advisor) want_value=advisor ;;
+  --advisor=*)
+    ADVISOR=${a#--advisor=}
+    ADVISOR_SET=1
     ;;
   --dispatch-override) want_value=dispatch-override ;;
   --dispatch-override=*) DISPATCH_OVERRIDE=${a#--dispatch-override=} ;;
@@ -1312,6 +1334,16 @@ fi
   echo "error: --effort requires a non-empty value" >&2
   exit 1
 }
+[ "$ADVISOR_SET" -eq 0 ] || [ -n "$ADVISOR" ] || {
+  echo "error: --advisor requires a non-empty value" >&2
+  exit 1
+}
+# `default` is bin/fm-control.sh's spelling for no advisor, as for --model.
+[ "$ADVISOR" != default ] || ADVISOR=
+if [ "$KIND" = secondmate ] && [ -n "$ADVISOR" ]; then
+  echo 'error: --advisor is for ship and scout launches, never a secondmate' >&2
+  exit 1
+fi
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || {
   echo "error: --backend requires a non-empty value" >&2
   exit 1
@@ -2082,6 +2114,7 @@ spawn_abort_cleanup() {
             echo "tasktmp=${TASK_TMP:-}"
             echo "model=${MODEL:-default}"
             echo "effort=${EFFORT:-default}"
+            [ -z "$ADVISOR" ] || echo "advisor=$ADVISOR"
             echo "fast=$FAST"
             echo "backend=orca"
             echo "orca_worktree_id=$ORCA_WORKTREE_ID"
@@ -2595,6 +2628,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$HARNESS_ARG" ] || shared_args+=(--harness "$HARNESS_ARG")
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
+  [ -z "$ADVISOR" ] || shared_args+=(--advisor "$ADVISOR")
   [ -z "$DISPATCH_OVERRIDE" ] || shared_args+=(--dispatch-override "$DISPATCH_OVERRIDE")
   [ "$PLACEMENT_OVERRIDE_SET" -eq 0 ] || shared_args+=(--placement-override "$PLACEMENT_OVERRIDE")
   [ "$HERMES_PROFILE_SET" -eq 0 ] || shared_args+=(--hermes-profile "$HERMES_PROFILE")
@@ -3435,7 +3469,7 @@ launch_template() {
     # record-backed doorbell: the full envelope is published into the receiving
     # home's state/operational-inbox before launch and only a printable doorbell
     # naming it is passed. A record that cannot be published stops the spawn.
-    printf '%s' '__CLAUDENAME____MODELFLAG____EFFORTFLAG____BRIEFDOORBELL__'
+    printf '%s' '__CLAUDENAME____MODELFLAG____EFFORTFLAG____CLAUDEADVISOR____BRIEFDOORBELL__'
     ;;
   # --disable hooks (equivalent to -c features.hooks=false) requests that codex
   # turn its whole lifecycle-hook layer off for CREWMATE and SCOUT launches only.
@@ -3759,6 +3793,18 @@ case "$ARG3" in
   ;;
 esac
 
+# The Claude advisor axis (header); bin/fm-harness.sh validate-advisor owns the
+# pairing rule.
+if [ -n "$ADVISOR" ]; then
+  # Checked here, after a relaunch has restored the task's recorded kind.
+  if [ "$KIND" = secondmate ]; then
+    echo 'error: --advisor is for ship and scout launches, never a secondmate' >&2
+    exit 1
+  fi
+  advisor_harness=$HARNESS
+  [ "$RAW_LAUNCH" -eq 0 ] || advisor_harness="raw launch command"
+  "$SCRIPT_DIR/fm-harness.sh" validate-advisor "$advisor_harness" "$MODEL" "$ADVISOR" || exit 1
+fi
 case "$DISPATCH_OVERRIDE" in *[![:print:]]*) echo 'error: --dispatch-override must be a printable reason' >&2; exit 1 ;; esac
 DISPATCH_RECORD="$DATA/$ID/dispatch-resolution.json"
 if [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ] && [ -f "$CONFIG/crew-dispatch.json" ]; then
@@ -3769,8 +3815,8 @@ if [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ] && [ -f "$CONFIG/crew-disp
   dispatch_fields=$(jq -r --arg id "$ID" '
     select(.task == $id and (.status | IN("clear", "ambiguous", "escalate", "error", "off"))
       and (if .status == "clear" then (.profile.harness | type) == "string" and .profile.harness != "" else true end))
-    | .status, (.profile.harness // ""), (.profile.model // ""), (.profile.effort // "")' "$DISPATCH_RECORD" 2>/dev/null) || dispatch_fields=
-  { read -r dispatch_status; read -r selected_harness; read -r selected_model; read -r selected_effort; } <<<"$dispatch_fields" || true
+    | .status, (.profile.harness // ""), (.profile.model // ""), (.profile.effort // ""), (.profile.advisor // "")' "$DISPATCH_RECORD" 2>/dev/null) || dispatch_fields=
+  { read -r dispatch_status; read -r selected_harness; read -r selected_model; read -r selected_effort; read -r selected_advisor; } <<<"$dispatch_fields" || true
   if [ -z "$dispatch_status" ]; then
     echo "error: malformed dispatch resolution $DISPATCH_RECORD for task $ID; rerun bin/fm-dispatch-resolve.sh $DATA/$ID/brief.md --project <name>" >&2
     exit 1
@@ -3778,8 +3824,9 @@ if [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ] && [ -f "$CONFIG/crew-disp
   if [ "$dispatch_status" = clear ] && [ -z "$DISPATCH_OVERRIDE" ] \
     && { [ "$RAW_LAUNCH" -eq 1 ] || [ "$HARNESS" != "$selected_harness" ] \
       || { [ -n "$selected_model" ] && [ "${MODEL:-}" != "$selected_model" ]; } \
-      || { [ -n "$selected_effort" ] && [ "${EFFORT:-}" != "$selected_effort" ]; }; }; then
-    echo "error: launch flags do not match the clear dispatch selection --harness $selected_harness${selected_model:+ --model $selected_model}${selected_effort:+ --effort $selected_effort} recorded in $DISPATCH_RECORD; pass those flags with no raw launch command, or record this task's override with --dispatch-override <reason>" >&2
+      || { [ -n "$selected_effort" ] && [ "${EFFORT:-}" != "$selected_effort" ]; } \
+      || [ "${ADVISOR:-}" != "${selected_advisor:-}" ]; }; then
+    echo "error: launch flags do not match the clear dispatch selection --harness $selected_harness${selected_model:+ --model $selected_model}${selected_effort:+ --effort $selected_effort}${selected_advisor:+ --advisor $selected_advisor} recorded in $DISPATCH_RECORD; pass those flags with no raw launch command, or record this task's override with --dispatch-override <reason>" >&2
     exit 1
   fi
 fi
@@ -4077,6 +4124,10 @@ WORKER_ACCOUNT_ROOT=${WORKER_ACCOUNT_ROOT%%$'\t'*}
 if [ "$BACKEND" = t3code ]; then
   if [ "$RAW_LAUNCH" = 1 ]; then
     echo "error: backend=t3code cannot run a raw launch command because T3 starts the agent itself; pass a harness name or choose another backend" >&2
+    exit 1
+  fi
+  if [ -n "$ADVISOR" ]; then
+    echo "error: backend=t3code starts claude itself and cannot pass --advisor $ADVISOR; drop the advisor or choose another backend" >&2
     exit 1
   fi
   if [ "$HARNESS" = claude ] && [ "$CLAUDE_PERMISSION_MODE" != bypass ]; then
@@ -8164,7 +8215,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 # a preserved pr= identity block last, and repairs a record an earlier writer
 # left with a key after it, so the PR merge watch can still read the record.
 preserve_relaunch_meta() {
-  fm_pr_meta_rewrite "$RELAUNCH_META" "window endpoint_task_id worktree project harness hermes_profile hermes_home kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort fast opencode_version account account_provider omp_profile compact_window busy_gen spawn_gen approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id t3_thread_id t3_project_id tern_session_id tern_tab_id tern_block_id hc_session hc_terminal home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential"
+  fm_pr_meta_rewrite "$RELAUNCH_META" "window endpoint_task_id worktree project harness hermes_profile hermes_home kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort advisor fast opencode_version account account_provider omp_profile compact_window busy_gen spawn_gen approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id t3_thread_id t3_project_id tern_session_id tern_tab_id tern_block_id hc_session hc_terminal home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential"
 }
 {
   echo "window=$META_WINDOW"
@@ -8191,6 +8242,9 @@ preserve_relaunch_meta() {
   [ -z "$EXTERNAL_BACKUP_REMOTE" ] || echo "backup_prefix=$EXTERNAL_BACKUP_PREFIX"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  # The Claude advisor, only when one applies, so every other record stays
+  # byte-identical; bin/fm-control.sh relaunch reads it back.
+  [ -z "$ADVISOR" ] || echo "advisor=$ADVISOR"
   echo "fast=$FAST"
   [ -z "$DISPATCH_OVERRIDE" ] || printf 'dispatch_override=%s\n' "$DISPATCH_OVERRIDE"
   if [ -n "$PLACEMENT_FALLBACK_REASON" ]; then
@@ -8412,6 +8466,7 @@ fi
 LAUNCH=${LAUNCH//__PIRESUME__/$RESUME_ARGS}
 LAUNCH=${LAUNCH//__CLAUDEPERMFLAG__/$CLAUDE_PERM_FLAG}
 LAUNCH=${LAUNCH//__CLAUDECOMPACT__/${COMPACT_WINDOW:+CLAUDE_CODE_AUTO_COMPACT_WINDOW=$COMPACT_WINDOW }}
+LAUNCH=${LAUNCH//__CLAUDEADVISOR__/${ADVISOR:+--advisor $(shell_quote "$ADVISOR") }}
 case "$LAUNCH" in
 *__CLAUDENAME__*) LAUNCH=${LAUNCH//__CLAUDENAME__/"$(claude_session_name_flag "$ID")"} ;;
 esac
@@ -9278,6 +9333,7 @@ SPAWN_ACCOUNT=
 [ -z "$WORKER_ACCOUNT_PROVIDER" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT account_provider=$WORKER_ACCOUNT_PROVIDER"
 [ -z "$OMP_PROFILE_PIN" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT omp_profile=$OMP_PROFILE_PIN"
 [ -z "$COMPACT_WINDOW" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT compact_window=$COMPACT_WINDOW"
+[ -z "$ADVISOR" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT advisor=$ADVISOR"
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 [ ! -e "$CONFIG/fleet-ledger" ] || [ "$RELAUNCH" -eq 1 ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" dispatched "$ID" "$KIND" "${PROJ_ABS##*/}" "$HARNESS" "$MODEL" || true
 # Opt-in Herdr project groups (docs/herdr-backend.md "Project groups") tag the
