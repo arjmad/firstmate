@@ -2712,7 +2712,17 @@ test_claude_advisor_renders_for_opus_workers() {
   args=$(claude_launch_args "$WT_DIR")
   printf '%s\n' "$args" | grep -qx -- --advisor && fail "a launch with no advisor must not pass --advisor"
   assert_no_grep advisor= "$HOME_DIR/state/$id.meta" "a launch with no advisor must record none"
-  pass "claude opus ships and scouts launch with and record --advisor fable; no advisor leaves the launch unchanged"
+  # `default` means no advisor, so it renders none even on a Fable main.
+  id=claude-advisor-default-z37
+  rec=$(make_spawn_case claude-advisor-default claude "$id")
+  read_case_record "$rec"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model claude-fable-5-2 --advisor default)
+  status=$?
+  expect_code 0 "$status" "a default advisor should launch with no advisor"$'\n'"$out"
+  args=$(claude_launch_args "$WT_DIR")
+  printf '%s\n' "$args" | grep -qx -- --advisor && fail "a default advisor must not pass --advisor"
+  assert_no_grep advisor= "$HOME_DIR/state/$id.meta" "a default advisor must record none"
+  pass "claude opus ships and scouts launch with and record --advisor fable; no advisor or a default one leaves the launch unchanged"
 }
 
 test_claude_advisor_refuses_unpairable_launches() {

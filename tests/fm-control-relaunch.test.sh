@@ -1367,6 +1367,25 @@ test_claude_advisor_follows_the_relaunch() {
   pass "fm-control relaunch: a Claude replacement keeps its advisor on the same model, drops it on a model change, and refuses a Fable main first"
 }
 
+test_secondmate_relaunch_refuses_an_advisor() {
+  local dir home out rc
+  dir=$(new_case smadvisor sma1)
+  home="$dir/home"
+  fm_git_worktree "$dir/proj" "$dir/smhome" sma-branch
+  mkdir -p "$dir/smhome/state" "$dir/smhome/data" "$dir/smhome/bin" "$home/data/sma1"
+  printf 'sma1\n' > "$dir/smhome/.fm-secondmate-home"
+  printf '%s\n' "window=fmses:fm-sma1" "endpoint_task_id=sma1" "worktree=$dir/smhome" "project=$dir/smhome" \
+    "harness=claude" "kind=secondmate" "mode=secondmate" "yolo=off" "model=claude-opus-5-5" "effort=default" \
+    "home=$dir/smhome" > "$home/state/sma1.meta"
+  printf '%s\n' "fm-sma1" > "$dir/fake/windows"
+  printf '%s' "$dir/smhome" > "$dir/fake/cwd"
+  out=$(run_control "$dir" sma1 relaunch --harness claude --model claude-opus-5-5 --advisor fable); rc=$?
+  expect_code 1 "$rc" "a secondmate relaunch with an advisor must refuse"
+  assert_contains "$out" "never a secondmate" "the refusal must say why"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "a refused secondmate advisor relaunch stopped the running agent"
+  pass "fm-control relaunch: a secondmate refuses an advisor before its agent stops"
+}
+
 test_explicit_model_wins_over_the_recorded_one() {
   local dir out rc
   dir=$(new_case explicit rl7)
@@ -3669,6 +3688,7 @@ test_exclude_tools_refusals_happen_before_the_agent_stops
 test_claude_denied_mcp_servers_follow_the_relaunch
 test_claude_compact_window_follows_the_relaunch
 test_claude_advisor_follows_the_relaunch
+test_secondmate_relaunch_refuses_an_advisor
 test_explicit_model_wins_over_the_recorded_one
 test_relaunch_onto_an_unverified_harness_is_refused
 test_prior_harness_turnend_registry_entry_is_cleared

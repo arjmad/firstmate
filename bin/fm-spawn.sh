@@ -1338,7 +1338,9 @@ fi
   echo "error: --advisor requires a non-empty value" >&2
   exit 1
 }
-if [ "$KIND" = secondmate ] && [ "$ADVISOR_SET" = 1 ]; then
+# `default` is bin/fm-control.sh's spelling for no advisor, as for --model.
+[ "$ADVISOR" != default ] || ADVISOR=
+if [ "$KIND" = secondmate ] && [ -n "$ADVISOR" ]; then
   echo 'error: --advisor is for ship and scout launches, never a secondmate' >&2
   exit 1
 fi
@@ -3794,6 +3796,11 @@ esac
 # The Claude advisor axis (header); bin/fm-harness.sh validate-advisor owns the
 # pairing rule.
 if [ -n "$ADVISOR" ]; then
+  # Checked here, after a relaunch has restored the task's recorded kind.
+  if [ "$KIND" = secondmate ]; then
+    echo 'error: --advisor is for ship and scout launches, never a secondmate' >&2
+    exit 1
+  fi
   advisor_harness=$HARNESS
   [ "$RAW_LAUNCH" -eq 0 ] || advisor_harness="raw launch command"
   "$SCRIPT_DIR/fm-harness.sh" validate-advisor "$advisor_harness" "$MODEL" "$ADVISOR" || exit 1
