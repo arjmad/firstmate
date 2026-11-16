@@ -4293,8 +4293,9 @@ EOF
 # board's link is recorded on each still-open call of its inventory. Only a
 # task with an attested non-empty inventory of captain calls hands boards
 # over, and a ship only while one of those calls is still open (or cannot be
-# read or found under its attested id, so a live call never loses its board);
-# any other board is retired after the record is gone, as before.
+# read, so a live call never loses its board); a call answered or moved out of
+# the live backlog is not open, and any other board is retired after the record
+# is gone, as before.
 # A failed handover is tried once more before teardown refuses, since
 # adopt-task finishes an interrupted handover and board-link records each link
 # once; the refusal then carries the cause itself, so a caller that keeps only
@@ -4306,7 +4307,7 @@ teardown_inventory_has_open_call() {
     [ -n "$entry" ] || continue
     rc=0
     FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
-      FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" open "$entry" --distinguish-absent >/dev/null 2>&1 || rc=$?
+      FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" open "$entry" >/dev/null 2>&1 || rc=$?
     [ "$rc" = 1 ] || return 0
   done <<EOF
 $(meta_value "$META" decision_keys | tr ',' '\n')

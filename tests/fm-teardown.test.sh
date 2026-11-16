@@ -5071,27 +5071,37 @@ test_ship_teardown_retires_a_board_with_no_open_call() {
 }
 
 # A ship whose attested call the captain already answered has no open call left,
-# so its board is retired too rather than handed to firstmate.
-test_ship_teardown_retires_a_board_whose_call_was_answered() {
-  local case_dir board sid rc
+# so its board is retired too rather than handed to firstmate, including after
+# Done retention moved the answered row out of the live backlog.
+ship_teardown_retires_an_answered_board() {  # <answered|archived>
+  local variant=$1 case_dir board sid rc
   local -a case_env
   command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; return 0; }
-  case_dir=$(make_case ship-board-answered)
+  case_dir=$(make_case "ship-board-$variant")
   scout_board_case "$case_dir" ship
   printf '%s\n' 'Layout: wide' > "$case_dir/answer.txt"
   "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" answer task-x1-call --decision-file "$case_dir/answer.txt" >/dev/null \
-    || fail "ship-board-answered: could not answer the ship's captain call"
+    || fail "ship-board-$variant: could not answer the ship's captain call"
+  if [ "$variant" = archived ]; then
+    (cd "$case_dir" && tasks-axi rm task-x1-call --file "$case_dir/data/backlog.md") >/dev/null \
+      || fail "ship-board-archived: could not move the answered row out of the live backlog"
+  fi
 
   rc=0
   run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
-  expect_code 0 "$rc" "ship-board-answered: teardown failed: $(cat "$case_dir/stderr")"
-  assert_absent "$case_dir/state/task-x1.meta" "ship-board-answered: teardown did not complete"
+  expect_code 0 "$rc" "ship-board-$variant: teardown failed: $(cat "$case_dir/stderr")"
+  assert_absent "$case_dir/state/task-x1.meta" "ship-board-$variant: teardown did not complete"
   assert_no_grep "adopted:" "$case_dir/stdout" \
-    "ship-board-answered: teardown handed a board whose call was answered to firstmate"
+    "ship-board-$variant: teardown handed a board whose call was answered to firstmate"
   assert_absent "$case_dir/state/procevent/$sid.source" \
-    "ship-board-answered: teardown left the ship's board registered"
+    "ship-board-$variant: teardown left the ship's board registered"
   unset FM_PROCEVENT_CLAIM_ROOT LAVISH_AXI_STATE_DIR
-  pass "ship teardown retires a board whose captain call was already answered"
+  pass "ship teardown retires a board whose captain call was already answered ($variant)"
+}
+
+test_ship_teardown_retires_a_board_whose_call_was_answered() {
+  ship_teardown_retires_an_answered_board answered
+  ship_teardown_retires_an_answered_board archived
 }
 
 test_scout_teardown_refuses_while_its_board_has_an_unread_round() {
