@@ -138,13 +138,13 @@
 # `bin/fm-procevent.sh retire-task`, which owns which rounds are safe to drop; a
 # board kept for an unread round is named in the output and does not fail the
 # teardown.
-# A scout with an attested non-empty captain-call inventory first hands its
-# boards to firstmate through `bin/fm-procevent.sh adopt-task`, before its
+# A scout or ship with an attested non-empty captain-call inventory first hands
+# its boards to firstmate through `bin/fm-procevent.sh adopt-task`, before its
 # endpoint closes, and records each board's link on its still-open calls
 # through `bin/fm-captain-hold.sh board-link`, so the board and its answers
-# outlive the scout. A board with an unread round, or a handover that fails,
+# outlive the worker. A board with an unread round, or a handover that fails,
 # refuses the teardown with nothing changed; --force instead falls back to the
-# retirement above.
+# retirement above. A task with no such inventory keeps the retirement above.
 # data/<id>/ is deliberately left in place: a successor spawn reads brief.md
 # from it. Only its reproducible scratch goes, through
 # bin/fm-data-scratch-prune.sh under the meta lock just before the task record
@@ -4285,18 +4285,18 @@ EOF
   esac
 }
 
-# A finished scout's review board outlives the scout (see the header): after
+# A finished worker's review board outlives the worker (see the header): after
 # the presentation-lock preflight and before anything below closes its
 # endpoint, every board it owns is handed to
 # firstmate, bound to the keyed-answer intake, and confirmed listening, and the
 # board's link is recorded on each still-open call of its inventory. Only a
-# scout with an attested non-empty inventory of captain calls hands boards
+# task with an attested non-empty inventory of captain calls hands boards
 # over; any other board is retired after the record is gone, as before.
 # A failed handover is tried once more before teardown refuses, since
 # adopt-task finishes an interrupted handover and board-link records each link
 # once; the refusal then carries the cause itself, so a caller that keeps only
 # the last line still sees why.
-if [ "$KIND" = scout ] && [ -d "$STATE/procevent" ] \
+if [ -d "$STATE/procevent" ] \
   && [ "$(meta_value "$META" decisions_reviewed)" = 1 ] \
   && [ -n "$(meta_value "$META" decision_keys)" ]; then
   teardown_adopt_boards
@@ -4311,7 +4311,7 @@ if [ "$KIND" = scout ] && [ -d "$STATE/procevent" ] \
     0) ;;
     3)
       if [ "$FORCE" != "--force" ]; then
-        echo "REFUSED: scout task $ID still has an unread round on its review board (see the kept: lines above); nothing was changed." >&2
+        echo "REFUSED: ${KIND:-ship} task $ID still has an unread round on its review board (see the kept: lines above); nothing was changed." >&2
         echo "Read the round, acknowledge it with bin/fm-procevent.sh handled, then re-run teardown so the board is handed to firstmate." >&2
         exit 1
       fi
@@ -4319,7 +4319,7 @@ if [ "$KIND" = scout ] && [ -d "$STATE/procevent" ] \
       ;;
     *)
       if [ "$FORCE" != "--force" ]; then
-        echo "REFUSED: scout task $ID's review board could not be handed to firstmate: $TEARDOWN_ADOPT_CAUSE; its endpoint is still open, so re-run teardown once that is fixed." >&2
+        echo "REFUSED: ${KIND:-ship} task $ID's review board could not be handed to firstmate: $TEARDOWN_ADOPT_CAUSE; its endpoint is still open, so re-run teardown once that is fixed." >&2
         exit 1
       fi
       echo "warning: $ID's review board could not be handed to firstmate: $TEARDOWN_ADOPT_CAUSE; --force retires the boards it still owns with the task, and any already handed over stay firstmate's" >&2

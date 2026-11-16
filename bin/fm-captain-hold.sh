@@ -253,9 +253,9 @@
 #
 # `board-link` records a board's new link on every still-open captain call in
 # an origin's attested inventory, as one `Captain hold board: <url>` line plus
-# the origin and time, once per link. Scout teardown calls it with each board
-# it hands over to firstmate (bin/fm-procevent.sh `adopt-task`), so the link
-# outlives the scout's status log whether or not it changed; a closed call is
+# the origin and time, once per link. Scout and ship teardown call it with each
+# board they hand over to firstmate (bin/fm-procevent.sh `adopt-task`), so the
+# link outlives the worker's status log whether or not it changed; a closed call is
 # skipped, and a call whose state cannot be read fails the command.
 #
 # `complete` is the shared investigation and visual-review completion gate.

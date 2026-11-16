@@ -27,8 +27,10 @@
 #   task's own repo, and appears once.
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
-#   It offers the Lavish review loop only when `fm-bootstrap.sh lavish-compatible`
-#   confirms the legacy board-compatibility floor; otherwise it asks for a text report.
+#   Every worker brief, scout and ship alike, carries the Lavish arm rule only when
+#   `fm-bootstrap.sh lavish-compatible` confirms the legacy board-compatibility
+#   floor; otherwise a scout brief asks for a text report and a ship brief for a
+#   plain-text decision.
 #   --secondmate writes a persistent secondmate charter. The project list
 #   is cloned into the secondmate home, while the natural-language scope
 #   tells the main firstmate when to route work there; routine churn stays in its own home;
@@ -884,9 +886,19 @@ else
   SETUP_BASE="You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch."
 fi
 
+# Every worker brief carries the Lavish arm rule (fork patch,
+# docs/fork-decisions/2026-11-16-ship-board-handover.md): a board a worker opens
+# without arming it has no listener, so an answer the captain queues there
+# reaches no agent. The rule's core is shared; each kind adds its own ending.
+LAVISH_COMPATIBLE=0
+"$SCRIPT_DIR/fm-bootstrap.sh" lavish-compatible >/dev/null 2>&1 && LAVISH_COMPATIBLE=1
+LAVISH_ARM_RULE='use the lavish-axi rule: arm your board with bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>; never run lavish-axi poll yourself. Re-arm with the reply after each nonterminal round that reaches you before you finish to acknowledge it, and route the board feedback through your steering inbox.'
+LAVISH_CONCLUDE_RULE='At session_ended or an empty End, stop without re-arming and acknowledge that final round with bin/fm-procevent.sh handled <source-id> <sequence> to conclude and retire your board.'
+LAVISH_URL_RULE="as \`$FM_ROOT/bin/fm-lavish-url.sh <url>\` prints it"
+
 if [ "$KIND" = scout ]; then
-if "$SCRIPT_DIR/fm-bootstrap.sh" lavish-compatible >/dev/null 2>&1; then
-  LAVISH_LINE='If your deliverable is a visual artifact the captain will review, use the lavish-axi rule: arm your board with bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>; never run lavish-axi poll yourself. Re-arm with the reply after each nonterminal round that reaches you before you finish to acknowledge it, and route the board feedback through your steering inbox. Do not wait for the captain to open the board: once the report and board are complete, put the live board URL in the report as '"\`$FM_ROOT/bin/fm-lavish-url.sh <url>\`"' prints it, hold any decision it leaves him under the completion gate below, and declare done; teardown hands your board to firstmate, whose listener carries his answers. At session_ended or an empty End, stop without re-arming and acknowledge that final round with bin/fm-procevent.sh handled <source-id> <sequence> to conclude and retire your board.'
+if [ "$LAVISH_COMPATIBLE" = 1 ]; then
+  LAVISH_LINE="If your deliverable is a visual artifact the captain will review, $LAVISH_ARM_RULE Do not wait for the captain to open the board: once the report and board are complete, put the live board URL in the report $LAVISH_URL_RULE, hold any decision it leaves him under the completion gate below, and declare done; teardown hands your board to firstmate, whose listener carries his answers. $LAVISH_CONCLUDE_RULE"
 else
   LAVISH_LINE='Lavish is unavailable (lavish-axi is missing or below its supported version floor), so deliver your findings as a text report without Lavish, even for a visual deliverable.'
 fi
@@ -977,6 +989,11 @@ case "$MODE" in
 esac
 RULE1=$(fm_ship_rule_one "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH") || exit 1
 DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$PR_TEXT") || exit 1
+if [ "$LAVISH_COMPATIBLE" = 1 ]; then
+  LAVISH_LINE="If you put a board, preview, or other visual artifact in front of the captain to review or decide on, $LAVISH_ARM_RULE Do not wait for the captain to open the board: put the live board URL, $LAVISH_URL_RULE, in the needs-decision line that asks for his call, then stop as rule 6 says. When this task is torn down, a board that still carries a captain call firstmate holds is handed to firstmate, whose listener carries his answers, and any other board is retired. $LAVISH_CONCLUDE_RULE"
+else
+  LAVISH_LINE='Lavish is unavailable (lavish-axi is missing or below its supported version floor), so do not open a Lavish board; name any visual artifact by its file path in the needs-decision line that asks for the captain'"'"'s call.'
+fi
 [ -z "$SHORT_LOOP_BLOCK" ] || DOD=$(printf '%s\n' "$DOD" | fm_dod_with_short_loop_floor) || exit 1
 
 cat > "$BRIEF" <<EOF
@@ -1032,6 +1049,9 @@ $SHARED_NO_CD_RULE
 $WAIT_BLOCK$INBOX_SECTION
 
 $NOTICED_SECTION
+
+# Review boards
+$LAVISH_LINE
 
 # Project memory
 A project's \`AGENTS.md\` or \`CLAUDE.md\` is loaded into every agent session in that project, so edit it only to correct information that is factually wrong - including information your own change made wrong - and never to add knowledge because it is missing.
