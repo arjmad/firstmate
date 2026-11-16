@@ -25,6 +25,7 @@ Give every new hold a kind: `--kind arjun-only` when any option spends money, to
 Every hold waits for the captain's answer; no kind releases itself, and the script refuses the retired `--default` and `--no-default` flags.
 Record the call's own choices on every new hold: `--options 'A|B'` (two or three short labels, the ones a worker's `needs-decision` line names), `--recommend A`, and a one-line `--ask` question, so his buttons say what each choice does rather than Done; leave them off only when the call has no discrete choices, and use `choices <task-id>` to add them to a call already held.
 After inventorying the whole report and review surface, firstmate runs `bin/fm-captain-hold.sh complete` with every captain-held task id, or with `--none` when nothing waits on the captain.
+A call a ship's Lavish board raises is held the same way, with `--origin <ship-id>` and `complete <ship-id> <call-id>`, because only an attested inventory with an open call hands the ship's board to firstmate at teardown instead of retiring it.
 A scout may attest its own empty inventory only through the narrow command exception in its generated brief's Definition of done.
 For a non-empty inventory or a refused command, the scout reports to firstmate rather than writing metadata or backlog records.
 A completed investigation and an ended visual review use this same owner and completion command; a visual tool, including Lavish, never owns a parallel completion policy.

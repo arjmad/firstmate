@@ -4928,19 +4928,19 @@ test_teardown_retires_the_task_owned_boards() {
   pass "teardown retires the task's own review boards and keeps one holding an unread round"
 }
 
-# A finished scout whose board carries a held captain call hands that board to
-# firstmate before its endpoint closes: the board keeps its link, the link is
-# recorded on the held call, and an answer the captain gives on the board after
-# the scout is gone still resolves that call through the keyed-answer intake.
-# A board with an unread round refuses the teardown with nothing changed.
-scout_board_case() {  # <name>: a scout with a held call and a board armed for it
-  local case_dir=$1 hold=task-x1-call
-  write_meta "$case_dir" no-mistakes scout
-  prepare_scout_teardown "$case_dir"
+# A finished scout or ship whose board carries a held captain call hands that
+# board to firstmate before its endpoint closes: the board keeps its link, the
+# link is recorded on the held call, and an answer the captain gives on the board
+# after the worker is gone still resolves that call through the keyed-answer
+# intake. A board with an unread round refuses the teardown with nothing changed.
+scout_board_case() {  # <case-dir> [scout|ship] [call|nocall]: a worker with a board armed for its call
+  local case_dir=$1 kind=${2:-scout} call=${3:-call} hold=task-x1-call
+  write_meta "$case_dir" no-mistakes "$kind"
+  [ "$kind" != scout ] || prepare_scout_teardown "$case_dir"
   export FM_PROCEVENT_CLAIM_ROOT="$case_dir/claims" LAVISH_AXI_STATE_DIR="$case_dir/lavish-state"
   fm_test_track_procevent_home "$case_dir" "$case_dir/claims"
   fm_test_tasks_toml "$case_dir/.tasks.toml"
-  seed_backlog_in_flight "$case_dir" scout
+  seed_backlog_in_flight "$case_dir" "$kind"
   cat > "$case_dir/fakebin/lavish-axi" <<'SH'
 #!/usr/bin/env bash
 d=${LAVISH_AXI_STATE_DIR:?}
@@ -4994,36 +4994,39 @@ SH
     > "$LAVISH_AXI_STATE_DIR/state.json"
   case_env=(env FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" FM_DATA_OVERRIDE="$case_dir/data"
     FM_CONFIG_OVERRIDE="$case_dir/config" PATH="$case_dir/fakebin:$PATH")
-  "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" hold "$hold" --title "Pick the layout" \
-    --reason "layout call on the scout board" --repo sample --origin task-x1 >/dev/null \
-    || fail "$case_dir: could not hold the scout's captain call"
-  "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" complete task-x1 "$hold" >/dev/null \
-    || fail "$case_dir: could not attest the scout's captain-call inventory"
+  if [ "$call" = call ]; then
+    "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" hold "$hold" --title "Pick the layout" \
+      --reason "layout call on the $kind board" --repo sample --origin task-x1 >/dev/null \
+      || fail "$case_dir: could not hold the $kind's captain call"
+    "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" complete task-x1 "$hold" >/dev/null \
+      || fail "$case_dir: could not attest the $kind's captain-call inventory"
+  fi
   "${case_env[@]}" "$ROOT/bin/fm-procevent-lavish.sh" arm "$board" --for task-x1 >/dev/null \
-    || fail "$case_dir: could not arm the scout's board"
+    || fail "$case_dir: could not arm the $kind's board"
   sid=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$board")
 }
 
-test_scout_teardown_hands_its_board_to_firstmate() {
-  local case_dir board sid show rc
+# <kind>: the worker kind whose finished board is handed over.
+worker_teardown_hands_its_board_to_firstmate() {
+  local kind=$1 case_dir board sid show rc
   local -a case_env
   command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; return 0; }
-  case_dir=$(make_case scout-board-handover)
-  scout_board_case "$case_dir"
+  case_dir=$(make_case "$kind-board-handover")
+  scout_board_case "$case_dir" "$kind"
 
   rc=0
   run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
-  expect_code 0 "$rc" "scout-board-handover: teardown failed: $(cat "$case_dir/stderr")"
-  assert_absent "$case_dir/state/task-x1.meta" "scout-board-handover: teardown did not complete"
+  expect_code 0 "$rc" "$kind-board-handover: teardown failed: $(cat "$case_dir/stderr")"
+  assert_absent "$case_dir/state/task-x1.meta" "$kind-board-handover: teardown did not complete"
   assert_grep "adopted: $sid (from task task-x1)" "$case_dir/stdout" \
-    "scout-board-handover: teardown did not hand the board to firstmate"
+    "$kind-board-handover: teardown did not hand the board to firstmate"
   grep -qx 'adopted_from=task-x1' "$case_dir/state/procevent/$sid.source" \
-    || fail "scout-board-handover: the board is not firstmate's after teardown"
+    || fail "$kind-board-handover: the board is not firstmate's after teardown"
   [ "$("${case_env[@]}" "$ROOT/bin/fm-procevent.sh" list | awk -v id="$sid" '$1 == id { print $3 }')" = live ] \
-    || fail "scout-board-handover: the handed-over board is not listening"
+    || fail "$kind-board-handover: the handed-over board is not listening"
   show=$(cd "$case_dir" && tasks-axi show task-x1-call --full --file "$case_dir/data/backlog.md")
   assert_contains "$show" "Captain hold board: http://127.0.0.1:14387/session/0123456789abcdef" \
-    "scout-board-handover: the board's link was not recorded on the held call"
+    "$kind-board-handover: the board's link was not recorded on the held call"
 
   : > "$LAVISH_AXI_STATE_DIR/answer"
   for _ in $(seq 1 200); do
@@ -5031,11 +5034,131 @@ test_scout_teardown_hands_its_board_to_firstmate() {
     case "$show" in *"state: done"*) break ;; esac
     sleep 0.1
   done
-  assert_contains "$show" "state: done" "scout-board-handover: an answer on the adopted board did not resolve the held call"
+  assert_contains "$show" "state: done" "$kind-board-handover: an answer on the adopted board did not resolve the held call"
   assert_contains "$show" "Resolution mode: answered" \
-    "scout-board-handover: the held call was not closed through the keyed-answer intake"
+    "$kind-board-handover: the held call was not closed through the keyed-answer intake"
   unset FM_PROCEVENT_CLAIM_ROOT LAVISH_AXI_STATE_DIR
-  pass "scout teardown hands its board to firstmate, and an answer there resolves the held call"
+  pass "$kind teardown hands its board to firstmate, and an answer there resolves the held call"
+}
+
+test_scout_teardown_hands_its_board_to_firstmate() {
+  worker_teardown_hands_its_board_to_firstmate scout
+}
+
+test_ship_teardown_hands_its_board_to_firstmate() {
+  worker_teardown_hands_its_board_to_firstmate ship
+}
+
+# A ship whose board carries no captain call firstmate holds keeps today's
+# behavior: teardown retires the board with the task rather than handing it over.
+test_ship_teardown_retires_a_board_with_no_open_call() {
+  local case_dir board sid rc
+  local -a case_env
+  command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; return 0; }
+  case_dir=$(make_case ship-board-no-call)
+  scout_board_case "$case_dir" ship nocall
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "ship-board-no-call: teardown failed: $(cat "$case_dir/stderr")"
+  assert_absent "$case_dir/state/task-x1.meta" "ship-board-no-call: teardown did not complete"
+  assert_no_grep "adopted:" "$case_dir/stdout" \
+    "ship-board-no-call: teardown handed a board with no open call to firstmate"
+  assert_absent "$case_dir/state/procevent/$sid.source" \
+    "ship-board-no-call: teardown left the ship's board registered"
+  unset FM_PROCEVENT_CLAIM_ROOT LAVISH_AXI_STATE_DIR
+  pass "ship teardown retires a board that carries no open captain call"
+}
+
+# A ship whose attested call the captain already answered has no open call left,
+# so its board is retired too rather than handed to firstmate, including after
+# Done retention moved the answered row out of the live backlog.
+ship_teardown_retires_an_answered_board() {  # <answered|archived>
+  local variant=$1 case_dir board sid rc
+  local -a case_env
+  command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; return 0; }
+  case_dir=$(make_case "ship-board-$variant")
+  scout_board_case "$case_dir" ship
+  printf '%s\n' 'Layout: wide' > "$case_dir/answer.txt"
+  "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" answer task-x1-call --decision-file "$case_dir/answer.txt" >/dev/null \
+    || fail "ship-board-$variant: could not answer the ship's captain call"
+  if [ "$variant" = archived ]; then
+    (cd "$case_dir" && tasks-axi rm task-x1-call --file "$case_dir/data/backlog.md") >/dev/null \
+      || fail "ship-board-archived: could not move the answered row out of the live backlog"
+  fi
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "ship-board-$variant: teardown failed: $(cat "$case_dir/stderr")"
+  assert_absent "$case_dir/state/task-x1.meta" "ship-board-$variant: teardown did not complete"
+  assert_no_grep "adopted:" "$case_dir/stdout" \
+    "ship-board-$variant: teardown handed a board whose call was answered to firstmate"
+  assert_absent "$case_dir/state/procevent/$sid.source" \
+    "ship-board-$variant: teardown left the ship's board registered"
+  unset FM_PROCEVENT_CLAIM_ROOT LAVISH_AXI_STATE_DIR
+  pass "ship teardown retires a board whose captain call was already answered ($variant)"
+}
+
+test_ship_teardown_retires_a_board_whose_call_was_answered() {
+  ship_teardown_retires_an_answered_board answered
+  ship_teardown_retires_an_answered_board archived
+}
+
+# A ship whose inventory mixes an answered call Done retention moved out with a
+# call still open hands its board over and records the link on the open call.
+test_ship_teardown_hands_over_a_board_with_a_mixed_inventory() {
+  local case_dir board sid rc show
+  local -a case_env
+  command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; return 0; }
+  case_dir=$(make_case ship-board-mixed)
+  scout_board_case "$case_dir" ship
+  "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" hold task-x1-call2 --title "Pick the colour" \
+    --reason "colour call on the ship board" --repo sample --origin task-x1 >/dev/null \
+    || fail "ship-board-mixed: could not hold the second call"
+  "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" complete task-x1 task-x1-call2 >/dev/null \
+    || fail "ship-board-mixed: could not attest the second call"
+  printf '%s\n' 'Colour: red' > "$case_dir/answer.txt"
+  "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" answer task-x1-call2 --decision-file "$case_dir/answer.txt" >/dev/null \
+    || fail "ship-board-mixed: could not answer the second call"
+  (cd "$case_dir" && tasks-axi rm task-x1-call2 --file "$case_dir/data/backlog.md") >/dev/null \
+    || fail "ship-board-mixed: could not move the answered row out of the live backlog"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "ship-board-mixed: teardown failed: $(cat "$case_dir/stderr")"
+  assert_grep "adopted: $sid (from task task-x1)" "$case_dir/stdout" \
+    "ship-board-mixed: teardown did not hand the board to firstmate"
+  show=$(cd "$case_dir" && tasks-axi show task-x1-call --full --file "$case_dir/data/backlog.md")
+  assert_contains "$show" "Captain hold board: http://127.0.0.1:14387/session/0123456789abcdef" \
+    "ship-board-mixed: the board's link was not recorded on the open call"
+  "${case_env[@]}" "$ROOT/bin/fm-procevent.sh" retire "$sid" >/dev/null 2>&1 || true
+  unset FM_PROCEVENT_CLAIM_ROOT LAVISH_AXI_STATE_DIR
+  pass "ship teardown hands over a board whose inventory mixes an archived answered call with an open one"
+}
+
+# An inventory entry attested under its pre-collapse key still resolves to its
+# open call through the legacy <origin>-decision-<key> identity, so the board
+# is handed over rather than retired.
+test_ship_teardown_hands_over_a_board_for_a_legacy_inventory_entry() {
+  local case_dir board sid rc
+  local -a case_env
+  command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; return 0; }
+  case_dir=$(make_case ship-board-legacy)
+  scout_board_case "$case_dir" ship nocall
+  "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" hold task-x1-decision-layout --title "Pick the layout" \
+    --reason "layout call on the ship board" --repo sample --origin task-x1 >/dev/null \
+    || fail "ship-board-legacy: could not hold the legacy-identity call"
+  "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" complete task-x1 layout >/dev/null \
+    || fail "ship-board-legacy: could not attest the pre-collapse inventory key"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "ship-board-legacy: teardown failed: $(cat "$case_dir/stderr")"
+  assert_grep "adopted: $sid (from task task-x1)" "$case_dir/stdout" \
+    "ship-board-legacy: teardown retired a board whose legacy-keyed call is still open"
+  "${case_env[@]}" "$ROOT/bin/fm-procevent.sh" retire "$sid" >/dev/null 2>&1 || true
+  unset FM_PROCEVENT_CLAIM_ROOT LAVISH_AXI_STATE_DIR
+  pass "ship teardown hands over a board whose open call is attested under its pre-collapse key"
 }
 
 test_scout_teardown_refuses_while_its_board_has_an_unread_round() {
@@ -7453,6 +7576,11 @@ test_herdr_projection_teardown_refused_close_preserves_task_and_copy
 test_teardown_retires_task_watcher_markers_and_orphan_journal
 test_teardown_retires_the_task_owned_boards
 test_scout_teardown_hands_its_board_to_firstmate
+test_ship_teardown_hands_its_board_to_firstmate
+test_ship_teardown_retires_a_board_with_no_open_call
+test_ship_teardown_retires_a_board_whose_call_was_answered
+test_ship_teardown_hands_over_a_board_for_a_legacy_inventory_entry
+test_ship_teardown_hands_over_a_board_with_a_mixed_inventory
 test_scout_teardown_refuses_while_its_board_has_an_unread_round
 test_scout_teardown_retries_a_failed_board_handover_once
 test_scout_teardown_refusal_names_the_handover_cause

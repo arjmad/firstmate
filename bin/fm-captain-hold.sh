@@ -36,6 +36,7 @@
 #   fm-captain-hold.sh binding <source-id>
 #   fm-captain-hold.sh complete <origin-id> (--none | <task-id>...)
 #   fm-captain-hold.sh board-link <origin-id> <url>
+#   fm-captain-hold.sh inventory-open <origin-id>
 #   fm-captain-hold.sh verify <origin-id>
 #   fm-captain-hold.sh open <task-id> [--identity] [--distinguish-absent]
 #   fm-captain-hold.sh diverged
@@ -253,10 +254,19 @@
 #
 # `board-link` records a board's new link on every still-open captain call in
 # an origin's attested inventory, as one `Captain hold board: <url>` line plus
-# the origin and time, once per link. Scout teardown calls it with each board
-# it hands over to firstmate (bin/fm-procevent.sh `adopt-task`), so the link
-# outlives the scout's status log whether or not it changed; a closed call is
-# skipped, and a call whose state cannot be read fails the command.
+# the origin and time, once per link. Scout and ship teardown call it with each
+# board they hand over to firstmate (bin/fm-procevent.sh `adopt-task`), so the
+# link outlives the worker's status log whether or not it changed; a closed call,
+# or an entry no longer in the live backlog because Done retention moved it out,
+# is skipped, and a call whose state cannot be read fails the command.
+#
+# `inventory-open` prints `open` when an origin's attested inventory still
+# holds an open captain call, resolving each entry as `board-link` does, and
+# `closed` when it holds none: no attested inventory, every call answered, or an
+# entry that resolves to no live task because Done retention moved it out. Ship
+# teardown asks it before handing the ship's boards to firstmate; a call whose
+# state cannot be read prints `open`, and any other output means "cannot tell",
+# so a caller that must never drop a live call's board treats it as open.
 #
 # `complete` is the shared investigation and visual-review completion gate.
 # It attests, in the origin task's metadata, the reviewed inventory of
@@ -2722,7 +2732,13 @@ command_board_link() {
   line="Captain hold board: $url"
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
-    resolved=$(resolve_entry "$origin" "$entry") || fail "cannot resolve inventory entry $entry of $origin"
+    rc=0
+    resolved=$(resolve_entry "$origin" "$entry" 2>/dev/null) || rc=$?
+    case "$rc" in
+      0) ;;
+      1) printf 'skipped: %s (not in the live backlog)\n' "$entry"; continue ;;
+      *) fail "cannot resolve inventory entry $entry of $origin" ;;
+    esac
     id=${resolved%% *}
     rc=0
     ( command_open "$id" ) || rc=$?
@@ -2756,6 +2772,35 @@ command_board_link() {
   done <<EOF
 $(printf '%s\n' "$keys" | tr ',' '\n')
 EOF
+}
+
+command_inventory_open() {
+  local origin=${1:-} meta keys entry resolved rc
+  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  validate_slug origin-id "$origin"
+  meta="$STATE/$origin.meta"
+  if [ ! -f "$meta" ] || [ "$(meta_value "$meta" decisions_reviewed)" != 1 ]; then
+    printf 'closed\n'
+    return 0
+  fi
+  keys=$(meta_value "$meta" decision_keys)
+  require_tasks_axi
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    rc=0
+    resolved=$(resolve_entry "$origin" "$entry" 2>/dev/null) || rc=$?
+    case "$rc" in
+      0) ;;
+      1) continue ;;
+      *) printf 'open\n'; return 0 ;;
+    esac
+    rc=0
+    ( command_open "${resolved%% *}" ) >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 1 ] || { printf 'open\n'; return 0; }
+  done <<EOF
+$(printf '%s\n' "$keys" | tr ',' '\n')
+EOF
+  printf 'closed\n'
 }
 
 command_complete() {
@@ -3089,6 +3134,7 @@ case "${1:-}" in
   binding) shift; command_binding "$@" ;;
   complete) shift; command_complete "$@" ;;
   board-link) shift; command_board_link "$@" ;;
+  inventory-open) shift; command_inventory_open "$@" ;;
   verify) shift; command_verify "$@" ;;
   open) shift; command_open "$@" ;;
   diverged) shift; command_diverged "$@" ;;

@@ -142,9 +142,10 @@
 #            1 when a retire failed.
 #            Firstmate-registered sources are never touched.
 # adopt-task Hand every board <task-id> owns over to firstmate, so the board
-#            outlives the worker. Called by scout teardown before it closes the
-#            worker's endpoint. Per board: a round the adapter calls silent is
-#            acknowledged as in retire-task; any other unacknowledged round
+#            outlives the worker. Called by scout and ship teardown before
+#            it closes the worker's endpoint. Per board: a round the adapter
+#            calls silent is acknowledged as in retire-task; any other
+#            unacknowledged round
 #            prints `kept:` and keeps every board of the task with it, checked
 #            before any board moves, since no captured answer is ever handed
 #            over unread. The adapter's `adopt`
