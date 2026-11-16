@@ -677,7 +677,6 @@ tests/fm-lint.test.sh
 tests/fm-crew-state.test.sh
 tests/fm-park.test.sh
 tests/fm-t3-mcp.test.sh
-tests/fm-x-mode.test.sh
 tests/fm-pi-primary-types.test.sh
 tests/fm-cd-pretool-check.test.sh
 tests/fm-review-diff.test.sh
@@ -696,6 +695,7 @@ tests/fm-pr-merge.test.sh
 tests/fm-test-run.test.sh
 tests/fm-backend-t3code.test.sh
 tests/fm-backend-herdr.test.sh
+tests/fm-x-mode.test.sh
 tests/fm-arm-pretool-check.test.sh
 tests/fm-composer-lib.test.sh
 tests/fm-herdr-lab.test.sh

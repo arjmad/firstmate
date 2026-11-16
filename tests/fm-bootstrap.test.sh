@@ -325,14 +325,23 @@ test_record_hygiene_archives_old_orphan_status() {
   pass "bootstrap archives an old orphan status log and reports interleaved duplicates"
 }
 
+# A home's state/ and data/ listing for the inert-flag check. The fork's
+# session-start residue sweep stamps state/.residue-sweep-last
+# (bin/fm-state-residue-sweep.sh); that stamp, and the directory lines whose
+# size it changes, are not record hygiene, so the listing leaves them out.
+record_hygiene_listing() {
+  # shellcheck disable=SC2012 # A long listing compares names, sizes, and times at once.
+  (cd "$1" && ls -laR state data) | awk '!/ \.residue-sweep-last$| \.\.?$/'
+}
+
 test_record_hygiene_absent_flag_is_inert() {
   local case_dir fakebin out_off out_on before after
   case_dir="$TMP_ROOT/record-hygiene-off"
   fakebin=$(seed_record_hygiene_home "$case_dir")
-  before=$(cd "$case_dir/home" && ls -laR state data)
+  before=$(record_hygiene_listing "$case_dir/home")
   out_off=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_BOOTSTRAP_NETWORK=skip FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
-  after=$(cd "$case_dir/home" && ls -laR state data)
+  after=$(record_hygiene_listing "$case_dir/home")
   assert_not_contains "$out_off" 'RECORD_HYGIENE' "bootstrap reported record hygiene without config/record-hygiene"
   [ "$before" = "$after" ] || fail "bootstrap changed state or data records without config/record-hygiene"
   [ -f "$case_dir/home/state/orphan.status" ] || fail "bootstrap archived an orphan status log without config/record-hygiene"

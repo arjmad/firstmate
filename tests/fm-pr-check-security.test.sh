@@ -1342,11 +1342,14 @@ test_scan_does_not_replace_a_pr_whose_merge_is_being_recorded() {
     kill -0 "$holder_pid" 2>/dev/null || fail "could not hold the wake-queue lock"
     sleep 0.1
   done
+  # A yolo merge, because an attended merge main makes itself queues no wake
+  # (fork patch, bin/fm-merge-outcome-lib.sh) and so would never stall on the
+  # held wake-queue lock.
   (
     # shellcheck source=/dev/null
     . "$ROOT/bin/fm-merge-outcome-lib.sh"
     FM_HOME="$dir/home" FM_CONFIG_OVERRIDE="$dir/home/config" \
-      fm_merge_outcome_report "$dir/home" "$state" task-a https://github.com/o/r/pull/7 self
+      fm_merge_outcome_report "$dir/home" "$state" task-a https://github.com/o/r/pull/7 self yolo
   ) >/dev/null 2>"$dir/merge.stderr" &
   merge_pid=$!
   until [ -d "$state/task-a.pr-poll-merge-notified.lock" ]; do
