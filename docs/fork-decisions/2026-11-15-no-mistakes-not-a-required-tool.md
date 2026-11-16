@@ -6,5 +6,5 @@ No upstream proposal: upstream still ships the pipeline as its default delivery 
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| no-mistakes is not a required tool | `bin/fm-bootstrap.sh` (header, `install_cmd`, `upgrade_cmd`, `COMMON_TOOLS`, `NO_MISTAKES_MIN` and its OUTDATED check), `tests/fm-bootstrap.test.sh` (`make_fake_toolchain`, `test_no_mistakes_not_required`), `tests/fixtures.sh` (floor comment) | same files | carried | c8d8fdad |
+| no-mistakes is not a required tool | `bin/fm-bootstrap.sh` (header, `install_cmd`, `upgrade_cmd`, `COMMON_TOOLS`, `NO_MISTAKES_MIN` and its OUTDATED check), `tests/fm-bootstrap.test.sh` (`make_fake_toolchain`, `test_no_mistakes_not_required`), `tests/fixtures.sh` (floor comment), `docs/configuration.md` (universal requirements, diagnostics), `.agents/skills/bootstrap-diagnostics/SKILL.md` (OUTDATED floors) | same files | carried | c8d8fdad |
 | The worker brief's shared-infrastructure rule drops the no-mistakes daemon | `bin/fm-brief.sh` (header, `SHARED_INFRA_RULE`) | same file | carried | c8d8fdad |

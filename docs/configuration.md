@@ -2460,7 +2460,6 @@ Every home requires:
 
 - node and git.
 - gh, with GitHub authentication through `gh auth login`.
-- no-mistakes v1.46.0 or newer.
 - Compatible gh-axi.
 - chrome-devtools-axi.
 - Compatible tasks-axi, as specified in "Backlog backend" above.
@@ -2469,7 +2468,7 @@ Every home requires:
 [`bin/fm-bootstrap.sh`](../bin/fm-bootstrap.sh) owns the axi-family floor policy and the gh-axi and lavish-axi floors, while [`bin/fm-tasks-axi-lib.sh`](../bin/fm-tasks-axi-lib.sh) and [`bin/fm-quota-axi-lib.sh`](../bin/fm-quota-axi-lib.sh) hold their own tools' floor constants.
 This section is the single owner of that universal toolchain list; backend guides' prerequisites point here and add only their backend-specific tools.
 
-In that list, no-mistakes runs the validation pipeline, gh-axi and chrome-devtools-axi cover GitHub and browser operations, and tasks-axi plus quota-axi back backlog mutations and quota-aware array dispatch.
+In that list, gh-axi and chrome-devtools-axi cover GitHub and browser operations, and tasks-axi plus quota-axi back backlog mutations and quota-aware array dispatch.
 Lavish is a presentation-only dependency for visual decisions and reports; nonvisual work can proceed with plain text when it is unavailable.
 
 **Backend requirements**
@@ -2510,7 +2509,7 @@ A herdr, zellij, cmux, paseo, rex, t3code, or tern home is therefore never told 
 An absent required tool with an automated install path reports `MISSING:` with its install command, while a present required tool below its floor or missing a required capability reports `OUTDATED:` with its installed version (or `unparseable`), requirement, and upgrade command; manual-only and presentation-only dependencies retain their dedicated diagnostics, and [`bin/fm-bootstrap.sh`](../bin/fm-bootstrap.sh)'s header owns these exact line formats.
 
 - An absent `treehouse` reports `MISSING:` with its install command, while an installed build without `treehouse get --lease` support reports `OUTDATED:` with the `treehouse update` upgrade.
-- An absent `no-mistakes` reports `MISSING:` with its install command, while a version below 1.46.0 or an unparseable version reports `OUTDATED:` with the `no-mistakes update` upgrade.
+- This fork does not require `no-mistakes`, so bootstrap reports neither an absent nor an old one ([fork decision](fork-decisions/2026-11-15-no-mistakes-not-a-required-tool.md)).
 - An absent `tasks-axi` reports `MISSING: tasks-axi (install: npm install -g tasks-axi)` and a below-floor or feature-incompatible one reports `OUTDATED:` with its required version and any missing feature-probe capability, while retaining that same `npm install -g tasks-axi` upgrade; when `config/backlog-backend` is not `manual`, a home with a configured non-markdown adapter or a markdown backlog refuses lifecycle mutation until compatible `tasks-axi` is on `PATH`, while a manual-backend home keeps its backlog hand-edited.
 - An absent `gh-axi` reports `MISSING: gh-axi (install: npm install -g gh-axi && gh-axi setup hooks)` and an outdated one reports `OUTDATED:` with its `gh-axi update` upgrade.
 - An absent or board-incompatible `lavish-axi` reports `PRESENTATION_UNAVAILABLE` with the 0.1.77 compatibility floor, install command, and explicit text fallback; compatible versions below 0.1.80 retain legacy board replies and report an upgrade recommendation for synchronous acceptance, while [`bootstrap-diagnostics`](../.agents/skills/bootstrap-diagnostics/SKILL.md) owns diagnostic handling.
