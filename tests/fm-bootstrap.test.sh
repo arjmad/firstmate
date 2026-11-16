@@ -14,7 +14,7 @@
 # --archive-body, whether its mv help advertises
 # multi-ID moves, whether quota-axi is on PATH or which version it reports,
 # whether the local backend config opts out of tasks-axi backlog mutations,
-# which no-mistakes version is on PATH, which gh-axi version is on PATH, and
+# whether a no-mistakes stays unreported, which gh-axi version is on PATH, and
 # which lavish-axi version is on PATH.
 # Dedicated fleet-sync cases pin the computed bootstrap timeout, explicit
 # override, blank-env defaulting, partial-output relay, and pre-launch timeout
@@ -100,15 +100,6 @@ fi
 exit 0
 SH
   chmod +x "$fakebin/treehouse"
-  cat > "$fakebin/no-mistakes" <<'SH'
-#!/usr/bin/env bash
-if [ "${1:-}" = --version ]; then
-  printf '%s\n' "${FM_FAKE_NO_MISTAKES_VERSION:-no-mistakes version v1.46.0 (fake) 2026-06-27T00:02:18Z}"
-  exit 0
-fi
-exit 0
-SH
-  chmod +x "$fakebin/no-mistakes"
   add_tasks_axi "$fakebin" "0.2.6"
   add_quota_axi "$fakebin"
   printf '%s\n' "$fakebin"
@@ -394,43 +385,32 @@ test_absent_tool_cases_hide_a_real_install_in_the_base_path() {
   pass "bootstrap: an absent-tool case hides the tool in the fallback base path"
 }
 
-test_no_mistakes_min_version() {
-  local label version mode installed expect case_dir fakebin base out missing n
-  missing='MISSING: no-mistakes (install: curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh)'
+# Fork patch (docs/fork-decisions/2026-11-15-no-mistakes-not-a-required-tool.md):
+# no-mistakes is not a required tool, so neither its absence nor an old build
+# may print a MISSING or OUTDATED line that would get it reinstalled.
+test_no_mistakes_not_required() {
+  local label version case_dir fakebin base out n
   n=0
-  while IFS='^' read -r label version mode installed; do
+  while IFS='^' read -r label version; do
     [ -n "$label" ] || continue
     n=$((n + 1))
     case_dir="$TMP_ROOT/no-mistakes-$n"
-    mkdir -p "$case_dir/home"
     mkdir -p "$case_dir/home/config"
     printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
     fakebin=$(make_fake_toolchain "$case_dir")
-    base=$BASE_PATH
-    if [ "$version" = absent ]; then
-      rm -f "$fakebin/no-mistakes"
-      base=$(fm_test_base_path_sans "$base" no-mistakes)
+    base=$(fm_test_base_path_sans "$BASE_PATH" no-mistakes)
+    if [ "$version" != absent ]; then
+      printf '#!/usr/bin/env bash\nprintf "%%s\\n" "%s"\n' "$version" > "$fakebin/no-mistakes"
+      chmod +x "$fakebin/no-mistakes"
     fi
     out=$(PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
-      FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_NO_MISTAKES_VERSION="$version" "$ROOT/bin/fm-bootstrap.sh")
-    case "$mode" in
-      empty)
-        [ -z "$out" ] || fail "$label: expected silence, got: $out" ;;
-      missing)
-        [ "$out" = "$missing" ] || fail "$label: expected '$missing', got: $out" ;;
-      outdated)
-        expect="OUTDATED: no-mistakes (installed: $installed; requires 1.46.0; upgrade: no-mistakes update)"
-        [ "$out" = "$expect" ] || fail "$label: expected '$expect', got: $out" ;;
-    esac
+      FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+    [ -z "$out" ] || fail "$label: expected silence, got: $out"
   done <<'ROWS'
-minimum no-mistakes version is accepted^no-mistakes version v1.46.0 (fake)^empty^
-newer no-mistakes minor is accepted^no-mistakes version v1.47.0 (fake)^empty^
-newer no-mistakes major is accepted^no-mistakes version v2.0.0 (fake)^empty^
-absent no-mistakes reports a missing tool^absent^missing^
-older no-mistakes patch reports an upgrade^no-mistakes version v1.45.4 (fake)^outdated^1.45.4
-unparseable no-mistakes version reports an upgrade^no-mistakes development build^outdated^unparseable
+absent no-mistakes is not reported^absent
+old no-mistakes is not reported^no-mistakes version v1.45.4 (fake)
 ROWS
-  pass "bootstrap separates an absent no-mistakes from one below its version floor"
+  pass "bootstrap reports no-mistakes neither missing nor outdated"
 }
 
 test_gh_axi_min_version() {
@@ -1558,7 +1538,7 @@ SH
 
 test_bootstrap_reporting
 test_absent_tool_cases_hide_a_real_install_in_the_base_path
-test_no_mistakes_min_version
+test_no_mistakes_not_required
 test_gh_axi_min_version
 test_lavish_axi_min_version
 test_tasks_axi_min_version

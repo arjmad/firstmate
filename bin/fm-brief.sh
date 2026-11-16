@@ -139,7 +139,7 @@
 # apart.
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
 # Both crewmate scaffolds carry one shared rule against administering the
-# infrastructure every lane shares - the no-mistakes daemon, the worktree pool
+# infrastructure every lane shares - the worktree pool
 # their own slot came from, and the host's processes, which a worker stops only
 # by the pid it recorded and never by a pkill/killall pattern - so ship and scout
 # cannot drift apart. A secondmate charter omits it: that home allocates and
@@ -814,18 +814,7 @@ fi
 # The secondmate charter deliberately omits this rule because a secondmate
 # legitimately allocates and returns slots for crewmates in its own home.
 IFS= read -r -d '' SHARED_INFRA_RULE <<'EOF' || true
-7. Never administer infrastructure that every lane shares. Three things are shared:
-   - The `no-mistakes` daemon - one instance serving every lane/home, so stopping, restarting, or
-     updating it kills other lanes' in-flight pipeline runs; only firstmate manages the daemon.
-     Before you append `blocked:` about the pipeline, run `no-mistakes daemon status` and
-     `no-mistakes axi status`. If the daemon socket refuses connections or is missing, append
-     `blocked [at=<epoch>]: {the daemon error}` and stop even when the local run record still says running or
-     fixing, because that record can be stale after the daemon exits. A run record failed with a
-     daemon error is also a real block.
-     Only after ruling out socket refusal, if the run is still running or fixing, reattach and keep
-     going. A drive-call error, timeout, slow read, or generic unreachability is NOT a daemon error:
-     the daemon accepts `respond` immediately and runs the round in the background, so a killed or
-     timed-out call was only waiting for a read while the run kept working.
+7. Never administer infrastructure that every lane shares. Two things are shared:
    - The worktree pool your own worktree came from, and the repository every lane's worktree
      shares. Never create, remove, return, prune, move, or reassign a worktree or pool slot, and
      never write into a sibling slot's directory. Rule 2 does not cover this: removing a worktree
@@ -846,7 +835,7 @@ IFS= read -r -d '' SHARED_INFRA_RULE <<'EOF' || true
      tmux socket you created. Never stop anything by name or command-line pattern -
      `pkill`, `killall`, `pkill -f`, or `kill $(pgrep ...)` - because the same pattern matches
      live services and other agents, and stopping one restarts or ends work you do not own.
-   If you genuinely need a second checkout, another slot, or the daemon touched, or need a process
+   If you genuinely need a second checkout, another slot, or need a process
    you did not start stopped, append
    `blocked [at=<epoch>]: {what you need}` and stop; firstmate arranges it.
 EOF
