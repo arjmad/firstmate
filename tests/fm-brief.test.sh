@@ -1779,11 +1779,10 @@ test_crewmate_scaffolds_forbid_pool_administration() {
     assert_grep "confirmation nobody can answer" "$b" "$b: email-address rule lost its reason"
   done
 
-  # The daemon half of the rule survived the fold.
-  assert_grep "no-mistakes" "$brief" "scout brief lost the shared no-mistakes daemon rule"
-  # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
-  assert_grep 'blocked [at=<epoch>]: {the daemon error}' "$brief" \
-    "scout brief lost the daemon-error reporting instruction"
+  # Fork patch (docs/fork-decisions/2026-11-15-no-mistakes-not-a-required-tool.md):
+  # the retired no-mistakes daemon is no longer shared infrastructure.
+  assert_grep "Two things are shared:" "$brief" "scout brief lost the shared-infrastructure count"
+  assert_no_grep 'no-mistakes` daemon' "$brief" "scout brief still names the retired no-mistakes daemon"
 
   # A secondmate runs its own home and legitimately allocates and returns slots
   # for its own crewmates, so the crewmate prohibition must NOT reach its charter.
