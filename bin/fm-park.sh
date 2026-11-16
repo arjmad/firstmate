@@ -86,7 +86,8 @@
 # --if-eligible it does nothing unless the lane is eligible for merge-time
 # cleanup (land_eligible below: parked, or config/auto-land present and the
 # crew's newest line not ready:, since that worker still has work after the
-# merge). With
+# merge; the watcher's merge-time land runs once, so firstmate tears that lane
+# down after its later done:). With
 # --detach it starts the land as a detached action (below), prints "automatic
 # cleanup started", and returns at once; with --queue it only saves the request.
 # The request (state/<id>.review-park-land) records the merged PR as pr=, and
@@ -699,7 +700,8 @@ cmd_resume() {
 
 # A worker whose newest line is the fork's ready: verb lands its PR and then
 # keeps working toward a later done: (fork patch, docs/fork-decisions.md
-# 2026-10-14), so neither parking nor automatic cleanup may end it.
+# 2026-10-14), so neither parking nor automatic cleanup may end it; firstmate
+# tears it down after that done: (.agents/skills/ship-landing/SKILL.md).
 reported_ready() {  # <id>
   [ "$(status_line_verb "$(last_crew_status_line "$STATE/$1.status")")" = "$FM_CLASSIFY_READY_VERB" ]
 }

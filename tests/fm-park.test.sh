@@ -982,10 +982,7 @@ test_ready_lane_is_neither_parked_nor_auto_landed() {
   : > "$w/config/auto-land"
   out=$(run_park "$w" land lane --if-eligible 2>&1)
   [ -z "$out" ] && [ ! -e "$w/teardown.log" ] || fail "ready-land: automatic cleanup ended a ready lane: $out"
-  printf 'done [at=3]: PR %s\n' "$GH_URL" >> "$w/state/lane.status"
-  out=$(run_park "$w" land lane --if-eligible 2>&1)
-  [ "$(cat "$w/teardown.log" 2>/dev/null)" = lane ] || fail "ready-land: the later done: lane was not cleaned up: $out"
-  pass "a ready: lane is never parked or cleaned up automatically, and its later done: is"
+  pass "a ready: lane is never parked or cleaned up automatically at its merge"
 }
 
 test_land_queue_fails_when_cleanup_request_cannot_be_written() {

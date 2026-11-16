@@ -189,7 +189,8 @@ pr_check_scan() {
     if [ -f "$marker" ] && [ ! -L "$marker" ] && [ "$(cat "$marker")" = "$url" ]; then
       continue
     fi
-    line="$id reported $url in a done line, but $note"
+    # Name the verb that reported it: a ready: lane keeps working after its merge.
+    line="$id reported $url in a $(status_line_verb "$(last_crew_status_line "$STATE/$id.status")") line, but $note"
     fm_wake_append check pr-register "check: pr-register: $line" || continue
     if tmp=$(mktemp "$STATE/.pr-register-refused.XXXXXX"); then
       { printf '%s\n' "$url" > "$tmp" && mv -f -- "$tmp" "$marker"; } || rm -f -- "$tmp"
