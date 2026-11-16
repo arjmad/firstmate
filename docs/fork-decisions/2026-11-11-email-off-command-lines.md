@@ -5,4 +5,4 @@ No upstream proposal yet: the stall comes from this fleet's harness behavior.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| Ship and scout briefs carry the email-address rule | `bin/fm-brief.sh` (`SHARED_NO_CD_RULE`), `tests/fm-brief.test.sh` | same file | carried | c8d8fdad |
+| Ship and scout briefs carry the email-address rule | `bin/fm-brief.sh` (`SHARED_NO_CD_RULE`), `tests/fm-brief.test.sh` | same file | carried | 427056c4 |

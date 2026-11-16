@@ -2,4 +2,4 @@ PR: #72
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| Serialize concurrent Herdr recoveries with the resume lock-wait opt-in | `tests/fm-backend-herdr-presentation-e2e.test.sh` | same test | carried | c8d8fdad |
+| Serialize concurrent Herdr recoveries with the resume lock-wait opt-in | `tests/fm-backend-herdr-presentation-e2e.test.sh` | same test | carried | 427056c4 |

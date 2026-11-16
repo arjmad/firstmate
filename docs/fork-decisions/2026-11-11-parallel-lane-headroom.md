@@ -5,4 +5,4 @@ Upstream runs its parallel lanes one at a time with its own hints, so this is a 
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| Parallel hints refreshed from fork CI, lanes repacked, and each parallel CI lane runs two-wide | `bin/fm-test-run.sh` (`portable_parallel_weight_hints`, `list_portable_parallel_1`, `list_portable_parallel_2`), `.github/workflows/ci.yml` (`--jobs 2` on both parallel lanes), `docs/fm-test-portable-shards.md` "Parallel lanes" | `bin/fm-test-run.sh`, `.github/workflows/ci.yml`, `docs/fm-test-portable-shards.md` | carried | c8d8fdad |
+| Parallel hints refreshed from fork CI, lanes repacked, and each parallel CI lane runs two-wide | `bin/fm-test-run.sh` (`portable_parallel_weight_hints`, `list_portable_parallel_1`, `list_portable_parallel_2`), `.github/workflows/ci.yml` (`--jobs 2` on both parallel lanes), `docs/fm-test-portable-shards.md` "Parallel lanes" | `bin/fm-test-run.sh`, `.github/workflows/ci.yml`, `docs/fm-test-portable-shards.md` | conflicted | 427056c4 |
