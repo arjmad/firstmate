@@ -5,4 +5,4 @@ No upstream proposal: the line is small enough to carry until a sync.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| `reply` adds a line when the note carries no request id | `bin/fm-inbox.sh` (`cmd_reply`, header), `tests/fm-inbox.test.sh` (reply reader case) | `bin/fm-inbox.sh` (`cmd_reply`), `tests/fm-inbox.test.sh` | carried | c8d8fdad |
+| `reply` adds a line when the note carries no request id | `bin/fm-inbox.sh` (`cmd_reply`, header), `tests/fm-inbox.test.sh` (reply reader case) | `bin/fm-inbox.sh` (`cmd_reply`), `tests/fm-inbox.test.sh` | carried | 427056c4 |
