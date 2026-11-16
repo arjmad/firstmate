@@ -3301,7 +3301,7 @@ The Lavish version floors and feature probe are owned by `bin/fm-bootstrap.sh`.
 
 A finished scout or ship is never kept parked only so its board and listener stay alive.
 When a scout or ship whose attested captain-call inventory is non-empty is torn down, `bin/fm-teardown.sh` first runs `bin/fm-procevent.sh adopt-task <task-id>`, before it closes the worker's endpoint.
-A ship's inventory is the same attestation: firstmate holds the call its board raised with `--origin <ship-id>` and runs `bin/fm-captain-hold.sh complete <ship-id> <call-id>`, as `captain-hold-lifecycle` requires for any visual review it ends.
+A ship's inventory is the same attestation, which `captain-hold-lifecycle` has firstmate record when it holds the call a ship's board raised.
 
 - Each board the worker owns moves to firstmate's own ownership, the same ownership a bearings board has: the worker's listener stops, the source is bound with `bin/fm-captain-hold.sh bind` unless it already has a binding, and a firstmate listener is confirmed running.
 - The board keeps its session link whenever Lavish still has the session open, because the artifact under `data/<task-id>/` and the shared Lavish server both outlive the worker; an idle session is resumed with a plain open, never `--reopen`.
@@ -3309,7 +3309,7 @@ A ship's inventory is the same attestation: firstmate holds the call its board r
 - A keyed answer the captain gives on the adopted board then resolves its held call through the keyed-answer intake, and any other round reaches firstmate as an ordinary process-event `check` wake.
 - A board with an unacknowledged round that carries anything stays with the worker and the teardown refuses with nothing changed, so a captured answer is never handed over unread; read the round, acknowledge it with `bin/fm-procevent.sh handled`, then re-run the teardown.
 - A board the captain ended from the browser is retired with the worker as before, and `--force` falls back to that retirement when a handover cannot be made.
-- A ship with no attested inventory, or none of whose inventory calls is still open, keeps its boards' retirement with the task, as before; a call whose state cannot be read counts as open, so a live call never loses its board.
+- A ship with no attested inventory, or none of whose inventory calls is still open, keeps its boards' retirement with the task, as before; a call whose state cannot be read, or that its attested id no longer finds, counts as open, so a live call never loses its board.
 - The landed-work and scout completion gates run first and are unchanged.
 - The cross-home gap between worker rounds remains an accepted residual until lavish-axi's exclusive listener lands.
 - The crew instruction `bin/fm-brief.sh` emits in every scout and ship brief points workers at this arm-and-acknowledge contract, so a board a ship opens has a listener while it runs.

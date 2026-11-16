@@ -1172,7 +1172,7 @@ test_scout_completion_write_exception_is_task_scoped() {
 # path, so a board the captain answers always has a listener.
 test_lavish_line_follows_presentation_floor() {
   local base kind flags text_only label version expect case_dir fakebin brief n=0
-  local hosting='use the lavish-axi rule: arm your board with bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>'
+  local hosting="use the lavish-axi rule: arm your board with $ROOT/bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>"
   base=$(fm_test_base_path_sans "${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" lavish-axi)
   for kind in scout ship; do
     if [ "$kind" = scout ]; then

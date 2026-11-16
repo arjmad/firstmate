@@ -892,8 +892,8 @@ fi
 # reaches no agent. The rule's core is shared; each kind adds its own ending.
 LAVISH_COMPATIBLE=0
 "$SCRIPT_DIR/fm-bootstrap.sh" lavish-compatible >/dev/null 2>&1 && LAVISH_COMPATIBLE=1
-LAVISH_ARM_RULE='use the lavish-axi rule: arm your board with bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>; never run lavish-axi poll yourself. Re-arm with the reply after each nonterminal round that reaches you before you finish to acknowledge it, and route the board feedback through your steering inbox.'
-LAVISH_CONCLUDE_RULE='At session_ended or an empty End, stop without re-arming and acknowledge that final round with bin/fm-procevent.sh handled <source-id> <sequence> to conclude and retire your board.'
+LAVISH_ARM_RULE="use the lavish-axi rule: arm your board with $FM_ROOT/bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>; never run lavish-axi poll yourself. Re-arm with the reply after each nonterminal round that reaches you before you finish to acknowledge it, and route the board feedback through your steering inbox."
+LAVISH_CONCLUDE_RULE="At session_ended or an empty End, stop without re-arming and acknowledge that final round with $FM_ROOT/bin/fm-procevent.sh handled <source-id> <sequence> to conclude and retire your board."
 LAVISH_URL_RULE="as \`$FM_ROOT/bin/fm-lavish-url.sh <url>\` prints it"
 
 if [ "$KIND" = scout ]; then
