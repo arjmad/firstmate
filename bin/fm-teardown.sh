@@ -4291,8 +4291,8 @@ EOF
 # endpoint, every board it owns is handed to
 # firstmate, bound to the keyed-answer intake, and confirmed listening, and the
 # board's link is recorded on each still-open call of its inventory. Only a
-# task with an attested non-empty inventory of captain calls hands boards
-# over, and a ship only while `fm-captain-hold.sh inventory-open` does not
+# scout or ship with an attested non-empty inventory of captain calls hands
+# boards over, and a ship only while `fm-captain-hold.sh inventory-open` does not
 # report its inventory closed, so a live call never loses its board; any other
 # board is retired after the record is gone, as before.
 # A failed handover is tried once more before teardown refuses, since
@@ -4300,7 +4300,11 @@ EOF
 # once; the refusal then carries the cause itself, so a caller that keeps only
 # the last line still sees why.
 teardown_inventory_has_open_call() {
-  [ "$KIND" != scout ] || return 0
+  case "${KIND:-ship}" in
+    scout) return 0 ;;
+    ship) ;;
+    *) return 1 ;;
+  esac
   [ "$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
     FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" inventory-open "$ID" 2>/dev/null)" != closed ]
 }

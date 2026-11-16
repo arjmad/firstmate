@@ -256,8 +256,9 @@
 # an origin's attested inventory, as one `Captain hold board: <url>` line plus
 # the origin and time, once per link. Scout and ship teardown call it with each
 # board they hand over to firstmate (bin/fm-procevent.sh `adopt-task`), so the
-# link outlives the worker's status log whether or not it changed; a closed call is
-# skipped, and a call whose state cannot be read fails the command.
+# link outlives the worker's status log whether or not it changed; a closed call,
+# or an entry no longer in the live backlog because Done retention moved it out,
+# is skipped, and a call whose state cannot be read fails the command.
 #
 # `inventory-open` prints `open` when an origin's attested inventory still
 # holds an open captain call, resolving each entry as `board-link` does, and
@@ -2731,7 +2732,13 @@ command_board_link() {
   line="Captain hold board: $url"
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
-    resolved=$(resolve_entry "$origin" "$entry") || fail "cannot resolve inventory entry $entry of $origin"
+    rc=0
+    resolved=$(resolve_entry "$origin" "$entry" 2>/dev/null) || rc=$?
+    case "$rc" in
+      0) ;;
+      1) printf 'skipped: %s (not in the live backlog)\n' "$entry"; continue ;;
+      *) fail "cannot resolve inventory entry $entry of $origin" ;;
+    esac
     id=${resolved%% *}
     rc=0
     ( command_open "$id" ) || rc=$?

@@ -5104,6 +5104,38 @@ test_ship_teardown_retires_a_board_whose_call_was_answered() {
   ship_teardown_retires_an_answered_board archived
 }
 
+# A ship whose inventory mixes an answered call Done retention moved out with a
+# call still open hands its board over and records the link on the open call.
+test_ship_teardown_hands_over_a_board_with_a_mixed_inventory() {
+  local case_dir board sid rc show
+  local -a case_env
+  command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; return 0; }
+  case_dir=$(make_case ship-board-mixed)
+  scout_board_case "$case_dir" ship
+  "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" hold task-x1-call2 --title "Pick the colour" \
+    --reason "colour call on the ship board" --repo sample --origin task-x1 >/dev/null \
+    || fail "ship-board-mixed: could not hold the second call"
+  "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" complete task-x1 task-x1-call2 >/dev/null \
+    || fail "ship-board-mixed: could not attest the second call"
+  printf '%s\n' 'Colour: red' > "$case_dir/answer.txt"
+  "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" answer task-x1-call2 --decision-file "$case_dir/answer.txt" >/dev/null \
+    || fail "ship-board-mixed: could not answer the second call"
+  (cd "$case_dir" && tasks-axi rm task-x1-call2 --file "$case_dir/data/backlog.md") >/dev/null \
+    || fail "ship-board-mixed: could not move the answered row out of the live backlog"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "ship-board-mixed: teardown failed: $(cat "$case_dir/stderr")"
+  assert_grep "adopted: $sid (from task task-x1)" "$case_dir/stdout" \
+    "ship-board-mixed: teardown did not hand the board to firstmate"
+  show=$(cd "$case_dir" && tasks-axi show task-x1-call --full --file "$case_dir/data/backlog.md")
+  assert_contains "$show" "Captain hold board: http://127.0.0.1:14387/session/0123456789abcdef" \
+    "ship-board-mixed: the board's link was not recorded on the open call"
+  "${case_env[@]}" "$ROOT/bin/fm-procevent.sh" retire "$sid" >/dev/null 2>&1 || true
+  unset FM_PROCEVENT_CLAIM_ROOT LAVISH_AXI_STATE_DIR
+  pass "ship teardown hands over a board whose inventory mixes an archived answered call with an open one"
+}
+
 # An inventory entry attested under its pre-collapse key still resolves to its
 # open call through the legacy <origin>-decision-<key> identity, so the board
 # is handed over rather than retired.
@@ -7548,6 +7580,7 @@ test_ship_teardown_hands_its_board_to_firstmate
 test_ship_teardown_retires_a_board_with_no_open_call
 test_ship_teardown_retires_a_board_whose_call_was_answered
 test_ship_teardown_hands_over_a_board_for_a_legacy_inventory_entry
+test_ship_teardown_hands_over_a_board_with_a_mixed_inventory
 test_scout_teardown_refuses_while_its_board_has_an_unread_round
 test_scout_teardown_retries_a_failed_board_handover_once
 test_scout_teardown_refusal_names_the_handover_cause
