@@ -990,9 +990,9 @@ esac
 RULE1=$(fm_ship_rule_one "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH") || exit 1
 DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$PR_TEXT") || exit 1
 if [ "$LAVISH_COMPATIBLE" = 1 ]; then
-  LAVISH_LINE="If you put a board, preview, or other visual artifact in front of the captain to review or decide on, $LAVISH_ARM_RULE Do not wait for the captain to open the board: put the live board URL, $LAVISH_URL_RULE, in the needs-decision line that asks for his call, then stop as rule 6 says. When this task is torn down, a board that still carries a captain call firstmate holds is handed to firstmate, whose listener carries his answers, and any other board is retired. $LAVISH_CONCLUDE_RULE"
+  LAVISH_LINE="If you put a board, preview, or other visual artifact in front of the captain to review or decide on, $LAVISH_ARM_RULE Do not wait for the captain to open the board: put the live board URL, $LAVISH_URL_RULE, in the status line that points him at it, and when the board asks for his call, that line is the needs-decision line and you stop as rule 6 says. When this task is torn down, a board that still carries a captain call firstmate holds is handed to firstmate, whose listener carries his answers, and any other board is retired. $LAVISH_CONCLUDE_RULE"
 else
-  LAVISH_LINE='Lavish is unavailable (lavish-axi is missing or below its supported version floor), so do not open a Lavish board; name any visual artifact by its file path in the needs-decision line that asks for the captain'"'"'s call.'
+  LAVISH_LINE='Lavish is unavailable (lavish-axi is missing or below its supported version floor), so do not open a Lavish board; name any visual artifact by its file path in the status line that points the captain at it.'
 fi
 [ -z "$SHORT_LOOP_BLOCK" ] || DOD=$(printf '%s\n' "$DOD" | fm_dod_with_short_loop_floor) || exit 1
 

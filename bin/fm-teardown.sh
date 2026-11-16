@@ -144,7 +144,8 @@
 # through `bin/fm-captain-hold.sh board-link`, so the board and its answers
 # outlive the worker. A board with an unread round, or a handover that fails,
 # refuses the teardown with nothing changed; --force instead falls back to the
-# retirement above. A task with no such inventory keeps the retirement above.
+# retirement above. A task with no such inventory, or a ship none of whose
+# inventory calls is still open, keeps the retirement above.
 # data/<id>/ is deliberately left in place: a successor spawn reads brief.md
 # from it. Only its reproducible scratch goes, through
 # bin/fm-data-scratch-prune.sh under the meta lock just before the task record
@@ -4291,14 +4292,31 @@ EOF
 # firstmate, bound to the keyed-answer intake, and confirmed listening, and the
 # board's link is recorded on each still-open call of its inventory. Only a
 # task with an attested non-empty inventory of captain calls hands boards
-# over; any other board is retired after the record is gone, as before.
+# over, and a ship only while one of those calls is still open (or cannot be
+# read, so a live call never loses its board); any other board is retired
+# after the record is gone, as before.
 # A failed handover is tried once more before teardown refuses, since
 # adopt-task finishes an interrupted handover and board-link records each link
 # once; the refusal then carries the cause itself, so a caller that keeps only
 # the last line still sees why.
+teardown_inventory_has_open_call() {
+  local entry rc
+  [ "$KIND" != scout ] || return 0
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    rc=0
+    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+      FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" open "$entry" >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 1 ] || return 0
+  done <<EOF
+$(meta_value "$META" decision_keys | tr ',' '\n')
+EOF
+  return 1
+}
 if [ -d "$STATE/procevent" ] \
   && [ "$(meta_value "$META" decisions_reviewed)" = 1 ] \
-  && [ -n "$(meta_value "$META" decision_keys)" ]; then
+  && [ -n "$(meta_value "$META" decision_keys)" ] \
+  && teardown_inventory_has_open_call; then
   teardown_adopt_boards
   case "$TEARDOWN_ADOPT_RC" in
     0|3) ;;

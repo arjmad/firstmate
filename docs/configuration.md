@@ -3309,7 +3309,7 @@ A ship's inventory is the same attestation: firstmate holds the call its board r
 - A keyed answer the captain gives on the adopted board then resolves its held call through the keyed-answer intake, and any other round reaches firstmate as an ordinary process-event `check` wake.
 - A board with an unacknowledged round that carries anything stays with the worker and the teardown refuses with nothing changed, so a captured answer is never handed over unread; read the round, acknowledge it with `bin/fm-procevent.sh handled`, then re-run the teardown.
 - A board the captain ended from the browser is retired with the worker as before, and `--force` falls back to that retirement when a handover cannot be made.
-- A ship with no attested inventory keeps its boards' retirement with the task, as before.
+- A ship with no attested inventory, or none of whose inventory calls is still open, keeps its boards' retirement with the task, as before; a call whose state cannot be read counts as open, so a live call never loses its board.
 - The landed-work and scout completion gates run first and are unchanged.
 - The cross-home gap between worker rounds remains an accepted residual until lavish-axi's exclusive listener lands.
 - The crew instruction `bin/fm-brief.sh` emits in every scout and ship brief points workers at this arm-and-acknowledge contract, so a board a ship opens has a listener while it runs.

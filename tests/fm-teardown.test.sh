@@ -5070,6 +5070,30 @@ test_ship_teardown_retires_a_board_with_no_open_call() {
   pass "ship teardown retires a board that carries no open captain call"
 }
 
+# A ship whose attested call the captain already answered has no open call left,
+# so its board is retired too rather than handed to firstmate.
+test_ship_teardown_retires_a_board_whose_call_was_answered() {
+  local case_dir board sid rc
+  local -a case_env
+  command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; return 0; }
+  case_dir=$(make_case ship-board-answered)
+  scout_board_case "$case_dir" ship
+  printf '%s\n' 'Layout: wide' > "$case_dir/answer.txt"
+  "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" answer task-x1-call --decision-file "$case_dir/answer.txt" >/dev/null \
+    || fail "ship-board-answered: could not answer the ship's captain call"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "ship-board-answered: teardown failed: $(cat "$case_dir/stderr")"
+  assert_absent "$case_dir/state/task-x1.meta" "ship-board-answered: teardown did not complete"
+  assert_no_grep "adopted:" "$case_dir/stdout" \
+    "ship-board-answered: teardown handed a board whose call was answered to firstmate"
+  assert_absent "$case_dir/state/procevent/$sid.source" \
+    "ship-board-answered: teardown left the ship's board registered"
+  unset FM_PROCEVENT_CLAIM_ROOT LAVISH_AXI_STATE_DIR
+  pass "ship teardown retires a board whose captain call was already answered"
+}
+
 test_scout_teardown_refuses_while_its_board_has_an_unread_round() {
   local case_dir board sid rc
   local -a case_env
@@ -7487,6 +7511,7 @@ test_teardown_retires_the_task_owned_boards
 test_scout_teardown_hands_its_board_to_firstmate
 test_ship_teardown_hands_its_board_to_firstmate
 test_ship_teardown_retires_a_board_with_no_open_call
+test_ship_teardown_retires_a_board_whose_call_was_answered
 test_scout_teardown_refuses_while_its_board_has_an_unread_round
 test_scout_teardown_retries_a_failed_board_handover_once
 test_scout_teardown_refusal_names_the_handover_cause
