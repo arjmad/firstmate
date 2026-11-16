@@ -704,10 +704,12 @@ cmd_resume() {
 # newest ready: neither parking nor automatic cleanup may end it; firstmate
 # tears it down after that done: (.agents/skills/ship-landing/SKILL.md).
 reported_ready() {  # <id>
-  local line
-  line=$(grep -E "^[[:space:]]*(done|$FM_CLASSIFY_READY_VERB)([[:space:]:[]|$)" \
-    "$STATE/$1.status" 2>/dev/null | tail -n 1) || true
-  [ "$(status_line_verb "$line")" = "$FM_CLASSIFY_READY_VERB" ]
+  local line verb last=
+  while IFS= read -r line; do
+    verb=$(status_line_verb "$line")
+    case "$verb" in done|"$FM_CLASSIFY_READY_VERB") last=$verb ;; esac
+  done < <(grep -E "^[[:space:]]*(done|$FM_CLASSIFY_READY_VERB)([[:space:]:[]|$)" "$STATE/$1.status" 2>/dev/null)
+  [ "$last" = "$FM_CLASSIFY_READY_VERB" ]
 }
 
 # Parked lanes always clean up; other lanes require explicit home opt-in.

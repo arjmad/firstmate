@@ -983,8 +983,11 @@ test_ready_lane_is_neither_parked_nor_auto_landed() {
   out=$(run_park "$w" land lane --if-eligible 2>&1)
   [ -z "$out" ] && [ ! -e "$w/teardown.log" ] || fail "ready-land: automatic cleanup ended a ready lane: $out"
   # Later working: and paused: lines do not end the ready report; only a done: does.
-  printf 'working [at=3]: companion other PR %s\n' "$GH_URL" >> "$w/state/lane.status"
-  printf 'paused [at=4]: waiting for the merge\n' >> "$w/state/lane.status"
+  {
+    printf 'working [at=3]: companion other PR %s\n' "$GH_URL"
+    printf 'paused [at=4]: waiting for the merge\n'
+    printf 'done reviewing the follow-up, next the migration\n'
+  } >> "$w/state/lane.status"
   printf 'state: paused · source: status-log · waiting for the merge\n' > "$w/crew-state"
   rm -f "$w/config/auto-land"
   rc=0; out=$(run_park "$w" park lane 2>&1) || rc=$?
