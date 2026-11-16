@@ -51,7 +51,9 @@
 # refuses unless: the task is a ship with pr= and an armed merge poll
 # (state/<id>.check.sh); its backend can prove a stop and launch a replacement;
 # its local copy is clean with HEAD equal to the forge
-# head; bin/fm-crew-state.sh reads done or paused; the agent is idle; the
+# head; bin/fm-crew-state.sh reads done or paused; the crew's newest line is
+# not ready: (a fork verb whose task continues after its PR merges,
+# docs/fork-decisions.md 2026-10-14); the agent is idle; the
 # steering inbox holds no unhandled message; and the gate is clean. It then
 # durably leases a Treehouse slot to the task (treehouse lease, state-only, so a
 # later get never hands the copy out and prune never removes it even if the
@@ -82,7 +84,9 @@
 # bin/fm-teardown.sh <task-id> (never --force), so every teardown gate still
 # applies, and prints one outcome line naming the lane and its PR. With
 # --if-eligible it does nothing unless the lane is eligible for merge-time
-# cleanup (land_eligible below: parked, or config/auto-land present). With
+# cleanup (land_eligible below: parked, or config/auto-land present and the
+# crew's newest line not ready:, since that worker still has work after the
+# merge). With
 # --detach it starts the land as a detached action (below), prints "automatic
 # cleanup started", and returns at once; with --queue it only saves the request.
 # The request (state/<id>.review-park-land) records the merged PR as pr=, and
@@ -173,6 +177,8 @@ export FM_HOME FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG"
 . "$SCRIPT_DIR/fm-control-lib.sh"
 # shellcheck source=bin/fm-busy-lib.sh
 . "$SCRIPT_DIR/fm-busy-lib.sh"
+# shellcheck source=bin/fm-classify-lib.sh
+. "$SCRIPT_DIR/fm-classify-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-parent-channel-lib.sh
@@ -573,6 +579,7 @@ park_preflight() {  # <id>
     'state: done '*|'state: paused '*) ;;
     *) echo "the worker has not finished at a ready report (${crew:-crew state unreadable})"; return 1 ;;
   esac
+  ! reported_ready "$id" || { echo "the worker reported ready: its task continues after the PR merges"; return 1; }
 }
 
 # Durable Treehouse lease for a pool slot; prints yes when taken, no when the
@@ -690,9 +697,17 @@ cmd_resume() {
 
 # --- land ------------------------------------------------------------------
 
+# A worker whose newest line is the fork's ready: verb lands its PR and then
+# keeps working toward a later done: (fork patch, docs/fork-decisions.md
+# 2026-10-14), so neither parking nor automatic cleanup may end it.
+reported_ready() {  # <id>
+  [ "$(status_line_verb "$(last_crew_status_line "$STATE/$1.status")")" = "$FM_CLASSIFY_READY_VERB" ]
+}
+
 # Parked lanes always clean up; other lanes require explicit home opt-in.
 land_eligible() {  # <id>
-  [ -e "$(record_path "$1")" ] || [ -e "$CONFIG/auto-land" ]
+  [ -e "$(record_path "$1")" ] && return 0
+  [ -e "$CONFIG/auto-land" ] && ! reported_ready "$1"
 }
 
 cmd_land() {

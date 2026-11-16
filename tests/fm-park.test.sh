@@ -968,6 +968,26 @@ test_land_requires_opt_in_but_always_cleans_parked() {
   pass "merge-time cleanup requires opt-in for unparked lanes and always cleans parked lanes"
 }
 
+# The fork's ready: verb (bin/fm-brief.sh) lands a PR whose task continues
+# after the merge, so neither parking nor automatic cleanup may end that worker.
+test_ready_lane_is_neither_parked_nor_auto_landed() {
+  local w out rc
+  w=$(make_world ready-lane "$GH_URL")
+  gh_fixture "$w/gh.1.json"
+  printf 'ready [at=2]: PR %s\n' "$GH_URL" >> "$w/state/lane.status"
+  printf 'state: paused · source: status-log · ready: PR %s\n' "$GH_URL" > "$w/crew-state"
+  rc=0; out=$(run_park "$w" park lane 2>&1) || rc=$?
+  case "$rc:$out" in 1:*"reported ready"*) ;; *) fail "ready-park: $rc $out" ;; esac
+  [ ! -e "$w/state/lane.review-park" ] && [ ! -e "$w/control.log" ] || fail "ready-park: the lane was parked"
+  : > "$w/config/auto-land"
+  out=$(run_park "$w" land lane --if-eligible 2>&1)
+  [ -z "$out" ] && [ ! -e "$w/teardown.log" ] || fail "ready-land: automatic cleanup ended a ready lane: $out"
+  printf 'done [at=3]: PR %s\n' "$GH_URL" >> "$w/state/lane.status"
+  out=$(run_park "$w" land lane --if-eligible 2>&1)
+  [ "$(cat "$w/teardown.log" 2>/dev/null)" = lane ] || fail "ready-land: the later done: lane was not cleaned up: $out"
+  pass "a ready: lane is never parked or cleaned up automatically, and its later done: is"
+}
+
 test_land_queue_fails_when_cleanup_request_cannot_be_written() {
   local w out rc=0
   w=$(make_world land-queue-write-fail "$GH_URL")
@@ -1227,6 +1247,7 @@ fm_test_run \
   test_closed_pr_is_reported_once \
   test_tick_parks_clean_idle_lanes_only_when_opted_in \
   test_land_requires_opt_in_but_always_cleans_parked \
+  test_ready_lane_is_neither_parked_nor_auto_landed \
   test_land_queue_fails_when_cleanup_request_cannot_be_written \
   test_land_report_keeps_lost_pool_slot_details \
   test_detached_land_returns_at_once_and_the_tick_reports_it \
