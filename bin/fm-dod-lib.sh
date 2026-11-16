@@ -973,8 +973,9 @@ fm_dod_pr_url_from_done_note() {  # <note>
 }
 
 # The URL of a note that is exactly a ready report (`PR <url>`, `PR <url> checks
-# green`, or Gerrit's `PR <url> published for review`), or empty. Anything else
-# around the URL is prose, so the caller claims no delivered PR from it.
+# green`, or Gerrit's `PR <url> published for review`), optionally followed by
+# the fork's `; captain step: <action>` (bin/fm-brief.sh), or empty. Anything
+# else around the URL is prose, so the caller claims no delivered PR from it.
 fm_dod_ready_note_url() {  # <note>
   local url=$1
   case "$url" in 'PR '*) url=${url#PR } ;; *) return 1 ;; esac

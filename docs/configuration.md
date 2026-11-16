@@ -946,7 +946,7 @@ The [captain-hold policy](../.agents/skills/captain-hold-lifecycle/SKILL.md#poli
 ## Park on review
 
 The optional local, gitignored `config/park-on-review` presence flag opts this home into stopping the idle agent of a ship lane whose PR or merge request only awaits human review.
-`config/auto-land` opts into merge-time cleanup of unparked ship lanes.
+`config/auto-land` opts into merge-time cleanup of unparked ship lanes, except a lane whose newest crew line is the fork's `ready:`, whose task continues after its PR merges.
 Either flag also lets `bin/fm-teardown.sh` accept a merged GitLab merge request, including a squash or merge-train merge, as landed work when the merge request's head contains the lane's work; with neither flag, teardown does not read GitLab merge requests.
 Both flags are home-local and not inherited by secondmate homes.
 The full behavior contract and command details are owned by [`bin/fm-park.sh`](../bin/fm-park.sh); the watcher calls its `tick` command on each check sweep.
@@ -955,7 +955,7 @@ The full behavior contract and command details are owned by [`bin/fm-park.sh`](.
 
 The optional local, gitignored `config/pr-register-scan` presence flag opts this home into recording, without the supervisor, each PR a task reports.
 With the flag present, the watcher's check sweep runs `bin/fm-pr-check.sh scan` before the merge polls.
-The scan reads a ship task's PR only from a ready report: the task's newest crew-declared status line must be a `done:` line that is exactly `PR <url>`, `PR <url> checks green`, or `PR <url> published for review`, so prose around the URL and any later crew line report nothing.
+The scan reads a ship task's PR only from a ready report: the task's newest crew-declared status line must be a `done:` or `ready:` line that is exactly `PR <url>`, `PR <url> checks green`, or `PR <url> published for review`, optionally ending in `; captain step: <action>` (fork patch), so other prose around the URL and any later crew line report nothing.
 Later `resolved:` and `captain-held:` lines are supervisor bookkeeping and do not withdraw a ready report.
 It records that PR through the ordinary registration path when the task has no `pr=`, or has that same `pr=` but no published merge poll.
 When the status log named the recorded `pr=` and the ready report names a different PR, that PR replaces the recorded one, so a lane that closes a PR and opens another moves its merge poll.
