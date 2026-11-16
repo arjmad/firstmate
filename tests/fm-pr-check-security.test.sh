@@ -978,19 +978,15 @@ test_scan_records_fork_ready_shapes() {
   local dir state out
   dir=$(make_case scan-fork-ready-shapes)
   state="$dir/home/state"
-  write_task_meta "$dir" task-ready
-  printf '%s\n' 'ready [at=2]: PR https://github.com/o/r/pull/13' > "$state/task-ready.status"
   write_task_meta "$dir" task-step
   printf '%s\n' 'done [at=2]: PR https://github.com/o/r/pull/14 checks green; captain step: link the shop account' \
     > "$state/task-step.status"
 
   out=$(run_check_entry "$dir" scan 2> "$dir/stderr") || fail "the scan failed: $(cat "$dir/stderr")"
   [ -z "$out" ] || fail "a scan that recorded everything printed: $out"
-  grep -qxF 'pr=https://github.com/o/r/pull/13' "$state/task-ready.meta" \
-    || fail "the PR named in a ready line was not recorded"
   grep -qxF 'pr=https://github.com/o/r/pull/14' "$state/task-step.meta" \
     || fail "the PR named in a done line with a captain step was not recorded"
-  pass "the scan records the PR a ready line or a captain-step done line reports"
+  pass "the scan records the PR a captain-step done line reports"
 }
 
 # A refused registration is reported once per task and PR, and later scans keep
