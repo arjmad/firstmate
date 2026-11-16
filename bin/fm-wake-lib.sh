@@ -549,7 +549,9 @@ fm_lock_clean_known_files() {
   for name in "${FM_LOCK_KNOWN_FILES[@]}"; do
     paths+=("$lockdir/$name")
   done
-  rm -f "${paths[@]}" "$lockdir/pid".tmp.* 2>/dev/null || true
+  # The temporaries go first, so the known files are removed in their listed
+  # order and watcher-path is the last one named.
+  rm -f "$lockdir/pid".tmp.* "${paths[@]}" 2>/dev/null || true
 }
 
 fm_lock_set_role() {
