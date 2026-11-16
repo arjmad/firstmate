@@ -36,7 +36,7 @@ Mining transcripts for items is out of scope.
 ## Acting first
 
 Firstmate settles what it can before anything reaches Arjun (Arjun, 2026-11-11, rule 1 of the calls-grouping board).
-A noticed item is held for him only when it needs his decision or review: an ask-first item, a rule or ruling, retiring a part, an addition of new machinery, or anything of Sapna's.
+A noticed item is held for him only when it needs his decision or review: an ask-first item, a rule or ruling, retiring a part, or an addition of new machinery.
 
 - **Routine.** Every other noticed item is the fleet's to fix or drop, provided the change can be undone and stays inside firstmate's authority (a broken test, a stale doc, a small bug, a finding that turns out moot).
   File it with `--routine`, so it is fleet work rather than a call, and either dispatch that row as its fix or drop it.
