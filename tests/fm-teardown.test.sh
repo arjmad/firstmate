@@ -5104,6 +5104,31 @@ test_ship_teardown_retires_a_board_whose_call_was_answered() {
   ship_teardown_retires_an_answered_board archived
 }
 
+# An inventory entry attested under its pre-collapse key still resolves to its
+# open call through the legacy <origin>-decision-<key> identity, so the board
+# is handed over rather than retired.
+test_ship_teardown_hands_over_a_board_for_a_legacy_inventory_entry() {
+  local case_dir board sid rc
+  local -a case_env
+  command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; return 0; }
+  case_dir=$(make_case ship-board-legacy)
+  scout_board_case "$case_dir" ship nocall
+  "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" hold task-x1-decision-layout --title "Pick the layout" \
+    --reason "layout call on the ship board" --repo sample --origin task-x1 >/dev/null \
+    || fail "ship-board-legacy: could not hold the legacy-identity call"
+  "${case_env[@]}" "$ROOT/bin/fm-captain-hold.sh" complete task-x1 layout >/dev/null \
+    || fail "ship-board-legacy: could not attest the pre-collapse inventory key"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "ship-board-legacy: teardown failed: $(cat "$case_dir/stderr")"
+  assert_grep "adopted: $sid (from task task-x1)" "$case_dir/stdout" \
+    "ship-board-legacy: teardown retired a board whose legacy-keyed call is still open"
+  "${case_env[@]}" "$ROOT/bin/fm-procevent.sh" retire "$sid" >/dev/null 2>&1 || true
+  unset FM_PROCEVENT_CLAIM_ROOT LAVISH_AXI_STATE_DIR
+  pass "ship teardown hands over a board whose open call is attested under its pre-collapse key"
+}
+
 test_scout_teardown_refuses_while_its_board_has_an_unread_round() {
   local case_dir board sid rc
   local -a case_env
@@ -7522,6 +7547,7 @@ test_scout_teardown_hands_its_board_to_firstmate
 test_ship_teardown_hands_its_board_to_firstmate
 test_ship_teardown_retires_a_board_with_no_open_call
 test_ship_teardown_retires_a_board_whose_call_was_answered
+test_ship_teardown_hands_over_a_board_for_a_legacy_inventory_entry
 test_scout_teardown_refuses_while_its_board_has_an_unread_round
 test_scout_teardown_retries_a_failed_board_handover_once
 test_scout_teardown_refusal_names_the_handover_cause

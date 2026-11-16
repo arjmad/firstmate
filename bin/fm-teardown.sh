@@ -4292,27 +4292,17 @@ EOF
 # firstmate, bound to the keyed-answer intake, and confirmed listening, and the
 # board's link is recorded on each still-open call of its inventory. Only a
 # task with an attested non-empty inventory of captain calls hands boards
-# over, and a ship only while one of those calls is still open (or cannot be
-# read, so a live call never loses its board); a call answered or moved out of
-# the live backlog is not open, and any other board is retired after the record
-# is gone, as before.
+# over, and a ship only while `fm-captain-hold.sh inventory-open` does not
+# report its inventory closed, so a live call never loses its board; any other
+# board is retired after the record is gone, as before.
 # A failed handover is tried once more before teardown refuses, since
 # adopt-task finishes an interrupted handover and board-link records each link
 # once; the refusal then carries the cause itself, so a caller that keeps only
 # the last line still sees why.
 teardown_inventory_has_open_call() {
-  local entry rc
   [ "$KIND" != scout ] || return 0
-  while IFS= read -r entry; do
-    [ -n "$entry" ] || continue
-    rc=0
-    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
-      FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" open "$entry" >/dev/null 2>&1 || rc=$?
-    [ "$rc" = 1 ] || return 0
-  done <<EOF
-$(meta_value "$META" decision_keys | tr ',' '\n')
-EOF
-  return 1
+  [ "$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+    FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" inventory-open "$ID" 2>/dev/null)" != closed ]
 }
 if [ -d "$STATE/procevent" ] \
   && [ "$(meta_value "$META" decisions_reviewed)" = 1 ] \
