@@ -111,7 +111,7 @@ pr_check_reported_url() {  # <status-file>
   local line url
   [ -f "$1" ] && [ ! -L "$1" ] || return 1
   line=$(last_crew_status_line "$1")
-  case "$(status_line_verb "$line")" in done|ready) ;; *) return 1 ;; esac
+  case "$(status_line_verb "$line")" in done|"$FM_CLASSIFY_READY_VERB") ;; *) return 1 ;; esac
   url=$(fm_dod_ready_note_url "$(status_line_note "$line")") || return 1
   fm_pr_url_parse "$url" || return 1
   printf '%s\n' "$FM_PR_URL"

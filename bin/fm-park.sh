@@ -705,7 +705,7 @@ cmd_resume() {
 # tears it down after that done: (.agents/skills/ship-landing/SKILL.md).
 reported_ready() {  # <id>
   local line
-  line=$(grep -E "^[[:space:]]*(done|$FM_CLASSIFY_READY_VERB)([[:space:]]*\[[^]]*\])*[[:space:]]*:" \
+  line=$(grep -E "^[[:space:]]*(done|$FM_CLASSIFY_READY_VERB)([[:space:]:[]|$)" \
     "$STATE/$1.status" 2>/dev/null | tail -n 1) || true
   [ "$(status_line_verb "$line")" = "$FM_CLASSIFY_READY_VERB" ]
 }
@@ -834,6 +834,7 @@ watch_unparked() {  # <id>
   state=$(printf '%s' "$snap" | jq -r .state)
   [ "$state" != closed ] || { closed_once "$id" "$pr"; return 0; }
   [ "$state" = open ] && [ -e "$CONFIG/park-on-review" ] || return 0
+  ! reported_ready "$id" || return 0
   ! lane_busy "$id" || return 0
   local idle_secs
   idle_secs=$(step_secs "$READ_SECS") || return 0
