@@ -978,6 +978,9 @@ fm_dod_pr_url_from_done_note() {  # <note>
 fm_dod_ready_note_url() {  # <note>
   local url=$1
   case "$url" in 'PR '*) url=${url#PR } ;; *) return 1 ;; esac
+  # A done line may end with the step only the captain can take after the
+  # merge (bin/fm-brief.sh); the PR it names is still ready to land.
+  case "$url" in *'; captain step: '*) url=${url%%; captain step: *} ;; esac
   case "$url" in
     *' checks green') url=${url% checks green} ;;
     *' published for review') url=${url% published for review} ;;

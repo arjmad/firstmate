@@ -47,7 +47,9 @@
 set -u
 
 usage() { sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
-case "${1:-}" in -h|--help) usage 0 ;; esac
+case "${1:-}" in
+  -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+esac
 
 SCRIPT_SELF=${BASH_SOURCE[0]}
 SCRIPT_DIR=${SCRIPT_SELF%/*}

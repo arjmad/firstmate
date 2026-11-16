@@ -54,7 +54,7 @@
 # merge monitoring never depends on the supervisor remembering this command.
 # bin/fm-watch.sh runs it at the start of each check sweep. A task reports a PR
 # only when its newest crew-declared status line (last_crew_status_line in
-# bin/fm-classify-lib.sh) is a done: line in a ready shape
+# bin/fm-classify-lib.sh) is a done: or ready: line in a ready shape
 # (fm_dod_ready_note_url in bin/fm-dod-lib.sh) naming a supported PR URL, so
 # prose around the URL, a line saying the PR is not ready, and any later crew
 # line each leave nothing to record. A candidate is a task record that is not a
@@ -111,7 +111,7 @@ pr_check_reported_url() {  # <status-file>
   local line url
   [ -f "$1" ] && [ ! -L "$1" ] || return 1
   line=$(last_crew_status_line "$1")
-  [ "$(status_line_verb "$line")" = "done" ] || return 1
+  case "$(status_line_verb "$line")" in done|ready) ;; *) return 1 ;; esac
   url=$(fm_dod_ready_note_url "$(status_line_note "$line")") || return 1
   fm_pr_url_parse "$url" || return 1
   printf '%s\n' "$FM_PR_URL"

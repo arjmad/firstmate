@@ -971,6 +971,28 @@ test_scan_records_a_pr_reported_in_a_done_line() {
   pass "the scan records the PR a done line reports and leaves prose, scouts and recorded PRs alone"
 }
 
+# The fork's ready: line (a task that continues after its PR merges) and a
+# done: line ending in the captain's own post-merge step both report a PR that
+# is ready to land, so the scan records each of them too.
+test_scan_records_fork_ready_shapes() {
+  local dir state out
+  dir=$(make_case scan-fork-ready-shapes)
+  state="$dir/home/state"
+  write_task_meta "$dir" task-ready
+  printf '%s\n' 'ready [at=2]: PR https://github.com/o/r/pull/13' > "$state/task-ready.status"
+  write_task_meta "$dir" task-step
+  printf '%s\n' 'done [at=2]: PR https://github.com/o/r/pull/14 checks green; captain step: link the shop account' \
+    > "$state/task-step.status"
+
+  out=$(run_check_entry "$dir" scan 2> "$dir/stderr") || fail "the scan failed: $(cat "$dir/stderr")"
+  [ -z "$out" ] || fail "a scan that recorded everything printed: $out"
+  grep -qxF 'pr=https://github.com/o/r/pull/13' "$state/task-ready.meta" \
+    || fail "the PR named in a ready line was not recorded"
+  grep -qxF 'pr=https://github.com/o/r/pull/14' "$state/task-step.meta" \
+    || fail "the PR named in a done line with a captain step was not recorded"
+  pass "the scan records the PR a ready line or a captain-step done line reports"
+}
+
 # A refused registration is reported once per task and PR, and later scans keep
 # retrying silently, so a draft marked ready afterwards is recorded unaided.
 test_scan_reports_a_refusal_once_and_retries() {
@@ -4356,13 +4378,10 @@ test_self_merged_lane_is_still_cleaned_up_by_the_poll() {
   chmod +x "$dir/teardown-stub"
   retire_contributions_observer "$dir"
   add_stop_custom_check "$dir"
-  # The merge entrypoint's queued outcome surfaces as a recovery wake first.
-  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" >"$dir/recovery.out" 2>"$dir/recovery.err" \
-    || fail "self-merge-cleanup: recovery cycle failed: $(cat "$dir/recovery.err")"
-  grep -F 'check: rearm-resurface' "$dir/recovery.out" >/dev/null \
-    || fail "self-merge-cleanup: the recorded merge did not surface as a recovery wake: $(cat "$dir/recovery.out")"
-  ack_watcher_cycle "$state" || fail "self-merge-cleanup: recovery acknowledgement failed"
-  rm -f "$state/.last-check"
+  # An attended merge main made itself in a main home queues no merge-landed
+  # wake (fork patch, bin/fm-pr-merge.sh), so no recovery wake comes first.
+  ! grep -F "merged-task-a-$url" "$state/.wake-queue" >/dev/null 2>&1 \
+    || fail "self-merge-cleanup: the attended merge queued a merge-landed wake"
   set +e
   FM_PARK_TEARDOWN_BIN="$dir/teardown-stub" FM_TEST_GH_STATE=MERGED \
     run_watcher_bounded "$dir/home" "$dir/fakebin" >"$dir/watch.out" 2>"$dir/watch.err"
@@ -4401,13 +4420,10 @@ test_merged_poll_stays_armed_when_cleanup_queue_fails() {
   add_stop_custom_check "$dir"
   run_merge_entry "$dir" task-a "$url" >"$dir/merge.out" 2>"$dir/merge.err" \
     || fail "merge-queue-failure: merge entrypoint failed: $(cat "$dir/merge.err")"
-  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" \
-    >"$dir/recovery.out" 2>"$dir/recovery.err" \
-    || fail "merge-queue-failure: recovery cycle failed: $(cat "$dir/recovery.err")"
-  grep -F 'check: rearm-resurface' "$dir/recovery.out" >/dev/null \
-    || fail "merge-queue-failure: merged result did not surface for recovery"
-  ack_watcher_cycle "$state" || fail "merge-queue-failure: recovery acknowledgement failed"
-  rm -f "$state/.last-check"
+  # An attended merge main made itself in a main home queues no merge-landed
+  # wake (fork patch, bin/fm-pr-merge.sh), so no recovery cycle comes first.
+  ! grep -F "merged-task-a-$url" "$state/.wake-queue" >/dev/null 2>&1 \
+    || fail "merge-queue-failure: the attended merge queued a merge-landed wake"
   printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/teardown.log"\n' "$dir" > "$dir/teardown-stub"
   chmod +x "$dir/teardown-stub"
   cat > "$dir/fakebin/mv" <<SH
@@ -5781,6 +5797,7 @@ test_direct_pr_unpushed_commit_refuses_registration
 test_merge_record_judges_forge_head_not_copy_head
 test_merge_rerecord_refreshes_before_refusing
 test_scan_records_a_pr_reported_in_a_done_line
+test_scan_records_fork_ready_shapes
 test_scan_reports_a_refusal_once_and_retries
 test_scan_retries_refused_task_behind_a_hanging_registration
 test_scan_rotates_past_a_hanging_registration
