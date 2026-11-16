@@ -51,8 +51,8 @@
 # refuses unless: the task is a ship with pr= and an armed merge poll
 # (state/<id>.check.sh); its backend can prove a stop and launch a replacement;
 # its local copy is clean with HEAD equal to the forge
-# head; bin/fm-crew-state.sh reads done or paused; the crew's newest line is
-# not ready: (a fork verb whose task continues after its PR merges,
+# head; bin/fm-crew-state.sh reads done or paused; no ready: report stands
+# without a later done: (a fork verb whose task continues after its PR merges,
 # docs/fork-decisions.md 2026-10-14); the agent is idle; the
 # steering inbox holds no unhandled message; and the gate is clean. It then
 # durably leases a Treehouse slot to the task (treehouse lease, state-only, so a
@@ -84,8 +84,8 @@
 # bin/fm-teardown.sh <task-id> (never --force), so every teardown gate still
 # applies, and prints one outcome line naming the lane and its PR. With
 # --if-eligible it does nothing unless the lane is eligible for merge-time
-# cleanup (land_eligible below: parked, or config/auto-land present and the
-# crew's newest line not ready:, since that worker still has work after the
+# cleanup (land_eligible below: parked, or config/auto-land present and no
+# ready: report standing without a later done:, since that worker still has work after the
 # merge; the watcher's merge-time land runs once, so firstmate tears that lane
 # down after its later done:). With
 # --detach it starts the land as a detached action (below), prints "automatic
@@ -698,12 +698,16 @@ cmd_resume() {
 
 # --- land ------------------------------------------------------------------
 
-# A worker whose newest line is the fork's ready: verb lands its PR and then
-# keeps working toward a later done: (fork patch, docs/fork-decisions.md
-# 2026-10-14), so neither parking nor automatic cleanup may end it; firstmate
+# A worker that reported the fork's ready: verb lands its PR and then keeps
+# working, under any later working: or paused: lines, toward a later done:
+# (fork patch, docs/fork-decisions.md 2026-10-14), so until a done: follows its
+# newest ready: neither parking nor automatic cleanup may end it; firstmate
 # tears it down after that done: (.agents/skills/ship-landing/SKILL.md).
 reported_ready() {  # <id>
-  [ "$(status_line_verb "$(last_crew_status_line "$STATE/$1.status")")" = "$FM_CLASSIFY_READY_VERB" ]
+  local line
+  line=$(grep -E "^[[:space:]]*(done|$FM_CLASSIFY_READY_VERB)([[:space:]]*\[[^]]*\])*[[:space:]]*:" \
+    "$STATE/$1.status" 2>/dev/null | tail -n 1) || true
+  [ "$(status_line_verb "$line")" = "$FM_CLASSIFY_READY_VERB" ]
 }
 
 # Parked lanes always clean up; other lanes require explicit home opt-in.
