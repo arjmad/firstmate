@@ -1167,32 +1167,40 @@ test_scout_completion_write_exception_is_task_scoped() {
   pass "fm-brief.sh: scouts may attest only their own empty inventory through the guarded command"
 }
 
-# A scout brief offers the Lavish review loop for every compatible board version,
-# including older builds that use the legacy reply path.
-test_scout_lavish_line_follows_presentation_floor() {
-  local base label version expect case_dir fakebin brief n=0
-  local hosting='use the lavish-axi rule'
-  local text_only='deliver your findings as a text report without Lavish'
+# Every worker brief, scout and ship alike, carries the Lavish arm rule for every
+# compatible board version, including older builds that use the legacy reply
+# path, so a board the captain answers always has a listener.
+test_lavish_line_follows_presentation_floor() {
+  local base kind flags text_only label version expect case_dir fakebin brief n=0
+  local hosting='use the lavish-axi rule: arm your board with bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>'
   base=$(fm_test_base_path_sans "${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" lavish-axi)
-  while IFS='^' read -r label version expect; do
-    [ -n "$label" ] || continue
-    n=$((n + 1))
-    case_dir="$TMP_ROOT/scout-lavish-$n"
-    mkdir -p "$case_dir/home/data"
-    fakebin=$(fm_fakebin "$case_dir")
-    [ "$version" = absent ] || fm_fake_version_tool "$fakebin" lavish-axi FM_FAKE_LAVISH_AXI_VERSION "$version"
-    PATH="$fakebin:$base" FM_HOME="$case_dir/home" \
-      "$ROOT/bin/fm-brief.sh" scout-lavish alpha --scout >/dev/null \
-      || fail "$label: scout scaffold failed"
-    brief="$case_dir/home/data/scout-lavish/brief.md"
-    if [ "$expect" = hosting ]; then
-      assert_grep "$hosting" "$brief" "$label: scout brief did not offer the Lavish review loop"
-      assert_no_grep "$text_only" "$brief" "$label: scout brief withheld Lavish from a compatible build"
+  for kind in scout ship; do
+    if [ "$kind" = scout ]; then
+      flags=--scout text_only='deliver your findings as a text report without Lavish'
     else
-      assert_grep "$text_only" "$brief" "$label: scout brief did not ask for a text report"
-      assert_no_grep "$hosting" "$brief" "$label: scout brief offered a below-floor Lavish"
+      flags='--mode direct-PR' text_only='so do not open a Lavish board'
     fi
-  done <<'ROWS'
+    while IFS='^' read -r label version expect; do
+      [ -n "$label" ] || continue
+      n=$((n + 1))
+      label="$kind, $label"
+      case_dir="$TMP_ROOT/brief-lavish-$n"
+      mkdir -p "$case_dir/home/data"
+      fakebin=$(fm_fakebin "$case_dir")
+      [ "$version" = absent ] || fm_fake_version_tool "$fakebin" lavish-axi FM_FAKE_LAVISH_AXI_VERSION "$version"
+      # shellcheck disable=SC2086 # $flags is one or two fixed words.
+      PATH="$fakebin:$base" FM_HOME="$case_dir/home" \
+        "$ROOT/bin/fm-brief.sh" brief-lavish alpha $flags >/dev/null \
+        || fail "$label: scaffold failed"
+      brief="$case_dir/home/data/brief-lavish/brief.md"
+      if [ "$expect" = hosting ]; then
+        assert_grep "$hosting" "$brief" "$label: brief did not carry the Lavish arm rule"
+        assert_no_grep "$text_only" "$brief" "$label: brief withheld Lavish from a compatible build"
+      else
+        assert_grep "$text_only" "$brief" "$label: brief did not fall back to plain text"
+        assert_no_grep "$hosting" "$brief" "$label: brief offered a below-floor Lavish"
+      fi
+    done <<'ROWS'
 lavish-axi at the board compatibility floor^0.1.77^hosting
 lavish-axi below the reply feature floor^0.1.79^hosting
 lavish-axi at the reply feature floor^0.1.80^hosting
@@ -1200,7 +1208,8 @@ lavish-axi above the reply feature floor^0.2.0^hosting
 lavish-axi below the board compatibility floor^0.1.76^text
 absent lavish-axi^absent^text
 ROWS
-  pass "fm-brief.sh: scout Lavish hosting follows the bootstrap lavish-axi floor"
+  done
+  pass "fm-brief.sh: scout and ship Lavish arm rules follow the bootstrap lavish-axi floor"
 }
 
 # Scout and secondmate paths still scaffold well-formed briefs.
@@ -2084,7 +2093,7 @@ test_scout_and_secondmate_load_decision_hold_policy
 test_scout_completion_write_exception_is_task_scoped
 test_scout_and_secondmate_scaffold
 test_scout_files_brain_and_keeps_notes_with_report
-test_scout_lavish_line_follows_presentation_floor
+test_lavish_line_follows_presentation_floor
 test_inbox_listing_command_is_safe_on_empty_inbox
 test_workers_wait_without_spending_turns
 test_wait_no_turns_absent_keeps_the_previous_brief
