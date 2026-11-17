@@ -160,8 +160,8 @@ EOF
 
 # The registry is the captain's standing posture, so dropping below its rigor is
 # allowed but never silent, while matching or exceeding it stays quiet. An
-# unregistered project resolves to the same no-mistakes standing default
-# (AGENTS.md section 7), so a downgrade there is announced too. A conditional
+# unregistered project resolves to the direct-PR fallback (this fork retired
+# the no-mistakes pipeline), so a downgrade below it is announced too. A conditional
 # policy is excluded because both of its legs are legitimate classifications.
 test_spawn_notices_a_rigor_downgrade_against_the_registry() {
   local rec home proj fakebin out label mode registry expect registered n=0
@@ -190,7 +190,8 @@ no-mistakes project shipped local-only|- proj [no-mistakes] - fixture (added 202
 no-mistakes project shipped no-mistakes|- proj [no-mistakes] - fixture (added 2026-01-01)|no-mistakes|quiet|no-mistakes
 local-only project shipped no-mistakes|- proj [local-only] - fixture (added 2026-01-01)|no-mistakes|quiet|local-only
 conditional policy shipped direct-PR|- proj [no-mistakes-prod-only] - fixture (added 2026-01-01)|direct-PR|quiet|no-mistakes-prod-only
-unregistered project resolves to the no-mistakes standing default|- other [no-mistakes] - fixture (added 2026-01-01)|direct-PR|notice|no-mistakes
+unregistered project resolves to the direct-PR fallback|- other [no-mistakes] - fixture (added 2026-01-01)|local-only|notice|direct-PR
+unregistered project shipped direct-PR|- other [no-mistakes] - fixture (added 2026-01-01)|direct-PR|quiet|direct-PR
 ROWS
   pass "fm-spawn: a rigor downgrade against the registered posture is announced, never blocked"
 }
@@ -617,7 +618,7 @@ EOF
   [ "$out" = "direct-PR off" ] || fail "--raw altered a flat registered mode (got '$out')"
 
   out=$(FM_HOME="$home" "$PROJECT_MODE" typoproj 2>/dev/null)
-  [ "$out" = "no-mistakes off" ] || fail "a typo'd mode no longer falls back to the most rigorous default"
+  [ "$out" = "direct-PR off" ] || fail "a typo'd mode no longer falls back to the direct-PR default"
   err=$(FM_HOME="$home" "$PROJECT_MODE" typoproj 2>&1 >/dev/null)
   assert_contains "$err" "unknown mode" "a typo'd registry mode stopped warning"
   pass "fm-project-mode: the conditional policy is accepted, mapped for mechanical callers, and readable raw"
@@ -1342,7 +1343,7 @@ forge under the conditional policy|- fp [no-mistakes-prod-only forge=gerrit] - f
 an external review forge on direct-PR|- fp [direct-PR forge=external] - fixture (added 2026-01-01)|direct-PR off|external
 a project with no forge keeps yolo|- fp [direct-PR +yolo] - fixture (added 2026-01-01)|direct-PR on|none
 a keyed token that is not the forge is ignored|- fp [direct-PR owner=me] - fixture (added 2026-01-01)|direct-PR off|none
-an unregistered project|- other [direct-PR] - fixture (added 2026-01-01)|no-mistakes off|none
+an unregistered project|- other [direct-PR] - fixture (added 2026-01-01)|direct-PR off|none
 ROWS
 
   printf '%s\n' '- fp [no-mistakes-prod-only forge=gerrit] - fixture (added 2026-01-01)' > "$home/data/projects.md"
@@ -1398,21 +1399,21 @@ a misspelled forge value|- fp [no-mistakes forge=gerit] - fixture (added 2026-01
 an empty forge value|- fp [no-mistakes +yolo forge=] - fixture (added 2026-01-01)|forge=
 ROWS
 
-  while IFS='|' read -r label registry; do
+  while IFS='|' read -r label registry want; do
     [ -n "$label" ] || continue
     printf '%s\n' "$registry" > "$home/data/projects.md"
     out=$(FM_HOME="$home" "$PROJECT_MODE" fp 2>/dev/null) \
       || fail "$label: a token the parser never read became a refusal"
-    [ "$out" = "no-mistakes off" ] || fail "$label: expected the old tolerant 'no-mistakes off', got '$out'"
+    [ "$out" = "$want" ] || fail "$label: expected the tolerant '$want', got '$out'"
     out=$(FM_HOME="$home" "$PROJECT_MODE" --forge fp 2>/dev/null) \
       || fail "$label: --forge refused a token the parser never read"
     [ "$out" = none ] || fail "$label: an ignored token bound a forge ('$out')"
   done <<'ROWS'
-an unknown token beside the mode|- fp [no-mistakes +tomorrow] - fixture (added 2026-01-01)
-the forge key with a space|- fp [no-mistakes forge gerrit] - fixture (added 2026-01-01)
-a bare forge value in the mode slot|- fp [gerrit] - fixture (added 2026-01-01)
-a keyed token in the mode slot|- fp [owner=me] - fixture (added 2026-01-01)
-an annotation the line never closes|- fp [no-mistakes - fixture (added 2026-01-01)
+an unknown token beside the mode|- fp [no-mistakes +tomorrow] - fixture (added 2026-01-01)|no-mistakes off
+the forge key with a space|- fp [no-mistakes forge gerrit] - fixture (added 2026-01-01)|no-mistakes off
+a bare forge value in the mode slot|- fp [gerrit] - fixture (added 2026-01-01)|direct-PR off
+a keyed token in the mode slot|- fp [owner=me] - fixture (added 2026-01-01)|direct-PR off
+an annotation the line never closes|- fp [no-mistakes - fixture (added 2026-01-01)|no-mistakes off
 ROWS
   printf '%s\n' '- fp [gerrit] - fixture (added 2026-01-01)' > "$home/data/projects.md"
   err=$(FM_HOME="$home" "$PROJECT_MODE" fp 2>&1 >/dev/null)
@@ -1983,7 +1984,7 @@ EOF
   [ "$out" = "" ] || fail "an empty branch= override must resolve to an empty prefix, not fm/ (got '$out')"
 
   out=$(FM_HOME="$home" "$PROJECT_MODE" typomodeproj 2>/dev/null)
-  [ "$out" = "no-mistakes off" ] || fail "a typo'd mode's registered branch leaked into the mode/yolo output (got '$out')"
+  [ "$out" = "direct-PR off" ] || fail "a typo'd mode's registered branch leaked into the mode/yolo output (got '$out')"
   err=$(FM_HOME="$home" "$PROJECT_MODE" typomodeproj 2>&1 >/dev/null)
   assert_contains "$err" "unknown mode" "a typo'd mode with a branch override stopped warning"
   out=$(FM_HOME="$home" "$PROJECT_MODE" --branch-prefix typomodeproj 2>/dev/null)

@@ -110,8 +110,10 @@
 # tell a conditional policy apart from a flat mode sees "no-mistakes-prod-only"
 # itself. Not combined with --branch-prefix, which has no conditional-policy leg.
 #
-# An unknown/missing project or unknown mode falls back to "no-mistakes off" (or
-# "fm/" under --branch-prefix) and warns to stderr, so a typo never silently
+# An unknown/missing project or unknown mode falls back to "direct-PR off" (or
+# "fm/" under --branch-prefix) and warns to stderr; this fork retired the
+# no-mistakes pipeline, so the fallback opens a plain PR rather than a run no
+# daemon serves, and a typo still never silently
 # drops the gate. Other annotation tokens are ignored, as they always were, keyed
 # ones included: a `<key>=<value>` token whose key is none of `forge`, `branch`, and
 # `pr` resolves as it did before the forge existed, and in the mode slot it
@@ -156,11 +158,11 @@ esac
 NAME=${1:?usage: fm-project-mode.sh [--raw|--branch-prefix|--forge|--pr] <project-name>}
 
 if [ ! -f "$REG" ]; then
-  echo "warn: no registry at $REG; defaulting $NAME to no-mistakes off" >&2
+  echo "warn: no registry at $REG; defaulting $NAME to direct-PR off" >&2
   if [ "$BRANCH_PREFIX_QUERY" -eq 1 ]; then
     echo "fm/"
   elif [ "$WANT_FORGE" -eq 1 ]; then echo none
-  elif [ "$WANT_PR" -eq 1 ]; then echo auto; else echo "no-mistakes off"; fi
+  elif [ "$WANT_PR" -eq 1 ]; then echo auto; else echo "direct-PR off"; fi
   exit 0
 fi
 
@@ -229,11 +231,11 @@ parsed=$(awk -v n="$NAME" '
 ' "$REG")
 
 if [ -z "$parsed" ]; then
-  echo "warn: project \"$NAME\" not in registry; defaulting to no-mistakes off" >&2
+  echo "warn: project \"$NAME\" not in registry; defaulting to direct-PR off" >&2
   if [ "$BRANCH_PREFIX_QUERY" -eq 1 ]; then
     echo "fm/"
   elif [ "$WANT_FORGE" -eq 1 ]; then echo none
-  elif [ "$WANT_PR" -eq 1 ]; then echo auto; else echo "no-mistakes off"; fi
+  elif [ "$WANT_PR" -eq 1 ]; then echo auto; else echo "direct-PR off"; fi
   exit 0
 fi
 
@@ -255,7 +257,7 @@ forge=${rest_forge:-none}
 pr=${rest_pr:-auto}
 case "$mode" in
   no-mistakes|direct-PR|local-only|no-mistakes-prod-only) ;;
-  *) echo "warn: unknown mode \"$mode\" for $NAME; defaulting to no-mistakes off" >&2; mode=no-mistakes; yolo=off; branch=fm/ ;;
+  *) echo "warn: unknown mode \"$mode\" for $NAME; defaulting to direct-PR off" >&2; mode=direct-PR; yolo=off; branch=fm/ ;;
 esac
 case "$yolo" in on|off) ;; *) yolo=off ;; esac
 if [ "$BRANCH_PREFIX_QUERY" -eq 1 ]; then
