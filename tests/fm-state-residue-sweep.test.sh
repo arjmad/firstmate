@@ -1029,6 +1029,27 @@ test_bootstrap_runs_sweep_only_when_locked() {
   pass "bootstrap: the sweep runs on the locked deferred pass only and converges silently"
 }
 
+# The deferred worker wakes firstmate for any report line that is not
+# BOOTSTRAP_INFO, and the sweep now overlaps the helm's first turn, so a task set
+# a spawn holds must surface as information, as the watcher logs it, not a wake.
+test_bootstrap_reports_a_held_task_set_as_information() {
+  local home fb tmuxfb out holder
+  home=$(new_home boot-held); fb=$(make_toolchain "$TMP_ROOT/boot-held"); tmuxfb=$(make_tmux "$TMP_ROOT/boot-held")
+  touch "$home/state/.last-watcher-beat"
+  world "$home" "" ok zsh
+  seed_task_records "$home" being.spawned
+  holder=$(hold_task_set_lock "$home" "$TMP_ROOT/boot-held/ready")
+  out=$(run_bootstrap "$tmuxfb:$fb" "$home")
+  kill "$holder" 2>/dev/null
+  wait "$holder" 2>/dev/null
+  assert_contains "$out" "BOOTSTRAP_INFO: warning: state residue sweep: the task set is locked" \
+    "the deferred pass should report the held task set as information: $out"
+  if printf '%s\n' "$out" | grep -q '^warning: state residue sweep'; then
+    fail "the deferred pass relayed a sweep warning as an actionable line: $out"
+  fi
+  pass "bootstrap: a task set held during the deferred sweep is reported as information"
+}
+
 test_gone_endpoint_swept_and_live_kept
 test_live_without_record_never_queried_past_inventory
 test_ambiguous_and_unreadable_kept
@@ -1052,3 +1073,4 @@ test_watch_arm_scratch_rotates_unless_a_watcher_runs
 test_retired_task_state_swept_and_live_kept
 test_herdr_gone_pane_swept_live_and_stopped_server_handled
 test_bootstrap_runs_sweep_only_when_locked
+test_bootstrap_reports_a_held_task_set_as_information
