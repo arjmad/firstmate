@@ -491,8 +491,9 @@ adapter_self_announcing() {  # <adapter>
 }
 
 source_file()  { printf '%s/%s.source\n' "$REG" "$1"; }
+# Only the header before `argv:` holds fields; an argv line is listener data.
 source_field() {  # <source-id> <field>
-  sed -n "s/^$2=//p" "$(source_file "$1")" | head -1
+  sed -n -e '/^argv:$/q' -e "s/^$2=//p" "$(source_file "$1")" | head -1
 }
 source_kind() { source_field "$1" kind; }
 source_owner_task() { source_field "$1" owner_task; }
@@ -2011,6 +2012,8 @@ cmd_retire_quiet_boards() {
     set -- "$id" --if-matches "$adapter"
     [ -z "$adopted" ] || set -- "$@" --adopted-from "$adopted"
     if ! "$SCRIPT_DIR/fm-procevent.sh" retire "$@" -- "${ARGV[@]}" >/dev/null 2>&1; then
+      # A re-arm that landed after the identity check is a correct refusal.
+      [ "$(fm_pr_file_identity "$(source_file "$id")" 2>/dev/null)" = "$identity" ] || continue
       board_retire_log "board-retire-failed: $id reason=$reason"
       printf 'board-retire-failed: %s\n' "$id" >&2
       continue
