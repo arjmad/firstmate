@@ -168,6 +168,8 @@ printf '%s\n' '## Projects' '- typo [direct-PRR +yolo] - a mistyped mode (added 
 mkdir -p "$TMP_ROOT/typo" "$TMP_ROOT/empty" && mv "$TMP_ROOT/typo.md" "$TMP_ROOT/typo/projects.md"
 [ "$(FM_DATA_OVERRIDE="$TMP_ROOT/typo" "$PROJECT_MODE" typo 2>/dev/null)" = "direct-PR off" ] || fail "an unknown mode did not fall back to direct-PR"
 [ "$(FM_DATA_OVERRIDE="$TMP_ROOT/empty" "$PROJECT_MODE" any 2>/dev/null)" = "direct-PR off" ] || fail "a missing registry did not fall back to direct-PR"
+printf '%s\n' '## Projects' '- typo [no-mistake pr=manual] - a mistyped mode (added 2026-01-01)' > "$TMP_ROOT/typo/projects.md"
+[ "$(FM_DATA_OVERRIDE="$TMP_ROOT/typo" "$PROJECT_MODE" typo 2>/dev/null)" = "direct-PR off" ] || fail "an unknown mode with pr=manual was refused instead of falling back"
 pass "fm-project-mode: unlisted project, unknown mode, and missing registry fall back to direct-PR off"
 
 echo "# fm-project-mode.test.sh: all assertions passed"

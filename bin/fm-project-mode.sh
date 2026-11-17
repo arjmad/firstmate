@@ -113,8 +113,8 @@
 # An unknown/missing project or unknown mode falls back to "direct-PR off" (or
 # "fm/" under --branch-prefix) and warns to stderr; this fork retired the
 # no-mistakes pipeline, so the fallback opens a plain PR rather than a run no
-# daemon serves, and a typo still never silently
-# drops the gate. Other annotation tokens are ignored, as they always were, keyed
+# daemon serves; a typo is never silent, though it no longer keeps a gate, and
+# it drops a pr=manual binding so the fallback is never refused. Other annotation tokens are ignored, as they always were, keyed
 # ones included: a `<key>=<value>` token whose key is none of `forge`, `branch`, and
 # `pr` resolves as it did before the forge existed, and in the mode slot it
 # is read as an unknown mode. A key one or two edits from `forge` (such as
@@ -257,7 +257,7 @@ forge=${rest_forge:-none}
 pr=${rest_pr:-auto}
 case "$mode" in
   no-mistakes|direct-PR|local-only|no-mistakes-prod-only) ;;
-  *) echo "warn: unknown mode \"$mode\" for $NAME; defaulting to direct-PR off" >&2; mode=direct-PR; yolo=off; branch=fm/ ;;
+  *) echo "warn: unknown mode \"$mode\" for $NAME; defaulting to direct-PR off" >&2; mode=direct-PR; yolo=off; branch=fm/; pr=auto ;;
 esac
 case "$yolo" in on|off) ;; *) yolo=off ;; esac
 if [ "$BRANCH_PREFIX_QUERY" -eq 1 ]; then
