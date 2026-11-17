@@ -684,6 +684,12 @@ code_review_recorded_ids() {
 
 CODE_REVIEW_CARRY_LINES=10
 
+# The diff ids of trusted record comments that carry no carry marker.
+code_review_full_record_ids() {
+  gh api --paginate "repos/$FM_PR_OWNER/$FM_PR_REPO/issues/$FM_PR_NUMBER/comments" \
+    --jq '.[] | select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") | .body | gsub("\r"; "") | select(test("(^|\n)<!-- fm-code-review-carry ") | not) | capture("(^|\n)<!-- fm-code-review v1 diff=(?<id>[0-9a-f]{40,64}) head=[0-9a-f]{40,64} -->(\n|$)") | .id'
+}
+
 # The head of the last record comment from a trusted author that carries no
 # carry marker, or nothing when the PR has none.
 code_review_full_record_head() {
@@ -806,15 +812,11 @@ code_review_status() {
   esac
   code_review_gate_check || return 2
   # Enforce mode holds a pull request that edits its own gate until a record
-  # for its diff states the gate change, even one that would be exempt; once
-  # one does, in either mode, that record is what the status line reports.
-  if [ -n "$CODE_REVIEW_GATE_FILES" ]; then
-    if [ "$CODE_REVIEW_GATE_STATED" = 1 ]; then
-      verdict=code-changing
-    elif [ "$CODE_REVIEW_GATE_MODE" = enforce ]; then
-      gate=1
-      verdict=code-changing
-    fi
+  # for its diff states the gate change, even one that would be exempt, and
+  # then reports that record; observe mode keeps every verdict.
+  if [ -n "$CODE_REVIEW_GATE_FILES" ] && [ "$CODE_REVIEW_GATE_MODE" = enforce ]; then
+    verdict=code-changing
+    [ "$CODE_REVIEW_GATE_STATED" = 1 ] || gate=1
   fi
   gate_why="edits its own gate files ($CODE_REVIEW_GATE_FILES) and carries no code review record for it stating what the gate change loosens or tightens; record one with fm-code-review.sh record $FM_PR_URL --gate <statement>"
   if [ "$verdict" = exempt ]; then
@@ -847,7 +849,7 @@ code_review_status() {
 }
 
 code_review_record() {  # <note> <carry 0|1> <gate statement>
-  local note=$1 carry=$2 gate=$3 status=0 head head0='' body marker
+  local note=$1 carry=$2 gate=$3 status=0 head head0='' body marker full
   local line="Code review: Claude Code \`/code-review\` (medium) ran on this diff; each finding is posted inline and was fixed or answered in its thread."
   # A carry binds the diff it fingerprints, the head it measures, and the head
   # it records to one push: the head is read before and after both.
@@ -858,14 +860,25 @@ code_review_record() {  # <note> <carry 0|1> <gate statement>
   code_review_status || status=$?
   case "$status" in
     0)
-      if [ -n "$gate" ] && [ -n "$CODE_REVIEW_GATE_FILES" ] && [ "$CODE_REVIEW_GATE_STATED" = 0 ]; then
-        # Reviewed or exempt, but no record for this diff states its gate
-        # change yet: a full record at the same diff carries the statement.
-        carry=0
+      if [ -n "$gate" ] && [ -n "$CODE_REVIEW_GATE_FILES" ] && [ "$CODE_REVIEW_GATE_STATED" = 0 ] \
+        && [ "${CODE_REVIEW_LINE%%:*}" = reviewed ]; then
+        # Reviewed, but no record for this diff states its gate change yet:
+        # a record of the same kind at the same diff carries the statement, so
+        # a carried diff stays measured from its full review.
+        if ! full=$(code_review_full_record_ids); then
+          echo "error: could not read the comments of $FM_PR_URL" >&2
+          return 1
+        fi
+        carry=1
+        ! printf '%s\n' "$full" | grep -qxF -- "$CODE_REVIEW_DIFF_ID" || carry=0
+        if [ "$carry" = 1 ] && { ! head0=$(code_review_head) || ! fm_pr_head_valid "$head0"; }; then
+          echo "error: could not read the head commit of $FM_PR_URL" >&2
+          return 1
+        fi
       else
         [ -z "$note" ] || echo "warning: $FM_PR_URL needs no new record at this diff, so the note was not posted" >&2
         [ -z "$gate" ] || echo "warning: $FM_PR_URL needs no gate statement at this diff, so it was not posted" >&2
-        if [ -n "$CODE_REVIEW_GATE_FILES" ] && [ "$CODE_REVIEW_GATE_STATED" = 0 ]; then
+        if [ -n "$CODE_REVIEW_GATE_FILES" ] && [ "$CODE_REVIEW_GATE_STATED" = 0 ] && [ "${CODE_REVIEW_LINE%%:*}" = reviewed ]; then
           echo "warning: $FM_PR_URL edits its own gate files ($CODE_REVIEW_GATE_FILES); run record again with --gate <what the gate change loosens or tightens, or nothing loosened>" >&2
         fi
         code_review_print_status

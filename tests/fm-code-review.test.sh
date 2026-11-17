@@ -895,10 +895,32 @@ test_gate_self_edit_observe_keeps_verdicts_and_notes_would_block() {
     "exempt: "*$'\n'"gate-observe: $URL edits its own gate files (REVIEW.md) "*) ;;
     *) fail "gate-observe-exempt: got '$OUT'" ;;
   esac
-  run_case "$dir" record "$URL"
-  expect_code 0 "$RC" "gate-observe-exempt: record without --gate stays a no-op on an exempt diff"
-  assert_contains "$ERR" 'run record again with --gate' "gate-observe-exempt: record did not name --gate"
-  [ "$(jq length "$dir/comments.json")" = 0 ] || fail "gate-observe-exempt: record without --gate posted on an exempt diff"
+  # Nor does a statement post there: a record at an exempt diff would pose as
+  # a full review that later carries measure from.
+  run_case "$dir" record "$URL" --gate 'Nothing loosened: the rules only gain an item'
+  expect_code 0 "$RC" "gate-observe-exempt: record --gate stays a no-op on an exempt diff"
+  assert_contains "$ERR" 'needs no gate statement at this diff' "gate-observe-exempt: record did not say the statement was not posted"
+  [ "$(jq length "$dir/comments.json")" = 0 ] || fail "gate-observe-exempt: record --gate posted on an exempt diff"
+  case "$OUT" in
+    "exempt: "*$'\n'"gate-observe: "*) ;;
+    *) fail "gate-observe-exempt: after record --gate got '$OUT'" ;;
+  esac
+
+  # A diff its carry covers keeps a carry: the statement does not move the
+  # full review that later carries measure from.
+  dir=$(make_case gate-observe-carried check.sh)
+  id=$(diff_id "$dir")
+  full_record "$dir" "$REVIEWED_HEAD"
+  write_compare "$dir" ahead 'check.sh 2'
+  run_case "$dir" record "$URL" --carry
+  expect_code 0 "$RC" "gate-observe-carried: the follow-up should carry: $ERR"
+  run_case "$dir" record "$URL" --gate 'tightens: adds the shellcheck step; nothing loosened'
+  expect_code 0 "$RC" "gate-observe-carried: record --gate on a carried diff must post: $ERR"
+  [ "$OUT" = "reviewed: diff $id of $URL carries a code review record stating its gate change" ] \
+    || fail "gate-observe-carried: got '$OUT'"
+  jq -r '.[-1].body' "$dir/comments.json" > "$dir/body"
+  [ "$(sed -n 2p "$dir/body")" = "<!-- fm-code-review-carry from=$REVIEWED_HEAD lines=2 -->" ] \
+    || fail "gate-observe-carried: the statement record is not a carry from the full review: $(cat "$dir/body")"
 
   # A pull request off the gate prints the one line as before.
   dir=$(make_case gate-observe-none bin/tool.sh src/check.sh docs/check.sh.md)
