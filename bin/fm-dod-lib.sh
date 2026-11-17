@@ -946,7 +946,7 @@ fm_dod_accept_external_review_done() {  # <worktree> <project> <line> <meta>
 
 # 0 when this ship done: is one the named-head gate must accept or refuse.
 # no-mistakes pre-validation done: is the pipeline handoff and is not gated.
-# Empty mode is treated as no-mistakes, the unregistered-project default.
+# Empty mode is treated as no-mistakes, the legacy record default.
 fm_dod_should_gate_ship_done() {  # <kind> <mode> <line>
   local note
   [ "$1" = ship ] || return 1

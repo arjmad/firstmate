@@ -161,4 +161,15 @@ err=$(FM_DATA_OVERRIDE="$DATA" "$PROJECT_MODE" --pr hand-direct 2>&1 >/dev/null)
 assert_contains "$err" "only a no-mistakes ship takes it" "the direct-PR refusal did not say why"
 pass "fm-project-mode: pr=manual refuses another mode, a bound forge, an empty value, and an unknown value, but leaves --forge answerable"
 
+# This fork retired the no-mistakes pipeline, so every fallback - an unlisted
+# project, an unknown mode, and a missing registry - resolves to direct-PR.
+[ "$(run_mode not-registered)" = "direct-PR off" ] || fail "an unlisted project did not fall back to direct-PR: $(run_mode not-registered)"
+printf '%s\n' '## Projects' '- typo [direct-PRR +yolo] - a mistyped mode (added 2026-01-01)' > "$TMP_ROOT/typo.md"
+mkdir -p "$TMP_ROOT/typo" "$TMP_ROOT/empty" && mv "$TMP_ROOT/typo.md" "$TMP_ROOT/typo/projects.md"
+[ "$(FM_DATA_OVERRIDE="$TMP_ROOT/typo" "$PROJECT_MODE" typo 2>/dev/null)" = "direct-PR off" ] || fail "an unknown mode did not fall back to direct-PR"
+[ "$(FM_DATA_OVERRIDE="$TMP_ROOT/empty" "$PROJECT_MODE" any 2>/dev/null)" = "direct-PR off" ] || fail "a missing registry did not fall back to direct-PR"
+printf '%s\n' '## Projects' '- typo [no-mistake pr=manual] - a mistyped mode (added 2026-01-01)' > "$TMP_ROOT/typo/projects.md"
+[ "$(FM_DATA_OVERRIDE="$TMP_ROOT/typo" "$PROJECT_MODE" typo 2>/dev/null)" = "direct-PR off" ] || fail "an unknown mode with pr=manual was refused instead of falling back"
+pass "fm-project-mode: unlisted project, unknown mode, and missing registry fall back to direct-PR off"
+
 echo "# fm-project-mode.test.sh: all assertions passed"

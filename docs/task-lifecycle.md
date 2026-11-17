@@ -40,7 +40,7 @@ Resolve the project's registered ship-branch prefix the same way, via `bin/fm-pr
 When the work must start from and target a branch other than the project's default, such as a named feature or release branch, pass it to the ship or scout brief and spawn as `--base-branch <branch>`; any promotion reads it from task meta.
 When a ship must also change other registered projects, name each one to the brief and spawn as `--also <repo>`, so the same task gets a companion worktree of each and opens every companion PR itself (fork patch, `docs/fork-decisions.md` 2026-10-14); never dispatch a companion PR as a second task.
 On a `no-mistakes-prod-only` project, classify the task's surface: internal-only tooling, automation, contributor or operator process, and release or submission work ships `direct-PR`, while product-facing, mixed, and uncertain work ships `no-mistakes`; never infer internal-only from file location or project name.
-An unregistered project or absent registry resolves to `no-mistakes` with yolo off, and the registration gap goes to the captain.
+An unregistered project or absent registry resolves to `direct-PR` with yolo off (fork patch, `docs/fork-decisions.md` 2026-11-16), and the registration gap goes to the captain.
 Record the resulting mode, `yolo` merge posture, and the one-line reason for any deviation in the backlog item note.
 
 Treat file or subsystem overlap as a risk signal rather than an automatic reason to wait, and dispatch isolated work immediately with no concurrency cap when each change can be independently implemented and validated and the selected delivery path can reconcile ordinary rebases or conflicts.
