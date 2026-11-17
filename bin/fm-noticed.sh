@@ -5,7 +5,7 @@
 # Usage:
 #   fm-noticed.sh file noticed|idea <slug> --title <text> --why <text>
 #                 [--from <task-or-agent>] [--repo <name>] [--evidence <text>]
-#                 [--now] [--routine]
+#                 [--now] [--call ask-first|ruling|retire|machinery]
 #   fm-noticed.sh collect <task-id>
 #   fm-noticed.sh list [noticed|idea]
 #   fm-noticed.sh unseen
@@ -19,34 +19,42 @@
 #
 # AN ITEM IS ITS SLUG. The task id is noticed-<slug> or idea-<slug>, and the
 # backlog kind is noticed or idea, so `fm-tasks-axi.sh list --kind noticed`
-# finds them. An item is an ordinary captain hold through
-# bin/fm-captain-hold.sh (kind reversible), which keeps it out of dispatch,
-# unless it is filed --routine: then it is the fleet's own work, held for no
-# one (fork patch, docs/fork-decisions/2026-11-11-calls-grouped-by-what-it-takes.md).
+# finds them. A noticed item is routine by default: the fleet's own work,
+# held for no one. An idea, and a noticed item filed --call, is an ordinary
+# captain hold through bin/fm-captain-hold.sh (kind reversible), which keeps
+# it out of dispatch (fork patches,
+# docs/fork-decisions/2026-11-11-calls-grouped-by-what-it-takes.md and
+# docs/fork-decisions/2026-11-17-noticed-routine-default.md).
 # Nothing here ever starts work.
 #
 # file     File one item, or attach evidence to the item its slug already
 #          names. One line per call:
-#            filed: <id>       a new item, held for the captain
+#            filed: <id>       a new item
 #            matched: <id>     already open; a dated "Seen again" line was
 #                              added to its body
-#            reopened: <id>    a closed noticed item came back; it is re-held
-#                              (refiled fresh once Done retention archived it)
+#            reopened: <id>    a closed noticed item came back, routine or
+#                              re-held as this filing says (refiled fresh
+#                              once Done retention archived it)
 #            skipped: <id> (answered earlier)   a closed idea is never re-asked,
 #                              archived or not
-#          A filed or reopened noticed item joins the unseen list labelled
-#          `noticed`, where it waits for the Monday triage; an idea gets no unseen
-#          row, and the Monday sweep reads it from `list idea`. --now marks a noticed item urgent or
-#          doing harm (money, customers, account health, security): filed,
-#          matched or reopened, it joins the unseen list labelled `now`, the
-#          only label the wake drain prints, and an idea refuses it. Once
-#          `now`, a row stays `now` until marked shown. --routine files a
-#          noticed item firstmate will fix or drop on its own, an undoable
-#          change inside its authority that needs no decision of his: the row
-#          is not held, its owner is the fleet, and it joins no unseen list
-#          until `close --fixed` or `--dropped` lists it for the Monday
-#          triage (a --now row is still listed now); an idea refuses it. An
-#          open item filed again only gains its evidence, --routine or not.
+#          A noticed item is filed routine unless --call is given: firstmate
+#          fixes or drops it on its own, so the row is not held, its owner is
+#          the fleet, and it joins no unseen list until `close --fixed` or
+#          `--dropped` lists it for the Monday triage. --call <kind> holds a
+#          noticed item for the captain instead, naming the call it needs:
+#          ask-first (an ask-first action), ruling (a rule or ruling),
+#          retire (retiring a part) or machinery (adding new machinery); its
+#          hold reason records the kind, and a filed or reopened held item
+#          joins the unseen list labelled `noticed`, where it waits for the
+#          Monday triage. An idea is always held, gets no unseen row, and the
+#          Monday sweep reads it from `list idea`; it refuses --call. --now
+#          marks a noticed item urgent or doing harm (money, customers,
+#          account health, security), routine or held: filed, matched or
+#          reopened, it joins the unseen list labelled `now`, the only label
+#          the wake drain prints, and an idea refuses it. Once `now`, a row
+#          stays `now` until marked shown. --routine is accepted for older
+#          callers and changes nothing; it refuses an idea and --call. An
+#          open item filed again only gains its evidence, --call or not.
 #          --from names who saw it (a
 #          task id or an agent); one naming nova or sapna is refused, because
 #          Sapna's agents never file into this backlog. A body rewrite takes
@@ -204,14 +212,14 @@ append_body() {  # <id> <line>
   return "$rc"
 }
 
-hold_reason() {  # <kind> <title> <why> <from>
+hold_reason() {  # <kind> <title> <why> <from> [<call>]
   local label=Noticed
   [ "$1" = idea ] && label=Idea
-  printf '%s by %s on %s: %s Why it may matter: %s' "$label" "$4" "$TODAY" "$2" "$3"
+  printf '%s by %s on %s%s: %s Why it may matter: %s' "$label" "$4" "$TODAY" "${5:+ (call: $5)}" "$2" "$3"
 }
 
 cmd_file() {
-  local kind=${1:-} slug=${2:-} title='' why='' from=firstmate repo='' evidence='' now=0 routine=0 id show state
+  local kind=${1:-} slug=${2:-} title='' why='' from=firstmate repo='' evidence='' now=0 routine=0 old_routine=0 call='' call_given=0 id show state
   [ $# -ge 2 ] || refuse "file needs noticed|idea and a slug"
   shift 2
   while [ $# -gt 0 ]; do
@@ -222,14 +230,22 @@ cmd_file() {
       --repo) repo=${2-}; shift ;;
       --evidence) evidence=${2-}; shift ;;
       --now) now=1 ;;
-      --routine) routine=1 ;;
+      --call) call=${2-}; call_given=1; shift ;;
+      --routine) old_routine=1 ;;
       *) refuse "unknown option $1" ;;
     esac
     shift
   done
   case "$kind" in noticed | idea) ;; *) refuse "kind must be noticed or idea (got $kind)" ;; esac
   [ "$now" = 0 ] || [ "$kind" = noticed ] || refuse "--now marks an urgent noticed item; an idea waits for the Monday triage"
-  [ "$routine" = 0 ] || [ "$kind" = noticed ] || refuse "--routine files a noticed item firstmate fixes or drops; an idea waits for the Monday triage"
+  [ "$old_routine" = 0 ] || [ "$kind" = noticed ] || refuse "--routine files a noticed item firstmate fixes or drops; an idea waits for the Monday triage"
+  if [ "$call_given" = 1 ]; then
+    case "$call" in ask-first | ruling | retire | machinery) ;; *) refuse "--call must be ask-first, ruling, retire or machinery (got $call)" ;; esac
+    [ "$kind" = noticed ] || refuse "--call holds a noticed item; every idea is already held for the captain"
+    [ "$old_routine" = 0 ] || refuse "--call holds the item for the captain; --routine files it as the fleet's"
+  fi
+  # A noticed item is routine unless --call names the call it needs from him.
+  [ "$kind" = noticed ] && [ -z "$call" ] && routine=1
   valid_slug "$slug" || refuse "slug must be lowercase-kebab (got $slug)"
   one_line --title "$title"
   one_line --why "$why"
@@ -272,7 +288,7 @@ cmd_file() {
     fi
     # Reopened rows are dispatchable until held, so hold at once, and close
     # the row again if the hold fails.
-    if ! "$HOLD" hold "$id" --kind reversible --reason "$(hold_reason "$kind" "$title" "$why" "$from")" >/dev/null; then
+    if ! "$HOLD" hold "$id" --kind reversible --reason "$(hold_reason "$kind" "$title" "$why" "$from" "$call")" >/dev/null; then
       "$TASKS" "done" "$id" >/dev/null 2>&1 \
         || echo "fm-noticed: $id is reopened but unheld; hold or close it before anything dispatches" >&2
       echo "fm-noticed: could not re-hold $id" >&2
@@ -311,7 +327,7 @@ Routine: firstmate fixes or drops this on its own." >/dev/null \
   fi
   "$TASKS" add "$id" "$title" --kind "$kind" ${repo:+--repo "$repo"} --body "$body" >/dev/null \
     || { echo "fm-noticed: could not add $id" >&2; exit 1; }
-  "$HOLD" hold "$id" --kind reversible --reason "$(hold_reason "$kind" "$title" "$why" "$from")" >/dev/null \
+  "$HOLD" hold "$id" --kind reversible --reason "$(hold_reason "$kind" "$title" "$why" "$from" "$call")" >/dev/null \
     || { echo "fm-noticed: $id was added but could not be held; hold it with bin/fm-captain-hold.sh before anything dispatches" >&2; exit 1; }
   grep -Fxq -- "$id" "$FILED" 2>/dev/null || printf '%s\n' "$id" >> "$FILED"
   [ "$kind" = noticed ] && list_noticed "$id" "$title" "$now"
