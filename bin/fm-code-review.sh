@@ -103,7 +103,7 @@
 # read. Any other mode reads as enforce, with a warning.
 #
 # The review's instructions are layered (fork patch,
-# docs/fork-decisions/2026-11-17-review-md-and-severity.md): the fleet-wide
+# docs/fork-decisions/2026-11-17-review-md-layering.md): the fleet-wide
 # merge-gate focus, then the repository's REVIEW.md as committed on the pull
 # request's base branch, never the pull request's own copy, which local
 # /code-review does not read on its own. The reviewer checks only the
@@ -119,12 +119,6 @@
 # reaches it is skipped entirely; each skip is said on stderr and in the
 # prompt. A base branch with no REVIEW.md leaves the review prompt unchanged,
 # and one that cannot be read fails the review.
-#
-# The focus asks each finding to open with its severity: Important (the
-# author fixes or answers it), Nit (at most 3, needing no answer), or
-# Pre-existing (never charged to the author). Only Important findings bind
-# the record: the worker records once every Important finding is fixed or
-# answered.
 #
 # GitHub only: the findings post to GitHub pull requests, so a GitLab or
 # Forgejo URL is refused here and bin/fm-pr-merge.sh does not apply the guard
@@ -410,37 +404,30 @@ code_review_tier() {
 # because the skill folds its arguments into one review-target line anyway.
 code_review_focus() {
   cat <<EOF
-Merge-gate focus for this review: the author must fix or answer in writing every Important finding you report, and many past findings here were declined. These rules remove the kinds of finding that authors decline; they do not raise the bar for a real defect. Keep hunting correctness bugs and wrong instructions with full recall, and report every one that survives the rules below, up to the cap; spend the room these rules free on correctness: before you finish, go over each changed function, each removed line, and each changed procedure step once more for a defect you have not listed.
+Merge-gate focus for this review: the author must fix or answer in writing every finding you report, and many past findings here were declined. These rules remove the kinds of finding that authors decline; they do not raise the bar for a real defect. Keep hunting correctness bugs and wrong instructions with full recall, and report every one that survives the rules below, up to the cap; spend the room these rules free on correctness: before you finish, go over each changed function, each removed line, and each changed procedure step once more for a defect you have not listed.
 1. A finding is something that makes code, configuration, or an executed document (a skill, procedure, agent contract, or record that an agent acts on) do the wrong thing in ordinary use, or a document statement that is false and would lead its reader to a wrong action. For a document agents follow step by step, an agent applying a step literally is ordinary use, so a step that omits, contradicts, or misstates what the rest of the system requires is a finding even when a general rule elsewhere says otherwise.
 2. Skip the cleanup, altitude, and preference angles entirely: duplication or reuse of a helper, simplification, refactoring, naming, wording, line wrapping, style, a fix at a different depth, and cost or speed unless it makes something fail or time out in ordinary use.
 3. Skip test-quality findings (a weak, flaky, or missing test, an unfaithful stub, a misleading test label) unless a test now passes while the behavior it covers is broken.
 4. Skip defensive hardening (a fallback, validation, or a guard) for an input, platform, tool version, or future caller that nothing in the repository shows occurs; when the finding needs such a trigger, look for its producer or caller first and drop it if there is none. A network call that hangs or fails, another process or a concurrent run, a stuck or dead process, and records or state written before this change are ordinary triggers, not speculative ones.
 5. Read the pull request's title and description before judging intent: run gh pr view $FM_PR_NUMBER --repo $FM_PR_HOST/$FM_PR_OWNER/$FM_PR_REPO --json title,body. Behavior that the description, or a spec, decision, or record it cites, states as intended is not a finding unless it breaks something that text does not account for.
 6. Before you report that something is missing or unguarded, check the callers, wrappers, and owning documents outside the changed lines; drop it only when you can cite the code or step that already prevents the failure on the path this change affects.
-7. Report a problem in unchanged code as Important only when this diff introduces it, exposes it, or makes it reachable; otherwise report it only as Pre-existing, and only when it is a correctness defect in code this diff changes or calls.
+7. Report a problem in unchanged code only when this diff introduces it, exposes it, or makes it reachable.
 8. A clear violation of a written rule in a CLAUDE.md or AGENTS.md that governs the changed file is still a finding when you can quote the rule and the line that breaks it.
 9. Evidence: every claim a finding makes about how code or a document behaves cites the file:line in the source that shows it, read rather than inferred from a name; drop a finding whose claim rests on what a name, a comment, or a convention suggests.
 10. Do not report what the repository's own gate already enforces (its ./check.sh, with its lint, format, type, and document-size checks), nor anything in generated files or lockfiles.
-11. Severity: begin each finding's summary with its severity and a colon. Important: a finding under rule 1 that this diff introduces, exposes, or makes reachable; the author must fix or answer it. Nit: real but minor, never blocking and needing no answer; report at most 3, the most useful. Pre-existing: a real defect that predates this diff and that it does not make reachable, reported for information only and never charged to the author.
 EOF
 }
 
 CODE_REVIEW_POSTED_INLINE=0
 CODE_REVIEW_POSTED_GENERAL=0
-CODE_REVIEW_IMPORTANT=0
-CODE_REVIEW_NITS=0
-CODE_REVIEW_NITS_DROPPED=0
-CODE_REVIEW_PREEXISTING=0
 # Posts each finding of a JSON findings array file as an inline comment on
 # the PR's head, or as a general PR comment naming its file and line when
 # GitHub refuses the inline one (a line outside the diff, a path outside the
 # repository). A `<!--` in the reviewer's text becomes `< !--`, so a finding can
-# never pose as a record marker. Each finding keeps the severity its summary
-# opens with (Important, Nit, or Pre-existing, the focus's rule 11); one with
-# none is posted as Important, and Nits past the first 3 are not posted.
-# Returns 1 when any finding could not be posted either way.
+# never pose as a record marker. Returns 1 when any finding could not be
+# posted either way.
 code_review_post_findings() {  # <findings-file>
-  local findings=$1 head top count i finding severity path line body err failed=0
+  local findings=$1 head top count i finding path line body err failed=0
   if ! head=$(code_review_head) || ! fm_pr_head_valid "$head"; then
     echo "error: could not read the head commit of $FM_PR_URL, so no finding was posted" >&2
     return 1
@@ -452,27 +439,12 @@ code_review_post_findings() {  # <findings-file>
   while [ "$i" -lt "$count" ]; do
     finding=$(jq -c ".[$i]" "$findings")
     i=$((i + 1))
-    # The severity the focus asks each summary to open with; a finding
-    # without one counts as Important, so nothing unlabeled goes unanswered.
-    severity=$(printf '%s' "$finding" | jq -r '(.summary // "" | tostring) as $s | ($s | capture("^[[:space:]*_]*(?<s>important|nit|pre-existing)[[:space:]*_]*:"; "i") | .s | ascii_downcase) // ""')
-    case $severity in
-      nit)
-        if [ "$CODE_REVIEW_NITS" -ge 3 ]; then
-          CODE_REVIEW_NITS_DROPPED=$((CODE_REVIEW_NITS_DROPPED + 1))
-          continue
-        fi
-        CODE_REVIEW_NITS=$((CODE_REVIEW_NITS + 1))
-        ;;
-      pre-existing) CODE_REVIEW_PREEXISTING=$((CODE_REVIEW_PREEXISTING + 1)) ;;
-      *) CODE_REVIEW_IMPORTANT=$((CODE_REVIEW_IMPORTANT + 1)) ;;
-    esac
     path=$(printf '%s' "$finding" | jq -r '.file // "" | tostring')
     [ -z "$top" ] || path=${path#"$top"/}
     path=${path#./}
     line=$(printf '%s' "$finding" | jq -r '.line // "" | tostring')
     body=$(printf '%s' "$finding" | jq -r '[(.summary // "" | tostring), (.failure_scenario // "" | tostring | select(. != "") | "Failure scenario: " + .)] | map(select(. != "")) | join("\n\n")')
     body=${body//<!--/< !--}
-    [ -n "$severity" ] || body="Important: $body"
     case "$line" in
       ''|0|*[!0-9]*) ;;
       *)
@@ -541,7 +513,7 @@ code_review_run() {  # <model>
   fi
   rc=0
   code_review_post_findings "$findings" || rc=1
-  echo "posted: $CODE_REVIEW_POSTED_INLINE inline and $CODE_REVIEW_POSTED_GENERAL general comments for $(jq 'length' "$findings") findings on $FM_PR_URL ($CODE_REVIEW_IMPORTANT Important, $CODE_REVIEW_NITS Nit, $CODE_REVIEW_PREEXISTING Pre-existing; $CODE_REVIEW_NITS_DROPPED Nit past the cap of 3 not posted)"
+  echo "posted: $CODE_REVIEW_POSTED_INLINE inline and $CODE_REVIEW_POSTED_GENERAL general comments for $(jq 'length' "$findings") findings on $FM_PR_URL"
   rm -f "$findings"
   if [ "$rc" -ne 0 ]; then
     echo "error: a finding could not be posted; the review output is in $out" >&2
@@ -877,7 +849,7 @@ code_review_status() {
 
 code_review_record() {  # <note> <carry 0|1> <gate statement>
   local note=$1 carry=$2 gate=$3 status=0 head head0='' body marker
-  local line="Code review: Claude Code \`/code-review\` (medium) ran on this diff; each finding is posted on the PR, and each Important one was fixed or answered in its thread, while a Nit or Pre-existing finding needs no answer."
+  local line="Code review: Claude Code \`/code-review\` (medium) ran on this diff; each finding is posted inline and was fixed or answered in its thread."
   # A carry binds the diff it fingerprints, the head it measures, and the head
   # it records to one push: the head is read before and after both.
   if [ "$carry" = 1 ] && { ! head0=$(code_review_head) || ! fm_pr_head_valid "$head0"; }; then

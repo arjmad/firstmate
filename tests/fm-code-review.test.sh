@@ -462,7 +462,7 @@ OUT
   jq -r '.[0].body' "$dir/inline.json" | grep -qx 'Failure scenario: run it and it prints new' \
     || fail "review: the inline body does not carry the failure scenario"
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-  jq -r '.[0].body' "$dir/comments.json" | grep -q '^`bin/tool.sh:99`: Important: a line outside the diff' \
+  jq -r '.[0].body' "$dir/comments.json" | grep -q '^`bin/tool.sh:99`: a line outside the diff' \
     || fail "review: a refused inline finding did not fall back to a general comment naming its file and line"
   ! jq -r '.[].body' "$dir/inline.json" "$dir/comments.json" | grep -q '<!--' \
     || fail "review: a finding's text kept a marker opener"
@@ -1128,33 +1128,6 @@ test_review_md_includes_follow_the_service_rules() {
   pass "fm-code-review includes REVIEW.md's @ files one level deep within the service's file and byte limits"
 }
 
-# shellcheck disable=SC2016  # the backticks are Markdown fences, not expansion
-test_review_posts_severity_and_caps_nits() {
-  local dir
-  dir=$(make_case severity bin/tool.sh)
-  make_claude "$dir"
-  cat > "$dir/claude-out" <<'OUT'
-```json
-[
-  {"file": "bin/tool.sh", "line": 2, "summary": "Important: echo prints the wrong word"},
-  {"file": "bin/tool.sh", "line": 2, "summary": "**Nit**: one"},
-  {"file": "bin/tool.sh", "line": 2, "summary": "nit: two"},
-  {"file": "bin/tool.sh", "line": 2, "summary": "Nit: three"},
-  {"file": "bin/tool.sh", "line": 2, "summary": "Nit: four"},
-  {"file": "bin/tool.sh", "line": 2, "summary": "Pre-existing: old bug"},
-  {"file": "bin/tool.sh", "line": 2, "summary": "no label at all"}
-]
-```
-OUT
-  run_review "$dir" "$URL" --model claude-opus-5-5
-  expect_code 0 "$RC" "severity: the review should post: $ERR"
-  assert_contains "$OUT" "for 7 findings on $URL (2 Important, 3 Nit, 1 Pre-existing; 1 Nit past the cap of 3 not posted)" "severity: wrong counts: $OUT"
-  [ "$(jq length "$dir/inline.json")" = 6 ] || fail "severity: a Nit past the cap was posted"
-  ! jq -r '.[].body' "$dir/inline.json" | grep -q 'four' || fail "severity: the fourth Nit was posted"
-  jq -r '.[-1].body' "$dir/inline.json" | grep -qx 'Important: no label at all' || fail "severity: an unlabeled finding was not posted as Important"
-  pass "fm-code-review review posts each finding's severity, an unlabeled one as Important, and at most 3 Nits"
-}
-
 test_classify_exempts_records_receipts_data_seed_and_markdown_only
 test_status_with_a_table_asks_the_classifier_for_the_tier
 test_status_with_a_table_fails_closed
@@ -1175,4 +1148,3 @@ test_gate_self_edit_enforce_holds_until_the_record_states_the_change
 test_gate_self_edit_under_a_table
 test_review_reads_review_md_from_the_base_branch
 test_review_md_includes_follow_the_service_rules
-test_review_posts_severity_and_caps_nits

@@ -2240,7 +2240,7 @@ require_code_review() {
       return 1
       ;;
   esac
-  echo "error: run Claude Code's /code-review headless on the pinned model with bin/fm-code-review.sh review $URL --model <config/code-review-model, default claude-opus-5-5>, which posts its findings to the PR, fix or answer each Important finding (a Nit or Pre-existing one needs no answer), then record it with bin/fm-code-review.sh record $URL (docs/task-lifecycle.md); only an explicit captain instruction may pass --waive-review <reason>" >&2
+  echo "error: run Claude Code's /code-review headless on the pinned model with bin/fm-code-review.sh review $URL --model <config/code-review-model, default claude-opus-5-5>, which posts its findings to the PR, fix or answer each finding, then record it with bin/fm-code-review.sh record $URL (docs/task-lifecycle.md); only an explicit captain instruction may pass --waive-review <reason>" >&2
   return 1
 }
 
