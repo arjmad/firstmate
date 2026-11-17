@@ -852,8 +852,9 @@ code_review_record() {  # <note> <carry 0|1> <gate statement>
   local note=$1 carry=$2 gate=$3 status=0 head head0='' body marker full ids
   local line="Code review: Claude Code \`/code-review\` (medium) ran on this diff; each finding is posted inline and was fixed or answered in its thread."
   # A carry binds the diff it fingerprints, the head it measures, and the head
-  # it records to one push: the head is read before and after both.
-  if [ "$carry" = 1 ] && { ! head0=$(code_review_head) || ! fm_pr_head_valid "$head0"; }; then
+  # it records to one push: the head is read before and after both. A gate
+  # statement may become a carry below, so it reads the head first too.
+  if { [ "$carry" = 1 ] || [ -n "$gate" ]; } && { ! head0=$(code_review_head) || ! fm_pr_head_valid "$head0"; }; then
     echo "error: could not read the head commit of $FM_PR_URL" >&2
     return 1
   fi
@@ -897,10 +898,6 @@ code_review_record() {  # <note> <carry 0|1> <gate statement>
     if printf '%s\n' "$ids" | grep -qxF -- "$CODE_REVIEW_DIFF_ID" \
       && ! printf '%s\n' "$full" | grep -qxF -- "$CODE_REVIEW_DIFF_ID"; then
       carry=1
-      if ! head0=$(code_review_head) || ! fm_pr_head_valid "$head0"; then
-        echo "error: could not read the head commit of $FM_PR_URL" >&2
-        return 1
-      fi
     fi
   fi
   if ! head=$(code_review_head) || ! fm_pr_head_valid "$head"; then
