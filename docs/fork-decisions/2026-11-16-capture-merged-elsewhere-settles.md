@@ -1,0 +1,8 @@
+2026-11-16: Arjun's 2026-11-11 calls rule had the main firstmate settle proposal 7 of the 2026-11-16 bad-pattern reflect: after a capture PR lands, the fleet sync itself settles and fast-forwards the capture checkout, whoever merged it.
+Decision: the ordinary and scheduled sync run the capture command's `--settle` once per landed edit state for a capture checkout held only by edits under its capture directory, strictly behind an origin that changed one of those paths, and fast-forward it when that leaves it clean.
+Why: only `bin/fm-capture-land.sh` ran the settle form, so a capture PR merged by any other path left its capture checkout behind origin, reading `live edits wait for the scheduled capture:` with no wake, until the next capture landed through that command.
+Edits origin does not hold yet still hold the fast-forward, as before.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| The sync settles a capture checkout whose edits a merged capture PR already holds, whoever merged it, once per landed edit state, before any capture starts, and fast-forwards it in the same run | `bin/fm-fleet-sync.sh` (header, `capture_paths_only`, `capture_fingerprint`, `settle_capture`, `run_settle`, `landed_paths`, `landed_state`, `settle_landed_capture`, `fast_forward_clone`), `tests/fm-fleet-sync.test.sh` (`build_capture_live`, `test_capture_merged_elsewhere_settles_and_fast_forwards`, `test_merged_elsewhere_settle_keeps_unlanded_edits`, `test_failed_ordinary_settle_wakes_once_and_is_not_rerun`, `test_settle_capture_waits_then_settles_and_fast_forwards`), `docs/configuration.md` live-checkouts section | `bin/fm-fleet-sync.sh` (header, `fast_forward_clone`) | carried | 427056c4 |

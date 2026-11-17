@@ -993,7 +993,10 @@ test_live_checkouts_scoped_by_project_and_tilde() {
 # build_capture_live <home> <name>: a live checkout whose origin also holds
 # skills/a.md, plus <home>/capture-<name>.sh, a capture command that appends its
 # working directory and process group to <home>/captures-<name> and then waits
-# while <home>/capture-hold-<name> exists. Echoes the checkout path.
+# while <home>/capture-hold-<name> exists. Its --settle keeps the real capture
+# commands' contract instead: it appends to <home>/settles-<name>, restores each
+# edited path under skills/ whose text origin/main already holds, and prints
+# "settled <path>" for it. Echoes the checkout path.
 build_capture_live() {
   local home=$1 name=$2 live
   live=$(build_live "$home" "$name")
@@ -1003,6 +1006,14 @@ build_capture_live() {
   git -C "$live" pull -q --ff-only
   cat > "$home/capture-$name.sh" <<SCRIPT
 #!/usr/bin/env bash
+if [ "\${1:-}" = --settle ]; then
+  echo settle >> '$home/settles-$name'
+  git diff --name-only HEAD -- skills/ | while IFS= read -r p; do
+    [ "\$(git hash-object -- "\$p")" = "\$(git rev-parse --verify --quiet "origin/main:\$p")" ] || continue
+    git checkout -q HEAD -- "\$p" && echo "settled \$p"
+  done
+  exit 0
+fi
 printf '%s %s\n' "\$(pwd -P)" "\$(ps -o pgid= -p \$\$ | tr -d ' ')" >> '$home/captures-$name'
 while [ -e '$home/capture-hold-$name' ]; do sleep 0.1; done
 SCRIPT
@@ -1290,6 +1301,134 @@ SCRIPT
   pass "the settle form still settles and fast-forwards a capture-start=off checkout"
 }
 
+# land_live_edit <home> <name> <live> <path>: merge the checkout's live text of
+# <path> on origin the way a capture PR merged by hand does, without
+# bin/fm-capture-land.sh and so without its settle form.
+land_live_edit() {
+  local home=$1 name=$2 live=$3 path=$4
+  cp "$live/$path" "$home/work-$name/$path"
+  git -C "$home/work-$name" commit -qam "capture merged outside fm-capture-land"
+  git -C "$home/work-$name" push -q origin main
+}
+
+test_capture_merged_elsewhere_settles_and_fast_forwards() {
+  local home live cmd out start pending
+  for start in off sync; do
+    home=$(isolated_home)
+    live=$(build_capture_live "$home" nova)
+    cmd="$home/capture-nova.sh"
+    printf 'live edit\n' >> "$live/skills/a.md"
+    land_live_edit "$home" nova "$live" skills/a.md
+    advance_origin "$home" nova C1
+    live_config "$home" "nova $live capture=skills/:$cmd capture-start=$start echo ran >> '$home/post-nova'"
+    pending="$home/state/fleet-sync-stuck"
+
+    out=$(run_sync "$home" nova)
+    assert_contains "$out" "nova live $live: settled: $cmd --settle restored 1 path(s) origin already holds" \
+      "capture-start=$start: the plain sync settles the edits a capture merged elsewhere landed"
+    assert_contains "$out" "nova live $live: synced" "capture-start=$start: the settled checkout fast-forwards"
+    assert_equals "$(git -C "$home/work-nova" rev-parse HEAD)" "$(head_sha "$live")" "capture-start=$start: the checkout is at origin"
+    assert_equals "" "$(git -C "$live" status --porcelain)" "capture-start=$start: the checkout is clean"
+    assert_contains "$(cat "$live/skills/a.md")" "live edit" "capture-start=$start: the landed edit is live"
+    assert_equals 1 "$(runs_of "$home/post-nova")" "capture-start=$start: the post-update command ran for the new HEAD"
+    assert_equals 0 "$(runs_of "$home/captures-nova")" "capture-start=$start: no capture started"
+
+    run_scheduled "$home"
+    assert_equals 1 "$(runs_of "$home/settles-nova")" "capture-start=$start: a current clean checkout settles nothing more"
+    [ ! -e "$pending" ] || fail "capture-start=$start: a capture merged elsewhere must not wake firstmate: $(cat "$pending")"
+  done
+  pass "a capture PR merged outside fm-capture-land is settled and fast-forwarded by the ordinary sync"
+}
+
+test_merged_elsewhere_settle_keeps_unlanded_edits() {
+  local home live cmd out pending kept
+  home=$(isolated_home)
+  live=$(build_capture_live "$home" nova)
+  cmd="$home/capture-nova.sh"
+  commit_file "$home/work-nova" skills/b.md v0 "skill b"
+  git -C "$home/work-nova" push -q origin main
+  git -C "$live" pull -q --ff-only
+  printf 'live edit\n' >> "$live/skills/a.md"
+  land_live_edit "$home" nova "$live" skills/a.md
+  printf 'unlanded edit\n' >> "$live/skills/b.md"
+  kept="$home/b.kept"
+  cp "$live/skills/b.md" "$kept"
+  live_config "$home" "nova $live capture=skills/:$cmd capture-start=off"
+  pending="$home/state/fleet-sync-stuck"
+
+  out=$(run_sync "$home" nova)
+  assert_not_equals "$(git -C "$home/work-nova" rev-parse HEAD)" "$(head_sha "$live")" "an unlanded edit still holds the fast-forward"
+  assert_equals "$(git -C "$home/work-nova" show HEAD:skills/a.md)" "$(cat "$live/skills/a.md")" "the landed path keeps origin's text"
+  cmp -s "$kept" "$live/skills/b.md" || fail "the unlanded edit must survive byte for byte"
+  assert_contains "$out" "nova live $live: live edits wait for the scheduled capture: 2 uncommitted path(s) under skills/ only, 1 commits behind origin/main" \
+    "a held settle still reads as waiting for the scheduled capture"
+  assert_not_contains "$out" "STUCK" "a held settle is not STUCK"
+
+  run_scheduled "$home"
+  run_scheduled "$home"
+  assert_equals 1 "$(runs_of "$home/settles-nova")" "an unchanged edit state is settled once"
+  [ ! -e "$pending" ] || fail "a held settle must not wake firstmate: $(cat "$pending")"
+  cmp -s "$kept" "$live/skills/b.md" || fail "the unlanded edit must still survive byte for byte"
+
+  printf 'more unlanded edit\n' >> "$live/skills/b.md"
+  run_scheduled "$home"
+  assert_equals 1 "$(runs_of "$home/settles-nova")" "a further edit to a path origin never changed settles nothing more"
+
+  printf 'local edit\n' >> "$live/file.txt"
+  out=$(run_sync "$home" nova)
+  assert_contains "$out" "nova live $live: STUCK: on branch main with uncommitted changes" "an edit outside the capture dir stays STUCK"
+  assert_equals 1 "$(runs_of "$home/settles-nova")" "an edit outside the capture dir runs no settle"
+
+  git -C "$live" checkout -q -- file.txt skills/b.md
+  out=$(run_sync "$home" nova)
+  assert_contains "$out" "nova live $live: settled: $cmd --settle restored 1 path(s) origin already holds" \
+    "once the unlanded edit clears, the landed one settles"
+  assert_equals "$(git -C "$home/work-nova" rev-parse HEAD)" "$(head_sha "$live")" "and the checkout fast-forwards"
+  assert_equals "" "$(git -C "$live" status --porcelain)" "the checkout is clean"
+  pass "the ordinary sync's settle keeps unlanded edits, runs once per edit state, and never runs beside unrelated edits"
+}
+
+test_failed_ordinary_settle_wakes_once_and_is_not_rerun() {
+  local home live cmd log pending
+  home=$(isolated_home)
+  live=$(build_capture_live "$home" nova)
+  cmd="$home/bad-settle-nova.sh"
+  cat > "$cmd" <<SCRIPT
+#!/usr/bin/env bash
+echo "\$1" >> '$home/bad-settles-nova'
+echo "skill-capture: HEAD is not on origin/main" >&2
+exit 1
+SCRIPT
+  chmod +x "$cmd"
+  printf 'live edit\n' >> "$live/skills/a.md"
+  land_live_edit "$home" nova "$live" skills/a.md
+  live_config "$home" "nova $live capture=skills/:$cmd capture-start=off"
+  log="$home/state/.fleet-sync-scheduled.log"
+  pending="$home/state/fleet-sync-stuck"
+
+  run_scheduled "$home"
+  run_scheduled "$home"
+  assert_equals 1 "$(runs_of "$home/bad-settles-nova")" "a failed settle is not rerun for the same state"
+  assert_contains "$(cat "$log")" "nova live $live: STUCK: $cmd --settle failed (exit 1) - needs attention; last output: skill-capture: HEAD is not on origin/main" \
+    "later runs repeat the failure"
+  assert_equals 1 "$(grep -c -- '--settle failed (exit 1)' "$pending" 2>/dev/null || true)" "the failure wakes firstmate once"
+  assert_contains "$(cat "$live/skills/a.md")" "live edit" "the live edit is kept"
+
+  rm -f "$pending"
+  advance_origin "$home" nova C1
+  run_scheduled "$home"
+  assert_equals 2 "$(runs_of "$home/bad-settles-nova")" "a new origin commit retries the settle"
+  [ ! -e "$pending" ] || fail "a repeated settle failure must not wake firstmate again: $(cat "$pending")"
+
+  printf 'unlanded edit\n' >> "$live/skills/b.md"
+  cp "$home/capture-nova.sh" "$cmd"
+  out=$(run_sync "$home" --settle-capture nova)
+  assert_contains "$out" "nova live $live: settle held:" "once the command is fixed, the settle form reruns it"
+  out=$(run_sync "$home" nova)
+  assert_not_contains "$out" "--settle failed" "the settle form clears the recorded failure"
+  pass "a failed ordinary settle wakes once, is rerun only for a new state, keeps the live edit, and the settle form clears it"
+}
+
 test_capture_skips_edits_outside_its_dir() {
   local home live out
   home=$(new_home)
@@ -1328,15 +1467,16 @@ echo capture >> '$home/captures-settler'
 while [ -e '$home/capture-hold-settler' ]; do sleep 0.1; done
 SCRIPT
   chmod +x "$cmd"
-  # The capture merged: origin holds the live edit, which still sits uncommitted.
-  printf 'v1\n' > "$home/work-settler/skills/a.md"
-  git -C "$home/work-settler" commit -qam "capture merged"
-  git -C "$home/work-settler" push -q origin main
   printf 'v1\n' > "$live/skills/a.md"
   live_config "$home" "settler $live capture=skills/:$cmd"
   : > "$home/capture-hold-settler"
   out=$(run_sync "$home" settler)
-  assert_contains "$out" "capturing:" "the merge's own sync starts a capture for the new edit state"
+  assert_contains "$out" "capturing:" "the sync starts a capture for the live edit"
+  # The capture merged while it still runs: origin holds the live edit, which
+  # still sits uncommitted.
+  printf 'v1\n' > "$home/work-settler/skills/a.md"
+  git -C "$home/work-settler" commit -qam "capture merged"
+  git -C "$home/work-settler" push -q origin main
 
   out=$(FM_CAPTURE_SETTLE_WAIT_SECS=0 run_sync "$home" --settle-capture settler)
   assert_contains "$out" "settler live $live: skipped: busy: $cmd is still running" "a running capture defers the settle"
@@ -1696,6 +1836,9 @@ test_current_capture_edits_pend_without_a_wake
 test_open_capture_pr_pends_instead_of_stuck
 test_capture_start_off_waits_for_the_scheduled_capture
 test_settle_capture_runs_for_capture_start_off
+test_capture_merged_elsewhere_settles_and_fast_forwards
+test_merged_elsewhere_settle_keeps_unlanded_edits
+test_failed_ordinary_settle_wakes_once_and_is_not_rerun
 test_capture_skips_edits_outside_its_dir
 test_settle_capture_waits_then_settles_and_fast_forwards
 test_settle_capture_failure_is_stuck
