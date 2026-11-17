@@ -554,6 +554,14 @@ test_task_set_acquire_waits_out_only_the_sweep() {
   wait "$holder" 2>/dev/null
   [ "$rc" -eq 0 ] || fail "a spawn's task-set acquire must take the lock the residue sweep released after a refused take"
 
+  # A take that fails with no holder, as in a state directory a teardown
+  # removed, refuses at once rather than waiting out the minute.
+  rc=0
+  SECONDS=0
+  bash -c '. "$1/bin/fm-wake-lib.sh"; fm_task_set_lock_try_acquire "$2"' _ "$ROOT" "$dir/removed-state/.task-set.lock" || rc=$?
+  [ "$rc" -ne 0 ] || fail "a spawn's task-set acquire must refuse a lock it cannot create"
+  [ "$SECONDS" -lt 5 ] || fail "a spawn's task-set acquire must refuse a lock it cannot create without waiting"
+
   rm -f "$ready"
   holder=$(hold_task_set_lock "$dir" "$ready")
   rc=0

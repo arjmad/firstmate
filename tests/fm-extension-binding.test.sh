@@ -2334,7 +2334,7 @@ if [ "${#orphan_live[@]}" -gt 0 ]; then
 fi
 for orphan_source in orphan-first orphan-second; do
   [ -e "$H_ORPHAN_READY/state/procevent-inbox/$orphan_source.1.handled" ] \
-    || fail "recovered source $orphan_source never handled its private result; inbox: $(ls "$H_ORPHAN_READY/state/procevent-inbox" 2>&1 | tr '\n' ' '); wakes: $(wake_payloads "$H_ORPHAN_READY" | grep "$orphan_source" | tr '\n' ' ')"
+    || fail "recovered source $orphan_source never handled its private result; inbox: $(find "$H_ORPHAN_READY/state/procevent-inbox" -mindepth 1 -maxdepth 1 -name "$orphan_source.*" 2>&1 | tr '\n' ' '); wakes: $(wake_payloads "$H_ORPHAN_READY" | grep "$orphan_source" | tr '\n' ' ')"
   assert_absent "$H_ORPHAN_READY/state/procevent/$orphan_source.source" "recovered terminal source did not retire"
   assert_absent "$FM_PROCEVENT_CLAIM_ROOT/$orphan_source.claim" "recovered terminal source retained its claim"
 done

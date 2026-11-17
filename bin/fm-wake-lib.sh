@@ -1878,15 +1878,16 @@ fm_task_set_lock_path() {  # <state-dir>
 # holds it for the seconds its task-keyed pass takes, so its hourly run never
 # fails a spawn. The holder's role is reread on every attempt, so a holder
 # that is anything but the sweep, including one that takes the lock during the
-# wait, is refused at once, and the wait refuses after a minute. A lock gone by
-# the time its role is read was released after the refused take, so the take
-# is tried again rather than refused.
+# wait, is refused at once, and the wait refuses after a minute. A take refused
+# by a holder whose lock is gone by the time its role is read lost only to that
+# holder's release, so it is tried again; a take that failed with no holder
+# seen, such as one in a removed state directory, still refuses.
 fm_task_set_lock_try_acquire() {  # <lock>
   local lock=$1 deadline=$((SECONDS + 60)) role
   while ! fm_lock_try_acquire "$lock"; do
     role=$(fm_lock_role "$lock" 2>/dev/null || true)
     if [ "$role" != residue-sweep ]; then
-      [ -z "$role" ] && [ ! -e "$lock" ] && [ ! -L "$lock" ] || return 1
+      [ -z "$role" ] && [ -n "${FM_LOCK_HELD_PID:-}" ] && [ ! -e "$lock" ] && [ ! -L "$lock" ] || return 1
     fi
     [ "$SECONDS" -lt "$deadline" ] || return 1
     sleep 0.1
