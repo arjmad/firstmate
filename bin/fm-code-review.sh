@@ -166,8 +166,9 @@
 #       carried record, and refuses with exit 1 when the follow-up since the
 #       last full record is not one a carry covers. --gate adds the gate
 #       statement, which posts a record even at a diff already reviewed
-#       when no record for it states the gate change yet, as a carry when
-#       only a carry covers that diff, and never at an exempt one; a pull request
+#       when no record for it states the gate change yet, as a statement-only
+#       record (an `fm-code-review-gate` line, claiming no review, never a
+#       carry's baseline), and never at an exempt one; a pull request
 #       that edits its gate and gets no --gate is refused with exit 1 in
 #       enforce mode, and warned about in observe mode.
 set -eu
@@ -317,10 +318,10 @@ EOF
   if [ -n "$why" ]; then
     CODE_REVIEW_GATE_FILES=
     if [ "$CODE_REVIEW_GATE_MODE" = observe ]; then
-      CODE_REVIEW_GATE_NOTE="gate-observe: whether $FM_PR_URL edits its own gate files is unknown, because $why; enforce mode would refuse its merge"
+      CODE_REVIEW_GATE_NOTE="gate-observe: the gate check of $FM_PR_URL could not run, because $why; enforce mode would refuse its merge until it can, and no record clears this"
       return 0
     fi
-    echo "error: whether $FM_PR_URL edits its own gate files cannot be read, because $why" >&2
+    echo "error: the gate check of $FM_PR_URL could not run, because $why" >&2
     return 2
   fi
   if [ -n "$found" ] && [ "$CODE_REVIEW_GATE_STATED" = 0 ] && [ "$CODE_REVIEW_GATE_MODE" = observe ]; then
@@ -331,7 +332,10 @@ EOF
 
 # The status line, then the observe note when there is one.
 code_review_print_status() {
-  [ -z "$CODE_REVIEW_LINE" ] || printf '%s\n' "$CODE_REVIEW_LINE"
+  # The note only ever follows a status line, so a reader takes line 1 as the
+  # status even when the status could not be read.
+  [ -n "$CODE_REVIEW_LINE" ] || return 0
+  printf '%s\n' "$CODE_REVIEW_LINE"
   [ -z "$CODE_REVIEW_GATE_NOTE" ] || printf '%s\n' "$CODE_REVIEW_GATE_NOTE"
 }
 
@@ -536,7 +540,7 @@ CODE_REVIEW_RULES_SKIPPED=0
 # skipped for a limit. Returns 1 when the base keeps no REVIEW.md, 3 when
 # REVIEW.md alone reaches the byte limit, and 2 when a file cannot be read.
 code_review_rules_text() {
-  local review rc=0 line name text size total fence=0 out='' files=' ' nfiles=0
+  local review rc=0 line bare name text size total fence='' out='' files=' ' nfiles=0
   # Lengths below count bytes, as the limit does.
   local LC_ALL=C
   review=$(code_review_base_file REVIEW.md) || return $?
@@ -544,19 +548,29 @@ code_review_rules_text() {
   [ "$total" -lt "$CODE_REVIEW_RULES_BYTES" ] || return 3
   CODE_REVIEW_RULES_SKIPPED=0
   while IFS= read -r line || [ -n "$line" ]; do
+    # A fence closes only on its own kind of marker, so a ~~~ line inside a
+    # ``` block stays inside it.
     case $line in
-      '```'*|'~~~'*) fence=$((1 - fence)) ;;
+      '```'*|'~~~'*)
+        if [ -z "$fence" ]; then
+          fence=${line%"${line#???}"}
+        elif [ "${line%"${line#???}"}" = "$fence" ]; then
+          fence=
+        fi
+        ;;
     esac
     name=
-    if [ "$fence" = 0 ]; then
-      case $line in
+    if [ -z "$fence" ]; then
+      # Trailing blanks or a CR line ending do not stop an include.
+      bare=${line%"${line##*[![:space:]]}"}
+      case $bare in
         @*[[:space:]]*|@) ;;
         @.claude/skills/*/SKILL.md)
-          name=${line#@}
+          name=${bare#@}
           case ${name#.claude/skills/} in */*/*) name= ;; esac
           ;;
         @*/*) ;;
-        @*) name=${line#@} ;;
+        @*) name=${bare#@} ;;
       esac
       # Only plain names travel in the contents API path.
       case $name in *[!A-Za-z0-9._/-]*|*..*) name= ;; esac
@@ -685,18 +699,12 @@ code_review_recorded_ids() {
 
 CODE_REVIEW_CARRY_LINES=10
 
-# The diff ids of trusted record comments that carry no carry marker.
-code_review_full_record_ids() {
-  gh api --paginate "repos/$FM_PR_OWNER/$FM_PR_REPO/issues/$FM_PR_NUMBER/comments" \
-    --jq '.[] | select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") | .body | gsub("\r"; "") | select(test("(^|\n)<!-- fm-code-review-carry ") | not) | capture("(^|\n)<!-- fm-code-review v1 diff=(?<id>[0-9a-f]{40,64}) head=[0-9a-f]{40,64} -->(\n|$)") | .id'
-}
-
 # The head of the last record comment from a trusted author that carries no
-# carry marker, or nothing when the PR has none.
+# carry or gate-statement marker, or nothing when the PR has none.
 code_review_full_record_head() {
   local heads
   heads=$(gh api --paginate "repos/$FM_PR_OWNER/$FM_PR_REPO/issues/$FM_PR_NUMBER/comments" \
-    --jq '.[] | select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") | .body | gsub("\r"; "") | select(test("(^|\n)<!-- fm-code-review-carry ") | not) | capture("(^|\n)<!-- fm-code-review v1 diff=[0-9a-f]{40,64} head=(?<head>[0-9a-f]{40,64}) -->(\n|$)") | .head') \
+    --jq '.[] | select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") | .body | gsub("\r"; "") | select(test("(^|\n)<!-- fm-code-review-(carry |gate -->)") | not) | capture("(^|\n)<!-- fm-code-review v1 diff=[0-9a-f]{40,64} head=(?<head>[0-9a-f]{40,64}) -->(\n|$)") | .head') \
     || return 1
   printf '%s\n' "$heads" | sed -n '$p'
 }
@@ -816,10 +824,11 @@ code_review_status() {
   # for its diff states the gate change, even one that would be exempt, and
   # then reports that record; observe mode keeps every verdict.
   if [ -n "$CODE_REVIEW_GATE_FILES" ] && [ "$CODE_REVIEW_GATE_MODE" = enforce ]; then
+    [ "$verdict" = code-changing ] || changes='would be exempt by its paths'
     verdict=code-changing
     [ "$CODE_REVIEW_GATE_STATED" = 1 ] || gate=1
   fi
-  gate_why="edits its own gate files ($CODE_REVIEW_GATE_FILES) and carries no code review record for it stating what the gate change loosens or tightens; record one with fm-code-review.sh record $FM_PR_URL --gate <statement>"
+  gate_why="edits its own gate files ($CODE_REVIEW_GATE_FILES) and carries no code review record for it stating what the gate change loosens or tightens; add the statement with fm-code-review.sh record $FM_PR_URL --gate <statement>"
   if [ "$verdict" = exempt ]; then
     if [ "$status" -eq 0 ]; then
       CODE_REVIEW_LINE="exempt: $FM_PR_URL is tinker under its risk-tiers.toml: ${CODE_REVIEW_TIER#*: }"
@@ -832,30 +841,32 @@ code_review_status() {
     echo "error: could not fingerprint the diff of $FM_PR_URL" >&2
     return 2
   fi
-  if [ "$gate" = 1 ]; then
-    CODE_REVIEW_LINE="unreviewed: diff $CODE_REVIEW_DIFF_ID of $FM_PR_URL $gate_why"
-    return 1
-  fi
   if ! ids=$(code_review_recorded_ids); then
     echo "error: could not read the comments of $FM_PR_URL" >&2
     return 2
   fi
   if printf '%s\n' "$ids" | grep -qxF "$CODE_REVIEW_DIFF_ID"; then
+    if [ "$gate" = 1 ]; then
+      CODE_REVIEW_LINE="unreviewed: diff $CODE_REVIEW_DIFF_ID of $FM_PR_URL $gate_why"
+      return 1
+    fi
     CODE_REVIEW_LINE="reviewed: diff $CODE_REVIEW_DIFF_ID of $FM_PR_URL carries a code review record"
     [ "$CODE_REVIEW_GATE_STATED" = 0 ] || CODE_REVIEW_LINE="$CODE_REVIEW_LINE stating its gate change"
     return 0
   fi
   CODE_REVIEW_LINE="unreviewed: diff $CODE_REVIEW_DIFF_ID of $FM_PR_URL $changes and carries no code review record for it"
+  # With no review yet, the review comes first; its record then states the
+  # gate change.
+  [ "$gate" = 0 ] || CODE_REVIEW_LINE="$CODE_REVIEW_LINE; it also edits its own gate files ($CODE_REVIEW_GATE_FILES), so after its /code-review the record needs --gate <statement>"
   return 1
 }
 
 code_review_record() {  # <note> <carry 0|1> <gate statement>
-  local note=$1 carry=$2 gate=$3 status=0 head head0='' body marker full ids
+  local note=$1 carry=$2 gate=$3 status=0 head head0='' body marker ids stmt
   local line="Code review: Claude Code \`/code-review\` (medium) ran on this diff; each finding is posted inline and was fixed or answered in its thread."
   # A carry binds the diff it fingerprints, the head it measures, and the head
-  # it records to one push: the head is read before and after both. A gate
-  # statement may become a carry below, so it reads the head first too.
-  if { [ "$carry" = 1 ] || [ -n "$gate" ]; } && { ! head0=$(code_review_head) || ! fm_pr_head_valid "$head0"; }; then
+  # it records to one push: the head is read before and after both.
+  if [ "$carry" = 1 ] && { ! head0=$(code_review_head) || ! fm_pr_head_valid "$head0"; }; then
     echo "error: could not read the head commit of $FM_PR_URL" >&2
     return 1
   fi
@@ -888,25 +899,27 @@ code_review_record() {  # <note> <carry 0|1> <gate statement>
       ;;
     *) return "$status" ;;
   esac
-  # A statement added at a diff a record already covers keeps that record's
-  # kind: a carry when only a carry covers it, so the full review that later
-  # carries measure from stays the one that ran.
+  # A statement added at a diff a record already covers is a statement-only
+  # record: it claims no review, and neither a carry nor the brief's review
+  # count treats it as a full record.
+  stmt=0
   if [ -n "$gate" ] && [ "$carry" = 0 ] && [ -n "$CODE_REVIEW_GATE_FILES" ] && [ "$CODE_REVIEW_GATE_STATED" = 0 ]; then
-    if ! ids=$(code_review_recorded_ids) || ! full=$(code_review_full_record_ids); then
+    if ! ids=$(code_review_recorded_ids); then
       echo "error: could not read the comments of $FM_PR_URL" >&2
       return 1
     fi
-    if printf '%s\n' "$ids" | grep -qxF -- "$CODE_REVIEW_DIFF_ID" \
-      && ! printf '%s\n' "$full" | grep -qxF -- "$CODE_REVIEW_DIFF_ID"; then
-      carry=1
-    fi
+    ! printf '%s\n' "$ids" | grep -qxF -- "$CODE_REVIEW_DIFF_ID" || stmt=1
   fi
   if ! head=$(code_review_head) || ! fm_pr_head_valid "$head"; then
     echo "error: could not read the head commit of $FM_PR_URL" >&2
     return 1
   fi
   marker="<!-- fm-code-review v1 diff=$CODE_REVIEW_DIFF_ID head=$head -->"
-  if [ "$carry" = 1 ]; then
+  if [ "$stmt" = 1 ]; then
+    marker="$marker
+<!-- fm-code-review-gate -->"
+    line="Gate statement for the code review already recorded at this diff; no new review ran."
+  elif [ "$carry" = 1 ]; then
     code_review_carry_check "$head" || return "$?"
     if [ "$head" != "$head0" ] || [ "$(code_review_head 2>/dev/null)" != "$head" ]; then
       echo "error: the head of $FM_PR_URL moved while the carry was measured; run record --carry again" >&2

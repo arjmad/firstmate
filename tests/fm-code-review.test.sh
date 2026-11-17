@@ -886,6 +886,9 @@ test_gate_self_edit_observe_keeps_verdicts_and_notes_would_block() {
     || fail "gate-observe: after the statement status still notes the gate: $OUT"
   jq -r '.[-1].body' "$dir/comments.json" | grep -qx 'Gate change: tightens: adds the shellcheck step; nothing loosened' \
     || fail "gate-observe: the record does not carry the statement line: $(jq -r '.[-1].body' "$dir/comments.json")"
+  # The diff already had its full record, so the statement claims no review.
+  jq -r '.[-1].body' "$dir/comments.json" | grep -qx '<!-- fm-code-review-gate -->' \
+    || fail "gate-observe: a statement at a reviewed diff posed as a new review: $(jq -r '.[-1].body' "$dir/comments.json")"
 
   # A REVIEW.md-only pull request stays exempt, but is noted.
   dir=$(make_case gate-observe-exempt REVIEW.md)
@@ -906,8 +909,8 @@ test_gate_self_edit_observe_keeps_verdicts_and_notes_would_block() {
     *) fail "gate-observe-exempt: after record --gate got '$OUT'" ;;
   esac
 
-  # A diff its carry covers keeps a carry: the statement does not move the
-  # full review that later carries measure from.
+  # A diff its carry covers gets a statement-only record: it neither poses
+  # as a full review nor re-measures the carry, which a rebase would break.
   dir=$(make_case gate-observe-carried check.sh)
   id=$(diff_id "$dir")
   full_record "$dir" "$REVIEWED_HEAD"
@@ -919,8 +922,8 @@ test_gate_self_edit_observe_keeps_verdicts_and_notes_would_block() {
   [ "$OUT" = "reviewed: diff $id of $URL carries a code review record stating its gate change" ] \
     || fail "gate-observe-carried: got '$OUT'"
   jq -r '.[-1].body' "$dir/comments.json" > "$dir/body"
-  [ "$(sed -n 2p "$dir/body")" = "<!-- fm-code-review-carry from=$REVIEWED_HEAD lines=2 -->" ] \
-    || fail "gate-observe-carried: the statement record is not a carry from the full review: $(cat "$dir/body")"
+  [ "$(sed -n 2p "$dir/body")" = "<!-- fm-code-review-gate -->" ] \
+    || fail "gate-observe-carried: the statement record is not statement-only: $(cat "$dir/body")"
 
   # The same holds when enforce mode reads the carried diff unreviewed for
   # want of the statement.
@@ -936,8 +939,8 @@ test_gate_self_edit_observe_keeps_verdicts_and_notes_would_block() {
   run_case "$dir" record "$URL" --gate 'tightens: adds the shellcheck step; nothing loosened'
   expect_code 0 "$RC" "gate-enforce-carried: record --gate on a carried diff must post: $ERR"
   jq -r '.[-1].body' "$dir/comments.json" > "$dir/body"
-  [ "$(sed -n 2p "$dir/body")" = "<!-- fm-code-review-carry from=$REVIEWED_HEAD lines=2 -->" ] \
-    || fail "gate-enforce-carried: the statement record is not a carry from the full review: $(cat "$dir/body")"
+  [ "$(sed -n 2p "$dir/body")" = "<!-- fm-code-review-gate -->" ] \
+    || fail "gate-enforce-carried: the statement record is not statement-only: $(cat "$dir/body")"
 
   # A pull request off the gate prints the one line as before.
   dir=$(make_case gate-observe-none bin/tool.sh src/check.sh docs/check.sh.md)
@@ -951,7 +954,7 @@ test_gate_self_edit_observe_keeps_verdicts_and_notes_would_block() {
   : > "$dir/contents-fail"
   run_case "$dir" status "$URL"
   expect_code 0 "$RC" "gate-observe-unreadable: observe mode must not fail closed"
-  assert_contains "$OUT" "gate-observe: whether $URL edits its own gate files is unknown, because check.sh on its base branch could not be read" \
+  assert_contains "$OUT" "gate-observe: the gate check of $URL could not run, because check.sh on its base branch could not be read" \
     "gate-observe-unreadable: the note did not say what could not be read"
   pass "fm-code-review observe mode keeps every verdict and notes a merge enforce mode would refuse"
 }
@@ -964,7 +967,7 @@ test_gate_self_edit_enforce_holds_until_the_record_states_the_change() {
   id=$(diff_id "$dir")
   run_case "$dir" status "$URL"
   expect_code 1 "$RC" "gate-enforce-exempt: a REVIEW.md-only PR must not be exempt in enforce mode"
-  [ "$OUT" = "unreviewed: diff $id of $URL edits its own gate files (REVIEW.md) and carries no code review record for it stating what the gate change loosens or tightens; record one with fm-code-review.sh record $URL --gate <statement>" ] \
+  [ "$OUT" = "unreviewed: diff $id of $URL would be exempt by its paths and carries no code review record for it; it also edits its own gate files (REVIEW.md), so after its /code-review the record needs --gate <statement>" ] \
     || fail "gate-enforce-exempt: got '$OUT'"
 
   # A plain record cannot pass the gate, nor can a carry, nor a statement
@@ -1125,6 +1128,18 @@ test_review_md_includes_follow_the_service_rules() {
   expect_code 0 "$RC" "rules-includes: the review should run: $ERR"
   assert_contains "$PROMPT" 'REVIEW.md begins: Root rule. Rule A. @rules-b.md ``` @rules-b.md ``` @missing.md @sub/x.md @rules a.md Skill rule. REVIEW.md ends.' \
     "rules-includes: includes were not placed one level deep, outside fences, by plain name"
+
+  # A fence closes only on its own marker, and trailing blanks or a CR line
+  # ending still include.
+  dir=$(make_case rules-fences bin/tool.sh)
+  mkdir -p "$dir/base"
+  printf '%s\n' '```' '~~~' '@rules-b.md' '```' '@rules-b.md  ' $'@rules-a.md\r' > "$dir/base/REVIEW.md"
+  printf 'Rule A.\n' > "$dir/base/rules-a.md"
+  printf 'Rule B.\n' > "$dir/base/rules-b.md"
+  review_prompt "$dir"
+  expect_code 0 "$RC" "rules-fences: the review should run: $ERR"
+  assert_contains "$PROMPT" 'REVIEW.md begins: ``` ~~~ @rules-b.md ``` Rule B. Rule A. REVIEW.md ends.' \
+    "rules-fences: a mixed fence or a trailing blank changed what was included"
 
   # The business repository's shape: the checklist lives only in root files
   # pulled in by blank-line-separated @review-*.md lines.

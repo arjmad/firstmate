@@ -2235,7 +2235,7 @@ require_code_review() {
       ;;
   esac
   case $line in
-    *" edits its own gate files "*)
+    *" edits its own gate files "*" stating what the gate change "*)
       echo "error: the pull request edits the gate that judges it, so its worker states what that change loosens or tightens against the base branch's gate, or nothing loosened, with bin/fm-code-review.sh record $URL --gate <statement>, after its /code-review if none is recorded; only an explicit captain instruction may pass --waive-review <reason>" >&2
       return 1
       ;;

@@ -561,7 +561,7 @@ fm_dod_code_review_block() {  # <direct-PR|no-mistakes>
   fi
   cat <<EOF
 Before that done report, give a code-changing GitHub PR its code review; a PR on any other forge skips this step.
-Run \`$cli status <pr-url>\`; \`exempt\` or \`reviewed\` needs nothing more, so a tinker-tier or docs-only PR runs neither review below.
+Run \`$cli status <pr-url>\`; \`exempt\` or \`reviewed\` needs nothing more, except the gate statement below when \`status\` says the PR edits its own gate files, so a tinker-tier or docs-only PR runs neither review below.
 On \`unreviewed\`, first run the \`tstack-sol-loop\` skill on your branch against the PR's base once the local checks the repository's own guidance names pass on it: GPT Sol on the Codex subscription reviews the change for at most 3 rounds, never the skill's extended 5, and the skill's own rules decide when the loop stops.
 Settle each Sol finding as that skill says - fix the real ones with the smallest change and decline nits and out-of-scope findings in one line in its ledger - then $sol_fix, since the skill pushes nothing during it, and add the PR-body line the skill asks for.
 When the skill hands an open finding to its user - one disputed twice, or a blocker or should still open when the rounds run out - that user is firstmate: append \`needs-decision [at=<epoch>]: {the open Sol findings}\` and stop.
@@ -574,7 +574,7 @@ When \`status\` or \`record\` says the PR edits its own gate files, also pass \`
 Pushes that fix or answer this review's findings are covered by the one \`record\` you run after your last push; only a push after \`record\` that changes the diff needs a new review, and a rebase that leaves the diff alone needs none.
 For a small follow-up pushed after \`record\`, run \`$cli record <pr-url> --carry\` instead of a new review; the script decides what a carry covers, and when it refuses, its message says whether to run the carry again or \`/code-review\` again.
 Before such a new \`/code-review\`, run \`tstack-sol-loop\` again as a fresh loop of one round on the change since the record, outside the first loop's 3, settle and escalate its findings as above, and name that round in the new \`record\`'s note.
-Count this PR's full records, the \`fm-code-review v1\` comments you posted without a \`fm-code-review-carry\` line, rather than relying on memory: with three already posted, a change that would need another \`/code-review\` pass does not get one: append \`needs-decision [at=<epoch>]: {why the PR keeps needing review}\` and stop instead of looping.
+Count this PR's full records, the \`fm-code-review v1\` comments you posted without a \`fm-code-review-carry\` or \`fm-code-review-gate\` line, rather than relying on memory: with three already posted, a change that would need another \`/code-review\` pass does not get one: append \`needs-decision [at=<epoch>]: {why the PR keeps needing review}\` and stop instead of looping.
 If the headless \`/code-review\` command cannot run here, or \`review\` exits non-zero, append \`blocked:\` naming its error instead of done.
 EOF
 }
