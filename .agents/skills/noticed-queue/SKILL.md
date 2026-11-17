@@ -78,8 +78,9 @@ The Atlas board itself still builds only when he asks.
 An idea reaches Arjun, as an Atlas card or in the Monday triage, only when it passes all six tests below; when you write Atlas's ideas, apply them before you rank, and carry only those that pass, up to seven.
 They come from his verdicts: he dropped all seven Atlas ideas of 2026-10-26 on quality ("Didn't like the ideas [it] came up with", 2026-10-28), and on the 2026-10-30 ecosystem board he kept 22 of the 39 ideas built on tools the fleet already runs and 1 of the 10 that brought a new platform.
 
-1. **One concrete friction, seen.** Name one thing that went wrong or cost money or time, with a dated instance, and the smallest change that removes it.
-   A broad new system, loop, standing rule or guide with no one failure behind it is not an idea: "a weekly profit decision loop" and "a taste guide per area" were dropped, while "one alert per Nova skill capture, not seven" and "instant 'got it' for every scan and print" were kept.
+1. **One concrete change with a named payoff.** Name the smallest change and what it removes or gains.
+   It may answer a friction already seen (give the dated instance) or one not seen yet: a foreseen risk or an opportunity, with the reasoning for why it would pay off.
+   A broad new system, loop, standing rule or guide with no specific payoff is still not an idea: "a weekly profit decision loop" and "a taste guide per area" were dropped, while "one alert per Nova skill capture, not seven" and "instant 'got it' for every scan and print" were kept.
 2. **Not already there.** Search the backlog, open captain holds, the noticed list, the skills store and the business stack's commands first.
    An idea a filed task or an existing skill already covers is evidence for that task, not a new idea: the 2026-10-26 disk-retention idea was the filed `task-media-retention`, and the FBA stock guard repeated what `inventory-worksheet` plans.
 3. **No standing ruling against it.** Read the rulings in `data/captain.md` and the latest ecosystem review; an idea that reopens one needs new evidence that answers the reason he gave, and leads with it.
