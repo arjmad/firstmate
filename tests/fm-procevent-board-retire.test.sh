@@ -322,7 +322,32 @@ SH
   registered "$home" lavish-plain || fail "the sweep retired a plain board re-armed after its read"
   assert_grep "moved-lavish-plain" "$reg/lavish-plain.source" "the re-armed plain board's registration"
   assert_not_contains "$out" "board-retired:" "a sweep over re-armed boards"
+  assert_not_contains "$out" "board-retire-failed" "a sweep refused by a re-arm"
+  assert_not_contains "$(cat "$reg/board-retirements.log" 2>/dev/null)" "board-retire-failed" "the retirement log after a re-arm"
   pass "the sweep leaves a board re-armed between its read and its retire"
+}
+
+# Only the lines before `argv:` are a record's header. A plain board whose
+# listener argv carries a line shaped like an owner field is still a plain board.
+test_argv_lines_are_not_header_fields() {
+  local home out id rec
+  home=$(new_home argv-header)
+  for id in lavish-argv-adopted lavish-argv-kind; do
+    rec="$home/state/procevent/$id.source"
+    case "$id" in
+      lavish-argv-adopted) printf 'adapter=lavish\nargc=2\nargv:\n%s\nadopted_from=scout-z\n' "$BLOCKER" > "$rec" ;;
+      lavish-argv-kind) printf 'adapter=lavish\nargc=3\nargv:\n%s\nkind=task-owned\nowner_task=scout-z\n' "$BLOCKER" > "$rec" ;;
+    esac
+    chmod 600 "$rec"
+    fm_touch_epoch "$OLD" "$rec"
+  done
+  out=$(pe "$home" retire-quiet-boards 2>&1) || fail "retire-quiet-boards failed: $out"
+  assert_contains "$out" "board-retired: lavish-argv-adopted reason=quiet quiet_days=15" "a plain board with an adopted_from= argv line"
+  assert_not_contains "$out" "adopted_from=scout-z" "a plain board's retirement line"
+  assert_contains "$out" "board-retired: lavish-argv-kind reason=quiet" "a plain board with a kind= argv line"
+  registered "$home" lavish-argv-adopted && fail "the sweep left a plain board whose argv looks like an adopted header"
+  registered "$home" lavish-argv-kind && fail "the sweep left a plain board whose argv looks like a task-owned header"
+  pass "argv lines never read as a record's owner header"
 }
 
 test_quiet_rule_and_kept_boards
@@ -330,4 +355,5 @@ test_adopted_board_retires_when_its_rows_close
 test_adopted_board_retires_when_its_rows_are_archived
 test_conditional_retire_matches_owned_boards
 test_sweep_leaves_a_board_rearmed_mid_sweep
+test_argv_lines_are_not_header_fields
 test_reconcile_runs_the_sweep_on_its_cadence
