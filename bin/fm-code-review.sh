@@ -26,7 +26,8 @@
 # since the files it leaves unlisted cannot be classified.
 #
 # The review is Claude Code's built-in /code-review skill at its medium level,
-# run headless by `review` on the home's pinned model with the PR number and
+# run headless by `review` on the home's pinned model with the PR's full URL
+# (a bare number names whichever repository the working directory is in) and
 # firstmate's merge-gate focus (fork patch,
 # docs/fork-decisions/2026-11-10-code-review-focus.md). The skill runs in a
 # forked context that sees only its own arguments, so the focus rides there:
@@ -85,7 +86,7 @@
 #
 # Usage:
 #   fm-code-review.sh review <pr-url> --model <model>
-#       Runs `claude -p --model <model> "/code-review medium <number> <focus>"`
+#       Runs `claude -p --model <model> "/code-review medium <pr-url> <focus>"`
 #       from the current directory, printing its output, then posts each
 #       finding of its JSON findings block and prints one `posted:` line.
 #       Exits 0 when every finding posted (none is fine), 1 when the review
@@ -95,7 +96,7 @@
 #       minutes, longer than a shell tool's default time limit.
 #   fm-code-review.sh args <pr-url>
 #       Prints, on one line, the arguments a hand-run /code-review takes for
-#       the pull request: `medium --comment <number>` and then the merge-gate
+#       the pull request: `medium --comment <pr-url>` and then the merge-gate
 #       focus. Exits 0, or 2 when the URL is not a GitHub pull request.
 #   fm-code-review.sh classify [<path>...]
 #       Paths from the arguments, or one per line on stdin when there are none,
@@ -290,7 +291,7 @@ code_review_run() {  # <model>
   out=$(mktemp "${TMPDIR:-/tmp}/fm-code-review-output.XXXXXX") || return 1
   findings=$(mktemp "${TMPDIR:-/tmp}/fm-code-review-findings.XXXXXX") || return 1
   set +e
-  claude -p --model "$model" "/code-review medium $FM_PR_NUMBER $(code_review_focus_line)" \
+  claude -p --model "$model" "/code-review medium $FM_PR_URL $(code_review_focus_line)" \
     < /dev/null | tee "$out"
   piped=("${PIPESTATUS[@]}")
   set -e
@@ -589,7 +590,7 @@ case "$cmd" in
   args)
     [ "$#" -eq 1 ] || { echo "error: usage: fm-code-review.sh args <pr-url>" >&2; exit 2; }
     code_review_parse_url "$1" || exit 2
-    printf 'medium --comment %s %s\n' "$FM_PR_NUMBER" "$(code_review_focus_line)"
+    printf 'medium --comment %s %s\n' "$FM_PR_URL" "$(code_review_focus_line)"
     ;;
   review)
     [ "$#" -ge 1 ] || { echo "error: usage: fm-code-review.sh review <pr-url> --model <model>" >&2; exit 2; }

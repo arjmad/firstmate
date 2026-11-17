@@ -732,11 +732,16 @@ def run_case(kind):
                 command = ["node", str(host), "process-event", "ext-sleep", "source.poll",
                     "--source-id", "sleep-source", "--config-ref", f"active-block|{marker}|{release}", *expected]
             process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            wait_for(marker.exists)
+            # The fixture creates the marker before it writes the pid, so wait
+            # for the pid itself rather than for the file to exist.
+            def marker_pid():
+                text = marker.read_text() if marker.exists() else ""
+                return int(text) if text.strip() else None
+            wait_for(marker_pid)
             if kind == "launch":
-                group = int(marker.read_text())
+                group = marker_pid()
             else:
-                group = os.getpgid(int(marker.read_text()))
+                group = os.getpgid(marker_pid())
             def invocation_owner():
                 for filename in (home / "state/extension-invocations").glob("*.owner.json"):
                     owner = json.loads(filename.read_text())
@@ -2328,8 +2333,8 @@ if [ "${#orphan_live[@]}" -gt 0 ]; then
   fail "recovered source ${orphan_live[*]%%:*} did not finish within ${orphan_wait_seconds}s"
 fi
 for orphan_source in orphan-first orphan-second; do
-  assert_present "$H_ORPHAN_READY/state/procevent-inbox/$orphan_source.1.handled" \
-    "recovered source $orphan_source never handled its private result"
+  [ -e "$H_ORPHAN_READY/state/procevent-inbox/$orphan_source.1.handled" ] \
+    || fail "recovered source $orphan_source never handled its private result; inbox: $(find "$H_ORPHAN_READY/state/procevent-inbox" -mindepth 1 -maxdepth 1 -name "$orphan_source.*" 2>&1 | tr '\n' ' '); wakes: $(wake_payloads "$H_ORPHAN_READY" | grep "$orphan_source" | tr '\n' ' ')"
   assert_absent "$H_ORPHAN_READY/state/procevent/$orphan_source.source" "recovered terminal source did not retire"
   assert_absent "$FM_PROCEVENT_CLAIM_ROOT/$orphan_source.claim" "recovered terminal source retained its claim"
 done

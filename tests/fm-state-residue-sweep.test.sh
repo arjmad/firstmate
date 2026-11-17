@@ -515,6 +515,53 @@ test_task_set_acquire_waits_out_only_the_sweep() {
   wait "$holder" 2>/dev/null
   [ "$rc" -eq 0 ] || fail "a spawn's task-set acquire should wait out the residue sweep's hold"
 
+  # The sweep can release between a refused take and the read of its role,
+  # which then finds no lock at all; this pins that interleaving.
+  rm -f "$ready" "$dir/released"
+  (
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-wake-lib.sh"
+    fm_lock_try_acquire "$lock" || exit 1
+    fm_lock_set_role "$lock" residue-sweep || exit 1
+    : > "$ready"
+    i=0
+    while [ ! -e "$dir/released" ] && [ "$i" -lt 200 ]; do
+      sleep 0.05
+      i=$((i + 1))
+    done
+    fm_lock_release "$lock"
+  ) >/dev/null 2>&1 &
+  holder=$!
+  i=0
+  while [ ! -e "$ready" ] && [ "$i" -lt 100 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -e "$ready" ] || fail "the test could not hold the task-set lock as the residue sweep"
+  rc=0
+  bash -c '. "$1/bin/fm-wake-lib.sh"
+    lock=$2 released=$3
+    eval "fm_test_real_$(declare -f fm_lock_try_acquire)"
+    fm_lock_try_acquire() {
+      fm_test_real_fm_lock_try_acquire "$@" && return 0
+      if [ ! -e "$released" ]; then
+        : > "$released"
+        while [ -L "$lock" ] || [ -e "$lock" ]; do sleep 0.01; done
+      fi
+      return 1
+    }
+    fm_task_set_lock_try_acquire "$lock" && fm_lock_release "$lock"' _ "$ROOT" "$lock" "$dir/released" || rc=$?
+  wait "$holder" 2>/dev/null
+  [ "$rc" -eq 0 ] || fail "a spawn's task-set acquire must take the lock the residue sweep released after a refused take"
+
+  # A take that fails with no holder, as in a state directory a teardown
+  # removed, refuses at once rather than waiting out the minute.
+  rc=0
+  SECONDS=0
+  bash -c '. "$1/bin/fm-wake-lib.sh"; fm_task_set_lock_try_acquire "$2"' _ "$ROOT" "$dir/removed-state/.task-set.lock" || rc=$?
+  [ "$rc" -ne 0 ] || fail "a spawn's task-set acquire must refuse a lock it cannot create"
+  [ "$SECONDS" -lt 5 ] || fail "a spawn's task-set acquire must refuse a lock it cannot create without waiting"
+
   rm -f "$ready"
   holder=$(hold_task_set_lock "$dir" "$ready")
   rc=0

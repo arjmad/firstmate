@@ -351,8 +351,8 @@ test_args_carry_the_merge_gate_focus() {
   expect_code 0 "$RC" "args: a GitHub PR URL should print the review arguments"
   [ "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" = 1 ] || fail "args: the arguments must be one line, got: $OUT"
   case "$OUT" in
-    'medium --comment 12 Merge-gate focus for this review: '*) ;;
-    *) fail "args: the arguments do not start with the level, --comment, the number, and the focus: $OUT" ;;
+    "medium --comment $URL Merge-gate focus for this review: "*) ;;
+    *) fail "args: the arguments do not start with the level, --comment, the PR URL, and the focus: $OUT" ;;
   esac
   assert_contains "$OUT" 'run gh pr view 12 --repo github.com/example/repo --json title,body' "args: the focus does not name this PR's description"
   [ ! -s "$dir/gh.log" ] || fail "args: printing the arguments must not call gh"
@@ -427,8 +427,8 @@ OUT
   [ "$(sed -n 1,3p "$dir/claude.log" | tr '\n' ' ')" = '-p --model claude-opus-5-5 ' ] \
     || fail "review: claude was not run headless on the pinned model: $(cat "$dir/claude.log")"
   case "$(sed -n 4p "$dir/claude.log")" in
-    '/code-review medium 12 Merge-gate focus for this review: '*) ;;
-    *) fail "review: the prompt is not the review with the PR number and the focus: $(sed -n 4p "$dir/claude.log")" ;;
+    "/code-review medium $URL Merge-gate focus for this review: "*) ;;
+    *) fail "review: the prompt is not the review with the PR URL and the focus: $(sed -n 4p "$dir/claude.log")" ;;
   esac
   ! grep -q -- '--comment' "$dir/claude.log" || fail "review: the reviewer was asked to post, so findings could post twice"
   assert_contains "$OUT" 'I found three issues.' "review: the review output was not printed"
