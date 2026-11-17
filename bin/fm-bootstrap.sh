@@ -1894,12 +1894,16 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
     # are reported as information, as the watcher logs them, rather than as a
     # deferred result needing action. The watcher's 60s bound also applies here:
     # a first-turn spawn waits at most a minute for the sweep's task-set hold.
+    # fm_exec_timed names this bootstrap as the sweep's owner, so a worker bound
+    # that kills bootstrap also ends the sweep instead of leaving it running
+    # after the acquisition lease is released.
     if network_sweep_authorized 'state residue sweep'; then
       __fm_timing_stamp=$(fm_timing_now_ms)
       {
         sweep_rc=0
-        fm_run_timed 60 "$SCRIPT_DIR/fm-state-residue-sweep.sh" 2>&1 </dev/null || sweep_rc=$?
-        [ "$sweep_rc" -ne 124 ] \
+        (FM_EXEC_TIMED_OWNER_PID=$$ fm_exec_timed 60 1 "$SCRIPT_DIR/fm-state-residue-sweep.sh") 2>&1 </dev/null \
+          || sweep_rc=$?
+        ! fm_timed_out "$sweep_rc" \
           || echo "BOOTSTRAP_INFO: state residue sweep did not finish within its 60s bound; the watcher's heartbeat sweep retries"
       } | sed 's/^warning: /BOOTSTRAP_INFO: warning: /'
       fm_timing_record phase residue-sweep "$__fm_timing_stamp"
