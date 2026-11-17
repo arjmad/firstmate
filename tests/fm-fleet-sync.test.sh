@@ -1388,6 +1388,40 @@ test_merged_elsewhere_settle_keeps_unlanded_edits() {
   pass "the ordinary sync's settle keeps unlanded edits, runs once per edit state, and never runs beside unrelated edits"
 }
 
+test_failed_ordinary_settle_wakes_once_and_is_not_rerun() {
+  local home live cmd log pending
+  home=$(isolated_home)
+  live=$(build_capture_live "$home" nova)
+  cmd="$home/bad-settle-nova.sh"
+  cat > "$cmd" <<SCRIPT
+#!/usr/bin/env bash
+echo "\$1" >> '$home/bad-settles-nova'
+echo "skill-capture: HEAD is not on origin/main" >&2
+exit 1
+SCRIPT
+  chmod +x "$cmd"
+  printf 'live edit\n' >> "$live/skills/a.md"
+  land_live_edit "$home" nova "$live" skills/a.md
+  live_config "$home" "nova $live capture=skills/:$cmd capture-start=off"
+  log="$home/state/.fleet-sync-scheduled.log"
+  pending="$home/state/fleet-sync-stuck"
+
+  run_scheduled "$home"
+  run_scheduled "$home"
+  assert_equals 1 "$(runs_of "$home/bad-settles-nova")" "a failed settle is not rerun for the same state"
+  assert_contains "$(cat "$log")" "nova live $live: STUCK: $cmd --settle failed (exit 1) - needs attention; last output: skill-capture: HEAD is not on origin/main" \
+    "later runs repeat the failure"
+  assert_equals 1 "$(grep -c -- '--settle failed (exit 1)' "$pending" 2>/dev/null || true)" "the failure wakes firstmate once"
+  assert_contains "$(cat "$live/skills/a.md")" "live edit" "the live edit is kept"
+
+  rm -f "$pending"
+  advance_origin "$home" nova C1
+  run_scheduled "$home"
+  assert_equals 2 "$(runs_of "$home/bad-settles-nova")" "a new origin commit retries the settle"
+  [ ! -e "$pending" ] || fail "a repeated settle failure must not wake firstmate again: $(cat "$pending")"
+  pass "a failed ordinary settle wakes once, is rerun only for a new state, and keeps the live edit"
+}
+
 test_capture_skips_edits_outside_its_dir() {
   local home live out
   home=$(new_home)
@@ -1797,6 +1831,7 @@ test_capture_start_off_waits_for_the_scheduled_capture
 test_settle_capture_runs_for_capture_start_off
 test_capture_merged_elsewhere_settles_and_fast_forwards
 test_merged_elsewhere_settle_keeps_unlanded_edits
+test_failed_ordinary_settle_wakes_once_and_is_not_rerun
 test_capture_skips_edits_outside_its_dir
 test_settle_capture_waits_then_settles_and_fast_forwards
 test_settle_capture_failure_is_stuck
