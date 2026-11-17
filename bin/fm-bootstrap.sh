@@ -1889,10 +1889,14 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   if network_phase; then
     # Watcher bookkeeping for endpoints that are provably gone, and orphaned
     # scratch files. The sweep is built to run mid-session (bin/fm-watch.sh runs
-    # it at the heartbeat too), never exits nonzero, and prints its own warnings.
+    # it at the heartbeat too) and never exits nonzero. Its warnings say what it
+    # kept for its next run, such as a task set a first-turn spawn holds, so they
+    # are reported as information, as the watcher logs them, rather than as a
+    # deferred result needing action.
     if network_sweep_authorized 'state residue sweep'; then
       __fm_timing_stamp=$(fm_timing_now_ms)
-      "$SCRIPT_DIR/fm-state-residue-sweep.sh" || true
+      { "$SCRIPT_DIR/fm-state-residue-sweep.sh" 2>&1 || true; } \
+        | sed 's/^warning: /BOOTSTRAP_INFO: warning: /'
       fm_timing_record phase residue-sweep "$__fm_timing_stamp"
     fi
     # Adopt existing durable contribution links without making a network call.
