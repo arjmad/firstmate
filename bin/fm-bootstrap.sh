@@ -1892,11 +1892,16 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
     # it at the heartbeat too) and never exits nonzero. Its warnings say what it
     # kept for its next run, such as a task set a first-turn spawn holds, so they
     # are reported as information, as the watcher logs them, rather than as a
-    # deferred result needing action.
+    # deferred result needing action. The watcher's 60s bound also applies here:
+    # a first-turn spawn waits at most a minute for the sweep's task-set hold.
     if network_sweep_authorized 'state residue sweep'; then
       __fm_timing_stamp=$(fm_timing_now_ms)
-      { "$SCRIPT_DIR/fm-state-residue-sweep.sh" 2>&1 || true; } \
-        | sed 's/^warning: /BOOTSTRAP_INFO: warning: /'
+      {
+        sweep_rc=0
+        fm_run_timed 60 "$SCRIPT_DIR/fm-state-residue-sweep.sh" 2>&1 </dev/null || sweep_rc=$?
+        [ "$sweep_rc" -ne 124 ] \
+          || echo "BOOTSTRAP_INFO: state residue sweep did not finish within its 60s bound; the watcher's heartbeat sweep retries"
+      } | sed 's/^warning: /BOOTSTRAP_INFO: warning: /'
       fm_timing_record phase residue-sweep "$__fm_timing_stamp"
     fi
     # Adopt existing durable contribution links without making a network call.
