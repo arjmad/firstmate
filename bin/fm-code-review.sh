@@ -413,8 +413,7 @@ Merge-gate focus for this review: the author must fix or answer in writing every
 6. Before you report that something is missing or unguarded, check the callers, wrappers, and owning documents outside the changed lines; drop it only when you can cite the code or step that already prevents the failure on the path this change affects.
 7. Report a problem in unchanged code only when this diff introduces it, exposes it, or makes it reachable.
 8. A clear violation of a written rule in a CLAUDE.md or AGENTS.md that governs the changed file is still a finding when you can quote the rule and the line that breaks it.
-9. Evidence: every claim a finding makes about how code or a document behaves cites the file:line in the source that shows it, read rather than inferred from a name; drop a finding whose claim rests on what a name, a comment, or a convention suggests.
-10. Do not report what the repository's own gate already enforces (its ./check.sh, with its lint, format, type, and document-size checks), nor anything in generated files or lockfiles.
+9. Do not report what the repository's own gate already enforces (its ./check.sh, with its lint, format, type, and document-size checks), nor anything in generated files or lockfiles.
 EOF
 }
 
