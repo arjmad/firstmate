@@ -19,7 +19,9 @@
 #
 # Two callers run it, each inside this home's session: bin/fm-bootstrap.sh at
 # session start, as one of its locked MUTATING sweeps it skips under
-# FM_BOOTSTRAP_DETECT_ONLY=1 exactly like the others, and bin/fm-watch.sh at
+# FM_BOOTSTRAP_DETECT_ONLY=1 exactly like the others and runs in its deferred
+# half (bin/fm-startup-network.sh), concurrently with the digest and the first
+# turn, and bin/fm-watch.sh at
 # every heartbeat with --heartbeat, so a session that runs for days still
 # sweeps hourly. A mid-session sweep can overlap a spawn or a forced teardown,
 # so the task-keyed pass below runs only while this sweep holds the home's

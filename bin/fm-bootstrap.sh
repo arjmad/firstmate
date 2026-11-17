@@ -132,27 +132,34 @@
 #          Unset/0 (the default) runs all nine sweeps - this flag is purely
 #          additive.
 #          state_residue_sweep is bin/fm-state-residue-sweep.sh, whose header
-#          owns what it retires and how an endpoint is proven gone; it runs on
-#          the local pass only and reports through its own BOOTSTRAP_INFO line.
+#          owns what it retires and how an endpoint is proven gone; it runs in
+#          the deferred half (below) and reports through its own BOOTSTRAP_INFO
+#          line.
 #          data_media_prune is bin/fm-data-media-prune.sh, whose header owns
 #          which torn-down tasks' media and scratch it removes and its data
 #          size trigger; it removes nothing unless
 #          config/data-media-retention-days or
 #          config/data-scratch-retention-days is set, runs on the local pass
 #          only, and reports through its own BOOTSTRAP_INFO lines.
-#          Set FM_BOOTSTRAP_NETWORK to split this run by whether a step talks to
-#          the network, so a session start can print its digest from local reads
-#          alone and run the network half off the digest's blocking path:
-#            all  (default, and any unrecognized value) - every local and network
-#                 step. Unrecognized values fall back here on purpose: a typo
-#                 must never silently skip a safety sweep.
-#            skip - every LOCAL step, and none of the network ones. Skips
+#          Set FM_BOOTSTRAP_NETWORK to split this run into a blocking half and a
+#          deferred half, so a session start can print its digest from the
+#          blocking half alone and run the deferred half off the digest's
+#          bounded blocking path:
+#            all  (default, and any unrecognized value) - both halves. Unrecognized
+#                 values fall back here on purpose: a typo must never silently
+#                 skip a safety sweep.
+#            skip - the blocking half: every local step except the deferred
+#                 housekeeping below, and none of the network ones. Skips
 #                 `gh auth status`, secondmate_liveness_sweep, secondmate_sync,
-#                 secondmate_handoff_resume, and fleet_sync.
-#            only - ONLY those network steps and nothing else. No tool detection,
-#                 no version floors, no tangle check, no backlog
-#                 reconciliation, no x_mode_setup: those already ran on the
-#                 local pass.
+#                 secondmate_handoff_resume, fleet_sync, and that housekeeping.
+#            only - the deferred half: those network steps, then the local
+#                 housekeeping whose cost grows with the home's history and that
+#                 the first turn does not need - state_residue_sweep, contribution
+#                 observation arming (fm-contributions.sh arm --if-owned), and
+#                 the PR health monitor's arming, which takes the same lock. No
+#                 tool detection, no version floors, no tangle check, no backlog
+#                 reconciliation, no data_media_prune, no x_mode_setup: those ran
+#                 on the blocking half.
 #          FM_BOOTSTRAP_DETECT_ONLY composes with it unchanged, so `only` plus
 #          detect-only is the read-only `gh auth status` probe on its own.
 #          bin/fm-startup-network.sh owns the deferral: it runs the `only` phase
@@ -1569,14 +1576,11 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ] && local_phase; then
       exit 1
     fi
   fi
-  # Watcher bookkeeping for endpoints that are provably gone, and orphaned
-  # scratch files. Runs after the record reconciliation above so a task record
-  # that reconciliation just restored still protects its endpoint's markers.
-  # The sweep never exits nonzero; a problem is a warning it prints itself.
-  "$SCRIPT_DIR/fm-state-residue-sweep.sh" || true
   # Bulky media and reproducible scratch of torn-down, quiet tasks under data/,
-  # each opt-in by config, and the data size trigger. It exits nonzero only for
-  # an unusable configured value, which it names.
+  # each opt-in by config, and the data size trigger. It stays on this blocking
+  # pass after the reconciliation above because it deletes without the task-set
+  # lock, so it must not overlap the helm's first turn. It exits nonzero only
+  # for an unusable configured value, which it names.
   "$SCRIPT_DIR/fm-data-media-prune.sh" || true
 fi
 
@@ -1870,22 +1874,58 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   # x_mode_setup writes local Relay artifacts only and never leaves the machine.
   local_phase && x_mode_setup
   local_phase && lavish_chrome_patch
-  # Adopt existing durable contribution links without making a network call.
-  # Detection-only startup must never publish a check registration.
-  if local_phase && command -v jq >/dev/null 2>&1 \
-    && [ -d "$DATA" ] && [ -x "$SCRIPT_DIR/fm-contributions.sh" ]; then
-    "$SCRIPT_DIR/fm-contributions.sh" arm --if-owned >/dev/null \
-      || echo "MISSING: contribution observation could not be armed; coverage is unconfirmed"
-  fi
-  if local_phase && [ -e "$CONFIG/pr-health-monitor" ] && command -v jq >/dev/null 2>&1 \
-    && [ -d "$DATA" ] && [ -x "$SCRIPT_DIR/fm-pr-health.sh" ]; then
-    "$SCRIPT_DIR/fm-pr-health.sh" arm >/dev/null \
-      || echo "MISSING: the PR health monitor could not be armed; owned PRs are not watched"
-  fi
   if [ -n "$fleet_sync_pid" ]; then
     wait "$fleet_sync_pid" || true
     cat "$fleet_sync_out"
     rm -f "$fleet_sync_out"
+  fi
+  # Local housekeeping whose cost grows with the home's history (state/ records,
+  # contribution records) and that the first turn does not need, so it rides
+  # the deferred half rather than the digest's bounded blocking path. It runs
+  # last, so a deferred worker that runs out of time cuts only housekeeping,
+  # which the next start repeats. It needs no ordering against the backlog
+  # reconciliation above: reconciliation never creates a task record, so a
+  # sweep that runs first only keeps more.
+  if network_phase; then
+    # Watcher bookkeeping for endpoints that are provably gone, and orphaned
+    # scratch files. The sweep is built to run mid-session (bin/fm-watch.sh runs
+    # it at the heartbeat too) and never exits nonzero. Its warnings say what it
+    # kept for its next run, such as a task set a first-turn spawn holds, so they
+    # are reported as information, as the watcher logs them, rather than as a
+    # deferred result needing action. The watcher's 60s bound also applies here:
+    # a first-turn spawn waits at most a minute for the sweep's task-set hold.
+    # fm_exec_timed names this bootstrap as the sweep's owner, so a worker bound
+    # that kills bootstrap also ends the sweep instead of leaving it running
+    # after the acquisition lease is released.
+    if network_sweep_authorized 'state residue sweep'; then
+      __fm_timing_stamp=$(fm_timing_now_ms)
+      {
+        sweep_rc=0
+        (FM_EXEC_TIMED_OWNER_PID=$$ fm_exec_timed 60 1 "$SCRIPT_DIR/fm-state-residue-sweep.sh") 2>&1 </dev/null \
+          || sweep_rc=$?
+        ! fm_timed_out "$sweep_rc" \
+          || echo "BOOTSTRAP_INFO: state residue sweep did not finish within its 60s bound; the watcher's heartbeat sweep retries"
+      } | sed 's/^warning: /BOOTSTRAP_INFO: warning: /'
+      fm_timing_record phase residue-sweep "$__fm_timing_stamp"
+    fi
+    # Adopt existing durable contribution links without making a network call.
+    # Detection-only startup must never publish a check registration. The PR
+    # health monitor arms contribution observation under the same lock, so it
+    # moves with it rather than waiting on it from the blocking path.
+    if command -v jq >/dev/null 2>&1 && [ -d "$DATA" ]; then
+      if [ -x "$SCRIPT_DIR/fm-contributions.sh" ] \
+        && network_sweep_authorized 'contribution observation arming'; then
+        __fm_timing_stamp=$(fm_timing_now_ms)
+        "$SCRIPT_DIR/fm-contributions.sh" arm --if-owned >/dev/null \
+          || echo "MISSING: contribution observation could not be armed; coverage is unconfirmed"
+        fm_timing_record phase contributions-arm "$__fm_timing_stamp"
+      fi
+      if [ -e "$CONFIG/pr-health-monitor" ] && [ -x "$SCRIPT_DIR/fm-pr-health.sh" ] \
+        && network_sweep_authorized 'PR health monitor arming'; then
+        "$SCRIPT_DIR/fm-pr-health.sh" arm >/dev/null \
+          || echo "MISSING: the PR health monitor could not be armed; owned PRs are not watched"
+      fi
+    fi
   fi
 fi
 local_phase && secondmate_handoff_detect

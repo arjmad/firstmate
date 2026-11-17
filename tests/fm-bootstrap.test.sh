@@ -1251,6 +1251,57 @@ SH
   pass "bootstrap: FM_BOOTSTRAP_NETWORK partitions one run into local and network halves"
 }
 
+# Housekeeping that scales with a home's history and that the first turn does
+# not need must stay off a session start's blocking half and run in its deferred
+# half, under the same fleet-lock recheck as the network sweeps. The residue
+# sweep stamps state/.residue-sweep-last on every run, and the PR health monitor
+# leaves its check registration; the data prune deletes without the task-set
+# lock, so it stays on the blocking half, where its size advisory prints.
+test_housekeeping_sweeps_run_in_the_deferred_half() {
+  local case_dir fakebin home out
+  case_dir="$TMP_ROOT/housekeeping-phase"
+  home="$case_dir/home"
+  mkdir -p "$home/config" "$home/state" "$home/data/old-task"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  printf '1\n' > "$home/config/data-size-trigger-mib"
+  : > "$home/config/pr-health-monitor"
+  printf 'brief\n' > "$home/data/old-task/brief.md"
+  head -c 2200000 /dev/zero > "$home/data/old-task/capture.bin"
+  printf '%s\n' "$$" > "$home/state/.lock"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_real_jq "$fakebin"
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_BOOTSTRAP_NETWORK=skip "$ROOT/bin/fm-bootstrap.sh" 2>&1)
+  assert_absent "$home/state/.residue-sweep-last" "the blocking half ran the state residue sweep"
+  assert_absent "$home/state/pr-health.check.sh" "the blocking half armed the PR health monitor"
+  assert_contains "$out" "BOOTSTRAP_INFO: data size:" "the blocking half dropped the data prune"
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_BOOTSTRAP_NETWORK=only FM_BOOTSTRAP_NETWORK_LOCK_PID=111111 \
+    "$ROOT/bin/fm-bootstrap.sh" 2>&1)
+  assert_absent "$home/state/.residue-sweep-last" "a stale deferred worker ran the state residue sweep"
+  assert_absent "$home/state/pr-health.check.sh" "a stale deferred worker armed the PR health monitor"
+  assert_contains "$out" "changed before state residue sweep" "the stale worker did not report the refused residue sweep"
+  assert_contains "$out" "changed before contribution observation arming" "the stale worker did not report the refused contribution arming"
+  assert_contains "$out" "changed before PR health monitor arming" "the stale worker did not report the refused PR health arming"
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_BOOTSTRAP_NETWORK=only FM_BOOTSTRAP_NETWORK_LOCK_PID="$$" \
+    "$ROOT/bin/fm-bootstrap.sh" 2>&1)
+  assert_present "$home/state/.residue-sweep-last" "the deferred half did not run the state residue sweep"
+  assert_present "$home/state/pr-health.check.sh" "the deferred half did not arm the PR health monitor"
+  assert_not_contains "$out" "BOOTSTRAP_INFO: data size:" "the deferred half repeated the data prune"
+
+  rm -f "$home/state/.residue-sweep-last" "$home/state/pr-health.check.sh" "$home/state/pr-health.check-trust"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh" 2>&1)
+  assert_present "$home/state/.residue-sweep-last" "an unsplit run dropped the state residue sweep"
+  assert_present "$home/state/pr-health.check.sh" "an unsplit run dropped the PR health arming"
+  assert_contains "$out" "BOOTSTRAP_INFO: data size:" "an unsplit run dropped the data prune"
+  pass "bootstrap: history-scaled housekeeping runs in the deferred half, the data prune in the blocking half"
+}
+
 test_network_sweeps_recheck_lock_ownership() {
   local case_dir fakebin fake_root marker out
   case_dir="$TMP_ROOT/network-lock-handoff"
@@ -1951,6 +2002,7 @@ test_fleet_sync_timeout_is_computed_before_launch
 test_routine_bootstrap_confirmations_are_silent
 test_routine_bootstrap_contract_runs_under_system_bash
 test_network_phase_partitions_the_run
+test_housekeeping_sweeps_run_in_the_deferred_half
 test_network_sweeps_recheck_lock_ownership
 test_network_phases_record_per_step_elapsed_times
 test_tasks_axi_verdict_handoff_is_consumed_once

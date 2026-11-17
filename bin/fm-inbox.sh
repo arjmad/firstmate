@@ -1439,23 +1439,31 @@ pending_note_ids() {
 # close-handed-off from the mate's terminal line. A row that cannot be read is
 # listed rather than hidden. One
 # tab-separated line each, oldest first: note id, captured at, item, summary.
+# handled/ only grows and few of its notes are handoffs, while the session-start
+# digest runs this on its bounded blocking path, so one awk pass reads every
+# note's header request id and only handoff notes cost a fork each.
+# The loop reads that pass's rows on stdin, so no command inside it may read stdin.
 unreplied_handoff_rows() {
   local now f id rid item captured at summary show state
   [ -d "$INBOX/handled" ] || return 0
   now=${FM_INBOX_NOW:-$(date +%s)}
-  for f in "$INBOX/handled"/*.note; do
+  find "$INBOX/handled" -maxdepth 1 -type f -name '*.note' -exec awk '
+    FNR == 1 { header = 1 }
+    !header { next }
+    /^--$/ { header = 0; next }
+    /^request_id=/ { if (substr($0, 12) ~ /^handoff:./) print FILENAME "\t" substr($0, 12); header = 0 }
+  ' {} + 2>/dev/null | while IFS=$'\t' read -r f rid; do
     [ -f "$f" ] || continue
     id=${f##*/}
     id=${id%.note}
     [ ! -f "$REPLIES/$id" ] || continue
-    rid=$(sed -n '/^--$/q;s/^request_id=//p' "$f" | head -n 1)
-    case "$rid" in handoff:?*) item=${rid#handoff:} ;; *) continue ;; esac
+    item=${rid#handoff:}
     [ ! -f "$INBOX/.handed-off/$item" ] || continue
     captured=${id%%-*}
     case "$captured" in ''|*[!0-9]*) continue ;; esac
     [ $((now - captured)) -ge "$REWAKE_SECONDS" ] || continue
     if show=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
-        FM_CONFIG_OVERRIDE="$CONFIG" "$FM_ROOT/bin/fm-tasks-axi.sh" show "$item" 2>/dev/null); then
+        FM_CONFIG_OVERRIDE="$CONFIG" "$FM_ROOT/bin/fm-tasks-axi.sh" show "$item" 2>/dev/null </dev/null); then
       state=$(printf '%s\n' "$show" | sed -n 's/^  state: //p' | head -n 1)
       [ "$state" = "done" ] || continue
     fi
