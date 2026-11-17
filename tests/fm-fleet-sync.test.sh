@@ -1370,10 +1370,21 @@ test_merged_elsewhere_settle_keeps_unlanded_edits() {
   [ ! -e "$pending" ] || fail "a held settle must not wake firstmate: $(cat "$pending")"
   cmp -s "$kept" "$live/skills/b.md" || fail "the unlanded edit must still survive byte for byte"
 
+  printf 'more unlanded edit\n' >> "$live/skills/b.md"
+  run_scheduled "$home"
+  assert_equals 1 "$(runs_of "$home/settles-nova")" "a further edit to a path origin never changed settles nothing more"
+
   printf 'local edit\n' >> "$live/file.txt"
   out=$(run_sync "$home" nova)
   assert_contains "$out" "nova live $live: STUCK: on branch main with uncommitted changes" "an edit outside the capture dir stays STUCK"
   assert_equals 1 "$(runs_of "$home/settles-nova")" "an edit outside the capture dir runs no settle"
+
+  git -C "$live" checkout -q -- file.txt skills/b.md
+  out=$(run_sync "$home" nova)
+  assert_contains "$out" "nova live $live: settled: $cmd --settle restored 1 path(s) origin already holds" \
+    "once the unlanded edit clears, the landed one settles"
+  assert_equals "$(git -C "$home/work-nova" rev-parse HEAD)" "$(head_sha "$live")" "and the checkout fast-forwards"
+  assert_equals "" "$(git -C "$live" status --porcelain)" "the checkout is clean"
   pass "the ordinary sync's settle keeps unlanded edits, runs once per edit state, and never runs beside unrelated edits"
 }
 
@@ -1415,15 +1426,16 @@ echo capture >> '$home/captures-settler'
 while [ -e '$home/capture-hold-settler' ]; do sleep 0.1; done
 SCRIPT
   chmod +x "$cmd"
-  # The capture merged: origin holds the live edit, which still sits uncommitted.
-  printf 'v1\n' > "$home/work-settler/skills/a.md"
-  git -C "$home/work-settler" commit -qam "capture merged"
-  git -C "$home/work-settler" push -q origin main
   printf 'v1\n' > "$live/skills/a.md"
   live_config "$home" "settler $live capture=skills/:$cmd"
   : > "$home/capture-hold-settler"
   out=$(run_sync "$home" settler)
-  assert_contains "$out" "capturing:" "the merge's own sync starts a capture for the new edit state"
+  assert_contains "$out" "capturing:" "the sync starts a capture for the live edit"
+  # The capture merged while it still runs: origin holds the live edit, which
+  # still sits uncommitted.
+  printf 'v1\n' > "$home/work-settler/skills/a.md"
+  git -C "$home/work-settler" commit -qam "capture merged"
+  git -C "$home/work-settler" push -q origin main
 
   out=$(FM_CAPTURE_SETTLE_WAIT_SECS=0 run_sync "$home" --settle-capture settler)
   assert_contains "$out" "settler live $live: skipped: busy: $cmd is still running" "a running capture defers the settle"

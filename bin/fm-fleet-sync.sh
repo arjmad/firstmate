@@ -81,8 +81,9 @@
 # ..." - informational, since the edits block no fast-forward and wait for the
 # capture to land. One behind it whose capture log names a pull request that
 # `gh pr view` reads as open, within FM_CAPTURE_PR_READ_SECS (default 10),
-# reports "capture-pending <PR url>: ..." - also informational, since landing
-# that PR settles and fast-forwards it (see the settle form). A read that fails
+# reports "capture-pending <PR url>: ..." - also informational, since once that
+# PR merges, by any path, the sync settles and fast-forwards it (see the
+# ordinary settle below). A read that fails
 # keeps the last open reading of that same URL, recorded in
 # state/live-checkouts/<key>.capture.pr, so a gh outage wakes no one. One ahead
 # of it, or behind it with no open capture PR, gets the ordinary STUCK line with
@@ -92,8 +93,8 @@
 # STUCK as before. <dir> must lie inside the checkout, and a <command> without a
 # slash is ./<command>.
 # capture-start=off keeps the entry a capture project - bin/fm-capture-land.sh
-# still lands its PRs and the settle form still runs "<command> --settle" - but
-# the sync never starts <command>: its own scheduled job does. A checkout held
+# still lands its PRs and the sync still runs "<command> --settle" - but the
+# sync never starts <command>: its own scheduled job does. A checkout held
 # only by edits under <dir>/ that is at or behind origin/<default> reports "live
 # edits wait for the scheduled capture: ..." (behind it, ending "; fast-forwards
 # once it lands"), which wakes no one; one ahead of it or diverged is STUCK.
@@ -101,7 +102,25 @@
 # capture= on the same line.
 # The single-project form syncs the entries for that project name; the whole-fleet
 # form syncs every entry after the clones.
-# Settle form (--settle-capture <project>), for after a capture PR merged
+# Ordinary settle: a capture PR merged by any path (bin/fm-capture-land.sh,
+# bin/fm-pr-merge.sh, the forge, or the capture job's own landing) leaves its
+# edits uncommitted in the checkout, which blocks the fast-forward. So after the
+# fetch, a capture= checkout on its default branch whose uncommitted paths all
+# lie under <dir>/, that is strictly behind origin/<default>, and where
+# origin/<default> changed at least one of those paths since HEAD, runs
+# "<command> --settle" from the checkout before any capture starts, and
+# fast-forwards in the same run once that leaves it clean. It never waits: a
+# capture this sync started defers the checkout as above. It runs once per
+# state - the command, HEAD, origin/<default>, the edits to the paths origin
+# changed, and which other paths are uncommitted - recorded with its exit in
+# state/live-checkouts/<key>.settle, so a further edit to a path origin never
+# changed runs no second settle. It prints "settled: ..." when it clears the
+# checkout, "settle held: <reason>" when it restored a path while other edits
+# still hold the fast-forward (each restored path keeps origin's text, as in
+# the settle form), nothing when it restored no path, and a STUCK line naming
+# its exit when it fails, which later runs repeat for the same state without
+# rerunning it. The checkout's ordinary line follows while it is still held.
+# Settle form (--settle-capture <project>), for right after a capture PR merged
 # (bin/fm-capture-land.sh): before the single-project sync, each of that
 # project's capture= checkouts first waits while a capture this sync started is
 # still running - up to FM_CAPTURE_SETTLE_WAIT_SECS (default 600), polling every
@@ -204,6 +223,10 @@ POST_UPDATE_TAIL_CHARS=200
 CAPTURE_DIR=""
 CAPTURE_CMD=""
 CAPTURE_START=sync
+CAPTURE_PATHS=()
+LANDED_PATHS=()
+SETTLE_RC=""
+SETTLE_TAIL=""
 
 SCHEDULED_INTERVAL_FILE="$CONFIG/fleet-sync-interval"
 SCHEDULED_INTERVAL_DEFAULT=1800
@@ -566,26 +589,30 @@ report_stuck() {
 
 # capture_paths_only: true when the checkout has uncommitted paths - tracked
 # edits against HEAD and untracked files, ignored files excluded - and all of
-# them lie under $CAPTURE_DIR; sets CAPTURE_COUNT to how many there are.
+# them lie under $CAPTURE_DIR; sets CAPTURE_PATHS to them and CAPTURE_COUNT to
+# how many there are.
 capture_paths_only() {
-  local path n=0
+  local path
+  CAPTURE_PATHS=()
   while IFS= read -r -d '' path; do
-    case "$path" in "$CAPTURE_DIR"*) n=$((n + 1)) ;; *) return 1 ;; esac
+    case "$path" in "$CAPTURE_DIR"*) CAPTURE_PATHS+=("$path") ;; *) return 1 ;; esac
   done < <({ git -C "$PROJ" diff -z --name-only --no-renames HEAD
     git -C "$PROJ" ls-files -z --others --exclude-standard; } 2>/dev/null | sort -zu)
-  CAPTURE_COUNT=$n
-  [ "$n" -gt 0 ]
+  CAPTURE_COUNT=${#CAPTURE_PATHS[@]}
+  [ "$CAPTURE_COUNT" -gt 0 ]
 }
 
-# capture_fingerprint: one hash of the edit state a capture is started for, so
-# an unchanged state never starts a second run. It includes origin/<default>
-# because a capture is built on it: after a merge the edits need a fresh capture
-# before they can land.
+# capture_fingerprint [<path>...]: one hash of the edit state a capture is
+# started for, so an unchanged state never starts a second run. It includes
+# origin/<default> because a capture is built on it: after a merge the edits
+# need a fresh capture before they can land. With paths, it hashes the edits to
+# exactly those paths instead of the whole capture dir.
 capture_fingerprint() {
   local untracked
-  untracked=$(git -C "$PROJ" -c core.quotePath=false ls-files --others --exclude-standard -- "$CAPTURE_DIR" 2>/dev/null)
+  [ "$#" -gt 0 ] || set -- "$CAPTURE_DIR"
+  untracked=$(git -C "$PROJ" --literal-pathspecs -c core.quotePath=false ls-files --others --exclude-standard -- "$@" 2>/dev/null)
   { git -C "$PROJ" rev-parse HEAD "$BASE"
-    git -C "$PROJ" diff --binary --no-renames HEAD -- "$CAPTURE_DIR"
+    git -C "$PROJ" --literal-pathspecs diff --binary --no-renames HEAD -- "$@"
     if [ -n "$untracked" ]; then
       printf '%s\n' "$untracked"
       printf '%s\n' "$untracked" | git -C "$PROJ" hash-object --no-filters --stdin-paths
@@ -755,15 +782,29 @@ settle_blocker() {
 # header). Returns non-zero only when a capture is still running after the wait,
 # which leaves the checkout for the ordinary busy skip.
 settle_capture() {
-  local waited=0 log rc=0 path kept=0
+  local waited=0
   while capture_running; do
     [ "$waited" -lt "$CAPTURE_SETTLE_WAIT_SECS" ] || return 1
     sleep "$LIVE_LOCK_POLL_SECS"
     waited=$((waited + LIVE_LOCK_POLL_SECS))
   done
+  run_settle asked || true
+  return 0
+}
+
+# run_settle <asked|found>: run "<command> --settle" from the checkout, give each
+# path it settled origin's text back when the checkout still cannot
+# fast-forward, and report the outcome; sets SETTLE_RC to the command's exit and
+# SETTLE_TAIL to its output tail when it failed. "asked" (the settle form)
+# always prints one line; "found" (the ordinary sync's own settle) prints
+# nothing for a settle that restored no path and left the checkout held.
+# Returns non-zero only when the command could not be started.
+run_settle() {
+  local why=$1 log rc=0 path kept=0 n
+  SETTLE_RC="" SETTLE_TAIL=""
   log=$(mktemp "${TMPDIR:-/tmp}/fm-capture-settle.XXXXXX") || {
     echo "$label: STUCK: could not start $CAPTURE_CMD --settle - needs attention"
-    return 0
+    return 1
   }
   (cd "$PROJ" && bash -c "$CAPTURE_CMD --settle") </dev/null >"$log" 2>&1 || rc=$?
   cat "$log" >&2
@@ -775,15 +816,72 @@ settle_capture() {
       git -C "$PROJ" restore --source="$SETTLE_BASE" --worktree -- "$path" 2>/dev/null && kept=$((kept + 1))
     done < <(sed -n 's/^settled //p' "$log")
   fi
+  n=$(grep -c '^settled ' "$log" || true)
   if [ "$rc" != 0 ]; then
-    echo "$label: STUCK: $CAPTURE_CMD --settle failed (exit $rc) - needs attention; last output: $(post_update_output_tail "$log")"
+    SETTLE_TAIL=$(post_update_output_tail "$log")
+    echo "$label: STUCK: $CAPTURE_CMD --settle failed (exit $rc) - needs attention; last output: $SETTLE_TAIL"
   elif [ -n "$SETTLE_BLOCKER" ]; then
-    echo "$label: settle held: $SETTLE_BLOCKER, so the checkout cannot fast-forward yet; kept $kept settled path(s) at ${SETTLE_BASE:-origin}'s text"
+    { [ "$why" = found ] && [ "$n" = 0 ]; } \
+      || echo "$label: settle held: $SETTLE_BLOCKER, so the checkout cannot fast-forward yet; kept $kept settled path(s) at ${SETTLE_BASE:-origin}'s text"
   else
-    echo "$label: settled: $CAPTURE_CMD --settle restored $(grep -c '^settled ' "$log" || true) path(s) origin already holds"
+    echo "$label: settled: $CAPTURE_CMD --settle restored $n path(s) origin already holds"
   fi
   rm -f "$log"
+  SETTLE_RC=$rc
   return 0
+}
+
+# landed_paths: true when the checkout is strictly behind $BASE, every
+# uncommitted path lies under $CAPTURE_DIR, and origin/<default> changed at
+# least one of them since HEAD - the only state in which origin can already
+# hold one of the edits; sets LANDED_PATHS to those paths.
+landed_paths() {
+  local path
+  LANDED_PATHS=()
+  capture_paths_only || return 1
+  [ "$(git -C "$PROJ" rev-parse HEAD 2>/dev/null)" != "$(git -C "$PROJ" rev-parse "$BASE" 2>/dev/null)" ] || return 1
+  git -C "$PROJ" merge-base --is-ancestor HEAD "$BASE" 2>/dev/null || return 1
+  while IFS= read -r -d '' path; do
+    LANDED_PATHS+=("$path")
+  done < <(git -C "$PROJ" --literal-pathspecs diff -z --name-only --no-renames HEAD "$BASE" -- "${CAPTURE_PATHS[@]}" 2>/dev/null)
+  [ "${#LANDED_PATHS[@]}" -gt 0 ]
+}
+
+# landed_state: one hash of what a settle of this checkout depends on - the
+# command, HEAD, origin/<default>, the edits to LANDED_PATHS, and which other
+# paths are uncommitted - so a further edit to a path origin never changed is
+# not a new state, while that path's edit clearing is. Call after landed_paths.
+landed_state() {
+  local fp
+  fp=$(capture_fingerprint "${LANDED_PATHS[@]}") && [ -n "$fp" ] || return 1
+  printf '%s\n' "$fp" "$CAPTURE_CMD" "${CAPTURE_PATHS[@]}" | git hash-object --stdin
+}
+
+# settle_landed_capture: the ordinary sync's own settle for a capture= checkout
+# on its default branch, after the fetch (see the header). It runs
+# "<command> --settle" once per landed_state, recorded with the command's exit
+# in state/live-checkouts/<key>.settle; a recorded failure prints its STUCK line
+# again without rerunning the command. The settle form settles on its own.
+settle_landed_capture() {
+  local key record fp memo_fp="" memo_rc="" memo_tail=""
+  [ -n "$CAPTURE_CMD" ] && [ "$SETTLE_CAPTURE" != 1 ] || return 0
+  landed_paths || return 0
+  key=$(live_record_key) || return 0
+  record="$LIVE_RECORDS/$key.settle"
+  fp=$(landed_state) && [ -n "$fp" ] || return 0
+  [ ! -f "$record" ] || read -r memo_fp memo_rc memo_tail < "$record" || true
+  if [ "$memo_fp" = "$fp" ]; then
+    [ "$memo_rc" = 0 ] \
+      || echo "$label: STUCK: $CAPTURE_CMD --settle failed (exit $memo_rc) - needs attention; last output: $memo_tail"
+    return 0
+  fi
+  run_settle found || return 0
+  # Keyed on the state the settle left: a held settle gives each landed path
+  # origin's text, which can differ from the live text by the command's own
+  # normalization. A settle that cleared every landed path needs no record.
+  landed_paths || return 0
+  fp=$(landed_state) && [ -n "$fp" ] || return 0
+  write_live_record "$record" "$fp $SETTLE_RC${SETTLE_TAIL:+ $SETTLE_TAIL}"
 }
 
 # One config value of $PROJ's own .git, read without needing a work tree.
@@ -908,9 +1006,13 @@ fast_forward_clone() {
       return 0
     fi
   elif [ "$dirty" = yes ]; then
-    # On the default branch but with uncommitted changes we must not disturb.
-    capture_or_report_stuck
-    return 0
+    # On the default branch but with uncommitted changes we must not disturb,
+    # unless the capture command's own settle clears every one of them.
+    settle_landed_capture
+    if [ -n "$(git -C "$PROJ" status --porcelain 2>/dev/null | head -1)" ]; then
+      capture_or_report_stuck
+      return 0
+    fi
   fi
 
   if ! git -C "$PROJ" rev-parse --verify --quiet "$DEFAULT^{commit}" >/dev/null; then
