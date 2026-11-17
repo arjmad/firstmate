@@ -797,6 +797,7 @@ test_direct_pr_dod_waits_for_checks_green() {
   assert_grep 'gh-axi pr checks <number> --watch --fail-fast' "$out" "direct-PR DoD does not wait for the PR's checks"
   assert_grep 'gate-wait [at=<epoch>]: checks on PR {url}' "$out" "direct-PR DoD does not declare the checks wait"
   assert_grep 'merge_state' "$out" "direct-PR DoD does not catch a required check that never reported"
+  assert_grep 'gh-axi pr reopen <number>' "$out" "direct-PR DoD leaves a run an Actions outage stranded with no recovery"
   assert_grep 'fleet-gate' "$out" "direct-PR DoD does not name the fleet-gate trap"
   assert_grep 'findings.json' "$out" "direct-PR DoD does not name the untracked review output"
   assert_grep 'working [at=<epoch>]: fixing {check}' "$out" "direct-PR DoD leaves a fixing worker declared as waiting"
