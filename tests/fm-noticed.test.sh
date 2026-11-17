@@ -239,6 +239,7 @@ test_a_routine_item_is_never_held_for_him() {
   assert_equals "" "$(noticed "$home" unseen)" "a routine item waits to be shown before it is handled"
   out=$(noticed "$home" file noticed lint-drift --title "Lint config drifted" --why "seen again" --from t2)
   assert_equals "matched: noticed-lint-drift" "$out" "a routine item filed again was not matched"
+  assert_not_contains "$(tasks "$home" show noticed-lint-drift --full)" "held: yes" "a routine item filed again was held"
   # A ship's teardown may close the row before firstmate records the fix.
   tasks "$home" "done" noticed-lint-drift >/dev/null || fail "could not close the routine row"
   out=$(noticed "$home" close noticed-lint-drift --evidence "pinned the lint config" --fixed \
@@ -271,11 +272,26 @@ test_a_routine_item_is_never_held_for_him() {
   assert_contains "$(tasks "$home" show noticed-dead-link --full)" "(call: ruling)" "a routine item back with --call was not held"
   assert_contains "$(noticed "$home" unseen)" "noticed-dead-link	noticed	Dead doc link" \
     "a routine item back with --call does not wait for the Monday triage"
+  assert_contains "$(tasks "$home" show noticed-dead-link --full)" "Held for the captain (call: ruling)." \
+    "a routine item back with --call does not say in its body that it is held now"
+  # An open routine item that turns out to need his call is held when filed again with --call.
+  noticed "$home" file noticed slow-sync --title "Slow sync" --why "lag" --from t1 >/dev/null
+  out=$(noticed "$home" file noticed slow-sync --title "Slow sync" --why "needs new machinery" --from t2 --call machinery)
+  assert_equals "matched: noticed-slow-sync" "$out" "an open routine item filed with --call was not matched"
+  show=$(tasks "$home" show noticed-slow-sync --full)
+  assert_contains "$show" "held: yes" "an open routine item filed with --call was not held"
+  assert_contains "$show" "(call: machinery)" "the new hold does not name its call"
+  assert_contains "$show" "Held for the captain 2026-10-27 (call: machinery)." "the body does not say the row is held now"
+  assert_contains "$(noticed "$home" unseen)" "noticed-slow-sync	noticed	Slow sync" \
+    "an open routine item held with --call does not wait for the Monday triage"
   noticed "$home" file noticed held-once --title "Held once" --why "first" --from t1 --call retire >/dev/null
   noticed "$home" close noticed-held-once --evidence "settled" >/dev/null
   out=$(noticed "$home" file noticed held-once --title "Held once" --why "back" --from t2) \
     || fail "a held item back as routine could not be reopened: $out"
-  assert_equals "reopened: noticed-held-once" "$out" "a held item back as routine was not reopened"
+  assert_equals "reopened: noticed-held-once (lifted its earlier captain hold)" "$out" \
+    "a held item back as routine does not say its old hold was lifted"
+  assert_contains "$(tasks "$home" show noticed-held-once --full)" "Its earlier captain hold was lifted; it is routine now." \
+    "the body does not record the lifted hold"
   assert_not_contains "$(tasks "$home" show noticed-held-once --full)" "held: yes" "a routine recurrence kept its old captain hold"
   assert_equals fleet "$(tasks "$home" owner noticed-held-once)" "a routine recurrence is not the fleet's"
   # A dated hold whose date has passed reads unheld but still carries its kind.

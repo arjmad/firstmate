@@ -34,7 +34,10 @@
 #                              added to its body
 #            reopened: <id>    a closed noticed item came back, routine or
 #                              re-held as this filing says (refiled fresh
-#                              once Done retention archived it)
+#                              once Done retention archived it); a routine
+#                              reopen that lifted the captain hold the item
+#                              closed with adds ` (lifted its earlier captain
+#                              hold)`
 #            skipped: <id> (answered earlier)   a closed idea is never re-asked,
 #                              archived or not
 #          A noticed item is filed routine unless --call is given: firstmate
@@ -54,7 +57,8 @@
 #          the wake drain prints, and an idea refuses it. Once `now`, a row
 #          stays `now` until marked shown. --routine is accepted for older
 #          callers and changes nothing; it refuses an idea and --call. An
-#          open item filed again only gains its evidence, --call or not.
+#          open item filed again gains its evidence, and --call also holds
+#          it when it is not held yet.
 #          --from names who saw it (a
 #          task id or an agent); one naming nova or sapna is refused, because
 #          Sapna's agents never file into this backlog. A body rewrite takes
@@ -261,7 +265,16 @@ cmd_file() {
     if [ "$state" != "done" ]; then
       append_body "$id" "Seen again $TODAY by $from: ${evidence:-$why}" \
         || { echo "fm-noticed: could not attach evidence to $id" >&2; exit 1; }
-      [ "$now" = 0 ] || list_noticed "$id" "$(shown_field "$show" title)" 1
+      if [ -n "$call" ] && [ "$(shown_field "$show" held)" != yes ]; then
+        # An open routine row that turns out to need his call is held now.
+        "$HOLD" hold "$id" --kind reversible --reason "$(hold_reason "$kind" "$title" "$why" "$from" "$call")" >/dev/null \
+          || { echo "fm-noticed: $id is open but could not be held; hold it with bin/fm-captain-hold.sh before anything dispatches" >&2; exit 1; }
+        append_body "$id" "Held for the captain $TODAY (call: $call)." \
+          || { echo "fm-noticed: $id is held but its hold was not noted in its body" >&2; exit 1; }
+        list_noticed "$id" "$(shown_field "$show" title)" "$now"
+      elif [ "$now" = 1 ]; then
+        list_noticed "$id" "$(shown_field "$show" title)" 1
+      fi
       printf 'matched: %s\n' "$id"
       return 0
     fi
@@ -272,18 +285,21 @@ cmd_file() {
     "$TASKS" reopen "$id" >/dev/null || { echo "fm-noticed: could not reopen $id" >&2; exit 1; }
     if [ "$routine" = 1 ]; then
       # A reopen restores the hold it closed with, even one whose date has
-      # passed; a routine recurrence is the fleet's, so lift it first.
+      # passed; a routine recurrence is the fleet's, so lift it first, and say
+      # so, because the caller cannot see that the closed row was a call.
+      local lifted=''
       case "$(shown_field "$("$TASKS" show "$id" 2>/dev/null)" hold_kind)" in '' | - | null) ;; *)
-        "$TASKS" unhold "$id" >/dev/null || { echo "fm-noticed: $id is reopened but still held; unhold it before anything else" >&2; exit 1; } ;;
+        "$TASKS" unhold "$id" >/dev/null || { echo "fm-noticed: $id is reopened but still held; unhold it before anything else" >&2; exit 1; }
+        lifted=' (lifted its earlier captain hold)' ;;
       esac
       "$TASKS" owner "$id" fleet >/dev/null \
         || { echo "fm-noticed: $id is reopened but its owner could not be set to the fleet" >&2; exit 1; }
-      append_body "$id" "Back $TODAY, seen by $from: ${evidence:-$why}" \
+      append_body "$id" "Back $TODAY, seen by $from: ${evidence:-$why}${lifted:+ Its earlier captain hold was lifted; it is routine now.}" \
         || { echo "fm-noticed: $id is reopened but its new evidence was not attached" >&2; exit 1; }
       # Broken again: its fix or drop no longer stands.
       ! grep -Eq "^$id$TAB(fixed|dropped)$TAB" "$UNSEEN" 2>/dev/null || drop_unseen "$id"
       [ "$now" = 0 ] || list_noticed "$id" "$title" 1
-      printf 'reopened: %s\n' "$id"
+      printf 'reopened: %s%s\n' "$id" "$lifted"
       return 0
     fi
     # Reopened rows are dispatchable until held, so hold at once, and close
@@ -294,7 +310,7 @@ cmd_file() {
       echo "fm-noticed: could not re-hold $id" >&2
       exit 1
     fi
-    append_body "$id" "Back $TODAY, seen by $from: ${evidence:-$why}" \
+    append_body "$id" "Back $TODAY, seen by $from: ${evidence:-$why} Held for the captain (call: $call)." \
       || { echo "fm-noticed: $id is re-held but its new evidence was not attached" >&2; exit 1; }
     list_noticed "$id" "$title" "$now"
     printf 'reopened: %s\n' "$id"
