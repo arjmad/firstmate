@@ -40,8 +40,10 @@
 #                       secondmate liveness, pending remote handoff retry, X-mode
 #                       artifact writes, the Lavish chrome patch, fleet sync)
 #                       also run only when
-#                       locked; the four network sweeps run in the deferred
-#                       stage rather than this synchronous bootstrap section.
+#                       locked; the four network sweeps and the state residue
+#                       sweep run in the deferred stage rather than this
+#                       synchronous bootstrap section, as does contribution and
+#                       PR health arming.
 #   3. wake-drain     - presents durable wakes and advances recovery handling
 #                       state, so it only runs when locked. The local bounded
 #                       inactive-outcome startup scan runs in the deferred worker.
@@ -90,7 +92,10 @@
 # started as one detached bounded worker right after the lock (step 1) and
 # harvested at step 7 without ever blocking on it. The bounded inactive-outcome
 # startup scan joins that worker because its local current-state reads can also
-# be slow. bin/fm-startup-network.sh owns that stage and its safety argument;
+# be slow, and so does bootstrap's local housekeeping whose cost grows with the
+# home's history (the state residue sweep and contribution arming), so a heavily
+# loaded host still prints the digest inside its bound.
+# bin/fm-startup-network.sh owns that stage and its safety argument;
 # bin/fm-bootstrap.sh and bin/fm-inactive-reconcile.sh remain the owners of the
 # work itself and still run it.
 # The digest is therefore composed from bounded local reads and local
@@ -1036,7 +1041,7 @@ if [ "$READ_ONLY" -eq 0 ]; then
 fi
 
 # --- 2. bootstrap --------------------------------------------------------
-# FM_BOOTSTRAP_NETWORK=skip on every path: bootstrap's own network half is what
+# FM_BOOTSTRAP_NETWORK=skip on every path: bootstrap's own deferred half is what
 # the deferred stage above is running right now, and running it twice would both
 # re-block this digest and race the worker's sweeps against themselves.
 stage bootstrap

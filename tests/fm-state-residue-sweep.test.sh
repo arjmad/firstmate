@@ -996,10 +996,12 @@ SH
   printf '%s\n' "$fakebin"
 }
 
+# The deferred half of a split bootstrap, the one bin/fm-startup-network.sh runs
+# for a locked session start, is where the sweep runs.
 run_bootstrap() {  # <fakebin> <home> [extra env...]
   local fb=$1 home=$2
   shift 2
-  PATH="$fb:$BASE_PATH" TMUX='' HERDR_ENV='' FM_HOME="$home" FM_BOOTSTRAP_NETWORK=skip \
+  PATH="$fb:$BASE_PATH" TMUX='' HERDR_ENV='' FM_HOME="$home" FM_BOOTSTRAP_NETWORK=only \
     FM_TEST_TMUX_WORLD="$home/world" FM_TEST_TMUX_CALLS="$home/calls" \
     env "$@" "$ROOT/bin/fm-bootstrap.sh" 2>&1
 }
@@ -1019,12 +1021,12 @@ test_bootstrap_runs_sweep_only_when_locked() {
 
   out=$(run_bootstrap "$tmuxfb:$fb" "$home")
   assert_contains "$out" "BOOTSTRAP_INFO: state residue sweep: removed 12 watcher record(s) for 1 gone endpoint(s)" \
-    "the locked local pass should run the sweep and relay its summary: $out"
-  [ "$(count_markers "$home" firstmate_fm-gone)" -eq 0 ] || fail "the locked pass left markers behind"
+    "the locked deferred pass should run the sweep and relay its summary: $out"
+  [ "$(count_markers "$home" firstmate_fm-gone)" -eq 0 ] || fail "the locked deferred pass left markers behind"
 
   out=$(run_bootstrap "$tmuxfb:$fb" "$home")
   assert_not_contains "$out" "state residue sweep" "a converged home must stay silent on the next run: $out"
-  pass "bootstrap: the sweep runs on the locked local pass only and converges silently"
+  pass "bootstrap: the sweep runs on the locked deferred pass only and converges silently"
 }
 
 test_gone_endpoint_swept_and_live_kept
