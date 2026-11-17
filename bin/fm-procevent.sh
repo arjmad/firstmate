@@ -174,9 +174,9 @@
 #            board whose task has a record or status log again, and a board
 #            registered again during the sweep are never retired; a captured
 #            round stays captured and announced until handled. Each
-#            retirement prints one `board-retired:` line, and each retirement
-#            or refused retirement is appended, timestamped, to
-#            procevent/board-retirements.log.
+#            retirement prints one `board-retired:` line, and each retirement,
+#            or refused retirement of a board not registered again during the
+#            sweep, is appended, timestamped, to procevent/board-retirements.log.
 #            Reconcile runs this at most once per
 #            FM_PROCEVENT_BOARD_SWEEP_SECONDS (default 3600; 0 runs it every
 #            cycle), and an unusable setting skips it.
@@ -492,7 +492,7 @@ adapter_self_announcing() {  # <adapter>
 
 source_file()  { printf '%s/%s.source\n' "$REG" "$1"; }
 source_field() {  # <source-id> <field>
-  sed -n "s/^$2=//p" "$(source_file "$1")" | head -1
+  sed -n -e '/^argv:$/q' -e "s/^$2=//p" "$(source_file "$1")" | head -1
 }
 source_kind() { source_field "$1" kind; }
 source_owner_task() { source_field "$1" owner_task; }
@@ -2006,11 +2006,13 @@ cmd_retire_quiet_boards() {
     # The registration must still be the one read above: a board armed or
     # handed over again during the sweep is not this one. The retire is also
     # conditional on the record content read above, so a re-arm that changes
-    # that record after this check is refused under the source lock.
+    # that record after this check is refused under the source lock and is
+    # not logged as a failure.
     [ "$(fm_pr_file_identity "$(source_file "$id")" 2>/dev/null)" = "$identity" ] || continue
     set -- "$id" --if-matches "$adapter"
     [ -z "$adopted" ] || set -- "$@" --adopted-from "$adopted"
     if ! "$SCRIPT_DIR/fm-procevent.sh" retire "$@" -- "${ARGV[@]}" >/dev/null 2>&1; then
+      [ "$(fm_pr_file_identity "$(source_file "$id")" 2>/dev/null)" = "$identity" ] || continue
       board_retire_log "board-retire-failed: $id reason=$reason"
       printf 'board-retire-failed: %s\n' "$id" >&2
       continue

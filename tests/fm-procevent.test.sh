@@ -5943,6 +5943,16 @@ touch "$ADOPT/live.html.go"
 for _ in $(seq 1 300); do wake_payloads "$ADOPT/home" | grep -q "$ad_live" && break; sleep 0.1; done
 assert_contains "$(wake_payloads "$ADOPT/home")" "$ad_live" "the adopted board's round did not reach firstmate"
 assert_absent "$ADOPT/home/state/worker-a.inbox" "the adopted board's round was delivered to the gone worker"
+ad_dir=$(cd "$ADOPT" && pwd -P)
+ad retire "$ad_unread" --if-matches lavish --adopted-from worker-a -- \
+  "$ROOT/bin/fm-procevent-lavish.sh" poll "$ad_dir/unread.html" >/dev/null \
+  || fail "an exact match did not retire the board adopt-task published"
+ad retire "$ad_other" --if-matches lavish --owner-task worker-b -- \
+  "$ROOT/bin/fm-procevent-lavish.sh" poll "$ad_dir/other.html" >/dev/null \
+  || fail "an exact match did not retire the board register-task published"
+ad retire "$ad_fm" --if-matches lavish -- \
+  "$ROOT/bin/fm-procevent-lavish.sh" poll "$ad_dir/firstmate.html" >/dev/null \
+  || fail "an exact match did not retire the board arm published for firstmate"
 unset ADOPT_FAKE ADOPT_SESSION
 pass "adopt-task hands a finished task's boards to firstmate, keeps one with an unread round, and leaves an ended one for retirement"
 
