@@ -751,6 +751,22 @@ assert_contains "$out" "$handoff" "the one real handoff is still listed among ma
 [ "$sed_calls" -le 20 ] || fail "unread ran sed $sed_calls times for 120 ordinary handled notes; expected a cost bounded by the handoff notes"
 pass "unread's handoff scan does not fork per ordinary handled note"
 
+# The scan's rows reach its loop on stdin, so a backlog lookup that reads stdin
+# must not swallow the handoffs after the first.
+home=$(make_home unreplied-stdin)
+first=$(run_inbox "$home" note --request-id handoff:hf-a --json "[claude] handoff hf-a: first" | json_get id)
+second=$(run_inbox "$home" note --request-id handoff:hf-b --json "[claude] handoff hf-b: second" | json_get id)
+run_inbox "$home" drain --ack "$first" >/dev/null
+run_inbox "$home" drain --ack "$second" >/dev/null
+fakebin="$TMP_ROOT/unreplied-stdin-bin"
+mkdir -p "$fakebin"
+printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 1\n' >"$fakebin/tasks-axi"
+chmod +x "$fakebin/tasks-axi"
+out=$(PATH="$fakebin:$PATH" FM_INBOX_NOW=$(( $(date +%s) + 90000 )) run_inbox "$home" unread)
+assert_contains "$out" "2 acknowledged handoff note(s) with no reply and no open backlog row" \
+  "a backlog lookup that reads stdin must not end the handoff scan early: $out"
+pass "unread's handoff scan keeps every handoff when a backlog lookup reads stdin"
+
 # --- close-handed-off answers a moved row from the secondmate's terminal line ----
 
 # A row fm-backlog-handoff.sh moved to secondmate sm-1, with its handoff note.
