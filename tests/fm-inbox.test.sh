@@ -722,6 +722,35 @@ if command -v tasks-axi >/dev/null 2>&1; then
 fi
 pass "unread lists acknowledged handoff notes a day old with no reply and no open row"
 
+# --- unread's handoff scan costs per handoff note, not per handled note ----------
+
+# A long-lived home acknowledges thousands of ordinary notes and only a few
+# handoffs, and the session-start digest runs unread on its bounded blocking path.
+home=$(make_home unreplied-cost)
+handoff=$(run_inbox "$home" note --request-id handoff:hf-cost --json "[claude] handoff hf-cost: the forgotten one" | json_get id)
+run_inbox "$home" drain --ack "$handoff" >/dev/null
+for n in $(seq 1 120); do
+  printf 'id=1700000000-plain%s\nat=2026-01-01T00:00:00Z\nsource=text\nannounce_marker=1\n--\nrequest_id=handoff:body-only\n' "$n" \
+    >"$home/state/inbox/handled/1700000000-plain$n.note"
+done
+fakebin="$TMP_ROOT/unreplied-cost-bin"
+mkdir -p "$fakebin"
+real_sed=$(command -v sed)
+cat >"$fakebin/sed" <<SH
+#!/usr/bin/env bash
+printf 'sed\n' >>"$TMP_ROOT/unreplied-cost-sed.log"
+exec "$real_sed" "\$@"
+SH
+chmod +x "$fakebin/sed"
+: >"$TMP_ROOT/unreplied-cost-sed.log"
+out=$(PATH="$fakebin:$PATH" FM_INBOX_NOW=$(( $(date +%s) + 90000 )) run_inbox "$home" unread)
+sed_calls=$(wc -l <"$TMP_ROOT/unreplied-cost-sed.log" | tr -d ' ')
+assert_contains "$out" "1 acknowledged handoff note(s) with no reply and no open backlog row" \
+  "a body line that only looks like a handoff request id does not make a note a handoff"
+assert_contains "$out" "$handoff" "the one real handoff is still listed among many ordinary notes"
+[ "$sed_calls" -le 20 ] || fail "unread ran sed $sed_calls times for 120 ordinary handled notes; expected a cost bounded by the handoff notes"
+pass "unread's handoff scan does not fork per ordinary handled note"
+
 # --- close-handed-off answers a moved row from the secondmate's terminal line ----
 
 # A row fm-backlog-handoff.sh moved to secondmate sm-1, with its handoff note.
