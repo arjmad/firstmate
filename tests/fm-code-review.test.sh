@@ -1087,6 +1087,22 @@ test_review_md_includes_follow_the_service_rules() {
   assert_contains "$PROMPT" 'REVIEW.md begins: Root rule. Rule A. @rules-b.md ``` @rules-b.md ``` @missing.md @sub/x.md @rules a.md Skill rule. REVIEW.md ends.' \
     "rules-includes: includes were not placed one level deep, outside fences, by plain name"
 
+  # The business repository's shape: the checklist lives only in root files
+  # pulled in by blank-line-separated @review-*.md lines.
+  dir=$(make_case rules-business bin/tool.sh)
+  mkdir -p "$dir/base"
+  printf '%s\n' '# Review instructions' '' 'Check only the items whose trigger matches the diff.' '' \
+    '@review-browser-labels.md' '' '@review-sync-stock.md' '' '@review-runner-mail.md' > "$dir/base/REVIEW.md"
+  printf '%s\n' '### B1. A label is bought once' '- **Trigger:** `labels/`.' > "$dir/base/review-browser-labels.md"
+  printf '%s\n' '### S1. A zero nobody counted is never pushed' '- **Trigger:** `sync/cycle.py`.' > "$dir/base/review-sync-stock.md"
+  printf '%s\n' '### M1. A customer mail is sent once' '- **Trigger:** `mail/`.' > "$dir/base/review-runner-mail.md"
+  review_prompt "$dir"
+  expect_code 0 "$RC" "rules-business: the review should run: $ERR"
+  for item in '### B1. A label is bought once' '### S1. A zero nobody counted is never pushed' '### M1. A customer mail is sent once'; do
+    assert_contains "$PROMPT" "$item" "rules-business: the included item '$item' did not reach the reviewer"
+  done
+  case "$PROMPT" in *'@review-'*) fail "rules-business: an include line reached the reviewer unexpanded" ;; esac
+
   dir=$(make_case rules-limits bin/tool.sh)
   mkdir -p "$dir/base"
   printf 'Root.\n' > "$dir/base/REVIEW.md"
