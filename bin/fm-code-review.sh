@@ -166,7 +166,8 @@
 #       carried record, and refuses with exit 1 when the follow-up since the
 #       last full record is not one a carry covers. --gate adds the gate
 #       statement, which posts a record even at a diff already reviewed
-#       when no record for it states the gate change yet; a pull request
+#       when no record for it states the gate change yet, as a carry when
+#       only a carry covers that diff, and never at an exempt one; a pull request
 #       that edits its gate and gets no --gate is refused with exit 1 in
 #       enforce mode, and warned about in observe mode.
 set -eu
