@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Behavior tests for bin/fm-noticed.sh: a noticed problem or an idea becomes a
-# captain hold that never dispatches, a duplicate attaches evidence instead of
+# Behavior tests for bin/fm-noticed.sh: a noticed problem is the fleet's own
+# work unless --call names the captain call it needs, an idea or a --call item
+# becomes a captain hold that never dispatches, a duplicate attaches evidence instead of
 # filing twice, a finished task's lines are collected, every unseen item waits for the Monday
 # triage, and the wake drain shows only an urgent (--now) item, until it is marked shown.
 set -u
@@ -55,18 +56,19 @@ test_noticed_is_a_captain_hold_that_never_dispatches() {
   local home out show
   home=$(make_home file)
   out=$(noticed "$home" file noticed canary-red --title "Packet canary red twice" \
-    --why "the Monday packet may be wrong" --from fix-labels-1027 --repo business) \
+    --why "the Monday packet may be wrong" --from fix-labels-1027 --repo business --call ruling) \
     || fail "file refused a valid item: $out"
   assert_equals "filed: noticed-canary-red" "$out" "file did not report the new item"
   show=$(tasks "$home" show noticed-canary-red --full)
   assert_contains "$show" "kind: noticed" "the item is not tagged noticed"
   assert_contains "$show" "held: yes" "the item is not held for the captain"
   assert_contains "$show" "[reversible]" "the item is not a reversible call"
+  assert_contains "$show" "(call: ruling)" "the hold does not name the call it needs"
   assert_contains "$show" "Why it may matter: the Monday packet may be wrong" "the why was not kept"
   assert_contains "$(tasks "$home" ready)" "ready: 0" "a noticed item became dispatchable"
   assert_equals "noticed-canary-red	noticed	Packet canary red twice" "$(noticed "$home" unseen)" \
     "the noticed item is not on the unseen list"
-  pass "a noticed problem is a captain hold that never dispatches and waits to be shown"
+  pass "a noticed problem filed --call is a captain hold that never dispatches and waits to be shown"
 }
 
 test_a_duplicate_attaches_evidence() {
@@ -74,7 +76,7 @@ test_a_duplicate_attaches_evidence() {
   home=$(make_home duplicate)
   long="packet may be wrong: $(printf 'evidence %.0s' $(seq 1 80))end-of-first-why"
   noticed "$home" file noticed canary-red --title "Packet canary red" --why "$long" \
-    --from t1 >/dev/null || fail "first file failed"
+    --from t1 --call ruling >/dev/null || fail "first file failed"
   out=$(noticed "$home" file noticed canary-red --title "Packet canary red again" --why "still red" \
     --from t2 --evidence "canary run 10-27 exit 2") || fail "second file failed: $out"
   assert_equals "matched: noticed-canary-red" "$out" "a duplicate was not matched"
@@ -89,10 +91,10 @@ test_a_duplicate_attaches_evidence() {
 test_closed_items_come_back_or_stay_answered() {
   local home out
   home=$(make_home closed)
-  noticed "$home" file noticed printer-down --title "Printer offline" --why "labels stall" --from t1 >/dev/null
+  noticed "$home" file noticed printer-down --title "Printer offline" --why "labels stall" --from t1 --call ruling >/dev/null
   noticed "$home" shown noticed-printer-down >/dev/null
   tasks "$home" "done" noticed-printer-down >/dev/null || fail "could not close the fixture"
-  out=$(noticed "$home" file noticed printer-down --title "Printer offline again" --why "labels stall" --from t2)
+  out=$(noticed "$home" file noticed printer-down --title "Printer offline again" --why "labels stall" --from t2 --call ruling)
   assert_equals "reopened: noticed-printer-down" "$out" "a recurring problem was not reopened"
   assert_contains "$(tasks "$home" show noticed-printer-down)" "held: yes" "the reopened item is not held"
   assert_contains "$(noticed "$home" unseen)" "noticed-printer-down" "the reopened item is not shown again"
@@ -130,9 +132,16 @@ test_refusals() {
   noticed "$home" file other x --title a --why b >/dev/null 2>&1 && fail "an unknown kind was accepted"
   noticed "$home" file idea Bad_Slug --title a --why b >/dev/null 2>&1 && fail "a bad slug was accepted"
   noticed "$home" file idea ok --title a --why '' >/dev/null 2>&1 && fail "an empty why was accepted"
+  noticed "$home" file noticed ok --title a --why b --call later >/dev/null 2>&1 && fail "an unknown call kind was accepted"
+  noticed "$home" file noticed ok --title a --why b --call >/dev/null 2>&1 && fail "an empty call kind was accepted"
+  noticed "$home" file idea ok --title a --why b --call ruling >/dev/null 2>&1 && fail "an idea took --call"
+  noticed "$home" file noticed ok --title a --why b --call ruling --routine >/dev/null 2>&1 \
+    && fail "--call was accepted beside --routine"
   assert_equals "" "$(tasks "$home" list --kind idea --fields created | grep -E '^  idea-' || true)" \
     "a refused call left a row"
-  pass "Nova items, unknown kinds, bad slugs and empty reasons are refused"
+  assert_equals "" "$(tasks "$home" list --kind noticed --fields created | grep -E '^  noticed-' || true)" \
+    "a refused --call left a row"
+  pass "Nova items, unknown kinds, bad slugs, empty reasons and bad --call uses are refused"
 }
 
 test_collect_reads_the_report_then_notes() {
@@ -159,7 +168,7 @@ test_close_settles_an_item_and_list_keeps_answered_ones() {
   local home out
   home=$(make_home close)
   noticed "$home" file noticed canary-red --title "Canary red" --why "packet" --from t1 >/dev/null
-  noticed "$home" file noticed printer-down --title "Printer offline" --why "labels" --from t1 >/dev/null
+  noticed "$home" file noticed printer-down --title "Printer offline" --why "labels" --from t1 --call ruling >/dev/null
   out=$(noticed "$home" close noticed-canary-red --evidence "business PR 431 fixed the packet check")
   assert_equals "closed: noticed-canary-red" "$out" "close did not report the item"
   assert_contains "$(tasks "$home" show noticed-canary-red --full)" "Settled 2026-10-27: business PR 431 fixed" \
@@ -194,7 +203,7 @@ test_a_fix_on_its_own_waits_for_the_triage() {
 
   noticed "$home" file noticed stale-doc --title "Stale setup doc" --why "still wrong" --from t2 >/dev/null
   noticed "$home" close noticed-stale-doc --evidence "second fix" --fixed --pr https://github.com/o/r/pull/8 >/dev/null
-  out=$(noticed "$home" file noticed stale-doc --title "Stale setup doc" --why "broken again" --from t3)
+  out=$(noticed "$home" file noticed stale-doc --title "Stale setup doc" --why "broken again" --from t3 --call ruling)
   assert_equals "reopened: noticed-stale-doc" "$out" "a problem back after a fix on its own was not reopened"
   assert_equals "noticed-stale-doc	noticed	Stale setup doc" "$(noticed "$home" unseen)" \
     "a problem back after its fix is still reported as fixed"
@@ -214,21 +223,23 @@ test_a_fix_on_its_own_waits_for_the_triage() {
   pass "a fix firstmate makes on its own needs its PR, waits for the Monday triage, gives way to a recurrence, and never hides an untold urgent item"
 }
 
-# Rule 1 of 2026-11-11: an undoable fix inside the fleet's authority is never
-# held for him. A routine item is the fleet's own work, and reaches him only in
-# the Monday "Handled for you" list once fixed or dropped.
+# Rule 1 of 2026-11-11, enforced as the default on 2026-11-17: a noticed item
+# is the fleet's own work unless --call names the call it needs from him, and
+# reaches him only in the Monday "Handled for you" list once fixed or dropped.
 test_a_routine_item_is_never_held_for_him() {
   local home out show
   home=$(make_home routine)
   out=$(noticed "$home" file noticed lint-drift --title "Lint config drifted" --why "CI may pass bad code" \
-    --from t1 --repo firstmate --routine) || fail "file --routine refused a noticed item: $out"
-  assert_equals "filed: noticed-lint-drift" "$out" "file --routine did not report the item"
+    --from t1 --repo firstmate) || fail "file refused a noticed item: $out"
+  assert_equals "filed: noticed-lint-drift" "$out" "file did not report the routine item"
   show=$(tasks "$home" show noticed-lint-drift --full)
-  assert_not_contains "$show" "held: yes" "a routine item was held for the captain"
+  assert_not_contains "$show" "held: yes" "a noticed item with no --call was held for the captain"
+  assert_contains "$show" "Routine: firstmate fixes or drops this on its own." "the routine item does not say so"
   assert_equals fleet "$(tasks "$home" owner noticed-lint-drift)" "a routine item is not the fleet's"
   assert_equals "" "$(noticed "$home" unseen)" "a routine item waits to be shown before it is handled"
-  out=$(noticed "$home" file noticed lint-drift --title "Lint config drifted" --why "seen again" --from t2 --routine)
+  out=$(noticed "$home" file noticed lint-drift --title "Lint config drifted" --why "seen again" --from t2)
   assert_equals "matched: noticed-lint-drift" "$out" "a routine item filed again was not matched"
+  assert_not_contains "$(tasks "$home" show noticed-lint-drift --full)" "held: yes" "a routine item filed again was held"
   # A ship's teardown may close the row before firstmate records the fix.
   tasks "$home" "done" noticed-lint-drift >/dev/null || fail "could not close the routine row"
   out=$(noticed "$home" close noticed-lint-drift --evidence "pinned the lint config" --fixed \
@@ -236,7 +247,12 @@ test_a_routine_item_is_never_held_for_him() {
   assert_equals "noticed-lint-drift	fixed	Lint config drifted - pinned the lint config (https://github.com/o/r/pull/3)" \
     "$(noticed "$home" unseen)" "a routine fix is not listed for the Monday triage"
   noticed "$home" shown noticed-lint-drift >/dev/null
-  noticed "$home" file noticed dead-link --title "Dead doc link" --why "readers get lost" --from t1 --routine >/dev/null
+  # Older callers still pass --routine; it files the same routine row.
+  out=$(noticed "$home" file noticed dead-link --title "Dead doc link" --why "readers get lost" --from t1 --routine) \
+    || fail "file refused the old --routine flag: $out"
+  assert_equals "filed: noticed-dead-link" "$out" "file --routine did not report the item"
+  assert_not_contains "$(tasks "$home" show noticed-dead-link --full)" "held: yes" "file --routine held the item"
+  assert_equals fleet "$(tasks "$home" owner noticed-dead-link)" "file --routine did not give the item to the fleet"
   out=$(noticed "$home" close noticed-dead-link --evidence "the page was retired on purpose" --dropped) \
     || fail "close --dropped refused: $out"
   assert_equals "noticed-dead-link	dropped	Dead doc link - the page was retired on purpose" \
@@ -246,27 +262,48 @@ test_a_routine_item_is_never_held_for_him() {
     && fail "close accepted --fixed with --dropped"
   noticed "$home" file idea quicker --title a --why b --from t1 --routine >/dev/null 2>&1 \
     && fail "an idea was filed routine"
-  out=$(noticed "$home" file noticed dead-link --title "Dead doc link" --why "back" --from t3 --routine)
+  out=$(noticed "$home" file noticed dead-link --title "Dead doc link" --why "back" --from t3)
   assert_equals "reopened: noticed-dead-link" "$out" "a routine item back after its drop was not reopened"
   assert_not_contains "$(tasks "$home" show noticed-dead-link --full)" "held: yes" "a reopened routine item was held"
   assert_equals "" "$(noticed "$home" unseen)" "a reopened routine item still reads as dropped"
-  noticed "$home" file noticed held-once --title "Held once" --why "first" --from t1 >/dev/null
+  noticed "$home" close noticed-dead-link --evidence "settled" >/dev/null
+  out=$(noticed "$home" file noticed dead-link --title "Dead doc link" --why "now it needs a ruling" --from t4 --call ruling)
+  assert_equals "reopened: noticed-dead-link" "$out" "a routine item back with --call was not reopened"
+  assert_contains "$(tasks "$home" show noticed-dead-link --full)" "(call: ruling)" "a routine item back with --call was not held"
+  assert_contains "$(noticed "$home" unseen)" "noticed-dead-link	noticed	Dead doc link" \
+    "a routine item back with --call does not wait for the Monday triage"
+  assert_contains "$(tasks "$home" show noticed-dead-link --full)" "Held for the captain (call: ruling)." \
+    "a routine item back with --call does not say in its body that it is held now"
+  # An open routine item that turns out to need his call is held when filed again with --call.
+  noticed "$home" file noticed slow-sync --title "Slow sync" --why "lag" --from t1 >/dev/null
+  out=$(noticed "$home" file noticed slow-sync --title "Slow sync" --why "needs new machinery" --from t2 --call machinery)
+  assert_equals "matched: noticed-slow-sync" "$out" "an open routine item filed with --call was not matched"
+  show=$(tasks "$home" show noticed-slow-sync --full)
+  assert_contains "$show" "held: yes" "an open routine item filed with --call was not held"
+  assert_contains "$show" "(call: machinery)" "the new hold does not name its call"
+  assert_contains "$show" "Held for the captain 2026-10-27 (call: machinery)." "the body does not say the row is held now"
+  assert_contains "$(noticed "$home" unseen)" "noticed-slow-sync	noticed	Slow sync" \
+    "an open routine item held with --call does not wait for the Monday triage"
+  noticed "$home" file noticed held-once --title "Held once" --why "first" --from t1 --call retire >/dev/null
   noticed "$home" close noticed-held-once --evidence "settled" >/dev/null
-  out=$(noticed "$home" file noticed held-once --title "Held once" --why "back" --from t2 --routine) \
+  out=$(noticed "$home" file noticed held-once --title "Held once" --why "back" --from t2) \
     || fail "a held item back as routine could not be reopened: $out"
-  assert_equals "reopened: noticed-held-once" "$out" "a held item back as routine was not reopened"
+  assert_equals "reopened: noticed-held-once (lifted its earlier captain hold)" "$out" \
+    "a held item back as routine does not say its old hold was lifted"
+  assert_contains "$(tasks "$home" show noticed-held-once --full)" "Its earlier captain hold was lifted; it is routine now." \
+    "the body does not record the lifted hold"
   assert_not_contains "$(tasks "$home" show noticed-held-once --full)" "held: yes" "a routine recurrence kept its old captain hold"
   assert_equals fleet "$(tasks "$home" owner noticed-held-once)" "a routine recurrence is not the fleet's"
   # A dated hold whose date has passed reads unheld but still carries its kind.
-  noticed "$home" file noticed held-dated --title "Held dated" --why "first" --from t1 >/dev/null
+  noticed "$home" file noticed held-dated --title "Held dated" --why "first" --from t1 --call machinery >/dev/null
   FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     "$ROOT/bin/fm-captain-hold.sh" hold noticed-held-dated --reason "later" --until 2026-01-01 >/dev/null \
     || fail "could not date the hold"
   noticed "$home" close noticed-held-dated --evidence "settled" >/dev/null
-  out=$(noticed "$home" file noticed held-dated --title "Held dated" --why "back" --from t2 --routine) \
+  out=$(noticed "$home" file noticed held-dated --title "Held dated" --why "back" --from t2) \
     || fail "a past-dated held item back as routine could not be reopened: $out"
   assert_equals fleet "$(tasks "$home" owner noticed-held-dated)" "a past-dated routine recurrence is not the fleet's"
-  pass "a routine item is the fleet's own work, never held for him, and reaches him only once fixed or dropped"
+  pass "a noticed item is routine by default, --routine still files it so, and only --call holds it for him"
 }
 
 # Rule 3 of 2026-11-11: a call held 14 days with no date shows once in the
@@ -308,7 +345,7 @@ test_the_drain_shows_only_urgent_items() {
   home=$(make_home drain)
   drain=$(run_drain "$home") || fail "the drain failed with nothing filed"
   assert_not_contains "$drain" "NOTICED" "the drain printed an empty NOTICED section"
-  noticed "$home" file noticed canary-red --title "Canary red" --why "packet" --from t1 >/dev/null
+  noticed "$home" file noticed canary-red --title "Canary red" --why "packet" --from t1 --call ruling >/dev/null
   noticed "$home" file idea bundle-slow --title "Bundle slow movers" --why "frees cash" --from t1 >/dev/null
   # A row an earlier version listed for the next reply waits for the triage too.
   printf 'noticed-old\tnoticed\tOld item\n' >> "$home/state/noticed/unseen.tsv"
@@ -336,7 +373,7 @@ test_now_marks_an_item_urgent() {
   out=$(noticed "$home" file noticed refunds-failing --title "Refunds failing" --why "customers unpaid" \
     --from t1 --now) || fail "file refused --now: $out"
   assert_equals "filed: noticed-refunds-failing" "$out" "a --now item was not filed"
-  assert_contains "$(tasks "$home" show noticed-refunds-failing)" "held: yes" "a --now item is not held"
+  assert_contains "$(tasks "$home" show noticed-refunds-failing)" "held: no" "a --now item with no --call was held"
   assert_equals "noticed-refunds-failing	now	Refunds failing" "$(noticed "$home" unseen)" \
     "a --now item is not on the unseen list as now"
   noticed "$home" file noticed refunds-failing --title "Refunds failing" --why "still" --from t2 >/dev/null
@@ -357,10 +394,16 @@ test_now_marks_an_item_urgent() {
   assert_contains "$(noticed "$home" unseen)" "noticed-canary-red	now	Canary red" \
     "an urgent recurrence is not listed as now"
 
+  out=$(noticed "$home" file noticed chargebacks --title "Chargebacks rising" --why "account health" \
+    --from t1 --now --call ask-first) || fail "file refused --now with --call: $out"
+  assert_contains "$(tasks "$home" show noticed-chargebacks)" "held: yes" "a --now --call item is not held"
+  assert_contains "$(noticed "$home" unseen)" "noticed-chargebacks	now	Chargebacks rising" \
+    "a held urgent item is not listed as now"
+
   noticed "$home" file idea faster --title a --why b --from t1 --now >/dev/null 2>&1 \
     && fail "an idea was filed as urgent"
   assert_equals "" "$(noticed "$home" unseen | grep idea- || true)" "a refused urgent idea was listed"
-  pass "--now files, matches or reopens a noticed item as urgent, keeps it urgent, and refuses an idea"
+  pass "--now files, matches or reopens a noticed item as urgent, held or not, keeps it urgent, and refuses an idea"
 }
 
 test_noticed_is_a_captain_hold_that_never_dispatches

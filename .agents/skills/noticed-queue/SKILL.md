@@ -11,7 +11,7 @@ metadata:
 Arjun's design of 2026-10-27 (brain facts 8944, 8990, 9027, 9064 on `systems/platform/firstmate`), funnelled on 2026-11-08: agents stay on task, what they notice is kept, and only what needs him reaches him.
 A **noticed** item is something broken outside the task that noticed it.
 An **idea** is something that could make the ecosystem better.
-A noticed item that needs his decision or review, and every idea, is a captain hold, so filing never dispatches work and a pick starts only from his answer; a routine noticed item is the fleet's own work from the start (see Acting first).
+A noticed item is the fleet's own work from the start unless it needs his decision or review (see Acting first); that item, and every idea, is a captain hold, so filing never dispatches it and a pick starts only from his answer.
 `bin/fm-noticed.sh --help` owns the mechanics; this file owns the judgment.
 
 One funnel: workers, Cade, Codex and the second mate hand what they notice to firstmate, never to Arjun directly; an agent already in a live chat with him may add one line at the end of that reply.
@@ -24,7 +24,9 @@ Each task yields at most one noticed and one idea; `none` and an empty section a
 
 1. Run `bin/fm-noticed.sh list` and look for an open item about the same broken thing or the same idea.
    Reuse its slug when one matches, so `file` attaches the new evidence instead of filing a duplicate.
-2. File with `bin/fm-noticed.sh file noticed|idea <slug> --title <one line> --why <why it may matter> --from <task or agent> [--repo <repo>] [--evidence <pointer>] [--now] [--routine]`, adding `--routine` to a noticed item Acting first settles on its own.
+2. File with `bin/fm-noticed.sh file noticed|idea <slug> --title <one line> --why <why it may matter> --from <task or agent> [--repo <repo>] [--evidence <pointer>] [--now] [--call ask-first|ruling|retire|machinery]`.
+   A noticed item files as routine; add `--call` with its kind only to one Acting first holds for him, and filing an open routine item's slug again with `--call` holds it.
+   A `reopened` line that says it lifted an earlier captain hold means the item was his call before it closed; if it still needs him, file it again with `--call`.
    Capture the observation and why it may matter; leave value unknown until the triage.
    Add `--now` only to a noticed item that is urgent or doing harm now: money, customers, account health or security; filing an open item's slug again with `--now` makes it urgent.
 3. Acknowledge a fleet-handoff notice with `bin/fm-inbox.sh drain --ack <id>` and nothing more: a notice has no read-back, so a reply to it reaches nobody.
@@ -36,10 +38,12 @@ Mining transcripts for items is out of scope.
 ## Acting first
 
 Firstmate settles what it can before anything reaches Arjun (Arjun, 2026-11-11, rule 1 of the calls-grouping board).
-A noticed item is held for him only when it needs his decision or review: an ask-first item, a rule or ruling, retiring a part, or an addition of new machinery.
+A noticed item is held for him only when it needs his decision or review, and its `--call` kind names which: `ask-first` (an ask-first item), `ruling` (a rule or ruling), `retire` (retiring a part), or `machinery` (an addition of new machinery).
+An item with no `--call` is routine, so every hold filed since 2026-11-17 names the call it needs (Arjun, 2026-11-17); an older noticed hold names no kind and is still his call.
 
 - **Routine.** Every other noticed item is the fleet's to fix or drop, provided the change can be undone and stays inside firstmate's authority (a broken test, a stale doc, a small bug, a finding that turns out moot).
-  File it with `--routine`, so it is fleet work rather than a call, and either dispatch that row as its fix or drop it.
+  File it without `--call`, so it is fleet work rather than a call, and either dispatch that row as its fix or drop it.
+  A routine row can be urgent: `--now` still reaches him this turn, and his ask-first rules still bind its fix.
   Once the fix lands, close it with `bin/fm-noticed.sh close <id> --evidence <what changed> --fixed --pr <PR URL>` (the PR is required); to drop it, close it with `--dropped` and the reason.
   Both record it for the Monday "Handled for you" list (Arjun, 2026-11-08: "i want to be made aware of noticed changes you make").
 - **Duplicate.** A repeat sighting is matched to its open item at filing and never becomes a second one.
