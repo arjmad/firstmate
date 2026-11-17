@@ -922,6 +922,23 @@ test_gate_self_edit_observe_keeps_verdicts_and_notes_would_block() {
   [ "$(sed -n 2p "$dir/body")" = "<!-- fm-code-review-carry from=$REVIEWED_HEAD lines=2 -->" ] \
     || fail "gate-observe-carried: the statement record is not a carry from the full review: $(cat "$dir/body")"
 
+  # The same holds when enforce mode reads the carried diff unreviewed for
+  # want of the statement.
+  dir=$(make_case gate-enforce-carried check.sh)
+  id=$(diff_id "$dir")
+  full_record "$dir" "$REVIEWED_HEAD"
+  write_compare "$dir" ahead 'check.sh 2'
+  run_case "$dir" record "$URL" --carry
+  expect_code 0 "$RC" "gate-enforce-carried: the follow-up should carry in observe mode: $ERR"
+  gate_mode "$dir" enforce
+  run_case "$dir" status "$URL"
+  expect_code 1 "$RC" "gate-enforce-carried: enforce mode must hold the carried diff for its statement"
+  run_case "$dir" record "$URL" --gate 'tightens: adds the shellcheck step; nothing loosened'
+  expect_code 0 "$RC" "gate-enforce-carried: record --gate on a carried diff must post: $ERR"
+  jq -r '.[-1].body' "$dir/comments.json" > "$dir/body"
+  [ "$(sed -n 2p "$dir/body")" = "<!-- fm-code-review-carry from=$REVIEWED_HEAD lines=2 -->" ] \
+    || fail "gate-enforce-carried: the statement record is not a carry from the full review: $(cat "$dir/body")"
+
   # A pull request off the gate prints the one line as before.
   dir=$(make_case gate-observe-none bin/tool.sh src/check.sh docs/check.sh.md)
   run_case "$dir" status "$URL"

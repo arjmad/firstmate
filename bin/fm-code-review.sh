@@ -849,7 +849,7 @@ code_review_status() {
 }
 
 code_review_record() {  # <note> <carry 0|1> <gate statement>
-  local note=$1 carry=$2 gate=$3 status=0 head head0='' body marker full
+  local note=$1 carry=$2 gate=$3 status=0 head head0='' body marker full ids
   local line="Code review: Claude Code \`/code-review\` (medium) ran on this diff; each finding is posted inline and was fixed or answered in its thread."
   # A carry binds the diff it fingerprints, the head it measures, and the head
   # it records to one push: the head is read before and after both.
@@ -862,19 +862,9 @@ code_review_record() {  # <note> <carry 0|1> <gate statement>
     0)
       if [ -n "$gate" ] && [ -n "$CODE_REVIEW_GATE_FILES" ] && [ "$CODE_REVIEW_GATE_STATED" = 0 ] \
         && [ "${CODE_REVIEW_LINE%%:*}" = reviewed ]; then
-        # Reviewed, but no record for this diff states its gate change yet:
-        # a record of the same kind at the same diff carries the statement, so
-        # a carried diff stays measured from its full review.
-        if ! full=$(code_review_full_record_ids); then
-          echo "error: could not read the comments of $FM_PR_URL" >&2
-          return 1
-        fi
-        carry=1
-        ! printf '%s\n' "$full" | grep -qxF -- "$CODE_REVIEW_DIFF_ID" || carry=0
-        if [ "$carry" = 1 ] && { ! head0=$(code_review_head) || ! fm_pr_head_valid "$head0"; }; then
-          echo "error: could not read the head commit of $FM_PR_URL" >&2
-          return 1
-        fi
+        # Reviewed, but no record for this diff states its gate change yet;
+        # the record's kind is chosen below.
+        :
       else
         [ -z "$note" ] || echo "warning: $FM_PR_URL needs no new record at this diff, so the note was not posted" >&2
         [ -z "$gate" ] || echo "warning: $FM_PR_URL needs no gate statement at this diff, so it was not posted" >&2
@@ -896,6 +886,23 @@ code_review_record() {  # <note> <carry 0|1> <gate statement>
       ;;
     *) return "$status" ;;
   esac
+  # A statement added at a diff a record already covers keeps that record's
+  # kind: a carry when only a carry covers it, so the full review that later
+  # carries measure from stays the one that ran.
+  if [ -n "$gate" ] && [ "$carry" = 0 ] && [ -n "$CODE_REVIEW_GATE_FILES" ] && [ "$CODE_REVIEW_GATE_STATED" = 0 ]; then
+    if ! ids=$(code_review_recorded_ids) || ! full=$(code_review_full_record_ids); then
+      echo "error: could not read the comments of $FM_PR_URL" >&2
+      return 1
+    fi
+    if printf '%s\n' "$ids" | grep -qxF -- "$CODE_REVIEW_DIFF_ID" \
+      && ! printf '%s\n' "$full" | grep -qxF -- "$CODE_REVIEW_DIFF_ID"; then
+      carry=1
+      if ! head0=$(code_review_head) || ! fm_pr_head_valid "$head0"; then
+        echo "error: could not read the head commit of $FM_PR_URL" >&2
+        return 1
+      fi
+    fi
+  fi
   if ! head=$(code_review_head) || ! fm_pr_head_valid "$head"; then
     echo "error: could not read the head commit of $FM_PR_URL" >&2
     return 1
