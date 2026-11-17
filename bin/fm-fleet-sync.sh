@@ -119,7 +119,9 @@
 # still hold the fast-forward (each restored path keeps origin's text, as in
 # the settle form), nothing when it restored no path, and a STUCK line naming
 # its exit when it fails, which later runs repeat for the same state without
-# rerunning it. The checkout's ordinary line follows while it is still held.
+# rerunning it; the settle form reruns it and clears that record. It also skips
+# a checkout whose capture another sync started during this sync's fetch. The
+# checkout's ordinary line follows while it is still held.
 # Settle form (--settle-capture <project>), for right after a capture PR merged
 # (bin/fm-capture-land.sh): before the single-project sync, each of that
 # project's capture= checkouts first waits while a capture this sync started is
@@ -782,13 +784,15 @@ settle_blocker() {
 # header). Returns non-zero only when a capture is still running after the wait,
 # which leaves the checkout for the ordinary busy skip.
 settle_capture() {
-  local waited=0
+  local waited=0 key
   while capture_running; do
     [ "$waited" -lt "$CAPTURE_SETTLE_WAIT_SECS" ] || return 1
     sleep "$LIVE_LOCK_POLL_SECS"
     waited=$((waited + LIVE_LOCK_POLL_SECS))
   done
   run_settle asked || true
+  # The asked settle supersedes the ordinary sync's record of an earlier one.
+  if key=$(live_record_key); then rm -f "$LIVE_RECORDS/$key.settle"; fi
   return 0
 }
 
@@ -875,6 +879,8 @@ settle_landed_capture() {
       || echo "$label: STUCK: $CAPTURE_CMD --settle failed (exit $memo_rc) - needs attention; last output: $memo_tail"
     return 0
   fi
+  # A capture another sync started during this sync's fetch reads these files.
+  ! capture_running || return 0
   run_settle found || return 0
   # Keyed on the state the settle left: a held settle gives each landed path
   # origin's text, which can differ from the live text by the command's own

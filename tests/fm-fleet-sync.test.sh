@@ -1419,7 +1419,14 @@ SCRIPT
   run_scheduled "$home"
   assert_equals 2 "$(runs_of "$home/bad-settles-nova")" "a new origin commit retries the settle"
   [ ! -e "$pending" ] || fail "a repeated settle failure must not wake firstmate again: $(cat "$pending")"
-  pass "a failed ordinary settle wakes once, is rerun only for a new state, and keeps the live edit"
+
+  printf 'unlanded edit\n' >> "$live/skills/b.md"
+  cp "$home/capture-nova.sh" "$cmd"
+  out=$(run_sync "$home" --settle-capture nova)
+  assert_contains "$out" "nova live $live: settle held:" "once the command is fixed, the settle form reruns it"
+  out=$(run_sync "$home" nova)
+  assert_not_contains "$out" "--settle failed" "the settle form clears the recorded failure"
+  pass "a failed ordinary settle wakes once, is rerun only for a new state, keeps the live edit, and the settle form clears it"
 }
 
 test_capture_skips_edits_outside_its_dir() {
