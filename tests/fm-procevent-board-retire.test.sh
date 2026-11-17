@@ -327,8 +327,6 @@ SH
   pass "the sweep leaves a board re-armed between its read and its retire"
 }
 
-# Only the lines before `argv:` are a record's header. A plain board whose
-# listener argv carries a line shaped like an owner field is still a plain board.
 test_argv_lines_are_not_header_fields() {
   local home out id rec
   home=$(new_home argv-header)

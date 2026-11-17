@@ -491,7 +491,6 @@ adapter_self_announcing() {  # <adapter>
 }
 
 source_file()  { printf '%s/%s.source\n' "$REG" "$1"; }
-# Only the header before `argv:` holds fields; an argv line is listener data.
 source_field() {  # <source-id> <field>
   sed -n -e '/^argv:$/q' -e "s/^$2=//p" "$(source_file "$1")" | head -1
 }
@@ -2007,12 +2006,12 @@ cmd_retire_quiet_boards() {
     # The registration must still be the one read above: a board armed or
     # handed over again during the sweep is not this one. The retire is also
     # conditional on the record content read above, so a re-arm that changes
-    # that record after this check is refused under the source lock.
+    # that record after this check is refused under the source lock and is
+    # not logged as a failure.
     [ "$(fm_pr_file_identity "$(source_file "$id")" 2>/dev/null)" = "$identity" ] || continue
     set -- "$id" --if-matches "$adapter"
     [ -z "$adopted" ] || set -- "$@" --adopted-from "$adopted"
     if ! "$SCRIPT_DIR/fm-procevent.sh" retire "$@" -- "${ARGV[@]}" >/dev/null 2>&1; then
-      # A re-arm that landed after the identity check is a correct refusal.
       [ "$(fm_pr_file_identity "$(source_file "$id")" 2>/dev/null)" = "$identity" ] || continue
       board_retire_log "board-retire-failed: $id reason=$reason"
       printf 'board-retire-failed: %s\n' "$id" >&2

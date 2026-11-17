@@ -5943,8 +5943,6 @@ touch "$ADOPT/live.html.go"
 for _ in $(seq 1 300); do wake_payloads "$ADOPT/home" | grep -q "$ad_live" && break; sleep 0.1; done
 assert_contains "$(wake_payloads "$ADOPT/home")" "$ad_live" "the adopted board's round did not reach firstmate"
 assert_absent "$ADOPT/home/state/worker-a.inbox" "the adopted board's round was delivered to the gone worker"
-# The exact conditional retire the board sweep uses matches each record shape
-# exactly as arm, register-task, and adopt-task published it.
 ad_dir=$(cd "$ADOPT" && pwd -P)
 ad retire "$ad_unread" --if-matches lavish --adopted-from worker-a -- \
   "$ROOT/bin/fm-procevent-lavish.sh" poll "$ad_dir/unread.html" >/dev/null \
