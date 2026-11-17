@@ -174,9 +174,9 @@
 #            board whose task has a record or status log again, and a board
 #            registered again during the sweep are never retired; a captured
 #            round stays captured and announced until handled. Each
-#            retirement prints one `board-retired:` line, and each retirement
-#            or refused retirement is appended, timestamped, to
-#            procevent/board-retirements.log.
+#            retirement prints one `board-retired:` line, and each retirement,
+#            or refused retirement of a board not registered again during the
+#            sweep, is appended, timestamped, to procevent/board-retirements.log.
 #            Reconcile runs this at most once per
 #            FM_PROCEVENT_BOARD_SWEEP_SECONDS (default 3600; 0 runs it every
 #            cycle), and an unusable setting skips it.
