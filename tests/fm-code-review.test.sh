@@ -917,6 +917,7 @@ test_gate_self_edit_observe_keeps_verdicts_and_notes_would_block() {
   pass "fm-code-review observe mode keeps every verdict and notes a merge enforce mode would refuse"
 }
 
+# shellcheck disable=SC2016  # the check.sh lines are fixture text, not expansion
 test_gate_self_edit_enforce_holds_until_the_record_states_the_change() {
   local dir id path
   dir=$(make_case gate-enforce-exempt REVIEW.md)
@@ -1023,6 +1024,7 @@ test_gate_self_edit_under_a_table() {
   pass "fm-code-review enforce mode holds a gate edit even where the tier table calls it tinker"
 }
 
+# shellcheck disable=SC2016  # the backticks are Markdown fences, not expansion
 test_review_reads_review_md_from_the_base_branch() {
   local dir focus
   dir=$(make_case review-rules-none bin/tool.sh)
@@ -1062,6 +1064,7 @@ test_review_reads_review_md_from_the_base_branch() {
 }
 
 # The prompt argument a review would run with. Args: dir; sets PROMPT.
+# shellcheck disable=SC2016  # the backticks are Markdown fences, not expansion
 review_prompt() {
   make_claude "$1"
   printf 'No defects.\n\n```json\n[]\n```\n' > "$1/claude-out"
@@ -1069,6 +1072,7 @@ review_prompt() {
   PROMPT=$(sed -n 4p "$1/claude.log" 2>/dev/null)
 }
 
+# shellcheck disable=SC2016  # the backticks are Markdown fences, not expansion
 test_review_md_includes_follow_the_service_rules() {
   local dir i
   dir=$(make_case rules-includes bin/tool.sh)
