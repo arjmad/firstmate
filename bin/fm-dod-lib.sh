@@ -553,10 +553,10 @@ fm_dod_code_review_block() {  # <direct-PR|no-mistakes>
   local cli fix sol_fix model
   model=$(fm_dod_code_review_model)
   printf -v cli '%q' "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-code-review.sh"
-  fix='push a fix for every finding you agree is real'
+  fix='push a fix for every Important finding you agree is real'
   sol_fix='push its fixes once the loop ends'
   if [ "$1" = no-mistakes ]; then
-    fix='commit a fix for every finding you agree is real and run /no-mistakes again so the pipeline pushes it'
+    fix='commit a fix for every Important finding you agree is real and run /no-mistakes again so the pipeline pushes it'
     sol_fix='run /no-mistakes again once the loop ends so the pipeline pushes its fixes'
   fi
   cat <<EOF
@@ -569,7 +569,9 @@ This step is the ask that skill waits for, and where it would report a blocker b
 Then run Claude Code's built-in \`/code-review\` once from this worktree on the pinned model \`$model\` with the shell command \`$cli review <pr-url> --model $model\`: it runs the review headless with firstmate's merge-gate focus and then posts each finding to the PR itself, and a refused URL runs no review.
 Do not invoke the skill in your own session instead: an in-session skill runs on the session's model, and a worker cannot switch its own session's model, so only the headless command pins it.
 A medium review takes longer than a shell tool's default time limit, so run that command in the background or with your harness's longest command timeout, and wait for it to exit before you go on.
-Then $fix, reply in the PR thread of every finding you do not, and after your last push run \`$cli record <pr-url> --note 'Sol: <N> rounds, <model>, <verdict>'\`, or \`--note 'Sol: skipped, <reason>'\` when the loop could not run, with no apostrophe in the note, and confirm it prints \`reviewed\`.
+Each posted finding opens with its severity: Important binds you, while a Nit or Pre-existing finding needs no fix and no written answer, and you may fix a Nit you agree with.
+Then $fix, reply in the PR thread of every Important finding you do not, and after your last push run \`$cli record <pr-url> --note 'Sol: <N> rounds, <model>, <verdict>'\`, or \`--note 'Sol: skipped, <reason>'\` when the loop could not run, with no apostrophe in the note, and confirm it prints \`reviewed\`.
+When \`status\` or \`record\` says the PR edits its own gate files, also pass \`--gate '<what the change loosens or tightens against the base branch gate, or nothing loosened>'\` to that \`record\`, with no apostrophe in it, and run it even on \`exempt\` or \`reviewed\` until \`status\` no longer says the PR edits its own gate files.
 Pushes that fix or answer this review's findings are covered by the one \`record\` you run after your last push; only a push after \`record\` that changes the diff needs a new review, and a rebase that leaves the diff alone needs none.
 For a small follow-up pushed after \`record\`, run \`$cli record <pr-url> --carry\` instead of a new review; the script decides what a carry covers, and when it refuses, its message says whether to run the carry again or \`/code-review\` again.
 Before such a new \`/code-review\`, run \`tstack-sol-loop\` again as a fresh loop of one round on the change since the record, outside the first loop's 3, settle and escalate its findings as above, and name that round in the new \`record\`'s note.

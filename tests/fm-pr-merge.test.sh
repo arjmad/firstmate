@@ -347,6 +347,10 @@ case "${1:-} ${2:-}" in
         cat "$FM_TEST_GH_VIEW_JSON"
         exit 0
         ;;
+      *" --json baseRefName "*)
+        jq -r .baseRefName "$FM_TEST_GH_VIEW_JSON"
+        exit 0
+        ;;
       *headRefOid*)
         cat "$FM_TEST_GH_HEAD"
         exit 0
@@ -479,6 +483,16 @@ case "${1:-} ${2:-}" in
       *" repos/"*"/contents/risk-tiers.toml?ref=main "*)
         if [ -d "$fixtures/tier-remote.git" ]; then
           printf 'file\n'
+          exit 0
+        fi
+        echo 'gh: Not Found (HTTP 404)' >&2
+        exit 1
+        ;;
+      *" repos/"*"/contents/"*)
+        # The gate self-edit read of the base branch's check.sh
+        # (bin/fm-code-review.sh): absent unless the case writes one.
+        if [ -f "$fixtures/github-base-check.sh" ]; then
+          cat "$fixtures/github-base-check.sh"
           exit 0
         fi
         echo 'gh: Not Found (HTTP 404)' >&2
@@ -6189,6 +6203,47 @@ Code review: findings fixed."
   pass "fm-pr-merge merges a code-changing PR only with a trusted review record for its current diff"
 }
 
+# The gate self-edit rule rides the same review gate: observe logs a merge
+# enforce would refuse once it lands; enforce refuses it with the gate remedy.
+test_gate_self_edit_observe_logs_and_enforce_refuses() {
+  local case_dir head=c0dec0dec0dec0dec0dec0dec0dec0dec0dec0de id
+  case_dir=$(make_case gate-observe)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_pr_files "$case_dir" .github/workflows/ci.yml
+  id=$(github_pr_diff_id "$case_dir")
+  { printf '['; github_pr_comment OWNER "<!-- fm-code-review v1 diff=$id head=$head -->"; printf ']\n'; } \
+    > "$case_dir/github-pr-comments.json"
+  run_review_case "$case_dir" 93
+  expect_code 0 "$RC" "gate-observe: observe mode must not block the merge"
+  assert_grep 'note: gate self-edit (observe): ' "$case_dir/stderr" "gate-observe: the would-block note was not printed"
+  assert_logged_gh_merge "$case_dir" 93 example/repo --squash
+  assert_grep "https://github.com/example/repo/pull/93	head=$head	" "$case_dir/state/gate-self-edit-observe.log" \
+    "gate-observe: the landed merge was not logged as one enforce would refuse"
+
+  case_dir=$(make_case gate-enforce)
+  mkdir -p "$case_dir/wt" "$case_dir/home/config"
+  printf 'enforce\n' > "$case_dir/home/config/gate-self-edit"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_pr_files "$case_dir" .github/workflows/ci.yml
+  id=$(github_pr_diff_id "$case_dir")
+  { printf '['; github_pr_comment OWNER "<!-- fm-code-review v1 diff=$id head=$head -->"; printf ']\n'; } \
+    > "$case_dir/github-pr-comments.json"
+  run_review_case "$case_dir" 94
+  expect_code 1 "$RC" "gate-enforce: a gate edit without a statement must be refused"
+  assert_grep 'edits its own gate files (.github/workflows/ci.yml)' "$case_dir/stderr" "gate-enforce: the refusal did not name the gate files"
+  assert_grep 'record https://github.com/example/repo/pull/94 --gate <statement>' "$case_dir/stderr" "gate-enforce: the refusal did not name the gate remedy"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "gate-enforce: gh pr merge ran"
+
+  { printf '['; github_pr_comment OWNER "<!-- fm-code-review v1 diff=$id head=$head -->
+Gate change: tightens the lint job; nothing loosened"; printf ']\n'; } > "$case_dir/github-pr-comments.json"
+  run_review_case "$case_dir" 94
+  expect_code 0 "$RC" "gate-enforce: a record stating the gate change must merge"
+  assert_logged_gh_merge "$case_dir" 94 example/repo --squash
+  [ ! -e "$case_dir/state/gate-self-edit-observe.log" ] || fail "gate-enforce: enforce mode wrote the observe log"
+  pass "fm-pr-merge logs an observed gate self-edit after it lands and refuses an unstated one in enforce mode"
+}
+
 # Gives a case's repository a risk-tiers.toml on main and a pull request head
 # in a local remote that the code review's clone fetches, with a stub classifier
 # that prints the tier line given; the head is left in tier-head for
@@ -6827,6 +6882,7 @@ test_required_partial_reads_report_all_failures
 test_allow_red_refused_on_forgejo
 test_allow_missing_refused_on_forgejo
 test_code_changing_pr_needs_a_trusted_review_record_for_its_diff
+test_gate_self_edit_observe_logs_and_enforce_refuses
 test_tier_table_decides_whether_a_merge_needs_review
 test_review_state_unreadable_refuses
 test_waive_review_merges_once_and_is_logged

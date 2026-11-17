@@ -243,7 +243,13 @@
 # word, and once the forge accepts that merge it is appended to
 # state/code-review-waivers.log as one tab-separated line of epoch, task id,
 # URL, verified head, and reason. Like --allow-red it is
-# refused while the away-posture record exists. GitLab and Forgejo merges are
+# refused while the away-posture record exists. The same status also owns the
+# gate self-edit rule (docs/fork-decisions/2026-11-17-gate-self-edit.md), read
+# under this home's config: in enforce mode it reads a pull request that edits
+# its own gate unreviewed until its record states the gate change, and in
+# observe mode its `gate-observe:` line is printed as a note and, once the
+# forge accepts the merge, appended to state/gate-self-edit-observe.log in the
+# waiver log's shape with the observation as the reason. GitLab and Forgejo merges are
 # not reviewed here, because the review posts its findings to GitHub only, and
 # --waive-review is refused on them.
 #
@@ -2196,10 +2202,15 @@ log_one_way_merge() {
 # only thing letting the merge proceed, for log_code_review_waiver below.
 CODE_REVIEW_WAIVED=false
 CODE_REVIEW_STATUS=0
+CODE_REVIEW_GATE_OBSERVED=
 require_code_review() {
-  local line status=0
-  line=$("$SCRIPT_DIR/fm-code-review.sh" status "$URL") || status=$?
+  local line status=0 out
+  out=$(FM_CONFIG_OVERRIDE="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" "$SCRIPT_DIR/fm-code-review.sh" status "$URL") || status=$?
   CODE_REVIEW_STATUS=$status
+  line=$(printf '%s\n' "$out" | sed -n 1p)
+  # Observe mode's would-refuse line, logged once the merge lands.
+  CODE_REVIEW_GATE_OBSERVED=$(printf '%s\n' "$out" | sed -n 's/^gate-observe: //p' | sed -n 1p)
+  [ -z "$CODE_REVIEW_GATE_OBSERVED" ] || printf 'note: gate self-edit (observe): %s\n' "$CODE_REVIEW_GATE_OBSERVED" >&2
   case "$status" in
     0)
       printf 'verified: %s\n' "$line" >&2
@@ -2223,7 +2234,13 @@ require_code_review() {
       printf 'error: refusing to merge %s\n  - its code review state could not be read\n' "$URL" >&2
       ;;
   esac
-  echo "error: run Claude Code's /code-review headless on the pinned model with bin/fm-code-review.sh review $URL --model <config/code-review-model, default claude-opus-5-5>, which posts its findings to the PR, fix or answer each finding, then record it with bin/fm-code-review.sh record $URL (docs/task-lifecycle.md); only an explicit captain instruction may pass --waive-review <reason>" >&2
+  case $line in
+    *" edits its own gate files "*)
+      echo "error: the pull request edits the gate that judges it, so its worker states what that change loosens or tightens against the base branch's gate, or nothing loosened, with bin/fm-code-review.sh record $URL --gate <statement>, after its /code-review if none is recorded; only an explicit captain instruction may pass --waive-review <reason>" >&2
+      return 1
+      ;;
+  esac
+  echo "error: run Claude Code's /code-review headless on the pinned model with bin/fm-code-review.sh review $URL --model <config/code-review-model, default claude-opus-5-5>, which posts its findings to the PR, fix or answer each Important finding (a Nit or Pre-existing one needs no answer), then record it with bin/fm-code-review.sh record $URL (docs/task-lifecycle.md); only an explicit captain instruction may pass --waive-review <reason>" >&2
   return 1
 }
 
@@ -2295,6 +2312,16 @@ log_code_review_waiver() {
     >> "$STATE/code-review-waivers.log" 2>/dev/null && return 0
   printf 'actionable: the forge accepted the merge of %s, but its code review waiver could not be logged: %s\n' \
     "$URL" "$WAIVE_REVIEW" >&2
+}
+
+# Observe mode's record of a merge enforce mode would have refused, on the
+# same terms as the waiver log; a failed write is reported, never a failed merge.
+log_gate_self_edit_observed() {
+  [ -n "$CODE_REVIEW_GATE_OBSERVED" ] || return 0
+  printf '%s\t%s\t%s\thead=%s\t%s\n' "$(date +%s)" "$ID" "$URL" "$FM_PR_MERGE_HEAD" "$CODE_REVIEW_GATE_OBSERVED" \
+    >> "$STATE/gate-self-edit-observe.log" 2>/dev/null && return 0
+  printf 'note: the forge accepted the merge of %s, but its gate self-edit observation could not be logged: %s\n' \
+    "$URL" "$CODE_REVIEW_GATE_OBSERVED" >&2
 }
 
 persist_accepted_merge_authority() {
@@ -2622,6 +2649,7 @@ case "$PROVIDER" in
     if [ "$merge_status" -eq 0 ]; then
       FM_PR_GITHUB_MERGE_ACCEPTED=true
       log_code_review_waiver
+      log_gate_self_edit_observed
       persist_accepted_merge_authority || exit 1
       fm_afk_contract_lock_release || true
       fm_lock_release "$MERGE_CONTROL_LOCK" || true
