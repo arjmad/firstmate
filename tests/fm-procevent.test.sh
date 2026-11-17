@@ -5945,15 +5945,15 @@ assert_contains "$(wake_payloads "$ADOPT/home")" "$ad_live" "the adopted board's
 assert_absent "$ADOPT/home/state/worker-a.inbox" "the adopted board's round was delivered to the gone worker"
 # The exact conditional retire the board sweep uses matches each record shape
 # exactly as arm, register-task, and adopt-task published it.
-ad_listener() { printf '%s\n' "$ROOT/bin/fm-procevent-lavish.sh" poll "$(cd "$ADOPT" && pwd -P)/$1.html"; }
-mapfile -t ad_argv < <(ad_listener unread)
-ad retire "$ad_unread" --if-matches lavish --adopted-from worker-a -- "${ad_argv[@]}" >/dev/null \
+ad_dir=$(cd "$ADOPT" && pwd -P)
+ad retire "$ad_unread" --if-matches lavish --adopted-from worker-a -- \
+  "$ROOT/bin/fm-procevent-lavish.sh" poll "$ad_dir/unread.html" >/dev/null \
   || fail "an exact match did not retire the board adopt-task published"
-mapfile -t ad_argv < <(ad_listener other)
-ad retire "$ad_other" --if-matches lavish --owner-task worker-b -- "${ad_argv[@]}" >/dev/null \
+ad retire "$ad_other" --if-matches lavish --owner-task worker-b -- \
+  "$ROOT/bin/fm-procevent-lavish.sh" poll "$ad_dir/other.html" >/dev/null \
   || fail "an exact match did not retire the board register-task published"
-mapfile -t ad_argv < <(ad_listener firstmate)
-ad retire "$ad_fm" --if-matches lavish -- "${ad_argv[@]}" >/dev/null \
+ad retire "$ad_fm" --if-matches lavish -- \
+  "$ROOT/bin/fm-procevent-lavish.sh" poll "$ad_dir/firstmate.html" >/dev/null \
   || fail "an exact match did not retire the board arm published for firstmate"
 unset ADOPT_FAKE ADOPT_SESSION
 pass "adopt-task hands a finished task's boards to firstmate, keeps one with an unread round, and leaves an ended one for retirement"
