@@ -2826,24 +2826,173 @@ test_claude_advisor_refuses_unpairable_launches() {
 }
 
 test_claude_advisor_must_match_the_dispatch_selection() {
-  local rec id out status
+  local rec id out status args
   id=claude-advisor-dispatch-z39
   rec=$(make_spawn_case claude-advisor-dispatch claude "$id")
   read_case_record "$rec"
   enable_dispatch_profile "$HOME_DIR"
   record_dispatch "$HOME_DIR" "$id" clear claude claude-opus-5-5 high fable
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
-    --harness claude --model claude-opus-5-5 --effort high 2>&1)
+    --harness claude --model claude-opus-5-5 --effort high --advisor default 2>&1)
   status=$?
-  expect_code 1 "$status" "a spawn that drops the selected advisor must refuse"$'\n'"$out"
+  expect_code 1 "$status" "a spawn that declines the selected advisor without an override must refuse"$'\n'"$out"
   assert_contains "$out" "--advisor fable" "the refusal must name the selected advisor"
   [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "the mismatch refusal still wrote a task record"
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
-    --harness claude --model claude-opus-5-5 --effort high --advisor fable 2>&1)
+    --harness claude --model claude-opus-5-5 --effort high 2>&1)
   status=$?
-  expect_code 0 "$status" "a spawn passing the selected profile line should succeed"$'\n'"$out"
+  expect_code 0 "$status" "a spawn that omits --advisor should take the selected one"$'\n'"$out"
+  args=$(claude_launch_args "$WT_DIR")
+  printf '%s\n' "$args" | grep -A1 -x -- --advisor | grep -qx fable \
+    || fail "an omitted --advisor must launch with the selected fable advisor, got:"$'\n'"$args"
   assert_grep advisor=fable "$HOME_DIR/state/$id.meta" "the dispatched record must carry advisor=fable"
-  pass "a clear dispatch selection's advisor must be passed, like its model and effort"
+  id=claude-advisor-dispatch-override-z39
+  rec=$(make_spawn_case claude-advisor-dispatch-override claude "$id")
+  read_case_record "$rec"
+  enable_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id" clear claude claude-opus-5-5 high fable
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+    --harness claude --model claude-opus-5-5 --effort high --advisor default --dispatch-override 'no advisor for this task' 2>&1)
+  status=$?
+  expect_code 0 "$status" "an overridden --advisor default should launch"$'\n'"$out"
+  args=$(claude_launch_args "$WT_DIR")
+  printf '%s\n' "$args" | grep -qx -- --advisor && fail "an explicit --advisor default must launch with no advisor"
+  assert_no_grep advisor= "$HOME_DIR/state/$id.meta" "an explicit --advisor default must record none"
+  # An override that moves a clear Fable selection to Opus takes the agreed
+  # advisor rather than the Fable rule's none.
+  id=claude-advisor-dispatch-moved-z39
+  rec=$(make_spawn_case claude-advisor-dispatch-moved claude "$id")
+  read_case_record "$rec"
+  enable_advisor_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id" clear claude claude-fable-5-2 high
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+    --harness claude --model claude-opus-5-5 --effort high --dispatch-override 'opus for this task' 2>&1)
+  status=$?
+  expect_code 0 "$status" "an overridden opus launch of a fable selection should launch"$'\n'"$out"
+  assert_grep advisor=fable "$HOME_DIR/state/$id.meta" "an override off the selected model must take the agreed advisor"
+  # An effort-only override leaves the selection too: a clear low-effort
+  # selection with no advisor, launched at high, takes the agreed advisor.
+  id=claude-advisor-dispatch-effort-z39
+  rec=$(make_spawn_case claude-advisor-dispatch-effort claude "$id")
+  read_case_record "$rec"
+  enable_advisor_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id" clear claude claude-opus-5-5 low
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+    --harness claude --model claude-opus-5-5 --effort high --dispatch-override 'high for this task' 2>&1)
+  status=$?
+  expect_code 0 "$status" "an effort-overridden launch should launch"$'\n'"$out"
+  assert_grep advisor=fable "$HOME_DIR/state/$id.meta" "an override off the selected effort must take the agreed advisor"
+  # A selection whose advisor is spelled `default` means none.
+  id=claude-advisor-dispatch-default-z39
+  rec=$(make_spawn_case claude-advisor-dispatch-default claude "$id")
+  read_case_record "$rec"
+  enable_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id" clear claude claude-opus-5-5 high default
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+    --harness claude --model claude-opus-5-5 --effort high 2>&1)
+  status=$?
+  expect_code 0 "$status" "a selection with a default advisor should launch"$'\n'"$out"
+  assert_no_grep advisor= "$HOME_DIR/state/$id.meta" "a selection with a default advisor must record none"
+  pass "a clear dispatch selection's advisor fills an omitted --advisor; declining it needs --advisor default and an override; an override off its model or effort takes the agreed one"
+}
+
+# A config whose advisor-capable claude profiles all name fable, beside a Fable
+# rule (no advisor) and another harness, as a home's crew-dispatch.json does.
+enable_advisor_dispatch_profile() {  # <home> [<second opus advisor>]
+  local home=$1 second=${2:-fable}
+  jq -cn --arg second "$second" '{rules: [
+      {when: "named fable", use: {harness: "claude", model: "claude-fable-5-2", effort: "high"}},
+      {when: "narrow", use: {harness: "claude", model: "claude-opus-5-5", effort: "low", advisor: "fable"}},
+      {when: "routine", use: [{harness: "pi", model: "openai-codex/gpt-6.1-sol", effort: "high"}]}],
+    default: {harness: "claude", model: "claude-opus-5-5", effort: "high", advisor: $second}}' \
+    > "$home/config/crew-dispatch.json"
+}
+
+test_claude_advisor_fills_from_config_when_dispatch_is_not_clear() {
+  local kind rec id out status args setup
+  for kind in ship scout; do
+    id="claude-advisor-fill-$kind-z40"
+    rec=$(make_spawn_case "claude-advisor-fill-$kind" claude "$id")
+    read_case_record "$rec"
+    enable_advisor_dispatch_profile "$HOME_DIR"
+    record_dispatch "$HOME_DIR" "$id" ambiguous
+    case "$kind" in
+      ship) out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+        --harness claude --model claude-opus-5-5 --effort high 2>&1) ;;
+      scout) out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout \
+        --harness claude --model claude-opus-5-5 --effort high 2>&1) ;;
+    esac
+    status=$?
+    expect_code 0 "$status" "an ambiguous claude $kind spawn should launch"$'\n'"$out"
+    args=$(claude_launch_args "$WT_DIR")
+    printf '%s\n' "$args" | grep -A1 -x -- --advisor | grep -qx fable \
+      || fail "an ambiguous $kind with no --advisor must take the agreed fable advisor, got:"$'\n'"$args"
+    assert_grep advisor=fable "$HOME_DIR/state/$id.meta" "the $kind record must carry advisor=fable"
+  done
+  # Launches that take none, each still succeeding: an explicit default, a
+  # Fable main model, no --model (with a note), and profiles that disagree.
+  for setup in default fable-main no-model disagree; do
+    id="claude-advisor-nofill-$setup-z40"
+    rec=$(make_spawn_case "claude-advisor-nofill-$setup" claude "$id")
+    read_case_record "$rec"
+    if [ "$setup" = disagree ]; then
+      enable_advisor_dispatch_profile "$HOME_DIR" opus
+    else
+      enable_advisor_dispatch_profile "$HOME_DIR"
+    fi
+    record_dispatch "$HOME_DIR" "$id" ambiguous
+    case "$setup" in
+      default) out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+        --harness claude --model claude-opus-5-5 --advisor default 2>&1) ;;
+      fable-main) out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+        --harness claude --model claude-fable-5-2 --effort high 2>&1) ;;
+      no-model) out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+        --harness claude 2>&1) ;;
+      disagree) out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+        --harness claude --model claude-opus-5-5 2>&1) ;;
+    esac
+    status=$?
+    expect_code 0 "$status" "the $setup claude spawn should launch with no advisor"$'\n'"$out"
+    args=$(claude_launch_args "$WT_DIR")
+    printf '%s\n' "$args" | grep -qx -- --advisor && fail "the $setup launch must not pass --advisor, got:"$'\n'"$args"
+    assert_no_grep advisor= "$HOME_DIR/state/$id.meta" "the $setup launch must record no advisor"
+    [ "$setup" != no-model ] || assert_contains "$out" "configured advisor fable is not applied" \
+      "a launch with no --model must say the configured advisor was not applied"
+  done
+  pass "an omitted --advisor on a non-clear dispatch takes the advisor every advisor-capable claude profile agrees on; default, a Fable main, no model, or disagreement take none"
+}
+
+test_batch_forwards_an_explicit_default_advisor() {
+  local rec id1 id2 out status
+  id1=claude-advisor-batch-a-z41
+  id2=claude-advisor-batch-b-z41
+  rec=$(make_spawn_case claude-advisor-batch claude "$id1" "$id2")
+  read_case_record "$rec"
+  enable_advisor_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id1" ambiguous
+  record_dispatch "$HOME_DIR" "$id2" ambiguous
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id1=$PROJ_DIR" "$id2=$PROJ_DIR" --harness claude --model claude-opus-5-5 --advisor default 2>&1)
+  status=$?
+  expect_code 0 "$status" "a batch with --advisor default should launch"$'\n'"$out"
+  assert_no_grep advisor= "$HOME_DIR/state/$id1.meta" "a batch --advisor default must reach the first pair"
+  assert_no_grep advisor= "$HOME_DIR/state/$id2.meta" "a batch --advisor default must reach the second pair"
+  assert_grep model=claude-opus-5-5 "$HOME_DIR/state/$id1.meta" "the first pair must have launched"
+  assert_grep model=claude-opus-5-5 "$HOME_DIR/state/$id2.meta" "the second pair must have launched"
+  id1=claude-advisor-batch-c-z41
+  id2=claude-advisor-batch-d-z41
+  rec=$(make_spawn_case claude-advisor-batch-fill claude "$id1" "$id2")
+  read_case_record "$rec"
+  enable_advisor_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id1" ambiguous
+  record_dispatch "$HOME_DIR" "$id2" ambiguous
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id1=$PROJ_DIR" "$id2=$PROJ_DIR" --harness claude --model claude-opus-5-5 2>&1)
+  status=$?
+  expect_code 0 "$status" "a batch with no --advisor should launch"$'\n'"$out"
+  assert_grep advisor=fable "$HOME_DIR/state/$id1.meta" "a batch with no --advisor must fill the first pair"
+  assert_grep advisor=fable "$HOME_DIR/state/$id2.meta" "a batch with no --advisor must fill the second pair"
+  pass "a batch forwards an explicit --advisor default so no pair refills it from the config, and fills each pair without one"
 }
 
 test_claude_long_launch_is_delivered_intact() {
@@ -3684,6 +3833,8 @@ test_claude_compact_window_fails_closed
 test_claude_advisor_renders_for_opus_workers
 test_claude_advisor_refuses_unpairable_launches
 test_claude_advisor_must_match_the_dispatch_selection
+test_claude_advisor_fills_from_config_when_dispatch_is_not_clear
+test_batch_forwards_an_explicit_default_advisor
 test_claude_long_launch_is_delivered_intact
 test_claude_crewmate_launch_carries_the_attribution_policy
 test_keep_ai_trailers_omits_attribution_settings_and_strip_hooks

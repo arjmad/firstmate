@@ -2272,12 +2272,15 @@ The declared value must be a boolean; anything else is an actionable configurati
 
 A profile `advisor` names the model a Claude worker consults at decision points, such as `"advisor": "fable"`.
 `fm-spawn.sh` passes it to a Claude ship or scout as `--advisor <model>`, which sets the advisor for that one session without writing Claude settings (Claude Code 2.1.321 or later for a Fable advisor).
+When a fresh Claude ship or scout launch omits `--advisor`, `fm-spawn.sh` applies the advisor this config gives it: the clear dispatch selection's advisor when the launch keeps its harness, model, and effort, otherwise the one advisor that every claude profile with an explicit non-Fable model agrees on, across rules and `default`; profiles that disagree give none.
+The fill never adds a refusal: a Fable main model, a launch with no `--model` (which prints a note), a raw launch command, and `backend=t3code` are not filled, and under a clear selection that names an advisor they still need `--dispatch-override`, as before.
+An explicit `--advisor default` launches with no advisor, and under a clear selection that names one it also needs `--dispatch-override`, like any other deviation.
 It is valid only with harness `claude` and an explicit `model` that is not a Fable model; anything else is a configuration error at bootstrap and in typed resolution, and `fm-spawn.sh` refuses the launch.
 The Fable refusal is deliberate: a Fable main model accepts only a Fable advisor, so the pairing would double Fable use, and refusing is visible where silently dropping the field would not be.
 The value must be a plain model alias or id (letters, digits, `.`, `_`, `-`), and `bin/fm-harness.sh validate-advisor` owns the rule.
 The task record keeps it as `advisor=`, and `bin/fm-control.sh relaunch` keeps it only while the harness and model stay the same; a secondmate never takes one.
 Each advisor call spends the advisor model's usage on top of the worker's own.
-Arjun chose this for the Opus 5.5 workers on 2026-11-14 ("Yes let's do it"; [fork decision](fork-decisions/2026-11-14-claude-advisor.md)), so a home that wants it adds `"advisor": "fable"` to each `claude-opus-5-5` profile.
+Arjun chose this for the Opus 5.5 workers on 2026-11-14 ("Yes let's do it"; [fork decision](fork-decisions/2026-11-14-claude-advisor.md)), so a home that wants it adds `"advisor": "fable"` to each `claude-opus-5-5` profile; on 2026-11-18 he had the spawn apply it to launches that omit the flag ([fork decision](fork-decisions/2026-11-18-spawn-fills-configured-advisor.md)).
 
 **Fields applied only by typed resolution**
 
