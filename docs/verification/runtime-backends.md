@@ -1802,6 +1802,30 @@ This proves that `herdr server` remains in the foreground as the launchd job, so
 
 `bin/fm-test-run.sh tests/fm-remote-herdr-guard.test.sh` pins the resulting decision table against real marker-carrying processes, and `tests/fm-remote-doctor.test.sh` pins the doctor's verdicts on the same markers.
 
+### Linux fm-remote legacy owner
+
+Measured 2026-11-18 on Arch Linux (Omarchy, kernel 7.2.15) with Herdr 0.9.5 and lsof 4.99.7, read-only against a running fm-remote server that the doctor's `--fix` had started before owner records existed, the guarantee behind `fm_remote_herdr_launched_by_root` in [`bin/fm-remote-herdr-owner-lib.sh`](../../bin/fm-remote-herdr-owner-lib.sh); the home directory is written as `~`.
+
+```sh
+lsof -U -a -c herdr -F pn
+tr '\0' '\n' < /proc/<pid>/environ | grep -E '^(FM_REMOTE_DOCTOR_BOOTSTRAP|HERDR_SESSION)='
+tr '\0' '\n' < /proc/<pid>/environ | grep '^PATH=' | cut -d: -f1-2
+cat /proc/<pid>/cgroup
+```
+
+```text
+p8282
+n~/.config/herdr/sessions/fm-remote/herdr.sock type=STREAM
+HERDR_SESSION=fm-remote
+FM_REMOTE_DOCTOR_BOOTSTRAP=1
+PATH=~/code/agents/firstmate/bin:~/.local/bin
+0::/user.slice/user-1000.slice/user@1000.service/firstmate.slice/run-p8282-i16894.scope
+```
+
+Linux lsof appends ` type=STREAM` to a unix socket's name, so an exact path match finds no owner there.
+The server's environment is the one `bin/fm-remote-entrypoint.sh` gives the doctor, which `fm_backend_herdr_server_ensure` passes on, while its transient `run-p<pid>.scope` does not name the code root.
+`tests/fm-remote-doctor.test.sh` pins the doctor's adoption and refusals against real processes carrying these markers.
+
 ### Linux fm-remote slice
 
 Measured 2026-10-28 on Arch Linux (Omarchy) with systemd 262 (262.1-1-arch), over a non-interactive SSH session whose `XDG_RUNTIME_DIR` was `/run/user/1000`, the guarantee behind [`bin/fm-linux-slice-lib.sh`](../../bin/fm-linux-slice-lib.sh): a `systemd-run --user --scope` start keeps the started command's pid and process group, so the remote job worker's pid record and process-group stop still hold.

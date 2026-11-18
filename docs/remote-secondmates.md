@@ -278,7 +278,7 @@ The Herdr agent applies only to the herdr backend; a rex-verified host needs onl
 The primary Firstmate code root keeps the `fm-remote` session and `dev.firstmate.herdr.fm-remote` launch-agent label.
 The doctor records that root as the service owner, and a different code root on the same account receives a separate, root-derived Herdr session and launch-agent label.
 [`bin/fm-remote-herdr-identity-lib.sh`](../bin/fm-remote-herdr-identity-lib.sh) owns that resolution, so readiness, launch, relaunch, and endpoint validation all name the same session for a code root.
-A legacy service without an owner record is adopted only when its existing launch-agent guard proves the current root owns it; otherwise the doctor leaves it alone and reports the ownership gap.
+A legacy service without an owner record is adopted only when its existing launch-agent guard proves the current root owns it, or on Linux when the process holding its session socket carries the launch environment the current root's entrypoint gives the doctor; otherwise the doctor leaves it alone and reports the ownership gap.
 An operator's `--fix` refuses to rewrite, reload, or restart a Herdr service owned by another code root, one whose owner cannot be proven, or one whose pane list shows live panes or cannot be read; it reports the service and its owner instead.
 Readiness runs its unattended repair as `--fix --automatic`, which never stops, boots out, replaces, reloads, or takes over a running Herdr server or a loaded Herdr launch agent, because launchd can restart that server and a mate can create a pane in it at any moment.
 It can record ownership, install and bootstrap an unloaded agent for a stopped server, or start a stopped server through an already matching loaded agent; destructive Herdr repairs remain operator actions.
@@ -347,6 +347,7 @@ A file at `~/.local/bin/fm-remote-entrypoint.sh` that is not Firstmate's own sym
 | Always required | `git`, `jq`, the selected backend's CLI (`herdr` or `rex`), compatible `tasks-axi`, and `treehouse` |
 | At least one of | `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, or `omp` |
 | Additionally required on macOS | `lsof`, so the doctor and guard can prove which process owns the session socket |
+| Needed on Linux for a server older than its owner record | `lsof`, so the doctor can prove the server's code root from the process holding the session socket |
 
 ## Provision a route
 

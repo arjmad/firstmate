@@ -45,6 +45,14 @@
 #                dev.firstmate.remote-job is loaded only in gui/<uid>
 #       unknown  none of the above; XPC_SERVICE_NAME alone, including value 0,
 #                does not prove an Aqua birth
+#   fm_remote_herdr_launched_by_root <pid> <session> <fm-root>
+#     Succeeds only when /proc/<pid>/environ, read NUL-delimited, carries
+#     FM_REMOTE_DOCTOR_BOOTSTRAP=1, HERDR_SESSION=<session>, and a PATH whose
+#     first entry is exactly <fm-root>/bin: the environment
+#     bin/fm-remote-entrypoint.sh gives the doctor, which a server the doctor
+#     started on Linux inherits. It is the Linux stand-in for the darwin
+#     launch-agent guard when no owner record exists, so it fails closed
+#     wherever /proc does not answer.
 #   fm_remote_herdr_birth_is_aqua <birth>
 #     Succeeds only for launchd and worker. `unknown` is deliberately not
 #     Aqua: a server that cannot prove its birth is treated like a foreign one,
@@ -61,7 +69,7 @@ fm_remote_herdr_socket_owner() { # <socket-path>
       n*)
         [ -n "$pid" ] || continue
         case "${line#n}" in
-          "$socket"|"$real") candidates="${candidates}${pid}"$'\n' ;;
+          "$socket"|"$real"|"$socket type=STREAM"|"$real type=STREAM") candidates="${candidates}${pid}"$'\n' ;;
         esac
         ;;
     esac
@@ -85,6 +93,22 @@ fm_remote_herdr_process_env() { # <pid>
     return 0
   fi
   ps -Eww -o command= -p "$pid" 2>/dev/null | tr ' ' '\n' | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' || true
+}
+
+fm_remote_herdr_launched_by_root() { # <pid> <session> <fm-root>
+  local pid=$1 session=$2 root=$3 entry bootstrap='' server_session='' path=''
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ -n "$session" ] && [ -n "$root" ] && [ -r "/proc/$pid/environ" ] || return 1
+  # Only a name's first entry counts, as it is the one getenv returns.
+  while IFS= read -r -d '' entry; do
+    case "$entry" in
+      FM_REMOTE_DOCTOR_BOOTSTRAP=*) [ -n "$bootstrap" ] || bootstrap="=${entry#*=}" ;;
+      HERDR_SESSION=*) [ -n "$server_session" ] || server_session="=${entry#*=}" ;;
+      PATH=*) [ -n "$path" ] || path="=${entry#*=}" ;;
+    esac
+  done < "/proc/$pid/environ"
+  path=${path#=}
+  [ "$bootstrap" = =1 ] && [ "$server_session" = "=$session" ] && [ "${path%%:*}" = "$root/bin" ]
 }
 
 fm_remote_herdr_process_ancestry() { # <pid>
