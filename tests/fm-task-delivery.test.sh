@@ -325,6 +325,30 @@ EOF
   pass "fm-promote: an opted-in home sends a publishing promotion on a project with origin back to origin's default branch"
 }
 
+# A promoted direct-PR ship on the business checkout (meta records its absolute
+# path) carries the business push rule (CI audit C); another project does not.
+test_promote_adds_the_business_push_rule_by_project_name() {
+  local rec home proj fakebin biz id out p
+  rec=$(make_home promote-biz "- business [direct-PR] - fixture (added 2026-01-01)" "- proj [direct-PR] - fixture (added 2026-01-01)")
+  IFS='|' read -r home proj fakebin <<EOF
+$rec
+EOF
+  biz="$(dirname "$proj")/business"
+  git clone -q "$proj" "$biz" || fail "could not clone the business fixture"
+  for id in promote-biz-c1 promote-proj-c1; do
+    write_brief "$home" "$id"
+    if [ "$id" = promote-biz-c1 ]; then p=$biz; else p=$proj; fi
+    printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\nproject=%s\n' "$id" "$p" > "$home/state/$id.meta"
+    out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" "$id" --mode direct-PR --yolo off 2>&1)
+    expect_code 0 "$?" "$id: the promotion should succeed"$'\n'"$out"
+  done
+  assert_grep 'For the business PR, whether it is' "$home/data/promote-biz-c1/ship-instructions.md" \
+    "a promoted business ship lacks the business push rule"
+  assert_no_grep 'For the business PR, whether it is' "$home/data/promote-proj-c1/ship-instructions.md" \
+    "a promoted non-business ship gained the business push rule"
+  pass "fm-promote: a promoted business direct-PR ship carries the business push rule"
+}
+
 # A symlink at state/<id>.meta is the containment hazard the shared publisher
 # refuses: promotion must not rewrite the symlink target in place.
 test_promote_refuses_a_symlinked_task_record() {
@@ -2005,6 +2029,7 @@ test_spawn_notices_a_rigor_downgrade_against_the_registry
 test_scout_records_no_delivery_posture
 test_promote_requires_and_records_the_delivery_contract
 test_promote_names_origin_for_a_publishing_mode_in_an_opted_in_home
+test_promote_adds_the_business_push_rule_by_project_name
 test_promote_refuses_a_symlinked_task_record
 test_promotion_delivers_the_real_definition_of_done
 test_promotion_persists_the_selected_ship_branch

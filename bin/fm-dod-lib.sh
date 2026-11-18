@@ -1337,3 +1337,18 @@ fm_dod_accept_ship_done() {  # <kind> <mode> <worktree> <project> <line> [<state
   printf '%s\n' "named head $sha is unreachable outside the worker copy"
   return 1
 }
+
+# fm_dod_with_business_push_rule MODE REPO... - copy a DoD block from stdin and,
+# when MODE is direct-PR and a REPO is business, insert the business push rule
+# right after the local-checks step (Arjun 2026-11-18, CI audit C): business
+# gate.yml runs ./check.sh itself, so its required gate proves the full suite.
+fm_dod_with_business_push_rule() {
+  local mode=$1 repo hit=0 rule
+  shift
+  [ "$mode" = direct-PR ] || { cat; return 0; }
+  for repo in "$@"; do [ "$repo" = business ] && hit=1; done
+  [ "$hit" = 1 ] || { cat; return 0; }
+  # shellcheck disable=SC2016 # Backticks are literal brief text.
+  rule='For the business PR, whether it is this task'"'"'s own or a companion'"'"'s, every local check this contract names - before you push, before the Sol loop, and after your last push - is `./check.sh --quick`: its required `gate` workflow runs the full `./check.sh` itself, so run the full suite locally only when you want proof before pushing.'
+  awk -v rule="$rule" '{ print } /^When it is implemented and committed, run the local checks/ { print rule }'
+}

@@ -994,6 +994,8 @@ if [ "$LAVISH_COMPATIBLE" = 1 ]; then
 else
   LAVISH_LINE='Lavish is unavailable (lavish-axi is missing or below its supported version floor), so do not open a Lavish board; name any visual artifact by its file path in the status line that points the captain at it.'
 fi
+# shellcheck disable=SC2086 # REPO is one validated name and ALSO_LIST splits on purpose.
+DOD=$(printf '%s\n' "$DOD" | fm_dod_with_business_push_rule "$MODE" $REPO $ALSO_LIST)
 [ -z "$SHORT_LOOP_BLOCK" ] || DOD=$(printf '%s\n' "$DOD" | fm_dod_with_short_loop_floor) || exit 1
 
 cat > "$BRIEF" <<EOF
