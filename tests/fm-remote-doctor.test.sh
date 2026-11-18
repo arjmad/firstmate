@@ -256,7 +256,11 @@ SH
 pid=$(cat "$FM_FAKE_STATE/socket-owner" 2>/dev/null || printf '%s' "$FM_FAKE_AQUA_PID")
 [ -n "$pid" ] || exit 0
 printf 'p%s\n' "$pid"
-printf 'n%s\n' "$FM_FAKE_HERDR_SOCKET"
+if [ -f "$FM_FAKE_STATE/lsof-linux-format" ]; then
+  printf 'n%s type=STREAM\n' "$FM_FAKE_HERDR_SOCKET"
+else
+  printf 'n%s\n' "$FM_FAKE_HERDR_SOCKET"
+fi
 SH
   chmod +x "$CASE_BIN/lsof"
 
@@ -1085,6 +1089,63 @@ assert_not_contains "$DOCTOR_OUT" 'fix herdr-server=applied:' "the doctor took o
 assert_absent "$CASE_HOME/.firstmate/remote-herdr-owner" "the doctor claimed an unproven legacy server"
 [ "$(cat "$CASE_HERDR_RUNNING")" = true ] || fail "the doctor changed the legacy server state"
 pass "a legacy service without a provable owner is reported and never taken over"
+
+# --- a Linux legacy server is adopted only from its own launch environment ---
+# Linux has no launch-agent plist, so the proof is the environment of the
+# process holding the session socket: the doctor's bootstrap marker, the
+# session it serves, and a PATH led by this root's bin. lsof prints the Linux
+# unix-socket name with its " type=STREAM" suffix.
+
+linux_legacy_case() { # <holder-env...>
+  new_case Linux with-herdr no-gui
+  rm -f "$CASE_HOME/.firstmate/remote-herdr-owner"
+  printf 'true\n' > "$CASE_HERDR_RUNNING"
+  : > "$CASE_STATE/lsof-linux-format"
+  hold "$@"
+  printf '%s\n' "$HOLDER_PID" > "$CASE_STATE/socket-owner"
+}
+
+if [ -r "/proc/$$/environ" ]; then
+  linux_legacy_case PATH="$ROOT/bin:/usr/bin:/bin" FM_REMOTE_DOCTOR_BOOTSTRAP=1 HERDR_SESSION=fm-remote
+  doctor
+  expect_code 1 "$DOCTOR_RC" "a Linux legacy server without its durable owner record was reported ready"
+  assert_contains "$DOCTOR_OUT" "check herdr-owner=fixable: session fm-remote is proven to belong to $ROOT" \
+    "the doctor did not offer metadata-only adoption of a Linux legacy server its root launched"
+  assert_absent "$CASE_HOME/.firstmate/remote-herdr-owner" "a read-only check recorded the Linux legacy owner"
+  doctor --fix --automatic
+  expect_code 0 "$DOCTOR_RC" "automatic repair could not adopt the Linux legacy server"
+  assert_contains "$DOCTOR_OUT" 'fix herdr-owner=applied:' "the Linux metadata-only adoption was not reported"
+  assert_not_contains "$DOCTOR_OUT" 'fix herdr-server=' "Linux legacy adoption controlled the running server"
+  [ "$(cat "$CASE_HOME/.firstmate/remote-herdr-owner")" = "$ROOT" ] \
+    || fail "the Linux legacy server owner record was not adopted"
+  [ "$(cat "$CASE_HERDR_RUNNING")" = true ] || fail "Linux legacy adoption changed the server state"
+  kill -0 "$HOLDER_PID" 2>/dev/null || fail "Linux legacy adoption stopped the socket holder"
+  pass "a Linux legacy server launched by this root is adopted without touching it"
+
+  for holder_env in \
+    "PATH=/elsewhere/firstmate/bin:/usr/bin:/bin FM_REMOTE_DOCTOR_BOOTSTRAP=1 HERDR_SESSION=fm-remote" \
+    "PATH=/usr/bin:$ROOT/bin:/bin FM_REMOTE_DOCTOR_BOOTSTRAP=1 HERDR_SESSION=fm-remote" \
+    "PATH=$ROOT/bin:/usr/bin:/bin HERDR_SESSION=fm-remote" \
+    "PATH=$ROOT/bin:/usr/bin:/bin FM_REMOTE_DOCTOR_BOOTSTRAP=1 HERDR_SESSION=fm-remote-0123456789abcdef"; do
+    # shellcheck disable=SC2086 # each entry is a list of NAME=VALUE words
+    linux_legacy_case $holder_env
+    doctor --fix --automatic
+    expect_code 1 "$DOCTOR_RC" "a Linux legacy server was adopted from an environment that does not prove this root: $holder_env"
+    assert_contains "$DOCTOR_OUT" 'owner cannot be proven' "an unproven Linux legacy owner was not reported: $holder_env"
+    assert_absent "$CASE_HOME/.firstmate/remote-herdr-owner" "the doctor claimed an unproven Linux legacy server: $holder_env"
+    [ "$(cat "$CASE_HERDR_RUNNING")" = true ] || fail "the doctor changed an unproven Linux legacy server: $holder_env"
+  done
+  pass "a Linux legacy server whose environment names another root, session, or no bootstrap stays unadopted"
+
+  hold PATH="$ROOT/bin:/usr/bin:/bin" FM_REMOTE_DOCTOR_BOOTSTRAP=1 HERDR_SESSION=fm-remote
+  linux_legacy_case XPC_SERVICE_NAME=0
+  doctor --fix --automatic
+  expect_code 1 "$DOCTOR_RC" "markers on a process that does not hold the socket proved the Linux owner"
+  assert_absent "$CASE_HOME/.firstmate/remote-herdr-owner" "the doctor adopted from a process that does not hold the socket"
+  pass "only the process holding the session socket can prove a Linux legacy owner"
+else
+  echo "skip: /proc/<pid>/environ is unreadable here, so the Linux legacy-owner proof cannot run"
+fi
 
 # --- linux has no launch agent, and --fix starts the server directly ---------
 
