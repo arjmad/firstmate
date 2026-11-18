@@ -1501,6 +1501,10 @@ test_also_dependent_repositories_are_rendered_and_bounded() {
   # shellcheck disable=SC2016 # Backticks are literal generated brief text.
   assert_grep 'In the business repository, push after `./check.sh --quick`' "$home/data/brief-also-biz/brief.md" \
     "a brief touching business lacks the CI audit C push rule"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-also-biz-local sample --mode local-only --also business >/dev/null 2>&1 \
+    || fail "a local-only brief with --also business should scaffold"
+  assert_no_grep 'check.sh --quick' "$home/data/brief-also-biz-local/brief.md" \
+    "a local-only brief gained the business push rule"
   for args in "--mode direct-PR --also sample" "--mode direct-PR --also jobs --also jobs" \
     "--mode direct-PR --also bad/name" "--scout --also jobs" \
     "--mode direct-PR --forge external --also jobs"; do

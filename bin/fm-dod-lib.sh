@@ -1337,3 +1337,17 @@ fm_dod_accept_ship_done() {  # <kind> <mode> <worktree> <project> <line> [<state
   printf '%s\n' "named head $sha is unreachable outside the worker copy"
   return 1
 }
+
+# fm_dod_with_business_push_rule MODE REPO... - copy a DoD block from stdin and,
+# when MODE is direct-PR and a REPO is business, append the business push rule
+# (Arjun 2026-11-18, CI audit C): its gate workflow runs ./check.sh itself.
+fm_dod_with_business_push_rule() {
+  local mode=$1 repo hit=0
+  shift
+  cat
+  [ "$mode" = direct-PR ] || return 0
+  for repo in "$@"; do [ "$repo" = business ] && hit=1; done
+  [ "$hit" = 1 ] || return 0
+  # shellcheck disable=SC2016 # Backticks are literal brief text.
+  printf '%s\n' 'In the business repository, push after `./check.sh --quick` and let the required `gate` prove the full suite on the PR, since its workflow runs `./check.sh` itself; the local full `./check.sh` after your last push named above does not apply there, so run it only when you want proof before pushing.'
+}
