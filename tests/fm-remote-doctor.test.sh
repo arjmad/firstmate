@@ -1137,6 +1137,14 @@ if [ -r "/proc/$$/environ" ]; then
   done
   pass "a Linux legacy server whose environment names another root, session, or no bootstrap stays unadopted"
 
+  linux_legacy_case PATH="$ROOT/bin:/usr/bin:/bin" FM_REMOTE_DOCTOR_BOOTSTRAP=1 HERDR_SESSION=fm-remote
+  : > "$CASE_HOME/.firstmate/remote-herdr-owner"
+  doctor --fix --automatic
+  expect_code 1 "$DOCTOR_RC" "a launch environment overrode an existing invalid owner record"
+  assert_contains "$DOCTOR_OUT" 'owner cannot be proven' "an invalid Linux owner record was not reported"
+  [ ! -s "$CASE_HOME/.firstmate/remote-herdr-owner" ] || fail "the doctor rewrote an existing invalid owner record"
+  pass "a Linux launch environment adopts only a missing owner record, never an invalid one"
+
   hold PATH="$ROOT/bin:/usr/bin:/bin" FM_REMOTE_DOCTOR_BOOTSTRAP=1 HERDR_SESSION=fm-remote
   linux_legacy_case XPC_SERVICE_NAME=0
   doctor --fix --automatic

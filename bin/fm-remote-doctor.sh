@@ -977,10 +977,16 @@ check_herdr_server() {
     return 0
   fi
   if herdr_server_running; then
-    if [ -z "$HERDR_OWNER_ROOT" ] && herdr_server_linux_launched_here; then
+    if [ -z "$HERDR_OWNER_ROOT" ] && [ ! -e "$HERDR_OWNER_FILE" ] && [ ! -L "$HERDR_OWNER_FILE" ] \
+      && herdr_server_linux_launched_here; then
       HERDR_OWNER_ROOT=$FM_ROOT
     fi
     if [ -z "$HERDR_OWNER_ROOT" ]; then
+      if [ "$PLATFORM" = linux ] && ! command -v lsof >/dev/null 2>&1; then
+        record herdr-server "human: session $HERDR_SESSION_NAME is running but its Firstmate code-root owner cannot be proven because lsof does not resolve; leaving the legacy service untouched" \
+          "install lsof on that account so this check can prove the owner from the process holding the session socket, or identify the code root that owns this Herdr service before attempting a repair"
+        return 0
+      fi
       record herdr-server "human: session $HERDR_SESSION_NAME is running but its Firstmate code-root owner cannot be proven; leaving the legacy service untouched" \
         "identify the code root that owns this Herdr service before attempting a repair"
       return 0

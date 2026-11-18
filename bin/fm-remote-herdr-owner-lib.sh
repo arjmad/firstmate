@@ -69,7 +69,7 @@ fm_remote_herdr_socket_owner() { # <socket-path>
       n*)
         [ -n "$pid" ] || continue
         case "${line#n}" in
-          "$socket"|"$real"|"$socket type="*|"$real type="*) candidates="${candidates}${pid}"$'\n' ;;
+          "$socket"|"$real"|"$socket type=STREAM"|"$real type=STREAM") candidates="${candidates}${pid}"$'\n' ;;
         esac
         ;;
     esac
