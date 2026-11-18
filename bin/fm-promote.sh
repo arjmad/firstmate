@@ -359,7 +359,7 @@ EOF
   # carries the short-loop floor.
   local dod
   dod=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$PR_TEXT") || return 1
-  printf '%s\n' "$dod" | fm_dod_with_business_push_rule "$MODE" "$PROMOTE_PROJECT" | fm_dod_with_short_loop_floor
+  printf '%s\n' "$dod" | fm_dod_with_business_push_rule "$MODE" "${PROMOTE_PROJECT_NAME:-}" | fm_dod_with_short_loop_floor
 }
 mkdir -p "$DATA/$ID"
 [ ! -d "$INSTRUCTIONS" ] || { echo "error: ship instructions path is a directory: $INSTRUCTIONS" >&2; exit 1; }
