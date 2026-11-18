@@ -470,7 +470,12 @@ test_size_lines_are_reused_while_a_task_size_is_unchanged() {
   out=$(run_prune "$home" --if-due)
   assert_contains "$out" "BOOTSTRAP_INFO: data size: big-task 3 MiB: 0 MiB clean checkouts, 0 MiB dependency folders, 1 MiB images, 2 MiB PDFs, 0 MiB other" \
     "a task whose size moved is scanned again"
-  pass "size trigger: an --if-due run reuses a task's line while its size is unchanged and scans it again once the size moves"
+  mv "$home/data/big-task/more.png" "$home/data/big-task/more.pdf"
+  backdate 0.51 "$home/state/.data-retention-last"
+  out=$(run_prune "$home" --if-due)
+  assert_contains "$out" "BOOTSTRAP_INFO: data size: big-task 3 MiB: 0 MiB clean checkouts, 0 MiB dependency folders, 0 MiB images, 3 MiB PDFs, 0 MiB other" \
+    "the full run 12 hours later scans every task again"
+  pass "size trigger: an --if-due run reuses a task's line while its size is unchanged, for at most 12 hours"
 }
 
 # --- --if-due cadence ------------------------------------------------------------
@@ -504,9 +509,11 @@ test_if_due_runs_retention_at_most_every_twelve_hours() {
   done
   make_task "$home" third-task
   start_clock "$home" third-task
+  rm "$home/state/.data-retention-last"
   out=$(run_prune "$home")
   assert_contains "$out" "removed 3 files" "a run without --if-due always runs: $out"
-  rm "$home/config/data-media-retention-days" "$home/state/.data-retention-last"
+  assert_absent "$home/state/.data-retention-last" "a run without --if-due records nothing"
+  rm "$home/config/data-media-retention-days"
   printf '1\n' > "$home/config/data-size-trigger-mib"
   printf '7\n' > "$home/config/data-scratch-retention-days"
   mib "$home/data/third-task/export.bin" 2
