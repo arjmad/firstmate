@@ -154,7 +154,8 @@
 #   its harness, model, and effort, otherwise the one advisor every claude profile with
 #   an explicit non-Fable model agrees on (none when they disagree). A pairing
 #   validate-advisor would refuse (a Fable main or no --model), a raw launch
-#   command, and backend=t3code take none instead of refusing. An explicit
+#   command, and backend=t3code are not filled; a clear selection that names an
+#   advisor still needs --dispatch-override for them, as before. An explicit
 #   `--advisor default` still means no advisor.
 #   --fast <on|off> is this task's model priority ("fast") tier, default off.
 #   Off is the captain's standing orchestration default: every firstmate-launched
