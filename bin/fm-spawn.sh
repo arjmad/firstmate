@@ -148,7 +148,14 @@
 #   validate-advisor refuses (another harness, a raw launch command, no explicit
 #   --model, or a Fable main model). The value is recorded as advisor= in the
 #   task record and on the spawned line only when set, and bin/fm-control.sh
-#   relaunch passes it back; like --model it is not read from config here.
+#   relaunch passes it back. When a fresh claude ship or scout omits --advisor
+#   while config/crew-dispatch.json is active, the launch takes the advisor that
+#   config gives it: a clear dispatch selection's advisor when the launch keeps
+#   its harness and model, otherwise the one advisor every claude profile with
+#   an explicit non-Fable model agrees on (none when they disagree). A pairing
+#   validate-advisor would refuse (a Fable main or no --model), a raw launch
+#   command, and backend=t3code take none instead of refusing. An explicit
+#   `--advisor default` still means no advisor.
 #   --fast <on|off> is this task's model priority ("fast") tier, default off.
 #   Off is the captain's standing orchestration default: every firstmate-launched
 #   worker runs standard tier even when the launching machine's own config or a
@@ -2637,7 +2644,9 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$HARNESS_ARG" ] || shared_args+=(--harness "$HARNESS_ARG")
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
-  [ -z "$ADVISOR" ] || shared_args+=(--advisor "$ADVISOR")
+  # An explicit `--advisor default` is forwarded as such, so no pair refills it
+  # from the dispatch config.
+  [ "$ADVISOR_SET" -eq 0 ] || shared_args+=(--advisor "${ADVISOR:-default}")
   [ -z "$DISPATCH_OVERRIDE" ] || shared_args+=(--dispatch-override "$DISPATCH_OVERRIDE")
   [ "$PLACEMENT_OVERRIDE_SET" -eq 0 ] || shared_args+=(--placement-override "$PLACEMENT_OVERRIDE")
   [ "$HERMES_PROFILE_SET" -eq 0 ] || shared_args+=(--hermes-profile "$HERMES_PROFILE")
@@ -3842,6 +3851,34 @@ if [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ] && [ -f "$CONFIG/crew-disp
   if [ -z "$dispatch_status" ]; then
     echo "error: malformed dispatch resolution $DISPATCH_RECORD for task $ID; rerun bin/fm-dispatch-resolve.sh $DATA/$ID/brief.md --project <name>" >&2
     exit 1
+  fi
+  # An omitted --advisor takes the advisor this config gives the launch (header):
+  # the clear selection's when the launch is that selection, else the one value
+  # every advisor-capable profile agrees on (bin/fm-harness.sh validate-advisor
+  # owns which profiles can take one). A launch the pairing rule would refuse
+  # simply takes none.
+  if [ "$ADVISOR_SET" -eq 0 ] && [ "$HARNESS" = claude ] && [ "$RAW_LAUNCH" -eq 0 ] && [ "$BACKEND" != t3code ]; then
+    if [ "$dispatch_status" = clear ] && [ "$selected_harness" = claude ] \
+      && { [ -z "$selected_model" ] || [ "${MODEL:-}" = "$selected_model" ]; }; then
+      config_advisor=$selected_advisor
+    else
+      config_advisor=$(jq -r '
+        def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
+        [((.rules // [])[] | profiles(.use)[]), profiles(.default)[]
+          | select(type == "object" and .harness == "claude" and (.model | type) == "string"
+              and .model != "default" and (.model | ascii_downcase | contains("fable") | not))
+          | (.advisor // "")]
+        | unique | if length == 1 then .[0] else "" end' "$CONFIG/crew-dispatch.json" 2>/dev/null) || config_advisor=
+    fi
+    if [ -n "$config_advisor" ]; then
+      if "$SCRIPT_DIR/fm-harness.sh" validate-advisor claude "$MODEL" "$config_advisor" 2>/dev/null; then
+        ADVISOR=$config_advisor
+      else
+        case "${MODEL:-default}" in
+          default) echo "note: task $ID has no --model, so the configured advisor $config_advisor is not applied; pass --model to apply it" >&2 ;;
+        esac
+      fi
+    fi
   fi
   if [ "$dispatch_status" = clear ] && [ -z "$DISPATCH_OVERRIDE" ] \
     && { [ "$RAW_LAUNCH" -eq 1 ] || [ "$HARNESS" != "$selected_harness" ] \
