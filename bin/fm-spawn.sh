@@ -151,7 +151,7 @@
 #   relaunch passes it back. When a fresh claude ship or scout omits --advisor
 #   while config/crew-dispatch.json is active, the launch takes the advisor that
 #   config gives it: a clear dispatch selection's advisor when the launch keeps
-#   its harness and model, otherwise the one advisor every claude profile with
+#   its harness, model, and effort, otherwise the one advisor every claude profile with
 #   an explicit non-Fable model agrees on (none when they disagree). A pairing
 #   validate-advisor would refuse (a Fable main or no --model), a raw launch
 #   command, and backend=t3code take none instead of refusing. An explicit
@@ -3848,6 +3848,8 @@ if [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ] && [ -f "$CONFIG/crew-disp
       and (if .status == "clear" then (.profile.harness | type) == "string" and .profile.harness != "" else true end))
     | .status, (.profile.harness // ""), (.profile.model // ""), (.profile.effort // ""), (.profile.advisor // "")' "$DISPATCH_RECORD" 2>/dev/null) || dispatch_fields=
   { read -r dispatch_status; read -r selected_harness; read -r selected_model; read -r selected_effort; read -r selected_advisor; } <<<"$dispatch_fields" || true
+  # `default` is the spelling for no advisor, as for --advisor.
+  [ "$selected_advisor" != default ] || selected_advisor=
   if [ -z "$dispatch_status" ]; then
     echo "error: malformed dispatch resolution $DISPATCH_RECORD for task $ID; rerun bin/fm-dispatch-resolve.sh $DATA/$ID/brief.md --project <name>" >&2
     exit 1
@@ -3859,7 +3861,8 @@ if [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ] && [ -f "$CONFIG/crew-disp
   # simply takes none.
   if [ "$ADVISOR_SET" -eq 0 ] && [ "$HARNESS" = claude ] && [ "$RAW_LAUNCH" -eq 0 ] && [ "$BACKEND" != t3code ]; then
     if [ "$dispatch_status" = clear ] && [ "$selected_harness" = claude ] \
-      && { [ -z "$selected_model" ] || [ "${MODEL:-}" = "$selected_model" ]; }; then
+      && { [ -z "$selected_model" ] || [ "${MODEL:-}" = "$selected_model" ]; } \
+      && { [ -z "$selected_effort" ] || [ "${EFFORT:-}" = "$selected_effort" ]; }; then
       config_advisor=$selected_advisor
     else
       config_advisor=$(jq -r '
@@ -3870,7 +3873,7 @@ if [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ] && [ -f "$CONFIG/crew-disp
           | (.advisor // "")]
         | unique | if length == 1 then .[0] else "" end' "$CONFIG/crew-dispatch.json" 2>/dev/null) || config_advisor=
     fi
-    if [ -n "$config_advisor" ]; then
+    if [ -n "$config_advisor" ] && [ "$config_advisor" != default ]; then
       if "$SCRIPT_DIR/fm-harness.sh" validate-advisor claude "$MODEL" "$config_advisor" 2>/dev/null; then
         ADVISOR=$config_advisor
       else

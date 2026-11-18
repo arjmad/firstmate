@@ -2272,7 +2272,7 @@ The declared value must be a boolean; anything else is an actionable configurati
 
 A profile `advisor` names the model a Claude worker consults at decision points, such as `"advisor": "fable"`.
 `fm-spawn.sh` passes it to a Claude ship or scout as `--advisor <model>`, which sets the advisor for that one session without writing Claude settings (Claude Code 2.1.321 or later for a Fable advisor).
-When a fresh Claude ship or scout launch omits `--advisor`, `fm-spawn.sh` applies the advisor this config gives it: the clear dispatch selection's advisor when the launch keeps its harness and model, otherwise the one advisor that every claude profile with an explicit non-Fable model agrees on, across rules and `default`; profiles that disagree give none.
+When a fresh Claude ship or scout launch omits `--advisor`, `fm-spawn.sh` applies the advisor this config gives it: the clear dispatch selection's advisor when the launch keeps its harness, model, and effort, otherwise the one advisor that every claude profile with an explicit non-Fable model agrees on, across rules and `default`; profiles that disagree give none.
 A filled advisor never refuses a launch: a Fable main model, a launch with no `--model` (which prints a note), a raw launch command, and `backend=t3code` launch with none.
 An explicit `--advisor default` launches with no advisor, and under a clear selection that names one it also needs `--dispatch-override`, like any other deviation.
 It is valid only with harness `claude` and an explicit `model` that is not a Fable model; anything else is a configuration error at bootstrap and in typed resolution, and `fm-spawn.sh` refuses the launch.

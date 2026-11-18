@@ -2870,7 +2870,30 @@ test_claude_advisor_must_match_the_dispatch_selection() {
   status=$?
   expect_code 0 "$status" "an overridden opus launch of a fable selection should launch"$'\n'"$out"
   assert_grep advisor=fable "$HOME_DIR/state/$id.meta" "an override off the selected model must take the agreed advisor"
-  pass "a clear dispatch selection's advisor fills an omitted --advisor; declining it needs --advisor default and an override; an override off its model takes the agreed one"
+  # An effort-only override leaves the selection too: a clear low-effort
+  # selection with no advisor, launched at high, takes the agreed advisor.
+  id=claude-advisor-dispatch-effort-z39
+  rec=$(make_spawn_case claude-advisor-dispatch-effort claude "$id")
+  read_case_record "$rec"
+  enable_advisor_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id" clear claude claude-opus-5-5 low
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+    --harness claude --model claude-opus-5-5 --effort high --dispatch-override 'high for this task' 2>&1)
+  status=$?
+  expect_code 0 "$status" "an effort-overridden launch should launch"$'\n'"$out"
+  assert_grep advisor=fable "$HOME_DIR/state/$id.meta" "an override off the selected effort must take the agreed advisor"
+  # A selection whose advisor is spelled `default` means none.
+  id=claude-advisor-dispatch-default-z39
+  rec=$(make_spawn_case claude-advisor-dispatch-default claude "$id")
+  read_case_record "$rec"
+  enable_dispatch_profile "$HOME_DIR"
+  record_dispatch "$HOME_DIR" "$id" clear claude claude-opus-5-5 high default
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+    --harness claude --model claude-opus-5-5 --effort high 2>&1)
+  status=$?
+  expect_code 0 "$status" "a selection with a default advisor should launch"$'\n'"$out"
+  assert_no_grep advisor= "$HOME_DIR/state/$id.meta" "a selection with a default advisor must record none"
+  pass "a clear dispatch selection's advisor fills an omitted --advisor; declining it needs --advisor default and an override; an override off its model or effort takes the agreed one"
 }
 
 # A config whose advisor-capable claude profiles all name fable, beside a Fable
