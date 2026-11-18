@@ -1,0 +1,9 @@
+2026-11-18: firstmate, after the Fafnir remote second mate's auto-relaunch was refused, routed the fix for a Linux fm-remote Herdr server that predates owner records and so had no `~/.firstmate/remote-herdr-owner`.
+Decision: on Linux the doctor proves such a server's code root from the process holding its session socket, whose environment must carry `FM_REMOTE_DOCTOR_BOOTSTRAP=1`, the session's `HERDR_SESSION`, and a `PATH` led by exactly that root's `bin`, and records it as the existing metadata-only `herdr-owner` gap; anything weaker stays a human gap.
+Why: Linux has no launch-agent plist to stand in for the missing record, so every relaunch was refused until an operator wrote the record by hand; the server's own launch environment names its root as firmly as the darwin guard path does.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| A Linux legacy Herdr server is adopted from its socket holder's launch environment | `bin/fm-remote-doctor.sh` (`herdr_server_linux_launched_here`, `check_herdr_server`, header), `bin/fm-remote-herdr-owner-lib.sh` (`fm_remote_herdr_launched_by_root`), `bin/fm-remote-herdr-identity-lib.sh` (header), `tests/fm-remote-doctor.test.sh`, `docs/remote-secondmates.md`, `docs/verification/runtime-backends.md` | `bin/fm-remote-doctor.sh`, `bin/fm-remote-herdr-owner-lib.sh`, `bin/fm-remote-herdr-identity-lib.sh` | carried | 427056c4 |
+| Socket-owner discovery matches the ` type=STREAM` suffix Linux lsof appends to unix-socket names | `bin/fm-remote-herdr-owner-lib.sh` (`fm_remote_herdr_socket_owner`) | `bin/fm-remote-herdr-owner-lib.sh` | carried | 427056c4 |
+| The entrypoint's trusted doctor identity pins this doctor | `bin/fm-remote-entrypoint.sh` (`DOCTOR_SHA256`) | `bin/fm-remote-entrypoint.sh` | carried | 427056c4 |
