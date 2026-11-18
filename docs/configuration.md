@@ -850,7 +850,8 @@ The file is a home-local preference and is not inherited by secondmate homes.
 
 Workers leave renders, clip copies, screenshots, and disk images in `data/<task>/`, and nothing removes them after teardown.
 The optional local, gitignored `config/data-media-retention-days` file holds a whole number of days N from 1 to 3650, and the locked session-start bootstrap then removes the video, audio, and disk image files of every task that has been torn down for N days and whose `data/<task>/` has not changed in N days.
-A task counts as torn down only when it has no live record under `state/` and no open backlog row, and its N days start at the first session start that sees it so; a home whose backlog cannot be read removes nothing.
+A task counts as torn down only when it has no live record under `state/` and no open backlog row, and its N days start at the first bootstrap retention run that sees it so; a home whose backlog cannot be read removes nothing.
+The bootstrap runs media and scratch retention at most once every 12 hours, so a session start that comes sooner skips them, and a clock starts, and anything newly due goes, at the next run.
 Only video, audio, and disk images are removed; still images, PDFs, and exports, reports and other text files, finals, and anything inside a git checkout stay, and nothing outside this home's `data/` is touched.
 An absent file means no retention, and the file is not inherited by secondmate homes.
 Run `bin/fm-data-media-prune.sh --dry-run` to list what a run would remove today, with each file's size, without starting any task's clock; without the file it previews 7 days, and `--days <N>` previews another value.
@@ -870,6 +871,7 @@ A one-off real run by hand is `bin/fm-data-media-prune.sh --scratch-days <N>` fr
 
 At every locked session start, when this home's `data/` holds more than the trigger, the bootstrap prints `BOOTSTRAP_INFO: data size:` lines naming the five largest torn-down tasks and how much of each is clean checkouts, dependency folders, images, PDFs, and other files.
 The optional local, gitignored `config/data-size-trigger-mib` file holds the trigger as a whole number of MiB from 1 to 16777216; without it the trigger is 4096 MiB (4 GiB).
+Between those 12-hourly runs, the bootstrap reuses a task's line from its last run while that task's size is unchanged.
 The lines change nothing: clean checkouts and dependency folders go through task scratch retention, and images and PDFs follow the Drive rule above, one captain-approved batch at a time.
 
 ## Firstmate role (config/firstmate-role)

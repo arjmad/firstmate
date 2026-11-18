@@ -11,7 +11,20 @@
 #   - size: when data/ as a whole is over a size trigger, name the largest
 #     torn-down tasks and what each holds, so firstmate can propose a cleanup.
 #
-# Usage: fm-data-media-prune.sh [--dry-run] [--days <N>] [--scratch-days <N>]
+# Usage: fm-data-media-prune.sh [--dry-run] [--if-due] [--days <N>] [--scratch-days <N>]
+#        --if-due
+#          Run in full only when the last full --if-due run finished at least
+#          12 hours ago (state/.data-retention-last records it). A run inside
+#          that interval skips the media and scratch parts, still clearing the
+#          clock of a task that is live again, and reuses each size-trigger
+#          line from state/.data-size-cache whose task and KiB in this run's du
+#          are unchanged. Retention is counted in whole days, so a session
+#          start that comes sooner would only repeat the last run's whole-data/
+#          walk, kept-checkout checks, and size scans: a clock starts, and
+#          anything newly due goes, at the next full run instead, so a size
+#          line is at most 12 hours stale. bin/fm-bootstrap.sh passes it; a
+#          dry run ignores it, and a run without it never reads or records
+#          either file.
 #        --dry-run
 #          Classify exactly as a real run would, change nothing (not even the
 #          retention clocks below), and print one
@@ -35,7 +48,7 @@
 # The size trigger is on in every home. config/data-size-trigger-mib holds a
 # whole number of MiB from 1 to 16777216 (default 4096, which is 4 GiB); data/
 # is measured with one du per run, and the backlog is read only when a part
-# needs it.
+# needs it (--if-due above owns when a size line is reused).
 #
 # Output. A run that removed (or under --dry-run would remove) any media prints
 #   BOOTSTRAP_INFO: data media retention: removed <n> files (<MiB> MiB) from <m> torn-down tasks quiet over <N> days
@@ -133,6 +146,7 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 
 DRY_RUN=0
+IF_DUE=0
 DAYS=
 SCRATCH_DAYS=
 DEFAULT_DRY_RUN_DAYS=7
@@ -141,6 +155,9 @@ DEFAULT_SIZE_MIB=4096
 MAX_SIZE_MIB=16777216
 SIZE_TASKS=5
 CLOCKS="$STATE/data-media-retention"
+RETENTION_STAMP="$STATE/.data-retention-last"
+RETENTION_INTERVAL_MINUTES=720
+SIZE_CACHE="$STATE/.data-size-cache"
 
 usage() {
   sed -n '2,/^set -u$/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -149,6 +166,7 @@ usage() {
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
+    --if-due) IF_DUE=1 ;;
     --days|--scratch-days)
       [ $# -ge 2 ] || { echo "error: $1 needs a value" >&2; exit 2; }
       if [ "$1" = --days ]; then DAYS=$2; else SCRATCH_DAYS=$2; fi
@@ -208,6 +226,16 @@ SIZE_MIB=$(whole_number "${SIZE_MIB:-$DEFAULT_SIZE_MIB}" "$MAX_SIZE_MIB" "the da
   echo "warning: $CONFIG/data-size-trigger-mib is not a whole number of MiB from 1 to $MAX_SIZE_MIB; using $DEFAULT_SIZE_MIB" >&2
   SIZE_MIB=$DEFAULT_SIZE_MIB
 }
+# --if-due (header): inside the interval, DUE=0 leaves both parts off; a live
+# task's clock is still cleared (CLOCK_DAYS), since that costs no scan.
+CLOCK_DAYS=$DAYS
+DUE=1
+if [ "$IF_DUE" -eq 1 ] && [ "$DRY_RUN" -eq 0 ] && [ -f "$RETENTION_STAMP" ] \
+  && [ -n "$(find "$RETENTION_STAMP" -mmin "-$RETENTION_INTERVAL_MINUTES" -print 2>/dev/null)" ]; then
+  DUE=0
+  DAYS=
+  SCRATCH_DAYS=
+fi
 QUIET_MINUTES=$((${DAYS:-0} * 1440))
 SCRATCH_QUIET_MINUTES=$((${SCRATCH_DAYS:-0} * 1440))
 
@@ -224,7 +252,7 @@ measure_data() {
   [ "$DATA_KIB" -le $((SIZE_MIB * 1024)) ] || OVER_SIZE=1
 }
 measure_data
-[ -n "$DAYS" ] || [ -n "$SCRATCH_DAYS" ] || [ "$OVER_SIZE" -eq 1 ] || exit 0
+[ -n "$CLOCK_DAYS" ] || [ -n "$SCRATCH_DAYS" ] || [ "$OVER_SIZE" -eq 1 ] || exit 0
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fm-data-media-prune.XXXXXX") || { echo "warning: data media retention skipped: cannot create a scratch directory" >&2; exit 0; }
 trap 'rm -rf "$WORK"' EXIT
@@ -459,7 +487,7 @@ for dir in "$DATA"/*/; do
   [ -d "$dir" ] && [ ! -L "$dir" ] && [ -f "$dir/brief.md" ] || continue
   clock="$CLOCKS/$task.retired"
   if task_is_live "$task"; then
-    [ -z "$DAYS" ] || [ "$DRY_RUN" -eq 1 ] || rm -f "$clock"
+    [ -z "$CLOCK_DAYS" ] || [ "$DRY_RUN" -eq 1 ] || rm -f "$clock"
     continue
   fi
   printf '%s\n' "$task" >> "$WORK/retired"
@@ -513,6 +541,8 @@ fi
 if [ "$DRY_RUN" -eq 0 ] && [ $((TOTAL_FILES + SCRATCH_ITEMS)) -gt 0 ]; then
   measure_data
 fi
+# A full --if-due run drops the old size lines; the part below records fresh ones.
+[ "$IF_DUE" -eq 0 ] || [ "$DRY_RUN" -eq 1 ] || [ "$DUE" -eq 0 ] || rm -f "$SIZE_CACHE"
 if [ "$OVER_SIZE" -eq 1 ]; then
   # Each torn-down task's KiB from the du above, largest first.
   printf '%s\n' "$DU_OUT" | awk -F '\t' -v p="$DATA_REAL/" 'FILENAME == ARGV[1] { retired[$0] = 1; next }
@@ -520,11 +550,27 @@ if [ "$OVER_SIZE" -eq 1 ]; then
     | sort -t "$(printf '\t')" -k1,1nr -k2 | head -n "$SIZE_TASKS" > "$WORK/largest"
   if [ -s "$WORK/largest" ]; then
     size_line "its largest torn-down tasks follow. Clean checkouts and dependency folders go with scratch retention (config/data-scratch-retention-days); images and PDFs move to Drive only as one captain-approved batch (docs/configuration.md)"
+    # An --if-due run that is not due reuses a line whose task and KiB match.
     while IFS="$(printf '\t')" read -r kib task; do
-      size_task "$DATA/$task" "$kib"
+      line=
+      [ "$DUE" -eq 1 ] || [ ! -f "$SIZE_CACHE" ] \
+        || line=$(awk -F '\t' -v t="$task" -v k="$kib" '$1 "" == t "" && $2 "" == k "" { print $3; exit }' "$SIZE_CACHE" 2>/dev/null)
+      [ -n "$line" ] || line=$(size_task "$DATA/$task" "$kib")
+      printf '%s\n' "$line"
+      printf '%s\t%s\t%s\n' "$task" "$kib" "$line" >> "$WORK/size-cache"
     done < "$WORK/largest"
+    if [ "$IF_DUE" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
+      { cp "$WORK/size-cache" "$SIZE_CACHE.$$" && mv -f "$SIZE_CACHE.$$" "$SIZE_CACHE"; } 2>/dev/null || {
+        rm -f "$SIZE_CACHE.$$"
+        echo "warning: could not record the data size lines in $SIZE_CACHE" >&2
+      }
+    fi
   else
     size_line "no torn-down task holds any of it"
   fi
+fi
+# A full --if-due run that got this far records itself.
+if [ "$IF_DUE" -eq 1 ] && [ "$DRY_RUN" -eq 0 ] && [ "$DUE" -eq 1 ]; then
+  touch "$RETENTION_STAMP" 2>/dev/null || echo "warning: could not record this run in $RETENTION_STAMP" >&2
 fi
 exit 0

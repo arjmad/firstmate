@@ -446,6 +446,94 @@ test_size_trigger_names_the_largest_torn_down_tasks() {
   pass "size trigger: over the configured size, names the largest torn-down tasks and what each holds, and removes nothing"
 }
 
+test_size_lines_are_reused_while_a_task_size_is_unchanged() {
+  local home first out
+  home=$(new_home size-cache)
+  printf '1\n' > "$home/config/data-size-trigger-mib"
+  put "$home/data/big-task/brief.md" "# Task"
+  mib "$home/data/big-task/shots/screen.png" 2
+  out=$(run_prune "$home" --dry-run | grep -v '^data-scratch: ')
+  assert_absent "$home/state/.data-size-cache" "a dry run records no size lines"
+  first=$(run_prune "$home" --if-due)
+  assert_contains "$first" "BOOTSTRAP_INFO: data size: big-task 2 MiB: 0 MiB clean checkouts, 0 MiB dependency folders, 2 MiB images, 0 MiB PDFs, 0 MiB other" \
+    "the first real run scans the task"
+  mv "$home/data/big-task/shots/screen.png" "$home/data/big-task/shots/screen.pdf"
+  out=$(run_prune "$home" --if-due)
+  assert_equals "$first" "$out" "a task whose size is unchanged keeps its recorded line"
+  out=$(run_prune "$home" --dry-run | grep -v '^data-scratch: ')
+  assert_contains "$out" "big-task 2 MiB: 0 MiB clean checkouts, 0 MiB dependency folders, 0 MiB images, 2 MiB PDFs" \
+    "a dry run always scans the task"
+  out=$(run_prune "$home")
+  assert_contains "$out" "big-task 2 MiB: 0 MiB clean checkouts, 0 MiB dependency folders, 0 MiB images, 2 MiB PDFs" \
+    "a run without --if-due always scans the task"
+  mib "$home/data/big-task/more.png" 1
+  out=$(run_prune "$home" --if-due)
+  assert_contains "$out" "BOOTSTRAP_INFO: data size: big-task 3 MiB: 0 MiB clean checkouts, 0 MiB dependency folders, 1 MiB images, 2 MiB PDFs, 0 MiB other" \
+    "a task whose size moved is scanned again"
+  mv "$home/data/big-task/more.png" "$home/data/big-task/more.pdf"
+  backdate 0.51 "$home/state/.data-retention-last"
+  out=$(run_prune "$home" --if-due)
+  assert_contains "$out" "BOOTSTRAP_INFO: data size: big-task 3 MiB: 0 MiB clean checkouts, 0 MiB dependency folders, 0 MiB images, 3 MiB PDFs, 0 MiB other" \
+    "the full run 12 hours later scans every task again"
+  printf '1024\n' > "$home/config/data-size-trigger-mib"
+  printf '7\n' > "$home/config/data-media-retention-days"
+  backdate 0.51 "$home/state/.data-retention-last"
+  run_prune "$home" --if-due >/dev/null
+  assert_absent "$home/state/.data-size-cache" "a full run with no size lines drops the old ones"
+  printf '1\n' > "$home/config/data-size-trigger-mib"
+  mv "$home/data/big-task/more.pdf" "$home/data/big-task/more.png"
+  out=$(run_prune "$home" --if-due)
+  assert_contains "$out" "big-task 3 MiB: 0 MiB clean checkouts, 0 MiB dependency folders, 1 MiB images, 2 MiB PDFs" \
+    "a run after that full run scans the task rather than reuse a line older than 12 hours"
+  pass "size trigger: an --if-due run reuses a task's line while its size is unchanged, for at most 12 hours"
+}
+
+# --- --if-due cadence ------------------------------------------------------------
+
+test_if_due_runs_retention_at_most_every_twelve_hours() {
+  local home out f
+  home=$(new_home due)
+  printf '7\n' > "$home/config/data-media-retention-days"
+  make_task "$home" first-task
+  start_clock "$home" first-task
+  out=$(run_prune "$home" --if-due)
+  assert_contains "$out" "removed 3 files" "a home with no recorded run is due: $out"
+  assert_present "$home/state/.data-retention-last" "a real retention run records itself"
+  make_task "$home" second-task
+  start_clock "$home" second-task
+  out=$(run_prune "$home" --if-due)
+  [ -z "$out" ] || fail "a retention run inside the last 12 hours is skipped: $out"
+  assert_task_untouched "$home" second-task "a run that is not due"
+  put "$home/state/second-task.meta" "window=x"
+  run_prune "$home" --if-due >/dev/null
+  assert_absent "$home/state/data-media-retention/second-task.retired" "a run that is not due still clears a live task's clock"
+  rm "$home/state/second-task.meta"
+  start_clock "$home" second-task
+  out=$(run_prune "$home" --if-due --dry-run | grep -v '^data-scratch: ')
+  assert_contains "$out" "would remove 3 files" "a dry run ignores --if-due"
+  backdate 0.51 "$home/state/.data-retention-last"
+  out=$(run_prune "$home" --if-due)
+  assert_contains "$out" "removed 3 files" "a run 12 hours after the last one is due again: $out"
+  for f in $PRUNABLE; do
+    assert_absent "$home/data/second-task/$f" "the due run removes second-task/$f"
+  done
+  make_task "$home" third-task
+  start_clock "$home" third-task
+  rm "$home/state/.data-retention-last"
+  out=$(run_prune "$home")
+  assert_contains "$out" "removed 3 files" "a run without --if-due always runs: $out"
+  assert_absent "$home/state/.data-retention-last" "a run without --if-due records nothing"
+  rm "$home/config/data-media-retention-days"
+  printf '1\n' > "$home/config/data-size-trigger-mib"
+  printf '7\n' > "$home/config/data-scratch-retention-days"
+  mib "$home/data/third-task/export.bin" 2
+  run_prune "$home" --if-due >/dev/null
+  assert_present "$home/state/.data-retention-last" "a scratch-only retention run records itself too"
+  out=$(run_prune "$home" --if-due)
+  assert_contains "$out" "BOOTSTRAP_INFO: data size: data/ holds " "the size trigger runs when retention is not due"
+  pass "--if-due: retention runs at most every 12 hours, the size trigger every run, and a plain or dry run always"
+}
+
 # --- bootstrap seat -----------------------------------------------------------
 
 make_toolchain() {  # <dir>
@@ -529,4 +617,6 @@ test_scratch_retention_is_its_own_opt_in
 test_scratch_dry_run_lists_and_removes_nothing
 test_scratch_real_run_removes_only_clean_checkouts_and_dependency_folders
 test_size_trigger_names_the_largest_torn_down_tasks
+test_size_lines_are_reused_while_a_task_size_is_unchanged
+test_if_due_runs_retention_at_most_every_twelve_hours
 test_bootstrap_runs_prune_only_when_locked
