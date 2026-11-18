@@ -885,7 +885,10 @@ ROWS
 }
 
 test_session_provider_backends_gate_own_cli_not_tmux() {
-  local backend cli case_dir fakebin out missing
+  local backend cli case_dir fakebin out missing sans_path
+  # A host can install a session CLI system-wide (Fafnir ships /usr/bin/herdr),
+  # so hide them all from BASE_PATH to keep the "CLI absent" case hermetic.
+  sans_path=$(fm_test_base_path_sans "$BASE_PATH" herdr zellij cmux paseo rex tern tmux)
   # With the backend's OWN session CLI absent (and tmux also absent), bootstrap
   # must fail closed on the genuine dep and never substitute a false tmux demand.
   while IFS='^' read -r backend cli; do
@@ -896,7 +899,7 @@ test_session_provider_backends_gate_own_cli_not_tmux() {
     printf '%s\n' "$backend" > "$case_dir/home/config/backend"
     # Toolchain has jq + treehouse but NOT the session CLI and NOT tmux.
     fakebin=$(make_fake_toolchain_no_tmux "$case_dir")
-    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    out=$(PATH="$fakebin:$sans_path" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
       FM_BACKEND_PASEO_BUNDLE_BIN="$case_dir/no-paseo" REX_BIN_DIR="$case_dir/no-rex-bin-dir" \
       FM_BACKEND_REX_BUNDLE_BIN="$case_dir/no-rex" FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
     case "$backend" in
