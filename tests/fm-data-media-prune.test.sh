@@ -475,6 +475,16 @@ test_size_lines_are_reused_while_a_task_size_is_unchanged() {
   out=$(run_prune "$home" --if-due)
   assert_contains "$out" "BOOTSTRAP_INFO: data size: big-task 3 MiB: 0 MiB clean checkouts, 0 MiB dependency folders, 0 MiB images, 3 MiB PDFs, 0 MiB other" \
     "the full run 12 hours later scans every task again"
+  printf '1024\n' > "$home/config/data-size-trigger-mib"
+  printf '7\n' > "$home/config/data-media-retention-days"
+  backdate 0.51 "$home/state/.data-retention-last"
+  run_prune "$home" --if-due >/dev/null
+  assert_absent "$home/state/.data-size-cache" "a full run with no size lines drops the old ones"
+  printf '1\n' > "$home/config/data-size-trigger-mib"
+  mv "$home/data/big-task/more.pdf" "$home/data/big-task/more.png"
+  out=$(run_prune "$home" --if-due)
+  assert_contains "$out" "big-task 3 MiB: 0 MiB clean checkouts, 0 MiB dependency folders, 1 MiB images, 2 MiB PDFs" \
+    "a run after that full run scans the task rather than reuse a line older than 12 hours"
   pass "size trigger: an --if-due run reuses a task's line while its size is unchanged, for at most 12 hours"
 }
 

@@ -541,6 +541,8 @@ fi
 if [ "$DRY_RUN" -eq 0 ] && [ $((TOTAL_FILES + SCRATCH_ITEMS)) -gt 0 ]; then
   measure_data
 fi
+# A full --if-due run drops the old size lines; the part below records fresh ones.
+[ "$IF_DUE" -eq 0 ] || [ "$DRY_RUN" -eq 1 ] || [ "$DUE" -eq 0 ] || rm -f "$SIZE_CACHE"
 if [ "$OVER_SIZE" -eq 1 ]; then
   # Each torn-down task's KiB from the du above, largest first.
   printf '%s\n' "$DU_OUT" | awk -F '\t' -v p="$DATA_REAL/" 'FILENAME == ARGV[1] { retired[$0] = 1; next }
