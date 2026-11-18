@@ -12,7 +12,9 @@
 # The code root recorded in ~/.firstmate/remote-herdr-owner owns the primary
 # fm-remote session and dev.firstmate.herdr.fm-remote label. Before owner
 # records existed, the guard path in the primary darwin launch agent was the
-# only durable evidence of its root, so it stands in for a missing record. Every
+# only durable evidence of its root, so it stands in for a missing record. A
+# Linux server has no such file; bin/fm-remote-doctor.sh proves it from the
+# running server's environment and records its owner instead. Every
 # other code root on the account gets fm-remote-<root-id> and
 # dev.firstmate.herdr.fm-remote-<root-id>, recorded in
 # ~/.firstmate/remote-herdr-owner-<root-id>, where <root-id> is the first 16

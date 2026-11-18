@@ -72,8 +72,10 @@
 # because launchd can restart that server and a mate can create a pane in it at
 # any moment; it only records ownership and starts a stopped server, and
 # reports everything else as an operator action. It may adopt a legacy owner
-# only when its launch-agent guard proves the current root, and that adoption
-# writes metadata without restarting the service. It also writes and reloads
+# only when its launch-agent guard proves the current root, or on Linux when
+# the process holding the session socket carries the launch environment this
+# root's entrypoint gives the doctor (bin/fm-remote-herdr-owner-lib.sh), and
+# that adoption writes metadata without restarting the service. It also writes and reloads
 # the owned Aqua agents,
 # starts the Linux workers where no Aqua agent applies, starts a persistent rex
 # server when that backend needs one and none answers, recreates the entrypoint
@@ -340,6 +342,17 @@ herdr_server_birth() {
 
 # On darwin the session is ready only when its server was born in the Aqua
 # login session; elsewhere any running server is.
+# Linux has no launch agent whose guard names a legacy server's root, so the
+# process holding the session socket must itself carry the environment this
+# root's entrypoint gave the doctor that started it.
+herdr_server_linux_launched_here() {
+  local socket owner
+  [ "$PLATFORM" = linux ] || return 1
+  socket=$(herdr_server_status_json | jq -r '.server.socket // empty' 2>/dev/null) || return 1
+  owner=$(fm_remote_herdr_socket_owner "$socket") || return 1
+  fm_remote_herdr_launched_by_root "$owner" "$HERDR_SESSION_NAME" "$FM_ROOT"
+}
+
 herdr_server_aqua_owned() {
   local birth
   herdr_server_running || return 1
@@ -964,14 +977,18 @@ check_herdr_server() {
     return 0
   fi
   if herdr_server_running; then
+    if [ -z "$HERDR_OWNER_ROOT" ] && herdr_server_linux_launched_here; then
+      HERDR_OWNER_ROOT=$FM_ROOT
+    fi
     if [ -z "$HERDR_OWNER_ROOT" ]; then
       record herdr-server "human: session $HERDR_SESSION_NAME is running but its Firstmate code-root owner cannot be proven; leaving the legacy service untouched" \
         "identify the code root that owns this Herdr service before attempting a repair"
       return 0
     fi
-    # A legacy service is adopted only when its launch-agent guard proves this
-    # code root owns it, and adoption is its own metadata-only gap so it never
-    # queues a reload or restart of the running server.
+    # A legacy service is adopted only when its launch-agent guard, or on
+    # Linux its socket holder's launch environment, proves this code root
+    # owns it, and adoption is its own metadata-only gap so it never queues a
+    # reload or restart of the running server.
     if [ ! -e "$HERDR_OWNER_FILE" ] && [ ! -L "$HERDR_OWNER_FILE" ] && [ "$HERDR_OWNER_ROOT" = "$FM_ROOT" ]; then
       record herdr-owner "fixable: session $HERDR_SESSION_NAME is proven to belong to $FM_ROOT but still needs its durable owner record" \
         "rerun this command with --fix to record ownership without restarting the server"
