@@ -15,7 +15,8 @@
 #        --if-due
 #          Run the media and scratch parts only when the last real run of
 #          either finished at least 12 hours ago (state/.data-retention-last
-#          records it), and otherwise skip both; the size trigger still runs.
+#          records it), and otherwise skip both, still clearing the clock of
+#          a task that is live again; the size trigger still runs.
 #          Retention is counted in whole days, so a session start that comes
 #          sooner would only repeat the last run's whole-data/ walk and
 #          kept-checkout checks: anything newly due goes at the next due run
@@ -43,10 +44,10 @@
 # The size trigger is on in every home. config/data-size-trigger-mib holds a
 # whole number of MiB from 1 to 16777216 (default 4096, which is 4 GiB); data/
 # is measured with one du per run, and the backlog is read only when a part
-# needs it. A real run reuses a task's size line from state/.data-size-cache
-# while that task's KiB in this run's du is unchanged, so a torn-down task's
-# checkouts and files are scanned again only when its size moves; a dry run
-# always scans.
+# needs it. An --if-due run reuses a task's size line from
+# state/.data-size-cache while that task's KiB in this run's du is unchanged,
+# so a torn-down task's checkouts and files are scanned again only when its
+# size moves; a dry run or a run without --if-due always scans.
 #
 # Output. A run that removed (or under --dry-run would remove) any media prints
 #   BOOTSTRAP_INFO: data media retention: removed <n> files (<MiB> MiB) from <m> torn-down tasks quiet over <N> days
@@ -225,6 +226,8 @@ SIZE_MIB=$(whole_number "${SIZE_MIB:-$DEFAULT_SIZE_MIB}" "$MAX_SIZE_MIB" "the da
   SIZE_MIB=$DEFAULT_SIZE_MIB
 }
 # --if-due: a retention run inside the last interval leaves both parts off.
+# A live task's clock is still cleared (CLOCK_DAYS), since that costs no scan.
+CLOCK_DAYS=$DAYS
 if [ "$IF_DUE" -eq 1 ] && [ "$DRY_RUN" -eq 0 ] && [ -f "$RETENTION_STAMP" ] \
   && [ -n "$(find "$RETENTION_STAMP" -mmin "-$RETENTION_INTERVAL_MINUTES" -print 2>/dev/null)" ]; then
   DAYS=
@@ -246,7 +249,7 @@ measure_data() {
   [ "$DATA_KIB" -le $((SIZE_MIB * 1024)) ] || OVER_SIZE=1
 }
 measure_data
-[ -n "$DAYS" ] || [ -n "$SCRATCH_DAYS" ] || [ "$OVER_SIZE" -eq 1 ] || exit 0
+[ -n "$CLOCK_DAYS" ] || [ -n "$SCRATCH_DAYS" ] || [ "$OVER_SIZE" -eq 1 ] || exit 0
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fm-data-media-prune.XXXXXX") || { echo "warning: data media retention skipped: cannot create a scratch directory" >&2; exit 0; }
 trap 'rm -rf "$WORK"' EXIT
@@ -481,7 +484,7 @@ for dir in "$DATA"/*/; do
   [ -d "$dir" ] && [ ! -L "$dir" ] && [ -f "$dir/brief.md" ] || continue
   clock="$CLOCKS/$task.retired"
   if task_is_live "$task"; then
-    [ -z "$DAYS" ] || [ "$DRY_RUN" -eq 1 ] || rm -f "$clock"
+    [ -z "$CLOCK_DAYS" ] || [ "$DRY_RUN" -eq 1 ] || rm -f "$clock"
     continue
   fi
   printf '%s\n' "$task" >> "$WORK/retired"
@@ -540,22 +543,24 @@ if [ "$DRY_RUN" -eq 0 ] && [ $((TOTAL_FILES + SCRATCH_ITEMS)) -gt 0 ]; then
   measure_data
 fi
 if [ "$OVER_SIZE" -eq 1 ]; then
+  CACHE_SIZE=0
+  [ "$IF_DUE" -eq 0 ] || [ "$DRY_RUN" -eq 1 ] || CACHE_SIZE=1
   # Each torn-down task's KiB from the du above, largest first.
   printf '%s\n' "$DU_OUT" | awk -F '\t' -v p="$DATA_REAL/" 'FILENAME == ARGV[1] { retired[$0] = 1; next }
       index($2, p) == 1 { t = substr($2, length(p) + 1); if (t in retired) print $1 "\t" t }' "$WORK/retired" - \
     | sort -t "$(printf '\t')" -k1,1nr -k2 | head -n "$SIZE_TASKS" > "$WORK/largest"
   if [ -s "$WORK/largest" ]; then
     size_line "its largest torn-down tasks follow. Clean checkouts and dependency folders go with scratch retention (config/data-scratch-retention-days); images and PDFs move to Drive only as one captain-approved batch (docs/configuration.md)"
-    # A real run reuses a line whose task and KiB match the cache (header).
+    # An --if-due run reuses a line whose task and KiB match the cache (header).
     while IFS="$(printf '\t')" read -r kib task; do
       line=
-      [ "$DRY_RUN" -eq 1 ] || [ ! -f "$SIZE_CACHE" ] \
-        || line=$(awk -F '\t' -v t="$task" -v k="$kib" '$1 == t && $2 == k { print $3; exit }' "$SIZE_CACHE" 2>/dev/null)
+      [ "$CACHE_SIZE" -eq 0 ] || [ ! -f "$SIZE_CACHE" ] \
+        || line=$(awk -F '\t' -v t="$task" -v k="$kib" '$1 "" == t "" && $2 "" == k "" { print $3; exit }' "$SIZE_CACHE" 2>/dev/null)
       [ -n "$line" ] || line=$(size_task "$DATA/$task" "$kib")
       printf '%s\n' "$line"
       printf '%s\t%s\t%s\n' "$task" "$kib" "$line" >> "$WORK/size-cache"
     done < "$WORK/largest"
-    if [ "$DRY_RUN" -eq 0 ]; then
+    if [ "$CACHE_SIZE" -eq 1 ]; then
       { cp "$WORK/size-cache" "$SIZE_CACHE.$$" && mv -f "$SIZE_CACHE.$$" "$SIZE_CACHE"; } 2>/dev/null || {
         rm -f "$SIZE_CACHE.$$"
         echo "warning: could not record the data size lines in $SIZE_CACHE" >&2

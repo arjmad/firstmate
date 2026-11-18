@@ -871,7 +871,7 @@ A one-off real run by hand is `bin/fm-data-media-prune.sh --scratch-days <N>` fr
 
 At every locked session start, when this home's `data/` holds more than the trigger, the bootstrap prints `BOOTSTRAP_INFO: data size:` lines naming the five largest torn-down tasks and how much of each is clean checkouts, dependency folders, images, PDFs, and other files.
 The optional local, gitignored `config/data-size-trigger-mib` file holds the trigger as a whole number of MiB from 1 to 16777216; without it the trigger is 4096 MiB (4 GiB).
-A task's line is reused from the last run while its size is unchanged.
+The bootstrap reuses a task's line from its last run while that task's size is unchanged.
 The lines change nothing: clean checkouts and dependency folders go through task scratch retention, and images and PDFs follow the Drive rule above, one captain-approved batch at a time.
 
 ## Firstmate role (config/firstmate-role)
