@@ -80,6 +80,46 @@
 # after the marker, so status and bin/fm-pr-merge.sh read it as an ordinary
 # record and the next carry still measures from the full review.
 #
+# A pull request that edits its own repository's gate (fork patch,
+# docs/fork-decisions/2026-11-17-gate-self-edit.md) needs its record to say
+# what that gate change loosens or tightens, because a change that can modify
+# the check judging it leaves that check broken. Its gate files are check.sh,
+# .github/workflows/*, .claude/skills/verify*/*, REVIEW.md, and each
+# repository-relative file the base branch's check.sh sources by a literal
+# `source <path>` or `. <path>` line (a leading $VAR/, ${VAR}/ or ./ is
+# dropped; a path still holding $, or starting with / or ~, is skipped). A
+# rename counts both its names. `record --gate <statement>` adds the line
+#   Gate change: <statement>
+# to the record, and the statement must name what is loosened or tightened, or
+# say "nothing loosened", so it holds "loosen" or "tighten" in any case. The
+# config/gate-self-edit mode, read from FM_CONFIG_OVERRIDE, else
+# $FM_HOME/config, else this script's home, decides what a missing statement
+# does: `off` reads nothing; `observe`, the default, keeps every verdict and
+# prints a second status line `gate-observe: <why>` when enforce would refuse,
+# or when the gate files could not be read, which bin/fm-pr-merge.sh logs once
+# the merge lands; `enforce` makes such a pull request code-changing even where
+# it would be exempt, reads it unreviewed until a record for its current diff
+# carries the statement, and leaves it unreadable when its gate files cannot be
+# read. Any other mode reads as enforce, with a warning.
+#
+# The review's instructions are layered (fork patch,
+# docs/fork-decisions/2026-11-17-review-md-layering.md): the fleet-wide
+# merge-gate focus, then the repository's REVIEW.md as committed on the pull
+# request's base branch, never the pull request's own copy, which local
+# /code-review does not read on its own. The reviewer checks only the
+# REVIEW.md items whose trigger matches the diff. As Claude Code's review
+# service defines includes, a REVIEW.md line holding only `@<name>`, outside a
+# code fence, is replaced by the file of that name beside REVIEW.md, or by
+# `.claude/skills/<folder>/SKILL.md`, read from the same base branch, one level
+# deep (an `@` line inside an included file stays text); a name with no such
+# file stays as text. At most CODE_REVIEW_RULES_FILES (8) distinct files are
+# included, a skill file over CODE_REVIEW_RULES_SKILL_BYTES (30000) is not, and
+# REVIEW.md with its includes stays under CODE_REVIEW_RULES_BYTES (150000): an
+# include that would reach it is skipped whole, and a REVIEW.md that alone
+# reaches it is skipped entirely; each skip is said on stderr and in the
+# prompt. A base branch with no REVIEW.md leaves the review prompt unchanged,
+# and one that cannot be read fails the review.
+#
 # GitHub only: the findings post to GitHub pull requests, so a GitLab or
 # Forgejo URL is refused here and bin/fm-pr-merge.sh does not apply the guard
 # to those forges.
@@ -87,27 +127,32 @@
 # Usage:
 #   fm-code-review.sh review <pr-url> --model <model>
 #       Runs `claude -p --model <model> "/code-review medium <pr-url> <focus>"`
-#       from the current directory, printing its output, then posts each
+#       (with the base branch's REVIEW.md rules after the focus when it keeps
+#       one) from the current directory, printing its output, then posts each
 #       finding of its JSON findings block and prints one `posted:` line.
 #       Exits 0 when every finding posted (none is fine), 1 when the review
-#       failed, printed no findings block, or a finding could not be posted
+#       failed, its base REVIEW.md could not be read, printed no findings
+#       block, or a finding could not be posted
 #       (the output file is named, and nothing is retried), and 2 for a usage
 #       error or a URL that is not a GitHub pull request. The run takes many
 #       minutes, longer than a shell tool's default time limit.
 #   fm-code-review.sh args <pr-url>
 #       Prints, on one line, the arguments a hand-run /code-review takes for
 #       the pull request: `medium --comment <pr-url>` and then the merge-gate
-#       focus. Exits 0, or 2 when the URL is not a GitHub pull request.
+#       focus, then the base branch's REVIEW.md rules when it keeps one.
+#       Exits 0, 1 when that REVIEW.md cannot be read, or 2 when the URL is
+#       not a GitHub pull request.
 #   fm-code-review.sh classify [<path>...]
 #       Paths from the arguments, or one per line on stdin when there are none,
 #       classified as a repository without a table classifies them. Prints
 #       `code-changing` or `exempt` and exits 0.
 #   fm-code-review.sh status <pr-url>
 #       Prints one line: `exempt: ...`, `reviewed: diff <id> ...`, or
-#       `unreviewed: diff <id> ...`. Exits 0 for exempt or reviewed, 1 for
+#       `unreviewed: diff <id> ...`, then in observe mode the optional
+#       `gate-observe: ...` line. Exits 0 for exempt or reviewed, 1 for
 #       unreviewed, and 2 when the pull request cannot be read or the URL is
 #       not a GitHub pull request.
-#   fm-code-review.sh record <pr-url> [--carry] [--note <text>]
+#   fm-code-review.sh record <pr-url> [--carry] [--note <text>] [--gate <statement>]
 #       Posts the record for the PR's current diff, unless the PR is exempt
 #       or already reviewed at that diff, with <text> on its own line after
 #       the standard line saying which review ran, such as the worker's
@@ -119,7 +164,13 @@
 #       the status line. Exits as status does, except that a record that
 #       cannot be posted or read back exits 1. With --carry it posts only a
 #       carried record, and refuses with exit 1 when the follow-up since the
-#       last full record is not one a carry covers.
+#       last full record is not one a carry covers. --gate adds the gate
+#       statement, which posts a record even at a diff already reviewed
+#       when no record for it states the gate change yet, as a statement-only
+#       record (an `fm-code-review-gate` line, claiming no review, never a
+#       carry's baseline), and never at an exempt one; a pull request
+#       that edits its gate and gets no --gate is refused with exit 1 in
+#       enforce mode, and warned about in observe mode.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -145,6 +196,147 @@ code_review_classify_stream() {
     code_review_path_exempt "$path" || { echo code-changing; return 0; }
   done
   echo exempt
+}
+
+CODE_REVIEW_GATE_MODE=
+# Sets CODE_REVIEW_GATE_MODE to the home's gate self-edit mode (see the header).
+code_review_gate_mode() {
+  local cfg mode=
+  [ -z "$CODE_REVIEW_GATE_MODE" ] || return 0
+  cfg=${FM_CONFIG_OVERRIDE:-${FM_HOME:-$SCRIPT_DIR/..}/config}
+  [ ! -f "$cfg/gate-self-edit" ] || IFS= read -r mode < "$cfg/gate-self-edit" || true
+  mode=${mode//[[:space:]]/}
+  case $mode in
+    '') mode=observe ;;
+    off|observe|enforce) ;;
+    *)
+      echo "warning: $cfg/gate-self-edit reads '$mode', not off, observe, or enforce, so the gate self-edit check enforces" >&2
+      mode=enforce
+      ;;
+  esac
+  CODE_REVIEW_GATE_MODE=$mode
+}
+
+CODE_REVIEW_BASE=
+# Sets CODE_REVIEW_BASE to the pull request's base branch, read once per run;
+# a name outside the characters a ref query can carry unescaped is refused.
+code_review_base() {
+  local base
+  [ -z "$CODE_REVIEW_BASE" ] || return 0
+  base=$(gh pr view "$FM_PR_NUMBER" --repo "$FM_PR_OWNER/$FM_PR_REPO" --json baseRefName --jq .baseRefName) || return 1
+  case $base in
+    ''|*[!A-Za-z0-9._/-]*) return 1 ;;
+  esac
+  CODE_REVIEW_BASE=$base
+}
+
+# Prints <path> as committed on the base branch. Returns 1 when the base keeps
+# no such file, and 2 when it cannot be read.
+code_review_base_file() {  # <path>
+  local err out
+  code_review_base || { echo "error: could not read the base branch of $FM_PR_URL" >&2; return 2; }
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-code-review.XXXXXX") || return 2
+  if out=$(gh api "repos/$FM_PR_OWNER/$FM_PR_REPO/contents/$1?ref=$CODE_REVIEW_BASE" \
+    -H 'Accept: application/vnd.github.raw' 2> "$err"); then
+    rm -f "$err"
+    printf '%s\n' "$out"
+    return 0
+  fi
+  if grep -q 'HTTP 404' "$err"; then
+    rm -f "$err"
+    return 1
+  fi
+  cat "$err" >&2
+  rm -f "$err"
+  return 2
+}
+
+# The repository-relative paths a check.sh on stdin sources literally.
+code_review_gate_sourced() {
+  sed -n -E 's/^[[:space:]]*(source|\.)[[:space:]]+([^[:space:];&|]+).*/\2/p' \
+    | tr -d "\"'" \
+    | sed -E 's#^(\$[A-Za-z_][A-Za-z0-9_]*/|\$\{[A-Za-z_][A-Za-z0-9_]*\}/|\./)##' \
+    | grep -v -E '^[/~]|\$' || true
+}
+
+CODE_REVIEW_FILES=
+CODE_REVIEW_FILES_READ=0
+CODE_REVIEW_GATE_FILES=
+CODE_REVIEW_GATE_STATED=0
+CODE_REVIEW_GATE_NOTE=
+# Reads whether the pull request edits its own gate files (see the header):
+# sets CODE_REVIEW_GATE_FILES to them, comma-separated, and for any sets
+# CODE_REVIEW_DIFF_ID and CODE_REVIEW_GATE_STATED (1 when a trusted record for
+# that diff states the gate change). In observe mode it sets
+# CODE_REVIEW_GATE_NOTE when enforce would refuse or nothing could be read, and
+# never fails; in enforce mode an unreadable state returns 2.
+code_review_gate_check() {
+  local check sourced='' rc=0 path found='' ids why=''
+  code_review_gate_mode
+  [ "$CODE_REVIEW_GATE_MODE" != off ] || return 0
+  if [ "$CODE_REVIEW_FILES_READ" = 0 ]; then
+    if CODE_REVIEW_FILES=$(code_review_files); then
+      CODE_REVIEW_FILES_READ=1
+    else
+      why="its changed files could not be read"
+    fi
+  fi
+  if [ -z "$why" ]; then
+    check=$(code_review_base_file check.sh) || rc=$?
+    case $rc in
+      0) sourced=$(printf '%s\n' "$check" | code_review_gate_sourced) ;;
+      1) ;;
+      *) why="check.sh on its base branch could not be read" ;;
+    esac
+  fi
+  if [ -z "$why" ]; then
+    while IFS= read -r path; do
+      [ -n "$path" ] || continue
+      case "$path" in
+        check.sh|.github/workflows/*|.claude/skills/verify*/*|REVIEW.md) ;;
+        *) printf '%s\n' "$sourced" | grep -qxF -- "$path" || continue ;;
+      esac
+      case ", $found, " in
+        *", $path, "*) ;;
+        *) found=${found:+$found, }$path ;;
+      esac
+    done <<EOF
+$(printf '%s\n' "$CODE_REVIEW_FILES" | sed 's/^[FP] //')
+EOF
+    CODE_REVIEW_GATE_FILES=$found
+  fi
+  if [ -z "$why" ] && [ -n "$found" ]; then
+    if ! CODE_REVIEW_DIFF_ID=$(code_review_diff_id); then
+      why="its diff could not be fingerprinted"
+    elif ! ids=$(gh api --paginate "repos/$FM_PR_OWNER/$FM_PR_REPO/issues/$FM_PR_NUMBER/comments" \
+      --jq '.[] | select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") | .body | gsub("\r"; "") | select(test("(^|\n)Gate change: [^\n]*(loosen|tighten)"; "i")) | capture("(^|\n)<!-- fm-code-review v1 diff=(?<id>[0-9a-f]{40,64}) head=[0-9a-f]{40,64} -->(\n|$)") | .id'); then
+      why="its comments could not be read"
+    elif printf '%s\n' "$ids" | grep -qxF -- "$CODE_REVIEW_DIFF_ID"; then
+      CODE_REVIEW_GATE_STATED=1
+    fi
+  fi
+  if [ -n "$why" ]; then
+    CODE_REVIEW_GATE_FILES=
+    if [ "$CODE_REVIEW_GATE_MODE" = observe ]; then
+      CODE_REVIEW_GATE_NOTE="gate-observe: the gate check of $FM_PR_URL could not run, because $why; enforce mode would refuse its merge until it can, and no record clears this"
+      return 0
+    fi
+    echo "error: the gate check of $FM_PR_URL could not run, because $why" >&2
+    return 2
+  fi
+  if [ -n "$found" ] && [ "$CODE_REVIEW_GATE_STATED" = 0 ] && [ "$CODE_REVIEW_GATE_MODE" = observe ]; then
+    CODE_REVIEW_GATE_NOTE="gate-observe: $FM_PR_URL edits its own gate files ($found) and no code review record for its current diff states what the gate change loosens or tightens; enforce mode would refuse its merge until record --gate posts one"
+  fi
+  return 0
+}
+
+# The status line, then the observe note when there is one.
+code_review_print_status() {
+  # The note only ever follows a status line, so a reader takes line 1 as the
+  # status even when the status could not be read.
+  [ -n "$CODE_REVIEW_LINE" ] || return 0
+  printf '%s\n' "$CODE_REVIEW_LINE"
+  [ -z "$CODE_REVIEW_GATE_NOTE" ] || printf '%s\n' "$CODE_REVIEW_GATE_NOTE"
 }
 
 # Whether main keeps a risk-tiers.toml: returns 0 when it does, 1 when it does
@@ -226,6 +418,7 @@ Merge-gate focus for this review: the author must fix or answer in writing every
 6. Before you report that something is missing or unguarded, check the callers, wrappers, and owning documents outside the changed lines; drop it only when you can cite the code or step that already prevents the failure on the path this change affects.
 7. Report a problem in unchanged code only when this diff introduces it, exposes it, or makes it reachable.
 8. A clear violation of a written rule in a CLAUDE.md or AGENTS.md that governs the changed file is still a finding when you can quote the rule and the line that breaks it.
+9. Do not report what the repository's own gate already enforces (its ./check.sh, with its lint, format, type, and document-size checks), nor anything in generated files or lockfiles.
 EOF
 }
 
@@ -286,12 +479,13 @@ code_review_post_findings() {  # <findings-file>
 # findings and post none; the run here passes no --comment and posts every
 # finding of the JSON findings block the skill always ends its reply with.
 code_review_run() {  # <model>
-  local model=$1 out findings rc blocks
+  local model=$1 out findings rc blocks tail
   local -a piped
+  tail=$(code_review_prompt_tail) || { echo "error: no review ran" >&2; return 1; }
   out=$(mktemp "${TMPDIR:-/tmp}/fm-code-review-output.XXXXXX") || return 1
   findings=$(mktemp "${TMPDIR:-/tmp}/fm-code-review-findings.XXXXXX") || return 1
   set +e
-  claude -p --model "$model" "/code-review medium $FM_PR_URL $(code_review_focus_line)" \
+  claude -p --model "$model" "/code-review medium $FM_PR_URL $tail" \
     < /dev/null | tee "$out"
   piped=("${PIPESTATUS[@]}")
   set -e
@@ -334,6 +528,116 @@ code_review_run() {  # <model>
 
 code_review_focus_line() {
   code_review_focus | tr '\n' ' ' | sed 's/ *$//'
+}
+
+CODE_REVIEW_RULES_BYTES=150000
+CODE_REVIEW_RULES_FILES=8
+CODE_REVIEW_RULES_SKILL_BYTES=30000
+CODE_REVIEW_RULES=
+CODE_REVIEW_RULES_SKIPPED=0
+# Sets CODE_REVIEW_RULES to the base branch's REVIEW.md with its includes in
+# place (see the header) and CODE_REVIEW_RULES_SKIPPED to the include lines
+# skipped for a limit. Returns 1 when the base keeps no REVIEW.md, 3 when
+# REVIEW.md alone reaches the byte limit, and 2 when a file cannot be read.
+code_review_rules_text() {
+  local review rc=0 line bare name text size total fence='' out='' files=' ' nfiles=0
+  # Lengths below count bytes, as the limit does.
+  local LC_ALL=C
+  review=$(code_review_base_file REVIEW.md) || return $?
+  total=$(printf '%s\n' "$review" | wc -c | tr -d ' ')
+  [ "$total" -lt "$CODE_REVIEW_RULES_BYTES" ] || return 3
+  CODE_REVIEW_RULES_SKIPPED=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    # A fence closes only on its own kind of marker, so a ~~~ line inside a
+    # ``` block stays inside it.
+    case $line in
+      '```'*|'~~~'*)
+        if [ -z "$fence" ]; then
+          fence=${line%"${line#???}"}
+        elif [ "${line%"${line#???}"}" = "$fence" ]; then
+          fence=
+        fi
+        ;;
+    esac
+    name=
+    if [ -z "$fence" ]; then
+      # Trailing blanks or a CR line ending do not stop an include.
+      bare=${line%"${line##*[![:space:]]}"}
+      case $bare in
+        @*[[:space:]]*|@) ;;
+        @.claude/skills/*/SKILL.md)
+          name=${bare#@}
+          case ${name#.claude/skills/} in */*/*) name= ;; esac
+          ;;
+        @*/*) ;;
+        @*) name=${bare#@} ;;
+      esac
+      # Only plain names travel in the contents API path.
+      case $name in *[!A-Za-z0-9._/-]*|*..*) name= ;; esac
+    fi
+    if [ -n "$name" ]; then
+      rc=0
+      text=$(code_review_base_file "$name") || rc=$?
+      case $rc in
+        0)
+          size=$(printf '%s\n' "$text" | wc -c | tr -d ' ')
+          case "$files" in *" $name "*) ;; *) nfiles=$((nfiles + 1)) ;; esac
+          if [ "$nfiles" -gt "$CODE_REVIEW_RULES_FILES" ] \
+            || [ $((total - ${#line} - 1 + size)) -ge "$CODE_REVIEW_RULES_BYTES" ] \
+            || { case $name in .claude/*) [ "$size" -gt "$CODE_REVIEW_RULES_SKILL_BYTES" ] ;; *) false ;; esac; }; then
+            case "$files" in *" $name "*) ;; *) nfiles=$((nfiles - 1)) ;; esac
+            CODE_REVIEW_RULES_SKIPPED=$((CODE_REVIEW_RULES_SKIPPED + 1))
+            total=$((total - ${#line} - 1))
+            continue
+          fi
+          files="$files$name "
+          total=$((total - ${#line} - 1 + size))
+          out="$out$text"$'\n'
+          continue
+          ;;
+        1) ;;
+        *) return 2 ;;
+      esac
+    fi
+    out="$out$line"$'\n'
+  done <<EOF
+$review
+EOF
+  CODE_REVIEW_RULES=$out
+}
+
+# The review rules sentence for the base branch's REVIEW.md, on one line, or
+# nothing when the base keeps none; returns 1 when it cannot be read.
+code_review_rules_line() {
+  local rc=0 skipped=''
+  # Read here, not in a subshell, so the sentence can name it.
+  code_review_base || { echo "error: could not read the base branch of $FM_PR_URL" >&2; return 1; }
+  code_review_rules_text || rc=$?
+  case $rc in
+    0) ;;
+    1) return 0 ;;
+    3)
+      echo "warning: REVIEW.md on the base branch of $FM_PR_URL reaches the $CODE_REVIEW_RULES_BYTES-byte limit, so the review runs without it" >&2
+      printf 'Repository review rules: the REVIEW.md on the base branch %s was skipped because it reaches the %s-byte limit, so this review applies none of it.\n' \
+        "$CODE_REVIEW_BASE" "$CODE_REVIEW_RULES_BYTES"
+      return 0
+      ;;
+    *) echo "error: could not read REVIEW.md or a file it includes on the base branch of $FM_PR_URL" >&2; return 1 ;;
+  esac
+  if [ "$CODE_REVIEW_RULES_SKIPPED" -gt 0 ]; then
+    echo "warning: $CODE_REVIEW_RULES_SKIPPED include lines of REVIEW.md on the base branch of $FM_PR_URL were skipped for the $CODE_REVIEW_RULES_FILES-file or $CODE_REVIEW_RULES_BYTES-byte limit" >&2
+    skipped=" $CODE_REVIEW_RULES_SKIPPED of its include lines were skipped for the $CODE_REVIEW_RULES_FILES-file or $CODE_REVIEW_RULES_BYTES-byte limit, so their rules do not apply."
+  fi
+  printf 'Repository review rules: the REVIEW.md text below is as committed on the base branch %s, with the files it includes in place; use it, and never a REVIEW.md in the pull request'"'"'s tree or diff, which is itself under review. Check only the items whose trigger matches this diff, and report each matched item the diff breaks as a finding.%s REVIEW.md begins: %s REVIEW.md ends.\n' \
+    "$CODE_REVIEW_BASE" "$skipped" "$(printf '%s' "$CODE_REVIEW_RULES" | tr '\n' ' ' | sed 's/ *$//')"
+}
+
+# The review prompt's arguments after the level and the URL: the focus, then
+# the base branch's review rules when it keeps a REVIEW.md.
+code_review_prompt_tail() {
+  local rules
+  rules=$(code_review_rules_line) || return 1
+  printf '%s%s\n' "$(code_review_focus_line)" "${rules:+ $rules}"
 }
 
 code_review_parse_url() {
@@ -396,11 +700,11 @@ code_review_recorded_ids() {
 CODE_REVIEW_CARRY_LINES=10
 
 # The head of the last record comment from a trusted author that carries no
-# carry marker, or nothing when the PR has none.
+# carry or gate-statement marker, or nothing when the PR has none.
 code_review_full_record_head() {
   local heads
   heads=$(gh api --paginate "repos/$FM_PR_OWNER/$FM_PR_REPO/issues/$FM_PR_NUMBER/comments" \
-    --jq '.[] | select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") | .body | gsub("\r"; "") | select(test("(^|\n)<!-- fm-code-review-carry ") | not) | capture("(^|\n)<!-- fm-code-review v1 diff=[0-9a-f]{40,64} head=(?<head>[0-9a-f]{40,64}) -->(\n|$)") | .head') \
+    --jq '.[] | select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") | .body | gsub("\r"; "") | select(test("(^|\n)<!-- fm-code-review-(carry |gate -->)") | not) | capture("(^|\n)<!-- fm-code-review v1 diff=[0-9a-f]{40,64} head=(?<head>[0-9a-f]{40,64}) -->(\n|$)") | .head') \
     || return 1
   printf '%s\n' "$heads" | sed -n '$p'
 }
@@ -482,9 +786,13 @@ CODE_REVIEW_HAS_TABLE=
 # Sets CODE_REVIEW_LINE to the status line and returns 0 exempt or reviewed, 1
 # unreviewed, 2 unreadable; sets CODE_REVIEW_DIFF_ID for a code-changing PR.
 code_review_status() {
-  local files verdict ids status=0 changes='changes code'
+  local files verdict ids status=0 changes='changes code' gate=0 gate_why
   CODE_REVIEW_DIFF_ID=
   CODE_REVIEW_LINE=
+  CODE_REVIEW_FILES_READ=0
+  CODE_REVIEW_GATE_FILES=
+  CODE_REVIEW_GATE_STATED=0
+  CODE_REVIEW_GATE_NOTE=
   code_review_has_table || status=$?
   CODE_REVIEW_HAS_TABLE=$status
   case "$status" in
@@ -499,6 +807,8 @@ code_review_status() {
         echo "error: could not read the changed files of $FM_PR_URL" >&2
         return 2
       fi
+      CODE_REVIEW_FILES=$files
+      CODE_REVIEW_FILES_READ=1
       verdict=$(printf '%s\n' "$files" | sed 's/^[FP] //' | code_review_classify_stream)
       if [ "$(printf '%s\n' "$files" | grep -c '^F ')" -ge 3000 ]; then
         verdict=code-changing
@@ -509,6 +819,16 @@ code_review_status() {
       return 2
       ;;
   esac
+  code_review_gate_check || return 2
+  # Enforce mode holds a pull request that edits its own gate until a record
+  # for its diff states the gate change, even one that would be exempt, and
+  # then reports that record; observe mode keeps every verdict.
+  if [ -n "$CODE_REVIEW_GATE_FILES" ] && [ "$CODE_REVIEW_GATE_MODE" = enforce ]; then
+    [ "$verdict" = code-changing ] || changes='would be exempt by its paths'
+    verdict=code-changing
+    [ "$CODE_REVIEW_GATE_STATED" = 1 ] || gate=1
+  fi
+  gate_why="edits its own gate files ($CODE_REVIEW_GATE_FILES) and carries no code review record for it stating what the gate change loosens or tightens; add the statement with fm-code-review.sh record $FM_PR_URL --gate <statement>"
   if [ "$verdict" = exempt ]; then
     if [ "$status" -eq 0 ]; then
       CODE_REVIEW_LINE="exempt: $FM_PR_URL is tinker under its risk-tiers.toml: ${CODE_REVIEW_TIER#*: }"
@@ -517,7 +837,7 @@ code_review_status() {
     fi
     return 0
   fi
-  if ! CODE_REVIEW_DIFF_ID=$(code_review_diff_id); then
+  if [ -z "$CODE_REVIEW_DIFF_ID" ] && ! CODE_REVIEW_DIFF_ID=$(code_review_diff_id); then
     echo "error: could not fingerprint the diff of $FM_PR_URL" >&2
     return 2
   fi
@@ -526,15 +846,23 @@ code_review_status() {
     return 2
   fi
   if printf '%s\n' "$ids" | grep -qxF "$CODE_REVIEW_DIFF_ID"; then
+    if [ "$gate" = 1 ]; then
+      CODE_REVIEW_LINE="unreviewed: diff $CODE_REVIEW_DIFF_ID of $FM_PR_URL $gate_why"
+      return 1
+    fi
     CODE_REVIEW_LINE="reviewed: diff $CODE_REVIEW_DIFF_ID of $FM_PR_URL carries a code review record"
+    [ "$CODE_REVIEW_GATE_STATED" = 0 ] || CODE_REVIEW_LINE="$CODE_REVIEW_LINE stating its gate change"
     return 0
   fi
   CODE_REVIEW_LINE="unreviewed: diff $CODE_REVIEW_DIFF_ID of $FM_PR_URL $changes and carries no code review record for it"
+  # With no review yet, the review comes first; its record then states the
+  # gate change.
+  [ "$gate" = 0 ] || CODE_REVIEW_LINE="$CODE_REVIEW_LINE; it also edits its own gate files ($CODE_REVIEW_GATE_FILES), so after its /code-review the record needs --gate <statement>"
   return 1
 }
 
-code_review_record() {  # <note> <carry 0|1>
-  local note=$1 carry=$2 status=0 head head0='' body marker
+code_review_record() {  # <note> <carry 0|1> <gate statement>
+  local note=$1 carry=$2 gate=$3 status=0 head head0='' body marker ids stmt
   local line="Code review: Claude Code \`/code-review\` (medium) ran on this diff; each finding is posted inline and was fixed or answered in its thread."
   # A carry binds the diff it fingerprints, the head it measures, and the head
   # it records to one push: the head is read before and after both.
@@ -545,19 +873,53 @@ code_review_record() {  # <note> <carry 0|1>
   code_review_status || status=$?
   case "$status" in
     0)
-      [ -z "$note" ] || echo "warning: $FM_PR_URL needs no new record at this diff, so the note was not posted" >&2
-      printf '%s\n' "$CODE_REVIEW_LINE"
-      return 0
+      if [ -n "$gate" ] && [ -n "$CODE_REVIEW_GATE_FILES" ] && [ "$CODE_REVIEW_GATE_STATED" = 0 ] \
+        && [ "${CODE_REVIEW_LINE%%:*}" = reviewed ]; then
+        # Reviewed, but no record for this diff states its gate change yet;
+        # the record's kind is chosen below.
+        :
+      else
+        [ -z "$note" ] || echo "warning: $FM_PR_URL needs no new record at this diff, so the note was not posted" >&2
+        [ -z "$gate" ] || echo "warning: $FM_PR_URL needs no gate statement at this diff, so it was not posted" >&2
+        if [ -n "$CODE_REVIEW_GATE_FILES" ] && [ "$CODE_REVIEW_GATE_STATED" = 0 ] && [ "${CODE_REVIEW_LINE%%:*}" = reviewed ]; then
+          echo "warning: $FM_PR_URL edits its own gate files ($CODE_REVIEW_GATE_FILES); run record again with --gate <what the gate change loosens or tightens, or nothing loosened>" >&2
+        fi
+        code_review_print_status
+        return 0
+      fi
       ;;
-    1) ;;
+    1)
+      if [ -z "$gate" ] && [ -n "$CODE_REVIEW_GATE_FILES" ] && [ "$CODE_REVIEW_GATE_STATED" = 0 ]; then
+        if [ "$CODE_REVIEW_GATE_MODE" = enforce ]; then
+          echo "error: $FM_PR_URL edits its own gate files ($CODE_REVIEW_GATE_FILES), so its record needs --gate <what the gate change loosens or tightens, or nothing loosened>" >&2
+          return 1
+        fi
+        echo "warning: $FM_PR_URL edits its own gate files ($CODE_REVIEW_GATE_FILES); pass --gate <what the gate change loosens or tightens, or nothing loosened>, which enforce mode requires" >&2
+      fi
+      ;;
     *) return "$status" ;;
   esac
+  # A statement added at a diff a record already covers is a statement-only
+  # record: it claims no review, and neither a carry nor the brief's review
+  # count treats it as a full record.
+  stmt=0
+  if [ -n "$gate" ] && [ "$carry" = 0 ] && [ -n "$CODE_REVIEW_GATE_FILES" ] && [ "$CODE_REVIEW_GATE_STATED" = 0 ]; then
+    if ! ids=$(code_review_recorded_ids); then
+      echo "error: could not read the comments of $FM_PR_URL" >&2
+      return 1
+    fi
+    ! printf '%s\n' "$ids" | grep -qxF -- "$CODE_REVIEW_DIFF_ID" || stmt=1
+  fi
   if ! head=$(code_review_head) || ! fm_pr_head_valid "$head"; then
     echo "error: could not read the head commit of $FM_PR_URL" >&2
     return 1
   fi
   marker="<!-- fm-code-review v1 diff=$CODE_REVIEW_DIFF_ID head=$head -->"
-  if [ "$carry" = 1 ]; then
+  if [ "$stmt" = 1 ]; then
+    marker="$marker
+<!-- fm-code-review-gate -->"
+    line="Gate statement for the code review already recorded at this diff; no new review ran."
+  elif [ "$carry" = 1 ]; then
     code_review_carry_check "$head" || return "$?"
     if [ "$head" != "$head0" ] || [ "$(code_review_head 2>/dev/null)" != "$head" ]; then
       echo "error: the head of $FM_PR_URL moved while the carry was measured; run record --carry again" >&2
@@ -571,6 +933,8 @@ code_review_record() {  # <note> <carry 0|1>
 $line"
   [ -z "$note" ] || body="$body
 $note"
+  [ -z "$gate" ] || body="$body
+Gate change: $gate"
   if ! printf '%s\n' "$body" | gh pr comment "$FM_PR_NUMBER" --repo "$FM_PR_OWNER/$FM_PR_REPO" --body-file - >/dev/null; then
     echo "error: could not post the code review record on $FM_PR_URL" >&2
     return 1
@@ -581,7 +945,11 @@ $note"
     echo "error: the code review record posted on $FM_PR_URL does not read back for its current diff" >&2
     return 1
   fi
-  printf '%s\n' "$CODE_REVIEW_LINE"
+  if [ -n "$gate" ] && [ -n "$CODE_REVIEW_GATE_FILES" ] && [ "$CODE_REVIEW_GATE_STATED" = 0 ]; then
+    echo "error: the gate statement posted on $FM_PR_URL does not read back for its current diff" >&2
+    return 1
+  fi
+  code_review_print_status
 }
 
 cmd=${1-}
@@ -590,7 +958,8 @@ case "$cmd" in
   args)
     [ "$#" -eq 1 ] || { echo "error: usage: fm-code-review.sh args <pr-url>" >&2; exit 2; }
     code_review_parse_url "$1" || exit 2
-    printf 'medium --comment %s %s\n' "$FM_PR_URL" "$(code_review_focus_line)"
+    tail=$(code_review_prompt_tail) || exit 1
+    printf 'medium --comment %s %s\n' "$FM_PR_URL" "$tail"
     ;;
   review)
     [ "$#" -ge 1 ] || { echo "error: usage: fm-code-review.sh review <pr-url> --model <model>" >&2; exit 2; }
@@ -624,14 +993,15 @@ case "$cmd" in
     code_review_parse_url "$1" || exit 2
     rc=0
     code_review_status || rc=$?
-    [ -z "$CODE_REVIEW_LINE" ] || printf '%s\n' "$CODE_REVIEW_LINE"
+    code_review_print_status
     exit "$rc"
     ;;
   record)
-    [ "$#" -ge 1 ] || { echo "error: usage: fm-code-review.sh record <pr-url> [--carry] [--note <text>]" >&2; exit 2; }
+    [ "$#" -ge 1 ] || { echo "error: usage: fm-code-review.sh record <pr-url> [--carry] [--note <text>] [--gate <statement>]" >&2; exit 2; }
     code_review_parse_url "$1" || exit 2
     shift
     note=
+    gate=
     carry=0
     while [ "$#" -gt 0 ]; do
       case "$1" in
@@ -647,11 +1017,23 @@ case "$cmd" in
           note=$2
           shift 2
           ;;
+        --gate)
+          [ -n "${2:-}" ] || { echo "error: --gate requires a statement" >&2; exit 2; }
+          case $2 in
+            *$'\n'*|*'<!--'*) echo "error: --gate must be one line without '<!--', so it cannot pose as a record marker" >&2; exit 2 ;;
+          esac
+          case "$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')" in
+            *loosen*|*tighten*) ;;
+            *) echo "error: --gate must say what the gate change loosens or tightens, or say nothing loosened" >&2; exit 2 ;;
+          esac
+          gate=$2
+          shift 2
+          ;;
         *) echo "error: unknown record argument: $1" >&2; exit 2 ;;
       esac
     done
     rc=0
-    code_review_record "$note" "$carry" || rc=$?
+    code_review_record "$note" "$carry" "$gate" || rc=$?
     exit "$rc"
     ;;
   -h|--help) usage ;;

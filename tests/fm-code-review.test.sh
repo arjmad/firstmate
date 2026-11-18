@@ -70,6 +70,19 @@ case "$1 $2" in
     fi
     printf 'file\n'
     ;;
+  "api repos/example/repo/contents/"*)
+    # A file on the base branch, raw, from the case's base/ directory.
+    path=${2#repos/example/repo/contents/}
+    ref=${path#*\?ref=}
+    path=${path%%\?*}
+    [ "$ref" = "$(cat "$FM_TEST_DIR/base-ref" 2>/dev/null || echo main)" ] || { echo 'gh: No commit found for the ref (HTTP 404)' >&2; exit 1; }
+    if [ -f "$FM_TEST_DIR/contents-fail" ]; then
+      echo 'gh: Server Error (HTTP 502)' >&2
+      exit 1
+    fi
+    [ -f "$FM_TEST_DIR/base/$path" ] || { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
+    cat "$FM_TEST_DIR/base/$path"
+    ;;
   "pr diff")
     case " $* " in
       *" --help "*)
@@ -102,6 +115,12 @@ case "$1 $2" in
     gh_jq "$FM_TEST_DIR/compare.json" "$@"
     ;;
   "pr view")
+    case " $* " in
+      *" baseRefName "*)
+        cat "$FM_TEST_DIR/base-ref" 2>/dev/null || echo main
+        exit 0
+        ;;
+    esac
     # A heads file, one head per line, is read one line per call: a push
     # landing between two reads.
     if [ -s "$FM_TEST_DIR/heads" ]; then
@@ -145,6 +164,7 @@ run_case() {
   shift
   set +e
   FM_TEST_DIR="$dir" PATH="$dir/fakebin:$PATH" TMPDIR="$dir/tmp" \
+    FM_CONFIG_OVERRIDE="$dir/config" \
     FM_RISK_TIER="${FM_TEST_CLASSIFIER:-$dir/fakebin/risk-tier}" \
     GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$dir/remote.git.insteadOf" \
     GIT_CONFIG_VALUE_0=https://github.com/example/repo.git \
@@ -355,7 +375,8 @@ test_args_carry_the_merge_gate_focus() {
     *) fail "args: the arguments do not start with the level, --comment, the PR URL, and the focus: $OUT" ;;
   esac
   assert_contains "$OUT" 'run gh pr view 12 --repo github.com/example/repo --json title,body' "args: the focus does not name this PR's description"
-  [ ! -s "$dir/gh.log" ] || fail "args: printing the arguments must not call gh"
+  [ "$(grep -v -e ' --json baseRefName ' -e '^api repos/example/repo/contents/REVIEW.md?ref=main ' "$dir/gh.log")" = '' ] \
+    || fail "args: printing the arguments may only read the base branch's REVIEW.md: $(cat "$dir/gh.log")"
   run_case "$dir" args https://gitlab.example/group/project/-/merge_requests/7
   expect_code 2 "$RC" "args-gitlab: a GitLab URL gets no review arguments"
   run_case "$dir" args
@@ -541,6 +562,9 @@ test_record_posts_once_for_the_current_diff() {
 test_status_with_a_table_asks_the_classifier_for_the_tier() {
   local dir id
   dir=$(make_case table-tinker hosts/thor/homebrew.nix)
+  # The gate self-edit check reads the changed files on its own; off here, so
+  # the read below proves the tier comes from the table alone.
+  gate_mode "$dir" off
   write_table "$dir"
   make_remote "$dir" hosts/thor/homebrew.nix
   printf 'tinker: every change against origin/main (abc) is tinker for thor: hosts/thor/homebrew.nix\n' > "$dir/tier"
@@ -825,6 +849,339 @@ Carried." '. + [{author_association: "OWNER", body: $b}]' "$dir/comments.json" >
   pass "fm-code-review record --carry measures from the last trusted full review, not an earlier carry"
 }
 
+# The gate self-edit rule (docs/fork-decisions/2026-11-17-gate-self-edit.md).
+# Args: dir mode
+gate_mode() {
+  mkdir -p "$1/config"
+  printf '%s\n' "$2" > "$1/config/gate-self-edit"
+}
+
+# A trusted record comment for the case's current diff. Args: dir [extra line]
+gate_record() {
+  local dir=$1 body
+  body="<!-- fm-code-review v1 diff=$(diff_id "$dir") head=$HEAD_SHA -->
+Code review: ran."
+  [ "$#" -lt 2 ] || body="$body
+$2"
+  jq -c --arg b "$body" '. + [{author_association: "OWNER", body: $b}]' "$dir/comments.json" > "$dir/comments.next"
+  mv "$dir/comments.next" "$dir/comments.json"
+}
+
+test_gate_self_edit_observe_keeps_verdicts_and_notes_would_block() {
+  local dir id
+  # Observe is the default: no config/gate-self-edit at all.
+  dir=$(make_case gate-observe check.sh)
+  gate_record "$dir"
+  id=$(diff_id "$dir")
+  run_case "$dir" status "$URL"
+  expect_code 0 "$RC" "gate-observe: observe mode must keep the reviewed verdict"
+  [ "$(printf '%s\n' "$OUT" | sed -n 1p)" = "reviewed: diff $id of $URL carries a code review record" ] \
+    || fail "gate-observe: the first status line changed: $OUT"
+  [ "$(printf '%s\n' "$OUT" | sed -n 2p)" = "gate-observe: $URL edits its own gate files (check.sh) and no code review record for its current diff states what the gate change loosens or tightens; enforce mode would refuse its merge until record --gate posts one" ] \
+    || fail "gate-observe: the would-block line is wrong: $OUT"
+
+  run_case "$dir" record "$URL" --gate 'tightens: adds the shellcheck step; nothing loosened'
+  expect_code 0 "$RC" "gate-observe: record --gate on a reviewed diff must post the statement: $ERR"
+  [ "$OUT" = "reviewed: diff $id of $URL carries a code review record stating its gate change" ] \
+    || fail "gate-observe: after the statement status still notes the gate: $OUT"
+  jq -r '.[-1].body' "$dir/comments.json" | grep -qx 'Gate change: tightens: adds the shellcheck step; nothing loosened' \
+    || fail "gate-observe: the record does not carry the statement line: $(jq -r '.[-1].body' "$dir/comments.json")"
+  # The diff already had its full record, so the statement claims no review.
+  jq -r '.[-1].body' "$dir/comments.json" | grep -qx '<!-- fm-code-review-gate -->' \
+    || fail "gate-observe: a statement at a reviewed diff posed as a new review: $(jq -r '.[-1].body' "$dir/comments.json")"
+
+  # A REVIEW.md-only pull request stays exempt, but is noted.
+  dir=$(make_case gate-observe-exempt REVIEW.md)
+  run_case "$dir" status "$URL"
+  expect_code 0 "$RC" "gate-observe-exempt: observe mode must keep the exempt verdict"
+  case "$OUT" in
+    "exempt: "*$'\n'"gate-observe: $URL edits its own gate files (REVIEW.md) "*) ;;
+    *) fail "gate-observe-exempt: got '$OUT'" ;;
+  esac
+  # Nor does a statement post there: a record at an exempt diff would pose as
+  # a full review that later carries measure from.
+  run_case "$dir" record "$URL" --gate 'Nothing loosened: the rules only gain an item'
+  expect_code 0 "$RC" "gate-observe-exempt: record --gate stays a no-op on an exempt diff"
+  assert_contains "$ERR" 'needs no gate statement at this diff' "gate-observe-exempt: record did not say the statement was not posted"
+  [ "$(jq length "$dir/comments.json")" = 0 ] || fail "gate-observe-exempt: record --gate posted on an exempt diff"
+  case "$OUT" in
+    "exempt: "*$'\n'"gate-observe: "*) ;;
+    *) fail "gate-observe-exempt: after record --gate got '$OUT'" ;;
+  esac
+
+  # A diff its carry covers gets a statement-only record: it neither poses
+  # as a full review nor re-measures the carry, which a rebase would break.
+  dir=$(make_case gate-observe-carried check.sh)
+  id=$(diff_id "$dir")
+  full_record "$dir" "$REVIEWED_HEAD"
+  write_compare "$dir" ahead 'check.sh 2'
+  run_case "$dir" record "$URL" --carry
+  expect_code 0 "$RC" "gate-observe-carried: the follow-up should carry: $ERR"
+  run_case "$dir" record "$URL" --gate 'tightens: adds the shellcheck step; nothing loosened'
+  expect_code 0 "$RC" "gate-observe-carried: record --gate on a carried diff must post: $ERR"
+  [ "$OUT" = "reviewed: diff $id of $URL carries a code review record stating its gate change" ] \
+    || fail "gate-observe-carried: got '$OUT'"
+  jq -r '.[-1].body' "$dir/comments.json" > "$dir/body"
+  [ "$(sed -n 2p "$dir/body")" = "<!-- fm-code-review-gate -->" ] \
+    || fail "gate-observe-carried: the statement record is not statement-only: $(cat "$dir/body")"
+
+  # The same holds when enforce mode reads the carried diff unreviewed for
+  # want of the statement.
+  dir=$(make_case gate-enforce-carried check.sh)
+  id=$(diff_id "$dir")
+  full_record "$dir" "$REVIEWED_HEAD"
+  write_compare "$dir" ahead 'check.sh 2'
+  run_case "$dir" record "$URL" --carry
+  expect_code 0 "$RC" "gate-enforce-carried: the follow-up should carry in observe mode: $ERR"
+  gate_mode "$dir" enforce
+  run_case "$dir" status "$URL"
+  expect_code 1 "$RC" "gate-enforce-carried: enforce mode must hold the carried diff for its statement"
+  run_case "$dir" record "$URL" --gate 'tightens: adds the shellcheck step; nothing loosened'
+  expect_code 0 "$RC" "gate-enforce-carried: record --gate on a carried diff must post: $ERR"
+  jq -r '.[-1].body' "$dir/comments.json" > "$dir/body"
+  [ "$(sed -n 2p "$dir/body")" = "<!-- fm-code-review-gate -->" ] \
+    || fail "gate-enforce-carried: the statement record is not statement-only: $(cat "$dir/body")"
+
+  # A pull request off the gate prints the one line as before.
+  dir=$(make_case gate-observe-none bin/tool.sh src/check.sh docs/check.sh.md)
+  run_case "$dir" status "$URL"
+  expect_code 1 "$RC" "gate-observe-none: an ordinary unreviewed PR stays unreviewed"
+  [ "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" = 1 ] || fail "gate-observe-none: a PR off the gate got a second line: $OUT"
+
+  # An unreadable gate read is noted, never refused, in observe mode.
+  dir=$(make_case gate-observe-unreadable check.sh)
+  gate_record "$dir"
+  : > "$dir/contents-fail"
+  run_case "$dir" status "$URL"
+  expect_code 0 "$RC" "gate-observe-unreadable: observe mode must not fail closed"
+  assert_contains "$OUT" "gate-observe: the gate check of $URL could not run, because check.sh on its base branch could not be read" \
+    "gate-observe-unreadable: the note did not say what could not be read"
+  pass "fm-code-review observe mode keeps every verdict and notes a merge enforce mode would refuse"
+}
+
+# shellcheck disable=SC2016  # the check.sh lines are fixture text, not expansion
+test_gate_self_edit_enforce_holds_until_the_record_states_the_change() {
+  local dir id path
+  dir=$(make_case gate-enforce-exempt REVIEW.md)
+  gate_mode "$dir" enforce
+  id=$(diff_id "$dir")
+  run_case "$dir" status "$URL"
+  expect_code 1 "$RC" "gate-enforce-exempt: a REVIEW.md-only PR must not be exempt in enforce mode"
+  [ "$OUT" = "unreviewed: diff $id of $URL would be exempt by its paths and carries no code review record for it; it also edits its own gate files (REVIEW.md), so after its /code-review the record needs --gate <statement>" ] \
+    || fail "gate-enforce-exempt: got '$OUT'"
+
+  # A plain record cannot pass the gate, nor can a carry, nor a statement
+  # that names neither direction.
+  run_case "$dir" record "$URL"
+  expect_code 1 "$RC" "gate-enforce-record: record without --gate must be refused"
+  assert_contains "$ERR" 'its record needs --gate' "gate-enforce-record: the refusal did not name --gate"
+  run_case "$dir" record "$URL" --carry
+  expect_code 1 "$RC" "gate-enforce-carry: a carry without --gate must be refused"
+  [ "$(jq length "$dir/comments.json")" = 0 ] || fail "gate-enforce-record: a refused record posted anyway"
+  run_case "$dir" record "$URL" --gate 'looks fine'
+  expect_code 2 "$RC" "gate-enforce-vague: a statement without loosen or tighten is a usage error"
+  run_case "$dir" record "$URL" --gate 'Nothing loosened: the rules only gain an item'
+  expect_code 0 "$RC" "gate-enforce-stated: record --gate must pass the gate: $ERR"
+  [ "$OUT" = "reviewed: diff $id of $URL carries a code review record stating its gate change" ] \
+    || fail "gate-enforce-stated: got '$OUT'"
+
+  # The statement must sit in a trusted record for the current diff.
+  dir=$(make_case gate-enforce-split .github/workflows/ci.yml)
+  gate_mode "$dir" enforce
+  gate_record "$dir"
+  jq -c '. + [{author_association: "OWNER", body: "Gate change: nothing loosened"},
+    {author_association: "CONTRIBUTOR", body: ("<!-- fm-code-review v1 diff=" + $id + " head=" + $h + " -->\nGate change: nothing loosened")}]' \
+    --arg id "$(diff_id "$dir")" --arg h "$HEAD_SHA" "$dir/comments.json" > "$dir/comments.next"
+  mv "$dir/comments.next" "$dir/comments.json"
+  run_case "$dir" status "$URL"
+  expect_code 1 "$RC" "gate-enforce-split: a statement apart from the record, or from a stranger, must not count"
+
+  # Which paths are gate files: the fixed set, renames, and what the base
+  # branch's check.sh sources literally.
+  for path in check.sh .github/workflows/gate.yml .claude/skills/verify/SKILL.md .claude/skills/verify-shipping/run.sh scripts/lib.sh tests/helpers.sh; do
+    dir=$(make_case "gate-enforce-path-${path//\//-}" "$path")
+    gate_mode "$dir" enforce
+    mkdir -p "$dir/base"
+    printf '%s\n' '#!/usr/bin/env bash' '. "$REPO_ROOT/scripts/lib.sh"' "  source ./tests/helpers.sh # helpers" \
+      '. "$(dirname "$0")/x.sh"' 'source /etc/profile' > "$dir/base/check.sh"
+    run_case "$dir" status "$URL"
+    expect_code 1 "$RC" "gate-enforce-path: $path must be a gate file"
+    assert_contains "$OUT" "edits its own gate files ($path)" "gate-enforce-path: $path was not named"
+  done
+  for path in x.sh etc/profile .claude/skills/other/SKILL.md .github/workflows.md lib/check.sh; do
+    dir=$(make_case "gate-enforce-off-${path//\//-}" "$path")
+    gate_mode "$dir" enforce
+    mkdir -p "$dir/base"
+    printf '%s\n' '. "$(dirname "$0")/x.sh"' 'source /etc/profile' > "$dir/base/check.sh"
+    gate_record "$dir"
+    run_case "$dir" status "$URL"
+    case "$OUT" in *"gate files"*) fail "gate-enforce-off: $path must not be a gate file: $OUT" ;; esac
+  done
+  dir=$(make_case gate-enforce-rename docs/ci.txt)
+  gate_mode "$dir" enforce
+  jq -c '.[0].previous_filename = ".github/workflows/ci.yml"' "$dir/files.json" > "$dir/files.next" && mv "$dir/files.next" "$dir/files.json"
+  run_case "$dir" status "$URL"
+  assert_contains "$OUT" "edits its own gate files (.github/workflows/ci.yml)" "gate-enforce-rename: a workflow renamed away was not a gate edit"
+
+  # The base branch's check.sh decides, never the pull request's branch name.
+  dir=$(make_case gate-enforce-base scripts/lib.sh)
+  gate_mode "$dir" enforce
+  printf 'release\n' > "$dir/base-ref"
+  mkdir -p "$dir/base"
+  printf '. scripts/lib.sh\n' > "$dir/base/check.sh"
+  run_case "$dir" status "$URL"
+  expect_code 1 "$RC" "gate-enforce-base: the file the base check.sh sources must be a gate file"
+  assert_grep 'contents/check.sh?ref=release ' "$dir/gh.log" "gate-enforce-base: check.sh was not read from the base branch"
+
+  # Enforce fails closed on an unreadable gate read; off reads nothing.
+  dir=$(make_case gate-enforce-unreadable check.sh)
+  gate_mode "$dir" enforce
+  : > "$dir/contents-fail"
+  run_case "$dir" status "$URL"
+  expect_code 2 "$RC" "gate-enforce-unreadable: enforce mode must fail closed"
+  dir=$(make_case gate-off REVIEW.md)
+  gate_mode "$dir" off
+  run_case "$dir" status "$URL"
+  expect_code 0 "$RC" "gate-off: off mode keeps the exempt verdict"
+  [ "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" = 1 ] || fail "gate-off: off mode printed a note: $OUT"
+  assert_no_grep 'contents/check.sh' "$dir/gh.log" "gate-off: off mode read the gate"
+  dir=$(make_case gate-typo REVIEW.md)
+  gate_mode "$dir" enfroce
+  run_case "$dir" status "$URL"
+  expect_code 1 "$RC" "gate-typo: an unknown mode must enforce"
+  assert_contains "$ERR" "reads 'enfroce', not off, observe, or enforce" "gate-typo: no warning named the bad mode"
+  pass "fm-code-review enforce mode holds a gate edit until a trusted record for its diff states the change"
+}
+
+test_gate_self_edit_under_a_table() {
+  local dir
+  dir=$(make_case gate-table check.sh)
+  gate_mode "$dir" enforce
+  write_table "$dir"
+  printf 'tinker: the change is small\n' > "$dir/tier"
+  make_remote "$dir" check.sh
+  run_case "$dir" status "$URL"
+  expect_code 1 "$RC" "gate-table: a tinker PR that edits check.sh must not be exempt in enforce mode: $ERR"
+  assert_contains "$OUT" "edits its own gate files (check.sh)" "gate-table: the gate files were not named"
+  pass "fm-code-review enforce mode holds a gate edit even where the tier table calls it tinker"
+}
+
+# shellcheck disable=SC2016  # the backticks are Markdown fences, not expansion
+test_review_reads_review_md_from_the_base_branch() {
+  local dir focus
+  dir=$(make_case review-rules-none bin/tool.sh)
+  make_claude "$dir"
+  printf 'No defects.\n\n```json\n[]\n```\n' > "$dir/claude-out"
+  run_case "$dir" args "$URL"
+  focus=${OUT#"medium --comment $URL "}
+  run_review "$dir" "$URL" --model claude-opus-5-5
+  expect_code 0 "$RC" "review-rules-none: a base with no REVIEW.md should review as before: $ERR"
+  [ "$(sed -n 4p "$dir/claude.log")" = "/code-review medium $URL $focus" ] \
+    || fail "review-rules-none: the prompt changed without a REVIEW.md: $(sed -n 4p "$dir/claude.log")"
+  case "$focus" in *REVIEW.md*) fail "review-rules-none: the focus names a REVIEW.md that does not exist" ;; esac
+
+  dir=$(make_case review-rules bin/tool.sh REVIEW.md)
+  make_claude "$dir"
+  printf 'No defects.\n\n```json\n[]\n```\n' > "$dir/claude-out"
+  printf 'release\n' > "$dir/base-ref"
+  mkdir -p "$dir/base"
+  printf '%s\n' '# Review rules' '- When the diff touches bin/: every new script has a test.' > "$dir/base/REVIEW.md"
+  run_review "$dir" "$URL" --model claude-opus-5-5
+  expect_code 0 "$RC" "review-rules: the review should run with the base rules: $ERR"
+  case "$(sed -n 4p "$dir/claude.log")" in
+    "/code-review medium $URL Merge-gate focus for this review: "*"Repository review rules: the REVIEW.md text below is as committed on the base branch release, with the files it includes in place; "*"Check only the items whose trigger matches this diff"*"REVIEW.md begins: # Review rules - When the diff touches bin/: every new script has a test. REVIEW.md ends.") ;;
+    *) fail "review-rules: the prompt does not carry the base branch's REVIEW.md: $(sed -n 4p "$dir/claude.log")" ;;
+  esac
+  assert_grep 'api repos/example/repo/contents/REVIEW.md?ref=release ' "$dir/gh.log" "review-rules: REVIEW.md was not read at the base branch"
+  [ "$(wc -l < "$dir/claude.log" | tr -d ' ')" = 4 ] || fail "review-rules: the prompt is not one argument"
+
+  dir=$(make_case review-rules-unreadable bin/tool.sh)
+  make_claude "$dir"
+  printf 'No defects.\n\n```json\n[]\n```\n' > "$dir/claude-out"
+  : > "$dir/contents-fail"
+  run_review "$dir" "$URL" --model claude-opus-5-5
+  expect_code 1 "$RC" "review-rules-unreadable: an unreadable REVIEW.md must fail the review"
+  [ ! -e "$dir/claude.log" ] || fail "review-rules-unreadable: the review ran without its rules"
+  pass "fm-code-review review hands the reviewer REVIEW.md from the base branch, and nothing when there is none"
+}
+
+# The prompt argument a review would run with. Args: dir; sets PROMPT.
+# shellcheck disable=SC2016  # the backticks are Markdown fences, not expansion
+review_prompt() {
+  make_claude "$1"
+  printf 'No defects.\n\n```json\n[]\n```\n' > "$1/claude-out"
+  run_review "$1" "$URL" --model claude-opus-5-5
+  PROMPT=$(sed -n 4p "$1/claude.log" 2>/dev/null)
+}
+
+# shellcheck disable=SC2016  # the backticks are Markdown fences, not expansion
+test_review_md_includes_follow_the_service_rules() {
+  local dir i
+  dir=$(make_case rules-includes bin/tool.sh)
+  mkdir -p "$dir/base/.claude/skills/style"
+  printf '%s\n' 'Root rule.' '@rules-a.md' '```' '@rules-b.md' '```' '@missing.md' '@sub/x.md' '@rules a.md' \
+    '@.claude/skills/style/SKILL.md' > "$dir/base/REVIEW.md"
+  printf '%s\n' 'Rule A.' '@rules-b.md' > "$dir/base/rules-a.md"
+  printf 'Rule B.\n' > "$dir/base/rules-b.md"
+  printf 'Skill rule.\n' > "$dir/base/.claude/skills/style/SKILL.md"
+  review_prompt "$dir"
+  expect_code 0 "$RC" "rules-includes: the review should run: $ERR"
+  assert_contains "$PROMPT" 'REVIEW.md begins: Root rule. Rule A. @rules-b.md ``` @rules-b.md ``` @missing.md @sub/x.md @rules a.md Skill rule. REVIEW.md ends.' \
+    "rules-includes: includes were not placed one level deep, outside fences, by plain name"
+
+  # A fence closes only on its own marker, and trailing blanks or a CR line
+  # ending still include.
+  dir=$(make_case rules-fences bin/tool.sh)
+  mkdir -p "$dir/base"
+  printf '%s\n' '```' '~~~' '@rules-b.md' '```' '@rules-b.md  ' $'@rules-a.md\r' > "$dir/base/REVIEW.md"
+  printf 'Rule A.\n' > "$dir/base/rules-a.md"
+  printf 'Rule B.\n' > "$dir/base/rules-b.md"
+  review_prompt "$dir"
+  expect_code 0 "$RC" "rules-fences: the review should run: $ERR"
+  assert_contains "$PROMPT" 'REVIEW.md begins: ``` ~~~ @rules-b.md ``` Rule B. Rule A. REVIEW.md ends.' \
+    "rules-fences: a mixed fence or a trailing blank changed what was included"
+
+  # The business repository's shape: the checklist lives only in root files
+  # pulled in by blank-line-separated @review-*.md lines.
+  dir=$(make_case rules-business bin/tool.sh)
+  mkdir -p "$dir/base"
+  printf '%s\n' '# Review instructions' '' 'Check only the items whose trigger matches the diff.' '' \
+    '@review-browser-labels.md' '' '@review-sync-stock.md' '' '@review-runner-mail.md' > "$dir/base/REVIEW.md"
+  printf '%s\n' '### B1. A label is bought once' '- **Trigger:** `labels/`.' > "$dir/base/review-browser-labels.md"
+  printf '%s\n' '### S1. A zero nobody counted is never pushed' '- **Trigger:** `sync/cycle.py`.' > "$dir/base/review-sync-stock.md"
+  printf '%s\n' '### M1. A customer mail is sent once' '- **Trigger:** `mail/`.' > "$dir/base/review-runner-mail.md"
+  review_prompt "$dir"
+  expect_code 0 "$RC" "rules-business: the review should run: $ERR"
+  for item in '### B1. A label is bought once' '### S1. A zero nobody counted is never pushed' '### M1. A customer mail is sent once'; do
+    assert_contains "$PROMPT" "$item" "rules-business: the included item '$item' did not reach the reviewer"
+  done
+  case "$PROMPT" in *'@review-'*) fail "rules-business: an include line reached the reviewer unexpanded" ;; esac
+
+  dir=$(make_case rules-limits bin/tool.sh)
+  mkdir -p "$dir/base"
+  printf 'Root.\n' > "$dir/base/REVIEW.md"
+  for i in 1 2 3 4 5 6 7 8 9; do
+    printf 'R%s.\n' "$i" > "$dir/base/r$i.md"
+    printf '@r%s.md\n' "$i" >> "$dir/base/REVIEW.md"
+  done
+  head -c 150000 /dev/zero | tr '\0' x > "$dir/base/big.md"
+  printf '@big.md\n' >> "$dir/base/REVIEW.md"
+  review_prompt "$dir"
+  expect_code 0 "$RC" "rules-limits: the review should run: $ERR"
+  assert_contains "$PROMPT" '2 of its include lines were skipped' "rules-limits: the ninth file and the oversized one were not reported skipped"
+  assert_contains "$PROMPT" 'R8. REVIEW.md ends.' "rules-limits: the first eight files were not included"
+  assert_contains "$ERR" '2 include lines of REVIEW.md' "rules-limits: the skip was not warned about"
+
+  dir=$(make_case rules-too-big bin/tool.sh)
+  mkdir -p "$dir/base"
+  head -c 150001 /dev/zero | tr '\0' x > "$dir/base/REVIEW.md"
+  review_prompt "$dir"
+  expect_code 0 "$RC" "rules-too-big: the review should run without the rules: $ERR"
+  assert_contains "$PROMPT" 'was skipped because it reaches the 150000-byte limit' "rules-too-big: the prompt did not say REVIEW.md was skipped"
+  case "$PROMPT" in *xxxxxxxx*) fail "rules-too-big: the oversized REVIEW.md reached the prompt" ;; esac
+  pass "fm-code-review includes REVIEW.md's @ files one level deep within the service's file and byte limits"
+}
+
 test_classify_exempts_records_receipts_data_seed_and_markdown_only
 test_status_with_a_table_asks_the_classifier_for_the_tier
 test_status_with_a_table_fails_closed
@@ -840,3 +1197,8 @@ test_record_carry_covers_a_small_follow_up
 test_record_carry_refuses_what_it_cannot_cover
 test_record_carry_measures_from_the_last_full_review
 test_record_carry_counts_every_path_under_a_table
+test_gate_self_edit_observe_keeps_verdicts_and_notes_would_block
+test_gate_self_edit_enforce_holds_until_the_record_states_the_change
+test_gate_self_edit_under_a_table
+test_review_reads_review_md_from_the_base_branch
+test_review_md_includes_follow_the_service_rules

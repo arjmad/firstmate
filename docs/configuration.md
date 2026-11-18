@@ -308,6 +308,14 @@ The fleet's `fleet-mode` command writes this file (normal: `claude-opus-5-5`, he
 `bin/fm-dod-lib.sh` (`fm_dod_code_review_model`) owns the read.
 A secondmate home inherits the primary's file like the rest of the inheritable config (`FM_INHERITABLE_CONFIG` in `bin/fm-config-inherit-lib.sh`), so a `fleet-mode` switch reaches a secondmate's briefs at its next inheritance convergence (its spawn, the bootstrap secondmate sweep, or `bin/fm-config-push.sh`).
 
+## Gate self-edit mode (config/gate-self-edit)
+
+A pull request that edits its own repository's gate, such as `check.sh`, a workflow, a verify skill, or `REVIEW.md`, merges only once its code review record states what that gate change loosens or tightens (fork patch, `docs/fork-decisions/2026-11-17-gate-self-edit.md`).
+The first line of gitignored `config/gate-self-edit` sets how strictly: `off`, `observe` (the default when the file is absent or empty), or `enforce`; any other value enforces, with a warning.
+In `observe` mode nothing is refused, and each merge that `enforce` would have refused is appended to `state/gate-self-edit-observe.log` once it lands, so a week of that log shows what switching to `enforce` would block.
+`bin/fm-code-review.sh` owns the gate file set, the statement's form, and each mode's behavior; `bin/fm-pr-merge.sh` reads the mode from the merging home's config.
+A secondmate home inherits the primary's file like the rest of the inheritable config (`FM_INHERITABLE_CONFIG` in `bin/fm-config-inherit-lib.sh`).
+
 ## Pi supervision branch model and effort (config/supervision-branch-model, config/supervision-branch-effort)
 
 The branch can run on a cheaper model than main because supervision is an easier job than the captain's own conversation.

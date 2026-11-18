@@ -879,7 +879,7 @@ test_pr_based_dod_carries_the_code_review_step() {
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
     assert_grep 'with three already posted, a change that would need another `/code-review` pass does not get one' "$out" "$mode: DoD does not stop a fourth review pass"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    assert_grep 'comments you posted without a `fm-code-review-carry` line, rather than relying on memory' "$out" "$mode: DoD does not say how to count review passes"
+    assert_grep 'comments you posted without a `fm-code-review-carry` or `fm-code-review-gate` line, rather than relying on memory' "$out" "$mode: DoD does not say how to count review passes"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
     sol_line=$(grep -n 'first run the `tstack-sol-loop` skill' "$out" | cut -d: -f1)
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
