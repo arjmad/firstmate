@@ -342,9 +342,9 @@ EOF
     out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" "$id" --mode direct-PR --yolo off 2>&1)
     expect_code 0 "$?" "$id: the promotion should succeed"$'\n'"$out"
   done
-  assert_grep 'In the business repository, push after' "$home/data/promote-biz-c1/ship-instructions.md" \
+  assert_grep 'For the business PR, whether it is' "$home/data/promote-biz-c1/ship-instructions.md" \
     "a promoted business ship lacks the business push rule"
-  assert_no_grep 'In the business repository, push after' "$home/data/promote-proj-c1/ship-instructions.md" \
+  assert_no_grep 'For the business PR, whether it is' "$home/data/promote-proj-c1/ship-instructions.md" \
     "a promoted non-business ship gained the business push rule"
   pass "fm-promote: a promoted business direct-PR ship carries the business push rule"
 }
