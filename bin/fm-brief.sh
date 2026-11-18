@@ -994,6 +994,11 @@ if [ "$LAVISH_COMPATIBLE" = 1 ]; then
 else
   LAVISH_LINE='Lavish is unavailable (lavish-axi is missing or below its supported version floor), so do not open a Lavish board; name any visual artifact by its file path in the status line that points the captain at it.'
 fi
+# Business ship briefs leave the full suite to the required gate (Arjun 2026-11-18, CI audit C).
+case " $REPO $ALSO_LIST " in
+  *" business "*) DOD="$DOD
+In the business repository, push after \`./check.sh --quick\` and let the required \`gate\` prove the full suite on the PR; run the full \`./check.sh\` locally only when you want proof before pushing." ;;
+esac
 [ -z "$SHORT_LOOP_BLOCK" ] || DOD=$(printf '%s\n' "$DOD" | fm_dod_with_short_loop_floor) || exit 1
 
 cat > "$BRIEF" <<EOF
