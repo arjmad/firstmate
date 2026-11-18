@@ -412,7 +412,7 @@ STUB
     for contract in "$payload" "$home/data/$id/brief.md"; do
       assert_grep "This replaces the scout rule limiting outside-worktree writes to the report and status file." "$contract" \
         "$mode: $contract retained the scout-only write restriction"
-      assert_grep "Keep project edits inside this worktree; keep proof and scratch output outside it, under \`$home/data/$id/\` or, for bulk scratch such as clones and builds, only this task's own temp root \`/tmp/fm-$id/\`, which teardown removes; never another \`/tmp\` path, which nothing reaps." "$contract" \
+      assert_grep "Keep project edits inside this worktree; keep proof outside it, under \`$home/data/$id/\`, and put scratch output, including bulk clones and builds, only under this task's own temp root \`/tmp/fm-$id/\`, which teardown removes; never another \`/tmp\` path, which nothing reaps." "$contract" \
         "$mode: $contract omitted the ship scratch-location rule"
       assert_grep "Outside the worktree, write only that task material and the status and steering-inbox records authorized below." "$contract" \
         "$mode: $contract omitted the ship outside-worktree write boundary"

@@ -1014,7 +1014,7 @@ If the top-level path is the primary checkout or not the worktree you were launc
 $ALSO_SECTION
 # Rules
 $RULE1
-2. Keep project edits inside this worktree; keep proof and scratch output outside it, under \`$DATA/$ID/\` or, for bulk scratch such as clones and builds, only this task's own temp root \`/tmp/fm-$ID/\`, which teardown removes; never another \`/tmp\` path, which nothing reaps.
+2. Keep project edits inside this worktree; keep proof outside it, under \`$DATA/$ID/\`, and put scratch output, including bulk clones and builds, only under this task's own temp root \`/tmp/fm-$ID/\`, which teardown removes; never another \`/tmp\` path, which nothing reaps.
    Outside the worktree, write only that task material and the status and steering-inbox records authorized below.
    Filing durable knowledge through the fleet's sanctioned memory route (\`fleet-memory\`, such as the principal's brain) is permitted and is not a change outside the worktree.
    $BRAIN_FILING_RULE
