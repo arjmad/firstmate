@@ -340,7 +340,7 @@ This section supersedes every earlier brief instruction about delivery mode.
 These current ship instructions supersede the scout delivery rules and report-based Definition of done.
 Any earlier "Never push" or scout-only delivery language in this file is superseded.
 This replaces the scout rule limiting outside-worktree writes to the report and status file.
-Keep project edits inside this worktree; keep proof and scratch output outside it, under \`$DATA/$ID/\` or a temporary directory.
+Keep project edits inside this worktree; keep proof outside it, under \`$DATA/$ID/\`, and put scratch output, including bulk clones and builds, only under this task's own temp root \`/tmp/fm-$ID/\`, which teardown removes; never a \`/tmp\` path of your own choosing, which nothing reaps (paths a Firstmate helper hands you are fine).
 Outside the worktree, write only that task material and the status and steering-inbox records authorized below.
 Filing durable knowledge through the fleet's sanctioned memory route (\`fleet-memory\`, such as the principal's brain) is permitted and is not a change outside the worktree.
 $(fm_brain_filing_rule)
