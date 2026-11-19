@@ -29,7 +29,7 @@ Every upstream-sync PR re-checks each row `bin/fm-fork-decisions.sh patches` lis
 Status is `carried` when the change still applies and upstream is unchanged there, `upstreamed` when upstream now has an equivalent so the fork change can be dropped at the next sync, or `conflicted` when upstream changed the same code and the merge needed a hand; a row a later patch replaced reads `superseded by #N` instead.
 A sync drops a fork change only when its row reads `upstreamed`, and the captain's merge of that sync PR is the approval.
 A sync PR lands as a merge commit, never a squash, so the next sync's merge base is the upstream commit it merged.
-On GitHub, `bin/fm-pr-merge.sh` refuses to squash or rebase one and names `-- --merge`.
+Build one by merging upstream into a branch cut from `main`; on GitHub, `bin/fm-pr-merge.sh` then refuses to squash or rebase it and names `-- --merge`.
 The 2026-10-14 sync (#81) landed squashed, which left git's merge base at 1a868710, so the 2026-10-19 sync merged against 24f3a6b8 explicitly.
 
 The first records cover the fork-only commits in `git log --no-merges upstream/main..origin/main` at upstream `main` 1a868710, grouped by change.

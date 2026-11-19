@@ -3,6 +3,7 @@ The 2026-09-17 (#21), 2026-10-14 (#81) and 2026-11-16 (#256) syncs each landed a
 Decision: on GitHub, `bin/fm-pr-merge.sh` refuses a squash or rebase, the implicit default included, of a pull request whose verified head merged in a lineage its base branch lacks, and names `-- --merge` as the fix.
 The check reads the pull request's commits from GitHub's compare API rather than a local `upstream` remote, because the merging clone may have none.
 A pull request that merged another unlanded feature branch is refused the same way, because a squash would also swallow that branch's commits.
+The guard reads parent order, so it catches a sync built the documented way, upstream merged into a branch cut from `main`; a sync built the other way round looks exactly like GitHub's own update-branch merge and is not caught.
 No upstream proposal: the guard serves this fork's sync workflow.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
