@@ -1197,13 +1197,9 @@ resolve_relaunch_profile() {
   # old agent stops. Secondmate agents are not covered.
   if [ "$KIND" != secondmate ]; then
     fm_exclude_tools_check "$TARGET_HARNESS" 0 "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" >/dev/null || return 1
-    # The spawn this relaunch runs prints the list's deny-all warning once;
-    # keep only a refusal's reason here.
-    local denied_mcp_err
-    denied_mcp_err=$(fm_worker_denied_mcp_servers_check "$TARGET_HARNESS" 0 "$BACKEND" 2>&1 >/dev/null) || {
-      printf '%s\n' "$denied_mcp_err" >&2
-      return 1
-    }
+    # Quiet on success: the spawn this relaunch runs prints the deny-all warning once.
+    fm_worker_denied_mcp_servers_check "$TARGET_HARNESS" 0 "$BACKEND" >/dev/null 2>&1 \
+      || { fm_worker_denied_mcp_servers_check "$TARGET_HARNESS" 0 "$BACKEND" >/dev/null; return 1; }
     fm_crew_compact_window_check "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" >/dev/null || return 1
   fi
 }
