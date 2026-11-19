@@ -1411,7 +1411,16 @@ test_claude_denied_mcp_servers_follow_the_relaunch() {
   expect_code 0 "$rc" "a Claude relaunch with a denied-server list should succeed"$'\n'"$out"
   assert_contains "$(cat "$dir/fake/literal")" '"deniedMcpServers":[{"serverName":"homeassistant"},{"serverName":"monarch"}]' \
     "the relaunched Claude worker must keep the rendered list's denied MCP servers"
-  pass "fm-control relaunch: a Claude replacement keeps the rendered list's denied MCP servers, and a bad list denies every server"
+  # With no override, the list is read from the fleet-rendered path under HOME.
+  : > "$dir/fake/literal"
+  mkdir -p "$dir/user-home/.config/fleet/claude"
+  printf '%s\n' 'homeassistant' > "$dir/user-home/.config/fleet/claude/worker-denied-mcp-servers"
+  out=$(unset FM_WORKER_DENIED_MCP_SERVERS_FILE; run_control "$dir" "$id" relaunch --note "default path"); rc=$?
+  expect_code 0 "$rc" "a Claude relaunch reading the default list path should succeed"$'\n'"$out"
+  assert_not_contains "$out" "denied every MCP server" "the default path must find the rendered list"
+  assert_contains "$(cat "$dir/fake/literal")" '"deniedMcpServers":[{"serverName":"homeassistant"}]' \
+    "the relaunched Claude worker must be denied the servers at the default list path"
+  pass "fm-control relaunch: a Claude replacement keeps the rendered list's denied MCP servers, read from the default path, and a bad list denies every server"
 }
 
 # config/crew-compact-window: a Claude relaunch re-reads the window, carries
