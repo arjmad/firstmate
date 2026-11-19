@@ -67,7 +67,10 @@
 # 1..25). A configured value rides the generated check shim into watcher runs
 # and is cut down to the watcher's own per-check bound (FM_CHECK_TIMEOUT,
 # default 30, read from the poll's environment because the watcher runs it as
-# a direct child) with a three-second margin. Every read, including one retry,
+# a direct child) with a three-second margin. The forge deadline never passes
+# the script's launch plus that bound less the margin, so local preparation
+# spends the same bound; a window that has closed leaves every URL unmeasured.
+# Every read, including one retry,
 # is capped at five seconds. A first attempt killed at that bound or deadline is
 # budget refusal; a killed retry retains the genuine failure that caused it.
 # HTTP 5xx, 429, secondary-rate-limit 403, connection, DNS and TLS failures are
@@ -77,7 +80,7 @@
 # dependent waves: core, six independent reads (seven when FM_CONTRIBUTIONS_REPLY_AGE
 # is set), then the closing head read;
 # an issue has two waves. Before starting a URL, poll reserves the smaller of
-# the effective budget and 15 seconds for those waves. URLs needing forge
+# the forge window left when reads begin and 15 seconds for those waves. URLs needing forge
 # reads are sorted by URL and rotated by the current five-minute epoch bucket
 # modulo their count, without stored scheduling state or freshness-based
 # reordering. Terminal URLs settle separately before the forge budget starts
@@ -189,6 +192,7 @@ export FM_HOME FM_STATE_OVERRIDE="$STATE"
 fail() { printf 'fm-contributions: %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '2,/^set -eu$/s/^# \{0,1\}//p' "$0"; }
 case "${1:-}" in -h|--help) usage; exit 0 ;; esac
+LAUNCHED=$(date +%s)
 command -v jq >/dev/null 2>&1 || fail 'jq is required to measure contribution coverage'
 NOW=${FM_CONTRIBUTIONS_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
 EPOCH=$(jq -nr --arg now "$NOW" '$now | fromdateiso8601') || fail 'invalid observation clock'
@@ -215,6 +219,7 @@ review_bots() { # config/contribution-review-bots -> JSON array of logins
 }
 [ "$BUDGET_CAP" -ge 1 ] || BUDGET_CAP=1
 [ "$BUDGET" -le "$BUDGET_CAP" ] || BUDGET=$BUDGET_CAP
+CHECK_CUTOFF=$((LAUNCHED + BUDGET_CAP))
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-contributions.XXXXXX")
 LOCK_HELD=0
 cleanup() {
@@ -230,18 +235,27 @@ jq_lib() { # jq options/program via final argument
   jq -L "$SCRIPT_DIR" "$@" "include \"fm-contributions\"; $program"
 }
 
+oversized_records() { # ./<task>/contributions.json paths over the 1 MiB cap, one per line
+  (cd "$DATA" && find . -mindepth 2 -maxdepth 2 -type f -name contributions.json -size +1048576c -print) 2>/dev/null
+}
+
 read_saved() {
-  local file dir task
+  local file dir task oversized size_scan_ok=1
   local -a files=() tasks=()
   ERRORS=0
   if [ -L "$DATA" ]; then
     ERRORS=1; printf '[]\n' > "$TMP/saved.json"; return 0
   fi
+  oversized=$'\n'$(oversized_records)$'\n' || size_scan_ok=0
   for file in "$DATA"/*/contributions.json; do
     [ -e "$file" ] || [ -L "$file" ] || continue
     fm_dirname_to dir "$file"
     fm_basename_to task "$dir"
-    if [ -L "$file" ] || [ -L "$dir" ] || [ ! -f "$file" ] || [ "$(wc -c < "$file")" -gt 1048576 ]; then
+    if [ -L "$file" ] || [ -L "$dir" ] || [ ! -f "$file" ] \
+      || case "$oversized" in
+        *$'\n'"./$task/contributions.json"$'\n'*) true ;;
+        *) [ "$size_scan_ok" -eq 0 ] && [ "$(wc -c < "$file")" -gt 1048576 ] ;;
+      esac; then
       ERRORS=$((ERRORS + 1))
       continue
     fi
@@ -638,7 +652,7 @@ clear_unsupported_errors() {
 }
 
 poll() {
-  local task url old kind error observed why unreported=$'\n'
+  local task url old kind error observed why now unreported=$'\n'
   local -a row
   acquire
   get_input
@@ -688,8 +702,11 @@ poll() {
   jq -Rnr --argjson bucket "$((EPOCH / 300))" '
     [inputs] | if length == 0 then . else ($bucket % length) as $offset | .[$offset:] + .[:$offset] end
     | .[]' < "$TMP/live.tsv" > "$TMP/known.tsv"
-  DEADLINE=$(( $(date +%s) + BUDGET ))
-  OBSERVATION_RESERVE=$((BUDGET < 15 ? BUDGET : 15))
+  now=$(date +%s)
+  DEADLINE=$((now + BUDGET))
+  [ "$DEADLINE" -le "$CHECK_CUTOFF" ] || DEADLINE=$CHECK_CUTOFF
+  OBSERVATION_RESERVE=$((DEADLINE - now < 15 ? DEADLINE - now : 15))
+  [ "$OBSERVATION_RESERVE" -ge 1 ] || OBSERVATION_RESERVE=1
   while IFS=$'\t' read -r -a row; do
     [ $((DEADLINE - $(date +%s))) -ge "$OBSERVATION_RESERVE" ] || break
     url=${row[0]}
