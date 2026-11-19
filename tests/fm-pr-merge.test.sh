@@ -6931,8 +6931,10 @@ test_one_way_approved_is_attended_only
 # renames the landed commit's new note away. The merge variants are clean
 # plus merges: sync merges in an upstream branch cut from the first commit,
 # sync-long is sync with 120 upstream commits, sync-updated is sync after main moved and was merged into the branch,
-# base-merged is clean after that same main merge, and upstream-landed merges
-# the upstream branch that main itself merged first. Every path is Markdown, so the code review gate reads exempt.
+# base-merged is clean after that same main merge, upstream-landed merges
+# the upstream branch that main itself merged first, and pulled-update is clean
+# whose remote copy took that main merge while a local fix was committed, then
+# pulled with a merge. Every path is Markdown, so the code review gate reads exempt.
 # Leaves the landed commit in revert-landed and GitHub's squash of the head in
 # revert-merged. Args: case_dir variant
 add_revert_repo() {
@@ -6961,7 +6963,7 @@ add_revert_repo() {
       git -C "$repo" checkout -q "$base" -- notes
       rm "$repo/notes/c.md"
       ;;
-    clean|sync|sync-long|sync-updated|base-merged|upstream-landed) git -C "$repo" checkout -q -b pr ;;
+    clean|sync|sync-long|sync-updated|base-merged|upstream-landed|pulled-update) git -C "$repo" checkout -q -b pr ;;
     followup)
       git -C "$repo" checkout -q -b pr
       printf 'three\n' > "$repo/notes/a.md"
@@ -7003,6 +7005,17 @@ add_revert_repo() {
       revert_commit 2026-01-05T00:00:00Z 'Land a later note'
       git -C "$repo" checkout -q pr
       revert_merge 2026-01-05T01:00:00Z "Merge branch 'main' into pr" main
+      ;;
+    pulled-update)
+      git -C "$repo" checkout -q main
+      printf 'later\n' > "$repo/notes/z.md"
+      revert_commit 2026-01-05T00:00:00Z 'Land a later note'
+      git -C "$repo" checkout -q -b pr-remote pr
+      revert_merge 2026-01-05T01:00:00Z "Merge branch 'main' into pr" main
+      git -C "$repo" checkout -q pr
+      printf 'fix\n' > "$repo/notes/f.md"
+      revert_commit 2026-01-05T02:00:00Z 'Fix my note'
+      revert_merge 2026-01-05T03:00:00Z "Merge branch 'pr' of origin into pr" pr-remote
       ;;
   esac
   head=$(git -C "$repo" rev-parse HEAD)
@@ -7199,7 +7212,7 @@ test_upstream_sync_refuses_squash_and_rebase() {
       run_revert_merge "$case_dir" -- "${method[@]}"
     fi
     expect_code 1 "$RC" "sync-refuses $args: an upstream sync must not merge flattened"$'\n'"$(cat "$case_dir/stderr")"
-    assert_grep "merge commit ${merge:0:12} brings in ${parent:0:12}, which main does not hold" "$case_dir/stderr" \
+    assert_grep "merges in commits main does not hold (an upstream sync, another unlanded branch, or a branch that landed by squash): merge commit ${merge:0:12} brings in ${parent:0:12}" "$case_dir/stderr" \
       "sync-refuses $args: the refusal did not name the merge and the merged-in parent"$'\n'"$(cat "$case_dir/stderr")"
     assert_grep 're-run the same command ending in: -- --merge' "$case_dir/stderr" \
       "sync-refuses $args: the refusal did not name --merge"
@@ -7225,7 +7238,7 @@ test_upstream_sync_refuses_squash_and_rebase() {
     assert_no_grep '&page=' "$case_dir/gh.log" "sync-merges $args: a merge commit read the sync list"
   done
 
-  for variant in clean base-merged upstream-landed; do
+  for variant in clean base-merged upstream-landed pulled-update; do
     case_dir=$(make_case "sync-squashes-$variant")
     mkdir -p "$case_dir/wt"
     add_revert_repo "$case_dir" "$variant"

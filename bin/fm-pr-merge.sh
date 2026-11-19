@@ -312,11 +312,13 @@
 # pull request whose verified head merged in a lineage its base branch does not
 # hold merges only as a merge commit. A squash or rebase, the implicit --squash
 # default included, is refused before any captain hold or forge write, and the
-# refusal names -- --merge. github_verify_sync_method owns the rule: among the
-# commits of compare/BASE...HEAD, a merge commit one of whose parents after the
-# first is also in that list. A merge of the base into the branch, this
-# script's own behind-base update included, has only its first parent there and
-# keeps squashing. A commit list that cannot be read whole refuses too, and
+# refusal names -- --merge. github_side_merges owns the rule: among the commits
+# of compare/BASE...HEAD, a merge commit one of whose parents after the first is
+# also in that list and brings in at least one single-parent commit its first
+# parent does not hold. A merge of the base into the branch, this script's own
+# behind-base update included, has only its first parent there and keeps
+# squashing, and so does a pull of such an update, which brings in only merge
+# commits. A commit list that cannot be read whole refuses too, and
 # --merge needs no read. GitLab and Forgejo are not checked: this script
 # imposes no squash there, and the fork lives on GitHub.
 # Behind base (fork patch, docs/fork-decisions.md 2026-11-03): GitHub refuses
@@ -2291,7 +2293,9 @@ github_verify_no_revert() {
 }
 
 # The merge commits of the verified head that merged in a lineage its base
-# lacks, one "<merge sha> <merged-in parent sha>" line each on stdout, read
+# lacks, one "<merge sha> <merged-in parent sha>" line each on stdout: a listed
+# later parent counts only when it brings in a single-parent listed commit the
+# merge's first parent does not reach, so a pulled base update passes. Read
 # from every page of compare/BASE...HEAD so a long list is judged whole. It
 # returns 1, with the reason on stdout instead, when that list cannot be read
 # completely. Args: owner/repo base-branch head
@@ -2348,11 +2352,34 @@ EOF
     printf 'the commits between %s and %s do not include that head' "$base" "$head"
     return 1
   fi
-  printf '%s' "$rows" | awk -F '\t' '$1 == "c" { listed[$2] = 1; sha[++n] = $2; parents[n] = $3 }
+  printf '%s' "$rows" | awk -F '\t' '
+    $1 == "c" { listed[$2] = 1; sha[++n] = $2; parents[$2] = $3 }
+    # Marks in seen[] every listed commit reachable from start through listed
+    # parents, start included, tagged with mark.
+    function walk(start, mark,   stack, top, c, q, np, i) {
+      top = 0
+      if (start in listed) stack[++top] = start
+      while (top > 0) {
+        c = stack[top--]
+        if (seen[c] == mark) continue
+        seen[c] = mark
+        np = split(parents[c], q, " ")
+        for (i = 1; i <= np; i++) if ((q[i] in listed) && seen[q[i]] != mark) stack[++top] = q[i]
+      }
+    }
     END {
-      for (i = 1; i <= n; i++) {
-        k = split(parents[i], p, " ")
-        for (j = 2; j <= k; j++) if (p[j] in listed) print sha[i], p[j]
+      for (m = 1; m <= n; m++) {
+        k = split(parents[sha[m]], p, " ")
+        for (j = 2; j <= k; j++) {
+          if (!(p[j] in listed)) continue
+          split("", seen); walk(p[1], "first")
+          for (c in seen) first[c] = 1
+          split("", seen); walk(p[j], "side")
+          found = 0
+          for (c in seen) if (!(c in first) && split(parents[c], q, " ") == 1) { found = 1; break }
+          split("", first)
+          if (found) print sha[m], p[j]
+        }
       }
     }'
 }
@@ -2377,14 +2404,14 @@ github_verify_sync_method() {
   while read -r merge parent; do
     shown=$((shown + 1))
     [ "$shown" -le 3 ] || continue
-    printf '  - head %s is an upstream sync or merges another unlanded lineage: merge commit %s brings in %s, which %s does not hold\n' \
-      "$FM_PR_MERGE_HEAD" "${merge:0:12}" "${parent:0:12}" "$FM_PR_GITHUB_BASE" >&2
+    printf '  - head %s merges in commits %s does not hold (an upstream sync, another unlanded branch, or a branch that landed by squash): merge commit %s brings in %s\n' \
+      "$FM_PR_MERGE_HEAD" "$FM_PR_GITHUB_BASE" "${merge:0:12}" "${parent:0:12}" >&2
   done <<EOF
 $found
 EOF
   [ "$shown" -le 3 ] || printf '  - and %s more such merge commits\n' "$((shown - 3))" >&2
   echo "error: a squash or rebase drops that ancestry, so the next upstream sync merges against an old base and fleet-updates counts the fork behind; re-run the same command ending in: -- --merge" >&2
-  echo "error: when this is not an upstream sync, rebuild the branch without merging the other branch's unlanded commits" >&2
+  echo "error: when this is not an upstream sync, rebase the branch onto $FM_PR_GITHUB_BASE without the other branch's commits" >&2
   return 1
 }
 
