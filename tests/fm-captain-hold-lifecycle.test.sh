@@ -179,6 +179,9 @@ case "${1:-} ${2:-}" in
       .merge_commit_sha*) printf '%s\n' 9999999999999999999999999999999999999999 ;;
     esac
     ;;
+  # The upstream-sync read (bin/fm-pr-merge.sh), already through its --jq
+  # filter: no commit beyond the base, so the default squash stands.
+  "api repos/"*"/compare/"*"&page="*) printf 't\t0\t%s\n' 8888888888888888888888888888888888888888 ;;
   "api repos/"*"/compare/"*) printf '%s\t%s\t\n' 8888888888888888888888888888888888888888 8888888888888888888888888888888888888888 ;;
   "api repos/"*"/commits?"*) printf 'count\t0\n' ;;
   "api repos/"*) printf '%s\n' '{"name":"main","protected":false}' ;;

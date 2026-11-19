@@ -308,6 +308,19 @@
 # work, waives the pre-merge refusal for one merge; like --allow-red it is
 # refused while the away-posture record exists, and it is refused on GitLab and
 # Forgejo, whose merges this check does not read yet.
+# Upstream syncs (fork patch, docs/fork-decisions.md 2026-11-19): a GitHub
+# pull request whose verified head merged in a lineage its base branch does not
+# hold merges only as a merge commit. A squash or rebase, the implicit --squash
+# default included, is refused before any captain hold or forge write, and the
+# refusal names -- --merge. github_side_merges owns the rule: among the commits
+# of compare/BASE...HEAD, a merge commit one of whose parents after the first is
+# also in that list and brings in a commit its first parent does not hold,
+# other than a merge whose own first parent is listed. A merge of the base into
+# the branch, this script's own behind-base update included, has only its first
+# parent there and keeps squashing, and so does a pull of such an update, which
+# brings in only that kind of merge. A commit list that cannot be read whole refuses too, and
+# --merge needs no read. GitLab and Forgejo are not checked: this script
+# imposes no squash there, and the fork lives on GitHub.
 # Behind base (fork patch, docs/fork-decisions.md 2026-11-03): GitHub refuses
 # to merge a pull request whose base branch requires it up to date while
 # mergeStateStatus reads BEHIND. Once every gate above passes at the verified
@@ -2279,6 +2292,132 @@ github_verify_no_revert() {
   return 1
 }
 
+# The merge commits of the verified head that merged in a lineage its base
+# lacks, one "<merge sha> <merged-in parent sha>" line each on stdout: a listed
+# later parent counts only when it brings in a listed commit the merge's first
+# parent does not reach, other than a merge continuing a listed first parent,
+# so a pulled base update passes. Read
+# from every page of compare/BASE...HEAD so a long list is judged whole. It
+# returns 1, with the reason on stdout instead, when that list cannot be read
+# completely. Args: owner/repo base-branch head
+github_side_merges() {
+  local repo=$1 base=$2 head=$3 page=1 pages=1 total='' pinned='' out first rows=''
+  local kind page_total page_base sha parents parent count
+  while [ "$page" -le "$pages" ]; do
+    if ! out=$(gh api "repos/$repo/compare/${pinned:-$base}...$head?per_page=100&page=$page" \
+      --jq '"t\t\(.total_commits)\t\(.base_commit.sha // "")", (.commits[]? | "c\t\(.sha)\t\(if (.parents | type) == "array" then [.parents[].sha] | join(" ") else "-" end)")' \
+      2>/dev/null); then
+      printf 'page %s of the commits between %s and %s could not be read' "$page" "$base" "$head"
+      return 1
+    fi
+    first=${out%%$'\n'*}
+    IFS=$'\t' read -r kind page_total page_base <<EOF
+$first
+EOF
+    if [ "$kind" != t ] || ! [[ "$page_total" =~ ^[0-9]+$ ]] || ! fm_pr_head_valid "$page_base"; then
+      printf 'page %s of the commits between %s and %s carried no commit count or base commit' "$page" "$base" "$head"
+      return 1
+    fi
+    if [ -z "$total" ]; then
+      total=$page_total
+      pinned=$page_base
+      pages=$(( (total + 99) / 100 ))
+    elif [ "$page_total" != "$total" ] || [ "$page_base" != "$pinned" ]; then
+      printf 'the commits between %s and %s changed while they were read' "$base" "$head"
+      return 1
+    fi
+    [ "$out" = "$first" ] || rows="$rows${out#*$'\n'}"$'\n'
+    page=$((page + 1))
+  done
+  while IFS=$'\t' read -r kind sha parents; do
+    [ -n "$kind" ] || continue
+    if [ "$kind" != c ] || ! fm_pr_head_valid "$sha" || [ -z "$parents" ] || [ "$parents" = - ]; then
+      printf 'a commit between %s and %s was listed without its sha or parents' "$base" "$head"
+      return 1
+    fi
+    for parent in $parents; do
+      if ! fm_pr_head_valid "$parent"; then
+        printf 'commit %s was listed with an invalid parent' "$sha"
+        return 1
+      fi
+    done
+  done <<EOF
+$rows
+EOF
+  count=$(printf '%s' "$rows" | awk -F '\t' '$1 == "c" && !seen[$2]++' | wc -l | tr -d ' ')
+  if [ "$count" != "$total" ] || [ "$(printf '%s' "$rows" | grep -c '^c')" != "$total" ]; then
+    printf 'only %s of the %s commits between %s and %s were listed' "$count" "$total" "$base" "$head"
+    return 1
+  fi
+  if [ "$total" -gt 0 ] && ! printf '%s' "$rows" | grep -q "^c"$'\t'"$head"$'\t'; then
+    printf 'the commits between %s and %s do not include that head' "$base" "$head"
+    return 1
+  fi
+  printf '%s' "$rows" | awk -F '\t' '
+    $1 == "c" { listed[$2] = 1; sha[++n] = $2; parents[$2] = $3 }
+    # Marks in seen[] every listed commit reachable from start through listed
+    # parents, start included, tagged with mark.
+    function walk(start, mark,   stack, top, c, q, np, i) {
+      top = 0
+      if (start in listed) stack[++top] = start
+      while (top > 0) {
+        c = stack[top--]
+        if (seen[c] == mark) continue
+        seen[c] = mark
+        np = split(parents[c], q, " ")
+        for (i = 1; i <= np; i++) if ((q[i] in listed) && seen[q[i]] != mark) stack[++top] = q[i]
+      }
+    }
+    END {
+      for (m = 1; m <= n; m++) {
+        k = split(parents[sha[m]], p, " ")
+        for (j = 2; j <= k; j++) {
+          if (!(p[j] in listed)) continue
+          split("", seen); walk(p[1], "first")
+          for (c in seen) first[c] = 1
+          split("", seen); walk(p[j], "side")
+          found = 0
+          # A merge there continuing a listed first parent is a pulled base
+          # update; any other commit there is work the base lacks.
+          for (c in seen) if (!(c in first) && (split(parents[c], q, " ") == 1 || !(q[1] in listed))) { found = 1; break }
+          split("", first)
+          if (found) print sha[m], p[j]
+        }
+      }
+    }'
+}
+
+# The upstream-sync gate (see the header) at the verified head. A merge commit
+# keeps every ancestry, so it needs no read.
+github_verify_sync_method() {
+  local method found merge parent shown=0
+  github_caller_method_is merge && return 0
+  method=${FM_PR_GITHUB_CALLER_METHOD:-squash (the default)}
+  if ! found=$(github_side_merges "$PR_OWNER/$PR_REPO" "$FM_PR_GITHUB_BASE" "$FM_PR_MERGE_HEAD"); then
+    printf 'error: refusing to merge %s with %s\n  - whether head %s merges in a lineage %s does not hold could not be read: %s\n' \
+      "$URL" "$method" "$FM_PR_MERGE_HEAD" "$FM_PR_GITHUB_BASE" "$found" >&2
+    echo "error: retry the merge; when the pull request is an upstream sync, re-run the same command ending in: -- --merge" >&2
+    return 1
+  fi
+  if [ -z "$found" ]; then
+    printf 'verified: head %s merges in no lineage outside %s\n' "$FM_PR_MERGE_HEAD" "$FM_PR_GITHUB_BASE" >&2
+    return 0
+  fi
+  printf 'error: refusing to merge %s with %s\n' "$URL" "$method" >&2
+  while read -r merge parent; do
+    shown=$((shown + 1))
+    [ "$shown" -le 3 ] || continue
+    printf '  - head %s merges in commits %s does not hold (an upstream sync, another unlanded branch, or a branch that landed by squash): merge commit %s brings in %s\n' \
+      "$FM_PR_MERGE_HEAD" "$FM_PR_GITHUB_BASE" "${merge:0:12}" "${parent:0:12}" >&2
+  done <<EOF
+$found
+EOF
+  [ "$shown" -le 3 ] || printf '  - and %s more such merge commits\n' "$((shown - 3))" >&2
+  echo "error: a squash or rebase drops that ancestry, so the next upstream sync merges against an old base and fleet-updates counts the fork behind; re-run the same command ending in: -- --merge" >&2
+  echo "error: when this is not an upstream sync, rebase the branch onto $FM_PR_GITHUB_BASE without the other branch's commits" >&2
+  return 1
+}
+
 # The post-merge landed-work check (see the header): reports, never refuses.
 github_report_merged_reverts() {
   local level=actionable
@@ -2586,6 +2725,7 @@ case "$PROVIDER" in
         exit 1
       fi
       github_verify_no_revert || exit 1
+      github_verify_sync_method || exit 1
       if ! require_code_review; then
         [ "$FM_PR_GITHUB_BRANCH_UPDATED" = false ] || [ "$CODE_REVIEW_STATUS" -ne 1 ] \
           || printf 'error: the update from %s changed the pull request'"'"'s diff, so its earlier review record does not cover head %s; it needs a fresh review before it merges\n' \
@@ -2617,6 +2757,7 @@ case "$PROVIDER" in
         fi
         github_update_behind_branch || exit 1
         github_verify_no_revert || exit 1
+        github_verify_sync_method || exit 1
         if ! require_code_review; then
           [ "$CODE_REVIEW_STATUS" -ne 1 ] \
             || printf 'error: the update from %s changed the pull request'"'"'s diff, so its earlier review record does not cover head %s; it needs a fresh review before it merges\n' \
