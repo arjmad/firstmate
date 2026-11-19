@@ -1401,6 +1401,8 @@ test_claude_denied_mcp_servers_follow_the_relaunch() {
   assert_contains "$out" "denied every MCP server" "the relaunch must warn that every server is denied"
   assert_contains "$(cat "$dir/fake/literal")" '"allowedMcpServers":[]' \
     "a malformed list must deny the relaunched Claude worker every MCP server"
+  assert_contains "$(cat "$dir/fake/literal")" '--strict-mcp-config' \
+    "a malformed list must also skip the relaunched worker's other MCP configuration"
   assert_not_contains "$(cat "$dir/fake/literal")" 'deniedMcpServers' \
     "a malformed list must not fall back to the retired home file"
   : > "$dir/fake/literal"

@@ -1845,7 +1845,7 @@ Each relaunch installs a fresh worker extension with the home's current list, so
 
 ## Worker-denied MCP servers
 
-The fleet configuration renders `~/.config/fleet/claude/worker-denied-mcp-servers` (under `$XDG_CONFIG_HOME` when set), which names MCP servers that no Claude ship or scout may load, whichever Claude account it runs on.
+The fleet configuration renders `~/.config/fleet/claude/worker-denied-mcp-servers`, which names MCP servers that no Claude ship or scout may load, whichever Claude account it runs on.
 That rendered file is the one source: Firstmate reads it on every Claude ship and scout spawn and relaunch, from every home on the host, and `FM_WORKER_DENIED_MCP_SERVERS_FILE` points it at another path, as the test suite does.
 It exists for servers kept to the captain's own sessions and the helm, which a worker would otherwise load from the account's user-scope configuration.
 Each Claude ship and scout launch carries `"deniedMcpServers":[{"serverName":"<name>"},...]` in its inline `--settings` JSON, and Claude Code then refuses to start those servers for that session alone.
@@ -1854,7 +1854,7 @@ The helm, the captain's own sessions, and a secondmate's own agent keep them.
 The file uses the format of `config/crew-exclude-tools` above, with one server name per line instead of one tool name, and a name may not contain `.`, which Claude's setting does not accept.
 A file with no entries denies nothing.
 
-The list fails closed: when the file is missing, dangling, unreadable, not a regular file, or has a malformed entry, the spawn or relaunch prints a warning naming the file and the worker launches with `"allowedMcpServers":[]` instead, which denies it every MCP server.
+The list fails closed: when the file is missing, dangling, unreadable, not a regular file, or has a malformed entry, the spawn or relaunch prints a warning naming the file and the worker launches with `"allowedMcpServers":[]` and `--strict-mcp-config` instead, which deny it every MCP server; the flag keeps a project's own `allowedMcpServers`, which Claude Code merges into that empty list, from admitting a server.
 A host without the rendered list therefore keeps dispatching Claude workers, with no MCP servers, rather than launching them with fewer denials.
 A raw launch command, which can reach Claude behind any wrapper, and the T3 Code backend, whose command lines Firstmate does not build, cannot carry either setting, so they refuse whenever the list names a server or is unusable.
 Other runtimes do not read Claude's MCP configuration, so they neither read nor refuse on the list; a server registered in another runtime's own MCP configuration is not covered.

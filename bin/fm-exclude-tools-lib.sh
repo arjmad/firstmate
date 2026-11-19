@@ -86,11 +86,11 @@ fm_exclude_tools_check() {
 }
 
 # fm_worker_denied_mcp_servers_file: print the path of the worker-denied MCP
-# server list, the fleet-rendered ~/.config/fleet/claude/worker-denied-mcp-servers
-# under $XDG_CONFIG_HOME when set; FM_WORKER_DENIED_MCP_SERVERS_FILE overrides
-# it for tests and for a home outside that fleet.
+# server list, the fleet-rendered ~/.config/fleet/claude/worker-denied-mcp-servers;
+# FM_WORKER_DENIED_MCP_SERVERS_FILE overrides it for tests and for a home
+# outside that fleet.
 fm_worker_denied_mcp_servers_file() {
-  printf '%s' "${FM_WORKER_DENIED_MCP_SERVERS_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/fleet/claude/worker-denied-mcp-servers}"
+  printf '%s' "${FM_WORKER_DENIED_MCP_SERVERS_FILE:-$HOME/.config/fleet/claude/worker-denied-mcp-servers}"
 }
 
 # fm_worker_denied_mcp_servers_check <harness> <raw-launch 0|1> <backend>:

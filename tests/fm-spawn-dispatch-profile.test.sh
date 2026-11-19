@@ -2548,6 +2548,7 @@ test_claude_task_workers_launch_with_denied_mcp_servers() {
     export FM_WORKER_DENIED_MCP_SERVERS_FILE="$ROOT/tests/fixtures/worker-denied-mcp-servers-none"
     expect_code 0 "$status" "claude $kind spawn with a denied-server list should succeed"$'\n'"$out"
     assert_not_contains "$out" "denied every MCP server" "a valid list must not fall back to denying every server"
+    assert_not_contains "$(cat "$LAUNCH_LOG")" "--strict-mcp-config" "a valid list must keep the worker's other MCP servers"
     settings=$(claude_settings_json_arg "$(cat "$LAUNCH_LOG")")
     case "$kind" in
       secondmate)
@@ -2605,6 +2606,8 @@ test_claude_denied_mcp_servers_fail_closed() {
     settings=$(claude_settings_json_arg "$(cat "$LAUNCH_LOG")")
     printf '%s' "$settings" | jq -e '.allowedMcpServers == [] and (has("deniedMcpServers") | not)' >/dev/null \
       || fail "a $setup denied-server list did not deny every MCP server: $settings"
+    assert_contains "$(cat "$LAUNCH_LOG")" " --strict-mcp-config " \
+      "a $setup denied-server list must also skip every other MCP configuration"
   done
   # A raw command cannot carry any denial, so it refuses whether the list names
   # servers or is missing.

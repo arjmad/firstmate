@@ -100,7 +100,7 @@ Off in `--settings` wins over user and project settings for both keys on Claude 
 
 ## Worker-denied MCP servers
 
-A Claude ship or scout also carries `"deniedMcpServers"` for each server the fleet-rendered worker-denied list names in that inline `--settings` JSON, or `"allowedMcpServers":[]` when that list is missing or invalid; [`docs/configuration.md`](../../../../../docs/configuration.md#worker-denied-mcp-servers) owns the list and its fallback.
+A Claude ship or scout also carries `"deniedMcpServers"` for each server the fleet-rendered worker-denied list names in that inline `--settings` JSON, or `"allowedMcpServers":[]` with `--strict-mcp-config` when that list is missing or invalid; [`docs/configuration.md`](../../../../../docs/configuration.md#worker-denied-mcp-servers) owns the list and its fallback.
 
 ## Compaction window
 
