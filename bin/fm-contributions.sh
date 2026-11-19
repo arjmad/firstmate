@@ -80,7 +80,8 @@
 # dependent waves: core, six independent reads (seven when FM_CONTRIBUTIONS_REPLY_AGE
 # is set), then the closing head read;
 # an issue has two waves. Before starting a URL, poll reserves the smaller of
-# the forge window left when reads begin and 15 seconds for those waves. URLs needing forge
+# the forge window left when reads begin (less one second for a clock tick)
+# and 15 seconds for those waves. URLs needing forge
 # reads are sorted by URL and rotated by the current five-minute epoch bucket
 # modulo their count, without stored scheduling state or freshness-based
 # reordering. Terminal URLs settle separately before the forge budget starts
@@ -236,7 +237,7 @@ jq_lib() { # jq options/program via final argument
 }
 
 oversized_records() { # ./<task>/contributions.json paths over the 1 MiB cap, one per line
-  (cd "$DATA" && find . -mindepth 2 -maxdepth 2 -type f -name contributions.json -size +1048576c -print) 2>/dev/null
+  (CDPATH= cd -- "$DATA" && find . -mindepth 2 -maxdepth 2 -type f -name contributions.json -size +1048576c -print) 2>/dev/null
 }
 
 read_saved() {
@@ -705,7 +706,7 @@ poll() {
   now=$(date +%s)
   DEADLINE=$((now + BUDGET))
   [ "$DEADLINE" -le "$CHECK_CUTOFF" ] || DEADLINE=$CHECK_CUTOFF
-  OBSERVATION_RESERVE=$((DEADLINE - now < 15 ? DEADLINE - now : 15))
+  OBSERVATION_RESERVE=$((DEADLINE - now - 1 < 15 ? DEADLINE - now - 1 : 15))
   [ "$OBSERVATION_RESERVE" -ge 1 ] || OBSERVATION_RESERVE=1
   while IFS=$'\t' read -r -a row; do
     [ $((DEADLINE - $(date +%s))) -ge "$OBSERVATION_RESERVE" ] || break
