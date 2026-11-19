@@ -242,7 +242,7 @@ jq_lib() { # jq options/program via final argument
 }
 
 oversized_records() { # ./<task>/contributions.json paths over the 1 MiB cap, one per line
-  (CDPATH= cd -- "$DATA" && find . -mindepth 2 -maxdepth 2 -type f -name contributions.json -size +1048576c -print) 2>/dev/null
+  (CDPATH='' cd -- "$DATA" && find . -mindepth 2 -maxdepth 2 -type f -name contributions.json -size +1048576c -print) 2>/dev/null
 }
 
 read_saved() {
