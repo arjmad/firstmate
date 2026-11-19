@@ -7242,6 +7242,8 @@ test_upstream_sync_refuses_squash_and_rebase() {
   add_revert_repo "$case_dir" sync-long
   run_revert_merge "$case_dir"
   expect_code 1 "$RC" "sync-long: a sync past the first page must refuse"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "merge commit $(git -C "$case_dir/revert-repo" rev-parse --short=12 pr) brings in $(git -C "$case_dir/revert-repo" rev-parse --short=12 pr^2)" \
+    "$case_dir/stderr" "sync-long: the refusal did not name the merge and the commit it brings in"
   assert_grep "compare/$(git -C "$case_dir/revert-repo" rev-parse main)...$(cat "$case_dir/github-head")?per_page=100&page=2" \
     "$case_dir/gh.log" "sync-long: page 2 was not read against the pinned base"
   pass "fm-pr-merge refuses to squash or rebase an upstream sync and names --merge, while base merges keep squashing"
