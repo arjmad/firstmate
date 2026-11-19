@@ -2625,6 +2625,7 @@ test_claude_denied_mcp_servers_fail_closed() {
     status=$?
     expect_code 1 "$status" "a $setup claude spawn that must deny MCP servers must refuse"$'\n'"$out"
     assert_contains "$out" "raw launch command cannot carry that denial" "the $setup refusal must say why"
+    assert_not_contains "$out" "this Claude worker is denied every MCP server" "the $setup refusal must not claim a worker launched"
     [ ! -s "$LAUNCH_LOG" ] || fail "claude launched despite a $setup denied-server list"
     [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "the $setup refusal still wrote a task record"
   done

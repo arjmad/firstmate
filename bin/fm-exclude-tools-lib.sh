@@ -109,7 +109,9 @@ fm_worker_denied_mcp_servers_check() {
   local harness=$1 raw=$2 backend=$3 file names='' problem=''
   [ "$raw" = 1 ] || [ "$harness" = claude ] || return 0
   file=$(fm_worker_denied_mcp_servers_file)
-  if [ ! -e "$file" ]; then
+  if [ -L "$file" ] && [ ! -e "$file" ]; then
+    problem='is a dangling link'
+  elif [ ! -e "$file" ]; then
     problem='is missing'
   elif [ ! -f "$file" ] || [ ! -r "$file" ]; then
     problem='is not a readable regular file'
@@ -120,19 +122,20 @@ fm_worker_denied_mcp_servers_check() {
     *.*) problem="has a server name with '.', which Claude's deniedMcpServers does not accept" ;;
     esac
   fi
-  if [ -n "$problem" ]; then
-    echo "warning: the worker-denied MCP server list $file $problem, so this Claude worker is denied every MCP server; render the list from the fleet configuration or set FM_WORKER_DENIED_MCP_SERVERS_FILE" >&2
-    names='*'
-  fi
+  [ -z "$problem" ] || names='*'
   [ -n "$names" ] || return 0
+  local need="$file names MCP servers to deny Claude workers"
+  [ -z "$problem" ] || need="the worker-denied MCP server list $file $problem, so Claude workers must be denied every MCP server"
   if [ "$raw" = 1 ]; then
-    echo "error: $file requires denying MCP servers to Claude workers, but a raw launch command cannot carry that denial; launch with a harness name instead" >&2
+    echo "error: $need, but a raw launch command cannot carry that denial; launch with a harness name instead" >&2
     return 1
   fi
   if [ "$backend" = t3code ]; then
-    echo "error: $file requires denying MCP servers to Claude workers, but backend=t3code builds its own claude command and cannot carry that denial; choose another backend" >&2
+    echo "error: $need, but backend=t3code builds its own claude command and cannot carry that denial; choose another backend" >&2
     return 1
   fi
+  [ -z "$problem" ] \
+    || echo "warning: the worker-denied MCP server list $file $problem, so this Claude worker is denied every MCP server; render the list from the fleet configuration or set FM_WORKER_DENIED_MCP_SERVERS_FILE" >&2
   printf '%s' "$names"
 }
 
