@@ -134,6 +134,8 @@
 # newly durable signals for the authenticated check to surface.
 # ack removes only the named pending token.
 # A crash after enqueue can duplicate a wake but cannot consume the pending signal.
+# A pending signal whose wake a crash left unqueued is announced at the start
+# of the next poll, before any forge read, whether or not its URL is read.
 #
 # Re-raising unanswered review threads is opt-in. Unless
 # FM_CONTRIBUTIONS_REPLY_AGE is set to a positive number of seconds, poll makes
@@ -652,6 +654,20 @@ clear_unsupported_errors() {
     | [$task,.url] | @tsv')
 }
 
+replay_unnotified() { # announce saved signals whose wake a crash left unqueued, before any forge read
+  local task url replayed=0
+  while IFS=$'\t' read -r task url; do
+    fm_pr_task_id_valid "$task" || { printf 'contributions: invalid durable task id\n'; continue; }
+    jq --arg task "$task" --arg url "$url" '.[] | select(.task == $task) | .records[] | select(.url == $url)' \
+      "$TMP/saved.json" > "$TMP/replay.json"
+    publish_pending "$task" "$url" "$TMP/replay.json"
+    replayed=1
+  done < <(jq -r '.[] | .task as $task | .records[] | . as $r
+    | select(any($r.pending[]; .token as $t | ($r.notified // [] | index($t)) == null))
+    | [$task, $r.url] | @tsv' "$TMP/saved.json")
+  [ "$replayed" -eq 0 ] || read_saved
+}
+
 poll() {
   local task url old kind error observed why now unreported=$'\n'
   local -a row
@@ -659,6 +675,7 @@ poll() {
   get_input
   read_saved
   [ "$ERRORS" -eq 0 ] || printf 'contributions: %s unreadable durable record(s)\n' "$ERRORS"
+  replay_unnotified
   clear_unsupported_errors
   # Only supported URLs enter final settlement and the forge-read rotation.
   # One line per distinct URL: its settlement, the URL, then every owning task.
