@@ -602,8 +602,9 @@
 #   Claude ship or scout then carries
 #   "deniedMcpServers":[{"serverName":"<name>"},...] in its inline
 #   __CLAUDESETTINGS__ JSON, or "allowedMcpServers":[] plus
-#   --strict-mcp-config when the list is missing or invalid, which denies
-#   every MCP server even where another settings scope allows some.
+#   --strict-mcp-config --no-chrome when the list is missing or invalid,
+#   which denies every MCP server, Claude in Chrome's included, even where
+#   another settings scope allows some.
 # Worker compaction window:
 #   docs/configuration.md "Worker compaction window" owns
 #   config/crew-compact-window. Resolve it with bin/fm-exclude-tools-lib.sh
@@ -3459,8 +3460,9 @@ launch_template() {
   # The same inline JSON carries "deniedMcpServers" for the servers the
   # fleet-rendered worker-denied list names, which Claude Code refuses to
   # start for that session alone ("MCP server blocked by enterprise policy",
-  # 2.1.319), or "allowedMcpServers":[] and --strict-mcp-config, which a
-  # merged project allowlist cannot reopen, when that list is missing or invalid
+  # 2.1.319), or "allowedMcpServers":[] with --strict-mcp-config --no-chrome,
+  # which a merged project allowlist cannot reopen, when that list is missing
+  # or invalid
   # (docs/fork-decisions/2026-11-11-worker-denied-mcp-servers.md,
   # docs/fork-decisions/2026-11-19-worker-denied-mcp-servers-fleet-list.md).
   # Claude Code's --settings flag takes one value, a file path or an inline
@@ -8574,7 +8576,7 @@ case "$LAUNCH" in
     claude_strict_mcp=
     if [ "$DENIED_MCP_SERVERS" = '*' ]; then
       claude_denied_mcp=',"allowedMcpServers":[]'
-      claude_strict_mcp=' --strict-mcp-config'
+      claude_strict_mcp=' --strict-mcp-config --no-chrome'
     elif [ -n "$DENIED_MCP_SERVERS" ]; then
       IFS=, read -r -a claude_denied_names <<<"$DENIED_MCP_SERVERS"
       for claude_denied_name in "${claude_denied_names[@]}"; do

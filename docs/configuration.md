@@ -1854,7 +1854,8 @@ The helm, the captain's own sessions, and a secondmate's own agent keep them.
 The file uses the format of `config/crew-exclude-tools` above, with one server name per line instead of one tool name, and a name may not contain `.`, which Claude's setting does not accept.
 A file with no entries denies nothing.
 
-The list fails closed: when the file is missing, dangling, unreadable, not a regular file, or has a malformed entry, the spawn or relaunch prints a warning naming the file and the worker launches with `"allowedMcpServers":[]` and `--strict-mcp-config` instead, which deny it every MCP server; the flag keeps a project's own `allowedMcpServers`, which Claude Code merges into that empty list, from admitting a server.
+The list fails closed: when the file is missing, dangling, unreadable, not a regular file, or has a malformed entry, the spawn or relaunch prints a warning naming the file and the worker launches with `"allowedMcpServers":[]`, `--strict-mcp-config`, and `--no-chrome` instead, which deny it every MCP server; the flags keep a project's own `allowedMcpServers`, which Claude Code merges into that empty list, from admitting a configured server or Claude in Chrome.
+Claude Code refuses `--strict-mcp-config` on a host with an administrator `managed-mcp.json`, so there the fallback stops the worker at startup instead.
 A host without the rendered list therefore keeps dispatching Claude workers, with no MCP servers, rather than launching them with fewer denials.
 A raw launch command, which can reach Claude behind any wrapper, and the T3 Code backend, whose command lines Firstmate does not build, cannot carry either setting, so they refuse whenever the list names a server or is unusable.
 Other runtimes do not read Claude's MCP configuration, so they neither read nor refuse on the list; a server registered in another runtime's own MCP configuration is not covered.

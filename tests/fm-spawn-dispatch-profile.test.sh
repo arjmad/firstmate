@@ -2606,7 +2606,7 @@ test_claude_denied_mcp_servers_fail_closed() {
     settings=$(claude_settings_json_arg "$(cat "$LAUNCH_LOG")")
     printf '%s' "$settings" | jq -e '.allowedMcpServers == [] and (has("deniedMcpServers") | not)' >/dev/null \
       || fail "a $setup denied-server list did not deny every MCP server: $settings"
-    assert_contains "$(cat "$LAUNCH_LOG")" " --strict-mcp-config " \
+    assert_contains "$(cat "$LAUNCH_LOG")" " --strict-mcp-config --no-chrome " \
       "a $setup denied-server list must also skip every other MCP configuration"
   done
   # A raw command cannot carry any denial, so it refuses whether the list names
