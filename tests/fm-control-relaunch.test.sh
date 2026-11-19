@@ -1398,7 +1398,8 @@ test_claude_denied_mcp_servers_follow_the_relaunch() {
   printf '%s\n' 'two words' > "$list"
   out=$(FM_WORKER_DENIED_MCP_SERVERS_FILE="$list" run_control "$dir" "$id" relaunch --note "bad list"); rc=$?
   expect_code 0 "$rc" "a malformed denied-server list must still relaunch, denying every server"$'\n'"$out"
-  assert_contains "$out" "denied every MCP server" "the relaunch must warn that every server is denied"
+  [ "$(printf '%s\n' "$out" | grep -c "denied every MCP server")" = 1 ] \
+    || fail "the relaunch must warn exactly once that every server is denied: $out"
   assert_contains "$(cat "$dir/fake/literal")" '"allowedMcpServers":[]' \
     "a malformed list must deny the relaunched Claude worker every MCP server"
   assert_contains "$(cat "$dir/fake/literal")" '--strict-mcp-config' \
