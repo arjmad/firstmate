@@ -85,14 +85,15 @@
 # reads are sorted by URL and rotated by the current five-minute epoch bucket
 # modulo their count, without stored scheduling state or freshness-based
 # reordering. Terminal URLs settle separately before the forge budget starts
-# and consume no rotation slots.
+# and consume no rotation slots, but that settlement, like the rest of the
+# local preparation, spends the same per-check bound.
 # A deliberately smaller configured budget remains bounded and may be
 # unmeasured, rather than being mislabeled unavailable. Each distinct supported
 # URL is attempted at most once per poll and its observation applied to every owner.
 # A supported URL's final observation applies
 # to every owner without another forge read. When the budget refuses a read
 # mid-observation, that URL's records stay untouched and the poll moves to the
-# next URL that still has a full observation reserve; only a genuine forge
+# next URL that still has the observation reserve; only a genuine forge
 # failure, structural refusal or head change records an error.
 # API failure leaves error evidence; an expired or absent observation is not
 # silence. The error and its unavailable line name the first failing step: a
@@ -136,6 +137,8 @@
 # A crash after enqueue can duplicate a wake but cannot consume the pending signal.
 # A pending signal whose wake a crash left unqueued is announced at the start
 # of the next poll, before any forge read, whether or not its URL is read.
+# An unanswered re-raise is left to its observation, which recomputes it, and a
+# lone closed signal is announced only while its task's captain hold is open.
 #
 # Re-raising unanswered review threads is opt-in. Unless
 # FM_CONTRIBUTIONS_REPLY_AGE is set to a positive number of seconds, poll makes
@@ -655,16 +658,18 @@ clear_unsupported_errors() {
 }
 
 replay_unnotified() { # announce saved signals whose wake a crash left unqueued, before any forge read
-  local task url replayed=0
-  while IFS=$'\t' read -r task url; do
+  local task url owed replayed=0
+  while IFS=$'\t' read -r task url owed; do
     fm_pr_task_id_valid "$task" || { printf 'contributions: invalid durable task id\n'; continue; }
+    [ "$owed" != closed ] || "$SCRIPT_DIR/fm-captain-hold.sh" open "$task" 2>/dev/null || continue
     jq --arg task "$task" --arg url "$url" '.[] | select(.task == $task) | .records[] | select(.url == $url)' \
       "$TMP/saved.json" > "$TMP/replay.json"
     publish_pending "$task" "$url" "$TMP/replay.json"
     replayed=1
   done < <(jq -r '.[] | .task as $task | .records[] | . as $r
-    | select(any($r.pending[]; .token as $t | ($r.notified // [] | index($t)) == null))
-    | [$task, $r.url] | @tsv' "$TMP/saved.json")
+    | [$r.pending[] | select(.type != "unanswered" and (.token as $t | ($r.notified // [] | index($t)) == null)) | .type] as $owed
+    | select($owed | length > 0)
+    | [$task, $r.url, (if all($owed[]; . == "closed") then "closed" else "other" end)] | @tsv' "$TMP/saved.json")
   [ "$replayed" -eq 0 ] || read_saved
 }
 

@@ -1627,12 +1627,17 @@ test_signal_saved_before_a_crash_is_announced_without_a_forge_read() {
     head:null,author:"maintainer",body:"Please clarify the contract"}'
   mutate_record "$home" delivery ".records[0].checked_at=\"2026-09-15T08:00:00Z\" | .records[0].pending=[$event] | .records[0].seen=[\"comment:12:2026-09-16T08:01:00Z:\"]"
   mutate_record "$home" landed ".records[0].pending=[$event | .token=\"review:7:x:\" | .type=\"review\"] | .records[0].seen=[\"review:7:x:\"]"
+  record "$home" rethread 901 merged mergeable
+  mutate_record "$home" rethread ".records[0].pending=[$event | .token=\"unanswered:31:x\" | .type=\"unanswered\"]"
+  record "$home" released 902 closed mergeable
+  mutate_record "$home" released '.records[0].pending=[{token:"closed",type:"closed",source:"https://github.com/o/r/pull/902",head:null,body:"PR closed without merging"}] | .records[0].seen=["closed"]'
   /bin/date +%s > "$home/forge/clock"
   printf 'hang\n' > "$home/forge/fault"
   out=$(with_home "$home" env FM_CHECK_TIMEOUT=6 "$ROOT/bin/fm-contributions.sh" poll) \
     || fail 'poll failed with saved, unannounced signals'
   [ "$(printf '%s\n' "$out" | grep -Ec '^contribution-wake: check: contributions (delivery|landed) [0-9a-f]{64}$')" -eq 2 ] \
     || fail "saved signals left unannounced by a crash were not both announced: $out"
+  case "$out" in *rethread*|*released*) fail "replay announced an unanswered re-raise or a closure with no open hold: $out" ;; esac
   [ "$(grep -c 'contribution-' "$home/state/.wake-queue")" -eq 2 ] || fail 'saved signals did not each queue one wake'
   jq -e '.records[0].notified == ["comment:12:2026-09-16T08:01:00Z:"]' "$home/data/delivery/contributions.json" >/dev/null \
     || fail 'the announced live signal was not marked notified'
