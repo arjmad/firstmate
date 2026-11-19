@@ -2514,13 +2514,14 @@ test_claude_task_workers_launch_without_artifact_or_connectors() {
   pass "claude ships and scouts launch without the Artifact tool or claude.ai connectors; secondmates keep both"
 }
 
-# config/worker-denied-mcp-servers: a Claude ship or scout launches with the
-# listed servers in deniedMcpServers, read from the JSON the pane's shell would
-# hand claude; a secondmate keeps them, and an unreadable list fails closed.
-write_denied_mcp_file() {  # <home> <line>...
-  local home=$1
-  shift
-  printf '%s\n' "$@" > "$home/config/worker-denied-mcp-servers"
+# The fleet-rendered worker-denied MCP server list: a Claude ship or scout
+# launches with the listed servers in deniedMcpServers, read from the JSON the
+# pane's shell would hand claude; a secondmate keeps them, a retired home
+# config/worker-denied-mcp-servers is ignored, and a missing or invalid list
+# denies every MCP server.
+write_denied_mcp_file() {  # <line>... ; writes $CASE_DIR/fleet/worker-denied-mcp-servers
+  mkdir -p "$CASE_DIR/fleet"
+  printf '%s\n' "$@" > "$CASE_DIR/fleet/worker-denied-mcp-servers"
 }
 
 test_claude_task_workers_launch_with_denied_mcp_servers() {
@@ -2529,84 +2530,116 @@ test_claude_task_workers_launch_with_denied_mcp_servers() {
     id="claude-denymcp-$kind-z31"
     rec=$(make_spawn_case "claude-denymcp-$kind" claude "$id")
     read_case_record "$rec"
-    write_denied_mcp_file "$HOME_DIR" '# kept to the captain and the helm' '' '  homeassistant  ' 'monarch'
+    write_denied_mcp_file '# kept to the captain and the helm' '' '  homeassistant  ' $'monarch\r'
+    # The retired home file no longer adds or replaces a denial.
+    printf '%s\n' 'legacyserver' > "$HOME_DIR/config/worker-denied-mcp-servers"
+    export FM_WORKER_DENIED_MCP_SERVERS_FILE="$CASE_DIR/fleet/worker-denied-mcp-servers"
     case "$kind" in
-      ship) out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR") ;;
-      scout) out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout) ;;
+      ship) out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1) ;;
+      scout) out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout 2>&1) ;;
       secondmate)
         sm="$CASE_DIR/secondmate-home"
         make_seeded_secondmate_home "$sm" "$id"
         out=$(FM_TEST_CLAUDE_CONFIG_DIR="$CASE_DIR/claude-work" \
-          run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+          run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate 2>&1)
         ;;
     esac
     status=$?
+    export FM_WORKER_DENIED_MCP_SERVERS_FILE="$ROOT/tests/fixtures/worker-denied-mcp-servers-none"
     expect_code 0 "$status" "claude $kind spawn with a denied-server list should succeed"$'\n'"$out"
+    assert_not_contains "$out" "denied every MCP server" "a valid list must not fall back to denying every server"
+    assert_not_contains "$(cat "$LAUNCH_LOG")" "--strict-mcp-config" "a valid list must keep the worker's other MCP servers"
     settings=$(claude_settings_json_arg "$(cat "$LAUNCH_LOG")")
     case "$kind" in
       secondmate)
-        printf '%s' "$settings" | jq -e 'has("deniedMcpServers") | not' >/dev/null \
+        printf '%s' "$settings" | jq -e 'has("deniedMcpServers") or has("allowedMcpServers") | not' >/dev/null \
           || fail "claude secondmate settings denied MCP servers: $settings"
         ;;
       *)
-        printf '%s' "$settings" | jq -e '.deniedMcpServers == [{"serverName":"homeassistant"},{"serverName":"monarch"}] and .enableArtifact == false and .feedbackDrafts == "off"' >/dev/null \
-          || fail "claude $kind settings did not deny the listed MCP servers: $settings"
+        printf '%s' "$settings" | jq -e '.deniedMcpServers == [{"serverName":"homeassistant"},{"serverName":"monarch"}] and (has("allowedMcpServers") | not) and .enableArtifact == false and .feedbackDrafts == "off"' >/dev/null \
+          || fail "claude $kind settings did not deny exactly the rendered list's MCP servers: $settings"
         ;;
     esac
   done
-  # Without the file, or with no entries, the settings carry no denial.
+  # A rendered list with no entries, even without a final newline, denies
+  # nothing.
   id=claude-denymcp-empty-z31
   rec=$(make_spawn_case claude-denymcp-empty claude "$id")
   read_case_record "$rec"
-  write_denied_mcp_file "$HOME_DIR" '# nothing denied'
-  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  mkdir -p "$CASE_DIR/fleet"
+  printf '# nothing denied' > "$CASE_DIR/fleet/worker-denied-mcp-servers"
+  out=$(FM_WORKER_DENIED_MCP_SERVERS_FILE="$CASE_DIR/fleet/worker-denied-mcp-servers" \
+    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
   status=$?
   expect_code 0 "$status" "claude spawn with an empty denied-server list should succeed"$'\n'"$out"
+  assert_not_contains "$out" "denied every MCP server" "an empty list must not fall back to denying every server"
   settings=$(claude_settings_json_arg "$(cat "$LAUNCH_LOG")")
-  printf '%s' "$settings" | jq -e 'has("deniedMcpServers") | not' >/dev/null \
-    || fail "an empty denied-server list still added deniedMcpServers: $settings"
-  pass "claude ships and scouts launch with the home's denied MCP servers; secondmates and an empty list add none"
+  printf '%s' "$settings" | jq -e 'has("deniedMcpServers") or has("allowedMcpServers") | not' >/dev/null \
+    || fail "an empty denied-server list still denied MCP servers: $settings"
+  pass "claude ships and scouts launch with the rendered list's denied MCP servers; secondmates, an empty list, and the retired home file add none"
 }
 
 test_claude_denied_mcp_servers_fail_closed() {
-  local rec id out status n=0 setup
-  for setup in dangling malformed dotted directory raw raw-env raw-other; do
-    n=$((n + 1))
+  local rec id out status setup settings list
+  for setup in missing dangling directory unreadable malformed dotted; do
+    [ "$setup" != unreadable ] || [ "$(id -u)" != 0 ] || continue
+    id="claude-denymcp-closed-$setup-z32"
+    rec=$(make_spawn_case "claude-denymcp-closed-$setup" claude "$id")
+    read_case_record "$rec"
+    list="$CASE_DIR/fleet/worker-denied-mcp-servers"
+    mkdir -p "$CASE_DIR/fleet"
+    case "$setup" in
+      missing) ;;
+      dangling) ln -s "$CASE_DIR/fleet/absent" "$list" ;;
+      directory) mkdir "$list" ;;
+      unreadable) write_denied_mcp_file 'homeassistant' && chmod 000 "$list" ;;
+      malformed) write_denied_mcp_file 'homeassistant' 'two words' ;;
+      dotted) write_denied_mcp_file 'home.assistant' ;;
+    esac
+    out=$(FM_WORKER_DENIED_MCP_SERVERS_FILE="$list" \
+      run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
+    status=$?
+    [ "$setup" != unreadable ] || chmod 600 "$list"
+    expect_code 0 "$status" "claude spawn with a $setup denied-server list should still launch"$'\n'"$out"
+    assert_contains "$out" "$list" "the $setup warning must name the list"
+    assert_contains "$out" "denied every MCP server" "the $setup warning must say every server is denied"
+    settings=$(claude_settings_json_arg "$(cat "$LAUNCH_LOG")")
+    printf '%s' "$settings" | jq -e '.allowedMcpServers == [] and (has("deniedMcpServers") | not)' >/dev/null \
+      || fail "a $setup denied-server list did not deny every MCP server: $settings"
+    assert_contains "$(cat "$LAUNCH_LOG")" " --strict-mcp-config --no-chrome " \
+      "a $setup denied-server list must also skip every other MCP configuration"
+  done
+  # A raw command cannot carry any denial, so it refuses whether the list names
+  # servers or is missing.
+  for setup in raw raw-env raw-other raw-missing; do
     id="claude-denymcp-refuse-$setup-z32"
     rec=$(make_spawn_case "claude-denymcp-refuse-$setup" claude "$id")
     read_case_record "$rec"
+    list="$CASE_DIR/fleet/worker-denied-mcp-servers"
+    [ "$setup" = raw-missing ] || write_denied_mcp_file 'homeassistant'
     case "$setup" in
-      dangling) ln -s "$CASE_DIR/fleet/worker-denied-mcp-servers" "$HOME_DIR/config/worker-denied-mcp-servers" ;;
-      malformed) write_denied_mcp_file "$HOME_DIR" 'homeassistant' 'two words' ;;
-      directory) mkdir "$HOME_DIR/config/worker-denied-mcp-servers" ;;
-      dotted) write_denied_mcp_file "$HOME_DIR" 'home.assistant' ;;
-      raw | raw-env | raw-other) write_denied_mcp_file "$HOME_DIR" 'homeassistant' ;;
+      raw | raw-missing) out=$(FM_WORKER_DENIED_MCP_SERVERS_FILE="$list" run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "claude --dangerously-skip-permissions" 2>&1) ;;
+      raw-other) out=$(FM_WORKER_DENIED_MCP_SERVERS_FILE="$list" run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "./worker.sh --go" 2>&1) ;;
+      raw-env) out=$(FM_WORKER_DENIED_MCP_SERVERS_FILE="$list" run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "env -u CLAUDECODE claude --dangerously-skip-permissions" 2>&1) ;;
     esac
-    if [ "$setup" = raw ]; then
-      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "claude --dangerously-skip-permissions" 2>&1)
-    elif [ "$setup" = raw-other ]; then
-      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "./worker.sh --go" 2>&1)
-    elif [ "$setup" = raw-env ]; then
-      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "env -u CLAUDECODE claude --dangerously-skip-permissions" 2>&1)
-    else
-      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
-    fi
     status=$?
-    expect_code 1 "$status" "claude spawn with a $setup denied-server list must refuse"$'\n'"$out"
-    assert_contains "$out" "config/worker-denied-mcp-servers" "the $setup refusal must name the config file"
+    expect_code 1 "$status" "a $setup claude spawn that must deny MCP servers must refuse"$'\n'"$out"
+    assert_contains "$out" "raw launch command cannot carry that denial" "the $setup refusal must say why"
+    assert_not_contains "$out" "this Claude worker is denied every MCP server" "the $setup refusal must not claim a worker launched"
     [ ! -s "$LAUNCH_LOG" ] || fail "claude launched despite a $setup denied-server list"
     [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "the $setup refusal still wrote a task record"
   done
   # Another runtime loads none of these Claude servers, so it neither reads
-  # nor refuses on the list.
+  # nor warns on the list.
   id=claude-denymcp-codex-z33
   rec=$(make_spawn_case claude-denymcp-codex codex "$id")
   read_case_record "$rec"
-  ln -s "$CASE_DIR/fleet/worker-denied-mcp-servers" "$HOME_DIR/config/worker-denied-mcp-servers"
-  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
+  out=$(FM_WORKER_DENIED_MCP_SERVERS_FILE="$CASE_DIR/fleet/absent" \
+    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
   status=$?
   expect_code 0 "$status" "a codex spawn must not refuse on the Claude denied-server list"$'\n'"$out"
-  pass "an unreadable or malformed denied-server list, or any raw command, refuses before any launch or record"
+  assert_not_contains "$out" "denied every MCP server" "a codex spawn must not read the Claude denied-server list"
+  pass "a missing, unreadable, or malformed denied-server list denies every MCP server; any raw command refuses before any launch or record"
 }
 
 # config/crew-compact-window: a Claude ship or scout runs with

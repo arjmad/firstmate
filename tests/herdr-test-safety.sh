@@ -12,6 +12,10 @@ set -u
 # tests/lib.sh and bin/fm-gate-refuse-lib.sh for why firstmate's own suite,
 # which the no-mistakes gate runs from a gate worktree, must be exempt).
 export FM_GATE_REFUSE_BYPASS=1
+# Likewise pin the worker-denied MCP server list to tests/lib.sh's empty
+# fixture, so a raw launch is not refused on a runner without the fleet list.
+FM_WORKER_DENIED_MCP_SERVERS_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/worker-denied-mcp-servers-none"
+export FM_WORKER_DENIED_MCP_SERVERS_FILE
 
 HERDR_TEST_SAFETY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null

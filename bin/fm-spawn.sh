@@ -597,11 +597,14 @@
 #   before provisioning; __PIEXCLUDE__ and __CLAUDEEXCLUDE__ below own the Pi and
 #   Claude launch substitutions.
 # Worker-denied MCP servers:
-#   docs/configuration.md "Worker-denied MCP servers" owns
-#   config/worker-denied-mcp-servers. Resolve it with
-#   bin/fm-exclude-tools-lib.sh before provisioning; a Claude ship or scout
-#   then carries "deniedMcpServers":[{"serverName":"<name>"},...] in its
-#   inline __CLAUDESETTINGS__ JSON.
+#   docs/configuration.md "Worker-denied MCP servers" owns the fleet-rendered
+#   list. Resolve it with bin/fm-exclude-tools-lib.sh before provisioning; a
+#   Claude ship or scout then carries
+#   "deniedMcpServers":[{"serverName":"<name>"},...] in its inline
+#   __CLAUDESETTINGS__ JSON, or "allowedMcpServers":[] plus
+#   --strict-mcp-config --no-chrome when the list is missing or invalid,
+#   which denies every MCP server, Claude in Chrome's included, even where
+#   another settings scope allows some.
 # Worker compaction window:
 #   docs/configuration.md "Worker compaction window" owns
 #   config/crew-compact-window. Resolve it with bin/fm-exclude-tools-lib.sh
@@ -3454,10 +3457,14 @@ launch_template() {
   # (docs/fork-decisions/2026-10-27-worker-no-artifact-connectors.md). Off in
   # --settings wins over user and project settings for both keys (Claude Code
   # 2.1.310 settings schema). A secondmate and the helm keep both.
-  # The same inline JSON carries "deniedMcpServers" for the servers
-  # config/worker-denied-mcp-servers lists, which Claude Code refuses to start
-  # for that session alone ("MCP server blocked by enterprise policy", 2.1.319)
-  # (docs/fork-decisions/2026-11-11-worker-denied-mcp-servers.md).
+  # The same inline JSON carries "deniedMcpServers" for the servers the
+  # fleet-rendered worker-denied list names, which Claude Code refuses to
+  # start for that session alone ("MCP server blocked by enterprise policy",
+  # 2.1.319), or "allowedMcpServers":[] with --strict-mcp-config --no-chrome,
+  # which a merged project allowlist cannot reopen, when that list is missing
+  # or invalid
+  # (docs/fork-decisions/2026-11-11-worker-denied-mcp-servers.md,
+  # docs/fork-decisions/2026-11-19-worker-denied-mcp-servers-fleet-list.md).
   # Claude Code's --settings flag takes one value, a file path or an inline
   # JSON string (https://code.claude.com/docs/en/cli-reference). A secondmate's
   # busy hooks share that value, in state/<id>.claude-settings.json, and the
@@ -3991,7 +3998,7 @@ fi
 # config/crew-exclude-tools (header above): refuse before worker provisioning
 # if this launch cannot honor the list. Secondmate agents are not covered.
 EXCLUDE_TOOLS=
-# config/worker-denied-mcp-servers (header above) likewise refuses before
+# The worker-denied MCP server list (header above) likewise refuses before
 # provisioning when a Claude ship or scout cannot carry its denial.
 DENIED_MCP_SERVERS=
 # config/crew-compact-window (header above) refuses before provisioning when
@@ -4000,7 +4007,7 @@ DENIED_MCP_SERVERS=
 COMPACT_WINDOW=
 if [ "$KIND" != secondmate ]; then
   EXCLUDE_TOOLS=$(fm_exclude_tools_check "$HARNESS" "$RAW_LAUNCH" "$CONFIG") || exit 1
-  DENIED_MCP_SERVERS=$(fm_worker_denied_mcp_servers_check "$HARNESS" "$RAW_LAUNCH" "$BACKEND" "$CONFIG") || exit 1
+  DENIED_MCP_SERVERS=$(fm_worker_denied_mcp_servers_check "$HARNESS" "$RAW_LAUNCH" "$BACKEND") || exit 1
   COMPACT_WINDOW=$(fm_crew_compact_window_check "$HARNESS" "$CONFIG") || exit 1
   if [ -n "$COMPACT_WINDOW" ] && { [ "$RAW_LAUNCH" = 1 ] || [ "$BACKEND" = t3code ]; }; then
     echo "notice: config/crew-compact-window is not applied to a raw launch command or backend=t3code; $ID launches with the harness default" >&2
@@ -4226,7 +4233,9 @@ if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS" = claude ]; then
   fi
   WORKER_MCP_GAP=$(fm_worker_account_claude_mcp_gap "$SESSION_CLAUDE_STORE" "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json")
   # A server the worker is denied anyway is no gap worth a warning.
-  if [ -n "$WORKER_MCP_GAP" ] && [ -n "$DENIED_MCP_SERVERS" ]; then
+  if [ "$DENIED_MCP_SERVERS" = '*' ]; then
+    WORKER_MCP_GAP=
+  elif [ -n "$WORKER_MCP_GAP" ] && [ -n "$DENIED_MCP_SERVERS" ]; then
     worker_mcp_gap_kept=
     read -r -a worker_mcp_gap_names <<<"$WORKER_MCP_GAP"
     for worker_mcp_gap_name in "${worker_mcp_gap_names[@]}"; do
@@ -8561,17 +8570,21 @@ case "$LAUNCH" in
   if [ "$KIND" = secondmate ]; then
     LAUNCH=${LAUNCH//__CLAUDESETTINGS__/$(shell_quote "$STATE_REAL/$ID.claude-settings.json")}
   else
-    # config/worker-denied-mcp-servers names are validated to letters, digits,
-    # _ . and -, so they need no JSON or shell quoting here.
+    # Worker-denied MCP server names are validated to letters, digits, _ and
+    # -, so they need no JSON or shell quoting here; '*' denies them all.
     claude_denied_mcp=
-    if [ -n "$DENIED_MCP_SERVERS" ]; then
+    claude_strict_mcp=
+    if [ "$DENIED_MCP_SERVERS" = '*' ]; then
+      claude_denied_mcp=',"allowedMcpServers":[]'
+      claude_strict_mcp=' --strict-mcp-config --no-chrome'
+    elif [ -n "$DENIED_MCP_SERVERS" ]; then
       IFS=, read -r -a claude_denied_names <<<"$DENIED_MCP_SERVERS"
       for claude_denied_name in "${claude_denied_names[@]}"; do
         claude_denied_mcp="${claude_denied_mcp:+$claude_denied_mcp,}{\"serverName\":\"$claude_denied_name\"}"
       done
       claude_denied_mcp=",\"deniedMcpServers\":[$claude_denied_mcp]"
     fi
-    claude_settings="'{\"feedbackDrafts\":\"off\",\"enableArtifact\":false,\"disableClaudeAiConnectors\":true${claude_denied_mcp}__CLAUDEATTRIBUTION__}'"
+    claude_settings="'{\"feedbackDrafts\":\"off\",\"enableArtifact\":false,\"disableClaudeAiConnectors\":true${claude_denied_mcp}__CLAUDEATTRIBUTION__}'${claude_strict_mcp}"
     LAUNCH=${LAUNCH//__CLAUDESETTINGS__/$claude_settings}
   fi
   ;;

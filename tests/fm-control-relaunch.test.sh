@@ -1389,22 +1389,39 @@ test_exclude_tools_refusals_happen_before_the_agent_stops() {
 }
 
 test_claude_denied_mcp_servers_follow_the_relaunch() {
-  local dir out rc id=rl-claude-denymcp
+  local dir out rc id=rl-claude-denymcp list
   dir=$(new_case claude-denymcp "$id")
   add_ship_task "$dir" "$id" claude
-  mkdir -p "$dir/home/config"
-  printf '%s\n' 'two words' > "$dir/home/config/worker-denied-mcp-servers"
-  out=$(run_control "$dir" "$id" relaunch --note "bad list"); rc=$?
-  expect_code 1 "$rc" "a malformed denied-server list must refuse the relaunch"
-  assert_contains "$out" "config/worker-denied-mcp-servers has a malformed entry" "refusal must name the entry"
-  [ "$(cat "$dir/fake/command")" = claude ] || fail "a malformed denied-server list stopped the running agent"
-  [ ! -s "$dir/fake/literal" ] || fail "a refused relaunch sent lifecycle input"
-  printf '%s\n' 'homeassistant' 'monarch' > "$dir/home/config/worker-denied-mcp-servers"
-  out=$(run_control "$dir" "$id" relaunch --note "keep denial"); rc=$?
+  mkdir -p "$dir/home/config" "$dir/fleet"
+  list="$dir/fleet/worker-denied-mcp-servers"
+  printf '%s\n' 'legacyserver' > "$dir/home/config/worker-denied-mcp-servers"
+  printf '%s\n' 'two words' > "$list"
+  out=$(FM_WORKER_DENIED_MCP_SERVERS_FILE="$list" run_control "$dir" "$id" relaunch --note "bad list"); rc=$?
+  expect_code 0 "$rc" "a malformed denied-server list must still relaunch, denying every server"$'\n'"$out"
+  [ "$(printf '%s\n' "$out" | grep -c "denied every MCP server")" = 1 ] \
+    || fail "the relaunch must warn exactly once that every server is denied: $out"
+  assert_contains "$(cat "$dir/fake/literal")" '"allowedMcpServers":[]' \
+    "a malformed list must deny the relaunched Claude worker every MCP server"
+  assert_contains "$(cat "$dir/fake/literal")" '--strict-mcp-config' \
+    "a malformed list must also skip the relaunched worker's other MCP configuration"
+  assert_not_contains "$(cat "$dir/fake/literal")" 'deniedMcpServers' \
+    "a malformed list must not fall back to the retired home file"
+  : > "$dir/fake/literal"
+  printf '%s\n' 'homeassistant' 'monarch' > "$list"
+  out=$(FM_WORKER_DENIED_MCP_SERVERS_FILE="$list" run_control "$dir" "$id" relaunch --note "keep denial"); rc=$?
   expect_code 0 "$rc" "a Claude relaunch with a denied-server list should succeed"$'\n'"$out"
   assert_contains "$(cat "$dir/fake/literal")" '"deniedMcpServers":[{"serverName":"homeassistant"},{"serverName":"monarch"}]' \
-    "the relaunched Claude worker must keep the home's denied MCP servers"
-  pass "fm-control relaunch: a Claude replacement keeps the denied MCP servers, and a bad list refuses before the agent stops"
+    "the relaunched Claude worker must keep the rendered list's denied MCP servers"
+  # With no override, the list is read from the fleet-rendered path under HOME.
+  : > "$dir/fake/literal"
+  mkdir -p "$dir/user-home/.config/fleet/claude"
+  printf '%s\n' 'homeassistant' > "$dir/user-home/.config/fleet/claude/worker-denied-mcp-servers"
+  out=$(unset FM_WORKER_DENIED_MCP_SERVERS_FILE; run_control "$dir" "$id" relaunch --note "default path"); rc=$?
+  expect_code 0 "$rc" "a Claude relaunch reading the default list path should succeed"$'\n'"$out"
+  assert_not_contains "$out" "denied every MCP server" "the default path must find the rendered list"
+  assert_contains "$(cat "$dir/fake/literal")" '"deniedMcpServers":[{"serverName":"homeassistant"}]' \
+    "the relaunched Claude worker must be denied the servers at the default list path"
+  pass "fm-control relaunch: a Claude replacement keeps the rendered list's denied MCP servers, read from the default path, and a bad list denies every server"
 }
 
 # config/crew-compact-window: a Claude relaunch re-reads the window, carries
