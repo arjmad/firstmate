@@ -111,7 +111,7 @@ GitLab and Forgejo PRs carry no review here, because the review posts its findin
 
 ### Validate
 
-Load `validation-supervision` when a ship starts or already has an active no-mistakes validation run, including a mid-run requirement change or finding; that skill owns validation supervision.
+Load `validation-supervision` when a ship already has an active no-mistakes validation run, including a mid-run requirement change or finding; that skill owns validation supervision.
 
 ### PR ready, landing, and teardown
 
