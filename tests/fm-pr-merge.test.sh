@@ -6934,7 +6934,8 @@ test_one_way_approved_is_attended_only
 # base-merged is clean after that same main merge, upstream-landed merges
 # the upstream branch that main itself merged first, and pulled-update is clean
 # whose remote copy took that main merge while a local fix was committed, then
-# pulled with a merge. Every path is Markdown, so the code review gate reads exempt.
+# pulled with a merge; upstream-merge-only merges in an upstream merge, with
+# its own change, of two upstream commits main already merged. Every path is Markdown, so the code review gate reads exempt.
 # Leaves the landed commit in revert-landed and GitHub's squash of the head in
 # revert-merged. Args: case_dir variant
 add_revert_repo() {
@@ -6963,7 +6964,7 @@ add_revert_repo() {
       git -C "$repo" checkout -q "$base" -- notes
       rm "$repo/notes/c.md"
       ;;
-    clean|sync|sync-long|sync-updated|base-merged|upstream-landed|pulled-update) git -C "$repo" checkout -q -b pr ;;
+    clean|sync|sync-long|sync-updated|base-merged|upstream-landed|pulled-update|upstream-merge-only) git -C "$repo" checkout -q -b pr ;;
     followup)
       git -C "$repo" checkout -q -b pr
       printf 'three\n' > "$repo/notes/a.md"
@@ -7005,6 +7006,24 @@ add_revert_repo() {
       revert_commit 2026-01-05T00:00:00Z 'Land a later note'
       git -C "$repo" checkout -q pr
       revert_merge 2026-01-05T01:00:00Z "Merge branch 'main' into pr" main
+      ;;
+    upstream-merge-only)
+      git -C "$repo" checkout -q -b upstream "$base"
+      printf 'up a\n' > "$repo/notes/up-a.md"
+      revert_commit 2026-01-04T01:00:00Z 'Upstream a'
+      git -C "$repo" checkout -q -b upstream-b "$base"
+      printf 'up b\n' > "$repo/notes/up-b.md"
+      revert_commit 2026-01-04T02:00:00Z 'Upstream b'
+      git -C "$repo" checkout -q main
+      revert_merge 2026-01-04T03:00:00Z 'Merge upstream a into main' upstream
+      revert_merge 2026-01-04T03:30:00Z 'Merge upstream b into main' upstream-b
+      git -C "$repo" checkout -q upstream
+      GIT_AUTHOR_DATE=2026-01-04T04:00:00Z GIT_COMMITTER_DATE=2026-01-04T04:00:00Z \
+        git -C "$repo" merge -q --no-ff --no-commit upstream-b
+      printf 'resolved\n' > "$repo/notes/up-res.md"
+      revert_commit 2026-01-04T04:00:00Z 'Upstream merges b with a resolution'
+      git -C "$repo" checkout -q pr
+      revert_merge 2026-01-04T05:00:00Z 'Sync upstream' upstream
       ;;
     pulled-update)
       git -C "$repo" checkout -q main
@@ -7226,6 +7245,16 @@ test_upstream_sync_refuses_squash_and_rebase() {
   expect_code 1 "$RC" "sync-updated: a sync merged with main afterwards must still refuse"$'\n'"$(cat "$case_dir/stderr")"
   assert_grep 're-run the same command ending in: -- --merge' "$case_dir/stderr" \
     "sync-updated: the refusal did not name --merge"
+
+  # Upstream's only new commit is a merge, with its own change, of two commits
+  # main already holds; it is still work the base lacks.
+  case_dir=$(make_case sync-merge-only-refuses)
+  mkdir -p "$case_dir/wt"
+  add_revert_repo "$case_dir" upstream-merge-only
+  run_revert_merge "$case_dir"
+  expect_code 1 "$RC" "sync-merge-only: a sync bringing in only an upstream merge must refuse"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "merge commit $(git -C "$case_dir/revert-repo" rev-parse --short=12 pr) brings in $(git -C "$case_dir/revert-repo" rev-parse --short=12 upstream)" \
+    "$case_dir/stderr" "sync-merge-only: the refusal did not name the sync merge"
 
   for args in --merge --method=merge; do
     case_dir=$(make_case "sync-merges-$args")

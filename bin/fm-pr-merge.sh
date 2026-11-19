@@ -314,11 +314,11 @@
 # default included, is refused before any captain hold or forge write, and the
 # refusal names -- --merge. github_side_merges owns the rule: among the commits
 # of compare/BASE...HEAD, a merge commit one of whose parents after the first is
-# also in that list and brings in at least one single-parent commit its first
-# parent does not hold. A merge of the base into the branch, this script's own
-# behind-base update included, has only its first parent there and keeps
-# squashing, and so does a pull of such an update, which brings in only merge
-# commits. A commit list that cannot be read whole refuses too, and
+# also in that list and brings in a commit its first parent does not hold,
+# other than a merge whose own first parent is listed. A merge of the base into
+# the branch, this script's own behind-base update included, has only its first
+# parent there and keeps squashing, and so does a pull of such an update, which
+# brings in only that kind of merge. A commit list that cannot be read whole refuses too, and
 # --merge needs no read. GitLab and Forgejo are not checked: this script
 # imposes no squash there, and the fork lives on GitHub.
 # Behind base (fork patch, docs/fork-decisions.md 2026-11-03): GitHub refuses
@@ -2294,8 +2294,9 @@ github_verify_no_revert() {
 
 # The merge commits of the verified head that merged in a lineage its base
 # lacks, one "<merge sha> <merged-in parent sha>" line each on stdout: a listed
-# later parent counts only when it brings in a single-parent listed commit the
-# merge's first parent does not reach, so a pulled base update passes. Read
+# later parent counts only when it brings in a listed commit the merge's first
+# parent does not reach, other than a merge continuing a listed first parent,
+# so a pulled base update passes. Read
 # from every page of compare/BASE...HEAD so a long list is judged whole. It
 # returns 1, with the reason on stdout instead, when that list cannot be read
 # completely. Args: owner/repo base-branch head
@@ -2376,7 +2377,9 @@ EOF
           for (c in seen) first[c] = 1
           split("", seen); walk(p[j], "side")
           found = 0
-          for (c in seen) if (!(c in first) && split(parents[c], q, " ") == 1) { found = 1; break }
+          # A merge there continuing a listed first parent is a pulled base
+          # update; any other commit there is work the base lacks.
+          for (c in seen) if (!(c in first) && (split(parents[c], q, " ") == 1 || !(q[1] in listed))) { found = 1; break }
           split("", first)
           if (found) print sha[m], p[j]
         }
