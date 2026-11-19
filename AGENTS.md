@@ -148,6 +148,7 @@ Do not add an independent reviewer or a validation pipeline beyond the code revi
 Merge authority: current explicit authority or the registry's `+yolo` posture permits landing; otherwise request the captain's decision.
 Land PRs with `bin/fm-pr-merge.sh`, retaining its current-head, check, and authority guards.
 Never merge a red PR, or one with an unreported required check, unless an explicit current instruction names the check to waive or orders that merge for a GitLab merge request with no head pipeline; standing yolo never does.
+Destructive, irreversible, or security-sensitive changes retain their own authority requirements.
 Load `ask-user-authority` and `validation-supervision` before deciding or answering any ask-user finding; implementation workers never answer their own findings.
 
 Verify landing before teardown; preserve uncommitted or unlanded work unless its discard is explicitly authorized.
