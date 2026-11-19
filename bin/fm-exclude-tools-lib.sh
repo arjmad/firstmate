@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # fm-exclude-tools-lib.sh - shared parsing and runtime-support checks for the
-# worker launch config files of this home's ship and scout workers: the lists
-# that keep tools out of them, config/crew-exclude-tools and
-# config/worker-denied-mcp-servers, and the Claude compaction window,
+# worker launch inputs of this home's ship and scout workers: the lists that
+# keep tools out of them, config/crew-exclude-tools and the fleet-rendered
+# worker-denied MCP server list, and the Claude compaction window,
 # config/crew-compact-window. Sourced by bin/fm-spawn.sh and bin/fm-control.sh.
 #
 # docs/configuration.md "Worker tool exclusions", "Worker-denied MCP
@@ -11,13 +11,37 @@
 # Name verification belongs inside the worker's loaded-tool registry, never
 # in an out-of-band server connection from these launch-time checks.
 
+# fm_name_list_entries <file> <label> <entry-noun>: print the comma-joined
+# names in a readable file, one per line, skipping blank and # comment lines.
+# Non-zero with the reason on stderr, naming the file as <label>, when an
+# entry is malformed or the file cannot be read.
+fm_name_list_entries() {
+  local file=$1 label=$2 noun=$3 line names=''
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line#"${line%%[![:space:]]*}"}
+    line=${line%"${line##*[![:space:]]}"}
+    case "$line" in
+    '' | '#'*) continue ;;
+    esac
+    if [ -n "${line//[A-Za-z0-9_.-]/}" ]; then
+      echo "error: $label has a malformed entry '$line'; expected one $noun per line using only letters, digits, _ . and - (blank lines and # comment lines are allowed)" >&2
+      return 1
+    fi
+    names="${names:+$names,}$line"
+  done <"$file" || {
+    echo "error: cannot read $label" >&2
+    return 1
+  }
+  printf '%s' "$names"
+}
+
 # fm_config_name_list <config-dir> <file> <entry-noun>: print the comma-joined
 # names in config/<file>, empty when the file is absent or lists nothing.
 # Non-zero with the reason on stderr when the file or an entry is invalid; a
 # present but dangling, nonregular, or unreadable file is invalid, so a home
 # that declares a list never launches without it.
 fm_config_name_list() {
-  local config=$1 name=$2 noun=$3 file line names='' present
+  local config=$1 name=$2 noun=$3 file present
   file=$config/$name
   present=$(perl -MErrno=ENOENT -e '
     if (lstat $ARGV[0]) { print 1 }
@@ -29,22 +53,7 @@ fm_config_name_list() {
     echo "error: config/$name must be a readable regular file" >&2
     return 1
   fi
-  while IFS= read -r line || [ -n "$line" ]; do
-    line=${line#"${line%%[![:space:]]*}"}
-    line=${line%"${line##*[![:space:]]}"}
-    case "$line" in
-    '' | '#'*) continue ;;
-    esac
-    if [ -n "${line//[A-Za-z0-9_.-]/}" ]; then
-      echo "error: config/$name has a malformed entry '$line'; expected one $noun per line using only letters, digits, _ . and - (blank lines and # comment lines are allowed)" >&2
-      return 1
-    fi
-    names="${names:+$names,}$line"
-  done <"$file" || {
-    echo "error: cannot read config/$name" >&2
-    return 1
-  }
-  printf '%s' "$names"
+  fm_name_list_entries "$file" "config/$name" "$noun"
 }
 
 # fm_exclude_tools_names <config-dir>: print the comma-joined names, empty when
@@ -76,33 +85,52 @@ fm_exclude_tools_check() {
   printf '%s' "$names"
 }
 
-# fm_worker_denied_mcp_servers_check <harness> <raw-launch 0|1> <backend> <config-dir>:
-# for a Claude ship or scout launch, print the comma-joined server names
-# config/worker-denied-mcp-servers lists, empty when the home lists none.
-# Refuses when the file is invalid, or when it lists servers and this launch
-# cannot carry Claude's deniedMcpServers setting: any raw command, which can
-# reach claude behind a wrapper firstmate cannot see through, or T3 Code,
-# which builds its own provider command. Names use only letters, digits, _
-# and -, the server-name form Claude's setting accepts. Every other runtime
-# does not read Claude's MCP configuration, so it neither reads nor refuses
-# on the file.
+# fm_worker_denied_mcp_servers_file: print the path of the worker-denied MCP
+# server list, the fleet-rendered ~/.config/fleet/claude/worker-denied-mcp-servers
+# under $XDG_CONFIG_HOME when set; FM_WORKER_DENIED_MCP_SERVERS_FILE overrides
+# it for tests and for a home outside that fleet.
+fm_worker_denied_mcp_servers_file() {
+  printf '%s' "${FM_WORKER_DENIED_MCP_SERVERS_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/fleet/claude/worker-denied-mcp-servers}"
+}
+
+# fm_worker_denied_mcp_servers_check <harness> <raw-launch 0|1> <backend>:
+# for a Claude ship or scout launch, print the comma-joined server names the
+# worker-denied MCP server list names, empty when it names none, or '*' when
+# the list is missing, unreadable, or malformed: the worker is then denied
+# every MCP server, with a warning naming the file, so a host that lacks the
+# list never launches a worker with fewer denials. Refuses when the launch
+# must deny servers but cannot carry Claude's MCP server policy settings: any
+# raw command, which can reach claude behind a wrapper firstmate cannot see
+# through, or T3 Code, which builds its own provider command. Names use only
+# letters, digits, _ and -, the server-name form Claude's setting accepts.
+# Every other runtime does not read Claude's MCP configuration, so it neither
+# reads nor refuses on the list.
 fm_worker_denied_mcp_servers_check() {
-  local harness=$1 raw=$2 backend=$3 config=$4 names
+  local harness=$1 raw=$2 backend=$3 file names='' problem=''
   [ "$raw" = 1 ] || [ "$harness" = claude ] || return 0
-  names=$(fm_config_name_list "$config" worker-denied-mcp-servers 'MCP server name') || return 1
+  file=$(fm_worker_denied_mcp_servers_file)
+  if [ ! -e "$file" ]; then
+    problem='is missing'
+  elif [ ! -f "$file" ] || [ ! -r "$file" ]; then
+    problem='is not a readable regular file'
+  elif ! names=$(fm_name_list_entries "$file" "$file" 'MCP server name' 2>/dev/null); then
+    problem='is unreadable or has an entry that is not one server name of letters, digits, _ and -'
+  else
+    case "$names" in
+    *.*) problem="has a server name with '.', which Claude's deniedMcpServers does not accept" ;;
+    esac
+  fi
+  if [ -n "$problem" ]; then
+    echo "warning: the worker-denied MCP server list $file $problem, so this Claude worker is denied every MCP server; render the list from the fleet configuration or set FM_WORKER_DENIED_MCP_SERVERS_FILE" >&2
+    names='*'
+  fi
   [ -n "$names" ] || return 0
-  case "$names" in
-  *.*)
-    echo "error: config/worker-denied-mcp-servers has a server name with '.'; Claude's deniedMcpServers accepts only letters, digits, _ and -" >&2
-    return 1
-    ;;
-  esac
   if [ "$raw" = 1 ]; then
-    echo "error: config/worker-denied-mcp-servers lists MCP servers a worker must not load, but a raw launch command cannot carry that denial; launch with a harness name instead" >&2
+    echo "error: $file requires denying MCP servers to Claude workers, but a raw launch command cannot carry that denial; launch with a harness name instead" >&2
     return 1
   fi
   if [ "$backend" = t3code ]; then
-    echo "error: config/worker-denied-mcp-servers lists MCP servers a worker must not load, but backend=t3code builds its own claude command and cannot carry that denial; choose another backend" >&2
+    echo "error: $file requires denying MCP servers to Claude workers, but backend=t3code builds its own claude command and cannot carry that denial; choose another backend" >&2
     return 1
   fi
   printf '%s' "$names"

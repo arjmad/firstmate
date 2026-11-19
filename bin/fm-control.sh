@@ -1191,13 +1191,13 @@ resolve_relaunch_profile() {
         | grep -qxF "$(fm_polytoken_hooks_file "$WT")" \
       || fm_polytoken_require_hooks_free "$WT" || return 1
   fi
-  # Likewise config/crew-exclude-tools, config/worker-denied-mcp-servers, and
-  # config/crew-compact-window: a malformed or unreadable file, or a
+  # Likewise config/crew-exclude-tools, the worker-denied MCP server list, and
+  # config/crew-compact-window: a malformed or unreadable config file, or a
   # replacement launch that cannot honor the list, refuses here, before the
   # old agent stops. Secondmate agents are not covered.
   if [ "$KIND" != secondmate ]; then
     fm_exclude_tools_check "$TARGET_HARNESS" 0 "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" >/dev/null || return 1
-    fm_worker_denied_mcp_servers_check "$TARGET_HARNESS" 0 "$BACKEND" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" >/dev/null || return 1
+    fm_worker_denied_mcp_servers_check "$TARGET_HARNESS" 0 "$BACKEND" >/dev/null || return 1
     fm_crew_compact_window_check "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" >/dev/null || return 1
   fi
 }

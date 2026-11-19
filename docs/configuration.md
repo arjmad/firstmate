@@ -1843,22 +1843,24 @@ Each relaunch installs a fresh worker extension with the home's current list, so
 
 [`bin/fm-exclude-tools-lib.sh`](../bin/fm-exclude-tools-lib.sh) implements parsing and pre-launch validation for this contract; [`bin/fm-spawn.sh`](../bin/fm-spawn.sh)'s header owns the launch-flag mechanics.
 
-## Worker-denied MCP servers (config/worker-denied-mcp-servers)
+## Worker-denied MCP servers
 
-The optional local, gitignored `config/worker-denied-mcp-servers` names MCP servers that no Claude ship or scout from this home may load, whichever Claude account it runs on.
+The fleet configuration renders `~/.config/fleet/claude/worker-denied-mcp-servers` (under `$XDG_CONFIG_HOME` when set), which names MCP servers that no Claude ship or scout may load, whichever Claude account it runs on.
+That rendered file is the one source: Firstmate reads it on every Claude ship and scout spawn and relaunch, from every home on the host, and `FM_WORKER_DENIED_MCP_SERVERS_FILE` points it at another path, as the test suite does.
 It exists for servers kept to the captain's own sessions and the helm, which a worker would otherwise load from the account's user-scope configuration.
 Each Claude ship and scout launch carries `"deniedMcpServers":[{"serverName":"<name>"},...]` in its inline `--settings` JSON, and Claude Code then refuses to start those servers for that session alone.
 The helm, the captain's own sessions, and a secondmate's own agent keep them.
 
 The file uses the format of `config/crew-exclude-tools` above, with one server name per line instead of one tool name, and a name may not contain `.`, which Claude's setting does not accept.
-It may be a symlink, so a home can point it at a list another repository deploys.
-The file is inherited into secondmate homes under the [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md) inherited-local-material contract, so a secondmate's own Claude workers are denied the same servers.
-With no file, or a file with no entries, every launch is unchanged.
+A file with no entries denies nothing.
 
-The file fails closed: when it is present but dangling, unreadable, not a regular file, or has a malformed entry, a Claude ship or scout spawn or relaunch refuses before its endpoint, local copy, or task record exists, and a relaunch refuses before it stops the running worker.
-A non-empty list also refuses every raw launch command, because one can reach Claude behind any wrapper, and the T3 Code backend, because Firstmate does not build those command lines.
-Other runtimes do not read Claude's MCP configuration, so they neither read nor refuse on the file; a server registered in another runtime's own MCP configuration is not covered.
-[`bin/fm-exclude-tools-lib.sh`](../bin/fm-exclude-tools-lib.sh) implements the parsing and refusals, and [`bin/fm-spawn.sh`](../bin/fm-spawn.sh)'s header owns the launch mechanics.
+The list fails closed: when the file is missing, dangling, unreadable, not a regular file, or has a malformed entry, the spawn or relaunch prints a warning naming the file and the worker launches with `"allowedMcpServers":[]` instead, which denies it every MCP server.
+A host without the rendered list therefore keeps dispatching Claude workers, with no MCP servers, rather than launching them with fewer denials.
+A raw launch command, which can reach Claude behind any wrapper, and the T3 Code backend, whose command lines Firstmate does not build, cannot carry either setting, so they refuse whenever the list names a server or is unusable.
+Other runtimes do not read Claude's MCP configuration, so they neither read nor refuse on the list; a server registered in another runtime's own MCP configuration is not covered.
+[`bin/fm-exclude-tools-lib.sh`](../bin/fm-exclude-tools-lib.sh) implements the parsing and fallback, and [`bin/fm-spawn.sh`](../bin/fm-spawn.sh)'s header owns the launch mechanics.
+
+A home's `config/worker-denied-mcp-servers`, which held this list before 2026-11-19, is retired: Firstmate no longer reads it or copies it into secondmate homes, and a home may remove it.
 
 ## Worker compaction window (config/crew-compact-window)
 
