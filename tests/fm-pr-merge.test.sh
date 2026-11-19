@@ -230,7 +230,7 @@ revert_files_json() {
     | if (.[0] | startswith("R")) then {filename: .[2], previous_filename: .[1]} else {filename: .[1]} end)'
 }
 revert_api() {
-  local endpoint='' arg repo="$fixtures/revert-repo" query a b mb status files
+  local endpoint='' arg repo="$fixtures/revert-repo" query a b mb status files commits page per_page
   for arg in "$@"; do
     case "$arg" in repos/*) endpoint=$arg; break ;; esac
   done
@@ -240,7 +240,7 @@ revert_api() {
   if [ ! -d "$repo" ]; then
     case "$endpoint" in
       */pulls/*) printf '{"created_at":"2026-01-01T00:00:00Z","merge_commit_sha":"9999999999999999999999999999999999999999"}\n' ;;
-      */compare/*) printf '{"status":"ahead","merge_base_commit":{"sha":"8888888888888888888888888888888888888888"},"base_commit":{"sha":"8888888888888888888888888888888888888888"},"commits":[],"files":[]}\n' ;;
+      */compare/*) printf '{"status":"ahead","merge_base_commit":{"sha":"8888888888888888888888888888888888888888"},"base_commit":{"sha":"8888888888888888888888888888888888888888"},"total_commits":0,"commits":[],"files":[]}\n' ;;
       */commits) printf '[]\n' ;;
       */git/trees/*) printf '{"truncated":false,"tree":[]}\n' ;;
       *) printf '{"files":[]}\n' ;;
@@ -266,10 +266,20 @@ revert_api() {
       if [ "$a" = "$(cat "$fixtures/revert-compare-cap" 2>/dev/null)" ]; then
         files=$(jq -nc '[range(300) | {filename: "filler/\(.)"}]')
       fi
+      # GitHub lists the commits the head holds and the base does not, oldest
+      # first, and pages them when the query names a page.
+      commits=$(TZ=UTC git -C "$repo" log --reverse --format='%H%x09%P%x09%ad' --date=format-local:%Y-%m-%dT%H:%M:%SZ "$a..$b" \
+        | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t")
+          | {sha: .[0], parents: (.[1] | split(" ") | map(select(length > 0) | {sha: .})), commit: {author: {date: .[2]}}})')
+      page=$(printf '%s' "$query" | tr '&' '\n' | sed -n 's/^page=//p')
+      per_page=$(printf '%s' "$query" | tr '&' '\n' | sed -n 's/^per_page=//p')
       jq -nc --arg s "$status" --arg mb "$mb" --arg base "$a" \
-        --argjson files "$files" \
-        --argjson dates "$(TZ=UTC git -C "$repo" log --format=%ad --date=format-local:%Y-%m-%dT%H:%M:%SZ "$mb..$b" | jq -Rsc 'split("\n") | map(select(length > 0))')" \
-        '{status: $s, merge_base_commit: {sha: $mb}, base_commit: {sha: $base}, files: $files, commits: ($dates | map({commit: {author: {date: .}}}))}'
+        --argjson files "$files" --argjson commits "$commits" \
+        --arg page "$page" --arg per "${per_page:-100}" \
+        '{status: $s, merge_base_commit: {sha: $mb}, base_commit: {sha: $base}, files: $files,
+          total_commits: ($commits | length),
+          commits: (if $page == "" then $commits
+            else $commits[(($page | tonumber) - 1) * ($per | tonumber):($page | tonumber) * ($per | tonumber)] end)}'
       ;;
     */commits)
       a=$(printf '%s' "$query" | tr '&' '\n' | sed -n 's/^sha=//p')
@@ -504,6 +514,18 @@ case "${1:-} ${2:-}" in
           *) exit 1 ;;
         esac
         cat "$FM_TEST_GH_RUNS"
+        exit $?
+        ;;
+      *" repos/"*"/compare/"*"&page="*)
+        # The upstream-sync read (github_side_merges), paged and with its own
+        # failure switch; sync-compare-short loses the newest listed commit.
+        [ ! -f "$fixtures/sync-api-fail" ] || exit 1
+        revert_api "$@" > "$fixtures/sync-api.json" || exit 1
+        if [ -f "$fixtures/sync-compare-short" ]; then
+          short=$(jq -c '.commits |= .[:-1]' "$fixtures/sync-api.json") || exit 1
+          printf '%s\n' "$short" > "$fixtures/sync-api.json"
+        fi
+        gh_jq "$fixtures/sync-api.json" "$@"
         exit $?
         ;;
       *" repos/"*"/pulls/"*|*" repos/"*"/compare/"*|*" repos/"*"/commits"*|*" repos/"*"/git/trees/"*)
@@ -6906,7 +6928,11 @@ test_one_way_approved_is_attended_only
 # own note); stale-late is stale opened and committed only after that commit
 # landed, the way a worker opens its PR at the end; followup is clean but also
 # edits the landed commit's changed note again; renamed is clean but also
-# renames the landed commit's new note away. Every path is Markdown, so the code review gate reads exempt.
+# renames the landed commit's new note away. The merge variants are clean
+# plus merges: sync merges in an upstream branch cut from the first commit,
+# sync-long is sync with 120 upstream commits, sync-updated is sync after main moved and was merged into the branch,
+# base-merged is clean after that same main merge, and upstream-landed merges
+# the upstream branch that main itself merged first. Every path is Markdown, so the code review gate reads exempt.
 # Leaves the landed commit in revert-landed and GitHub's squash of the head in
 # revert-merged. Args: case_dir variant
 add_revert_repo() {
@@ -6914,6 +6940,9 @@ add_revert_repo() {
   revert_commit() {
     git -C "$repo" add -A
     GIT_AUTHOR_DATE=$1 GIT_COMMITTER_DATE=$1 git -C "$repo" commit -q -m "$2"
+  }
+  revert_merge() {
+    GIT_AUTHOR_DATE=$1 GIT_COMMITTER_DATE=$1 git -C "$repo" merge -q --no-ff -m "$2" "$3"
   }
   git init -q -b main "$repo"
   mkdir -p "$repo/notes"
@@ -6932,7 +6961,7 @@ add_revert_repo() {
       git -C "$repo" checkout -q "$base" -- notes
       rm "$repo/notes/c.md"
       ;;
-    clean) git -C "$repo" checkout -q -b pr ;;
+    clean|sync|sync-long|sync-updated|base-merged|upstream-landed) git -C "$repo" checkout -q -b pr ;;
     followup)
       git -C "$repo" checkout -q -b pr
       printf 'three\n' > "$repo/notes/a.md"
@@ -6946,6 +6975,36 @@ add_revert_repo() {
   printf 'mine\n' > "$repo/notes/d.md"
   revert_commit 2026-01-04T00:00:00Z 'Add my note'
   [ "$variant" != stale-late ] || printf '2026-01-05T00:00:00Z\n' > "$case_dir/revert-created"
+  case "$variant" in
+    sync|sync-long|sync-updated|upstream-landed)
+      git -C "$repo" checkout -q -b upstream "$base"
+      printf 'up one\n' > "$repo/notes/up1.md"
+      revert_commit 2026-01-04T01:00:00Z 'Upstream first'
+      printf 'up two\n' > "$repo/notes/up2.md"
+      revert_commit 2026-01-04T02:00:00Z 'Upstream second'
+      if [ "$variant" = sync-long ]; then
+        for i in $(seq 3 120); do
+          printf 'up %s\n' "$i" > "$repo/notes/up$i.md"
+          revert_commit 2026-01-04T02:00:00Z "Upstream $i"
+        done
+      fi
+      if [ "$variant" = upstream-landed ]; then
+        git -C "$repo" checkout -q main
+        revert_merge 2026-01-04T03:00:00Z 'Merge upstream into main' upstream
+      fi
+      git -C "$repo" checkout -q pr
+      revert_merge 2026-01-04T04:00:00Z 'Sync upstream' upstream
+      ;;
+  esac
+  case "$variant" in
+    sync-updated|base-merged)
+      git -C "$repo" checkout -q main
+      printf 'later\n' > "$repo/notes/z.md"
+      revert_commit 2026-01-05T00:00:00Z 'Land a later note'
+      git -C "$repo" checkout -q pr
+      revert_merge 2026-01-05T01:00:00Z "Merge branch 'main' into pr" main
+      ;;
+  esac
   head=$(git -C "$repo" rev-parse HEAD)
   git -C "$repo" checkout -q main
   tree=$(git -C "$repo" merge-tree --write-tree main "$head")
@@ -7122,8 +7181,96 @@ test_allow_revert_is_an_attended_github_waiver() {
   pass "fm-pr-merge's --allow-revert waives the landed-work check once, attended and on GitHub only"
 }
 
+# An upstream sync merges in a lineage its base lacks, so a squash or rebase,
+# the implicit default included, is refused and names --merge, which needs no
+# read; merges of the base into the branch keep squashing.
+test_upstream_sync_refuses_squash_and_rebase() {
+  local case_dir variant args merge parent method
+  for args in default --squash --rebase '--method squash'; do
+    case_dir=$(make_case "sync-refuses-$(printf '%s' "$args" | tr ' ' -)")
+    mkdir -p "$case_dir/wt"
+    add_revert_repo "$case_dir" sync
+    merge=$(git -C "$case_dir/revert-repo" rev-parse pr)
+    parent=$(git -C "$case_dir/revert-repo" rev-parse upstream)
+    if [ "$args" = default ]; then
+      run_revert_merge "$case_dir"
+    else
+      read -r -a method <<< "$args"
+      run_revert_merge "$case_dir" -- "${method[@]}"
+    fi
+    expect_code 1 "$RC" "sync-refuses $args: an upstream sync must not merge flattened"$'\n'"$(cat "$case_dir/stderr")"
+    assert_grep "merge commit ${merge:0:12} brings in ${parent:0:12}, which main does not hold" "$case_dir/stderr" \
+      "sync-refuses $args: the refusal did not name the merge and the merged-in parent"$'\n'"$(cat "$case_dir/stderr")"
+    assert_grep 're-run the same command ending in: -- --merge' "$case_dir/stderr" \
+      "sync-refuses $args: the refusal did not name --merge"
+    assert_no_grep 'pr merge' "$case_dir/gh.log" "sync-refuses $args: gh pr merge ran for a flattened sync"
+  done
+
+  case_dir=$(make_case sync-updated-refuses)
+  mkdir -p "$case_dir/wt"
+  add_revert_repo "$case_dir" sync-updated
+  run_revert_merge "$case_dir"
+  expect_code 1 "$RC" "sync-updated: a sync merged with main afterwards must still refuse"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep 're-run the same command ending in: -- --merge' "$case_dir/stderr" \
+    "sync-updated: the refusal did not name --merge"
+
+  for args in --merge --method=merge; do
+    case_dir=$(make_case "sync-merges-$args")
+    mkdir -p "$case_dir/wt"
+    add_revert_repo "$case_dir" sync
+    : > "$case_dir/sync-api-fail"
+    run_revert_merge "$case_dir" -- "$args"
+    expect_code 0 "$RC" "sync-merges $args: an explicit merge commit must land"$'\n'"$(cat "$case_dir/stderr")"
+    assert_logged_gh_merge "$case_dir" 90 example/repo "$args"
+    assert_no_grep '&page=' "$case_dir/gh.log" "sync-merges $args: a merge commit read the sync list"
+  done
+
+  for variant in clean base-merged upstream-landed; do
+    case_dir=$(make_case "sync-squashes-$variant")
+    mkdir -p "$case_dir/wt"
+    add_revert_repo "$case_dir" "$variant"
+    run_revert_merge "$case_dir"
+    expect_code 0 "$RC" "sync-squashes $variant: a PR that merges in no other lineage must squash"$'\n'"$(cat "$case_dir/stderr")"
+    assert_logged_gh_merge "$case_dir" 90 example/repo --squash
+    assert_grep 'merges in no lineage outside main' "$case_dir/stderr" \
+      "sync-squashes $variant: the guard did not verify the head"
+  done
+  # A list longer than one page is read whole, its later pages pinned to the
+  # base commit page one reported.
+  case_dir=$(make_case sync-long-refuses)
+  mkdir -p "$case_dir/wt"
+  add_revert_repo "$case_dir" sync-long
+  run_revert_merge "$case_dir"
+  expect_code 1 "$RC" "sync-long: a sync past the first page must refuse"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "compare/$(git -C "$case_dir/revert-repo" rev-parse main)...$(cat "$case_dir/github-head")?per_page=100&page=2" \
+    "$case_dir/gh.log" "sync-long: page 2 was not read against the pinned base"
+  pass "fm-pr-merge refuses to squash or rebase an upstream sync and names --merge, while base merges keep squashing"
+}
+
+# A commit list that cannot be read whole refuses a squash rather than
+# passing it unjudged.
+test_unreadable_sync_list_refuses_squash() {
+  local case_dir switch
+  for switch in sync-api-fail sync-compare-short; do
+    case_dir=$(make_case "sync-unreadable-$switch")
+    mkdir -p "$case_dir/wt"
+    add_revert_repo "$case_dir" clean
+    : > "$case_dir/$switch"
+    run_revert_merge "$case_dir"
+    expect_code 1 "$RC" "sync-unreadable $switch: an unread list must refuse a squash"$'\n'"$(cat "$case_dir/stderr")"
+    assert_grep 'merges in a lineage main does not hold could not be read' "$case_dir/stderr" \
+      "sync-unreadable $switch: the refusal did not say the list was unreadable"$'\n'"$(cat "$case_dir/stderr")"
+    assert_grep 're-run the same command ending in: -- --merge' "$case_dir/stderr" \
+      "sync-unreadable $switch: the refusal did not name --merge"
+    assert_no_grep 'pr merge' "$case_dir/gh.log" "sync-unreadable $switch: gh pr merge ran"
+  done
+  pass "fm-pr-merge refuses a squash when the pull request's commit list cannot be read whole"
+}
+
 test_merge_that_undoes_landed_work_is_refused
 test_merge_that_keeps_landed_work_verifies_both_sides
+test_upstream_sync_refuses_squash_and_rebase
+test_unreadable_sync_list_refuses_squash
 test_merged_commit_that_undoes_landed_work_is_reported
 test_unreadable_landed_work_check_refuses
 test_allow_revert_is_an_attended_github_waiver
