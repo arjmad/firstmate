@@ -1483,13 +1483,15 @@ command_hold() {
     task_show_or_fail "$id" "task $id disappeared while recording its batch tag"
     recorded_batch=$batch
   fi
-  # Ideas and noticed items group in the Monday triage instead, and the
-  # wrapper's filing hold of a row he must take himself has no filer to tell.
-  # A call whose back-on date passed reads unheld but is still his call.
+  # Only a call row warns: not a work row a question gates (such as a ship's
+  # merge hold), not an idea or noticed item, which group in the Monday triage,
+  # and not the wrapper's filing hold, which has no filer to tell. A call whose
+  # back-on date passed reads unheld but is still his call. The prefix keeps
+  # this advice out of the failure causes teardown collects.
   if [ "$existing_hold_kind" != captain ] && [ -z "$recorded_batch" ] && [ "$options_given" = 0 ] \
     && [ "${FM_CAPTAIN_HOLD_IF_UNHELD_CAPTAIN_ROW:-0}" != 1 ] \
-    && ! printf '%s\n' "$show" | grep -Eq '^  kind: (idea|noticed)$'; then
-    printf 'fm-captain-hold: %s files as a call that takes his own hands; if answering it takes a board or one place, tag it with --batch board:<task-id> or --batch place:<name> so it shows with its group\n' "$id" >&2
+    && printf '%s\n' "$show" | grep -Eq '^  kind: captain$'; then
+    printf 'fm-captain-hold warning: %s files as a call that takes his own hands; if answering it takes a board or one place, tag it with --batch board:<task-id> or --batch place:<name> so it shows with its group\n' "$id" >&2
   fi
   # The kind prefix rides on the stored reason (see the header).
   if [ -n "$decision_kind" ]; then
@@ -2934,7 +2936,7 @@ command_board_link() {
     body=$(decode_shown_value "$(show_field "$show" body)") \
       || fail "could not decode the existing body for $id"
     [ -n "$(fm_backlog_row_field_of_body batch "$body")" ] \
-      || printf 'fm-captain-hold: %s is on the board %s carries but has no Batch: tag; tag it with bin/fm-tasks-axi.sh batch %s board:%s so the board shows as one call\n' "$id" "$origin" "$id" "$origin" >&2
+      || printf 'fm-captain-hold warning: %s is on the board %s carries but has no Batch: tag; tag it with bin/fm-tasks-axi.sh batch %s board:%s so the board shows as one call\n' "$id" "$origin" "$id" "$origin" >&2
     case $'\n'"$body"$'\n' in
       *$'\n'"$line"$'\n'*)
         release_task_control_lock

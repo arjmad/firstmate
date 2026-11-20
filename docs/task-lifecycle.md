@@ -128,7 +128,7 @@ A decision is simply a task held for the captain: create the task with `bin/fm-t
 An `add` of a `--kind captain` row owned by `arjun` holds it at once as his own step, so create a call you will hold with its kind and choices through `bin/fm-captain-hold.sh hold <id> --title` instead.
 A row's title is its next action in plain words and never opens with a date; its fields say the rest ([`bin/fm-backlog-row-lib.sh`](../bin/fm-backlog-row-lib.sh) owns the hold kinds and line formats).
 A hold uses one of four kinds strictly: `captain` needs his answer or his hands, `external` waits on someone else to act even when he owns the follow-up, `future` has nothing to do until a date, and `parked` is someday.
-`future` and `parked` holds carry a back-on date (`--until`) and `external` a recheck date (`--until`); a captain call carries the date he names, else none, and stays live, because tasks-axi lifts a hold on its back-on date.
+`future` and `parked` holds carry a back-on date (`--until`) and `external` a recheck date (`--until`); a captain call with no date stays live, and one he dates with `--until` comes back on that date, because tasks-axi lifts a hold on its back-on date.
 A `Due: YYYY-MM-DD` body line (`add --due`, `due <id>`, `hold --due`) means only an outside deadline and is never invented, kept apart from the back-on date so a snooze never moves it.
 Rows the captain works off together carry one `Batch: <tag>` line (`add --batch`, `batch <id>`): `place:<name>` for one place's errand list, `board:<task-id>` for the members of one board.
 A member is one held row and never shows alone, while a call with its own outside deadline stays its own call and gets no tag.

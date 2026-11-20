@@ -429,7 +429,7 @@ test_untagged_board_or_place_calls_warn() {
   assert_not_contains "$err" "--batch" "a call with choices warned about a tag"
   err=$(run_captain "$home" hold sign-thor --title "Sign in on Thor" --reason "Sign in" 2>&1 >/dev/null) \
     || fail "an untagged call was refused: $err"
-  assert_contains "$err" "sign-thor files as a call that takes his own hands" "an untagged hands call did not warn"
+  assert_contains "$err" "fm-captain-hold warning: sign-thor files as a call that takes his own hands" "an untagged hands call did not warn under the advice prefix"
   assert_contains "$err" "--batch place:<name>" "the warning did not name the tag to add"
   err=$(run_captain "$home" hold sign-thor --reason "Sign in again" 2>&1 >/dev/null) || fail "a re-hold was refused: $err"
   assert_not_contains "$err" "--batch" "a re-hold of a live call warned again"
@@ -445,6 +445,11 @@ test_untagged_board_or_place_calls_warn() {
   FM_HOME="$home" "$ROOT/bin/fm-tasks-axi.sh" add idea-faster "Faster packets" --kind idea >/dev/null || fail "could not add an idea"
   err=$(run_captain "$home" hold idea-faster --reason "Idea" --kind reversible 2>&1 >/dev/null) || fail "holding an idea failed: $err"
   assert_not_contains "$err" "--batch" "an idea warned about a tag"
+  # A work row a question gates, such as a ship's merge hold, is no call to tag.
+  (cd "$home" && tasks-axi add ship-merge "Ship the widget" --kind ship --repo sample >/dev/null) || fail "could not add ship-merge"
+  err=$(run_captain "$home" hold ship-merge --reason "one-way door merge" --kind arjun-only 2>&1 >/dev/null) \
+    || fail "holding a ship row failed: $err"
+  assert_not_contains "$err" "--batch" "holding a ship row for its merge advised a batch tag"
 
   printf 'decisions_reviewed=1\ndecision_keys=sign-heimdall,sign-thor\n' > "$home/state/board-origin.meta"
   err=$(run_captain "$home" board-link board-origin https://example.invalid/board 2>&1 >/dev/null) \
