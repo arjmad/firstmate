@@ -32,7 +32,8 @@ Each task yields at most one noticed and one idea; `none` and an empty section a
 3. Acknowledge a fleet-handoff notice with `bin/fm-inbox.sh drain --ack <id>` and nothing more: a notice has no read-back, so a reply to it reaches nobody.
 
 Done when every collected line is filed, matched, or judged not an item.
-Sapna's agents never file here: a Nova notice is refused, and a secondmate home files into its own backlog.
+Sapna's agents never file here: a Nova notice is refused.
+A secondmate holds no idea or captain call of its own: it hands each one to the main home ([`docs/secondmate-parent-channel.md`](../../../docs/secondmate-parent-channel.md#ideas-and-captain-calls-belong-to-the-main-home)).
 Mining transcripts for items is out of scope.
 
 ## Acting first

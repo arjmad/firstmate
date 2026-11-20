@@ -918,7 +918,7 @@ The report, its notes files beside it in \`$DATA/$ID/\`, and any brain filing be
 # Rules
 1. Never push to any remote and never open a PR.
 2. Stay inside this worktree; outside it, write only the report, notes files beside it in \`$DATA/$ID/\`, and the status file below, except for the task's empty-inventory attestation through \`fm-captain-hold.sh complete --none\`, exactly as specified under Definition of done.
-   Filing durable knowledge through the fleet's sanctioned memory route (\`fleet-memory\`) is permitted and is not a change outside the worktree: a research scout follows the research-playbook filing step, recording one research-log entry and the verified facts on the brain page that owns the subject, while recommendations stay in the report until the captain decides them.
+   Filing durable knowledge through the fleet's sanctioned memory route (\`fleet-memory\`) is permitted and is not a change outside the worktree: a research scout follows the research skill's filing step, recording one research-log entry and the verified facts on the brain page that owns the subject, while recommendations stay in the report until the captain decides them.
    $BRAIN_FILING_RULE
    That filing goes only to Arjun's brain; a scout working in Sapna's domain never writes Arjun's brain and never writes Sapna's.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
