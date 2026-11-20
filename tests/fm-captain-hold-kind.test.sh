@@ -368,11 +368,12 @@ test_keyed_answer_records_a_pick_by_label() {
   pass "a keyed answer that names a recorded choice is recorded as that pick, replays idempotently, and free text still works"
 }
 
-# Every captain call carries a date (docs/fork-decisions/2026-11-08-backlog-row-shape.md):
-# a new call filed without --until stays live and records a next-day Due:
-# line, --due names another, a deferred call keeps its back-on date, a re-hold
-# of a live call adds nothing, and a dated title is refused when creating.
-test_new_call_records_a_due_date() {
+# Due: means only an outside deadline
+# (docs/fork-decisions/2026-11-20-captain-call-due-is-a-real-deadline.md): a
+# new call filed without --until stays live with no Due: line, --due records
+# one, a deferred call keeps its back-on date, a re-hold of a live call adds
+# nothing, and a dated title is refused when creating.
+test_new_call_gets_no_invented_due_date() {
   local home show out
   home=$(make_home due-date)
   FM_CAPTAIN_HOLD_NOW=2026-07-31T22:00:00Z run_captain "$home" hold sample-new --title "Pick the route" \
@@ -380,12 +381,13 @@ test_new_call_records_a_due_date() {
   show=$(show_task "$home" sample-new)
   assert_contains "$show" 'held: yes' "an undated new call is not live"
   assert_contains "$show" 'hold_until: "-"' "an undated new call got a back-on date"
-  assert_contains "$show" 'Due: 2026-08-01' "an undated new call did not get the next day as its due date"
+  assert_not_contains "$show" 'Due: ' "an undated new call got an invented due date"
   FM_CAPTAIN_HOLD_NOW=2026-08-02T10:00:00Z run_captain "$home" hold sample-new --reason "Decide again" --kind reversible >/dev/null \
     || fail "re-holding a live call failed"
-  [ "$(show_task "$home" sample-new | grep -o 'Due: ' | wc -l | tr -d ' ')" = 1 ] \
-    || fail "re-holding a live call changed its due date: $(show_task "$home" sample-new)"
-  assert_contains "$(show_task "$home" sample-new)" 'Due: 2026-08-01' "re-holding a live call moved its due date"
+  assert_not_contains "$(show_task "$home" sample-new)" 'Due: ' "re-holding a live call invented a due date"
+  run_captain "$home" hold sample-new --reason "Decide by the deadline" --kind reversible --due 2026-08-20 >/dev/null \
+    || fail "re-holding a live call with --due failed"
+  assert_contains "$(show_task "$home" sample-new)" 'Due: 2026-08-20' "--due on a re-hold was not recorded"
 
   run_captain "$home" hold sample-named --title "Sign the lease" --reason "Sign" --due 2026-09-14 >/dev/null \
     || fail "a call with --due was refused"
@@ -407,7 +409,7 @@ test_new_call_records_a_due_date() {
   if out=$(run_captain "$home" hold sample-bad --title "Bad due" --reason "Decide" --due 2026-02-30 2>&1); then
     fail "an impossible --due was accepted: $out"
   fi
-  pass "a new undated captain call stays live with a next-day due date, and --due, --until and an existing due date are kept"
+  pass "a new undated captain call stays live with no invented due date, and --due, --until and an existing due date are kept"
 }
 
 test_kind_arguments_are_validated
@@ -420,4 +422,4 @@ test_choices_keeps_a_retired_default_as_the_recommendation
 test_defer_keeps_a_retired_default_as_the_recommendation
 test_hold_records_the_captain_as_owner_and_release_hands_back
 test_kind_prefix_shows_on_every_hold_reason
-test_new_call_records_a_due_date
+test_new_call_gets_no_invented_due_date

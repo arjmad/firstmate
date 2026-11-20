@@ -72,13 +72,11 @@
 # `--until` records the captain's own deferral date through `tasks-axi hold
 # --until`, so a "revisit later" answer is stored as a date instead of a live
 # card.
-# Every captain call carries a date (fork patch,
-# docs/fork-decisions/2026-11-08-backlog-row-shape.md). A new call - the row is
-# not already held for the captain - filed without `--until` stays live, with
-# no back-on date, and records a `Due: YYYY-MM-DD` body line
-# (bin/fm-backlog-row-lib.sh owns it): the date `--due` names, else the one the
-# row already records, else the next day (the local date, or the day after
-# FM_CAPTAIN_HOLD_NOW's). `--due` also records its date on any other hold. A
+# A call filed without `--until` stays live, with no back-on date. A `Due:
+# YYYY-MM-DD` body line (bin/fm-backlog-row-lib.sh owns it) means only an
+# outside deadline: `--due` records the date it names on any hold, and no date
+# is invented for a call that has none (fork patch,
+# docs/fork-decisions/2026-11-20-captain-call-due-is-a-real-deadline.md). A
 # title opening with a `[YYYY-MM-DD]` date is refused when creating a row.
 #
 # HOLD KINDS (fork patches, docs/fork-decisions.md 2026-10-14 and
@@ -1424,7 +1422,6 @@ command_hold() {
     [ -n "$repo" ] || repo=firstmate
     validate_one_line repo "$repo"
     [ -z "$origin" ] || body=$(printf 'Origin: %s' "$origin")
-    [ -n "$due" ] || [ -n "$until" ] || due=$(captain_call_default_due) || exit 1
     [ -z "$due" ] || body=$(fm_backlog_row_field_body_with due "$body" "$due")
     body=$(fm_backlog_owner_body_with "$body" arjun)
     # tasks-axi add never passes --due. Beads due.required would refuse this
@@ -1449,11 +1446,8 @@ command_hold() {
   task_show_or_fail "$id" "task $id disappeared while recording its hold-set stamp"
   [ -n "$(body_hold_set_timestamp "$(show_field_value "$show" body)")" ] \
     || fail "task $id did not retain its hold-set stamp"
-  # A new call with no back-on date records its due date (see the header).
+  # --due records an outside deadline (see the header).
   recorded_due=$(fm_backlog_row_field_of_body due "$(show_field_value "$show" body)")
-  if [ -z "$due" ] && [ -z "$until" ] && [ "$preserve_hold_set" = 0 ] && [ -z "$recorded_due" ]; then
-    due=$(captain_call_default_due) || exit 1
-  fi
   if [ -n "$due" ] && [ "$due" != "$recorded_due" ]; then
     write_due "$id" "$due" "$show" || fail "could not record the due date $due on $id"
     task_show_or_fail "$id" "task $id disappeared while recording its due date"
@@ -1561,19 +1555,6 @@ apply_pending_retained_artifact() {  # <task-id>
 # A caller holding a fresh read of the row passes it to spare a backend read.
 # OWNER_WRITTEN says whether the body changed.
 OWNER_WRITTEN=0
-# The due date a new captain call gets when no one names one: the next day.
-captain_call_default_due() {
-  local today epoch next
-  if [ -n "${FM_CAPTAIN_HOLD_NOW:-}" ]; then
-    today=${FM_CAPTAIN_HOLD_NOW%%T*}
-  else
-    today=$(date +%Y-%m-%d)
-  fi
-  epoch=$(fm_utc_iso_to_epoch "${today}T12:00:00Z") || fail "cannot read the date $today"
-  next=$(epoch_to_utc_iso $((epoch + 86400))) || fail "cannot compute the day after $today"
-  printf '%s\n' "${next%%T*}"
-}
-
 # Record <due> as the row's Due: line, keeping the owner line last.
 write_due() {  # <task-id> <due> <fresh-show-output>
   local id=$1 due=$2 show=$3 body owner tmp
