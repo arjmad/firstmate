@@ -824,11 +824,11 @@ jobs:
       - name: Fork-patch records are valid
         run: bin/fm-fork-decisions.sh check
       # A fork PR that changes upstream-owned files adds or edits a record.
+      # The checkout is the PR's merge commit, so HEAD^1 is the base it merges
+      # into, even when main moved on after the event's base.sha.
       - name: Upstream-owned changes carry a fork-patch record
         if: github.event_name == 'pull_request'
-        env:
-          FM_PR_BASE: ${{ github.event.pull_request.base.sha }}
-        run: bin/fm-fork-decisions.sh pr-check --base "$FM_PR_BASE"
+        run: bin/fm-fork-decisions.sh pr-check --base HEAD^1
 
   # The Full suite verdict: one check that fails until an outside PR has the
   # full-ci go-ahead and otherwise fails when any lane failed or was cancelled.
