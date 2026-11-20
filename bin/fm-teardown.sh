@@ -151,7 +151,11 @@
 # data/<id>/ is deliberately left in place: a successor spawn reads brief.md
 # from it. Only its reproducible scratch goes, through
 # bin/fm-data-scratch-prune.sh under the meta lock just before the task record
-# is removed; a checkout holding unlanded work stays and is named. A Claude
+# is removed; a checkout holding unlanded work stays and is named, and once the
+# record is gone teardown files one routine noticed row,
+# noticed-kept-checkout-<id>, through bin/fm-noticed.sh listing every kept
+# checkout, so firstmate proves each landed or abandoned once instead of the
+# checkout sitting there unseen. A Claude
 # task's workspace-trust entry for a launch directory this teardown retired
 # leaves the Claude store at the same point, through
 # bin/fm-claude-store-prune.sh --path.
@@ -4856,8 +4860,11 @@ fi
 # The task's reproducible scratch leaves data/<id>/ while its meta lock still
 # keeps a successor spawn of the same id out: bin/fm-data-scratch-prune.sh owns
 # what goes, what stays, and its report lines.
+TEARDOWN_KEPT_CHECKOUTS=
 if [ "$KIND" != secondmate ] && [ -d "$DATA/$ID" ]; then
-  "$SCRIPT_DIR/fm-data-scratch-prune.sh" "$DATA/$ID" </dev/null || true
+  TEARDOWN_SCRATCH=$("$SCRIPT_DIR/fm-data-scratch-prune.sh" "$DATA/$ID" </dev/null) || true
+  [ -z "$TEARDOWN_SCRATCH" ] || printf '%s\n' "$TEARDOWN_SCRATCH"
+  TEARDOWN_KEPT_CHECKOUTS=$(printf '%s\n' "$TEARDOWN_SCRATCH" | sed -n 's/^data-scratch: kept checkout //p')
 fi
 # A Claude launch registered workspace trust for the directory it started in
 # (bin/fm-claude-trust.sh): the task worktree, or a secondmate's home. Once this
@@ -4967,6 +4974,25 @@ if [ "$KIND" != secondmate ] && [ -d "$STATE" ]; then
   if [ -n "$TEARDOWN_NOTICED" ]; then
     printf '%s\n' "$TEARDOWN_NOTICED" | sed "s/^/noticed-queue: $ID left /"
     echo "noticed-queue: file each through bin/fm-noticed.sh (noticed-queue skill)"
+  fi
+fi
+# A scratch checkout the prune above kept holds work teardown could not prove
+# landed, so it is filed once as a routine noticed row naming every kept
+# checkout (fork patch,
+# docs/fork-decisions/2026-11-20-teardown-files-kept-checkouts.md); a repeat
+# teardown of the same id matches that row. Filing never fails the teardown.
+if [ -n "$TEARDOWN_KEPT_CHECKOUTS" ] && [ -d "$STATE" ]; then
+  TEARDOWN_KEPT_SLUG=$(printf '%s' "$ID" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+  TEARDOWN_KEPT_COUNT=$(printf '%s\n' "$TEARDOWN_KEPT_CHECKOUTS" | grep -c .)
+  if TEARDOWN_KEPT_FILED=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+    "$SCRIPT_DIR/fm-noticed.sh" file noticed "kept-checkout-$TEARDOWN_KEPT_SLUG" \
+      --title "Teardown of $ID kept $TEARDOWN_KEPT_COUNT scratch checkout(s) in data/$ID/" \
+      --why "Each holds work teardown could not prove landed, so it stays on disk unseen until someone proves it landed or recorded abandoned; deleting anything unique is the captain's call." \
+      --from teardown \
+      --evidence "$(printf '%s\n' "$TEARDOWN_KEPT_CHECKOUTS" | paste -sd ';' - | sed 's/;/; /g')" 2>&1); then
+    echo "noticed-queue: $TEARDOWN_KEPT_FILED (scratch checkouts teardown kept)"
+  else
+    echo "warning: teardown $ID kept scratch checkouts but could not file their noticed row: $TEARDOWN_KEPT_FILED" >&2
   fi
 fi
 [ "$TEARDOWN_POOL_SLOT_LOST" = 0 ] || exit "$TEARDOWN_LOST_SLOT_EXIT"

@@ -2642,6 +2642,117 @@ test_claude_denied_mcp_servers_fail_closed() {
   pass "a missing, unreadable, or malformed denied-server list denies every MCP server; any raw command refuses before any launch or record"
 }
 
+# The fleet-rendered worker-denied MCP tool list: a Claude ship or scout hides
+# the listed tool patterns through --disallowedTools, after any
+# config/crew-exclude-tools names; a secondmate and another runtime get none; a
+# present but malformed list denies every MCP server; and a raw command refuses
+# whenever the list names a tool.
+write_denied_mcp_tools_file() {  # <line>... ; writes $CASE_DIR/fleet/worker-denied-mcp-tools
+  mkdir -p "$CASE_DIR/fleet"
+  printf '%s\n' "$@" > "$CASE_DIR/fleet/worker-denied-mcp-tools"
+}
+
+test_claude_task_workers_hide_denied_mcp_tools() {
+  local kind rec id sm out status launch list
+  for kind in ship scout secondmate; do
+    id="claude-denytools-$kind-z35"
+    rec=$(make_spawn_case "claude-denytools-$kind" claude "$id")
+    read_case_record "$rec"
+    write_exclude_file "$HOME_DIR" 'Workflow'
+    write_denied_mcp_tools_file '# writes and sends stay with the helm' '' \
+      '  mcp__monarch__Create*  ' $'mcp__gws-*__send_gmail_message\r'
+    list="$CASE_DIR/fleet/worker-denied-mcp-tools"
+    case "$kind" in
+      ship) out=$(FM_WORKER_DENIED_MCP_TOOLS_FILE="$list" run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1) ;;
+      scout) out=$(FM_WORKER_DENIED_MCP_TOOLS_FILE="$list" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout 2>&1) ;;
+      secondmate)
+        sm="$CASE_DIR/secondmate-home"
+        make_seeded_secondmate_home "$sm" "$id"
+        out=$(FM_WORKER_DENIED_MCP_TOOLS_FILE="$list" FM_TEST_CLAUDE_CONFIG_DIR="$CASE_DIR/claude-work" \
+          run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate 2>&1)
+        ;;
+    esac
+    status=$?
+    expect_code 0 "$status" "claude $kind spawn with a denied-tool list should succeed"$'\n'"$out"
+    assert_not_contains "$out" "denied every MCP server" "a valid tool list must not fall back to denying every server"
+    launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
+    case "$kind" in
+      secondmate)
+        assert_not_contains "$launch" "--disallowedTools" "a Claude secondmate's own agent must not receive the worker tool denials"
+        ;;
+      *)
+        assert_contains "$launch" "--disallowedTools 'Workflow,mcp__monarch__Create*,mcp__gws-*__send_gmail_message' --append-system-prompt " \
+          "claude $kind launch must hide the home exclusions and then the rendered tool patterns"
+        assert_not_contains "$launch" "--strict-mcp-config" "a valid tool list must keep the worker's MCP servers"
+        ;;
+    esac
+  done
+  # Another runtime loads none of these Claude tools, so it neither reads nor
+  # refuses on the list.
+  id=claude-denytools-codex-z35
+  rec=$(make_spawn_case claude-denytools-codex codex "$id")
+  read_case_record "$rec"
+  write_denied_mcp_tools_file 'not a pattern'
+  out=$(FM_WORKER_DENIED_MCP_TOOLS_FILE="$CASE_DIR/fleet/worker-denied-mcp-tools" \
+    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
+  expect_code 0 "$?" "a codex spawn must not refuse on the Claude denied-tool list"$'\n'"$out"
+  assert_not_contains "$(cat "$LAUNCH_LOG")" "--disallowedTools" "a codex launch must not carry Claude tool denials"
+  # An absent list denies no tool.
+  id=claude-denytools-absent-z35
+  rec=$(make_spawn_case claude-denytools-absent claude "$id")
+  read_case_record "$rec"
+  out=$(FM_WORKER_DENIED_MCP_TOOLS_FILE="$CASE_DIR/fleet/absent" \
+    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
+  expect_code 0 "$?" "claude spawn without a denied-tool list should succeed"$'\n'"$out"
+  assert_not_contains "$out" "denied every MCP server" "an absent tool list must not deny every server"
+  assert_not_contains "$(cat "$LAUNCH_LOG")" "--disallowedTools" "an absent tool list must hide no tool"
+  pass "claude ships and scouts hide the rendered MCP tool patterns; secondmates, other runtimes, and an absent list add none"
+}
+
+test_claude_denied_mcp_tools_fail_closed() {
+  local rec id out status setup settings list
+  for setup in dangling directory unreadable malformed bare-tool; do
+    [ "$setup" != unreadable ] || [ "$(id -u)" != 0 ] || continue
+    id="claude-denytools-closed-$setup-z36"
+    rec=$(make_spawn_case "claude-denytools-closed-$setup" claude "$id")
+    read_case_record "$rec"
+    list="$CASE_DIR/fleet/worker-denied-mcp-tools"
+    mkdir -p "$CASE_DIR/fleet"
+    case "$setup" in
+      dangling) ln -s "$CASE_DIR/fleet/absent" "$list" ;;
+      directory) mkdir "$list" ;;
+      unreadable) write_denied_mcp_tools_file 'mcp__monarch__Create*' && chmod 000 "$list" ;;
+      malformed) write_denied_mcp_tools_file 'mcp__monarch__Create*' 'two words' ;;
+      bare-tool) write_denied_mcp_tools_file 'Bash' ;;
+    esac
+    out=$(FM_WORKER_DENIED_MCP_TOOLS_FILE="$list" \
+      run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
+    status=$?
+    [ "$setup" != unreadable ] || chmod 600 "$list"
+    expect_code 0 "$status" "claude spawn with a $setup denied-tool list should still launch"$'\n'"$out"
+    assert_contains "$out" "worker-denied MCP tool list $list" "the $setup warning must name the tool list"
+    assert_contains "$out" "denied every MCP server" "the $setup warning must say every server is denied"
+    settings=$(claude_settings_json_arg "$(cat "$LAUNCH_LOG")")
+    printf '%s' "$settings" | jq -e '.allowedMcpServers == [] and (has("deniedMcpServers") | not)' >/dev/null \
+      || fail "a $setup denied-tool list did not deny every MCP server: $settings"
+    assert_contains "$(cat "$LAUNCH_LOG")" " --strict-mcp-config --no-chrome " \
+      "a $setup denied-tool list must also skip every other MCP configuration"
+  done
+  # A raw command cannot carry --disallowedTools, so a list that names a tool
+  # refuses it even when the server list names none.
+  id=claude-denytools-raw-z36
+  rec=$(make_spawn_case claude-denytools-raw claude "$id")
+  read_case_record "$rec"
+  write_denied_mcp_tools_file 'mcp__monarch__Create*'
+  out=$(FM_WORKER_DENIED_MCP_TOOLS_FILE="$CASE_DIR/fleet/worker-denied-mcp-tools" \
+    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" "claude --dangerously-skip-permissions" 2>&1)
+  expect_code 1 "$?" "a raw claude spawn that must hide MCP tools must refuse"$'\n'"$out"
+  assert_contains "$out" "names MCP tools to deny Claude workers, but a raw launch command cannot carry that denial" "the raw refusal must say why"
+  [ ! -s "$LAUNCH_LOG" ] || fail "claude launched despite a denied-tool list it could not carry"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "the raw refusal still wrote a task record"
+  pass "a present but unusable denied-tool list denies every MCP server; a raw command refuses a list that names a tool"
+}
+
 # config/crew-compact-window: a Claude ship or scout runs with
 # CLAUDE_CODE_AUTO_COMPACT_WINDOW at the home's window and records it, even
 # under a launch-env allowlist that does not name it and over an ambient
@@ -3860,6 +3971,8 @@ test_claude_task_workers_launch_with_the_task_list
 test_claude_task_workers_launch_without_artifact_or_connectors
 test_claude_task_workers_launch_with_denied_mcp_servers
 test_claude_denied_mcp_servers_fail_closed
+test_claude_task_workers_hide_denied_mcp_tools
+test_claude_denied_mcp_tools_fail_closed
 test_claude_task_workers_launch_with_compact_window
 test_claude_compact_window_absent_or_other_runtime_changes_nothing
 test_claude_compact_window_fails_closed

@@ -35,11 +35,10 @@ Load `diagnostic-reasoning` before scoping a reported bug and before acting on a
 
 Resolve every ship task's concrete delivery mode and `yolo` merge posture at intake.
 Pass the mode explicitly to the brief, and pass both values explicitly to the spawn and any scout promotion; each command refuses to guess the values it consumes.
-A current explicit captain instruction wins; otherwise the project's registry entry is the captain's standing posture, and dropping below its rigor needs a reason you can state.
+Every ship delivers `direct-PR`, because this fleet retired the no-mistakes pipeline on 2026-11-10 (`AGENTS.md` section 7); the project's registry entry still supplies the standing `yolo` posture, and a current explicit captain instruction wins over it.
 Resolve the project's registered ship-branch prefix the same way, via `bin/fm-project-mode.sh --branch-prefix <project>`, and pass it explicitly to the brief, ship spawn, and scout promotion as `--branch-prefix` (default `fm/` needs no flag).
 When the work must start from and target a branch other than the project's default, such as a named feature or release branch, pass it to the ship or scout brief and spawn as `--base-branch <branch>`; any promotion reads it from task meta.
 When a ship must also change other registered projects, name each one to the brief and spawn as `--also <repo>`, so the same task gets a companion worktree of each and opens every companion PR itself (fork patch, `docs/fork-decisions.md` 2026-10-14); never dispatch a companion PR as a second task.
-On a `no-mistakes-prod-only` project, classify the task's surface: internal-only tooling, automation, contributor or operator process, and release or submission work ships `direct-PR`, while product-facing, mixed, and uncertain work ships `no-mistakes`; never infer internal-only from file location or project name.
 An unregistered project or absent registry resolves to `direct-PR` with yolo off (fork patch, `docs/fork-decisions.md` 2026-11-16), and the registration gap goes to the captain.
 Record the resulting mode, `yolo` merge posture, and the one-line reason for any deviation in the backlog item note.
 
@@ -70,15 +69,13 @@ Supervise all live work under section 8.
 
 ### Selected delivery path and merge authority
 
-The selected delivery path owns its own rigor.
-When no-mistakes is selected, no-mistakes alone owns review, fixes, tests, documentation, push, PR, and CI; otherwise follow the faster path without adding an independent reviewer.
-The one exception on either path is the code review before merge below.
-Never hold work outside no-mistakes for a manual clean verdict, stack serial manual reviews, or infer authority for one from security, architecture, or risk alone.
+The selected delivery path owns its own rigor: follow it without adding an independent reviewer.
+The one exception is the code review before merge below.
+Never hold work for a manual clean verdict, stack serial manual reviews, or infer authority for one from security, architecture, or risk alone.
 A separate review or audit is allowed only when the captain explicitly requests that deliverable or the authorized task is a knowledge-only review; one named question remains scoped to that question.
-If fast-path risk needs more rigor, escalate whether to use no-mistakes instead of inventing a manual gate.
+If a ship's risk needs more rigor than its path gives, escalate that to the captain instead of inventing a manual gate.
 The path's worker, automated gates, and captain approval remain authoritative:
 
-- **no-mistakes** runs the full pipeline through a PR, then waits for the configured merge authority.
 - **direct-PR** has the worker push and open a PR without the no-mistakes pipeline, then waits for the configured merge authority.
 - **local-only** has the worker stop with a clean ready branch, then waits for the configured merge authority before firstmate uses the guarded fast-forward merge path.
 
@@ -88,7 +85,7 @@ Never merge a red PR, or one with a required check that has not reported, under 
 Destructive, irreversible, and security-sensitive merges still escalate.
 A PR whose body marks its Merge Danger `**Door:** one-way` is irreversible by its author's own reading, so `yolo` never merges it (fork patch, `docs/fork-decisions.md` 2026-10-26): `bin/fm-pr-merge.sh` refuses it, holds the task for the captain with its blast radius, and merges it only with `--one-way-approved` on his explicit word for that PR; its header owns the Door-line reading.
 A GitHub PR whose merge would undo a commit its base branch already holds is refused under either posture (fork patch, `docs/fork-decisions.md` 2026-10-28): `bin/fm-pr-merge.sh` names each such commit, checks the merged commit again after landing, and merges one anyway only with the attended `--allow-revert` on the captain's explicit word for that PR; `bin/fm-pr-revert-lib.sh` owns what counts as undone.
-Without a current explicit captain instruction that states the concrete merge, the green default stands, and standing `yolo` cannot authorize a red merge; section 1 owns when such an instruction overrides a Firstmate-written standing rule within its exact scope.
+Without a current explicit captain instruction that states the concrete merge, the green default stands, and standing `yolo` cannot authorize a red merge; `AGENTS.md` "Captain instruction precedence" owns when such an instruction overrides a Firstmate-written standing rule within its exact scope.
 Load `ask-user-authority` and `validation-supervision` before deciding or answering any ask-user finding; the implementation worker never answers its own finding.
 Use `bin/fm-pr-merge.sh` for every task PR merge so merge metadata is recorded and an unproved merge is refused instead of reported as landed, and use `bin/fm-merge-local.sh` for approved local-only landing; never call a lower-level merge command around their guards.
 After an autonomous merge, give the captain a one-line full-URL or local-main outcome.

@@ -50,7 +50,7 @@ When any crewmate is live, delegate changes to shared tracked material rather th
 This repo is a shared template, while `.env`, `data/`, `state/`, `config/`, `projects/`, and `.no-mistakes/` are captain-private and gitignored.
 Ship shared tracked changes by direct PR under section 7's merge authority, as for any other project.
 Absent an explicit local grant, never push, fork, or open an issue, comment, or pull request on this repository's upstream; role is never inferred from identity, permissions, remotes, ownership, authentication, environment, or CI.
-Load `firstmate-self-repo`, which owns the role, its grants, and the dispatch flags, before dispatching, promoting, or delivering work that targets this repository, when a firstmate bug or improvement idea surfaces in ordinary use, and before granting or revoking upstream publication authority.
+`firstmate-self-repo` owns that role, its grants, and the dispatch flags for work that targets this repository.
 Never add an agent name as a commit co-author.
 Use `gh-axi` for GitHub, `chrome-devtools-axi` for browser work, and compatible `lavish-axi` for visual decisions or reports; consult current help rather than memorizing flags.
 
@@ -60,7 +60,7 @@ Before inspecting or changing home configuration or runtime records, read [Opera
 `FM_HOME` selects the private `data/`, `state/`, `config/`, and `projects/`; scripts come from their tracked code root.
 Each secondmate has its own home, backlog, projects, and session lock.
 Use an explicit `FM_HOME` when steering, so another home's state cannot be selected accidentally.
-Keep the primary shell in this home: use `git -C <dir>`, an absolute path, or a subshell `(cd <dir> && ...)`, because the cd guard (`docs/cd-guard.md`) denies a top-level `cd`.
+Keep the primary shell in this home: use `git -C <dir>`, an absolute path, or a subshell `(cd <dir> && ...)`, because the cd guard (`docs/cd-guard.md`) denies a top-level `cd` on every harness that keeps a changed directory; a Claude helm's shell returns here after each command.
 Read the current record before replacing it; use its owning helper rather than hand-editing runtime state.
 Shared tracked surfaces and private ignored paths are defined in section 1; section 6 owns knowledge placement, regardless of harness memory.
 
@@ -87,8 +87,7 @@ For startup diagnostics or mechanism changes, read `bin/fm-session-start.sh`, [s
 
 ## 4. Harness and runtime dispatch
 
-Load `harness-adapters` before spawn, recovery, trust handling, skill invocation, interrupt, exit, resume, or adapter verification.
-At every crewmate/scout intake, read its [dispatch reference](.agents/skills/harness-adapters/references/common/dispatch.md) for configured profile resolution, current quota evidence, and runtime selection.
+At every crewmate/scout intake, read the `harness-adapters` [dispatch reference](.agents/skills/harness-adapters/references/common/dispatch.md) for configured profile resolution, current quota evidence, and runtime selection.
 That reference owns dispatch policy; `quota-array-dispatch` owns matched-array selection and `harness-adapters` owns supported roles and model/effort rules.
 Use verified adapters only; report an unverified static override and use the supported fallback under the router's safety contract.
 A backend dependency, authentication, version, or unsupported-backend failure is a blocker for that backend, never permission for a silent backend switch.
@@ -107,12 +106,10 @@ Surface actionable decisions or failures, otherwise resume supervision silently.
 
 ## 6. Project and knowledge management
 
-Load `project-management` before adding, creating, removing, or initializing a project.
-That skill owns registry syntax, delivery-mode selection, outward-facing consent, clone and initialization procedure, safe rollback, and removal preflight.
+`project-management` owns registry syntax, delivery-mode selection, outward-facing consent, clone and initialization procedure, safe rollback, and removal preflight.
 Project creation never authorizes an unmentioned remote, and project removal never bypasses that preflight or unlanded-work checks.
 
-Load `secondmate-provisioning` before creating, seeding, validating, launching, handing backlog to, recovering, pushing inherited local material into, or retiring a secondmate home, and before editing `data/secondmates.md`.
-Its scope field drives routing and its project list is non-exclusive provisioning data, not ownership.
+`secondmate-provisioning` owns the secondmate lifecycle and `data/secondmates.md`, whose scope field drives routing and whose project list is non-exclusive provisioning data, not ownership.
 
 A secondmate is idle by default and acts only on work routed by the main firstmate.
 It reconciles its own work under way after restart, then waits silently; an empty queue never authorizes a survey, audit, or self-directed improvement sweep.
@@ -152,7 +149,7 @@ Destructive, irreversible, or security-sensitive changes retain their own author
 Load `ask-user-authority` and `validation-supervision` before deciding or answering any ask-user finding; implementation workers never answer their own findings.
 
 Verify landing before teardown; preserve uncommitted or unlanded work unless its discard is explicitly authorized.
-Read and relay a scout's self-contained report, and load `captain-hold-lifecycle` before declaring an investigation or visual review complete.
+Read and relay a scout's self-contained report; `captain-hold-lifecycle` decides when an investigation or review is complete.
 A persistent secondmate's empty queue is healthy, not authority to retire it.
 
 ## 8. Supervision protocol
