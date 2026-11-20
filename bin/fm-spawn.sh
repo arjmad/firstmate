@@ -671,8 +671,9 @@
 #                  config/crew-exclude-tools on Pi/pi-signed ship and scout
 #                  launches (supplies its own leading space, empty otherwise)
 #     __CLAUDEEXCLUDE__ optional `--disallowedTools '<comma-joined names>' ` from
-#                  config/crew-exclude-tools on Claude ship and scout launches
-#                  (supplies its own trailing space, empty otherwise). Claude
+#                  config/crew-exclude-tools, then the fleet-rendered
+#                  worker-denied MCP tool patterns, on Claude ship and scout
+#                  launches (supplies its own trailing space, empty otherwise). Claude
 #                  Code drops a disallowed tool's schema from every request, and
 #                  a later flag always follows so the variadic option cannot
 #                  swallow the launch prompt.

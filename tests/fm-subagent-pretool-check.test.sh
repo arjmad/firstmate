@@ -18,7 +18,6 @@ printf '# fixture\n' > "$PRIMARY/AGENTS.md"
 git -C "$PRIMARY" init -q
 
 BRIEF_ONLY_ROUTE='first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work'
-SCOUT_ROUTE='first classify the work under the AGENTS.md intake contract: work already classified as a scout goes to bin/fm-scout.sh "<question>" [project], while authorized ship work and its bounded research go to bin/fm-brief.sh then bin/fm-spawn.sh'
 
 # Every delegation, scheduling, worktree, and task-tracking tool Claude Code
 # 2.1.217 offered a primary session in the observed baseline.
@@ -147,24 +146,16 @@ test_guard_never_classifies_mcp_tools() {
 
 test_deny_message_defers_to_intake_classification() {
   local actual
-  printf '#!/usr/bin/env bash\n' > "$PRIMARY/bin/fm-scout.sh"
-  run_tool Agent && fail "scout-present case must still deny"
-  actual=$(jq -r '.systemMessage' "$ERR")
-  case "$actual" in
-    *"$SCOUT_ROUTE"*) ;;
-    *) fail "deny must reserve bin/fm-scout.sh for classified scout work: $actual" ;;
-  esac
-  case "$actual" in
-    *'investigation or diagnosis goes to bin/fm-scout.sh'*) fail "deny must not classify all investigation or diagnosis as scout work: $actual" ;;
-  esac
-  rm -f "$PRIMARY/bin/fm-scout.sh"
-  run_tool Agent && fail "scout-absent case must still deny"
+  run_tool Agent && fail "delegation must deny"
   actual=$(jq -r '.systemMessage' "$ERR")
   case "$actual" in
     *"$BRIEF_ONLY_ROUTE"*) ;;
-    *) fail "deny must degrade to brief-then-spawn when fm-scout.sh is absent: $actual" ;;
+    *) fail "deny must defer to intake classification and name brief-then-spawn: $actual" ;;
   esac
-  pass "deny defers to intake classification and degrades gracefully without fm-scout.sh"
+  case "$actual" in
+    *fm-scout.sh*) fail "deny must not name a script no home ships: $actual" ;;
+  esac
+  pass "deny defers to intake classification and names the brief-then-spawn route"
 }
 
 test_monitor_deny_cites_one_live_cycle() {

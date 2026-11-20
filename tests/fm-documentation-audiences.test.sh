@@ -187,8 +187,39 @@ test_directory_entry_classifies_its_files() {
   pass "a directory entry classifies every tracked record under it, once, and only when it covers one"
 }
 
+# shellcheck disable=SC2016 # Backticks are literal Markdown in the index.
+test_script_index_lists_every_bin_file() {
+  local repo="$TMP_ROOT/script-index"
+  mkdir -p "$repo/docs" "$repo/bin/backends" "$repo/bin/assets"
+  git -C "$repo" init -q
+  printf '%s\n' '[Setup](docs/setup.md) [Policy](docs/policy.md)' > "$repo/README.md"
+  printf '%s\n' '# Setup' > "$repo/docs/setup.md"
+  printf '%s\n' '# Policy' > "$repo/docs/policy.md"
+  printf '%s\n' '# Evidence' > "$repo/docs/evidence.md"
+  : > "$repo/bin/fm-one.sh"; : > "$repo/bin/fm-two-lib.sh"; : > "$repo/bin/backends/tmux.sh"
+  : > "$repo/bin/assets/chrome.css"
+  printf '%s\n' '# The bin/ toolbelt' '' '| Script | Purpose |' '| --- | --- |' \
+    '| `fm-one.sh` | One |' '| [`fm-two-lib.sh`](../bin/fm-two-lib.sh) | Two |' '| `backends/tmux.sh` | Tmux |' \
+    > "$repo/docs/scripts.md"
+  write_fixture_inventory "$repo"
+  add_fixture_surfaces "$repo" "docs/scripts.md=operator-current"
+  git -C "$repo" add README.md docs bin
+  "$CHECK" --root "$repo" >/dev/null \
+    || fail "an index with one plain or linked row per bin/ and bin/backends/ file failed the check"
+
+  : > "$repo/bin/fm-three.sh"
+  git -C "$repo" add bin
+  run_expect_failure "docs/scripts.md: no row for bin/fm-three.sh" "$CHECK" --root "$repo"
+  printf '%s\n' '| `fm-three.sh` | Three |' '| `fm-gone.sh` | Gone |' '| `fm-one.sh` | One again |' >> "$repo/docs/scripts.md"
+  git -C "$repo" add docs
+  run_expect_failure "docs/scripts.md: listed more than once: fm-one.sh; rows for files not tracked in bin/: fm-gone.sh" \
+    "$CHECK" --root "$repo"
+  pass "docs/scripts.md has exactly one row per tracked bin/ and bin/backends/ file"
+}
+
 test_repository_inventory_passes
 test_duplicate_and_setup_classification_fail
 test_required_pointer_fails
 test_local_links_and_no_keyword_heuristic
 test_directory_entry_classifies_its_files
+test_script_index_lists_every_bin_file

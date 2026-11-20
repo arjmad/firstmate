@@ -19,6 +19,8 @@ One funnel: workers, Cade, Codex and the second mate hand what they notice to fi
 ## Filing
 
 Firstmate is the only writer.
+Teardown, which firstmate runs, files one kind itself: `noticed-kept-checkout-<task>`, a scratch checkout it kept in `data/<task>/`.
+Settle that row by proving each checkout landed, deleting only those and any whose discard the captain himself recorded, and holding the rest for the captain as one `--call ask-first` discard list, because deleting unlanded work is ask-first.
 Items arrive four ways: a teardown's `noticed-queue:` lines, a fleet-handoff notice in the inbox (`[<agent>] notice: ...`), a scout report, and what firstmate itself notices.
 Each task yields at most one noticed and one idea; `none` and an empty section are normal.
 

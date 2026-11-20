@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Behavior tests for bin/fm-fork-decisions.sh: the repository's fork-decision
 # records pass the check, a decision or row appended to the docs/fork-decisions.md
-# entry point fails it, malformed records fail it, and `patches` names each
-# record's PR from its `PR:` line or from the squash commit that added it.
+# entry point fails it, malformed records fail it, a carried row naming a
+# missing repository path fails it, `patches` names each record's PR from its
+# `PR:` line or from the squash commit that added it, and `pr-check` fails a
+# change to an upstream-owned file that adds no record.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -139,8 +141,100 @@ test_patches_reads_the_pr_from_the_record_or_its_commit() {
   pass "patches names each PR from the record's PR line or the commit that landed it, across renames and merge commits"
 }
 
+commit_all() {
+  git -C "$1" add -A
+  git -C "$1" -c user.name=t -c user.email=t@example.invalid commit -qm "$2"
+}
+
+# shellcheck disable=SC2016 # Backticks are literal Markdown in the records.
+test_cited_paths_must_exist() {
+  local repo="$TMP_ROOT/cited" record
+  fixture "$repo"
+  mkdir -p "$repo/bin"
+  : > "$repo/bin/a.sh"; : > "$repo/bin/kept.sh"; : > "$repo/bin/tool-auth.py"
+  commit_all "$repo" 'Add bin'
+  record="$repo/docs/fork-decisions/2026-10-06-cited.md"
+  {
+    printf '%s\n| --- | --- | --- | --- | --- |\n' "$HEADER"
+    printf '| Kept | `bin/kept.sh` (`main`), `bin/tool*.{sh,py}`, `state/runtime.log` | same | carried | abc123 |\n'
+    printf '| Dropped a workflow | `bin/gone.yml` (removed) | that file | carried | abc123 |\n'
+    printf '| Old | `bin/retired.sh` | same | superseded by #9 | abc123 |\n'
+  } > "$record"
+  "$SCRIPT" check --root "$repo" >/dev/null \
+    || fail "an existing path, a matching glob or brace group, a (removed) path, a runtime path, or a superseded row failed the check"
+  {
+    printf '| Moved | `bin/kept.sh`, `bin/moved.sh` | same | conflicted | abc123 |\n'
+    printf '| No match | `bin/none*.{sh,py}` | same | carried | abc123 |\n'
+  } >> "$record"
+  run_expect_failure 'docs/fork-decisions/2026-10-06-cited.md:6: a conflicted row names bin/moved.sh, which is not in the repository' \
+    "$SCRIPT" check --root "$repo"
+  run_expect_failure 'docs/fork-decisions/2026-10-06-cited.md:7: a carried row names bin/none*.{sh,py}, which is not in the repository' \
+    "$SCRIPT" check --root "$repo"
+  pass "a carried or conflicted row naming a missing repository path fails; globs, (removed), runtime paths, and other statuses pass"
+}
+
+# A fixture with an upstream commit holding bin/up.sh and a record naming it
+# as the last checked sync, then a branch for each change under test.
+# shellcheck disable=SC2016 # Backticks are literal Markdown in the records.
+pr_fixture() {
+  local repo=$1 sync
+  fixture "$repo"
+  mkdir -p "$repo/bin"
+  printf 'upstream\n' > "$repo/bin/up.sh"
+  commit_all "$repo" 'Upstream code'
+  sync=$(git -C "$repo" rev-parse HEAD)
+  printf '%s\n| --- | --- | --- | --- | --- |\n| A patch | `bin/up.sh` | same file | carried | %s |\n' "$HEADER" "${sync:0:8}" \
+    > "$repo/docs/fork-decisions/2026-10-06-a-patch.md"
+  commit_all "$repo" 'Record a patch (#20)'
+}
+
+# shellcheck disable=SC2016 # Backticks are literal Markdown in the records.
+test_pr_check_needs_a_record_for_upstream_owned_changes() {
+  local repo="$TMP_ROOT/pr-check" out
+  pr_fixture "$repo"
+
+  git -C "$repo" checkout -qb fork-only main
+  printf 'fork\n' > "$repo/bin/fork-only.sh"
+  printf '\nMore fork prose.\n' >> "$repo/docs/fork-decisions.md"
+  commit_all "$repo" 'Fork-only change'
+  out=$("$SCRIPT" pr-check --root "$repo" --base main --head fork-only) \
+    || fail "a change to fork-owned files only failed pr-check: $out"
+  assert_contains "$out" "pr-check ok upstream-owned=0 records=0" "pr-check did not report the fork-only change"
+
+  git -C "$repo" checkout -qb unrecorded main
+  printf 'patched\n' >> "$repo/bin/up.sh"
+  commit_all "$repo" 'Patch upstream code'
+  run_expect_failure "edits upstream-owned files (present at upstream sync" \
+    "$SCRIPT" pr-check --root "$repo" --base main --head unrecorded
+  out=$("$SCRIPT" pr-check --root "$repo" --base main --head unrecorded 2>&1) || true
+  assert_contains "$out" "  bin/up.sh" "pr-check did not name the upstream-owned file"
+
+  git -C "$repo" checkout -qb record-deleted unrecorded
+  git -C "$repo" rm -q docs/fork-decisions/2026-10-02-fix-a-thing.md
+  commit_all "$repo" 'Delete a record'
+  run_expect_failure "edits upstream-owned files (present at upstream sync" \
+    "$SCRIPT" pr-check --root "$repo" --base main --head record-deleted
+
+  git -C "$repo" checkout -qb recorded unrecorded
+  printf '%s\n| --- | --- | --- | --- | --- |\n| Patch it | `bin/up.sh` | same file | carried | abc123 |\n' "$HEADER" \
+    > "$repo/docs/fork-decisions/2026-10-07-patch-it.md"
+  commit_all "$repo" 'Record the patch'
+  out=$("$SCRIPT" pr-check --root "$repo" --base main --head recorded) \
+    || fail "an upstream-owned change with its record failed pr-check: $out"
+  assert_contains "$out" "pr-check ok upstream-owned=1 records=1" "pr-check did not count the change and its record"
+
+  git -C "$repo" checkout -q recorded
+  out=$("$SCRIPT" pr-check --root "$repo" --base main) || fail "pr-check with the default --head failed: $out"
+
+  run_expect_failure "pr-check needs --base" "$SCRIPT" pr-check --root "$repo"
+  run_expect_failure "--base needs a revision and belongs to pr-check" "$SCRIPT" check --root "$repo" --base main
+  pass "pr-check fails an upstream-owned change without a record and passes fork-only or recorded changes"
+}
+
 test_repository_records_pass
 test_appending_to_the_entry_point_fails
 test_malformed_records_fail
 test_tolerated_record_shapes_pass
 test_patches_reads_the_pr_from_the_record_or_its_commit
+test_cited_paths_must_exist
+test_pr_check_needs_a_record_for_upstream_owned_changes

@@ -1,12 +1,15 @@
 ---
 name: operational-home-layout
-description: Load when locating, interpreting, or changing Firstmate home, config, data, state, project, or generated runtime paths.
+description: Load when you need the exact path, owner, or handling of one Firstmate home file under config/, data/, or state/ that docs/configuration.md "Operational home layout and state" does not name.
 user-invocable: false
 metadata:
   internal: true
 ---
 
 # Operational home layout
+
+[`docs/configuration.md`](../../../docs/configuration.md#operational-home-layout-and-state) "Operational home layout and state" is the one owner of the top-level layout; read it first.
+This skill is only the per-file index beneath it, and where the two differ, that section is right and this index is the one to fix.
 
 ```
 AGENTS.md            supervisor contract (CLAUDE.md is a real @AGENTS.md pointer to it)

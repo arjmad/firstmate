@@ -465,6 +465,15 @@ test_changed_dependency_selection_and_unmapped_failure() {
     || fail "unmapped changed source failure is not actionable: $(cat "$tmp/err")"
 
   rm -f "$repo/src/unmapped.ts"
+
+  # The audience suite a bin/ script also selects never counts as its mapping.
+  printf '#!/usr/bin/env bash\n' >"$repo/bin/fm-zz-unmapped.sh"
+  set +e
+  (cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD) >"$tmp/out" 2>"$tmp/err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "an unmapped bin/ script must still fail with exit 2, got $rc: $(cat "$tmp/out")"
+  rm -f "$repo/bin/fm-zz-unmapped.sh"
   listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
   [ -z "$listed" ] || fail "a retired unmapped source without consumers selected tests: $listed"
   rm -rf "$tmp"
@@ -499,6 +508,14 @@ test_changed_documentation_selects_its_readers_and_tree_checkers() {
   assert_contains "$listed" "tests/fm-fork-decisions.test.sh" \
     "a new fork-decision record must select the suite that checks every record"
   rm -r "$repo/docs/fork-decisions"
+
+  # A script directly in bin/ needs its docs/scripts.md row, which only the
+  # audience suite checks, so a mapped one selects that suite too.
+  printf '\n' >>"$repo/bin/fm-quota-choose.sh"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$listed" "tests/fm-documentation-audiences.test.sh" \
+    "a script directly in bin/ must select the suite that checks the bin/ index"
+  git -C "$repo" checkout -q -- bin/fm-quota-choose.sh
 
   printf 'license\n' >"$repo/LICENSE"
   listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD) \
