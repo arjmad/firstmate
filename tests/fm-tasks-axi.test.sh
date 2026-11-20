@@ -243,7 +243,10 @@ test_wrapper_holds_captain_owned_captain_rows() {
   show=$(wrapper_from_code "$dir" show rk-printer --full)
   assert_contains "$show" "held: yes" "a captain-owned captain row was not held"
   assert_contains "$show" "hold_kind: captain" "the row was not held for the captain"
-  assert_contains "$show" "only you can take this step" "the hold reason does not say whose step it is"
+  assert_contains "$show" "only you can take this step: Repeated: printer toner" "the hold reason does not name the step"
+  wrapper_from_code "$dir" add --kind captain --owner arjun rk-flags-first "Flags before the id" >/dev/null \
+    || fail "adding with flags before the id failed"
+  assert_contains "$(wrapper_from_code "$dir" show rk-flags-first)" "held: yes" "a row added with flags before its id was not held"
   # A row filed unheld before this rule, then re-added as the responder does each run.
   (cd "$dir/home" && tasks-axi add rk-consent "Repeated: re-consent" --kind captain --body "Owner: arjun" \
     --file "$dir/home/data/backlog.md" >/dev/null) || fail "could not add the legacy row"
@@ -278,6 +281,12 @@ test_wrapper_holds_captain_owned_captain_rows() {
   wrapper_from_code "$dir" add rk-printer "Repeated: printer toner" --kind captain --owner arjun >/dev/null \
     || fail "re-adding a closed row failed"
   assert_contains "$(wrapper_from_code "$dir" show rk-printer)" "state: done" "a closed row was reopened"
+  # The helper re-checks under the row's lock, so a row answered meanwhile stays answered.
+  wrapper_from_code "$dir" owner rk-fleet fleet >/dev/null || fail "could not keep rk-fleet with the fleet"
+  out=$(cd "$dir/code" && FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$dir/code" FM_CAPTAIN_HOLD_IF_UNHELD_CAPTAIN_ROW=1 \
+    "$ROOT/bin/fm-captain-hold.sh" hold rk-fleet --reason "only you can take this step: x") || fail "the guarded hold failed: $out"
+  assert_contains "$out" "skipped: rk-fleet" "the guarded hold did not skip a fleet-owned row"
+  assert_contains "$(wrapper_from_code "$dir" show rk-fleet)" "held: no" "the guarded hold held a fleet-owned row"
   ready=$(wrapper_from_code "$dir" ready)
   assert_not_contains "$ready" "rk-consent" "a captain-owned captain row is still dispatchable"
   assert_contains "$ready" "rk-fleet" "a fleet-owned captain row left the dispatch queue"

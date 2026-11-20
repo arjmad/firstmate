@@ -29,9 +29,10 @@
 # (fleet), except `--kind captain`, which must name one and is refused
 # otherwise. An `Owner:` line already in the given body counts as naming one.
 # A `--kind captain` row owned by `arjun` is a step only the captain can take,
-# so once `add` succeeds, a new or already-present open row that carries no
-# hold yet is held for him through bin/fm-captain-hold.sh hold, which keeps it
-# out of dispatch and puts it among his calls (fork patch,
+# so once `add` succeeds, the new or already-present row tasks-axi reports, if
+# open and carrying no hold, is held for him through bin/fm-captain-hold.sh
+# hold, which re-checks it under the row's control lock, keeps it out of
+# dispatch and puts it among his calls (fork patch,
 # docs/fork-decisions/2026-11-20-captain-kind-rows-held-at-filing.md); a row
 # that cannot be held fails the command with exit 1 after the add.
 # `update` with `--body` or `--body-file` carries the row's recorded owner
@@ -447,23 +448,27 @@ task_lock() {  # <id>
 
 # add/create of a captain-owned kind=captain row: hold it for him unless the
 # row is closed or already carries a hold of any kind (see the header).
-hold_added_captain_row() {
-  local id=${ARGS[1]:-} kind arg
+hold_added_captain_row() {  # <tasks-axi add output>
+  local id kind arg title
   for arg in ${ARGS[@]+"${ARGS[@]}"}; do
     case "$arg" in -h|--help) return 0 ;; esac
   done
   kind=$(arg_value --kind) || kind=
   [ "$kind" = captain ] && [ "$OWNER" = arjun ] || return 0
-  case "$id" in ''|-*) return 0 ;; esac
+  # The row tasks-axi reports it added, wherever the id sat or was minted.
+  id=$(printf '%s\n' "$1" | sed -n -e 's/^ok: added \([^ ]*\) .*/\1/p' -e 's/^ok: add \([^ ]*\) already exists.*/\1/p' | head -1)
+  [ -n "$id" ] || { printf 'fm-tasks-axi: could not tell which row this add filed, so it was not held for the captain; hold it with bin/fm-captain-hold.sh hold before anything dispatches it\n' >&2; return 1; }
   shown_body "$id" || { printf 'fm-tasks-axi: %s was added but could not be read to hold it for the captain; hold it with bin/fm-captain-hold.sh hold before anything dispatches it\n' "$id" >&2; return 1; }
-  # An idempotent add keeps the stored row, so judge the row as stored.
+  # An idempotent add keeps the stored row, so judge the row as stored;
+  # bin/fm-captain-hold.sh repeats this check under the row's control lock.
   printf '%s\n' "$SHOWN_ROW" | grep -q '^  state: done$' && return 0
   printf '%s\n' "$SHOWN_ROW" | grep -q '^  kind: captain$' || return 0
   [ "$(fm_backlog_owner_of_body "$SHOWN_BODY")" = arjun ] || return 0
   printf '%s\n' "$SHOWN_ROW" | grep -Eq '^  held: no$' || return 0
   [ "$(printf '%s\n' "$SHOWN_ROW" | grep -Ec '^  hold_(kind|reason|until): ("-"|-)$')" = 3 ] || return 0
-  "$SCRIPT_DIR/fm-captain-hold.sh" hold "$id" \
-    --reason "only you can take this step; the row's body names it" >/dev/null \
+  title=$(fm_backlog_owner_shown_body "$(printf '%s\n' "$SHOWN_ROW" | sed -n 's/^  title: /  body: /p' | head -1)") || title=$id
+  FM_CAPTAIN_HOLD_IF_UNHELD_CAPTAIN_ROW=1 "$SCRIPT_DIR/fm-captain-hold.sh" hold "$id" \
+    --reason "only you can take this step: ${title:-$id}" >/dev/null \
     || { printf 'fm-tasks-axi: %s was added but could not be held for the captain; hold it with bin/fm-captain-hold.sh hold before anything dispatches it\n' "$id" >&2; return 1; }
 }
 
@@ -734,9 +739,16 @@ case "${1:-}" in
 esac
 if [ -n "$OWNER_BODY_FILE" ]; then
   status=0
-  tasks-axi ${ARGS[@]+"${ARGS[@]}"} || status=$?
+  case "${1:-}" in
+    add|create)
+      # Captured, then printed as is, so the filing hold knows the row's id.
+      added=$(tasks-axi ${ARGS[@]+"${ARGS[@]}"}) || status=$?
+      [ -z "$added" ] || printf '%s\n' "$added"
+      ;;
+    *) tasks-axi ${ARGS[@]+"${ARGS[@]}"} || status=$? ;;
+  esac
   rm -f -- "$OWNER_BODY_FILE"
-  case "${1:-}" in add|create) [ "$status" -ne 0 ] || hold_added_captain_row || status=1 ;; esac
+  case "${1:-}" in add|create) [ "$status" -ne 0 ] || hold_added_captain_row "$added" || status=1 ;; esac
   exit "$status"
 fi
 case "${1:-}" in
