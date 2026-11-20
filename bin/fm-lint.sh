@@ -54,9 +54,8 @@
 # actual roots. Partition mode starts with full source-aware analysis, never
 # changed-only or --fast, and does not accept explicit paths. Each partition
 # also runs workflow lint and backend-purity checks, keeping either invocation
-# independently useful. Upstream CI runs two partitions; this fork's private
-# repository runs on smaller hosted runners, so its ci.yml selects more
-# partitions to keep the heaviest source graphs in separate jobs.
+# independently useful. Upstream CI runs two partitions; this fork's ci.yml
+# selects more, one worker each, and its lint job's comment owns why.
 #
 # With FM_LINT_REQUIRE_BOUNDS=1, which CI sets, every per-root ShellCheck
 # process runs under an enforced envelope: a wall deadline
