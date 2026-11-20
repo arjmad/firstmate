@@ -35,7 +35,7 @@ Load `diagnostic-reasoning` before scoping a reported bug and before acting on a
 
 Resolve every ship task's concrete delivery mode and `yolo` merge posture at intake.
 Pass the mode explicitly to the brief, and pass both values explicitly to the spawn and any scout promotion; each command refuses to guess the values it consumes.
-Every ship delivers `direct-PR`, because this fleet retired the no-mistakes pipeline on 2026-11-10 (`AGENTS.md` section 7); the project's registry entry still supplies the standing `yolo` posture, and a current explicit captain instruction wins over it.
+Every ship delivers `direct-PR`, because this fleet retired the no-mistakes pipeline on 2026-11-10 (`AGENTS.md` section 7), except to a project the registry records `local-only`, which lands locally without publishing; the registry entry still supplies the standing `yolo` posture, and a current explicit captain instruction wins over either.
 Resolve the project's registered ship-branch prefix the same way, via `bin/fm-project-mode.sh --branch-prefix <project>`, and pass it explicitly to the brief, ship spawn, and scout promotion as `--branch-prefix` (default `fm/` needs no flag).
 When the work must start from and target a branch other than the project's default, such as a named feature or release branch, pass it to the ship or scout brief and spawn as `--base-branch <branch>`; any promotion reads it from task meta.
 When a ship must also change other registered projects, name each one to the brief and spawn as `--also <repo>`, so the same task gets a companion worktree of each and opens every companion PR itself (fork patch, `docs/fork-decisions.md` 2026-10-14); never dispatch a companion PR as a second task.

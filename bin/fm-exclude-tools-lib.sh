@@ -113,13 +113,18 @@ fm_worker_denied_mcp_tools_file() {
 # fm_worker_denied_mcp_tools_entries: print the comma-joined Claude tool
 # patterns the worker-denied MCP tool list names, one `mcp__<server>__<tool>`
 # per line where `*` matches any run of characters, skipping blank and #
-# comment lines. Prints nothing when the file is absent. Non-zero with the
-# reason on stderr when it is present but dangling, not a readable regular
-# file, or has an entry of any other shape.
+# comment lines. Prints nothing only when the file does not exist. Non-zero
+# with the reason on stderr when it cannot be inspected, or is present but
+# dangling, not a readable regular file, or has an entry of any other shape.
 fm_worker_denied_mcp_tools_entries() {
-  local file line names=''
+  local file line names='' present
   file=$(fm_worker_denied_mcp_tools_file)
-  [ -e "$file" ] || [ -L "$file" ] || return 0
+  present=$(perl -MErrno=ENOENT -e '
+    if (lstat $ARGV[0]) { print 1 }
+    elsif ($! == ENOENT) { print 0 }
+    else { die "error: cannot inspect $ARGV[0]: $!\n" }
+  ' -- "$file") || return 1
+  [ "$present" = 1 ] || return 0
   if [ ! -f "$file" ] || [ ! -r "$file" ]; then
     echo "error: $file must be a readable regular file" >&2
     return 1

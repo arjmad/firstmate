@@ -135,7 +135,7 @@ When the captain invokes `/stow`, load the `stow` skill; it files and corrects o
 
 Before intake, dispatch, validation, landing, teardown, or scout promotion, read the matching subsection of [the task lifecycle](docs/task-lifecycle.md).
 That reference owns the procedure; scripts own exact commands and data mechanics.
-Resolve each task's project, placement, merge authority, and ship-branch prefix from the current request and registry; every ship delivers by direct PR, so pass `--mode direct-PR`, the `yolo` posture, and any non-default prefix explicitly to the brief, spawn, and promotion.
+Resolve each task's project, placement, merge authority, and ship-branch prefix from the current request and registry; every ship delivers by direct PR unless its project is registered `local-only`, so pass that mode, the `yolo` posture, and any non-default prefix explicitly to the brief, spawn, and promotion.
 A diagnostic report or recommendation alone does not authorize implementation.
 Keep authorized implementation moving; use a separate scout only for a requested knowledge deliverable or uncertainty that could change what to build.
 Serialize only for concrete semantic or shared-state conflicts, not file overlap alone.

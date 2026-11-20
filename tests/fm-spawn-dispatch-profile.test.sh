@@ -2711,8 +2711,8 @@ test_claude_task_workers_hide_denied_mcp_tools() {
 
 test_claude_denied_mcp_tools_fail_closed() {
   local rec id out status setup settings list
-  for setup in dangling directory unreadable malformed bare-tool; do
-    [ "$setup" != unreadable ] || [ "$(id -u)" != 0 ] || continue
+  for setup in dangling directory unreadable unsearchable malformed bare-tool; do
+    case "$setup" in unreadable | unsearchable) [ "$(id -u)" != 0 ] || continue ;; esac
     id="claude-denytools-closed-$setup-z36"
     rec=$(make_spawn_case "claude-denytools-closed-$setup" claude "$id")
     read_case_record "$rec"
@@ -2722,6 +2722,7 @@ test_claude_denied_mcp_tools_fail_closed() {
       dangling) ln -s "$CASE_DIR/fleet/absent" "$list" ;;
       directory) mkdir "$list" ;;
       unreadable) write_denied_mcp_tools_file 'mcp__monarch__Create*' && chmod 000 "$list" ;;
+      unsearchable) write_denied_mcp_tools_file 'mcp__monarch__Create*' && chmod 000 "$CASE_DIR/fleet" ;;
       malformed) write_denied_mcp_tools_file 'mcp__monarch__Create*' 'two words' ;;
       bare-tool) write_denied_mcp_tools_file 'Bash' ;;
     esac
@@ -2729,6 +2730,7 @@ test_claude_denied_mcp_tools_fail_closed() {
       run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
     status=$?
     [ "$setup" != unreadable ] || chmod 600 "$list"
+    [ "$setup" != unsearchable ] || chmod 700 "$CASE_DIR/fleet"
     expect_code 0 "$status" "claude spawn with a $setup denied-tool list should still launch"$'\n'"$out"
     assert_contains "$out" "worker-denied MCP tool list $list" "the $setup warning must name the tool list"
     assert_contains "$out" "denied every MCP server" "the $setup warning must say every server is denied"
