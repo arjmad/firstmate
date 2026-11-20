@@ -348,6 +348,7 @@ test_the_drain_shows_only_urgent_items() {
   noticed "$home" file noticed canary-red --title "Canary red" --why "packet" --from t1 --call ruling >/dev/null
   noticed "$home" file idea bundle-slow --title "Bundle slow movers" --why "frees cash" --from t1 >/dev/null
   # A row an earlier version listed for the next reply waits for the triage too.
+  tasks "$home" add noticed-old "Old item" --kind noticed >/dev/null || fail "could not add the old row"
   printf 'noticed-old\tnoticed\tOld item\n' >> "$home/state/noticed/unseen.tsv"
   drain=$(run_drain "$home") || fail "the drain failed with unseen items"
   assert_not_contains "$drain" "NOTICED" "the drain showed an item that waits for the Monday triage"
@@ -406,6 +407,81 @@ test_now_marks_an_item_urgent() {
   pass "--now files, matches or reopens a noticed item as urgent, held or not, keeps it urgent, and refuses an idea"
 }
 
+test_unseen_drops_closed_rows_and_keeps_titles_whole() {
+  local home long out list
+  home=$(make_home tidy)
+  long="Packing slips print the warehouse copy twice when a batch spans two printers and one of them is asleep"
+  noticed "$home" file noticed slips-twice --title "$long" --why "paper" --from t1 >/dev/null
+  noticed "$home" close noticed-slips-twice --evidence "one copy per batch" --fixed \
+    --pr https://github.com/o/r/pull/5 >/dev/null || fail "close --fixed refused a long title"
+  assert_equals "noticed-slips-twice	fixed	$long - one copy per batch (https://github.com/o/r/pull/5)" \
+    "$(noticed "$home" unseen)" "a long title was not stored whole on one line"
+
+  noticed "$home" file noticed open-one --title "Still open" --why "w" --from t1 --call ruling >/dev/null
+  noticed "$home" file noticed shut-elsewhere --title "Shut by a teardown" --why "w" --from t1 --call ruling >/dev/null
+  noticed "$home" file noticed urgent-shut --title "Urgent and shut" --why "w" --from t1 --now >/dev/null
+  tasks "$home" "done" noticed-shut-elsewhere >/dev/null || fail "could not close a row outside fm-noticed.sh"
+  tasks "$home" "done" noticed-urgent-shut >/dev/null || fail "could not close the urgent row"
+  # Rows an older close split over two lines after tasks-axi's 80-character
+  # cut, an entry whose row was archived, and a split half whose entry is gone.
+  cut="Word word word word word word word word word word word word word word word word "
+  printf '%s\n' "noticed-old-fix	fixed	$cut" \
+    "... (truncated, 98 chars total - use --full to see complete text) - fixed at its cause (https://github.com/o/r/pull/2)" \
+    "noticed-archived	noticed	Archived long ago" \
+    "noticed-shown-fix	fixed	$cut" \
+    "... (truncated, 90 chars total - use --full to see complete text) - shown already (https://github.com/o/r/pull/6)" \
+    "noticed-orphan-before	dropped	A short title" \
+    "... (truncated, 91 chars total - use --full to see complete text) - an orphaned half" >> "$home/state/noticed/unseen.tsv"
+  assert_equals "shown: noticed-shown-fix" "$(noticed "$home" shown noticed-shown-fix)" "shown did not mark a split entry"
+  assert_not_contains "$(cat "$home/state/noticed/unseen.tsv")" "shown already" "shown left a split entry's second half behind"
+  list=$(noticed "$home" unseen) || fail "unseen failed"
+  assert_contains "$list" "noticed-open-one	noticed	Still open" "an open noticed row left the list"
+  assert_not_contains "$list" "noticed-shut-elsewhere" "a noticed row closed by another path stayed listed"
+  assert_not_contains "$list" "noticed-archived" "a noticed row no longer in the backlog stayed listed"
+  assert_contains "$list" "noticed-urgent-shut	now	Urgent and shut" "a now row he was not told about left the list"
+  assert_contains "$list" "noticed-old-fix	fixed	${cut% }... - fixed at its cause (https://github.com/o/r/pull/2)" \
+    "a split fixed title was not rejoined"
+  assert_contains "$list" "noticed-orphan-before	dropped	A short title" "an entry before an unpaired half changed"
+  assert_contains "$list" "an orphaned half" "a half that matches no cut entry was joined or lost"
+  assert_equals "$list" "$(cat "$home/state/noticed/unseen.tsv")" "the tidy was not written back for the drain"
+  assert_equals "$(printf '%s\n' "$list" | grep -c 'truncated, ')" 1 "a paired truncation pointer stayed in the list"
+
+  printf 'noticed-gone\tnoticed\tGone\n' >> "$home/state/noticed/unseen.tsv"
+  fm_fakebin "$home/broken" >/dev/null
+  printf '#!/usr/bin/env bash\necho "backend down" >&2\nexit 1\n' > "$home/broken/fakebin/tasks-axi"
+  chmod +x "$home/broken/fakebin/tasks-axi"
+  out=$(PATH="$home/broken/fakebin:$PATH" noticed "$home" unseen 2>/dev/null)
+  assert_contains "$out" "noticed-gone	noticed	Gone" "a failed backlog read pruned an entry"
+  # A listing that exits 0 but holds fewer rows than its count line says.
+  cat > "$home/broken/fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+printf 'count: 2\ntasks[2]{id,state,kind,repo,title}:\n  noticed-open-one,queued,noticed,"-",Still open\n'
+SH
+  out=$(PATH="$home/broken/fakebin:$PATH" noticed "$home" unseen 2>/dev/null)
+  assert_contains "$out" "noticed-gone	noticed	Gone" "a partial backlog listing pruned an entry"
+  # A listing whose count agrees but whose second row is not a row.
+  cat > "$home/broken/fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+printf 'count: 2\ntasks[2]{id,state,kind,repo,title}:\n  noticed-open-one,queued,noticed,"-",Still open\n  garbage\n'
+SH
+  out=$(PATH="$home/broken/fakebin:$PATH" noticed "$home" unseen 2>/dev/null)
+  assert_contains "$out" "noticed-gone	noticed	Gone" "a listing with a malformed row pruned an entry"
+  # A zero count that contradicts its table, and a row cut short.
+  cat > "$home/broken/fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+printf 'count: 0\ntasks[1]{id,state,kind,repo,title}:\n  noticed-open-one,queued,noticed,"-",Still open\n'
+SH
+  out=$(PATH="$home/broken/fakebin:$PATH" noticed "$home" unseen 2>/dev/null)
+  assert_contains "$out" "noticed-gone	noticed	Gone" "a zero count with a table pruned an entry"
+  cat > "$home/broken/fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+printf 'count: 1\ntasks[1]{id,state,kind,repo,title}:\n  noticed-gone,done\n'
+SH
+  out=$(PATH="$home/broken/fakebin:$PATH" noticed "$home" unseen 2>/dev/null)
+  assert_contains "$out" "noticed-gone	noticed	Gone" "a row cut short pruned an entry"
+  pass "unseen drops noticed rows closed by any path, keeps now, fixed and dropped rows, rejoins split titles, and prunes nothing on a failed read"
+}
+
 test_noticed_is_a_captain_hold_that_never_dispatches
 test_a_duplicate_attaches_evidence
 test_closed_items_come_back_or_stay_answered
@@ -417,3 +493,4 @@ test_a_fix_on_its_own_waits_for_the_triage
 test_a_routine_item_is_never_held_for_him
 test_waiting_lists_each_aged_call_once
 test_the_drain_shows_only_urgent_items
+test_unseen_drops_closed_rows_and_keeps_titles_whole

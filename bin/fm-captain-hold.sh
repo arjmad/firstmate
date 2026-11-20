@@ -59,6 +59,10 @@
 # a UTC `Captain hold set:` timestamp in the task body: repeating an active
 # hold preserves the existing timestamp, while re-holding released work starts
 # a new lifecycle. A task already closed is refused rather than reopened.
+# With FM_CAPTAIN_HOLD_IF_UNHELD_CAPTAIN_ROW=1, the filing hold
+# bin/fm-tasks-axi.sh runs, `hold` re-checks an existing row under its control
+# lock and prints `skipped: <id>`, changing nothing, unless the row is open, of
+# kind captain, owned by arjun, and carries no hold of any kind.
 # `--origin` also records the origin on a `Captain hold origin:` body line, which
 # `complete` and `verify` check. The reason may hold parentheses and line breaks:
 # tasks-axi refuses them, so `hold` escapes them where it writes the reason and
@@ -1394,6 +1398,17 @@ command_hold() {
   if task_show "$id"; then
     show=$TASK_SHOW_OUTPUT
     state=$(show_field "$show" state)
+    # bin/fm-tasks-axi.sh's filing hold: decide under the control lock, so a
+    # concurrent answer or hold is never overwritten.
+    if [ "${FM_CAPTAIN_HOLD_IF_UNHELD_CAPTAIN_ROW:-0}" = 1 ]; then
+      if [ "$state" = "done" ] || [ "$(show_field_value "$show" kind)" != captain ] \
+        || [ -n "$(show_field_value "$show" hold_kind)$(show_field_value "$show" hold_reason)$(show_field_value "$show" hold_until)" ] \
+        || [ "$(fm_backlog_owner_of_body "$(show_field_value "$show" body)")" != arjun ]; then
+        release_task_control_lock
+        printf 'skipped: %s\n' "$id"
+        return 0
+      fi
+    fi
     [ "$state" != "done" ] \
       || fail "task $id is already closed; a new captain call needs its own task"
     existing_hold_kind=$(show_field_value "$show" hold_kind)
