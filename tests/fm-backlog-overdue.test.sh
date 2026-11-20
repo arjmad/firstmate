@@ -177,10 +177,22 @@ test_refire_clock_runs_from_the_handled_wake() {
   out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 13 * day))) || fail "scan failed: $out"
   assert_equals "$(queued_rows "$home" late)" 1 "a still-queued wake was duplicated"
   ack_all "$home"
+  # The hourly scan after the wake was handled starts the week.
+  out=$(scan_at "$home" $((GATE_EPOCH + 14 * HOUR + 13 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "" "the scan right after a late-handled wake repeated it"
   out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 14 * day))) || fail "scan failed: $out"
   assert_equals "$out" "" "the repeat fired a day after a late-handled wake"
-  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 20 * day))) || fail "scan failed: $out"
+  out=$(scan_at "$home" $((GATE_EPOCH + 14 * HOUR + 20 * day))) || fail "scan failed: $out"
   assert_equals "$out" "overdue late" "the repeat did not fire a week after the wake was handled"
+
+  # A watcher outage: the repeat wake is still queued at the last scan before
+  # it, and is handled before the first scan after it, 13 days on.
+  out=$(scan_at "$home" $((GATE_EPOCH + 15 * HOUR + 20 * day))) || fail "scan failed: $out"
+  ack_all "$home"
+  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 33 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "" "the first scan after an outage repeated a wake handled moments before"
+  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 40 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue late" "the repeat did not fire a week after the post-outage scan"
   pass "the weekly repeat counts from when the earlier wake was handled, not when it was queued"
 }
 

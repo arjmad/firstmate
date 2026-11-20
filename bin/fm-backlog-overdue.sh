@@ -25,9 +25,11 @@
 # FM_BACKLOG_OVERDUE_REFIRE_SECS, in seconds); a row still overdue then wakes
 # again, and so on weekly, so an acknowledged wake whose row was never
 # re-dated, dispatched or closed cannot rot silently. While its wake is still
-# queued, unhandled, each scan moves the marker's time to now, so the interval
-# runs from when the wake was handled. A marker holding only a date, written
-# before the re-fire existed, wakes again on its next scan.
+# queued, unhandled, the marker reads `<date> <epoch> queued`; the first scan
+# that finds it handled restarts the marker's time there, so the interval runs
+# from when the wake was handled, even after a watcher outage. A marker
+# holding only a date, written before the re-fire existed, wakes again on its
+# next scan.
 # Dispatching the row, answering or lifting its hold, closing it, or giving it
 # an unresolved blocker takes it off the overdue set, and the next scan removes
 # its marker; a later gate that again lapses therefore wakes once more, as does
@@ -108,7 +110,7 @@ load_wake_lib() {
 
 cmd_scan() {
   local now listing rows id until title opened age hours marker queued candidates='' payload
-  local fired_until fired_at again queued_before=''
+  local fired_until fired_at fired_queued again queued_before=''
   [ "$#" -eq 0 ] || die "usage: fm-backlog-overdue.sh scan"
   now=${FM_BACKLOG_OVERDUE_NOW:-$(date +%s)}
   case "$now" in ''|*[!0-9]*) die "FM_BACKLOG_OVERDUE_NOW must be epoch seconds" ;; esac
@@ -145,12 +147,16 @@ cmd_scan() {
     [ "$age" -ge "$GRACE" ] || continue
     marker="$MARKERS/$id"
     again=''
-    fired_until='' fired_at=''
-    [ ! -f "$marker" ] || read -r fired_until fired_at < "$marker" 2>/dev/null || true
+    fired_until='' fired_at='' fired_queued=''
+    [ ! -f "$marker" ] || read -r fired_until fired_at fired_queued < "$marker" 2>/dev/null || true
     if [ "$fired_until" = "$until" ]; then
       # Fired for this gate: quiet until the re-fire interval has passed since
       # the wake was handled.
       if printf '%s\n' "$queued_before" | grep -Fxq "backlog-overdue:$id"; then
+        [ "$fired_queued" = queued ] || printf '%s %s queued\n' "$until" "${fired_at:-$now}" > "$marker" 2>/dev/null || true
+        continue
+      fi
+      if [ "$fired_queued" = queued ]; then
         printf '%s %s\n' "$until" "$now" > "$marker" 2>/dev/null || true
         continue
       fi
