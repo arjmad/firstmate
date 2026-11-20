@@ -4,4 +4,4 @@ No upstream proposal: upstream keeps the skill.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| `session-start-recovery` is removed and its citers point at its owners | `.agents/skills/session-start-recovery/SKILL.md` (deleted), `.agents/skills/bootstrap-diagnostics/SKILL.md`, `.agents/skills/harness-adapters/references/common/primary-hooks.md`, `docs/documentation-audiences.json` | same files | carried | 427056c4 |
+| `session-start-recovery` is removed and its citers point at its owners | `.agents/skills/session-start-recovery/SKILL.md` (removed), `.agents/skills/bootstrap-diagnostics/SKILL.md`, `.agents/skills/harness-adapters/references/common/primary-hooks.md`, `docs/documentation-audiences.json` | same files | carried | 427056c4 |
