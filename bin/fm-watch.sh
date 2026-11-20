@@ -4011,7 +4011,8 @@ self_update_due_tick() {
 $out
 EOF
   case "$verdict" in
-    held-queued) wake "check: $text" ;;
+    held) rm -f "$woke"; return 0 ;;
+    held-queued) rm -f "$woke"; wake "check: $text" ;;
     due-queued) ;;
     due) [ "$(cat "$woke" 2>/dev/null)" != "$target" ] || return 0 ;;
     *) return 0 ;;

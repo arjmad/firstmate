@@ -270,8 +270,8 @@ due_check() {
 # $STATE/.self-update-due holds "<sha> <queued-epoch> <queued-kind> <held-since>":
 # the head last seen, when and as what (due, held, or none) it was last queued,
 # and since when some head has been held. A due head is queued unless it was
-# queued as due within the repeat interval, so a head first held is queued
-# once its task ends. A held head is queued only once heads have been held for
+# queued as due within the repeat interval and has not been held since, so a
+# head is queued again as due whenever its holding task ends. A held head is queued only once heads have been held for
 # the repeat interval, a clock new heads do not restart.
 due_queue() {
   local line=$1 marker="$STATE/.self-update-due" verdict target text now repeat
@@ -303,6 +303,8 @@ EOF
         at=$now kind=due key="self-update-due-$target"
       fi
     else
+      # A held head that becomes due again is queued again.
+      [ "$kind" = held ] || { at=0 kind=none; }
       [ "$since" -gt 0 ] || since=$now
       if [ $((now - since)) -ge "$repeat" ] \
         && { [ "$kind" != held ] || [ $((now - at)) -ge "$repeat" ]; }; then

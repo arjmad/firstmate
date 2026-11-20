@@ -112,7 +112,7 @@ Load `validation-supervision` when a ship already has an active no-mistakes vali
 
 ### PR ready, landing, and teardown
 
-Load `ship-landing` when a ship reports a PR or ready branch, when deciding or monitoring landing, and before task cleanup; that skill owns the ready signal, landing, and teardown.
+Load `ship-landing` when a ship reports a PR or ready branch, when deciding or monitoring landing, before task cleanup, and on a `check: firstmate self-update due:` wake or a `self-update-due:` teardown line; that skill owns the ready signal, landing, and teardown.
 
 ### Scout outcome and promotion
 
