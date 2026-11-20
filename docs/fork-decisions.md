@@ -32,5 +32,5 @@ A sync PR lands as a merge commit, never a squash, so the next sync's merge base
 Build one by merging upstream into a branch cut from `main`; on GitHub, `bin/fm-pr-merge.sh` then refuses to squash or rebase it and names `-- --merge`.
 The 2026-10-14 sync (#81) landed squashed, which left git's merge base at 1a868710, so the 2026-10-19 sync merged against 24f3a6b8 explicitly.
 
-The first records cover the fork-only commits in `git log --no-merges upstream/main..origin/main` at upstream `main` 1a868710, grouped by change.
+The first records cover the fork-only commits in `git log --no-merges kunchenguid/main..origin/main` (the `kunchenguid` remote is upstream) at upstream `main` 1a868710, grouped by change.
 The upstream-merge commits (95b30d7d, #21, #34) and the fork-decisions-only docs commits (#66, #67, #71) are syncs or fork-owned prose and carry no record.

@@ -2712,11 +2712,14 @@ test_scout_teardown_prints_what_it_noticed() {
     "$case_dir/stdout" "scout-noticed: the idea line was not printed"
   assert_grep "noticed-queue: file each through bin/fm-noticed.sh" "$case_dir/stdout" \
     "scout-noticed: teardown did not say how to file them"
+  assert_no_grep "kept-checkout" "$case_dir/stdout" \
+    "scout-noticed: a teardown that kept no checkout filed a kept-checkout row"
   pass "scout teardown prints the one noticed and one idea line the task left"
 }
 
 # A finished task's reproducible scratch leaves data/<id>/ at teardown, while a
-# checkout holding unlanded work, and the report, stay.
+# checkout holding unlanded work, and the report, stay, and the kept checkout
+# is filed once as a routine noticed row.
 test_teardown_deletes_task_data_scratch() {
   local case_dir rc d
   case_dir=$(make_case scratch-prune)
@@ -2743,7 +2746,19 @@ test_teardown_deletes_task_data_scratch() {
   assert_grep "data-scratch: kept checkout task-x1/unlanded: commits no remote-tracking branch holds" \
     "$case_dir/stdout" "scratch-prune: teardown did not name the kept checkout"
   assert_grep "data-scratch: removed 3 items (" "$case_dir/stdout" "scratch-prune: teardown did not summarize"
-  pass "teardown deletes the task's clean clones, node_modules, and binaries and names a kept checkout"
+  assert_grep "noticed-queue: filed: noticed-kept-checkout-task-x1 (scratch checkouts teardown kept)" \
+    "$case_dir/stdout" "scratch-prune: teardown did not file the kept checkout as a noticed row"
+  local row
+  row=$(FM_HOME="$case_dir" "$ROOT/bin/fm-tasks-axi.sh" show noticed-kept-checkout-task-x1 --full 2>&1) \
+    || fail "scratch-prune: the noticed row is not in the backlog: $row"
+  case "$row" in
+    *"task-x1/unlanded: commits no remote-tracking branch holds"*) ;;
+    *) fail "scratch-prune: the noticed row does not name the kept checkout: $row" ;;
+  esac
+  case "$row" in
+    *"held: yes"*) fail "scratch-prune: the kept-checkout row is held for the captain instead of routine: $row" ;;
+  esac
+  pass "teardown deletes the task's clean clones, node_modules, and binaries, names a kept checkout, and files it once"
 }
 
 # A Claude task's workspace-trust entry leaves the store its launch used once

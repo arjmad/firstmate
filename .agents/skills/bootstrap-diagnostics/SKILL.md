@@ -12,7 +12,7 @@ metadata:
 
 Handle each printed line as below, before dispatching work that depends on it.
 The line formats themselves are owned by `bin/fm-bootstrap.sh`'s header; this playbook owns the response to actionable lines.
-The session-start rules in `session-start-recovery` still bind: detect, then consent, then install or upgrade - never change a tool the captain has not approved in this session - and no work is dispatched until the tools it needs are present and GitHub auth is good.
+The session-start rules in `AGENTS.md` section 3 still bind: detect, then consent, then install or upgrade - never change a tool the captain has not approved in this session - and no work is dispatched until the tools it needs are present and GitHub auth is good.
 When any diagnostic needs captain attention, report the plain consequence and requested action using `AGENTS.md` section 9's captain-facing translation contract; do not name the diagnostic label unless the captain needs to paste it into a command or issue.
 
 - `MISSING: <tool> (install: <command>)` - the tool is absent; list the missing tools to the captain with a one-line purpose each plus the printed install commands, wait for consent (one approval may cover the list), then run `bin/fm-bootstrap.sh install <approved tools...>`.
@@ -33,7 +33,7 @@ When any diagnostic needs captain attention, report the plain consequence and re
 - `NETWORK_CHECKS: <what did not complete>; rerun <command>` - the deferred network stage itself could not finish, so the checks it names are simply unknown, not failed.
   Rerun the printed command; it is idempotent and re-derives every finding.
   A `hit the ...s bound` line means one of those checks is slow or unreachable - most often a remote secondmate host - and the stage stopped rather than letting it wedge; a `recorded fleet lock holder changed` line means lock line 1 no longer names the pid that requested the sweeps, because another session took the lock or this session re-anchored it, so they were skipped and belong to whichever session holds the lock now.
-- `TANGLE: <remediation>` - the primary checkout is stranded on a feature branch instead of its default branch; `AGENTS.md` section 8 explains why this guard exists and what it protects.
+- `TANGLE: <remediation>` - the primary checkout is stranded on a feature branch instead of its default branch; [`docs/architecture.md`](../../../docs/architecture.md#worktrees-not-branches-in-your-checkout) explains why this guard exists and what it protects.
   The work is safe on that branch ref; restore the primary to its default branch with the printed `git -C <root> checkout <default>`, then re-validate that branch in a proper worktree.
   This is the only sanctioned firstmate-initiated git write to the primary, and it is a non-destructive branch switch that strands nothing.
 - `STARTUP_MEMORY_BUDGET: invalid config/startup-memory-budget - <reason>` - the visible startup-memory budget is not a safe one-line positive decimal file; do not infer the default or propagate it.

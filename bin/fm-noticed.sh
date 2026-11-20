@@ -15,7 +15,8 @@
 #
 # .agents/skills/noticed-queue/SKILL.md owns the policy: who files, when, how
 # to match a duplicate, and what the Monday sweep and triage do. This script
-# owns the mechanics. Firstmate is its only caller.
+# owns the mechanics. Firstmate is its only caller, directly or through
+# bin/fm-teardown.sh, which files a scratch checkout it kept.
 #
 # AN ITEM IS ITS SLUG. The task id is noticed-<slug> or idea-<slug>, and the
 # backlog kind is noticed or idea, so `fm-tasks-axi.sh list --kind noticed`

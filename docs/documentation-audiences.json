@@ -714,10 +714,6 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/session-start-recovery/SKILL.md",
-      "audience": "agent-runtime"
-    },
-    {
       "path": ".agents/skills/ship-landing/SKILL.md",
       "audience": "agent-runtime"
     },
