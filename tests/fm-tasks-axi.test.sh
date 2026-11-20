@@ -253,12 +253,26 @@ test_wrapper_holds_captain_owned_captain_rows() {
   wrapper_from_code "$dir" add rk-fleet "Fleet does it, reports to him" --kind captain --owner fleet >/dev/null \
     || fail "adding a fleet-owned captain row failed"
   assert_contains "$(wrapper_from_code "$dir" show rk-fleet)" "held: no" "a fleet-owned captain row was held"
-  wrapper_from_code "$dir" add rk-parked "Parked his step" --kind ship >/dev/null || fail "could not add rk-parked"
-  wrapper_from_code "$dir" hold rk-parked --reason "later" --kind parked --until 2030-01-01 >/dev/null \
-    || fail "could not park rk-parked"
+  wrapper_from_code "$dir" add rk-fleet "Fleet does it, reports to him" --kind captain --owner arjun >/dev/null \
+    || fail "re-adding a fleet-owned captain row failed"
+  assert_contains "$(wrapper_from_code "$dir" show rk-fleet)" "held: no" "re-adding a fleet-owned row naming arjun held it"
+  assert_equals fleet "$(wrapper_from_code "$dir" owner rk-fleet)" "re-adding a fleet-owned row changed its owner"
+  # Rows that would qualify, but already carry a park, or a hold with no kind.
+  (cd "$dir/home" && tasks-axi add rk-parked "Parked his step" --kind captain --body "Owner: arjun" \
+    --file "$dir/home/data/backlog.md" >/dev/null \
+    && tasks-axi hold rk-parked --reason "later" --kind parked --until 2030-01-01 --file "$dir/home/data/backlog.md" >/dev/null \
+    && tasks-axi add rk-kindless "Held with no kind" --kind captain --body "Owner: arjun" \
+      --file "$dir/home/data/backlog.md" >/dev/null \
+    && tasks-axi hold rk-kindless --reason "waits on the bank" --until 2020-01-01 --file "$dir/home/data/backlog.md" >/dev/null) \
+    || fail "could not add the already-held rows"
   wrapper_from_code "$dir" add rk-parked "Parked his step" --kind captain --owner arjun >/dev/null \
     || fail "re-adding a parked row failed"
   assert_contains "$(wrapper_from_code "$dir" show rk-parked)" "hold_kind: parked" "a parked row was re-held"
+  wrapper_from_code "$dir" add rk-kindless "Held with no kind" --kind captain --owner arjun >/dev/null \
+    || fail "re-adding a kindless hold failed"
+  assert_contains "$(wrapper_from_code "$dir" show rk-kindless --full)" "waits on the bank" "a kindless hold was replaced"
+  wrapper_from_code "$dir" add rk-help "Help read" --kind captain --owner arjun --help >/dev/null 2>&1 || true
+  assert_not_contains "$(cat "$dir/home/data/backlog.md")" "rk-help" "a help read filed or held a row"
   wrapper_from_code "$dir" "done" rk-printer >/dev/null || fail "could not close rk-printer"
   wrapper_from_code "$dir" add rk-printer "Repeated: printer toner" --kind captain --owner arjun >/dev/null \
     || fail "re-adding a closed row failed"

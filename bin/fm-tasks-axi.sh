@@ -448,13 +448,20 @@ task_lock() {  # <id>
 # add/create of a captain-owned kind=captain row: hold it for him unless the
 # row is closed or already carries a hold of any kind (see the header).
 hold_added_captain_row() {
-  local id=${ARGS[1]:-} kind
+  local id=${ARGS[1]:-} kind arg
+  for arg in ${ARGS[@]+"${ARGS[@]}"}; do
+    case "$arg" in -h|--help) return 0 ;; esac
+  done
   kind=$(arg_value --kind) || kind=
   [ "$kind" = captain ] && [ "$OWNER" = arjun ] || return 0
   case "$id" in ''|-*) return 0 ;; esac
   shown_body "$id" || { printf 'fm-tasks-axi: %s was added but could not be read to hold it for the captain; hold it with bin/fm-captain-hold.sh hold before anything dispatches it\n' "$id" >&2; return 1; }
-  ! printf '%s\n' "$SHOWN_ROW" | grep -q '^  state: done$' || return 0
-  printf '%s\n' "$SHOWN_ROW" | grep -Eq '^  hold_kind: ("-"|-)$' || return 0
+  # An idempotent add keeps the stored row, so judge the row as stored.
+  printf '%s\n' "$SHOWN_ROW" | grep -q '^  state: done$' && return 0
+  printf '%s\n' "$SHOWN_ROW" | grep -q '^  kind: captain$' || return 0
+  [ "$(fm_backlog_owner_of_body "$SHOWN_BODY")" = arjun ] || return 0
+  printf '%s\n' "$SHOWN_ROW" | grep -Eq '^  held: no$' || return 0
+  [ "$(printf '%s\n' "$SHOWN_ROW" | grep -Ec '^  hold_(kind|reason|until): ("-"|-)$')" = 3 ] || return 0
   "$SCRIPT_DIR/fm-captain-hold.sh" hold "$id" \
     --reason "only you can take this step; the row's body names it" >/dev/null \
     || { printf 'fm-tasks-axi: %s was added but could not be held for the captain; hold it with bin/fm-captain-hold.sh hold before anything dispatches it\n' "$id" >&2; return 1; }
