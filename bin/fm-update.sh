@@ -93,9 +93,9 @@
 # clone's default branch, or the config/self-update-source remote and branch), because fleet sync fetches
 # those clones after every merge and on its schedule; the code root's own
 # remote ref is fetched only by an update. A target that is HEAD or already in
-# HEAD's history is current, and one HEAD has diverged from is not due either,
-# because the fast-forward-only update would skip it (fm-ff-lib.sh records that
-# divergence for startup to surface). It prints nothing when current, in a secondmate
+# HEAD's history is current. A head HEAD has diverged from, or any head while
+# the code root is dirty or off its default branch, is not due either, because
+# the fast-forward-only update would skip it. It prints nothing when current, in a secondmate
 # home (its parent's /updatefirstmate updates it), or when no such clone names
 # a newer head; otherwise one line:
 #   due <target-sha> <text>    no task of this home works on such a clone
@@ -107,8 +107,13 @@
 # the first time it sees that head, and again once FM_SELF_UPDATE_DUE_REPEAT
 # seconds (default 86400) pass while it stays due, it queues one `check:` wake
 # keyed self-update-due-<sha>, records "<sha> <epoch>" in
-# $STATE/.self-update-due, and prints `queued` in place of `due`. A current
-# code root removes that record.
+# $STATE/.self-update-due, and prints `queued` in place of `due`. A held head
+# is recorded when first seen and queued only once it stays held that long,
+# so a stale task record cannot hide it for good. A current code root removes
+# that record.
+#
+# FM_SELF_UPDATE_DUE_ROOT replaces the code root for --due only, so the watcher
+# and teardown suites can point it at a clean fixture checkout.
 #
 # Usage: fm-update.sh [--help | --due [--queue]]
 set -eu
@@ -194,13 +199,18 @@ read_self_update_source
 
 # --- due check (--due) -----------------------------------------------------
 
-# due_newer <sha> - rc 0 when the update could fast-forward HEAD to <sha>: a
-# head HEAD lacks, and HEAD is in its history. A head the code root has not
-# fetched counts, because the update fetches it first.
+# due_newer <sha> <clone> - rc 0 when the update could fast-forward HEAD to
+# <sha>: a head HEAD lacks, with HEAD in its history. When the code root has
+# not fetched <sha>, the clone that has it answers instead; a clone lacking
+# HEAD means HEAD holds commits origin lacks, so the update would skip it.
 due_newer() {
   [ -n "$1" ] && [ "$1" != "$DUE_HEAD" ] || return 1
-  git -C "$FM_ROOT" cat-file -e "$1^{commit}" 2>/dev/null || return 0
-  git -C "$FM_ROOT" merge-base --is-ancestor "$DUE_HEAD" "$1" 2>/dev/null
+  if git -C "$FM_ROOT" cat-file -e "$1^{commit}" 2>/dev/null; then
+    git -C "$FM_ROOT" merge-base --is-ancestor "$DUE_HEAD" "$1" 2>/dev/null
+  else
+    git -C "$2" cat-file -e "$DUE_HEAD^{commit}" 2>/dev/null \
+      && git -C "$2" merge-base --is-ancestor "$DUE_HEAD" "$1" 2>/dev/null
+  fi
 }
 
 due_check() {
@@ -208,6 +218,11 @@ due_check() {
   # shellcheck source=bin/fm-role-lib.sh
   . "$SCRIPT_DIR/fm-role-lib.sh"
   DUE_HEAD=$(git -C "$FM_ROOT" rev-parse --verify --quiet HEAD) || return 0
+  # The update skips a code root off its default branch or with a dirty tree,
+  # so neither is due.
+  branch=$(default_branch "$FM_ROOT") || return 0
+  [ "$(git -C "$FM_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null)" = "$branch" ] || return 0
+  [ -z "$(dirty_status "$FM_ROOT")" ] || return 0
   remote=${SELF_UPDATE_REMOTE:-origin}
   url=$(git -C "$FM_ROOT" remote get-url "$remote" 2>/dev/null) || return 0
   identity=$(fm_role_remote_identity "$url" "$FM_ROOT")
@@ -223,7 +238,7 @@ due_check() {
     branch=$SELF_UPDATE_BRANCH
     [ -n "$branch" ] || branch=$(default_branch "$clone") || continue
     sha=$(git -C "$clone" rev-parse --verify --quiet "refs/remotes/origin/$branch^{commit}") || continue
-    if due_newer "$sha"; then
+    if due_newer "$sha" "$clone"; then
       target=$sha via="projects/${clone##*/} origin/$branch"
     fi
   done
@@ -261,7 +276,7 @@ due_queue() {
   read -r verdict target text <<EOF
 $line
 EOF
-  if [ "$verdict" = due ]; then
+  if [ "$verdict" = due ] || [ "$verdict" = held ]; then
     repeat=${FM_SELF_UPDATE_DUE_REPEAT:-86400}
     case "$repeat" in ''|*[!0-9]*) repeat=86400 ;; esac
     # shellcheck source=bin/fm-wake-lib.sh
@@ -272,7 +287,10 @@ EOF
     now=$(date +%s)
     [ ! -f "$marker" ] || read -r raised at < "$marker" || true
     case "$at" in ''|*[!0-9]*) at=0 ;; esac
-    if [ "$raised" != "$target" ] || [ $((now - at)) -ge "$repeat" ]; then
+    if [ "$verdict" = held ] && [ "$raised" != "$target" ]; then
+      printf '%s %s\n' "$target" "$now" > "$marker"
+    elif [ "$raised" != "$target" ] || [ $((now - at)) -ge "$repeat" ]; then
+      [ "$verdict" = due ] || text="$text; it has waited at least ${repeat}s, so check whether that task is still live"
       if ! fm_wake_append_locked check "self-update-due-$target" "check: $text"; then
         fm_lock_release "$FM_WAKE_QUEUE_LOCK"
         return 1
@@ -287,6 +305,7 @@ EOF
 
 if [ "$DUE" = 1 ]; then
   export GIT_NO_LAZY_FETCH=1
+  FM_ROOT=${FM_SELF_UPDATE_DUE_ROOT:-$FM_ROOT}
   due_line=$(due_check)
   if [ "$DUE_QUEUE" = 1 ]; then
     due_queue "$due_line"

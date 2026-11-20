@@ -715,6 +715,12 @@ test_due_reports_a_landed_head_once_no_task_works_on_firstmate() {
 
   git -C "$w/home/projects/fm" fetch -q origin
   head=$(git -C "$w/main" rev-parse HEAD)
+  printf 'dirty\n' >> "$w/main/README.md"
+  assert_equals "$(run_due "$w")" "" "a dirty code root is not due, since the update would skip it"
+  git -C "$w/main" checkout -q -- README.md
+  git -C "$w/main" checkout -q -b side
+  assert_equals "$(run_due "$w")" "" "a code root off its default branch is not due"
+  git -C "$w/main" checkout -q main
   out=$(run_due "$w")
   assert_contains "$out" "due $target firstmate self-update due: the code root runs ${head:0:8}, behind projects/fm origin/main at ${target:0:8}" \
     "a landed head the code root lacks is due"
@@ -732,6 +738,13 @@ test_due_reports_a_landed_head_once_no_task_works_on_firstmate() {
   assert_contains "$out" "task t1 still works on firstmate" "the held line names the task"
   printf 'project=%s\nalso_project_fm=%s\n' "$w/home/projects/unrelated" "$w/home/projects/fm" > "$w/home/state/t1.meta"
   assert_contains "$(run_due "$w")" "held $target " "a companion firstmate task holds the update"
+  printf 'project=%s\nkind=ship\n' "$w/home/projects/fm" > "$w/home/state/t1.meta"
+  assert_contains "$(run_due "$w" --queue)" "held $target " "a held head is only recorded when first seen"
+  printf '%s 1\n' "$target" > "$w/home/state/.self-update-due"
+  out=$(run_due "$w" --queue)
+  assert_contains "$out" "queued $target " "a head held past the repeat interval is queued"
+  assert_contains "$out" "check whether that task is still live" "the held wake asks whether the task is live"
+  rm "$w/home/state/.self-update-due"
   printf 'project=%s\n' "$w/home/projects/unrelated" > "$w/home/state/t1.meta"
   assert_contains "$(run_due "$w")" "due $target " "a task on another project does not hold the update"
   printf 'project=%s\nkind=secondmate\n' "$w/home/projects/fm" > "$w/home/state/sm1.meta"
@@ -753,6 +766,7 @@ test_due_reports_a_landed_head_once_no_task_works_on_firstmate() {
   assert_equals "$(git -C "$w/main" rev-parse HEAD^)" "$target" "--due moved the code root"
   bump_origin "$w" readme
   git -C "$w/home/projects/fm" fetch -q origin
+  assert_equals "$(run_due "$w" --queue)" "" "a diverged code root that has not fetched the head must report nothing, since the update would skip it"
   git -C "$w/main" fetch -q origin
   assert_equals "$(run_due "$w" --queue)" "" "a code root diverged from the landed head must report nothing, since the update would skip it"
   pass "T16 --due reports a landed head from a fleet-synced project clone, held while a task works on firstmate"

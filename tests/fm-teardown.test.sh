@@ -2510,7 +2510,7 @@ test_dirty_return_warns_which_slot_was_lost() {
   add_treehouse_that_leaves_residue "$case_dir"
 
   set +e
-  FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  FM_SELF_UPDATE_DUE_ROOT="$case_dir/root" FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
   rc=$?
   set -e
 
@@ -2544,7 +2544,7 @@ SH
   chmod +x "$case_dir/fakebin/tmux"
 
   set +e
-  FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  FM_SELF_UPDATE_DUE_ROOT="$case_dir/root" FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
   rc=$?
   set -e
 
@@ -2652,7 +2652,7 @@ test_return_that_removes_copy_warns_cannot_verify() {
   add_treehouse_that_removes_copy "$case_dir"
 
   rc=0
-  FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  FM_SELF_UPDATE_DUE_ROOT="$case_dir/root" FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
 
   expect_code 4 "$rc" "return-removes-copy: an unverified slot should exit 4 after cleanup"
   assert_grep "lost this slot" "$case_dir/stderr" "return-removes-copy: no lost-slot warning"
@@ -2708,16 +2708,23 @@ test_teardown_names_a_due_self_update() {
   clone="$case_dir/projects/firstmate"
   git clone -q --shared --no-checkout "$ROOT" "$clone" || fail "self-update-due: could not clone the code root"
   git -C "$clone" remote set-url origin "$url"
+  # A clean code root on its default branch at this checkout's HEAD; the real
+  # checkout may be dirty or detached.
+  git clone -q --shared --no-checkout "$ROOT" "$case_dir/root" || fail "self-update-due: could not clone the code root"
+  git -C "$case_dir/root" remote set-url origin "$url"
+  git -C "$case_dir/root" update-ref refs/remotes/origin/main "$(git -C "$ROOT" rev-parse HEAD)"
+  git -C "$case_dir/root" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+  git -C "$case_dir/root" checkout -q -B main "$(git -C "$ROOT" rev-parse HEAD)"
   landed=$(git -C "$clone" -c user.name=test -c user.email=test@example.invalid commit-tree \
     "$(git -C "$ROOT" rev-parse 'HEAD^{tree}')" -p "$(git -C "$ROOT" rev-parse HEAD)" -m landed)
   git -C "$clone" update-ref refs/remotes/origin/main "$landed"
   git -C "$clone" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
   printf 'also_project_firstmate=%s\n' "$clone" >> "$case_dir/state/task-x1.meta"
-  assert_contains "$(FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" "$ROOT/bin/fm-update.sh" --due)" \
+  assert_contains "$(FM_SELF_UPDATE_DUE_ROOT="$case_dir/root" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" "$ROOT/bin/fm-update.sh" --due)" \
     "held $landed " "self-update-due: the live task did not hold the head before teardown"
 
   rc=0
-  FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  FM_SELF_UPDATE_DUE_ROOT="$case_dir/root" FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
   expect_code 0 "$rc" "self-update-due: teardown failed: $(cat "$case_dir/stderr")"
   assert_grep "self-update-due: firstmate self-update due: the code root runs " "$case_dir/stdout" \
     "self-update-due: the due head was not named"

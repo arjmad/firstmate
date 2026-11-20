@@ -1794,6 +1794,14 @@ test_landed_firstmate_head_wakes_once_for_self_update() {
   clone="$dir/projects/firstmate"
   git clone -q --shared --no-checkout "$ROOT" "$clone" || fail "could not clone the code root"
   git -C "$clone" remote set-url origin "$url"
+  # A clean code root on its default branch at this checkout's HEAD; the real
+  # checkout may be dirty or detached.
+  git clone -q --shared --no-checkout "$ROOT" "$dir/root" || fail "could not clone the code root"
+  git -C "$dir/root" remote set-url origin "$url"
+  git -C "$dir/root" update-ref refs/remotes/origin/main "$(git -C "$ROOT" rev-parse HEAD)"
+  git -C "$dir/root" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+  git -C "$dir/root" checkout -q -B main "$(git -C "$ROOT" rev-parse HEAD)"
+  export FM_SELF_UPDATE_DUE_ROOT="$dir/root"
   landed=$(git -C "$clone" -c user.name=test -c user.email=test@example.invalid commit-tree "$(git -C "$ROOT" rev-parse 'HEAD^{tree}')" -p "$(git -C "$ROOT" rev-parse HEAD)" -m landed)
   git -C "$clone" update-ref refs/remotes/origin/main "$landed"
   git -C "$clone" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
@@ -1819,15 +1827,15 @@ test_landed_firstmate_head_wakes_once_for_self_update() {
   wait_poll_cycle "$state" "$pid" || fail "the same landed head woke the watcher again: $(cat "$out")"
 
   # A teardown that sees the next head first queues its row while the watcher
-  # polls; the watcher still wakes once for it.
+  # polls; the watcher still wakes for it, by the queued row or its own check.
   second=$(git -C "$clone" -c user.name=test -c user.email=test@example.invalid commit-tree "$(git -C "$ROOT" rev-parse 'HEAD^{tree}')" -p "$landed" -m second)
   git -C "$clone" update-ref refs/remotes/origin/main "$second"
   FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-update.sh" --due --queue >/dev/null \
     || fail "the teardown-side check failed"
   touch -t 200001010000 "$state/.last-self-update-due"
   wait_for_exit "$pid" 100 || { reap "$pid"; fail "a head a teardown queued first did not wake the watcher: $(cat "$out")"; }
-  grep -F "behind projects/firstmate origin/main at ${second:0:8}" "$out" >/dev/null \
-    || fail "the wake did not name the head the teardown queued: $(cat "$out")"
+  grep -E "behind projects/firstmate origin/main at ${second:0:8}|queued work" "$out" >/dev/null \
+    || fail "the wake did not surface the head the teardown queued: $(cat "$out")"
   FM_HOME="$dir" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-wake-drain.sh" >/dev/null 2>"$dir/drain.err" \
     || fail "could not drain the teardown-queued wake: $(cat "$dir/drain.err")"
   ack_drain_err "$state" "$dir/drain.err" >/dev/null 2>&1 || fail "could not acknowledge the teardown-queued wake"
@@ -1842,6 +1850,7 @@ test_landed_firstmate_head_wakes_once_for_self_update() {
   reap "$pid"
   [ ! -e "$state/.self-update-due" ] || fail "a current code root kept the raised-head record"
   [ ! -e "$state/.self-update-due-woke" ] || fail "a current code root kept the watcher's woke record"
+  unset FM_SELF_UPDATE_DUE_ROOT
   pass "a landed firstmate head wakes once for self-update and clears once the code root is current"
 }
 
