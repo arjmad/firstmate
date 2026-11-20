@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Behavior tests for bin/fm-backlog-overdue.sh: a queued backlog item whose date
 # gate opened more than the grace period ago without a dispatch or answer wakes
-# firstmate exactly once, with a reason naming it and how long it is overdue,
-# and a later dispatch or answer clears it.
+# firstmate once, with a reason naming it and how long it is overdue, again
+# each week while it stays overdue, and a later dispatch or answer clears it.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -141,6 +141,113 @@ test_dispatch_or_answer_clears_and_a_new_lapse_wakes_again() {
   pass "a dispatch or answer clears the overdue mark, and a later lapse wakes once more"
 }
 
+# An overridden interval names its own cadence in the repeat wake.
+test_overridden_interval_names_its_cadence() {
+  local home out row
+  home=$(new_home daily)
+  add_dated "$home" stalled 'Stalled dated job' 2026-10-24
+  out=$(FM_BACKLOG_OVERDUE_REFIRE_SECS=086400 scan_at "$home" $((GATE_EPOCH + 13 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue stalled" "the first lapse was not reported"
+  ack_all "$home"
+  out=$(FM_BACKLOG_OVERDUE_REFIRE_SECS=086400 scan_at "$home" $((GATE_EPOCH + 14 * HOUR))) || fail "scan failed: $out"
+  out=$(FM_BACKLOG_OVERDUE_REFIRE_SECS=086400 scan_at "$home" $((GATE_EPOCH + 38 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue stalled" "a row still overdue a day after its handled wake did not wake again"
+  row=$(grep "$(printf '\tbacklog-overdue:stalled\t')" "$home/state/.wake-queue")
+  assert_contains "$row" "woken again, daily until it is dispatched" "the repeat wake did not name the overridden cadence"
+  home=$(new_home refire-off)
+  add_dated "$home" stalled 'Stalled dated job' 2026-10-24
+  out=$(FM_BACKLOG_OVERDUE_REFIRE_SECS=off scan_at "$home" $((GATE_EPOCH + 13 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue stalled" "the first lapse was not reported with the re-fire off"
+  ack_all "$home"
+  out=$(FM_BACKLOG_OVERDUE_REFIRE_SECS=off scan_at "$home" $((GATE_EPOCH + 14 * HOUR))) || fail "scan failed: $out"
+  out=$(FM_BACKLOG_OVERDUE_REFIRE_SECS=off scan_at "$home" $((GATE_EPOCH + 30 * 24 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "" "a re-fire set off woke the row again"
+  out=$(FM_BACKLOG_OVERDUE_REFIRE_SECS=0 scan_at "$home" $((GATE_EPOCH + 31 * 24 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "" "a re-fire set to 0 woke the row again"
+  pass "an overridden re-fire interval, even zero-padded, names its own cadence, and 0 or off keeps one wake per gate"
+}
+
+test_still_overdue_item_wakes_again_weekly() {
+  local home out row day=$((24 * HOUR))
+  home=$(new_home weekly)
+  add_dated "$home" stalled 'Stalled dated job' 2026-10-24
+  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue stalled" "the first lapse was not reported"
+  ack_all "$home"
+  # The hourly scan after the wake was handled starts the week.
+  out=$(scan_at "$home" $((GATE_EPOCH + 14 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "" "the scan after a handled wake repeated it"
+
+  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 7 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "" "an acknowledged wake re-fired before a week had passed"
+  out=$(scan_at "$home" $((GATE_EPOCH + 14 * HOUR + 7 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue stalled" "a row still overdue a week after its wake did not wake again"
+  row=$(grep "$(printf '\tbacklog-overdue:stalled\t')" "$home/state/.wake-queue")
+  assert_contains "$row" "opened 182h ago and it is still queued, not dispatched or answered; woken again, weekly" \
+    "the repeat wake did not say it is a weekly repeat or how long the row is overdue"
+  ack_all "$home"
+
+  out=$(scan_at "$home" $((GATE_EPOCH + 15 * HOUR + 7 * day))) || fail "scan failed: $out"
+  out=$(scan_at "$home" $((GATE_EPOCH + 14 * HOUR + 8 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "" "the repeat wake re-fired again before another week"
+  out=$(scan_at "$home" $((GATE_EPOCH + 15 * HOUR + 14 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue stalled" "a row still overdue after two weeks did not wake a third time"
+  pass "a row still overdue after its wake wakes again each week until it is handled"
+}
+
+test_refire_clock_runs_from_the_handled_wake() {
+  local home out day=$((24 * HOUR))
+  home=$(new_home late-ack)
+  add_dated "$home" late 'Wake handled late' 2026-10-24
+  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue late" "the first lapse was not reported"
+  # The wake stays queued, unhandled, for 13 days of hourly scans.
+  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 7 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "" "a still-queued wake was reported again"
+  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 13 * day))) || fail "scan failed: $out"
+  assert_equals "$(queued_rows "$home" late)" 1 "a still-queued wake was duplicated"
+  ack_all "$home"
+  # The hourly scan after the wake was handled starts the week.
+  out=$(scan_at "$home" $((GATE_EPOCH + 14 * HOUR + 13 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "" "the scan right after a late-handled wake repeated it"
+  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 14 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "" "the repeat fired a day after a late-handled wake"
+  out=$(scan_at "$home" $((GATE_EPOCH + 14 * HOUR + 20 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue late" "the repeat did not fire a week after the wake was handled"
+
+  # A watcher outage: the repeat wake is still queued at the last scan before
+  # it, and is handled before the first scan after it, 13 days on.
+  out=$(scan_at "$home" $((GATE_EPOCH + 15 * HOUR + 20 * day))) || fail "scan failed: $out"
+  ack_all "$home"
+  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 33 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "" "the first scan after an outage repeated a wake handled moments before"
+  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 40 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue late" "the repeat did not fire a week after the post-outage scan"
+
+  # An outage that starts before any scan sees that new wake still queued,
+  # handled 10 days later before the first scan after it.
+  ack_all "$home"
+  out=$(scan_at "$home" $((GATE_EPOCH + 14 * HOUR + 50 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "" "a wake handled before any scan saw it queued repeated at once"
+  out=$(scan_at "$home" $((GATE_EPOCH + 15 * HOUR + 57 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue late" "the repeat did not fire a week after that wake was handled"
+  pass "the weekly repeat counts from when the earlier wake was handled, not when it was queued"
+}
+
+test_date_only_marker_wakes_again_once() {
+  local home out
+  home=$(new_home legacy-marker)
+  add_dated "$home" legacy 'Woken before re-fires existed' 2026-10-24
+  mkdir -p "$home/state/backlog-overdue"
+  printf '%s\n' 2026-10-24 > "$home/state/backlog-overdue/legacy"
+  out=$(scan_at "$home" $((GATE_EPOCH + 3 * 24 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue legacy" "a row behind a date-only marker did not wake again"
+  ack_all "$home"
+  out=$(scan_at "$home" $((GATE_EPOCH + 4 * 24 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "" "a rewritten marker re-fired before a week had passed"
+  pass "a marker written before weekly re-fires wakes its row once more, then weekly"
+}
+
 test_still_queued_key_is_not_duplicated() {
   local home out
   home=$(new_home dedup)
@@ -190,6 +297,10 @@ test_grace_period_bounds_the_wake
 test_grace_runs_from_local_midnight
 test_waiting_or_dispatched_items_stay_quiet
 test_dispatch_or_answer_clears_and_a_new_lapse_wakes_again
+test_still_overdue_item_wakes_again_weekly
+test_overridden_interval_names_its_cadence
+test_refire_clock_runs_from_the_handled_wake
+test_date_only_marker_wakes_again_once
 test_still_queued_key_is_not_duplicated
 test_failed_backlog_read_changes_nothing
 test_home_without_backlog_is_silent

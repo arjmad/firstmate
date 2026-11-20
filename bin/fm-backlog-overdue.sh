@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fm-backlog-overdue.sh - wake firstmate once for dated backlog work its gate left stalled.
+# fm-backlog-overdue.sh - wake firstmate, weekly while it lasts, for dated backlog work its gate left stalled.
 #
 # Usage:
 #   fm-backlog-overdue.sh scan
@@ -17,15 +17,27 @@
 # heartbeat re-evaluation of queued work half the gate's first day before this
 # fires.
 #
-# Each overdue row gets exactly one durable `check:` wake keyed
+# Each overdue row gets one durable `check:` wake keyed
 # `backlog-overdue:<id>`, whose payload names the task id, its gate date, and
 # how many hours it is overdue. The marker state/backlog-overdue/<id> records
-# the gate date it fired for, so the row stays quiet on every later scan.
+# the gate date it fired for and when, as `<date> <epoch>`, so the row stays
+# quiet until the re-fire interval passes (7 days,
+# FM_BACKLOG_OVERDUE_REFIRE_SECS, in seconds); a row still overdue then wakes
+# again, and so on weekly, so an acknowledged wake whose row was never
+# re-dated, dispatched or closed cannot rot silently. A marker written with a
+# wake reads `<date> <epoch> queued`; the first scan that finds that wake
+# handled restarts the marker's time there and drops the flag, so the interval
+# runs from when the wake was handled, even after a watcher outage.
+# FM_BACKLOG_OVERDUE_REFIRE_SECS=0 or off keeps the old once-per-gate wake. A
+# marker holding only a date, written before the re-fire existed, wakes again
+# on its next scan, unless its earlier wake is still queued: then the interval
+# starts when that wake is handled.
 # Dispatching the row, answering or lifting its hold, closing it, or giving it
 # an unresolved blocker takes it off the overdue set, and the next scan removes
 # its marker; a later gate that again lapses therefore wakes once more, as does
-# a re-held row with a new date. The marker write and the append share the
-# wake-queue lock, and a key still queued gets no second row.
+# a re-held row with a new date. Every marker read that decides a re-fire, the
+# marker writes, and the append share the wake-queue lock, and a key still
+# queued gets no second row.
 #
 # Prints one `overdue <id>` line per wake it queued, so bin/fm-watch.sh
 # can wake once for the batch. A home with no readable tasks-axi backlog (a
@@ -50,9 +62,18 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 MARKERS="$STATE/backlog-overdue"
 GRACE=${FM_BACKLOG_OVERDUE_GRACE_SECS:-43200}
 case "$GRACE" in ''|*[!0-9]*) GRACE=43200 ;; esac
+REFIRE=${FM_BACKLOG_OVERDUE_REFIRE_SECS:-604800}
+case "$REFIRE" in off) REFIRE=0 ;; ""|*[!0-9]*) REFIRE=604800 ;; *) REFIRE=$((10#$REFIRE)) ;; esac
+# The repeat wake names its own cadence, so an overridden interval reads true.
+if [ "$REFIRE" = 604800 ]; then REFIRE_WORDS=weekly
+elif [ "$REFIRE" = 86400 ]; then REFIRE_WORDS=daily
+elif [ $((REFIRE % 86400)) -eq 0 ]; then REFIRE_WORDS="every $((REFIRE / 86400)) days"
+elif [ $((REFIRE % 3600)) -eq 0 ]; then REFIRE_WORDS="every $((REFIRE / 3600))h"
+else REFIRE_WORDS="every ${REFIRE}s"
+fi
 
 usage() {
-  sed -n '2,34{s/^# \{0,1\}//;p;}' "$0"
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
 }
 
 die() {
@@ -99,6 +120,7 @@ load_wake_lib() {
 
 cmd_scan() {
   local now listing rows id until title opened age hours marker queued candidates='' payload
+  local fired_until fired_at fired_queued again refire=0
   [ "$#" -eq 0 ] || die "usage: fm-backlog-overdue.sh scan"
   now=${FM_BACKLOG_OVERDUE_NOW:-$(date +%s)}
   case "$now" in ''|*[!0-9]*) die "FM_BACKLOG_OVERDUE_NOW must be epoch seconds" ;; esac
@@ -126,18 +148,43 @@ cmd_scan() {
     age=$((now - opened))
     [ "$age" -ge "$GRACE" ] || continue
     marker="$MARKERS/$id"
-    [ "$(cat "$marker" 2>/dev/null)" != "$until" ] || continue
+    again=''
+    fired_until=''
+    [ ! -f "$marker" ] || read -r fired_until _ < "$marker" 2>/dev/null || true
+    if [ "$fired_until" = "$until" ]; then
+      # Fired for this gate: quiet until the re-fire interval has passed since
+      # the wake was handled, decided against the queue and marker as they
+      # stand under the wake-queue lock.
+      command -v fm_wake_append_locked >/dev/null 2>&1 || load_wake_lib \
+        || die "cannot load the wake library to read the queued wakes"
+      fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || die "cannot take the wake-queue lock"
+      fired_until='' fired_at='' fired_queued='' refire=0
+      read -r fired_until fired_at fired_queued < "$marker" 2>/dev/null || true
+      if [ "$fired_until" != "$until" ]; then
+        :
+      elif fm_wake_queued_keys_locked check | grep -Fxq "backlog-overdue:$id"; then
+        [ "$fired_queued" = queued ] || printf '%s %s queued\n' "$until" "${fired_at:-$now}" > "$marker" 2>/dev/null || true
+      elif [ "$fired_queued" = queued ]; then
+        printf '%s %s\n' "$until" "$now" > "$marker" 2>/dev/null || true
+      elif [ "$REFIRE" -gt 0 ]; then
+        case "$fired_at" in ''|*[!0-9]*) fired_at=0 ;; esac
+        [ $((now - fired_at)) -lt "$REFIRE" ] || refire=1
+      fi
+      fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+      [ "$refire" = 1 ] || continue
+      again="; woken again, $REFIRE_WORDS until it is dispatched, re-dated, answered or closed"
+    fi
     hours=$((age / 3600))
-    payload="check: backlog $id overdue: its date gate $until opened ${hours}h ago and it is still queued, not dispatched or answered - ${title:0:120}"
+    payload="check: backlog $id overdue: its date gate $until opened ${hours}h ago and it is still queued, not dispatched or answered$again - ${title:0:120}"
     command -v fm_wake_append_locked >/dev/null 2>&1 || load_wake_lib \
       || die "cannot load the wake library to report $id"
     (umask 077; mkdir -p "$MARKERS") || die "cannot create $MARKERS"
     fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || die "cannot take the wake-queue lock"
     queued=$(fm_wake_queued_keys_locked check)
     if printf '%s\n' "$queued" | grep -Fxq "backlog-overdue:$id"; then
-      printf '%s\n' "$until" > "$marker" 2>/dev/null || true
+      printf '%s %s queued\n' "$until" "$now" > "$marker" 2>/dev/null || true
     elif fm_wake_append_locked check "backlog-overdue:$id" "$payload"; then
-      printf '%s\n' "$until" > "$marker" 2>/dev/null \
+      printf '%s %s queued\n' "$until" "$now" > "$marker" 2>/dev/null \
         || printf 'fm-backlog-overdue: woke for %s but could not record it under %s\n' "$id" "$MARKERS" >&2
       printf 'overdue %s\n' "$id"
     fi
