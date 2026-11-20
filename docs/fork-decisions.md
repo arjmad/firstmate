@@ -2,7 +2,7 @@
 
 This fork's standing decisions and its fork patches live one record per file under [`docs/fork-decisions/`](fork-decisions/), and this page is their stable entry point.
 It holds no records, so no PR edits it to record one, and two PRs that each record a decision never touch the same file.
-`bin/fm-fork-decisions.sh check` fails when a dated decision or a table row is added here, and `tests/fm-fork-decisions.test.sh` runs it in CI.
+`bin/fm-fork-decisions.sh check` fails when a dated decision or a table row is added here, or when a carried row names a repository path that is gone, and CI's `Repo invariants` job runs it on every event.
 
 ## Finding a record
 
@@ -24,7 +24,7 @@ A later decision that changes an earlier one edits that record or adds a new dat
 The [decision to keep firstmate fixes in this fork](fork-decisions/2026-10-10-fork-patches-stay-in-fork.md) is why fork patches are tracked.
 
 Contract:
-Every fork PR that changes upstream-owned files adds one fork-patch record naming what changed, where, and the upstream code it touches.
+Every fork PR that changes upstream-owned files adds one fork-patch record naming what changed, where, and the upstream code it touches; CI's `Repo invariants` job fails a pull request that changes them and adds or edits no record at all, through `bin/fm-fork-decisions.sh pr-check`, so the reviewer still checks that a row covers the change.
 Every upstream-sync PR re-checks each row `bin/fm-fork-decisions.sh patches` lists against the merged upstream and updates its status and last-checked sync in its record.
 Status is `carried` when the change still applies and upstream is unchanged there, `upstreamed` when upstream now has an equivalent so the fork change can be dropped at the next sync, or `conflicted` when upstream changed the same code and the merge needed a hand; a row a later patch replaced reads `superseded by #N` instead.
 A sync drops a fork change only when its row reads `upstreamed`, and the captain's merge of that sync PR is the approval.

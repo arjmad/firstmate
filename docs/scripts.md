@@ -97,6 +97,9 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `backends/rex.sh`        | Experimental Rex session-provider adapter                                            |
 | `backends/t3code.sh`     | Experimental T3 Code adapter driving the agent session through `fm-t3-mcp.mjs`       |
 | `backends/tern.sh`       | Experimental tern session-provider adapter                                           |
+| `backends/hc.sh` | Experimental herdr-core (`hc`) session-provider adapter |
+| `backends/herdr-agent-view.py` | Set or clear Firstmate's project-group agent view on a Herdr control socket |
+| `backends/rex-eventwait.lua` | The Rex adapter's bounded event reader, run inside `rex do` |
 | `fm-config-push.sh`      | Push declared inherited local material to live local or remote secondmates and send the placement-specific config reread when changed |
 | `fm-project-mode.sh`     | Resolve a project's registered delivery posture, forge binding, PR-text binding, or ship-branch prefix from `data/projects.md` for fleet sync, home seeding, and the forge and PR-text agreements a ship spawn or scout promotion applies |
 | `fm-forge-detect.sh`     | Propose a clone's forge binding from its origin remote for project-add intake, never recording it |
@@ -226,7 +229,6 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-agy-trust.sh` | Pre-register Antigravity CLI workspace trust for a task worktree before an agy spawn |
 | `fm-allocation-lib.sh` | Own the task allocation-ownership contract for reused worktree and home pool slots |
 | `fm-backlog-overdue.sh` | Wake firstmate once for a queued backlog item whose date gate lapsed without a dispatch or answer |
-| `fm-backlog-handoff.sh` | Hand identified in-scope backlog items from the main backlog to a secondmate's home backlog |
 | `fm-branch-dispatch.mjs` | Command-line entry to supervision-branch wake dispatch for a non-Pi supervision host |
 | `fm-branch-report.sh` | Record one handled fleet event from a supervision-host branch session in the durable outcome store |
 | `fm-cd-command-policy.mjs` | Decide whether a shell command persistently changes the primary firstmate shell's directory |
@@ -239,8 +241,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-cursor-lib.sh` | Resolve the Cursor executable and identify Cursor processes |
 | `fm-devin-config.sh` | Write a private Devin worker config that preserves the user's settings and hooks |
 | `fm-dispatch-resolve.sh` | Resolve one dispatch profile from a task brief through the opt-in typesafe.ai model |
-| `fm-doc-audience-check.sh` | Validate the tracked documentation audience inventory, setup routing, and local links |
-| `fm-dod-lib.sh` | Own a ship task's Definition of done block and the named-head gate that accepts its `done:` |
+| `fm-doc-audience-check.sh` | Validate the tracked documentation audience inventory, setup routing, local links, and this index's one row per `bin/` file |
 | `fm-env-lib.sh` | Shared one-key accessor for `.env`-style files |
 | `fm-fork-decisions.sh` | Check the one-file-per-record fork decisions under `docs/fork-decisions/` and print their fork-patch rows as one table |
 | `fm-gemini-lib.sh` | Identify Gemini CLI processes |
@@ -260,7 +261,6 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-procevent-extension-capture.pl` | Capture and hand off a process-to-event extension result for `fm-procevent.sh` |
 | `fm-procevent-lavish.sh` | Lavish adapter for the process-to-event runner: classify and read captured results |
 | `fm-procevent-lib.sh` | Shared identity, ownership, capture, and publication rules for the process-to-event runner |
-| `fm-project-origin-lib.sh` | Validate a project origin URL handed from one home to another |
 | `fm-push-transition-lib.sh` | Own the watcher's native push-transition escalation |
 | `fm-remote-delta-read.sh` | Blocking, non-destructive delta read of a remote secondmate append-only log |
 | `fm-remote-entrypoint.sh` | Fixed remote SSH entrypoint that validates and runs one tracked `bin/fm-*.sh` for `fm-on.sh` |
@@ -291,3 +291,35 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-transition-lib.sh` | Backend-neutral agent-state transition shape and supervision policy |
 | `fm-turnend-guard-cursor.sh` | Cursor `stop` hook for a primary session's turn-end supervision |
 | `fm-worker-account-lib.sh` | Own the opt-in per-home worker account pin and its launch-time sign-in check |
+| `fm-claude-account-quota.sh` | Measure each Claude account `config/claude-accounts` declares, in isolation, and print its quota facts |
+| `fm-claude-store-lock.mjs` | Own Claude Code's store lock for every firstmate write to its per-user `.claude.json`; imported, with no command-line entry point |
+| `fm-commandcode-mod.ts` | Command Code worker mod that writes one task incarnation's semantic busy state through `fm-busy-event.sh` |
+| `fm-cortex-plugin.sh` | Write a private Cortex Code worker plugin carrying firstmate's lifecycle hooks |
+| `fm-exclude-tools-lib.sh` | Parse and check the ship and scout worker launch inputs: excluded tools, the fleet-rendered worker-denied MCP server list, and the Claude compaction window |
+| `fm-extension-deadline.mjs` | Host-owned extension deadlines that survive a host suspension with one bounded grace |
+| `fm-herdr-groups.sh` | Opt-in Herdr project groups: display-only metadata tags and a sorted agents view for this home's Herdr tasks |
+| `fm-hermes-hook.sh` | Hermes native shell-hook receiver that turns TUI turn events into busy and idle evidence |
+| `fm-hermes-lib.sh` | Hermes TUI worker support: the selected profile home and gateway checks |
+| `fm-hermes-process-lib.sh` | Hermes process identity shared by detection, liveness, and the tmux composer |
+| `fm-hold-reason-lib.sh` | The one reversible encoding of a captain-hold reason inside a tasks-axi hold tag |
+| `fm-intake-spill.sh` | Decide whether this home is too busy for more work, which secondmate takes the work, and whether a project's placement sends it to a remote secondmate first |
+| `fm-kimi-trust-lib.sh` | Kimi Code CLI folder-prompt predicates over one visible-pane capture |
+| `fm-lavish-url.py` | HTML and routing helper for `fm-lavish-url.sh`; not a user entry point |
+| `fm-omp-process-lib.sh` | omp (Oh My Pi) process identity shared by harness detection and the session-lock ancestry walk |
+| `fm-omp-profile-lib.sh` | Own the opt-in per-secondmate omp profile pin: which launch reads it, its parsing, and its refusals |
+| `fm-polytoken-lib.sh` | The polytoken (Polytoken CLI) adapter facts shared by spawn, control, and its other consumers |
+| `fm-project-capacity-lib.sh` | How many workers a project admits at once on this machine, and whether a fresh spawn still fits |
+| `fm-record-export.py` | Descriptor-safe filesystem engine for `fm-record-export.sh` |
+| `fm-record-export.sh` | Export a fixed, versioned set of private fleet records |
+| `fm-record-hygiene-lib.sh` | Report home-local record inconsistencies for `fm-bootstrap.sh` and `fm-watch.sh` |
+| `fm-remote-herdr-identity-lib.sh` | Which Herdr session and launch-agent label one code root's remote secondmates use on this account |
+| `fm-role-lib.sh` | The home role and self-repository publication consent |
+| `fm-role.sh` | Report and check this home's firstmate role |
+| `fm-sessionstart-agy.sh` | Antigravity CLI (agy) session-open hook transport to `fm-sessionstart-run.sh` |
+| `fm-stow-guard.sh` | Opt-in Claude Stop hook that asks a primary session to `/stow` before context compaction |
+| `fm-supervision-handoff.sh` | Private Claude host hand-back owner, enabled by `config/supervision-handoff-ack` |
+| `fm-test-linux.sh` | Opt-in: run the shell tests changed on this branch inside a Linux container with GNU userland |
+| `fm-test-tap-verify.sh` | Prove a TAP-planned suite actually finished |
+| `fm-turnend-guard-agy.sh` | Antigravity (agy) Stop hook for a primary session's turn-end supervision |
+| `fm-warm-compact-lib.sh` | Warm-cache compaction for a Claude primary and the supervision host's engine conversation |
+| `fm-worker-hook-status.sh` | A Claude Code crewmate's own lifecycle hooks append its status line |
