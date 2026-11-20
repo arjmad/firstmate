@@ -818,8 +818,12 @@ jobs:
             printf '%s\n' "$tracked"
             exit 1
           fi
-      # docs/fork-decisions.md: a fork PR that changes upstream-owned files
-      # adds or edits its fork-patch record.
+      # docs/fork-decisions.md: every record is well formed and every path a
+      # carried row cites still exists. This runs on every event, because a PR
+      # that deletes or renames a cited file need not select the record suite.
+      - name: Fork-patch records are valid
+        run: bin/fm-fork-decisions.sh check
+      # A fork PR that changes upstream-owned files adds or edits a record.
       - name: Upstream-owned changes carry a fork-patch record
         if: github.event_name == 'pull_request'
         env:

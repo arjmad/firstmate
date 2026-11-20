@@ -2566,7 +2566,7 @@ test_interruption_before_and_after_raw_commit() {
   while [ "$i" -lt 100 ]; do
     if [ "$(cat "$state/.wake-queue.lock/pid" 2>/dev/null || true)" = "$pid" ] \
       && grep -Eq '^(pending|announced):handling:' "$state/.watcher-down" 2>/dev/null \
-      && ps -A -o ppid=,comm= | awk -v parent="$pid" '$1 == parent && $2 == "sleep" { found = 1 } END { exit !found }'; then
+      && ps -A -o ppid=,comm= | awk -v parent="$pid" '$1 == parent { sub(".*/", "", $2); if ($2 == "sleep") found = 1 } END { exit !found }'; then
       break
     fi
     sleep 0.05
