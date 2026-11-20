@@ -1185,6 +1185,46 @@ EOF
   pass "home-summary excludes kind=secondmate from unowned_current and terminal_in_flight"
 }
 
+# The heartbeat's fleet view lists every queued row that has waited 7 days or
+# more with no hold and no blocker as an action, naming what each needs.
+test_view_lists_waiting_unheld_rows() {
+  local home fakebin view section
+  home=$(make_home waiting-unheld)
+  mkdir -p "$home/data"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] old-fleet-work - Sign the Kempf login out (repo: sample) (kind: ship) (since 2026-07-10)
+
+  Owner: fleet
+- [ ] old-his-step - Re-consent the Google account (repo: sample) (kind: captain) (since 2026-07-11)
+
+  Owner: arjun
+- [ ] fresh-work - Filed this week (repo: sample) (kind: ship) (since 2026-07-20)
+- [ ] old-held - Held for the captain (repo: sample) (kind: captain) (since 2026-07-01) (hold: choose a route) (hold-kind: captain)
+- [ ] old-parked - Parked someday (repo: sample) (kind: ship) (since 2026-07-01) (hold: later) (hold-kind: parked) (hold-until: 2026-12-01)
+- [ ] old-blocked - Waits on upstream blocked-by: fresh-work (repo: sample) (kind: ship) (since 2026-07-01)
+
+## Done
+EOF
+  fakebin=$(make_fakebin "$home")
+  view=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_SNAPSHOT_NOW=2026-07-25T00:00:00Z "$VIEW")
+  assert_contains "$view" "## Waiting Unheld" "the view has no waiting-unheld section"
+  assert_contains "$view" "| old-fleet-work | Sign the Kempf login out | 2026-07-10 | fleet | dispatch it, date it (hold --kind future --until), or close it |" \
+    "a fleet row waiting unheld for 15 days is not listed with its action"
+  assert_contains "$view" "| old-his-step | Re-consent the Google account | 2026-07-11 | arjun | his own step: hold it for him (bin/fm-captain-hold.sh hold) |" \
+    "a captain-owned row waiting unheld is not listed with the hold action"
+  section=$(printf '%s\n' "$view" | sed -n '/^## Waiting Unheld/,/^## Done/p')
+  assert_not_contains "$section" "fresh-work" "a row filed under 7 days ago was listed"
+  assert_not_contains "$section" "old-held" "a held row was listed"
+  assert_not_contains "$section" "old-parked" "a parked row was listed"
+  assert_not_contains "$section" "old-blocked" "a blocked row was listed"
+  view=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_SNAPSHOT_NOW=2026-07-12T00:00:00Z "$VIEW")
+  assert_contains "$view" "No queued row has waited 7 days or more without a hold." "an empty list did not say so"
+  pass "the fleet view lists queued rows waiting 7 days or more with no hold or blocker, each with its action"
+}
+
 fm_test_run \
   test_empty_fleet_json \
   test_fixture_snapshot_json \
@@ -1203,5 +1243,6 @@ fm_test_run \
   test_scout_reports_include_teardown_reports \
   test_backlog_tasks_axi_forms_and_overrides \
   test_view_renders_snapshot \
+  test_view_lists_waiting_unheld_rows \
   test_view_renders_dead_secondmate_agent_status \
   test_view_renders_remote_secondmate_home_and_newest_pr
