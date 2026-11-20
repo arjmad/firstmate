@@ -816,7 +816,7 @@ fi
 # The protocol file rule 4 names owns the full rule and its reasons.
 IFS= read -r -d '' SHARED_INFRA_RULE <<'EOF' || true
 7. Never administer infrastructure that every lane shares (read the protocol file in rule 4 before you start or stop a process):
-   - Never create, remove, return, prune, move, or reassign any worktree or slot of the worktree pool you came from (`treehouse` get/return/remove/prune, `git worktree add|remove|move|prune`, or the same on any other worktree provider), and never write into a sibling slot's directory.
+   - Never create, remove, return, prune, move, or reassign any worktree of the repository every lane shares or any slot of the worktree pool you came from (`treehouse` get/return/remove/prune, `git worktree add|remove|move|prune`, or the same on any other worktree provider), and never write into a sibling slot's directory.
    - Stop only a process you started, by the pid you recorded in the same command that started it as its own group, `(set -m; <command> & echo $! > <pidfile>)`: check that `ps -o args= -p <pid>` still shows it, then run `kill -- -<pid>`, or use its own handle (your harness's stop, `docker compose down`, `kill-server` on your tmux socket). Never stop anything by name or pattern (`pkill`, `killall`, `pkill -f`, or `kill $(pgrep ...)`), which also matches live services and other agents.
    If you need a second checkout, another slot, or a process you did not start stopped, append `blocked [at=<epoch>]: {what you need}` and stop; firstmate arranges it.
 EOF
