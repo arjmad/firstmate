@@ -73,9 +73,14 @@
 #          each was filed (tasks-axi's list; the sweep reads age from
 #          `created`).
 # unseen   Print what firstmate has not yet shown the captain, one
-#          `<id><TAB><label><TAB><title>` line each, label `now`, `noticed`
-#          or `fixed`. A read; bin/fm-wake-drain.sh prints its
-#          `now` rows every drain, and the Monday triage reads the rest.
+#          `<id><TAB><label><TAB><title>` line each, label `now`, `noticed`,
+#          `fixed` or `dropped`. bin/fm-wake-drain.sh prints its `now` rows
+#          every drain, and the Monday triage reads the rest. It tidies the
+#          list first: a `noticed` row whose item is no longer open (closed
+#          by any path, or archived) leaves it, and a title an older `close`
+#          split over two lines with tasks-axi's truncation pointer is
+#          rejoined, the pointer cut to `...`. A backlog read that fails or
+#          cannot be parsed prunes nothing.
 # shown    Mark items shown after the captain message or Monday triage that
 #          brought them to him.
 #          Prints `shown: <id>` for each id that was unseen.
@@ -381,10 +386,56 @@ cmd_list() {
   done
 }
 
+# The ids of every open (queued or in-flight) backlog row, one per line, or
+# a failure when either listing fails or does not parse.
+open_row_ids() {
+  local state listing
+  for state in queued in_flight; do
+    listing=$("$TASKS" list --state "$state" --limit 1000000 2>/dev/null) || return 1
+    printf '%s\n' "$listing" | grep -q '^count: [0-9]' || return 1
+    printf '%s\n' "$listing" | awk '/^[a-z_]+\[[0-9]+\]\{/ { rows = 1; next } rows && /^  / { split(substr($0, 3), f, ","); print f[1]; next } { rows = 0 }'
+  done
+}
+
+# Rewrite the unseen list as `unseen` describes; call under lock_state.
+tidy_unseen() {
+  local open='' prune=1 tmp
+  [ -s "$UNSEEN" ] || return 0
+  if grep -q "^[^$TAB]*${TAB}noticed$TAB" "$UNSEEN"; then
+    open=$(open_row_ids) || prune=0
+  fi
+  tmp=$(mktemp "$UNSEEN.XXXXXX") || return 1
+  if OPEN_IDS="$open" awk -v prune="$prune" -F "$TAB" '
+    BEGIN { n = split(ENVIRON["OPEN_IDS"], ids, "\n"); for (i = 1; i <= n; i++) if (ids[i] != "") open[ids[i]] = 1 }
+    function flush() {
+      if (entry == "") return
+      split(entry, f, "\t")
+      if (!(prune && f[2] == "noticed" && !(f[1] in open))) print entry
+      entry = ""
+    }
+    $0 ~ /^[^\t]+\t(now|noticed|fixed|dropped)\t/ { flush(); entry = $0; next }
+    entry != "" {
+      line = $0
+      sub(/^\.\.\. \(truncated, [0-9]+ chars total - use [^)]*to see complete text\)/, "...", line)
+      sub(/[ ]+$/, "", entry)
+      entry = entry line
+      next
+    }
+    END { flush() }
+  ' "$UNSEEN" > "$tmp"; then
+    if cmp -s "$tmp" "$UNSEEN"; then rm -f "$tmp"; else mv "$tmp" "$UNSEEN"; fi
+  else
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
 cmd_unseen() {
   [ $# -eq 0 ] || refuse "unseen takes no arguments"
-  [ -f "$UNSEEN" ] && cat "$UNSEEN"
-  return 0
+  [ -f "$UNSEEN" ] || return 0
+  lock_state
+  tidy_unseen || echo "fm-noticed: could not tidy $UNSEEN; listing it as it is" >&2
+  cat "$UNSEEN"
 }
 
 cmd_shown() {
@@ -424,7 +475,7 @@ cmd_close() {
   [ "$fixed" = 0 ] || { settled="$settled Fixed by firstmate on its own."; label=fixed; }
   [ "$dropped" = 0 ] || { settled="$settled Dropped by firstmate on its own."; label=dropped; }
   lock_state
-  show=$("$TASKS" show "$id" 2>/dev/null) || { echo "fm-noticed: could not read $id" >&2; exit 1; }
+  show=$("$TASKS" show "$id" --full 2>/dev/null) || { echo "fm-noticed: could not read $id" >&2; exit 1; }
   title=$(shown_field "$show" title)
   append_body "$id" "$settled" || { echo "fm-noticed: could not record the evidence on $id" >&2; exit 1; }
   if [ "$(shown_field "$show" state)" != "done" ]; then
