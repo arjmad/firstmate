@@ -148,19 +148,23 @@ test_still_overdue_item_wakes_again_weekly() {
   out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR))) || fail "scan failed: $out"
   assert_equals "$out" "overdue stalled" "the first lapse was not reported"
   ack_all "$home"
+  # The hourly scan after the wake was handled starts the week.
+  out=$(scan_at "$home" $((GATE_EPOCH + 14 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "" "the scan after a handled wake repeated it"
 
-  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 7 * day - HOUR))) || fail "scan failed: $out"
-  assert_equals "$out" "" "an acknowledged wake re-fired before a week had passed"
   out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 7 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "" "an acknowledged wake re-fired before a week had passed"
+  out=$(scan_at "$home" $((GATE_EPOCH + 14 * HOUR + 7 * day))) || fail "scan failed: $out"
   assert_equals "$out" "overdue stalled" "a row still overdue a week after its wake did not wake again"
   row=$(grep "$(printf '\tbacklog-overdue:stalled\t')" "$home/state/.wake-queue")
-  assert_contains "$row" "opened 181h ago and it is still queued, not dispatched or answered; woken again, weekly" \
+  assert_contains "$row" "opened 182h ago and it is still queued, not dispatched or answered; woken again, weekly" \
     "the repeat wake did not say it is a weekly repeat or how long the row is overdue"
   ack_all "$home"
 
-  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 8 * day))) || fail "scan failed: $out"
+  out=$(scan_at "$home" $((GATE_EPOCH + 15 * HOUR + 7 * day))) || fail "scan failed: $out"
+  out=$(scan_at "$home" $((GATE_EPOCH + 14 * HOUR + 8 * day))) || fail "scan failed: $out"
   assert_equals "$out" "" "the repeat wake re-fired again before another week"
-  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 14 * day))) || fail "scan failed: $out"
+  out=$(scan_at "$home" $((GATE_EPOCH + 15 * HOUR + 14 * day))) || fail "scan failed: $out"
   assert_equals "$out" "overdue stalled" "a row still overdue after two weeks did not wake a third time"
   pass "a row still overdue after its wake wakes again each week until it is handled"
 }
@@ -193,6 +197,14 @@ test_refire_clock_runs_from_the_handled_wake() {
   assert_equals "$out" "" "the first scan after an outage repeated a wake handled moments before"
   out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 40 * day))) || fail "scan failed: $out"
   assert_equals "$out" "overdue late" "the repeat did not fire a week after the post-outage scan"
+
+  # An outage that starts before any scan sees that new wake still queued,
+  # handled 10 days later before the first scan after it.
+  ack_all "$home"
+  out=$(scan_at "$home" $((GATE_EPOCH + 14 * HOUR + 50 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "" "a wake handled before any scan saw it queued repeated at once"
+  out=$(scan_at "$home" $((GATE_EPOCH + 15 * HOUR + 57 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue late" "the repeat did not fire a week after that wake was handled"
   pass "the weekly repeat counts from when the earlier wake was handled, not when it was queued"
 }
 

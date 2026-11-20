@@ -24,10 +24,10 @@
 # quiet until the re-fire interval passes (7 days,
 # FM_BACKLOG_OVERDUE_REFIRE_SECS, in seconds); a row still overdue then wakes
 # again, and so on weekly, so an acknowledged wake whose row was never
-# re-dated, dispatched or closed cannot rot silently. While its wake is still
-# queued, unhandled, the marker reads `<date> <epoch> queued`; the first scan
-# that finds it handled restarts the marker's time there, so the interval runs
-# from when the wake was handled, even after a watcher outage. A marker
+# re-dated, dispatched or closed cannot rot silently. A marker written with a
+# wake reads `<date> <epoch> queued`; the first scan that finds that wake
+# handled restarts the marker's time there and drops the flag, so the interval
+# runs from when the wake was handled, even after a watcher outage. A marker
 # holding only a date, written before the re-fire existed, wakes again on its
 # next scan.
 # Dispatching the row, answering or lifting its hold, closing it, or giving it
@@ -172,9 +172,9 @@ cmd_scan() {
     fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || die "cannot take the wake-queue lock"
     queued=$(fm_wake_queued_keys_locked check)
     if printf '%s\n' "$queued" | grep -Fxq "backlog-overdue:$id"; then
-      printf '%s %s\n' "$until" "$now" > "$marker" 2>/dev/null || true
+      printf '%s %s queued\n' "$until" "$now" > "$marker" 2>/dev/null || true
     elif fm_wake_append_locked check "backlog-overdue:$id" "$payload"; then
-      printf '%s %s\n' "$until" "$now" > "$marker" 2>/dev/null \
+      printf '%s %s queued\n' "$until" "$now" > "$marker" 2>/dev/null \
         || printf 'fm-backlog-overdue: woke for %s but could not record it under %s\n' "$id" "$MARKERS" >&2
       printf 'overdue %s\n' "$id"
     fi
