@@ -216,23 +216,6 @@ esac
 # shellcheck source=bin/fm-role-lib.sh
 . "$SCRIPT_DIR/fm-role-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
-IFS= read -r -d '' CREWMATE_PAUSE_INSTRUCTIONS <<EOF || true
-   Use \`$PAUSED_VERB: {why}\` - distinct from \`blocked:\` - when deliberately waiting for work or an external condition expected to clear on its own, including your own validation round.
-   Before ending your turn with your own background shell or monitor still running, or before waiting on your own pipeline run or a long foreground command, append \`$PAUSED_VERB [at=<epoch>]: {job and completion condition}\` to the status file.
-   Name what you are waiting for and what will let you resume; do not repeat the declaration on every poll.
-   Do not declare active implementation or reasoning as a wait.
-   Firstmate may still raise one first-sight alert; the declared wait then uses the existing long recheck cadence instead of repeated possible-wedge alarms.
-   When you know when the wait clears, include \`until <YYYY-MM-DDTHH:MMZ>\` (UTC) for a recheck at that time; for your own background job or command with a timeout, that time is its start plus its timeout, rounded up to the minute.
-   Follow the resolution rule below when the wait clears, then resume the task.
-   Use \`$FM_CLASSIFY_GATE_WAIT_VERB: {gate}\` instead when the wait is a CI run or a policy gate (a required check, a review requirement, a merge queue) that clears without anyone deciding anything; it releases your attention exactly like a pause and is never a \`needs-decision\`.
-   Use \`blocked:\` when you are stuck and need help.
-   When only the captain himself can clear that blocker or answer that question (he must act, sign in, or choose), add the \`[on=captain]\` tag before the colon, as in \`blocked [on=captain] [at=<epoch>]: {what he must do}\`; that tag, not your wording, puts the wait in his inbox.
-EOF
-IFS= read -r -d '' SHIP_READY_INSTRUCTIONS <<EOF || true
-   Use \`$FM_CLASSIFY_READY_VERB [at=<epoch>]: PR {url}\` when your PR is open and ready to land but your task continues after it merges, such as a step that needs the merged code or a companion PR that must land first.
-   You may not merge it, and landing it is firstmate's under the project's merge posture, so a PR waiting to land is never a \`needs-decision\`; when nothing remains for you once it is open, report \`done:\` under the Definition of done instead.
-   A step only the captain can take himself once your PR merges (an action on his own hands or machine, such as linking an account or a launch only he can run) is not a reason to report \`ready:\` or to wait as \`blocked [on=captain]\`: end the \`done:\` line the Definition of done names with \`; captain step: {the exact action}\` and stop, even when the PR has already merged; firstmate lands the PR, holds that step for him and releases you, and his answer starts a fresh ship for anything left after it.
-EOF
 
 resolve_directory_input() {
   local name=$1 path=$2 resolved
@@ -260,6 +243,21 @@ else
 fi
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 case "$CONFIG" in /*) ;; *) CONFIG="$PWD/$CONFIG" ;; esac
+# Each status, wait, and shared-infrastructure rule stays one line in the
+# brief; the protocol file a worker reads on demand owns what each means in
+# practice (fork patch, docs/fork-decisions/2026-11-20-brief-rules-one-line.md).
+STATUS_PROTOCOL="$FM_ROOT/.agents/skills/crewmate-status-protocol/SKILL.md"
+IFS= read -r -d '' CREWMATE_PAUSE_INSTRUCTIONS <<EOF || true
+   Read \`$STATUS_PROTOCOL\` before your first \`$PAUSED_VERB:\`, \`$FM_CLASSIFY_GATE_WAIT_VERB:\`, or \`[on=captain]\` line.
+   Use \`$PAUSED_VERB: {why}\` for a deliberate wait that clears on its own: Before ending your turn with your own background job still running, or while waiting on your own pipeline run, validation round, or long foreground command, append \`$PAUSED_VERB [at=<epoch>]: {job and completion condition}\`, with \`until <YYYY-MM-DDTHH:MMZ>\` (UTC) when you know when it clears.
+   Use \`$FM_CLASSIFY_GATE_WAIT_VERB: {gate}\` instead when the wait is a CI run or a policy gate that clears without anyone deciding; it is never a \`needs-decision\`.
+   Use \`blocked:\` when you are stuck and need help, as \`blocked [on=captain] [at=<epoch>]: {what he must do}\` when only the captain can clear it.
+   When a blocker or wait clears without a firstmate reply, append \`resolved [at=<epoch>]: {how it cleared}\` (with its \`[key=<slug>]\` if it had one) as you resume.
+EOF
+IFS= read -r -d '' SHIP_READY_INSTRUCTIONS <<EOF || true
+   Use \`$FM_CLASSIFY_READY_VERB [at=<epoch>]: PR {url}\` when your PR is open and ready to land but your task continues after it merges; you never merge it, so a PR waiting to land is never a \`needs-decision\`.
+   A step only the captain can take after it merges is no reason for \`$FM_CLASSIFY_READY_VERB:\`: end the \`done:\` line the Definition of done names with \`; captain step: {the exact action}\` and stop.
+EOF
 KIND=ship
 HERDR_LAB=0
 NO_PROJECTS=0
@@ -815,31 +813,12 @@ fi
 # Rule 2 governs file edits, so it does not prohibit pool administration.
 # The secondmate charter deliberately omits this rule because a secondmate
 # legitimately allocates and returns slots for crewmates in its own home.
+# The protocol file rule 4 names owns the full rule and its reasons.
 IFS= read -r -d '' SHARED_INFRA_RULE <<'EOF' || true
-7. Never administer infrastructure that every lane shares. Two things are shared:
-   - The worktree pool your own worktree came from, and the repository every lane's worktree
-     shares. Never create, remove, return, prune, move, or reassign a worktree or pool slot, and
-     never write into a sibling slot's directory. Rule 2 does not cover this: removing a worktree
-     is administration rather than an edit outside your directory, and it lands on lanes that are
-     running right now. The act is the rule and commands are only examples of it - `treehouse`
-     get/return/remove/prune, the equivalent operations on any other worktree provider or runtime
-     backend, and `git worktree add|remove|move|prune`. A slot that looks unused is not evidence
-     that it is free, and returning your own worktree is firstmate's job at cleanup, not yours.
-   - The processes on this host: live services and other lanes' agent sessions run beside yours,
-     often under the same user and with the same command line as a scratch copy you start. Stop
-     only what you started, by the pid you recorded when you started it. Record it in the same
-     command that starts the process, because `$!` does not survive into a later tool call, and
-     start it as its own process group so its children stop with it:
-     `(set -m; <command> & echo $! > <pidfile>)`. To stop it, check that
-     `ps -o args= -p <pid>` still shows the command you launched, then run `kill -- -<pid>`.
-     Stopping something through its own handle is also fine: your harness's stop for its own
-     background task, `docker compose down` for your compose project, or a `kill-server` on the
-     tmux socket you created. Never stop anything by name or command-line pattern -
-     `pkill`, `killall`, `pkill -f`, or `kill $(pgrep ...)` - because the same pattern matches
-     live services and other agents, and stopping one restarts or ends work you do not own.
-   If you genuinely need a second checkout, another slot, or need a process
-   you did not start stopped, append
-   `blocked [at=<epoch>]: {what you need}` and stop; firstmate arranges it.
+7. Never administer infrastructure that every lane shares (the protocol file in rule 4 explains why):
+   - Never create, remove, return, prune, move, or reassign a slot in the worktree pool you came from (`treehouse` get/return/remove/prune, `git worktree add|remove|move|prune`, or the same on any other worktree provider), and never write into a sibling slot's directory.
+   - Stop only a process you started, by the pid you recorded in the same command that started it as its own group, `(set -m; <command> & echo $! > <pidfile>)`: check that `ps -o args= -p <pid>` still shows it, then run `kill -- -<pid>`, or use its own handle (your harness's stop, `docker compose down`, `kill-server` on your tmux socket). Never stop anything by name or pattern (`pkill`, `killall`, `pkill -f`, or `kill $(pgrep ...)`), which also matches live services and other agents.
+   If you need a second checkout, another slot, or a process you did not start stopped, append `blocked [at=<epoch>]: {what you need}` and stop; firstmate arranges it.
 EOF
 SHARED_INFRA_RULE=${SHARED_INFRA_RULE%$'\n'}
 BRAIN_FILING_RULE=$(fm_brain_filing_rule)
@@ -926,22 +905,16 @@ The report, its notes files beside it in \`$DATA/$ID/\`, and any brain filing be
    \`$STATUS_APPEND\`
    States: working, needs-decision, blocked, $PAUSED_VERB, $FM_CLASSIFY_GATE_WAIT_VERB, done, failed.
    Substitute \`<epoch>\` with the current Unix time in seconds - run \`date +%s\` and write the number it printed; a stamp that is not plain digits records no time at all.
-   Each append wakes firstmate, so report sparingly: only phase changes a supervisor
-   would act on and the needs-decision/blocked/paused/done/failed states. No step-by-step
-   FYI progress lines; firstmate reads your pane for that.
+   Each append wakes firstmate, so append only phase changes a supervisor would act on and the needs-decision/blocked/paused/done/failed states; firstmate reads your pane for progress.
 $PLAN_LINE
-   Whenever you mention a PR anywhere - a status line, your terminal, a summary - write its full
-   https:// URL exactly as the forge printed it, never a bare number such as "PR 108"; firstmate
-   copies that URL from your line rather than assembling one.
+   Write every PR you mention, anywhere, as its full https:// URL exactly as the forge printed it, never a bare number such as "PR 108".
 $CREWMATE_PAUSE_INSTRUCTIONS
 5. If you hit the same obstacle twice, append \`blocked [at=<epoch>]: {why}\` and stop; firstmate will help.
 6. If a decision belongs to a human (product choices, destructive actions) and you cannot finish the report without it,
    append \`needs-decision [at=<epoch>]: {the question} - choices: {A} | {B}[ | {C}]; recommended: {A}\` and stop. Firstmate will reply with the decision.
    A question your finished report hands the captain is not such a decision: it goes in the report, as the Definition of done says.
    Name two or three short choices (at most 60 bytes each, no \`]\`, \`;\` or \`|\` inside one) and the one you recommend; firstmate records them on the call it holds for the captain, so they become his buttons.
-   A decision or blocker on your status log stays open until a \`resolved\` line carrying its exact key lands or you declare \`done:\` or \`failed:\`, which clears every open one, firstmate's included; a later \`working:\` line never closes it.
-   So declare \`done:\` only once every decision you raised was answered or no longer needs an answer; \`failed:\` is always available for an unrecoverable failure.
-   Firstmate's reply normally writes that \`resolved\` line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved [at=<epoch>]: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
+   A decision or blocker stays open until a \`resolved\` line carrying its key lands or you declare \`done:\` or \`failed:\`, never by a later \`working:\` line, so declare \`done:\` only once none you raised still needs an answer; \`failed:\` is always available for an unrecoverable failure.
 $SHARED_INFRA_RULE
 $SHARED_NO_CD_RULE
 
@@ -1026,25 +999,17 @@ $RULE1
    \`$STATUS_APPEND\`
    States: working, needs-decision, blocked, $PAUSED_VERB, $FM_CLASSIFY_GATE_WAIT_VERB, $FM_CLASSIFY_READY_VERB, done, failed.
    Substitute \`<epoch>\` with the current Unix time in seconds - run \`date +%s\` and write the number it printed; a stamp that is not plain digits records no time at all.
-   Each append wakes firstmate, so report sparingly: only phase changes a supervisor
-   would act on (setup done, bug reproduced, fix implemented, validation passed) and the
-   needs-decision/blocked/paused/done/failed states. No step-by-step FYI progress lines;
-   firstmate reads your pane for that.
+   Each append wakes firstmate, so append only phase changes a supervisor would act on (setup done, bug reproduced, fix implemented, validation passed) and the needs-decision/blocked/paused/done/failed states; firstmate reads your pane for progress.
 $PLAN_LINE
-   Whenever you mention a PR anywhere - a status line, your terminal, a summary - write its full
-   https:// URL exactly as the forge printed it, never a bare number such as "PR 108"; firstmate
-   copies that URL from your line rather than assembling one.
-   A mid-task \`working:\` line (including setup complete) is nonterminal: do not end the
-   turn after it; continue the same stage until a defined \`done:\` gate under Definition of done.
+   Write every PR you mention, anywhere, as its full https:// URL exactly as the forge printed it, never a bare number such as "PR 108".
+   A mid-task \`working:\` line is nonterminal: do not end the turn after it; continue until a \`done:\` gate under Definition of done.
 $CREWMATE_PAUSE_INSTRUCTIONS$SHIP_READY_INSTRUCTIONS
 5. If you hit the same obstacle twice, append \`blocked [at=<epoch>]: {why}\` and stop; firstmate will help.
 6. If a decision belongs above the implementation worker (product choices, destructive actions),
    append \`needs-decision [at=<epoch>]: {the question} - choices: {A} | {B}[ | {C}]; recommended: {A}\` and stop. Firstmate will reply with the decision.
    Name two or three short choices (at most 60 bytes each, no \`]\`, \`;\` or \`|\` inside one) and the one you recommend; firstmate records them on the call it holds for the captain, so they become his buttons.
 $ASK_USER_BLOCK
-   A decision or blocker on your status log stays open until a \`resolved\` line carrying its exact key lands or you declare \`done:\` or \`failed:\`, which clears every open one, firstmate's included; a later \`working:\` line never closes it.
-   So declare \`done:\` only once every decision you raised was answered or no longer needs an answer; \`failed:\` is always available for an unrecoverable failure.
-   Firstmate's reply normally writes that \`resolved\` line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved [at=<epoch>]: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
+   A decision or blocker stays open until a \`resolved\` line carrying its key lands or you declare \`done:\` or \`failed:\`, never by a later \`working:\` line, so declare \`done:\` only once none you raised still needs an answer; \`failed:\` is always available for an unrecoverable failure.
 $SHARED_INFRA_RULE
 $SHARED_NO_CD_RULE
 

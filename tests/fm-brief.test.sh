@@ -221,7 +221,7 @@ test_ship_modes_generate_clean_briefs() {
       "$id: brief does not route brain filing through the brain's MCP tools"
     assert_grep "never by editing brain files or opening a brain PR directly" "$brief" \
       "$id: brief still lets a worker edit brain files directly"
-    assert_grep "mid-task \`working:\` line (including setup complete) is nonterminal" "$brief" \
+    assert_grep "mid-task \`working:\` line is nonterminal" "$brief" \
       "$id: brief missing nonterminal working:/setup-complete gate protection"
     assert_no_grep "EOF" "$brief" "$id: brief leaked a heredoc EOF marker (unterminated heredoc)"
   done
@@ -1090,7 +1090,7 @@ SIGNALS
 }
 
 test_ship_and_scout_teach_validation_round_pause() {
-  local home kind id brief
+  local home kind id brief protocol
   home="$TMP_ROOT/validation-round-pause-home"
   mkdir -p "$home/data" "$home/config"
   : > "$home/config/wait-no-turns"
@@ -1113,14 +1113,19 @@ test_ship_and_scout_teach_validation_round_pause() {
       "$kind brief names a heavy-test slot that nothing defines"
     assert_grep "your own validation round" "$brief" \
       "$kind brief did not teach workers to declare their validation-round wait"
-    assert_grep 'Before ending your turn with your own background shell or monitor still running' "$brief" \
+    assert_grep 'Before ending your turn with your own background job still running' "$brief" \
       "$kind brief did not require declaring a background-work wait"
-    assert_grep 'before waiting on your own pipeline run or a long foreground command' "$brief" \
+    assert_grep 'while waiting on your own pipeline run, validation round, or long foreground command' "$brief" \
       "$kind brief did not require declaring a pipeline or foreground wait"
-    assert_grep 'Firstmate may still raise one first-sight alert' "$brief" \
-      "$kind brief incorrectly promised to suppress the first alert"
-    assert_grep 'Do not declare active implementation or reasoning as a wait' "$brief" \
-      "$kind brief did not limit the declaration to actual waits"
+    # The protocol file the brief names owns the wait detail (fork patch,
+    # docs/fork-decisions/2026-11-20-brief-rules-one-line.md).
+    protocol="$ROOT/.agents/skills/crewmate-status-protocol/SKILL.md"
+    assert_grep "Read \`$protocol\` before your first" "$brief" \
+      "$kind brief does not name the status protocol file"
+    assert_grep 'Firstmate may still raise one first-sight alert' "$protocol" \
+      "the status protocol incorrectly promised to suppress the first alert"
+    assert_grep 'Do not declare active implementation or reasoning as a wait' "$protocol" \
+      "the status protocol did not limit the declaration to actual waits"
   done
   pass "fm-brief.sh: ship and scout scaffolds declare a validation-round pause once, then hold it"
 }
@@ -1804,7 +1809,7 @@ test_crewmate_scaffolds_forbid_pool_administration() {
 
   # Fork patch (docs/fork-decisions/2026-11-15-no-mistakes-not-a-required-tool.md):
   # the retired no-mistakes daemon is no longer shared infrastructure.
-  assert_grep "Two things are shared:" "$brief" "scout brief lost the shared-infrastructure count"
+  assert_grep "Never administer infrastructure that every lane shares" "$brief" "scout brief lost the shared-infrastructure rule"
   assert_no_grep 'no-mistakes` daemon' "$brief" "scout brief still names the retired no-mistakes daemon"
 
   # A secondmate runs its own home and legitimately allocates and returns slots
