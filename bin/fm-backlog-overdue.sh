@@ -24,8 +24,10 @@
 # quiet until the re-fire interval passes (7 days,
 # FM_BACKLOG_OVERDUE_REFIRE_SECS, in seconds); a row still overdue then wakes
 # again, and so on weekly, so an acknowledged wake whose row was never
-# re-dated, dispatched or closed cannot rot silently. A marker holding only a
-# date, written before the re-fire existed, wakes again on its next scan.
+# re-dated, dispatched or closed cannot rot silently. While its wake is still
+# queued, unhandled, each scan moves the marker's time to now, so the interval
+# runs from when the wake was handled. A marker holding only a date, written
+# before the re-fire existed, wakes again on its next scan.
 # Dispatching the row, answering or lifting its hold, closing it, or giving it
 # an unresolved blocker takes it off the overdue set, and the next scan removes
 # its marker; a later gate that again lapses therefore wakes once more, as does
@@ -106,7 +108,7 @@ load_wake_lib() {
 
 cmd_scan() {
   local now listing rows id until title opened age hours marker queued candidates='' payload
-  local fired_until fired_at again
+  local fired_until fired_at again queued_before=''
   [ "$#" -eq 0 ] || die "usage: fm-backlog-overdue.sh scan"
   now=${FM_BACKLOG_OVERDUE_NOW:-$(date +%s)}
   case "$now" in ''|*[!0-9]*) die "FM_BACKLOG_OVERDUE_NOW must be epoch seconds" ;; esac
@@ -125,6 +127,14 @@ cmd_scan() {
   printf '%s\n' "$listing" | grep -q '^count: [0-9]' \
     || die "backlog listing could not be parsed: $(printf '%s\n' "$listing" | sed -n '1p')"
   rows=$(gate_passed_rows "$listing")
+  # The overdue wakes still queued, read once, for the re-fire clock.
+  if [ -n "$rows" ] && [ -n "$(ls -A "$MARKERS" 2>/dev/null)" ]; then
+    command -v fm_wake_append_locked >/dev/null 2>&1 || load_wake_lib \
+      || die "cannot load the wake library to read the queued wakes"
+    fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || die "cannot take the wake-queue lock"
+    queued_before=$(fm_wake_queued_keys_locked check)
+    fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+  fi
 
   while IFS=$'\t' read -r id until title; do
     [ -n "$id" ] || continue
@@ -138,7 +148,12 @@ cmd_scan() {
     fired_until='' fired_at=''
     [ ! -f "$marker" ] || read -r fired_until fired_at < "$marker" 2>/dev/null || true
     if [ "$fired_until" = "$until" ]; then
-      # Fired for this gate: quiet until the re-fire interval has passed.
+      # Fired for this gate: quiet until the re-fire interval has passed since
+      # the wake was handled.
+      if printf '%s\n' "$queued_before" | grep -Fxq "backlog-overdue:$id"; then
+        printf '%s %s\n' "$until" "$now" > "$marker" 2>/dev/null || true
+        continue
+      fi
       case "$fired_at" in ''|*[!0-9]*) fired_at=0 ;; esac
       [ $((now - fired_at)) -ge "$REFIRE" ] || continue
       again='; woken again, weekly until it is dispatched, re-dated, answered or closed'

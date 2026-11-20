@@ -165,6 +165,25 @@ test_still_overdue_item_wakes_again_weekly() {
   pass "a row still overdue after its wake wakes again each week until it is handled"
 }
 
+test_refire_clock_runs_from_the_handled_wake() {
+  local home out day=$((24 * HOUR))
+  home=$(new_home late-ack)
+  add_dated "$home" late 'Wake handled late' 2026-10-24
+  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue late" "the first lapse was not reported"
+  # The wake stays queued, unhandled, for 13 days of hourly scans.
+  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 7 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "" "a still-queued wake was reported again"
+  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 13 * day))) || fail "scan failed: $out"
+  assert_equals "$(queued_rows "$home" late)" 1 "a still-queued wake was duplicated"
+  ack_all "$home"
+  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 14 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "" "the repeat fired a day after a late-handled wake"
+  out=$(scan_at "$home" $((GATE_EPOCH + 13 * HOUR + 20 * day))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue late" "the repeat did not fire a week after the wake was handled"
+  pass "the weekly repeat counts from when the earlier wake was handled, not when it was queued"
+}
+
 test_date_only_marker_wakes_again_once() {
   local home out
   home=$(new_home legacy-marker)
@@ -229,6 +248,7 @@ test_grace_runs_from_local_midnight
 test_waiting_or_dispatched_items_stay_quiet
 test_dispatch_or_answer_clears_and_a_new_lapse_wakes_again
 test_still_overdue_item_wakes_again_weekly
+test_refire_clock_runs_from_the_handled_wake
 test_date_only_marker_wakes_again_once
 test_still_queued_key_is_not_duplicated
 test_failed_backlog_read_changes_nothing
