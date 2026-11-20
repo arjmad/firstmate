@@ -467,7 +467,7 @@ hold_added_captain_row() {  # <tasks-axi add output>
   printf '%s\n' "$SHOWN_ROW" | grep -Eq '^  held: no$' || return 0
   [ "$(printf '%s\n' "$SHOWN_ROW" | grep -Ec '^  hold_(kind|reason|until): ("-"|-)$')" = 3 ] || return 0
   title=$(fm_backlog_owner_shown_body "$(printf '%s\n' "$SHOWN_ROW" | sed -n 's/^  title: /  body: /p' | head -1)") || title=$id
-  FM_CAPTAIN_HOLD_IF_UNHELD_CAPTAIN_ROW=1 "$SCRIPT_DIR/fm-captain-hold.sh" hold "$id" \
+  FM_CAPTAIN_HOLD_IF_UNHELD_CAPTAIN_ROW=1 "$SCRIPT_DIR/fm-captain-hold.sh" hold "$id" --kind arjun-only \
     --reason "only you can take this step: ${title:-$id}" >/dev/null \
     || { printf 'fm-tasks-axi: %s was added but could not be held for the captain; hold it with bin/fm-captain-hold.sh hold before anything dispatches it\n' "$id" >&2; return 1; }
 }

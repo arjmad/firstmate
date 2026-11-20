@@ -243,7 +243,7 @@ test_wrapper_holds_captain_owned_captain_rows() {
   show=$(wrapper_from_code "$dir" show rk-printer --full)
   assert_contains "$show" "held: yes" "a captain-owned captain row was not held"
   assert_contains "$show" "hold_kind: captain" "the row was not held for the captain"
-  assert_contains "$show" "only you can take this step: Repeated: printer toner" "the hold reason does not name the step"
+  assert_contains "$show" "[arjun-only] only you can take this step: Repeated: printer toner" "the hold reason does not name the step and its arjun-only kind"
   wrapper_from_code "$dir" add --kind captain --owner arjun rk-flags-first "Flags before the id" >/dev/null \
     || fail "adding with flags before the id failed"
   assert_contains "$(wrapper_from_code "$dir" show rk-flags-first)" "held: yes" "a row added with flags before its id was not held"
