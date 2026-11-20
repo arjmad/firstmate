@@ -154,7 +154,17 @@ test_overridden_interval_names_its_cadence() {
   assert_equals "$out" "overdue stalled" "a row still overdue a day after its handled wake did not wake again"
   row=$(grep "$(printf '\tbacklog-overdue:stalled\t')" "$home/state/.wake-queue")
   assert_contains "$row" "woken again, daily until it is dispatched" "the repeat wake did not name the overridden cadence"
-  pass "an overridden re-fire interval, even zero-padded, names its own cadence"
+  home=$(new_home refire-off)
+  add_dated "$home" stalled 'Stalled dated job' 2026-10-24
+  out=$(FM_BACKLOG_OVERDUE_REFIRE_SECS=off scan_at "$home" $((GATE_EPOCH + 13 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue stalled" "the first lapse was not reported with the re-fire off"
+  ack_all "$home"
+  out=$(FM_BACKLOG_OVERDUE_REFIRE_SECS=off scan_at "$home" $((GATE_EPOCH + 14 * HOUR))) || fail "scan failed: $out"
+  out=$(FM_BACKLOG_OVERDUE_REFIRE_SECS=off scan_at "$home" $((GATE_EPOCH + 30 * 24 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "" "a re-fire set off woke the row again"
+  out=$(FM_BACKLOG_OVERDUE_REFIRE_SECS=0 scan_at "$home" $((GATE_EPOCH + 31 * 24 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "" "a re-fire set to 0 woke the row again"
+  pass "an overridden re-fire interval, even zero-padded, names its own cadence, and 0 or off keeps one wake per gate"
 }
 
 test_still_overdue_item_wakes_again_weekly() {
