@@ -190,7 +190,8 @@
 # JSON inventory, an asset) that no suite names is refused like any unmapped
 # path; any tracked prose file (*.md, *.mdx,
 # *.rst, *.txt, docs/examples/) also selects tests/fm-documentation-audiences.test.sh,
-# because that suite checks every prose file without naming one.
+# because that suite checks every prose file without naming one; so does a
+# file directly in bin/ or bin/backends/, which needs its docs/scripts.md row.
 # tests/lib.sh, tests/fixtures.sh, tests/*-helpers.sh and tests/*-fixture.sh are
 # shared files that map to the suites naming them; a fixture under
 # tests/fixtures/<dir>/ or a recorded capture under tests/captures/<dir>/ is
@@ -2200,6 +2201,15 @@ select_changed() {  # <base> [<paths>]: these newline-separated paths instead of
           ;;
       esac
     done < <(families_for_changed_path "$path")
+    # docs/scripts.md needs one row per file directly in bin/ or bin/backends/,
+    # and the audience suite checks it. It is added only after the path's own
+    # mapping resolved, so it never stands in for behavioral coverage.
+    case "$path" in
+      bin/backends/*/*) ;;
+      bin/backends/*) wanted_scripts+=(fm-documentation-audiences.test.sh) ;;
+      bin/*/*) ;;
+      bin/*) wanted_scripts+=(fm-documentation-audiences.test.sh) ;;
+    esac
     case "$path" in
       bin/*)
         if [ -e "$path" ]; then

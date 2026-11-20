@@ -156,11 +156,12 @@ TOML
 # shellcheck disable=SC2034
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Pin the worker-denied MCP server list (bin/fm-exclude-tools-lib.sh) to an
-# empty fixture, so a Claude spawn neither reads the host's fleet-rendered list
-# nor, on a host or CI runner without one, denies every MCP server. A case that
-# exercises the list points this at its own file.
+# Pin the worker-denied MCP server and tool lists (bin/fm-exclude-tools-lib.sh)
+# to empty fixtures, so a Claude spawn neither reads the host's fleet-rendered
+# lists nor, on a host or CI runner without them, denies every MCP server. A
+# case that exercises a list points it at its own file.
 export FM_WORKER_DENIED_MCP_SERVERS_FILE="$ROOT/tests/fixtures/worker-denied-mcp-servers-none"
+export FM_WORKER_DENIED_MCP_TOOLS_FILE="$ROOT/tests/fixtures/worker-denied-mcp-tools-none"
 
 # --- reporters --------------------------------------------------------------
 

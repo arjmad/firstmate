@@ -101,6 +101,7 @@ Off in `--settings` wins over user and project settings for both keys on Claude 
 ## Worker-denied MCP servers
 
 A Claude ship or scout also carries `"deniedMcpServers"` for each server the fleet-rendered worker-denied list names in that inline `--settings` JSON, or `"allowedMcpServers":[]` with `--strict-mcp-config --no-chrome` when that list is missing or invalid; [`docs/configuration.md`](../../../../../docs/configuration.md#worker-denied-mcp-servers) owns the list and its fallback.
+It also hides each tool pattern the fleet-rendered worker-denied MCP tool list names through `--disallowedTools`, whose `*` patterns Claude Code 2.1.328 honors for MCP tool names; [`docs/configuration.md`](../../../../../docs/configuration.md#worker-denied-mcp-tools) owns that list.
 
 ## Compaction window
 

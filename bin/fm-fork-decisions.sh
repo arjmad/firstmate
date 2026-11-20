@@ -14,7 +14,22 @@
 #       <YYYY-MM-DD>-<slug>.md, when a record is neither a prose decision
 #       opening with its file's date nor a fork-patch table, or when a
 #       fork-patch table has the wrong header, cell count, or an empty status.
+#       It also fails when a `carried` or `conflicted` row's Files cell names,
+#       in backticks, a path under one of the repository's tracked top-level
+#       entries that matches nothing in the checkout; a glob or one brace group
+#       passes when anything matches, and a path followed by `(removed)` is
+#       one the patch deleted, so it is not checked.
 #       Prints `fm-fork-decisions: ok records=<n> patches=<n>` on success.
+#   fm-fork-decisions.sh pr-check --base <rev> [--head <rev>] [--root <repo>]
+#       Fail when the change from the merge base of <rev> and --head (default
+#       HEAD) to --head changes an upstream-owned file but adds or edits no
+#       docs/fork-decisions/ record (deleting one does not count), naming
+#       those files. A file is
+#       upstream-owned when it exists in the upstream sync commit, the newest
+#       commit in this checkout that a fork-patch row names as its last
+#       checked sync, so CI needs no upstream remote, only full history.
+#       docs/fork-decisions.md and the records are the fork's own and never
+#       count. An upstream-sync PR passes because it updates every row's sync.
 #   fm-fork-decisions.sh patches [--root <repo>]
 #       Print every fork-patch row as one table, oldest record first, with the
 #       record's date and its PR: the record's `PR:` line when it has one,
@@ -36,13 +51,18 @@ die() {
 case "${1-}" in
   -h|--help) usage; exit 0 ;;
   check|patches) COMMAND=$1; shift ;;
+  pr-check) COMMAND=pr_check; shift ;;
   *) usage >&2; exit 2 ;;
 esac
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+BASE=
+HEAD_REV=HEAD
 while [ $# -gt 0 ]; do
   case "$1" in
     --root) [ $# -ge 2 ] || die "--root needs a directory"; ROOT=$2; shift 2 ;;
+    --base) [ "$COMMAND" = pr_check ] && [ $# -ge 2 ] || die "--base needs a revision and belongs to pr-check"; BASE=$2; shift 2 ;;
+    --head) [ "$COMMAND" = pr_check ] && [ $# -ge 2 ] || die "--head needs a revision and belongs to pr-check"; HEAD_REV=$2; shift 2 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -64,7 +84,8 @@ records() {
 # The one record parser. Reports each format problem on stderr as
 # docs/fork-decisions/<name>:<line>: <problem> and exits non-zero when it found
 # one. With emit=1 it prints each fork-patch row as
-# "| <date> | <pr> | <cells> |"; otherwise it prints the row count.
+# "| <date> | <pr> | <cells> |"; with emit=2 it prints each row as
+# "<line>\t<status>\t<files cell>"; otherwise it prints the row count.
 parse_record() {
   local path=$1 emit=$2 pr=${3-}
   local name=${path##*/}
@@ -94,16 +115,60 @@ parse_record() {
       if (cells[4] !~ /^(carried|upstreamed|conflicted)$/ && cells[4] !~ /superseded by /)
         fail("status is carried, upstreamed, conflicted, or a note saying what it is superseded by, not \"" cells[4] "\"")
       rows++
-      if (emit) print "| " date " | " pr " | " cells[1] " | " cells[2] " | " cells[3] " | " cells[4] " | " cells[5] " |"
+      if (emit == 2) print NR "\t" cells[4] "\t" cells[2]
+      else if (emit) print "| " date " | " pr " | " cells[1] " | " cells[2] " | " cells[3] " | " cells[4] " | " cells[5] " |"
       next
     }
     table && state == "rows" { state = "done" }
     END {
       if (!prose && !table) fail("a record opens with \"" date ": \" (a decision) or holds a fork-patch table")
       if (table && !rowlines) fail("a fork-patch table needs at least one row")
-      if (!emit) print rows + 0
+      if (emit == 0) print rows + 0
       exit failed
     }' "$path"
+}
+
+# Whether a cited path names anything in the checkout: a plain path must
+# exist, a glob must match, and one {a,b} brace group is tried per choice.
+cited_path_exists() {
+  local path=$1 head tail choices choice
+  if [[ $path =~ ^([^{}]*)\{([^{}]*)\}([^{}]*)$ ]]; then
+    head=${BASH_REMATCH[1]} choices=${BASH_REMATCH[2]} tail=${BASH_REMATCH[3]}
+    while IFS= read -r choice; do
+      cited_path_exists "$head$choice$tail" && return 0
+    done < <(printf '%s\n' "$choices" | tr ',' '\n')
+    return 1
+  fi
+  case "$path" in
+    *[*?[]*) compgen -G "$ROOT/$path" >/dev/null ;;
+    *) [ -e "$ROOT/$path" ] || [ -L "$ROOT/$path" ] ;;
+  esac
+}
+
+# Fail, naming the record line, for each path a carried or conflicted row
+# cites that is missing. Only paths under a tracked top-level entry are
+# checked, so a runtime path such as state/<file> or a function name is not.
+check_cited_paths() {
+  local path=$1 name=${1##*/} bad=0 line status files token rest top tops
+  tops=$(git -C "$ROOT" ls-files 2>/dev/null | sed 's|/.*||' | LC_ALL=C sort -u)
+  [ -n "$tops" ] || return 0
+  while IFS=$'\t' read -r line status files; do
+    case "$status" in carried|conflicted) ;; *) continue ;; esac
+    rest=$files
+    while [[ $rest =~ \`([^\`]+)\`(.*)$ ]]; do
+      token=${BASH_REMATCH[1]} rest=${BASH_REMATCH[2]}
+      [[ $rest =~ ^[[:space:]]*\(removed ]] && continue
+      token=${token%%#*}
+      top=${token%%/*}
+      printf '%s\n' "$tops" | grep -qxF -- "$top" || continue
+      cited_path_exists "$token" && continue
+      # shellcheck disable=SC2016 # The backticks are literal Markdown.
+      printf 'docs/fork-decisions/%s:%s: a %s row names %s, which is not in the repository; correct the path, or mark a file the patch deleted as `%s` (removed)\n' \
+        "$name" "$line" "$status" "$token" "$token" >&2
+      bad=1
+    done
+  done < <(parse_record "$path" 2 2>/dev/null)
+  return "$bad"
 }
 
 command_check() {
@@ -125,6 +190,7 @@ command_check() {
     fi
     rows=$(parse_record "$path" 0) || bad=1
     patches=$((patches + ${rows:-0}))
+    check_cited_paths "$path" || bad=1
   done < <(records)
   [ "$bad" -eq 0 ] || exit 1
   printf 'fm-fork-decisions: ok records=%s patches=%s\n' "$count" "$patches"
@@ -161,6 +227,55 @@ command_patches() {
     grep -qF "$HEADER" "$path" || continue
     parse_record "$path" 1 "$(record_pr "$path")" || true
   done < <(records)
+}
+
+# The upstream sync commit: of the commits fork-patch rows name as their last
+# checked sync, the newest one this checkout has.
+upstream_sync_commit() {
+  local value commit best="" best_time=0 time
+  while IFS= read -r value; do
+    commit=$(git -C "$ROOT" rev-parse --verify --quiet "$value^{commit}" 2>/dev/null) || continue
+    time=$(git -C "$ROOT" show -s --format=%ct "$commit" 2>/dev/null) || continue
+    if [ -z "$best" ] || [ "$time" -gt "$best_time" ]; then
+      best=$commit best_time=$time
+    fi
+  done < <(command_patches | tail -n +3 | awk -F ' [|] ' '{ v = $NF; sub(/ [|]$/, "", v); gsub(/[ `]/, "", v); if (v ~ /^[0-9a-f]+$/) print v }' | LC_ALL=C sort -u)
+  [ -n "$best" ] || return 1
+  printf '%s\n' "$best"
+}
+
+# upstream_owned <sync> - print each path read on stdin that exists at <sync>,
+# except the records and their entry point, which are the fork's own. A
+# function, because stock macOS Bash 3.2 cannot parse a case inside $(...).
+upstream_owned() {
+  local sync=$1 path
+  while IFS= read -r path; do
+    case "$path" in '' | docs/fork-decisions.md | docs/fork-decisions/*) continue ;; esac
+    git -C "$ROOT" cat-file -e "$sync:$path" 2>/dev/null && printf '%s\n' "$path"
+  done
+  return 0
+}
+
+command_pr_check() {
+  local sync base changed owned records
+  [ -n "$BASE" ] || die "pr-check needs --base <rev>"
+  git -C "$ROOT" rev-parse --verify --quiet "$HEAD_REV^{commit}" >/dev/null || die "cannot read --head $HEAD_REV"
+  base=$(git -C "$ROOT" merge-base "$BASE" "$HEAD_REV" 2>/dev/null) \
+    || die "cannot find a merge base of $BASE and $HEAD_REV; the check needs full history"
+  sync=$(upstream_sync_commit) \
+    || die "no fork-patch row names a last checked sync commit this checkout has; the check needs full history"
+  changed=$(git -C "$ROOT" diff --name-only --no-renames "$base" "$HEAD_REV") || die "cannot diff $base..$HEAD_REV"
+  # A deleted record documents nothing, so only added or edited ones count.
+  records=$(git -C "$ROOT" diff --name-only --no-renames --diff-filter=AM "$base" "$HEAD_REV" -- docs/fork-decisions \
+    | grep -E '^docs/fork-decisions/[^/]+\.md$' || true)
+  owned=$(printf '%s\n' "$changed" | upstream_owned "$sync")
+  if [ -n "$owned" ] && [ -z "$records" ]; then
+    printf 'fm-fork-decisions: this change edits upstream-owned files (present at upstream sync %s) but adds or edits no docs/fork-decisions/ record; add a fork-patch record as docs/fork-decisions.md says:\n' "${sync:0:8}" >&2
+    printf '%s\n' "$owned" | sed 's/^/  /' >&2
+    exit 1
+  fi
+  printf 'fm-fork-decisions: pr-check ok upstream-owned=%s records=%s sync=%s\n' \
+    "$(printf '%s' "$owned" | grep -c . || true)" "$(printf '%s' "$records" | grep -c . || true)" "${sync:0:8}"
 }
 
 "command_$COMMAND"

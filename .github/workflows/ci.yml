@@ -113,24 +113,23 @@ jobs:
     if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
-    # Upstream lints as two canonical partitions. Full extended analysis over
-    # the whole canonical set does not fit this fork's 2-vCPU, 7 GB
-    # private-repository runner at that width, so bin/fm-lint.sh --partition
-    # splits it into more deterministic partitions that together cover the set
-    # exactly once. The partition COUNT is what keeps each job affordable,
-    # because the packing balances bytes and ShellCheck's cost is not
-    # byte-proportional: a root is analyzed with --external-sources and carries
-    # its whole source graph, while a test root stops at the production modules
-    # it imports. Measured per root with the pinned ShellCheck, peak RSS ranges
-    # from 155 MiB (tests/fm-pi-branch-extension.test.sh) to 6728 MiB
-    # (bin/fm-teardown.sh) at similar file sizes. At four partitions that let one
-    # job collect fm-spawn.sh, fm-teardown.sh and fm-watch.sh together it
-    # measured 11.18 GiB across the two concurrent workers it then ran and was
-    # killed by the runner at 4m49s and again at 5m05s; each job now runs one
-    # worker (FM_LINT_JOBS below). Eight partitions separate the expensive
-    # roots into different jobs, because the largest-first packing seeds the
-    # first N roots into N distinct bins; the job that then carries
-    # fm-teardown.sh alone measures 74s, and the worst of the eight measures 83s.
+    # Upstream lints as two canonical partitions; bin/fm-lint.sh --partition
+    # splits the canonical set into more deterministic partitions that together
+    # cover it exactly once. The split dates from when this fork was a private
+    # repository on the 2-vCPU, 7 GB hosted runner, where two concurrent
+    # workers holding fm-spawn.sh, fm-teardown.sh and fm-watch.sh reached
+    # 11.18 GiB and the runner killed the job. The repository is now public,
+    # so its jobs run on the standard hosted runner, and roots of 8.66 GiB
+    # resident complete there. Each job still runs one worker (FM_LINT_JOBS
+    # below), because one heavy root alone is over half the runner's memory.
+    # With one worker the partition count moves lint wall time, not its cost:
+    # run 44585400296 (2026-11-19) spent 3049 job-seconds across its eight
+    # lint jobs, about 6 s of each on setup, and all of its jobs started within
+    # 3 s, so no job waited for a runner. Its per-root telemetry, packed the way
+    # --partition packs, models the slowest partition at 819 s for four
+    # partitions, 724 s for five, 602 s for six, and 532 s for eight (measured
+    # 539 s), all under the slowest behavior shard's 1420 s. Fewer partitions
+    # would save only that setup time, so the count stays at eight.
     strategy:
       fail-fast: false
       matrix:
@@ -171,10 +170,12 @@ jobs:
           FM_LINT_JOBS: '1'
           # Fork-only: 13 GiB of address space per root instead of fm-lint's
           # 12 GiB default. The fork's own code in bin/fm-teardown.sh's source
-          # graph lifts that root's ShellCheck peak to about 8.0 GiB resident,
-          # the default's usable-heap wall (upstream peaks just under it). The
-          # root is still analyzed in full; only its memory bound is wider, and
-          # one worker per job keeps it alone on the runner.
+          # graph lifts that root's ShellCheck peak past the default's
+          # usable-heap wall (upstream peaks just under it), and one worker per
+          # job keeps it alone on the runner. This bound is not always enough:
+          # in run 44585400296, eight roots, bin/fm-teardown.sh among them,
+          # reached it at about 8.66 GiB resident and passed through the
+          # memory fallback without --external-sources (see bin/fm-lint.sh).
           FM_LINT_ROOT_MEMORY_KIB: '13631488'
         run: |
           set -eu
@@ -238,11 +239,13 @@ jobs:
           set -eu
           bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # Every tasks-axi install pins the same version, and --before freezes its
+      # caret-ranged dependencies, so a new release cannot turn main red.
       - name: Install tasks-axi
         if: steps.gate.outputs.run == 'true'
         run: |
           set -eu
-          npm install -g tasks-axi
+          npm install -g --before=2026-11-20T00:00:00Z tasks-axi@0.2.6
           tasks-axi --version
       - name: Install the Pi package for the Pi extension tests
         if: steps.gate.outputs.run == 'true'
@@ -303,7 +306,7 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         run: |
           set -eu
-          npm install -g tasks-axi
+          npm install -g --before=2026-11-20T00:00:00Z tasks-axi@0.2.6
           tasks-axi --version
       - name: Run portable parallel shard 2
         if: steps.gate.outputs.run == 'true'
@@ -383,7 +386,7 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         run: |
           set -eu
-          npm install -g tasks-axi
+          npm install -g --before=2026-11-20T00:00:00Z tasks-axi@0.2.6
           tasks-axi --version
       # Runtime-facing Pi extension probes need the installed public package
       # to avoid capability skips. tests/fm-pi-primary-types.test.sh owns its
@@ -753,7 +756,7 @@ jobs:
           [ "$parse_fail" -eq 0 ] || { echo "::error::stock macOS Bash 3.2 parse sweep failed"; exit 1; }
 
           command -v npm >/dev/null || { echo "::error::npm is required to install tasks-axi"; exit 1; }
-          npm install -g tasks-axi@0.2.6 >/dev/null
+          npm install -g --before=2026-11-20T00:00:00Z tasks-axi@0.2.6 >/dev/null
           PATH="$(npm prefix -g)/bin:$PATH"
           export PATH
           command -v tasks-axi >/dev/null || { echo "::error::tasks-axi is required for the stock Bash regressions"; exit 1; }
@@ -791,6 +794,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
+        with:
+          # The fork-patch record check reads the upstream sync commit the
+          # records name and the pull request's merge base from history.
+          fetch-depth: 0
       - name: Compatibility pointers must stay intact
         run: |
           set -eu
@@ -811,6 +818,17 @@ jobs:
             printf '%s\n' "$tracked"
             exit 1
           fi
+      # docs/fork-decisions.md: every record is well formed and every path a
+      # carried row cites still exists. This runs on every event, because a PR
+      # that deletes or renames a cited file need not select the record suite.
+      - name: Fork-patch records are valid
+        run: bin/fm-fork-decisions.sh check
+      # A fork PR that changes upstream-owned files adds or edits a record.
+      # The checkout is the PR's merge commit, so HEAD^1 is the base it merges
+      # into, even when main moved on after the event's base.sha.
+      - name: Upstream-owned changes carry a fork-patch record
+        if: github.event_name == 'pull_request'
+        run: bin/fm-fork-decisions.sh pr-check --base HEAD^1
 
   # The Full suite verdict: one check that fails until an outside PR has the
   # full-ci go-ahead and otherwise fails when any lane failed or was cancelled.

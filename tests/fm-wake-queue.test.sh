@@ -2558,16 +2558,21 @@ test_interruption_before_and_after_raw_commit() {
 
   FM_STATE_OVERRIDE="$state" FM_WAKE_DRAIN_TEST_DELAY_BEFORE_COMMIT=5 "$DRAIN" > "$before_out" &
   pid=$!
+  # Signal only once the drain sits in its pre-commit sleep. The lock and the
+  # handling marker are published before the drain's command substitutions
+  # run, and bash 5.2 can drop a TERM trap that lands while it parses one
+  # ("trap: unexpected EOF"), so the drain survives the signal.
   i=0
   while [ "$i" -lt 100 ]; do
     if [ "$(cat "$state/.wake-queue.lock/pid" 2>/dev/null || true)" = "$pid" ] \
-      && grep -Eq '^(pending|announced):handling:' "$state/.watcher-down" 2>/dev/null; then
+      && grep -Eq '^(pending|announced):handling:' "$state/.watcher-down" 2>/dev/null \
+      && ps -A -o ppid=,comm= | awk -v parent="$pid" '$1 == parent { sub(".*/", "", $2); if ($2 == "sleep") found = 1 } END { exit !found }'; then
       break
     fi
     sleep 0.05
     i=$((i + 1))
   done
-  [ "$i" -lt 100 ] || { kill "$pid" 2>/dev/null || true; fail "pre-commit drain never entered its serialized read boundary"; }
+  [ "$i" -lt 100 ] || { kill "$pid" 2>/dev/null || true; fail "pre-commit drain never reached its pre-commit delay inside the serialized read boundary"; }
   kill -TERM "$pid" 2>/dev/null || fail "could not interrupt drain before raw commitment"
   set +e
   wait "$pid"

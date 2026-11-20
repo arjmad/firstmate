@@ -7,6 +7,9 @@
 #
 # The inventory owns classification and setup routing. A surface path ending
 # in "/" classifies every in-scope tracked file under that directory.
+# When docs/scripts.md is tracked, it is the bin/ toolbelt index: every tracked
+# file directly in bin/ or bin/backends/ needs one table row whose first cell
+# names it in backticks, and every row must name a tracked file there.
 # This check validates structure only and does not keyword-lint prose.
 set -eu
 
@@ -138,6 +141,38 @@ def markdown_anchors(path: Path) -> set[str]:
     return anchors
 
 
+SCRIPT_INDEX = "docs/scripts.md"
+SCRIPT_INDEX_ROW_RE = re.compile(r"^\|[^|`]*`([^`]+)`")
+
+
+def validate_script_index(root: Path) -> None:
+    """One docs/scripts.md row per tracked bin/ and bin/backends/ file."""
+    if SCRIPT_INDEX not in set(git_tracked(root, [SCRIPT_INDEX])):
+        return
+    files = {
+        path[len("bin/"):]
+        for path in git_tracked(root, ["bin/*"])
+        if path.count("/") == 1 or (path.startswith("bin/backends/") and path.count("/") == 2)
+    }
+    rows: list[str] = []
+    for line in (root / SCRIPT_INDEX).read_text(encoding="utf-8").splitlines():
+        match = SCRIPT_INDEX_ROW_RE.match(line)
+        if match:
+            rows.append(match.group(1))
+    problems = []
+    duplicates = sorted(name for name, count in Counter(rows).items() if count != 1)
+    if duplicates:
+        problems.append("listed more than once: " + ", ".join(duplicates))
+    missing = sorted(files - set(rows))
+    if missing:
+        problems.append("no row for bin/" + ", bin/".join(missing))
+    extra = sorted(set(rows) - files)
+    if extra:
+        problems.append("rows for files not tracked in bin/: " + ", ".join(extra))
+    if problems:
+        fail(f"{SCRIPT_INDEX}: " + "; ".join(problems))
+
+
 def validate(root: Path, inventory_path: Path) -> tuple[int, int]:
     data = load_inventory(inventory_path)
     scope = data.get("scope")
@@ -261,6 +296,7 @@ def validate(root: Path, inventory_path: Path) -> tuple[int, int]:
                 if fragment not in anchors:
                     fail(f"unresolved local anchor in {path}: {raw}")
 
+    validate_script_index(root)
     return len(tracked), checked_links
 
 

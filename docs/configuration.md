@@ -108,7 +108,7 @@ Reproducible scratch leaves a task's `data/<id>/` at teardown, deleted rather th
 - Nested git checkouts with nothing uncommitted, stashed, or unpushed.
 - Dependency folders: `node_modules`, a Python `.venv`, and `dist` build output beside its package manifest unless it holds an image or PDF.
 - Downloaded tool binaries.
-- A checkout holding unlanded work is never deleted; teardown keeps it and names it with its reason.
+- A checkout holding unlanded work is never deleted; teardown keeps it, names it with its reason, and files it once as a routine noticed row, `noticed-kept-checkout-<task>`, so it does not sit there unseen.
 - A task torn down before this rule, or whose checkout was pushed later, gets the same rule again through [task scratch retention](#task-scratch-retention-configdata-scratch-retention-days).
 
 Everything else under `data/` follows one retention rule once its task has been closed for more than 60 days:
@@ -1862,6 +1862,24 @@ Other runtimes do not read Claude's MCP configuration, so they neither read nor 
 [`bin/fm-exclude-tools-lib.sh`](../bin/fm-exclude-tools-lib.sh) implements the parsing and fallback, and [`bin/fm-spawn.sh`](../bin/fm-spawn.sh)'s header owns the launch mechanics.
 
 A home's `config/worker-denied-mcp-servers`, which held this list before 2026-11-19, is retired: Firstmate no longer reads it or copies it into secondmate homes, and a home may remove it.
+
+## Worker-denied MCP tools
+
+The fleet configuration may also render `~/.config/fleet/claude/worker-denied-mcp-tools`, which names single tools of an allowed MCP server that no Claude ship or scout may call, such as a server's write or send tools whose reads workers still need.
+`FM_WORKER_DENIED_MCP_TOOLS_FILE` points it at another path, as the test suite does.
+It holds `#` comment lines, blank lines, and one Claude tool pattern per line of the form `mcp__<server>__<tool>`, using only letters, digits, `_`, `-`, and `*`, where `*` matches any run of characters:
+
+```text
+# Monarch writes and Gmail sends stay with the helm
+mcp__monarch__Create*
+mcp__gws-*__send_gmail_message
+```
+
+Each Claude ship and scout launch carries the patterns in `--disallowedTools`, after any `config/crew-exclude-tools` names, so Claude Code drops those tools' schemas from the session; the helm, the captain's own sessions, and a secondmate's own agent keep them, and other runtimes neither read nor refuse on the file.
+An absent file denies no tool.
+A file that cannot be inspected, or is present but dangling, unreadable, not a regular file, or has an entry of any other shape, falls back like the server list above: the worker is denied every MCP server, with a warning naming the file, and its `--disallowedTools` also carries `mcp__*`, which hides every MCP tool.
+A raw launch command and the T3 Code backend refuse whenever the file names a tool or cannot be read, because neither can carry `--disallowedTools` or the fallback.
+[`bin/fm-exclude-tools-lib.sh`](../bin/fm-exclude-tools-lib.sh) implements the parsing and fallback.
 
 ## Worker compaction window (config/crew-compact-window)
 

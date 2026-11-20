@@ -171,8 +171,7 @@ A tool removed from the schema stays removed, so a genuinely intended use of a l
 - Malformed or empty stdin, invalid JSON, a payload with no tool name, and missing `jq` for stdin transport all fail open with exit 0 and no output.
 
 The deny message names the real dispatch path.
-When `bin/fm-scout.sh` exists in the home the message first defers to the `AGENTS.md` intake classification, then routes work already classified as a scout there and authorized ship work with its bounded research to `bin/fm-brief.sh` then `bin/fm-spawn.sh`.
-When that script is absent the message still defers to intake classification and degrades to naming `bin/fm-brief.sh` then `bin/fm-spawn.sh` for dispatched work, rather than pointing at a script that is not there.
+The message first defers to the `AGENTS.md` intake classification, then names `bin/fm-brief.sh` followed by `bin/fm-spawn.sh`, the one route both scouts and ships dispatch through.
 A tool matched on the `monitor` stem gets a different message: it cites the one-live-cycle supervision rule in `AGENTS.md` section 8 instead of the dispatch route, because a primary reaching for a monitor is waiting on fleet work rather than delegating it.
 
 ## Harness wiring
