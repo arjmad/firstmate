@@ -179,7 +179,8 @@
 #                          bin/fm-backlog-overdue.sh scan queued one durable
 #                          check row per queued backlog item whose date gate
 #                          opened over its grace period ago without a dispatch
-#                          or answer, once per gate (backlog_overdue_tick)
+#                          or answer, weekly while it stays overdue
+#                          (backlog_overdue_tick)
 #   check: captain inbox: <n> note(s) still unacknowledged
 #                          bin/fm-inbox.sh rewake-due queued one durable check
 #                          row per inbox note still pending a day after its
@@ -3989,7 +3990,7 @@ fleet_sync_tick() {
 }
 
 # Overdue dated backlog work (bin/fm-backlog-overdue.sh's header owns the
-# overdue test, the grace period, and the once-per-gate marker). Once per
+# overdue test, the grace period, and the weekly re-fire marker). Once per
 # FM_BACKLOG_OVERDUE_INTERVAL seconds (default 3600; 0 or off disables) the
 # watcher starts `fm-backlog-overdue.sh scan` detached, so a slow backlog
 # backend never stalls the loop. The scan queues one durable `check:` row per
