@@ -2692,6 +2692,41 @@ test_scout_ignored_files_survive_scratch_clean() {
   pass "ignored files survive the scratch clean and plain scratch does not"
 }
 
+# A landed firstmate head that the ending task no longer holds is named in
+# teardown's output, because supervision can go idle before the watcher's next
+# due check.
+test_teardown_names_a_due_self_update() {
+  local case_dir rc url clone landed
+  url=$(git -C "$ROOT" remote get-url origin 2>/dev/null) || url=
+  if [ -z "$url" ]; then
+    pass "teardown names a due self-update (skipped: the code root has no origin)"
+    return 0
+  fi
+  case_dir=$(make_case self-update-due)
+  write_meta "$case_dir" no-mistakes scout
+  prepare_scout_teardown "$case_dir"
+  clone="$case_dir/projects/firstmate"
+  git clone -q --shared --no-checkout "$ROOT" "$clone" || fail "self-update-due: could not clone the code root"
+  git -C "$clone" remote set-url origin "$url"
+  landed=$(git -C "$clone" -c user.name=test -c user.email=test@example.invalid commit-tree \
+    "$(git -C "$ROOT" rev-parse 'HEAD^{tree}')" -p "$(git -C "$ROOT" rev-parse HEAD)" -m landed)
+  git -C "$clone" update-ref refs/remotes/origin/main "$landed"
+  git -C "$clone" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+  printf 'also_project_firstmate=%s\n' "$clone" >> "$case_dir/state/task-x1.meta"
+  assert_contains "$(FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" "$ROOT/bin/fm-update.sh" --due)" \
+    "held $landed " "self-update-due: the live task did not hold the head before teardown"
+
+  rc=0
+  FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "self-update-due: teardown failed: $(cat "$case_dir/stderr")"
+  assert_grep "self-update-due: firstmate self-update due: the code root runs " "$case_dir/stdout" \
+    "self-update-due: the due head was not named"
+  assert_grep "run /updatefirstmate" "$case_dir/stdout" "self-update-due: the step was not named"
+  grep "$(printf '\tcheck\tself-update-due-%s\t' "$landed")" "$case_dir/state/.wake-queue" >/dev/null \
+    || fail "self-update-due: the due head was not queued durably: $(cat "$case_dir/state/.wake-queue" 2>&1)"
+  pass "teardown names a landed firstmate head the ending task no longer holds"
+}
+
 # What a finished task noticed outside its work, and its idea, reach firstmate
 # in teardown's output, since teardown is the one step every ending passes.
 test_scout_teardown_prints_what_it_noticed() {
@@ -7769,6 +7804,7 @@ test_forced_secondmate_dirty_child_return_warns_and_completes
 test_return_that_removes_copy_warns_cannot_verify
 test_scout_ignored_files_survive_scratch_clean
 test_scout_teardown_prints_what_it_noticed
+test_teardown_names_a_due_self_update
 test_teardown_deletes_task_data_scratch
 test_teardown_forgets_claude_trust_for_a_retired_slot
 test_gh_error_and_content_absent_refuses

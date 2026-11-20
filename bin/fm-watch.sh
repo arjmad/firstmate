@@ -3988,6 +3988,29 @@ fleet_sync_tick() {
     "$SCRIPT_DIR/fm-fleet-sync.sh" --scheduled </dev/null >/dev/null 2>&1 &
 }
 
+# Firstmate self-update due (bin/fm-update.sh --due owns the offline test, the
+# dedupe and the durable row). Once per FM_SELF_UPDATE_DUE_INTERVAL seconds
+# (default 900; 0 or off disables) the watcher asks whether this main home's
+# code root is behind a landed firstmate head, and wakes when that check
+# queued a row; a held head (a task still works on firstmate) waits silently.
+SELF_UPDATE_DUE_INTERVAL=${FM_SELF_UPDATE_DUE_INTERVAL:-900}
+case "$SELF_UPDATE_DUE_INTERVAL" in off) SELF_UPDATE_DUE_INTERVAL=0 ;; ''|*[!0-9]*) SELF_UPDATE_DUE_INTERVAL=900 ;; esac
+self_update_due_tick() {
+  local out verdict target text
+  [ "$SELF_UPDATE_DUE_INTERVAL" -gt 0 ] || return 0
+  [ "$(age_of "$STATE/.last-self-update-due")" -ge "$SELF_UPDATE_DUE_INTERVAL" ] || return 0
+  touch "$STATE/.last-self-update-due"
+  out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-update.sh" --due --queue 2>/dev/null) || {
+    triage_log "self-update due check failed; the next check retries in ${SELF_UPDATE_DUE_INTERVAL}s"
+    return 0
+  }
+  read -r verdict target text <<EOF
+$out
+EOF
+  [ "$verdict" = queued ] || return 0
+  wake "check: $text"
+}
+
 # Overdue dated backlog work (bin/fm-backlog-overdue.sh's header owns the
 # overdue test, the grace period, and the once-per-gate marker). Once per
 # FM_BACKLOG_OVERDUE_INTERVAL seconds (default 3600; 0 or off disables) the
@@ -4517,6 +4540,7 @@ while :; do
   fi
 
   fleet_sync_tick
+  self_update_due_tick
   backlog_overdue_tick
   inbox_rewake_tick
   handed_off_reply_tick

@@ -4995,4 +4995,16 @@ if [ -n "$TEARDOWN_KEPT_CHECKOUTS" ] && [ -d "$STATE" ]; then
     echo "warning: teardown $ID kept scratch checkouts but could not file their noticed row (bin/fm-noticed.sh's reason is above); file it by hand" >&2
   fi
 fi
+# A firstmate head this ending leaves unheld is named here too (fork patch,
+# docs/fork-decisions/2026-11-20-self-update-due.md), because supervision can
+# go idle before the watcher's next due check. bin/fm-update.sh owns the test.
+if [ "$KIND" != secondmate ] && [ -d "$STATE" ]; then
+  # --queue also makes it a durable wake, since an automatic cleanup's output
+  # reaches nobody.
+  TEARDOWN_DUE=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-update.sh" --due --queue 2>/dev/null) \
+    || TEARDOWN_DUE=
+  case "$TEARDOWN_DUE" in
+    due\ * | queued\ *) printf 'self-update-due: %s\n' "${TEARDOWN_DUE#* * }" ;;
+  esac
+fi
 [ "$TEARDOWN_POOL_SLOT_LOST" = 0 ] || exit "$TEARDOWN_LOST_SLOT_EXIT"
