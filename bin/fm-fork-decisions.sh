@@ -244,6 +244,18 @@ upstream_sync_commit() {
   printf '%s\n' "$best"
 }
 
+# upstream_owned <sync> - print each path read on stdin that exists at <sync>,
+# except the records and their entry point, which are the fork's own. A
+# function, because stock macOS Bash 3.2 cannot parse a case inside $(...).
+upstream_owned() {
+  local sync=$1 path
+  while IFS= read -r path; do
+    case "$path" in '' | docs/fork-decisions.md | docs/fork-decisions/*) continue ;; esac
+    git -C "$ROOT" cat-file -e "$sync:$path" 2>/dev/null && printf '%s\n' "$path"
+  done
+  return 0
+}
+
 command_pr_check() {
   local sync base changed owned records
   [ -n "$BASE" ] || die "pr-check needs --base <rev>"
@@ -256,11 +268,7 @@ command_pr_check() {
   # A deleted record documents nothing, so only added or edited ones count.
   records=$(git -C "$ROOT" diff --name-only --no-renames --diff-filter=AM "$base" "$HEAD_REV" -- docs/fork-decisions \
     | grep -E '^docs/fork-decisions/[^/]+\.md$' || true)
-  # The records and their entry point are the fork's own, whatever upstream holds.
-  owned=$(printf '%s\n' "$changed" | while IFS= read -r path; do
-    case "$path" in '' | docs/fork-decisions.md | docs/fork-decisions/*) continue ;; esac
-    git -C "$ROOT" cat-file -e "$sync:$path" 2>/dev/null && printf '%s\n' "$path"
-  done)
+  owned=$(printf '%s\n' "$changed" | upstream_owned "$sync")
   if [ -n "$owned" ] && [ -z "$records" ]; then
     printf 'fm-fork-decisions: this change edits upstream-owned files (present at upstream sync %s) but adds or edits no docs/fork-decisions/ record; add a fork-patch record as docs/fork-decisions.md says:\n' "${sync:0:8}" >&2
     printf '%s\n' "$owned" | sed 's/^/  /' >&2
