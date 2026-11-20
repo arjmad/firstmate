@@ -84,7 +84,38 @@
 # fm-procevent-when.sh rebind-all to republish those bindings against the new
 # bytes; a failure there is swallowed rather than failing the update.
 #
-# Usage: fm-update.sh [--help]
+# Due check. `fm-update.sh --due` changes nothing and never fetches: it reports
+# whether this main home's code root is behind the head an update would reach,
+# so the watcher can raise "firstmate self-update due" after a firstmate PR
+# lands (docs/fork-decisions/2026-09-29-firstmate-self-update.md). It compares
+# the code root's HEAD against refs/remotes/origin/<branch> of each projects/
+# clone whose origin is the repository the update source names (origin and the
+# clone's default branch, or the config/self-update-source remote and branch), because fleet sync fetches
+# those clones after every merge and on its schedule; the code root's own
+# remote ref is fetched only by an update. A target that is HEAD or already in
+# HEAD's history is current. A head HEAD has diverged from, or any head while
+# the code root is dirty or off its default branch, is not due either, because
+# the fast-forward-only update would skip it. It prints nothing when current, in a secondmate
+# home (its parent's /updatefirstmate updates it), or when no such clone names
+# a newer head; otherwise one line:
+#   due <target-sha> <text>    no task of this home works on such a clone
+#   held <target-sha> <text>   a task record's project= or also_project_*=
+#                              path is such a clone (secondmate records never
+#                              hold it, because this update moves their homes)
+# An unusable config/self-update-source exits 1, as the update itself does.
+# `--due --queue` also makes a due head durable, for the watcher and teardown:
+# the first time it sees that head, and again once FM_SELF_UPDATE_DUE_REPEAT
+# seconds (default 86400) pass while it stays due, it queues one `check:` wake
+# keyed self-update-due-<sha> and prints `due-queued` in place of `due`. A
+# held head is queued, as `held-queued` keyed self-update-held-<sha>, only once
+# heads have stayed held that long, so a stale task record cannot hide them
+# for good. due_queue owns the record in $STATE/.self-update-due, which a
+# current code root removes.
+#
+# FM_SELF_UPDATE_DUE_ROOT replaces the code root for --due only, so the watcher
+# and teardown suites can point it at a clean fixture checkout.
+#
+# Usage: fm-update.sh [--help | --due [--queue]]
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -97,14 +128,21 @@ SECONDMATES_MD="$FM_HOME/data/secondmates.md"
 # shellcheck source=bin/fm-secondmate-restart-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-restart-lib.sh"
 
-usage() { echo "usage: fm-update.sh [--help]" >&2; }
+usage() { echo "usage: fm-update.sh [--help | --due [--queue]]" >&2; }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   usage 2>&1
   exit 0
 fi
 
-"$SCRIPT_DIR/fm-guard.sh" || true
+DUE=0 DUE_QUEUE=0
+if [ "${1:-}" = "--due" ] && { [ $# -eq 1 ] || { [ $# -eq 2 ] && [ "$2" = --queue ]; }; }; then
+  DUE=1
+  [ $# -eq 1 ] || DUE_QUEUE=1
+  shift $#
+else
+  "$SCRIPT_DIR/fm-guard.sh" || true
+fi
 [ $# -eq 0 ] || { usage; exit 1; }
 
 # --- self-update source ----------------------------------------------------
@@ -153,7 +191,151 @@ EOF
   SELF_UPDATE_BRANCH=$branch
 }
 
+# A secondmate home's parent updates it, so --due has nothing to report there,
+# even before its source file is read.
+[ "$DUE" = 0 ] || [ ! -e "$FM_HOME/.fm-secondmate-home" ] || exit 0
+
 read_self_update_source
+
+# --- due check (--due) -----------------------------------------------------
+
+# due_newer <sha> <clone> - rc 0 when the update could fast-forward HEAD to
+# <sha>: a head HEAD lacks, with HEAD in its history. When the code root has
+# not fetched <sha>, the clone that has it answers instead; a clone lacking
+# HEAD means HEAD holds commits origin lacks, so the update would skip it.
+due_newer() {
+  [ -n "$1" ] && [ "$1" != "$DUE_HEAD" ] || return 1
+  if git -C "$FM_ROOT" cat-file -e "$1^{commit}" 2>/dev/null; then
+    git -C "$FM_ROOT" merge-base --is-ancestor "$DUE_HEAD" "$1" 2>/dev/null
+  else
+    git -C "$2" cat-file -e "$DUE_HEAD^{commit}" 2>/dev/null \
+      && git -C "$2" merge-base --is-ancestor "$DUE_HEAD" "$1" 2>/dev/null
+  fi
+}
+
+due_check() {
+  local remote branch identity clone url sha target='' via='' paths='' path value meta busy=''
+  # shellcheck source=bin/fm-role-lib.sh
+  . "$SCRIPT_DIR/fm-role-lib.sh"
+  DUE_HEAD=$(git -C "$FM_ROOT" rev-parse --verify --quiet HEAD) || return 0
+  # The update skips a code root off its default branch or with a dirty tree,
+  # so neither is due.
+  branch=$(default_branch "$FM_ROOT") || return 0
+  [ "$(git -C "$FM_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null)" = "$branch" ] || return 0
+  [ -z "$(dirty_status "$FM_ROOT")" ] || return 0
+  remote=${SELF_UPDATE_REMOTE:-origin}
+  url=$(git -C "$FM_ROOT" remote get-url "$remote" 2>/dev/null) || return 0
+  identity=$(fm_role_remote_identity "$url" "$FM_ROOT")
+  [ -n "$identity" ] || return 0
+  for clone in "$FM_HOME"/projects/*/; do
+    clone=${clone%/}
+    [ -e "$clone/.git" ] || continue
+    url=$(git -C "$clone" remote get-url origin 2>/dev/null) || continue
+    [ "$(fm_role_remote_identity "$url" "$clone")" = "$identity" ] || continue
+    paths="$paths$(cd "$clone" && pwd -P)
+"
+    [ -z "$target" ] || continue
+    branch=$SELF_UPDATE_BRANCH
+    [ -n "$branch" ] || branch=$(default_branch "$clone") || continue
+    sha=$(git -C "$clone" rev-parse --verify --quiet "refs/remotes/origin/$branch^{commit}") || continue
+    if due_newer "$sha" "$clone"; then
+      target=$sha via="projects/${clone##*/} origin/$branch"
+    fi
+  done
+  [ -n "$target" ] || return 0
+  # A task record names its project by absolute path. A secondmate's record
+  # names its own home, a firstmate worktree that this update moves, so it
+  # never holds the update.
+  for meta in "$STATE"/*.meta; do
+    [ -f "$meta" ] || continue
+    ! grep -qx 'kind=secondmate' "$meta" || continue
+    while IFS= read -r value; do
+      path=$(cd "$value" 2>/dev/null && pwd -P) || continue
+      if printf '%s' "$paths" | grep -qxF -- "$path"; then
+        busy=$(basename "$meta" .meta)
+        break 2
+      fi
+    done < <(sed -n -E 's/^(project|also_project_[^=]*)=//p' "$meta")
+  done
+  if [ -n "$busy" ]; then
+    printf 'held %s firstmate self-update due: the code root runs %s, behind %s at %s; task %s still works on firstmate\n' \
+      "$target" "${DUE_HEAD:0:8}" "$via" "${target:0:8}" "$busy"
+  else
+    printf 'due %s firstmate self-update due: the code root runs %s, behind %s at %s, and no task works on firstmate; run /updatefirstmate\n' \
+      "$target" "${DUE_HEAD:0:8}" "$via" "${target:0:8}"
+  fi
+}
+
+# due_queue <due-check line> - the --queue half: dedupe, queue, record.
+# $STATE/.self-update-due holds "<sha> <queued-epoch> <queued-kind> <held-since>":
+# the head last seen, when and as what (due, held, or none) it was last queued,
+# and since when some head has been held. A due head is queued unless it was
+# queued as due within the repeat interval and has not been held since, so a
+# head is queued again as due whenever its holding task ends. A held head is queued only once heads have been held for
+# the repeat interval, a clock new heads do not restart.
+due_queue() {
+  local line=$1 marker="$STATE/.self-update-due" verdict target text now repeat
+  local raised='' at=0 kind=none since=0 key
+  if [ -z "$line" ]; then
+    rm -f "$marker"
+    return 0
+  fi
+  read -r verdict target text <<EOF
+$line
+EOF
+  if [ "$verdict" = due ] || [ "$verdict" = held ]; then
+    repeat=${FM_SELF_UPDATE_DUE_REPEAT:-86400}
+    case "$repeat" in ''|*[!0-9]*) repeat=86400 ;; esac
+    # shellcheck source=bin/fm-wake-lib.sh
+    . "$SCRIPT_DIR/fm-wake-lib.sh"
+    # The queue lock covers the record too, so the watcher and a teardown
+    # never both queue one head.
+    fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return 1
+    now=$(date +%s)
+    [ ! -f "$marker" ] || read -r raised at kind since < "$marker" || true
+    case "$at" in ''|*[!0-9]*) at=0 ;; esac
+    case "$since" in ''|*[!0-9]*) since=0 ;; esac
+    case "$kind" in due|held) ;; *) kind=none ;; esac
+    [ "$raised" = "$target" ] || { at=0 kind=none; }
+    if [ "$verdict" = due ]; then
+      since=0
+      if [ "$kind" != due ] || [ $((now - at)) -ge "$repeat" ]; then
+        at=$now kind=due key="self-update-due-$target"
+      fi
+    else
+      # A held head that becomes due again is queued again.
+      [ "$kind" = held ] || { at=0 kind=none; }
+      [ "$since" -gt 0 ] || since=$now
+      if [ $((now - since)) -ge "$repeat" ] \
+        && { [ "$kind" != held ] || [ $((now - at)) -ge "$repeat" ]; }; then
+        text="$text; it has waited at least ${repeat}s, so check whether that task is still live"
+        at=$now kind=held key="self-update-held-$target"
+      fi
+    fi
+    if [ -n "${key:-}" ]; then
+      if ! fm_wake_append_locked check "$key" "check: $text"; then
+        fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+        return 1
+      fi
+      verdict="$verdict-queued"
+    fi
+    printf '%s %s %s %s\n' "$target" "$at" "$kind" "$since" > "$marker"
+    fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+  fi
+  printf '%s %s %s\n' "$verdict" "$target" "$text"
+}
+
+if [ "$DUE" = 1 ]; then
+  export GIT_NO_LAZY_FETCH=1
+  FM_ROOT=${FM_SELF_UPDATE_DUE_ROOT:-$FM_ROOT}
+  due_line=$(due_check)
+  if [ "$DUE_QUEUE" = 1 ]; then
+    due_queue "$due_line"
+  elif [ -n "$due_line" ]; then
+    printf '%s\n' "$due_line"
+  fi
+  exit
+fi
 
 # --- main firstmate repo ---------------------------------------------------
 

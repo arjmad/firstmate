@@ -1,6 +1,6 @@
 ---
 name: ship-landing
-description: Load when a ship reports a PR or ready branch, when deciding or monitoring landing, and before task cleanup.
+description: Load when a ship reports a PR or ready branch, when deciding or monitoring landing, before task cleanup, and on a `check: firstmate self-update due:` wake or a `self-update-due:` teardown line.
 user-invocable: false
 metadata:
   internal: true
@@ -27,6 +27,7 @@ When `bin/fm-pr-merge.sh` refuses a code-changing PR as unreviewed, follow `docs
 When it refuses a PR whose merge would undo landed work, steer its worker to rebuild the branch on the base with only its own change; an `actionable:` line after a landed merge naming undone commits needs a restoring follow-up PR.
 When it refuses a one-way door and holds the task, bring the captain that merge call with the PR's full URL and blast radius; after his explicit word, record it with `answer --release` and re-run with `--one-way-approved` (`docs/task-lifecycle.md` "Selected delivery path and merge authority").
 Act on a `STUCK:` line in `bin/fm-pr-merge.sh`'s output or a `check: fleet-sync:` wake; a `skipped: busy:` one needs nothing, because the scheduled sync retries it.
+A merged firstmate PR goes live only through /updatefirstmate (fork patch): on a `self-update-due:` teardown line or a `check: firstmate self-update due:` wake, run it if `bin/fm-update.sh --due` still prints `due`; a `firstmate: skipped:` result is a blocker for the captain, not a step to repeat on the next wake or teardown line. A `held` result past a day names a task: check it with `bin/fm-crew-state.sh` and load `stuck-crewmate-recovery` when its record is stale.
 For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake, print nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
 Retire a custom check only through `bin/fm-check-unregister.sh <id>` (or `bin/fm-teardown.sh` for a spawned task); never hand-compose an `rm` with `$STATE`/`$ID`.
 

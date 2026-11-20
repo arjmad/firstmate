@@ -691,6 +691,100 @@ test_self_update_source_rewrite_is_skipped() {
   pass "T15 a non-fast-forward self-update source is skipped, never forced"
 }
 
+# --- T16: --due reports a landed head from a fleet-synced project clone -----
+run_due() {
+  FM_ROOT_OVERRIDE="$1/main" FM_HOME="$1/home" "$UPDATE" --due "${@:2}" 2>&1
+}
+
+test_due_reports_a_landed_head_once_no_task_works_on_firstmate() {
+  local w out head target
+  w=$(new_world t16)
+  mkdir -p "$w/home/projects"
+  git clone -q "$w/origin.git" "$w/home/projects/fm"
+  git init -q "$w/other.git" --bare
+  git clone -q "$w/origin.git" "$w/home/projects/unrelated" 2>/dev/null
+  git -C "$w/home/projects/unrelated" remote set-url origin "$w/other.git"
+
+  out=$(run_due "$w")
+  assert_equals "$out" "" "a current code root must report nothing"
+
+  bump_origin "$w" bin
+  target=$(git -C "$w/origin.git" rev-parse main)
+  out=$(run_due "$w")
+  assert_equals "$out" "" "an unfetched project clone must not report a head it does not have"
+
+  git -C "$w/home/projects/fm" fetch -q origin
+  head=$(git -C "$w/main" rev-parse HEAD)
+  printf 'dirty\n' >> "$w/main/README.md"
+  assert_equals "$(run_due "$w")" "" "a dirty code root is not due, since the update would skip it"
+  git -C "$w/main" checkout -q -- README.md
+  git -C "$w/main" checkout -q -b side
+  assert_equals "$(run_due "$w")" "" "a code root off its default branch is not due"
+  git -C "$w/main" checkout -q main
+  out=$(run_due "$w")
+  assert_contains "$out" "due $target firstmate self-update due: the code root runs ${head:0:8}, behind projects/fm origin/main at ${target:0:8}" \
+    "a landed head the code root lacks is due"
+  assert_contains "$out" "run /updatefirstmate" "the due line names the step"
+  assert_contains "$(run_due "$w" --queue)" "due-queued $target " "the first queued sighting queues a wake"
+  grep "$(printf '\tcheck\tself-update-due-%s\t' "$target")" "$w/home/state/.wake-queue" >/dev/null \
+    || fail "the due head was not queued durably"
+  assert_contains "$(run_due "$w" --queue)" "due $target " "a head queued within the repeat interval is not queued again"
+  printf '%s 1 due 0\n' "$target" > "$w/home/state/.self-update-due"
+  assert_contains "$(run_due "$w" --queue)" "due-queued $target " "a head still due after the repeat interval is queued again"
+  rm "$w/home/state/.self-update-due"
+
+  printf 'project=%s\nkind=ship\n' "$w/home/projects/fm" > "$w/home/state/t1.meta"
+  out=$(run_due "$w")
+  assert_contains "$out" "held $target " "a live firstmate task holds the update"
+  assert_contains "$out" "task t1 still works on firstmate" "the held line names the task"
+  printf 'project=%s\nalso_project_fm=%s\n' "$w/home/projects/unrelated" "$w/home/projects/fm" > "$w/home/state/t1.meta"
+  assert_contains "$(run_due "$w")" "held $target " "a companion firstmate task holds the update"
+  printf 'project=%s\nkind=ship\n' "$w/home/projects/fm" > "$w/home/state/t1.meta"
+  assert_contains "$(run_due "$w" --queue)" "held $target " "a held head is only recorded when first seen"
+  rm "$w/home/state/t1.meta"
+  assert_contains "$(run_due "$w" --queue)" "due-queued $target " "a head first held is queued once its task ends"
+  printf 'project=%s\nkind=ship\n' "$w/home/projects/fm" > "$w/home/state/t1.meta"
+  printf '%s 0 none 1\n' "0000000000000000000000000000000000000000" > "$w/home/state/.self-update-due"
+  out=$(run_due "$w" --queue)
+  assert_contains "$out" "held-queued $target " "a hold older than the repeat interval is queued, even across new heads"
+  assert_contains "$out" "check whether that task is still live" "the held wake asks whether the task is live"
+  grep "$(printf '\tcheck\tself-update-held-%s\t' "$target")" "$w/home/state/.wake-queue" >/dev/null \
+    || fail "the stale hold was not queued durably"
+  assert_contains "$(run_due "$w" --queue)" "held $target " "a stale hold queued within the repeat interval is not queued again"
+  rm "$w/home/state/t1.meta"
+  assert_contains "$(run_due "$w" --queue)" "due-queued $target " "a head queued as held is queued again as due once its task ends"
+  printf 'project=%s\nkind=ship\n' "$w/home/projects/fm" > "$w/home/state/t1.meta"
+  assert_contains "$(run_due "$w" --queue)" "held $target " "a head queued as due is held again by a new task"
+  rm "$w/home/state/t1.meta"
+  assert_contains "$(run_due "$w" --queue)" "due-queued $target " "a head held after its due wake is queued again once that task ends"
+  rm "$w/home/state/.self-update-due"
+  printf 'project=%s\n' "$w/home/projects/unrelated" > "$w/home/state/t1.meta"
+  assert_contains "$(run_due "$w")" "due $target " "a task on another project does not hold the update"
+  printf 'project=%s\nkind=secondmate\n' "$w/home/projects/fm" > "$w/home/state/sm1.meta"
+  assert_contains "$(run_due "$w")" "due $target " "a secondmate record never holds the update"
+  rm "$w/home/state/t1.meta" "$w/home/state/sm1.meta"
+
+  printf 'sm\n' > "$w/home/.fm-secondmate-home"
+  write_source "$w" "nosuchremote carry"
+  assert_equals "$(run_due "$w")" "" "a secondmate home leaves its update to its parent, before reading its source"
+  rm "$w/home/.fm-secondmate-home" "$w/home/config/self-update-source"
+
+  git -C "$w/main" pull -q --ff-only origin main
+  assert_equals "$(run_due "$w")" "" "a code root on the landed head must report nothing"
+  run_due "$w" --queue >/dev/null
+  [ ! -e "$w/home/state/.self-update-due" ] || fail "a current code root kept the queued-head record"
+  printf 'local\n' >> "$w/main/README.md"
+  git -C "$w/main" commit -qam local
+  assert_equals "$(run_due "$w")" "" "a code root ahead of the landed head must report nothing"
+  assert_equals "$(git -C "$w/main" rev-parse HEAD^)" "$target" "--due moved the code root"
+  bump_origin "$w" readme
+  git -C "$w/home/projects/fm" fetch -q origin
+  assert_equals "$(run_due "$w" --queue)" "" "a diverged code root that has not fetched the head must report nothing, since the update would skip it"
+  git -C "$w/main" fetch -q origin
+  assert_equals "$(run_due "$w" --queue)" "" "a code root diverged from the landed head must report nothing, since the update would skip it"
+  pass "T16 --due reports a landed head from a fleet-synced project clone, held while a task works on firstmate"
+}
+
 test_updates_main_and_secondmate
 test_reread_gate_is_instruction_only
 test_bin_only_advance_restarts
@@ -710,5 +804,6 @@ test_primary_update_rebinds_local_watch
 test_self_update_source_follows_branch
 test_self_update_source_refuses_unusable_config
 test_self_update_source_rewrite_is_skipped
+test_due_reports_a_landed_head_once_no_task_works_on_firstmate
 
 echo "# all fm-update tests passed"

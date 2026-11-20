@@ -1772,6 +1772,88 @@ EOF
   pass "an acknowledged inbox note never re-wakes the watcher"
 }
 
+# A firstmate head that landed in this home's project clone, and that the code
+# root lacks, wakes the watcher once with the self-update step; the same head
+# does not wake it again, and a current code root clears the record.
+self_update_due_watch() {  # <dir> <out>
+  PATH="$1/fakebin:$PATH" FM_HOME="$1" FM_STATE_OVERRIDE="$1/state" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_CREW_STATE_BIN="$1/fakebin/fm-crew-state.sh" \
+    FM_POLL=0.2 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_SECONDMATE_LIVENESS_SECS=99999999 FM_FLEET_SYNC_INTERVAL=off FM_INBOX_REWAKE_INTERVAL=off \
+    FM_SELF_UPDATE_DUE_INTERVAL=1 "$WATCH" > "$2" 2>/dev/null &
+}
+
+test_landed_firstmate_head_wakes_once_for_self_update() {
+  local dir state out pid url clone landed second
+  url=$(git -C "$ROOT" remote get-url origin 2>/dev/null) || url=
+  if [ -z "$url" ]; then
+    pass "a landed firstmate head wakes once for self-update (skipped: the code root has no origin)"
+    return 0
+  fi
+  dir=$(make_case self-update-due); dir=$(cd "$dir" && pwd -P); state="$dir/state"; out="$dir/watch.out"
+  clone="$dir/projects/firstmate"
+  git clone -q --shared --no-checkout "$ROOT" "$clone" || fail "could not clone the code root"
+  git -C "$clone" remote set-url origin "$url"
+  # A clean code root on its default branch at this checkout's HEAD; the real
+  # checkout may be dirty or detached.
+  git clone -q --shared --no-checkout "$ROOT" "$dir/root" || fail "could not clone the code root"
+  git -C "$dir/root" remote set-url origin "$url"
+  git -C "$dir/root" update-ref refs/remotes/origin/main "$(git -C "$ROOT" rev-parse HEAD)"
+  git -C "$dir/root" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+  git -C "$dir/root" checkout -q -B main "$(git -C "$ROOT" rev-parse HEAD)"
+  export FM_SELF_UPDATE_DUE_ROOT="$dir/root"
+  landed=$(git -C "$clone" -c user.name=test -c user.email=test@example.invalid commit-tree "$(git -C "$ROOT" rev-parse 'HEAD^{tree}')" -p "$(git -C "$ROOT" rev-parse HEAD)" -m landed)
+  git -C "$clone" update-ref refs/remotes/origin/main "$landed"
+  git -C "$clone" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+
+  self_update_due_watch "$dir" "$out"
+  pid=$!
+  wait_for_exit "$pid" 100 || { reap "$pid"; fail "a landed firstmate head did not wake the watcher: $(cat "$out")"; }
+  grep -F "check: firstmate self-update due: the code root runs " "$out" >/dev/null \
+    || fail "the wake did not name the self-update: $(cat "$out")"
+  grep -F "run /updatefirstmate" "$out" >/dev/null || fail "the wake did not name the step: $(cat "$out")"
+  grep "$(printf '\tcheck\tself-update-due-%s\t' "$landed")" "$state/.wake-queue" >/dev/null \
+    || fail "the self-update wake was not queued durably: $(cat "$state/.wake-queue" 2>&1)"
+  [ "$(cut -d' ' -f1 "$state/.self-update-due")" = "$landed" ] || fail "the raised head was not recorded"
+  FM_HOME="$dir" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-wake-drain.sh" >/dev/null 2>"$dir/drain.err" \
+    || fail "could not drain the self-update wake: $(cat "$dir/drain.err")"
+  ack_drain_err "$state" "$dir/drain.err" >/dev/null 2>&1 || fail "could not acknowledge the self-update wake"
+
+  : > "$out"
+  self_update_due_watch "$dir" "$out"
+  pid=$!
+  wait_poll_cycle "$state" "$pid" || fail "the same landed head woke the watcher again: $(cat "$out")"
+  touch -t 200001010000 "$state/.last-self-update-due"
+  wait_poll_cycle "$state" "$pid" || fail "the same landed head woke the watcher again: $(cat "$out")"
+
+  # A teardown that sees the next head first queues its row while the watcher
+  # polls; the watcher still wakes for it, by the queued row or its own check.
+  second=$(git -C "$clone" -c user.name=test -c user.email=test@example.invalid commit-tree "$(git -C "$ROOT" rev-parse 'HEAD^{tree}')" -p "$landed" -m second)
+  git -C "$clone" update-ref refs/remotes/origin/main "$second"
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-update.sh" --due --queue >/dev/null \
+    || fail "the teardown-side check failed"
+  touch -t 200001010000 "$state/.last-self-update-due"
+  wait_for_exit "$pid" 100 || { reap "$pid"; fail "a head a teardown queued first did not wake the watcher: $(cat "$out")"; }
+  grep -E "behind projects/firstmate origin/main at ${second:0:8}|queued work" "$out" >/dev/null \
+    || fail "the wake did not surface the head the teardown queued: $(cat "$out")"
+  FM_HOME="$dir" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-wake-drain.sh" >/dev/null 2>"$dir/drain.err" \
+    || fail "could not drain the teardown-queued wake: $(cat "$dir/drain.err")"
+  ack_drain_err "$state" "$dir/drain.err" >/dev/null 2>&1 || fail "could not acknowledge the teardown-queued wake"
+
+  : > "$out"
+  self_update_due_watch "$dir" "$out"
+  pid=$!
+  git -C "$clone" update-ref refs/remotes/origin/main "$(git -C "$ROOT" rev-parse HEAD)"
+  touch -t 200001010000 "$state/.last-self-update-due"
+  wait_poll_cycle "$state" "$pid" || fail "a current code root woke the watcher: $(cat "$out")"
+  wait_poll_cycle "$state" "$pid" || fail "a current code root woke the watcher: $(cat "$out")"
+  reap "$pid"
+  [ ! -e "$state/.self-update-due" ] || fail "a current code root kept the raised-head record"
+  [ ! -e "$state/.self-update-due-woke" ] || fail "a current code root kept the watcher's woke record"
+  unset FM_SELF_UPDATE_DUE_ROOT
+  pass "a landed firstmate head wakes once for self-update and clears once the code root is current"
+}
+
 # A handoff row moved to a secondmate is answered by the watcher's own poll once
 # the mate's merged line reaches this home's copy of its parent channel.
 test_secondmate_merged_line_answers_a_moved_handoff() {
@@ -2606,6 +2688,7 @@ fm_test_run \
   test_fleet_sync_schedule_runs_the_sync_when_due \
   test_unacknowledged_inbox_note_rewakes_the_watcher \
   test_acknowledged_inbox_note_never_rewakes_the_watcher \
+  test_landed_firstmate_head_wakes_once_for_self_update \
   test_secondmate_merged_line_answers_a_moved_handoff \
   test_overdue_scan_lines_surface_as_one_check_wake \
   test_leftover_sitting_state_wakes_once_to_surface_held_calls \
