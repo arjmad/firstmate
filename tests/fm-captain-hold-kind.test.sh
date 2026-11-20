@@ -412,6 +412,44 @@ test_new_call_gets_no_invented_due_date() {
   pass "a new undated captain call stays live with no invented due date, and --due, --until and an existing due date are kept"
 }
 
+# A call's group comes only from its Batch: tag
+# (docs/fork-decisions/2026-11-11-calls-grouped-by-what-it-takes.md): hold
+# --batch records the tag, a new untagged call with no choices warns that it
+# will show as taking his own hands, and board-link warns for each linked call
+# that carries no tag; nothing is refused for a missing tag.
+test_untagged_board_or_place_calls_warn() {
+  local home out err
+  home=$(make_home batch-tag)
+  err=$(run_captain "$home" hold sign-heimdall --title "Sign in on the Heimdall screen" --reason "Sign in" \
+    --batch place:heimdall-screen 2>&1 >/dev/null) || fail "a tagged call was refused: $err"
+  assert_contains "$(show_task "$home" sign-heimdall)" 'Batch: place:heimdall-screen' "--batch was not recorded"
+  assert_not_contains "$err" "--batch" "a tagged call warned about its tag"
+  err=$(run_captain "$home" hold push-rule --title "Pick the push rule" --reason "Pick" --kind reversible \
+    --options 'Push|Hold' --recommend Push 2>&1 >/dev/null) || fail "a call with choices was refused: $err"
+  assert_not_contains "$err" "--batch" "a call with choices warned about a tag"
+  err=$(run_captain "$home" hold sign-thor --title "Sign in on Thor" --reason "Sign in" 2>&1 >/dev/null) \
+    || fail "an untagged call was refused: $err"
+  assert_contains "$err" "sign-thor files as a call that takes his own hands" "an untagged hands call did not warn"
+  assert_contains "$err" "--batch place:<name>" "the warning did not name the tag to add"
+  err=$(run_captain "$home" hold sign-thor --reason "Sign in again" 2>&1 >/dev/null) || fail "a re-hold was refused: $err"
+  assert_not_contains "$err" "--batch" "a re-hold of a live call warned again"
+  if out=$(run_captain "$home" hold bad-tag --title "Bad tag" --reason "x" --batch "Heimdall Screen" 2>&1); then
+    fail "an invalid batch tag was accepted: $out"
+  fi
+  FM_HOME="$home" "$ROOT/bin/fm-tasks-axi.sh" add idea-faster "Faster packets" --kind idea >/dev/null || fail "could not add an idea"
+  err=$(run_captain "$home" hold idea-faster --reason "Idea" --kind reversible 2>&1 >/dev/null) || fail "holding an idea failed: $err"
+  assert_not_contains "$err" "--batch" "an idea warned about a tag"
+
+  printf 'decisions_reviewed=1\ndecision_keys=sign-heimdall,sign-thor\n' > "$home/state/board-origin.meta"
+  err=$(run_captain "$home" board-link board-origin https://example.invalid/board 2>&1 >/dev/null) \
+    || fail "board-link failed: $err"
+  assert_contains "$err" "sign-thor is on the board board-origin carries but has no Batch: tag" \
+    "board-link did not warn for an untagged member"
+  assert_contains "$err" "bin/fm-tasks-axi.sh batch sign-thor board:board-origin" "the warning did not name the tag command"
+  assert_not_contains "$err" "sign-heimdall is on the board" "board-link warned for a tagged member"
+  pass "hold --batch tags a call, and an untagged new hands call or board member warns without being refused"
+}
+
 test_kind_arguments_are_validated
 test_choice_arguments_are_validated
 test_choices_ride_on_the_reason_prefix
@@ -423,3 +461,4 @@ test_defer_keeps_a_retired_default_as_the_recommendation
 test_hold_records_the_captain_as_owner_and_release_hands_back
 test_kind_prefix_shows_on_every_hold_reason
 test_new_call_gets_no_invented_due_date
+test_untagged_board_or_place_calls_warn

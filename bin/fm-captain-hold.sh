@@ -22,7 +22,7 @@
 # Usage:
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
 #     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] [--due YYYY-MM-DD] \
-#     [--kind reversible|arjun-only] \
+#     [--batch place:<name>|board:<task-id>] [--kind reversible|arjun-only] \
 #     [--options '<A>|<B>[|<C>]' [--recommend <option>]] [--ask <question>]
 #   fm-captain-hold.sh choices <task-id> --options '<A>|<B>[|<C>]' [--recommend <option>] [--ask <question>]
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
@@ -78,6 +78,14 @@
 # is invented for a call that has none (fork patch,
 # docs/fork-decisions/2026-11-20-captain-call-due-is-a-real-deadline.md). A
 # title opening with a `[YYYY-MM-DD]` date is refused when creating a row.
+# `--batch` records the row's `Batch:` tag (the same line `fm-tasks-axi.sh
+# batch` writes), which groups a board's members (`board:<task-id>`) or one
+# place's errands (`place:<name>`). A call's group comes only from that tag,
+# so a new call filed with neither a tag nor `--options` (it would show as
+# taking his own hands) prints a warning on stderr naming `--batch`, unless
+# its row is an idea or noticed item, which the Monday triage groups, and
+# `board-link` warns for each call it links that carries no tag; neither
+# refuses, because a call with its own outside deadline stays its own call.
 #
 # HOLD KINDS (fork patches, docs/fork-decisions.md 2026-10-14 and
 # 2026-11-01).
@@ -1345,7 +1353,7 @@ epoch_to_utc_iso() {  # <epoch>
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0 stored_reason original_body='' hold_status=0
-  local decision_kind='' existing_reason='' due='' recorded_due
+  local decision_kind='' existing_reason='' due='' recorded_due batch='' recorded_batch
   local options='' options_given=0 recommend='' recommend_given=0 ask='' ask_given=0
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
@@ -1357,6 +1365,7 @@ command_hold() {
       --origin) shift; origin=${1:-} ;;
       --until) shift; until=${1:-} ;;
       --due) shift; due=${1:-}; fm_backlog_date_valid "$due" || fail "--due must be a YYYY-MM-DD date: $due" ;;
+      --batch) shift; batch=${1:-}; fm_backlog_batch_valid "$batch" || fail "$FM_BACKLOG_BATCH_RULE: $batch" ;;
       --kind) shift; decision_kind=${1:-} ;;
       --default|--no-default)
         fail "$1 was removed: holds no longer release themselves and wait for the captain's answer; give a recommendation with --options and --recommend"
@@ -1423,6 +1432,7 @@ command_hold() {
     validate_one_line repo "$repo"
     [ -z "$origin" ] || body=$(printf 'Origin: %s' "$origin")
     [ -z "$due" ] || body=$(fm_backlog_row_field_body_with due "$body" "$due")
+    [ -z "$batch" ] || body=$(fm_backlog_row_field_body_with batch "$body" "$batch")
     body=$(fm_backlog_owner_body_with "$body" arjun)
     # tasks-axi add never passes --due. Beads due.required would refuse this
     # create, and captain holds have no due semantics, so waive it for this
@@ -1449,8 +1459,19 @@ command_hold() {
   # --due records an outside deadline (see the header).
   recorded_due=$(fm_backlog_row_field_of_body due "$(show_field_value "$show" body)")
   if [ -n "$due" ] && [ "$due" != "$recorded_due" ]; then
-    write_due "$id" "$due" "$show" || fail "could not record the due date $due on $id"
+    write_row_field due "$id" "$due" "$show" || fail "could not record the due date $due on $id"
     task_show_or_fail "$id" "task $id disappeared while recording its due date"
+  fi
+  recorded_batch=$(fm_backlog_row_field_of_body batch "$(show_field_value "$show" body)")
+  if [ -n "$batch" ] && [ "$batch" != "$recorded_batch" ]; then
+    write_row_field batch "$id" "$batch" "$show" || fail "could not record the batch tag $batch on $id"
+    task_show_or_fail "$id" "task $id disappeared while recording its batch tag"
+    recorded_batch=$batch
+  fi
+  # Ideas and noticed items group in the Monday triage instead.
+  if [ "$preserve_hold_set" = 0 ] && [ -z "$recorded_batch" ] && [ "$options_given" = 0 ] \
+    && ! printf '%s\n' "$show" | grep -Eq '^  kind: (idea|noticed)$'; then
+    printf 'fm-captain-hold: %s files as a call that takes his own hands; if answering it takes a board or one place, tag it with --batch board:<task-id> or --batch place:<name> so it shows with its group\n' "$id" >&2
   fi
   # The kind prefix rides on the stored reason (see the header).
   if [ -n "$decision_kind" ]; then
@@ -1555,11 +1576,11 @@ apply_pending_retained_artifact() {  # <task-id>
 # A caller holding a fresh read of the row passes it to spare a backend read.
 # OWNER_WRITTEN says whether the body changed.
 OWNER_WRITTEN=0
-# Record <due> as the row's Due: line, keeping the owner line last.
-write_due() {  # <task-id> <due> <fresh-show-output>
-  local id=$1 due=$2 show=$3 body owner tmp
+# Record <value> as the row's Due: or Batch: line, keeping the owner line last.
+write_row_field() {  # <due|batch> <task-id> <value> <fresh-show-output>
+  local field=$1 id=$2 value=$3 show=$4 body owner tmp
   body=$(show_field_value "$show" body) || return 1
-  body=$(fm_backlog_row_field_body_with due "$body" "$due") || return 1
+  body=$(fm_backlog_row_field_body_with "$field" "$body" "$value") || return 1
   owner=$(fm_backlog_owner_of_body "$body")
   [ -z "$owner" ] || body=$(fm_backlog_owner_body_with "$body" "$owner")
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-due.XXXXXX") || return 1
@@ -2878,6 +2899,8 @@ command_board_link() {
     task_show_or_fail "$id" "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
     body=$(decode_shown_value "$(show_field "$show" body)") \
       || fail "could not decode the existing body for $id"
+    [ -n "$(fm_backlog_row_field_of_body batch "$body")" ] \
+      || printf 'fm-captain-hold: %s is on the board %s carries but has no Batch: tag; tag it with bin/fm-tasks-axi.sh batch %s board:%s so the board shows as one call\n' "$id" "$origin" "$id" "$origin" >&2
     case $'\n'"$body"$'\n' in
       *$'\n'"$line"$'\n'*)
         release_task_control_lock
