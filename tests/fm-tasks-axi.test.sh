@@ -231,6 +231,68 @@ test_wrapper_refuses_add_start() {
 # default, fleet, unless --owner or the body's own Owner: line names one; a
 # kind=captain row must name one. A body rewrite keeps the recorded owner, and
 # `owner` reads and records it.
+# A kind=captain row the captain owns is his own step, so filing it holds it
+# for him (through bin/fm-captain-hold.sh), keeping it out of dispatch; an
+# idempotent re-add holds one filed unheld earlier. A row the fleet owns, one
+# already carrying a hold of any kind, and a closed row are left as they are.
+test_wrapper_holds_captain_owned_captain_rows() {
+  local dir show ready out
+  dir=$(make_split wrapper-captain-hold)
+  out=$(wrapper_from_code "$dir" add rk-printer "Repeated: printer toner" --kind captain --owner arjun 2>&1) \
+    || fail "adding a captain-owned captain row failed: $out"
+  show=$(wrapper_from_code "$dir" show rk-printer --full)
+  assert_contains "$show" "held: yes" "a captain-owned captain row was not held"
+  assert_contains "$show" "hold_kind: captain" "the row was not held for the captain"
+  assert_contains "$show" "[arjun-only] only you can take this step: Repeated: printer toner" "the hold reason does not name the step and its arjun-only kind"
+  wrapper_from_code "$dir" add --kind captain --owner arjun rk-flags-first "Flags before the id" >/dev/null \
+    || fail "adding with flags before the id failed"
+  assert_contains "$(wrapper_from_code "$dir" show rk-flags-first)" "held: yes" "a row added with flags before its id was not held"
+  # A row filed unheld before this rule, then re-added as the responder does each run.
+  (cd "$dir/home" && tasks-axi add rk-consent "Repeated: re-consent" --kind captain --body "Owner: arjun" \
+    --file "$dir/home/data/backlog.md" >/dev/null) || fail "could not add the legacy row"
+  wrapper_from_code "$dir" add rk-consent "Repeated: re-consent" --kind captain --owner arjun >/dev/null \
+    || fail "re-adding the legacy row failed"
+  assert_contains "$(wrapper_from_code "$dir" show rk-consent)" "held: yes" "a re-added unheld captain row was not held"
+  wrapper_from_code "$dir" add rk-fleet "Fleet does it, reports to him" --kind captain --owner fleet >/dev/null \
+    || fail "adding a fleet-owned captain row failed"
+  assert_contains "$(wrapper_from_code "$dir" show rk-fleet)" "held: no" "a fleet-owned captain row was held"
+  wrapper_from_code "$dir" add rk-fleet "Fleet does it, reports to him" --kind captain --owner arjun >/dev/null \
+    || fail "re-adding a fleet-owned captain row failed"
+  assert_contains "$(wrapper_from_code "$dir" show rk-fleet)" "held: no" "re-adding a fleet-owned row naming arjun held it"
+  assert_equals fleet "$(wrapper_from_code "$dir" owner rk-fleet)" "re-adding a fleet-owned row changed its owner"
+  # Rows that would qualify, but already carry a park, or a hold with no kind.
+  (cd "$dir/home" && tasks-axi add rk-parked "Parked his step" --kind captain --body "Owner: arjun" \
+    --file "$dir/home/data/backlog.md" >/dev/null \
+    && tasks-axi hold rk-parked --reason "later" --kind parked --until 2030-01-01 --file "$dir/home/data/backlog.md" >/dev/null \
+    && tasks-axi add rk-kindless "Held with no kind" --kind captain --body "Owner: arjun" \
+      --file "$dir/home/data/backlog.md" >/dev/null \
+    && tasks-axi hold rk-kindless --reason "waits on the bank" --until 2020-01-01 --file "$dir/home/data/backlog.md" >/dev/null) \
+    || fail "could not add the already-held rows"
+  wrapper_from_code "$dir" add rk-parked "Parked his step" --kind captain --owner arjun >/dev/null \
+    || fail "re-adding a parked row failed"
+  assert_contains "$(wrapper_from_code "$dir" show rk-parked)" "hold_kind: parked" "a parked row was re-held"
+  wrapper_from_code "$dir" add rk-kindless "Held with no kind" --kind captain --owner arjun >/dev/null \
+    || fail "re-adding a kindless hold failed"
+  assert_contains "$(wrapper_from_code "$dir" show rk-kindless --full)" "waits on the bank" "a kindless hold was replaced"
+  wrapper_from_code "$dir" add rk-help "Help read" --kind captain --owner arjun --help >/dev/null 2>&1 \
+    || fail "a help read of add failed"
+  assert_not_contains "$(cat "$dir/home/data/backlog.md")" "rk-help" "a help read filed or held a row"
+  wrapper_from_code "$dir" "done" rk-printer >/dev/null || fail "could not close rk-printer"
+  wrapper_from_code "$dir" add rk-printer "Repeated: printer toner" --kind captain --owner arjun >/dev/null \
+    || fail "re-adding a closed row failed"
+  assert_contains "$(wrapper_from_code "$dir" show rk-printer)" "state: done" "a closed row was reopened"
+  # The helper re-checks under the row's lock, so a row answered meanwhile stays answered.
+  wrapper_from_code "$dir" owner rk-fleet fleet >/dev/null || fail "could not keep rk-fleet with the fleet"
+  out=$(cd "$dir/code" && FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$dir/code" FM_CAPTAIN_HOLD_IF_UNHELD_CAPTAIN_ROW=1 \
+    "$ROOT/bin/fm-captain-hold.sh" hold rk-fleet --reason "only you can take this step: x") || fail "the guarded hold failed: $out"
+  assert_contains "$out" "skipped: rk-fleet" "the guarded hold did not skip a fleet-owned row"
+  assert_contains "$(wrapper_from_code "$dir" show rk-fleet)" "held: no" "the guarded hold held a fleet-owned row"
+  ready=$(wrapper_from_code "$dir" ready)
+  assert_not_contains "$ready" "rk-consent" "a captain-owned captain row is still dispatchable"
+  assert_contains "$ready" "rk-fleet" "a fleet-owned captain row left the dispatch queue"
+  pass "filing a captain-owned kind=captain row holds it for the captain, and re-adding holds one filed unheld"
+}
+
 test_wrapper_owner_at_filing() {
   local dir out rc before body
   dir=$(make_split wrapper-owner)
@@ -261,16 +323,16 @@ test_wrapper_owner_at_filing() {
   assert_equals arjun "$(wrapper_from_code "$dir" owner ow-file)" "a piped body rewrite dropped the owner"
   body=$(wrapper_from_code "$dir" show ow-file --full)
   assert_contains "$body" "piped note" "the piped body was not written"
-  out=$(wrapper_from_code "$dir" owner ow-cap fleet)
-  assert_contains "$out" "ow-cap -> fleet" "owner did not record the change"
-  out=$(wrapper_from_code "$dir" owner ow-cap fleet)
-  assert_contains "$out" "already fleet" "a repeated owner was not a no-op"
+  out=$(wrapper_from_code "$dir" owner ow-ship arjun)
+  assert_contains "$out" "ow-ship -> arjun" "owner did not record the change"
+  out=$(wrapper_from_code "$dir" owner ow-ship arjun)
+  assert_contains "$out" "already arjun" "a repeated owner was not a no-op"
   [ "$(grep -c '^  Owner: ' "$dir/home/data/backlog.md")" = 3 ] \
     || fail "rows do not carry exactly one owner line each: $(cat "$dir/home/data/backlog.md")"
   out=$(wrapper_from_code "$dir" owner ow-missing 2>&1)
   rc=$?
   expect_code 2 "$rc" "owner on a missing row"
-  out=$(wrapper_from_code "$dir" owner ow-cap boss 2>&1)
+  out=$(wrapper_from_code "$dir" owner ow-ship boss 2>&1)
   rc=$?
   expect_code 2 "$rc" "owner with an unknown value"
   out=$(wrapper_from_code "$dir" update --body "id last" ow-cap 2>&1)
@@ -549,6 +611,7 @@ if [ "$HAVE_TASKS_AXI" = 1 ]; then
   test_wrapper_refusals
   test_wrapper_refuses_add_start
   test_wrapper_owner_at_filing
+  test_wrapper_holds_captain_owned_captain_rows
   test_wrapper_single_home
   test_wrapper_hold_quote_guard
   test_wrapper_row_shape
