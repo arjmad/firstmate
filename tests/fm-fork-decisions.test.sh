@@ -209,6 +209,12 @@ test_pr_check_needs_a_record_for_upstream_owned_changes() {
   out=$("$SCRIPT" pr-check --root "$repo" --base main --head unrecorded 2>&1) || true
   assert_contains "$out" "  bin/up.sh" "pr-check did not name the upstream-owned file"
 
+  git -C "$repo" checkout -qb record-deleted unrecorded
+  git -C "$repo" rm -q docs/fork-decisions/2026-10-02-fix-a-thing.md
+  commit_all "$repo" 'Delete a record'
+  run_expect_failure "edits upstream-owned files (present at upstream sync" \
+    "$SCRIPT" pr-check --root "$repo" --base main --head record-deleted
+
   git -C "$repo" checkout -qb recorded unrecorded
   printf '%s\n| --- | --- | --- | --- | --- |\n| Patch it | `bin/up.sh` | same file | carried | abc123 |\n' "$HEADER" \
     > "$repo/docs/fork-decisions/2026-10-07-patch-it.md"

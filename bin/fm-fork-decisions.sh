@@ -23,7 +23,8 @@
 #   fm-fork-decisions.sh pr-check --base <rev> [--head <rev>] [--root <repo>]
 #       Fail when the change from the merge base of <rev> and --head (default
 #       HEAD) to --head changes an upstream-owned file but adds or edits no
-#       docs/fork-decisions/ record, naming those files. A file is
+#       docs/fork-decisions/ record (deleting one does not count), naming
+#       those files. A file is
 #       upstream-owned when it exists in the upstream sync commit, the newest
 #       commit in this checkout that a fork-patch row names as its last
 #       checked sync, so CI needs no upstream remote, only full history.
@@ -252,7 +253,9 @@ command_pr_check() {
   sync=$(upstream_sync_commit) \
     || die "no fork-patch row names a last checked sync commit this checkout has; the check needs full history"
   changed=$(git -C "$ROOT" diff --name-only --no-renames "$base" "$HEAD_REV") || die "cannot diff $base..$HEAD_REV"
-  records=$(printf '%s\n' "$changed" | grep -E '^docs/fork-decisions/[^/]+\.md$' || true)
+  # A deleted record documents nothing, so only added or edited ones count.
+  records=$(git -C "$ROOT" diff --name-only --no-renames --diff-filter=AM "$base" "$HEAD_REV" -- docs/fork-decisions \
+    | grep -E '^docs/fork-decisions/[^/]+\.md$' || true)
   # The records and their entry point are the fork's own, whatever upstream holds.
   owned=$(printf '%s\n' "$changed" | while IFS= read -r path; do
     case "$path" in '' | docs/fork-decisions.md | docs/fork-decisions/*) continue ;; esac
