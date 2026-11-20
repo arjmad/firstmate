@@ -248,15 +248,15 @@ case "$CONFIG" in /*) ;; *) CONFIG="$PWD/$CONFIG" ;; esac
 # practice (fork patch, docs/fork-decisions/2026-11-20-brief-rules-one-line.md).
 STATUS_PROTOCOL="$FM_ROOT/.agents/skills/crewmate-status-protocol/SKILL.md"
 IFS= read -r -d '' CREWMATE_PAUSE_INSTRUCTIONS <<EOF || true
-   Read \`$STATUS_PROTOCOL\` before your first \`$PAUSED_VERB:\`, \`$FM_CLASSIFY_GATE_WAIT_VERB:\`, or \`[on=captain]\` line.
-   Use \`$PAUSED_VERB: {why}\` for a deliberate wait that clears on its own: Before ending your turn with your own background job still running, or while waiting on your own pipeline run, validation round, or long foreground command, append \`$PAUSED_VERB [at=<epoch>]: {job and completion condition}\`, with \`until <YYYY-MM-DDTHH:MMZ>\` (UTC) when you know when it clears.
+   Read \`$STATUS_PROTOCOL\` before your first \`$PAUSED_VERB:\`, \`$FM_CLASSIFY_GATE_WAIT_VERB:\`, \`resolved\`, or \`[on=captain]\` line, and before you start or stop a process.
+   Use \`$PAUSED_VERB: {why}\` for a deliberate wait that clears on its own: Before ending your turn with your own background job still running, or before waiting on your own pipeline run, validation round, or long foreground command, append \`$PAUSED_VERB [at=<epoch>]: {job and completion condition}\` once, with \`until <YYYY-MM-DDTHH:MMZ>\` (UTC) when you know when it clears; never declare active work as a wait.
    Use \`$FM_CLASSIFY_GATE_WAIT_VERB: {gate}\` instead when the wait is a CI run or a policy gate that clears without anyone deciding; it is never a \`needs-decision\`.
    Use \`blocked:\` when you are stuck and need help, as \`blocked [on=captain] [at=<epoch>]: {what he must do}\` when only the captain can clear it.
    When a blocker or wait clears without a firstmate reply, append \`resolved [at=<epoch>]: {how it cleared}\` (with its \`[key=<slug>]\` if it had one) as you resume.
 EOF
 IFS= read -r -d '' SHIP_READY_INSTRUCTIONS <<EOF || true
    Use \`$FM_CLASSIFY_READY_VERB [at=<epoch>]: PR {url}\` when your PR is open and ready to land but your task continues after it merges; you never merge it, so a PR waiting to land is never a \`needs-decision\`.
-   A step only the captain can take after it merges is no reason for \`$FM_CLASSIFY_READY_VERB:\`: end the \`done:\` line the Definition of done names with \`; captain step: {the exact action}\` and stop.
+   A step only the captain can take after it merges is no reason for \`$FM_CLASSIFY_READY_VERB:\` or \`blocked [on=captain]\`: end the \`done:\` line the Definition of done names with \`; captain step: {the exact action}\` and stop, even when the PR has already merged.
 EOF
 KIND=ship
 HERDR_LAB=0
@@ -815,8 +815,8 @@ fi
 # legitimately allocates and returns slots for crewmates in its own home.
 # The protocol file rule 4 names owns the full rule and its reasons.
 IFS= read -r -d '' SHARED_INFRA_RULE <<'EOF' || true
-7. Never administer infrastructure that every lane shares (the protocol file in rule 4 explains why):
-   - Never create, remove, return, prune, move, or reassign a slot in the worktree pool you came from (`treehouse` get/return/remove/prune, `git worktree add|remove|move|prune`, or the same on any other worktree provider), and never write into a sibling slot's directory.
+7. Never administer infrastructure that every lane shares (read the protocol file in rule 4 before you start or stop a process):
+   - Never create, remove, return, prune, move, or reassign any worktree or slot of the worktree pool you came from (`treehouse` get/return/remove/prune, `git worktree add|remove|move|prune`, or the same on any other worktree provider), and never write into a sibling slot's directory.
    - Stop only a process you started, by the pid you recorded in the same command that started it as its own group, `(set -m; <command> & echo $! > <pidfile>)`: check that `ps -o args= -p <pid>` still shows it, then run `kill -- -<pid>`, or use its own handle (your harness's stop, `docker compose down`, `kill-server` on your tmux socket). Never stop anything by name or pattern (`pkill`, `killall`, `pkill -f`, or `kill $(pgrep ...)`), which also matches live services and other agents.
    If you need a second checkout, another slot, or a process you did not start stopped, append `blocked [at=<epoch>]: {what you need}` and stop; firstmate arranges it.
 EOF

@@ -2580,16 +2580,23 @@ test_claude_task_workers_launch_with_denied_mcp_servers() {
 }
 
 test_claude_self_repo_workers_skip_the_supervisor_contract() {
-  local rec id out status settings wt_real common lineage
+  local rec id out status settings wt_real common proj_common lineage
   # The project shares firstmate's root commit once it borrows this
   # checkout's objects, which is how a clone of firstmate looks to the
   # lineage test; a scout skips the ship-only publication gate.
-  common=$(cd "$(git -C "$ROOT" rev-parse --git-common-dir)" && pwd -P) || fail "no git common dir for $ROOT"
+  common=$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir) && [ -d "$common/objects" ] \
+    || fail "no git common dir for $ROOT"
   for lineage in self other; do
     id="claude-selfrepo-$lineage-z33"
     rec=$(make_spawn_case "claude-selfrepo-$lineage" claude "$id")
     read_case_record "$rec"
-    [ "$lineage" = other ] || printf '%s\n' "$common/objects" >> "$(git -C "$PROJ_DIR" rev-parse --git-common-dir)/objects/info/alternates"
+    if [ "$lineage" = self ]; then
+      proj_common=$(git -C "$PROJ_DIR" rev-parse --path-format=absolute --git-common-dir) \
+        && [ -d "$proj_common/objects" ] && case "$proj_common" in "$CASE_DIR"/*) ;; *) false ;; esac \
+        || fail "the fixture project's git dir is not inside its case: ${proj_common:-none}"
+      printf '%s\n' "$common/objects" >> "$proj_common/objects/info/alternates" \
+        || fail "could not lend this checkout's objects to the fixture project"
+    fi
     out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout 2>&1)
     status=$?
     expect_code 0 "$status" "claude $lineage-repo scout spawn should succeed"$'\n'"$out"

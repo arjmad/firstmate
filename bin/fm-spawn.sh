@@ -4710,20 +4710,23 @@ json_escape() {
 # Granted paths are real (symlink-resolved) directories/files under this
 # task's home, matching BRIEF_REAL's own resolution: the brief dir (covers
 # brief.md/launch-brief.md/report.md), the steering inbox directory (covers
-# every steer and its handled/ acknowledgement), and the status file itself.
+# every steer and its handled/ acknowledgement), the status file itself, and
+# the code root's crewmate status protocol file, which the brief's Rules name.
 rovo_config_override_flag() {
-  local effort=$1 data_dir=$2 state_dir=$3 id=$4
-  local data_real state_real agent_json paths_json config_json
+  local effort=$1 data_dir=$2 state_dir=$3 id=$4 code_root=$5
+  local data_real state_real root_real agent_json paths_json config_json
   data_real=$(cd "$data_dir" && pwd -P) || return 1
   state_real=$(cd "$state_dir" && pwd -P) || return 1
+  root_real=$(cd "$code_root" && pwd -P) || return 1
   agent_json=
   case "$effort" in
   low | medium | high | max) agent_json="\"agent\":{\"efficiencyLevel\":\"$(json_escape "$effort")\"}," ;;
   esac
-  paths_json=$(printf '"%s","%s","%s"' \
+  paths_json=$(printf '"%s","%s","%s","%s"' \
     "$(json_escape "$data_real/$id")" \
     "$(json_escape "$state_real/$id.inbox")" \
-    "$(json_escape "$state_real/$id.status")")
+    "$(json_escape "$state_real/$id.status")" \
+    "$(json_escape "$root_real/.agents/skills/crewmate-status-protocol/SKILL.md")")
   config_json="{${agent_json}\"toolPermissions\":{\"allowedExternalPaths\":[$paths_json]}}"
   printf -- '--config-override %s ' "$(shell_quote "$config_json")"
 }
@@ -8613,7 +8616,7 @@ else
   LAUNCH=${LAUNCH//__CLAUDEATTRIBUTION__/,'"attribution":{"commit":"","pr":"","sessionUrl":false}'}
 fi
 if [ "$HARNESS" = rovo ]; then
-  ROVOCONFIGOVERRIDE=$(rovo_config_override_flag "$EFFORT" "$DATA" "$STATE" "$ID") || {
+  ROVOCONFIGOVERRIDE=$(rovo_config_override_flag "$EFFORT" "$DATA" "$STATE" "$ID" "$FM_ROOT") || {
     echo "error: could not resolve this task's home paths for rovo's allowedExternalPaths grant" >&2
     exit 1
   }

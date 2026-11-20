@@ -1115,7 +1115,7 @@ test_ship_and_scout_teach_validation_round_pause() {
       "$kind brief did not teach workers to declare their validation-round wait"
     assert_grep 'Before ending your turn with your own background job still running' "$brief" \
       "$kind brief did not require declaring a background-work wait"
-    assert_grep 'while waiting on your own pipeline run, validation round, or long foreground command' "$brief" \
+    assert_grep 'before waiting on your own pipeline run, validation round, or long foreground command' "$brief" \
       "$kind brief did not require declaring a pipeline or foreground wait"
     # The protocol file the brief names owns the wait detail (fork patch,
     # docs/fork-decisions/2026-11-20-brief-rules-one-line.md).
