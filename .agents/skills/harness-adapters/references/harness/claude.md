@@ -103,6 +103,11 @@ Off in `--settings` wins over user and project settings for both keys on Claude 
 A Claude ship or scout also carries `"deniedMcpServers"` for each server the fleet-rendered worker-denied list names in that inline `--settings` JSON, or `"allowedMcpServers":[]` with `--strict-mcp-config --no-chrome` when that list is missing or invalid; [`docs/configuration.md`](../../../../../docs/configuration.md#worker-denied-mcp-servers) owns the list and its fallback.
 It also hides each tool pattern the fleet-rendered worker-denied MCP tool list names through `--disallowedTools`, whose `*` patterns Claude Code 2.1.328 honors for MCP tool names; [`docs/configuration.md`](../../../../../docs/configuration.md#worker-denied-mcp-tools) owns that list.
 
+## Firstmate-repository workers
+
+A Claude ship or scout whose project shares firstmate's lineage (`fm_role_self_repo` in `bin/fm-role-lib.sh`) also carries `"claudeMdExcludes"` naming its worktree's root `AGENTS.md` and `CLAUDE.md` by real path, so it does not load the supervisor contract its role contract tells it to set aside.
+Both are named because excluding `CLAUDE.md` alone keeps its `@AGENTS.md` import on Claude Code 2.1.328; [the fork decision](../../../../../docs/fork-decisions/2026-11-20-self-repo-worker-skips-supervisor-contract.md) records the live check.
+
 ## Compaction window
 
 A Claude ship or scout from a home with `config/crew-compact-window` also launches with `CLAUDE_CODE_AUTO_COMPACT_WINDOW=<tokens>`, which Claude Code 2.1.319 accepts from 100k to 1M tokens and ranks above the `autoCompactWindow` setting; [`docs/configuration.md`](../../../../../docs/configuration.md#worker-compaction-window-configcrew-compact-window) owns the file and its refusals.

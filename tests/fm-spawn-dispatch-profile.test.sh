@@ -2579,6 +2579,36 @@ test_claude_task_workers_launch_with_denied_mcp_servers() {
   pass "claude ships and scouts launch with the rendered list's denied MCP servers; secondmates, an empty list, and the retired home file add none"
 }
 
+test_claude_self_repo_workers_skip_the_supervisor_contract() {
+  local rec id out status settings wt_real common lineage
+  # The project shares firstmate's root commit once it borrows this
+  # checkout's objects, which is how a clone of firstmate looks to the
+  # lineage test; a scout skips the ship-only publication gate.
+  common=$(cd "$(git -C "$ROOT" rev-parse --git-common-dir)" && pwd -P) || fail "no git common dir for $ROOT"
+  for lineage in self other; do
+    id="claude-selfrepo-$lineage-z33"
+    rec=$(make_spawn_case "claude-selfrepo-$lineage" claude "$id")
+    read_case_record "$rec"
+    [ "$lineage" = other ] || printf '%s\n' "$common/objects" >> "$(git -C "$PROJ_DIR" rev-parse --git-common-dir)/objects/info/alternates"
+    out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout 2>&1)
+    status=$?
+    expect_code 0 "$status" "claude $lineage-repo scout spawn should succeed"$'\n'"$out"
+    settings=$(claude_settings_json_arg "$(cat "$LAUNCH_LOG")")
+    wt_real=$(cd "$WT_DIR" && pwd -P)
+    case "$lineage" in
+      self)
+        printf '%s' "$settings" | jq -e --arg wt "$wt_real" '.claudeMdExcludes == [$wt + "/AGENTS.md", $wt + "/CLAUDE.md"] and .enableArtifact == false' >/dev/null \
+          || fail "a firstmate-repo scout did not exclude its worktree's AGENTS.md and CLAUDE.md: $settings"
+        ;;
+      other)
+        printf '%s' "$settings" | jq -e 'has("claudeMdExcludes") | not' >/dev/null \
+          || fail "a scout on another repository excluded its project guidance: $settings"
+        ;;
+    esac
+  done
+  pass "a claude scout on firstmate's own repository excludes the worktree's AGENTS.md and CLAUDE.md; another repository's keeps them"
+}
+
 test_claude_denied_mcp_servers_fail_closed() {
   local rec id out status setup settings list
   for setup in missing dangling directory unreadable malformed dotted; do
@@ -3975,6 +4005,7 @@ test_claude_task_workers_launch_with_the_task_list
 test_claude_task_workers_launch_without_artifact_or_connectors
 test_claude_task_workers_launch_with_denied_mcp_servers
 test_claude_denied_mcp_servers_fail_closed
+test_claude_self_repo_workers_skip_the_supervisor_contract
 test_claude_task_workers_hide_denied_mcp_tools
 test_claude_denied_mcp_tools_fail_closed
 test_claude_task_workers_launch_with_compact_window

@@ -8585,7 +8585,23 @@ case "$LAUNCH" in
       done
       claude_denied_mcp=",\"deniedMcpServers\":[$claude_denied_mcp]"
     fi
-    claude_settings="'{\"feedbackDrafts\":\"off\",\"enableArtifact\":false,\"disableClaudeAiConnectors\":true${claude_denied_mcp}__CLAUDEATTRIBUTION__}'${claude_strict_mcp}"
+    # A ship or scout on firstmate's own repository leaves the worktree's root
+    # AGENTS.md (the supervisor contract) and CLAUDE.md out of Claude's
+    # memory (docs/fork-decisions/2026-11-20-self-repo-worker-skips-supervisor-contract.md).
+    # Excluding CLAUDE.md alone keeps its @AGENTS.md import, so both are named,
+    # by the worktree's real path, which Claude matches. Undetermined lineage
+    # or a path needing JSON, shell, or glob escaping keeps the files loaded.
+    claude_md_excludes=
+    if [ -n "$WT" ] && fm_role_self_repo "$PROJ_ABS" "$FM_ROOT"; then
+      claude_wt_real=$(cd "$WT" 2>/dev/null && pwd -P) || claude_wt_real=
+      case "$claude_wt_real" in
+      /*) case "$claude_wt_real" in
+        *[!A-Za-z0-9/._-]*) ;;
+        *) claude_md_excludes=",\"claudeMdExcludes\":[\"$claude_wt_real/AGENTS.md\",\"$claude_wt_real/CLAUDE.md\"]" ;;
+        esac ;;
+      esac
+    fi
+    claude_settings="'{\"feedbackDrafts\":\"off\",\"enableArtifact\":false,\"disableClaudeAiConnectors\":true${claude_denied_mcp}${claude_md_excludes}__CLAUDEATTRIBUTION__}'${claude_strict_mcp}"
     LAUNCH=${LAUNCH//__CLAUDESETTINGS__/$claude_settings}
   fi
   ;;
