@@ -2329,6 +2329,11 @@ test_captain_calls_fold_into_their_groups() {
 - [ ] hands-d - Photograph the mats (repo: business) (kind: captain) (since 2026-07-01) (hold: needs his camera; Batch: place:fake) (hold-kind: captain)
   Captain hold set: 2026-07-10T00:00:00Z
 
+  His words quoted a tag line the row does not carry:
+  Batch: place:quoted
+
+  Batch: -
+
   Owner: arjun
 - [ ] solo-e - Count the shed (repo: business) (kind: captain) (since 2026-07-01) (hold: at the shed) (hold-kind: captain)
   Captain hold set: 2026-07-10T00:00:00Z

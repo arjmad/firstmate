@@ -570,7 +570,7 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
                   else cap(.body_lines[-1]; "^(?<v>local main)$")
                   end))
           | .owned_by = ([.body_lines[] | capture("^Owner:[[:space:]]*(?<v>arjun|fleet)[[:space:]]*$")? | .v] | last)
-          | .batch = ([.body_lines[] | capture("^Batch:[[:space:]]*(?<v>(place:)?[a-z0-9][a-z0-9-]*|board:[a-z0-9][a-z0-9._-]*)[[:space:]]*$")? | .v] | last)
+          | .batch = ([.body_lines[] | capture("^Batch:[[:space:]]*(?<v>(place:)?[a-z0-9][a-z0-9-]*|board:[a-z0-9][a-z0-9._-]*|-)[[:space:]]*$")? | .v] | last | if . == "-" then null else . end)
           | .body_excerpt = ((.body_lines
               | map(select(test("^Owner:[[:space:]]*(arjun|fleet)[[:space:]]*$") | not))
               | join(" "))[:240])

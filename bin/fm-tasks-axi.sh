@@ -54,9 +54,9 @@
 # parked`, and a date: a back-on date, `--until YYYY-MM-DD`, which for an
 # external wait is its recheck date, and which a captain call may replace
 # with a `Due:` date the row already records. A hold without a kind or a date
-# is refused (a help read is not checked); a new captain call without
-# `--until` goes through bin/fm-captain-hold.sh hold, which records its due
-# date. `add` refuses a title that
+# is refused (a help read is not checked); a live captain call without
+# `--until` goes through bin/fm-captain-hold.sh hold, which needs no date. `add`
+# refuses a title that
 # opens with a `[YYYY-MM-DD]` date, as does `update --title`. `add` also takes
 # `--due YYYY-MM-DD`, the real deadline, and `--batch <tag>`, a group the
 # captain moves together, which the wrapper consumes into `Due:` and `Batch:`
@@ -410,7 +410,7 @@ guard_row_shape() {
               fi
               ;;
           esac
-          fail "a captain call needs a date: hold it through bin/fm-captain-hold.sh hold, which gives a new call a due date, or pass --until YYYY-MM-DD"
+          fail "a live captain call goes through bin/fm-captain-hold.sh hold, which needs no date; or pass --until YYYY-MM-DD for when it comes back"
           ;;
         external) fail "an external wait needs its recheck date: pass --until YYYY-MM-DD for when to check on it" ;;
         *) fail "a hold needs its back-on date: pass --until YYYY-MM-DD for when the row comes back" ;;

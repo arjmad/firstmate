@@ -26,7 +26,7 @@ A decision is not a separate thing in this system.
 It is an ordinary backlog task held for the captain, and the task id is the identity every surface and channel uses.
 `bin/fm-captain-hold.sh` is the only lifecycle command layered on that primitive.
 The command addresses the active home's configured data directory.
-As a result, the existing backlog remains the only durable work database, and a secondmate-owned captain call stays in the secondmate home.
+As a result, the existing backlog remains the only durable work database; a secondmate-owned call is registered in the secondmate home as its gate's record, and the main home holds it for the captain ([secondmate parent channel](secondmate-parent-channel.md#ideas-and-captain-calls-belong-to-the-main-home)).
 It never reads report bodies, review artifacts, terminal output, or chat.
 
 ### Subcommands at a glance

@@ -25,7 +25,7 @@ Every captain-facing outcome that leaves durable evidence in the mate home is pu
 | Ship child PR ready | the child's `done:` PR ready line, whose accepted spellings the publisher below owns; `pr=` in the child's record once registered | `bin/fm-inactive-reconcile.sh` on the next poll with the child's line; `bin/fm-pr-check.sh` at registration with the canonical URL, or after the green report when [`config/ready-after-green`](configuration.md#pr-ready-line-after-green-configready-after-green) is set |
 | Scout child findings | the child's `done:` line plus `data/<child>/report.md` | `bin/fm-inactive-reconcile.sh` on the next poll, with the report pointer |
 | Child failed | the child's `failed:` line | `bin/fm-inactive-reconcile.sh` on the next poll |
-| Child decision escalated to the captain | the task held for the captain in the mate backlog | `bin/fm-captain-hold.sh hold`, and its answer by `answer` |
+| Child decision escalated to the captain | the task held in the mate backlog as its gate's record, until the main home relays the captain's answer (below) | `bin/fm-captain-hold.sh hold`, and its answer by `answer` |
 | PR merged | the merge poll or the mate's own merge | `bin/fm-merge-outcome-lib.sh` |
 | Child leaving the home | its final ledger line | `bin/fm-teardown.sh`, which refuses to remove the child while that line is undelivered |
 | Child ended silently | terminal current state with a silent ledger | the existing inactive-outcome scan in `bin/fm-inactive-reconcile.sh` |
@@ -42,6 +42,13 @@ Other correlated mate-home status lines remain wrong-home evidence, while a remo
 The mate home's own status scans treat that remote channel the same way: `status_scan_parent_channel_exclude` in `bin/fm-classify-lib.sh` resolves the outbound path through the same `bin/fm-parent-channel-lib.sh` binding, and the watcher's signal scan and heartbeat backstop, the away-mode daemon's catch-all scan, and the fleet-wide folds skip exactly that resolved path, never a file name.
 The remote reply adapter already mirrors every channel line into the parent home, so folding the channel again here would only spin spurious wakes and a phantom `parent-replies` task, while a `parent-replies.status` in a main home or in a local mate is an ordinary task log that keeps folding and waking.
 A missed-reply escalation includes the complete first sighting path and line number in readable shell-escaped form.
+
+## Ideas and captain calls belong to the main home
+
+A secondmate hands every idea and every captain call to the main home, by a fleet-handoff notice or a parent-channel line, and never keeps one held in its own backlog (Arjun, 2026-11-20, deep-audit item a7-25).
+The main home's Monday idea sweep and its answer and defer tools work only the main home's backlog, so a call or idea held only in a mate home is missed by the sweep and cannot be answered there, even where a bearings board shows it.
+Where the mate's own machinery needs a local record - a child's attested inventory or teardown gate registers its open call in the mate backlog ([captain-hold lifecycle](captain-hold-lifecycle.md)) - `bin/fm-captain-hold.sh` publishes that hold by the row above.
+That local row is only the gate's record: the main home holds the call for the captain, and the mate resolves its row when the main home relays his answer.
 
 ## What is deliberately not built
 

@@ -2562,7 +2562,33 @@ test_defer_batch_moves_tagged_calls_together() {
   assert_not_contains "$out" "office-done" "defer-batch touched a closed call"
   assert_contains "$(tasks_in "$home" show office-b --full)" "all office rows to Friday" "the batch words were not recorded"
   assert_equals office "$(run_fm_tasks_axi "$home" batch office-b)" "a Batch: line in his words replaced the row's tag"
-  assert_equals 2026-07-15 "$(run_fm_tasks_axi "$home" due office-b)" "a Due: line in his words replaced the row's due date"
+  # The calls carry no Due of their own, so his quoted Due: line must not become one.
+  assert_equals - "$(run_fm_tasks_axi "$home" due office-b)" "a Due: line in his words became the row's due date"
+  assert_contains "$(tasks_in "$home" show office-b --full)" 'Due: -' "the row did not record that it has no due date after his words"
+  run_fm_tasks_axi "$home" due office-b 2026-08-01 >/dev/null || fail "could not date office-b"
+  assert_equals 2026-08-01 "$(run_fm_tasks_axi "$home" due office-b)" "a due date set after his words did not stand"
+  run_fm_tasks_axi "$home" due office-b - >/dev/null || fail "could not clear office-b's due date"
+  assert_equals - "$(run_fm_tasks_axi "$home" due office-b)" "clearing the due date let his quoted Due: line become the row's"
+  assert_equals office "$(run_fm_tasks_axi "$home" batch office-b)" "changing the due date moved the batch tag"
+  # A deferral keeps a cleared field cleared while a quoted line of its shape stays in the body.
+  tasks_in "$home" add quoted-call "Quoted fields" --kind captain --repo sample >/dev/null || fail "could not add quoted-call"
+  tasks_in "$home" update quoted-call --body "$(printf 'His mail quoted:\nDue: 2099-01-01\nBatch: place:quoted\n\nDue: -\nBatch: -')" >/dev/null \
+    || fail "could not give quoted-call its body"
+  FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" hold quoted-call --reason "pick a day" --kind reversible >/dev/null \
+    || fail "could not hold quoted-call"
+  printf 'Arjun 2026-07-14: later\n' > "$home/quoted.txt"
+  FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" defer quoted-call --until 2026-07-30 \
+    --decision-file "$home/quoted.txt" >/dev/null || fail "deferring quoted-call failed"
+  assert_equals - "$(run_fm_tasks_axi "$home" due quoted-call)" "a deferral revived a quoted Due: line as the row's date"
+  assert_equals - "$(run_fm_tasks_axi "$home" batch quoted-call)" "a deferral revived a quoted Batch: line as the row's tag"
+  # His answer's words sit above the row's own fields, so a quoted field line must not become one either.
+  tasks_in "$home" add answered-call "Answered call" --kind captain --repo sample >/dev/null || fail "could not add answered-call"
+  run_captain "$home" hold answered-call --reason "pick a day" --kind reversible >/dev/null || fail "could not hold answered-call"
+  printf 'Arjun 2026-07-14: go ahead\nDue: 2099-03-03\nBatch: place:quoted\n' > "$home/answered.txt"
+  run_captain "$home" answer answered-call --decision-file "$home/answered.txt" --release >/dev/null \
+    || fail "answer --release failed on answered-call"
+  assert_equals - "$(run_fm_tasks_axi "$home" due answered-call)" "an answer's quoted Due: line became the released row's date"
+  assert_equals - "$(run_fm_tasks_axi "$home" batch answered-call)" "an answer's quoted Batch: line became the released row's tag"
   if out=$(run_captain "$home" defer-batch office --until 2026-07-18 2>&1); then
     fail "defer-batch ran without the captain's words: $out"
   fi

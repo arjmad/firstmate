@@ -30,11 +30,12 @@ Each task yields at most one noticed and one idea; `none` and an empty section a
    A noticed item files as routine; add `--call` with its kind only to one Acting first holds for him, and filing an open routine item's slug again with `--call` holds it.
    A `reopened` line that says it lifted an earlier captain hold means the item was his call before it closed; if it still needs him, file it again with `--call`.
    Capture the observation and why it may matter; leave value unknown until the triage.
+   In a secondmate home, file only routine noticed items: send each idea and each item that would take `--call` to the main home as a fleet-handoff notice or a parent-channel line instead, because the main home's sweep never reads a mate backlog ([`docs/secondmate-parent-channel.md`](../../../docs/secondmate-parent-channel.md#ideas-and-captain-calls-belong-to-the-main-home)).
    Add `--now` only to a noticed item that is urgent or doing harm now: money, customers, account health or security; filing an open item's slug again with `--now` makes it urgent.
 3. Acknowledge a fleet-handoff notice with `bin/fm-inbox.sh drain --ack <id>` and nothing more: a notice has no read-back, so a reply to it reaches nobody.
 
 Done when every collected line is filed, matched, or judged not an item.
-Sapna's agents never file here: a Nova notice is refused, and a secondmate home files into its own backlog.
+Sapna's agents never file here: a Nova notice is refused.
 Mining transcripts for items is out of scope.
 
 ## Acting first

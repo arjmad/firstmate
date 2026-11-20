@@ -368,11 +368,12 @@ test_keyed_answer_records_a_pick_by_label() {
   pass "a keyed answer that names a recorded choice is recorded as that pick, replays idempotently, and free text still works"
 }
 
-# Every captain call carries a date (docs/fork-decisions/2026-11-08-backlog-row-shape.md):
-# a new call filed without --until stays live and records a next-day Due:
-# line, --due names another, a deferred call keeps its back-on date, a re-hold
-# of a live call adds nothing, and a dated title is refused when creating.
-test_new_call_records_a_due_date() {
+# Due: means only an outside deadline
+# (docs/fork-decisions/2026-11-20-captain-call-due-is-a-real-deadline.md): a
+# new call filed without --until stays live with no Due: line, --due records
+# one, a deferred call keeps its back-on date, a re-hold of a live call adds
+# nothing, and a dated title is refused when creating.
+test_new_call_gets_no_invented_due_date() {
   local home show out
   home=$(make_home due-date)
   FM_CAPTAIN_HOLD_NOW=2026-07-31T22:00:00Z run_captain "$home" hold sample-new --title "Pick the route" \
@@ -380,12 +381,13 @@ test_new_call_records_a_due_date() {
   show=$(show_task "$home" sample-new)
   assert_contains "$show" 'held: yes' "an undated new call is not live"
   assert_contains "$show" 'hold_until: "-"' "an undated new call got a back-on date"
-  assert_contains "$show" 'Due: 2026-08-01' "an undated new call did not get the next day as its due date"
+  assert_not_contains "$show" 'Due: ' "an undated new call got an invented due date"
   FM_CAPTAIN_HOLD_NOW=2026-08-02T10:00:00Z run_captain "$home" hold sample-new --reason "Decide again" --kind reversible >/dev/null \
     || fail "re-holding a live call failed"
-  [ "$(show_task "$home" sample-new | grep -o 'Due: ' | wc -l | tr -d ' ')" = 1 ] \
-    || fail "re-holding a live call changed its due date: $(show_task "$home" sample-new)"
-  assert_contains "$(show_task "$home" sample-new)" 'Due: 2026-08-01' "re-holding a live call moved its due date"
+  assert_not_contains "$(show_task "$home" sample-new)" 'Due: ' "re-holding a live call invented a due date"
+  run_captain "$home" hold sample-new --reason "Decide by the deadline" --kind reversible --due 2026-08-20 >/dev/null \
+    || fail "re-holding a live call with --due failed"
+  assert_contains "$(show_task "$home" sample-new)" 'Due: 2026-08-20' "--due on a re-hold was not recorded"
 
   run_captain "$home" hold sample-named --title "Sign the lease" --reason "Sign" --due 2026-09-14 >/dev/null \
     || fail "a call with --due was refused"
@@ -407,7 +409,56 @@ test_new_call_records_a_due_date() {
   if out=$(run_captain "$home" hold sample-bad --title "Bad due" --reason "Decide" --due 2026-02-30 2>&1); then
     fail "an impossible --due was accepted: $out"
   fi
-  pass "a new undated captain call stays live with a next-day due date, and --due, --until and an existing due date are kept"
+  pass "a new undated captain call stays live with no invented due date, and --due, --until and an existing due date are kept"
+}
+
+# A call's group comes only from its Batch: tag
+# (docs/fork-decisions/2026-11-11-calls-grouped-by-what-it-takes.md): hold
+# --batch records the tag, a new untagged call with no choices warns that it
+# will show as taking his own hands, and board-link warns for each linked call
+# that carries no tag; nothing is refused for a missing tag.
+test_untagged_board_or_place_calls_warn() {
+  local home out err
+  home=$(make_home batch-tag)
+  err=$(run_captain "$home" hold sign-heimdall --title "Sign in on the Heimdall screen" --reason "Sign in" \
+    --batch place:heimdall-screen 2>&1 >/dev/null) || fail "a tagged call was refused: $err"
+  assert_contains "$(show_task "$home" sign-heimdall)" 'Batch: place:heimdall-screen' "--batch was not recorded"
+  assert_not_contains "$err" "--batch" "a tagged call warned about its tag"
+  err=$(run_captain "$home" hold push-rule --title "Pick the push rule" --reason "Pick" --kind reversible \
+    --options 'Push|Hold' --recommend Push 2>&1 >/dev/null) || fail "a call with choices was refused: $err"
+  assert_not_contains "$err" "--batch" "a call with choices warned about a tag"
+  err=$(run_captain "$home" hold sign-thor --title "Sign in on Thor" --reason "Sign in" 2>&1 >/dev/null) \
+    || fail "an untagged call was refused: $err"
+  assert_contains "$err" "fm-captain-hold warning: sign-thor files as a call that takes his own hands" "an untagged hands call did not warn under the advice prefix"
+  assert_contains "$err" "--batch place:<name>" "the warning did not name the tag to add"
+  err=$(run_captain "$home" hold sign-thor --reason "Sign in again" 2>&1 >/dev/null) || fail "a re-hold was refused: $err"
+  assert_not_contains "$err" "--batch" "a re-hold of a live call warned again"
+  # A call whose back-on date passed reads unheld but is still his call.
+  (cd "$home" && tasks-axi hold sign-thor --kind captain --until 2020-01-02 --reason "Sign in" >/dev/null) \
+    || fail "could not let sign-thor's back-on date pass"
+  assert_contains "$(show_task "$home" sign-thor)" "held: no" "an expired captain hold still read as held"
+  err=$(run_captain "$home" hold sign-thor --reason "Sign in, back on" 2>&1 >/dev/null) || fail "re-holding an expired call failed: $err"
+  assert_not_contains "$err" "--batch" "re-holding a call whose back-on date passed warned as if new"
+  if out=$(run_captain "$home" hold bad-tag --title "Bad tag" --reason "x" --batch "Heimdall Screen" 2>&1); then
+    fail "an invalid batch tag was accepted: $out"
+  fi
+  FM_HOME="$home" "$ROOT/bin/fm-tasks-axi.sh" add idea-faster "Faster packets" --kind idea >/dev/null || fail "could not add an idea"
+  err=$(run_captain "$home" hold idea-faster --reason "Idea" --kind reversible 2>&1 >/dev/null) || fail "holding an idea failed: $err"
+  assert_not_contains "$err" "--batch" "an idea warned about a tag"
+  # A work row a question gates, such as a ship's merge hold, is no call to tag.
+  (cd "$home" && tasks-axi add ship-merge "Ship the widget" --kind ship --repo sample >/dev/null) || fail "could not add ship-merge"
+  err=$(run_captain "$home" hold ship-merge --reason "one-way door merge" --kind arjun-only 2>&1 >/dev/null) \
+    || fail "holding a ship row failed: $err"
+  assert_not_contains "$err" "--batch" "holding a ship row for its merge advised a batch tag"
+
+  printf 'decisions_reviewed=1\ndecision_keys=sign-heimdall,sign-thor\n' > "$home/state/board-origin.meta"
+  err=$(run_captain "$home" board-link board-origin https://example.invalid/board 2>&1 >/dev/null) \
+    || fail "board-link failed: $err"
+  assert_contains "$err" "sign-thor is on the board board-origin carries but has no Batch: tag" \
+    "board-link did not warn for an untagged member"
+  assert_contains "$err" "bin/fm-tasks-axi.sh batch sign-thor board:board-origin" "the warning did not name the tag command"
+  assert_not_contains "$err" "sign-heimdall is on the board" "board-link warned for a tagged member"
+  pass "hold --batch tags a call, and an untagged new hands call or board member warns without being refused"
 }
 
 test_kind_arguments_are_validated
@@ -420,4 +471,5 @@ test_choices_keeps_a_retired_default_as_the_recommendation
 test_defer_keeps_a_retired_default_as_the_recommendation
 test_hold_records_the_captain_as_owner_and_release_hands_back
 test_kind_prefix_shows_on_every_hold_reason
-test_new_call_records_a_due_date
+test_new_call_gets_no_invented_due_date
+test_untagged_board_or_place_calls_warn

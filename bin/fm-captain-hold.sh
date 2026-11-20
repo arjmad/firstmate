@@ -22,7 +22,7 @@
 # Usage:
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
 #     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] [--due YYYY-MM-DD] \
-#     [--kind reversible|arjun-only] \
+#     [--batch place:<name>|board:<task-id>] [--kind reversible|arjun-only] \
 #     [--options '<A>|<B>[|<C>]' [--recommend <option>]] [--ask <question>]
 #   fm-captain-hold.sh choices <task-id> --options '<A>|<B>[|<C>]' [--recommend <option>] [--ask <question>]
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
@@ -76,14 +76,20 @@
 # `--until` records the captain's own deferral date through `tasks-axi hold
 # --until`, so a "revisit later" answer is stored as a date instead of a live
 # card.
-# Every captain call carries a date (fork patch,
-# docs/fork-decisions/2026-11-08-backlog-row-shape.md). A new call - the row is
-# not already held for the captain - filed without `--until` stays live, with
-# no back-on date, and records a `Due: YYYY-MM-DD` body line
-# (bin/fm-backlog-row-lib.sh owns it): the date `--due` names, else the one the
-# row already records, else the next day (the local date, or the day after
-# FM_CAPTAIN_HOLD_NOW's). `--due` also records its date on any other hold. A
+# A call filed without `--until` stays live, with no back-on date. A `Due:
+# YYYY-MM-DD` body line (bin/fm-backlog-row-lib.sh owns it) means only an
+# outside deadline: `--due` records the date it names on any hold, and no date
+# is invented for a call that has none (fork patch,
+# docs/fork-decisions/2026-11-20-captain-call-due-is-a-real-deadline.md). A
 # title opening with a `[YYYY-MM-DD]` date is refused when creating a row.
+# `--batch` records the row's `Batch:` tag (the same line `fm-tasks-axi.sh
+# batch` writes), which groups a board's members (`board:<task-id>`) or one
+# place's errands (`place:<name>`). A call's group comes only from that tag,
+# so a new call filed with neither a tag nor `--options` (it would show as
+# taking his own hands) prints a warning on stderr naming `--batch`, unless
+# its row is an idea or noticed item, which the Monday triage groups, and
+# `board-link` warns for each call it links that carries no tag; neither
+# refuses, because a call with its own outside deadline stays its own call.
 #
 # HOLD KINDS (fork patches, docs/fork-decisions.md 2026-10-14 and
 # 2026-11-01).
@@ -1351,7 +1357,7 @@ epoch_to_utc_iso() {  # <epoch>
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0 stored_reason original_body='' hold_status=0
-  local decision_kind='' existing_reason='' due='' recorded_due
+  local decision_kind='' existing_reason='' due='' recorded_due batch='' recorded_batch
   local options='' options_given=0 recommend='' recommend_given=0 ask='' ask_given=0
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
@@ -1363,6 +1369,7 @@ command_hold() {
       --origin) shift; origin=${1:-} ;;
       --until) shift; until=${1:-} ;;
       --due) shift; due=${1:-}; fm_backlog_date_valid "$due" || fail "--due must be a YYYY-MM-DD date: $due" ;;
+      --batch) shift; batch=${1:-}; fm_backlog_batch_valid "$batch" || fail "$FM_BACKLOG_BATCH_RULE: $batch" ;;
       --kind) shift; decision_kind=${1:-} ;;
       --default|--no-default)
         fail "$1 was removed: holds no longer release themselves and wait for the captain's answer; give a recommendation with --options and --recommend"
@@ -1439,8 +1446,8 @@ command_hold() {
     [ -n "$repo" ] || repo=firstmate
     validate_one_line repo "$repo"
     [ -z "$origin" ] || body=$(printf 'Origin: %s' "$origin")
-    [ -n "$due" ] || [ -n "$until" ] || due=$(captain_call_default_due) || exit 1
     [ -z "$due" ] || body=$(fm_backlog_row_field_body_with due "$body" "$due")
+    [ -z "$batch" ] || body=$(fm_backlog_row_field_body_with batch "$body" "$batch")
     body=$(fm_backlog_owner_body_with "$body" arjun)
     # tasks-axi add never passes --due. Beads due.required would refuse this
     # create, and captain holds have no due semantics, so waive it for this
@@ -1464,14 +1471,27 @@ command_hold() {
   task_show_or_fail "$id" "task $id disappeared while recording its hold-set stamp"
   [ -n "$(body_hold_set_timestamp "$(show_field_value "$show" body)")" ] \
     || fail "task $id did not retain its hold-set stamp"
-  # A new call with no back-on date records its due date (see the header).
+  # --due records an outside deadline (see the header).
   recorded_due=$(fm_backlog_row_field_of_body due "$(show_field_value "$show" body)")
-  if [ -z "$due" ] && [ -z "$until" ] && [ "$preserve_hold_set" = 0 ] && [ -z "$recorded_due" ]; then
-    due=$(captain_call_default_due) || exit 1
-  fi
   if [ -n "$due" ] && [ "$due" != "$recorded_due" ]; then
-    write_due "$id" "$due" "$show" || fail "could not record the due date $due on $id"
+    write_row_field due "$id" "$due" "$show" || fail "could not record the due date $due on $id"
     task_show_or_fail "$id" "task $id disappeared while recording its due date"
+  fi
+  recorded_batch=$(fm_backlog_row_field_of_body batch "$(show_field_value "$show" body)")
+  if [ -n "$batch" ] && [ "$batch" != "$recorded_batch" ]; then
+    write_row_field batch "$id" "$batch" "$show" || fail "could not record the batch tag $batch on $id"
+    task_show_or_fail "$id" "task $id disappeared while recording its batch tag"
+    recorded_batch=$batch
+  fi
+  # Only a call row warns: not a work row a question gates (such as a ship's
+  # merge hold), not an idea or noticed item, which group in the Monday triage,
+  # and not the wrapper's filing hold, which has no filer to tell. A call whose
+  # back-on date passed reads unheld but is still his call. The prefix keeps
+  # this advice out of the failure causes teardown collects.
+  if [ "$existing_hold_kind" != captain ] && [ -z "$recorded_batch" ] && [ "$options_given" = 0 ] \
+    && [ "${FM_CAPTAIN_HOLD_IF_UNHELD_CAPTAIN_ROW:-0}" != 1 ] \
+    && printf '%s\n' "$show" | grep -Eq '^  kind: captain$'; then
+    printf 'fm-captain-hold warning: %s files as a call that takes his own hands; if answering it takes a board or one place, tag it with --batch board:<task-id> or --batch place:<name> so it shows with its group\n' "$id" >&2
   fi
   # The kind prefix rides on the stored reason (see the header).
   if [ -n "$decision_kind" ]; then
@@ -1515,7 +1535,7 @@ command_hold() {
 # preserving the previous body below it and archiving the pristine original.
 # Successful closure removes the stamp to restore resolution-first ordering.
 write_resolution_record() {  # <task-id> <mode> <shown-body>
-  local id=$1 mode=$2 body=$3 new_body tmp hold_set
+  local id=$1 mode=$2 body=$3 new_body tmp hold_set field
   new_body=$(resolution_block "$mode")
   body=$(decode_shown_value "$body") \
     || fail "could not decode the existing body for $id"
@@ -1531,6 +1551,14 @@ write_resolution_record() {  # <task-id> <mode> <shown-body>
   if [ -n "$body" ]; then
     new_body=$(printf '%s\n\n%s' "$new_body" "$body")
   fi
+  # His words sit above the row's own fields; a field the row lacks is written
+  # `-` when they quote a line of its shape (bin/fm-backlog-row-lib.sh).
+  for field in due batch; do
+    if [ -z "$(fm_backlog_row_field_of_body "$field" "$body")" ] \
+      && [ -n "$(fm_backlog_row_field_of_body "$field" "$new_body")" ]; then
+      new_body=$(fm_backlog_row_field_body_append "$field" "$new_body" -)
+    fi
+  done
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-body.XXXXXX") \
     || fail "cannot stage the resolution record"
   if ! printf '%s\n' "$new_body" > "$tmp"; then
@@ -1576,24 +1604,11 @@ apply_pending_retained_artifact() {  # <task-id>
 # A caller holding a fresh read of the row passes it to spare a backend read.
 # OWNER_WRITTEN says whether the body changed.
 OWNER_WRITTEN=0
-# The due date a new captain call gets when no one names one: the next day.
-captain_call_default_due() {
-  local today epoch next
-  if [ -n "${FM_CAPTAIN_HOLD_NOW:-}" ]; then
-    today=${FM_CAPTAIN_HOLD_NOW%%T*}
-  else
-    today=$(date +%Y-%m-%d)
-  fi
-  epoch=$(fm_utc_iso_to_epoch "${today}T12:00:00Z") || fail "cannot read the date $today"
-  next=$(epoch_to_utc_iso $((epoch + 86400))) || fail "cannot compute the day after $today"
-  printf '%s\n' "${next%%T*}"
-}
-
-# Record <due> as the row's Due: line, keeping the owner line last.
-write_due() {  # <task-id> <due> <fresh-show-output>
-  local id=$1 due=$2 show=$3 body owner tmp
+# Record <value> as the row's Due: or Batch: line, keeping the owner line last.
+write_row_field() {  # <due|batch> <task-id> <value> <fresh-show-output>
+  local field=$1 id=$2 value=$3 show=$4 body owner tmp
   body=$(show_field_value "$show" body) || return 1
-  body=$(fm_backlog_row_field_body_with due "$body" "$due") || return 1
+  body=$(fm_backlog_row_field_body_with "$field" "$body" "$value") || return 1
   owner=$(fm_backlog_owner_of_body "$body")
   [ -z "$owner" ] || body=$(fm_backlog_owner_body_with "$body" "$owner")
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-due.XXXXXX") || return 1
@@ -1903,13 +1918,21 @@ deferral_record() {  # <decoded-body>
 # <block> when given, the replaced-deferral line, the row's Due: and Batch:
 # lines, and the owner line, in that order. The row fields follow the
 # captain's verbatim words so a field-looking line inside them never reads as
-# the row's own (bin/fm-backlog-row-lib.sh readers take the last line).
+# the row's own (bin/fm-backlog-row-lib.sh readers take the last line); a field
+# the row lacks is written `-` when his words hold a line of its shape.
 deferral_body() {  # <content> <block-or-empty> <replaced-entries> <owner-or-empty>
-  local body=$1 block=$2 replaced=$3 owner=$4 due batch fields=''
+  local body=$1 block=$2 replaced=$3 owner=$4 due batch fields='' field
   due=$(fm_backlog_row_field_of_body due "$body")
   batch=$(fm_backlog_row_field_of_body batch "$body")
-  [ -z "$due" ] || body=$(fm_backlog_row_field_body_with due "$body" '')
-  [ -z "$batch" ] || body=$(fm_backlog_row_field_body_with batch "$body" '')
+  for field in due batch; do
+    if printf '%s\n' "$body" | grep -Eq "$(fm_backlog_row_field_pattern "$field")"; then
+      body=$(fm_backlog_row_field_body_without "$field" "$body")
+    fi
+    # A field the row lacks is written `-` while any line of its shape stays.
+    if printf '%s\n%s\n' "$body" "$block" | grep -Eq "$(fm_backlog_row_field_pattern "$field")"; then
+      case "$field" in due) due=${due:--} ;; batch) batch=${batch:--} ;; esac
+    fi
+  done
   body=$(fm_backlog_row_trim_trailing_blank "$body")
   [ -z "$block" ] || body="${body:+$body$'\n\n'}$block"
   [ -z "$replaced" ] || body="${body:+$body$'\n\n'}Captain deferrals replaced: $(printf '%s\n' "$replaced" | paste -sd ';' - | sed 's/;/; /g')"
@@ -2912,6 +2935,8 @@ command_board_link() {
     task_show_or_fail "$id" "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
     body=$(decode_shown_value "$(show_field "$show" body)") \
       || fail "could not decode the existing body for $id"
+    [ -n "$(fm_backlog_row_field_of_body batch "$body")" ] \
+      || printf 'fm-captain-hold warning: %s is on the board %s carries but has no Batch: tag; tag it with bin/fm-tasks-axi.sh batch %s board:%s so the board shows as one call\n' "$id" "$origin" "$id" "$origin" >&2
     case $'\n'"$body"$'\n' in
       *$'\n'"$line"$'\n'*)
         release_task_control_lock
