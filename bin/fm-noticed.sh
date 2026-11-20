@@ -394,8 +394,8 @@ cmd_list() {
 
 # The ids of every open (queued or in-flight) backlog row, one per line, read
 # from one listing of every row; fails when the listing fails, or unless its
-# count line, its table's size and its rows agree and every row carries an id
-# and a known state.
+# count line, its table's size and its rows agree and every row carries an id,
+# a known state, and the table's five columns.
 open_row_ids() {
   local listing
   listing=$("$TASKS" list --limit 1000000 2>/dev/null) || return 1
@@ -404,14 +404,15 @@ open_row_ids() {
     /^tasks\[[0-9]+\]\{id,state,/ { size = substr($0, 7); sub(/\].*/, "", size); size += 0; rows = 1; table = 1; next }
     rows && /^  / {
       n++
-      split(substr($0, 3), f, ",")
-      if (f[1] !~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/ || f[2] !~ /^(queued|in_flight|done)$/) bad = 1
+      nf = split(substr($0, 3), f, ",")
+      if (f[1] ~ /^"[^"]*"$/) f[1] = substr(f[1], 2, length(f[1]) - 2)
+      if (nf < 5 || f[1] !~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/ || f[2] !~ /^(queued|in_flight|done)$/) bad = 1
       if (f[2] == "queued" || f[2] == "in_flight") ids = ids f[1] "\n"
       next
     }
     { rows = 0 }
     END {
-      if (bad || count == "" || (count > 0 && (!table || size != count)) || n != count) exit 1
+      if (bad || count == "" || (table && size != count) || (count > 0 && !table) || n != count) exit 1
       printf "%s", ids
     }'
 }
