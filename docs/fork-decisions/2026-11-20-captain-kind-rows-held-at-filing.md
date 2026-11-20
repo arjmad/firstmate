@@ -1,0 +1,6 @@
+2026-11-20: Arjun approved audit finding a7-21 in his deep-audit helm walk: the responder files a step only he can take (`kind captain`, `Owner: arjun`) through `bin/fm-tasks-axi.sh add` with no hold, so the row sat in the dispatchable ready group instead of among his calls.
+Decision: firstmate's wrapper holds such a row for him at filing, so no caller has to remember the hold and every hold-based view (calls, the Monday "Waiting 2+ weeks" list, Launchpad) sees it.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| `add` of a `--kind captain` row owned by `arjun` holds the new or already-present row tasks-axi reports, when it is open and carries no hold, through `bin/fm-captain-hold.sh hold` as an `arjun-only` call with the reason `only you can take this step: <title>`; the helper re-checks the row under its control lock (`FM_CAPTAIN_HOLD_IF_UNHELD_CAPTAIN_ROW`) and skips a row answered or held meanwhile; a hold that cannot be written fails the add with exit 1 | `bin/fm-tasks-axi.sh` (`hold_added_captain_row`), `bin/fm-captain-hold.sh` (`command_hold`), `docs/task-lifecycle.md` "Backlog contract", `tests/fm-tasks-axi.test.sh` | `bin/fm-tasks-axi.sh`, `bin/fm-captain-hold.sh`, `docs/task-lifecycle.md` | carried | 427056c4 |
