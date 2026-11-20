@@ -4710,20 +4710,25 @@ json_escape() {
 # Granted paths are real (symlink-resolved) directories/files under this
 # task's home, matching BRIEF_REAL's own resolution: the brief dir (covers
 # brief.md/launch-brief.md/report.md), the steering inbox directory (covers
-# every steer and its handled/ acknowledgement), and the status file itself.
+# every steer and its handled/ acknowledgement), the status file itself, and
+# the code root's .agents/skills directory, as claude_add_dirs_flag grants it,
+# for the skill files the brief and role contract name (the status protocol,
+# captain-hold-lifecycle, the coding-guidelines fallback).
 rovo_config_override_flag() {
-  local effort=$1 data_dir=$2 state_dir=$3 id=$4
-  local data_real state_real agent_json paths_json config_json
+  local effort=$1 data_dir=$2 state_dir=$3 id=$4 code_root=$5
+  local data_real state_real root_real agent_json paths_json config_json
   data_real=$(cd "$data_dir" && pwd -P) || return 1
   state_real=$(cd "$state_dir" && pwd -P) || return 1
+  root_real=$(cd "$code_root" && pwd -P) || return 1
   agent_json=
   case "$effort" in
   low | medium | high | max) agent_json="\"agent\":{\"efficiencyLevel\":\"$(json_escape "$effort")\"}," ;;
   esac
-  paths_json=$(printf '"%s","%s","%s"' \
+  paths_json=$(printf '"%s","%s","%s","%s"' \
     "$(json_escape "$data_real/$id")" \
     "$(json_escape "$state_real/$id.inbox")" \
-    "$(json_escape "$state_real/$id.status")")
+    "$(json_escape "$state_real/$id.status")" \
+    "$(json_escape "$root_real/.agents/skills")")
   config_json="{${agent_json}\"toolPermissions\":{\"allowedExternalPaths\":[$paths_json]}}"
   printf -- '--config-override %s ' "$(shell_quote "$config_json")"
 }
@@ -8585,7 +8590,23 @@ case "$LAUNCH" in
       done
       claude_denied_mcp=",\"deniedMcpServers\":[$claude_denied_mcp]"
     fi
-    claude_settings="'{\"feedbackDrafts\":\"off\",\"enableArtifact\":false,\"disableClaudeAiConnectors\":true${claude_denied_mcp}__CLAUDEATTRIBUTION__}'${claude_strict_mcp}"
+    # A ship or scout on firstmate's own repository leaves the worktree's root
+    # AGENTS.md (the supervisor contract) and CLAUDE.md out of Claude's
+    # memory (docs/fork-decisions/2026-11-20-self-repo-worker-skips-supervisor-contract.md).
+    # Excluding CLAUDE.md alone keeps its @AGENTS.md import, so both are named,
+    # by the worktree's real path, which Claude matches. Undetermined lineage
+    # or a path needing JSON, shell, or glob escaping keeps the files loaded.
+    claude_md_excludes=
+    if [ -n "$WT" ] && fm_role_self_repo "$PROJ_ABS" "$FM_ROOT"; then
+      claude_wt_real=$(cd "$WT" 2>/dev/null && pwd -P) || claude_wt_real=
+      case "$claude_wt_real" in
+      /*) case "$claude_wt_real" in
+        *[!A-Za-z0-9/._-]*) ;;
+        *) claude_md_excludes=",\"claudeMdExcludes\":[\"$claude_wt_real/AGENTS.md\",\"$claude_wt_real/CLAUDE.md\"]" ;;
+        esac ;;
+      esac
+    fi
+    claude_settings="'{\"feedbackDrafts\":\"off\",\"enableArtifact\":false,\"disableClaudeAiConnectors\":true${claude_denied_mcp}${claude_md_excludes}__CLAUDEATTRIBUTION__}'${claude_strict_mcp}"
     LAUNCH=${LAUNCH//__CLAUDESETTINGS__/$claude_settings}
   fi
   ;;
@@ -8597,7 +8618,7 @@ else
   LAUNCH=${LAUNCH//__CLAUDEATTRIBUTION__/,'"attribution":{"commit":"","pr":"","sessionUrl":false}'}
 fi
 if [ "$HARNESS" = rovo ]; then
-  ROVOCONFIGOVERRIDE=$(rovo_config_override_flag "$EFFORT" "$DATA" "$STATE" "$ID") || {
+  ROVOCONFIGOVERRIDE=$(rovo_config_override_flag "$EFFORT" "$DATA" "$STATE" "$ID" "$FM_ROOT") || {
     echo "error: could not resolve this task's home paths for rovo's allowedExternalPaths grant" >&2
     exit 1
   }
