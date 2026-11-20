@@ -3991,12 +3991,14 @@ fleet_sync_tick() {
 # Firstmate self-update due (bin/fm-update.sh --due owns the offline test, the
 # dedupe and the durable row). Once per FM_SELF_UPDATE_DUE_INTERVAL seconds
 # (default 900; 0 or off disables) the watcher asks whether this main home's
-# code root is behind a landed firstmate head, and wakes when that check
-# queued a row; a held head (a task still works on firstmate) waits silently.
+# code root is behind a landed firstmate head. It wakes when that check queued
+# a row, and once for a due head a teardown queued first, which
+# $STATE/.self-update-due-woke records; a held head (a task still works on
+# firstmate) waits silently.
 SELF_UPDATE_DUE_INTERVAL=${FM_SELF_UPDATE_DUE_INTERVAL:-900}
 case "$SELF_UPDATE_DUE_INTERVAL" in off) SELF_UPDATE_DUE_INTERVAL=0 ;; ''|*[!0-9]*) SELF_UPDATE_DUE_INTERVAL=900 ;; esac
 self_update_due_tick() {
-  local out verdict target text
+  local out verdict target text woke="$STATE/.self-update-due-woke"
   [ "$SELF_UPDATE_DUE_INTERVAL" -gt 0 ] || return 0
   [ "$(age_of "$STATE/.last-self-update-due")" -ge "$SELF_UPDATE_DUE_INTERVAL" ] || return 0
   touch "$STATE/.last-self-update-due"
@@ -4004,10 +4006,16 @@ self_update_due_tick() {
     triage_log "self-update due check failed; the next check retries in ${SELF_UPDATE_DUE_INTERVAL}s"
     return 0
   }
+  [ -n "$out" ] || { rm -f "$woke"; return 0; }
   read -r verdict target text <<EOF
 $out
 EOF
-  [ "$verdict" = queued ] || return 0
+  case "$verdict" in
+    queued) ;;
+    due) [ "$(cat "$woke" 2>/dev/null)" != "$target" ] || return 0 ;;
+    *) return 0 ;;
+  esac
+  printf '%s\n' "$target" > "$woke"
   wake "check: $text"
 }
 

@@ -93,7 +93,9 @@
 # clone's default branch, or the config/self-update-source remote and branch), because fleet sync fetches
 # those clones after every merge and on its schedule; the code root's own
 # remote ref is fetched only by an update. A target that is HEAD or already in
-# HEAD's history is current. It prints nothing when current, in a secondmate
+# HEAD's history is current, and one HEAD has diverged from is not due either,
+# because the fast-forward-only update would skip it (fm-ff-lib.sh records that
+# divergence for startup to surface). It prints nothing when current, in a secondmate
 # home (its parent's /updatefirstmate updates it), or when no such clone names
 # a newer head; otherwise one line:
 #   due <target-sha> <text>    no task of this home works on such a clone
@@ -192,11 +194,13 @@ read_self_update_source
 
 # --- due check (--due) -----------------------------------------------------
 
-# due_newer <sha> - rc 0 when <sha> is a head the code root's HEAD lacks.
+# due_newer <sha> - rc 0 when the update could fast-forward HEAD to <sha>: a
+# head HEAD lacks, and HEAD is in its history. A head the code root has not
+# fetched counts, because the update fetches it first.
 due_newer() {
   [ -n "$1" ] && [ "$1" != "$DUE_HEAD" ] || return 1
   git -C "$FM_ROOT" cat-file -e "$1^{commit}" 2>/dev/null || return 0
-  ! git -C "$FM_ROOT" merge-base --is-ancestor "$1" "$DUE_HEAD" 2>/dev/null
+  git -C "$FM_ROOT" merge-base --is-ancestor "$DUE_HEAD" "$1" 2>/dev/null
 }
 
 due_check() {

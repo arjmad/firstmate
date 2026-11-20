@@ -751,6 +751,10 @@ test_due_reports_a_landed_head_once_no_task_works_on_firstmate() {
   git -C "$w/main" commit -qam local
   assert_equals "$(run_due "$w")" "" "a code root ahead of the landed head must report nothing"
   assert_equals "$(git -C "$w/main" rev-parse HEAD^)" "$target" "--due moved the code root"
+  bump_origin "$w" readme
+  git -C "$w/home/projects/fm" fetch -q origin
+  git -C "$w/main" fetch -q origin
+  assert_equals "$(run_due "$w" --queue)" "" "a code root diverged from the landed head must report nothing, since the update would skip it"
   pass "T16 --due reports a landed head from a fleet-synced project clone, held while a task works on firstmate"
 }
 

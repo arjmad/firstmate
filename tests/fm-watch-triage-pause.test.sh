@@ -1784,7 +1784,7 @@ self_update_due_watch() {  # <dir> <out>
 }
 
 test_landed_firstmate_head_wakes_once_for_self_update() {
-  local dir state out pid url clone landed
+  local dir state out pid url clone landed second
   url=$(git -C "$ROOT" remote get-url origin 2>/dev/null) || url=
   if [ -z "$url" ]; then
     pass "a landed firstmate head wakes once for self-update (skipped: the code root has no origin)"
@@ -1818,12 +1818,30 @@ test_landed_firstmate_head_wakes_once_for_self_update() {
   touch -t 200001010000 "$state/.last-self-update-due"
   wait_poll_cycle "$state" "$pid" || fail "the same landed head woke the watcher again: $(cat "$out")"
 
+  # A teardown that sees the next head first queues its row while the watcher
+  # polls; the watcher still wakes once for it.
+  second=$(git -C "$clone" -c user.name=test -c user.email=test@example.invalid commit-tree "$(git -C "$ROOT" rev-parse 'HEAD^{tree}')" -p "$landed" -m second)
+  git -C "$clone" update-ref refs/remotes/origin/main "$second"
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-update.sh" --due --queue >/dev/null \
+    || fail "the teardown-side check failed"
+  touch -t 200001010000 "$state/.last-self-update-due"
+  wait_for_exit "$pid" 100 || { reap "$pid"; fail "a head a teardown queued first did not wake the watcher: $(cat "$out")"; }
+  grep -F "behind projects/firstmate origin/main at ${second:0:8}" "$out" >/dev/null \
+    || fail "the wake did not name the head the teardown queued: $(cat "$out")"
+  FM_HOME="$dir" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-wake-drain.sh" >/dev/null 2>"$dir/drain.err" \
+    || fail "could not drain the teardown-queued wake: $(cat "$dir/drain.err")"
+  ack_drain_err "$state" "$dir/drain.err" >/dev/null 2>&1 || fail "could not acknowledge the teardown-queued wake"
+
+  : > "$out"
+  self_update_due_watch "$dir" "$out"
+  pid=$!
   git -C "$clone" update-ref refs/remotes/origin/main "$(git -C "$ROOT" rev-parse HEAD)"
   touch -t 200001010000 "$state/.last-self-update-due"
   wait_poll_cycle "$state" "$pid" || fail "a current code root woke the watcher: $(cat "$out")"
   wait_poll_cycle "$state" "$pid" || fail "a current code root woke the watcher: $(cat "$out")"
   reap "$pid"
   [ ! -e "$state/.self-update-due" ] || fail "a current code root kept the raised-head record"
+  [ ! -e "$state/.self-update-due-woke" ] || fail "a current code root kept the watcher's woke record"
   pass "a landed firstmate head wakes once for self-update and clears once the code root is current"
 }
 
