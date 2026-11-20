@@ -578,8 +578,9 @@ backlog_row_facts() {
           set = substr($0, RSTART, RLENGTH); sub(/^[[:space:]]*Captain hold set:[[:space:]]*/, "", set); sub(/[[:space:]]+$/, "", set)
         }
       }
-      if ($0 ~ due_re) { v = $0; sub(/^[[:space:]]*Due:[[:space:]]*/, "", v); due = substr(v, 1, 10) }
-      if ($0 ~ batch_re) { v = $0; sub(/^[[:space:]]*Batch:[[:space:]]*/, "", v); sub(/[[:space:]]+$/, "", v); batch = v }
+      # A `-` value means the row has none (bin/fm-backlog-row-lib.sh).
+      if ($0 ~ due_re) { v = $0; sub(/^[[:space:]]*Due:[[:space:]]*/, "", v); due = substr(v, 1, 10); if (due ~ /^-/) due = "" }
+      if ($0 ~ batch_re) { v = $0; sub(/^[[:space:]]*Batch:[[:space:]]*/, "", v); sub(/[[:space:]]+$/, "", v); batch = (v == "-" ? "" : v) }
     }
     END { flush() }
   ' "$1" 2>/dev/null

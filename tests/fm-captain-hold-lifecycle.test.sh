@@ -2562,7 +2562,14 @@ test_defer_batch_moves_tagged_calls_together() {
   assert_not_contains "$out" "office-done" "defer-batch touched a closed call"
   assert_contains "$(tasks_in "$home" show office-b --full)" "all office rows to Friday" "the batch words were not recorded"
   assert_equals office "$(run_fm_tasks_axi "$home" batch office-b)" "a Batch: line in his words replaced the row's tag"
-  assert_equals 2026-07-15 "$(run_fm_tasks_axi "$home" due office-b)" "a Due: line in his words replaced the row's due date"
+  # The calls carry no Due of their own, so his quoted Due: line must not become one.
+  assert_equals - "$(run_fm_tasks_axi "$home" due office-b)" "a Due: line in his words became the row's due date"
+  assert_contains "$(tasks_in "$home" show office-b --full)" 'Due: -' "the row did not record that it has no due date after his words"
+  run_fm_tasks_axi "$home" due office-b 2026-08-01 >/dev/null || fail "could not date office-b"
+  assert_equals 2026-08-01 "$(run_fm_tasks_axi "$home" due office-b)" "a due date set after his words did not stand"
+  run_fm_tasks_axi "$home" due office-b - >/dev/null || fail "could not clear office-b's due date"
+  assert_equals - "$(run_fm_tasks_axi "$home" due office-b)" "clearing the due date let his quoted Due: line become the row's"
+  assert_equals office "$(run_fm_tasks_axi "$home" batch office-b)" "changing the due date moved the batch tag"
   if out=$(run_captain "$home" defer-batch office --until 2026-07-18 2>&1); then
     fail "defer-batch ran without the captain's words: $out"
   fi

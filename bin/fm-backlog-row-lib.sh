@@ -102,10 +102,14 @@ fm_backlog_title_dated() {
 
 # The line pattern of a field. It avoids interval expressions so every awk
 # reads it; fm_backlog_batch_valid bounds a tag's length where one is written.
+# A reader takes the last matching line, and a value of `-` means the row has
+# none: the writers put that line after quoted text, such as the captain's
+# recorded words, that still holds a line of the field's shape, so the quoted
+# line never reads as the row's own.
 fm_backlog_row_field_pattern() {  # <due|batch>
   case "$1" in
-    due) printf '%s' '^[[:space:]]*Due:[[:space:]]*([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])[[:space:]]*$' ;;
-    batch) printf '%s' '^[[:space:]]*Batch:[[:space:]]*((place:)?[a-z0-9][a-z0-9-]*|board:[a-z0-9][a-z0-9._-]*)[[:space:]]*$' ;;
+    due) printf '%s' '^[[:space:]]*Due:[[:space:]]*([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]|-)[[:space:]]*$' ;;
+    batch) printf '%s' '^[[:space:]]*Batch:[[:space:]]*((place:)?[a-z0-9][a-z0-9-]*|board:[a-z0-9][a-z0-9._-]*|-)[[:space:]]*$' ;;
     *) return 1 ;;
   esac
 }
@@ -121,9 +125,10 @@ fm_backlog_row_field_label() {  # <due|batch>
 # fm_backlog_row_field_of_body <due|batch> <decoded-body>: print the recorded
 # value, or nothing.
 fm_backlog_row_field_of_body() {
-  local pattern
+  local pattern value
   pattern=$(fm_backlog_row_field_pattern "$1") || return 1
-  printf '%s\n' "${2:-}" | sed -En "s/$pattern/\\1/p" | tail -1
+  value=$(printf '%s\n' "${2:-}" | sed -En "s/$pattern/\\1/p" | tail -1)
+  [ "$value" = - ] || printf '%s\n' "$value"
 }
 
 fm_backlog_row_trim_trailing_blank() {  # <text>
@@ -137,21 +142,12 @@ fm_backlog_row_trim_trailing_blank() {  # <text>
 # fm_backlog_row_field_body_with <due|batch> <decoded-body> <value-or-empty>:
 # print the body with its canonical (last) line of that field removed and,
 # for a non-empty value, a new one at the end, above a trailing owner line so
-# the owner stays last.
+# the owner stays last. Clearing a field whose shape still shows on an earlier
+# line writes `-` instead, so that line never becomes the row's value.
 fm_backlog_row_field_body_with() {
-  local field=$1 body=${2:-} value=${3:-} pattern label kept owner_line rest
+  local field=$1 body=${2:-} value=${3:-} pattern label kept owner_line
   pattern=$(fm_backlog_row_field_pattern "$field") || return 1
   label=$(fm_backlog_row_field_label "$field") || return 1
-  # A trailing owner line stays last (bin/fm-backlog-owner-lib.sh): detach it,
-  # write the field on the rest, and put it back.
-  rest=$(fm_backlog_row_trim_trailing_blank "$body")
-  owner_line=$(printf '%s\n' "$rest" | tail -1)
-  if [ -n "$value" ] && printf '%s\n' "$owner_line" | grep -Eq '^[[:space:]]*Owner:[[:space:]]*(arjun|fleet)[[:space:]]*$'; then
-    rest=$(fm_backlog_row_trim_trailing_blank "$(printf '%s\n' "$rest" | sed '$d')")
-    fm_backlog_row_field_body_with "$field" "$rest" "$value"
-    printf '\n%s\n' "$owner_line"
-    return 0
-  fi
   # Removing the line also drops a blank line before it that would otherwise
   # double up with the one after it.
   kept=$(printf '%s\n' "$body" | PATTERN=$pattern awk '
@@ -165,14 +161,28 @@ fm_backlog_row_field_body_with() {
     }
   ')
   kept=$(fm_backlog_row_trim_trailing_blank "$kept")
+  if [ -z "$value" ] && printf '%s\n' "$kept" | grep -Eq "$pattern"; then
+    value=-
+  fi
   if [ -z "$value" ]; then
     [ -z "$kept" ] || printf '%s\n' "$kept"
+    return 0
+  fi
+  # A trailing owner line stays last (bin/fm-backlog-owner-lib.sh): detach it,
+  # write the field on the rest, and put it back.
+  owner_line=$(printf '%s\n' "$kept" | tail -1)
+  if printf '%s\n' "$owner_line" | grep -Eq '^[[:space:]]*Owner:[[:space:]]*(arjun|fleet)[[:space:]]*$'; then
+    kept=$(fm_backlog_row_trim_trailing_blank "$(printf '%s\n' "$kept" | sed '$d')")
+  else
+    owner_line=
+  fi
+  if [ -z "$kept" ]; then
+    printf '%s: %s\n' "$label" "$value"
   elif printf '%s\n' "$kept" | tail -1 | grep -Eq '^(Due|Batch): '; then
     # Row fields written together stay one block.
     printf '%s\n%s: %s\n' "$kept" "$label" "$value"
-  elif [ -n "$kept" ]; then
-    printf '%s\n\n%s: %s\n' "$kept" "$label" "$value"
   else
-    printf '%s: %s\n' "$label" "$value"
+    printf '%s\n\n%s: %s\n' "$kept" "$label" "$value"
   fi
+  [ -z "$owner_line" ] || printf '\n%s\n' "$owner_line"
 }

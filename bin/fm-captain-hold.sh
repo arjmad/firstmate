@@ -1890,13 +1890,20 @@ deferral_record() {  # <decoded-body>
 # <block> when given, the replaced-deferral line, the row's Due: and Batch:
 # lines, and the owner line, in that order. The row fields follow the
 # captain's verbatim words so a field-looking line inside them never reads as
-# the row's own (bin/fm-backlog-row-lib.sh readers take the last line).
+# the row's own (bin/fm-backlog-row-lib.sh readers take the last line); a field
+# the row lacks is written `-` when his words hold a line of its shape.
 deferral_body() {  # <content> <block-or-empty> <replaced-entries> <owner-or-empty>
-  local body=$1 block=$2 replaced=$3 owner=$4 due batch fields=''
+  local body=$1 block=$2 replaced=$3 owner=$4 due batch fields='' field
   due=$(fm_backlog_row_field_of_body due "$body")
   batch=$(fm_backlog_row_field_of_body batch "$body")
-  [ -z "$due" ] || body=$(fm_backlog_row_field_body_with due "$body" '')
-  [ -z "$batch" ] || body=$(fm_backlog_row_field_body_with batch "$body" '')
+  for field in due batch; do
+    if printf '%s\n' "$body" | grep -Eq "$(fm_backlog_row_field_pattern "$field")"; then
+      body=$(fm_backlog_row_field_body_with "$field" "$body" '')
+    fi
+    if printf '%s\n' "$block" | grep -Eq "$(fm_backlog_row_field_pattern "$field")"; then
+      case "$field" in due) due=${due:--} ;; batch) batch=${batch:--} ;; esac
+    fi
+  done
   body=$(fm_backlog_row_trim_trailing_blank "$body")
   [ -z "$block" ] || body="${body:+$body$'\n\n'}$block"
   [ -z "$replaced" ] || body="${body:+$body$'\n\n'}Captain deferrals replaced: $(printf '%s\n' "$replaced" | paste -sd ';' - | sed 's/;/; /g')"
