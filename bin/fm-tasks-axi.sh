@@ -28,6 +28,12 @@
 # which the wrapper consumes; without it a row gets the default for its kind
 # (fleet), except `--kind captain`, which must name one and is refused
 # otherwise. An `Owner:` line already in the given body counts as naming one.
+# A `--kind captain` row owned by `arjun` is a step only the captain can take,
+# so once `add` succeeds, a new or already-present open row that carries no
+# hold yet is held for him through bin/fm-captain-hold.sh hold, which keeps it
+# out of dispatch and puts it among his calls (fork patch,
+# docs/fork-decisions/2026-11-20-captain-kind-rows-held-at-filing.md); a row
+# that cannot be held fails the command with exit 1 after the add.
 # `update` with `--body` or `--body-file` carries the row's recorded owner
 # into a new body that names none, so rewriting a note never drops it; such
 # an update names the row id first and refuses when the row cannot be read.
@@ -439,6 +445,21 @@ task_lock() {  # <id>
   trap 'fm_lock_release "$TASK_LOCK"' EXIT
 }
 
+# add/create of a captain-owned kind=captain row: hold it for him unless the
+# row is closed or already carries a hold of any kind (see the header).
+hold_added_captain_row() {
+  local id=${ARGS[1]:-} kind
+  kind=$(arg_value --kind) || kind=
+  [ "$kind" = captain ] && [ "$OWNER" = arjun ] || return 0
+  case "$id" in ''|-*) return 0 ;; esac
+  shown_body "$id" || { printf 'fm-tasks-axi: %s was added but could not be read to hold it for the captain; hold it with bin/fm-captain-hold.sh hold before anything dispatches it\n' "$id" >&2; return 1; }
+  ! printf '%s\n' "$SHOWN_ROW" | grep -q '^  state: done$' || return 0
+  printf '%s\n' "$SHOWN_ROW" | grep -Eq '^  hold_kind: ("-"|-)$' || return 0
+  "$SCRIPT_DIR/fm-captain-hold.sh" hold "$id" \
+    --reason "only you can take this step; the row's body names it" >/dev/null \
+    || { printf 'fm-tasks-axi: %s was added but could not be held for the captain; hold it with bin/fm-captain-hold.sh hold before anything dispatches it\n' "$id" >&2; return 1; }
+}
+
 # add/create: name the owner at filing (see the header), and record any
 # --due and --batch lines above it.
 prepare_add_owner() {
@@ -708,6 +729,7 @@ if [ -n "$OWNER_BODY_FILE" ]; then
   status=0
   tasks-axi ${ARGS[@]+"${ARGS[@]}"} || status=$?
   rm -f -- "$OWNER_BODY_FILE"
+  case "${1:-}" in add|create) [ "$status" -ne 0 ] || hold_added_captain_row || status=1 ;; esac
   exit "$status"
 fi
 case "${1:-}" in
