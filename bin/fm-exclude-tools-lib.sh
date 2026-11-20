@@ -68,15 +68,17 @@ fm_exclude_tools_names() {
 # fm_exclude_tools_check <harness> <raw-launch 0|1> <config-dir>: succeed when
 # this launch can honor the home's list (empty list, or a runtime that hides
 # tools); otherwise refuse naming the file. Prints the names on stdout. A
-# templated Claude launch also gets the worker-denied MCP tool patterns, which
-# fm_worker_denied_mcp_servers_check refuses or falls back on when they cannot
-# be carried or read.
+# templated Claude launch also gets the worker-denied MCP tool patterns, or
+# `mcp__*`, which hides every MCP tool, when that list cannot be read here, so
+# this read fails closed whatever fm_worker_denied_mcp_servers_check's own
+# read of the list later sees; that check refuses or falls back when the list
+# cannot be carried or read.
 fm_exclude_tools_check() {
   local harness=$1 raw=$2 config=$3 names tools
   names=$(fm_exclude_tools_names "$config") || return 1
-  if [ "$harness" = claude ] && [ "$raw" != 1 ] \
-    && tools=$(fm_worker_denied_mcp_tools_entries 2>/dev/null) && [ -n "$tools" ]; then
-    names="${names:+$names,}$tools"
+  if [ "$harness" = claude ] && [ "$raw" != 1 ]; then
+    tools=$(fm_worker_denied_mcp_tools_entries 2>/dev/null) || tools='mcp__*'
+    [ -z "$tools" ] || names="${names:+$names,}$tools"
   fi
   if [ -n "$names" ]; then
     if [ "$raw" = 1 ]; then

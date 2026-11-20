@@ -1877,8 +1877,8 @@ mcp__gws-*__send_gmail_message
 
 Each Claude ship and scout launch carries the patterns in `--disallowedTools`, after any `config/crew-exclude-tools` names, so Claude Code drops those tools' schemas from the session; the helm, the captain's own sessions, and a secondmate's own agent keep them, and other runtimes neither read nor refuse on the file.
 An absent file denies no tool.
-A file that cannot be inspected, or is present but dangling, unreadable, not a regular file, or has an entry of any other shape, falls back like the server list above: the worker is denied every MCP server, with a warning naming the file.
-A raw launch command and the T3 Code backend refuse whenever the file names a tool, because neither can carry `--disallowedTools`.
+A file that cannot be inspected, or is present but dangling, unreadable, not a regular file, or has an entry of any other shape, falls back like the server list above: the worker is denied every MCP server, with a warning naming the file, and its `--disallowedTools` also carries `mcp__*`, which hides every MCP tool.
+A raw launch command and the T3 Code backend refuse whenever the file names a tool or cannot be read, because neither can carry `--disallowedTools` or the fallback.
 [`bin/fm-exclude-tools-lib.sh`](../bin/fm-exclude-tools-lib.sh) implements the parsing and fallback.
 
 ## Worker compaction window (config/crew-compact-window)

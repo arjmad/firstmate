@@ -2739,6 +2739,8 @@ test_claude_denied_mcp_tools_fail_closed() {
       || fail "a $setup denied-tool list did not deny every MCP server: $settings"
     assert_contains "$(cat "$LAUNCH_LOG")" " --strict-mcp-config --no-chrome " \
       "a $setup denied-tool list must also skip every other MCP configuration"
+    assert_contains "$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")" "--disallowedTools 'mcp__*' --append-system-prompt " \
+      "a $setup denied-tool list must hide every MCP tool on its own read"
   done
   # A raw command cannot carry --disallowedTools, so a list that names a tool
   # refuses it even when the server list names none.

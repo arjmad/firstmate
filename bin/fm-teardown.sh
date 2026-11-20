@@ -4989,10 +4989,10 @@ if [ -n "$TEARDOWN_KEPT_CHECKOUTS" ] && [ -d "$STATE" ]; then
       --title "Teardown of $ID kept $TEARDOWN_KEPT_COUNT scratch checkout(s) in data/$ID/" \
       --why "Each holds work teardown could not prove landed, so it stays on disk unseen until someone proves it landed or recorded abandoned; deleting anything unique is the captain's call." \
       --from teardown \
-      --evidence "$(printf '%s\n' "$TEARDOWN_KEPT_CHECKOUTS" | awk 'NR > 1 { printf "; " } { printf "%s", $0 }')" 2>&1); then
+      --evidence "$(printf '%s\n' "$TEARDOWN_KEPT_CHECKOUTS" | awk 'NR > 1 { printf "; " } { printf "%s", $0 }')"); then
     echo "noticed-queue: $TEARDOWN_KEPT_FILED (scratch checkouts teardown kept)"
   else
-    echo "warning: teardown $ID kept scratch checkouts but could not file their noticed row: $TEARDOWN_KEPT_FILED" >&2
+    echo "warning: teardown $ID kept scratch checkouts but could not file their noticed row (bin/fm-noticed.sh's reason is above); file it by hand" >&2
   fi
 fi
 [ "$TEARDOWN_POOL_SLOT_LOST" = 0 ] || exit "$TEARDOWN_LOST_SLOT_EXIT"
