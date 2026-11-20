@@ -2,7 +2,7 @@
 Decision: each status, wait, decision-closing, and shared-infrastructure rule stays in the brief as one line that still names its exact status form, prohibition, and command, and the explanations behind them move to `.agents/skills/crewmate-status-protocol/SKILL.md`, which the brief names by path for the worker to read before its first pause, gate-wait, or captain-only line.
 The file sits under `.agents/skills/` because every Claude worker launch already grants that directory with `--add-dir`, so reading it never parks the pane on an outside-read question.
 Measured with `bin/fm-brief.sh` on a direct-PR ship and a scout, by top-level section: the ship brief's Rules fell from 9,391 to 6,761 bytes and the whole brief from 22,397 to 19,999; the scout's Rules from 8,417 to 6,351 and the whole brief from 14,875 to 12,954.
-Rovo confines its file tools to the worktree, so `rovo_config_override_flag` also grants the protocol file's real path.
+Rovo confines its file tools to the worktree, so `rovo_config_override_flag` also grants the code root's `.agents/skills/` directory by real path, matching Claude's `--add-dir` grant; that also reaches the captain-hold-lifecycle and coding-guidelines files the brief and role contract already named.
 The secondmate charter, the inbox section, and the Definition of done are unchanged.
 No upstream proposal yet: the moved text is upstream's, so a sync that edits these rules must patch the protocol file rather than reintroduce the long form.
 

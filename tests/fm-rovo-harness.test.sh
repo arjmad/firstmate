@@ -248,8 +248,8 @@ test_rovo_launch_then_send_is_verified() {
     "rovo launch's allowedExternalPaths grant omitted the steering inbox directory"
   assert_contains "$launch" "$state_real/$id.status" \
     "rovo launch's allowedExternalPaths grant omitted the status file"
-  assert_contains "$launch" "$(cd "$ROOT" && pwd -P)/.agents/skills/crewmate-status-protocol/SKILL.md" \
-    "rovo launch's allowedExternalPaths grant omitted the status protocol file the brief names"
+  assert_contains "$launch" "\"$(cd "$ROOT" && pwd -P)/.agents/skills\"" \
+    "rovo launch's allowedExternalPaths grant omitted the code root's skills directory the brief names"
   pass "fm-spawn: rovo launches bare, waits for readiness, and delivers its brief pointer"
 }
 

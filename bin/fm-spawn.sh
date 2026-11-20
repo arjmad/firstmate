@@ -4711,7 +4711,9 @@ json_escape() {
 # task's home, matching BRIEF_REAL's own resolution: the brief dir (covers
 # brief.md/launch-brief.md/report.md), the steering inbox directory (covers
 # every steer and its handled/ acknowledgement), the status file itself, and
-# the code root's crewmate status protocol file, which the brief's Rules name.
+# the code root's .agents/skills directory, as claude_add_dirs_flag grants it,
+# for the skill files the brief and role contract name (the status protocol,
+# captain-hold-lifecycle, the coding-guidelines fallback).
 rovo_config_override_flag() {
   local effort=$1 data_dir=$2 state_dir=$3 id=$4 code_root=$5
   local data_real state_real root_real agent_json paths_json config_json
@@ -4726,7 +4728,7 @@ rovo_config_override_flag() {
     "$(json_escape "$data_real/$id")" \
     "$(json_escape "$state_real/$id.inbox")" \
     "$(json_escape "$state_real/$id.status")" \
-    "$(json_escape "$root_real/.agents/skills/crewmate-status-protocol/SKILL.md")")
+    "$(json_escape "$root_real/.agents/skills")")
   config_json="{${agent_json}\"toolPermissions\":{\"allowedExternalPaths\":[$paths_json]}}"
   printf -- '--config-override %s ' "$(shell_quote "$config_json")"
 }

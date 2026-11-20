@@ -255,7 +255,7 @@ IFS= read -r -d '' CREWMATE_PAUSE_INSTRUCTIONS <<EOF || true
    When a blocker or wait clears without a firstmate reply, append \`resolved [at=<epoch>]: {how it cleared}\` (with its \`[key=<slug>]\` if it had one) as you resume.
 EOF
 IFS= read -r -d '' SHIP_READY_INSTRUCTIONS <<EOF || true
-   Use \`$FM_CLASSIFY_READY_VERB [at=<epoch>]: PR {url}\` when your PR is open and ready to land but your task continues after it merges; you never merge it, so a PR waiting to land is never a \`needs-decision\`.
+   Use \`$FM_CLASSIFY_READY_VERB [at=<epoch>]: PR {url}\` when your PR is open and ready to land but your task continues after it merges; you never merge it, so a PR waiting to land is never a \`needs-decision\`, and when nothing remains for you once it is open, report \`done:\` under the Definition of done instead.
    A step only the captain can take after it merges is no reason for \`$FM_CLASSIFY_READY_VERB:\` or \`blocked [on=captain]\`: end the \`done:\` line the Definition of done names with \`; captain step: {the exact action}\` and stop, even when the PR has already merged.
 EOF
 KIND=ship
@@ -914,7 +914,7 @@ $CREWMATE_PAUSE_INSTRUCTIONS
    append \`needs-decision [at=<epoch>]: {the question} - choices: {A} | {B}[ | {C}]; recommended: {A}\` and stop. Firstmate will reply with the decision.
    A question your finished report hands the captain is not such a decision: it goes in the report, as the Definition of done says.
    Name two or three short choices (at most 60 bytes each, no \`]\`, \`;\` or \`|\` inside one) and the one you recommend; firstmate records them on the call it holds for the captain, so they become his buttons.
-   A decision or blocker stays open until a \`resolved\` line carrying its key lands or you declare \`done:\` or \`failed:\`, never by a later \`working:\` line, so declare \`done:\` only once none you raised still needs an answer; \`failed:\` is always available for an unrecoverable failure.
+   A decision or blocker stays open until a \`resolved\` line carrying its key lands or you declare \`done:\` or \`failed:\`, which clears every open one, firstmate's included, never by a later \`working:\` line, so declare \`done:\` only once none you raised still needs an answer; \`failed:\` is always available for an unrecoverable failure.
 $SHARED_INFRA_RULE
 $SHARED_NO_CD_RULE
 
@@ -1009,7 +1009,7 @@ $CREWMATE_PAUSE_INSTRUCTIONS$SHIP_READY_INSTRUCTIONS
    append \`needs-decision [at=<epoch>]: {the question} - choices: {A} | {B}[ | {C}]; recommended: {A}\` and stop. Firstmate will reply with the decision.
    Name two or three short choices (at most 60 bytes each, no \`]\`, \`;\` or \`|\` inside one) and the one you recommend; firstmate records them on the call it holds for the captain, so they become his buttons.
 $ASK_USER_BLOCK
-   A decision or blocker stays open until a \`resolved\` line carrying its key lands or you declare \`done:\` or \`failed:\`, never by a later \`working:\` line, so declare \`done:\` only once none you raised still needs an answer; \`failed:\` is always available for an unrecoverable failure.
+   A decision or blocker stays open until a \`resolved\` line carrying its key lands or you declare \`done:\` or \`failed:\`, which clears every open one, firstmate's included, never by a later \`working:\` line, so declare \`done:\` only once none you raised still needs an answer; \`failed:\` is always available for an unrecoverable failure.
 $SHARED_INFRA_RULE
 $SHARED_NO_CD_RULE
 

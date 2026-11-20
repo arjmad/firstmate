@@ -2591,9 +2591,11 @@ test_claude_self_repo_workers_skip_the_supervisor_contract() {
     rec=$(make_spawn_case "claude-selfrepo-$lineage" claude "$id")
     read_case_record "$rec"
     if [ "$lineage" = self ]; then
-      proj_common=$(git -C "$PROJ_DIR" rev-parse --path-format=absolute --git-common-dir) \
-        && [ -d "$proj_common/objects" ] && case "$proj_common" in "$CASE_DIR"/*) ;; *) false ;; esac \
-        || fail "the fixture project's git dir is not inside its case: ${proj_common:-none}"
+      proj_common=$(git -C "$PROJ_DIR" rev-parse --path-format=absolute --git-common-dir) || proj_common=
+      case "$proj_common" in
+        "$CASE_DIR"/*) [ -d "$proj_common/objects" ] || fail "the fixture project has no objects dir: $proj_common" ;;
+        *) fail "the fixture project's git dir is not inside its case: ${proj_common:-none}" ;;
+      esac
       printf '%s\n' "$common/objects" >> "$proj_common/objects/info/alternates" \
         || fail "could not lend this checkout's objects to the fixture project"
     fi
