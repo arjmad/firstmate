@@ -1533,7 +1533,7 @@ command_hold() {
 # preserving the previous body below it and archiving the pristine original.
 # Successful closure removes the stamp to restore resolution-first ordering.
 write_resolution_record() {  # <task-id> <mode> <shown-body>
-  local id=$1 mode=$2 body=$3 new_body tmp hold_set
+  local id=$1 mode=$2 body=$3 new_body tmp hold_set field
   new_body=$(resolution_block "$mode")
   body=$(decode_shown_value "$body") \
     || fail "could not decode the existing body for $id"
@@ -1549,6 +1549,14 @@ write_resolution_record() {  # <task-id> <mode> <shown-body>
   if [ -n "$body" ]; then
     new_body=$(printf '%s\n\n%s' "$new_body" "$body")
   fi
+  # His words sit above the row's own fields; a field the row lacks is written
+  # `-` when they quote a line of its shape (bin/fm-backlog-row-lib.sh).
+  for field in due batch; do
+    if [ -z "$(fm_backlog_row_field_of_body "$field" "$body")" ] \
+      && [ -n "$(fm_backlog_row_field_of_body "$field" "$new_body")" ]; then
+      new_body=$(fm_backlog_row_field_body_append "$field" "$new_body" -)
+    fi
+  done
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-body.XXXXXX") \
     || fail "cannot stage the resolution record"
   if ! printf '%s\n' "$new_body" > "$tmp"; then

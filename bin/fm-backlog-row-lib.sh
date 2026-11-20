@@ -167,9 +167,8 @@ fm_backlog_row_field_body_without() {
 # the owner stays last. Clearing a field whose shape still shows on an earlier
 # line writes `-` instead, so that line never becomes the row's value.
 fm_backlog_row_field_body_with() {
-  local field=$1 body=${2:-} value=${3:-} pattern label kept owner_line
+  local field=$1 body=${2:-} value=${3:-} pattern kept
   pattern=$(fm_backlog_row_field_pattern "$field") || return 1
-  label=$(fm_backlog_row_field_label "$field") || return 1
   kept=$(fm_backlog_row_field_body_without "$field" "$body") || return 1
   if [ -z "$value" ] && printf '%s\n' "$kept" | grep -Eq "$pattern"; then
     value=-
@@ -178,6 +177,16 @@ fm_backlog_row_field_body_with() {
     [ -z "$kept" ] || printf '%s\n' "$kept"
     return 0
   fi
+  fm_backlog_row_field_body_append "$field" "$kept" "$value"
+}
+
+# fm_backlog_row_field_body_append <due|batch> <decoded-body> <value>: print the
+# body with a `<Label>: <value>` line added at the end, above a trailing owner
+# line, removing nothing.
+fm_backlog_row_field_body_append() {
+  local field=$1 kept=${2:-} value=$3 label owner_line
+  label=$(fm_backlog_row_field_label "$field") || return 1
+  kept=$(fm_backlog_row_trim_trailing_blank "$kept")
   # A trailing owner line stays last (bin/fm-backlog-owner-lib.sh): detach it,
   # write the field on the rest, and put it back.
   owner_line=$(printf '%s\n' "$kept" | tail -1)
