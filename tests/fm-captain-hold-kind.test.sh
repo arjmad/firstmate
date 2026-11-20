@@ -433,6 +433,12 @@ test_untagged_board_or_place_calls_warn() {
   assert_contains "$err" "--batch place:<name>" "the warning did not name the tag to add"
   err=$(run_captain "$home" hold sign-thor --reason "Sign in again" 2>&1 >/dev/null) || fail "a re-hold was refused: $err"
   assert_not_contains "$err" "--batch" "a re-hold of a live call warned again"
+  # A call whose back-on date passed reads unheld but is still his call.
+  (cd "$home" && tasks-axi hold sign-thor --kind captain --until 2020-01-02 --reason "Sign in" >/dev/null) \
+    || fail "could not let sign-thor's back-on date pass"
+  assert_contains "$(show_task "$home" sign-thor)" "held: no" "an expired captain hold still read as held"
+  err=$(run_captain "$home" hold sign-thor --reason "Sign in, back on" 2>&1 >/dev/null) || fail "re-holding an expired call failed: $err"
+  assert_not_contains "$err" "--batch" "re-holding a call whose back-on date passed warned as if new"
   if out=$(run_captain "$home" hold bad-tag --title "Bad tag" --reason "x" --batch "Heimdall Screen" 2>&1); then
     fail "an invalid batch tag was accepted: $out"
   fi

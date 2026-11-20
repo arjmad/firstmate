@@ -3,4 +3,4 @@ Decision: a call can be tagged when it is filed, and filing a call that has no t
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| `hold --batch place:<name>\|board:<task-id>` records the row's `Batch:` line; a new untagged call with no `--options` (not an idea or noticed item) warns on stderr naming `--batch`, and `board-link` warns for each linked call with no tag, naming `fm-tasks-axi.sh batch <id> board:<origin>` | `bin/fm-captain-hold.sh` (`command_hold`, `command_board_link`), `tests/fm-captain-hold-kind.test.sh` | `bin/fm-captain-hold.sh` | carried | 427056c4 |
+| `hold --batch place:<name>\|board:<task-id>` records the row's `Batch:` line; a new untagged call with no `--options` (not an idea or noticed item, not a call whose back-on date passed, and not `bin/fm-tasks-axi.sh`'s filing hold) warns on stderr naming `--batch`, and `board-link` warns for each linked call with no tag, naming `fm-tasks-axi.sh batch <id> board:<origin>` | `bin/fm-captain-hold.sh` (`command_hold`, `command_board_link`), `tests/fm-captain-hold-kind.test.sh` | `bin/fm-captain-hold.sh` | carried | 427056c4 |

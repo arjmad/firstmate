@@ -240,6 +240,7 @@ test_wrapper_holds_captain_owned_captain_rows() {
   dir=$(make_split wrapper-captain-hold)
   out=$(wrapper_from_code "$dir" add rk-printer "Repeated: printer toner" --kind captain --owner arjun 2>&1) \
     || fail "adding a captain-owned captain row failed: $out"
+  assert_not_contains "$out" "tag it with --batch" "the filing hold told the filer to tag a call it did not file as a call"
   show=$(wrapper_from_code "$dir" show rk-printer --full)
   assert_contains "$show" "held: yes" "a captain-owned captain row was not held"
   assert_contains "$show" "hold_kind: captain" "the row was not held for the captain"
