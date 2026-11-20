@@ -189,7 +189,12 @@ drop_unseen() {  # <id>; call under lock_state
   [ -f "$UNSEEN" ] || return 0
   grep -q "^$1$TAB" "$UNSEEN" || return 0
   tmp=$(mktemp "$UNSEEN.XXXXXX") || exit 1
-  grep -v "^$1$TAB" "$UNSEEN" > "$tmp"
+  # Drop the entry with the second half of a title an older close split off it.
+  awk -F "$TAB" -v id="$1" '
+    $1 == id && NF >= 3 { skip = 1; next }
+    skip && /^\.\.\. \(truncated, [0-9]+ chars total - use [^)]*to see complete text\)/ { next }
+    { skip = 0; print }
+  ' "$UNSEEN" > "$tmp"
   mv "$tmp" "$UNSEEN"
 }
 
@@ -386,15 +391,21 @@ cmd_list() {
   done
 }
 
-# The ids of every open (queued or in-flight) backlog row, one per line, or
-# a failure when either listing fails or does not parse.
+# The ids of every open (queued or in-flight) backlog row, one per line, read
+# from one listing of every row; fails when the listing fails, or when its
+# table is missing or holds a different number of rows than its count line.
 open_row_ids() {
-  local state listing
-  for state in queued in_flight; do
-    listing=$("$TASKS" list --state "$state" --limit 1000000 2>/dev/null) || return 1
-    printf '%s\n' "$listing" | grep -q '^count: [0-9]' || return 1
-    printf '%s\n' "$listing" | awk '/^[a-z_]+\[[0-9]+\]\{/ { rows = 1; next } rows && /^  / { split(substr($0, 3), f, ","); print f[1]; next } { rows = 0 }'
-  done
+  local listing
+  listing=$("$TASKS" list --limit 1000000 2>/dev/null) || return 1
+  printf '%s\n' "$listing" | awk '
+    /^count: [0-9]+$/ && count == "" { count = $2 + 0; next }
+    /^tasks\[[0-9]+\]\{id,state,/ { rows = 1; table = 1; next }
+    rows && /^  [^ ]/ { n++; split(substr($0, 3), f, ","); if (f[2] == "queued" || f[2] == "in_flight") ids = ids f[1] "\n"; next }
+    { rows = 0 }
+    END {
+      if (count == "" || (count > 0 && !table) || n != count) exit 1
+      printf "%s", ids
+    }'
 }
 
 # Rewrite the unseen list as `unseen` describes; call under lock_state.
@@ -406,21 +417,28 @@ tidy_unseen() {
   fi
   tmp=$(mktemp "$UNSEEN.XXXXXX") || return 1
   if OPEN_IDS="$open" awk -v prune="$prune" -F "$TAB" '
-    BEGIN { n = split(ENVIRON["OPEN_IDS"], ids, "\n"); for (i = 1; i <= n; i++) if (ids[i] != "") open[ids[i]] = 1 }
+    BEGIN {
+      POINTER = "^\\.\\.\\. \\(truncated, [0-9]+ chars total - use [^)]*to see complete text\\)"
+      n = split(ENVIRON["OPEN_IDS"], ids, "\n"); for (i = 1; i <= n; i++) if (ids[i] != "") open[ids[i]] = 1
+    }
     function flush() {
       if (entry == "") return
       split(entry, f, "\t")
       if (!(prune && f[2] == "noticed" && !(f[1] in open))) print entry
       entry = ""
     }
-    $0 ~ /^[^\t]+\t(now|noticed|fixed|dropped)\t/ { flush(); entry = $0; next }
-    entry != "" {
+    $0 ~ /^[^\t]+\t(now|noticed|fixed|dropped)\t/ { flush(); entry = $0; joinable = ($2 == "fixed" || $2 == "dropped") && length($3) == 80; next }
+    # The second half of a title tasks-axi cut at 80 characters, right after
+    # the fixed or dropped entry it was cut from; any other line stays as it is.
+    joinable && $0 ~ POINTER {
       line = $0
-      sub(/^\.\.\. \(truncated, [0-9]+ chars total - use [^)]*to see complete text\)/, "...", line)
+      sub(POINTER, "...", line)
       sub(/[ ]+$/, "", entry)
       entry = entry line
+      joinable = 0
       next
     }
+    { flush(); print; joinable = 0 }
     END { flush() }
   ' "$UNSEEN" > "$tmp"; then
     if cmp -s "$tmp" "$UNSEEN"; then rm -f "$tmp"; else mv "$tmp" "$UNSEEN"; fi

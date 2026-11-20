@@ -422,20 +422,29 @@ test_unseen_drops_closed_rows_and_keeps_titles_whole() {
   noticed "$home" file noticed urgent-shut --title "Urgent and shut" --why "w" --from t1 --now >/dev/null
   tasks "$home" "done" noticed-shut-elsewhere >/dev/null || fail "could not close a row outside fm-noticed.sh"
   tasks "$home" "done" noticed-urgent-shut >/dev/null || fail "could not close the urgent row"
-  # Rows an older close split over two lines, and an entry whose row was archived.
-  printf '%s\n' "noticed-old-fix	fixed	Word word word word " \
+  # Rows an older close split over two lines after tasks-axi's 80-character
+  # cut, an entry whose row was archived, and a split half whose entry is gone.
+  cut="Word word word word word word word word word word word word word word word word "
+  printf '%s\n' "noticed-old-fix	fixed	$cut" \
     "... (truncated, 98 chars total - use --full to see complete text) - fixed at its cause (https://github.com/o/r/pull/2)" \
-    "noticed-archived	noticed	Archived long ago" >> "$home/state/noticed/unseen.tsv"
+    "noticed-archived	noticed	Archived long ago" \
+    "noticed-shown-fix	fixed	$cut" \
+    "... (truncated, 90 chars total - use --full to see complete text) - shown already (https://github.com/o/r/pull/6)" \
+    "noticed-orphan-before	dropped	A short title" \
+    "... (truncated, 91 chars total - use --full to see complete text) - an orphaned half" >> "$home/state/noticed/unseen.tsv"
+  assert_equals "shown: noticed-shown-fix" "$(noticed "$home" shown noticed-shown-fix)" "shown did not mark a split entry"
+  assert_not_contains "$(cat "$home/state/noticed/unseen.tsv")" "shown already" "shown left a split entry's second half behind"
   list=$(noticed "$home" unseen) || fail "unseen failed"
   assert_contains "$list" "noticed-open-one	noticed	Still open" "an open noticed row left the list"
   assert_not_contains "$list" "noticed-shut-elsewhere" "a noticed row closed by another path stayed listed"
   assert_not_contains "$list" "noticed-archived" "a noticed row no longer in the backlog stayed listed"
   assert_contains "$list" "noticed-urgent-shut	now	Urgent and shut" "a now row he was not told about left the list"
-  assert_contains "$list" "noticed-old-fix	fixed	Word word word word... - fixed at its cause (https://github.com/o/r/pull/2)" \
+  assert_contains "$list" "noticed-old-fix	fixed	${cut% }... - fixed at its cause (https://github.com/o/r/pull/2)" \
     "a split fixed title was not rejoined"
-  assert_not_contains "$list" "truncated, " "the truncation pointer stayed in the list"
+  assert_contains "$list" "noticed-orphan-before	dropped	A short title" "an entry before an unpaired half changed"
+  assert_contains "$list" "an orphaned half" "a half that matches no cut entry was joined or lost"
   assert_equals "$list" "$(cat "$home/state/noticed/unseen.tsv")" "the tidy was not written back for the drain"
-  [ "$(printf '%s\n' "$list" | awk -F '\t' 'NF < 3' | wc -l | tr -d ' ')" = 0 ] || fail "a broken line remained: $list"
+  assert_equals "$(printf '%s\n' "$list" | grep -c 'truncated, ')" 1 "a paired truncation pointer stayed in the list"
 
   printf 'noticed-gone\tnoticed\tGone\n' >> "$home/state/noticed/unseen.tsv"
   fm_fakebin "$home/broken" >/dev/null
@@ -443,6 +452,13 @@ test_unseen_drops_closed_rows_and_keeps_titles_whole() {
   chmod +x "$home/broken/fakebin/tasks-axi"
   out=$(PATH="$home/broken/fakebin:$PATH" noticed "$home" unseen 2>/dev/null)
   assert_contains "$out" "noticed-gone	noticed	Gone" "a failed backlog read pruned an entry"
+  # A listing that exits 0 but holds fewer rows than its count line says.
+  cat > "$home/broken/fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+printf 'count: 2\ntasks[2]{id,state,kind,repo,title}:\n  noticed-open-one,queued,noticed,"-",Still open\n'
+SH
+  out=$(PATH="$home/broken/fakebin:$PATH" noticed "$home" unseen 2>/dev/null)
+  assert_contains "$out" "noticed-gone	noticed	Gone" "a partial backlog listing pruned an entry"
   pass "unseen drops noticed rows closed by any path, keeps now, fixed and dropped rows, rejoins split titles, and prunes nothing on a failed read"
 }
 
