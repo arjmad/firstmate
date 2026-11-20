@@ -459,6 +459,13 @@ printf 'count: 2\ntasks[2]{id,state,kind,repo,title}:\n  noticed-open-one,queued
 SH
   out=$(PATH="$home/broken/fakebin:$PATH" noticed "$home" unseen 2>/dev/null)
   assert_contains "$out" "noticed-gone	noticed	Gone" "a partial backlog listing pruned an entry"
+  # A listing whose count agrees but whose second row is not a row.
+  cat > "$home/broken/fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+printf 'count: 2\ntasks[2]{id,state,kind,repo,title}:\n  noticed-open-one,queued,noticed,"-",Still open\n  garbage\n'
+SH
+  out=$(PATH="$home/broken/fakebin:$PATH" noticed "$home" unseen 2>/dev/null)
+  assert_contains "$out" "noticed-gone	noticed	Gone" "a listing with a malformed row pruned an entry"
   pass "unseen drops noticed rows closed by any path, keeps now, fixed and dropped rows, rejoins split titles, and prunes nothing on a failed read"
 }
 

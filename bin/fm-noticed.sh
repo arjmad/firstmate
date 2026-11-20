@@ -189,10 +189,11 @@ drop_unseen() {  # <id>; call under lock_state
   [ -f "$UNSEEN" ] || return 0
   grep -q "^$1$TAB" "$UNSEEN" || return 0
   tmp=$(mktemp "$UNSEEN.XXXXXX") || exit 1
-  # Drop the entry with the second half of a title an older close split off it.
+  # Drop the entry with the second half of a title an older close split off
+  # it, paired as tidy_unseen pairs them.
   awk -F "$TAB" -v id="$1" '
-    $1 == id && NF >= 3 { skip = 1; next }
-    skip && /^\.\.\. \(truncated, [0-9]+ chars total - use [^)]*to see complete text\)/ { next }
+    $1 == id && NF >= 3 { skip = ($2 == "fixed" || $2 == "dropped") && length($3) == 80; next }
+    skip && /^\.\.\. \(truncated, [0-9]+ chars total - use [^)]*to see complete text\)/ { skip = 0; next }
     { skip = 0; print }
   ' "$UNSEEN" > "$tmp"
   mv "$tmp" "$UNSEEN"
@@ -392,18 +393,25 @@ cmd_list() {
 }
 
 # The ids of every open (queued or in-flight) backlog row, one per line, read
-# from one listing of every row; fails when the listing fails, or when its
-# table is missing or holds a different number of rows than its count line.
+# from one listing of every row; fails when the listing fails, or unless its
+# count line, its table's size and its rows agree and every row carries an id
+# and a known state.
 open_row_ids() {
   local listing
   listing=$("$TASKS" list --limit 1000000 2>/dev/null) || return 1
   printf '%s\n' "$listing" | awk '
     /^count: [0-9]+$/ && count == "" { count = $2 + 0; next }
-    /^tasks\[[0-9]+\]\{id,state,/ { rows = 1; table = 1; next }
-    rows && /^  [^ ]/ { n++; split(substr($0, 3), f, ","); if (f[2] == "queued" || f[2] == "in_flight") ids = ids f[1] "\n"; next }
+    /^tasks\[[0-9]+\]\{id,state,/ { size = substr($0, 7); sub(/\].*/, "", size); size += 0; rows = 1; table = 1; next }
+    rows && /^  / {
+      n++
+      split(substr($0, 3), f, ",")
+      if (f[1] !~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/ || f[2] !~ /^(queued|in_flight|done)$/) bad = 1
+      if (f[2] == "queued" || f[2] == "in_flight") ids = ids f[1] "\n"
+      next
+    }
     { rows = 0 }
     END {
-      if (count == "" || (count > 0 && !table) || n != count) exit 1
+      if (bad || count == "" || (count > 0 && (!table || size != count)) || n != count) exit 1
       printf "%s", ids
     }'
 }
