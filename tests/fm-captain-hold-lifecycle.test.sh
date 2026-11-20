@@ -2570,6 +2570,17 @@ test_defer_batch_moves_tagged_calls_together() {
   run_fm_tasks_axi "$home" due office-b - >/dev/null || fail "could not clear office-b's due date"
   assert_equals - "$(run_fm_tasks_axi "$home" due office-b)" "clearing the due date let his quoted Due: line become the row's"
   assert_equals office "$(run_fm_tasks_axi "$home" batch office-b)" "changing the due date moved the batch tag"
+  # A deferral keeps a cleared field cleared while a quoted line of its shape stays in the body.
+  tasks_in "$home" add quoted-call "Quoted fields" --kind captain --repo sample >/dev/null || fail "could not add quoted-call"
+  tasks_in "$home" update quoted-call --body "$(printf 'His mail quoted:\nDue: 2099-01-01\nBatch: place:quoted\n\nDue: -\nBatch: -')" >/dev/null \
+    || fail "could not give quoted-call its body"
+  FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" hold quoted-call --reason "pick a day" --kind reversible >/dev/null \
+    || fail "could not hold quoted-call"
+  printf 'Arjun 2026-07-14: later\n' > "$home/quoted.txt"
+  FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" defer quoted-call --until 2026-07-30 \
+    --decision-file "$home/quoted.txt" >/dev/null || fail "deferring quoted-call failed"
+  assert_equals - "$(run_fm_tasks_axi "$home" due quoted-call)" "a deferral revived a quoted Due: line as the row's date"
+  assert_equals - "$(run_fm_tasks_axi "$home" batch quoted-call)" "a deferral revived a quoted Batch: line as the row's tag"
   if out=$(run_captain "$home" defer-batch office --until 2026-07-18 2>&1); then
     fail "defer-batch ran without the captain's words: $out"
   fi

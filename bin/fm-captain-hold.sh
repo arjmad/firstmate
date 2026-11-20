@@ -1486,8 +1486,7 @@ command_hold() {
   # Ideas and noticed items group in the Monday triage instead, and the
   # wrapper's filing hold of a row he must take himself has no filer to tell.
   # A call whose back-on date passed reads unheld but is still his call.
-  if [ "$preserve_hold_set" = 0 ] && [ "$existing_hold_kind" != captain ] \
-    && [ -z "$recorded_batch" ] && [ "$options_given" = 0 ] \
+  if [ "$existing_hold_kind" != captain ] && [ -z "$recorded_batch" ] && [ "$options_given" = 0 ] \
     && [ "${FM_CAPTAIN_HOLD_IF_UNHELD_CAPTAIN_ROW:-0}" != 1 ] \
     && ! printf '%s\n' "$show" | grep -Eq '^  kind: (idea|noticed)$'; then
     printf 'fm-captain-hold: %s files as a call that takes his own hands; if answering it takes a board or one place, tag it with --batch board:<task-id> or --batch place:<name> so it shows with its group\n' "$id" >&2
@@ -1919,7 +1918,8 @@ deferral_body() {  # <content> <block-or-empty> <replaced-entries> <owner-or-emp
     if printf '%s\n' "$body" | grep -Eq "$(fm_backlog_row_field_pattern "$field")"; then
       body=$(fm_backlog_row_field_body_without "$field" "$body")
     fi
-    if printf '%s\n' "$block" | grep -Eq "$(fm_backlog_row_field_pattern "$field")"; then
+    # A field the row lacks is written `-` while any line of its shape stays.
+    if printf '%s\n%s\n' "$body" "$block" | grep -Eq "$(fm_backlog_row_field_pattern "$field")"; then
       case "$field" in due) due=${due:--} ;; batch) batch=${batch:--} ;; esac
     fi
   done

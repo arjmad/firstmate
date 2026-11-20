@@ -47,7 +47,8 @@ A missed-reply escalation includes the complete first sighting path and line num
 
 A secondmate hands every idea and every captain call to the main home, by a fleet-handoff notice or a parent-channel line, and never keeps one held in its own backlog (Arjun, 2026-11-20, deep-audit item a7-25).
 The main home's Monday idea sweep and its answer and defer tools work only the main home's backlog, so a call or idea held only in a mate home is missed by the sweep and cannot be answered there, even where a bearings board shows it.
-A hold that `bin/fm-captain-hold.sh` writes in a mate home is still published by the row above, so nothing is lost before the hand-off; the main home then holds the call, and the mate does not keep a second copy.
+Where the mate's own machinery needs a local record - a child's attested inventory or teardown gate registers its open call in the mate backlog ([captain-hold lifecycle](captain-hold-lifecycle.md)) - `bin/fm-captain-hold.sh` publishes that hold by the row above.
+That local row is only the gate's record: the main home holds the call for the captain, and the mate resolves its row when the main home relays his answer.
 
 ## What is deliberately not built
 
