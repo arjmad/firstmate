@@ -271,7 +271,8 @@ test_wrapper_holds_captain_owned_captain_rows() {
   wrapper_from_code "$dir" add rk-kindless "Held with no kind" --kind captain --owner arjun >/dev/null \
     || fail "re-adding a kindless hold failed"
   assert_contains "$(wrapper_from_code "$dir" show rk-kindless --full)" "waits on the bank" "a kindless hold was replaced"
-  wrapper_from_code "$dir" add rk-help "Help read" --kind captain --owner arjun --help >/dev/null 2>&1 || true
+  wrapper_from_code "$dir" add rk-help "Help read" --kind captain --owner arjun --help >/dev/null 2>&1 \
+    || fail "a help read of add failed"
   assert_not_contains "$(cat "$dir/home/data/backlog.md")" "rk-help" "a help read filed or held a row"
   wrapper_from_code "$dir" "done" rk-printer >/dev/null || fail "could not close rk-printer"
   wrapper_from_code "$dir" add rk-printer "Repeated: printer toner" --kind captain --owner arjun >/dev/null \
