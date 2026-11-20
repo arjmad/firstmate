@@ -725,12 +725,13 @@ test_due_reports_a_landed_head_once_no_task_works_on_firstmate() {
   assert_contains "$out" "due $target firstmate self-update due: the code root runs ${head:0:8}, behind projects/fm origin/main at ${target:0:8}" \
     "a landed head the code root lacks is due"
   assert_contains "$out" "run /updatefirstmate" "the due line names the step"
-  assert_contains "$(run_due "$w" --queue)" "queued $target " "the first queued sighting queues a wake"
+  assert_contains "$(run_due "$w" --queue)" "due-queued $target " "the first queued sighting queues a wake"
   grep "$(printf '\tcheck\tself-update-due-%s\t' "$target")" "$w/home/state/.wake-queue" >/dev/null \
     || fail "the due head was not queued durably"
   assert_contains "$(run_due "$w" --queue)" "due $target " "a head queued within the repeat interval is not queued again"
-  printf '%s 1\n' "$target" > "$w/home/state/.self-update-due"
-  assert_contains "$(run_due "$w" --queue)" "queued $target " "a head still due after the repeat interval is queued again"
+  printf '%s 1 due 0\n' "$target" > "$w/home/state/.self-update-due"
+  assert_contains "$(run_due "$w" --queue)" "due-queued $target " "a head still due after the repeat interval is queued again"
+  rm "$w/home/state/.self-update-due"
 
   printf 'project=%s\nkind=ship\n' "$w/home/projects/fm" > "$w/home/state/t1.meta"
   out=$(run_due "$w")
@@ -740,10 +741,18 @@ test_due_reports_a_landed_head_once_no_task_works_on_firstmate() {
   assert_contains "$(run_due "$w")" "held $target " "a companion firstmate task holds the update"
   printf 'project=%s\nkind=ship\n' "$w/home/projects/fm" > "$w/home/state/t1.meta"
   assert_contains "$(run_due "$w" --queue)" "held $target " "a held head is only recorded when first seen"
-  printf '%s 1\n' "$target" > "$w/home/state/.self-update-due"
+  rm "$w/home/state/t1.meta"
+  assert_contains "$(run_due "$w" --queue)" "due-queued $target " "a head first held is queued once its task ends"
+  printf 'project=%s\nkind=ship\n' "$w/home/projects/fm" > "$w/home/state/t1.meta"
+  printf '%s 0 none 1\n' "0000000000000000000000000000000000000000" > "$w/home/state/.self-update-due"
   out=$(run_due "$w" --queue)
-  assert_contains "$out" "queued $target " "a head held past the repeat interval is queued"
+  assert_contains "$out" "held-queued $target " "a hold older than the repeat interval is queued, even across new heads"
   assert_contains "$out" "check whether that task is still live" "the held wake asks whether the task is live"
+  grep "$(printf '\tcheck\tself-update-held-%s\t' "$target")" "$w/home/state/.wake-queue" >/dev/null \
+    || fail "the stale hold was not queued durably"
+  assert_contains "$(run_due "$w" --queue)" "held $target " "a stale hold queued within the repeat interval is not queued again"
+  rm "$w/home/state/t1.meta"
+  assert_contains "$(run_due "$w" --queue)" "due-queued $target " "a head queued as held is queued again as due once its task ends"
   rm "$w/home/state/.self-update-due"
   printf 'project=%s\n' "$w/home/projects/unrelated" > "$w/home/state/t1.meta"
   assert_contains "$(run_due "$w")" "due $target " "a task on another project does not hold the update"

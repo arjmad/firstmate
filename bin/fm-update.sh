@@ -106,11 +106,11 @@
 # `--due --queue` also makes a due head durable, for the watcher and teardown:
 # the first time it sees that head, and again once FM_SELF_UPDATE_DUE_REPEAT
 # seconds (default 86400) pass while it stays due, it queues one `check:` wake
-# keyed self-update-due-<sha>, records "<sha> <epoch>" in
-# $STATE/.self-update-due, and prints `queued` in place of `due`. A held head
-# is recorded when first seen and queued only once it stays held that long,
-# so a stale task record cannot hide it for good. A current code root removes
-# that record.
+# keyed self-update-due-<sha> and prints `due-queued` in place of `due`. A
+# held head is queued, as `held-queued` keyed self-update-held-<sha>, only once
+# heads have stayed held that long, so a stale task record cannot hide them
+# for good. due_queue owns the record in $STATE/.self-update-due, which a
+# current code root removes.
 #
 # FM_SELF_UPDATE_DUE_ROOT replaces the code root for --due only, so the watcher
 # and teardown suites can point it at a clean fixture checkout.
@@ -267,8 +267,15 @@ due_check() {
 }
 
 # due_queue <due-check line> - the --queue half: dedupe, queue, record.
+# $STATE/.self-update-due holds "<sha> <queued-epoch> <queued-kind> <held-since>":
+# the head last seen, when and as what (due, held, or none) it was last queued,
+# and since when some head has been held. A due head is queued unless it was
+# queued as due within the repeat interval, so a head first held is queued
+# once its task ends. A held head is queued only once heads have been held for
+# the repeat interval, a clock new heads do not restart.
 due_queue() {
-  local line=$1 marker="$STATE/.self-update-due" verdict target text raised='' at=0 now repeat
+  local line=$1 marker="$STATE/.self-update-due" verdict target text now repeat
+  local raised='' at=0 kind=none since=0 key
   if [ -z "$line" ]; then
     rm -f "$marker"
     return 0
@@ -285,19 +292,32 @@ EOF
     # never both queue one head.
     fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return 1
     now=$(date +%s)
-    [ ! -f "$marker" ] || read -r raised at < "$marker" || true
+    [ ! -f "$marker" ] || read -r raised at kind since < "$marker" || true
     case "$at" in ''|*[!0-9]*) at=0 ;; esac
-    if [ "$verdict" = held ] && [ "$raised" != "$target" ]; then
-      printf '%s %s\n' "$target" "$now" > "$marker"
-    elif [ "$raised" != "$target" ] || [ $((now - at)) -ge "$repeat" ]; then
-      [ "$verdict" = due ] || text="$text; it has waited at least ${repeat}s, so check whether that task is still live"
-      if ! fm_wake_append_locked check "self-update-due-$target" "check: $text"; then
+    case "$since" in ''|*[!0-9]*) since=0 ;; esac
+    case "$kind" in due|held) ;; *) kind=none ;; esac
+    [ "$raised" = "$target" ] || { at=0 kind=none; }
+    if [ "$verdict" = due ]; then
+      since=0
+      if [ "$kind" != due ] || [ $((now - at)) -ge "$repeat" ]; then
+        at=$now kind=due key="self-update-due-$target"
+      fi
+    else
+      [ "$since" -gt 0 ] || since=$now
+      if [ $((now - since)) -ge "$repeat" ] \
+        && { [ "$kind" != held ] || [ $((now - at)) -ge "$repeat" ]; }; then
+        text="$text; it has waited at least ${repeat}s, so check whether that task is still live"
+        at=$now kind=held key="self-update-held-$target"
+      fi
+    fi
+    if [ -n "${key:-}" ]; then
+      if ! fm_wake_append_locked check "$key" "check: $text"; then
         fm_lock_release "$FM_WAKE_QUEUE_LOCK"
         return 1
       fi
-      printf '%s %s\n' "$target" "$now" > "$marker"
-      verdict=queued
+      verdict="$verdict-queued"
     fi
+    printf '%s %s %s %s\n' "$target" "$at" "$kind" "$since" > "$marker"
     fm_lock_release "$FM_WAKE_QUEUE_LOCK"
   fi
   printf '%s %s %s\n' "$verdict" "$target" "$text"

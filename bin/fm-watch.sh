@@ -3994,7 +3994,7 @@ fleet_sync_tick() {
 # code root is behind a landed firstmate head. It wakes when that check queued
 # a row, and once for a due head a teardown queued first, which
 # $STATE/.self-update-due-woke records; a held head (a task still works on
-# firstmate) waits silently.
+# firstmate) waits silently until --queue queues it as stale.
 SELF_UPDATE_DUE_INTERVAL=${FM_SELF_UPDATE_DUE_INTERVAL:-900}
 case "$SELF_UPDATE_DUE_INTERVAL" in off) SELF_UPDATE_DUE_INTERVAL=0 ;; ''|*[!0-9]*) SELF_UPDATE_DUE_INTERVAL=900 ;; esac
 self_update_due_tick() {
@@ -4011,7 +4011,8 @@ self_update_due_tick() {
 $out
 EOF
   case "$verdict" in
-    queued) ;;
+    held-queued) wake "check: $text" ;;
+    due-queued) ;;
     due) [ "$(cat "$woke" 2>/dev/null)" != "$target" ] || return 0 ;;
     *) return 0 ;;
   esac

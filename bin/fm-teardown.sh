@@ -5004,7 +5004,7 @@ if [ "$KIND" != secondmate ] && [ -d "$STATE" ]; then
   TEARDOWN_DUE=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-update.sh" --due --queue 2>/dev/null) \
     || TEARDOWN_DUE=
   case "$TEARDOWN_DUE" in
-    due\ * | queued\ *) printf 'self-update-due: %s\n' "${TEARDOWN_DUE#* * }" ;;
+    due\ * | due-queued\ *) printf 'self-update-due: %s\n' "${TEARDOWN_DUE#* * }" ;;
   esac
 fi
 [ "$TEARDOWN_POOL_SLOT_LOST" = 0 ] || exit "$TEARDOWN_LOST_SLOT_EXIT"

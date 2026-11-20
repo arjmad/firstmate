@@ -1,6 +1,6 @@
 ---
 name: ship-landing
-description: Load when a ship reports a PR or ready branch, when deciding or monitoring landing, and before task cleanup.
+description: Load when a ship reports a PR or ready branch, when deciding or monitoring landing, before task cleanup, and on a `check: firstmate self-update due:` wake or a `self-update-due:` teardown line.
 user-invocable: false
 metadata:
   internal: true
