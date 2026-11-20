@@ -3994,7 +3994,8 @@ fleet_sync_tick() {
 # FM_BACKLOG_OVERDUE_INTERVAL seconds (default 3600; 0 or off disables) the
 # watcher starts `fm-backlog-overdue.sh scan` detached, so a slow backlog
 # backend never stalls the loop. The scan queues one durable `check:` row per
-# newly overdue item itself and its `overdue <id>` lines land in
+# newly overdue item, and again weekly while it stays overdue, itself, and its
+# `overdue <id>` lines land in
 # state/backlog-overdue-woke; the next tick claims that file and wakes once.
 BACKLOG_OVERDUE_INTERVAL=${FM_BACKLOG_OVERDUE_INTERVAL:-3600}
 case "$BACKLOG_OVERDUE_INTERVAL" in off) BACKLOG_OVERDUE_INTERVAL=0 ;; ''|*[!0-9]*) BACKLOG_OVERDUE_INTERVAL=3600 ;; esac
