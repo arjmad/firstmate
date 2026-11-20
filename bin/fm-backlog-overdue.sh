@@ -60,7 +60,14 @@ MARKERS="$STATE/backlog-overdue"
 GRACE=${FM_BACKLOG_OVERDUE_GRACE_SECS:-43200}
 case "$GRACE" in ''|*[!0-9]*) GRACE=43200 ;; esac
 REFIRE=${FM_BACKLOG_OVERDUE_REFIRE_SECS:-604800}
-case "$REFIRE" in ''|*[!0-9]*) REFIRE=604800 ;; esac
+case "$REFIRE" in ""|*[!0-9]*) REFIRE=604800 ;; *) REFIRE=$((10#$REFIRE)) ;; esac
+# The repeat wake names its own cadence, so an overridden interval reads true.
+if [ "$REFIRE" = 604800 ]; then REFIRE_WORDS=weekly
+elif [ "$REFIRE" = 86400 ]; then REFIRE_WORDS=daily
+elif [ $((REFIRE % 86400)) -eq 0 ]; then REFIRE_WORDS="every $((REFIRE / 86400)) days"
+elif [ $((REFIRE % 3600)) -eq 0 ]; then REFIRE_WORDS="every $((REFIRE / 3600))h"
+else REFIRE_WORDS="every ${REFIRE}s"
+fi
 
 usage() {
   awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
@@ -162,7 +169,7 @@ cmd_scan() {
       fi
       case "$fired_at" in ''|*[!0-9]*) fired_at=0 ;; esac
       [ $((now - fired_at)) -ge "$REFIRE" ] || continue
-      again='; woken again, weekly until it is dispatched, re-dated, answered or closed'
+      again="; woken again, $REFIRE_WORDS until it is dispatched, re-dated, answered or closed"
     fi
     hours=$((age / 3600))
     payload="check: backlog $id overdue: its date gate $until opened ${hours}h ago and it is still queued, not dispatched or answered$again - ${title:0:120}"

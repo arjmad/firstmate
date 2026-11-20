@@ -132,7 +132,7 @@ Everything else under `data/` follows one retention rule once its task has been 
 - Per-task steering-inbox records under `state/<id>.inbox/` (`bin/fm-task-inbox-lib.sh`).
 - Parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
 - Live-checkout post-update and capture records under `state/live-checkouts/`, and the scheduled sync's log, pending `fleet-sync-stuck` lines, and surfaced set (`bin/fm-fleet-sync.sh`).
-- Per-gate overdue markers (gate date and last wake time) under `state/backlog-overdue/`, pending `backlog-overdue-woke` lines, and the `.last-backlog-overdue` cadence marker of the watcher's overdue backlog scan (`bin/fm-backlog-overdue.sh`).
+- Per-gate overdue markers under `state/backlog-overdue/` (the gate date, the time the re-fire week starts - the first scan after the wake was handled - and a `queued` flag while the wake waits), pending `backlog-overdue-woke` lines, and the `.last-backlog-overdue` cadence marker of the watcher's overdue backlog scan (`bin/fm-backlog-overdue.sh`).
 - The log of captain-waived code reviews, `state/code-review-waivers.log` (`bin/fm-pr-merge.sh`).
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.

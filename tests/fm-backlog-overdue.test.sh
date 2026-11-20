@@ -141,6 +141,22 @@ test_dispatch_or_answer_clears_and_a_new_lapse_wakes_again() {
   pass "a dispatch or answer clears the overdue mark, and a later lapse wakes once more"
 }
 
+# An overridden interval names its own cadence in the repeat wake.
+test_overridden_interval_names_its_cadence() {
+  local home out row
+  home=$(new_home daily)
+  add_dated "$home" stalled 'Stalled dated job' 2026-10-24
+  out=$(FM_BACKLOG_OVERDUE_REFIRE_SECS=086400 scan_at "$home" $((GATE_EPOCH + 13 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue stalled" "the first lapse was not reported"
+  ack_all "$home"
+  out=$(FM_BACKLOG_OVERDUE_REFIRE_SECS=086400 scan_at "$home" $((GATE_EPOCH + 14 * HOUR))) || fail "scan failed: $out"
+  out=$(FM_BACKLOG_OVERDUE_REFIRE_SECS=086400 scan_at "$home" $((GATE_EPOCH + 38 * HOUR))) || fail "scan failed: $out"
+  assert_equals "$out" "overdue stalled" "a row still overdue a day after its handled wake did not wake again"
+  row=$(grep "$(printf '\tbacklog-overdue:stalled\t')" "$home/state/.wake-queue")
+  assert_contains "$row" "woken again, daily until it is dispatched" "the repeat wake did not name the overridden cadence"
+  pass "an overridden re-fire interval, even zero-padded, names its own cadence"
+}
+
 test_still_overdue_item_wakes_again_weekly() {
   local home out row day=$((24 * HOUR))
   home=$(new_home weekly)
@@ -272,6 +288,7 @@ test_grace_runs_from_local_midnight
 test_waiting_or_dispatched_items_stay_quiet
 test_dispatch_or_answer_clears_and_a_new_lapse_wakes_again
 test_still_overdue_item_wakes_again_weekly
+test_overridden_interval_names_its_cadence
 test_refire_clock_runs_from_the_handled_wake
 test_date_only_marker_wakes_again_once
 test_still_queued_key_is_not_duplicated
