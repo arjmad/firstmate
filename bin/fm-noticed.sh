@@ -419,13 +419,13 @@ open_row_ids() {
 
 # Rewrite the unseen list as `unseen` describes; call under lock_state.
 tidy_unseen() {
-  local open='' prune=1 tmp
+  local open_ids='' prune_ok=1 tmp
   [ -s "$UNSEEN" ] || return 0
   if grep -q "^[^$TAB]*${TAB}noticed$TAB" "$UNSEEN"; then
-    open=$(open_row_ids) || prune=0
+    open_ids=$(open_row_ids) || prune_ok=0
   fi
   tmp=$(mktemp "$UNSEEN.XXXXXX") || return 1
-  if OPEN_IDS="$open" awk -v prune="$prune" -F "$TAB" '
+  if OPEN_IDS="$open_ids" awk -v prune="$prune_ok" -F "$TAB" '
     BEGIN {
       POINTER = "^\\.\\.\\. \\(truncated, [0-9]+ chars total - use [^)]*to see complete text\\)"
       n = split(ENVIRON["OPEN_IDS"], ids, "\n"); for (i = 1; i <= n; i++) if (ids[i] != "") open[ids[i]] = 1
