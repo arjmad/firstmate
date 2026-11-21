@@ -99,6 +99,10 @@
 # for the common case where there is no remote at all.
 # Safety is proved again after task processes are reaped, before backlog-close
 # publication, branch deletion, or worktree return.
+# Branch deletion drops the branch the worktree has checked out, and also the
+# task's recorded ship branch (meta branch=) when the worktree left it, but that
+# one only when pr_is_merged proves the task's merged PR head holds its tip and
+# no worktree has it checked out (teardown_drop_recorded_branch).
 # Scout tasks (kind=scout in meta) carve out of that check: their worktree is
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Teardown proceeds only once the report exists and the shared
@@ -1879,9 +1883,9 @@ patch_id_for_commit() {
     | awk 'NR == 1 { print $1 }'
 }
 
-unpushed_patches_are_in_pr_head() {
-  local pr_head=$1 current base pr_patch_ids commit patch_id unpushed
-  current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || return 1
+unpushed_patches_are_in_pr_head() {  # <pr-head> [<commit>]
+  local pr_head=$1 tested=${2:-HEAD} current base pr_patch_ids commit patch_id unpushed
+  current=$(git -C "$WT" rev-parse --verify "$tested^{commit}" 2>/dev/null) || return 1
   base=$(git -C "$WT" merge-base "$current" "$pr_head" 2>/dev/null) || return 1
   pr_patch_ids=$(
     git -C "$WT" log --format=%H "$base..$pr_head" -- 2>/dev/null \
@@ -1892,7 +1896,7 @@ unpushed_patches_are_in_pr_head() {
       | sort -u
   ) || return 1
   [ -n "$pr_patch_ids" ] || return 1
-  unpushed=$(git -C "$WT" log --format=%H HEAD --not --exclude='no-mistakes/*' --remotes -- 2>/dev/null) || return 1
+  unpushed=$(git -C "$WT" log --format=%H "$current" --not --exclude='no-mistakes/*' --remotes -- 2>/dev/null) || return 1
   [ -n "$unpushed" ] || return 1
   while IFS= read -r commit; do
     [ -n "$commit" ] || continue
@@ -1904,7 +1908,9 @@ $unpushed
 EOF
 }
 
-# Is the worktree's PR merged for local work contained in that PR? Resolves the
+# Is the worktree's PR merged for local work contained in that PR? The local
+# work is the worktree's HEAD, or <commit> when given (teardown's recorded-branch
+# cleanup asks about a branch tip the worktree no longer has checked out). Resolves the
 # PR from the recorded pr= URL first, then from the branch name, and asks the
 # forge for both the PR state and head: a recorded Forgejo URL is read through
 # tea (fm_pr_forgejo_read_record), a recorded GitLab merge request through glab
@@ -1921,8 +1927,8 @@ gitlab_mr_landing_opted_in() {
   [ -e "$CONFIG/park-on-review" ] || [ -e "$CONFIG/auto-land" ]
 }
 
-pr_is_merged() {
-  local branch=$1 target view state remainder head resolved_url current landed=0
+pr_is_merged() {  # <branch> [<commit>]
+  local branch=$1 tested=${2:-HEAD} target view state remainder head resolved_url current landed=0
   if [ -n "$PR_URL" ]; then
     target=$PR_URL
   else
@@ -1956,10 +1962,10 @@ pr_is_merged() {
   fi
   [ -n "$head" ] || return 1
   ensure_commit_object "$target" "$head" || return 1
-  current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || return 1
+  current=$(git -C "$WT" rev-parse --verify "$tested^{commit}" 2>/dev/null) || return 1
   if git -C "$WT" merge-base --is-ancestor "$current" "$head" 2>/dev/null; then
     landed=1
-  elif unpushed_patches_are_in_pr_head "$head"; then
+  elif unpushed_patches_are_in_pr_head "$head" "$current"; then
     landed=1
   fi
   [ "$landed" = 1 ] || return 1
@@ -4630,6 +4636,34 @@ if [ "$BACKEND" = t3code ]; then
     endpoint_close_refusal "$ID" t3code "$T" 0 || exit 1
   }
 fi
+# The task's recorded ship branch (meta branch=) when the worktree no longer
+# has it checked out - the worker detached or switched away - so the shared
+# clone does not keep it. pr_is_merged, the landed-work owner, must prove the
+# task's PR merged with the branch tip inside its head; a tip past that head,
+# a branch another worktree has checked out, or an unreadable answer keeps it
+# with a note. The delete names the proven tip, so a ref that moves meanwhile
+# survives. Args: the branch the block above already deleted, or HEAD.
+teardown_drop_recorded_branch() {  # <deleted-branch>
+  local deleted=$1 recorded tip worktrees
+  recorded=$(meta_value "$META" branch)
+  [ -n "$recorded" ] && [ "$recorded" != "$deleted" ] || return 0
+  tip=$(git -C "$WT" rev-parse --quiet --verify "refs/heads/$recorded^{commit}" 2>/dev/null) || return 0
+  if ! worktrees=$(git -C "$WT" worktree list --porcelain 2>/dev/null); then
+    echo "note: kept local branch $recorded: could not list the worktrees that may have it checked out" >&2
+    return 0
+  fi
+  if printf '%s\n' "$worktrees" | grep -qxF "branch refs/heads/$recorded"; then
+    echo "note: kept local branch $recorded: another worktree has it checked out" >&2
+    return 0
+  fi
+  if ! pr_is_merged "$recorded" "$tip"; then
+    echo "note: kept local branch $recorded: no merged PR of this task holds its tip $tip" >&2
+    return 0
+  fi
+  git -C "$WT" update-ref -d "refs/heads/$recorded" "$tip" >/dev/null 2>&1 \
+    || echo "note: kept local branch $recorded: it moved off $tip or could not be deleted" >&2
+}
+
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.
 # The whole block is the allocation half: branch deletion, hook-file removal
 # inside the worktree, the Orca worktree removal, and the Treehouse return. Under
@@ -4649,6 +4683,7 @@ elif [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
         git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
       fi
     fi
+    teardown_drop_recorded_branch "$branch"
     rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
       "$WT/.opencode/plugins/fm-busy-state.js" \
       "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
@@ -4668,6 +4703,7 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
       git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
     fi
   fi
+  teardown_drop_recorded_branch "$branch"
   # Remove our hook and environment files so a reused pool worktree cannot fire
   # signals for a dead task or hand a t3code env block or channel statement to
   # its next holder.
