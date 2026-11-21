@@ -692,8 +692,16 @@ test_nontext_keeps_linked_live_and_secondmate_folders() {
   printf -- '- mate-two\n' > "$home/data/secondmates.md"
   make_swept_task "$home" mate-two 40 status
   make_swept_task "$home" free-task 40 status
-  out=$(run_prune "$home" --nontext --apply)
+  # A logging tasks-axi shows how many reads the open rows cost.
+  local fakebin="$TMP_ROOT/nontext-skip/bin"
+  mkdir -p "$fakebin"
+  # shellcheck disable=SC2016 # the wrapper's own "$@" stays literal
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\nexec %q "$@"\n' "$fakebin/calls" "$(command -v tasks-axi)" > "$fakebin/tasks-axi"
+  chmod +x "$fakebin/tasks-axi"
+  out=$(PATH="$fakebin:$PATH" run_prune "$home" --nontext --apply)
   assert_contains "$out" "skipped 4 linked from an open backlog row" "each linked folder is counted: $out"
+  assert_no_grep 'show ' "$fakebin/calls" "a markdown backlog's open rows are read in one pass, with no show per row"
+  assert_grep 'list ' "$fakebin/calls" "the logging wrapper saw the run's reads"
   for t in linked-abs linked-rel linked-held linked-quoted 001 live-task mate-home mate-two; do
     assert_not_swept "$home" "$t" "a linked, live, or secondmate folder"
   done
@@ -708,11 +716,20 @@ test_nontext_unreadable_row_removes_nothing() {
   real=$(command -v tasks-axi)
   fakebin="$TMP_ROOT/nontext-unreadable/bin"
   mkdir -p "$fakebin"
-  # shellcheck disable=SC2016 # the wrapper's own "$@" and $1 stay literal
-  printf '#!/usr/bin/env bash\n[ "${1:-}" != show ] || exit 1\nexec %q "$@"\n' "$real" > "$fakebin/tasks-axi"
+  # The wrapper lists one more open row than the file holds, so the run must
+  # fall back to `show` for it, and that read fails.
+  cat > "$fakebin/tasks-axi" <<SH
+#!/usr/bin/env bash
+[ "\${1:-}" != show ] || exit 1
+case " \$* " in
+  *" list "*" --state "*) exec $(printf '%q' "$real") "\$@" ;;
+  *" list "*) $(printf '%q' "$real") "\$@" | awk '{ print } /^tasks\[/ { print "  ghost-row,queued,ship,x,Ghost" }'; exit "\${PIPESTATUS[0]}" ;;
+esac
+exec $(printf '%q' "$real") "\$@"
+SH
   chmod +x "$fakebin/tasks-axi"
   out=$(PATH="$fakebin:$PATH" run_prune "$home" --nontext --apply)
-  assert_contains "$out" "warning: data nontext retention skipped: open backlog row some-row could not be read" \
+  assert_contains "$out" "warning: data nontext retention skipped: open backlog row ghost-row could not be read" \
     "an unreadable open row is named: $out"
   assert_not_contains "$out" "freed:" "an unreadable open row stops the part"
   assert_not_swept "$home" old-task "a run whose open row could not be read"

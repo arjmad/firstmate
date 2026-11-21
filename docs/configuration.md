@@ -111,7 +111,8 @@ Reproducible scratch leaves a task's `data/<id>/` at teardown, deleted rather th
 - A checkout holding unlanded work is never deleted; teardown keeps it, names it with its reason, and files it once as a routine noticed row, `noticed-kept-checkout-<task>`, so it does not sit there unseen.
 - A task torn down before this rule, or whose checkout was pushed later, gets the same rule again through [task scratch retention](#task-scratch-retention-configdata-scratch-retention-days).
 
-Everything else under `data/` follows one retention rule once its task has been closed for more than 60 days:
+In a home that opts in to [task non-text retention](#task-non-text-retention-configdata-nontext-retention-days), a torn-down task's non-text files are instead deleted N days after teardown with no drive copy, under Arjun's [2026-11-21 ruling](fork-decisions/2026-11-21-task-text-kept-media-swept.md), and the binary rules below do not apply there.
+In every other home, everything else under `data/` follows one retention rule once its task has been closed for more than 60 days:
 
 - Text records stay in the home: the task's `report.md`, `notes.md`, and any brief or decisions text.
 - Binaries (images, PDFs, exports) move to the owning business area's shared drive folder, resolved by folder ID, never by name path.

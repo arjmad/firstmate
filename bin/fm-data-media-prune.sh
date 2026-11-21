@@ -172,8 +172,9 @@
 #     log is a fresh copy written at teardown, so its own age is the teardown
 #     time; a reused id's newer files keep the folder.
 #   - Linked: an open (any state but done) row whose id is the task, or whose
-#     `tasks-axi show --full` text names data/<task> by any path. A row that
-#     cannot be read stops the part, removing nothing.
+#     text names data/<task> by any path: its block in a markdown backlog,
+#     read in one pass, else its `tasks-axi show --full`. A row that cannot be
+#     read stops the part, removing nothing.
 # As with scratch, a secondmate's folder is skipped, and so is everything inside
 # a git checkout, as for media. Only regular files go, never symlinks or
 # directories, whose extension, in any case, is one of
@@ -414,6 +415,21 @@ if [ -n "$NONTEXT_DAYS" ]; then
   AXI_FILE_ARGS=()
   [ -z "$FM_BACKLOG_AXI_FILE" ] || AXI_FILE_ARGS=(--file "$FM_BACKLOG_AXI_FILE")
   : > "$WORK/linked"
+  # A markdown backlog is read once: the blocks of the rows tasks-axi listed
+  # as open. Only an open id with no block there costs its own `show`.
+  cp "$WORK/open-ids" "$WORK/unread-ids"
+  if [ -n "$FM_BACKLOG_AXI_FILE" ]; then
+    awk 'FILENAME == ARGV[1] { if ($0 != "") open[$0] = 1; next }
+      /^- \[.\] / { id = substr($0, 7); sub(/ .*/, "", id); inrow = (id in open)
+        if (inrow) print "@@" id; if (inrow) print; next }
+      inrow && ($0 == "" || $0 ~ /^[[:space:]]/) { print; next }
+      { inrow = 0 }' "$WORK/open-ids" "$FM_BACKLOG_AXI_FILE" > "$WORK/open-text" \
+      || nontext_off "the backlog file could not be read: $FM_BACKLOG_AXI_FILE"
+    grep -o 'data/[A-Za-z0-9._-][A-Za-z0-9._-]*' "$WORK/open-text" | sed 's|^data/||; s/\.*$//' >> "$WORK/linked"
+    sed -n 's/^@@//p' "$WORK/open-text" | sort -u > "$WORK/read-ids"
+    comm -23 "$WORK/open-ids" "$WORK/read-ids" > "$WORK/unread-ids"
+  fi
+  [ -n "$NONTEXT_DAYS" ] || : > "$WORK/unread-ids"
   while IFS= read -r id; do
     [ -n "$id" ] || continue
     if ! row=$(cd "$FM_BACKLOG_AXI_ROOT" 2>/dev/null \
@@ -424,7 +440,7 @@ if [ -n "$NONTEXT_DAYS" ]; then
     fi
     # A link may be relative or absolute, and prose may end it with a period.
     printf '%s\n' "$row" | grep -o 'data/[A-Za-z0-9._-][A-Za-z0-9._-]*' | sed 's|^data/||; s/\.*$//' >> "$WORK/linked"
-  done < "$WORK/open-ids"
+  done < "$WORK/unread-ids"
 fi
 if [ -n "$NONTEXT_DAYS" ]; then
   if ! done_out=$(FM_TASKS_AXI_TIMEOUT=${FM_TASKS_AXI_TIMEOUT:-30} fm_backlog_row_list "$DATA" --limit 1000000 --state "done" --fields closed 2>&1) \

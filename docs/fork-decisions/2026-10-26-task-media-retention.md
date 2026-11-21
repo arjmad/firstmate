@@ -2,6 +2,7 @@
 Decision: firstmate removes its own torn-down tasks' video, audio, and disk images under `data/<task>/` at the locked session start, opt-in per home through `config/data-media-retention-days`, and keeps reports, finals, git checkouts, and live tasks; nothing outside this home's `data/` is touched by it.
 Still images, PDFs, and exports are left to Arjun's 2026-10-21 helm ruling (backlog row `fm-data-retention`): a task closed more than 60 days moves them to the Ecomills Drive in approved batches, and nothing is deleted before it lands there.
 Firstmate chose this split so the rule honors both rulings.
+In a home that opts in to non-text retention, Arjun's [2026-11-21 ruling](2026-11-21-task-text-kept-media-swept.md) supersedes that Drive clause: still images and PDFs are deleted 30 days after teardown, with no Drive copy.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
