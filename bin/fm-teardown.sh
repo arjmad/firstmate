@@ -4193,6 +4193,48 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] &&
   ORCA_PATH_MATCH_VERIFIED=1
 fi
 
+# The task's recorded ship branch (meta branch=) when the worktree no longer
+# has it checked out - the worker detached or switched away - so the shared
+# clone does not keep it. teardown_prove_recorded_branch runs in the safety
+# phase, where teardown reads the forge: pr_is_merged, the landed-work owner,
+# must prove the task's PR merged with the branch tip inside its head, and the
+# proven tip is kept. teardown_drop_recorded_branch then deletes the branch only
+# at that tip and only while no worktree has it checked out; a tip past that
+# head, no proof (a --force run proves nothing), or a moved ref keeps it with a
+# note.
+RECORDED_BRANCH=
+RECORDED_BRANCH_TIP=
+teardown_prove_recorded_branch() {
+  local recorded current tip
+  recorded=$(meta_value "$META" branch)
+  [ -n "$recorded" ] || return 0
+  current=$(git -C "$WT" symbolic-ref --quiet --short HEAD 2>/dev/null) || current=
+  [ "$recorded" != "$current" ] || return 0
+  tip=$(git -C "$WT" rev-parse --quiet --verify "refs/heads/$recorded^{commit}" 2>/dev/null) || return 0
+  RECORDED_BRANCH=$recorded
+  pr_is_merged "$recorded" "$tip" || return 0
+  RECORDED_BRANCH_TIP=$tip
+}
+
+teardown_drop_recorded_branch() {  # <deleted-branch>
+  local deleted=$1 recorded=$RECORDED_BRANCH tip=$RECORDED_BRANCH_TIP worktrees
+  [ -n "$recorded" ] && [ "$recorded" != "$deleted" ] || return 0
+  if [ -z "$tip" ]; then
+    echo "note: kept local branch $recorded: no merged PR of this task was proven to hold its tip" >&2
+    return 0
+  fi
+  if ! worktrees=$(git -C "$WT" worktree list --porcelain 2>/dev/null); then
+    echo "note: kept local branch $recorded: could not list the worktrees that may have it checked out" >&2
+    return 0
+  fi
+  if printf '%s\n' "$worktrees" | grep -qxF "branch refs/heads/$recorded"; then
+    echo "note: kept local branch $recorded: another worktree has it checked out" >&2
+    return 0
+  fi
+  git -C "$WT" update-ref -d "refs/heads/$recorded" "$tip" >/dev/null 2>&1 \
+    || echo "note: kept local branch $recorded: it moved off $tip or could not be deleted" >&2
+}
+
 if teardown_owns_worktree && [ -d "$WT" ] && [ "$FORCE" != "--force" ] && [ "$ALLOC_RECORDS_ONLY" != 1 ]; then
   if validate_worktree_teardown_safety; then
     :
@@ -4205,6 +4247,7 @@ if teardown_owns_worktree && [ -d "$WT" ] && [ "$FORCE" != "--force" ] && [ "$AL
       exit 1
     fi
   fi
+  [ "$KIND" = secondmate ] || teardown_prove_recorded_branch
 fi
 
 # Companion worktrees (see the header): ownership and the landed-work refusal
@@ -4636,34 +4679,6 @@ if [ "$BACKEND" = t3code ]; then
     endpoint_close_refusal "$ID" t3code "$T" 0 || exit 1
   }
 fi
-# The task's recorded ship branch (meta branch=) when the worktree no longer
-# has it checked out - the worker detached or switched away - so the shared
-# clone does not keep it. pr_is_merged, the landed-work owner, must prove the
-# task's PR merged with the branch tip inside its head; a tip past that head,
-# a branch another worktree has checked out, or an unreadable answer keeps it
-# with a note. The delete names the proven tip, so a ref that moves meanwhile
-# survives. Args: the branch the block above already deleted, or HEAD.
-teardown_drop_recorded_branch() {  # <deleted-branch>
-  local deleted=$1 recorded tip worktrees
-  recorded=$(meta_value "$META" branch)
-  [ -n "$recorded" ] && [ "$recorded" != "$deleted" ] || return 0
-  tip=$(git -C "$WT" rev-parse --quiet --verify "refs/heads/$recorded^{commit}" 2>/dev/null) || return 0
-  if ! worktrees=$(git -C "$WT" worktree list --porcelain 2>/dev/null); then
-    echo "note: kept local branch $recorded: could not list the worktrees that may have it checked out" >&2
-    return 0
-  fi
-  if printf '%s\n' "$worktrees" | grep -qxF "branch refs/heads/$recorded"; then
-    echo "note: kept local branch $recorded: another worktree has it checked out" >&2
-    return 0
-  fi
-  if ! pr_is_merged "$recorded" "$tip"; then
-    echo "note: kept local branch $recorded: no merged PR of this task holds its tip $tip" >&2
-    return 0
-  fi
-  git -C "$WT" update-ref -d "refs/heads/$recorded" "$tip" >/dev/null 2>&1 \
-    || echo "note: kept local branch $recorded: it moved off $tip or could not be deleted" >&2
-}
-
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.
 # The whole block is the allocation half: branch deletion, hook-file removal
 # inside the worktree, the Orca worktree removal, and the Treehouse return. Under
