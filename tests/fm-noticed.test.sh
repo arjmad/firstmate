@@ -483,7 +483,7 @@ SH
 }
 
 test_a_secondmate_hands_ideas_and_calls_to_the_main_home() {
-  local home parent channel out rc span needs
+  local home parent channel out rc span pad
   home=$(make_home mate)
   parent="$TMP_ROOT/mate-parent"
   mkdir -p "$parent/state"
