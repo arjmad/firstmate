@@ -99,7 +99,11 @@
 # backup namespace.
 # The two PR-based blocks require a non-draft pull request before the done
 # report, read back from the forge; a lane that deliberately holds a draft
-# declares a paused wait instead. bin/fm-pr-check.sh refuses to arm merge
+# declares a paused wait instead. A direct-PR worker whose repository's own
+# guidance opens PRs as drafts until reviewed reviews the draft and marks it
+# ready before its checks (fork patch, docs/fork-decisions 2026-11-21
+# draft-until-ready); the repository keeps a passing required check off a
+# draft head, so the checks wait below needs no draft case. bin/fm-pr-check.sh refuses to arm merge
 # monitoring on a draft through the same reading bin/fm-pr-merge.sh uses.
 # On those two modes outside Gerrit and Forgejo, fm_dod_code_review_block then
 # has the worker give a code-changing GitHub PR its code review before the done
@@ -590,10 +594,10 @@ fm_dod_checks_green_block() {
   cat <<EOF
 On a GitHub PR, then wait for its checks at your pushed HEAD: run \`gh-axi pr checks <number> --watch --fail-fast\`, and while it waits append \`gate-wait [at=<epoch>]: checks on PR {url}\` instead of reporting done.
 A failing check is yours to fix: append \`working [at=<epoch>]: fixing {check}\`, push the fix, and wait again.
-A required check that has never reported is missing from that list rather than pending, so also read \`gh-axi pr view <number>\`: a \`merge_state\` of blocked while every listed check is green means a required check has not posted.
+A required check that has never reported is missing from that list rather than pending, so also read \`gh-axi pr view <number>\`: a \`merge_state\` of blocked while every listed check is green means a required check has not posted, so watch again until it posts and passes.
 When that check's Actions run, found with \`gh-axi run list --branch <branch>\`, stays \`queued\` with no jobs in \`gh-axi run view <id>\` for over 10 minutes, as after a GitHub Actions outage, GitHub refuses to cancel or rerun it: run \`gh-axi pr close <number>\` then \`gh-axi pr reopen <number>\`, which starts a fresh \`pull_request\` run at the same head, and wait again.
 A repository with no checks at all reports none, which leaves nothing to wait for.
-A required \`fleet-gate\` or \`gate\` status posts only from a full \`./check.sh\` run on a clean tree whose HEAD is already pushed: run it after your last push, a rebase or force-push included because the new head has no status yet, never as a single-suite run, and with no untracked files left in the tree - the \`findings.json\` that \`/code-review\` writes counts.
+A required \`fleet-gate\` or \`gate\` status posts only from a full \`./check.sh\` run on a clean tree whose HEAD is already pushed: run it after your last push (on a PR held as a draft until reviewed, whose CI runs the suite when it is marked ready, the local run is optional and belongs before you mark it ready), a rebase or force-push included because the new head has no status yet, never as a single-suite run, and with no untracked files left in the tree - the \`findings.json\` that \`/code-review\` writes counts.
 EOF
 }
 
@@ -781,6 +785,7 @@ Ship branch: $branch
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
 When it is implemented and committed, run the local checks the repository's own guidance names for your change, then push your branch and open a PR with \`$forge_cli\` that is ready for review, not a draft$pr_base.
+Only where the repository's own guidance has its PRs opened as drafts until their reviews are done, open it as a draft instead, do your reviews on the draft, and mark it ready after your last review push and after any local full suite that guidance names, before you wait for its checks.
 Write the PR body with the \`matt-pr\` skill, around any lines the repository requires: a Summary, its Evidence, and a Merge Danger section with a \`**Door:** one-way\` or \`**Door:** two-way\` line and a \`**Blast Radius:**\` line; where that skill name does not resolve, write those same three sections yourself.
 Mark it a one-way door when the change cannot be walked back, such as destroyed data or a published commitment: a one-way PR waits for the captain's own word before it merges, under any merge posture.
 Before you report done, read the PR back from the forge and confirm it is not a draft $draft_check
