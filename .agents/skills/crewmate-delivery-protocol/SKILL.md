@@ -56,4 +56,4 @@ This step applies to a direct-PR worker on a GitHub PR, after the code review an
    That close keeps the branch, so never close this way with `bin/fm-pr-close.sh` or `--delete-branch`.
 5. A repository with no checks at all reports none, which leaves nothing to wait for.
 6. A required `fleet-gate` or `gate` status posts only from a full `./check.sh` run on a clean tree whose HEAD is already pushed.
-   Run it after your last push (on a PR held as a draft until reviewed, whose CI runs the suite when it is marked ready, the local run is optional and belongs before you mark it ready), a rebase or force-push included because the new head has no status yet, never as a single-suite run, and with no untracked files left in the tree - the `findings.json` that `/code-review` writes counts.
+   Run it after your last push (on a PR held as a draft until reviewed, whose CI runs the suite when it is marked ready, the local run is optional and belongs before you mark it ready), a rebase or force-push included because the new head has no status yet, never as a single-suite run, and with no untracked files left in the tree.

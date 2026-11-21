@@ -38,8 +38,15 @@ case "$1 $2" in
   "pr view") cat "$FM_TEST_DIR/view" ;;
   "pr close") : ;;
   "api --hostname")
-    [ "$3 $4" = "github.com user" ] || exit 1
-    echo firstmate-bot
+    case "$3 $4" in
+      "github.com user") echo firstmate-bot ;;
+      "github.com repos/example/repo") cat "$FM_TEST_DIR/default" 2>/dev/null || echo main ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  "pr list")
+    [ "$*" = "pr list --repo github.com/example/repo --state open --base fm/task-x1 --json number --jq length" ] || exit 1
+    cat "$FM_TEST_DIR/based" 2>/dev/null || echo 0
     ;;
   "auth git-credential") : ;;
   *) exit 1 ;;
@@ -102,7 +109,19 @@ test_refusals_close_but_keep_the_branch() {
   expect_code 0 "$RC" "collaborator: the close should succeed"
   assert_contains "$OUT" "kept: branch fm/task-x1: the pull request's author someone-else is not the signed-in account firstmate-bot" "collaborator: no kept line"
   ! deleted "$dir" || fail "collaborator: another author's branch was deleted"
-  pass "fm-pr-close keeps a fork's branch, a branch past the head, and another author's branch"
+
+  # A long-lived branch: the default branch, or another open PR's base.
+  dir=$(make_case default OPEN false firstmate-bot head)
+  printf 'fm/task-x1\n' > "$dir/default"
+  run_close "$dir" "$URL"
+  assert_contains "$OUT" "kept: branch fm/task-x1: it is the default branch of example/repo" "default: no kept line: $OUT"
+  ! deleted "$dir" || fail "default: the default branch was deleted"
+  dir=$(make_case based OPEN false firstmate-bot head)
+  printf '2\n' > "$dir/based"
+  run_close "$dir" "$URL"
+  assert_contains "$OUT" "kept: branch fm/task-x1: it is the base of 2 other open pull request(s)" "based: no kept line: $OUT"
+  ! deleted "$dir" || fail "based: another open PR's base branch was deleted"
+  pass "fm-pr-close keeps a fork's branch, a branch past the head, another author's branch, and a long-lived base branch"
 }
 
 test_closed_merged_and_foreign_urls() {

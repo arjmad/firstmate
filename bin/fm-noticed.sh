@@ -49,15 +49,14 @@
 #          through bin/fm-parent-channel-lib.sh as one
 #          `needs-decision [key=noticed-queue-<id>]: noticed-queue <kind> <id>
 #          [(call: <kind>)] [(now: ...)]: <title> - why: ... - from: ...` line
-#          with any repo and evidence fields, and no local row is kept; an open
-#          routine row of that id is closed with a note that it was handed up,
-#          and an open row already held for the captain, whose hold reached
-#          the main home on its own, matches locally instead.
+#          with any repo and evidence fields, and no local row is kept. An id
+#          with an open row in this home files locally as before, because that
+#          row tracks this home's own work; a --call there holds it, and
+#          bin/fm-captain-hold.sh publishes the hold to the main home.
 #          Evidence is cut to fit the channel's 1200-byte note, and an item
 #          whose other fields do not fit is refused (exit 2) before anything is
-#          sent. A channel that cannot be written, or a local row that cannot
-#          be closed after the hand-up, exits 1. Routine noticed items still
-#          file locally.
+#          sent. A channel that cannot be written exits 1. Routine noticed
+#          items still file locally.
 #          A noticed item is filed routine unless --call is given: firstmate
 #          fixes or drops it on its own, so the row is not held, its owner is
 #          the fleet, and it joins no unseen list until `close --fixed` or
@@ -254,25 +253,24 @@ append_body() {  # <id> <line>
 # needs-decision keyed noticed-queue-<id>, a key no backlog row carries,
 # holding every field the main home refiles it from; the main home closes it
 # with bin/fm-send.sh --resolve-key once filed. Returns 1 in a main home, or
-# for an open row already held here, which then file locally as before; exits
-# 1 when the channel cannot be written, so the item is never dropped silently.
+# when this home has an open row of the id, which then file locally as before;
+# exits 1 when the channel cannot be written, so the item is never dropped.
 hand_up_to_parent() {  # <id> <kind> <title> <why> <from> <repo> <evidence> <call> <now>
   local id=$1 key="noticed-queue-$1" rc=0 fields head room
   # A main home files locally, whatever the item's length.
   fm_parent_channel_home_id "$FM_HOME" >/dev/null || rc=$?
   [ "$rc" != 1 ] || return 1
   rc=0
-  # An open row already held for the captain published its own decision to the
-  # main home through bin/fm-captain-hold.sh, so it stays on the local path,
-  # which attaches the new evidence, rather than raising a second decision.
-  if show=$("$TASKS" show "$id" --full 2>/dev/null) && [ "$(shown_field "$show" state)" != "done" ] \
-    && [ "$(shown_field "$show" held)" = yes ]; then
+  # An open row here tracks work this home owns, such as its own kept
+  # checkouts, so it stays on the local path: the evidence attaches, and a
+  # --call holds it through bin/fm-captain-hold.sh, which publishes that hold
+  # to the main home, so the decision still goes up and the record stays here.
+  if show=$("$TASKS" show "$id" --full 2>/dev/null) && [ "$(shown_field "$show" state)" != "done" ]; then
     return 1
   fi
-  # An idea handed up before (or filed and closed here) is never re-asked, as
-  # in a main home; an open local row of it still goes up and closes below.
-  if [ "$2" = idea ] && grep -Fxq -- "$id" "$FILED" 2>/dev/null \
-    && ! { show=$("$TASKS" show "$id" --full 2>/dev/null) && [ "$(shown_field "$show" state)" != "done" ]; }; then
+  # An idea handed up before, or filed and closed here, is never re-asked, as
+  # in a main home.
+  if [ "$2" = idea ] && grep -Fxq -- "$id" "$FILED" 2>/dev/null; then
     printf 'skipped: %s (handed to the main home or answered earlier)\n' "$id"
     return 0
   fi
@@ -296,20 +294,11 @@ hand_up_to_parent() {  # <id> <kind> <title> <why> <from> <repo> <evidence> <cal
     "needs-decision [key=$key]: noticed-queue $(fm_parent_channel_clean_note "$fields")" "$key" || rc=$?
   case "$rc" in
     0)
-      # A routine row of this id filed here before is the main home's now, so
-      # close it rather than leave it for this home to fix on its own. An idea
-      # is recorded as filed, so a later sighting is skipped above; a noticed
-      # call that comes back is asked again, as a main home reopens it.
-      lock_state
-      [ "$2" != idea ] || grep -Fxq -- "$id" "$FILED" 2>/dev/null || printf '%s\n' "$id" >> "$FILED"
-      if show=$("$TASKS" show "$id" --full 2>/dev/null) && [ "$(shown_field "$show" state)" != "done" ]; then
-        if ! { append_body "$id" "Handed to the main home $TODAY on the parent channel (key $key); closed here." \
-          && "$TASKS" "done" "$id" >/dev/null; }; then
-          echo "fm-noticed: $id went to the main home, but its open row here could not be closed; close it with bin/fm-noticed.sh close $id --evidence \"handed to the main home as $key\"" >&2
-          printf 'handed-up: %s\n' "$id"
-          exit 1
-        fi
-        drop_unseen "$id"
+      # An idea is recorded as filed, so a later sighting is skipped above; a
+      # noticed call that comes back is asked again, as a main home reopens it.
+      if [ "$2" = idea ]; then
+        lock_state
+        grep -Fxq -- "$id" "$FILED" 2>/dev/null || printf '%s\n' "$id" >> "$FILED"
       fi
       printf 'handed-up: %s\n' "$id"
       return 0

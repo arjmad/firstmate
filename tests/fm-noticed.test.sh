@@ -563,12 +563,13 @@ test_a_secondmate_hands_ideas_and_calls_to_the_main_home() {
     || fail "a mate refused a routine item: $out"
   [ "$out" = "filed: noticed-flaky-test" ] || fail "a mate did not file its routine item locally: $out"
   ! grep -q 'flaky-test' "$channel" || fail "a routine item went to the parent channel"
-  # The same item seen again as a call goes up, and its routine row here closes.
+  # The same item seen again as a call: its open row tracks this home's own
+  # work, so it stays here and is held, and no second hand-up line is sent.
   out=$(noticed "$home" file noticed flaky-test --title "Flaky test" --why "it blocks merges" --from sm-task --call ruling) \
     || fail "a mate refused a --call for its routine item: $out"
-  [ "$out" = "handed-up: noticed-flaky-test" ] || fail "a routine item seen as a call was not handed up: $out"
-  assert_contains "$(tasks "$home" show noticed-flaky-test)" "state: done" \
-    "the routine row of a handed-up call stayed open for the mate to fix"
+  [ "$out" = "matched: noticed-flaky-test" ] || fail "a routine row seen as a call did not stay local: $out"
+  assert_contains "$(tasks "$home" show noticed-flaky-test)" "held: yes" "the routine row seen as a call was not held for the captain"
+  ! grep -q 'key=noticed-queue-noticed-flaky-test' "$channel" || fail "an open local row was handed up as well"
 
   rm "$home/.fm-secondmate-parent"
   set +e

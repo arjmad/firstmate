@@ -14,6 +14,8 @@
 #   - the head branch lives in the base repository, not a fork;
 #   - the pull request's author is the signed-in gh account, so the branch is
 #     firstmate's own rather than a collaborator's;
+#   - the branch is neither the repository's default branch nor the base of
+#     another open pull request, so a long-lived branch is never deleted;
 #   - the branch tip on GitHub is still the pull request's head commit, so no
 #     commit beyond that head is discarded: the delete is a git push with a
 #     lease on that head, which GitHub refuses for any other tip.
@@ -36,7 +38,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 
 usage() {
-  sed -n '2,/^set -eu$/s/^# \{0,1\}//p' "$0" | sed '$d'
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
 }
 
 url=
@@ -101,6 +103,13 @@ fm_pr_head_valid "$head" || keep "the pull request's head commit did not read ba
 [ "$cross" = false ] || keep "it lives in a fork, not in $repo"
 viewer=$(gh api --hostname "$FM_PR_HOST" user --jq .login 2>/dev/null) || keep "could not read the signed-in gh account"
 [ -n "$author" ] && [ "$author" = "$viewer" ] || keep "the pull request's author ${author:-unknown} is not the signed-in account ${viewer:-unknown}"
+# A long-lived branch firstmate opened a PR from (a release or develop branch)
+# is not a ship branch: keep the default branch and any other open PR's base.
+default=$(gh api --hostname "$FM_PR_HOST" "repos/$repo" --jq .default_branch 2>/dev/null) || keep "could not read the default branch of $repo"
+[ -n "$default" ] && [ "$branch" != "$default" ] || keep "it is the default branch of $repo"
+based=$(gh pr list --repo "$FM_PR_HOST/$repo" --state open --base "$branch" --json number --jq length 2>/dev/null) \
+  || keep "could not list the open pull requests based on it"
+[ "$based" = 0 ] || keep "it is the base of $based other open pull request(s)"
 # The delete is a push with a lease on the pull request's head, so GitHub
 # itself refuses it when the branch tip is anything else, even one pushed a
 # moment ago. The push runs from an empty scratch repository with gh's

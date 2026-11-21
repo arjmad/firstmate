@@ -600,7 +600,7 @@ fm_dod_checks_green_block() {
   protocol=$(fm_dod_delivery_protocol)
   cat <<EOF
 On a GitHub PR, then wait for its checks at your pushed HEAD with \`gh-axi pr checks <number> --watch --fail-fast\`, appending \`gate-wait [at=<epoch>]: checks on PR {url}\` while it waits instead of reporting done; a failing check is yours to fix: append \`working [at=<epoch>]: fixing {check}\`, push the fix, and wait again.
-Read \`$protocol\` "Checks" before that wait: it covers a required check that never reported (\`merge_state\`), an Actions run an outage stranded (\`gh-axi pr reopen <number>\`), and the required \`fleet-gate\` or \`gate\` status only a full \`./check.sh\` on a clean pushed tree posts, \`findings.json\` included.
+Read \`$protocol\` "Checks" before that wait: it covers a required check that never reported (\`merge_state\`), an Actions run an outage stranded (\`gh-axi pr reopen <number>\`), and the required \`fleet-gate\` or \`gate\` status only a full \`./check.sh\` on a clean pushed tree with no untracked files posts.
 EOF
 }
 

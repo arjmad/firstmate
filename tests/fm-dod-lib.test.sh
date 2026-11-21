@@ -825,7 +825,7 @@ test_direct_pr_dod_waits_for_checks_green() {
   assert_grep 'merge_state' "$out" "direct-PR DoD does not catch a required check that never reported"
   assert_grep 'gh-axi pr reopen <number>' "$out" "direct-PR DoD leaves a run an Actions outage stranded with no recovery"
   assert_grep 'fleet-gate' "$out" "direct-PR DoD does not name the fleet-gate trap"
-  assert_grep 'findings.json' "$out" "direct-PR DoD does not name the untracked review output"
+  assert_grep 'with no untracked files posts' "$out" "direct-PR DoD does not name the untracked-files trap"
   assert_grep 'working [at=<epoch>]: fixing {check}' "$out" "direct-PR DoD leaves a fixing worker declared as waiting"
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
   assert_grep 'for a PR outside GitHub, report `done [at=<epoch>]: PR {url}`' "$out" "direct-PR DoD holds a non-GitHub PR to the GitHub report"
