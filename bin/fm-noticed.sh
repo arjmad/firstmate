@@ -40,7 +40,23 @@
 #                              closed with adds ` (lifted its earlier captain
 #                              hold)`
 #            skipped: <id> (answered earlier)   a closed idea is never re-asked,
-#                              archived or not
+#                              archived or not; in a secondmate home, neither
+#                              is an idea already handed to the main home
+#            handed-up: <id>   in a secondmate home, an idea or a --call
+#                              item went to the main home instead (below)
+#          In a secondmate home (a .fm-secondmate-home marker) an idea or a
+#          --call item is not filed here: it is appended to the parent channel
+#          through bin/fm-parent-channel-lib.sh as one
+#          `needs-decision [key=noticed-queue-<id>]: noticed-queue <kind> <id>
+#          [(call: <kind>)] [(now: ...)]: <title> - why: ... - from: ...` line
+#          with any repo and evidence fields, and no local row is kept. An id
+#          with an open row in this home files locally as before, because that
+#          row tracks this home's own work; a --call there holds it, and
+#          bin/fm-captain-hold.sh publishes the hold to the main home.
+#          Evidence is cut to fit the channel's 1200-byte note, and an item
+#          whose other fields do not fit is refused (exit 2) before anything is
+#          sent. A channel that cannot be written exits 1. Routine noticed
+#          items still file locally.
 #          A noticed item is filed routine unless --call is given: firstmate
 #          fixes or drops it on its own, so the row is not held, its owner is
 #          the fleet, and it joins no unseen list until `close --fixed` or
@@ -132,6 +148,8 @@ HOLD="$SCRIPT_DIR/fm-captain-hold.sh"
 TAB=$'\t'
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-parent-channel-lib.sh
+. "$SCRIPT_DIR/fm-parent-channel-lib.sh"
 
 usage() {
   awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
@@ -228,6 +246,69 @@ append_body() {  # <id> <line>
   return "$rc"
 }
 
+# In a secondmate home, hand an idea or a --call item to the main home on the
+# parent channel instead of holding it here, because the main home's Monday
+# sweep and answer tools never read a mate backlog (docs/secondmate-parent-channel.md
+# "Ideas and captain calls belong to the main home"). The line is a
+# needs-decision keyed noticed-queue-<id>, a key no backlog row carries,
+# holding every field the main home refiles it from; the main home closes it
+# with bin/fm-send.sh --resolve-key once filed. Returns 1 in a main home, or
+# when this home has an open row of the id, which then file locally as before;
+# exits 1 when the channel cannot be written, so the item is never dropped.
+hand_up_to_parent() {  # <id> <kind> <title> <why> <from> <repo> <evidence> <call> <now>
+  local id=$1 key="noticed-queue-$1" rc=0 fields head room
+  # A main home files locally, whatever the item's length.
+  fm_parent_channel_home_id "$FM_HOME" >/dev/null || rc=$?
+  [ "$rc" != 1 ] || return 1
+  rc=0
+  # An open row here tracks work this home owns, such as its own kept
+  # checkouts, so it stays on the local path: the evidence attaches, and a
+  # --call holds it through bin/fm-captain-hold.sh, which publishes that hold
+  # to the main home, so the decision still goes up and the record stays here.
+  if show=$("$TASKS" show "$id" --full 2>/dev/null) && [ "$(shown_field "$show" state)" != "done" ]; then
+    return 1
+  fi
+  # An idea handed up before, or filed and closed here, is never re-asked, as
+  # in a main home.
+  if [ "$2" = idea ] && grep -Fxq -- "$id" "$FILED" 2>/dev/null; then
+    printf 'skipped: %s (handed to the main home or answered earlier)\n' "$id"
+    return 0
+  fi
+  # The call and urgency lead, so the channel's length cap can only cut evidence.
+  head="$2 $id${8:+ (call: $8)}"
+  [ "$9" = 0 ] || head="$head (now: urgent or doing harm)"
+  fields="$head: $3 - why: $4 - from: $5${6:+ - repo: $6}"
+  # The channel keeps 1200 bytes of a note: evidence takes only what is left,
+  # and an item whose own fields do not fit is refused before anything is sent.
+  room=$((1200 - $(LC_ALL=C; printf '%s' "${#fields}")))
+  [ "$room" -ge 0 ] || refuse "$id is too long to hand to the main home; shorten its title or why"
+  # The byte cut may split a multibyte character; drop its bytes until the
+  # evidence is valid UTF-8 again.
+  [ -z "$7" ] || [ "$room" -eq 0 ] || fields="$fields$(
+    LC_ALL=C
+    ev=$(printf '%s' " - evidence: $7" | cut -b1-"$room")
+    while [ -n "$ev" ] && ! printf '%s' "$ev" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; do ev=${ev%?}; done
+    printf '%s' "$ev"
+  )"
+  fm_parent_channel_report "$FM_HOME" "$STATE" \
+    "needs-decision [key=$key]: noticed-queue $(fm_parent_channel_clean_note "$fields")" "$key" || rc=$?
+  case "$rc" in
+    0)
+      # An idea is recorded as filed, so a later sighting is skipped above; a
+      # noticed call that comes back is asked again, as a main home reopens it.
+      if [ "$2" = idea ]; then
+        lock_state
+        grep -Fxq -- "$id" "$FILED" 2>/dev/null || printf '%s\n' "$id" >> "$FILED"
+      fi
+      printf 'handed-up: %s\n' "$id"
+      return 0
+      ;;
+    1) return 1 ;;
+  esac
+  echo "fm-noticed: this secondmate home could not hand $id to the main home on its parent channel (rc=$rc); hand it up as a fleet-handoff notice instead" >&2
+  exit 1
+}
+
 hold_reason() {  # <kind> <title> <why> <from> [<call>]
   local label=Noticed
   [ "$1" = idea ] && label=Idea
@@ -271,6 +352,9 @@ cmd_file() {
     refuse "Sapna's agents never file into this backlog (--from $from)"
   fi
   id="$kind-$slug"
+  if [ "$routine" = 0 ]; then
+    hand_up_to_parent "$id" "$kind" "$title" "$why" "$from" "$repo" "$evidence" "$call" "$now" && return 0
+  fi
   lock_state
   if show=$("$TASKS" show "$id" --full 2>/dev/null); then
     state=$(shown_field "$show" state)

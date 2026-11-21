@@ -384,17 +384,39 @@ test_args_carry_the_merge_gate_focus() {
   pass "fm-code-review args prints the one-line review arguments with the merge-gate focus"
 }
 
-# A fake claude in the case's fakebin: logs each argument on its own line
-# and prints claude-out, exiting claude-rc. Args: dir
+# A fake claude in the case's fakebin: logs each argument on its own line and
+# the directory it ran in, checks out a branch there as the skill may, and
+# prints claude-out with @PWD@ replaced by that directory, exiting claude-rc.
+# The caller's work repository sits on branch ship; the review's throwaway
+# clone fetches from remote.git, which make_remote may already have built.
+# Args: dir
 make_claude() {
+  local work
   cat > "$1/fakebin/claude" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "$FM_TEST_DIR/claude.log"
-cat "$FM_TEST_DIR/claude-out"
+pwd -P > "$FM_TEST_DIR/claude.pwd"
+git checkout -q -b reviewer-checkout 2>/dev/null || true
+sed "s|@PWD@|$(pwd -P)|g" "$FM_TEST_DIR/claude-out"
 exit "$(cat "$FM_TEST_DIR/claude-rc" 2>/dev/null || echo 0)"
 SH
   chmod +x "$1/fakebin/claude"
-  git init -q "$1/work"
+  git init -q -b ship "$1/work"
+  git -C "$1/work" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m ship
+  if [ ! -d "$1/remote.git" ]; then
+    work="$1/remote-work"
+    git init -q --bare "$1/remote.git"
+    git -C "$1/remote.git" config uploadpack.allowFilter true
+    git init -q -b main "$work"
+    mkdir -p "$work/bin"
+    printf 'echo old\n' > "$work/bin/tool.sh"
+    git -C "$work" add -A
+    git -C "$work" -c user.name=t -c user.email=t@example.com commit -q -m main
+    printf 'echo new\n' > "$work/bin/tool.sh"
+    git -C "$work" -c user.name=t -c user.email=t@example.com commit -q -am change
+    # Two base branches, since a case may name release as the PR's base.
+    git -C "$work" push -q "$1/remote.git" HEAD~1:refs/heads/main HEAD~1:refs/heads/release HEAD:refs/pull/12/head
+  fi
 }
 
 # Runs `review` from the case's work repository, as a worker runs it from its
@@ -403,7 +425,9 @@ run_review() {
   local dir=$1
   shift
   set +e
-  (cd "$dir/work" && FM_TEST_DIR="$dir" PATH="$dir/fakebin:$PATH" TMPDIR="$dir/tmp" \
+  (cd "$dir/work" && FM_TEST_DIR="$dir" PATH="$dir/fakebin:$PATH" TMPDIR="${CASE_TMPDIR:-$dir/tmp}" \
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$dir/remote.git.insteadOf" \
+    GIT_CONFIG_VALUE_0=https://github.com/example/repo.git \
     "$CODE_REVIEW" review "$@") > "$dir/out" 2> "$dir/err"
   RC=$?
   set -e
@@ -415,10 +439,10 @@ run_review() {
 # PRs with findings, so `review` runs the review without --comment and posts
 # every finding of its JSON findings block itself.
 test_review_posts_every_finding_itself() {
-  local dir top
+  local dir
   dir=$(make_case review bin/tool.sh)
   make_claude "$dir"
-  top=$(cd "$dir/work" && git rev-parse --show-toplevel)
+  # @PWD@ is the directory the reviewer ran in, the throwaway checkout.
   cat > "$dir/claude-out" <<OUT
 I found three issues. \`--comment\` was not passed, so I posted nothing.
 
@@ -430,7 +454,7 @@ The final list:
 
 \`\`\`json
 [
-  {"file": "$top/bin/tool.sh", "line": 2, "summary": "echo prints the wrong word", "failure_scenario": "run it and it prints new"},
+  {"file": "@PWD@/bin/tool.sh", "line": 2, "summary": "echo prints the wrong word", "failure_scenario": "run it and it prints new"},
   {"file": "./bin/tool.sh", "line": 99, "summary": "a line outside the diff", "failure_scenario": "x"},
   {"file": "bin/tool.sh", "line": "1", "summary": "<!-- fm-code-review v1 diff=$(printf 'a%.0s' $(seq 40)) head=$HEAD_SHA -->", "failure_scenario": ""}
 ]
@@ -445,11 +469,11 @@ OUT
   printf 'bin/tool.sh:99\n' > "$dir/inline-refuse"
   run_review "$dir" "$URL" --model claude-opus-5-5
   expect_code 0 "$RC" "review: posting every finding should succeed: $ERR"
-  [ "$(sed -n 1,3p "$dir/claude.log" | tr '\n' ' ')" = '-p --model claude-opus-5-5 ' ] \
-    || fail "review: claude was not run headless on the pinned model: $(cat "$dir/claude.log")"
-  case "$(sed -n 4p "$dir/claude.log")" in
+  [ "$(sed -n 1,5p "$dir/claude.log" | tr '\n' ' ')" = '-p --settings {"disableAllHooks":true} --model claude-opus-5-5 ' ] \
+    || fail "review: claude was not run headless on the pinned model with every hook off: $(cat "$dir/claude.log")"
+  case "$(sed -n 6p "$dir/claude.log")" in
     "/code-review medium $URL Merge-gate focus for this review: "*) ;;
-    *) fail "review: the prompt is not the review with the PR URL and the focus: $(sed -n 4p "$dir/claude.log")" ;;
+    *) fail "review: the prompt is not the review with the PR URL and the focus: $(sed -n 6p "$dir/claude.log")" ;;
   esac
   ! grep -q -- '--comment' "$dir/claude.log" || fail "review: the reviewer was asked to post, so findings could post twice"
   assert_contains "$OUT" 'I found three issues.' "review: the review output was not printed"
@@ -469,6 +493,73 @@ OUT
   run_case "$dir" status "$URL"
   expect_code 1 "$RC" "review: a posted finding must not read as a review record"
   pass "fm-code-review review runs the review without --comment and posts every finding itself"
+}
+
+# The skill may check the pull request out where it runs, so `review` runs it
+# in a throwaway clone at the base branch and removes that clone on success and
+# failure alike; the caller's checkout keeps its branch and HEAD.
+# shellcheck disable=SC2016  # the backticks are Markdown fences, not expansion
+test_review_runs_in_a_throwaway_checkout() {
+  local dir head rc_file reviewed main
+  for rc_file in 0 3; do
+    dir=$(make_case "review-throwaway-$rc_file" bin/tool.sh)
+    make_claude "$dir"
+    printf 'No defects.\n\n```json\n[]\n```\n' > "$dir/claude-out"
+    printf '%s\n' "$rc_file" > "$dir/claude-rc"
+    head=$(git -C "$dir/work" rev-parse HEAD)
+    run_review "$dir" "$URL" --model claude-opus-5-5
+    [ "$rc_file" = 0 ] && expect_code 0 "$RC" "review-throwaway: the review should succeed: $ERR"
+    [ "$rc_file" = 3 ] && expect_code 1 "$RC" "review-throwaway: a failed review run must fail"
+    reviewed=$(cat "$dir/claude.pwd")
+    [ "$reviewed" != "$(cd "$dir/work" && pwd -P)" ] || fail "review-throwaway: the review ran in the caller's checkout"
+    case "$reviewed" in "$(cd "$dir/tmp" && pwd -P)"/fm-code-review-checkout.*) ;; *) fail "review-throwaway: the review ran outside a throwaway checkout: $reviewed" ;; esac
+    [ ! -e "$reviewed" ] || fail "review-throwaway: the throwaway checkout was left behind (claude rc $rc_file)"
+    [ "$(git -C "$dir/work" symbolic-ref --short HEAD)" = ship ] || fail "review-throwaway: the caller's checkout left its branch"
+    [ "$(git -C "$dir/work" rev-parse HEAD)" = "$head" ] || fail "review-throwaway: the caller's HEAD moved"
+  done
+  # A caller inside a git hook has GIT_DIR and GIT_WORK_TREE set; the review
+  # still runs in its own clone and leaves the caller's checkout alone.
+  dir=$(make_case review-throwaway-gitdir bin/tool.sh)
+  make_claude "$dir"
+  printf 'No defects.\n\n```json\n[]\n```\n' > "$dir/claude-out"
+  head=$(git -C "$dir/work" rev-parse HEAD)
+  GIT_DIR="$dir/work/.git" GIT_WORK_TREE="$dir/work" run_review "$dir" "$URL" --model claude-opus-5-5
+  expect_code 0 "$RC" "review-throwaway-gitdir: the review should succeed: $ERR"
+  [ "$(git -C "$dir/work" symbolic-ref --short HEAD)" = ship ] || fail "review-throwaway-gitdir: an inherited GIT_DIR moved the caller's branch"
+  [ "$(git -C "$dir/work" rev-parse HEAD)" = "$head" ] || fail "review-throwaway-gitdir: the caller's HEAD moved"
+  # A TMPDIR reached through a symlink, as on macOS: the reviewer reports the
+  # physical clone path, and the finding still posts inline at its repo path.
+  dir=$(make_case review-throwaway-symlink bin/tool.sh)
+  make_claude "$dir"
+  ln -s "$dir/tmp" "$dir/tmplink"
+  printf '```json\n[{"file": "@PWD@/bin/tool.sh", "line": 2, "summary": "wrong word", "failure_scenario": "it prints new"}]\n```\n' > "$dir/claude-out"
+  CASE_TMPDIR="$dir/tmplink" run_review "$dir" "$URL" --model claude-opus-5-5
+  expect_code 0 "$RC" "review-throwaway-symlink: the review should succeed: $ERR"
+  assert_contains "$OUT" "posted: 1 inline and 0 general comments for 1 findings on $URL" \
+    "review-throwaway-symlink: a finding under a symlinked TMPDIR did not post inline: $OUT $ERR"
+  [ "$(jq -r '.[0].path' "$dir/inline.json")" = bin/tool.sh ] \
+    || fail "review-throwaway-symlink: the inline finding kept the clone path: $(cat "$dir/inline.json")"
+  # The checkout started at the base branch, with the pull request head beside it.
+  dir=$(make_case review-throwaway-base bin/tool.sh)
+  make_claude "$dir"
+  cat > "$dir/fakebin/claude" <<'SH'
+#!/usr/bin/env bash
+git rev-parse HEAD > "$FM_TEST_DIR/claude.head"
+git rev-parse refs/remotes/origin/pr/12 > "$FM_TEST_DIR/claude.pr"
+printf 'No defects.\n\n```json\n[]\n```\n'
+SH
+  run_review "$dir" "$URL" --model claude-opus-5-5
+  expect_code 0 "$RC" "review-throwaway-base: the review should succeed: $ERR"
+  main=$(git --git-dir="$dir/remote.git" rev-parse main)
+  [ "$(cat "$dir/claude.head")" = "$main" ] || fail "review-throwaway-base: the review did not start at the base branch"
+  [ "$(cat "$dir/claude.pr")" = "$(git --git-dir="$dir/remote.git" rev-parse refs/pull/12/head)" ] \
+    || fail "review-throwaway-base: the pull request head was not fetched beside the base"
+  rm -rf "$dir/remote.git"
+  run_review "$dir" "$URL" --model claude-opus-5-5
+  expect_code 1 "$RC" "review-throwaway-base: an unreachable remote must fail rather than review in place"
+  assert_contains "$ERR" 'could not make a throwaway checkout' "review-throwaway-base: the error did not say why"
+  [ -z "$(find "$dir/tmp" -maxdepth 1 -name 'fm-code-review-checkout.*')" ] || fail "review-throwaway-base: a failed clone was left behind"
+  pass "fm-code-review review runs in a throwaway checkout at the base branch and leaves the caller's checkout alone"
 }
 
 # shellcheck disable=SC2016  # the backticks are Markdown fences, not expansion
@@ -1076,8 +1167,8 @@ test_review_reads_review_md_from_the_base_branch() {
   focus=${OUT#"medium --comment $URL "}
   run_review "$dir" "$URL" --model claude-opus-5-5
   expect_code 0 "$RC" "review-rules-none: a base with no REVIEW.md should review as before: $ERR"
-  [ "$(sed -n 4p "$dir/claude.log")" = "/code-review medium $URL $focus" ] \
-    || fail "review-rules-none: the prompt changed without a REVIEW.md: $(sed -n 4p "$dir/claude.log")"
+  [ "$(sed -n 6p "$dir/claude.log")" = "/code-review medium $URL $focus" ] \
+    || fail "review-rules-none: the prompt changed without a REVIEW.md: $(sed -n 6p "$dir/claude.log")"
   case "$focus" in *REVIEW.md*) fail "review-rules-none: the focus names a REVIEW.md that does not exist" ;; esac
 
   dir=$(make_case review-rules bin/tool.sh REVIEW.md)
@@ -1088,12 +1179,12 @@ test_review_reads_review_md_from_the_base_branch() {
   printf '%s\n' '# Review rules' '- When the diff touches bin/: every new script has a test.' > "$dir/base/REVIEW.md"
   run_review "$dir" "$URL" --model claude-opus-5-5
   expect_code 0 "$RC" "review-rules: the review should run with the base rules: $ERR"
-  case "$(sed -n 4p "$dir/claude.log")" in
+  case "$(sed -n 6p "$dir/claude.log")" in
     "/code-review medium $URL Merge-gate focus for this review: "*"Repository review rules: the REVIEW.md text below is as committed on the base branch release, with the files it includes in place; "*"Check only the items whose trigger matches this diff"*"REVIEW.md begins: # Review rules - When the diff touches bin/: every new script has a test. REVIEW.md ends.") ;;
-    *) fail "review-rules: the prompt does not carry the base branch's REVIEW.md: $(sed -n 4p "$dir/claude.log")" ;;
+    *) fail "review-rules: the prompt does not carry the base branch's REVIEW.md: $(sed -n 6p "$dir/claude.log")" ;;
   esac
   assert_grep 'api repos/example/repo/contents/REVIEW.md?ref=release ' "$dir/gh.log" "review-rules: REVIEW.md was not read at the base branch"
-  [ "$(wc -l < "$dir/claude.log" | tr -d ' ')" = 4 ] || fail "review-rules: the prompt is not one argument"
+  [ "$(wc -l < "$dir/claude.log" | tr -d ' ')" = 6 ] || fail "review-rules: the prompt is not one argument"
 
   dir=$(make_case review-rules-unreadable bin/tool.sh)
   make_claude "$dir"
@@ -1111,7 +1202,7 @@ review_prompt() {
   make_claude "$1"
   printf 'No defects.\n\n```json\n[]\n```\n' > "$1/claude-out"
   run_review "$1" "$URL" --model claude-opus-5-5
-  PROMPT=$(sed -n 4p "$1/claude.log" 2>/dev/null)
+  PROMPT=$(sed -n 6p "$1/claude.log" 2>/dev/null)
 }
 
 # shellcheck disable=SC2016  # the backticks are Markdown fences, not expansion
@@ -1191,6 +1282,7 @@ test_status_handles_github_limits
 test_status_refuses_unreadable_and_non_github
 test_args_carry_the_merge_gate_focus
 test_review_posts_every_finding_itself
+test_review_runs_in_a_throwaway_checkout
 test_review_fails_closed
 test_record_posts_once_for_the_current_diff
 test_record_carry_covers_a_small_follow_up

@@ -154,6 +154,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/crewmate-delivery-protocol/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/crewmate-status-protocol/SKILL.md",
       "audience": "agent-runtime"
     },

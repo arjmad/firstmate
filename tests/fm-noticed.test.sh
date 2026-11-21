@@ -482,7 +482,108 @@ SH
   pass "unseen drops noticed rows closed by any path, keeps now, fixed and dropped rows, rejoins split titles, and prunes nothing on a failed read"
 }
 
+test_a_secondmate_hands_ideas_and_calls_to_the_main_home() {
+  local home parent channel out rc span pad
+  home=$(make_home mate)
+  parent="$TMP_ROOT/mate-parent"
+  mkdir -p "$parent/state"
+  channel="$parent/state/sample-mate.status"
+  printf 'sample-mate\n' > "$home/.fm-secondmate-home"
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$parent" > "$home/.fm-secondmate-parent"
+
+  out=$(noticed "$home" file idea faster-sweep --title "Sweep faster" --why "it saves a wake" \
+    --from sm-task --repo firstmate --evidence "sweep log") || fail "a mate refused a valid idea: $out"
+  [ "$out" = "handed-up: idea-faster-sweep" ] || fail "a mate idea did not report handed-up: $out"
+  ! tasks "$home" show idea-faster-sweep >/dev/null 2>&1 || fail "a mate kept a local row for an idea it handed up"
+  grep -q '^needs-decision \[key=noticed-queue-idea-faster-sweep\] \[at=[0-9]*\]: noticed-queue idea idea-faster-sweep: Sweep faster - why: it saves a wake - from: sm-task - repo: firstmate - evidence: sweep log$' \
+    "$channel" || fail "the parent channel line does not carry every field: $(cat "$channel")"
+  # The real classifier: the line wakes the parent as a decision, and a
+  # resolved line for its key, which bin/fm-send.sh --resolve-key writes, closes it.
+  span=$(bash -c '. "$1"; status_span_first_actionable_record "$2" 0 rec nd; rc=$?; printf "%s %s" "$rc" "$nd"' \
+    _ "$ROOT/bin/fm-classify-lib.sh" "$channel")
+  [ "$span" = "0 1" ] || fail "the handed-up line did not read as a new parent decision: $span"
+  printf 'resolved [key=noticed-queue-idea-faster-sweep] [at=1]: answered: filed in the main home\n' >> "$channel"
+  ! bash -c '. "$1"; status_has_open_needs_decision "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$channel" \
+    || fail "a resolved line did not close the handed-up decision"
+  # Seen again after the main home answered it: never re-asked.
+  out=$(noticed "$home" file idea faster-sweep --title "Sweep faster" --why "seen again" --from sm-task) \
+    || fail "a mate refused a repeat idea: $out"
+  [ "$out" = "skipped: idea-faster-sweep (handed to the main home or answered earlier)" ] || fail "a repeat idea was not skipped: $out"
+  [ "$(grep -c '^needs-decision \[key=noticed-queue-idea-faster-sweep\]' "$channel")" = 1 ] \
+    || fail "an answered idea was asked again: $(cat "$channel")"
+
+  out=$(noticed "$home" file noticed slow-canary --title "Canary slow" --why "it may time out" \
+    --from sm-task --call ruling) || fail "a mate refused a valid --call item: $out"
+  [ "$out" = "handed-up: noticed-slow-canary" ] || fail "a mate --call item did not report handed-up: $out"
+  grep -q '^needs-decision \[key=noticed-queue-noticed-slow-canary\] .*noticed-queue noticed noticed-slow-canary (call: ruling): Canary slow - why: it may time out - from: sm-task$' \
+    "$channel" || fail "the --call item did not reach the parent channel with its call kind: $(cat "$channel")"
+  ! tasks "$home" show noticed-slow-canary >/dev/null 2>&1 || fail "a mate kept a local row for a --call item it handed up"
+
+  # Over-long evidence is cut to fit the channel; a title too long to fit is
+  # refused before anything is sent.
+  out=$(noticed "$home" file idea long-proof --title "Long proof" --why "big log" --from sm-task \
+    --evidence "$(printf 'x%.0s' $(seq 1 1500))") || fail "a mate refused an idea with long evidence: $out"
+  grep -q '^needs-decision \[key=noticed-queue-idea-long-proof\] .*: noticed-queue idea idea-long-proof: Long proof - why: big log - from: sm-task - evidence: xxx' \
+    "$channel" || fail "an idea with long evidence lost its fields on the parent channel"
+  set +e
+  out=$(noticed "$home" file idea long-title --title "$(printf 't%.0s' $(seq 1 1300))" --why "w" --from sm-task 2>&1)
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "an idea too long to hand up must be refused"
+  ! grep -q 'idea-long-title' "$channel" || fail "an idea too long to hand up reached the parent channel"
+  # A cut through two-byte evidence, at either parity, leaves valid UTF-8.
+  for pad in a ab; do
+    out=$(noticed "$home" file idea "wide-proof-$pad" --title "Wide proof" --why "w" --from sm-task \
+      --evidence "$(printf 'é%.0s' $(seq 1 800))") || fail "a mate refused an idea with wide evidence: $out"
+  done
+  [ "$(grep -ac 'idea-wide-proof-' "$channel")" = 2 ] || fail "the wide-evidence ideas did not both reach the parent channel"
+  grep -a 'idea-wide-proof-' "$channel" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 \
+    || fail "cutting multi-byte evidence left a split character on the parent channel"
+  # A row already held for the captain here (filed before this home handed
+  # ideas up) published its own decision, so it matches locally, never twice.
+  mv "$home/.fm-secondmate-home" "$home/.fm-secondmate-home.off"
+  out=$(noticed "$home" file idea held-before --title "Held before" --why "w" --from sm-task) || fail "could not file the old held idea: $out"
+  mv "$home/.fm-secondmate-home.off" "$home/.fm-secondmate-home"
+  out=$(noticed "$home" file idea held-before --title "Held before" --why "seen again" --from sm-task) \
+    || fail "a mate refused a repeat of its held idea: $out"
+  [ "$out" = "matched: idea-held-before" ] || fail "a held row was handed up a second time instead of matching: $out"
+  ! grep -q 'key=noticed-queue-idea-held-before' "$channel" || fail "a held row raised a second decision on the parent channel"
+  # The cap is in bytes: 700 two-byte characters are 1400 bytes.
+  set +e
+  out=$(LC_ALL=C.UTF-8 noticed "$home" file idea wide-title --title "$(printf 'é%.0s' $(seq 1 700))" --why "w" --from sm-task 2>&1)
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "a multi-byte title past the byte cap must be refused"
+  # A main home has no channel cap: the same long title files locally.
+  out=$(noticed "$(make_home long-main)" file idea long-title --title "$(printf 't%.0s' $(seq 1 1300))" --why "w" --from firstmate) \
+    || fail "a main home refused a long idea: $out"
+  [ "$out" = "filed: idea-long-title" ] || fail "a main home did not file its long idea locally: $out"
+
+  out=$(noticed "$home" file noticed flaky-test --title "Flaky test" --why "CI reruns" --from sm-task) \
+    || fail "a mate refused a routine item: $out"
+  [ "$out" = "filed: noticed-flaky-test" ] || fail "a mate did not file its routine item locally: $out"
+  ! grep -q 'flaky-test' "$channel" || fail "a routine item went to the parent channel"
+  # The same item seen again as a call: its open row tracks this home's own
+  # work, so it stays here and is held, and no second hand-up line is sent.
+  out=$(noticed "$home" file noticed flaky-test --title "Flaky test" --why "it blocks merges" --from sm-task --call ruling) \
+    || fail "a mate refused a --call for its routine item: $out"
+  [ "$out" = "matched: noticed-flaky-test" ] || fail "a routine row seen as a call did not stay local: $out"
+  assert_contains "$(tasks "$home" show noticed-flaky-test)" "held: yes" "the routine row seen as a call was not held for the captain"
+  ! grep -q 'key=noticed-queue-noticed-flaky-test' "$channel" || fail "an open local row was handed up as well"
+
+  rm "$home/.fm-secondmate-parent"
+  set +e
+  out=$(noticed "$home" file idea lost-idea --title "Lost" --why "no channel" --from sm-task 2>&1)
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "a mate with no parent binding must not report an idea handed up"
+  assert_contains "$out" "could not hand idea-lost-idea to the main home" "the failure did not name the item"
+  ! tasks "$home" show idea-lost-idea >/dev/null 2>&1 || fail "a failed hand-up filed the idea locally after all"
+  pass "a secondmate hands ideas and --call items to the main home on its parent channel and files routine items locally"
+}
+
 test_noticed_is_a_captain_hold_that_never_dispatches
+test_a_secondmate_hands_ideas_and_calls_to_the_main_home
 test_a_duplicate_attaches_evidence
 test_closed_items_come_back_or_stay_answered
 test_refusals

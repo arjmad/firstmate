@@ -1,6 +1,6 @@
 ---
 name: noticed-queue
-description: Load when teardown prints a `noticed-queue:` line, an inbox note is a fleet-handoff notice, the wake drain prints NOTICED, you notice a problem outside the task at hand, the Monday `[open-items]` note arrives, or you write Atlas's ideas.
+description: Load when teardown prints a `noticed-queue:` line, a secondmate's status shows a `needs-decision [key=noticed-queue-...]` line, an inbox note is a fleet-handoff notice, the wake drain prints NOTICED, you notice a problem outside the task at hand, the Monday `[open-items]` note arrives, or you write Atlas's ideas.
 user-invocable: false
 metadata:
   internal: true
@@ -21,7 +21,8 @@ One funnel: workers, Cade, Codex and the second mate hand what they notice to fi
 Firstmate is the only writer.
 Teardown, which firstmate runs, files one kind itself: `noticed-kept-checkout-<task>`, a scratch checkout it kept in `data/<task>/`.
 Settle that row by proving each checkout landed, deleting only those and any whose discard the captain himself recorded, and holding the rest for the captain as one `--call ask-first` discard list, because deleting unlanded work is ask-first.
-Items arrive four ways: a teardown's `noticed-queue:` lines, a fleet-handoff notice in the inbox (`[<agent>] notice: ...`), a scout report, and what firstmate itself notices.
+Items arrive five ways: a teardown's `noticed-queue:` lines, a fleet-handoff notice in the inbox (`[<agent>] notice: ...`), a secondmate's `needs-decision [key=noticed-queue-<id>]: noticed-queue <kind> <id> ...` parent-channel line, a scout report, and what firstmate itself notices.
+File a secondmate's line here from its fields, then close its key with `bin/fm-send.sh <mate-id> --resolve-key noticed-queue-<id> "filed in the main home as <id>"`.
 Each task yields at most one noticed and one idea; `none` and an empty section are normal.
 
 1. Run `bin/fm-noticed.sh list` and look for an open item about the same broken thing or the same idea.
@@ -30,7 +31,7 @@ Each task yields at most one noticed and one idea; `none` and an empty section a
    A noticed item files as routine; add `--call` with its kind only to one Acting first holds for him, and filing an open routine item's slug again with `--call` holds it.
    A `reopened` line that says it lifted an earlier captain hold means the item was his call before it closed; if it still needs him, file it again with `--call`.
    Capture the observation and why it may matter; leave value unknown until the triage.
-   In a secondmate home, file only routine noticed items: send each idea and each item that would take `--call` to the main home as a fleet-handoff notice or a parent-channel line instead, because the main home's sweep never reads a mate backlog ([`docs/secondmate-parent-channel.md`](../../../docs/secondmate-parent-channel.md#ideas-and-captain-calls-belong-to-the-main-home)).
+   In a secondmate home, `file` hands each idea and each `--call` item to the main home on the parent channel itself, prints `handed-up: <id>`, and keeps no local row, because the main home's sweep never reads a mate backlog ([`docs/secondmate-parent-channel.md`](../../../docs/secondmate-parent-channel.md#ideas-and-captain-calls-belong-to-the-main-home)); routine noticed items still file locally.
    Add `--now` only to a noticed item that is urgent or doing harm now: money, customers, account health or security; filing an open item's slug again with `--now` makes it urgent.
 3. Acknowledge a fleet-handoff notice with `bin/fm-inbox.sh drain --ack <id>` and nothing more: a notice has no read-back, so a reply to it reaches nobody.
 

@@ -27,6 +27,7 @@ Every captain-facing outcome that leaves durable evidence in the mate home is pu
 | Child failed | the child's `failed:` line | `bin/fm-inactive-reconcile.sh` on the next poll |
 | Child decision escalated to the captain | the task held in the mate backlog as its gate's record, until the main home relays the captain's answer (below) | `bin/fm-captain-hold.sh hold`, and its answer by `answer` |
 | PR merged | the merge poll or the mate's own merge | `bin/fm-merge-outcome-lib.sh` |
+| Idea or noticed captain call | none in the mate home: the filing itself | `bin/fm-noticed.sh file`, at filing time |
 | Child leaving the home | its final ledger line | `bin/fm-teardown.sh`, which refuses to remove the child while that line is undelivered |
 | Child ended silently | terminal current state with a silent ledger | the existing inactive-outcome scan in `bin/fm-inactive-reconcile.sh` |
 | Answer to a marked request | a correlated line guarded by the pending-reply record | `bin/fm-secondmate-report.sh`, which resolves the parent channel from the mate home; the pending-reply guard repairs a line stranded in the local mate's same-basename status file before recovery or escalation |
@@ -47,6 +48,8 @@ A missed-reply escalation includes the complete first sighting path and line num
 
 A secondmate hands every idea and every captain call to the main home, by a fleet-handoff notice or a parent-channel line, and never keeps one held in its own backlog (Arjun, 2026-11-20, deep-audit item a7-25).
 The main home's Monday idea sweep and its answer and defer tools work only the main home's backlog, so a call or idea held only in a mate home is missed by the sweep and cannot be answered there, even where a bearings board shows it.
+`bin/fm-noticed.sh file` does this itself in a mate home: an idea or a `--call` item becomes one keyed `needs-decision [key=noticed-queue-<id>]: noticed-queue ...` line on the parent channel, carrying every field the main home files it from, and no local row; its header owns the line's fields.
+The main home files that item in its own backlog and closes the key with `bin/fm-send.sh <mate-id> --resolve-key noticed-queue-<id> "filed in the main home as <id>"` (the noticed-queue skill).
 Where the mate's own machinery needs a local record - a child's attested inventory or teardown gate registers its open call in the mate backlog ([captain-hold lifecycle](captain-hold-lifecycle.md)) - `bin/fm-captain-hold.sh` publishes that hold by the row above.
 That local row is only the gate's record: the main home holds the call for the captain, and the mate resolves its row when the main home relays his answer.
 
@@ -61,6 +64,7 @@ That local row is only the gate's record: the main home holds the call for the c
 
 `tests/fm-inactive-reconcile.test.sh` covers the ledger delivery against real ledgers with no harness: immediate done and failed delivery with note, PR, mode, posture, and report pointer, once-only delivery across polls, a ship `done:` withheld while its named head exists only in the worker copy, a pending one still delivered after teardown removes that copy, a line still being appended, later routine status prose not minting a fresh parent event because the inactive receipt identity binds structured fields only, the remote route, the yield of the inactive path to a terminal ledger, and the real watcher poll driving it.
 `tests/fm-captain-hold-lifecycle.test.sh` covers a mate home publishing a hold, its answer, and a distinct occurrence on re-hold, and a main home publishing nothing.
+`tests/fm-noticed.test.sh` covers a mate home handing an idea and a `--call` item up with no local row, the line reading as a parent decision that a `resolved` line for its key closes, a routine item still filed locally, and a missing parent binding failing loudly.
 `tests/fm-pr-merge.test.sh` covers the PR-ready line at registration and the merge outcome's upward report.
 `tests/fm-teardown.test.sh` covers teardown delivering a child's final line and refusing when the channel cannot be written.
 It also covers the registration-time ready line and its withholding until checks are green under `config/ready-after-green`.

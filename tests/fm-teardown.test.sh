@@ -2314,6 +2314,66 @@ test_pushed_branch_with_merged_pr_allows() {
   pass "teardown proceeds for a pushed branch whose recorded PR merged"
 }
 
+# The recorded ship branch a worktree no longer has checked out: a merged PR
+# whose head holds the branch tip deletes it from the shared clone; a tip past
+# that head, or one another worktree has checked out, keeps it.
+# Args: name variant (merged | beyond-head | checked-out-elsewhere)
+recorded_branch_case() {
+  local name=$1 variant=$2 case_dir rc pr_head
+  case_dir=$(make_case "$name")
+  write_meta "$case_dir" direct-PR ship
+  printf '%s\n' 'branch=fm/task-x1' >> "$case_dir/state/task-x1.meta"
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  push_task_branch_to_origin "$case_dir"
+  append_pr_meta_for_current_head "$case_dir"
+  pr_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+  git -C "$case_dir/wt" checkout -q --detach
+  case "$variant" in
+    beyond-head)
+      git -C "$case_dir/project" -c user.email=t@t -c user.name=t \
+        commit-tree -p "$pr_head" -m "unlanded follow-up" "$pr_head^{tree}" \
+        | xargs git -C "$case_dir/project" update-ref refs/heads/fm/task-x1
+      ;;
+    checked-out-elsewhere)
+      git -C "$case_dir/project" worktree add -q "$case_dir/other" fm/task-x1
+      ;;
+    patch-equivalent)
+      # A rebased copy of the PR head: the same patch, but not inside the head.
+      git -C "$case_dir/project" -c user.email=t@t -c user.name=t \
+        commit-tree -p "$pr_head^" -m "rebased copy" "$pr_head^{tree}" \
+        | xargs git -C "$case_dir/project" update-ref refs/heads/fm/task-x1
+      ;;
+  esac
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "$name: teardown should succeed once the recorded PR merged: $(cat "$case_dir/stderr")"
+  if [ "$variant" = merged ]; then
+    ! git -C "$case_dir/project" show-ref --verify --quiet refs/heads/fm/task-x1 \
+      || fail "$name: the recorded branch survived although its merged PR head holds it"
+  else
+    git -C "$case_dir/project" show-ref --verify --quiet refs/heads/fm/task-x1 \
+      || fail "$name: teardown deleted a recorded branch it must keep"
+    assert_grep 'kept local branch fm/task-x1' "$case_dir/stderr" "$name: teardown did not say why it kept the branch"
+  fi
+}
+
+test_recorded_branch_deleted_once_its_pr_merged() {
+  recorded_branch_case recorded-branch-merged merged
+  pass "teardown deletes the recorded ship branch the worktree left once its PR merged"
+}
+
+test_recorded_branch_with_unlanded_commit_is_kept() {
+  recorded_branch_case recorded-branch-beyond beyond-head
+  recorded_branch_case recorded-branch-elsewhere checked-out-elsewhere
+  recorded_branch_case recorded-branch-rebased patch-equivalent
+  pass "teardown keeps a recorded branch past its merged PR head, a rebased copy of it, or one checked out in another worktree"
+}
+
 test_pushed_follow_up_after_merged_pr_refuses() {
   local case_dir rc pr_head head
   case_dir=$(make_case pushed-after-merge)
@@ -7889,6 +7949,8 @@ test_companion_work_written_at_reap_is_preserved
 test_reassigned_companion_worktree_is_untouched
 test_pushed_branch_with_open_pr_refuses
 test_pushed_branch_with_merged_pr_allows
+test_recorded_branch_deleted_once_its_pr_merged
+test_recorded_branch_with_unlanded_commit_is_kept
 test_pushed_follow_up_after_merged_pr_refuses
 test_unrecorded_open_pr_found_by_branch_refuses
 test_closed_unmerged_pr_refuses_when_content_absent

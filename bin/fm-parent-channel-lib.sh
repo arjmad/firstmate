@@ -25,6 +25,8 @@
 #                                    remove the child while it is undelivered
 #   - bin/fm-secondmate-report.sh     a marked request's correlated answer,
 #                                    with this resolver choosing its destination
+#   - bin/fm-noticed.sh              an idea or noticed captain call, handed to
+#                                    the main home instead of a local row
 # The mate's own appends are reserved for judgement (bin/fm-brief.sh charter).
 # docs/secondmate-parent-channel.md records the design and its coverage.
 #
