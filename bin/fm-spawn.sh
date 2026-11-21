@@ -87,7 +87,7 @@
 #   first in the private launch-brief overlay, including the exact task-owned
 #   steering inbox. This never rewrites a project's instruction files or a
 #   secondmate's charter.
-#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--advisor <model>] [--fast <on|off>] [--account <entry>]
+#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--advisor <model>] [--fast <on|off>] [--account <entry>] [--no-content]
 #   --relaunch launches a replacement agent for an EXISTING task into that
 #   task's own recorded worktree, reusing its recorded endpoint when that
 #   endpoint still exists, instead of creating either from scratch. It is
@@ -166,7 +166,9 @@
 #   content=on, and a relaunch reads it back, so --content is refused beside
 #   --relaunch, on a secondmate, and on every launch that check refuses: another
 #   harness, a raw command, backend=t3code, a missing config, or a denial that
-#   would hide a content server or its sign-in tools.
+#   would hide a content server or its sign-in tools. --no-content, valid only
+#   beside --relaunch (bin/fm-control.sh relaunch --no-content), drops content=on
+#   so a task that check would refuse can still get a replacement.
 #   --fast <on|off> is this task's model priority ("fast") tier, default off.
 #   Off is the captain's standing orchestration default: every firstmate-launched
 #   worker runs standard tier even when the launching machine's own config or a
@@ -1142,6 +1144,7 @@ EFFORT=
 ADVISOR=
 ADVISOR_SET=0
 CONTENT=0
+NO_CONTENT=0
 DISPATCH_OVERRIDE=
 PLACEMENT_OVERRIDE=
 PLACEMENT_OVERRIDE_SET=0
@@ -1267,6 +1270,7 @@ for a in "$@"; do
     ;;
   --relaunch) RELAUNCH=1 ;;
   --content) CONTENT=1 ;;
+  --no-content) NO_CONTENT=1 ;;
   --herdr-resume-lock-wait) HERDR_RESUME_LOCK_WAIT=1 ;;
   --harness) want_value=harness ;;
   --harness=*)
@@ -1387,6 +1391,10 @@ if [ "$CONTENT" = 1 ] && [ "$KIND" = secondmate ]; then
 fi
 if [ "$CONTENT" = 1 ] && [ "$RELAUNCH" -eq 1 ]; then
   echo "error: --content is not a relaunch axis; a relaunch keeps the content=on the task's record carries" >&2
+  exit 1
+fi
+if [ "$NO_CONTENT" = 1 ] && [ "$RELAUNCH" -eq 0 ]; then
+  echo "error: --no-content applies to --relaunch only; a fresh spawn without --content loads no content MCP config" >&2
   exit 1
 fi
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || {
@@ -3136,7 +3144,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fi
   MODE=$(fm_meta_get "$RELAUNCH_META" mode)
   YOLO=$(fm_meta_get "$RELAUNCH_META" yolo)
-  [ "$(fm_meta_get "$RELAUNCH_META" content)" != on ] || CONTENT=1
+  [ "$NO_CONTENT" = 1 ] || [ "$(fm_meta_get "$RELAUNCH_META" content)" != on ] || CONTENT=1
   UPSTREAM_CONSENT=$(fm_meta_get "$RELAUNCH_META" upstream_consent)
   if [ "$KIND" = ship ]; then
     BRANCH=$(fm_meta_get "$RELAUNCH_META" branch)

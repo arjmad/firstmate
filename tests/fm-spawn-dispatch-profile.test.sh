@@ -3196,6 +3196,9 @@ test_claude_content_workers_load_the_content_mcp_config() {
     id="claude-content-$kind-z42"
     rec=$(make_spawn_case "claude-content-$kind" claude "$id")
     read_case_record "$rec"
+    # A bare `mcp` home exclusion hides no MCP tool, so it must not count as
+    # hiding the sign-in tools.
+    write_exclude_file "$HOME_DIR" 'mcp'
     write_denied_mcp_tools_file 'mcp__monarch__Create*' 'mcp__higgsfield__generate_video'
     case "$kind" in
       ship) out=$(FM_WORKER_DENIED_MCP_TOOLS_FILE="$CASE_DIR/fleet/worker-denied-mcp-tools" \
@@ -3215,7 +3218,7 @@ test_claude_content_workers_load_the_content_mcp_config() {
     esac
     printf '%s\n' "$args" | grep -qx -- --strict-mcp-config \
       && fail "a $kind content launch must keep the worker's other MCP servers"
-    printf '%s\n' "$args" | grep -A1 -x -- --disallowedTools | grep -qx 'mcp__monarch__Create\*,mcp__higgsfield__generate_video' \
+    printf '%s\n' "$args" | grep -A1 -x -- --disallowedTools | grep -qx 'mcp,mcp__monarch__Create\*,mcp__higgsfield__generate_video' \
       || fail "the $kind content launch must still hide the denied tools, got:"$'\n'"$args"
     assert_grep content=on "$HOME_DIR/state/$id.meta" "the $kind record must carry content=on"
     assert_contains "$out" " content=on" "the $kind spawned line must name the content switch"
@@ -3243,7 +3246,7 @@ test_claude_content_workers_load_the_content_mcp_config() {
 test_claude_content_refuses_launches_that_cannot_load_it() {
   local setup rec id out status harness want
   local -a args overrides
-  for setup in codex raw secondmate relaunch missing malformed bad-server denied-server deny-all \
+  for setup in codex raw secondmate relaunch fresh-no-content missing malformed bad-server denied-server deny-all \
     tool-glob server-glob whole-server; do
     id="claude-content-refuse-$setup-z43"
     harness=claude
@@ -3262,6 +3265,7 @@ test_claude_content_refuses_launches_that_cannot_load_it() {
         want="never a secondmate"
         ;;
       relaunch) args=("$id" --relaunch --content); want="not a relaunch axis" ;;
+      fresh-no-content) args=("$id" "$PROJ_DIR" --mode no-mistakes --yolo off --no-content); want="--no-content applies to --relaunch only" ;;
       missing) overrides=("FM_CONTENT_MCP_CONFIG_FILE=$CASE_DIR/fleet/absent.json"); want="missing or not a readable regular file" ;;
       malformed)
         printf '{"mcpServers":{}}\n' > "$CASE_DIR/fleet/content.mcp.json"

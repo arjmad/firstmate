@@ -226,7 +226,7 @@ fm_content_mcp_config_file() {
 # content server, and any hidden-tool entry that matches a sign-in tool,
 # because --disallowedTools has no exception syntax to reopen one.
 fm_content_mcp_check() {
-  local harness=$1 raw=$2 backend=$3 hidden=$4 denied=$5 file dir servers server tool pattern name
+  local harness=$1 raw=$2 backend=$3 hidden=$4 denied=$5 file dir servers server tool pattern name whole_server
   local -a patterns=() denied_names=()
   if [ "$raw" = 1 ] || [ "$harness" != claude ]; then
     local runtime="the $harness runtime"
@@ -271,10 +271,15 @@ fm_content_mcp_check() {
     done
     for tool in "mcp__${server}__authenticate" "mcp__${server}__complete_authentication"; do
       for pattern in ${patterns[@]+"${patterns[@]}"}; do
-        # The entry is a glob on purpose: a whole-server entry and a wildcard
-        # both hide the sign-in tool.
+        # The entry is a glob on purpose: a wildcard and a whole-server
+        # entry (mcp__<server>, no tool part) both hide the sign-in tool.
+        whole_server=0
+        case "$pattern" in
+          mcp__*__*) ;;
+          mcp__?*) whole_server=1 ;;
+        esac
         # shellcheck disable=SC2053
-        if [[ "$tool" == $pattern ]] || [[ "$tool" == ${pattern}__* ]]; then
+        if [[ "$tool" == $pattern ]] || { [ "$whole_server" = 1 ] && [[ "$tool" == ${pattern}__* ]]; }; then
           echo "error: --content needs $tool callable for the content sign-in, but the hidden-tool entry '$pattern' (config/crew-exclude-tools or $(fm_worker_denied_mcp_tools_file)) would deny it; narrow that entry" >&2
           return 1
         fi

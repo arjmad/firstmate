@@ -1525,7 +1525,12 @@ test_content_task_keeps_its_mcp_config_across_relaunch() {
   assert_contains "$out" "needs mcp__higgsfield__complete_authentication callable" "the sign-in refusal must say why"
   [ "$(cat "$dir/fake/command")" = claude ] || fail "a refused sign-in relaunch stopped the running agent"
   [ "$(meta_field "$dir" "$id" content)" = on ] || fail "a refused relaunch must keep content=on"
-  pass "fm-control relaunch: a content task keeps --mcp-config and content=on, and refuses another harness or a denied sign-in tool first"
+  : > "$dir/fake/literal"
+  out=$(run_control "$dir" "$id" relaunch --harness codex --no-content --note "recover off content"); rc=$?
+  expect_code 0 "$rc" "a --no-content relaunch onto codex should succeed"$'\n'"$out"
+  assert_not_contains "$(cat "$dir/fake/literal")" "--mcp-config" "a --no-content replacement must not load the content MCP config"
+  [ -z "$(meta_field "$dir" "$id" content)" ] || fail "--no-content must drop content=on from the record"
+  pass "fm-control relaunch: a content task keeps --mcp-config and content=on, refuses another harness or a denied sign-in tool first, and --no-content recovers it"
 }
 
 test_secondmate_relaunch_refuses_an_advisor() {

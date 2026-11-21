@@ -1888,6 +1888,7 @@ The fleet configuration renders `~/.config/fleet/claude/content.mcp.json`, a Cla
 A ship or scout spawned with `fm-spawn.sh --content` launches Claude Code with `--mcp-config <that file>` and no `--strict-mcp-config`, so it keeps its other MCP servers, and its task record carries `content=on`, which a relaunch keeps.
 The spawn, and a relaunch before the old agent stops, refuses when the launch could not load those servers with their sign-in tools callable: another harness, a raw launch command, the T3 Code backend, a secondmate, a missing or malformed file, a server name outside letters, digits, `_` and `-`, a worker-denied MCP server list that names one of its servers or cannot be read, or a hidden-tool entry in `config/crew-exclude-tools` or the worker-denied MCP tool list that matches `mcp__<server>__authenticate` or `mcp__<server>__complete_authentication`.
 Hiding a content server's other tools, such as one generation tool, still works.
+`fm-control.sh <id> relaunch --no-content` drops `content=on` and skips these checks, so a task they would refuse can still get a replacement.
 [`bin/fm-exclude-tools-lib.sh`](../bin/fm-exclude-tools-lib.sh) implements the checks, and the [`fm-spawn.sh`](../bin/fm-spawn.sh) header owns the flag.
 
 ## Worker compaction window (config/crew-compact-window)
