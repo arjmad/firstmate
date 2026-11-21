@@ -1881,6 +1881,15 @@ A file that cannot be inspected, or is present but dangling, unreadable, not a r
 A raw launch command and the T3 Code backend refuse whenever the file names a tool or cannot be read, because neither can carry `--disallowedTools` or the fallback.
 [`bin/fm-exclude-tools-lib.sh`](../bin/fm-exclude-tools-lib.sh) implements the parsing and fallback.
 
+## Content workers
+
+Content MCP servers, such as Higgsfield for images and video, load only for the workers that need them, never for every Claude session.
+The fleet configuration renders `~/.config/fleet/claude/content.mcp.json`, a Claude Code MCP config whose `mcpServers` object names those servers; `FM_CONTENT_MCP_CONFIG_FILE` points it at another path, as the test suite does.
+A ship or scout spawned with `fm-spawn.sh --content` launches Claude Code with `--mcp-config <that file>` and no `--strict-mcp-config`, so it keeps its other MCP servers, and its task record carries `content=on`, which a relaunch keeps.
+The spawn, and a relaunch before the old agent stops, refuses when the launch could not load those servers with their sign-in tools callable: another harness, a raw launch command, the T3 Code backend, a secondmate, a missing or malformed file, a server name outside letters, digits, `_` and `-`, a worker-denied MCP server list that names one of its servers or cannot be read, or a hidden-tool entry in `config/crew-exclude-tools` or the worker-denied MCP tool list that matches `mcp__<server>__authenticate` or `mcp__<server>__complete_authentication`.
+Hiding a content server's other tools, such as one generation tool, still works.
+[`bin/fm-exclude-tools-lib.sh`](../bin/fm-exclude-tools-lib.sh) implements the checks, and the [`fm-spawn.sh`](../bin/fm-spawn.sh) header owns the flag.
+
 ## Worker compaction window (config/crew-compact-window)
 
 The optional local, gitignored `config/crew-compact-window` sets the context size at which this home's Claude ships and scouts auto-compact.

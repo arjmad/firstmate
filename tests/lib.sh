@@ -162,6 +162,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # case that exercises a list points it at its own file.
 export FM_WORKER_DENIED_MCP_SERVERS_FILE="$ROOT/tests/fixtures/worker-denied-mcp-servers-none"
 export FM_WORKER_DENIED_MCP_TOOLS_FILE="$ROOT/tests/fixtures/worker-denied-mcp-tools-none"
+# Likewise pin a --content worker's MCP config to a fixture whose one server
+# points at a closed local port, so no test reads the host's config or reaches
+# a real content service.
+export FM_CONTENT_MCP_CONFIG_FILE="$ROOT/tests/fixtures/content.mcp.json"
 
 # --- reporters --------------------------------------------------------------
 

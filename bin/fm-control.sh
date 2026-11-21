@@ -105,7 +105,10 @@
 #              The same pre-stop refusal applies to this home's worker tool
 #              exclusions, worker-denied MCP servers, and Claude compaction
 #              window (bin/fm-exclude-tools-lib.sh): a malformed or unreadable
-#              file, or a replacement launch that cannot honor its list.
+#              file, or a replacement launch that cannot honor its list. A
+#              task recorded content=on (bin/fm-spawn.sh --content) keeps it,
+#              and a replacement that could not load its content MCP config,
+#              such as one on another harness, refuses here the same way.
 #              Refused on t3code before anything is stopped: a T3 thread
 #              keeps its conversation, so a new turn or a provider change on
 #              it continues the same agent rather than a fresh one
@@ -1201,6 +1204,12 @@ resolve_relaunch_profile() {
     fm_worker_denied_mcp_servers_check "$TARGET_HARNESS" 0 "$BACKEND" >/dev/null 2>&1 \
       || { fm_worker_denied_mcp_servers_check "$TARGET_HARNESS" 0 "$BACKEND" >/dev/null; return 1; }
     fm_crew_compact_window_check "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" >/dev/null || return 1
+    if [ "$(fm_meta_get "$META" content)" = on ]; then
+      local content_hidden content_denied
+      content_hidden=$(fm_exclude_tools_check "$TARGET_HARNESS" 0 "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" 2>/dev/null) || return 1
+      content_denied=$(fm_worker_denied_mcp_servers_check "$TARGET_HARNESS" 0 "$BACKEND" 2>/dev/null) || return 1
+      fm_content_mcp_check "$TARGET_HARNESS" 0 "$BACKEND" "$content_hidden" "$content_denied" >/dev/null || return 1
+    fi
   fi
 }
 
