@@ -46,10 +46,12 @@
 #          In a secondmate home (a .fm-secondmate-home marker) an idea or a
 #          --call item is not filed here: it is appended to the parent channel
 #          through bin/fm-parent-channel-lib.sh as one
-#          `needs-decision [key=<id>]: noticed-queue <kind> <id>: <title> -
-#          why: ... - from: ...` line with any repo, evidence, call and now
-#          fields, and no local row is kept; a channel that cannot be written
-#          exits 1. Routine noticed items still file locally.
+#          `needs-decision [key=noticed-queue-<id>]: noticed-queue <kind> <id>
+#          [(call: <kind>)] [(now: ...)]: <title> - why: ... - from: ...` line
+#          with any repo and evidence fields, and no local row is kept; an open
+#          local row of that id is closed with a note that it was handed up. A
+#          channel that cannot be written exits 1. Routine noticed items still
+#          file locally.
 #          A noticed item is filed routine unless --call is given: firstmate
 #          fixes or drops it on its own, so the row is not held, its owner is
 #          the fleet, and it joins no unseen list until `close --fixed` or
@@ -243,18 +245,32 @@ append_body() {  # <id> <line>
 # parent channel instead of holding it here, because the main home's Monday
 # sweep and answer tools never read a mate backlog (docs/secondmate-parent-channel.md
 # "Ideas and captain calls belong to the main home"). The line is a
-# needs-decision keyed by the item id, carrying every field the main home
-# refiles it from; the main home closes it with bin/fm-send.sh --resolve-key
-# once filed. Returns 1 in a main home, which files locally as before; exits 1
+# needs-decision keyed noticed-queue-<id>, a key no backlog row carries,
+# holding every field the main home refiles it from; the main home closes it
+# with bin/fm-send.sh --resolve-key once filed. Returns 1 in a main home, which files locally as before; exits 1
 # when the channel cannot be written, so the item is never dropped silently.
 hand_up_to_parent() {  # <id> <kind> <title> <why> <from> <repo> <evidence> <call> <now>
-  local id=$1 rc=0 fields
-  fields="$2 $id: $3 - why: $4 - from: $5${6:+ - repo: $6}${7:+ - evidence: $7}${8:+ - call: $8}"
-  [ "$9" = 0 ] || fields="$fields - now: urgent or doing harm"
+  local id=$1 key="noticed-queue-$1" rc=0 fields head
+  # The call and urgency lead, so the channel's length cap can only cut evidence.
+  head="$2 $id${8:+ (call: $8)}"
+  [ "$9" = 0 ] || head="$head (now: urgent or doing harm)"
+  fields="$head: $3 - why: $4 - from: $5${6:+ - repo: $6}${7:+ - evidence: $7}"
   fm_parent_channel_report "$FM_HOME" "$STATE" \
-    "needs-decision [key=$id]: noticed-queue $(fm_parent_channel_clean_note "$fields")" "$id" || rc=$?
+    "needs-decision [key=$key]: noticed-queue $(fm_parent_channel_clean_note "$fields")" "$key" || rc=$?
   case "$rc" in
-    0) printf 'handed-up: %s\n' "$id"; return 0 ;;
+    0)
+      # A routine row of this id filed here before is the main home's now, so
+      # close it rather than leave it for this home to fix on its own.
+      lock_state
+      if show=$("$TASKS" show "$id" --full 2>/dev/null) && [ "$(shown_field "$show" state)" != "done" ]; then
+        { append_body "$id" "Handed to the main home $TODAY on the parent channel (key $key); closed here." \
+          && "$TASKS" "done" "$id" >/dev/null; } \
+          || echo "fm-noticed: $id went to the main home, but its open row here could not be closed; close it with bin/fm-noticed.sh close $id" >&2
+        drop_unseen "$id"
+      fi
+      printf 'handed-up: %s\n' "$id"
+      return 0
+      ;;
     1) return 1 ;;
   esac
   echo "fm-noticed: this secondmate home could not hand $id to the main home on its parent channel (rc=$rc); hand it up as a fleet-handoff notice instead" >&2

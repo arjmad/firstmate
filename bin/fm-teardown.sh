@@ -1910,7 +1910,9 @@ EOF
 
 # Is the worktree's PR merged for local work contained in that PR? The local
 # work is the worktree's HEAD, or <commit> when given (teardown's recorded-branch
-# cleanup asks about a branch tip the worktree no longer has checked out). Resolves the
+# cleanup asks about a branch tip the worktree no longer has checked out, with
+# ancestry-only, so only a tip inside the PR head counts and no patch-equivalent
+# rebase hides a commit beyond it). Resolves the
 # PR from the recorded pr= URL first, then from the branch name, and asks the
 # forge for both the PR state and head: a recorded Forgejo URL is read through
 # tea (fm_pr_forgejo_read_record), a recorded GitLab merge request through glab
@@ -1927,8 +1929,8 @@ gitlab_mr_landing_opted_in() {
   [ -e "$CONFIG/park-on-review" ] || [ -e "$CONFIG/auto-land" ]
 }
 
-pr_is_merged() {  # <branch> [<commit>]
-  local branch=$1 tested=${2:-HEAD} target view state remainder head resolved_url current landed=0
+pr_is_merged() {  # <branch> [<commit> [ancestry-only]]
+  local branch=$1 tested=${2:-HEAD} strict=${3:-} target view state remainder head resolved_url current landed=0
   if [ -n "$PR_URL" ]; then
     target=$PR_URL
   else
@@ -1965,7 +1967,7 @@ pr_is_merged() {  # <branch> [<commit>]
   current=$(git -C "$WT" rev-parse --verify "$tested^{commit}" 2>/dev/null) || return 1
   if git -C "$WT" merge-base --is-ancestor "$current" "$head" 2>/dev/null; then
     landed=1
-  elif unpushed_patches_are_in_pr_head "$head" "$current"; then
+  elif [ "$strict" != ancestry-only ] && unpushed_patches_are_in_pr_head "$head" "$current"; then
     landed=1
   fi
   [ "$landed" = 1 ] || return 1
@@ -4212,7 +4214,7 @@ teardown_prove_recorded_branch() {
   [ "$recorded" != "$current" ] || return 0
   tip=$(git -C "$WT" rev-parse --quiet --verify "refs/heads/$recorded^{commit}" 2>/dev/null) || return 0
   RECORDED_BRANCH=$recorded
-  pr_is_merged "$recorded" "$tip" || return 0
+  pr_is_merged "$recorded" "$tip" ancestry-only || return 0
   RECORDED_BRANCH_TIP=$tip
 }
 

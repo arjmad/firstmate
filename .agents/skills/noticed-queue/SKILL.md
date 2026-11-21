@@ -1,6 +1,6 @@
 ---
 name: noticed-queue
-description: Load when teardown prints a `noticed-queue:` line, an inbox note is a fleet-handoff notice, the wake drain prints NOTICED, you notice a problem outside the task at hand, the Monday `[open-items]` note arrives, or you write Atlas's ideas.
+description: Load when teardown prints a `noticed-queue:` line, a secondmate's status shows a `needs-decision [key=noticed-queue-...]` line, an inbox note is a fleet-handoff notice, the wake drain prints NOTICED, you notice a problem outside the task at hand, the Monday `[open-items]` note arrives, or you write Atlas's ideas.
 user-invocable: false
 metadata:
   internal: true
@@ -21,8 +21,8 @@ One funnel: workers, Cade, Codex and the second mate hand what they notice to fi
 Firstmate is the only writer.
 Teardown, which firstmate runs, files one kind itself: `noticed-kept-checkout-<task>`, a scratch checkout it kept in `data/<task>/`.
 Settle that row by proving each checkout landed, deleting only those and any whose discard the captain himself recorded, and holding the rest for the captain as one `--call ask-first` discard list, because deleting unlanded work is ask-first.
-Items arrive five ways: a teardown's `noticed-queue:` lines, a fleet-handoff notice in the inbox (`[<agent>] notice: ...`), a secondmate's `needs-decision [key=<id>]: noticed-queue <kind> <id>: ...` parent-channel line, a scout report, and what firstmate itself notices.
-File a secondmate's line here from its fields, then close its key with `bin/fm-send.sh <mate-id> --resolve-key <id> "filed in the main home as <id>"`.
+Items arrive five ways: a teardown's `noticed-queue:` lines, a fleet-handoff notice in the inbox (`[<agent>] notice: ...`), a secondmate's `needs-decision [key=noticed-queue-<id>]: noticed-queue <kind> <id> ...` parent-channel line, a scout report, and what firstmate itself notices.
+File a secondmate's line here from its fields, then close its key with `bin/fm-send.sh <mate-id> --resolve-key noticed-queue-<id> "filed in the main home as <id>"`.
 Each task yields at most one noticed and one idea; `none` and an empty section are normal.
 
 1. Run `bin/fm-noticed.sh list` and look for an open item about the same broken thing or the same idea.

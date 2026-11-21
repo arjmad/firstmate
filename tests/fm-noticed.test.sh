@@ -495,21 +495,21 @@ test_a_secondmate_hands_ideas_and_calls_to_the_main_home() {
     --from sm-task --repo firstmate --evidence "sweep log") || fail "a mate refused a valid idea: $out"
   [ "$out" = "handed-up: idea-faster-sweep" ] || fail "a mate idea did not report handed-up: $out"
   ! tasks "$home" show idea-faster-sweep >/dev/null 2>&1 || fail "a mate kept a local row for an idea it handed up"
-  grep -q '^needs-decision \[key=idea-faster-sweep\] \[at=[0-9]*\]: noticed-queue idea idea-faster-sweep: Sweep faster - why: it saves a wake - from: sm-task - repo: firstmate - evidence: sweep log$' \
+  grep -q '^needs-decision \[key=noticed-queue-idea-faster-sweep\] \[at=[0-9]*\]: noticed-queue idea idea-faster-sweep: Sweep faster - why: it saves a wake - from: sm-task - repo: firstmate - evidence: sweep log$' \
     "$channel" || fail "the parent channel line does not carry every field: $(cat "$channel")"
   # The real classifier: the line wakes the parent as a decision, and a
   # resolved line for its key, which bin/fm-send.sh --resolve-key writes, closes it.
   span=$(bash -c '. "$1"; status_span_first_actionable_record "$2" 0 rec nd; rc=$?; printf "%s %s" "$rc" "$nd"' \
     _ "$ROOT/bin/fm-classify-lib.sh" "$channel")
   [ "$span" = "0 1" ] || fail "the handed-up line did not read as a new parent decision: $span"
-  printf 'resolved [key=idea-faster-sweep] [at=1]: answered: filed in the main home\n' >> "$channel"
+  printf 'resolved [key=noticed-queue-idea-faster-sweep] [at=1]: answered: filed in the main home\n' >> "$channel"
   ! bash -c '. "$1"; status_has_open_needs_decision "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$channel" \
     || fail "a resolved line did not close the handed-up decision"
 
   out=$(noticed "$home" file noticed slow-canary --title "Canary slow" --why "it may time out" \
     --from sm-task --call ruling) || fail "a mate refused a valid --call item: $out"
   [ "$out" = "handed-up: noticed-slow-canary" ] || fail "a mate --call item did not report handed-up: $out"
-  grep -q '^needs-decision \[key=noticed-slow-canary\] .*noticed-queue noticed noticed-slow-canary: Canary slow - why: it may time out - from: sm-task - call: ruling$' \
+  grep -q '^needs-decision \[key=noticed-queue-noticed-slow-canary\] .*noticed-queue noticed noticed-slow-canary (call: ruling): Canary slow - why: it may time out - from: sm-task$' \
     "$channel" || fail "the --call item did not reach the parent channel with its call kind: $(cat "$channel")"
   ! tasks "$home" show noticed-slow-canary >/dev/null 2>&1 || fail "a mate kept a local row for a --call item it handed up"
 
@@ -517,6 +517,12 @@ test_a_secondmate_hands_ideas_and_calls_to_the_main_home() {
     || fail "a mate refused a routine item: $out"
   [ "$out" = "filed: noticed-flaky-test" ] || fail "a mate did not file its routine item locally: $out"
   ! grep -q 'flaky-test' "$channel" || fail "a routine item went to the parent channel"
+  # The same item seen again as a call goes up, and its routine row here closes.
+  out=$(noticed "$home" file noticed flaky-test --title "Flaky test" --why "it blocks merges" --from sm-task --call ruling) \
+    || fail "a mate refused a --call for its routine item: $out"
+  [ "$out" = "handed-up: noticed-flaky-test" ] || fail "a routine item seen as a call was not handed up: $out"
+  assert_contains "$(tasks "$home" show noticed-flaky-test)" "state: done" \
+    "the routine row of a handed-up call stayed open for the mate to fix"
 
   rm "$home/.fm-secondmate-parent"
   set +e

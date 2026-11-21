@@ -2338,6 +2338,12 @@ recorded_branch_case() {
     checked-out-elsewhere)
       git -C "$case_dir/project" worktree add -q "$case_dir/other" fm/task-x1
       ;;
+    patch-equivalent)
+      # A rebased copy of the PR head: the same patch, but not inside the head.
+      git -C "$case_dir/project" -c user.email=t@t -c user.name=t \
+        commit-tree -p "$pr_head^" -m "rebased copy" "$pr_head^{tree}" \
+        | xargs git -C "$case_dir/project" update-ref refs/heads/fm/task-x1
+      ;;
   esac
 
   set +e
@@ -2364,7 +2370,8 @@ test_recorded_branch_deleted_once_its_pr_merged() {
 test_recorded_branch_with_unlanded_commit_is_kept() {
   recorded_branch_case recorded-branch-beyond beyond-head
   recorded_branch_case recorded-branch-elsewhere checked-out-elsewhere
-  pass "teardown keeps a recorded branch past its merged PR head or checked out in another worktree"
+  recorded_branch_case recorded-branch-rebased patch-equivalent
+  pass "teardown keeps a recorded branch past its merged PR head, a rebased copy of it, or one checked out in another worktree"
 }
 
 test_pushed_follow_up_after_merged_pr_refuses() {
@@ -7942,6 +7949,8 @@ test_companion_work_written_at_reap_is_preserved
 test_reassigned_companion_worktree_is_untouched
 test_pushed_branch_with_open_pr_refuses
 test_pushed_branch_with_merged_pr_allows
+test_recorded_branch_deleted_once_its_pr_merged
+test_recorded_branch_with_unlanded_commit_is_kept
 test_pushed_follow_up_after_merged_pr_refuses
 test_unrecorded_open_pr_found_by_branch_refuses
 test_closed_unmerged_pr_refuses_when_content_absent

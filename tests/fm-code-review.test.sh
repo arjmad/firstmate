@@ -517,6 +517,16 @@ test_review_runs_in_a_throwaway_checkout() {
     [ "$(git -C "$dir/work" symbolic-ref --short HEAD)" = ship ] || fail "review-throwaway: the caller's checkout left its branch"
     [ "$(git -C "$dir/work" rev-parse HEAD)" = "$head" ] || fail "review-throwaway: the caller's HEAD moved"
   done
+  # A caller inside a git hook has GIT_DIR and GIT_WORK_TREE set; the review
+  # still runs in its own clone and leaves the caller's checkout alone.
+  dir=$(make_case review-throwaway-gitdir bin/tool.sh)
+  make_claude "$dir"
+  printf 'No defects.\n\n```json\n[]\n```\n' > "$dir/claude-out"
+  head=$(git -C "$dir/work" rev-parse HEAD)
+  GIT_DIR="$dir/work/.git" GIT_WORK_TREE="$dir/work" run_review "$dir" "$URL" --model claude-opus-5-5
+  expect_code 0 "$RC" "review-throwaway-gitdir: the review should succeed: $ERR"
+  [ "$(git -C "$dir/work" symbolic-ref --short HEAD)" = ship ] || fail "review-throwaway-gitdir: an inherited GIT_DIR moved the caller's branch"
+  [ "$(git -C "$dir/work" rev-parse HEAD)" = "$head" ] || fail "review-throwaway-gitdir: the caller's HEAD moved"
   # The checkout started at the base branch, with the pull request head beside it.
   dir=$(make_case review-throwaway-base bin/tool.sh)
   make_claude "$dir"

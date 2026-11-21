@@ -15,7 +15,8 @@
 #   - the pull request's author is the signed-in gh account, so the branch is
 #     firstmate's own rather than a collaborator's;
 #   - the branch tip on GitHub is still the pull request's head commit, so no
-#     commit beyond that head is discarded.
+#     commit beyond that head is discarded: the delete is a git push with a
+#     lease on that head, which GitHub refuses for any other tip.
 # It never touches a local branch or checkout; teardown owns local branches.
 # It is not for the Definition of done's close-then-reopen recovery of a CI run
 # an Actions outage stranded: that close must keep the branch to reopen.
@@ -98,9 +99,18 @@ case "$branch" in
 esac
 fm_pr_head_valid "$head" || keep "the pull request's head commit did not read back"
 [ "$cross" = false ] || keep "it lives in a fork, not in $repo"
-viewer=$(gh api user --jq .login 2>/dev/null) || keep "could not read the signed-in gh account"
+viewer=$(gh api --hostname "$FM_PR_HOST" user --jq .login 2>/dev/null) || keep "could not read the signed-in gh account"
 [ -n "$author" ] && [ "$author" = "$viewer" ] || keep "the pull request's author ${author:-unknown} is not the signed-in account ${viewer:-unknown}"
-tip=$(gh api "repos/$repo/git/ref/heads/$branch" --jq .object.sha 2>/dev/null) || keep "could not read its tip on GitHub, or it is already gone"
-[ "$tip" = "$head" ] || keep "its tip $tip is past the pull request's head $head"
-gh api -X DELETE "repos/$repo/git/refs/heads/$branch" >/dev/null 2>&1 || keep "GitHub refused to delete it"
+# The delete is a push with a lease on the pull request's head, so GitHub
+# itself refuses it when the branch tip is anything else, even one pushed a
+# moment ago. The push runs from an empty scratch repository with gh's
+# credentials and never a prompt.
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/fm-pr-close.XXXXXX") || keep "could not make a scratch repository to push the delete from"
+trap 'rm -rf "$scratch"' EXIT
+git init -q "$scratch" || keep "could not make a scratch repository to push the delete from"
+if ! GIT_TERMINAL_PROMPT=0 git -C "$scratch" -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+  push -q --force-with-lease="refs/heads/$branch:$head" \
+  "https://$FM_PR_HOST/$repo.git" ":refs/heads/$branch" >/dev/null 2>&1; then
+  keep "its tip is not the pull request's head $head, it is already gone, or GitHub refused the delete"
+fi
 echo "deleted: branch $branch of $repo"

@@ -486,6 +486,11 @@ CODE_REVIEW_CHECKOUT=
 # base keeps the pull request's own Claude settings and hooks from loading,
 # as REVIEW.md is read from the base. The clone is removed on exit, failure
 # and signals included.
+code_review_drop_repo_env() {
+  unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_IMPLICIT_WORK_TREE GIT_PREFIX
+}
+
 code_review_checkout() {
   local dir
   if ! code_review_base; then
@@ -497,16 +502,21 @@ code_review_checkout() {
   trap 'rm -rf "$CODE_REVIEW_CHECKOUT"' EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  if git init -q "$dir" \
-    && git -C "$dir" remote add origin "https://$FM_PR_HOST/$FM_PR_OWNER/$FM_PR_REPO.git" \
-    && git -C "$dir" config remote.origin.promisor true \
-    && git -C "$dir" config remote.origin.partialclonefilter blob:none \
-    && git -C "$dir" config credential.helper '' \
-    && git -C "$dir" config --add credential.helper '!gh auth git-credential' \
-    && GIT_TERMINAL_PROMPT=0 git -C "$dir" fetch -q --filter=blob:none origin \
-      "+refs/heads/$CODE_REVIEW_BASE:refs/remotes/origin/$CODE_REVIEW_BASE" \
-      "+refs/pull/$FM_PR_NUMBER/head:refs/remotes/origin/pr/$FM_PR_NUMBER" \
-    && GIT_TERMINAL_PROMPT=0 git -C "$dir" checkout -q --detach "refs/remotes/origin/$CODE_REVIEW_BASE"; then
+  # A caller's GIT_DIR or GIT_WORK_TREE (a git hook sets them) would point
+  # these git commands back at the caller's repository, so drop them here.
+  if (
+    code_review_drop_repo_env
+    git init -q "$dir" \
+      && git -C "$dir" remote add origin "https://$FM_PR_HOST/$FM_PR_OWNER/$FM_PR_REPO.git" \
+      && git -C "$dir" config remote.origin.promisor true \
+      && git -C "$dir" config remote.origin.partialclonefilter blob:none \
+      && git -C "$dir" config credential.helper '' \
+      && git -C "$dir" config --add credential.helper '!gh auth git-credential' \
+      && GIT_TERMINAL_PROMPT=0 git -C "$dir" fetch -q --filter=blob:none origin \
+        "+refs/heads/$CODE_REVIEW_BASE:refs/remotes/origin/$CODE_REVIEW_BASE" \
+        "+refs/pull/$FM_PR_NUMBER/head:refs/remotes/origin/pr/$FM_PR_NUMBER" \
+      && GIT_TERMINAL_PROMPT=0 git -C "$dir" checkout -q --detach "refs/remotes/origin/$CODE_REVIEW_BASE"
+  ); then
     return 0
   fi
   echo "error: could not make a throwaway checkout of $FM_PR_URL to review in, so no review ran" >&2
@@ -525,7 +535,7 @@ code_review_run() {  # <model>
   out=$(mktemp "${TMPDIR:-/tmp}/fm-code-review-output.XXXXXX") || return 1
   findings=$(mktemp "${TMPDIR:-/tmp}/fm-code-review-findings.XXXXXX") || return 1
   set +e
-  (cd "$CODE_REVIEW_CHECKOUT" && exec claude -p --model "$model" "/code-review medium $FM_PR_URL $tail") \
+  (cd "$CODE_REVIEW_CHECKOUT" && code_review_drop_repo_env && exec claude -p --model "$model" "/code-review medium $FM_PR_URL $tail") \
     < /dev/null | tee "$out"
   piped=("${PIPESTATUS[@]}")
   set -e

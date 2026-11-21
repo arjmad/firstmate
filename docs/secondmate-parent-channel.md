@@ -48,8 +48,8 @@ A missed-reply escalation includes the complete first sighting path and line num
 
 A secondmate hands every idea and every captain call to the main home, by a fleet-handoff notice or a parent-channel line, and never keeps one held in its own backlog (Arjun, 2026-11-20, deep-audit item a7-25).
 The main home's Monday idea sweep and its answer and defer tools work only the main home's backlog, so a call or idea held only in a mate home is missed by the sweep and cannot be answered there, even where a bearings board shows it.
-`bin/fm-noticed.sh file` does this itself in a mate home: an idea or a `--call` item becomes one keyed `needs-decision [key=<id>]: noticed-queue ...` line on the parent channel, carrying every field the main home files it from, and no local row; its header owns the line's fields.
-The main home files that item in its own backlog and closes the key with `bin/fm-send.sh <mate-id> --resolve-key <id>` (the noticed-queue skill).
+`bin/fm-noticed.sh file` does this itself in a mate home: an idea or a `--call` item becomes one keyed `needs-decision [key=noticed-queue-<id>]: noticed-queue ...` line on the parent channel, carrying every field the main home files it from, and no local row; its header owns the line's fields.
+The main home files that item in its own backlog and closes the key with `bin/fm-send.sh <mate-id> --resolve-key noticed-queue-<id>` (the noticed-queue skill).
 Where the mate's own machinery needs a local record - a child's attested inventory or teardown gate registers its open call in the mate backlog ([captain-hold lifecycle](captain-hold-lifecycle.md)) - `bin/fm-captain-hold.sh` publishes that hold by the row above.
 That local row is only the gate's record: the main home holds the call for the captain, and the mate resolves its row when the main home relays his answer.
 
