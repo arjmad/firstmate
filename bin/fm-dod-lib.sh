@@ -549,10 +549,22 @@ fm_dod_code_review_model() {
   printf '%s\n' "$model"
 }
 
+# The delivery protocol a ship worker reads by path for the full code-review
+# and checks steps, as crewmate-status-protocol holds the status rules. The
+# Definition of done keeps one line per rule, every value it renders (the
+# review script, the pinned model, the mode's push wording), and every stop or
+# escalation; the protocol file holds the rest of each step.
+fm_dod_delivery_protocol() {
+  local d=${BASH_SOURCE[0]%/*}
+  [ "$d" != "${BASH_SOURCE[0]}" ] || d=.
+  printf '%s/.agents/skills/crewmate-delivery-protocol/SKILL.md\n' "$(cd "${d:-/}/.." && pwd)"
+}
+
 fm_dod_code_review_block() {  # <direct-PR|no-mistakes>
-  local cli fix sol_fix model
+  local cli fix sol_fix model protocol
   model=$(fm_dod_code_review_model)
   printf -v cli '%q' "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-code-review.sh"
+  protocol=$(fm_dod_delivery_protocol)
   fix='push a fix for every finding you agree is real'
   sol_fix='push its fixes once the loop ends'
   if [ "$1" = no-mistakes ]; then
@@ -561,20 +573,13 @@ fm_dod_code_review_block() {  # <direct-PR|no-mistakes>
   fi
   cat <<EOF
 Before that done report, give a code-changing GitHub PR its code review; a PR on any other forge skips this step.
-Run \`$cli status <pr-url>\`; \`exempt\` or \`reviewed\` needs nothing more, except the gate statement below when \`status\` says the PR edits its own gate files, so a tinker-tier or docs-only PR runs neither review below.
-On \`unreviewed\`, first run the \`tstack-sol-loop\` skill on your branch against the PR's base once the local checks the repository's own guidance names pass on it: GPT Sol on the Codex subscription reviews the change for at most 3 rounds, never the skill's extended 5, and the skill's own rules decide when the loop stops.
-Settle each Sol finding as that skill says - fix the real ones with the smallest change and decline nits and out-of-scope findings in one line in its ledger - then $sol_fix, since the skill pushes nothing during it, and add the PR-body line the skill asks for.
-When the skill hands an open finding to its user - one disputed twice, or a blocker or should still open when the rounds run out - that user is firstmate: append \`needs-decision [at=<epoch>]: {the open Sol findings}\` and stop.
-This step is the ask that skill waits for, and where it would report a blocker because nothing here can reach Sol - the skill is not installed, Codex is not signed in, or no route runs Sol - skip the loop instead, never substitute another model, append \`working [at=<epoch>]: Sol skipped: {reason}\` so firstmate sees it, and keep the reason for the record note.
-Then run Claude Code's built-in \`/code-review\` once from this worktree on the pinned model \`$model\` with the shell command \`$cli review <pr-url> --model $model\`: it runs the review headless with firstmate's merge-gate focus and then posts each finding to the PR itself, and a refused URL runs no review.
-Do not invoke the skill in your own session instead: an in-session skill runs on the session's model, and a worker cannot switch its own session's model, so only the headless command pins it.
-A medium review takes longer than a shell tool's default time limit, so run that command in the background or with your harness's longest command timeout, and wait for it to exit before you go on.
-Then $fix, reply in the PR thread of every finding you do not, and after your last push run \`$cli record <pr-url> --note 'Sol: <N> rounds, <model>, <verdict>'\`, or \`--note 'Sol: skipped, <reason>'\` when the loop could not run, with no apostrophe in the note, and confirm it prints \`reviewed\`.
-When \`status\` or \`record\` says the PR edits its own gate files, also pass \`--gate '<what the change loosens or tightens against the base branch gate, or nothing loosened>'\` to that \`record\`, with no apostrophe in it, and run it even on \`reviewed\` until \`status\` no longer says the PR edits its own gate files; an \`exempt\` PR needs no statement.
-Pushes that fix or answer this review's findings are covered by the one \`record\` you run after your last push; only a push after \`record\` that changes the diff needs a new review, and a rebase that leaves the diff alone needs none.
-For a small follow-up pushed after \`record\`, run \`$cli record <pr-url> --carry\` instead of a new review; the script decides what a carry covers, and when it refuses, its message says whether to run the carry again or \`/code-review\` again.
-Before such a new \`/code-review\`, run \`tstack-sol-loop\` again as a fresh loop of one round on the change since the record, outside the first loop's 3, settle and escalate its findings as above, and name that round in the new \`record\`'s note.
-Count this PR's full records, the \`fm-code-review v1\` comments you posted without a \`fm-code-review-carry\` or \`fm-code-review-gate\` line, rather than relying on memory: with three already posted, a change that would need another \`/code-review\` pass does not get one: append \`needs-decision [at=<epoch>]: {why the PR keeps needing review}\` and stop instead of looping.
+Read \`$protocol\` "Code review" before this step: it holds each step below in full, including the gate statement, the carry, and how to count records.
+Run \`$cli status <pr-url>\`; \`exempt\` or \`reviewed\` needs nothing more, except the gate statement when \`status\` says the PR edits its own gate files.
+On \`unreviewed\`, first run the \`tstack-sol-loop\` skill on your branch against the PR's base, for at most 3 rounds, never the skill's extended 5, and settle its findings by its rules; then $sol_fix.
+When the skill hands an open finding to its user, that user is firstmate: append \`needs-decision [at=<epoch>]: {the open Sol findings}\` and stop; where nothing here can reach Sol, skip the loop instead, never substitute another model, and append \`working [at=<epoch>]: Sol skipped: {reason}\` so firstmate sees it.
+Then run Claude Code's built-in \`/code-review\` once on the pinned model \`$model\` with the shell command \`$cli review <pr-url> --model $model\`, in the background or with your longest command timeout, never as the skill in your own session: it runs the review headless with firstmate's merge-gate focus and then posts each finding to the PR itself.
+Then $fix, reply in the PR thread of every finding you do not, and after your last push run \`$cli record <pr-url> --note 'Sol: <N> rounds, <model>, <verdict>'\`, or \`--note 'Sol: skipped, <reason>'\`, and confirm it prints \`reviewed\`.
+With three full records already posted, a change that would need another \`/code-review\` pass does not get one: append \`needs-decision [at=<epoch>]: {why the PR keeps needing review}\` and stop instead of looping.
 If the headless \`/code-review\` command cannot run here, or \`review\` exits non-zero, append \`blocked:\` naming its error instead of done.
 EOF
 }
@@ -584,16 +589,14 @@ EOF
 # not reported, and a required check that never reported is absent from the
 # checks list rather than pending. A run an Actions outage strands stays queued
 # with no jobs and refuses cancel and rerun, while a PR reopen starts a fresh
-# run at the same head, so the block names that recovery. fm_dod_accept_ship_done refuses that mode's
-# GitHub done: without `checks green`.
+# run at the same head, so the protocol file names that recovery.
+# fm_dod_accept_ship_done refuses that mode's GitHub done: without `checks green`.
 fm_dod_checks_green_block() {
+  local protocol
+  protocol=$(fm_dod_delivery_protocol)
   cat <<EOF
-On a GitHub PR, then wait for its checks at your pushed HEAD: run \`gh-axi pr checks <number> --watch --fail-fast\`, and while it waits append \`gate-wait [at=<epoch>]: checks on PR {url}\` instead of reporting done.
-A failing check is yours to fix: append \`working [at=<epoch>]: fixing {check}\`, push the fix, and wait again.
-A required check that has never reported is missing from that list rather than pending, so also read \`gh-axi pr view <number>\`: a \`merge_state\` of blocked while every listed check is green means a required check has not posted.
-When that check's Actions run, found with \`gh-axi run list --branch <branch>\`, stays \`queued\` with no jobs in \`gh-axi run view <id>\` for over 10 minutes, as after a GitHub Actions outage, GitHub refuses to cancel or rerun it: run \`gh-axi pr close <number>\` then \`gh-axi pr reopen <number>\`, which starts a fresh \`pull_request\` run at the same head, and wait again.
-A repository with no checks at all reports none, which leaves nothing to wait for.
-A required \`fleet-gate\` or \`gate\` status posts only from a full \`./check.sh\` run on a clean tree whose HEAD is already pushed: run it after your last push, a rebase or force-push included because the new head has no status yet, never as a single-suite run, and with no untracked files left in the tree - the \`findings.json\` that \`/code-review\` writes counts.
+On a GitHub PR, then wait for its checks at your pushed HEAD with \`gh-axi pr checks <number> --watch --fail-fast\`, appending \`gate-wait [at=<epoch>]: checks on PR {url}\` while it waits instead of reporting done; a failing check is yours to fix: append \`working [at=<epoch>]: fixing {check}\`, push the fix, and wait again.
+Read \`$protocol\` "Checks" before that wait: it covers a required check that never reported (\`merge_state\`), an Actions run an outage stranded (\`gh-axi pr reopen <number>\`), and the required \`fleet-gate\` or \`gate\` status only a full \`./check.sh\` on a clean pushed tree posts, \`findings.json\` included.
 EOF
 }
 
