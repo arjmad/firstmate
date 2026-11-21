@@ -1493,6 +1493,46 @@ test_claude_advisor_follows_the_relaunch() {
   pass "fm-control relaunch: a Claude replacement keeps its advisor on the same model, drops it on a model change, and refuses a Fable main first"
 }
 
+# A content task (bin/fm-spawn.sh --content): a Claude relaunch keeps
+# content=on and its --mcp-config, and a replacement on another harness, or one
+# whose sign-in tools a later denial would hide, refuses before the running
+# agent stops.
+test_content_task_keeps_its_mcp_config_across_relaunch() {
+  local dir out rc id=rl-content meta config
+  dir=$(new_case content "$id")
+  add_ship_task "$dir" "$id" claude
+  meta="$dir/home/state/$id.meta"
+  printf 'content=on\n' >> "$meta"
+  config="$(cd "$ROOT/tests/fixtures" && pwd -P)/content.mcp.json"
+  out=$(run_control "$dir" "$id" relaunch --note "keep content"); rc=$?
+  expect_code 0 "$rc" "a Claude relaunch of a content task should succeed"$'\n'"$out"
+  assert_contains "$(cat "$dir/fake/literal")" "--mcp-config '$config' --append-system-prompt " \
+    "the relaunched content worker must load the content MCP config"
+  assert_not_contains "$(cat "$dir/fake/literal")" "--strict-mcp-config" \
+    "the relaunched content worker must keep its other MCP servers"
+  [ "$(meta_field "$dir" "$id" content)" = on ] \
+    || fail "the relaunch must keep content=on, got '$(meta_field "$dir" "$id" content)'"
+  out=$(run_control "$dir" "$id" relaunch --harness codex --note "switch runtime"); rc=$?
+  expect_code 1 "$rc" "a content task relaunch onto codex must refuse"
+  assert_contains "$out" "--content loads the content MCP servers through Claude Code's --mcp-config, so it needs --harness claude" \
+    "the harness refusal must say why"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "a refused content relaunch stopped the running agent"
+  mkdir -p "$dir/fleet"
+  printf 'mcp__higgsfield__complete_authentication\n' > "$dir/fleet/worker-denied-mcp-tools"
+  out=$(FM_WORKER_DENIED_MCP_TOOLS_FILE="$dir/fleet/worker-denied-mcp-tools" \
+    run_control "$dir" "$id" relaunch --note "denied sign-in"); rc=$?
+  expect_code 1 "$rc" "a content relaunch whose sign-in tool is denied must refuse"
+  assert_contains "$out" "needs mcp__higgsfield__complete_authentication callable" "the sign-in refusal must say why"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "a refused sign-in relaunch stopped the running agent"
+  [ "$(meta_field "$dir" "$id" content)" = on ] || fail "a refused relaunch must keep content=on"
+  : > "$dir/fake/literal"
+  out=$(run_control "$dir" "$id" relaunch --harness codex --no-content --note "recover off content"); rc=$?
+  expect_code 0 "$rc" "a --no-content relaunch onto codex should succeed"$'\n'"$out"
+  assert_not_contains "$(cat "$dir/fake/literal")" "--mcp-config" "a --no-content replacement must not load the content MCP config"
+  [ -z "$(meta_field "$dir" "$id" content)" ] || fail "--no-content must drop content=on from the record"
+  pass "fm-control relaunch: a content task keeps --mcp-config and content=on, refuses another harness or a denied sign-in tool first, and --no-content recovers it"
+}
+
 test_secondmate_relaunch_refuses_an_advisor() {
   local dir home out rc
   dir=$(new_case smadvisor sma1)
@@ -3818,6 +3858,7 @@ test_exclude_tools_refusals_happen_before_the_agent_stops
 test_claude_denied_mcp_servers_follow_the_relaunch
 test_claude_compact_window_follows_the_relaunch
 test_claude_advisor_follows_the_relaunch
+test_content_task_keeps_its_mcp_config_across_relaunch
 test_secondmate_relaunch_refuses_an_advisor
 test_explicit_model_wins_over_the_recorded_one
 test_relaunch_onto_an_unverified_harness_is_refused

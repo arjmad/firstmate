@@ -3182,6 +3182,134 @@ test_batch_forwards_an_explicit_default_advisor() {
   pass "a batch forwards an explicit --advisor default so no pair refills it from the config, and fills each pair without one"
 }
 
+# --content: a Claude ship or scout loads the content MCP config through
+# --mcp-config, keeps its other MCP servers, and records content=on; a launch
+# without it is unchanged; and every launch that could not load the content
+# servers with their sign-in tools callable refuses before any launch or record.
+content_fixture_path() {
+  printf '%s/content.mcp.json' "$(cd "$ROOT/tests/fixtures" && pwd -P)"
+}
+
+test_claude_content_workers_load_the_content_mcp_config() {
+  local kind rec id id2 out status args after
+  for kind in ship scout; do
+    id="claude-content-$kind-z42"
+    rec=$(make_spawn_case "claude-content-$kind" claude "$id")
+    read_case_record "$rec"
+    # A bare `mcp` home exclusion hides no MCP tool, so it must not count as
+    # hiding the sign-in tools.
+    write_exclude_file "$HOME_DIR" 'mcp'
+    write_denied_mcp_tools_file 'mcp__monarch__Create*' 'mcp__higgsfield__generate_video'
+    case "$kind" in
+      ship) out=$(FM_WORKER_DENIED_MCP_TOOLS_FILE="$CASE_DIR/fleet/worker-denied-mcp-tools" \
+        run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --content 2>&1) ;;
+      scout) out=$(FM_WORKER_DENIED_MCP_TOOLS_FILE="$CASE_DIR/fleet/worker-denied-mcp-tools" \
+        run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout --content 2>&1) ;;
+    esac
+    status=$?
+    expect_code 0 "$status" "claude $kind spawn with --content should succeed"$'\n'"$out"
+    args=$(claude_launch_args "$WT_DIR")
+    printf '%s\n' "$args" | grep -A1 -x -- --mcp-config | grep -qxF "$(content_fixture_path)" \
+      || fail "the $kind launch must pass --mcp-config $(content_fixture_path), got:"$'\n'"$args"
+    after=$(printf '%s\n' "$args" | grep -A2 -x -- --mcp-config | sed -n 3p)
+    case "$after" in
+      --*) ;;
+      *) fail "a flag must follow the variadic --mcp-config value in the $kind launch, got '$after'" ;;
+    esac
+    printf '%s\n' "$args" | grep -qx -- --strict-mcp-config \
+      && fail "a $kind content launch must keep the worker's other MCP servers"
+    printf '%s\n' "$args" | grep -A1 -x -- --disallowedTools | grep -qx 'mcp,mcp__monarch__Create\*,mcp__higgsfield__generate_video' \
+      || fail "the $kind content launch must still hide the denied tools, got:"$'\n'"$args"
+    assert_grep content=on "$HOME_DIR/state/$id.meta" "the $kind record must carry content=on"
+    assert_contains "$out" " content=on" "the $kind spawned line must name the content switch"
+  done
+  id=claude-content-none-z42
+  rec=$(make_spawn_case claude-content-none claude "$id")
+  read_case_record "$rec"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
+  expect_code 0 "$?" "claude spawn without --content should succeed"$'\n'"$out"
+  args=$(claude_launch_args "$WT_DIR")
+  printf '%s\n' "$args" | grep -qx -- --mcp-config && fail "a launch without --content must not pass --mcp-config"
+  assert_no_grep content= "$HOME_DIR/state/$id.meta" "a launch without --content must record none"
+  id=claude-content-batch-a-z42
+  id2=claude-content-batch-b-z42
+  rec=$(make_spawn_case claude-content-batch claude "$id" "$id2")
+  read_case_record "$rec"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id=$PROJ_DIR" "$id2=$PROJ_DIR" --content 2>&1)
+  expect_code 0 "$?" "a batch with --content should launch"$'\n'"$out"
+  assert_grep content=on "$HOME_DIR/state/$id.meta" "a batch --content must reach the first pair"
+  assert_grep content=on "$HOME_DIR/state/$id2.meta" "a batch --content must reach the second pair"
+  pass "claude content ships and scouts load the content MCP config without --strict-mcp-config and record content=on; other launches are unchanged"
+}
+
+test_claude_content_refuses_launches_that_cannot_load_it() {
+  local setup rec id out status harness want
+  local -a args overrides
+  for setup in codex raw secondmate relaunch fresh-no-content missing malformed bad-server denied-server deny-all \
+    tool-glob server-glob whole-server; do
+    id="claude-content-refuse-$setup-z43"
+    harness=claude
+    [ "$setup" != codex ] || harness=codex
+    rec=$(make_spawn_case "claude-content-refuse-$setup" "$harness" "$id")
+    read_case_record "$rec"
+    args=("$id" "$PROJ_DIR" --mode no-mistakes --yolo off --content)
+    overrides=()
+    mkdir -p "$CASE_DIR/fleet"
+    case "$setup" in
+      codex) want="needs --harness claude; the codex runtime cannot load them" ;;
+      raw) args+=("claude --dangerously-skip-permissions"); want="a raw launch command cannot load them" ;;
+      secondmate)
+        make_seeded_secondmate_home "$CASE_DIR/secondmate-home" "$id"
+        args=("$id" "$CASE_DIR/secondmate-home" --secondmate --content)
+        want="never a secondmate"
+        ;;
+      relaunch) args=("$id" --relaunch --content); want="not a relaunch axis" ;;
+      fresh-no-content) args=("$id" "$PROJ_DIR" --mode no-mistakes --yolo off --no-content); want="--no-content applies to --relaunch only" ;;
+      missing) overrides=("FM_CONTENT_MCP_CONFIG_FILE=$CASE_DIR/fleet/absent.json"); want="missing or not a readable regular file" ;;
+      malformed)
+        printf '{"mcpServers":{}}\n' > "$CASE_DIR/fleet/content.mcp.json"
+        overrides=("FM_CONTENT_MCP_CONFIG_FILE=$CASE_DIR/fleet/content.mcp.json"); want="non-empty mcpServers object"
+        ;;
+      bad-server)
+        printf '{"mcpServers":{"higgs field":{"type":"http","url":"http://127.0.0.1:9/"}}}\n' > "$CASE_DIR/fleet/content.mcp.json"
+        overrides=("FM_CONTENT_MCP_CONFIG_FILE=$CASE_DIR/fleet/content.mcp.json"); want="names server 'higgs field'"
+        ;;
+      denied-server)
+        printf 'homeassistant\nhiggsfield\n' > "$CASE_DIR/fleet/worker-denied-mcp-servers"
+        overrides=("FM_WORKER_DENIED_MCP_SERVERS_FILE=$CASE_DIR/fleet/worker-denied-mcp-servers"); want="loads MCP server higgsfield, but the worker-denied MCP server list"
+        ;;
+      deny-all)
+        write_denied_mcp_tools_file 'two words'
+        overrides=("FM_WORKER_DENIED_MCP_TOOLS_FILE=$CASE_DIR/fleet/worker-denied-mcp-tools"); want="would be denied every MCP server"
+        ;;
+      tool-glob)
+        write_denied_mcp_tools_file 'mcp__monarch__Create*' 'mcp__*__authenticate'
+        overrides=("FM_WORKER_DENIED_MCP_TOOLS_FILE=$CASE_DIR/fleet/worker-denied-mcp-tools")
+        want="needs mcp__higgsfield__authenticate callable for the content sign-in, but the hidden-tool entry 'mcp__*__authenticate'"
+        ;;
+      server-glob)
+        write_denied_mcp_tools_file 'mcp__higgsfield__*'
+        overrides=("FM_WORKER_DENIED_MCP_TOOLS_FILE=$CASE_DIR/fleet/worker-denied-mcp-tools")
+        want="the hidden-tool entry 'mcp__higgsfield__*'"
+        ;;
+      whole-server)
+        write_exclude_file "$HOME_DIR" 'mcp__higgsfield'
+        want="the hidden-tool entry 'mcp__higgsfield'"
+        ;;
+    esac
+    # Each setup's overrides apply to its own spawn only.
+    out=$(for kv in ${overrides[@]+"${overrides[@]}"}; do export "${kv?}"; done
+      run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "${args[@]}" 2>&1)
+    status=$?
+    [ "$status" -ne 0 ] || fail "the $setup content launch must refuse"$'\n'"$out"
+    assert_contains "$out" "$want" "the $setup refusal must say why"
+    [ ! -s "$LAUNCH_LOG" ] || fail "claude launched despite the $setup content refusal"
+    [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "the $setup content refusal still wrote a task record"
+  done
+  pass "--content refuses another harness, a raw command, a secondmate, a relaunch flag, an unusable config, and any denial of a content server or its sign-in tools"
+}
+
 test_claude_long_launch_is_delivered_intact() {
   local rec id out status launch expected
   id=profile-claude-long-launch-z24
@@ -4025,6 +4153,8 @@ test_claude_advisor_refuses_unpairable_launches
 test_claude_advisor_must_match_the_dispatch_selection
 test_claude_advisor_fills_from_config_when_dispatch_is_not_clear
 test_batch_forwards_an_explicit_default_advisor
+test_claude_content_workers_load_the_content_mcp_config
+test_claude_content_refuses_launches_that_cannot_load_it
 test_claude_long_launch_is_delivered_intact
 test_claude_crewmate_launch_carries_the_attribution_policy
 test_keep_ai_trailers_omits_attribution_settings_and_strip_hooks

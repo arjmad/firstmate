@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--advisor <model>] [--fast <on|off>] [--dispatch-override <reason>] [--placement-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait] [--also <repo>]...
-#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--advisor <model>] [--fast <on|off>] [--dispatch-override <reason>] [--placement-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--advisor <model>] [--fast <on|off>] [--content] [--dispatch-override <reason>] [--placement-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait] [--also <repo>]...
+#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--advisor <model>] [--fast <on|off>] [--content] [--dispatch-override <reason>] [--placement-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--fast <on|off>] [--backend <name>] --secondmate
 #   A fresh ship or scout <project-dir> must resolve, physically, to a clone
 #   directly under this home's projects/ whose git common dir is its own .git;
@@ -87,7 +87,7 @@
 #   first in the private launch-brief overlay, including the exact task-owned
 #   steering inbox. This never rewrites a project's instruction files or a
 #   secondmate's charter.
-#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--advisor <model>] [--fast <on|off>] [--account <entry>]
+#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--advisor <model>] [--fast <on|off>] [--account <entry>] [--no-content]
 #   --relaunch launches a replacement agent for an EXISTING task into that
 #   task's own recorded worktree, reusing its recorded endpoint when that
 #   endpoint still exists, instead of creating either from scratch. It is
@@ -157,6 +157,18 @@
 #   command, and backend=t3code are not filled; a clear selection that names an
 #   advisor still needs --dispatch-override for them, as before. An explicit
 #   `--advisor default` still means no advisor.
+#   --content (fork patch, docs/fork-decisions.md 2026-11-21) marks an image or
+#   video ship or scout: its claude launch gets `--mcp-config <path>` for the
+#   fleet-rendered content MCP config (bin/fm-exclude-tools-lib.sh's
+#   fm_content_mcp_check owns the path, its override, and every refusal), so
+#   those servers load only for this worker. --strict-mcp-config is never added,
+#   so the worker keeps its other MCP servers. The task record carries
+#   content=on, and a relaunch reads it back, so --content is refused beside
+#   --relaunch, on a secondmate, and on every launch that check refuses: another
+#   harness, a raw command, backend=t3code, a missing config, or a denial that
+#   would hide a content server or its sign-in tools. --no-content, valid only
+#   beside --relaunch (bin/fm-control.sh relaunch --no-content), drops content=on
+#   so a task that check would refuse can still get a replacement.
 #   --fast <on|off> is this task's model priority ("fast") tier, default off.
 #   Off is the captain's standing orchestration default: every firstmate-launched
 #   worker runs standard tier even when the launching machine's own config or a
@@ -662,6 +674,10 @@
 #                  (claude_session_name_flag below; supplies its own trailing space)
 #     __CLAUDEADVISOR__ `--advisor <model> ` from --advisor on a Claude ship or
 #                  scout (supplies its own trailing space, empty otherwise)
+#     __CLAUDECONTENTMCP__ `--mcp-config '<path>' ` from --content on a Claude
+#                  ship or scout (supplies its own trailing space, empty
+#                  otherwise); --mcp-config is variadic, so a later flag always
+#                  follows it, as for __CLAUDEEXCLUDE__
 #     __PIBIN__    quoted concrete Pi-family executable path resolved from PATH
 #     __PITUIMODE__ optional --tui-mode regular when that executable advertises it
 #     __PIAPPROVE__ optional --approve on a Pi/pi-signed launch when that
@@ -1127,6 +1143,8 @@ MODEL=
 EFFORT=
 ADVISOR=
 ADVISOR_SET=0
+CONTENT=0
+NO_CONTENT=0
 DISPATCH_OVERRIDE=
 PLACEMENT_OVERRIDE=
 PLACEMENT_OVERRIDE_SET=0
@@ -1251,6 +1269,8 @@ for a in "$@"; do
     KIND_SET=1
     ;;
   --relaunch) RELAUNCH=1 ;;
+  --content) CONTENT=1 ;;
+  --no-content) NO_CONTENT=1 ;;
   --herdr-resume-lock-wait) HERDR_RESUME_LOCK_WAIT=1 ;;
   --harness) want_value=harness ;;
   --harness=*)
@@ -1363,6 +1383,18 @@ fi
 [ "$ADVISOR" != default ] || ADVISOR=
 if [ "$KIND" = secondmate ] && [ -n "$ADVISOR" ]; then
   echo 'error: --advisor is for ship and scout launches, never a secondmate' >&2
+  exit 1
+fi
+if [ "$CONTENT" = 1 ] && [ "$KIND" = secondmate ]; then
+  echo 'error: --content is for image and video ship and scout launches, never a secondmate' >&2
+  exit 1
+fi
+if [ "$CONTENT" = 1 ] && [ "$RELAUNCH" -eq 1 ]; then
+  echo "error: --content is not a relaunch axis; a relaunch keeps the content=on the task's record carries" >&2
+  exit 1
+fi
+if [ "$NO_CONTENT" = 1 ] && [ "$RELAUNCH" -eq 0 ]; then
+  echo "error: --no-content applies to --relaunch only; a fresh spawn without --content loads no content MCP config" >&2
   exit 1
 fi
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || {
@@ -2136,6 +2168,7 @@ spawn_abort_cleanup() {
             echo "model=${MODEL:-default}"
             echo "effort=${EFFORT:-default}"
             [ -z "$ADVISOR" ] || echo "advisor=$ADVISOR"
+            [ "$CONTENT" = 0 ] || echo "content=on"
             echo "fast=$FAST"
             echo "backend=orca"
             echo "orca_worktree_id=$ORCA_WORKTREE_ID"
@@ -2652,6 +2685,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   # An explicit `--advisor default` is forwarded as such, so no pair refills it
   # from the dispatch config.
   [ "$ADVISOR_SET" -eq 0 ] || shared_args+=(--advisor "${ADVISOR:-default}")
+  [ "$CONTENT" = 0 ] || shared_args+=(--content)
   [ -z "$DISPATCH_OVERRIDE" ] || shared_args+=(--dispatch-override "$DISPATCH_OVERRIDE")
   [ "$PLACEMENT_OVERRIDE_SET" -eq 0 ] || shared_args+=(--placement-override "$PLACEMENT_OVERRIDE")
   [ "$HERMES_PROFILE_SET" -eq 0 ] || shared_args+=(--hermes-profile "$HERMES_PROFILE")
@@ -3110,6 +3144,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fi
   MODE=$(fm_meta_get "$RELAUNCH_META" mode)
   YOLO=$(fm_meta_get "$RELAUNCH_META" yolo)
+  [ "$NO_CONTENT" = 1 ] || [ "$(fm_meta_get "$RELAUNCH_META" content)" != on ] || CONTENT=1
   UPSTREAM_CONSENT=$(fm_meta_get "$RELAUNCH_META" upstream_consent)
   if [ "$KIND" = ship ]; then
     BRANCH=$(fm_meta_get "$RELAUNCH_META" branch)
@@ -3501,7 +3536,7 @@ launch_template() {
     [ "$kind" = secondmate ] || printf '%s' 'CLAUDE_CODE_ENABLE_TODO_TOOLS=1 __CLAUDECOMPACT__'
     printf '%s' 'claude __CLAUDEPERMFLAG__ __CLAUDEADDDIRS__--settings __CLAUDESETTINGS__ '
     if [ "$kind" != secondmate ]; then
-      printf '%s' '__CLAUDEEXCLUDE__'
+      printf '%s' '__CLAUDEEXCLUDE____CLAUDECONTENTMCP__'
       printf '%s' "--append-system-prompt '$(spawn_claude_task_channel_statement)' "
     fi
     # Claude Code strips invisible characters, U+2063 included, from the
@@ -4006,9 +4041,15 @@ DENIED_MCP_SERVERS=
 # malformed. Only a templated launch can carry it: a raw command is the
 # operator's own, and backend=t3code builds its own claude command.
 COMPACT_WINDOW=
+# --content (header above) refuses here too, after the denials it must not
+# collide with are known.
+CONTENT_MCP_CONFIG=
 if [ "$KIND" != secondmate ]; then
   EXCLUDE_TOOLS=$(fm_exclude_tools_check "$HARNESS" "$RAW_LAUNCH" "$CONFIG") || exit 1
   DENIED_MCP_SERVERS=$(fm_worker_denied_mcp_servers_check "$HARNESS" "$RAW_LAUNCH" "$BACKEND") || exit 1
+  if [ "$CONTENT" = 1 ]; then
+    CONTENT_MCP_CONFIG=$(fm_content_mcp_check "$HARNESS" "$RAW_LAUNCH" "$BACKEND" "$EXCLUDE_TOOLS" "$DENIED_MCP_SERVERS") || exit 1
+  fi
   COMPACT_WINDOW=$(fm_crew_compact_window_check "$HARNESS" "$CONFIG") || exit 1
   if [ -n "$COMPACT_WINDOW" ] && { [ "$RAW_LAUNCH" = 1 ] || [ "$BACKEND" = t3code ]; }; then
     echo "notice: config/crew-compact-window is not applied to a raw launch command or backend=t3code; $ID launches with the harness default" >&2
@@ -8312,7 +8353,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 # a preserved pr= identity block last, and repairs a record an earlier writer
 # left with a key after it, so the PR merge watch can still read the record.
 preserve_relaunch_meta() {
-  fm_pr_meta_rewrite "$RELAUNCH_META" "window endpoint_task_id worktree project harness hermes_profile hermes_home kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort advisor fast opencode_version account account_provider omp_profile compact_window busy_gen spawn_gen approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id t3_thread_id t3_project_id tern_session_id tern_tab_id tern_block_id hc_session hc_terminal home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential"
+  fm_pr_meta_rewrite "$RELAUNCH_META" "window endpoint_task_id worktree project harness hermes_profile hermes_home kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort advisor content fast opencode_version account account_provider omp_profile compact_window busy_gen spawn_gen approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id t3_thread_id t3_project_id tern_session_id tern_tab_id tern_block_id hc_session hc_terminal home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential"
 }
 {
   echo "window=$META_WINDOW"
@@ -8342,6 +8383,8 @@ preserve_relaunch_meta() {
   # The Claude advisor, only when one applies, so every other record stays
   # byte-identical; bin/fm-control.sh relaunch reads it back.
   [ -z "$ADVISOR" ] || echo "advisor=$ADVISOR"
+  # --content, only when set; bin/fm-spawn.sh --relaunch reads it back.
+  [ "$CONTENT" = 0 ] || echo "content=on"
   echo "fast=$FAST"
   [ -z "$DISPATCH_OVERRIDE" ] || printf 'dispatch_override=%s\n' "$DISPATCH_OVERRIDE"
   if [ -n "$PLACEMENT_FALLBACK_REASON" ]; then
@@ -8565,6 +8608,7 @@ LAUNCH=${LAUNCH//__PIRESUME__/$RESUME_ARGS}
 LAUNCH=${LAUNCH//__CLAUDEPERMFLAG__/$CLAUDE_PERM_FLAG}
 LAUNCH=${LAUNCH//__CLAUDECOMPACT__/${COMPACT_WINDOW:+CLAUDE_CODE_AUTO_COMPACT_WINDOW=$COMPACT_WINDOW }}
 LAUNCH=${LAUNCH//__CLAUDEADVISOR__/${ADVISOR:+--advisor $(shell_quote "$ADVISOR") }}
+LAUNCH=${LAUNCH//__CLAUDECONTENTMCP__/${CONTENT_MCP_CONFIG:+--mcp-config $(shell_quote "$CONTENT_MCP_CONFIG") }}
 case "$LAUNCH" in
 *__CLAUDENAME__*) LAUNCH=${LAUNCH//__CLAUDENAME__/"$(claude_session_name_flag "$ID")"} ;;
 esac
@@ -9455,6 +9499,7 @@ SPAWN_ACCOUNT=
 [ -z "$OMP_PROFILE_PIN" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT omp_profile=$OMP_PROFILE_PIN"
 [ -z "$COMPACT_WINDOW" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT compact_window=$COMPACT_WINDOW"
 [ -z "$ADVISOR" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT advisor=$ADVISOR"
+[ "$CONTENT" = 0 ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT content=on"
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 [ ! -e "$CONFIG/fleet-ledger" ] || [ "$RELAUNCH" -eq 1 ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" dispatched "$ID" "$KIND" "${PROJ_ABS##*/}" "$HARNESS" "$MODEL" || true
 # Opt-in Herdr project groups (docs/herdr-backend.md "Project groups") tag the

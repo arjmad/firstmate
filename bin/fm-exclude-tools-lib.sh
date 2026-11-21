@@ -2,13 +2,14 @@
 # fm-exclude-tools-lib.sh - shared parsing and runtime-support checks for the
 # worker launch inputs of this home's ship and scout workers: the lists that
 # keep tools out of them, config/crew-exclude-tools and the fleet-rendered
-# worker-denied MCP server and MCP tool lists, and the Claude compaction
-# window, config/crew-compact-window. Sourced by bin/fm-spawn.sh and
-# bin/fm-control.sh.
+# worker-denied MCP server and MCP tool lists, the Claude compaction
+# window, config/crew-compact-window, and the content MCP config a --content
+# worker loads. Sourced by bin/fm-spawn.sh and bin/fm-control.sh.
 #
 # docs/configuration.md "Worker tool exclusions", "Worker-denied MCP
-# servers", "Worker-denied MCP tools", and "Worker compaction window" own the
-# file formats and operator contracts; bin/fm-spawn.sh's header owns
+# servers", "Worker-denied MCP tools", "Content workers", and "Worker
+# compaction window" own the file formats and operator contracts;
+# bin/fm-spawn.sh's header owns
 # launch-flag mechanics.
 # Name verification belongs inside the worker's loaded-tool registry, never
 # in an out-of-band server connection from these launch-time checks.
@@ -201,6 +202,91 @@ fm_worker_denied_mcp_servers_check() {
   [ -z "$problem" ] \
     || echo "warning: $label $problem, so this Claude worker is denied every MCP server; render the list from the fleet configuration or set FM_WORKER_DENIED_MCP_SERVERS_FILE or FM_WORKER_DENIED_MCP_TOOLS_FILE" >&2
   printf '%s' "$names"
+}
+
+# fm_content_mcp_config_file: print the path of the content MCP config a
+# --content Claude ship or scout loads through --mcp-config, the
+# fleet-rendered ~/.config/fleet/claude/content.mcp.json;
+# FM_CONTENT_MCP_CONFIG_FILE overrides it for tests and for a home outside
+# that fleet.
+fm_content_mcp_config_file() {
+  printf '%s' "${FM_CONTENT_MCP_CONFIG_FILE:-$HOME/.config/fleet/claude/content.mcp.json}"
+}
+
+# fm_content_mcp_check <harness> <raw-launch 0|1> <backend> <hidden-tools>
+# <denied-servers>: for a --content ship or scout, print the physical path of
+# the content MCP config, after proving the launch can load every server it
+# names with each server's sign-in tools (authenticate and
+# complete_authentication) callable. <hidden-tools> is what
+# fm_exclude_tools_check printed and <denied-servers> what
+# fm_worker_denied_mcp_servers_check printed. Refuses, naming the reason, a
+# runtime other than a templated claude launch, backend=t3code (which builds
+# its own claude command), a missing or malformed config, a server name
+# outside letters, digits, _ and -, a deny-every-server fallback, a denied
+# content server, and any hidden-tool entry that matches a sign-in tool,
+# because --disallowedTools has no exception syntax to reopen one.
+fm_content_mcp_check() {
+  local harness=$1 raw=$2 backend=$3 hidden=$4 denied=$5 file dir servers server tool pattern name whole_server
+  local -a patterns=() denied_names=()
+  if [ "$raw" = 1 ] || [ "$harness" != claude ]; then
+    local runtime="the $harness runtime"
+    [ "$raw" != 1 ] || runtime='a raw launch command'
+    echo "error: --content loads the content MCP servers through Claude Code's --mcp-config, so it needs --harness claude; $runtime cannot load them" >&2
+    return 1
+  fi
+  if [ "$backend" = t3code ]; then
+    echo "error: --content needs --mcp-config on the claude command, but backend=t3code builds its own claude command; choose another backend" >&2
+    return 1
+  fi
+  file=$(fm_content_mcp_config_file)
+  if [ ! -f "$file" ] || [ ! -r "$file" ]; then
+    echo "error: --content needs the content MCP config $file, which is missing or not a readable regular file; render it from the fleet configuration or set FM_CONTENT_MCP_CONFIG_FILE" >&2
+    return 1
+  fi
+  if ! servers=$(jq -r '.mcpServers | if type == "object" and length > 0 then keys[] else error("no servers") end' "$file" 2>/dev/null); then
+    echo "error: the content MCP config $file is not JSON with a non-empty mcpServers object" >&2
+    return 1
+  fi
+  dir=$(cd "$(dirname "$file")" && pwd -P) || {
+    echo "error: cannot resolve the directory of the content MCP config $file" >&2
+    return 1
+  }
+  file="$dir/$(basename "$file")"
+  if [ "$denied" = '*' ]; then
+    echo "error: --content needs its MCP servers, but this Claude worker would be denied every MCP server because a worker-denied MCP list is unusable; fix that list first" >&2
+    return 1
+  fi
+  [ -z "$denied" ] || IFS=, read -r -a denied_names <<<"$denied"
+  [ -z "$hidden" ] || IFS=, read -r -a patterns <<<"$hidden"
+  while IFS= read -r server; do
+    if ! [[ "$server" =~ ^[A-Za-z0-9_-]+$ ]]; then
+      echo "error: the content MCP config $file names server '$server'; use only letters, digits, _ and - so its tool names can be checked" >&2
+      return 1
+    fi
+    for name in ${denied_names[@]+"${denied_names[@]}"}; do
+      [ "$name" != "$server" ] || {
+        echo "error: --content loads MCP server $server, but the worker-denied MCP server list $(fm_worker_denied_mcp_servers_file) denies it" >&2
+        return 1
+      }
+    done
+    for tool in "mcp__${server}__authenticate" "mcp__${server}__complete_authentication"; do
+      for pattern in ${patterns[@]+"${patterns[@]}"}; do
+        # The entry is a glob on purpose: a wildcard and a whole-server
+        # entry (mcp__<server>, no tool part) both hide the sign-in tool.
+        whole_server=0
+        case "$pattern" in
+          mcp__*__*) ;;
+          mcp__?*) whole_server=1 ;;
+        esac
+        # shellcheck disable=SC2053
+        if [[ "$tool" == $pattern ]] || { [ "$whole_server" = 1 ] && [[ "$tool" == ${pattern}__* ]]; }; then
+          echo "error: --content needs $tool callable for the content sign-in, but the hidden-tool entry '$pattern' (config/crew-exclude-tools or $(fm_worker_denied_mcp_tools_file)) would deny it; narrow that entry" >&2
+          return 1
+        fi
+      done
+    done
+  done <<<"$servers"
+  printf '%s' "$file"
 }
 
 # fm_crew_compact_window_check <harness> <config-dir>: for a Claude ship or

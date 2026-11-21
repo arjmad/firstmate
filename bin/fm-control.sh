@@ -6,7 +6,7 @@
 #        fm-control.sh <task-id> exit
 #        fm-control.sh <task-id> relaunch [--harness <name>] [--model <name>]
 #                                         [--effort <level>] [--advisor <model>]
-#                                         [--account <entry>]
+#                                         [--account <entry>] [--no-content]
 #                                         (--note <text> | --note-file <path>)
 #
 # Why this exists, and how it differs from fm-send.sh. bin/fm-send.sh is the
@@ -105,7 +105,12 @@
 #              The same pre-stop refusal applies to this home's worker tool
 #              exclusions, worker-denied MCP servers, and Claude compaction
 #              window (bin/fm-exclude-tools-lib.sh): a malformed or unreadable
-#              file, or a replacement launch that cannot honor its list.
+#              file, or a replacement launch that cannot honor its list. A
+#              task recorded content=on (bin/fm-spawn.sh --content) keeps it,
+#              and a replacement that could not load its content MCP config,
+#              such as one on another harness, refuses here the same way;
+#              --no-content drops content=on for the replacement and skips
+#              that check, the one way to recover such a task otherwise.
 #              Refused on t3code before anything is stopped: a T3 thread
 #              keeps its conversation, so a new turn or a provider change on
 #              it continues the same agent rather than a fresh one
@@ -294,6 +299,7 @@ HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
 ACCOUNT_SET=0
+NO_CONTENT=0
 NOTE=
 NOTE_SET=0
 control_want_value=
@@ -328,6 +334,7 @@ for control_arg in "$@"; do
     --advisor) control_want_value=advisor ;;
     --advisor=*) NEW_ADVISOR=${control_arg#--advisor=}; ADVISOR_SET=1 ;;
     --account) control_want_value=account ;;
+    --no-content) NO_CONTENT=1 ;;
     --account=*) NEW_ACCOUNT=${control_arg#--account=}; ACCOUNT_SET=1 ;;
     --note) control_want_value=note ;;
     --note=*) NOTE=${control_arg#--note=}; NOTE_SET=1 ;;
@@ -346,8 +353,8 @@ if [ -n "$control_want_value" ]; then
 fi
 
 if [ "$VERB" != relaunch ]; then
-  [ "$HARNESS_SET" = 0 ] && [ "$MODEL_SET" = 0 ] && [ "$EFFORT_SET" = 0 ] && [ "$ADVISOR_SET" = 0 ] && [ "$ACCOUNT_SET" = 0 ] && [ "$NOTE_SET" = 0 ] \
-    || die "--harness, --model, --effort, --advisor, --account, and --note apply to 'relaunch' only"
+  [ "$HARNESS_SET" = 0 ] && [ "$MODEL_SET" = 0 ] && [ "$EFFORT_SET" = 0 ] && [ "$ADVISOR_SET" = 0 ] && [ "$ACCOUNT_SET" = 0 ] && [ "$NO_CONTENT" = 0 ] && [ "$NOTE_SET" = 0 ] \
+    || die "--harness, --model, --effort, --advisor, --account, --no-content, and --note apply to 'relaunch' only"
 fi
 [ "$ACCOUNT_SET" = 0 ] || [ -n "$NEW_ACCOUNT" ] || die "--account requires a non-empty value"
 [ "$HARNESS_SET" = 0 ] || [ -n "$NEW_HARNESS" ] || die "--harness requires a non-empty value"
@@ -1201,6 +1208,12 @@ resolve_relaunch_profile() {
     fm_worker_denied_mcp_servers_check "$TARGET_HARNESS" 0 "$BACKEND" >/dev/null 2>&1 \
       || { fm_worker_denied_mcp_servers_check "$TARGET_HARNESS" 0 "$BACKEND" >/dev/null; return 1; }
     fm_crew_compact_window_check "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" >/dev/null || return 1
+    if [ "$NO_CONTENT" = 0 ] && [ "$(fm_meta_get "$META" content)" = on ]; then
+      local content_hidden content_denied
+      content_hidden=$(fm_exclude_tools_check "$TARGET_HARNESS" 0 "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" 2>/dev/null) || return 1
+      content_denied=$(fm_worker_denied_mcp_servers_check "$TARGET_HARNESS" 0 "$BACKEND" 2>/dev/null) || return 1
+      fm_content_mcp_check "$TARGET_HARNESS" 0 "$BACKEND" "$content_hidden" "$content_denied" >/dev/null || return 1
+    fi
   fi
 }
 
@@ -1358,6 +1371,7 @@ do_relaunch() {
   [ "$TARGET_EFFORT" = default ] || spawn_args+=(--effort "$TARGET_EFFORT")
   [ "$TARGET_ADVISOR" = default ] || spawn_args+=(--advisor "$TARGET_ADVISOR")
   [ -z "$TARGET_ACCOUNT" ] || spawn_args+=(--account "$TARGET_ACCOUNT")
+  [ "$NO_CONTENT" = 0 ] || spawn_args+=(--no-content)
   if FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
       "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" >/dev/null; then
     RELAUNCH_META_PUBLISHED=1

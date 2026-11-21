@@ -32,6 +32,7 @@ Run `bin/fm-dispatch-resolve.sh` directly on the written brief in the same turn,
 The generic effort fallback and its precedence are owned by `harness-adapters`: explicit captain and standing configured effort win; otherwise use low for well-understood explicit work, xhigh for ambiguous investigation or design, intermediate levels proportionally, and never max without explicit captain preference.
 Do not add model-specific versions of that policy.
 Every firstmate-launched worker runs the provider's standard tier; `fm-spawn`'s `--fast on` is a per-spawn captain opt-in that is never inherited and never carried to the next task.
+A ship or scout whose task generates images or video spawns on a Claude profile with `fm-spawn`'s `--content`, which loads the content MCP servers for that worker alone ([`configuration`](../../../../../docs/configuration.md#content-workers) "Content workers").
 
 `secondmate-provisioning` owns secondmate harness pins and inherited local material, while `harness-adapters` owns the harness consequences.
 Dispatch only on a backend that `fm-spawn` validates as spawn-capable; pass an explicit per-spawn `--backend` only under that exact task's own authority, never as later-task precedent (selection contract: [`configuration`](../../../../../docs/configuration.md) "Runtime backend").
