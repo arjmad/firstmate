@@ -469,8 +469,8 @@ OUT
   printf 'bin/tool.sh:99\n' > "$dir/inline-refuse"
   run_review "$dir" "$URL" --model claude-opus-5-5
   expect_code 0 "$RC" "review: posting every finding should succeed: $ERR"
-  [ "$(sed -n 1,5p "$dir/claude.log" | tr '\n' ' ')" = '-p --setting-sources user --model claude-opus-5-5 ' ] \
-    || fail "review: claude was not run headless on the pinned model with only user settings: $(cat "$dir/claude.log")"
+  [ "$(sed -n 1,5p "$dir/claude.log" | tr '\n' ' ')" = '-p --settings {"disableAllHooks":true} --model claude-opus-5-5 ' ] \
+    || fail "review: claude was not run headless on the pinned model with every hook off: $(cat "$dir/claude.log")"
   case "$(sed -n 6p "$dir/claude.log")" in
     "/code-review medium $URL Merge-gate focus for this review: "*) ;;
     *) fail "review: the prompt is not the review with the PR URL and the focus: $(sed -n 6p "$dir/claude.log")" ;;

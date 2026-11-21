@@ -126,10 +126,11 @@
 #
 # Usage:
 #   fm-code-review.sh review <pr-url> --model <model>
-#       Runs `claude -p --setting-sources user --model <model> "/code-review
-#       medium <pr-url> <focus>"` (with the base branch's REVIEW.md rules after
-#       the focus when it keeps one) in a throwaway clone detached at the base
-#       branch, never in the caller's checkout, with no project hooks loaded,
+#       Runs `claude -p --settings '{"disableAllHooks":true}' --model <model>
+#       "/code-review medium <pr-url> <focus>"` (with the base branch's
+#       REVIEW.md rules after the focus when it keeps one) in a throwaway clone
+#       detached at the base branch, never in the caller's checkout, with no
+#       hooks run,
 #       printing its output, then posts each finding of its
 #       JSON findings block and prints one `posted:` line.
 #       Exits 0 when every finding posted (none is fine), 1 when the review
@@ -539,10 +540,11 @@ code_review_run() {  # <model>
   out=$(mktemp "${TMPDIR:-/tmp}/fm-code-review-output.XXXXXX") || return 1
   findings=$(mktemp "${TMPDIR:-/tmp}/fm-code-review-findings.XXXXXX") || return 1
   set +e
-  # --setting-sources user: the clone of a firstmate repository passes the
-  # primary-home test its hooks use, so the clone's own project settings, and
-  # with them its session hooks, must not load in the review session.
-  (cd "$CODE_REVIEW_CHECKOUT" && code_review_drop_repo_env && exec claude -p --setting-sources user --model "$model" "/code-review medium $FM_PR_URL $tail") \
+  # disableAllHooks: the clone of a firstmate repository passes the
+  # primary-home test its hooks use, so no hook may run in the review session;
+  # the clone's CLAUDE.md and other project settings still load, as they did
+  # when the review ran in the caller's checkout.
+  (cd "$CODE_REVIEW_CHECKOUT" && code_review_drop_repo_env && exec claude -p --settings '{"disableAllHooks":true}' --model "$model" "/code-review medium $FM_PR_URL $tail") \
     < /dev/null | tee "$out"
   piped=("${PIPESTATUS[@]}")
   set -e
