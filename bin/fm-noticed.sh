@@ -41,6 +41,15 @@
 #                              hold)`
 #            skipped: <id> (answered earlier)   a closed idea is never re-asked,
 #                              archived or not
+#            handed-up: <id>   in a secondmate home, an idea or a --call
+#                              item went to the main home instead (below)
+#          In a secondmate home (a .fm-secondmate-home marker) an idea or a
+#          --call item is not filed here: it is appended to the parent channel
+#          through bin/fm-parent-channel-lib.sh as one
+#          `needs-decision [key=<id>]: noticed-queue <kind> <id>: <title> -
+#          why: ... - from: ...` line with any repo, evidence, call and now
+#          fields, and no local row is kept; a channel that cannot be written
+#          exits 1. Routine noticed items still file locally.
 #          A noticed item is filed routine unless --call is given: firstmate
 #          fixes or drops it on its own, so the row is not held, its owner is
 #          the fleet, and it joins no unseen list until `close --fixed` or
@@ -132,6 +141,8 @@ HOLD="$SCRIPT_DIR/fm-captain-hold.sh"
 TAB=$'\t'
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-parent-channel-lib.sh
+. "$SCRIPT_DIR/fm-parent-channel-lib.sh"
 
 usage() {
   awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
@@ -228,6 +239,28 @@ append_body() {  # <id> <line>
   return "$rc"
 }
 
+# In a secondmate home, hand an idea or a --call item to the main home on the
+# parent channel instead of holding it here, because the main home's Monday
+# sweep and answer tools never read a mate backlog (docs/secondmate-parent-channel.md
+# "Ideas and captain calls belong to the main home"). The line is a
+# needs-decision keyed by the item id, carrying every field the main home
+# refiles it from; the main home closes it with bin/fm-send.sh --resolve-key
+# once filed. Returns 1 in a main home, which files locally as before; exits 1
+# when the channel cannot be written, so the item is never dropped silently.
+hand_up_to_parent() {  # <id> <kind> <title> <why> <from> <repo> <evidence> <call> <now>
+  local id=$1 rc=0 fields
+  fields="$2 $id: $3 - why: $4 - from: $5${6:+ - repo: $6}${7:+ - evidence: $7}${8:+ - call: $8}"
+  [ "$9" = 0 ] || fields="$fields - now: urgent or doing harm"
+  fm_parent_channel_report "$FM_HOME" "$STATE" \
+    "needs-decision [key=$id]: noticed-queue $(fm_parent_channel_clean_note "$fields")" "$id" || rc=$?
+  case "$rc" in
+    0) printf 'handed-up: %s\n' "$id"; return 0 ;;
+    1) return 1 ;;
+  esac
+  echo "fm-noticed: this secondmate home could not hand $id to the main home on its parent channel (rc=$rc); hand it up as a fleet-handoff notice instead" >&2
+  exit 1
+}
+
 hold_reason() {  # <kind> <title> <why> <from> [<call>]
   local label=Noticed
   [ "$1" = idea ] && label=Idea
@@ -271,6 +304,9 @@ cmd_file() {
     refuse "Sapna's agents never file into this backlog (--from $from)"
   fi
   id="$kind-$slug"
+  if [ "$routine" = 0 ]; then
+    hand_up_to_parent "$id" "$kind" "$title" "$why" "$from" "$repo" "$evidence" "$call" "$now" && return 0
+  fi
   lock_state
   if show=$("$TASKS" show "$id" --full 2>/dev/null); then
     state=$(shown_field "$show" state)

@@ -482,7 +482,55 @@ SH
   pass "unseen drops noticed rows closed by any path, keeps now, fixed and dropped rows, rejoins split titles, and prunes nothing on a failed read"
 }
 
+test_a_secondmate_hands_ideas_and_calls_to_the_main_home() {
+  local home parent channel out rc span needs
+  home=$(make_home mate)
+  parent="$TMP_ROOT/mate-parent"
+  mkdir -p "$parent/state"
+  channel="$parent/state/sample-mate.status"
+  printf 'sample-mate\n' > "$home/.fm-secondmate-home"
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$parent" > "$home/.fm-secondmate-parent"
+
+  out=$(noticed "$home" file idea faster-sweep --title "Sweep faster" --why "it saves a wake" \
+    --from sm-task --repo firstmate --evidence "sweep log") || fail "a mate refused a valid idea: $out"
+  [ "$out" = "handed-up: idea-faster-sweep" ] || fail "a mate idea did not report handed-up: $out"
+  ! tasks "$home" show idea-faster-sweep >/dev/null 2>&1 || fail "a mate kept a local row for an idea it handed up"
+  grep -q '^needs-decision \[key=idea-faster-sweep\] \[at=[0-9]*\]: noticed-queue idea idea-faster-sweep: Sweep faster - why: it saves a wake - from: sm-task - repo: firstmate - evidence: sweep log$' \
+    "$channel" || fail "the parent channel line does not carry every field: $(cat "$channel")"
+  # The real classifier: the line wakes the parent as a decision, and a
+  # resolved line for its key, which bin/fm-send.sh --resolve-key writes, closes it.
+  span=$(bash -c '. "$1"; status_span_first_actionable_record "$2" 0 rec nd; rc=$?; printf "%s %s" "$rc" "$nd"' \
+    _ "$ROOT/bin/fm-classify-lib.sh" "$channel")
+  [ "$span" = "0 1" ] || fail "the handed-up line did not read as a new parent decision: $span"
+  printf 'resolved [key=idea-faster-sweep] [at=1]: answered: filed in the main home\n' >> "$channel"
+  ! bash -c '. "$1"; status_has_open_needs_decision "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$channel" \
+    || fail "a resolved line did not close the handed-up decision"
+
+  out=$(noticed "$home" file noticed slow-canary --title "Canary slow" --why "it may time out" \
+    --from sm-task --call ruling) || fail "a mate refused a valid --call item: $out"
+  [ "$out" = "handed-up: noticed-slow-canary" ] || fail "a mate --call item did not report handed-up: $out"
+  grep -q '^needs-decision \[key=noticed-slow-canary\] .*noticed-queue noticed noticed-slow-canary: Canary slow - why: it may time out - from: sm-task - call: ruling$' \
+    "$channel" || fail "the --call item did not reach the parent channel with its call kind: $(cat "$channel")"
+  ! tasks "$home" show noticed-slow-canary >/dev/null 2>&1 || fail "a mate kept a local row for a --call item it handed up"
+
+  out=$(noticed "$home" file noticed flaky-test --title "Flaky test" --why "CI reruns" --from sm-task) \
+    || fail "a mate refused a routine item: $out"
+  [ "$out" = "filed: noticed-flaky-test" ] || fail "a mate did not file its routine item locally: $out"
+  ! grep -q 'flaky-test' "$channel" || fail "a routine item went to the parent channel"
+
+  rm "$home/.fm-secondmate-parent"
+  set +e
+  out=$(noticed "$home" file idea lost-idea --title "Lost" --why "no channel" --from sm-task 2>&1)
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "a mate with no parent binding must not report an idea handed up"
+  assert_contains "$out" "could not hand idea-lost-idea to the main home" "the failure did not name the item"
+  ! tasks "$home" show idea-lost-idea >/dev/null 2>&1 || fail "a failed hand-up filed the idea locally after all"
+  pass "a secondmate hands ideas and --call items to the main home on its parent channel and files routine items locally"
+}
+
 test_noticed_is_a_captain_hold_that_never_dispatches
+test_a_secondmate_hands_ideas_and_calls_to_the_main_home
 test_a_duplicate_attaches_evidence
 test_closed_items_come_back_or_stay_answered
 test_refusals
