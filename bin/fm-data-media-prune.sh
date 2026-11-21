@@ -9,13 +9,27 @@
 #     checkouts and dependency folders a task kept from before that rule, or
 #     from before its checkout was pushed, go too;
 #   - size: when data/ as a whole is over a size trigger, name the largest
-#     torn-down tasks and what each holds, so firstmate can propose a cleanup.
+#     torn-down tasks and what each holds, so firstmate can propose a cleanup;
+#   - non-text: once a task has been torn down N days (30 by default), remove
+#     every non-text file it left and keep its text (below).
 #
 # Usage: fm-data-media-prune.sh [--dry-run] [--if-due] [--days <N>] [--scratch-days <N>]
+#        fm-data-media-prune.sh --nontext [--apply] [--nontext-days <N>]
+#        --nontext
+#          Run only the non-text part, as a dry run unless --apply is also
+#          given: print one line per task folder it would free,
+#            would free: <KiB> KiB in <n> files from data/<task>/, keeping <KiB> KiB
+#          (`freed:` under --apply), then the summary line below and one
+#            data nontext retention: skipped <a> linked from an open backlog row, <b> with no teardown record, <c> torn down or changed within <N> days
+#          line. It starts no clock and runs no other part.
+#        --apply
+#          With --nontext only: remove the files it lists.
+#        --nontext-days <N>
+#          Non-text retention in whole days, 1 to 3650. Overrides the config.
 #        --if-due
 #          Run in full only when the last full --if-due run finished at least
 #          12 hours ago (state/.data-retention-last records it). A run inside
-#          that interval skips the media and scratch parts, still clearing the
+#          that interval skips the media, scratch, and non-text parts, still clearing the
 #          clock of a task that is live again, and reuses each size-trigger
 #          line from state/.data-size-cache whose task and KiB in this run's du
 #          are unchanged. Retention is counted in whole days, so a session
@@ -40,10 +54,11 @@
 # that opted in to one never starts the other. config/data-media-retention-days
 # holds the media N and config/data-scratch-retention-days the scratch N; with
 # a part's file absent and no option for it, a real run skips that part, while
-# --dry-run previews it with the default of 7 days. bin/fm-bootstrap.sh runs
-# this real (not dry) as one of its locked MUTATING sweeps, so the caller must
-# already hold this home's session lock; by hand, only --dry-run is safe while
-# another live session holds it.
+# --dry-run previews it with the default of 7 days (the non-text part has its
+# own opt-in, below). bin/fm-bootstrap.sh runs this real (not dry) as one of
+# its locked MUTATING sweeps, so the caller must already hold this home's
+# session lock; by hand, only --dry-run or --nontext without --apply is safe
+# while another live session holds it.
 #
 # The size trigger is on in every home. config/data-size-trigger-mib holds a
 # whole number of MiB from 1 to 16777216 (default 4096, which is 4 GiB); data/
@@ -54,6 +69,8 @@
 #   BOOTSTRAP_INFO: data media retention: removed <n> files (<MiB> MiB) from <m> torn-down tasks quiet over <N> days
 # and any scratch
 #   BOOTSTRAP_INFO: data scratch retention: removed <n> items (<MiB> MiB) from <m> torn-down tasks quiet over <N> days
+# and any non-text
+#   BOOTSTRAP_INFO: data nontext retention: removed <n> files (<MiB> MiB) from <m> tasks torn down over <N> days
 # (`would remove` under --dry-run), and nothing otherwise; --dry-run also prints
 #   data media retention: would start the retention clock for <k> torn-down tasks
 # when it would. When data/ is over the size trigger, it prints
@@ -102,9 +119,10 @@
 #   video: mp4 mov m4v webm mkv avi
 #   audio: mp3 wav m4a aac flac ogg opus
 #   disk:  iso img raw qcow2 vmdk vdi dmg
-# Still images, PDFs, and exports are never removed here: the captain's
-# 2026-10-21 ruling moves those to Drive before anything is deleted
-# (docs/fork-decisions/2026-10-26-task-media-retention.md).
+# Still images, PDFs, and exports are never removed by this part: the
+# captain's 2026-10-21 ruling moved those to Drive before anything is deleted
+# (docs/fork-decisions/2026-10-26-task-media-retention.md), and only the
+# non-text part below, from his 2026-11-21 ruling, removes them.
 # and that is not a final. The task's own .md, .json, .txt, .html, and .htm
 # files are always kept, and a media file is a final when, ignoring case,
 #   - its name contains "final", or
@@ -132,6 +150,45 @@
 # teardown, a secondmate's data/<id>/ is never touched: an id
 # data/secondmates.md names, or a folder holding a children/ directory of
 # retired children's records, is skipped.
+#
+# The non-text part (docs/fork-decisions/2026-11-21-task-text-kept-media-swept.md).
+# It is opt-in per home by config/data-nontext-retention-days, which holds its
+# N. With that file present, a real run - the bootstrap's --if-due run included
+# - applies it and prints only its summary line, and --dry-run previews it with
+# per-folder lines; with the file absent, only --nontext runs it, with N 30.
+# It needs a task (above) that is torn down, has a teardown record, is not
+# linked from an open backlog row, and is quiet:
+#   - Teardown record: data/<task>/status.log or status.<n>.log, which
+#     teardown copies there under config/status-archive (bin/fm-teardown.sh),
+#     or the closing date tasks-axi stamps on the task's done row when
+#     teardown closes it, read from the backlog's done rows and its markdown
+#     Done archive ((merged|done|reported|closed <YYYY-MM-DD>) there). A task
+#     with neither is skipped. Teardown prunes those status logs after 30
+#     days, so for older tasks the done row is usually the only record left.
+#   - Torn down N days: the newest closing date is at least N + 1 whole UTC
+#     days old (the extra day absorbs the stamp's time zone), and no regular
+#     file under data/<task>/ was modified within N days. The archived status
+#     log is a fresh copy written at teardown, so its own age is the teardown
+#     time; a reused id's newer files keep the folder.
+#   - Linked: an open (any state but done) row whose id is the task, or whose
+#     `tasks-axi show --full` text names data/<task> by any path. A row that
+#     cannot be read stops the part, removing nothing.
+# As with scratch, a secondmate's folder is skipped, and so is everything inside
+# a git checkout, as for media. Only regular files go, never symlinks or
+# directories, whose extension, in any case, is one of
+#   images:   png jpg jpeg gif webp heic heif tif tiff bmp avif ico psd
+#   video:    mp4 mov m4v webm mkv avi
+#   audio:    mp3 wav m4a aac flac ogg opus
+#   pdf:      pdf
+#   db:       db sqlite sqlite3 db-wal db-shm sqlite-wal sqlite-shm duckdb
+#   archives: zip tar gz tgz bz2 xz zst 7z rar
+#   disk:     iso img raw qcow2 vmdk vdi dmg
+# or that is a data or log text file over 1 MiB: log json jsonl ndjson csv tsv
+# xml, except status.log and status.<n>.log, which always stay. 1 MiB is above
+# the 99th percentile of every one of those kinds in a measured home (json 277
+# KiB, csv 639 KiB, log 626 KiB), so only machine dumps exceed it. Everything
+# else stays: md, txt, html, toml, yaml, svg, meta, briefs, reports, status,
+# every file kind not listed, and finals too, which this part does not exempt.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -149,6 +206,11 @@ DRY_RUN=0
 IF_DUE=0
 DAYS=
 SCRATCH_DAYS=
+NONTEXT_ONLY=0
+APPLY=0
+NONTEXT_DAYS=
+DEFAULT_NONTEXT_DAYS=30
+NONTEXT_FLOOR_KIB=1024
 DEFAULT_DRY_RUN_DAYS=7
 MAX_DAYS=3650
 DEFAULT_SIZE_MIB=4096
@@ -167,9 +229,15 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --if-due) IF_DUE=1 ;;
-    --days|--scratch-days)
+    --nontext) NONTEXT_ONLY=1 ;;
+    --apply) APPLY=1 ;;
+    --days|--scratch-days|--nontext-days)
       [ $# -ge 2 ] || { echo "error: $1 needs a value" >&2; exit 2; }
-      if [ "$1" = --days ]; then DAYS=$2; else SCRATCH_DAYS=$2; fi
+      case "$1" in
+        --days) DAYS=$2 ;;
+        --scratch-days) SCRATCH_DAYS=$2 ;;
+        *) NONTEXT_DAYS=$2 ;;
+      esac
       shift
       ;;
     -h|--help) usage; exit 0 ;;
@@ -217,8 +285,28 @@ retention_days() {
   whole_number "$v" "$MAX_DAYS" "retention days" || exit 2
 }
 
-DAYS=$(retention_days "$DAYS" "$CONFIG/data-media-retention-days") || exit 2
-SCRATCH_DAYS=$(retention_days "$SCRATCH_DAYS" "$CONFIG/data-scratch-retention-days") || exit 2
+if [ "$NONTEXT_ONLY" -eq 1 ]; then
+  # --nontext runs that part alone, so the other parts' options do not apply.
+  if [ "$IF_DUE" -eq 1 ] || [ -n "$DAYS" ] || [ -n "$SCRATCH_DAYS" ]; then
+    echo "error: --nontext runs only the non-text part; drop --if-due, --days, and --scratch-days" >&2
+    exit 2
+  fi
+  [ "$APPLY" -eq 0 ] || [ "$DRY_RUN" -eq 0 ] || { echo "error: --apply and --dry-run contradict each other" >&2; exit 2; }
+  [ -n "$NONTEXT_DAYS" ] || NONTEXT_DAYS=$(config_value "$CONFIG/data-nontext-retention-days") || exit 2
+  NONTEXT_DAYS=$(whole_number "${NONTEXT_DAYS:-$DEFAULT_NONTEXT_DAYS}" "$MAX_DAYS" "retention days") || exit 2
+  NONTEXT_DRY=$((1 - APPLY))
+else
+  [ "$APPLY" -eq 0 ] || { echo "error: --apply needs --nontext" >&2; exit 2; }
+  DAYS=$(retention_days "$DAYS" "$CONFIG/data-media-retention-days") || exit 2
+  SCRATCH_DAYS=$(retention_days "$SCRATCH_DAYS" "$CONFIG/data-scratch-retention-days") || exit 2
+  # The non-text part runs here only when the home opted in (header).
+  [ -n "$NONTEXT_DAYS" ] || NONTEXT_DAYS=$(config_value "$CONFIG/data-nontext-retention-days") || exit 2
+  [ -z "$NONTEXT_DAYS" ] || NONTEXT_DAYS=$(whole_number "$NONTEXT_DAYS" "$MAX_DAYS" "retention days") || exit 2
+  NONTEXT_DRY=$DRY_RUN
+fi
+# Per-folder lines from the non-text part for a run by hand, never the bootstrap's.
+NONTEXT_VERBOSE=0
+[ "$NONTEXT_ONLY" -eq 0 ] && [ "$DRY_RUN" -eq 0 ] || NONTEXT_VERBOSE=1
 # The size trigger only reports, so an unusable value falls back to the
 # default with a warning rather than stopping the retention a home opted in to.
 SIZE_MIB=$(config_value "$CONFIG/data-size-trigger-mib" 2>/dev/null) || SIZE_MIB=bad
@@ -235,9 +323,11 @@ if [ "$IF_DUE" -eq 1 ] && [ "$DRY_RUN" -eq 0 ] && [ -f "$RETENTION_STAMP" ] \
   DUE=0
   DAYS=
   SCRATCH_DAYS=
+  NONTEXT_DAYS=
 fi
 QUIET_MINUTES=$((${DAYS:-0} * 1440))
 SCRATCH_QUIET_MINUTES=$((${SCRATCH_DAYS:-0} * 1440))
+NONTEXT_QUIET_MINUTES=$((${NONTEXT_DAYS:-0} * 1440))
 
 [ -d "$DATA" ] || exit 0
 
@@ -252,7 +342,9 @@ measure_data() {
   [ "$DATA_KIB" -le $((SIZE_MIB * 1024)) ] || OVER_SIZE=1
 }
 measure_data
-[ -n "$CLOCK_DAYS" ] || [ -n "$SCRATCH_DAYS" ] || [ "$OVER_SIZE" -eq 1 ] || exit 0
+# --nontext reports only its own part, never the size trigger.
+[ "$NONTEXT_ONLY" -eq 0 ] || OVER_SIZE=0
+[ -n "$CLOCK_DAYS" ] || [ -n "$SCRATCH_DAYS" ] || [ -n "$NONTEXT_DAYS" ] || [ "$OVER_SIZE" -eq 1 ] || exit 0
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fm-data-media-prune.XXXXXX") || { echo "warning: data media retention skipped: cannot create a scratch directory" >&2; exit 0; }
 trap 'rm -rf "$WORK"' EXIT
@@ -290,6 +382,74 @@ printf '%s\n' "$backlog_out" | sed -n 's/^  \([A-Za-z0-9._-]*\),\([a-z_]*\),.*/\
 NL='
 '
 OPEN_IDS="$NL$(cat "$WORK/open-ids")$NL"
+
+# The non-text part's backlog reads (header): the folders open rows link, the
+# tasks with a closing date, and those whose newest one is under N + 1 whole UTC
+# days old. A read that fails turns the part off for this run.
+nontext_off() {  # <why>
+  echo "warning: data nontext retention skipped: $1" >&2
+  NONTEXT_DAYS=
+}
+# dn(<YYYY-MM-DD>): a day number, so two dates' difference is whole days.
+DAY_AWK='function dn(s,  y, m, d) {
+  y = substr(s, 1, 4) + 0; m = substr(s, 6, 2) + 0; d = substr(s, 9, 2) + 0
+  if (m <= 2) { y--; m += 12 }
+  return 365 * y + int(y / 4) - int(y / 100) + int(y / 400) + int((153 * (m - 3) + 2) / 5) + d
+}'
+LINKED=$NL
+CLOSED_IDS=$NL
+YOUNG_IDS=$NL
+if [ -n "$NONTEXT_DAYS" ]; then
+  AXI_FILE_ARGS=()
+  [ -z "$FM_BACKLOG_AXI_FILE" ] || AXI_FILE_ARGS=(--file "$FM_BACKLOG_AXI_FILE")
+  : > "$WORK/linked"
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    if ! row=$(cd "$FM_BACKLOG_AXI_ROOT" 2>/dev/null \
+      && FM_TASKS_AXI_TIMEOUT=${FM_TASKS_AXI_TIMEOUT:-30} fm_tasks_axi show "$id" --full ${AXI_FILE_ARGS[@]+"${AXI_FILE_ARGS[@]}"} 2>&1) \
+      || ! printf '%s\n' "$row" | grep -qxF "  id: $id"; then
+      nontext_off "open backlog row $id could not be read"
+      break
+    fi
+    # A link may be relative or absolute, and prose may end it with a period.
+    printf '%s\n' "$row" | grep -o 'data/[A-Za-z0-9._-][A-Za-z0-9._-]*' | sed 's|^data/||; s/\.*$//' >> "$WORK/linked"
+  done < "$WORK/open-ids"
+fi
+if [ -n "$NONTEXT_DAYS" ]; then
+  if ! done_out=$(FM_TASKS_AXI_TIMEOUT=${FM_TASKS_AXI_TIMEOUT:-30} fm_backlog_row_list "$DATA" --limit 1000000 --state "done" --fields closed 2>&1) \
+    || ! printf '%s\n' "$done_out" | grep -q '^count: [0-9]'; then
+    nontext_off "the backlog's done rows could not be read"
+  fi
+fi
+if [ -n "$NONTEXT_DAYS" ]; then
+  printf '%s\n' "$done_out" \
+    | sed -n 's/^  \([A-Za-z0-9._-]*\),done,.*,\([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)$/\1 \2/p' > "$WORK/closed"
+  archive=$(fm_backlog_markdown_archive "$DATA")
+  case $? in
+    0)
+      if [ -f "$archive" ]; then
+        awk '/^- \[x\] / && $3 ~ /^[A-Za-z0-9._-]+$/ {
+            id = $3; line = $0
+            while (match(line, /\((merged|done|reported|closed) [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)/)) {
+              print id, substr(line, RSTART + RLENGTH - 11, 10)
+              line = substr(line, RSTART + RLENGTH)
+            }
+          }' "$archive" >> "$WORK/closed" || nontext_off "the backlog's Done archive could not be read: $archive"
+      elif [ -e "$archive" ]; then
+        nontext_off "the backlog's Done archive is not a file: $archive"
+      fi
+      ;;
+    1) ;;
+    *) nontext_off "the backlog's Done archive could not be located" ;;
+  esac
+fi
+if [ -n "$NONTEXT_DAYS" ]; then
+  LINKED="$NL$(sort -u "$WORK/linked")$NL"
+  CLOSED_IDS="$NL$(awk '{ print $1 }' "$WORK/closed" | sort -u)$NL"
+  YOUNG_IDS="$NL$(awk -v today="$(date -u +%Y-%m-%d)" -v n="$NONTEXT_DAYS" "$DAY_AWK"'
+    { d = dn($2); if (!($1 in last) || d > last[$1]) last[$1] = d }
+    END { t = dn(today); for (id in last) if (t - last[id] < n + 1) print id }' "$WORK/closed" | sort -u)$NL"
+fi
 
 task_is_live() {  # <task>
   local suffix
@@ -390,6 +550,76 @@ media_task() {
   fi
 }
 
+# nontext_task <dir>: remove (or count) one swept task's non-text files
+# (header), outside every git checkout under it.
+nontext_task() {
+  local dir=$1 kib file task_files=0 task_kib=0 total verb=freed
+  find "$dir" -name .git -prune -print 2>/dev/null | sed 's|/\.git$||' > "$WORK/git-roots"
+  prune_args
+  find "$dir" "${PRUNE_ARGS[@]+"${PRUNE_ARGS[@]}"}" -type f \( \
+    -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.gif' -o -iname '*.webp' -o -iname '*.heic' -o \
+    -iname '*.heif' -o -iname '*.tif' -o -iname '*.tiff' -o -iname '*.bmp' -o -iname '*.avif' -o -iname '*.ico' -o -iname '*.psd' -o \
+    -iname '*.mp4' -o -iname '*.mov' -o -iname '*.m4v' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.avi' -o \
+    -iname '*.mp3' -o -iname '*.wav' -o -iname '*.m4a' -o -iname '*.aac' -o -iname '*.flac' -o -iname '*.ogg' -o -iname '*.opus' -o \
+    -iname '*.pdf' -o \
+    -iname '*.db' -o -iname '*.sqlite' -o -iname '*.sqlite3' -o -iname '*.db-wal' -o -iname '*.db-shm' -o \
+    -iname '*.sqlite-wal' -o -iname '*.sqlite-shm' -o -iname '*.duckdb' -o \
+    -iname '*.zip' -o -iname '*.tar' -o -iname '*.gz' -o -iname '*.tgz' -o -iname '*.bz2' -o -iname '*.xz' -o \
+    -iname '*.zst' -o -iname '*.7z' -o -iname '*.rar' -o \
+    -iname '*.iso' -o -iname '*.img' -o -iname '*.raw' -o -iname '*.qcow2' -o -iname '*.vmdk' -o -iname '*.vdi' -o -iname '*.dmg' -o \
+    \( \( -iname '*.log' -o -iname '*.json' -o -iname '*.jsonl' -o -iname '*.ndjson' -o -iname '*.csv' -o -iname '*.tsv' -o \
+    -iname '*.xml' \) -size +"$NONTEXT_FLOOR_KIB"k ! -name status.log ! -name 'status.[0-9]*.log' \) \
+    \) -print 2>/dev/null > "$WORK/all"
+  if [ -s "$WORK/git-roots" ]; then
+    awk 'FILENAME == ARGV[1] { roots[++n] = $0 "/"; next }
+      { for (i = 1; i <= n; i++) if (index($0, roots[i]) == 1) next; print }' \
+      "$WORK/git-roots" "$WORK/all" > "$WORK/candidates"
+  else
+    mv "$WORK/all" "$WORK/candidates"
+  fi
+  [ -s "$WORK/candidates" ] || return 0
+  total=$(du -sk "$dir" 2>/dev/null | awk '{ print $1 }')
+  case "$total" in ''|*[!0-9]*) total=0 ;; esac
+  tr '\n' '\0' < "$WORK/candidates" | xargs -0 du -k 2>/dev/null > "$WORK/sizes"
+  while IFS="$(printf '\t')" read -r kib file; do
+    [ -f "$file" ] && [ ! -L "$file" ] || continue
+    case "$kib" in ''|*[!0-9]*) kib=0 ;; esac
+    if [ "$NONTEXT_DRY" -eq 0 ] && ! rm -f -- "$file"; then
+      echo "warning: could not remove $file" >&2
+      continue
+    fi
+    task_files=$((task_files + 1))
+    task_kib=$((task_kib + kib))
+  done < "$WORK/sizes"
+  [ "$task_files" -gt 0 ] || return 0
+  NONTEXT_FILES=$((NONTEXT_FILES + task_files))
+  NONTEXT_KIB=$((NONTEXT_KIB + task_kib))
+  NONTEXT_TASKS=$((NONTEXT_TASKS + 1))
+  [ "$NONTEXT_VERBOSE" -eq 1 ] || return 0
+  [ "$NONTEXT_DRY" -eq 0 ] || verb="would free"
+  [ "$total" -ge "$task_kib" ] || total=$task_kib
+  printf '%s: %s KiB in %s files from data/%s/, keeping %s KiB\n' \
+    "$verb" "$task_kib" "$task_files" "${dir##*/}" "$((total - task_kib))"
+}
+
+# nontext_consider <dir> <task>: sweep one torn-down task that passes the
+# non-text part's checks (header), counting why any other is skipped.
+nontext_consider() {
+  local dir=$1 task=$2
+  [ ! -e "$dir/children" ] || return 0
+  case "$SECONDMATE_IDS" in *"$NL$task$NL"*) return 0 ;; esac
+  case "$LINKED" in *"$NL$task$NL"*) NONTEXT_LINKED=$((NONTEXT_LINKED + 1)); return 0 ;; esac
+  if [ -z "$(find "$dir" -maxdepth 1 -type f \( -name status.log -o -name 'status.[0-9]*.log' \) -print 2>/dev/null)" ]; then
+    case "$CLOSED_IDS" in
+      *"$NL$task$NL"*) ;;
+      *) NONTEXT_NO_RECORD=$((NONTEXT_NO_RECORD + 1)); return 0 ;;
+    esac
+  fi
+  case "$YOUNG_IDS" in *"$NL$task$NL"*) NONTEXT_YOUNG=$((NONTEXT_YOUNG + 1)); return 0 ;; esac
+  files_quiet "$dir" "$NONTEXT_QUIET_MINUTES" || { NONTEXT_YOUNG=$((NONTEXT_YOUNG + 1)); return 0; }
+  nontext_task "$dir"
+}
+
 # scratch_items <scratch-prune output>: print "<items> <KiB>" for its removed
 # (or would-remove) item lines, the per-task summary line excluded.
 scratch_items() {
@@ -462,6 +692,12 @@ NEW_CLOCKS=0
 SCRATCH_ITEMS=0
 SCRATCH_KIB=0
 SCRATCH_TASK_COUNT=0
+NONTEXT_FILES=0
+NONTEXT_KIB=0
+NONTEXT_TASKS=0
+NONTEXT_LINKED=0
+NONTEXT_NO_RECORD=0
+NONTEXT_YOUNG=0
 : > "$WORK/retired"
 if [ -n "$DAYS" ] && [ "$DRY_RUN" -eq 0 ]; then
   mkdir -p "$CLOCKS" 2>/dev/null || { echo "warning: data media retention skipped: cannot create $CLOCKS" >&2; exit 0; }
@@ -502,6 +738,7 @@ for dir in "$DATA"/*/; do
       fi
       ;;
   esac
+  [ -z "$NONTEXT_DAYS" ] || nontext_consider "$dir" "$task"
   [ -n "$DAYS" ] || continue
   if [ ! -f "$clock" ]; then
     NEW_CLOCKS=$((NEW_CLOCKS + 1))
@@ -536,9 +773,21 @@ fi
 if [ "$DRY_RUN" -eq 1 ] && [ "$NEW_CLOCKS" -gt 0 ]; then
   printf 'data media retention: would start the retention clock for %s torn-down tasks\n' "$NEW_CLOCKS"
 fi
+if [ -n "$NONTEXT_DAYS" ]; then
+  nverb=removed
+  [ "$NONTEXT_DRY" -eq 0 ] || nverb="would remove"
+  if [ "$NONTEXT_FILES" -gt 0 ]; then
+    printf 'BOOTSTRAP_INFO: data nontext retention: %s %s files (%s MiB) from %s tasks torn down over %s days\n' \
+      "$nverb" "$NONTEXT_FILES" "$((NONTEXT_KIB / 1024))" "$NONTEXT_TASKS" "$NONTEXT_DAYS"
+  fi
+  if [ "$NONTEXT_VERBOSE" -eq 1 ]; then
+    printf 'data nontext retention: skipped %s linked from an open backlog row, %s with no teardown record, %s torn down or changed within %s days\n' \
+      "$NONTEXT_LINKED" "$NONTEXT_NO_RECORD" "$NONTEXT_YOUNG" "$NONTEXT_DAYS"
+  fi
+fi
 
 # The size trigger, measured again when this run removed anything.
-if [ "$DRY_RUN" -eq 0 ] && [ $((TOTAL_FILES + SCRATCH_ITEMS)) -gt 0 ]; then
+if [ "$NONTEXT_ONLY" -eq 0 ] && [ "$DRY_RUN" -eq 0 ] && [ $((TOTAL_FILES + SCRATCH_ITEMS + NONTEXT_FILES)) -gt 0 ]; then
   measure_data
 fi
 # A full --if-due run drops the old size lines; the part below records fresh ones.
@@ -549,7 +798,7 @@ if [ "$OVER_SIZE" -eq 1 ]; then
       index($2, p) == 1 { t = substr($2, length(p) + 1); if (t in retired) print $1 "\t" t }' "$WORK/retired" - \
     | sort -t "$(printf '\t')" -k1,1nr -k2 | head -n "$SIZE_TASKS" > "$WORK/largest"
   if [ -s "$WORK/largest" ]; then
-    size_line "its largest torn-down tasks follow. Clean checkouts and dependency folders go with scratch retention (config/data-scratch-retention-days); images and PDFs move to Drive only as one captain-approved batch (docs/configuration.md)"
+    size_line "its largest torn-down tasks follow. Clean checkouts and dependency folders go with scratch retention (config/data-scratch-retention-days); images and PDFs go with non-text retention (config/data-nontext-retention-days), else move to Drive only as one captain-approved batch (docs/configuration.md)"
     # An --if-due run that is not due reuses a line whose task and KiB match.
     while IFS="$(printf '\t')" read -r kib task; do
       line=
