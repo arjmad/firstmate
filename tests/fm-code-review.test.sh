@@ -425,7 +425,7 @@ run_review() {
   local dir=$1
   shift
   set +e
-  (cd "$dir/work" && FM_TEST_DIR="$dir" PATH="$dir/fakebin:$PATH" TMPDIR="$dir/tmp" \
+  (cd "$dir/work" && FM_TEST_DIR="$dir" PATH="$dir/fakebin:$PATH" TMPDIR="${CASE_TMPDIR:-$dir/tmp}" \
     GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$dir/remote.git.insteadOf" \
     GIT_CONFIG_VALUE_0=https://github.com/example/repo.git \
     "$CODE_REVIEW" review "$@") > "$dir/out" 2> "$dir/err"
@@ -527,6 +527,18 @@ test_review_runs_in_a_throwaway_checkout() {
   expect_code 0 "$RC" "review-throwaway-gitdir: the review should succeed: $ERR"
   [ "$(git -C "$dir/work" symbolic-ref --short HEAD)" = ship ] || fail "review-throwaway-gitdir: an inherited GIT_DIR moved the caller's branch"
   [ "$(git -C "$dir/work" rev-parse HEAD)" = "$head" ] || fail "review-throwaway-gitdir: the caller's HEAD moved"
+  # A TMPDIR reached through a symlink, as on macOS: the reviewer reports the
+  # physical clone path, and the finding still posts inline at its repo path.
+  dir=$(make_case review-throwaway-symlink bin/tool.sh)
+  make_claude "$dir"
+  ln -s "$dir/tmp" "$dir/tmplink"
+  printf '```json\n[{"file": "@PWD@/bin/tool.sh", "line": 2, "summary": "wrong word", "failure_scenario": "it prints new"}]\n```\n' > "$dir/claude-out"
+  CASE_TMPDIR="$dir/tmplink" run_review "$dir" "$URL" --model claude-opus-5-5
+  expect_code 0 "$RC" "review-throwaway-symlink: the review should succeed: $ERR"
+  assert_contains "$OUT" "posted: 1 inline and 0 general comments for 1 findings on $URL" \
+    "review-throwaway-symlink: a finding under a symlinked TMPDIR did not post inline: $OUT $ERR"
+  [ "$(jq -r '.[0].path' "$dir/inline.json")" = bin/tool.sh ] \
+    || fail "review-throwaway-symlink: the inline finding kept the clone path: $(cat "$dir/inline.json")"
   # The checkout started at the base branch, with the pull request head beside it.
   dir=$(make_case review-throwaway-base bin/tool.sh)
   make_claude "$dir"

@@ -499,6 +499,9 @@ code_review_checkout() {
     return 1
   fi
   dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-code-review-checkout.XXXXXX") || return 1
+  # The physical path, as the reviewer reports it (macOS's TMPDIR is a symlink),
+  # so finding paths strip to repository paths.
+  dir=$(cd "$dir" && pwd -P) || return 1
   CODE_REVIEW_CHECKOUT=$dir
   trap 'rm -rf "$CODE_REVIEW_CHECKOUT"' EXIT
   trap 'exit 130' INT

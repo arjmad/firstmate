@@ -4202,8 +4202,8 @@ fi
 # must prove the task's PR merged with the branch tip inside its head, and the
 # proven tip is kept. teardown_drop_recorded_branch then deletes the branch only
 # at that tip and only while no worktree has it checked out; a tip past that
-# head, no proof (a --force run proves nothing), or a moved ref keeps it with a
-# note.
+# head or a moved ref keeps it with a note. A --force run skips the proof, so it
+# leaves the recorded branch alone without a note.
 RECORDED_BRANCH=
 RECORDED_BRANCH_TIP=
 teardown_prove_recorded_branch() {

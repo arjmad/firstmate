@@ -50,7 +50,9 @@
 #          `needs-decision [key=noticed-queue-<id>]: noticed-queue <kind> <id>
 #          [(call: <kind>)] [(now: ...)]: <title> - why: ... - from: ...` line
 #          with any repo and evidence fields, and no local row is kept; an open
-#          local row of that id is closed with a note that it was handed up.
+#          routine row of that id is closed with a note that it was handed up,
+#          and an open row already held for the captain, whose hold reached
+#          the main home on its own, matches locally instead.
 #          Evidence is cut to fit the channel's 1200-byte note, and an item
 #          whose other fields do not fit is refused (exit 2) before anything is
 #          sent. A channel that cannot be written, or a local row that cannot
@@ -251,14 +253,22 @@ append_body() {  # <id> <line>
 # "Ideas and captain calls belong to the main home"). The line is a
 # needs-decision keyed noticed-queue-<id>, a key no backlog row carries,
 # holding every field the main home refiles it from; the main home closes it
-# with bin/fm-send.sh --resolve-key once filed. Returns 1 in a main home, which files locally as before; exits 1
-# when the channel cannot be written, so the item is never dropped silently.
+# with bin/fm-send.sh --resolve-key once filed. Returns 1 in a main home, or
+# for an open row already held here, which then file locally as before; exits
+# 1 when the channel cannot be written, so the item is never dropped silently.
 hand_up_to_parent() {  # <id> <kind> <title> <why> <from> <repo> <evidence> <call> <now>
   local id=$1 key="noticed-queue-$1" rc=0 fields head room
   # A main home files locally, whatever the item's length.
   fm_parent_channel_home_id "$FM_HOME" >/dev/null || rc=$?
   [ "$rc" != 1 ] || return 1
   rc=0
+  # An open row already held for the captain published its own decision to the
+  # main home through bin/fm-captain-hold.sh, so it stays on the local path,
+  # which attaches the new evidence, rather than raising a second decision.
+  if show=$("$TASKS" show "$id" --full 2>/dev/null) && [ "$(shown_field "$show" state)" != "done" ] \
+    && [ "$(shown_field "$show" held)" = yes ]; then
+    return 1
+  fi
   # An idea handed up before (or filed and closed here) is never re-asked, as
   # in a main home; an open local row of it still goes up and closes below.
   if [ "$2" = idea ] && grep -Fxq -- "$id" "$FILED" 2>/dev/null \
@@ -274,7 +284,14 @@ hand_up_to_parent() {  # <id> <kind> <title> <why> <from> <repo> <evidence> <cal
   # and an item whose own fields do not fit is refused before anything is sent.
   room=$((1200 - $(LC_ALL=C; printf '%s' "${#fields}")))
   [ "$room" -ge 0 ] || refuse "$id is too long to hand to the main home; shorten its title or why"
-  [ -z "$7" ] || [ "$room" -eq 0 ] || fields="$fields$(printf '%s' " - evidence: $7" | cut -b1-"$room")"
+  # The byte cut may split a multibyte character; drop its bytes until the
+  # evidence is valid UTF-8 again.
+  [ -z "$7" ] || [ "$room" -eq 0 ] || fields="$fields$(
+    LC_ALL=C
+    ev=$(printf '%s' " - evidence: $7" | cut -b1-"$room")
+    while [ -n "$ev" ] && ! printf '%s' "$ev" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; do ev=${ev%?}; done
+    printf '%s' "$ev"
+  )"
   fm_parent_channel_report "$FM_HOME" "$STATE" \
     "needs-decision [key=$key]: noticed-queue $(fm_parent_channel_clean_note "$fields")" "$key" || rc=$?
   case "$rc" in

@@ -531,6 +531,23 @@ test_a_secondmate_hands_ideas_and_calls_to_the_main_home() {
   set -e
   expect_code 2 "$rc" "an idea too long to hand up must be refused"
   ! grep -q 'idea-long-title' "$channel" || fail "an idea too long to hand up reached the parent channel"
+  # A cut through two-byte evidence, at either parity, leaves valid UTF-8.
+  for pad in a ab; do
+    out=$(noticed "$home" file idea "wide-proof-$pad" --title "Wide proof" --why "w" --from sm-task \
+      --evidence "$(printf 'é%.0s' $(seq 1 800))") || fail "a mate refused an idea with wide evidence: $out"
+  done
+  [ "$(grep -ac 'idea-wide-proof-' "$channel")" = 2 ] || fail "the wide-evidence ideas did not both reach the parent channel"
+  grep -a 'idea-wide-proof-' "$channel" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 \
+    || fail "cutting multi-byte evidence left a split character on the parent channel"
+  # A row already held for the captain here (filed before this home handed
+  # ideas up) published its own decision, so it matches locally, never twice.
+  mv "$home/.fm-secondmate-home" "$home/.fm-secondmate-home.off"
+  out=$(noticed "$home" file idea held-before --title "Held before" --why "w" --from sm-task) || fail "could not file the old held idea: $out"
+  mv "$home/.fm-secondmate-home.off" "$home/.fm-secondmate-home"
+  out=$(noticed "$home" file idea held-before --title "Held before" --why "seen again" --from sm-task) \
+    || fail "a mate refused a repeat of its held idea: $out"
+  [ "$out" = "matched: idea-held-before" ] || fail "a held row was handed up a second time instead of matching: $out"
+  ! grep -q 'key=noticed-queue-idea-held-before' "$channel" || fail "a held row raised a second decision on the parent channel"
   # The cap is in bytes: 700 two-byte characters are 1400 bytes.
   set +e
   out=$(LC_ALL=C.UTF-8 noticed "$home" file idea wide-title --title "$(printf 'é%.0s' $(seq 1 700))" --why "w" --from sm-task 2>&1)
