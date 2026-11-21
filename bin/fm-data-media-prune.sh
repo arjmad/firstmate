@@ -162,9 +162,8 @@
 #   - Teardown record: data/<task>/status.log or status.<n>.log, which
 #     teardown copies there under config/status-archive (bin/fm-teardown.sh),
 #     or the closing date tasks-axi stamps on the task's done row when
-#     teardown closes it, read from the backlog's done rows and its markdown
-#     Done archive (a trailing (merged|done|reported|closed <YYYY-MM-DD>)
-#     metadata group there, never the title's text). A task with neither is
+#     teardown closes it, as tasks-axi reads it from the backlog's done rows
+#     and from its markdown Done archive's rows. A task with neither is
 #     skipped; a status log counts only as status.log or status.<digits>.log. Teardown prunes those status logs after 30
 #     days, so for older tasks the done row is usually the only record left.
 #   - Torn down N days: the newest closing date is at least N + 1 whole UTC
@@ -433,23 +432,41 @@ if [ -n "$NONTEXT_DAYS" ]; then
     nontext_off "the backlog's done rows could not be read"
   fi
 fi
+# closed_dates: "<id> <YYYY-MM-DD>" for each done row in a tasks-axi list.
+closed_dates() {
+  unquote_ids | sed -n 's/^  \([A-Za-z0-9._-]*\),done,.*,\([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)$/\1 \2/p'
+}
+# archive_closed_dates <archive>: closed_dates for every row in the markdown
+# Done archive. tasks-axi will not read the archive as a backlog, so its rows
+# are replayed under one scratch Done section, as bin/fm-captain-hold.sh does,
+# and tasks-axi's own parser reads each closing date.
+archive_closed_dates() {
+  local out
+  mkdir "$WORK/archive" || return 1
+  printf 'backend = "markdown"\n' > "$WORK/archive/.tasks.toml" || return 1
+  {
+    printf '## Done\n'
+    awk '/^- \[.\] / { inrow = 1; print; next }
+      inrow && ($0 == "" || $0 ~ /^[[:space:]]/) { print; next }
+      { inrow = 0 }' "$1"
+  } > "$WORK/archive/backlog.md" || return 1
+  out=$(cd "$WORK/archive" && FM_TASKS_AXI_TIMEOUT=${FM_TASKS_AXI_TIMEOUT:-30} \
+    fm_tasks_axi list --state "done" --fields closed --limit 1000000 --file "$WORK/archive/backlog.md" 2>&1) || return 1
+  printf '%s\n' "$out" | grep -q '^count: [0-9]' || return 1
+  printf '%s\n' "$out" | closed_dates
+}
 if [ -n "$NONTEXT_DAYS" ]; then
-  printf '%s\n' "$done_out" | unquote_ids \
-    | sed -n 's/^  \([A-Za-z0-9._-]*\),done,.*,\([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)$/\1 \2/p' > "$WORK/closed"
+  printf '%s\n' "$done_out" | closed_dates > "$WORK/closed"
   archive=$(fm_backlog_markdown_archive "$DATA")
   case $? in
     0)
       if [ -f "$archive" ]; then
-        # Only the row's trailing metadata groups, never its title text.
-        awk '/^- \[x\] / && $3 ~ /^[A-Za-z0-9._-]+$/ {
-            id = $3; line = $0
-            while (match(line, / \([^()]*\)$/)) {
-              g = substr(line, RSTART + 2, RLENGTH - 3)
-              if (g ~ /^(merged|done|reported|closed) [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/)
-                print id, substr(g, length(g) - 9)
-              line = substr(line, 1, RSTART - 1)
-            }
-          }' "$archive" >> "$WORK/closed" || nontext_off "the backlog's Done archive could not be read: $archive"
+        # tasks-axi will not read the archive as a backlog, so its rows are
+        # replayed under one scratch Done section, as bin/fm-captain-hold.sh
+        # does, and tasks-axi's own parser reads each closing date.
+        if archive_closed_dates "$archive" >> "$WORK/closed"; then :; else
+          nontext_off "the backlog's Done archive could not be read: $archive"
+        fi
       elif [ -e "$archive" ]; then
         nontext_off "the backlog's Done archive is not a file: $archive"
       fi

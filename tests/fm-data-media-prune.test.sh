@@ -648,8 +648,18 @@ EOF
   make_swept_task "$home" dated-status 40
   put "$home/data/dated-status/status.2026-01-01.log"
   backdate 40 "$home/data/dated-status/status.2026-01-01.log"
-  printf '## Archived\n- [x] archived-row - Done (repo: x) (kind: ship) (since 2026-01-01) (done %s)\n- [x] title-date - Copied notes (reported %s) evidence only (repo: x) (kind: ship)\n' \
-    "$(day_ago 40)" "$(day_ago 40)" > "$home/data/done-archive.md"
+  # Archive rows as retention writes them, read by tasks-axi's own parser.
+  cat > "$home/data/done-archive.md" <<EOF
+
+## Archived 2026-01-01
+- [x] archived-row - Done (repo: x) (kind: ship) (since 2026-01-01) (done $(day_ago 40))
+  Its body.
+
+- [x] title-date - Copied notes (reported $(day_ago 40)) (reference copy) (repo: x) (kind: ship)
+
+## Archived 2026-01-02
+- [x] title-date - Copied notes (reported $(day_ago 40)) evidence only (repo: x) (kind: ship)
+EOF
   out=$(run_prune "$home" --nontext --apply)
   assert_contains "$out" "data nontext retention: skipped 0 linked from an open backlog row, 3 with no teardown record, 2 torn down or changed within 30 days" \
     "the skip line counts each reason: $out"
