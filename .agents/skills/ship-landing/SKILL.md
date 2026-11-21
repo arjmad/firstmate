@@ -38,6 +38,7 @@ Tear down any other ship task only after landing is confirmed.
 Chain a teardown or a steer after `bin/fm-pr-merge.sh` only on that script's own exit status (`bin/fm-pr-merge.sh ... && ...`), never after `;` or a pipe, whose status is the last command's: a refused merge exits non-zero, and a steer sent after it tells the worker its PR merged when it did not.
 A teardown refusal for uncommitted or unlanded work is a stop-and-investigate result, never an obstacle to bypass.
 Never force teardown without explicit discard authority.
+Close a PR you retire unmerged, such as a superseded one, with `bin/fm-pr-close.sh <PR url>`, never `gh pr close --delete-branch`, so its head branch goes too when that discards nothing.
 After successful teardown, record completion, retain only the configured recent Done history, and re-evaluate queued work whose blockers and time gates have cleared.
 
 Release a ship whose only remaining step is the captain's own (fork patch, `docs/fork-decisions.md` 2026-11-09), mirroring the scout release in `scout-completion`: when nothing is left after its PR merges but an action he must take himself - a physical step, a sign-in, a launch on his own machine - the ship's work is done.
