@@ -128,10 +128,12 @@
 #   fm-code-review.sh review <pr-url> --model <model>
 #       Runs `claude -p --model <model> "/code-review medium <pr-url> <focus>"`
 #       (with the base branch's REVIEW.md rules after the focus when it keeps
-#       one) from the current directory, printing its output, then posts each
-#       finding of its JSON findings block and prints one `posted:` line.
+#       one) in a throwaway clone detached at the base branch, never in the
+#       caller's checkout, printing its output, then posts each finding of its
+#       JSON findings block and prints one `posted:` line.
 #       Exits 0 when every finding posted (none is fine), 1 when the review
-#       failed, its base REVIEW.md could not be read, printed no findings
+#       failed, its throwaway clone could not be made, its base REVIEW.md
+#       could not be read, printed no findings
 #       block, or a finding could not be posted
 #       (the output file is named, and nothing is retried), and 2 for a usage
 #       error or a URL that is not a GitHub pull request. The run takes many
@@ -436,7 +438,8 @@ code_review_post_findings() {  # <findings-file>
     echo "error: could not read the head commit of $FM_PR_URL, so no finding was posted" >&2
     return 1
   fi
-  top=$(git rev-parse --show-toplevel 2>/dev/null) || top=
+  top=$CODE_REVIEW_CHECKOUT
+  [ -n "$top" ] || top=$(git rev-parse --show-toplevel 2>/dev/null) || top=
   err=$(mktemp "${TMPDIR:-/tmp}/fm-code-review.XXXXXX") || return 1
   count=$(jq 'length' "$findings")
   i=0
@@ -474,6 +477,42 @@ code_review_post_findings() {  # <findings-file>
   return "$failed"
 }
 
+CODE_REVIEW_CHECKOUT=
+# The review never runs in the caller's checkout: the skill may check the pull
+# request out where it runs, which once moved a worker off its ship branch. It
+# runs in a throwaway blob-less clone detached at the base branch, with the
+# pull request's head fetched as refs/remotes/origin/pr/<n>, and gh's
+# credentials kept in the clone for the blobs it reads later. Starting on the
+# base keeps the pull request's own Claude settings and hooks from loading,
+# as REVIEW.md is read from the base. The clone is removed on exit, failure
+# and signals included.
+code_review_checkout() {
+  local dir
+  if ! code_review_base; then
+    echo "error: could not read the base branch of $FM_PR_URL, so no review ran" >&2
+    return 1
+  fi
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-code-review-checkout.XXXXXX") || return 1
+  CODE_REVIEW_CHECKOUT=$dir
+  trap 'rm -rf "$CODE_REVIEW_CHECKOUT"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  if git init -q "$dir" \
+    && git -C "$dir" remote add origin "https://$FM_PR_HOST/$FM_PR_OWNER/$FM_PR_REPO.git" \
+    && git -C "$dir" config remote.origin.promisor true \
+    && git -C "$dir" config remote.origin.partialclonefilter blob:none \
+    && git -C "$dir" config credential.helper '' \
+    && git -C "$dir" config --add credential.helper '!gh auth git-credential' \
+    && GIT_TERMINAL_PROMPT=0 git -C "$dir" fetch -q --filter=blob:none origin \
+      "+refs/heads/$CODE_REVIEW_BASE:refs/remotes/origin/$CODE_REVIEW_BASE" \
+      "+refs/pull/$FM_PR_NUMBER/head:refs/remotes/origin/pr/$FM_PR_NUMBER" \
+    && GIT_TERMINAL_PROMPT=0 git -C "$dir" checkout -q --detach "refs/remotes/origin/$CODE_REVIEW_BASE"; then
+    return 0
+  fi
+  echo "error: could not make a throwaway checkout of $FM_PR_URL to review in, so no review ran" >&2
+  return 1
+}
+
 # Runs the merge-gate review headless and posts its findings. The skill's own
 # --comment posting is optional by its prompt, so a reviewer may print its
 # findings and post none; the run here passes no --comment and posts every
@@ -482,10 +521,11 @@ code_review_run() {  # <model>
   local model=$1 out findings rc blocks tail
   local -a piped
   tail=$(code_review_prompt_tail) || { echo "error: no review ran" >&2; return 1; }
+  code_review_checkout || return 1
   out=$(mktemp "${TMPDIR:-/tmp}/fm-code-review-output.XXXXXX") || return 1
   findings=$(mktemp "${TMPDIR:-/tmp}/fm-code-review-findings.XXXXXX") || return 1
   set +e
-  claude -p --model "$model" "/code-review medium $FM_PR_URL $tail" \
+  (cd "$CODE_REVIEW_CHECKOUT" && exec claude -p --model "$model" "/code-review medium $FM_PR_URL $tail") \
     < /dev/null | tee "$out"
   piped=("${PIPESTATUS[@]}")
   set -e
