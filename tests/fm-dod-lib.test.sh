@@ -711,7 +711,7 @@ EOF
 }
 
 # The draft check the DoD hands a worker must be the gh-axi path that rule 3 of
-# every ship brief requires for GitHub operations, never raw gh (issue 5325).
+# every ship brief requires for views a person reads, never raw gh (issue 5325).
 test_pr_based_dod_draft_check_uses_gh_axi() {
   local mode out
   for mode in direct-PR no-mistakes; do
