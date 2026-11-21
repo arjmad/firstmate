@@ -1111,8 +1111,7 @@ The optional local, gitignored `config/status-archive` presence flag opts this h
 Create it with `touch "$FM_HOME/config/status-archive"`; remove it to disable future archival and pruning.
 It is off by default: without the flag, teardown deletes status logs as before and leaves existing archives untouched.
 The flag applies to teardown run by this home, including forced retirement of its secondmate children; it is not inherited by other homes.
-Each opted-in archival prunes owned logs older than 30 completed days by mtime; housekeeping failures warn and never abort teardown.
-Age-based retention works independently of the selected backlog backend and keeps histories available for a predictable audit period.
+Archived status logs are kept at every age (this fork's D5 keep-forever rule); each opted-in archival prunes only orphaned `.status-archive.*` staging files older than 30 completed days by mtime, and housekeeping failures warn and never abort teardown.
 [`architecture.md`](architecture.md#task-status-archives) describes archive locations and isolation from live state; [`bin/fm-teardown.sh`](../bin/fm-teardown.sh) owns the mechanics.
 
 ## Record hygiene report (config/record-hygiene)
@@ -1162,7 +1161,7 @@ Each attempt builds a fresh sibling staging directory, flushes every copied file
 `manifest.v1.json` carries the version, capture time, completeness, source-relative names, byte counts, and SHA-256 values.
 Retries parse that JSON with duplicate-key rejection, require the exact v1 fields and types, and verify a one-to-one mapping between manifest entries and archived regular files.
 A reused task ID writes its distinct `spawn_gen` rather than overwriting an earlier generation.
-Only strictly valid committed generations older than 30 completed days are pruned by manifest mtime, matching task status archive retention, and scan failures warn without undoing a successful capture.
+Only strictly valid committed generations older than 30 completed days are pruned by manifest mtime, and scan failures warn without undoing a successful capture.
 If the archive cannot commit, teardown reports the reason and stops before deleting metadata, status, or inbox sources.
 Removing `config/record-export-root` is the explicit escape hatch back to ordinary teardown behavior.
 
