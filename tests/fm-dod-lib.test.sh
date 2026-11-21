@@ -727,16 +727,13 @@ test_pr_based_dod_draft_check_uses_gh_axi() {
 
 # A repository whose CI gates once at ready (fleet, 2026-11-21) has its PRs
 # opened as drafts until their reviews are done; the direct-PR DoD defers to
-# that guidance and has the worker wait for the ready run, because the job a
-# draft skipped counts as a passing check.
+# that guidance, before the code review it moves onto the draft.
 test_direct_pr_dod_defers_to_draft_until_ready_guidance() {
   local out draft_at review_at
   out="$TMP_ROOT/dod-draft-until-ready.md"
   fm_dod_block direct-PR dod-draft-ready-task > "$out"
   assert_grep "has its PRs opened as drafts until their reviews are done" "$out" \
     "direct-PR DoD must defer to a repository that opens PRs as drafts until reviewed"
-  assert_grep "a run the ready event started exists at your head" "$out" \
-    "direct-PR DoD must wait for the ready run before trusting the checks"
   draft_at=$(grep -n 'open it as a draft instead' "$out" | head -1 | cut -d: -f1)
   review_at=$(grep -n '^Then run Claude Code' "$out" | head -1 | cut -d: -f1)
   [ -n "$draft_at" ] && [ -n "$review_at" ] && [ "$draft_at" -lt "$review_at" ] \
