@@ -45,8 +45,8 @@ record_hygiene_report() {
                   archive="$dir/status.$n.log"
                 done
                 if mv -- "$file" "$archive"; then
-                  # Start status-archive retention at archive time, not at the
-                  # orphan's last write, so teardown's 30-day prune keeps it.
+                  # Stamp the archive time, not the orphan's last write, so the
+                  # data media sweep counts its quiet period from archival.
                   touch -- "$archive" || echo "RECORD_HYGIENE: could not refresh archived status log time: $id" >&2
                 else
                   echo "RECORD_HYGIENE: could not archive orphan status log: $id" >&2
