@@ -111,7 +111,8 @@ Reproducible scratch leaves a task's `data/<id>/` at teardown, deleted rather th
 - A checkout holding unlanded work is never deleted; teardown keeps it, names it with its reason, and files it once as a routine noticed row, `noticed-kept-checkout-<task>`, so it does not sit there unseen.
 - A task torn down before this rule, or whose checkout was pushed later, gets the same rule again through [task scratch retention](#task-scratch-retention-configdata-scratch-retention-days).
 
-Everything else under `data/` follows one retention rule once its task has been closed for more than 60 days:
+In a home that opts in to [task non-text retention](#task-non-text-retention-configdata-nontext-retention-days), a torn-down task's non-text files are instead deleted N days after teardown with no drive copy, under Arjun's [2026-11-21 ruling](fork-decisions/2026-11-21-task-text-kept-media-swept.md), and the binary rules below do not apply there.
+In every other home, everything else under `data/` follows one retention rule once its task has been closed for more than 60 days:
 
 - Text records stay in the home: the task's `report.md`, `notes.md`, and any brief or decisions text.
 - Binaries (images, PDFs, exports) move to the owning business area's shared drive folder, resolved by folder ID, never by name path.
@@ -867,12 +868,25 @@ Run `bin/fm-data-media-prune.sh --dry-run` to list what it would remove and what
 A one-off real run by hand is `bin/fm-data-media-prune.sh --scratch-days <N>` from the session that holds this home's lock.
 [`fm-data-scratch-prune.sh`'s header](../bin/fm-data-scratch-prune.sh) owns which checkouts and folders go.
 
+## Task non-text retention (config/data-nontext-retention-days)
+
+A torn-down task's text is kept forever, and its other files are removed once it has been torn down for N days, under Arjun's 2026-11-21 ruling.
+The optional local, gitignored `config/data-nontext-retention-days` file holds a whole number of days N from 1 to 3650, and the locked session-start bootstrap then removes those files from every torn-down task's `data/<task>/` that has a teardown record at least N days old and no change in N days.
+The teardown record is the `status.log` teardown archives into the folder under [`config/status-archive`](#task-status-archive-configstatus-archive), or the closing date on the task's done backlog row, so a task with neither is skipped.
+A folder that an open backlog row links, by its id or by any path to `data/<task>`, is skipped, and a home whose backlog cannot be read removes nothing.
+It removes images, video, audio, PDFs, databases, archives, disk images, and log and data files (`.log`, `.json`, `.csv`, and the like) over 1 MiB.
+It keeps Markdown, plain text, HTML, TOML, YAML, SVG, status logs, other kinds it does not list, anything inside a git checkout, and secondmates' folders, and it touches nothing outside this home's `data/`.
+It does not exempt finals, so file a deliverable to Drive or a repository within the N days.
+An absent file means the bootstrap never runs it, and the file is not inherited by secondmate homes.
+Run `bin/fm-data-media-prune.sh --nontext` for a dry run that prints each folder's KiB it would free and why it skipped the rest, with N 30 unless the file or `--nontext-days <N>` sets it, and add `--apply` to remove them by hand from the session that holds this home's lock.
+[`fm-data-media-prune.sh`'s header](../bin/fm-data-media-prune.sh) owns the teardown record, the link rule, and the exact file kinds.
+
 ## Data size trigger (config/data-size-trigger-mib)
 
 At every locked session start, when this home's `data/` holds more than the trigger, the bootstrap prints `BOOTSTRAP_INFO: data size:` lines naming the five largest torn-down tasks and how much of each is clean checkouts, dependency folders, images, PDFs, and other files.
 The optional local, gitignored `config/data-size-trigger-mib` file holds the trigger as a whole number of MiB from 1 to 16777216; without it the trigger is 4096 MiB (4 GiB).
 Between those 12-hourly runs, the bootstrap reuses a task's line from its last run while that task's size is unchanged.
-The lines change nothing: clean checkouts and dependency folders go through task scratch retention, and images and PDFs follow the Drive rule above, one captain-approved batch at a time.
+The lines change nothing: clean checkouts and dependency folders go through task scratch retention, and images and PDFs go through task non-text retention where a home opted in, else follow the Drive rule above, one captain-approved batch at a time.
 
 ## Firstmate role (config/firstmate-role)
 

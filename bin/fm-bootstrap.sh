@@ -136,10 +136,11 @@
 #          the deferred half (below) and reports through its own BOOTSTRAP_INFO
 #          line.
 #          data_media_prune is bin/fm-data-media-prune.sh, whose header owns
-#          which torn-down tasks' media and scratch it removes and its data
-#          size trigger; it removes nothing unless
-#          config/data-media-retention-days or
-#          config/data-scratch-retention-days is set, runs on the local pass
+#          which torn-down tasks' media, scratch, and non-text files it
+#          removes and its data size trigger; it removes nothing unless
+#          config/data-media-retention-days,
+#          config/data-scratch-retention-days, or
+#          config/data-nontext-retention-days is set, runs on the local pass
 #          only with --if-due (at most every 12 hours for the retention parts),
 #          and reports through its own BOOTSTRAP_INFO lines.
 #          Set FM_BOOTSTRAP_NETWORK to split this run into a blocking half and a
@@ -1577,8 +1578,8 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ] && local_phase; then
       exit 1
     fi
   fi
-  # Bulky media and reproducible scratch of torn-down, quiet tasks under data/,
-  # each opt-in by config, and the data size trigger. It stays on this blocking
+  # Bulky media, reproducible scratch, and non-text files of torn-down, quiet
+  # tasks under data/, each opt-in by config, and the data size trigger. It stays on this blocking
   # pass after the reconciliation above because it deletes without the task-set
   # lock, so it must not overlap the helm's first turn. --if-due keeps its
   # whole-data/ retention scans to one run per 12 hours, since retention counts

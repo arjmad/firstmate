@@ -414,8 +414,8 @@ test_size_trigger_names_the_largest_torn_down_tasks() {
   out=$(run_prune "$home")
   assert_contains "$out" "BOOTSTRAP_INFO: data size: data/ holds " "the trigger names data/'s size"
   assert_contains "$out" ", over the 1 MiB trigger; its largest torn-down tasks follow." "the trigger names itself"
-  assert_contains "$out" "images and PDFs move to Drive only as one captain-approved batch (docs/configuration.md)" \
-    "the trigger names the Drive rule for images and PDFs"
+  assert_contains "$out" "images other than SVG and PDFs go with non-text retention (config/data-nontext-retention-days), else move to Drive only as one captain-approved batch (docs/configuration.md)" \
+    "the trigger names the rules for images and PDFs"
   assert_contains "$out" "BOOTSTRAP_INFO: data size: big-task 6 MiB: 0 MiB clean checkouts, 2 MiB dependency folders, 1 MiB images, 2 MiB PDFs, 1 MiB other" \
     "the largest task's line says what it holds"
   assert_contains "$out" "BOOTSTRAP_INFO: data size: small-task 1 MiB: " "the next task follows"
@@ -534,6 +534,254 @@ test_if_due_runs_retention_at_most_every_twelve_hours() {
   pass "--if-due: retention runs at most every 12 hours, the size trigger every run, and a plain or dry run always"
 }
 
+# --- non-text retention -------------------------------------------------------
+
+# day_ago <days>: the UTC date <days> days back, as tasks-axi stamps a close.
+day_ago() {
+  perl -MPOSIX -e 'print strftime("%Y-%m-%d", gmtime(time - shift() * 86400))' "$1"
+}
+
+# NONTEXT are the files the non-text part removes; TEXT_KEPT and the rest of
+# KEEP_ALSO stay, each for the reason its name gives.
+NONTEXT="shot.png Photo.JPG doc.PDF clip.mp4 voice.wav cache.db bundle.zip data.tar.gz disk.img big.log big.json big.csv"
+TEXT_KEPT="brief.md report.md board/index.html notes.txt plan.toml conf.yaml small.json small.csv small.log icon.svg"
+KEEP_ALSO="unknown.bin checkout/.git/HEAD checkout/shot.png link.png"
+
+# make_swept_task <home> <task> <days-ago> [status]: a torn-down task's folder,
+# every file <days-ago> days old; with "status", its teardown status archive
+# too (a big one, which always stays).
+make_swept_task() {
+  local d=$1/data/$2 f
+  for f in $TEXT_KEPT; do put "$d/$f"; done
+  put "$d/board/index.html" '<img src="../shot.png">'
+  for f in shot.png Photo.JPG doc.PDF clip.mp4 voice.wav cache.db bundle.zip data.tar.gz disk.img unknown.bin checkout/shot.png; do
+    put "$d/$f"
+  done
+  mib "$d/big.log" 2
+  mib "$d/big.json" 2
+  mib "$d/big.csv" 2
+  put "$d/checkout/.git/HEAD" "ref: refs/heads/main"
+  put "$TMP_ROOT/outside.png"
+  ln -s "$TMP_ROOT/outside.png" "$d/link.png"
+  if [ "${4:-}" = status ]; then
+    put "$d/status.log" "done [at=1]: finished"
+    mib "$d/status.1.log" 2
+  fi
+  find "$d" -type f -exec perl -e 'my $t = time - shift() * 86400; utime $t, $t, @ARGV' "$3" {} +
+}
+
+assert_swept() {  # <home> <task> <msg> [status]
+  local f
+  for f in $NONTEXT; do assert_absent "$1/data/$2/$f" "$3: $2/$f should be removed"; done
+  for f in $TEXT_KEPT $KEEP_ALSO; do
+    [ -e "$1/data/$2/$f" ] || [ -L "$1/data/$2/$f" ] || fail "$3: $2/$f must stay"
+  done
+  [ "${4:-}" != status ] || {
+    assert_present "$1/data/$2/status.log" "$3: the status archive must stay"
+    [ -n "$(find "$1/data/$2/status.1.log" -size +1024k 2>/dev/null)" ] || fail "$3: a big status archive must stay whole"
+  }
+}
+
+assert_not_swept() {  # <home> <task> <msg>
+  local f
+  for f in $NONTEXT $TEXT_KEPT; do assert_present "$1/data/$2/$f" "$3: $2/$f must stay"; done
+}
+
+test_nontext_dry_run_is_the_default() {
+  local home out
+  home=$(new_home nontext-dry)
+  make_swept_task "$home" old-task 40 status
+  out=$(run_prune "$home" --nontext)
+  assert_contains "$out" "would free: " "the default is a dry run: $out"
+  assert_contains "$out" " in 12 files from data/old-task/, keeping " "the dry run names the folder and its file count: $out"
+  assert_contains "$out" "BOOTSTRAP_INFO: data nontext retention: would remove 12 files (6 MiB) from 1 tasks torn down over 30 days" \
+    "the dry run sums what it would free"
+  assert_contains "$out" "data nontext retention: skipped 0 linked from an open backlog row, 0 with no teardown record, 0 torn down or changed within 30 days" \
+    "the dry run says why it skipped folders"
+  assert_not_swept "$home" old-task "a dry run"
+  assert_absent "$home/state/data-media-retention" "a non-text run starts no media clock"
+  pass "nontext: --nontext is a dry run that names per-folder bytes and removes nothing"
+}
+
+test_nontext_apply_removes_only_non_text() {
+  local home out
+  home=$(new_home nontext-apply)
+  make_swept_task "$home" old-task 40 status
+  # A newline in a parent folder must not split a path into a kept file's.
+  put "$home/data/old-task/keep.md"
+  put "$home/data/old-task/keep.md
+odd/shot.png"
+  backdate 40 "$home/data/old-task/keep.md" "$home/data/old-task/keep.md
+odd/shot.png"
+  out=$(run_prune "$home" --nontext --apply)
+  assert_present "$home/data/old-task/keep.md" "a path split at a newline never removes a kept file"
+  assert_contains "$out" "freed: " "--apply reports what it freed: $out"
+  assert_contains "$out" "BOOTSTRAP_INFO: data nontext retention: removed 12 files (6 MiB) from 1 tasks torn down over 30 days" \
+    "--apply sums what it removed"
+  assert_not_contains "$out" "data size:" "--nontext never runs the size trigger"
+  assert_swept "$home" old-task "--apply" status
+  assert_present "$TMP_ROOT/outside.png" "a symlink's target is never touched"
+  out=$(run_prune "$home" --nontext --apply)
+  assert_not_contains "$out" "freed:" "a second run finds nothing left: $out"
+  pass "nontext: --apply removes images, video, audio, PDFs, databases, archives, disk images and big data text, and keeps text, status archives, unknown kinds, checkouts and symlinks"
+}
+
+test_nontext_needs_a_teardown_record_old_enough() {
+  local home out
+  home=$(new_home nontext-record)
+  # No status archive and no done row: no teardown record.
+  make_swept_task "$home" no-record 40
+  # A status archive written ten days ago: torn down ten days ago.
+  make_swept_task "$home" recent-status 40 status
+  backdate 10 "$home/data/recent-status/status.log"
+  # Only a done row, closed 40 days ago, in the backlog and in the archive.
+  make_swept_task "$home" done-row 40
+  make_swept_task "$home" archived-row 40
+  # A done row closed ten days ago, though its files are older.
+  make_swept_task "$home" recent-row 40
+  cat >> "$home/data/backlog.md" <<EOF
+- [x] done-row - Done (repo: x) (kind: ship) (merged $(day_ago 40))
+- [x] recent-row - Done (repo: x) (kind: ship) (merged $(day_ago 10))
+EOF
+  # A date in a title, or a status log a task named itself, is no record.
+  make_swept_task "$home" title-date 40
+  make_swept_task "$home" dated-status 40
+  put "$home/data/dated-status/status.2026-01-01.log"
+  backdate 40 "$home/data/dated-status/status.2026-01-01.log"
+  # Archive rows as retention writes them, read by tasks-axi's own parser.
+  cat > "$home/data/done-archive.md" <<EOF
+
+## Archived 2026-01-01
+- [x] archived-row - Done (repo: x) (kind: ship) (since 2026-01-01) (done $(day_ago 40))
+  Its body.
+
+- [x] title-date - Copied notes (reported $(day_ago 40)) (reference copy) (repo: x) (kind: ship)
+
+## Archived 2026-01-02
+- [x] title-date - Copied notes (reported $(day_ago 40)) evidence only (repo: x) (kind: ship)
+EOF
+  out=$(run_prune "$home" --nontext --apply)
+  assert_contains "$out" "data nontext retention: skipped 0 linked from an open backlog row, 3 with no teardown record, 2 torn down or changed within 30 days" \
+    "the skip line counts each reason: $out"
+  assert_not_swept "$home" no-record "a folder with no teardown record"
+  assert_not_swept "$home" title-date "a folder whose only date is in a title"
+  assert_not_swept "$home" dated-status "a folder whose only status log is not teardown's"
+  assert_not_swept "$home" recent-status "a status archive ten days old"
+  assert_not_swept "$home" recent-row "a done row closed ten days ago"
+  assert_swept "$home" done-row "a done row closed 40 days ago"
+  assert_swept "$home" archived-row "an archived done row closed 40 days ago"
+  out=$(run_prune "$home" --nontext --nontext-days 5)
+  assert_contains "$out" "from data/recent-status/" "--nontext-days changes the age: $out"
+  assert_contains "$out" "from data/recent-row/" "--nontext-days applies to a done row too: $out"
+  pass "nontext: a folder needs a teardown record, a status archive or a done row, at least N days old"
+}
+
+test_nontext_keeps_linked_live_and_secondmate_folders() {
+  local home out
+  home=$(new_home nontext-skip \
+    "- [ ] owner-row - Fork patch follow-up (repo: x) (kind: ship) (since 2026-10-01)
+  Evidence: $TMP_ROOT/nontext-skip/home/data/linked-abs/report.md
+  See data/linked-rel." \
+    "- [ ] held-row - Waiting on the captain (repo: x) (kind: scout) (since 2026-10-01) (hold: his call)
+  Board: data/linked-held/board/index.html" \
+    "- [ ] 001 - An id tasks-axi quotes (repo: x) (kind: ship) (since 2026-10-01)
+  See data/linked-quoted/report.md")
+  for t in linked-abs linked-rel linked-held linked-quoted 001 live-task mate-home; do make_swept_task "$home" "$t" 40 status; done
+  put "$home/state/live-task.meta" "window=x"
+  mkdir -p "$home/data/mate-home/children"
+  printf -- '- mate-two\n' > "$home/data/secondmates.md"
+  make_swept_task "$home" mate-two 40 status
+  make_swept_task "$home" free-task 40 status
+  # A logging tasks-axi shows how many reads the open rows cost.
+  local fakebin="$TMP_ROOT/nontext-skip/bin"
+  mkdir -p "$fakebin"
+  # shellcheck disable=SC2016 # the wrapper's own "$@" stays literal
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\nexec %q "$@"\n' "$fakebin/calls" "$(command -v tasks-axi)" > "$fakebin/tasks-axi"
+  chmod +x "$fakebin/tasks-axi"
+  out=$(PATH="$fakebin:$PATH" run_prune "$home" --nontext --apply)
+  assert_contains "$out" "skipped 4 linked from an open backlog row" "each linked folder is counted: $out"
+  assert_no_grep 'show ' "$fakebin/calls" "a markdown backlog's open rows are read in one pass, with no show per row"
+  assert_grep 'list ' "$fakebin/calls" "the logging wrapper saw the run's reads"
+  for t in linked-abs linked-rel linked-held linked-quoted 001 live-task mate-home mate-two; do
+    assert_not_swept "$home" "$t" "a linked, live, or secondmate folder"
+  done
+  assert_swept "$home" free-task "an unlinked folder in the same run" status
+  pass "nontext: folders an open row links by any path, live tasks, and secondmates' folders stay whole"
+}
+
+test_nontext_unreadable_row_removes_nothing() {
+  local home out fakebin real
+  home=$(new_home nontext-unreadable "- [ ] some-row - Open (repo: x) (kind: ship) (since 2026-10-01)")
+  make_swept_task "$home" old-task 40 status
+  real=$(command -v tasks-axi)
+  fakebin="$TMP_ROOT/nontext-unreadable/bin"
+  mkdir -p "$fakebin"
+  # The wrapper lists one more open row than the file holds, so the run must
+  # fall back to `show` for it, and that read fails.
+  cat > "$fakebin/tasks-axi" <<SH
+#!/usr/bin/env bash
+[ "\${1:-}" != show ] || exit 1
+case " \$* " in
+  *" list "*" --state "*) exec $(printf '%q' "$real") "\$@" ;;
+  *" list "*) $(printf '%q' "$real") "\$@" | awk '{ print } /^tasks\[/ { print "  ghost-row,queued,ship,x,Ghost" }'; exit "\${PIPESTATUS[0]}" ;;
+esac
+exec $(printf '%q' "$real") "\$@"
+SH
+  chmod +x "$fakebin/tasks-axi"
+  out=$(PATH="$fakebin:$PATH" run_prune "$home" --nontext --apply)
+  assert_contains "$out" "warning: data nontext retention skipped: open backlog row ghost-row could not be read" \
+    "an unreadable open row is named: $out"
+  assert_not_contains "$out" "freed:" "an unreadable open row stops the part"
+  assert_not_swept "$home" old-task "a run whose open row could not be read"
+  pass "nontext: an open row that cannot be read removes nothing"
+}
+
+test_nontext_is_opt_in_on_real_runs() {
+  local home out
+  home=$(new_home nontext-optin)
+  make_swept_task "$home" old-task 40 status
+  out=$(run_prune "$home")
+  [ -z "$out" ] || fail "a real run without config/data-nontext-retention-days must stay silent: $out"
+  out=$(run_prune "$home" --dry-run)
+  assert_not_contains "$out" "nontext" "a dry run without the config previews no non-text part: $out"
+  assert_not_swept "$home" old-task "an unconfigured home"
+  printf '30\n' > "$home/config/data-nontext-retention-days"
+  out=$(run_prune "$home" --dry-run)
+  assert_contains "$out" "would free: " "a configured dry run lists folders: $out"
+  assert_not_swept "$home" old-task "a configured dry run"
+  out=$(run_prune "$home" --if-due)
+  assert_equals "BOOTSTRAP_INFO: data nontext retention: removed 12 files (6 MiB) from 1 tasks torn down over 30 days" "$out" \
+    "the bootstrap's configured real run prints only its summary"
+  assert_swept "$home" old-task "a configured real run" status
+  pass "nontext: a real run applies it only once config/data-nontext-retention-days opts the home in"
+}
+
+test_nontext_option_errors() {
+  local home rc out
+  home=$(new_home nontext-opts)
+  for args in "--apply" "--nontext-days 30" "--dry-run --nontext-days 30" "--nontext --days 3" "--nontext --if-due" "--nontext --apply --dry-run" "--nontext --nontext-days 0" "--nontext --nontext-days 3651"; do
+    rc=0
+    # shellcheck disable=SC2086
+    run_prune "$home" $args >/dev/null || rc=$?
+    assert_equals 2 "$rc" "'$args' is refused"
+  done
+  printf '\n' > "$home/config/data-nontext-retention-days"
+  rc=0
+  run_prune "$home" --nontext >/dev/null || rc=$?
+  assert_equals 2 "$rc" "an empty config value is refused"
+  # Outside --nontext, a bad value turns off only that part.
+  printf 'soon\n' > "$home/config/data-nontext-retention-days"
+  printf '7\n' > "$home/config/data-media-retention-days"
+  make_task "$home" done-task
+  start_clock "$home" done-task
+  rc=0
+  out=$(run_prune "$home") || rc=$?
+  assert_equals 0 "$rc" "a bad non-text value does not stop a combined run"
+  assert_contains "$out" "warning: data nontext retention skipped: " "the bad value is named: $out"
+  assert_contains "$out" "BOOTSTRAP_INFO: data media retention: removed 3 files" "media retention still runs: $out"
+  pass "nontext: contradictory options and out-of-range days exit 2, and a bad config value skips only its own part"
+}
+
 # --- bootstrap seat -----------------------------------------------------------
 
 make_toolchain() {  # <dir>
@@ -619,4 +867,11 @@ test_scratch_real_run_removes_only_clean_checkouts_and_dependency_folders
 test_size_trigger_names_the_largest_torn_down_tasks
 test_size_lines_are_reused_while_a_task_size_is_unchanged
 test_if_due_runs_retention_at_most_every_twelve_hours
+test_nontext_dry_run_is_the_default
+test_nontext_apply_removes_only_non_text
+test_nontext_needs_a_teardown_record_old_enough
+test_nontext_keeps_linked_live_and_secondmate_folders
+test_nontext_unreadable_row_removes_nothing
+test_nontext_is_opt_in_on_real_runs
+test_nontext_option_errors
 test_bootstrap_runs_prune_only_when_locked
