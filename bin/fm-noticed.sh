@@ -253,15 +253,20 @@ append_body() {  # <id> <line>
 # with bin/fm-send.sh --resolve-key once filed. Returns 1 in a main home, which files locally as before; exits 1
 # when the channel cannot be written, so the item is never dropped silently.
 hand_up_to_parent() {  # <id> <kind> <title> <why> <from> <repo> <evidence> <call> <now>
-  local id=$1 key="noticed-queue-$1" rc=0 fields head
+  local id=$1 key="noticed-queue-$1" rc=0 fields head room
+  # A main home files locally, whatever the item's length.
+  fm_parent_channel_home_id "$FM_HOME" >/dev/null || rc=$?
+  [ "$rc" != 1 ] || return 1
+  rc=0
   # The call and urgency lead, so the channel's length cap can only cut evidence.
   head="$2 $id${8:+ (call: $8)}"
   [ "$9" = 0 ] || head="$head (now: urgent or doing harm)"
   fields="$head: $3 - why: $4 - from: $5${6:+ - repo: $6}"
   # The channel keeps 1200 bytes of a note: evidence takes only what is left,
   # and an item whose own fields do not fit is refused before anything is sent.
-  [ "${#fields}" -le 1200 ] || refuse "$id is too long to hand to the main home; shorten its title or why"
-  [ -z "$7" ] || fields="$fields$(printf '%s' " - evidence: $7" | cut -c1-$((1200 - ${#fields})))"
+  room=$((1200 - $(LC_ALL=C; printf '%s' "${#fields}")))
+  [ "$room" -ge 0 ] || refuse "$id is too long to hand to the main home; shorten its title or why"
+  [ -z "$7" ] || [ "$room" -eq 0 ] || fields="$fields$(printf '%s' " - evidence: $7" | cut -b1-"$room")"
   fm_parent_channel_report "$FM_HOME" "$STATE" \
     "needs-decision [key=$key]: noticed-queue $(fm_parent_channel_clean_note "$fields")" "$key" || rc=$?
   case "$rc" in

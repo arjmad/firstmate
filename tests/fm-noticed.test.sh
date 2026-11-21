@@ -525,6 +525,16 @@ test_a_secondmate_hands_ideas_and_calls_to_the_main_home() {
   set -e
   expect_code 2 "$rc" "an idea too long to hand up must be refused"
   ! grep -q 'idea-long-title' "$channel" || fail "an idea too long to hand up reached the parent channel"
+  # The cap is in bytes: 700 two-byte characters are 1400 bytes.
+  set +e
+  out=$(LC_ALL=C.UTF-8 noticed "$home" file idea wide-title --title "$(printf 'é%.0s' $(seq 1 700))" --why "w" --from sm-task 2>&1)
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "a multi-byte title past the byte cap must be refused"
+  # A main home has no channel cap: the same long title files locally.
+  out=$(noticed "$(make_home long-main)" file idea long-title --title "$(printf 't%.0s' $(seq 1 1300))" --why "w" --from firstmate) \
+    || fail "a main home refused a long idea: $out"
+  [ "$out" = "filed: idea-long-title" ] || fail "a main home did not file its long idea locally: $out"
 
   out=$(noticed "$home" file noticed flaky-test --title "Flaky test" --why "CI reruns" --from sm-task) \
     || fail "a mate refused a routine item: $out"
