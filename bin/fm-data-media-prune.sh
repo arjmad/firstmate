@@ -417,7 +417,7 @@ if [ -n "$NONTEXT_DAYS" ]; then
   while IFS= read -r id; do
     [ -n "$id" ] || continue
     if ! row=$(cd "$FM_BACKLOG_AXI_ROOT" 2>/dev/null \
-      && FM_TASKS_AXI_TIMEOUT=${FM_TASKS_AXI_TIMEOUT:-30} fm_tasks_axi show "$id" --full ${AXI_FILE_ARGS[@]+"${AXI_FILE_ARGS[@]}"} 2>&1) \
+      && FM_TASKS_AXI_TIMEOUT=${FM_TASKS_AXI_TIMEOUT:-30} fm_tasks_axi show "$id" --full ${AXI_FILE_ARGS[@]+"${AXI_FILE_ARGS[@]}"} 2>&1 </dev/null) \
       || ! printf '%s\n' "$row" | grep -qxF -e "  id: $id" -e "  id: \"$id\""; then
       nontext_off "open backlog row $id could not be read"
       break
