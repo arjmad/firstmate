@@ -7298,9 +7298,15 @@ test_status_archive_reuse_and_retention() {
   ln -s "$case_dir/outside/status.log" "$case_dir/data/task-x1/status.1.log"
   ln -s "$case_dir/outside" "$case_dir/data/symlink-task"
   printf 'expired\n' > "$case_dir/data/old/status.log"
+  printf 'old reuse\n' > "$case_dir/data/old/status.3.log"
+  mkdir -p "$case_dir/data/old/children/kid"
+  printf 'old child\n' > "$case_dir/data/old/children/kid/status.log"
+  printf 'partial\n' > "$case_dir/data/old/.status-archive.stale"
+  printf 'partial child\n' > "$case_dir/data/old/children/kid/.status-archive.stale"
+  touch -t 200001010000 "$case_dir/data/old/children/kid/"* "$case_dir/data/old/children/kid/.status-archive.stale"
   printf 'report survives\n' > "$case_dir/data/old/report.md"
   printf 'unowned file survives\n' > "$case_dir/data/old/status.notes.log"
-  touch -t 200001010000 "$case_dir/data/old/"* "$case_dir/outside/status.log"
+  touch -t 200001010000 "$case_dir/data/old/"* "$case_dir/data/old/.status-archive.stale" "$case_dir/outside/status.log"
   printf 'done: second generation\n' > "$case_dir/state/task-x1.status"
   touch -t 200001010000 "$case_dir/state/task-x1.status"
   rc=0
@@ -7311,10 +7317,14 @@ test_status_archive_reuse_and_retention() {
   assert_grep 'second generation' "$archive" "reused ID did not select a fresh archive"
   assert_grep 'outside sentinel' "$case_dir/outside/status.log" "archive or pruning followed a symlink"
   [ -L "$case_dir/data/task-x1/status.1.log" ] || fail "archive replaced an existing symlink"
-  assert_absent "$case_dir/data/old/status.log" "expired status archive survived pruning"
+  assert_grep 'expired' "$case_dir/data/old/status.log" "a status log older than 30 days was pruned (D5 keep-forever)"
+  assert_present "$case_dir/data/old/status.3.log" "a reused-ID status log older than 30 days was pruned"
+  assert_present "$case_dir/data/old/children/kid/status.log" "a child status log older than 30 days was pruned"
+  assert_absent "$case_dir/data/old/.status-archive.stale" "a stale staging file survived pruning"
+  assert_absent "$case_dir/data/old/children/kid/.status-archive.stale" "a stale child staging file survived pruning"
   assert_present "$case_dir/data/old/report.md" "pruning removed other task data"
   assert_present "$case_dir/data/old/status.notes.log" "pruning removed an unowned filename"
-  pass "reused task IDs never overwrite archives and retention removes only old owned logs"
+  pass "reused task IDs never overwrite archives and retention keeps status logs and removes only stale staging files"
 }
 
 test_status_archive_unsafe_paths_refuse() {
@@ -7480,12 +7490,12 @@ test_status_archive_pruning_failure_warns_and_completes() {
     touch "$case_dir/config/status-archive"
     printf 'done: current history\n' > "$case_dir/state/task-x1.status"
     mkdir -p "$case_dir/data/unrelated-old"
-    printf 'expired\n' > "$case_dir/data/unrelated-old/status.log"
-    touch -t 200001010000 "$case_dir/data/unrelated-old/status.log"
+    printf 'expired\n' > "$case_dir/data/unrelated-old/.status-archive.stale"
+    touch -t 200001010000 "$case_dir/data/unrelated-old/.status-archive.stale"
     cat > "$case_dir/fakebin/$operation" <<'SH'
 #!/usr/bin/env bash
 for arg in "$@"; do
-  case "$arg" in */unrelated-old|*/unrelated-old/status.log) exit 1 ;; esac
+  case "$arg" in */unrelated-old|*/unrelated-old/.status-archive.stale) exit 1 ;; esac
 done
 exec "${FM_ARCHIVE_TEST_COMMAND:?}" "$@"
 SH
@@ -7496,7 +7506,7 @@ SH
     grep -E 'warning:.*unrelated-old' "$case_dir/stderr" >/dev/null || fail "pruning failure did not name its path"
     assert_grep 'current history' "$case_dir/data/task-x1/status.log" "pruning failure lost current archive"
     assert_absent "$case_dir/state/task-x1.meta" "pruning failure retained current metadata"
-    assert_present "$case_dir/data/unrelated-old/status.log" "failure fixture did not preserve expired archive"
+    assert_present "$case_dir/data/unrelated-old/.status-archive.stale" "failure fixture did not preserve the stale staging file"
   done
   pass "retention failures warn without aborting unrelated teardown"
 }

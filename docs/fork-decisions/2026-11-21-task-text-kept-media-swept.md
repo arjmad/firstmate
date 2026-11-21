@@ -4,7 +4,7 @@ The map behind it found Heimdall's `data/` at 8.30 GB in 3,098 task folders with
 For homes that opt in, this supersedes the [2026-10-26 media retention record](2026-10-26-task-media-retention.md)'s clause that still images and PDFs move to Drive before any are deleted; the media part it describes is unchanged.
 The rule has no finals exemption, because D5 names none: a deliverable is filed to Drive or a repository within the 30 days.
 Teardown already writes two records of its time, the `data/<task>/status.log` copy under `config/status-archive` and the closing date on the task's done backlog row, so no new record was added.
-Teardown prunes those status logs after 30 days, so the done row is usually the only record left for an older task.
+Teardown used to prune those status logs after 30 days; the [status-log keep-forever patch](2026-11-21-status-log-keep-forever.md) keeps them now, but for a task torn down earlier the done row may be the only record left.
 It extends the existing media prune rather than adding a second sweep, so the torn-down test, the backlog read, and the checkout and secondmate skips keep one owner, and it rides that prune's locked session-start run.
 No upstream proposal yet: upstream has no data retention of its own to extend.
 

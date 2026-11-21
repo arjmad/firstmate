@@ -395,8 +395,9 @@
 # outside the home being removed. Remote-home retirement with no status is a
 # no-op. Symlinked/non-regular sources and symlinked archive directories refuse
 # cleanup rather than following them; the configured data root may be a symlink.
-# Existing archive filenames are never overwritten. Each archival prunes owned
-# logs and orphaned staging files older than 30 completed days by mtime.
+# Existing archive filenames are never overwritten. Each archival prunes
+# orphaned .status-archive.* staging files older than 30 completed days by
+# mtime; archived status logs are kept at every age (fork, D5 keep-forever).
 # Pruning failures warn, never abort teardown, and leave other task data and
 # symlinks alone.
 # Opt-in config/record-export-root delegates the record archive transaction to
@@ -522,18 +523,13 @@ teardown_archive_directory() {  # <directory>
 }
 
 teardown_prune_status_archives() {  # <task-directory>
-  local dir=$1 child file suffix
+  local dir=$1 child file
   [ -d "$dir" ] && [ ! -L "$dir" ] || return 0
+  # Fork (D5 keep-forever): archived status.log and status.<N>.log are task
+  # text and stay at every age; only orphaned staging files are pruned.
   while IFS= read -r -d '' file; do
-    suffix=${file##*/}
-    case "$suffix" in
-      status.log|.status-archive.*) ;;
-      *) suffix=${suffix#status.}; suffix=${suffix%.log}
-         case "$suffix" in ''|*[!0-9]*) continue ;; esac ;;
-    esac
-    rm -f -- "$file" || echo "warning: could not prune status archive: $file" >&2
-  done < <(find "$dir" -maxdepth 1 -type f \
-    \( -name status.log -o -name 'status.[0-9]*.log' -o -name '.status-archive.*' \) \
+    rm -f -- "$file" || echo "warning: could not prune status archive staging file: $file" >&2
+  done < <(find "$dir" -maxdepth 1 -type f -name '.status-archive.*' \
     -mtime +30 -print0 || echo "warning: could not scan status archives: $dir" >&2)
   [ ! -L "$dir/children" ] || return 0
   for child in "$dir/children"/*; do

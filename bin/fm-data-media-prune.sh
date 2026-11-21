@@ -164,8 +164,9 @@
 #     or the closing date tasks-axi stamps on the task's done row when
 #     teardown closes it, as tasks-axi reads it from the backlog's done rows
 #     and from its markdown Done archive's rows. A task with neither is
-#     skipped; a status log counts only as status.log or status.<digits>.log. Teardown prunes those status logs after 30
-#     days, so for older tasks the done row is usually the only record left.
+#     skipped; a status log counts only as status.log or status.<digits>.log. In this fork teardown keeps those
+#     status logs at every age (D5 keep-forever); a task torn down before that
+#     change may have lost its log, leaving its done row as the only record.
 #   - Torn down N days: the newest closing date is at least N + 1 whole UTC
 #     days old (the extra day absorbs the stamp's time zone), and no regular
 #     file under data/<task>/ was modified within N days. The archived status
