@@ -3295,7 +3295,7 @@ test_claude_content_refuses_launches_that_cannot_load_it() {
         ;;
     esac
     # Each setup's overrides apply to its own spawn only.
-    out=$(for kv in "${overrides[@]}"; do export "${kv?}"; done
+    out=$(for kv in ${overrides[@]+"${overrides[@]}"}; do export "${kv?}"; done
       run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "${args[@]}" 2>&1)
     status=$?
     [ "$status" -ne 0 ] || fail "the $setup content launch must refuse"$'\n'"$out"

@@ -263,14 +263,14 @@ fm_content_mcp_check() {
       echo "error: the content MCP config $file names server '$server'; use only letters, digits, _ and - so its tool names can be checked" >&2
       return 1
     fi
-    for name in "${denied_names[@]}"; do
+    for name in ${denied_names[@]+"${denied_names[@]}"}; do
       [ "$name" != "$server" ] || {
         echo "error: --content loads MCP server $server, but the worker-denied MCP server list $(fm_worker_denied_mcp_servers_file) denies it" >&2
         return 1
       }
     done
     for tool in "mcp__${server}__authenticate" "mcp__${server}__complete_authentication"; do
-      for pattern in "${patterns[@]}"; do
+      for pattern in ${patterns[@]+"${patterns[@]}"}; do
         # The entry is a glob on purpose: a whole-server entry and a wildcard
         # both hide the sign-in tool.
         # shellcheck disable=SC2053
