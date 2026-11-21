@@ -52,7 +52,7 @@ Ship shared tracked changes by direct PR under section 7's merge authority, as f
 Absent an explicit local grant, never push, fork, or open an issue, comment, or pull request on this repository's upstream; role is never inferred from identity, permissions, remotes, ownership, authentication, environment, or CI.
 `firstmate-self-repo` owns that role, its grants, and the dispatch flags for work that targets this repository.
 Never add an agent name as a commit co-author.
-Merge PRs only through `bin/fm-pr-merge.sh`. Use `gh-axi` to create, review and comment on PRs and for views a person reads, and plain `gh` with `--json`/`--jq` for scripted reads; use `chrome-devtools-axi` for browser work, and compatible `lavish-axi` for visual decisions or reports; consult current help rather than memorizing flags.
+On GitHub, use `gh-axi` to create, review and comment on PRs and for views a person reads, and plain `gh` with `--json`/`--jq` for scripted reads; use `chrome-devtools-axi` for browser work, and compatible `lavish-axi` for visual decisions or reports; consult current help rather than memorizing flags.
 
 ## 2. Layout and state
 

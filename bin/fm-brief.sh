@@ -392,7 +392,7 @@ if [ "$KIND" = ship ]; then
   elif [ "$FORGE" = external ]; then
     FORGE_RULE_LINE="Publish only through the review tool your Definition of done names, and use chrome-devtools-axi for browser operations."
   else
-    FORGE_RULE_LINE="Use gh-axi to create, review and comment on PRs and for views a person reads, plain gh with --json/--jq for scripted reads, and chrome-devtools-axi for browser operations."
+    FORGE_RULE_LINE="On GitHub, use gh-axi to create, review and comment on PRs and for views a person reads, and plain gh with --json/--jq for scripted reads; use chrome-devtools-axi for browser operations."
   fi
 elif [ "$FORGE_SET" -eq 1 ] || [ "$SHAPE_SET" -eq 1 ] || [ "$PR_TEXT_SET" -eq 1 ]; then
   echo "error: --forge, --shape, and --pr apply only to ship briefs; a scout delivers a report and a secondmate charter is not a delivery contract" >&2
@@ -630,7 +630,7 @@ IFS= read -r -d '' WAIT_SECTION <<'EOF' || true
 # Waiting
 Every turn you take resends your whole context, so a wait must cost no turns.
 After you append `needs-decision:` or `blocked:`, end your turn at once: do not check the inbox, the status file, or anything else, because the answer arrives as a terminal message that starts your next turn.
-Wait on anything external - a pipeline gate, PR checks - with ONE blocking shell command that returns when the state changes: `no-mistakes axi run` or `respond` with `--wait`, `gh pr checks <pr> --watch`, or `until <condition>; do sleep 30; done` for anything else.
+Wait on anything external - a pipeline gate, PR checks - with ONE blocking shell command that returns when the state changes: `no-mistakes axi run` or `respond` with `--wait`, `gh-axi pr checks <pr> --watch --fail-fast`, or `until <condition>; do sleep 30; done` for anything else.
 Never spend turns on `sleep` followed by a status check, and never background a command in order to poll it.
 In Claude Code that `until` loop in a single Bash call is the sanctioned foreground wait: when the harness refuses a sleep-then-check command and points you at backgrounding instead, reissue the wait as the loop rather than accepting the background.
 Bound that command by what your harness lets one command run: in Pi pass the bash tool a `timeout` of at most 2700 seconds, because Pi sets none by default; in Claude Code pass the Bash tool its maximum `timeout` of 600000 ms, because its default is 2 minutes; in Codex keep waiting on a still-running command with empty `write_stdin` polls of up to 300000 ms; elsewhere pass your shell tool its largest timeout and assume at most 10 minutes.
@@ -900,7 +900,7 @@ The report, its notes files beside it in \`$DATA/$ID/\`, and any brain filing be
    Filing durable knowledge through the fleet's sanctioned memory route (\`fleet-memory\`) is permitted and is not a change outside the worktree: a research scout follows the research skill's filing step, recording one research-log entry and the verified facts on the brain page that owns the subject, while recommendations stay in the report until the captain decides them.
    $BRAIN_FILING_RULE
    That filing goes only to Arjun's brain; a scout working in Sapna's domain never writes Arjun's brain and never writes Sapna's.
-3. Use gh-axi for GitHub views a person reads, plain gh with --json/--jq for scripted reads, and chrome-devtools-axi for browser operations.
+3. On GitHub, use gh-axi for views a person reads and plain gh with --json/--jq for scripted reads; use chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`$STATUS_APPEND\`
    States: working, needs-decision, blocked, $PAUSED_VERB, $FM_CLASSIFY_GATE_WAIT_VERB, done, failed.
