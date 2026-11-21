@@ -40,7 +40,8 @@
 #                              closed with adds ` (lifted its earlier captain
 #                              hold)`
 #            skipped: <id> (answered earlier)   a closed idea is never re-asked,
-#                              archived or not
+#                              archived or not; in a secondmate home, neither
+#                              is an idea already handed to the main home
 #            handed-up: <id>   in a secondmate home, an idea or a --call
 #                              item went to the main home instead (below)
 #          In a secondmate home (a .fm-secondmate-home marker) an idea or a
@@ -258,6 +259,13 @@ hand_up_to_parent() {  # <id> <kind> <title> <why> <from> <repo> <evidence> <cal
   fm_parent_channel_home_id "$FM_HOME" >/dev/null || rc=$?
   [ "$rc" != 1 ] || return 1
   rc=0
+  # An idea handed up before (or filed and closed here) is never re-asked, as
+  # in a main home; an open local row of it still goes up and closes below.
+  if [ "$2" = idea ] && grep -Fxq -- "$id" "$FILED" 2>/dev/null \
+    && ! { show=$("$TASKS" show "$id" --full 2>/dev/null) && [ "$(shown_field "$show" state)" != "done" ]; }; then
+    printf 'skipped: %s (handed to the main home or answered earlier)\n' "$id"
+    return 0
+  fi
   # The call and urgency lead, so the channel's length cap can only cut evidence.
   head="$2 $id${8:+ (call: $8)}"
   [ "$9" = 0 ] || head="$head (now: urgent or doing harm)"
@@ -272,8 +280,11 @@ hand_up_to_parent() {  # <id> <kind> <title> <why> <from> <repo> <evidence> <cal
   case "$rc" in
     0)
       # A routine row of this id filed here before is the main home's now, so
-      # close it rather than leave it for this home to fix on its own.
+      # close it rather than leave it for this home to fix on its own. An idea
+      # is recorded as filed, so a later sighting is skipped above; a noticed
+      # call that comes back is asked again, as a main home reopens it.
       lock_state
+      [ "$2" != idea ] || grep -Fxq -- "$id" "$FILED" 2>/dev/null || printf '%s\n' "$id" >> "$FILED"
       if show=$("$TASKS" show "$id" --full 2>/dev/null) && [ "$(shown_field "$show" state)" != "done" ]; then
         if ! { append_body "$id" "Handed to the main home $TODAY on the parent channel (key $key); closed here." \
           && "$TASKS" "done" "$id" >/dev/null; }; then

@@ -505,6 +505,12 @@ test_a_secondmate_hands_ideas_and_calls_to_the_main_home() {
   printf 'resolved [key=noticed-queue-idea-faster-sweep] [at=1]: answered: filed in the main home\n' >> "$channel"
   ! bash -c '. "$1"; status_has_open_needs_decision "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$channel" \
     || fail "a resolved line did not close the handed-up decision"
+  # Seen again after the main home answered it: never re-asked.
+  out=$(noticed "$home" file idea faster-sweep --title "Sweep faster" --why "seen again" --from sm-task) \
+    || fail "a mate refused a repeat idea: $out"
+  [ "$out" = "skipped: idea-faster-sweep (handed to the main home or answered earlier)" ] || fail "a repeat idea was not skipped: $out"
+  [ "$(grep -c '^needs-decision \[key=noticed-queue-idea-faster-sweep\]' "$channel")" = 1 ] \
+    || fail "an answered idea was asked again: $(cat "$channel")"
 
   out=$(noticed "$home" file noticed slow-canary --title "Canary slow" --why "it may time out" \
     --from sm-task --call ruling) || fail "a mate refused a valid --call item: $out"

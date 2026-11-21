@@ -469,11 +469,11 @@ OUT
   printf 'bin/tool.sh:99\n' > "$dir/inline-refuse"
   run_review "$dir" "$URL" --model claude-opus-5-5
   expect_code 0 "$RC" "review: posting every finding should succeed: $ERR"
-  [ "$(sed -n 1,3p "$dir/claude.log" | tr '\n' ' ')" = '-p --model claude-opus-5-5 ' ] \
-    || fail "review: claude was not run headless on the pinned model: $(cat "$dir/claude.log")"
-  case "$(sed -n 4p "$dir/claude.log")" in
+  [ "$(sed -n 1,5p "$dir/claude.log" | tr '\n' ' ')" = '-p --setting-sources user --model claude-opus-5-5 ' ] \
+    || fail "review: claude was not run headless on the pinned model with only user settings: $(cat "$dir/claude.log")"
+  case "$(sed -n 6p "$dir/claude.log")" in
     "/code-review medium $URL Merge-gate focus for this review: "*) ;;
-    *) fail "review: the prompt is not the review with the PR URL and the focus: $(sed -n 4p "$dir/claude.log")" ;;
+    *) fail "review: the prompt is not the review with the PR URL and the focus: $(sed -n 6p "$dir/claude.log")" ;;
   esac
   ! grep -q -- '--comment' "$dir/claude.log" || fail "review: the reviewer was asked to post, so findings could post twice"
   assert_contains "$OUT" 'I found three issues.' "review: the review output was not printed"
@@ -1155,8 +1155,8 @@ test_review_reads_review_md_from_the_base_branch() {
   focus=${OUT#"medium --comment $URL "}
   run_review "$dir" "$URL" --model claude-opus-5-5
   expect_code 0 "$RC" "review-rules-none: a base with no REVIEW.md should review as before: $ERR"
-  [ "$(sed -n 4p "$dir/claude.log")" = "/code-review medium $URL $focus" ] \
-    || fail "review-rules-none: the prompt changed without a REVIEW.md: $(sed -n 4p "$dir/claude.log")"
+  [ "$(sed -n 6p "$dir/claude.log")" = "/code-review medium $URL $focus" ] \
+    || fail "review-rules-none: the prompt changed without a REVIEW.md: $(sed -n 6p "$dir/claude.log")"
   case "$focus" in *REVIEW.md*) fail "review-rules-none: the focus names a REVIEW.md that does not exist" ;; esac
 
   dir=$(make_case review-rules bin/tool.sh REVIEW.md)
@@ -1167,12 +1167,12 @@ test_review_reads_review_md_from_the_base_branch() {
   printf '%s\n' '# Review rules' '- When the diff touches bin/: every new script has a test.' > "$dir/base/REVIEW.md"
   run_review "$dir" "$URL" --model claude-opus-5-5
   expect_code 0 "$RC" "review-rules: the review should run with the base rules: $ERR"
-  case "$(sed -n 4p "$dir/claude.log")" in
+  case "$(sed -n 6p "$dir/claude.log")" in
     "/code-review medium $URL Merge-gate focus for this review: "*"Repository review rules: the REVIEW.md text below is as committed on the base branch release, with the files it includes in place; "*"Check only the items whose trigger matches this diff"*"REVIEW.md begins: # Review rules - When the diff touches bin/: every new script has a test. REVIEW.md ends.") ;;
-    *) fail "review-rules: the prompt does not carry the base branch's REVIEW.md: $(sed -n 4p "$dir/claude.log")" ;;
+    *) fail "review-rules: the prompt does not carry the base branch's REVIEW.md: $(sed -n 6p "$dir/claude.log")" ;;
   esac
   assert_grep 'api repos/example/repo/contents/REVIEW.md?ref=release ' "$dir/gh.log" "review-rules: REVIEW.md was not read at the base branch"
-  [ "$(wc -l < "$dir/claude.log" | tr -d ' ')" = 4 ] || fail "review-rules: the prompt is not one argument"
+  [ "$(wc -l < "$dir/claude.log" | tr -d ' ')" = 6 ] || fail "review-rules: the prompt is not one argument"
 
   dir=$(make_case review-rules-unreadable bin/tool.sh)
   make_claude "$dir"
@@ -1190,7 +1190,7 @@ review_prompt() {
   make_claude "$1"
   printf 'No defects.\n\n```json\n[]\n```\n' > "$1/claude-out"
   run_review "$1" "$URL" --model claude-opus-5-5
-  PROMPT=$(sed -n 4p "$1/claude.log" 2>/dev/null)
+  PROMPT=$(sed -n 6p "$1/claude.log" 2>/dev/null)
 }
 
 # shellcheck disable=SC2016  # the backticks are Markdown fences, not expansion
