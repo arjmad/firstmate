@@ -162,8 +162,9 @@
 #     teardown copies there under config/status-archive (bin/fm-teardown.sh),
 #     or the closing date tasks-axi stamps on the task's done row when
 #     teardown closes it, read from the backlog's done rows and its markdown
-#     Done archive ((merged|done|reported|closed <YYYY-MM-DD>) there). A task
-#     with neither is skipped. Teardown prunes those status logs after 30
+#     Done archive (a trailing (merged|done|reported|closed <YYYY-MM-DD>)
+#     metadata group there, never the title's text). A task with neither is
+#     skipped; a status log counts only as status.log or status.<digits>.log. Teardown prunes those status logs after 30
 #     days, so for older tasks the done row is usually the only record left.
 #   - Torn down N days: the newest closing date is at least N + 1 whole UTC
 #     days old (the extra day absorbs the stamp's time zone), and no regular
@@ -297,6 +298,8 @@ if [ "$NONTEXT_ONLY" -eq 1 ]; then
   NONTEXT_DRY=$((1 - APPLY))
 else
   [ "$APPLY" -eq 0 ] || { echo "error: --apply needs --nontext" >&2; exit 2; }
+  # Only the config opts a real run in, so an option alone never deletes.
+  [ -z "$NONTEXT_DAYS" ] || { echo "error: --nontext-days needs --nontext" >&2; exit 2; }
   DAYS=$(retention_days "$DAYS" "$CONFIG/data-media-retention-days") || exit 2
   SCRATCH_DAYS=$(retention_days "$SCRATCH_DAYS" "$CONFIG/data-scratch-retention-days") || exit 2
   # The non-text part runs here only when the home opted in (header).
@@ -376,7 +379,11 @@ backlog_status=$?
 if [ "$backlog_status" -ne 0 ] || ! printf '%s\n' "$backlog_out" | grep -q '^count: [0-9]'; then
   backlog_skip "$(printf '%s\n' "$backlog_out" | sed -n '1p')"
 fi
-printf '%s\n' "$backlog_out" | sed -n 's/^  \([A-Za-z0-9._-]*\),\([a-z_]*\),.*/\1 \2/p' \
+# tasks-axi quotes an id that reads as a number or keyword, such as "001".
+unquote_ids() {
+  sed 's/^  "\([A-Za-z0-9._-]*\)",/  \1,/'
+}
+printf '%s\n' "$backlog_out" | unquote_ids | sed -n 's/^  \([A-Za-z0-9._-]*\),\([a-z_]*\),.*/\1 \2/p' \
   | awk '$2 != "done" { print $1 }' | sort -u > "$WORK/open-ids"
 # Newline-framed lists, so a membership test is a case match rather than a fork.
 NL='
@@ -407,7 +414,7 @@ if [ -n "$NONTEXT_DAYS" ]; then
     [ -n "$id" ] || continue
     if ! row=$(cd "$FM_BACKLOG_AXI_ROOT" 2>/dev/null \
       && FM_TASKS_AXI_TIMEOUT=${FM_TASKS_AXI_TIMEOUT:-30} fm_tasks_axi show "$id" --full ${AXI_FILE_ARGS[@]+"${AXI_FILE_ARGS[@]}"} 2>&1) \
-      || ! printf '%s\n' "$row" | grep -qxF "  id: $id"; then
+      || ! printf '%s\n' "$row" | grep -qxF -e "  id: $id" -e "  id: \"$id\""; then
       nontext_off "open backlog row $id could not be read"
       break
     fi
@@ -422,17 +429,20 @@ if [ -n "$NONTEXT_DAYS" ]; then
   fi
 fi
 if [ -n "$NONTEXT_DAYS" ]; then
-  printf '%s\n' "$done_out" \
+  printf '%s\n' "$done_out" | unquote_ids \
     | sed -n 's/^  \([A-Za-z0-9._-]*\),done,.*,\([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)$/\1 \2/p' > "$WORK/closed"
   archive=$(fm_backlog_markdown_archive "$DATA")
   case $? in
     0)
       if [ -f "$archive" ]; then
+        # Only the row's trailing metadata groups, never its title text.
         awk '/^- \[x\] / && $3 ~ /^[A-Za-z0-9._-]+$/ {
             id = $3; line = $0
-            while (match(line, /\((merged|done|reported|closed) [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)/)) {
-              print id, substr(line, RSTART + RLENGTH - 11, 10)
-              line = substr(line, RSTART + RLENGTH)
+            while (match(line, / \([^()]*\)$/)) {
+              g = substr(line, RSTART + 2, RLENGTH - 3)
+              if (g ~ /^(merged|done|reported|closed) [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/)
+                print id, substr(g, length(g) - 9)
+              line = substr(line, 1, RSTART - 1)
             }
           }' "$archive" >> "$WORK/closed" || nontext_off "the backlog's Done archive could not be read: $archive"
       elif [ -e "$archive" ]; then
@@ -569,7 +579,7 @@ nontext_task() {
     -iname '*.iso' -o -iname '*.img' -o -iname '*.raw' -o -iname '*.qcow2' -o -iname '*.vmdk' -o -iname '*.vdi' -o -iname '*.dmg' -o \
     \( \( -iname '*.log' -o -iname '*.json' -o -iname '*.jsonl' -o -iname '*.ndjson' -o -iname '*.csv' -o -iname '*.tsv' -o \
     -iname '*.xml' \) -size +"$NONTEXT_FLOOR_KIB"k ! -name status.log ! -name 'status.[0-9]*.log' \) \
-    \) -print 2>/dev/null > "$WORK/all"
+    \) ! -name "*$NL*" -print 2>/dev/null > "$WORK/all"
   if [ -s "$WORK/git-roots" ]; then
     awk 'FILENAME == ARGV[1] { roots[++n] = $0 "/"; next }
       { for (i = 1; i <= n; i++) if (index($0, roots[i]) == 1) next; print }' \
@@ -602,6 +612,20 @@ nontext_task() {
     "$verb" "$task_kib" "$task_files" "${dir##*/}" "$((total - task_kib))"
 }
 
+# status_archived <dir>: true when teardown archived a status log there, a
+# regular status.log or status.<digits>.log.
+status_archived() {
+  local f n
+  for f in "$1"/status.log "$1"/status.*.log; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    n=${f##*/status.}
+    n=${n%.log}
+    case "$f" in */status.log) return 0 ;; esac
+    case "$n" in ''|*[!0-9]*) ;; *) return 0 ;; esac
+  done
+  return 1
+}
+
 # nontext_consider <dir> <task>: sweep one torn-down task that passes the
 # non-text part's checks (header), counting why any other is skipped.
 nontext_consider() {
@@ -609,7 +633,7 @@ nontext_consider() {
   [ ! -e "$dir/children" ] || return 0
   case "$SECONDMATE_IDS" in *"$NL$task$NL"*) return 0 ;; esac
   case "$LINKED" in *"$NL$task$NL"*) NONTEXT_LINKED=$((NONTEXT_LINKED + 1)); return 0 ;; esac
-  if [ -z "$(find "$dir" -maxdepth 1 -type f \( -name status.log -o -name 'status.[0-9]*.log' \) -print 2>/dev/null)" ]; then
+  if ! status_archived "$dir"; then
     case "$CLOSED_IDS" in
       *"$NL$task$NL"*) ;;
       *) NONTEXT_NO_RECORD=$((NONTEXT_NO_RECORD + 1)); return 0 ;;

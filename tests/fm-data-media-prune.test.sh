@@ -636,12 +636,19 @@ test_nontext_needs_a_teardown_record_old_enough() {
 - [x] done-row - Done (repo: x) (kind: ship) (merged $(day_ago 40))
 - [x] recent-row - Done (repo: x) (kind: ship) (merged $(day_ago 10))
 EOF
-  printf '## Archived\n- [x] archived-row - Done (repo: x) (kind: ship) (since 2026-01-01) (done %s)\n' "$(day_ago 40)" \
-    > "$home/data/done-archive.md"
+  # A date in a title, or a status log a task named itself, is no record.
+  make_swept_task "$home" title-date 40
+  make_swept_task "$home" dated-status 40
+  put "$home/data/dated-status/status.2026-01-01.log"
+  backdate 40 "$home/data/dated-status/status.2026-01-01.log"
+  printf '## Archived\n- [x] archived-row - Done (repo: x) (kind: ship) (since 2026-01-01) (done %s)\n- [x] title-date - Copied notes (reported %s) evidence only (repo: x) (kind: ship)\n' \
+    "$(day_ago 40)" "$(day_ago 40)" > "$home/data/done-archive.md"
   out=$(run_prune "$home" --nontext --apply)
-  assert_contains "$out" "data nontext retention: skipped 0 linked from an open backlog row, 1 with no teardown record, 2 torn down or changed within 30 days" \
+  assert_contains "$out" "data nontext retention: skipped 0 linked from an open backlog row, 3 with no teardown record, 2 torn down or changed within 30 days" \
     "the skip line counts each reason: $out"
   assert_not_swept "$home" no-record "a folder with no teardown record"
+  assert_not_swept "$home" title-date "a folder whose only date is in a title"
+  assert_not_swept "$home" dated-status "a folder whose only status log is not teardown's"
   assert_not_swept "$home" recent-status "a status archive ten days old"
   assert_not_swept "$home" recent-row "a done row closed ten days ago"
   assert_swept "$home" done-row "a done row closed 40 days ago"
@@ -659,16 +666,18 @@ test_nontext_keeps_linked_live_and_secondmate_folders() {
   Evidence: $TMP_ROOT/nontext-skip/home/data/linked-abs/report.md
   See data/linked-rel." \
     "- [ ] held-row - Waiting on the captain (repo: x) (kind: scout) (since 2026-10-01) (hold: his call)
-  Board: data/linked-held/board/index.html")
-  for t in linked-abs linked-rel linked-held live-task mate-home; do make_swept_task "$home" "$t" 40 status; done
+  Board: data/linked-held/board/index.html" \
+    "- [ ] 001 - An id tasks-axi quotes (repo: x) (kind: ship) (since 2026-10-01)
+  See data/linked-quoted/report.md")
+  for t in linked-abs linked-rel linked-held linked-quoted 001 live-task mate-home; do make_swept_task "$home" "$t" 40 status; done
   put "$home/state/live-task.meta" "window=x"
   mkdir -p "$home/data/mate-home/children"
   printf -- '- mate-two\n' > "$home/data/secondmates.md"
   make_swept_task "$home" mate-two 40 status
   make_swept_task "$home" free-task 40 status
   out=$(run_prune "$home" --nontext --apply)
-  assert_contains "$out" "skipped 3 linked from an open backlog row" "each linked folder is counted: $out"
-  for t in linked-abs linked-rel linked-held live-task mate-home mate-two; do
+  assert_contains "$out" "skipped 4 linked from an open backlog row" "each linked folder is counted: $out"
+  for t in linked-abs linked-rel linked-held linked-quoted 001 live-task mate-home mate-two; do
     assert_not_swept "$home" "$t" "a linked, live, or secondmate folder"
   done
   assert_swept "$home" free-task "an unlinked folder in the same run" status
@@ -716,7 +725,7 @@ test_nontext_is_opt_in_on_real_runs() {
 test_nontext_option_errors() {
   local home rc
   home=$(new_home nontext-opts)
-  for args in "--apply" "--nontext --days 3" "--nontext --if-due" "--nontext --apply --dry-run" "--nontext --nontext-days 0" "--nontext --nontext-days 3651"; do
+  for args in "--apply" "--nontext-days 30" "--dry-run --nontext-days 30" "--nontext --days 3" "--nontext --if-due" "--nontext --apply --dry-run" "--nontext --nontext-days 0" "--nontext --nontext-days 3651"; do
     rc=0
     # shellcheck disable=SC2086
     run_prune "$home" $args >/dev/null || rc=$?
