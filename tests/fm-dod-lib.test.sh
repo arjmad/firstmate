@@ -725,6 +725,32 @@ test_pr_based_dod_draft_check_uses_gh_axi() {
   pass "PR-based DoD draft check uses gh-axi"
 }
 
+# A repository whose CI gates once at ready (fleet, 2026-11-21) has its PRs
+# opened as drafts until their reviews are done; the direct-PR DoD defers to
+# that guidance, before the code review it moves onto the draft.
+test_direct_pr_dod_defers_to_draft_until_ready_guidance() {
+  local out draft_at review_at proto
+  out="$TMP_ROOT/dod-draft-until-ready.md"
+  fm_dod_block direct-PR dod-draft-ready-task > "$out"
+  assert_grep "has its PRs opened as drafts until their reviews are done" "$out" \
+    "direct-PR DoD must defer to a repository that opens PRs as drafts until reviewed"
+  assert_grep "mark it ready after your last review push and after any local full suite that guidance names, before you wait for its checks" "$out" \
+    "direct-PR DoD must mark a draft ready after the reviews and local suite and before the checks wait"
+  # The checks steps live in the delivery protocol the block names by path.
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  proto=$(sed -n 's/^Read `\([^`]*\)` "Checks" before that wait.*/\1/p' "$out")
+  [ -n "$proto" ] && [ -f "$proto" ] || fail "direct-PR DoD does not point at a readable delivery protocol: '$proto'"
+  assert_grep "the local run is optional and belongs before you mark it ready" "$proto" \
+    "the delivery protocol must keep a draft PR's local full suite optional and before it is marked ready"
+  assert_grep "means a required check has not posted, so watch again until it posts and passes" "$proto" \
+    "the delivery protocol must keep waiting while a required check has not posted"
+  draft_at=$(grep -n 'open it as a draft instead' "$out" | head -1 | cut -d: -f1)
+  review_at=$(grep -n '^Then run Claude Code' "$out" | head -1 | cut -d: -f1)
+  [ -n "$draft_at" ] && [ -n "$review_at" ] && [ "$draft_at" -lt "$review_at" ] \
+    || fail "the draft-until-ready line must come before the code review it defers marking ready past"
+  pass "direct-PR DoD defers to draft-until-ready guidance"
+}
+
 # A scaffold block rendered below a placeholder (bin/fm-brief.sh --method) must
 # not hide a forgotten fill: a line that is still exactly the placeholder is an
 # unfilled subsection, while a placeholder quoted inside a sentence is content.
@@ -990,6 +1016,7 @@ test_standalone_local_only_needs_project_ref
 test_non_done_lines_are_not_gated
 test_fenced_and_indented_captain_lines_are_not_intent
 test_pr_based_dod_draft_check_uses_gh_axi
+test_direct_pr_dod_defers_to_draft_until_ready_guidance
 test_direct_pr_dod_waits_for_checks_green
 test_pr_based_dod_carries_the_code_review_step
 test_direct_pr_dod_writes_the_matt_pr_body

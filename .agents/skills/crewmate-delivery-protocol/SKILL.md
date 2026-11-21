@@ -50,10 +50,10 @@ This step applies to a direct-PR worker on a GitHub PR, after the code review an
 
 1. Wait for the PR's checks at your pushed HEAD: run `gh-axi pr checks <number> --watch --fail-fast`, and while it waits append `gate-wait [at=<epoch>]: checks on PR {url}` instead of reporting done.
 2. A failing check is yours to fix: append `working [at=<epoch>]: fixing {check}`, push the fix, and wait again.
-3. A required check that has never reported is missing from that list rather than pending, so also read `gh-axi pr view <number>`: a `merge_state` of blocked while every listed check is green means a required check has not posted.
+3. A required check that has never reported is missing from that list rather than pending, so also read `gh-axi pr view <number>`: a `merge_state` of blocked while every listed check is green means a required check has not posted, so watch again until it posts and passes.
 4. When that check's Actions run, found with `gh-axi run list --branch <branch>`, stays `queued` with no jobs in `gh-axi run view <id>` for over 10 minutes, as after a GitHub Actions outage, GitHub refuses to cancel or rerun it.
    Run `gh-axi pr close <number>` then `gh-axi pr reopen <number>`, which starts a fresh `pull_request` run at the same head, and wait again.
    That close keeps the branch, so never close this way with `bin/fm-pr-close.sh` or `--delete-branch`.
 5. A repository with no checks at all reports none, which leaves nothing to wait for.
 6. A required `fleet-gate` or `gate` status posts only from a full `./check.sh` run on a clean tree whose HEAD is already pushed.
-   Run it after your last push, a rebase or force-push included because the new head has no status yet, never as a single-suite run, and with no untracked files left in the tree - the `findings.json` that `/code-review` writes counts.
+   Run it after your last push (on a PR held as a draft until reviewed, whose CI runs the suite when it is marked ready, the local run is optional and belongs before you mark it ready), a rebase or force-push included because the new head has no status yet, never as a single-suite run, and with no untracked files left in the tree - the `findings.json` that `/code-review` writes counts.

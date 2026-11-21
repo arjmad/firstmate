@@ -5,6 +5,7 @@ Decision: in a secondmate home, `bin/fm-noticed.sh file` hands an idea or a `--c
 Decision: `bin/fm-code-review.sh review` runs the headless review in a throwaway clone at the base branch, because the review once checked a companion PR out in the worker's own worktree and moved it off its ship branch.
 Decision: the ship Definition of done keeps one line per code-review and checks rule and names `.agents/skills/crewmate-delivery-protocol/SKILL.md` for the full steps, as the 2026-11-20 brief-rules record did for status rules, because those two procedures were the largest fixed block in every ship brief.
 The moved text is upstream's, so a sync that edits the code-review or checks steps must patch the protocol file rather than reintroduce the long form.
+The checks wording of the 2026-11-21 draft-until-ready record (watch again until a missing required check posts; a draft's local full suite is optional and runs before ready) moved with it into that file's "Checks" section.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
