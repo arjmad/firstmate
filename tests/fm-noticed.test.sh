@@ -513,6 +513,19 @@ test_a_secondmate_hands_ideas_and_calls_to_the_main_home() {
     "$channel" || fail "the --call item did not reach the parent channel with its call kind: $(cat "$channel")"
   ! tasks "$home" show noticed-slow-canary >/dev/null 2>&1 || fail "a mate kept a local row for a --call item it handed up"
 
+  # Over-long evidence is cut to fit the channel; a title too long to fit is
+  # refused before anything is sent.
+  out=$(noticed "$home" file idea long-proof --title "Long proof" --why "big log" --from sm-task \
+    --evidence "$(printf 'x%.0s' $(seq 1 1500))") || fail "a mate refused an idea with long evidence: $out"
+  grep -q '^needs-decision \[key=noticed-queue-idea-long-proof\] .*: noticed-queue idea idea-long-proof: Long proof - why: big log - from: sm-task - evidence: xxx' \
+    "$channel" || fail "an idea with long evidence lost its fields on the parent channel"
+  set +e
+  out=$(noticed "$home" file idea long-title --title "$(printf 't%.0s' $(seq 1 1300))" --why "w" --from sm-task 2>&1)
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "an idea too long to hand up must be refused"
+  ! grep -q 'idea-long-title' "$channel" || fail "an idea too long to hand up reached the parent channel"
+
   out=$(noticed "$home" file noticed flaky-test --title "Flaky test" --why "CI reruns" --from sm-task) \
     || fail "a mate refused a routine item: $out"
   [ "$out" = "filed: noticed-flaky-test" ] || fail "a mate did not file its routine item locally: $out"

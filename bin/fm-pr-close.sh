@@ -107,6 +107,10 @@ viewer=$(gh api --hostname "$FM_PR_HOST" user --jq .login 2>/dev/null) || keep "
 # credentials and never a prompt.
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/fm-pr-close.XXXXXX") || keep "could not make a scratch repository to push the delete from"
 trap 'rm -rf "$scratch"' EXIT
+# A caller's GIT_DIR or GIT_WORK_TREE (a git hook sets them) would aim the
+# scratch commands at the caller's repository.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_IMPLICIT_WORK_TREE GIT_PREFIX
 git init -q "$scratch" || keep "could not make a scratch repository to push the delete from"
 if ! GIT_TERMINAL_PROMPT=0 git -C "$scratch" -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
   push -q --force-with-lease="refs/heads/$branch:$head" \

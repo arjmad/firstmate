@@ -49,8 +49,11 @@
 #          `needs-decision [key=noticed-queue-<id>]: noticed-queue <kind> <id>
 #          [(call: <kind>)] [(now: ...)]: <title> - why: ... - from: ...` line
 #          with any repo and evidence fields, and no local row is kept; an open
-#          local row of that id is closed with a note that it was handed up. A
-#          channel that cannot be written exits 1. Routine noticed items still
+#          local row of that id is closed with a note that it was handed up.
+#          Evidence is cut to fit the channel's 1200-byte note, and an item
+#          whose other fields do not fit is refused (exit 2) before anything is
+#          sent. A channel that cannot be written, or a local row that cannot
+#          be closed after the hand-up, exits 1. Routine noticed items still
 #          file locally.
 #          A noticed item is filed routine unless --call is given: firstmate
 #          fixes or drops it on its own, so the row is not held, its owner is
@@ -254,7 +257,11 @@ hand_up_to_parent() {  # <id> <kind> <title> <why> <from> <repo> <evidence> <cal
   # The call and urgency lead, so the channel's length cap can only cut evidence.
   head="$2 $id${8:+ (call: $8)}"
   [ "$9" = 0 ] || head="$head (now: urgent or doing harm)"
-  fields="$head: $3 - why: $4 - from: $5${6:+ - repo: $6}${7:+ - evidence: $7}"
+  fields="$head: $3 - why: $4 - from: $5${6:+ - repo: $6}"
+  # The channel keeps 1200 bytes of a note: evidence takes only what is left,
+  # and an item whose own fields do not fit is refused before anything is sent.
+  [ "${#fields}" -le 1200 ] || refuse "$id is too long to hand to the main home; shorten its title or why"
+  [ -z "$7" ] || fields="$fields$(printf '%s' " - evidence: $7" | cut -c1-$((1200 - ${#fields})))"
   fm_parent_channel_report "$FM_HOME" "$STATE" \
     "needs-decision [key=$key]: noticed-queue $(fm_parent_channel_clean_note "$fields")" "$key" || rc=$?
   case "$rc" in
@@ -263,9 +270,12 @@ hand_up_to_parent() {  # <id> <kind> <title> <why> <from> <repo> <evidence> <cal
       # close it rather than leave it for this home to fix on its own.
       lock_state
       if show=$("$TASKS" show "$id" --full 2>/dev/null) && [ "$(shown_field "$show" state)" != "done" ]; then
-        { append_body "$id" "Handed to the main home $TODAY on the parent channel (key $key); closed here." \
-          && "$TASKS" "done" "$id" >/dev/null; } \
-          || echo "fm-noticed: $id went to the main home, but its open row here could not be closed; close it with bin/fm-noticed.sh close $id" >&2
+        if ! { append_body "$id" "Handed to the main home $TODAY on the parent channel (key $key); closed here." \
+          && "$TASKS" "done" "$id" >/dev/null; }; then
+          echo "fm-noticed: $id went to the main home, but its open row here could not be closed; close it with bin/fm-noticed.sh close $id --evidence \"handed to the main home as $key\"" >&2
+          printf 'handed-up: %s\n' "$id"
+          exit 1
+        fi
         drop_unseen "$id"
       fi
       printf 'handed-up: %s\n' "$id"
