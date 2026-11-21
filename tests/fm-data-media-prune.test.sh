@@ -414,7 +414,7 @@ test_size_trigger_names_the_largest_torn_down_tasks() {
   out=$(run_prune "$home")
   assert_contains "$out" "BOOTSTRAP_INFO: data size: data/ holds " "the trigger names data/'s size"
   assert_contains "$out" ", over the 1 MiB trigger; its largest torn-down tasks follow." "the trigger names itself"
-  assert_contains "$out" "images and PDFs go with non-text retention (config/data-nontext-retention-days), else move to Drive only as one captain-approved batch (docs/configuration.md)" \
+  assert_contains "$out" "images other than SVG and PDFs go with non-text retention (config/data-nontext-retention-days), else move to Drive only as one captain-approved batch (docs/configuration.md)" \
     "the trigger names the rules for images and PDFs"
   assert_contains "$out" "BOOTSTRAP_INFO: data size: big-task 6 MiB: 0 MiB clean checkouts, 2 MiB dependency folders, 1 MiB images, 2 MiB PDFs, 1 MiB other" \
     "the largest task's line says what it holds"
@@ -607,7 +607,14 @@ test_nontext_apply_removes_only_non_text() {
   local home out
   home=$(new_home nontext-apply)
   make_swept_task "$home" old-task 40 status
+  # A newline in a parent folder must not split a path into a kept file's.
+  put "$home/data/old-task/keep.md"
+  put "$home/data/old-task/keep.md
+odd/shot.png"
+  backdate 40 "$home/data/old-task/keep.md" "$home/data/old-task/keep.md
+odd/shot.png"
   out=$(run_prune "$home" --nontext --apply)
+  assert_present "$home/data/old-task/keep.md" "a path split at a newline never removes a kept file"
   assert_contains "$out" "freed: " "--apply reports what it freed: $out"
   assert_contains "$out" "BOOTSTRAP_INFO: data nontext retention: removed 12 files (6 MiB) from 1 tasks torn down over 30 days" \
     "--apply sums what it removed"
@@ -723,7 +730,7 @@ test_nontext_is_opt_in_on_real_runs() {
 }
 
 test_nontext_option_errors() {
-  local home rc
+  local home rc out
   home=$(new_home nontext-opts)
   for args in "--apply" "--nontext-days 30" "--dry-run --nontext-days 30" "--nontext --days 3" "--nontext --if-due" "--nontext --apply --dry-run" "--nontext --nontext-days 0" "--nontext --nontext-days 3651"; do
     rc=0
@@ -735,7 +742,17 @@ test_nontext_option_errors() {
   rc=0
   run_prune "$home" --nontext >/dev/null || rc=$?
   assert_equals 2 "$rc" "an empty config value is refused"
-  pass "nontext: contradictory options and out-of-range days exit 2"
+  # Outside --nontext, a bad value turns off only that part.
+  printf 'soon\n' > "$home/config/data-nontext-retention-days"
+  printf '7\n' > "$home/config/data-media-retention-days"
+  make_task "$home" done-task
+  start_clock "$home" done-task
+  rc=0
+  out=$(run_prune "$home") || rc=$?
+  assert_equals 0 "$rc" "a bad non-text value does not stop a combined run"
+  assert_contains "$out" "warning: data nontext retention skipped: " "the bad value is named: $out"
+  assert_contains "$out" "BOOTSTRAP_INFO: data media retention: removed 3 files" "media retention still runs: $out"
+  pass "nontext: contradictory options and out-of-range days exit 2, and a bad config value skips only its own part"
 }
 
 # --- bootstrap seat -----------------------------------------------------------

@@ -82,7 +82,8 @@
 # remove from it today, images and PDFs are what only a captain-approved Drive
 # batch moves (docs/configuration.md), and other is the rest, kept checkouts
 # included. A problem is a `warning:` on stderr. An unusable option or config
-# value exits 2, except the size trigger's, which warns and uses the default;
+# value exits 2, except the size trigger's, which warns and uses the default,
+# and the non-text config's outside --nontext, which warns and skips that part;
 # every other outcome exits 0 so a session start continues, and a backlog that
 # cannot be read removes nothing.
 #
@@ -302,9 +303,13 @@ else
   [ -z "$NONTEXT_DAYS" ] || { echo "error: --nontext-days needs --nontext" >&2; exit 2; }
   DAYS=$(retention_days "$DAYS" "$CONFIG/data-media-retention-days") || exit 2
   SCRATCH_DAYS=$(retention_days "$SCRATCH_DAYS" "$CONFIG/data-scratch-retention-days") || exit 2
-  # The non-text part runs here only when the home opted in (header).
-  [ -n "$NONTEXT_DAYS" ] || NONTEXT_DAYS=$(config_value "$CONFIG/data-nontext-retention-days") || exit 2
-  [ -z "$NONTEXT_DAYS" ] || NONTEXT_DAYS=$(whole_number "$NONTEXT_DAYS" "$MAX_DAYS" "retention days") || exit 2
+  # The non-text part runs here only when the home opted in (header); an
+  # unusable value turns off only that part, so the others still run.
+  if ! NONTEXT_DAYS=$(config_value "$CONFIG/data-nontext-retention-days" 2>/dev/null) \
+    || { [ -n "$NONTEXT_DAYS" ] && ! NONTEXT_DAYS=$(whole_number "$NONTEXT_DAYS" "$MAX_DAYS" "retention days" 2>/dev/null); }; then
+    echo "warning: data nontext retention skipped: $CONFIG/data-nontext-retention-days is not a whole number of days from 1 to $MAX_DAYS" >&2
+    NONTEXT_DAYS=
+  fi
   NONTEXT_DRY=$DRY_RUN
 fi
 # Per-folder lines from the non-text part for a run by hand, never the bootstrap's.
@@ -579,7 +584,7 @@ nontext_task() {
     -iname '*.iso' -o -iname '*.img' -o -iname '*.raw' -o -iname '*.qcow2' -o -iname '*.vmdk' -o -iname '*.vdi' -o -iname '*.dmg' -o \
     \( \( -iname '*.log' -o -iname '*.json' -o -iname '*.jsonl' -o -iname '*.ndjson' -o -iname '*.csv' -o -iname '*.tsv' -o \
     -iname '*.xml' \) -size +"$NONTEXT_FLOOR_KIB"k ! -name status.log ! -name 'status.[0-9]*.log' \) \
-    \) ! -name "*$NL*" -print 2>/dev/null > "$WORK/all"
+    \) ! -path "*$NL*" -print 2>/dev/null > "$WORK/all"
   if [ -s "$WORK/git-roots" ]; then
     awk 'FILENAME == ARGV[1] { roots[++n] = $0 "/"; next }
       { for (i = 1; i <= n; i++) if (index($0, roots[i]) == 1) next; print }' \
@@ -822,7 +827,7 @@ if [ "$OVER_SIZE" -eq 1 ]; then
       index($2, p) == 1 { t = substr($2, length(p) + 1); if (t in retired) print $1 "\t" t }' "$WORK/retired" - \
     | sort -t "$(printf '\t')" -k1,1nr -k2 | head -n "$SIZE_TASKS" > "$WORK/largest"
   if [ -s "$WORK/largest" ]; then
-    size_line "its largest torn-down tasks follow. Clean checkouts and dependency folders go with scratch retention (config/data-scratch-retention-days); images and PDFs go with non-text retention (config/data-nontext-retention-days), else move to Drive only as one captain-approved batch (docs/configuration.md)"
+    size_line "its largest torn-down tasks follow. Clean checkouts and dependency folders go with scratch retention (config/data-scratch-retention-days); images other than SVG and PDFs go with non-text retention (config/data-nontext-retention-days), else move to Drive only as one captain-approved batch (docs/configuration.md)"
     # An --if-due run that is not due reuses a line whose task and KiB match.
     while IFS="$(printf '\t')" read -r kib task; do
       line=
