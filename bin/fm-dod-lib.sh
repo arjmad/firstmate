@@ -597,7 +597,7 @@ A failing check is yours to fix: append \`working [at=<epoch>]: fixing {check}\`
 A required check that has never reported is missing from that list rather than pending, so also read \`gh-axi pr view <number>\`: a \`merge_state\` of blocked while every listed check is green means a required check has not posted.
 When that check's Actions run, found with \`gh-axi run list --branch <branch>\`, stays \`queued\` with no jobs in \`gh-axi run view <id>\` for over 10 minutes, as after a GitHub Actions outage, GitHub refuses to cancel or rerun it: run \`gh-axi pr close <number>\` then \`gh-axi pr reopen <number>\`, which starts a fresh \`pull_request\` run at the same head, and wait again.
 A repository with no checks at all reports none, which leaves nothing to wait for.
-A required \`fleet-gate\` or \`gate\` status posts only from a full \`./check.sh\` run on a clean tree whose HEAD is already pushed: run it after your last push, and on a PR held as a draft until reviewed, just before you mark it ready, a rebase or force-push included because the new head has no status yet, never as a single-suite run, and with no untracked files left in the tree - the \`findings.json\` that \`/code-review\` writes counts.
+A required \`fleet-gate\` or \`gate\` status posts only from a full \`./check.sh\` run on a clean tree whose HEAD is already pushed: run it after your last push (on a PR held as a draft until reviewed, whose CI runs the suite when it is marked ready, the local run is optional, and if you make it, make it just before you mark it ready), a rebase or force-push included because the new head has no status yet, never as a single-suite run, and with no untracked files left in the tree - the \`findings.json\` that \`/code-review\` writes counts.
 EOF
 }
 
