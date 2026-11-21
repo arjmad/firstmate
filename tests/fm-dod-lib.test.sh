@@ -734,10 +734,12 @@ test_direct_pr_dod_defers_to_draft_until_ready_guidance() {
   fm_dod_block direct-PR dod-draft-ready-task > "$out"
   assert_grep "has its PRs opened as drafts until their reviews are done" "$out" \
     "direct-PR DoD must defer to a repository that opens PRs as drafts until reviewed"
-  assert_grep "mark it ready after your last review push, before you wait for its checks" "$out" \
-    "direct-PR DoD must mark a draft ready after the reviews and before the checks wait"
-  assert_grep "the local run is optional, and if you make it, make it just before you mark it ready" "$out" \
+  assert_grep "mark it ready after your last review push and after any local full suite that guidance names, before you wait for its checks" "$out" \
+    "direct-PR DoD must mark a draft ready after the reviews and local suite and before the checks wait"
+  assert_grep "the local run is optional and belongs before you mark it ready" "$out" \
     "direct-PR DoD must keep a draft PR's local full suite optional and before it is marked ready"
+  assert_grep "means a required check has not posted, so watch again until it posts and passes" "$out" \
+    "direct-PR DoD must keep waiting while a required check has not posted"
   draft_at=$(grep -n 'open it as a draft instead' "$out" | head -1 | cut -d: -f1)
   review_at=$(grep -n '^Then run Claude Code' "$out" | head -1 | cut -d: -f1)
   [ -n "$draft_at" ] && [ -n "$review_at" ] && [ "$draft_at" -lt "$review_at" ] \
