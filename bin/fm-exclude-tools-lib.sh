@@ -7,8 +7,9 @@
 # worker loads. Sourced by bin/fm-spawn.sh and bin/fm-control.sh.
 #
 # docs/configuration.md "Worker tool exclusions", "Worker-denied MCP
-# servers", "Worker-denied MCP tools", "Content workers", and "Worker compaction window" own the
-# file formats and operator contracts; bin/fm-spawn.sh's header owns
+# servers", "Worker-denied MCP tools", "Content workers", and "Worker
+# compaction window" own the file formats and operator contracts;
+# bin/fm-spawn.sh's header owns
 # launch-flag mechanics.
 # Name verification belongs inside the worker's loaded-tool registry, never
 # in an out-of-band server connection from these launch-time checks.
