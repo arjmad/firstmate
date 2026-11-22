@@ -36,9 +36,12 @@
 # `bin/fm-helm-refresh.sh request` refuses it.
 #
 # With restart=1, `fm-stow-guard.sh prompt` is the one writer of that offer:
-# it records offer:{sid, at} for the session, with last_stow at the same time
-# and fired set for the session so the Stop that ends that /stow's turn does
-# not ask again and remove it, when a submitted prompt is /stow itself: after trimming
+# it records offer:{sid, at} for the session, last_stow at the same time, and
+# a one-shot typed:<sid> that the next Stop of that session consumes: that
+# Stop asks nothing, and marks the context ask fired when it reads at or over
+# the token line, so the /stow's own turn end neither asks again nor removes
+# the offer while a later crossing still asks. It writes them when a
+# submitted prompt is /stow itself: after trimming
 # whitespace, exactly /stow or /stow followed by whitespace and arguments
 # (Claude Code 2.1.328 puts a typed /stow in the payload's prompt as typed;
 # docs/verification/supervision.md "Helm refresh by /clear"). It also needs a
@@ -164,12 +167,11 @@ if [ "$mode" = prompt ]; then
     [ -n "$current" ] || current='{}'
   fi
   tmp=$(mktemp "$state_path.XXXXXX" 2>/dev/null) || exit 0
-  # The typed /stow is also this session's newest stow and answers its context
-  # ask, so the Stop that ends its own turn neither asks again nor removes the
-  # offer. A typed /stow expands inline and leaves no Skill call in the tail.
+  # The typed /stow is this session's newest stow (it expands inline and
+  # leaves no Skill call in the tail), and `typed` lets the Stop that ends its
+  # own turn skip its ask once instead of asking again and removing the offer.
   if ! jq -n --argjson current "$current" --arg sid "$sid" --argjson at "$now" \
-      '$current + {offer:{sid:$sid, at:$at}, last_stow:$at,
-        fired:((($current.fired // {}) | if type == "object" then . else {} end) + {($sid):true})}' \
+      '$current + {offer:{sid:$sid, at:$at}, last_stow:$at, typed:$sid}' \
       > "$tmp" 2>/dev/null \
     || ! mv -f "$tmp" "$state_path" 2>/dev/null; then
     rm -f "$tmp"
@@ -211,11 +213,13 @@ last_stow=
 asked=0
 fired='{}'
 offer=null
+typed=
 if [ -f "$state_path" ]; then
   last_stow=$(jq -r '.last_stow // empty' "$state_path" 2>/dev/null || true)
   asked=$(jq -r '.asked // 0' "$state_path" 2>/dev/null || echo 0)
   fired=$(jq -c '.fired // {}' "$state_path" 2>/dev/null || echo '{}')
   offer=$(jq -c '.offer // null' "$state_path" 2>/dev/null || echo null)
+  typed=$(jq -r '.typed // empty | strings' "$state_path" 2>/dev/null || true)
 fi
 case "$last_stow" in
   ''|*[!0-9]*) last_stow= ;;
@@ -283,7 +287,14 @@ fi
 
 reason=
 has_fired=$(jq -r --arg sid "$sid" 'if .[$sid] == true then "1" else "0" end' <<<"$fired") || exit 0
-if [ "$tokens" -ge "$threshold" ] && [ "$has_fired" -eq 0 ]; then
+if [ -n "$typed" ] && [ "$typed" = "$sid" ]; then
+  # The Stop that ends a typed /stow's turn: that /stow answered this
+  # crossing, so count it as asked and ask nothing this once.
+  typed=
+  if [ "$tokens" -ge "$threshold" ]; then
+    fired=$(jq -c --arg sid "$sid" '.[$sid] = true' <<<"$fired") || exit 0
+  fi
+elif [ "$tokens" -ge "$threshold" ] && [ "$has_fired" -eq 0 ]; then
   reason="fm-stow-guard: context is ${tokens} tokens, near auto-compaction."
   fired=$(jq -c --arg sid "$sid" '.[$sid] = true' <<<"$fired") || exit 0
 elif [ "$saves_readable" -eq 1 ] && [ -z "$last_stow" ]; then
@@ -303,12 +314,14 @@ fi
 tmp=$(mktemp "$STATE/.stow-guard.json.XXXXXX") || exit 0
 if [ -n "$last_stow" ]; then
   jq -n --argjson last_stow "$last_stow" --argjson asked "$asked" --argjson fired "$fired" \
-    --argjson offer "$offer" \
-    '{last_stow:$last_stow, asked:$asked, fired:$fired} + (if $offer == null then {} else {offer:$offer} end)' \
+    --argjson offer "$offer" --arg typed "$typed" \
+    '{last_stow:$last_stow, asked:$asked, fired:$fired} + (if $offer == null then {} else {offer:$offer} end)
+      + (if $typed == "" then {} else {typed:$typed} end)' \
     > "$tmp" || { rm -f "$tmp"; exit 0; }
 else
-  jq -n --argjson asked "$asked" --argjson fired "$fired" --argjson offer "$offer" \
-    '{asked:$asked, fired:$fired} + (if $offer == null then {} else {offer:$offer} end)' \
+  jq -n --argjson asked "$asked" --argjson fired "$fired" --argjson offer "$offer" --arg typed "$typed" \
+    '{asked:$asked, fired:$fired} + (if $offer == null then {} else {offer:$offer} end)
+      + (if $typed == "" then {} else {typed:$typed} end)' \
     > "$tmp" || { rm -f "$tmp"; exit 0; }
 fi
 mv -f "$tmp" "$state_path" || { rm -f "$tmp"; exit 0; }

@@ -1058,7 +1058,7 @@ The live guard then ran one real `claude -p /stow` under the tracked registratio
 
 ```text
 $ FM_STOW_GUARD_PROMPT_LIVE=1 tests/fm-stow-guard-prompt-live-e2e.test.sh
-evidence: Claude Code 2.1.328: /stow recorded {"sid":"92c0da5f-c26e-400b-8e81-35186ad45c24","at":1795348508}, reply STOW-OK
+evidence: Claude Code 2.1.328: /stow recorded {"sid":"11c58b4b-bb8a-4ad5-b302-f94560aeda8f","at":1795352892}, reply STOW-OK
 ok - Claude Code 2.1.328: a typed /stow reaches the tracked prompt hook as /stow and records the lock session's offer
 ```
 

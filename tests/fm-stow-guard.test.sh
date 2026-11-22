@@ -204,9 +204,9 @@ test_typed_stow_records_the_offer() {
   invoke_prompt "$PRIMARY" "$(prompt_payload /stow)"
   jq -e --arg sid "$PROMPT_SID" \
     '.offer == {sid:$sid, at:5000} and .last_stow == 5000 and .asked == 5
-      and .fired == {other:true, ($sid):true}' \
+      and .fired == {other:true} and .typed == $sid' \
     "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "a typed /stow did not record the offer, the stow time, and the session's ask: $(cat "$CASE_STATE/.stow-guard.json")"
+    || fail "a typed /stow did not record the offer, the stow time, and its one-shot marker: $(cat "$CASE_STATE/.stow-guard.json")"
 
   # The Stop that ends the typed /stow's turn, still over the token line, asks
   # for no second pass and keeps the offer for the request after the pass.
@@ -216,8 +216,36 @@ test_typed_stow_records_the_offer() {
     | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW=5001 TMUX_PANE=%7 || rc=$?
   [ "$rc" -eq 0 ] || fail "the Stop after a typed /stow must exit 0, got $rc"
   assert_silent "the Stop after a typed /stow"
-  jq -e --arg sid "$PROMPT_SID" '.offer == {sid:$sid, at:5000}' "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "the Stop dropped the typed /stow's offer: $(cat "$CASE_STATE/.stow-guard.json")"
+  jq -e --arg sid "$PROMPT_SID" \
+    '.offer == {sid:$sid, at:5000} and .fired[$sid] == true and (has("typed") | not)' \
+    "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "the Stop dropped the typed /stow's offer or kept its marker: $(cat "$CASE_STATE/.stow-guard.json")"
+  # The next Stop, still over the line, is an ordinary one: the crossing is
+  # already counted, so it stays silent too.
+  rc=0
+  printf '{"session_id":"%s","transcript_path":"%s"}\n' "$PROMPT_SID" "$CASE_TRANSCRIPT" \
+    | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW=5002 TMUX_PANE=%7 || rc=$?
+  [ "$rc" -eq 0 ] || fail "the second Stop after a typed /stow must exit 0, got $rc"
+  assert_silent "the second Stop after a typed /stow"
+
+  # A typed /stow under the line, above the re-arm point, leaves the next
+  # crossing's ask in place, also after its own turn's Stop.
+  prepare_prompt_case typed-stow-below-line
+  invoke_prompt "$PRIMARY" "$(prompt_payload /stow)"
+  write_usage 800
+  rc=0
+  printf '{"session_id":"%s","transcript_path":"%s"}\n' "$PROMPT_SID" "$CASE_TRANSCRIPT" \
+    | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW=5001 TMUX_PANE=%7 || rc=$?
+  [ "$rc" -eq 0 ] || fail "the Stop under the line after a typed /stow must exit 0, got $rc"
+  assert_silent "the Stop under the line after a typed /stow"
+  jq -e --arg sid "$PROMPT_SID" '.offer.sid == $sid' "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "the Stop under the line dropped the typed /stow's offer: $(cat "$CASE_STATE/.stow-guard.json")"
+  write_usage 1200
+  rc=0
+  printf '{"session_id":"%s","transcript_path":"%s"}\n' "$PROMPT_SID" "$CASE_TRANSCRIPT" \
+    | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW=5002 TMUX_PANE=%7 || rc=$?
+  [ "$rc" -eq 0 ] || fail "the later crossing must exit 0, got $rc"
+  assert_block "the later crossing after a typed /stow" "context is 1200 tokens"
 
   prepare_prompt_case typed-stow-args
   invoke_prompt "$PRIMARY" "$(prompt_payload $'  /stow  quick\n')" \
