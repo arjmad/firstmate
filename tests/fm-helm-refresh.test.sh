@@ -62,12 +62,14 @@ run_as_session() {
   : > "$ERR"
   rm -f "$rc_file"
   set -m
+  # The trailing `:` keeps bash from exec'ing sleep as the -c string's last
+  # command, which would change the lock pid's process identity mid-test.
   # shellcheck disable=SC2016 # the session script expands its own arguments.
   env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SESSION -u TMUX \
     TMUX_PANE=%424242 TMUX_TMPDIR="$EMPTY_TMUX" \
     FM_HOME="$CASE_HOME" FM_STATE_OVERRIDE="$CASE_STATE" FM_CONFIG_OVERRIDE="$CASE_CONFIG" \
     "$@" \
-    "$FAKE_CLAUDE" -c 'printf "%s\n" "$$" > "$1/.lock"; "$2" "$3" >"$5" 2>"$6"; printf "%s\n" "$?" > "$4.tmp"; mv "$4.tmp" "$4"; sleep 120' _ \
+    "$FAKE_CLAUDE" -c 'printf "%s\n" "$$" > "$1/.lock"; "$2" "$3" >"$5" 2>"$6"; printf "%s\n" "$?" > "$4.tmp"; mv "$4.tmp" "$4"; sleep 120; :' _ \
     "$CASE_STATE" "$SCRIPT" "$sub" "$rc_file" "$OUT" "$ERR" </dev/null >/dev/null 2>&1 &
   pid=$!
   set +m
