@@ -62,6 +62,7 @@ run_as_session() {
   : > "$ERR"
   rm -f "$rc_file"
   set -m
+  # shellcheck disable=SC2016 # the session script expands its own arguments.
   env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SESSION -u TMUX \
     TMUX_PANE=%424242 TMUX_TMPDIR="$EMPTY_TMUX" \
     FM_HOME="$CASE_HOME" FM_STATE_OVERRIDE="$CASE_STATE" FM_CONFIG_OVERRIDE="$CASE_CONFIG" \

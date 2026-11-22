@@ -75,8 +75,9 @@ test_clear_refreshes_the_lab_primary() {
   grep -q $'\tfinished\t.*doorbell=empty' "$state/.helm-refresh.log" \
     || fail "Claude Code $CLAUDE_VERSION: the refresh did not finish with a delivered doorbell: $(cat "$state/.helm-refresh.log")"
 
-  [ "$(head -n 1 "$state/.lock")" = "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null \
-    || fail "Claude Code $CLAUDE_VERSION: /clear did not keep the lock pid $lock_pid"
+  if [ "$(head -n 1 "$state/.lock")" != "$lock_pid" ] || ! kill -0 "$lock_pid" 2>/dev/null; then
+    fail "Claude Code $CLAUDE_VERSION: /clear did not keep the lock pid $lock_pid"
+  fi
   new_sid=$(cat "$state/.lock-session")
   [ -n "$new_sid" ] && [ "$new_sid" != "$sid" ] \
     || fail "Claude Code $CLAUDE_VERSION: /clear did not re-key the session (still $new_sid)"
