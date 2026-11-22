@@ -2,7 +2,7 @@
 name: stow
 description: >-
   Sweep the session for uncaptured durable knowledge and unfiled or wrong open work records, and curate startup memory.
-  Use when the captain invokes /stow (e.g. "/stow", "stow what you've learned"), before a session reset or context compaction, or periodically to keep operational memory current.
+  Use when the captain invokes /stow (e.g. "/stow", "stow what you've learned"), before a session reset or context compaction, or periodically to keep operational memory current; `/stow quick` is the short save the stow guard asks for at its token line.
 user-invocable: true
 metadata:
   internal: true
@@ -15,6 +15,18 @@ metadata:
 Sweep this session for durable knowledge and open-work record state that exist only in conversation, then leave the next session with a compact current operating map rather than an accumulating journal.
 Memory entries are tiered and decay between passes, and stale material retires to a cold archive instead of being deleted.
 This skill writes only through the existing Firstmate ownership and write boundaries.
+
+## Quick save (`/stow quick`)
+
+The mode is chosen by the first argument word: `quick`, in any case, selects the quick save, and anything else, including no argument, is the full pass every other section describes.
+A `/stow` the captain types with no argument is always the full pass.
+The stow guard asks for the quick save at its token line, because the full pass does not fit between that line and compaction; its daily age ask still asks for the full pass ([Stow guard](../../../docs/configuration.md#stow-guard-configstow-guard)).
+
+The quick save runs only [Knowledge sweep and routing](#knowledge-sweep-and-routing) and [Open-record persistence](#open-record-persistence): file unfiled findings, correct stale row notes, and record each captain answer held only in conversation through `bin/fm-captain-hold.sh answer`.
+It skips the whole required startup-memory pass, so it reads no memory file in full and runs no decay, migration, consolidation, budget eviction, or offload; it also skips the cascade and the restart question.
+A finding whose owner is a startup memory file gets a new entry only when `bin/fm-startup-memory-budget.sh report` shows the new entry fits within the effective budget; otherwise leave it on its task row, or in the receipt when it has none, for the next full pass.
+Its receipt is a few lines: what it filed or corrected, and anything it left for the full pass.
+It never says the session is reset-safe, so it never asks the captain to start fresh, even after a `/stow quick` he typed.
 
 ## Memory tiers and entry markers
 
@@ -81,7 +93,7 @@ While the flag is present:
 
 ## Required startup-memory pass
 
-Every `/stow` invocation performs this complete pass, even when the session contains no new finding:
+Every full `/stow` pass performs this complete pass, even when the session contains no new finding; only the [quick save](#quick-save-stow-quick) skips it:
 
 1. Run `bin/fm-startup-memory-budget.sh report` before considering a write.
    Record its effective budget and each file's estimated-token total.
@@ -229,7 +241,7 @@ A local skill exists only in this home, so offloading an entry out of `data/capt
    Match each finding against the home's declared memory tiers first and capture a tier-owned finding to that tier, falling back to the local files only for classes no declared tier owns.
    When the owning tier is unreachable from this session, write the finding to the startup-loaded local memory file its class would otherwise use, or keep it where it already lives, carrying the pending-capture marker for that tier; it is still an exception for the receipt, never a reason to treat the local copy as sufficient.
 3. **Write within the existing boundaries.**
-   - Captain preferences and fleet-local operational facts belong in the destination selected by AGENTS.md after the required whole-file curation pass.
+   - Captain preferences and fleet-local operational facts belong in the destination selected by AGENTS.md after the required whole-file curation pass, which a quick save replaces with its budget check.
      Create `data/learnings.md` only for a genuinely new local learning with no stronger owner.
    - In a primary home, curate shared captain preferences only under the existing primary-authoritative shared-preference contract.
      In a secondmate home, route a newly discovered shared preference to the main firstmate through marked status or a document pointer instead of editing the inherited file.
@@ -272,6 +284,7 @@ The first pass after adoption performs a one-time revalidation sweep of editable
 
 ## Completion receipt
 
+This is the full pass's receipt; the [quick save](#quick-save-stow-quick) writes its own short one.
 Report the outcome in plain captain-facing language with all of these facts:
 
 - effective startup-memory budget and total estimated tokens before and after;
@@ -295,7 +308,7 @@ Apart from that re-run for his answer, ask nothing and leave `request` unrun aft
 
 ## Automatic cascade to secondmates
 
-In a primary home, every `/stow` cascades to every registered secondmate after this home's own required pass and knowledge sweep are complete.
+In a primary home, every full `/stow` pass cascades to every registered secondmate after this home's own required pass and knowledge sweep are complete.
 In a secondmate home, `/stow` curates that home only and never cascades further.
 The cascade changes nothing until `/stow` is invoked: it adds no notification, no digest section, and no background work.
 

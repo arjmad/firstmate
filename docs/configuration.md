@@ -1469,9 +1469,14 @@ The skill text owns the marker spelling, the tick order, and the reinforcement r
 Without the file the session is unchanged.
 
 With the file present, the Claude Stop hook `bin/fm-stow-guard.sh` blocks one turn end and tells that session to run the existing `/stow` skill.
-It asks when the newest context reading in the transcript tail is at least `tokens` (default 300000), once per crossing, and again only after a later reading falls below two-thirds of that line.
-It also asks when the newest `/stow` it has seen is at least `hours` old (default 24), and then not again for an hour.
+It makes two asks.
+The context ask comes when the newest context reading in the transcript tail is at least `tokens` (default 300000), once per crossing, and again only after a later reading falls below two-thirds of that line.
+It asks for `/stow quick`, the skill's quick save: it files and corrects the open work records and findings the session holds, and skips the startup-memory curation, the cascade, and the restart question, so it fits in the room left before compaction.
+The age ask comes when the newest full `/stow` it has seen is at least `hours` old (default 24), and then not again for an hour.
+It asks for the full pass, and a quick save does not reset its clock, so the full pass still comes due once a day.
+When both are due at one turn end, the context ask wins and the age ask waits an hour.
 That age ask is skipped when a `/stow` timestamp cannot be read.
+The [stow skill](../.agents/skills/stow/SKILL.md#quick-save-stow-quick) owns what the quick save does.
 The stored state is what makes each ask once per crossing, so a continuation stop is handled like any other stop.
 A hook error does not block the turn, and the hook never compacts the session itself.
 It runs for a plain Claude primary checkout of this home.
@@ -1484,7 +1489,8 @@ Remove the file to turn the ask off.
 The script header owns the transcript read, the state file, and the block message.
 
 With `restart=1`, a `/stow` the captain types himself in the primary's tmux or Herdr pane offers a fresh restart in place of compaction, through the same script's UserPromptSubmit hook.
-A `/stow` that the guard's own ask, an agent, or the stow cascade starts makes no offer, so it saves everything and keeps the session.
+A `/stow` that the guard's own ask, an agent, or the stow cascade starts makes no offer, so it saves and keeps the session.
+A quick save never asks the fresh-start question, even when the captain types `/stow quick`.
 When the typed `/stow`'s receipt says the session is reset-safe, the primary asks the captain whether to start fresh now or keep the session.
 Only "Start fresh now" runs `bin/fm-helm-refresh.sh request`, and once its turn ends the session is cleared with Claude Code's `/clear` and started again by one doorbell.
 The process, its session lock, its parked supervision, its Remote Control session, and its session name stay the same, while the context drops back to the fresh-start set.
