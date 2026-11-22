@@ -271,8 +271,8 @@ done
 # after the second proof, or a deadline it crossed, still types nothing.
 why=$(stop_reason)
 [ -z "$why" ] || finish 1 gave-up "$why; nothing was typed"
-[ "$SECONDS" -lt "$deadline" ] || finish 1 gave-up "the turn did not end within ${WAIT}s; nothing was typed"
 pane_ready || finish 1 gave-up "the pane stopped reading idle and empty just before /clear; nothing was typed"
+[ "$SECONDS" -lt "$deadline" ] || finish 1 gave-up "the turn did not end within ${WAIT}s; nothing was typed"
 verdict=$(fm_backend_send_text_submit "$TRANSPORT" "$TARGET" "/clear" 2 0.2 0.2 2>/dev/null) || verdict=unconfirmed
 
 # The re-key below is the proof that /clear ran, so an ambiguous submit
@@ -312,7 +312,7 @@ while [ "$SECONDS" -lt "$kick_deadline" ]; do
   fi
   sleep "$POLL"
 done
-# A doorbell that did not read empty leaves the fresh session waiting for its
-# next wake; the record it rings stays queued for that wake's drain.
-[ "$kicked" = empty ] || finish 1 failed "new_sid=$new_sid doorbell=$kicked; the session cleared but its first turn waits for the next wake"
+# The session cleared either way; a doorbell that did not read empty is
+# reported as unconfirmed.
+[ "$kicked" = empty ] || finish 1 failed "new_sid=$new_sid doorbell=$kicked; the session cleared, but its doorbell was not confirmed"
 finish 0 finished "new_sid=$new_sid doorbell=$kicked"
