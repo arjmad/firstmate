@@ -418,13 +418,14 @@ code_review_tier() {
     && git -C "$dir" show origin/main:risk-tiers.toml > "$dir/risk-tiers.toml" \
     && fetched=$(git -C "$dir" rev-parse --verify refs/fm-code-review/head); then
     if [ "$fetched" = "$head" ]; then
-      if python=$(code_review_tomllib_python) \
-        && shim="$dir/.git/fm-code-review-python" && mkdir "$shim" \
-        && ln -s "$python" "$shim/python3"; then
-        CODE_REVIEW_TIER=$(PATH="$shim:$PATH" "$classifier" --root "$dir" --head "$head") || status=2
-      else
+      if ! python=$(code_review_tomllib_python); then
         CODE_REVIEW_TIER=$("$classifier" --root "$dir" --head "$head") || status=2
         [ "$status" = 0 ] || echo "error: no python3 or python3.11+ on PATH can import tomllib, which the risk-tier classifier needs (Python 3.11+)" >&2
+      elif shim="$dir/.git/fm-code-review-python" && mkdir "$shim" && ln -s "$python" "$shim/python3"; then
+        CODE_REVIEW_TIER=$(PATH="$shim:$PATH" "$classifier" --root "$dir" --head "$head") || status=2
+      else
+        echo "error: could not link $python as the risk-tier classifier's python3 under $dir" >&2
+        status=2
       fi
     else
       echo "error: the pull request ref of $FM_PR_URL names $fetched, not its head $head yet; read it again" >&2

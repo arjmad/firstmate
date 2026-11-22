@@ -1950,7 +1950,9 @@ ok - Claude Code (2.1.318 (Claude Code)) on herdr 0.9.5: a Herdr restore resumed
 ```
 
 Claude Code 2.1.328 asks before it adds an `--add-dir` directory that no trusted directory covers: an "Adding a new directory" dialog with the cursor on "No, exit".
-A worker's grant names its home's task-channel directories, and a fleet home is trusted in its store because its primary runs there, so a real spawn never sees the dialog; the guard's lab home is registered through `bin/fm-claude-trust.sh --lab-home` before the spawn for the same standing.
+A worker's grant names its home's task-channel directories and its code root's `.agents/skills`, and `bin/fm-spawn.sh` registers trust only for the worktree and project, or a secondmate home, so a spawn avoids the dialog only when those directories are already trusted in the store the worker launches on.
+A fleet home is trusted in the store its Claude primary runs on, so a worker on that same store does not see the dialog; a worker pinned to another store (`config/claude-account`, `config/claude-accounts`) that never trusted the home is not covered and has not been tested live.
+The guard's lab home is registered through `bin/fm-claude-trust.sh --lab-home` before the spawn for the same standing.
 Without that registration the 2.1.328 run stopped at the dialog: `the spawned worker never reported its wait within 180s: This session hasn't worked here before.`
 
 Observed 2026-11-22 on Fafnir against Herdr 0.9.5 and Claude Code 2.1.328, run as `FM_SPAWN_STEER_LIVE=1 tests/fm-spawn-steer-herdr-live-e2e.test.sh`:
