@@ -362,14 +362,41 @@ code_review_has_table() {
   return 2
 }
 
+# The first python3, or python3.14 down to python3.11, in PATH order that can
+# import tomllib, printed as a path. Every PATH entry is tried, not only the
+# first python3, because a host can put an older python3 (3.9, no tomllib)
+# ahead of a newer one under the same name; empty and relative entries are
+# skipped. Returns 1 when none can.
+code_review_tomllib_python() {
+  local entry name candidate
+  local -a entries
+  IFS=: read -r -a entries <<< "$PATH"
+  for entry in "${entries[@]}"; do
+    case "$entry" in /*) ;; *) continue ;; esac
+    for name in python3 python3.14 python3.13 python3.12 python3.11; do
+      candidate="$entry/$name"
+      [ -f "$candidate" ] && [ -x "$candidate" ] || continue
+      if "$candidate" -c 'import tomllib' > /dev/null 2>&1; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    done
+  done
+  return 1
+}
+
 CODE_REVIEW_TIER=
 # Sets CODE_REVIEW_TIER to the classifier's `<tier>: <why>` line for the pull
 # request's head as the API reports it, read once per run. Runs the classifier
 # on a throwaway blob-less clone holding origin/main, that head, and main's
 # table in its tree, fetched with gh's credentials and never a prompt; a pull
 # request ref that does not yet name that head is refused rather than read.
+# The fleet's classifier is a `#!/usr/bin/env python3` script that needs
+# tomllib (Python 3.11+), so it runs with a private directory ahead of PATH
+# whose only entry is `python3`, linked to code_review_tomllib_python's pick;
+# with no such interpreter it runs as is, and a failure then says so.
 code_review_tier() {
-  local classifier=${FM_RISK_TIER:-${FLEET_NIX:-$HOME/nix}/bin/risk-tier} dir head fetched status=0
+  local classifier=${FM_RISK_TIER:-${FLEET_NIX:-$HOME/nix}/bin/risk-tier} dir head fetched status=0 python shim=
   [ -z "$CODE_REVIEW_TIER" ] || return 0
   if [ ! -x "$classifier" ]; then
     echo "error: $FM_PR_OWNER/$FM_PR_REPO keeps a risk-tiers.toml, but its classifier $classifier is not an executable file" >&2
@@ -391,7 +418,15 @@ code_review_tier() {
     && git -C "$dir" show origin/main:risk-tiers.toml > "$dir/risk-tiers.toml" \
     && fetched=$(git -C "$dir" rev-parse --verify refs/fm-code-review/head); then
     if [ "$fetched" = "$head" ]; then
-      CODE_REVIEW_TIER=$("$classifier" --root "$dir" --head "$head") || status=2
+      if ! python=$(code_review_tomllib_python); then
+        CODE_REVIEW_TIER=$("$classifier" --root "$dir" --head "$head") || status=2
+        [ "$status" = 0 ] || echo "error: no python3 or python3.11+ on PATH can import tomllib, which the risk-tier classifier needs (Python 3.11+)" >&2
+      elif shim="$dir/.git/fm-code-review-python" && mkdir "$shim" && ln -s "$python" "$shim/python3"; then
+        CODE_REVIEW_TIER=$(PATH="$shim:$PATH" "$classifier" --root "$dir" --head "$head") || status=2
+      else
+        echo "error: could not link $python as the risk-tier classifier's python3 under $dir" >&2
+        status=2
+      fi
     else
       echo "error: the pull request ref of $FM_PR_URL names $fetched, not its head $head yet; read it again" >&2
       status=2

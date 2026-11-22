@@ -177,6 +177,13 @@ printf '%s\n' "\$\$" > "\$FM_HOME/state/.lock"
 exec claude --model $MODEL --effort low --dangerously-skip-permissions
 ENV
   chmod +x "$lab/launch.sh"
+  # The pane's login zsh reads this .zshenv (ZDOTDIR rides the workspace's
+  # --env) before any startup file loads a line editor, so the launch never
+  # passes through typed input that history or autosuggestion can rewrite.
+  # ZDOTDIR is dropped first so no later zsh, such as Claude's Bash tool
+  # shell, reads this file again.
+  mkdir -p "$lab/zdotdir"
+  printf "unset ZDOTDIR\nexec bash '%s/launch.sh'\n" "$lab" > "$lab/zdotdir/.zshenv"
   printf '%s\n' "$lab"
 }
 
@@ -304,13 +311,15 @@ claude_ready_state() {  # <target> -> diagnostic state; success when ready
 # idle with the host parked on a live watcher.
 start_primary() {  # <lab>
   local lab=$1 create pane screen i started prompt readiness=unknown last_seen=none
-  create=$(lab workspace create --cwd "$lab/fm" --label herdr-primary --no-focus) \
+  create=$(lab workspace create --cwd "$lab/fm" --label herdr-primary --no-focus --env "ZDOTDIR=$lab/zdotdir") \
     || fail "$(basename "$lab"): the lab workspace did not create"
   pane=$(printf '%s' "$create" | jq -er '.result.root_pane.pane_id') \
     || fail "$(basename "$lab"): could not read the primary pane id"
   printf '%s\n' "$pane" > "$lab/pane-id"
-  lab pane run "$pane" "bash '$lab/launch.sh'" >/dev/null \
-    || fail "$(basename "$lab"): the primary's launch command was not sent"
+  # launch.sh writes the lock before it execs Claude. The launch needs Herdr's
+  # pane shell to be zsh (the fleet's default_shell), which reads ZDOTDIR.
+  wait_until 300 test -s "$lab/fm/state/.lock" \
+    || fail "$(basename "$lab"): the pane shell never ran the lab .zshenv launch (ZDOTDIR=$lab/zdotdir); this guard needs Herdr's pane shell to be zsh"$'\n'"$(diagnose "$lab")"
   i=0
   while [ "$i" -lt 120 ]; do
     screen=$(lab pane read "$pane" --source visible 2>/dev/null)
