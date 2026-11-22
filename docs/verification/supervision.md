@@ -1051,6 +1051,17 @@ ok - Claude Code 2.1.328: /clear refreshes the primary in place with the same lo
 
 The Remote Control entry was read from the local session record, not from the Claude app.
 
+A `/stow` the captain types makes the same offer through `bin/fm-stow-guard.sh prompt`, which matches the UserPromptSubmit payload's `prompt`.
+That was measured on 2026-11-22 on Linux x86_64 (Omarchy) with Claude Code 2.1.328 (model `haiku`).
+A recording hook in a scratch project saw `"prompt":"/stow"` for `claude -p /stow` and for `/stow` typed into an interactive session driven through a pty.
+The live guard then ran one real `claude -p /stow` under the tracked registration, with the lock and `state/.lock-session` naming that process:
+
+```text
+$ FM_STOW_GUARD_PROMPT_LIVE=1 tests/fm-stow-guard-prompt-live-e2e.test.sh
+evidence: Claude Code 2.1.328: /stow recorded {"sid":"92c0da5f-c26e-400b-8e81-35186ad45c24","at":1795348508}, reply STOW-OK
+ok - Claude Code 2.1.328: a typed /stow reaches the tracked prompt hook as /stow and records the lock session's offer
+```
+
 Deterministic entry points:
 
 ```sh

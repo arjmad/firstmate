@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # fm-stow-guard.sh - Claude Stop hook that asks a primary session to /stow
-# before context compaction.
+# before context compaction, and with `prompt`, the UserPromptSubmit hook that
+# records the same restart offer for a /stow the captain types.
 #
 # Opt in by creating the home-local config/stow-guard file. Absent means off.
 # docs/configuration.md "Stow guard" owns that gate and its tunables. This
@@ -37,6 +38,20 @@
 # file records the offer as offer:{sid, at} for that session. That command
 # owns what happens next; with no request, the session compacts as before.
 #
+# `fm-stow-guard.sh prompt` records that same offer, and changes nothing else
+# in the state file, when a submitted prompt is /stow itself: after trimming
+# whitespace, exactly /stow or /stow followed by whitespace and arguments
+# (Claude Code 2.1.328 puts a typed /stow in the payload's prompt as typed;
+# docs/verification/supervision.md "Helm refresh by /clear"). It also needs
+# restart=1, a Claude session id, this session holding state/.lock under that
+# same id in state/.lock-session, and the pane the Stop ask needs. Anything
+# that reaches the session as fleet input (a from-firstmate marker, an
+# operational doorbell, a <task-notification> rewake) does not start with
+# /stow, so it records nothing. The limit: a bare /stow typed into the helm's
+# pane counts as the captain's, whoever typed it. This mode prints nothing and
+# always exits 0, because UserPromptSubmit output enters the context and a
+# non-zero exit can block the prompt.
+#
 # The hook prints one Claude block decision, or nothing. Any unreadable
 # payload, missing jq, scope miss, or state-write failure exits 0 and prints
 # nothing, so a Stop is never stuck on this hook. It is silent for a Cursor
@@ -59,16 +74,19 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 usage() {
   cat <<'EOF'
-usage: fm-stow-guard.sh
+usage: fm-stow-guard.sh [prompt]
 
-Claude Stop hook. Reads the hook payload on stdin.
+Claude Stop hook, or with `prompt`, its UserPromptSubmit hook.
+Reads the hook payload on stdin.
 Create config/stow-guard to enable it. See the script header.
 EOF
 }
 
+mode=stop
 case "${1:-}" in
   -h|--help) usage; exit 0 ;;
   "") ;;
+  prompt) mode=prompt ;;
   *) usage >&2; exit 2 ;;
 esac
 
@@ -119,6 +137,39 @@ while IFS= read -r line || [ -n "$line" ]; do
     restart) [ "$value" != 1 ] || restart=1 ;;
   esac
 done < "$CONFIG/stow-guard"
+
+if [ "$mode" = prompt ]; then
+  [ "$restart" -eq 1 ] && [ "$sid" != session ] || exit 0
+  prompt=$(jq -r '.prompt // empty | strings' <<<"$payload" 2>/dev/null) || exit 0
+  prompt=${prompt#"${prompt%%[![:space:]]*}"}
+  prompt=${prompt%"${prompt##*[![:space:]]}"}
+  case "$prompt" in
+    /stow|/stow[[:space:]]*) ;;
+    *) exit 0 ;;
+  esac
+  # shellcheck source=bin/fm-session-lock-lib.sh
+  . "$SCRIPT_DIR/fm-session-lock-lib.sh" >/dev/null 2>&1 || exit 0
+  fm_session_lock_owned_by_self "$STATE" >/dev/null 2>&1 || exit 0
+  [ "$(cat "$STATE/.lock-session" 2>/dev/null)" = "$sid" ] || exit 0
+  fm_primary_pane_transport --default-session || exit 0
+  now=${FM_STOW_GUARD_NOW:-$(date +%s)}
+  case "$now" in
+    ''|*[!0-9]*) exit 0 ;;
+  esac
+  state_path="$STATE/.stow-guard.json"
+  current='{}'
+  if [ -f "$state_path" ]; then
+    current=$(jq -c 'if type == "object" then . else {} end' "$state_path" 2>/dev/null) || current='{}'
+    [ -n "$current" ] || current='{}'
+  fi
+  tmp=$(mktemp "$state_path.XXXXXX" 2>/dev/null) || exit 0
+  if ! jq -n --argjson current "$current" --arg sid "$sid" --argjson at "$now" \
+      '$current + {offer:{sid:$sid, at:$at}}' > "$tmp" 2>/dev/null \
+    || ! mv -f "$tmp" "$state_path" 2>/dev/null; then
+    rm -f "$tmp"
+  fi
+  exit 0
+fi
 
 if [ -n "${FM_STOW_CONTEXT_TOKENS:-}" ]; then
   case "$FM_STOW_CONTEXT_TOKENS" in

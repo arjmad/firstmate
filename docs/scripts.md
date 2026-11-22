@@ -298,7 +298,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-cortex-plugin.sh` | Write a private Cortex Code worker plugin carrying firstmate's lifecycle hooks |
 | `fm-exclude-tools-lib.sh` | Parse and check the ship and scout worker launch inputs: excluded tools, the fleet-rendered worker-denied MCP server list, the Claude compaction window, and the `--content` and `--docs` MCP configs |
 | `fm-extension-deadline.mjs` | Host-owned extension deadlines that survive a host suspension with one bounded grace |
-| `fm-helm-refresh.sh` | After a reset-safe `/stow` the stow guard asked for, clear the Claude primary to a fresh context with `/clear` instead of compacting |
+| `fm-helm-refresh.sh` | After a reset-safe `/stow` the stow guard asked for or the captain typed, clear the Claude primary to a fresh context with `/clear` instead of compacting |
 | `fm-herdr-groups.sh` | Opt-in Herdr project groups: display-only metadata tags and a sorted agents view for this home's Herdr tasks |
 | `fm-hermes-hook.sh` | Hermes native shell-hook receiver that turns TUI turn events into busy and idle evidence |
 | `fm-hermes-lib.sh` | Hermes TUI worker support: the selected profile home and gateway checks |
@@ -319,7 +319,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-role-lib.sh` | The home role and self-repository publication consent |
 | `fm-role.sh` | Report and check this home's firstmate role |
 | `fm-sessionstart-agy.sh` | Antigravity CLI (agy) session-open hook transport to `fm-sessionstart-run.sh` |
-| `fm-stow-guard.sh` | Opt-in Claude Stop hook that asks a primary session to `/stow` before context compaction |
+| `fm-stow-guard.sh` | Opt-in Claude Stop hook that asks a primary session to `/stow` before context compaction, and with `prompt`, the UserPromptSubmit hook that records the same restart offer for a `/stow` the captain types |
 | `fm-supervision-handoff.sh` | Private Claude host hand-back owner, enabled by `config/supervision-handoff-ack` |
 | `fm-test-linux.sh` | Opt-in: run the shell tests changed on this branch inside a Linux container with GNU userland |
 | `fm-test-tap-verify.sh` | Prove a TAP-planned suite actually finished |

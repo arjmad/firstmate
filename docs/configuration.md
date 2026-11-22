@@ -1484,6 +1484,7 @@ Remove the file to turn the ask off.
 The script header owns the transcript read, the state file, and the block message.
 
 With `restart=1`, an ask made in a tmux or Herdr pane also offers a fresh restart in place of compaction.
+A `/stow` the captain types himself in that primary's pane makes the same offer, through the same script's UserPromptSubmit hook; a `/stow` that an agent or the stow cascade sends does not.
 When the `/stow` receipt says the session is reset-safe, the primary runs `bin/fm-helm-refresh.sh request`, and once its turn ends the session is cleared with Claude Code's `/clear` and started again by one doorbell.
 The process, its session lock, its parked supervision, its Remote Control session, and its session name stay the same, while the context drops back to the fresh-start set.
 Without a reset-safe receipt, or when any refresh check fails, the session keeps its context and compacts as it does today.

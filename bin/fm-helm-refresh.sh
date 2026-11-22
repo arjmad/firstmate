@@ -4,8 +4,9 @@
 #
 # Usage:
 #   fm-helm-refresh.sh request      the helm runs this, as its last step, only
-#                                   when the /stow receipt that bin/fm-stow-guard.sh
-#                                   asked for says the session is reset-safe
+#                                   when the receipt of a /stow that
+#                                   bin/fm-stow-guard.sh asked for, or that the
+#                                   captain typed, says the session is reset-safe
 #   fm-helm-refresh.sh status       print the pending request and the newest log lines
 #   fm-helm-refresh.sh run <token>  the detached owner `request` starts; not for hand use
 #
@@ -23,7 +24,9 @@
 #   - this process belongs to the session that holds state/.lock;
 #   - state/.stow-guard.json holds an offer for exactly that session id (the
 #     id in state/.lock-session), made within FM_HELM_REFRESH_OFFER_TTL seconds
-#     (default 7200), so a /stow nobody asked for never restarts the helm;
+#     (default 7200) by bin/fm-stow-guard.sh: its Stop ask, or its prompt hook
+#     when the captain typed /stow, so a /stow an agent or the fleet started
+#     never restarts the helm;
 #   - this process runs in a tmux or Herdr pane bin/fm-primary-pane-lib.sh
 #     can prove;
 #   - state/.afk and state/.afk-contract are absent;

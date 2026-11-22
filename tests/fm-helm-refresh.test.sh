@@ -14,6 +14,7 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 SCRIPT="$ROOT/bin/fm-helm-refresh.sh"
+GUARD="$ROOT/bin/fm-stow-guard.sh"
 TMP_ROOT=$(fm_test_tmproot fm-helm-refresh)
 FAKEBIN=$(fm_fakebin "$TMP_ROOT/fakebin")
 ln -s /bin/bash "$FAKEBIN/claude"
@@ -51,7 +52,8 @@ stop_sessions() {
 trap stop_sessions EXIT
 
 # run_as_session <subcommand> [env assignments...]
-# The fake harness records its own pid as the lock holder, runs the script as
+# The fake harness records its own pid as the lock holder, first feeds
+# PROMPT_PAYLOAD, when one is passed, to the stow guard's prompt hook, runs the script as
 # its child inside a pretend tmux pane unless TMUX_PANE= is passed, publishes
 # the exit status, and then stays alive as the session the lock names, in its
 # own process group so the EXIT trap can stop it and its sleep together.
@@ -69,8 +71,8 @@ run_as_session() {
     TMUX_PANE=%424242 TMUX_TMPDIR="$EMPTY_TMUX" \
     FM_HOME="$CASE_HOME" FM_STATE_OVERRIDE="$CASE_STATE" FM_CONFIG_OVERRIDE="$CASE_CONFIG" \
     "$@" \
-    "$FAKE_CLAUDE" -c 'printf "%s\n" "$$" > "$1/.lock"; "$2" "$3" >"$5" 2>"$6"; printf "%s\n" "$?" > "$4.tmp"; mv "$4.tmp" "$4"; sleep 120; :' _ \
-    "$CASE_STATE" "$SCRIPT" "$sub" "$rc_file" "$OUT" "$ERR" </dev/null >/dev/null 2>&1 &
+    "$FAKE_CLAUDE" -c 'printf "%s\n" "$$" > "$1/.lock"; [ -z "${PROMPT_PAYLOAD:-}" ] || printf "%s" "$PROMPT_PAYLOAD" | "$7" prompt; "$2" "$3" >"$5" 2>"$6"; printf "%s\n" "$?" > "$4.tmp"; mv "$4.tmp" "$4"; sleep 120; :' _ \
+    "$CASE_STATE" "$SCRIPT" "$sub" "$rc_file" "$OUT" "$ERR" "$GUARD" </dev/null >/dev/null 2>&1 &
   pid=$!
   set +m
   SESSIONS+=("$pid")
@@ -170,6 +172,32 @@ test_granted_request_gives_up_without_typing() {
   pass "a granted request starts a detached owner that gives up untouched when the pane never proves idle"
 }
 
+test_typed_stow_offer_is_accepted() {
+  local rc=0 primary="$TMP_ROOT/primary" payload
+  mkdir -p "$primary/bin"
+  git -C "$primary" init -q
+  : > "$primary/AGENTS.md"
+  payload=$(jq -nc --arg sid "$SID" '{hook_event_name:"UserPromptSubmit", session_id:$sid, prompt:"/stow"}')
+
+  prepare_case typed-stow
+  rm -f "$CASE_STATE/.stow-guard.json"
+  run_as_session request FM_ROOT_OVERRIDE="$primary" PROMPT_PAYLOAD="$payload" \
+    FM_HELM_REFRESH_WAIT=2 FM_HELM_REFRESH_POLL=1 || rc=$?
+  [ "$rc" -eq 0 ] || fail "a request after a typed /stow must exit 0, got $rc: $(cat "$ERR")"
+  jq -e --arg sid "$SID" '.offer.sid == $sid' "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "the typed /stow recorded no offer: $(cat "$CASE_STATE/.stow-guard.json" 2>/dev/null)"
+  grep -qF "requested; end the turn now" "$OUT" || fail "the request after a typed /stow did not say so: $(cat "$OUT")"
+  wait_until 30 owner_finished || fail "the owner never finished: $(cat "$CASE_STATE/.helm-refresh.log")"
+
+  # The same request with a marked /stow from the fleet finds no offer.
+  prepare_case marked-stow
+  rm -f "$CASE_STATE/.stow-guard.json"
+  payload=$(jq -nc --arg sid "$SID" '{hook_event_name:"UserPromptSubmit", session_id:$sid, prompt:"[fm-from-firstmate]/stow"}')
+  assert_refused "a marked /stow" "made no restart offer to this session" \
+    FM_ROOT_OVERRIDE="$primary" PROMPT_PAYLOAD="$payload"
+  pass "a typed /stow's offer lets the request through within the TTL, and a marked one leaves it refused"
+}
+
 test_session_change_stops_the_owner() {
   local rc=0
   prepare_case session-change
@@ -216,5 +244,6 @@ test_status_and_usage() {
 fm_test_run \
   test_refusals \
   test_granted_request_gives_up_without_typing \
+  test_typed_stow_offer_is_accepted \
   test_session_change_stops_the_owner \
   test_status_and_usage
