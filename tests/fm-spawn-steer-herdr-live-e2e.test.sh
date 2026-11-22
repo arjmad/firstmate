@@ -257,15 +257,16 @@ printf '# Projects\n\n- smoke [local-only] - scratch project for the spawn-and-s
 # "No, exit". A fleet home is trusted in its store because its primary runs
 # there; the lab home gets the same standing through bin/fm-claude-trust.sh's
 # lab-home mode, which needs a checkout top level holding AGENTS.md and bin/.
+# The grant also names this checkout's .agents/skills, so the checkout running
+# the guard must already be trusted in the store the worker launches on.
 printf '# Lab home\n\nA disposable home for the spawn-and-steer smoke guard.\n' > "$LAB_HOME/AGENTS.md"
 mkdir -p "$LAB_HOME/bin"
 git init -q "$LAB_HOME"
-"$ROOT/bin/fm-claude-trust.sh" --lab-home "$LAB_HOME" >/dev/null \
-  || fail "could not register Claude workspace trust for the lab home"
 if [ -n "$ACCOUNT" ]; then
-  CLAUDE_CONFIG_DIR="$ACCOUNT" "$ROOT/bin/fm-claude-trust.sh" --lab-home "$LAB_HOME" >/dev/null \
-    || fail "could not register Claude workspace trust for the lab home in $ACCOUNT"
-fi
+  CLAUDE_CONFIG_DIR="$ACCOUNT" "$ROOT/bin/fm-claude-trust.sh" --lab-home "$LAB_HOME" >/dev/null
+else
+  "$ROOT/bin/fm-claude-trust.sh" --lab-home "$LAB_HOME" >/dev/null
+fi || fail "could not register Claude workspace trust for the lab home${ACCOUNT:+ in $ACCOUNT}"
 
 # The paused verb is pinned to its default so the brief and the wait below agree.
 in_lab() {  # <command...>: run with the lab home, the lab pool, and the Herdr wrapper

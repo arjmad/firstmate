@@ -316,15 +316,10 @@ start_primary() {  # <lab>
   pane=$(printf '%s' "$create" | jq -er '.result.root_pane.pane_id') \
     || fail "$(basename "$lab"): could not read the primary pane id"
   printf '%s\n' "$pane" > "$lab/pane-id"
-  # launch.sh writes the lock before it execs Claude. A pane shell that is not
-  # zsh ignores ZDOTDIR, so it alone gets the launch typed at its prompt.
-  if ! wait_until 300 test -s "$lab/fm/state/.lock"; then
-    case "$(lab pane process-info --pane "$pane" 2>/dev/null | jq -r '.result.process_info.foreground_processes[0].argv[0] // empty' 2>/dev/null)" in
-      *zsh) fail "$(basename "$lab"): the pane's zsh never ran the lab .zshenv launch (ZDOTDIR=$lab/zdotdir)"$'\n'"$(diagnose "$lab")" ;;
-    esac
-    lab pane run "$pane" "bash '$lab/launch.sh'" >/dev/null \
-      || fail "$(basename "$lab"): the primary's launch command was not sent"
-  fi
+  # launch.sh writes the lock before it execs Claude. The launch needs Herdr's
+  # pane shell to be zsh (the fleet's default_shell), which reads ZDOTDIR.
+  wait_until 300 test -s "$lab/fm/state/.lock" \
+    || fail "$(basename "$lab"): the pane shell never ran the lab .zshenv launch (ZDOTDIR=$lab/zdotdir); this guard needs Herdr's pane shell to be zsh"$'\n'"$(diagnose "$lab")"
   i=0
   while [ "$i" -lt 120 ]; do
     screen=$(lab pane read "$pane" --source visible 2>/dev/null)
