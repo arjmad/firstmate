@@ -17,8 +17,14 @@
 #
 # The context ask fires once when the newest usage in the transcript tail is at
 # or above the token line, then again only after a later read falls below
-# two-thirds of that line. The age ask fires when the newest seen /stow is
-# older than the hour line, and then not again for an hour. It is skipped when
+# two-thirds of that line. It asks for the stow skill's quick save
+# (`/stow quick`), because a full pass does not fit between the line and
+# compaction. The age ask fires when the newest seen full /stow is older than
+# the hour line, and then not again for an hour; it asks for the full pass.
+# It waits while the context reading is at or above the token line, so the
+# full pass comes after a compaction or a fresh start, never in the gap before
+# compaction. When both are due on one stop, the context ask wins, and its ask
+# time holds the age ask off for the next hour. The age ask is skipped when
 # a /stow timestamp cannot be read, including when python3 is missing, so a
 # just-completed /stow is not asked for again from a stale clock. The stored
 # state is what makes each ask once per crossing, so a continuation stop
@@ -27,13 +33,15 @@
 #
 # Context size is the same sum warm-cache compaction uses: input + cache_read
 # + cache_creation on the newest usage object in the last 2MB of the transcript.
-# A /stow is a Skill tool call whose skill is stow, in that same tail. The
-# newest one is remembered in state/.stow-guard.json, so a later tail that no
-# longer contains it does not rewind the clock.
+# A full /stow is a Skill tool call whose skill is stow, in that same tail,
+# unless the first word of its args is quick (any case). A quick save does not
+# move the clock, so the full pass still comes due after quick saves. The
+# newest full one is remembered in state/.stow-guard.json as last_stow, so a
+# later tail that no longer contains it does not rewind the clock.
 #
-# The ask never offers a fresh restart and never writes an offer, so the
-# /stow it asks for saves and keeps the session. It carries an existing offer
-# through unchanged.
+# Neither ask offers a fresh restart or writes an offer, so the /stow it asks
+# for saves and keeps the session. It carries an existing offer through
+# unchanged.
 #
 # With restart=1, `fm-stow-guard.sh prompt` is the one writer of that offer:
 # it records offer:{sid, at} for the session, and changes nothing else in the
@@ -240,6 +248,8 @@ if [ -n "$transcript" ] && [ -r "$transcript" ]; then
         fromjson? | .timestamp as $ts | select($ts != null)
         | .message.content[]?
         | select(.type == "tool_use" and .name == "Skill" and .input.skill == "stow")
+        | select((.input.args // "" | tostring | ascii_downcase
+            | [splits("[[:space:]]+")] | map(select(. != "")) | .[0] // "") != "quick")
         | $ts
       ' | python3 -c 'import datetime, sys
 best = 0
@@ -279,15 +289,17 @@ reason=
 has_fired=$(jq -r --arg sid "$sid" 'if .[$sid] == true then "1" else "0" end' <<<"$fired") || exit 0
 if [ "$tokens" -ge "$threshold" ] && [ "$has_fired" -eq 0 ]; then
   reason="fm-stow-guard: context is ${tokens} tokens, near auto-compaction."
+  reason="$reason Run the stow skill now with the argument quick (/stow quick) for a quick save, then continue the turn you were in."
   fired=$(jq -c --arg sid "$sid" '.[$sid] = true' <<<"$fired") || exit 0
 elif [ "$saves_readable" -eq 1 ] && [ -z "$last_stow" ]; then
   last_stow=$now
-elif [ "$saves_readable" -eq 1 ] && [ $((now - last_stow)) -ge "$max_age" ] && [ $((now - asked)) -ge 3600 ]; then
-  reason="fm-stow-guard: the last /stow is older than ${hours}h."
+elif [ "$saves_readable" -eq 1 ] && [ "$tokens" -lt "$threshold" ] \
+    && [ $((now - last_stow)) -ge "$max_age" ] && [ $((now - asked)) -ge 3600 ]; then
+  reason="fm-stow-guard: the last full /stow is older than ${hours}h."
+  reason="$reason Run the /stow skill now (full pass, no argument), then continue the turn you were in."
 fi
 if [ -n "$reason" ]; then
   asked=$now
-  reason="$reason Run the /stow skill now (full pass), then continue the turn you were in."
 fi
 
 tmp=$(mktemp "$STATE/.stow-guard.json.XXXXXX") || exit 0

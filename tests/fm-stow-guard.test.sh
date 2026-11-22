@@ -121,7 +121,7 @@ test_guard_ask_never_offers_a_restart() {
   payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" \
     TMUX_PANE=%7 HERDR_ENV= || rc=$?
   [ "$rc" -eq 0 ] || fail "the guard's ask with restart=1 must exit 0, got $rc"
-  assert_block "the guard's ask with restart=1" "Run the /stow skill now (full pass), then continue the turn you were in."
+  assert_block "the guard's ask with restart=1" "with the argument quick (/stow quick) for a quick save, then continue the turn you were in."
   ! grep -q 'fm-helm-refresh' "$OUT" || fail "the guard's ask offered a restart: $(cat "$OUT")"
   jq -e 'has("offer") | not' "$CASE_STATE/.stow-guard.json" >/dev/null \
     || fail "the guard's ask recorded an offer: $(cat "$CASE_STATE/.stow-guard.json")"
@@ -391,6 +391,128 @@ test_recorded_stow_sets_the_age_clock() {
   pass "a Skill /stow sets the age clock and a later tail does not rewind it"
 }
 
+# write_stow <iso timestamp> [<args>]: append a stow Skill call, with args only
+# when given, so a call with no args stays the shape Claude Code writes.
+write_stow() {
+  jq -nc --arg ts "$1" --arg args "${2-}" --argjson has_args "$([ $# -ge 2 ] && echo true || echo false)" \
+    '{timestamp:$ts,message:{content:[{type:"tool_use",name:"Skill",input:({skill:"stow"} + (if $has_args then {args:$args} else {} end))}],usage:{input_tokens:10,cache_read_input_tokens:0,cache_creation_input_tokens:0}}}' \
+    >> "$CASE_TRANSCRIPT"
+}
+
+iso_epoch() {
+  python3 -c 'import datetime, sys; print(int(datetime.datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00")).timestamp()))' "$1"
+}
+
+test_each_ask_names_its_pass() {
+  local rc=0 now=1700000000
+  prepare_case ask-context
+  printf 'tokens=1000\n' > "$CASE_CONFIG/stow-guard"
+  write_usage 1200
+  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW="$now" || rc=$?
+  [ "$rc" -eq 0 ] || fail "the context ask must exit 0, got $rc"
+  assert_block "the context ask" "Run the stow skill now with the argument quick (/stow quick) for a quick save"
+  ! grep -q 'full pass' "$OUT" || fail "the context ask asked for the full pass: $(cat "$OUT")"
+
+  prepare_case ask-age
+  : > "$CASE_CONFIG/stow-guard"
+  printf '{"last_stow":%s,"asked":0,"fired":{}}\n' "$((now - 86400))" > "$CASE_STATE/.stow-guard.json"
+  rc=0
+  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW="$now" || rc=$?
+  [ "$rc" -eq 0 ] || fail "the age ask must exit 0, got $rc"
+  assert_block "the age ask" "Run the /stow skill now (full pass, no argument)"
+  ! grep -q 'quick' "$OUT" || fail "the age ask asked for a quick save: $(cat "$OUT")"
+  pass "the context ask asks for /stow quick and the age ask asks for the full pass"
+}
+
+test_quick_save_does_not_move_the_full_pass_clock() {
+  local rc=0 full quick now
+  command -v python3 >/dev/null 2>&1 || {
+    pass "a quick save does not move the full pass clock (skipped, python3 not found)"
+    return
+  }
+  prepare_case quick-clock
+  : > "$CASE_CONFIG/stow-guard"
+  full=$(iso_epoch 2026-01-01T00:00:00Z)
+  quick=$(iso_epoch 2026-01-01T06:00:00Z)
+  write_stow 2026-01-01T00:00:00Z
+  write_stow 2026-01-01T06:00:00Z quick
+  now=$((quick + 100))
+  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW="$now" || rc=$?
+  [ "$rc" -eq 0 ] || fail "a tail with a full and a newer quick save must exit 0, got $rc"
+  assert_silent "a tail with a full and a newer quick save"
+  jq -e --argjson full "$full" '.last_stow == $full' "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "a newer quick save moved the clock past the full pass: $(cat "$CASE_STATE/.stow-guard.json")"
+
+  # Only quick saves after it, each spelled another way: the age ask still comes due.
+  : > "$CASE_TRANSCRIPT"
+  write_stow 2026-01-01T12:00:00Z ' Quick'
+  write_stow 2026-01-01T18:00:00Z $'quick\tat the token line'
+  write_stow 2026-01-01T23:00:00Z QUICK
+  now=$((full + 86400))
+  rc=0
+  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW="$now" || rc=$?
+  [ "$rc" -eq 0 ] || fail "a quick-only tail a day after the full pass must exit 0, got $rc"
+  assert_block "a quick-only tail a day after the full pass" "Run the /stow skill now (full pass, no argument)"
+  jq -e --argjson full "$full" '.last_stow == $full' "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "quick saves moved the clock: $(cat "$CASE_STATE/.stow-guard.json")"
+
+  # A stow call with other args, or a word that only starts with quick, is a full pass.
+  : > "$CASE_TRANSCRIPT"
+  write_stow 2026-01-02T01:00:00Z 'quickly please'
+  now=$(($(iso_epoch 2026-01-02T01:00:00Z) + 100))
+  rc=0
+  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW="$now" || rc=$?
+  [ "$rc" -eq 0 ] || fail "a stow call with other args must exit 0, got $rc"
+  assert_silent "a stow call with other args"
+  jq -e --argjson stamp "$(iso_epoch 2026-01-02T01:00:00Z)" '.last_stow == $stamp' "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "a stow call with other args did not move the clock: $(cat "$CASE_STATE/.stow-guard.json")"
+
+  # On the first opt-in stop, a quick-only tail starts the clock at now, as an empty tail does.
+  prepare_case quick-first
+  : > "$CASE_CONFIG/stow-guard"
+  write_stow 2026-01-01T06:00:00Z quick
+  now=$((quick + 100))
+  rc=0
+  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW="$now" || rc=$?
+  [ "$rc" -eq 0 ] || fail "a first stop with only a quick save must exit 0, got $rc"
+  assert_silent "a first stop with only a quick save"
+  jq -e --argjson now "$now" '.last_stow == $now' "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "a quick-only first stop did not start the clock at now: $(cat "$CASE_STATE/.stow-guard.json")"
+  pass "a quick save leaves last_stow on the newest full pass, the age ask still comes due, and other args count as a full pass"
+}
+
+test_both_asks_due_asks_quick_then_full_below_the_line() {
+  local rc=0 now=1700000000
+  prepare_case both-due
+  printf 'tokens=1000\n' > "$CASE_CONFIG/stow-guard"
+  printf '{"last_stow":%s,"asked":0,"fired":{}}\n' "$((now - 2 * 86400))" > "$CASE_STATE/.stow-guard.json"
+  write_usage 1200
+  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW="$now" || rc=$?
+  [ "$rc" -eq 0 ] || fail "a stop with both asks due must exit 0, got $rc"
+  assert_block "a stop with both asks due" "(/stow quick) for a quick save"
+
+  rc=0
+  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW="$((now + 60))" || rc=$?
+  [ "$rc" -eq 0 ] || fail "the next stop inside the hour must exit 0, got $rc"
+  assert_silent "the next stop inside the hour"
+
+  # An hour later the context is still over the line, so the full pass waits.
+  write_usage 1300
+  rc=0
+  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW="$((now + 3600))" || rc=$?
+  [ "$rc" -eq 0 ] || fail "the stop an hour later over the line must exit 0, got $rc"
+  assert_silent "the stop an hour later over the line"
+
+  # After a compaction drops the context below the line, the full pass is asked for.
+  : > "$CASE_TRANSCRIPT"
+  write_usage 500
+  rc=0
+  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW="$((now + 3700))" || rc=$?
+  [ "$rc" -eq 0 ] || fail "the stop below the line must exit 0, got $rc"
+  assert_block "the stop below the line" "Run the /stow skill now (full pass, no argument)"
+  pass "with both asks due the context ask asks for a quick save, and the age ask waits until the context is below the line"
+}
+
 test_crew_worktree_is_silent() {
   local child="$TMP_ROOT/child" rc=0
   git -C "$PRIMARY" add AGENTS.md
@@ -567,6 +689,9 @@ fm_test_run \
   test_continuation_stop_blocks_once_per_crossing \
   test_age_interval_blocks_once_per_hour \
   test_recorded_stow_sets_the_age_clock \
+  test_each_ask_names_its_pass \
+  test_quick_save_does_not_move_the_full_pass_clock \
+  test_both_asks_due_asks_quick_then_full_below_the_line \
   test_crew_worktree_is_silent \
   test_secondmate_home_is_silent \
   test_missing_python_skips_the_age_ask \
