@@ -55,23 +55,25 @@
 # ALLOWED_FILE_DIRS, the directories workspace-mcp may read attachments from.
 # claude_tool_list names, by absolute path, a tab-separated tool list: '#' comment and
 # blank lines, then a header row naming one 'tool' and one 'claude' column among any
-# others, then one row per tool whose claude value is 'on' or 'off'. claude-install and
-# claude-config append every 'off' tool, in file order, to each Claude Code server's
-# argv as --disabled-tools; the argv, hermes-config, and the consent driver never carry
-# it. A missing or malformed list, one with no tool rows, a bad tool name, or a
-# duplicate tool refuses both rather than registering a server with the tools it was
-# meant to remove.
+# others, then one row per tool whose claude value is 'on', 'docs', or 'off'.
+# claude-install and claude-config append every 'off' and 'docs' tool, in file order,
+# to each Claude Code user-scope server's argv as --disabled-tools, and 'claude-config
+# --docs' appends only the 'off' tools; the argv, hermes-config, and the consent driver
+# never carry it. A missing or malformed list, one with no tool rows, a bad tool name,
+# or a duplicate tool refuses both rather than registering a server with the tools it
+# was meant to remove.
 # Blank lines and '#' comments are ignored. There is no built-in table: a missing,
 # unreadable, or malformed file, a duplicate slug or email, or an implausible email
 # refuses every subcommand except help, naming the file and the accepted format.
 #
-# Claude Code's user-scope servers load only Gmail, Drive, and Calendar (captain,
-# 2026-11-22); Docs, Sheets, and Contacts are opt-in per session. claude-install also
-# writes <root>/claude-docs.mcp.json (0600), what 'claude-config --docs' prints: the
-# same gws-<slug> servers at every service of the consent, which a session loads with
-# claude --mcp-config=<that file> (fm-spawn.sh --docs) to replace the user-scope ones.
-# claude-uninstall removes that file too. The argv, hermes-config, and the consent
-# driver keep every service, so one consent still serves every runtime.
+# The 'docs' rows are opt-in per session (captain, 2026-11-22: Docs, Sheets, and
+# Contacts). claude-install also writes <root>/claude-docs.mcp.json (0600), what
+# 'claude-config --docs' prints: the same gws-<slug> servers without those
+# subtractions, which a session loads with claude --mcp-config=<that file>
+# (fm-spawn.sh --docs) to replace the user-scope ones. claude-uninstall removes that
+# file too. Every server keeps the full --permissions: in that mode upstream consents
+# to every listed service whatever tools are disabled, so a sign-in from any session
+# keeps one credential that serves every runtime.
 #
 # Paths. FM_GWS_ROOT overrides the root, which otherwise defaults to
 # ${XDG_STATE_HOME:-$HOME/.local/state}/google-workspace-mcp. The root is shared by
@@ -105,9 +107,6 @@ CLAUDE_TOOL_LIST=""
 SERVER_BIN="${FM_GWS_SERVER-$(command -v workspace-mcp 2>/dev/null || true)}"
 
 PERMISSIONS="gmail:full drive:full calendar:full docs:full sheets:full contacts:full"
-# The services a Claude Code session loads by default, a subset of PERMISSIONS; the
-# --docs opt-in config carries all of PERMISSIONS.
-CLAUDE_DEFAULT_PERMISSIONS="gmail:full drive:full calendar:full"
 
 GWS_ROOT="${FM_GWS_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/google-workspace-mcp}"
 ACCOUNTS_ROOT="$GWS_ROOT/accounts"
@@ -117,7 +116,7 @@ CLAUDE_BIN="${FM_GWS_CLAUDE:-claude}"
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-usage() { sed -n '21,79p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '21,81p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed 's/^# \{0,1\}//'; }
 
 CONFIG_FORMAT="accepted format, one setting per line: 'account <slug> <email>', 'bws_project_id <uuid>', 'bws_secret_key <name>', optional 'allowed_file_dirs <path>', optional 'claude_tool_list <path>'"
 
@@ -215,24 +214,24 @@ creds_dir() { printf '%s/%s\n' "$ACCOUNTS_ROOT" "$(account_slug "$1")"; }
 # server_argv prints the workspace-mcp invocation one token per line, the command
 # first. Every consumer - the Claude Code entry, the Hermes block, and the consent
 # ceremony - reads it from here, so the three can never drift from each other.
-# [<permissions>] narrows the services, for Claude Code's default servers only.
 server_argv() {
-  local permissions="${1:-$PERMISSIONS}"
   if [ -n "$SERVER_BIN" ]; then printf '%s\n' "$SERVER_BIN"; else printf '%s\n' uvx workspace-mcp; fi
   printf '%s\n' --single-user --permissions
   # shellcheck disable=SC2086 # deliberate word splitting: one permission token per line
-  printf '%s\n' $permissions
+  printf '%s\n' $PERMISSIONS
 }
 
-# claude_disabled_tools prints the claude_tool_list's 'off' tools one per line, in file
-# order, and nothing when no list is configured; it fails, naming the list, on anything
-# the header comment above does not accept.
+# claude_disabled_tools [docs] prints the claude_tool_list's 'off' and 'docs' tools, or
+# with docs only its 'off' tools, one per line in file order, and nothing when no list
+# is configured; it fails, naming the list, on anything the header comment above does
+# not accept.
 claude_disabled_tools() {
+  local tier="${1:-}"
   [ -n "$CLAUDE_TOOL_LIST" ] || return 0
   [ -f "$CLAUDE_TOOL_LIST" ] && [ -r "$CLAUDE_TOOL_LIST" ] \
     || die "$CONFIG_FILE: claude_tool_list $CLAUDE_TOOL_LIST is not a readable file"
   local out
-  out=$(awk -F'\t' '
+  out=$(awk -F'\t' -v tier="$tier" '
     { sub(/\r$/, "") }
     /^#/ || /^[[:space:]]*$/ { next }
     !header {
@@ -247,21 +246,19 @@ claude_disabled_tools() {
     { rows++ }
     $t !~ /^[a-z][a-z0-9_]*$/ { print "line " NR ": bad tool name \"" $t "\""; bad = 1; exit }
     seen[$t]++ { print "line " NR ": duplicate tool " $t; bad = 1; exit }
-    $c != "on" && $c != "off" { print "line " NR ": " $t " claude value must be on or off"; bad = 1; exit }
-    $c == "off" { print $t }
+    $c != "on" && $c != "docs" && $c != "off" { print "line " NR ": " $t " claude value must be on, docs, or off"; bad = 1; exit }
+    $c == "off" || ($c == "docs" && tier != "docs") { print $t }
     END { if (!bad && !rows) { print "no tool rows"; bad = 1 } exit bad }' "$CLAUDE_TOOL_LIST") \
     || die "$CLAUDE_TOOL_LIST (claude_tool_list): ${out##*$'\n'}"
   [ -z "$out" ] || printf '%s\n' "$out"
 }
 
-# claude_argv [docs] is server_argv at the default Claude Code services, or at every
-# service for docs, plus Claude Code's own subtraction: --disabled-tools and the
-# claude_tool_list's 'off' tools, or nothing when none is off.
+# claude_argv [docs] is server_argv plus Claude Code's own subtraction: --disabled-tools
+# and claude_disabled_tools' tools for that tier, or nothing when none is disabled.
 claude_argv() {
-  local off permissions="$CLAUDE_DEFAULT_PERMISSIONS"
-  [ "${1:-}" != docs ] || permissions="$PERMISSIONS"
-  off=$(claude_disabled_tools) || exit 1
-  server_argv "$permissions"
+  local off
+  off=$(claude_disabled_tools "${1:-}") || exit 1
+  server_argv
   [ -z "$off" ] || printf '%s\n' --disabled-tools "$off"
 }
 
@@ -350,7 +347,6 @@ cmd_paths() {
   printf 'accounts root:   %s\n' "$ACCOUNTS_ROOT"
   printf 'client secret:   %s\n' "$CLIENT_SECRET_FILE"
   printf 'permissions:     %s\n' "$PERMISSIONS"
-  printf 'claude default:  %s\n' "$CLAUDE_DEFAULT_PERMISSIONS"
   printf 'claude --docs:   %s\n' "$CLAUDE_DOCS_CONFIG"
 }
 

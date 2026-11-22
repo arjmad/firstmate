@@ -173,7 +173,7 @@
 #   a ship or scout that needs Google Docs, Sheets, or Contacts: its claude
 #   launch gets `--mcp-config <path>` for the claude-docs.mcp.json that
 #   bin/fm-google-workspace.sh claude-install writes, whose gws-* servers replace
-#   the user-scope Gmail, Drive, and Calendar ones (fm_docs_mcp_check owns the
+#   the user-scope ones that leave those tools out (fm_docs_mcp_check owns the
 #   path, its override, and every refusal). It records docs=on, and --no-docs
 #   is its relaunch recovery; every rule above for --content holds for it, and
 #   the two combine.

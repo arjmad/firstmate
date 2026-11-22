@@ -305,16 +305,25 @@ test_registering_with_claude_code_keeps_the_accounts_apart() {
 }
 
 test_claude_code_loads_docs_sheets_and_contacts_only_on_opt_in() {
-  local root log installed docs out code service
+  local root log list installed docs out code permissions
   root=$(new_root docstier)
   log="$TMP_ROOT/docstier.log"
+  list="$TMP_ROOT/docstier-tools.tsv"
+  printf '%s\n' "$(printf 'tool\tclaude\tcade')" \
+    "$(printf 'search_gmail_messages\ton\ton')" \
+    "$(printf 'manage_out_of_office\toff\tsend')" \
+    "$(printf 'get_doc_content\tdocs\ton')" \
+    "$(printf 'read_sheet_values\tdocs\ton')" > "$list"
+  write_config "account alpha $PERSONAL_ACCOUNT
+account ops   $WORKSPACE_ACCOUNT
+account bravo $THIRD_ACCOUNT
+claude_tool_list $list"
+  permissions="--permissions gmail:full drive:full calendar:full docs:full sheets:full contacts:full"
   : > "$log"
   CLAUDE_STUB_LOG="$log" gws "$root" claude-install >/dev/null || fail "claude-install failed"
   installed=$(grep "mcp add -s user gws-alpha" "$log")
-  assert_contains "$installed" "--permissions gmail:full drive:full calendar:full" "the user-scope server loads Gmail, Drive, and Calendar"
-  for service in docs sheets contacts; do
-    assert_not_contains "$installed" "$service:full" "the user-scope server does not load $service"
-  done
+  assert_contains "$installed" "$permissions --disabled-tools manage_out_of_office get_doc_content read_sheet_values" \
+    "the user-scope server keeps every consented service and disables the off and docs tools, in file order"
   [ -f "$root/claude-docs.mcp.json" ] || fail "claude-install did not write the --docs opt-in config"
   expect_code 600 "$(python3 -c 'import os, stat, sys; print(format(stat.S_IMODE(os.stat(sys.argv[1]).st_mode), "o"))' "$root/claude-docs.mcp.json")" "the --docs config is private to the user"
   docs=$(cat "$root/claude-docs.mcp.json")
@@ -325,14 +334,15 @@ print(" ".join(sorted(d)))
 print(" ".join(d["gws-ops"]["args"]))
 print(d["gws-ops"]["env"]["WORKSPACE_MCP_CREDENTIALS_DIR"])' <<<"$docs")
   assert_contains "$out" "gws-alpha gws-bravo gws-ops" "the --docs file names the same servers as user scope, so they replace them"
-  assert_contains "$out" "gmail:full drive:full calendar:full docs:full sheets:full contacts:full" "the --docs servers load every consented service"
+  assert_contains "$out" "${permissions#--permissions } --disabled-tools manage_out_of_office"$'\n' "the --docs servers disable only the off tools"
   assert_contains "$out" "$root/accounts/ops" "each --docs server keeps its own credentials directory"
-  assert_not_contains "$(gws "$root" claude-config)" "docs:full" "claude-config prints the default servers without --docs"
+  assert_contains "$(gws "$root" claude-config | tr -d '\n ')" '"manage_out_of_office","get_doc_content","read_sheet_values"]' "claude-config prints the user-scope servers without the docs tools"
   out=$(gws "$root" claude-config --sheets 2>&1) && code=0 || code=$?
   expect_code 1 "$code" "an unknown claude-config option refuses"
   out=$(CLAUDE_STUB_LOG="$log" gws "$root" claude-uninstall)
   assert_contains "$out" "removed: $root/claude-docs.mcp.json" "claude-uninstall reports the --docs config it removed"
   [ ! -e "$root/claude-docs.mcp.json" ] || fail "claude-uninstall left the --docs opt-in config behind"
+  write_config
   pass "Claude Code loads Docs, Sheets, and Contacts only on opt-in"
 }
 
@@ -382,7 +392,7 @@ claude_tool_list $list"
   assert_equals "${argv}--disabled-tools manage_out_of_office manage_focus_time " "$claude" "Claude Code --docs args are the invocation plus the off tools, in file order"
   : > "$log"
   CLAUDE_STUB_LOG="$log" gws "$root" claude-install >/dev/null || fail "claude-install failed with a tool list"
-  expect_code 2 "$(grep -cF -- "calendar:full --disabled-tools manage_out_of_office manage_focus_time" "$log")" "claude-install registers every server with the off tools"
+  expect_code 2 "$(grep -cF -- "contacts:full --disabled-tools manage_out_of_office manage_focus_time" "$log")" "claude-install registers every server with the off tools"
   assert_contains "$(tr -d '\n ' < "$root/claude-docs.mcp.json")" '"contacts:full","--disabled-tools","manage_out_of_office","manage_focus_time"' "the --docs file carries the same off tools"
   assert_no_grep "search_gmail_messages" "$log" "an on tool is never disabled"
   assert_not_contains "$(gws "$root" argv)" "--disabled-tools" "the shared invocation carries no Claude Code subtraction"
@@ -394,8 +404,8 @@ claude_tool_list $list"
 
   printf 'tool\tclaude\nget_events\tmaybe\n' > "$list"
   out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
-  expect_code 1 "$code" "a claude value other than on or off refuses claude-config"
-  assert_contains "$out" "claude value must be on or off" "the refusal names the bad value"
+  expect_code 1 "$code" "a claude value other than on, docs, or off refuses claude-config"
+  assert_contains "$out" "claude value must be on, docs, or off" "the refusal names the bad value"
   printf 'tool\tclaude\nget_events\toff\nget_events\ton\n' > "$list"
   out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
   expect_code 1 "$code" "a duplicate tool refuses claude-config"

@@ -42,9 +42,8 @@ Only when no launcher is found, or `FM_GWS_SERVER` is set empty, does the comman
 Each instance additionally receives `WORKSPACE_MCP_CREDENTIALS_DIR` for its own account and `GOOGLE_CLIENT_SECRET_PATH` for the shared client.
 `bin/fm-google-workspace.sh argv` prints this list, and the Claude Code and Hermes configurations are both generated from it, so the three cannot drift apart.
 Claude Code's servers add one subtraction, the `off` tools of an optional `claude_tool_list` ([configuration](configuration.md#google-workspace-accounts-configgoogle-workspace)).
-Claude Code's user-scope servers also load only `gmail:full drive:full calendar:full` (captain, 2026-11-22), and Docs, Sheets, and Contacts are opt-in per session through the [Docs workers](configuration.md#docs-workers) config, which carries the full list above.
-The consent and the Hermes block keep the full list, so one credential per account still serves every runtime.
-A consent started from a default session's own `start_google_auth` requests only that session's three services, and upstream does not ask Google to keep the other grants, so re-consent through `bin/fm-google-workspace.sh auth <account>` or a Docs session instead.
+Its `docs` rows are Claude Code's Docs, Sheets, and Contacts tools, which a session loads only through the [Docs workers](configuration.md#docs-workers) config (captain, 2026-11-22).
+That split is a `--disabled-tools` subtraction, never a shorter `--permissions` list: a new consent asks Google only for the listed services and does not keep the earlier grants, so a server at fewer services would hand out a narrower consent and replace the one credential every runtime shares.
 
 `--permissions` is the only flag that narrows the OAuth token itself.
 `--tool-tier` and `--disabled-tools` shrink the registered tool list while still consenting to every scope the loaded services imply, so neither is a substitute.
