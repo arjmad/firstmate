@@ -123,9 +123,18 @@ test_refusals() {
   : > "$CASE_STATE/.afk"
   assert_refused "away mode" "away mode is on"
 
+  prepare_case afk-contract
+  : > "$CASE_STATE/.afk-contract"
+  assert_refused "away mode starting" "away mode is on"
+
   prepare_case cooldown
   printf '%s\tcleared\ttoken=x\n' "$(( $(date +%s) - 60 ))" > "$CASE_STATE/.helm-refresh.log"
   assert_refused "recent clear" "less than 3600s ago"
+
+  # A /clear whose re-key came too late logs only `typed`, and still counts.
+  prepare_case cooldown-typed
+  printf '%s\ttyped\ttoken=x\n' "$(( $(date +%s) - 60 ))" > "$CASE_STATE/.helm-refresh.log"
+  assert_refused "recent typed clear" "less than 3600s ago"
 
   prepare_case foreign-lock
   local rc=0
@@ -177,7 +186,16 @@ test_session_change_stops_the_owner() {
   wait_until 30 owner_finished || fail "the owner never finished: $(cat "$CASE_STATE/.helm-refresh.log")"
   grep -q $'\tgave-up\t.*the request was replaced or removed; nothing was typed' "$CASE_STATE/.helm-refresh.log" \
     || fail "a removed request did not stop the owner: $(cat "$CASE_STATE/.helm-refresh.log")"
-  pass "the owner stops without typing when the session changes or the request is removed"
+
+  prepare_case opt-out
+  rc=0
+  run_as_session request FM_HELM_REFRESH_WAIT=60 FM_HELM_REFRESH_POLL=1 || rc=$?
+  [ "$rc" -eq 0 ] || fail "request must exit 0, got $rc: $(cat "$ERR")"
+  printf 'tokens=1000\n' > "$CASE_CONFIG/stow-guard"
+  wait_until 30 owner_finished || fail "the owner never finished: $(cat "$CASE_STATE/.helm-refresh.log")"
+  grep -q $'\tgave-up\t.*no longer holds restart=1; nothing was typed' "$CASE_STATE/.helm-refresh.log" \
+    || fail "a withdrawn opt-in did not stop the owner: $(cat "$CASE_STATE/.helm-refresh.log")"
+  pass "the owner stops without typing when the session changes, the request is removed, or the opt-in is withdrawn"
 }
 
 test_status_and_usage() {

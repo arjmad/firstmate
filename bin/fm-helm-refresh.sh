@@ -26,8 +26,8 @@
 #     (default 7200), so a /stow nobody asked for never restarts the helm;
 #   - this process runs in a tmux or Herdr pane bin/fm-primary-pane-lib.sh
 #     can prove;
-#   - state/.afk is absent;
-#   - state/.helm-refresh.log records no clear within FM_HELM_REFRESH_COOLDOWN
+#   - state/.afk and state/.afk-contract are absent;
+#   - state/.helm-refresh.log records no typed /clear within FM_HELM_REFRESH_COOLDOWN
 #     seconds (default 3600), so a fresh context that is already over the
 #     guard's line is never cleared again and again;
 #   - no other request is pending with a live owner.
@@ -40,9 +40,11 @@
 # that the pane is idle with an empty composer (fm_primary_pane_idle_proven),
 # with state/.question-open absent at each. It gives up, with no change, when
 # the request is replaced or removed, the lock moves to another pid or process,
-# the session id in state/.lock-session changes, state/.afk appears, or the
-# wait runs out. Then it types /clear through the backend's submit primitive,
-# waits up to FM_HELM_REFRESH_CLEAR_WAIT seconds (default 60) for
+# the session id in state/.lock-session changes, away mode starts, restart=1
+# leaves config/stow-guard, the pane leaves idle after a first proof (a new
+# turn, a draft or a question the receipt does not cover), or the wait runs
+# out. Then it types /clear through the backend's submit primitive, logs
+# `typed`, waits up to FM_HELM_REFRESH_CLEAR_WAIT seconds (default 60) for
 # state/.lock-session to name a new session under the same lock pid, and then,
 # once the pane proves idle twice again (up to FM_HELM_REFRESH_KICK_WAIT, default 120),
 # rings one record-backed watcher doorbell so the fresh session reads its
@@ -97,6 +99,15 @@ refuse() {  # <reason>
   exit 1
 }
 
+opted_in() {
+  grep -Eq '^restart=1[[:space:]]*$' "$CONFIG/stow-guard" 2>/dev/null
+}
+
+# Away posture starts with state/.afk-contract before state/.afk is written.
+away_mode_on() {
+  [ -e "$STATE/.afk" ] || [ -e "$STATE/.afk-contract" ]
+}
+
 pending_field() {  # <field>
   jq -r --arg f "$1" '.[$f] // empty' "$PENDING" 2>/dev/null
 }
@@ -139,8 +150,7 @@ if [ "$1" = status ]; then
 fi
 
 if [ "$1" = request ]; then
-  grep -Eq '^restart=1[[:space:]]*$' "$CONFIG/stow-guard" 2>/dev/null \
-    || refuse "config/stow-guard does not hold restart=1"
+  opted_in || refuse "config/stow-guard does not hold restart=1"
   fm_session_lock_owned_by_self "$STATE" \
     || refuse "this process is not in the session that holds the firstmate session lock"
   lock_pid=$(head -n 1 "$STATE/.lock" 2>/dev/null)
@@ -159,8 +169,10 @@ if [ "$1" = request ]; then
   # Heimdall helm runs there.
   fm_primary_pane_transport --default-session \
     || refuse "this session runs in no tmux or Herdr pane a restart can prove"
-  [ ! -e "$STATE/.afk" ] || refuse "away mode is on"
-  last_cleared=$(awk -F '\t' '$2 == "cleared" { t = $1 } END { print t }' "$LOG" 2>/dev/null)
+  ! away_mode_on || refuse "away mode is on"
+  # Every /clear logs `typed` before its re-key wait, so a clear whose re-key
+  # came late still counts.
+  last_cleared=$(awk -F '\t' '$2 == "typed" || $2 == "cleared" { t = $1 } END { print t }' "$LOG" 2>/dev/null)
   case "$last_cleared" in ''|*[!0-9]*) last_cleared=0 ;; esac
   [ $(( $(date +%s) - last_cleared )) -ge "$COOLDOWN" ] \
     || refuse "this home cleared a session less than ${COOLDOWN}s ago, so a fresh context is already near the stow line"
@@ -244,7 +256,8 @@ stop_reason() {
   lock_held || { echo "the session lock moved to another process"; return; }
   [ "$(cat "$STATE/.lock-session" 2>/dev/null)" = "$SID" ] \
     || { echo "the session changed before the clear"; return; }
-  [ ! -e "$STATE/.afk" ] || { echo "away mode turned on"; return; }
+  ! away_mode_on || { echo "away mode turned on"; return; }
+  opted_in || { echo "config/stow-guard no longer holds restart=1"; return; }
 }
 
 pane_ready() {
@@ -261,8 +274,10 @@ while :; do
   if pane_ready; then
     proofs=$((proofs + 1))
     [ "$proofs" -lt 2 ] || break
-  else
-    proofs=0
+  elif [ "$proofs" -gt 0 ]; then
+    # The stow's turn had ended. A busy pane, a draft or a question now means
+    # new work the reset-safe receipt does not cover.
+    finish 1 gave-up "the pane left idle after the stow's turn ended; nothing was typed"
   fi
   sleep "$POLL"
 done
@@ -274,6 +289,7 @@ why=$(stop_reason)
 pane_ready || finish 1 gave-up "the pane stopped reading idle and empty just before /clear; nothing was typed"
 [ "$SECONDS" -lt "$deadline" ] || finish 1 gave-up "the turn did not end within ${WAIT}s; nothing was typed"
 verdict=$(fm_backend_send_text_submit "$TRANSPORT" "$TARGET" "/clear" 2 0.2 0.2 2>/dev/null) || verdict=unconfirmed
+log typed "token=$TOKEN sid=$SID submit=$verdict"
 
 # The re-key below is the proof that /clear ran, so an ambiguous submit
 # verdict still waits for it rather than giving up on a session that cleared.
