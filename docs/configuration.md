@@ -1908,6 +1908,7 @@ Hiding a content server's other tools, such as one generation tool, still works.
 ## Docs workers
 
 The Claude Code `gws-*` servers that `bin/fm-google-workspace.sh claude-install` registers at user scope disable the `claude_tool_list` rows marked `docs`, the Docs, Sheets, and Contacts tools, which load only for the workers that need them ([Google Workspace accounts](#google-workspace-accounts-configgoogle-workspace)).
+With no `claude_tool_list`, or one without `docs` rows, every session gets those tools, so run `claude-install` (the wizard's last stage) after the list carries them.
 `claude-install` also writes `claude-docs.mcp.json` in its root, the same `gws-<slug>` servers without that subtraction; a server from `--mcp-config` replaces the user-scope server of the same name, so the tool names do not change.
 `fm-spawn.sh --docs` loads that file exactly as `--content` loads its own, with the same refusals, record (`docs=on`), and relaunch recovery (`fm-control.sh <id> relaunch --no-docs`), and the two switches combine.
 The sign-in tool it keeps callable is `mcp__<server>__start_google_auth`.
