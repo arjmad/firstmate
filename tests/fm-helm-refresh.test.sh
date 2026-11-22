@@ -110,11 +110,11 @@ test_refusals() {
 
   prepare_case no-offer
   rm -f "$CASE_STATE/.stow-guard.json"
-  assert_refused "no offer" "made no restart offer to this session"
+  assert_refused "no offer" "no /stow the captain typed made a restart offer to this session"
 
   prepare_case other-session
   write_offer other-session "$(date +%s)"
-  assert_refused "offer to another session" "made no restart offer to this session"
+  assert_refused "offer to another session" "no /stow the captain typed made a restart offer to this session"
 
   prepare_case stale-offer
   write_offer "$SID" "$(( $(date +%s) - 7300 ))"
@@ -193,9 +193,18 @@ test_typed_stow_offer_is_accepted() {
   prepare_case marked-stow
   rm -f "$CASE_STATE/.stow-guard.json"
   payload=$(jq -nc --arg sid "$SID" '{hook_event_name:"UserPromptSubmit", session_id:$sid, prompt:"[fm-from-firstmate]/stow"}')
-  assert_refused "a marked /stow" "made no restart offer to this session" \
+  assert_refused "a marked /stow" "no /stow the captain typed made a restart offer to this session" \
     FM_ROOT_OVERRIDE="$primary" PROMPT_PAYLOAD="$payload"
-  pass "a typed /stow's offer lets the request through within the TTL, and a marked one leaves it refused"
+
+  # The guard's own ask, even after a typed /stow's offer, leaves it refused.
+  prepare_case guard-asked-stow
+  jq -nc '{message:{usage:{input_tokens:5000}}}' > "$CASE_HOME/transcript.jsonl"
+  jq -nc --arg sid "$SID" --arg t "$CASE_HOME/transcript.jsonl" '{session_id:$sid, transcript_path:$t}' \
+    | env -u GROK_AGENT -u GROK_HOOK_EVENT TMUX_PANE=%424242 FM_ROOT_OVERRIDE="$primary" FM_HOME="$primary" \
+      FM_STATE_OVERRIDE="$CASE_STATE" FM_CONFIG_OVERRIDE="$CASE_CONFIG" "$GUARD" > "$CASE_HOME/ask.out"
+  jq -e '.decision == "block"' "$CASE_HOME/ask.out" >/dev/null || fail "the guard did not ask: $(cat "$CASE_HOME/ask.out")"
+  assert_refused "a guard-asked /stow" "no /stow the captain typed made a restart offer to this session"
+  pass "a typed /stow's offer lets the request through within the TTL, and a marked or guard-asked one leaves it refused"
 }
 
 test_session_change_stops_the_owner() {

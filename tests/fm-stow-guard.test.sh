@@ -113,63 +113,32 @@ test_context_crossing_blocks_once_until_rearm() {
   pass "a context crossing blocks once, a continuation below two-thirds re-arms, and the next crossing blocks"
 }
 
-test_restart_offer_needs_opt_in_and_a_pane() {
+test_guard_ask_never_offers_a_restart() {
   local rc=0
-  prepare_case restart-offer
+  # A typed /stow's offer is in the state file when the guard asks.
+  prepare_case guard-ask
   printf 'tokens=1000\nrestart=1\n' > "$CASE_CONFIG/stow-guard"
+  printf '{"asked":0,"fired":{},"offer":{"sid":"s1","at":4000}}\n' > "$CASE_STATE/.stow-guard.json"
   write_usage 1200
   payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" \
     TMUX_PANE=%7 HERDR_ENV= || rc=$?
-  [ "$rc" -eq 0 ] || fail "restart offer must exit 0, got $rc"
-  assert_block "restart offer" "bin/fm-helm-refresh.sh request as your last step"
-  jq -e '.offer.sid == "s1" and (.offer.at | type == "number") and .fired.s1 == true' \
-    "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "restart offer was not recorded for the session: $(cat "$CASE_STATE/.stow-guard.json")"
+  [ "$rc" -eq 0 ] || fail "the guard's ask with restart=1 must exit 0, got $rc"
+  assert_block "the guard's ask with restart=1" "Run the /stow skill now (full pass), then continue the turn you were in."
+  ! grep -q 'fm-helm-refresh' "$OUT" || fail "the guard's ask offered a restart: $(cat "$OUT")"
+  jq -e 'has("offer") | not' "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "the guard's ask kept or recorded an offer: $(cat "$CASE_STATE/.stow-guard.json")"
 
-  # A later stop keeps the offer, so the request made after the /stow finds it.
-  rc=0
-  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" \
-    TMUX_PANE=%7 HERDR_ENV= || rc=$?
-  [ "$rc" -eq 0 ] || fail "stop after the offer must exit 0, got $rc"
-  assert_silent "stop after the offer"
-  jq -e '.offer.sid == "s1"' "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "a later stop dropped the offer: $(cat "$CASE_STATE/.stow-guard.json")"
-
-  # A pane in Herdr's default session carries no HERDR_SESSION.
-  prepare_case restart-herdr-default
+  prepare_case guard-ask-herdr
   printf 'tokens=1000\nrestart=1\n' > "$CASE_CONFIG/stow-guard"
   write_usage 1200
   rc=0
   payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" \
     TMUX_PANE= HERDR_ENV=1 HERDR_PANE_ID=w1:p1 HERDR_SESSION= || rc=$?
-  [ "$rc" -eq 0 ] || fail "restart in a default-session Herdr pane must exit 0, got $rc"
-  assert_block "restart in a default-session Herdr pane" "bin/fm-helm-refresh.sh request as your last step"
-  jq -e '.offer.sid == "s1"' "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "a default-session Herdr pane recorded no offer: $(cat "$CASE_STATE/.stow-guard.json")"
-
-  prepare_case restart-no-pane
-  printf 'tokens=1000\nrestart=1\n' > "$CASE_CONFIG/stow-guard"
-  write_usage 1200
-  rc=0
-  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" \
-    TMUX_PANE= HERDR_ENV= || rc=$?
-  [ "$rc" -eq 0 ] || fail "restart without a pane must exit 0, got $rc"
-  assert_block "restart without a pane" "then continue the turn you were in."
+  [ "$rc" -eq 0 ] || fail "the guard's ask in a Herdr pane must exit 0, got $rc"
+  assert_block "the guard's ask in a Herdr pane" "then continue the turn you were in."
   jq -e 'has("offer") | not' "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "an ask outside a pane recorded an offer: $(cat "$CASE_STATE/.stow-guard.json")"
-
-  prepare_case restart-off
-  printf 'tokens=1000\nrestart=2\n' > "$CASE_CONFIG/stow-guard"
-  write_usage 1200
-  rc=0
-  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" \
-    TMUX_PANE=%7 HERDR_ENV= || rc=$?
-  [ "$rc" -eq 0 ] || fail "an unusable restart line must exit 0, got $rc"
-  assert_block "unusable restart line" "then continue the turn you were in."
-  ! grep -q 'fm-helm-refresh' "$OUT" || fail "an unusable restart line offered a restart: $(cat "$OUT")"
-  jq -e 'has("offer") | not' "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "an unusable restart line recorded an offer: $(cat "$CASE_STATE/.stow-guard.json")"
-  pass "restart=1 inside a pane names the refresh request and records the session's offer; otherwise the ask is unchanged"
+    || fail "the guard's ask in a Herdr pane recorded an offer: $(cat "$CASE_STATE/.stow-guard.json")"
+  pass "with restart=1 in a pane, the guard's ask names no refresh request, records no offer, and removes a typed /stow's offer"
 }
 
 PROMPT_SID=11111111-2222-3333-4444-555555555555
@@ -580,7 +549,7 @@ test_tracked_stop_hook_is_synchronous_and_grok_inert() {
 fm_test_run \
   test_absent_config_is_silent \
   test_context_crossing_blocks_once_until_rearm \
-  test_restart_offer_needs_opt_in_and_a_pane \
+  test_guard_ask_never_offers_a_restart \
   test_typed_stow_records_the_offer \
   test_fleet_sent_stow_records_no_offer \
   test_typed_stow_outside_the_primary_session_records_no_offer \

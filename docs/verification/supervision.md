@@ -1046,12 +1046,12 @@ ok - Claude Code 2.1.328: /clear refreshes the primary in place with the same lo
 | Lock and supervision | the lock pid stayed the same, `state/.lock-session` named the new session id, and the parked supervision host and its watcher arm stayed alive across `/clear` |
 | Wakes | a wake queued before the clear reached the new session's first turn |
 | Session name and Remote Control | a `claude --remote-control` session kept its `~/.claude/sessions/<pid>.json` `name` and `bridgeSessionId` across `/clear` while its `sessionId` changed |
-| Stow guard path | with `tokens=60000` and `restart=1`, the guard's ask led the lab primary through `/stow` to `request`; the owner logged `requested`, `cleared` 9 seconds later, then `finished ... doorbell=empty`, and the fresh session started at 46,304 tokens against 81,027 before |
+| Stow to refresh | with a restart offer recorded for the lab session (then made by the guard's ask, which no longer makes one), the lab primary went through `/stow` to `request`; the owner logged `requested`, `cleared` 9 seconds later, then `finished ... doorbell=empty`, and the fresh session started at 46,304 tokens against 81,027 before |
 | Cooldown | with the line below the fresh-start size, a second clear inside the hour was refused: `not requested: this home cleared a session less than 3600s ago` |
 
 The Remote Control entry was read from the local session record, not from the Claude app.
 
-A `/stow` the captain types makes the same offer through `bin/fm-stow-guard.sh prompt`, which matches the UserPromptSubmit payload's `prompt`.
+The offer now comes only from a `/stow` the captain types, through `bin/fm-stow-guard.sh prompt`, which matches the UserPromptSubmit payload's `prompt`.
 That was measured on 2026-11-22 on Linux x86_64 (Omarchy) with Claude Code 2.1.328 (model `haiku`).
 A recording hook in a scratch project saw `"prompt":"/stow"` for `claude -p /stow` and for `/stow` typed into an interactive session driven through a pty.
 The live guard then ran one real `claude -p /stow` under the tracked registration, with the lock and `state/.lock-session` naming that process:

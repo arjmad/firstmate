@@ -10,7 +10,7 @@
 # give-up paths; this guard proves the /clear path end to end.
 #
 # It stands up a disposable tmux lab with bin/fm-live-lab.sh (a real Claude
-# primary on the committed HEAD), records a stow-guard restart offer for the
+# primary on the committed HEAD), records a typed /stow's restart offer for the
 # lab session, asks the lab primary to run `fm-helm-refresh.sh request`, and
 # then checks the owner's log, the lock, the session record and the new
 # transcript. It submits prompts, so it is opt-in: FM_HELM_REFRESH_LIVE=1 (or

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fm-stow-guard.sh - Claude Stop hook that asks a primary session to /stow
 # before context compaction, and with `prompt`, the UserPromptSubmit hook that
-# records the same restart offer for a /stow the captain types.
+# records a fresh-restart offer for a /stow the captain types.
 #
 # Opt in by creating the home-local config/stow-guard file. Absent means off.
 # docs/configuration.md "Stow guard" owns that gate and its tunables. This
@@ -31,26 +31,26 @@
 # newest one is remembered in state/.stow-guard.json, so a later tail that no
 # longer contains it does not rewind the clock.
 #
-# With restart=1, an ask made from inside a tmux or Herdr pane
-# (bin/fm-primary-pane-lib.sh names the transports) also offers a fresh
-# restart: the block message names `bin/fm-helm-refresh.sh request`, to run
-# only when the /stow receipt says the session is reset-safe, and the state
-# file records the offer as offer:{sid, at} for that session. That command
-# owns what happens next; with no request, the session compacts as before.
+# The ask never offers a fresh restart, and it removes any offer the state
+# file holds, so the /stow it asks for saves and keeps the session and
+# `bin/fm-helm-refresh.sh request` refuses it.
 #
-# `fm-stow-guard.sh prompt` records that same offer, and changes nothing else
-# in the state file, when a submitted prompt is /stow itself: after trimming
+# With restart=1, `fm-stow-guard.sh prompt` is the one writer of that offer:
+# it records offer:{sid, at} for the session, and changes nothing else in the
+# state file, when a submitted prompt is /stow itself: after trimming
 # whitespace, exactly /stow or /stow followed by whitespace and arguments
 # (Claude Code 2.1.328 puts a typed /stow in the payload's prompt as typed;
-# docs/verification/supervision.md "Helm refresh by /clear"). It also needs
-# restart=1, a Claude session id, this session holding state/.lock under that
-# same id in state/.lock-session, and the pane the Stop ask needs. Anything
-# that reaches the session as fleet input (a from-firstmate marker, an
-# operational doorbell, a <task-notification> rewake) does not start with
-# /stow, so it records nothing. The limit: a bare /stow typed into the helm's
-# pane counts as the captain's, whoever typed it. This mode prints nothing and
-# always exits 0, because UserPromptSubmit output enters the context and a
-# non-zero exit can block the prompt.
+# docs/verification/supervision.md "Helm refresh by /clear"). It also needs a
+# Claude session id, this session holding state/.lock under that same id in
+# state/.lock-session, and a tmux or Herdr pane bin/fm-primary-pane-lib.sh
+# can name. Anything that reaches the session as fleet input (a from-firstmate
+# marker, an operational doorbell, a <task-notification> rewake) does not
+# start with /stow, so it records nothing. The limit: a bare /stow typed into
+# the helm's pane counts as the captain's, whoever typed it. The offer lets
+# `bin/fm-helm-refresh.sh request`, which owns what happens next, run after a
+# reset-safe receipt; with no request, the session compacts as before. This
+# mode prints nothing and always exits 0, because UserPromptSubmit output
+# enters the context and a non-zero exit can block the prompt.
 #
 # The hook prints one Claude block decision, or nothing. Any unreadable
 # payload, missing jq, scope miss, or state-write failure exits 0 and prints
@@ -287,12 +287,10 @@ elif [ "$saves_readable" -eq 1 ] && [ $((now - last_stow)) -ge "$max_age" ] && [
 fi
 if [ -n "$reason" ]; then
   asked=$now
-  if [ "$restart" -eq 1 ] && [ "$sid" != session ] && fm_primary_pane_transport --default-session; then
-    reason="$reason Run the /stow skill now (full pass). If its receipt says this session is reset-safe, run $FM_ROOT/bin/fm-helm-refresh.sh request as your last step and end the turn: the session then clears to a fresh context instead of compacting. Otherwise continue the turn you were in."
-    offer=$(jq -nc --arg sid "$sid" --argjson at "$now" '{sid:$sid, at:$at}') || exit 0
-  else
-    reason="$reason Run the /stow skill now (full pass), then continue the turn you were in."
-  fi
+  reason="$reason Run the /stow skill now (full pass), then continue the turn you were in."
+  # The /stow this asks for is not one the captain typed, so it must not reuse
+  # an earlier typed /stow's offer.
+  offer=null
 fi
 
 tmp=$(mktemp "$STATE/.stow-guard.json.XXXXXX") || exit 0
