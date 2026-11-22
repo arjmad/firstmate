@@ -308,6 +308,7 @@ log cleared "token=$TOKEN sid=$SID new_sid=$new_sid lock_pid=$LOCK_PID submit=$v
 
 kick_deadline=$((SECONDS + KICK_WAIT))
 kicked=deferred
+message=  # fm_operational_record_write sets it to the doorbell text.
 proofs=0
 while [ "$SECONDS" -lt "$kick_deadline" ]; do
   lock_held || break
