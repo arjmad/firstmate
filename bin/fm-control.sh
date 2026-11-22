@@ -7,6 +7,7 @@
 #        fm-control.sh <task-id> relaunch [--harness <name>] [--model <name>]
 #                                         [--effort <level>] [--advisor <model>]
 #                                         [--account <entry>] [--no-content]
+#                                         [--no-docs]
 #                                         (--note <text> | --note-file <path>)
 #
 # Why this exists, and how it differs from fm-send.sh. bin/fm-send.sh is the
@@ -111,6 +112,7 @@
 #              such as one on another harness, refuses here the same way;
 #              --no-content drops content=on for the replacement and skips
 #              that check, the one way to recover such a task otherwise.
+#              docs=on (bin/fm-spawn.sh --docs) and --no-docs work the same.
 #              Refused on t3code before anything is stopped: a T3 thread
 #              keeps its conversation, so a new turn or a provider change on
 #              it continues the same agent rather than a fresh one
@@ -300,6 +302,7 @@ MODEL_SET=0
 EFFORT_SET=0
 ACCOUNT_SET=0
 NO_CONTENT=0
+NO_DOCS=0
 NOTE=
 NOTE_SET=0
 control_want_value=
@@ -335,6 +338,7 @@ for control_arg in "$@"; do
     --advisor=*) NEW_ADVISOR=${control_arg#--advisor=}; ADVISOR_SET=1 ;;
     --account) control_want_value=account ;;
     --no-content) NO_CONTENT=1 ;;
+    --no-docs) NO_DOCS=1 ;;
     --account=*) NEW_ACCOUNT=${control_arg#--account=}; ACCOUNT_SET=1 ;;
     --note) control_want_value=note ;;
     --note=*) NOTE=${control_arg#--note=}; NOTE_SET=1 ;;
@@ -353,8 +357,8 @@ if [ -n "$control_want_value" ]; then
 fi
 
 if [ "$VERB" != relaunch ]; then
-  [ "$HARNESS_SET" = 0 ] && [ "$MODEL_SET" = 0 ] && [ "$EFFORT_SET" = 0 ] && [ "$ADVISOR_SET" = 0 ] && [ "$ACCOUNT_SET" = 0 ] && [ "$NO_CONTENT" = 0 ] && [ "$NOTE_SET" = 0 ] \
-    || die "--harness, --model, --effort, --advisor, --account, --no-content, and --note apply to 'relaunch' only"
+  [ "$HARNESS_SET" = 0 ] && [ "$MODEL_SET" = 0 ] && [ "$EFFORT_SET" = 0 ] && [ "$ADVISOR_SET" = 0 ] && [ "$ACCOUNT_SET" = 0 ] && [ "$NO_CONTENT" = 0 ] && [ "$NO_DOCS" = 0 ] && [ "$NOTE_SET" = 0 ] \
+    || die "--harness, --model, --effort, --advisor, --account, --no-content, --no-docs, and --note apply to 'relaunch' only"
 fi
 [ "$ACCOUNT_SET" = 0 ] || [ -n "$NEW_ACCOUNT" ] || die "--account requires a non-empty value"
 [ "$HARNESS_SET" = 0 ] || [ -n "$NEW_HARNESS" ] || die "--harness requires a non-empty value"
@@ -1214,6 +1218,12 @@ resolve_relaunch_profile() {
       content_denied=$(fm_worker_denied_mcp_servers_check "$TARGET_HARNESS" 0 "$BACKEND" 2>/dev/null) || return 1
       fm_content_mcp_check "$TARGET_HARNESS" 0 "$BACKEND" "$content_hidden" "$content_denied" >/dev/null || return 1
     fi
+    if [ "$NO_DOCS" = 0 ] && [ "$(fm_meta_get "$META" docs)" = on ]; then
+      local docs_hidden docs_denied
+      docs_hidden=$(fm_exclude_tools_check "$TARGET_HARNESS" 0 "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" 2>/dev/null) || return 1
+      docs_denied=$(fm_worker_denied_mcp_servers_check "$TARGET_HARNESS" 0 "$BACKEND" 2>/dev/null) || return 1
+      fm_docs_mcp_check "$TARGET_HARNESS" 0 "$BACKEND" "$docs_hidden" "$docs_denied" >/dev/null || return 1
+    fi
   fi
 }
 
@@ -1372,6 +1382,7 @@ do_relaunch() {
   [ "$TARGET_ADVISOR" = default ] || spawn_args+=(--advisor "$TARGET_ADVISOR")
   [ -z "$TARGET_ACCOUNT" ] || spawn_args+=(--account "$TARGET_ACCOUNT")
   [ "$NO_CONTENT" = 0 ] || spawn_args+=(--no-content)
+  [ "$NO_DOCS" = 0 ] || spawn_args+=(--no-docs)
   if FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
       "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" >/dev/null; then
     RELAUNCH_META_PUBLISHED=1

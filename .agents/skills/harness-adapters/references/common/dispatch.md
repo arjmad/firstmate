@@ -33,6 +33,7 @@ The generic effort fallback and its precedence are owned by `harness-adapters`: 
 Do not add model-specific versions of that policy.
 Every firstmate-launched worker runs the provider's standard tier; `fm-spawn`'s `--fast on` is a per-spawn captain opt-in that is never inherited and never carried to the next task.
 A ship or scout whose task generates images or video spawns on a Claude profile with `fm-spawn`'s `--content`, which loads the content MCP servers for that worker alone ([`configuration`](../../../../../docs/configuration.md#content-workers) "Content workers").
+A ship or scout whose task reads or writes Google Docs, Sheets, or Contacts spawns with `--docs` the same way ([`configuration`](../../../../../docs/configuration.md#docs-workers) "Docs workers"); Gmail, Drive, and Calendar need no switch.
 
 `secondmate-provisioning` owns secondmate harness pins and inherited local material, while `harness-adapters` owns the harness consequences.
 Dispatch only on a backend that `fm-spawn` validates as spawn-capable; pass an explicit per-spawn `--backend` only under that exact task's own authority, never as later-task precedent (selection contract: [`configuration`](../../../../../docs/configuration.md) "Runtime backend").

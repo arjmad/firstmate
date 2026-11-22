@@ -30,8 +30,9 @@
 #   fm-google-workspace.sh auth <account>            run one attended consent ceremony
 #   fm-google-workspace.sh verify <account>          real read; prints the authenticated account
 #   fm-google-workspace.sh status                    per-account readiness, values never shown
-#   fm-google-workspace.sh claude-config             print the Claude Code MCP entries as JSON
+#   fm-google-workspace.sh claude-config [--docs]    print the Claude Code MCP entries as JSON
 #   fm-google-workspace.sh claude-install            register the servers in Claude Code user scope
+#                                                    and write the --docs opt-in MCP config
 #   fm-google-workspace.sh claude-uninstall          remove those same servers again
 #   fm-google-workspace.sh hermes-config             print the Hermes mcp_servers YAML block
 #   fm-google-workspace.sh revoke <account> [--yes]  delete that account's local credentials
@@ -54,15 +55,25 @@
 # ALLOWED_FILE_DIRS, the directories workspace-mcp may read attachments from.
 # claude_tool_list names, by absolute path, a tab-separated tool list: '#' comment and
 # blank lines, then a header row naming one 'tool' and one 'claude' column among any
-# others, then one row per tool whose claude value is 'on' or 'off'. claude-install and
-# claude-config append every 'off' tool, in file order, to each Claude Code server's
-# argv as --disabled-tools; the argv, hermes-config, and the consent driver never carry
-# it. A missing or malformed list, one with no tool rows, a bad tool name, or a
-# duplicate tool refuses both rather than registering a server with the tools it was
-# meant to remove.
+# others, then one row per tool whose claude value is 'on', 'docs', or 'off'.
+# claude-install and claude-config append every 'off' and 'docs' tool, in file order,
+# to each Claude Code user-scope server's argv as --disabled-tools, and 'claude-config
+# --docs' appends only the 'off' tools; the argv, hermes-config, and the consent driver
+# never carry it. A missing or malformed list, one with no tool rows, a bad tool name,
+# or a duplicate tool refuses both rather than registering a server with the tools it
+# was meant to remove.
 # Blank lines and '#' comments are ignored. There is no built-in table: a missing,
 # unreadable, or malformed file, a duplicate slug or email, or an implausible email
 # refuses every subcommand except help, naming the file and the accepted format.
+#
+# The 'docs' rows are opt-in per session (captain, 2026-11-22: Docs, Sheets, and
+# Contacts). claude-install also writes <root>/claude-docs.mcp.json (0600), what
+# 'claude-config --docs' prints: the same gws-<slug> servers without those
+# subtractions, which a session loads with claude --mcp-config=<that file>
+# (fm-spawn.sh --docs) to replace the user-scope ones. claude-uninstall removes that
+# file too. Every server keeps the full --permissions: in that mode upstream consents
+# to every listed service whatever tools are disabled, so a sign-in from any session
+# keeps one credential that serves every runtime.
 #
 # Paths. FM_GWS_ROOT overrides the root, which otherwise defaults to
 # ${XDG_STATE_HOME:-$HOME/.local/state}/google-workspace-mcp. The root is shared by
@@ -100,11 +111,12 @@ PERMISSIONS="gmail:full drive:full calendar:full docs:full sheets:full contacts:
 GWS_ROOT="${FM_GWS_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/google-workspace-mcp}"
 ACCOUNTS_ROOT="$GWS_ROOT/accounts"
 CLIENT_SECRET_FILE="$GWS_ROOT/client_secret.json"
+CLAUDE_DOCS_CONFIG="$GWS_ROOT/claude-docs.mcp.json"
 CLAUDE_BIN="${FM_GWS_CLAUDE:-claude}"
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-usage() { sed -n '21,70p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '21,81p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed 's/^# \{0,1\}//'; }
 
 CONFIG_FORMAT="accepted format, one setting per line: 'account <slug> <email>', 'bws_project_id <uuid>', 'bws_secret_key <name>', optional 'allowed_file_dirs <path>', optional 'claude_tool_list <path>'"
 
@@ -209,15 +221,17 @@ server_argv() {
   printf '%s\n' $PERMISSIONS
 }
 
-# claude_disabled_tools prints the claude_tool_list's 'off' tools one per line, in file
-# order, and nothing when no list is configured; it fails, naming the list, on anything
-# the header comment above does not accept.
+# claude_disabled_tools [docs] prints the claude_tool_list's 'off' and 'docs' tools, or
+# with docs only its 'off' tools, one per line in file order, and nothing when no list
+# is configured; it fails, naming the list, on anything the header comment above does
+# not accept.
 claude_disabled_tools() {
+  local tier="${1:-}"
   [ -n "$CLAUDE_TOOL_LIST" ] || return 0
   [ -f "$CLAUDE_TOOL_LIST" ] && [ -r "$CLAUDE_TOOL_LIST" ] \
     || die "$CONFIG_FILE: claude_tool_list $CLAUDE_TOOL_LIST is not a readable file"
   local out
-  out=$(awk -F'\t' '
+  out=$(awk -F'\t' -v tier="$tier" '
     { sub(/\r$/, "") }
     /^#/ || /^[[:space:]]*$/ { next }
     !header {
@@ -232,18 +246,18 @@ claude_disabled_tools() {
     { rows++ }
     $t !~ /^[a-z][a-z0-9_]*$/ { print "line " NR ": bad tool name \"" $t "\""; bad = 1; exit }
     seen[$t]++ { print "line " NR ": duplicate tool " $t; bad = 1; exit }
-    $c != "on" && $c != "off" { print "line " NR ": " $t " claude value must be on or off"; bad = 1; exit }
-    $c == "off" { print $t }
+    $c != "on" && $c != "docs" && $c != "off" { print "line " NR ": " $t " claude value must be on, docs, or off"; bad = 1; exit }
+    $c == "off" || ($c == "docs" && tier != "docs") { print $t }
     END { if (!bad && !rows) { print "no tool rows"; bad = 1 } exit bad }' "$CLAUDE_TOOL_LIST") \
     || die "$CLAUDE_TOOL_LIST (claude_tool_list): ${out##*$'\n'}"
   [ -z "$out" ] || printf '%s\n' "$out"
 }
 
-# claude_argv is server_argv plus Claude Code's own subtraction: --disabled-tools and the
-# claude_tool_list's 'off' tools, or nothing when none is off.
+# claude_argv [docs] is server_argv plus Claude Code's own subtraction: --disabled-tools
+# and claude_disabled_tools' tools for that tier, or nothing when none is disabled.
 claude_argv() {
   local off
-  off=$(claude_disabled_tools) || exit 1
+  off=$(claude_disabled_tools "${1:-}") || exit 1
   server_argv
   [ -z "$off" ] || printf '%s\n' --disabled-tools "$off"
 }
@@ -333,6 +347,7 @@ cmd_paths() {
   printf 'accounts root:   %s\n' "$ACCOUNTS_ROOT"
   printf 'client secret:   %s\n' "$CLIENT_SECRET_FILE"
   printf 'permissions:     %s\n' "$PERMISSIONS"
+  printf 'claude --docs:   %s\n' "$CLAUDE_DOCS_CONFIG"
 }
 
 cmd_init() {
@@ -469,8 +484,13 @@ cmd_status() {
 }
 
 cmd_claude_config() {
-  local command argv
-  argv=$(claude_argv) || exit 1
+  local command argv tier=""
+  case "${1:-}" in
+    '') ;;
+    --docs) tier=docs ;;
+    *) die "unknown claude-config option '$1'; expected nothing or --docs" ;;
+  esac
+  argv=$(claude_argv "$tier") || exit 1
   command=$(head -n 1 <<<"$argv")
   argv=$(tail -n +2 <<<"$argv")
   accounts_rows | python3 -c 'import json, sys
@@ -496,8 +516,9 @@ print(json.dumps({"mcpServers": servers}, indent=2))' "$argv" "$ACCOUNTS_ROOT" "
 
 cmd_claude_install() {
   command -v "$CLAUDE_BIN" >/dev/null 2>&1 || die "$CLAUDE_BIN is not on PATH"
-  local slug email argv
+  local slug email argv docs
   argv=$(claude_argv) || exit 1
+  docs=$(cmd_claude_config --docs) || exit 1
   accounts_rows | while IFS=$'\t' read -r slug email; do
     "$CLAUDE_BIN" mcp remove -s user "gws-$slug" >/dev/null 2>&1 || true
     # shellcheck disable=SC2086 # deliberate word splitting: one argv token per line
@@ -507,7 +528,16 @@ cmd_claude_install() {
       -e "ALLOWED_FILE_DIRS=$ALLOWED_FILE_DIRS" \
       -- $argv >/dev/null || die "cannot register gws-$slug with Claude Code"
     printf 'registered: gws-%s -> %s\n' "$slug" "$email"
-  done
+  done || exit 1
+  # Written beside the credentials through a same-directory rename, so a session that
+  # reads it mid-install sees the old file or the new one, never a partial one.
+  ensure_dir_0700 "$GWS_ROOT"
+  if ! { ( umask 077 && printf '%s\n' "$docs" > "$CLAUDE_DOCS_CONFIG.tmp.$$" ) &&
+    mv -f -- "$CLAUDE_DOCS_CONFIG.tmp.$$" "$CLAUDE_DOCS_CONFIG"; }; then
+    rm -f -- "$CLAUDE_DOCS_CONFIG.tmp.$$"
+    die "cannot write $CLAUDE_DOCS_CONFIG"
+  fi
+  printf 'wrote:      %s (--docs opt-in)\n' "$CLAUDE_DOCS_CONFIG"
 }
 
 cmd_claude_uninstall() {
@@ -520,6 +550,10 @@ cmd_claude_uninstall() {
       printf 'absent:  gws-%s\n' "$slug"
     fi
   done
+  if [ -f "$CLAUDE_DOCS_CONFIG" ]; then
+    rm -f -- "$CLAUDE_DOCS_CONFIG" || die "cannot remove $CLAUDE_DOCS_CONFIG"
+    printf 'removed: %s\n' "$CLAUDE_DOCS_CONFIG"
+  fi
 }
 
 cmd_hermes_config() {

@@ -1209,6 +1209,7 @@ The file is the account boundary's enforcement point, so there is no built-in ta
 The optional `allowed_file_dirs <path>` names the directory `workspace-mcp` may read attachments from; `claude-install` and `claude-config` pass it to every `gws-<slug>` server as `ALLOWED_FILE_DIRS`, and it defaults to the home's `data/` directory, so a re-install keeps it instead of dropping a hand-set value.
 The optional `claude_tool_list <path>` names a tab-separated tool list with `tool` and `claude` columns, so one list can serve every agent; `claude-install` and `claude-config` remove its `off` tools from every Claude Code `gws-<slug>` server with workspace-mcp's `--disabled-tools`, while `argv`, `hermes-config`, and the consent driver are unchanged, and an unreadable or malformed list refuses both rather than registering servers with tools it meant to remove.
 Without it, no tool is disabled.
+A third `claude` value, `docs`, marks a tool that only a [Docs worker](#docs-workers) loads: the user-scope servers disable it beside the `off` tools, and the opt-in file `claude-install` writes, which `claude-config --docs` prints and `claude-uninstall` removes, disables only the `off` tools; `claude-config` alone prints the user-scope servers.
 The two Bitwarden settings are required only by `client-secret push-bws` and `client-secret pull-bws`, which refuse without them.
 Adding a row grants agents a mailbox, so it is a captain decision rather than a maintenance edit.
 The file is per home and is not inherited by secondmate homes.
@@ -1909,6 +1910,15 @@ The spawn, and a relaunch before the old agent stops, refuses when the launch co
 Hiding a content server's other tools, such as one generation tool, still works.
 `fm-control.sh <id> relaunch --no-content` drops `content=on` and skips these checks, so a task they would refuse can still get a replacement.
 [`bin/fm-exclude-tools-lib.sh`](../bin/fm-exclude-tools-lib.sh) implements the checks, and the [`fm-spawn.sh`](../bin/fm-spawn.sh) header owns the flag.
+
+## Docs workers
+
+The Claude Code `gws-*` servers that `bin/fm-google-workspace.sh claude-install` registers at user scope disable the `claude_tool_list` rows marked `docs`, the Docs, Sheets, and Contacts tools, which load only for the workers that need them ([Google Workspace accounts](#google-workspace-accounts-configgoogle-workspace)).
+With no `claude_tool_list`, or one without `docs` rows, every session gets those tools, so run `claude-install` (the wizard's last stage) after the list carries them.
+`claude-install` also writes `claude-docs.mcp.json` in its root, the same `gws-<slug>` servers without that subtraction; a server from `--mcp-config` replaces the user-scope server of the same name, so the tool names do not change.
+`fm-spawn.sh --docs` loads that file exactly as `--content` loads its own, with the same refusals, record (`docs=on`), and relaunch recovery (`fm-control.sh <id> relaunch --no-docs`), and the two switches combine.
+The sign-in tool it keeps callable is `mcp__<server>__start_google_auth`.
+`FM_DOCS_MCP_CONFIG_FILE` points it at another path, as the test suite does.
 
 ## Worker compaction window (config/crew-compact-window)
 

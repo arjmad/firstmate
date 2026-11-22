@@ -204,9 +204,9 @@ test_the_two_runtimes_are_configured_from_one_invocation() {
   local root argv claude hermes
   root=$(new_root oneowner)
   argv=$(gws "$root" argv | tail -n +2 | tr '\n' ' ')
-  claude=$(gws "$root" claude-config | python3 -c 'import json, sys; print(" ".join(json.load(sys.stdin)["mcpServers"]["gws-alpha"]["args"]) + " ")')
+  claude=$(gws "$root" claude-config --docs | python3 -c 'import json, sys; print(" ".join(json.load(sys.stdin)["mcpServers"]["gws-alpha"]["args"]) + " ")')
   hermes=$(gws "$root" hermes-config)
-  [ "$argv" = "$claude" ] || fail "Claude Code args drifted from the tool's own invocation: '$claude' vs '$argv'"
+  [ "$argv" = "$claude" ] || fail "Claude Code --docs args drifted from the tool's own invocation: '$claude' vs '$argv'"
   assert_contains "$hermes" "gmail:full" "the Hermes block carries the same permissions"
   assert_contains "$hermes" "trust: untrusted" "a mailbox server is untrusted input in Hermes"
   pass "both runtimes are configured from the one invocation the tool owns"
@@ -304,6 +304,48 @@ test_registering_with_claude_code_keeps_the_accounts_apart() {
   pass "registering with Claude Code keeps the accounts apart"
 }
 
+test_claude_code_loads_docs_sheets_and_contacts_only_on_opt_in() {
+  local root log list installed docs out code permissions
+  root=$(new_root docstier)
+  log="$TMP_ROOT/docstier.log"
+  list="$TMP_ROOT/docstier-tools.tsv"
+  printf '%s\n' "$(printf 'tool\tclaude\tcade')" \
+    "$(printf 'search_gmail_messages\ton\ton')" \
+    "$(printf 'manage_out_of_office\toff\tsend')" \
+    "$(printf 'get_doc_content\tdocs\ton')" \
+    "$(printf 'read_sheet_values\tdocs\ton')" > "$list"
+  write_config "account alpha $PERSONAL_ACCOUNT
+account ops   $WORKSPACE_ACCOUNT
+account bravo $THIRD_ACCOUNT
+claude_tool_list $list"
+  permissions="--permissions gmail:full drive:full calendar:full docs:full sheets:full contacts:full"
+  : > "$log"
+  CLAUDE_STUB_LOG="$log" gws "$root" claude-install >/dev/null || fail "claude-install failed"
+  installed=$(grep "mcp add -s user gws-alpha" "$log")
+  assert_contains "$installed" "$permissions --disabled-tools manage_out_of_office get_doc_content read_sheet_values" \
+    "the user-scope server keeps every consented service and disables the off and docs tools, in file order"
+  [ -f "$root/claude-docs.mcp.json" ] || fail "claude-install did not write the --docs opt-in config"
+  expect_code 600 "$(python3 -c 'import os, stat, sys; print(format(stat.S_IMODE(os.stat(sys.argv[1]).st_mode), "o"))' "$root/claude-docs.mcp.json")" "the --docs config is private to the user"
+  docs=$(cat "$root/claude-docs.mcp.json")
+  assert_equals "$(gws "$root" claude-config --docs)" "$docs" "the --docs file is what claude-config --docs prints"
+  out=$(python3 -c 'import json, sys
+d = json.load(sys.stdin)["mcpServers"]
+print(" ".join(sorted(d)))
+print(" ".join(d["gws-ops"]["args"]))
+print(d["gws-ops"]["env"]["WORKSPACE_MCP_CREDENTIALS_DIR"])' <<<"$docs")
+  assert_contains "$out" "gws-alpha gws-bravo gws-ops" "the --docs file names the same servers as user scope, so they replace them"
+  assert_contains "$out" "${permissions#--permissions } --disabled-tools manage_out_of_office"$'\n' "the --docs servers disable only the off tools"
+  assert_contains "$out" "$root/accounts/ops" "each --docs server keeps its own credentials directory"
+  assert_contains "$(gws "$root" claude-config | tr -d '\n ')" '"manage_out_of_office","get_doc_content","read_sheet_values"]' "claude-config prints the user-scope servers without the docs tools"
+  out=$(gws "$root" claude-config --sheets 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "an unknown claude-config option refuses"
+  out=$(CLAUDE_STUB_LOG="$log" gws "$root" claude-uninstall)
+  assert_contains "$out" "removed: $root/claude-docs.mcp.json" "claude-uninstall reports the --docs config it removed"
+  [ ! -e "$root/claude-docs.mcp.json" ] || fail "claude-uninstall left the --docs opt-in config behind"
+  write_config
+  pass "Claude Code loads Docs, Sheets, and Contacts only on opt-in"
+}
+
 test_attachment_directory_survives_a_reinstall() {
   local root log
   root=$(new_root allowed)
@@ -346,11 +388,12 @@ test_the_claude_tool_list_disables_its_off_tools_on_claude_code_only() {
 account ops   $WORKSPACE_ACCOUNT
 claude_tool_list $list"
   argv=$(gws "$root" argv | tail -n +2 | tr '\n' ' ')
-  claude=$(gws "$root" claude-config | python3 -c 'import json, sys; print(" ".join(json.load(sys.stdin)["mcpServers"]["gws-ops"]["args"]) + " ")')
-  assert_equals "${argv}--disabled-tools manage_out_of_office manage_focus_time " "$claude" "Claude Code args are the invocation plus the off tools, in file order"
+  claude=$(gws "$root" claude-config --docs | python3 -c 'import json, sys; print(" ".join(json.load(sys.stdin)["mcpServers"]["gws-ops"]["args"]) + " ")')
+  assert_equals "${argv}--disabled-tools manage_out_of_office manage_focus_time " "$claude" "Claude Code --docs args are the invocation plus the off tools, in file order"
   : > "$log"
   CLAUDE_STUB_LOG="$log" gws "$root" claude-install >/dev/null || fail "claude-install failed with a tool list"
   expect_code 2 "$(grep -cF -- "contacts:full --disabled-tools manage_out_of_office manage_focus_time" "$log")" "claude-install registers every server with the off tools"
+  assert_contains "$(tr -d '\n ' < "$root/claude-docs.mcp.json")" '"contacts:full","--disabled-tools","manage_out_of_office","manage_focus_time"' "the --docs file carries the same off tools"
   assert_no_grep "search_gmail_messages" "$log" "an on tool is never disabled"
   assert_not_contains "$(gws "$root" argv)" "--disabled-tools" "the shared invocation carries no Claude Code subtraction"
   hermes=$(gws "$root" hermes-config)
@@ -361,8 +404,8 @@ claude_tool_list $list"
 
   printf 'tool\tclaude\nget_events\tmaybe\n' > "$list"
   out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
-  expect_code 1 "$code" "a claude value other than on or off refuses claude-config"
-  assert_contains "$out" "claude value must be on or off" "the refusal names the bad value"
+  expect_code 1 "$code" "a claude value other than on, docs, or off refuses claude-config"
+  assert_contains "$out" "claude value must be on, docs, or off" "the refusal names the bad value"
   printf 'tool\tclaude\nget_events\toff\nget_events\ton\n' > "$list"
   out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
   expect_code 1 "$code" "a duplicate tool refuses claude-config"
@@ -518,6 +561,7 @@ test_reauthorizing_never_clears_another_accounts_credential
 test_revoke_without_confirmation_deletes_nothing
 test_revoke_deletes_only_that_accounts_own_credentials
 test_registering_with_claude_code_keeps_the_accounts_apart
+test_claude_code_loads_docs_sheets_and_contacts_only_on_opt_in
 test_attachment_directory_survives_a_reinstall
 test_the_claude_tool_list_disables_its_off_tools_on_claude_code_only
 test_only_a_desktop_oauth_client_is_installed_and_kept_private
