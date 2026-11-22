@@ -296,7 +296,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-claude-store-lock.mjs` | Own Claude Code's store lock for every firstmate write to its per-user `.claude.json`; imported, with no command-line entry point |
 | `fm-commandcode-mod.ts` | Command Code worker mod that writes one task incarnation's semantic busy state through `fm-busy-event.sh` |
 | `fm-cortex-plugin.sh` | Write a private Cortex Code worker plugin carrying firstmate's lifecycle hooks |
-| `fm-exclude-tools-lib.sh` | Parse and check the ship and scout worker launch inputs: excluded tools, the fleet-rendered worker-denied MCP server list, and the Claude compaction window |
+| `fm-exclude-tools-lib.sh` | Parse and check the ship and scout worker launch inputs: excluded tools, the fleet-rendered worker-denied MCP server list, the Claude compaction window, and the `--content` and `--docs` MCP configs |
 | `fm-extension-deadline.mjs` | Host-owned extension deadlines that survive a host suspension with one bounded grace |
 | `fm-herdr-groups.sh` | Opt-in Herdr project groups: display-only metadata tags and a sorted agents view for this home's Herdr tasks |
 | `fm-hermes-hook.sh` | Hermes native shell-hook receiver that turns TUI turn events into busy and idle evidence |

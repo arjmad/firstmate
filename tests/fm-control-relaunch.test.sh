@@ -1533,6 +1533,33 @@ test_content_task_keeps_its_mcp_config_across_relaunch() {
   pass "fm-control relaunch: a content task keeps --mcp-config and content=on, refuses another harness or a denied sign-in tool first, and --no-content recovers it"
 }
 
+# A docs task (bin/fm-spawn.sh --docs) follows the same relaunch rules.
+test_docs_task_keeps_its_mcp_config_across_relaunch() {
+  local dir out rc id=rl-docs meta config
+  dir=$(new_case docs "$id")
+  add_ship_task "$dir" "$id" claude
+  meta="$dir/home/state/$id.meta"
+  printf 'docs=on\n' >> "$meta"
+  config="$(cd "$ROOT/tests/fixtures" && pwd -P)/docs.mcp.json"
+  out=$(run_control "$dir" "$id" relaunch --note "keep docs"); rc=$?
+  expect_code 0 "$rc" "a Claude relaunch of a docs task should succeed"$'\n'"$out"
+  assert_contains "$(cat "$dir/fake/literal")" "--mcp-config '$config' --append-system-prompt " \
+    "the relaunched docs worker must load the docs MCP config"
+  [ "$(meta_field "$dir" "$id" docs)" = on ] \
+    || fail "the relaunch must keep docs=on, got '$(meta_field "$dir" "$id" docs)'"
+  out=$(run_control "$dir" "$id" relaunch --harness codex --note "switch runtime"); rc=$?
+  expect_code 1 "$rc" "a docs task relaunch onto codex must refuse"
+  assert_contains "$out" "--docs loads the docs MCP servers through Claude Code's --mcp-config, so it needs --harness claude" \
+    "the harness refusal must say why"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "a refused docs relaunch stopped the running agent"
+  : > "$dir/fake/literal"
+  out=$(run_control "$dir" "$id" relaunch --harness codex --no-docs --note "recover off docs"); rc=$?
+  expect_code 0 "$rc" "a --no-docs relaunch onto codex should succeed"$'\n'"$out"
+  assert_not_contains "$(cat "$dir/fake/literal")" "--mcp-config" "a --no-docs replacement must not load the docs MCP config"
+  [ -z "$(meta_field "$dir" "$id" docs)" ] || fail "--no-docs must drop docs=on from the record"
+  pass "fm-control relaunch: a docs task keeps --mcp-config and docs=on, refuses another harness first, and --no-docs recovers it"
+}
+
 test_secondmate_relaunch_refuses_an_advisor() {
   local dir home out rc
   dir=$(new_case smadvisor sma1)
@@ -3859,6 +3886,7 @@ test_claude_denied_mcp_servers_follow_the_relaunch
 test_claude_compact_window_follows_the_relaunch
 test_claude_advisor_follows_the_relaunch
 test_content_task_keeps_its_mcp_config_across_relaunch
+test_docs_task_keeps_its_mcp_config_across_relaunch
 test_secondmate_relaunch_refuses_an_advisor
 test_explicit_model_wins_over_the_recorded_one
 test_relaunch_onto_an_unverified_harness_is_refused

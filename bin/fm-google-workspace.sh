@@ -30,8 +30,9 @@
 #   fm-google-workspace.sh auth <account>            run one attended consent ceremony
 #   fm-google-workspace.sh verify <account>          real read; prints the authenticated account
 #   fm-google-workspace.sh status                    per-account readiness, values never shown
-#   fm-google-workspace.sh claude-config             print the Claude Code MCP entries as JSON
+#   fm-google-workspace.sh claude-config [--docs]    print the Claude Code MCP entries as JSON
 #   fm-google-workspace.sh claude-install            register the servers in Claude Code user scope
+#                                                    and write the --docs opt-in MCP config
 #   fm-google-workspace.sh claude-uninstall          remove those same servers again
 #   fm-google-workspace.sh hermes-config             print the Hermes mcp_servers YAML block
 #   fm-google-workspace.sh revoke <account> [--yes]  delete that account's local credentials
@@ -63,6 +64,14 @@
 # Blank lines and '#' comments are ignored. There is no built-in table: a missing,
 # unreadable, or malformed file, a duplicate slug or email, or an implausible email
 # refuses every subcommand except help, naming the file and the accepted format.
+#
+# Claude Code's user-scope servers load only Gmail, Drive, and Calendar (captain,
+# 2026-11-22); Docs, Sheets, and Contacts are opt-in per session. claude-install also
+# writes <root>/claude-docs.mcp.json (0600), what 'claude-config --docs' prints: the
+# same gws-<slug> servers at every service of the consent, which a session loads with
+# claude --mcp-config=<that file> (fm-spawn.sh --docs) to replace the user-scope ones.
+# claude-uninstall removes that file too. The argv, hermes-config, and the consent
+# driver keep every service, so one consent still serves every runtime.
 #
 # Paths. FM_GWS_ROOT overrides the root, which otherwise defaults to
 # ${XDG_STATE_HOME:-$HOME/.local/state}/google-workspace-mcp. The root is shared by
@@ -96,15 +105,19 @@ CLAUDE_TOOL_LIST=""
 SERVER_BIN="${FM_GWS_SERVER-$(command -v workspace-mcp 2>/dev/null || true)}"
 
 PERMISSIONS="gmail:full drive:full calendar:full docs:full sheets:full contacts:full"
+# The services a Claude Code session loads by default, a subset of PERMISSIONS; the
+# --docs opt-in config carries all of PERMISSIONS.
+CLAUDE_DEFAULT_PERMISSIONS="gmail:full drive:full calendar:full"
 
 GWS_ROOT="${FM_GWS_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/google-workspace-mcp}"
 ACCOUNTS_ROOT="$GWS_ROOT/accounts"
 CLIENT_SECRET_FILE="$GWS_ROOT/client_secret.json"
+CLAUDE_DOCS_CONFIG="$GWS_ROOT/claude-docs.mcp.json"
 CLAUDE_BIN="${FM_GWS_CLAUDE:-claude}"
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-usage() { sed -n '21,70p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '21,79p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed 's/^# \{0,1\}//'; }
 
 CONFIG_FORMAT="accepted format, one setting per line: 'account <slug> <email>', 'bws_project_id <uuid>', 'bws_secret_key <name>', optional 'allowed_file_dirs <path>', optional 'claude_tool_list <path>'"
 
@@ -202,11 +215,13 @@ creds_dir() { printf '%s/%s\n' "$ACCOUNTS_ROOT" "$(account_slug "$1")"; }
 # server_argv prints the workspace-mcp invocation one token per line, the command
 # first. Every consumer - the Claude Code entry, the Hermes block, and the consent
 # ceremony - reads it from here, so the three can never drift from each other.
+# [<permissions>] narrows the services, for Claude Code's default servers only.
 server_argv() {
+  local permissions="${1:-$PERMISSIONS}"
   if [ -n "$SERVER_BIN" ]; then printf '%s\n' "$SERVER_BIN"; else printf '%s\n' uvx workspace-mcp; fi
   printf '%s\n' --single-user --permissions
   # shellcheck disable=SC2086 # deliberate word splitting: one permission token per line
-  printf '%s\n' $PERMISSIONS
+  printf '%s\n' $permissions
 }
 
 # claude_disabled_tools prints the claude_tool_list's 'off' tools one per line, in file
@@ -239,12 +254,14 @@ claude_disabled_tools() {
   [ -z "$out" ] || printf '%s\n' "$out"
 }
 
-# claude_argv is server_argv plus Claude Code's own subtraction: --disabled-tools and the
+# claude_argv [docs] is server_argv at the default Claude Code services, or at every
+# service for docs, plus Claude Code's own subtraction: --disabled-tools and the
 # claude_tool_list's 'off' tools, or nothing when none is off.
 claude_argv() {
-  local off
+  local off permissions="$CLAUDE_DEFAULT_PERMISSIONS"
+  [ "${1:-}" != docs ] || permissions="$PERMISSIONS"
   off=$(claude_disabled_tools) || exit 1
-  server_argv
+  server_argv "$permissions"
   [ -z "$off" ] || printf '%s\n' --disabled-tools "$off"
 }
 
@@ -333,6 +350,8 @@ cmd_paths() {
   printf 'accounts root:   %s\n' "$ACCOUNTS_ROOT"
   printf 'client secret:   %s\n' "$CLIENT_SECRET_FILE"
   printf 'permissions:     %s\n' "$PERMISSIONS"
+  printf 'claude default:  %s\n' "$CLAUDE_DEFAULT_PERMISSIONS"
+  printf 'claude --docs:   %s\n' "$CLAUDE_DOCS_CONFIG"
 }
 
 cmd_init() {
@@ -469,8 +488,13 @@ cmd_status() {
 }
 
 cmd_claude_config() {
-  local command argv
-  argv=$(claude_argv) || exit 1
+  local command argv tier=""
+  case "${1:-}" in
+    '') ;;
+    --docs) tier=docs ;;
+    *) die "unknown claude-config option '$1'; expected nothing or --docs" ;;
+  esac
+  argv=$(claude_argv "$tier") || exit 1
   command=$(head -n 1 <<<"$argv")
   argv=$(tail -n +2 <<<"$argv")
   accounts_rows | python3 -c 'import json, sys
@@ -496,8 +520,9 @@ print(json.dumps({"mcpServers": servers}, indent=2))' "$argv" "$ACCOUNTS_ROOT" "
 
 cmd_claude_install() {
   command -v "$CLAUDE_BIN" >/dev/null 2>&1 || die "$CLAUDE_BIN is not on PATH"
-  local slug email argv
+  local slug email argv docs
   argv=$(claude_argv) || exit 1
+  docs=$(cmd_claude_config --docs) || exit 1
   accounts_rows | while IFS=$'\t' read -r slug email; do
     "$CLAUDE_BIN" mcp remove -s user "gws-$slug" >/dev/null 2>&1 || true
     # shellcheck disable=SC2086 # deliberate word splitting: one argv token per line
@@ -507,7 +532,16 @@ cmd_claude_install() {
       -e "ALLOWED_FILE_DIRS=$ALLOWED_FILE_DIRS" \
       -- $argv >/dev/null || die "cannot register gws-$slug with Claude Code"
     printf 'registered: gws-%s -> %s\n' "$slug" "$email"
-  done
+  done || exit 1
+  # Written beside the credentials through a same-directory rename, so a session that
+  # reads it mid-install sees the old file or the new one, never a partial one.
+  ensure_dir_0700 "$GWS_ROOT"
+  if ! { ( umask 077 && printf '%s\n' "$docs" > "$CLAUDE_DOCS_CONFIG.tmp.$$" ) &&
+    mv -f -- "$CLAUDE_DOCS_CONFIG.tmp.$$" "$CLAUDE_DOCS_CONFIG"; }; then
+    rm -f -- "$CLAUDE_DOCS_CONFIG.tmp.$$"
+    die "cannot write $CLAUDE_DOCS_CONFIG"
+  fi
+  printf 'wrote:      %s (--docs opt-in)\n' "$CLAUDE_DOCS_CONFIG"
 }
 
 cmd_claude_uninstall() {
@@ -520,6 +554,10 @@ cmd_claude_uninstall() {
       printf 'absent:  gws-%s\n' "$slug"
     fi
   done
+  if [ -f "$CLAUDE_DOCS_CONFIG" ]; then
+    rm -f -- "$CLAUDE_DOCS_CONFIG" || die "cannot remove $CLAUDE_DOCS_CONFIG"
+    printf 'removed: %s\n' "$CLAUDE_DOCS_CONFIG"
+  fi
 }
 
 cmd_hermes_config() {

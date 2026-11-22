@@ -166,6 +166,9 @@ export FM_WORKER_DENIED_MCP_TOOLS_FILE="$ROOT/tests/fixtures/worker-denied-mcp-t
 # points at a closed local port, so no test reads the host's config or reaches
 # a real content service.
 export FM_CONTENT_MCP_CONFIG_FILE="$ROOT/tests/fixtures/content.mcp.json"
+# And a --docs worker's to a fixture whose one gws-* server runs /usr/bin/false,
+# so no test reads the host's Google Workspace config or credentials.
+export FM_DOCS_MCP_CONFIG_FILE="$ROOT/tests/fixtures/docs.mcp.json"
 
 # --- reporters --------------------------------------------------------------
 

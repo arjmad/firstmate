@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "gws-fixture": {
+      "type": "stdio",
+      "command": "/usr/bin/false",
+      "args": [
+        "--single-user",
+        "--permissions",
+        "gmail:full",
+        "drive:full",
+        "calendar:full",
+        "docs:full",
+        "sheets:full",
+        "contacts:full"
+      ]
+    }
+  }
+}

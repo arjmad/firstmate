@@ -3310,6 +3310,84 @@ test_claude_content_refuses_launches_that_cannot_load_it() {
   pass "--content refuses another harness, a raw command, a secondmate, a relaunch flag, an unusable config, and any denial of a content server or its sign-in tools"
 }
 
+# --docs: the same switch for the Docs, Sheets, and Contacts gws-* servers. The
+# shared check is pinned by the --content cases above; these pin what differs:
+# its own config and record, its start_google_auth sign-in tool, and that it
+# combines with --content.
+docs_fixture_path() {
+  printf '%s/docs.mcp.json' "$(cd "$ROOT/tests/fixtures" && pwd -P)"
+}
+
+test_claude_docs_workers_load_the_docs_mcp_config() {
+  local rec id out status args configs
+  id=claude-docs-ship-z44
+  rec=$(make_spawn_case claude-docs-ship claude "$id")
+  read_case_record "$rec"
+  write_denied_mcp_tools_file 'mcp__gws-*__send_gmail_message'
+  out=$(FM_WORKER_DENIED_MCP_TOOLS_FILE="$CASE_DIR/fleet/worker-denied-mcp-tools" \
+    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --docs 2>&1)
+  status=$?
+  expect_code 0 "$status" "claude ship spawn with --docs should succeed"$'\n'"$out"
+  args=$(claude_launch_args "$WT_DIR")
+  printf '%s\n' "$args" | grep -A1 -x -- --mcp-config | grep -qxF "$(docs_fixture_path)" \
+    || fail "the launch must pass --mcp-config $(docs_fixture_path), got:"$'\n'"$args"
+  printf '%s\n' "$args" | grep -qx -- --strict-mcp-config \
+    && fail "a docs launch must keep the worker's other MCP servers"
+  assert_grep docs=on "$HOME_DIR/state/$id.meta" "the record must carry docs=on"
+  assert_no_grep content= "$HOME_DIR/state/$id.meta" "a --docs launch records no content switch"
+  assert_contains "$out" " docs=on" "the spawned line must name the docs switch"
+  id=claude-docs-both-z44
+  rec=$(make_spawn_case claude-docs-both claude "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout --content --docs 2>&1)
+  expect_code 0 "$?" "claude scout spawn with --content --docs should succeed"$'\n'"$out"
+  args=$(claude_launch_args "$WT_DIR")
+  configs=$(printf '%s\n' "$args" | grep -A1 -x -- --mcp-config | grep -v -x -- --mcp-config | grep -v -x -- --)
+  assert_equals "$(content_fixture_path)"$'\n'"$(docs_fixture_path)" "$configs" "a --content --docs launch passes both configs, content first"
+  assert_grep content=on "$HOME_DIR/state/$id.meta" "the combined record must carry content=on"
+  assert_grep docs=on "$HOME_DIR/state/$id.meta" "the combined record must carry docs=on"
+  pass "claude docs workers load the docs MCP config, record docs=on, and combine with --content"
+}
+
+test_claude_docs_refuses_launches_that_cannot_load_it() {
+  local setup rec id out status harness want
+  local -a args overrides
+  for setup in codex secondmate relaunch fresh-no-docs missing signin-denied; do
+    id="claude-docs-refuse-$setup-z45"
+    harness=claude
+    [ "$setup" != codex ] || harness=codex
+    rec=$(make_spawn_case "claude-docs-refuse-$setup" "$harness" "$id")
+    read_case_record "$rec"
+    args=("$id" "$PROJ_DIR" --mode no-mistakes --yolo off --docs)
+    overrides=()
+    mkdir -p "$CASE_DIR/fleet"
+    case "$setup" in
+      codex) want="--docs loads the docs MCP servers through Claude Code's --mcp-config, so it needs --harness claude" ;;
+      secondmate)
+        make_seeded_secondmate_home "$CASE_DIR/secondmate-home" "$id"
+        args=("$id" "$CASE_DIR/secondmate-home" --secondmate --docs)
+        want="never a secondmate"
+        ;;
+      relaunch) args=("$id" --relaunch --docs); want="--docs is not a relaunch axis" ;;
+      fresh-no-docs) args=("$id" "$PROJ_DIR" --mode no-mistakes --yolo off --no-docs); want="--no-docs applies to --relaunch only" ;;
+      missing) overrides=("FM_DOCS_MCP_CONFIG_FILE=$CASE_DIR/fleet/absent.json"); want="run bin/fm-google-workspace.sh claude-install or set FM_DOCS_MCP_CONFIG_FILE" ;;
+      signin-denied)
+        write_denied_mcp_tools_file 'mcp__gws-*__start_google_auth'
+        overrides=("FM_WORKER_DENIED_MCP_TOOLS_FILE=$CASE_DIR/fleet/worker-denied-mcp-tools")
+        want="--docs needs mcp__gws-fixture__start_google_auth callable for the docs sign-in"
+        ;;
+    esac
+    out=$(for kv in ${overrides[@]+"${overrides[@]}"}; do export "${kv?}"; done
+      run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "${args[@]}" 2>&1)
+    status=$?
+    [ "$status" -ne 0 ] || fail "the $setup docs launch must refuse"$'\n'"$out"
+    assert_contains "$out" "$want" "the $setup refusal must say why"
+    [ ! -s "$LAUNCH_LOG" ] || fail "claude launched despite the $setup docs refusal"
+    [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "the $setup docs refusal still wrote a task record"
+  done
+  pass "--docs refuses another harness, a secondmate, a relaunch flag, a missing config, and a denied start_google_auth"
+}
+
 test_claude_long_launch_is_delivered_intact() {
   local rec id out status launch expected
   id=profile-claude-long-launch-z24
@@ -4155,6 +4233,8 @@ test_claude_advisor_fills_from_config_when_dispatch_is_not_clear
 test_batch_forwards_an_explicit_default_advisor
 test_claude_content_workers_load_the_content_mcp_config
 test_claude_content_refuses_launches_that_cannot_load_it
+test_claude_docs_workers_load_the_docs_mcp_config
+test_claude_docs_refuses_launches_that_cannot_load_it
 test_claude_long_launch_is_delivered_intact
 test_claude_crewmate_launch_carries_the_attribution_policy
 test_keep_ai_trailers_omits_attribution_settings_and_strip_hooks
