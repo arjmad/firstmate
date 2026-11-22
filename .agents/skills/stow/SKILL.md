@@ -287,6 +287,7 @@ State what reset-safe means in the same breath as the claim: nothing this sessio
 It is never a claim that the home's durable records are correct, because this pass checks no record the session did not name.
 Do not hide an over-budget result behind a reset-safe claim.
 In a primary home the receipt is written after the cascade below, not instead of it.
+When the stow guard's ask named `bin/fm-helm-refresh.sh request`, run it only after a receipt that says reset-safe; otherwise leave it unrun.
 
 ## Automatic cascade to secondmates
 

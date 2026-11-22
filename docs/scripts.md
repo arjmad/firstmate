@@ -298,6 +298,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-cortex-plugin.sh` | Write a private Cortex Code worker plugin carrying firstmate's lifecycle hooks |
 | `fm-exclude-tools-lib.sh` | Parse and check the ship and scout worker launch inputs: excluded tools, the fleet-rendered worker-denied MCP server list, and the Claude compaction window |
 | `fm-extension-deadline.mjs` | Host-owned extension deadlines that survive a host suspension with one bounded grace |
+| `fm-helm-refresh.sh` | After a reset-safe `/stow` the stow guard asked for, clear the Claude primary to a fresh context with `/clear` instead of compacting |
 | `fm-herdr-groups.sh` | Opt-in Herdr project groups: display-only metadata tags and a sorted agents view for this home's Herdr tasks |
 | `fm-hermes-hook.sh` | Hermes native shell-hook receiver that turns TUI turn events into busy and idle evidence |
 | `fm-hermes-lib.sh` | Hermes TUI worker support: the selected profile home and gateway checks |
@@ -309,6 +310,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-omp-process-lib.sh` | omp (Oh My Pi) process identity shared by harness detection and the session-lock ancestry walk |
 | `fm-omp-profile-lib.sh` | Own the opt-in per-secondmate omp profile pin: which launch reads it, its parsing, and its refusals |
 | `fm-polytoken-lib.sh` | The polytoken (Polytoken CLI) adapter facts shared by spawn, control, and its other consumers |
+| `fm-primary-pane-lib.sh` | Shared proof that a Claude primary's own tmux or Herdr pane is idle with an empty composer, for helpers that type into it |
 | `fm-project-capacity-lib.sh` | How many workers a project admits at once on this machine, and whether a fresh spawn still fits |
 | `fm-record-export.py` | Descriptor-safe filesystem engine for `fm-record-export.sh` |
 | `fm-record-export.sh` | Export a fixed, versioned set of private fleet records |
