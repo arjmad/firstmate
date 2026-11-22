@@ -735,6 +735,77 @@ test_status_with_a_table_fails_closed() {
   pass "fm-code-review status fails closed when a tabled repository's tier cannot be read"
 }
 
+# The fleet's classifier is a `#!/usr/bin/env python3` script that imports
+# tomllib, and a host can put a python3 without it (3.9) first on PATH while a
+# newer one sits later. The case puts a python3 that cannot import tomllib, and
+# python3.11 to python3.14 that run nothing, ahead of the real interpreter, so
+# the status read must find the later python3 itself; with no usable
+# interpreter left on PATH it must fail closed and say why.
+test_status_with_a_table_finds_a_python_with_tomllib() {
+  local dir real name py_dir no_py path_dir tool
+  local -a path_dirs
+  real=$(command -v python3 2>/dev/null)
+  if [ -z "$real" ] || ! "$real" -c 'import tomllib' >/dev/null 2>&1; then
+    echo "skip: no python3 with tomllib on PATH to stand behind the old one"
+    return 0
+  fi
+  dir=$(make_case table-old-python hosts/thor/homebrew.nix)
+  gate_mode "$dir" off
+  write_table "$dir"
+  make_remote "$dir" hosts/thor/homebrew.nix
+  printf 'tinker: every change is tinker for thor: hosts/thor/homebrew.nix\n' > "$dir/tier"
+  cat > "$dir/fakebin/risk-tier" <<'PYSRC'
+#!/usr/bin/env python3
+import os
+import sys
+import tomllib
+with open(os.path.join(sys.argv[2], "risk-tiers.toml"), "rb") as stream:
+    tomllib.load(stream)
+with open(os.path.join(os.environ["FM_TEST_DIR"], "tier")) as stream:
+    sys.stdout.write(stream.read())
+PYSRC
+  chmod +x "$dir/fakebin/risk-tier"
+  py_dir="$dir/old-python"
+  mkdir -p "$py_dir"
+  cat > "$py_dir/python3" <<'SH'
+#!/usr/bin/env bash
+echo "old python: no such module" >&2
+exit 1
+SH
+  for name in python3.11 python3.12 python3.13 python3.14; do
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$py_dir/$name"
+  done
+  chmod +x "$py_dir"/python3*
+  # The old interpreter really shadows the classifier's own lookup.
+  if FM_TEST_DIR="$dir" PATH="$py_dir:$PATH" "$dir/fakebin/risk-tier" --root "$dir/remote-work" >/dev/null 2>&1; then
+    fail "table-old-python: the classifier ran under the shadowing python3, so the case proves nothing"
+  fi
+  PATH="$py_dir:$PATH" run_case "$dir" status "$URL"
+  expect_code 0 "$RC" "table-old-python: a later python3 with tomllib should classify the PR ($ERR)"
+  assert_contains "$OUT" 'is tinker under its risk-tiers.toml' "table-old-python: got '$OUT'"
+  [ -z "$(ls -A "$dir/tmp")" ] || fail "table-old-python: the classifier's clone or interpreter shim was left behind"
+
+  # Nothing on PATH can import tomllib: every other tool stays reachable through
+  # a directory of links that leaves out each python.
+  no_py="$dir/no-python"
+  mkdir -p "$no_py"
+  IFS=: read -r -a path_dirs <<< "$PATH"
+  for path_dir in "${path_dirs[@]}"; do
+    [ -n "$path_dir" ] && [ -d "$path_dir" ] || continue
+    for tool in "$path_dir"/*; do
+      name=${tool##*/}
+      case "$name" in python*) continue ;; esac
+      [ -x "$tool" ] && [ ! -e "$no_py/$name" ] || continue
+      ln -s "$tool" "$no_py/$name"
+    done
+  done
+  PATH="$py_dir:$no_py" run_case "$dir" status "$URL"
+  expect_code 2 "$RC" "table-no-tomllib: a classifier with no usable python must leave the state unreadable"
+  assert_contains "$ERR" 'tomllib' "table-no-tomllib: the error did not name the missing tomllib"
+  [ -z "$(ls -A "$dir/tmp")" ] || fail "table-no-tomllib: the classifier's clone was left behind"
+  pass "fm-code-review status runs a tabled repository's classifier on a python3 with tomllib, wherever it sits on PATH"
+}
+
 # The fleet's own classifier, when this host has it (FM_TEST_RISK_TIER, or
 # FLEET_NIX's bin/risk-tier), on the cases the stub cannot speak for.
 test_status_with_the_fleet_classifier() {
@@ -1276,6 +1347,7 @@ test_review_md_includes_follow_the_service_rules() {
 test_classify_exempts_records_receipts_data_seed_and_markdown_only
 test_status_with_a_table_asks_the_classifier_for_the_tier
 test_status_with_a_table_fails_closed
+test_status_with_a_table_finds_a_python_with_tomllib
 test_status_with_the_fleet_classifier
 test_status_reads_exempt_unreviewed_and_reviewed
 test_status_handles_github_limits
