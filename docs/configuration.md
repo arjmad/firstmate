@@ -1474,7 +1474,8 @@ The context ask comes when the newest context reading in the transcript tail is 
 It asks for `/stow quick`, the skill's quick save: it files and corrects the open work records and findings the session holds, and skips the startup-memory curation, the cascade, and the restart question, so it fits in the room left before compaction.
 The age ask comes when the newest full `/stow` it has seen is at least `hours` old (default 24), and then not again for an hour.
 It asks for the full pass, and a quick save does not reset its clock, so the full pass still comes due once a day.
-When both are due at one turn end, the context ask wins and the age ask waits an hour.
+It waits while the context reading is at or above `tokens`, so the full pass runs after a compaction or a fresh start, not in the gap before compaction.
+When both are due at one turn end, the context ask wins and the age ask waits at least an hour.
 That age ask is skipped when a `/stow` timestamp cannot be read.
 The [stow skill](../.agents/skills/stow/SKILL.md#quick-save-stow-quick) owns what the quick save does.
 The stored state is what makes each ask once per crossing, so a continuation stop is handled like any other stop.

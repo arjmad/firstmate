@@ -21,8 +21,10 @@
 # (`/stow quick`), because a full pass does not fit between the line and
 # compaction. The age ask fires when the newest seen full /stow is older than
 # the hour line, and then not again for an hour; it asks for the full pass.
-# When both are due on one stop, the context ask wins, and its ask time holds
-# the age ask off for the next hour. The age ask is skipped when
+# It waits while the context reading is at or above the token line, so the
+# full pass comes after a compaction or a fresh start, never in the gap before
+# compaction. When both are due on one stop, the context ask wins, and its ask
+# time holds the age ask off for the next hour. The age ask is skipped when
 # a /stow timestamp cannot be read, including when python3 is missing, so a
 # just-completed /stow is not asked for again from a stale clock. The stored
 # state is what makes each ask once per crossing, so a continuation stop
@@ -291,7 +293,8 @@ if [ "$tokens" -ge "$threshold" ] && [ "$has_fired" -eq 0 ]; then
   fired=$(jq -c --arg sid "$sid" '.[$sid] = true' <<<"$fired") || exit 0
 elif [ "$saves_readable" -eq 1 ] && [ -z "$last_stow" ]; then
   last_stow=$now
-elif [ "$saves_readable" -eq 1 ] && [ $((now - last_stow)) -ge "$max_age" ] && [ $((now - asked)) -ge 3600 ]; then
+elif [ "$saves_readable" -eq 1 ] && [ "$tokens" -lt "$threshold" ] \
+    && [ $((now - last_stow)) -ge "$max_age" ] && [ $((now - asked)) -ge 3600 ]; then
   reason="fm-stow-guard: the last full /stow is older than ${hours}h."
   reason="$reason Run the /stow skill now (full pass, no argument), then continue the turn you were in."
 fi

@@ -481,7 +481,7 @@ test_quick_save_does_not_move_the_full_pass_clock() {
   pass "a quick save leaves last_stow on the newest full pass, the age ask still comes due, and other args count as a full pass"
 }
 
-test_both_asks_due_asks_quick_then_full_an_hour_later() {
+test_both_asks_due_asks_quick_then_full_below_the_line() {
   local rc=0 now=1700000000
   prepare_case both-due
   printf 'tokens=1000\n' > "$CASE_CONFIG/stow-guard"
@@ -496,11 +496,21 @@ test_both_asks_due_asks_quick_then_full_an_hour_later() {
   [ "$rc" -eq 0 ] || fail "the next stop inside the hour must exit 0, got $rc"
   assert_silent "the next stop inside the hour"
 
+  # An hour later the context is still over the line, so the full pass waits.
+  write_usage 1300
   rc=0
   payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW="$((now + 3600))" || rc=$?
-  [ "$rc" -eq 0 ] || fail "the stop an hour later must exit 0, got $rc"
-  assert_block "the stop an hour later" "Run the /stow skill now (full pass, no argument)"
-  pass "with both asks due the context ask asks for a quick save, and the age ask asks for the full pass an hour later"
+  [ "$rc" -eq 0 ] || fail "the stop an hour later over the line must exit 0, got $rc"
+  assert_silent "the stop an hour later over the line"
+
+  # After a compaction drops the context below the line, the full pass is asked for.
+  : > "$CASE_TRANSCRIPT"
+  write_usage 500
+  rc=0
+  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW="$((now + 3700))" || rc=$?
+  [ "$rc" -eq 0 ] || fail "the stop below the line must exit 0, got $rc"
+  assert_block "the stop below the line" "Run the /stow skill now (full pass, no argument)"
+  pass "with both asks due the context ask asks for a quick save, and the age ask waits until the context is below the line"
 }
 
 test_crew_worktree_is_silent() {
@@ -681,7 +691,7 @@ fm_test_run \
   test_recorded_stow_sets_the_age_clock \
   test_each_ask_names_its_pass \
   test_quick_save_does_not_move_the_full_pass_clock \
-  test_both_asks_due_asks_quick_then_full_an_hour_later \
+  test_both_asks_due_asks_quick_then_full_below_the_line \
   test_crew_worktree_is_silent \
   test_secondmate_home_is_silent \
   test_missing_python_skips_the_age_ask \

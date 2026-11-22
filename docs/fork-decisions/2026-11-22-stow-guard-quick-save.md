@@ -3,6 +3,7 @@ The guard asks at `tokens=240000` against a compaction near 300K, and a full pas
 Decision: the context ask asks for `/stow quick`, which runs only the knowledge sweep and open-record persistence, adds a memory entry only when the budget report shows room, skips the startup-memory pass, the cascade and the restart question, and never says reset-safe.
 The age ask (`hours=`, default 24) still asks for the full pass, and a quick save does not move its clock (`last_stow` in `state/.stow-guard.json`), so the full pass still comes due once a day after quick saves.
 The guard tells them apart by the stow Skill call's args: a first word of `quick` is a quick save, anything else is the full pass.
+The age ask also waits while the context reading is at or above the token line, because once quick saves stop resetting its clock it could otherwise ask for the full pass in the same gap before compaction; the merge-gate review on the PR found that case.
 The once-per-crossing state, the offer handling and `restart=1` are unchanged, and a guard ask still never offers a restart; the fresh restart still follows only a `/stow` the captain types and his "Start fresh now" pick, so this amends the "saves everything" wording of [the typed-stow restart record](2026-11-22-typed-stow-restarts-helm.md) and nothing else in it.
 No upstream proposal yet: the stow guard is upstream's, but its token line and this fleet's long-running helm are what made the full pass too big for the gap.
 
