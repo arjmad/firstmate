@@ -40,7 +40,9 @@
 # a one-shot typed:<sid> that the next Stop of that session consumes: that
 # Stop asks nothing, and marks the context ask fired when it reads at or over
 # the token line, so the /stow's own turn end neither asks again nor removes
-# the offer while a later crossing still asks. It writes them when a
+# the offer while a later crossing still asks; any later prompt of that
+# session removes the marker, because an interrupted turn fires no Stop. It
+# writes them when a
 # submitted prompt is /stow itself: after trimming
 # whitespace, exactly /stow or /stow followed by whitespace and arguments
 # (Claude Code 2.1.328 puts a typed /stow in the payload's prompt as typed;
@@ -149,7 +151,18 @@ if [ "$mode" = prompt ]; then
   prompt=${prompt%"${prompt##*[![:space:]]}"}
   case "$prompt" in
     /stow|/stow[[:space:]]*) ;;
-    *) exit 0 ;;
+    *)
+      # A new turn: an interrupted /stow fired no Stop, so its marker ends here.
+      state_path="$STATE/.stow-guard.json"
+      if [ "$(jq -r '.typed // empty' "$state_path" 2>/dev/null)" = "$sid" ] \
+        && tmp=$(mktemp "$state_path.XXXXXX" 2>/dev/null); then
+        if ! jq 'del(.typed)' "$state_path" > "$tmp" 2>/dev/null \
+          || ! mv -f "$tmp" "$state_path" 2>/dev/null; then
+          rm -f "$tmp"
+        fi
+      fi
+      exit 0
+      ;;
   esac
   # shellcheck source=bin/fm-session-lock-lib.sh
   . "$SCRIPT_DIR/fm-session-lock-lib.sh" >/dev/null 2>&1 || exit 0

@@ -247,6 +247,20 @@ test_typed_stow_records_the_offer() {
   [ "$rc" -eq 0 ] || fail "the later crossing must exit 0, got $rc"
   assert_block "the later crossing after a typed /stow" "context is 1200 tokens"
 
+  # An interrupted /stow fires no Stop, so the next prompt ends its marker and
+  # the next Stop over the line still asks.
+  prepare_prompt_case typed-stow-interrupted
+  invoke_prompt "$PRIMARY" "$(prompt_payload /stow)"
+  invoke_prompt "$PRIMARY" "$(prompt_payload 'what changed today?')"
+  jq -e --arg sid "$PROMPT_SID" '.offer.sid == $sid and (has("typed") | not)' "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "the next prompt kept an interrupted /stow's marker: $(cat "$CASE_STATE/.stow-guard.json")"
+  write_usage 1200
+  rc=0
+  printf '{"session_id":"%s","transcript_path":"%s"}\n' "$PROMPT_SID" "$CASE_TRANSCRIPT" \
+    | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW=5001 TMUX_PANE=%7 || rc=$?
+  [ "$rc" -eq 0 ] || fail "the Stop after an interrupted /stow must exit 0, got $rc"
+  assert_block "the Stop after an interrupted /stow" "context is 1200 tokens"
+
   prepare_prompt_case typed-stow-args
   invoke_prompt "$PRIMARY" "$(prompt_payload $'  /stow  quick\n')" \
     TMUX_PANE= HERDR_ENV=1 HERDR_PANE_ID=w1:p1
