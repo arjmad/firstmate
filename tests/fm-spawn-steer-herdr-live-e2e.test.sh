@@ -33,8 +33,9 @@
 # bin/fm-herdr-lab.sh by a PATH wrapper that refuses any other session; the
 # lab helper verifies the default fleet session is unchanged at teardown. The
 # lab home, the scratch project and its origin, and the Treehouse pool
-# (TREEHOUSE_ROOT) all live under one temporary root. The spawn registers
-# Claude workspace trust for the worker's worktree; cleanup removes every
+# (TREEHOUSE_ROOT) all live under one temporary root. The guard registers
+# Claude workspace trust for the lab home and the spawn registers it for the
+# worker's worktree; cleanup removes every
 # Claude project entry under that root with bin/fm-live-lab.sh forget-claude.
 #
 # Run it with FM_SPAWN_STEER_LIVE=1 (or FM_LIVE=1) before merging a change to
@@ -249,6 +250,22 @@ git -C "$SEED" -c user.name=lab -c user.email=lab@example.invalid commit -q -m "
 git clone -q --bare "$SEED" "$TMP_ROOT/origins/smoke.git"
 git clone -q "$TMP_ROOT/origins/smoke.git" "$LAB_HOME/projects/smoke"
 printf '# Projects\n\n- smoke [local-only] - scratch project for the spawn-and-steer smoke guard\n' > "$LAB_HOME/data/projects.md"
+
+# The worker's --add-dir grant names this home's task-channel directories, and
+# since Claude Code 2.1.328 an --add-dir outside every trusted directory parks
+# the launch on an "Adding a new directory" dialog whose cursor sits on
+# "No, exit". A fleet home is trusted in its store because its primary runs
+# there; the lab home gets the same standing through bin/fm-claude-trust.sh's
+# lab-home mode, which needs a checkout top level holding AGENTS.md and bin/.
+printf '# Lab home\n\nA disposable home for the spawn-and-steer smoke guard.\n' > "$LAB_HOME/AGENTS.md"
+mkdir -p "$LAB_HOME/bin"
+git init -q "$LAB_HOME"
+"$ROOT/bin/fm-claude-trust.sh" --lab-home "$LAB_HOME" >/dev/null \
+  || fail "could not register Claude workspace trust for the lab home"
+if [ -n "$ACCOUNT" ]; then
+  CLAUDE_CONFIG_DIR="$ACCOUNT" "$ROOT/bin/fm-claude-trust.sh" --lab-home "$LAB_HOME" >/dev/null \
+    || fail "could not register Claude workspace trust for the lab home in $ACCOUNT"
+fi
 
 # The paused verb is pinned to its default so the brief and the wait below agree.
 in_lab() {  # <command...>: run with the lab home, the lab pool, and the Herdr wrapper
