@@ -1477,10 +1477,16 @@ It runs for a plain Claude primary checkout of this home.
 It stays silent in a crew worktree and in a marked secondmate home, because a Stop block there leaves the parent recording that mate as idle while it is still working.
 The file is per home and is not inherited.
 Blank lines and lines that start with `#` are ignored.
-Optional lines are `tokens=<n>` and `hours=<n>`.
+Optional lines are `tokens=<n>`, `hours=<n>`, and `restart=1`.
 An unusable value keeps its default.
 Remove the file to turn the ask off.
 The script header owns the transcript read, the state file, and the block message.
+
+With `restart=1`, an ask made in a tmux or Herdr pane also offers a fresh restart in place of compaction.
+When the `/stow` receipt says the session is reset-safe, the primary runs `bin/fm-helm-refresh.sh request`, and once its turn ends the session is cleared with Claude Code's `/clear` and started again by one doorbell.
+The process, its session lock, its parked supervision, its Remote Control session, and its session name stay the same, while the context drops back to the fresh-start set.
+Without a reset-safe receipt, or when any refresh check fails, the session keeps its context and compacts as it does today.
+The `bin/fm-helm-refresh.sh` header owns the request checks, the wait for an idle pane, and its log, `state/.helm-refresh.log`.
 
 ## Self-update source (config/self-update-source)
 

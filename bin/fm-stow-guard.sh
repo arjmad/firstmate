@@ -7,9 +7,9 @@
 # header owns the transcript read, the state file, and the block message.
 #
 # With the file present, defaults are 300000 context tokens and 24 hours since
-# the newest /stow this hook has seen. Optional lines are tokens=<n> and
-# hours=<n>. Blank lines and lines starting with # are ignored. An unusable
-# value keeps its default. An hour above 87600 or a token count above
+# the newest /stow this hook has seen. Optional lines are tokens=<n>,
+# hours=<n> and restart=1. Blank lines and lines starting with # are ignored.
+# An unusable value keeps its default. An hour above 87600 or a token count above
 # 100000000 is unusable, so the shell comparison stays inside integer range.
 # FM_STOW_CONTEXT_TOKENS and FM_STOW_MAX_AGE_HOURS override those two lines
 # when they are usable integers. FM_STOW_GUARD_NOW overrides the clock for tests.
@@ -30,6 +30,13 @@
 # newest one is remembered in state/.stow-guard.json, so a later tail that no
 # longer contains it does not rewind the clock.
 #
+# With restart=1, an ask made from inside a tmux or Herdr pane
+# (bin/fm-primary-pane-lib.sh names the transports) also offers a fresh
+# restart: the block message names `bin/fm-helm-refresh.sh request`, to run
+# only when the /stow receipt says the session is reset-safe, and the state
+# file records the offer as offer:{sid, at} for that session. That command
+# owns what happens next; with no request, the session compacts as before.
+#
 # The hook prints one Claude block decision, or nothing. Any unreadable
 # payload, missing jq, scope miss, or state-write failure exits 0 and prints
 # nothing, so a Stop is never stuck on this hook. It is silent for a Cursor
@@ -47,6 +54,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 # shellcheck source=bin/fm-primary-scope-lib.sh
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh" || exit 0
+# shellcheck source=bin/fm-primary-pane-lib.sh
+. "$SCRIPT_DIR/fm-primary-pane-lib.sh" || exit 0
 
 usage() {
   cat <<'EOF'
@@ -93,6 +102,7 @@ fm_root_is_secondmate_home "$FM_ROOT" && exit 0
 
 threshold=300000
 hours=24
+restart=0
 line='' key='' value=''
 while IFS= read -r line || [ -n "$line" ]; do
   case "$line" in
@@ -106,6 +116,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   case "$key" in
     tokens) threshold=$value ;;
     hours) hours=$value ;;
+    restart) [ "$value" != 1 ] || restart=1 ;;
   esac
 done < "$CONFIG/stow-guard"
 
@@ -142,10 +153,12 @@ state_path="$STATE/.stow-guard.json"
 last_stow=
 asked=0
 fired='{}'
+offer=null
 if [ -f "$state_path" ]; then
   last_stow=$(jq -r '.last_stow // empty' "$state_path" 2>/dev/null || true)
   asked=$(jq -r '.asked // 0' "$state_path" 2>/dev/null || echo 0)
   fired=$(jq -c '.fired // {}' "$state_path" 2>/dev/null || echo '{}')
+  offer=$(jq -c '.offer // null' "$state_path" 2>/dev/null || echo null)
 fi
 case "$last_stow" in
   ''|*[!0-9]*) last_stow= ;;
@@ -155,6 +168,9 @@ case "$asked" in
 esac
 if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$fired"; then
   fired='{}'
+fi
+if ! jq -e 'type == "object" or . == null' >/dev/null 2>&1 <<<"$offer"; then
+  offer=null
 fi
 
 tokens=0
@@ -211,24 +227,33 @@ fi
 reason=
 has_fired=$(jq -r --arg sid "$sid" 'if .[$sid] == true then "1" else "0" end' <<<"$fired") || exit 0
 if [ "$tokens" -ge "$threshold" ] && [ "$has_fired" -eq 0 ]; then
-  reason="fm-stow-guard: context is ${tokens} tokens, near auto-compaction. Run the /stow skill now (full pass), then continue the turn you were in."
+  reason="fm-stow-guard: context is ${tokens} tokens, near auto-compaction."
   fired=$(jq -c --arg sid "$sid" '.[$sid] = true' <<<"$fired") || exit 0
 elif [ "$saves_readable" -eq 1 ] && [ -z "$last_stow" ]; then
   last_stow=$now
 elif [ "$saves_readable" -eq 1 ] && [ $((now - last_stow)) -ge "$max_age" ] && [ $((now - asked)) -ge 3600 ]; then
-  reason="fm-stow-guard: the last /stow is older than ${hours}h. Run the /stow skill now (full pass), then continue the turn you were in."
+  reason="fm-stow-guard: the last /stow is older than ${hours}h."
 fi
 if [ -n "$reason" ]; then
   asked=$now
+  if [ "$restart" -eq 1 ] && [ "$sid" != session ] && fm_primary_pane_transport --default-session; then
+    reason="$reason Run the /stow skill now (full pass). If its receipt says this session is reset-safe, run $FM_ROOT/bin/fm-helm-refresh.sh request as your last step and end the turn: the session then clears to a fresh context instead of compacting. Otherwise continue the turn you were in."
+    offer=$(jq -nc --arg sid "$sid" --argjson at "$now" '{sid:$sid, at:$at}') || exit 0
+  else
+    reason="$reason Run the /stow skill now (full pass), then continue the turn you were in."
+  fi
 fi
 
 tmp=$(mktemp "$STATE/.stow-guard.json.XXXXXX") || exit 0
 if [ -n "$last_stow" ]; then
   jq -n --argjson last_stow "$last_stow" --argjson asked "$asked" --argjson fired "$fired" \
-    '{last_stow:$last_stow, asked:$asked, fired:$fired}' > "$tmp" || { rm -f "$tmp"; exit 0; }
+    --argjson offer "$offer" \
+    '{last_stow:$last_stow, asked:$asked, fired:$fired} + (if $offer == null then {} else {offer:$offer} end)' \
+    > "$tmp" || { rm -f "$tmp"; exit 0; }
 else
-  jq -n --argjson asked "$asked" --argjson fired "$fired" \
-    '{asked:$asked, fired:$fired}' > "$tmp" || { rm -f "$tmp"; exit 0; }
+  jq -n --argjson asked "$asked" --argjson fired "$fired" --argjson offer "$offer" \
+    '{asked:$asked, fired:$fired} + (if $offer == null then {} else {offer:$offer} end)' \
+    > "$tmp" || { rm -f "$tmp"; exit 0; }
 fi
 mv -f "$tmp" "$state_path" || { rm -f "$tmp"; exit 0; }
 

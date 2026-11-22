@@ -1,0 +1,14 @@
+2026-11-22: Arjun picked "Auto restart after stow" in the helm context discussion: after the stow guard's `/stow` comes back reset-safe, the Claude helm restarts on a fresh context instead of compacting.
+A compaction carries a summary, a second digest and every earlier skill body into the next context, about 25k tokens, while a fresh start begins at the startup set.
+Decision: the restart is Claude Code's own `/clear`, typed into the helm's pane by a detached owner once the turn ends, not an exit and relaunch.
+A lab probe on Claude Code 2.1.328 showed `/clear` drops the context to the fresh-start size (46,174 tokens against 46,108 for a fresh launch) with no skill body re-injected.
+It keeps the lock pid, the parked supervision host and watcher, the Remote Control bridge session and the session name, so it needs no lock handover, no relaunch through the `~/nix` launcher and no Remote Control reconnect, and Arjun's ask that the new Remote Control entry keep the helm's name holds because the entry itself does not change.
+It is opt-in per home (`restart=1` in `config/stow-guard`), runs only on a reset-safe receipt for a session the guard asked, and never while a captain question is open, a turn is running, or away mode is on; any refusal leaves today's compaction as the fallback.
+The pane proof the supervision hand-back already used moved into a shared library, so both helpers type into the helm's pane under one proof.
+No upstream proposal yet: the stow guard is upstream's, but this restart serves this fleet's long-running helm.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| The stow guard's `restart=1` line offers a fresh restart in its ask and records the offer for that session | `bin/fm-stow-guard.sh` (config parse, `offer` state, block message), `tests/fm-stow-guard.test.sh` (`test_restart_offer_needs_opt_in_and_a_pane`), `docs/configuration.md` ("Stow guard") | `bin/fm-stow-guard.sh`, `tests/fm-stow-guard.test.sh`, `docs/configuration.md` | carried | 427056c4 |
+| The helm refresh: the request checks and the detached owner that types `/clear` and the doorbell | `bin/fm-helm-refresh.sh`, `tests/fm-helm-refresh.test.sh`, `tests/fm-helm-refresh-live-e2e.test.sh`, `bin/fm-test-run.sh` (live-harness-optin list), `docs/scripts.md`, `docs/verification/supervision.md` ("Helm refresh by /clear"), `.agents/skills/stow/SKILL.md` (completion receipt) | `bin/fm-test-run.sh`, `docs/scripts.md`, `docs/verification/supervision.md`, `.agents/skills/stow/SKILL.md` | carried | 427056c4 |
+| The Claude primary pane proof moves out of the supervision hand-back into a shared library | `bin/fm-primary-pane-lib.sh`, `bin/fm-supervision-handoff.sh` (`retry_delivery`) | `bin/fm-supervision-handoff.sh` | carried | 427056c4 |
