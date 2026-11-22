@@ -203,12 +203,14 @@ test_typed_stow_records_the_offer() {
   printf '{"last_stow":100,"asked":5,"fired":{"other":true}}\n' > "$CASE_STATE/.stow-guard.json"
   invoke_prompt "$PRIMARY" "$(prompt_payload /stow)"
   jq -e --arg sid "$PROMPT_SID" \
-    '.offer == {sid:$sid, at:5000} and .last_stow == 100 and .asked == 5 and .fired == {other:true}' \
+    '.offer == {sid:$sid, at:5000} and .last_stow == 5000 and .asked == 5
+      and .fired == {other:true, ($sid):true}' \
     "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "a typed /stow did not record only the offer: $(cat "$CASE_STATE/.stow-guard.json")"
+    || fail "a typed /stow did not record the offer, the stow time, and the session's ask: $(cat "$CASE_STATE/.stow-guard.json")"
 
-  # A later Stop below the line keeps the offer for the request after the pass.
-  write_usage 10
+  # The Stop that ends the typed /stow's turn, still over the token line, asks
+  # for no second pass and keeps the offer for the request after the pass.
+  write_usage 1200
   rc=0
   printf '{"session_id":"%s","transcript_path":"%s"}\n' "$PROMPT_SID" "$CASE_TRANSCRIPT" \
     | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW=5001 TMUX_PANE=%7 || rc=$?

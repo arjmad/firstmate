@@ -36,8 +36,9 @@
 # `bin/fm-helm-refresh.sh request` refuses it.
 #
 # With restart=1, `fm-stow-guard.sh prompt` is the one writer of that offer:
-# it records offer:{sid, at} for the session, and changes nothing else in the
-# state file, when a submitted prompt is /stow itself: after trimming
+# it records offer:{sid, at} for the session, with last_stow at the same time
+# and fired set for the session so the Stop that ends that /stow's turn does
+# not ask again and remove it, when a submitted prompt is /stow itself: after trimming
 # whitespace, exactly /stow or /stow followed by whitespace and arguments
 # (Claude Code 2.1.328 puts a typed /stow in the payload's prompt as typed;
 # docs/verification/supervision.md "Helm refresh by /clear"). It also needs a
@@ -163,8 +164,13 @@ if [ "$mode" = prompt ]; then
     [ -n "$current" ] || current='{}'
   fi
   tmp=$(mktemp "$state_path.XXXXXX" 2>/dev/null) || exit 0
+  # The typed /stow is also this session's newest stow and answers its context
+  # ask, so the Stop that ends its own turn neither asks again nor removes the
+  # offer. A typed /stow expands inline and leaves no Skill call in the tail.
   if ! jq -n --argjson current "$current" --arg sid "$sid" --argjson at "$now" \
-      '$current + {offer:{sid:$sid, at:$at}}' > "$tmp" 2>/dev/null \
+      '$current + {offer:{sid:$sid, at:$at}, last_stow:$at,
+        fired:((($current.fired // {}) | if type == "object" then . else {} end) + {($sid):true})}' \
+      > "$tmp" 2>/dev/null \
     || ! mv -f "$tmp" "$state_path" 2>/dev/null; then
     rm -f "$tmp"
   fi
