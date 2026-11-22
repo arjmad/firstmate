@@ -8,8 +8,8 @@
 #
 # With the file present, defaults are 300000 context tokens and 24 hours since
 # the newest /stow this hook has seen. Optional lines are tokens=<n>,
-# hours=<n> and restart=1. Blank lines and lines starting with # are ignored. An unusable
-# value keeps its default. An hour above 87600 or a token count above
+# hours=<n> and restart=1. Blank lines and lines starting with # are ignored.
+# An unusable value keeps its default. An hour above 87600 or a token count above
 # 100000000 is unusable, so the shell comparison stays inside integer range.
 # FM_STOW_CONTEXT_TOKENS and FM_STOW_MAX_AGE_HOURS override those two lines
 # when they are usable integers. FM_STOW_GUARD_NOW overrides the clock for tests.

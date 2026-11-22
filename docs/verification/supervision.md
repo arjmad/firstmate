@@ -1029,6 +1029,35 @@ tests/fm-supervision-host-hook.test.sh
 tests/fm-backend-herdr.test.sh
 ```
 
+### Helm refresh by /clear, 2026-11-22
+
+This supports the `restart=1` line in [Stow guard](../configuration.md#stow-guard-configstow-guard): `bin/fm-helm-refresh.sh` types Claude Code's `/clear` into the primary's own pane and the session starts again on a fresh context, with no relaunch.
+It was measured on 2026-11-22 on macOS arm64 with Claude Code 2.1.328 (model `sonnet`) in tmux labs from `bin/fm-live-lab.sh`.
+
+```text
+$ FM_HELM_REFRESH_LIVE=1 tests/fm-helm-refresh-live-e2e.test.sh
+evidence: Claude Code 2.1.328: lock pid 38652 kept, session 2bfa06f7-bd83-4eb9-bc3d-4d4c67e7796d -> cddb41e7-3f97-4411-9f89-c18812f5ce9b, name home-25 kept, context 58806 -> 46393
+ok - Claude Code 2.1.328: /clear refreshes the primary in place with the same lock pid and name, and a smaller context
+```
+
+| Case | Observed |
+| --- | --- |
+| Context | a fresh launch's first turn read 46,108 tokens; after two skill loads and the digest read the session read 59,473, and its first turn after `/clear` read 46,174, with no skill body re-injected |
+| Lock and supervision | the lock pid stayed the same, `state/.lock-session` named the new session id, and the parked supervision host and its watcher arm stayed alive across `/clear` |
+| Wakes | a wake queued before the clear reached the new session's first turn |
+| Session name and Remote Control | a `claude --remote-control` session kept its `~/.claude/sessions/<pid>.json` `name` and `bridgeSessionId` across `/clear` while its `sessionId` changed |
+| Stow guard path | with `tokens=60000` and `restart=1`, the guard's ask led the lab primary through `/stow` to `request`; the owner logged `requested`, `cleared` 9 seconds later, then `finished ... doorbell=empty`, and the fresh session started at 46,304 tokens against 81,027 before |
+| Cooldown | with the line below the fresh-start size, a second clear inside the hour was refused: `not requested: this home cleared a session less than 3600s ago` |
+
+The Remote Control entry was read from the local session record, not from the Claude app.
+
+Deterministic entry points:
+
+```sh
+tests/fm-helm-refresh.test.sh
+tests/fm-stow-guard.test.sh
+```
+
 ## Wedge-alarm channels
 
 The two real notification channels were bounded manually on 2026-07-10 on macOS 26.5.2 with Herdr 0.7.3.

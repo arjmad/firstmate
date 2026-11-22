@@ -12,8 +12,8 @@
 #
 # Automatic delivery is restricted to the inherited pane on Claude, proven
 # for the pinned session-lock pid by bin/fm-primary-pane-lib.sh, which owns
-# the transport and every fact of that proof. All other endpoints retain the queued wake and keep
-# watching but need a normal turn or human message to resume main. No terminal
+# the transport and every fact of that proof. All other endpoints retain the
+# queued wake and keep watching but need a normal turn or human message to resume main. No terminal
 # text proves acknowledgement. Busy, unknown, or pending input is never
 # overwritten. The existing backend submit primitive owns Enter retries.
 # Removing the opt-in, losing the pinned session, or entering daemon-backed
