@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# fm-helm-refresh.sh - clear a Claude primary to a fresh context after the stow
-# guard's /stow pass came back reset-safe, instead of letting it compact.
+# fm-helm-refresh.sh - clear a Claude primary to a fresh context after a /stow
+# the captain typed came back reset-safe, instead of letting it compact.
 #
 # Usage:
 #   fm-helm-refresh.sh request      the helm runs this, as its last step, only
-#                                   when the /stow receipt that bin/fm-stow-guard.sh
-#                                   asked for says the session is reset-safe
+#                                   when the receipt of a /stow the captain
+#                                   typed says the session is reset-safe and
+#                                   he then picked "Start fresh now" (the stow
+#                                   skill owns that question)
 #   fm-helm-refresh.sh status       print the pending request and the newest log lines
 #   fm-helm-refresh.sh run <token>  the detached owner `request` starts; not for hand use
 #
@@ -23,7 +25,9 @@
 #   - this process belongs to the session that holds state/.lock;
 #   - state/.stow-guard.json holds an offer for exactly that session id (the
 #     id in state/.lock-session), made within FM_HELM_REFRESH_OFFER_TTL seconds
-#     (default 7200), so a /stow nobody asked for never restarts the helm;
+#     (default 7200) by bin/fm-stow-guard.sh's prompt hook when the captain
+#     typed /stow, so a /stow the stow guard asked for, or an agent or the
+#     fleet started, never restarts the helm;
 #   - this process runs in a tmux or Herdr pane bin/fm-primary-pane-lib.sh
 #     can prove;
 #   - state/.afk and state/.afk-contract are absent;
@@ -161,10 +165,10 @@ if [ "$1" = request ]; then
   offer_sid=$(jq -r '.offer.sid // empty' "$GUARD_STATE" 2>/dev/null) || offer_sid=
   offer_at=$(jq -r '.offer.at // empty' "$GUARD_STATE" 2>/dev/null) || offer_at=
   [ -n "$offer_sid" ] && [ "$offer_sid" = "$sid" ] \
-    || refuse "the stow guard made no restart offer to this session"
-  case "$offer_at" in ''|*[!0-9]*) refuse "the stow guard's restart offer has no readable time" ;; esac
+    || refuse "no /stow the captain typed made a restart offer to this session"
+  case "$offer_at" in ''|*[!0-9]*) refuse "the typed /stow's restart offer has no readable time" ;; esac
   [ $(( $(date +%s) - offer_at )) -le "$OFFER_TTL" ] \
-    || refuse "the stow guard's restart offer is older than ${OFFER_TTL}s"
+    || refuse "the typed /stow's restart offer is older than ${OFFER_TTL}s"
   # The default Herdr session puts no HERDR_SESSION in its panes, and the
   # Heimdall helm runs there.
   fm_primary_pane_transport --default-session \

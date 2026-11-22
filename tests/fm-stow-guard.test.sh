@@ -113,63 +113,191 @@ test_context_crossing_blocks_once_until_rearm() {
   pass "a context crossing blocks once, a continuation below two-thirds re-arms, and the next crossing blocks"
 }
 
-test_restart_offer_needs_opt_in_and_a_pane() {
+test_guard_ask_never_offers_a_restart() {
   local rc=0
-  prepare_case restart-offer
+  prepare_case guard-ask
   printf 'tokens=1000\nrestart=1\n' > "$CASE_CONFIG/stow-guard"
   write_usage 1200
   payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" \
     TMUX_PANE=%7 HERDR_ENV= || rc=$?
-  [ "$rc" -eq 0 ] || fail "restart offer must exit 0, got $rc"
-  assert_block "restart offer" "bin/fm-helm-refresh.sh request as your last step"
-  jq -e '.offer.sid == "s1" and (.offer.at | type == "number") and .fired.s1 == true' \
-    "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "restart offer was not recorded for the session: $(cat "$CASE_STATE/.stow-guard.json")"
+  [ "$rc" -eq 0 ] || fail "the guard's ask with restart=1 must exit 0, got $rc"
+  assert_block "the guard's ask with restart=1" "Run the /stow skill now (full pass), then continue the turn you were in."
+  ! grep -q 'fm-helm-refresh' "$OUT" || fail "the guard's ask offered a restart: $(cat "$OUT")"
+  jq -e 'has("offer") | not' "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "the guard's ask recorded an offer: $(cat "$CASE_STATE/.stow-guard.json")"
 
-  # A later stop keeps the offer, so the request made after the /stow finds it.
+  # A typed /stow's offer already in the state file passes through unchanged.
+  prepare_case guard-ask-existing-offer
+  printf 'tokens=1000\nrestart=1\n' > "$CASE_CONFIG/stow-guard"
+  printf '{"asked":0,"fired":{},"offer":{"sid":"s1","at":4000}}\n' > "$CASE_STATE/.stow-guard.json"
+  write_usage 1200
   rc=0
-  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" \
-    TMUX_PANE=%7 HERDR_ENV= || rc=$?
-  [ "$rc" -eq 0 ] || fail "stop after the offer must exit 0, got $rc"
-  assert_silent "stop after the offer"
-  jq -e '.offer.sid == "s1"' "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "a later stop dropped the offer: $(cat "$CASE_STATE/.stow-guard.json")"
+  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" TMUX_PANE=%7 HERDR_ENV= || rc=$?
+  [ "$rc" -eq 0 ] || fail "an ask with an existing offer must exit 0, got $rc"
+  assert_block "an ask with an existing offer" "then continue the turn you were in."
+  jq -e '.offer == {sid:"s1", at:4000}' "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "the guard's ask changed an existing offer: $(cat "$CASE_STATE/.stow-guard.json")"
 
-  # A pane in Herdr's default session carries no HERDR_SESSION.
-  prepare_case restart-herdr-default
+  prepare_case guard-ask-herdr
   printf 'tokens=1000\nrestart=1\n' > "$CASE_CONFIG/stow-guard"
   write_usage 1200
   rc=0
   payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" \
     TMUX_PANE= HERDR_ENV=1 HERDR_PANE_ID=w1:p1 HERDR_SESSION= || rc=$?
-  [ "$rc" -eq 0 ] || fail "restart in a default-session Herdr pane must exit 0, got $rc"
-  assert_block "restart in a default-session Herdr pane" "bin/fm-helm-refresh.sh request as your last step"
-  jq -e '.offer.sid == "s1"' "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "a default-session Herdr pane recorded no offer: $(cat "$CASE_STATE/.stow-guard.json")"
+  [ "$rc" -eq 0 ] || fail "the guard's ask in a Herdr pane must exit 0, got $rc"
+  assert_block "the guard's ask in a Herdr pane" "then continue the turn you were in."
+  jq -e 'has("offer") | not' "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "the guard's ask in a Herdr pane recorded an offer: $(cat "$CASE_STATE/.stow-guard.json")"
+  pass "with restart=1 in a pane, the guard's ask names no refresh request, records no offer, and carries an existing offer through unchanged"
+}
 
-  prepare_case restart-no-pane
+PROMPT_SID=11111111-2222-3333-4444-555555555555
+FAKEBIN=$(fm_fakebin "$TMP_ROOT/fakebin")
+ln -s /bin/bash "$FAKEBIN/claude"
+FAKE_CLAUDE="$FAKEBIN/claude"
+
+# prepare_prompt_case <name>: an opted-in home whose lock session is PROMPT_SID.
+prepare_prompt_case() {
+  prepare_case "$1"
   printf 'tokens=1000\nrestart=1\n' > "$CASE_CONFIG/stow-guard"
-  write_usage 1200
-  rc=0
-  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" \
-    TMUX_PANE= HERDR_ENV= || rc=$?
-  [ "$rc" -eq 0 ] || fail "restart without a pane must exit 0, got $rc"
-  assert_block "restart without a pane" "then continue the turn you were in."
-  jq -e 'has("offer") | not' "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "an ask outside a pane recorded an offer: $(cat "$CASE_STATE/.stow-guard.json")"
+  printf '%s\n' "$PROMPT_SID" > "$CASE_STATE/.lock-session"
+}
 
-  prepare_case restart-off
-  printf 'tokens=1000\nrestart=2\n' > "$CASE_CONFIG/stow-guard"
+prompt_payload() {  # <prompt> [<session id>]
+  jq -nc --arg p "$1" --arg sid "${2-$PROMPT_SID}" \
+    '{hook_event_name:"UserPromptSubmit", prompt:$p} + (if $sid == "" then {} else {session_id:$sid} end)'
+}
+
+# invoke_prompt <root> <payload> [env assignments...]
+# Runs `fm-stow-guard.sh prompt` as the lock-owning session: a bash named
+# claude records its own pid in state/.lock, then runs the hook as its child
+# inside a pretend tmux pane unless the caller passes TMUX_PANE=.
+invoke_prompt() {
+  local root=$1 body=$2 rc=0
+  shift 2
+  : > "$OUT"
+  : > "$ERR"
+  # shellcheck disable=SC2016 # the session script expands its own arguments.
+  env -u GROK_AGENT -u GROK_HOOK_EVENT -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SESSION -u TMUX \
+    TMUX_PANE=%7 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" \
+    FM_STATE_OVERRIDE="$CASE_STATE" FM_CONFIG_OVERRIDE="$CASE_CONFIG" FM_STOW_GUARD_NOW=5000 \
+    "$@" \
+    "$FAKE_CLAUDE" -c 'printf "%s\n" "$$" > "$1/.lock"; printf "%s" "$2" | "$3" prompt >"$4" 2>"$5"; exit $?' _ \
+    "$CASE_STATE" "$body" "$GUARD" "$OUT" "$ERR" || rc=$?
+  [ "$rc" -eq 0 ] || fail "the prompt hook must exit 0, got $rc: $(cat "$ERR")"
+  assert_silent "the prompt hook"
+}
+
+assert_no_offer() {  # <label>
+  if [ -f "$CASE_STATE/.stow-guard.json" ]; then
+    jq -e 'has("offer") | not' "$CASE_STATE/.stow-guard.json" >/dev/null \
+      || fail "$1 recorded an offer: $(cat "$CASE_STATE/.stow-guard.json")"
+  fi
+}
+
+test_typed_stow_records_the_offer() {
+  local rc=0
+  prepare_prompt_case typed-stow
+  printf '{"last_stow":100,"asked":5,"fired":{"other":true}}\n' > "$CASE_STATE/.stow-guard.json"
+  invoke_prompt "$PRIMARY" "$(prompt_payload /stow)"
+  jq -e --arg sid "$PROMPT_SID" \
+    '.offer == {sid:$sid, at:5000} and .last_stow == 100 and .asked == 5 and .fired == {other:true}' \
+    "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "a typed /stow did not record only the offer: $(cat "$CASE_STATE/.stow-guard.json")"
+
+  # The guard's own ask state is untouched, so a Stop over the line still asks,
+  # and it carries the offer through for the request after the pass.
   write_usage 1200
   rc=0
-  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" \
-    TMUX_PANE=%7 HERDR_ENV= || rc=$?
-  [ "$rc" -eq 0 ] || fail "an unusable restart line must exit 0, got $rc"
-  assert_block "unusable restart line" "then continue the turn you were in."
-  ! grep -q 'fm-helm-refresh' "$OUT" || fail "an unusable restart line offered a restart: $(cat "$OUT")"
-  jq -e 'has("offer") | not' "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "an unusable restart line recorded an offer: $(cat "$CASE_STATE/.stow-guard.json")"
-  pass "restart=1 inside a pane names the refresh request and records the session's offer; otherwise the ask is unchanged"
+  printf '{"session_id":"%s","transcript_path":"%s"}\n' "$PROMPT_SID" "$CASE_TRANSCRIPT" \
+    | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW=5001 TMUX_PANE=%7 || rc=$?
+  [ "$rc" -eq 0 ] || fail "the Stop after a typed /stow must exit 0, got $rc"
+  assert_block "the Stop over the line after a typed /stow" "context is 1200 tokens"
+  jq -e --arg sid "$PROMPT_SID" '.offer == {sid:$sid, at:5000}' "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "the Stop dropped the typed /stow's offer: $(cat "$CASE_STATE/.stow-guard.json")"
+
+  prepare_prompt_case typed-stow-args
+  invoke_prompt "$PRIMARY" "$(prompt_payload $'  /stow  quick\n')" \
+    TMUX_PANE= HERDR_ENV=1 HERDR_PANE_ID=w1:p1
+  jq -e --arg sid "$PROMPT_SID" '.offer == {sid:$sid, at:5000}' "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "a typed /stow with arguments in a Herdr pane recorded no offer: $(cat "$CASE_STATE/.stow-guard.json" 2>/dev/null)"
+  pass "a /stow the lock session types records only the restart offer, and the guard's next ask carries it through"
+}
+
+test_fleet_sent_stow_records_no_offer() {
+  local prompt label mark=$'\xE2\x81\xA3' n=0
+  local -a prompts=(
+    "[fm-from-firstmate]${mark}/stow"
+    "[fm-from-firstmate]/stow"
+    "${mark}FIRSTMATE_OP: v1 watcher: /stow"
+    ": Firstmate operational input waiting: read '/home/x/state/operational-inbox/1-a.msg' and handle its contents as Firstmate operational input."
+    $'\n<task-notification>\n/stow\n</task-notification>'
+    "please run /stow now"
+    "/stowaway"
+    "/stow-cascade"
+  )
+  for prompt in "${prompts[@]}"; do
+    n=$((n + 1))
+    prepare_prompt_case "fleet-stow-$n"
+    invoke_prompt "$PRIMARY" "$(prompt_payload "$prompt")"
+    label="prompt $n ($(printf '%s' "$prompt" | head -c 40))"
+    assert_no_offer "$label"
+  done
+  pass "a marked, doorbell, rewake, or other non-/stow prompt records no offer"
+}
+
+test_typed_stow_outside_the_primary_session_records_no_offer() {
+  local rc=0 child="$TMP_ROOT/prompt-child" second="$TMP_ROOT/prompt-second"
+
+  prepare_prompt_case prompt-no-restart
+  printf 'tokens=1000\n' > "$CASE_CONFIG/stow-guard"
+  invoke_prompt "$PRIMARY" "$(prompt_payload /stow)"
+  assert_no_offer "a home without restart=1"
+
+  prepare_prompt_case prompt-other-session
+  invoke_prompt "$PRIMARY" "$(prompt_payload /stow other-session)"
+  assert_no_offer "a session other than the lock session"
+
+  prepare_prompt_case prompt-no-sid
+  invoke_prompt "$PRIMARY" "$(prompt_payload /stow '')"
+  assert_no_offer "a payload with no session id"
+
+  prepare_prompt_case prompt-no-pane
+  invoke_prompt "$PRIMARY" "$(prompt_payload /stow)" TMUX_PANE=
+  assert_no_offer "a session outside any pane"
+
+  # The lock names this test's own shell, which is no harness ancestor.
+  prepare_prompt_case prompt-not-owner
+  printf '%s\n' "$$" > "$CASE_STATE/.lock"
+  prompt_payload /stow | env -u GROK_AGENT -u GROK_HOOK_EVENT -u TMUX TMUX_PANE=%7 \
+    FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" \
+    FM_STATE_OVERRIDE="$CASE_STATE" FM_CONFIG_OVERRIDE="$CASE_CONFIG" \
+    "$GUARD" prompt >"$OUT" 2>"$ERR" || rc=$?
+  [ "$rc" -eq 0 ] || fail "a session without the lock must exit 0, got $rc"
+  assert_silent "a session without the lock"
+  assert_no_offer "a session without the lock"
+
+  # Its own primary, so the other fixtures' commits and branches stay theirs.
+  mkdir -p "$TMP_ROOT/prompt-primary"
+  git -C "$TMP_ROOT/prompt-primary" init -q
+  printf '# fixture\n' > "$TMP_ROOT/prompt-primary/AGENTS.md"
+  git -C "$TMP_ROOT/prompt-primary" add AGENTS.md
+  git -C "$TMP_ROOT/prompt-primary" -c user.name=fixture -c user.email=fixture@example.test \
+    -c commit.gpgsign=false commit -qm fixture
+  git -C "$TMP_ROOT/prompt-primary" worktree add -q -b fixture-prompt-child "$child"
+  mkdir -p "$child/bin"
+  prepare_prompt_case prompt-crew
+  invoke_prompt "$child" "$(prompt_payload /stow)"
+  assert_no_offer "a crew worktree"
+
+  mkdir -p "$second/bin"
+  git -C "$second" init -q
+  printf '# fixture\n' > "$second/AGENTS.md"
+  printf 'sm-fixture\n' > "$second/.fm-secondmate-home"
+  prepare_prompt_case prompt-secondmate
+  invoke_prompt "$second" "$(prompt_payload /stow)"
+  assert_no_offer "a secondmate home"
+  pass "a typed /stow records no offer without restart=1, the lock session's id, a pane, or the lock, nor in a crew worktree or secondmate home"
 }
 
 test_continuation_stop_blocks_once_per_crossing() {
@@ -417,13 +545,25 @@ test_tracked_stop_hook_is_synchronous_and_grok_inert() {
     | length' "$ROOT/.claude/settings.json") \
     || fail "tracked Stop hooks could not be read"
   [ "$matches" -eq 1 ] || fail "expected one synchronous grok-inert Stop hook for fm-stow-guard.sh, saw $matches"
-  pass "tracked Claude Stop settings run fm-stow-guard.sh once, synchronously, and inert under grok"
+  matches=$(jq -e '
+    [.hooks.UserPromptSubmit[].hooks[]
+      | select(.command | contains("/bin/fm-stow-guard.sh prompt"))
+      | select(.timeout == 10)
+      | select(.asyncRewake | not)
+      | select(.command | contains("${GROK_AGENT:-}${GROK_HOOK_EVENT:-}"))]
+    | length' "$ROOT/.claude/settings.json") \
+    || fail "tracked UserPromptSubmit hooks could not be read"
+  [ "$matches" -eq 1 ] || fail "expected one synchronous grok-inert UserPromptSubmit hook for fm-stow-guard.sh prompt, saw $matches"
+  pass "tracked Claude settings run fm-stow-guard.sh once at Stop and once as prompt, synchronously, and inert under grok"
 }
 
 fm_test_run \
   test_absent_config_is_silent \
   test_context_crossing_blocks_once_until_rearm \
-  test_restart_offer_needs_opt_in_and_a_pane \
+  test_guard_ask_never_offers_a_restart \
+  test_typed_stow_records_the_offer \
+  test_fleet_sent_stow_records_no_offer \
+  test_typed_stow_outside_the_primary_session_records_no_offer \
   test_continuation_stop_blocks_once_per_crossing \
   test_age_interval_blocks_once_per_hour \
   test_recorded_stow_sets_the_age_clock \

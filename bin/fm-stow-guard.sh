@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # fm-stow-guard.sh - Claude Stop hook that asks a primary session to /stow
-# before context compaction.
+# before context compaction, and with `prompt`, the UserPromptSubmit hook that
+# records a fresh-restart offer for a /stow the captain types.
 #
 # Opt in by creating the home-local config/stow-guard file. Absent means off.
 # docs/configuration.md "Stow guard" owns that gate and its tunables. This
@@ -30,12 +31,26 @@
 # newest one is remembered in state/.stow-guard.json, so a later tail that no
 # longer contains it does not rewind the clock.
 #
-# With restart=1, an ask made from inside a tmux or Herdr pane
-# (bin/fm-primary-pane-lib.sh names the transports) also offers a fresh
-# restart: the block message names `bin/fm-helm-refresh.sh request`, to run
-# only when the /stow receipt says the session is reset-safe, and the state
-# file records the offer as offer:{sid, at} for that session. That command
-# owns what happens next; with no request, the session compacts as before.
+# The ask never offers a fresh restart and never writes an offer, so the
+# /stow it asks for saves and keeps the session. It carries an existing offer
+# through unchanged.
+#
+# With restart=1, `fm-stow-guard.sh prompt` is the one writer of that offer:
+# it records offer:{sid, at} for the session, and changes nothing else in the
+# state file, when a submitted prompt is /stow itself: after trimming
+# whitespace, exactly /stow or /stow followed by whitespace and arguments
+# (Claude Code 2.1.328 puts a typed /stow in the payload's prompt as typed;
+# docs/verification/supervision.md "Helm refresh by /clear"). It also needs a
+# Claude session id, this session holding state/.lock under that same id in
+# state/.lock-session, and a tmux or Herdr pane bin/fm-primary-pane-lib.sh
+# can name. Anything that reaches the session as fleet input (a from-firstmate
+# marker, an operational doorbell, a <task-notification> rewake) does not
+# start with /stow, so it records nothing. The limit: a bare /stow typed into
+# the helm's pane counts as the captain's, whoever typed it. The offer lets
+# `bin/fm-helm-refresh.sh request`, which owns what happens next, run after a
+# reset-safe receipt; with no request, the session compacts as before. This
+# mode prints nothing and always exits 0, because UserPromptSubmit output
+# enters the context and a non-zero exit can block the prompt.
 #
 # The hook prints one Claude block decision, or nothing. Any unreadable
 # payload, missing jq, scope miss, or state-write failure exits 0 and prints
@@ -59,16 +74,19 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 usage() {
   cat <<'EOF'
-usage: fm-stow-guard.sh
+usage: fm-stow-guard.sh [prompt]
 
-Claude Stop hook. Reads the hook payload on stdin.
+Claude Stop hook, or with `prompt`, its UserPromptSubmit hook.
+Reads the hook payload on stdin.
 Create config/stow-guard to enable it. See the script header.
 EOF
 }
 
+mode=stop
 case "${1:-}" in
   -h|--help) usage; exit 0 ;;
   "") ;;
+  prompt) mode=prompt ;;
   *) usage >&2; exit 2 ;;
 esac
 
@@ -119,6 +137,39 @@ while IFS= read -r line || [ -n "$line" ]; do
     restart) [ "$value" != 1 ] || restart=1 ;;
   esac
 done < "$CONFIG/stow-guard"
+
+if [ "$mode" = prompt ]; then
+  [ "$restart" -eq 1 ] && [ "$sid" != session ] || exit 0
+  prompt=$(jq -r '.prompt // empty | strings' <<<"$payload" 2>/dev/null) || exit 0
+  prompt=${prompt#"${prompt%%[![:space:]]*}"}
+  prompt=${prompt%"${prompt##*[![:space:]]}"}
+  case "$prompt" in
+    /stow|/stow[[:space:]]*) ;;
+    *) exit 0 ;;
+  esac
+  # shellcheck source=bin/fm-session-lock-lib.sh
+  . "$SCRIPT_DIR/fm-session-lock-lib.sh" >/dev/null 2>&1 || exit 0
+  fm_session_lock_owned_by_self "$STATE" >/dev/null 2>&1 || exit 0
+  [ "$(cat "$STATE/.lock-session" 2>/dev/null)" = "$sid" ] || exit 0
+  fm_primary_pane_transport --default-session || exit 0
+  now=${FM_STOW_GUARD_NOW:-$(date +%s)}
+  case "$now" in
+    ''|*[!0-9]*) exit 0 ;;
+  esac
+  state_path="$STATE/.stow-guard.json"
+  current='{}'
+  if [ -f "$state_path" ]; then
+    current=$(jq -c 'if type == "object" then . else {} end' "$state_path" 2>/dev/null) || current='{}'
+    [ -n "$current" ] || current='{}'
+  fi
+  tmp=$(mktemp "$state_path.XXXXXX" 2>/dev/null) || exit 0
+  if ! jq -n --argjson current "$current" --arg sid "$sid" --argjson at "$now" \
+      '$current + {offer:{sid:$sid, at:$at}}' > "$tmp" 2>/dev/null \
+    || ! mv -f "$tmp" "$state_path" 2>/dev/null; then
+    rm -f "$tmp"
+  fi
+  exit 0
+fi
 
 if [ -n "${FM_STOW_CONTEXT_TOKENS:-}" ]; then
   case "$FM_STOW_CONTEXT_TOKENS" in
@@ -236,12 +287,7 @@ elif [ "$saves_readable" -eq 1 ] && [ $((now - last_stow)) -ge "$max_age" ] && [
 fi
 if [ -n "$reason" ]; then
   asked=$now
-  if [ "$restart" -eq 1 ] && [ "$sid" != session ] && fm_primary_pane_transport --default-session; then
-    reason="$reason Run the /stow skill now (full pass). If its receipt says this session is reset-safe, run $FM_ROOT/bin/fm-helm-refresh.sh request as your last step and end the turn: the session then clears to a fresh context instead of compacting. Otherwise continue the turn you were in."
-    offer=$(jq -nc --arg sid "$sid" --argjson at "$now" '{sid:$sid, at:$at}') || exit 0
-  else
-    reason="$reason Run the /stow skill now (full pass), then continue the turn you were in."
-  fi
+  reason="$reason Run the /stow skill now (full pass), then continue the turn you were in."
 fi
 
 tmp=$(mktemp "$STATE/.stow-guard.json.XXXXXX") || exit 0
