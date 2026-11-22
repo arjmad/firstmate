@@ -31,8 +31,8 @@
 # newest one is remembered in state/.stow-guard.json, so a later tail that no
 # longer contains it does not rewind the clock.
 #
-# The ask never offers a fresh restart, and it removes any offer the state
-# file holds, so the /stow it asks for saves and keeps the session and
+# The ask never offers a fresh restart, and it removes an offer the state
+# file holds for this session, so the /stow it asks for saves and keeps the session and
 # `bin/fm-helm-refresh.sh request` refuses it.
 #
 # With restart=1, `fm-stow-guard.sh prompt` is the one writer of that offer:
@@ -289,8 +289,9 @@ if [ -n "$reason" ]; then
   asked=$now
   reason="$reason Run the /stow skill now (full pass), then continue the turn you were in."
   # The /stow this asks for is not one the captain typed, so it must not reuse
-  # an earlier typed /stow's offer.
-  offer=null
+  # an earlier typed /stow's offer to this session. Another session's offer
+  # stays.
+  offer=$(jq -c --arg sid "$sid" 'if type == "object" and .sid == $sid then null else . end' <<<"$offer") || exit 0
 fi
 
 tmp=$(mktemp "$STATE/.stow-guard.json.XXXXXX") || exit 0

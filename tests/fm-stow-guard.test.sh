@@ -128,6 +128,18 @@ test_guard_ask_never_offers_a_restart() {
   jq -e 'has("offer") | not' "$CASE_STATE/.stow-guard.json" >/dev/null \
     || fail "the guard's ask kept or recorded an offer: $(cat "$CASE_STATE/.stow-guard.json")"
 
+  # An ask in another session sharing the checkout leaves the primary's offer.
+  prepare_case guard-ask-other-session
+  printf 'tokens=1000\nrestart=1\n' > "$CASE_CONFIG/stow-guard"
+  printf '{"asked":0,"fired":{},"offer":{"sid":"primary","at":4000}}\n' > "$CASE_STATE/.stow-guard.json"
+  write_usage 1200
+  rc=0
+  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" TMUX_PANE=%7 HERDR_ENV= || rc=$?
+  [ "$rc" -eq 0 ] || fail "an ask in another session must exit 0, got $rc"
+  assert_block "an ask in another session" "then continue the turn you were in."
+  jq -e '.offer == {sid:"primary", at:4000}' "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "an ask in another session removed the primary's offer: $(cat "$CASE_STATE/.stow-guard.json")"
+
   prepare_case guard-ask-herdr
   printf 'tokens=1000\nrestart=1\n' > "$CASE_CONFIG/stow-guard"
   write_usage 1200
@@ -138,7 +150,7 @@ test_guard_ask_never_offers_a_restart() {
   assert_block "the guard's ask in a Herdr pane" "then continue the turn you were in."
   jq -e 'has("offer") | not' "$CASE_STATE/.stow-guard.json" >/dev/null \
     || fail "the guard's ask in a Herdr pane recorded an offer: $(cat "$CASE_STATE/.stow-guard.json")"
-  pass "with restart=1 in a pane, the guard's ask names no refresh request, records no offer, and removes a typed /stow's offer"
+  pass "with restart=1 in a pane, the guard's ask names no refresh request, records no offer, and removes only this session's typed /stow offer"
 }
 
 PROMPT_SID=11111111-2222-3333-4444-555555555555

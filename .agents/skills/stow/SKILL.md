@@ -289,7 +289,8 @@ Do not hide an over-budget result behind a reset-safe claim.
 In a primary home the receipt is written after the cascade below, not instead of it.
 When the captain typed `/stow` himself in a home whose `config/stow-guard` holds `restart=1` and the receipt says reset-safe, end the pass by asking him through the native question selector whether to start fresh, with the options "Start fresh now" (recommended, listed first) and "Keep this session".
 Run `bin/fm-helm-refresh.sh request` as your last step only when he picks "Start fresh now"; "Keep this session" changes nothing.
-If the question guard refuses the selector, ask the same question in the turn's final message instead, and run `request` as the last step of the turn in which he answers "Start fresh now".
+If the question guard refuses the selector, ask the same question in the turn's final message instead; when he answers "Start fresh now", run `request` only if nothing but his answer reached the session since the receipt, and otherwise run the `/stow` pass again first, because the receipt no longer covers that work.
+When `request` refuses, say so in one line; the session keeps its context.
 Ask nothing and leave `request` unrun after a receipt that is not reset-safe, and after a `/stow` the stow guard, an agent, or the cascade started.
 
 ## Automatic cascade to secondmates
