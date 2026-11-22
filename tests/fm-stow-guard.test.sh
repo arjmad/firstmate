@@ -115,10 +115,8 @@ test_context_crossing_blocks_once_until_rearm() {
 
 test_guard_ask_never_offers_a_restart() {
   local rc=0
-  # A typed /stow's offer is in the state file when the guard asks.
   prepare_case guard-ask
   printf 'tokens=1000\nrestart=1\n' > "$CASE_CONFIG/stow-guard"
-  printf '{"asked":0,"fired":{},"offer":{"sid":"s1","at":4000}}\n' > "$CASE_STATE/.stow-guard.json"
   write_usage 1200
   payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" \
     TMUX_PANE=%7 HERDR_ENV= || rc=$?
@@ -126,19 +124,19 @@ test_guard_ask_never_offers_a_restart() {
   assert_block "the guard's ask with restart=1" "Run the /stow skill now (full pass), then continue the turn you were in."
   ! grep -q 'fm-helm-refresh' "$OUT" || fail "the guard's ask offered a restart: $(cat "$OUT")"
   jq -e 'has("offer") | not' "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "the guard's ask kept or recorded an offer: $(cat "$CASE_STATE/.stow-guard.json")"
+    || fail "the guard's ask recorded an offer: $(cat "$CASE_STATE/.stow-guard.json")"
 
-  # An ask in another session sharing the checkout leaves the primary's offer.
-  prepare_case guard-ask-other-session
+  # A typed /stow's offer already in the state file passes through unchanged.
+  prepare_case guard-ask-existing-offer
   printf 'tokens=1000\nrestart=1\n' > "$CASE_CONFIG/stow-guard"
-  printf '{"asked":0,"fired":{},"offer":{"sid":"primary","at":4000}}\n' > "$CASE_STATE/.stow-guard.json"
+  printf '{"asked":0,"fired":{},"offer":{"sid":"s1","at":4000}}\n' > "$CASE_STATE/.stow-guard.json"
   write_usage 1200
   rc=0
   payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" TMUX_PANE=%7 HERDR_ENV= || rc=$?
-  [ "$rc" -eq 0 ] || fail "an ask in another session must exit 0, got $rc"
-  assert_block "an ask in another session" "then continue the turn you were in."
-  jq -e '.offer == {sid:"primary", at:4000}' "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "an ask in another session removed the primary's offer: $(cat "$CASE_STATE/.stow-guard.json")"
+  [ "$rc" -eq 0 ] || fail "an ask with an existing offer must exit 0, got $rc"
+  assert_block "an ask with an existing offer" "then continue the turn you were in."
+  jq -e '.offer == {sid:"s1", at:4000}' "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "the guard's ask changed an existing offer: $(cat "$CASE_STATE/.stow-guard.json")"
 
   prepare_case guard-ask-herdr
   printf 'tokens=1000\nrestart=1\n' > "$CASE_CONFIG/stow-guard"
@@ -150,7 +148,7 @@ test_guard_ask_never_offers_a_restart() {
   assert_block "the guard's ask in a Herdr pane" "then continue the turn you were in."
   jq -e 'has("offer") | not' "$CASE_STATE/.stow-guard.json" >/dev/null \
     || fail "the guard's ask in a Herdr pane recorded an offer: $(cat "$CASE_STATE/.stow-guard.json")"
-  pass "with restart=1 in a pane, the guard's ask names no refresh request, records no offer, and removes only this session's typed /stow offer"
+  pass "with restart=1 in a pane, the guard's ask names no refresh request, records no offer, and carries an existing offer through unchanged"
 }
 
 PROMPT_SID=11111111-2222-3333-4444-555555555555
@@ -203,70 +201,27 @@ test_typed_stow_records_the_offer() {
   printf '{"last_stow":100,"asked":5,"fired":{"other":true}}\n' > "$CASE_STATE/.stow-guard.json"
   invoke_prompt "$PRIMARY" "$(prompt_payload /stow)"
   jq -e --arg sid "$PROMPT_SID" \
-    '.offer == {sid:$sid, at:5000} and .last_stow == 5000 and .asked == 5
-      and .fired == {other:true} and .typed == $sid' \
+    '.offer == {sid:$sid, at:5000} and .last_stow == 100 and .asked == 5 and .fired == {other:true}' \
     "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "a typed /stow did not record the offer, the stow time, and its one-shot marker: $(cat "$CASE_STATE/.stow-guard.json")"
+    || fail "a typed /stow did not record only the offer: $(cat "$CASE_STATE/.stow-guard.json")"
 
-  # The Stop that ends the typed /stow's turn, still over the token line, asks
-  # for no second pass and keeps the offer for the request after the pass.
+  # The guard's own ask state is untouched, so a Stop over the line still asks,
+  # and it carries the offer through for the request after the pass.
   write_usage 1200
   rc=0
   printf '{"session_id":"%s","transcript_path":"%s"}\n' "$PROMPT_SID" "$CASE_TRANSCRIPT" \
     | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW=5001 TMUX_PANE=%7 || rc=$?
   [ "$rc" -eq 0 ] || fail "the Stop after a typed /stow must exit 0, got $rc"
-  assert_silent "the Stop after a typed /stow"
-  jq -e --arg sid "$PROMPT_SID" \
-    '.offer == {sid:$sid, at:5000} and .fired[$sid] == true and (has("typed") | not)' \
-    "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "the Stop dropped the typed /stow's offer or kept its marker: $(cat "$CASE_STATE/.stow-guard.json")"
-  # The next Stop, still over the line, is an ordinary one: the crossing is
-  # already counted, so it stays silent too.
-  rc=0
-  printf '{"session_id":"%s","transcript_path":"%s"}\n' "$PROMPT_SID" "$CASE_TRANSCRIPT" \
-    | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW=5002 TMUX_PANE=%7 || rc=$?
-  [ "$rc" -eq 0 ] || fail "the second Stop after a typed /stow must exit 0, got $rc"
-  assert_silent "the second Stop after a typed /stow"
-
-  # A typed /stow under the line, above the re-arm point, leaves the next
-  # crossing's ask in place, also after its own turn's Stop.
-  prepare_prompt_case typed-stow-below-line
-  invoke_prompt "$PRIMARY" "$(prompt_payload /stow)"
-  write_usage 800
-  rc=0
-  printf '{"session_id":"%s","transcript_path":"%s"}\n' "$PROMPT_SID" "$CASE_TRANSCRIPT" \
-    | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW=5001 TMUX_PANE=%7 || rc=$?
-  [ "$rc" -eq 0 ] || fail "the Stop under the line after a typed /stow must exit 0, got $rc"
-  assert_silent "the Stop under the line after a typed /stow"
-  jq -e --arg sid "$PROMPT_SID" '.offer.sid == $sid' "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "the Stop under the line dropped the typed /stow's offer: $(cat "$CASE_STATE/.stow-guard.json")"
-  write_usage 1200
-  rc=0
-  printf '{"session_id":"%s","transcript_path":"%s"}\n' "$PROMPT_SID" "$CASE_TRANSCRIPT" \
-    | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW=5002 TMUX_PANE=%7 || rc=$?
-  [ "$rc" -eq 0 ] || fail "the later crossing must exit 0, got $rc"
-  assert_block "the later crossing after a typed /stow" "context is 1200 tokens"
-
-  # An interrupted /stow fires no Stop, so the next prompt ends its marker and
-  # the next Stop over the line still asks.
-  prepare_prompt_case typed-stow-interrupted
-  invoke_prompt "$PRIMARY" "$(prompt_payload /stow)"
-  invoke_prompt "$PRIMARY" "$(prompt_payload 'what changed today?')"
-  jq -e --arg sid "$PROMPT_SID" '.offer.sid == $sid and (has("typed") | not)' "$CASE_STATE/.stow-guard.json" >/dev/null \
-    || fail "the next prompt kept an interrupted /stow's marker: $(cat "$CASE_STATE/.stow-guard.json")"
-  write_usage 1200
-  rc=0
-  printf '{"session_id":"%s","transcript_path":"%s"}\n' "$PROMPT_SID" "$CASE_TRANSCRIPT" \
-    | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" FM_STOW_GUARD_NOW=5001 TMUX_PANE=%7 || rc=$?
-  [ "$rc" -eq 0 ] || fail "the Stop after an interrupted /stow must exit 0, got $rc"
-  assert_block "the Stop after an interrupted /stow" "context is 1200 tokens"
+  assert_block "the Stop over the line after a typed /stow" "context is 1200 tokens"
+  jq -e --arg sid "$PROMPT_SID" '.offer == {sid:$sid, at:5000}' "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "the Stop dropped the typed /stow's offer: $(cat "$CASE_STATE/.stow-guard.json")"
 
   prepare_prompt_case typed-stow-args
   invoke_prompt "$PRIMARY" "$(prompt_payload $'  /stow  quick\n')" \
     TMUX_PANE= HERDR_ENV=1 HERDR_PANE_ID=w1:p1
   jq -e --arg sid "$PROMPT_SID" '.offer == {sid:$sid, at:5000}' "$CASE_STATE/.stow-guard.json" >/dev/null \
     || fail "a typed /stow with arguments in a Herdr pane recorded no offer: $(cat "$CASE_STATE/.stow-guard.json" 2>/dev/null)"
-  pass "a /stow the lock session types records the restart offer, keeps the rest of the state, and survives the next Stop"
+  pass "a /stow the lock session types records only the restart offer, and the guard's next ask carries it through"
 }
 
 test_fleet_sent_stow_records_no_offer() {

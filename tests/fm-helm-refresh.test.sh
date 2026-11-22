@@ -196,8 +196,9 @@ test_typed_stow_offer_is_accepted() {
   assert_refused "a marked /stow" "no /stow the captain typed made a restart offer to this session" \
     FM_ROOT_OVERRIDE="$primary" PROMPT_PAYLOAD="$payload"
 
-  # The guard's own ask, even after a typed /stow's offer, leaves it refused.
+  # The guard's own ask records no offer, so its /stow is refused.
   prepare_case guard-asked-stow
+  rm -f "$CASE_STATE/.stow-guard.json"
   jq -nc '{message:{usage:{input_tokens:5000}}}' > "$CASE_HOME/transcript.jsonl"
   jq -nc --arg sid "$SID" --arg t "$CASE_HOME/transcript.jsonl" '{session_id:$sid, transcript_path:$t}' \
     | env -u GROK_AGENT -u GROK_HOOK_EVENT TMUX_PANE=%424242 FM_ROOT_OVERRIDE="$primary" FM_HOME="$primary" \

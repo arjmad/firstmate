@@ -4,8 +4,11 @@ He then added: "Can we make it so slash stow does the stow as normal and then gi
 Decision: a `/stow` the captain types in the Claude helm runs the pass as normal, and after a reset-safe receipt the helm asks him through the native question selector, "Start fresh now" (recommended) or "Keep this session"; only "Start fresh now" restarts it fresh.
 The `/stow` the stow guard asks for saves everything and keeps the session, and a receipt that is not reset-safe asks nothing.
 This supersedes the offer half of [the helm fresh restart record](2026-11-22-helm-fresh-restart-after-stow.md), whose restart ran only "for a session the guard asked"; the `/clear` refresh mechanics it records are unchanged.
-The stow guard gains a UserPromptSubmit mode that records `offer:{sid, at}` in `state/.stow-guard.json` when the lock-holding primary's prompt is `/stow` itself, with `last_stow` and a one-shot `typed` marker so the Stop that ends that `/stow`'s own turn asks nothing, and its Stop ask no longer offers a restart and removes its own session's offer, so the typed `/stow` is the one offer source and `bin/fm-helm-refresh.sh request` stays its one reader.
+The stow guard gains a UserPromptSubmit mode that records `offer:{sid, at}` in `state/.stow-guard.json` when the lock-holding primary's prompt is `/stow` itself, and its Stop ask no longer offers or records a restart, so the typed `/stow` is the one offer source and `bin/fm-helm-refresh.sh request` stays its one reader.
 A `/stow` that an agent, a secondmate home or the stow cascade sends records nothing, and every other refusal in `request` is unchanged.
+The guard's own ask state (`fired`, `last_stow`, `asked`) is left alone, because a Stop hook cannot tell which turn it ends and that state is what stops a compaction without a stow.
+So a typed `/stow` whose own turn ends over the token line still gets the guard's ask and a second pass, as before, and its offer survives it.
+A typed offer also stays valid for its TTL across a later guard-asked `/stow`; the skill's question, asked only after a typed `/stow`, is what keeps that `/stow` from restarting.
 No upstream proposal yet, for the same reason as the record it amends.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
