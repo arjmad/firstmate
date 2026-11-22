@@ -1949,6 +1949,18 @@ ok - Claude Code (2.1.318 (Claude Code)) on herdr 0.9.5: fm-send's doorbell reac
 ok - Claude Code (2.1.318 (Claude Code)) on herdr 0.9.5: a Herdr restore resumed session 96fd4d46-ed13-4515-aa2a-934e8c515357 with its launch flags on CLAUDE_CONFIG_DIR=/Users/arjmad/.claude-ecomills
 ```
 
+Claude Code 2.1.328 asks before it adds an `--add-dir` directory that no trusted directory covers: an "Adding a new directory" dialog with the cursor on "No, exit".
+A worker's grant names its home's task-channel directories, and a fleet home is trusted in its store because its primary runs there, so a real spawn never sees the dialog; the guard's lab home is registered through `bin/fm-claude-trust.sh --lab-home` before the spawn for the same standing.
+Without that registration the 2.1.328 run stopped at the dialog: `the spawned worker never reported its wait within 180s: This session hasn't worked here before.`
+
+Observed 2026-11-22 on Fafnir against Herdr 0.9.5 and Claude Code 2.1.328, run as `FM_SPAWN_STEER_LIVE=1 tests/fm-spawn-steer-herdr-live-e2e.test.sh`:
+
+```text
+ok - Claude Code (2.1.328 (Claude Code)) on herdr 0.9.5: fm-spawn launched a named Claude worker in isolated session fm-lab-spawn-steer-live-2739417-7573 and it went idle
+ok - Claude Code (2.1.328 (Claude Code)) on herdr 0.9.5: fm-send's doorbell reached the idle named worker, which acted and acknowledged
+ok - Claude Code (2.1.328 (Claude Code)) on herdr 0.9.5: a Herdr restore resumed session ee1736a2-b27e-4ba5-a92b-22c2679329df with its launch flags
+```
+
 The lab session's saved layout held the reported command for the pane, `"agent_resume":{"source":"herdr:claude","agent":"claude","argv":["sh","<home>/state/<id>.claude-resume.sh","<session-id>"]}`, beside Herdr's own `agent_session` reference.
 
 Observed 2026-10-19 with the PR 88 composer change reverted:
