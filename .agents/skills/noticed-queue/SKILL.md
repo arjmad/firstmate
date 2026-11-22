@@ -8,7 +8,7 @@ metadata:
 
 # Noticed queue and idea capture
 
-Arjun's design of 2026-10-27 (brain facts 8944, 8990, 9027, 9064 on `systems/platform/firstmate`), funnelled on 2026-11-08: agents stay on task, what they notice is kept, and only what needs him reaches him.
+Arjun's design of 2026-10-27 ([`docs/fork-decisions/2026-10-27-noticed-queue.md`](../../../docs/fork-decisions/2026-10-27-noticed-queue.md); brain fact 9064 on `systems/platform/firstmate`), funnelled on 2026-11-08: agents stay on task, what they notice is kept, and only what needs him reaches him.
 A **noticed** item is something broken outside the task that noticed it.
 An **idea** is something that could make the ecosystem better.
 A noticed item is the fleet's own work from the start unless it needs his decision or review (see Acting first); that item, and every idea, is a captain hold, so filing never dispatches it and a pick starts only from his answer.

@@ -1,4 +1,4 @@
-2026-10-27: Arjun, in the proactivity-audit grilling in the Claude workspace session, settled how agents become proactive without drifting off task (brain facts 8944, 8990, 9027 and 9064 on `systems/platform/firstmate`).
+2026-10-27: Arjun, in the proactivity-audit grilling in the Claude workspace session, settled how agents become proactive without drifting off task (brain fact 9064 on `systems/platform/firstmate`).
 Decision: a problem an agent notices outside its task, and an idea that could improve the ecosystem, become backlog captain holds kind `noticed` or `idea`, filed only by firstmate, deduplicated, and never dispatched until he picks.
 Workers jot observations in task-local notes and leave at most one `Noticed:` and one `Idea:` line at the end; firstmate shows each noticed item once, the Monday open-items sweep re-checks them and flags any still broken after a week, and a Monday ranking with Atlas's rule shows him the top 3 new ideas once.
 One read-only exploration scout a week rotates over Amazon and Walmart program changes, upstream tool features, and business-data blind spots; its findings reach him only through idea capture and the top 3.
