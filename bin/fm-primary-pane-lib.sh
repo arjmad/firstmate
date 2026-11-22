@@ -9,7 +9,10 @@
 #
 #   tmux   TMUX_PANE
 #   herdr  HERDR_ENV=1 + HERDR_PANE_ID + HERDR_SESSION (a named session's pane,
-#          including the fm-remote session remote homes run under)
+#          including the fm-remote session remote homes run under); with
+#          --default-session, a pane with no HERDR_SESSION is the default
+#          session's, as bin/backends/herdr.sh's fm_backend_herdr_session reads
+#          it, because a pane in Herdr's default session carries none
 #
 # An explicit target variable is deliberately NOT honored: the helper must
 # never deliver to a pane another home or a stray environment configured.
@@ -30,11 +33,12 @@
 # The caller sources bin/fm-backend.sh (with the tmux adapter, and the herdr
 # adapter when that transport is used) and bin/fm-session-lock-lib.sh first.
 
-# fm_primary_pane_transport: set FM_PRIMARY_PANE_TRANSPORT (tmux|herdr) and
-# FM_PRIMARY_PANE_TARGET from the injected pane identity. Returns 1, with both
-# empty, when this process is in no supported pane.
+# fm_primary_pane_transport [--default-session]: set FM_PRIMARY_PANE_TRANSPORT
+# (tmux|herdr) and FM_PRIMARY_PANE_TARGET from the injected pane identity.
+# Returns 1, with both empty, when this process is in no supported pane.
 # shellcheck disable=SC2034 # Both are results for the sourcing caller.
 fm_primary_pane_transport() {
+  local session=${HERDR_SESSION:-}
   FM_PRIMARY_PANE_TRANSPORT=
   FM_PRIMARY_PANE_TARGET=
   if [ -n "${TMUX_PANE:-}" ]; then
@@ -42,9 +46,10 @@ fm_primary_pane_transport() {
     FM_PRIMARY_PANE_TARGET=$TMUX_PANE
     return 0
   fi
-  if [ "${HERDR_ENV:-}" = 1 ] && [ -n "${HERDR_PANE_ID:-}" ] && [ -n "${HERDR_SESSION:-}" ]; then
+  [ "${1:-}" != --default-session ] || [ -n "$session" ] || session=default
+  if [ "${HERDR_ENV:-}" = 1 ] && [ -n "${HERDR_PANE_ID:-}" ] && [ -n "$session" ]; then
     FM_PRIMARY_PANE_TRANSPORT=herdr
-    FM_PRIMARY_PANE_TARGET="$HERDR_SESSION:$HERDR_PANE_ID"
+    FM_PRIMARY_PANE_TARGET="$session:$HERDR_PANE_ID"
     return 0
   fi
   return 1

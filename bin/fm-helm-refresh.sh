@@ -155,7 +155,9 @@ if [ "$1" = request ]; then
   case "$offer_at" in ''|*[!0-9]*) refuse "the stow guard's restart offer has no readable time" ;; esac
   [ $(( $(date +%s) - offer_at )) -le "$OFFER_TTL" ] \
     || refuse "the stow guard's restart offer is older than ${OFFER_TTL}s"
-  fm_primary_pane_transport \
+  # The default Herdr session puts no HERDR_SESSION in its panes, and the
+  # Heimdall helm runs there.
+  fm_primary_pane_transport --default-session \
     || refuse "this session runs in no tmux or Herdr pane a restart can prove"
   [ ! -e "$STATE/.afk" ] || refuse "away mode is on"
   last_cleared=$(awk -F '\t' '$2 == "cleared" { t = $1 } END { print t }' "$LOG" 2>/dev/null)
@@ -192,31 +194,8 @@ fi
 # --- run --------------------------------------------------------------------
 
 TOKEN=$2
-[ "$(pending_field token)" = "$TOKEN" ] || exit 1
-SID=$(pending_field sid)
-LOCK_PID=$(pending_field lock_pid)
-LOCK_IDENTITY=$(pending_field lock_identity)
-TRANSPORT=$(pending_field transport)
-TARGET=$(pending_field target)
-[ -n "$SID" ] && [ -n "$LOCK_PID" ] && [ -n "$LOCK_IDENTITY" ] && [ -n "$TARGET" ] || {
-  log gave-up "token=$TOKEN the pending request is incomplete"
-  exit 1
-}
-# shellcheck source=bin/fm-backend.sh
-. "$SCRIPT_DIR/fm-backend.sh"
-# shellcheck source=bin/fm-operational-input.sh
-. "$SCRIPT_DIR/fm-operational-input.sh"
-fm_backend_source tmux || exit 1
-case "$TRANSPORT" in
-  tmux) ;;
-  herdr) fm_backend_source herdr || exit 1 ;;
-  *) log gave-up "token=$TOKEN unknown transport '$TRANSPORT'"; exit 1 ;;
-esac
 
-identity=$(fm_pid_identity "$$") || exit 1
-tmp=$(mktemp "$OWNER.XXXXXX") || exit 1
-printf '%s\t%s\n' "$$" "$identity" > "$tmp" && mv -f "$tmp" "$OWNER" || exit 1
-
+# Every end of this owner is one log line, and it removes only its own records.
 finish() {  # <status> <event> <detail>
   log "$2" "token=$TOKEN $3"
   [ "$(pending_field token)" != "$TOKEN" ] || rm -f "$PENDING"
@@ -224,6 +203,34 @@ finish() {  # <status> <event> <detail>
   exit "$1"
 }
 trap 'finish 1 gave-up "stopped by a signal before it finished"' TERM INT HUP
+
+[ "$(pending_field token)" = "$TOKEN" ] || finish 1 gave-up "the request was replaced or removed before the owner started"
+SID=$(pending_field sid)
+LOCK_PID=$(pending_field lock_pid)
+LOCK_IDENTITY=$(pending_field lock_identity)
+TRANSPORT=$(pending_field transport)
+TARGET=$(pending_field target)
+if [ -z "$SID" ] || [ -z "$LOCK_PID" ] || [ -z "$LOCK_IDENTITY" ] || [ -z "$TARGET" ]; then
+  finish 1 gave-up "the pending request is incomplete"
+fi
+# shellcheck source=bin/fm-backend.sh
+. "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-operational-input.sh
+. "$SCRIPT_DIR/fm-operational-input.sh"
+fm_backend_source tmux || finish 1 gave-up "the tmux adapter would not load"
+case "$TRANSPORT" in
+  tmux) ;;
+  herdr) fm_backend_source herdr || finish 1 gave-up "the herdr adapter would not load" ;;
+  *) finish 1 gave-up "unknown transport '$TRANSPORT'" ;;
+esac
+
+identity=$(fm_pid_identity "$$") || identity=
+[ -n "$identity" ] || finish 1 gave-up "the owner's own process identity cannot be read"
+tmp=$(mktemp "$OWNER.XXXXXX") || finish 1 gave-up "state/.helm-refresh-owner cannot be written"
+if ! printf '%s\t%s\n' "$$" "$identity" > "$tmp" || ! mv -f "$tmp" "$OWNER"; then
+  rm -f "$tmp"
+  finish 1 gave-up "state/.helm-refresh-owner cannot be written"
+fi
 
 lock_held() {
   [ "$(head -n 1 "$STATE/.lock" 2>/dev/null)" = "$LOCK_PID" ] \

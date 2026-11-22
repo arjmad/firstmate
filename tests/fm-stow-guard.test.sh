@@ -135,6 +135,18 @@ test_restart_offer_needs_opt_in_and_a_pane() {
   jq -e '.offer.sid == "s1"' "$CASE_STATE/.stow-guard.json" >/dev/null \
     || fail "a later stop dropped the offer: $(cat "$CASE_STATE/.stow-guard.json")"
 
+  # A pane in Herdr's default session carries no HERDR_SESSION.
+  prepare_case restart-herdr-default
+  printf 'tokens=1000\nrestart=1\n' > "$CASE_CONFIG/stow-guard"
+  write_usage 1200
+  rc=0
+  payload | invoke_guard "$PRIMARY" "$CASE_STATE" "$CASE_CONFIG" \
+    TMUX_PANE= HERDR_ENV=1 HERDR_PANE_ID=w1:p1 HERDR_SESSION= || rc=$?
+  [ "$rc" -eq 0 ] || fail "restart in a default-session Herdr pane must exit 0, got $rc"
+  assert_block "restart in a default-session Herdr pane" "bin/fm-helm-refresh.sh request as your last step"
+  jq -e '.offer.sid == "s1"' "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "a default-session Herdr pane recorded no offer: $(cat "$CASE_STATE/.stow-guard.json")"
+
   prepare_case restart-no-pane
   printf 'tokens=1000\nrestart=1\n' > "$CASE_CONFIG/stow-guard"
   write_usage 1200

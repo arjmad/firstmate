@@ -236,7 +236,7 @@ elif [ "$saves_readable" -eq 1 ] && [ $((now - last_stow)) -ge "$max_age" ] && [
 fi
 if [ -n "$reason" ]; then
   asked=$now
-  if [ "$restart" -eq 1 ] && [ "$sid" != session ] && fm_primary_pane_transport; then
+  if [ "$restart" -eq 1 ] && [ "$sid" != session ] && fm_primary_pane_transport --default-session; then
     reason="$reason Run the /stow skill now (full pass). If its receipt says this session is reset-safe, run $FM_ROOT/bin/fm-helm-refresh.sh request as your last step and end the turn: the session then clears to a fresh context instead of compacting. Otherwise continue the turn you were in."
     offer=$(jq -nc --arg sid "$sid" --argjson at "$now" '{sid:$sid, at:$at}') || exit 0
   else
