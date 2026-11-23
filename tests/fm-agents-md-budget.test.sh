@@ -46,6 +46,30 @@ test_counts_bytes_not_characters() {
   pass "size is measured in bytes, as Codex truncates"
 }
 
+test_nested_tracked_agents_md_counts_toward_budget() {
+  local repo="$TMP_ROOT/repo" out rc
+  mkdir -p "$repo/sub" "$repo/projects/x"
+  git -C "$repo" init -q
+  printf 'projects/\n' > "$repo/.gitignore"
+  write_bytes "$repo/AGENTS.md" 600
+  write_bytes "$repo/sub/AGENTS.md" 300
+  write_bytes "$repo/projects/x/AGENTS.md" 5000
+  git -C "$repo" add .gitignore AGENTS.md sub/AGENTS.md
+  out=$("$CHECK" --repo "$repo" --budget 1000 --margin 100 2>&1) \
+    || fail "root plus nested tracked AGENTS.md at the limit was refused: $out"
+  assert_contains "$out" "bytes=900 limit=900" "nested AGENTS.md was not summed, or an ignored one was"
+
+  printf 'a' >> "$repo/sub/AGENTS.md"
+  out=$("$CHECK" --repo "$repo" --budget 1000 --margin 100 2>&1)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "chain one byte over the limit exited $rc, want 1"
+  assert_contains "$out" "2 tracked files" "overrun did not name the summed chain"
+  assert_contains "$out" "is 901 bytes, 1 over the 900-byte limit" "chain overrun was not explained"
+  assert_contains "$out" '"Maintaining this file"' "overrun did not point at the maintenance section"
+  assert_contains "$out" "do not raise the limit" "overrun did not say to prune instead of raising the limit"
+  pass "every tracked AGENTS.md shares the budget; ignored ones do not count"
+}
+
 test_invalid_arguments_refuse() {
   local rc
   "$CHECK" --budget 12k >/dev/null 2>&1; rc=$?
@@ -60,4 +84,5 @@ test_invalid_arguments_refuse() {
 test_repository_agents_md_fits_codex_budget
 test_limit_boundary_is_budget_minus_margin
 test_counts_bytes_not_characters
+test_nested_tracked_agents_md_counts_toward_budget
 test_invalid_arguments_refuse
