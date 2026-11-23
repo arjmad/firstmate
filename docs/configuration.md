@@ -1491,6 +1491,7 @@ The script header owns the transcript read, the state file, and the block messag
 
 With `restart=1`, a `/stow` the captain types himself in the primary's tmux or Herdr pane offers a fresh restart in place of compaction, through the same script's UserPromptSubmit hook.
 A `/stow` that the guard's own ask, an agent, or the stow cascade starts makes no offer, so it saves and keeps the session.
+A typed `/stow quick` makes no offer either, because a quick save never claims reset-safe.
 A quick save never asks the fresh-start question, even when the captain types `/stow quick`.
 When the typed `/stow`'s receipt says the session is reset-safe, the primary asks the captain whether to start fresh now or keep the session.
 Only "Start fresh now" runs `bin/fm-helm-refresh.sh request`, and once its turn ends the session is cleared with Claude Code's `/clear` and started again by one doorbell.

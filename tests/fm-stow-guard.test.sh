@@ -217,11 +217,27 @@ test_typed_stow_records_the_offer() {
     || fail "the Stop dropped the typed /stow's offer: $(cat "$CASE_STATE/.stow-guard.json")"
 
   prepare_prompt_case typed-stow-args
-  invoke_prompt "$PRIMARY" "$(prompt_payload $'  /stow  quick\n')" \
+  invoke_prompt "$PRIMARY" "$(prompt_payload $'  /stow  full\n')" \
     TMUX_PANE= HERDR_ENV=1 HERDR_PANE_ID=w1:p1
   jq -e --arg sid "$PROMPT_SID" '.offer == {sid:$sid, at:5000}' "$CASE_STATE/.stow-guard.json" >/dev/null \
     || fail "a typed /stow with arguments in a Herdr pane recorded no offer: $(cat "$CASE_STATE/.stow-guard.json" 2>/dev/null)"
+  prepare_prompt_case typed-stow-quickly
+  invoke_prompt "$PRIMARY" "$(prompt_payload '/stow quickly')"
+  jq -e '.offer' "$CASE_STATE/.stow-guard.json" >/dev/null \
+    || fail "a typed /stow quickly recorded no offer: $(cat "$CASE_STATE/.stow-guard.json" 2>/dev/null)"
   pass "a /stow the lock session types records only the restart offer, and the guard's next ask carries it through"
+}
+
+test_typed_stow_quick_records_no_offer() {
+  local prompt n=0
+  local -a prompts=('/stow quick' $'  /stow\tquick  \n' '/stow quick extra words')
+  for prompt in "${prompts[@]}"; do
+    n=$((n + 1))
+    prepare_prompt_case "typed-stow-quick-$n"
+    invoke_prompt "$PRIMARY" "$(prompt_payload "$prompt")"
+    assert_no_offer "typed quick prompt $n"
+  done
+  pass "a typed /stow quick records no restart offer"
 }
 
 test_fleet_sent_stow_records_no_offer() {
@@ -684,6 +700,7 @@ fm_test_run \
   test_context_crossing_blocks_once_until_rearm \
   test_guard_ask_never_offers_a_restart \
   test_typed_stow_records_the_offer \
+  test_typed_stow_quick_records_no_offer \
   test_fleet_sent_stow_records_no_offer \
   test_typed_stow_outside_the_primary_session_records_no_offer \
   test_continuation_stop_blocks_once_per_crossing \
