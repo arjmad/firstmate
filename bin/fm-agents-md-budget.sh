@@ -63,7 +63,8 @@ if [ -n "$FILE" ]; then
   label=$FILE
 else
   [ -f "$REPO/AGENTS.md" ] || die "no root AGENTS.md in $REPO" 2
-  tracked=$(git -C "$REPO" ls-files -- AGENTS.md '*/AGENTS.md') \
+  # quotePath=false keeps non-ASCII paths literal so each one is found on disk.
+  tracked=$(git -C "$REPO" -c core.quotePath=false ls-files -- AGENTS.md '*/AGENTS.md') \
     || die "cannot list tracked AGENTS.md files in $REPO" 2
   bytes=0
   count=0

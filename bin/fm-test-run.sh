@@ -1637,6 +1637,12 @@ families_for_changed_path() {
       ;;
   esac
   case "$path" in
+    # Every nested AGENTS.md shares Codex's budget, whatever arm owns its folder.
+    */AGENTS.md)
+      printf '%s\n' "__script__:fm-agents-md-budget.test.sh"
+      ;;
+  esac
+  case "$path" in
     tests/fm-backend-herdr-eventwait.test.py)
       printf '%s\n' real-herdr-gated
       printf '%s\n' backend-dispatch
