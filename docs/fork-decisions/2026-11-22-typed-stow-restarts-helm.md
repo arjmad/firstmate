@@ -5,6 +5,7 @@ Decision: a `/stow` the captain types in the Claude helm runs the pass as normal
 The `/stow` the stow guard asks for saves everything and keeps the session, and a receipt that is not reset-safe asks nothing.
 This supersedes the offer half of [the helm fresh restart record](2026-11-22-helm-fresh-restart-after-stow.md), whose restart ran only "for a session the guard asked"; the `/clear` refresh mechanics it records are unchanged.
 The stow guard gains a UserPromptSubmit mode that records `offer:{sid, at}` in `state/.stow-guard.json` when the lock-holding primary's prompt is `/stow` itself, and its Stop ask no longer offers or records a restart, so the typed `/stow` is the one offer source and `bin/fm-helm-refresh.sh request` stays its one reader.
+A typed `/stow quick` records nothing either, because a quick save never claims reset-safe (amended 2026-11-22).
 A `/stow` that an agent, a secondmate home or the stow cascade sends records nothing, and every other refusal in `request` is unchanged.
 The guard's own ask state (`fired`, `last_stow`, `asked`) is left alone, because a Stop hook cannot tell which turn it ends and that state is what stops a compaction without a stow.
 So a typed `/stow` whose own turn ends over the token line still gets the guard's ask and a second pass, as before, and its offer survives it.
