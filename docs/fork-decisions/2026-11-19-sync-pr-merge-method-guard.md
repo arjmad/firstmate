@@ -8,4 +8,4 @@ No upstream proposal: the guard serves this fork's sync workflow.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| Refuse to squash or rebase an upstream-sync pull request on GitHub, naming `-- --merge` | `bin/fm-pr-merge.sh` (header, GitHub gate loop), `tests/fm-pr-merge.test.sh` (gh mock compare answers, `add_revert_repo` sync fixtures) | `bin/fm-pr-merge.sh` (the default `--squash`), `tests/fm-pr-merge.test.sh` | carried | 427056c4 |
+| Refuse to squash or rebase an upstream-sync pull request on GitHub, naming `-- --merge` | `bin/fm-pr-merge.sh` (header, GitHub gate loop), `tests/fm-pr-merge.test.sh` (gh mock compare answers, `add_revert_repo` sync fixtures), `tests/fm-pr-check-security.test.sh` and `tests/fm-captain-hold-lifecycle.test.sh` (their gh mocks answer the paged compare read) | `bin/fm-pr-merge.sh` (the default `--squash`), `tests/fm-pr-merge.test.sh`, `tests/fm-pr-check-security.test.sh`, `tests/fm-captain-hold-lifecycle.test.sh` (gh mocks) | carried | 427056c4 |
