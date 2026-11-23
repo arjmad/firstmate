@@ -11,8 +11,8 @@
 # (default margin 2048 bytes), so growth is caught before it reaches the cut.
 # The budget is shared by every AGENTS.md from the repository root down to the
 # working folder, so by default the check sums the root AGENTS.md and every nested
-# AGENTS.md git tracks in --repo (default this repository; ignored paths such as
-# projects/ are excluded). --file measures one file instead; sizes are in bytes.
+# AGENTS.md git tracks or would track in --repo (default this repository; ignored
+# paths such as projects/ are excluded). --file measures one file instead; sizes are in bytes.
 # Prints one "ok" line on success; prints the overrun to stderr and exits 1 otherwise.
 set -eu
 
@@ -64,7 +64,7 @@ if [ -n "$FILE" ]; then
 else
   [ -f "$REPO/AGENTS.md" ] || die "no root AGENTS.md in $REPO" 2
   # quotePath=false keeps non-ASCII paths literal so each one is found on disk.
-  tracked=$(git -C "$REPO" -c core.quotePath=false ls-files -- AGENTS.md '*/AGENTS.md') \
+  tracked=$(git -C "$REPO" -c core.quotePath=false ls-files --cached --others --exclude-standard -- AGENTS.md '*/AGENTS.md') \
     || die "cannot list tracked AGENTS.md files in $REPO" 2
   bytes=0
   count=0
@@ -75,7 +75,7 @@ else
   done <<EOF_TRACKED
 $tracked
 EOF_TRACKED
-  label="the AGENTS.md chain ($count tracked files under $REPO)"
+  label="the AGENTS.md chain ($count files under $REPO)"
 fi
 limit=$((BUDGET - MARGIN))
 if [ "$bytes" -gt "$limit" ]; then

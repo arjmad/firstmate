@@ -226,7 +226,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm_voice_records.py`    | What a spoken answer may read, and the handover that queues real work                |
 | `backends/herdr-eventwait.py` | Subscribe to a Herdr session's native agent-status stream and print one projected line per event |
 | `backends/herdr-workspace-move.py` | Send one presentation-only `workspace.move` request to a Herdr control socket |
-| `fm-agents-md-budget.sh` | Fail when the tracked `AGENTS.md` chain (root plus every nested one) exceeds Codex's shared project-doc byte budget minus a safety margin |
+| `fm-agents-md-budget.sh` | Fail when the non-ignored `AGENTS.md` chain (root plus every nested one) exceeds Codex's shared project-doc byte budget minus a safety margin |
 | `fm-agy-trust.sh` | Pre-register Antigravity CLI workspace trust for a task worktree before an agy spawn |
 | `fm-allocation-lib.sh` | Own the task allocation-ownership contract for reused worktree and home pool slots |
 | `fm-backlog-overdue.sh` | Wake firstmate, weekly while it lasts, for a queued backlog item whose date gate lapsed without a dispatch or answer |
