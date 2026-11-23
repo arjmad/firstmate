@@ -319,7 +319,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-role-lib.sh` | The home role and self-repository publication consent |
 | `fm-role.sh` | Report and check this home's firstmate role |
 | `fm-sessionstart-agy.sh` | Antigravity CLI (agy) session-open hook transport to `fm-sessionstart-run.sh` |
-| `fm-stow-guard.sh` | Opt-in Claude Stop hook that asks a primary session to `/stow` before context compaction, and with `prompt`, the UserPromptSubmit hook that records a fresh-restart offer for a `/stow` the captain types |
+| `fm-stow-guard.sh` | Opt-in Claude Stop hook that asks a primary session to `/stow` before context compaction, and with `prompt`, the UserPromptSubmit hook that records a fresh-restart offer for a `/stow` the captain types, except `/stow quick` |
 | `fm-supervision-handoff.sh` | Private Claude host hand-back owner, enabled by `config/supervision-handoff-ack` |
 | `fm-test-linux.sh` | Opt-in: run the shell tests changed on this branch inside a Linux container with GNU userland |
 | `fm-test-tap-verify.sh` | Prove a TAP-planned suite actually finished |

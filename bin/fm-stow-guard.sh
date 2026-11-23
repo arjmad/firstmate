@@ -48,7 +48,9 @@
 # state file, when a submitted prompt is /stow itself: after trimming
 # whitespace, exactly /stow or /stow followed by whitespace and arguments
 # (Claude Code 2.1.328 puts a typed /stow in the payload's prompt as typed;
-# docs/verification/supervision.md "Helm refresh by /clear"). It also needs a
+# docs/verification/supervision.md "Helm refresh by /clear"), except when its
+# first argument word is quick, in any case: a quick save never claims reset-safe, so a
+# /stow quick records no offer. It also needs a
 # Claude session id, this session holding state/.lock under that same id in
 # state/.lock-session, and a tmux or Herdr pane bin/fm-primary-pane-lib.sh
 # can name. Anything that reaches the session as fleet input (a from-firstmate
@@ -154,6 +156,12 @@ if [ "$mode" = prompt ]; then
   case "$prompt" in
     /stow|/stow[[:space:]]*) ;;
     *) exit 0 ;;
+  esac
+  # A quick save never claims reset-safe, so its offer could only expire.
+  stow_args=${prompt#/stow}
+  stow_args=${stow_args#"${stow_args%%[![:space:]]*}"}
+  case "$stow_args" in
+    [Qq][Uu][Ii][Cc][Kk]|[Qq][Uu][Ii][Cc][Kk][[:space:]]*) exit 0 ;;
   esac
   # shellcheck source=bin/fm-session-lock-lib.sh
   . "$SCRIPT_DIR/fm-session-lock-lib.sh" >/dev/null 2>&1 || exit 0

@@ -26,8 +26,8 @@
 #   - state/.stow-guard.json holds an offer for exactly that session id (the
 #     id in state/.lock-session), made within FM_HELM_REFRESH_OFFER_TTL seconds
 #     (default 7200) by bin/fm-stow-guard.sh's prompt hook when the captain
-#     typed /stow, so a /stow the stow guard asked for, or an agent or the
-#     fleet started, never restarts the helm;
+#     typed /stow (not /stow quick), so a quick save, a /stow the stow guard
+#     asked for, or one an agent or the fleet started, never restarts the helm;
 #   - this process runs in a tmux or Herdr pane bin/fm-primary-pane-lib.sh
 #     can prove;
 #   - state/.afk and state/.afk-contract are absent;
