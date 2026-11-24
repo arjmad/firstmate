@@ -182,7 +182,10 @@ end
 # fork variables unset, and needed jobs successful. Short keys: event, action,
 # label (the label an event adds), labels (comma-separated labels on the PR),
 # association, head (head repository), number, run_id, skip_push, skip_macos,
-# draft (true or false: whether the PR is a draft), needs (success, failure, or
+# draft (true or false: whether the PR was a draft when its event fired),
+# live_draft (true, false, or unread: what the pull request API answers when
+# Ready for review rereads it, read only by run_ready_verdict, which defaults it
+# to draft), needs (success, failure, or
 # cancelled: the needed jobs' results that job conditions and the Full suite
 # verdict read), outcome (how every job that runs concludes, read only by
 # published_checks). A push or workflow_dispatch event has no pull request, so
@@ -195,7 +198,7 @@ def simulated_context(workflow_name, overrides)
     "event" => "pull_request", "action" => "synchronize", "label" => "",
     "labels" => "", "association" => "NONE", "head" => "contributor/firstmate",
     "number" => "108", "run_id" => "900001", "skip_push" => "", "skip_macos" => "",
-    "draft" => "false", "needs" => "success", "outcome" => "success",
+    "draft" => "false", "live_draft" => "", "needs" => "success", "outcome" => "success",
   }
   if overrides.any? { |pair| pair == "event=push" }
     o.merge!("action" => "", "association" => "", "head" => "", "number" => "")
@@ -217,6 +220,7 @@ def simulated_context(workflow_name, overrides)
     "github.event.pull_request.number" => o["number"],
     "github.event.pull_request.draft" => o["event"] == "pull_request" ? o["draft"] == "true" : nil,
     "github.run_id" => o["run_id"],
+    "github.token" => "simulated-token",
     "vars.FM_CI_SKIP_PUSH" => o["skip_push"],
     "vars.FM_CI_SKIP_MACOS" => o["skip_macos"],
     "needs.status" => o["needs"],
@@ -288,7 +292,31 @@ end
 }
 
 run_full_suite_verdict() { run_job_steps full-suite "$@"; }
-run_ready_verdict() { run_job_steps ready-for-review "$@"; }
+
+# Ready for review rereads the pull request through `gh api`; a stub `gh`
+# answers with the simulated live_draft, or fails for unread, so no run here
+# reaches GitHub.
+GH_STUB_DIR=$(fm_test_tmproot fm-ci-workflow-gh) || fail "could not create the gh stub directory"
+cat > "$GH_STUB_DIR/gh" <<'STUB'
+#!/usr/bin/env bash
+[ "${1:-} ${2:-}" = "api repos/$GH_REPO/pulls/$FM_CI_PR" ] || exit 2
+case $FM_TEST_LIVE_DRAFT in
+  true|false) printf '%s\n' "$FM_TEST_LIVE_DRAFT" ;;
+  *) exit 1 ;;
+esac
+STUB
+chmod +x "$GH_STUB_DIR/gh"
+
+run_ready_verdict() {  # [KEY=VALUE]...
+  local arg draft=false live=
+  for arg in "$@"; do
+    case $arg in
+      draft=*) draft=${arg#draft=} ;;
+      live_draft=*) live=${arg#live_draft=} ;;
+    esac
+  done
+  FM_TEST_LIVE_DRAFT=${live:-$draft} PATH="$GH_STUB_DIR:$PATH" run_job_steps ready-for-review "$@"
+}
 
 # Print the checks one simulated run publishes, one "<name><TAB><conclusion>"
 # per line: GitHub publishes a check for every job, running or skipped, so a
@@ -520,6 +548,11 @@ test_draft_pr_runs_only_quick_checks() {
   fi
   printf '%s\n' "$out" | grep -q 'mark it ready for review' \
     || fail "the Ready for review failure on a draft must say to mark it ready, got:"$'\n'"$out"
+  if out=$(run_ready_verdict head=kunchenguid/firstmate draft=true live_draft=unread); then
+    fail "the Ready for review verdict must fail when a draft event's live state cannot be read:"$'\n'"$out"
+  fi
+  out=$(run_ready_verdict head=kunchenguid/firstmate draft=true live_draft=false) \
+    || fail "a draft event's run that starts after the PR was marked ready must pass Ready for review:"$'\n'"$out"
   for context in "head=kunchenguid/firstmate" "action=ready_for_review" "event=push" \
     "event=workflow_dispatch action= association= head= number="; do
     # shellcheck disable=SC2086  # each context is a deliberate word list
@@ -572,10 +605,12 @@ test_only_the_ready_run_turns_a_draft_head_green() {
   before=$(published_checks head=kunchenguid/firstmate draft=true) || fail "could not resolve the draft run's checks"
   printf '%s\n' "$before" | grep -qx $'Ready for review\tfailure' \
     || fail "a draft run must publish a failing Ready for review, got:"$'\n'"$before"
-  printf '%s\n' "$before" | grep -qx $'Full suite\tskipped' \
+  printf '%s\n' "$before" | grep -qx $'Not run for draft - Full suite\tskipped' \
     || fail "a draft run must skip Full suite, which would otherwise stay red until the ready run's lanes finish, got:"$'\n'"$before"
-  printf '%s\n' "$before" | grep -qx $'Behavior portable serial 1\tskipped' \
+  printf '%s\n' "$before" | grep -qx $'Not run for draft - Behavior portable serial 1\tskipped' \
     || fail "a draft run must skip the behavior lanes, got:"$'\n'"$before"
+  printf '%s\n' "$before" | grep -q $'^Full suite\t\|^Behavior portable serial 1\t' \
+    && fail "a draft run must publish no check under a full-suite job's own name, got:"$'\n'"$before"
   ruby -ryaml -e 'exit(YAML.load_file(ARGV[0]).fetch("jobs").fetch("ready-for-review").key?("needs") ? 1 : 0)' "$CI_WORKFLOW" \
     || fail "Ready for review must need no other job, so the ready run replaces a draft's failure at once"
   after=$(checks_after_runs "head=kunchenguid/firstmate draft=true" \
@@ -584,9 +619,20 @@ test_only_the_ready_run_turns_a_draft_head_green() {
     || fail "the ready run must leave Full suite passing, got:"$'\n'"$after"
   printf '%s\n' "$after" | grep -qx $'Ready for review\tsuccess' \
     || fail "the ready run must leave Ready for review passing, got:"$'\n'"$after"
-  printf '%s\n' "$after" | grep -vqx $'.*\tsuccess' \
-    && fail "after the ready run every check must pass, got:"$'\n'"$after"
-  pass "a draft head reads failing until the ready run passes it"
+  printf '%s\n' "$after" | grep -vqx $'.*\t\\(success\\|skipped\\)' \
+    && fail "after the ready run no check may fail, got:"$'\n'"$after"
+  # GitHub can start a draft event's run after the ready run on the same head.
+  # That late run reads the pull request as ready, and its skipped jobs carry
+  # the draft prefix, so it neither fails the head nor masks the ready run.
+  after=$(checks_after_runs "head=kunchenguid/firstmate action=ready_for_review outcome=success" \
+    "head=kunchenguid/firstmate draft=true live_draft=false") || fail "could not merge the ready and late draft runs"
+  printf '%s\n' "$after" | grep -qx $'Ready for review\tsuccess' \
+    || fail "a late draft run must leave Ready for review passing, got:"$'\n'"$after"
+  printf '%s\n' "$after" | grep -qx $'Full suite\tsuccess' \
+    || fail "a late draft run must leave the ready run's Full suite visible, got:"$'\n'"$after"
+  printf '%s\n' "$after" | grep -qx $'Behavior portable serial 1\tsuccess' \
+    || fail "a late draft run must leave the ready run's lanes visible, got:"$'\n'"$after"
+  pass "a draft head reads failing until the ready run passes it, and a late draft run cannot undo that"
 }
 
 # DOP-167: another label neither starts nor cancels a run: no job runs, not
@@ -822,19 +868,25 @@ test_label_events_run_all_or_nothing_under_prefixed_names() {
   actual=$(jobs_running_under event=workflow_dispatch action= association= head= number=) \
     || fail "could not resolve the dispatch conditions"
   [ "$actual" = "$all" ] || fail "workflow_dispatch must run every job"
-  ruby -ryaml -e "$EXPRESSION_RUBY" - "$CI_WORKFLOW" <<'RUBY' || fail "label name prefix contract"
+  # A job a draft skips takes the draft prefix on a draft, so a draft run's
+  # skipped check never shares a name with, or masks, the ready run's.
+  ruby -ryaml -e "$EXPRESSION_RUBY" - "$CI_WORKFLOW" "$DRAFT_JOBS" <<'RUBY' || fail "label and draft name prefix contract"
+draft_runs = ARGV[1].split
 YAML.load_file(ARGV[0]).fetch("jobs").each do |id, job|
   name = job.fetch("name")
   prefix = name[/\A\$\{\{(.+?)\}\}/, 1] or raise "#{id} has no name prefix expression"
   rest = name.sub(/\A\$\{\{.+?\}\}/, "")
   raise "#{id} keeps no own name after its prefix" if rest.strip.empty?
-  [["labeled", "docs", "Not run for label - "], ["labeled", "full-ci", ""], ["synchronize", "", ""]].each do |action, label, want|
-    got = Expression.evaluate(prefix, {"github.event.action" => action, "github.event.label.name" => label}).to_s
-    raise "#{id} prefix under #{action} #{label.inspect} is #{got.inspect}, wanted #{want.inspect}" unless got == want
+  on_draft = draft_runs.include?(id) ? "" : "Not run for draft - "
+  [["labeled", "docs", nil, "Not run for label - "], ["labeled", "full-ci", nil, ""], ["synchronize", "", nil, ""],
+   ["synchronize", "", false, ""], ["synchronize", "", true, on_draft], ["labeled", "docs", true, "Not run for label - "]].each do |action, label, draft, want|
+    got = Expression.evaluate(prefix, {"github.event.action" => action, "github.event.label.name" => label,
+      "github.event.pull_request.draft" => draft}).to_s
+    raise "#{id} prefix under #{action} #{label.inspect} draft=#{draft.inspect} is #{got.inspect}, wanted #{want.inspect}" unless got == want
   end
 end
 RUBY
-  pass "full-ci and workflow_dispatch run every job, and any other label runs none under prefixed names"
+  pass "full-ci and workflow_dispatch run every job, any other label runs none under prefixed names, and a draft's skipped jobs carry the draft prefix"
 }
 
 test_plan_consumers_gate_every_later_step() {

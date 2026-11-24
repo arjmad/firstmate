@@ -36,7 +36,7 @@ Use this workflow when no-mistakes is the selected delivery path.
 CI on a pull request from an author without write access runs only the quick checks at first: `Test coverage guard`, `Repo invariants`, and the no-mistakes body check.
 Lint and the behavior suites wait for a maintainer, or the maintainer's fleet, to add the `full-ci` label when the pull request is picked up for review.
 Until then the `Full suite` check fails with a message naming the label; that is expected and needs no action from you.
-Adding the label runs the full suite, and every later push to that pull request runs it again.
+Adding the label runs the full suite once the pull request is ready for review, and every later push to it runs the suite again.
 This keeps the repository's public CI within GitHub's limit on jobs running at once, while no-mistakes already reviews, tests, and lints your change locally.
 Pull requests from this repository's own branches or from authors with write access run the full suite without the label once they are ready for review; a draft runs only the quick checks.
 
@@ -152,7 +152,7 @@ Its header owns selection, runtime detection, and exit codes.
 CI owns broad regression across required portable parallel shards, the portable serial lane's separate-runner shards, the Herdr lane, lint, invariants, the coverage guard, and stock macOS Bash compatibility in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 Pushing a new head to a pull request cancels that pull request's still-running CI so only the current head is validated, and a newer push to `main` cancels the older `main` run so only the newest merge's run finishes; the workflow owns that contract, the `full-ci` gate described under [The `full-ci` label](#the-full-ci-label), the draft gate below, and their rationale.
 Open a pull request on this repository as a draft and keep it a draft until its reviews are done, then mark it ready after the last review push.
-A draft runs only `CI plan`, `Test coverage guard` and `Repo invariants`, and its `Ready for review` check fails saying to mark it ready, so review-fix pushes cost no full run; marking it ready runs the full suite once on its head, and each later push runs it again.
+A draft runs only `CI plan`, `Test coverage guard` and `Repo invariants`, and its `Ready for review` check fails saying to mark it ready, so review-fix pushes cost no full run; marking it ready runs the full suite once on its head, subject to the `full-ci` gate for an outside pull request, and each later push runs it again.
 A fork can set the repository variable `FM_CI_SKIP_PUSH` to `1` to skip the push run of `CI`, and `FM_CI_SKIP_MACOS` to `1` to skip the stock macOS Bash job, without a tracked edit that drifts from upstream.
 Each skip is a job-level condition, so a skipped job reports success rather than leaving the pull request pending, and with neither variable set every job runs on upstream and on every fork exactly as before.
 A pull request's CI runs only the lint partitions and behavior scripts its change touches, and every other check reports success as a no-op; [affected-shard planning](docs/fm-test-portable-shards.md#affected-shard-planning) lists what still runs the full suite, including any pull request over 25 changed files.

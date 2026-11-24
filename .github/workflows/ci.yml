@@ -71,7 +71,9 @@ concurrency:
 # reads as fully tested. Marking it ready (ready_for_review) runs the full suite
 # once on that head, and each later push runs it again. Every full-suite job
 # and the Full suite verdict carry the same draft condition, repeated per job
-# for the same reason as the fork opt-out; CONTRIBUTING.md documents the flow.
+# for the same reason as the fork opt-out, and a "Not run for draft - " name
+# prefix, so a draft run GitHub starts after the ready run on the same head
+# cannot mask the ready run's checks; CONTRIBUTING.md documents the flow.
 #
 # Affected-shard planning (fork patch, docs/fork-decisions/2026-11-09-ci-affected-shards.md):
 # bin/fm-ci-plan.sh's header owns what a change selects and when it falls back
@@ -118,7 +120,7 @@ jobs:
           FM_CI_PLAN=$plan bin/fm-ci-plan.sh explain >> "$GITHUB_STEP_SUMMARY"
 
   lint:
-    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Lint ${{ matrix.partition }}of${{ strategy.job-total }}
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || github.event.pull_request.draft && 'Not run for draft - ' || '' }}Lint ${{ matrix.partition }}of${{ strategy.job-total }}
     runs-on: ubuntu-24.04
     needs: plan
     if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && !github.event.pull_request.draft }}
@@ -220,7 +222,7 @@ jobs:
   # Two duration-balanced portable parallel shards of the Phase 2 proven-isolated
   # set only. Composition owner: bin/fm-test-run.sh (docs/fm-test-portable-shards.md).
   tests-portable-parallel-1:
-    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Behavior portable parallel 1
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || github.event.pull_request.draft && 'Not run for draft - ' || '' }}Behavior portable parallel 1
     runs-on: ubuntu-24.04
     needs: plan
     if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && !github.event.pull_request.draft }}
@@ -283,7 +285,7 @@ jobs:
           if-no-files-found: warn
 
   tests-portable-parallel-2:
-    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Behavior portable parallel 2
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || github.event.pull_request.draft && 'Not run for draft - ' || '' }}Behavior portable parallel 2
     runs-on: ubuntu-24.04
     needs: plan
     if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && !github.event.pull_request.draft }}
@@ -343,7 +345,7 @@ jobs:
   # and the shard count both belong to bin/fm-test-run.sh, which refuses a lane
   # whose "ofN" disagrees with it (docs/fm-test-portable-shards.md).
   tests-portable-serial:
-    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Behavior portable serial ${{ matrix.shard }}
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || github.event.pull_request.draft && 'Not run for draft - ' || '' }}Behavior portable serial ${{ matrix.shard }}
     runs-on: ubuntu-24.04
     needs: plan
     env:
@@ -442,7 +444,7 @@ jobs:
   # platform invariant fails (focus, cleanup, default-session tripwire), keep
   # the failure evidence and move the job to macOS rather than skip assertions.
   tests-herdr:
-    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Behavior tests (Herdr)
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || github.event.pull_request.draft && 'Not run for draft - ' || '' }}Behavior tests (Herdr)
     runs-on: ubuntu-24.04
     needs: plan
     if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && !github.event.pull_request.draft }}
@@ -585,7 +587,7 @@ jobs:
   # lab (bin/fm-hc-lab.sh) gives each session a private core, a fleet-state
   # tripwire, and a serve/hold daemon sweep at teardown.
   tests-hc:
-    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Behavior tests (herdr-core)
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || github.event.pull_request.draft && 'Not run for draft - ' || '' }}Behavior tests (herdr-core)
     runs-on: ubuntu-24.04
     needs: plan
     if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && !github.event.pull_request.draft }}
@@ -687,7 +689,7 @@ jobs:
 
   # Aggregate per-lane timing into one summary artifact for critical-path review.
   tests-timing-aggregate:
-    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Behavior timing aggregate
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || github.event.pull_request.draft && 'Not run for draft - ' || '' }}Behavior timing aggregate
     runs-on: ubuntu-24.04
     # Fast tier: aggregation is seconds of work over lane artifacts.
     timeout-minutes: 5
@@ -728,7 +730,7 @@ jobs:
           if-no-files-found: warn
 
   macos-stock-bash:
-    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Stock macOS Bash snapshot compatibility
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || github.event.pull_request.draft && 'Not run for draft - ' || '' }}Stock macOS Bash snapshot compatibility
     runs-on: macos-latest
     needs: plan
     if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && vars.FM_CI_SKIP_MACOS != '1' && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && !github.event.pull_request.draft }}
@@ -845,19 +847,28 @@ jobs:
   # no other job, so the ready run replaces a draft's failure within seconds of
   # the PR being marked ready, while Full suite, which GitHub creates only once
   # its lanes finish, skips on a draft rather than leaving a stale failure there.
+  # An event's draft flag is as old as the event, and GitHub can start a draft
+  # event's run after the ready run on the same head, so a draft run fails only
+  # when the pull request is still a draft now; an unreadable answer fails.
   ready-for-review:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Ready for review
     runs-on: ubuntu-24.04
     if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
-    # Fast tier: one shell test of the event's draft flag.
+    # Fast tier: one shell test of the draft flag and one API read.
     timeout-minutes: 5
+    permissions:
+      pull-requests: read
     steps:
       - name: Require a pull request that is ready for review
         env:
           FM_CI_DRAFT: ${{ github.event.pull_request.draft && 'true' || 'false' }}
+          FM_CI_PR: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          if [ "$FM_CI_DRAFT" = true ]; then
+          if [ "$FM_CI_DRAFT" = true ] \
+            && [ "$(gh api "repos/$GH_REPO/pulls/$FM_CI_PR" --jq .draft 2>/dev/null || echo unread)" != false ]; then
             echo "::error::A draft pull request runs only the quick checks; mark it ready for review to run the full suite. See CONTRIBUTING.md."
             exit 1
           fi
@@ -871,7 +882,7 @@ jobs:
   # from its older event could finish after, and mask, a later full-ci pass.
   # On a draft it skips, and Ready for review carries the failure instead.
   full-suite:
-    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Full suite
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || github.event.pull_request.draft && 'Not run for draft - ' || '' }}Full suite
     runs-on: ubuntu-24.04
     # Fast tier: the verdict reads its needed jobs' results.
     timeout-minutes: 5
