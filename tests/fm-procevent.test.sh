@@ -5983,7 +5983,21 @@ for prepare in fm_procevent_capture_inbox_prepare fm_procevent_capture_reservati
       [ "$rc" -ne 0 ] || fail "$prepare must refuse a peer's directory that is not private: $out"
     fi
   done
+  # A mkdir that fails with no directory to show for it still says why.
+  peer_state="$TMP_ROOT/peer-mkdir/$prepare-readonly/state"
+  mkdir -p "$peer_state"
+  chmod 0500 "$peer_state"
+  rc=0
+  out=$(FM_HOME="${peer_state%/state}" bash -c '
+    . "$1/bin/fm-pr-lib.sh"
+    . "$1/bin/fm-wake-lib.sh"
+    . "$1/bin/fm-procevent-lib.sh"
+    "$2" "$3"
+  ' _ "$ROOT" "$prepare" "$peer_state" 2>&1) || rc=$?
+  chmod 0700 "$peer_state"
+  [ "$rc" -ne 0 ] && assert_contains "$out" "mkdir" "$prepare must report why its mkdir failed (rc=$rc): $out"
+  [ "$rc" -ne 0 ] || fail "$prepare must refuse a state root it cannot write: $out"
 done
-pass "the capture preparers accept a private directory a peer runner created first and refuse one that is not private"
+pass "the capture preparers accept a private directory a peer runner created first, refuse one that is not private, and report a mkdir that fails"
 
 printf '\nall procevent tests passed\n'
