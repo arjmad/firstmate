@@ -6,8 +6,9 @@ on:
   pull_request:
     branches: [main]
     # labeled lets the full-ci go-ahead start the full suite; see the
-    # outside pull request gate below.
-    types: [opened, synchronize, reopened, labeled]
+    # outside pull request gate below. ready_for_review starts the full suite
+    # a draft skipped; see the draft gate below.
+    types: [opened, synchronize, reopened, labeled, ready_for_review]
   workflow_dispatch:
     inputs:
       base:
@@ -28,10 +29,12 @@ permissions:
 # one never cancels a running suite. Evidence and rationale: the September 12
 # Actions starvation report, section 3 "Workflow mechanics to ship first", and
 # the October 28 concurrency measurements behind the full-ci gate.
+# A draft's runs keep a group of their own, so a draft run GitHub starts after
+# the ready_for_review run can never cancel that PR's one full suite run.
 # Upstream's separate compliance workflow keeps its own event-specific groups;
 # this fork carries no compliance workflow (#19), so this is its only group.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ (github.event_name == 'push' && 'main') || (github.event.action == 'labeled' && github.event.label.name != 'full-ci' && github.run_id) || github.event.pull_request.number || github.run_id }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.draft && 'draft-' || '' }}${{ (github.event_name == 'push' && 'main') || (github.event.action == 'labeled' && github.event.label.name != 'full-ci' && github.run_id) || github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
 
 # Timeout policy: docs/fm-test-portable-shards.md "Timeouts" owns the three
@@ -61,6 +64,14 @@ concurrency:
 # an earlier failure, so each job that skips there takes a "Not run for label - "
 # name prefix instead. The condition is repeated per job for the same reason as
 # the fork opt-out; CONTRIBUTING.md documents the label.
+#
+# Draft gate (fork patch, docs/fork-decisions/2026-11-24-ci-draft-gate.md): a
+# draft PR runs only the CI plan, the coverage guard and the invariants, and the
+# Full suite job fails saying to mark it ready, so a draft head never reads as
+# fully tested. Marking it ready (ready_for_review) runs the full suite once on
+# that head, and each later push runs it again. Every full-suite job carries
+# the same draft condition, repeated per job for the same reason as the fork
+# opt-out; CONTRIBUTING.md documents the draft flow.
 #
 # Affected-shard planning (fork patch, docs/fork-decisions/2026-11-09-ci-affected-shards.md):
 # bin/fm-ci-plan.sh's header owns what a change selects and when it falls back
@@ -110,7 +121,7 @@ jobs:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Lint ${{ matrix.partition }}of${{ strategy.job-total }}
     runs-on: ubuntu-24.04
     needs: plan
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && !github.event.pull_request.draft }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     # Upstream lints as two canonical partitions; bin/fm-lint.sh --partition
@@ -212,7 +223,7 @@ jobs:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Behavior portable parallel 1
     runs-on: ubuntu-24.04
     needs: plan
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && !github.event.pull_request.draft }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     steps:
@@ -275,7 +286,7 @@ jobs:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Behavior portable parallel 2
     runs-on: ubuntu-24.04
     needs: plan
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && !github.event.pull_request.draft }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     steps:
@@ -341,7 +352,7 @@ jobs:
       # leaving a shard of the required lane unrun.
       FM_SERIAL_LANE: portable-serial-${{ matrix.shard }}of${{ strategy.job-total }}
       FM_SERIAL_SHARD: ${{ matrix.shard }}
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && !github.event.pull_request.draft }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     strategy:
@@ -434,7 +445,7 @@ jobs:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Behavior tests (Herdr)
     runs-on: ubuntu-24.04
     needs: plan
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && !github.event.pull_request.draft }}
     # Heavy tier (see the timeout policy above): the last-resort job backstop.
     # The family-run step below owns the hang tripwire, so a wedged suite fails
     # there with the always() cleanup and timing upload still running.
@@ -577,7 +588,7 @@ jobs:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Behavior tests (herdr-core)
     runs-on: ubuntu-24.04
     needs: plan
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && !github.event.pull_request.draft }}
     # Heavy tier (see the timeout policy above): the last-resort job backstop.
     # The family-run step below owns the hang tripwire, so a wedged suite fails
     # there with the always() cleanup and timing upload still running.
@@ -686,7 +697,7 @@ jobs:
       - tests-portable-serial
       - tests-herdr
       - tests-hc
-    if: ${{ always() && !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
+    if: ${{ always() && !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && !github.event.pull_request.draft }}
     steps:
       - uses: actions/checkout@v6
       - name: Download lane timing artifacts
@@ -720,7 +731,7 @@ jobs:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Stock macOS Bash snapshot compatibility
     runs-on: macos-latest
     needs: plan
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && vars.FM_CI_SKIP_MACOS != '1' && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && vars.FM_CI_SKIP_MACOS != '1' && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && !github.event.pull_request.draft }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     steps:
@@ -853,12 +864,17 @@ jobs:
       - invariants
     if: ${{ always() && !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
     steps:
-      - name: Require the full-ci go-ahead and passing lanes
+      - name: Require a ready pull request, the full-ci go-ahead and passing lanes
         env:
+          FM_CI_DRAFT: ${{ github.event.pull_request.draft && 'true' || 'false' }}
           FM_CI_FULL: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
           FM_CI_LANES_FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
         run: |
           set -eu
+          if [ "$FM_CI_DRAFT" = true ]; then
+            echo "::error::A draft pull request runs only the quick checks; mark it ready for review to run the full suite. See CONTRIBUTING.md."
+            exit 1
+          fi
           if [ "$FM_CI_FULL" != true ]; then
             echo "::error::The full suite runs on outside pull requests only after a maintainer adds the full-ci label; see CONTRIBUTING.md."
             exit 1
