@@ -1116,12 +1116,26 @@ fm_procevent_private_directory_valid() {
   [ "$canonical" = "$normalized" ]
 }
 
+# fm_procevent_private_mkdir <dir>: create <dir> with mode 0700, succeeding
+# when a peer created it first; the caller still validates it. The mkdir's
+# error reaches stderr only when no directory exists afterward.
+fm_procevent_private_mkdir() {
+  local dir=$1 error
+  error=$( (umask 077; mkdir "$dir") 2>&1 ) && return 0
+  [ -d "$dir" ] && return 0
+  [ -z "$error" ] || printf '%s\n' "$error" >&2
+  return 1
+}
+
 fm_procevent_capture_inbox_prepare() {
   local state=$1 inbox
   state=$(fm_procevent_state_root_resolve "$state") || return 1
   inbox=$(fm_procevent_inbox_dir "$state")
+  # Another source's runner can create it between the check and the mkdir;
+  # the validation below, not the mkdir's status, decides whether it is usable.
+  # The mkdir's error is printed only when no directory came of it.
   if [ ! -e "$inbox" ] && [ ! -L "$inbox" ]; then
-    (umask 077; mkdir "$inbox") || return 1
+    fm_procevent_private_mkdir "$inbox" || return 1
   fi
   fm_procevent_private_directory_valid "$inbox" 1 || return 1
   printf '%s\n' "$inbox"
@@ -1142,8 +1156,9 @@ fm_procevent_capture_reservation_prepare() {
   local state=$1 reservation
   state=$(fm_procevent_state_root_resolve "$state") || return 1
   reservation=$(fm_procevent_capture_reservation_dir "$state")
+  # A peer runner can win this mkdir too, as in the inbox preparer above.
   if [ ! -e "$reservation" ] && [ ! -L "$reservation" ]; then
-    (umask 077; mkdir "$reservation") || return 1
+    fm_procevent_private_mkdir "$reservation" || return 1
   fi
   fm_procevent_private_directory_valid "$reservation" 1 || return 1
   printf '%s\n' "$reservation"

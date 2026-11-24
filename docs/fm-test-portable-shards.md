@@ -167,7 +167,7 @@ The workflow retains per-PR supersession and keeps only the newest of close main
 
 ## Affected-shard planning
 
-A pull request runs only the CI work its change touches.
+A pull request runs only the CI work its change touches, and a draft runs none of it until it is marked ready ([`CONTRIBUTING.md`](../CONTRIBUTING.md#development) describes the draft flow).
 The `CI plan` job runs `bin/fm-ci-plan.sh plan`, which records the behavior scripts `bin/fm-test-run.sh --changed` selects and the lint roots whose analysis can see a changed file.
 Every lint partition, behavior lane, the Herdr lane and the macOS job keep their check names, run `bin/fm-ci-plan.sh gate` after checkout, and no-op every later step when nothing they own is affected, so an unaffected check still reports success.
 A touched behavior lane runs only its selected scripts through `bin/fm-test-run.sh --only`; a touched lint partition runs whole.
@@ -188,7 +188,7 @@ A lane that reaches its tier bound needs investigation and a distribution or run
 
 | Tier | Jobs | Bound | Rationale |
 |---|---|---|---|
-| Fast | coverage guard, repo invariants, timing aggregate, Full suite verdict | 5 minutes | Seconds-long local work, so the tripwire only catches a hung runner. |
+| Fast | coverage guard, repo invariants, timing aggregate, Ready for review verdict, Full suite verdict | 5 minutes | Seconds-long local work, so the tripwire only catches a hung runner. |
 | Normal | lint partitions, portable parallel shards, portable serial shards, macOS stock Bash | 30 minutes, one value shared by every job in the tier | One shared hang tripwire keeps every ordinary test and lint lane on the same policy instead of allowing per-lane packing estimates or one-off caps to set the bound. |
 | Heavy | Herdr | family-run step 20 minutes under a 75-minute job-level last-resort backstop | Healthy runs finish in about 7-10 minutes, so the step tripwire fails a wedged suite while the `always()` cleanup and timing upload still run, and the job cap only catches a hang outside that step. |
 

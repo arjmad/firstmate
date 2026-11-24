@@ -36,9 +36,9 @@ Use this workflow when no-mistakes is the selected delivery path.
 CI on a pull request from an author without write access runs only the quick checks at first: `Test coverage guard`, `Repo invariants`, and the no-mistakes body check.
 Lint and the behavior suites wait for a maintainer, or the maintainer's fleet, to add the `full-ci` label when the pull request is picked up for review.
 Until then the `Full suite` check fails with a message naming the label; that is expected and needs no action from you.
-Adding the label runs the full suite, and every later push to that pull request runs it again.
+Adding the label runs the full suite once the pull request is ready for review, and every later push to it runs the suite again.
 This keeps the repository's public CI within GitHub's limit on jobs running at once, while no-mistakes already reviews, tests, and lints your change locally.
-Pull requests from this repository's own branches or from authors with write access run the full suite without the label.
+Pull requests from this repository's own branches or from authors with write access run the full suite without the label once they are ready for review; a draft runs only the quick checks.
 
 See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/start-here/quick-start/) for the full first-run walkthrough.
 
@@ -52,10 +52,11 @@ This fork has no server-side merge enforcement: `main` has no ruleset, no classi
 [`bin/fm-pr-merge.sh`](bin/fm-pr-merge.sh) is the merge guard: it refuses unless every check is green at the PR's current head and every required check GitHub reports has reported.
 Because GitHub reports no required checks here, that second test is empty today, so a job that never started is not caught by GitHub and the guard rests on the checks that did report.
 
-The CI layout's actual job contexts are `CI plan`, `Lint 1of8` through `Lint 8of8` (one per lint matrix partition), `Test coverage guard`, `Repo invariants`, `Stock macOS Bash snapshot compatibility`, `Behavior portable parallel 1`, `Behavior portable parallel 2`, `Behavior portable serial 1` through `Behavior portable serial 15`, `Behavior tests (Herdr)`, `Behavior tests (herdr-core)`, `Behavior timing aggregate`, and `Full suite`.
+The CI layout's actual job contexts are `CI plan`, `Lint 1of8` through `Lint 8of8` (one per lint matrix partition), `Test coverage guard`, `Repo invariants`, `Stock macOS Bash snapshot compatibility`, `Behavior portable parallel 1`, `Behavior portable parallel 2`, `Behavior portable serial 1` through `Behavior portable serial 15`, `Behavior tests (Herdr)`, `Behavior tests (herdr-core)`, `Behavior timing aggregate`, `Ready for review`, and `Full suite`.
 This fork has no no-mistakes compliance job, so unlike upstream it has no compliance context.
 The timing aggregate is not a substitute for individual jobs because it can succeed while collecting evidence from a failed run.
 The individual lanes skip on an outside pull request until it has the `full-ci` label, and a skipped job satisfies a required check, so `Full suite` must be required too: it fails until the label is on and whenever a lane failed or was cancelled.
+On a draft every lane and `Full suite` skip, so `Ready for review` must be required as well: it fails on a draft and passes on every other run.
 
 If required checks are ever configured on `main`, require those exact contexts with `strict_required_status_checks_policy: false`, bind them to the GitHub Actions app already producing them, and confirm names from real checks first; `bin/fm-pr-merge.sh` then reads them from the ruleset or branch protection on its own.
 Coordinate any workflow rollback with configured required-check names so a retired check cannot leave ordinary merges waiting forever.
@@ -105,7 +106,7 @@ Firstmate's wrapper still matters: crewmates route every `ask-user` finding to f
 The `firstmate-coding-guidelines` skill owns the rule that local no-mistakes Test stays intent-targeted rather than configuring `commands.test`.
 On this repository the pull request's CI is the proof, so before you push, run only `bin/fm-test-run.sh --near`: the suites named for each changed file, plus the backend suites CI can only gate-skip.
 `bin/fm-test-run.sh --list --near` prints that selection without running it, and the runner's header owns how a changed file maps to its suites.
-Do not run `--all`, `--changed`, or every suite that touches your change before pushing; CI plans and runs that wider set, and every push, a review fix included, runs the whole branch's plan again.
+Do not run `--all`, `--changed`, or every suite that touches your change before pushing; CI plans and runs that wider set, and every push to a pull request that is ready for review, a review fix included, runs the whole branch's plan again.
 Run more locally only to reproduce a failing CI lane, or to run by name a gated live guard CI cannot run, such as the launch-code guard the `firstmate-coding-guidelines` skill names.
 `bin/fm-pr-merge.sh` still refuses a pull request with a red or unreported check, so a suite the local run missed stops the merge, not the push.
 When you do name subjects, pass them to `bin/fm-test-run.sh` rather than chaining `bash tests/a.test.sh && bash tests/b.test.sh`, because a list of script paths gets the same bounded concurrency as `--near`.
@@ -149,11 +150,14 @@ Portable shard balance evidence lives in `docs/fm-test-portable-shards.md`.
 Its header owns selection, runtime detection, and exit codes.
 `--near` is the ordinary local path; family, `--changed`, and `--all` runs reproduce CI or are a deliberate wider regression.
 CI owns broad regression across required portable parallel shards, the portable serial lane's separate-runner shards, the Herdr lane, lint, invariants, the coverage guard, and stock macOS Bash compatibility in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
-Pushing a new head to a pull request cancels that pull request's still-running CI so only the current head is validated, and a newer push to `main` cancels the older `main` run so only the newest merge's run finishes; the workflow owns that contract, the `full-ci` gate described under [The `full-ci` label](#the-full-ci-label), and their rationale.
+Pushing a new head to a pull request cancels that pull request's still-running CI so only the current head is validated, and a newer push to `main` cancels the older `main` run so only the newest merge's run finishes; the workflow owns that contract, the `full-ci` gate described under [The `full-ci` label](#the-full-ci-label), the draft gate below, and their rationale.
+Open a pull request on this repository as a draft and keep it a draft until its reviews are done, then mark it ready after the last review push.
+A draft runs only `CI plan`, `Test coverage guard` and `Repo invariants`, and its `Ready for review` check fails saying to mark it ready, so review-fix pushes cost no full run; marking it ready runs the full suite once on its head, subject to the `full-ci` gate for an outside pull request, and each later push runs it again.
+If GitHub starts a draft push's run after the ready run, `Ready for review` reads red on a head whose suite passed; rerun that job in the ready run to clear it, with `gh run rerun --job <id>` and the id `gh run view <ready-run-id> --json jobs --jq '.jobs[] | select(.name == "Ready for review") | .databaseId'` prints.
 A fork can set the repository variable `FM_CI_SKIP_PUSH` to `1` to skip the push run of `CI`, and `FM_CI_SKIP_MACOS` to `1` to skip the stock macOS Bash job, without a tracked edit that drifts from upstream.
 Each skip is a job-level condition, so a skipped job reports success rather than leaving the pull request pending, and with neither variable set every job runs on upstream and on every fork exactly as before.
 A pull request's CI runs only the lint partitions and behavior scripts its change touches, and every other check reports success as a no-op; [affected-shard planning](docs/fm-test-portable-shards.md#affected-shard-planning) lists what still runs the full suite, including any pull request over 25 changed files.
-To run the full suite on a pull request, add the `full-ci` label, which restarts its CI in full and keeps every later push full while the label stays, or start the `CI` workflow by hand with `workflow_dispatch` and an empty `base` input; giving `base` a ref instead plans the branch against it as a pull request would.
+To run the full suite on a pull request that is ready for review, add the `full-ci` label, which restarts its CI in full and keeps every later push full while the label stays (on a draft the label takes effect once it is marked ready), or start the `CI` workflow by hand with `workflow_dispatch` and an empty `base` input; giving `base` a ref instead plans the branch against it as a pull request would.
 Use `bin/fm-test-run.sh --list-lanes` for exact lane names and `--help` for `--jobs` rules and required gate-skip flags when reproducing a lane locally.
 Leave the `sleep 0.1` cadence in the suites' bounded condition waits alone.
 Those sleeps look like recoverable overhead - the `fm-watch-triage*.test.sh` suites alone issue about 1,900 of them, each paying a flat ~100ms scheduler wake-up penalty on macOS - but they are not overhead added to the clock; they are how a test waits for a subject that only moves on `fm-watch.sh`'s own one-second `FM_POLL` cadence.

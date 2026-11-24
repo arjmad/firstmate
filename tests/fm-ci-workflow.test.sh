@@ -22,6 +22,10 @@
 # whole suite, any other label neither starts nor cancels a run, and close main
 # pushes keep only the newest run.
 #
+# They also hold the draft gate (audit item a1-32): a draft runs only the quick
+# checks and a failing Ready for review verdict in a group of its own, and
+# marking it ready runs the full suite once on its head.
+#
 # They also hold the fork opt-out: the repository variables FM_CI_SKIP_PUSH and
 # FM_CI_SKIP_MACOS let a fork skip the push run and the macOS job through a
 # job-level condition, while with neither set every job runs exactly as before.
@@ -178,10 +182,13 @@ end
 # fork variables unset, and needed jobs successful. Short keys: event, action,
 # label (the label an event adds), labels (comma-separated labels on the PR),
 # association, head (head repository), number, run_id, skip_push, skip_macos,
-# needs (success, failure, or cancelled: the needed jobs' results that job
-# conditions and the Full suite verdict read), outcome (how every job that runs
-# concludes, read only by published_checks). A push event clears the PR fields,
-# which GitHub leaves empty there. Each resolver prepends this.
+# draft (true or false: whether the PR was a draft when its event fired),
+# needs (success, failure, or
+# cancelled: the needed jobs' results that job conditions and the Full suite
+# verdict read), outcome (how every job that runs concludes, read only by
+# published_checks). A push or workflow_dispatch event has no pull request, so
+# its PR fields are empty and its draft flag is null, as GitHub leaves them.
+# Each resolver prepends this.
 # shellcheck disable=SC2016  # Ruby text, not shell expansions
 CONTEXT_RUBY='
 def simulated_context(workflow_name, overrides)
@@ -189,7 +196,7 @@ def simulated_context(workflow_name, overrides)
     "event" => "pull_request", "action" => "synchronize", "label" => "",
     "labels" => "", "association" => "NONE", "head" => "contributor/firstmate",
     "number" => "108", "run_id" => "900001", "skip_push" => "", "skip_macos" => "",
-    "needs" => "success", "outcome" => "success",
+    "draft" => "false", "needs" => "success", "outcome" => "success",
   }
   if overrides.any? { |pair| pair == "event=push" }
     o.merge!("action" => "", "association" => "", "head" => "", "number" => "")
@@ -209,6 +216,7 @@ def simulated_context(workflow_name, overrides)
     "github.event.pull_request.author_association" => o["association"],
     "github.event.pull_request.head.repo.full_name" => o["head"],
     "github.event.pull_request.number" => o["number"],
+    "github.event.pull_request.draft" => o["event"] == "pull_request" ? o["draft"] == "true" : nil,
     "github.run_id" => o["run_id"],
     "vars.FM_CI_SKIP_PUSH" => o["skip_push"],
     "vars.FM_CI_SKIP_MACOS" => o["skip_macos"],
@@ -260,30 +268,38 @@ end
 ' "$CI_WORKFLOW" "$@"
 }
 
-# Run the Full suite job's steps under one simulated context exactly as the
-# runner would: each step's env expressions are resolved, then its script runs
-# under bash with that environment. Prints the scripts' output; the exit status
-# is the job's.
-run_full_suite_verdict() {  # [KEY=VALUE]...
-  local script
+# Run one job's steps under one simulated context exactly as the runner
+# would: each step's env expressions are resolved, then its script runs under
+# bash with that environment. Prints the scripts' output; the exit status is
+# the job's. Only the verdict jobs, whose steps are self-contained shell, are
+# run this way.
+run_job_steps() {  # <job> [KEY=VALUE]...
+  local job=$1 script
+  shift
   script=$(ruby -ryaml -rshellwords -e "$EXPRESSION_RUBY" -e "$CONTEXT_RUBY" -e '
 doc = YAML.load_file(ARGV.shift)
+job = ARGV.shift
 context = simulated_context(doc.fetch("name"), ARGV)
-doc.fetch("jobs").fetch("full-suite").fetch("steps").each do |step|
+doc.fetch("jobs").fetch(job).fetch("steps").each do |step|
   env = step.fetch("env", {}).map { |k, v| "#{k}=#{interpolate(v, context).shellescape}" }.join(" ")
   puts "#{env} bash -c #{step.fetch("run").shellescape} || exit $?"
 end
-' "$CI_WORKFLOW" "$@") || fail "could not resolve the Full suite steps"
+' "$CI_WORKFLOW" "$job" "$@") || fail "could not resolve the $job steps"
   bash -c "$script" 2>&1
 }
+
+run_full_suite_verdict() { run_job_steps full-suite "$@"; }
+run_ready_verdict() { run_job_steps ready-for-review "$@"; }
 
 # Print the checks one simulated run publishes, one "<name><TAB><conclusion>"
 # per line: GitHub publishes a check for every job, running or skipped, so a
 # skipped job still appears with conclusion skipped. Matrix jobs are expanded
 # even when skipped, the stricter assumption about how GitHub names them. Job
 # conditions read the needs prerequisite status as given; every running job
-# concludes with the simulated outcome, and the Full suite verdict is executed
-# by run_full_suite_verdict with that outcome as its needed jobs' results.
+# concludes with the simulated outcome, the Full suite verdict is executed by
+# run_full_suite_verdict with that outcome as its needed jobs' results, and the
+# Ready for review verdict fails when its own steps fail and otherwise
+# concludes with the simulated outcome.
 published_checks() {  # [KEY=VALUE]...
   local rows name conclusion outcome=success arg
   for arg in "$@"; do
@@ -301,16 +317,21 @@ doc.fetch("jobs").each do |id, job|
   expansions = expansions.map { |extra| extra.merge("strategy.job-total" => expansions.length.to_s) }
   expansions.each do |extra|
     name = interpolate(job.fetch("name", id), context.merge(extra))
-    conclusion = !runs ? "skipped" : id == "full-suite" ? "verdict" : context.fetch("simulated.outcome")
+    conclusion = !runs ? "skipped" : %w[full-suite ready-for-review].include?(id) ? "verdict:#{id}" : context.fetch("simulated.outcome")
     puts [name, conclusion].join("\t")
   end
 end
 ' "$CI_WORKFLOW" "$@") || fail "could not resolve the published checks"
   [ -n "$rows" ] || return 0
   while IFS=$'\t' read -r name conclusion; do
-    if [ "$conclusion" = verdict ]; then
-      if run_full_suite_verdict "$@" needs="$outcome" >/dev/null; then conclusion=success; else conclusion=failure; fi
-    fi
+    case $conclusion in
+      verdict:full-suite)
+        if run_full_suite_verdict "$@" needs="$outcome" >/dev/null; then conclusion=success; else conclusion=failure; fi
+        ;;
+      verdict:ready-for-review)
+        if run_ready_verdict "$@" >/dev/null; then conclusion=$outcome; else conclusion=failure; fi
+        ;;
+    esac
     printf '%s\t%s\n' "$name" "$conclusion"
   done <<<"$rows"
 }
@@ -338,7 +359,7 @@ puts YAML.load_file(ARGV[0]).fetch("jobs").fetch(ARGV[1]).fetch("timeout-minutes
 # Tier membership is the executable inventory of the timeout policy: a new job
 # must join a tier, and a job-level value outside these tiers is exactly the
 # one-off number the policy removed.
-FAST_TIER_JOBS='plan test-coverage invariants tests-timing-aggregate full-suite'
+FAST_TIER_JOBS='plan test-coverage invariants tests-timing-aggregate ready-for-review full-suite'
 NORMAL_TIER_JOBS='lint tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial macos-stock-bash'
 HEAVY_TIER_JOBS='tests-herdr tests-hc'
 
@@ -423,7 +444,9 @@ test_only_the_full_ci_label_joins_the_pr_group() {
   pass "only the full-ci label joins and supersedes the PR's group; other labels cancel nothing"
 }
 
-QUICK_JOBS='plan test-coverage invariants full-suite'
+QUICK_JOBS='plan test-coverage invariants ready-for-review full-suite'
+# What a draft runs: the quick checks and the Ready for review verdict.
+DRAFT_JOBS='plan test-coverage invariants ready-for-review'
 
 # DOP-167 direction A: an outside PR without the label runs only the quick
 # checks and the Full suite verdict, which fails naming the label.
@@ -480,6 +503,121 @@ test_trusted_runs_are_unchanged() {
   pass "main pushes, own branches and write-access authors still run every job and pass the verdict"
 }
 
+# Draft gate (docs/fork-decisions/2026-11-24-ci-draft-gate.md): a draft runs
+# only the quick checks, whoever opened it and whatever labels it carries, and
+# its Ready for review verdict fails saying to mark it ready, which passes on
+# every run that is not a draft.
+test_draft_pr_runs_only_quick_checks() {
+  local context actual out
+  for context in "head=kunchenguid/firstmate action=opened" "head=kunchenguid/firstmate action=synchronize" \
+    "association=OWNER action=reopened" "labels=full-ci action=synchronize" \
+    "labels=full-ci action=labeled label=full-ci" "action=synchronize"; do
+    # shellcheck disable=SC2086  # each context is a deliberate word list
+    actual=$(jobs_running_under $context draft=true | tr '\n' ' ') || fail "could not resolve draft jobs for $context"
+    [ "$actual" = "$DRAFT_JOBS " ] || fail "a draft PR ($context) must run only $DRAFT_JOBS, ran: $actual"
+  done
+  if out=$(run_ready_verdict head=kunchenguid/firstmate draft=true); then
+    fail "the Ready for review verdict must fail on a draft PR:"$'\n'"$out"
+  fi
+  printf '%s\n' "$out" | grep -q 'mark it ready for review' \
+    || fail "the Ready for review failure on a draft must say to mark it ready, got:"$'\n'"$out"
+  for context in "head=kunchenguid/firstmate" "action=ready_for_review" "event=push" \
+    "event=workflow_dispatch action= association= head= number="; do
+    # shellcheck disable=SC2086  # each context is a deliberate word list
+    out=$(run_ready_verdict $context) || fail "the Ready for review verdict must pass off a draft ($context):"$'\n'"$out"
+  done
+  pass "a draft PR runs only the quick checks and a failing Ready for review saying to mark it ready"
+}
+
+# Marking a draft ready runs the full suite on its head, under the same trust
+# gate as a push: an own-branch PR runs every job, an unlabelled outside PR
+# still waits for full-ci.
+test_ready_for_review_runs_the_whole_suite() {
+  local all actual out
+  all=$(workflow_jobs | tr '\n' ' ') || fail "could not list ci.yml jobs"
+  actual=$(jobs_running_under action=ready_for_review head=kunchenguid/firstmate | tr '\n' ' ') \
+    || fail "could not resolve ready_for_review jobs"
+  [ "$actual" = "$all" ] || fail "marking an own-branch PR ready must run every job, ran: $actual"
+  out=$(run_full_suite_verdict action=ready_for_review head=kunchenguid/firstmate) \
+    || fail "the Full suite verdict must pass on a ready PR whose lanes passed:"$'\n'"$out"
+  actual=$(jobs_running_under action=ready_for_review | tr '\n' ' ') || fail "could not resolve outside ready_for_review jobs"
+  [ "$actual" = "$QUICK_JOBS " ] || fail "marking an unlabelled outside PR ready must still run only $QUICK_JOBS, ran: $actual"
+  pass "marking a PR ready runs the full suite under the same full-ci gate as a push"
+}
+
+# A draft's runs keep their own group, so a draft run GitHub starts after the
+# ready run cannot cancel it, while the ready run and later pushes share the
+# PR's ordinary group and supersede one another.
+test_draft_runs_keep_their_own_group() {
+  local draft ready push other
+  draft=$(resolve_concurrency number=108 run_id=900030 draft=true) || fail "could not resolve draft concurrency"
+  ready=$(resolve_concurrency number=108 run_id=900031 action=ready_for_review) || fail "could not resolve ready concurrency"
+  push=$(resolve_concurrency number=108 run_id=900032) || fail "could not resolve PR concurrency"
+  other=$(resolve_concurrency number=109 run_id=900033 draft=true) || fail "could not resolve draft concurrency"
+  [ "$(group_of "$draft")" != "$(group_of "$ready")" ] \
+    || fail "a draft run must not share the ready run's group ($(group_of "$draft"))"
+  [ "$(group_of "$ready")" = "$(group_of "$push")" ] && [ "$(cancel_of "$push")" = true ] \
+    || fail "the ready run and later pushes must supersede within the PR group, got $ready and $push"
+  [ "$(group_of "$draft")" != "$(group_of "$other")" ] \
+    || fail "distinct draft PRs must not share a concurrency group ($(group_of "$draft"))"
+  pass "draft runs keep their own group apart from the ready run, which later pushes supersede"
+}
+
+# A draft head never reads as fully tested: its run publishes a failing Ready
+# for review and skipped lanes and Full suite, and only the ready run's results
+# make it green. Ready for review needs no other job, so the ready run clears
+# that failure at once, while GitHub creates Full suite only once its lanes
+# finish.
+test_only_the_ready_run_turns_a_draft_head_green() {
+  local before after
+  before=$(published_checks head=kunchenguid/firstmate draft=true) || fail "could not resolve the draft run's checks"
+  printf '%s\n' "$before" | grep -qx $'Ready for review\tfailure' \
+    || fail "a draft run must publish a failing Ready for review, got:"$'\n'"$before"
+  printf '%s\n' "$before" | grep -qx $'Not run for draft - Full suite\tskipped' \
+    || fail "a draft run must skip Full suite, which would otherwise stay red until the ready run's lanes finish, got:"$'\n'"$before"
+  printf '%s\n' "$before" | grep -qx $'Not run for draft - Behavior portable serial 1\tskipped' \
+    || fail "a draft run must skip the behavior lanes, got:"$'\n'"$before"
+  printf '%s\n' "$before" | grep -q $'^Full suite\t\|^Behavior portable serial 1\t' \
+    && fail "a draft run must publish no check under a full-suite job's own name, got:"$'\n'"$before"
+  ruby -ryaml -e 'exit(YAML.load_file(ARGV[0]).fetch("jobs").fetch("ready-for-review").key?("needs") ? 1 : 0)' "$CI_WORKFLOW" \
+    || fail "Ready for review must need no other job, so the ready run replaces a draft's failure at once"
+  after=$(checks_after_runs "head=kunchenguid/firstmate draft=true" \
+    "head=kunchenguid/firstmate action=ready_for_review outcome=success") || fail "could not merge the draft and ready runs"
+  printf '%s\n' "$after" | grep -qx $'Full suite\tsuccess' \
+    || fail "the ready run must leave Full suite passing, got:"$'\n'"$after"
+  printf '%s\n' "$after" | grep -qx $'Ready for review\tsuccess' \
+    || fail "the ready run must leave Ready for review passing, got:"$'\n'"$after"
+  printf '%s\n' "$after" | grep -vqx $'.*\t\\(success\\|skipped\\)' \
+    && fail "after the ready run no check may fail, got:"$'\n'"$after"
+  # GitHub can start a draft event's run after the ready run on the same head.
+  # That late run fails closed on Ready for review, and its skipped jobs carry
+  # the draft prefix, so it never masks the ready run's lanes or Full suite.
+  after=$(checks_after_runs "head=kunchenguid/firstmate action=ready_for_review outcome=success" \
+    "head=kunchenguid/firstmate draft=true") || fail "could not merge the ready and late draft runs"
+  printf '%s\n' "$after" | grep -qx $'Ready for review\tfailure' \
+    || fail "a late draft run must leave Ready for review failing closed, got:"$'\n'"$after"
+  printf '%s\n' "$after" | grep -qx $'Full suite\tsuccess' \
+    || fail "a late draft run must leave the ready run's Full suite visible, got:"$'\n'"$after"
+  printf '%s\n' "$after" | grep -qx $'Behavior portable serial 1\tsuccess' \
+    || fail "a late draft run must leave the ready run's lanes visible, got:"$'\n'"$after"
+  pass "a draft head reads failing until the ready run passes it, and a late draft run fails closed without masking it"
+}
+
+# A late draft run's passing quick checks can replace the ready run's failed
+# ones on the same head, so the ready run's Full suite must carry them: it
+# needs every job but the timing aggregate and Ready for review, the plan
+# included, whose failure would otherwise skip every lane and pass the verdict.
+test_full_suite_needs_every_quick_check() {
+  local all want actual
+  all=$(workflow_jobs) || fail "could not list ci.yml jobs"
+  want=$(printf '%s\n' "$all" | grep -vx 'tests-timing-aggregate\|ready-for-review\|full-suite' | LC_ALL=C sort)
+  actual=$(ruby -ryaml -e 'puts YAML.load_file(ARGV[0]).fetch("jobs").fetch("full-suite").fetch("needs")' "$CI_WORKFLOW" | LC_ALL=C sort) \
+    || fail "could not read the Full suite needs"
+  [ "$actual" = "$want" ] \
+    || fail "Full suite must need every lane and quick check, the plan included"$'\n'"needs: $(printf '%s' "$actual" | tr '\n' ' ')"$'\n'"wanted: $(printf '%s' "$want" | tr '\n' ' ')"
+  pass "Full suite needs every lane and quick check, so a failed plan keeps it red"
+}
+
 # DOP-167: another label neither starts nor cancels a run: no job runs, not
 # even the Full suite verdict, whose waiting failure the PR's push already
 # published (Greptile review on PR #7949: a verdict from that never-cancelled
@@ -527,7 +665,7 @@ test_unrelated_label_never_masks_an_earlier_failure() {
       case "$expect:$name" in
         all-failed:*) want=failure ;;
         waiting:'Full suite') want=failure ;;
-        waiting:'CI plan'|waiting:'Test coverage guard'|waiting:'Repo invariants') want=success ;;
+        waiting:'CI plan'|waiting:'Test coverage guard'|waiting:'Repo invariants'|waiting:'Ready for review') want=success ;;
         waiting:*) want=skipped ;;
       esac
       [ "$conclusion" = "$want" ] \
@@ -713,25 +851,32 @@ test_label_events_run_all_or_nothing_under_prefixed_names() {
   actual=$(jobs_running_under event=workflow_dispatch action= association= head= number=) \
     || fail "could not resolve the dispatch conditions"
   [ "$actual" = "$all" ] || fail "workflow_dispatch must run every job"
-  ruby -ryaml -e "$EXPRESSION_RUBY" - "$CI_WORKFLOW" <<'RUBY' || fail "label name prefix contract"
+  # A job a draft skips takes the draft prefix on a draft, so a draft run's
+  # skipped check never shares a name with, or masks, the ready run's.
+  ruby -ryaml -e "$EXPRESSION_RUBY" - "$CI_WORKFLOW" "$DRAFT_JOBS" <<'RUBY' || fail "label and draft name prefix contract"
+draft_runs = ARGV[1].split
 YAML.load_file(ARGV[0]).fetch("jobs").each do |id, job|
   name = job.fetch("name")
   prefix = name[/\A\$\{\{(.+?)\}\}/, 1] or raise "#{id} has no name prefix expression"
   rest = name.sub(/\A\$\{\{.+?\}\}/, "")
   raise "#{id} keeps no own name after its prefix" if rest.strip.empty?
-  [["labeled", "docs", "Not run for label - "], ["labeled", "full-ci", ""], ["synchronize", "", ""]].each do |action, label, want|
-    got = Expression.evaluate(prefix, {"github.event.action" => action, "github.event.label.name" => label}).to_s
-    raise "#{id} prefix under #{action} #{label.inspect} is #{got.inspect}, wanted #{want.inspect}" unless got == want
+  on_draft = draft_runs.include?(id) ? "" : "Not run for draft - "
+  [["labeled", "docs", nil, "Not run for label - "], ["labeled", "full-ci", nil, ""], ["synchronize", "", nil, ""],
+   ["synchronize", "", false, ""], ["synchronize", "", true, on_draft], ["labeled", "docs", true, "Not run for label - "]].each do |action, label, draft, want|
+    got = Expression.evaluate(prefix, {"github.event.action" => action, "github.event.label.name" => label,
+      "github.event.pull_request.draft" => draft}).to_s
+    raise "#{id} prefix under #{action} #{label.inspect} draft=#{draft.inspect} is #{got.inspect}, wanted #{want.inspect}" unless got == want
   end
 end
 RUBY
-  pass "full-ci and workflow_dispatch run every job, and any other label runs none under prefixed names"
+  pass "full-ci and workflow_dispatch run every job, any other label runs none under prefixed names, and a draft's skipped jobs carry the draft prefix"
 }
 
 test_plan_consumers_gate_every_later_step() {
   ruby -ryaml - "$CI_WORKFLOW" <<'RUBY' || fail "plan gate contract"
 jobs = YAML.load_file(ARGV[0]).fetch("jobs")
-consumers = jobs.select { |_, job| Array(job["needs"]).include?("plan") }
+# The Full suite verdict needs the plan only for its result, not its output.
+consumers = jobs.select { |id, job| id != "full-suite" && Array(job["needs"]).include?("plan") }
 expected = %w[lint tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial tests-herdr tests-hc macos-stock-bash]
 raise "plan consumers are #{consumers.keys.sort}, wanted #{expected.sort}" unless consumers.keys.sort == expected.sort
 consumers.each do |id, job|
@@ -797,6 +942,11 @@ test_only_the_full_ci_label_joins_the_pr_group
 test_outside_pr_without_label_runs_only_quick_checks
 test_full_ci_label_runs_the_whole_suite
 test_trusted_runs_are_unchanged
+test_draft_pr_runs_only_quick_checks
+test_ready_for_review_runs_the_whole_suite
+test_draft_runs_keep_their_own_group
+test_only_the_ready_run_turns_a_draft_head_green
+test_full_suite_needs_every_quick_check
 test_unrelated_label_starts_no_job
 test_late_unrelated_label_run_never_masks_a_full_ci_pass
 test_unrelated_label_never_masks_an_earlier_failure
