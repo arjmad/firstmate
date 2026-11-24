@@ -1120,8 +1120,10 @@ fm_procevent_capture_inbox_prepare() {
   local state=$1 inbox
   state=$(fm_procevent_state_root_resolve "$state") || return 1
   inbox=$(fm_procevent_inbox_dir "$state")
+  # Another source's runner can create it between the check and the mkdir;
+  # the validation below, not the mkdir's status, decides whether it is usable.
   if [ ! -e "$inbox" ] && [ ! -L "$inbox" ]; then
-    (umask 077; mkdir "$inbox") || return 1
+    (umask 077; mkdir "$inbox" 2>/dev/null) || [ -d "$inbox" ] || return 1
   fi
   fm_procevent_private_directory_valid "$inbox" 1 || return 1
   printf '%s\n' "$inbox"
@@ -1142,8 +1144,9 @@ fm_procevent_capture_reservation_prepare() {
   local state=$1 reservation
   state=$(fm_procevent_state_root_resolve "$state") || return 1
   reservation=$(fm_procevent_capture_reservation_dir "$state")
+  # A peer runner can win this mkdir too, as in the inbox preparer above.
   if [ ! -e "$reservation" ] && [ ! -L "$reservation" ]; then
-    (umask 077; mkdir "$reservation") || return 1
+    (umask 077; mkdir "$reservation" 2>/dev/null) || [ -d "$reservation" ] || return 1
   fi
   fm_procevent_private_directory_valid "$reservation" 1 || return 1
   printf '%s\n' "$reservation"
