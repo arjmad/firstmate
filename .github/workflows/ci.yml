@@ -881,7 +881,10 @@ jobs:
     runs-on: ubuntu-24.04
     # Fast tier: the verdict reads its needed jobs' results.
     timeout-minutes: 5
+    # The plan is needed too: a failed plan skips every lane, and a later draft
+    # run's passing CI plan could replace that red check on the same head.
     needs:
+      - plan
       - lint
       - test-coverage
       - tests-portable-parallel-1

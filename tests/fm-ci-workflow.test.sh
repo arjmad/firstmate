@@ -603,6 +603,21 @@ test_only_the_ready_run_turns_a_draft_head_green() {
   pass "a draft head reads failing until the ready run passes it, and a late draft run fails closed without masking it"
 }
 
+# A late draft run's passing quick checks can replace the ready run's failed
+# ones on the same head, so the ready run's Full suite must carry them: it
+# needs every job but the timing aggregate and Ready for review, the plan
+# included, whose failure would otherwise skip every lane and pass the verdict.
+test_full_suite_needs_every_quick_check() {
+  local all want actual
+  all=$(workflow_jobs) || fail "could not list ci.yml jobs"
+  want=$(printf '%s\n' "$all" | grep -vx 'tests-timing-aggregate\|ready-for-review\|full-suite' | LC_ALL=C sort)
+  actual=$(ruby -ryaml -e 'puts YAML.load_file(ARGV[0]).fetch("jobs").fetch("full-suite").fetch("needs")' "$CI_WORKFLOW" | LC_ALL=C sort) \
+    || fail "could not read the Full suite needs"
+  [ "$actual" = "$want" ] \
+    || fail "Full suite must need every lane and quick check, the plan included"$'\n'"needs: $(printf '%s' "$actual" | tr '\n' ' ')"$'\n'"wanted: $(printf '%s' "$want" | tr '\n' ' ')"
+  pass "Full suite needs every lane and quick check, so a failed plan keeps it red"
+}
+
 # DOP-167: another label neither starts nor cancels a run: no job runs, not
 # even the Full suite verdict, whose waiting failure the PR's push already
 # published (Greptile review on PR #7949: a verdict from that never-cancelled
@@ -860,7 +875,8 @@ RUBY
 test_plan_consumers_gate_every_later_step() {
   ruby -ryaml - "$CI_WORKFLOW" <<'RUBY' || fail "plan gate contract"
 jobs = YAML.load_file(ARGV[0]).fetch("jobs")
-consumers = jobs.select { |_, job| Array(job["needs"]).include?("plan") }
+# The Full suite verdict needs the plan only for its result, not its output.
+consumers = jobs.select { |id, job| id != "full-suite" && Array(job["needs"]).include?("plan") }
 expected = %w[lint tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial tests-herdr tests-hc macos-stock-bash]
 raise "plan consumers are #{consumers.keys.sort}, wanted #{expected.sort}" unless consumers.keys.sort == expected.sort
 consumers.each do |id, job|
@@ -930,6 +946,7 @@ test_draft_pr_runs_only_quick_checks
 test_ready_for_review_runs_the_whole_suite
 test_draft_runs_keep_their_own_group
 test_only_the_ready_run_turns_a_draft_head_green
+test_full_suite_needs_every_quick_check
 test_unrelated_label_starts_no_job
 test_late_unrelated_label_run_never_masks_a_full_ci_pass
 test_unrelated_label_never_masks_an_earlier_failure
