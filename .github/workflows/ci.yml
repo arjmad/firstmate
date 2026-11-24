@@ -847,28 +847,23 @@ jobs:
   # no other job, so the ready run replaces a draft's failure within seconds of
   # the PR being marked ready, while Full suite, which GitHub creates only once
   # its lanes finish, skips on a draft rather than leaving a stale failure there.
-  # An event's draft flag is as old as the event, and GitHub can start a draft
-  # event's run after the ready run on the same head, so a draft run fails only
-  # when the pull request is still a draft now; an unreadable answer fails.
+  # It reads the event's own draft flag and fails closed: a draft event's run
+  # that GitHub starts after the ready run on the same head leaves this check
+  # red there, never green before the ready run's checks exist, and rerunning
+  # this job from the ready run clears it (CONTRIBUTING.md).
   ready-for-review:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Ready for review
     runs-on: ubuntu-24.04
     if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
-    # Fast tier: one shell test of the draft flag and one API read.
+    # Fast tier: one shell test of the event's draft flag.
     timeout-minutes: 5
-    permissions:
-      pull-requests: read
     steps:
       - name: Require a pull request that is ready for review
         env:
           FM_CI_DRAFT: ${{ github.event.pull_request.draft && 'true' || 'false' }}
-          FM_CI_PR: ${{ github.event.pull_request.number }}
-          GH_REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          if [ "$FM_CI_DRAFT" = true ] \
-            && [ "$(gh api "repos/$GH_REPO/pulls/$FM_CI_PR" --jq .draft 2>/dev/null || echo unread)" != false ]; then
+          if [ "$FM_CI_DRAFT" = true ]; then
             echo "::error::A draft pull request runs only the quick checks; mark it ready for review to run the full suite. See CONTRIBUTING.md."
             exit 1
           fi
