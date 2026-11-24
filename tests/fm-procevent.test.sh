@@ -5956,4 +5956,34 @@ ad retire "$ad_fm" --if-matches lavish -- \
 unset ADOPT_FAKE ADOPT_SESSION
 pass "adopt-task hands a finished task's boards to firstmate, keeps one with an unread round, and leaves an ended one for retirement"
 
+# Two sources' runners starting together in a home that has never captured
+# both find the capture inbox and reservation directories missing, and one
+# runner's mkdir loses to the other's. The loser must still capture rather than
+# exit without a result. A mkdir that first creates the directory as the peer
+# would, then runs the real one, pins that interleaving; a peer's directory
+# that is not private is still refused.
+for prepare in fm_procevent_capture_inbox_prepare fm_procevent_capture_reservation_prepare; do
+  for peer_mode in 700 755; do
+    peer_state="$TMP_ROOT/peer-mkdir/$prepare-$peer_mode/state"
+    mkdir -p "$peer_state"
+    chmod 0700 "$peer_state"
+    rc=0
+    out=$(FM_HOME="${peer_state%/state}" bash -c '
+      . "$1/bin/fm-pr-lib.sh"
+      . "$1/bin/fm-wake-lib.sh"
+      . "$1/bin/fm-procevent-lib.sh"
+      peer_mode=$4
+      mkdir() { command mkdir -m "$peer_mode" "$1" && command mkdir "$1"; }
+      "$2" "$3"
+    ' _ "$ROOT" "$prepare" "$peer_state" "$peer_mode" 2>&1) || rc=$?
+    if [ "$peer_mode" = 700 ]; then
+      [ "$rc" -eq 0 ] && [ -d "$out" ] && [ "${out%/*}" = "$(cd -P "$peer_state" && pwd -P)" ] \
+        || fail "$prepare must accept the private directory a peer runner created first (rc=$rc): $out"
+    else
+      [ "$rc" -ne 0 ] || fail "$prepare must refuse a peer's directory that is not private: $out"
+    fi
+  done
+done
+pass "the capture preparers accept a private directory a peer runner created first and refuse one that is not private"
+
 printf '\nall procevent tests passed\n'
