@@ -67,11 +67,11 @@ concurrency:
 #
 # Draft gate (fork patch, docs/fork-decisions/2026-11-24-ci-draft-gate.md): a
 # draft PR runs only the CI plan, the coverage guard and the invariants, and the
-# Full suite job fails saying to mark it ready, so a draft head never reads as
-# fully tested. Marking it ready (ready_for_review) runs the full suite once on
-# that head, and each later push runs it again. Every full-suite job carries
-# the same draft condition, repeated per job for the same reason as the fork
-# opt-out; CONTRIBUTING.md documents the draft flow.
+# Ready for review job fails saying to mark it ready, so a draft head never
+# reads as fully tested. Marking it ready (ready_for_review) runs the full suite
+# once on that head, and each later push runs it again. Every full-suite job
+# and the Full suite verdict carry the same draft condition, repeated per job
+# for the same reason as the fork opt-out; CONTRIBUTING.md documents the flow.
 #
 # Affected-shard planning (fork patch, docs/fork-decisions/2026-11-09-ci-affected-shards.md):
 # bin/fm-ci-plan.sh's header owns what a change selects and when it falls back
@@ -841,12 +841,35 @@ jobs:
         if: github.event_name == 'pull_request'
         run: bin/fm-fork-decisions.sh pr-check --base HEAD^1
 
+  # The draft verdict: fails on a draft PR, passes on every other run. It needs
+  # no other job, so the ready run replaces a draft's failure within seconds of
+  # the PR being marked ready, while Full suite, which GitHub creates only once
+  # its lanes finish, skips on a draft rather than leaving a stale failure there.
+  ready-for-review:
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Ready for review
+    runs-on: ubuntu-24.04
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
+    # Fast tier: one shell test of the event's draft flag.
+    timeout-minutes: 5
+    steps:
+      - name: Require a pull request that is ready for review
+        env:
+          FM_CI_DRAFT: ${{ github.event.pull_request.draft && 'true' || 'false' }}
+        run: |
+          set -eu
+          if [ "$FM_CI_DRAFT" = true ]; then
+            echo "::error::A draft pull request runs only the quick checks; mark it ready for review to run the full suite. See CONTRIBUTING.md."
+            exit 1
+          fi
+          echo "Not a draft."
+
   # The Full suite verdict: one check that fails until an outside PR has the
   # full-ci go-ahead and otherwise fails when any lane failed or was cancelled.
   # It runs even when every lane is skipped, because a skipped job would read
   # as passing. On an unrelated label event it skips under the prefixed name
   # like every other job: that run is never cancelled, so a verdict it computed
   # from its older event could finish after, and mask, a later full-ci pass.
+  # On a draft it skips, and Ready for review carries the failure instead.
   full-suite:
     name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && 'Not run for label - ' || '' }}Full suite
     runs-on: ubuntu-24.04
@@ -862,19 +885,14 @@ jobs:
       - tests-hc
       - macos-stock-bash
       - invariants
-    if: ${{ always() && !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') }}
+    if: ${{ always() && !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && !(github.event.action == 'labeled' && github.event.label.name != 'full-ci') && !github.event.pull_request.draft }}
     steps:
-      - name: Require a ready pull request, the full-ci go-ahead and passing lanes
+      - name: Require the full-ci go-ahead and passing lanes
         env:
-          FM_CI_DRAFT: ${{ github.event.pull_request.draft && 'true' || 'false' }}
           FM_CI_FULL: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'COLLABORATOR' || contains(github.event.pull_request.labels.*.name, 'full-ci')) }}
           FM_CI_LANES_FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
         run: |
           set -eu
-          if [ "$FM_CI_DRAFT" = true ]; then
-            echo "::error::A draft pull request runs only the quick checks; mark it ready for review to run the full suite. See CONTRIBUTING.md."
-            exit 1
-          fi
           if [ "$FM_CI_FULL" != true ]; then
             echo "::error::The full suite runs on outside pull requests only after a maintainer adds the full-ci label; see CONTRIBUTING.md."
             exit 1
