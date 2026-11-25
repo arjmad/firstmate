@@ -706,6 +706,18 @@ WAIT_FLAG="$TMP_ROOT/wait-flag"
 [ "$?" -eq 124 ] || fail "wait must return 124 when its timeout passes"
 "$ROOT/bin/fm-procevent-when.sh" wait --interval 0.1 -- sh -c 'exit 3' 2>/dev/null
 [ "$?" -eq 2 ] || fail "wait must return 2 on a condition error"
+T0=$(date +%s)
+"$ROOT/bin/fm-procevent-when.sh" wait --interval 30 --timeout 2 -- false 2>/dev/null
+[ "$?" -eq 124 ] && [ $(( $(date +%s) - T0 )) -le 4 ] || fail "wait must not sleep past --timeout"
+T0=$(date +%s)
+"$ROOT/bin/fm-procevent-when.sh" wait --timeout 2 -- sleep 30 2>/dev/null
+[ "$?" -eq 124 ] && [ $(( $(date +%s) - T0 )) -le 4 ] || fail "wait must bound a hung condition by --timeout"
+"$ROOT/bin/fm-procevent-when.sh" wait --timeout 5 -- sh -c 'exit 124' 2>/dev/null
+[ "$?" -eq 2 ] || fail "wait must report a condition's own exit 124 as an error"
+"$ROOT/bin/fm-procevent-when.sh" wait --interval 2 --timeout 08 -- false 2>/dev/null
+[ "$?" -eq 124 ] || fail "wait must read a zero-padded --timeout as decimal"
+"$ROOT/bin/fm-procevent-when.sh" wait --bogus -- true 2>/dev/null
+[ "$?" -eq 2 ] || fail "wait must exit 2 on a usage error"
 [ ! -e "$TMP_ROOT/state/when" ] || fail "wait must not register anything"
 pass "wait blocks in the foreground until its condition holds, times out with 124, and errors with 2"
 

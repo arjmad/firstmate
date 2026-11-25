@@ -392,28 +392,38 @@ spec_load() {
 # --- run ---------------------------------------------------------------------
 
 cmd_wait() {
-  local interval=30 stable=1 timeout=540 hits=0 start rc
+  local interval=30 stable=1 timeout=540 hits=0 deadline rc left nap
+  wait_usage() { printf 'wait: %s\n' "$1" >&2; exit 2; }
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --interval) positive_number "${2-}" || die "--interval needs a positive number"; interval=$2; shift 2 ;;
-      --stable)   positive_int "${2-}" || die "--stable needs a positive integer"; stable=$2; shift 2 ;;
-      --timeout)  positive_int "${2-}" || die "--timeout needs a positive integer"; timeout=$2; shift 2 ;;
+      --interval) positive_number "${2-}" || wait_usage "--interval needs a positive number"; interval=$2; shift 2 ;;
+      --stable)   positive_int "${2-}" || wait_usage "--stable needs a positive integer"; stable=$((10#$2)); shift 2 ;;
+      --timeout)  positive_int "${2-}" || wait_usage "--timeout needs a positive integer"; timeout=$((10#$2)); shift 2 ;;
       --) shift; break ;;
-      *) die "wait: unknown option $1 (put the condition after --)" ;;
+      *) wait_usage "unknown option $1 (put the condition after --)" ;;
     esac
   done
-  [ "$#" -gt 0 ] || die "wait: missing condition argv after --"
-  start=$(date +%s)
+  [ "$#" -gt 0 ] || wait_usage "missing condition argv after --"
+  deadline=$(( $(date +%s) + timeout ))
   while :; do
-    "$@" >/dev/null 2>&1
+    # One deadline bounds every poll and nap, so a hung condition or a long
+    # interval can never hold the caller past --timeout.
+    left=$(( deadline - $(date +%s) ))
+    [ "$left" -gt 0 ] || { printf 'wait: timed out after %ss; reissue to keep waiting\n' "$timeout" >&2; return 124; }
+    fm_run_timed "$left" "$@" >/dev/null 2>&1
     rc=$?
     case "$rc" in
       0) hits=$((hits + 1)); [ "$hits" -ge "$stable" ] && return 0 ;;
       1) hits=0 ;;
+      124) [ "$(date +%s)" -ge "$deadline" ] && continue
+           printf 'wait: condition exited 124\n' >&2; return 2 ;;
       *) printf 'wait: condition exited %s\n' "$rc" >&2; return 2 ;;
     esac
-    [ $(( $(date +%s) - start )) -ge "$timeout" ] && { printf 'wait: timed out after %ss; reissue to keep waiting\n' "$timeout" >&2; return 124; }
-    sleep "$interval"
+    left=$(( deadline - $(date +%s) ))
+    [ "$left" -gt 0 ] || continue
+    nap=$interval
+    awk -v a="$interval" -v b="$left" 'BEGIN { exit !(a > b) }' && nap=$left
+    sleep "$nap"
   done
 }
 
