@@ -1104,7 +1104,7 @@ test_ship_and_scout_teach_validation_round_pause() {
       "$kind brief still tells workers never to declare a wait they hold in a command"
     assert_no_grep "heavy-test slot" "$brief" \
       "$kind brief names a heavy-test slot that nothing defines"
-    assert_grep "\`$ROOT/bin/fm-procevent-when.sh wait -- <condition argv>\`" "$brief" \
+    assert_grep "\`$ROOT/bin/fm-procevent-when.sh wait -- sh -c '<test>'\`" "$brief" \
       "$kind brief does not name fm-procevent-when.sh wait as the one wait"
     assert_grep "your own validation round" "$brief" \
       "$kind brief did not teach workers to declare their validation-round wait"

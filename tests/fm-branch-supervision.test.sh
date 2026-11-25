@@ -174,7 +174,7 @@ test_branch_prompt_names_the_one_wait() {
   local prompt
   prompt=$(bash "$ROOT/bin/fm-branch-prompt.sh") || fail "branch prompt generator failed"
   assert_contains "$prompt" \
-    "To wait in a turn, run ONE foreground \`bin/fm-procevent-when.sh wait -- <condition argv>\`" \
+    "To wait in a turn, run ONE foreground \`bin/fm-procevent-when.sh wait -- sh -c '<test>'\`" \
     "branch prompt does not name fm-procevent-when.sh wait as the one wait"
   assert_contains "$prompt" "never \`sleep\` then check, a sleep loop, Monitor, or CronCreate." \
     "branch prompt does not forbid sleep loops and Monitor"

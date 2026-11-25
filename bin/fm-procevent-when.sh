@@ -81,8 +81,9 @@
 #            no registration, no state) until it holds for --stable (default 1)
 #            consecutive polls, every --interval seconds (default 30), for at
 #            most --timeout seconds (default 540, under Claude Code's 600000 ms
-#            Bash cap). Exit 0 once it holds, 124 on timeout, 2 on a condition
-#            error (exit other than 0 or 1); reissue the same command after 124.
+#            Bash cap). Like `until`, any non-zero condition exit is "not yet".
+#            Exit 0 once it holds, 124 on timeout (reissue it), 2 on bad usage.
+#            The argv runs with no shell: wrap a shell test as `sh -c '<test>'`.
 #            Use it instead of sleep-then-check, a background job, or Monitor.
 # run        The blocking child the generic runner executes; never run it in a
 #            conversational turn. It polls the condition on the registered
@@ -412,13 +413,12 @@ cmd_wait() {
     [ "$left" -gt 0 ] || { printf 'wait: timed out after %ss; reissue to keep waiting\n' "$timeout" >&2; return 124; }
     fm_run_timed "$left" "$@" >/dev/null 2>&1
     rc=$?
-    case "$rc" in
-      0) hits=$((hits + 1)); [ "$hits" -ge "$stable" ] && return 0 ;;
-      1) hits=0 ;;
-      124) [ "$(date +%s)" -ge "$deadline" ] && continue
-           printf 'wait: condition exited 124\n' >&2; return 2 ;;
-      *) printf 'wait: condition exited %s\n' "$rc" >&2; return 2 ;;
-    esac
+    # Like `until`: exit 0 holds, any other exit (a timed-out poll too) is not yet.
+    if [ "$rc" -eq 0 ]; then
+      hits=$((hits + 1)); [ "$hits" -ge "$stable" ] && return 0
+    else
+      hits=0
+    fi
     left=$(( deadline - $(date +%s) ))
     [ "$left" -gt 0 ] || continue
     nap=$interval
