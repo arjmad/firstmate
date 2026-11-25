@@ -348,6 +348,12 @@
 # merging on --one-way-approved refuses the consent, because the updated head
 # would be a new merge call, and without it goes to the forge as before, like
 # a caller's --auto.
+# Later rulings (fork patch, docs/fork-decisions/2026-11-25-later-rulings-at-landing.md):
+# once the captain-hold check passes, bin/fm-later-rulings.sh --found-only
+# prints, as note: lines on stderr, any captain ruling dated on or after the
+# task's recorded approval. It is advisory: it never refuses the merge, its
+# one backlog row read keeps that read's usual time bound, and a failure to
+# read is silent.
 # Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--update-branch] [--expected-head <full-sha>] [--allow-red <check-name>] [--allow-missing <check-name>] [--allow-no-pipeline] [--waive-review <reason>] [--one-way-approved] [--allow-revert] [-- <extra forge merge args>]
 #
 # On GitLab, this script confirms the MR is actually merged before reporting it;
@@ -2678,6 +2684,9 @@ require_current_away_authority || away_status=$?
 require_recorded_pr_identity || exit 1
 record_pr_metadata || exit 1
 require_released_captain_hold || exit 1
+# Advisory only (see the header's later-rulings paragraph).
+{ FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-later-rulings.sh" "$ID" --found-only 2>/dev/null || true; } \
+  | sed 's/^/note: /' >&2 || true
 
 # Accepted confused-agent-grade limitation, as in bin/fm-lease-lib.sh, not an
 # oversight: if this lock-owning shell dies while its gh or glab child lives,

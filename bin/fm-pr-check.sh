@@ -49,6 +49,11 @@
 # named-head gate is judged against that repo's companion worktree.
 # bin/fm-teardown.sh reads also_pr_<repo>= for its landed-work check and
 # bin/fm-pr-merge.sh accepts a recorded companion PR.
+# Later rulings (fork patch, docs/fork-decisions/2026-11-25-later-rulings-at-landing.md):
+# a registration run by hand for the task's own PR, never a companion, the
+# scan, or the merge-time re-record, ends by printing on stderr any captain
+# ruling bin/fm-later-rulings.sh --found-only lists for the task; it is
+# advisory and never changes the result.
 #
 # scan records every task whose status reports a PR that nobody recorded, so
 # merge monitoring never depends on the supervisor remembering this command.
@@ -695,4 +700,10 @@ case "$READY_RC" in
   0|1) ;;
   *) printf 'actionable: PR %s is registered but its ready line did not reach the parent channel (rc=%s)\n' "$URL" "$READY_RC" >&2 ;;
 esac
+# A ready registration by hand, not the scan's or the merge's re-record, also
+# lists on stderr any captain ruling dated on or after the task's approval,
+# so it is read before the merge; bin/fm-later-rulings.sh owns the listing.
+if [ "${FM_PR_CHECK_MERGE:-}" != 1 ] && [ "${FM_PR_CHECK_SCAN:-}" != 1 ] && [ -z "$ALSO_REPO" ]; then
+  FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-later-rulings.sh" "$ID" --found-only >&2 2>/dev/null || true
+fi
 printf 'armed: state/%s.check.sh\n' "$ID"

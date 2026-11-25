@@ -1047,6 +1047,55 @@ test_verified_merge_records_pr_and_head() {
   pass "fm-pr-merge records pr= and pr_head= for a verified GitHub merge"
 }
 
+# A captain ruling dated after the task's recorded approval is listed when the
+# ready PR is registered by hand and again as a note at merge time, and the
+# merge still lands: the listing is advisory (bin/fm-later-rulings.sh).
+test_later_rulings_are_listed_without_blocking_the_merge() {
+  local case_dir rc
+  command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found (later rulings)"; return 0; }
+  case_dir=$(make_case later-rulings)
+  add_gh_mocks "$case_dir" 7070707070707070707070707070707070707070
+  : > "$case_dir/gh-axi.log"
+  printf '%s\n' 'Arjun 2026-11-20 on the board: ship the drafted line.' > "$case_dir/answer.txt"
+  FM_HOME="$case_dir/home" FM_STATE_OVERRIDE="$case_dir/state" PATH="$case_dir/fakebin:$PATH" \
+    "$ROOT/bin/fm-captain-hold.sh" hold task-x1 --title "Land the drafted line" \
+    --reason "approve the drafted line" --kind reversible --batch board:task-x1 >/dev/null 2>&1 \
+    || fail "later-rulings: could not hold the task"
+  FM_HOME="$case_dir/home" FM_STATE_OVERRIDE="$case_dir/state" PATH="$case_dir/fakebin:$PATH" \
+    "$ROOT/bin/fm-captain-hold.sh" answer task-x1 --decision-file "$case_dir/answer.txt" --release \
+    >/dev/null 2>&1 || fail "later-rulings: could not release the task"
+  printf '%s\n' '# Captain' '' \
+    '- Old rule (Arjun 2026-11-01): ship drafts as approved.' \
+    '- Codex is the reviewer only (Arjun 2026-11-21): drop the second-builder role.' \
+    > "$case_dir/home/data/captain.md"
+
+  set +e
+  PR_MERGE="$ROOT/bin/fm-pr-check.sh" run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/71 \
+    > "$case_dir/check-stdout" 2> "$case_dir/check-stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "later-rulings: registration should succeed: $(cat "$case_dir/check-stderr")"
+  assert_grep 'later-rulings: task-x1 was approved 2026-11-20 (the newest captain-hold resolution on its backlog row); 1 captain ruling' "$case_dir/check-stderr" \
+    "later-rulings: registration did not list the later ruling"
+  assert_grep 'data/captain.md:4 2026-11-21 - Codex is the reviewer only' "$case_dir/check-stderr" \
+    "later-rulings: registration did not name the ruling"
+  assert_no_grep 'Old rule' "$case_dir/check-stderr" "later-rulings: an older ruling was listed"
+  assert_no_grep 'later-rulings' "$case_dir/check-stdout" "later-rulings: the listing reached stdout"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/71 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "later-rulings: the merge should still succeed: $(cat "$case_dir/stderr")"
+  assert_grep 'note: later-rulings: task-x1 was approved 2026-11-20' "$case_dir/stderr" \
+    "later-rulings: the merge did not note the later ruling"
+  assert_grep 'note:   data/captain.md:4 2026-11-21' "$case_dir/stderr" \
+    "later-rulings: the merge note did not name the ruling"
+  assert_logged_gh_merge "$case_dir" 71 example/repo --squash
+  pass "a ruling dated after the recorded approval is listed at registration and noted at merge, and the merge still lands"
+}
+
 # A companion PR recorded on the task (fm-pr-check.sh --also) merges under the
 # same gates without rebinding the task's own PR or reporting the task landed,
 # while any other unrecorded PR stays refused as before.
@@ -4133,6 +4182,7 @@ test_github_closed_unqueued_outcome_omits_retry_flags
 test_github_agreeing_queue_rules_keep_retry_guidance
 test_github_conflicting_queue_rules_report_ambiguity
 test_verified_merge_records_pr_and_head
+test_later_rulings_are_listed_without_blocking_the_merge
 test_recorded_companion_pr_merges_without_rebinding_the_task
 test_pr_metadata_is_recorded_before_the_forge_call
 test_merge_failure_propagates_after_recording
