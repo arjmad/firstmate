@@ -14,22 +14,24 @@
 #
 # The approval date. --since gives it directly, for an approval recorded
 # somewhere other than the task's backlog row, such as an audit's picks.
-# Otherwise it is the first YYYY-MM-DD date in the "Captain decision:" text of
-# the newest resolution record bin/fm-captain-hold.sh wrote into the task's
-# backlog row (records are prepended, so the first one in the body is the
-# newest), the record its `answer` or `answer --release` leaves when the
-# captain approves or releases the work. Only that newest record is read: one
-# carrying "Reconciliation evidence:" is not the captain's word, so it leaves no
-# approval date rather than falling back to an older one. A row with no such
-# record, or a decision text with no date before its first blank line, has no
-# approval date.
+# Otherwise it is the earliest captain decision recorded on the task's backlog
+# row: each resolution record bin/fm-captain-hold.sh wrote there through
+# `answer` or `answer --release` (one per captain answer, the newest first)
+# whose payload is "Captain decision:" gives the first YYYY-MM-DD date of that
+# text. The earliest is taken because a later answer, such as a release to
+# start the queued ship, can postdate the approval of its text, and listing
+# from too early only lists more. A record carrying "Reconciliation evidence:"
+# is not the captain's word and gives no date. A row with no such record, or
+# decision texts with no date before their first blank line, has no approval
+# date.
 #
 # The rulings. Every dated item in this home's data/captain.md and, when
 # present, data/captain-shared.md. An item is one list entry ("- ", "* " or
 # "1. " at the line start) together with its indented continuation lines, or
-# one other non-blank line. Its date is the latest full YYYY-MM-DD date
-# anywhere in it, so a ruling amended or relayed later counts from its newest
-# date; a short date such as "11-21" is not read. An item is listed when its
+# one other non-blank line. Its date is the latest full YYYY-MM-DD date in it
+# that is not after tomorrow, so a ruling amended or relayed later counts from
+# its newest date while a deadline such as "until 2027-01-15" does not; a short
+# date such as "11-21" is not read. An item is listed when its
 # date is on or after the approval date: a ruling carries no time of day, so
 # one dated the approval day may still have come after it.
 #
@@ -96,25 +98,30 @@ for name in captain.md captain-shared.md; do
 done
 [ "${#FILES[@]}" -gt 0 ] || say_empty "no data/captain.md or data/captain-shared.md in this home"
 
-# The newest resolution record in a decoded row body, read only up to the next
-# record, prints the first full date of its "Captain decision:" text, up to the
-# blank line that ends that text; a newest record whose payload is another
-# label prints nothing, even if the row's later prose holds that heading.
+# Across the resolution records in a decoded row body, prints the earliest of
+# their decision dates: in each record whose first payload label is "Captain
+# decision:", the first full date of that text before its blank line. A record
+# with another label, and a heading outside any record or after a record's own
+# label, gives none.
 approval_date_from_body() {
   awk '
-    /^Resolution recorded by fm-(captain|decision)-hold\.$/ { if (record) exit; record = 1; next }
-    record && !found && /^(Reconciliation evidence|Default release):$/ { exit }
-    record && !found && $0 == "Captain decision:" { found = 1; next }
-    found && $0 == "" { exit }
-    found && match($0, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/) {
-      print substr($0, RSTART, RLENGTH); exit
+    /^Resolution recorded by fm-(captain|decision)-hold\.$/ { record = 1; labelled = 0; reading = 0; next }
+    record && !labelled && /^(Captain decision|Reconciliation evidence|Default release):$/ {
+      labelled = 1; reading = ($0 == "Captain decision:"); next
     }
+    reading && $0 == "" { reading = 0; next }
+    reading && match($0, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/) {
+      d = substr($0, RSTART, RLENGTH)
+      if (earliest == "" || d < earliest) earliest = d
+      reading = 0
+    }
+    END { if (earliest != "") print earliest }
   '
 }
 
 SOURCE="--since"
 if [ -z "$SINCE" ]; then
-  SOURCE="the newest captain-hold resolution on its backlog row"
+  SOURCE="the earliest captain decision on its backlog row"
   show=
   if [ -f "$SCRIPT_DIR/fm-tasks-axi-lib.sh" ] && [ -f "$SCRIPT_DIR/fm-backlog-transition-lib.sh" ]; then
     # shellcheck source=bin/fm-tasks-axi-lib.sh
@@ -142,16 +149,19 @@ if [ -z "$SINCE" ]; then
   [ -n "$SINCE" ] || say_empty "$ID records no dated captain approval; pass --since YYYY-MM-DD to check it"
 fi
 
+# A date after tomorrow is a deadline, not a ruling; tomorrow, not today, so
+# a ruling dated in a time zone ahead of this host still counts.
+LATEST_OK=$(perl -MPOSIX -e 'print strftime("%Y-%m-%d", localtime(time + 86400))' 2>/dev/null) || LATEST_OK=9999-12-31
 LISTING=$(
   for file in "${FILES[@]}"; do
-    awk -v since="$SINCE" -v label="data/${file##*/}" '
+    awk -v since="$SINCE" -v until="$LATEST_OK" -v label="data/${file##*/}" '
       function flush(   rest, d, latest, text) {
         if (start == 0) return
         latest = ""
         rest = item
         while (match(rest, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)) {
           d = substr(rest, RSTART, RLENGTH)
-          if (d > latest) latest = d
+          if (d > latest && d <= until) latest = d
           rest = substr(rest, RSTART + RLENGTH)
         }
         if (latest != "" && latest >= since) {
@@ -173,7 +183,7 @@ LISTING=$(
   done
 )
 
-[ -n "$LISTING" ] || say_empty "no captain ruling dated on or after $ID's approval $SINCE"
+[ -n "$LISTING" ] || say_empty "no item in data/captain.md or data/captain-shared.md is dated on or after $ID's approval $SINCE"
 COUNT=$(printf '%s\n' "$LISTING" | grep -c '^  ')
 printf 'later-rulings: %s was approved %s (%s); %s captain ruling(s) are dated on or after it - re-read the approved text against each before merging:\n' \
   "$ID" "$SINCE" "$SOURCE" "$COUNT"

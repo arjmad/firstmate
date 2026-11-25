@@ -57,6 +57,8 @@ write_captain_files() {  # <home>
 - Wrapped rule (Arjun 2026-11-02):
   amended on 2026-11-23 with a second line.
 - Short-date rule (Arjun 11-24): a short date alone is not read.
+- Deadline rule (Arjun 2026-11-21): pause the ads until 2099-01-15.
+- Old deadline rule (Arjun 2026-11-01): hold the listing until 2099-02-01.
 EOF
   cat > "$1/data/captain-shared.md" <<'EOF'
 # Shared captain preferences
@@ -70,14 +72,17 @@ test_rulings_after_the_recorded_approval_are_listed() {
   local home out rc
   home=$(make_home listed)
   write_captain_files "$home"
-  approve "$home" ship-text "Arjun 2026-11-10 on the board: approve the draft."
-  # A later re-hold and answer is the newest record, so its date is the approval.
   approve "$home" ship-text "Arjun 2026-11-20 on the board: ship the arjun.md line as drafted."
+  # A later release to start the queued ship is the newest record, but the
+  # earliest decision still dates the approval of its text.
+  approve "$home" ship-text "Arjun 2026-11-23 via Launchpad: start it now."
   out=$(in_home "$home" "$LATER" ship-text 2>&1)
   rc=$?
   expect_code 0 "$rc" "the listing failed: $out"
-  assert_contains "$out" "later-rulings: ship-text was approved 2026-11-20 (the newest captain-hold resolution on its backlog row); 5 captain ruling(s)" \
-    "the header did not name the newest approval and the count"$'\n'"$out"
+  assert_contains "$out" "later-rulings: ship-text was approved 2026-11-20 (the earliest captain decision on its backlog row); 6 captain ruling(s)" \
+    "the header did not name the earliest approval and the count"$'\n'"$out"
+  assert_contains "$out" "data/captain.md:11 2026-11-21 - Deadline rule" \
+    "a ruling with a future deadline did not count from its ruling date"$'\n'"$out"
   assert_contains "$out" "data/captain.md:5 2026-11-21 - Codex is the reviewer only" \
     "a ruling after the approval was not listed"$'\n'"$out"
   assert_contains "$out" "data/captain.md:6 2026-11-20 - Same-day rule" \
@@ -89,10 +94,12 @@ test_rulings_after_the_recorded_approval_are_listed() {
   assert_contains "$out" "data/captain-shared.md:3 2026-11-24 - Shared rule" \
     "a ruling in data/captain-shared.md was not listed"$'\n'"$out"
   case "$out" in
-    *"Older rule"*|*"Short-date rule"*|*"Shared old rule"*|*"memory tiers"*)
-      fail "an item dated before the approval, or with no full date, was listed"$'\n'"$out" ;;
+    *"Older rule"*|*"Short-date rule"*|*"Shared old rule"*|*"memory tiers"*|*"Old deadline rule"*)
+      fail "an item dated before the approval, with no full date, or only by a deadline was listed"$'\n'"$out" ;;
   esac
-  pass "rulings on or after the newest recorded approval are listed from both captain files, and older or undated ones are not"
+  ! printf '%s\n' "$out" | grep -Eq ':[0-9]+ 2099-' \
+    || fail "an item was dated by its future deadline"$'\n'"$out"
+  pass "rulings on or after the earliest recorded approval are listed from both captain files, and older, undated or deadline-only ones are not"
 }
 
 test_since_overrides_the_backlog_row() {
@@ -136,25 +143,28 @@ test_nothing_to_list_says_so_once_and_found_only_is_silent() {
   assert_equals "later-rulings: undated-ship records no dated captain approval; pass --since YYYY-MM-DD to check it" "$out" \
     "a decision text with no date was read as an approval"
 
-  # Only the newest resolution record dates an approval: a newest record that
-  # carries reconciliation evidence does not fall back to an older decision,
-  # and a "Captain decision:" line outside any record is not one.
+  # Only a record's own "Captain decision:" text dates an approval: reconciliation
+  # evidence gives none, a "Captain decision:" heading after a record's own label
+  # or outside any record is not one, and an older real decision still counts.
   printf '%s\n' 'Resolution recorded by fm-captain-hold.' 'Decision digest: aa' 'Resolution mode: reconciled' '' \
-    'Reconciliation evidence:' 'Moot on 2026-11-22.' '' \
+    'Reconciliation evidence:' 'Moot on 2026-11-02.' '' \
     'Captain decision:' 'Arjun 2026-11-09 in an older note.' '' \
     'Resolution recorded by fm-captain-hold.' 'Decision digest: bb' 'Resolution mode: released' '' \
-    'Captain decision:' 'Arjun 2026-11-10: ship it.' > "$home/reconciled.txt"
+    'Captain decision:' 'Arjun 2026-11-21: ship it.' > "$home/reconciled.txt"
   printf '%s\n' 'Notes from the scout.' 'Captain decision:' 'Arjun 2026-11-10 maybe.' > "$home/prose.txt"
   for row in reconciled prose; do
     in_home "$home" "$ROOT/bin/fm-tasks-axi.sh" add "$row-ship" "Ship $row" --kind ship \
       --body-file "$home/$row.txt" >/dev/null 2>&1 || fail "could not add the $row row"
-    out=$(in_home "$home" "$LATER" "$row-ship" 2>&1)
-    assert_equals "later-rulings: $row-ship records no dated captain approval; pass --since YYYY-MM-DD to check it" "$out" \
-      "the $row row was read as a dated approval"
   done
+  out=$(in_home "$home" "$LATER" reconciled-ship 2>&1)
+  assert_contains "$out" "later-rulings: reconciled-ship was approved 2026-11-21 (the earliest captain decision on its backlog row)" \
+    "reconciliation evidence or a stray heading dated the approval"$'\n'"$out"
+  out=$(in_home "$home" "$LATER" prose-ship 2>&1)
+  assert_equals "later-rulings: prose-ship records no dated captain approval; pass --since YYYY-MM-DD to check it" "$out" \
+    "a heading outside any record was read as a dated approval"
 
   out=$(in_home "$home" "$LATER" plain-ship --since 2026-11-30 2>&1)
-  assert_equals "later-rulings: no captain ruling dated on or after plain-ship's approval 2026-11-30" "$out" \
+  assert_equals "later-rulings: no item in data/captain.md or data/captain-shared.md is dated on or after plain-ship's approval 2026-11-30" "$out" \
     "an approval with no later ruling did not say so in one line"
 
   for args in "plain-ship" "missing-row" "plain-ship --since 2026-11-30"; do

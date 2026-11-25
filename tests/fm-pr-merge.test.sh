@@ -1075,7 +1075,7 @@ test_later_rulings_are_listed_without_blocking_the_merge() {
   rc=$?
   set -e
   expect_code 0 "$rc" "later-rulings: registration should succeed: $(cat "$case_dir/check-stderr")"
-  assert_grep 'later-rulings: task-x1 was approved 2026-11-20 (the newest captain-hold resolution on its backlog row); 1 captain ruling' "$case_dir/check-stderr" \
+  assert_grep 'later-rulings: task-x1 was approved 2026-11-20 (the earliest captain decision on its backlog row); 1 captain ruling' "$case_dir/check-stderr" \
     "later-rulings: registration did not list the later ruling"
   assert_grep 'data/captain.md:4 2026-11-21 - Codex is the reviewer only' "$case_dir/check-stderr" \
     "later-rulings: registration did not name the ruling"
