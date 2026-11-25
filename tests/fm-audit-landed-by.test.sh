@@ -9,7 +9,9 @@
 #   - A second run changes nothing, byte for byte.
 #   - A landed_by on an id the ledger now lists as not landed is dropped; an
 #     id the ledger does not list is left alone.
-#   - A two-space, non-ASCII, newline-terminated file keeps that layout.
+#   - A one-space, ASCII-escaped file with no final newline and a two-space,
+#     raw UTF-8, newline-terminated file each keep their layout.
+#   - An escaped pipe inside a ledger cell is not a column boundary.
 #   - It refuses a ledger id decisions.json lacks, a ledger with no table,
 #     and a layout it cannot reproduce, each leaving the file untouched.
 #   - --dry-run reports and writes nothing.
@@ -41,7 +43,7 @@ write_decisions() {
   printf '%s' '{
  "a1-01": {
   "decision": "do",
-  "title": "café one",
+  "title": "caf\u00e9 one",
   "status": "closed"
  },
  "a1-02": {
@@ -60,7 +62,7 @@ write_decisions() {
 }
 
 LEDGER_ROWS=(
-  '| - | a1-01 | landed | https://github.com/o/biz/pull/12, https://github.com/o/fleet/pull/7; again https://github.com/o/biz/pull/12 |  | one |'
+  '| - | a1-01 | landed | https://github.com/o/biz/pull/12, https://github.com/o/fleet/pull/7; again https://github.com/o/biz/pull/12 |  | one \| an escaped pipe |'
   '| b | a1-02 | landed | helm step done 2026-11-20 (decisions.json) |  | two |'
   '| b | a1-03 | open-ship | https://github.com/o/biz/pull/99 closed | a ship | three |'
 )
@@ -89,7 +91,7 @@ test_exact_bytes() {
   printf '%s' '{
  "a1-01": {
   "decision": "do",
-  "title": "café one",
+  "title": "caf\u00e9 one",
   "status": "closed",
   "landed_by": [
    "https://github.com/o/biz/pull/12",

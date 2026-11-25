@@ -37,7 +37,8 @@ import re
 import sys
 import tempfile
 
-PR_URL = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+(?![0-9])")
+PR_URL = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+(?![0-9A-Za-z_])")
+CELL_BOUNDARY = re.compile(r"(?<!\\)\|")
 SEPARATOR_CELL = re.compile(r"^:?-+:?$")
 ID_COL, STATUS_COL, WHERE_COL = "Id", "Status", "Where it landed / evidence"
 FIELD = "landed_by"
@@ -51,7 +52,7 @@ def cells(line: str) -> list[str] | None:
     line = line.strip()
     if not (line.startswith("|") and line.endswith("|") and len(line) > 1):
         return None
-    return [c.strip() for c in line[1:-1].split("|")]
+    return [c.strip() for c in CELL_BOUNDARY.split(line[1:-1])]
 
 
 def read_ledger(path: str) -> dict[str, tuple[str, str]]:
@@ -118,7 +119,7 @@ def main(argv: list[str]) -> int:
     ledger_path, decisions_path = args
     try:
         ledger = read_ledger(ledger_path)
-        with open(decisions_path, encoding="utf-8") as f:
+        with open(decisions_path, encoding="utf-8", newline="") as f:
             raw = f.read()
         try:
             data = json.loads(raw)
@@ -154,7 +155,7 @@ def main(argv: list[str]) -> int:
             mode = os.stat(decisions_path).st_mode & 0o7777
             fd, tmp = tempfile.mkstemp(prefix=".landed-by-", dir=directory)
             try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
                     f.write(out)
                 os.chmod(tmp, mode)
                 os.replace(tmp, decisions_path)
