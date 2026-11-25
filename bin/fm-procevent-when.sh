@@ -14,6 +14,7 @@
 #   fm-procevent-when.sh rebind-all
 #   fm-procevent-when.sh process-absent <pattern>
 #   fm-procevent-when.sh run <source-id>
+#   fm-procevent-when.sh wait [--interval <secs>] [--stable <n>] [--timeout <secs>] -- <argv>...
 #
 # arm        Bind a (condition, action) pair as process-event source
 #            "when-<name>". The spec is written privately under state/when/ and
@@ -75,6 +76,17 @@
 #            wrappers, whose argv carries the pattern on platforms whose pgrep
 #            does not hide ancestors) matches `pgrep -f <pattern>`, 1 while
 #            one still does, and 2 when pgrep itself fails.
+# wait       The one in-turn wait for a worker, the helm, or the away
+#            supervisor: poll the condition argv in the FOREGROUND (no shell,
+#            no registration, no state) until it holds for --stable (default 1)
+#            consecutive polls, every --interval seconds (default 30), for at
+#            most --timeout seconds (default 540, under Claude Code's 600000 ms
+#            Bash cap). Like `until`, any non-zero condition exit is "not yet".
+#            Exit 0 once it holds, 124 on timeout (reissue it), 2 on bad usage.
+#            The argv runs with no shell: wrap a shell test as `bash -c '<test>'`,
+#            which sees only exported variables. Exit 126 or 127 (the condition
+#            cannot run) exits 2 at once; a timeout prints the last poll's stderr.
+#            Use it instead of sleep-then-check, a background job, or Monitor.
 # run        The blocking child the generic runner executes; never run it in a
 #            conversational turn. It polls the condition on the registered
 #            cadence, requires the stable count of consecutive trues, claims a
@@ -382,6 +394,49 @@ spec_load() {
 
 # --- run ---------------------------------------------------------------------
 
+cmd_wait() {
+  local interval=30 stable=1 timeout=540 hits=0 deadline rc left nap err=
+  wait_usage() { printf 'wait: %s\n' "$1" >&2; exit 2; }
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --interval) positive_number "${2-}" || wait_usage "--interval needs a positive number"; interval=$2; shift 2 ;;
+      --stable)   positive_int "${2-}" || wait_usage "--stable needs a positive integer"; stable=$((10#$2)); shift 2 ;;
+      --timeout)  positive_int "${2-}" || wait_usage "--timeout needs a positive integer"; timeout=$((10#$2)); shift 2 ;;
+      --) shift; break ;;
+      *) wait_usage "unknown option $1 (put the condition after --)" ;;
+    esac
+  done
+  [ "$#" -gt 0 ] || wait_usage "missing condition argv after --"
+  deadline=$(( $(date +%s) + timeout ))
+  while :; do
+    # One deadline bounds every poll and nap, so a hung condition or a long
+    # interval can never hold the caller past --timeout.
+    left=$(( deadline - $(date +%s) ))
+    [ "$left" -gt 0 ] || {
+      printf 'wait: timed out after %ss; reissue to keep waiting\n' "$timeout" >&2
+      [ -z "$err" ] || printf 'wait: last poll stderr: %s\n' "$err" >&2
+      return 124
+    }
+    err=$(fm_run_timed "$left" "$@" 2>&1 >/dev/null | tail -c 2048; exit "${PIPESTATUS[0]}")
+    rc=$?
+    # A condition that cannot run is a hard error, never a silent "not yet".
+    case "$rc" in
+      126|127) printf 'wait: condition could not run (exit %s): %s\n' "$rc" "$err" >&2; return 2 ;;
+    esac
+    # Like `until`: exit 0 holds, any other exit (a timed-out poll too) is not yet.
+    if [ "$rc" -eq 0 ]; then
+      hits=$((hits + 1)); [ "$hits" -ge "$stable" ] && return 0
+    else
+      hits=0
+    fi
+    left=$(( deadline - $(date +%s) ))
+    [ "$left" -gt 0 ] || continue
+    nap=$interval
+    awk -v a="$interval" -v b="$left" 'BEGIN { exit !(a > b) }' && nap=$left
+    sleep "$nap"
+  done
+}
+
 # bounded_run <timeout-secs> <output-file> <argv>...
 # Run argv directly with combined output captured, bounded by the timeout.
 # Returns the command's exit status, or 124 on timeout.
@@ -687,6 +742,7 @@ case "${1-}" in
   source-id) shift; cmd_source_id "$@" ;;
   retire)    shift; cmd_retire "$@" ;;
   rebind-all) shift; cmd_rebind_all "$@" ;;
+  wait)      shift; cmd_wait "$@"; exit $? ;;
   process-absent) shift; [ "$#" -eq 1 ] || usage; cmd_process_absent "$@" ;;
   ''|-h|--help|help) usage ;;
   *) die "unknown command: $1" ;;
