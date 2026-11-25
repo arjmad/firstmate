@@ -1,7 +1,7 @@
 ---
 name: crewmate-status-protocol
 description: >-
-  Read by path when a crewmate or scout brief's Rules point here: before a worker's first pause, gate-wait, ready, or captain-only status line, before it resolves its own blocker or wait, and before it starts or stops a process or touches a worktree pool.
+  Read by path when a crewmate or scout brief's Rules point here: before a worker's first status line other than working, before it resolves its own blocker or wait, before it lists or reads its steering inbox, and before it starts or stops a process or touches a worktree pool.
 user-invocable: false
 metadata:
   internal: true
@@ -12,6 +12,11 @@ metadata:
 Your brief's Rules carry each rule as one line; this file holds what those lines mean in practice.
 Where your brief and this file differ, your brief wins.
 The pause, gate-wait, and ready verbs below are the ones your brief's States list names.
+
+## Status lines
+
+Substitute `<epoch>` with the current Unix time in seconds: run `date +%s` and write the number it printed; a stamp that is not plain digits records no time at all.
+Each append wakes firstmate, so append only phase changes a supervisor would act on (setup done, bug reproduced, fix implemented, validation passed) and the needs-decision, blocked, pause, done, and failed states; firstmate reads your pane for progress.
 
 ## Waits
 
@@ -28,6 +33,10 @@ Use the gate-wait state instead when the wait is a CI run or a policy gate (a re
 
 Use `blocked:` when you are stuck and need help.
 When only the captain himself can clear that blocker or answer that question (he must act, sign in, or choose), add the `[on=captain]` tag before the colon, as in `blocked [on=captain] [at=<epoch>]: {what he must do}`; that tag, not your wording, puts the wait in his inbox.
+
+## Decisions
+
+A `needs-decision` line names two or three short choices (at most 60 bytes each, no `]`, `;` or `|` inside one) and the one you recommend; firstmate records them on the call it holds for the captain, so they become his buttons.
 
 ## Ready and captain steps (ship tasks)
 
@@ -53,7 +62,18 @@ A slot that looks unused is not evidence that it is free, and returning your own
 
 The processes on this host: live services and other lanes' agent sessions run beside yours, often under the same user and with the same command line as a scratch copy you start.
 Stop only what you started, by the pid you recorded when you started it.
-Record it in the same command that starts the process, because `$!` does not survive into a later tool call, and start it as its own process group so its children stop with it: `(set -m; <command> & echo $! > <pidfile>)`.
+Record it in the same command that starts the process, because `$!` does not survive into a later tool call, and start it as its own process group so its children stop with it: `bash -c '(set -m; <command> & echo $! > <pidfile>)'`.
+Run it through `bash -c` even from bash: job control under `set -m` is what puts the process in its own group, and a zsh tool shell refuses `set -m` (`can't change option: -m`), so the bare form starts nothing and records no pid.
 To stop it, check that `ps -o args= -p <pid>` still shows the command you launched, then run `kill -- -<pid>`.
 Stopping something through its own handle is also fine: your harness's stop for its own background task, `docker compose down` for your compose project, or a `kill-server` on the tmux socket you created.
 Never stop anything by name or command-line pattern - `pkill`, `killall`, `pkill -f`, or `kill $(pgrep ...)` - because the same pattern matches live services and other agents, and stopping one restarts or ends work you do not own.
+
+## Steering inbox
+
+Your brief names your inbox directory; `<inbox>` below stands for it.
+List waiting records with `find <inbox> -maxdepth 1 -name '*.msg' 2>/dev/null | sort -V`, read the complete contents of each record, including its final line even when it is not newline-terminated, and act on each in numeric order.
+Prefer the format-aware `fm_task_inbox_body` reader from `bin/fm-task-inbox-lib.sh` when it is available.
+If you read manually, a header line `body-terminator=1` means the writer added exactly one synthetic final newline to terminate the record file; that marked newline is not part of the logical message body, so remove only it and preserve any intentional trailing newlines.
+Legacy records without that marker may end without a newline; read them through the file end.
+Acknowledge each handled record by moving it: `mv <inbox>/NNN.msg <inbox>/handled/`.
+Without the move firstmate rings again and eventually treats you as stuck.
