@@ -286,6 +286,8 @@ prompt_since() {  # <epoch>
   IFS=$'\t' read -r at kind sid 2>/dev/null < "$STATE/.helm-refresh-last-prompt" || return 0
   case "$at" in ''|*[!0-9]*) return 0 ;; esac
   [ "$sid" = "$SID" ] && [ "$at" -ge "$1" ] || return 0
+  # A fleet record one retry already waited through is not new again.
+  [ "$at $kind" != "${RETRIED_RECORD:-}" ] || return 0
   printf '%s %s\n' "$at" "$kind"
 }
 
@@ -301,8 +303,11 @@ proof_at=0
 # question, is new work the reset-safe receipt does not cover. Returns 0 on
 # a retry; exits otherwise.
 retry_or_give_up() {  # <give-up detail>
-  case "$(prompt_since "$proof_at")" in
+  local record
+  record=$(prompt_since "$proof_at")
+  case "$record" in
     *' fleet')
+      RETRIED_RECORD=$record
       log retry "token=$TOKEN sid=$SID a fleet wake started a turn after the idle proof; waiting for it to end"
       proofs=0
       return 0
@@ -318,6 +323,9 @@ while :; do
   case "$(prompt_since "$REQUESTED_AT")" in
     *' captain') finish 1 gave-up "the captain sent a new prompt after the request; nothing was typed" ;;
   esac
+  # Stamped before the probe, one second early: a prompt recorded while the
+  # proof ran still counts as after it, and an extra retry costs one poll.
+  probe_at=$(( $(date +%s) - 1 ))
   if pane_ready; then
     # A fleet turn that started and ended between two polls leaves the pane
     # idle, so a fleet record since the proof also starts the proofs over.
@@ -325,7 +333,7 @@ while :; do
       retry_or_give_up "the pane left idle after the stow's turn ended"
     fi
     proofs=$((proofs + 1))
-    [ "$proofs" -gt 1 ] || proof_at=$(date +%s)
+    [ "$proofs" -gt 1 ] || proof_at=$probe_at
     if [ "$proofs" -ge 2 ]; then
       # One last check at the moment of typing, so a draft or question that
       # arrived after the second proof, or a deadline it crossed, still types
