@@ -1103,16 +1103,14 @@ test_bootstrap_reports_a_held_task_set_as_information() {
 # pointer_message <feedback|terminal> <task> <result>: the pointer text
 # bin/fm-procevent.sh writes, built through the same library builders.
 pointer_message() {
-  (
-    . "$ROOT/bin/fm-pr-lib.sh"
-    . "$ROOT/bin/fm-wake-lib.sh"
-    . "$ROOT/bin/fm-procevent-lib.sh"
-    if [ "$1" = feedback ]; then
-      fm_procevent_feedback_pointer_message "$2" "$3"
+  # shellcheck disable=SC2016 # expanded by the child shell
+  bash -c '
+    . "$1/bin/fm-pr-lib.sh"; . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-procevent-lib.sh"
+    if [ "$2" = feedback ]; then
+      fm_procevent_feedback_pointer_message "$3" "$4"
     else
-      fm_procevent_terminal_pointer_message "$(fm_procevent_result_source_id "$3")" "$(fm_procevent_result_sequence "$3")" "$3"
-    fi
-  )
+      fm_procevent_terminal_pointer_message "$(fm_procevent_result_source_id "$4")" "$(fm_procevent_result_sequence "$4")" "$4"
+    fi' _ "$ROOT" "$1" "$2" "$3"
 }
 
 write_steer() {  # <path> <body>
@@ -1207,7 +1205,8 @@ test_dead_locks_reclaimed_and_live_kept() {
   world "$home" "" ok zsh
   old=$(( $(date +%s) - 2 * 3600 ))
   sleep 0 & dead=$!; wait "$dead"
-  start=$(. "$ROOT/bin/fm-wake-lib.sh"; fm_pid_start_time "$$")
+  # shellcheck disable=SC2016 # expanded by the child shell
+  start=$(bash -c '. "$1/bin/fm-wake-lib.sh"; fm_pid_start_time "$2"' _ "$ROOT" "$$")
   # .dead: link to an owner whose pid is gone. .reused: the pid runs but its
   # start time differs from pid-start. .live: the pid runs with its own start
   # time. .young: dead but inside the age guard. .plain: a plain lock dir.
