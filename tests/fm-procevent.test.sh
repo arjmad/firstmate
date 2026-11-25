@@ -5556,7 +5556,7 @@ case "${1-}" in
     ;;
   --*|reply|'') exit 2 ;;
   *)
-    printf '%s\n' "$1" >> "${NEVER_OPENS:?}"
+    printf '%s port=%s\n' "$1" "${LAVISH_AXI_PORT-unset}" >> "${NEVER_OPENS:?}"
     [ -z "${NEVER_OPEN_SAVES-}" ] || lavish_session "$1"
     printf 'url: http://127.0.0.1:14387/session/0123456789abcdef\n'
     ;;
@@ -5588,6 +5588,17 @@ sleep 1
 PATH="$NEVER/bin:$PATH" FM_HOME="$NEVER/home" FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=1 \
   "$ROOT/bin/fm-procevent-lavish.sh" arm "$never_art" >/dev/null 2>&1 || true
 [ ! -s "$NEVER_OPENS" ] || fail "arm reopened a board that already has a saved session"
+touch "$NEVER_RELEASE"
+PATH="$NEVER/bin:$PATH" FM_HOME="$NEVER/home" \
+  "$ROOT/bin/fm-procevent-lavish.sh" retire "$never_art" >/dev/null 2>&1 || true
+# A retired board whose session firstmate ended is opened again by the next arm.
+perl -MJSON::PP -i -0pe '$s = decode_json($_); $_->{status} = "ended" for values %{$s->{sessions}}; $_ = encode_json($s)' \
+  "$LAVISH_AXI_STATE_DIR/state.json"
+rm -f "$NEVER_RELEASE"; : > "$NEVER_OPENS"
+PATH="$NEVER/bin:$PATH" FM_HOME="$NEVER/home" NEVER_OPEN_SAVES=1 \
+  "$ROOT/bin/fm-procevent-lavish.sh" arm "$never_art" >/dev/null 2>&1 || true
+[ "$(grep -c . "$NEVER_OPENS")" = 1 ] || fail "arm did not open a board whose saved session is ended"
+assert_grep "port=14387" "$NEVER_OPENS" "arm reopened an ended board off its saved server"
 touch "$NEVER_RELEASE"
 PATH="$NEVER/bin:$PATH" FM_HOME="$NEVER/home" \
   "$ROOT/bin/fm-procevent-lavish.sh" retire "$never_art" >/dev/null 2>&1 || true
@@ -5701,6 +5712,7 @@ RTASK_BIN=$(fm_fakebin "$RTASK/bin")
 cat > "$RTASK_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
 [ "${1-}" != --version ] || { printf '0.1.79\n'; exit 0; }
+[ "${1-}" != end ] || { printf '%s\n' "${2-}" >> "${0%/*}/ended"; exit 0; }
 art=${2-}
 while [ ! -e "$art.go" ]; do
   [ "$SECONDS" -lt "${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}" ] || exit 75
@@ -5758,6 +5770,10 @@ PATH="$RTASK_BIN:$PATH" pe "$RTASK/home" retire-task worker-a > "$RTASK/out" 2>&
 assert_contains "$(cat "$RTASK/out")" "retired: $rt_listen" "retire-task did not retire the listening board"
 assert_contains "$(cat "$RTASK/out")" "retired: $rt_empty" "retire-task did not retire the board whose round said nothing"
 assert_contains "$(cat "$RTASK/out")" "kept: $rt_unread 1" "retire-task did not name the unread round it kept"
+assert_contains "$(cat "$RTASK/out")" "board-ended: $rt_listen" "retire-task did not end the retired board's Lavish session"
+assert_contains "$(cat "$RTASK/out")" "board-ended: $rt_empty" "retire-task did not end the empty-round board's Lavish session"
+assert_not_contains "$(cat "$RTASK/out")" "board-ended: $rt_unread" "retire-task ended a board it kept"
+assert_grep "$RTASK/listen.html" "$RTASK_BIN/ended" "lavish-axi end was not given the retired board's artifact"
 assert_not_contains "$(cat "$RTASK/out")" "kept: $rt_listen " \
   "retire-task counted a dotted sibling's round against a shorter source id"
 assert_absent "$RTASK/home/state/procevent/$rt_listen.source" "the listening board is still registered"

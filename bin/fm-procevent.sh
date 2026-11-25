@@ -340,6 +340,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-task-inbox-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 
@@ -1955,14 +1957,60 @@ board_retire_log() {  # <line>
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$REG/board-retirements.log" 2>/dev/null || true
 }
 
+# The Lavish artifact a lavish listener polls (`<adapter> poll <artifact> ...`),
+# read from ARGV as read_argv left it; nothing for any other listener shape.
+board_artifact() {  # <adapter>
+  [ "$1" = lavish ] && [ "${#ARGV[@]}" -ge 3 ] && [ "${ARGV[1]}" = poll ] || return 1
+  printf '%s\n' "${ARGV[2]}"
+}
+
+# Retiring only drops firstmate's listener, so the Lavish session would stay
+# `open` and count as a live board. End it after the retire through the
+# adapter's `end` (`lavish-axi end` on the board's own server, which still
+# allows a plain reopen), bounded so a stalled server cannot hold up teardown
+# or reconcile. A missing lavish-axi, a failed end or a timeout only warns: the
+# retirement itself has already succeeded.
+# A board armed again since its retire has a new session that must stay open.
+# BOARD_END_BUDGET_SECONDS caps the ends of one sweep or teardown, so a stalled server
+# costs reconcile at most that much rather than BOARD_END_SECONDS per board.
+BOARD_END_SECONDS=30
+BOARD_END_BUDGET_SECONDS=60
+BOARD_END_DEADLINE=
+board_end_session() {  # <source-id> <artifact>
+  local out line rc=0 bound=$BOARD_END_SECONDS left
+  [ ! -e "$(source_file "$1")" ] || return 0
+  if [ -n "$BOARD_END_DEADLINE" ]; then
+    left=$((BOARD_END_DEADLINE - $(date +%s)))
+    [ "$left" -ge "$bound" ] || bound=$left
+  fi
+  if [ "$bound" -le 0 ]; then
+    line="board-end-failed: $1 reason=sweep end budget of ${BOARD_END_BUDGET_SECONDS}s spent"
+  elif ! command -v lavish-axi >/dev/null 2>&1; then
+    line="board-end-failed: $1 reason=lavish-axi-missing"
+  else
+    out=$(fm_run_timed "$bound" "$(adapter_script lavish)" end "$2" 2>&1 </dev/null) || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      line="board-ended: $1"
+      board_retire_log "$line"
+      printf '%s\n' "$line"
+      return 0
+    fi
+    [ "$rc" -ne 124 ] || out="timed out after ${bound}s"
+    line="board-end-failed: $1 reason=$(printf '%s' "$out" | tr '\n' ' ' | sed 's/ *$//')"
+  fi
+  board_retire_log "$line"
+  printf 'warning: %s\n' "$line" >&2
+}
+
 cmd_retire_quiet_boards() {
   local quiet now rec id adapter adopted task_state task_path last reason identity
-  local backlog='' backlog_state=pending days log_line
+  local backlog='' backlog_state=pending days log_line artifact
   [ "$#" -eq 0 ] || usage
   quiet=$(board_seconds_setting FM_PROCEVENT_BOARD_QUIET_SECONDS 1209600 1) \
     || die "FM_PROCEVENT_BOARD_QUIET_SECONDS must be whole seconds of at least 1"
   [ -d "$REG" ] || return 0
   now=$(date +%s)
+  BOARD_END_DEADLINE=$((now + BOARD_END_BUDGET_SECONDS))
   for rec in "$REG"/*.source; do
     [ -f "$rec" ] && [ ! -L "$rec" ] || continue
     id=${rec##*/}; id=${id%.source}
@@ -2020,6 +2068,7 @@ cmd_retire_quiet_boards() {
     log_line="board-retired: $id reason=$reason quiet_days=$days${adopted:+ adopted_from=$adopted}"
     board_retire_log "$log_line"
     printf '%s\n' "$log_line"
+    if artifact=$(board_artifact "$adapter"); then board_end_session "$id" "$artifact"; fi
   done
 }
 
@@ -2061,8 +2110,10 @@ cmd_reconcile() {
     while IFS= read -r board_line; do
       case "$board_line" in
         'board-retired: '*) printf '%s\n' "$board_line"; stopped=$((stopped + 1)) ;;
+        'board-ended: '*) printf '%s\n' "$board_line" ;;
+        'warning: board-end-failed: '*) printf '%s\n' "$board_line" >&2 ;;
       esac
-    done < <(cmd_retire_quiet_boards 2>/dev/null)
+    done < <(cmd_retire_quiet_boards 2>&1)
   fi
 
   # Stop a runner this home owns whose source is no longer registered. Without
@@ -2873,9 +2924,10 @@ EOF
 }
 
 cmd_retire_task() {
-  local task=${1-} rec id any_kept=0 failed=0 out pending
+  local task=${1-} rec id any_kept=0 failed=0 out pending artifact
   [ "$#" -eq 1 ] || usage
   fm_pr_task_id_valid "$task" || die "task id is invalid: $task"
+  BOARD_END_DEADLINE=$(( $(date +%s) + BOARD_END_BUDGET_SECONDS ))
   # One read of the captured rounds serves every board this task owns.
   pending=$(fm_procevent_pending "$STATE")
   for rec in "$REG"/*.source; do
@@ -2883,6 +2935,10 @@ cmd_retire_task() {
     id=${rec##*/}; id=${id%.source}
     [ "$(source_kind "$id" 2>/dev/null || true)" = task-owned ] || continue
     [ "$(source_owner_task "$id" 2>/dev/null || true)" = "$task" ] || continue
+    # Read first: acknowledging a terminal round or the retire removes the
+    # record.
+    artifact=
+    if read_argv "$id"; then artifact=$(board_artifact "$(read_adapter "$id" 2>/dev/null)") || artifact=; fi
     if retire_task_unread "$task" "$id" "$pending"; then
       any_kept=1
       continue
@@ -2892,6 +2948,7 @@ cmd_retire_task() {
     # leftover runner records.
     if out=$("$SCRIPT_DIR/fm-procevent.sh" retire "$id" 2>&1); then
       printf '%s\n' "$out"
+      [ -z "$artifact" ] || board_end_session "$id" "$artifact"
       continue
     fi
     # A round captured after the check above makes retire refuse. It is
@@ -2901,6 +2958,7 @@ cmd_retire_task() {
       any_kept=1
     elif out=$("$SCRIPT_DIR/fm-procevent.sh" retire "$id" 2>&1); then
       printf '%s\n' "$out"
+      [ -z "$artifact" ] || board_end_session "$id" "$artifact"
     else
       printf 'error: cannot retire %s owned by task %s: %s\n' "$id" "$task" "$out" >&2
       failed=1
