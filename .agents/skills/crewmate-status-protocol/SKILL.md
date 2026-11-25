@@ -64,6 +64,7 @@ The processes on this host: live services and other lanes' agent sessions run be
 Stop only what you started, by the pid you recorded when you started it.
 Record it in the same command that starts the process, because `$!` does not survive into a later tool call, and start it as its own process group so its children stop with it: `bash -c '(set -m; <command> & echo $! > <pidfile>)'`.
 Run it through `bash -c` even from bash: job control under `set -m` is what puts the process in its own group, and a zsh tool shell refuses `set -m` (`can't change option: -m`), so the bare form starts nothing and records no pid.
+Inside those single quotes write a literal single quote as `'\''`, and pass a value from your own shell as an argument rather than naming its variable: `bash -c '(set -m; <command> "$1" & echo $! > <pidfile>)' _ "$value"`.
 To stop it, check that `ps -o args= -p <pid>` still shows the command you launched, then run `kill -- -<pid>`.
 Stopping something through its own handle is also fine: your harness's stop for its own background task, `docker compose down` for your compose project, or a `kill-server` on the tmux socket you created.
 Never stop anything by name or command-line pattern - `pkill`, `killall`, `pkill -f`, or `kill $(pgrep ...)` - because the same pattern matches live services and other agents, and stopping one restarts or ends work you do not own.

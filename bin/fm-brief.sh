@@ -248,7 +248,7 @@ case "$CONFIG" in /*) ;; *) CONFIG="$PWD/$CONFIG" ;; esac
 # practice (fork patch, docs/fork-decisions/2026-11-20-brief-rules-one-line.md).
 STATUS_PROTOCOL="$FM_ROOT/.agents/skills/crewmate-status-protocol/SKILL.md"
 IFS= read -r -d '' CREWMATE_PAUSE_INSTRUCTIONS <<EOF || true
-   Read \`$STATUS_PROTOCOL\` before your first status line, and before you start or stop a process: it says when each state applies and how to write \`<epoch>\`, \`[on=captain]\`, keys, and \`resolved\`.
+   Read \`$STATUS_PROTOCOL\` before your first status line, and before you start or stop a process: it says when each state applies and how to write \`<epoch>\`, \`[on=captain]\`, keys, and \`resolved\`. Here the pause verb is \`$PAUSED_VERB\` and the gate-wait verb is \`$FM_CLASSIFY_GATE_WAIT_VERB\`.
 EOF
 KIND=ship
 HERDR_LAB=0
@@ -610,7 +610,7 @@ PLAN_LINE='   Keep your plan as Claude Code'"'"'s task list when you have its ta
 # the secondmate's own firstmate checkout.
 INBOX_PROTOCOL="\`$STATUS_PROTOCOL\`"
 # shellcheck disable=SC2016 # the backticks are literal Markdown in the brief
-[ "$KIND" != secondmate ] || INBOX_PROTOCOL='`.agents/skills/crewmate-status-protocol/SKILL.md` in your own firstmate checkout'
+[ "$KIND" != secondmate ] || INBOX_PROTOCOL='`.agents/skills/crewmate-status-protocol/SKILL.md` in your own firstmate checkout (on an older checkout without that section, read each record with `fm_task_inbox_body` from its `bin/fm-task-inbox-lib.sh`)'
 IFS= read -r -d '' INBOX_SECTION <<EOF || true
 # Firstmate instruction inbox
 Firstmate steers you through durable message files in $INBOX_DIR. When a note says an instruction is waiting there, or at a natural checkpoint when you are unsure, act on each \`NNN.msg\` in numeric order, then move it to \`$INBOX_DIR/handled/\`: the move IS the acknowledgement, and without it firstmate rings again.
