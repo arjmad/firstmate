@@ -1054,7 +1054,7 @@ SIGNALS
     case "$kind" in
       secondmate) ;;
       *)
-        assert_grep "Read \`$protocol\` before your first status line other than" "$brief" \
+        assert_grep "Read \`$protocol\` before your first status line, and before" "$brief" \
           "$kind brief does not point at the status protocol before its first status line"
         ;;
     esac
@@ -1390,6 +1390,15 @@ test_inbox_guidance_explains_marked_body_terminator() {
     brief="$home/data/$id/brief.md"
     assert_grep 'Read the "Steering inbox" section of' "$brief" "$kind scaffold omitted the inbox-reading pointer"
     assert_grep 'the move IS the acknowledgement' "$brief" "$kind scaffold omitted the move-is-ack rule"
+    # A secondmate charter is also published to remote hosts, so its pointer
+    # names the protocol in the secondmate's own checkout, not this code root.
+    if [ "$kind" = secondmate ]; then
+      # shellcheck disable=SC2016 # Literal backticks must remain unexpanded.
+      assert_grep '`.agents/skills/crewmate-status-protocol/SKILL.md` in your own firstmate checkout' "$brief" \
+        "secondmate charter does not name the protocol in its own checkout"
+      assert_no_grep "section of \`$ROOT/.agents/skills/crewmate-status-protocol/SKILL.md\`" "$brief" \
+        "secondmate charter names this host's absolute protocol path"
+    fi
   done
   # The status protocol owns the record-reading mechanics (a1-54).
   protocol="$ROOT/.agents/skills/crewmate-status-protocol/SKILL.md"

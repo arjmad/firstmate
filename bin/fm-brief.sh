@@ -248,7 +248,7 @@ case "$CONFIG" in /*) ;; *) CONFIG="$PWD/$CONFIG" ;; esac
 # practice (fork patch, docs/fork-decisions/2026-11-20-brief-rules-one-line.md).
 STATUS_PROTOCOL="$FM_ROOT/.agents/skills/crewmate-status-protocol/SKILL.md"
 IFS= read -r -d '' CREWMATE_PAUSE_INSTRUCTIONS <<EOF || true
-   Read \`$STATUS_PROTOCOL\` before your first status line other than \`working\`, and before you start or stop a process: it says when each state applies and how to write \`<epoch>\`, \`[on=captain]\`, keys, and \`resolved\`.
+   Read \`$STATUS_PROTOCOL\` before your first status line, and before you start or stop a process: it says when each state applies and how to write \`<epoch>\`, \`[on=captain]\`, keys, and \`resolved\`.
 EOF
 KIND=ship
 HERDR_LAB=0
@@ -605,10 +605,16 @@ PLAN_LINE='   Keep your plan as Claude Code'"'"'s task list when you have its ta
 # body-terminator rule, legacy records, fm_task_inbox_body) is owned by the
 # "Steering inbox" section of the status protocol file (fork patch,
 # docs/fork-decisions/2026-11-20-brief-rules-one-line.md).
+# A secondmate charter is also published to remote hosts, where this home's
+# absolute code root does not exist, so it names the protocol by its path in
+# the secondmate's own firstmate checkout.
+INBOX_PROTOCOL="\`$STATUS_PROTOCOL\`"
+# shellcheck disable=SC2016 # the backticks are literal Markdown in the brief
+[ "$KIND" != secondmate ] || INBOX_PROTOCOL='`.agents/skills/crewmate-status-protocol/SKILL.md` in your own firstmate checkout'
 IFS= read -r -d '' INBOX_SECTION <<EOF || true
 # Firstmate instruction inbox
 Firstmate steers you through durable message files in $INBOX_DIR. When a note says an instruction is waiting there, or at a natural checkpoint when you are unsure, act on each \`NNN.msg\` in numeric order, then move it to \`$INBOX_DIR/handled/\`: the move IS the acknowledgement, and without it firstmate rings again.
-Read the "Steering inbox" section of \`$STATUS_PROTOCOL\` for how to list and read the records. An empty or absent inbox needs no action.
+Read the "Steering inbox" section of $INBOX_PROTOCOL for how to list and read the records. An empty or absent inbox needs no action.
 EOF
 if [ -e "$CONFIG/wait-no-turns" ]; then
   INBOX_SECTION+="Do not poll or list the inbox while waiting; a waiting instruction rings."$'\n'
@@ -919,7 +925,7 @@ Keep your research notes file (quotes, URLs, dates) in \`$DATA/$ID/\` beside the
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
 $LAVISH_LINE
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
-A question your findings leave for the captain is not a reason to wait: put it in the report with its choices and your recommendation, and declare done.
+A question your findings leave for the captain is not a reason to wait: put it in the report (and board) with its choices and your recommendation, and declare done.
 Only when the reviewed inventory is empty, run \`FM_HOME=$(shell_quote "$FM_HOME") bash $(shell_quote "$FM_ROOT/bin/fm-captain-hold.sh") complete $(shell_quote "$ID") --none\`.
 When the report is complete, append \`done [at=<epoch>]: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report with what that work needs; firstmate dispatches it as a fresh ship once it is authorized, so the report must carry everything that ship will need.
