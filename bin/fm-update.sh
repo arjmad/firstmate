@@ -102,7 +102,9 @@
 #   held <target-sha> <text>   a task record's project= or also_project_*=
 #                              path is such a clone (secondmate records never
 #                              hold it, because this update moves their homes)
-# An unusable config/self-update-source exits 1, as the update itself does.
+# An unusable config/self-update-source exits 3 under --due (1 for the update
+# itself), so the watcher can tell it from any other failure and raise
+# `check: firstmate self-update source unusable: <reason>`.
 # `--due --queue` also makes a due head durable, for the watcher and teardown:
 # the first time it sees that head, and again once FM_SELF_UPDATE_DUE_REPEAT
 # seconds (default 86400) pass while it stays due, it queues one `check:` wake
@@ -153,6 +155,7 @@ SELF_UPDATE_BRANCH=""
 
 self_update_source_refuse() {  # <reason>
   echo "error: $SELF_UPDATE_SOURCE_FILE: $1; fix it or remove it to update from origin" >&2
+  [ "$DUE" = 0 ] || exit 3
   exit 1
 }
 

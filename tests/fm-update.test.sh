@@ -767,7 +767,11 @@ test_due_reports_a_landed_head_once_no_task_works_on_firstmate() {
   printf 'sm\n' > "$w/home/.fm-secondmate-home"
   write_source "$w" "nosuchremote carry"
   assert_equals "$(run_due "$w")" "" "a secondmate home leaves its update to its parent, before reading its source"
-  rm "$w/home/.fm-secondmate-home" "$w/home/config/self-update-source"
+  rm "$w/home/.fm-secondmate-home"
+  local rc=0
+  FM_ROOT_OVERRIDE="$w/main" FM_HOME="$w/home" "$UPDATE" --due >/dev/null 2>&1 || rc=$?
+  assert_equals "$rc" "3" "--due exits 3 on an unusable source, so the watcher can name it"
+  rm "$w/home/config/self-update-source"
 
   git -C "$w/main" pull -q --ff-only origin main
   assert_equals "$(run_due "$w")" "" "a code root on the landed head must report nothing"

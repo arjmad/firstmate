@@ -3873,7 +3873,8 @@ launch_template() {
   # turn-end), so no launch placeholder for one exists.
   # __ROVOCONFIGOVERRIDE__ (not __EFFORTFLAG__) carries rovo's single
   # --config-override flag: it always grants allowedExternalPaths for this
-  # task's home-side brief dir, steering inbox, and status file - the file
+  # task's home-side brief dir, steering inbox, and status file, plus the
+  # code root's .agents/skills (rovo_config_override_flag) - the file
   # tool confinement that otherwise blocks the standard
   # instructions/steering/status/report loop (rovo's bash tool has no such
   # grant and stays confined to the worktree; the worker's own file tools do
