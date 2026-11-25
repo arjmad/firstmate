@@ -241,7 +241,8 @@ test_session_change_stops_the_owner() {
 # A pane probe for FM_HELM_REFRESH_PANE_PROBE: each call takes the next line of
 # $PROBE_SEQ. idle passes; busy fails; busy-fleet and busy-captain fail and
 # first write the stow guard's prompt record for SID with that kind, as the
-# prompt hook does when that turn's prompt is submitted. An empty sequence reads busy.
+# prompt hook does when that turn's prompt is submitted; idle-fleet writes the
+# fleet record and passes. An empty sequence reads busy.
 PROBE="$FAKEBIN/pane-probe"
 cat > "$PROBE" <<'PROBE_EOF'
 #!/usr/bin/env bash
@@ -249,6 +250,9 @@ line=$(head -n 1 "$PROBE_SEQ" 2>/dev/null)
 tail -n +2 "$PROBE_SEQ" > "$PROBE_SEQ.tmp" 2>/dev/null && mv -f "$PROBE_SEQ.tmp" "$PROBE_SEQ"
 case "$line" in
   idle) exit 0 ;;
+  idle-fleet)
+    printf '%s\t%s\t%s\n' "$(date +%s)" fleet "$PROBE_SID" > "$PROBE_STATE/.helm-refresh-last-prompt"
+    exit 0 ;;
   busy-fleet|busy-captain)
     printf '%s\t%s\t%s\n' "$(date +%s)" "${line#busy-}" "$PROBE_SID" > "$PROBE_STATE/.helm-refresh-last-prompt" ;;
 esac
@@ -274,7 +278,14 @@ test_fleet_wake_after_proof_retries() {
   grep -q $'\tretry\t.*a fleet wake started a turn' "$log" || fail "a fleet wake did not log a retry: $(cat "$log")"
   grep -q $'\ttyped\t' "$log" || fail "the owner did not go on to /clear after the fleet turn ended: $(cat "$log")"
   ! grep -q $'\tgave-up\t' "$log" || fail "a fleet wake made the owner give up: $(cat "$log")"
-  [ ! -e "$CASE_STATE/.helm-refresh-last-prompt" ] || fail "the owner left the prompt record behind"
+  wait_until 10 test ! -e "$CASE_STATE/.helm-refresh-last-prompt" || fail "the owner left the prompt record behind"
+
+  # A fleet turn that starts and ends between two polls leaves the pane idle;
+  # its record still starts the proofs over.
+  run_probed quick-fleet idle idle-fleet idle idle idle
+  log="$CASE_STATE/.helm-refresh.log"
+  grep -q $'\tretry\t' "$log" || fail "a fleet turn between polls did not retry: $(cat "$log")"
+  grep -q $'\ttyped\t' "$log" || fail "the owner did not go on to /clear after a quick fleet turn: $(cat "$log")"
   pass "a fleet wake after the idle proof resets the proof, logs a retry, and the clear goes on"
 }
 

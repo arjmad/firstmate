@@ -283,7 +283,7 @@ pane_ready() {
 # <epoch>, as "<at> <kind>", or nothing.
 prompt_since() {  # <epoch>
   local at kind sid
-  IFS=$'\t' read -r at kind sid < "$STATE/.helm-refresh-last-prompt" 2>/dev/null || return 0
+  IFS=$'\t' read -r at kind sid 2>/dev/null < "$STATE/.helm-refresh-last-prompt" || return 0
   case "$at" in ''|*[!0-9]*) return 0 ;; esac
   [ "$sid" = "$SID" ] && [ "$at" -ge "$1" ] || return 0
   printf '%s %s\n' "$at" "$kind"
@@ -294,6 +294,23 @@ case "$REQUESTED_AT" in ''|*[!0-9]*) REQUESTED_AT=$(date +%s) ;; esac
 deadline=$((SECONDS + WAIT))
 proofs=0
 proof_at=0
+# The pane read busy, or a fleet record appeared, after a proof. The stow's
+# turn had ended, so a fleet wake (a doorbell, a from-firstmate message or a
+# rewake) that started a turn since that proof is routine: drop the proofs
+# and wait for that turn to end too. Anything else, such as a draft or a
+# question, is new work the reset-safe receipt does not cover. Returns 0 on
+# a retry; exits otherwise.
+retry_or_give_up() {  # <give-up detail>
+  case "$(prompt_since "$proof_at")" in
+    *' fleet')
+      log retry "token=$TOKEN sid=$SID a fleet wake started a turn after the idle proof; waiting for it to end"
+      proofs=0
+      return 0
+      ;;
+    *' captain') finish 1 gave-up "the captain sent a new prompt after the request; nothing was typed" ;;
+  esac
+  finish 1 gave-up "$1; nothing was typed"
+}
 while :; do
   why=$(stop_reason)
   [ -z "$why" ] || finish 1 gave-up "$why; nothing was typed"
@@ -302,35 +319,30 @@ while :; do
     *' captain') finish 1 gave-up "the captain sent a new prompt after the request; nothing was typed" ;;
   esac
   if pane_ready; then
+    # A fleet turn that started and ended between two polls leaves the pane
+    # idle, so a fleet record since the proof also starts the proofs over.
+    if [ "$proofs" -gt 0 ] && [ -n "$(prompt_since "$proof_at")" ]; then
+      retry_or_give_up "the pane left idle after the stow's turn ended"
+    fi
     proofs=$((proofs + 1))
     [ "$proofs" -gt 1 ] || proof_at=$(date +%s)
-    [ "$proofs" -lt 2 ] || break
+    if [ "$proofs" -ge 2 ]; then
+      # One last check at the moment of typing, so a draft or question that
+      # arrived after the second proof, or a deadline it crossed, still types
+      # nothing, while a fleet wake there waits as above.
+      why=$(stop_reason)
+      [ -z "$why" ] || finish 1 gave-up "$why; nothing was typed"
+      if pane_ready && [ -z "$(prompt_since "$proof_at")" ]; then
+        [ "$SECONDS" -lt "$deadline" ] || finish 1 gave-up "the turn did not end within ${WAIT}s; nothing was typed"
+        break
+      fi
+      retry_or_give_up "the pane stopped reading idle and empty just before /clear"
+    fi
   elif [ "$proofs" -gt 0 ]; then
-    # The stow's turn had ended. A fleet wake (a doorbell, a from-firstmate
-    # message or a rewake) that started a turn since then is routine, so
-    # wait for that turn to end too. Anything else, such as a draft or a
-    # question, is new work the reset-safe receipt does not cover.
-    case "$(prompt_since "$proof_at")" in
-      *' fleet')
-        log retry "token=$TOKEN sid=$SID a fleet wake started a turn after the idle proof; waiting for it to end"
-        proofs=0
-        ;;
-      *' captain') finish 1 gave-up "the captain sent a new prompt after the request; nothing was typed" ;;
-      *) finish 1 gave-up "the pane left idle after the stow's turn ended; nothing was typed" ;;
-    esac
+    retry_or_give_up "the pane left idle after the stow's turn ended"
   fi
   sleep "$POLL"
 done
-
-# One last check at the moment of typing, so a draft or question that arrived
-# after the second proof, or a deadline it crossed, still types nothing.
-why=$(stop_reason)
-[ -z "$why" ] || finish 1 gave-up "$why; nothing was typed"
-case "$(prompt_since "$REQUESTED_AT")" in
-  *' captain') finish 1 gave-up "the captain sent a new prompt after the request; nothing was typed" ;;
-esac
-pane_ready || finish 1 gave-up "the pane stopped reading idle and empty just before /clear; nothing was typed"
-[ "$SECONDS" -lt "$deadline" ] || finish 1 gave-up "the turn did not end within ${WAIT}s; nothing was typed"
 verdict=$(fm_backend_send_text_submit "$TRANSPORT" "$TARGET" "/clear" 2 0.2 0.2 2>/dev/null) || verdict=unconfirmed
 log typed "token=$TOKEN sid=$SID submit=$verdict"
 

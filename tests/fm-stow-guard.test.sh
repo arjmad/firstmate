@@ -291,6 +291,14 @@ test_pending_refresh_records_each_prompt_kind() {
   grep -q $'\tfleet\t' "$CASE_STATE/.helm-refresh-last-prompt" \
     || fail "a doorbell was not recorded as fleet: $(cat "$CASE_STATE/.helm-refresh-last-prompt" 2>/dev/null)"
 
+  # A captain prompt since the request is not hidden by a later fleet prompt.
+  prepare_prompt_case pending-latch
+  jq -nc --arg sid "$PROMPT_SID" '{token:"t", sid:$sid, at:1}' > "$CASE_STATE/.helm-refresh-pending"
+  invoke_prompt "$PRIMARY" "$(prompt_payload "what is next")"
+  invoke_prompt "$PRIMARY" "$(prompt_payload "${mark}FIRSTMATE_OP: v1 watcher: one event")"
+  grep -q $'\tcaptain\t' "$CASE_STATE/.helm-refresh-last-prompt" \
+    || fail "a fleet prompt hid the captain's: $(cat "$CASE_STATE/.helm-refresh-last-prompt")"
+
   # No record without a pending refresh, or with one for another session.
   prepare_prompt_case no-pending
   invoke_prompt "$PRIMARY" "$(prompt_payload "what is next")"

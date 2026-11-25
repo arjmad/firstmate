@@ -175,7 +175,17 @@ if [ "$mode" = prompt ]; then
     esac
     prompt_now=${FM_STOW_GUARD_NOW:-$(date +%s)}
     record="$STATE/.helm-refresh-last-prompt"
-    if tmp=$(mktemp "$record.XXXXXX" 2>/dev/null); then
+    # A captain prompt since the request stays recorded, so a later fleet
+    # prompt never hides it from the owner.
+    pending_at=$(jq -r '.at // 0' "$pending" 2>/dev/null) || pending_at=0
+    IFS=$'\t' read -r last_at last_kind last_sid 2>/dev/null < "$record" || last_kind=
+    case "$pending_at" in ''|*[!0-9]*) pending_at=0 ;; esac
+    case "${last_at:-}" in ''|*[!0-9]*) last_at=0 ;; esac
+    if [ "$prompt_kind" = fleet ] && [ "$last_kind" = captain ] \
+      && [ "${last_sid:-}" = "$sid" ] && [ "$last_at" -ge "$pending_at" ]; then
+      prompt_kind=
+    fi
+    if [ -n "$prompt_kind" ] && tmp=$(mktemp "$record.XXXXXX" 2>/dev/null); then
       if ! printf '%s\t%s\t%s\n' "$prompt_now" "$prompt_kind" "$sid" > "$tmp" 2>/dev/null \
         || ! mv -f "$tmp" "$record" 2>/dev/null; then
         rm -f "$tmp"
