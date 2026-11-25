@@ -971,7 +971,7 @@ test_herdr_lab_contract_applies_to_scouts_but_not_secondmates() {
 }
 
 test_pause_verb_override_renders_all_brief_scaffolds() {
-  local home kind id brief append now epoch templates template line signals states
+  local home kind id brief append now epoch templates template line signals states protocol
   home="$TMP_ROOT/pause-verb-home"
   mkdir -p "$home/data"
 
@@ -1048,40 +1048,33 @@ SIGNALS
     esac
     assert_grep "States: $states" "$brief" \
       "$kind brief did not render the configured pause verb in its states list"
+    # The brief keeps only the States list and a pointer; the status protocol
+    # owns what each state means (a1-54).
+    protocol="$ROOT/.agents/skills/crewmate-status-protocol/SKILL.md"
     case "$kind" in
-      ship:*)
-        # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
-        assert_grep 'Use `ready [at=<epoch>]: PR {url}` when your PR is open and ready to land' "$brief" \
-          "$kind brief did not say when to use ready"
-        # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
-        assert_grep 'so a PR waiting to land is never a `needs-decision`' "$brief" \
-          "$kind brief did not keep a ready PR out of needs-decision"
-        # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
-        assert_grep 'end the `done:` line the Definition of done names with `; captain step: {the exact action}` and stop' "$brief" \
-          "$kind brief did not release a merged ship whose only step is the captain's"
-        ;;
+      secondmate) ;;
       *)
+        assert_grep "Read \`$protocol\` before your first status line, and before" "$brief" \
+          "$kind brief does not point at the status protocol before its first status line"
+        ;;
+    esac
+    case "$kind" in
+      ship:*) ;;
+      *)
+        # shellcheck disable=SC2016 # Literal backticks must remain unexpanded.
         assert_no_grep 'Use `ready' "$brief" "$kind brief offered the ship-only ready state"
         assert_no_grep 'captain step:' "$brief" "$kind brief offered the ship-only captain-step release"
         ;;
     esac
-    case "$kind" in
-      secondmate) ;;
-      *)
-        # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
-        assert_grep 'Use `gate-wait: {gate}` instead when the wait is a CI run or a policy gate' "$brief" \
-          "$kind brief did not say when to use gate-wait"
-        ;;
-    esac
-    # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
-    assert_grep 'Use `awaiting: {why}`' "$brief" \
-      "$kind brief did not instruct the configured pause status"
     # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
     assert_no_grep '`paused: {why}`' "$brief" \
       "$kind brief still instructs the default paused status"
-    assert_grep 'a blocker or wait clears' "$brief" \
-      "$kind brief did not require durable resolution when a blocker clears"
     if [ "$kind" = secondmate ]; then
+      # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
+      assert_grep 'Use `awaiting: {why}`' "$brief" \
+        "$kind brief did not instruct the configured pause status"
+      assert_grep 'a blocker or wait clears' "$brief" \
+        "$kind brief did not require durable resolution when a blocker clears"
       assert_grep 'even when the answer is what started that work' "$brief" \
         "$kind brief did not warn that an answer-started done/working never closes a decision"
     fi
@@ -1113,13 +1106,13 @@ test_ship_and_scout_teach_validation_round_pause() {
       "$kind brief names a heavy-test slot that nothing defines"
     assert_grep "your own validation round" "$brief" \
       "$kind brief did not teach workers to declare their validation-round wait"
-    assert_grep 'Before ending your turn with your own background job still running' "$brief" \
-      "$kind brief did not require declaring a background-work wait"
-    assert_grep 'before waiting on your own pipeline run, validation round, or long foreground command' "$brief" \
-      "$kind brief did not require declaring a pipeline or foreground wait"
     # The protocol file the brief names owns the wait detail (fork patch,
     # docs/fork-decisions/2026-11-20-brief-rules-one-line.md).
     protocol="$ROOT/.agents/skills/crewmate-status-protocol/SKILL.md"
+    assert_grep 'Before ending your turn with your own background shell or monitor still running' "$protocol" \
+      "the status protocol did not require declaring a background-work wait"
+    assert_grep 'before waiting on your own pipeline run or a long foreground command' "$protocol" \
+      "the status protocol did not require declaring a pipeline or foreground wait"
     assert_grep "Read \`$protocol\` before your first" "$brief" \
       "$kind brief does not name the status protocol file"
     assert_grep 'Firstmate may still raise one first-sight alert' "$protocol" \
@@ -1150,7 +1143,7 @@ test_scout_and_secondmate_load_decision_hold_policy() {
 }
 
 test_scout_completion_write_exception_is_task_scoped() {
-  local home id brief command
+  local home id brief command hold
   home="$TMP_ROOT/scout completion home"
   mkdir -p "$home/data"
   for id in inventory-alpha inventory-beta; do
@@ -1162,13 +1155,15 @@ test_scout_completion_write_exception_is_task_scoped() {
       "scout outside-write rule did not name its exact completion gate"
     assert_grep "Only when the reviewed inventory is empty, run \`$command\`." "$brief" \
       "scout did not receive the empty-inventory command for its own task and home"
-    assert_grep 'This exception permits only that command, not direct metadata edits, another task, or any backlog write.' "$brief" \
-      "scout completion exception granted broader write authority"
-    assert_grep 'If any captain call remains, leave the attestation to firstmate, which registers the inventory and attests completion when it takes the call.' "$brief" \
-      "scout was instructed to write a non-empty inventory itself"
-    assert_grep 'If the command refuses, report the refusal to firstmate and stop rather than bypassing the completion gate.' "$brief" \
-      "scout was allowed to bypass a refused completion"
+    assert_grep "read and follow \`$ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\`" "$brief" \
+      "scout DoD no longer points at the completion-gate owner"
   done
+  # captain-hold-lifecycle owns the exception's limits (a1-54).
+  hold="$ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md"
+  assert_grep 'that exception permits only that one command, never a direct metadata edit, another task, or a backlog write' "$hold" \
+    "scout completion exception granted broader write authority"
+  assert_grep 'For a non-empty inventory or a refused command, the scout reports to firstmate and stops' "$hold" \
+    "scout was allowed to write a non-empty inventory or bypass a refused completion"
   pass "fm-brief.sh: scouts may attest only their own empty inventory through the guarded command"
 }
 
@@ -1283,10 +1278,15 @@ test_inbox_listing_command_is_safe_on_empty_inbox() {
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-inbox-list some-proj --mode no-mistakes >/dev/null 2>&1 \
     || fail "fm-brief.sh ship scaffold exited non-zero"
   brief="$home/data/brief-inbox-list/brief.md"
-  # shellcheck disable=SC2016
-  cmd=$(sed -n 's/.*list them with `\(find [^`]*\)`.*/\1/p' "$brief" | head -1)
-  [ -n "$cmd" ] || fail "the brief does not give a find-based inbox listing command"
+  # The brief points at the status protocol, which owns the listing command
+  # with an `<inbox>` placeholder for the path the brief names (a1-54).
   inbox="$home/state/brief-inbox-list.inbox"
+  assert_grep "$inbox" "$brief" "the brief does not name its inbox path"
+  # shellcheck disable=SC2016
+  cmd=$(sed -n 's/.*List waiting records with `\(find [^`]*\)`.*/\1/p' \
+    "$ROOT/.agents/skills/crewmate-status-protocol/SKILL.md" | head -1)
+  [ -n "$cmd" ] || fail "the status protocol does not give a find-based inbox listing command"
+  cmd=${cmd//<inbox>/$inbox}
   for shell_name in bash zsh; do
     command -v "$shell_name" >/dev/null 2>&1 || continue
     rm -rf "$inbox"
@@ -1368,7 +1368,7 @@ test_wait_no_turns_absent_keeps_the_previous_brief() {
 }
 
 test_inbox_guidance_explains_marked_body_terminator() {
-  local home brief kind id
+  local home brief kind id protocol
   home="$TMP_ROOT/inbox-guidance"
   for kind in no-mistakes scout secondmate; do
     id="inbox-$kind"
@@ -1388,11 +1388,25 @@ test_inbox_guidance_explains_marked_body_terminator() {
         ;;
     esac
     brief="$home/data/$id/brief.md"
-    assert_grep 'fm_task_inbox_body' "$brief" "$kind scaffold omitted the format-aware inbox reader"
-    assert_grep 'body-terminator=1' "$brief" "$kind scaffold omitted the body terminator marker"
-    assert_grep 'not part of the logical message body' "$brief" "$kind scaffold omitted the synthetic terminator meaning"
-    assert_grep 'preserve any intentional trailing newlines' "$brief" "$kind scaffold omitted trailing-newline preservation"
+    assert_grep 'Read the "Steering inbox" section of' "$brief" "$kind scaffold omitted the inbox-reading pointer"
+    assert_grep 'the move IS the acknowledgement' "$brief" "$kind scaffold omitted the move-is-ack rule"
+    # A secondmate charter is also published to remote hosts, so its pointer
+    # names the protocol in the secondmate's own checkout, not this code root.
+    if [ "$kind" = secondmate ]; then
+      # shellcheck disable=SC2016 # Literal backticks must remain unexpanded.
+      assert_grep '`.agents/skills/crewmate-status-protocol/SKILL.md` in your own firstmate checkout' "$brief" \
+        "secondmate charter does not name the protocol in its own checkout"
+      assert_no_grep "section of \`$ROOT/.agents/skills/crewmate-status-protocol/SKILL.md\`" "$brief" \
+        "secondmate charter names this host's absolute protocol path"
+    fi
   done
+  # The status protocol owns the record-reading mechanics (a1-54).
+  protocol="$ROOT/.agents/skills/crewmate-status-protocol/SKILL.md"
+  assert_grep '## Steering inbox' "$protocol" "the status protocol has no Steering inbox section"
+  assert_grep 'fm_task_inbox_body' "$protocol" "the protocol omitted the format-aware inbox reader"
+  assert_grep 'body-terminator=1' "$protocol" "the protocol omitted the body terminator marker"
+  assert_grep 'not part of the logical message body' "$protocol" "the protocol omitted the synthetic terminator meaning"
+  assert_grep 'preserve any intentional trailing newlines' "$protocol" "the protocol omitted trailing-newline preservation"
   pass "fm-brief: inbox guidance explains marked synthetic terminators in every scaffold"
 }
 
@@ -1829,6 +1843,52 @@ test_crewmate_scaffolds_forbid_pool_administration() {
 # worker to stop only processes it started, by the pid it recorded, and name the
 # pattern kills it must never use, inside the shared rule that ship and scout
 # emit byte-identically.
+# The pidfile recipe the brief prescribes must work from a zsh tool shell,
+# where a bare `set -m` refuses (a1-56): run the brief's own recipe text from
+# `zsh -c` and check the recorded pid leads its own process group.
+test_pidfile_recipe_runs_from_zsh() {
+  local home brief recipe cmd pidfile pid pgid
+  if ! command -v zsh >/dev/null 2>&1; then
+    pass "fm-brief.sh: pidfile recipe zsh check skipped (no zsh)"
+    return
+  fi
+  home="$TMP_ROOT/pid-zsh-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" pid-zsh alpha --mode direct-PR >/dev/null 2>&1 \
+    || fail "fm-brief.sh exited non-zero scaffolding pid-zsh"
+  brief="$home/data/pid-zsh/brief.md"
+  recipe=$(grep -o "\`bash -c '(set -m; <command> & echo \$! > <pidfile>)'\`" "$brief" | head -n 1 | tr -d '\`')
+  [ -n "$recipe" ] || fail "brief carries no bash -c pidfile recipe"
+  pidfile="$TMP_ROOT/pid-zsh.pid"
+  cmd=${recipe//<command>/\/bin\/sleep 5}
+  cmd=${cmd//<pidfile>/$pidfile}
+  zsh -c "$cmd" || fail "pidfile recipe failed under zsh -c: $cmd"
+  [ -s "$pidfile" ] || fail "pidfile recipe under zsh -c recorded no pid"
+  pid=$(cat "$pidfile")
+  pgid=$(ps -o pgid= -p "$pid" | tr -d ' ')
+  kill -- "-$pid" 2>/dev/null || true
+  [ "$pid" = "$pgid" ] || fail "pidfile recipe under zsh -c: pid $pid is not its group leader (pgid $pgid)"
+  pass "fm-brief.sh: the pidfile recipe records a group-leading pid from zsh -c"
+}
+
+# A scout must run a repository gate without posting a fleet-gate status
+# to GitHub (x-11); ships keep the bare gate, which posts on purpose.
+test_scout_gate_runs_without_status_post() {
+  local home
+  home="$TMP_ROOT/scout-gate-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" gate-scout alpha --scout >/dev/null 2>&1 \
+    || fail "scout scaffold failed"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" gate-ship alpha --mode direct-PR >/dev/null 2>&1 \
+    || fail "ship scaffold failed"
+  # shellcheck disable=SC2016 # Literal backticks must remain unexpanded.
+  assert_grep 'Run a repository gate here as `FLEET_GATE_STATUS=0 ./check.sh`; the bare gate posts a fleet-gate status to GitHub.' \
+    "$home/data/gate-scout/brief.md" "scout brief does not turn off the gate's GitHub status post"
+  assert_no_grep 'FLEET_GATE_STATUS=0' "$home/data/gate-ship/brief.md" \
+    "ship brief turned off the gate status a ship needs"
+  pass "fm-brief.sh: scouts run the repository gate without posting a GitHub status"
+}
+
 test_crewmate_scaffolds_require_pid_based_process_stops() {
   local home id brief rule
   home="$TMP_ROOT/pid-stop-home"
@@ -1851,7 +1911,7 @@ test_crewmate_scaffolds_require_pid_based_process_stops() {
     assert_grep "live services" "$rule" \
       "$id brief did not say why a pattern kill is unsafe"
     # shellcheck disable=SC2016 # Literal command text must remain unexpanded.
-    assert_grep '(set -m; <command> & echo $! > <pidfile>)' "$rule" \
+    assert_grep "bash -c '(set -m; <command> & echo \$! > <pidfile>)'" "$rule" \
       "$id brief did not record the pid in the launching command as its own process group"
     assert_grep 'kill -- -<pid>' "$rule" \
       "$id brief did not stop the recorded process group with its children"
@@ -2049,10 +2109,13 @@ test_decision_rule_matches_terminal_fold() {
     else
       [ -z "$after" ] || fail "$kind fold no longer clears an open decision on done"
       [ -z "$failed" ] || fail "$kind fold no longer clears an open decision on failed"
-      assert_grep "lands or you declare" "$brief" \
-        "$kind brief no longer says done or failed clears open decisions"
-      assert_grep "for an unrecoverable failure" "$brief" \
-        "$kind brief no longer limits terminal declarations over an unanswered decision"
+      # The status protocol the brief points at owns the closing rule (a1-54).
+      assert_grep "owns the choices format and when the decision closes" "$brief" \
+        "$kind brief no longer points at the decision-closing rule"
+      assert_grep "lands or you declare" "$ROOT/.agents/skills/crewmate-status-protocol/SKILL.md" \
+        "the status protocol no longer says done or failed clears open decisions"
+      assert_grep "for an unrecoverable failure" "$ROOT/.agents/skills/crewmate-status-protocol/SKILL.md" \
+        "the status protocol no longer limits terminal declarations over an unanswered decision"
       assert_no_grep "line never closes it, even when" "$brief" \
         "$kind brief still promises done never closes an open decision"
     fi
@@ -2131,3 +2194,5 @@ test_crewmate_scaffolds_require_pid_based_process_stops
 test_method_poteto_mode_renders_one_shared_contract
 test_method_is_validated_and_refused_where_it_does_not_apply
 test_method_warning_flags_a_standing_class_id_without_refusing
+test_pidfile_recipe_runs_from_zsh
+test_scout_gate_runs_without_status_post
