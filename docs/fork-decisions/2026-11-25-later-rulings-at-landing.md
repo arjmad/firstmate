@@ -1,0 +1,10 @@
+2026-11-25: Arjun released the idea "Before a queued ship lands approved text, diff it against captain.md rulings dated after the approval" from the Launchpad to start at once.
+It came from the 2026-11-24 agents-and-skills audit (finding a5-61): an arjun.md line calling Codex a "second builder" was approved on 2026-11-20, Arjun ruled "Reviewer only" on 2026-11-21, and the 2026-11-20 text still shipped on 2026-11-24.
+Decision: `bin/fm-later-rulings.sh` lists every dated item in the home's `data/captain.md` and `data/captain-shared.md` whose latest date is on or after the task's approval, and the ready registration (`bin/fm-pr-check.sh` run by hand) and `bin/fm-pr-merge.sh` print that list, so the landing firstmate re-reads the approved text against it before the merge.
+The approval date is the earliest of the first dates in the "Captain decision:" texts of the `bin/fm-captain-hold.sh` resolutions on the task's backlog row, because a later answer such as a release to start the queued ship can postdate the text's approval, or `--since` for an approval recorded elsewhere.
+It is advisory and mechanical: it compares no text, never refuses or delays a merge, and prints nothing at those call sites when it finds nothing or cannot read, because AGENTS.md section 7 forbids an extra review pipeline and a fuzzy text match would block merges falsely.
+No upstream proposal yet: the captain-file conventions it reads are this fleet's.
+
+| What | Files or functions | Upstream code touched | Status | Last checked sync |
+| --- | --- | --- | --- | --- |
+| List captain rulings dated on or after a ship's approval at its registration and merge | `bin/fm-later-rulings.sh` (new), `bin/fm-pr-check.sh` (end of a hand registration, header), `bin/fm-pr-merge.sh` (after the captain-hold check, header), `.agents/skills/ship-landing/SKILL.md`, `docs/scripts.md`, `tests/fm-later-rulings.test.sh` (new), `tests/fm-pr-merge.test.sh` (`test_later_rulings_are_listed_without_blocking_the_merge`) | `bin/fm-pr-check.sh`, `bin/fm-pr-merge.sh`, `.agents/skills/ship-landing/SKILL.md`, `docs/scripts.md`, `tests/fm-pr-merge.test.sh` | carried | 427056c4 |
