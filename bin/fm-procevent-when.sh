@@ -83,7 +83,9 @@
 #            most --timeout seconds (default 540, under Claude Code's 600000 ms
 #            Bash cap). Like `until`, any non-zero condition exit is "not yet".
 #            Exit 0 once it holds, 124 on timeout (reissue it), 2 on bad usage.
-#            The argv runs with no shell: wrap a shell test as `sh -c '<test>'`.
+#            The argv runs with no shell: wrap a shell test as `bash -c '<test>'`,
+#            which sees only exported variables. Exit 126 or 127 (the condition
+#            cannot run) exits 2 at once; a timeout prints the last poll's stderr.
 #            Use it instead of sleep-then-check, a background job, or Monitor.
 # run        The blocking child the generic runner executes; never run it in a
 #            conversational turn. It polls the condition on the registered
@@ -393,7 +395,7 @@ spec_load() {
 # --- run ---------------------------------------------------------------------
 
 cmd_wait() {
-  local interval=30 stable=1 timeout=540 hits=0 deadline rc left nap
+  local interval=30 stable=1 timeout=540 hits=0 deadline rc left nap err=
   wait_usage() { printf 'wait: %s\n' "$1" >&2; exit 2; }
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -410,9 +412,17 @@ cmd_wait() {
     # One deadline bounds every poll and nap, so a hung condition or a long
     # interval can never hold the caller past --timeout.
     left=$(( deadline - $(date +%s) ))
-    [ "$left" -gt 0 ] || { printf 'wait: timed out after %ss; reissue to keep waiting\n' "$timeout" >&2; return 124; }
-    fm_run_timed "$left" "$@" >/dev/null 2>&1
+    [ "$left" -gt 0 ] || {
+      printf 'wait: timed out after %ss; reissue to keep waiting\n' "$timeout" >&2
+      [ -z "$err" ] || printf 'wait: last poll stderr: %s\n' "$err" >&2
+      return 124
+    }
+    err=$(fm_run_timed "$left" "$@" 2>&1 >/dev/null | tail -c 2048; exit "${PIPESTATUS[0]}")
     rc=$?
+    # A condition that cannot run is a hard error, never a silent "not yet".
+    case "$rc" in
+      126|127) printf 'wait: condition could not run (exit %s): %s\n' "$rc" "$err" >&2; return 2 ;;
+    esac
     # Like `until`: exit 0 holds, any other exit (a timed-out poll too) is not yet.
     if [ "$rc" -eq 0 ]; then
       hits=$((hits + 1)); [ "$hits" -ge "$stable" ] && return 0

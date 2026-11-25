@@ -714,6 +714,10 @@ T0=$(date +%s)
 [ "$?" -eq 124 ] && [ $(( $(date +%s) - T0 )) -le 4 ] || fail "wait must bound a hung condition by --timeout"
 "$ROOT/bin/fm-procevent-when.sh" wait --interval 2 --timeout 08 -- false 2>/dev/null
 [ "$?" -eq 124 ] || fail "wait must read a zero-padded --timeout as decimal"
+"$ROOT/bin/fm-procevent-when.sh" wait --timeout 5 -- no-such-command-fm-wait 2>/dev/null
+[ "$?" -eq 2 ] || fail "wait must exit 2 at once when the condition cannot run"
+WAIT_ERR=$("$ROOT/bin/fm-procevent-when.sh" wait --interval 0.1 --timeout 1 -- sh -c 'echo nope >&2; exit 1' 2>&1)
+case "$WAIT_ERR" in *"last poll stderr: nope"*) ;; *) fail "wait must print the last poll's stderr on timeout" ;; esac
 "$ROOT/bin/fm-procevent-when.sh" wait --bogus -- true 2>/dev/null
 [ "$?" -eq 2 ] || fail "wait must exit 2 on a usage error"
 [ ! -e "$TMP_ROOT/state/when" ] || fail "wait must not register anything"
