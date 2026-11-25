@@ -354,13 +354,14 @@ cmd_arm() {
   # board writes, so a never-opened board would be armed over a listener that
   # dies on its first lookup. Open it the way adoption does, never `--reopen`.
   # A session firstmate ended when it retired the board is saved but ended,
-  # and a listener on it would see only `ended`; a plain open resumes it.
+  # and a listener on it would see only `ended`; a plain open on the board's
+  # own server resumes it. One the captain ended stays ended, and its listener
+  # then delivers that ending round as before.
   if ! saved_session "$real" >/dev/null 2>&1 || [ "$(saved_session "$real" status 2>/dev/null)" = ended ]; then
+    if saved_session "$real" >/dev/null 2>&1; then apply_session_host "$real"; fi
     lavish-axi "$real" >/dev/null 2>&1 || true
     session_error=$(saved_session "$real" 2>&1 >/dev/null) \
       || die "the board has no usable saved Lavish session even after opening it with lavish-axi (${session_error:-no reason given}), so no listener could reach it: $artifact"
-    [ "$(saved_session "$real" status 2>/dev/null)" != ended ] \
-      || die "the board's saved Lavish session is still ended after opening it with lavish-axi, so no listener could reach it: $artifact"
   fi
   listener=("$SCRIPT_DIR/fm-procevent-lavish.sh" poll "$real")
   [ -z "$reply_file" ] || listener+=(--agent-reply-file "$reply_file")

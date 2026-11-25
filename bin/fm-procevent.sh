@@ -1971,7 +1971,7 @@ board_artifact() {  # <adapter>
 # or reconcile. A missing lavish-axi, a failed end or a timeout only warns: the
 # retirement itself has already succeeded.
 # A board armed again since its retire has a new session that must stay open.
-# BOARD_END_BUDGET_SECONDS caps the ends of one sweep, so a stalled server
+# BOARD_END_BUDGET_SECONDS caps the ends of one sweep or teardown, so a stalled server
 # costs reconcile at most that much rather than BOARD_END_SECONDS per board.
 BOARD_END_SECONDS=30
 BOARD_END_BUDGET_SECONDS=60
@@ -2927,6 +2927,7 @@ cmd_retire_task() {
   local task=${1-} rec id any_kept=0 failed=0 out pending artifact
   [ "$#" -eq 1 ] || usage
   fm_pr_task_id_valid "$task" || die "task id is invalid: $task"
+  BOARD_END_DEADLINE=$(( $(date +%s) + BOARD_END_BUDGET_SECONDS ))
   # One read of the captured rounds serves every board this task owns.
   pending=$(fm_procevent_pending "$STATE")
   for rec in "$REG"/*.source; do
