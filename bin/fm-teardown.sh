@@ -598,6 +598,9 @@ teardown_retire_status() {  # <state> <task-id> [<archive-relative-directory>]
 # count. Best effort, because the route is already gone; a leftover is named.
 teardown_forget_route_records() {
   local id=$1 path
+  # A nested remote retirement keeps these records inside the home it just
+  # removed; recreating its state directory would resurrect that home.
+  [ -d "$STATE" ] || return 0
   FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
     "$SCRIPT_DIR/fm-fleet-ledger.sh" forget "$id" >/dev/null 2>&1 \
     || echo "warning: could not drop the fleet-ledger offset of retired route $id" >&2
