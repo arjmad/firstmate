@@ -1977,21 +1977,25 @@ BOARD_END_SECONDS=30
 BOARD_END_BUDGET_SECONDS=60
 BOARD_END_DEADLINE=
 board_end_session() {  # <source-id> <artifact>
-  local out line rc=0
+  local out line rc=0 bound=$BOARD_END_SECONDS left
   [ ! -e "$(source_file "$1")" ] || return 0
-  if [ -n "$BOARD_END_DEADLINE" ] && [ "$(date +%s)" -ge "$BOARD_END_DEADLINE" ]; then
+  if [ -n "$BOARD_END_DEADLINE" ]; then
+    left=$((BOARD_END_DEADLINE - $(date +%s)))
+    [ "$left" -ge "$bound" ] || bound=$left
+  fi
+  if [ "$bound" -le 0 ]; then
     line="board-end-failed: $1 reason=sweep end budget of ${BOARD_END_BUDGET_SECONDS}s spent"
   elif ! command -v lavish-axi >/dev/null 2>&1; then
     line="board-end-failed: $1 reason=lavish-axi-missing"
   else
-    out=$(fm_run_timed "$BOARD_END_SECONDS" "$(adapter_script lavish)" end "$2" 2>&1 </dev/null) || rc=$?
+    out=$(fm_run_timed "$bound" "$(adapter_script lavish)" end "$2" 2>&1 </dev/null) || rc=$?
     if [ "$rc" -eq 0 ]; then
       line="board-ended: $1"
       board_retire_log "$line"
       printf '%s\n' "$line"
       return 0
     fi
-    [ "$rc" -ne 124 ] || out="timed out after ${BOARD_END_SECONDS}s"
+    [ "$rc" -ne 124 ] || out="timed out after ${bound}s"
     line="board-end-failed: $1 reason=$(printf '%s' "$out" | tr '\n' ' ' | sed 's/ *$//')"
   fi
   board_retire_log "$line"

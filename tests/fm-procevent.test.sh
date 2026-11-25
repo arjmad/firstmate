@@ -5601,6 +5601,18 @@ PATH="$NEVER/bin:$PATH" FM_HOME="$NEVER/home" NEVER_OPEN_SAVES=1 \
 touch "$NEVER_RELEASE"
 PATH="$NEVER/bin:$PATH" FM_HOME="$NEVER/home" \
   "$ROOT/bin/fm-procevent-lavish.sh" retire "$never_art" >/dev/null 2>&1 || true
+# A reopen that leaves the session ended is refused, not armed onto a dead board.
+perl -MJSON::PP -i -0pe '$s = decode_json($_); $_->{status} = "ended" for values %{$s->{sessions}}; $_ = encode_json($s)' \
+  "$LAVISH_AXI_STATE_DIR/state.json"
+rm -f "$NEVER_RELEASE"
+set +e
+PATH="$NEVER/bin:$PATH" FM_HOME="$NEVER/home" \
+  "$ROOT/bin/fm-procevent-lavish.sh" arm "$never_art" > "$NEVER/ended.out" 2> "$NEVER/ended.err"
+ended_rc=$?
+set -e
+[ "$ended_rc" -ne 0 ] || fail "arm succeeded on a board whose session stayed ended"
+assert_contains "$(cat "$NEVER/ended.err")" "still ended" "arm's refusal of a board that stayed ended"
+assert_absent "$NEVER/home/state/procevent/$never_id.source" "a refused arm of an ended board left it registered"
 pass "arm opens a never-opened board, prints its link, and leaves a listener that stays live"
 
 rm -f "$NEVER_RELEASE" "$NEVER_POLLS" "$NEVER_OPENS"
