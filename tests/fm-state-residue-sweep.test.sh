@@ -25,6 +25,7 @@
 #   - The task-keyed records of a task nothing live references are retired;
 #     a meta, status log, turn-ended file, inbox holding an unhandled steer, or
 #     queued wake keeps them.
+#   - A steer that only points at a handled process-event result is residue.
 #   - A retired task's steering inbox and hooks directory are swept, and its
 #     Herdr presentation journal once the workspace it names is proven gone.
 #   - A watch-arm capture rotates by age only while no live watcher holds the
@@ -1097,7 +1098,59 @@ test_bootstrap_reports_a_held_task_set_as_information() {
   pass "bootstrap: a task set held during the deferred sweep is reported as information"
 }
 
+# pointer_message <feedback|terminal> <task> <result>: the pointer text
+# bin/fm-procevent.sh writes, built through the same library builders.
+pointer_message() {
+  (
+    . "$ROOT/bin/fm-pr-lib.sh"
+    . "$ROOT/bin/fm-wake-lib.sh"
+    . "$ROOT/bin/fm-procevent-lib.sh"
+    if [ "$1" = feedback ]; then
+      fm_procevent_feedback_pointer_message "$2" "$3"
+    else
+      fm_procevent_terminal_pointer_message "$(fm_procevent_result_source_id "$3")" "$(fm_procevent_result_sequence "$3")" "$3"
+    fi
+  )
+}
+
+write_steer() {  # <path> <body>
+  printf 'schema=fm-task-inbox.v1\nat=2026-11-01T00:00:00Z\nbody-terminator=1\n--\n%s\n' "$2" > "$1"
+}
+
+test_handled_pointer_steer_is_residue() {
+  local home fb out state pin
+  home=$(new_home pointer-steer); fb=$(make_tmux "$TMP_ROOT/pointer-steer")
+  state="$home/state"
+  world "$home" "" ok zsh
+  pin="$state/procevent-inbox"
+  mkdir -p "$pin" "$state/procevent"
+  for r in lavish-a.1 lavish-b.2 lavish-c.3 lavish-d.4; do printf 'x\n' > "$pin/$r.result"; done
+  : > "$pin/lavish-a.1.handled"; : > "$pin/lavish-b.2.handled"; : > "$pin/lavish-d.4.handled"
+  for id in fed.task term.task unread.task mixed.task meta.task; do
+    seed_task_state "$home" "$id"
+    seed_task_records "$home" "$id"
+  done
+  write_steer "$state/fed.task.inbox/002.msg" "$(pointer_message feedback fed.task "$pin/lavish-a.1.result")"
+  write_steer "$state/term.task.inbox/002.msg" "$(pointer_message terminal term.task "$pin/lavish-b.2.result")"
+  write_steer "$state/unread.task.inbox/002.msg" "$(pointer_message feedback unread.task "$pin/lavish-c.3.result")"
+  write_steer "$state/mixed.task.inbox/002.msg" "$(pointer_message feedback mixed.task "$pin/lavish-a.1.result") and more"
+  write_steer "$state/meta.task.inbox/002.msg" "$(pointer_message feedback meta.task "$pin/lavish-d.4.result")"
+  printf 'window=firstmate:fm-meta.task\nbackend=tmux\nkind=ship\n' > "$state/meta.task.meta"
+
+  out=$(run_sweep "$fb" "$home")
+  for id in fed.task term.task; do
+    [ ! -e "$state/$id.inbox" ] || fail "an inbox holding only a handled-result pointer is residue: $id: $out"
+    [ "$(count_task_records "$home" "$id")" -eq 0 ] || fail "task $id has no live reference left; its records should go"
+  done
+  [ -f "$state/unread.task.inbox/002.msg" ] || fail "a pointer to an unhandled result must keep its task live"
+  [ -f "$state/mixed.task.inbox/002.msg" ] || fail "a steer that is more than the pointer must keep its task live"
+  [ -f "$state/meta.task.inbox/002.msg" ] || fail "a task with a meta keeps its inbox"
+  [ "$(count_task_records "$home" unread.task)" -eq 4 ] || fail "a live task keeps its records"
+  pass "sweep: a steer that only points at a handled process-event result is residue"
+}
+
 test_gone_endpoint_swept_and_live_kept
+test_handled_pointer_steer_is_residue
 test_live_without_record_never_queried_past_inventory
 test_ambiguous_and_unreadable_kept
 test_meta_referenced_endpoint_never_touched

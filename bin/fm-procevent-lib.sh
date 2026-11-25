@@ -262,6 +262,53 @@ fm_procevent_launch_floor_prune_locked() {  # <state-root> <source-id> <registra
   done
 }
 
+# _fm_procevent_launch_floor_stamp_of <registry-dir> <source-id> <stamp-path>:
+# whether <stamp-path> is one of <source-id>'s own stamps, the legacy
+# `<id>.last-launch` or `<id>.<identity>.last-launch`, and not a stamp of a
+# longer source id that only starts with `<id>.`.
+_fm_procevent_launch_floor_stamp_of() {
+  local rest
+  [ "$3" = "$1/$2.last-launch" ] && return 0
+  rest=${3#"$1/$2."}
+  [ "$rest" != "$3" ] || return 1
+  rest=${rest%.last-launch}
+  case "$rest" in ''|*[!0-9-]*) return 1 ;; esac
+}
+
+# fm_procevent_launch_floor_remove_all_locked <state-root> <source-id>: drop
+# every pacing stamp of a source being retired, under its source lock.
+fm_procevent_launch_floor_remove_all_locked() {
+  local reg stamp
+  fm_procevent_source_id_valid "$2" || return 1
+  reg=$(fm_procevent_registry_dir "$1") || return 1
+  for stamp in "$reg/$2".*.last-launch "$reg/$2.last-launch"; do
+    [ -e "$stamp" ] || [ -L "$stamp" ] || continue
+    _fm_procevent_launch_floor_stamp_of "$reg" "$2" "$stamp" || continue
+    rm -f -- "$stamp" || return 1
+  done
+}
+
+# fm_procevent_launch_floor_orphans <state-root>: print every pacing stamp
+# whose source has no `<id>.source` registration. A stamp name is parsed both
+# as `<id>.<identity>` and as a legacy bare `<id>`, and either reading that
+# names a registered source keeps it.
+fm_procevent_launch_floor_orphans() {
+  local reg stamp base id
+  reg=$(fm_procevent_registry_dir "$1") || return 1
+  [ -d "$reg" ] || return 0
+  for stamp in "$reg"/*.last-launch; do
+    [ -f "$stamp" ] || [ -L "$stamp" ] || continue
+    base=${stamp##*/}
+    base=${base%.last-launch}
+    [ -e "$reg/$base.source" ] || [ -L "$reg/$base.source" ] && continue
+    id=${base%.*}
+    if [ "$id" != "$base" ] && _fm_procevent_launch_floor_stamp_of "$reg" "$id" "$stamp"; then
+      [ -e "$reg/$id.source" ] || [ -L "$reg/$id.source" ] && continue
+    fi
+    printf '%s\n' "$stamp"
+  done
+}
+
 fm_procevent_launch_floor_wait() {  # <state-root> <source-id> <registration-identity> <seconds>
   local state=$1 id=$2 expected=$3 floor=$4 reg stamp registration current_identity status=0
   stamp=$(fm_procevent_launch_floor_stamp_path "$state" "$id" "$expected") || return 1
@@ -1398,6 +1445,39 @@ fm_procevent_result_source_id() {
   local base=${1##*/}
   base=${base%.result}
   printf '%s\n' "${base%.*}"
+}
+
+# The two steering-inbox pointers bin/fm-procevent.sh writes to a board's
+# owner task, built in one place so the residue sweep can recognise a pointer
+# by rebuilding it rather than by matching a copy of its wording.
+fm_procevent_feedback_pointer_message() {  # <owner-task> <result-path>
+  printf 'Lavish review feedback is captured for task %s at %s. Read it with bin/fm-procevent-lavish.sh read %s, apply the round, and re-arm the board with the reply.' "$1" "$2" "$2"
+}
+
+fm_procevent_terminal_pointer_message() {  # <source-id> <sequence> <result-path>
+  printf 'Lavish review result %s sequence %s is terminal at %s. Read it with bin/fm-procevent-lavish.sh read %s, stop and conclude the review, and do not re-arm the board. The board stays yours until you acknowledge this round with bin/fm-procevent.sh handled %s %s, which retires it.' "$1" "$2" "$3" "$3" "$1" "$2"
+}
+
+# fm_procevent_pointer_message_result <state> <owner-task> <body>: when <body>
+# is exactly one of the pointers above, for <owner-task> and a result under
+# this home's procevent inbox, print that result path; fail otherwise.
+fm_procevent_pointer_message_result() {
+  local inbox result rest
+  inbox=$(fm_procevent_inbox_dir "$1")
+  case "$3" in
+    'Lavish review feedback is captured for task '*) rest=${3#*" at "} ;;
+    'Lavish review result '*) rest=${3#*" is terminal at "} ;;
+    *) return 1 ;;
+  esac
+  result=${rest%%". Read it with "*}
+  case "$result" in "$inbox"/*.result) ;; *) return 1 ;; esac
+  case "${result#"$inbox"/}" in */*) return 1 ;; esac
+  if [ "$3" = "$(fm_procevent_feedback_pointer_message "$2" "$result")" ] \
+    || [ "$3" = "$(fm_procevent_terminal_pointer_message "$(fm_procevent_result_source_id "$result")" "$(fm_procevent_result_sequence "$result")" "$result")" ]; then
+    printf '%s\n' "$result"
+    return 0
+  fi
+  return 1
 }
 
 fm_procevent_result_sequence() {

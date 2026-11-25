@@ -77,7 +77,12 @@
 # wake-queue key naming the task's status, turn-ended, or check file, or a
 # signal wake keyed by the bare task id (keys naming nothing of those files
 # protect nothing, because these records only describe them). An inbox whose
-# steers were all acknowledged into handled/ is residue, not liveness. The same
+# steers were all acknowledged into handled/ is residue, not liveness, and so
+# is one whose only unhandled steers are the Lavish feedback or terminal
+# pointers bin/fm-procevent.sh writes to a board's owner task: a pointer is
+# matched by rebuilding it through fm_procevent_pointer_message_result, never
+# by a prefix, and counts only once the result it names carries its .handled
+# marker, so a pointer to an unread round still keeps its task live. The same
 # test retires three pieces of per-task state a spawn leaves that a
 # non-teardown ending never removes: the steering inbox state/<id>.inbox, the
 # read-only commit-msg hooks directory state/<id>.git-hooks, and the Herdr
@@ -158,6 +163,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-procevent-lib.sh
 . "$SCRIPT_DIR/fm-procevent-lib.sh"
+# shellcheck source=bin/fm-task-inbox-lib.sh
+. "$SCRIPT_DIR/fm-task-inbox-lib.sh"
 
 # Scratch files older than this many days are orphans; see the header.
 FM_STATE_RESIDUE_SCRATCH_MAX_AGE_DAYS=7
@@ -461,6 +468,18 @@ procevent_live_source() {  # <source-id>
   PROCEVENT_SOURCES="$PROCEVENT_SOURCES|$1|"
   procevent_live "procevent:$1:"
 }
+# handled_pointer_msg <msg> <task-id>: whether a steer is only the
+# process-event pointer bin/fm-procevent.sh writes to a board's owner task
+# (rebuilt through fm_procevent_pointer_message_result) and the result it
+# names already carries its handled marker, so the steer asks nothing more of
+# the task. A plain file only; anything unreadable is a live steer.
+handled_pointer_msg() {
+  local body result
+  [ -f "$1" ] && [ ! -L "$1" ] || return 1
+  body=$(fm_task_inbox_body "$1") || return 1
+  result=$(fm_procevent_pointer_message_result "$STATE" "$2" "$body") || return 1
+  fm_procevent_is_handled "$STATE" "$(fm_procevent_result_source_id "$result")" "$(fm_procevent_result_sequence "$result")"
+}
 collect_referenced() {
   local path name key keys kind status msg
   _fm_wake_require_classify || return 1
@@ -473,6 +492,7 @@ collect_referenced() {
     name=${path##*/}
     for msg in "$path"/*.msg; do
       [ -e "$msg" ] || [ -L "$msg" ] || continue
+      handled_pointer_msg "$msg" "${name%.inbox}" && continue
       reference_task "${name%.inbox}" || return 1
       break
     done
