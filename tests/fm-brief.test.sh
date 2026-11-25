@@ -1525,6 +1525,37 @@ test_also_dependent_repositories_are_rendered_and_bounded() {
   pass "fm-brief.sh: --also records dependent repositories and refuses misuse before writing"
 }
 
+test_live_placement_is_rendered_and_bounded() {
+  local home rc brief reason
+  home="$TMP_ROOT/live-home"
+  mkdir -p "$home/data"
+  # shellcheck source=bin/fm-dod-lib.sh
+  . "$ROOT/bin/fm-dod-lib.sh"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-live-l1 some-proj --mode direct-PR --base-branch feature/hub --live "Seller Central Chrome" >/dev/null 2>&1 \
+    || fail "direct-PR --live should scaffold"
+  brief="$home/data/brief-live-l1/brief.md"
+  reason=$(fm_brief_live_placements "$brief") || fail "the ship brief carries no live line under # Setup"
+  [ "$reason" = "Seller Central Chrome" ] || fail "the ship brief recorded live reason '$reason'"
+  [ "$(fm_brief_base_branches "$brief")" = feature/hub ] || fail "a live line broke the brief's Base branch line"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-live-l2 some-proj --scout --live=mail >/dev/null 2>&1 \
+    || fail "scout --live should scaffold"
+  [ "$(fm_brief_live_placements "$home/data/brief-live-l2/brief.md")" = mail ] || fail "the scout brief carries no live line"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-live-l3 some-proj --mode direct-PR >/dev/null 2>&1 || fail "plain brief should scaffold"
+  ! fm_brief_live_placements "$home/data/brief-live-l3/brief.md" >/dev/null || fail "a brief without --live carries a live line"
+
+  rc=0
+  FM_HOME="$home" FM_SECONDMATE_CHARTER=x "$ROOT/bin/fm-brief.sh" brief-live-l4 --secondmate some-proj --live x >/dev/null 2>&1 || rc=$?
+  expect_code 1 "$rc" "--live on a secondmate charter was not refused"
+  rc=0
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-live-l5 some-proj --mode direct-PR --live "" >/dev/null 2>&1 || rc=$?
+  expect_code 1 "$rc" "an empty --live reason was not refused"
+  assert_absent "$home/data/brief-live-l5/brief.md" "a refused --live brief was written"
+  pass "fm-brief.sh: --live writes one Placement: live line under # Setup and refuses misuse"
+}
+
 test_base_branch_is_rendered_and_bounded() {
   local home out rc brief base meta_base
   home="$TMP_ROOT/base-branch-home"
@@ -2118,6 +2149,7 @@ test_workers_wait_without_spending_turns
 test_wait_no_turns_absent_keeps_the_previous_brief
 test_inbox_guidance_explains_marked_body_terminator
 test_home_brief_include_is_appended_last
+test_live_placement_is_rendered_and_bounded
 test_base_branch_is_rendered_and_bounded
 test_also_dependent_repositories_are_rendered_and_bounded
 test_ship_branch_prefix_defaults_to_legacy_fm

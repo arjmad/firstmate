@@ -301,6 +301,17 @@ fm_brief_base_branches() {  # <brief>
   ' "$1"
 }
 
+# Prints the reason of each `Placement: live - <reason>` line under a brief's
+# `# Setup` (bin/fm-brief.sh --live writes it; bin/fm-spawn.sh reads it); exits
+# 1 when there is none.
+fm_brief_live_placements() {  # <brief>
+  awk '
+    /^# / { setup = ($0 == "# Setup"); next }
+    setup && sub(/^Placement: live - /, "") { print; n++ }
+    END { exit !n }
+  ' "$1"
+}
+
 fm_ship_rule_one() {  # <no-mistakes|direct-PR|local-only> <task-id> [branch] [<forge>] [<base>]
   local mode=$1 id=$2 forge=${4:-none} base=${5:-}
   local branch=${3:-fm/$id} target='the default branch'

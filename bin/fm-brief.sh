@@ -14,8 +14,8 @@
 # charters still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--base-branch <branch>] [--forge <none|gerrit|forgejo|external> [--shape squash]] [--pr <auto|manual>] [--also <repo>]... [--herdr-lab]
-#        fm-brief.sh <task-id> <repo-name> --scout [--base-branch <branch>] [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--base-branch <branch>] [--forge <none|gerrit|forgejo|external> [--shape squash]] [--pr <auto|manual>] [--also <repo>]... [--live <reason>] [--herdr-lab]
+#        fm-brief.sh <task-id> <repo-name> --scout [--base-branch <branch>] [--live <reason>] [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --also <repo> (repeatable, ship briefs only; fork patch, docs/fork-decisions.md
 #   2026-10-14) names a dependent repository this task also changes. The brief
@@ -95,6 +95,11 @@
 # Definition of done then targets that branch with its pull request.
 # bin/fm-dod-lib.sh's fm_base_branch_valid owns which deliveries accept one.
 # Refused on --secondmate.
+# --live <reason> marks a ship or scout that must run in this home, such as a
+# live business op or one that needs Heimdall-only state (Seller Central Chrome,
+# mail state, the business DB). It writes one "Placement: live - <reason>" line
+# under `# Setup`; bin/fm-spawn.sh reads it, skips the config/intake-spill
+# placement probe, and records placement=live. Refused on --secondmate.
 # --forge names the project's forge, defaults to none, and is orthogonal to --mode
 # exactly as the registry's `forge=` token is. It is the captain's confirmed
 # registry binding, read from data/projects.md at intake and passed here; this
@@ -279,6 +284,8 @@ UPSTREAM_CONSENT=
 UPSTREAM_CONSENT_SET=0
 PROJECT_DIR=
 PROJECT_DIR_SET=0
+LIVE_REASON=
+LIVE_SET=0
 ALSO_REPOS=()
 POS=()
 want_value=
@@ -298,6 +305,7 @@ for a in "$@"; do
       upstream-consent) UPSTREAM_CONSENT=$a; UPSTREAM_CONSENT_SET=1 ;;
       project) PROJECT_DIR=$a; PROJECT_DIR_SET=1 ;;
       also) ALSO_REPOS+=("$a") ;;
+      live) LIVE_REASON=$a; LIVE_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -328,6 +336,8 @@ for a in "$@"; do
     --project=*) PROJECT_DIR=${a#--project=}; PROJECT_DIR_SET=1 ;;
     --also) want_value=also ;;
     --also=*) ALSO_REPOS+=("${a#--also=}") ;;
+    --live) want_value=live ;;
+    --live=*) LIVE_REASON=${a#--live=}; LIVE_SET=1 ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
     # brief input. Refuse it loudly so it is never silently dropped here and then
     # believed to have been recorded.
@@ -456,6 +466,19 @@ printf -v BRANCH_Q '%q' "$BRANCH"
 if [ "$KIND" = secondmate ] && [ "$HERDR_LAB" -eq 1 ]; then
   echo "error: --herdr-lab applies only to crewmate ship or scout briefs" >&2
   exit 1
+fi
+
+if [ "$LIVE_SET" -eq 1 ]; then
+  [ "$KIND" != secondmate ] || {
+    echo "error: --live applies only to ship and scout briefs; a secondmate is placed by its registry route" >&2
+    exit 1
+  }
+  case "$LIVE_REASON" in
+  '' | *[![:print:]]*)
+    echo 'error: --live must be a printable reason' >&2
+    exit 1
+    ;;
+  esac
 fi
 
 if [ "$NO_PROJECTS" -eq 1 ] && [ "$KIND" != secondmate ]; then
@@ -864,6 +887,8 @@ Base branch: $BASE_BRANCH"
 else
   SETUP_BASE="You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch."
 fi
+[ "$LIVE_SET" -eq 0 ] || SETUP_BASE="$SETUP_BASE
+Placement: live - $LIVE_REASON"
 
 # Every worker brief carries the Lavish arm rule (fork patch,
 # docs/fork-decisions/2026-11-16-ship-board-handover.md): a board a worker opens

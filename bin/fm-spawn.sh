@@ -348,7 +348,12 @@
 #   task stays queued for routing there. On a fallback the spawn continues and
 #   records placement=fallback and placement_reason=<why> in the task record,
 #   and the first fallback in this home also prints `placement-notice:` for the
-#   captain. --placement-override <reason> records the captain's redirect as
+#   captain. A brief's `Placement: live - <reason>` line under # Setup
+#   (bin/fm-brief.sh --live) places the task here with no probe and records
+#   placement=live and placement_reason=<reason>; a secondmate spawn refuses
+#   it, a relaunch keeps the recorded placement, and it cannot be combined with
+#   --placement-override. --placement-override <reason> records a reason this
+#   task must run here (a captain redirect or a Heimdall-only need) as
 #   placement_override= and skips the probe; it is refused on secondmates and
 #   relaunches. A declaration with a first rule that cannot be read refuses the
 #   spawn with exit 1; one without a first rule never gates a spawn.
@@ -2864,9 +2869,36 @@ fi
 # path that does not resolve is refused by that check.
 PLACEMENT_FALLBACK_REASON=
 SPAWN_PLACEMENT_PROJECT=
+# A brief's live line (bin/fm-brief.sh --live) places a fresh ship or scout
+# here without the probe. Read before the probe: the scaffold exists already.
+PLACEMENT_LIVE_REASON=
+if [ "$RELAUNCH" -eq 0 ] && [ -f "$DATA/$ID/brief.md" ] &&
+  PLACEMENT_LIVE_LINES=$(fm_brief_live_placements "$DATA/$ID/brief.md"); then
+  if [ "$KIND" = secondmate ]; then
+    echo "error: $DATA/$ID/brief.md carries a Placement: live line; a secondmate is placed by its registry route" >&2
+    exit 1
+  fi
+  if [ "$(printf '%s\n' "$PLACEMENT_LIVE_LINES" | wc -l)" -ne 1 ]; then
+    echo "error: $DATA/$ID/brief.md carries more than one Placement: live line; keep one" >&2
+    exit 1
+  fi
+  case "$PLACEMENT_LIVE_LINES" in
+  '' | *[![:print:]]*)
+    echo "error: $DATA/$ID/brief.md Placement: live line needs a printable reason" >&2
+    exit 1
+    ;;
+  esac
+  if [ "$PLACEMENT_OVERRIDE_SET" -eq 1 ]; then
+    echo "error: $DATA/$ID/brief.md already places this task live; drop --placement-override" >&2
+    exit 1
+  fi
+  PLACEMENT_LIVE_REASON=$PLACEMENT_LIVE_LINES
+  echo "placement: task $ID runs here (live): $PLACEMENT_LIVE_REASON" >&2
+fi
 # Only a declaration that names a first rule gates spawns; a spill alone is
 # intake's judgment and never refuses one.
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$PLACEMENT_OVERRIDE_SET" -eq 0 ] &&
+  [ -z "$PLACEMENT_LIVE_REASON" ] &&
   { [ -e "$CONFIG/intake-spill" ] || [ -L "$CONFIG/intake-spill" ]; } &&
   { [ ! -r "$CONFIG/intake-spill" ] || grep -Eq '^[[:space:]]*first([[:space:]]|$)' "$CONFIG/intake-spill"; }; then
   case "${POS[1]:-}" in
@@ -2898,7 +2930,7 @@ if [ -n "$SPAWN_PLACEMENT_PROJECT" ]; then
     fi
     ;;
   *)
-    echo "error: spawn refused: the placement rule in config/intake-spill sends $SPAWN_PLACEMENT_PROJECT work to secondmate $SPAWN_PLACEMENT_FIRST first, and ${SPAWN_PLACEMENT_REASON:-it has a free slot}; route task $ID there, or pass --placement-override <reason> when the captain redirects it" >&2
+    echo "error: spawn refused: the placement rule in config/intake-spill sends $SPAWN_PLACEMENT_PROJECT work to secondmate $SPAWN_PLACEMENT_FIRST first, and ${SPAWN_PLACEMENT_REASON:-it has a free slot}; route task $ID there, scaffold its brief with bin/fm-brief.sh --live <reason> for a live business op, or pass --placement-override <reason>, a reason this task must run here (a captain redirect or a Heimdall-only need)" >&2
     exit 1
     ;;
   esac
@@ -8423,6 +8455,9 @@ preserve_relaunch_meta() {
   if [ -n "$PLACEMENT_FALLBACK_REASON" ]; then
     echo "placement=fallback"
     printf 'placement_reason=%s\n' "$PLACEMENT_FALLBACK_REASON"
+  elif [ -n "$PLACEMENT_LIVE_REASON" ]; then
+    echo "placement=live"
+    printf 'placement_reason=%s\n' "$PLACEMENT_LIVE_REASON"
   fi
   [ "$PLACEMENT_OVERRIDE_SET" -eq 0 ] || printf 'placement_override=%s\n' "$PLACEMENT_OVERRIDE"
   # The detected OpenCode major, recorded so fm-control sends the exit key this
