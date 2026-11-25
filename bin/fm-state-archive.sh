@@ -11,8 +11,9 @@
 #          Classify and report exactly as a real run would, move nothing, and
 #          list each record that would move.
 #
-# bin/fm-bootstrap.sh runs it on its locked local pass, next to
-# bin/fm-data-media-prune.sh, and never under FM_BOOTSTRAP_DETECT_ONLY=1.
+# bin/fm-bootstrap.sh runs it in its deferred half, right after the state
+# residue sweep, under the fleet-lock holder check and a 60s bound, and never
+# under FM_BOOTSTRAP_DETECT_ONLY=1.
 #
 # What moves. Two kinds of record, each older than
 # FM_STATE_ARCHIVE_MAX_AGE_DAYS by its mtime:
@@ -44,8 +45,8 @@
 #
 # Cost bound. A home that never archived holds thousands of old records, so
 # one run moves at most FM_STATE_ARCHIVE_BUDGET notes and source rounds and
-# leaves the rest for the next session start; the summary reports the count
-# deferred.
+# leaves the rest, unscanned, for the next session start; the summary says
+# when more remain.
 set -u
 
 case "${1:-}" in
@@ -86,7 +87,7 @@ warn() { printf 'warning: state archive: %s\n' "$*" >&2; }
 
 MAX_AGE=$((FM_STATE_ARCHIVE_MAX_AGE_DAYS * 86400))
 ARCHIVE_ROOT="$DATA/archive/state"
-MOVED_NOTES=0 MOVED_ROUNDS=0 MOVED_SOURCES=0 DEFERRED=0 SPENT=0
+MOVED_NOTES=0 MOVED_ROUNDS=0 MOVED_SOURCES=0 MORE=0 SPENT=0
 
 old_enough() { [ "$(fm_path_age "$1")" -gt "$MAX_AGE" ]; }
 
@@ -147,6 +148,11 @@ steer_names() {  # <fixed text>
 archive_notes() {
   local note id dest
   for note in "$STATE/inbox/handled"/*.note; do
+    # A spent budget stops the scan too: the rest costs forks the bound needs.
+    if [ "$SPENT" -ge "$FM_STATE_ARCHIVE_BUDGET" ]; then
+      MORE=1
+      break
+    fi
     [ -f "$note" ] && [ ! -L "$note" ] || continue
     old_enough "$note" || continue
     id=${note##*/}
@@ -154,10 +160,6 @@ archive_notes() {
     queue_names "$id" && continue
     [ ! -e "$STATE/inbox/.replies/$id" ] || continue
     [ -z "$(sed -n '/^--$/q;/^request_id=./p' "$note" 2>/dev/null)" ] || continue
-    if [ "$SPENT" -ge "$FM_STATE_ARCHIVE_BUDGET" ]; then
-      DEFERRED=$((DEFERRED + 1))
-      continue
-    fi
     SPENT=$((SPENT + 1))
     dest="$ARCHIVE_ROOT/$(month_of "$note")/inbox"
     if [ "$DRY_RUN" -eq 1 ]; then
@@ -273,6 +275,10 @@ archive_procevent() {
   inbox=$(fm_procevent_inbox_dir "$STATE")
   [ -d "$inbox" ] && [ ! -L "$inbox" ] || return 0
   for f in "$inbox"/*.handled; do
+    if [ "$SPENT" -ge "$FM_STATE_ARCHIVE_BUDGET" ]; then
+      MORE=1
+      break
+    fi
     [ -f "$f" ] || continue
     id=$(fm_procevent_result_source_id "${f%.handled}.result")
     fm_procevent_source_id_valid "$id" || continue
@@ -281,7 +287,7 @@ archive_procevent() {
     seqs=$(source_archivable "$inbox" "$id") || continue
     count=$(printf '%s\n' "$seqs" | wc -l | tr -d ' ')
     if [ $((SPENT + count)) -gt "$FM_STATE_ARCHIVE_BUDGET" ] && [ "$SPENT" -gt 0 ]; then
-      DEFERRED=$((DEFERRED + count))
+      MORE=1
       continue
     fi
     SPENT=$((SPENT + count))
@@ -307,7 +313,7 @@ if [ "$MOVED_NOTES" -gt 0 ] || [ "$MOVED_ROUNDS" -gt 0 ]; then
   [ "$DRY_RUN" -eq 0 ] || verb='would move'
   printf 'BOOTSTRAP_INFO: state archive: %s %s handled note(s) and %s process-event round(s) of %s retired source(s) older than %s days to data/archive/state/' \
     "$verb" "$MOVED_NOTES" "$MOVED_ROUNDS" "$MOVED_SOURCES" "$FM_STATE_ARCHIVE_MAX_AGE_DAYS"
-  [ "$DEFERRED" -eq 0 ] || printf ', %s deferred to the next session start' "$DEFERRED"
+  [ "$MORE" -eq 0 ] || printf '; more remain for the next session start'
   printf '\n'
 fi
 exit 0

@@ -30,8 +30,8 @@
 #   fm-fleet-ledger.sh capture
 #   fm-fleet-ledger.sh appended <config> <state>/<task>.status
 #
-# forget deletes <task>'s saved offset and records nothing, whether or not the
-# ledger is on; bin/fm-teardown.sh runs it when it retires a secondmate route.
+# forget deletes <task>'s saved offset under the ledger lock and records
+# nothing, whether or not the ledger is on; bin/fm-teardown.sh runs it when it retires a secondmate route.
 #
 # capture appends one task.status record for every complete (newline-ended)
 # line added to a state/<task>.status log since that task's byte offset in
@@ -113,7 +113,12 @@ offset_path() { printf '%s/.%s.fleet-ledger-offset' "$STATE" "$1"; }
 # forget runs whether or not the ledger is on, because an offset outlives a
 # ledger switched off after it was written.
 if [ "$cmd" = forget ]; then
+  [ -d "$STATE" ] && [ ! -L "$STATE" ] || exit 0
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$SCRIPT_DIR/fm-wake-lib.sh" || exit 1
+  fm_lock_acquire_wait "$LOCK" || exit 1
   rm -f -- "$(offset_path "$2")"
+  fm_lock_release "$LOCK"
   exit
 fi
 

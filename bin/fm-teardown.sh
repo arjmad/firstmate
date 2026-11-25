@@ -816,10 +816,12 @@ unseeded_remote_route_teardown() {
     echo "REFUSED: remote secondmate $ID has no task record here, and its host did not confirm an absent or never-seeded home; the route is preserved" >&2
     return 1
   fi
+  # Retire the status log while the route still names it, so a failure keeps
+  # both for the retry.
+  teardown_retire_status "$STATE" "$ID" || return 1
   tmp="$SECONDMATE_REG.tmp.$$"
   grep -vE "^- $ID( |$)" "$SECONDMATE_REG" > "$tmp" || true
   mv -f -- "$tmp" "$SECONDMATE_REG"
-  teardown_retire_status "$STATE" "$ID" || return 1
   rm -f -- "$STATE/.secondmate-relaunch-$ID" "$STATE/.secondmate-relaunch-bound-$ID"
   teardown_forget_route_records "$ID"
   printf '%s\n' "$out"

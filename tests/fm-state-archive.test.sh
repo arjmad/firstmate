@@ -150,7 +150,7 @@ test_budget_defers_the_remainder() {
   for n in 1 2 3; do old_note "$home" "179000000$n-b"; done
   out=$(FM_STATE_ARCHIVE_BUDGET=2 run_archive "$home")
   assert_contains "$out" "moved 2 handled note(s)" "the budget should cap one run: $out"
-  assert_contains "$out" "1 deferred to the next session start" "the rest should be reported deferred: $out"
+  assert_contains "$out" "more remain for the next session start" "the rest should be reported as left: $out"
   out=$(FM_STATE_ARCHIVE_BUDGET=2 run_archive "$home")
   assert_contains "$out" "moved 1 handled note(s)" "the next run should finish: $out"
   pass "archive: the per-run budget defers the remainder"
