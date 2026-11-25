@@ -701,8 +701,7 @@ pass "the fire-time reload never observes rebind_one's spec/trust publish mid-re
 # wait: the foreground in-turn wait needs no home and no registration.
 WAIT_FLAG="$TMP_ROOT/wait-flag"
 ( sleep 0.5; : > "$WAIT_FLAG" ) &
-"$ROOT/bin/fm-procevent-when.sh" wait --interval 0.1 --timeout 20 -- test -e "$WAIT_FLAG"
-[ "$?" -eq 0 ] || fail "wait must return 0 once its condition holds"
+"$ROOT/bin/fm-procevent-when.sh" wait --interval 0.1 --timeout 20 -- test -e "$WAIT_FLAG" || fail "wait must return 0 once its condition holds"
 "$ROOT/bin/fm-procevent-when.sh" wait --interval 0.1 --timeout 1 -- false 2>/dev/null
 [ "$?" -eq 124 ] || fail "wait must return 124 when its timeout passes"
 "$ROOT/bin/fm-procevent-when.sh" wait --interval 0.1 -- sh -c 'exit 3' 2>/dev/null
