@@ -215,6 +215,24 @@ test_live_line_outside_setup_does_not_place() {
   pass "a live line outside # Setup does not place the task"
 }
 
+test_fenced_or_duplicate_live_lines() {
+  local case_dir out rc=0
+  case_dir=$(make_case live-fenced task-a task-b)
+  # shellcheck disable=SC2016  # literal Markdown fence
+  printf '\n# Setup\n```\n~~~\n# Setup\nPlacement: live - only an example\n```\n' >> "$case_dir/home/data/task-a/brief.md"
+  out=$(spawn_ship "$case_dir" task-a) || rc=$?
+  expect_code 1 "$rc" "a fenced example live line placed the task: $out"
+  assert_contains "$out" "sends project work to secondmate faf first" "the rule still applies past a fenced example"
+  rc=0
+  add_live_line "$case_dir" task-b "mail state"
+  printf 'Placement: live - \n' >> "$case_dir/home/data/task-b/brief.md"
+  out=$(spawn_ship "$case_dir" task-b) || rc=$?
+  expect_code 1 "$rc" "two live lines were accepted: $out"
+  assert_contains "$out" "more than one Placement: live line" "the refusal names the duplicate"
+  assert_nothing_created "$case_dir" task-b
+  pass "a fenced example live line is ignored and two live lines are refused"
+}
+
 test_project_outside_the_rule_is_untouched() {
   local case_dir out rc=0 wt
   case_dir=$(make_case outside task-a)
@@ -257,6 +275,7 @@ test_fallback_launches_here_and_records_the_reason
 test_override_skips_the_probe_and_is_recorded
 test_live_brief_line_skips_the_probe_and_is_recorded
 test_live_line_outside_setup_does_not_place
+test_fenced_or_duplicate_live_lines
 test_project_outside_the_rule_is_untouched
 test_unreadable_declaration_refuses
 

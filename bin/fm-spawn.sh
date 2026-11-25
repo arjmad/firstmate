@@ -2872,13 +2872,17 @@ SPAWN_PLACEMENT_PROJECT=
 # A brief's live line (bin/fm-brief.sh --live) places a fresh ship or scout
 # here without the probe. Read before the probe: the scaffold exists already.
 PLACEMENT_LIVE_REASON=
-if [ "$RELAUNCH" -eq 0 ] && [ -f "$DATA/$ID/brief.md" ] &&
-  PLACEMENT_LIVE_LINES=$(fm_brief_live_placements "$DATA/$ID/brief.md"); then
+PLACEMENT_LIVE_RC=1
+if [ "$RELAUNCH" -eq 0 ] && [ -f "$DATA/$ID/brief.md" ]; then
+  PLACEMENT_LIVE_RC=0
+  PLACEMENT_LIVE_LINES=$(fm_brief_live_placements "$DATA/$ID/brief.md") || PLACEMENT_LIVE_RC=$?
+fi
+if [ "$PLACEMENT_LIVE_RC" -ne 1 ]; then
   if [ "$KIND" = secondmate ]; then
     echo "error: $DATA/$ID/brief.md carries a Placement: live line; a secondmate is placed by its registry route" >&2
     exit 1
   fi
-  if [ "$(printf '%s\n' "$PLACEMENT_LIVE_LINES" | wc -l)" -ne 1 ]; then
+  if [ "$PLACEMENT_LIVE_RC" -ne 0 ]; then
     echo "error: $DATA/$ID/brief.md carries more than one Placement: live line; keep one" >&2
     exit 1
   fi
