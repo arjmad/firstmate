@@ -29,13 +29,20 @@ fm_remote_inherit_transaction_lock_path() { # <state-dir> <id>
   printf '%s/.remote-inherit-%s.lock\n' "$state" "$id"
 }
 
+# The parent's durable inheritance sequence for one remote route; teardown
+# drops it with the retired route.
+fm_remote_inherit_generation_path() { # <state-dir> <id>
+  case "$2" in *[!/A-Za-z0-9._-]*|''|*/*) return 1 ;; esac
+  printf '%s/.remote-inherit-%s.generation\n' "$1" "$2"
+}
+
 fm_remote_inherit_generation_next() { # <state-dir> <id> [committed-remote-floor]
   # The caller holds fm_remote_inherit_transaction_lock_path across allocation
   # and transport. Recovery advances beyond both durable sequence owners.
   local state=$1 id=$2 floor=${3:-0} path current next tmp extra
   case "$id" in *[!/A-Za-z0-9._-]*|''|*/*) return 1 ;; esac
   [ -d "$state" ] && [ ! -L "$state" ] || return 1
-  path="$state/.remote-inherit-$id.generation"
+  path=$(fm_remote_inherit_generation_path "$state" "$id") || return 1
   current=0
   if [ -e "$path" ] || [ -L "$path" ]; then
     [ -f "$path" ] && [ ! -L "$path" ] || return 1

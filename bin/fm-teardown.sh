@@ -475,6 +475,7 @@ for _teardown_source in \
   fm-env-lib.sh \
   fm-secondmate-registry-lib.sh \
   fm-secondmate-parent-lib.sh \
+  fm-secondmate-nudge-lib.sh \
   fm-pending-reply-lib.sh \
   fm-operational-input.sh \
   fm-marker-lib.sh \
@@ -512,6 +513,8 @@ unset _teardown_source
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-secondmate-parent-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-parent-lib.sh"
+# shellcheck source=bin/fm-secondmate-nudge-lib.sh
+. "$SCRIPT_DIR/fm-secondmate-nudge-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
 # The bounded remote-ref refresh is shared with the done-claim gate.
@@ -586,6 +589,24 @@ teardown_retire_status() {  # <state> <task-id> [<archive-relative-directory>]
   for entry in "$DATA"/*; do
     teardown_prune_status_archives "$entry"
   done
+}
+
+# teardown_forget_route_records <id>: after a secondmate route is fully
+# retired, drop the per-route records the status retirement does not own,
+# each through its writer: the fleet-ledger offset, the remote inheritance
+# generation, and the remote-reply mirrored-source record and retirement
+# count. Best effort, because the route is already gone; a leftover is named.
+teardown_forget_route_records() {
+  local id=$1 path
+  FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
+    "$SCRIPT_DIR/fm-fleet-ledger.sh" forget "$id" >/dev/null 2>&1 \
+    || echo "warning: could not drop the fleet-ledger offset of retired route $id" >&2
+  if path=$(fm_remote_inherit_generation_path "$STATE" "$id"); then
+    rm -f -- "$path" || echo "warning: could not remove $path" >&2
+  fi
+  FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE \
+    "$SCRIPT_DIR/fm-procevent-remote-reply.sh" forget-retired "$id" >/dev/null 2>&1 \
+    || echo "warning: could not drop the remote-reply records of retired route $id" >&2
 }
 
 teardown_export_records() {  # <state> <task-id>
@@ -796,6 +817,9 @@ unseeded_remote_route_teardown() {
   tmp="$SECONDMATE_REG.tmp.$$"
   grep -vE "^- $ID( |$)" "$SECONDMATE_REG" > "$tmp" || true
   mv -f -- "$tmp" "$SECONDMATE_REG"
+  teardown_retire_status "$STATE" "$ID" || return 1
+  rm -f -- "$STATE/.secondmate-relaunch-$ID" "$STATE/.secondmate-relaunch-bound-$ID"
+  teardown_forget_route_records "$ID"
   printf '%s\n' "$out"
   printf 'teardown %s complete (route only: remote %s:%s held no seeded home)\n' \
     "$ID" "$SECONDMATE_REGISTRY_HOST" "$SECONDMATE_REGISTRY_HOME"
@@ -1377,6 +1401,7 @@ remote_secondmate_teardown() {
   rm -f -- "$STATE/$ID.turn-ended" "$STATE/$ID.progress" \
     "$(fm_wake_signal_seen_path "$STATE" "$STATE/$ID.turn-ended")" \
     "$STATE/.secondmate-relaunch-$ID" "$STATE/.secondmate-relaunch-bound-$ID"
+  teardown_forget_route_records "$ID"
   printf 'teardown %s complete (remote %s:%s)\n' "$ID" "$remote_host" "$remote_home"
   return "$rc"
 }
@@ -4977,6 +5002,7 @@ else
 fi
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0
+[ "$KIND" != secondmate ] || teardown_forget_route_records "$ID"
 # A review board the task armed for itself would otherwise keep polling, and be
 # re-armed by every session start, long after its owner is gone. It is retired
 # only once the record is gone, so a teardown that aborts earlier never leaves

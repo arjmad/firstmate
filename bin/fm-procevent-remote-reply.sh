@@ -11,6 +11,7 @@
 #   fm-procevent-remote-reply.sh source-id <secondmate-id>
 #   fm-procevent-remote-reply.sh relisten
 #   fm-procevent-remote-reply.sh retire <secondmate-id>
+#   fm-procevent-remote-reply.sh forget-retired <secondmate-id>
 #
 # `arm` registers one blocking, non-destructive delta source for the remote
 # home's state/parent-replies.status log. The process-event runner owns blocking,
@@ -179,7 +180,8 @@ write_cursor() { # <id> <offset> <hash>
 }
 
 # A missing file is zero and is not created. Ingest only reads this.
-# Retirement is the one writer, so a crash during ingest cannot change it.
+# Retirement is the one writer, so a crash during ingest cannot change it;
+# forget-retired drops it once the route itself is gone.
 read_retirement_count() { # <id>; sets RETIREMENT_COUNT
   local path count lines
   path=$(retirement_count_path "$1")
@@ -843,6 +845,16 @@ cmd_retire_finalize_locked() {
   rm -f -- "$(fm_pending_reply_remote_channel_watermark_path "$STATE" "$id")"
 }
 
+# Called by bin/fm-teardown.sh only after a route is fully retired (its task
+# record and registry line are gone), so no ingest can recreate either record
+# and the retirement count no longer has a status log to keep distinct.
+cmd_forget_retired() {
+  local id=${1:-}
+  validate_id "$id"
+  rm -f -- "$(mirrored_source_path "$id")" "$(retirement_count_path "$id")" \
+    || die "cannot remove the retired route's remote reply records"
+}
+
 cmd_retire() {
   local id=${1:-} force=${2:-} lock
   validate_id "$id"
@@ -884,6 +896,7 @@ case "${1:-}" in
   retire) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; cmd_retire "$@" ;;
   retire-quiesce-locked) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; require_parent_lifecycle_lock "$1"; cmd_retire_quiesce_locked "$@" ;;
   retire-finalize-locked) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; require_parent_lifecycle_lock "$1"; cmd_retire_finalize_locked "$@" ;;
+  forget-retired) shift; [ "$#" -eq 1 ] || usage; cmd_forget_retired "$@" ;;
   ''|-h|--help|help) usage ;;
   *) die "unknown command: $1" ;;
 esac

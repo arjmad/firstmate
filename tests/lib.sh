@@ -1278,6 +1278,36 @@ assert_absent() {
   [ ! -e "$1" ] || fail "$2"
 }
 
+# The per-route records a parent keeps for secondmate <id>, as their writers
+# name them (bin/fm-classify-lib.sh, bin/fm-fleet-ledger.sh,
+# bin/fm-secondmate-nudge-lib.sh, bin/fm-procevent-remote-reply.sh). A plain
+# id needs no folding.
+secondmate_route_record_paths() {  # <state> <id>
+  printf '%s\n' "$1/$2.status" "$1/.$2.fleet-ledger-offset" "$1/.$2.open-decisions-cursor" \
+    "$1/.hb-surfaced-$2" "$1/.seen-$2_status" "$1/.remote-inherit-$2.generation" \
+    "$1/.remote-reply-mirrored-$2" "$1/.secondmate-relaunch-$2" "$1/remote-replies/$2.retirements"
+}
+
+seed_secondmate_route_records() {  # <state> <id>
+  local p
+  mkdir -p "$1/remote-replies"
+  while IFS= read -r p; do
+    [ -e "$p" ] || printf '1\n' > "$p"
+  done <<EOF
+$(secondmate_route_record_paths "$1" "$2")
+EOF
+}
+
+assert_secondmate_route_records_absent() {  # <state> <id> <label>
+  local p left=
+  while IFS= read -r p; do
+    [ ! -e "$p" ] || left="$left ${p#"$1"/}"
+  done <<EOF
+$(secondmate_route_record_paths "$1" "$2")
+EOF
+  [ -z "$left" ] || fail "$3 left the retired route's records:$left"
+}
+
 # assert_present <path> <msg>: path must exist.
 assert_present() {
   [ -e "$1" ] || fail "$2"

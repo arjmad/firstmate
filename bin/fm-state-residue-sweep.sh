@@ -116,7 +116,8 @@
 # runs) leaves the lock itself - the <name>.lock link still pointing at its
 # owner, or a plain <name>.lock directory - which the owner pass above never
 # touches because the lock still names it. A lock directly under state/, other
-# than the watcher's state/.watch.lock, is reclaimed when it is older than
+# than the watcher's state/.watch.lock, the supervise daemon's
+# state/.supervise-daemon.lock and any .subsuper-* record, is reclaimed when it is older than
 # FM_STATE_RESIDUE_OWNER_MIN_AGE_SECONDS and fm_lock_holder_alive says its
 # recorded pid is gone or, through its pid-start record, now belongs to a
 # different process (pid reuse). The reclaim goes through the lock library's
@@ -707,7 +708,7 @@ sweep_dead_locks() {
   for path in "$STATE"/*.lock "$STATE"/.*.lock; do
     [ -L "$path" ] || [ -d "$path" ] || continue
     name=${path##*/}
-    [ "$name" != .watch.lock ] || continue
+    case "$name" in .watch.lock|.supervise-daemon.lock|.subsuper-*) continue ;; esac
     # Aged by the directory the lock resolves to (its owner, for a link).
     [ "$(fm_path_age "$path/.")" -gt "$FM_STATE_RESIDUE_OWNER_MIN_AGE_SECONDS" ] || continue
     pid=$(cat "$path/pid" 2>/dev/null || true)
@@ -725,6 +726,8 @@ sweep_dead_locks() {
       else
         REMOVED_DEAD_LOCKS=$((REMOVED_DEAD_LOCKS + 1))
       fi
+    else
+      warn "kept dead lock $name: the lock library would not reclaim it"
     fi
   done
 }

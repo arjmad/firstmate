@@ -596,9 +596,11 @@ assert_grep 'holds an endpoint record for seed-unknown' "$TMP_ROOT/seed-unknown-
 assert_grep '- seed-unknown ' "$TMP_ROOT/seed-parent/data/secondmates.md" \
   "a refused route-only retirement removed the route"
 rm -rf "$TMP_ROOT/seed-unknown-home/state/parent-route"
+seed_secondmate_route_records "$TMP_ROOT/seed-parent/state" seed-unknown
 out=$(seed_env "$ROOT/bin/fm-teardown.sh" seed-unknown 2>&1) \
   || fail "teardown refused a route whose remote home was never seeded"$'\n'"$out"
 assert_contains "$out" 'never-seeded: seed-unknown' "route-only retirement did not say the home was never seeded"
+assert_secondmate_route_records_absent "$TMP_ROOT/seed-parent/state" seed-unknown "route-only retirement"
 assert_no_grep '- seed-unknown ' "$TMP_ROOT/seed-parent/data/secondmates.md" \
   "route-only retirement left the never-seeded route registered"
 assert_present "$TMP_ROOT/seed-unknown-home/state" "route-only retirement removed the leftover remote directory"
@@ -1789,6 +1791,7 @@ FM_HOME="$PARENT" bash -c '
 printf 'confirmed:%s\n' "$retired_wake_corr" > "$PARENT/state/.backlog-handoff-ios.wake-pending"
 printf '%s\tattempt\n' "$(date +%s)" > "$PARENT/state/.secondmate-relaunch-ios"
 printf '%s\tdead\n' "$(date +%s)" > "$PARENT/state/.secondmate-relaunch-bound-ios"
+seed_secondmate_route_records "$PARENT/state" ios
 liveness_lock="$PARENT/state/.secondmate-liveness-ios.lock"
 # The link is published before the claim finishes; signal only after acquire.
 # shellcheck disable=SC2016 # Positional parameters expand in the child shell.
@@ -1903,6 +1906,7 @@ assert_absent "$PARENT/state/.secondmate-relaunch-ios" \
 assert_absent "$PARENT/state/.secondmate-relaunch-bound-ios" \
   "remote retirement left the relaunch park marker a same-id replacement would inherit"
 assert_absent "$liveness_lock" "remote retirement left its liveness lock behind"
+assert_secondmate_route_records_absent "$PARENT/state" ios "remote retirement"
 assert_no_grep '- ios ' "$PARENT/data/secondmates.md" "remote retirement did not remove the registry route"
 jq -e --arg workspace "$SIBLING_WORKSPACE" --arg pane "$SIBLING_PANE" '
   any(.workspaces[]; .workspace_id == $workspace and .label == "2ndmate-macos")
