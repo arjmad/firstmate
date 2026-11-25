@@ -348,7 +348,57 @@ test_argv_lines_are_not_header_fields() {
   pass "argv lines never read as a record's owner header"
 }
 
+# A retired board's Lavish session is ended too, so it stops counting as open;
+# a failed end or a missing lavish-axi only warns and never undoes the retire.
+lavish_board() {  # <home> <source-id> <artifact>
+  local rec="$1/state/procevent/$2.source"
+  printf 'adapter=lavish\nargc=3\nargv:\n%s\npoll\n%s\n' "$BLOCKER" "$3" > "$rec"
+  chmod 600 "$rec"
+  fm_touch_epoch "$OLD" "$rec"
+}
+
+test_retired_board_session_is_ended() {
+  local home bin out rc
+  home=$(new_home board-end)
+  bin=$(fm_fakebin "$TMP_ROOT/board-end-bin")
+  cat > "$bin/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${0%/*}/calls"
+case "${2-}" in *fails.html) echo "server said no" >&2; exit 1 ;; esac
+SH
+  chmod +x "$bin/lavish-axi"
+  lavish_board "$home" lavish-end-ok "$home/ok.html"
+  lavish_board "$home" lavish-end-bad "$home/fails.html"
+  board "$home" lavish-end-other "$OLD"
+  out=$(PATH="$bin:$PATH" pe "$home" retire-quiet-boards 2>&1) || fail "retire-quiet-boards failed: $out"
+  assert_contains "$out" "board-ended: lavish-end-ok" "the ended board's line"
+  assert_contains "$out" "warning: board-end-failed: lavish-end-bad reason=server said no" "a failed end's warning"
+  registered "$home" lavish-end-bad && fail "a failed end undid the retirement"
+  assert_contains "$out" "board-retired: lavish-end-other" "a non-poll listener still retires"
+  assert_grep "end $home/ok.html" "$bin/calls" "lavish-axi end got the board's artifact"
+  assert_not_contains "$(cat "$bin/calls")" "never-lavish-end-other" "a listener with no poll artifact was ended"
+  assert_grep "board-ended: lavish-end-ok" "$home/state/procevent/board-retirements.log" "the durable end log"
+  assert_grep "board-end-failed: lavish-end-bad" "$home/state/procevent/board-retirements.log" "the durable end-failure log"
+
+  home=$(new_home board-end-missing)
+  lavish_board "$home" lavish-end-none "$home/none.html"
+  # The PATH without any directory that holds a lavish-axi.
+  local dir nolavish=''
+  local IFS=:
+  for dir in $PATH; do
+    [ -e "$dir/lavish-axi" ] || nolavish=${nolavish:+$nolavish:}$dir
+  done
+  unset IFS
+  rc=0
+  out=$(PATH="$nolavish" pe "$home" retire-quiet-boards 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || fail "a missing lavish-axi failed the sweep ($rc): $out"
+  assert_contains "$out" "board-retired: lavish-end-none" "the board retires without lavish-axi"
+  assert_contains "$out" "warning: board-end-failed: lavish-end-none reason=lavish-axi-missing" "the missing lavish-axi warning"
+  pass "a retired board's Lavish session is ended, and a failed or impossible end only warns"
+}
+
 test_quiet_rule_and_kept_boards
+test_retired_board_session_is_ended
 test_adopted_board_retires_when_its_rows_close
 test_adopted_board_retires_when_its_rows_are_archived
 test_conditional_retire_matches_owned_boards

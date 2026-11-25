@@ -5701,6 +5701,7 @@ RTASK_BIN=$(fm_fakebin "$RTASK/bin")
 cat > "$RTASK_BIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash
 [ "${1-}" != --version ] || { printf '0.1.79\n'; exit 0; }
+[ "${1-}" != end ] || { printf '%s\n' "${2-}" >> "${0%/*}/ended"; exit 0; }
 art=${2-}
 while [ ! -e "$art.go" ]; do
   [ "$SECONDS" -lt "${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}" ] || exit 75
@@ -5758,6 +5759,10 @@ PATH="$RTASK_BIN:$PATH" pe "$RTASK/home" retire-task worker-a > "$RTASK/out" 2>&
 assert_contains "$(cat "$RTASK/out")" "retired: $rt_listen" "retire-task did not retire the listening board"
 assert_contains "$(cat "$RTASK/out")" "retired: $rt_empty" "retire-task did not retire the board whose round said nothing"
 assert_contains "$(cat "$RTASK/out")" "kept: $rt_unread 1" "retire-task did not name the unread round it kept"
+assert_contains "$(cat "$RTASK/out")" "board-ended: $rt_listen" "retire-task did not end the retired board's Lavish session"
+assert_contains "$(cat "$RTASK/out")" "board-ended: $rt_empty" "retire-task did not end the empty-round board's Lavish session"
+assert_not_contains "$(cat "$RTASK/out")" "board-ended: $rt_unread" "retire-task ended a board it kept"
+assert_grep "$RTASK/listen.html" "$RTASK_BIN/ended" "lavish-axi end was not given the retired board's artifact"
 assert_not_contains "$(cat "$RTASK/out")" "kept: $rt_listen " \
   "retire-task counted a dotted sibling's round against a shorter source id"
 assert_absent "$RTASK/home/state/procevent/$rt_listen.source" "the listening board is still registered"

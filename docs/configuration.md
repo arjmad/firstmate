@@ -3533,6 +3533,7 @@ A board firstmate owns or adopted is not listened to forever: `bin/fm-procevent.
 - A worker-owned board, an adopted board whose task has a record or status log again, and a board registered again during the sweep are never retired, and retiring a board never touches its captured rounds, which stay announced until handled.
 - Retirement is the ordinary `retire` path, which stops the listener and drops the board's decision binding, so a very late answer on a retired board no longer arrives; arming the board again restores it, and the bearings board build arms its own board again on its next full build.
 - Each retirement prints one `board-retired:` line naming the source, the reason, and the quiet days, and each retirement, or refused retirement of a board not registered again during the sweep, is appended with a UTC timestamp to `state/procevent/board-retirements.log`.
+- After a board's listener retires, here or through `retire-task` at teardown, its Lavish session is ended with `lavish-axi end <artifact>` (a plain reopen still works), so it stops counting as an open board; each end prints and logs `board-ended: <source>`, and a failed end or a missing lavish-axi only warns with `board-end-failed:` and never fails the retirement.
 - `reconcile` runs the sweep at most once per `FM_PROCEVENT_BOARD_SWEEP_SECONDS` (default 3600; 0 runs it every cycle) and counts each retirement as `stopped`; an unusable value of either setting skips the sweep.
 
 **Register deterministic condition and action watches**
