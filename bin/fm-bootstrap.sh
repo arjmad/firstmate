@@ -146,8 +146,8 @@
 #          and reports through its own BOOTSTRAP_INFO lines.
 #          state_archive is bin/fm-state-archive.sh, whose header owns which
 #          old state/ records it moves to data/archive/state/ and what keeps
-#          one in place; it runs on the local pass right after
-#          data_media_prune and reports through its own BOOTSTRAP_INFO line.
+#          one in place; it runs in the deferred half right after
+#          state_residue_sweep and reports through its own BOOTSTRAP_INFO line.
 #          Set FM_BOOTSTRAP_NETWORK to split this run into a blocking half and a
 #          deferred half, so a session start can print its digest from the
 #          blocking half alone and run the deferred half off the digest's
@@ -161,11 +161,11 @@
 #                 secondmate_handoff_resume, fleet_sync, and that housekeeping.
 #            only - the deferred half: those network steps, then the local
 #                 housekeeping whose cost grows with the home's history and that
-#                 the first turn does not need - state_residue_sweep, contribution
+#                 the first turn does not need - state_residue_sweep, state_archive, contribution
 #                 observation arming (fm-contributions.sh arm --if-owned), and
 #                 the PR health monitor's arming, which takes the same lock. No
 #                 tool detection, no version floors, no tangle check, no backlog
-#                 reconciliation, no data_media_prune or state_archive, no x_mode_setup: those ran
+#                 reconciliation, no data_media_prune, no x_mode_setup: those ran
 #                 on the blocking half.
 #          FM_BOOTSTRAP_DETECT_ONLY composes with it unchanged, so `only` plus
 #          detect-only is the read-only `gh auth status` probe on its own.
@@ -1591,9 +1591,6 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ] && local_phase; then
   # whole days. It exits nonzero only for an unusable configured value, which
   # it names.
   "$SCRIPT_DIR/fm-data-media-prune.sh" --if-due || true
-  # Handled captain notes and retired process-event rounds older than 30 days
-  # move to data/archive/state/; it moves, never deletes, and always exits 0.
-  "$SCRIPT_DIR/fm-state-archive.sh" || true
 fi
 
 # Local detection: presence, version floors, and configuration. Nothing here
@@ -1919,6 +1916,20 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
           || echo "BOOTSTRAP_INFO: state residue sweep did not finish within its 60s bound; the watcher's heartbeat sweep retries"
       } | sed 's/^warning: /BOOTSTRAP_INFO: warning: /'
       fm_timing_record phase residue-sweep "$__fm_timing_stamp"
+    fi
+    # Old handled captain notes and retired process-event rounds move to
+    # data/archive/state/ (moves, never deletes, always exits 0). It scans
+    # state/ history, so it rides this deferred half under the same bound.
+    if network_sweep_authorized 'state archive'; then
+      __fm_timing_stamp=$(fm_timing_now_ms)
+      {
+        archive_rc=0
+        (FM_EXEC_TIMED_OWNER_PID=$$ fm_exec_timed 60 1 "$SCRIPT_DIR/fm-state-archive.sh") 2>&1 </dev/null \
+          || archive_rc=$?
+        ! fm_timed_out "$archive_rc" \
+          || echo "BOOTSTRAP_INFO: state archive did not finish within its 60s bound; the next session start continues it"
+      } | sed 's/^warning: /BOOTSTRAP_INFO: warning: /'
+      fm_timing_record phase state-archive "$__fm_timing_stamp"
     fi
     # Adopt existing durable contribution links without making a network call.
     # Detection-only startup must never publish a check registration. The PR

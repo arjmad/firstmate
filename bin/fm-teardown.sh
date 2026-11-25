@@ -594,16 +594,18 @@ teardown_retire_status() {  # <state> <task-id> [<archive-relative-directory>]
 # teardown_forget_route_records <id>: after a secondmate route is fully
 # retired, drop the per-route records the status retirement does not own,
 # each through its writer: the fleet-ledger offset, the remote inheritance
-# generation, and the remote-reply mirrored-source record and retirement
+# generation, the pending reread nudge, and the remote-reply mirrored-source record and retirement
 # count. Best effort, because the route is already gone; a leftover is named.
 teardown_forget_route_records() {
   local id=$1 path
   FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
     "$SCRIPT_DIR/fm-fleet-ledger.sh" forget "$id" >/dev/null 2>&1 \
     || echo "warning: could not drop the fleet-ledger offset of retired route $id" >&2
-  if path=$(fm_remote_inherit_generation_path "$STATE" "$id"); then
+  for path in "$(fm_remote_inherit_generation_path "$STATE" "$id")" \
+    "$(fm_secondmate_nudge_marker_path "$STATE" "$id")"; do
+    [ -n "$path" ] || continue
     rm -f -- "$path" || echo "warning: could not remove $path" >&2
-  fi
+  done
   FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE \
     "$SCRIPT_DIR/fm-procevent-remote-reply.sh" forget-retired "$id" >/dev/null 2>&1 \
     || echo "warning: could not drop the remote-reply records of retired route $id" >&2

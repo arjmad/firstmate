@@ -822,10 +822,9 @@ extension_source_request_id() {  # <adapter> <source-id> <next-sequence> <regist
 }
 
 next_result_sequence() {  # <source-id>
-  local id=$1 inbox seq=1
+  local id=$1 inbox
   inbox=$(fm_procevent_inbox_dir "$STATE")
-  while [ -e "$inbox/$id.$seq.result" ]; do seq=$((seq + 1)); done
-  printf '%s\n' "$seq"
+  fm_procevent_next_sequence "$inbox" "$id"
 }
 
 register_extension_locks_release() {  # <source-id>

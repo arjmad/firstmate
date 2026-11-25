@@ -1285,14 +1285,23 @@ assert_absent() {
 secondmate_route_record_paths() {  # <state> <id>
   printf '%s\n' "$1/$2.status" "$1/.$2.fleet-ledger-offset" "$1/.$2.open-decisions-cursor" \
     "$1/.hb-surfaced-$2" "$1/.seen-$2_status" "$1/.remote-inherit-$2.generation" \
-    "$1/.remote-reply-mirrored-$2" "$1/.secondmate-relaunch-$2" "$1/remote-replies/$2.retirements"
+    "$1/.remote-reply-mirrored-$2" "$1/.secondmate-relaunch-$2" "$1/remote-replies/$2.retirements" \
+    "$1/.secondmate-nudge-pending/$2.pending"
 }
 
+# Each record is seeded in a form its reader accepts, so a retirement that
+# reads one before removing it still proceeds.
 seed_secondmate_route_records() {  # <state> <id>
   local p
-  mkdir -p "$1/remote-replies"
+  mkdir -p "$1/remote-replies" "$1/.secondmate-nudge-pending"
   while IFS= read -r p; do
-    [ -e "$p" ] || printf '1\n' > "$p"
+    [ ! -e "$p" ] || continue
+    case "$p" in
+      *.retirements) printf 'count=1\n' > "$p" ;;
+      *.status|*.pending) : > "$p" ;;
+      *.generation|*.fleet-ledger-offset) printf '1\n' > "$p" ;;
+      *) printf '%s\t%s\n' "$(date +%s)" attempt > "$p" ;;
+    esac
   done <<EOF
 $(secondmate_route_record_paths "$1" "$2")
 EOF

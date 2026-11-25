@@ -272,7 +272,10 @@ _fm_procevent_launch_floor_stamp_of() {
   rest=${3#"$1/$2."}
   [ "$rest" != "$3" ] || return 1
   rest=${rest%.last-launch}
-  case "$rest" in ''|*[!0-9-]*) return 1 ;; esac
+  # The writer's identity is digit runs joined by dashes (its colons, folded),
+  # so a bare number is a longer source id's legacy stamp, not an identity.
+  case "$rest" in *[!0-9-]*) return 1 ;; esac
+  case "$rest" in [0-9]*-*[0-9]) ;; *) return 1 ;; esac
 }
 
 # fm_procevent_launch_floor_remove_all_locked <state-root> <source-id>: drop
@@ -1266,8 +1269,7 @@ fm_procevent_capture() {
     inbox=$(fm_procevent_inbox_dir "$state")
     (umask 077; mkdir -p "$inbox") || return 1
   fi
-  seq=1
-  while [ -e "$inbox/$id.$seq.result" ]; do seq=$((seq + 1)); done
+  seq=$(fm_procevent_next_sequence "$inbox" "$id")
   dest="$inbox/$id.$seq.result"
   adapter_dest="$inbox/$id.$seq.adapter"
   if [ "$#" -eq 5 ]; then
@@ -1445,6 +1447,24 @@ fm_procevent_result_source_id() {
   local base=${1##*/}
   base=${base%.result}
   printf '%s\n' "${base%.*}"
+}
+
+# A source's sequence floor, <inbox>/<source>.seq-floor: the highest sequence
+# bin/fm-state-archive.sh moved out of the inbox. Every capture allocator
+# starts above it, so an archived round's sequence is never reused.
+fm_procevent_sequence_floor() {  # <inbox-dir> <source-id>
+  local floor=0
+  { IFS= read -r floor < "$1/$2.seq-floor"; } 2>/dev/null || floor=0
+  case "$floor" in ''|*[!0-9]*) floor=0 ;; esac
+  printf '%s\n' "$floor"
+}
+
+# The first sequence above the floor with no result yet.
+fm_procevent_next_sequence() {  # <inbox-dir> <source-id>
+  local seq
+  seq=$(( $(fm_procevent_sequence_floor "$1" "$2") + 1 ))
+  while [ -e "$1/$2.$seq.result" ] || [ -L "$1/$2.$seq.result" ]; do seq=$((seq + 1)); done
+  printf '%s\n' "$seq"
 }
 
 # The two steering-inbox pointers bin/fm-procevent.sh writes to a board's

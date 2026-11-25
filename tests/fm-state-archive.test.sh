@@ -108,7 +108,24 @@ test_retired_sources_move_whole_and_live_ones_stay() {
     [ -e "$pin/$f.result" ] && [ -e "$pin/$f.handled" ] || fail "round $f must stay: $out"
   done
   assert_contains "$out" "2 process-event round(s) of 1 retired source(s)" "summary line: $out"
-  pass "archive: a retired source's settled rounds move whole; live ones stay"
+  [ "$(cat "$pin/gone.seq-floor")" = 2 ] || fail "the archive should raise gone's sequence floor to 2"
+  [ "$(bash -c '. "$1/bin/fm-pr-lib.sh"; . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-procevent-lib.sh"; fm_procevent_next_sequence "$2" gone' _ "$ROOT" "$pin")" = 3 ] \
+    || fail "a later capture of gone must not reuse an archived sequence"
+  pass "archive: a retired source's settled rounds move whole above a sequence floor; live ones stay"
+}
+
+test_linked_notes_stay() {
+  local home
+  home=$(new_home linked)
+  printf 'request_id=handoff:x\n--\nnote\n' > "$home/state/inbox/handled/1790000000-req.note"
+  fm_touch_epoch "$OLD" "$home/state/inbox/handled/1790000000-req.note"
+  old_note "$home" 1790000001-replied
+  mkdir -p "$home/state/inbox/.replies"
+  printf 'reply\n' > "$home/state/inbox/.replies/1790000001-replied"
+  run_archive "$home" >/dev/null
+  [ -e "$home/state/inbox/handled/1790000000-req.note" ] || fail "a note with a request id must stay for its replay"
+  [ -e "$home/state/inbox/handled/1790000001-replied.note" ] || fail "a note with a reply must stay for its receipts"
+  pass "archive: notes a request id or a reply still reads stay"
 }
 
 test_existing_destination_is_never_overwritten() {
@@ -141,3 +158,4 @@ test_old_notes_move_and_live_ones_stay
 test_retired_sources_move_whole_and_live_ones_stay
 test_existing_destination_is_never_overwritten
 test_budget_defers_the_remainder
+test_linked_notes_stay

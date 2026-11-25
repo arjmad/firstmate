@@ -17,7 +17,9 @@
 # What moves. Two kinds of record, each older than
 # FM_STATE_ARCHIVE_MAX_AGE_DAYS by its mtime:
 #   - a captain note firstmate acknowledged, state/inbox/handled/<id>.note
-#     (bin/fm-inbox.sh), to data/archive/state/<YYYY-MM>/inbox/;
+#     (bin/fm-inbox.sh), to data/archive/state/<YYYY-MM>/inbox/, unless it
+#     carries a request_id (a retry must replay it, not recreate it) or has a
+#     reply under state/inbox/.replies/ (replies and receipts read the note);
 #   - the captured results of a retired process-event source,
 #     state/procevent-inbox/<source>.<seq>.* (bin/fm-procevent.sh), to
 #     data/archive/state/<YYYY-MM>/procevent-inbox/, aged by each round's
@@ -30,12 +32,13 @@
 # old enough, the source has no `<source>.source` registration
 # (state/procevent/), no queued wake names it, no watcher marker
 # (.seen-procevent-*) carries its key, no unhandled task steer under
-# state/*.inbox/ names one of its results, and its source lock is free. The
-# rounds of a source move together because each capture takes the first free
-# sequence from 1: moving only some would make a later capture reuse a
-# sequence the source already used. A source that registers again after its
-# rounds moved starts again at sequence 1, as after any full discard. Within a
-# round the .result moves first and the .handled marker last, so an
+# state/*.inbox/ names one of its results, and its source lock is free.
+# Under that lock it first raises the source's sequence floor,
+# state/procevent-inbox/<source>.seq-floor (fm_procevent_sequence_floor), to
+# its highest archived sequence; every capture allocator starts above the
+# floor, so a source that registers again never reuses an archived sequence,
+# its handled marker or a task pointer's text. The floor file itself stays.
+# Within a round the .result moves first and the .handled marker last, so an
 # interrupted move never leaves a result that reads as unhandled
 # (fm_procevent_pending), and the next run finishes the round.
 #
@@ -149,6 +152,8 @@ archive_notes() {
     id=${note##*/}
     id=${id%.note}
     queue_names "$id" && continue
+    [ ! -e "$STATE/inbox/.replies/$id" ] || continue
+    [ -z "$(sed -n '/^--$/q;/^request_id=./p' "$note" 2>/dev/null)" ] || continue
     if [ "$SPENT" -ge "$FM_STATE_ARCHIVE_BUDGET" ]; then
       DEFERRED=$((DEFERRED + 1))
       continue
@@ -209,6 +214,19 @@ source_archivable() {
   printf '%s\n' $seqs
 }
 
+# write_floor <inbox> <source> <seqs>: atomically raise <source>.seq-floor
+# (fm_procevent_sequence_floor) to the highest of <seqs>; never lowers it.
+write_floor() {
+  local floor seq tmp
+  floor=$(fm_procevent_sequence_floor "$1" "$2")
+  for seq in $3; do [ "$seq" -le "$floor" ] || floor=$seq; done
+  tmp=$(umask 077; mktemp "$1/.$2.seq-floor.XXXXXX") || return 1
+  if ! printf '%s\n' "$floor" > "$tmp" || ! mv -f -- "$tmp" "$1/$2.seq-floor"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+}
+
 archive_source() {  # <inbox> <source> <seqs>
   local inbox=$1 id=$2 seqs=$3 seq f dest lock rc=0
   lock=$(fm_procevent_source_lock_path "$id")
@@ -217,6 +235,13 @@ archive_source() {  # <inbox> <source> <seqs>
     fm_lock_try_acquire "$lock" || return 0
     # Re-check under the lock: a registration may have appeared meanwhile.
     if [ -e "$(fm_procevent_registry_dir "$STATE")/$id.source" ]; then
+      fm_lock_release "$lock" || true
+      return 0
+    fi
+    # Raise the sequence floor before anything moves, so neither a later
+    # capture nor an interrupted move can ever reuse an archived sequence.
+    if ! write_floor "$inbox" "$id" "$seqs"; then
+      warn "could not record the sequence floor of $id; moved nothing of it"
       fm_lock_release "$lock" || true
       return 0
     fi
