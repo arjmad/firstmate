@@ -58,7 +58,12 @@
 # start with /stow, so it records nothing. The limit: a bare /stow typed into
 # the helm's pane counts as the captain's, whoever typed it. The offer lets
 # `bin/fm-helm-refresh.sh request`, which owns what happens next, run after a
-# reset-safe receipt; with no request, the session compacts as before. This
+# reset-safe receipt; with no request, the session compacts as before.
+# While state/.helm-refresh-pending names this session, the same hook also
+# writes state/.helm-refresh-last-prompt, one line `<epoch> <kind> <sid>`
+# (tab-separated) for every submitted prompt: kind fleet for a from-firstmate
+# marker, an operational envelope or doorbell, or a <task-notification>, and
+# captain for anything else. bin/fm-helm-refresh.sh reads it. This
 # mode prints nothing and always exits 0, because UserPromptSubmit output
 # enters the context and a non-zero exit can block the prompt.
 #
@@ -151,6 +156,32 @@ done < "$CONFIG/stow-guard"
 if [ "$mode" = prompt ]; then
   [ "$restart" -eq 1 ] && [ "$sid" != session ] || exit 0
   prompt=$(jq -r '.prompt // empty | strings' <<<"$payload" 2>/dev/null) || exit 0
+  # While a helm refresh waits for this session, tell its owner who started
+  # each new turn: a fleet wake it may wait through, or the captain.
+  pending="$STATE/.helm-refresh-pending"
+  if [ -f "$pending" ] \
+    && [ "$(jq -r '.sid // empty' "$pending" 2>/dev/null)" = "$sid" ]; then
+    prompt_kind=captain
+    # shellcheck source=bin/fm-operational-input.sh
+    if . "$SCRIPT_DIR/fm-operational-input.sh" >/dev/null 2>&1; then
+      if fm_message_from_firstmate "$prompt" \
+        || fm_operational_input_classify "$prompt" _kind \
+        || fm_operational_doorbell_kind "$prompt" "$STATE" _kind; then
+        prompt_kind=fleet
+      fi
+    fi
+    case "${prompt#"${prompt%%[![:space:]]*}"}" in
+      '<task-notification>'*) prompt_kind=fleet ;;
+    esac
+    prompt_now=${FM_STOW_GUARD_NOW:-$(date +%s)}
+    record="$STATE/.helm-refresh-last-prompt"
+    if tmp=$(mktemp "$record.XXXXXX" 2>/dev/null); then
+      if ! printf '%s\t%s\t%s\n' "$prompt_now" "$prompt_kind" "$sid" > "$tmp" 2>/dev/null \
+        || ! mv -f "$tmp" "$record" 2>/dev/null; then
+        rm -f "$tmp"
+      fi
+    fi
+  fi
   prompt=${prompt#"${prompt%%[![:space:]]*}"}
   prompt=${prompt%"${prompt##*[![:space:]]}"}
   case "$prompt" in

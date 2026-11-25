@@ -258,6 +258,50 @@ test_fleet_sent_stow_records_no_offer() {
   pass "a marked, doorbell, rewake, or other non-/stow prompt records no offer"
 }
 
+test_pending_refresh_records_each_prompt_kind() {
+  local prompt kind mark=$'\xE2\x81\xA3' n=0 record want inbox
+  # Each entry: <expected kind>|<prompt>.
+  local -a cases=(
+    "fleet|[fm-from-firstmate]${mark}check the board"
+    "fleet|${mark}FIRSTMATE_OP: v1 watcher: one event"
+    $'fleet|\n<task-notification>\nStop hook feedback\n</task-notification>'
+    "captain|what is next"
+    "captain|/stow"
+    "captain|[fm-from-firstmate]/stow"
+  )
+  for entry in "${cases[@]}"; do
+    n=$((n + 1))
+    want=${entry%%|*}
+    prompt=${entry#*|}
+    prepare_prompt_case "pending-prompt-$n"
+    jq -nc --arg sid "$PROMPT_SID" '{token:"t", sid:$sid, at:1}' > "$CASE_STATE/.helm-refresh-pending"
+    invoke_prompt "$PRIMARY" "$(prompt_payload "$prompt")"
+    record=$(cat "$CASE_STATE/.helm-refresh-last-prompt" 2>/dev/null)
+    [ "$record" = "5000"$'\t'"$want"$'\t'"$PROMPT_SID" ] \
+      || fail "prompt $n ($(printf '%s' "$prompt" | head -c 40)) recorded '$record', want $want"
+  done
+
+  # A doorbell counts as fleet only when it names a real record in this home's inbox.
+  prepare_prompt_case pending-doorbell
+  jq -nc --arg sid "$PROMPT_SID" '{token:"t", sid:$sid, at:1}' > "$CASE_STATE/.helm-refresh-pending"
+  inbox="$CASE_STATE/operational-inbox"
+  mkdir -p "$inbox"
+  printf '%sFIRSTMATE_OP: v1 watcher: one event' "$mark" > "$inbox/1-a.msg"
+  invoke_prompt "$PRIMARY" "$(prompt_payload ": Firstmate operational input waiting: read '$inbox/1-a.msg' and handle its contents as Firstmate operational input.")"
+  grep -q $'\tfleet\t' "$CASE_STATE/.helm-refresh-last-prompt" \
+    || fail "a doorbell was not recorded as fleet: $(cat "$CASE_STATE/.helm-refresh-last-prompt" 2>/dev/null)"
+
+  # No record without a pending refresh, or with one for another session.
+  prepare_prompt_case no-pending
+  invoke_prompt "$PRIMARY" "$(prompt_payload "what is next")"
+  [ ! -e "$CASE_STATE/.helm-refresh-last-prompt" ] || fail "a prompt with no pending refresh wrote a record"
+  prepare_prompt_case pending-other
+  jq -nc '{token:"t", sid:"other", at:1}' > "$CASE_STATE/.helm-refresh-pending"
+  invoke_prompt "$PRIMARY" "$(prompt_payload "what is next")"
+  [ ! -e "$CASE_STATE/.helm-refresh-last-prompt" ] || fail "a refresh pending for another session got a record"
+  pass "while a refresh is pending for this session, each prompt is recorded as fleet or captain"
+}
+
 test_typed_stow_outside_the_primary_session_records_no_offer() {
   local rc=0 child="$TMP_ROOT/prompt-child" second="$TMP_ROOT/prompt-second"
 
@@ -698,6 +742,7 @@ fm_test_run \
   test_typed_stow_records_the_offer \
   test_typed_stow_quick_records_no_offer \
   test_fleet_sent_stow_records_no_offer \
+  test_pending_refresh_records_each_prompt_kind \
   test_typed_stow_outside_the_primary_session_records_no_offer \
   test_continuation_stop_blocks_once_per_crossing \
   test_age_interval_blocks_once_per_hour \

@@ -1497,6 +1497,8 @@ When the typed `/stow`'s receipt says the session is reset-safe, the primary ask
 Only "Start fresh now" runs `bin/fm-helm-refresh.sh request`, and once its turn ends the session is cleared with Claude Code's `/clear` and started again by one doorbell.
 The process, its session lock, its parked supervision, its Remote Control session, and its session name stay the same, while the context drops back to the fresh-start set.
 Without a reset-safe receipt, or when any refresh check fails, the session keeps its context and compacts as it does today.
+A fleet wake that starts a turn while the refresh waits, such as a doorbell, a from-firstmate message, or a watcher rewake, does not cancel it: the refresh waits for that turn to end too, within the same deadline.
+A prompt the captain sends, a draft in the composer, or a busy pane with no recorded fleet prompt still cancels it, and nothing is typed.
 The `bin/fm-helm-refresh.sh` header owns the request checks, the wait for an idle pane, and its log, `state/.helm-refresh.log`.
 
 ## Self-update source (config/self-update-source)

@@ -238,6 +238,65 @@ test_session_change_stops_the_owner() {
   pass "the owner stops without typing when the session changes, the request is removed, or the opt-in is withdrawn"
 }
 
+# A pane probe for FM_HELM_REFRESH_PANE_PROBE: each call takes the next line of
+# $PROBE_SEQ. idle passes; busy fails; busy-fleet and busy-captain fail and
+# first write the stow guard's prompt record for SID with that kind, as the
+# prompt hook does when that turn's prompt is submitted. An empty sequence reads busy.
+PROBE="$FAKEBIN/pane-probe"
+cat > "$PROBE" <<'PROBE_EOF'
+#!/usr/bin/env bash
+line=$(head -n 1 "$PROBE_SEQ" 2>/dev/null)
+tail -n +2 "$PROBE_SEQ" > "$PROBE_SEQ.tmp" 2>/dev/null && mv -f "$PROBE_SEQ.tmp" "$PROBE_SEQ"
+case "$line" in
+  idle) exit 0 ;;
+  busy-fleet|busy-captain)
+    printf '%s\t%s\t%s\n' "$(date +%s)" "${line#busy-}" "$PROBE_SID" > "$PROBE_STATE/.helm-refresh-last-prompt" ;;
+esac
+exit 1
+PROBE_EOF
+chmod +x "$PROBE"
+
+# run_probed <name> <sequence...>: a granted request whose pane reads the sequence.
+run_probed() {
+  local name=$1 rc=0
+  shift
+  prepare_case "$name"
+  printf '%s\n' "$@" > "$CASE_HOME/seq"
+  run_as_session request FM_HELM_REFRESH_WAIT=30 FM_HELM_REFRESH_POLL=1 FM_HELM_REFRESH_CLEAR_WAIT=1 \
+    FM_HELM_REFRESH_PANE_PROBE="$PROBE" PROBE_SEQ="$CASE_HOME/seq" PROBE_STATE="$CASE_STATE" PROBE_SID="$SID" || rc=$?
+  [ "$rc" -eq 0 ] || fail "$name: request must exit 0, got $rc: $(cat "$ERR")"
+  wait_until 40 owner_finished || fail "$name: the owner never finished: $(cat "$CASE_STATE/.helm-refresh.log")"
+}
+
+test_fleet_wake_after_proof_retries() {
+  run_probed fleet-wake idle busy-fleet busy busy idle idle idle
+  local log="$CASE_STATE/.helm-refresh.log"
+  grep -q $'\tretry\t.*a fleet wake started a turn' "$log" || fail "a fleet wake did not log a retry: $(cat "$log")"
+  grep -q $'\ttyped\t' "$log" || fail "the owner did not go on to /clear after the fleet turn ended: $(cat "$log")"
+  ! grep -q $'\tgave-up\t' "$log" || fail "a fleet wake made the owner give up: $(cat "$log")"
+  [ ! -e "$CASE_STATE/.helm-refresh-last-prompt" ] || fail "the owner left the prompt record behind"
+  pass "a fleet wake after the idle proof resets the proof, logs a retry, and the clear goes on"
+}
+
+test_captain_prompt_or_draft_gives_up() {
+  run_probed captain-prompt idle busy-captain busy idle idle
+  grep -q $'\tgave-up\t.*the captain sent a new prompt after the request; nothing was typed' "$CASE_STATE/.helm-refresh.log" \
+    || fail "a captain prompt did not stop the owner: $(cat "$CASE_STATE/.helm-refresh.log")"
+  ! grep -q $'\ttyped\t' "$CASE_STATE/.helm-refresh.log" || fail "a captain prompt was cleared"
+
+  run_probed draft idle busy idle idle
+  grep -q $'\tgave-up\t.*the pane left idle after the stow.s turn ended; nothing was typed' "$CASE_STATE/.helm-refresh.log" \
+    || fail "a busy pane with no prompt record did not give up: $(cat "$CASE_STATE/.helm-refresh.log")"
+  ! grep -q $'\tretry\t' "$CASE_STATE/.helm-refresh.log" || fail "a draft was retried"
+
+  # A fleet record older than the proof does not explain a new busy pane.
+  run_probed stale-fleet idle busy-fleet busy idle busy idle idle
+  grep -q $'\tretry\t' "$CASE_STATE/.helm-refresh.log" || fail "stale-fleet: the first fleet wake did not retry"
+  grep -q $'\tgave-up\t.*the pane left idle' "$CASE_STATE/.helm-refresh.log" \
+    || fail "a later busy pane with only an older fleet record did not give up: $(cat "$CASE_STATE/.helm-refresh.log")"
+  pass "a captain prompt, a draft, or a busy pane with no new fleet record still gives up without typing"
+}
+
 test_status_and_usage() {
   local rc=0
   prepare_case status
@@ -256,4 +315,6 @@ fm_test_run \
   test_granted_request_gives_up_without_typing \
   test_typed_stow_offer_is_accepted \
   test_session_change_stops_the_owner \
+  test_fleet_wake_after_proof_retries \
+  test_captain_prompt_or_draft_gives_up \
   test_status_and_usage

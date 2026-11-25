@@ -45,9 +45,14 @@
 # with state/.question-open absent at each. It gives up, with no change, when
 # the request is replaced or removed, the lock moves to another pid or process,
 # the session id in state/.lock-session changes, away mode starts, restart=1
-# leaves config/stow-guard, the pane leaves idle after a first proof (a new
-# turn, a draft or a question the receipt does not cover), or the wait runs
-# out. Then it types /clear through the backend's submit primitive, logs
+# leaves config/stow-guard, the captain submits a prompt after the request,
+# the pane leaves idle after a first proof for anything but a fleet wake (a
+# draft, a question, or a turn with no fleet prompt record), or the wait runs
+# out. A fleet wake after a proof is routine: when
+# state/.helm-refresh-last-prompt, which bin/fm-stow-guard.sh's prompt hook
+# writes while the request is pending, names a fleet prompt for this session
+# since that proof, run logs `retry`, drops its proofs and waits for that turn
+# to end too, inside the same deadline. Then it types /clear through the backend's submit primitive, logs
 # `typed`, waits up to FM_HELM_REFRESH_CLEAR_WAIT seconds (default 60) for
 # state/.lock-session to name a new session under the same lock pid, and then,
 # once the pane proves idle twice again (up to FM_HELM_REFRESH_KICK_WAIT, default 120),
@@ -214,7 +219,7 @@ TOKEN=$2
 # Every end of this owner is one log line, and it removes only its own records.
 finish() {  # <status> <event> <detail>
   log "$2" "token=$TOKEN $3"
-  [ "$(pending_field token)" != "$TOKEN" ] || rm -f "$PENDING"
+  [ "$(pending_field token)" != "$TOKEN" ] || rm -f "$PENDING" "$STATE/.helm-refresh-last-prompt"
   [ "$(cut -f1 "$OWNER" 2>/dev/null)" != "$$" ] || rm -f "$OWNER"
   exit "$1"
 }
@@ -265,23 +270,54 @@ stop_reason() {
 }
 
 pane_ready() {
-  [ ! -e "$STATE/.question-open" ] \
-    && fm_primary_pane_idle_proven "$TRANSPORT" "$TARGET" "$LOCK_PID"
+  [ ! -e "$STATE/.question-open" ] || return 1
+  # Tests swap the pane proof for a command; nothing in production sets it.
+  if [ -n "${FM_HELM_REFRESH_PANE_PROBE:-}" ]; then
+    "$FM_HELM_REFRESH_PANE_PROBE" "$TRANSPORT" "$TARGET" "$LOCK_PID"
+    return
+  fi
+  fm_primary_pane_idle_proven "$TRANSPORT" "$TARGET" "$LOCK_PID"
 }
 
+# The prompt record bin/fm-stow-guard.sh writes for this session at or after
+# <epoch>, as "<at> <kind>", or nothing.
+prompt_since() {  # <epoch>
+  local at kind sid
+  IFS=$'\t' read -r at kind sid < "$STATE/.helm-refresh-last-prompt" 2>/dev/null || return 0
+  case "$at" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$sid" = "$SID" ] && [ "$at" -ge "$1" ] || return 0
+  printf '%s %s\n' "$at" "$kind"
+}
+
+REQUESTED_AT=$(pending_field at)
+case "$REQUESTED_AT" in ''|*[!0-9]*) REQUESTED_AT=$(date +%s) ;; esac
 deadline=$((SECONDS + WAIT))
 proofs=0
+proof_at=0
 while :; do
   why=$(stop_reason)
   [ -z "$why" ] || finish 1 gave-up "$why; nothing was typed"
   [ "$SECONDS" -lt "$deadline" ] || finish 1 gave-up "the turn did not end within ${WAIT}s; nothing was typed"
+  case "$(prompt_since "$REQUESTED_AT")" in
+    *' captain') finish 1 gave-up "the captain sent a new prompt after the request; nothing was typed" ;;
+  esac
   if pane_ready; then
     proofs=$((proofs + 1))
+    [ "$proofs" -gt 1 ] || proof_at=$(date +%s)
     [ "$proofs" -lt 2 ] || break
   elif [ "$proofs" -gt 0 ]; then
-    # The stow's turn had ended. A busy pane, a draft or a question now means
-    # new work the reset-safe receipt does not cover.
-    finish 1 gave-up "the pane left idle after the stow's turn ended; nothing was typed"
+    # The stow's turn had ended. A fleet wake (a doorbell, a from-firstmate
+    # message or a rewake) that started a turn since then is routine, so
+    # wait for that turn to end too. Anything else, such as a draft or a
+    # question, is new work the reset-safe receipt does not cover.
+    case "$(prompt_since "$proof_at")" in
+      *' fleet')
+        log retry "token=$TOKEN sid=$SID a fleet wake started a turn after the idle proof; waiting for it to end"
+        proofs=0
+        ;;
+      *' captain') finish 1 gave-up "the captain sent a new prompt after the request; nothing was typed" ;;
+      *) finish 1 gave-up "the pane left idle after the stow's turn ended; nothing was typed" ;;
+    esac
   fi
   sleep "$POLL"
 done
@@ -290,6 +326,9 @@ done
 # after the second proof, or a deadline it crossed, still types nothing.
 why=$(stop_reason)
 [ -z "$why" ] || finish 1 gave-up "$why; nothing was typed"
+case "$(prompt_since "$REQUESTED_AT")" in
+  *' captain') finish 1 gave-up "the captain sent a new prompt after the request; nothing was typed" ;;
+esac
 pane_ready || finish 1 gave-up "the pane stopped reading idle and empty just before /clear; nothing was typed"
 [ "$SECONDS" -lt "$deadline" ] || finish 1 gave-up "the turn did not end within ${WAIT}s; nothing was typed"
 verdict=$(fm_backend_send_text_submit "$TRANSPORT" "$TARGET" "/clear" 2 0.2 0.2 2>/dev/null) || verdict=unconfirmed
