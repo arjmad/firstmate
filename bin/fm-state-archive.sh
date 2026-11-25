@@ -179,7 +179,8 @@ round_files() {
   for f in "$1/$2.$3".*; do
     [ -e "$f" ] || [ -L "$f" ] || continue
     rest=${f#"$1/$2.$3."}
-    case "$rest" in *.*|handled) continue ;; esac
+    # seq-floor here is source `<source>.<seq>`'s own floor, not a round file.
+    case "$rest" in *.*|handled|seq-floor) continue ;; esac
     printf '%s\n' "$f"
   done
   [ -e "$1/$2.$3.handled" ] && printf '%s\n' "$1/$2.$3.handled"

@@ -274,7 +274,7 @@ _fm_procevent_launch_floor_stamp_of() {
   rest=${rest%.last-launch}
   # The writer's identity is digit runs joined by dashes (its colons, folded),
   # so a bare number is a longer source id's legacy stamp, not an identity.
-  case "$rest" in *[!0-9-]*) return 1 ;; esac
+  case "$rest" in *[!0-9-]*|*--*) return 1 ;; esac
   case "$rest" in [0-9]*-*[0-9]) ;; *) return 1 ;; esac
 }
 

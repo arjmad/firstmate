@@ -86,6 +86,7 @@ test_retired_sources_move_whole_and_live_ones_stay() {
   pin="$home/state/procevent-inbox"
   round "$home" gone 1 old; round "$home" gone 2 old
   round "$home" gone.x 1 fresh
+  printf '7\n' > "$pin/gone.1.seq-floor"
   round "$home" reg 1 old; : > "$home/state/procevent/reg.source"
   round "$home" mixed 1 old; round "$home" mixed 2 fresh
   round "$home" unread 1 old; round "$home" unread 2 old unhandled
@@ -104,6 +105,7 @@ test_retired_sources_move_whole_and_live_ones_stay() {
     [ ! -e "$pin/$f" ] || fail "moved round file $f is still in state/"
   done
   [ -e "$pin/gone.x.1.result" ] || fail "a longer source id must not move with gone"
+  [ "$(cat "$pin/gone.1.seq-floor" 2>/dev/null)" = 7 ] || fail "source gone.1's sequence floor must not move with gone's round 1"
   for f in reg.1 mixed.1 unread.1 queued.1 marked.1 pointed.1; do
     [ -e "$pin/$f.result" ] && [ -e "$pin/$f.handled" ] || fail "round $f must stay: $out"
   done
