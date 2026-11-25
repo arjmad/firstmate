@@ -698,4 +698,17 @@ assert_grep 'status: fired' "$RESULT" \
 assert_grep 'v2 ran against' "$RESULT" "the fired action ran the rebound (v2) bytes, not a rejection from a torn read"
 pass "the fire-time reload never observes rebind_one's spec/trust publish mid-rename"
 
+# wait: the foreground in-turn wait needs no home and no registration.
+WAIT_FLAG="$TMP_ROOT/wait-flag"
+( sleep 0.5; : > "$WAIT_FLAG" ) &
+"$ROOT/bin/fm-procevent-when.sh" wait --interval 0.1 --timeout 20 -- test -e "$WAIT_FLAG"
+[ "$?" -eq 0 ] || fail "wait must return 0 once its condition holds"
+"$ROOT/bin/fm-procevent-when.sh" wait --interval 0.1 --timeout 1 -- false 2>/dev/null
+[ "$?" -eq 124 ] || fail "wait must return 124 when its timeout passes"
+"$ROOT/bin/fm-procevent-when.sh" wait --interval 0.1 -- sh -c 'exit 3' 2>/dev/null
+[ "$?" -eq 2 ] || fail "wait must return 2 on a condition error"
+[ ! -e "$TMP_ROOT/state/when" ] || fail "wait must not register anything"
+pass "wait blocks in the foreground until its condition holds, times out with 124, and errors with 2"
+
 printf 'all fm-procevent-when tests passed\n'
+

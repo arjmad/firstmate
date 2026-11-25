@@ -170,6 +170,17 @@ test_branch_prompt_routes_completed_scouts_through_guarded_cleanup() {
   pass "emitted branch prompt routes completed scouts through existing policies and leased cleanup, preserving unfinished work"
 }
 
+test_branch_prompt_names_the_one_wait() {
+  local prompt
+  prompt=$(bash "$ROOT/bin/fm-branch-prompt.sh") || fail "branch prompt generator failed"
+  assert_contains "$prompt" \
+    "To wait in a turn, run ONE foreground \`bin/fm-procevent-when.sh wait -- <condition argv>\`" \
+    "branch prompt does not name fm-procevent-when.sh wait as the one wait"
+  assert_contains "$prompt" "never \`sleep\` then check, a sleep loop, Monitor, or CronCreate." \
+    "branch prompt does not forbid sleep loops and Monitor"
+  pass "branch prompt names fm-procevent-when.sh wait as its one in-turn wait"
+}
+
 # --- append-only outcome store ------------------------------------------------
 
 test_outcome_store_is_append_only_with_cursor_reads() {
@@ -1701,6 +1712,7 @@ WRAPPER
 test_branch_prompt_is_byte_stable_and_above_cache_floor
 test_branch_prompt_home_include_is_appended_last
 test_branch_prompt_routes_completed_scouts_through_guarded_cleanup
+test_branch_prompt_names_the_one_wait
 test_outcome_store_is_append_only_with_cursor_reads
 test_outcome_index_rebuild_skips_retired_tasks
 test_outcome_append_keeps_a_bounded_display_tail

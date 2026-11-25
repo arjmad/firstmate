@@ -629,15 +629,16 @@ IFS= read -r -d '' WAIT_SECTION <<'EOF' || true
 # Waiting
 Every turn you take resends your whole context, so a wait must cost no turns.
 After you append `needs-decision:` or `blocked:`, end your turn at once: do not check the inbox, the status file, or anything else, because the answer arrives as a terminal message that starts your next turn.
-Wait on anything external - a pipeline gate, PR checks - with ONE blocking shell command that returns when the state changes: `no-mistakes axi run` or `respond` with `--wait`, `gh-axi pr checks <pr> --watch --fail-fast`, or `until <condition>; do sleep 30; done` for anything else.
+Wait on anything external - a pipeline gate, PR checks - with ONE blocking shell command that returns when the state changes: `no-mistakes axi run` or `respond` with `--wait`, `gh-axi pr checks <pr> --watch --fail-fast`, or `@FM_ROOT@/bin/fm-procevent-when.sh wait -- <condition argv>` (exit 0 when it holds, 124 on timeout: reissue it) for anything else.
 Never spend turns on `sleep` followed by a status check, and never background a command in order to poll it.
-In Claude Code that `until` loop in a single Bash call is the sanctioned foreground wait: when the harness refuses a sleep-then-check command and points you at backgrounding instead, reissue the wait as the loop rather than accepting the background.
+In Claude Code that `wait` in a single Bash call is the sanctioned foreground wait: when the harness refuses a sleep-then-check command and points you at backgrounding instead, reissue it as that `wait` rather than accepting the background.
 Bound that command by what your harness lets one command run: in Pi pass the bash tool a `timeout` of at most 2700 seconds, because Pi sets none by default; in Claude Code pass the Bash tool its maximum `timeout` of 600000 ms, because its default is 2 minutes; in Codex keep waiting on a still-running command with empty `write_stdin` polls of up to 300000 ms; elsewhere pass your shell tool its largest timeout and assume at most 10 minutes.
 Give any `--wait` a duration a little under that bound.
 When the bound passes with nothing changed, run the same blocking command again, with no status check in between.
 The one exception is `respond`: it sent its answer before it began waiting, so reattach with `no-mistakes axi run --wait` instead, and never send the same `respond` again, because it would answer whichever gate parks next without you reading it.
 A wait your shell can watch this way needs no `paused:` line, except your own pipeline run, a long foreground command, or your own validation round, which you declare once just before its blocking hold: append `paused:` once just before its first blocking command, then stay in the command, and never append it again as you reissue that command.
 EOF
+WAIT_SECTION=${WAIT_SECTION//@FM_ROOT@/$FM_ROOT}
 WAIT_SECTION=${WAIT_SECTION%$'\n'}
 WAIT_BLOCK=
 if [ -e "$CONFIG/wait-no-turns" ]; then

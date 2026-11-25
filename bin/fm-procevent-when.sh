@@ -14,6 +14,7 @@
 #   fm-procevent-when.sh rebind-all
 #   fm-procevent-when.sh process-absent <pattern>
 #   fm-procevent-when.sh run <source-id>
+#   fm-procevent-when.sh wait [--interval <secs>] [--stable <n>] [--timeout <secs>] -- <argv>...
 #
 # arm        Bind a (condition, action) pair as process-event source
 #            "when-<name>". The spec is written privately under state/when/ and
@@ -75,6 +76,14 @@
 #            wrappers, whose argv carries the pattern on platforms whose pgrep
 #            does not hide ancestors) matches `pgrep -f <pattern>`, 1 while
 #            one still does, and 2 when pgrep itself fails.
+# wait       The one in-turn wait for a worker, the helm, or the away
+#            supervisor: poll the condition argv in the FOREGROUND (no shell,
+#            no registration, no state) until it holds for --stable (default 1)
+#            consecutive polls, every --interval seconds (default 30), for at
+#            most --timeout seconds (default 540, under Claude Code's 600000 ms
+#            Bash cap). Exit 0 once it holds, 124 on timeout, 2 on a condition
+#            error (exit other than 0 or 1); reissue the same command after 124.
+#            Use it instead of sleep-then-check, a background job, or Monitor.
 # run        The blocking child the generic runner executes; never run it in a
 #            conversational turn. It polls the condition on the registered
 #            cadence, requires the stable count of consecutive trues, claims a
@@ -382,6 +391,32 @@ spec_load() {
 
 # --- run ---------------------------------------------------------------------
 
+cmd_wait() {
+  local interval=30 stable=1 timeout=540 hits=0 start rc
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --interval) positive_number "${2-}" || die "--interval needs a positive number"; interval=$2; shift 2 ;;
+      --stable)   positive_int "${2-}" || die "--stable needs a positive integer"; stable=$2; shift 2 ;;
+      --timeout)  positive_int "${2-}" || die "--timeout needs a positive integer"; timeout=$2; shift 2 ;;
+      --) shift; break ;;
+      *) die "wait: unknown option $1 (put the condition after --)" ;;
+    esac
+  done
+  [ "$#" -gt 0 ] || die "wait: missing condition argv after --"
+  start=$(date +%s)
+  while :; do
+    "$@" >/dev/null 2>&1
+    rc=$?
+    case "$rc" in
+      0) hits=$((hits + 1)); [ "$hits" -ge "$stable" ] && return 0 ;;
+      1) hits=0 ;;
+      *) printf 'wait: condition exited %s\n' "$rc" >&2; return 2 ;;
+    esac
+    [ $(( $(date +%s) - start )) -ge "$timeout" ] && { printf 'wait: timed out after %ss; reissue to keep waiting\n' "$timeout" >&2; return 124; }
+    sleep "$interval"
+  done
+}
+
 # bounded_run <timeout-secs> <output-file> <argv>...
 # Run argv directly with combined output captured, bounded by the timeout.
 # Returns the command's exit status, or 124 on timeout.
@@ -687,6 +722,7 @@ case "${1-}" in
   source-id) shift; cmd_source_id "$@" ;;
   retire)    shift; cmd_retire "$@" ;;
   rebind-all) shift; cmd_rebind_all "$@" ;;
+  wait)      shift; cmd_wait "$@"; exit $? ;;
   process-absent) shift; [ "$#" -eq 1 ] || usage; cmd_process_absent "$@" ;;
   ''|-h|--help|help) usage ;;
   *) die "unknown command: $1" ;;
