@@ -18,7 +18,9 @@
 # when that secondmate does not answer, is not running, or has no free slot
 # under its memory ceiling. --project <name> judges that rule for one project;
 # bin/fm-spawn.sh runs it before a fresh ship or scout and refuses a local
-# spawn the rule sends elsewhere.
+# spawn the rule sends elsewhere. A brief whose # Setup carries a
+# `Placement: live - <reason>` line (bin/fm-brief.sh --live) is placed in this
+# home with no probe and no --placement-override.
 #
 # Usage: fm-intake-spill.sh [--project <name>]
 #

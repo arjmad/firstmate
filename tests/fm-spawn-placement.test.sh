@@ -181,6 +181,58 @@ test_override_skips_the_probe_and_is_recorded() {
   pass "--placement-override records the captain's redirect and skips the probe"
 }
 
+add_live_line() {  # <case-dir> <id> <reason>
+  printf '\n# Setup\nPlacement: live - %s\n' "$3" >> "$1/home/data/$2/brief.md"
+}
+
+test_live_brief_line_skips_the_probe_and_is_recorded() {
+  local case_dir out rc=0
+  case_dir=$(make_case live task-a task-b)
+  add_live_line "$case_dir" task-a "Seller Central Chrome"
+  out=$(spawn_ship "$case_dir" task-a) || rc=$?
+  expect_code 0 "$rc" "a live-placed spawn was refused: $out"
+  assert_contains "$out" "spawned task-a" "a live-placed spawn did not launch"
+  assert_contains "$out" "placement: task task-a runs here (live): Seller Central Chrome" "the live placement is announced"
+  [ ! -s "$case_dir/ssh.log" ] || fail "a live-placed spawn still probed the remote host: $(cat "$case_dir/ssh.log")"
+  assert_grep "placement=live" "$case_dir/home/state/task-a.meta" "the task record marks the live placement"
+  assert_grep "placement_reason=Seller Central Chrome" "$case_dir/home/state/task-a.meta" "the task record keeps the live reason"
+  assert_no_regex "^placement_override=" "$case_dir/home/state/task-a.meta" "a live placement records no override"
+  rc=0
+  add_live_line "$case_dir" task-b "mail state"
+  out=$(spawn_ship "$case_dir" task-b --placement-override "captain asked") || rc=$?
+  expect_code 1 "$rc" "a live line with --placement-override was not refused: $out"
+  assert_contains "$out" "drop --placement-override" "the refusal names the conflict"
+  pass "a brief's live line places the task here with no probe, records placement=live, and refuses an override beside it"
+}
+
+test_live_line_outside_setup_does_not_place() {
+  local case_dir out rc=0
+  case_dir=$(make_case live-outside task-a)
+  printf '\nPlacement: live - not in setup\n' >> "$case_dir/home/data/task-a/brief.md"
+  out=$(spawn_ship "$case_dir" task-a) || rc=$?
+  expect_code 1 "$rc" "a live line outside # Setup still placed the task: $out"
+  assert_contains "$out" "sends project work to secondmate faf first" "the rule still applies"
+  pass "a live line outside # Setup does not place the task"
+}
+
+test_fenced_or_duplicate_live_lines() {
+  local case_dir out rc=0
+  case_dir=$(make_case live-fenced task-a task-b)
+  # shellcheck disable=SC2016  # literal Markdown fence
+  printf '\n# Setup\n```\n~~~\n# Setup\nPlacement: live - only an example\n```\n' >> "$case_dir/home/data/task-a/brief.md"
+  out=$(spawn_ship "$case_dir" task-a) || rc=$?
+  expect_code 1 "$rc" "a fenced example live line placed the task: $out"
+  assert_contains "$out" "sends project work to secondmate faf first" "the rule still applies past a fenced example"
+  rc=0
+  add_live_line "$case_dir" task-b "mail state"
+  printf 'Placement: live - \n' >> "$case_dir/home/data/task-b/brief.md"
+  out=$(spawn_ship "$case_dir" task-b) || rc=$?
+  expect_code 1 "$rc" "two live lines were accepted: $out"
+  assert_contains "$out" "more than one Placement: live line" "the refusal names the duplicate"
+  assert_nothing_created "$case_dir" task-b
+  pass "a fenced example live line is ignored and two live lines are refused"
+}
+
 test_project_outside_the_rule_is_untouched() {
   local case_dir out rc=0 wt
   case_dir=$(make_case outside task-a)
@@ -221,6 +273,9 @@ test_free_secondmate_refuses_the_local_spawn
 test_spill_only_declaration_never_gates
 test_fallback_launches_here_and_records_the_reason
 test_override_skips_the_probe_and_is_recorded
+test_live_brief_line_skips_the_probe_and_is_recorded
+test_live_line_outside_setup_does_not_place
+test_fenced_or_duplicate_live_lines
 test_project_outside_the_rule_is_untouched
 test_unreadable_declaration_refuses
 
