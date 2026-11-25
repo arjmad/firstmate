@@ -2934,7 +2934,7 @@ if [ -n "$SPAWN_PLACEMENT_PROJECT" ]; then
     fi
     ;;
   *)
-    echo "error: spawn refused: the placement rule in config/intake-spill sends $SPAWN_PLACEMENT_PROJECT work to secondmate $SPAWN_PLACEMENT_FIRST first, and ${SPAWN_PLACEMENT_REASON:-it has a free slot}; route task $ID there, scaffold its brief with bin/fm-brief.sh --live <reason> for a live business op, or pass --placement-override <reason>, a reason this task must run here (a captain redirect or a Heimdall-only need)" >&2
+    echo "error: spawn refused: the placement rule in config/intake-spill sends $SPAWN_PLACEMENT_PROJECT work to secondmate $SPAWN_PLACEMENT_FIRST first, and ${SPAWN_PLACEMENT_REASON:-it has a free slot}; route task $ID there, add a 'Placement: live - <reason>' line under its brief's # Setup for a live business op (bin/fm-brief.sh --live writes one), or pass --placement-override <reason>, a reason this task must run here (a captain redirect or a Heimdall-only need)" >&2
     exit 1
     ;;
   esac
