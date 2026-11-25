@@ -1854,6 +1854,40 @@ test_landed_firstmate_head_wakes_once_for_self_update() {
   pass "a landed firstmate head wakes once for self-update and clears once the code root is current"
 }
 
+# An unusable config/self-update-source wakes the watcher once per distinct
+# reason; the same reason stays quiet, and a new one wakes again.
+test_unusable_self_update_source_wakes_once_per_reason() {
+  local dir state out pid
+  dir=$(make_case self-update-source); dir=$(cd "$dir" && pwd -P); state="$dir/state"; out="$dir/watch.out"
+  mkdir -p "$dir/config"
+  printf 'nosuchremote carry\n' > "$dir/config/self-update-source"
+  self_update_due_watch "$dir" "$out"
+  pid=$!
+  wait_for_exit "$pid" 100 || { reap "$pid"; fail "an unusable self-update source did not wake the watcher: $(cat "$out")"; }
+  grep -F "check: firstmate self-update source unusable: remote 'nosuchremote' does not exist" "$out" >/dev/null \
+    || fail "the wake did not name the unusable source: $(cat "$out")"
+  grep -F "fix it or remove it" "$out" >/dev/null && fail "the wake kept the refusal's advice tail: $(cat "$out")"
+  FM_HOME="$dir" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-wake-drain.sh" >/dev/null 2>"$dir/drain.err" \
+    || fail "could not drain the unusable-source wake: $(cat "$dir/drain.err")"
+  ack_drain_err "$state" "$dir/drain.err" >/dev/null 2>&1 || fail "could not acknowledge the unusable-source wake"
+
+  : > "$out"
+  self_update_due_watch "$dir" "$out"
+  pid=$!
+  touch -t 200001010000 "$state/.last-self-update-due"
+  wait_poll_cycle "$state" "$pid" || fail "the same unusable source woke the watcher again: $(cat "$out")"
+  touch -t 200001010000 "$state/.last-self-update-due"
+  wait_poll_cycle "$state" "$pid" || fail "the same unusable source woke the watcher again: $(cat "$out")"
+
+  printf 'fork\n' > "$dir/config/self-update-source"
+  touch -t 200001010000 "$state/.last-self-update-due"
+  wait_for_exit "$pid" 100 || { reap "$pid"; fail "a new unusable-source reason did not wake the watcher: $(cat "$out")"; }
+  grep -F 'check: firstmate self-update source unusable: expected exactly one line' "$out" >/dev/null \
+    || fail "the second wake did not name the new reason: $(cat "$out")"
+  [ ! -e "$state/.self-update-due.err" ] || fail "the due check left its stderr capture"
+  pass "an unusable self-update source wakes once per distinct reason"
+}
+
 # A handoff row moved to a secondmate is answered by the watcher's own poll once
 # the mate's merged line reaches this home's copy of its parent channel.
 test_secondmate_merged_line_answers_a_moved_handoff() {
@@ -2689,6 +2723,7 @@ fm_test_run \
   test_unacknowledged_inbox_note_rewakes_the_watcher \
   test_acknowledged_inbox_note_never_rewakes_the_watcher \
   test_landed_firstmate_head_wakes_once_for_self_update \
+  test_unusable_self_update_source_wakes_once_per_reason \
   test_secondmate_merged_line_answers_a_moved_handoff \
   test_overdue_scan_lines_surface_as_one_check_wake \
   test_leftover_sitting_state_wakes_once_to_surface_held_calls \

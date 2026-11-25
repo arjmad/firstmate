@@ -102,8 +102,10 @@
 # declares a paused wait instead. A direct-PR worker whose repository's own
 # guidance opens PRs as drafts until reviewed reviews the draft and marks it
 # ready before its checks (fork patch, docs/fork-decisions 2026-11-21
-# draft-until-ready); the repository keeps a passing required check off a
-# draft head, so the checks wait below needs no draft case. bin/fm-pr-check.sh refuses to arm merge
+# draft-until-ready); a draft fails its `Ready for review` check and skips the
+# full suite, and the worker marks it ready before the checks wait, so the wait
+# sees the ready run and needs no draft case (no required check is involved;
+# docs/fork-decisions/2026-11-24-ci-draft-gate.md). bin/fm-pr-check.sh refuses to arm merge
 # monitoring on a draft through the same reading bin/fm-pr-merge.sh uses.
 # On those two modes outside Gerrit and Forgejo, fm_dod_code_review_block then
 # has the worker give a code-changing GitHub PR its code review before the done

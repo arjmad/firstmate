@@ -1503,7 +1503,8 @@ The `bin/fm-helm-refresh.sh` header owns the request checks, the wait for an idl
 
 ## Self-update source (config/self-update-source)
 
-The optional local, gitignored `config/self-update-source` changes where `/updatefirstmate` takes the running firstmate from, and nothing else.
+The optional local, gitignored `config/self-update-source` changes where `/updatefirstmate` takes the running firstmate from, and which head the watcher's 15-minute due check (`bin/fm-update.sh --due`) compares the code root against; it changes nothing else.
+When the file is unusable, the due check exits 3 and the watcher raises one `check: firstmate self-update source unusable: <reason>` wake per distinct reason.
 It suits a home that runs its own fixes before upstream merges them, by following a branch that holds upstream's default branch plus those fixes, for example a `carry` branch on a fork.
 It holds one line, `<remote> <branch>`, for example `fork carry`, naming a remote that already exists in this repository and a branch on that remote.
 When the file is absent, `/updatefirstmate` fast-forwards from `origin` exactly as before.
@@ -2276,6 +2277,7 @@ Firstmate cannot see which part of a worker's life uses the resource, so the num
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
 `config/crew-dispatch.json` is an optional local, gitignored file containing natural-language rules that firstmate reads before dispatching a crewmate or scout.
+Where the fleet's `fleet-mode` command runs, it writes this file from `config/crew-dispatch.normal.json` or `config/crew-dispatch.heavy.json`: edit the mode file, then run `~/nix/bin/fleet-mode <mode>`; a hand edit of `crew-dispatch.json` is set aside as `crew-dispatch.json.fleet-mode-<epoch>` at the next switch (`~/nix/docs/fleet-mode.md`).
 Firstmate chooses the best matching rule with judgment; shell scripts do not match the natural-language rules.
 Firstmate resolves the rule's profile object or array under `AGENTS.md` section 4 and `quota-array-dispatch`, then passes only concrete `--harness`, `--model`, `--effort`, and `--advisor` flags to `fm-spawn.sh`.
 

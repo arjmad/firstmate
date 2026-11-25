@@ -203,6 +203,14 @@
 #                          running a check or removing poll artifacts
 #   heartbeat              fleet-scan backstop found an unsurfaced captain-relevant
 #                          status, unless afk is active
+#   check: firstmate self-update due: ... | check: firstmate self-update held: ...
+#                          the 15-minute due check (fm-update.sh --due --queue)
+#                          found the code root behind a landed firstmate head;
+#                          run /updatefirstmate (ship-landing owns the handling)
+#   check: firstmate self-update source unusable: <reason>
+#                          config/self-update-source cannot be read or names a
+#                          bad remote or branch, so the due check cannot run;
+#                          fires once per distinct reason
 #   check: queued work: <count> <kind>[, ...] | check: rearm-resurface
 #                          recovery: main's queued rows (often one another
 #                          process appended, or one queued while no
@@ -3995,18 +4003,39 @@ fleet_sync_tick() {
 # code root is behind a landed firstmate head. It wakes when that check queued
 # a row, and once for a due head a teardown queued first, which
 # $STATE/.self-update-due-woke records; a held head (a task still works on
-# firstmate) waits silently until --queue queues it as stale.
+# firstmate) waits silently until --queue queues it as stale. An unusable
+# config/self-update-source (exit 3) wakes once per distinct reason, which
+# $STATE/.self-update-source-woke records; a working check clears it.
 SELF_UPDATE_DUE_INTERVAL=${FM_SELF_UPDATE_DUE_INTERVAL:-900}
 case "$SELF_UPDATE_DUE_INTERVAL" in off) SELF_UPDATE_DUE_INTERVAL=0 ;; ''|*[!0-9]*) SELF_UPDATE_DUE_INTERVAL=900 ;; esac
 self_update_due_tick() {
-  local out verdict target text woke="$STATE/.self-update-due-woke"
+  local out rc err reason verdict target text woke="$STATE/.self-update-due-woke"
+  local src_woke="$STATE/.self-update-source-woke"
   [ "$SELF_UPDATE_DUE_INTERVAL" -gt 0 ] || return 0
   [ "$(age_of "$STATE/.last-self-update-due")" -ge "$SELF_UPDATE_DUE_INTERVAL" ] || return 0
   touch "$STATE/.last-self-update-due"
-  out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-update.sh" --due --queue 2>/dev/null) || {
+  err="$STATE/.self-update-due.err"
+  rc=0
+  out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-update.sh" --due --queue 2>"$err") || rc=$?
+  if [ "$rc" -eq 3 ]; then
+    # Exit 3: config/self-update-source is unusable. Wake once per distinct
+    # reason; $src_woke holds the last one raised.
+    reason=$(head -n 1 "$err" 2>/dev/null)
+    rm -f "$err"
+    reason=${reason#*self-update-source: }
+    reason=${reason%; fix it or remove it*}
+    [ -n "$reason" ] || reason="unreadable"
+    [ "$(cat "$src_woke" 2>/dev/null)" != "$reason" ] || return 0
+    printf '%s\n' "$reason" > "$src_woke"
+    wake "check: firstmate self-update source unusable: $reason"
+    return 0
+  fi
+  rm -f "$err"
+  [ "$rc" -eq 0 ] || {
     triage_log "self-update due check failed; the next check retries in ${SELF_UPDATE_DUE_INTERVAL}s"
     return 0
   }
+  rm -f "$src_woke"
   [ -n "$out" ] || { rm -f "$woke"; return 0; }
   read -r verdict target text <<EOF
 $out
