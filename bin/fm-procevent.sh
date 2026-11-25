@@ -2832,6 +2832,7 @@ cmd_retire() {
   rm -f -- "$(launch_failed_file "$id")"
   rm -f -- "$REG/.$id.cleanup-failed"
   rm -f -- "$REG/.$id.reply."*
+  fm_procevent_launch_floor_remove_all_locked "$STATE" "$id" || true
   fm_procevent_source_lock_release "$id"
   # A retired source produces no further answer, so drop any decision binding it
   # carried. Generic and idempotent: the binding owner is asked to forget this

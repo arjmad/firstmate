@@ -131,6 +131,7 @@ run_sweep() {  # <fakebin> <home> [args...]
   local fb=$1 home=$2
   shift 2
   PATH="$fb:$BASE_PATH" TMUX='' HERDR_ENV='' FM_HOME="$home" \
+    FM_PROCEVENT_CLAIM_ROOT="$home/claims" \
     FM_TEST_TMUX_WORLD="$home/world" FM_TEST_TMUX_CALLS="$home/calls" \
     "$SWEEP" "$@" 2>&1
 }
@@ -1169,6 +1170,36 @@ test_supervision_scratch_rotates_by_age() {
   pass "sweep: status-presentation, PR-poll and watcher-capture scratch rotate by age"
 }
 
+test_orphan_launch_stamps_retired() {
+  local home fb out reg
+  home=$(new_home stamps); fb=$(make_tmux "$TMP_ROOT/stamps")
+  world "$home" "" ok zsh
+  reg="$home/state/procevent"
+  mkdir -p "$reg"
+  : > "$reg/live.source"
+  : > "$reg/live.10-20.last-launch"
+  : > "$reg/live.11-21.last-launch"
+  : > "$reg/gone.10-20.last-launch"
+  : > "$reg/gone.last-launch"
+  : > "$reg/live.x.5-6.last-launch"
+  : > "$reg/legacy.1.source"
+  : > "$reg/legacy.1.last-launch"
+
+  out=$(run_sweep "$fb" "$home" --dry-run)
+  assert_contains "$out" "would retire orphan launch stamp gone.10-20.last-launch" "--dry-run should list an orphan stamp: $out"
+  [ -e "$reg/gone.10-20.last-launch" ] || fail "--dry-run removed a stamp"
+
+  out=$(run_sweep "$fb" "$home")
+  [ ! -e "$reg/gone.10-20.last-launch" ] && [ ! -e "$reg/gone.last-launch" ] \
+    || fail "stamps of a source with no registration should go: $(ls "$reg")"
+  [ ! -e "$reg/live.x.5-6.last-launch" ] || fail "a stamp of the unregistered source live.x is an orphan even though live is registered"
+  [ -e "$reg/live.10-20.last-launch" ] && [ -e "$reg/live.11-21.last-launch" ] \
+    || fail "a registered source keeps its stamps"
+  [ -e "$reg/legacy.1.last-launch" ] || fail "a legacy bare-id stamp of a registered source is kept"
+  assert_contains "$out" "3 orphan launch stamp(s)" "the summary should count removed stamps: $out"
+  pass "sweep: launch-pacing stamps of unregistered sources are retired"
+}
+
 test_dead_locks_reclaimed_and_live_kept() {
   local home fb out state old dead start o
   home=$(new_home dead-locks); fb=$(make_tmux "$TMP_ROOT/dead-locks")
@@ -1215,6 +1246,7 @@ test_dead_locks_reclaimed_and_live_kept() {
 test_gone_endpoint_swept_and_live_kept
 test_handled_pointer_steer_is_residue
 test_dead_locks_reclaimed_and_live_kept
+test_orphan_launch_stamps_retired
 test_supervision_scratch_rotates_by_age
 test_live_without_record_never_queried_past_inventory
 test_ambiguous_and_unreadable_kept

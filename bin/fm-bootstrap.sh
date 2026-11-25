@@ -116,8 +116,9 @@
 #          The `code-root <file>` variant is a detect-only local check that runs
 #          even in a read-only session; detect_code_root_backlog_fork owns what
 #          it reports.
-#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the nine MUTATING sweeps
+#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the ten MUTATING sweeps
 #          (backlog_record_reconcile, state_residue_sweep, data_media_prune,
+#          state_archive,
 #          secondmate_sync, secondmate_liveness_sweep,
 #          secondmate_handoff_resume, x_mode_setup, lavish_chrome_patch,
 #          fleet_sync) while still
@@ -129,7 +130,7 @@
 #          secondmate homes, pending handoff outboxes and receiver wakes,
 #          X-mode artifacts, the Lavish install, project clones, or repair
 #          instructions.
-#          Unset/0 (the default) runs all nine sweeps - this flag is purely
+#          Unset/0 (the default) runs all ten sweeps - this flag is purely
 #          additive.
 #          state_residue_sweep is bin/fm-state-residue-sweep.sh, whose header
 #          owns what it retires and how an endpoint is proven gone; it runs in
@@ -143,6 +144,10 @@
 #          config/data-nontext-retention-days is set, runs on the local pass
 #          only with --if-due (at most every 12 hours for the retention parts),
 #          and reports through its own BOOTSTRAP_INFO lines.
+#          state_archive is bin/fm-state-archive.sh, whose header owns which
+#          old state/ records it moves to data/archive/state/ and what keeps
+#          one in place; it runs on the local pass right after
+#          data_media_prune and reports through its own BOOTSTRAP_INFO line.
 #          Set FM_BOOTSTRAP_NETWORK to split this run into a blocking half and a
 #          deferred half, so a session start can print its digest from the
 #          blocking half alone and run the deferred half off the digest's
@@ -160,7 +165,7 @@
 #                 observation arming (fm-contributions.sh arm --if-owned), and
 #                 the PR health monitor's arming, which takes the same lock. No
 #                 tool detection, no version floors, no tangle check, no backlog
-#                 reconciliation, no data_media_prune, no x_mode_setup: those ran
+#                 reconciliation, no data_media_prune or state_archive, no x_mode_setup: those ran
 #                 on the blocking half.
 #          FM_BOOTSTRAP_DETECT_ONLY composes with it unchanged, so `only` plus
 #          detect-only is the read-only `gh auth status` probe on its own.
@@ -1586,6 +1591,9 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ] && local_phase; then
   # whole days. It exits nonzero only for an unusable configured value, which
   # it names.
   "$SCRIPT_DIR/fm-data-media-prune.sh" --if-due || true
+  # Handled captain notes and retired process-event rounds older than 30 days
+  # move to data/archive/state/; it moves, never deletes, and always exits 0.
+  "$SCRIPT_DIR/fm-state-archive.sh" || true
 fi
 
 # Local detection: presence, version floors, and configuration. Nothing here

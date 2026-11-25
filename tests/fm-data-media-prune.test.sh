@@ -840,10 +840,15 @@ test_bootstrap_runs_prune_only_when_locked() {
   printf '7\n' > "$home/config/data-media-retention-days"
   make_task "$home" done-task
   start_clock "$home" done-task
+  # The state archive shares this locked local seat.
+  mkdir -p "$home/state/inbox/handled"
+  printf 'note\n' > "$home/state/inbox/handled/1790000000-old.note"
+  fm_touch_epoch $(( $(date +%s) - 40 * 86400 )) "$home/state/inbox/handled/1790000000-old.note"
 
   out=$(run_bootstrap "$fb" "$home" FM_BOOTSTRAP_DETECT_ONLY=1)
   assert_not_contains "$out" "data media retention" "the read-only session path must not prune"
   assert_task_untouched "$home" done-task "the read-only session path"
+  assert_present "$home/state/inbox/handled/1790000000-old.note" "the read-only session path must not archive"
 
   out=$(run_bootstrap "$fb" "$home")
   assert_contains "$out" "BOOTSTRAP_INFO: data media retention: removed 3 files" \
@@ -852,7 +857,10 @@ test_bootstrap_runs_prune_only_when_locked() {
     assert_absent "$home/data/done-task/$f" "the locked pass should remove $f"
   done
   assert_present "$home/data/done-task/report.md" "the locked pass must keep the report"
-  pass "bootstrap: the prune runs on the locked local pass only"
+  assert_contains "$out" "BOOTSTRAP_INFO: state archive: moved 1 handled note(s)" \
+    "the locked local pass should run the state archive: $out"
+  assert_absent "$home/state/inbox/handled/1790000000-old.note" "the locked pass should archive the old note"
+  pass "bootstrap: the prune and the state archive run on the locked local pass only"
 }
 
 test_dry_run_lists_media_and_removes_nothing

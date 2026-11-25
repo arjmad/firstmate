@@ -118,7 +118,7 @@ In every other home, everything else under `data/` follows one retention rule on
 - Binaries (images, PDFs, exports) move to the owning business area's shared drive folder, resolved by folder ID, never by name path.
 - Binaries move only as one captain-approved batch at a time, and each move is logged by file ID.
 - Nothing is deleted from the home before its copy has landed in the drive.
-- `data/archive/` holds 281 task folders from 2026-08-28 to 2026-10-07 that were moved out of `data/` by hand before this rule existed; a cited `data/<task>/` path that is gone is at `data/archive/<task>/`.
+- `data/archive/` holds 281 task folders from 2026-08-28 to 2026-10-07 that were moved out of `data/` by hand before this rule existed, and `data/archive/state/` holds old `state/` records (below); a cited `data/<task>/` path that is gone is at `data/archive/<task>/`.
   Evidence another repository cites is copied into that repository's records, not cited by its path here.
 
 `state/` holds runtime records:
@@ -135,6 +135,11 @@ In every other home, everything else under `data/` follows one retention rule on
 - Live-checkout post-update and capture records under `state/live-checkouts/`, and the scheduled sync's log, pending `fleet-sync-stuck` lines, and surfaced set (`bin/fm-fleet-sync.sh`).
 - Per-gate overdue markers under `state/backlog-overdue/` (the gate date, the time the re-fire week starts - the first scan after the wake was handled - and a `queued` flag while the wake waits), pending `backlog-overdue-woke` lines, and the `.last-backlog-overdue` cadence marker of the watcher's overdue backlog scan (`bin/fm-backlog-overdue.sh`).
 - The log of captain-waived code reviews, `state/code-review-waivers.log` (`bin/fm-pr-merge.sh`).
+
+Two `state/` record kinds have a retention rule, and neither deletes text:
+
+- A handled captain note (`state/inbox/handled/`) and the captured rounds of a retired process-event source (`state/procevent-inbox/`) move to `data/archive/state/<YYYY-MM>/` once older than 30 days, so the data retention rule above keeps their text. The locked session start runs [`bin/fm-state-archive.sh`](../bin/fm-state-archive.sh), whose header owns what keeps a record in place: a queued wake, a pending round, a registered source, or a task steer that names it.
+- A process-event source's launch-pacing stamps (`state/procevent/<source>.*.last-launch`) are dropped when the source retires, and the [state residue sweep](../bin/fm-state-residue-sweep.sh) drops any stamp whose source has no registration.
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
 

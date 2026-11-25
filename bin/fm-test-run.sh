@@ -408,7 +408,7 @@ family_for_basename() {
     fm-bootstrap.test.sh|fm-bootstrap-network-parallel.test.sh|fm-fleet-sync.test.sh|fm-gate-refuse.test.sh|fm-gotmp.test.sh|\
     fm-lavish-patch.test.sh|\
     fm-session-start.test.sh|fm-sessionstart-nudge.test.sh|fm-startup-network.test.sh|\
-    fm-state-residue-sweep.test.sh|fm-data-media-prune.test.sh|\
+    fm-state-residue-sweep.test.sh|fm-data-media-prune.test.sh|fm-state-archive.test.sh|\
     fm-tangle-guard.test.sh|fm-update.test.sh)
       printf '%s\n' session-bootstrap
       ;;
@@ -1042,6 +1042,7 @@ tests/fm-startup-growth-check.test.sh 9147
 tests/fm-startup-memory-budget.test.sh 10726
 tests/fm-startup-network.test.sh 102564
 tests/fm-stat-shadowing.test.sh 86
+tests/fm-state-archive.test.sh 1500
 tests/fm-state-residue-sweep.test.sh 10733
 tests/fm-stow-cascade.test.sh 3700
 tests/fm-stow-guard.test.sh 30000
@@ -1814,6 +1815,12 @@ families_for_changed_path() {
     bin/fm-data-media-prune.sh)
       # The locked bootstrap retention prune and data size trigger; its own
       # suite drives it directly and through fm-bootstrap.sh.
+      printf '%s\n' "__script__:fm-data-media-prune.test.sh"
+      ;;
+    bin/fm-state-archive.sh)
+      # The locked bootstrap move of old state/ records into data/archive/;
+      # its own suite drives it, and the prune suite covers its bootstrap seat.
+      printf '%s\n' "__script__:fm-state-archive.test.sh"
       printf '%s\n' "__script__:fm-data-media-prune.test.sh"
       ;;
     bin/fm-quota-axi-lib.sh)

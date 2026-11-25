@@ -125,6 +125,14 @@
 # holder under the lock's steal mutex, so a live acquirer never loses its lock
 # and a lock holding files the library does not own is left in place.
 #
+# Orphan launch stamps. bin/fm-procevent.sh keeps one launch-pacing stamp
+# state/procevent/<source>.<identity>.last-launch per registration, and its
+# retire drops them, but a source retired before that rule left its stamps
+# behind for good. A stamp whose source has no <source>.source registration
+# (fm_procevent_launch_floor_orphans) is removed under that source's lock,
+# taken without waiting and re-checked under it, so a source registering at
+# that moment keeps its stamp.
+#
 # Scratch rotation. bin/fm-claude-stop-autoarm.sh captures each arm attempt in
 # state/.claude-autoarm-output.<random>, bin/fm-wake-drain.sh stages a row
 # rewrite in state/.wake-rows.consume.<random>,
@@ -732,6 +740,42 @@ sweep_dead_locks() {
   done
 }
 
+# Launch-pacing stamps of sources with no registration; see "Orphan
+# launch stamps" in the header.
+sweep_launch_stamps() {
+  local stamp base id lock root
+  root=$(fm_procevent_claim_root)
+  while IFS= read -r stamp; do
+    [ -n "$stamp" ] || continue
+    base=${stamp##*/}
+    if [ "$DRY_RUN" -eq 1 ]; then
+      printf 'would retire orphan launch stamp %s\n' "$base"
+      REMOVED_STAMPS=$((REMOVED_STAMPS + 1))
+      continue
+    fi
+    # Take the source lock without waiting and re-read under it, so a source
+    # registering right now keeps its stamp. A legacy bare-id stamp is locked
+    # by its whole name.
+    base=${base%.last-launch}
+    id=${base%.*}
+    _fm_procevent_launch_floor_stamp_of "${stamp%/*}" "$id" "$stamp" 2>/dev/null || id=$base
+    fm_procevent_source_id_valid "$id" || continue
+    (umask 077; mkdir -p "$root") 2>/dev/null || continue
+    lock=$(fm_procevent_source_lock_path "$id")
+    fm_lock_try_acquire "$lock" || continue
+    if fm_procevent_launch_floor_orphans "$STATE" | grep -Fxq -- "$stamp"; then
+      if rm -f -- "$stamp"; then
+        REMOVED_STAMPS=$((REMOVED_STAMPS + 1))
+      else
+        warn "could not remove $stamp"
+      fi
+    fi
+    fm_lock_release "$lock" || true
+  done <<EOF
+$(fm_procevent_launch_floor_orphans "$STATE")
+EOF
+}
+
 # --- scratch rotation ----------------------------------------------------------
 
 rotate_scratch() {
@@ -764,7 +808,7 @@ if [ ! -d "$STATE" ] || [ -L "$STATE" ]; then
 fi
 
 REMOVED_RECORDS=0 REMOVED_ENDPOINTS=0 ROTATED=0 QUERIES=0 DEFERRED=0
-REMOVED_TASK_RECORDS=0 REMOVED_LOCK_OWNERS=0 REMOVED_DEAD_LOCKS=0
+REMOVED_TASK_RECORDS=0 REMOVED_LOCK_OWNERS=0 REMOVED_DEAD_LOCKS=0 REMOVED_STAMPS=0
 KEPT_META=0 KEPT_LIVE=0 KEPT_UNRESOLVED=0 KEPT_UNMATCHED=0
 
 if [ "$HEARTBEAT" -eq 1 ] && { [ -e "$LAST_SWEEP" ] || [ -L "$LAST_SWEEP" ]; } \
@@ -803,17 +847,18 @@ if [ "$TASK_SET_LOCK_HELD" -eq 1 ]; then
 fi
 sweep_dead_locks
 sweep_lock_owners
+sweep_launch_stamps
 rotate_scratch
 [ "$DRY_RUN" -eq 1 ] || touch "$LAST_SWEEP" 2>/dev/null || warn "could not record this sweep in $LAST_SWEEP"
 
 if [ "$REMOVED_ENDPOINTS" -gt 0 ] || [ "$ROTATED" -gt 0 ] \
   || [ "$REMOVED_TASK_RECORDS" -gt 0 ] || [ "$REMOVED_LOCK_OWNERS" -gt 0 ] \
-  || [ "$REMOVED_DEAD_LOCKS" -gt 0 ]; then
+  || [ "$REMOVED_DEAD_LOCKS" -gt 0 ] || [ "$REMOVED_STAMPS" -gt 0 ]; then
   verb=removed
   [ "$DRY_RUN" -eq 0 ] || verb='would remove'
-  printf 'BOOTSTRAP_INFO: state residue sweep: %s %s watcher record(s) for %s gone endpoint(s) and %s stale scratch file(s), %s retired-task record(s), %s dead lock owner(s), %s dead lock(s); kept watcher records for %s endpoint(s) a task record names (never probed), %s probed and still running, %s unresolved, %s matching no backend this home runs' \
+  printf 'BOOTSTRAP_INFO: state residue sweep: %s %s watcher record(s) for %s gone endpoint(s) and %s stale scratch file(s), %s retired-task record(s), %s dead lock owner(s), %s dead lock(s), %s orphan launch stamp(s); kept watcher records for %s endpoint(s) a task record names (never probed), %s probed and still running, %s unresolved, %s matching no backend this home runs' \
     "$verb" "$REMOVED_RECORDS" "$REMOVED_ENDPOINTS" "$ROTATED" \
-    "$REMOVED_TASK_RECORDS" "$REMOVED_LOCK_OWNERS" "$REMOVED_DEAD_LOCKS" \
+    "$REMOVED_TASK_RECORDS" "$REMOVED_LOCK_OWNERS" "$REMOVED_DEAD_LOCKS" "$REMOVED_STAMPS" \
     "$KEPT_META" "$KEPT_LIVE" "$KEPT_UNRESOLVED" "$KEPT_UNMATCHED"
   [ "$DEFERRED" -eq 0 ] || printf ', %s deferred to the next sweep' "$DEFERRED"
   printf ' (these count watcher bookkeeping, not fleet liveness; bin/fm-fleet-view.sh shows which panes are live)\n'
