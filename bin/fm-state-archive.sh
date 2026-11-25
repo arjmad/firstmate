@@ -11,9 +11,9 @@
 #          Classify and report exactly as a real run would, move nothing, and
 #          list each record that would move.
 #
-# bin/fm-bootstrap.sh runs it in its deferred half, right after the state
-# residue sweep, under the fleet-lock holder check and a 60s bound, and never
-# under FM_BOOTSTRAP_DETECT_ONLY=1.
+# bin/fm-bootstrap.sh runs it last in its deferred half, after the arming
+# steps, under the fleet-lock holder check and a 30s bound, and never under
+# FM_BOOTSTRAP_DETECT_ONLY=1.
 #
 # What moves. Two kinds of record, each older than
 # FM_STATE_ARCHIVE_MAX_AGE_DAYS by its mtime:
@@ -45,8 +45,9 @@
 #
 # Cost bound. A home that never archived holds thousands of old records, so
 # one run moves at most FM_STATE_ARCHIVE_BUDGET notes and source rounds and
-# leaves the rest, unscanned, for the next session start; the summary says
-# when more remain.
+# stops scanning once it has, leaving the rest for the next session start;
+# the summary says when more remain. Records it keeps are scanned every run,
+# so the caller's time bound, not the budget, caps a run's time.
 set -u
 
 case "${1:-}" in

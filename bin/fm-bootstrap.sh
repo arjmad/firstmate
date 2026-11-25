@@ -146,8 +146,8 @@
 #          and reports through its own BOOTSTRAP_INFO lines.
 #          state_archive is bin/fm-state-archive.sh, whose header owns which
 #          old state/ records it moves to data/archive/state/ and what keeps
-#          one in place; it runs in the deferred half right after
-#          state_residue_sweep and reports through its own BOOTSTRAP_INFO line.
+#          one in place; it runs in the deferred half after
+#          the arming steps, last, under a 30s bound, and reports through its own BOOTSTRAP_INFO line.
 #          Set FM_BOOTSTRAP_NETWORK to split this run into a blocking half and a
 #          deferred half, so a session start can print its digest from the
 #          blocking half alone and run the deferred half off the digest's
@@ -1917,20 +1917,6 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
       } | sed 's/^warning: /BOOTSTRAP_INFO: warning: /'
       fm_timing_record phase residue-sweep "$__fm_timing_stamp"
     fi
-    # Old handled captain notes and retired process-event rounds move to
-    # data/archive/state/ (moves, never deletes, always exits 0). It scans
-    # state/ history, so it rides this deferred half under the same bound.
-    if network_sweep_authorized 'state archive'; then
-      __fm_timing_stamp=$(fm_timing_now_ms)
-      {
-        archive_rc=0
-        (FM_EXEC_TIMED_OWNER_PID=$$ fm_exec_timed 60 1 "$SCRIPT_DIR/fm-state-archive.sh") 2>&1 </dev/null \
-          || archive_rc=$?
-        ! fm_timed_out "$archive_rc" \
-          || echo "BOOTSTRAP_INFO: state archive did not finish within its 60s bound; the next session start continues it"
-      } | sed 's/^warning: /BOOTSTRAP_INFO: warning: /'
-      fm_timing_record phase state-archive "$__fm_timing_stamp"
-    fi
     # Adopt existing durable contribution links without making a network call.
     # Detection-only startup must never publish a check registration. The PR
     # health monitor arms contribution observation under the same lock, so it
@@ -1948,6 +1934,22 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
         "$SCRIPT_DIR/fm-pr-health.sh" arm >/dev/null \
           || echo "MISSING: the PR health monitor could not be armed; owned PRs are not watched"
       fi
+    fi
+    # Old handled captain notes and retired process-event rounds move to
+    # data/archive/state/ (moves, never deletes, always exits 0). It scans
+    # state/ history, so it rides this deferred half, last, after the arming
+    # steps, with a 30s slice of the worker's budget; a cut run resumes next
+    # start.
+    if network_sweep_authorized 'state archive'; then
+      __fm_timing_stamp=$(fm_timing_now_ms)
+      {
+        archive_rc=0
+        (FM_EXEC_TIMED_OWNER_PID=$$ fm_exec_timed 30 1 "$SCRIPT_DIR/fm-state-archive.sh") 2>&1 </dev/null \
+          || archive_rc=$?
+        ! fm_timed_out "$archive_rc" \
+          || echo "BOOTSTRAP_INFO: state archive did not finish within its 30s bound; the next session start continues it"
+      } | sed 's/^warning: /BOOTSTRAP_INFO: warning: /'
+      fm_timing_record phase state-archive "$__fm_timing_stamp"
     fi
   fi
 fi
