@@ -23,9 +23,10 @@ Output:
   run is a no-op. One summary line goes to stdout. --dry-run prints the summary
   and writes nothing.
 
-Refusals (exit 1, file untouched): no recognizable ledger table, a ledger row
-with a duplicate id or a missing column, a ledger id decisions.json does not
-hold, a decisions.json that is not an object of objects, or one whose layout
+Refusals (exit 1, file untouched): no recognizable ledger table or more than
+one, a ledger row with a duplicate id or a missing column, a Status that
+names landed but is not exactly `landed` (such as `**landed**`), a ledger id
+decisions.json does not hold, a decisions.json that is not an object of objects, or one whose layout
 this tool cannot reproduce byte for byte (it never reformats a file).
 """
 
@@ -59,15 +60,20 @@ def read_ledger(path: str) -> dict[str, tuple[str, str]]:
     """Map each ledger id to (status, evidence cell)."""
     with open(path, encoding="utf-8") as f:
         lines = f.read().splitlines()
-    for i, line in enumerate(lines[:-1]):
-        header = cells(line)
-        sep = cells(lines[i + 1])
-        if not header or not sep or len(sep) != len(header):
-            continue
-        if not all(SEPARATOR_CELL.match(c) for c in sep):
-            continue
-        if not {ID_COL, STATUS_COL, WHERE_COL} <= set(header):
-            continue
+
+    def is_ledger_header(i: int) -> bool:
+        header, sep = cells(lines[i]), cells(lines[i + 1])
+        return bool(
+            header and sep and len(sep) == len(header)
+            and all(SEPARATOR_CELL.match(c) for c in sep)
+            and {ID_COL, STATUS_COL, WHERE_COL} <= set(header)
+        )
+
+    tables = [i for i in range(len(lines) - 1) if is_ledger_header(i)]
+    if len(tables) > 1:
+        raise Refusal(f"{path}:{tables[1] + 1}: a second ledger table; this tool reads a ledger with exactly one")
+    for i in tables:
+        header = cells(lines[i]) or []
         id_i, st_i, wh_i = (header.index(c) for c in (ID_COL, STATUS_COL, WHERE_COL))
         rows: dict[str, tuple[str, str]] = {}
         for n, row_line in enumerate(lines[i + 2:], start=i + 3):
@@ -131,6 +137,9 @@ def main(argv: list[str]) -> int:
         missing = [fid for fid in ledger if fid not in data]
         if missing:
             raise Refusal(f"{decisions_path} holds no entry for ledger id(s): {', '.join(missing)}")
+        odd = [f"{fid} ({status})" for fid, (status, _) in ledger.items() if status != "landed" and "landed" in status.lower()]
+        if odd:
+            raise Refusal(f"{ledger_path}: a Status that names landed but is not exactly 'landed': {', '.join(odd)}")
 
         landed = empty = removed = 0
         for fid, (status, where) in ledger.items():

@@ -12,7 +12,8 @@
 #   - A one-space, ASCII-escaped file with no final newline and a two-space,
 #     raw UTF-8, newline-terminated file each keep their layout.
 #   - An escaped pipe inside a ledger cell is not a column boundary.
-#   - It refuses a ledger id decisions.json lacks, a ledger with no table,
+#   - It refuses a ledger id decisions.json lacks, a ledger with no table or
+#     two, a Status that names landed but is not exactly landed,
 #     and a layout it cannot reproduce, each leaving the file untouched.
 #   - --dry-run reports and writes nothing.
 set -u
@@ -191,10 +192,17 @@ test_refusals_leave_the_file_untouched() {
   write_ledger "$dir/dupe.md" "${LEDGER_ROWS[@]}" '| - | a1-01 | moot | none |  | again |'
   expect_refusal "a duplicate ledger id" "appears twice" "$dir/dupe.md" "$dir/decisions.json"
 
+  write_ledger "$dir/two.md" "${LEDGER_ROWS[@]}"
+  printf '## batch 2\n\n| Id | Status | Where it landed / evidence |\n|---|---|---|\n| a1-04 | landed | https://github.com/o/r/pull/2 |\n' >>"$dir/two.md"
+  expect_refusal "a second ledger table" "a second ledger table" "$dir/two.md" "$dir/decisions.json"
+
+  write_ledger "$dir/bold.md" '| - | a1-01 | **landed** | https://github.com/o/r/pull/5 |  | one |'
+  expect_refusal "a decorated landed status" "not exactly 'landed'" "$dir/bold.md" "$dir/decisions.json"
+
   printf '{"a1-01":{"status":"closed"},"a1-02":{},"a1-03":{}}' >"$dir/compact.json"
   write_ledger "$dir/ok.md" "${LEDGER_ROWS[@]}"
   expect_refusal "a layout it cannot reproduce" "refusing to reformat" "$dir/ok.md" "$dir/compact.json"
-  pass "landed-by: unknown ids, tableless ledgers and foreign layouts are refused untouched"
+  pass "landed-by: unknown ids, tableless or two-table ledgers, odd statuses and foreign layouts are refused untouched"
 }
 
 test_dry_run_writes_nothing() {
