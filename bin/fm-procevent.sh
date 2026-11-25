@@ -822,10 +822,9 @@ extension_source_request_id() {  # <adapter> <source-id> <next-sequence> <regist
 }
 
 next_result_sequence() {  # <source-id>
-  local id=$1 inbox seq=1
+  local id=$1 inbox
   inbox=$(fm_procevent_inbox_dir "$STATE")
-  while [ -e "$inbox/$id.$seq.result" ]; do seq=$((seq + 1)); done
-  printf '%s\n' "$seq"
+  fm_procevent_next_sequence "$inbox" "$id"
 }
 
 register_extension_locks_release() {  # <source-id>
@@ -925,7 +924,7 @@ publish_result() {  # <result-file>
   if ! fm_procevent_is_handled "$STATE" "$id" "$seq"; then
     if [ -n "$owner_task" ]; then
       if adapter_result_is_terminal "$adapter" "$result"; then
-        message="Lavish review result $id sequence $seq is terminal at $result. Read it with bin/fm-procevent-lavish.sh read $result, stop and conclude the review, and do not re-arm the board. The board stays yours until you acknowledge this round with bin/fm-procevent.sh handled $id $seq, which retires it."
+        message=$(fm_procevent_terminal_pointer_message "$id" "$seq" "$result")
       else
         export FM_PROCEVENT_CAPTURE_SOURCE_LOCK_HELD=1
         if adapter_result_is_silent "$adapter" "$result"; then
@@ -939,7 +938,7 @@ publish_result() {  # <result-file>
           esac
         fi
         unset FM_PROCEVENT_CAPTURE_SOURCE_LOCK_HELD
-        message="Lavish review feedback is captured for task $owner_task at $result. Read it with bin/fm-procevent-lavish.sh read $result, apply the round, and re-arm the board with the reply."
+        message=$(fm_procevent_feedback_pointer_message "$owner_task" "$result")
       fi
       # Snapshot the records that already exist (active and handled) before
       # the idempotent write, so a dedup match - including one already
@@ -2832,6 +2831,7 @@ cmd_retire() {
   rm -f -- "$(launch_failed_file "$id")"
   rm -f -- "$REG/.$id.cleanup-failed"
   rm -f -- "$REG/.$id.reply."*
+  fm_procevent_launch_floor_remove_all_locked "$STATE" "$id" || true
   fm_procevent_source_lock_release "$id"
   # A retired source produces no further answer, so drop any decision binding it
   # carried. Generic and idempotent: the binding owner is asked to forget this

@@ -116,8 +116,9 @@
 #          The `code-root <file>` variant is a detect-only local check that runs
 #          even in a read-only session; detect_code_root_backlog_fork owns what
 #          it reports.
-#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the nine MUTATING sweeps
+#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the ten MUTATING sweeps
 #          (backlog_record_reconcile, state_residue_sweep, data_media_prune,
+#          state_archive,
 #          secondmate_sync, secondmate_liveness_sweep,
 #          secondmate_handoff_resume, x_mode_setup, lavish_chrome_patch,
 #          fleet_sync) while still
@@ -129,7 +130,7 @@
 #          secondmate homes, pending handoff outboxes and receiver wakes,
 #          X-mode artifacts, the Lavish install, project clones, or repair
 #          instructions.
-#          Unset/0 (the default) runs all nine sweeps - this flag is purely
+#          Unset/0 (the default) runs all ten sweeps - this flag is purely
 #          additive.
 #          state_residue_sweep is bin/fm-state-residue-sweep.sh, whose header
 #          owns what it retires and how an endpoint is proven gone; it runs in
@@ -143,6 +144,10 @@
 #          config/data-nontext-retention-days is set, runs on the local pass
 #          only with --if-due (at most every 12 hours for the retention parts),
 #          and reports through its own BOOTSTRAP_INFO lines.
+#          state_archive is bin/fm-state-archive.sh, whose header owns which
+#          old state/ records it moves to data/archive/state/ and what keeps
+#          one in place; it runs in the deferred half after
+#          the arming steps, last, under a 30s bound, and reports through its own BOOTSTRAP_INFO line.
 #          Set FM_BOOTSTRAP_NETWORK to split this run into a blocking half and a
 #          deferred half, so a session start can print its digest from the
 #          blocking half alone and run the deferred half off the digest's
@@ -156,7 +161,7 @@
 #                 secondmate_handoff_resume, fleet_sync, and that housekeeping.
 #            only - the deferred half: those network steps, then the local
 #                 housekeeping whose cost grows with the home's history and that
-#                 the first turn does not need - state_residue_sweep, contribution
+#                 the first turn does not need - state_residue_sweep, state_archive, contribution
 #                 observation arming (fm-contributions.sh arm --if-owned), and
 #                 the PR health monitor's arming, which takes the same lock. No
 #                 tool detection, no version floors, no tangle check, no backlog
@@ -1929,6 +1934,22 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
         "$SCRIPT_DIR/fm-pr-health.sh" arm >/dev/null \
           || echo "MISSING: the PR health monitor could not be armed; owned PRs are not watched"
       fi
+    fi
+    # Old handled captain notes and retired process-event rounds move to
+    # data/archive/state/ (moves, never deletes, always exits 0). It scans
+    # state/ history, so it rides this deferred half, last, after the arming
+    # steps, with a 30s slice of the worker's budget; a cut run resumes next
+    # start.
+    if network_sweep_authorized 'state archive'; then
+      __fm_timing_stamp=$(fm_timing_now_ms)
+      {
+        archive_rc=0
+        (FM_EXEC_TIMED_OWNER_PID=$$ fm_exec_timed 30 1 "$SCRIPT_DIR/fm-state-archive.sh") 2>&1 </dev/null \
+          || archive_rc=$?
+        ! fm_timed_out "$archive_rc" \
+          || echo "BOOTSTRAP_INFO: state archive did not finish within its 30s bound; the next session start continues it"
+      } | sed 's/^warning: /BOOTSTRAP_INFO: warning: /'
+      fm_timing_record phase state-archive "$__fm_timing_stamp"
     fi
   fi
 fi

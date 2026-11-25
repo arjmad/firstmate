@@ -4020,6 +4020,14 @@ PACE_STAMPS=$(find "$HPACE/state/procevent" -maxdepth 1 -type f \
   -name 'pace-src.*.last-launch' | wc -l | tr -d ' ')
 [ "$PACE_STAMPS" = 1 ] || fail "replacement registrations accumulated stale pacing state"
 pass "a replacement registration starts with one fresh launch floor"
+: > "$HPACE/state/procevent/pace-src.x.1-2.last-launch"
+pe "$HPACE" retire pace-src >/dev/null || fail "retiring the paced source failed"
+PACE_STAMPS=$(find "$HPACE/state/procevent" -maxdepth 1 -type f \
+  -name 'pace-src.*.last-launch' ! -name 'pace-src.x.*' | wc -l | tr -d ' ')
+[ "$PACE_STAMPS" = 0 ] || fail "retire left the source's launch-pacing stamps"
+[ -e "$HPACE/state/procevent/pace-src.x.1-2.last-launch" ] \
+  || fail "retire removed the stamp of a longer source id that starts with its own"
+pass "retire drops the source's launch-pacing stamps and only those"
 
 HPACE_RACE="$TMP_ROOT/registration-pacing-race"; new_home "$HPACE_RACE"
 fm_test_track_procevent_home "$HPACE_RACE"

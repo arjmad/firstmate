@@ -25,6 +25,7 @@
 #   - The task-keyed records of a task nothing live references are retired;
 #     a meta, status log, turn-ended file, inbox holding an unhandled steer, or
 #     queued wake keeps them.
+#   - A steer that only points at a handled process-event result is residue.
 #   - A retired task's steering inbox and hooks directory are swept, and its
 #     Herdr presentation journal once the workspace it names is proven gone.
 #   - A watch-arm capture rotates by age only while no live watcher holds the
@@ -130,6 +131,7 @@ run_sweep() {  # <fakebin> <home> [args...]
   local fb=$1 home=$2
   shift 2
   PATH="$fb:$BASE_PATH" TMUX='' HERDR_ENV='' FM_HOME="$home" \
+    FM_PROCEVENT_CLAIM_ROOT="$home/claims" \
     FM_TEST_TMUX_WORLD="$home/world" FM_TEST_TMUX_CALLS="$home/calls" \
     "$SWEEP" "$@" 2>&1
 }
@@ -669,6 +671,7 @@ test_dead_lock_owners_swept_and_live_kept() {
     printf '%s\n' "$dead" > "$state/$o/pid"
   done
   printf '%s\n' "$$" > "$state/.alive.lock.owner.DDDDDD/pid"
+  printf '%s\n' "$$" > "$state/.held.lock.owner.BBBBBB/pid"
   printf 'x\n' > "$state/.odd.lock.owner.EEEEEE/unknown"
   ln -s "$state/.held.lock.owner.BBBBBB" "$state/.held.lock"
   ln -s "$state/.stolen.lock.owner.FFFFFF" "$state/.stolen.lock.steal"
@@ -1097,7 +1100,153 @@ test_bootstrap_reports_a_held_task_set_as_information() {
   pass "bootstrap: a task set held during the deferred sweep is reported as information"
 }
 
+# pointer_message <feedback|terminal> <task> <result>: the pointer text
+# bin/fm-procevent.sh writes, built through the same library builders.
+pointer_message() {
+  # shellcheck disable=SC2016 # expanded by the child shell
+  bash -c '
+    . "$1/bin/fm-pr-lib.sh"; . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-procevent-lib.sh"
+    if [ "$2" = feedback ]; then
+      fm_procevent_feedback_pointer_message "$3" "$4"
+    else
+      fm_procevent_terminal_pointer_message "$(fm_procevent_result_source_id "$4")" "$(fm_procevent_result_sequence "$4")" "$4"
+    fi' _ "$ROOT" "$1" "$2" "$3"
+}
+
+write_steer() {  # <path> <body>
+  printf 'schema=fm-task-inbox.v1\nat=2026-11-01T00:00:00Z\nbody-terminator=1\n--\n%s\n' "$2" > "$1"
+}
+
+test_handled_pointer_steer_is_residue() {
+  local home fb out state pin
+  home=$(new_home pointer-steer); fb=$(make_tmux "$TMP_ROOT/pointer-steer")
+  state="$home/state"
+  world "$home" "" ok zsh
+  pin="$state/procevent-inbox"
+  mkdir -p "$pin" "$state/procevent"
+  for r in lavish-a.1 lavish-b.2 lavish-c.3 lavish-d.4; do printf 'x\n' > "$pin/$r.result"; done
+  : > "$pin/lavish-a.1.handled"; : > "$pin/lavish-b.2.handled"; : > "$pin/lavish-d.4.handled"
+  for id in fed.task term.task unread.task mixed.task meta.task; do
+    seed_task_state "$home" "$id"
+    seed_task_records "$home" "$id"
+  done
+  write_steer "$state/fed.task.inbox/002.msg" "$(pointer_message feedback fed.task "$pin/lavish-a.1.result")"
+  write_steer "$state/term.task.inbox/002.msg" "$(pointer_message terminal term.task "$pin/lavish-b.2.result")"
+  write_steer "$state/unread.task.inbox/002.msg" "$(pointer_message feedback unread.task "$pin/lavish-c.3.result")"
+  write_steer "$state/mixed.task.inbox/002.msg" "$(pointer_message feedback mixed.task "$pin/lavish-a.1.result") and more"
+  write_steer "$state/meta.task.inbox/002.msg" "$(pointer_message feedback meta.task "$pin/lavish-d.4.result")"
+  printf 'window=firstmate:fm-meta.task\nbackend=tmux\nkind=ship\n' > "$state/meta.task.meta"
+
+  out=$(run_sweep "$fb" "$home")
+  for id in fed.task term.task; do
+    [ ! -e "$state/$id.inbox" ] || fail "an inbox holding only a handled-result pointer is residue: $id: $out"
+    [ "$(count_task_records "$home" "$id")" -eq 0 ] || fail "task $id has no live reference left; its records should go"
+  done
+  [ -f "$state/unread.task.inbox/002.msg" ] || fail "a pointer to an unhandled result must keep its task live"
+  [ -f "$state/mixed.task.inbox/002.msg" ] || fail "a steer that is more than the pointer must keep its task live"
+  [ -f "$state/meta.task.inbox/002.msg" ] || fail "a task with a meta keeps its inbox"
+  [ "$(count_task_records "$home" unread.task)" -eq 4 ] || fail "a live task keeps its records"
+  pass "sweep: a steer that only points at a handled process-event result is residue"
+}
+
+test_supervision_scratch_rotates_by_age() {
+  local home fb out now p
+  home=$(new_home scratch2); fb=$(make_tmux "$TMP_ROOT/scratch2")
+  world "$home" "" ok zsh
+  now=$(date +%s)
+  for p in .status-presentation.prepared. .fm-pr-poll-check. .fm-pr-poll-registration. .fm-capture-output.; do
+    printf 'old\n' > "$home/state/${p}OLD001"
+    printf 'fresh\n' > "$home/state/${p}NEW001"
+    fm_touch_epoch $((now - 8 * 86400)) "$home/state/${p}OLD001"
+  done
+  out=$(run_sweep "$fb" "$home")
+  for p in .status-presentation.prepared. .fm-pr-poll-check. .fm-pr-poll-registration. .fm-capture-output.; do
+    [ ! -e "$home/state/${p}OLD001" ] || fail "an 8-day-old ${p} scratch file should rotate"
+    [ -e "$home/state/${p}NEW001" ] || fail "a fresh ${p} scratch file must survive"
+  done
+  assert_contains "$out" "4 stale scratch file(s)" "the summary line should count them: $out"
+  pass "sweep: status-presentation, PR-poll and watcher-capture scratch rotate by age"
+}
+
+test_orphan_launch_stamps_retired() {
+  local home fb out reg
+  home=$(new_home stamps); fb=$(make_tmux "$TMP_ROOT/stamps")
+  world "$home" "" ok zsh
+  reg="$home/state/procevent"
+  mkdir -p "$reg"
+  : > "$reg/live.source"
+  : > "$reg/live.10-20.last-launch"
+  : > "$reg/live.11-21.last-launch"
+  : > "$reg/gone.10-20.last-launch"
+  : > "$reg/gone.last-launch"
+  : > "$reg/live.x.5-6.last-launch"
+  : > "$reg/legacy.1.source"
+  : > "$reg/legacy.1.last-launch"
+
+  out=$(run_sweep "$fb" "$home" --dry-run)
+  assert_contains "$out" "would retire orphan launch stamp gone.10-20.last-launch" "--dry-run should list an orphan stamp: $out"
+  [ -e "$reg/gone.10-20.last-launch" ] || fail "--dry-run removed a stamp"
+
+  out=$(run_sweep "$fb" "$home")
+  [ ! -e "$reg/gone.10-20.last-launch" ] && [ ! -e "$reg/gone.last-launch" ] \
+    || fail "stamps of a source with no registration should go: $(ls "$reg")"
+  [ ! -e "$reg/live.x.5-6.last-launch" ] || fail "a stamp of the unregistered source live.x is an orphan even though live is registered"
+  [ -e "$reg/live.10-20.last-launch" ] && [ -e "$reg/live.11-21.last-launch" ] \
+    || fail "a registered source keeps its stamps"
+  [ -e "$reg/legacy.1.last-launch" ] || fail "a legacy bare-id stamp of a registered source is kept"
+  assert_contains "$out" "3 orphan launch stamp(s)" "the summary should count removed stamps: $out"
+  pass "sweep: launch-pacing stamps of unregistered sources are retired"
+}
+
+test_dead_locks_reclaimed_and_live_kept() {
+  local home fb out state old dead start o
+  home=$(new_home dead-locks); fb=$(make_tmux "$TMP_ROOT/dead-locks")
+  state="$home/state"
+  world "$home" "" ok zsh
+  old=$(( $(date +%s) - 2 * 3600 ))
+  sleep 0 & dead=$!; wait "$dead"
+  # shellcheck disable=SC2016 # expanded by the child shell
+  start=$(bash -c '. "$1/bin/fm-wake-lib.sh"; fm_pid_start_time "$2"' _ "$ROOT" "$$")
+  # .dead: link to an owner whose pid is gone. .reused: the pid runs but its
+  # start time differs from pid-start. .live: the pid runs with its own start
+  # time. .young: dead but inside the age guard. .plain: a plain lock dir.
+  for o in dead reused live young; do
+    mkdir "$state/.$o.lock.owner.AAAAAA"
+    ln -s "$state/.$o.lock.owner.AAAAAA" "$state/.$o.lock"
+  done
+  mkdir "$state/plain.lock"
+  printf '%s\n' "$dead" > "$state/.dead.lock.owner.AAAAAA/pid"
+  printf '%s\n' "$dead" > "$state/.young.lock.owner.AAAAAA/pid"
+  printf '%s\n' "$dead" > "$state/plain.lock/pid"
+  printf '%s\n' "$$" > "$state/.reused.lock.owner.AAAAAA/pid"
+  printf 'not-%s\n' "$start" > "$state/.reused.lock.owner.AAAAAA/pid-start"
+  printf '%s\n' "$$" > "$state/.live.lock.owner.AAAAAA/pid"
+  printf '%s\n' "$start" > "$state/.live.lock.owner.AAAAAA/pid-start"
+  for o in .dead .reused .live; do fm_touch_epoch "$old" "$state/$o.lock.owner.AAAAAA"; done
+  fm_touch_epoch "$old" "$state/plain.lock"
+
+  out=$(run_sweep "$fb" "$home" --dry-run)
+  assert_contains "$out" "would retire dead lock .dead.lock" "--dry-run should list a dead lock: $out"
+  assert_contains "$out" "would retire dead lock .reused.lock" "--dry-run should list a reused-pid lock: $out"
+  [ -L "$state/.dead.lock" ] || fail "--dry-run removed a lock"
+
+  out=$(run_sweep "$fb" "$home")
+  [ ! -e "$state/.dead.lock" ] && [ ! -L "$state/.dead.lock" ] && [ ! -e "$state/.dead.lock.owner.AAAAAA" ] \
+    || fail "a dead holder's lock and owner should be reclaimed: $(ls -a "$state")"
+  [ ! -L "$state/.reused.lock" ] && [ ! -e "$state/.reused.lock.owner.AAAAAA" ] \
+    || fail "a lock whose pid was reused by another process should be reclaimed"
+  [ ! -e "$state/plain.lock" ] || fail "a plain dead lock directory should be reclaimed"
+  [ -L "$state/.live.lock" ] && [ -d "$state/.live.lock.owner.AAAAAA" ] || fail "a live holder's lock must survive"
+  [ -L "$state/.young.lock" ] || fail "a young lock may be mid-acquire and must survive"
+  assert_contains "$out" "3 dead lock(s)" "the summary line should count reclaimed locks: $out"
+  pass "sweep: dead and pid-reused locks are reclaimed; live and young ones kept"
+}
+
 test_gone_endpoint_swept_and_live_kept
+test_handled_pointer_steer_is_residue
+test_dead_locks_reclaimed_and_live_kept
+test_orphan_launch_stamps_retired
+test_supervision_scratch_rotates_by_age
 test_live_without_record_never_queried_past_inventory
 test_ambiguous_and_unreadable_kept
 test_meta_referenced_endpoint_never_touched

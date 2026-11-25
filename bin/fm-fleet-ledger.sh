@@ -26,8 +26,12 @@
 #   fm-fleet-ledger.sh merged <task> pr <url>
 #   fm-fleet-ledger.sh merged <task> local
 #   fm-fleet-ledger.sh cleaned_up <task>
+#   fm-fleet-ledger.sh forget <task>
 #   fm-fleet-ledger.sh capture
 #   fm-fleet-ledger.sh appended <config> <state>/<task>.status
+#
+# forget deletes <task>'s saved offset under the ledger lock and records
+# nothing, whether or not the ledger is on; bin/fm-teardown.sh runs it when it retires a secondmate route.
 #
 # capture appends one task.status record for every complete (newline-ended)
 # line added to a state/<task>.status log since that task's byte offset in
@@ -71,7 +75,7 @@ LOCK="$STATE/.fleet-ledger.lock"
 TEXT_MAX_CHARS=2000
 
 usage() {
-  echo "usage: fm-fleet-ledger.sh dispatched <task> <kind> <project> <harness> <model> | pr_ready <task> <url> | merged <task> pr <url> | merged <task> local | cleaned_up <task> | capture | appended <config> <state>/<task>.status" >&2
+  echo "usage: fm-fleet-ledger.sh dispatched <task> <kind> <project> <harness> <model> | pr_ready <task> <url> | merged <task> pr <url> | merged <task> local | cleaned_up <task> | forget <task> | capture | appended <config> <state>/<task>.status" >&2
   exit "${1:-2}"
 }
 
@@ -88,7 +92,7 @@ case "$cmd" in
     task_ok "${2:-}" || usage
     case "$#:${3:-}" in 4:pr) [ -n "$4" ] || usage ;; 3:local) ;; *) usage ;; esac
     ;;
-  cleaned_up) { [ "$#" -eq 2 ] && task_ok "$2"; } || usage ;;
+  cleaned_up|forget) { [ "$#" -eq 2 ] && task_ok "$2"; } || usage ;;
   capture) [ "$#" -eq 1 ] || usage ;;
   appended)
     [ "$#" -eq 3 ] && [ -n "$2" ] || usage
@@ -104,10 +108,22 @@ case "$cmd" in
   *) usage ;;
 esac
 
+offset_path() { printf '%s/.%s.fleet-ledger-offset' "$STATE" "$1"; }
+
+# forget runs whether or not the ledger is on, because an offset outlives a
+# ledger switched off after it was written.
+if [ "$cmd" = forget ]; then
+  [ -d "$STATE" ] && [ ! -L "$STATE" ] || exit 0
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$SCRIPT_DIR/fm-wake-lib.sh" || exit 1
+  fm_lock_acquire_wait "$LOCK" || exit 1
+  rm -f -- "$(offset_path "$2")"
+  fm_lock_release "$LOCK"
+  exit
+fi
+
 [ -e "$CONFIG/fleet-ledger" ] || exit 0
 [ -d "$STATE" ] && [ ! -L "$STATE" ] || exit 1
-
-offset_path() { printf '%s/.%s.fleet-ledger-offset' "$STATE" "$1"; }
 
 read_offset() { # <task> <out-var>: saved byte offset, 0 when absent or malformed
   local value=0

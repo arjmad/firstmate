@@ -312,7 +312,14 @@ if (defined $host_error) {
     exit 0;
   }
 }
+# Start above the source's sequence floor (fm_procevent_sequence_floor in
+# bin/fm-procevent-lib.sh owns it), so an archived round's sequence is never reused.
 $sequence = 1;
+if (open(my $floor_fh, '<', "$id.seq-floor")) {
+  my $floor = <$floor_fh>;
+  close($floor_fh);
+  $sequence = $1 + 1 if defined $floor && $floor =~ /\A(\d{1,18})\n?\z/;
+}
 $sequence++ while -e "$id.$sequence.result" || -l "$id.$sequence.result";
 my $prefix = "$id.$sequence";
 my $nonce = ".$prefix.$$";

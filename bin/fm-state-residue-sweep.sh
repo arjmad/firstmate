@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fm-state-residue-sweep.sh - retire the watcher's per-endpoint bookkeeping
 # under state/ once the endpoint it describes is provably gone, retire the
-# task-keyed records and dead lock owners nothing live references, and rotate
+# task-keyed records, dead locks and dead lock owners nothing live references, and rotate
 # the scratch files supervision scripts can leave behind.
 #
 # Usage: fm-state-residue-sweep.sh [--dry-run | --heartbeat]
@@ -77,7 +77,12 @@
 # wake-queue key naming the task's status, turn-ended, or check file, or a
 # signal wake keyed by the bare task id (keys naming nothing of those files
 # protect nothing, because these records only describe them). An inbox whose
-# steers were all acknowledged into handled/ is residue, not liveness. The same
+# steers were all acknowledged into handled/ is residue, not liveness, and so
+# is one whose only unhandled steers are the Lavish feedback or terminal
+# pointers bin/fm-procevent.sh writes to a board's owner task: a pointer is
+# matched by rebuilding it through fm_procevent_pointer_message_result, never
+# by a prefix, and counts only once the result it names carries its .handled
+# marker, so a pointer to an unread round still keeps its task live. The same
 # test retires three pieces of per-task state a spawn leaves that a
 # non-teardown ending never removes: the steering inbox state/<id>.inbox, the
 # read-only commit-msg hooks directory state/<id>.git-hooks, and the Herdr
@@ -107,17 +112,45 @@
 # it: an acquirer before ln -sn followed the lock link into this directory and
 # left it there, so the holder's release could not remove the directory.
 #
+# Dead locks. A holder SIGKILLed inside its hold (an EXIT-trap release never
+# runs) leaves the lock itself - the <name>.lock link still pointing at its
+# owner, or a plain <name>.lock directory - which the owner pass above never
+# touches because the lock still names it. A lock directly under state/, other
+# than the watcher's state/.watch.lock, the supervise daemon's
+# state/.supervise-daemon.lock and any .subsuper-* record, is reclaimed when it is older than
+# FM_STATE_RESIDUE_OWNER_MIN_AGE_SECONDS and fm_lock_holder_alive says its
+# recorded pid is gone or, through its pid-start record, now belongs to a
+# different process (pid reuse). The reclaim goes through the lock library's
+# own fm_lock_try_acquire and fm_lock_release, whose steal path re-checks the
+# holder under the lock's steal mutex, so a live acquirer never loses its lock
+# and a lock holding files the library does not own is left in place.
+#
+# Orphan launch stamps. bin/fm-procevent.sh keeps one launch-pacing stamp
+# state/procevent/<source>.<identity>.last-launch per registration, and its
+# retire drops them, but a source retired before that rule left its stamps
+# behind for good. A stamp whose source has no <source>.source registration
+# (fm_procevent_launch_floor_orphans) is removed under that source's lock,
+# taken without waiting and re-checked under it, so a source registering at
+# that moment keeps its stamp.
+#
 # Scratch rotation. bin/fm-claude-stop-autoarm.sh captures each arm attempt in
 # state/.claude-autoarm-output.<random>, bin/fm-wake-drain.sh stages a row
 # rewrite in state/.wake-rows.consume.<random>,
 # bin/fm-home-summary-refresh.sh stages state/.home-summary.json.<random> and
-# state/.home-summary-error.<random>, and bin/fm-watch-arm.sh captures its
-# watcher child's stdout in state/.watch-arm-output.<random>; each removes its
+# state/.home-summary-error.<random>, bin/fm-watch-arm.sh captures its
+# watcher child's stdout in state/.watch-arm-output.<random>, bin/fm-wake-drain.sh
+# prepares a status section in state/.status-presentation.prepared.<random>,
+# bin/fm-pr-lib.sh stages a PR-poll check and registration in
+# state/.fm-pr-poll-check.<random> and state/.fm-pr-poll-registration.<random>,
+# and bin/fm-watch.sh captures one pane read or event wait in
+# state/.fm-capture-output.<random>; each removes its
 # file on every path a trap can catch, so one older than
 # FM_STATE_RESIDUE_SCRATCH_MAX_AGE_DAYS was orphaned by a killed process and is
 # removed. The threshold is a constant, not a config file: no other live
 # scratch file is ever that old (an arm attempt lasts seconds; a row rewrite
-# holds the queue lock; a summary refresh is bounded at a minute), so there is
+# holds the queue lock; a summary refresh is bounded at a minute; a status
+# section, a PR-poll staging file and a watcher capture last one drain, call
+# or poll), so there is
 # nothing to tune. A watch-arm capture lives as long as its watcher, and an idle
 # home's watcher can run for days, so those are kept outright while a live pid
 # holds this home's state/.watch.lock.
@@ -158,6 +191,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-procevent-lib.sh
 . "$SCRIPT_DIR/fm-procevent-lib.sh"
+# shellcheck source=bin/fm-task-inbox-lib.sh
+. "$SCRIPT_DIR/fm-task-inbox-lib.sh"
 
 # Scratch files older than this many days are orphans; see the header.
 FM_STATE_RESIDUE_SCRATCH_MAX_AGE_DAYS=7
@@ -171,7 +206,7 @@ FM_STATE_RESIDUE_HEARTBEAT_INTERVAL_SECONDS=3600
 # Longest prefixes first, so `.stale-since-K` is read as key K under
 # `.stale-since-` and never as key `since-K` under `.stale-`.
 FM_STATE_RESIDUE_PREFIXES='.stale-since- .paused-rechecked- .paused-resurfaced- .writing-since- .writing-resurfaced- .waiting-resurfaced- .wedge-escalations- .churn-since- .hash- .count- .stale- .paused-'
-FM_STATE_RESIDUE_SCRATCH_PREFIXES='.claude-autoarm-output. .wake-rows.consume. .home-summary.json. .home-summary-error. .watch-arm-output.'
+FM_STATE_RESIDUE_SCRATCH_PREFIXES='.claude-autoarm-output. .wake-rows.consume. .home-summary.json. .home-summary-error. .watch-arm-output. .status-presentation.prepared. .fm-pr-poll-check. .fm-pr-poll-registration. .fm-capture-output.'
 
 DRY_RUN=0
 HEARTBEAT=0
@@ -461,6 +496,18 @@ procevent_live_source() {  # <source-id>
   PROCEVENT_SOURCES="$PROCEVENT_SOURCES|$1|"
   procevent_live "procevent:$1:"
 }
+# handled_pointer_msg <msg> <task-id>: whether a steer is only the
+# process-event pointer bin/fm-procevent.sh writes to a board's owner task
+# (rebuilt through fm_procevent_pointer_message_result) and the result it
+# names already carries its handled marker, so the steer asks nothing more of
+# the task. A plain file only; anything unreadable is a live steer.
+handled_pointer_msg() {
+  local body result
+  [ -f "$1" ] && [ ! -L "$1" ] || return 1
+  body=$(fm_task_inbox_body "$1") || return 1
+  result=$(fm_procevent_pointer_message_result "$STATE" "$2" "$body") || return 1
+  fm_procevent_is_handled "$STATE" "$(fm_procevent_result_source_id "$result")" "$(fm_procevent_result_sequence "$result")"
+}
 collect_referenced() {
   local path name key keys kind status msg
   _fm_wake_require_classify || return 1
@@ -473,6 +520,7 @@ collect_referenced() {
     name=${path##*/}
     for msg in "$path"/*.msg; do
       [ -e "$msg" ] || [ -L "$msg" ] || continue
+      handled_pointer_msg "$msg" "${name%.inbox}" && continue
       reference_task "${name%.inbox}" || return 1
       break
     done
@@ -661,6 +709,73 @@ sweep_lock_owners() {
   done
 }
 
+# Abandoned locks: a <name>.lock (the link to its owner, or a plain lock
+# directory) whose holder is gone. See "Dead locks" in the header.
+sweep_dead_locks() {
+  local path name pid
+  for path in "$STATE"/*.lock "$STATE"/.*.lock; do
+    [ -L "$path" ] || [ -d "$path" ] || continue
+    name=${path##*/}
+    case "$name" in .watch.lock|.supervise-daemon.lock|.subsuper-*) continue ;; esac
+    # Aged by the directory the lock resolves to (its owner, for a link).
+    [ "$(fm_path_age "$path/.")" -gt "$FM_STATE_RESIDUE_OWNER_MIN_AGE_SECONDS" ] || continue
+    pid=$(cat "$path/pid" 2>/dev/null || true)
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    fm_lock_holder_alive "$path" "$pid" && continue
+    if [ "$DRY_RUN" -eq 1 ]; then
+      printf 'would retire dead lock %s\n' "$name"
+      REMOVED_DEAD_LOCKS=$((REMOVED_DEAD_LOCKS + 1))
+      continue
+    fi
+    if fm_lock_try_acquire "$path"; then
+      fm_lock_release "$path" || true
+      if [ -e "$path" ] || [ -L "$path" ]; then
+        warn "could not remove dead lock $name"
+      else
+        REMOVED_DEAD_LOCKS=$((REMOVED_DEAD_LOCKS + 1))
+      fi
+    else
+      warn "kept dead lock $name: the lock library would not reclaim it"
+    fi
+  done
+}
+
+# Launch-pacing stamps of sources with no registration; see "Orphan
+# launch stamps" in the header.
+sweep_launch_stamps() {
+  local stamp base id lock root
+  root=$(fm_procevent_claim_root)
+  while IFS= read -r stamp; do
+    [ -n "$stamp" ] || continue
+    base=${stamp##*/}
+    if [ "$DRY_RUN" -eq 1 ]; then
+      printf 'would retire orphan launch stamp %s\n' "$base"
+      REMOVED_STAMPS=$((REMOVED_STAMPS + 1))
+      continue
+    fi
+    # Take the source lock without waiting and re-read under it, so a source
+    # registering right now keeps its stamp. A legacy bare-id stamp is locked
+    # by its whole name.
+    base=${base%.last-launch}
+    id=${base%.*}
+    _fm_procevent_launch_floor_stamp_of "${stamp%/*}" "$id" "$stamp" 2>/dev/null || id=$base
+    fm_procevent_source_id_valid "$id" || continue
+    (umask 077; mkdir -p "$root") 2>/dev/null || continue
+    lock=$(fm_procevent_source_lock_path "$id")
+    fm_lock_try_acquire "$lock" || continue
+    if fm_procevent_launch_floor_orphans "$STATE" | grep -Fxq -- "$stamp"; then
+      if rm -f -- "$stamp"; then
+        REMOVED_STAMPS=$((REMOVED_STAMPS + 1))
+      else
+        warn "could not remove $stamp"
+      fi
+    fi
+    fm_lock_release "$lock" || true
+  done <<EOF
+$(fm_procevent_launch_floor_orphans "$STATE")
+EOF
+}
+
 # --- scratch rotation ----------------------------------------------------------
 
 rotate_scratch() {
@@ -693,7 +808,7 @@ if [ ! -d "$STATE" ] || [ -L "$STATE" ]; then
 fi
 
 REMOVED_RECORDS=0 REMOVED_ENDPOINTS=0 ROTATED=0 QUERIES=0 DEFERRED=0
-REMOVED_TASK_RECORDS=0 REMOVED_LOCK_OWNERS=0
+REMOVED_TASK_RECORDS=0 REMOVED_LOCK_OWNERS=0 REMOVED_DEAD_LOCKS=0 REMOVED_STAMPS=0
 KEPT_META=0 KEPT_LIVE=0 KEPT_UNRESOLVED=0 KEPT_UNMATCHED=0
 
 if [ "$HEARTBEAT" -eq 1 ] && { [ -e "$LAST_SWEEP" ] || [ -L "$LAST_SWEEP" ]; } \
@@ -730,17 +845,20 @@ if [ "$TASK_SET_LOCK_HELD" -eq 1 ]; then
   TASK_SET_LOCK_HELD=0
   fm_lock_release "$TASK_SET_LOCK" || true
 fi
+sweep_dead_locks
 sweep_lock_owners
+sweep_launch_stamps
 rotate_scratch
 [ "$DRY_RUN" -eq 1 ] || touch "$LAST_SWEEP" 2>/dev/null || warn "could not record this sweep in $LAST_SWEEP"
 
 if [ "$REMOVED_ENDPOINTS" -gt 0 ] || [ "$ROTATED" -gt 0 ] \
-  || [ "$REMOVED_TASK_RECORDS" -gt 0 ] || [ "$REMOVED_LOCK_OWNERS" -gt 0 ]; then
+  || [ "$REMOVED_TASK_RECORDS" -gt 0 ] || [ "$REMOVED_LOCK_OWNERS" -gt 0 ] \
+  || [ "$REMOVED_DEAD_LOCKS" -gt 0 ] || [ "$REMOVED_STAMPS" -gt 0 ]; then
   verb=removed
   [ "$DRY_RUN" -eq 0 ] || verb='would remove'
-  printf 'BOOTSTRAP_INFO: state residue sweep: %s %s watcher record(s) for %s gone endpoint(s) and %s stale scratch file(s), %s retired-task record(s), %s dead lock owner(s); kept watcher records for %s endpoint(s) a task record names (never probed), %s probed and still running, %s unresolved, %s matching no backend this home runs' \
+  printf 'BOOTSTRAP_INFO: state residue sweep: %s %s watcher record(s) for %s gone endpoint(s) and %s stale scratch file(s), %s retired-task record(s), %s dead lock owner(s), %s dead lock(s), %s orphan launch stamp(s); kept watcher records for %s endpoint(s) a task record names (never probed), %s probed and still running, %s unresolved, %s matching no backend this home runs' \
     "$verb" "$REMOVED_RECORDS" "$REMOVED_ENDPOINTS" "$ROTATED" \
-    "$REMOVED_TASK_RECORDS" "$REMOVED_LOCK_OWNERS" \
+    "$REMOVED_TASK_RECORDS" "$REMOVED_LOCK_OWNERS" "$REMOVED_DEAD_LOCKS" "$REMOVED_STAMPS" \
     "$KEPT_META" "$KEPT_LIVE" "$KEPT_UNRESOLVED" "$KEPT_UNMATCHED"
   [ "$DEFERRED" -eq 0 ] || printf ', %s deferred to the next sweep' "$DEFERRED"
   printf ' (these count watcher bookkeeping, not fleet liveness; bin/fm-fleet-view.sh shows which panes are live)\n'
