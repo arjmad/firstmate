@@ -810,6 +810,7 @@ tests/fm-also-companion.test.sh 17229
 tests/fm-approval-failover.test.sh 5410
 tests/fm-ask-user-authority.test.sh 270
 tests/fm-atlas.test.sh 116508
+tests/fm-audit-landed-by.test.sh 300
 tests/fm-backend-cmux-smoke.test.sh 49
 tests/fm-backend-cmux.test.sh 5036
 tests/fm-backend-hc-liveness-live-e2e.test.sh 9000
