@@ -12,6 +12,7 @@
 #   fm-procevent-lavish.sh read <result-file>
 #   fm-procevent-lavish.sh source-id <artifact.html>
 #   fm-procevent-lavish.sh retire <artifact.html>
+#   fm-procevent-lavish.sh end <artifact.html>
 #   fm-procevent-lavish.sh poll <artifact.html> [--agent-reply-file <path>]
 #   fm-procevent-lavish.sh deliver-reply poll <artifact.html> --agent-reply-file <path>
 #   fm-procevent-lavish.sh adopt poll <artifact.html> [--agent-reply-file <path>]
@@ -461,6 +462,15 @@ cmd_deliver_reply() {
   lavish_reply_compatible || exit 3
   apply_session_host "$2"
   post_lavish_reply "$2" "$4"
+}
+
+# End a board's Lavish session (a plain reopen still works) on the server its
+# saved session names, so a board opened on another port is ended there.
+cmd_end() {
+  [ "$#" -eq 1 ] && [ -n "$1" ] || usage
+  command -v lavish-axi >/dev/null 2>&1 || die "lavish-axi is not installed"
+  apply_session_host "$1"
+  lavish-axi end "$1"
 }
 
 cmd_retire() {
@@ -1338,6 +1348,7 @@ cmd_read() {
 case "${1-}" in
   arm)       shift; cmd_arm "$@" ;;
   retire)    shift; cmd_retire "$@" ;;
+  end)       shift; cmd_end "$@" ;;
   poll)      shift; cmd_poll "$@" ;;
   deliver-reply) shift; cmd_deliver_reply "$@" ;;
   adopt)     shift; cmd_adopt "$@" ;;

@@ -11,6 +11,8 @@ set -u
 
 TMP_ROOT=$(fm_test_tmproot fm-procevent-board-retire)
 export FM_PROCEVENT_CLAIM_ROOT="$TMP_ROOT/claims"
+export LAVISH_AXI_STATE_DIR="$TMP_ROOT/lavish-state"
+mkdir -p "$LAVISH_AXI_STATE_DIR"
 unset FM_ROOT_OVERRIDE FM_DATA_OVERRIDE FM_STATE_OVERRIDE FM_CONFIG_OVERRIDE TASKS_AXI_FILE TASKS_AXI_BACKEND
 unset FM_PROCEVENT_BOARD_QUIET_SECONDS FM_PROCEVENT_BOARD_SWEEP_SECONDS
 
@@ -350,8 +352,20 @@ test_argv_lines_are_not_header_fields() {
 
 # A retired board's Lavish session is ended too, so it stops counting as open;
 # a failed end or a missing lavish-axi only warns and never undoes the retire.
+# The board's saved session, in the store format bin/fm-procevent-lavish.sh
+# reads, on a non-default port so the end must use the board's own server.
 lavish_board() {  # <home> <source-id> <artifact>
   local rec="$1/state/procevent/$2.source"
+  : > "$3"
+  perl -MJSON::PP -MCwd=realpath -e '
+    my ($path, $artifact, $key) = @ARGV;
+    my $state = { sessions => {} };
+    if (-f $path) { open my $in, "<", $path or die $!; local $/; $state = decode_json(<$in>); }
+    $state->{sessions}{$key} = { key => $key, file => realpath($artifact), status => "open",
+      url => "http://127.0.0.1:24999/session/0123456789abcdef" };
+    open my $out, ">", $path or die $!;
+    print $out encode_json($state);
+  ' "$LAVISH_AXI_STATE_DIR/state.json" "$3" "$2"
   printf 'adapter=lavish\nargc=3\nargv:\n%s\npoll\n%s\n' "$BLOCKER" "$3" > "$rec"
   chmod 600 "$rec"
   fm_touch_epoch "$OLD" "$rec"
@@ -363,7 +377,7 @@ test_retired_board_session_is_ended() {
   bin=$(fm_fakebin "$TMP_ROOT/board-end-bin")
   cat > "$bin/lavish-axi" <<'SH'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >> "${0%/*}/calls"
+printf '%s port=%s\n' "$*" "${LAVISH_AXI_PORT-}" >> "${0%/*}/calls"
 case "${2-}" in *fails.html) echo "server said no" >&2; exit 1 ;; esac
 SH
   chmod +x "$bin/lavish-axi"
@@ -375,7 +389,7 @@ SH
   assert_contains "$out" "warning: board-end-failed: lavish-end-bad reason=server said no" "a failed end's warning"
   registered "$home" lavish-end-bad && fail "a failed end undid the retirement"
   assert_contains "$out" "board-retired: lavish-end-other" "a non-poll listener still retires"
-  assert_grep "end $home/ok.html" "$bin/calls" "lavish-axi end got the board's artifact"
+  assert_grep "end $home/ok.html port=24999" "$bin/calls" "lavish-axi end got the board's artifact on its own server"
   assert_not_contains "$(cat "$bin/calls")" "never-lavish-end-other" "a listener with no poll artifact was ended"
   assert_grep "board-ended: lavish-end-ok" "$home/state/procevent/board-retirements.log" "the durable end log"
   assert_grep "board-end-failed: lavish-end-bad" "$home/state/procevent/board-retirements.log" "the durable end-failure log"

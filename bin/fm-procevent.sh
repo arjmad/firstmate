@@ -340,6 +340,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-task-inbox-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 
@@ -1963,19 +1965,25 @@ board_artifact() {  # <adapter>
 }
 
 # Retiring only drops firstmate's listener, so the Lavish session would stay
-# `open` and count as a live board. End it after the retire with
-# `lavish-axi end`, which still allows a plain reopen. A missing lavish-axi or
-# a failed end only warns: the retirement itself has already succeeded.
+# `open` and count as a live board. End it after the retire through the
+# adapter's `end` (`lavish-axi end` on the board's own server, which still
+# allows a plain reopen), bounded so a stalled server cannot hold up teardown
+# or reconcile. A missing lavish-axi, a failed end or a timeout only warns: the
+# retirement itself has already succeeded.
+BOARD_END_SECONDS=30
 board_end_session() {  # <source-id> <artifact>
-  local out line
+  local out line rc=0
   if ! command -v lavish-axi >/dev/null 2>&1; then
     line="board-end-failed: $1 reason=lavish-axi-missing"
-  elif out=$(lavish-axi end "$2" 2>&1 </dev/null); then
-    line="board-ended: $1"
-    board_retire_log "$line"
-    printf '%s\n' "$line"
-    return 0
   else
+    out=$(fm_run_timed "$BOARD_END_SECONDS" "$(adapter_script lavish)" end "$2" 2>&1 </dev/null) || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      line="board-ended: $1"
+      board_retire_log "$line"
+      printf '%s\n' "$line"
+      return 0
+    fi
+    [ "$rc" -ne 124 ] || out="timed out after ${BOARD_END_SECONDS}s"
     line="board-end-failed: $1 reason=$(printf '%s' "$out" | tr '\n' ' ' | sed 's/ *$//')"
   fi
   board_retire_log "$line"
@@ -2089,8 +2097,10 @@ cmd_reconcile() {
     while IFS= read -r board_line; do
       case "$board_line" in
         'board-retired: '*) printf '%s\n' "$board_line"; stopped=$((stopped + 1)) ;;
+        'board-ended: '*) printf '%s\n' "$board_line" ;;
+        'warning: board-end-failed: '*) printf '%s\n' "$board_line" >&2 ;;
       esac
-    done < <(cmd_retire_quiet_boards 2>/dev/null)
+    done < <(cmd_retire_quiet_boards 2>&1)
   fi
 
   # Stop a runner this home owns whose source is no longer registered. Without
