@@ -703,7 +703,7 @@ esac
 # A ready registration by hand, not the scan's or the merge's re-record, also
 # lists on stderr any captain ruling dated on or after the task's approval,
 # so it is read before the merge; bin/fm-later-rulings.sh owns the listing.
-if [ "${FM_PR_CHECK_MERGE:-}" != 1 ] && [ "${FM_PR_CHECK_SCAN:-}" != 1 ] && [ -z "$ALSO_REPO" ]; then
+if [ "${FM_PR_CHECK_MERGE:-}" != 1 ] && [ "${FM_PR_CHECK_SCAN:-}" != 1 ]; then
   FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-later-rulings.sh" "$ID" --found-only >&2 2>/dev/null || true
 fi
 printf 'armed: state/%s.check.sh\n' "$ID"

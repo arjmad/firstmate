@@ -136,6 +136,23 @@ test_nothing_to_list_says_so_once_and_found_only_is_silent() {
   assert_equals "later-rulings: undated-ship records no dated captain approval; pass --since YYYY-MM-DD to check it" "$out" \
     "a decision text with no date was read as an approval"
 
+  # Only the newest resolution record dates an approval: a newest record that
+  # carries reconciliation evidence does not fall back to an older decision,
+  # and a "Captain decision:" line outside any record is not one.
+  printf '%s\n' 'Resolution recorded by fm-captain-hold.' 'Decision digest: aa' 'Resolution mode: reconciled' '' \
+    'Reconciliation evidence:' 'Moot on 2026-11-22.' '' \
+    'Captain decision:' 'Arjun 2026-11-09 in an older note.' '' \
+    'Resolution recorded by fm-captain-hold.' 'Decision digest: bb' 'Resolution mode: released' '' \
+    'Captain decision:' 'Arjun 2026-11-10: ship it.' > "$home/reconciled.txt"
+  printf '%s\n' 'Notes from the scout.' 'Captain decision:' 'Arjun 2026-11-10 maybe.' > "$home/prose.txt"
+  for row in reconciled prose; do
+    in_home "$home" "$ROOT/bin/fm-tasks-axi.sh" add "$row-ship" "Ship $row" --kind ship \
+      --body-file "$home/$row.txt" >/dev/null 2>&1 || fail "could not add the $row row"
+    out=$(in_home "$home" "$LATER" "$row-ship" 2>&1)
+    assert_equals "later-rulings: $row-ship records no dated captain approval; pass --since YYYY-MM-DD to check it" "$out" \
+      "the $row row was read as a dated approval"
+  done
+
   out=$(in_home "$home" "$LATER" plain-ship --since 2026-11-30 2>&1)
   assert_equals "later-rulings: no captain ruling dated on or after plain-ship's approval 2026-11-30" "$out" \
     "an approval with no later ruling did not say so in one line"

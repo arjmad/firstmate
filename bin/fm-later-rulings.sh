@@ -18,9 +18,11 @@
 # the newest resolution record bin/fm-captain-hold.sh wrote into the task's
 # backlog row (records are prepended, so the first one in the body is the
 # newest), the record its `answer` or `answer --release` leaves when the
-# captain approves or releases the work. A "Reconciliation evidence:" record is
-# not the captain's word and is never read as an approval. A row with no such
-# record, or a decision text with no date, has no approval date.
+# captain approves or releases the work. Only that newest record is read: one
+# carrying "Reconciliation evidence:" is not the captain's word, so it leaves no
+# approval date rather than falling back to an older one. A row with no such
+# record, or a decision text with no date before its first blank line, has no
+# approval date.
 #
 # The rulings. Every dated item in this home's data/captain.md and, when
 # present, data/captain-shared.md. An item is one list entry ("- ", "* " or
@@ -94,11 +96,15 @@ for name in captain.md captain-shared.md; do
 done
 [ "${#FILES[@]}" -gt 0 ] || say_empty "no data/captain.md or data/captain-shared.md in this home"
 
-# The newest "Captain decision:" text in a decoded row body, up to the blank
-# line that ends its block, prints its first full date.
+# The newest resolution record in a decoded row body, read only up to the next
+# record, prints the first full date of its "Captain decision:" text, up to the
+# blank line that ends that text; a newest record whose payload is another
+# label prints nothing, even if the row's later prose holds that heading.
 approval_date_from_body() {
   awk '
-    !found && $0 == "Captain decision:" { found = 1; next }
+    /^Resolution recorded by fm-(captain|decision)-hold\.$/ { if (record) exit; record = 1; next }
+    record && !found && /^(Reconciliation evidence|Default release):$/ { exit }
+    record && !found && $0 == "Captain decision:" { found = 1; next }
     found && $0 == "" { exit }
     found && match($0, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/) {
       print substr($0, RSTART, RLENGTH); exit
