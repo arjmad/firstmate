@@ -2277,7 +2277,7 @@ Firstmate cannot see which part of a worker's life uses the resource, so the num
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
 `config/crew-dispatch.json` is an optional local, gitignored file containing natural-language rules that firstmate reads before dispatching a crewmate or scout.
-Where the fleet's `fleet-mode` command runs, it writes this file from `config/crew-dispatch.normal.json` or `config/crew-dispatch.heavy.json`: edit the mode file, then run `~/nix/bin/fleet-mode <mode>`; a hand edit of `crew-dispatch.json` is set aside as `crew-dispatch.json.fleet-mode-<epoch>` at the next switch (`~/nix/docs/fleet-mode.md`).
+Where the fleet's `fleet-mode` command runs, it writes this file from `config/crew-dispatch.normal.json` or `config/crew-dispatch.heavy.json`: edit the mode file, then run `fleet-mode <current mode>` (see `fleet-mode status`), because running the other mode switches the whole fleet; an edit to the other mode's file needs no run until that mode is chosen; a hand edit of `crew-dispatch.json` is set aside as `crew-dispatch.json.fleet-mode-<epoch>` at the next switch (`~/nix/docs/fleet-mode.md`).
 Firstmate chooses the best matching rule with judgment; shell scripts do not match the natural-language rules.
 Firstmate resolves the rule's profile object or array under `AGENTS.md` section 4 and `quota-array-dispatch`, then passes only concrete `--harness`, `--model`, `--effort`, and `--advisor` flags to `fm-spawn.sh`.
 
