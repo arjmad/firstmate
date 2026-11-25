@@ -1869,6 +1869,8 @@ test_unusable_self_update_source_wakes_once_per_reason() {
   grep -F "fix it or remove it" "$out" >/dev/null && fail "the wake kept the refusal's advice tail: $(cat "$out")"
   FM_HOME="$dir" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-wake-drain.sh" >/dev/null 2>"$dir/drain.err" \
     || fail "could not drain the unusable-source wake: $(cat "$dir/drain.err")"
+  grep "$(printf '\tcheck\tself-update-source-unusable\t')" "$state/.wake-queue" >/dev/null \
+    || fail "the unusable-source wake was not queued durably: $(cat "$state/.wake-queue" 2>&1)"
   ack_drain_err "$state" "$dir/drain.err" >/dev/null 2>&1 || fail "could not acknowledge the unusable-source wake"
 
   : > "$out"

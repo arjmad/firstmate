@@ -4026,6 +4026,8 @@ self_update_due_tick() {
     reason=${reason%; fix it or remove it*}
     [ -n "$reason" ] || reason="unreadable"
     [ "$(cat "$src_woke" 2>/dev/null)" != "$reason" ] || return 0
+    # Queue the row before the marker, so a lost delivery still drains it.
+    fm_wake_append check "self-update-source-unusable" "check: firstmate self-update source unusable: $reason" || return 0
     printf '%s\n' "$reason" > "$src_woke"
     wake "check: firstmate self-update source unusable: $reason"
     return 0
