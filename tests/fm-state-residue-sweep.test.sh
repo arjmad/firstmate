@@ -670,6 +670,7 @@ test_dead_lock_owners_swept_and_live_kept() {
     printf '%s\n' "$dead" > "$state/$o/pid"
   done
   printf '%s\n' "$$" > "$state/.alive.lock.owner.DDDDDD/pid"
+  printf '%s\n' "$$" > "$state/.held.lock.owner.BBBBBB/pid"
   printf 'x\n' > "$state/.odd.lock.owner.EEEEEE/unknown"
   ln -s "$state/.held.lock.owner.BBBBBB" "$state/.held.lock"
   ln -s "$state/.stolen.lock.owner.FFFFFF" "$state/.stolen.lock.steal"
@@ -1149,8 +1150,72 @@ test_handled_pointer_steer_is_residue() {
   pass "sweep: a steer that only points at a handled process-event result is residue"
 }
 
+test_supervision_scratch_rotates_by_age() {
+  local home fb out now p
+  home=$(new_home scratch2); fb=$(make_tmux "$TMP_ROOT/scratch2")
+  world "$home" "" ok zsh
+  now=$(date +%s)
+  for p in .status-presentation.prepared. .fm-pr-poll-check. .fm-pr-poll-registration. .fm-capture-output.; do
+    printf 'old\n' > "$home/state/${p}OLD001"
+    printf 'fresh\n' > "$home/state/${p}NEW001"
+    fm_touch_epoch $((now - 8 * 86400)) "$home/state/${p}OLD001"
+  done
+  out=$(run_sweep "$fb" "$home")
+  for p in .status-presentation.prepared. .fm-pr-poll-check. .fm-pr-poll-registration. .fm-capture-output.; do
+    [ ! -e "$home/state/${p}OLD001" ] || fail "an 8-day-old ${p} scratch file should rotate"
+    [ -e "$home/state/${p}NEW001" ] || fail "a fresh ${p} scratch file must survive"
+  done
+  assert_contains "$out" "4 stale scratch file(s)" "the summary line should count them: $out"
+  pass "sweep: status-presentation, PR-poll and watcher-capture scratch rotate by age"
+}
+
+test_dead_locks_reclaimed_and_live_kept() {
+  local home fb out state old dead start o
+  home=$(new_home dead-locks); fb=$(make_tmux "$TMP_ROOT/dead-locks")
+  state="$home/state"
+  world "$home" "" ok zsh
+  old=$(( $(date +%s) - 2 * 3600 ))
+  sleep 0 & dead=$!; wait "$dead"
+  start=$(. "$ROOT/bin/fm-wake-lib.sh"; fm_pid_start_time "$$")
+  # .dead: link to an owner whose pid is gone. .reused: the pid runs but its
+  # start time differs from pid-start. .live: the pid runs with its own start
+  # time. .young: dead but inside the age guard. .plain: a plain lock dir.
+  for o in dead reused live young; do
+    mkdir "$state/.$o.lock.owner.AAAAAA"
+    ln -s "$state/.$o.lock.owner.AAAAAA" "$state/.$o.lock"
+  done
+  mkdir "$state/plain.lock"
+  printf '%s\n' "$dead" > "$state/.dead.lock.owner.AAAAAA/pid"
+  printf '%s\n' "$dead" > "$state/.young.lock.owner.AAAAAA/pid"
+  printf '%s\n' "$dead" > "$state/plain.lock/pid"
+  printf '%s\n' "$$" > "$state/.reused.lock.owner.AAAAAA/pid"
+  printf 'not-%s\n' "$start" > "$state/.reused.lock.owner.AAAAAA/pid-start"
+  printf '%s\n' "$$" > "$state/.live.lock.owner.AAAAAA/pid"
+  printf '%s\n' "$start" > "$state/.live.lock.owner.AAAAAA/pid-start"
+  for o in .dead .reused .live; do fm_touch_epoch "$old" "$state/$o.lock.owner.AAAAAA"; done
+  fm_touch_epoch "$old" "$state/plain.lock"
+
+  out=$(run_sweep "$fb" "$home" --dry-run)
+  assert_contains "$out" "would retire dead lock .dead.lock" "--dry-run should list a dead lock: $out"
+  assert_contains "$out" "would retire dead lock .reused.lock" "--dry-run should list a reused-pid lock: $out"
+  [ -L "$state/.dead.lock" ] || fail "--dry-run removed a lock"
+
+  out=$(run_sweep "$fb" "$home")
+  [ ! -e "$state/.dead.lock" ] && [ ! -L "$state/.dead.lock" ] && [ ! -e "$state/.dead.lock.owner.AAAAAA" ] \
+    || fail "a dead holder's lock and owner should be reclaimed: $(ls -a "$state")"
+  [ ! -L "$state/.reused.lock" ] && [ ! -e "$state/.reused.lock.owner.AAAAAA" ] \
+    || fail "a lock whose pid was reused by another process should be reclaimed"
+  [ ! -e "$state/plain.lock" ] || fail "a plain dead lock directory should be reclaimed"
+  [ -L "$state/.live.lock" ] && [ -d "$state/.live.lock.owner.AAAAAA" ] || fail "a live holder's lock must survive"
+  [ -L "$state/.young.lock" ] || fail "a young lock may be mid-acquire and must survive"
+  assert_contains "$out" "3 dead lock(s)" "the summary line should count reclaimed locks: $out"
+  pass "sweep: dead and pid-reused locks are reclaimed; live and young ones kept"
+}
+
 test_gone_endpoint_swept_and_live_kept
 test_handled_pointer_steer_is_residue
+test_dead_locks_reclaimed_and_live_kept
+test_supervision_scratch_rotates_by_age
 test_live_without_record_never_queried_past_inventory
 test_ambiguous_and_unreadable_kept
 test_meta_referenced_endpoint_never_touched
