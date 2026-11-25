@@ -354,18 +354,18 @@ test_argv_lines_are_not_header_fields() {
 # a failed end or a missing lavish-axi only warns and never undoes the retire.
 # The board's saved session, in the store format bin/fm-procevent-lavish.sh
 # reads, on a non-default port so the end must use the board's own server.
-lavish_board() {  # <home> <source-id> <artifact>
+lavish_board() {  # <home> <source-id> <artifact> [session-status]
   local rec="$1/state/procevent/$2.source"
   : > "$3"
   perl -MJSON::PP -MCwd=realpath -e '
-    my ($path, $artifact, $key) = @ARGV;
+    my ($path, $artifact, $key, $status) = @ARGV;
     my $state = { sessions => {} };
     if (-f $path) { open my $in, "<", $path or die $!; local $/; $state = decode_json(<$in>); }
-    $state->{sessions}{$key} = { key => $key, file => realpath($artifact), status => "open",
+    $state->{sessions}{$key} = { key => $key, file => realpath($artifact), status => $status,
       url => "http://127.0.0.1:24999/session/0123456789abcdef" };
     open my $out, ">", $path or die $!;
     print $out encode_json($state);
-  ' "$LAVISH_AXI_STATE_DIR/state.json" "$3" "$2"
+  ' "$LAVISH_AXI_STATE_DIR/state.json" "$3" "$2" "${4:-open}"
   printf 'adapter=lavish\nargc=3\nargv:\n%s\npoll\n%s\n' "$BLOCKER" "$3" > "$rec"
   chmod 600 "$rec"
   fm_touch_epoch "$OLD" "$rec"
@@ -384,6 +384,7 @@ SH
   lavish_board "$home" lavish-end-ok "$home/ok.html"
   lavish_board "$home" lavish-end-bad "$home/fails.html"
   board "$home" lavish-end-other "$OLD"
+  lavish_board "$home" lavish-end-done "$home/done.html" ended
   out=$(PATH="$bin:$PATH" pe "$home" retire-quiet-boards 2>&1) || fail "retire-quiet-boards failed: $out"
   assert_contains "$out" "board-ended: lavish-end-ok" "the ended board's line"
   assert_contains "$out" "warning: board-end-failed: lavish-end-bad reason=server said no" "a failed end's warning"
@@ -391,6 +392,8 @@ SH
   assert_contains "$out" "board-retired: lavish-end-other" "a non-poll listener still retires"
   assert_grep "end $home/ok.html port=24999" "$bin/calls" "lavish-axi end got the board's artifact on its own server"
   assert_not_contains "$(cat "$bin/calls")" "never-lavish-end-other" "a listener with no poll artifact was ended"
+  assert_not_contains "$(cat "$bin/calls")" "done.html" "an already-ended session was ended again"
+  assert_contains "$out" "board-ended: lavish-end-done" "an already-ended session counts as ended"
   assert_grep "board-ended: lavish-end-ok" "$home/state/procevent/board-retirements.log" "the durable end log"
   assert_grep "board-end-failed: lavish-end-bad" "$home/state/procevent/board-retirements.log" "the durable end-failure log"
 

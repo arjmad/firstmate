@@ -272,6 +272,7 @@ saved_session() {  # <artifact> [url]
     $host =~ s/^\[|\]$//g;
     $host ne "0.0.0.0" && $host ne "::" && $port >= 1 && $port <= 65535
       or die "invalid saved Lavish server address\n";
+    if (defined($want) && $want eq "status") { print(($sessions[0]->{status} // ""), "\n"); exit 0; }
     print defined($want) && $want eq "url" ? "$url\n" : "$host\n$port\n";
   ' "${LAVISH_AXI_STATE_DIR:-$HOME/.lavish-axi}/state.json" "$@"
 }
@@ -352,7 +353,9 @@ cmd_arm() {
   # Every poll routes through the board's saved session, which only opening the
   # board writes, so a never-opened board would be armed over a listener that
   # dies on its first lookup. Open it the way adoption does, never `--reopen`.
-  if ! saved_session "$real" >/dev/null 2>&1; then
+  # A session firstmate ended when it retired the board is saved but ended,
+  # and a listener on it would see only `ended`; a plain open resumes it.
+  if ! saved_session "$real" >/dev/null 2>&1 || [ "$(saved_session "$real" status 2>/dev/null)" = ended ]; then
     lavish-axi "$real" >/dev/null 2>&1 || true
     session_error=$(saved_session "$real" 2>&1 >/dev/null) \
       || die "the board has no usable saved Lavish session even after opening it with lavish-axi (${session_error:-no reason given}), so no listener could reach it: $artifact"
@@ -470,6 +473,8 @@ cmd_end() {
   [ "$#" -eq 1 ] && [ -n "$1" ] || usage
   command -v lavish-axi >/dev/null 2>&1 || die "lavish-axi is not installed"
   apply_session_host "$1"
+  # Already over (the captain ended it, or an earlier end): nothing to do.
+  [ "$(saved_session "$1" status 2>/dev/null)" != ended ] || return 0
   lavish-axi end "$1"
 }
 

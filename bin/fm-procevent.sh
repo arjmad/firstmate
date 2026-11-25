@@ -1970,10 +1970,18 @@ board_artifact() {  # <adapter>
 # allows a plain reopen), bounded so a stalled server cannot hold up teardown
 # or reconcile. A missing lavish-axi, a failed end or a timeout only warns: the
 # retirement itself has already succeeded.
+# A board armed again since its retire has a new session that must stay open.
+# BOARD_END_BUDGET_SECONDS caps the ends of one sweep, so a stalled server
+# costs reconcile at most that much rather than BOARD_END_SECONDS per board.
 BOARD_END_SECONDS=30
+BOARD_END_BUDGET_SECONDS=60
+BOARD_END_DEADLINE=
 board_end_session() {  # <source-id> <artifact>
   local out line rc=0
-  if ! command -v lavish-axi >/dev/null 2>&1; then
+  [ ! -e "$(source_file "$1")" ] || return 0
+  if [ -n "$BOARD_END_DEADLINE" ] && [ "$(date +%s)" -ge "$BOARD_END_DEADLINE" ]; then
+    line="board-end-failed: $1 reason=sweep end budget of ${BOARD_END_BUDGET_SECONDS}s spent"
+  elif ! command -v lavish-axi >/dev/null 2>&1; then
     line="board-end-failed: $1 reason=lavish-axi-missing"
   else
     out=$(fm_run_timed "$BOARD_END_SECONDS" "$(adapter_script lavish)" end "$2" 2>&1 </dev/null) || rc=$?
@@ -1998,6 +2006,7 @@ cmd_retire_quiet_boards() {
     || die "FM_PROCEVENT_BOARD_QUIET_SECONDS must be whole seconds of at least 1"
   [ -d "$REG" ] || return 0
   now=$(date +%s)
+  BOARD_END_DEADLINE=$((now + BOARD_END_BUDGET_SECONDS))
   for rec in "$REG"/*.source; do
     [ -f "$rec" ] && [ ! -L "$rec" ] || continue
     id=${rec##*/}; id=${id%.source}

@@ -5591,6 +5591,16 @@ PATH="$NEVER/bin:$PATH" FM_HOME="$NEVER/home" FM_PROCEVENT_LAUNCH_CONFIRM_SECOND
 touch "$NEVER_RELEASE"
 PATH="$NEVER/bin:$PATH" FM_HOME="$NEVER/home" \
   "$ROOT/bin/fm-procevent-lavish.sh" retire "$never_art" >/dev/null 2>&1 || true
+# A retired board whose session firstmate ended is opened again by the next arm.
+perl -MJSON::PP -i -0pe '$s = decode_json($_); $_->{status} = "ended" for values %{$s->{sessions}}; $_ = encode_json($s)' \
+  "$LAVISH_AXI_STATE_DIR/state.json"
+rm -f "$NEVER_RELEASE"; : > "$NEVER_OPENS"
+PATH="$NEVER/bin:$PATH" FM_HOME="$NEVER/home" NEVER_OPEN_SAVES=1 \
+  "$ROOT/bin/fm-procevent-lavish.sh" arm "$never_art" >/dev/null 2>&1 || true
+[ "$(grep -c . "$NEVER_OPENS")" = 1 ] || fail "arm did not open a board whose saved session is ended"
+touch "$NEVER_RELEASE"
+PATH="$NEVER/bin:$PATH" FM_HOME="$NEVER/home" \
+  "$ROOT/bin/fm-procevent-lavish.sh" retire "$never_art" >/dev/null 2>&1 || true
 pass "arm opens a never-opened board, prints its link, and leaves a listener that stays live"
 
 rm -f "$NEVER_RELEASE" "$NEVER_POLLS" "$NEVER_OPENS"
