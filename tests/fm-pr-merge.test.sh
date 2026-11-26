@@ -7650,13 +7650,14 @@ test_captain_approval_file_failed_post_refuses_the_merge() {
 
 test_captain_approval_file_bad_file_refuses_before_the_forge() {
   local case_dir rc label head=a409a409a409a409a409a409a409a409a409a40b
-  for label in missing empty two-lines; do
+  for label in missing empty two-lines binary; do
     case_dir=$(make_case "captain-approval-$label")
     mkdir -p "$case_dir/wt"
     add_gh_mocks "$case_dir" "$head"
     case "$label" in
       empty) printf '  \n' > "$case_dir/approval" ;;
       two-lines) printf 'ship it\nand the other one\n' > "$case_dir/approval" ;;
+      binary) printf 'ship\0it\n' > "$case_dir/approval" ;;
     esac
     set +e
     run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/97 \
@@ -7666,7 +7667,7 @@ test_captain_approval_file_bad_file_refuses_before_the_forge() {
     expect_code 2 "$rc" "captain-approval-$label: a bad file must refuse"
     [ ! -s "$case_dir/gh.log" ] || fail "captain-approval-$label: a forge call ran: $(cat "$case_dir/gh.log")"
   done
-  pass "fm-pr-merge refuses a missing, empty, or multi-line --captain-approval-file before any forge call"
+  pass "fm-pr-merge refuses a missing, empty, multi-line, or binary --captain-approval-file before any forge call"
 }
 
 test_captain_approval_file_is_refused_while_away() {

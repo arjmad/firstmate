@@ -584,13 +584,18 @@ if [ -n "$CAPTAIN_APPROVAL_FILE" ]; then
     printf 'error: --captain-approval-file %s is not a readable file\n' "$CAPTAIN_APPROVAL_FILE" >&2
     exit 2
   fi
-  approval_words=$(grep -v '^[[:space:]]*$' "$CAPTAIN_APPROVAL_FILE" || true)
+  # A ./ prefix keeps grep from reading a leading - as an option and BSD date
+  # from reading a numeric name as epoch seconds.
+  approval_path=$CAPTAIN_APPROVAL_FILE
+  case "$approval_path" in /*) ;; *) approval_path=./$approval_path ;; esac
+  # -I reads a binary file as no match, so it refuses as empty.
+  approval_words=$(LC_ALL=C grep -I -v '^[[:space:]]*$' "$approval_path" || true)
   if [ -z "$approval_words" ] || [ "$(printf '%s\n' "$approval_words" | wc -l | tr -d ' ')" -ne 1 ]; then
     printf 'error: --captain-approval-file %s must hold exactly one non-empty line: the captain'"'"'s words\n' "$CAPTAIN_APPROVAL_FILE" >&2
     exit 2
   fi
   approval_words=$(printf '%s' "$approval_words" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-  approval_date=$(TZ=UTC date -u -r "$CAPTAIN_APPROVAL_FILE" +%Y-%m-%d 2>/dev/null) || approval_date=
+  approval_date=$(TZ=UTC date -u -r "$approval_path" +%Y-%m-%d 2>/dev/null) || approval_date=
   case "$approval_date" in
     [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
     *)
