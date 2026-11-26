@@ -366,6 +366,14 @@ test_ask_alone_and_keep_choices_keep_recorded_choices() {
     || fail "hold --keep-choices on a call past its date failed"
   assert_contains "$(show_task "$home" sample-past)" '[reversible; options: Go|Stop; recommended: Go] re-dated' \
     "hold --keep-choices dropped the choices of a call past its back-on date"
+  # A retired default on a call with no options stays its recommendation.
+  run_captain "$home" hold sample-legacy --title "Legacy call" --reason "pick a day" --kind reversible >/dev/null \
+    || fail "the legacy hold failed"
+  give_retired_default "$home" sample-legacy "[reversible; default: Go; releases 2026-10-17T10:00:00Z] pick a day"
+  run_captain "$home" hold sample-legacy --reason "after the trip" --keep-choices >/dev/null \
+    || fail "hold --keep-choices on a call with a retired default failed"
+  assert_contains "$(show_task "$home" sample-legacy)" '[reversible] after the trip (recommended: Go)' \
+    "hold --keep-choices dropped a retired default's recommendation"
   run_captain "$home" hold sample-pay --reason "plain re-hold" >/dev/null || fail "a plain re-hold failed"
   show=$(show_task "$home" sample-pay)
   assert_not_contains "$show" 'options: Paid' "a re-hold without --keep-choices kept the choices"

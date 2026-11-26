@@ -1447,6 +1447,14 @@ command_hold() {
       if [ "$existing_hold_kind" = captain ] \
         && parse_hold_kind_prefix "$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")"; then
         [ -n "$decision_kind" ] || decision_kind=$HOLD_DECISION_KIND
+        # A retired default on a call with no options stays its recommendation,
+        # as `choices` and `defer` keep it (see "HOLD KINDS").
+        if [ "$options_given" = 0 ] && [ -z "$HOLD_OPTIONS" ] && [ -n "$HOLD_DEFAULT_OPTION" ]; then
+          case "$reason" in
+            *"(recommended: $HOLD_DEFAULT_OPTION)"*) ;;
+            *) reason="$reason (recommended: $HOLD_DEFAULT_OPTION)" ;;
+          esac
+        fi
         if [ "$options_given" = 0 ] && [ "$recommend_given" = 0 ] && [ -n "$HOLD_OPTIONS" ]; then
           options=$HOLD_OPTIONS options_given=1 recommend=$HOLD_RECOMMENDED recommend_given=1
         fi
