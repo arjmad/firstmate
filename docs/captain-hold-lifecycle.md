@@ -117,7 +117,7 @@ It requires a non-empty captain decision file of at most 8192 bytes.
 A quiet record is a present captain and does not refuse.
 It then works in this order:
 
-1. It durably writes a resolution block carrying the decision digest and a `Resolution mode:`.
+1. It durably writes a resolution block carrying the decision digest, a `Resolution mode:` and a `Resolved at:` UTC stamp (the `bin/fm-captain-hold.sh` header owns the block's format).
 2. It retains the leading hold-set stamp until the selected `tasks-axi done` or `tasks-axi unhold` transition succeeds.
 3. It then restores the successful record's resolution-first body ordering.
    The previous body remains preserved below the block and archived through tasks-axi `--archive-body`.

@@ -33,16 +33,19 @@ in_home() {  # <home> <command> [args...]
     FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" "$@"
 }
 
-# Hold <id> for the captain, then record <words> as his releasing answer, the
-# way an approval of held work is recorded.
-approve() {  # <home> <id> <words>
+# Hold <id> for the captain, then record <words> as his releasing answer at
+# <resolved-at>, the way an approval of held work is recorded; the record's
+# Resolved at stamp is that time. Stamps are given at 12:00Z, which is the
+# same day in every zone from UTC-12, so the stamp's day does not depend on
+# the runner's time zone.
+approve() {  # <home> <id> <words> <resolved-at>
   local home=$1 id=$2
   printf '%s\n' "$3" > "$home/answer.txt"
   in_home "$home" "$ROOT/bin/fm-captain-hold.sh" hold "$id" --title "Land the approved text" \
     --reason "approve the drafted text" --kind reversible --batch "board:$id" >/dev/null 2>&1 \
     || fail "could not hold $id"
-  in_home "$home" "$ROOT/bin/fm-captain-hold.sh" answer "$id" --decision-file "$home/answer.txt" \
-    --release >/dev/null 2>&1 || fail "could not release $id"
+  FM_CAPTAIN_HOLD_NOW=$4 in_home "$home" "$ROOT/bin/fm-captain-hold.sh" answer "$id" \
+    --decision-file "$home/answer.txt" --release >/dev/null 2>&1 || fail "could not release $id"
 }
 
 write_captain_files() {  # <home>
@@ -72,14 +75,15 @@ test_rulings_after_the_recorded_approval_are_listed() {
   local home out rc
   home=$(make_home listed)
   write_captain_files "$home"
-  approve "$home" ship-text "Arjun 2026-11-20 on the board: ship the arjun.md line as drafted."
+  approve "$home" ship-text "Arjun 2026-11-20 on the board: ship the arjun.md line as drafted." \
+    2026-11-20T12:00:00Z
   # A later release to start the queued ship is the newest record, but the
   # earliest decision still dates the approval of its text.
-  approve "$home" ship-text "Arjun 2026-11-23 via Launchpad: start it now."
+  approve "$home" ship-text "Arjun 2026-11-23 via Launchpad: start it now." 2026-11-23T12:00:00Z
   out=$(in_home "$home" "$LATER" ship-text 2>&1)
   rc=$?
   expect_code 0 "$rc" "the listing failed: $out"
-  assert_contains "$out" "later-rulings: ship-text was approved 2026-11-20 (the earliest captain decision on its backlog row); 6 captain ruling(s)" \
+  assert_contains "$out" "later-rulings: ship-text was approved 2026-11-20 (the earliest captain decision on its backlog row, recorded at 2026-11-20T12:00:00Z); 6 captain ruling(s)" \
     "the header did not name the earliest approval and the count"$'\n'"$out"
   assert_contains "$out" "data/captain.md:11 2026-11-21 - Deadline rule" \
     "a ruling with a future deadline did not count from its ruling date"$'\n'"$out"
@@ -100,6 +104,52 @@ test_rulings_after_the_recorded_approval_are_listed() {
   ! printf '%s\n' "$out" | grep -Eq ':[0-9]+ 2099-' \
     || fail "an item was dated by its future deadline"$'\n'"$out"
   pass "rulings on or after the earliest recorded approval are listed from both captain files, and older, undated or deadline-only ones are not"
+}
+
+test_resolved_at_stamp_is_preferred_and_prose_is_the_fallback() {
+  local home out
+  home=$(make_home stamped)
+  write_captain_files "$home"
+  # His words name 2026-11-20, but the answer was recorded on 2026-11-22: the
+  # stamp dates the approval, so the 2026-11-21 ruling predates it.
+  approve "$home" stamped-ship "Arjun 2026-11-20 on the board: ship it." 2026-11-22T12:00:00Z
+  out=$(in_home "$home" "$LATER" stamped-ship 2>&1)
+  assert_contains "$out" "later-rulings: stamped-ship was approved 2026-11-22 (the earliest captain decision on its backlog row, recorded at 2026-11-22T12:00:00Z); 3 captain ruling(s)" \
+    "the Resolved at stamp did not date the approval"$'\n'"$out"
+  case "$out" in
+    *"Codex is the reviewer only"*) fail "a ruling dated before the stamped approval was listed"$'\n'"$out" ;;
+  esac
+
+  # 03:00Z on 2026-11-22 is still the evening of 2026-11-21 in New York, so a
+  # host there dates the approval from its own earlier day, and a UTC host from
+  # the UTC day.
+  approve "$home" evening-ship "Arjun: ship it." 2026-11-22T03:00:00Z
+  out=$(TZ=America/New_York in_home "$home" "$LATER" evening-ship 2>&1)
+  assert_contains "$out" "later-rulings: evening-ship was approved 2026-11-21 (the earliest captain decision on its backlog row, recorded at 2026-11-22T03:00:00Z)" \
+    "a stamp west of UTC was not dated from the host's earlier local day"$'\n'"$out"
+  out=$(TZ=UTC in_home "$home" "$LATER" evening-ship 2>&1)
+  assert_contains "$out" "later-rulings: evening-ship was approved 2026-11-22 (the earliest captain decision on its backlog row, recorded at 2026-11-22T03:00:00Z)" \
+    "a stamp on a UTC host was not dated from its UTC day"$'\n'"$out"
+
+  # A record without a stamp (written before it existed), a repaired record
+  # (recorded after the fact), a malformed stamp, and a stamp quoted below a
+  # record's own label all fall back to the prose date.
+  printf '%s\n' 'Resolution recorded by fm-captain-hold.' 'Decision digest: aa' 'Resolution mode: released' '' \
+    'Captain decision:' 'Arjun 2026-11-21: ship it.' > "$home/legacy.txt"
+  printf '%s\n' 'Resolution recorded by fm-captain-hold.' 'Decision digest: aa' 'Resolution mode: repaired' \
+    'Resolved at: 2026-11-25T12:00:00Z' '' 'Captain decision:' 'Arjun 2026-11-21: ship it.' > "$home/repaired.txt"
+  printf '%s\n' 'Resolution recorded by fm-captain-hold.' 'Decision digest: aa' 'Resolution mode: released' \
+    'Resolved at: 2026-11-31T12:00:00Z' '' 'Captain decision:' 'Arjun 2026-11-21: ship it.' > "$home/malformed.txt"
+  printf '%s\n' 'Resolution recorded by fm-captain-hold.' 'Decision digest: aa' 'Resolution mode: released' '' \
+    'Captain decision:' 'Arjun 2026-11-21: ship it.' 'Resolved at: 2026-11-25T12:00:00Z' > "$home/quoted.txt"
+  for row in legacy repaired malformed quoted; do
+    in_home "$home" "$ROOT/bin/fm-tasks-axi.sh" add "$row-ship" "Ship $row" --kind ship \
+      --body-file "$home/$row.txt" >/dev/null 2>&1 || fail "could not add the $row row"
+    out=$(in_home "$home" "$LATER" "$row-ship" 2>&1)
+    assert_contains "$out" "later-rulings: $row-ship was approved 2026-11-21 (the earliest captain decision on its backlog row); 5 captain ruling(s)" \
+      "the $row record did not fall back to its prose date"$'\n'"$out"
+  done
+  pass "an answer's Resolved at stamp dates its approval, and an unstamped, repaired, malformed or quoted stamp falls back to the prose date"
 }
 
 test_since_overrides_the_backlog_row() {
@@ -138,10 +188,11 @@ test_nothing_to_list_says_so_once_and_found_only_is_silent() {
   assert_equals "later-rulings: plain-ship records no dated captain approval; pass --since YYYY-MM-DD to check it" "$out" \
     "a row with no captain approval did not say so in one line"
 
-  approve "$home" undated-ship "Firstmate decided: ship it."
+  # A decision text with no date is still dated by its record's stamp.
+  approve "$home" undated-ship "Firstmate decided: ship it." 2026-11-25T12:00:00Z
   out=$(in_home "$home" "$LATER" undated-ship 2>&1)
-  assert_equals "later-rulings: undated-ship records no dated captain approval; pass --since YYYY-MM-DD to check it" "$out" \
-    "a decision text with no date was read as an approval"
+  assert_equals "later-rulings: no item in data/captain.md or data/captain-shared.md is dated on or after undated-ship's approval 2026-11-25" "$out" \
+    "a stamped answer with no date in its words was not dated by its stamp"
 
   # Only a record's own "Captain decision:" text dates an approval: reconciliation
   # evidence gives none, a "Captain decision:" heading after a record's own label
@@ -152,7 +203,10 @@ test_nothing_to_list_says_so_once_and_found_only_is_silent() {
     'Resolution recorded by fm-captain-hold.' 'Decision digest: bb' 'Resolution mode: released' '' \
     'Captain decision:' 'Arjun 2026-11-21: ship it.' > "$home/reconciled.txt"
   printf '%s\n' 'Notes from the scout.' 'Captain decision:' 'Arjun 2026-11-10 maybe.' > "$home/prose.txt"
-  for row in reconciled prose; do
+  # An unstamped record's decision text with no date gives no approval date.
+  printf '%s\n' 'Resolution recorded by fm-captain-hold.' 'Decision digest: cc' 'Resolution mode: released' '' \
+    'Captain decision:' 'Firstmate decided: ship it.' > "$home/bare.txt"
+  for row in reconciled prose bare; do
     in_home "$home" "$ROOT/bin/fm-tasks-axi.sh" add "$row-ship" "Ship $row" --kind ship \
       --body-file "$home/$row.txt" >/dev/null 2>&1 || fail "could not add the $row row"
   done
@@ -162,6 +216,9 @@ test_nothing_to_list_says_so_once_and_found_only_is_silent() {
   out=$(in_home "$home" "$LATER" prose-ship 2>&1)
   assert_equals "later-rulings: prose-ship records no dated captain approval; pass --since YYYY-MM-DD to check it" "$out" \
     "a heading outside any record was read as a dated approval"
+  out=$(in_home "$home" "$LATER" bare-ship 2>&1)
+  assert_equals "later-rulings: bare-ship records no dated captain approval; pass --since YYYY-MM-DD to check it" "$out" \
+    "an unstamped decision text with no date was read as an approval"
 
   out=$(in_home "$home" "$LATER" plain-ship --since 2026-11-30 2>&1)
   assert_equals "later-rulings: no item in data/captain.md or data/captain-shared.md is dated on or after plain-ship's approval 2026-11-30" "$out" \
@@ -192,6 +249,7 @@ test_malformed_arguments_exit_2() {
 }
 
 test_rulings_after_the_recorded_approval_are_listed
+test_resolved_at_stamp_is_preferred_and_prose_is_the_fallback
 test_since_overrides_the_backlog_row
 test_nothing_to_list_says_so_once_and_found_only_is_silent
 test_malformed_arguments_exit_2
