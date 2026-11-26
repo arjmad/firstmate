@@ -279,13 +279,15 @@
 #
 # Captain approval on the PR (audit a4-09): an attended
 # --captain-approval-file <path>, passed when the captain's word approved a PR
-# whose Visual review is not `none`, posts one GitHub PR comment whose first
-# line is exactly `Approved: Arjun <YYYY-MM-DD>: <his words>` once every other
-# gate has passed and just before the forge merge. The words are the file's one
-# non-empty line, trimmed of surrounding whitespace; the date is the file's
-# modification time in UTC, the time his answer was written down (the same file
-# bin/fm-captain-hold.sh answer --decision-file recorded, when one did). A file
-# that is missing, empty, or holds more than one non-empty line refuses before
+# whose PR body's Visual review section (a sites convention) is not `none`,
+# posts one GitHub PR comment whose first line is exactly
+# `Approved: Arjun <YYYY-MM-DD>: <his words>` and whose second line is
+# `Head: <verified head sha>`, once every other gate has passed and just before
+# the forge merge, so a reader can refuse an approval left from an earlier head.
+# The words are the file's non-empty lines, each trimmed and joined by one
+# space; the date is the file's modification time in UTC, so write the file
+# when he answers, as the bin/fm-captain-hold.sh answer --decision-file file
+# that recorded it was. A file that is missing, empty, or binary refuses before
 # any forge call; a comment that does not post refuses the merge. Readers such
 # as sites' theme-go-live.py match `^Approved: Arjun [0-9]{4}-[0-9]{2}-[0-9]{2}: .+`.
 # It is GitHub-only, refused while the away-posture record exists, and never
@@ -590,11 +592,12 @@ if [ -n "$CAPTAIN_APPROVAL_FILE" ]; then
   case "$approval_path" in /*) ;; *) approval_path=./$approval_path ;; esac
   # -I reads a binary file as no match, so it refuses as empty.
   approval_words=$(LC_ALL=C grep -I -v '^[[:space:]]*$' "$approval_path" || true)
-  if [ -z "$approval_words" ] || [ "$(printf '%s\n' "$approval_words" | wc -l | tr -d ' ')" -ne 1 ]; then
-    printf 'error: --captain-approval-file %s must hold exactly one non-empty line: the captain'"'"'s words\n' "$CAPTAIN_APPROVAL_FILE" >&2
+  approval_words=$(printf '%s\n' "$approval_words" | tr -d '\r' \
+    | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | paste -sd ' ' -)
+  if [ -z "$approval_words" ]; then
+    printf 'error: --captain-approval-file %s holds no text: it must hold the captain'"'"'s words\n' "$CAPTAIN_APPROVAL_FILE" >&2
     exit 2
   fi
-  approval_words=$(printf '%s' "$approval_words" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
   approval_date=$(TZ=UTC date -u -r "$approval_path" +%Y-%m-%d 2>/dev/null) || approval_date=
   case "$approval_date" in
     [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
@@ -2752,7 +2755,7 @@ require_released_captain_hold || exit 1
 # merge; a comment that does not post refuses the merge.
 post_captain_approval() {
   [ -n "$CAPTAIN_APPROVAL_LINE" ] || return 0
-  if printf '%s\n' "$CAPTAIN_APPROVAL_LINE" \
+  if printf '%s\nHead: %s\n' "$CAPTAIN_APPROVAL_LINE" "$FM_PR_MERGE_HEAD" \
     | gh pr comment "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" --body-file - >/dev/null 2>&1; then
     printf 'verified: posted the captain'"'"'s approval on %s\n' "$URL" >&2
     return 0
