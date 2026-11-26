@@ -910,16 +910,24 @@ test_answer_records_and_closes() {
   assert_contains "$show" "held: yes" "a refused answer released the captain-held task"
 
   printf 'Captain chose the guard option.\n' > "$home/guard-decision.txt"
-  run_captain "$home" answer sample-guard-call --decision-file "$home/guard-decision.txt" >/dev/null \
+  FM_CAPTAIN_HOLD_NOW=2026-07-01T08:00:00Z run_captain "$home" answer sample-guard-call \
+    --decision-file "$home/guard-decision.txt" >/dev/null \
     || fail "answer could not close the captain-held task"
   show=$(tasks_in "$home" show sample-guard-call --full)
   assert_contains "$show" "state: done" "an answered captain-held task did not close"
   assert_contains "$show" "Resolution recorded by fm-captain-hold" "the answered task lost the decision record"
-  assert_contains "$show" "Resolution mode: answered" "the answered task did not record its close path"
+  assert_contains "$show" 'Resolution mode: answered\nResolved at: 2026-07-01T08:00:00Z\n\nCaptain decision:' \
+    "the answered task did not record its close path and machine resolution time in the record header"
   assert_contains "$show" "Captain chose the guard option." \
     "the answered task did not record the captain decision text"
-  run_captain "$home" answer sample-guard-call --decision-file "$home/guard-decision.txt" >/dev/null \
+  FM_CAPTAIN_HOLD_NOW=2026-07-02T08:00:00Z run_captain "$home" answer sample-guard-call \
+    --decision-file "$home/guard-decision.txt" >/dev/null \
     || fail "identical answer retry was not idempotent"
+  show=$(tasks_in "$home" show sample-guard-call --full)
+  [ "$(printf '%s\n' "$show" | grep -o 'Resolved at: ' | wc -l)" -eq 1 ] \
+    || fail "an identical answer retry added a second resolution stamp"$'\n'"$show"
+  assert_contains "$show" "Resolved at: 2026-07-01T08:00:00Z" \
+    "an identical answer retry rewrote the first record's resolution stamp"
   printf 'Captain chose something else entirely.\n' > "$home/drifted.txt"
   if run_captain "$home" answer sample-guard-call --decision-file "$home/drifted.txt" \
     > "$home/drifted-answer.out" 2> "$home/drifted-answer.err"; then
@@ -1736,6 +1744,8 @@ test_secondmate_reconcile_publishes_before_request_retirement() {
   assert_contains "$show" "state: done" "request retirement failure reversed the reconciled close"
   assert_contains "$show" "Resolution mode: reconciled" \
     "request retirement failure lost the reconciled resolution mode"
+  printf '%s\n' "$show" | grep -Eq 'Resolution mode: reconciled\\nResolved at: [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\n' \
+    || fail "the reconciled record carries no machine resolution time: $show"
   [ -f "$request" ] || fail "the request retired despite its forced retirement failure"
   [ "$(grep -c 'resolved \[key=captain-hold-reconcile-channel-call-1\]: captain hold reconcile-channel-call: reconciled' \
     <(sed -E 's/ \[at=[0-9]+\]//' "$channel"))" -eq 1 ] \

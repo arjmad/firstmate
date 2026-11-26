@@ -367,8 +367,12 @@
 # Removing the presence flag disables policy registration and settlement.
 #
 # Resolution records: the block written into the body names this script, the
-# decision digest, and a `Resolution mode:` of answered, released, repaired,
-# reconciled, forge-closed, or forge-released.
+# decision digest, a `Resolution mode:` of answered, released, repaired,
+# reconciled, forge-closed, or forge-released, and a `Resolved at:` UTC
+# YYYY-MM-DDTHH:MM:SSZ stamp of when the record was written (fork patch,
+# docs/fork-decisions/2026-11-26-captain-answer-resolved-at.md), then a blank
+# line and the labelled payload. An exact retry keeps the first record and its
+# stamp; a record written before the stamp existed simply lacks the line.
 # Records written by the retired fm-decision-hold.sh (routed, declined,
 # answered, repaired) and the `defaulted` records of the retired default
 # release are recognized everywhere a record is read, so nothing already
@@ -716,10 +720,11 @@ closed_answer_replay_mode_compatible() {  # <mode> <task-body>
 # reading as the captain's own words. Reconciliation modes carry evidence;
 # answer modes carry what the captain said.
 resolution_block() {  # <mode>
-  local label='Captain decision:'
+  local label='Captain decision:' resolved_at
   case "$1" in reconciled|forge-closed|forge-released) label='Reconciliation evidence:' ;; esac
-  printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\n\n%s\n%s\n' \
-    "$DECISION_DIGEST" "$1" "$label" "$DECISION_TEXT"
+  resolved_at=${FM_CAPTAIN_HOLD_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+  printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\nResolved at: %s\n\n%s\n%s\n' \
+    "$DECISION_DIGEST" "$1" "$resolved_at" "$label" "$DECISION_TEXT"
 }
 
 # Durable state of one captain call: an active captain hold (annotations

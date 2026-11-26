@@ -17,13 +17,20 @@
 # Otherwise it is the earliest captain decision recorded on the task's backlog
 # row: each resolution record bin/fm-captain-hold.sh wrote there through
 # `answer` or `answer --release` (one per captain answer, the newest first)
-# whose payload is "Captain decision:" gives the first YYYY-MM-DD date of that
-# text. The earliest is taken because a later answer, such as a release to
-# start the queued ship, can postdate the approval of its text, and listing
-# from too early only lists more. A record carrying "Reconciliation evidence:"
-# is not the captain's word and gives no date. A row with no such record, or
-# decision texts with no date before their first blank line, has no approval
-# date.
+# whose payload is "Captain decision:" gives one date. A record of mode
+# answered or released whose header carries a well-formed `Resolved at:`
+# stamp (that script's header owns the block) gives the stamp's day: the
+# earlier of its UTC day and this host's local day, so a ruling the captain
+# dated later the same local evening still counts. Any other record, such as
+# one written before the stamp existed or a `repaired` one recorded after the
+# fact, gives the first YYYY-MM-DD date of its decision text before the
+# text's first blank line. The earliest is taken because a later answer, such
+# as a release to start the queued ship, can postdate the approval of its
+# text, and listing from too early only lists more. A record carrying
+# "Reconciliation evidence:" is not the captain's word and gives no date. A
+# row with no such record, or only records that give no date, has no approval
+# date. The stamp dates when the answer was recorded, so an answer recorded
+# well after he gave it dates the approval late.
 #
 # The rulings. Every dated item in this home's data/captain.md and, when
 # present, data/captain-shared.md. An item is one list entry ("- ", "* " or
@@ -36,7 +43,8 @@
 # one dated the approval day may still have come after it.
 #
 # Output, on stdout. When rulings are found, one header line naming the task,
-# the approval date and where it came from, then one line per item:
+# the approval date and where it came from (with the `Resolved at:` stamp when
+# one gave it), then one line per item:
 #   <file>:<first line> <date> <the item, whitespace collapsed, cut to 200 characters>
 # Otherwise one line saying why nothing was listed: no captain file, no
 # approval date, an unreadable backlog row, or no later ruling. --found-only
@@ -99,23 +107,53 @@ done
 [ "${#FILES[@]}" -gt 0 ] || say_empty "no data/captain.md or data/captain-shared.md in this home"
 
 # Across the resolution records in a decoded row body, prints the earliest of
-# their decision dates: in each record whose first payload label is "Captain
-# decision:", the first full date of that text before its blank line. A record
-# with another label, and a heading outside any record or after a record's own
-# label, gives none.
+# their decision dates as `<YYYY-MM-DD> <stamp-or-prose>`, the stamp when that
+# date came from a `Resolved at:` line (see the header). Only a record whose
+# first payload label is "Captain decision:" gives a date, and only its own
+# header, between the leader line and that label, can carry its stamp, so a
+# stamp quoted in the captain's words or an older body below is not read. A
+# heading outside any record or after a record's own label gives none.
 approval_date_from_body() {
-  awk '
-    /^Resolution recorded by fm-(captain|decision)-hold\.$/ { record = 1; labelled = 0; reading = 0; next }
-    record && !labelled && /^(Captain decision|Reconciliation evidence|Default release):$/ {
-      labelled = 1; reading = ($0 == "Captain decision:"); next
+  perl -MPOSIX=strftime -MTime::Local=timegm -e '
+    use strict; use warnings;
+    my ($record, $labelled, $reading, $mode, $stamp) = (0, 0, 0, "", "");
+    my ($earliest, $from) = ("", "");
+    sub consider {
+      my ($d, $source) = @_;
+      ($earliest, $from) = ($d, $source) if $earliest eq "" || $d lt $earliest;
     }
-    reading && $0 == "" { reading = 0; next }
-    reading && match($0, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/) {
-      d = substr($0, RSTART, RLENGTH)
-      if (earliest == "" || d < earliest) earliest = d
-      reading = 0
+    # The earlier of the stamp'"'"'s UTC day and its local day here; none when
+    # the stamp names no real time.
+    sub stamp_day {
+      my ($y, $mo, $d, $h, $mi, $s) = $_[0] =~ /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)Z$/ or return "";
+      my $epoch = eval { timegm($s, $mi, $h, $d, $mo - 1, $y) };
+      return "" unless defined $epoch;
+      my $utc = strftime("%Y-%m-%d", gmtime $epoch);
+      my $local = strftime("%Y-%m-%d", localtime $epoch);
+      return $local lt $utc ? $local : $utc;
     }
-    END { if (earliest != "") print earliest }
+    while (my $line = <STDIN>) {
+      chomp $line;
+      if ($line =~ /^Resolution recorded by fm-(captain|decision)-hold\.$/) {
+        ($record, $labelled, $reading, $mode, $stamp) = (1, 0, 0, "", "");
+        next;
+      }
+      if ($record && !$labelled) {
+        if ($line =~ /^Resolution mode: (\S+)$/) { $mode = $1; next; }
+        if ($line =~ /^Resolved at: (\S+)$/) { $stamp = $1; next; }
+        if ($line =~ /^(Captain decision|Reconciliation evidence|Default release):$/) {
+          $labelled = 1;
+          $reading = 0;
+          next unless $line eq "Captain decision:";
+          my $day = ($mode eq "answered" || $mode eq "released") ? stamp_day($stamp) : "";
+          if ($day ne "") { consider($day, "$stamp"); } else { $reading = 1; }
+          next;
+        }
+      }
+      if ($reading && $line eq "") { $reading = 0; next; }
+      if ($reading && $line =~ /(\d{4}-\d\d-\d\d)/) { consider($1, "prose"); $reading = 0; }
+    }
+    print "$earliest $from\n" if $earliest ne "";
   '
 }
 
@@ -145,8 +183,13 @@ if [ -z "$SINCE" ]; then
     utf8::encode($value) if utf8::is_utf8($value);
     print $value, "\n";
   ' 2>/dev/null) || body=
-  SINCE=$(printf '%s\n' "$body" | approval_date_from_body)
+  approval=$(printf '%s\n' "$body" | approval_date_from_body 2>/dev/null) || approval=
+  SINCE=${approval%% *}
   [ -n "$SINCE" ] || say_empty "$ID records no dated captain approval; pass --since YYYY-MM-DD to check it"
+  case "${approval#* }" in
+    prose) ;;
+    *) SOURCE="$SOURCE, recorded at ${approval#* }" ;;
+  esac
 fi
 
 # A date after tomorrow is a deadline, not a ruling; tomorrow, not today, so
