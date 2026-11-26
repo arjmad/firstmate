@@ -960,6 +960,9 @@ worker_run_job() { # <account-home> <job-dir>
   # macOS credential lookups (claude auth status) key on the login identity.
   [ -z "${USER:-}" ] || child_env+=("USER=$USER")
   [ -z "${LOGNAME:-}" ] || child_env+=("LOGNAME=$LOGNAME")
+  # Telemetry opt-outs reach lavish-axi and impeccable only when the operator set them.
+  [ -z "${LAVISH_AXI_TELEMETRY:-}" ] || child_env+=("LAVISH_AXI_TELEMETRY=$LAVISH_AXI_TELEMETRY")
+  [ -z "${IMPECCABLE_NO_TELEMETRY:-}" ] || child_env+=("IMPECCABLE_NO_TELEMETRY=$IMPECCABLE_NO_TELEMETRY")
   remaining=$((deadline - $(date +%s)))
   [ "$remaining" -gt 0 ] || {
     worker_cleanup_output_capture "$job" "$stdout_reader" "$stderr_reader"

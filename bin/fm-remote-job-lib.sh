@@ -71,8 +71,9 @@
 #
 # The worker accepts only a tracked, non-symlink executable named fm-*.sh below
 # its configured FM_ROOT/bin. Every child receives env -i with the composed
-# PATH, HOME, FM_HOME, FM_ROOT_OVERRIDE, and FM_REMOTE_JOB_ACTIVE=1, plus USER
-# and LOGNAME when they are nonempty in the worker's environment. The PATH
+# PATH, HOME, FM_HOME, FM_ROOT_OVERRIDE, and FM_REMOTE_JOB_ACTIVE=1, plus USER,
+# LOGNAME, LAVISH_AXI_TELEMETRY, and IMPECCABLE_NO_TELEMETRY when they are
+# nonempty in the worker's environment. The PATH
 # is intentionally filesystem-discovered rather than login-shell-derived:
 # ~/.local/bin; Firstmate's toolchain at ~/.local/state/firstmate/toolchain/bin;
 # nvm, asdf, and mise shims/install bins; Nix; Homebrew; and the system tail.
