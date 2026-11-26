@@ -1063,7 +1063,7 @@ test_later_rulings_are_listed_without_blocking_the_merge() {
     || fail "later-rulings: could not hold the task"
   # The answer is recorded two days after the date his words carry, so the
   # record's Resolved at stamp, not the prose date, dates the approval.
-  FM_CAPTAIN_HOLD_NOW=2026-11-22T09:00:00Z \
+  FM_CAPTAIN_HOLD_NOW=2026-11-22T12:00:00Z \
     FM_HOME="$case_dir/home" FM_STATE_OVERRIDE="$case_dir/state" PATH="$case_dir/fakebin:$PATH" \
     "$ROOT/bin/fm-captain-hold.sh" answer task-x1 --decision-file "$case_dir/answer.txt" --release \
     >/dev/null 2>&1 || fail "later-rulings: could not release the task"
@@ -1079,11 +1079,11 @@ test_later_rulings_are_listed_without_blocking_the_merge() {
   rc=$?
   set -e
   expect_code 0 "$rc" "later-rulings: registration should succeed: $(cat "$case_dir/check-stderr")"
-  assert_grep 'later-rulings: task-x1 was approved 2026-11-22 (the earliest captain decision on its backlog row, recorded at 2026-11-22T09:00:00Z); 1 captain ruling' "$case_dir/check-stderr" \
+  assert_grep 'later-rulings: task-x1 was approved 2026-11-22 (the earliest captain decision on its backlog row, recorded at 2026-11-22T12:00:00Z); 1 captain ruling' "$case_dir/check-stderr" \
     "later-rulings: registration did not date the approval from its Resolved at stamp"
   assert_grep 'data/captain.md:5 2026-11-23 - Reviews stay short' "$case_dir/check-stderr" \
     "later-rulings: registration did not name the ruling"
-  assert_no_grep 'Old rule\|Codex is the reviewer only' "$case_dir/check-stderr" \
+  assert_no_regex 'Old rule|Codex is the reviewer only' "$case_dir/check-stderr" \
     "later-rulings: a ruling dated before the stamped approval was listed"
   assert_no_grep 'later-rulings' "$case_dir/check-stdout" "later-rulings: the listing reached stdout"
 

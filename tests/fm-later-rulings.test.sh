@@ -35,7 +35,9 @@ in_home() {  # <home> <command> [args...]
 
 # Hold <id> for the captain, then record <words> as his releasing answer at
 # <resolved-at>, the way an approval of held work is recorded; the record's
-# Resolved at stamp is that time.
+# Resolved at stamp is that time. Stamps are given at 12:00Z, which is the
+# same day in every zone from UTC-12, so the stamp's day does not depend on
+# the runner's time zone.
 approve() {  # <home> <id> <words> <resolved-at>
   local home=$1 id=$2
   printf '%s\n' "$3" > "$home/answer.txt"
@@ -74,14 +76,14 @@ test_rulings_after_the_recorded_approval_are_listed() {
   home=$(make_home listed)
   write_captain_files "$home"
   approve "$home" ship-text "Arjun 2026-11-20 on the board: ship the arjun.md line as drafted." \
-    2026-11-20T09:00:00Z
+    2026-11-20T12:00:00Z
   # A later release to start the queued ship is the newest record, but the
   # earliest decision still dates the approval of its text.
-  approve "$home" ship-text "Arjun 2026-11-23 via Launchpad: start it now." 2026-11-23T09:00:00Z
+  approve "$home" ship-text "Arjun 2026-11-23 via Launchpad: start it now." 2026-11-23T12:00:00Z
   out=$(in_home "$home" "$LATER" ship-text 2>&1)
   rc=$?
   expect_code 0 "$rc" "the listing failed: $out"
-  assert_contains "$out" "later-rulings: ship-text was approved 2026-11-20 (the earliest captain decision on its backlog row, recorded at 2026-11-20T09:00:00Z); 6 captain ruling(s)" \
+  assert_contains "$out" "later-rulings: ship-text was approved 2026-11-20 (the earliest captain decision on its backlog row, recorded at 2026-11-20T12:00:00Z); 6 captain ruling(s)" \
     "the header did not name the earliest approval and the count"$'\n'"$out"
   assert_contains "$out" "data/captain.md:11 2026-11-21 - Deadline rule" \
     "a ruling with a future deadline did not count from its ruling date"$'\n'"$out"
@@ -110,13 +112,24 @@ test_resolved_at_stamp_is_preferred_and_prose_is_the_fallback() {
   write_captain_files "$home"
   # His words name 2026-11-20, but the answer was recorded on 2026-11-22: the
   # stamp dates the approval, so the 2026-11-21 ruling predates it.
-  approve "$home" stamped-ship "Arjun 2026-11-20 on the board: ship it." 2026-11-22T09:00:00Z
+  approve "$home" stamped-ship "Arjun 2026-11-20 on the board: ship it." 2026-11-22T12:00:00Z
   out=$(in_home "$home" "$LATER" stamped-ship 2>&1)
-  assert_contains "$out" "later-rulings: stamped-ship was approved 2026-11-22 (the earliest captain decision on its backlog row, recorded at 2026-11-22T09:00:00Z); 3 captain ruling(s)" \
+  assert_contains "$out" "later-rulings: stamped-ship was approved 2026-11-22 (the earliest captain decision on its backlog row, recorded at 2026-11-22T12:00:00Z); 3 captain ruling(s)" \
     "the Resolved at stamp did not date the approval"$'\n'"$out"
   case "$out" in
     *"Codex is the reviewer only"*) fail "a ruling dated before the stamped approval was listed"$'\n'"$out" ;;
   esac
+
+  # 03:00Z on 2026-11-22 is still the evening of 2026-11-21 in New York, so a
+  # host there dates the approval from its own earlier day, and a UTC host from
+  # the UTC day.
+  approve "$home" evening-ship "Arjun: ship it." 2026-11-22T03:00:00Z
+  out=$(TZ=America/New_York in_home "$home" "$LATER" evening-ship 2>&1)
+  assert_contains "$out" "later-rulings: evening-ship was approved 2026-11-21 (the earliest captain decision on its backlog row, recorded at 2026-11-22T03:00:00Z)" \
+    "a stamp west of UTC was not dated from the host's earlier local day"$'\n'"$out"
+  out=$(TZ=UTC in_home "$home" "$LATER" evening-ship 2>&1)
+  assert_contains "$out" "later-rulings: evening-ship was approved 2026-11-22 (the earliest captain decision on its backlog row, recorded at 2026-11-22T03:00:00Z)" \
+    "a stamp on a UTC host was not dated from its UTC day"$'\n'"$out"
 
   # A record without a stamp (written before it existed), a repaired record
   # (recorded after the fact), a malformed stamp, and a stamp quoted below a
@@ -124,11 +137,11 @@ test_resolved_at_stamp_is_preferred_and_prose_is_the_fallback() {
   printf '%s\n' 'Resolution recorded by fm-captain-hold.' 'Decision digest: aa' 'Resolution mode: released' '' \
     'Captain decision:' 'Arjun 2026-11-21: ship it.' > "$home/legacy.txt"
   printf '%s\n' 'Resolution recorded by fm-captain-hold.' 'Decision digest: aa' 'Resolution mode: repaired' \
-    'Resolved at: 2026-11-25T09:00:00Z' '' 'Captain decision:' 'Arjun 2026-11-21: ship it.' > "$home/repaired.txt"
+    'Resolved at: 2026-11-25T12:00:00Z' '' 'Captain decision:' 'Arjun 2026-11-21: ship it.' > "$home/repaired.txt"
   printf '%s\n' 'Resolution recorded by fm-captain-hold.' 'Decision digest: aa' 'Resolution mode: released' \
-    'Resolved at: 2026-11-31T09:00:00Z' '' 'Captain decision:' 'Arjun 2026-11-21: ship it.' > "$home/malformed.txt"
+    'Resolved at: 2026-11-31T12:00:00Z' '' 'Captain decision:' 'Arjun 2026-11-21: ship it.' > "$home/malformed.txt"
   printf '%s\n' 'Resolution recorded by fm-captain-hold.' 'Decision digest: aa' 'Resolution mode: released' '' \
-    'Captain decision:' 'Arjun 2026-11-21: ship it.' 'Resolved at: 2026-11-25T09:00:00Z' > "$home/quoted.txt"
+    'Captain decision:' 'Arjun 2026-11-21: ship it.' 'Resolved at: 2026-11-25T12:00:00Z' > "$home/quoted.txt"
   for row in legacy repaired malformed quoted; do
     in_home "$home" "$ROOT/bin/fm-tasks-axi.sh" add "$row-ship" "Ship $row" --kind ship \
       --body-file "$home/$row.txt" >/dev/null 2>&1 || fail "could not add the $row row"
@@ -176,7 +189,7 @@ test_nothing_to_list_says_so_once_and_found_only_is_silent() {
     "a row with no captain approval did not say so in one line"
 
   # A decision text with no date is still dated by its record's stamp.
-  approve "$home" undated-ship "Firstmate decided: ship it." 2026-11-25T09:00:00Z
+  approve "$home" undated-ship "Firstmate decided: ship it." 2026-11-25T12:00:00Z
   out=$(in_home "$home" "$LATER" undated-ship 2>&1)
   assert_equals "later-rulings: no item in data/captain.md or data/captain-shared.md is dated on or after undated-ship's approval 2026-11-25" "$out" \
     "a stamped answer with no date in its words was not dated by its stamp"
