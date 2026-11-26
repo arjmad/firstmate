@@ -656,7 +656,7 @@ APPLY_SHAPE_JQ='
              | select((.hold | has($k)) and (.hold[$k] | type) != "string") | "row \($n): hold.\($k) must be a string")
          end
        else empty end),
-      (if [.. | strings | select(test("[\r\n]"))] != [] then "row \($n): a value spans more than one line" else empty end)
+      (if [.. | strings | select(test("[\r\n  ]"))] != [] then "row \($n): a value spans more than one line" else empty end)
     end;
   if length != 1 or (.[0] | type) != "array" then "the file must hold one JSON array of rows"
   elif (.[0] | length) == 0 then "the file holds no rows"
@@ -767,6 +767,8 @@ command_apply() {
       apply_refuse "no backlog row $id in this home"
     elif printf '%s\n' "$SHOWN_ROW" | grep -q '^  state: done$'; then
       apply_refuse "the row is closed"
+    elif printf '%s\n' "$SHOWN_ROW" | grep -q '^  kind: public-followup$'; then
+      apply_refuse "a public-followup row changes only through tasks-axi public-followup"
     else
       if [ "$has_title" = + ]; then
         if fm_backlog_title_dated "$title"; then apply_refuse "a title names the next action, not a date"

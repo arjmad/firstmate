@@ -436,6 +436,7 @@ JSON
     '[{"id": "vendor"}]|names no field' \
     '[{"id": "vendor", "title": "x", "hold": {"kind": "future", "until": "2026-12-01", "reason": "r", "bogus": "1"}}]|unknown hold field bogus' \
     '[{"id": "vendor", "title": "two\nlines"}]|spans more than one line' \
+    '[{"id": "vendor", "title": "two lines"}]|spans more than one line' \
     '[{"id": "vendor", "title": "   "}]|tasks-axi refuses this title' \
     '[{"id": "vendor", "title": "Call the vendor (repo: sales)"}]|canonical task tags' \
     '[{"id": "vendor", "title": "Call the vendor (since 2026-12-01)"}]|canonical task tags' \
