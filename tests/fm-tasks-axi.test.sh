@@ -294,6 +294,80 @@ test_wrapper_holds_captain_owned_captain_rows() {
   pass "filing a captain-owned kind=captain row holds it for the captain, and re-adding holds one filed unheld"
 }
 
+# The jobs responder files every row with `--json`, so the filing hold reads
+# the row's id from the JSON result: a new row, one already present, one
+# already held and a blocked one, with stdout still one JSON document.
+test_wrapper_holds_captain_rows_added_with_json() {
+  local dir out show body
+  dir=$(make_split wrapper-captain-json)
+  body=$(printf 'Repeated problem `x.hands` (responder).\nOwner: arjun')
+  out=$(wrapper_from_code "$dir" add rk-json "Your hands json" --kind captain --body "$body" --json) \
+    || fail "a --json add of a captain-owned captain row failed: $out"
+  assert_equals rk-json "$(printf '%s' "$out" | jq -r '.task.id')" "a --json add's stdout is not its JSON result"
+  show=$(wrapper_from_code "$dir" show rk-json --full)
+  assert_contains "$show" "held: yes" "a captain row added with --json was not held"
+  assert_contains "$show" "only you can take this step: Your hands json" "the --json filing hold does not name the step"
+  # Already present and unheld: the responder's next run re-adds it.
+  (cd "$dir/home" && tasks-axi add rk-json-legacy "Your hands legacy" --kind captain --body "Owner: arjun" \
+    --file "$dir/home/data/backlog.md" >/dev/null) || fail "could not add the legacy row"
+  out=$(wrapper_from_code "$dir" add rk-json-legacy "Your hands legacy" --kind captain --body "$body" --json) \
+    || fail "a --json re-add of an unheld row failed: $out"
+  assert_equals true "$(printf '%s' "$out" | jq -r '.already')" "the re-add did not report the row already present"
+  assert_contains "$(wrapper_from_code "$dir" show rk-json-legacy)" "held: yes" "a --json re-add of an unheld row did not hold it"
+  # Already held: its hold stands as it was.
+  (cd "$dir/home" && tasks-axi add rk-json-held "Your hands held" --kind captain --body "Owner: arjun" \
+    --file "$dir/home/data/backlog.md" >/dev/null \
+    && tasks-axi hold rk-json-held --reason "his own words" --kind captain --until 2030-01-01 \
+      --file "$dir/home/data/backlog.md" >/dev/null) || fail "could not add the held row"
+  wrapper_from_code "$dir" add rk-json-held "Your hands held" --kind captain --body "$body" --json >/dev/null \
+    || fail "a --json re-add of a held row failed"
+  show=$(wrapper_from_code "$dir" show rk-json-held --full)
+  assert_contains "$show" "his own words" "a --json re-add replaced the row's hold"
+  assert_not_contains "$show" "only you can take this step" "a --json re-add re-held a held row"
+  # Blocked by another row: still his step, so still held.
+  out=$(wrapper_from_code "$dir" add rk-json-blocked "Your hands blocked" --kind captain --body "$body" \
+    --blocked-by rk-json --json) || fail "a --json add of a blocked captain row failed: $out"
+  assert_equals true "$(printf '%s' "$out" | jq -r '.task.blocked')" "the fixture row is not blocked"
+  assert_contains "$(wrapper_from_code "$dir" show rk-json-blocked)" "held: yes" "a blocked captain row added with --json was not held"
+  pass "a --json add holds a captain-owned captain row (new, already present, blocked) and leaves a held one alone"
+}
+
+# The responder closes a row after retention has archived it; the archive
+# says it is done, so the close succeeds as already done, in either format.
+test_wrapper_done_on_archived_row() {
+  local dir out rc
+  dir=$(make_split wrapper-done-archived)
+  for id in ar-old ar-new; do
+    wrapper_from_code "$dir" add "$id" "Row $id" >/dev/null || fail "could not add $id"
+    wrapper_from_code "$dir" "done" "$id" >/dev/null || fail "could not close $id"
+  done
+  wrapper_from_code "$dir" prune --keep 1 >/dev/null || fail "prune failed"
+  assert_grep '- [x] ar-old - ' "$dir/home/data/done-archive.md" "retention did not archive the oldest row"
+  assert_no_grep 'ar-old' "$dir/home/data/backlog.md" "the archived row is still in the backlog"
+  out=$(wrapper_from_code "$dir" "done" ar-old --note "clean for 3 runs" --json) \
+    || fail "done --json on an archived row failed: $out"
+  assert_equals "true true done ar-old" "$(printf '%s' "$out" | jq -r '"\(.already) \(.archived) \(.task.state) \(.task.id)"')" \
+    "done --json on an archived row did not report it already done"
+  out=$(wrapper_from_code "$dir" close ar-old)
+  rc=$?
+  expect_code 0 "$rc" "close on an archived row"
+  assert_equals "ok: ar-old already done (archived)" "$out" "close on an archived row did not say it is already done"
+  # An id that is a prefix of an archived one, or absent, stays a refusal.
+  for id in ar ar-ol ar-none; do
+    out=$(wrapper_from_code "$dir" "done" "$id" --json)
+    rc=$?
+    expect_code 1 "$rc" "done on the unknown row $id"
+    assert_contains "$out" "code: NOT_FOUND" "done on the unknown row $id lost tasks-axi's refusal"
+  done
+  out=$(wrapper_from_code "$dir" rm ar-old 2>&1)
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "rm of an archived row reported success"
+  out=$(wrapper_from_code "$dir" "done" ar-new --json) || fail "done --json of a live closed row failed: $out"
+  assert_equals true "$(printf '%s' "$out" | jq -r '.already')" "a repeated done lost tasks-axi's own result"
+  assert_equals null "$(printf '%s' "$out" | jq -r '.archived')" "a live closed row was reported archived"
+  pass "done and close of a row retention archived succeed as already done; other refusals stand"
+}
+
 test_wrapper_owner_at_filing() {
   local dir out rc before body
   dir=$(make_split wrapper-owner)
@@ -613,6 +687,8 @@ if [ "$HAVE_TASKS_AXI" = 1 ]; then
   test_wrapper_refuses_add_start
   test_wrapper_owner_at_filing
   test_wrapper_holds_captain_owned_captain_rows
+  test_wrapper_holds_captain_rows_added_with_json
+  test_wrapper_done_on_archived_row
   test_wrapper_single_home
   test_wrapper_hold_quote_guard
   test_wrapper_row_shape

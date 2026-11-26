@@ -29,7 +29,8 @@
 # (fleet), except `--kind captain`, which must name one and is refused
 # otherwise. An `Owner:` line already in the given body counts as naming one.
 # A `--kind captain` row owned by `arjun` is a step only the captain can take,
-# so once `add` succeeds, the new or already-present row tasks-axi reports, if
+# so once `add` succeeds, the new or already-present row tasks-axi reports (the
+# `task.id` of an `add --json` result, else its text `ok:` line), if
 # open and carrying no hold, is held for him through bin/fm-captain-hold.sh
 # hold, which re-checks it under the row's control lock, keeps it out of
 # dispatch and puts it among his calls (fork patch,
@@ -84,7 +85,11 @@
 # where this home's configured archive lives (bin/fm-backlog-transition-lib.sh
 # fm_backlog_markdown_archive owns the resolution), whether or not it exists
 # yet; it prints nothing when the backend keeps no markdown archive, and
-# refuses when the backend configuration cannot be read.
+# refuses when the backend configuration cannot be read. A `done` (or `close`)
+# that tasks-axi refuses as NOT_FOUND, of a row that archive holds, prints
+# `ok: <id> already done (archived)` (with `--json`, a result object whose
+# `already` and `archived` are true) and exits 0, writing no handoff reply, so
+# a caller that closes a row retention already moved reads it as closed.
 #
 # Superseded-ruling guard (opt-in): when the home-private `config/captain-name`
 # names the captain (one name per line; blank and `#` lines ignored), `hold`,
@@ -455,8 +460,10 @@ hold_added_captain_row() {  # <tasks-axi add output>
   done
   kind=$(arg_value --kind) || kind=
   [ "$kind" = captain ] && [ "$OWNER" = arjun ] || return 0
-  # The row tasks-axi reports it added, wherever the id sat or was minted.
-  id=$(printf '%s\n' "$1" | sed -n -e 's/^ok: added \([^ ]*\) .*/\1/p' -e 's/^ok: add \([^ ]*\) already exists.*/\1/p' | head -1)
+  # The row tasks-axi reports it added, wherever the id sat or was minted:
+  # `task.id` of an `add --json` result, else its text `ok:` line.
+  id=$(printf '%s\n' "$1" | jq -r '.task.id // empty | strings' 2>/dev/null) || id=
+  [ -n "$id" ] || id=$(printf '%s\n' "$1" | sed -n -e 's/^ok: added \([^ ]*\) .*/\1/p' -e 's/^ok: add \([^ ]*\) already exists.*/\1/p' | head -1)
   [ -n "$id" ] || { printf 'fm-tasks-axi: could not tell which row this add filed, so it was not held for the captain; hold it with bin/fm-captain-hold.sh hold before anything dispatches it\n' >&2; return 1; }
   shown_body "$id" || { printf 'fm-tasks-axi: %s was added but could not be read to hold it for the captain; hold it with bin/fm-captain-hold.sh hold before anything dispatches it\n' "$id" >&2; return 1; }
   # An idempotent add keeps the stored row, so judge the row as stored;
@@ -658,24 +665,60 @@ guard_superseded_quote() {
 # for a row no handoff filed. The close already landed, so a failure here only
 # warns on stderr and never changes the exit status or stdout (--json stays
 # parseable).
-close_reply() {  # <verb>
-  local verb=$1 id='' arg how="done" i=1 note=''
-  local -a flags=()
-  [ "${FM_HANDOFF_CLOSE_REPLY:-}" != skip ] || return 0
+# The row a close or removal names, into CLOSE_ID, and the close's links and
+# note into CLOSE_FLAGS and CLOSE_NOTE; fails for a help read.
+CLOSE_ID=
+CLOSE_NOTE=
+CLOSE_FLAGS=()
+close_args() {
+  local arg i=1
+  CLOSE_ID=
+  CLOSE_NOTE=
+  CLOSE_FLAGS=()
   while [ "$i" -lt "${#ARGS[@]}" ]; do
     arg=${ARGS[$i]}
     case "$arg" in
-      --note) note=${ARGS[$((i + 1))]:-}; flags+=("$arg" "$note"); i=$((i + 1)) ;;
-      --note=*) note=${arg#--note=}; flags+=("$arg") ;;
-      --pr|--report) flags+=("$arg" "${ARGS[$((i + 1))]:-}"); i=$((i + 1)) ;;
-      --pr=*|--report=*) flags+=("$arg") ;;
+      --note) CLOSE_NOTE=${ARGS[$((i + 1))]:-}; CLOSE_FLAGS+=("$arg" "$CLOSE_NOTE"); i=$((i + 1)) ;;
+      --note=*) CLOSE_NOTE=${arg#--note=}; CLOSE_FLAGS+=("$arg") ;;
+      --pr|--report) CLOSE_FLAGS+=("$arg" "${ARGS[$((i + 1))]:-}"); i=$((i + 1)) ;;
+      --pr=*|--report=*) CLOSE_FLAGS+=("$arg") ;;
       --keep) i=$((i + 1)) ;;
-      -h|--help) return 0 ;;
+      -h|--help) return 1 ;;
       -*) ;;
-      *) [ -n "$id" ] || id=$arg ;;
+      *) [ -n "$CLOSE_ID" ] || CLOSE_ID=$arg ;;
     esac
     i=$((i + 1))
   done
+}
+
+# A done or close that tasks-axi refused as NOT_FOUND (<its output>) of a row
+# the Done archive holds: report it already done, in the caller's format, and
+# succeed. Fails, printing nothing, for any other refusal.
+archived_close() {  # <tasks-axi output>
+  local archive arg
+  close_args || return 1
+  [ -n "$CLOSE_ID" ] || return 1
+  printf '%s\n' "$1" | grep -qx 'code: NOT_FOUND' || return 1
+  archive=$(fm_backlog_markdown_archive "$DATA" 2>/dev/null) && [ -f "$archive" ] || return 1
+  ID=$CLOSE_ID awk 'index($0, "- [x] " ENVIRON["ID"] " - ") == 1 { found = 1; exit } END { exit !found }' "$archive" \
+    || return 1
+  for arg in "${ARGS[@]}"; do
+    if [ "$arg" = --json ]; then
+      jq -n --arg id "$CLOSE_ID" '{ok: true, action: "done", already: true, archived: true, task: {id: $id, state: "done"}}'
+      return 0
+    fi
+  done
+  printf 'ok: %s already done (archived)\n' "$CLOSE_ID"
+}
+
+close_reply() {  # <verb>
+  local verb=$1 id how="done" note
+  local -a flags=()
+  [ "${FM_HANDOFF_CLOSE_REPLY:-}" != skip ] || return 0
+  close_args || return 0
+  id=$CLOSE_ID
+  note=$CLOSE_NOTE
+  flags=(${CLOSE_FLAGS[@]+"${CLOSE_FLAGS[@]}"})
   [ -n "$id" ] || return 0
   case "$verb" in rm|delete) how=removed; flags=(--reason "$REASON") ;; esac
   [ "${FM_HANDOFF_CLOSE_REPLY:-}" != removed ] || { how=removed; flags=(--reason "${REASON:-$note}"); }
@@ -752,7 +795,18 @@ if [ -n "$OWNER_BODY_FILE" ]; then
   exit "$status"
 fi
 case "${1:-}" in
-  done|close|rm|delete)
+  done|close)
+    # Captured, so a refusal of a row retention already archived reads as done.
+    status=0
+    closed=$(tasks-axi ${ARGS[@]+"${ARGS[@]}"}) || status=$?
+    if [ "$status" -ne 0 ] && archived_close "$closed"; then
+      exit 0
+    fi
+    [ -z "$closed" ] || printf '%s\n' "$closed"
+    [ "$status" -eq 0 ] && close_reply "$1"
+    exit "$status"
+    ;;
+  rm|delete)
     status=0
     tasks-axi ${ARGS[@]+"${ARGS[@]}"} || status=$?
     [ "$status" -eq 0 ] && close_reply "$1"
