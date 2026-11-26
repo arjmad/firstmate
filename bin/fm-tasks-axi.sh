@@ -690,6 +690,12 @@ command_apply() {
   file=$(absolute_from_caller "$file")
   [ -f "$file" ] && [ -r "$file" ] || fail "cannot read the apply file $file"
   command -v jq >/dev/null 2>&1 || fail "apply needs jq on PATH"
+  # Check and write from one copy, so an edit to the list mid-run applies nothing unchecked.
+  APPLY_SNAPSHOT=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-tasks-axi-apply.XXXXXX") || fail "cannot stage the apply file"
+  trap 'rm -f -- "$APPLY_SNAPSHOT"' EXIT
+  cp -- "$file" "$APPLY_SNAPSHOT" || fail "cannot stage the apply file $file"
+  local source=$file
+  file=$APPLY_SNAPSHOT
   shape=$(jq -r "$APPLY_SHAPE_JQ" "$file" 2>&1) || fail "the apply file is not JSON: $(printf '%s' "$shape" | head -1)"
   if [ -n "$shape" ]; then
     printf '%s\n' "$shape" | sed 's/^/refused: /' >&2
@@ -767,7 +773,7 @@ command_apply() {
     fi
     i=$((i + 1))
   done
-  [ "$refused" = 0 ] || fail "apply refused $refused field(s) of $file; nothing was changed"
+  [ "$refused" = 0 ] || fail "apply refused $refused field(s) of $source; nothing was changed"
   if [ "$check" = 1 ]; then
     [ "${#plan[@]}" = 0 ] || printf 'plan: %s\n' "${plan[@]}"
     printf 'apply: %s rows, %s changes checked; nothing was changed\n' "$count" "${#plan[@]}"
