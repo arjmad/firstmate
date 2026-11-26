@@ -17,6 +17,7 @@
 #     [--expected-head <full-sha>]
 #     [--allow-red <check>] [--allow-missing <check>] [--allow-no-pipeline]
 #     [--waive-review <reason>] [--one-way-approved] [--allow-revert]
+#     [--captain-approval-file <path>]
 #     [-- <forge merge flags>]
 #   fm-pr-merge.sh -h | --help
 #
@@ -276,6 +277,22 @@
 # to state/one-way-door-merges.log as one tab-separated line of epoch, task id,
 # URL, verified head, and blast radius.
 #
+# Captain approval on the PR (audit a4-09): an attended
+# --captain-approval-file <path>, passed when the captain's word approved a PR
+# whose PR body's Visual review section (a sites convention) is not `none`,
+# posts one GitHub PR comment whose first line is exactly
+# `Approved: Arjun <YYYY-MM-DD>: <his words>` and whose second line is
+# `Head: <verified head sha>`, once every other gate has passed and just before
+# the forge merge, so a reader can refuse an approval left from an earlier head.
+# The words are the file's non-empty lines, each trimmed and joined by one
+# space; the date is the file's modification time in UTC, so write the file
+# when he answers, as the bin/fm-captain-hold.sh answer --decision-file file
+# that recorded it was. A file that is missing, empty, or binary refuses before
+# any forge call; a comment that does not post refuses the merge. Readers such
+# as sites' theme-go-live.py match `^Approved: Arjun [0-9]{4}-[0-9]{2}-[0-9]{2}: .+`.
+# It is GitHub-only, refused while the away-posture record exists, and never
+# skips any other gate.
+#
 # Branch standing merges (fork patch, docs/fork-decisions.md 2026-10-27): while
 # attended, the supervision branch actor merges only the class Arjun named for
 # it, and require_merge_actor below owns that class. The pull request is on
@@ -354,7 +371,7 @@
 # task's recorded approval. It is advisory: it never refuses the merge, its
 # one backlog row read keeps that read's usual time bound, and a failure to
 # read is silent.
-# Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--update-branch] [--expected-head <full-sha>] [--allow-red <check-name>] [--allow-missing <check-name>] [--allow-no-pipeline] [--waive-review <reason>] [--one-way-approved] [--allow-revert] [-- <extra forge merge args>]
+# Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--update-branch] [--expected-head <full-sha>] [--allow-red <check-name>] [--allow-missing <check-name>] [--allow-no-pipeline] [--waive-review <reason>] [--one-way-approved] [--allow-revert] [--captain-approval-file <path>] [-- <extra forge merge args>]
 #
 # On GitLab, this script confirms the MR is actually merged before reporting it;
 # an auto-merge-queued or unconfirmed request leaves the poll armed and records
@@ -444,6 +461,8 @@ ALLOW_MISSING=()
 WAIVE_REVIEW=
 ONE_WAY_APPROVED=false
 ALLOW_REVERT=false
+CAPTAIN_APPROVAL_FILE=
+CAPTAIN_APPROVAL_LINE=
 EXPECTED_HEAD=
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -454,6 +473,16 @@ while [ "$#" -gt 0 ]; do
     --allow-revert=*)
       echo "error: --allow-revert takes no value" >&2
       exit 2
+      ;;
+    --captain-approval-file)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || { echo "error: --captain-approval-file needs a file path" >&2; exit 2; }
+      CAPTAIN_APPROVAL_FILE=$2
+      shift 2
+      ;;
+    --captain-approval-file=*)
+      CAPTAIN_APPROVAL_FILE=${1#--captain-approval-file=}
+      [ -n "$CAPTAIN_APPROVAL_FILE" ] || { echo "error: --captain-approval-file needs a file path" >&2; exit 2; }
+      shift
       ;;
     --one-way-approved)
       ONE_WAY_APPROVED=true
@@ -545,6 +574,39 @@ done
 if [ "$UPDATE_BRANCH" = true ] && [ "$PROVIDER" != github ]; then
   echo "error: --update-branch applies only to GitHub" >&2
   exit 2
+fi
+# The captain-approval line (see the header) is read and refused here, before
+# any forge call, so a bad file never reaches a merge.
+if [ -n "$CAPTAIN_APPROVAL_FILE" ]; then
+  if [ "$PROVIDER" != github ]; then
+    echo "error: --captain-approval-file applies only to GitHub" >&2
+    exit 2
+  fi
+  if [ ! -f "$CAPTAIN_APPROVAL_FILE" ] || [ ! -r "$CAPTAIN_APPROVAL_FILE" ]; then
+    printf 'error: --captain-approval-file %s is not a readable file\n' "$CAPTAIN_APPROVAL_FILE" >&2
+    exit 2
+  fi
+  # A ./ prefix keeps grep from reading a leading - as an option and BSD date
+  # from reading a numeric name as epoch seconds.
+  approval_path=$CAPTAIN_APPROVAL_FILE
+  case "$approval_path" in /*) ;; *) approval_path=./$approval_path ;; esac
+  # -I reads a binary file as no match, so it refuses as empty.
+  approval_words=$(LC_ALL=C grep -I -v '^[[:space:]]*$' "$approval_path" || true)
+  approval_words=$(printf '%s\n' "$approval_words" | tr -d '\r' \
+    | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | paste -sd ' ' -)
+  if [ -z "$approval_words" ]; then
+    printf 'error: --captain-approval-file %s holds no text: it must hold the captain'"'"'s words\n' "$CAPTAIN_APPROVAL_FILE" >&2
+    exit 2
+  fi
+  approval_date=$(TZ=UTC date -u -r "$approval_path" +%Y-%m-%d 2>/dev/null) || approval_date=
+  case "$approval_date" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+    *)
+      printf 'error: the decision time of --captain-approval-file %s could not be read\n' "$CAPTAIN_APPROVAL_FILE" >&2
+      exit 2
+      ;;
+  esac
+  CAPTAIN_APPROVAL_LINE="Approved: Arjun $approval_date: $approval_words"
 fi
 if [ -n "$EXPECTED_HEAD" ] && ! fm_pr_head_valid "$EXPECTED_HEAD"; then
   echo "error: --expected-head requires a full lowercase commit sha" >&2
@@ -869,7 +931,7 @@ require_merge_actor() {
   [ "$ATTENDED_OVERRIDE" = false ] && [ "${#ALLOW_RED[@]}" -eq 0 ] \
     && [ "${#ALLOW_MISSING[@]}" -eq 0 ] && [ -z "$WAIVE_REVIEW" ] \
     && [ "$ONE_WAY_APPROVED" = false ] && [ "$ALLOW_NO_PIPELINE" = false ] \
-    && [ "$ALLOW_REVERT" = false ] \
+    && [ "$ALLOW_REVERT" = false ] && [ -z "$CAPTAIN_APPROVAL_FILE" ] \
     || reasons="$reasons"$'\n'"  - an override flag needs the captain's word through main"
   case "$FM_PR_DOOR" in
     ''|two-way) ;;
@@ -2024,6 +2086,10 @@ require_current_away_authority() {
     echo "error: --one-way-approved is attended-only; while the away-posture record exists a one-way door waits for the captain's return" >&2
     return 2
   fi
+  if [ "$FM_PR_AWAY_POSTURE" = true ] && [ -n "$CAPTAIN_APPROVAL_FILE" ]; then
+    echo "error: --captain-approval-file is attended-only; while the away-posture record exists the captain's approval is never written for him" >&2
+    return 2
+  fi
   if [ "$FM_PR_AWAY_POSTURE" = true ] && [ "$ALLOW_REVERT" = true ]; then
     echo "error: --allow-revert is attended-only; while the away-posture record exists a merge never undoes landed work" >&2
     return 2
@@ -2684,6 +2750,19 @@ require_current_away_authority || away_status=$?
 require_recorded_pr_identity || exit 1
 record_pr_metadata || exit 1
 require_released_captain_hold || exit 1
+
+# Posts the captain-approval comment (see the header) right before the forge
+# merge; a comment that does not post refuses the merge.
+post_captain_approval() {
+  [ -n "$CAPTAIN_APPROVAL_LINE" ] || return 0
+  if printf '%s\nHead: %s\n' "$CAPTAIN_APPROVAL_LINE" "$FM_PR_MERGE_HEAD" \
+    | gh pr comment "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" --body-file - >/dev/null 2>&1; then
+    printf 'verified: posted the captain'"'"'s approval on %s\n' "$URL" >&2
+    return 0
+  fi
+  printf 'error: refusing to merge %s: the captain'"'"'s approval comment could not be posted on it\n' "$URL" >&2
+  return 1
+}
 # Advisory only (see the header's later-rulings paragraph).
 { FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-later-rulings.sh" "$ID" --found-only 2>/dev/null || true; } \
   | sed 's/^/note: /' >&2 || true
@@ -2783,6 +2862,7 @@ case "$PROVIDER" in
     # seconds later. Retry a refused merge a bounded number of times, still
     # under the locks above and still bound to the verified head, but only
     # while a fresh read shows the pull request open and CLEAN at that head.
+    post_captain_approval || exit 1
     merge_attempt=1
     while :; do
       merge_status=0
