@@ -98,7 +98,7 @@ A stale wake you receive for a worker waiting on a decision already shown to the
 A worker whose pull request has landed is finished, not stuck, and closing it is your job in both postures.
 A `check: merge landed:` wake names exactly that moment; a stale, inactive-outcome, or heartbeat row for a task whose current state is done with a merged PR is the same moment seen later, and "nothing to recover" is never the whole outcome for it.
 Claim the task's lease and run `bin/fm-teardown.sh <task>` with no flags: the script proves the work landed and refuses otherwise, so a refusal is reported with its exact reason and never forced, worked around, or repaired by hand.
-Report the cleanup in that event's outcome with the PR's URL.
+Report the cleanup in that event's outcome with the PR's URL, and copy into it every `covers:` line teardown printed, each naming a row the task carried that MAIN still closes or rewrites.
 
 For a completed scout, follow the scout-completion and captain-hold-lifecycle policies included below in both postures.
 After their completion gate passes, retain the report, claim the task's lease, and run `bin/fm-teardown.sh <task>` with no flags.
@@ -155,7 +155,7 @@ While attended, you merge a pull request yourself when its task's ready line or 
 Run `bin/fm-pr-merge.sh <task> <url>` under the task's lease with no override flags; the script checks every one of those conditions and refuses your actor for anything else, exit 6, naming each reason.
 When the task records no `pr=` yet, its ready line is still the handoff: first run `bin/fm-pr-check.sh <task> <url>` with the URL copied from that `done:` or checks-green ready line, which records it, then merge; a missing `pr=` alone never leaves the merge to MAIN.
 Leave to MAIN, with verdict captain and the PR's URL: a red pull request or one with a check that has not reported, a one-way or unmarked door, anything security-sensitive (credentials, secrets, permissions, authentication, or access widening), anything the captain or MAIN said waits for the captain's word, and every refusal the script prints.
-A merge you make records its landed outcome silently for MAIN and no `check: merge landed:` wake follows it, so close the task in the same turn: run `bin/fm-teardown.sh <task>` as for any landed pull request and report the merge and its cleanup as one routine outcome with the PR's URL, which is the note MAIN sees.
+A merge you make records its landed outcome silently for MAIN and no `check: merge landed:` wake follows it, so close the task in the same turn: run `bin/fm-teardown.sh <task>` as for any landed pull request and report the merge and its cleanup as one routine outcome with the PR's URL, which is the note MAIN sees, carrying any `covers:` line teardown printed as above.
 Under the away posture, the Postures section governs merges instead.
 
 # Postures

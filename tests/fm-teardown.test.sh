@@ -821,7 +821,7 @@ test_teardown_names_open_rows_its_row_covers() {
   tasks-axi add noticed-mentioned "a row only mentioned mid-line" --kind noticed --file "$backlog" >/dev/null
   tasks-axi add task-x1 "teardown fixture task" --kind ship --start --file "$backlog" \
     --body "$(printf '%s\n' 'The plan names a "Covers: noticed-mentioned" line mid-sentence.' \
-      'Covers: noticed-open-a, noticed-closed noticed-gone, task-x1' 'Covers: noticed-open-b')" >/dev/null
+      'Covers: noticed-open-a, noticed-closed noticed-gone, task-x1' 'Covers: noticed-open-b.')" >/dev/null
 
   out=$(run_teardown "$case_dir") || fail "covers: teardown failed: $out"
   assert_grep '- [x] task-x1 ' "$case_dir/data/done-archive.md" \
@@ -837,6 +837,32 @@ test_teardown_names_open_rows_its_row_covers() {
       || fail "covers: teardown changed covered row $row"
   done
   pass "teardown names each open row its closed row covers, and closes none of them"
+}
+
+# The work has landed even when the close itself fails, and the close replay at
+# the next session start cannot name the covered rows, so the failing run does.
+test_teardown_names_covered_rows_when_its_close_fails() {
+  local case_dir out backlog rc=0 real
+  case_dir=$(make_case covers-close-fails)
+  backlog="$case_dir/data/backlog.md"
+  write_meta "$case_dir" no-mistakes ship
+  printf '%s\n' 'pr=https://github.com/example/repo/pull/7' >> "$case_dir/state/task-x1.meta"
+  printf '%s\n' '# Backlog' '' '## In flight' '' '## Queued' '' '## Done' > "$backlog"
+  tasks-axi add noticed-open-a "an open covered row" --kind noticed --file "$backlog" >/dev/null
+  tasks-axi add task-x1 "teardown fixture task" --kind ship --start --file "$backlog" \
+    --body 'Covers: noticed-open-a' >/dev/null
+  real=$(command -v tasks-axi)
+  cat > "$case_dir/fakebin/tasks-axi" <<SH
+#!/usr/bin/env bash
+[ "\${1:-}" != "done" ] || { echo "error: simulated close failure"; exit 1; }
+exec "$real" "\$@"
+SH
+  chmod +x "$case_dir/fakebin/tasks-axi"
+  out=$(run_teardown "$case_dir" 2>/dev/null) || rc=$?
+  [ "$rc" = 1 ] || fail "covers-close-fails: expected exit 1 from a failed close, got $rc: $out"
+  printf '%s\n' "$out" | grep -q '^covers: noticed-open-a is still open' \
+    || fail "covers-close-fails: the failed close did not name its covered row: $out"
+  pass "a teardown whose close fails still names the open rows its row covers"
 }
 
 # A forced teardown proves nothing landed, so its close names no covered row.
@@ -7845,6 +7871,7 @@ test_retained_sources_still_reach_the_ordinary_refusal
 test_local_only_fork_remote_allows
 test_teardown_closes_the_backlog_item_itself
 test_teardown_names_open_rows_its_row_covers
+test_teardown_names_covered_rows_when_its_close_fails
 test_teardown_force_names_no_covered_row
 test_teardown_force_close_writes_no_handoff_reply
 test_teardown_closes_a_gerrit_task_with_its_change_url_as_a_note

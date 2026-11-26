@@ -132,6 +132,8 @@ fm_tasks_axi_compatible() { return 1; }
 fm_backlog_backend_manual() { return 1; }
 SH
   ln -s "$ROOT/bin/fm-backlog-transition-lib.sh" "$fake/bin/fm-backlog-transition-lib.sh"
+  ln -s "$ROOT/bin/fm-backlog-owner-lib.sh" "$fake/bin/fm-backlog-owner-lib.sh"
+  ln -s "$ROOT/bin/fm-backlog-row-lib.sh" "$fake/bin/fm-backlog-row-lib.sh"
   # Meta with a nonexistent worktree so the dirty/treehouse blocks skip.
   cat > "$fake/state/$id.meta" <<META
 window=fakeses:fm-$id
@@ -240,6 +242,8 @@ fm_tasks_axi_compatible() { return 1; }
 fm_backlog_backend_manual() { return 1; }
 SH
   ln -s "$ROOT/bin/fm-backlog-transition-lib.sh" "$fake/bin/fm-backlog-transition-lib.sh"
+  ln -s "$ROOT/bin/fm-backlog-owner-lib.sh" "$fake/bin/fm-backlog-owner-lib.sh"
+  ln -s "$ROOT/bin/fm-backlog-row-lib.sh" "$fake/bin/fm-backlog-row-lib.sh"
   # No tasktmp= line at all.
   cat > "$fake/state/$id.meta" <<META
 window=fakeses:fm-$id

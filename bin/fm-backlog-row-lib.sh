@@ -146,12 +146,13 @@ fm_backlog_row_field_of_body() {
 }
 
 # fm_backlog_row_covers_of_body <decoded-body>: print each row id the body's
-# `Covers:` lines name, once each and in order; a token not shaped like a row
-# id is skipped.
+# `Covers:` lines name, once each and in order; a trailing `.`, `;` or `:` is
+# dropped, and a token not shaped like a row id is skipped.
 fm_backlog_row_covers_of_body() {
   printf '%s\n' "${1:-}" \
     | sed -En 's/^[[:space:]]*Covers:[[:space:]]*//p' \
     | tr -s ', \t' '\n' \
+    | sed -E 's/[.;:]+$//' \
     | awk '/^[A-Za-z0-9][A-Za-z0-9._-]*$/ && !seen[$0]++'
 }
 
