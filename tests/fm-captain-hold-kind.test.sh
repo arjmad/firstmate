@@ -358,6 +358,14 @@ test_ask_alone_and_keep_choices_keep_recorded_choices() {
     || fail "hold --keep-choices with a new --ask failed"
   assert_contains "$(show_task "$home" sample-pay)" 'recommended: Paid; ask: Paid all?] new question' \
     "hold --keep-choices did not take the given question over the recorded one"
+  # A call past its back-on date reads unheld but keeps its choices through a re-date.
+  run_captain "$home" hold sample-past --title "Past call" --reason "was due" --kind reversible \
+    --options "Go|Stop" --recommend Go --until 2020-01-01 >/dev/null || fail "the past-dated hold failed"
+  assert_contains "$(show_task "$home" sample-past)" 'held: no' "the fixture call is not past its back-on date"
+  run_captain "$home" hold sample-past --reason "re-dated" --until 2030-01-01 --keep-choices >/dev/null \
+    || fail "hold --keep-choices on a call past its date failed"
+  assert_contains "$(show_task "$home" sample-past)" '[reversible; options: Go|Stop; recommended: Go] re-dated' \
+    "hold --keep-choices dropped the choices of a call past its back-on date"
   run_captain "$home" hold sample-pay --reason "plain re-hold" >/dev/null || fail "a plain re-hold failed"
   show=$(show_task "$home" sample-pay)
   assert_not_contains "$show" 'options: Paid' "a re-hold without --keep-choices kept the choices"

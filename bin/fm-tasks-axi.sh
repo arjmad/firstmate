@@ -171,7 +171,8 @@
 #   - a `hold` without one of the four kinds, or without a valid `--until`
 #     date (a captain call: nor a recorded due date), a title that opens with a
 #     date, an invalid `--due` date or
-#     `--batch` tag, or `due`/`batch` on a row that does not exist.
+#     `--batch` tag (or a new body's `Batch:` line naming one that is not the
+#     row's recorded tag), or `due`/`batch` on a row that does not exist.
 # Otherwise the exit status is tasks-axi's own, unless decoding a read fails;
 # in that case the decoder's nonzero status is returned.
 set -u
@@ -505,6 +506,15 @@ hold_added_captain_row() {  # <tasks-axi add output>
     || { printf 'fm-tasks-axi: %s was added but could not be held for the captain; hold it with bin/fm-captain-hold.sh hold before anything dispatches it\n' "$id" >&2; return 1; }
 }
 
+# A new body's own Batch: tag is written like `--batch`, so a bare legacy slug
+# is refused unless it is the tag the row already records.
+refuse_body_batch() {  # <new-body> <recorded-tag-or-empty>
+  local named
+  named=$(fm_backlog_row_field_of_body batch "$1")
+  [ -z "$named" ] || [ "$named" = "$2" ] || fm_backlog_batch_valid "$named" \
+    || fail "the body's Batch: line: $FM_BACKLOG_BATCH_RULE: $named"
+}
+
 # add/create: name the owner at filing (see the header), and record any
 # --due and --batch lines above it.
 prepare_add_owner() {
@@ -520,6 +530,7 @@ prepare_add_owner() {
     fi
   fi
   body=$GIVEN_BODY
+  [ "$BATCH_GIVEN" = 1 ] || refuse_body_batch "$body" ''
   [ "$DUE_GIVEN" = 0 ] || body=$(fm_backlog_row_field_body_with due "$body" "$DUE")
   [ "$BATCH_GIVEN" = 0 ] || body=$(fm_backlog_row_field_body_with batch "$body" "$BATCH")
   stage_body "$(fm_backlog_owner_body_with "$body" "$OWNER")"
@@ -537,6 +548,7 @@ prepare_update_owner() {
   esac
   shown_body "$id" || fail "cannot read $id to check and carry its owner, due date and batch tag into the new body"
   [ "$named" != fleet ] || ! shown_captain_hold || refuse_fleet_on_captain_hold "$id"
+  refuse_body_batch "$body" "$(fm_backlog_row_field_of_body batch "$SHOWN_BODY")"
   [ -n "$named" ] || recorded=$(fm_backlog_owner_of_body "$SHOWN_BODY")
   for field in due batch; do
     [ -z "$(fm_backlog_row_field_of_body "$field" "$body")" ] || continue
@@ -634,8 +646,8 @@ APPLY_SHAPE_JQ='
       ((keys - ["id", "title", "batch", "hold", "ask"])[] | "row \($n): unknown field \(.)"),
       (if (.id | type) != "string" or .id == "" then "row \($n): id must be a non-empty string" else empty end),
       (if (keys - ["id"]) == [] then "row \($n): names no field to set" else empty end),
-      ("title", "batch", "ask") as $k
-        | select(has($k) and (.[$k] | type) != "string") | "row \($n): \($k) must be a string",
+      (("title", "batch", "ask") as $k
+        | select(has($k) and (.[$k] | type) != "string") | "row \($n): \($k) must be a string"),
       (if has("hold") then
          if (.hold | type) != "object" then "row \($n): hold must be a JSON object"
          else
@@ -646,11 +658,12 @@ APPLY_SHAPE_JQ='
        else empty end),
       (if [.. | strings | select(test("[\r\n]"))] != [] then "row \($n): a value spans more than one line" else empty end)
     end;
-  if type != "array" then "the file must hold a JSON array of rows"
-  elif length == 0 then "the file holds no rows"
+  if length != 1 or (.[0] | type) != "array" then "the file must hold one JSON array of rows"
+  elif (.[0] | length) == 0 then "the file holds no rows"
   else
-    (to_entries[] | .key as $i | .value | row_errors($i + 1)),
-    ([.[] | objects | .id | strings] | group_by(.) | map(select(length > 1) | .[0])[] | "id \(.) is named by more than one row")
+    .[0]
+    | (to_entries[] | .key as $i | .value | row_errors($i + 1)),
+      ([.[] | objects | .id | strings] | group_by(.) | map(select(length > 1) | .[0])[] | "id \(.) is named by more than one row")
   end'
 
 # One field of row <index>: prints `+<value>` when the row sets it, nothing
@@ -668,6 +681,17 @@ apply_run() {  # <command> [args...]
   fi
   printf '%s' "$out" | tr '\n' ' '
   return 1
+}
+
+# The kind, reversible or arjun-only, that the captain hold of the row last read
+# by shown_body records on its reason (bin/fm-captain-hold.sh owns that
+# prefix); fails when the row has no captain hold or its reason no kind.
+shown_call_kind() {
+  local kind
+  printf '%s\n' "$SHOWN_ROW" | grep -q '^  hold_kind: captain$' || return 1
+  kind=$(printf '%s\n' "$SHOWN_ROW" | fm_hold_reason_decode_stream 2>/dev/null \
+    | grep -E '^  hold_reason: "?\[(reversible|arjun-only)[];]' | head -1 | grep -oE 'reversible|arjun-only' | head -1)
+  [ -n "$kind" ] && printf '%s\n' "$kind"
 }
 
 # One refused field of the row command_apply is checking (its n and id).
@@ -696,7 +720,7 @@ command_apply() {
   cp -- "$file" "$APPLY_SNAPSHOT" || fail "cannot stage the apply file $file"
   local source=$file
   file=$APPLY_SNAPSHOT
-  shape=$(jq -r "$APPLY_SHAPE_JQ" "$file" 2>&1) || fail "the apply file is not JSON: $(printf '%s' "$shape" | head -1)"
+  shape=$(jq -rs "$APPLY_SHAPE_JQ" "$file" 2>&1) || fail "the apply file is not JSON: $(printf '%s' "$shape" | head -1)"
   if [ -n "$shape" ]; then
     printf '%s\n' "$shape" | sed 's/^/refused: /' >&2
     fail "apply refused the file; nothing was changed"
@@ -718,7 +742,7 @@ command_apply() {
     call=$(apply_get "$file" "$i" .hold.call); call=${call#+}
     has_hold=0
     [ "$hold" != true ] || has_hold=1
-    if ! [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    if ! [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
       apply_refuse "the id is not slug-shaped"
     elif ! shown_body "$id"; then
       apply_refuse "no backlog row $id in this home"
@@ -726,8 +750,10 @@ command_apply() {
       apply_refuse "the row is closed"
     else
       if [ "$has_title" = + ]; then
-        if [ -z "$title" ]; then apply_refuse "title is empty"
+        if [ -z "$(printf '%s' "$title" | tr -d '[:space:]')" ]; then apply_refuse "title is empty"
         elif fm_backlog_title_dated "$title"; then apply_refuse "a title names the next action, not a date"
+        elif [[ "$title" =~ \([a-z-]+:[^\)]*\)[[:space:]]*$ ]]; then
+          apply_refuse "tasks-axi refuses a title that ends with a task tag such as (repo: x)"
         else plan+=("$id title: $title"); fi
       fi
       if [ "$has_batch" = + ]; then
@@ -751,6 +777,8 @@ command_apply() {
           apply_refuse "tasks-axi refuses parentheses in a $kind hold reason"
         elif [ -n "$call" ] && [ "$call" != reversible ] && [ "$call" != arjun-only ]; then
           apply_refuse "hold.call must be reversible or arjun-only: $call"
+        elif [[ "$reason" =~ ^\[(reversible|arjun-only)[]\;] ]]; then
+          apply_refuse "hold.reason must not begin with a kind prefix; give hold.call instead"
         else
           plan+=("$id hold: $kind${until:+ until $until}${call:+ ($call)} - $reason")
         fi
@@ -763,8 +791,9 @@ command_apply() {
         elif [ "$has_hold" = 0 ] && ! { printf '%s\n' "$SHOWN_ROW" | grep -q '^  hold_kind: captain$' \
             && printf '%s\n' "$SHOWN_ROW" | grep -q '^  held: yes$'; }; then
           apply_refuse "an ask needs a captain hold: the row is not held for the captain, so give it a hold of kind captain"
-        elif [ "$has_hold" = 1 ] && [ "$kind" = captain ] && [ -z "$call" ] \
-            && ! printf '%s\n' "$SHOWN_ROW" | grep -q '^  hold_kind: captain$'; then
+        elif [ "$has_hold" = 0 ] && ! shown_call_kind >/dev/null; then
+          apply_refuse "an ask rides on the call's kind, which this row's hold does not record: give it a hold of kind captain with hold.call"
+        elif [ "$has_hold" = 1 ] && [ "$kind" = captain ] && [ -z "$call" ] && ! shown_call_kind >/dev/null; then
           apply_refuse "an ask rides on the call's kind: give hold.call reversible or arjun-only"
         elif [ "$has_hold" = 0 ] || [ "$kind" = captain ]; then
           plan+=("$id ask: $ask")
@@ -796,7 +825,8 @@ command_apply() {
       case "$field" in
         title)
           [ "$has_title" = + ] || continue
-          out=$(apply_run "$SCRIPT_DIR/fm-tasks-axi.sh" update "$id" --title "$title") || status=1
+          # The = form keeps a value such as --help a value.
+          out=$(apply_run "$SCRIPT_DIR/fm-tasks-axi.sh" update "$id" --title="$title") || status=1
           ;;
         batch)
           [ "$has_batch" = + ] || continue
@@ -811,7 +841,7 @@ command_apply() {
             [ "$has_ask" != + ] || cargs+=(--ask "$ask")
             out=$(apply_run "$SCRIPT_DIR/fm-captain-hold.sh" "${cargs[@]}") || status=1
           else
-            out=$(apply_run "$SCRIPT_DIR/fm-tasks-axi.sh" hold "$id" --kind "$kind" --until "$until" --reason "$reason") \
+            out=$(apply_run "$SCRIPT_DIR/fm-tasks-axi.sh" hold "$id" --kind "$kind" --until "$until" --reason="$reason") \
               || status=1
           fi
           ;;
@@ -943,7 +973,7 @@ archived_close() {  # <tasks-axi output>
   for arg in "${ARGS[@]}"; do
     if [ "$arg" = --json ]; then
       jq -n --arg id "$CLOSE_ID" '{ok: true, action: "done", already: true, archived: true, task: {id: $id, state: "done"}}'
-      return 0
+      return
     fi
   done
   printf 'ok: %s already done (archived)\n' "$CLOSE_ID"

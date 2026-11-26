@@ -384,6 +384,7 @@ test_wrapper_apply_sets_fields_from_one_list() {
   captain hold kempf-cogs --title "Pay Kempf COGS" --reason "COGS bills" --kind arjun-only \
     --ask "Have you paid the Q1-Q3 COGS bills" >/dev/null 2>&1 || fail "could not hold kempf-cogs"
   wrapper_from_code "$dir" add vendor "Call the vendor" >/dev/null || fail "could not add vendor"
+  captain hold kindless --title "A call with no kind" --reason "old style" >/dev/null 2>&1 || fail "could not hold kindless"
   mkdir -p "$dir/lists"
   cat > "$dir/lists/sweep.json" <<'JSON'
 [
@@ -433,6 +434,14 @@ JSON
     '[{"id": "missing-row", "title": "x"}]|no backlog row missing-row' \
     '[{"id": "vendor", "title": "x"}, {"id": "vendor", "batch": "-"}]|more than one row' \
     '[{"id": "vendor"}]|names no field' \
+    '[{"id": "vendor", "title": "x", "hold": {"kind": "future", "until": "2026-12-01", "reason": "r", "bogus": "1"}}]|unknown hold field bogus' \
+    '[{"id": "vendor", "title": "two\nlines"}]|spans more than one line' \
+    '[{"id": "vendor", "title": "   "}]|title is empty' \
+    '[{"id": "vendor", "title": "Call the vendor (repo: sales)"}]|task tag' \
+    '[{"id": "fafnir-signin", "hold": {"kind": "captain", "reason": "[arjun-only] x"}}]|kind prefix' \
+    '[{"id": "kindless", "ask": "Go?"}]|does not record' \
+    '[{"id": "vendor", "title": "x"}] [{"id": "ha-weekend", "title": "y"}]|one JSON array' \
+    '|one JSON array' \
     '{"id": "vendor"}|JSON array'; do
     printf '%s\n' "${bad%|*}" > "$dir/lists/bad.json"
     out=$(wrapper_from_code "$dir" apply "$dir/lists/bad.json" 2>&1)
@@ -443,6 +452,10 @@ JSON
   printf '[{"id": "ha-weekend", "title": "Retitled"}, {"id": "vendor", "batch": "office"}]\n' > "$dir/lists/bad.json"
   wrapper_from_code "$dir" apply "$dir/lists/bad.json" >/dev/null 2>&1
   assert_equals "$before" "$(cat "$dir/home/data/backlog.md")" "a refused file still changed a row it could set"
+  # A value that reads like a flag is still a value.
+  printf '[{"id": "vendor", "title": "--help"}]\n' > "$dir/lists/flag.json"
+  wrapper_from_code "$dir" apply "$dir/lists/flag.json" >/dev/null || fail "apply of a flag-like title failed"
+  assert_contains "$(wrapper_from_code "$dir" show vendor)" 'title: "--help"' "a flag-like title was not written"
   pass "apply sets title, batch, hold and ask from one list as fields, and refuses a file it cannot set whole"
 }
 
@@ -646,11 +659,21 @@ test_wrapper_row_shape() {
   wrapper_from_code "$dir" batch rs-1 - >/dev/null || fail "batch could not clear a board tag"
   # A legacy bare tag written before the prefixes still reads, survives a body
   # rewrite, and is retagged with a prefixed one.
-  wrapper_from_code "$dir" add rs-legacy "Legacy errand" --body "$(printf 'old note\n\nBatch: office')" >/dev/null \
-    || fail "could not add a row whose body carries a legacy bare tag"
+  out=$(wrapper_from_code "$dir" add rs-body-bare "Bare in the body" --body "$(printf 'note\n\nBatch: office')" 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "add whose body names a bare tag"
+  assert_no_grep "rs-body-bare" "$dir/home/data/backlog.md" "a body naming a bare tag was still added"
+  (cd "$dir/home" && tasks-axi add rs-legacy "Legacy errand" --body "$(printf 'old note\n\nBatch: office\n\nOwner: fleet')" \
+    --file "$dir/home/data/backlog.md" >/dev/null) || fail "could not seed a row whose body carries a legacy bare tag"
   assert_equals office "$(wrapper_from_code "$dir" batch rs-legacy)" "a legacy bare tag no longer reads"
   wrapper_from_code "$dir" update rs-legacy --body "new note" >/dev/null || fail "update --body of a legacy-tagged row failed"
   assert_equals office "$(wrapper_from_code "$dir" batch rs-legacy)" "a body rewrite dropped a legacy bare tag"
+  wrapper_from_code "$dir" update rs-legacy --body "$(printf 'newer note\n\nBatch: office')" >/dev/null \
+    || fail "a body rewrite that keeps the row's own legacy tag was refused"
+  out=$(wrapper_from_code "$dir" update rs-legacy --body "$(printf 'note\n\nBatch: shed')" 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "update whose body names a new bare tag"
+  assert_equals office "$(wrapper_from_code "$dir" batch rs-legacy)" "a refused body rewrite changed the tag"
   out=$(wrapper_from_code "$dir" batch rs-legacy office 2>&1)
   rc=$?
   expect_code 2 "$rc" "re-recording a legacy bare tag"

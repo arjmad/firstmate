@@ -129,8 +129,9 @@
 # expose it in hold_reason, and bin/fm-bearings-snapshot.sh projects it as
 # board rows' choices. Like the kind, choices live and die with the reason:
 # a re-hold that passes none drops them, unless it passes `--keep-choices`,
-# which keeps the recorded kind, choices and question of an active call
-# wherever the re-hold passes none, and an unhold clears them. `choices`
+# which keeps the recorded kind, choices and question of a captain hold
+# (active, or past its back-on date) wherever the re-hold passes none, and an
+# unhold clears them. `choices`
 # sets or replaces the choices on a call already held for the captain, keeping
 # its reason, kind and date, and a retired default stands in for an omitted
 # `--recommend`; `choices --ask` alone replaces only the question, keeping the
@@ -1439,10 +1440,12 @@ command_hold() {
     fi
     [ -z "${FM_CAPTAIN_HOLD_EXPECT_REASON+set}" ] || [ "$existing_reason" = "$FM_CAPTAIN_HOLD_EXPECT_REASON" ] \
       || fail "task $id was re-held since it was read; read it again"
-    # --keep-choices: a re-hold of an active call keeps the kind, choices and
-    # question it records wherever the caller passes none (see the header).
+    # --keep-choices: a re-hold of a call keeps the kind, choices and question
+    # it records wherever the caller passes none (see the header), including
+    # a call whose back-on date has passed, which reads unheld.
     if [ "$keep_choices" = 1 ]; then
-      if [ "$preserve_hold_set" = 1 ] && parse_hold_kind_prefix "$existing_reason"; then
+      if [ "$existing_hold_kind" = captain ] \
+        && parse_hold_kind_prefix "$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")"; then
         [ -n "$decision_kind" ] || decision_kind=$HOLD_DECISION_KIND
         if [ "$options_given" = 0 ] && [ "$recommend_given" = 0 ] && [ -n "$HOLD_OPTIONS" ]; then
           options=$HOLD_OPTIONS options_given=1 recommend=$HOLD_RECOMMENDED recommend_given=1
