@@ -801,6 +801,59 @@ test_teardown_closes_the_backlog_item_itself() {
   pass "teardown closes its own backlog item before reporting success"
 }
 
+# A ship's row names the open rows its work carries on a `Covers:` line, and its
+# close names each one still open, read before the close because retention may
+# archive the row at once; it never closes one (docs/task-lifecycle.md).
+test_teardown_names_open_rows_its_row_covers() {
+  local case_dir out backlog row
+  case_dir=$(make_case covers)
+  backlog="$case_dir/data/backlog.md"
+  write_meta "$case_dir" no-mistakes ship
+  printf '%s\n' 'pr=https://github.com/example/repo/pull/7' >> "$case_dir/state/task-x1.meta"
+  printf '%s\n' '# Backlog' '' '## In flight' '' '## Queued' '' '## Done' > "$backlog"
+  # Retention archives every closed row at once.
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' 'path = "data/backlog.md"' \
+    'archive = "data/done-archive.md"' 'done_keep = 0' > "$case_dir/.tasks.toml"
+  tasks-axi add noticed-open-a "an open covered row" --kind noticed --file "$backlog" >/dev/null
+  tasks-axi add noticed-open-b "a second open covered row" --kind noticed --file "$backlog" >/dev/null
+  tasks-axi add noticed-closed "a covered row already closed" --kind noticed --file "$backlog" >/dev/null
+  tasks-axi "done" noticed-closed --note fixed --no-prune --file "$backlog" >/dev/null
+  tasks-axi add noticed-mentioned "a row only mentioned mid-line" --kind noticed --file "$backlog" >/dev/null
+  tasks-axi add task-x1 "teardown fixture task" --kind ship --start --file "$backlog" \
+    --body "$(printf '%s\n' 'The plan names a "Covers: noticed-mentioned" line mid-sentence.' \
+      'Covers: noticed-open-a, noticed-closed noticed-gone, task-x1' 'Covers: noticed-open-b')" >/dev/null
+
+  out=$(run_teardown "$case_dir") || fail "covers: teardown failed: $out"
+  assert_grep '- [x] task-x1 ' "$case_dir/data/done-archive.md" \
+    "covers: the ship's own row was not closed and archived at once"
+  [ "$(printf '%s\n' "$out" | grep -c '^covers: ')" = 2 ] \
+    || fail "covers: expected exactly two covers: lines: $out"
+  printf '%s\n' "$out" | grep -qxF "covers: noticed-open-a is still open; task-x1 carried it, so close it with task-x1's evidence or rewrite it to the step it still holds (ship-landing skill)" \
+    || fail "covers: the first open covered row was not named: $out"
+  printf '%s\n' "$out" | grep -q '^covers: noticed-open-b is still open' \
+    || fail "covers: a second Covers: line was not read: $out"
+  for row in noticed-open-a noticed-open-b noticed-mentioned; do
+    [ "$(tasks-axi show "$row" --file "$backlog" | sed -n 's/^  state: *//p')" = queued ] \
+      || fail "covers: teardown changed covered row $row"
+  done
+  pass "teardown names each open row its closed row covers, and closes none of them"
+}
+
+# A forced teardown proves nothing landed, so its close names no covered row.
+test_teardown_force_names_no_covered_row() {
+  local case_dir out backlog
+  case_dir=$(make_case covers-force)
+  backlog="$case_dir/data/backlog.md"
+  write_meta "$case_dir" no-mistakes ship
+  printf '%s\n' '# Backlog' '' '## In flight' '' '## Queued' '' '## Done' > "$backlog"
+  tasks-axi add noticed-open-a "an open covered row" --kind noticed --file "$backlog" >/dev/null
+  tasks-axi add task-x1 "teardown fixture task" --kind ship --start --file "$backlog" \
+    --body 'Covers: noticed-open-a' >/dev/null
+  out=$(run_teardown "$case_dir" --force) || fail "covers-force: teardown failed: $out"
+  ! printf '%s\n' "$out" | grep -q '^covers: ' || fail "covers-force: a forced close named a covered row: $out"
+  pass "a forced teardown names no covered row"
+}
+
 # A forced teardown may discard work that never landed, so its close leaves the
 # handoff note unanswered for a person rather than telling the sender "Done".
 test_teardown_force_close_writes_no_handoff_reply() {
@@ -7791,6 +7844,8 @@ test_forced_secondmate_own_missing_adapter_sibling_refuses_before_child_cleanup
 test_retained_sources_still_reach_the_ordinary_refusal
 test_local_only_fork_remote_allows
 test_teardown_closes_the_backlog_item_itself
+test_teardown_names_open_rows_its_row_covers
+test_teardown_force_names_no_covered_row
 test_teardown_force_close_writes_no_handoff_reply
 test_teardown_closes_a_gerrit_task_with_its_change_url_as_a_note
 test_teardown_closes_a_gitlab_task_with_its_merge_request_url_as_a_note

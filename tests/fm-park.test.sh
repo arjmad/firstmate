@@ -1016,6 +1016,26 @@ SH
   pass "land queue fails when the cleanup request cannot be written"
 }
 
+# Nobody reads a detached teardown's output, so the rows a landed lane's own row
+# covered and left open ride its outcome; its other lines stay out.
+test_land_outcome_carries_open_covered_rows() {
+  local w out
+  w=$(make_world land-covers "$GH_URL")
+  : > "$w/config/auto-land"
+  cat > "$w/fakebin/fm-teardown.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' 'teardown lane complete (window none, worktree /pool/3)' \
+  'covers: noticed-wrong-size is still open; lane carried it, so close it with lane'"'"'s evidence or rewrite it to the step it still holds (ship-landing skill)' \
+  'noticed-queue: lane left nothing'
+SH
+  chmod +x "$w/fakebin/fm-teardown.sh"
+  out=$(run_park "$w" land lane --if-eligible 2>&1)
+  [ "$out" = "cleaned up lane: PR $GH_URL merged; lane torn down and its working copy returned
+covers: noticed-wrong-size is still open; lane carried it, so close it with lane's evidence or rewrite it to the step it still holds (ship-landing skill)" ] \
+    || fail "land-covers: $out"
+  pass "a landed lane's outcome carries each open row its own row covered"
+}
+
 test_land_report_keeps_lost_pool_slot_details() {
   local w out report
   w=$(make_world land-slot-lost "$GH_URL")
@@ -1259,6 +1279,7 @@ fm_test_run \
   test_land_requires_opt_in_but_always_cleans_parked \
   test_ready_lane_is_neither_parked_nor_auto_landed \
   test_land_queue_fails_when_cleanup_request_cannot_be_written \
+  test_land_outcome_carries_open_covered_rows \
   test_land_report_keeps_lost_pool_slot_details \
   test_detached_land_returns_at_once_and_the_tick_reports_it \
   test_pending_land_recovers_after_watcher_restart \

@@ -463,6 +463,8 @@ t3code_secondmate_lsof_check() {  # <task-id> <home>
 for _teardown_source in \
   fm-tasks-axi-lib.sh \
   fm-backlog-transition-lib.sh \
+  fm-backlog-owner-lib.sh \
+  fm-backlog-row-lib.sh \
   fm-timeout-lib.sh \
   fm-backend.sh \
   fm-control-lib.sh \
@@ -495,6 +497,10 @@ unset _teardown_source
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
+# shellcheck source=bin/fm-backlog-owner-lib.sh
+. "$SCRIPT_DIR/fm-backlog-owner-lib.sh"
+# shellcheck source=bin/fm-backlog-row-lib.sh
+. "$SCRIPT_DIR/fm-backlog-row-lib.sh"
 # Pending replies load the shared backend dispatcher and status classifier.
 # Import those graphs once rather than initializing and analyzing them twice.
 # shellcheck source=bin/fm-pending-reply-lib.sh
@@ -4462,6 +4468,26 @@ if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
   }
 fi
 
+# The rows this task's own row names on a `Covers:` line (fork patch,
+# docs/fork-decisions/2026-11-26-landing-covers.md; bin/fm-backlog-row-lib.sh
+# owns the line). They are read while the row is still open, because retention
+# may archive it the moment it closes, and named at the end of the run. Only a
+# close of landed work reads them: a retained captain call stays open, and
+# --force proves nothing landed. A failed read costs only that reminder.
+TEARDOWN_COVERS=
+teardown_covers_read() {
+  local data row body
+  data=$(fm_backlog_data_absolute "$DATA") || return 1
+  row=$(fm_backlog_row_show "$data" "$ID" --full) || return 1
+  body=$(fm_backlog_owner_shown_body "$row") || return 1
+  TEARDOWN_COVERS=$(fm_backlog_row_covers_of_body "$body" | grep -vxF -- "$ID" || true)
+}
+if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ] && [ "$BACKLOG_TRANSITION" = close ] \
+   && [ "$FORCE" != --force ] && [ "$KIND" != secondmate ]; then
+  teardown_covers_read \
+    || echo "warning: could not read $ID's backlog row for a Covers: line; check by hand whether a row it carried is still open" >&2
+fi
+
 # The initial landed/discard-work checks above have passed (or --force skipped
 # them). Fix 1 and Fix 2 (see script header) run here, unconditionally on
 # --force, and before branch deletion or worktree return - a still-parked run or a
@@ -5057,6 +5083,21 @@ if [ "$KIND" != secondmate ] && [ -d "$STATE" ]; then
     printf '%s\n' "$TEARDOWN_NOTICED" | sed "s/^/noticed-queue: $ID left /"
     echo "noticed-queue: file each through bin/fm-noticed.sh (noticed-queue skill)"
   fi
+fi
+# Each row the closed row's Covers: line named that is still open, read above
+# before the close. It is never closed here: the ship-landing skill closes it
+# with this task's evidence or rewrites it to the step it still holds. A row
+# already done or gone is silent.
+if [ -n "$TEARDOWN_COVERS" ] && [ "$BACKLOG_CLOSED" = 1 ]; then
+  while IFS= read -r TEARDOWN_COVERED; do
+    [ -n "$TEARDOWN_COVERED" ] || continue
+    if fm_backlog_row_probe "$DATA" "$TEARDOWN_COVERED"; then
+      [ "${FM_BACKLOG_ROW_STATE%% *}" = "done" ] \
+        || echo "covers: $TEARDOWN_COVERED is still open; $ID carried it, so close it with $ID's evidence or rewrite it to the step it still holds (ship-landing skill)"
+    elif [ "$FM_BACKLOG_ROW_RESULT" != not_found ]; then
+      echo "covers: $TEARDOWN_COVERED could not be read ($FM_BACKLOG_ROW_ERROR); $ID carried it, so check whether it is still open"
+    fi
+  done <<< "$TEARDOWN_COVERS"
 fi
 # A scratch checkout the prune above kept holds work teardown could not prove
 # landed, so it is filed once as a routine noticed row naming every kept

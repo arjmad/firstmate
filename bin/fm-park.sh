@@ -761,11 +761,17 @@ cmd_land() {
     return 0
   fi
   out=$(FM_HOME=$FM_HOME fm_run_timed "$ACTION_SECS" "$TEARDOWN_BIN" "$id" 2>&1) || rc=$?
+  # A row the lane's own row covered and left open (teardown's `covers:` lines,
+  # docs/fork-decisions/2026-11-26-landing-covers.md) rides the outcome, since
+  # nobody reads a detached teardown's output.
   case "$rc" in
-    0) printf 'cleaned up %s: PR %s merged; lane torn down and its working copy returned\n' "$id" "$pr" ;;
+    0)
+      printf 'cleaned up %s: PR %s merged; lane torn down and its working copy returned\n' "$id" "$pr"
+      printf '%s\n' "$out" | grep -E '^covers: ' || true
+      ;;
     4)
       printf 'cleaned up %s: PR %s merged; lane torn down, but its returned pool slot was lost\n' "$id" "$pr"
-      printf '%s\n' "$out" | grep -E '^(warning: treehouse return left pool slot |  )' || true
+      printf '%s\n' "$out" | grep -E '^(warning: treehouse return left pool slot |  |covers: )' || true
       ;;
     *)
       why=$(printf '%s\n' "$out" | grep -m1 -E 'REFUSED|^error|refus' || printf '%s\n' "$out" | tail -1)
