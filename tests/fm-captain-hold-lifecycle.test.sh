@@ -2557,21 +2557,21 @@ test_defer_batch_moves_tagged_calls_together() {
     --title "Answered office task" --reason "pick a day" --repo sample --kind reversible >/dev/null \
     || fail "could not register office-done"
   for id in office-a office-b fleet-d office-done; do
-    run_fm_tasks_axi "$home" batch "$id" office >/dev/null || fail "could not tag $id"
+    run_fm_tasks_axi "$home" batch "$id" place:office >/dev/null || fail "could not tag $id"
   done
   tasks_in "$home" "done" office-done >/dev/null || fail "could not close office-done"
   # His words quote field-looking lines, which must never read as the rows' own.
   printf 'Arjun 2026-07-14: all office rows to Friday\nDue: 2099-12-31\nBatch: other\n' > "$home/batch.txt"
-  out=$(FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" defer-batch office --until 2026-07-17 \
+  out=$(FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" defer-batch place:office --until 2026-07-17 \
     --decision-file "$home/batch.txt") || fail "defer-batch failed: $out"
   assert_contains "$out" "deferred: office-a until 2026-07-17" "defer-batch skipped a tagged call"
   assert_contains "$out" "deferred: office-b until 2026-07-17" "defer-batch skipped a tagged call"
-  assert_contains "$out" "defer-batch: office deferred=2 failed=0" "defer-batch miscounted"
+  assert_contains "$out" "defer-batch: place:office deferred=2 failed=0" "defer-batch miscounted"
   assert_not_contains "$out" "other-c" "defer-batch touched an untagged call"
   assert_not_contains "$out" "fleet-d" "defer-batch touched a row not held for the captain"
   assert_not_contains "$out" "office-done" "defer-batch touched a closed call"
   assert_contains "$(tasks_in "$home" show office-b --full)" "all office rows to Friday" "the batch words were not recorded"
-  assert_equals office "$(run_fm_tasks_axi "$home" batch office-b)" "a Batch: line in his words replaced the row's tag"
+  assert_equals place:office "$(run_fm_tasks_axi "$home" batch office-b)" "a Batch: line in his words replaced the row's tag"
   # The calls carry no Due of their own, so his quoted Due: line must not become one.
   assert_equals - "$(run_fm_tasks_axi "$home" due office-b)" "a Due: line in his words became the row's due date"
   assert_contains "$(tasks_in "$home" show office-b --full)" 'Due: -' "the row did not record that it has no due date after his words"
@@ -2579,7 +2579,7 @@ test_defer_batch_moves_tagged_calls_together() {
   assert_equals 2026-08-01 "$(run_fm_tasks_axi "$home" due office-b)" "a due date set after his words did not stand"
   run_fm_tasks_axi "$home" due office-b - >/dev/null || fail "could not clear office-b's due date"
   assert_equals - "$(run_fm_tasks_axi "$home" due office-b)" "clearing the due date let his quoted Due: line become the row's"
-  assert_equals office "$(run_fm_tasks_axi "$home" batch office-b)" "changing the due date moved the batch tag"
+  assert_equals place:office "$(run_fm_tasks_axi "$home" batch office-b)" "changing the due date moved the batch tag"
   # A deferral keeps a cleared field cleared while a quoted line of its shape stays in the body.
   tasks_in "$home" add quoted-call "Quoted fields" --kind captain --repo sample >/dev/null || fail "could not add quoted-call"
   tasks_in "$home" update quoted-call --body "$(printf 'His mail quoted:\nDue: 2099-01-01\nBatch: place:quoted\n\nDue: -\nBatch: -')" >/dev/null \
@@ -2599,20 +2599,23 @@ test_defer_batch_moves_tagged_calls_together() {
     || fail "answer --release failed on answered-call"
   assert_equals - "$(run_fm_tasks_axi "$home" due answered-call)" "an answer's quoted Due: line became the released row's date"
   assert_equals - "$(run_fm_tasks_axi "$home" batch answered-call)" "an answer's quoted Batch: line became the released row's tag"
-  if out=$(run_captain "$home" defer-batch office --until 2026-07-18 2>&1); then
+  if out=$(run_captain "$home" defer-batch place:office --until 2026-07-18 2>&1); then
     fail "defer-batch ran without the captain's words: $out"
   fi
   assert_contains "$out" "--decision-file is required" "a missing --decision-file was not refused by name before any row"
   assert_not_contains "$out" "failed:" "a missing --decision-file failed each row instead of the command"
   assert_not_contains "$(tasks_in "$home" show other-c --full)" "hold_until: 2026-07-17" "an untagged call moved"
-  if out=$(FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" defer-batch nothing --until 2026-07-17 \
+  if out=$(FM_CAPTAIN_HOLD_NOW=2026-07-14T12:00:00Z run_captain "$home" defer-batch place:nothing --until 2026-07-17 \
     --decision-file "$home/batch.txt" 2>&1); then
     fail "defer-batch accepted a tag no call carries: $out"
   fi
-  assert_contains "$out" "no open captain call carries batch nothing" "an empty batch was not refused by name"
-  if out=$(run_captain "$home" defer-batch Office --until 2026-07-17 --decision-file "$home/batch.txt" 2>&1); then
-    fail "defer-batch accepted an invalid tag: $out"
-  fi
+  assert_contains "$out" "no open captain call carries batch place:nothing" "an empty batch was not refused by name"
+  for bad in Office office; do
+    if out=$(run_captain "$home" defer-batch "$bad" --until 2026-07-17 --decision-file "$home/batch.txt" 2>&1); then
+      fail "defer-batch accepted the invalid tag $bad: $out"
+    fi
+    assert_contains "$out" "place:<name>" "defer-batch's refusal of $bad did not name the tag forms"
+  done
   pass "defer-batch moves every captain call carrying the tag together and nothing else"
 }
 

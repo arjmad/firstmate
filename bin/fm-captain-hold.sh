@@ -23,8 +23,8 @@
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
 #     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] [--due YYYY-MM-DD] \
 #     [--batch place:<name>|board:<task-id>] [--kind reversible|arjun-only] \
-#     [--options '<A>|<B>[|<C>]' [--recommend <option>]] [--ask <question>]
-#   fm-captain-hold.sh choices <task-id> --options '<A>|<B>[|<C>]' [--recommend <option>] [--ask <question>]
+#     [--options '<A>|<B>[|<C>]' [--recommend <option>]] [--ask <question>] [--keep-choices]
+#   fm-captain-hold.sh choices <task-id> (--options '<A>|<B>[|<C>]' [--recommend <option>] [--ask <question>] | --ask <question>)
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
 #   fm-captain-hold.sh defer <task-id> --until YYYY-MM-DD --decision-file <path> [--reason <reason>]
 #   fm-captain-hold.sh defer-batch <tag> --until YYYY-MM-DD --decision-file <path> [--reason <reason>]
@@ -128,10 +128,14 @@
 # That prefix is the one machine-readable record: tasks-axi `list` and `show`
 # expose it in hold_reason, and bin/fm-bearings-snapshot.sh projects it as
 # board rows' choices. Like the kind, choices live and die with the reason:
-# a re-hold that passes none drops them, and an unhold clears them. `choices`
+# a re-hold that passes none drops them, unless it passes `--keep-choices`,
+# which keeps the recorded kind, choices and question of a captain hold
+# (active, or past its back-on date) wherever the re-hold passes none, and an
+# unhold clears them. `choices`
 # sets or replaces the choices on a call already held for the captain, keeping
 # its reason, kind and date, and a retired default stands in for an omitted
-# `--recommend`: it re-holds through `hold`, which refuses when the row was
+# `--recommend`; `choices --ask` alone replaces only the question, keeping the
+# recorded choices: it re-holds through `hold`, which refuses when the row was
 # answered, released or re-held since it read it.
 # `defer` keeps a call's choices through the re-hold.
 #
@@ -1363,11 +1367,12 @@ command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0 stored_reason original_body='' hold_status=0
   local decision_kind='' existing_reason='' due='' recorded_due batch='' recorded_batch
-  local options='' options_given=0 recommend='' recommend_given=0 ask='' ask_given=0
+  local options='' options_given=0 recommend='' recommend_given=0 ask='' ask_given=0 keep_choices=0
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --keep-choices) keep_choices=1 ;;
       --title) shift; title=${1:-} ;;
       --reason) shift; reason=${1:-} ;;
       --repo) shift; repo=${1:-} ;;
@@ -1389,8 +1394,10 @@ command_hold() {
   validate_slug task-id "$id"
   [ -n "$reason" ] || fail "reason must not be empty"
   validate_hold_kind_args "$decision_kind" "$reason"
-  validate_hold_choice_args "$decision_kind" "$options_given" "$options" "$recommend_given" "$recommend" \
-    "$ask_given" "$ask"
+  # A kind --keep-choices may carry is known only once the row is read.
+  [ "$keep_choices" = 1 ] && [ -z "$decision_kind" ] \
+    || validate_hold_choice_args "$decision_kind" "$options_given" "$options" "$recommend_given" "$recommend" \
+      "$ask_given" "$ask"
   if [ -n "$origin" ]; then
     validate_slug origin-id "$origin"
   fi
@@ -1433,12 +1440,39 @@ command_hold() {
     fi
     [ -z "${FM_CAPTAIN_HOLD_EXPECT_REASON+set}" ] || [ "$existing_reason" = "$FM_CAPTAIN_HOLD_EXPECT_REASON" ] \
       || fail "task $id was re-held since it was read; read it again"
+    # --keep-choices: a re-hold of a call keeps the kind, choices and question
+    # it records wherever the caller passes none (see the header), including
+    # a call whose back-on date has passed, which reads unheld.
+    if [ "$keep_choices" = 1 ]; then
+      if [ "$existing_hold_kind" = captain ] \
+        && parse_hold_kind_prefix "$(fm_hold_reason_decode "$(show_field_value "$show" hold_reason)")"; then
+        [ -n "$decision_kind" ] || decision_kind=$HOLD_DECISION_KIND
+        # A retired default on a call with no options stays its recommendation,
+        # as `choices` and `defer` keep it (see "HOLD KINDS").
+        if [ "$options_given" = 0 ] && [ -z "$HOLD_OPTIONS" ] && [ -n "$HOLD_DEFAULT_OPTION" ]; then
+          case "$reason" in
+            *"(recommended: $HOLD_DEFAULT_OPTION)"*) ;;
+            *) reason="$reason (recommended: $HOLD_DEFAULT_OPTION)" ;;
+          esac
+        fi
+        if [ "$options_given" = 0 ] && [ "$recommend_given" = 0 ] && [ -n "$HOLD_OPTIONS" ]; then
+          options=$HOLD_OPTIONS options_given=1 recommend=$HOLD_RECOMMENDED recommend_given=1
+        fi
+        if [ "$ask_given" = 0 ] && [ -n "$HOLD_ASK" ]; then
+          ask=$HOLD_ASK ask_given=1
+        fi
+      fi
+      validate_hold_choice_args "$decision_kind" "$options_given" "$options" "$recommend_given" "$recommend" \
+        "$ask_given" "$ask"
+    fi
     if [ -n "$title" ]; then
       existing_title=$(show_field_value "$show" title)
       [ "$existing_title" = "$title" ] || fail "existing task $id has a different title"
     fi
   else
     [ -z "${FM_CAPTAIN_HOLD_EXPECT_REASON+set}" ] || fail "task $id is no longer held for the captain"
+    [ "$keep_choices" = 0 ] || validate_hold_choice_args "$decision_kind" "$options_given" "$options" \
+      "$recommend_given" "$recommend" "$ask_given" "$ask"
     [ -n "$title" ] || fail "--title is required to create task $id"
     validate_one_line title "$title"
     ! fm_backlog_title_dated "$title" \
@@ -1833,7 +1867,7 @@ command_choices() {
     shift
   done
   validate_slug task-id "$id"
-  [ "$options_given" = 1 ] || fail "choices requires --options"
+  [ "$options_given" = 1 ] || [ "$ask_given" = 1 ] || fail "choices requires --options, or --ask alone"
   require_tasks_axi
   task_show_or_fail "$id" "no task $id"
   [ "$(show_field "$show" state)" != "done" ] || fail "task $id is already closed"
@@ -1847,13 +1881,20 @@ command_choices() {
   keep=(--kind "$HOLD_DECISION_KIND")
   [ -z "$hold_until" ] || keep+=(--until "$hold_until")
   # An --ask the caller leaves out keeps the recorded one, and a retired
-  # default that is still one of the options stands in for a --recommend left out.
+  # default that is still one of the options stands in for a --recommend left
+  # out; with no options it stays in the reason, as `defer` keeps it.
   [ "$ask_given" = 1 ] || [ -z "$HOLD_ASK" ] || pass+=(--ask "$HOLD_ASK")
-  if [ "$recommend_given" = 0 ] && [ -n "$HOLD_DEFAULT_OPTION" ]; then
+  # An --ask alone replaces only the question, so recorded choices stay.
+  if [ "$options_given" = 0 ] && [ -n "$HOLD_OPTIONS" ]; then
+    [ "$recommend_given" = 0 ] || fail "--recommend requires --options"
+    pass+=(--options "$HOLD_OPTIONS" --recommend "$HOLD_RECOMMENDED")
+  elif [ "$recommend_given" = 0 ] && [ -n "$HOLD_DEFAULT_OPTION" ] && [ "$options_given" = 1 ]; then
     IFS='|' read -r -a labels <<< "$options"
     for label in "${labels[@]}"; do
       [ "$(trim_text "$label")" != "$HOLD_DEFAULT_OPTION" ] || { pass+=(--recommend "$HOLD_DEFAULT_OPTION"); break; }
     done
+  elif [ "$options_given" = 0 ]; then
+    carry_retired_default
   fi
   FM_CAPTAIN_HOLD_EXPECT_REASON=$reason "$0" hold "$id" --reason "$HOLD_REASON_REST" "${keep[@]}" "${pass[@]}"
 }

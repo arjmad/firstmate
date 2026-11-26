@@ -35,7 +35,9 @@
 #                            `place:office`; <name> is a lowercase slug
 #   Batch: board:<task-id>   a member of the board that task id carries
 # A bare lowercase slug (`Batch: office`, written before the prefixes) still
-# reads, and counts as a place list. fm_backlog_batch_class owns the group
+# reads, and counts as a place list, but no writer takes one: a row is retagged
+# `place:<name>` (docs/fork-decisions/2026-11-26-backlog-wrapper-audit-1124.md).
+# fm_backlog_batch_class owns the group
 # class a tag gives. bin/fm-captain-hold.sh `defer-batch` defers, and
 # `answer-batch` answers, every captain call carrying one tag. A reader takes
 # the last matching line, a writer replaces only that line, and a body that
@@ -75,11 +77,12 @@ fm_backlog_date_valid() {
   [ "$day" -le "$max" ]
 }
 
-# fm_backlog_batch_valid <tag>: succeed for `place:<slug>`, `board:<task-id>`,
-# or a bare lowercase slug, each part lowercase; a board id is at most 116
+# fm_backlog_batch_valid <tag>: succeed for a tag a writer may record or a
+# batch command may name, `place:<slug>` or `board:<task-id>`, each part
+# lowercase; a bare legacy slug is refused. A board id is at most 116
 # characters, so the board's `batch.board.<id>` item key stays within 128.
 fm_backlog_batch_valid() {
-  [[ "${1:-}" =~ ^(place:)?[a-z0-9][a-z0-9-]{0,39}$ ]] \
+  [[ "${1:-}" =~ ^place:[a-z0-9][a-z0-9-]{0,39}$ ]] \
     || [[ "${1:-}" =~ ^board:[a-z0-9][a-z0-9._-]{0,115}$ ]]
 }
 
@@ -93,7 +96,7 @@ fm_backlog_batch_class() {
 }
 
 # shellcheck disable=SC2034  # read by the scripts that source this file
-FM_BACKLOG_BATCH_RULE='a batch tag is place:<name> or board:<task-id> in lowercase letters, digits and dashes (a task id may also hold dots and underscores), or a bare legacy slug'
+FM_BACKLOG_BATCH_RULE='a batch tag is place:<name> or board:<task-id> in lowercase letters, digits and dashes (a task id may also hold dots and underscores); a bare legacy slug still reads but is retagged place:<name>'
 
 # fm_backlog_title_dated <title>: succeed when the title opens with a
 # `[YYYY-MM-DD]` date, which belongs in the hold or the Due: line instead.

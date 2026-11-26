@@ -329,6 +329,57 @@ test_choices_set_choices_on_an_active_hold() {
   pass "choices sets the choices on an active hold and keeps its reason, kind, date and question"
 }
 
+# `choices --ask` alone replaces only the question, and `hold --keep-choices`
+# re-holds an active call with a new reason or date while keeping the kind,
+# choices and question it records; without the flag a re-hold drops them.
+test_ask_alone_and_keep_choices_keep_recorded_choices() {
+  local home show
+  home=$(make_home choice-keep)
+  run_captain "$home" hold sample-pay --title "Pay the bills" --reason "COGS bills" --kind arjun-only \
+    --options "Paid|Not yet" --recommend Paid --ask "Paid Q1-Q3?" >/dev/null || fail "the hold failed"
+  run_captain "$home" choices sample-pay --ask "Paid Q2 and Q3?" >/dev/null || fail "choices --ask alone failed"
+  show=$(show_task "$home" sample-pay)
+  assert_contains "$show" '[arjun-only; options: Paid|Not yet; recommended: Paid; ask: Paid Q2 and Q3?] COGS bills' \
+    "choices --ask alone did not keep the choices, kind and reason"
+  if run_captain "$home" choices sample-pay --recommend Paid > "$home/out" 2> "$home/err"; then
+    fail "choices accepted --recommend with neither --options nor --ask"
+  fi
+  run_captain "$home" hold sample-ask --title "Ask only" --reason "a question" --kind reversible --ask "Go?" >/dev/null \
+    || fail "the ask-only hold failed"
+  run_captain "$home" choices sample-ask --ask "Go now?" >/dev/null || fail "choices --ask on a call with no options failed"
+  assert_contains "$(show_task "$home" sample-ask)" '[reversible; ask: Go now?] a question' "an ask-only call's question was not replaced"
+  run_captain "$home" hold sample-pay --reason "after the SMITE test" --until 2026-12-02 --keep-choices >/dev/null \
+    || fail "hold --keep-choices failed"
+  show=$(show_task "$home" sample-pay)
+  assert_contains "$show" '[arjun-only; options: Paid|Not yet; recommended: Paid; ask: Paid Q2 and Q3?] after the SMITE test' \
+    "hold --keep-choices dropped the recorded kind, choices or question"
+  assert_contains "$show" 'hold_until: 2026-12-02' "hold --keep-choices did not record the date"
+  run_captain "$home" hold sample-pay --reason "new question" --keep-choices --ask "Paid all?" >/dev/null \
+    || fail "hold --keep-choices with a new --ask failed"
+  assert_contains "$(show_task "$home" sample-pay)" 'recommended: Paid; ask: Paid all?] new question' \
+    "hold --keep-choices did not take the given question over the recorded one"
+  # A call past its back-on date reads unheld but keeps its choices through a re-date.
+  run_captain "$home" hold sample-past --title "Past call" --reason "was due" --kind reversible \
+    --options "Go|Stop" --recommend Go --until 2020-01-01 >/dev/null || fail "the past-dated hold failed"
+  assert_contains "$(show_task "$home" sample-past)" 'held: no' "the fixture call is not past its back-on date"
+  run_captain "$home" hold sample-past --reason "re-dated" --until 2030-01-01 --keep-choices >/dev/null \
+    || fail "hold --keep-choices on a call past its date failed"
+  assert_contains "$(show_task "$home" sample-past)" '[reversible; options: Go|Stop; recommended: Go] re-dated' \
+    "hold --keep-choices dropped the choices of a call past its back-on date"
+  # A retired default on a call with no options stays its recommendation.
+  run_captain "$home" hold sample-legacy --title "Legacy call" --reason "pick a day" --kind reversible >/dev/null \
+    || fail "the legacy hold failed"
+  give_retired_default "$home" sample-legacy "[reversible; default: Go; releases 2026-10-17T10:00:00Z] pick a day"
+  run_captain "$home" hold sample-legacy --reason "after the trip" --keep-choices >/dev/null \
+    || fail "hold --keep-choices on a call with a retired default failed"
+  assert_contains "$(show_task "$home" sample-legacy)" '[reversible] after the trip (recommended: Go)' \
+    "hold --keep-choices dropped a retired default's recommendation"
+  run_captain "$home" hold sample-pay --reason "plain re-hold" >/dev/null || fail "a plain re-hold failed"
+  show=$(show_task "$home" sample-pay)
+  assert_not_contains "$show" 'options: Paid' "a re-hold without --keep-choices kept the choices"
+  pass "choices --ask alone and hold --keep-choices keep the choices a call records"
+}
+
 test_keyed_answer_records_a_pick_by_label() {
   local home show out
   home=$(make_home choice-pick)
@@ -465,6 +516,7 @@ test_kind_arguments_are_validated
 test_choice_arguments_are_validated
 test_choices_ride_on_the_reason_prefix
 test_choices_set_choices_on_an_active_hold
+test_ask_alone_and_keep_choices_keep_recorded_choices
 test_keyed_answer_records_a_pick_by_label
 test_holds_wait_for_the_captains_answer
 test_choices_keeps_a_retired_default_as_the_recommendation
