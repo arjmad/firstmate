@@ -436,8 +436,9 @@ JSON
     '[{"id": "vendor"}]|names no field' \
     '[{"id": "vendor", "title": "x", "hold": {"kind": "future", "until": "2026-12-01", "reason": "r", "bogus": "1"}}]|unknown hold field bogus' \
     '[{"id": "vendor", "title": "two\nlines"}]|spans more than one line' \
-    '[{"id": "vendor", "title": "   "}]|title is empty' \
-    '[{"id": "vendor", "title": "Call the vendor (repo: sales)"}]|task tag' \
+    '[{"id": "vendor", "title": "   "}]|tasks-axi refuses this title' \
+    '[{"id": "vendor", "title": "Call the vendor (repo: sales)"}]|canonical task tags' \
+    '[{"id": "vendor", "title": "Call the vendor (since 2026-12-01)"}]|canonical task tags' \
     '[{"id": "fafnir-signin", "hold": {"kind": "captain", "reason": "[arjun-only] x"}}]|kind prefix' \
     '[{"id": "kindless", "ask": "Go?"}]|does not record' \
     '[{"id": "vendor", "title": "x"}] [{"id": "ha-weekend", "title": "y"}]|one JSON array' \
@@ -456,6 +457,10 @@ JSON
   printf '[{"id": "vendor", "title": "--help"}]\n' > "$dir/lists/flag.json"
   wrapper_from_code "$dir" apply "$dir/lists/flag.json" >/dev/null || fail "apply of a flag-like title failed"
   assert_contains "$(wrapper_from_code "$dir" show vendor)" 'title: "--help"' "a flag-like title was not written"
+  # Prose in parentheses that tasks-axi takes is not refused.
+  printf '[{"id": "vendor", "title": "Call the vendor (contact: Emma)"}]\n' > "$dir/lists/prose.json"
+  wrapper_from_code "$dir" apply "$dir/lists/prose.json" >/dev/null || fail "apply refused a title tasks-axi takes"
+  assert_contains "$(wrapper_from_code "$dir" show vendor)" "(contact: Emma)" "a title tasks-axi takes was not written"
   pass "apply sets title, batch, hold and ask from one list as fields, and refuses a file it cannot set whole"
 }
 

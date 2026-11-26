@@ -694,6 +694,24 @@ shown_call_kind() {
   [ -n "$kind" ] && printf '%s\n' "$kind"
 }
 
+# Whether tasks-axi takes <title> as a title, asked of tasks-axi itself on a
+# scratch markdown backlog so its own title rules decide; prints its refusal.
+apply_title_probe() {  # <title>
+  local probe=$APPLY_SCRATCH/probe out
+  if [ ! -f "$probe/backlog.md" ]; then
+    if ! { mkdir -p "$probe" && printf '## In flight\n\n## Queued\n\n## Done\n' > "$probe/backlog.md" \
+      && (cd "$probe" && unset TASKS_AXI_FILE TASKS_AXI_BACKEND \
+        && tasks-axi add title-probe probe --backend markdown --file "$probe/backlog.md" >/dev/null); }; then
+      printf 'the title check could not start'
+      return 1
+    fi
+  fi
+  out=$(cd "$probe" && unset TASKS_AXI_FILE TASKS_AXI_BACKEND \
+    && tasks-axi update title-probe --title="$1" --backend markdown --file "$probe/backlog.md" 2>&1) && return 0
+  printf '%s' "$out" | sed -n 's/^error: //p' | head -1
+  return 1
+}
+
 # One refused field of the row command_apply is checking (its n and id).
 apply_refuse() {  # <why>
   printf 'refused: row %s (%s): %s\n' "$n" "$id" "$*" >&2
@@ -714,12 +732,13 @@ command_apply() {
   file=$(absolute_from_caller "$file")
   [ -f "$file" ] && [ -r "$file" ] || fail "cannot read the apply file $file"
   command -v jq >/dev/null 2>&1 || fail "apply needs jq on PATH"
-  # Check and write from one copy, so an edit to the list mid-run applies nothing unchecked.
-  APPLY_SNAPSHOT=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-tasks-axi-apply.XXXXXX") || fail "cannot stage the apply file"
-  trap 'rm -f -- "$APPLY_SNAPSHOT"' EXIT
-  cp -- "$file" "$APPLY_SNAPSHOT" || fail "cannot stage the apply file $file"
+  # Check and write from one copy, so an edit to the list mid-run applies
+  # nothing unchecked; the scratch backlog beside it is apply_title_probe's.
+  APPLY_SCRATCH=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/fm-tasks-axi-apply.XXXXXX") || fail "cannot stage the apply file"
+  trap 'rm -rf -- "$APPLY_SCRATCH"' EXIT
+  cp -- "$file" "$APPLY_SCRATCH/list.json" || fail "cannot stage the apply file $file"
   local source=$file
-  file=$APPLY_SNAPSHOT
+  file=$APPLY_SCRATCH/list.json
   shape=$(jq -rs "$APPLY_SHAPE_JQ" "$file" 2>&1) || fail "the apply file is not JSON: $(printf '%s' "$shape" | head -1)"
   if [ -n "$shape" ]; then
     printf '%s\n' "$shape" | sed 's/^/refused: /' >&2
@@ -750,10 +769,9 @@ command_apply() {
       apply_refuse "the row is closed"
     else
       if [ "$has_title" = + ]; then
-        if [ -z "$(printf '%s' "$title" | tr -d '[:space:]')" ]; then apply_refuse "title is empty"
-        elif fm_backlog_title_dated "$title"; then apply_refuse "a title names the next action, not a date"
-        elif [[ "$title" =~ \([a-z-]+:[^\)]*\)[[:space:]]*$ ]]; then
-          apply_refuse "tasks-axi refuses a title that ends with a task tag such as (repo: x)"
+        if fm_backlog_title_dated "$title"; then apply_refuse "a title names the next action, not a date"
+        elif ! out=$(apply_title_probe "$title"); then
+          apply_refuse "tasks-axi refuses this title: $out"
         else plan+=("$id title: $title"); fi
       fi
       if [ "$has_batch" = + ]; then
@@ -777,7 +795,7 @@ command_apply() {
           apply_refuse "tasks-axi refuses parentheses in a $kind hold reason"
         elif [ -n "$call" ] && [ "$call" != reversible ] && [ "$call" != arjun-only ]; then
           apply_refuse "hold.call must be reversible or arjun-only: $call"
-        elif [[ "$reason" =~ ^\[(reversible|arjun-only)[]\;] ]]; then
+        elif [ "$kind" = captain ] && [[ "$reason" =~ ^\[(reversible|arjun-only)[]\;] ]]; then
           apply_refuse "hold.reason must not begin with a kind prefix; give hold.call instead"
         else
           plan+=("$id hold: $kind${until:+ until $until}${call:+ ($call)} - $reason")
