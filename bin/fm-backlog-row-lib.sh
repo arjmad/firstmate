@@ -45,6 +45,16 @@
 # this exact `Due:` format, and bin/fm-fleet-snapshot.sh reads the `Batch:`
 # line with the same pattern.
 #
+# A ship's row may also name the open rows its work carries, so its landing
+# closes or rewrites them (fork patch,
+# docs/fork-decisions/2026-11-26-landing-covers.md):
+#
+#   Covers: <id>[, <id>...]
+#
+# Only a line that opens with `Covers:` counts, and it holds row ids alone.
+# bin/fm-teardown.sh reads it when it closes the ship's row and prints one
+# `covers:` line per named row still open; it never closes one itself.
+#
 # This file defines functions only.
 
 # fm_backlog_hold_kind_valid <kind>: succeed for one of the four hold kinds.
@@ -133,6 +143,17 @@ fm_backlog_row_field_of_body() {
   pattern=$(fm_backlog_row_field_pattern "$1") || return 1
   value=$(printf '%s\n' "${2:-}" | sed -En "s/$pattern/\\1/p" | tail -1)
   [ "$value" = - ] || printf '%s\n' "$value"
+}
+
+# fm_backlog_row_covers_of_body <decoded-body>: print each row id the body's
+# `Covers:` lines name, once each and in order; a trailing `.`, `;` or `:` is
+# dropped, and a token not shaped like a row id is skipped.
+fm_backlog_row_covers_of_body() {
+  printf '%s\n' "${1:-}" \
+    | sed -En 's/^[[:space:]]*Covers:[[:space:]]*//p' \
+    | tr -s ', \t' '\n' \
+    | sed -E 's/[.;:]+$//' \
+    | awk '/^[A-Za-z0-9][A-Za-z0-9._-]*$/ && !seen[$0]++'
 }
 
 fm_backlog_row_trim_trailing_blank() {  # <text>

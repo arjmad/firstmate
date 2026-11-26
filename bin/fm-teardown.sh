@@ -463,6 +463,8 @@ t3code_secondmate_lsof_check() {  # <task-id> <home>
 for _teardown_source in \
   fm-tasks-axi-lib.sh \
   fm-backlog-transition-lib.sh \
+  fm-backlog-owner-lib.sh \
+  fm-backlog-row-lib.sh \
   fm-timeout-lib.sh \
   fm-backend.sh \
   fm-control-lib.sh \
@@ -495,6 +497,10 @@ unset _teardown_source
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
+# shellcheck source=bin/fm-backlog-owner-lib.sh
+. "$SCRIPT_DIR/fm-backlog-owner-lib.sh"
+# shellcheck source=bin/fm-backlog-row-lib.sh
+. "$SCRIPT_DIR/fm-backlog-row-lib.sh"
 # Pending replies load the shared backend dispatcher and status classifier.
 # Import those graphs once rather than initializing and analyzing them twice.
 # shellcheck source=bin/fm-pending-reply-lib.sh
@@ -4462,6 +4468,45 @@ if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
   }
 fi
 
+# The rows this task's own row names on a `Covers:` line (fork patch,
+# docs/fork-decisions/2026-11-26-landing-covers.md; bin/fm-backlog-row-lib.sh
+# owns the line). They are read while the row is still open, because retention
+# may archive it the moment it closes, and named at the end of the run. Only a
+# close of landed work reads them: a retained captain call stays open, and
+# --force proves nothing landed. A failed read costs only that reminder.
+TEARDOWN_COVERS=
+teardown_covers_read() {
+  local data row body
+  data=$(fm_backlog_data_absolute "$DATA") || return 1
+  row=$(fm_backlog_row_show "$data" "$ID" --full) || return 1
+  body=$(fm_backlog_owner_shown_body "$row") || return 1
+  TEARDOWN_COVERS=$(fm_backlog_row_covers_of_body "$body" | grep -vxF -- "$ID" || true)
+}
+# One `covers:` line per row read above that is still open; none is closed
+# here, since the ship-landing skill closes it with this task's evidence or
+# rewrites it to the step it still holds. A row already done or gone is silent.
+# It runs at the end of the run, and also when the close itself fails, because
+# the work has landed and the close replay at the next session start cannot
+# name them.
+teardown_covers_report() {
+  local covered
+  [ -n "$TEARDOWN_COVERS" ] || return 0
+  while IFS= read -r covered; do
+    [ -n "$covered" ] || continue
+    if fm_backlog_row_probe "$DATA" "$covered"; then
+      [ "${FM_BACKLOG_ROW_STATE%% *}" = "done" ] \
+        || echo "covers: $covered is still open; $ID carried it, so close it with $ID's evidence or rewrite it to the step it still holds (ship-landing skill)"
+    elif [ "$FM_BACKLOG_ROW_RESULT" != not_found ]; then
+      echo "covers: $covered could not be read ($FM_BACKLOG_ROW_ERROR); $ID carried it, so check whether it is still open"
+    fi
+  done <<< "$TEARDOWN_COVERS"
+}
+if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ] && [ "$BACKLOG_TRANSITION" = close ] \
+   && [ "$FORCE" != --force ] && [ "$KIND" != secondmate ]; then
+  teardown_covers_read \
+    || echo "covers: could not read $ID's backlog row for a Covers: line; check by hand whether a row it carried is still open"
+fi
+
 # The initial landed/discard-work checks above have passed (or --force skipped
 # them). Fix 1 and Fix 2 (see script header) run here, unconditionally on
 # --force, and before branch deletion or worktree return - a still-parked run or a
@@ -4991,6 +5036,7 @@ if [ "$BACKLOG_CLOSED" = 1 ]; then
       echo "error: $ID's endpoint and local copy are cleaned up, but its captain-held backlog item could not be returned to Queued atomically ($FM_BACKLOG_TRANSITION_ERROR); the pending retention is recorded and the next session start retries it" >&2
     else
       echo "error: $ID's endpoint and local copy are cleaned up, but its backlog item could not be closed atomically ($FM_BACKLOG_TRANSITION_ERROR); the pending close is recorded and the next session start retries it" >&2
+      teardown_covers_report
     fi
     exit 1
   fi
@@ -5058,6 +5104,7 @@ if [ "$KIND" != secondmate ] && [ -d "$STATE" ]; then
     echo "noticed-queue: file each through bin/fm-noticed.sh (noticed-queue skill)"
   fi
 fi
+[ "$BACKLOG_CLOSED" != 1 ] || teardown_covers_report
 # A scratch checkout the prune above kept holds work teardown could not prove
 # landed, so it is filed once as a routine noticed row naming every kept
 # checkout (fork patch,
