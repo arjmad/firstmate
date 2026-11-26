@@ -300,7 +300,7 @@ test_wrapper_holds_captain_owned_captain_rows() {
 test_wrapper_holds_captain_rows_added_with_json() {
   local dir out show body
   dir=$(make_split wrapper-captain-json)
-  body=$(printf 'Repeated problem `x.hands` (responder).\nOwner: arjun')
+  body=$(printf 'Repeated problem x.hands (responder).\nOwner: arjun')
   out=$(wrapper_from_code "$dir" add rk-json "Your hands json" --kind captain --body "$body" --json) \
     || fail "a --json add of a captain-owned captain row failed: $out"
   assert_equals rk-json "$(printf '%s' "$out" | jq -r '.task.id')" "a --json add's stdout is not its JSON result"
@@ -366,6 +366,84 @@ test_wrapper_done_on_archived_row() {
   assert_equals true "$(printf '%s' "$out" | jq -r '.already')" "a repeated done lost tasks-axi's own result"
   assert_equals null "$(printf '%s' "$out" | jq -r '.archived')" "a live closed row was reported archived"
   pass "done and close of a row retention archived succeed as already done; other refusals stand"
+}
+
+# `apply <file>` sets many rows' title, batch, hold and ask as fields, never
+# as body notes, and refuses the whole file before any write when one field
+# cannot be set. The fixture is the four 11-23 sweep corrections that the
+# one-off script left as notes (audit a7-04).
+test_wrapper_apply_sets_fields_from_one_list() {
+  local dir out rc show before
+  dir=$(make_split wrapper-apply)
+  captain() { (cd "$dir/code" && FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$dir/code" "$ROOT/bin/fm-captain-hold.sh" "$@"); }
+  wrapper_from_code "$dir" add ha-hands "Your hands: Home Assistant" --kind captain --owner fleet >/dev/null \
+    || fail "could not add ha-hands"
+  captain hold fafnir-signin --title "Sign Kempf in on Fafnir" --reason "sign in" --kind arjun-only \
+    --options "Done|Not yet" --recommend Done --ask "Signed in?" >/dev/null 2>&1 || fail "could not hold fafnir-signin"
+  wrapper_from_code "$dir" add ha-weekend "Home Assistant hardware weekend" >/dev/null || fail "could not add ha-weekend"
+  captain hold kempf-cogs --title "Pay Kempf COGS" --reason "COGS bills" --kind arjun-only \
+    --ask "Have you paid the Q1-Q3 COGS bills" >/dev/null 2>&1 || fail "could not hold kempf-cogs"
+  wrapper_from_code "$dir" add vendor "Call the vendor" >/dev/null || fail "could not add vendor"
+  mkdir -p "$dir/lists"
+  cat > "$dir/lists/sweep.json" <<'JSON'
+[
+  {"id": "ha-hands", "batch": "place:ha-weekend",
+   "hold": {"kind": "captain", "until": "2026-12-04", "reason": "do it on the HA weekend", "call": "reversible"}},
+  {"id": "fafnir-signin", "batch": "place:fafnir", "hold": {"kind": "captain", "until": "2026-12-02", "reason": "with the SMITE test"}},
+  {"id": "ha-weekend", "title": "Home Assistant hardware weekend; reconnect the living-room Voice PE"},
+  {"id": "kempf-cogs", "ask": "Have you paid the Q2 and Q3 COGS bills"},
+  {"id": "vendor", "hold": {"kind": "external", "until": "2026-12-10", "reason": "waits on the vendor reply"}}
+]
+JSON
+  before=$(cat "$dir/home/data/backlog.md")
+  out=$(cd "$dir/lists" && FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$dir/code" "$WRAPPER" apply sweep.json --check) \
+    || fail "apply --check of a relative list failed: $out"
+  assert_contains "$out" "plan: kempf-cogs ask: Have you paid the Q2 and Q3 COGS bills" "apply --check did not print the plan"
+  assert_equals "$before" "$(cat "$dir/home/data/backlog.md")" "apply --check wrote the backlog"
+  out=$(cd "$dir/lists" && FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$dir/code" "$WRAPPER" apply sweep.json) \
+    || fail "apply failed: $out"
+  assert_contains "$out" "apply: 5 rows, 7 changes, 0 failed" "apply miscounted its changes"
+  show=$(wrapper_from_code "$dir" show ha-hands --full)
+  assert_contains "$show" "hold_kind: captain" "apply did not hold ha-hands for the captain"
+  assert_contains "$show" "hold_until: 2026-12-04" "apply did not date ha-hands's hold"
+  assert_contains "$show" "[reversible] do it on the HA weekend" "apply did not record ha-hands's reason and kind"
+  assert_equals place:ha-weekend "$(wrapper_from_code "$dir" batch ha-hands)" "apply did not tag ha-hands"
+  show=$(wrapper_from_code "$dir" show fafnir-signin --full)
+  assert_contains "$show" "[arjun-only; options: Done|Not yet; recommended: Done; ask: Signed in?] with the SMITE test" \
+    "re-holding fafnir-signin dropped its kind, choices or question"
+  assert_contains "$show" "hold_until: 2026-12-02" "apply did not date fafnir-signin"
+  assert_equals place:fafnir "$(wrapper_from_code "$dir" batch fafnir-signin)" "apply did not tag fafnir-signin"
+  assert_contains "$(wrapper_from_code "$dir" show ha-weekend)" "reconnect the living-room Voice PE" "apply did not retitle ha-weekend"
+  assert_contains "$(wrapper_from_code "$dir" show kempf-cogs --full)" "ask: Have you paid the Q2 and Q3 COGS bills] COGS bills" \
+    "apply did not replace kempf-cogs's question"
+  assert_grep "(hold-kind: external) (hold-until: 2026-12-10)" "$dir/home/data/backlog.md" "apply did not record the external wait"
+  assert_no_grep "corrected" "$dir/home/data/backlog.md" "apply wrote a body note"
+  out=$(cd "$dir/lists" && FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$dir/code" "$WRAPPER" apply sweep.json) \
+    || fail "a rerun of the same list failed: $out"
+  assert_contains "$(wrapper_from_code "$dir" show fafnir-signin --full)" "options: Done|Not yet" "a rerun dropped the choices"
+  before=$(cat "$dir/home/data/backlog.md")
+  # One field nothing can set refuses the whole file, naming each refusal.
+  for bad in \
+    '[{"id": "vendor", "batch": "office"}]|bare legacy slug' \
+    '[{"id": "vendor", "note": "x"}]|unknown field note' \
+    '[{"id": "vendor", "hold": {"kind": "future", "reason": "later"}}]|needs hold.until' \
+    '[{"id": "vendor", "hold": {"kind": "future", "until": "2026-12-01", "reason": "later (maybe)"}}]|parentheses' \
+    '[{"id": "vendor", "ask": "Call now?"}]|needs a captain hold' \
+    '[{"id": "vendor", "title": "[2026-12-01] call"}]|not a date' \
+    '[{"id": "missing-row", "title": "x"}]|no backlog row missing-row' \
+    '[{"id": "vendor", "title": "x"}, {"id": "vendor", "batch": "-"}]|more than one row' \
+    '[{"id": "vendor"}]|names no field' \
+    '{"id": "vendor"}|JSON array'; do
+    printf '%s\n' "${bad%|*}" > "$dir/lists/bad.json"
+    out=$(wrapper_from_code "$dir" apply "$dir/lists/bad.json" 2>&1)
+    rc=$?
+    expect_code 2 "$rc" "apply of ${bad%|*}"
+    assert_contains "$out" "${bad##*|}" "apply's refusal of ${bad%|*} did not say why"
+  done
+  printf '[{"id": "ha-weekend", "title": "Retitled"}, {"id": "vendor", "batch": "office"}]\n' > "$dir/lists/bad.json"
+  wrapper_from_code "$dir" apply "$dir/lists/bad.json" >/dev/null 2>&1
+  assert_equals "$before" "$(cat "$dir/home/data/backlog.md")" "a refused file still changed a row it could set"
+  pass "apply sets title, batch, hold and ask from one list as fields, and refuses a file it cannot set whole"
 }
 
 test_wrapper_owner_at_filing() {
@@ -519,13 +597,18 @@ test_wrapper_row_shape() {
   assert_contains "$out" "not a date" "the dated-title refusal did not say why"
   assert_no_grep "rs-dated" "$dir/home/data/backlog.md" "a refused dated title was still added"
 
-  wrapper_from_code "$dir" add rs-1 "Call the vendor" --due 2026-11-20 --batch office --body "first note" >/dev/null \
+  out=$(wrapper_from_code "$dir" add rs-bare "Call the vendor" --batch office 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "add with a bare --batch slug"
+  assert_contains "$out" "place:<name>" "the bare-slug refusal did not name the place form"
+  assert_no_grep "rs-bare" "$dir/home/data/backlog.md" "a refused bare --batch slug was still added"
+  wrapper_from_code "$dir" add rs-1 "Call the vendor" --due 2026-11-20 --batch place:office --body "first note" >/dev/null \
     || fail "add with --due and --batch failed"
   assert_equals 2026-11-20 "$(wrapper_from_code "$dir" due rs-1)" "add --due was not recorded"
-  assert_equals office "$(wrapper_from_code "$dir" batch rs-1)" "add --batch was not recorded"
+  assert_equals place:office "$(wrapper_from_code "$dir" batch rs-1)" "add --batch was not recorded"
   assert_equals fleet "$(wrapper_from_code "$dir" owner rs-1)" "the owner was not recorded beside the row fields"
   body=$(wrapper_from_code "$dir" show rs-1 --full)
-  assert_contains "$body" 'first note\n\nDue: 2026-11-20\nBatch: office\n\nOwner: fleet' "the row fields are not one block above the owner"
+  assert_contains "$body" 'first note\n\nDue: 2026-11-20\nBatch: place:office\n\nOwner: fleet' "the row fields are not one block above the owner"
 
   out=$(wrapper_from_code "$dir" update rs-1 --title "[2026-11-01] call the vendor" 2>&1)
   rc=$?
@@ -533,7 +616,7 @@ test_wrapper_row_shape() {
 
   wrapper_from_code "$dir" update rs-1 --body "second note" >/dev/null || fail "update --body failed"
   assert_equals 2026-11-20 "$(wrapper_from_code "$dir" due rs-1)" "a body rewrite dropped the due date"
-  assert_equals office "$(wrapper_from_code "$dir" batch rs-1)" "a body rewrite dropped the batch tag"
+  assert_equals place:office "$(wrapper_from_code "$dir" batch rs-1)" "a body rewrite dropped the batch tag"
   assert_equals fleet "$(wrapper_from_code "$dir" owner rs-1)" "a body rewrite dropped the owner"
 
   out=$(wrapper_from_code "$dir" due rs-1 2026-12-01) || fail "due could not change the date"
@@ -555,12 +638,26 @@ test_wrapper_row_shape() {
   assert_equals place:office "$(wrapper_from_code "$dir" batch rs-1)" "a place tag was not recorded"
   wrapper_from_code "$dir" batch rs-1 board:pricing-review.1111 >/dev/null || fail "batch refused a board tag"
   assert_equals board:pricing-review.1111 "$(wrapper_from_code "$dir" batch rs-1)" "a board tag was not recorded"
-  for bad in place:Office shelf:office board: place:a.b; do
+  for bad in office place:Office shelf:office board: place:a.b; do
     out=$(wrapper_from_code "$dir" batch rs-1 "$bad" 2>&1)
     rc=$?
     expect_code 2 "$rc" "batch with the tag $bad"
   done
   wrapper_from_code "$dir" batch rs-1 - >/dev/null || fail "batch could not clear a board tag"
+  # A legacy bare tag written before the prefixes still reads, survives a body
+  # rewrite, and is retagged with a prefixed one.
+  wrapper_from_code "$dir" add rs-legacy "Legacy errand" --body "$(printf 'old note\n\nBatch: office')" >/dev/null \
+    || fail "could not add a row whose body carries a legacy bare tag"
+  assert_equals office "$(wrapper_from_code "$dir" batch rs-legacy)" "a legacy bare tag no longer reads"
+  wrapper_from_code "$dir" update rs-legacy --body "new note" >/dev/null || fail "update --body of a legacy-tagged row failed"
+  assert_equals office "$(wrapper_from_code "$dir" batch rs-legacy)" "a body rewrite dropped a legacy bare tag"
+  out=$(wrapper_from_code "$dir" batch rs-legacy office 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "re-recording a legacy bare tag"
+  wrapper_from_code "$dir" batch rs-legacy place:office >/dev/null || fail "a legacy bare tag could not be retagged"
+  assert_equals place:office "$(wrapper_from_code "$dir" batch rs-legacy)" "the retag was not recorded"
+  [ "$(wrapper_from_code "$dir" show rs-legacy --full | grep -c 'Batch: ')" = 1 ] \
+    || fail "the retag left the legacy line beside the new one: $(wrapper_from_code "$dir" show rs-legacy --full)"
   out=$(wrapper_from_code "$dir" due rs-missing 2026-12-01 2>&1)
   rc=$?
   expect_code 2 "$rc" "due on a missing row"
@@ -689,6 +786,7 @@ if [ "$HAVE_TASKS_AXI" = 1 ]; then
   test_wrapper_holds_captain_owned_captain_rows
   test_wrapper_holds_captain_rows_added_with_json
   test_wrapper_done_on_archived_row
+  test_wrapper_apply_sets_fields_from_one_list
   test_wrapper_single_home
   test_wrapper_hold_quote_guard
   test_wrapper_row_shape

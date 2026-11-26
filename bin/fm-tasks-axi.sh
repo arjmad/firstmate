@@ -6,6 +6,7 @@
 #        fm-tasks-axi.sh due <id> [YYYY-MM-DD|-]
 #        fm-tasks-axi.sh batch <id> [<tag>|-]
 #        fm-tasks-axi.sh archive-path
+#        fm-tasks-axi.sh apply <file> [--check]
 #        fm-tasks-axi.sh --help
 #
 # Every routine firstmate backlog read or mutation goes through this command
@@ -90,6 +91,31 @@
 # `ok: <id> already done (archived)` (with `--json`, a result object whose
 # `already` and `archived` are true) and exits 0, writing no handoff reply, so
 # a caller that closes a row retention already moved reads it as closed.
+#
+# Apply: the wrapper-only subcommand `apply <file>` sets many rows' fields
+# from one reviewed list, such as a sweep's corrections, as fields and never
+# as body notes. <file> (relative to the caller's directory) holds a JSON
+# array of rows; each names its `id` and at least one of:
+#   "title": "<next action>"           through `update <id> --title`
+#   "batch": "<tag>" or "-"            through `batch <id>`
+#   "hold": {"kind": "future|parked|external", "until": "YYYY-MM-DD",
+#            "reason": "<one line>"}   through `hold`; no parentheses
+#   "hold": {"kind": "captain", "reason": "<one line>",
+#            "until": "YYYY-MM-DD", "call": "reversible|arjun-only"}
+#                                      through bin/fm-captain-hold.sh hold
+#                                      --keep-choices; until and call optional
+#   "ask": "<question>"                his call's question: beside a captain
+#                                      hold it rides on that hold, alone it
+#                                      goes through fm-captain-hold.sh choices
+# Every field of every row is checked first against the row as stored (an
+# open row, a valid title, tag, kind and date, an ask only on a captain
+# hold), and one field it cannot set, or an unknown key, refuses the whole
+# file with exit 2 before anything is written, naming each refusal on stderr.
+# `--check` stops there and prints the plan. Otherwise the fields run in the
+# order title, batch, hold, ask, each through the command that owns it, so its
+# guards and locks hold; a row stops at its first failed field, and the
+# command prints one `ok:` or `failed:` line per field and a summary, and
+# exits 1 when any field failed. A rerun of the same file converges.
 #
 # Superseded-ruling guard (opt-in): when the home-private `config/captain-name`
 # names the captain (one name per line; blank and `#` lines ignored), `hold`,
@@ -598,6 +624,212 @@ command_row_field() {  # <due|batch>
   printf 'ok: %s %s -> %s\n' "$field" "$id" "${want:--}"
 }
 
+# The wrapper-only `apply <file> [--check]` subcommand (see the header).
+# The shape refusals of the whole file, one line each; nothing when it is sound.
+# shellcheck disable=SC2016  # a jq program, expanded by jq
+APPLY_SHAPE_JQ='
+  def row_errors($n):
+    if type != "object" then "row \($n): a row must be a JSON object"
+    else
+      ((keys - ["id", "title", "batch", "hold", "ask"])[] | "row \($n): unknown field \(.)"),
+      (if (.id | type) != "string" or .id == "" then "row \($n): id must be a non-empty string" else empty end),
+      (if (keys - ["id"]) == [] then "row \($n): names no field to set" else empty end),
+      ("title", "batch", "ask") as $k
+        | select(has($k) and (.[$k] | type) != "string") | "row \($n): \($k) must be a string",
+      (if has("hold") then
+         if (.hold | type) != "object" then "row \($n): hold must be a JSON object"
+         else
+           ((.hold | keys - ["kind", "until", "reason", "call"])[] | "row \($n): unknown hold field \(.)"),
+           (("kind", "until", "reason", "call") as $k
+             | select((.hold | has($k)) and (.hold[$k] | type) != "string") | "row \($n): hold.\($k) must be a string")
+         end
+       else empty end),
+      (if [.. | strings | select(test("[\r\n]"))] != [] then "row \($n): a value spans more than one line" else empty end)
+    end;
+  if type != "array" then "the file must hold a JSON array of rows"
+  elif length == 0 then "the file holds no rows"
+  else
+    (to_entries[] | .key as $i | .value | row_errors($i + 1)),
+    ([.[] | objects | .id | strings] | group_by(.) | map(select(length > 1) | .[0])[] | "id \(.) is named by more than one row")
+  end'
+
+# One field of row <index>: prints `+<value>` when the row sets it, nothing
+# when it does not.
+apply_get() {  # <file> <index> <jq path, such as .title or .hold.kind>
+  jq -r --argjson i "$2" ".[\$i] | ($3) as \$v | if \$v == null then empty else \"+\" + \$v end" "$1"
+}
+
+# Run a backlog command as the caller did, from the caller's directory with
+# the caller's home, for one field of `apply`; prints its output on failure.
+apply_run() {  # <command> [args...]
+  local out
+  if out=$(cd "$CALLER_DIR" && "$@" 2>&1); then
+    return 0
+  fi
+  printf '%s' "$out" | tr '\n' ' '
+  return 1
+}
+
+# One refused field of the row command_apply is checking (its n and id).
+apply_refuse() {  # <why>
+  printf 'refused: row %s (%s): %s\n' "$n" "$id" "$*" >&2
+  refused=$((refused + 1))
+}
+
+command_apply() {
+  local file=${ARGS[1]:-} check=0 shape count i n id title batch ask hold kind until reason call out
+  local has_title has_batch has_ask has_hold refused=0 changes=0 failed=0 field status
+  local -a plan=() row_ids=() cargs=()
+  case "${ARGS[2]:-}" in
+    '') ;;
+    --check) check=1 ;;
+    *) fail "usage: apply <file> [--check]" ;;
+  esac
+  [ "${#ARGS[@]}" -le 3 ] || fail "usage: apply <file> [--check]"
+  case "$file" in ''|-*) fail "usage: apply <file> [--check]" ;; esac
+  file=$(absolute_from_caller "$file")
+  [ -f "$file" ] && [ -r "$file" ] || fail "cannot read the apply file $file"
+  command -v jq >/dev/null 2>&1 || fail "apply needs jq on PATH"
+  shape=$(jq -r "$APPLY_SHAPE_JQ" "$file" 2>&1) || fail "the apply file is not JSON: $(printf '%s' "$shape" | head -1)"
+  if [ -n "$shape" ]; then
+    printf '%s\n' "$shape" | sed 's/^/refused: /' >&2
+    fail "apply refused the file; nothing was changed"
+  fi
+  count=$(jq 'length' "$file")
+  # Every field each row sets, checked against the row as stored, before any write.
+  i=0
+  while [ "$i" -lt "$count" ]; do
+    n=$((i + 1))
+    id=$(apply_get "$file" "$i" .id); id=${id#+}
+    row_ids+=("$id")
+    title=$(apply_get "$file" "$i" .title); has_title=${title:0:1}; title=${title#+}
+    batch=$(apply_get "$file" "$i" .batch); has_batch=${batch:0:1}; batch=${batch#+}
+    ask=$(apply_get "$file" "$i" .ask); has_ask=${ask:0:1}; ask=${ask#+}
+    hold=$(jq -r --argjson i "$i" '.[$i] | has("hold")' "$file")
+    kind=$(apply_get "$file" "$i" .hold.kind); kind=${kind#+}
+    until=$(apply_get "$file" "$i" .hold.until); until=${until#+}
+    reason=$(apply_get "$file" "$i" .hold.reason); reason=${reason#+}
+    call=$(apply_get "$file" "$i" .hold.call); call=${call#+}
+    has_hold=0
+    [ "$hold" != true ] || has_hold=1
+    if ! [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      apply_refuse "the id is not slug-shaped"
+    elif ! shown_body "$id"; then
+      apply_refuse "no backlog row $id in this home"
+    elif printf '%s\n' "$SHOWN_ROW" | grep -q '^  state: done$'; then
+      apply_refuse "the row is closed"
+    else
+      if [ "$has_title" = + ]; then
+        if [ -z "$title" ]; then apply_refuse "title is empty"
+        elif fm_backlog_title_dated "$title"; then apply_refuse "a title names the next action, not a date"
+        else plan+=("$id title: $title"); fi
+      fi
+      if [ "$has_batch" = + ]; then
+        if [ "$batch" = - ] || fm_backlog_batch_valid "$batch"; then plan+=("$id batch: $batch")
+        else apply_refuse "$FM_BACKLOG_BATCH_RULE: $batch"; fi
+      fi
+      if [ "$has_hold" = 1 ]; then
+        if ! fm_backlog_hold_kind_valid "$kind"; then
+          apply_refuse "hold.kind must be captain, external, future or parked"
+        elif [ -z "$reason" ]; then
+          apply_refuse "hold.reason is empty"
+        elif [ -n "$until" ] && ! fm_backlog_date_valid "$until"; then
+          apply_refuse "hold.until must be a YYYY-MM-DD date: $until"
+        elif [ "$kind" != captain ] && [ -z "$until" ]; then
+          apply_refuse "a $kind hold needs hold.until, the date that lifts it"
+        elif [ "$kind" != captain ] && [ -n "$call" ]; then
+          apply_refuse "hold.call classifies a captain hold only"
+        elif [ "$kind" != captain ] && [ "$has_ask" = + ]; then
+          apply_refuse "an ask rides on a captain hold, not a $kind one"
+        elif [ "$kind" != captain ] && [[ "$reason" == *[\(\)]* ]]; then
+          apply_refuse "tasks-axi refuses parentheses in a $kind hold reason"
+        elif [ -n "$call" ] && [ "$call" != reversible ] && [ "$call" != arjun-only ]; then
+          apply_refuse "hold.call must be reversible or arjun-only: $call"
+        else
+          plan+=("$id hold: $kind${until:+ until $until}${call:+ ($call)} - $reason")
+        fi
+      fi
+      if [ "$has_ask" = + ]; then
+        if [ -z "$ask" ]; then
+          apply_refuse "ask is empty"
+        elif [[ "$ask" == *[\]\;]* ]] || [ "$(printf '%s' "$ask" | wc -c | tr -d ' ')" -gt 200 ]; then
+          apply_refuse "ask must be at most 200 bytes, with no ] or ;"
+        elif [ "$has_hold" = 0 ] && ! { printf '%s\n' "$SHOWN_ROW" | grep -q '^  hold_kind: captain$' \
+            && printf '%s\n' "$SHOWN_ROW" | grep -q '^  held: yes$'; }; then
+          apply_refuse "an ask needs a captain hold: the row is not held for the captain, so give it a hold of kind captain"
+        elif [ "$has_hold" = 1 ] && [ "$kind" = captain ] && [ -z "$call" ] \
+            && ! printf '%s\n' "$SHOWN_ROW" | grep -q '^  hold_kind: captain$'; then
+          apply_refuse "an ask rides on the call's kind: give hold.call reversible or arjun-only"
+        elif [ "$has_hold" = 0 ] || [ "$kind" = captain ]; then
+          plan+=("$id ask: $ask")
+        fi
+      fi
+    fi
+    i=$((i + 1))
+  done
+  [ "$refused" = 0 ] || fail "apply refused $refused field(s) of $file; nothing was changed"
+  if [ "$check" = 1 ]; then
+    [ "${#plan[@]}" = 0 ] || printf 'plan: %s\n' "${plan[@]}"
+    printf 'apply: %s rows, %s changes checked; nothing was changed\n' "$count" "${#plan[@]}"
+    return 0
+  fi
+  # Each field through the command that owns it, so its own guards and locks
+  # hold; a row's later fields stop at its first failure.
+  i=0
+  while [ "$i" -lt "$count" ]; do
+    id=${row_ids[$i]}
+    title=$(apply_get "$file" "$i" .title); has_title=${title:0:1}; title=${title#+}
+    batch=$(apply_get "$file" "$i" .batch); has_batch=${batch:0:1}; batch=${batch#+}
+    ask=$(apply_get "$file" "$i" .ask); has_ask=${ask:0:1}; ask=${ask#+}
+    kind=$(apply_get "$file" "$i" .hold.kind); kind=${kind#+}
+    until=$(apply_get "$file" "$i" .hold.until); until=${until#+}
+    reason=$(apply_get "$file" "$i" .hold.reason); reason=${reason#+}
+    call=$(apply_get "$file" "$i" .hold.call); call=${call#+}
+    for field in title batch hold ask; do
+      status=0
+      case "$field" in
+        title)
+          [ "$has_title" = + ] || continue
+          out=$(apply_run "$SCRIPT_DIR/fm-tasks-axi.sh" update "$id" --title "$title") || status=1
+          ;;
+        batch)
+          [ "$has_batch" = + ] || continue
+          out=$(apply_run "$SCRIPT_DIR/fm-tasks-axi.sh" batch "$id" "$batch") || status=1
+          ;;
+        hold)
+          [ -n "$kind" ] || continue
+          if [ "$kind" = captain ]; then
+            cargs=(hold "$id" --reason "$reason" --keep-choices)
+            [ -z "$until" ] || cargs+=(--until "$until")
+            [ -z "$call" ] || cargs+=(--kind "$call")
+            [ "$has_ask" != + ] || cargs+=(--ask "$ask")
+            out=$(apply_run "$SCRIPT_DIR/fm-captain-hold.sh" "${cargs[@]}") || status=1
+          else
+            out=$(apply_run "$SCRIPT_DIR/fm-tasks-axi.sh" hold "$id" --kind "$kind" --until "$until" --reason "$reason") \
+              || status=1
+          fi
+          ;;
+        ask)
+          # An ask beside a captain hold rode on that hold.
+          [ "$has_ask" = + ] && [ -z "$kind" ] || continue
+          out=$(apply_run "$SCRIPT_DIR/fm-captain-hold.sh" choices "$id" --ask "$ask") || status=1
+          ;;
+      esac
+      if [ "$status" = 0 ]; then
+        changes=$((changes + 1))
+        printf 'ok: apply %s %s\n' "$id" "$field"
+      else
+        failed=$((failed + 1))
+        printf 'failed: apply %s %s: %s\n' "$id" "$field" "$out"
+        break
+      fi
+    done
+    i=$((i + 1))
+  done
+  printf 'apply: %s rows, %s changes, %s failed\n' "$count" "$changes" "$failed"
+  [ "$failed" = 0 ] || return 1
+}
+
 # The superseded-ruling guard described in the header. Each helper prints
 # nothing when it finds no dated captain quote.
 captain_names() {
@@ -760,6 +992,10 @@ case "${1:-}" in
     ;;
   due|batch)
     command_row_field "$1"
+    exit $?
+    ;;
+  apply)
+    command_apply
     exit $?
     ;;
   archive-path)

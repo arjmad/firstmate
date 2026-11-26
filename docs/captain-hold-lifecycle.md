@@ -97,8 +97,8 @@ A row held before that removal may still carry a default and a release time in i
 
 A call held for the captain may carry its own two or three choices and the recommended one, so Bearings and Launchpad offer them as buttons instead of a generic Done.
 `hold --options 'A|B' --recommend A`, with an optional one-line `--ask` question, records them on the same reason prefix as the kind.
-`choices <task-id>` adds or replaces them on an active hold without touching its reason, kind, or date, and `defer` keeps them.
-They live and die with the reason, so a re-hold that passes none drops them.
+`choices <task-id>` adds or replaces them on an active hold without touching its reason, kind, or date, `choices <task-id> --ask` alone replaces only the question, and `defer` keeps them.
+They live and die with the reason, so a re-hold that passes none drops them, unless it passes `--keep-choices`, which keeps an active call's recorded kind, choices and question wherever the re-hold passes none.
 `bin/fm-bearings-snapshot.sh --fields board` projects them as each row's `choices`, and a row without them carries null, which a surface shows as a single Open action rather than an invented choice.
 A keyed answer whose answer or shown label names a recorded choice, ignoring case, keeps the captain's words and adds a `Choice picked:` line naming it; [Answer-time resolution](#answer-time-resolution) is otherwise unchanged.
 `bin/fm-captain-hold.sh --help` owns the grammar and refusals, and `tests/fm-captain-hold-kind.test.sh` covers them.

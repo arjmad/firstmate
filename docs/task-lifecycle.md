@@ -131,9 +131,10 @@ A row's title is its next action in plain words and never opens with a date; its
 A hold uses one of four kinds strictly: `captain` needs his answer or his hands, `external` waits on someone else to act even when he owns the follow-up, `future` has nothing to do until a date, and `parked` is someday.
 `future` and `parked` holds carry a back-on date (`--until`) and `external` a recheck date (`--until`); a captain call with no date stays live, and one he dates with `--until` comes back on that date, because tasks-axi lifts a hold on its back-on date.
 A `Due: YYYY-MM-DD` body line (`add --due`, `due <id>`, `hold --due`) means only an outside deadline and is never invented, kept apart from the back-on date so a snooze never moves it.
-Rows the captain works off together carry one `Batch: <tag>` line (`add --batch`, `batch <id>`): `place:<name>` for one place's errand list, `board:<task-id>` for the members of one board.
+Rows the captain works off together carry one `Batch: <tag>` line (`add --batch`, `batch <id>`): `place:<name>` for one place's errand list, `board:<task-id>` for the members of one board; a bare legacy tag still reads as a place list, but every writer and batch command refuses one.
 A member is one held row and never shows alone, while a call with its own outside deadline stays its own call and gets no tag.
 `bin/fm-captain-hold.sh defer-batch <tag>` defers, and `answer-batch <tag>` answers, every captain call carrying the tag at once.
+A reviewed list of corrections to many rows, such as a sweep's, lands as fields through `bin/fm-tasks-axi.sh apply <file>`, which sets each row's title, batch, hold and ask and refuses the whole list when one field cannot be set, never as body notes.
 Fleet work that only comes back on a date is a `future` hold with `--until`, never a captain hold.
 When a main-side thread such as a pending captain decision or relay reminder is worth durable tracking, file it as its own work item and hold it through that wrapper.
 Captain calls discovered by investigations or visual reviews follow `captain-hold-lifecycle`, which owns their completion gate and recorded-answer rules.
