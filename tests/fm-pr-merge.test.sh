@@ -376,6 +376,12 @@ case "${1:-} ${2:-}" in
         ;;
     esac
     ;;
+  "pr comment")
+    # The captain-approval comment: its body is kept, and a fixture fails it.
+    cat > "$fixtures/github-posted-comment"
+    [ ! -f "$fixtures/github-comment-fails" ] || exit 1
+    exit 0
+    ;;
   "pr merge")
     [ -z "${FM_TEST_GH_MERGE_ARGS:-}" ] || printf '%s\0' "$@" > "$FM_TEST_GH_MERGE_ARGS"
     # A transient refusal: the first merge attempt fails with the forge's own
@@ -7597,9 +7603,99 @@ test_squash_summary_ignores_headings_inside_code_fences() {
   pass "fm-pr-merge ignores headings inside fenced code, and treats a backtick run holding a backtick as inline code, when reading the What Changed section"
 }
 
+
+# The captain-approval comment (audit a4-09): posted with the exact line before
+# the merge, a failed post refuses, a bad file refuses before any forge call,
+# and the flag is refused while away.
+test_captain_approval_file_posts_the_approval_before_the_merge() {
+  local case_dir rc head=a409a409a409a409a409a409a409a409a409a409
+  case_dir=$(make_case captain-approval-posts)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  printf '  ship the new theme  \n\n' > "$case_dir/approval"
+  touch -t 202611251230 "$case_dir/approval"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/97 \
+    --captain-approval-file "$case_dir/approval" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "captain-approval-posts: the merge should succeed: $(cat "$case_dir/stderr")"
+  [ "$(head -n 1 "$case_dir/github-posted-comment")" = "Approved: Arjun $(TZ=UTC date -u -r "$case_dir/approval" +%Y-%m-%d): ship the new theme" ] \
+    || fail "captain-approval-posts: unexpected comment: $(cat "$case_dir/github-posted-comment")"
+  head -n 1 "$case_dir/github-posted-comment" | grep -Eq '^Approved: Arjun [0-9]{4}-[0-9]{2}-[0-9]{2}: .+' \
+    || fail "captain-approval-posts: the comment does not match the reader contract"
+  [ "$(grep -n 'pr comment' "$case_dir/gh.log" | head -n 1 | cut -d: -f1)" -lt "$(grep -n 'pr merge' "$case_dir/gh.log" | head -n 1 | cut -d: -f1)" ] \
+    || fail "captain-approval-posts: the comment did not post before the merge"
+  pass "fm-pr-merge --captain-approval-file posts the Approved line before the merge"
+}
+
+test_captain_approval_file_failed_post_refuses_the_merge() {
+  local case_dir rc head=a409a409a409a409a409a409a409a409a409a40a
+  case_dir=$(make_case captain-approval-post-fails)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  printf 'ship it\n' > "$case_dir/approval"
+  : > "$case_dir/github-comment-fails"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/97 \
+    --captain-approval-file "$case_dir/approval" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "captain-approval-post-fails: a failed post must refuse"
+  assert_grep "approval comment could not be posted" "$case_dir/stderr" \
+    "captain-approval-post-fails: the refusal did not name the failed post"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "captain-approval-post-fails: the merge ran"
+  pass "fm-pr-merge refuses the merge when the captain's approval comment does not post"
+}
+
+test_captain_approval_file_bad_file_refuses_before_the_forge() {
+  local case_dir rc label head=a409a409a409a409a409a409a409a409a409a40b
+  for label in missing empty two-lines; do
+    case_dir=$(make_case "captain-approval-$label")
+    mkdir -p "$case_dir/wt"
+    add_gh_mocks "$case_dir" "$head"
+    case "$label" in
+      empty) printf '  \n' > "$case_dir/approval" ;;
+      two-lines) printf 'ship it\nand the other one\n' > "$case_dir/approval" ;;
+    esac
+    set +e
+    run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/97 \
+      --captain-approval-file "$case_dir/approval" > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 2 "$rc" "captain-approval-$label: a bad file must refuse"
+    [ ! -s "$case_dir/gh.log" ] || fail "captain-approval-$label: a forge call ran: $(cat "$case_dir/gh.log")"
+  done
+  pass "fm-pr-merge refuses a missing, empty, or multi-line --captain-approval-file before any forge call"
+}
+
+test_captain_approval_file_is_refused_while_away() {
+  local case_dir rc head=a409a409a409a409a409a409a409a409a409a40c
+  case_dir=$(make_case captain-approval-away)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  printf 'ship it\n' > "$case_dir/approval"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/97 \
+    --captain-approval-file "$case_dir/approval" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "captain-approval-away: the flag must be refused while away"
+  assert_grep '--captain-approval-file is attended-only' "$case_dir/stderr" \
+    "captain-approval-away: refusal did not name attended-only"
+  assert_no_grep 'pr comment' "$case_dir/gh.log" "captain-approval-away: a comment posted"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "captain-approval-away: the merge ran"
+  pass "fm-pr-merge refuses --captain-approval-file while away"
+}
+
 test_squash_summary_uses_title_and_what_changed
 test_squash_summary_reads_crlf_bodies
 test_squash_summary_falls_back_to_repository_default
 test_squash_summary_caller_commit_text_wins
 test_squash_summary_leaves_gitlab_and_forgejo_untouched
 test_squash_summary_ignores_headings_inside_code_fences
+test_captain_approval_file_posts_the_approval_before_the_merge
+test_captain_approval_file_failed_post_refuses_the_merge
+test_captain_approval_file_bad_file_refuses_before_the_forge
+test_captain_approval_file_is_refused_while_away
