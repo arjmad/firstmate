@@ -603,7 +603,7 @@ test_a_new_row_naming_a_known_path_gets_a_similar_hint() {
   ! grep -q 'noticed-doc-drift' "$home/hint.err" || fail "a row naming another path was hinted"
   # A path inside a longer one is a different file.
   noticed "$home" file noticed doc-backup --title "Backup copy stale" --why "y" --from t2 --repo firstmate \
-    --evidence "other/docs/scripts.md and docs/scripts.md.bak" > /dev/null 2> "$home/longer.err" \
+    --evidence "other/docs/scripts.md, docs/scripts.md.bak, docs/scripts.md-old and docs/scripts.md.1" > /dev/null 2> "$home/longer.err" \
     || fail "the longer-path filing failed"
   ! grep -q 'noticed-doc-drift' "$home/longer.err" || fail "a longer path was hinted as the same file: $(cat "$home/longer.err")"
   noticed "$home" file noticed doc-again --title "Scripts row wrong" --why "y" --from t2 --repo firstmate \
