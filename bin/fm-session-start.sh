@@ -531,7 +531,8 @@ strip_axi_help() {
 # docs/fork-decisions/2026-11-11-calls-grouped-by-what-it-takes.md for captain
 # calls (board, place, quick, hands) and the hold kind for the rest, each split
 # by Batch: tag or repo. A held row that the in-flight or blocked group already
-# prints is not printed twice. The ready group keeps id, kind, repo and due date.
+# prints is not printed twice. The ready group is counted, as
+# print_ready_queued_bounded says.
 #
 # "Live" is bin/fm-fleet-snapshot.sh's hold_bucket "live", read from the same
 # structured fields: a captain hold that is not blocked, whose hold_until is

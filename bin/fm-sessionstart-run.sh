@@ -163,14 +163,23 @@ run_digest() {
   esac
   dir="$STATE/.digest-read"
   copy="$dir/$SESSION_ID.txt"
-  if ! mkdir -p "$dir" 2>/dev/null || ! : > "$copy" 2>/dev/null; then
+  # The digest is written to a partial file and renamed onto the copy its cue
+  # names only once it is complete, so a reader of the saved copies, such as
+  # bin/fm-startup-memory-budget.sh report, never measures one still being
+  # written.
+  out="$dir/.$SESSION_ID.partial"
+  if ! mkdir -p "$dir" 2>/dev/null || ! : > "$out" 2>/dev/null; then
     "$SCRIPT_DIR/fm-session-start.sh" "$@" || true
     return 0
   fi
-  # The digest writes the file it only names in its cue, so out is the same path.
-  out=$copy
   FM_SESSION_START_DIGEST_COPY="$copy" "$SCRIPT_DIR/fm-session-start.sh" "$@" > "$out" || true
-  cat "$out"
+  if ! mv -f "$out" "$copy" 2>/dev/null; then
+    # Unpublished, so nothing arms: the check fails open on a missing copy.
+    cat "$out"
+    rm -f "$out" 2>/dev/null || true
+    return 0
+  fi
+  cat "$copy"
   "$SCRIPT_DIR/fm-digest-read-check.sh" arm "$SESSION_ID" "$copy" >/dev/null 2>&1 || true
 }
 
