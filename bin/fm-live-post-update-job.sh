@@ -28,14 +28,9 @@ __fm_job_receipt() {
     && mv -f "$tmp" "$__fm_job_record.job"
 }
 
-{ printf '%s %s\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  LC_ALL=C TZ=UTC0 ps -p "$$" -o lstart=; } > "$__fm_job_record.running.tmp.$$" 2>/dev/null \
-  && mv -f "$__fm_job_record.running.tmp.$$" "$__fm_job_record.running"
-
 if ! __fm_job_cmd=$(cat "$__fm_job_record.job.cmd" 2>/dev/null) || [ -z "$__fm_job_cmd" ]; then
   echo "fm-live-post-update-job: no command at $__fm_job_record.job.cmd" > "$__fm_job_record.job.log"
   __fm_job_receipt 126
-  rm -f "$__fm_job_record.running"
   exit 0
 fi
 # Sourced at top level so each declare -x stays global; a read-only variable
@@ -45,6 +40,10 @@ if [ -f "$__fm_job_record.job.env" ]; then
   . "$__fm_job_record.job.env" 2>/dev/null
   rm -f "$__fm_job_record.job.env"
 fi
+# Only once its inputs are read: the sync keeps another sync off them until then.
+{ printf '%s %s\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  LC_ALL=C TZ=UTC0 ps -p "$$" -o lstart=; } > "$__fm_job_record.running.tmp.$$" 2>/dev/null \
+  && mv -f "$__fm_job_record.running.tmp.$$" "$__fm_job_record.running"
 
 if cd "$__fm_job_dir" 2>/dev/null; then
   bash -c "$__fm_job_cmd" </dev/null > "$__fm_job_record.job.log" 2>&1

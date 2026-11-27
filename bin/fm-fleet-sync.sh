@@ -1337,11 +1337,18 @@ detach_submit() {
       && DETACH_VIA=launchd && return 0
     echo "$label: launchd refused $job; starting the post-update command in its own session instead" >&2
   fi
-  # set -m gives the run its own process group, and the subshell's exit hands
-  # it to init, so neither a group kill nor a process-tree kill reaches it.
-  (cd / && set -m && if command -v setsid >/dev/null 2>&1; then
+  # A new session (setsid, or perl's POSIX::setsid after a fork where the tool
+  # is missing, as on macOS), and the subshell's exit hands it to init, so no
+  # group, session or process-tree kill of the sync reaches it; without either,
+  # set -m and nohup still give it its own process group.
+  # shellcheck disable=SC2016 # perl's own code, not shell expansions
+  (cd / && if command -v setsid >/dev/null 2>&1; then
       setsid "$BASH" "$runner" "$record" "$nonce" "$head" "$proj_abs" </dev/null >"$record.job.launchd.log" 2>&1 &
+    elif command -v perl >/dev/null 2>&1; then
+      perl -MPOSIX -e 'exit 0 if fork; POSIX::setsid() >= 0 or die "setsid: $!"; exec @ARGV or die "exec: $!"' \
+        "$BASH" "$runner" "$record" "$nonce" "$head" "$proj_abs" </dev/null >"$record.job.launchd.log" 2>&1 &
     else
+      set -m
       nohup "$BASH" "$runner" "$record" "$nonce" "$head" "$proj_abs" </dev/null >"$record.job.launchd.log" 2>&1 &
     fi) || return 1
   DETACH_VIA=session
@@ -1374,6 +1381,7 @@ detach_follow() {
     fi
     if [ -f "$record.running" ]; then
       if post_update_still_running "$record.running"; then
+        detach_unlock
         case "$RUNNING_STARTED" in
           ''|*[!0-9]*) ;;
           *) [ $(( $(date +%s) - RUNNING_STARTED )) -le "$POST_UPDATE_STUCK_SECS" ] || return 2 ;;
@@ -1394,6 +1402,46 @@ detach_follow() {
   done
 }
 
+# detach_lock <record>: take the checkout's launch lock, <record>.job.lock,
+# which a sync holds from writing the job's files until its runner is up, so a
+# second sync never rewrites or deletes them under it. One whose holder (its
+# pid file) is gone, or older than DETACH_START_SECS, is a killed launch and is
+# taken over. While another sync holds it, sets DETACH_LEFT=yes and RUNNING_*
+# for an "activating:" line, and is false.
+detach_lock() {
+  local since holder=""
+  DETACH_LOCK="$1.job.lock"
+  if mkdir "$DETACH_LOCK" 2>/dev/null; then
+    echo "$$" > "$DETACH_LOCK/pid" 2>/dev/null || true
+    return 0
+  fi
+  since=$(fm_lock_path_mtime "$DETACH_LOCK" 2>/dev/null) || since=""
+  read -r holder < "$DETACH_LOCK/pid" 2>/dev/null || holder=""
+  case "$since" in
+    ''|*[!0-9]*) ;;
+    *)
+      if [ $(( $(date +%s) - since )) -gt "$DETACH_START_SECS" ] \
+          || { [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; }; then
+        rm -rf "$DETACH_LOCK"
+        if mkdir "$DETACH_LOCK" 2>/dev/null; then
+          echo "$$" > "$DETACH_LOCK/pid" 2>/dev/null || true
+          return 0
+        fi
+      fi
+      ;;
+  esac
+  DETACH_LOCK=""
+  RUNNING_PID=starting RUNNING_STARTED=$since DETACH_LEFT=yes
+  RUNNING_SINCE=$(date -u -r "${since:-0}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -d "@${since:-0}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || RUNNING_SINCE=unknown
+  return 1
+}
+
+detach_unlock() {
+  [ -z "${DETACH_LOCK:-}" ] || rm -rf "$DETACH_LOCK" 2>/dev/null || true
+  DETACH_LOCK=""
+}
+
 # run_detached_post_update <record> <command> <key>: one post-update=detached
 # run, followed to its end; sets rc and output as the inline run does, output
 # being the run's own log, which stays beside its record. Sets DETACH_LEFT=yes
@@ -1406,6 +1454,7 @@ run_detached_post_update() {
   head=$(git -C "$PROJ" rev-parse HEAD 2>/dev/null) || head=unknown
   nonce="$(date +%s).$$.${RANDOM:-0}"
   output="$record.job.log"
+  detach_lock "$record" || return 0
   rm -f "$record.running" "$record.job.env"
   if ! printf '%s\n' "$cmd" > "$record.job.cmd" 2>/dev/null \
       || ! (umask 077 && export -p > "$record.job.env") 2>/dev/null; then
@@ -1414,18 +1463,22 @@ run_detached_post_update() {
     detach_submit "$record" "$nonce" "$head" "$job" || submitted=$?
   fi
   if [ "$submitted" = 2 ]; then
+    detach_unlock
     rm -f "$record.job.env"
     RUNNING_PID=$(detach_launchd_pid "$job") || RUNNING_PID=unknown
-    RUNNING_SINCE="its launchd start" RUNNING_STARTED="" DETACH_LEFT=yes
+    RUNNING_STARTED=$(fm_lock_path_mtime "$record.job.plist" 2>/dev/null) || RUNNING_STARTED=""
+    RUNNING_SINCE="its launchd start" DETACH_LEFT=yes
     return 0
   fi
   if [ "$submitted" != 0 ]; then
+    detach_unlock
     rm -f "$record.job.env"
     printf 'fm-fleet-sync: could not submit the detached post-update run\n' > "$output" 2>/dev/null || output=/dev/null
     rc=125
     return 0
   fi
   detach_follow "$record" "$nonce" || followed=$?
+  detach_unlock
   if [ "$followed" = 2 ]; then
     DETACH_LEFT=yes
     return 0

@@ -2050,6 +2050,28 @@ test_detached_first_sighting_killed_then_failed_is_retried() {
   pass "a first-sighting run whose sync was killed and which then failed is retried by the next sync"
 }
 
+test_detached_launch_lock_defers_then_is_taken_over() {
+  local home live out rec
+  home=$(isolated_home)
+  live=$(build_detached_live "$home" locked)
+  live_config "$home" "locked $live post-update=detached $home/job-locked.sh"
+  run_sync "$home" locked >/dev/null
+  advance_origin "$home" locked C1
+  rec="$home/state/live-checkouts/$(printf '%s' "$(cd "$live" && pwd -P)" | git hash-object --stdin)"
+  mkdir "$rec.job.lock"
+  echo "$$" > "$rec.job.lock/pid"
+  out=$(FM_LIVE_POST_UPDATE_LAUNCHCTL=none FM_LIVE_POST_UPDATE_POLL_SECS=0.1 run_sync "$home" locked)
+  assert_contains "$out" "locked live $live: activating: post-update command already running (pid starting, since " \
+    "a launch a live sync holds reads activating"
+  assert_equals 0 "$(runs_of "$home/runs-locked")" "no second launch starts under it"
+  touch -t 202001010000 "$rec.job.lock"
+  out=$(FM_LIVE_POST_UPDATE_LAUNCHCTL=none FM_LIVE_POST_UPDATE_POLL_SECS=0.1 run_sync "$home" locked)
+  assert_contains "$out" "locked live $live: post-update command ran" "a launch lock older than the start bound is taken over"
+  [ ! -e "$rec.job.lock" ] || fail "the launch lock is released once the run is up"
+  assert_equals 1 "$(runs_of "$home/runs-locked")" "the command ran once"
+  pass "a launch lock a live sync holds defers the launch as activating; a stale one, or a dead holder's, is taken over"
+}
+
 # wait_for_receipt <live> <home>: wait until the checkout's detached run wrote its receipt.
 wait_for_receipt() {
   local rec i=0
@@ -2142,6 +2164,7 @@ test_detached_post_update_failure_is_stuck_and_retried
 test_detached_post_update_uses_a_launchd_one_shot
 test_detached_post_update_follow_is_bounded
 test_detached_first_sighting_killed_then_failed_is_retried
+test_detached_launch_lock_defers_then_is_taken_over
 test_scheduled_stuck_episode_wakes_once
 test_running_post_update_reports_activating
 test_foreign_live_activation_reports_activating
