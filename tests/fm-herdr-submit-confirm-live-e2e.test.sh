@@ -341,7 +341,7 @@ if command -v systemd-run >/dev/null 2>&1 \
     [ "$verdict" != send-failed ] \
       || fail "Claude Code ($VERSION) on $HERDR_VER, starved: steer $n was judged unsent (send-failed)"
     sleep 3
-    if fm_backend_herdr_payload_held "$TARGET2" "$ST_TEXT"; then
+    if [ "$(fm_composer_claude_after_enter fm_backend_herdr_composer_content "$TARGET2" "$ST_TEXT")" = pending ]; then
       fail "Claude Code ($VERSION) on $HERDR_VER, starved: steer $n was left typed but unsubmitted (verdict '$verdict')"
     fi
     landed=0

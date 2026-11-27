@@ -2018,6 +2018,33 @@ test_quoted_exit_picker_text_is_not_a_dialog() {
   pass "picker text quoted above a normal composer is not read as a live picker"
 }
 
+# A content read that fails once (a capture mid-redraw) and then shows the
+# payload, as a CPU-starved Claude can render it.
+fm_test_flaky_content() {  # <target>
+  local n
+  n=$(($(cat "$FM_TEST_FLAKY_READS") + 1))
+  printf '%s' "$n" > "$FM_TEST_FLAKY_READS"
+  [ "$n" -gt 1 ] || return 1
+  printf 'steer text'
+}
+
+test_payload_proof_survives_a_failed_read() {
+  local rc
+  FM_TEST_FLAKY_READS=$(mktemp)
+  printf '0' > "$FM_TEST_FLAKY_READS"
+  FM_COMPOSER_PROOF_POLLS=3 FM_COMPOSER_PROOF_INTERVAL=0 \
+    fm_composer_await_payload fm_test_flaky_content win 'steer text'; rc=$?
+  [ "$rc" -eq 0 ] || fail "a failed read must not end the payload proof, rc=$rc after $(cat "$FM_TEST_FLAKY_READS") reads"
+  printf '0' > "$FM_TEST_FLAKY_READS"
+  FM_COMPOSER_PROOF_POLLS=1 FM_COMPOSER_PROOF_INTERVAL=0 \
+    fm_composer_await_payload fm_test_flaky_content win 'steer text'; rc=$?
+  [ "$rc" -eq 1 ] || fail "a failed read on the last poll must still refuse, rc=$rc"
+  rm -f "$FM_TEST_FLAKY_READS"
+  unset FM_TEST_FLAKY_READS
+  pass "a failed composer read counts against the payload proof's polls instead of ending it"
+}
+
+test_payload_proof_survives_a_failed_read
 test_background_exit_picker_stays_pending_and_blocks_retry
 test_dialog_heading_and_footer_must_be_the_recorded_lines
 test_dialog_note_skips_the_match_when_no_sink_is_set

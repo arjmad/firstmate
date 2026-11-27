@@ -318,11 +318,12 @@ fm_pane_is_busy() {  # <target> [harness]
 # [busy-harness] scopes every busy read to one harness signature; the submit
 # core passes polytoken for a pane whose composer identity is polytoken (its
 # `Running for` row is outside the harness-less union) and nothing otherwise.
-# [claude-proof] 1 marks a Claude pane, which clears its composer whenever it
-# takes an Enter, queued or not (fm_backend_herdr_payload_held owns that
-# evidence), so a pending composer there gets no queued-Enter conversion.
-fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle] [busy-harness] [claude-proof]
-  local target=$1 retries=$2 sleep_s=$3 baseline_idle=${4:-} busy_harness=${5:-} claude_proof=${6:-} i=0 j state busy_state
+# [claude-payload] marks a Claude pane and carries the text just typed. Claude
+# clears its composer whenever it takes an Enter, queued or not, so there
+# fm_composer_claude_after_enter decides each Enter from the composer's
+# content, and neither the busy-footer nor the queued-Enter conversion applies.
+fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle] [busy-harness] [claude-payload]
+  local target=$1 retries=$2 sleep_s=$3 baseline_idle=${4:-} busy_harness=${5:-} claude_text=${6:-} i=0 j state busy_state
   while :; do
     tmux send-keys -t "$target" Enter 2>/dev/null || true
     sleep "$sleep_s"
@@ -331,6 +332,10 @@ fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle
     if fm_composer_blocking_dialog_noted >/dev/null; then
       printf 'unknown'
       return 0
+    fi
+    if [ -n "$claude_text" ]; then
+      state=$(fm_composer_claude_after_enter fm_tmux_composer_content "$target" "$claude_text")
+      [ "$state" = pending ] || { printf '%s' "$state"; return 0; }
     fi
     case "$state" in
       pending|pending-unproven) ;;
@@ -354,7 +359,7 @@ fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle
     i=$((i + 1))
     [ "$i" -lt "$retries" ] || break
   done
-  if [ "$state" != pending ] || [ "$claude_proof" = 1 ]; then
+  if [ "$state" != pending ] || [ -n "$claude_text" ]; then
     printf '%s' "$state"
     return 0
   fi
@@ -416,7 +421,7 @@ fm_tmux_send_key() {  # <target> <key>
 # empty (send-failed), or reported unknown when the clear cannot be verified.
 fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
   local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 baseline_idle='' baseline_state err busy_harness
-  local proof='' content
+  local claude_text='' content
   # The turn-started baseline must predate our own typing: a pane already
   # busy before the text lands can turn "busy" for reasons unrelated to our
   # Enter, so only a clean idle-to-busy transition may confirm a submit.
@@ -424,7 +429,7 @@ fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
   baseline_state=$(fm_pane_busy_state "$target" "$busy_harness")
   [ "$baseline_state" = idle ] && baseline_idle=1
   if fm_tmux_pane_is_claude "$target"; then
-    proof=1
+    claude_text=$text
     content=$(fm_tmux_composer_content "$target") || { printf 'send-failed'; return 0; }
     [ -z "${content//[$' \t\r\n\v\f']/}" ] || { printf 'send-failed'; return 0; }
   fi
@@ -436,7 +441,7 @@ fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
     return 0
   fi
   sleep "$settle"
-  if [ "$proof" = 1 ] && ! fm_composer_await_payload fm_tmux_composer_content "$target" "$text"; then
+  if [ -n "$claude_text" ] && ! fm_composer_await_payload fm_tmux_composer_content "$target" "$text"; then
     if fm_composer_clear fm_tmux_send_key fm_tmux_composer_state "$target" "$text"; then
       printf 'send-failed'
     else
@@ -444,5 +449,5 @@ fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
     fi
     return 0
   fi
-  fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s" "$baseline_idle" "$busy_harness" "$proof"
+  fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s" "$baseline_idle" "$busy_harness" "$claude_text"
 }

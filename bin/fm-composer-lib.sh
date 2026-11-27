@@ -2647,17 +2647,47 @@ fm_composer_payload_shown() {  # <text> <after>
 # Ctrl+U or Enter sent before that block lands is applied to the empty
 # composer first and the block then lands after it, so one read at the caller's
 # settle judged a slow payload unsent, "cleared" it before it landed, and left
-# the whole steer typed but unsubmitted. 0 once shown; 1 when the budget ends
-# or the read fails.
+# the whole steer typed but unsubmitted. A failed read (a capture taken
+# mid-redraw) only spends one poll. 0 once shown; 1 when the budget ends.
 FM_COMPOSER_PROOF_POLLS=${FM_COMPOSER_PROOF_POLLS:-25}
 FM_COMPOSER_PROOF_INTERVAL=${FM_COMPOSER_PROOF_INTERVAL:-0.2}
 fm_composer_await_payload() {  # <content-fn> <target> <text>
   local content_fn=$1 target=$2 text=$3 i=0 content
   while :; do
-    content=$("$content_fn" "$target") || return 1
-    fm_composer_payload_shown "$text" "$content" && return 0
+    if content=$("$content_fn" "$target"); then
+      fm_composer_payload_shown "$text" "$content" && return 0
+    fi
     i=$((i + 1))
     [ "$i" -lt "$FM_COMPOSER_PROOF_POLLS" ] || return 1
+    sleep "$FM_COMPOSER_PROOF_INTERVAL"
+  done
+}
+
+# fm_composer_claude_after_enter: whether a Claude composer took an Enter.
+# Claude clears its composer whenever it takes an Enter, whether it starts the
+# turn or queues it behind a running one (live, Claude 2.1.332 on Herdr 0.9.5:
+# empty 0.3 s after Enter, idle and mid-turn alike), which is why a Claude
+# submit gets no queued-Enter conversion. So `empty` needs a read of a cleared
+# composer; `pending` means it still shows
+# <text>, so the Enter may be retried; `unknown` means no read succeeded in
+# FM_COMPOSER_AFTER_ENTER_READS tries, or the composer shows other text, which
+# a retried Enter must not submit.
+FM_COMPOSER_AFTER_ENTER_READS=${FM_COMPOSER_AFTER_ENTER_READS:-3}
+fm_composer_claude_after_enter() {  # <content-fn> <target> <text> -> empty|pending|unknown
+  local content_fn=$1 target=$2 text=$3 i=0 content
+  while :; do
+    if content=$("$content_fn" "$target"); then
+      if fm_composer_payload_shown "$text" "$content"; then
+        printf 'pending'
+      elif [ -z "${content//[$' \t\r\n\v\f']/}" ]; then
+        printf 'empty'
+      else
+        printf 'unknown'
+      fi
+      return 0
+    fi
+    i=$((i + 1))
+    [ "$i" -lt "$FM_COMPOSER_AFTER_ENTER_READS" ] || { printf 'unknown'; return 0; }
     sleep "$FM_COMPOSER_PROOF_INTERVAL"
   done
 }

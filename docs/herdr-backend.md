@@ -689,7 +689,9 @@ When native `agent get` identity is Claude, the adapter types only into an empty
 A Claude composer that already holds text, or cannot be read, before the send is refused with nothing typed.
 Before that Enter, the adapter continues only when the selected composer shows the typed payload, or only Claude paste placeholders with no literal remainder.
 The proof polls for that payload for up to about five seconds (`FM_COMPOSER_PROOF_POLLS` reads `FM_COMPOSER_PROOF_INTERVAL` seconds apart), because a CPU-starved Claude inserts a typed burst as one block seconds after the bytes arrive, and a Ctrl+U or Enter sent before that block lands is applied first.
-After Enter, delivery on a Claude pane needs a composer that no longer shows the payload, whatever the native state says, and a Claude submit gets no queued-Enter conversion, because Claude clears its composer whenever it takes an Enter, queued or not.
+After Enter, delivery on a Claude pane needs a read of a cleared composer, whatever the native state says, and a Claude submit gets no queued-Enter conversion, because Claude clears its composer whenever it takes an Enter, queued or not.
+A composer that still shows the payload gets Enter again.
+One that cannot be read in three tries, or shows other text, reports `unknown` and gets no further Enter (`fm_composer_claude_after_enter`).
 The tmux submit core applies the same proof to a Claude pane; the rules live once in [`bin/fm-composer-lib.sh`](../bin/fm-composer-lib.sh) ("Claude payload proof").
 Dated measurement: docs/verification/runtime-backends.md "Claude payload proof on a starved pane".
 Every herdr adapter composer read (`fm_backend_herdr_composer_state`, `fm_backend_herdr_composer_content`) captures the full visible viewport, never a bounded tail.

@@ -95,6 +95,7 @@ The supervisor guard selects only the detected primary harness's signature rathe
 It types a message once and retries Enter only until the composer clears.
 Only a proven empty composer is a positive delivery acknowledgement.
 On a Claude pane it follows the Claude composer proof that [`herdr-backend.md`](herdr-backend.md#claude-composer-proof) owns: nothing is typed onto a leftover draft, and Enter waits until the composer shows exactly the typed text.
+Delivery there needs a read of a cleared composer, so neither the turn-started busy-footer confirmation nor the queued-Enter conversion applies to a Claude pane.
 Text left in established structure remains `pending`, text in ambiguous structure remains unproven, and unreadable or unsafe state remains unknown.
 An ordinary local `fm-send.sh` text steer and every remote text steer no longer ride this verified submit at all: they become durable steering-inbox records plus best-effort constant doorbell lines (`bin/fm-task-inbox-lib.sh`).
 The verdicts above are delivery-critical only for the local typed plane - harness-native invocations and explicit backend targets - where `fm-send.sh` still never retypes or assumes a confirmed submit for an unconfirmed verdict; its header owns the distinct delivered-unconfirmed exit status and operator response.

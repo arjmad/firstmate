@@ -3504,7 +3504,7 @@ fm_backend_herdr_rendered_busy_state() {  # <target> [harness] -> busy|idle|unkn
 # fm_composer_queued_enter_verdict confirms delivery. When native identity is
 # Claude, text is typed only into an empty composer, Enter is sent only once
 # the composer shows the payload (fm_composer_await_payload), and delivery
-# needs a composer that no longer shows it (fm_backend_herdr_payload_held).
+# needs a read of a cleared composer (fm_composer_claude_after_enter).
 # A missing read, a shorter suffix, or a paste placeholder followed by a
 # literal remainder does not press Enter: the composer is cleared back to
 # empty and the verdict is send-failed, or unknown when the clear cannot be
@@ -3683,12 +3683,12 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
         "$confirm_sleep" "$FM_BACKEND_HERDR_SUBMIT_POLLS")
       case "$verdict" in
         busy)
-          # A Claude composer that still shows the payload did not take this
-          # Enter, whatever the native state says; the read below retries it.
-          if [ "$proof" != 1 ] || ! fm_backend_herdr_payload_held "$target" "$text"; then
-            printf 'empty'
-            return 0
-          fi
+          # On Claude a working status is delivery only with a cleared
+          # composer; one that still shows the payload did not take this
+          # Enter, and the read below retries it.
+          [ "$proof" = 1 ] || { printf 'empty'; return 0; }
+          verdict=$(fm_composer_claude_after_enter fm_backend_herdr_composer_content "$target" "$text")
+          [ "$verdict" = pending ] || { printf '%s' "$verdict"; return 0; }
           ;;
         unknown) printf 'unknown'; return 0 ;;
       esac
@@ -3736,19 +3736,6 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
       return 0
     fi
   done
-}
-
-# fm_backend_herdr_payload_held: 0 when a Claude composer still shows <text>.
-# Claude clears its composer when it takes an Enter, whether it starts the
-# turn or queues it behind a running one (live, Claude 2.1.332 on Herdr 0.9.5:
-# empty 0.3 s after Enter, idle and mid-turn alike), so a composer that still
-# shows the payload after Enter means the Enter was not taken. That is why a
-# Claude submit gets no queued-Enter conversion. An unreadable composer is not
-# proof of either.
-fm_backend_herdr_payload_held() {  # <target> <text>
-  local content
-  content=$(fm_backend_herdr_composer_content "$1") || return 1
-  fm_composer_payload_shown "$2" "$content"
 }
 
 # fm_backend_herdr_kill: remove the task's pane, best-effort (mirrors

@@ -416,7 +416,8 @@ test_typed_submit_on_open_exit_picker_types_nothing() {
 # reports the pane's foreground process as `.claude-wrapped`, the Nix-wrapped
 # name) and draws Claude's composer between two rules. Typed text lands in the
 # composer unless FM_FAKE_DROP_TYPED is set; Ctrl+U empties it; Enter empties
-# it unless $FM_FAKE_SWALLOW exists.
+# it unless $FM_FAKE_SWALLOW exists, and blanks the whole screen (no composer
+# to read) when FM_FAKE_ENTER_BLANKS is set.
 make_claude_submit_mock() {
   local dir=$1 fakebin="$1/fakebin"
   mkdir -p "$fakebin"
@@ -445,7 +446,11 @@ case "${1:-}" in
         -l) literal=1 ;;
         Enter)
           printf 'Enter\n' >> "$FM_FAKE_SENT"
-          [ -f "${FM_FAKE_SWALLOW:-/nonexistent}" ] || draw '' ;;
+          if [ -n "${FM_FAKE_ENTER_BLANKS:-}" ]; then
+            : > "$COMPOSER"
+          elif [ ! -f "${FM_FAKE_SWALLOW:-/nonexistent}" ]; then
+            draw ''
+          fi ;;
         C-u) printf 'C-u\n' >> "$FM_FAKE_SENT"; draw '' ;;
         *)
           if [ "$literal" = 1 ]; then
@@ -526,8 +531,21 @@ test_claude_swallowed_enter_while_busy_is_not_queued() {
   pass "fm_tmux_submit_core: on Claude a held payload after Enter retries stays pending"
 }
 
+# A busy footer after an idle baseline confirms other harnesses' turns, but on
+# Claude delivery needs a read of a cleared composer.
+test_claude_unreadable_composer_after_enter_is_unknown() {
+  local dir="$TMP_ROOT/claude-enter-blank"
+  mkdir -p "$dir"
+  claude_submit "$dir" '' 'Reply with exactly PONG' FM_FAKE_ENTER_BLANKS=1 FM_FAKE_PANE_BUSY=1
+  [ "$(cat "$dir/verdict")" = unknown ] \
+    || fail "a Claude composer that cannot be read after Enter must not confirm delivery, got '$(cat "$dir/verdict")'"
+  [ "$(grep -c '^Enter$' "$dir/sent")" -eq 1 ] || fail "an unconfirmed Enter must not be retried, sent: $(cat "$dir/sent")"
+  pass "fm_tmux_submit_core: on Claude an unreadable composer after Enter is unknown, not a busy-footer delivery"
+}
+
 test_claude_leftover_is_refused_before_typing
 test_claude_shown_payload_submits_and_clears
+test_claude_unreadable_composer_after_enter_is_unknown
 test_claude_unshown_payload_gets_no_enter
 test_claude_swallowed_enter_while_busy_is_not_queued
 test_typed_submit_on_open_exit_picker_types_nothing
