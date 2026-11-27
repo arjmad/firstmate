@@ -66,7 +66,7 @@ Do not mention a filed item in your next reply, unless it is a NOW item or bears
 ## Monday: sweep and triage
 
 The jobs launcher's Monday `[open-items]` note dispatches the open-items sweep scout.
-Add four duties to that scout's brief:
+Add five duties to that scout's brief:
 
 - **Noticed re-check.** Re-check every open noticed item (`bin/fm-noticed.sh list noticed`) against live state.
   Firstmate closes one fixed elsewhere with `bin/fm-noticed.sh close <id> --evidence <what fixed it>`, fixes a routine one under Acting first, and carries to the triage any item still broken 7 days or more after its `created` date that needs his call, with the recommended fix.
@@ -75,9 +75,10 @@ Add four duties to that scout's brief:
 - **Usage.** Run `node ~/code/apps/apps/launchpad/server/usage-summary.js --json --days 7` (Arjun, 2026-11-25, a4-02): per kind, its `never` lists the desk's fixed surfaces with no use that week and its `quiet` lists those used before the week but not in it.
   Check each page or whole feature among them against the idea bar below as a "landed but unused" idea candidate, never one idea per tap, and return one triage line: the week's events and active days, the never and quiet counts, and at most five page-level names.
   When the script fails or is missing, return that line as `usage summary unavailable: <reason>` instead.
+- **Effort split.** Run this home's `bin/fm-effort-split.sh` by its absolute path (Arjun, 2026-11-27, `docs/fork-decisions/2026-11-27-effort-class-split.md`) and return the one line it prints, last week's shipped work by `Class:` line against the target; when it fails, return `effort split unavailable: <reason>` instead.
 
 The weekly `triage-weekly` backlog row is where the result reaches him.
-Open it with a "Handled for you" list: one line per `fixed` or `dropped` row of `bin/fm-noticed.sh unseen`, naming the item, what changed or why it was dropped, and the PR URL of a fix, followed by the sweep's usage line.
+Open it with a "Handled for you" list: one line per `fixed` or `dropped` row of `bin/fm-noticed.sh unseen`, naming the item, what changed or why it was dropped, and the PR URL of a fix, followed by the sweep's usage and effort split lines.
 Then bring only the items from `unseen` and the sweep that need his call, each with a recommendation and a one-tap answer and each passing idea in one line, and park everything else.
 Then add a "Waiting 2+ weeks" section (Arjun, 2026-11-11, rule 3): one line per call `bin/fm-noticed.sh waiting` prints, a call held 14 days with no date, each with Keep, Drop or a date.
 No call is re-asked or closed by itself: Keep leaves it in its group, Drop closes it through `bin/fm-captain-hold.sh answer`, and a date defers it through `defer`, each only on his answer.
