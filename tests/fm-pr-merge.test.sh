@@ -1115,6 +1115,82 @@ test_later_rulings_are_listed_without_blocking_the_merge() {
   pass "a ruling dated after the recorded approval is listed at registration and noted at merge, dated by the Resolved at stamp or, without one, the prose date, and the merge still lands"
 }
 
+# A task's home patch (bin/fm-home-patch.sh, audit a1-61) prints as note: lines
+# before the forge merge and is applied once an attended merge lands; a failed
+# merge, an away merge and a companion PR leave it unapplied.
+write_home_patch_fixture() {  # <case_dir>
+  local home="$1/home"
+  printf '%s\n' 'old learning' > "$home/data/learnings.md"
+  printf '%s\n' 'new learning' > "$1/learnings.edit"
+  FM_HOME="$home" bash "$ROOT/bin/fm-home-patch.sh" add task-x1 data/learnings.md "$1/learnings.edit" >/dev/null 2>&1 \
+    || fail "home-patch: could not write the fixture patch"
+}
+
+test_home_patch_is_noted_then_applied_after_an_attended_merge() {
+  local case_dir rc
+  case_dir=$(make_case home-patch-attended)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" abababababababababababababababababababab
+  write_home_patch_fixture "$case_dir"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/961 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "home-patch-attended: the merge should succeed: $(cat "$case_dir/stderr")"
+  assert_grep 'note: +new learning' "$case_dir/stderr" "home-patch-attended: the diff was not noted"
+  assert_grep 'note: home-patch: task-x1: applies cleanly' "$case_dir/stderr" \
+    "home-patch-attended: the note carried no verdict"
+  assert_grep 'home-patch: task-x1: applied to data/learnings.md' "$case_dir/stdout" \
+    "home-patch-attended: the merge did not apply the patch"
+  grep -qx 'new learning' "$case_dir/home/data/learnings.md" || fail "home-patch-attended: the home file was not patched"
+  grep -q '^digest=' "$case_dir/home/data/task-x1/home-patch.shown" \
+    || fail "home-patch-attended: the attended merge did not record the digest it showed"
+  assert_logged_gh_merge "$case_dir" 961 example/repo --squash
+  pass "an attended merge notes the home patch before the forge and applies it after"
+}
+
+test_home_patch_waits_on_a_failed_away_or_companion_merge() {
+  local case_dir rc url=https://github.com/example/repo/pull/962
+  case_dir=$(make_case home-patch-failed)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks_merge_fails "$case_dir"
+  write_home_patch_fixture "$case_dir"
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$url" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "home-patch-failed: the merge should fail"
+  grep -qx 'old learning' "$case_dir/home/data/learnings.md" || fail "home-patch-failed: a failed merge applied the patch"
+
+  case_dir=$(make_case home-patch-away)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" acacacacacacacacacacacacacacacacacacacac
+  printf '\nyolo=on\n' >> "$case_dir/state/task-x1.meta"
+  write_away_record "$case_dir"
+  write_home_patch_fixture "$case_dir"
+  run_pr_merge "$case_dir" task-x1 "$url" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "home-patch-away: the away merge should succeed: $(cat "$case_dir/stderr")"
+  assert_grep "actionable: merged $url under away authority, so its home patch data/task-x1/home-patch.md stays unapplied" \
+    "$case_dir/stderr" "home-patch-away: no actionable line named the pending patch"
+  grep -qx 'old learning' "$case_dir/home/data/learnings.md" || fail "home-patch-away: an away merge applied the patch"
+  [ ! -e "$case_dir/home/data/task-x1/home-patch.shown" ] \
+    || fail "home-patch-away: an away merge recorded a digest nobody reviewed"
+
+  case_dir=$(make_case home-patch-companion)
+  mkdir -p "$case_dir/wt"
+  fm_git_init_commit "$case_dir/jobs-wt"
+  printf '%s\n' "pr=$url" "also=jobs" "also_worktree_jobs=$case_dir/jobs-wt" \
+    "also_project_jobs=$case_dir/jobs" "also_pr_jobs=https://github.com/example/jobs/pull/967" >> "$case_dir/state/task-x1.meta"
+  add_gh_mocks "$case_dir" adadadadadadadadadadadadadadadadadadadad
+  write_home_patch_fixture "$case_dir"
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/jobs/pull/967 > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "home-patch-companion: the companion merge should succeed: $(cat "$case_dir/stderr")"
+  assert_no_grep 'home-patch: task-x1' "$case_dir/stderr" "home-patch-companion: a companion merge noted the task's patch"
+  grep -qx 'old learning' "$case_dir/home/data/learnings.md" || fail "home-patch-companion: a companion merge applied the patch"
+  pass "a failed, away or companion merge leaves the home patch unapplied"
+}
+
 # A companion PR recorded on the task (fm-pr-check.sh --also) merges under the
 # same gates without rebinding the task's own PR or reporting the task landed,
 # while any other unrecorded PR stays refused as before.
@@ -4202,6 +4278,8 @@ test_github_agreeing_queue_rules_keep_retry_guidance
 test_github_conflicting_queue_rules_report_ambiguity
 test_verified_merge_records_pr_and_head
 test_later_rulings_are_listed_without_blocking_the_merge
+test_home_patch_is_noted_then_applied_after_an_attended_merge
+test_home_patch_waits_on_a_failed_away_or_companion_merge
 test_recorded_companion_pr_merges_without_rebinding_the_task
 test_pr_metadata_is_recorded_before_the_forge_call
 test_merge_failure_propagates_after_recording

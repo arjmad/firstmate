@@ -163,6 +163,15 @@
 # task's workspace-trust entry for a launch directory this teardown retired
 # leaves the Claude store at the same point, through
 # bin/fm-claude-store-prune.sh --path.
+# Home patch (audit a1-61): once the record is gone, a non-forced ship teardown
+# prints bin/fm-home-patch.sh show for a data/<id>/home-patch.md still pending
+# and applies it with apply --shown, so only the digest an attended merge
+# showed the helm lands, when the task's merge was recorded
+# (state/<id>.pr-poll-merge-notified), no away record (or legacy state/.afk)
+# exists and the main session is the actor; that script owns the format and
+# what a patch may change. A pending patch it does not apply, a local-only
+# ship's included, is filed once as the routine noticed row
+# noticed-home-patch-<id>, and nothing here fails the teardown.
 # Companion worktrees (fork patch, docs/fork-decisions.md 2026-10-14): a ship
 # spawned with bin/fm-spawn.sh --also records also=<repos> with
 # also_worktree_<repo>= and also_project_<repo>= per repo, and
@@ -1549,6 +1558,13 @@ elif [ "$TREEHOUSE_SLOT_LOCK_REQUIRED" = 1 ]; then
 fi
 MODE=$(grep '^mode=' "$META" | cut -d= -f2- || true)
 [ -n "$MODE" ] || MODE=no-mistakes
+# Whether this ship's merge was recorded, read now because cleanup removes the
+# record; the home-patch step after the record goes reads it (see the header).
+TEARDOWN_HOME_PATCH_MERGED=0
+if [ "$KIND" = ship ] && [ -f "$STATE/$ID.pr-poll-merge-notified" ] \
+  && [ ! -L "$STATE/$ID.pr-poll-merge-notified" ]; then
+  TEARDOWN_HOME_PATCH_MERGED=1
+fi
 BASE_BRANCH=$(grep '^base_branch=' "$META" | cut -d= -f2- || true)
 
 # A record accepted as a legacy incarnation (no spawn_gen, and either
@@ -5077,6 +5093,44 @@ fi
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi
+# A ship's home patch (see the header) is applied here, once the record is gone;
+# one left unapplied is filed as a routine noticed row so the helm sees it.
+teardown_home_patch() {
+  local pending='' slug filed shown rc=0
+  [ "$KIND" = ship ] && [ "$FORCE" != --force ] && [ -d "$STATE" ] || return 0
+  shown=$(FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-home-patch.sh" show "$ID" 2>&1 </dev/null) || rc=$?
+  case "$rc" in 3|4) return 0 ;; esac
+  if [ "$MODE" = local-only ]; then
+    pending="a local-only ship records no merge, so the helm applies it by hand after review"
+  elif [ "$TEARDOWN_HOME_PATCH_MERGED" != 1 ]; then
+    pending="no merge of its PR was recorded"
+  elif [ "$(FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-afk-contract.sh" mode 2>/dev/null)" = away ] \
+    || { [ -e "$STATE/.afk" ] && [ "$(fm_afk_mode "$STATE")" = away ]; }; then
+    pending="an away record exists, so nobody reviewed it"
+  elif [ "$(fm_lease_actor 2>/dev/null)" = branch ]; then
+    pending="the supervision branch ran this teardown, so the helm did not review it"
+  else
+    # Only the digest an attended merge showed the helm is applied here; a
+    # patch that appeared or changed after that waits for the helm's review.
+    printf '%s\n' "$shown"
+    if [ "$rc" -ne 0 ] \
+      || ! FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-home-patch.sh" apply "$ID" --shown </dev/null; then
+      pending="it did not apply (the lines above say why)"
+    fi
+  fi
+  [ -n "$pending" ] || return 0
+  slug=$(printf '%s' "$ID" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+  if filed=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+    "$SCRIPT_DIR/fm-noticed.sh" file noticed "home-patch-$slug" \
+      --title "Home patch for $ID is not applied" \
+      --why "Teardown left data/$ID/home-patch.md unapplied because $pending; review it with bin/fm-home-patch.sh show $ID, apply it only if its work landed, and close this row." \
+      --from teardown --evidence "data/$ID/home-patch.md" </dev/null); then
+    echo "noticed-queue: $filed (home patch left unapplied)"
+  else
+    echo "warning: teardown $ID left its home patch unapplied ($pending) and could not file its noticed row; run bin/fm-home-patch.sh show $ID by hand" >&2
+  fi
+}
+teardown_home_patch || true
 # A secondmate retirement may remove the home containing an overridden control
 # state directory. Do not let the side-band refresh recreate that retired home.
 if [ -d "$STATE" ]; then

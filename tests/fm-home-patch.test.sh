@@ -1,0 +1,349 @@
+#!/usr/bin/env bash
+# bin/fm-home-patch.sh: a ship's home-file change recorded as one diff in
+# data/<id>/home-patch.md, shown with a verdict, and applied once to the home's
+# data/ or config/ - whether the home is a git checkout, nested in one, or
+# neither - while every path or shape it may not change, and a drifted file,
+# changes nothing.
+set -u
+
+# shellcheck source=tests/lib.sh
+# shellcheck disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+TMP_ROOT=$(fm_test_tmproot fm-home-patch)
+PATCHER="$ROOT/bin/fm-home-patch.sh"
+
+make_home() {  # <dir>
+  mkdir -p "$1/data" "$1/config" "$1/state"
+  printf '%s\n' '# Learnings' 'old line' '```' 'fenced' '```' > "$1/data/learnings.md"
+  printf '%s\n' '# read by fm-spawn once worker-compact-window-1112 lands' '400000' > "$1/config/crew-compact-window"
+  printf '%s\n' '# Captain' 'a ruling' > "$1/data/captain.md"
+  printf '%s\n' 'one' > "$1/state/thing"
+}
+
+in_home() {  # <home> <command> [args...]
+  local home=$1
+  shift
+  FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" "$@"
+}
+
+# Records an edit of <rel> whose new content is the rest of the arguments.
+add_edit() {  # <home> <id> <rel> <line>...
+  local home=$1 id=$2 rel=$3 copy
+  shift 3
+  copy="$TMP_ROOT/edit.$$.$RANDOM"
+  printf '%s\n' "$@" > "$copy"
+  in_home "$home" bash "$PATCHER" add "$id" "$rel" "$copy" >/dev/null 2>&1
+}
+
+# Writes a home patch holding exactly <diff-file> in one diff block.
+write_patch() {  # <home> <id> <diff-file>
+  mkdir -p "$1/data/$2"
+  { printf '# Home patch\n\n```diff\n'; cat "$3"; printf '```\n'; } > "$1/data/$2/home-patch.md"
+}
+
+expect_code() {  # <want> <got> <message>
+  [ "$1" = "$2" ] || fail "$3 (exit $2, want $1)"
+}
+
+test_add_show_apply_once() {
+  local home="$TMP_ROOT/once" out rc
+  make_home "$home"
+  add_edit "$home" ship-1 data/learnings.md '# Learnings' 'new line' '```' 'fenced' '```' \
+    || fail "add refused a data/ edit"
+  add_edit "$home" ship-1 config/crew-compact-window '# read by fm-spawn' '400000' \
+    || fail "add refused a config/ edit"
+  grep -qx 'old line' "$home/data/learnings.md" || fail "add edited the live home file"
+  out=$(in_home "$home" bash "$PATCHER" show ship-1 2>&1); rc=$?
+  expect_code 0 "$rc" "show did not report a clean patch"
+  printf '%s\n' "$out" | grep -qx 'home-patch: ship-1: applies cleanly' || fail "show printed no clean verdict: $out"
+  printf '%s\n' "$out" | grep -qx '+new line' || fail "show did not print the diff: $out"
+  out=$(in_home "$home" bash "$PATCHER" apply ship-1 2>&1); rc=$?
+  expect_code 0 "$rc" "apply did not apply a clean patch: $out"
+  printf '%s\n' "$out" | grep -qx 'home-patch: ship-1: applied to data/learnings.md, config/crew-compact-window' \
+    || fail "apply did not name both files: $out"
+  grep -qx 'new line' "$home/data/learnings.md" || fail "the data/ edit did not land"
+  grep -qx '```' "$home/data/learnings.md" || fail "a fence line in the edited text was lost"
+  grep -qx '# read by fm-spawn' "$home/config/crew-compact-window" || fail "the config/ edit did not land"
+  grep -q '^digest=' "$home/data/ship-1/home-patch.applied" || fail "no applied record was written"
+  out=$(in_home "$home" bash "$PATCHER" apply ship-1 2>&1); rc=$?
+  expect_code 3 "$rc" "a second apply was not a no-op"
+  [ -z "$out" ] || fail "a second apply printed something: $out"
+  out=$(in_home "$home" bash "$PATCHER" show ship-1 2>&1)
+  printf '%s\n' "$out" | grep -qx 'home-patch: ship-1: already applied' || fail "show did not say already applied: $out"
+  pass "add records a diff without editing the home, and apply lands it once"
+}
+
+# A file's mode survives the apply, emptying or filling a file stays a content
+# edit, and apply --digest applies only the diff it was shown.
+test_mode_empty_files_and_digest_binding() {
+  local home="$TMP_ROOT/mode" out rc digest
+  make_home "$home"
+  chmod 600 "$home/config/crew-compact-window"
+  : > "$home/data/empty.md"
+  add_edit "$home" ship-5 config/crew-compact-window '# private' || fail "add refused a config/ edit"
+  add_edit "$home" ship-5 data/empty.md 'filled' || fail "add refused filling an empty file"
+  : > "$TMP_ROOT/cleared"
+  in_home "$home" bash "$PATCHER" add ship-5 data/learnings.md "$TMP_ROOT/cleared" >/dev/null 2>&1 \
+    || fail "add refused emptying a file"
+  out=$(in_home "$home" bash "$PATCHER" apply ship-5 --digest 0000000000000000000000000000000000000000 2>&1); rc=$?
+  expect_code 1 "$rc" "apply took a digest it was not shown"
+  printf '%s\n' "$out" | grep -q 'it changed after it was shown' || fail "a digest mismatch was not named: $out"
+  grep -qx '# read by fm-spawn once worker-compact-window-1112 lands' "$home/config/crew-compact-window" \
+    || fail "a digest mismatch changed a file"
+  digest=$(in_home "$home" bash "$PATCHER" show ship-5 2>/dev/null | sed -n 's/^home-patch: ship-5: digest //p')
+  [ -n "$digest" ] || fail "show printed no digest"
+  (umask 022; in_home "$home" bash "$PATCHER" apply ship-5 --digest "$digest" >/dev/null 2>&1); rc=$?
+  expect_code 0 "$rc" "apply refused the digest it was shown"
+  [ "$(cat "$home/config/crew-compact-window")" = '# private' ] || fail "the config/ edit did not land"
+  [ "$(cat "$home/data/empty.md")" = filled ] || fail "an empty file was not filled"
+  [ ! -s "$home/data/learnings.md" ] || fail "a file was not emptied"
+  [ -n "$(find "$home/config/crew-compact-window" -perm 600)" ] || fail "the apply widened a private file's mode"
+  pass "apply keeps each file's mode, edits empty files, and applies only the digest it was shown"
+}
+
+# add writes nothing through a symlink and never publishes a refused block.
+test_add_refuses_symlinks_and_keeps_a_valid_patch() {
+  local home="$TMP_ROOT/addsafe" rc before
+  make_home "$home"
+  mkdir -p "$home/elsewhere" "$home/data/ship-6"
+  ln -s ../../elsewhere/target.md "$home/data/ship-6/home-patch.md"
+  printf '%s\n' 'x' > "$TMP_ROOT/edit-x"
+  in_home "$home" bash "$PATCHER" add ship-6 data/learnings.md "$TMP_ROOT/edit-x" >/dev/null 2>&1; rc=$?
+  expect_code 2 "$rc" "add wrote through a symlinked patch file"
+  [ ! -e "$home/elsewhere/target.md" ] || fail "add created a file through a symlink"
+  add_edit "$home" ship-7 data/learnings.md '# Learnings' 'new line' '```' 'fenced' '```' || fail "add refused"
+  before=$(cat "$home/data/ship-7/home-patch.md")
+  ln -s learnings.md "$home/data/alias.md"
+  in_home "$home" bash "$PATCHER" add ship-7 data/alias.md "$TMP_ROOT/edit-x" >/dev/null 2>&1; rc=$?
+  expect_code 2 "$rc" "add accepted a symlinked target"
+  [ "$before" = "$(cat "$home/data/ship-7/home-patch.md")" ] || fail "a refused add changed a valid patch"
+  pass "add refuses a symlinked patch file or target and leaves a valid patch as it was"
+}
+
+# add refuses a binary edit, which git apply would skip without a word.
+test_binary_add_is_refused() {
+  local home="$TMP_ROOT/binary" rc
+  make_home "$home"
+  printf '\000\001binary' > "$TMP_ROOT/binary-copy"
+  in_home "$home" bash "$PATCHER" add ship-9 data/learnings.md "$TMP_ROOT/binary-copy" >/dev/null 2>&1; rc=$?
+  expect_code 2 "$rc" "add accepted a binary edit"
+  [ ! -e "$home/data/ship-9/home-patch.md" ] || fail "a refused binary add wrote a patch"
+  pass "add refuses a binary edit"
+}
+
+# A file that cannot be rewritten stops the apply before any home file
+# changes, and no temporary file is left beside it.
+test_unwritable_target_changes_nothing() {
+  local home="$TMP_ROOT/rollback" out rc
+  make_home "$home"
+  add_edit "$home" ship-8 data/learnings.md '# Learnings' 'new line' '```' 'fenced' '```' || fail "add refused"
+  add_edit "$home" ship-8 config/crew-compact-window '# new comment' '400000' || fail "add refused"
+  chmod 400 "$home/config/crew-compact-window"
+  if [ -w "$home/config/crew-compact-window" ]; then
+    chmod 600 "$home/config/crew-compact-window"
+    pass "an unwritable target changes nothing (skipped: this user can write a read-only file)"
+    return
+  fi
+  out=$(in_home "$home" bash "$PATCHER" apply ship-8 2>&1); rc=$?
+  chmod 600 "$home/config/crew-compact-window"
+  expect_code 1 "$rc" "a failed write was reported as applied"
+  printf '%s\n' "$out" | grep -q 'could not prepare the new config/crew-compact-window beside it); nothing changed' \
+    || fail "an unwritable target did not say nothing changed: $out"
+  grep -qx 'old line' "$home/data/learnings.md" || fail "an unwritable target let the first file change"
+  [ ! -e "$home/data/ship-8/home-patch.applied" ] || fail "a failed apply was recorded applied"
+  [ -z "$(find "$home/data" "$home/config" -name '*.fm-home-patch.*')" ] || fail "a failed apply left a temporary file"
+  pass "an unwritable target changes nothing and leaves no temporary file"
+}
+
+test_hand_applied_patch_is_recognised() {
+  local home="$TMP_ROOT/hand" rc
+  make_home "$home"
+  add_edit "$home" ship-2 data/learnings.md '# Learnings' 'new line' '```' 'fenced' '```' || fail "add refused"
+  printf '%s\n' '# Learnings' 'new line' '```' 'fenced' '```' > "$home/data/learnings.md"
+  in_home "$home" bash "$PATCHER" apply ship-2 >/dev/null 2>&1; rc=$?
+  expect_code 3 "$rc" "a patch already applied by hand was not recognised"
+  [ -f "$home/data/ship-2/home-patch.applied" ] || fail "the hand-applied patch got no applied record"
+  pass "a patch already applied by hand is a no-op that gets its record"
+}
+
+test_home_location_does_not_move_paths() {
+  local outer="$TMP_ROOT/outer" top="$TMP_ROOT/top" bare="$TMP_ROOT/bare" home rc
+  fm_git_init_commit "$top"
+  make_home "$top"
+  fm_git_init_commit "$outer"
+  make_home "$outer/nested/home"
+  make_home "$bare"
+  for home in "$top" "$outer/nested/home" "$bare"; do
+    add_edit "$home" ship-3 data/learnings.md '# Learnings' 'moved' '```' 'fenced' '```' || fail "add refused in $home"
+    in_home "$home" bash "$PATCHER" apply ship-3 >/dev/null 2>&1; rc=$?
+    expect_code 0 "$rc" "apply failed for the home at $home"
+    grep -qx 'moved' "$home/data/learnings.md" || fail "the edit missed the home at $home"
+  done
+  [ ! -e "$outer/data" ] || fail "a nested home's patch landed in the enclosing checkout"
+  pass "a home at a checkout top, nested in a checkout, or outside one is the diff's root"
+}
+
+test_drift_changes_nothing() {
+  local home="$TMP_ROOT/drift" out rc
+  make_home "$home"
+  add_edit "$home" ship-4 data/learnings.md '# Learnings' 'new line' '```' 'fenced' '```' || fail "add refused"
+  add_edit "$home" ship-4 config/crew-compact-window '# new comment' '400000' || fail "add refused"
+  printf '%s\n' '# Learnings' 'someone else edited this' '```' 'fenced' '```' > "$home/data/learnings.md"
+  out=$(in_home "$home" bash "$PATCHER" apply ship-4 2>&1); rc=$?
+  expect_code 1 "$rc" "a drifted patch did not refuse"
+  printf '%s\n' "$out" | grep -q '^actionable: home patch data/ship-4/home-patch.md was not applied (does not apply' \
+    || fail "a drifted patch printed no actionable line: $out"
+  grep -qx '# read by fm-spawn once worker-compact-window-1112 lands' "$home/config/crew-compact-window" \
+    || fail "the clean hunk of a drifted patch was applied"
+  [ ! -e "$home/data/ship-4/home-patch.applied" ] || fail "a drifted patch was recorded applied"
+  [ -f "$home/data/ship-4/home-patch.md" ] || fail "a drifted patch was removed"
+  pass "a drifted patch changes no file, keeps the patch and prints one actionable line"
+}
+
+# Each refused shape: apply exits 1 with a refused verdict and changes nothing.
+expect_refused() {  # <home> <id> <message>
+  local out rc before
+  before=$(cat "$1/data/learnings.md" "$1/config/crew-compact-window" "$1/data/captain.md" "$1/state/thing" 2>/dev/null)
+  out=$(in_home "$1" bash "$PATCHER" show "$2" 2>&1); rc=$?
+  expect_code 1 "$rc" "$3: show did not refuse"
+  printf '%s\n' "$out" | grep -q "^home-patch: $2: refused: " || fail "$3: no refused verdict: $out"
+  in_home "$1" bash "$PATCHER" apply "$2" >/dev/null 2>&1; rc=$?
+  expect_code 1 "$rc" "$3: apply did not refuse"
+  [ "$before" = "$(cat "$1/data/learnings.md" "$1/config/crew-compact-window" "$1/data/captain.md" "$1/state/thing" 2>/dev/null)" ] \
+    || fail "$3: a refused patch changed a file"
+}
+
+test_paths_and_shapes_it_may_not_change() {
+  local home="$TMP_ROOT/refuse" d="$TMP_ROOT/diffs" rc
+  make_home "$home"
+  mkdir -p "$d"
+  printf '%s\n' '--- a/state/thing' '+++ b/state/thing' '@@ -1 +1 @@' '-one' '+two' > "$d/state.diff"
+  write_patch "$home" r-state "$d/state.diff"
+  expect_refused "$home" r-state "a state/ path"
+  printf '%s\n' '--- a/data/captain.md' '+++ b/data/captain.md' '@@ -1,2 +1,2 @@' ' # Captain' '-a ruling' '+a forged ruling' > "$d/captain.diff"
+  write_patch "$home" r-captain "$d/captain.diff"
+  expect_refused "$home" r-captain "the captain's rulings"
+  printf '%s\n' '--- a/data/../state/thing' '+++ b/data/../state/thing' '@@ -1 +1 @@' '-one' '+two' > "$d/dotdot.diff"
+  write_patch "$home" r-dotdot "$d/dotdot.diff"
+  expect_refused "$home" r-dotdot "a .. component"
+  printf '%s\n' 'diff --git a/data/new.md b/data/new.md' 'new file mode 100644' '--- /dev/null' '+++ b/data/new.md' '@@ -0,0 +1 @@' '+hello' > "$d/create.diff"
+  write_patch "$home" r-create "$d/create.diff"
+  expect_refused "$home" r-create "a created file"
+  [ ! -e "$home/data/new.md" ] || fail "a create patch created its file"
+  printf '%s\n' 'diff --git a/config/crew-compact-window b/config/crew-compact-window' 'old mode 100644' 'new mode 100755' > "$d/mode.diff"
+  write_patch "$home" r-mode "$d/mode.diff"
+  expect_refused "$home" r-mode "a mode change"
+  mkdir -p "$home/elsewhere"
+  printf '%s\n' 'one' > "$home/elsewhere/target"
+  ln -s ../elsewhere/target "$home/data/link.md"
+  printf '%s\n' '--- a/data/link.md' '+++ b/data/link.md' '@@ -1 +1 @@' '-one' '+two' > "$d/link.diff"
+  write_patch "$home" r-link "$d/link.diff"
+  expect_refused "$home" r-link "a symlinked file"
+  grep -qx one "$home/elsewhere/target" || fail "a patch wrote through a symlink"
+  ln -s ../elsewhere "$home/data/linkdir"
+  printf '%s\n' '--- a/data/linkdir/target' '+++ b/data/linkdir/target' '@@ -1 +1 @@' '-one' '+two' > "$d/linkdir.diff"
+  write_patch "$home" r-linkdir "$d/linkdir.diff"
+  expect_refused "$home" r-linkdir "a symlinked directory"
+  grep -qx one "$home/elsewhere/target" || fail "a patch wrote through a symlinked directory"
+  mkdir -p "$home/data/r-open"
+  printf '%s\n' '# Home patch' '```diff' '--- a/data/learnings.md' > "$home/data/r-open/home-patch.md"
+  expect_refused "$home" r-open "an unclosed block"
+  mkdir -p "$home/data/r-empty"
+  printf '%s\n' '# Home patch' 'no diff here' > "$home/data/r-empty/home-patch.md"
+  expect_refused "$home" r-empty "a file with no diff block"
+  printf '%s\n' 'one' > "$TMP_ROOT/abs-copy"
+  in_home "$home" bash "$PATCHER" add r-add state/thing "$TMP_ROOT/abs-copy" >/dev/null 2>&1; rc=$?
+  expect_code 2 "$rc" "add accepted a state/ path"
+  local rel
+  for rel in data/projects.md config/claude-account config/claude-permission-mode config/launch-env-allowlist; do
+    printf '%s\n' 'one' > "$home/$rel"
+    printf '%s\n' "--- a/$rel" "+++ b/$rel" '@@ -1 +1 @@' '-one' '+two' > "$d/authority.diff"
+    write_patch "$home" r-authority "$d/authority.diff"
+    expect_refused "$home" r-authority "$rel, which carries authority"
+    grep -qx one "$home/$rel" || fail "a patch changed $rel"
+  done
+  pass "state/, the captain's rulings, authority records, .., create, mode change, symlinks and malformed files are refused"
+}
+
+# A second add for the same file replaces its block, so a revised edit is one
+# more add; once the patch is applied, add keeps it and starts a new one.
+test_add_revises_and_starts_a_new_patch_after_apply() {
+  local home="$TMP_ROOT/revise" out rc kept
+  make_home "$home"
+  add_edit "$home" ship-10 data/learnings.md '# Learnings' 'first try' '```' 'fenced' '```' || fail "add refused"
+  add_edit "$home" ship-10 config/crew-compact-window '# kept block' '400000' || fail "add refused"
+  add_edit "$home" ship-10 data/learnings.md '# Learnings' 'second try' '```' 'fenced' '```' \
+    || fail "a revised add for the same file was refused"
+  [ "$(grep -c '^diff --git a/data/learnings.md' "$home/data/ship-10/home-patch.md")" = 1 ] \
+    || fail "a revised add left two blocks for one file"
+  in_home "$home" bash "$PATCHER" apply ship-10 >/dev/null 2>&1; rc=$?
+  expect_code 0 "$rc" "the revised patch did not apply"
+  grep -qx 'second try' "$home/data/learnings.md" || fail "the revised edit did not land"
+  grep -qx '# kept block' "$home/config/crew-compact-window" || fail "the other file's block was lost"
+  printf '%s\n' '# Learnings' 'third' '```' 'fenced' '```' > "$TMP_ROOT/third-copy"
+  out=$(in_home "$home" bash "$PATCHER" add ship-10 data/learnings.md "$TMP_ROOT/third-copy" 2>&1); rc=$?
+  expect_code 0 "$rc" "add after an applied patch was refused: $out"
+  printf '%s\n' "$out" | grep -q 'this change starts a new one' || fail "add did not say it started a new patch: $out"
+  kept=$(find "$home/data/ship-10" -name 'home-patch.*.md')
+  { [ -n "$kept" ] && grep -q '+second try' "$kept"; } || fail "the applied patch was not kept"
+  grep -q '+third' "$home/data/ship-10/home-patch.md" || fail "the new patch does not hold the new change"
+  ! grep -q 'kept block' "$home/data/ship-10/home-patch.md" || fail "the new patch still holds the applied change"
+  in_home "$home" bash "$PATCHER" apply ship-10 >/dev/null 2>&1; rc=$?
+  expect_code 0 "$rc" "the new patch did not apply"
+  grep -qx 'third' "$home/data/learnings.md" || fail "the new patch's edit did not land"
+  pass "add replaces a file's earlier block and starts a new patch once the old one is applied"
+}
+
+# show --record keeps the digest the helm saw; apply --shown applies only it.
+test_record_and_apply_shown() {
+  local home="$TMP_ROOT/shown" out rc
+  make_home "$home"
+  add_edit "$home" ship-11 data/learnings.md '# Learnings' 'seen' '```' 'fenced' '```' || fail "add refused"
+  out=$(in_home "$home" bash "$PATCHER" apply ship-11 --shown 2>&1); rc=$?
+  expect_code 1 "$rc" "apply --shown applied a patch nobody was shown"
+  printf '%s\n' "$out" | grep -q 'no attended landing step showed it to the helm' || fail "no reason given: $out"
+  in_home "$home" bash "$PATCHER" show ship-11 >/dev/null 2>&1
+  [ ! -e "$home/data/ship-11/home-patch.shown" ] || fail "show without --record recorded a digest"
+  in_home "$home" bash "$PATCHER" show ship-11 --record >/dev/null 2>&1
+  add_edit "$home" ship-11 data/learnings.md '# Learnings' 'unseen' '```' 'fenced' '```' || fail "add refused"
+  out=$(in_home "$home" bash "$PATCHER" apply ship-11 --shown 2>&1); rc=$?
+  expect_code 1 "$rc" "apply --shown applied a patch changed after it was shown"
+  grep -qx 'old line' "$home/data/learnings.md" || fail "a refused apply --shown changed the file"
+  in_home "$home" bash "$PATCHER" show ship-11 --record >/dev/null 2>&1
+  in_home "$home" bash "$PATCHER" apply ship-11 --shown >/dev/null 2>&1; rc=$?
+  expect_code 0 "$rc" "apply --shown refused the digest it was shown"
+  grep -qx 'unseen' "$home/data/learnings.md" || fail "apply --shown did not land the shown patch"
+  pass "apply --shown applies only the digest show --record kept"
+}
+
+test_no_patch_and_bad_arguments() {
+  local home="$TMP_ROOT/none" out rc
+  make_home "$home"
+  out=$(in_home "$home" bash "$PATCHER" show nothing-here 2>&1); rc=$?
+  expect_code 4 "$rc" "show of no patch"
+  [ "$out" = 'home-patch: nothing-here: none' ] || fail "show of no patch printed: $out"
+  out=$(in_home "$home" bash "$PATCHER" apply nothing-here 2>&1); rc=$?
+  expect_code 4 "$rc" "apply of no patch"
+  [ -z "$out" ] || fail "apply of no patch printed: $out"
+  for args in "apply ../evil" "show" "apply a b" "frob ship"; do
+    # shellcheck disable=SC2086 # Word splitting builds each refused argument set.
+    in_home "$home" bash "$PATCHER" $args >/dev/null 2>&1; rc=$?
+    expect_code 2 "$rc" "a malformed argument set: '$args'"
+  done
+  pass "no patch is a quiet exit 4 and a malformed argument exits 2"
+}
+
+fm_test_run \
+  test_add_show_apply_once \
+  test_mode_empty_files_and_digest_binding \
+  test_add_refuses_symlinks_and_keeps_a_valid_patch \
+  test_binary_add_is_refused \
+  test_unwritable_target_changes_nothing \
+  test_hand_applied_patch_is_recognised \
+  test_home_location_does_not_move_paths \
+  test_drift_changes_nothing \
+  test_paths_and_shapes_it_may_not_change \
+  test_add_revises_and_starts_a_new_patch_after_apply \
+  test_record_and_apply_shown \
+  test_no_patch_and_bad_arguments
