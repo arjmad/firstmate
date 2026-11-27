@@ -225,6 +225,9 @@ test_runner_saves_and_arms_only_for_claude() {
   cat > "$fixture/bin/fm-session-start.sh" <<'SH'
 #!/usr/bin/env bash
 printf 'READ CUE: copy=%s\n' "${FM_SESSION_START_DIGEST_COPY:-none}"
+# The copy a reader can find must not exist until the digest is complete.
+[ -z "${FM_SESSION_START_DIGEST_COPY:-}" ] || [ ! -e "$FM_SESSION_START_DIGEST_COPY" ] \
+  || printf 'COPY VISIBLE WHILE WRITING\n'
 i=0
 while [ "$i" -lt "${FAKE_DIGEST_LINES:-400}" ]; do
   printf 'fake digest line %04d padding padding padding padding\n' "$i"
@@ -242,6 +245,8 @@ SH
   assert_equals "$(cat "$copy")" "$out" "the printed digest differs from its saved copy"
   assert_contains "$(printf '%s' "$out" | head -n 1)" "copy=$copy" "the digest cue does not name its saved copy"
   [ -f "$pending" ] || fail "the Claude runner did not arm a spilled-size digest"
+  assert_not_contains "$out" "COPY VISIBLE WHILE WRITING" "the saved copy was visible before the digest was complete"
+  [ -z "$(find "$fixture/state/.digest-read" -name '*.partial')" ] || fail "the runner left its partial digest behind"
 
   rm -rf "$fixture/state/.digest-read"
   out=$(printf '{"source":"startup","session_id":"%s"}' "$SID" |

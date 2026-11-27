@@ -163,12 +163,13 @@
 #     print_held_counted). Every other held row is counted in one line per
 #     group naming the command that lists them all, and a held row the
 #     in-flight or blocked group already lists is not printed twice.
-#   - Only the ready (dispatchable-now) listing is bounded, by
-#     FM_SESSION_START_QUEUED_LIMIT, default 20, and it keeps each row's id,
-#     kind, repo and due date; a row due within NEAR_DAYS is always shown.
-#     Anything it omits is disclosed with an exact remainder count and the
-#     command that shows the rest, so a deep queue costs a counter rather than
-#     kilobytes.
+#   - The ready (dispatchable-now) group is counted, not listed: one line per
+#     kind split by repo, naming the command that lists every row (fork patch,
+#     docs/fork-decisions/2026-11-27-ready-rows-counted.md). A row due within
+#     NEAR_DAYS is always listed with its id, kind, repo and due date, and
+#     FM_SESSION_START_QUEUED_LIMIT (default 0) lists that many more. Anything
+#     it omits is disclosed with an exact remainder count, so a deep queue
+#     costs a counter rather than kilobytes.
 #     (This replaces FM_SESSION_START_BACKLOG_LIMIT, which bounded the whole
 #     listing indiscriminately and so could drop a held or blocked row.)
 # When compatible tasks-axi is selected and available, the shared tasks-axi
@@ -415,8 +416,8 @@ TASKS_AXI_CHECK_REASON=$(fm_tasks_axi_check_reason)
 
 STATUS_TAIL=${FM_SESSION_START_STATUS_TAIL:-3}
 case "$STATUS_TAIL" in ''|*[!0-9]*) STATUS_TAIL=3 ;; esac
-QUEUED_LIMIT=${FM_SESSION_START_QUEUED_LIMIT:-20}
-case "$QUEUED_LIMIT" in ''|*[!0-9]*|0) QUEUED_LIMIT=20 ;; esac
+QUEUED_LIMIT=${FM_SESSION_START_QUEUED_LIMIT:-0}
+case "$QUEUED_LIMIT" in ''|*[!0-9]*) QUEUED_LIMIT=0 ;; esac
 # One per-task endpoint read may never outlive this bound: a hung backend CLI
 # becomes that task's endpoint: error line instead of the digest's whole
 # runtime budget.
@@ -463,10 +464,14 @@ print_backlog_pointer() {
 MANUAL_KEEP_RE='[(]hold|blocked-by:'
 
 print_backlog_manual_compact() {
-  local path=$1 reason=$2
-  printf 'compact backlog listing (%s; done rows omitted; every in-flight, held, and blocked title line kept; other queued bounded to %s; indented task bodies omitted)\n' \
-    "$reason" "$QUEUED_LIMIT"
-  awk -v max="$QUEUED_LIMIT" -v keep_re="$MANUAL_KEEP_RE" '
+  local path=$1 reason=$2 near
+  near=$(date_in_days "$NEAR_DAYS") || near=''
+  printf 'compact backlog listing (%s; done rows omitted; every in-flight, held, and blocked title line kept; other queued counted, listing only the title lines due within %s days plus the first %s; indented task bodies omitted)\n' \
+    "$reason" "$NEAR_DAYS" "$QUEUED_LIMIT"
+  # The row facts arrive as the first input file, not the environment, so a
+  # large backlog cannot exceed the per-variable environment limit.
+  awk -v max="$QUEUED_LIMIT" -v keep_re="$MANUAL_KEEP_RE" -v near="$near" '
+    FILENAME == ARGV[1] { split($0, f, "\t"); if (f[2] ~ /^[0-9]/) due[f[1]] = f[2]; next }
     function state_for_heading(line, heading) {
       heading = line
       sub(/^##[[:space:]]+/, "", heading)
@@ -487,7 +492,11 @@ print_backlog_manual_compact() {
     state == "queued" && /^[-*][[:space:]]+/ {
       queued_total++
       if ($0 ~ keep_re) { gated++; print $0; next }
-      if (plain_shown < max) { plain_shown++; print $0 }
+      # A title line due within NEAR_DAYS is always listed and leaves the
+      # limit to the other lines.
+      id = $0; sub(/^[-*] \[.\] /, "", id); sub(/ .*$/, "", id)
+      urgent = (near != "" && (id in due) && due[id] <= near)
+      if (urgent || listed_plain < max) { plain_shown++; print $0; if (!urgent) listed_plain++ }
       next
     }
     END {
@@ -502,7 +511,7 @@ print_backlog_manual_compact() {
         }
       }
     }
-  ' "$path" | fm_hold_reason_decode_stream markdown
+  ' <(backlog_row_facts "$path") "$path" | fm_hold_reason_decode_stream markdown
 }
 
 # tasks-axi closes every listing with its own help block. This section composes
@@ -522,7 +531,8 @@ strip_axi_help() {
 # docs/fork-decisions/2026-11-11-calls-grouped-by-what-it-takes.md for captain
 # calls (board, place, quick, hands) and the hold kind for the rest, each split
 # by Batch: tag or repo. A held row that the in-flight or blocked group already
-# prints is not printed twice. The ready group keeps id, kind, repo and due date.
+# prints is not printed twice. The ready group is counted, as
+# print_ready_queued_bounded says.
 #
 # "Live" is bin/fm-fleet-snapshot.sh's hold_bucket "live", read from the same
 # structured fields: a captain hold that is not blocked, whose hold_until is
@@ -599,42 +609,73 @@ shorten_axi_titles() {
   sed -E 's/\\n\.\.\. \(truncated, [0-9]+ chars total - use show [^ ]+ --full to see complete text\)/.../g'
 }
 
-# Bound the dispatchable-now listing and keep each row's id, kind, repo and due
-# date: the brief and body are read at dispatch (`show <id> --full`), and the
-# due date is what can make a ready row urgent. A row due within NEAR_DAYS is
-# always shown; the bound cuts only the others, and whatever it cuts is
-# disclosed exactly. Every other line tasks-axi prints (its count, its
-# public-followup line) passes through untouched.
+# Count the dispatchable-now group and list only the rows that can be urgent:
+# one count line per kind, split by repo, names the command that lists every
+# row; a row due within NEAR_DAYS is always listed with its id, kind, repo and
+# due date, and QUEUED_LIMIT lists that many more. The brief and body are read
+# at dispatch (`show <id> --full`). Every other line tasks-axi prints (its
+# count, its public-followup line) passes through untouched and in order; the
+# table header prints only when a row is listed under it.
 print_ready_queued_bounded() {
   local ready=$1 near
   near=$(date_in_days "$NEAR_DAYS") || near=''
   printf '%s\n' "$ready" | FM_ROW_FACTS="$ROW_FACTS" LC_ALL=C awk -v max="$QUEUED_LIMIT" -v near="$near" -v near_days="$NEAR_DAYS" '
+    function tally(kind, repo) {
+      if (!(kind in kinds)) { kinds[kind] = 0; knames[++nkinds] = kind }
+      kinds[kind]++
+      if (!((kind, repo) in repos)) { repos[kind, repo] = 0; rnames[kind, ++nrepos[kind]] = repo }
+      repos[kind, repo]++
+    }
     BEGIN {
       n = split(ENVIRON["FM_ROW_FACTS"], fl, "\n")
       for (i = 1; i <= n; i++) { split(fl[i], f, "\t"); if (f[2] ~ /^[0-9]/) due[f[1]] = f[2] }
     }
     /^help\[/ { exit }
     /^ready\[[0-9]+\]\{id,state,kind,repo,title\}:$/ {
-      rows = 1; slim = 1; hdr = $0; sub(/\{.*$/, "{id,kind,repo,due}:", hdr); print hdr; next
+      rows = 1; slim = 1; hdr = $0; sub(/\{.*$/, "{id,kind,repo,due}:", hdr); line[++lines] = hdr; hdr_at = lines; next
     }
-    /^ready\[/ { rows = 1; slim = 0; print; next }
+    /^ready\[/ { rows = 1; slim = 0; line[++lines] = $0; hdr_at = lines; next }
     rows && /^[[:space:]]/ {
       total++
       split(substr($0, 3), f, ",")
+      if (slim) tally(f[3], f[4])
       d = (f[1] in due) ? due[f[1]] : "-"
       urgent = (near != "" && d != "-" && d <= near)
-      if (shown < max || urgent) {
-        print (slim ? "  " f[1] "," f[3] "," f[4] "," d : $0); shown++
+      # An urgent row leaves the limit to the other rows.
+      if (urgent || plain < max) {
+        line[++lines] = (slim ? "  " f[1] "," f[3] "," f[4] "," d : $0); shown++
+        if (!urgent) plain++
       }
       next
     }
-    { rows = 0; print }
+    { rows = 0; line[++lines] = $0 }
     END {
-      if (total > 0) {
-        printf "(shown %d of %d ready queued item(s); a row due within %d days is always shown)\n", shown, total, near_days
-        if (total > shown) {
-          printf "(%d more queued - bin/fm-tasks-axi.sh ready)\n", total - shown
+      for (i = 1; i <= lines; i++) if (i != hdr_at || shown > 0) print line[i]
+      if (total == 0) exit
+      if (nkinds > 0) {
+        # Kinds and repos by count, most first, then by name.
+        for (a = 2; a <= nkinds; a++) {
+          k = knames[a]
+          for (b = a - 1; b >= 1 && (kinds[knames[b]] < kinds[k] || (kinds[knames[b]] == kinds[k] && knames[b] > k)); b--) knames[b + 1] = knames[b]
+          knames[b + 1] = k
         }
+        printf "counted ready rows, by kind (bin/fm-tasks-axi.sh ready lists every one):\n"
+        for (a = 1; a <= nkinds; a++) {
+          k = knames[a]; np = nrepos[k]
+          for (c = 1; c <= np; c++) order[c] = rnames[k, c]
+          for (c = 2; c <= np; c++) {
+            r = order[c]
+            for (b = c - 1; b >= 1 && (repos[k, order[b]] < repos[k, r] || (repos[k, order[b]] == repos[k, r] && order[b] > r)); b--) order[b + 1] = order[b]
+            order[b + 1] = r
+          }
+          detail = ""
+          for (c = 1; c <= np; c++) detail = detail (c > 1 ? ", " : "") order[c] " " repos[k, order[c]]
+          printf "  %s: %d (%s)\n", k, kinds[k], detail
+        }
+      }
+      printf "(listed %d of %d ready queued item(s); a row due within %d days is always listed)\n", shown, total, near_days
+      if (total > shown) {
+        printf "(%d more queued - bin/fm-tasks-axi.sh ready)\n", total - shown
       }
     }
   '
@@ -800,8 +841,8 @@ print_backlog_tasks_axi_compact() {
     ROW_FACTS=$(backlog_row_facts "$path")
     listed=$(printf '%s\n%s\n' "$(printf '%s\n' "$in_flight" | strip_axi_help)" \
       "$(printf '%s\n' "$blocked" | strip_axi_help)" | listing_ids)
-    printf 'compact backlog listing (tasks-axi; done rows omitted; every in-flight and blocked row in full; a held row in full only when it is a live captain call or due or back within %s days, every other held row counted per group; ready queued as id, kind, repo and due date, bounded to %s; titles cut at 80 characters end in "..."; task bodies omitted)\n' \
-      "$NEAR_DAYS" "$QUEUED_LIMIT"
+    printf 'compact backlog listing (tasks-axi; done rows omitted; every in-flight and blocked row in full; a held row in full only when it is a live captain call or due or back within %s days, every other held row counted per group; ready queued counted by kind and repo, listing as id, kind, repo and due date only the rows due within %s days plus the first %s (FM_SESSION_START_QUEUED_LIMIT); titles cut at 80 characters end in "..."; task bodies omitted)\n' \
+      "$NEAR_DAYS" "$NEAR_DAYS" "$QUEUED_LIMIT"
     printf '\nin flight:\n'
     printf '%s\n' "$in_flight" | fm_hold_reason_decode_stream | strip_axi_help | shorten_axi_titles
     printf '\nheld (captain- or time-gated; a held row already listed under in flight or blocked queued is not repeated):\n'
@@ -1203,7 +1244,7 @@ Go to a source directly only when:
     each task's full log path),
   - a full task body or full title is needed (bin/fm-tasks-axi.sh show <id> --full,
     or data/backlog.md),
-  - the backlog listing counted held rows or omitted queued items and this turn
+  - the backlog listing counted held or ready rows and this turn
     needs them (the listing names the command that lists them),
   - the NETWORK CHECKS section reported its checks still IN PROGRESS and this
     turn needs their verdict (bin/fm-startup-network.sh report),
