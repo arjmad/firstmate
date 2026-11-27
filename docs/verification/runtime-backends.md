@@ -1971,6 +1971,42 @@ Observed 2026-10-19 with the PR 88 composer change reverted:
 fm-send: doorbell did not reach fm-lab-spawn-steer-live-99193-25733:w2:p2; the steer is durably recorded at <lab>/home/state/steer99025x1582.inbox/001.msg and the watcher will re-ring
 ```
 
+### Claude payload proof on a starved pane
+
+Measured 2026-11-27 on Linux (Omarchy) against Herdr 0.9.5, tmux 3.7c and Claude Code 2.1.332 (`--model haiku`), each in an isolated lab: a named `fm-lab-` Herdr session through `bin/fm-herdr-lab.sh`, and a private tmux socket from `bin/fm-lab-home.sh tmux-dir`.
+"Starved" is a Claude launched under `systemd-run --user --scope --collect -p CPUQuota=8%`, which stands in for a worker at idle CPU beside a busy desktop session.
+
+Typed-burst timing, with no Enter pressed: the doorbell line typed by `herdr pane send-text` into a starved Claude appeared in the composer as one block, never partially, after 2457, 147, 247, 275 and 244 ms.
+A Ctrl+U sent straight after the same text did not clear it: the block landed 388 to 589 ms later, the Ctrl+U removed only its last wrapped row, and the first row stayed.
+An unstarved Claude showed the block before the 0.3 s settle in every ring.
+
+Doorbell rings through `fm_task_inbox_ring`, which submits through `fm_backend_send_text_submit`:
+
+| Pane | Code | Rings | Result |
+| --- | --- | --- | --- |
+| Herdr, unstarved, idle and mid-turn | before the fix | 14 | 14 rc=0, composer empty within 0.3 s |
+| Herdr, starved | before the fix | 7 | first ring: the one-shot proof failed, one Ctrl+U, `send-failed` (rc=2); the block then landed and that Ctrl+U deleted its last wrapped row, so the doorbell's first row sat typed; each of the next 6 rings found text that was not its own line and skipped (rc=1) |
+| Herdr, starved, 10 idle and 3 mid-turn | after the fix | 13 | 12 rc=0 and one rc=4 (the turn started after the confirm window); no doorbell left typed, no Ctrl+U |
+
+Leftover draft, `fm_backend_send_text_submit` with a steer:
+
+| Pane | Code | Result |
+| --- | --- | --- |
+| tmux | before the fix | verdict `empty`; Claude received `LEFTOVERDRAFT half typedReply with exactly FMTMUXPROBE6312` as one prompt |
+| tmux | after the fix | verdict `send-failed`, nothing typed, the draft left as it was |
+| Herdr | before and after | verdict `send-failed`, nothing typed (the Herdr proof already refused it) |
+
+A ring onto a leftover returned rc=1 (skipped) on both backends before and after the fix.
+Mid-turn, a doorbell's Enter left Claude's composer empty 0.3 s later on all 7 mid-turn rings, so Claude does not keep queued text in its composer; that is why a Claude submit gets no queued-Enter conversion.
+
+Live guards: `FM_HERDR_SUBMIT_CONFIRM_LIVE=1 tests/fm-herdr-submit-confirm-live-e2e.test.sh` (leftover refusal and the starved arm) and `FM_COMPOSER_MATRIX_LIVE=1 tests/fm-composer-matrix-live-e2e.test.sh` (tmux leftover refusal, no tokens):
+
+```text
+ok - live Herdr submit confirm: Claude Code (2.1.332 (Claude Code)) on herdr 0.9.5 refuses a leftover draft untouched and the shared clear empties it
+ok - live Herdr submit confirm: Claude Code (2.1.332 (Claude Code)) on herdr 0.9.5 at 8% CPU submits every steer and leaves none typed
+ok - claude (2.1.332 (Claude Code)): the tmux submit refuses a leftover draft untouched and the shared clear empties it
+```
+
 ### Claude exit behind the slash-command popup
 
 Measured 2026-09-26 against Herdr 0.9.0 and Claude Code 2.1.283 in an isolated `fm-lab-` session.
