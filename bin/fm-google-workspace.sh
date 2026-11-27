@@ -74,8 +74,9 @@
 # claude_tool_list, and FM_GWS_SERVER no longer reach those entries; only those two
 # profiles are read. Every configured slug needs exactly one row of each, whose server
 # is gws-<slug> and whose port is 1-65535 and used by no other row of the table;
-# anything else refuses both before any server is removed, rather than leave a store
-# half moved or point a server at another account's or profile's listener.
+# anything else refuses claude-install before any server is removed, rather than leave
+# a store half moved or point a server at another account's or profile's listener, and
+# refuses claude-config for the profile it prints ('claude', or 'claude-docs' with --docs).
 # Blank lines and '#' comments are ignored. There is no built-in table: a missing,
 # unreadable, or malformed file, a duplicate slug or email, or an implausible email
 # refuses every subcommand except help, naming the file and the accepted format.
@@ -131,7 +132,7 @@ CLAUDE_BIN="${FM_GWS_CLAUDE:-claude}"
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-usage() { sed -n '22,98p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '/^# Usage:$/,/^set -u$/p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed '$d' | sed 's/^# \{0,1\}//'; }
 
 CONFIG_FORMAT="accepted format, one setting per line: 'account <slug> <email>', 'bws_project_id <uuid>', 'bws_secret_key <name>', optional 'allowed_file_dirs <path>', optional 'claude_tool_list <path>', optional 'claude_listeners <path>'"
 
