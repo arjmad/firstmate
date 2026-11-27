@@ -7716,6 +7716,8 @@ test_sites_visual_review_refuses_without_captain_approval() {
     $'## Visual review\n\nNone of the shots clip at 360.\n' \
     $'## Visual review\n\nSee below. Visual review: nonexistent\n' \
     $'\xc3\xa9 Visual review: none\n' \
+    $'\xc2\xb2 Visual review: none\n' \
+    $'\xe2\x9c\x94\xef\xb8\x8f Visual review: none\n' \
     ''; do
     n=$((n + 1))
     case_dir=$(visual_review_case "sites-visual-$n" "$head" "$body")

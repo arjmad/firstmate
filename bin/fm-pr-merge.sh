@@ -2281,15 +2281,17 @@ require_door_authority() {
 # `## Visual review` heading whose first text after blank lines is `none`, with
 # `none` ending its sentence or clause. Each line is matched with the regular
 # expressions of sites' doormatsusa/scripts/theme-go-live.py VISUAL_NONE, so
-# the two agree on which PR is customer-visible, except that a CRLF line
-# ending is read as a line end here.
+# the two agree on which PR is customer-visible. Two departures: a CRLF line
+# ending is read as a line end, and a character before `Visual review` that
+# either Python or jq counts as a word character stops the match, so this
+# reading never exempts a body that theme-go-live.py would not.
 pr_body_visual_review_none() {
   # shellcheck disable=SC2016 # the backticks are jq regex text, not expansions
   jq -Rse '
     "none[ \\t*_`]*(?:$|[.:;,(-]|—|–)" as $ends
     | [split("\n")[] | sub("\r$"; "")] as $lines
     | any(range(0; $lines | length); . as $i
-        | ($lines[$i] | test("^[^\\w]*visual review[ \\t*_]*:[ \\t*_`]*" + $ends; "i"))
+        | ($lines[$i] | test("^[^\\p{L}\\p{M}\\p{N}\\p{Pc}]*visual review[ \\t*_]*:[ \\t*_`]*" + $ends; "i"))
           or (($lines[$i] | test("^#+[ \\t]*visual review[ \\t]*$"; "i"))
             and ([$lines[$i + 1:][] | select(test("^[ \\t]*$") | not)][0] // ""
               | test("^[ \\t*_`]*" + $ends; "i"))))
@@ -2310,11 +2312,7 @@ require_visual_review_approval() {
     printf 'verified: %s is customer-visible, merging on the captain'"'"'s approval (--captain-approval-file)\n' "$URL" >&2
     return 0
   fi
-  if [ "$FM_PR_BODY_READ" = true ]; then
-    printf "error: refusing to merge %s: its body's Visual review section is not \`none\`, so it changes what a customer sees\n" "$URL" >&2
-  else
-    printf 'error: refusing to merge %s: its body could not be read, so it is read as changing what a customer sees\n' "$URL" >&2
-  fi
+  printf "error: refusing to merge %s: its body's Visual review section is not \`none\`, so it changes what a customer sees\n" "$URL" >&2
   echo "error: only the captain's yes to its Visual review preview merges it: write his words to a file when he answers, then re-run with --captain-approval-file <file>" >&2
   return 1
 }
@@ -2901,6 +2899,7 @@ case "$PROVIDER" in
               "$FM_PR_GITHUB_BASE" "$FM_PR_MERGE_HEAD" >&2
           exit 1
         fi
+        require_visual_review_approval || exit 1
       elif [ -n "$EXPECTED_HEAD" ]; then
         echo "error: $URL is behind its base; updating its source branch requires explicit --update-branch consent on this authorized merge request (the update remains if new checks prevent merging)" >&2
         exit 1
