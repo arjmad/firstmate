@@ -399,7 +399,8 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 # failed, 3 skipped because the endpoint is positively dead or missing (nothing
 # typed; recovery owns the record), 4 typed but the turn start is unproven: the
 # submit verdict was not exact `empty` (unknown, pending, pending-unproven, an
-# API backend's unconfirmed), or our held doorbell outlived both Enters, so a
+# API backend's unconfirmed), or our held doorbell outlived both Enters or
+# could not be read after one, so a
 # sender must report the turn start unconfirmed. No return value is delivery
 # proof; the acknowledgement move is the only delivery signal.
 # The skip is deliberately narrow: only an exact `pending` verdict can defer,
@@ -411,9 +412,11 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 # A pending composer holding exactly our own doorbell line is a previous ring
 # whose Enter never landed, so on an agent not reported busy it is submitted
 # rather than skipped; skipping it would block every later ring. On both paths
-# a lost first Enter gets one confirmed retry.
+# a lost first Enter gets one confirmed retry. On the held path a composer that
+# cannot be read after an Enter is no proof the doorbell left it, so that ring
+# returns 4, not 0.
 fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
-  local backend=$1 target=$2 rec=$3 label=${4:-} line cstate verdict
+  local backend=$1 target=$2 rec=$3 label=${4:-} line cstate verdict hrc
   case "$(fm_backend_agent_state "$backend" "$target" 2>/dev/null || true)" in
     dead|missing) return 3 ;;
   esac
@@ -428,10 +431,12 @@ fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
         || return 1
       fm_backend_send_key "$backend" "$target" Enter "$label" >/dev/null 2>&1 || return 2
       sleep 0.3
-      fm_task_inbox_composer_holds "$backend" "$target" "$line" "$label" || return 0
+      hrc=0; fm_task_inbox_composer_holds "$backend" "$target" "$line" "$label" || hrc=$?
+      case $hrc in 1) return 0 ;; 2) return 4 ;; esac
       fm_backend_send_key "$backend" "$target" Enter "$label" >/dev/null 2>&1 || return 2
       sleep 0.3
-      fm_task_inbox_composer_holds "$backend" "$target" "$line" "$label" || return 0
+      hrc=0; fm_task_inbox_composer_holds "$backend" "$target" "$line" "$label" || hrc=$?
+      [ "$hrc" -ne 1 ] || return 0
       return 4
       ;;
   esac
@@ -449,12 +454,13 @@ fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
   return 4
 }
 
-# Whether the composer's content, ignoring line wrapping, is exactly <line>.
+# Whether the composer's content, ignoring line wrapping, is exactly <line>:
+# 0 it is, 1 a composer read shows it is not, 2 the composer cannot be read.
 fm_task_inbox_composer_holds() {  # <backend> <target> <line> [expected-label]
   local cap held
-  fm_backend_source "$1" || return 1
-  cap=$(fm_backend_capture "$1" "$2" "$FM_COMPOSER_CAPTURE_LINES" "${4:-}" 2>/dev/null) || return 1
-  held=$(fm_composer_extract_selected_content styled=0 "$cap") || return 1
+  fm_backend_source "$1" || return 2
+  cap=$(fm_backend_capture "$1" "$2" "$FM_COMPOSER_CAPTURE_LINES" "${4:-}" 2>/dev/null) || return 2
+  held=$(fm_composer_extract_selected_content styled=0 "$cap") || return 2
   [ -n "$held" ] && [ "$(printf '%s' "$held" | tr -d '[:space:]')" = "$(printf '%s' "$3" | tr -d '[:space:]')" ]
 }
 

@@ -312,7 +312,9 @@ test_ring_skips_dead_agent() {
 # A fake tmux whose pane is a Claude-style composer that keeps its content in
 # FM_FAKE_COMPOSER: literal input appends to it, capture renders it wrapped
 # between rules, and Enter submits it (logged as SUBMIT) unless
-# FM_FAKE_DROP_ENTERS still holds a count of Enters to swallow.
+# FM_FAKE_DROP_ENTERS still holds a count of Enters to swallow. When
+# FM_FAKE_BLANK_AFTER_ENTER names a path, an Enter creates it and every later
+# capture is blank, a pane whose composer cannot be read.
 make_composer_stub() {  # <dir>
   mkdir -p "$1/fakebin"
   cat > "$1/fakebin/tmux" <<'SH'
@@ -332,6 +334,7 @@ case "${1:-}" in
     if [ "$literal" = 1 ]; then
       printf '%s' "$1" >> "$FM_FAKE_COMPOSER"
     elif [ "${1:-}" = Enter ]; then
+      [ -z "${FM_FAKE_BLANK_AFTER_ENTER:-}" ] || : > "$FM_FAKE_BLANK_AFTER_ENTER"
       drops=$(cat "$FM_FAKE_DROP_ENTERS" 2>/dev/null || echo 0)
       if [ "$drops" -gt 0 ]; then
         echo $((drops - 1)) > "$FM_FAKE_DROP_ENTERS"
@@ -345,6 +348,7 @@ case "${1:-}" in
     case "$*" in *cursor_y*) printf '2\n'; exit 0 ;; esac
     printf 'fakepane\n'; exit 0 ;;
   capture-pane)
+    [ ! -e "${FM_FAKE_BLANK_AFTER_ENTER:-/nonexistent}" ] || exit 0
     rule=$(printf '─%.0s' $(seq 64))
     printf '● done\n%s\n' "$rule"
     if [ -s "$FM_FAKE_COMPOSER" ]; then
@@ -407,13 +411,20 @@ test_ring_submits_its_own_stuck_doorbell() {
   [ ! -s "$log" ] || fail "a stuck doorbell whose Enters were lost was submitted:"$'\n'"$(cat "$log")"
   [ "$(cat "$composer")" = "$doorbell" ] || fail "a stuck doorbell whose Enters were lost should stay in the composer"
 
+  : > "$log"; printf '%s' "$doorbell" > "$composer"; rm -f "$dir/blank"
+  rc=0
+  PATH="$dir/fakebin:$PATH" FM_SEND_LOG="$log" FM_FAKE_COMPOSER="$composer" FM_FAKE_DROP_ENTERS="$drops" \
+    FM_FAKE_BLANK_AFTER_ENTER="$dir/blank" inbox_lib "$state" fm_task_inbox_ring tmux sess:fm-t1 "$rec" fm-t1 || rc=$?
+  [ "$rc" = 4 ] || fail "a stuck doorbell whose composer cannot be read after Enter must report unconfirmed (4), got rc $rc"
+  rm -f "$dir/blank"
+
   : > "$log"; : > "$composer"; echo 1 > "$drops"
   rc=0; ring || rc=$?
   [ "$rc" = 0 ] || fail "a ring whose first Enter is lost should still report rung, got rc $rc"
   [ "$(cat "$log")" = "SUBMIT: $doorbell" ] \
     || fail "the retry Enter should submit the doorbell once:"$'\n'"$(cat "$log")"
   [ ! -s "$composer" ] || fail "a lost Enter left the doorbell unsubmitted"
-  pass "inbox: the ring submits its own stuck doorbell, skips other pending text, and retries a lost Enter once on both paths"
+  pass "inbox: the ring submits its own stuck doorbell, skips other pending text, retries a lost Enter once on both paths, and reports an unreadable composer after Enter unconfirmed"
 }
 
 # A typed doorbell whose submit cannot prove the turn started is not a
