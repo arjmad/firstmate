@@ -1290,7 +1290,7 @@ test_capture_start_off_fast_forwards_unless_paths_overlap() {
   live=$(build_capture_live "$home" cade)
   cmd="$home/capture-cade.sh"
   deploys="$home/cade-deploys"
-  live_config "$home" "cade $live capture=skills/:$cmd capture-start=off echo deployed >> '$deploys'"
+  live_config "$home" "cade $live capture=skills/:$cmd capture-start=off test -e '$home/cade-ok' && echo deployed >> '$deploys'"
   run_sync "$home" cade >/dev/null
   printf 'live edit\n' >> "$live/skills/a.md"
   printf 'new live skill\n' > "$live/skills/new.md"
@@ -1300,7 +1300,11 @@ test_capture_start_off_fast_forwards_unless_paths_overlap() {
   assert_contains "$out" "cade live $live: synced " "a checkout behind origin with untouched edits fast-forwards"
   assert_contains "$out" "2 uncommitted path(s) under skills/, none changed by origin, wait for the scheduled capture" \
     "the synced line says the edits still wait for the capture"
-  assert_contains "$out" "cade live $live: post-update command ran" "the post-update command runs after that fast-forward"
+  assert_contains "$out" "cade live $live: STUCK: post-update command failed (exit 1)" "the post-update command runs after that fast-forward"
+  : > "$home/cade-ok"
+  out=$(run_sync "$home" cade)
+  assert_contains "$out" "0 commits behind origin/main" "the next sync finds it at origin with the edits still there"
+  assert_contains "$out" "cade live $live: post-update command ran" "and retries the failed post-update command under them"
   assert_equals "$(head_sha "$live")" "$(git -C "$home/work-cade" rev-parse HEAD)" "the checkout is at origin"
   assert_equals 1 "$(runs_of "$deploys")" "post-update ran once"
   assert_contains "$(cat "$live/skills/a.md")" "live edit" "the tracked live edit is preserved"
@@ -2004,6 +2008,59 @@ test_detached_post_update_uses_a_launchd_one_shot() {
   pass "post-update=detached boots a launchd one-shot under the label prefix and unloads it once it finished"
 }
 
+test_detached_post_update_follow_is_bounded() {
+  local home live out
+  home=$(isolated_home)
+  live=$(build_detached_live "$home" hung)
+  live_config "$home" "hung $live post-update=detached $home/job-hung.sh"
+  run_sync "$home" hung >/dev/null
+  advance_origin "$home" hung C1
+  : > "$home/hold-hung"
+  out=$(FM_LIVE_POST_UPDATE_LAUNCHCTL=none FM_LIVE_POST_UPDATE_POLL_SECS=0.1 FM_LIVE_POST_UPDATE_STUCK_SECS=1 run_sync "$home" hung)
+  assert_contains "$out" "hung live $live: STUCK: post-update command still running (pid " "a sync stops following its own run past the bound"
+  assert_contains "$out" "it is left running - needs attention" "and leaves it running"
+  assert_equals 1 "$(runs_of "$home/runs-hung")" "the run is still the one it started"
+  rm -f "$home/hold-hung"
+  wait_for_receipt "$live" "$home"
+  out=$(FM_LIVE_POST_UPDATE_LAUNCHCTL=none run_sync "$home" hung)
+  assert_contains "$out" "hung live $live: post-update command ran at" "the next sync records the run once it finished"
+  assert_equals 1 "$(runs_of "$home/runs-hung")" "without running it again"
+  pass "a sync following its own detached run stops at the bound with one STUCK line and leaves the run going"
+}
+
+test_detached_first_sighting_killed_then_failed_is_retried() {
+  local home live out pid
+  home=$(isolated_home)
+  live=$(build_detached_live "$home" first)
+  live_config "$home" "first $live post-update=detached $home/job-first.sh"
+  advance_origin "$home" first C1
+  : > "$home/hold-first"
+  echo 3 > "$home/exit-first"
+  bash -c '(set -m; FM_LIVE_POST_UPDATE_LAUNCHCTL=none FM_LIVE_POST_UPDATE_POLL_SECS=0.1 FM_HOME="$1" FM_ROOT_OVERRIDE="$2" \
+    "$2/bin/fm-fleet-sync.sh" first >/dev/null 2>&1 & echo $! > "$1/sync.pid")' _ "$home" "$ROOT"
+  pid=$(cat "$home/sync.pid")
+  wait_for_line "$home/runs-first" 1
+  kill -- "-$pid"
+  rm -f "$home/hold-first"
+  wait_for_receipt "$live" "$home"
+  rm -f "$home/exit-first"
+  out=$(FM_LIVE_POST_UPDATE_LAUNCHCTL=none FM_LIVE_POST_UPDATE_POLL_SECS=0.1 run_sync "$home" first)
+  assert_contains "$out" "first live $live: post-update command ran" "the failed first run is retried, not seeded as deployed"
+  assert_equals 2 "$(runs_of "$home/runs-first")" "the command ran again"
+  pass "a first-sighting run whose sync was killed and which then failed is retried by the next sync"
+}
+
+# wait_for_receipt <live> <home>: wait until the checkout's detached run wrote its receipt.
+wait_for_receipt() {
+  local rec i=0
+  rec="$2/state/live-checkouts/$(printf '%s' "$(cd "$1" && pwd -P)" | git hash-object --stdin)"
+  while [ ! -f "$rec.job" ] || [ -e "$rec.running" ]; do
+    i=$((i + 1))
+    [ "$i" -lt 200 ] || fail "no receipt at $rec.job"
+    sleep 0.1
+  done
+}
+
 test_scheduled_sync_is_a_singleton() {
   local home clone holder before
   home=$(isolated_home)
@@ -2083,6 +2140,8 @@ test_detached_post_update_runs_outside_the_sync
 test_detached_post_update_outlives_a_killed_sync
 test_detached_post_update_failure_is_stuck_and_retried
 test_detached_post_update_uses_a_launchd_one_shot
+test_detached_post_update_follow_is_bounded
+test_detached_first_sighting_killed_then_failed_is_retried
 test_scheduled_stuck_episode_wakes_once
 test_running_post_update_reports_activating
 test_foreign_live_activation_reports_activating

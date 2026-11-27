@@ -110,7 +110,7 @@ test_lands_an_open_capture_pr_end_to_end() {
 test_capture_start_off_entry_still_lands() {
   local c
   c=$(new_case)
-  printf '%s\n' "nova ~/code/agents/nova lock=~/nova.lock capture-start=off running=~/nova.pid capture=skills/:cron/skill-capture.sh" \
+  printf '%s\n' "nova ~/code/agents/nova lock=~/nova.lock capture-start=off running=~/nova.pid post-update=detached capture=skills/:cron/skill-capture.sh" \
     > "$c/home/config/live-checkouts"
   land "$c" "$URL" --head "$HEAD_SHA"
   assert_equals 0 "$RC" "a capture-start=off entry is still a capture project: $OUT"
