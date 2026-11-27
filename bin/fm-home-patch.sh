@@ -268,18 +268,29 @@ not_applied() {  # <why>
 }
 
 # Applies $DIFF to a staging copy of its files, then writes each patched file
-# back through its own inode, so its mode and owner stay as they were.
+# back through its own inode, so its mode and owner stay as they were. A write
+# that fails puts every file already written back as it was.
 apply_staged() {
-  local stage="$WORK/stage" rel out
+  local stage="$WORK/stage" orig="$WORK/orig" rel out done_rel
+  local written=()
   for rel in "${REL_PATHS[@]}"; do
-    mkdir -p -- "$stage/$(dirname "$rel")" && cp -- "$HOME_ROOT/$rel" "$stage/$rel" || return 1
+    mkdir -p -- "$stage/$(dirname "$rel")" "$orig/$(dirname "$rel")" \
+      && cp -- "$HOME_ROOT/$rel" "$stage/$rel" && cp -- "$HOME_ROOT/$rel" "$orig/$rel" || return 1
   done
   if ! out=$(git_apply_in "$stage" "$DIFF" 2>&1); then
     printf '%s\n' "$out" | grep -m 1 . | sed 's/^error: //'
     return 1
   fi
   for rel in "${REL_PATHS[@]}"; do
-    cat -- "$stage/$rel" >"$HOME_ROOT/$rel" || { echo "could not write $rel"; return 1; }
+    if ! { cat -- "$stage/$rel" >"$HOME_ROOT/$rel"; } 2>/dev/null; then
+      for done_rel in "${written[@]+"${written[@]}"}"; do
+        cat -- "$orig/$done_rel" >"$HOME_ROOT/$done_rel" \
+          || { echo "could not write $rel, and could not restore $done_rel"; return 1; }
+      done
+      echo "could not write $rel; every file was restored"
+      return 1
+    fi
+    written+=("$rel")
   done
 }
 
@@ -322,6 +333,12 @@ do_add() {
     1) ;;
     *) echo "error: could not diff $rel against $edited" >&2; exit 1 ;;
   esac
+  # git apply skips a "Binary files differ" block silently, so add takes only
+  # a text edit.
+  if ! grep -q '^@@ ' "$WORK/add.diff"; then
+    echo "error: $rel or $edited is not text, so add records no change" >&2
+    exit 2
+  fi
   if [ -e "$PATCH" ]; then
     cp -- "$PATCH" "$candidate" || exit 1
   else

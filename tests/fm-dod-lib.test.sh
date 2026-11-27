@@ -70,6 +70,10 @@ test_every_mode_carries_the_home_patch_rule() {
     rule_at=$(printf '%s\n' "$out" | grep -n 'fm-home-patch.sh add' | cut -d: -f1)
     done_at=$(printf '%s\n' "$out" | grep -n '^The task is complete only when committed on your branch' | head -1 | cut -d: -f1)
     [ "$rule_at" = "$((done_at + 1))" ] || fail "$mode: the rule must follow the complete-when-committed line"
+    case "$mode" in
+      local-only:*) assert_contains "$out" 'applies it by hand once your work is on local main' "$mode: no hand-apply wording" ;;
+      *) assert_contains "$out" 'applies it once your work lands' "$mode: no landing wording" ;;
+    esac
   done
   home="$TMP_ROOT/promote-home-patch"
   id=promote-hp

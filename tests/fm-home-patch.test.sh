@@ -121,6 +121,32 @@ test_add_refuses_symlinks_and_keeps_a_valid_patch() {
   pass "add refuses a symlinked patch file or target and leaves a valid patch as it was"
 }
 
+# A write that fails partway puts back every file already written, and add
+# refuses a binary edit, which git apply would skip without a word.
+test_failed_write_restores_and_binary_add_is_refused() {
+  local home="$TMP_ROOT/rollback" out rc
+  make_home "$home"
+  add_edit "$home" ship-8 data/learnings.md '# Learnings' 'new line' '```' 'fenced' '```' || fail "add refused"
+  add_edit "$home" ship-8 config/crew-compact-window '# new comment' '400000' || fail "add refused"
+  chmod 400 "$home/config/crew-compact-window"
+  if [ -w "$home/config/crew-compact-window" ]; then
+    chmod 600 "$home/config/crew-compact-window"
+    pass "a failed write restores every file (skipped: this user can write a read-only file)"
+    return
+  fi
+  out=$(in_home "$home" bash "$PATCHER" apply ship-8 2>&1); rc=$?
+  chmod 600 "$home/config/crew-compact-window"
+  expect_code 1 "$rc" "a failed write was reported as applied"
+  printf '%s\n' "$out" | grep -q 'every file was restored' || fail "a failed write did not say it restored: $out"
+  grep -qx 'old line' "$home/data/learnings.md" || fail "a failed write left the first file changed"
+  [ ! -e "$home/data/ship-8/home-patch.applied" ] || fail "a failed write was recorded applied"
+  printf '\000\001binary' > "$TMP_ROOT/binary-copy"
+  in_home "$home" bash "$PATCHER" add ship-9 data/learnings.md "$TMP_ROOT/binary-copy" >/dev/null 2>&1; rc=$?
+  expect_code 2 "$rc" "add accepted a binary edit"
+  [ ! -e "$home/data/ship-9/home-patch.md" ] || fail "a refused binary add wrote a patch"
+  pass "a failed write restores every file it wrote, and add refuses a binary edit"
+}
+
 test_hand_applied_patch_is_recognised() {
   local home="$TMP_ROOT/hand" rc
   make_home "$home"
@@ -244,6 +270,7 @@ fm_test_run \
   test_add_show_apply_once \
   test_mode_empty_files_and_digest_binding \
   test_add_refuses_symlinks_and_keeps_a_valid_patch \
+  test_failed_write_restores_and_binary_add_is_refused \
   test_hand_applied_patch_is_recognised \
   test_home_location_does_not_move_paths \
   test_drift_changes_nothing \
