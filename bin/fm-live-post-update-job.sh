@@ -9,7 +9,8 @@
 # environment from <record>.job.env (mode 0600), which it deletes once read,
 # runs the command through bash -c from <dir> with output in <record>.job.log,
 # and holds <record>.running in the format the sync's own runs write (pid and
-# start time, then the process start stamp) while it runs. When the command
+# start time, then the process start stamp) while it runs, removing the sync's
+# launch reservation <record>.job.lock once that record is written. When the command
 # ends it writes the receipt <record>.job, one line
 #   finished <nonce> <head> <exit> <UTC time>
 # and only then removes <record>.running, so a follower that sees the run gone
@@ -31,6 +32,7 @@ __fm_job_receipt() {
 if ! __fm_job_cmd=$(cat "$__fm_job_record.job.cmd" 2>/dev/null) || [ -z "$__fm_job_cmd" ]; then
   echo "fm-live-post-update-job: no command at $__fm_job_record.job.cmd" > "$__fm_job_record.job.log"
   __fm_job_receipt 126
+  rm -rf "$__fm_job_record.job.lock"
   exit 0
 fi
 # Sourced at top level so each declare -x stays global; a read-only variable
@@ -44,6 +46,8 @@ fi
 { printf '%s %s\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   LC_ALL=C TZ=UTC0 ps -p "$$" -o lstart=; } > "$__fm_job_record.running.tmp.$$" 2>/dev/null \
   && mv -f "$__fm_job_record.running.tmp.$$" "$__fm_job_record.running"
+# The sync's launch reservation ends here, once this run can be seen.
+rm -rf "$__fm_job_record.job.lock"
 
 if cd "$__fm_job_dir" 2>/dev/null; then
   bash -c "$__fm_job_cmd" </dev/null > "$__fm_job_record.job.log" 2>&1

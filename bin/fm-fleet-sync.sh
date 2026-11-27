@@ -1381,7 +1381,6 @@ detach_follow() {
     fi
     if [ -f "$record.running" ]; then
       if post_update_still_running "$record.running"; then
-        detach_unlock
         case "$RUNNING_STARTED" in
           ''|*[!0-9]*) ;;
           *) [ $(( $(date +%s) - RUNNING_STARTED )) -le "$POST_UPDATE_STUCK_SECS" ] || return 2 ;;
@@ -1402,26 +1401,26 @@ detach_follow() {
   done
 }
 
-# detach_lock <record>: take the checkout's launch lock, <record>.job.lock,
-# which a sync holds from writing the job's files until its runner is up, so a
-# second sync never rewrites or deletes them under it. One whose holder (its
-# pid file) is gone, or older than DETACH_START_SECS, is a killed launch and is
-# taken over. While another sync holds it, sets DETACH_LEFT=yes and RUNNING_*
-# for an "activating:" line, and is false.
+# detach_lock <record>: take the checkout's launch reservation,
+# <record>.job.lock, from before the job's files are written until its runner
+# is up: the runner removes it once it has read them and written its running
+# record, so it outlives a sync killed mid-launch and a second sync never
+# rewrites them or starts a second run. The sync removes it only when its own
+# launch fails. One older than DETACH_START_SECS is a launch that never
+# started and is taken over. While it is held, sets DETACH_LEFT=yes and
+# RUNNING_* for an "activating:" line, and is false.
 detach_lock() {
-  local since holder=""
+  local since
   DETACH_LOCK="$1.job.lock"
   if mkdir "$DETACH_LOCK" 2>/dev/null; then
     echo "$$" > "$DETACH_LOCK/pid" 2>/dev/null || true
     return 0
   fi
   since=$(fm_lock_path_mtime "$DETACH_LOCK" 2>/dev/null) || since=""
-  read -r holder < "$DETACH_LOCK/pid" 2>/dev/null || holder=""
   case "$since" in
     ''|*[!0-9]*) ;;
     *)
-      if [ $(( $(date +%s) - since )) -gt "$DETACH_START_SECS" ] \
-          || { [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; }; then
+      if [ $(( $(date +%s) - since )) -gt "$DETACH_START_SECS" ]; then
         rm -rf "$DETACH_LOCK"
         if mkdir "$DETACH_LOCK" 2>/dev/null; then
           echo "$$" > "$DETACH_LOCK/pid" 2>/dev/null || true
@@ -1490,8 +1489,11 @@ run_detached_post_update() {
     rc=125
     return 0
   fi
+  # The runner releases the reservation once it is up; this sync drops it only
+  # when the run never started.
+  DETACH_LOCK=""
   detach_follow "$record" "$nonce" || followed=$?
-  detach_unlock
+  [ "$followed" != 1 ] || [ -e "$record.running" ] || rm -rf "$record.job.lock"
   if [ "$followed" = 2 ]; then
     DETACH_LEFT=yes
     return 0
