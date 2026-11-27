@@ -2966,6 +2966,40 @@ test_origin_slug_validation_precedes_path_construction() {
   pass "completion and verification validate origins before constructing paths"
 }
 
+# A mistyped `bind --help` once recorded a binding named `--help`. Help after a
+# subcommand prints usage and writes nothing, and an id beginning with `-` is
+# refused rather than stored.
+test_subcommand_help_and_dash_ids_write_nothing() {
+  local home sub flag out rc
+  home=$(make_home dash-ids)
+  for sub in bind unbind binding hold answer open complete verify; do
+    for flag in --help -h; do
+      rc=0
+      out=$(run_captain "$home" "$sub" "$flag" 2>&1) || rc=$?
+      [ "$rc" -eq 0 ] || fail "$sub $flag exited $rc instead of printing usage"
+      assert_contains "$out" "Usage:" "$sub $flag did not print usage"
+    done
+  done
+  [ ! -e "$home/state/decision-bindings" ] \
+    || fail "a help request wrote a decision binding: $(ls -A "$home/state/decision-bindings")"
+  if run_captain "$home" bind -x > "$home/dash.out" 2> "$home/dash.err"; then
+    fail "bind accepted a source id beginning with '-'"
+  fi
+  assert_grep "must not begin with '-'" "$home/dash.err" "the dash refusal did not say why"
+  [ ! -e "$home/state/decision-bindings/-x.origin" ] || fail "a refused dash id still wrote a binding"
+  if run_captain "$home" bind sample-src --bad-origin > "$home/dash-origin.out" 2> "$home/dash-origin.err"; then
+    fail "bind accepted a legacy origin beginning with '-'"
+  fi
+  if run_captain "$home" hold -sample --title "x" --reason "y" > "$home/dash-hold.out" 2> "$home/dash-hold.err"; then
+    fail "hold accepted a task id beginning with '-'"
+  fi
+  if grep -q -- '-sample' "$home/data/backlog.md"; then
+    fail "a refused dash task id still wrote a backlog row"
+  fi
+  run_captain "$home" bind sample-src >/dev/null || fail "a plain source id no longer binds"
+  pass "subcommand help writes nothing, and ids beginning with '-' are refused"
+}
+
 # --- record divergence ------------------------------------------------------
 
 run_drain() {  # <home>
@@ -5568,6 +5602,7 @@ test_answer_batch_answers_a_group_at_once
 test_an_undated_later_answer_never_closes
 test_chat_channel_feeds_the_same_keyed_answer_intake
 test_origin_slug_validation_precedes_path_construction
+test_subcommand_help_and_dash_ids_write_nothing
 test_status_resolution_over_an_open_hold_is_signalled
 test_legitimate_holds_produce_no_divergence_signal
 test_teardown_never_closes_a_captain_held_task

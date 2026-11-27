@@ -27,6 +27,7 @@ Each task yields at most one noticed and one idea; `none` and an empty section a
 
 1. Run `bin/fm-noticed.sh list` and look for an open item about the same broken thing or the same idea.
    Reuse its slug when one matches, so `file` attaches the new evidence instead of filing a duplicate.
+   A `similar:` hint after a new `filed:` line names open rows citing the same file path; when one is the same problem, file the sighting there and close the new row as the hint says.
 2. File with `bin/fm-noticed.sh file noticed|idea <slug> --title <one line> --why <why it may matter> --from <task or agent> [--repo <repo>] [--evidence <pointer>] [--now] [--call ask-first|ruling|retire|machinery]`.
    A noticed item files as routine; add `--call` with its kind only to one Acting first holds for him, and filing an open routine item's slug again with `--call` holds it.
    A `reopened` line that says it lifted an earlier captain hold means the item was his call before it closed; if it still needs him, file it again with `--call`.

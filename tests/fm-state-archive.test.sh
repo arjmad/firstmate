@@ -8,9 +8,13 @@
 #     fresh one, and one a queued wake names, stay.
 #   - A retired source whose every round is handled and old moves whole, each
 #     round's .handled marker last; nothing of it is deleted.
-#   - A registered source, a source with a fresh or unhandled round, one a
-#     queued wake or watcher marker names, and one an unhandled task steer
-#     points at all stay.
+#   - A retired source with a fresh or unhandled round, one a queued wake or
+#     watcher marker names, and one an unhandled task steer points at all
+#     stay.
+#   - A registered (live) source keeps its newest round; its older handled,
+#     old rounds move oldest first within the budget, except one a queued
+#     wake or unhandled steer names.
+#   - An archived note's announcement marker is removed with it.
 #   - A longer source id that starts with another's id is never swept with it.
 #   - An existing destination is never overwritten.
 #   - --dry-run reports and moves nothing; silence when nothing moves.
@@ -109,11 +113,112 @@ test_retired_sources_move_whole_and_live_ones_stay() {
   for f in reg.1 mixed.1 unread.1 queued.1 marked.1 pointed.1; do
     [ -e "$pin/$f.result" ] && [ -e "$pin/$f.handled" ] || fail "round $f must stay: $out"
   done
-  assert_contains "$out" "2 process-event round(s) of 1 retired source(s)" "summary line: $out"
+  assert_contains "$out" "2 process-event round(s) of 1 retired and 0 live source(s)" "summary line: $out"
   [ "$(cat "$pin/gone.seq-floor")" = 2 ] || fail "the archive should raise gone's sequence floor to 2"
   [ "$(bash -c '. "$1/bin/fm-pr-lib.sh"; . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-procevent-lib.sh"; fm_procevent_next_sequence "$2" gone' _ "$ROOT" "$pin")" = 3 ] \
     || fail "a later capture of gone must not reuse an archived sequence"
   pass "archive: a retired source's settled rounds move whole above a sequence floor; live ones stay"
+}
+
+# A registered source never retires, so its old rounds once piled up for good
+# (7,108 files in one home). Its settled older rounds now move one by one,
+# oldest first; its newest round, a queued or steered round, an unhandled or
+# fresh one, and its watcher markers stay, and a later capture never reuses an
+# archived sequence.
+test_live_source_moves_old_rounds_and_keeps_its_newest() {
+  local home out pin f n marker
+  home=$(new_home live)
+  pin="$home/state/procevent-inbox"
+  : > "$home/state/procevent/live.source"
+  # Rounds 1..12 old and handled, glob order 1,10,11,12,2,...: numeric order
+  # decides which is newest.
+  for n in 1 2 3 4 5 6 7 8 9 10 11 12; do round "$home" live "$n" old; done
+  round "$home" live 4 old unhandled; rm -f "$pin/live.4.handled"
+  printf '1\t0\tcheck\tprocevent:live:5\tx\n' > "$home/state/.wake-queue"
+  mkdir -p "$home/state/t.inbox"
+  printf 'schema=fm-task-inbox.v1\n--\nread %s now\n' "$pin/live.6.result" > "$home/state/t.inbox/001.msg"
+  round "$home" live 13 fresh
+  for n in 1 2 3; do
+    marker=$(STATE="$home/state" bash -c '. "$1/bin/fm-wake-lib.sh"; fm_wake_procevent_marker_path "$2" "$3"' _ "$ROOT" "$home/state" "procevent:live:$n")
+    : > "$marker"
+  done
+  # A live source whose only round is old keeps it as its newest.
+  : > "$home/state/procevent/solo.source"
+  round "$home" solo 1 old
+
+  out=$(run_archive "$home" --dry-run)
+  assert_contains "$out" "would archive procevent-inbox/live.1.*" "--dry-run should list a live source's old round: $out"
+  [ -e "$pin/live.1.result" ] || fail "--dry-run moved a live round"
+
+  out=$(FM_STATE_ARCHIVE_BUDGET=3 run_archive "$home")
+  for n in 1 2 3; do
+    [ -f "$(arch "$home" procevent-inbox)/live.$n.handled" ] || fail "the oldest live round $n should move first: $out"
+  done
+  [ -e "$pin/live.7.result" ] || fail "the budget should leave later live rounds for the next run: $out"
+  assert_contains "$out" "more remain for the next session start" "a cut live batch should say more remain: $out"
+  [ "$(cat "$pin/live.seq-floor")" = 3 ] || fail "the floor should cover exactly the moved batch: $(cat "$pin/live.seq-floor")"
+
+  out=$(run_archive "$home")
+  for n in 7 8 9 10 11 12; do
+    [ -f "$(arch "$home" procevent-inbox)/live.$n.result" ] || fail "settled live round $n should move: $out"
+    [ ! -e "$pin/live.$n.result" ] || fail "moved live round $n is still in state/"
+  done
+  [ -e "$pin/live.4.result" ] || fail "an unhandled live round must stay"
+  [ -e "$pin/live.5.handled" ] || fail "a live round a queued wake names must stay"
+  [ -e "$pin/live.6.handled" ] || fail "a live round a task steer points at must stay"
+  [ -e "$pin/live.13.handled" ] || fail "the fresh newest live round must stay: $out"
+  [ -e "$pin/solo.1.result" ] && [ -e "$pin/solo.1.handled" ] || fail "a live source's newest round must stay"
+  for f in "$home/state"/.seen-procevent-*; do
+    [ -e "$f" ] || fail "a live source's watcher markers must stay"
+  done
+  assert_contains "$out" "of 0 retired and 1 live source(s)" "summary line: $out"
+  [ "$(cat "$pin/live.seq-floor")" = 12 ] || fail "the floor should rise to the highest archived round"
+  [ "$(bash -c '. "$1/bin/fm-pr-lib.sh"; . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-procevent-lib.sh"; fm_procevent_next_sequence "$2" live' _ "$ROOT" "$pin")" = 14 ] \
+    || fail "a later capture of a live source must not reuse an archived sequence"
+  pass "archive: a live source's settled older rounds move oldest first within the budget; its newest and named rounds stay"
+}
+
+# A move cut short inside a round (here by a clashing destination) must never
+# leave a result behind without its adapter record, which readers require.
+test_a_cut_round_never_strands_a_result() {
+  local home pin dest
+  home=$(new_home cut)
+  pin="$home/state/procevent-inbox"
+  : > "$home/state/procevent/cut.source"
+  round "$home" cut 1 old
+  round "$home" cut 2 fresh
+  dest=$(arch "$home" procevent-inbox)
+  mkdir -p "$dest"
+  printf 'earlier\n' > "$dest/cut.1.owner-task"
+  run_archive "$home" >/dev/null
+  if [ -e "$pin/cut.1.result" ] && [ ! -e "$pin/cut.1.adapter" ]; then
+    fail "a cut round left its result without its adapter record"
+  fi
+  [ -f "$dest/cut.1.result" ] || fail "the result should move before the round's sidecars"
+  [ -e "$pin/cut.1.handled" ] || fail "the handled marker must stay until the round is whole"
+  [ "$(cat "$dest/cut.1.owner-task")" = earlier ] || fail "an existing archive file was overwritten"
+  pass "archive: a round cut short moves its result first and keeps its handled marker"
+}
+
+# A note's announcement marker outlives nothing once the note is archived: it
+# goes with the move, and stays while the note stays.
+test_archived_note_drops_its_announcement_marker() {
+  local home out
+  home=$(new_home announced)
+  mkdir -p "$home/state/inbox/.announced"
+  old_note "$home" 1790000000-gone
+  old_note "$home" 1790000001-kept
+  printf 'reply\n' > "$home/state/inbox/.announced/1790000000-gone"
+  printf 'reply\n' > "$home/state/inbox/.announced/1790000001-kept"
+  printf '1\t0\tcheck\tinbox:1790000001-kept\tx\n' > "$home/state/.wake-queue"
+  run_archive "$home" --dry-run >/dev/null
+  [ -e "$home/state/inbox/.announced/1790000000-gone" ] || fail "--dry-run removed a marker"
+  out=$(run_archive "$home")
+  [ -f "$(arch "$home" inbox)/1790000000-gone.note" ] || fail "the old note should move: $out"
+  [ ! -e "$home/state/inbox/.announced/1790000000-gone" ] || fail "an archived note's marker should go: $out"
+  [ -e "$home/state/inbox/.announced/1790000001-kept" ] || fail "a kept note's marker must stay"
+  assert_contains "$out" "removed 1 announcement marker(s) of archived notes" "summary line: $out"
+  pass "archive: an archived note's announcement marker is removed; a kept note's stays"
 }
 
 test_linked_notes_stay() {
@@ -158,6 +263,9 @@ test_budget_defers_the_remainder() {
 
 test_old_notes_move_and_live_ones_stay
 test_retired_sources_move_whole_and_live_ones_stay
+test_live_source_moves_old_rounds_and_keeps_its_newest
+test_a_cut_round_never_strands_a_result
+test_archived_note_drops_its_announcement_marker
 test_existing_destination_is_never_overwritten
 test_budget_defers_the_remainder
 test_linked_notes_stay

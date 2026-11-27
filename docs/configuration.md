@@ -138,7 +138,7 @@ In every other home, everything else under `data/` follows one retention rule on
 
 Two `state/` record kinds have a retention rule, and neither deletes text:
 
-- A handled captain note (`state/inbox/handled/`) and the captured rounds of a retired process-event source (`state/procevent-inbox/`) move to `data/archive/state/<YYYY-MM>/` once older than 30 days, so the data retention rule above keeps their text. The locked session start runs [`bin/fm-state-archive.sh`](../bin/fm-state-archive.sh), whose header owns what keeps a record in place: a queued wake, a pending round, a registered source, or a task steer that names it.
+- A handled captain note (`state/inbox/handled/`) and the captured rounds of a process-event source (`state/procevent-inbox/`) move to `data/archive/state/<YYYY-MM>/` once older than 30 days, so the data retention rule above keeps their text. The locked session start runs [`bin/fm-state-archive.sh`](../bin/fm-state-archive.sh), whose header owns what keeps a record in place: a queued wake, a pending round, a registered source's newest round, or a task steer that names it.
 - A process-event source's launch-pacing stamps (`state/procevent/<source>.*.last-launch`) are dropped when the source retires, and the [state residue sweep](../bin/fm-state-residue-sweep.sh) drops any stamp whose source has no registration.
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.

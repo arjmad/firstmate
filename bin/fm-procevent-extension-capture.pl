@@ -314,13 +314,23 @@ if (defined $host_error) {
 }
 # Start above the source's sequence floor (fm_procevent_sequence_floor in
 # bin/fm-procevent-lib.sh owns it), so an archived round's sequence is never reused.
-$sequence = 1;
-if (open(my $floor_fh, '<', "$id.seq-floor")) {
-  my $floor = <$floor_fh>;
-  close($floor_fh);
-  $sequence = $1 + 1 if defined $floor && $floor =~ /\A(\d{1,18})\n?\z/;
+# The floor is read again after the probe, as fm_procevent_next_sequence does,
+# because bin/fm-state-archive.sh may raise it and move a live source's older
+# rounds while this capture runs.
+sub sequence_floor {
+  my $floor = 0;
+  if (open(my $floor_fh, '<', "$id.seq-floor")) {
+    my $line = <$floor_fh>;
+    close($floor_fh);
+    $floor = $1 if defined $line && $line =~ /\A(\d{1,18})\n?\z/;
+  }
+  return $floor;
 }
-$sequence++ while -e "$id.$sequence.result" || -l "$id.$sequence.result";
+while (1) {
+  $sequence = sequence_floor() + 1;
+  $sequence++ while -e "$id.$sequence.result" || -l "$id.$sequence.result";
+  last if $sequence > sequence_floor();
+}
 my $prefix = "$id.$sequence";
 my $nonce = ".$prefix.$$";
 my $result_tmp = "$nonce.result";

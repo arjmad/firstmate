@@ -287,7 +287,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-startup-memory-budget-lib.sh` | Startup-memory budget primitives |
 | `fm-startup-memory-budget.sh` | Read and report the local startup-memory budget |
 | `fm-state-residue-sweep.sh` | Retire watcher bookkeeping for provably gone endpoints, task-keyed records, dead locks, lock owners and launch stamps nothing live references, and rotate supervision scratch files |
-| `fm-state-archive.sh` | Move handled captain notes and retired process-event rounds older than 30 days from `state/` to `data/archive/state/<YYYY-MM>/`, deleting nothing |
+| `fm-state-archive.sh` | Move handled captain notes, and process-event rounds older than 30 days (a live source's newest round stays), from `state/` to `data/archive/state/<YYYY-MM>/`, deleting only an archived note's announcement marker |
 | `fm-data-media-prune.sh` | Retention prune for torn-down, quiet tasks' `data/<task>/`: remove video, audio, and disk images when `config/data-media-retention-days` opts in, reapply the scratch rule when `config/data-scratch-retention-days` opts in, remove every non-text file of tasks torn down N days when `config/data-nontext-retention-days` opts in (a `--nontext` dry run, `--apply` by hand), and report the largest torn-down tasks when `data/` is over its size trigger, with a `--dry-run` listing |
 | `fm-data-scratch-prune.sh` | Delete a task's reproducible scratch from `data/<task>/` at teardown - clean pushed nested checkouts, dependency folders, and tool binaries - keeping and naming any checkout with unlanded work, with a `--dry-run` listing |
 | `fm-stow-cascade.sh` | Enumerate registered secondmates and their inputs for a `/stow` cascade |

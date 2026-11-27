@@ -1459,11 +1459,18 @@ fm_procevent_sequence_floor() {  # <inbox-dir> <source-id>
   printf '%s\n' "$floor"
 }
 
-# The first sequence above the floor with no result yet.
+# The first sequence above the floor with no result yet. A live source's
+# runner captures without the source lock while bin/fm-state-archive.sh may
+# raise the floor and move older rounds, so the floor is read again after the
+# probe: the archive writes the floor before it moves anything, so a sequence
+# still above the re-read floor was never archived.
 fm_procevent_next_sequence() {  # <inbox-dir> <source-id>
   local seq
-  seq=$(( $(fm_procevent_sequence_floor "$1" "$2") + 1 ))
-  while [ -e "$1/$2.$seq.result" ] || [ -L "$1/$2.$seq.result" ]; do seq=$((seq + 1)); done
+  while :; do
+    seq=$(( $(fm_procevent_sequence_floor "$1" "$2") + 1 ))
+    while [ -e "$1/$2.$seq.result" ] || [ -L "$1/$2.$seq.result" ]; do seq=$((seq + 1)); done
+    [ "$seq" -le "$(fm_procevent_sequence_floor "$1" "$2")" ] || break
+  done
   printf '%s\n' "$seq"
 }
 

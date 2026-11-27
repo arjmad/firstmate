@@ -1185,6 +1185,40 @@ EOF
   pass "home-summary excludes kind=secondmate from unowned_current and terminal_in_flight"
 }
 
+# A mate queue longer than the old 20-row default reaches the parent whole, and
+# a deliberately lower bound still says how many rows it left out.
+test_home_summary_carries_a_long_queue_whole() {
+  local home fakebin out n
+  home=$(make_home summary-long-queue)
+  {
+    printf '## In flight\n\n## Queued\n'
+    for n in $(seq 1 25); do
+      printf -- '- [ ] long-queue-%02d - Queued sample %02d (repo: alpha) (kind: ship) (since 2026-07-%02d)\n' "$n" "$n" "$n"
+    done
+    printf '\n## Done\n'
+  } > "$home/data/backlog.md"
+  fakebin=$(make_fakebin "$home")
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --secondmate-home-summary)
+  printf '%s' "$out" | jq -e '
+    (.queued | length) == 25 and .counts.queued == 25
+      and ([.omitted[] | select(.surface == "queued")] | length) == 0
+  ' >/dev/null || fail "the default bound cut a 25-row queue short: $out"
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_SECONDMATE_QUEUED=20 "$SNAPSHOT" --secondmate-home-summary)
+  printf '%s' "$out" | jq -e '
+    (.queued | length) == 20 and .counts.queued == 25
+      and ([.omitted[] | select(.surface == "queued") | .count] == [5])
+  ' >/dev/null || fail "an explicit lower bound did not disclose the rows it omitted: $out"
+  # Queued rows also stop at a quarter of the byte cap, so a long queue can
+  # never push the whole summary over it; the cut is disclosed.
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_SECONDMATE_MAX_BYTES=8192 "$SNAPSHOT" --secondmate-home-summary)
+  printf '%s' "$out" | jq -e '
+    (.queued | length) > 0 and (.queued | length) < 25
+      and ((.queued | tojson | utf8bytelength) <= 2048)
+      and ([.omitted[] | select(.surface == "queued") | .count] == [25 - (.queued | length)])
+  ' >/dev/null || fail "the byte share did not cut and disclose a long queue: $out"
+  pass "home-summary carries a 25-row queue whole and discloses an explicit lower bound and its byte share"
+}
+
 # The heartbeat's fleet view lists every queued row that has waited 7 days or
 # more with no hold and no blocker as an action, naming what each needs.
 test_view_lists_waiting_unheld_rows() {
@@ -1229,6 +1263,7 @@ fm_test_run \
   test_empty_fleet_json \
   test_fixture_snapshot_json \
   test_home_summary_excludes_secondmate_from_child_inventory \
+  test_home_summary_carries_a_long_queue_whole \
   test_undated_captain_hold_phrasing_and_aging \
   test_hold_buckets_are_total_and_text_blind \
   test_main_inventory_orphan_and_unstructured_disclosure \

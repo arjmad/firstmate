@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # fm-state-archive.sh - move old, settled state/ records into data/archive/state/
-# so state/ stays small, without deleting anything.
+# so state/ stays small. It deletes only one kind of record: the
+# announcement marker of a note it archived (below).
 #
 # Usage: fm-state-archive.sh [--dry-run]
 #          Prints one "BOOTSTRAP_INFO: state archive: ..." line when something
@@ -21,24 +22,35 @@
 #     (bin/fm-inbox.sh), to data/archive/state/<YYYY-MM>/inbox/, unless it
 #     carries a request_id (a retry must replay it, not recreate it) or has a
 #     reply under state/inbox/.replies/ (replies and receipts read the note);
-#   - the captured results of a retired process-event source,
+#     once the note is in the archive its announcement marker,
+#     state/inbox/.announced/<id>, is removed, because only a pending or
+#     handled note is ever announced (bin/fm-inbox.sh);
+#   - the captured results of a process-event source,
 #     state/procevent-inbox/<source>.<seq>.* (bin/fm-procevent.sh), to
 #     data/archive/state/<YYYY-MM>/procevent-inbox/, aged by each round's
 #     .handled marker.
 # <YYYY-MM> is the month of the record's mtime. A destination that already
 # exists is never overwritten; the record stays and is named in a warning.
 #
-# What stays. A note an unhandled wake still names stays. A source's rounds
-# move only together, and only when every one of its rounds is handled and
-# old enough, the source has no `<source>.source` registration
-# (state/procevent/), no queued wake names it, no watcher marker
+# What stays. A note an unhandled wake still names stays.
+# A retired source's rounds move only together, and only when every one of
+# its rounds is handled and old enough, the source has no `<source>.source`
+# registration (state/procevent/), no queued wake names it, no watcher marker
 # (.seen-procevent-*) carries its key, no unhandled task steer under
 # state/*.inbox/ names one of its results, and its source lock is free.
-# Under that lock it first raises the source's sequence floor,
+# A live source, one still registered, keeps its newest round always; each
+# older round moves on its own once it is handled and old enough, no queued
+# wake names that round, and no unhandled task steer names its result. Its
+# watcher markers stay, because they persist while the source is registered
+# and the residue sweep owns them. A live source moves its oldest rounds
+# first, at most what is left of the budget.
+# Under the source lock it first raises the source's sequence floor,
 # state/procevent-inbox/<source>.seq-floor (fm_procevent_sequence_floor), to
 # its highest archived sequence; every capture allocator starts above the
-# floor, so a source that registers again never reuses an archived sequence,
-# its handled marker or a task pointer's text. The floor file itself stays.
+# floor, so a source that registers again, or a live one's next capture,
+# never reuses an archived sequence, its handled marker or a task pointer's
+# text (a live runner captures without the source lock, so the allocator
+# re-reads the floor after it picks a sequence). The floor file itself stays.
 # Within a round the .result moves first and the .handled marker last, so an
 # interrupted move never leaves a result that reads as unhandled
 # (fm_procevent_pending), and the next run finishes the round.
@@ -88,7 +100,7 @@ warn() { printf 'warning: state archive: %s\n' "$*" >&2; }
 
 MAX_AGE=$((FM_STATE_ARCHIVE_MAX_AGE_DAYS * 86400))
 ARCHIVE_ROOT="$DATA/archive/state"
-MOVED_NOTES=0 MOVED_ROUNDS=0 MOVED_SOURCES=0 MORE=0 SPENT=0
+MOVED_NOTES=0 MOVED_ROUNDS=0 MOVED_SOURCES=0 MOVED_LIVE=0 MORE=0 SPENT=0 DROPPED_MARKERS=0
 
 old_enough() { [ "$(fm_path_age "$1")" -gt "$MAX_AGE" ]; }
 
@@ -168,46 +180,93 @@ archive_notes() {
       MOVED_NOTES=$((MOVED_NOTES + 1))
     elif move_one "$note" "$dest"; then
       MOVED_NOTES=$((MOVED_NOTES + 1))
+      drop_announced "$id" "$dest/${note##*/}"
     fi
   done
+}
+
+# drop_announced <id> <archived-note>: remove the note's announcement marker,
+# only once the note is proven in the archive and gone from state/.
+drop_announced() {
+  local marker="$STATE/inbox/.announced/$1"
+  [ -f "$marker" ] && [ ! -L "$marker" ] || return 0
+  [ -f "$2" ] && [ ! -e "$STATE/inbox/handled/$1.note" ] && [ ! -e "$STATE/inbox/$1.note" ] || return 0
+  rm -f -- "$marker" || { warn "could not remove inbox/.announced/$1"; return 0; }
+  DROPPED_MARKERS=$((DROPPED_MARKERS + 1))
 }
 
 # --- process-event rounds --------------------------------------------------------
 
 # round_files <inbox> <source> <seq>: every file of exactly this round, the
-# .handled marker last; a longer source id that starts with `<source>.` never
-# matches, because a round file's suffix holds no dot.
+# .result first, so a cut run never leaves a result without its sidecars, and
+# the .handled marker last; a longer source id that starts with `<source>.`
+# never matches, because a round file's suffix holds no dot.
 round_files() {
   local f rest
+  { [ -e "$1/$2.$3.result" ] || [ -L "$1/$2.$3.result" ]; } && printf '%s\n' "$1/$2.$3.result"
   for f in "$1/$2.$3".*; do
     [ -e "$f" ] || [ -L "$f" ] || continue
     rest=${f#"$1/$2.$3."}
     # seq-floor here is source `<source>.<seq>`'s own floor, not a round file.
-    case "$rest" in *.*|handled|seq-floor) continue ;; esac
+    case "$rest" in *.*|result|handled|seq-floor) continue ;; esac
     printf '%s\n' "$f"
   done
   [ -e "$1/$2.$3.handled" ] && printf '%s\n' "$1/$2.$3.handled"
 }
 
+# source_seqs <inbox> <source>: the source's round sequences, ascending.
+source_seqs() {
+  local f seq
+  for f in "$1/$2".*.result "$1/$2".*.handled; do
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    seq=${f#"$1/$2."}
+    seq=${seq%.*}
+    case "$seq" in ''|*[!0-9]*) continue ;; esac
+    printf '%s\n' "$seq"
+  done | sort -n -u
+}
+
+source_registered() {  # <source>
+  local reg
+  reg=$(fm_procevent_registry_dir "$STATE")
+  [ -e "$reg/$1.source" ] || [ -L "$reg/$1.source" ]
+}
+
+# queue_names_exactly <key>: a queued wake carries exactly this key.
+queue_names_exactly() {
+  [ -n "$QUEUE_KEYS" ] || return 1
+  printf '%s\n' "$QUEUE_KEYS" | grep -F -x -q -- "$1"
+}
+
+# live_rounds_archivable <inbox> <source>: a registered source's rounds older
+# than its newest that are handled and old, and that no queued wake or
+# unhandled steer names, oldest first.
+live_rounds_archivable() {
+  local inbox=$1 id=$2 seqs newest seq f
+  seqs=$(source_seqs "$inbox" "$id")
+  [ -n "$seqs" ] || return 1
+  newest=$(printf '%s\n' "$seqs" | tail -1)
+  for seq in $seqs; do
+    [ "$seq" -lt "$newest" ] || continue
+    f="$inbox/$id.$seq.handled"
+    if [ ! -f "$f" ] || [ -L "$f" ] || ! old_enough "$f"; then continue; fi
+    queue_names_exactly "procevent:$id:$seq" && continue
+    steer_names "$inbox/$id.$seq.result" && continue
+    printf '%s\n' "$seq"
+  done
+}
+
 # source_archivable <inbox> <source>: every round handled and old, and nothing
 # live names the source. Prints the source's sequences.
 source_archivable() {
-  local inbox=$1 id=$2 reg f seq seqs='' marker
-  reg=$(fm_procevent_registry_dir "$STATE")
-  [ ! -e "$reg/$id.source" ] && [ ! -L "$reg/$id.source" ] || return 1
+  local inbox=$1 id=$2 f seq seqs marker
+  source_registered "$id" && return 1
   queue_names "procevent:$id:" && return 1
   marker=$(fm_wake_procevent_marker_path "$STATE" "procevent:$id:") || return 1
   for f in "$marker"*; do
     [ -e "$f" ] && return 1
   done
-  for f in "$inbox/$id".*.result "$inbox/$id".*.handled; do
-    [ -e "$f" ] || [ -L "$f" ] || continue
-    seq=${f#"$inbox/$id."}
-    seq=${seq%.*}
-    case "$seq" in ''|*[!0-9]*) continue ;; esac
-    case " $seqs " in *" $seq "*) continue ;; esac
-    seqs="$seqs $seq"
-  done
+  seqs=$(source_seqs "$inbox" "$id")
   [ -n "$seqs" ] || return 1
   for seq in $seqs; do
     f="$inbox/$id.$seq.handled"
@@ -231,14 +290,17 @@ write_floor() {
   fi
 }
 
-archive_source() {  # <inbox> <source> <seqs>
-  local inbox=$1 id=$2 seqs=$3 seq f dest lock rc=0
+# archive_source <inbox> <source> <seqs> <retired|live>: a live source moves
+# only the rounds it was given, which never include its newest, so a
+# registration that comes or goes meanwhile changes nothing for it.
+archive_source() {
+  local inbox=$1 id=$2 seqs=$3 mode=$4 seq f dest lock rc=0
   lock=$(fm_procevent_source_lock_path "$id")
   if [ "$DRY_RUN" -eq 0 ]; then
     (umask 077; mkdir -p "$(fm_procevent_claim_root)") || return 0
     fm_lock_try_acquire "$lock" || return 0
     # Re-check under the lock: a registration may have appeared meanwhile.
-    if [ -e "$(fm_procevent_registry_dir "$STATE")/$id.source" ]; then
+    if [ "$mode" = retired ] && source_registered "$id"; then
       fm_lock_release "$lock" || true
       return 0
     fi
@@ -267,7 +329,13 @@ EOF
     MOVED_ROUNDS=$((MOVED_ROUNDS + 1))
   done
   [ "$DRY_RUN" -eq 1 ] || fm_lock_release "$lock" || true
-  [ "$rc" -eq 0 ] && MOVED_SOURCES=$((MOVED_SOURCES + 1))
+  if [ "$rc" -eq 0 ]; then
+    if [ "$mode" = live ]; then
+      MOVED_LIVE=$((MOVED_LIVE + 1))
+    else
+      MOVED_SOURCES=$((MOVED_SOURCES + 1))
+    fi
+  fi
   return 0
 }
 
@@ -285,6 +353,20 @@ archive_procevent() {
     fm_procevent_source_id_valid "$id" || continue
     case "$seen" in *"|$id|"*) continue ;; esac
     seen="$seen|$id|"
+    if source_registered "$id"; then
+      # A live source moves its oldest settled rounds, within what is left.
+      seqs=$(live_rounds_archivable "$inbox" "$id")
+      [ -n "$seqs" ] || continue
+      count=$(printf '%s\n' "$seqs" | wc -l | tr -d ' ')
+      if [ $((SPENT + count)) -gt "$FM_STATE_ARCHIVE_BUDGET" ]; then
+        MORE=1
+        count=$((FM_STATE_ARCHIVE_BUDGET - SPENT))
+        seqs=$(printf '%s\n' "$seqs" | head -n "$count")
+      fi
+      SPENT=$((SPENT + count))
+      archive_source "$inbox" "$id" "$(printf '%s ' "$seqs" | tr '\n' ' ')" live
+      continue
+    fi
     seqs=$(source_archivable "$inbox" "$id") || continue
     count=$(printf '%s\n' "$seqs" | wc -l | tr -d ' ')
     if [ $((SPENT + count)) -gt "$FM_STATE_ARCHIVE_BUDGET" ] && [ "$SPENT" -gt 0 ]; then
@@ -292,7 +374,7 @@ archive_procevent() {
       continue
     fi
     SPENT=$((SPENT + count))
-    archive_source "$inbox" "$id" "$(printf '%s ' "$seqs" | tr '\n' ' ')"
+    archive_source "$inbox" "$id" "$(printf '%s ' "$seqs" | tr '\n' ' ')" retired
   done
 }
 
@@ -312,8 +394,9 @@ archive_procevent
 if [ "$MOVED_NOTES" -gt 0 ] || [ "$MOVED_ROUNDS" -gt 0 ]; then
   verb=moved
   [ "$DRY_RUN" -eq 0 ] || verb='would move'
-  printf 'BOOTSTRAP_INFO: state archive: %s %s handled note(s) and %s process-event round(s) of %s retired source(s) older than %s days to data/archive/state/' \
-    "$verb" "$MOVED_NOTES" "$MOVED_ROUNDS" "$MOVED_SOURCES" "$FM_STATE_ARCHIVE_MAX_AGE_DAYS"
+  printf 'BOOTSTRAP_INFO: state archive: %s %s handled note(s) and %s process-event round(s) of %s retired and %s live source(s) older than %s days to data/archive/state/' \
+    "$verb" "$MOVED_NOTES" "$MOVED_ROUNDS" "$MOVED_SOURCES" "$MOVED_LIVE" "$FM_STATE_ARCHIVE_MAX_AGE_DAYS"
+  [ "$DROPPED_MARKERS" -eq 0 ] || printf '; removed %s announcement marker(s) of archived notes' "$DROPPED_MARKERS"
   [ "$MORE" -eq 0 ] || printf '; more remain for the next session start'
   printf '\n'
 fi

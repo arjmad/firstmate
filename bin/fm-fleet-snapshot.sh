@@ -173,7 +173,12 @@ FM_SNAPSHOT_BUDGET=${FM_SNAPSHOT_BUDGET:-5}
 FM_SNAPSHOT_CACHE_DIR=${FM_SNAPSHOT_CACHE_DIR:-$STATE/secondmate-summary-cache}
 FM_SNAPSHOT_SECONDMATE_MAX_BYTES=${FM_SNAPSHOT_SECONDMATE_MAX_BYTES:-262144}
 FM_SNAPSHOT_SECONDMATE_CHILDREN=${FM_SNAPSHOT_SECONDMATE_CHILDREN:-20}
-FM_SNAPSHOT_SECONDMATE_QUEUED=${FM_SNAPSHOT_SECONDMATE_QUEUED:-20}
+# Queued rows (and holds) one secondmate summary carries. A summary over
+# FM_SNAPSHOT_SECONDMATE_MAX_BYTES is rejected whole, so this stays a count
+# bound rather than none, and queued rows and holds also each stop at a
+# quarter of that byte cap (fit in secondmate_home_summary_json); a mate queue
+# the old 20 cut short now reaches the parent whole.
+FM_SNAPSHOT_SECONDMATE_QUEUED=${FM_SNAPSHOT_SECONDMATE_QUEUED:-100}
 FM_SNAPSHOT_SECONDMATE_DECISIONS=${FM_SNAPSHOT_SECONDMATE_DECISIONS:-20}
 FM_SNAPSHOT_TERMINAL_LINES=${FM_SNAPSHOT_TERMINAL_LINES:-8}
 FM_SNAPSHOT_TERMINAL_BYTES=${FM_SNAPSHOT_TERMINAL_BYTES:-4096}
@@ -1036,6 +1041,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
     --arg home "$FM_HOME" \
     --argjson child_n "$FM_SNAPSHOT_SECONDMATE_CHILDREN" \
     --argjson queued_n "$FM_SNAPSHOT_SECONDMATE_QUEUED" \
+    --argjson list_bytes "$((FM_SNAPSHOT_SECONDMATE_MAX_BYTES / 4))" \
     --argjson decisions_n "$FM_SNAPSHOT_SECONDMATE_DECISIONS" \
     --argjson landed_n "$FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME" \
     --slurpfile backlog "$1" \
@@ -1045,6 +1051,15 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
     | def trunc($n):
       tostring | gsub("\\s+"; " ")
       | if length > $n then .[:$n] + "…" else . end;
+    # A summary over FM_SNAPSHOT_SECONDMATE_MAX_BYTES is rejected whole, and a
+    # captain row carries its question untruncated, so queued rows and holds
+    # each keep rows in order only while they fit in a quarter of that cap.
+    def fit($budget):
+      reduce .[] as $row ({out:[],used:0,full:false};
+        ($row | tojson | utf8bytelength) as $n
+        | if .full or (.used + $n > $budget) then .full = true
+          else .out += [$row] | .used += $n end)
+      | .out;
     def filed_epoch:
       (.since // null) as $filed
       | if ($filed | type) != "string" then null
@@ -1174,7 +1189,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
         state:$state,
         active_children:$active_all[:$child_n],
         decisions_open:$decisions_all[:$decisions_n],
-        holds:$holds_all[:$queued_n],
+        holds:($holds_all[:$queued_n] | fit($list_bytes)),
         queued:([$queued_all[] | {id:(.id | trunc(120)),title:(.title | trunc(120)),
           question:(if .hold_kind == "captain" then (.title + ": " + .hold_reason) else null end),
           blocked_by:((.blocked_by // null) | if . == null then null else trunc(120) end),
@@ -1194,7 +1209,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
           since:((.since // null) | if . == null then null else trunc(40) end)}]
           | ((map(select(.captain_actionable != true)) | newest_filed_first)
              + (map(select(.captain_actionable == true)) | newest_filed_first))
-          | .[:$queued_n]),
+          | .[:$queued_n] | fit($list_bytes)),
         landed:(if $landed_n == 0 then $landed_all else $landed_all[:$landed_n] end),
         endpoints:([$tasks[] | {id,state:.current_state.state,source:.current_state.source,
           endpoint:(.endpoint + {target:((.endpoint.target // null) | if . == null then null else trunc(240) end)})}][:$child_n]),
@@ -1209,11 +1224,16 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
         omitted:[
           (if ($active_all | length) > $child_n then {surface:"active_children",count:(($active_all | length) - $child_n)} else empty end),
           (if ($decisions_all | length) > $decisions_n then {surface:"decisions_open",count:(($decisions_all | length) - $decisions_n)} else empty end),
-          (if ($queued_all | length) > $queued_n then {surface:"queued",count:(($queued_all | length) - $queued_n)} else empty end),
           (if ($tasks | length) > $child_n then {surface:"endpoints",count:(($tasks | length) - $child_n)} else empty end),
           (if $landed_n > 0 and ($landed_all | length) > $landed_n then {surface:"landed",count:(($landed_all | length) - $landed_n)} else empty end)
         ]
-      }'
+      }
+    # Queued rows and holds stop at a count or at their byte share, whichever
+    # comes first, so what they omit is read off what they kept.
+    | .omitted += [
+        (if .counts.queued > (.queued | length) then {surface:"queued",count:(.counts.queued - (.queued | length))} else empty end),
+        (if .counts.holds > (.holds | length) then {surface:"holds",count:(.counts.holds - (.holds | length))} else empty end)
+      ]'
 }
 
 # Current registered-secondmate aggregation.
