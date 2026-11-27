@@ -65,13 +65,60 @@ test_add_show_apply_once() {
   grep -qx 'new line' "$home/data/learnings.md" || fail "the data/ edit did not land"
   grep -qx '```' "$home/data/learnings.md" || fail "a fence line in the edited text was lost"
   grep -qx '# read by fm-spawn' "$home/config/crew-compact-window" || fail "the config/ edit did not land"
-  grep -q '^sha=' "$home/data/ship-1/home-patch.applied" || fail "no applied record was written"
+  grep -q '^digest=' "$home/data/ship-1/home-patch.applied" || fail "no applied record was written"
   out=$(in_home "$home" bash "$PATCHER" apply ship-1 2>&1); rc=$?
   expect_code 3 "$rc" "a second apply was not a no-op"
   [ -z "$out" ] || fail "a second apply printed something: $out"
   out=$(in_home "$home" bash "$PATCHER" show ship-1 2>&1)
   printf '%s\n' "$out" | grep -qx 'home-patch: ship-1: already applied' || fail "show did not say already applied: $out"
   pass "add records a diff without editing the home, and apply lands it once"
+}
+
+# A file's mode survives the apply, emptying or filling a file stays a content
+# edit, and apply --digest applies only the diff it was shown.
+test_mode_empty_files_and_digest_binding() {
+  local home="$TMP_ROOT/mode" out rc digest
+  make_home "$home"
+  chmod 600 "$home/config/crew-compact-window"
+  : > "$home/data/empty.md"
+  add_edit "$home" ship-5 config/crew-compact-window '# private' || fail "add refused a config/ edit"
+  add_edit "$home" ship-5 data/empty.md 'filled' || fail "add refused filling an empty file"
+  : > "$TMP_ROOT/cleared"
+  in_home "$home" bash "$PATCHER" add ship-5 data/learnings.md "$TMP_ROOT/cleared" >/dev/null 2>&1 \
+    || fail "add refused emptying a file"
+  out=$(in_home "$home" bash "$PATCHER" apply ship-5 --digest 0000000000000000000000000000000000000000 2>&1); rc=$?
+  expect_code 1 "$rc" "apply took a digest it was not shown"
+  printf '%s\n' "$out" | grep -q 'it changed after it was shown' || fail "a digest mismatch was not named: $out"
+  grep -qx '# read by fm-spawn once worker-compact-window-1112 lands' "$home/config/crew-compact-window" \
+    || fail "a digest mismatch changed a file"
+  digest=$(in_home "$home" bash "$PATCHER" show ship-5 2>/dev/null | sed -n 's/^home-patch: ship-5: digest //p')
+  [ -n "$digest" ] || fail "show printed no digest"
+  (umask 022; in_home "$home" bash "$PATCHER" apply ship-5 --digest "$digest" >/dev/null 2>&1); rc=$?
+  expect_code 0 "$rc" "apply refused the digest it was shown"
+  [ "$(cat "$home/config/crew-compact-window")" = '# private' ] || fail "the config/ edit did not land"
+  [ "$(cat "$home/data/empty.md")" = filled ] || fail "an empty file was not filled"
+  [ ! -s "$home/data/learnings.md" ] || fail "a file was not emptied"
+  [ -n "$(find "$home/config/crew-compact-window" -perm 600)" ] || fail "the apply widened a private file's mode"
+  pass "apply keeps each file's mode, edits empty files, and applies only the digest it was shown"
+}
+
+# add writes nothing through a symlink and never publishes a refused block.
+test_add_refuses_symlinks_and_keeps_a_valid_patch() {
+  local home="$TMP_ROOT/addsafe" rc before
+  make_home "$home"
+  mkdir -p "$home/elsewhere" "$home/data/ship-6"
+  ln -s ../../elsewhere/target.md "$home/data/ship-6/home-patch.md"
+  printf '%s\n' 'x' > "$TMP_ROOT/edit-x"
+  in_home "$home" bash "$PATCHER" add ship-6 data/learnings.md "$TMP_ROOT/edit-x" >/dev/null 2>&1; rc=$?
+  expect_code 2 "$rc" "add wrote through a symlinked patch file"
+  [ ! -e "$home/elsewhere/target.md" ] || fail "add created a file through a symlink"
+  add_edit "$home" ship-7 data/learnings.md '# Learnings' 'new line' '```' 'fenced' '```' || fail "add refused"
+  before=$(cat "$home/data/ship-7/home-patch.md")
+  ln -s learnings.md "$home/data/alias.md"
+  in_home "$home" bash "$PATCHER" add ship-7 data/alias.md "$TMP_ROOT/edit-x" >/dev/null 2>&1; rc=$?
+  expect_code 2 "$rc" "add accepted a symlinked target"
+  [ "$before" = "$(cat "$home/data/ship-7/home-patch.md")" ] || fail "a refused add changed a valid patch"
+  pass "add refuses a symlinked patch file or target and leaves a valid patch as it was"
 }
 
 test_hand_applied_patch_is_recognised() {
@@ -195,6 +242,8 @@ test_no_patch_and_bad_arguments() {
 
 fm_test_run \
   test_add_show_apply_once \
+  test_mode_empty_files_and_digest_binding \
+  test_add_refuses_symlinks_and_keeps_a_valid_patch \
   test_hand_applied_patch_is_recognised \
   test_home_location_does_not_move_paths \
   test_drift_changes_nothing \

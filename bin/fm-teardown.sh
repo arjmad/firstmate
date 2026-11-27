@@ -164,11 +164,13 @@
 # leaves the Claude store at the same point, through
 # bin/fm-claude-store-prune.sh --path.
 # Home patch (audit a1-61): once the record is gone, a non-forced ship teardown
-# runs bin/fm-home-patch.sh apply on data/<id>/home-patch.md when the task's
-# merge was recorded (state/<id>.pr-poll-merge-notified), no away record exists
-# and the main session is the actor; that script owns the format and what a
-# patch may change. A patch it does not apply is filed once as the routine
-# noticed row noticed-home-patch-<id>, and nothing here fails the teardown.
+# prints bin/fm-home-patch.sh show for a data/<id>/home-patch.md still pending
+# and applies exactly that digest when the task's merge was recorded
+# (state/<id>.pr-poll-merge-notified), no away record (or legacy state/.afk)
+# exists and the main session is the actor; that script owns the format and
+# what a patch may change. A pending patch it does not apply, a local-only
+# ship's included, is filed once as the routine noticed row
+# noticed-home-patch-<id>, and nothing here fails the teardown.
 # Companion worktrees (fork patch, docs/fork-decisions.md 2026-10-14): a ship
 # spawned with bin/fm-spawn.sh --also records also=<repos> with
 # also_worktree_<repo>= and also_project_<repo>= per repo, and
@@ -5093,17 +5095,27 @@ fi
 # A ship's home patch (see the header) is applied here, once the record is gone;
 # one left unapplied is filed as a routine noticed row so the helm sees it.
 teardown_home_patch() {
-  local pending='' slug filed
+  local pending='' slug filed shown rc=0 digest
   [ "$KIND" = ship ] && [ "$FORCE" != --force ] && [ -d "$STATE" ] || return 0
-  [ -f "$DATA/$ID/home-patch.md" ] && [ ! -f "$DATA/$ID/home-patch.applied" ] || return 0
-  if [ "$TEARDOWN_HOME_PATCH_MERGED" != 1 ]; then
+  shown=$(FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-home-patch.sh" show "$ID" 2>&1 </dev/null) || rc=$?
+  case "$rc" in 3|4) return 0 ;; esac
+  if [ "$MODE" = local-only ]; then
+    pending="a local-only ship records no merge, so the helm applies it by hand after review"
+  elif [ "$TEARDOWN_HOME_PATCH_MERGED" != 1 ]; then
     pending="no merge of its PR was recorded"
-  elif [ "$(FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-afk-contract.sh" mode 2>/dev/null)" = away ]; then
+  elif [ "$(FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-afk-contract.sh" mode 2>/dev/null)" = away ] \
+    || { [ -e "$STATE/.afk" ] && [ "$(fm_afk_mode "$STATE")" = away ]; }; then
     pending="an away record exists, so nobody reviewed it"
   elif [ "$(fm_lease_actor 2>/dev/null)" = branch ]; then
     pending="the supervision branch ran this teardown, so the helm did not review it"
-  elif ! FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-home-patch.sh" apply "$ID" </dev/null; then
-    pending="it did not apply (the actionable line above says why)"
+  else
+    # The helm sees exactly what is applied, bound to the digest shown.
+    printf '%s\n' "$shown"
+    digest=$(printf '%s\n' "$shown" | sed -n "s/^home-patch: $ID: digest //p" | head -n 1)
+    if [ "$rc" -ne 0 ] || [ -z "$digest" ] \
+      || ! FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-home-patch.sh" apply "$ID" --digest "$digest" </dev/null; then
+      pending="it did not apply (the lines above say why)"
+    fi
   fi
   [ -n "$pending" ] || return 0
   slug=$(printf '%s' "$ID" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')

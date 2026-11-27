@@ -392,10 +392,12 @@
 # Home patch (audit a1-61): when the task left data/<id>/home-patch.md, its
 # diff and verdict from bin/fm-home-patch.sh show print as note: lines just
 # before the forge merge, and once the forge confirms an attended merge the
-# patch is applied through bin/fm-home-patch.sh apply, which owns the format,
-# what a patch may change, and the applied record. A merge under away or
-# branch authority leaves it unapplied with an actionable line, a companion PR
-# never touches it, and neither step changes this script's exit.
+# patch is applied through bin/fm-home-patch.sh apply --digest with the digest
+# shown, so a patch changed in between is not applied; that script owns the
+# format, what a patch may change, and the applied record. A merge under away
+# or branch authority, a patch that appeared or did not apply when shown, leaves
+# it unapplied with an actionable line, a companion PR never touches it, and
+# neither step changes this script's exit.
 # Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--update-branch] [--expected-head <full-sha>] [--allow-red <check-name>] [--allow-missing <check-name>] [--allow-no-pipeline] [--waive-review <reason>] [--one-way-approved] [--allow-revert] [--captain-approval-file <path>] [-- <extra forge merge args>]
 #
 # On GitLab, this script confirms the MR is actually merged before reporting it;
@@ -2867,9 +2869,18 @@ post_captain_approval() {
   | sed 's/^/note: /' >&2 || true
 # Advisory only (see the header's home-patch paragraph): the helm reviews the
 # diff here, before the forge merge, and the tail below applies it.
+# The tail applies only the digest shown here, so a patch changed after this
+# point stays pending rather than landing unreviewed.
+HOME_PATCH_RC=4
+HOME_PATCH_DIGEST=
 if [ -z "$COMPANION_REPO" ]; then
-  { FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-home-patch.sh" show "$ID" 2>&1 </dev/null || true; } \
-    | grep -v '^home-patch: [^ ]*: none$' | sed 's/^/note: /' >&2 || true
+  HOME_PATCH_RC=0
+  HOME_PATCH_SHOWN=$(FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-home-patch.sh" show "$ID" 2>&1 </dev/null) \
+    || HOME_PATCH_RC=$?
+  if [ "$HOME_PATCH_RC" != 4 ]; then
+    printf '%s\n' "$HOME_PATCH_SHOWN" | sed 's/^/note: /' >&2 || true
+    HOME_PATCH_DIGEST=$(printf '%s\n' "$HOME_PATCH_SHOWN" | sed -n "s/^home-patch: $ID: digest //p" | head -n 1)
+  fi
 fi
 
 # Accepted confused-agent-grade limitation, as in bin/fm-lease-lib.sh, not an
@@ -3146,14 +3157,23 @@ case "$outcome_rc" in
 esac
 
 # The task's home patch (see the header's home-patch paragraph) is applied only
-# after an attended merge; under any other authority nobody reviewed the note
-# above, so it stays pending for teardown or the helm. It never changes the exit.
-if [ -z "$COMPANION_REPO" ]; then
-  if [ "${FM_PR_MERGE_AUTHORITY:-}" = attended ]; then
-    FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-home-patch.sh" apply "$ID" </dev/null || true
-  elif [ -f "$DATA/$ID/home-patch.md" ] && [ ! -f "$DATA/$ID/home-patch.applied" ]; then
+# after an attended merge, and only as the digest the note above showed; under
+# any other authority nobody reviewed that note, so it stays pending for
+# teardown or the helm. It never changes the exit.
+if [ -z "$COMPANION_REPO" ] && [ "$HOME_PATCH_RC" != 3 ]; then
+  if [ "$HOME_PATCH_RC" = 4 ]; then
+    [ ! -e "$DATA/$ID/home-patch.md" ] \
+      || printf 'actionable: merged %s, but data/%s/home-patch.md appeared after the merge showed none, so it stays unapplied until the helm reviews it: bin/fm-home-patch.sh show %s\n' \
+        "$URL" "$ID" "$ID" >&2
+  elif [ "${FM_PR_MERGE_AUTHORITY:-}" != attended ]; then
     printf 'actionable: merged %s under %s authority, so its home patch data/%s/home-patch.md stays unapplied until the helm reviews it: bin/fm-home-patch.sh show %s, then apply %s\n' \
       "$URL" "${FM_PR_MERGE_AUTHORITY:-unknown}" "$ID" "$ID" "$ID" >&2
+  elif [ -n "$HOME_PATCH_DIGEST" ] && [ "$HOME_PATCH_RC" = 0 ]; then
+    FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-home-patch.sh" apply "$ID" \
+      --digest "$HOME_PATCH_DIGEST" </dev/null || true
+  else
+    printf 'actionable: merged %s, but its home patch data/%s/home-patch.md did not apply when shown (the note above says why), so it stays unapplied\n' \
+      "$URL" "$ID" >&2
   fi
 fi
 

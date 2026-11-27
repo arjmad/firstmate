@@ -1425,7 +1425,7 @@ fm_dod_with_home_patch_rule() {
   local data=$1 id=$2 cli rule line placed=0
   printf -v cli '%q' "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-home-patch.sh"
   # shellcheck disable=SC2016 # Backticks are literal brief text.
-  rule='If your change also needs a file in this firstmate home'"'"'s `data/` or `config/` changed, do not edit that file: copy it under your temp root, edit the copy, and run `'"$cli add $id"' <home-relative path> <edited copy>`, which records the exact diff in `'"$data/$id"'/home-patch.md`; the landing step shows that diff and applies it after your PR merges.'
+  rule='If your change also needs a file in this firstmate home'"'"'s `data/` or `config/` changed, do not edit that file: copy it under your temp root, edit the copy, and run `'"$cli add $id"' <home-relative path> <edited copy>`, which records the exact diff in `'"$data/$id"'/home-patch.md`; the landing step shows that diff and applies it once your work lands.'
   while IFS= read -r line || [ -n "$line" ]; do
     printf '%s\n' "$line"
     if [ "$placed" -eq 0 ] && [ "${line#The task is complete only when committed on your branch}" != "$line" ]; then

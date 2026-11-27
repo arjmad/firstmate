@@ -2903,6 +2903,7 @@ test_teardown_applies_a_merged_ships_home_patch() {
   expect_code 0 "$rc" "home-patch-merged: teardown failed: $(cat "$case_dir/stderr")"
   assert_grep 'home-patch: task-x1: applied to data/learnings.md' "$case_dir/stdout" \
     "home-patch-merged: teardown did not apply the patch"
+  assert_grep '+new learning' "$case_dir/stdout" "home-patch-merged: teardown did not show the diff it applied"
   grep -qx 'new learning' "$case_dir/data/learnings.md" || fail "home-patch-merged: the home file was not patched"
   assert_no_grep 'noticed-home-patch' "$case_dir/stdout" "home-patch-merged: an applied patch was filed as noticed"
 
@@ -2920,6 +2921,13 @@ test_teardown_applies_a_merged_ships_home_patch() {
     *) fail "home-patch-unmerged: the noticed row does not say why: $row" ;;
   esac
 
+  case_dir=$(home_patch_teardown_case home-patch-by-hand no)
+  printf '%s\n' 'new learning' > "$case_dir/data/learnings.md"
+  rc=0
+  FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "home-patch-by-hand: teardown failed: $(cat "$case_dir/stderr")"
+  assert_no_grep 'noticed-home-patch' "$case_dir/stdout" "home-patch-by-hand: a patch applied by hand was filed as pending"
+
   case_dir=$(home_patch_teardown_case home-patch-forced yes)
   rc=0
   FM_HOME="$case_dir" run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
@@ -2927,7 +2935,7 @@ test_teardown_applies_a_merged_ships_home_patch() {
   grep -qx 'old learning' "$case_dir/data/learnings.md" || fail "home-patch-forced: a forced teardown applied the patch"
   assert_no_grep 'home-patch: task-x1' "$case_dir/stdout" "home-patch-forced: a forced teardown applied the patch"
   assert_no_grep 'noticed-home-patch' "$case_dir/stdout" "home-patch-forced: a forced teardown filed the patch"
-  pass "teardown applies a merged ship's home patch, files an unmerged one, and leaves a forced one alone"
+  pass "teardown shows and applies a merged ship's home patch, files an unmerged one, skips one applied by hand, and leaves a forced one alone"
 }
 
 # What a finished task noticed outside its work, and its idea, reach firstmate

@@ -1133,7 +1133,7 @@ test_home_patch_is_noted_then_applied_after_an_attended_merge() {
   add_gh_mocks "$case_dir" abababababababababababababababababababab
   write_home_patch_fixture "$case_dir"
   set +e
-  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/61 \
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/961 \
     > "$case_dir/stdout" 2> "$case_dir/stderr"
   rc=$?
   set -e
@@ -1144,12 +1144,12 @@ test_home_patch_is_noted_then_applied_after_an_attended_merge() {
   assert_grep 'home-patch: task-x1: applied to data/learnings.md' "$case_dir/stdout" \
     "home-patch-attended: the merge did not apply the patch"
   grep -qx 'new learning' "$case_dir/home/data/learnings.md" || fail "home-patch-attended: the home file was not patched"
-  assert_logged_gh_merge "$case_dir" 61 example/repo --squash
+  assert_logged_gh_merge "$case_dir" 961 example/repo --squash
   pass "an attended merge notes the home patch before the forge and applies it after"
 }
 
 test_home_patch_waits_on_a_failed_away_or_companion_merge() {
-  local case_dir rc url=https://github.com/example/repo/pull/62
+  local case_dir rc url=https://github.com/example/repo/pull/962
   case_dir=$(make_case home-patch-failed)
   mkdir -p "$case_dir/wt"
   add_gh_mocks_merge_fails "$case_dir"
@@ -1177,12 +1177,12 @@ test_home_patch_waits_on_a_failed_away_or_companion_merge() {
   mkdir -p "$case_dir/wt"
   fm_git_init_commit "$case_dir/jobs-wt"
   printf '%s\n' "pr=$url" "also=jobs" "also_worktree_jobs=$case_dir/jobs-wt" \
-    "also_project_jobs=$case_dir/jobs" "also_pr_jobs=https://github.com/example/jobs/pull/7" >> "$case_dir/state/task-x1.meta"
+    "also_project_jobs=$case_dir/jobs" "also_pr_jobs=https://github.com/example/jobs/pull/967" >> "$case_dir/state/task-x1.meta"
   add_gh_mocks "$case_dir" adadadadadadadadadadadadadadadadadadadad
   write_home_patch_fixture "$case_dir"
-  run_pr_merge "$case_dir" task-x1 https://github.com/example/jobs/pull/7 > "$case_dir/stdout" 2> "$case_dir/stderr" \
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/jobs/pull/967 > "$case_dir/stdout" 2> "$case_dir/stderr" \
     || fail "home-patch-companion: the companion merge should succeed: $(cat "$case_dir/stderr")"
-  assert_no_grep 'home-patch' "$case_dir/stderr" "home-patch-companion: a companion merge noted the task's patch"
+  assert_no_grep 'home-patch: task-x1' "$case_dir/stderr" "home-patch-companion: a companion merge noted the task's patch"
   grep -qx 'old learning' "$case_dir/home/data/learnings.md" || fail "home-patch-companion: a companion merge applied the patch"
   pass "a failed, away or companion merge leaves the home patch unapplied"
 }
