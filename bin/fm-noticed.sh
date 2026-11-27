@@ -44,6 +44,13 @@
 #                              is an idea already handed to the main home
 #            handed-up: <id>   in a secondmate home, an idea or a --call
 #                              item went to the main home instead (below)
+#          A new row (filed, or reopened after archiving) that names a file
+#          path also gets a read-only hint on stderr: up to three
+#          `fm-noticed: similar: <id> also names <path>` lines for other open
+#          rows of the same kind and --repo whose text names the same path (a
+#          test file by its file name, any other file only with a directory),
+#          and how to fold the new row into one. Nothing merges, and stdout and
+#          the exit status are unchanged; without --repo there is no hint.
 #          In a secondmate home (a .fm-secondmate-home marker) an idea or a
 #          --call item is not filed here: it is appended to the parent channel
 #          through bin/fm-parent-channel-lib.sh as one
@@ -309,6 +316,56 @@ hand_up_to_parent() {  # <id> <kind> <title> <why> <from> <repo> <evidence> <cal
   exit 1
 }
 
+# The file paths a filing names: path-like words with an extension in its
+# title, why and evidence. A test file matches by its file name, so
+# `tests/x.test.sh` and `x.test.sh` meet; any other file needs a directory
+# (`docs/a.md`, matched as written), because a bare `README.md` names nothing
+# in particular. URLs and domain names are not paths.
+named_paths() {  # <text>
+  printf '%s\n' "$1" | grep -oE '[A-Za-z0-9_./-]+\.[A-Za-z][A-Za-z0-9]{0,7}' | awk '
+    /^\/\// || /^www\./ { next }
+    {
+      sub(/^\.\//, "")
+      base = $0; sub(/.*\//, "", base)
+      if (base ~ /\.(com|org|net|io|dev|ai|app)$/) next
+      if (base ~ /(^test_|[._-]test\.|^test\.)/) key = base
+      else if (index($0, "/") > 1) key = $0
+      else next
+      if (!(key in seen)) { seen[key] = 1; print key }
+    }'
+}
+
+# similar_hint <kind> <new-id> <repo> <text>: after a new filing, name on
+# stderr at most three other open rows of the same kind and repo whose text
+# names one of the same paths (named_paths), so the filer can fold the new row
+# into one by hand. Read-only and best effort: it never merges, never changes
+# the exit status or stdout, and a failed read prints nothing.
+similar_hint() {
+  local kind=$1 id=$2 repo=$3 paths listing hits key state
+  [ -n "$repo" ] || return 0
+  paths=$(named_paths "$4") || return 0
+  [ -n "$paths" ] || return 0
+  listing=
+  for state in queued in_flight; do
+    listing="$listing$("$TASKS" list --state "$state" --kind "$kind" --repo "$repo" --fields body --limit 1000000 2>/dev/null)"$'\n' || return 0
+  done
+  hits=$(while IFS= read -r key; do
+    printf '%s\n' "$listing" | grep -F -- "$key" | awk -F , -v key="$key" -v self="$id" '
+      /^  "?[A-Za-z0-9]/ { rid = substr($1, 3); gsub(/"/, "", rid); if (rid != self) print rid "\t" key }'
+  done <<EOF
+$paths
+EOF
+  )
+  [ -n "$hits" ] || return 0
+  printf '%s\n' "$hits" | awk -F '\t' -v id="$id" -v kind="$kind" '
+    !($1 in seen) { seen[$1] = 1; n++; if (n <= 3) printf "fm-noticed: similar: %s also names %s\n", $1, $2 }
+    END {
+      if (n > 3) printf "fm-noticed: similar: and %d more\n", n - 3
+      if (n > 0) printf "fm-noticed: nothing was merged; if one is the same problem, file this sighting with its slug (file %s <slug>) and close %s --evidence \"same as <that id>\"\n", kind, id
+    }' >&2
+  return 0
+}
+
 hold_reason() {  # <kind> <title> <why> <from> [<call>]
   local label=Noticed
   [ "$1" = idea ] && label=Idea
@@ -435,6 +492,7 @@ Routine: firstmate fixes or drops this on its own." >/dev/null \
     ! grep -Eq "^$id$TAB(fixed|dropped)$TAB" "$UNSEEN" 2>/dev/null || drop_unseen "$id"
     [ "$now" = 0 ] || list_noticed "$id" "$title" 1
     printf '%s: %s\n' "$outcome" "$id"
+    similar_hint "$kind" "$id" "$repo" "$title $why $evidence" || true
     return 0
   fi
   "$TASKS" add "$id" "$title" --kind "$kind" ${repo:+--repo "$repo"} --body "$body" >/dev/null \
@@ -444,6 +502,7 @@ Routine: firstmate fixes or drops this on its own." >/dev/null \
   grep -Fxq -- "$id" "$FILED" 2>/dev/null || printf '%s\n' "$id" >> "$FILED"
   [ "$kind" = noticed ] && list_noticed "$id" "$title" "$now"
   printf '%s: %s\n' "$outcome" "$id"
+  similar_hint "$kind" "$id" "$repo" "$title $why $evidence" || true
 }
 
 cmd_collect() {

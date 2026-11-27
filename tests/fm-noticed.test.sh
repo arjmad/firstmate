@@ -582,7 +582,42 @@ test_a_secondmate_hands_ideas_and_calls_to_the_main_home() {
   pass "a secondmate hands ideas and --call items to the main home on its parent channel and files routine items locally"
 }
 
+# Four agents once filed one test timeout under four slugs. A new row that names
+# a path an open row of the same kind and repo already names gets a read-only
+# hint on stderr; stdout stays the one outcome line and nothing merges.
+test_a_new_row_naming_a_known_path_gets_a_similar_hint() {
+  local home out err
+  home=$(make_home similar)
+  noticed "$home" file noticed sync-timeout --title "Sync suite times out" --why "CI lane red" \
+    --from t1 --repo firstmate --evidence "tests/fm-fleet-sync.test.sh:120 hit 600s" >/dev/null 2>&1 \
+    || fail "could not file the first sighting"
+  noticed "$home" file noticed doc-drift --title "Doc drifted" --why "readers misled" \
+    --from t1 --repo firstmate --evidence "docs/scripts.md row stale" >/dev/null 2>&1 \
+    || fail "could not file the doc row"
+  out=$(noticed "$home" file noticed sync-hang --title "fm-fleet-sync.test.sh hangs" --why "CI waits" \
+    --from t2 --repo firstmate 2> "$home/hint.err") || fail "a filing with a similar row failed: $out"
+  assert_equals "filed: noticed-sync-hang" "$out" "the hint changed the outcome line on stdout"
+  assert_grep "similar: noticed-sync-timeout also names fm-fleet-sync.test.sh" "$home/hint.err" \
+    "a test named by file name did not meet the row naming its path"
+  assert_grep "nothing was merged" "$home/hint.err" "the hint did not say how to fold the row by hand"
+  ! grep -q 'noticed-doc-drift' "$home/hint.err" || fail "a row naming another path was hinted"
+  tasks "$home" show noticed-sync-timeout --full | grep -q 'Seen again' \
+    && fail "the hint merged evidence into the earlier row"
+  # Another repo, a bare README.md, or no --repo gives no hint.
+  noticed "$home" file noticed sync-other --title "x" --why "y" --from t3 --repo business \
+    --evidence "tests/fm-fleet-sync.test.sh" > /dev/null 2> "$home/other.err" || fail "the other-repo filing failed"
+  [ ! -s "$home/other.err" ] || fail "a row in another repo was hinted: $(cat "$home/other.err")"
+  noticed "$home" file noticed readme-word --title "README.md wording" --why "y" --from t3 --repo firstmate \
+    --evidence "README.md" > /dev/null 2> "$home/bare.err" || fail "the bare-name filing failed"
+  [ ! -s "$home/bare.err" ] || fail "a bare file name was hinted: $(cat "$home/bare.err")"
+  out=$(noticed "$home" file noticed sync-norepo --title "fm-fleet-sync.test.sh" --why "y" --from t3 2> "$home/norepo.err") \
+    || fail "the no-repo filing failed"
+  [ ! -s "$home/norepo.err" ] || fail "a filing with no --repo was hinted: $(cat "$home/norepo.err")"
+  pass "a new row naming a path an open row names gets a read-only similar hint, and nothing merges"
+}
+
 test_noticed_is_a_captain_hold_that_never_dispatches
+test_a_new_row_naming_a_known_path_gets_a_similar_hint
 test_a_secondmate_hands_ideas_and_calls_to_the_main_home
 test_a_duplicate_attaches_evidence
 test_closed_items_come_back_or_stay_answered
