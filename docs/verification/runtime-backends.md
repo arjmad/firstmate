@@ -1986,7 +1986,8 @@ Doorbell rings through `fm_task_inbox_ring`, which submits through `fm_backend_s
 | --- | --- | --- | --- |
 | Herdr, unstarved, idle and mid-turn | before the fix | 14 | 14 rc=0, composer empty within 0.3 s |
 | Herdr, starved | before the fix | 7 | first ring: the one-shot proof failed, one Ctrl+U, `send-failed` (rc=2); the block then landed and that Ctrl+U deleted its last wrapped row, so the doorbell's first row sat typed; each of the next 6 rings found text that was not its own line and skipped (rc=1) |
-| Herdr, starved, 10 idle and 3 mid-turn | after the fix | 13 | 12 rc=0 and one rc=4 (the turn started after the confirm window); no doorbell left typed, no Ctrl+U |
+| Herdr, starved, 10 idle and 3 mid-turn | after the payload poll | 13 | 12 rc=0 and one rc=4 (the turn started after the confirm window); no doorbell left typed, no Ctrl+U |
+| Herdr, starved, 10 idle and 3 mid-turn | final, with the post-Enter content read | 13 | 13 rc=0, composer empty and the agent working 1.5 s after every ring |
 
 Leftover draft, `fm_backend_send_text_submit` with a steer:
 
@@ -1998,6 +1999,12 @@ Leftover draft, `fm_backend_send_text_submit` with a steer:
 
 A ring onto a leftover returned rc=1 (skipped) on both backends before and after the fix.
 Mid-turn, a doorbell's Enter left Claude's composer empty 0.3 s later on all 7 mid-turn rings, so Claude does not keep queued text in its composer; that is why a Claude submit gets no queued-Enter conversion.
+
+tmux with a starved Claude, 6 doorbells per run: before and after the fix, 5 rc=0 and one rc=4, with no doorbell left typed; the tmux core never sent a Ctrl+U before a payload was shown, so it never had the Herdr race.
+There a leftover typed just before the steer had not rendered when the pre-type read ran, so the steer was typed onto it; the proof saw the joined text, pressed no Enter, and cleared both (`send-failed`).
+
+After Enter, the composer classifier strips Claude's grey slash-command text as a ghost: a typed `/exit` reads `empty` on Herdr and `unknown` on tmux while the content reader returns `/exit`.
+So a Claude Enter is decided from the composer's content (`fm_composer_claude_after_enter`), and through it `/context` and `/exit` submit on both backends: on tmux both return `empty`, `/context` renders, and `/exit` ends Claude.
 
 Live guards: `FM_HERDR_SUBMIT_CONFIRM_LIVE=1 tests/fm-herdr-submit-confirm-live-e2e.test.sh` (leftover refusal and the starved arm) and `FM_COMPOSER_MATRIX_LIVE=1 tests/fm-composer-matrix-live-e2e.test.sh` (tmux leftover refusal, no tokens):
 
