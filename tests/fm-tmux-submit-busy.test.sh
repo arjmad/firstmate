@@ -485,7 +485,7 @@ claude_submit() {  # <dir> <composer-text> <message> [env...]
   printf '%s\n' '────────────────────────' "❯ $held" '────────────────────────' '  ⏵⏵ bypass permissions on' > "$dir/composer"
   : > "$dir/sent"
   env PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$dir/sent" \
-    FM_COMPOSER_PROOF_POLLS=2 FM_COMPOSER_PROOF_INTERVAL=0 "$@" \
+    FM_COMPOSER_PROOF_POLLS=2 FM_COMPOSER_PROOF_INTERVAL=0 FM_COMPOSER_CLEAR_SETTLE=0 "$@" \
     bash -c '. "$0/bin/fm-tmux-lib.sh"; fm_pane_is_busy() { [ "${FM_FAKE_PANE_BUSY:-0}" = 1 ]; }; fm_tmux_submit_core %0 "$1" 3 0 0' \
     "$ROOT" "$message" > "$dir/verdict" 2>/dev/null
 }

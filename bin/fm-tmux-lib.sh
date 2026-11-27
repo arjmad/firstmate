@@ -442,7 +442,7 @@ fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
   fi
   sleep "$settle"
   if [ -n "$claude_text" ] && ! fm_composer_await_payload fm_tmux_composer_content "$target" "$text"; then
-    if fm_composer_clear fm_tmux_send_key fm_tmux_composer_state "$target" "$text"; then
+    if fm_composer_clear fm_tmux_send_key fm_tmux_composer_content "$target" "$text"; then
       printf 'send-failed'
     else
       printf 'unknown'

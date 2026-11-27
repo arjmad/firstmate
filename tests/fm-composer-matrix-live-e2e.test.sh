@@ -151,7 +151,7 @@ check_claude_leftover_refused() {  # <version> <target>
       "$version" "$verdict" "$content" >&2
     return 0
   fi
-  if ! fm_composer_clear fm_tmux_send_key fm_tmux_composer_state "$target" "$draft"; then
+  if ! fm_composer_clear fm_tmux_send_key fm_tmux_composer_content "$target" "$draft"; then
     FAILED=1
     printf 'not ok - claude (%s): the shared clear did not empty the leftover draft\n' "$version" >&2
     return 0

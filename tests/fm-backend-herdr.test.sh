@@ -38,9 +38,9 @@ TMP_ROOT=$(fm_test_tmproot fm-backend-herdr-tests)
 mkdir -p "$TMP_ROOT/ambient-home"
 export FM_HOME="$TMP_ROOT/ambient-home"
 export FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0
-# The canned responses below give the Claude payload proof one read; the
-# late-burst case raises it to show the proof waits for a slow composer.
-export FM_COMPOSER_PROOF_POLLS=1
+# The canned responses below give the Claude payload proof one read and its
+# clear no settle recheck; the late-burst and late-clear cases raise them.
+export FM_COMPOSER_PROOF_POLLS=1 FM_COMPOSER_CLEAR_RECHECKS=0
 
 # make_herdr_fakebin: a `herdr` stub that logs every invocation (one line,
 # unit-separated args, to $FM_HERDR_LOG) and returns the canned response for
@@ -6172,6 +6172,31 @@ test_send_text_submit_claude_grey_slash_command_is_proven_and_submitted() {
   pass "fm_backend_herdr_send_text_submit: a typed slash command Claude draws in muted truecolor grey is proven and submitted"
 }
 
+# The refused-proof clear checks the composer's content too: a grey slash
+# command still there after Ctrl+U is not a cleared composer, so a clear that
+# cannot be verified reports unknown, not send-failed.
+test_send_text_submit_claude_clear_does_not_read_grey_text_as_cleared() {
+  local dir log resp fb out rule head n
+  dir="$TMP_ROOT/submit-claude-grey-clear"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  rule=$(printf '%0.s\xe2\x94\x80' $(seq 1 60))
+  head=$(printf '%0.s\xe2\x94\x80' $(seq 1 19))
+  herdr_submit_claude_prefix "$resp" /exit
+  for n in 4 6; do
+    {
+      printf '\x1b[0m\x1b[38;2;121;129;134m%s Firstmate operational input 1790546042 \xe2\x94\x80\x1b[0m\n' "$head"
+      printf '\xe2\x9d\xaf\xc2\xa0\x1b[0m\x1b[38;2;112;112;112m/context\x1b[0m\n'
+      printf '\x1b[0m\x1b[38;2;121;129;134m%s\x1b[0m\n' "$rule"
+      printf '  \x1b[0m\x1b[38;2;86;93;96m\xe2\x8f\xb5\xe2\x8f\xb5 bypass permissions on\x1b[0m\n'
+    } > "$resp/$n.out"
+  done
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 /exit 3 0.01 0.01' "$ROOT" )
+  [ "$out" = unknown ] || fail "a grey command still in the composer after Ctrl+U is not a verified clear, got '$out'; log: $(cat "$log")"
+  [ "$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")" -eq 0 ] || fail "a refused proof must not press Enter"
+  pass "fm_backend_herdr_send_text_submit: the refused-proof clear does not read grey slash text as cleared"
+}
+
 # The composer classifier strips that grey as a ghost and reads the composer
 # empty, so a Claude Enter is decided from the composer's content: a grey
 # /exit still shown after Enter is not delivery, whether the native status went
@@ -7349,6 +7374,7 @@ test_ring_through_herdr_reports_unconfirmed_turn_start
 test_send_text_submit_claude_2_1_291_popup_still_refuses_a_partial_payload
 test_send_text_submit_claude_grey_slash_command_is_proven_and_submitted
 test_send_text_submit_claude_grey_slash_command_still_held_is_not_delivered
+test_send_text_submit_claude_clear_does_not_read_grey_text_as_cleared
 test_send_text_submit_claude_slash_menu_selection_row_is_not_the_composer
 test_send_text_submit_named_claude_slash_menu_selection_row_is_not_the_composer
 test_send_text_submit_claude_titled_wrapped_doorbell_is_proven_and_submitted

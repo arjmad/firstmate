@@ -705,7 +705,8 @@ It ignores U+2063 because Claude's Herdr read-back never shows it.
 A composer that holds a shorter suffix, or a placeholder plus a literal remainder, does not receive Enter.
 Instead:
 
-1. The adapter presses Ctrl+U until the shared classifier reads the composer as empty.
+1. The adapter presses Ctrl+U until the composer's content reads blank, and reads it again after a one-second settle (`FM_COMPOSER_CLEAR_RECHECKS`, `FM_COMPOSER_CLEAR_SETTLE`) because a starved Claude can apply the Ctrl+U before a typed block still landing.
+   The check reads content, not the classifier, which strips Claude's grey slash-command text as a ghost.
 2. It then reports `send-failed`, so a resend starts from a clean composer.
 
 Ctrl+C is not used for this, because Claude documents it as interrupting a running operation.

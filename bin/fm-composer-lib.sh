@@ -2709,19 +2709,39 @@ fm_composer_clear_presses() {  # <text>
 }
 
 # fm_composer_clear: after a refused proof, press Ctrl+U through <key-fn>
-# until <state-fn> reads the composer as empty. Claude documents Ctrl+U as
+# until <content-fn> reads the composer as blank. Claude documents Ctrl+U as
 # delete-to-line-start, repeated across lines of a multiline draft; Ctrl+C is
-# not used because it interrupts a running turn. 0 only when the composer is
-# verified empty again, within fm_composer_clear_presses presses.
-fm_composer_clear() {  # <key-fn> <state-fn> <target> <text>
-  local key_fn=$1 state_fn=$2 target=$3 text=$4 presses i=0
+# not used because it interrupts a running turn. The check reads the
+# composer's content, not the classifier, which strips Claude's grey
+# slash-command text as a ghost and would call a held `/exit` cleared. A blank
+# read is read again FM_COMPOSER_CLEAR_RECHECKS times, FM_COMPOSER_CLEAR_SETTLE
+# seconds apart, because a starved Claude applies an early Ctrl+U before a
+# typed block still landing; text that lands then gets more presses. 0 only
+# when the composer is verified blank, within fm_composer_clear_presses presses.
+FM_COMPOSER_CLEAR_RECHECKS=${FM_COMPOSER_CLEAR_RECHECKS:-1}
+FM_COMPOSER_CLEAR_SETTLE=${FM_COMPOSER_CLEAR_SETTLE:-1}
+fm_composer_clear() {  # <key-fn> <content-fn> <target> <text>
+  local key_fn=$1 content_fn=$2 target=$3 text=$4 presses i=0 checks
   presses=$(fm_composer_clear_presses "$text")
   while [ "$i" -lt "$presses" ]; do
     "$key_fn" "$target" C-u || return 1
     i=$((i + 1))
-    [ "$("$state_fn" "$target")" = empty ] && return 0
+    _fm_composer_reads_blank "$content_fn" "$target" || continue
+    checks=0
+    while [ "$checks" -lt "$FM_COMPOSER_CLEAR_RECHECKS" ]; do
+      sleep "$FM_COMPOSER_CLEAR_SETTLE"
+      _fm_composer_reads_blank "$content_fn" "$target" || continue 2
+      checks=$((checks + 1))
+    done
+    return 0
   done
   return 1
+}
+
+_fm_composer_reads_blank() {  # <content-fn> <target>
+  local content
+  content=$("$1" "$2") || return 1
+  [ -z "${content//[$' \t\r\n\v\f']/}" ]
 }
 
 _fm_composer_classify_pi_rows() {  # <screen> <styled>

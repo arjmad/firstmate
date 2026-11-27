@@ -2044,7 +2044,39 @@ test_payload_proof_survives_a_failed_read() {
   pass "a failed composer read counts against the payload proof's polls instead of ending it"
 }
 
+# A starved Claude applies an early Ctrl+U before a typed block that is still
+# landing, so the clear's first blank read is not the end: the block that lands
+# during the settle gets another press.
+fm_test_late_key() {  # <target> <key>
+  printf '%s\n' "$2" >> "$FM_TEST_LATE_KEYS"
+  [ "$(wc -l < "$FM_TEST_LATE_KEYS")" -lt 2 ] || : > "$FM_TEST_LATE_COMPOSER"
+}
+fm_test_late_content() {  # <target>
+  local n
+  n=$(($(cat "$FM_TEST_LATE_READS") + 1))
+  printf '%s' "$n" > "$FM_TEST_LATE_READS"
+  [ "$n" -ne 2 ] || printf 'late doorbell' > "$FM_TEST_LATE_COMPOSER"
+  cat "$FM_TEST_LATE_COMPOSER"
+}
+
+test_clear_presses_again_for_a_block_that_lands_after_a_blank_read() {
+  local dir rc
+  dir=$(mktemp -d)
+  FM_TEST_LATE_KEYS="$dir/keys" FM_TEST_LATE_READS="$dir/reads" FM_TEST_LATE_COMPOSER="$dir/composer"
+  : > "$FM_TEST_LATE_KEYS"; printf '0' > "$FM_TEST_LATE_READS"; : > "$FM_TEST_LATE_COMPOSER"
+  FM_COMPOSER_CLEAR_RECHECKS=1 FM_COMPOSER_CLEAR_SETTLE=0 \
+    fm_composer_clear fm_test_late_key fm_test_late_content win 'late doorbell'; rc=$?
+  [ "$rc" -eq 0 ] || fail "a clear that presses the late block away should verify, rc=$rc"
+  [ "$(grep -c '^C-u$' "$FM_TEST_LATE_KEYS")" -eq 2 ] \
+    || fail "a block landing after the first blank read needs a second Ctrl+U, sent $(grep -c '^C-u$' "$FM_TEST_LATE_KEYS")"
+  [ ! -s "$FM_TEST_LATE_COMPOSER" ] || fail "the late block was left typed: $(cat "$FM_TEST_LATE_COMPOSER")"
+  rm -rf "$dir"
+  unset FM_TEST_LATE_KEYS FM_TEST_LATE_READS FM_TEST_LATE_COMPOSER
+  pass "fm_composer_clear: a typed block that lands after the first blank read gets another Ctrl+U"
+}
+
 test_payload_proof_survives_a_failed_read
+test_clear_presses_again_for_a_block_that_lands_after_a_blank_read
 test_background_exit_picker_stays_pending_and_blocks_retry
 test_dialog_heading_and_footer_must_be_the_recorded_lines
 test_dialog_note_skips_the_match_when_no_sink_is_set

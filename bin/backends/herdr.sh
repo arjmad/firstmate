@@ -3648,7 +3648,7 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
   sleep "$settle"
   if [ "$proof" = 1 ]; then
     if ! fm_composer_await_payload fm_backend_herdr_composer_content "$target" "$text"; then
-      if fm_composer_clear fm_backend_herdr_send_key fm_backend_herdr_composer_state "$target" "$text"; then
+      if fm_composer_clear fm_backend_herdr_send_key fm_backend_herdr_composer_content "$target" "$text"; then
         printf 'send-failed'
       else
         printf 'unknown'

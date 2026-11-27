@@ -138,7 +138,7 @@ verdict=$(fm_backend_herdr_send_text_submit "$TARGET" "Reply with exactly LEFTOV
 content=$(fm_backend_herdr_composer_content "$TARGET" 2>/dev/null) || content=
 [ "$verdict" = send-failed ] && [ "${content//[[:space:]]/}" = "${LEFTOVER//[[:space:]]/}" ] \
   || fail "Claude Code ($VERSION) on $HERDR_VER: a leftover draft must be refused untouched, got verdict '$verdict' and composer '$content'"
-fm_composer_clear fm_backend_herdr_send_key fm_backend_herdr_composer_state "$TARGET" "$LEFTOVER" \
+fm_composer_clear fm_backend_herdr_send_key fm_backend_herdr_composer_content "$TARGET" "$LEFTOVER" \
   || fail "Claude Code ($VERSION) on $HERDR_VER: the shared clear did not empty the leftover draft"
 pass "live Herdr submit confirm: Claude Code ($VERSION) on $HERDR_VER refuses a leftover draft untouched and the shared clear empties it"
 
