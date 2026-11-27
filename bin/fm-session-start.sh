@@ -468,11 +468,10 @@ print_backlog_manual_compact() {
   near=$(date_in_days "$NEAR_DAYS") || near=''
   printf 'compact backlog listing (%s; done rows omitted; every in-flight, held, and blocked title line kept; other queued counted, listing only the title lines due within %s days plus the first %s; indented task bodies omitted)\n' \
     "$reason" "$NEAR_DAYS" "$QUEUED_LIMIT"
-  FM_ROW_FACTS="$(backlog_row_facts "$path")" awk -v max="$QUEUED_LIMIT" -v keep_re="$MANUAL_KEEP_RE" -v near="$near" '
-    BEGIN {
-      n = split(ENVIRON["FM_ROW_FACTS"], fl, "\n")
-      for (i = 1; i <= n; i++) { split(fl[i], f, "\t"); if (f[2] ~ /^[0-9]/) due[f[1]] = f[2] }
-    }
+  # The row facts arrive as the first input file, not the environment, so a
+  # large backlog cannot exceed the per-variable environment limit.
+  awk -v max="$QUEUED_LIMIT" -v keep_re="$MANUAL_KEEP_RE" -v near="$near" '
+    FILENAME == ARGV[1] { split($0, f, "\t"); if (f[2] ~ /^[0-9]/) due[f[1]] = f[2]; next }
     function state_for_heading(line, heading) {
       heading = line
       sub(/^##[[:space:]]+/, "", heading)
@@ -512,7 +511,7 @@ print_backlog_manual_compact() {
         }
       }
     }
-  ' "$path" | fm_hold_reason_decode_stream markdown
+  ' <(backlog_row_facts "$path") "$path" | fm_hold_reason_decode_stream markdown
 }
 
 # tasks-axi closes every listing with its own help block. This section composes
