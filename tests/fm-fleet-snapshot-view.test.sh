@@ -1208,7 +1208,15 @@ test_home_summary_carries_a_long_queue_whole() {
     (.queued | length) == 20 and .counts.queued == 25
       and ([.omitted[] | select(.surface == "queued") | .count] == [5])
   ' >/dev/null || fail "an explicit lower bound did not disclose the rows it omitted: $out"
-  pass "home-summary carries a 25-row queue whole and discloses an explicit lower bound"
+  # Queued rows also stop at a quarter of the byte cap, so a long queue can
+  # never push the whole summary over it; the cut is disclosed.
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_SECONDMATE_MAX_BYTES=8192 "$SNAPSHOT" --secondmate-home-summary)
+  printf '%s' "$out" | jq -e '
+    (.queued | length) > 0 and (.queued | length) < 25
+      and ((.queued | tojson | utf8bytelength) <= 2048)
+      and ([.omitted[] | select(.surface == "queued") | .count] == [25 - (.queued | length)])
+  ' >/dev/null || fail "the byte share did not cut and disclose a long queue: $out"
+  pass "home-summary carries a 25-row queue whole and discloses an explicit lower bound and its byte share"
 }
 
 # The heartbeat's fleet view lists every queued row that has waited 7 days or

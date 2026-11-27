@@ -46,7 +46,8 @@
 #                              item went to the main home instead (below)
 #          A new row (filed, or reopened after archiving) that names a file
 #          path also gets a read-only hint on stderr: up to three
-#          `fm-noticed: similar: <id> also names <path>` lines for other open
+#          `fm-noticed: similar: <id> also names <path> (to add to it: file
+#          <kind> <slug>)` lines for other open
 #          rows of the same kind and --repo whose text names the same path (a
 #          test file by its file name, any other file only with a directory),
 #          and how to fold the new row into one. Nothing merges, and stdout and
@@ -376,10 +377,14 @@ similar_hint() {
       ($2 in want) && $1 != self { print }')
   [ -n "$hits" ] || return 0
   printf '%s\n' "$hits" | awk -F '\t' -v id="$id" -v kind="$kind" '
-    !($1 in seen) { seen[$1] = 1; n++; if (n <= 3) printf "fm-noticed: similar: %s also names %s\n", $1, $2 }
+    !($1 in seen) {
+      seen[$1] = 1; n++
+      slug = $1; sub("^" kind "-", "", slug)
+      if (n <= 3) printf "fm-noticed: similar: %s also names %s (to add to it: file %s %s)\n", $1, $2, kind, slug
+    }
     END {
       if (n > 3) printf "fm-noticed: similar: and %d more\n", n - 3
-      if (n > 0) printf "fm-noticed: nothing was merged; if one is the same problem, file this sighting with its slug (file %s <slug>) and close %s --evidence \"same as <that id>\"\n", kind, id
+      if (n > 0) printf "fm-noticed: nothing was merged; if one is the same problem, file this sighting with the slug shown and close %s --evidence \"same as <that id>\"\n", id
     }' >&2
   return 0
 }

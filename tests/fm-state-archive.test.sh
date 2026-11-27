@@ -178,6 +178,28 @@ test_live_source_moves_old_rounds_and_keeps_its_newest() {
   pass "archive: a live source's settled older rounds move oldest first within the budget; its newest and named rounds stay"
 }
 
+# A move cut short inside a round (here by a clashing destination) must never
+# leave a result behind without its adapter record, which readers require.
+test_a_cut_round_never_strands_a_result() {
+  local home pin dest
+  home=$(new_home cut)
+  pin="$home/state/procevent-inbox"
+  : > "$home/state/procevent/cut.source"
+  round "$home" cut 1 old
+  round "$home" cut 2 fresh
+  dest=$(arch "$home" procevent-inbox)
+  mkdir -p "$dest"
+  printf 'earlier\n' > "$dest/cut.1.owner-task"
+  run_archive "$home" >/dev/null
+  if [ -e "$pin/cut.1.result" ] && [ ! -e "$pin/cut.1.adapter" ]; then
+    fail "a cut round left its result without its adapter record"
+  fi
+  [ -f "$dest/cut.1.result" ] || fail "the result should move before the round's sidecars"
+  [ -e "$pin/cut.1.handled" ] || fail "the handled marker must stay until the round is whole"
+  [ "$(cat "$dest/cut.1.owner-task")" = earlier ] || fail "an existing archive file was overwritten"
+  pass "archive: a round cut short moves its result first and keeps its handled marker"
+}
+
 # A note's announcement marker outlives nothing once the note is archived: it
 # goes with the move, and stays while the note stays.
 test_archived_note_drops_its_announcement_marker() {
@@ -242,6 +264,7 @@ test_budget_defers_the_remainder() {
 test_old_notes_move_and_live_ones_stay
 test_retired_sources_move_whole_and_live_ones_stay
 test_live_source_moves_old_rounds_and_keeps_its_newest
+test_a_cut_round_never_strands_a_result
 test_archived_note_drops_its_announcement_marker
 test_existing_destination_is_never_overwritten
 test_budget_defers_the_remainder

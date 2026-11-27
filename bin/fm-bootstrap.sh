@@ -1935,8 +1935,9 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
           || echo "MISSING: the PR health monitor could not be armed; owned PRs are not watched"
       fi
     fi
-    # Old handled captain notes and retired process-event rounds move to
-    # data/archive/state/ (moves, never deletes, always exits 0). It scans
+    # Old handled captain notes and settled process-event rounds move to
+    # data/archive/state/ (bin/fm-state-archive.sh's header owns what moves and
+    # the one marker it removes; always exits 0). It scans
     # state/ history, so it rides this deferred half, last, after the arming
     # steps, with a 30s slice of the worker's budget; a cut run resumes next
     # start.

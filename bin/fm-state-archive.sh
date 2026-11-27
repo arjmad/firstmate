@@ -198,15 +198,17 @@ drop_announced() {
 # --- process-event rounds --------------------------------------------------------
 
 # round_files <inbox> <source> <seq>: every file of exactly this round, the
-# .handled marker last; a longer source id that starts with `<source>.` never
-# matches, because a round file's suffix holds no dot.
+# .result first, so a cut run never leaves a result without its sidecars, and
+# the .handled marker last; a longer source id that starts with `<source>.`
+# never matches, because a round file's suffix holds no dot.
 round_files() {
   local f rest
+  { [ -e "$1/$2.$3.result" ] || [ -L "$1/$2.$3.result" ]; } && printf '%s\n' "$1/$2.$3.result"
   for f in "$1/$2.$3".*; do
     [ -e "$f" ] || [ -L "$f" ] || continue
     rest=${f#"$1/$2.$3."}
     # seq-floor here is source `<source>.<seq>`'s own floor, not a round file.
-    case "$rest" in *.*|handled|seq-floor) continue ;; esac
+    case "$rest" in *.*|result|handled|seq-floor) continue ;; esac
     printf '%s\n' "$f"
   done
   [ -e "$1/$2.$3.handled" ] && printf '%s\n' "$1/$2.$3.handled"

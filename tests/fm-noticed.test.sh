@@ -600,6 +600,8 @@ test_a_new_row_naming_a_known_path_gets_a_similar_hint() {
   assert_grep "similar: noticed-sync-timeout also names fm-fleet-sync.test.sh" "$home/hint.err" \
     "a test named by file name did not meet the row naming its path"
   assert_grep "nothing was merged" "$home/hint.err" "the hint did not say how to fold the row by hand"
+  # The slug it shows is the one `file` takes, without the kind prefix.
+  assert_grep "(to add to it: file noticed sync-timeout)" "$home/hint.err" "the hint did not show the slug file takes"
   ! grep -q 'noticed-doc-drift' "$home/hint.err" || fail "a row naming another path was hinted"
   # A path inside a longer one is a different file.
   noticed "$home" file noticed doc-backup --title "Backup copy stale" --why "y" --from t2 --repo firstmate \
