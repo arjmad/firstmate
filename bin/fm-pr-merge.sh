@@ -2279,32 +2279,21 @@ require_door_authority() {
 # Whether a PR body on stdin says `Visual review: none` (see the header's
 # captain-approval paragraph): a `Visual review: none` line, or a
 # `## Visual review` heading whose first text after blank lines is `none`, with
-# `none` ending its sentence or clause. It follows sites'
-# doormatsusa/scripts/theme-go-live.py VISUAL_NONE, so the two agree on which
-# PR is customer-visible; here a CRLF line ending is read as a line end, and
-# only ASCII letters, digits, and _ count as word characters.
+# `none` ending its sentence or clause. Each line is matched with the regular
+# expressions of sites' doormatsusa/scripts/theme-go-live.py VISUAL_NONE, so
+# the two agree on which PR is customer-visible, except that a CRLF line
+# ending is read as a line end here.
 pr_body_visual_review_none() {
-  LC_ALL=C awk '
-    # The text after "none" ends its sentence or clause: the line ends, or it
-    # goes on with one of . : ; , ( - or an em or en dash.
-    function none_ends(rest) {
-      return rest == "" || rest ~ /^[.:;,(-]/ \
-        || substr(rest, 1, 3) == "\342\200\224" || substr(rest, 1, 3) == "\342\200\223"
-    }
-    {
-      sub(/\r$/, "")
-      line = tolower($0)
-      if (heading) {
-        if (line ~ /^[ \t]*$/) next
-        heading = 0
-        if (match(line, /^[ \t*_`]*none[ \t*_`]*/) && none_ends(substr(line, RLENGTH + 1))) found = 1
-      }
-      if (match(line, /^[^a-z0-9_]*visual review[ \t*_]*:[ \t*_`]*none[ \t*_`]*/) \
-        && none_ends(substr(line, RLENGTH + 1))) found = 1
-      if (line ~ /^#+[ \t]*visual review[ \t]*$/) heading = 1
-    }
-    END { exit found ? 0 : 1 }
-  '
+  # shellcheck disable=SC2016 # the backticks are jq regex text, not expansions
+  jq -Rse '
+    "none[ \\t*_`]*(?:$|[.:;,(-]|—|–)" as $ends
+    | [split("\n")[] | sub("\r$"; "")] as $lines
+    | any(range(0; $lines | length); . as $i
+        | ($lines[$i] | test("^[^\\w]*visual review[ \\t*_]*:[ \\t*_`]*" + $ends; "i"))
+          or (($lines[$i] | test("^#+[ \\t]*visual review[ \\t]*$"; "i"))
+            and ([$lines[$i + 1:][] | select(test("^[ \\t]*$") | not)][0] // ""
+              | test("^[ \\t*_`]*" + $ends; "i"))))
+  ' >/dev/null 2>&1
 }
 
 # The customer-visible gate (see the header's captain-approval paragraph), run

@@ -7715,6 +7715,7 @@ test_sites_visual_review_refuses_without_captain_approval() {
     $'Visual review: none of the shots clip\n' \
     $'## Visual review\n\nNone of the shots clip at 360.\n' \
     $'## Visual review\n\nSee below. Visual review: nonexistent\n' \
+    $'\xc3\xa9 Visual review: none\n' \
     ''; do
     n=$((n + 1))
     case_dir=$(visual_review_case "sites-visual-$n" "$head" "$body")
@@ -7769,6 +7770,7 @@ test_sites_visual_review_none_merges_as_before() {
     $'- Visual review: `none` (scripts only)\n' \
     $'## Visual review\n\n\nNone - tooling only.\n' \
     $'Visual review: none\xe2\x80\x94scripts only\n' \
+    $'\xe2\x9c\x85 Visual review: none\n' \
     $'## Summary\r\n\r\nTooling.\r\n\r\nVisual review: none\r\n'; do
     n=$((n + 1))
     case_dir=$(visual_review_case "sites-none-$n" "$head" "$body")
@@ -7795,7 +7797,8 @@ test_sites_visual_review_none_merges_as_before() {
 
 test_sites_visual_review_waits_while_away() {
   local case_dir rc head=a415a415a415a415a415a415a415a415a415a418
-  # Without the flag the gate refuses; with it the attended-only refusal does.
+  # Without the flag the gate refuses; the flag itself is refused while away
+  # (test_captain_approval_file_is_refused_while_away).
   case_dir=$(visual_review_case sites-visual-away "$head" "$VISUAL_BODY")
   write_away_record "$case_dir" --words 'merge task-x1 when green'
   set +e
@@ -7807,19 +7810,6 @@ test_sites_visual_review_waits_while_away() {
   assert_grep "Visual review section is not \`none\`" "$case_dir/stderr" \
     "sites-visual-away: the refusal did not name the Visual review section"
   assert_no_grep 'pr merge' "$case_dir/gh.log" "sites-visual-away: the merge ran"
-
-  case_dir=$(visual_review_case sites-visual-away-flag "$head" "$VISUAL_BODY")
-  write_away_record "$case_dir" --words 'merge task-x1 when green'
-  printf 'ship it\n' > "$case_dir/approval"
-  set +e
-  FM_TEST_HOME="$case_dir/home" run_pr_merge "$case_dir" task-x1 https://github.com/arjmad/sites/pull/164 \
-    --captain-approval-file "$case_dir/approval" > "$case_dir/stdout" 2> "$case_dir/stderr"
-  rc=$?
-  set -e
-  expect_code 2 "$rc" "sites-visual-away-flag: the flag must be refused while away"
-  assert_grep '--captain-approval-file is attended-only' "$case_dir/stderr" \
-    "sites-visual-away-flag: refusal did not name attended-only"
-  assert_no_grep 'pr merge' "$case_dir/gh.log" "sites-visual-away-flag: the merge ran"
   pass "fm-pr-merge never merges a customer-visible sites PR while away"
 }
 
