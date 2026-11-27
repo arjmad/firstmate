@@ -247,7 +247,7 @@ live_rounds_archivable() {
   for seq in $seqs; do
     [ "$seq" -lt "$newest" ] || continue
     f="$inbox/$id.$seq.handled"
-    [ -f "$f" ] && [ ! -L "$f" ] && old_enough "$f" || continue
+    if [ ! -f "$f" ] || [ -L "$f" ] || ! old_enough "$f"; then continue; fi
     queue_names_exactly "procevent:$id:$seq" && continue
     steer_names "$inbox/$id.$seq.result" && continue
     printf '%s\n' "$seq"

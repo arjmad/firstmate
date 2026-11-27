@@ -586,7 +586,7 @@ test_a_secondmate_hands_ideas_and_calls_to_the_main_home() {
 # a path an open row of the same kind and repo already names gets a read-only
 # hint on stderr; stdout stays the one outcome line and nothing merges.
 test_a_new_row_naming_a_known_path_gets_a_similar_hint() {
-  local home out err
+  local home out
   home=$(make_home similar)
   noticed "$home" file noticed sync-timeout --title "Sync suite times out" --why "CI lane red" \
     --from t1 --repo firstmate --evidence "tests/fm-fleet-sync.test.sh:120 hit 600s" >/dev/null 2>&1 \
