@@ -791,11 +791,19 @@ test_direct_pr_dod_renders_the_registered_draft_token() {
     || fail "fm-brief.sh refused a project with no draft token"
   assert_grep 'ready for review, not a draft' "$home/data/plain-brief/brief.md" "a project with no draft token lost the ready wording"
   assert_grep "Only where the repository's own guidance" "$home/data/plain-brief/brief.md" "a project with no draft token lost the conditional wording"
-  rc=0
-  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" wrong-brief wrong --mode direct-PR 2>&1) || rc=$?
-  [ "$rc" -ne 0 ] || fail "fm-brief.sh accepted a refused registry draft token"
-  assert_contains "$out" "+draft-until-ready" "fm-brief.sh refused the draft token without naming it"
-  [ ! -e "$home/data/wrong-brief/brief.md" ] || fail "a refused draft token still wrote a brief"
+  # A token registered where it cannot apply is refused whatever the task's mode.
+  for mode in direct-PR no-mistakes; do
+    rc=0
+    out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "wrong-brief-$mode" wrong --mode "$mode" 2>&1) || rc=$?
+    [ "$rc" -ne 0 ] || fail "fm-brief.sh --mode $mode accepted a refused registry draft token"
+    assert_contains "$out" "+draft-until-ready" "fm-brief.sh --mode $mode refused the draft token without naming it"
+    [ ! -e "$home/data/wrong-brief-$mode/brief.md" ] || fail "a refused draft token still wrote a $mode brief"
+  done
+  # Companion PRs follow the same DoD, so --also keeps the guidance-gated wording.
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" draft-also drafted --mode direct-PR --also plain >/dev/null 2>&1 \
+    || fail "fm-brief.sh refused a draft-until-ready ship with a companion"
+  assert_grep "Only where the repository's own guidance" "$home/data/draft-also/brief.md" \
+    "a ship with a companion repository lost the wording that defers to each repository's guidance"
 
   id="draft-promote"
   meta="$home/state/$id.meta"

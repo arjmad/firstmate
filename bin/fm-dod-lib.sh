@@ -259,23 +259,23 @@ fm_pr_text_valid() {  # <pr> <mode> <forge> <caller>
 
 # The project's registered PR-opening posture (audit a1-59): `until-ready` when
 # its data/projects.md posture line carries +draft-until-ready, else `ready`;
-# bin/fm-project-mode.sh --draft owns that grammar and its refusals. Only a
-# direct-PR ship with no forge binding takes it, so any other contract, or an
-# empty project name, reads `ready` without opening the registry. The
-# registry's warnings stay quiet here; its refusal is printed and fails the
-# caller, as the spawn's own registry read would.
+# bin/fm-project-mode.sh --draft owns that grammar and its refusals. The
+# registry is read for every named project, so a token registered where it
+# cannot apply is refused here whatever the task's mode, because the spawn's
+# registry reads do not refuse it. Only a direct-PR ship with no forge binding
+# takes it, so any other contract reads `ready`, and an empty project name
+# reads `ready` without opening the registry. The registry's warnings stay
+# quiet here; its refusal is printed and fails the caller.
 fm_dod_project_draft() {  # <mode> <forge> <project-name>
   local mode=$1 forge=$2 name=$3 d draft
-  if [ "$mode" != direct-PR ] || [ "$forge" != none ] || [ -z "$name" ]; then
-    printf 'ready\n'
-    return 0
-  fi
+  [ -n "$name" ] || { printf 'ready\n'; return 0; }
   d=${BASH_SOURCE[0]%/*}
   [ "$d" != "${BASH_SOURCE[0]}" ] || d=.
   if ! draft=$("$d/fm-project-mode.sh" --draft "$name" 2>/dev/null); then
     "$d/fm-project-mode.sh" --draft "$name" >/dev/null || true
     return 1
   fi
+  [ "$mode:$forge" = direct-PR:none ] || draft=ready
   printf '%s\n' "$draft"
 }
 

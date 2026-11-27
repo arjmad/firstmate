@@ -1024,6 +1024,9 @@ RULE1=$(fm_ship_rule_one "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH") || exi
 # token, which only words when a direct-PR worker marks its PR ready (audit
 # a1-59; bin/fm-dod-lib.sh's fm_dod_project_draft owns when it is read).
 DRAFT=$(FM_DATA_OVERRIDE="$DATA" fm_dod_project_draft "$MODE" "$FORGE" "$REPO") || exit 1
+# Companion PRs follow the same DoD, so a ship with --also keeps the wording
+# that defers to each repository's own guidance.
+[ "${#ALSO_REPOS[@]}" -eq 0 ] || DRAFT=ready
 DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$PR_TEXT" "$DRAFT") || exit 1
 if [ "$LAVISH_COMPATIBLE" = 1 ]; then
   LAVISH_LINE="If you put a board, preview, or other visual artifact in front of the captain to review or decide on, $LAVISH_ARM_RULE Keep the board's file under \`$DATA/$ID/\`, which outlives this worktree, so the board still serves after teardown hands it to firstmate. Do not wait for the captain to open the board: put the live board URL, $LAVISH_URL_RULE, in the status line that points him at it, and when the board asks for his call, that line is the needs-decision line and you stop as rule 6 says. When this task is torn down, a board that still carries a captain call firstmate holds is handed to firstmate, whose listener carries his answers, and any other board is retired. $LAVISH_CONCLUDE_RULE"
