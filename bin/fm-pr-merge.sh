@@ -2279,10 +2279,10 @@ require_door_authority() {
 # Whether a PR body on stdin says `Visual review: none` (see the header's
 # captain-approval paragraph): a `Visual review: none` line, or a
 # `## Visual review` heading whose first text after blank lines is `none`, with
-# `none` ending its sentence or clause. It reads exactly as sites'
-# doormatsusa/scripts/theme-go-live.py VISUAL_NONE does, so the two never
-# disagree on which PR is customer-visible, except that a CRLF line ending is
-# read as a line end.
+# `none` ending its sentence or clause. It follows sites'
+# doormatsusa/scripts/theme-go-live.py VISUAL_NONE, so the two agree on which
+# PR is customer-visible; here a CRLF line ending is read as a line end, and
+# only ASCII letters, digits, and _ count as word characters.
 pr_body_visual_review_none() {
   LC_ALL=C awk '
     # The text after "none" ends its sentence or clause: the line ends, or it
