@@ -958,7 +958,7 @@ test_pr_based_dod_carries_the_code_review_step() {
     # The DoD keeps the pointer and the lines a worker must see first (audit a1-65).
     assert_no_grep 'tstack-sol-loop' "$out" "$mode: DoD still restates the protocol's review steps"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    assert_grep 'Report done only after `'"$cli"' record <pr-url>`' "$out" "$mode: DoD does not hold done until record"
+    assert_grep 'On `unreviewed`, report done only after `'"$cli"' record <pr-url>`' "$out" "$mode: DoD does not hold an unreviewed PR's done until record"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
     assert_grep 'prints `reviewed`.' "$out" "$mode: DoD does not hold done until record prints reviewed"
     rc=0

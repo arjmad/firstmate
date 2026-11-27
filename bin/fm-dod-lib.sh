@@ -619,7 +619,7 @@ fm_dod_code_review_block() {  # <direct-PR|no-mistakes>
 Before that done report, give a code-changing GitHub PR its code review; a PR on any other forge skips this step.
 Read \`$protocol\` "Code review" before this step and follow it: it holds every step, stop, and escalation in full, with \`<review script>\` as \`$cli\` and \`<model>\` as \`$model\`.
 Run \`$cli status <pr-url>\` first; \`exempt\` or \`reviewed\` needs nothing more, except the gate statement when \`status\` says the PR edits its own gate files.
-Report done only after \`$cli record <pr-url>\`, run after $last_push, prints \`reviewed\`.
+On \`unreviewed\`, report done only after \`$cli record <pr-url>\`, run after $last_push, prints \`reviewed\`.
 EOF
 }
 
