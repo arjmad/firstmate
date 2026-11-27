@@ -65,6 +65,7 @@ test_every_mode_carries_the_home_patch_rule() {
     out=$(fm_dod_block "${mode%%:*}" hp-task "" "${mode#*:}" | fm_dod_with_home_patch_rule /home/x/data hp-task)
     [ "$(printf '%s\n' "$out" | grep -c 'fm-home-patch.sh add hp-task <home-relative path> <edited copy>')" -eq 1 ] \
       || fail "$mode: the DoD must name the home-patch command once"
+    # shellcheck disable=SC2016 # The backticks are literal brief text.
     assert_contains "$out" '`/home/x/data/hp-task/home-patch.md`' "$mode: the rule did not name the task's patch file"
     rule_at=$(printf '%s\n' "$out" | grep -n 'fm-home-patch.sh add' | cut -d: -f1)
     done_at=$(printf '%s\n' "$out" | grep -n '^The task is complete only when committed on your branch' | head -1 | cut -d: -f1)

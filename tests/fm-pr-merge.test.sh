@@ -1127,7 +1127,7 @@ write_home_patch_fixture() {  # <case_dir>
 }
 
 test_home_patch_is_noted_then_applied_after_an_attended_merge() {
-  local case_dir rc note_at merge_at
+  local case_dir rc
   case_dir=$(make_case home-patch-attended)
   mkdir -p "$case_dir/wt"
   add_gh_mocks "$case_dir" abababababababababababababababababababab
