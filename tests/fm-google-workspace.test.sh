@@ -443,6 +443,120 @@ claude_tool_list $list"
   pass "the claude tool list disables its off tools on Claude Code only"
 }
 
+# write_listener_table <path> [<extra row>] writes a listener table in fleet's shape:
+# a claude and a claude-docs row per configured account on distinct ports, plus
+# decoys that must never be read - another profile's rows for the same account, one
+# under the same server name, and a row for an account the config does not list.
+write_listener_table() {
+  local extra="${2:+,
+    $2}"
+  cat > "$1" <<EOF
+{
+  "_doc": "fixture",
+  "listeners": [
+    { "name": "cade-alpha", "port": 4171, "profile": "cade", "account": "alpha", "server": "gws-alpha" },
+    { "name": "cade-send-alpha", "port": 4174, "profile": "cade-send", "account": "alpha", "server": "gws-alpha-send" },
+    { "name": "claude-alpha", "port": 4161, "profile": "claude", "account": "alpha", "server": "gws-alpha" },
+    { "name": "claude-ops", "port": 4162, "profile": "claude", "account": "ops", "server": "gws-ops" },
+    { "name": "claude-bravo", "port": 4163, "profile": "claude", "account": "bravo", "server": "gws-bravo" },
+    { "name": "claude-other", "port": 4164, "profile": "claude", "account": "other", "server": "gws-other" },
+    { "name": "claude-docs-alpha", "port": 4165, "profile": "claude-docs", "account": "alpha", "server": "gws-alpha" },
+    { "name": "claude-docs-ops", "port": 4166, "profile": "claude-docs", "account": "ops", "server": "gws-ops" },
+    { "name": "claude-docs-bravo", "port": 4167, "profile": "claude-docs", "account": "bravo", "server": "gws-bravo" }$extra
+  ]
+}
+EOF
+}
+
+# expect_listener_refusal <root> <log> <message> <why> [--docs]: claude-install and
+# claude-config (with --docs when the bad row is a claude-docs one) both refuse the
+# current table, naming <message>, and no server is removed or added.
+expect_listener_refusal() {
+  local root=$1 log=$2 message=$3 why=$4 tier=${5:-} out code
+  : > "$log"
+  out=$(CLAUDE_STUB_LOG="$log" gws "$root" claude-install 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "$why refuses claude-install"
+  assert_contains "$out" "$message" "the refusal names it: $why"
+  assert_no_grep "mcp " "$log" "$why leaves every server as it was"
+  out=$(gws "$root" claude-config ${tier:+"$tier"} 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "$why refuses claude-config $tier"
+  assert_contains "$out" "$message" "claude-config $tier names it too: $why"
+}
+
+test_claude_code_reaches_the_shared_listeners_by_url() {
+  local root log table list out code docs
+  root=$(new_root listeners)
+  log="$TMP_ROOT/listeners.log"
+  table="$TMP_ROOT/workspace-mcp.json"
+  list="$TMP_ROOT/listeners-tools.tsv"
+  write_tool_list "$list"
+  write_listener_table "$table"
+  stub_claude
+  write_config "account alpha $PERSONAL_ACCOUNT
+account ops   $WORKSPACE_ACCOUNT
+account bravo $THIRD_ACCOUNT
+claude_tool_list $list
+claude_listeners $table"
+  : > "$log"
+  out=$(CLAUDE_STUB_LOG="$log" gws "$root" claude-install) || fail "claude-install failed with a listener table"
+  assert_equals "mcp remove -s user gws-alpha
+mcp add -s user --transport http gws-alpha http://127.0.0.1:4161/mcp
+mcp remove -s user gws-ops
+mcp add -s user --transport http gws-ops http://127.0.0.1:4162/mcp
+mcp remove -s user gws-bravo
+mcp add -s user --transport http gws-bravo http://127.0.0.1:4163/mcp" "$(cat "$log")" \
+    "each account is its claude listener's URL, with no command, env, or --disabled-tools of its own"
+  assert_contains "$out" "registered: gws-ops -> $WORKSPACE_ACCOUNT at http://127.0.0.1:4162/mcp" "the install names the URL each server now reaches"
+  docs=$(cat "$root/claude-docs.mcp.json")
+  assert_equals "$(gws "$root" claude-config --docs)" "$docs" "the --docs file is what claude-config --docs prints"
+  assert_equals '{"gws-alpha": {"type": "http", "url": "http://127.0.0.1:4165/mcp"}, "gws-bravo": {"type": "http", "url": "http://127.0.0.1:4167/mcp"}, "gws-ops": {"type": "http", "url": "http://127.0.0.1:4166/mcp"}}' \
+    "$(python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["mcpServers"], sort_keys=True))' <<<"$docs")" \
+    "the --docs file names the same servers at their claude-docs listeners, so they replace the user-scope ones"
+  assert_equals '{"gws-alpha": {"type": "http", "url": "http://127.0.0.1:4161/mcp"}, "gws-bravo": {"type": "http", "url": "http://127.0.0.1:4163/mcp"}, "gws-ops": {"type": "http", "url": "http://127.0.0.1:4162/mcp"}}' \
+    "$(gws "$root" claude-config | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["mcpServers"], sort_keys=True))')" \
+    "claude-config prints the user-scope servers at their claude listeners"
+  assert_not_contains "$(gws "$root" hermes-config)" "127.0.0.1" "the Hermes block is unchanged by a listener table"
+  : > "$log"
+  CLAUDE_STUB_LOG="$log" gws "$root" claude-install >/dev/null || fail "claude-install is not repeatable with a listener table"
+  expect_code 3 "$(grep -c "mcp remove" "$log")" "a repeat run replaces each server rather than adding a duplicate"
+
+  write_listener_table "$table"
+  python3 -c 'import json, sys
+t = json.load(open(sys.argv[1]))
+t["listeners"] = [r for r in t["listeners"] if r["name"] != "claude-docs-bravo"]
+json.dump(t, open(sys.argv[1], "w"))' "$table"
+  expect_listener_refusal "$root" "$log" "no claude-docs row for account bravo" "a configured account with no claude-docs row" --docs
+  write_listener_table "$table" '{ "name": "claude-alpha-2", "port": 4169, "profile": "claude", "account": "alpha", "server": "gws-alpha" }'
+  expect_listener_refusal "$root" "$log" "two claude rows for account alpha" "two claude rows for one account"
+  write_listener_table "$table" '{ "name": "claude-docs-bravo", "port": 4168, "profile": "claude-docs", "account": "bravo", "server": "gws-bravo" }'
+  expect_listener_refusal "$root" "$log" "two claude-docs rows for account bravo" "two claude-docs rows for one account" --docs
+  write_listener_table "$table.base"
+  sed 's/"server": "gws-ops" },/"server": "gws-ops-send" },/' "$table.base" > "$table"
+  expect_listener_refusal "$root" "$log" "names server 'gws-ops-send', not gws-ops" "a row whose server is not gws-<slug>"
+  for port in '"4161"' 0 70000 true; do
+    sed "s/\"port\": 4161,/\"port\": $port,/" "$table.base" > "$table"
+    expect_listener_refusal "$root" "$log" "has port $(python3 -c 'import json, sys; print(repr(json.loads(sys.argv[1])))' "$port"), not 1-65535" "port $port"
+  done
+  printf '{"listeners": {}}\n' > "$table"
+  expect_listener_refusal "$root" "$log" 'no "listeners" array' "a table without a listeners array"
+  printf 'not json\n' > "$table"
+  expect_listener_refusal "$root" "$log" "not a JSON listener table" "a table that is not JSON"
+  rm -f "$table"
+  expect_listener_refusal "$root" "$log" "is not a readable file" "a missing table"
+  write_config "claude_listeners $table
+claude_listeners $table"
+  out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a duplicate claude_listeners refuses claude-config"
+  assert_contains "$out" "duplicate claude_listeners" "the refusal names the duplicate setting"
+  write_config "claude_listeners workspace-mcp.json"
+  out=$(gws "$root" claude-config 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a relative claude_listeners refuses claude-config"
+  assert_contains "$out" "claude_listeners must be an absolute path" "the refusal asks for an absolute path"
+  rm -f "$table.base"
+  write_config
+  pass "Claude Code reaches the shared listeners by URL"
+}
+
 test_only_a_desktop_oauth_client_is_installed_and_kept_private() {
   local root out code mode
   root=$(new_root clientsecret)
@@ -564,6 +678,7 @@ test_registering_with_claude_code_keeps_the_accounts_apart
 test_claude_code_loads_docs_sheets_and_contacts_only_on_opt_in
 test_attachment_directory_survives_a_reinstall
 test_the_claude_tool_list_disables_its_off_tools_on_claude_code_only
+test_claude_code_reaches_the_shared_listeners_by_url
 test_only_a_desktop_oauth_client_is_installed_and_kept_private
 test_auth_refuses_before_an_oauth_client_exists
 test_the_consent_driver_refuses_without_a_server_invocation

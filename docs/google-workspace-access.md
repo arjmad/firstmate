@@ -7,6 +7,7 @@ Gmail, Drive, Calendar, Docs, Sheets, and Contacts for the captain's configured 
 ## Shape
 
 One `google_workspace_mcp` instance per account, `--single-user`, each pointed at its own `WORKSPACE_MCP_CREDENTIALS_DIR`, over stdio.
+A home whose config names `claude_listeners` instead points Claude Code's servers at shared loopback listeners that keep the same shape, one per account and tool profile ([configuration](configuration.md#google-workspace-accounts-configgoogle-workspace)).
 The per-instance credentials directory is the account boundary, and that is the whole reason for the shape.
 Nearly every tool this server exposes takes the target mailbox as an ordinary call argument, so one shared instance holding several accounts would leave the separation between them to a string the model emits.
 A process holding only one account's directory cannot reach another mailbox whatever it is asked for.
