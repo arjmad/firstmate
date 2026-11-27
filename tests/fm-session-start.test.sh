@@ -164,7 +164,11 @@ case "${1:-}" in
     printf 'ready[%s]{id,state,kind,repo,title}:\n' "$ready_count"
     i=1
     while [ "$i" -le "$ready_count" ]; do
-      printf '  ready-%s,queued,ship,firstmate,Ready item %s\n' "$i" "$i"
+      if [ -n "${FM_FAKE_TASKS_AXI_READY_MIXED:-}" ] && [ $((i % 3)) -ne 0 ]; then
+        printf '  ready-%s,queued,noticed,%s,Ready item %s\n' "$i" "$( [ $((i % 2)) -eq 0 ] && echo business || echo skills)" "$i"
+      else
+        printf '  ready-%s,queued,ship,firstmate,Ready item %s\n' "$i" "$i"
+      fi
       i=$((i + 1))
     done
     printf 'ready_public_followups: 0 delivery-ready obligations\n'
@@ -2100,7 +2104,7 @@ EOF
   out=$(FM_FAKE_TASKS_AXI_LOG="$log" FM_FAKE_TASKS_AXI_READY=3 \
     run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
-  assert_contains "$out" 'compact backlog listing (tasks-axi; done rows omitted; every in-flight and blocked row in full; a held row in full only when it is a live captain call or due or back within 2 days, every other held row counted per group; ready queued as id, kind, repo and due date, bounded to 20; titles cut at 80 characters end in "..."; task bodies omitted)' \
+  assert_contains "$out" 'compact backlog listing (tasks-axi; done rows omitted; every in-flight and blocked row in full; a held row in full only when it is a live captain call or due or back within 2 days, every other held row counted per group; ready queued counted by kind and repo, listing as id, kind, repo and due date only the rows due within 2 days plus the first 0 (FM_SESSION_START_QUEUED_LIMIT); titles cut at 80 characters end in "..."; task bodies omitted)' \
     "compatible tasks-axi backend did not render the compact backlog listing"
   assert_contains "$out" "tasks[1]{id,state,kind,repo,title,blocked_by,hold_kind,hold_reason}:" \
     "tasks-axi compact listing omitted the expected structured field header"
@@ -2112,11 +2116,16 @@ EOF
     "a held listing with only a live captain call printed a counted line"
   assert_contains "$out" 'blocked-followup,queued,scout,firstmate,Follow compact startup,compact-startup,"-","-"' \
     "tasks-axi compact listing omitted blocked-by metadata"
-  assert_contains "$out" "ready[3]{id,kind,repo,due}:
-  ready-1,ship,firstmate,-" \
-    "tasks-axi compact listing did not slim the ready rows to id, kind, repo and due date"
-  assert_contains "$out" "  ready-3,ship,firstmate,-" \
-    "tasks-axi compact listing omitted a dispatchable queued row inside the bound"
+  # By default the ready group is a count: no row and no empty table header.
+  assert_contains "$out" "counted ready rows, by kind (bin/fm-tasks-axi.sh ready lists every one):
+  ship: 3 (firstmate 3)" \
+    "tasks-axi compact listing did not count the ready rows by kind and repo"
+  assert_contains "$out" "(listed 0 of 3 ready queued item(s); a row due within 2 days is always listed)" \
+    "tasks-axi compact listing did not report that it listed no ready row"
+  assert_contains "$out" "(3 more queued - bin/fm-tasks-axi.sh ready)" \
+    "tasks-axi compact listing did not name the command that lists the counted ready rows"
+  assert_not_contains "$out" "ready-1," "tasks-axi compact listing listed a ready row that is not due soon"
+  assert_not_contains "$out" "ready[3]{" "tasks-axi compact listing printed a ready table header with no rows"
   assert_not_contains "$out" "OVERSIZED-BODY-LINE" "tasks-axi compact digest leaked an in-flight task body"
   assert_not_contains "$out" "QUEUED-BODY-LINE" "tasks-axi compact digest leaked a queued task body"
   assert_not_contains "$out" "DONE-ROW-LINE" "tasks-axi compact digest listed a done row at startup"
@@ -2309,7 +2318,12 @@ EOF
   assert_not_contains "$out" "ready-6," "the queued bound let through a row due more than 2 days out"
   assert_contains "$out" "  ready-7,ship,firstmate,$(date_in_days 2)" \
     "the queued bound hid a row due within 2 days"
-  assert_contains "$out" "(shown 4 of 7 ready queued item(s); a row due within 2 days is always shown)" \
+  assert_contains "$out" "ready[7]{id,kind,repo,due}:
+  ready-1,ship,firstmate,-" \
+    "the bounded ready listing did not slim its rows to id, kind, repo and due date"
+  assert_contains "$out" "  ship: 7 (firstmate 7)" \
+    "the bounded ready listing dropped its count by kind and repo"
+  assert_contains "$out" "(listed 4 of 7 ready queued item(s); a row due within 2 days is always listed)" \
     "the bounded queued listing did not report what it showed"
   assert_contains "$out" "(3 more queued - bin/fm-tasks-axi.sh ready)" \
     "the bounded queued listing did not disclose an exact remainder and how to see it"
@@ -2321,6 +2335,22 @@ EOF
     "the queued bound swallowed a blocked row"
   assert_contains "$out" "compact-startup,in_flight,ship,firstmate,Compact startup digest,none,captain,captain choice pending" \
     "the queued bound swallowed an in-flight row"
+
+  # At the default bound of 0 only the row due within 2 days is listed, and the
+  # count splits kinds and repos, most first, then by name.
+  out=$(FM_FAKE_TASKS_AXI_READY=7 FM_FAKE_TASKS_AXI_READY_MIXED=1 \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "ready[7]{id,kind,repo,due}:
+  ready-7,noticed,skills,$(date_in_days 2)
+ready_public_followups:" \
+    "the default ready listing did not list exactly the row due within 2 days"
+  assert_not_contains "$out" "ready-6," "the default ready listing listed a row due more than 2 days out"
+  assert_contains "$out" "counted ready rows, by kind (bin/fm-tasks-axi.sh ready lists every one):
+  noticed: 5 (skills 3, business 2)
+  ship: 2 (firstmate 2)
+(listed 1 of 7 ready queued item(s); a row due within 2 days is always listed)
+(6 more queued - bin/fm-tasks-axi.sh ready)" \
+    "the default ready listing did not count every ready row by kind and repo"
 
   pass "the startup backlog bound cuts only dispatchable queued rows and discloses the remainder exactly"
 }
@@ -2384,6 +2414,10 @@ EOF
     "unavailable tasks-axi fallback omitted a backlog title line"
   assert_not_contains "$out" "OVERSIZED-BODY-LINE" "unavailable tasks-axi fallback leaked an in-flight task body"
   assert_not_contains "$out" "DONE-ROW-LINE" "unavailable tasks-axi fallback listed a done row at startup"
+  # By default the other queued title lines are counted, never listed.
+  assert_not_contains "$out" "- [ ] plain-1 - " "unavailable tasks-axi fallback listed a plain queued title line by default"
+  assert_contains "$out" "(25 more queued - raise FM_SESSION_START_QUEUED_LIMIT or read data/backlog.md for the rest)" \
+    "unavailable tasks-axi fallback did not count its plain queued title lines"
 
   pass "unavailable or incompatible tasks-axi falls back to compact manual backlog rendering"
 }

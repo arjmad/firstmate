@@ -209,6 +209,50 @@ test_budget_accounting_reports_all_three_files_and_safe_failure() {
   pass "budget accounting sums the three startup files and reports safe failures"
 }
 
+# The digest lines measure the newest saved session-start digest against the
+# read check's own limits, and a home with no saved digest is not an error.
+test_budget_report_measures_the_newest_saved_digest() {
+  local home out old_stamp i
+  home="$TMP_ROOT/digest-home"
+  mkdir -p "$home/config" "$home/data" "$home/state"
+  printf '7500\n' > "$home/config/startup-memory-budget"
+
+  out=$(FM_HOME="$home" "$BUDGET" report)
+  assert_contains "$out" 'digest_copy=none' "a home with no saved digest did not say so"
+  assert_contains "$out" 'digest_status=unmeasured' "a home with no saved digest was not unmeasured"
+  assert_contains "$out" 'budget_status=within-budget' "a missing digest changed the three-file verdict"
+
+  mkdir -p "$home/state/.digest-read"
+  for i in $(seq 1 1300); do printf 'line %s\n' "$i"; done > "$home/state/.digest-read/old.txt"
+  old_stamp=$(( $(date +%s) - 7200 ))
+  TZ=UTC touch -t "$(date -u -r "$old_stamp" +%Y%m%d%H%M.%S 2>/dev/null || date -u -d "@$old_stamp" +%Y%m%d%H%M.%S)" \
+    "$home/state/.digest-read/old.txt"
+  printf 'abcdefghi\nj\n' > "$home/state/.digest-read/new.txt"
+
+  out=$(FM_HOME="$home" "$BUDGET" report)
+  assert_contains "$out" 'digest_copy=state/.digest-read/new.txt' "report did not pick the newest saved digest"
+  assert_contains "$out" 'digest_bytes=12' "report did not count the digest bytes"
+  assert_contains "$out" 'digest_estimated_tokens=4' "report did not estimate digest tokens as the files are estimated"
+  assert_contains "$out" 'digest_lines=2' "report did not count the digest lines"
+  assert_contains "$out" 'digest_inline_cap_bytes=10000' "report did not name the read check's default cap"
+  assert_contains "$out" 'digest_status=inline' "a digest under the cap was not inline"
+  assert_contains "$out" 'digest_forced_read_chunks=0' "an inline digest needed forced reads"
+
+  rm -f "$home/state/.digest-read/new.txt"
+  out=$(FM_HOME="$home" FM_DIGEST_SPILL_BYTES=100 "$BUDGET" report)
+  assert_contains "$out" 'digest_copy=state/.digest-read/old.txt' "report did not fall back to the remaining copy"
+  assert_contains "$out" 'digest_inline_cap_bytes=100' "report did not follow the read check's configured cap"
+  assert_contains "$out" 'digest_status=spills' "a digest over the cap was not reported as spilling"
+  assert_contains "$out" 'digest_lines=1300' "report did not count the spilled digest's lines"
+  assert_contains "$out" 'digest_forced_read_chunks=3' "1,300 lines did not need three 600-line reads"
+  case "$out" in
+    *digest_copy_age_seconds=7[12][0-9][0-9]*) ;;
+    *) fail "report did not give the copy's age: $out" ;;
+  esac
+  assert_contains "$out" 'budget_status=within-budget' "a spilling digest changed the three-file verdict"
+  pass "budget report measures the newest saved digest against the read check's limits"
+}
+
 new_propagation_world() {
   local world=$1 root="$1/root" home="$1/home" sm="$1/sm" head
   mkdir -p "$home/config" "$home/data" "$home/state" "$root/bin"
@@ -333,6 +377,7 @@ test_primary_budget_converges_with_exact_reread_and_safe_failures() {
 test_primary_bootstrap_materializes_visible_default
 test_safe_parser_rejects_ambiguous_and_unsafe_values
 test_budget_accounting_reports_all_three_files_and_safe_failure
+test_budget_report_measures_the_newest_saved_digest
 test_primary_budget_converges_with_exact_reread_and_safe_failures
 
 echo '# all fm-startup-memory-budget tests passed'

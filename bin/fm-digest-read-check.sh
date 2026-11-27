@@ -36,6 +36,11 @@
 #       After a successful Read of an accepted path, records the lines it
 #       covered (offset, default 1; limit, default 2000) and disarms the
 #       session once every line of the copy is covered. Prints nothing.
+#   fm-digest-read-check.sh limits
+#       Prints `spill_threshold_bytes=<n>` (the arm threshold above) and
+#       `read_chunk_lines=<n>` (the offset/limit chunk the deny message asks
+#       for), one per line, so bin/fm-startup-memory-budget.sh measures a saved
+#       digest against the same numbers this check enforces.
 #
 # State: $STATE/.digest-read/<session-id>.txt is the saved digest and
 # $STATE/.digest-read/<session-id>.pending the arm record (one `range S E` line
@@ -53,6 +58,7 @@ FM_HOME=${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}
 STATE=${FM_STATE_OVERRIDE:-$FM_HOME/state}
 DIR="$STATE/.digest-read"
 DEFAULT_READ_LIMIT=2000
+READ_CHUNK_LINES=600
 
 valid_session() {
   case "$1" in
@@ -184,7 +190,7 @@ cmd_check() {
   fi
   total=$(line_count "$COPY")
   unread=$(unread_ranges "$PENDING" "$total")
-  reason="[digest-read] this session's start digest was cut to a preview, so its captain rulings, learnings, and fleet state are not in context yet (AGENTS.md section 3). Read $COPY in full with the Read tool before anything else: $total lines, still unread: ${unread:-none}; read it in offset/limit chunks of about 600 lines when one read is too large. Every other tool is refused until then (blocked tool: ${TOOL:-unknown}). Launch the session with FM_ALLOW_UNREAD_DIGEST=1 for a deliberate exception."
+  reason="[digest-read] this session's start digest was cut to a preview, so its captain rulings, learnings, and fleet state are not in context yet (AGENTS.md section 3). Read $COPY in full with the Read tool before anything else: $total lines, still unread: ${unread:-none}; read it in offset/limit chunks of about $READ_CHUNK_LINES lines when one read is too large. Every other tool is refused until then (blocked tool: ${TOOL:-unknown}). Launch the session with FM_ALLOW_UNREAD_DIGEST=1 for a deliberate exception."
   escaped=$(printf '%s' "$reason" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' ')
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"%s"}\n' "$escaped" >&2
   exit 2
@@ -211,6 +217,10 @@ case "${1:-}" in
   arm) shift; cmd_arm "$@"; exit 0 ;;
   check) cmd_check; exit 0 ;;
   record) cmd_record; exit 0 ;;
+  limits)
+    printf 'spill_threshold_bytes=%s\nread_chunk_lines=%s\n' "$(spill_threshold)" "$READ_CHUNK_LINES"
+    exit 0
+    ;;
   -h|--help) usage; exit 0 ;;
   *) usage >&2; exit 0 ;;
 esac
