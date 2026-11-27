@@ -13,26 +13,26 @@ fm_git_identity fmtest fmtest@example.invalid
 SPLIT="$ROOT/bin/fm-effort-split.sh"
 TMP_ROOT=$(fm_test_tmproot fm-effort-split-tests)
 
-# new_case: a home registering alpha and beta (GitHub clones), gamma (no
-# clone) and delta (a non-GitHub origin), plus a fake gh that serves
-# <case>/prs-<repo>.json. Echoes the case directory.
+# new_case: a home registering alpha and "beta ops" (GitHub clones; a name
+# may hold a space), gamma (no clone) and delta (a non-GitHub origin), plus a
+# fake gh that serves <case>/prs-<repo>.json. Echoes the case directory.
 new_case() {
   local c name
   c=$(mktemp -d "$TMP_ROOT/case.XXXXXX")
   mkdir -p "$c/home/data" "$c/home/config" "$c/home/projects" "$c/fakebin"
   printf '%s\n' '# Projects' \
     '- alpha [direct-PR +yolo] - First (added 2026-08-25)' \
-    '- beta [direct-PR] - Second (added 2026-08-25)' \
+    '- beta ops - Second (added 2026-08-25)' \
     '- gamma [direct-PR] - Not cloned (added 2026-08-25)' \
     '- delta [direct-PR] - Elsewhere (added 2026-08-25)' \
     '- alpha-again [direct-PR] - Same origin as alpha (added 2026-08-25)' \
     > "$c/home/data/projects.md"
-  for name in alpha beta delta alpha-again; do
+  for name in alpha 'beta ops' delta alpha-again; do
     fm_git_init_commit "$c/home/projects/$name"
   done
   git -C "$c/home/projects/alpha" remote add origin https://github.com/acme/alpha.git
   git -C "$c/home/projects/alpha-again" remote add origin git@github.com:acme/alpha.git
-  git -C "$c/home/projects/beta" remote add origin https://github.com/acme/beta.git
+  git -C "$c/home/projects/beta ops" remote add origin https://github.com/acme/beta.git
   git -C "$c/home/projects/delta" remote add origin https://gitlab.example/acme/delta.git
   printf '[]\n' > "$c/prs-alpha.json"
   printf '[]\n' > "$c/prs-beta.json"
@@ -90,13 +90,13 @@ test_counts_by_class_with_capped_lines_and_names_the_week() {
     = '[5,{"count":40,"lines":10},{"count":20,"lines":89},"fleet within target"]' ] \
     || fail "wrong shares or verdict: $(printf '%s' "$json" | jq -c '[.domain_prs, .shares, .verdict]')"
   [ "$(printf '%s' "$json" | jq -c '[.projects, .skipped]')" \
-    = '[["alpha","beta"],["gamma (no clone)","delta (not GitHub)"]]' ] \
+    = '[["alpha","beta ops"],["gamma (no clone)","delta (not GitHub)"]]' ] \
     || fail "wrong projects read or skipped: $(printf '%s' "$json" | jq -c '[.projects, .skipped]')"
   [ "$(grep -c '^pr list' "$c/gh.log")" = 2 ] || fail "a shared origin was read twice: $(cat "$c/gh.log")"
   out=$(run_split "$c" --week 2026-W47) || fail "the reader failed: $out"
   [ "$(printf '%s\n' "$out" | wc -l)" = 1 ] || fail "the Monday line is not one line: $out"
   case "$out" in
-    "Effort split 2026-W47 (2026-11-16..2026-11-22 UTC; read alpha, beta; skipped gamma (no clone), delta (not GitHub); 6 merged PRs, 2 unclassified): sales+cost 40% of PRs, 10% of capped lines (target at least 35%); fleet 20% of PRs, 89% of capped lines (target at most 30%): fleet within target; by class sales 1, cost 1, run 0, time 0, fleet 1, sapna 1, personal 0, unclassified 2 (sapna not in the shares)") ;;
+    "Effort split 2026-W47 (2026-11-16..2026-11-22 UTC; read alpha, beta ops; skipped gamma (no clone), delta (not GitHub); 6 merged PRs, 2 unclassified): sales+cost 40% of PRs, 10% of capped lines (target at least 35%); fleet 20% of PRs, 89% of capped lines (target at most 30%): fleet within target; by class sales 1, cost 1, run 0, time 0, fleet 1, sapna 1, personal 0, unclassified 2 (sapna not in the shares)") ;;
     *) fail "unexpected Monday line: $out" ;;
   esac
   pass "fm-effort-split counts each PR by its Class line and capped lines, leaves sapna out of the shares, and names what it read"

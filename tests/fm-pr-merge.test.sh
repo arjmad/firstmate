@@ -7858,6 +7858,7 @@ test_pr_class_refuses_a_scaffold_brief_without_a_class_line() {
     $'## Summary\n\nA fix.\n' \
     $'## Summary\n\nThis PR sets the Class: sales line for later.\n' \
     $'Class: marketing\n' \
+    $'Class: sales cost\n' \
     $'Class:\n' \
     $'Class: sales\nClass: fleet\n'; do
     n=$((n + 1))

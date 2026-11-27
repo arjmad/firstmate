@@ -139,29 +139,39 @@ while IFS= read -r name; do
   SEEN="$SEEN $repo"
   json=$(GH_HOST=$host gh pr list --repo "$slug" --state merged \
     --search "merged:$START..$END" --limit "$SEARCH_CAP" \
-    --json url,body,additions,deletions) \
+    --json body,additions,deletions) \
     || die "could not read the merged PRs of $slug"
   count=$(printf '%s' "$json" | jq 'length') || die "unreadable PR list for $slug"
   [ "$count" -lt "$SEARCH_CAP" ] \
     || die "$slug returned $SEARCH_CAP merged PRs for $LABEL, gh's search cap, so the week cannot be read whole"
-  # One row per PR: <class>\t<capped lines>\t<url>.
+  # One row per PR: <class>\t<capped lines>.
   i=-1
   while i=$((i + 1)); [ "$i" -lt "$count" ]; do
     class=$(printf '%s' "$json" | jq -r --argjson i "$i" '.[$i].body // ""' | fm_pr_class_of_body) \
       || class=unclassified
     printf '%s\t%s\n' "$class" \
       "$(printf '%s' "$json" | jq -r --argjson i "$i" --argjson cap "$LINE_CAP" \
-        '.[$i] | "\([(.additions // 0) + (.deletions // 0), $cap] | min)\t\(.url)"')" >> "$ROWS"
+        '.[$i] | [(.additions // 0) + (.deletions // 0), $cap] | min')" >> "$ROWS"
   done
   READ_NAMES="$READ_NAMES${READ_NAMES:+, }$name"
-done < <(sed -nE 's/^- ([A-Za-z0-9][A-Za-z0-9._-]*)([[:space:]].*)?$/\1/p' "$REGISTRY")
+done < <(awk '
+  # A registry name runs from "- " to the first " [" or " - ", or to the end of
+  # the line, as bin/fm-project-mode.sh matches it.
+  substr($0, 1, 2) == "- " {
+    name = substr($0, 3)
+    cut = length(name) + 1
+    i = index(name, " ["); if (i && i < cut) cut = i
+    i = index(name, " - "); if (i && i < cut) cut = i
+    name = substr(name, 1, cut - 1)
+    if (name != "") print name
+  }' "$REGISTRY")
 
 # shellcheck disable=SC2016 # jq program text, not shell expansions
 READING=$(jq -Rn \
   --arg week "$LABEL" --arg start "$START" --arg end "$END" \
   --arg projects "$READ_NAMES" --arg skipped "$SKIPPED" --arg words "$FM_PR_CLASS_WORDS unclassified" \
   --argjson cap "$LINE_CAP" --argjson target "$SALES_COST_TARGET" --argjson fleet_max "$FLEET_MAX" '
-  [inputs | select(length > 0) | split("\t") | {class: .[0], lines: (.[1] | tonumber), url: .[2]}] as $prs
+  [inputs | select(length > 0) | split("\t") | {class: .[0], lines: (.[1] | tonumber)}] as $prs
   | ($words | split(" ")) as $classes
   | (reduce $classes[] as $c ({}; .[$c] = {
         count: ([$prs[] | select(.class == $c)] | length),

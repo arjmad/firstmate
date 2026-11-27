@@ -2946,6 +2946,7 @@ case "$PROVIDER" in
               "$FM_PR_GITHUB_BASE" "$FM_PR_MERGE_HEAD" >&2
           exit 1
         fi
+        require_pr_class || exit 1
         require_visual_review_approval || exit 1
       elif [ -n "$EXPECTED_HEAD" ]; then
         echo "error: $URL is behind its base; updating its source branch requires explicit --update-branch consent on this authorized merge request (the update remains if new checks prevent merging)" >&2

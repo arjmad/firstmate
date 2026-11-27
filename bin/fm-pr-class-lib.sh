@@ -43,10 +43,11 @@ EOF
 
 # fm_pr_class_valid <word>: succeed for one of FM_PR_CLASS_WORDS.
 fm_pr_class_valid() {
-  case " $FM_PR_CLASS_WORDS " in
-    *" ${1:-} "*) [ -n "${1:-}" ] ;;
-    *) return 1 ;;
-  esac
+  local word
+  for word in $FM_PR_CLASS_WORDS; do
+    [ "${1:-}" != "$word" ] || return 0
+  done
+  return 1
 }
 
 # fm_pr_class_of_body: read a PR body on stdin and print its class.
