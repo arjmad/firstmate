@@ -1417,6 +1417,24 @@ fm_dod_accept_ship_done() {  # <kind> <mode> <worktree> <project> <line> [<state
   return 1
 }
 
+# fm_dod_with_home_patch_rule DATA-DIR TASK-ID - copy a DoD block from stdin and
+# insert, right after its "The task is complete only when committed" line, the
+# rule that a worker records a home-file change as a home patch instead of
+# editing it (audit a1-61); bin/fm-home-patch.sh owns the file and its landing.
+fm_dod_with_home_patch_rule() {
+  local data=$1 id=$2 cli rule line placed=0
+  printf -v cli '%q' "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-home-patch.sh"
+  # shellcheck disable=SC2016 # Backticks are literal brief text.
+  rule='If your change also needs a file in this firstmate home'"'"'s `data/` or `config/` changed, do not edit that file: copy it under your temp root, edit the copy, and run `'"$cli add $id"' <home-relative path> <edited copy>`, which records the exact diff in `'"$data/$id"'/home-patch.md`; the landing step shows that diff and applies it after your PR merges.'
+  while IFS= read -r line || [ -n "$line" ]; do
+    printf '%s\n' "$line"
+    if [ "$placed" -eq 0 ] && [ "${line#The task is complete only when committed on your branch}" != "$line" ]; then
+      printf '%s\n' "$rule"
+      placed=1
+    fi
+  done
+}
+
 # fm_dod_with_business_push_rule MODE REPO... - copy a DoD block from stdin and,
 # when MODE is direct-PR and a REPO is business, insert the business push rule
 # right after the local-checks step (Arjun 2026-11-18, CI audit C): business

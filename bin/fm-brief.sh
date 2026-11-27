@@ -1035,6 +1035,7 @@ else
 fi
 # shellcheck disable=SC2086 # REPO is one validated name and ALSO_LIST splits on purpose.
 DOD=$(printf '%s\n' "$DOD" | fm_dod_with_business_push_rule "$MODE" $REPO $ALSO_LIST)
+DOD=$(printf '%s\n' "$DOD" | fm_dod_with_home_patch_rule "$DATA" "$ID")
 [ -z "$SHORT_LOOP_BLOCK" ] || DOD=$(printf '%s\n' "$DOD" | fm_dod_with_short_loop_floor) || exit 1
 
 cat > "$BRIEF" <<EOF

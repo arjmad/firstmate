@@ -2873,6 +2873,63 @@ test_teardown_names_a_due_self_update() {
   pass "teardown names a landed firstmate head the ending task no longer holds"
 }
 
+# A ship's home patch (bin/fm-home-patch.sh, audit a1-61) is applied by its
+# teardown once its merge was recorded; without that record it is filed as a
+# routine noticed row, and a forced teardown leaves it alone.
+home_patch_teardown_case() {  # <name> <merged:yes|no>
+  local case_dir
+  case_dir=$(make_case "$1")
+  write_meta "$case_dir" no-mistakes ship
+  printf '%s\n' 'pr=https://github.com/example/repo/pull/7' >> "$case_dir/state/task-x1.meta"
+  seed_backlog_in_flight "$case_dir"
+  printf '%s\n' 'old learning' > "$case_dir/data/learnings.md"
+  printf '%s\n' 'new learning' > "$case_dir/learnings.edit"
+  FM_HOME="$case_dir" FM_DATA_OVERRIDE="$case_dir/data" bash "$ROOT/bin/fm-home-patch.sh" \
+    add task-x1 data/learnings.md "$case_dir/learnings.edit" >/dev/null 2>&1 \
+    || fail "$1: could not write the fixture patch"
+  if [ "$2" = yes ]; then
+    printf '%s\n' fm-pr-poll-merge-notified-v1 github github.com example/repo 7 \
+      > "$case_dir/state/task-x1.pr-poll-merge-notified"
+    chmod 600 "$case_dir/state/task-x1.pr-poll-merge-notified"
+  fi
+  printf '%s\n' "$case_dir"
+}
+
+test_teardown_applies_a_merged_ships_home_patch() {
+  local case_dir rc row
+  case_dir=$(home_patch_teardown_case home-patch-merged yes)
+  rc=0
+  FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "home-patch-merged: teardown failed: $(cat "$case_dir/stderr")"
+  assert_grep 'home-patch: task-x1: applied to data/learnings.md' "$case_dir/stdout" \
+    "home-patch-merged: teardown did not apply the patch"
+  grep -qx 'new learning' "$case_dir/data/learnings.md" || fail "home-patch-merged: the home file was not patched"
+  assert_no_grep 'noticed-home-patch' "$case_dir/stdout" "home-patch-merged: an applied patch was filed as noticed"
+
+  case_dir=$(home_patch_teardown_case home-patch-unmerged no)
+  rc=0
+  FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "home-patch-unmerged: teardown failed: $(cat "$case_dir/stderr")"
+  grep -qx 'old learning' "$case_dir/data/learnings.md" || fail "home-patch-unmerged: an unrecorded merge applied the patch"
+  assert_grep 'noticed-queue: filed: noticed-home-patch-task-x1 (home patch left unapplied)' "$case_dir/stdout" \
+    "home-patch-unmerged: the pending patch was not filed as a noticed row"
+  row=$(FM_HOME="$case_dir" "$ROOT/bin/fm-tasks-axi.sh" show noticed-home-patch-task-x1 --full 2>&1) \
+    || fail "home-patch-unmerged: the noticed row is not in the backlog: $row"
+  case "$row" in
+    *"no merge of its PR was recorded"*) ;;
+    *) fail "home-patch-unmerged: the noticed row does not say why: $row" ;;
+  esac
+
+  case_dir=$(home_patch_teardown_case home-patch-forced yes)
+  rc=0
+  FM_HOME="$case_dir" run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "home-patch-forced: teardown failed: $(cat "$case_dir/stderr")"
+  grep -qx 'old learning' "$case_dir/data/learnings.md" || fail "home-patch-forced: a forced teardown applied the patch"
+  assert_no_grep 'home-patch: task-x1' "$case_dir/stdout" "home-patch-forced: a forced teardown applied the patch"
+  assert_no_grep 'noticed-home-patch' "$case_dir/stdout" "home-patch-forced: a forced teardown filed the patch"
+  pass "teardown applies a merged ship's home patch, files an unmerged one, and leaves a forced one alone"
+}
+
 # What a finished task noticed outside its work, and its idea, reach firstmate
 # in teardown's output, since teardown is the one step every ending passes.
 test_scout_teardown_prints_what_it_noticed() {
@@ -7962,6 +8019,7 @@ test_forced_secondmate_child_scout_nested_clone_returns_clean
 test_forced_secondmate_dirty_child_return_warns_and_completes
 test_return_that_removes_copy_warns_cannot_verify
 test_scout_ignored_files_survive_scratch_clean
+test_teardown_applies_a_merged_ships_home_patch
 test_scout_teardown_prints_what_it_noticed
 test_teardown_names_a_due_self_update
 test_teardown_deletes_task_data_scratch

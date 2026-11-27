@@ -389,6 +389,13 @@
 # task's recorded approval. It is advisory: it never refuses the merge, its
 # one backlog row read keeps that read's usual time bound, and a failure to
 # read is silent.
+# Home patch (audit a1-61): when the task left data/<id>/home-patch.md, its
+# diff and verdict from bin/fm-home-patch.sh show print as note: lines just
+# before the forge merge, and once the forge confirms an attended merge the
+# patch is applied through bin/fm-home-patch.sh apply, which owns the format,
+# what a patch may change, and the applied record. A merge under away or
+# branch authority leaves it unapplied with an actionable line, a companion PR
+# never touches it, and neither step changes this script's exit.
 # Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--update-branch] [--expected-head <full-sha>] [--allow-red <check-name>] [--allow-missing <check-name>] [--allow-no-pipeline] [--waive-review <reason>] [--one-way-approved] [--allow-revert] [--captain-approval-file <path>] [-- <extra forge merge args>]
 #
 # On GitLab, this script confirms the MR is actually merged before reporting it;
@@ -2858,6 +2865,12 @@ post_captain_approval() {
 # Advisory only (see the header's later-rulings paragraph).
 { FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-later-rulings.sh" "$ID" --found-only 2>/dev/null || true; } \
   | sed 's/^/note: /' >&2 || true
+# Advisory only (see the header's home-patch paragraph): the helm reviews the
+# diff here, before the forge merge, and the tail below applies it.
+if [ -z "$COMPANION_REPO" ]; then
+  { FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-home-patch.sh" show "$ID" 2>&1 </dev/null || true; } \
+    | grep -v '^home-patch: [^ ]*: none$' | sed 's/^/note: /' >&2 || true
+fi
 
 # Accepted confused-agent-grade limitation, as in bin/fm-lease-lib.sh, not an
 # oversight: if this lock-owning shell dies while its gh or glab child lives,
@@ -3131,6 +3144,18 @@ case "$outcome_rc" in
     printf 'actionable: merged %s but could not record the outcome for supervision\n' "$URL" >&2
     ;;
 esac
+
+# The task's home patch (see the header's home-patch paragraph) is applied only
+# after an attended merge; under any other authority nobody reviewed the note
+# above, so it stays pending for teardown or the helm. It never changes the exit.
+if [ -z "$COMPANION_REPO" ]; then
+  if [ "${FM_PR_MERGE_AUTHORITY:-}" = attended ]; then
+    FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-home-patch.sh" apply "$ID" </dev/null || true
+  elif [ -f "$DATA/$ID/home-patch.md" ] && [ ! -f "$DATA/$ID/home-patch.applied" ]; then
+    printf 'actionable: merged %s under %s authority, so its home patch data/%s/home-patch.md stays unapplied until the helm reviews it: bin/fm-home-patch.sh show %s, then apply %s\n' \
+      "$URL" "${FM_PR_MERGE_AUTHORITY:-unknown}" "$ID" "$ID" "$ID" >&2
+  fi
+fi
 
 # Bring the merged project's clone and live checkouts current now, rather than
 # at the next teardown or scheduled sync. Its lines follow on stdout; a STUCK

@@ -56,6 +56,33 @@ test_promotion_carries_the_short_loop_floor() {
   pass "promotion carries the short-loop floor before the done step"
 }
 
+# Every delivery mode's contract carries the home-patch rule once, right after
+# its "complete only when committed" line, naming the task's own patch file;
+# a promoted ship gets it too (audit a1-61).
+test_every_mode_carries_the_home_patch_rule() {
+  local mode out rule_at done_at home id
+  for mode in direct-PR:none no-mistakes:none local-only:none direct-PR:gerrit no-mistakes:gerrit; do
+    out=$(fm_dod_block "${mode%%:*}" hp-task "" "${mode#*:}" | fm_dod_with_home_patch_rule /home/x/data hp-task)
+    [ "$(printf '%s\n' "$out" | grep -c 'fm-home-patch.sh add hp-task <home-relative path> <edited copy>')" -eq 1 ] \
+      || fail "$mode: the DoD must name the home-patch command once"
+    assert_contains "$out" '`/home/x/data/hp-task/home-patch.md`' "$mode: the rule did not name the task's patch file"
+    rule_at=$(printf '%s\n' "$out" | grep -n 'fm-home-patch.sh add' | cut -d: -f1)
+    done_at=$(printf '%s\n' "$out" | grep -n '^The task is complete only when committed on your branch' | head -1 | cut -d: -f1)
+    [ "$rule_at" = "$((done_at + 1))" ] || fail "$mode: the rule must follow the complete-when-committed line"
+  done
+  home="$TMP_ROOT/promote-home-patch"
+  id=promote-hp
+  mkdir -p "$home/state" "$home/data/$id"
+  printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\n' "$id" > "$home/state/$id.meta"
+  printf '# Task\n## Captain%ss intent\nFix the bug.\n\n## Firstmate spec\nReproduce it first.\n\n# Setup\nThis is a SCOUT task: the deliverable is a written report, not a PR.\n' "'" \
+    > "$home/data/$id/brief.md"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$ROOT/bin/fm-promote.sh" "$id" --mode direct-PR --yolo off 2>&1) \
+    || fail "promoting a scout failed: $out"
+  [ "$(grep -c "fm-home-patch.sh add $id " "$home/data/$id/ship-instructions.md")" -eq 1 ] \
+    || fail "a promoted ship must carry the home-patch rule once"
+  pass "every delivery mode, and a promoted ship, carries the home-patch rule once"
+}
+
 test_floor_placement_refuses_a_dod_without_ship_branch() {
   printf '# Definition of done\nno branch line\n' | fm_dod_with_short_loop_floor >/dev/null 2>&1 \
     && fail "placing the floor must refuse a DoD with no Ship branch line"
@@ -1063,6 +1090,7 @@ test_direct_pr_dod_writes_the_matt_pr_body() {
 test_short_loop_floor_has_five_steps
 test_promotion_carries_the_short_loop_floor
 test_floor_placement_refuses_a_dod_without_ship_branch
+test_every_mode_carries_the_home_patch_rule
 test_scout_done_is_not_gated
 test_unpushed_ship_done_is_refused
 test_no_mistakes_prevalidation_done_is_not_gated
