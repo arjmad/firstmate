@@ -116,8 +116,47 @@ check_harness_idle_empty() {  # <name> <launch-cmd...>
     CHECKED=$((CHECKED + 1))
     pass "$name ($version): real idle composer classifies empty"
     check_harness_idle_cursorless "$name" "$version" "$SESSION:$win"
+    [ "$name" != claude ] || check_claude_leftover_refused "$version" "$SESSION:$win"
   fi
   tmux -L "$SOCKET" kill-window -t "$SESSION:$win" 2>/dev/null || true
+}
+
+# The Claude payload proof on tmux, with no prompt submitted: the pane is
+# identified as Claude, a leftover draft is read back through the proof's
+# composer read, the submit core refuses to type onto it (a leftover once went
+# out joined to the steer), and the shared clear empties it.
+check_claude_leftover_refused() {  # <version> <target>
+  local version=$1 target=$2 draft='half typed draft' content='' verdict i=0
+  fm_tmux_pane_is_claude "$target" || {
+    FAILED=1
+    printf 'not ok - claude (%s): the pane was not identified as Claude, so the payload proof is off\n' "$version" >&2
+    return 0
+  }
+  tmux send-keys -t "$target" -l "$draft"
+  while [ "$i" -lt 20 ]; do
+    content=$(fm_tmux_composer_content "$target") && [ "${content//[[:space:]]/}" = "${draft//[[:space:]]/}" ] && break
+    i=$((i + 1))
+    sleep 0.25
+  done
+  if [ "${content//[[:space:]]/}" != "${draft//[[:space:]]/}" ]; then
+    FAILED=1
+    printf "not ok - claude (%s): the composer read did not return the typed draft, got '%s'\n" "$version" "$content" >&2
+    return 0
+  fi
+  verdict=$(fm_tmux_submit_core "$target" 'Reply with exactly PONG' 3 0.4 0.3)
+  content=$(fm_tmux_composer_content "$target") || content=
+  if [ "$verdict" != send-failed ] || [ "${content//[[:space:]]/}" != "${draft//[[:space:]]/}" ]; then
+    FAILED=1
+    printf "not ok - claude (%s): a leftover draft must be refused untouched, got verdict '%s' and composer '%s'\n" \
+      "$version" "$verdict" "$content" >&2
+    return 0
+  fi
+  if ! fm_composer_clear fm_tmux_send_key fm_tmux_composer_state "$target" "$draft"; then
+    FAILED=1
+    printf 'not ok - claude (%s): the shared clear did not empty the leftover draft\n' "$version" >&2
+    return 0
+  fi
+  pass "claude ($version): the tmux submit refuses a leftover draft untouched and the shared clear empties it"
 }
 
 # The same proven-idle pane read the way every cursorless backend reads it
