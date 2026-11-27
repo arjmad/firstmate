@@ -851,8 +851,16 @@ EOF
       fi
       cat <<EOF
 Write the PR body with the \`matt-pr\` skill, around any lines the repository requires: a Summary, its Evidence, and a Merge Danger section with a \`**Door:** one-way\` or \`**Door:** two-way\` line and a \`**Blast Radius:**\` line; where that skill name does not resolve, write those same three sections yourself.
+EOF
+      # The Class line is this fleet's own effort record, so a PR published to
+      # an upstream under recorded consent never carries it.
+      if [ -z "$consent" ]; then
+        cat <<EOF
 $FM_PR_CLASS_BRIEF_MARKER put one line \`Class: <word>\` in the PR body, and in each companion PR's body, naming the kind of work it is with one of these words; a PR with no Class line, or another word, is refused at merge:
 $(fm_pr_class_glossary | sed 's/^/- /')
+EOF
+      fi
+      cat <<EOF
 Mark it a one-way door when the change cannot be walked back, such as destroyed data or a published commitment: a one-way PR waits for the captain's own word before it merges, under any merge posture.
 Before you report done, read the PR back from the forge and confirm it is not a draft $draft_check
 A draft cannot be merged, so a done report on one leaves the merge unasked.

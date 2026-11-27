@@ -7886,9 +7886,10 @@ test_pr_class_merges_a_scaffold_brief_with_a_class_line() {
     $'## Summary\n\nA fix.\n\nClass: sales\n' \
     $'**Class:** fleet\n' \
     $'- Class: `Cost`\n' \
-    $'## Summary\r\n\r\nClass: run\r\n'; do
+    $'## Summary\r\n\r\nClass: run\r\n' \
+    $'Class: time\n\n```text\nClass: marketing\nClass: <word>\n```\n'; do
     n=$((n + 1))
-    case $n in 1) word=sales ;; 2) word=fleet ;; 3) word=cost ;; 4) word=run ;; esac
+    case $n in 1) word=sales ;; 2) word=fleet ;; 3) word=cost ;; 4) word=run ;; 5) word='time' ;; esac
     case_dir=$(visual_review_case "class-ok-$n" "$head" "$body")
     class_brief "$case_dir"
     set +e

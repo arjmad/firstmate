@@ -12,7 +12,8 @@
 # each one covers, and that text is the one definition the ship brief hands its
 # worker. Only a line that opens with `Class:` counts, after any leading list
 # or quote marker and `**` or backtick emphasis, so a mid-sentence mention is
-# ignored; the word is read case-insensitively.
+# ignored, as is any line inside a fenced code block; the word is read
+# case-insensitively.
 #
 # The ship brief's Definition of done (bin/fm-dod-lib.sh, direct-PR block)
 # writes the instruction on a line that opens with FM_PR_CLASS_BRIEF_MARKER.
@@ -59,6 +60,9 @@ fm_pr_class_of_body() {
   values=$(awk '
     {
       sub(/\r$/, "")
+      # A line inside a fenced code block quotes text; it is never the line.
+      if ($0 ~ /^[[:space:]]*(```|~~~)/) { fenced = !fenced; next }
+      if (fenced) next
       line = $0
       gsub(/\*\*|`/, "", line)
       sub(/^[[:space:]]+/, "", line)
