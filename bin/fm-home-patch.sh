@@ -4,8 +4,8 @@
 #
 # Usage:
 #   fm-home-patch.sh add <task-id> <home-path> <edited-copy>
-#   fm-home-patch.sh show <task-id>
-#   fm-home-patch.sh apply <task-id> [--digest <digest>]
+#   fm-home-patch.sh show <task-id> [--record]
+#   fm-home-patch.sh apply <task-id> [--digest <digest> | --shown]
 #   fm-home-patch.sh -h | --help
 #
 # A worker never edits its home's data/ or config/. When its change also needs
@@ -24,18 +24,25 @@
 # add edits nothing in the home: it diffs the live <home-path> against
 # <edited-copy>, a scratch copy the worker edited, and appends that diff as one
 # block under a `diff --git` header, so emptying a file or filling an empty one
-# stays a content edit. It creates the file with a heading when absent, and it
-# publishes the result only when show would not refuse it, then prints show's
-# output. A symlink at the task directory or the patch file is refused. Run it
-# once per file, against the live file, so each block's context is what the
-# home holds now.
+# stays a content edit. A block add wrote earlier for the same file is
+# replaced, so a revised edit is one more add. When the patch is already
+# applied (a task's later PR), add keeps it as data/<task-id>/home-patch.<digest>.md
+# and starts a new patch, which needs its own review. It creates the file with a
+# heading when absent, and it publishes the result only when show would not
+# refuse it, then prints show's output. A symlink at the task directory or the
+# patch file is refused. Run it once per file, against the live file, so each
+# block's context is what the home holds now.
 #
 # What a patch may change. Only an existing regular file under the home's
 # data/ or config/, reached through no symlink, and only its content: a path
 # under state/, an absolute path, a `..` or `.` component, a quoted path, a
 # binary hunk, and any create, delete, rename, copy or mode change are refused
-# before anything is applied. data/captain*.md is refused too, because only the
-# captain's own word writes his rulings.
+# before anything is applied. Paths that carry authority are refused too:
+# data/captain*.md (only the captain's own word writes his rulings), the
+# project, secondmate and backlog records their own tools write, and config
+# files naming an account, a permission, the launch environment, a merge
+# posture or autoland, a forge host, or a secret, token or credential. That
+# list is defense in depth; the helm's review of the shown diff is the gate.
 #
 # show prints the patch's paths, its digest (the git blob id of its diff), the
 # diff, and one verdict line:
@@ -44,13 +51,18 @@
 #   home-patch: <id>: none                   (exit 4; nothing else printed)
 #   home-patch: <id>: refused: <why>         (exit 1)
 #   home-patch: <id>: does not apply: <why>  (exit 1)
-# apply runs the same checks. With --digest it also refuses a patch whose
-# digest is not the one given, so a caller applies exactly the diff it showed.
+# show --record, for a caller whose output the helm reads before the merge,
+# also writes data/<id>/home-patch.shown with the digest of a patch that
+# applies cleanly. apply runs the same checks. With --digest it also refuses a
+# patch whose digest is not the one given, so a caller applies exactly the diff
+# it showed; --shown takes that digest from home-patch.shown and refuses when
+# none was recorded, so a later step applies only what the helm saw.
 # A patch that applies is applied by `git apply` to a staging copy of its files,
 # so no home file changes unless every hunk applies. Each patched file is then
 # built beside its target with the target's mode and published by rename, so
 # no file is ever half written; a file that cannot be built (a read-only one)
-# changes nothing, and a failed rename restores the files already published.
+# or that changed while the patch was applied changes nothing, and a failed
+# rename restores the files already published.
 # data/<id>/home-patch.applied records the applied digest; apply then prints
 # `home-patch: <id>: applied to <paths>` and exits 0. An already applied patch,
 # by that record or because its reverse diff applies, is a silent exit 3, so a
@@ -64,12 +76,13 @@
 # the home, so a home nested in another checkout is still its own root.
 #
 # Who runs it. bin/fm-pr-merge.sh prints show's output as note: lines before
-# the forge merge and, after an attended merge is confirmed, runs apply with
-# the digest it showed; under away or branch authority it leaves the patch
-# pending, because nobody reviewed it. bin/fm-teardown.sh shows and applies a
-# patch still pending for a ship whose merge was recorded, when no away record
-# exists and the main session is the actor, and files a noticed row for a patch
-# it leaves unapplied. Neither caller's exit changes with it.
+# the forge merge (with --record under attended authority) and, after an
+# attended merge is confirmed, runs apply with the digest it showed; under
+# away or branch authority it leaves the patch pending, because nobody
+# reviewed it. bin/fm-teardown.sh runs apply --shown for a patch still pending
+# for a ship whose merge was recorded, when no away record exists and the main
+# session is the actor, and files a noticed row for a patch it leaves
+# unapplied. Neither caller's exit changes with it.
 #
 # Environment: FM_HOME selects the home (patch paths are relative to it);
 # FM_DATA_OVERRIDE moves only where data/<task-id>/home-patch.md is read.
@@ -90,12 +103,23 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 
 CMD=${1:-}
 EXPECT_DIGEST=
+SHOW_RECORD=false
+USE_SHOWN=false
 case "$CMD" in
   add) [ "$#" -eq 4 ] || { usage >&2; exit 2; } ;;
-  show) [ "$#" -eq 2 ] || { usage >&2; exit 2; } ;;
+  show)
+    if [ "$#" -eq 3 ] && [ "$3" = --record ]; then
+      SHOW_RECORD=true
+    elif [ "$#" -ne 2 ]; then
+      usage >&2
+      exit 2
+    fi
+    ;;
   apply)
     if [ "$#" -eq 4 ] && [ "$3" = --digest ] && [ -n "$4" ]; then
       EXPECT_DIGEST=$4
+    elif [ "$#" -eq 3 ] && [ "$3" = --shown ]; then
+      USE_SHOWN=true
     elif [ "$#" -ne 2 ]; then
       usage >&2
       exit 2
@@ -113,6 +137,7 @@ HOME_ROOT=$(cd -P -- "$FM_HOME" 2>/dev/null && pwd -P) || {
 }
 PATCH="$DATA/$ID/home-patch.md"
 APPLIED="$DATA/$ID/home-patch.applied"
+SHOWN="$DATA/$ID/home-patch.shown"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fm-home-patch.XXXXXX") || exit 1
 trap 'rm -rf "$WORK"' EXIT
 DIFF="$WORK/patch.diff"
@@ -135,6 +160,12 @@ path_refusal() {  # <rel>
     '"'*) echo "a quoted path is not accepted: $rel"; return ;;
     /*) echo "an absolute path is outside the home: $rel"; return ;;
     data/captain*.md) echo "$rel holds the captain's own rulings"; return ;;
+    data/projects.md|data/secondmates.md|data/backlog.md|config/*account*|config/*permission*|config/launch-env*|\
+    config/*yolo*|config/*posture*|config/*autoland*|config/auto-land*|config/*hosts*|\
+    config/*secret*|config/*token*|config/*credential*)
+      echo "$rel carries authority only the captain's word or its own tool changes"
+      return
+      ;;
     data/?*|config/?*) ;;
     *) echo "$rel is not under data/ or config/"; return ;;
   esac
@@ -240,10 +271,14 @@ EOF
   VERDICT="does not apply: $(printf '%s' "$why" | grep -m 1 . | sed 's/^error: //')" VERDICT_RC=1
 }
 
-record_applied() {
-  local tmp="$APPLIED.tmp.$$"
+record_digest() {  # <record-file> <stamp-key>
+  local tmp="$1.tmp.$$"
   [ -n "$DIGEST" ] || return 1
-  printf 'applied_at=%s\ndigest=%s\n' "$(date +%s)" "$DIGEST" >"$tmp" && mv -f -- "$tmp" "$APPLIED"
+  printf '%s=%s\ndigest=%s\n' "$2" "$(date +%s)" "$DIGEST" >"$tmp" && mv -f -- "$tmp" "$1"
+}
+
+record_applied() {
+  record_digest "$APPLIED" applied_at
 }
 
 print_judged() {
@@ -260,6 +295,10 @@ do_show() {
     exit 4
   fi
   print_judged
+  if [ "$SHOW_RECORD" = true ] && [ "$VERDICT_RC" -eq 0 ] && [ ! -L "$DATA/$ID" ]; then
+    record_digest "$SHOWN" shown_at \
+      || printf 'warning: could not record the shown digest in %s\n' "$SHOWN" >&2
+  fi
   exit "$VERDICT_RC"
 }
 
@@ -309,7 +348,8 @@ apply_staged() {
   done
   for i in "${!REL_PATHS[@]}"; do
     rel=${REL_PATHS[$i]}
-    if mv -f -- "${tmps[$i]}" "$HOME_ROOT/$rel" 2>/dev/null; then
+    # A write another session made since the copy above would be lost.
+    if cmp -s -- "$orig/$rel" "$HOME_ROOT/$rel" && mv -f -- "${tmps[$i]}" "$HOME_ROOT/$rel" 2>/dev/null; then
       published+=("$rel")
       continue
     fi
@@ -321,9 +361,9 @@ apply_staged() {
       fi
     done
     if [ -n "$failed" ]; then
-      echo "could not publish ${REL_PATHS[$i]}, and could not restore $failed, which now hold the patched text"
+      echo "could not publish ${REL_PATHS[$i]} (it may have changed while applying), and could not restore $failed, which now hold the patched text"
     else
-      echo "could not publish ${REL_PATHS[$i]}; every file published before it was restored"
+      echo "could not publish ${REL_PATHS[$i]} (it may have changed while applying); every file published before it was restored"
     fi
     return 1
   done
@@ -336,6 +376,10 @@ do_apply() {
     4) exit 4 ;;
     1) not_applied "$VERDICT" ;;
   esac
+  if [ "$USE_SHOWN" = true ]; then
+    EXPECT_DIGEST=$(sed -n 's/^digest=//p' "$SHOWN" 2>/dev/null | head -n 1)
+    [ -n "$EXPECT_DIGEST" ] || not_applied "no attended landing step showed it to the helm"
+  fi
   if [ -n "$EXPECT_DIGEST" ] && [ "$DIGEST" != "$EXPECT_DIGEST" ]; then
     not_applied "it changed after it was shown: digest $DIGEST, shown $EXPECT_DIGEST"
   fi
@@ -351,7 +395,7 @@ do_apply() {
 }
 
 do_add() {
-  local rel=$3 edited=$4 why rc=0 candidate="$WORK/candidate.md"
+  local rel=$3 edited=$4 why rc=0 candidate="$WORK/candidate.md" kept
   why=$(path_refusal "$rel")
   if [ -n "$why" ]; then
     echo "error: $why" >&2
@@ -374,8 +418,25 @@ do_add() {
     echo "error: $rel or $edited is not text, so add records no change" >&2
     exit 2
   fi
+  judge "$PATCH"
+  if [ "$VERDICT_RC" -eq 3 ]; then
+    # The patch is in the home already, so this change starts a new one.
+    kept="$DATA/$ID/home-patch.$(printf '%.12s' "$DIGEST").md"
+    if [ -e "$kept" ] || ! mv -- "$PATCH" "$kept"; then
+      echo "error: could not keep the applied patch as $kept, so nothing was written" >&2
+      exit 1
+    fi
+    echo "home-patch: $ID: the applied patch is kept as data/$ID/${kept##*/}; this change starts a new one"
+  fi
   if [ -e "$PATCH" ]; then
-    cp -- "$PATCH" "$candidate" || exit 1
+    # Drop the block add wrote earlier for this file; the new one replaces it.
+    awk -v head="diff --git a/$rel b/$rel" '
+      opened { opened = 0; if ($0 == head) { drop = 1; next }; print "```diff" }
+      drop { if ($0 == "```") drop = 0; next }
+      $0 == "```diff" { opened = 1; next }
+      { print }
+      END { if (opened) print "```diff" }
+    ' "$PATCH" >"$candidate" || exit 1
   else
     printf '# Home patch for %s\n\nbin/fm-home-patch.sh applies this after the work lands.\n' "$ID" >"$candidate" || exit 1
   fi

@@ -255,7 +255,66 @@ test_paths_and_shapes_it_may_not_change() {
   printf '%s\n' 'one' > "$TMP_ROOT/abs-copy"
   in_home "$home" bash "$PATCHER" add r-add state/thing "$TMP_ROOT/abs-copy" >/dev/null 2>&1; rc=$?
   expect_code 2 "$rc" "add accepted a state/ path"
-  pass "state/, the captain's rulings, .., create, mode change, symlinks and malformed files are refused"
+  local rel
+  for rel in data/projects.md config/claude-account config/claude-permission-mode config/launch-env-allowlist; do
+    printf '%s\n' 'one' > "$home/$rel"
+    printf '%s\n' "--- a/$rel" "+++ b/$rel" '@@ -1 +1 @@' '-one' '+two' > "$d/authority.diff"
+    write_patch "$home" r-authority "$d/authority.diff"
+    expect_refused "$home" r-authority "$rel, which carries authority"
+    grep -qx one "$home/$rel" || fail "a patch changed $rel"
+  done
+  pass "state/, the captain's rulings, authority records, .., create, mode change, symlinks and malformed files are refused"
+}
+
+# A second add for the same file replaces its block, so a revised edit is one
+# more add; once the patch is applied, add keeps it and starts a new one.
+test_add_revises_and_starts_a_new_patch_after_apply() {
+  local home="$TMP_ROOT/revise" out rc kept
+  make_home "$home"
+  add_edit "$home" ship-10 data/learnings.md '# Learnings' 'first try' '```' 'fenced' '```' || fail "add refused"
+  add_edit "$home" ship-10 config/crew-compact-window '# kept block' '400000' || fail "add refused"
+  add_edit "$home" ship-10 data/learnings.md '# Learnings' 'second try' '```' 'fenced' '```' \
+    || fail "a revised add for the same file was refused"
+  [ "$(grep -c '^diff --git a/data/learnings.md' "$home/data/ship-10/home-patch.md")" = 1 ] \
+    || fail "a revised add left two blocks for one file"
+  in_home "$home" bash "$PATCHER" apply ship-10 >/dev/null 2>&1; rc=$?
+  expect_code 0 "$rc" "the revised patch did not apply"
+  grep -qx 'second try' "$home/data/learnings.md" || fail "the revised edit did not land"
+  grep -qx '# kept block' "$home/config/crew-compact-window" || fail "the other file's block was lost"
+  printf '%s\n' '# Learnings' 'third' '```' 'fenced' '```' > "$TMP_ROOT/third-copy"
+  out=$(in_home "$home" bash "$PATCHER" add ship-10 data/learnings.md "$TMP_ROOT/third-copy" 2>&1); rc=$?
+  expect_code 0 "$rc" "add after an applied patch was refused: $out"
+  printf '%s\n' "$out" | grep -q 'this change starts a new one' || fail "add did not say it started a new patch: $out"
+  kept=$(find "$home/data/ship-10" -name 'home-patch.*.md')
+  { [ -n "$kept" ] && grep -q '+second try' "$kept"; } || fail "the applied patch was not kept"
+  grep -q '+third' "$home/data/ship-10/home-patch.md" || fail "the new patch does not hold the new change"
+  ! grep -q 'kept block' "$home/data/ship-10/home-patch.md" || fail "the new patch still holds the applied change"
+  in_home "$home" bash "$PATCHER" apply ship-10 >/dev/null 2>&1; rc=$?
+  expect_code 0 "$rc" "the new patch did not apply"
+  grep -qx 'third' "$home/data/learnings.md" || fail "the new patch's edit did not land"
+  pass "add replaces a file's earlier block and starts a new patch once the old one is applied"
+}
+
+# show --record keeps the digest the helm saw; apply --shown applies only it.
+test_record_and_apply_shown() {
+  local home="$TMP_ROOT/shown" out rc
+  make_home "$home"
+  add_edit "$home" ship-11 data/learnings.md '# Learnings' 'seen' '```' 'fenced' '```' || fail "add refused"
+  out=$(in_home "$home" bash "$PATCHER" apply ship-11 --shown 2>&1); rc=$?
+  expect_code 1 "$rc" "apply --shown applied a patch nobody was shown"
+  printf '%s\n' "$out" | grep -q 'no attended landing step showed it to the helm' || fail "no reason given: $out"
+  in_home "$home" bash "$PATCHER" show ship-11 >/dev/null 2>&1
+  [ ! -e "$home/data/ship-11/home-patch.shown" ] || fail "show without --record recorded a digest"
+  in_home "$home" bash "$PATCHER" show ship-11 --record >/dev/null 2>&1
+  add_edit "$home" ship-11 data/learnings.md '# Learnings' 'unseen' '```' 'fenced' '```' || fail "add refused"
+  out=$(in_home "$home" bash "$PATCHER" apply ship-11 --shown 2>&1); rc=$?
+  expect_code 1 "$rc" "apply --shown applied a patch changed after it was shown"
+  grep -qx 'old line' "$home/data/learnings.md" || fail "a refused apply --shown changed the file"
+  in_home "$home" bash "$PATCHER" show ship-11 --record >/dev/null 2>&1
+  in_home "$home" bash "$PATCHER" apply ship-11 --shown >/dev/null 2>&1; rc=$?
+  expect_code 0 "$rc" "apply --shown refused the digest it was shown"
+  grep -qx 'unseen' "$home/data/learnings.md" || fail "apply --shown did not land the shown patch"
+  pass "apply --shown applies only the digest show --record kept"
 }
 
 test_no_patch_and_bad_arguments() {
@@ -285,4 +344,6 @@ fm_test_run \
   test_home_location_does_not_move_paths \
   test_drift_changes_nothing \
   test_paths_and_shapes_it_may_not_change \
+  test_add_revises_and_starts_a_new_patch_after_apply \
+  test_record_and_apply_shown \
   test_no_patch_and_bad_arguments

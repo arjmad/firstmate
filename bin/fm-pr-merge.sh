@@ -391,7 +391,8 @@
 # read is silent.
 # Home patch (audit a1-61): when the task left data/<id>/home-patch.md, its
 # diff and verdict from bin/fm-home-patch.sh show print as note: lines just
-# before the forge merge, and once the forge confirms an attended merge the
+# before the forge merge (an attended run records the digest it showed, with
+# --record, for teardown's apply --shown), and once the forge confirms an attended merge the
 # patch is applied through bin/fm-home-patch.sh apply --digest with the digest
 # shown, so a patch changed in between is not applied; that script owns the
 # format, what a patch may change, and the applied record. A merge under away
@@ -2875,8 +2876,12 @@ HOME_PATCH_RC=4
 HOME_PATCH_DIGEST=
 if [ -z "$COMPANION_REPO" ]; then
   HOME_PATCH_RC=0
-  HOME_PATCH_SHOWN=$(FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-home-patch.sh" show "$ID" 2>&1 </dev/null) \
-    || HOME_PATCH_RC=$?
+  # Only an attended run's notes reach the helm, so only it records the
+  # digest that teardown may later apply (apply --shown).
+  HOME_PATCH_RECORD=()
+  [ "${FM_PR_MERGE_AUTHORITY:-}" != attended ] || HOME_PATCH_RECORD=(--record)
+  HOME_PATCH_SHOWN=$(FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-home-patch.sh" show "$ID" \
+    "${HOME_PATCH_RECORD[@]+"${HOME_PATCH_RECORD[@]}"}" 2>&1 </dev/null) || HOME_PATCH_RC=$?
   if [ "$HOME_PATCH_RC" != 4 ]; then
     printf '%s\n' "$HOME_PATCH_SHOWN" | sed 's/^/note: /' >&2 || true
     HOME_PATCH_DIGEST=$(printf '%s\n' "$HOME_PATCH_SHOWN" | sed -n "s/^home-patch: $ID: digest //p" | head -n 1)

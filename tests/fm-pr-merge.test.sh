@@ -1144,6 +1144,8 @@ test_home_patch_is_noted_then_applied_after_an_attended_merge() {
   assert_grep 'home-patch: task-x1: applied to data/learnings.md' "$case_dir/stdout" \
     "home-patch-attended: the merge did not apply the patch"
   grep -qx 'new learning' "$case_dir/home/data/learnings.md" || fail "home-patch-attended: the home file was not patched"
+  grep -q '^digest=' "$case_dir/home/data/task-x1/home-patch.shown" \
+    || fail "home-patch-attended: the attended merge did not record the digest it showed"
   assert_logged_gh_merge "$case_dir" 961 example/repo --squash
   pass "an attended merge notes the home patch before the forge and applies it after"
 }
@@ -1172,6 +1174,8 @@ test_home_patch_waits_on_a_failed_away_or_companion_merge() {
   assert_grep "actionable: merged $url under away authority, so its home patch data/task-x1/home-patch.md stays unapplied" \
     "$case_dir/stderr" "home-patch-away: no actionable line named the pending patch"
   grep -qx 'old learning' "$case_dir/home/data/learnings.md" || fail "home-patch-away: an away merge applied the patch"
+  [ ! -e "$case_dir/home/data/task-x1/home-patch.shown" ] \
+    || fail "home-patch-away: an away merge recorded a digest nobody reviewed"
 
   case_dir=$(make_case home-patch-companion)
   mkdir -p "$case_dir/wt"

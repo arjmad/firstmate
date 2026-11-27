@@ -2876,7 +2876,7 @@ test_teardown_names_a_due_self_update() {
 # A ship's home patch (bin/fm-home-patch.sh, audit a1-61) is applied by its
 # teardown once its merge was recorded; without that record it is filed as a
 # routine noticed row, and a forced teardown leaves it alone.
-home_patch_teardown_case() {  # <name> <merged:yes|no>
+home_patch_teardown_case() {  # <name> <merged:yes|no> [shown:yes|no, default yes]
   local case_dir
   case_dir=$(make_case "$1")
   write_meta "$case_dir" no-mistakes ship
@@ -2891,6 +2891,11 @@ home_patch_teardown_case() {  # <name> <merged:yes|no>
     printf '%s\n' fm-pr-poll-merge-notified-v1 github github.com example/repo 7 \
       > "$case_dir/state/task-x1.pr-poll-merge-notified"
     chmod 600 "$case_dir/state/task-x1.pr-poll-merge-notified"
+  fi
+  # An attended fm-pr-merge.sh records the digest it showed the helm.
+  if [ "${3:-yes}" = yes ]; then
+    FM_HOME="$case_dir" FM_DATA_OVERRIDE="$case_dir/data" bash "$ROOT/bin/fm-home-patch.sh" \
+      show task-x1 --record >/dev/null 2>&1 || fail "$1: could not record the shown digest"
   fi
   printf '%s\n' "$case_dir"
 }
@@ -2907,6 +2912,27 @@ test_teardown_applies_a_merged_ships_home_patch() {
   grep -qx 'new learning' "$case_dir/data/learnings.md" || fail "home-patch-merged: the home file was not patched"
   assert_no_grep 'noticed-home-patch' "$case_dir/stdout" "home-patch-merged: an applied patch was filed as noticed"
 
+  # A patch revised after the helm saw it, or never shown at all, waits.
+  case_dir=$(home_patch_teardown_case home-patch-revised yes)
+  printf '%s\n' 'newer learning' > "$case_dir/learnings.edit"
+  FM_HOME="$case_dir" FM_DATA_OVERRIDE="$case_dir/data" bash "$ROOT/bin/fm-home-patch.sh" \
+    add task-x1 data/learnings.md "$case_dir/learnings.edit" >/dev/null 2>&1 \
+    || fail "home-patch-revised: add did not replace the earlier block"
+  rc=0
+  FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "home-patch-revised: teardown failed: $(cat "$case_dir/stderr")"
+  grep -qx 'old learning' "$case_dir/data/learnings.md" || fail "home-patch-revised: a patch changed after it was shown was applied"
+  assert_grep 'it changed after it was shown' "$case_dir/stderr" "home-patch-revised: teardown did not say why it waited"
+  assert_grep 'noticed-queue: filed: noticed-home-patch-task-x1' "$case_dir/stdout" \
+    "home-patch-revised: the revised patch was not filed as a noticed row"
+  case_dir=$(home_patch_teardown_case home-patch-unshown yes no)
+  rc=0
+  FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "home-patch-unshown: teardown failed: $(cat "$case_dir/stderr")"
+  grep -qx 'old learning' "$case_dir/data/learnings.md" || fail "home-patch-unshown: a patch no merge showed was applied"
+  assert_grep 'no attended landing step showed it to the helm' "$case_dir/stderr" \
+    "home-patch-unshown: teardown did not say why it waited"
+
   case_dir=$(home_patch_teardown_case home-patch-unmerged no)
   rc=0
   FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
@@ -2917,7 +2943,7 @@ test_teardown_applies_a_merged_ships_home_patch() {
   row=$(FM_HOME="$case_dir" "$ROOT/bin/fm-tasks-axi.sh" show noticed-home-patch-task-x1 --full 2>&1) \
     || fail "home-patch-unmerged: the noticed row is not in the backlog: $row"
   case "$row" in
-    *"no merge of its PR was recorded"*) ;;
+    *"no merge of its PR was recorded"*"apply it only if its work landed"*) ;;
     *) fail "home-patch-unmerged: the noticed row does not say why: $row" ;;
   esac
 
@@ -2935,7 +2961,7 @@ test_teardown_applies_a_merged_ships_home_patch() {
   grep -qx 'old learning' "$case_dir/data/learnings.md" || fail "home-patch-forced: a forced teardown applied the patch"
   assert_no_grep 'home-patch: task-x1' "$case_dir/stdout" "home-patch-forced: a forced teardown applied the patch"
   assert_no_grep 'noticed-home-patch' "$case_dir/stdout" "home-patch-forced: a forced teardown filed the patch"
-  pass "teardown shows and applies a merged ship's home patch, files an unmerged one, skips one applied by hand, and leaves a forced one alone"
+  pass "teardown applies the merged ship's home patch the helm was shown, files a revised, unshown or unmerged one, skips one applied by hand, and leaves a forced one alone"
 }
 
 # What a finished task noticed outside its work, and its idea, reach firstmate

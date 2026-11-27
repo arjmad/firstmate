@@ -165,7 +165,8 @@
 # bin/fm-claude-store-prune.sh --path.
 # Home patch (audit a1-61): once the record is gone, a non-forced ship teardown
 # prints bin/fm-home-patch.sh show for a data/<id>/home-patch.md still pending
-# and applies exactly that digest when the task's merge was recorded
+# and applies it with apply --shown, so only the digest an attended merge
+# showed the helm lands, when the task's merge was recorded
 # (state/<id>.pr-poll-merge-notified), no away record (or legacy state/.afk)
 # exists and the main session is the actor; that script owns the format and
 # what a patch may change. A pending patch it does not apply, a local-only
@@ -5095,7 +5096,7 @@ fi
 # A ship's home patch (see the header) is applied here, once the record is gone;
 # one left unapplied is filed as a routine noticed row so the helm sees it.
 teardown_home_patch() {
-  local pending='' slug filed shown rc=0 digest
+  local pending='' slug filed shown rc=0
   [ "$KIND" = ship ] && [ "$FORCE" != --force ] && [ -d "$STATE" ] || return 0
   shown=$(FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-home-patch.sh" show "$ID" 2>&1 </dev/null) || rc=$?
   case "$rc" in 3|4) return 0 ;; esac
@@ -5109,11 +5110,11 @@ teardown_home_patch() {
   elif [ "$(fm_lease_actor 2>/dev/null)" = branch ]; then
     pending="the supervision branch ran this teardown, so the helm did not review it"
   else
-    # The helm sees exactly what is applied, bound to the digest shown.
+    # Only the digest an attended merge showed the helm is applied here; a
+    # patch that appeared or changed after that waits for the helm's review.
     printf '%s\n' "$shown"
-    digest=$(printf '%s\n' "$shown" | sed -n "s/^home-patch: $ID: digest //p" | head -n 1)
-    if [ "$rc" -ne 0 ] || [ -z "$digest" ] \
-      || ! FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-home-patch.sh" apply "$ID" --digest "$digest" </dev/null; then
+    if [ "$rc" -ne 0 ] \
+      || ! FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-home-patch.sh" apply "$ID" --shown </dev/null; then
       pending="it did not apply (the lines above say why)"
     fi
   fi
@@ -5122,7 +5123,7 @@ teardown_home_patch() {
   if filed=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
     "$SCRIPT_DIR/fm-noticed.sh" file noticed "home-patch-$slug" \
       --title "Home patch for $ID is not applied" \
-      --why "Teardown left data/$ID/home-patch.md unapplied because $pending; review it with bin/fm-home-patch.sh show $ID, then apply it or close this row." \
+      --why "Teardown left data/$ID/home-patch.md unapplied because $pending; review it with bin/fm-home-patch.sh show $ID, apply it only if its work landed, and close this row." \
       --from teardown --evidence "data/$ID/home-patch.md" </dev/null); then
     echo "noticed-queue: $filed (home patch left unapplied)"
   else
