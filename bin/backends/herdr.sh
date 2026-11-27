@@ -3684,11 +3684,8 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
       case "$verdict" in
         busy)
           # On Claude a working status is delivery only with a cleared
-          # composer; one that still shows the payload did not take this
-          # Enter, and the read below retries it.
+          # composer, which the read below decides.
           [ "$proof" = 1 ] || { printf 'empty'; return 0; }
-          verdict=$(fm_composer_claude_after_enter fm_backend_herdr_composer_content "$target" "$text")
-          [ "$verdict" = pending ] || { printf '%s' "$verdict"; return 0; }
           ;;
         unknown) printf 'unknown'; return 0 ;;
       esac
@@ -3700,6 +3697,10 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
         printf 'unknown'
         return 0
       fi
+      # The classifier strips Claude's grey slash-command text as a ghost, so
+      # a Claude Enter is decided from the composer's content instead.
+      [ "$proof" != 1 ] \
+        || verdict=$(fm_composer_claude_after_enter fm_backend_herdr_composer_content "$target" "$text")
       case "$verdict" in
         empty) printf 'empty'; return 0 ;;
         pending|pending-unproven) ;;
@@ -3712,6 +3713,8 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
         printf 'unknown'
         return 0
       fi
+      [ "$proof" != 1 ] \
+        || verdict=$(fm_composer_claude_after_enter fm_backend_herdr_composer_content "$target" "$text")
       if [ "$verdict" = pending ] && [ "$proof" != 1 ] && [ "$raw_status" != working ] \
         && [ "$footer_baseline" = idle ] \
         && [ "$(fm_backend_herdr_rendered_busy_state "$target" "$busy_harness")" = busy ]; then
