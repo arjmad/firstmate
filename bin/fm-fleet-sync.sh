@@ -1446,15 +1446,28 @@ detach_unlock() {
 # run, followed to its end; sets rc and output as the inline run does, output
 # being the run's own log, which stays beside its record. Sets DETACH_LEFT=yes
 # instead, with RUNNING_* naming the run, when the run is still going: an
-# earlier one launchd still runs, or this one passed the bound.
+# earlier one launchd still runs, or this one passed the bound; DETACH_DONE=yes
+# when, under its lock, another sync's run turns out to have succeeded for HEAD.
 run_detached_post_update() {
   local record=$1 cmd=$2 job nonce head submitted=0 followed=0
-  DETACH_LEFT=no
+  DETACH_LEFT=no DETACH_DONE=no
   job=$(detach_label "$3")
   head=$(git -C "$PROJ" rev-parse HEAD 2>/dev/null) || head=unknown
   nonce="$(date +%s).$$.${RANDOM:-0}"
   output="$record.job.log"
   detach_lock "$record" || return 0
+  # Checked again under the lock: another sync's run may have started, or
+  # finished for this HEAD, since run_post_update looked.
+  if post_update_still_running "$record.running"; then
+    detach_unlock
+    DETACH_LEFT=yes
+    return 0
+  fi
+  if detach_receipt "$record" && [ "$RECEIPT_HEAD" = "$head" ] && [ "$RECEIPT_RC" = 0 ]; then
+    detach_unlock
+    DETACH_DONE=yes
+    return 0
+  fi
   rm -f "$record.running" "$record.job.env"
   if ! printf '%s\n' "$cmd" > "$record.job.cmd" 2>/dev/null \
       || ! (umask 077 && export -p > "$record.job.env") 2>/dev/null; then
@@ -1534,6 +1547,11 @@ run_post_update() {
     run_detached_post_update "$record" "$cmd" "$key"
     if [ "$DETACH_LEFT" = yes ]; then
       report_running_post_update
+      return 0
+    fi
+    if [ "$DETACH_DONE" = yes ]; then
+      write_live_record "$record" "$head"
+      echo "$label: post-update command ran at $(git -C "$PROJ" rev-parse --short HEAD) (detached run, log $record.job.log)"
       return 0
     fi
   else
