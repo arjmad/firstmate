@@ -1340,7 +1340,8 @@ detach_submit() {
 detach_receipt() {
   local word
   RECEIPT_NONCE="" RECEIPT_HEAD="" RECEIPT_RC=""
-  read -r word RECEIPT_NONCE RECEIPT_HEAD RECEIPT_RC _ < "$1.job" 2>/dev/null || return 1
+  [ -f "$1.job" ] || return 1
+  read -r word RECEIPT_NONCE RECEIPT_HEAD RECEIPT_RC _ 2>/dev/null < "$1.job" || return 1
   [ "$word" = finished ] && [ -n "$RECEIPT_RC" ]
 }
 
