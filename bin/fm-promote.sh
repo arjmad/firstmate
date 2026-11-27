@@ -39,7 +39,7 @@
 # what it publishes.
 # There is no --forge flag here: the binding comes from the registry, and for a
 # task record naming no project it is none. bin/fm-brief.sh takes --forge instead
-# because that script has no registry access at all, and bin/fm-spawn.sh checks
+# because that script reads no delivery choice from the registry, and bin/fm-spawn.sh checks
 # its value against the registry; bin/fm-project-mode.sh's header owns the
 # binding and bin/fm-dod-lib.sh owns what it changes for the worker, including
 # the refusal of a forge on local-only. A forge=external project is refused
@@ -47,7 +47,8 @@
 # The project's pr=manual binding is read the same way and applies to a promoted
 # no-mistakes mode only (bin/fm-project-mode.sh --pr; bin/fm-dod-lib.sh's
 # fm_pr_text_valid owns where it is accepted); the ship's Definition of done then
-# carries it.
+# carries it. Its +draft-until-ready token is read the same way, through
+# bin/fm-dod-lib.sh's fm_dod_project_draft, for a promoted direct-PR mode only.
 # Usage: fm-promote.sh <task-id> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--upstream-consent <host>/<owner>/<repo>]
 # --upstream-consent records the captain's one-off approval for this task to
 # publish to firstmate's own upstream repository; promotion applies the same
@@ -95,6 +96,7 @@ MODE_SET=0
 YOLO_SET=0
 FORGE=none
 PR_TEXT=auto
+DRAFT=ready
 UPSTREAM_CONSENT=
 UPSTREAM_CONSENT_SET=0
 POS=()
@@ -251,6 +253,10 @@ if [ -n "$PROMOTE_PROJECT" ]; then
     exit 1
   fi
   [ "$MODE" != no-mistakes ] || PR_TEXT=${PROMOTE_STANDING_PR:-auto}
+  DRAFT=$(fm_dod_project_draft "$MODE" "$FORGE" "$PROMOTE_PROJECT_NAME") || {
+    echo "error: $ID cannot promote: the registry entry for $PROMOTE_PROJECT_NAME does not resolve to a delivery posture (see the refusal above); correct data/projects.md and promote again" >&2
+    exit 1
+  }
 fi
 BASE_BRANCH=$(sed -n 's/^base_branch=//p' "$META" | head -n 1)
 fm_base_branch_valid "$BASE_BRANCH" "$MODE" "$FORGE" "fm-promote.sh $ID" || exit 1
@@ -358,7 +364,7 @@ EOF
   # Promotion demotes any scout-time method to context, so every promoted ship
   # carries the short-loop floor.
   local dod
-  dod=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$PR_TEXT") || return 1
+  dod=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$PR_TEXT" "$DRAFT") || return 1
   printf '%s\n' "$dod" | fm_dod_with_business_push_rule "$MODE" "${PROMOTE_PROJECT_NAME:-}" | fm_dod_with_short_loop_floor
 }
 mkdir -p "$DATA/$ID"

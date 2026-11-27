@@ -745,10 +745,76 @@ test_direct_pr_dod_defers_to_draft_until_ready_guidance() {
   assert_grep "means a required check has not posted, so watch again until it posts and passes" "$proto" \
     "the delivery protocol must keep waiting while a required check has not posted"
   draft_at=$(grep -n 'open it as a draft instead' "$out" | head -1 | cut -d: -f1)
-  review_at=$(grep -n '^Then run Claude Code' "$out" | head -1 | cut -d: -f1)
+  review_at=$(grep -n '^Before that done report, give a code-changing GitHub PR its code review' "$out" | head -1 | cut -d: -f1)
   [ -n "$draft_at" ] && [ -n "$review_at" ] && [ "$draft_at" -lt "$review_at" ] \
     || fail "the draft-until-ready line must come before the code review it defers marking ready past"
   pass "direct-PR DoD defers to draft-until-ready guidance"
+}
+
+# A project registered +draft-until-ready (audit a1-59) gets only the draft
+# wording, from the registry alone: both fm-brief.sh and fm-promote.sh read it,
+# and an unregistered project keeps both sentences unchanged.
+test_direct_pr_dod_renders_the_registered_draft_token() {
+  local out home id meta draft_at review_at rc
+  out="$TMP_ROOT/dod-draft-token.md"
+  fm_dod_block direct-PR dod-draft-token-task "" none "" "" auto until-ready > "$out"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'open a PR with `gh-axi`: open it as a draft, do your reviews on the draft, and mark it ready after your last review push, before you wait for its checks.' "$out" \
+    "a draft-until-ready project does not open its PR as a draft and mark it ready after the last review push"
+  assert_no_grep 'ready for review, not a draft' "$out" "a draft-until-ready project is still told to open a ready PR"
+  assert_no_grep "Only where the repository's own guidance" "$out" "a draft-until-ready project still gets the conditional wording"
+  draft_at=$(grep -n 'open it as a draft, do your reviews on the draft' "$out" | cut -d: -f1)
+  review_at=$(grep -n '^Before that done report, give a code-changing GitHub PR its code review' "$out" | cut -d: -f1)
+  [ -n "$draft_at" ] && [ -n "$review_at" ] && [ "$draft_at" -lt "$review_at" ] \
+    || fail "the draft line must come before the code review it defers marking ready past"
+  for args in "no-mistakes:none" "direct-PR:forgejo" "local-only:none"; do
+    rc=0
+    fm_dod_block "${args%%:*}" dod-draft-token-task "" "${args#*:}" "" "" auto until-ready >/dev/null 2>&1 || rc=$?
+    [ "$rc" -ne 0 ] || fail "draft=until-ready was accepted on $args"
+  done
+  rc=0
+  fm_dod_block direct-PR dod-draft-token-task "" none "" "" auto sometimes >/dev/null 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || fail "an unknown draft posture was accepted"
+
+  home="$TMP_ROOT/draft-token-home"
+  mkdir -p "$home/data" "$home/state"
+  printf '%s\n' '## Projects' \
+    '- drafted [direct-PR +yolo +draft-until-ready] - opens drafts (added 2026-01-01)' \
+    '- plain [direct-PR +yolo] - opens ready PRs (added 2026-01-01)' \
+    '- wrong [no-mistakes +draft-until-ready] - a refused token (added 2026-01-01)' > "$home/data/projects.md"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" draft-brief drafted --mode direct-PR >/dev/null 2>&1 \
+    || fail "fm-brief.sh refused a draft-until-ready project"
+  assert_grep 'open it as a draft, do your reviews on the draft' "$home/data/draft-brief/brief.md" \
+    "fm-brief.sh did not read the registered draft token"
+  assert_no_grep 'ready for review, not a draft' "$home/data/draft-brief/brief.md" "fm-brief.sh kept the ready wording on a draft project"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" plain-brief plain --mode direct-PR >/dev/null 2>&1 \
+    || fail "fm-brief.sh refused a project with no draft token"
+  assert_grep 'ready for review, not a draft' "$home/data/plain-brief/brief.md" "a project with no draft token lost the ready wording"
+  assert_grep "Only where the repository's own guidance" "$home/data/plain-brief/brief.md" "a project with no draft token lost the conditional wording"
+  # A token registered where it cannot apply is refused whatever the task's mode.
+  for mode in direct-PR no-mistakes; do
+    rc=0
+    out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "wrong-brief-$mode" wrong --mode "$mode" 2>&1) || rc=$?
+    [ "$rc" -ne 0 ] || fail "fm-brief.sh --mode $mode accepted a refused registry draft token"
+    assert_contains "$out" "+draft-until-ready" "fm-brief.sh --mode $mode refused the draft token without naming it"
+    [ ! -e "$home/data/wrong-brief-$mode/brief.md" ] || fail "a refused draft token still wrote a $mode brief"
+  done
+  # Companion PRs follow the same DoD, so --also keeps the guidance-gated wording.
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" draft-also drafted --mode direct-PR --also plain >/dev/null 2>&1 \
+    || fail "fm-brief.sh refused a draft-until-ready ship with a companion"
+  assert_grep "Only where the repository's own guidance" "$home/data/draft-also/brief.md" \
+    "a ship with a companion repository lost the wording that defers to each repository's guidance"
+
+  id="draft-promote"
+  meta="$home/state/$id.meta"
+  mkdir -p "$home/data/$id"
+  printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\nproject=%s\n' "$id" "$home/projects/drafted" > "$meta"
+  printf '%s\n' '# Task' "## Captain's intent" 'Fix it.' '' '## Firstmate spec' 'Reproduce first.' '' '# Setup' 'You are in a disposable git worktree.' > "$home/data/$id/brief.md"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$ROOT/bin/fm-promote.sh" "$id" --mode direct-PR --yolo on 2>&1) \
+    || fail "fm-promote.sh refused a draft-until-ready project"$'\n'"$out"
+  assert_grep 'open it as a draft, do your reviews on the draft' "$home/data/$id/ship-instructions.md" \
+    "fm-promote.sh did not read the registered draft token"
+  pass "direct-PR DoD renders only the draft wording for a project registered +draft-until-ready"
 }
 
 # A scaffold block rendered below a placeholder (bin/fm-brief.sh --method) must
@@ -822,11 +888,8 @@ test_direct_pr_dod_waits_for_checks_green() {
   fm_dod_block direct-PR dod-checks-task > "$out"
   assert_grep 'gh-axi pr checks <number> --watch --fail-fast' "$out" "direct-PR DoD does not wait for the PR's checks"
   assert_grep 'gate-wait [at=<epoch>]: checks on PR {url}' "$out" "direct-PR DoD does not declare the checks wait"
-  assert_grep 'merge_state' "$out" "direct-PR DoD does not catch a required check that never reported"
-  assert_grep 'gh-axi pr reopen <number>' "$out" "direct-PR DoD leaves a run an Actions outage stranded with no recovery"
-  assert_grep 'fleet-gate' "$out" "direct-PR DoD does not name the fleet-gate trap"
-  assert_grep 'with no untracked files posts' "$out" "direct-PR DoD does not name the untracked-files trap"
-  assert_grep 'working [at=<epoch>]: fixing {check}' "$out" "direct-PR DoD leaves a fixing worker declared as waiting"
+  # The DoD keeps only the wait itself; every other checks step is the protocol's.
+  assert_no_grep 'merge_state' "$out" "direct-PR DoD still restates the protocol's checks steps"
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
   assert_grep 'for a PR outside GitHub, report `done [at=<epoch>]: PR {url}`' "$out" "direct-PR DoD holds a non-GitHub PR to the GitHub report"
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
@@ -846,6 +909,10 @@ test_direct_pr_dod_waits_for_checks_green() {
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
   assert_grep 'Run `gh-axi pr close <number>` then `gh-axi pr reopen <number>`' "$proto" "the protocol leaves a stranded Actions run with no recovery"
   assert_grep 'never as a single-suite run, and with no untracked files left in the tree' "$proto" "the protocol does not name the fleet-gate trap"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'A required `fleet-gate` or `gate` status posts only from a full `./check.sh` run' "$proto" "the protocol does not name the fleet-gate status"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'append `working [at=<epoch>]: fixing {check}`, push the fix, and wait again' "$proto" "the protocol leaves a fixing worker declared as waiting"
   out="$TMP_ROOT/dod-checks-forgejo.md"
   fm_dod_block direct-PR dod-checks-task "" forgejo > "$out"
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
@@ -865,7 +932,8 @@ test_code_review_model_pin() {
   printf ' claude-fable-5-2 \nignored\n' > "$cfg/code-review-model"
   [ "$(CONFIG=$cfg fm_dod_code_review_model)" = claude-fable-5-2 ] || fail "file: review model is not its first trimmed line"
   out=$(CONFIG=$cfg fm_dod_code_review_block direct-PR)
-  assert_contains "$out" 'review <pr-url> --model claude-fable-5-2`' "the review command does not carry the pinned model"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_contains "$out" '`<model>` as `claude-fable-5-2`' "the review step does not carry the pinned model"
   printf 'x;rm -rf ~\n' > "$cfg/code-review-model"
   [ "$(CONFIG=$cfg fm_dod_code_review_model)" = claude-opus-5-5 ] || fail "unsafe id: review model is not the default"
   pass "code review model pin reads config/code-review-model with a claude-opus-5-5 default"
@@ -888,11 +956,19 @@ test_pr_based_dod_carries_the_code_review_step() {
     proto=$(sed -n 's/^Read `\([^`]*\)` "Code review" before this step.*/\1/p' "$out")
     [ -n "$proto" ] && [ -f "$proto" ] || fail "$mode: DoD does not point at a readable delivery protocol: '$proto'"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    assert_grep 'once on the pinned model `claude-opus-5-5` with the shell command `'"$cli"' review <pr-url> --model claude-opus-5-5`' "$out" "$mode: DoD does not run the review through the script on the default pinned model"
-    assert_grep 'never as the skill in your own session' "$out" "$mode: DoD lets the worker run the review on its own session's model"
-    assert_grep 'then posts each finding to the PR itself' "$out" "$mode: DoD does not say the script posts the findings"
+    assert_grep 'with `<review script>` as `'"$cli"'` and `<model>` as `claude-opus-5-5`' "$out" "$mode: DoD does not name the review script and the default pinned model for the protocol"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    assert_grep 'or `review` exits non-zero, append `blocked:`' "$out" "$mode: DoD does not block on a failed review run"
+    assert_grep '`<review script> review <pr-url> --model <model>`' "$proto" "$mode: the protocol does not run the review through the script on the pinned model"
+    assert_grep 'Do not invoke the skill in your own session instead' "$proto" "$mode: the protocol lets the worker run the review on its own session's model"
+    assert_grep 'then posts each finding to the PR itself' "$proto" "$mode: the protocol does not say the script posts the findings"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep 'or `review` exits non-zero, append `blocked:`' "$proto" "$mode: the protocol does not block on a failed review run"
+    # The DoD keeps the pointer and the lines a worker must see first (audit a1-65).
+    assert_no_grep 'tstack-sol-loop' "$out" "$mode: DoD still restates the protocol's review steps"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep 'On `unreviewed`, report done only after `'"$cli"' record <pr-url>`' "$out" "$mode: DoD does not hold an unreviewed PR's done until record"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep 'prints `reviewed`.' "$out" "$mode: DoD does not hold done until record prints reviewed"
     rc=0
     "$cli" review https://gitlab.example/group/project/-/merge_requests/7 --model claude-opus-5-5 2>/dev/null || rc=$?
     [ "$rc" -eq 2 ] || fail "$mode: the DoD's review script does not refuse a non-GitHub URL before it runs"
@@ -908,43 +984,43 @@ test_pr_based_dod_carries_the_code_review_step() {
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
     assert_no_grep 'and then you run `/code-review` again' "$out" "$mode: DoD still sends the worker to a new review after every carry"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    assert_grep 'first run the `tstack-sol-loop` skill' "$out" "$mode: DoD does not run the Sol pre-check"
-    assert_grep 'at most 3 rounds, never the skill'"'"'s extended 5' "$out" "$mode: DoD does not cap Sol at three rounds"
-    assert_grep 'settle its findings by its rules' "$out" "$mode: DoD does not settle Sol findings by the skill's rules"
+    assert_grep 'first run the `tstack-sol-loop` skill' "$proto" "$mode: the protocol does not run the Sol pre-check"
+    assert_grep 'at most 3 rounds, never the skill'"'"'s extended 5' "$proto" "$mode: the protocol does not cap Sol at three rounds"
+    assert_grep 'Settle each Sol finding as that skill says' "$proto" "$mode: the protocol does not settle Sol findings by the skill's rules"
     assert_grep 'decline nits and out-of-scope findings in one line in its ledger' "$proto" "$mode: the protocol does not settle Sol findings by the skill's rules"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
     assert_grep 'Before such a new `/code-review`, run `tstack-sol-loop` again as a fresh loop of one round on the change since the record, outside the first loop'"'"'s 3' "$proto" "$mode: the protocol does not give a refused carry its own Sol round"
-    assert_grep 'that user is firstmate: append `needs-decision' "$out" "$mode: DoD does not send an open Sol finding to firstmate"
-    assert_grep 'skip the loop instead, never substitute another model' "$out" "$mode: DoD gives no fallback when Sol is unreachable"
+    assert_grep 'that user is firstmate: append `needs-decision' "$proto" "$mode: the protocol does not send an open Sol finding to firstmate"
+    assert_grep 'skip the loop instead, never substitute another model' "$proto" "$mode: the protocol gives no fallback when Sol is unreachable"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    assert_grep 'append `working [at=<epoch>]: Sol skipped: {reason}` so firstmate sees it' "$out" "$mode: DoD skips Sol without telling firstmate"
-    assert_grep "$cli record <pr-url> --note 'Sol: <N> rounds, <model>, <verdict>'" "$out" "$mode: DoD does not record the Sol outcome"
-    assert_grep "--note 'Sol: skipped, <reason>'" "$out" "$mode: DoD does not record a skipped Sol loop"
+    assert_grep 'append `working [at=<epoch>]: Sol skipped: {reason}` so firstmate sees it' "$proto" "$mode: the protocol skips Sol without telling firstmate"
+    assert_grep "<review script> record <pr-url> --note 'Sol: <N> rounds, <model>, <verdict>'" "$proto" "$mode: the protocol does not record the Sol outcome"
+    assert_grep "--note 'Sol: skipped, <reason>'" "$proto" "$mode: the protocol does not record a skipped Sol loop"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    assert_grep 'With three full records already posted, a change that would need another `/code-review` pass does not get one' "$out" "$mode: DoD does not stop a fourth review pass"
+    assert_grep 'With three already posted, a change that would need another `/code-review` pass does not get one' "$proto" "$mode: the protocol does not stop a fourth review pass"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
     assert_grep 'comments you posted without a `fm-code-review-carry` or `fm-code-review-gate` line, rather than relying on memory' "$proto" "$mode: the protocol does not say how to count review passes"
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    sol_line=$(grep -n 'first run the `tstack-sol-loop` skill' "$out" | cut -d: -f1)
+    sol_line=$(grep -n 'first run the `tstack-sol-loop` skill' "$proto" | cut -d: -f1)
     # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-    claude_line=$(grep -n '^Then run Claude Code'"'"'s built-in `/code-review` once on the pinned model' "$out" | cut -d: -f1)
-    [ -n "$claude_line" ] && [ "$sol_line" -lt "$claude_line" ] || fail "$mode: the Sol loop does not come before the one /code-review"
+    claude_line=$(grep -n 'Then run Claude Code'"'"'s built-in `/code-review` once on the pinned model' "$proto" | cut -d: -f1)
+    [ -n "$claude_line" ] && [ "$sol_line" -lt "$claude_line" ] || fail "$mode: the protocol's Sol loop does not come before the one /code-review"
     assert_no_grep "A later push that changes the PR's diff needs the review again" "$out" "$mode: DoD still says every fix push needs a new review"
     review_line=$(grep -n '^Before that done report, give a code-changing GitHub PR its code review' "$out" | cut -d: -f1)
     done_line=$(grep -n '^Then append `done' "$out" | cut -d: -f1)
     [ "$review_line" -lt "$done_line" ] || fail "$mode: the review step comes after the done report"
   done
-  assert_grep 'run /no-mistakes again so the pipeline pushes it' "$TMP_ROOT/dod-review-no-mistakes.md" \
+  assert_grep 'run after the /no-mistakes run that pushes your last fix, prints' "$TMP_ROOT/dod-review-no-mistakes.md" \
     "no-mistakes: review fixes must ride the pipeline"
-  assert_grep 'run /no-mistakes again once the loop ends so the pipeline pushes its fixes' "$TMP_ROOT/dod-review-no-mistakes.md" \
-    "no-mistakes: Sol fixes must ride the pipeline"
-  assert_grep 'push its fixes once the loop ends' "$TMP_ROOT/dod-review-direct-PR.md" \
-    "direct-PR: Sol fixes are not pushed after the loop"
+  assert_grep 'a no-mistakes worker commits and runs /no-mistakes again so the pipeline pushes it' "$proto" \
+    "no-mistakes: the protocol does not route review fixes through the pipeline"
+  assert_grep 'run after your last push, prints' "$TMP_ROOT/dod-review-direct-PR.md" \
+    "direct-PR: the record does not follow the last push"
   # A pr=manual no-mistakes ship opens its PR by hand and still carries the step.
   out="$TMP_ROOT/dod-review-manual.md"
   fm_dod_block no-mistakes dod-review-task "" none "" "" manual > "$out"
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-  assert_grep 'it runs the review headless with firstmate'"'"'s merge-gate focus' "$out" "pr=manual: DoD does not carry the code review step"
+  assert_grep 'fm-code-review.sh status <pr-url>` first' "$out" "pr=manual: DoD does not carry the code review step"
   assert_grep 'beyond the code-review step below' "$out" "pr=manual: DoD forbids the review's own PR comments"
   review_line=$(grep -n '^Before that done report, give a code-changing GitHub PR its code review' "$out" | cut -d: -f1)
   done_line=$(grep -n '^Then append `done' "$out" | cut -d: -f1)
@@ -1017,6 +1093,7 @@ test_non_done_lines_are_not_gated
 test_fenced_and_indented_captain_lines_are_not_intent
 test_pr_based_dod_draft_check_uses_gh_axi
 test_direct_pr_dod_defers_to_draft_until_ready_guidance
+test_direct_pr_dod_renders_the_registered_draft_token
 test_direct_pr_dod_waits_for_checks_green
 test_pr_based_dod_carries_the_code_review_step
 test_direct_pr_dod_writes_the_matt_pr_body

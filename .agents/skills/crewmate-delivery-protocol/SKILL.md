@@ -9,7 +9,7 @@ metadata:
 
 # Crewmate delivery protocol
 
-Your brief's Definition of done carries each delivery rule as one line; this file holds the full steps behind those lines.
+Your brief's Definition of done points here and keeps only the lines you must see first; this file holds every delivery step in full, with each stop and escalation.
 Where your brief and this file differ, your brief wins.
 `<review script>` below is the `fm-code-review.sh` path your brief names, and `<model>` is the pinned review model it names.
 Where a step says to push, a direct-PR worker pushes from its copy, and a no-mistakes worker commits and runs /no-mistakes again so the pipeline pushes it.

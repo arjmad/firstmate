@@ -2788,6 +2788,13 @@ Firstmate passes it to `bin/fm-brief.sh --pr manual` at intake the same way it p
 The generated brief then has the worker pass `--skip pr,ci` on every `no-mistakes axi run`, write the PR title and body itself, open or update the PR with `gh-axi`, and wait for the PR's checks; `bin/fm-dod-lib.sh` owns that text.
 The token is the thin registry form of no-mistakes' own keep-text option, [kunchenguid/no-mistakes#1648](https://github.com/kunchenguid/no-mistakes/issues/1648), and is meant to map onto it once that exists.
 
+## Draft until ready (data/projects.md +draft-until-ready token)
+
+A project with no `+draft-until-ready` token keeps today's direct-PR wording: open the PR ready for review, unless the repository's own guidance opens its PRs as drafts until reviewed.
+A project whose guidance always opens PRs as drafts and marks them ready after the last review push, as firstmate's [`CONTRIBUTING.md`](../CONTRIBUTING.md) does, is registered with `+draft-until-ready`, and its direct-PR Definition of done then says only that.
+`bin/fm-project-mode.sh --draft <name>` reads it back, and its header owns the grammar and refusals: it applies to a `direct-PR` project with no `forge=` binding only.
+Unlike `pr=`, firstmate passes no flag for it: `bin/fm-brief.sh` and `bin/fm-promote.sh` read it from the registry through `bin/fm-dod-lib.sh`, which owns the wording.
+
 ## GitHub Enterprise hosts (config/github-hosts)
 
 `config/github-hosts` is an optional local, gitignored file naming the GitHub Enterprise hosts whose pull request URLs this home accepts, one lowercase hostname per line, such as `leadsonline.ghe.com`.

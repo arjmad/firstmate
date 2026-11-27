@@ -15,7 +15,7 @@
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
 # Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--base-branch <branch>] [--forge <none|gerrit|forgejo|external> [--shape squash]] [--pr <auto|manual>] [--also <repo>]... [--live <reason>] [--herdr-lab]
-#        fm-brief.sh <task-id> <repo-name> --scout [--base-branch <branch>] [--live <reason>] [--herdr-lab]
+#        fm-brief.sh <task-id> <repo-name> --scout [--read-only] [--base-branch <branch>] [--live <reason>] [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --also <repo> (repeatable, ship briefs only; fork patch, docs/fork-decisions.md
 #   2026-10-14) names a dependent repository this task also changes. The brief
@@ -27,6 +27,12 @@
 #   task's own repo, and appears once.
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
+#   --read-only (scout only) makes a scout that writes nothing but its report,
+#   notes, and status lines: its brief drops the brain-filing permission and the
+#   empty-inventory `fm-captain-hold.sh complete --none` step, and says to report
+#   done while firstmate attests the inventory as the scout-completion skill says.
+#   Use it for audit scouts, whose findings firstmate files after the captain's
+#   walk (audit a1-63).
 #   Every worker brief, scout and ship alike, carries the Lavish arm rule only when
 #   `fm-bootstrap.sh lavish-compatible` confirms the legacy board-compatibility
 #   floor; otherwise a scout brief asks for a text report and a ship brief for a
@@ -50,7 +56,9 @@
 #   omitted contract cannot be silent.
 # For ship tasks, --mode is REQUIRED and shapes the definition of done. Firstmate
 # resolves it per task at intake (AGENTS.md section 7); data/projects.md holds the
-# captain's standing posture as context, and this script never reads it:
+# captain's standing posture as context, and this script never reads it for a
+# delivery choice (its one registry read is the +draft-until-ready token, which
+# only words when a direct-PR worker marks its PR ready; audit a1-59):
 #   no-mistakes  implement -> /no-mistakes pipeline -> PR -> configured merge authority
 #   direct-PR    implement -> push + open PR via gh-axi (no pipeline) -> configured merge authority
 #   local-only   implement on branch, stop and report "ready in branch" (no push/PR);
@@ -278,6 +286,7 @@ PROJECT_DIR=
 PROJECT_DIR_SET=0
 LIVE_REASON=
 LIVE_SET=0
+READ_ONLY=0
 ALSO_REPOS=()
 POS=()
 want_value=
@@ -305,6 +314,7 @@ for a in "$@"; do
   fi
   case "$a" in
     --scout) KIND=scout ;;
+    --read-only) READ_ONLY=1 ;;
     --secondmate) KIND=secondmate ;;
     --herdr-lab) HERDR_LAB=1 ;;
     --no-projects) NO_PROJECTS=1 ;;
@@ -406,6 +416,10 @@ if [ "$BASE_BRANCH_SET" -eq 1 ]; then
     exit 1
   fi
   fm_base_branch_valid "$BASE_BRANCH" "$MODE" "$FORGE" "fm-brief.sh --base-branch" || exit 1
+fi
+if [ "$KIND" != scout ] && [ "$READ_ONLY" -eq 1 ]; then
+  echo "error: --read-only applies only to scout briefs; a ship delivers a PR and a secondmate charter is not a task" >&2
+  exit 1
 fi
 if [ "$KIND" != ship ]; then
   [ "$UPSTREAM_CONSENT_SET" -eq 0 ] || {
@@ -647,12 +661,14 @@ INBOX_SECTION=${INBOX_SECTION%$'\n'}
 # How a crewmate or scout waits. Every model turn resends the whole context, so
 # a wait must cost no turns: a decision wait ends the turn, and an external
 # wait sleeps in one bounded blocking shell command sized to the harness.
-# Emitted only when config/wait-no-turns is present.
+# The one-line condition wait in Rules 4 (WAIT_RULE_LINE) is always present
+# (audit guidance-44); this section, which adds the no-turn-spend detail, is
+# emitted only when config/wait-no-turns is present.
 IFS= read -r -d '' WAIT_SECTION <<'EOF' || true
 # Waiting
 Every turn you take resends your whole context, so a wait must cost no turns.
 After you append `needs-decision:` or `blocked:`, end your turn at once: do not check the inbox, the status file, or anything else, because the answer arrives as a terminal message that starts your next turn.
-Wait on anything external - a pipeline gate, PR checks - with ONE blocking shell command that returns when the state changes: `no-mistakes axi run` or `respond` with `--wait`, `gh-axi pr checks <pr> --watch --fail-fast`, or `@WAIT_HELPER@ wait -- bash -c '<test>'` (it re-runs the test until it exits 0 and sees only exported variables; exit 124 is a timeout: reissue it; exit 2 means the test cannot run) for anything else.
+Wait on anything external - a pipeline gate, PR checks - with ONE blocking shell command that returns when the state changes: `no-mistakes axi run` or `respond` with `--wait`, `gh-axi pr checks <pr> --watch --fail-fast`, or rule 4's condition wait (it re-runs the test until it exits 0 and sees only exported variables; exit 124 is a timeout: reissue it; exit 2 means the test cannot run) for anything else.
 Never spend turns on `sleep` followed by a status check, and never background a command in order to poll it.
 In Claude Code that `wait` in a single Bash call is the sanctioned foreground wait: when the harness refuses a sleep-then-check command and points you at backgrounding instead, reissue it as that `wait` rather than accepting the background.
 Bound that command by what your harness lets one command run: in Pi pass the bash tool a `timeout` of at most 2700 seconds, because Pi sets none by default; in Claude Code pass the Bash tool its maximum `timeout` of 600000 ms, because its default is 2 minutes; in Codex keep waiting on a still-running command with empty `write_stdin` polls of up to 300000 ms; elsewhere pass your shell tool its largest timeout and assume at most 10 minutes.
@@ -662,8 +678,9 @@ The one exception is `respond`: it sent its answer before it began waiting, so r
 A wait your shell can watch this way needs no `paused:` line, except your own pipeline run, a long foreground command, or your own validation round, which you declare once just before its blocking hold: append `paused:` once just before its first blocking command, then stay in the command, and never append it again as you reissue that command.
 EOF
 WAIT_HELPER=$(shell_quote "$FM_ROOT/bin/fm-procevent-when.sh")
-WAIT_SECTION=${WAIT_SECTION//@WAIT_HELPER@/"$WAIT_HELPER"}
 WAIT_SECTION=${WAIT_SECTION%$'\n'}
+WAIT_RULE_LINE="   Wait on a condition with \`$WAIT_HELPER wait -- bash -c '<test>'\` in one shell command with your shell tool's longest timeout; never sleep then check."
+CREWMATE_PAUSE_INSTRUCTIONS="${CREWMATE_PAUSE_INSTRUCTIONS%$'\n'}"$'\n'"$WAIT_RULE_LINE"$'\n'
 WAIT_BLOCK=
 if [ -e "$CONFIG/wait-no-turns" ]; then
   WAIT_BLOCK="$WAIT_SECTION"$'\n\n'
@@ -902,8 +919,35 @@ LAVISH_CONCLUDE_RULE="At session_ended or an empty End, stop without re-arming a
 LAVISH_URL_RULE="as \`$FM_ROOT/bin/fm-lavish-link.sh <url>\` prints it"
 
 if [ "$KIND" = scout ]; then
+# A read-only scout (--read-only) writes nothing that outlives it except its
+# report and notes: no brain filing and no empty-inventory attestation, so
+# firstmate attests the inventory when it reads the report (audit a1-63).
+SCOUT_SURVIVES="The report, its notes files beside it in \`$DATA/$ID/\`, and any brain filing below are the only things that survive, so anything worth keeping must be in them."
+SCOUT_DECISION_HOLD='hold any decision it leaves him under the completion gate below'
+IFS= read -r -d '' SCOUT_WRITE_RULE <<EOF || true
+2. Stay inside this worktree; outside it, write only the report, notes files beside it in \`$DATA/$ID/\`, and the status file below, except for the task's empty-inventory attestation through \`fm-captain-hold.sh complete --none\`, exactly as specified under Definition of done.
+   Filing durable knowledge through the fleet's sanctioned memory route (\`fleet-memory\`) is permitted and is not a change outside the worktree: a research scout follows the research skill's filing step, recording one research-log entry and the verified facts on the brain page that owns the subject, while recommendations stay in the report until the captain decides them.
+   $BRAIN_FILING_RULE
+   That filing goes only to Arjun's brain; a scout working in Sapna's domain never writes Arjun's brain and never writes Sapna's.
+EOF
+IFS= read -r -d '' SCOUT_COMPLETION <<EOF || true
+Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
+A question your findings leave for the captain is not a reason to wait: put it in the report (and board) with its choices and your recommendation, and declare done.
+Only when the reviewed inventory is empty, run \`FM_HOME=$(shell_quote "$FM_HOME") bash $(shell_quote "$FM_ROOT/bin/fm-captain-hold.sh") complete $(shell_quote "$ID") --none\`.
+EOF
+if [ "$READ_ONLY" -eq 1 ]; then
+  SCOUT_SURVIVES="This is a read-only scout: the report and its notes files beside it in \`$DATA/$ID/\` are the only things that survive, so anything worth keeping must be in them."
+  SCOUT_DECISION_HOLD='put any decision it leaves him in the report'
+  IFS= read -r -d '' SCOUT_WRITE_RULE <<EOF || true
+2. Stay inside this worktree; outside it, write only the report, notes files beside it in \`$DATA/$ID/\`, and the status file below.
+   File nothing to any brain, backlog, or task record, and run no captain-hold command: firstmate files what your report holds.
+EOF
+  SCOUT_COMPLETION="A question your findings leave for the captain is not a reason to wait: put it in the report (and board) with its choices and your recommendation, and declare done."$'\n'"Report done; firstmate attests the inventory."$'\n'
+fi
+SCOUT_WRITE_RULE=${SCOUT_WRITE_RULE%$'\n'}
+SCOUT_COMPLETION=${SCOUT_COMPLETION%$'\n'}
 if [ "$LAVISH_COMPATIBLE" = 1 ]; then
-  LAVISH_LINE="If your deliverable is a visual artifact the captain will review, $LAVISH_ARM_RULE Do not wait for the captain to open the board: once the report and board are complete, put the live board URL in the report $LAVISH_URL_RULE, hold any decision it leaves him under the completion gate below, and declare done; teardown hands your board to firstmate, whose listener carries his answers. $LAVISH_CONCLUDE_RULE"
+  LAVISH_LINE="If your deliverable is a visual artifact the captain will review, $LAVISH_ARM_RULE Do not wait for the captain to open the board: once the report and board are complete, put the live board URL in the report $LAVISH_URL_RULE, $SCOUT_DECISION_HOLD, and declare done; teardown hands your board to firstmate, whose listener carries his answers. $LAVISH_CONCLUDE_RULE"
 else
   LAVISH_LINE='Lavish is unavailable (lavish-axi is missing or below its supported version floor), so deliver your findings as a text report without Lavish, even for a visual deliverable.'
 fi
@@ -918,15 +962,12 @@ $HERDR_SECTION
 $SETUP_BASE
 This is a SCOUT task: the deliverable is a written report, not a PR.
 The worktree is your laboratory - install, run, edit, and make scratch commits freely; all of it is discarded at teardown.
-The report, its notes files beside it in \`$DATA/$ID/\`, and any brain filing below are the only things that survive, so anything worth keeping must be in them.
+$SCOUT_SURVIVES
 
 # Rules
 1. Never push to any remote and never open a PR.
    Run a repository gate here as \`FLEET_GATE_STATUS=0 ./check.sh\`; the bare gate posts a fleet-gate status to GitHub.
-2. Stay inside this worktree; outside it, write only the report, notes files beside it in \`$DATA/$ID/\`, and the status file below, except for the task's empty-inventory attestation through \`fm-captain-hold.sh complete --none\`, exactly as specified under Definition of done.
-   Filing durable knowledge through the fleet's sanctioned memory route (\`fleet-memory\`) is permitted and is not a change outside the worktree: a research scout follows the research skill's filing step, recording one research-log entry and the verified facts on the brain page that owns the subject, while recommendations stay in the report until the captain decides them.
-   $BRAIN_FILING_RULE
-   That filing goes only to Arjun's brain; a scout working in Sapna's domain never writes Arjun's brain and never writes Sapna's.
+$SCOUT_WRITE_RULE
 3. On GitHub, use gh-axi for views a person reads and plain gh with --json/--jq for scripted reads; use chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`$STATUS_APPEND\`
@@ -951,9 +992,7 @@ That file is required even when your task names another deliverable, such as a f
 Keep your research notes file (quotes, URLs, dates) in \`$DATA/$ID/\` beside the report, never only in the worktree, and give every \`[read]\` or \`[sub]\` claim in the report its source URL.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
 $LAVISH_LINE
-Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
-A question your findings leave for the captain is not a reason to wait: put it in the report (and board) with its choices and your recommendation, and declare done.
-Only when the reviewed inventory is empty, run \`FM_HOME=$(shell_quote "$FM_HOME") bash $(shell_quote "$FM_ROOT/bin/fm-captain-hold.sh") complete $(shell_quote "$ID") --none\`.
+$SCOUT_COMPLETION
 When the report is complete, append \`done [at=<epoch>]: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report with what that work needs; firstmate dispatches it as a fresh ship once it is authorized, so the report must carry everything that ship will need.
 EOF
@@ -981,7 +1020,14 @@ case "$MODE" in
     ;;
 esac
 RULE1=$(fm_ship_rule_one "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH") || exit 1
-DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$PR_TEXT") || exit 1
+# The one registry read this scaffold makes: the project's +draft-until-ready
+# token, which only words when a direct-PR worker marks its PR ready (audit
+# a1-59; bin/fm-dod-lib.sh's fm_dod_project_draft owns when it is read).
+DRAFT=$(FM_DATA_OVERRIDE="$DATA" fm_dod_project_draft "$MODE" "$FORGE" "$REPO") || exit 1
+# Companion PRs follow the same DoD, so a ship with --also keeps the wording
+# that defers to each repository's own guidance.
+[ "${#ALSO_REPOS[@]}" -eq 0 ] || DRAFT=ready
+DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$BASE_BRANCH" "$UPSTREAM_CONSENT" "$PR_TEXT" "$DRAFT") || exit 1
 if [ "$LAVISH_COMPATIBLE" = 1 ]; then
   LAVISH_LINE="If you put a board, preview, or other visual artifact in front of the captain to review or decide on, $LAVISH_ARM_RULE Keep the board's file under \`$DATA/$ID/\`, which outlives this worktree, so the board still serves after teardown hands it to firstmate. Do not wait for the captain to open the board: put the live board URL, $LAVISH_URL_RULE, in the status line that points him at it, and when the board asks for his call, that line is the needs-decision line and you stop as rule 6 says. When this task is torn down, a board that still carries a captain call firstmate holds is handed to firstmate, whose listener carries his answers, and any other board is retired. $LAVISH_CONCLUDE_RULE"
 else

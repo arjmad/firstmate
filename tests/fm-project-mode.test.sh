@@ -40,6 +40,10 @@ cat > "$DATA/projects.md" <<'EOF'
 - hand-forgejo [no-mistakes forge=forgejo pr=manual] - a bound forge (added 2026-01-01)
 - hand-empty [no-mistakes pr=] - an empty value (added 2026-01-01)
 - hand-auto [no-mistakes pr=auto] - auto is the absence of the token, not a value (added 2026-01-01)
+- drafted [direct-PR +yolo +draft-until-ready] - PRs open as drafts until reviewed (added 2026-01-01)
+- drafted-first [+draft-until-ready direct-PR branch=] - draft token first, order must not matter (added 2026-01-01)
+- drafted-nm [no-mistakes +draft-until-ready] - the pipeline opens its own PR (added 2026-01-01)
+- drafted-forgejo [direct-PR forge=forgejo +draft-until-ready] - a bound forge (added 2026-01-01)
 EOF
 
 run_mode() {
@@ -160,6 +164,38 @@ assert_contains "$err" "pr=manual" "the unknown pr value refusal did not name th
 err=$(FM_DATA_OVERRIDE="$DATA" "$PROJECT_MODE" --pr hand-direct 2>&1 >/dev/null)
 assert_contains "$err" "only a no-mistakes ship takes it" "the direct-PR refusal did not say why"
 pass "fm-project-mode: pr=manual refuses another mode, a bound forge, an empty value, and an unknown value, but leaves --forge answerable"
+
+# +draft-until-ready (audit a1-59) is a direct-PR, no-forge posture token.
+run_draft() {
+  FM_DATA_OVERRIDE="$DATA" "$PROJECT_MODE" --draft "$1" 2>/dev/null
+}
+[ "$(run_draft legacy)" = "ready" ] || fail "an entry with no draft token must report ready: $(run_draft legacy)"
+[ "$(run_draft flagged)" = "ready" ] || fail "mode and +yolo with no draft token must report ready: $(run_draft flagged)"
+[ "$(run_draft missing-project)" = "ready" ] || fail "a missing project must default --draft to ready: $(run_draft missing-project)"
+[ "$(FM_DATA_OVERRIDE="$TMP_ROOT/no-such-dir" "$PROJECT_MODE" --draft legacy 2>/dev/null)" = "ready" ] \
+  || fail "an absent registry file must default --draft to ready"
+[ "$(run_draft drafted)" = "until-ready" ] || fail "+draft-until-ready did not resolve: $(run_draft drafted)"
+[ "$(run_mode drafted)" = "direct-PR on" ] || fail "+draft-until-ready changed the two-word output: $(run_mode drafted)"
+err=$(FM_DATA_OVERRIDE="$DATA" "$PROJECT_MODE" drafted 2>&1 >/dev/null)
+[ -z "$err" ] || fail "a registered +draft-until-ready warned: $err"
+[ "$(run_draft drafted-first)" = "until-ready" ] || fail "+draft-until-ready placed first did not resolve: $(run_draft drafted-first)"
+[ "$(run_mode drafted-first)" = "direct-PR off" ] || fail "+draft-until-ready placed first was read as the mode: $(run_mode drafted-first)"
+[ "$(FM_DATA_OVERRIDE="$DATA" "$PROJECT_MODE" --branch-prefix drafted-first 2>/dev/null)" = "" ] \
+  || fail "+draft-until-ready placed first displaced the empty branch= override"
+for name in drafted-nm drafted-forgejo; do
+  for flag in "" --draft; do
+    # shellcheck disable=SC2086 # An empty flag must expand to nothing.
+    out=$(FM_DATA_OVERRIDE="$DATA" "$PROJECT_MODE" $flag "$name" 2>/dev/null)
+    status=$?
+    [ "$status" -eq 3 ] || fail "$name did not refuse${flag:+ under $flag} (status $status, got '$out')"
+    [ -z "$out" ] || fail "a refused $name still handed the caller a posture: '$out'"
+  done
+  [ "$(FM_DATA_OVERRIDE="$DATA" "$PROJECT_MODE" --pr "$name" 2>/dev/null)" = "auto" ] \
+    || fail "--pr refused over the draft token of $name"
+done
+err=$(FM_DATA_OVERRIDE="$DATA" "$PROJECT_MODE" --draft drafted-forgejo 2>&1 >/dev/null)
+assert_contains "$err" "forge=forgejo with +draft-until-ready" "the bound-forge draft refusal did not name the forge"
+pass "fm-project-mode: +draft-until-ready binds direct-PR in any token order and refuses another mode or a bound forge"
 
 # This fork retired the no-mistakes pipeline, so every fallback - an unlisted
 # project, an unknown mode, and a missing registry - resolves to direct-PR.
