@@ -84,7 +84,9 @@ report_digest() {
 $limits
 EOF_LIMITS
   bytes=$(LC_ALL=C wc -c < "$newest" 2>/dev/null | tr -d '[:space:]')
-  lines=$(awk 'END { print NR }' "$newest" 2>/dev/null)
+  # A copy pruned or made unreadable since it was picked is unmeasured, not a
+  # failed report: set -e would otherwise end the report here.
+  lines=$(awk 'END { print NR }' "$newest" 2>/dev/null) || lines=''
   case "$cap:$chunk:$bytes:$lines" in
     *[!0-9:]*|:*|*::*|*:)
       printf 'digest_copy=%s

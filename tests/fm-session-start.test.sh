@@ -2368,7 +2368,7 @@ EOF
 
   out=$(FM_SESSION_START_QUEUED_LIMIT=4 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
-  assert_contains "$out" "compact backlog listing (manual backend; done rows omitted; every in-flight, held, and blocked title line kept; other queued bounded to 4; indented task bodies omitted)" \
+  assert_contains "$out" "compact backlog listing (manual backend; done rows omitted; every in-flight, held, and blocked title line kept; other queued counted, listing only the title lines due within 2 days plus the first 4; indented task bodies omitted)" \
     "manual backend did not use compact title-line rendering"
   assert_contains "$out" "## In flight" "manual compact rendering omitted the in-flight section heading"
   assert_contains "$out" "- [ ] compact-startup - Compact startup digest" \
@@ -2405,6 +2405,12 @@ EOF
   make_fake_toolchain "$fakebin"
   make_fake_ps_claude "$fakebin"
   write_long_body_backlog "$home/data/backlog.md"
+  # plain-20 is due within 2 days and plain-21 later.
+  awk -v soon="$(date_in_days 2)" -v later="$(date_in_days 3)" '
+    { print }
+    /^- \[ \] plain-20 / { print "  Due: " soon }
+    /^- \[ \] plain-21 / { print "  Due: " later }
+  ' "$home/data/backlog.md" > "$home/data/backlog.md.new" && mv "$home/data/backlog.md.new" "$home/data/backlog.md"
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
@@ -2414,9 +2420,15 @@ EOF
     "unavailable tasks-axi fallback omitted a backlog title line"
   assert_not_contains "$out" "OVERSIZED-BODY-LINE" "unavailable tasks-axi fallback leaked an in-flight task body"
   assert_not_contains "$out" "DONE-ROW-LINE" "unavailable tasks-axi fallback listed a done row at startup"
-  # By default the other queued title lines are counted, never listed.
+  # By default the other queued title lines are counted, and only the one due
+  # within 2 days is listed.
   assert_not_contains "$out" "- [ ] plain-1 - " "unavailable tasks-axi fallback listed a plain queued title line by default"
-  assert_contains "$out" "(25 more queued - raise FM_SESSION_START_QUEUED_LIMIT or read data/backlog.md for the rest)" \
+  assert_contains "$out" "- [ ] plain-20 - Plain queued item 20" \
+    "unavailable tasks-axi fallback hid a title line due within 2 days"
+  assert_not_contains "$out" "- [ ] plain-21 - " "unavailable tasks-axi fallback listed a title line due later"
+  assert_contains "$out" "(shown 1 in-flight, 2 held or blocked queued, 1 of 25 other queued title line(s); 1 done row(s) omitted)" \
+    "unavailable tasks-axi fallback did not account for its listed title lines"
+  assert_contains "$out" "(24 more queued - raise FM_SESSION_START_QUEUED_LIMIT or read data/backlog.md for the rest)" \
     "unavailable tasks-axi fallback did not count its plain queued title lines"
 
   pass "unavailable or incompatible tasks-axi falls back to compact manual backlog rendering"

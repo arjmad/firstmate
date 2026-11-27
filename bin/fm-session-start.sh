@@ -464,10 +464,15 @@ print_backlog_pointer() {
 MANUAL_KEEP_RE='[(]hold|blocked-by:'
 
 print_backlog_manual_compact() {
-  local path=$1 reason=$2
-  printf 'compact backlog listing (%s; done rows omitted; every in-flight, held, and blocked title line kept; other queued bounded to %s; indented task bodies omitted)\n' \
-    "$reason" "$QUEUED_LIMIT"
-  awk -v max="$QUEUED_LIMIT" -v keep_re="$MANUAL_KEEP_RE" '
+  local path=$1 reason=$2 near
+  near=$(date_in_days "$NEAR_DAYS") || near=''
+  printf 'compact backlog listing (%s; done rows omitted; every in-flight, held, and blocked title line kept; other queued counted, listing only the title lines due within %s days plus the first %s; indented task bodies omitted)\n' \
+    "$reason" "$NEAR_DAYS" "$QUEUED_LIMIT"
+  FM_ROW_FACTS="$(backlog_row_facts "$path")" awk -v max="$QUEUED_LIMIT" -v keep_re="$MANUAL_KEEP_RE" -v near="$near" '
+    BEGIN {
+      n = split(ENVIRON["FM_ROW_FACTS"], fl, "\n")
+      for (i = 1; i <= n; i++) { split(fl[i], f, "\t"); if (f[2] ~ /^[0-9]/) due[f[1]] = f[2] }
+    }
     function state_for_heading(line, heading) {
       heading = line
       sub(/^##[[:space:]]+/, "", heading)
@@ -488,7 +493,11 @@ print_backlog_manual_compact() {
     state == "queued" && /^[-*][[:space:]]+/ {
       queued_total++
       if ($0 ~ keep_re) { gated++; print $0; next }
-      if (plain_shown < max) { plain_shown++; print $0 }
+      # A title line due within NEAR_DAYS is always listed and leaves the
+      # limit to the other lines.
+      id = $0; sub(/^[-*] \[.\] /, "", id); sub(/ .*$/, "", id)
+      urgent = (near != "" && (id in due) && due[id] <= near)
+      if (urgent || listed_plain < max) { plain_shown++; print $0; if (!urgent) listed_plain++ }
       next
     }
     END {
@@ -632,8 +641,10 @@ print_ready_queued_bounded() {
       if (slim) tally(f[3], f[4])
       d = (f[1] in due) ? due[f[1]] : "-"
       urgent = (near != "" && d != "-" && d <= near)
-      if (shown < max || urgent) {
+      # An urgent row leaves the limit to the other rows.
+      if (urgent || plain < max) {
         line[++lines] = (slim ? "  " f[1] "," f[3] "," f[4] "," d : $0); shown++
+        if (!urgent) plain++
       }
       next
     }
