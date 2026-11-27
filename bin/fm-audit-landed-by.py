@@ -1,100 +1,115 @@
 #!/usr/bin/env python3
-"""fm-audit-landed-by.py - write each landed audit id's PR URLs into decisions.json.
+"""fm-audit-landed-by.py - stamp each audit id a merged PR names into decisions.json.
 
-Usage: fm-audit-landed-by.py [--dry-run] <ledger.md> <decisions.json>
+Usage: fm-audit-landed-by.py [--dry-run] [--table <out.md>] --owner <owner>
+         [--owner <owner>...] --since <YYYY-MM-DD> [--until <YYYY-MM-DD>]
+         <decisions.json>
 
 Inputs:
-  <ledger.md>       an audit wrap-up ledger: a Markdown table whose header row
-                    names at least the columns `Id`, `Status` and
-                    `Where it landed / evidence`, one row per approved id.
   <decisions.json>  the audit's per-id rulings: one JSON object keyed by
-                    finding id, each value an object.
+                    finding id, each value an object. An entry whose
+                    `decision` is present and not `do` (declined, deferred)
+                    is never stamped and stays out of the table.
+  --owner           a GitHub owner whose repositories hold the fleet's PRs;
+                    repeat it for more than one.
+  --since, --until  the merge-date window to search, inclusive; --since is
+                    the audit's start date, --until defaults to today (UTC).
 
-Output:
-  <decisions.json>, rewritten in place. Each id whose ledger Status is
-  `landed` gets `landed_by`: every https://github.com/<owner>/<repo>/pull/<n>
-  in its evidence cell, in cell order without repeats. A landed id with no PR
-  URL gets an empty list (landed without a PR, such as a helm step or a
-  setting). An id the ledger lists with any other status loses a `landed_by`
-  an earlier run wrote; an id the ledger does not list is left alone. No other
-  field changes. A new `landed_by` goes last in its object, an existing one
-  keeps its place, and the file keeps its indent, ASCII escaping and final
-  newline. A run that changes nothing leaves the file untouched, so a second
-  run is a no-op. One summary line goes to stdout. --dry-run prints the summary
-  and writes nothing.
+Source: every PR `gh search prs --merged --owner ... --merged-at
+<since>..<until>` returns whose state reads merged. A window that fills
+gh's 1000-result cap is split in half until each part fits. A PR names an
+id when the id appears in its title or body as a whole token (a1-6 does not
+match a1-60 or xa1-6). No ledger, backlog row or other prose is read for a
+PR URL.
 
-Refusals (exit 1, file untouched): no recognizable ledger table or more than
-one, a ledger row with a duplicate id or a missing column, a Status that
-names landed but is not exactly `landed` (such as `**landed**`), a ledger id
-decisions.json does not hold, a decisions.json that is not an object of objects, or one whose layout
-this tool cannot reproduce byte for byte (it never reformats a file).
+Output: <decisions.json>, rewritten in place.
+  - Stamp: an id a merged PR names gets `status` set to `landed` and every
+    such PR's URL in `landed_by` (new URLs sorted by repository and number,
+    after the URLs already there).
+  - An existing `landed_by` URL no merged PR in the window names, such as one
+    the helm entered by hand, is kept when `gh pr view` reads it MERGED and
+    dropped otherwise. A value that is not a PR URL is a refusal.
+  - Nothing is un-stamped: an id no PR names keeps its `status`.
+  - No other field changes. A new `landed_by` goes last in its object, an
+    existing one keeps its place, and the file keeps its indent, ASCII
+    escaping and final newline. A run that changes nothing leaves the file
+    untouched, so a second run over the same PRs is a no-op.
+  --table <out.md> also writes the next audit's prior-status table: one row
+    per approved id (Id, Status, Landed by, Title) from the stamped record,
+    with a kept hand URL marked `(hand)`.
+  One summary line goes to stdout. --dry-run prints it and writes nothing.
+
+Refusals (exit 1, nothing written): a decisions.json that is not an object
+of objects, or whose layout this tool cannot reproduce byte for byte (it
+never reformats a file), a landed_by that is not a list of PR URLs, a gh
+search or view that fails, or a single day that alone fills gh's cap.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 
-PR_URL = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+(?![0-9A-Za-z_])")
-CELL_BOUNDARY = re.compile(r"(?<!\\)\|")
-SEPARATOR_CELL = re.compile(r"^:?-+:?$")
-ID_COL, STATUS_COL, WHERE_COL = "Id", "Status", "Where it landed / evidence"
+PR_URL = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([0-9]+)$")
 FIELD = "landed_by"
+SEARCH_CAP = 1000
+USAGE = (
+    "usage: fm-audit-landed-by.py [--dry-run] [--table <out.md>] --owner <owner> "
+    "[--owner <owner>...] --since <YYYY-MM-DD> [--until <YYYY-MM-DD>] <decisions.json>"
+)
 
 
 class Refusal(RuntimeError):
     pass
 
 
-def cells(line: str) -> list[str] | None:
-    line = line.strip()
-    if not (line.startswith("|") and line.endswith("|") and len(line) > 1):
-        return None
-    return [c.strip() for c in CELL_BOUNDARY.split(line[1:-1])]
+class Usage(RuntimeError):
+    pass
 
 
-def read_ledger(path: str) -> dict[str, tuple[str, str]]:
-    """Map each ledger id to (status, evidence cell)."""
-    with open(path, encoding="utf-8") as f:
-        lines = f.read().splitlines()
+def gh_json(args: list[str]) -> object:
+    try:
+        proc = subprocess.run(["gh", *args], capture_output=True, text=True, check=False)
+    except OSError as e:
+        raise Refusal(f"gh {args[0]} {args[1]} could not run: {e}") from None
+    if proc.returncode != 0:
+        raise Refusal(f"gh {' '.join(args[:2])} failed ({proc.returncode}): {proc.stderr.strip()}")
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as e:
+        raise Refusal(f"gh {' '.join(args[:2])} printed no JSON: {e}") from None
 
-    def is_ledger_header(i: int) -> bool:
-        header, sep = cells(lines[i]), cells(lines[i + 1])
-        return bool(
-            header and sep and len(sep) == len(header)
-            and all(SEPARATOR_CELL.match(c) for c in sep)
-            and {ID_COL, STATUS_COL, WHERE_COL} <= set(header)
-        )
 
-    tables = [i for i in range(len(lines) - 1) if is_ledger_header(i)]
-    if len(tables) > 1:
-        raise Refusal(f"{path}:{tables[1] + 1}: a second ledger table; this tool reads a ledger with exactly one")
-    for i in tables:
-        header = cells(lines[i]) or []
-        id_i, st_i, wh_i = (header.index(c) for c in (ID_COL, STATUS_COL, WHERE_COL))
-        rows: dict[str, tuple[str, str]] = {}
-        for n, row_line in enumerate(lines[i + 2:], start=i + 3):
-            row = cells(row_line)
-            if row is None:
-                break
-            if len(row) != len(header):
-                raise Refusal(f"{path}:{n}: row has {len(row)} cells, the header has {len(header)}")
-            fid = row[id_i]
-            if not fid:
-                raise Refusal(f"{path}:{n}: row has an empty {ID_COL}")
-            if fid in rows:
-                raise Refusal(f"{path}:{n}: id {fid} appears twice")
-            rows[fid] = (row[st_i], row[wh_i])
-        if not rows:
-            raise Refusal(f"{path}: the ledger table has no rows")
-        return rows
-    raise Refusal(
-        f"{path}: no recognizable ledger table (a Markdown table whose header names "
-        f"'{ID_COL}', '{STATUS_COL}' and '{WHERE_COL}')"
-    )
+def search_merged(owners: list[str], since: dt.date, until: dt.date) -> list[dict]:
+    """Every merged PR in [since, until], splitting a window that fills the cap."""
+    args = ["search", "prs", "--merged"]
+    for owner in owners:
+        args += ["--owner", owner]
+    args += ["--merged-at", f"{since.isoformat()}..{until.isoformat()}",
+             "--limit", str(SEARCH_CAP), "--json", "url,title,body,state"]
+    found = gh_json(args)
+    if not isinstance(found, list):
+        raise Refusal("gh search prs did not print a list")
+    if len(found) < SEARCH_CAP:
+        return found
+    if since == until:
+        raise Refusal(f"{since}: one day fills gh's {SEARCH_CAP}-result search cap; narrow --owner")
+    mid = since + (until - since) // 2
+    return search_merged(owners, since, mid) + search_merged(owners, mid + dt.timedelta(days=1), until)
+
+
+def id_pattern(fid: str) -> re.Pattern[str]:
+    return re.compile(r"(?<![A-Za-z0-9_-])" + re.escape(fid) + r"(?![A-Za-z0-9_])")
+
+
+def url_key(url: str) -> tuple[str, int]:
+    m = PR_URL.match(url)
+    return (m.group(1), int(m.group(2))) if m else (url, 0)
 
 
 def dump_style(raw: str, data: object) -> dict:
@@ -110,21 +125,97 @@ def dump_style(raw: str, data: object) -> dict:
     raise Refusal("decisions.json is not in a layout this tool can keep byte for byte; refusing to reformat it")
 
 
+def write_atomic(path: str, text: str, mode: int | None) -> None:
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(prefix=".landed-by-", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        os.chmod(tmp, mode if mode is not None else 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def table_cell(value: str) -> str:
+    return " ".join(value.split()).replace("|", "\\|")
+
+
+def prior_status_table(data: dict, named: dict[str, list[str]], owners: list[str],
+                       since: dt.date, until: dt.date) -> str:
+    lines = [
+        "# Prior-status table",
+        "",
+        f"Built by bin/fm-audit-landed-by.py from PRs by {', '.join(owners)} merged "
+        f"{since.isoformat()}..{until.isoformat()} that name each id, and from decisions.json's status.",
+        "A URL marked (hand) is merged but does not name its id; someone entered it by hand.",
+        "",
+        "| Id | Status | Landed by | Title |",
+        "|---|---|---|---|",
+    ]
+    for fid, entry in data.items():
+        if not approved(entry):
+            continue
+        urls = [u if u in named.get(fid, []) else f"{u} (hand)" for u in entry.get(FIELD, [])]
+        lines.append(
+            f"| {table_cell(fid)} | {table_cell(str(entry.get('status') or '-'))} | "
+            f"{table_cell(', '.join(urls) or '-')} | {table_cell(str(entry.get('title') or ''))} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def approved(entry: dict) -> bool:
+    return entry.get("decision", "do") == "do"
+
+
+def parse_args(argv: list[str]) -> dict | None:
+    """The options, or None when --help asks for the usage text."""
+    opts: dict = {"dry_run": False, "table": None, "owners": [], "since": None, "until": None, "paths": []}
+    it = iter(argv)
+    for arg in it:
+        if arg in ("-h", "--help"):
+            return None
+        if arg == "--dry-run":
+            opts["dry_run"] = True
+        elif arg in ("--table", "--owner", "--since", "--until"):
+            value = next(it, None)
+            if value is None:
+                raise Usage(f"{arg} needs a value")
+            if arg == "--owner":
+                opts["owners"].append(value)
+            else:
+                opts[arg[2:]] = value
+        elif arg.startswith("--"):
+            raise Usage(f"unknown option {arg}")
+        else:
+            opts["paths"].append(arg)
+    if len(opts["paths"]) != 1 or not opts["owners"] or not opts["since"]:
+        raise Usage("needs one <decisions.json>, at least one --owner and --since")
+    for key in ("since", "until"):
+        if opts[key] is not None:
+            try:
+                opts[key] = dt.date.fromisoformat(opts[key])
+            except ValueError:
+                raise Usage(f"--{key} is not a YYYY-MM-DD date: {opts[key]}") from None
+    opts["until"] = opts["until"] or dt.datetime.now(dt.timezone.utc).date()
+    if opts["until"] < opts["since"]:
+        raise Usage("--until is before --since")
+    return opts
+
+
 def main(argv: list[str]) -> int:
-    args = list(argv)
-    dry_run = False
-    if args and args[0] in ("-h", "--help"):
+    try:
+        opts = parse_args(argv)
+    except Usage as e:
+        print(f"fm-audit-landed-by: {e}\n{USAGE}", file=sys.stderr)
+        return 2
+    if opts is None:
         print(__doc__.strip())
         return 0
-    if args and args[0] == "--dry-run":
-        dry_run = True
-        args = args[1:]
-    if len(args) != 2:
-        print("usage: fm-audit-landed-by.py [--dry-run] <ledger.md> <decisions.json>", file=sys.stderr)
-        return 2
-    ledger_path, decisions_path = args
+    decisions_path = opts["paths"][0]
     try:
-        ledger = read_ledger(ledger_path)
         with open(decisions_path, encoding="utf-8", newline="") as f:
             raw = f.read()
         try:
@@ -134,44 +225,68 @@ def main(argv: list[str]) -> int:
         if not isinstance(data, dict) or not all(isinstance(v, dict) for v in data.values()):
             raise Refusal(f"{decisions_path}: not an object of per-id objects")
         style = dump_style(raw, data)
-        missing = [fid for fid in ledger if fid not in data]
-        if missing:
-            raise Refusal(f"{decisions_path} holds no entry for ledger id(s): {', '.join(missing)}")
-        odd = [f"{fid} ({status})" for fid, (status, _) in ledger.items() if status != "landed" and "landed" in status.lower()]
-        if odd:
-            raise Refusal(f"{ledger_path}: a Status that names landed but is not exactly 'landed': {', '.join(odd)}")
+        for fid, entry in data.items():
+            urls = entry.get(FIELD, [])
+            if not isinstance(urls, list) or not all(isinstance(u, str) and PR_URL.match(u) for u in urls):
+                raise Refusal(f"{decisions_path}: {fid}'s {FIELD} is not a list of PR URLs")
 
-        landed = empty = removed = 0
-        for fid, (status, where) in ledger.items():
-            entry = data[fid]
-            if status == "landed":
-                urls = list(dict.fromkeys(PR_URL.findall(where)))
+        merged = [p for p in search_merged(opts["owners"], opts["since"], opts["until"])
+                  if isinstance(p, dict) and str(p.get("state", "")).lower() == "merged"
+                  and isinstance(p.get("url"), str) and PR_URL.match(p["url"])]
+        merged_urls = {p["url"] for p in merged}
+        named: dict[str, list[str]] = {}
+        for fid, entry in data.items():
+            if not approved(entry):
+                continue
+            rx = id_pattern(fid)
+            hits = {p["url"] for p in merged if rx.search(f"{p.get('title') or ''}\n{p.get('body') or ''}")}
+            if hits:
+                named[fid] = sorted(hits, key=url_key)
+
+        view_cache: dict[str, bool] = {}
+
+        def is_merged(url: str) -> bool:
+            if url in merged_urls:
+                return True
+            if url not in view_cache:
+                state = gh_json(["pr", "view", url, "--json", "state"])
+                view_cache[url] = isinstance(state, dict) and str(state.get("state", "")).upper() == "MERGED"
+            return view_cache[url]
+
+        stamped = newly = kept = dropped = 0
+        for fid, entry in data.items():
+            existing = entry.get(FIELD)
+            hits = named.get(fid, [])
+            if existing is None and not hits:
+                continue
+            keep = []
+            for url in existing or []:
+                if url in hits or is_merged(url):
+                    keep.append(url)
+                    kept += url not in hits
+                else:
+                    dropped += 1
+            urls = keep + [u for u in hits if u not in keep]
+            if existing is not None or urls:
                 entry[FIELD] = urls
-                landed += 1
-                empty += not urls
-            elif FIELD in entry:
-                del entry[FIELD]
-                removed += 1
+            if hits:
+                stamped += 1
+                if entry.get("status") != "landed":
+                    newly += 1
+                    entry["status"] = "landed"
 
         out = json.dumps(data, indent=style["indent"], ensure_ascii=style["ensure_ascii"]) + style["trailing"]
         changed = out != raw
+        verb = "would change" if opts["dry_run"] and changed else "changed" if changed else "unchanged"
         print(
-            f"landed_by: {landed} landed id(s), {empty} with no PR URL; "
-            f"{removed} stale removed; {'would change' if dry_run and changed else 'changed' if changed else 'unchanged'}"
+            f"landed_by: {len(merged)} merged PR(s) searched; {stamped} id(s) named by one, "
+            f"{newly} newly landed; {kept} hand URL(s) kept, {dropped} unmerged URL(s) dropped; {verb}"
         )
-        if changed and not dry_run:
-            directory = os.path.dirname(os.path.abspath(decisions_path))
-            mode = os.stat(decisions_path).st_mode & 0o7777
-            fd, tmp = tempfile.mkstemp(prefix=".landed-by-", dir=directory)
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
-                    f.write(out)
-                os.chmod(tmp, mode)
-                os.replace(tmp, decisions_path)
-            except BaseException:
-                if os.path.exists(tmp):
-                    os.unlink(tmp)
-                raise
+        if not opts["dry_run"]:
+            if changed:
+                write_atomic(decisions_path, out, os.stat(decisions_path).st_mode & 0o7777)
+            if opts["table"]:
+                write_atomic(opts["table"], prior_status_table(data, named, opts["owners"], opts["since"], opts["until"]), None)
         return 0
     except (Refusal, OSError, UnicodeDecodeError) as e:
         print(f"fm-audit-landed-by: refused: {e}", file=sys.stderr)
