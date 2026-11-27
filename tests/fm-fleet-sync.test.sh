@@ -1286,7 +1286,7 @@ test_capture_start_off_waits_for_the_scheduled_capture() {
 # today's wait when origin changed an edited path, tracked or untracked.
 test_capture_start_off_fast_forwards_unless_paths_overlap() {
   local home live cmd out deploys
-  home=$(new_home)
+  home=$(isolated_home)
   live=$(build_capture_live "$home" cade)
   cmd="$home/capture-cade.sh"
   deploys="$home/cade-deploys"
@@ -1829,6 +1829,180 @@ test_dead_or_reused_running_pid_stays_stuck() {
   pass "a running= pid file naming a dead pid, or a pid reused after the file was written, still reads STUCK"
 }
 
+# --- post-update=detached (audit a2-55) --------------------------------------
+
+# build_detached_live <home> <name>: a live checkout whose post-update command
+# $home/job-<name>.sh appends one line to $home/runs-<name> naming its process
+# group, its parent and $FM_DETACH_TEST_MARK, then waits while
+# $home/hold-<name> exists and exits with the number in $home/exit-<name> (0
+# when absent). Echoes the checkout path.
+build_detached_live() {
+  local home=$1 name=$2 live
+  live=$(build_live "$home" "$name")
+  cat > "$home/job-$name.sh" <<SCRIPT
+#!/usr/bin/env bash
+echo "pgid=\$(ps -o pgid= -p \$\$ | tr -d ' ') mark=\${FM_DETACH_TEST_MARK:-} cwd=\$(pwd -P)" >> '$home/runs-$name'
+echo "job output for $name"
+while [ -e '$home/hold-$name' ]; do sleep 0.1; done
+exit "\$(cat '$home/exit-$name' 2>/dev/null || echo 0)"
+SCRIPT
+  chmod +x "$home/job-$name.sh"
+  printf '%s\n' "$live"
+}
+
+# fake_launchctl <home>: a launchctl on <home>/fakebin that keeps loaded jobs as
+# files under <home>/launchd/, logs each call to <home>/launchd/calls, and on
+# bootstrap starts the plist's ProgramArguments in their own process group.
+fake_launchctl() {
+  local home=$1
+  mkdir -p "$home/fakebin" "$home/launchd"
+  cat > "$home/fakebin/launchctl" <<SCRIPT
+#!/usr/bin/env bash
+dir='$home/launchd'
+echo "\$*" >> "\$dir/calls"
+case "\$1" in
+  print)
+    case "\$2" in
+      gui/*/*) label=\${2#gui/*/}; [ -e "\$dir/\$label" ] || exit 113
+        pid=\$(cat "\$dir/\$label.pid" 2>/dev/null)
+        if [ -n "\$pid" ] && kill -0 "\$pid" 2>/dev/null; then echo "	pid = \$pid"; fi
+        exit 0 ;;
+      gui/*) exit 0 ;;
+    esac ;;
+  bootout) label=\${2#gui/*/}; rm -f "\$dir/\$label" "\$dir/\$label.pid"; exit 0 ;;
+  bootstrap)
+    label=\$(sed -n '/<key>Label<\/key>/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}' "\$3")
+    args=()
+    while IFS= read -r a; do args+=("\$a"); done < <(sed -n '/<key>ProgramArguments<\/key>/,/<\/array>/s/.*<string>\(.*\)<\/string>.*/\1/p' "\$3")
+    : > "\$dir/\$label"
+    bash -c '(set -m; "\$@" </dev/null >/dev/null 2>&1 & echo \$! > "\$0")' "\$dir/\$label.pid" "\${args[@]}"
+    exit 0 ;;
+esac
+exit 1
+SCRIPT
+  chmod +x "$home/fakebin/launchctl"
+}
+
+# wait_for_line <file> <count>: wait until <file> holds <count> lines.
+wait_for_line() {
+  local i=0
+  while [ "$(runs_of "$1")" -lt "$2" ]; do
+    i=$((i + 1))
+    [ "$i" -lt 200 ] || fail "$1 never reached $2 line(s)"
+    sleep 0.1
+  done
+}
+
+test_detached_post_update_runs_outside_the_sync() {
+  local home live out
+  home=$(isolated_home)
+  live=$(build_detached_live "$home" fleet)
+  live_config "$home" "fleet $live post-update=detached $home/job-fleet.sh"
+  run_sync "$home" fleet >/dev/null
+  advance_origin "$home" fleet C1
+
+  out=$(FM_LIVE_POST_UPDATE_LAUNCHCTL=none FM_LIVE_POST_UPDATE_POLL_SECS=0.1 FM_DETACH_TEST_MARK=from-the-sync \
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" fleet 2>"$home/err")
+  assert_contains "$out" "fleet live $live: post-update command ran at $(git -C "$live" rev-parse --short HEAD)" \
+    "a detached run that succeeds reads as an inline one"
+  assert_contains "$(cat "$home/err")" "job output for fleet" "the run's output reaches the sync's stderr"
+  assert_equals 1 "$(runs_of "$home/runs-fleet")" "the command ran once"
+  assert_contains "$(cat "$home/runs-fleet")" "mark=from-the-sync" "the run keeps the sync's exported environment"
+  assert_contains "$(cat "$home/runs-fleet")" "cwd=$(cd "$live" && pwd -P)" "the run starts from the checkout"
+  [ ! -e "$home/state/live-checkouts/$(printf '%s' "$(cd "$live" && pwd -P)" | git hash-object --stdin).job.env" ] \
+    || fail "the environment snapshot must not outlive the run's start"
+
+  out=$(FM_LIVE_POST_UPDATE_LAUNCHCTL=none run_sync "$home" fleet)
+  assert_contains "$out" "fleet live $live: already current" "a second sync finds it current"
+  assert_equals 1 "$(runs_of "$home/runs-fleet")" "no second run for the same HEAD"
+
+  live_config "$home" "fleet $live post-update=sometimes $home/job-fleet.sh"
+  out=$(run_sync "$home" fleet)
+  assert_contains "$out" "live-checkouts: skipped: line 1 post-update= wants inline or detached" "an unknown post-update= is refused by line"
+  pass "a post-update=detached run takes the sync's environment and reads as an inline run"
+}
+
+test_detached_post_update_outlives_a_killed_sync() {
+  local home live out pid syncpgid i
+  home=$(isolated_home)
+  live=$(build_detached_live "$home" fleet)
+  live_config "$home" "fleet $live post-update=detached $home/job-fleet.sh"
+  run_sync "$home" fleet >/dev/null
+  advance_origin "$home" fleet C1
+  : > "$home/hold-fleet"
+  bash -c '(set -m; FM_LIVE_POST_UPDATE_LAUNCHCTL=none FM_LIVE_POST_UPDATE_POLL_SECS=0.1 FM_HOME="$1" FM_ROOT_OVERRIDE="$2" \
+    "$2/bin/fm-fleet-sync.sh" fleet >"$1/killed.out" 2>&1 & echo $! > "$1/sync.pid")' _ "$home" "$ROOT"
+  pid=$(cat "$home/sync.pid")
+  wait_for_line "$home/runs-fleet" 1
+  syncpgid=$(ps -o pgid= -p "$pid" | tr -d ' ')
+  assert_not_contains "$(cat "$home/runs-fleet")" "pgid=$syncpgid " "the run is not in the sync's process group"
+  kill -- "-$syncpgid"
+  i=0
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  kill -0 "$pid" 2>/dev/null && fail "the sync did not die with its group"
+
+  out=$(FM_LIVE_POST_UPDATE_LAUNCHCTL=none run_sync "$home" fleet)
+  assert_contains "$out" "fleet live $live: activating: post-update command already running" "the surviving run reads activating"
+  assert_not_contains "$out" "STUCK" "a surviving run is not STUCK"
+
+  out=$(FM_LIVE_POST_UPDATE_LAUNCHCTL=none FM_LIVE_POST_UPDATE_STUCK_SECS=1 run_sync "$home" fleet 2>/dev/null; sleep 2;
+    FM_LIVE_POST_UPDATE_LAUNCHCTL=none FM_LIVE_POST_UPDATE_STUCK_SECS=1 run_sync "$home" fleet)
+  assert_contains "$out" "fleet live $live: STUCK: post-update command still running (pid " "a run past the bound reads STUCK"
+  assert_contains "$out" "it is left running - needs attention" "the bound never stops the run"
+
+  rm -f "$home/hold-fleet"
+  i=0
+  while [ -e "$home/state/live-checkouts/$(printf '%s' "$(cd "$live" && pwd -P)" | git hash-object --stdin).running" ] && [ "$i" -lt 100 ]; do
+    sleep 0.1; i=$((i + 1))
+  done
+  out=$(FM_LIVE_POST_UPDATE_LAUNCHCTL=none run_sync "$home" fleet)
+  assert_contains "$out" "fleet live $live: post-update command ran at $(git -C "$live" rev-parse --short HEAD) (detached run, log " \
+    "the next sync records the surviving run's success"
+  assert_equals 1 "$(runs_of "$home/runs-fleet")" "the command is not run again"
+  out=$(FM_LIVE_POST_UPDATE_LAUNCHCTL=none run_sync "$home" fleet)
+  assert_contains "$out" "fleet live $live: already current" "then it is current"
+  assert_equals 1 "$(runs_of "$home/runs-fleet")" "still one run"
+  pass "a detached run outlives a sync killed with its process group, reads activating, then STUCK past the bound, and its receipt counts"
+}
+
+test_detached_post_update_failure_is_stuck_and_retried() {
+  local home live out
+  home=$(isolated_home)
+  live=$(build_detached_live "$home" flaky)
+  live_config "$home" "flaky $live post-update=detached $home/job-flaky.sh"
+  run_sync "$home" flaky >/dev/null
+  advance_origin "$home" flaky C1
+  echo 3 > "$home/exit-flaky"
+  out=$(FM_LIVE_POST_UPDATE_LAUNCHCTL=none FM_LIVE_POST_UPDATE_POLL_SECS=0.1 run_sync "$home" flaky)
+  assert_contains "$out" "flaky live $live: STUCK: post-update command failed (exit 3)" "a failed detached run is loud"
+  assert_contains "$out" "last output: job output for flaky" "its STUCK line carries the run's output"
+  rm -f "$home/exit-flaky"
+  out=$(FM_LIVE_POST_UPDATE_LAUNCHCTL=none FM_LIVE_POST_UPDATE_POLL_SECS=0.1 run_sync "$home" flaky)
+  assert_contains "$out" "flaky live $live: post-update command ran" "the next sync retries it"
+  assert_equals 2 "$(runs_of "$home/runs-flaky")" "it ran twice"
+  pass "a failed detached run reads STUCK with its output and is retried on the next sync"
+}
+
+test_detached_post_update_uses_a_launchd_one_shot() {
+  local home live out calls
+  home=$(isolated_home)
+  live=$(build_detached_live "$home" fleet)
+  fake_launchctl "$home"
+  calls="$home/launchd/calls"
+  live_config "$home" "fleet $live post-update=detached $home/job-fleet.sh"
+  run_sync "$home" fleet >/dev/null
+  advance_origin "$home" fleet C1
+  out=$(PATH="$home/fakebin:$PATH" FM_LIVE_POST_UPDATE_POLL_SECS=0.1 FM_LIVE_POST_UPDATE_LABEL_PREFIX=test.fm-detach \
+    run_sync "$home" fleet)
+  assert_contains "$out" "fleet live $live: post-update command ran" "the launchd run reads as an inline one"
+  assert_equals 1 "$(runs_of "$home/runs-fleet")" "the command ran once"
+  grep -Eq "^bootstrap gui/$(id -u) .*\.job\.plist$" "$calls" || fail "the run was booted as a launchd job; calls: $(cat "$calls")"
+  grep -q '^bootstrap ' "$calls" && grep -A100 '^bootstrap ' "$calls" | grep -q "^bootout gui/$(id -u)/test\.fm-detach\.fleet\." \
+    || fail "the finished one-shot is booted out; calls: $(cat "$calls")"
+  [ -z "$(find "$home/launchd" -name 'test.fm-detach.*' -print)" ] || fail "a launchd job is left loaded: $(ls "$home/launchd")"
+  pass "post-update=detached boots a launchd one-shot under the label prefix and unloads it once it finished"
+}
+
 test_scheduled_sync_is_a_singleton() {
   local home clone holder before
   home=$(isolated_home)
@@ -1904,6 +2078,10 @@ test_settle_capture_failure_is_stuck
 test_scheduled_interval_is_home_configurable
 test_scheduled_sync_queues_new_stuck_lines_once
 test_scheduled_sync_is_a_singleton
+test_detached_post_update_runs_outside_the_sync
+test_detached_post_update_outlives_a_killed_sync
+test_detached_post_update_failure_is_stuck_and_retried
+test_detached_post_update_uses_a_launchd_one_shot
 test_scheduled_stuck_episode_wakes_once
 test_running_post_update_reports_activating
 test_foreign_live_activation_reports_activating

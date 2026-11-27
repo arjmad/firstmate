@@ -34,7 +34,7 @@
 # checkout the captain-private $FM_HOME/config/live-checkouts lists - a working
 # copy outside projects/ that something actually runs from (a scheduled job's
 # repo, a symlinked skills tree, a service's source). One entry per line:
-#   <project> <path> [lock=<lock-path>] [capture=<dir>/:<command>] [capture-start=off|sync] [running=<pid-file>] [post-update command...]
+#   <project> <path> [lock=<lock-path>] [capture=<dir>/:<command>] [capture-start=off|sync] [running=<pid-file>] [post-update=inline|detached] [post-update command...]
 # Blank lines and lines starting with # are ignored; a leading ~/ in <path>,
 # <lock-path> or <pid-file> expands to $HOME. An absent file means no live checkouts.
 # Each live checkout gets the same guards as a clone - clone root, origin, clean
@@ -66,6 +66,26 @@
 # Its output still goes to stderr, and a failure's STUCK line also ends with
 # "; last output: " and the command's last POST_UPDATE_TAIL_LINES non-blank lines
 # joined with " / ", so a relay that keeps only stdout still names the reason.
+# A run still alive after FM_LIVE_POST_UPDATE_STUCK_SECS (default 3600) reads
+# "STUCK: post-update command still running (pid <pid>, since <time>), past the
+# <n>-minute bound; it is left running" instead, the same text while it lasts,
+# and is never stopped.
+# post-update=detached (default inline) runs the command outside the sync's
+# process tree, so a sync killed by its caller's timeout or a session that ends
+# no longer kills it mid-run: as the launchd one-shot
+# <FM_LIVE_POST_UPDATE_LABEL_PREFIX, default dev.firstmate.live-post-update>.<project>.<key>
+# in this user's gui domain, booted from a plist beside the checkout's record
+# (FM_LIVE_POST_UPDATE_LAUNCHCTL names the launchctl, "none" skips launchd), or,
+# where launchd cannot take it, in its own session. bin/fm-live-post-update-job.sh
+# is the job: it runs the command with the sync's exported environment, from the
+# checkout, holds the same running record, and ends by writing the receipt
+# state/live-checkouts/<key>.job ("finished <nonce> <head> <exit> <time>") beside
+# its output in <key>.job.log. The sync follows that receipt to the end and
+# reports it as an inline run, the job's log standing in for its output; a run
+# that has not started within FM_LIVE_POST_UPDATE_START_SECS (default 60), or
+# ends without a receipt, is a failed run (exit 125). A later sync that finds a
+# successful receipt for the current HEAD records it as that HEAD's run
+# without running the command again; a failed one is retried as usual.
 # capture=<dir>/:<command> is for a checkout whose tree is edited in place, such
 # as a writable skills/ tree that a capture job commits as a PR. When the
 # checkout is on its default branch and every uncommitted path (tracked edits
@@ -224,6 +244,18 @@ case "$LIVE_LOCK_POLL_SECS" in ''|*[!0-9]*|0) LIVE_LOCK_POLL_SECS=5 ;; esac
 # A failed post-update command's STUCK line carries this much of its output.
 POST_UPDATE_TAIL_LINES=3
 POST_UPDATE_TAIL_CHARS=200
+# post-update=detached knobs (see the header): the launchctl to use (none
+# skips launchd), the job label prefix, how long a submitted run may take to
+# start, the follow poll, and the age past which a run still going reads STUCK.
+DETACH_LAUNCHCTL=${FM_LIVE_POST_UPDATE_LAUNCHCTL-launchctl}
+DETACH_LABEL_PREFIX=${FM_LIVE_POST_UPDATE_LABEL_PREFIX:-dev.firstmate.live-post-update}
+DETACH_START_SECS=${FM_LIVE_POST_UPDATE_START_SECS:-60}
+case "$DETACH_START_SECS" in ''|0|*[!0-9]*) DETACH_START_SECS=60 ;; esac
+DETACH_POLL_SECS=${FM_LIVE_POST_UPDATE_POLL_SECS:-1}
+case "$DETACH_POLL_SECS" in ''|*[!0-9.]*|*.*.*) DETACH_POLL_SECS=1 ;; esac
+POST_UPDATE_STUCK_SECS=${FM_LIVE_POST_UPDATE_STUCK_SECS:-3600}
+case "$POST_UPDATE_STUCK_SECS" in ''|0|*[!0-9]*) POST_UPDATE_STUCK_SECS=3600 ;; esac
+POST_UPDATE_MODE=inline
 # The current live checkout's capture=<dir>/:<command> and capture-start=;
 # empty for clones.
 CAPTURE_DIR=""
@@ -1154,10 +1186,14 @@ post_update_output_tail() {
 # counts; sets RUNNING_PID and RUNNING_SINCE. The stamp is read in the C locale
 # and UTC, so syncs started under different environments agree on it.
 post_update_still_running() {
-  local started
-  RUNNING_PID="" RUNNING_SINCE=""
-  [ -f "$1" ] && { read -r RUNNING_PID RUNNING_SINCE; read -r started; } < "$1" 2>/dev/null \
-    && [ -n "$started" ] && [ "$(LC_ALL=C TZ=UTC0 ps -p "$RUNNING_PID" -o lstart= 2>/dev/null)" = "$started" ]
+  local started now
+  RUNNING_PID="" RUNNING_SINCE="" RUNNING_STARTED=""
+  [ -f "$1" ] && { read -r RUNNING_PID RUNNING_SINCE; read -r started; } < "$1" 2>/dev/null && [ -n "$started" ] || return 1
+  # macOS pads lstart with trailing blanks, which read already dropped.
+  now=$(LC_ALL=C TZ=UTC0 ps -p "$RUNNING_PID" -o lstart= 2>/dev/null) || return 1
+  now=${now%"${now##*[![:space:]]}"}
+  [ "$now" = "$started" ] || return 1
+  RUNNING_STARTED=$(fm_lock_path_mtime "$1" 2>/dev/null || true)
 }
 
 # post_update_running_by_pid_file <pid-file>: true while the pid <pid-file>
@@ -1166,7 +1202,7 @@ post_update_still_running() {
 # ended never counts; sets RUNNING_PID and RUNNING_SINCE, the file's write time.
 post_update_running_by_pid_file() {
   local pid="" age written
-  RUNNING_PID="" RUNNING_SINCE=""
+  RUNNING_PID="" RUNNING_SINCE="" RUNNING_STARTED=""
   [ -n "$1" ] && [ -f "$1" ] || return 1
   read -r pid _ < "$1" 2>/dev/null || [ -n "$pid" ] || return 1
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
@@ -1179,7 +1215,7 @@ post_update_running_by_pid_file() {
   written=$(fm_lock_path_mtime "$1") || return 1
   case "$written" in ''|*[!0-9]*) return 1 ;; esac
   [ $(( $(date +%s) - age )) -le $((written + 1)) ] || return 1
-  RUNNING_PID=$pid
+  RUNNING_PID=$pid RUNNING_STARTED=$written
   RUNNING_SINCE=$(date -u -r "$written" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
     || date -u -d "@$written" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || RUNNING_SINCE=$written
 }
@@ -1195,9 +1231,181 @@ exec_recording_run() {
     exec bash -c "$2"' fm-post-update "$1" "$2"
 }
 
+# report_running_post_update <record>: the "activating:" line for a run that is
+# still alive (RUNNING_PID, RUNNING_SINCE, RUNNING_STARTED), or, once it has run
+# longer than POST_UPDATE_STUCK_SECS, a STUCK line that names it and leaves it
+# running. Its text stays the same while the run lasts, so it wakes once.
+report_running_post_update() {
+  local now
+  now=$(date +%s)
+  case "$RUNNING_STARTED" in
+    ''|*[!0-9]*) ;;
+    *)
+      if [ $((now - RUNNING_STARTED)) -gt "$POST_UPDATE_STUCK_SECS" ]; then
+        echo "$label: STUCK: post-update command still running (pid $RUNNING_PID, since $RUNNING_SINCE), past the $((POST_UPDATE_STUCK_SECS / 60))-minute bound; it is left running - needs attention"
+        return 0
+      fi
+      ;;
+  esac
+  echo "$label: activating: post-update command already running (pid $RUNNING_PID, since $RUNNING_SINCE); the next sync runs it for $(git -C "$PROJ" rev-parse --short HEAD) if it still needs to"
+}
+
+# detach_launchd_ready: true when launchd can take a job: DETACH_LAUNCHCTL is
+# set and not "none", runs, and reaches this user's gui domain; sets DETACH_UID.
+detach_launchd_ready() {
+  [ -n "$DETACH_LAUNCHCTL" ] && [ "$DETACH_LAUNCHCTL" != none ] || return 1
+  command -v "$DETACH_LAUNCHCTL" >/dev/null 2>&1 || return 1
+  DETACH_UID=$(id -u 2>/dev/null) || return 1
+  "$DETACH_LAUNCHCTL" print "gui/$DETACH_UID" >/dev/null 2>&1
+}
+
+# detach_label <key>: this checkout's launchd job label.
+detach_label() {
+  local project
+  project=$(printf '%s' "${label%% *}" | LC_ALL=C tr -c 'A-Za-z0-9.-' '-')
+  printf '%s.%s.%s\n' "$DETACH_LABEL_PREFIX" "$project" "$(printf '%s' "$1" | cut -c1-12)"
+}
+
+# detach_launchd_pid <label>: the pid launchd runs for <label>, if any.
+detach_launchd_pid() {
+  local pid
+  pid=$("$DETACH_LAUNCHCTL" print "gui/$DETACH_UID/$1" 2>/dev/null | awk '$1 == "pid" && $2 == "=" { print $3; exit }')
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s\n' "$pid"
+}
+
+# detach_launchd_remove <label>: unload a finished one-shot, waiting up to 10s
+# for launchd to let go of it.
+detach_launchd_remove() {
+  local i=0
+  "$DETACH_LAUNCHCTL" print "gui/$DETACH_UID/$1" >/dev/null 2>&1 || return 0
+  "$DETACH_LAUNCHCTL" bootout "gui/$DETACH_UID/$1" >/dev/null 2>&1 || true
+  while "$DETACH_LAUNCHCTL" print "gui/$DETACH_UID/$1" >/dev/null 2>&1; do
+    [ "$i" -lt 100 ] || return 1
+    i=$((i + 1))
+    sleep 0.1
+  done
+}
+
+xml_escape() {
+  local v=$1
+  v=${v//&/&amp;}
+  v=${v//</&lt;}
+  v=${v//>/&gt;}
+  printf '%s' "$v"
+}
+
+# detach_submit <record> <nonce> <head> <label>: start the runner for one
+# detached post-update run: as the launchd one-shot <label> when launchd can
+# take it, else in its own session (setsid where it exists, else its own
+# process group under nohup). Sets DETACH_VIA to launchd or session.
+detach_submit() {
+  local record=$1 nonce=$2 head=$3 job=$4 runner arg plist
+  runner="$SCRIPT_DIR/fm-live-post-update-job.sh"
+  DETACH_VIA=""
+  if detach_launchd_ready && detach_launchd_remove "$job"; then
+    plist="$record.job.plist"
+    {
+      printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+        '<plist version="1.0">' '<dict>' '  <key>Label</key>'
+      printf '  <string>%s</string>\n' "$(xml_escape "$job")"
+      printf '%s\n' '  <key>ProgramArguments</key>' '  <array>'
+      for arg in "$BASH" "$runner" "$record" "$nonce" "$head" "$proj_abs"; do
+        printf '    <string>%s</string>\n' "$(xml_escape "$arg")"
+      done
+      printf '%s\n' '  </array>' '  <key>RunAtLoad</key>' '  <true/>' '  <key>KeepAlive</key>' '  <false/>' \
+        '  <key>AbandonProcessGroup</key>' '  <true/>' '  <key>StandardOutPath</key>'
+      printf '  <string>%s</string>\n' "$(xml_escape "$record.job.launchd.log")"
+      printf '%s\n' '  <key>StandardErrorPath</key>'
+      printf '  <string>%s</string>\n' "$(xml_escape "$record.job.launchd.log")"
+      printf '%s\n' '</dict>' '</plist>'
+    } > "$plist" 2>/dev/null \
+      && "$DETACH_LAUNCHCTL" bootstrap "gui/$DETACH_UID" "$plist" >/dev/null 2>&1 \
+      && DETACH_VIA=launchd && return 0
+    echo "$label: launchd refused $job; starting the post-update command in its own session instead" >&2
+  fi
+  # shellcheck disable=SC2016 # $1..$5 expand in the detached shell
+  (cd / && set -m && if command -v setsid >/dev/null 2>&1; then
+      setsid "$BASH" "$runner" "$record" "$nonce" "$head" "$proj_abs" </dev/null >"$record.job.launchd.log" 2>&1 &
+    else
+      nohup "$BASH" "$runner" "$record" "$nonce" "$head" "$proj_abs" </dev/null >"$record.job.launchd.log" 2>&1 &
+    fi) || return 1
+  DETACH_VIA=session
+}
+
+# detach_receipt <record>: load <record>.job into RECEIPT_NONCE, RECEIPT_HEAD
+# and RECEIPT_RC; false when there is none.
+detach_receipt() {
+  local word
+  RECEIPT_NONCE="" RECEIPT_HEAD="" RECEIPT_RC=""
+  read -r word RECEIPT_NONCE RECEIPT_HEAD RECEIPT_RC _ < "$1.job" 2>/dev/null || return 1
+  [ "$word" = finished ] && [ -n "$RECEIPT_RC" ]
+}
+
+# detach_follow <record> <nonce>: wait for the run <nonce> to write its
+# receipt, as long as it is alive; sets DETACH_RC, or DETACH_WHY when the run
+# never started within DETACH_START_SECS or ended without a receipt. A sync
+# killed here leaves the run going; the next sync reads its receipt.
+detach_follow() {
+  local record=$1 nonce=$2 deadline
+  DETACH_RC="" DETACH_WHY=""
+  deadline=$(( $(date +%s) + DETACH_START_SECS ))
+  while :; do
+    if detach_receipt "$record" && [ "$RECEIPT_NONCE" = "$nonce" ]; then
+      DETACH_RC=$RECEIPT_RC
+      return 0
+    fi
+    if [ -f "$record.running" ]; then
+      if ! post_update_still_running "$record.running"; then
+        if detach_receipt "$record" && [ "$RECEIPT_NONCE" = "$nonce" ]; then
+          DETACH_RC=$RECEIPT_RC
+          return 0
+        fi
+        DETACH_WHY="ended without recording its exit"
+        return 1
+      fi
+    elif [ "$(date +%s)" -ge "$deadline" ]; then
+      DETACH_WHY="did not start within ${DETACH_START_SECS}s"
+      return 1
+    fi
+    sleep "$DETACH_POLL_SECS"
+  done
+}
+
+# run_detached_post_update <record> <command> <key>: one post-update=detached
+# run, followed to its end; sets rc and output as the inline run does, output
+# being the run's own log, which stays beside its record.
+run_detached_post_update() {
+  local record=$1 cmd=$2 job nonce head
+  job=$(detach_label "$3")
+  head=$(git -C "$PROJ" rev-parse HEAD 2>/dev/null) || head=unknown
+  nonce="$(date +%s).$$.${RANDOM:-0}"
+  output="$record.job.log"
+  rm -f "$record.running" "$record.job.env"
+  if ! printf '%s\n' "$cmd" > "$record.job.cmd" 2>/dev/null \
+      || ! (umask 077 && export -p > "$record.job.env") 2>/dev/null \
+      || ! detach_submit "$record" "$nonce" "$head" "$job"; then
+    rm -f "$record.job.env"
+    printf 'fm-fleet-sync: could not submit the detached post-update run\n' > "$output" 2>/dev/null || output=/dev/null
+    rc=125
+    return 0
+  fi
+  if detach_follow "$record" "$nonce"; then
+    rc=$DETACH_RC
+  else
+    rm -f "$record.job.env"
+    printf 'fm-fleet-sync: the detached post-update run (%s %s) %s; see %s\n' "$DETACH_VIA" "$job" "$DETACH_WHY" "$record.job.launchd.log" >> "$output" 2>/dev/null || true
+    rc=125
+  fi
+  [ "$DETACH_VIA" != launchd ] || { detach_launchd_remove "$job" || true; rm -f "$record.job.plist"; }
+}
+
 # run_post_update <command> <fast-forwarded yes|no>: run the entry's post-update
 # command when the checkout's HEAD differs from the commit the command last
-# succeeded for (see the header), recording HEAD after a success.
+# succeeded for (see the header), recording HEAD after a success. Under
+# post-update=detached it first takes a finished detached run's successful
+# receipt for this HEAD as that success, and runs the command detached.
 run_post_update() {
   local cmd=$1 moved=$2 key record head recorded="" rc=0 output tail
   head=$(git -C "$PROJ" rev-parse HEAD 2>/dev/null) || return 0
@@ -1211,20 +1419,39 @@ run_post_update() {
     # A first sighting this sync fast-forwarded still owes a run, so leave a
     # record that matches no commit rather than none.
     [ -n "$recorded" ] || [ "$moved" = no ] || write_live_record "$record" pending
-    echo "$label: activating: post-update command already running (pid $RUNNING_PID, since $RUNNING_SINCE); the next sync runs it for $(git -C "$PROJ" rev-parse --short HEAD) if it still needs to"
+    report_running_post_update
+    return 0
+  fi
+  if [ "$POST_UPDATE_MODE" = detached ] && detach_receipt "$record" \
+      && [ "$RECEIPT_HEAD" = "$head" ] && [ "$RECEIPT_RC" = 0 ]; then
+    # A run whose sync was killed while following it finished for this HEAD.
+    write_live_record "$record" "$head"
+    if detach_launchd_ready; then detach_launchd_remove "$(detach_label "$key")" || true; fi
+    echo "$label: post-update command ran at $(git -C "$PROJ" rev-parse --short HEAD) (detached run, log $record.job.log)"
     return 0
   fi
   if [ -z "$recorded" ] && [ "$moved" = no ]; then
     write_live_record "$record" "$head"
     return 0
   fi
-  # The command's output still reaches stderr, but it is also captured so a
-  # failure carries its reason on stdout: bootstrap and the scheduled sync keep
-  # only stdout's STUCK line.
-  output=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-sync-post-update.XXXXXX" 2>/dev/null) || output=/dev/null
   mkdir -p "$LIVE_RECORDS" 2>/dev/null || true
-  (cd "$PROJ" && exec_recording_run "$record.running" "$cmd") </dev/null >"$output" 2>&1 || rc=$?
-  rm -f "$record.running"
+  if [ "$POST_UPDATE_MODE" = detached ]; then
+    if detach_launchd_ready && RUNNING_PID=$(detach_launchd_pid "$(detach_label "$key")"); then
+      # Started by another sync a moment ago, before its runner wrote its record.
+      RUNNING_SINCE="launchd start" RUNNING_STARTED=""
+      [ -n "$recorded" ] || [ "$moved" = no ] || write_live_record "$record" pending
+      report_running_post_update
+      return 0
+    fi
+    run_detached_post_update "$record" "$cmd" "$key"
+  else
+    # The command's output still reaches stderr, but it is also captured so a
+    # failure carries its reason on stdout: bootstrap and the scheduled sync keep
+    # only stdout's STUCK line.
+    output=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-sync-post-update.XXXXXX" 2>/dev/null) || output=/dev/null
+    (cd "$PROJ" && exec_recording_run "$record.running" "$cmd") </dev/null >"$output" 2>&1 || rc=$?
+    rm -f "$record.running"
+  fi
   [ "$output" = /dev/null ] || cat "$output" >&2 || true
   if [ "$rc" -ne 0 ]; then
     # A first-sighting failure still leaves a record that matches no commit, so
@@ -1232,10 +1459,10 @@ run_post_update() {
     [ -n "$recorded" ] || write_live_record "$record" pending
     tail=$(post_update_output_tail "$output")
     echo "$label: STUCK: post-update command failed (exit $rc) at $(git -C "$PROJ" rev-parse --short HEAD); the next sync retries it - needs attention${tail:+; last output: $tail}"
-    [ "$output" = /dev/null ] || rm -f "$output"
+    [ "$output" = /dev/null ] || [ "$POST_UPDATE_MODE" = detached ] || rm -f "$output"
     return 0
   fi
-  [ "$output" = /dev/null ] || rm -f "$output"
+  [ "$output" = /dev/null ] || [ "$POST_UPDATE_MODE" = detached ] || rm -f "$output"
   write_live_record "$record" "$head"
   echo "$label: post-update command ran at $(git -C "$PROJ" rev-parse --short HEAD)"
 }
@@ -1255,10 +1482,11 @@ write_live_record() {
   fi
 }
 
-# sync_live_checkout <project> <path> <lock> <capture> <command> <lock-wait-secs> <pid-file> <capture-start>
+# sync_live_checkout <project> <path> <lock> <capture> <command> <lock-wait-secs> <pid-file> <capture-start> <post-update-mode>
 sync_live_checkout() {
   local project=$1 path=$2 lock=$3 capture=$4 cmd=$5 wait_secs=$6 self before moved
   CAPTURE_START=${8:-sync}
+  POST_UPDATE_MODE=${9:-inline}
   PROJ=$(expand_home "$path")
   RUNNING_PID_FILE=""
   [ -z "$7" ] || RUNNING_PID_FILE=$(expand_home "$7")
@@ -1311,7 +1539,7 @@ sync_live_checkout() {
 # sync_live_checkouts <project-or-empty> <lock-wait-secs>: sync the configured
 # live checkouts for one project, or every entry when the project is empty.
 sync_live_checkouts() {
-  local only=$1 wait_secs=$2 line project path lock capture capture_start running cmd rest token n=0
+  local only=$1 wait_secs=$2 line project path lock capture capture_start running post_update cmd rest token n=0
   [ -f "$LIVE_CHECKOUTS_FILE" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n + 1))
@@ -1328,7 +1556,7 @@ sync_live_checkouts() {
       continue
     fi
     [ -z "$only" ] || [ "$project" = "$only" ] || continue
-    lock="" capture="" capture_start="" running=""
+    lock="" capture="" capture_start="" running="" post_update=""
     while :; do
       token=${rest%%[[:space:]]*}
       case "$token" in
@@ -1336,6 +1564,7 @@ sync_live_checkouts() {
         capture=*) capture=${token#capture=} ;;
         capture-start=*) capture_start=${token#capture-start=} ;;
         running=*) running=${token#running=} ;;
+        post-update=*) post_update=${token#post-update=} ;;
         *) break ;;
       esac
       rest=${rest#"$token"}
@@ -1357,12 +1586,19 @@ sync_live_checkouts() {
         continue
         ;;
     esac
+    case "$post_update" in
+      ''|inline|detached) ;;
+      *)
+        echo "live-checkouts: skipped: line $n post-update= wants inline or detached"
+        continue
+        ;;
+    esac
     if [ -n "$capture_start" ] && [ -z "$capture" ]; then
       echo "live-checkouts: skipped: line $n capture-start= needs a capture= entry"
       continue
     fi
     cmd=$rest
-    sync_live_checkout "$project" "$path" "$lock" "$capture" "$cmd" "$wait_secs" "$running" "$capture_start"
+    sync_live_checkout "$project" "$path" "$lock" "$capture" "$cmd" "$wait_secs" "$running" "$capture_start" "$post_update"
   done < "$LIVE_CHECKOUTS_FILE"
 }
 
