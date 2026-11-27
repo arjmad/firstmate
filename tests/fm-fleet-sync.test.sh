@@ -1997,8 +1997,9 @@ test_detached_post_update_uses_a_launchd_one_shot() {
   assert_contains "$out" "fleet live $live: post-update command ran" "the launchd run reads as an inline one"
   assert_equals 1 "$(runs_of "$home/runs-fleet")" "the command ran once"
   grep -Eq "^bootstrap gui/$(id -u) .*\.job\.plist$" "$calls" || fail "the run was booted as a launchd job; calls: $(cat "$calls")"
-  grep -q '^bootstrap ' "$calls" && grep -A100 '^bootstrap ' "$calls" | grep -q "^bootout gui/$(id -u)/test\.fm-detach\.fleet\." \
-    || fail "the finished one-shot is booted out; calls: $(cat "$calls")"
+  if ! grep -A100 '^bootstrap ' "$calls" | grep -q "^bootout gui/$(id -u)/test\.fm-detach\.fleet\."; then
+    fail "the finished one-shot is booted out; calls: $(cat "$calls")"
+  fi
   [ -z "$(find "$home/launchd" -name 'test.fm-detach.*' -print)" ] || fail "a launchd job is left loaded: $(ls "$home/launchd")"
   pass "post-update=detached boots a launchd one-shot under the label prefix and unloads it once it finished"
 }

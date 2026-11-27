@@ -719,7 +719,7 @@ report_capture_held() {
 # a path in CAPTURE_PATHS, or a directory holding one or a path inside one, so a
 # fast-forward could touch a live edit; also true when that diff is unreadable.
 capture_paths_overlap_origin() {
-  local changed dirty list
+  local changed dirty list overlap=1
   list=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-sync-changed.XXXXXX" 2>/dev/null) || return 0
   if ! git -C "$PROJ" diff -z --name-only --no-renames HEAD "$BASE" > "$list" 2>/dev/null; then
     rm -f "$list"
@@ -727,12 +727,13 @@ capture_paths_overlap_origin() {
   fi
   while IFS= read -r -d '' changed; do
     for dirty in "${CAPTURE_PATHS[@]}"; do
-      case "$changed" in "$dirty" | "$dirty"/*) rm -f "$list"; return 0 ;; esac
-      case "$dirty" in "$changed"/*) rm -f "$list"; return 0 ;; esac
+      case "$changed" in "$dirty" | "$dirty"/*) overlap=0 ;; esac
+      case "$dirty" in "$changed"/*) overlap=0 ;; esac
     done
+    [ "$overlap" = 1 ] || break
   done < "$list"
   rm -f "$list"
-  return 1
+  return "$overlap"
 }
 
 # report_capture_waiting: handle a capture-start=off checkout held only by edits

@@ -808,7 +808,7 @@ See [`fleet-ledger.md`](fleet-ledger.md) for the opt-in setup, record contract, 
 ## Live checkouts (config/live-checkouts)
 
 The optional local, gitignored `config/live-checkouts` file lists working copies outside `projects/` that something runs from, so a merged PR goes live without a hand `git pull`.
-Each line is `<project> <path> [lock=<lock-path>] [capture=<dir>/:<command>] [capture-start=off|sync] [running=<pid-file>] [post-update command]`, where a leading `~/` expands to `$HOME` and blank or `#` lines are ignored.
+Each line is `<project> <path> [lock=<lock-path>] [capture=<dir>/:<command>] [capture-start=off|sync] [running=<pid-file>] [post-update=inline|detached] [post-update command]`, where a leading `~/` expands to `$HOME` and blank or `#` lines are ignored.
 An absent file means no live checkouts.
 
 ```text
@@ -827,11 +827,16 @@ A held `lock=` path defers the checkout, after a short bounded wait in the singl
 The post-update command runs once for each new HEAD and is retried on the next sync after a failure, whose `STUCK:` line ends with the command's last few output lines.
 A sync that finds the command still running from another sync starts no second run and reports `activating:` with that run's pid and start time instead of `STUCK:`.
 A `running=<pid-file>` entry extends that to a run fleet-sync did not start: it names the file the command's own one-at-a-time guard writes its pid to, and while that pid is a live process that started no later than the file was written (with a second of slack for clock rounding), the sync reports the same `activating:` line instead of `STUCK:`.
+A run still alive after `FM_LIVE_POST_UPDATE_STUCK_SECS` (default an hour) reports `STUCK:` once, naming its pid and start time, and is left running.
+`post-update=detached` runs the command outside the sync's process tree, as a launchd one-shot in the user's gui domain where launchd can take it and in its own session elsewhere, so a caller's timeout or an ending session that kills the sync no longer kills the command.
+The sync still follows that run to its end and reports it as above, and a later sync records a run that succeeded after its sync died without running the command again.
 A `capture=` entry is for a checkout edited in place, such as a writable skills tree that a capture job turns into a PR: when only uncommitted edits under that directory hold the checkout, the sync starts the capture command detached once per edit state and reports `capturing:` instead of `STUCK:`, and defers the checkout while that capture runs.
 Once the capture has succeeded, edits it did not clear on a checkout already at its origin default branch read `live edits pending capture:`, which wakes no one because they block no fast-forward.
 The same edits on a checkout behind origin read `capture-pending <PR url>:` while the pull request the capture's log names is still open, which wakes no one either because once it merges, by any path, the sync settles and fast-forwards the checkout.
 The same edits on a checkout ahead of origin, or behind it with no open capture PR, or a failed capture, report `STUCK:`.
-`capture-start=off` is for a capture project whose own scheduled job, such as a nightly cron, runs its capture: the sync never starts the capture command, and edits only under the capture directory on a checkout at or behind origin read `live edits wait for the scheduled capture:`, which wakes no one because once that job's capture merges, the sync settles and fast-forwards it.
+`capture-start=off` is for a capture project whose own scheduled job, such as a nightly cron, runs its capture: the sync never starts the capture command.
+With edits only under the capture directory, a checkout behind origin where origin changed none of the edited paths fast-forwards under the edits and runs its post-update command, leaving the edits for that job.
+A checkout at origin, or behind it where origin changed an edited path, reads `live edits wait for the scheduled capture:`, which wakes no one because once that job's capture merges, the sync settles and fast-forwards it.
 The same edits on a checkout ahead of origin or diverged from it still report `STUCK:`, and `capture-start=sync`, the default, keeps the sync-started capture above.
 Because the sync cannot see that job's run, give the entry a `lock=` naming a path the job holds while it runs, so neither the sync nor the settle touches the checkout under it.
 Whoever merges a capture PR, the next sync runs the capture command's `--settle` for a checkout on its default branch whose uncommitted paths all lie under the capture directory and that is behind an origin that changed one of them, so the edits origin already holds stop blocking the fast-forward; edits origin does not hold yet keep it waiting, and an edit outside the capture directory keeps it `STUCK:` with no settle.
@@ -4067,6 +4072,8 @@ FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT=     # optional seconds allowed for bootstrap's 
 FM_FLEET_SYNC_INTERVAL=1800  # seconds between the watcher's scheduled whole-fleet fm-fleet-sync.sh runs when config/fleet-sync-interval is absent; off or 0 disables, values below 300 use 300
 FM_LIVE_CHECKOUT_LOCK_WAIT_SECS=120  # seconds the single-project fm-fleet-sync.sh form waits for a live checkout's held lock= path before deferring it
 FM_LIVE_CHECKOUT_LOCK_POLL_SECS=5    # seconds between those lock checks
+FM_LIVE_POST_UPDATE_STUCK_SECS=3600  # seconds a live checkout's post-update run may stay alive before the sync reports it STUCK (it is never stopped)
+FM_LIVE_POST_UPDATE_START_SECS=60    # seconds a post-update=detached run may take to start before the sync reports it failed
 FM_FLEET_PRUNE=1        # set to 0 to skip pruning local branches whose upstream is gone
 FM_STALE_WORKTREE_LOCK_AGE_SECS=30       # min mtime age before fm-teardown.sh treats a leftover worktree git index.lock as provably stale
 FM_TREEHOUSE_RETURN_LOCK_RETRIES=3        # retries after a treehouse return fails on the transient git index.lock signature
