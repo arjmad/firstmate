@@ -411,6 +411,143 @@ test_typed_submit_on_open_exit_picker_types_nothing() {
   pass "fm_backend_send_text_submit: a typed message to the exit picker types nothing and sends no Enter"
 }
 
+# --- Claude payload proof on tmux -------------------------------------------
+# make_claude_submit_mock: a tmux whose pane runs Claude Code (a fake `ps`
+# reports the pane's foreground process as `.claude-wrapped`, the Nix-wrapped
+# name) and draws Claude's composer between two rules. Typed text lands in the
+# composer unless FM_FAKE_DROP_TYPED is set; Ctrl+U empties it; Enter empties
+# it unless $FM_FAKE_SWALLOW exists, and blanks the whole screen (no composer
+# to read) when FM_FAKE_ENTER_BLANKS is set.
+make_claude_submit_mock() {
+  local dir=$1 fakebin="$1/fakebin"
+  mkdir -p "$fakebin"
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+COMPOSER="${FM_FAKE_COMPOSER:?}"
+draw() {
+  printf '%s\n' '────────────────────────' "❯ $1" '────────────────────────' '  ⏵⏵ bypass permissions on' > "$COMPOSER"
+}
+case "${1:-}" in
+  display-message)
+    for a in "$@"; do
+      case "$a" in
+        *cursor_y*) printf '1\n'; exit 0 ;;
+        *pane_tty*) printf '/dev/pts/fake\n'; exit 0 ;;
+      esac
+    done
+    exit 0 ;;
+  capture-pane) cat "$COMPOSER" 2>/dev/null; exit 0 ;;
+  send-keys)
+    shift; literal=0
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -t) shift ;;
+        -l) literal=1 ;;
+        Enter)
+          printf 'Enter\n' >> "$FM_FAKE_SENT"
+          if [ -n "${FM_FAKE_ENTER_BLANKS:-}" ]; then
+            : > "$COMPOSER"
+          elif [ ! -f "${FM_FAKE_SWALLOW:-/nonexistent}" ]; then
+            draw ''
+          fi ;;
+        C-u) printf 'C-u\n' >> "$FM_FAKE_SENT"; draw '' ;;
+        *)
+          if [ "$literal" = 1 ]; then
+            printf 'typed %s\n' "$1" >> "$FM_FAKE_SENT"
+            held=$(sed -n 's/^❯ //p' "$COMPOSER")
+            [ -n "${FM_FAKE_DROP_TYPED:-}" ] || draw "$held$1"
+          fi ;;
+      esac
+      shift
+    done
+    exit 0 ;;
+esac
+exit 1
+SH
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *" -t "*) printf '  4242  4242  4242 .claude-wrapped\n' ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/tmux" "$fakebin/ps"
+  printf '%s\n' "$fakebin"
+}
+
+# The bash -c body expands in the child, so its single quotes are deliberate.
+# shellcheck disable=SC2016
+claude_submit() {  # <dir> <composer-text> <message> [env...]
+  local dir=$1 held=$2 message=$3 fakebin
+  shift 3
+  fakebin=$(make_claude_submit_mock "$dir")
+  printf '%s\n' '────────────────────────' "❯ $held" '────────────────────────' '  ⏵⏵ bypass permissions on' > "$dir/composer"
+  : > "$dir/sent"
+  env PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$dir/sent" \
+    FM_COMPOSER_PROOF_POLLS=2 FM_COMPOSER_PROOF_INTERVAL=0 FM_COMPOSER_CLEAR_SETTLE=0 "$@" \
+    bash -c '. "$0/bin/fm-tmux-lib.sh"; fm_pane_is_busy() { [ "${FM_FAKE_PANE_BUSY:-0}" = 1 ]; }; fm_tmux_submit_core %0 "$1" 3 0 0' \
+    "$ROOT" "$message" > "$dir/verdict" 2>/dev/null
+}
+
+test_claude_leftover_is_refused_before_typing() {
+  local dir="$TMP_ROOT/claude-leftover"
+  mkdir -p "$dir"
+  claude_submit "$dir" 'half typed draft' 'Reply with exactly PONG'
+  [ "$(cat "$dir/verdict")" = send-failed ] \
+    || fail "a Claude composer holding a leftover must refuse the submit, got '$(cat "$dir/verdict")'"
+  [ ! -s "$dir/sent" ] || fail "nothing may be typed or pressed onto a leftover, sent: $(cat "$dir/sent")"
+  grep -F '❯ half typed draft' "$dir/composer" >/dev/null || fail "the leftover draft must stay as it was"
+  pass "fm_tmux_submit_core: a Claude composer holding a leftover is refused before anything is typed"
+}
+
+test_claude_shown_payload_submits_and_clears() {
+  local dir="$TMP_ROOT/claude-shown"
+  mkdir -p "$dir"
+  claude_submit "$dir" '' 'Reply with exactly PONG'
+  [ "$(cat "$dir/verdict")" = empty ] \
+    || fail "a payload the Claude composer shows should submit and confirm empty, got '$(cat "$dir/verdict")'"
+  [ "$(grep -c '^Enter$' "$dir/sent")" -eq 1 ] || fail "a shown payload should take one Enter, sent: $(cat "$dir/sent")"
+  pass "fm_tmux_submit_core: a Claude payload the composer shows is submitted once and the composer clears"
+}
+
+test_claude_unshown_payload_gets_no_enter() {
+  local dir="$TMP_ROOT/claude-unshown"
+  mkdir -p "$dir"
+  claude_submit "$dir" '' 'Reply with exactly PONG' FM_FAKE_DROP_TYPED=1
+  [ "$(cat "$dir/verdict")" = send-failed ] \
+    || fail "a payload the Claude composer never shows must report send-failed, got '$(cat "$dir/verdict")'"
+  [ "$(grep -c '^Enter$' "$dir/sent")" -eq 0 ] || fail "an unshown payload must not get Enter, sent: $(cat "$dir/sent")"
+  pass "fm_tmux_submit_core: a Claude payload the composer never shows gets no Enter"
+}
+
+test_claude_swallowed_enter_while_busy_is_not_queued() {
+  local dir="$TMP_ROOT/claude-busy-swallow"
+  mkdir -p "$dir"
+  touch "$dir/.swallow"
+  claude_submit "$dir" '' 'Reply with exactly PONG' FM_FAKE_SWALLOW="$dir/.swallow" FM_FAKE_PANE_BUSY=1
+  [ "$(cat "$dir/verdict")" = pending ] \
+    || fail "a Claude composer still holding the payload after Enter retries is pending, got '$(cat "$dir/verdict")'"
+  pass "fm_tmux_submit_core: on Claude a held payload after Enter retries stays pending"
+}
+
+# A busy footer after an idle baseline confirms other harnesses' turns, but on
+# Claude delivery needs a read of a cleared composer.
+test_claude_unreadable_composer_after_enter_is_unknown() {
+  local dir="$TMP_ROOT/claude-enter-blank"
+  mkdir -p "$dir"
+  claude_submit "$dir" '' 'Reply with exactly PONG' FM_FAKE_ENTER_BLANKS=1 FM_FAKE_PANE_BUSY=1
+  [ "$(cat "$dir/verdict")" = unknown ] \
+    || fail "a Claude composer that cannot be read after Enter must not confirm delivery, got '$(cat "$dir/verdict")'"
+  [ "$(grep -c '^Enter$' "$dir/sent")" -eq 1 ] || fail "an unconfirmed Enter must not be retried, sent: $(cat "$dir/sent")"
+  pass "fm_tmux_submit_core: on Claude an unreadable composer after Enter is unknown, not a busy-footer delivery"
+}
+
+test_claude_leftover_is_refused_before_typing
+test_claude_shown_payload_submits_and_clears
+test_claude_unreadable_composer_after_enter_is_unknown
+test_claude_unshown_payload_gets_no_enter
+test_claude_swallowed_enter_while_busy_is_not_queued
 test_typed_submit_on_open_exit_picker_types_nothing
 test_wrapped_continuation_retries_swallowed_enter
 test_placeholder_like_bare_input_retries_swallowed_enter

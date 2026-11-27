@@ -120,6 +120,28 @@ while [ "$i" -lt 60 ]; do
 done
 [ "$idle" = 1 ] || fail "Claude Code ($VERSION) on $HERDR_VER never rendered an idle composer in the lab pane"
 
+# A leftover draft in the composer must be refused before anything is typed,
+# so it is never submitted joined to the steer, and the shared clear empties it.
+LEFTOVER='half typed draft'
+lab pane send-text "$PANE" "$LEFTOVER" >/dev/null || fail "could not type the leftover draft"
+i=0
+content=''
+while [ "$i" -lt 20 ]; do
+  content=$(fm_backend_herdr_composer_content "$TARGET" 2>/dev/null) || content=
+  [ "${content//[[:space:]]/}" = "${LEFTOVER//[[:space:]]/}" ] && break
+  i=$((i + 1))
+  sleep 0.25
+done
+[ "${content//[[:space:]]/}" = "${LEFTOVER//[[:space:]]/}" ] \
+  || fail "Claude Code ($VERSION) on $HERDR_VER: the composer read did not return the typed draft, got '$content'"
+verdict=$(fm_backend_herdr_send_text_submit "$TARGET" "Reply with exactly LEFTOVERPONG and nothing else." 3 0.4 0.4)
+content=$(fm_backend_herdr_composer_content "$TARGET" 2>/dev/null) || content=
+[ "$verdict" = send-failed ] && [ "${content//[[:space:]]/}" = "${LEFTOVER//[[:space:]]/}" ] \
+  || fail "Claude Code ($VERSION) on $HERDR_VER: a leftover draft must be refused untouched, got verdict '$verdict' and composer '$content'"
+fm_composer_clear fm_backend_herdr_send_key fm_backend_herdr_composer_content "$TARGET" "$LEFTOVER" \
+  || fail "Claude Code ($VERSION) on $HERDR_VER: the shared clear did not empty the leftover draft"
+pass "live Herdr submit confirm: Claude Code ($VERSION) on $HERDR_VER refuses a leftover draft untouched and the shared clear empties it"
+
 TOKEN="FMHERDRPONG$$_$RANDOM"
 verdict=$(fm_backend_herdr_send_text_submit "$TARGET" "Reply with exactly $TOKEN and nothing else." 3 0.4 0.4) \
   || fail "send_text_submit failed to run against Claude Code ($VERSION) on $HERDR_VER"
@@ -236,15 +258,16 @@ verdict=$(fm_backend_herdr_send_text_submit "$TARGET" '/context' 3 0.4 1.2) \
 [ "$verdict" = empty ] \
   || fail "Claude Code ($VERSION) on $HERDR_VER: a typed /context behind its command popup must confirm empty, got '$verdict'"
 # Confirm /context ran, not merely that the composer cleared: its report opens
-# with a `Context Usage` heading, which the popup's lowercase description does
-# not match. The report can run to hundreds of rows, so the read reaches far
-# enough back to keep its heading.
+# with a `Context Usage` heading (2.1.283), or with `Context usage` as the
+# command's result row (2.1.332), neither of which the popup's lowercase
+# description matches. The report can run to hundreds of rows, so the read
+# reaches far enough back to keep its heading.
 rendered=0
 i=0
 while [ "$i" -lt 45 ]; do
   screen=$(lab pane read "$PANE" --source recent --lines 1000 2>/dev/null || true)
   case "$screen" in
-    *'Context Usage'*) rendered=1; break ;;
+    *'Context Usage'*|*'Context usage'*) rendered=1; break ;;
   esac
   i=$((i + 1))
   sleep 1
@@ -286,5 +309,56 @@ done
 [ "$exited" = 1 ] \
   || fail "Claude Code ($VERSION) on $HERDR_VER: the /exit submission reported '$verdict' but the agent never exited"$'\n'"$(lab pane read "$PANE" --source visible 2>/dev/null | tail -15)"
 pass "live Herdr submit confirm: Claude Code ($VERSION) on $HERDR_VER proves and submits a typed /exit behind its command popup"
+
+# A CPU-starved Claude inserts a typed burst seconds after the bytes arrive.
+# The fleet's workers run at idle CPU beside a desktop session, so a steer to
+# a starved pane must still be submitted, never left typed in the composer.
+# Linux with a user systemd manager only; elsewhere this arm is reported
+# skipped.
+if command -v systemd-run >/dev/null 2>&1 \
+  && systemd-run --user --scope --collect --quiet -p CPUQuota=8% true >/dev/null 2>&1; then
+  WS2_JSON=$(lab workspace create --cwd "$ROOT" --label fm-submitstarved --no-focus) \
+    || fail "could not create the starved-pane workspace"
+  PANE2=$(printf '%s' "$WS2_JSON" | jq -er '.result.root_pane.pane_id') \
+    || fail "starved workspace create did not return a pane id"
+  TARGET2="$SESSION:$PANE2"
+  lab pane run "$PANE2" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 systemd-run --user --scope --collect --quiet -p CPUQuota=8% claude --name 'ship: submitstarved' --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\"}'" >/dev/null \
+    || fail "could not launch a CPU-starved Claude Code ($VERSION) in the lab"
+  n=1
+  while [ "$n" -le 3 ]; do
+    i=0
+    while [ "$i" -lt 90 ]; do
+      st=$(lab agent get "$PANE2" 2>/dev/null | jq -r '.result.agent.agent_status // empty')
+      if [ "$(fm_backend_herdr_composer_state "$TARGET2")" = empty ]; then
+        case "$st" in idle|done) break ;; esac
+      fi
+      i=$((i + 1))
+      sleep 1
+    done
+    ST_TOKEN="FMHERDRSTARVED${n}_$$"
+    ST_TEXT="Reply with exactly $ST_TOKEN and nothing else."
+    verdict=$(fm_backend_herdr_send_text_submit "$TARGET2" "$ST_TEXT" 2 0.4 0.3)
+    [ "$verdict" != send-failed ] \
+      || fail "Claude Code ($VERSION) on $HERDR_VER, starved: steer $n was judged unsent (send-failed)"
+    sleep 3
+    if [ "$(fm_composer_claude_after_enter fm_backend_herdr_composer_content "$TARGET2" "$ST_TEXT")" = pending ]; then
+      fail "Claude Code ($VERSION) on $HERDR_VER, starved: steer $n was left typed but unsubmitted (verdict '$verdict')"
+    fi
+    landed=0
+    i=0
+    while [ "$i" -lt 90 ]; do
+      screen=$(lab pane read "$PANE2" --source recent --lines 200 2>/dev/null || true)
+      [ "$(printf '%s\n' "$screen" | grep -F -c "$ST_TOKEN" || true)" -ge 2 ] && { landed=1; break; }
+      i=$((i + 1))
+      sleep 1
+    done
+    [ "$landed" = 1 ] \
+      || fail "Claude Code ($VERSION) on $HERDR_VER, starved: steer $n reported '$verdict' but its reply never rendered"
+    n=$((n + 1))
+  done
+  pass "live Herdr submit confirm: Claude Code ($VERSION) on $HERDR_VER at 8% CPU submits every steer and leaves none typed"
+else
+  printf '# skip: no user systemd-run CPUQuota scope here, so the starved-pane arm is not exercised\n'
+fi
 
 [ "$CHECKED" -gt 0 ] || fail "FM_HERDR_SUBMIT_CONFIRM_LIVE=1 checked no harness"

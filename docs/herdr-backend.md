@@ -688,6 +688,12 @@ Typed-plane text is typed once; only Enter is retried.
 When native `agent get` identity is Claude, the adapter types only into an empty composer.
 A Claude composer that already holds text, or cannot be read, before the send is refused with nothing typed.
 Before that Enter, the adapter continues only when the selected composer shows the typed payload, or only Claude paste placeholders with no literal remainder.
+The proof polls for that payload for up to about five seconds (`FM_COMPOSER_PROOF_POLLS` reads `FM_COMPOSER_PROOF_INTERVAL` seconds apart), because a CPU-starved Claude inserts a typed burst as one block seconds after the bytes arrive, and a Ctrl+U or Enter sent before that block lands is applied first.
+After Enter, delivery on a Claude pane needs a read of a cleared composer, whatever the native state says, and a Claude submit gets no queued-Enter conversion, because Claude clears its composer whenever it takes an Enter, queued or not.
+A composer that still shows the payload gets Enter again.
+One that cannot be read in three tries, or shows other text, reports `unknown` and gets no further Enter (`fm_composer_claude_after_enter`).
+The tmux submit core applies the same proof to a Claude pane; the rules live once in [`bin/fm-composer-lib.sh`](../bin/fm-composer-lib.sh) ("Claude payload proof").
+Dated measurement: docs/verification/runtime-backends.md "Claude payload proof on a starved pane".
 Every herdr adapter composer read (`fm_backend_herdr_composer_state`, `fm_backend_herdr_composer_content`) captures the full visible viewport, never a bounded tail.
 An overlay Claude renders between the composer and the pane bottom - the slash-command popup is the verified shape - pushes the composer outside a tail window, and the composer is by definition inside the viewport.
 [`bin/fm-task-inbox-lib.sh`](../bin/fm-task-inbox-lib.sh) owns the separate shared inbox pending-line confirmation read.
@@ -699,7 +705,8 @@ It ignores U+2063 because Claude's Herdr read-back never shows it.
 A composer that holds a shorter suffix, or a placeholder plus a literal remainder, does not receive Enter.
 Instead:
 
-1. The adapter presses Ctrl+U until the shared classifier reads the composer as empty.
+1. The adapter presses Ctrl+U until the composer's content reads blank, and reads it again after a one-second settle (`FM_COMPOSER_CLEAR_RECHECKS`, `FM_COMPOSER_CLEAR_SETTLE`) because a starved Claude can apply the Ctrl+U before a typed block still landing.
+   The check reads content, not the classifier, which strips Claude's grey slash-command text as a ghost.
 2. It then reports `send-failed`, so a resend starts from a clean composer.
 
 Ctrl+C is not used for this, because Claude documents it as interrupting a running operation.
@@ -717,6 +724,7 @@ On an idle or done native baseline, submit confirmation proceeds in this order:
    A cleared composer is delivery, and proven pending text retries Enter.
 3. After the retry budget, `fm_composer_queued_enter_verdict` treats proven pending text plus a generating busy signal as a queued delivered Enter.
    It keeps an idle pending composer as a genuine swallow.
+   A Claude pane skips this conversion (see Claude composer proof).
 
 On an already active or unreadable baseline, the adapter falls back to conservative composer clearance.
 That fallback adds a pre-Enter rendered-footer transition when the baseline is unavailable.

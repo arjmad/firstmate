@@ -318,8 +318,12 @@ fm_pane_is_busy() {  # <target> [harness]
 # [busy-harness] scopes every busy read to one harness signature; the submit
 # core passes polytoken for a pane whose composer identity is polytoken (its
 # `Running for` row is outside the harness-less union) and nothing otherwise.
-fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle] [busy-harness]
-  local target=$1 retries=$2 sleep_s=$3 baseline_idle=${4:-} busy_harness=${5:-} i=0 j state busy_state
+# [claude-payload] marks a Claude pane and carries the text just typed. Claude
+# clears its composer whenever it takes an Enter, queued or not, so there
+# fm_composer_claude_after_enter decides each Enter from the composer's
+# content, and neither the busy-footer nor the queued-Enter conversion applies.
+fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle] [busy-harness] [claude-payload]
+  local target=$1 retries=$2 sleep_s=$3 baseline_idle=${4:-} busy_harness=${5:-} claude_text=${6:-} i=0 j state busy_state
   while :; do
     tmux send-keys -t "$target" Enter 2>/dev/null || true
     sleep "$sleep_s"
@@ -328,6 +332,10 @@ fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle
     if fm_composer_blocking_dialog_noted >/dev/null; then
       printf 'unknown'
       return 0
+    fi
+    if [ -n "$claude_text" ]; then
+      state=$(fm_composer_claude_after_enter fm_tmux_composer_content "$target" "$claude_text")
+      [ "$state" = pending ] || { printf '%s' "$state"; return 0; }
     fi
     case "$state" in
       pending|pending-unproven) ;;
@@ -351,7 +359,7 @@ fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle
     i=$((i + 1))
     [ "$i" -lt "$retries" ] || break
   done
-  if [ "$state" != pending ]; then
+  if [ "$state" != pending ] || [ -n "$claude_text" ]; then
     printf '%s' "$state"
     return 0
   fi
@@ -371,14 +379,61 @@ fm_tmux_submit_busy_harness() {  # <target>
   [ "${identity%%$'\t'*}" != polytoken ] || printf 'polytoken'
 }
 
+# fm_tmux_pane_is_claude: true when the pane's FOREGROUND process group runs
+# Claude Code. Its process name carries `claude` (`claude` for the native
+# binary, `.claude-wrapped` under a Nix wrapper, verified 2.1.332). It matches
+# the process name only: bin/fm-agent-process-lib.sh also falls back to the
+# binary's path for a version-named Claude, which no fleet tmux launch runs. A
+# pane whose agent exited to a shell gets no Claude proof.
+fm_tmux_pane_is_claude() {  # <target>
+  local target=$1 tty pgid tpgid comm
+  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 1
+  case "$tty" in /dev/*) ;; *) return 1 ;; esac
+  while read -r _ pgid tpgid comm; do
+    [ -n "$comm" ] || continue
+    [ "$pgid" = "$tpgid" ] || continue
+    case "${comm##*/}" in *claude*) return 0 ;; esac
+  done <<EOF
+$(LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null)
+EOF
+  return 1
+}
+
+# fm_tmux_composer_content: the selected composer's typed text, for the
+# Claude payload proof. It reads the styled visible pane the way
+# fm_backend_herdr_composer_content reads Herdr's viewport, with the
+# dark-truecolor ghost strip off for the same reason (Claude draws a typed
+# slash command in muted grey).
+fm_tmux_composer_content() {  # <target>
+  local cap
+  cap=$(fm_tmux_composer_capture "$1") && [ -n "$cap" ] || return 1
+  FM_COMPOSER_GHOST_LUMA_MAX=0 fm_composer_extract_selected_content \
+    "$(printf 'styled=1\ncursor=0\nidentity=0')" "$cap"
+}
+
+fm_tmux_send_key() {  # <target> <key>
+  tmux send-keys -t "$1" "$2" 2>/dev/null
+}
+
+# On a Claude pane the submit follows the shared Claude payload proof in
+# bin/fm-composer-lib.sh: nothing is typed unless the composer is empty, so a
+# leftover draft is never submitted with the text; Enter waits until the
+# composer shows exactly the text; and a refused composer is cleared back to
+# empty (send-failed), or reported unknown when the clear cannot be verified.
 fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
   local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 baseline_idle='' baseline_state err busy_harness
+  local claude_text='' content
   # The turn-started baseline must predate our own typing: a pane already
   # busy before the text lands can turn "busy" for reasons unrelated to our
   # Enter, so only a clean idle-to-busy transition may confirm a submit.
   busy_harness=$(fm_tmux_submit_busy_harness "$target")
   baseline_state=$(fm_pane_busy_state "$target" "$busy_harness")
   [ "$baseline_state" = idle ] && baseline_idle=1
+  if fm_tmux_pane_is_claude "$target"; then
+    claude_text=$text
+    content=$(fm_tmux_composer_content "$target") || { printf 'send-failed'; return 0; }
+    [ -z "${content//[$' \t\r\n\v\f']/}" ] || { printf 'send-failed'; return 0; }
+  fi
   # A failed literal send replays tmux's stderr (for example "command too
   # long") so the caller can log why nothing was typed.
   if ! err=$(tmux send-keys -t "$target" -l "$text" 2>&1 >/dev/null); then
@@ -387,5 +442,13 @@ fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
     return 0
   fi
   sleep "$settle"
-  fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s" "$baseline_idle" "$busy_harness"
+  if [ -n "$claude_text" ] && ! fm_composer_await_payload fm_tmux_composer_content "$target" "$text"; then
+    if fm_composer_clear fm_tmux_send_key fm_tmux_composer_content "$target" "$text"; then
+      printf 'send-failed'
+    else
+      printf 'unknown'
+    fi
+    return 0
+  fi
+  fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s" "$baseline_idle" "$busy_harness" "$claude_text"
 }

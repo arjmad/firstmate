@@ -2602,6 +2602,148 @@ fm_composer_queued_enter_verdict() {  # <composer-state> <busy|idle|unknown>
   fi
 }
 
+# --- Claude payload proof (shared by the tmux and herdr submit cores) -------
+#
+# On a Claude pane a submit types only into an empty composer, presses Enter
+# only once the composer shows exactly the text it typed, and clears a refused
+# composer back to empty. The adapters supply the reads and the key; the rules
+# live here.
+
+# fm_composer_payload_shown: 0 when <after>, read from a composer that was
+# empty before the send, shows <text>.
+# Literal equality ignores whitespace, the same comparison zellij uses, so a
+# wrapped payload still matches. It also ignores U+2063, the invisible mark
+# that starts operational inputs and separates the from-firstmate label:
+# Claude's composer read-back on Herdr never shows it (verified live), and it
+# carries no instruction text of its own. A composer that holds only
+# `[Pasted text #N]` or `[Pasted text #N +M lines]` placeholders (the
+# multi-line form, verified live on Claude 2.1.278), with no literal remainder,
+# is the same proof for one fast burst: Claude collapses that burst into the
+# placeholder and expands it on submit. A shorter literal suffix, or a
+# placeholder followed by a literal remainder, is the head-truncation shape
+# and is not proof. A leftover in front of the payload is not proof either.
+fm_composer_payload_shown() {  # <text> <after>
+  local text=$1 after=$2 literal
+  fm_composer_normalize_spaces_var text
+  fm_composer_normalize_spaces_var after
+  text=${text//[$' \t\r\n\v\f']/}
+  text=${text//$'\xE2\x81\xA3'/}
+  after=${after//[$' \t\r\n\v\f']/}
+  after=${after//$'\xE2\x81\xA3'/}
+  [ -n "$text" ] && [ -n "$after" ] || return 1
+  [ "$after" = "$text" ] && return 0
+  literal=$after
+  while [[ $literal =~ \[Pastedtext#[0-9]+(\+[0-9]+lines?)?\] ]]; do
+    literal=${literal/"${BASH_REMATCH[0]}"/}
+  done
+  [ -z "$literal" ]
+}
+
+# fm_composer_await_payload: poll <content-fn> <target> until the composer
+# shows <text> (fm_composer_payload_shown), up to FM_COMPOSER_PROOF_POLLS reads
+# FM_COMPOSER_PROOF_INTERVAL seconds apart. Claude Code inserts a typed burst
+# as one block, and on a CPU-starved pane it does so seconds after the bytes
+# arrive (live, Claude 2.1.332 at 8% CPU on Herdr 0.9.5: 147 to 2457 ms). A
+# Ctrl+U or Enter sent before that block lands is applied to the empty
+# composer first and the block then lands after it, so one read at the caller's
+# settle judged a slow payload unsent, "cleared" it before it landed, and left
+# the whole steer typed but unsubmitted. A failed read (a capture taken
+# mid-redraw) only spends one poll. 0 once shown; 1 when the budget ends.
+FM_COMPOSER_PROOF_POLLS=${FM_COMPOSER_PROOF_POLLS:-25}
+FM_COMPOSER_PROOF_INTERVAL=${FM_COMPOSER_PROOF_INTERVAL:-0.2}
+fm_composer_await_payload() {  # <content-fn> <target> <text>
+  local content_fn=$1 target=$2 text=$3 i=0 content
+  while :; do
+    if content=$("$content_fn" "$target"); then
+      fm_composer_payload_shown "$text" "$content" && return 0
+    fi
+    i=$((i + 1))
+    [ "$i" -lt "$FM_COMPOSER_PROOF_POLLS" ] || return 1
+    sleep "$FM_COMPOSER_PROOF_INTERVAL"
+  done
+}
+
+# fm_composer_claude_after_enter: whether a Claude composer took an Enter.
+# Claude clears its composer whenever it takes an Enter, whether it starts the
+# turn or queues it behind a running one (live, Claude 2.1.332 on Herdr 0.9.5:
+# empty 0.3 s after Enter, idle and mid-turn alike), which is why a Claude
+# submit gets no queued-Enter conversion. So `empty` needs a read of a cleared
+# composer; `pending` means it still shows
+# <text>, so the Enter may be retried; `unknown` means no read succeeded in
+# FM_COMPOSER_AFTER_ENTER_READS tries, or the composer shows other text, which
+# a retried Enter must not submit.
+FM_COMPOSER_AFTER_ENTER_READS=${FM_COMPOSER_AFTER_ENTER_READS:-3}
+fm_composer_claude_after_enter() {  # <content-fn> <target> <text> -> empty|pending|unknown
+  local content_fn=$1 target=$2 text=$3 i=0 content
+  while :; do
+    if content=$("$content_fn" "$target"); then
+      if fm_composer_payload_shown "$text" "$content"; then
+        printf 'pending'
+      elif [ -z "${content//[$' \t\r\n\v\f']/}" ]; then
+        printf 'empty'
+      else
+        printf 'unknown'
+      fi
+      return 0
+    fi
+    i=$((i + 1))
+    [ "$i" -lt "$FM_COMPOSER_AFTER_ENTER_READS" ] || { printf 'unknown'; return 0; }
+    sleep "$FM_COMPOSER_PROOF_INTERVAL"
+  done
+}
+
+# fm_composer_clear_presses: how many composer rows a refused composer may
+# occupy, bounding the Ctrl+U presses a verified clear may need. A literal
+# payload wraps, and clearing a multi-row leftover is one press per rendered
+# row (live Claude deletes one wrapped row per press).
+fm_composer_clear_presses() {  # <text>
+  local text=$1 lines
+  lines=$(( (${#text} / 40) + 8 ))
+  if [ "$lines" -lt "$FM_COMPOSER_CAPTURE_LINES" ]; then
+    lines=$FM_COMPOSER_CAPTURE_LINES
+  fi
+  if [ "$lines" -gt 200 ]; then
+    lines=200
+  fi
+  printf '%s' "$lines"
+}
+
+# fm_composer_clear: after a refused proof, press Ctrl+U through <key-fn>
+# until <content-fn> reads the composer as blank. Claude documents Ctrl+U as
+# delete-to-line-start, repeated across lines of a multiline draft; Ctrl+C is
+# not used because it interrupts a running turn. The check reads the
+# composer's content, not the classifier, which strips Claude's grey
+# slash-command text as a ghost and would call a held `/exit` cleared. A blank
+# read is read again FM_COMPOSER_CLEAR_RECHECKS times, FM_COMPOSER_CLEAR_SETTLE
+# seconds apart, because a starved Claude applies an early Ctrl+U before a
+# typed block still landing; text that lands then gets more presses. 0 only
+# when the composer is verified blank, within fm_composer_clear_presses presses.
+FM_COMPOSER_CLEAR_RECHECKS=${FM_COMPOSER_CLEAR_RECHECKS:-1}
+FM_COMPOSER_CLEAR_SETTLE=${FM_COMPOSER_CLEAR_SETTLE:-1}
+fm_composer_clear() {  # <key-fn> <content-fn> <target> <text>
+  local key_fn=$1 content_fn=$2 target=$3 text=$4 presses i=0 checks
+  presses=$(fm_composer_clear_presses "$text")
+  while [ "$i" -lt "$presses" ]; do
+    "$key_fn" "$target" C-u || return 1
+    i=$((i + 1))
+    _fm_composer_reads_blank "$content_fn" "$target" || continue
+    checks=0
+    while [ "$checks" -lt "$FM_COMPOSER_CLEAR_RECHECKS" ]; do
+      sleep "$FM_COMPOSER_CLEAR_SETTLE"
+      _fm_composer_reads_blank "$content_fn" "$target" || continue 2
+      checks=$((checks + 1))
+    done
+    return 0
+  done
+  return 1
+}
+
+_fm_composer_reads_blank() {  # <content-fn> <target>
+  local content
+  content=$("$1" "$2") || return 1
+  [ -z "${content//[$' \t\r\n\v\f']/}" ]
+}
+
 _fm_composer_classify_pi_rows() {  # <screen> <styled>
   local screen=$1 styled=$2 row raw content
   row=$((FM_COMPOSER_SCAN_PI_OPEN + 1))

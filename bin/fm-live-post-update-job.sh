@@ -20,6 +20,12 @@
 # the command's exit.
 set -u
 
+case "${1:-}" in
+  -h|--help)
+    echo "usage: fm-live-post-update-job.sh <record> <nonce> <head> <dir>"
+    exit 0
+    ;;
+esac
 if [ "$#" -ne 4 ]; then
   echo "usage: fm-live-post-update-job.sh <record> <nonce> <head> <dir>" >&2
   exit 2
