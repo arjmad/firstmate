@@ -17,6 +17,8 @@
 #     half-landing never reads done.
 #   - An existing landed_by URL no PR names is kept when gh reads it MERGED and
 #     dropped otherwise, and the id's status stays; nothing is un-stamped.
+#   - An id an --also audit file also holds is never stamped; the summary
+#     lists each one a PR named, with its PRs (the a7-05/a7-07 case).
 #   - --table writes the prior-status table from the stamped record, marking a
 #     kept hand URL (hand), with one row per approved id.
 #   - The search passes --merged and every --owner, and a window that fills
@@ -164,7 +166,7 @@ test_stamps_named_ids_and_is_idempotent() {
   setup "$dir"
   out=$(run_tool "$dir" "${WINDOW[@]}" "$dir/decisions.json" 2>&1) || fail "first run failed: $out"
   assert_contains "$out" "3 merged PR(s) searched; 5 id(s) named by one, 2 newly landed, 2 held at open-helm/open-captain" "summary counts: $out"
-  assert_contains "$out" "2 hand URL(s) kept, 1 unmerged URL(s) dropped; changed" "summary counts the hand URLs: $out"
+  assert_contains "$out" "2 hand URL(s) kept, 1 unmerged URL(s) dropped; 0 id(s) another audit shares left for the helm; changed" "summary counts the hand URLs: $out"
   printf '%s' '{
  "a1-01": {
   "decision": "do",
@@ -288,6 +290,43 @@ test_prior_status_table() {
   pass "landed-by: --table writes one prior-status row per approved id from the stamped record"
 }
 
+# The 2026-11-24 case: a7-05 and a7-07 restart in the next audit, whose PRs
+# name its own a7-05 and a7-07. Without --also they stamp the earlier audit;
+# with the later audit's decisions.json as --also they are left for the helm.
+test_also_leaves_shared_ids_for_the_helm() {
+  local dir="$TMP_ROOT/also" out before code=0
+  mkdir -p "$dir"
+  printf '%s\n' '[
+ {"day": "2026-11-26", "state": "merged", "url": "https://github.com/o/firstmate/pull/313",
+  "title": "feat(tasks-axi): responder-safe adds (audit a7-01, a7-05)", "body": ""},
+ {"day": "2026-11-26", "state": "merged", "url": "https://github.com/o/firstmate/pull/315",
+  "title": "feat(landing): covers lines (audit a7-07, a4-02)", "body": ""}
+]' >"$dir/prs.json"
+  printf '{}\n' >"$dir/states.json"
+  : >"$dir/gh.log"
+  printf '{\n  "a7-05": {\n    "status": "open"\n  },\n  "a7-07": {\n    "status": "open"\n  },\n  "a4-02": {\n    "status": "open"\n  }\n}\n' >"$dir/decisions.json"
+  printf '{\n  "a7-01": {},\n  "a7-05": {},\n  "a7-07": {}\n}\n' >"$dir/later.json"
+  cp "$dir/decisions.json" "$dir/fresh.json"
+
+  out=$(run_tool "$dir" --dry-run "${WINDOW[@]}" "$dir/decisions.json" 2>&1) || fail "run without --also failed: $out"
+  assert_contains "$out" "3 id(s) named by one, 3 newly landed" "without --also the later audit's PRs stamp every shared id: $out"
+
+  out=$(run_tool "$dir" "${WINDOW[@]}" --also "$dir/later.json" "$dir/decisions.json" 2>&1) || fail "run with --also failed: $out"
+  assert_contains "$out" "1 id(s) named by one, 1 newly landed" "only the unshared id is stamped: $out"
+  assert_contains "$out" "2 id(s) another audit shares left for the helm, a7-05 (https://github.com/o/firstmate/pull/313), a7-07 (https://github.com/o/firstmate/pull/315); changed" \
+    "the summary lists each shared id a PR named, with its PRs: $out"
+  printf '{\n  "a7-05": {\n    "status": "open"\n  },\n  "a7-07": {\n    "status": "open"\n  },\n  "a4-02": {\n    "status": "landed",\n    "landed_by": [\n      "https://github.com/o/firstmate/pull/315"\n    ]\n  }\n}\n' >"$dir/expected.json"
+  cmp -s "$dir/expected.json" "$dir/decisions.json" \
+    || fail "--also result differs:"$'\n'"$(diff "$dir/expected.json" "$dir/decisions.json")"
+
+  before=$(cksum <"$dir/fresh.json")
+  out=$(run_tool "$dir" "${WINDOW[@]}" --also "$dir/missing.json" "$dir/fresh.json" 2>&1) || code=$?
+  expect_code 1 "$code" "a missing --also file"
+  assert_contains "$out" "refused" "a missing --also file is a refusal: $out"
+  assert_equals "$before" "$(cksum <"$dir/fresh.json")" "a missing --also file leaves decisions.json untouched"
+  pass "landed-by: an id an --also audit shares is never stamped and is listed for the helm"
+}
+
 # expect_refusal <label> <needle> <dir> [env...] : exit 1, message, no write.
 expect_refusal() {
   local label=$1 needle=$2 dir=$3 before out code=0
@@ -349,5 +388,6 @@ fm_test_run \
   test_stamps_named_ids_and_is_idempotent \
   test_search_args_and_window_split \
   test_prior_status_table \
+  test_also_leaves_shared_ids_for_the_helm \
   test_refusals_leave_the_file_untouched \
   test_dry_run_and_usage

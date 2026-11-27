@@ -3,7 +3,7 @@
 
 Usage: fm-audit-landed-by.py [--dry-run] [--table <out.md>] --owner <owner>
          [--owner <owner>...] --since <YYYY-MM-DD> [--until <YYYY-MM-DD>]
-         <decisions.json>
+         [--also <other-decisions.json>...] <decisions.json>
 
 Inputs:
   <decisions.json>  the audit's per-id rulings: one JSON object keyed by
@@ -14,6 +14,12 @@ Inputs:
                     repeat it for more than one.
   --since, --until  the merge-date window to search, inclusive; --since is
                     the audit's start date, --until defaults to today (UTC).
+  --also            another audit's decisions.json; repeat it for more than
+                    one. Audits reuse some ids (the a7-NN run restarts each
+                    audit), so a PR naming a shared id may land the other
+                    audit's finding: an id any --also file also holds is
+                    never stamped, and the summary lists each one a PR
+                    named, with its PRs, for the helm to settle by hand.
 
 Source: every PR `gh search prs --merged --owner ... --merged-at
 <since>..<until>` returns whose state reads merged. A window that fills
@@ -44,7 +50,8 @@ Output: <decisions.json>, rewritten in place.
 
 Refusals (exit 1, nothing written): a decisions.json that is not an object
 of objects, or whose layout this tool cannot reproduce byte for byte (it
-never reformats a file), a landed_by that is not a list of PR URLs, a gh
+never reformats a file), a landed_by that is not a list of PR URLs, an
+--also file that is missing or not a JSON object, a gh
 search or view that fails, or a single day that alone fills gh's cap.
 A write error exits 1 too; decisions.json is written before the table, so a
 failed table write leaves decisions.json already stamped.
@@ -68,7 +75,8 @@ HELD_STATUSES = frozenset({"open-helm", "open-captain"})
 SEARCH_CAP = 1000
 USAGE = (
     "usage: fm-audit-landed-by.py [--dry-run] [--table <out.md>] --owner <owner> "
-    "[--owner <owner>...] --since <YYYY-MM-DD> [--until <YYYY-MM-DD>] <decisions.json>"
+    "[--owner <owner>...] --since <YYYY-MM-DD> [--until <YYYY-MM-DD>] "
+    "[--also <other-decisions.json>...] <decisions.json>"
 )
 
 
@@ -180,19 +188,21 @@ def approved(entry: dict) -> bool:
 
 def parse_args(argv: list[str]) -> dict | None:
     """The options, or None when --help asks for the usage text."""
-    opts: dict = {"dry_run": False, "table": None, "owners": [], "since": None, "until": None, "paths": []}
+    opts: dict = {"dry_run": False, "table": None, "owners": [], "also": [], "since": None, "until": None, "paths": []}
     it = iter(argv)
     for arg in it:
         if arg in ("-h", "--help"):
             return None
         if arg == "--dry-run":
             opts["dry_run"] = True
-        elif arg in ("--table", "--owner", "--since", "--until"):
+        elif arg in ("--table", "--owner", "--also", "--since", "--until"):
             value = next(it, None)
             if value is None:
                 raise Usage(f"{arg} needs a value")
             if arg == "--owner":
                 opts["owners"].append(value)
+            elif arg == "--also":
+                opts["also"].append(value)
             else:
                 opts[arg[2:]] = value
         elif arg.startswith("--"):
@@ -237,19 +247,30 @@ def main(argv: list[str]) -> int:
             urls = entry.get(FIELD, [])
             if not isinstance(urls, list) or not all(isinstance(u, str) and PR_URL.match(u) for u in urls):
                 raise Refusal(f"{decisions_path}: {fid}'s {FIELD} is not a list of PR URLs")
+        shared_ids: set[str] = set()
+        for other_path in opts["also"]:
+            with open(other_path, encoding="utf-8") as f:
+                try:
+                    other = json.load(f)
+                except json.JSONDecodeError as e:
+                    raise Refusal(f"{other_path}: not valid JSON: {e}") from None
+            if not isinstance(other, dict):
+                raise Refusal(f"{other_path}: not an object of per-id objects")
+            shared_ids |= set(other) & set(data)
 
-        merged = [p for p in search_merged(opts["owners"], opts["since"], opts["until"])
+        merged =[p for p in search_merged(opts["owners"], opts["since"], opts["until"])
                   if isinstance(p, dict) and str(p.get("state", "")).lower() == "merged"
                   and isinstance(p.get("url"), str) and PR_URL.match(p["url"])]
         merged_urls = {p["url"] for p in merged}
         named: dict[str, list[str]] = {}
+        shared: dict[str, list[str]] = {}
         for fid, entry in data.items():
             if not approved(entry):
                 continue
             rx = id_pattern(fid)
             hits = {p["url"] for p in merged if rx.search(f"{p.get('title') or ''}\n{p.get('body') or ''}")}
             if hits:
-                named[fid] = sorted(hits, key=url_key)
+                (shared if fid in shared_ids else named)[fid] = sorted(hits, key=url_key)
 
         view_cache: dict[str, bool] = {}
 
@@ -288,9 +309,11 @@ def main(argv: list[str]) -> int:
         out = json.dumps(data, indent=style["indent"], ensure_ascii=style["ensure_ascii"]) + style["trailing"]
         changed = out != raw
         verb = "would change" if opts["dry_run"] and changed else "changed" if changed else "unchanged"
+        left = "".join(f", {fid} ({' '.join(urls)})" for fid, urls in shared.items())
         print(
             f"landed_by: {len(merged)} merged PR(s) searched; {stamped} id(s) named by one, "
-            f"{newly} newly landed, {held} held at open-helm/open-captain; {kept} hand URL(s) kept, {dropped} unmerged URL(s) dropped; {verb}"
+            f"{newly} newly landed, {held} held at open-helm/open-captain; {kept} hand URL(s) kept, {dropped} unmerged URL(s) dropped; "
+            f"{len(shared)} id(s) another audit shares left for the helm{left}; {verb}"
         )
         if not opts["dry_run"]:
             if changed:
