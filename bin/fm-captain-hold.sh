@@ -46,6 +46,10 @@
 #   fm-captain-hold.sh reconcile close <task-id> --evidence-file <path>
 #   fm-captain-hold.sh reconcile note <task-id> --note-file <path>
 #
+# `-h`/`--help`, alone or as a subcommand's first argument, prints this text
+# and changes nothing. Every id is a privacy-safe slug that may not begin with
+# `-`, so a mistyped option is refused rather than recorded as an id.
+#
 # `hold` places an existing task under an active captain hold, or creates the
 # task first when no work item exists to hold (--title required to create; the
 # optional --origin records provenance in the new task's body and supplies the
@@ -412,6 +416,12 @@ usage() {
 case "${1:-}" in
   -h|--help) usage; exit 0 ;;
 esac
+# `<subcommand> --help` is answered here too, before anything reads or writes
+# state, so it can never be taken as an id (a stray `bind --help` once
+# recorded a binding named `--help`).
+case "${2:-}" in
+  -h|--help) usage; exit 0 ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -491,6 +501,7 @@ validate_slug() {  # <label> <value>
   local label=$1 value=$2
   case "$value" in
     ''|*[!A-Za-z0-9._-]*) fail "$label must be a non-empty privacy-safe slug: $value" ;;
+    -*) fail "$label must not begin with '-' (an option is not an id): $value" ;;
   esac
 }
 
