@@ -381,9 +381,10 @@ fm_tmux_submit_busy_harness() {  # <target>
 
 # fm_tmux_pane_is_claude: true when the pane's FOREGROUND process group runs
 # Claude Code. Its process name carries `claude` (`claude` for the native
-# binary, `.claude-wrapped` under a Nix wrapper, verified 2.1.332), the same
-# family match bin/fm-agent-process-lib.sh uses for liveness. A pane whose
-# agent exited to a shell gets no Claude proof.
+# binary, `.claude-wrapped` under a Nix wrapper, verified 2.1.332). It matches
+# the process name only: bin/fm-agent-process-lib.sh also falls back to the
+# binary's path for a version-named Claude, which no fleet tmux launch runs. A
+# pane whose agent exited to a shell gets no Claude proof.
 fm_tmux_pane_is_claude() {  # <target>
   local target=$1 tty pgid tpgid comm
   tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 1
