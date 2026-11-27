@@ -2059,7 +2059,7 @@ test_detached_launch_lock_defers_then_is_taken_over() {
   advance_origin "$home" locked C1
   rec="$home/state/live-checkouts/$(printf '%s' "$(cd "$live" && pwd -P)" | git hash-object --stdin)"
   mkdir "$rec.job.lock"
-  echo 999999 > "$rec.job.lock/pid"
+  echo another-run > "$rec.job.lock/nonce"
   out=$(FM_LIVE_POST_UPDATE_LAUNCHCTL=none FM_LIVE_POST_UPDATE_POLL_SECS=0.1 run_sync "$home" locked)
   assert_contains "$out" "locked live $live: activating: post-update command already running (pid starting, since " \
     "a reservation whose sync is gone still holds until the start bound, since its runner may yet start"
@@ -2070,6 +2070,29 @@ test_detached_launch_lock_defers_then_is_taken_over() {
   [ ! -e "$rec.job.lock" ] || fail "the launch lock is released once the run is up"
   assert_equals 1 "$(runs_of "$home/runs-locked")" "the command ran once"
   pass "a launch reservation defers the launch as activating until the start bound, and a stale one is taken over"
+}
+
+test_detached_runner_that_starts_too_late_runs_nothing() {
+  local home rec
+  home=$(isolated_home)
+  rec="$home/rec"
+  mkdir -p "$home/co"
+  printf '%s\n' "echo ran >> '$home/late-runs'" > "$rec.job.cmd"
+  printf 'declare -x FM_DETACH_TEST_MARK="x"\n' > "$rec.job.env"
+  bash "$ROOT/bin/fm-live-post-update-job.sh" "$rec" late-nonce h1 "$home/co"
+  assert_equals 0 "$(runs_of "$home/late-runs")" "a runner with no reservation runs nothing"
+  [ ! -e "$rec.job" ] && [ ! -e "$rec.running" ] || fail "a runner with no reservation writes no receipt or running record"
+  [ -e "$rec.job.env" ] || fail "a runner with no reservation leaves another run's inputs alone"
+  mkdir "$rec.job.lock"
+  echo other-nonce > "$rec.job.lock/nonce"
+  bash "$ROOT/bin/fm-live-post-update-job.sh" "$rec" late-nonce h1 "$home/co"
+  assert_equals 0 "$(runs_of "$home/late-runs")" "a runner whose reservation another run took over runs nothing"
+  echo late-nonce > "$rec.job.lock/nonce"
+  bash "$ROOT/bin/fm-live-post-update-job.sh" "$rec" late-nonce h1 "$home/co"
+  assert_equals 1 "$(runs_of "$home/late-runs")" "the reserved run runs"
+  [ ! -e "$rec.job.lock" ] || fail "the reserved run releases its reservation"
+  assert_contains "$(cat "$rec.job")" "finished late-nonce h1 0 " "and writes its receipt"
+  pass "a detached runner whose reservation is gone or another run's starts too late and runs nothing"
 }
 
 # wait_for_receipt <live> <home>: wait until the checkout's detached run wrote its receipt.
@@ -2165,6 +2188,7 @@ test_detached_post_update_uses_a_launchd_one_shot
 test_detached_post_update_follow_is_bounded
 test_detached_first_sighting_killed_then_failed_is_retried
 test_detached_launch_lock_defers_then_is_taken_over
+test_detached_runner_that_starts_too_late_runs_nothing
 test_scheduled_stuck_episode_wakes_once
 test_running_post_update_reports_activating
 test_foreign_live_activation_reports_activating

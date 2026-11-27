@@ -218,6 +218,19 @@ test_edits_waiting_for_the_scheduled_capture_still_land() {
     "the outcome says the checkout catches up after the next scheduled capture"
   assert_absent "$c/home/state/$ID.meta" "the record is closed"
   c=$(new_case)
+  printf '%s\n' "nova live ~/code/agents/nova: settle held: skills/b.md is still uncommitted, so the checkout cannot fast-forward yet; kept 0 settled path(s) at origin/main's text" \
+    "nova live ~/code/agents/nova: synced 578fdf1..873e7a5; 1 uncommitted path(s) under skills/, none changed by origin, wait for the scheduled capture" \
+    "nova live ~/code/agents/nova: post-update command ran at 873e7a5" > "$c/sync-out"
+  land "$c" "$URL"
+  assert_equals 0 "$RC" "a checkout that fast-forwarded under newer edits finishes the land: $OUT"
+  assert_contains "$OUT" "landed: $URL; nova's live checkout is synced, and its newer edits wait for the scheduled capture" \
+    "the outcome says it is synced with edits still waiting"
+  c=$(new_case)
+  printf '%s\n' "$waiting" \
+    "nova live ~/code/agents/nova: activating: post-update command already running (pid 42, since 2026-11-27T20:00:00Z); the next sync runs it for 873e7a5 if it still needs to" > "$c/sync-out"
+  land "$c" "$URL"
+  assert_equals 0 "$RC" "a post-update still running beside waiting edits does not make the land unfinished: $OUT"
+  c=$(new_case)
   printf '%s\n' "nova live ~/code/agents/nova: STUCK: cron/skill-capture.sh --settle failed (exit 1) - needs attention" "$waiting" > "$c/sync-out"
   land "$c" "$URL"
   assert_equals 3 "$RC" "a failed settle stays unfinished beside waiting edits"

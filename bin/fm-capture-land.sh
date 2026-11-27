@@ -197,15 +197,21 @@ SYNC_OUT=$("$SCRIPT_DIR/fm-fleet-sync.sh" --settle-capture "$PROJECTS/$PROJECT" 
 # every other outcome (STUCK, a skip, edits still pending capture) is unfinished.
 # A capture-start=off checkout whose newer edits wait for its scheduled capture
 # also counts: the settle kept the landed paths at origin's text ("settle held"),
-# and the checkout fast-forwards once that scheduled capture lands.
+# and the checkout fast-forwards once that scheduled capture lands, or already
+# fast-forwarded under those edits ("synced ...; ... wait for the scheduled
+# capture"); a post-update run still going there reads "activating:".
 LIVE_LINES=$(printf '%s\n' "$SYNC_OUT" | grep -F "$PROJECT live " || true)
 OK_LINES='synced|already current|recovered|settled|post-update command ran|fetch succeeded'
 WENT_LIVE='synced|already current|recovered'
 WAITING=no
 if printf '%s\n' "$LIVE_LINES" | grep -q ': live edits wait for the scheduled capture: '; then
-  OK_LINES="$OK_LINES|settle held|live edits wait for the scheduled capture"
-  WENT_LIVE="$WENT_LIVE|live edits wait for the scheduled capture"
   WAITING=yes
+elif printf '%s\n' "$LIVE_LINES" | grep -Eq ': synced [^ ;]+; .*, wait for the scheduled capture$'; then
+  WAITING=synced
+fi
+if [ "$WAITING" != no ]; then
+  OK_LINES="$OK_LINES|settle held|live edits wait for the scheduled capture|activating: post-update command already running"
+  WENT_LIVE="$WENT_LIVE|live edits wait for the scheduled capture"
 fi
 if [ -z "$LIVE_LINES" ] \
   || printf '%s\n' "$LIVE_LINES" | grep -Evq ": ($OK_LINES)" \
@@ -228,6 +234,8 @@ if [ -e "$META" ]; then
 fi
 if [ "$RC" = 0 ] && [ "$WAITING" = yes ]; then
   echo "landed: $URL; $PROJECT's live checkout keeps the landed paths at origin's text and fast-forwards once the scheduled capture of its newer edits lands"
+elif [ "$RC" = 0 ] && [ "$WAITING" = synced ]; then
+  echo "landed: $URL; $PROJECT's live checkout is synced, and its newer edits wait for the scheduled capture"
 elif [ "$RC" = 0 ]; then
   echo "landed: $URL; $PROJECT's live checkout is settled and synced"
 fi

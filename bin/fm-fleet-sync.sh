@@ -79,7 +79,8 @@
 # where launchd cannot take it, in its own session. bin/fm-live-post-update-job.sh
 # is the job: it runs the command with the sync's exported environment, from the
 # checkout, holds the same running record, and ends by writing the receipt
-# state/live-checkouts/<key>.job ("finished <nonce> <head> <exit> <time>") beside
+# state/live-checkouts/<key>.job ("finished <nonce> <head> <exit> <time>", the
+# last 10 runs' lines, newest last) beside
 # its output in <key>.job.log. The sync follows that receipt to the end and
 # reports it as an inline run, the job's log standing in for its output; a run
 # that has not started within FM_LIVE_POST_UPDATE_START_SECS (default 60), or
@@ -1354,13 +1355,19 @@ detach_submit() {
   DETACH_VIA=session
 }
 
-# detach_receipt <record>: load <record>.job into RECEIPT_NONCE, RECEIPT_HEAD
-# and RECEIPT_RC; false when there is none.
+# detach_receipt <record> [<nonce>]: load the newest line of <record>.job, or
+# the line of run <nonce>, into RECEIPT_HEAD and RECEIPT_RC;
+# false when there is none.
 detach_receipt() {
-  local word
-  RECEIPT_NONCE="" RECEIPT_HEAD="" RECEIPT_RC=""
+  local word line
+  RECEIPT_HEAD="" RECEIPT_RC=""
   [ -f "$1.job" ] || return 1
-  read -r word RECEIPT_NONCE RECEIPT_HEAD RECEIPT_RC _ 2>/dev/null < "$1.job" || return 1
+  if [ -n "${2:-}" ]; then
+    line=$(grep -F "finished $2 " "$1.job" 2>/dev/null | tail -n 1)
+  else
+    line=$(tail -n 1 "$1.job" 2>/dev/null)
+  fi
+  read -r word _ RECEIPT_HEAD RECEIPT_RC _ <<< "$line"
   [ "$word" = finished ] && [ -n "$RECEIPT_RC" ]
 }
 
@@ -1375,7 +1382,7 @@ detach_follow() {
   DETACH_RC="" DETACH_WHY=""
   deadline=$(( $(date +%s) + DETACH_START_SECS ))
   while :; do
-    if detach_receipt "$record" && [ "$RECEIPT_NONCE" = "$nonce" ]; then
+    if detach_receipt "$record" "$nonce"; then
       DETACH_RC=$RECEIPT_RC
       return 0
     fi
@@ -1386,7 +1393,7 @@ detach_follow() {
           *) [ $(( $(date +%s) - RUNNING_STARTED )) -le "$POST_UPDATE_STUCK_SECS" ] || return 2 ;;
         esac
       else
-        if detach_receipt "$record" && [ "$RECEIPT_NONCE" = "$nonce" ]; then
+        if detach_receipt "$record" "$nonce"; then
           DETACH_RC=$RECEIPT_RC
           return 0
         fi
@@ -1401,7 +1408,8 @@ detach_follow() {
   done
 }
 
-# detach_lock <record>: take the checkout's launch reservation,
+# detach_lock <record> <nonce>: take the checkout's launch reservation for run
+# <nonce> (its nonce file names the one run allowed to start),
 # <record>.job.lock, from before the job's files are written until its runner
 # is up: the runner removes it once it has read them and written its running
 # record, so it outlives a sync killed mid-launch and a second sync never
@@ -1413,7 +1421,7 @@ detach_lock() {
   local since
   DETACH_LOCK="$1.job.lock"
   if mkdir "$DETACH_LOCK" 2>/dev/null; then
-    echo "$$" > "$DETACH_LOCK/pid" 2>/dev/null || true
+    echo "$2" > "$DETACH_LOCK/nonce" 2>/dev/null || true
     return 0
   fi
   since=$(fm_lock_path_mtime "$DETACH_LOCK" 2>/dev/null) || since=""
@@ -1423,7 +1431,7 @@ detach_lock() {
       if [ $(( $(date +%s) - since )) -gt "$DETACH_START_SECS" ]; then
         rm -rf "$DETACH_LOCK"
         if mkdir "$DETACH_LOCK" 2>/dev/null; then
-          echo "$$" > "$DETACH_LOCK/pid" 2>/dev/null || true
+          echo "$2" > "$DETACH_LOCK/nonce" 2>/dev/null || true
           return 0
         fi
       fi
@@ -1454,7 +1462,7 @@ run_detached_post_update() {
   head=$(git -C "$PROJ" rev-parse HEAD 2>/dev/null) || head=unknown
   nonce="$(date +%s).$$.${RANDOM:-0}"
   output="$record.job.log"
-  detach_lock "$record" || return 0
+  detach_lock "$record" "$nonce" || return 0
   # Checked again under the lock: another sync's run may have started, or
   # finished for this HEAD, since run_post_update looked.
   if post_update_still_running "$record.running"; then

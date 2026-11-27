@@ -14,7 +14,10 @@
 # ends it writes the receipt <record>.job, one line
 #   finished <nonce> <head> <exit> <UTC time>
 # and only then removes <record>.running, so a follower that sees the run gone
-# finds its receipt. It always exits 0: the receipt carries the command's exit.
+# finds its receipt; the receipt keeps the last 10 runs' lines, newest last. A
+# run whose nonce is not the one <record>.job.lock/nonce holds started too late
+# and exits at once, running nothing. It always exits 0: the receipt carries
+# the command's exit.
 set -u
 
 if [ "$#" -ne 4 ]; then
@@ -23,11 +26,20 @@ if [ "$#" -ne 4 ]; then
 fi
 __fm_job_record=$1 __fm_job_nonce=$2 __fm_job_head=$3 __fm_job_dir=$4
 
+# The receipt keeps the last few runs' lines, newest last, so a sync following
+# one run still finds its own line after another sync's retry has finished.
 __fm_job_receipt() {
   local tmp="$__fm_job_record.job.tmp.$$"
-  printf 'finished %s %s %s %s\n' "$__fm_job_nonce" "$__fm_job_head" "$1" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp" \
+  { tail -n 9 "$__fm_job_record.job" 2>/dev/null
+    printf 'finished %s %s %s %s\n' "$__fm_job_nonce" "$__fm_job_head" "$1" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; } > "$tmp" \
     && mv -f "$tmp" "$__fm_job_record.job"
 }
+
+# A run whose sync gave up on it, or whose reservation another sync has since
+# taken over, starts too late: it touches nothing and runs nothing.
+__fm_job_owner=""
+read -r __fm_job_owner < "$__fm_job_record.job.lock/nonce" 2>/dev/null || __fm_job_owner=""
+[ "$__fm_job_owner" = "$__fm_job_nonce" ] || exit 0
 
 if ! __fm_job_cmd=$(cat "$__fm_job_record.job.cmd" 2>/dev/null) || [ -z "$__fm_job_cmd" ]; then
   echo "fm-live-post-update-job: no command at $__fm_job_record.job.cmd" > "$__fm_job_record.job.log"
