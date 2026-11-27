@@ -320,28 +320,41 @@ hand_up_to_parent() {  # <id> <kind> <title> <why> <from> <repo> <evidence> <cal
 # title, why and evidence. A test file matches by its file name, so
 # `tests/x.test.sh` and `x.test.sh` meet; any other file needs a directory
 # (`docs/a.md`, matched as written), because a bare `README.md` names nothing
-# in particular. URLs and domain names are not paths.
-named_paths() {  # <text>
-  printf '%s\n' "$1" | grep -oE '[A-Za-z0-9_./-]+\.[A-Za-z][A-Za-z0-9]{0,7}' | awk '
-    /^\/\// || /^www\./ { next }
+# in particular. URLs and domain names are not paths. Reads lines on stdin and
+# prints `<line number><TAB><path>` once per path a line names; a listing's
+# escaped `\n` counts as a break.
+path_keys() {
+  awk '
     {
-      sub(/^\.\//, "")
-      base = $0; sub(/.*\//, "", base)
-      if (base ~ /\.(com|org|net|io|dev|ai|app)$/) next
-      if (base ~ /(^test_|[._-]test\.|^test\.)/) key = base
-      else if (index($0, "/") > 1) key = $0
-      else next
-      if (!(key in seen)) { seen[key] = 1; print key }
+      line = $0; gsub(/\\n/, " ", line); split("", seen)
+      while (match(line, /[A-Za-z0-9_.\/-]+\.[A-Za-z][A-Za-z0-9]*/)) {
+        tok = substr(line, RSTART, RLENGTH); line = substr(line, RSTART + RLENGTH)
+        if (tok ~ /^\/\// || tok ~ /^www\./) continue
+        sub(/^\.\//, "", tok)
+        base = tok; sub(/.*\//, "", base)
+        ext = base; sub(/.*\./, "", ext)
+        if (length(ext) > 8 || ext ~ /^(com|org|net|io|dev|ai|app)$/) continue
+        if (base ~ /(^test_|[._-]test\.|^test\.)/) key = base
+        else if (index(tok, "/") > 1) key = tok
+        else continue
+        if (!(key in seen)) { seen[key] = 1; print NR "\t" key }
+      }
     }'
+}
+
+named_paths() {  # <text>
+  printf '%s\n' "$1" | path_keys | cut -f2 | awk '!seen[$0]++'
 }
 
 # similar_hint <kind> <new-id> <repo> <text>: after a new filing, name on
 # stderr at most three other open rows of the same kind and repo whose text
 # names one of the same paths (named_paths), so the filer can fold the new row
 # into one by hand. Read-only and best effort: it never merges, never changes
-# the exit status or stdout, and a failed read prints nothing.
+# the exit status or stdout, and a failed read prints nothing. It reads each
+# row as `tasks-axi list` shows it, so a path cited only past the listing's
+# body cut is missed.
 similar_hint() {
-  local kind=$1 id=$2 repo=$3 paths listing hits key state
+  local kind=$1 id=$2 repo=$3 paths listing rows hits state
   [ -n "$repo" ] || return 0
   paths=$(named_paths "$4") || return 0
   [ -n "$paths" ] || return 0
@@ -349,13 +362,16 @@ similar_hint() {
   for state in queued in_flight; do
     listing="$listing$("$TASKS" list --state "$state" --kind "$kind" --repo "$repo" --fields body --limit 1000000 2>/dev/null)"$'\n' || return 0
   done
-  hits=$(while IFS= read -r key; do
-    printf '%s\n' "$listing" | grep -F -- "$key" | awk -F , -v key="$key" -v self="$id" '
-      /^  "?[A-Za-z0-9]/ { rid = substr($1, 3); gsub(/"/, "", rid); if (rid != self) print rid "\t" key }'
-  done <<EOF
-$paths
-EOF
-  )
+  # One row per line; a path matches only as a whole path, never inside a
+  # longer one.
+  rows=$(printf '%s\n' "$listing" | grep -E '^  "?[A-Za-z0-9]') || return 0
+  hits=$(printf '%s\n' "$rows" | path_keys | PATHS="$paths" ROWS="$rows" awk -F '\t' -v self="$id" '
+    BEGIN {
+      n = split(ENVIRON["PATHS"], p, "\n"); for (i = 1; i <= n; i++) if (p[i] != "") want[p[i]] = 1
+      m = split(ENVIRON["ROWS"], r, "\n")
+      for (i = 1; i <= m; i++) { rid = r[i]; sub(/^  /, "", rid); sub(/,.*/, "", rid); gsub(/"/, "", rid); ids[i] = rid }
+    }
+    ($2 in want) && ids[$1] != self { print ids[$1] "\t" $2 }')
   [ -n "$hits" ] || return 0
   printf '%s\n' "$hits" | awk -F '\t' -v id="$id" -v kind="$kind" '
     !($1 in seen) { seen[$1] = 1; n++; if (n <= 3) printf "fm-noticed: similar: %s also names %s\n", $1, $2 }

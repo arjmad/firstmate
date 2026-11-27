@@ -601,6 +601,15 @@ test_a_new_row_naming_a_known_path_gets_a_similar_hint() {
     "a test named by file name did not meet the row naming its path"
   assert_grep "nothing was merged" "$home/hint.err" "the hint did not say how to fold the row by hand"
   ! grep -q 'noticed-doc-drift' "$home/hint.err" || fail "a row naming another path was hinted"
+  # A path inside a longer one is a different file.
+  noticed "$home" file noticed doc-backup --title "Backup copy stale" --why "y" --from t2 --repo firstmate \
+    --evidence "other/docs/scripts.md and docs/scripts.md.bak" > /dev/null 2> "$home/longer.err" \
+    || fail "the longer-path filing failed"
+  ! grep -q 'noticed-doc-drift' "$home/longer.err" || fail "a longer path was hinted as the same file: $(cat "$home/longer.err")"
+  noticed "$home" file noticed doc-again --title "Scripts row wrong" --why "y" --from t2 --repo firstmate \
+    --evidence "see docs/scripts.md" > /dev/null 2> "$home/same.err" || fail "the same-path filing failed"
+  assert_grep "similar: noticed-doc-drift also names docs/scripts.md" "$home/same.err" \
+    "a row naming the same directory path was not hinted"
   tasks "$home" show noticed-sync-timeout --full | grep -q 'Seen again' \
     && fail "the hint merged evidence into the earlier row"
   # Another repo, a bare README.md, or no --repo gives no hint.
