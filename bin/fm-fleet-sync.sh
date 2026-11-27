@@ -95,9 +95,13 @@
 # capture-start=off keeps the entry a capture project - bin/fm-capture-land.sh
 # still lands its PRs and the sync still runs "<command> --settle" - but the
 # sync never starts <command>: its own scheduled job does. A checkout held
-# only by edits under <dir>/ that is at or behind origin/<default> reports "live
-# edits wait for the scheduled capture: ..." (behind it, ending "; fast-forwards
-# once it lands"), which wakes no one; one ahead of it or diverged is STUCK.
+# only by edits under <dir>/ that is strictly behind origin/<default>, where
+# origin changed none of the edited paths since HEAD, fast-forwards under the
+# edits ("synced ...; ... wait for the scheduled capture") and runs its
+# post-update command. One at origin/<default>, or behind it where origin
+# changed an edited path, reports "live edits wait for the scheduled capture:
+# ..." (behind it, ending "; fast-forwards once it lands"), which wakes no one;
+# one ahead of it or diverged is STUCK.
 # capture-start=sync, the default, is the behavior above. Either value needs a
 # capture= on the same line.
 # The single-project form syncs the entries for that project name; the whole-fleet
@@ -679,19 +683,52 @@ report_capture_held() {
   fi
 }
 
-# report_capture_waiting: report a capture-start=off checkout held only by
-# edits under its capture dir. Its own scheduled job captures them, so at or
-# behind origin/<default> they only wait for that capture to land, whose settle
-# then fast-forwards it: informational. Ahead of it or diverged, it is STUCK.
+# capture_paths_overlap_origin: true when origin/<default> changed, since HEAD,
+# a path in CAPTURE_PATHS, or a directory holding one or a path inside one, so a
+# fast-forward could touch a live edit; also true when that diff is unreadable.
+capture_paths_overlap_origin() {
+  local changed dirty list
+  list=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-sync-changed.XXXXXX" 2>/dev/null) || return 0
+  if ! git -C "$PROJ" diff -z --name-only --no-renames HEAD "$BASE" > "$list" 2>/dev/null; then
+    rm -f "$list"
+    return 0
+  fi
+  while IFS= read -r -d '' changed; do
+    for dirty in "${CAPTURE_PATHS[@]}"; do
+      case "$changed" in "$dirty" | "$dirty"/*) rm -f "$list"; return 0 ;; esac
+      case "$dirty" in "$changed"/*) rm -f "$list"; return 0 ;; esac
+    done
+  done < "$list"
+  rm -f "$list"
+  return 1
+}
+
+# report_capture_waiting: handle a capture-start=off checkout held only by edits
+# under its capture dir. Its own scheduled job captures them. Strictly behind
+# origin/<default> with no edited path among the paths origin changed since
+# HEAD, it fast-forwards under the edits (git merge --ff-only), prints the
+# ordinary "synced" line and sets FF_CURRENT=yes so the post-update command
+# runs; the edits stay for the capture. At origin/<default>, or behind it with
+# an overlapping path or a fast-forward git refuses, the edits only wait for
+# that capture to land, whose settle then fast-forwards it: informational.
+# Ahead of it or diverged, it is STUCK.
 report_capture_waiting() {
-  local behind
+  local behind before after
   if git -C "$PROJ" merge-base --is-ancestor HEAD "$BASE" 2>/dev/null \
       && behind=$(git -C "$PROJ" rev-list --count "HEAD..$BASE" 2>/dev/null); then
     if [ "$behind" = 0 ]; then
       echo "$label: live edits wait for the scheduled capture: $CAPTURE_COUNT uncommitted path(s) under $CAPTURE_DIR only, 0 commits behind $BASE"
-    else
-      echo "$label: live edits wait for the scheduled capture: $CAPTURE_COUNT uncommitted path(s) under $CAPTURE_DIR only, $behind commits behind $BASE; fast-forwards once it lands"
+      return 0
     fi
+    if ! capture_paths_overlap_origin \
+        && before=$(git -C "$PROJ" rev-parse --short HEAD 2>/dev/null) \
+        && git -C "$PROJ" merge --ff-only --quiet "$BASE" >/dev/null 2>&1 \
+        && after=$(git -C "$PROJ" rev-parse --short HEAD 2>/dev/null); then
+      FF_CURRENT=yes
+      echo "$label: synced $before..$after; $CAPTURE_COUNT uncommitted path(s) under $CAPTURE_DIR, none changed by origin, wait for the scheduled capture"
+      return 0
+    fi
+    echo "$label: live edits wait for the scheduled capture: $CAPTURE_COUNT uncommitted path(s) under $CAPTURE_DIR only, $behind commits behind $BASE; fast-forwards once it lands"
   else
     report_stuck "$(stuck_state)"
   fi
@@ -953,7 +990,9 @@ sync_project() {
 
 # fast_forward_clone <prune yes|no>: fetch $PROJ's origin and fast-forward its
 # default branch when safe, printing one outcome line under $label. Sets
-# FF_CURRENT=yes only when the clone ends cleanly on its default branch at origin.
+# FF_CURRENT=yes only when the clone ends on its default branch at origin:
+# cleanly, or, for a capture-start=off live checkout, under live edits origin
+# did not touch (report_capture_waiting).
 fast_forward_clone() {
   local prune_mode=$1
   FF_CURRENT=no

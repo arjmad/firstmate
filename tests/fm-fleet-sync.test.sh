@@ -1242,11 +1242,15 @@ test_capture_start_off_waits_for_the_scheduled_capture() {
 
   advance_origin "$home" nova C1
   run_scheduled "$home"
+  assert_contains "$(cat "$log")" \
+    "nova live $live: synced " \
+    "edits origin never touched let the checkout fast-forward"
+  assert_equals "$(head_sha "$live")" "$(git -C "$home/work-nova" rev-parse HEAD)" "the checkout fast-forwarded under the edits"
   run_scheduled "$home"
   assert_equals 0 "$(runs_of "$home/captures-nova")" "falling behind origin starts no capture either"
   assert_contains "$(cat "$log")" \
-    "nova live $live: live edits wait for the scheduled capture: 1 uncommitted path(s) under skills/ only, 1 commits behind origin/main; fast-forwards once it lands" \
-    "edits behind origin wait for the scheduled capture"
+    "nova live $live: live edits wait for the scheduled capture: 1 uncommitted path(s) under skills/ only, 0 commits behind origin/main" \
+    "after the fast-forward the edits wait at origin"
   assert_not_contains "$(cat "$log")" "STUCK" "a checkout behind origin with waiting edits is not STUCK"
   [ ! -e "$pending" ] || fail "a checkout behind origin with waiting edits must not wake firstmate: $(cat "$pending")"
 
@@ -1274,7 +1278,61 @@ test_capture_start_off_waits_for_the_scheduled_capture() {
   live_config "$home" "nova $live capture-start=off"
   out=$(run_sync "$home" nova)
   assert_contains "$out" "live-checkouts: skipped: line 1 capture-start= needs a capture= entry" "capture-start= without capture= is refused"
-  pass "a capture-start=off checkout never starts its capture and waits for it without a wake, behind origin too"
+  pass "a capture-start=off checkout never starts its capture and waits for it without a wake, fast-forwarding under edits origin never touched"
+}
+
+# sapna-74: a capture-start=off checkout behind origin fast-forwards under live
+# edits origin did not touch and runs its post-update command once, but keeps
+# today's wait when origin changed an edited path, tracked or untracked.
+test_capture_start_off_fast_forwards_unless_paths_overlap() {
+  local home live cmd out deploys
+  home=$(new_home)
+  live=$(build_capture_live "$home" cade)
+  cmd="$home/capture-cade.sh"
+  deploys="$home/cade-deploys"
+  live_config "$home" "cade $live capture=skills/:$cmd capture-start=off echo deployed >> '$deploys'"
+  run_sync "$home" cade >/dev/null
+  printf 'live edit\n' >> "$live/skills/a.md"
+  printf 'new live skill\n' > "$live/skills/new.md"
+
+  advance_origin "$home" cade C1
+  out=$(run_sync "$home" cade)
+  assert_contains "$out" "cade live $live: synced " "a checkout behind origin with untouched edits fast-forwards"
+  assert_contains "$out" "2 uncommitted path(s) under skills/, none changed by origin, wait for the scheduled capture" \
+    "the synced line says the edits still wait for the capture"
+  assert_contains "$out" "cade live $live: post-update command ran" "the post-update command runs after that fast-forward"
+  assert_equals "$(head_sha "$live")" "$(git -C "$home/work-cade" rev-parse HEAD)" "the checkout is at origin"
+  assert_equals 1 "$(runs_of "$deploys")" "post-update ran once"
+  assert_contains "$(cat "$live/skills/a.md")" "live edit" "the tracked live edit is preserved"
+  assert_equals "new live skill" "$(cat "$live/skills/new.md")" "the untracked live file is preserved"
+  assert_equals 0 "$(runs_of "$home/captures-cade")" "no capture started"
+
+  out=$(run_sync "$home" cade)
+  assert_contains "$out" "0 commits behind origin/main" "a second sync finds it at origin, still waiting"
+  assert_equals 1 "$(runs_of "$deploys")" "post-update does not rerun for the same HEAD"
+
+  printf 'origin text\n' > "$home/work-cade/skills/new.md"
+  git -C "$home/work-cade" add skills/new.md
+  git -C "$home/work-cade" commit -qm "origin adds the file the live tree holds untracked"
+  git -C "$home/work-cade" push -q origin main
+  out=$(run_sync "$home" cade)
+  assert_contains "$out" \
+    "cade live $live: live edits wait for the scheduled capture: 2 uncommitted path(s) under skills/ only, 1 commits behind origin/main; fast-forwards once it lands" \
+    "origin adding an untracked live path keeps the wait"
+  assert_equals "new live skill" "$(cat "$live/skills/new.md")" "the untracked live file is untouched"
+
+  rm -f "$live/skills/new.md"
+  git -C "$home/work-cade" rm -q skills/new.md
+  commit_file "$home/work-cade" skills/a.md "origin's own text" "origin edits the live-edited skill"
+  git -C "$home/work-cade" push -q origin main
+  out=$(run_sync "$home" cade)
+  assert_contains "$out" \
+    "cade live $live: live edits wait for the scheduled capture: 1 uncommitted path(s) under skills/ only, 2 commits behind origin/main; fast-forwards once it lands" \
+    "origin changing a tracked live-edited path keeps the wait"
+  assert_contains "$(cat "$live/skills/a.md")" "live edit" "the tracked live edit is untouched"
+  assert_equals 1 "$(runs_of "$deploys")" "no post-update ran while it waits"
+  assert_not_contains "$out" "STUCK" "a waiting checkout is not STUCK"
+  pass "a capture-start=off checkout fast-forwards under edits origin did not touch, and waits when paths overlap"
 }
 
 test_settle_capture_runs_for_capture_start_off() {
@@ -1835,6 +1893,7 @@ test_failed_capture_surfaces_when_edits_change
 test_current_capture_edits_pend_without_a_wake
 test_open_capture_pr_pends_instead_of_stuck
 test_capture_start_off_waits_for_the_scheduled_capture
+test_capture_start_off_fast_forwards_unless_paths_overlap
 test_settle_capture_runs_for_capture_start_off
 test_capture_merged_elsewhere_settles_and_fast_forwards
 test_merged_elsewhere_settle_keeps_unlanded_edits
