@@ -296,7 +296,9 @@
 # reads it, and a body that could not be read is customer-visible too (audit
 # a4-15). Once its door gate passes, such a PR is refused without
 # --captain-approval-file, under any posture: standing yolo never supplies the
-# flag, and while away it is refused, so the PR waits for the captain.
+# flag, and while away it is refused, so the PR waits for the captain. When
+# such a PR is also a one-way door, its hold reason says the merge passes
+# --captain-approval-file too, so one captain answer covers both flags.
 #
 # Branch standing merges (fork patch, docs/fork-decisions.md 2026-10-27): while
 # attended, the supervision branch actor merges only the class Arjun named for
@@ -2258,6 +2260,9 @@ require_door_authority() {
     return 1
   fi
   reason="One-way door PR $URL needs your explicit word to merge; blast radius: $blast"
+  # One answer covers a customer-visible sites PR's preview too (see the header).
+  [ -n "$CAPTAIN_APPROVAL_FILE" ] || ! pr_is_customer_visible_sites \
+    || reason="$reason; it also changes what a customer sees, so his yes covers its Visual review preview and the merge passes --captain-approval-file too"
   fm_lock_release "$MERGE_CONTROL_LOCK" || true
   MERGE_CONTROL_LOCK=
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
@@ -2301,13 +2306,16 @@ pr_body_visual_review_none() {
 # The customer-visible gate (see the header's captain-approval paragraph), run
 # right after the door gate on GitHub. FM_PR_BODY is the body the live verify
 # read; a body that could not be read is customer-visible.
-require_visual_review_approval() {
+# True for an arjmad/sites PR whose body does not say `Visual review: none`.
+pr_is_customer_visible_sites() {
   local repo
   repo=$(printf '%s/%s/%s' "$PR_HOST" "$PR_OWNER" "$PR_REPO" | tr '[:upper:]' '[:lower:]')
-  [ "$repo" = github.com/arjmad/sites ] || return 0
-  if [ "$FM_PR_BODY_READ" = true ] && printf '%s\n' "$FM_PR_BODY" | pr_body_visual_review_none; then
-    return 0
-  fi
+  [ "$repo" = github.com/arjmad/sites ] || return 1
+  ! { [ "$FM_PR_BODY_READ" = true ] && printf '%s\n' "$FM_PR_BODY" | pr_body_visual_review_none; }
+}
+
+require_visual_review_approval() {
+  pr_is_customer_visible_sites || return 0
   if [ -n "$CAPTAIN_APPROVAL_FILE" ]; then
     printf 'verified: %s is customer-visible, merging on the captain'"'"'s approval (--captain-approval-file)\n' "$URL" >&2
     return 0

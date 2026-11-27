@@ -7797,6 +7797,34 @@ test_sites_visual_review_none_merges_as_before() {
   pass "fm-pr-merge merges a sites PR whose Visual review says none, and any other repository's PR, as before"
 }
 
+# A sites PR that is both a one-way door and customer-visible takes one
+# captain answer: the one-way hold names the approval flag too.
+test_sites_visual_review_one_way_takes_one_answer() {
+  local case_dir rc show head=a415a415a415a415a415a415a415a415a415a419
+  case_dir=$(visual_review_case sites-visual-one-way "$head" "$(one_way_body)"$'\r\n## Visual review\r\n\r\nShots at 360 and 1280.\r\n')
+  file_task_x1 "$case_dir"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/arjmad/sites/pull/165 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "sites-visual-one-way: the first run must hold for the captain"
+  show=$(FM_HOME="$case_dir/home" "$ROOT/bin/fm-tasks-axi.sh" show task-x1 --full)
+  assert_contains "$show" 'so his yes covers its Visual review preview and the merge passes --captain-approval-file too' \
+    "sites-visual-one-way: the hold reason does not name the approval flag"
+  printf 'Merge PR 165 and ship the shots.\n' > "$case_dir/decision"
+  captain_hold "$case_dir" answer task-x1 --decision-file "$case_dir/decision" --release >/dev/null \
+    || fail "sites-visual-one-way: the captain's answer could not be recorded"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/arjmad/sites/pull/165 --one-way-approved \
+    --captain-approval-file "$case_dir/decision" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "sites-visual-one-way: his one answer must merge it: $(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 165 arjmad/sites --squash
+  pass "fm-pr-merge brings the captain one call for a one-way, customer-visible sites PR"
+}
+
 test_sites_visual_review_waits_while_away() {
   local case_dir rc head=a415a415a415a415a415a415a415a415a415a418
   # Without the flag the gate refuses; the flag itself is refused while away
@@ -7829,3 +7857,4 @@ test_sites_visual_review_refuses_without_captain_approval
 test_sites_visual_review_merges_with_captain_approval
 test_sites_visual_review_none_merges_as_before
 test_sites_visual_review_waits_while_away
+test_sites_visual_review_one_way_takes_one_answer
