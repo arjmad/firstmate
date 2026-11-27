@@ -591,8 +591,8 @@ print(json.dumps({"mcpServers": servers}, indent=2))' "$argv" "$ACCOUNTS_ROOT" "
 cmd_claude_install() {
   command -v "$CLAUDE_BIN" >/dev/null 2>&1 || die "$CLAUDE_BIN is not on PATH"
   local slug email argv docs urls url
-  # Both tables are read in full before the first remove, so a bad row refuses the
-  # install with every server still as it was.
+  # Every entry, the --docs file's included, is built before the first remove, so a
+  # bad listener row or tool list refuses the install with every server as it was.
   docs=$(cmd_claude_config --docs) || exit 1
   if [ -n "$CLAUDE_LISTENERS" ]; then
     urls=$(claude_listener_urls claude) || exit 1
