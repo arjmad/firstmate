@@ -337,7 +337,7 @@ path_keys() {  # [rows]
         if (tok ~ /^\/\// || tok ~ /^www\./) continue
         sub(/^\.\//, "", tok)
         base = tok; sub(/.*\//, "", base)
-        if (index(base, ".") < 2) continue
+        if (index(base, ".") == 0) continue
         ext = base; sub(/.*\./, "", ext)
         if (ext !~ /^[A-Za-z][A-Za-z0-9]*$/ || length(ext) > 8 || ext ~ /^(com|org|net|io|dev|ai|app)$/) continue
         if (base ~ /(^test_|[._-]test\.|^test\.)/) key = base

@@ -610,6 +610,12 @@ test_a_new_row_naming_a_known_path_gets_a_similar_hint() {
     --evidence "see docs/scripts.md" > /dev/null 2> "$home/same.err" || fail "the same-path filing failed"
   assert_grep "similar: noticed-doc-drift also names docs/scripts.md" "$home/same.err" \
     "a row naming the same directory path was not hinted"
+  noticed "$home" file noticed env-one --title "Env drift" --why "y" --from t2 --repo firstmate \
+    --evidence "config/.env" > /dev/null 2>&1 || fail "the dotfile filing failed"
+  noticed "$home" file noticed env-two --title "Env again" --why "y" --from t3 --repo firstmate \
+    --evidence "config/.env" > /dev/null 2> "$home/dotfile.err" || fail "the second dotfile filing failed"
+  assert_grep "similar: noticed-env-one also names config/.env" "$home/dotfile.err" \
+    "two rows naming the same dotfile path got no hint"
   tasks "$home" show noticed-sync-timeout --full | grep -q 'Seen again' \
     && fail "the hint merged evidence into the earlier row"
   # Another repo, a bare README.md, or no --repo gives no hint.
