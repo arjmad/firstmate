@@ -1232,7 +1232,7 @@ exec_recording_run() {
     exec bash -c "$2"' fm-post-update "$1" "$2"
 }
 
-# report_running_post_update <record>: the "activating:" line for a run that is
+# report_running_post_update: the "activating:" line for a run that is
 # still alive (RUNNING_PID, RUNNING_SINCE, RUNNING_STARTED), or, once it has run
 # longer than POST_UPDATE_STUCK_SECS, a STUCK line that names it and leaves it
 # running. Its text stays the same while the run lasts, so it wakes once.
@@ -1326,7 +1326,8 @@ detach_submit() {
       && DETACH_VIA=launchd && return 0
     echo "$label: launchd refused $job; starting the post-update command in its own session instead" >&2
   fi
-  # shellcheck disable=SC2016 # $1..$5 expand in the detached shell
+  # set -m gives the run its own process group, and the subshell's exit hands
+  # it to init, so neither a group kill nor a process-tree kill reaches it.
   (cd / && set -m && if command -v setsid >/dev/null 2>&1; then
       setsid "$BASH" "$runner" "$record" "$nonce" "$head" "$proj_abs" </dev/null >"$record.job.launchd.log" 2>&1 &
     else
