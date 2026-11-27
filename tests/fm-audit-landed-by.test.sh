@@ -108,7 +108,10 @@ write_decisions() {
  "a1-04": {
   "decision": "no",
   "title": "four",
-  "status": "closed"
+  "status": "closed",
+  "landed_by": [
+   "https://github.com/o/gone/pull/1"
+  ]
  },
  "a1-05": {
   "decision": "do",
@@ -189,7 +192,10 @@ test_stamps_named_ids_and_is_idempotent() {
  "a1-04": {
   "decision": "no",
   "title": "four",
-  "status": "closed"
+  "status": "closed",
+  "landed_by": [
+   "https://github.com/o/gone/pull/1"
+  ]
  },
  "a1-05": {
   "decision": "do",

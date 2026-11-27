@@ -46,6 +46,8 @@ Refusals (exit 1, nothing written): a decisions.json that is not an object
 of objects, or whose layout this tool cannot reproduce byte for byte (it
 never reformats a file), a landed_by that is not a list of PR URLs, a gh
 search or view that fails, or a single day that alone fills gh's cap.
+A write error exits 1 too; decisions.json is written before the table, so a
+failed table write leaves decisions.json already stamped.
 """
 
 from __future__ import annotations
@@ -263,7 +265,7 @@ def main(argv: list[str]) -> int:
         for fid, entry in data.items():
             existing = entry.get(FIELD)
             hits = named.get(fid, [])
-            if existing is None and not hits:
+            if not approved(entry) or (existing is None and not hits):
                 continue
             keep = []
             for url in existing or []:
