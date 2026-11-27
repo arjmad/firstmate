@@ -291,7 +291,14 @@
 # any forge call; a comment that does not post refuses the merge. Readers such
 # as sites' theme-go-live.py match `^Approved: Arjun [0-9]{4}-[0-9]{2}-[0-9]{2}: .+`.
 # It is GitHub-only, refused while the away-posture record exists, and never
-# skips any other gate.
+# skips any other gate. A github.com/arjmad/sites PR is customer-visible unless
+# its body says `Visual review: none`, as pr_body_visual_review_none below
+# reads it, and a body that could not be read is customer-visible too (audit
+# a4-15). Once its door gate passes, such a PR is refused without
+# --captain-approval-file, under any posture: standing yolo never supplies the
+# flag, and while away it is refused, so the PR waits for the captain. When
+# such a PR is also a one-way door, its hold reason says the merge passes
+# --captain-approval-file too, so one captain answer covers both flags.
 #
 # Branch standing merges (fork patch, docs/fork-decisions.md 2026-10-27): while
 # attended, the supervision branch actor merges only the class Arjun named for
@@ -2253,6 +2260,9 @@ require_door_authority() {
     return 1
   fi
   reason="One-way door PR $URL needs your explicit word to merge; blast radius: $blast"
+  # One answer covers a customer-visible sites PR's preview too (see the header).
+  [ -n "$CAPTAIN_APPROVAL_FILE" ] || ! pr_is_customer_visible_sites \
+    || reason="$reason; it also changes what a customer sees, so his yes covers its Visual review preview and the merge passes --captain-approval-file too"
   fm_lock_release "$MERGE_CONTROL_LOCK" || true
   MERGE_CONTROL_LOCK=
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
@@ -2268,6 +2278,50 @@ require_door_authority() {
   fi
   printf 'error: task %s is now held for the captain'"'"'s merge call (blast radius: %s)\n' "$ID" "$blast" >&2
   echo "error: only the captain's explicit word for this PR merges it: record it with bin/fm-captain-hold.sh answer $ID --decision-file <file> --release, then re-run with --one-way-approved" >&2
+  return 1
+}
+
+# Whether a PR body on stdin says `Visual review: none` (see the header's
+# captain-approval paragraph): a `Visual review: none` line, or a
+# `## Visual review` heading whose first text after blank lines is `none`, with
+# `none` ending its sentence or clause. Each line is matched with the regular
+# expressions of sites' doormatsusa/scripts/theme-go-live.py VISUAL_NONE, so
+# the two agree on which PR is customer-visible. Two departures: a CRLF line
+# ending is read as a line end, and a character before `Visual review` that
+# either Python or jq counts as a word character stops the match, so this
+# reading never exempts a body that theme-go-live.py would not.
+pr_body_visual_review_none() {
+  # shellcheck disable=SC2016 # the backticks are jq regex text, not expansions
+  jq -Rse '
+    "none[ \\t*_`]*(?:$|[.:;,(-]|—|–)" as $ends
+    | [split("\n")[] | sub("\r$"; "")] as $lines
+    | any(range(0; $lines | length); . as $i
+        | ($lines[$i] | test("^[^\\p{L}\\p{M}\\p{N}\\p{Pc}]*visual review[ \\t*_]*:[ \\t*_`]*" + $ends; "i"))
+          or (($lines[$i] | test("^#+[ \\t]*visual review[ \\t]*$"; "i"))
+            and ([$lines[$i + 1:][] | select(test("^[ \\t]*$") | not)][0] // ""
+              | test("^[ \\t*_`]*" + $ends; "i"))))
+  ' >/dev/null 2>&1
+}
+
+# The customer-visible gate (see the header's captain-approval paragraph), run
+# right after the door gate on GitHub. FM_PR_BODY is the body the live verify
+# read; a body that could not be read is customer-visible.
+# True for an arjmad/sites PR whose body does not say `Visual review: none`.
+pr_is_customer_visible_sites() {
+  local repo
+  repo=$(printf '%s/%s/%s' "$PR_HOST" "$PR_OWNER" "$PR_REPO" | tr '[:upper:]' '[:lower:]')
+  [ "$repo" = github.com/arjmad/sites ] || return 1
+  ! { [ "$FM_PR_BODY_READ" = true ] && printf '%s\n' "$FM_PR_BODY" | pr_body_visual_review_none; }
+}
+
+require_visual_review_approval() {
+  pr_is_customer_visible_sites || return 0
+  if [ -n "$CAPTAIN_APPROVAL_FILE" ]; then
+    printf 'verified: %s is customer-visible, merging on the captain'"'"'s approval (--captain-approval-file)\n' "$URL" >&2
+    return 0
+  fi
+  printf "error: refusing to merge %s: its body's Visual review section is not \`none\`, so it changes what a customer sees\n" "$URL" >&2
+  echo "error: only the captain's yes to its Visual review preview merges it: write his words to a file when he answers, then re-run with --captain-approval-file <file>" >&2
   return 1
 }
 
@@ -2821,6 +2875,7 @@ case "$PROVIDER" in
         exit 1
       fi
       require_door_authority || exit 1
+      require_visual_review_approval || exit 1
       github_branch_needs_update "$@" || break
       github_update_branch_from_base || exit 1
     done
@@ -2852,6 +2907,7 @@ case "$PROVIDER" in
               "$FM_PR_GITHUB_BASE" "$FM_PR_MERGE_HEAD" >&2
           exit 1
         fi
+        require_visual_review_approval || exit 1
       elif [ -n "$EXPECTED_HEAD" ]; then
         echo "error: $URL is behind its base; updating its source branch requires explicit --update-branch consent on this authorized merge request (the update remains if new checks prevent merging)" >&2
         exit 1
