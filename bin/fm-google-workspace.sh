@@ -3,7 +3,8 @@
 #
 # Architecture, captain-settled 2026-08-28: ONE google_workspace_mcp instance per
 # Google account, --single-user, each with its own WORKSPACE_MCP_CREDENTIALS_DIR,
-# over stdio, wired into both firstmate/Claude Code and the captain's Hermes agent.
+# wired into both firstmate/Claude Code and the captain's Hermes agent, over stdio
+# unless claude_listeners (below) names shared loopback listeners for Claude Code.
 # The per-instance credentials directory IS the account boundary: the target account
 # is an ordinary call argument on nearly every tool, so a shared instance would leave
 # the boundary to a string the model emits, while a process holding one account's
@@ -51,6 +52,7 @@
 #   bws_secret_key <name>
 #   allowed_file_dirs <path>   optional; defaults to the home's data directory
 #   claude_tool_list <path>    optional; no tool is disabled without it
+#   claude_listeners <path>    optional; Claude Code stays on stdio without it
 # claude-install and claude-config pass allowed_file_dirs to every server as
 # ALLOWED_FILE_DIRS, the directories workspace-mcp may read attachments from.
 # claude_tool_list names, by absolute path, a tab-separated tool list: '#' comment and
@@ -62,6 +64,19 @@
 # never carry it. A missing or malformed list, one with no tool rows, a bad tool name,
 # or a duplicate tool refuses both rather than registering a server with the tools it
 # was meant to remove.
+# claude_listeners names, by absolute path, a JSON listener table (fleet's
+# hosts/heimdall/workspace-mcp.json): {"listeners": [{"profile", "account", "server",
+# "port", ...}]}, one row per account and tool profile, each a workspace-mcp already
+# serving http://127.0.0.1:<port>/mcp with its own credentials, ALLOWED_FILE_DIRS, and
+# --disabled-tools. With it, claude-install and claude-config write each gws-<slug> as
+# {"type": "http", "url": <that URL>} from its 'claude' row, and the --docs file from
+# its 'claude-docs' row, with no command, args, or env, so allowed_file_dirs,
+# claude_tool_list, and FM_GWS_SERVER no longer reach those entries; only those two
+# profiles are read. Every configured slug needs exactly one row of each, whose server
+# is gws-<slug> and whose port is 1-65535 and used by no other row of the table;
+# anything else refuses claude-install before any server is removed, rather than leave
+# a store half moved or point a server at another account's or profile's listener, and
+# refuses claude-config for the profile it prints ('claude', or 'claude-docs' with --docs).
 # Blank lines and '#' comments are ignored. There is no built-in table: a missing,
 # unreadable, or malformed file, a duplicate slug or email, or an implausible email
 # refuses every subcommand except help, naming the file and the accepted format.
@@ -99,6 +114,7 @@ BWS_PROJECT_ID=""
 BWS_SECRET_KEY=""
 ALLOWED_FILE_DIRS=""
 CLAUDE_TOOL_LIST=""
+CLAUDE_LISTENERS=""
 
 # The exact per-service permission levels. --permissions is the only flag that moves
 # the OAuth token boundary: --tool-tier and --disabled-tools shrink the tool list while
@@ -116,14 +132,14 @@ CLAUDE_BIN="${FM_GWS_CLAUDE:-claude}"
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-usage() { sed -n '21,81p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '/^# Usage:$/,/^set -u$/p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed '$d' | sed 's/^# \{0,1\}//'; }
 
-CONFIG_FORMAT="accepted format, one setting per line: 'account <slug> <email>', 'bws_project_id <uuid>', 'bws_secret_key <name>', optional 'allowed_file_dirs <path>', optional 'claude_tool_list <path>'"
+CONFIG_FORMAT="accepted format, one setting per line: 'account <slug> <email>', 'bws_project_id <uuid>', 'bws_secret_key <name>', optional 'allowed_file_dirs <path>', optional 'claude_tool_list <path>', optional 'claude_listeners <path>'"
 
 config_die() { die "$CONFIG_FILE: $*; $CONFIG_FORMAT"; }
 
 # load_config fills ACCOUNTS, BWS_PROJECT_ID, BWS_SECRET_KEY, ALLOWED_FILE_DIRS
-# (default FM_HOME/data), and CLAUDE_TOOL_LIST from CONFIG_FILE and
+# (default FM_HOME/data), CLAUDE_TOOL_LIST, and CLAUDE_LISTENERS from CONFIG_FILE and
 # refuses anything it cannot fully accept. There is deliberately no fallback table:
 # an account that is not in the file does not exist as far as this script is concerned.
 load_config() {
@@ -172,6 +188,12 @@ load_config() {
         [ -z "$CLAUDE_TOOL_LIST" ] || config_die "line $lineno: duplicate $key"
         case "$2" in /*) ;; *) config_die "line $lineno: claude_tool_list must be an absolute path" ;; esac
         CLAUDE_TOOL_LIST="$2"
+        ;;
+      claude_listeners)
+        [ "$#" -eq 2 ] || config_die "line $lineno: expected 'claude_listeners <path>'"
+        [ -z "$CLAUDE_LISTENERS" ] || config_die "line $lineno: duplicate $key"
+        case "$2" in /*) ;; *) config_die "line $lineno: claude_listeners must be an absolute path" ;; esac
+        CLAUDE_LISTENERS="$2"
         ;;
       *) config_die "line $lineno: unknown setting '$key'" ;;
     esac
@@ -260,6 +282,52 @@ claude_argv() {
   off=$(claude_disabled_tools "${1:-}") || exit 1
   server_argv
   [ -z "$off" ] || printf '%s\n' --disabled-tools "$off"
+}
+
+# claude_listener_urls <profile> prints slug<TAB>url, in account-table order, for the
+# claude_listeners table's <profile> row of every configured account (profile 'claude'
+# or 'claude-docs'), and fails, naming the table, on anything the header comment above
+# does not accept, so no caller removes a server before every row is known.
+claude_listener_urls() {
+  local profile="$1" out
+  [ -f "$CLAUDE_LISTENERS" ] && [ -r "$CLAUDE_LISTENERS" ] \
+    || die "$CONFIG_FILE: claude_listeners $CLAUDE_LISTENERS is not a readable file"
+  out=$(accounts_rows | python3 -c 'import json, sys
+path, profile = sys.argv[1], sys.argv[2]
+def bad(msg):
+    print(msg)
+    sys.exit(1)
+try:
+    with open(path) as f:
+        table = json.load(f)
+except (OSError, ValueError) as e:
+    bad("not a JSON listener table: %s" % e)
+rows = table.get("listeners") if isinstance(table, dict) else None
+if not isinstance(rows, list):
+    bad("no \"listeners\" array")
+slugs = [line.split("\t")[0] for line in sys.stdin.read().splitlines() if line.strip()]
+ports = [row.get("port") for row in rows if isinstance(row, dict)]
+found = {}
+for row in rows:
+    if not isinstance(row, dict) or row.get("profile") != profile or row.get("account") not in slugs:
+        continue
+    slug = row["account"]
+    if slug in found:
+        bad("two %s rows for account %s" % (profile, slug))
+    if row.get("server") != "gws-" + slug:
+        bad("the %s row for account %s names server %r, not gws-%s" % (profile, slug, row.get("server"), slug))
+    port = row.get("port")
+    if type(port) is not int or not 1 <= port <= 65535:
+        bad("the %s row for account %s has port %r, not 1-65535" % (profile, slug, port))
+    if ports.count(port) > 1:
+        bad("the %s row for account %s shares port %d with another listener" % (profile, slug, port))
+    found[slug] = "http://127.0.0.1:%d/mcp" % port
+for slug in slugs:
+    if slug not in found:
+        bad("no %s row for account %s" % (profile, slug))
+    print(slug + "\t" + found[slug])' "$CLAUDE_LISTENERS" "$profile") \
+    || die "$CLAUDE_LISTENERS (claude_listeners): ${out##*$'\n'}"
+  [ -z "$out" ] || printf '%s\n' "$out"
 }
 
 file_mode() {
@@ -484,12 +552,23 @@ cmd_status() {
 }
 
 cmd_claude_config() {
-  local command argv tier=""
+  local command argv tier="" urls
   case "${1:-}" in
     '') ;;
     --docs) tier=docs ;;
     *) die "unknown claude-config option '$1'; expected nothing or --docs" ;;
   esac
+  if [ -n "$CLAUDE_LISTENERS" ]; then
+    urls=$(claude_listener_urls "claude${tier:+-$tier}") || exit 1
+    printf '%s\n' "$urls" | python3 -c 'import json, sys
+servers = {}
+for line in sys.stdin.read().splitlines():
+    if line.strip():
+        slug, url = line.split("\t")
+        servers["gws-" + slug] = {"type": "http", "url": url}
+print(json.dumps({"mcpServers": servers}, indent=2))'
+    return
+  fi
   argv=$(claude_argv "$tier") || exit 1
   command=$(head -n 1 <<<"$argv")
   argv=$(tail -n +2 <<<"$argv")
@@ -516,19 +595,33 @@ print(json.dumps({"mcpServers": servers}, indent=2))' "$argv" "$ACCOUNTS_ROOT" "
 
 cmd_claude_install() {
   command -v "$CLAUDE_BIN" >/dev/null 2>&1 || die "$CLAUDE_BIN is not on PATH"
-  local slug email argv docs
-  argv=$(claude_argv) || exit 1
+  local slug email argv docs urls url
+  # Every entry, the --docs file's included, is built before the first remove, so a
+  # bad listener row or tool list refuses the install with every server as it was.
   docs=$(cmd_claude_config --docs) || exit 1
-  accounts_rows | while IFS=$'\t' read -r slug email; do
-    "$CLAUDE_BIN" mcp remove -s user "gws-$slug" >/dev/null 2>&1 || true
-    # shellcheck disable=SC2086 # deliberate word splitting: one argv token per line
-    "$CLAUDE_BIN" mcp add -s user "gws-$slug" \
-      -e "WORKSPACE_MCP_CREDENTIALS_DIR=$ACCOUNTS_ROOT/$slug" \
-      -e "GOOGLE_CLIENT_SECRET_PATH=$CLIENT_SECRET_FILE" \
-      -e "ALLOWED_FILE_DIRS=$ALLOWED_FILE_DIRS" \
-      -- $argv >/dev/null || die "cannot register gws-$slug with Claude Code"
-    printf 'registered: gws-%s -> %s\n' "$slug" "$email"
-  done || exit 1
+  if [ -n "$CLAUDE_LISTENERS" ]; then
+    urls=$(claude_listener_urls claude) || exit 1
+    while IFS=$'\t' read -r slug url; do
+      [ -n "$slug" ] || continue
+      email=$(account_email "$slug")
+      "$CLAUDE_BIN" mcp remove -s user "gws-$slug" >/dev/null 2>&1 || true
+      "$CLAUDE_BIN" mcp add -s user --transport http "gws-$slug" "$url" >/dev/null \
+        || die "cannot register gws-$slug with Claude Code"
+      printf 'registered: gws-%s -> %s at %s\n' "$slug" "$email" "$url"
+    done <<<"$urls"
+  else
+    argv=$(claude_argv) || exit 1
+    accounts_rows | while IFS=$'\t' read -r slug email; do
+      "$CLAUDE_BIN" mcp remove -s user "gws-$slug" >/dev/null 2>&1 || true
+      # shellcheck disable=SC2086 # deliberate word splitting: one argv token per line
+      "$CLAUDE_BIN" mcp add -s user "gws-$slug" \
+        -e "WORKSPACE_MCP_CREDENTIALS_DIR=$ACCOUNTS_ROOT/$slug" \
+        -e "GOOGLE_CLIENT_SECRET_PATH=$CLIENT_SECRET_FILE" \
+        -e "ALLOWED_FILE_DIRS=$ALLOWED_FILE_DIRS" \
+        -- $argv >/dev/null || die "cannot register gws-$slug with Claude Code"
+      printf 'registered: gws-%s -> %s\n' "$slug" "$email"
+    done || exit 1
+  fi
   # Written beside the credentials through a same-directory rename, so a session that
   # reads it mid-install sees the old file or the new one, never a partial one.
   ensure_dir_0700 "$GWS_ROOT"
