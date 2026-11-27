@@ -102,7 +102,8 @@
 # declares a paused wait instead. A direct-PR worker whose repository's own
 # guidance opens PRs as drafts until reviewed reviews the draft and marks it
 # ready before its checks (fork patch, docs/fork-decisions 2026-11-21
-# draft-until-ready); a draft fails its `Ready for review` check and skips the
+# draft-until-ready), and a project registered +draft-until-ready gets only
+# that wording (fm_dod_project_draft; audit a1-59); a draft fails its `Ready for review` check and skips the
 # full suite, and the worker marks it ready before the checks wait, so the wait
 # sees the ready run and needs no draft case (no required check is involved;
 # docs/fork-decisions/2026-11-24-ci-draft-gate.md). bin/fm-pr-check.sh refuses to arm merge
@@ -254,6 +255,28 @@ fm_pr_text_valid() {  # <pr> <mode> <forge> <caller>
     return 1
   fi
   return 0
+}
+
+# The project's registered PR-opening posture (audit a1-59): `until-ready` when
+# its data/projects.md posture line carries +draft-until-ready, else `ready`;
+# bin/fm-project-mode.sh --draft owns that grammar and its refusals. Only a
+# direct-PR ship with no forge binding takes it, so any other contract, or an
+# empty project name, reads `ready` without opening the registry. The
+# registry's warnings stay quiet here; its refusal is printed and fails the
+# caller, as the spawn's own registry read would.
+fm_dod_project_draft() {  # <mode> <forge> <project-name>
+  local mode=$1 forge=$2 name=$3 d draft
+  if [ "$mode" != direct-PR ] || [ "$forge" != none ] || [ -z "$name" ]; then
+    printf 'ready\n'
+    return 0
+  fi
+  d=${BASH_SOURCE[0]%/*}
+  [ "$d" != "${BASH_SOURCE[0]}" ] || d=.
+  if ! draft=$("$d/fm-project-mode.sh" --draft "$name" 2>/dev/null); then
+    "$d/fm-project-mode.sh" --draft "$name" >/dev/null || true
+    return 1
+  fi
+  printf '%s\n' "$draft"
 }
 
 # The task branch prefix: <branch> with its trailing <task-id> removed, or
@@ -574,9 +597,11 @@ fm_dod_code_review_model() {
 
 # The delivery protocol a ship worker reads by path for the full code-review
 # and checks steps, as crewmate-status-protocol holds the status rules. The
-# Definition of done keeps one line per rule, every value it renders (the
-# review script, the pinned model, the mode's push wording), and every stop or
-# escalation; the protocol file holds the rest of each step.
+# Definition of done keeps only the pointer, every value it renders (the
+# review script, the pinned model, the mode's push wording), and the lines a
+# worker must see first: the review `status` run, the `record` that must print
+# `reviewed` before done, and the checks wait with its gate-wait line. The
+# protocol file owns every other step, stop, and escalation (audit a1-65).
 fm_dod_delivery_protocol() {
   local d=${BASH_SOURCE[0]%/*}
   [ "$d" != "${BASH_SOURCE[0]}" ] || d=.
@@ -584,26 +609,17 @@ fm_dod_delivery_protocol() {
 }
 
 fm_dod_code_review_block() {  # <direct-PR|no-mistakes>
-  local cli fix sol_fix model protocol
+  local cli last_push model protocol
   model=$(fm_dod_code_review_model)
   printf -v cli '%q' "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-code-review.sh"
   protocol=$(fm_dod_delivery_protocol)
-  fix='push a fix for every finding you agree is real'
-  sol_fix='push its fixes once the loop ends'
-  if [ "$1" = no-mistakes ]; then
-    fix='commit a fix for every finding you agree is real and run /no-mistakes again so the pipeline pushes it'
-    sol_fix='run /no-mistakes again once the loop ends so the pipeline pushes its fixes'
-  fi
+  last_push='your last push'
+  [ "$1" != no-mistakes ] || last_push='the /no-mistakes run that pushes your last fix'
   cat <<EOF
 Before that done report, give a code-changing GitHub PR its code review; a PR on any other forge skips this step.
-Read \`$protocol\` "Code review" before this step: it holds each step below in full, including the gate statement, the carry, and how to count records.
-Run \`$cli status <pr-url>\`; \`exempt\` or \`reviewed\` needs nothing more, except the gate statement when \`status\` says the PR edits its own gate files.
-On \`unreviewed\`, first run the \`tstack-sol-loop\` skill on your branch against the PR's base, for at most 3 rounds, never the skill's extended 5, and settle its findings by its rules; then $sol_fix.
-When the skill hands an open finding to its user, that user is firstmate: append \`needs-decision [at=<epoch>]: {the open Sol findings}\` and stop; where nothing here can reach Sol, skip the loop instead, never substitute another model, and append \`working [at=<epoch>]: Sol skipped: {reason}\` so firstmate sees it.
-Then run Claude Code's built-in \`/code-review\` once on the pinned model \`$model\` with the shell command \`$cli review <pr-url> --model $model\`, in the background or with your longest command timeout, never as the skill in your own session: it runs the review headless with firstmate's merge-gate focus and then posts each finding to the PR itself.
-Then $fix, reply in the PR thread of every finding you do not, and after your last push run \`$cli record <pr-url> --note 'Sol: <N> rounds, <model>, <verdict>'\`, or \`--note 'Sol: skipped, <reason>'\`, and confirm it prints \`reviewed\`.
-With three full records already posted, a change that would need another \`/code-review\` pass does not get one: append \`needs-decision [at=<epoch>]: {why the PR keeps needing review}\` and stop instead of looping.
-If the headless \`/code-review\` command cannot run here, or \`review\` exits non-zero, append \`blocked:\` naming its error instead of done.
+Read \`$protocol\` "Code review" before this step and follow it: it holds every step, stop, and escalation in full, with \`<review script>\` as \`$cli\` and \`<model>\` as \`$model\`.
+Run \`$cli status <pr-url>\` first; \`exempt\` or \`reviewed\` needs nothing more, except the gate statement when \`status\` says the PR edits its own gate files.
+Report done only after \`$cli record <pr-url>\`, run after $last_push, prints \`reviewed\`.
 EOF
 }
 
@@ -618,8 +634,8 @@ fm_dod_checks_green_block() {
   local protocol
   protocol=$(fm_dod_delivery_protocol)
   cat <<EOF
-On a GitHub PR, then wait for its checks at your pushed HEAD with \`gh-axi pr checks <number> --watch --fail-fast\`, appending \`gate-wait [at=<epoch>]: checks on PR {url}\` while it waits instead of reporting done; a failing check is yours to fix: append \`working [at=<epoch>]: fixing {check}\`, push the fix, and wait again.
-Read \`$protocol\` "Checks" before that wait: it covers a required check that never reported (\`merge_state\`), an Actions run an outage stranded (\`gh-axi pr reopen <number>\`), and the required \`fleet-gate\` or \`gate\` status only a full \`./check.sh\` on a clean pushed tree with no untracked files posts.
+On a GitHub PR, then wait for its checks at your pushed HEAD with \`gh-axi pr checks <number> --watch --fail-fast\`, appending \`gate-wait [at=<epoch>]: checks on PR {url}\` while it waits instead of reporting done.
+Read \`$protocol\` "Checks" before that wait and follow it: it holds every step in full, including fixing a failing check.
 EOF
 }
 
@@ -696,12 +712,21 @@ fm_dod_with_short_loop_floor() {
   [ "$placed" -eq 1 ] || { echo "error: fm_dod_with_short_loop_floor: no Ship branch line to place the floor after" >&2; return 1; }
 }
 
-fm_dod_block() {  # <mode> <task-id> [branch] [<forge>] [<base>] [<consent>] [<pr>]
-  local mode=$1 id=$2 forge=${4:-none} base=${5:-} consent=${6:-} pr=${7:-auto}
+fm_dod_block() {  # <mode> <task-id> [branch] [<forge>] [<base>] [<consent>] [<pr>] [<draft>]
+  local mode=$1 id=$2 forge=${4:-none} base=${5:-} consent=${6:-} pr=${7:-auto} draft=${8:-ready}
   local branch=${3:-fm/$id} pr_base='' nm_base='' base_q contract_forge='' contract_consent='' forge_cli=gh-axi draft_check adapter done_report
   fm_forge_valid_for_mode "$forge" "$mode" fm_dod_block || return 1
   fm_base_branch_valid "$base" "$mode" "$forge" fm_dod_block || return 1
   fm_pr_text_valid "$pr" "$mode" "$forge" fm_dod_block || return 1
+  case "$draft" in
+    ready) ;;
+    until-ready)
+      [ "$mode:$forge" = direct-PR:none ] || {
+        echo "error: fm_dod_block: draft=until-ready ships mode=direct-PR with no forge binding only, not mode=$mode forge=$forge" >&2
+        return 1
+      } ;;
+    *) echo "error: fm_dod_block: unknown PR-opening posture '$draft' (expected ready or until-ready)" >&2; return 1 ;;
+  esac
   if [ -n "$consent" ]; then
     if [ "$mode" = local-only ]; then
       echo "error: fm_dod_block: upstream consent authorizes a publication that local-only never performs; drop it" >&2
@@ -806,8 +831,20 @@ Delivery contract: mode=direct-PR$contract_forge$contract_consent
 Ship branch: $branch
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
+EOF
+      # A project registered +draft-until-ready gets only the draft wording
+      # (audit a1-59); every other project keeps both, gated on its guidance.
+      if [ "$draft" = until-ready ]; then
+        cat <<EOF
+When it is implemented and committed, run the local checks the repository's own guidance names for your change, then push your branch and open a PR with \`$forge_cli\`$pr_base: open it as a draft, do your reviews on the draft, and mark it ready after your last review push, before you wait for its checks.
+EOF
+      else
+        cat <<EOF
 When it is implemented and committed, run the local checks the repository's own guidance names for your change, then push your branch and open a PR with \`$forge_cli\` that is ready for review, not a draft$pr_base.
 Only where the repository's own guidance has its PRs opened as drafts until their reviews are done, open it as a draft instead, do your reviews on the draft, and mark it ready after your last review push and after any local full suite that guidance names, before you wait for its checks.
+EOF
+      fi
+      cat <<EOF
 Write the PR body with the \`matt-pr\` skill, around any lines the repository requires: a Summary, its Evidence, and a Merge Danger section with a \`**Door:** one-way\` or \`**Door:** two-way\` line and a \`**Blast Radius:**\` line; where that skill name does not resolve, write those same three sections yourself.
 Mark it a one-way door when the change cannot be walked back, such as destroyed data or a published commitment: a one-way PR waits for the captain's own word before it merges, under any merge posture.
 Before you report done, read the PR back from the forge and confirm it is not a draft $draft_check

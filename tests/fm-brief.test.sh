@@ -1169,6 +1169,36 @@ test_scout_completion_write_exception_is_task_scoped() {
   pass "fm-brief.sh: scouts may attest only their own empty inventory through the guarded command"
 }
 
+# A read-only scout (audit a1-63) writes nothing but its report, notes, and
+# status: no brain filing and no self-attestation; firstmate attests.
+test_read_only_scout_files_and_attests_nothing() {
+  local home brief out rc flags
+  home="$TMP_ROOT/read-only-scout-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" audit-scout sample --scout --read-only >/dev/null \
+    || fail "read-only scout scaffold failed"
+  brief="$home/data/audit-scout/brief.md"
+  assert_no_grep "fm-captain-hold.sh" "$brief" "read-only scout still runs a captain-hold command"
+  assert_no_grep "complete --none" "$brief" "read-only scout still attests its own empty inventory"
+  assert_no_grep "fleet-memory" "$brief" "read-only scout still has the brain-filing permission"
+  assert_no_grep "brain filing below" "$brief" "read-only scout Setup still points at a brain filing"
+  assert_no_grep "under the completion gate below" "$brief" "read-only scout still points at a removed completion gate"
+  assert_grep "Report done; firstmate attests the inventory." "$brief" "read-only scout does not leave the attestation to firstmate"
+  assert_grep "File nothing to any brain, backlog, or task record, and run no captain-hold command" "$brief" \
+    "read-only scout does not forbid filing"
+  assert_grep "write only the report, notes files beside it in \`$home/data/audit-scout/\`, and the status file below." "$brief" \
+    "read-only scout lost its outside-write bound"
+  for flags in "--mode direct-PR" "--secondmate --no-projects"; do
+    rc=0
+    # shellcheck disable=SC2086 # the flag pair is split on purpose
+    out=$(FM_SECONDMATE_CHARTER=x FM_HOME="$home" "$ROOT/bin/fm-brief.sh" read-only-refused sample $flags --read-only 2>&1) || rc=$?
+    [ "$rc" -ne 0 ] || fail "--read-only was accepted with $flags"
+    assert_contains "$out" "--read-only applies only to scout briefs" "--read-only refusal with $flags did not explain itself"
+    [ ! -e "$home/data/read-only-refused/brief.md" ] || fail "a refused --read-only scaffold wrote a brief"
+  done
+  pass "fm-brief.sh: a read-only scout files and attests nothing, and the switch is scout-only"
+}
+
 # Every worker brief, scout and ship alike, carries the Lavish arm rule for every
 # compatible board version, including older builds that use the legacy reply
 # path, so a board the captain answers always has a listener.
@@ -1366,7 +1396,19 @@ test_wait_no_turns_absent_keeps_the_previous_brief() {
   assert_grep "background the drive call" "$brief" "an absent flag replaced the backgrounded drive text"
   assert_no_grep "issue the same foreground call again" "$brief" \
     "an absent flag still asked for the foreground reattach"
-  pass "fm-brief: without config/wait-no-turns the brief and drive text stay as they were"
+  # The condition wait itself is always-present Rules 4 text (audit guidance-44).
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-wait-off-scout some-proj --scout >/dev/null 2>&1 \
+    || fail "fm-brief.sh scout scaffold exited non-zero"
+  for brief in "$brief" "$home/data/brief-wait-off-scout/brief.md"; do
+    assert_grep "   Wait on a condition with \`'$ROOT/bin/fm-procevent-when.sh' wait -- bash -c '<test>'\` in one shell command with your shell tool's longest timeout; never sleep then check." "$brief" \
+      "an absent flag dropped the always-present condition wait from Rules 4"
+  done
+  FM_SECONDMATE_CHARTER='Supervise the alpha domain.' \
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-wait-off-sm --secondmate --no-projects >/dev/null 2>&1 \
+    || fail "fm-brief.sh secondmate scaffold exited non-zero"
+  assert_no_grep "fm-procevent-when.sh" "$home/data/brief-wait-off-sm/brief.md" \
+    "a secondmate charter, published to remote hosts, names this home's absolute wait helper"
+  pass "fm-brief: without config/wait-no-turns the brief and drive text stay as they were, with the condition wait in Rules 4"
 }
 
 test_inbox_guidance_explains_marked_body_terminator() {
@@ -2206,6 +2248,7 @@ test_pause_verb_override_renders_all_brief_scaffolds
 test_ship_and_scout_teach_validation_round_pause
 test_scout_and_secondmate_load_decision_hold_policy
 test_scout_completion_write_exception_is_task_scoped
+test_read_only_scout_files_and_attests_nothing
 test_scout_and_secondmate_scaffold
 test_scout_files_brain_and_keeps_notes_with_report
 test_lavish_line_follows_presentation_floor
