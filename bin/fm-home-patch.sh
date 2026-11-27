@@ -47,8 +47,10 @@
 # apply runs the same checks. With --digest it also refuses a patch whose
 # digest is not the one given, so a caller applies exactly the diff it showed.
 # A patch that applies is applied by `git apply` to a staging copy of its files,
-# so no home file changes unless every hunk applies, and each patched file is
-# then written back in place, keeping its own mode and owner.
+# so no home file changes unless every hunk applies. Each patched file is then
+# built beside its target with the target's mode and published by rename, so
+# no file is ever half written; a file that cannot be built (a read-only one)
+# changes nothing, and a failed rename restores the files already published.
 # data/<id>/home-patch.applied records the applied digest; apply then prints
 # `home-patch: <id>: applied to <paths>` and exits 0. An already applied patch,
 # by that record or because its reverse diff applies, is a silent exit 3, so a
@@ -262,17 +264,33 @@ do_show() {
 }
 
 not_applied() {  # <why>
-  printf 'actionable: home patch data/%s/home-patch.md was not applied (%s); nothing changed - fix it or apply the change by hand, then run bin/fm-home-patch.sh show %s\n' \
-    "$ID" "$1" "$ID" >&2
+  local changed='nothing changed'
+  case "$1" in *'could not restore'*) changed='some files changed, as it says' ;; esac
+  printf 'actionable: home patch data/%s/home-patch.md was not applied (%s); %s - fix it or apply the change by hand, then run bin/fm-home-patch.sh show %s\n' \
+    "$ID" "$1" "$changed" "$ID" >&2
   exit 1
 }
 
-# Applies $DIFF to a staging copy of its files, then writes each patched file
-# back through its own inode, so its mode and owner stay as they were. A write
-# that fails puts every file already written back as it was.
+# Writes <content> to a new file beside <rel> that carries <rel>'s own mode
+# (cp -p), and prints its path. Nothing is left behind when it fails.
+prepare_beside() {  # <rel> <content-file>
+  local tmp="$HOME_ROOT/$1.fm-home-patch.$$"
+  if { cp -p -- "$HOME_ROOT/$1" "$tmp" && cat -- "$2" >"$tmp"; } 2>/dev/null; then
+    printf '%s\n' "$tmp"
+    return 0
+  fi
+  rm -f -- "$tmp"
+  return 1
+}
+
+# Applies $DIFF to a staging copy of its files, then builds each patched file
+# beside its target with the target's mode and publishes it by rename, so no
+# home file is ever half written. A file that cannot be prepared changes
+# nothing; a rename that fails puts back every file already published, trying
+# each one, and names any it could not restore.
 apply_staged() {
-  local stage="$WORK/stage" orig="$WORK/orig" rel out done_rel
-  local written=()
+  local stage="$WORK/stage" orig="$WORK/orig" rel out tmp i failed=''
+  local tmps=() published=()
   for rel in "${REL_PATHS[@]}"; do
     mkdir -p -- "$stage/$(dirname "$rel")" "$orig/$(dirname "$rel")" \
       && cp -- "$HOME_ROOT/$rel" "$stage/$rel" && cp -- "$HOME_ROOT/$rel" "$orig/$rel" || return 1
@@ -282,15 +300,32 @@ apply_staged() {
     return 1
   fi
   for rel in "${REL_PATHS[@]}"; do
-    if ! { cat -- "$stage/$rel" >"$HOME_ROOT/$rel"; } 2>/dev/null; then
-      for done_rel in "${written[@]+"${written[@]}"}"; do
-        cat -- "$orig/$done_rel" >"$HOME_ROOT/$done_rel" \
-          || { echo "could not write $rel, and could not restore $done_rel"; return 1; }
-      done
-      echo "could not write $rel; every file was restored"
+    if ! tmp=$(prepare_beside "$rel" "$stage/$rel"); then
+      rm -f -- "${tmps[@]+"${tmps[@]}"}"
+      echo "could not prepare the new $rel beside it"
       return 1
     fi
-    written+=("$rel")
+    tmps+=("$tmp")
+  done
+  for i in "${!REL_PATHS[@]}"; do
+    rel=${REL_PATHS[$i]}
+    if mv -f -- "${tmps[$i]}" "$HOME_ROOT/$rel" 2>/dev/null; then
+      published+=("$rel")
+      continue
+    fi
+    rm -f -- "${tmps[@]+"${tmps[@]}"}"
+    for rel in "${published[@]+"${published[@]}"}"; do
+      if ! tmp=$(prepare_beside "$rel" "$orig/$rel") || ! mv -f -- "$tmp" "$HOME_ROOT/$rel" 2>/dev/null; then
+        [ -z "${tmp:-}" ] || rm -f -- "$tmp"
+        failed="${failed:+$failed, }$rel"
+      fi
+    done
+    if [ -n "$failed" ]; then
+      echo "could not publish ${REL_PATHS[$i]}, and could not restore $failed, which now hold the patched text"
+    else
+      echo "could not publish ${REL_PATHS[$i]}; every file published before it was restored"
+    fi
+    return 1
   done
 }
 
