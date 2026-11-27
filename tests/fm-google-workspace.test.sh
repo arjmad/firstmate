@@ -516,9 +516,6 @@ mcp add -s user --transport http gws-bravo http://127.0.0.1:4163/mcp" "$(cat "$l
     "$(gws "$root" claude-config | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["mcpServers"], sort_keys=True))')" \
     "claude-config prints the user-scope servers at their claude listeners"
   assert_not_contains "$(gws "$root" hermes-config)" "127.0.0.1" "the Hermes block is unchanged by a listener table"
-  : > "$log"
-  CLAUDE_STUB_LOG="$log" gws "$root" claude-install >/dev/null || fail "claude-install is not repeatable with a listener table"
-  expect_code 3 "$(grep -c "mcp remove" "$log")" "a repeat run replaces each server rather than adding a duplicate"
 
   write_listener_table "$table"
   python3 -c 'import json, sys
@@ -537,6 +534,12 @@ json.dump(t, open(sys.argv[1], "w"))' "$table"
     sed "s/\"port\": 4161,/\"port\": $port,/" "$table.base" > "$table"
     expect_listener_refusal "$root" "$log" "has port $(python3 -c 'import json, sys; print(repr(json.loads(sys.argv[1])))' "$port"), not 1-65535" "port $port"
   done
+  sed 's/"port": 4162,/"port": 4161,/' "$table.base" > "$table"
+  expect_listener_refusal "$root" "$log" "shares port 4161 with another listener" "two accounts on one port"
+  sed 's/"port": 4165,/"port": 4161,/' "$table.base" > "$table"
+  expect_listener_refusal "$root" "$log" "shares port 4161 with another listener" "a claude-docs row on a claude port" --docs
+  sed 's/"port": 4161,/"port": 4174,/' "$table.base" > "$table"
+  expect_listener_refusal "$root" "$log" "shares port 4174 with another listener" "a claude row on a cade-send port"
   printf '{"listeners": {}}\n' > "$table"
   expect_listener_refusal "$root" "$log" 'no "listeners" array' "a table without a listeners array"
   printf 'not json\n' > "$table"

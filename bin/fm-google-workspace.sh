@@ -73,8 +73,9 @@
 # its 'claude-docs' row, with no command, args, or env, so allowed_file_dirs,
 # claude_tool_list, and FM_GWS_SERVER no longer reach those entries; only those two
 # profiles are read. Every configured slug needs exactly one row of each, whose server
-# is gws-<slug> and whose port is 1-65535; anything else refuses both before any server
-# is removed, rather than leave a store half moved.
+# is gws-<slug> and whose port is 1-65535 and used by no other row of the table;
+# anything else refuses both before any server is removed, rather than leave a store
+# half moved or point a server at another account's or profile's listener.
 # Blank lines and '#' comments are ignored. There is no built-in table: a missing,
 # unreadable, or malformed file, a duplicate slug or email, or an implausible email
 # refuses every subcommand except help, naming the file and the accepted format.
@@ -130,7 +131,7 @@ CLAUDE_BIN="${FM_GWS_CLAUDE:-claude}"
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-usage() { sed -n '22,97p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '22,98p' "$SCRIPT_DIR/fm-google-workspace.sh" | sed 's/^# \{0,1\}//'; }
 
 CONFIG_FORMAT="accepted format, one setting per line: 'account <slug> <email>', 'bws_project_id <uuid>', 'bws_secret_key <name>', optional 'allowed_file_dirs <path>', optional 'claude_tool_list <path>', optional 'claude_listeners <path>'"
 
@@ -304,6 +305,7 @@ rows = table.get("listeners") if isinstance(table, dict) else None
 if not isinstance(rows, list):
     bad("no \"listeners\" array")
 slugs = [line.split("\t")[0] for line in sys.stdin.read().splitlines() if line.strip()]
+ports = [row.get("port") for row in rows if isinstance(row, dict)]
 found = {}
 for row in rows:
     if not isinstance(row, dict) or row.get("profile") != profile or row.get("account") not in slugs:
@@ -316,6 +318,8 @@ for row in rows:
     port = row.get("port")
     if type(port) is not int or not 1 <= port <= 65535:
         bad("the %s row for account %s has port %r, not 1-65535" % (profile, slug, port))
+    if ports.count(port) > 1:
+        bad("the %s row for account %s shares port %d with another listener" % (profile, slug, port))
     found[slug] = "http://127.0.0.1:%d/mcp" % port
 for slug in slugs:
     if slug not in found:
