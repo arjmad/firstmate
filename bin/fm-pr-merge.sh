@@ -291,7 +291,12 @@
 # any forge call; a comment that does not post refuses the merge. Readers such
 # as sites' theme-go-live.py match `^Approved: Arjun [0-9]{4}-[0-9]{2}-[0-9]{2}: .+`.
 # It is GitHub-only, refused while the away-posture record exists, and never
-# skips any other gate.
+# skips any other gate. A github.com/arjmad/sites PR is customer-visible unless
+# its body says `Visual review: none`, as pr_body_visual_review_none below
+# reads it, and a body that could not be read is customer-visible too (audit
+# a4-15). Once its door gate passes, such a PR is refused without
+# --captain-approval-file, under any posture: standing yolo never supplies the
+# flag, and while away it is refused, so the PR waits for the captain.
 #
 # Branch standing merges (fork patch, docs/fork-decisions.md 2026-10-27): while
 # attended, the supervision branch actor merges only the class Arjun named for
@@ -2271,6 +2276,60 @@ require_door_authority() {
   return 1
 }
 
+# Whether a PR body on stdin says `Visual review: none` (see the header's
+# captain-approval paragraph): a `Visual review: none` line, or a
+# `## Visual review` heading whose first text after blank lines is `none`, with
+# `none` ending its sentence or clause. It reads exactly as sites'
+# doormatsusa/scripts/theme-go-live.py VISUAL_NONE does, so the two never
+# disagree on which PR is customer-visible, except that a CRLF line ending is
+# read as a line end.
+pr_body_visual_review_none() {
+  LC_ALL=C awk '
+    # The text after "none" ends its sentence or clause: the line ends, or it
+    # goes on with one of . : ; , ( - or an em or en dash.
+    function none_ends(rest) {
+      return rest == "" || rest ~ /^[.:;,(-]/ \
+        || substr(rest, 1, 3) == "\342\200\224" || substr(rest, 1, 3) == "\342\200\223"
+    }
+    {
+      sub(/\r$/, "")
+      line = tolower($0)
+      if (heading) {
+        if (line ~ /^[ \t]*$/) next
+        heading = 0
+        if (match(line, /^[ \t*_`]*none[ \t*_`]*/) && none_ends(substr(line, RLENGTH + 1))) found = 1
+      }
+      if (match(line, /^[^a-z0-9_]*visual review[ \t*_]*:[ \t*_`]*none[ \t*_`]*/) \
+        && none_ends(substr(line, RLENGTH + 1))) found = 1
+      if (line ~ /^#+[ \t]*visual review[ \t]*$/) heading = 1
+    }
+    END { exit found ? 0 : 1 }
+  '
+}
+
+# The customer-visible gate (see the header's captain-approval paragraph), run
+# right after the door gate on GitHub. FM_PR_BODY is the body the live verify
+# read; a body that could not be read is customer-visible.
+require_visual_review_approval() {
+  local repo
+  repo=$(printf '%s/%s/%s' "$PR_HOST" "$PR_OWNER" "$PR_REPO" | tr '[:upper:]' '[:lower:]')
+  [ "$repo" = github.com/arjmad/sites ] || return 0
+  if [ "$FM_PR_BODY_READ" = true ] && printf '%s\n' "$FM_PR_BODY" | pr_body_visual_review_none; then
+    return 0
+  fi
+  if [ -n "$CAPTAIN_APPROVAL_FILE" ]; then
+    printf 'verified: %s is customer-visible, merging on the captain'"'"'s approval (--captain-approval-file)\n' "$URL" >&2
+    return 0
+  fi
+  if [ "$FM_PR_BODY_READ" = true ]; then
+    printf "error: refusing to merge %s: its body's Visual review section is not \`none\`, so it changes what a customer sees\n" "$URL" >&2
+  else
+    printf 'error: refusing to merge %s: its body could not be read, so it is read as changing what a customer sees\n' "$URL" >&2
+  fi
+  echo "error: only the captain's yes to its Visual review preview merges it: write his words to a file when he answers, then re-run with --captain-approval-file <file>" >&2
+  return 1
+}
+
 # Called only once the forge accepted the merge, so the log holds one-way
 # doors merged on the captain's word rather than attempts; a failed write is
 # reported, never a failed merge.
@@ -2821,6 +2880,7 @@ case "$PROVIDER" in
         exit 1
       fi
       require_door_authority || exit 1
+      require_visual_review_approval || exit 1
       github_branch_needs_update "$@" || break
       github_update_branch_from_base || exit 1
     done

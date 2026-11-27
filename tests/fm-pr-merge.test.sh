@@ -7691,6 +7691,138 @@ test_captain_approval_file_is_refused_while_away() {
   pass "fm-pr-merge refuses --captain-approval-file while away"
 }
 
+# The customer-visible sites gate (audit a4-15): an arjmad/sites PR whose
+# body's Visual review section is not `none` merges only with
+# --captain-approval-file, attended or away; any other repository, and a sites
+# body that says `Visual review: none`, merges as before.
+VISUAL_BODY=$'## Summary\n\nA new hero.\n\n## Visual review\n\nShots at 360 and 1280, before and after.\n'
+
+# Args: case_name head body; leaves a GitHub case whose live body is body.
+visual_review_case() {
+  local case_dir
+  case_dir=$(make_case "$1")
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$2"
+  set_pr_body "$case_dir/github-view.json" body "$3"
+  printf '%s\n' "$case_dir"
+}
+
+test_sites_visual_review_refuses_without_captain_approval() {
+  local case_dir rc body n=0 head=a415a415a415a415a415a415a415a415a415a415
+  for body in \
+    "$VISUAL_BODY" \
+    $'## Summary\n\nA fix with no Visual review section.\n' \
+    $'Visual review: none of the shots clip\n' \
+    $'## Visual review\n\nNone of the shots clip at 360.\n' \
+    $'## Visual review\n\nSee below. Visual review: nonexistent\n' \
+    ''; do
+    n=$((n + 1))
+    case_dir=$(visual_review_case "sites-visual-$n" "$head" "$body")
+    set +e
+    run_pr_merge "$case_dir" task-x1 https://github.com/arjmad/sites/pull/160 \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 1 "$rc" "sites-visual-$n: a customer-visible sites PR must refuse without the approval: $(cat "$case_dir/stderr")"
+    assert_grep "Visual review section is not \`none\`" "$case_dir/stderr" \
+      "sites-visual-$n: the refusal did not name the Visual review section"
+    assert_grep '--captain-approval-file <file>' "$case_dir/stderr" \
+      "sites-visual-$n: the refusal did not name the flag that merges it"
+    assert_no_grep 'pr merge' "$case_dir/gh.log" "sites-visual-$n: the merge ran"
+    assert_no_grep 'pr comment' "$case_dir/gh.log" "sites-visual-$n: a comment posted"
+  done
+  # The owner and repository match case-insensitively, as GitHub's do.
+  case_dir=$(visual_review_case sites-visual-case "$head" "$VISUAL_BODY")
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/ArjMad/Sites/pull/160 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "sites-visual-case: a mixed-case sites URL must still refuse: $(cat "$case_dir/stderr")"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "sites-visual-case: the merge ran"
+  pass "fm-pr-merge refuses a sites PR whose Visual review is not none, or has none at all, without --captain-approval-file"
+}
+
+test_sites_visual_review_merges_with_captain_approval() {
+  local case_dir rc head=a415a415a415a415a415a415a415a415a415a416
+  case_dir=$(visual_review_case sites-visual-approved "$head" "$VISUAL_BODY")
+  printf 'ship the new hero\n' > "$case_dir/approval"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/arjmad/sites/pull/161 \
+    --captain-approval-file "$case_dir/approval" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "sites-visual-approved: the approved merge should succeed: $(cat "$case_dir/stderr")"
+  assert_grep 'merging on the captain'"'"'s approval' "$case_dir/stderr" \
+    "sites-visual-approved: the merge did not say it is customer-visible"
+  head -n 1 "$case_dir/github-posted-comment" | grep -Eq '^Approved: Arjun [0-9]{4}-[0-9]{2}-[0-9]{2}: ship the new hero$' \
+    || fail "sites-visual-approved: unexpected comment: $(cat "$case_dir/github-posted-comment")"
+  assert_logged_gh_merge "$case_dir" 161 arjmad/sites --squash
+  pass "fm-pr-merge merges a customer-visible sites PR on --captain-approval-file"
+}
+
+test_sites_visual_review_none_merges_as_before() {
+  local case_dir rc body n=0 head=a415a415a415a415a415a415a415a415a415a417
+  for body in \
+    $'## Summary\n\nTooling.\n\nVisual review: none\n' \
+    $'**Visual review:** none. Tooling and docs only; nothing a customer sees changes.\n' \
+    $'- Visual review: `none` (scripts only)\n' \
+    $'## Visual review\n\n\nNone - tooling only.\n' \
+    $'Visual review: none\xe2\x80\x94scripts only\n' \
+    $'## Summary\r\n\r\nTooling.\r\n\r\nVisual review: none\r\n'; do
+    n=$((n + 1))
+    case_dir=$(visual_review_case "sites-none-$n" "$head" "$body")
+    set +e
+    run_pr_merge "$case_dir" task-x1 https://github.com/arjmad/sites/pull/162 \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 0 "$rc" "sites-none-$n: a sites PR whose Visual review is none should merge: $(cat "$case_dir/stderr")"
+    assert_logged_gh_merge "$case_dir" 162 arjmad/sites --squash
+    assert_no_grep 'pr comment' "$case_dir/gh.log" "sites-none-$n: a comment posted"
+  done
+  # Another repository's PR is not read for a Visual review at all.
+  case_dir=$(visual_review_case other-repo-visual "$head" "$VISUAL_BODY")
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/163 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "other-repo-visual: another repository's PR should merge as before: $(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 163 example/repo --squash
+  pass "fm-pr-merge merges a sites PR whose Visual review says none, and any other repository's PR, as before"
+}
+
+test_sites_visual_review_waits_while_away() {
+  local case_dir rc head=a415a415a415a415a415a415a415a415a415a418
+  # Without the flag the gate refuses; with it the attended-only refusal does.
+  case_dir=$(visual_review_case sites-visual-away "$head" "$VISUAL_BODY")
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  set +e
+  FM_TEST_HOME="$case_dir/home" run_pr_merge "$case_dir" task-x1 https://github.com/arjmad/sites/pull/164 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "sites-visual-away: a customer-visible sites PR must not merge while away: $(cat "$case_dir/stderr")"
+  assert_grep "Visual review section is not \`none\`" "$case_dir/stderr" \
+    "sites-visual-away: the refusal did not name the Visual review section"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "sites-visual-away: the merge ran"
+
+  case_dir=$(visual_review_case sites-visual-away-flag "$head" "$VISUAL_BODY")
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  printf 'ship it\n' > "$case_dir/approval"
+  set +e
+  FM_TEST_HOME="$case_dir/home" run_pr_merge "$case_dir" task-x1 https://github.com/arjmad/sites/pull/164 \
+    --captain-approval-file "$case_dir/approval" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "sites-visual-away-flag: the flag must be refused while away"
+  assert_grep '--captain-approval-file is attended-only' "$case_dir/stderr" \
+    "sites-visual-away-flag: refusal did not name attended-only"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "sites-visual-away-flag: the merge ran"
+  pass "fm-pr-merge never merges a customer-visible sites PR while away"
+}
+
 test_squash_summary_uses_title_and_what_changed
 test_squash_summary_reads_crlf_bodies
 test_squash_summary_falls_back_to_repository_default
@@ -7701,3 +7833,7 @@ test_captain_approval_file_posts_the_approval_before_the_merge
 test_captain_approval_file_failed_post_refuses_the_merge
 test_captain_approval_file_bad_file_refuses_before_the_forge
 test_captain_approval_file_is_refused_while_away
+test_sites_visual_review_refuses_without_captain_approval
+test_sites_visual_review_merges_with_captain_approval
+test_sites_visual_review_none_merges_as_before
+test_sites_visual_review_waits_while_away
