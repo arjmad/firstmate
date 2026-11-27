@@ -6,6 +6,9 @@
 # receives. Both paths must hand the worker the same contract: a promoted
 # no-mistakes worker that never received the ask-user escalation rule or the
 # `--yes` ban is the exact delivery hole this single owner exists to close.
+# The direct-PR block also tells the worker to put a `Class: <word>` line in its
+# PR body, on the line bin/fm-pr-class-lib.sh's FM_PR_CLASS_BRIEF_MARKER opens,
+# which is the marker bin/fm-pr-merge.sh's Class gate reads from the brief.
 # fm_dod_block <no-mistakes|direct-PR|local-only> <task-id> [branch] [<forge>]
 # prints the block on stdout with no trailing blank line. The caller validates the
 # mode; an unknown mode is refused rather than silently rendered as the pipeline
@@ -166,6 +169,8 @@
 . "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-brief-heading-lib.sh"
 # shellcheck source=bin/fm-external-review-lib.sh
 . "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-external-review-lib.sh"
+# shellcheck source=bin/fm-pr-class-lib.sh
+. "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-pr-class-lib.sh"
 
 fm_brief_worker_role() {  # <state-dir> <task-id> <code-root>
   local state=$1 task_id=$2 root=$3
@@ -846,6 +851,8 @@ EOF
       fi
       cat <<EOF
 Write the PR body with the \`matt-pr\` skill, around any lines the repository requires: a Summary, its Evidence, and a Merge Danger section with a \`**Door:** one-way\` or \`**Door:** two-way\` line and a \`**Blast Radius:**\` line; where that skill name does not resolve, write those same three sections yourself.
+$FM_PR_CLASS_BRIEF_MARKER put one line \`Class: <word>\` in the PR body, and in each companion PR's body, naming the kind of work it is with one of these words; a PR with no Class line, or another word, is refused at merge:
+$(fm_pr_class_glossary | sed 's/^/- /')
 Mark it a one-way door when the change cannot be walked back, such as destroyed data or a published commitment: a one-way PR waits for the captain's own word before it merges, under any merge posture.
 Before you report done, read the PR back from the forge and confirm it is not a draft $draft_check
 A draft cannot be merged, so a done report on one leaves the merge unasked.

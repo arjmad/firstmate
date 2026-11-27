@@ -7843,6 +7843,131 @@ test_sites_visual_review_waits_while_away() {
   pass "fm-pr-merge never merges a customer-visible sites PR while away"
 }
 
+# The effort-class gate (bin/fm-pr-class-lib.sh). class_brief writes task-x1's
+# brief from the real scaffold's direct-PR Definition of done, so the marker the
+# gate reads is the one bin/fm-dod-lib.sh renders, never a copy of it.
+class_brief() {  # <case_dir>
+  mkdir -p "$1/home/data/task-x1"
+  bash -c '. "$1/bin/fm-dod-lib.sh"; fm_dod_block direct-PR task-x1' _ "$ROOT" \
+    > "$1/home/data/task-x1/brief.md" || fail "could not render the scaffold's Definition of done"
+}
+
+test_pr_class_refuses_a_scaffold_brief_without_a_class_line() {
+  local case_dir rc body n=0 head=c1a55c1a55c1a55c1a55c1a55c1a55c1a55c1a55
+  for body in \
+    $'## Summary\n\nA fix.\n' \
+    $'## Summary\n\nThis PR sets the Class: sales line for later.\n' \
+    $'Class: marketing\n' \
+    $'Class:\n' \
+    $'Class: sales\nClass: fleet\n'; do
+    n=$((n + 1))
+    case_dir=$(visual_review_case "class-missing-$n" "$head" "$body")
+    class_brief "$case_dir"
+    set +e
+    run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/170 \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 1 "$rc" "class-missing-$n: a scaffold-briefed PR with no valid Class line must refuse: $(cat "$case_dir/stderr")"
+    # shellcheck disable=SC2016 # the backticks are literal Markdown
+    assert_grep 'add one line `Class: <word>` to the PR body' "$case_dir/stderr" \
+      "class-missing-$n: the refusal did not say how to fix it: $(cat "$case_dir/stderr")"
+    assert_no_grep 'pr merge' "$case_dir/gh.log" "class-missing-$n: the merge ran"
+  done
+  assert_grep "its Class line reads 'sales/fleet'" "$case_dir/stderr" \
+    "class-missing-$n: two Class lines that disagree were not named"
+  pass "fm-pr-merge refuses a scaffold-briefed PR whose body has no Class line, an unknown word, or two that disagree"
+}
+
+test_pr_class_merges_a_scaffold_brief_with_a_class_line() {
+  local case_dir rc body word n=0 head=c1a55c1a55c1a55c1a55c1a55c1a55c1a55c1a56
+  for body in \
+    $'## Summary\n\nA fix.\n\nClass: sales\n' \
+    $'**Class:** fleet\n' \
+    $'- Class: `Cost`\n' \
+    $'## Summary\r\n\r\nClass: run\r\n'; do
+    n=$((n + 1))
+    case $n in 1) word=sales ;; 2) word=fleet ;; 3) word=cost ;; 4) word=run ;; esac
+    case_dir=$(visual_review_case "class-ok-$n" "$head" "$body")
+    class_brief "$case_dir"
+    set +e
+    run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/171 \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 0 "$rc" "class-ok-$n: a scaffold-briefed PR with a Class line should merge: $(cat "$case_dir/stderr")"
+    assert_grep "carries Class: $word" "$case_dir/stderr" "class-ok-$n: the class read was not reported"
+    assert_logged_gh_merge "$case_dir" 171 example/repo --squash
+  done
+  pass "fm-pr-merge merges a scaffold-briefed PR that carries one known Class word"
+}
+
+# Firstmate's steer (2026-11-27): ships whose brief predates the Class
+# instruction, and tasks with no scaffold brief at all such as a capture, must
+# merge exactly as before.
+test_pr_class_older_brief_and_no_brief_merge_as_before() {
+  local case_dir rc head=c1a55c1a55c1a55c1a55c1a55c1a55c1a55c1a57
+  case_dir=$(visual_review_case class-older-brief "$head" $'## Summary\n\nA fix.\n')
+  mkdir -p "$case_dir/home/data/task-x1"
+  # shellcheck disable=SC2016 # the backticks are literal Markdown
+  printf '%s\n' '# Definition of done' 'Delivery contract: mode=direct-PR' \
+    'Write the PR body with the `matt-pr` skill, around any lines the repository requires.' \
+    > "$case_dir/home/data/task-x1/brief.md"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/172 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "class-older-brief: a ship briefed before the Class line should merge: $(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 172 example/repo --squash
+  assert_no_grep 'Class' "$case_dir/stderr" "class-older-brief: the Class gate spoke for an older brief"
+
+  case_dir=$(visual_review_case class-no-brief "$head" $'## Summary\n\nA capture.\n')
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/173 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "class-no-brief: a task with no brief should merge: $(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 173 example/repo --squash
+  pass "fm-pr-merge merges a ship whose brief predates the Class line, and a task with no brief, as before"
+}
+
+test_pr_class_applies_on_gitlab_and_forgejo() {
+  local case_dir rc
+  case_dir=$(make_gitlab_case class-gitlab-missing)
+  set_pr_body "$case_dir/mr.json" description $'## Summary\n\nA fix.\n'
+  class_brief "$case_dir"
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "class-gitlab-missing: a scaffold-briefed merge request with no Class line must refuse: $(cat "$case_dir/stderr")"
+  assert_no_grep 'mr merge' "$case_dir/glab.log" "class-gitlab-missing: the merge ran"
+
+  case_dir=$(make_gitlab_case class-gitlab-ok)
+  set_pr_body "$case_dir/mr.json" description $'Class: time\n'
+  class_brief "$case_dir"
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "class-gitlab-ok: a merge request with a Class line should merge: $(cat "$case_dir/stderr")"
+  assert_grep 'mr merge 7' "$case_dir/glab.log" "class-gitlab-ok: the merge did not run"
+
+  case_dir=$(make_forgejo_case class-forgejo-missing)
+  set_pr_body "$case_dir/pr.json" body $'## Summary\n\nA fix.\n'
+  class_brief "$case_dir"
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$FJ_URL" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "class-forgejo-missing: a scaffold-briefed Forgejo PR with no Class line must refuse: $(cat "$case_dir/stderr")"
+  # shellcheck disable=SC2016 # the backticks are literal Markdown
+  assert_grep 'add one line `Class: <word>`' "$case_dir/stderr" "class-forgejo-missing: the refusal was not the Class gate's"
+  pass "fm-pr-merge applies the Class gate on GitLab and Forgejo too"
+}
+
 test_squash_summary_uses_title_and_what_changed
 test_squash_summary_reads_crlf_bodies
 test_squash_summary_falls_back_to_repository_default
@@ -7858,3 +7983,7 @@ test_sites_visual_review_merges_with_captain_approval
 test_sites_visual_review_none_merges_as_before
 test_sites_visual_review_waits_while_away
 test_sites_visual_review_one_way_takes_one_answer
+test_pr_class_refuses_a_scaffold_brief_without_a_class_line
+test_pr_class_merges_a_scaffold_brief_with_a_class_line
+test_pr_class_older_brief_and_no_brief_merge_as_before
+test_pr_class_applies_on_gitlab_and_forgejo

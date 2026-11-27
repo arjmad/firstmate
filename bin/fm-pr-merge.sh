@@ -300,6 +300,17 @@
 # such a PR is also a one-way door, its hold reason says the merge passes
 # --captain-approval-file too, so one captain answer covers both flags.
 #
+# Effort class (fork patch, docs/fork-decisions/2026-11-27-effort-class-split.md):
+# a task whose data/<id>/brief.md carries the ship scaffold's Class instruction
+# (fm_pr_class_brief_requires in bin/fm-pr-class-lib.sh, which owns the line,
+# its words, and the marker) is refused, on every forge and under any posture,
+# until its PR body carries one `Class: <word>` line with a known word, and a
+# body that could not be read is refused too. A task with no such brief merges
+# as before: a ship briefed before the line existed, a capture or other
+# machine PR with no scaffold brief, and a no-mistakes or local-only ship. It
+# runs just before the door gate, so the captain is never asked about a PR this
+# refusal would still stop; adding the line needs no push and no new review.
+#
 # Branch standing merges (fork patch, docs/fork-decisions.md 2026-10-27): while
 # attended, the supervision branch actor merges only the class Arjun named for
 # it, and require_merge_actor below owns that class. The pull request is on
@@ -406,9 +417,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-pr-class-lib.sh
+. "$SCRIPT_DIR/fm-pr-class-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 # shellcheck source=bin/fm-merge-outcome-lib.sh
@@ -2325,6 +2339,30 @@ require_visual_review_approval() {
   return 1
 }
 
+# The effort-class gate (see the header's effort-class paragraph), run just
+# before the door gate on every forge. FM_PR_BODY is the body the live verify
+# read.
+require_pr_class() {
+  local class status=0
+  fm_pr_class_brief_requires "$DATA/$ID/brief.md" || return 0
+  if [ "$FM_PR_BODY_READ" != true ]; then
+    printf 'error: refusing to merge %s: its body could not be read, so its Class line cannot be checked\n' "$URL" >&2
+    return 1
+  fi
+  class=$(printf '%s\n' "$FM_PR_BODY" | fm_pr_class_of_body) || status=$?
+  case "$status" in
+    0)
+      printf 'verified: %s carries Class: %s\n' "$URL" "$class" >&2
+      return 0
+      ;;
+    1) printf "error: refusing to merge %s: task %s's brief asks for a \`Class: <word>\` line and its body has none\n" "$URL" "$ID" >&2 ;;
+    *) printf "error: refusing to merge %s: its Class line reads '%s', not one of: %s\n" "$URL" "$class" "$FM_PR_CLASS_WORDS" >&2 ;;
+  esac
+  # shellcheck disable=SC2016 # the backticks are literal Markdown
+  printf 'error: add one line `Class: <word>` to the PR body (bin/fm-pr-class-lib.sh defines each word), then re-run the merge; editing the body needs no push and no new review\n' >&2
+  return 1
+}
+
 # Called only once the forge accepted the merge, so the log holds one-way
 # doors merged on the captain's word rather than attempts; a failed write is
 # reported, never a failed merge.
@@ -2874,6 +2912,7 @@ case "$PROVIDER" in
             "$FM_PR_GITHUB_BASE" "$FM_PR_MERGE_HEAD" >&2
         exit 1
       fi
+      require_pr_class || exit 1
       require_door_authority || exit 1
       require_visual_review_approval || exit 1
       github_branch_needs_update "$@" || break
@@ -2979,6 +3018,7 @@ case "$PROVIDER" in
     ;;
   gitlab)
     gitlab_verify_mergeable || exit 1
+    require_pr_class || exit 1
     require_door_authority || exit 1
     # --sha binds the merge to the head this run verified, so a push that lands
     # in between is refused by GitLab instead of merged unverified. --yes only
@@ -3017,6 +3057,7 @@ case "$PROVIDER" in
     forgejo_method=$(caller_merge_method "$@")
     [ -n "$forgejo_method" ] || forgejo_method=$(forgejo_default_merge_style) || exit 1
     forgejo_verify_mergeable || exit 1
+    require_pr_class || exit 1
     require_door_authority || exit 1
     # The away record is locked first, so this last presence and authority
     # read and the forge command below share one live-owner critical section.
