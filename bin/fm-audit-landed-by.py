@@ -25,7 +25,10 @@ PR URL.
 Output: <decisions.json>, rewritten in place.
   - Stamp: an id a merged PR names gets `status` set to `landed` and every
     such PR's URL in `landed_by` (new URLs sorted by repository and number,
-    after the URLs already there).
+    after the URLs already there). An id whose status is `open-helm` or
+    `open-captain` gets the URLs but keeps its status, so a PR that lands
+    one half of it never marks it done; the helm sets `landed` when the
+    live step closes.
   - An existing `landed_by` URL no merged PR in the window names, such as one
     the helm entered by hand, is kept when `gh pr view` reads it MERGED and
     dropped otherwise. A value that is not a PR URL is a refusal.
@@ -57,6 +60,9 @@ import tempfile
 
 PR_URL = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([0-9]+)$")
 FIELD = "landed_by"
+# A status naming a step still open outside the PR: a stamp fills landed_by but
+# keeps it, so a half-landing never reads as done (firstmate, 2026-11-27).
+HELD_STATUSES = frozenset({"open-helm", "open-captain"})
 SEARCH_CAP = 1000
 USAGE = (
     "usage: fm-audit-landed-by.py [--dry-run] [--table <out.md>] --owner <owner> "
@@ -253,7 +259,7 @@ def main(argv: list[str]) -> int:
                 view_cache[url] = isinstance(state, dict) and str(state.get("state", "")).upper() == "MERGED"
             return view_cache[url]
 
-        stamped = newly = kept = dropped = 0
+        stamped = newly = held = kept = dropped = 0
         for fid, entry in data.items():
             existing = entry.get(FIELD)
             hits = named.get(fid, [])
@@ -271,7 +277,9 @@ def main(argv: list[str]) -> int:
                 entry[FIELD] = urls
             if hits:
                 stamped += 1
-                if entry.get("status") != "landed":
+                if entry.get("status") in HELD_STATUSES:
+                    held += 1
+                elif entry.get("status") != "landed":
                     newly += 1
                     entry["status"] = "landed"
 
@@ -280,7 +288,7 @@ def main(argv: list[str]) -> int:
         verb = "would change" if opts["dry_run"] and changed else "changed" if changed else "unchanged"
         print(
             f"landed_by: {len(merged)} merged PR(s) searched; {stamped} id(s) named by one, "
-            f"{newly} newly landed; {kept} hand URL(s) kept, {dropped} unmerged URL(s) dropped; {verb}"
+            f"{newly} newly landed, {held} held at open-helm/open-captain; {kept} hand URL(s) kept, {dropped} unmerged URL(s) dropped; {verb}"
         )
         if not opts["dry_run"]:
             if changed:

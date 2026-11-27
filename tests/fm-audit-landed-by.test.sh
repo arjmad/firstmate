@@ -12,6 +12,9 @@
 #     names, a declined id, a non-merged record and a near-miss token
 #     (a1-030, xa1-03) stamp nothing; no other field, key or layout byte moves.
 #   - A second run changes nothing, byte for byte.
+#   - An open-ship id a PR names becomes landed, while an open-helm or
+#     open-captain id keeps its status and only gains landed_by, so a
+#     half-landing never reads done.
 #   - An existing landed_by URL no PR names is kept when gh reads it MERGED and
 #     dropped otherwise, and the id's status stays; nothing is un-stamped.
 #   - --table writes the prior-status table from the stamped record, marking a
@@ -69,9 +72,9 @@ chmod +x "$FAKE_BIN/gh"
 write_prs() {
   printf '%s\n' '[
  {"day": "2026-11-21", "state": "merged", "url": "https://github.com/o/biz/pull/12",
-  "title": "fix: the thing (a1-01)", "body": "Also see a1-030 and xa1-03; declines a1-04."},
+  "title": "fix: the thing (a1-01)", "body": "Also see a1-030 and xa1-03; declines a1-04; repo half of a1-08."},
  {"day": "2026-11-23", "state": "merged", "url": "https://github.com/o/fleet/pull/7",
-  "title": "chore: tidy", "body": "## Summary\nAudit items a1-01 and a1-05, from the deep audit."},
+  "title": "chore: tidy", "body": "## Summary\nAudit items a1-01, a1-05, a1-06 and a1-07, from the deep audit."},
  {"day": "2026-11-24", "state": "closed", "url": "https://github.com/o/biz/pull/30",
   "title": "a1-02 attempt", "body": "never merged"},
  {"day": "2026-11-25", "state": "merged", "url": "https://github.com/o/nova/pull/40",
@@ -113,6 +116,21 @@ write_decisions() {
   "landed_by": [
    "https://github.com/o/fleet/pull/7"
   ]
+ },
+ "a1-06": {
+  "decision": "do",
+  "title": "six",
+  "status": "open-ship"
+ },
+ "a1-07": {
+  "decision": "do",
+  "title": "seven",
+  "status": "open-helm"
+ },
+ "a1-08": {
+  "decision": "do",
+  "title": "eight",
+  "status": "open-captain"
  }
 }' >"$1"
 }
@@ -140,7 +158,7 @@ test_stamps_named_ids_and_is_idempotent() {
   local dir="$TMP_ROOT/basic" out before
   setup "$dir"
   out=$(run_tool "$dir" "${WINDOW[@]}" "$dir/decisions.json" 2>&1) || fail "first run failed: $out"
-  assert_contains "$out" "3 merged PR(s) searched; 2 id(s) named by one, 1 newly landed" "summary counts: $out"
+  assert_contains "$out" "3 merged PR(s) searched; 5 id(s) named by one, 2 newly landed, 2 held at open-helm/open-captain" "summary counts: $out"
   assert_contains "$out" "1 hand URL(s) kept, 1 unmerged URL(s) dropped; changed" "summary counts the hand URLs: $out"
   printf '%s' '{
  "a1-01": {
@@ -177,6 +195,30 @@ test_stamps_named_ids_and_is_idempotent() {
   "landed_by": [
    "https://github.com/o/fleet/pull/7"
   ]
+ },
+ "a1-06": {
+  "decision": "do",
+  "title": "six",
+  "status": "landed",
+  "landed_by": [
+   "https://github.com/o/fleet/pull/7"
+  ]
+ },
+ "a1-07": {
+  "decision": "do",
+  "title": "seven",
+  "status": "open-helm",
+  "landed_by": [
+   "https://github.com/o/fleet/pull/7"
+  ]
+ },
+ "a1-08": {
+  "decision": "do",
+  "title": "eight",
+  "status": "open-captain",
+  "landed_by": [
+   "https://github.com/o/biz/pull/12"
+  ]
  }
 }' >"$dir/expected.json"
   cmp -s "$dir/expected.json" "$dir/decisions.json" \
@@ -186,7 +228,7 @@ test_stamps_named_ids_and_is_idempotent() {
   assert_contains "$out" "0 newly landed" "second run lands nothing new: $out"
   assert_contains "$out" "unchanged" "second run reports no change: $out"
   assert_equals "$before" "$(cksum <"$dir/decisions.json")" "a second run changes no byte"
-  pass "landed-by: merged PRs that name an id stamp it landed, hand URLs are checked, and a rerun is a no-op"
+  pass "landed-by: merged PRs that name an id stamp it landed (an open-helm or open-captain id keeps its status), hand URLs are checked, and a rerun is a no-op"
 }
 
 test_search_args_and_window_split() {
@@ -195,7 +237,7 @@ test_search_args_and_window_split() {
   out=$(PATH="$FAKE_BIN:$PATH" FAKE_GH_FULL=range FAKE_GH_PRS="$dir/prs.json" FAKE_GH_STATES="$dir/states.json" \
     FAKE_GH_LOG="$dir/gh.log" "$TOOL" --dry-run --owner o --owner p --since 2026-11-20 --until 2026-11-27 \
     "$dir/decisions.json" 2>&1) || fail "split run failed: $out"
-  assert_contains "$out" "3 merged PR(s) searched; 2 id(s) named by one" "the split windows find every PR once: $out"
+  assert_contains "$out" "3 merged PR(s) searched; 5 id(s) named by one" "the split windows find every PR once: $out"
   assert_contains "$(head -1 "$dir/gh.log")" "search prs --merged --owner o --owner p --merged-at 2026-11-20..2026-11-27" \
     "the search asks for merged PRs of every owner"
   searches=$(grep -c '^search prs' "$dir/gh.log")
@@ -228,7 +270,10 @@ test_prior_status_table() {
     '| a1-01 | landed | https://github.com/o/biz/pull/12, https://github.com/o/fleet/pull/7 | café one \| piped |' \
     '| a1-02 | done-helm-2026-11-20 | https://github.com/o/nova/pull/40 (hand) | two |' \
     '| a1-03 | open | - | three |' \
-    '| a1-05 | landed | https://github.com/o/fleet/pull/7 | five |' >"$dir/expected.md"
+    '| a1-05 | landed | https://github.com/o/fleet/pull/7 | five |' \
+    '| a1-06 | landed | https://github.com/o/fleet/pull/7 | six |' \
+    '| a1-07 | open-helm | https://github.com/o/fleet/pull/7 | seven |' \
+    '| a1-08 | open-captain | https://github.com/o/biz/pull/12 | eight |' >"$dir/expected.md"
   cmp -s "$dir/expected.md" "$dir/prior.md" \
     || fail "the table differs:"$'\n'"$(diff "$dir/expected.md" "$dir/prior.md")"
   pass "landed-by: --table writes one prior-status row per approved id from the stamped record"
