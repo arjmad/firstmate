@@ -19,7 +19,7 @@ Source: every PR `gh search prs --merged --owner ... --merged-at
 <since>..<until>` returns whose state reads merged. A window that fills
 gh's 1000-result cap is split in half until each part fits. A PR names an
 id when the id appears in its title or body as a whole token (a1-6 does not
-match a1-60 or xa1-6). No ledger, backlog row or other prose is read for a
+match a1-60, xa1-6 or a1-6-followup). No ledger, backlog row or other prose is read for a
 PR URL.
 
 Output: <decisions.json>, rewritten in place.
@@ -110,7 +110,7 @@ def search_merged(owners: list[str], since: dt.date, until: dt.date) -> list[dic
 
 
 def id_pattern(fid: str) -> re.Pattern[str]:
-    return re.compile(r"(?<![A-Za-z0-9_-])" + re.escape(fid) + r"(?![A-Za-z0-9_])")
+    return re.compile(r"(?<![A-Za-z0-9_-])" + re.escape(fid) + r"(?![A-Za-z0-9_-])")
 
 
 def url_key(url: str) -> tuple[str, int]:
@@ -156,7 +156,7 @@ def prior_status_table(data: dict, named: dict[str, list[str]], owners: list[str
         "",
         f"Built by bin/fm-audit-landed-by.py from PRs by {', '.join(owners)} merged "
         f"{since.isoformat()}..{until.isoformat()} that name each id, and from decisions.json's status.",
-        "A URL marked (hand) is merged but does not name its id; someone entered it by hand.",
+        "A URL marked (hand) is merged, but no PR this search found names its id with it, as when someone entered it by hand.",
         "",
         "| Id | Status | Landed by | Title |",
         "|---|---|---|---|",

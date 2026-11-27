@@ -72,7 +72,7 @@ chmod +x "$FAKE_BIN/gh"
 write_prs() {
   printf '%s\n' '[
  {"day": "2026-11-21", "state": "merged", "url": "https://github.com/o/biz/pull/12",
-  "title": "fix: the thing (a1-01)", "body": "Also see a1-030 and xa1-03; declines a1-04; repo half of a1-08."},
+  "title": "fix: the thing (a1-01)", "body": "Also see a1-030, xa1-03 and a1-03-followup; declines a1-04; repo half of a1-08."},
  {"day": "2026-11-23", "state": "merged", "url": "https://github.com/o/fleet/pull/7",
   "title": "chore: tidy", "body": "## Summary\nAudit items a1-01, a1-05, a1-06 and a1-07, from the deep audit."},
  {"day": "2026-11-24", "state": "closed", "url": "https://github.com/o/biz/pull/30",
@@ -96,7 +96,8 @@ write_decisions() {
   "status": "done-helm-2026-11-20",
   "landed_by": [
    "https://github.com/o/nova/pull/40",
-   "https://github.com/o/biz/pull/899"
+   "https://github.com/o/biz/pull/899",
+   "https://github.com/o/cade/pull/5"
   ]
  },
  "a1-03": {
@@ -148,7 +149,8 @@ setup() {
   mkdir -p "$1"
   write_prs "$1/prs.json"
   write_decisions "$1/decisions.json"
-  printf '%s\n' '{"https://github.com/o/biz/pull/899": "OPEN"}' >"$1/states.json"
+  # 899 never merged; cade/5 merged before the search window.
+  printf '%s\n' '{"https://github.com/o/biz/pull/899": "OPEN", "https://github.com/o/cade/pull/5": "MERGED"}' >"$1/states.json"
   : >"$1/gh.log"
 }
 
@@ -159,7 +161,7 @@ test_stamps_named_ids_and_is_idempotent() {
   setup "$dir"
   out=$(run_tool "$dir" "${WINDOW[@]}" "$dir/decisions.json" 2>&1) || fail "first run failed: $out"
   assert_contains "$out" "3 merged PR(s) searched; 5 id(s) named by one, 2 newly landed, 2 held at open-helm/open-captain" "summary counts: $out"
-  assert_contains "$out" "1 hand URL(s) kept, 1 unmerged URL(s) dropped; changed" "summary counts the hand URLs: $out"
+  assert_contains "$out" "2 hand URL(s) kept, 1 unmerged URL(s) dropped; changed" "summary counts the hand URLs: $out"
   printf '%s' '{
  "a1-01": {
   "decision": "do",
@@ -175,7 +177,8 @@ test_stamps_named_ids_and_is_idempotent() {
   "title": "two",
   "status": "done-helm-2026-11-20",
   "landed_by": [
-   "https://github.com/o/nova/pull/40"
+   "https://github.com/o/nova/pull/40",
+   "https://github.com/o/cade/pull/5"
   ]
  },
  "a1-03": {
@@ -263,12 +266,12 @@ test_prior_status_table() {
     '# Prior-status table' \
     '' \
     "Built by bin/fm-audit-landed-by.py from PRs by o merged 2026-11-20..2026-11-27 that name each id, and from decisions.json's status." \
-    'A URL marked (hand) is merged but does not name its id; someone entered it by hand.' \
+    'A URL marked (hand) is merged, but no PR this search found names its id with it, as when someone entered it by hand.' \
     '' \
     '| Id | Status | Landed by | Title |' \
     '|---|---|---|---|' \
     '| a1-01 | landed | https://github.com/o/biz/pull/12, https://github.com/o/fleet/pull/7 | café one \| piped |' \
-    '| a1-02 | done-helm-2026-11-20 | https://github.com/o/nova/pull/40 (hand) | two |' \
+    '| a1-02 | done-helm-2026-11-20 | https://github.com/o/nova/pull/40 (hand), https://github.com/o/cade/pull/5 (hand) | two |' \
     '| a1-03 | open | - | three |' \
     '| a1-05 | landed | https://github.com/o/fleet/pull/7 | five |' \
     '| a1-06 | landed | https://github.com/o/fleet/pull/7 | six |' \
