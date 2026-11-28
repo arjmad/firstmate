@@ -382,6 +382,11 @@ case "${1:-} ${2:-}" in
           rm -f "$fixtures/github-body-before-edit"
         fi
         jq -c '{body}' "$FM_TEST_GH_VIEW_JSON"
+        # After the edit's read-back, someone else removes the line again.
+        if [ -f "$fixtures/github-body-reverts" ] && [ -f "$fixtures/github-edited-body" ]; then
+          jq -c --rawfile b "$fixtures/github-body-reverts" '.body = $b' "$FM_TEST_GH_VIEW_JSON" \
+            > "$FM_TEST_GH_VIEW_JSON.tmp" && mv "$FM_TEST_GH_VIEW_JSON.tmp" "$FM_TEST_GH_VIEW_JSON"
+        fi
         exit 0
         ;;
     esac
@@ -8204,6 +8209,16 @@ test_pr_class_away_add_class_refuses_every_other_write() {
   expect_code 1 "$RC" "class-away-check-after-edit: a check that failed after the edit must refuse: $(cat "$case_dir/stderr")"
   assert_grep 'verified: added Class: fleet' "$case_dir/stderr" "class-away-check-after-edit: the line was not added"
   assert_no_grep 'pr merge' "$case_dir/gh.log" "class-away-check-after-edit: the merge ran past the failed check"
+
+  # One write per run: a line removed again after the edit is never re-added.
+  case_dir=$(visual_review_case class-away-reverted "$head" $'## Summary\n\nA fix.\n')
+  class_brief "$case_dir"
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  printf '## Summary\n\nA fix.\n' > "$case_dir/github-body-reverts"
+  run_class_case "$case_dir" 186 --add-class fleet
+  expect_code 1 "$RC" "class-away-reverted: a line removed after the edit must refuse: $(cat "$case_dir/stderr")"
+  [ "$(grep -c '^pr edit' "$case_dir/gh.log")" -eq 1 ] || fail "class-away-reverted: the body was written more than once"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "class-away-reverted: the merge ran"
 
   # GitLab takes no away write.
   case_dir=$(make_gitlab_case class-away-gitlab)

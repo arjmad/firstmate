@@ -2408,7 +2408,8 @@ require_pr_class() {
     return 1
   fi
   class=$(printf '%s\n' "$FM_PR_BODY" | fm_pr_class_of_body) || status=$?
-  if [ "$status" -eq 1 ] && [ -n "$ADD_CLASS" ]; then
+  # One write per run: a line gone again on a later read refuses, read-only.
+  if [ "$status" -eq 1 ] && [ -n "$ADD_CLASS" ] && [ "$FM_PR_CLASS_WRITTEN" = false ]; then
     github_add_class_line || return 1
     status=0
     class=$(printf '%s\n' "$FM_PR_BODY" | fm_pr_class_of_body) || status=$?
@@ -2470,6 +2471,9 @@ github_add_class_line_locked() {
     printf 'error: refusing to merge %s: its body could not be re-read to add its Class line; nothing was written\n' "$URL" >&2
     return 1
   fi
+  # A coarse edited-since guard: command substitution drops trailing newlines
+  # from both sides, which is harmless because the write below is built from
+  # this locked re-read, not from FM_PR_BODY.
   fresh=$(printf '%s' "$before" | jq -r '.body // ""')
   printf '%s\n' "$fresh" | fm_pr_class_of_body >/dev/null || status=$?
   if [ "$fresh" != "$FM_PR_BODY" ] || [ "$status" -ne 1 ]; then
