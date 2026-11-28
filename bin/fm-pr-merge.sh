@@ -310,6 +310,18 @@
 # machine PR with no scaffold brief, and a no-mistakes or local-only ship. It
 # runs just before the door gate, so the captain is never asked about a PR this
 # refusal would still stop; adding the line needs no push and no new review.
+# Away Class line (fork patch, docs/fork-decisions/2026-11-28-away-class-line.md):
+# while the away-posture record exists, a GitHub merge run with --add-class
+# <word> (a known word, chosen by the caller from the task) whose body has no
+# Class line appends that one line, after one blank line, to the body exactly
+# as the forge holds it, under the away record's lock, then reads the body
+# back and refuses unless it is the old body plus that line; the merge then
+# runs every gate as usual. That is the only PR write away authority makes
+# before a merge. The flag writes nothing and refuses for a body that already
+# carries another Class word or an invalid one, a body that changed since the
+# live verify, or a task whose brief asks for no line; it is refused attended,
+# where the line is added by hand, and on GitLab and Forgejo. A body already
+# carrying the same word merges without a write, so a re-run is safe.
 #
 # Branch standing merges (fork patch, docs/fork-decisions.md 2026-10-27): while
 # attended, the supervision branch actor merges only the class Arjun named for
@@ -399,7 +411,7 @@
 # or branch authority, a patch that appeared or did not apply when shown, leaves
 # it unapplied with an actionable line, a companion PR never touches it, and
 # neither step changes this script's exit.
-# Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--update-branch] [--expected-head <full-sha>] [--allow-red <check-name>] [--allow-missing <check-name>] [--allow-no-pipeline] [--waive-review <reason>] [--one-way-approved] [--allow-revert] [--captain-approval-file <path>] [-- <extra forge merge args>]
+# Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--update-branch] [--expected-head <full-sha>] [--allow-red <check-name>] [--allow-missing <check-name>] [--allow-no-pipeline] [--waive-review <reason>] [--one-way-approved] [--allow-revert] [--captain-approval-file <path>] [--add-class <word>] [-- <extra forge merge args>]
 #
 # On GitLab, this script confirms the MR is actually merged before reporting it;
 # an auto-merge-queued or unconfirmed request leaves the poll armed and records
@@ -494,9 +506,20 @@ ONE_WAY_APPROVED=false
 ALLOW_REVERT=false
 CAPTAIN_APPROVAL_FILE=
 CAPTAIN_APPROVAL_LINE=
+ADD_CLASS=
 EXPECTED_HEAD=
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --add-class)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || { echo "error: --add-class needs a class word" >&2; exit 2; }
+      [ -z "$ADD_CLASS" ] || { echo "error: --add-class may be specified only once" >&2; exit 2; }
+      ADD_CLASS=$2
+      shift 2
+      ;;
+    --add-class=*)
+      echo "error: --add-class requires a separate class word argument" >&2
+      exit 2
+      ;;
     --allow-revert)
       ALLOW_REVERT=true
       shift
@@ -638,6 +661,16 @@ if [ -n "$CAPTAIN_APPROVAL_FILE" ]; then
       ;;
   esac
   CAPTAIN_APPROVAL_LINE="Approved: Arjun $approval_date: $approval_words"
+fi
+if [ -n "$ADD_CLASS" ]; then
+  if [ "$PROVIDER" != github ]; then
+    echo "error: --add-class applies only to GitHub" >&2
+    exit 2
+  fi
+  if ! fm_pr_class_valid "$ADD_CLASS"; then
+    printf "error: --add-class '%s' is not one of: %s\n" "$ADD_CLASS" "$FM_PR_CLASS_WORDS" >&2
+    exit 2
+  fi
 fi
 if [ -n "$EXPECTED_HEAD" ] && ! fm_pr_head_valid "$EXPECTED_HEAD"; then
   echo "error: --expected-head requires a full lowercase commit sha" >&2
@@ -2125,6 +2158,10 @@ require_current_away_authority() {
     echo "error: --allow-revert is attended-only; while the away-posture record exists a merge never undoes landed work" >&2
     return 2
   fi
+  if [ "$FM_PR_AWAY_POSTURE" != true ] && [ -n "$ADD_CLASS" ]; then
+    echo "error: --add-class is away-only; attended, edit the PR body yourself and merge again" >&2
+    return 2
+  fi
 }
 
 # The Merge Danger reading (see the header). Reads the PR body on stdin and
@@ -2354,23 +2391,103 @@ require_visual_review_approval() {
 # read.
 require_pr_class() {
   local class status=0
-  fm_pr_class_brief_requires "$DATA/$ID/brief.md" || return 0
+  if ! fm_pr_class_brief_requires "$DATA/$ID/brief.md"; then
+    [ -z "$ADD_CLASS" ] || {
+      printf "error: refusing to merge %s: task %s's brief asks for no Class line, so --add-class has nothing to add; merge without it\n" "$URL" "$ID" >&2
+      return 1
+    }
+    return 0
+  fi
   if [ "$FM_PR_BODY_READ" != true ]; then
     printf 'error: refusing to merge %s: its body could not be read, so its Class line cannot be checked\n' "$URL" >&2
     return 1
   fi
   class=$(printf '%s\n' "$FM_PR_BODY" | fm_pr_class_of_body) || status=$?
+  if [ "$status" -eq 1 ] && [ -n "$ADD_CLASS" ]; then
+    github_add_class_line || return 1
+    status=0
+    class=$(printf '%s\n' "$FM_PR_BODY" | fm_pr_class_of_body) || status=$?
+  fi
   case "$status" in
     0)
+      if [ -n "$ADD_CLASS" ] && [ "$class" != "$ADD_CLASS" ]; then
+        printf "error: refusing to merge %s: its body already carries Class: %s, and --add-class only adds a missing line, never changes one\n" "$URL" "$class" >&2
+        return 1
+      fi
       printf 'verified: %s carries Class: %s\n' "$URL" "$class" >&2
       return 0
       ;;
     1) printf "error: refusing to merge %s: task %s's brief asks for a \`Class: <word>\` line and its body has none\n" "$URL" "$ID" >&2 ;;
     *) printf "error: refusing to merge %s: its Class line reads '%s', not one of: %s\n" "$URL" "$class" "$FM_PR_CLASS_WORDS" >&2 ;;
   esac
+  if [ "$status" -ne 1 ] && [ -n "$ADD_CLASS" ]; then
+    echo "error: --add-class only adds a missing line, never changes one, so this body waits for the captain's return" >&2
+    return 1
+  fi
+  if [ "$status" -eq 1 ] && [ "$FM_PR_AWAY_POSTURE" = true ]; then
+    # shellcheck disable=SC2016 # the backticks are literal Markdown
+    printf 'error: while away, re-run the merge with --add-class <word>, the word that fits the task (bin/fm-pr-class-lib.sh defines each); it adds that one line and nothing else\n' >&2
+    return 1
+  fi
   # shellcheck disable=SC2016 # the backticks are literal Markdown
   printf 'error: add one line `Class: <word>` to the PR body (bin/fm-pr-class-lib.sh defines each word), then re-run the merge; editing the body needs no push and no new review\n' >&2
   return 1
+}
+
+# The away Class line (see the header's effort-class paragraph): the one PR
+# write away authority makes before a merge. Under the away record's lock it
+# re-reads the body, refuses one that changed since the live verify or that
+# carries any Class line, appends exactly one `Class: <word>` line (after one
+# blank line) and nothing else, and reads the body back to confirm the forge
+# holds exactly that. FM_PR_BODY becomes the body read back.
+github_add_class_line() {
+  local took=false rc=0
+  # The behind-base re-check runs with the merge's own hold already taken.
+  if [ -z "${FM_AFK_CONTRACT_LOCK_HELD:-}" ]; then
+    if ! fm_afk_contract_lock_hold "$STATE"; then
+      printf 'error: refusing to merge %s: the away-posture record could not be locked to add its Class line; nothing was written\n' "$URL" >&2
+      return 1
+    fi
+    took=true
+  fi
+  github_add_class_line_locked || rc=$?
+  [ "$took" != true ] || fm_afk_contract_lock_release || true
+  return "$rc"
+}
+
+github_add_class_line_locked() {
+  local before after expected fresh status=0
+  if ! fm_afk_contract_away_present "$STATE"; then
+    printf 'error: refusing to merge %s: --add-class is away-only and the away-posture record is gone; nothing was written\n' "$URL" >&2
+    return 1
+  fi
+  if ! before=$(gh pr view "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" --json body 2>/dev/null) \
+    || ! printf '%s' "$before" | jq -e '.body == null or (.body | type == "string")' >/dev/null 2>&1; then
+    printf 'error: refusing to merge %s: its body could not be re-read to add its Class line; nothing was written\n' "$URL" >&2
+    return 1
+  fi
+  fresh=$(printf '%s' "$before" | jq -r '.body // ""')
+  printf '%s\n' "$fresh" | fm_pr_class_of_body >/dev/null || status=$?
+  if [ "$fresh" != "$FM_PR_BODY" ] || [ "$status" -ne 1 ]; then
+    printf 'error: refusing to merge %s: its body changed after it was read, so --add-class wrote nothing; re-run the merge\n' "$URL" >&2
+    return 1
+  fi
+  # The old body exactly as the forge holds it, one blank line, and the line.
+  expected=$(printf '%s' "$before" | jq -c --arg w "$ADD_CLASS" \
+    '(.body // "") as $b | $b + (if $b == "" or ($b | endswith("\n")) then "" else "\n" end)
+      + (if $b == "" then "" else "\n" end) + "Class: " + $w + "\n"')
+  if ! printf '%s' "$expected" | jq -j . \
+    | gh pr edit "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" --body-file - >/dev/null 2>&1; then
+    printf 'error: refusing to merge %s: the forge refused the edit that adds Class: %s\n' "$URL" "$ADD_CLASS" >&2
+    return 1
+  fi
+  if ! after=$(gh pr view "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" --json body 2>/dev/null) \
+    || ! printf '%s' "$after" | jq -e --argjson e "$expected" '.body == $e' >/dev/null 2>&1; then
+    printf 'error: refusing to merge %s: its body did not read back as the old body plus Class: %s\n' "$URL" "$ADD_CLASS" >&2
+    return 1
+  fi
+  FM_PR_BODY=$(printf '%s' "$after" | jq -r '.body')
+  printf 'verified: added Class: %s to the body of %s under away authority, and nothing else\n' "$ADD_CLASS" "$URL" >&2
 }
 
 # Called only once the forge accepted the merge, so the log holds one-way
