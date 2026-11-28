@@ -2425,7 +2425,6 @@ require_pr_class() {
     return 1
   fi
   if [ "$status" -eq 1 ] && [ "$FM_PR_AWAY_POSTURE" = true ]; then
-    # shellcheck disable=SC2016 # the backticks are literal Markdown
     printf 'error: while away, re-run the merge with --add-class <word>, the word that fits the task (bin/fm-pr-class-lib.sh defines each); it adds that one line and nothing else\n' >&2
     return 1
   fi
@@ -2434,7 +2433,7 @@ require_pr_class() {
   return 1
 }
 
-# The away Class line (see the header's effort-class paragraph): the one PR
+# The away Class line (see the header's paragraph of that name): the one PR
 # write away authority makes before a merge. Under the away record's lock it
 # re-reads the body, refuses one that changed since the live verify or that
 # carries any Class line, appends exactly one `Class: <word>` line (after one
