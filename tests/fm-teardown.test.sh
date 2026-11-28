@@ -2730,6 +2730,102 @@ test_forced_secondmate_child_scout_nested_clone_returns_clean() {
   pass "a forced secondmate teardown returns a child scout copy with a nested clone clean"
 }
 
+# Return succeeds (via the clean-fd behavior); `destroy <slot> --yes` calls are
+# logged instead of actually removing anything, so a case can assert on the
+# exact invocation and control its exit code with FM_TEST_DESTROY_EXIT.
+add_treehouse_log_destroy() {
+  local case_dir=$1
+  cat > "$case_dir/fakebin/treehouse" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = return ]; then
+  shift
+  wt=
+  for a in "\$@"; do
+    case "\$a" in
+      --force) ;;
+      *) wt=\$a ;;
+    esac
+  done
+  if [ -n "\$wt" ]; then
+    git -C "\$wt" clean -fdq || true
+  fi
+  exit 0
+fi
+if [ "\${1:-}" = destroy ]; then
+  shift
+  printf 'destroy %s\n' "\$*" >> "$case_dir/treehouse-destroy.log"
+  exit "\${FM_TEST_DESTROY_EXIT:-0}"
+fi
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/treehouse"
+}
+
+test_returned_pool_slot_is_destroyed_when_opted_in() {
+  local case_dir wt rc
+  case_dir=$(make_case pool-slot-destroyed)
+  wt=$(move_case_to_pool_slot "$case_dir" 5)
+  write_meta "$case_dir" no-mistakes scout "$wt"
+  prepare_scout_teardown "$case_dir"
+  add_treehouse_log_destroy "$case_dir"
+  : > "$case_dir/config/reclaim-pool-slots"
+
+  set +e
+  FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "pool-slot-destroyed: a cleanly returned slot's teardown should succeed"
+  assert_present "$case_dir/treehouse-destroy.log" "pool-slot-destroyed: destroy was never invoked"
+  assert_grep "destroy $wt --yes" "$case_dir/treehouse-destroy.log" \
+    "pool-slot-destroyed: destroy did not target the returned slot"
+  assert_no_grep "include-" "$case_dir/treehouse-destroy.log" \
+    "pool-slot-destroyed: destroy must stay safe-by-default, never pass an --include-* override"
+  pass "config/reclaim-pool-slots opts a home into destroying a cleanly returned pool slot"
+}
+
+test_unmerged_pool_slot_is_kept_after_destroy_skip() {
+  local case_dir wt rc
+  case_dir=$(make_case pool-slot-kept)
+  wt=$(move_case_to_pool_slot "$case_dir" 6)
+  write_meta "$case_dir" no-mistakes scout "$wt"
+  prepare_scout_teardown "$case_dir"
+  add_treehouse_log_destroy "$case_dir"
+  : > "$case_dir/config/reclaim-pool-slots"
+
+  set +e
+  FM_HOME="$case_dir" FM_TEST_DESTROY_EXIT=1 run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "pool-slot-kept: a destroy skip must not fail an otherwise-successful teardown"
+  assert_present "$wt" "pool-slot-kept: the kept slot's worktree should still exist"
+  assert_grep "destroy $wt --yes" "$case_dir/treehouse-destroy.log" \
+    "pool-slot-kept: destroy was never attempted"
+  assert_grep "slot not removed" "$case_dir/stderr" \
+    "pool-slot-kept: no warning was printed for the skipped destroy"
+  pass "an opted-in destroy that skips a dirty or unmerged slot only warns, never fails teardown"
+}
+
+test_pool_slot_is_kept_by_default_without_opt_in() {
+  local case_dir wt rc
+  case_dir=$(make_case pool-slot-keep-flag)
+  wt=$(move_case_to_pool_slot "$case_dir" 7)
+  write_meta "$case_dir" no-mistakes scout "$wt"
+  prepare_scout_teardown "$case_dir"
+  add_treehouse_log_destroy "$case_dir"
+
+  set +e
+  FM_HOME="$case_dir" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "pool-slot-keep-flag: teardown should still succeed"
+  assert_absent "$case_dir/treehouse-destroy.log" \
+    "pool-slot-keep-flag: destroy ran without the config/reclaim-pool-slots opt-in"
+  pass "an unconfigured home never destroys a returned pool slot (opt-in required)"
+}
+
 # Return succeeds but leaves no readable worktree behind to verify.
 add_treehouse_that_removes_copy() {
   local case_dir=$1
@@ -2780,6 +2876,42 @@ test_forced_secondmate_dirty_child_return_warns_and_completes() {
   assert_absent "$case_dir/state/task-x1.meta" "secondmate-child-dirty-return: task record was not removed"
   assert_absent "$home" "secondmate-child-dirty-return: secondmate home was not removed"
   pass "a forced secondmate teardown warns about a dirty child return and still completes"
+}
+
+test_secondmate_teardown_removes_its_pool_root_and_leaves_a_sibling() {
+  local case_dir home sibling pool_root sibling_root rc
+  case_dir=$(make_case secondmate-pool-root)
+  write_meta "$case_dir" local-only secondmate
+  home="$case_dir/secondmate-home"
+  sibling="$case_dir/sibling-home"
+  mkdir -p "$home/state" "$home/data" "$home/config" "$home/projects" \
+    "$sibling/state" "$sibling/data" "$sibling/config" "$sibling/projects"
+  printf '%s\n' task-x1 > "$home/.fm-secondmate-home"
+  printf '%s\n' sibling-x > "$sibling/.fm-secondmate-home"
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' \
+    "$case_dir" > "$home/.fm-secondmate-parent"
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' \
+    "$case_dir" > "$sibling/.fm-secondmate-parent"
+  printf '%s\n' "home=$home" >> "$case_dir/state/task-x1.meta"
+  pool_root=$(FM_HOME="$home" /bin/bash -c '. "$1" && fm_treehouse_spawn_root "$2"' \
+    _ "$ROOT/bin/fm-wake-lib.sh" "$home")
+  sibling_root=$(FM_HOME="$sibling" /bin/bash -c '. "$1" && fm_treehouse_spawn_root "$2"' \
+    _ "$ROOT/bin/fm-wake-lib.sh" "$sibling")
+  [ -n "$pool_root" ] || fail "secondmate-pool-root: spawn root for the home under teardown was empty"
+  [ -n "$sibling_root" ] || fail "secondmate-pool-root: spawn root for the sibling home was empty"
+  [ "$pool_root" != "$sibling_root" ] || fail "secondmate-pool-root: sibling home shared the teardown home's pool root"
+  mkdir -p "$pool_root" "$sibling_root"
+  printf 'drop\n' > "$pool_root/marker"
+  printf 'keep\n' > "$sibling_root/marker"
+
+  rc=0
+  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 0 "$rc" "secondmate-pool-root: forced secondmate teardown should succeed: $(cat "$case_dir/stderr")"
+  assert_absent "$home" "secondmate-pool-root: secondmate home was not removed"
+  assert_absent "$pool_root" "secondmate-pool-root: per-home pool root survived teardown"
+  assert_present "$sibling_root/marker" "secondmate-pool-root: sibling home's pool root was removed"
+  pass "secondmate teardown removes that home's pool root and leaves a sibling's untouched"
 }
 
 test_return_that_removes_copy_warns_cannot_verify() {
@@ -3970,7 +4102,8 @@ test_secondmate_pr_registration_publishes_ready_line() {
   write_meta "$case_dir" no-mistakes ship
   wt_commit_file "$case_dir" feature.txt hello "add feature"
   add_gh_pr_merged_for_head "$case_dir" "$(git -C "$case_dir/wt" rev-parse HEAD)"
-  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" \
+    FM_DATA_OVERRIDE="$case_dir/data" \
     PATH="$case_dir/fakebin:$PATH" "$PR_CHECK" task-x1 "$url" >/dev/null 2> "$case_dir/pr-check.err" \
     || fail "main-pr-ready: fm-pr-check failed"
   ! grep -q '^actionable:' "$case_dir/pr-check.err" \
@@ -8050,7 +8183,11 @@ test_ship_nested_clone_is_refused_and_bytes_stay
 test_dirty_return_warns_which_slot_was_lost
 test_dirty_return_warns_even_when_a_later_step_refuses
 test_forced_secondmate_child_scout_nested_clone_returns_clean
+test_returned_pool_slot_is_destroyed_when_opted_in
+test_unmerged_pool_slot_is_kept_after_destroy_skip
+test_pool_slot_is_kept_by_default_without_opt_in
 test_forced_secondmate_dirty_child_return_warns_and_completes
+test_secondmate_teardown_removes_its_pool_root_and_leaves_a_sibling
 test_return_that_removes_copy_warns_cannot_verify
 test_scout_ignored_files_survive_scratch_clean
 test_teardown_applies_a_merged_ships_home_patch

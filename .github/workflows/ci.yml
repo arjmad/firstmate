@@ -157,23 +157,38 @@ jobs:
       - name: Not affected by this change
         if: steps.gate.outputs.run != 'true'
         run: echo "No lint root in this partition is affected; see the CI plan summary."
+      # Cache key hashes the installers, which own the archive SHA-256 pins.
+      # The installers skip download (and checksum verification) when the
+      # pinned version is already at the destination, so a pin-only key would
+      # keep a stale binary; changing a checksum in an installer must miss
+      # this cache so the installer re-downloads and re-verifies.
+      - uses: actions/cache@v4
+        if: steps.gate.outputs.run == 'true'
+        with:
+          path: ${{ runner.temp }}/fm-ci-tools
+          key: fm-ci-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bin/fm-install-shellcheck.sh', 'bin/fm-install-actionlint.sh') }}
       - name: Install pinned ShellCheck
         if: steps.gate.outputs.run == 'true'
         run: |
           set -eu
-          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/fm-ci-tools"
+          echo "$RUNNER_TEMP/fm-ci-tools" >> "$GITHUB_PATH"
       - name: Install pinned actionlint
         if: steps.gate.outputs.run == 'true'
         run: |
           set -eu
-          bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          bin/fm-install-actionlint.sh "$RUNNER_TEMP/fm-ci-tools"
+          echo "$RUNNER_TEMP/fm-ci-tools" >> "$GITHUB_PATH"
       # Single owner of the lint definition (shell file set, config, version,
       # and GitHub workflow lint). Do not re-spell the checks here; keep CI
       # and the pre-push gate on this script so a self-broken ci.yml still
       # fails locally before merge. The partition count comes from the matrix so
       # the partitions can never disagree with the number of jobs that run them.
+      # Fork-only: a pull request lints whole canonical partitions, never
+      # upstream's `--changed` partitions. The plan gate above picks partitions
+      # by canonical membership (bin/fm-ci-plan.sh gate lint), and a `--changed`
+      # partition splits only the changed roots, so the two would disagree on
+      # which job owns a root and could leave a changed root unlinted.
       - name: Lint canonical partition
         if: steps.gate.outputs.run == 'true'
         env:
@@ -240,18 +255,23 @@ jobs:
       - name: Not affected by this change
         if: steps.gate.outputs.run != 'true'
         run: echo "No test in this lane is affected; see the CI plan summary."
+      - uses: actions/cache@v4
+        if: steps.gate.outputs.run == 'true'
+        with:
+          path: ${{ runner.temp }}/fm-ci-tools
+          key: fm-ci-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bin/fm-install-shellcheck.sh', 'bin/fm-install-actionlint.sh') }}
       - name: Install pinned ShellCheck
         if: steps.gate.outputs.run == 'true'
         run: |
           set -eu
-          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/fm-ci-tools"
+          echo "$RUNNER_TEMP/fm-ci-tools" >> "$GITHUB_PATH"
       - name: Install pinned actionlint
         if: steps.gate.outputs.run == 'true'
         run: |
           set -eu
-          bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          bin/fm-install-actionlint.sh "$RUNNER_TEMP/fm-ci-tools"
+          echo "$RUNNER_TEMP/fm-ci-tools" >> "$GITHUB_PATH"
       # Every tasks-axi install pins the same version, and --before freezes its
       # caret-ranged dependencies, so a new release cannot turn main red.
       - name: Install tasks-axi
@@ -303,24 +323,35 @@ jobs:
       - name: Not affected by this change
         if: steps.gate.outputs.run != 'true'
         run: echo "No test in this lane is affected; see the CI plan summary."
+      - uses: actions/cache@v4
+        if: steps.gate.outputs.run == 'true'
+        with:
+          path: ${{ runner.temp }}/fm-ci-tools
+          key: fm-ci-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bin/fm-install-shellcheck.sh', 'bin/fm-install-actionlint.sh') }}
       - name: Install pinned ShellCheck
         if: steps.gate.outputs.run == 'true'
         run: |
           set -eu
-          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/fm-ci-tools"
+          echo "$RUNNER_TEMP/fm-ci-tools" >> "$GITHUB_PATH"
       - name: Install pinned actionlint
         if: steps.gate.outputs.run == 'true'
         run: |
           set -eu
-          bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          bin/fm-install-actionlint.sh "$RUNNER_TEMP/fm-ci-tools"
+          echo "$RUNNER_TEMP/fm-ci-tools" >> "$GITHUB_PATH"
       - name: Install tasks-axi
         if: steps.gate.outputs.run == 'true'
         run: |
           set -eu
           npm install -g --before=2026-11-20T00:00:00Z tasks-axi@0.2.6
           tasks-axi --version
+      - name: Install the Pi package for the Pi extension tests
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          set -eu
+          npm install -g --before=2026-10-14T00:00:00Z @earendil-works/pi-coding-agent@1.2.0
+          npm ls -g --depth 0 @earendil-works/pi-coding-agent
       - name: Run portable parallel shard 2
         if: steps.gate.outputs.run == 'true'
         env:
@@ -329,6 +360,7 @@ jobs:
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-test"
           bin/fm-test-run.sh --lane portable-parallel-2 --jobs 2 --per-script-timeout-secs 1500 ${FM_CI_ONLY:+--only "$FM_CI_ONLY"} \
+            --fail-on-gate-skip 'Pi extension typecheck prerequisite not found' \
             --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-2.json"
       - name: Upload shard 2 timing artifact
         if: always() && steps.gate.outputs.run == 'true'
@@ -361,7 +393,7 @@ jobs:
       # Every shard reports so one failure never hides another shard's result.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -374,18 +406,23 @@ jobs:
       - name: Not affected by this change
         if: steps.gate.outputs.run != 'true'
         run: echo "No test in this shard is affected; see the CI plan summary."
+      - uses: actions/cache@v4
+        if: steps.gate.outputs.run == 'true'
+        with:
+          path: ${{ runner.temp }}/fm-ci-tools
+          key: fm-ci-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bin/fm-install-shellcheck.sh', 'bin/fm-install-actionlint.sh') }}
       - name: Install pinned ShellCheck
         if: steps.gate.outputs.run == 'true'
         run: |
           set -eu
-          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/fm-ci-tools"
+          echo "$RUNNER_TEMP/fm-ci-tools" >> "$GITHUB_PATH"
       - name: Install pinned actionlint
         if: steps.gate.outputs.run == 'true'
         run: |
           set -eu
-          bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          bin/fm-install-actionlint.sh "$RUNNER_TEMP/fm-ci-tools"
+          echo "$RUNNER_TEMP/fm-ci-tools" >> "$GITHUB_PATH"
       - name: Require tmux for e2e tests
         if: steps.gate.outputs.run == 'true'
         run: |
@@ -694,6 +731,7 @@ jobs:
     # Fast tier: aggregation is seconds of work over lane artifacts.
     timeout-minutes: 5
     needs:
+      - lint
       - tests-portable-parallel-1
       - tests-portable-parallel-2
       - tests-portable-serial
@@ -708,6 +746,12 @@ jobs:
           pattern: fm-test-timing-*
           path: ${{ runner.temp }}/fm-test-aggregate
           merge-multiple: true
+      - name: Download lint telemetry
+        uses: actions/download-artifact@v4
+        with:
+          pattern: fm-lint-telemetry-*
+          path: ${{ runner.temp }}/fm-lint-aggregate
+          merge-multiple: true
       - name: Build aggregate timing summary
         run: |
           set -eu
@@ -721,6 +765,13 @@ jobs:
           bin/fm-test-run.sh --aggregate-json \
             "$RUNNER_TEMP/fm-test/fm-test-timing-aggregate.json" \
             "${inputs[@]}"
+      - name: Warn when a lane exceeds the healthy 20-minute budget
+        if: always()
+        run: |
+          set -eu
+          bin/fm-ci-budget-warn.sh \
+            "$RUNNER_TEMP/fm-test/fm-test-timing-aggregate.json" \
+            "$RUNNER_TEMP/fm-lint-aggregate"
       - name: Upload aggregate timing artifact
         if: always()
         uses: actions/upload-artifact@v4

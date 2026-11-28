@@ -40,7 +40,7 @@ case "${1:-}" in
 esac
 
 PROTOCOL=1
-DOCTOR_SHA256=5e07128382a304f6b2148366d792da8691f5b842509649215f4d4cb235d55a61
+DOCTOR_SHA256=c46f5ec94a41e34d26286b105176152a8938486ba7e32b54829991208fb91f25
 REAL_SOURCE=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}" 2>/dev/null) ||
   REAL_SOURCE=$(realpath "${BASH_SOURCE[0]}" 2>/dev/null) ||
   REAL_SOURCE=${BASH_SOURCE[0]}

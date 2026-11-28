@@ -72,7 +72,7 @@ case "${1:-}" in
     HOME_SUMMARY_ERR_PATH=${FM_HOME_SUMMARY_ERR_PATH:-}
     unset FM_HOME_SUMMARY_TMP_PATH FM_HOME_SUMMARY_ERR_PATH
     ;;
-  --_log-failure) HOME_SUMMARY_MODE=log-failure ;;
+  --_log-failure) HOME_SUMMARY_MODE='log-failure' ;;
   -h|--help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
