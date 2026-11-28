@@ -69,6 +69,8 @@ test_two_audits_in_sequence_never_share_an_id() {
   assert_equals "a7-04 a7-05 a7-06 a1-60 a1-61" "$(printf '%s' "$ids" | tr '\n' ' ')" "the third audit's ids start past both earlier audits"
   # shellcheck disable=SC2086 # each id is one word
   decisions "$dir/deep-audit-1128/decisions.json" $ids
+  # The same audit's walk record names its own ids; check must not count it.
+  printf 'Arjun approved %s.\n' "$(printf '%s' "$ids" | tr '\n' ' ')" >"$dir/deep-audit-1128/walk-answers.md"
   out=$("$TOOL" check "$dir/deep-audit-1128/decisions.json" "$dir"/deep-audit-* 2>&1) \
     || fail "check refused ids next minted: $out"
   assert_contains "$out" "ok: 5 id(s)" "check passes the third audit: $out"
