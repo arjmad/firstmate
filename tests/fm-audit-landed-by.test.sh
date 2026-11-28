@@ -19,6 +19,8 @@
 #     dropped otherwise, and the id's status stays; nothing is un-stamped.
 #   - An id an --also audit file also holds is never stamped; the summary
 #     lists each one a PR named, with its PRs (the a7-05/a7-07 case).
+#   - With ids bin/fm-audit-ids.py numbered unique across audits, a later
+#     audit's PR stamps no earlier finding even without --also.
 #   - --table writes the prior-status table from the stamped record, marking a
 #     kept hand URL (hand), with one row per approved id.
 #   - The search passes --merged and every --owner, and a window that fills
@@ -290,7 +292,7 @@ test_prior_status_table() {
   pass "landed-by: --table writes one prior-status row per approved id from the stamped record"
 }
 
-# The 2026-11-24 case: a7-05 and a7-07 restart in the next audit, whose PRs
+# The 2026-11-24 case: a7-05 and a7-07 restarted in the next audit, whose PRs
 # name its own a7-05 and a7-07. Without --also they stamp the earlier audit;
 # with the later audit's decisions.json as --also they are left for the helm.
 test_also_leaves_shared_ids_for_the_helm() {
@@ -325,6 +327,25 @@ test_also_leaves_shared_ids_for_the_helm() {
   assert_contains "$out" "refused" "a missing --also file is a refusal: $out"
   assert_equals "$before" "$(cksum <"$dir/fresh.json")" "a missing --also file leaves decisions.json untouched"
   pass "landed-by: an id an --also audit shares is never stamped and is listed for the helm"
+}
+
+# Unique ids: the later audit numbers its a7 run from bin/fm-audit-ids.py next
+# over the earlier audit, so its PRs name ids the earlier decisions.json does
+# not hold, and a run with no --also stamps none of the earlier findings.
+test_unique_ids_need_no_also() {
+  local dir="$TMP_ROOT/unique" out later
+  mkdir -p "$dir/earlier"
+  printf '{\n  "a7-05": {\n    "status": "open"\n  },\n  "a7-07": {\n    "status": "open"\n  }\n}\n' >"$dir/earlier/decisions.json"
+  cp "$dir/earlier/decisions.json" "$dir/before.json"
+  later=$("$ROOT/bin/fm-audit-ids.py" next "$dir/earlier") || fail "fm-audit-ids.py next failed"
+  assert_equals "a7-08" "$later" "the later audit's a7 run starts past the earlier audit's"
+  printf '[\n {"day": "2026-11-26", "state": "merged", "url": "https://github.com/o/firstmate/pull/313",\n  "title": "feat: responder-safe adds (audit %s)", "body": "Closes %s."}\n]\n' "$later" "$later" >"$dir/prs.json"
+  printf '{}\n' >"$dir/states.json"
+  : >"$dir/gh.log"
+  out=$(run_tool "$dir" "${WINDOW[@]}" "$dir/earlier/decisions.json" 2>&1) || fail "run failed: $out"
+  assert_contains "$out" "0 id(s) named by one, 0 newly landed" "the later audit's PR stamps no earlier finding: $out"
+  cmp -s "$dir/before.json" "$dir/earlier/decisions.json" || fail "the earlier decisions.json changed"
+  pass "landed-by: with ids unique across audits, a later audit's PR stamps no earlier finding without --also"
 }
 
 # expect_refusal <label> <needle> <dir> [env...] : exit 1, message, no write.
@@ -389,5 +410,6 @@ fm_test_run \
   test_search_args_and_window_split \
   test_prior_status_table \
   test_also_leaves_shared_ids_for_the_helm \
+  test_unique_ids_need_no_also \
   test_refusals_leave_the_file_untouched \
   test_dry_run_and_usage
