@@ -828,7 +828,12 @@ test_signal_paths_checkpoint_between_workers() {
   printf 'window=sb:fm-a\nkind=ship\n' > "$state/a.meta"
   printf 'window=sb:fm-b\nkind=ship\n' > "$state/b.meta"
   : > "$state/a.status"; : > "$state/b.status"
+  # Not following fm-watch.sh keeps its background jobs from marking `$!` as
+  # set in this subshell for every later `pid=$!` in the file (SC2031), so the
+  # stubs and settings below that the sourced watcher reads look unused here.
+  # shellcheck disable=SC2034,SC2329
   (
+    # shellcheck source=/dev/null
     . "$ROOT/bin/fm-watch.sh"
     STATE="$state"; CONFIG="$dir/config"; mkdir -p "$CONFIG"
     : > "$CONFIG/turnend-churn-absorb"
