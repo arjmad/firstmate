@@ -5,4 +5,4 @@ No upstream proposal: this fork's `AGENTS.md` is already carried as its own text
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| AGENTS.md drops five copied skill triggers | `AGENTS.md` (sections 1, 4, 6, 7) | `AGENTS.md` | carried | 427056c4 |
+| AGENTS.md drops five copied skill triggers | `AGENTS.md` (sections 1, 4, 6, 7) | `AGENTS.md` | conflicted | 9ac0288e |

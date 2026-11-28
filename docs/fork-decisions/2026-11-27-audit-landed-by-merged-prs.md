@@ -8,4 +8,4 @@ This supersedes the ledger input of the [2026-11-25 record](2026-11-25-audit-lan
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| The landed-by tool reads merged PRs that name each id instead of ledger cells, holds an open-helm or open-captain status, leaves an id an `--also` audit shares for the helm, keeps a merged hand-entered URL, drops an unmerged one, never un-stamps, and writes the prior-status table with `--table` | `bin/fm-audit-landed-by.py`, `tests/fm-audit-landed-by.test.sh`, `docs/scripts.md` | `docs/scripts.md` | carried | 427056c4 |
+| The landed-by tool reads merged PRs that name each id instead of ledger cells, holds an open-helm or open-captain status, leaves an id an `--also` audit shares for the helm, keeps a merged hand-entered URL, drops an unmerged one, never un-stamps, and writes the prior-status table with `--table` | `bin/fm-audit-landed-by.py`, `tests/fm-audit-landed-by.test.sh`, `docs/scripts.md` | `docs/scripts.md` | carried | 9ac0288e |

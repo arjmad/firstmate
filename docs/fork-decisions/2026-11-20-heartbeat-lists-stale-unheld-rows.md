@@ -3,4 +3,4 @@ Decision: the fleet view the heartbeat review reads lists each unheld ready row 
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| A "Waiting Unheld" section lists every queued row with no hold, no unresolved blocker, and a `since` date 7 or more days (`FM_FLEET_VIEW_UNHELD_DAYS`) before the snapshot's date, with its action: hold a captain-owned row for him, else dispatch, date or close it | `bin/fm-fleet-view.sh`, `tests/fm-fleet-snapshot-view.test.sh` | `bin/fm-fleet-view.sh`, `tests/fm-fleet-snapshot-view.test.sh` | carried | 427056c4 |
+| A "Waiting Unheld" section lists every queued row with no hold, no unresolved blocker, and a `since` date 7 or more days (`FM_FLEET_VIEW_UNHELD_DAYS`) before the snapshot's date, with its action: hold a captain-owned row for him, else dispatch, date or close it | `bin/fm-fleet-view.sh`, `tests/fm-fleet-snapshot-view.test.sh` | `bin/fm-fleet-view.sh`, `tests/fm-fleet-snapshot-view.test.sh` | carried | 9ac0288e |

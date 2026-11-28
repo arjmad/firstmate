@@ -5,5 +5,5 @@ No upstream proposal: the scout branch is harmless upstream, and the pointers ar
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| The subagent guard names only the brief-then-spawn route, with no `bin/fm-scout.sh` branch | `bin/fm-subagent-pretool-check.sh` (`ROUTE`), `docs/subagent-guard.md` (deny message), `tests/fm-subagent-pretool-check.test.sh` (`test_deny_message_defers_to_intake_classification`) | same files | carried | 427056c4 |
-| Doc pointers name their real owners | `AGENTS.md` (section 2 cd guard line), `.agents/skills/bootstrap-diagnostics/SKILL.md` (`TANGLE`), `docs/task-lifecycle.md` (merge authority), `docs/fork-decisions.md` (first records) | `AGENTS.md`, `.agents/skills/bootstrap-diagnostics/SKILL.md` | carried | 427056c4 |
+| The subagent guard names only the brief-then-spawn route, with no `bin/fm-scout.sh` branch | `bin/fm-subagent-pretool-check.sh` (`ROUTE`), `docs/subagent-guard.md` (deny message), `tests/fm-subagent-pretool-check.test.sh` (`test_deny_message_defers_to_intake_classification`) | same files | carried | 9ac0288e |
+| Doc pointers name their real owners | `AGENTS.md` (section 2 cd guard line), `.agents/skills/bootstrap-diagnostics/SKILL.md` (`TANGLE`), `docs/task-lifecycle.md` (merge authority), `docs/fork-decisions.md` (first records) | `AGENTS.md`, `.agents/skills/bootstrap-diagnostics/SKILL.md` | conflicted | 9ac0288e |

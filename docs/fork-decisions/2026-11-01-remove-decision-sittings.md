@@ -6,4 +6,4 @@ No upstream proposal: the sittings were this fork's own patch, and removing them
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| The watcher finds state the retired sittings left in a home, queues one durable `check: decision sittings retired` wake when a call could have been held for a sitting, and removes that state, so held calls reach the captain now and the wake fires once | `bin/fm-watch.sh` (`decision_sittings_retire_tick`), `tests/fm-watch-triage-pause.test.sh` | watcher main loop (one added tick call) | carried | 427056c4 |
+| The watcher finds state the retired sittings left in a home, queues one durable `check: decision sittings retired` wake when a call could have been held for a sitting, and removes that state, so held calls reach the captain now and the wake fires once | `bin/fm-watch.sh` (`decision_sittings_retire_tick`), `tests/fm-watch-triage-pause.test.sh` | watcher main loop (one added tick call) | carried | 9ac0288e |

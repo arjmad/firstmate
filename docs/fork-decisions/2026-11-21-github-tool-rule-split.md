@@ -5,4 +5,4 @@ No upstream proposal: the split records this fleet's own usage.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| The GitHub tool rule splits PR actions and human views (`gh-axi`) from scripted reads (plain `gh --json/--jq`), and the ship brief wait line names `gh-axi pr checks --watch --fail-fast` | `AGENTS.md` (section 1 tool rule), `bin/fm-brief.sh` (`FORGE_RULE_LINE`, scout Rule 3, Waiting), `docs/configuration.md` (toolchain list), `tests/fm-brief.test.sh`, `tests/fm-dod-lib.test.sh` (comment) | same files | carried | 427056c4 |
+| The GitHub tool rule splits PR actions and human views (`gh-axi`) from scripted reads (plain `gh --json/--jq`), and the ship brief wait line names `gh-axi pr checks --watch --fail-fast` | `AGENTS.md` (section 1 tool rule), `bin/fm-brief.sh` (`FORGE_RULE_LINE`, scout Rule 3, Waiting), `docs/configuration.md` (toolchain list), `tests/fm-brief.test.sh`, `tests/fm-dod-lib.test.sh` (comment) | same files | carried | 9ac0288e |

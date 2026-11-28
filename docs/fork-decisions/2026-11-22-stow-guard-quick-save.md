@@ -9,5 +9,5 @@ No upstream proposal yet: the stow guard is upstream's, but its token line and t
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| The stow guard's context ask asks for `/stow quick`, its age ask for the full pass, and a quick save does not move the full pass's clock | `bin/fm-stow-guard.sh` (header, transcript read, block messages), `tests/fm-stow-guard.test.sh`, `docs/configuration.md` ("Stow guard") | `bin/fm-stow-guard.sh`, `tests/fm-stow-guard.test.sh`, `docs/configuration.md` | carried | 427056c4 |
-| The stow skill gains a quick save mode selected by the `quick` argument | `.agents/skills/stow/SKILL.md` (description, "Quick save", startup-memory pass, sweep step 3, receipt, cascade) | `.agents/skills/stow/SKILL.md` | carried | 427056c4 |
+| The stow guard's context ask asks for `/stow quick`, its age ask for the full pass, and a quick save does not move the full pass's clock | `bin/fm-stow-guard.sh` (header, transcript read, block messages), `tests/fm-stow-guard.test.sh`, `docs/configuration.md` ("Stow guard") | `bin/fm-stow-guard.sh`, `tests/fm-stow-guard.test.sh`, `docs/configuration.md` | carried | 9ac0288e |
+| The stow skill gains a quick save mode selected by the `quick` argument | `.agents/skills/stow/SKILL.md` (description, "Quick save", startup-memory pass, sweep step 3, receipt, cascade) | `.agents/skills/stow/SKILL.md` | carried | 9ac0288e |

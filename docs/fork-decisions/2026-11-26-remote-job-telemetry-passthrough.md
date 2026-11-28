@@ -4,4 +4,4 @@ No upstream proposal yet: the opt-outs serve this fleet's tool set.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| Pass the telemetry opt-outs to remote-job children when set | `bin/fm-remote-job-worker.sh` (`child_env`), `bin/fm-remote-job-lib.sh` (header), `tests/fm-remote-job.test.sh` (probe job, identity-unset fixture) | `bin/fm-remote-job-worker.sh`, `bin/fm-remote-job-lib.sh`, `tests/fm-remote-job.test.sh` | carried | 0dfc4abc |
+| Pass the telemetry opt-outs to remote-job children when set | `bin/fm-remote-job-worker.sh` (`child_env`), `bin/fm-remote-job-lib.sh` (header), `tests/fm-remote-job.test.sh` (probe job, identity-unset fixture) | `bin/fm-remote-job-worker.sh`, `bin/fm-remote-job-lib.sh`, `tests/fm-remote-job.test.sh` | carried | 9ac0288e |

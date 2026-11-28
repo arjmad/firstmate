@@ -4,4 +4,4 @@ This extends the [2026-11-14 advisor decision](2026-11-14-claude-advisor.md), wh
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| An omitted --advisor on a Claude ship or scout takes the clear dispatch selection's advisor, else the one advisor every advisor-capable claude profile agrees on; a batch forwards an explicit --advisor default | `bin/fm-spawn.sh` (header, batch `shared_args`, dispatch-record advisor fill), `tests/fm-spawn-dispatch-profile.test.sh`, `docs/configuration.md` | `bin/fm-spawn.sh` | carried | 427056c4 |
+| An omitted --advisor on a Claude ship or scout takes the clear dispatch selection's advisor, else the one advisor every advisor-capable claude profile agrees on; a batch forwards an explicit --advisor default | `bin/fm-spawn.sh` (header, batch `shared_args`, dispatch-record advisor fill), `tests/fm-spawn-dispatch-profile.test.sh`, `docs/configuration.md` | `bin/fm-spawn.sh` | carried | 9ac0288e |

@@ -2,4 +2,4 @@
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| A tool writes each landed audit id's PR URLs from a wrap-up ledger.md into decisions.json as landed_by, in place and idempotent, refusing an unknown id, a tableless ledger or a layout it cannot keep | `bin/fm-audit-landed-by.py` (new), `tests/fm-audit-landed-by.test.sh` (new), `bin/fm-test-run.sh` (serial weight hint), `docs/scripts.md` | `bin/fm-test-run.sh`, `docs/scripts.md` | superseded by #320 | 427056c4 |
+| A tool writes each landed audit id's PR URLs from a wrap-up ledger.md into decisions.json as landed_by, in place and idempotent, refusing an unknown id, a tableless ledger or a layout it cannot keep | `bin/fm-audit-landed-by.py` (new), `tests/fm-audit-landed-by.test.sh` (new), `bin/fm-test-run.sh` (serial weight hint), `docs/scripts.md` | `bin/fm-test-run.sh`, `docs/scripts.md` | superseded by #320 | 9ac0288e |

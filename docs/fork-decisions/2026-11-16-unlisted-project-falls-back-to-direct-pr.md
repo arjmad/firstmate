@@ -4,4 +4,4 @@ No upstream proposal: upstream still ships the pipeline as its default delivery 
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| Registry fallbacks resolve to direct-PR | `bin/fm-project-mode.sh` (header, missing-registry, unlisted, unknown-mode fallbacks), `bin/fm-spawn.sh` (downgrade-notice comment), `bin/fm-dod-lib.sh` (comment), `docs/task-lifecycle.md` (intake), `tests/fm-project-mode.test.sh`, `tests/fm-task-delivery.test.sh`, `tests/fm-secondmate-safety.test.sh` | same files | carried | 427056c4 |
+| Registry fallbacks resolve to direct-PR | `bin/fm-project-mode.sh` (header, missing-registry, unlisted, unknown-mode fallbacks), `bin/fm-spawn.sh` (downgrade-notice comment), `bin/fm-dod-lib.sh` (comment), `docs/task-lifecycle.md` (intake), `tests/fm-project-mode.test.sh`, `tests/fm-task-delivery.test.sh`, `tests/fm-secondmate-safety.test.sh` | same files | carried | 9ac0288e |

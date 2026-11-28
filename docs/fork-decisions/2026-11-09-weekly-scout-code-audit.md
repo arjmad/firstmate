@@ -5,4 +5,4 @@ Why: a quick trial on business at 05a4200 on 2026-11-09 took two sub-audits, abo
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| The weekly exploration scout rotates modulo 4, adding a quick `improve` code audit of one repository per turn, with its repository order read from earlier audit reports | `.agents/skills/noticed-queue/SKILL.md` (Weekly exploration scout) | none | carried | 427056c4 |
+| The weekly exploration scout rotates modulo 4, adding a quick `improve` code audit of one repository per turn, with its repository order read from earlier audit reports | `.agents/skills/noticed-queue/SKILL.md` (Weekly exploration scout) | none | carried | 9ac0288e |

@@ -5,4 +5,4 @@ No upstream proposal yet: upstream's index carries the same copy and could take 
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| The trigger index skill points at the skill descriptions instead of copying them | `.agents/skills/agent-skill-trigger-index/SKILL.md` | same file | carried | 427056c4 |
+| The trigger index skill points at the skill descriptions instead of copying them | `.agents/skills/agent-skill-trigger-index/SKILL.md` | same file | carried | 9ac0288e |

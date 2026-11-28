@@ -7,4 +7,4 @@ No upstream proposal: the account layout and the listener table are this fleet's
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| A `claude_listeners` table points Claude Code's `gws-*` servers and the `--docs` file at shared loopback listeners by URL | `bin/fm-google-workspace.sh` (header, `usage`, `load_config`, `claude_listener_urls`, `cmd_claude_config`, `cmd_claude_install`), `tests/fm-google-workspace.test.sh`, `docs/configuration.md` (Google Workspace accounts, Docs workers), `docs/google-workspace-access.md` | same files | carried | becac35a |
+| A `claude_listeners` table points Claude Code's `gws-*` servers and the `--docs` file at shared loopback listeners by URL | `bin/fm-google-workspace.sh` (header, `usage`, `load_config`, `claude_listener_urls`, `cmd_claude_config`, `cmd_claude_install`), `tests/fm-google-workspace.test.sh`, `docs/configuration.md` (Google Workspace accounts, Docs workers), `docs/google-workspace-access.md` | same files | carried | 9ac0288e |

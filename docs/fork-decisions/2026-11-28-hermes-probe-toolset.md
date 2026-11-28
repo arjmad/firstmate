@@ -6,4 +6,4 @@ No upstream proposal: the probes and their fleet agents are this fleet's.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| One-shot Hermes probes default to a narrow toolset plus `no_mcp` | `.agents/skills/harness-adapters/references/harness/hermes.md` (One-shot probes), `.agents/skills/harness-adapters/SKILL.md` (description, `probe` operation) | same files | carried | 38524c1a |
+| One-shot Hermes probes default to a narrow toolset plus `no_mcp` | `.agents/skills/harness-adapters/references/harness/hermes.md` (One-shot probes), `.agents/skills/harness-adapters/SKILL.md` (description, `probe` operation) | same files | carried | 9ac0288e |

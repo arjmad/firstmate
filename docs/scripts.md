@@ -303,6 +303,8 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-turnend-guard-cursor.sh` | Cursor `stop` hook for a primary session's turn-end supervision |
 | `fm-worker-account-lib.sh` | Own the opt-in per-home worker account pin and its launch-time sign-in check |
 | `fm-claude-account-quota.sh` | Measure each Claude account `config/claude-accounts` declares, in isolation, and print its quota facts |
+| `fm-codex-account-quota.sh` | Measure each Codex account `config/codex-accounts` declares, in isolation, and print its quota facts |
+| `fm-account-quota-lib.sh` | Single owner of the per-account quota read, output rows, and exit codes behind the Claude and Codex account-quota commands |
 | `fm-claude-store-lock.mjs` | Own Claude Code's store lock for every firstmate write to its per-user `.claude.json`; imported, with no command-line entry point |
 | `fm-commandcode-mod.ts` | Command Code worker mod that writes one task incarnation's semantic busy state through `fm-busy-event.sh` |
 | `fm-cortex-plugin.sh` | Write a private Cortex Code worker plugin carrying firstmate's lifecycle hooks |
