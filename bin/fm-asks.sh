@@ -165,7 +165,7 @@ command_list() {
 # The outcome line Nova reads: what the close did, in one sentence.
 outcome_text() {  # <id> <title> <how> <pr> <report> <note> <reason>
   local id=$1 title=$2 how=$3 pr=$4 report=$5 note=$6 reason=$7 text
-  if [ "$how" = done ]; then
+  if [ "$how" = "done" ]; then
     text="Firstmate closed backlog row $id ($title) on $(today) as done"
     [ -z "$pr" ] || text="$text; PR $pr"
     [ -z "$report" ] || text="$text; report $report"

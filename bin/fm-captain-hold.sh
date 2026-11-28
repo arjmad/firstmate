@@ -1719,7 +1719,7 @@ settle_answered_ask() {  # <task-id>
   [ -x "$SCRIPT_DIR/fm-asks.sh" ] || return 0
   words=$(printf '%s\n' "$DECISION_TEXT" | sed -n '/[^[:space:]]/{p;q;}' | cut -c1-300)
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
-    "$SCRIPT_DIR/fm-asks.sh" settle "$1" done --note "the captain answered it: ${words:-his answer is on the row}" >&2 \
+    "$SCRIPT_DIR/fm-asks.sh" settle "$1" "done" --note "the captain answered it: ${words:-his answer is on the row}" >&2 \
     || printf 'fm-captain-hold: %s is answered, but its ask was not settled; see the line above\n' "$1" >&2
   return 0
 }

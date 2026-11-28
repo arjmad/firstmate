@@ -658,7 +658,7 @@ command_row_field() {  # <due|batch|asked>
 # `asked <id> [sapna|sunita [<ref>]|-]` (see the header): today's date goes on
 # a new ask, and the recorded date stays when the person and ref are the same.
 command_asked() {
-  local id=${ARGS[1]:-} person=${ARGS[2]:-} ref=${ARGS[3]:-} recorded r_person r_date r_ref
+  local id=${ARGS[1]:-} person=${ARGS[2]:-} ref=${ARGS[3]:-} recorded r_person r_ref
   case "$id" in ''|-*) fail "usage: asked <id> [sapna|sunita [<ref>]|-]" ;; esac
   [ "${#ARGS[@]}" -le 4 ] || fail "usage: asked <id> [sapna|sunita [<ref>]|-]"
   case "$person" in
@@ -668,7 +668,7 @@ command_asked() {
   esac
   shown_body "$id" || fail "no backlog row $id in this home"
   recorded=$(fm_backlog_row_field_of_body asked "$SHOWN_BODY")
-  read -r r_person r_date r_ref <<<"$recorded"
+  read -r r_person _ r_ref <<<"$recorded"
   if [ -n "$recorded" ] && [ "$r_person" = "$person" ] && [ "$r_ref" = "$ref" ]; then
     printf 'ok: asked %s already %s\n' "$id" "$recorded"
     return 0
@@ -696,14 +696,14 @@ read_close_asked() {
 
 # After the close landed: settle the row's ask through bin/fm-asks.sh.
 settle_close_ask() {  # <verb>
-  local how=done
+  local how="done"
   [ -n "$CLOSE_ASKED" ] || return 0
   local -a flags=(--asked "$CLOSE_ASKED" --title "${CLOSE_TITLE:-$CLOSE_ID}")
   case "$1" in rm|delete) how=removed; flags+=(--reason "$REASON") ;; esac
   if [ "${FM_HANDOFF_CLOSE_REPLY:-}" = removed ]; then
     how=removed
     flags+=(--reason "${REASON:-$CLOSE_NOTE}")
-  elif [ "$how" = done ]; then
+  elif [ "$how" = "done" ]; then
     flags+=(${CLOSE_FLAGS[@]+"${CLOSE_FLAGS[@]}"})
   fi
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
@@ -1117,8 +1117,8 @@ case "${1:-}" in
     for arg in ${ARGS[@]+"${ARGS[@]}"}; do
       [ "$arg" = --asked ] || continue
       asks_args=()
-      for arg in "${ARGS[@]:1}"; do
-        [ "$arg" = --asked ] || asks_args+=("$arg")
+      for asks_arg in "${ARGS[@]:1}"; do
+        [ "$asks_arg" = --asked ] || asks_args+=("$asks_arg")
       done
       exec env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
         "$SCRIPT_DIR/fm-asks.sh" list ${asks_args[@]+"${asks_args[@]}"}
